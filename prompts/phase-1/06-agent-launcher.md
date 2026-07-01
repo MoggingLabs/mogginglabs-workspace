@@ -35,3 +35,7 @@ brokers credentials.
 ## Guardrails
 - **ADR 0002** — never store/inject/proxy provider credentials; adapters build commands only.
 - Keep `@backend` Electron-free; the OS-only bits (e.g. opening a browser) live in `src/main`.
+
+> **Complemented by [`06b-provider-mix-templates.md`](06b-provider-mix-templates.md):** provider-mix
+> templates ("N panes of provider A, M of provider B") that open a whole workspace and launch each
+> pane's CLI via these adapters. 06 stays the single-CLI primitive; 06b composes it (05 + 06).

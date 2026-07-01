@@ -29,6 +29,7 @@ Execute in order; each file is self-contained.
 | 04 | `04-multi-pane-layout.md` | **DONE**: split/grid templates (1/2/4/6/8/9/12/16), drag-resize, focus; 8 panes concurrent + isolated (multi-pane smoke green) |
 | 05 | `05-workspace-tabs.md` | **DONE**: color-coded workspace tabs (new/close/switch, Ctrl+T, Ctrl+1..9), each = dir + own layout; `mogging .` launcher (bin + `mogging://` deep link); theme picker; persist/restore via a main-side SettingsStore (workspace smoke green) |
 | 06 | `06-agent-launcher.md` | one-click launch of a CLI into a pane with cwd; BYO auth |
+| 06b | `06b-provider-mix-templates.md` | provider-mix templates: choose how many panes per provider -> a workspace that launches each pane's CLI (BYO auth) |
 | 07 | `07-packaging-signing-updates.md` | signed/notarized installers + auto-update for win/mac |
 
 ## Overall Definition of Done (Phase 1)
