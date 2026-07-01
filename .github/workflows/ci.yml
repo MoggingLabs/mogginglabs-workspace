@@ -26,10 +26,13 @@ jobs:
           node-version: '20'
           cache: npm
 
-      # @lydell/node-pty ships prebuilt (N-API) binaries, so no VS/Xcode toolchain is
-      # needed for install/typecheck/build.
+      # Native modules (node-pty, better-sqlite3) are EXTERNALIZED in the build and used only
+      # at runtime/packaging, never bundled — so typecheck + build don't need their compiled
+      # binaries. Skip install scripts so CI never tries to compile better-sqlite3 (which has
+      # no Node prebuild here and no VS/Xcode on the runner). The Electron-ABI rebuild happens
+      # via the postinstall in dev and via electron-builder at packaging (step 07).
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Typecheck
         run: npm run typecheck
