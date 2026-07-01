@@ -15,11 +15,10 @@ each pane's assigned CLI** into its pane at the workspace cwd, each **self-authe
 ## Concept
 A **template** = a name + a **provider mix**: a list of `{ provider, count }` (providers = the
 06 CLI roster — claude / codex / gemini / aider / opencode — plus a plain `shell`). The **total
-count** selects the grid template from 05 (1/2/4/6/8/9/12/16); if the total isn't an exact grid
-size, round up to the next and **pad the remainder with `shell` panes** (or extend 05's grid set
-for the odd sizes). Each slot in the resulting layout carries a **provider assignment**; on open,
-that slot's pane launches the assigned CLI via 06's adapter. Presets ship built-in; users build +
-save their own.
+count** selects the 05 grid (1/2/4/6/8/9/12/16); if it isn't an exact grid size, round up and
+**pad the remainder with `shell` panes** (or extend 05's grids). Each slot carries a **provider
+assignment**; on open its pane launches that CLI via 06's adapter. Presets ship built-in; users
+build + save their own.
 
 ## Steps
 1. **Template model + store** — `src/backend/features/templates/` (Electron-free): a
@@ -31,8 +30,8 @@ save their own.
    build a custom mix — a **count stepper per provider**, live-previewing the resulting grid and
    total panes — then "Open workspace". Use 06's `detect()` to **disable providers not installed**.
 3. **Open-from-template flow** — composes 05 + 06: create a workspace (05) with the resolved
-   layout; record each slot's provider assignment; each pane launches its assigned CLI (06
-   adapter `launchCommand(cwd)`) at the workspace cwd. Label panes by provider + per-pane state (06).
+   layout; record each slot's assignment; each pane launches its CLI via 06's adapter
+   `launchCommand(cwd)`. Label panes by provider + per-pane state (06).
 4. **Persist assignments + restore** — persist the workspace's pane→provider map (05 store); on
    relaunch, restore re-launches each pane's CLI via its adapter `resume` (03/05 restore), so a
    template workspace **comes back with the same lineup**. No credentials persisted, ever.
