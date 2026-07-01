@@ -7,7 +7,15 @@ import * as fs from 'node:fs'
 import { DAEMON_PROTOCOL_VERSION } from '@contracts'
 import { SessionManager } from './session'
 import { createServer } from './transport'
-import { acquireLock, releaseLock, writeEndpoint, clearEndpoint, socketAddress, log } from './lifecycle'
+import {
+  acquireLock,
+  releaseLock,
+  writeEndpoint,
+  clearEndpoint,
+  socketAddress,
+  otherVersionEndpoints,
+  log
+} from './lifecycle'
 
 // Shut down when there are no clients AND no panes for this long (no zombie daemons).
 const IDLE_SHUTDOWN_MS = Number(process.env.MOGGING_DAEMON_IDLE_MS ?? 30 * 60 * 1000)
@@ -78,6 +86,8 @@ function main(): void {
     }
     writeEndpoint({ version: DAEMON_PROTOCOL_VERSION, address, token, pid: process.pid })
     log('listening ' + address + ' pid ' + process.pid)
+    const others = otherVersionEndpoints()
+    if (others.length) log('other-version daemons live (session migration pending Phase-1/03): ' + JSON.stringify(others))
     armIdle()
   })
 }

@@ -69,3 +69,17 @@ detached process. (PoC in the session scratchpad; to be productionized as `src/p
 5. Hardening pass: Windows pipe SD, Unix perms, stale-socket, security audit.
 6. Version-skew migration (`--resume` + snapshot) + persistence (Phase-1/03).
 7. macOS (forkpty) parity.
+
+## Status (2026-07-01)
+Steps 1-5 DONE + verified on Windows; **OSC agent-state parity DONE**; **daemon flipped to the
+DEFAULT** (in-proc via `MOGGING_INPROC`, plus a start-failure fallback). The comprehensive
+terminal smoke passes on both the daemon path and the in-proc fallback.
+- **Version-skew (6):** per-version **isolation is done** and structural — socket/dir/endpoint
+  are namespaced by `DAEMON_PROTOCOL_VERSION`, so a new app version starts its own daemon and
+  never clashes with an old one (no tmux "kill-server"; old sessions keep running = no data
+  loss). The daemon logs any live other-version daemons on startup. Seamless session
+  **carry-over** across a version bump (re-attach old agents into the new daemon) requires
+  Phase-1/03 (persist metadata + scrollback; re-attach via agent `--resume`) — designed, lands
+  with persistence.
+- **macOS (7):** code is forkpty-ready and CI builds green on macOS; runtime verification needs
+  a Mac (`prompts/phase-1/macos-daemon-parity-checklist.md`).

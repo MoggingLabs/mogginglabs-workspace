@@ -14,11 +14,11 @@ import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 // App-wiring layer: compose the backend over an Electron context and open the
 // window. All real logic lives in @backend and @ui; this file only connects them.
 //
-// PHASE 0: the backend (and its PTYs) run in this main process — already separate
-// from the renderer, so a UI crash can't kill an agent. PHASE 1 (opt-in, MOGGING_DAEMON)
-// moves the PTYs into a detached daemon that ALSO survives a main crash / app restart
-// (see docs/adr/0006 and src/pty-daemon/); the in-proc path remains the default until the
-// daemon path reaches agent-state (OSC) parity.
+// PHASE 0: the backend (and its PTYs) ran in this main process. PHASE 1: the PTYs now live
+// in a detached daemon (the DEFAULT) that survives a renderer reload AND a main crash / app
+// restart, with full terminal + scrollback + agent-state parity (see docs/adr/0006 and
+// src/pty-daemon/). MOGGING_INPROC forces the in-proc backend; daemon startup is also wrapped
+// so any failure falls back to in-proc, keeping the app functional.
 
 let win: BrowserWindow | null = null
 let disposeBackend: (() => void) | null = null
@@ -40,13 +40,21 @@ app.whenReady().then(async () => {
 
   initMainTelemetry() // observability first, so early errors are captured
 
-  // MOGGING_DAEMON opts into the detached PTY daemon (ADR 0006); default stays in-proc
-  // (backend-in-main), which is already renderer-reload-safe and keeps agent-state parity.
-  if (process.env.MOGGING_DAEMON) {
-    disposeBackend = await startDaemonBackend(() => win?.webContents ?? null)
-  } else {
+  // The detached PTY daemon (ADR 0006) is now the DEFAULT — full parity with in-proc plus
+  // survival across a main crash / app restart. MOGGING_INPROC forces the in-proc backend.
+  const startInProc = (): void => {
     const ctx = createElectronContext(() => win?.webContents ?? null)
     disposeBackend = startBackend(ctx)
+  }
+  if (process.env.MOGGING_INPROC) {
+    startInProc()
+  } else {
+    try {
+      disposeBackend = await startDaemonBackend(() => win?.webContents ?? null)
+    } catch (err) {
+      getTelemetry().captureError(err, { feature: 'daemon', op: 'start', platform: process.platform })
+      startInProc() // daemon unavailable -> in-proc so the app still works
+    }
   }
   registerClipboard() // system clipboard IPC (app-layer, Electron-only)
 

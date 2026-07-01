@@ -98,3 +98,31 @@ export function log(msg: string): void {
     /* logging is best-effort */
   }
 }
+
+/**
+ * Live daemon endpoints from OTHER protocol versions. Because paths are namespaced by
+ * version, an app update starts its OWN daemon and never clashes with an old one (no tmux
+ * "kill-server"; old sessions keep running = no data loss). This surfaces those old daemons
+ * so a future update can MIGRATE their sessions (via agent `--resume` + snapshot, Phase-1/03).
+ */
+export function otherVersionEndpoints(): Array<{ version: number; pid: number; address: string }> {
+  const found: Array<{ version: number; pid: number; address: string }> = []
+  try {
+    const runRoot = path.dirname(runtimeDir())
+    for (const name of fs.readdirSync(runRoot)) {
+      const m = /^v(\d+)$/.exec(name)
+      if (!m || Number(m[1]) === DAEMON_PROTOCOL_VERSION) continue
+      try {
+        const ep = JSON.parse(fs.readFileSync(path.join(runRoot, name, 'endpoint.json'), 'utf8'))
+        if (ep && typeof ep.pid === 'number' && isAlive(ep.pid)) {
+          found.push({ version: ep.version, pid: ep.pid, address: ep.address })
+        }
+      } catch {
+        /* no/invalid endpoint in that version dir */
+      }
+    }
+  } catch {
+    /* run root missing */
+  }
+  return found
+}
