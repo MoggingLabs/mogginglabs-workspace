@@ -9,8 +9,8 @@ import * as os from 'node:os'
 import * as pty from '@lydell/node-pty'
 import type { SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { OscParser } from '@backend/features/agent-state'
-import { SessionStore } from '@backend/features/workspace'
-import type { PersistedPane } from '@contracts'
+import { SessionStore, resumeCommandFor } from '@backend/features/workspace'
+import type { PersistedPane, PersistedWorkspace, WorkspaceLayout } from '@contracts'
 
 const SCROLLBACK_BYTES = 200_000
 
@@ -36,7 +36,7 @@ class PaneSession {
   private lastState: AgentState = 'idle'
   private subs = new Set<PaneSubscriber>()
 
-  constructor(id: string, spec: SpawnSpec, hooks: PaneHooks, restore?: { scrollback: string }) {
+  constructor(id: string, spec: SpawnSpec, hooks: PaneHooks, restore?: { scrollback: string; resumeCommand?: string | null }) {
     this.id = id
     this.cols = spec.cols ?? 80
     this.rows = spec.rows ?? 24
@@ -71,9 +71,11 @@ class PaneSession {
       this.subs.clear()
       hooks.onExit()
     })
-    // Fresh panes run their launch command; RESTORED panes do NOT (avoid re-launching an
-    // agent) — they repaint prior scrollback in a fresh shell at the same cwd.
+    // Fresh panes run their launch command. RESTORED panes repaint prior scrollback in a fresh
+    // shell at the same cwd, and relaunch a known agent via its own resume (step 4) — never a
+    // frozen process; a pane with no resumable agent just restores its shell.
     if (spec.run && !restore) this.proc.write(spec.run + '\r')
+    else if (restore?.resumeCommand) this.proc.write(restore.resumeCommand + '\r')
   }
 
   get scrollback(): string {
@@ -83,7 +85,14 @@ class PaneSession {
     return { id: this.id, cols: this.cols, rows: this.rows }
   }
   snapshot(): PersistedPane {
-    return { id: this.id, cwd: this.cwd, command: this.command, scrollback: this.buffer, updatedAt: Date.now() }
+    return {
+      id: this.id,
+      workspaceId: 'default',
+      cwd: this.cwd,
+      command: this.command,
+      scrollback: this.buffer,
+      updatedAt: Date.now()
+    }
   }
   subscribe(s: PaneSubscriber): void {
     this.subs.add(s)
@@ -135,6 +144,18 @@ export class SessionManager {
     return [...this.panes.values()].map((p) => p.snapshot())
   }
 
+  /** The current single default workspace + its (flat) layout. Steps 04/05 add real
+   *  workspaces + a split tree; this persists the pane arrangement that exists today. */
+  workspaces(): PersistedWorkspace[] {
+    const layout: WorkspaceLayout = { v: 1, panes: [...this.panes.keys()] }
+    return [{ id: 'default', name: 'Workspace', layout: JSON.stringify(layout), updatedAt: Date.now() }]
+  }
+
+  private persist(): void {
+    this.store.savePanes(this.snapshotAll())
+    this.store.saveWorkspaces(this.workspaces())
+  }
+
   private hooks(id: string): PaneHooks {
     return {
       onExit: () => {
@@ -160,10 +181,13 @@ export class SessionManager {
    *  Only runs into an empty manager. Returns how many panes were restored. */
   restore(): number {
     if (this.panes.size > 0) return 0
+    this.store.loadWorkspaces() // load persisted workspaces (layout consumed by the app in 04/05)
     const persisted = this.store.loadPanes()
     for (const p of persisted) {
       const spec: SpawnSpec = { cwd: p.cwd, run: p.command }
-      const pane = new PaneSession(p.id, spec, this.hooks(p.id), { scrollback: p.scrollback })
+      // Relaunch a known agent via its own resume (step 4) — never a frozen process.
+      const resumeCommand = resumeCommandFor(p.command)
+      const pane = new PaneSession(p.id, spec, this.hooks(p.id), { scrollback: p.scrollback, resumeCommand })
       this.panes.set(p.id, pane)
     }
     return persisted.length
@@ -174,7 +198,7 @@ export class SessionManager {
     if (this.persistTimer) return
     this.persistTimer = setTimeout(() => {
       this.persistTimer = undefined
-      this.store.savePanes(this.snapshotAll())
+      this.persist()
     }, delayMs)
   }
 
@@ -184,7 +208,7 @@ export class SessionManager {
       clearTimeout(this.persistTimer)
       this.persistTimer = undefined
     }
-    this.store.savePanes(this.snapshotAll())
+    this.persist()
   }
 
   remove(id: string): void {

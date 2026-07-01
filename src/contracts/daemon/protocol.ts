@@ -4,6 +4,7 @@
 // tmux "kill-server on upgrade" pitfall). Depends on nothing (pure types + helpers).
 
 import type { AgentState } from '../domain/agent'
+import type { PersistedWorkspace } from '../ipc/workspace.ipc'
 
 export const DAEMON_PROTOCOL_VERSION = 1
 
@@ -45,7 +46,7 @@ export type ClientMessage =
 
 /** daemon -> client */
 export type ServerMessage =
-  | { t: 'welcome'; v: number; panes: PaneInfo[] }
+  | { t: 'welcome'; v: number; panes: PaneInfo[]; workspaces: PersistedWorkspace[] }
   | { t: 'error'; reason: string }
   | { t: 'spawned'; id: string; existing: boolean; scrollback: string }
   | { t: 'attached'; id: string; scrollback: string }

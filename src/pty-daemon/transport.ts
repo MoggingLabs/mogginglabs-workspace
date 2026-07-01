@@ -86,7 +86,7 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           clearTimeout(authTimer)
           hooks.onClientCountChange(1)
           hooks.onActivity()
-          send({ t: 'welcome', v: DAEMON_PROTOCOL_VERSION, panes: sessions.list() })
+          send({ t: 'welcome', v: DAEMON_PROTOCOL_VERSION, panes: sessions.list(), workspaces: sessions.workspaces() })
         } else {
           send({ t: 'error', reason: 'auth' })
           sock.destroy()
