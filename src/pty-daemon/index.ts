@@ -3,6 +3,7 @@
 // app's @lydell/node-pty prebuilt. It outlives the app (spawned detached) and holds the
 // PTYs; the app is a thin client that reconnects on each launch.
 import * as crypto from 'node:crypto'
+import * as fs from 'node:fs'
 import { DAEMON_PROTOCOL_VERSION } from '@contracts'
 import { SessionManager } from './session'
 import { createServer } from './transport'
@@ -64,6 +65,17 @@ function main(): void {
   process.on('uncaughtException', (e) => log('UNCAUGHT ' + (e && e.stack ? e.stack : e)))
 
   server.listen(address, () => {
+    // Defense in depth. Unix: restrict the socket to the owner (the dir is already 0700).
+    // Windows: named pipes reject remote clients by default; local access is gated by the
+    // random auth token, whose endpoint file lives in the per-user (ACL-protected)
+    // LOCALAPPDATA runtime dir. Unauthenticated connections are dropped within ~3s.
+    if (process.platform !== 'win32') {
+      try {
+        fs.chmodSync(address, 0o600)
+      } catch {
+        /* best effort */
+      }
+    }
     writeEndpoint({ version: DAEMON_PROTOCOL_VERSION, address, token, pid: process.pid })
     log('listening ' + address + ' pid ' + process.pid)
     armIdle()

@@ -28,6 +28,18 @@ Node and reuses the app's `@lydell/node-pty` prebuilt.
 - **No live-fd transfer across versions:** recovery across an update uses agent `--resume` +
   scrollback snapshots (ties to Phase-1/03 persistence).
 
-## Status
-Survival core proven (Windows). Remaining per ADR 0006 §Staged: app client + integration,
-app-level survival smoke, Windows pipe SID / unix perms audit, version-skew migration, macOS.
+## Status (2026-07-01)
+Steps 1-6 done + verified on Windows: production daemon, app integration (opt-in
+`MOGGING_DAEMON`), app-level survival (quit+relaunch, same daemon pid), OSC agent-state
+parity, and the security audit below. Remaining (ADR 0006 §Staged 7): version-skew migration
+(`--resume` + snapshot, ties to Phase-1/03) and macOS forkpty parity; then flip the default.
+
+### Security audit (step 6, verified)
+- **Auth token enforced** — a wrong/absent token is rejected (`error:auth`) and the socket is
+  dropped within ~3s; only the correct token gets a `welcome`.
+- **Unix** — socket `0600`, runtime dir `0700`, endpoint file `0600`.
+- **Windows** — named pipes reject remote clients by default; local access is gated by the
+  token, whose endpoint file lives in the per-user ACL-protected `LOCALAPPDATA`. A native
+  single-SID pipe DACL is a future nice-to-have (Node exposes no API for it); the token +
+  protected file are the security boundary today.
+- **Versioned** protocol + per-version socket prevents cross-version confusion.
