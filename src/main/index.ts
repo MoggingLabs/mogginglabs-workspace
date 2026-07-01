@@ -5,6 +5,7 @@ import { createElectronContext } from './electron-context'
 import { initMainTelemetry } from './telemetry'
 import { registerClipboard } from './clipboard'
 import { registerAppSettings, disposeAppSettings } from './app-settings'
+import { registerAgents } from './agents'
 import { runSmoke } from './smoke'
 import { runAgentSmoke } from './agent-smoke'
 import { runStateSmoke } from './state-smoke'
@@ -12,6 +13,7 @@ import { runReloadSmoke } from './reload-smoke'
 import { runShot } from './shot'
 import { runMultipaneSmoke } from './multipane-smoke'
 import { runWorkspaceSmoke } from './workspace-smoke'
+import { runAgentLaunchSmoke } from './agentlaunch-smoke'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { registerDeepLink, initialDeepLinkCwd } from './deep-link'
@@ -72,6 +74,7 @@ app.whenReady().then(async () => {
   }
   registerClipboard() // system clipboard IPC (app-layer, Electron-only)
   registerAppSettings() // app-level workspace state (tabs + theme) persistence (Phase-1/05)
+  registerAgents() // agent launcher: detect installed CLIs + build launch commands (Phase-1/06)
 
   openWindow()
 
@@ -100,6 +103,8 @@ app.whenReady().then(async () => {
     runMultipaneSmoke(win) // env-gated multi-pane isolation smoke
   } else if (process.env.MOGGING_WORKSPACE && win) {
     runWorkspaceSmoke(win, process.env.MOGGING_WORKSPACE) // env-gated workspace persist/restore smoke
+  } else if (process.env.MOGGING_AGENTLAUNCH && win) {
+    runAgentLaunchSmoke(win) // env-gated agent-launcher smoke (picker -> TUI)
   }
 
   app.on('activate', () => {

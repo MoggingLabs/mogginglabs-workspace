@@ -3,6 +3,7 @@ import { createAppShell } from './shell/app-shell'
 import { mountFeatures, registerFeature } from './core/registry/feature-registry'
 import { workspaceFeature } from './features/workspace'
 import { terminalFeature } from './features/terminal'
+import { agentsFeature } from './features/agents'
 import { agentStateFeature } from './features/agent-state'
 
 export { getTelemetry, setTelemetry } from './core/telemetry'
@@ -19,6 +20,7 @@ export function start(): void {
   const shell = createAppShell(root)
   registerFeature(workspaceFeature) // owns tabs + per-workspace grids; provides slots
   registerFeature(terminalFeature)
+  registerFeature(agentsFeature) // agent launcher (picker -> focused pane)
   registerFeature(agentStateFeature)
   mountFeatures(shell)
 }

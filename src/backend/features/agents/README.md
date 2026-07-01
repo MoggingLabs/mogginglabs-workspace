@@ -1,10 +1,16 @@
-# backend/features/agents (Phase 1)
+# backend/features/agents (Phase 1/06)
 
-Home for agent-CLI adapters — one small module per hosted CLI (Claude Code, Codex,
-Gemini, Aider, OpenCode) describing how to launch it, its resume flag, and any
-first-party hook wiring for reliable state signals.
+Agent-CLI adapters — how to detect + launch each hosted CLI (Claude Code, Codex, Gemini,
+Aider, OpenCode). Pure + Electron-free; shared with the settings-driven auth feature
+(`prompts/features/auth-settings.md`).
 
-**Never** put provider credentials here — adapters only build the *command* to run;
-each CLI authenticates the user's own account itself (see docs/adr/0002).
+- `adapters.ts` — the `AgentAdapter` registry (`AGENT_ADAPTERS`): `{ id, name, bin, resumeFlag }`.
+- `detect.ts` — `detectAgents()` / `isOnPath()`: which CLIs are installed (PATH scan; sees the
+  process PATH, so a login-shell-only rc entry may be missed — the PTY's login shell still runs it).
+- `launch.ts` — `buildLaunchCommand(agentId, cwd, resume)`: the `cd <cwd> && <cli>` command
+  string (platform/shell-aware).
 
-Suggested shape: `registry.ts` (adapter registry) + `<cli>.adapter.ts` per CLI.
+**Never** put provider credentials here — adapters build the *command* only; each CLI
+authenticates the user's own account itself (ADR 0002). Main exposes `detect` + `command` over
+IPC (`src/main/agents.ts`); the launcher UI (`src/ui/features/agents`) writes the returned
+command into the focused pane, where the CLI takes over as a self-authenticated TUI.

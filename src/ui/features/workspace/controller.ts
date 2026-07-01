@@ -1,4 +1,6 @@
+import type { PaneId } from '@contracts'
 import { GridLayout } from '../layout'
+import { setFocusedPane } from '../../core/layout/focus'
 import { type WorkspaceMeta, colorForOrdinal, newWorkspaceId } from './model'
 
 interface WorkspaceView {
@@ -62,7 +64,9 @@ export class WorkspaceController {
     const container = document.createElement('div')
     container.className = 'workspace-view'
     this.hostEl.append(container)
-    const layout = new GridLayout(container, meta.id, ordinal * 100)
+    const layout = new GridLayout(container, meta.id, ordinal * 100, (paneId) =>
+      setFocusedPane({ paneId, cwd: meta.cwd })
+    )
 
     const tab = this.makeTab(meta)
     this.tabsEl.append(tab)
@@ -104,13 +108,18 @@ export class WorkspaceController {
   }
 
   switch(id: string): void {
-    if (!this.views.has(id)) return
+    const view = this.views.get(id)
+    if (!view) return
     this.activeId = id
     for (const [vid, v] of this.views) {
       const on = vid === id
       v.container.classList.toggle('active', on)
       v.tab.classList.toggle('active', on)
     }
+    setFocusedPane({
+      paneId: view.layout.focusedPaneId() ?? ((view.meta.ordinal * 100 + 1) as PaneId),
+      cwd: view.meta.cwd
+    })
     this.onChange()
   }
 

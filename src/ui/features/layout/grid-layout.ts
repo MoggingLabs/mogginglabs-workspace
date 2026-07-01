@@ -21,7 +21,8 @@ export class GridLayout {
   constructor(
     host: HTMLElement,
     private readonly source: string,
-    private readonly baseId = 0
+    private readonly baseId = 0,
+    private readonly onFocus?: (paneId: PaneId) => void
   ) {
     this.grid = document.createElement('div')
     this.grid.className = 'layout-grid'
@@ -157,6 +158,14 @@ export class GridLayout {
   private setFocused(slot: HTMLElement): void {
     for (const s of Array.from(this.grid.querySelectorAll('.layout-slot'))) s.classList.remove('focused')
     slot.classList.add('focused')
+    const paneId = Number(slot.dataset.paneId)
+    if (paneId) this.onFocus?.(paneId as PaneId)
+  }
+
+  /** The pane id of the currently-focused slot (there is always one after apply). */
+  focusedPaneId(): PaneId | null {
+    const el = this.grid.querySelector('.layout-slot.focused') as HTMLElement | null
+    return el ? (Number(el.dataset.paneId) as PaneId) : null
   }
 
   /** Tear down: clear this source's slots (terminal disposes its panes) + remove the grid. */

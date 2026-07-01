@@ -253,6 +253,7 @@ body {
 }
 
 .layout-slot {
+  position: relative;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -284,4 +285,107 @@ body {
 body.resizing,
 body.resizing * {
   user-select: none;
+}
+
+/* Agent launcher (titlebar) */
+.agent-launcher {
+  position: relative;
+}
+
+.agent-launch-btn {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.agent-launch-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.agent-menu {
+  position: absolute;
+  top: 30px;
+  right: 0;
+  min-width: 168px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  z-index: 30;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.agent-menu[hidden] {
+  display: none;
+}
+
+.agent-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.agent-menu-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.agent-menu-empty {
+  padding: 6px 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* Per-pane badge: OSC agent-state chip + launched-agent label */
+.pane-badge {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.pane-label {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+}
+
+.pane-badge.has-label .pane-label {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.pane-state {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.pane-state[data-state="busy"] {
+  background: var(--warn);
+}
+
+.pane-state[data-state="attention"] {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
 }

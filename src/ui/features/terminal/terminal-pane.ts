@@ -7,6 +7,7 @@ import '@xterm/xterm/css/xterm.css'
 import { getBridge } from '../../core/ipc/bridge'
 import { terminalClient } from './terminal.client'
 import { onTerminalTheme } from '../../core/theme/theme-port'
+import { onPaneLabel, getPaneLabel } from '../../core/layout/pane-meta'
 
 /** A single xterm pane bound to a backend PTY of the same id. */
 export class TerminalPane {
@@ -16,6 +17,7 @@ export class TerminalPane {
   private readonly resizeObs: ResizeObserver
   private devHandle: unknown
   private themeUnsub?: () => void
+  private paneLabelUnsub?: () => void
 
   constructor(
     private readonly id: PaneId,
@@ -69,6 +71,7 @@ export class TerminalPane {
     // Apply the active theme now (replayed) + on every change (decoupled via the theme port).
     this.themeUnsub = onTerminalTheme((theme) => (this.term.options.theme = theme))
 
+    this.mountBadge(host)
     this.exposeForDev(host)
   }
 
@@ -90,6 +93,33 @@ export class TerminalPane {
       return false
     }
     return true
+  }
+
+  /** Per-pane corner badge: the launched agent's label + its OSC agent-state chip (06). Each
+   *  pane shows its OWN state, so "which agent needs me" is answerable at a glance. */
+  private mountBadge(host: HTMLElement): void {
+    const badge = document.createElement('div')
+    badge.className = 'pane-badge'
+    const label = document.createElement('span')
+    label.className = 'pane-label'
+    const state = document.createElement('span')
+    state.className = 'pane-state'
+    state.dataset.state = 'idle'
+    badge.append(label, state)
+    host.append(badge)
+
+    const applyLabel = (text: string): void => {
+      label.textContent = text
+      badge.classList.toggle('has-label', !!text)
+    }
+    applyLabel(getPaneLabel(this.id) ?? '')
+
+    terminalClient.onState((e) => {
+      if (e.id === this.id) state.dataset.state = e.state
+    })
+    this.paneLabelUnsub = onPaneLabel((paneId, text) => {
+      if (paneId === this.id) applyLabel(text)
+    })
   }
 
   /** Dev-only debug handle so tooling/smoke can inspect the real terminal. Guarded by
@@ -125,6 +155,7 @@ export class TerminalPane {
 
   dispose(): void {
     this.themeUnsub?.()
+    this.paneLabelUnsub?.()
     this.resizeObs.disconnect()
     terminalClient.kill({ id: this.id })
     this.term.dispose()

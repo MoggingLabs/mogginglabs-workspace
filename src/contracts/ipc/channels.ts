@@ -24,8 +24,14 @@ export const WorkspaceChannels = {
   openCwd: 'workspace:openCwd' // main -> renderer: open/focus a workspace for a directory
 } as const
 
+export const AgentChannels = {
+  detect: 'agents:detect', // -> AgentInfo[] (which CLIs are installed)
+  command: 'agents:command' // (AgentCommandRequest) -> launch command string | null
+} as const
+
 export const AllChannels: readonly string[] = [
   ...Object.values(TerminalChannels),
   ...Object.values(ClipboardChannels),
-  ...Object.values(WorkspaceChannels)
+  ...Object.values(WorkspaceChannels),
+  ...Object.values(AgentChannels)
 ]
