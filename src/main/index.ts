@@ -7,6 +7,7 @@ import { registerClipboard } from './clipboard'
 import { registerAppSettings, disposeAppSettings } from './app-settings'
 import { registerAgents } from './agents'
 import { registerTemplates } from './templates'
+import { registerAttention } from './attention'
 import { runSmoke } from './smoke'
 import { runAgentSmoke } from './agent-smoke'
 import { runStateSmoke } from './state-smoke'
@@ -16,6 +17,7 @@ import { runMultipaneSmoke } from './multipane-smoke'
 import { runWorkspaceSmoke } from './workspace-smoke'
 import { runAgentLaunchSmoke } from './agentlaunch-smoke'
 import { runTemplateSmoke } from './template-smoke'
+import { runAttentionSmoke } from './attention-smoke'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { registerDeepLink, initialDeepLinkCwd } from './deep-link'
@@ -79,6 +81,7 @@ app.whenReady().then(async () => {
   registerAppSettings() // app-level workspace state (tabs + theme) persistence (Phase-1/05)
   registerAgents() // agent launcher: detect installed CLIs + build launch commands (Phase-1/06)
   registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
+  registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
 
   openWindow()
 
@@ -112,6 +115,8 @@ app.whenReady().then(async () => {
     runAgentLaunchSmoke(win) // env-gated agent-launcher smoke (picker -> TUI)
   } else if (process.env.MOGGING_TEMPLATE && win) {
     runTemplateSmoke(win, process.env.MOGGING_TEMPLATE) // env-gated provider-mix template smoke
+  } else if (process.env.MOGGING_ATTENTION && win) {
+    runAttentionSmoke(win) // env-gated tab-attention aggregation smoke (Phase-2/01)
   }
 
   app.on('activate', () => {

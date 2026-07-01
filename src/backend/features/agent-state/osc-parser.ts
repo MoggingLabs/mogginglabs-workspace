@@ -1,20 +1,23 @@
 import type { AgentState } from '@contracts'
 
-// Incremental scanner for OSC (Operating System Command) sequences on a raw PTY
-// stream. An OSC starts with ESC ] and ends with BEL (0x07) or ST (ESC \).
+// Incremental scanner for OSC (Operating System Command) sequences on a raw PTY stream. An OSC
+// starts with ESC ] and ends with BEL (0x07) or ST (ESC \).
 //
 //   OSC 9 / 99 / 777          notifications              -> "attention"
-//   OSC 133 ; C               command start              -> "busy"
-//   OSC 133 ; D[;exit]        command end (+ exit code)  -> "idle"
+//   OSC 133 ; A               prompt start                            (mark, for command blocks)
+//   OSC 133 ; B               command line start                      (mark, for command blocks)
+//   OSC 133 ; C               command execution start    -> "busy"    (mark)
+//   OSC 133 ; D[;exit]        command end (+ exit code)  -> "idle"    (mark)
 //   OSC 7  ; file://host/path current working directory
 //
-// Phase-0 scope: detects sequences fully contained in a chunk. Sequences split
-// exactly on a chunk boundary are dropped (rare; hardened in Phase 2 with a carry
-// buffer). Not every CLI emits OSC, so pair with an output-quiescence heuristic.
+// Phase-2 hardening: a proper byte state machine that carries `inOsc`, the body `buf`, AND a
+// `pendingEsc` flag across chunk boundaries — so a sequence split anywhere (including exactly on
+// the ESC of `ESC ]` or the ESC of the `ESC \` terminator) is parsed correctly, not dropped. Not
+// every CLI emits OSC, so state is paired with an output-quiescence heuristic elsewhere.
 
 /** A decoded OSC event of interest (backend-internal detail, not on the wire). */
 export interface OscEvent {
-  kind: 'notify' | 'cmd-start' | 'cmd-end' | 'cwd'
+  kind: 'notify' | 'prompt' | 'cmd-line' | 'cmd-start' | 'cmd-end' | 'cwd'
   code: number
   payload?: string
   exitCode?: number
@@ -29,6 +32,7 @@ const MAX_OSC = 4096
 export class OscParser {
   private buf = ''
   private inOsc = false
+  private pendingEsc = false // saw an ESC as the last byte; its meaning depends on the NEXT byte
 
   constructor(
     private readonly onState: (state: AgentState) => void,
@@ -39,24 +43,37 @@ export class OscParser {
     for (let i = 0; i < data.length; i++) {
       const code = data.charCodeAt(i)
 
-      if (!this.inOsc) {
-        if (code === ESC && data.charCodeAt(i + 1) === OSC_INTRO) {
-          this.inOsc = true
+      if (this.pendingEsc) {
+        this.pendingEsc = false
+        if (this.inOsc) {
+          if (code === ST_TAIL) {
+            this.flush() // ESC \ = ST terminator
+            this.inOsc = false
+            continue
+          }
+          // ESC not followed by '\' inside an OSC terminates it (discard); re-arm on ESC.
+          this.inOsc = false
           this.buf = ''
-          i++ // consume ']'
+          if (code === ESC) this.pendingEsc = true
+          continue
+        }
+        if (code === OSC_INTRO) {
+          this.inOsc = true // ESC ] = OSC start
+          this.buf = ''
+        } else if (code === ESC) {
+          this.pendingEsc = true
         }
         continue
       }
 
+      if (code === ESC) {
+        this.pendingEsc = true
+        continue
+      }
+      if (!this.inOsc) continue
       if (code === BEL) {
         this.flush()
         this.inOsc = false
-        continue
-      }
-      if (code === ESC && data.charCodeAt(i + 1) === ST_TAIL) {
-        this.flush()
-        this.inOsc = false
-        i++ // consume '\'
         continue
       }
 
@@ -84,7 +101,11 @@ export class OscParser {
         break
       case 133: {
         const mark = rest[0]
-        if (mark === 'C') {
+        if (mark === 'A') {
+          this.onEvent?.({ kind: 'prompt', code })
+        } else if (mark === 'B') {
+          this.onEvent?.({ kind: 'cmd-line', code })
+        } else if (mark === 'C') {
           this.onState('busy')
           this.onEvent?.({ kind: 'cmd-start', code })
         } else if (mark === 'D') {

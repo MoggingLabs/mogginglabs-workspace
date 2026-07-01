@@ -10,5 +10,8 @@ export const workspaceClient = {
   },
   onOpenCwd: (cb: (cwd: string) => void): void => {
     getBridge().on(WorkspaceChannels.openCwd, (p) => cb(p as string))
+  },
+  setAttention: (anyAttention: boolean): void => {
+    getBridge().send(WorkspaceChannels.attention, anyAttention)
   }
 }

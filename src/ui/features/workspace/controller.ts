@@ -1,6 +1,7 @@
-import type { PaneId } from '@contracts'
+import type { AgentState, PaneId } from '@contracts'
 import { GridLayout } from '../layout'
 import { setFocusedPane } from '../../core/layout/focus'
+import { paneState, onAttentionChange } from '../../core/attention/attention-port'
 import { requestAgentLaunch } from '../../core/agents/launch-port'
 import type { TemplateWorkspaceSpec } from '../../core/workspace/open-service'
 import { type WorkspaceMeta, colorForOrdinal, newWorkspaceId } from './model'
@@ -10,6 +11,7 @@ interface WorkspaceView {
   tab: HTMLElement
   container: HTMLElement
   layout: GridLayout
+  attentionLatched: boolean
 }
 
 export interface CreateOpts {
@@ -36,8 +38,11 @@ export class WorkspaceController {
   constructor(
     private readonly tabsEl: HTMLElement,
     private readonly hostEl: HTMLElement,
-    private readonly onChange: () => void
-  ) {}
+    private readonly onChange: () => void,
+    private readonly onAttention?: (anyAttention: boolean) => void
+  ) {
+    onAttentionChange(() => this.refreshAttention())
+  }
 
   list(): WorkspaceMeta[] {
     return Array.from(this.views.values()).map((v) => v.meta)
@@ -75,7 +80,7 @@ export class WorkspaceController {
     const tab = this.makeTab(meta)
     this.tabsEl.append(tab)
 
-    this.views.set(meta.id, { meta, tab, container, layout })
+    this.views.set(meta.id, { meta, tab, container, layout, attentionLatched: false })
     layout.apply(meta.paneCount)
 
     if (opts.activate !== false) this.switch(meta.id)
@@ -124,7 +129,35 @@ export class WorkspaceController {
       paneId: view.layout.focusedPaneId() ?? ((view.meta.ordinal * 100 + 1) as PaneId),
       cwd: view.meta.cwd
     })
+    this.refreshAttention() // activating a workspace clears its ring (you're looking at it)
     this.onChange()
+  }
+
+  /** Recompute each workspace's tab attention indicator + the app-level any-attention flag. A
+   *  tab rings when a BACKGROUND pane needs you (attention latches until you focus that tab;
+   *  busy shows a softer dot). The active workspace never rings. */
+  private refreshAttention(): void {
+    let anyAttention = false
+    for (const view of this.views.values()) {
+      const active = view.meta.id === this.activeId
+      const base = view.meta.ordinal * 100
+      let maxState: AgentState = 'idle'
+      for (let i = 1; i <= view.meta.paneCount; i++) {
+        const s = paneState((base + i) as PaneId)
+        if (s === 'attention') {
+          maxState = 'attention'
+          break
+        }
+        if (s === 'busy') maxState = 'busy'
+      }
+      if (active) view.attentionLatched = false
+      else if (maxState === 'attention') view.attentionLatched = true
+      const indicator = active ? '' : view.attentionLatched ? 'attention' : maxState === 'busy' ? 'busy' : ''
+      if (indicator) view.tab.dataset.attention = indicator
+      else delete view.tab.dataset.attention
+      if (indicator === 'attention') anyAttention = true
+    }
+    this.onAttention?.(anyAttention)
   }
 
   /** Switch by tab position (Ctrl/Cmd+1..9). */

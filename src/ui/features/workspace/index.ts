@@ -1,10 +1,11 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import type { WorkspaceState } from '@contracts'
+import type { AgentState, PaneId, WorkspaceState } from '@contracts'
 import { TEMPLATE_COUNTS } from '../layout'
 import { WorkspaceController, type CreateOpts } from './controller'
 import { workspaceClient } from './workspace.client'
 import { THEMES, DEFAULT_THEME_ID, applyTheme } from './themes'
 import { setWorkspaceOpener } from '../../core/workspace/open-service'
+import { setPaneState } from '../../core/attention/attention-port'
 
 function debounce(fn: () => void, ms: number): () => void {
   let t: ReturnType<typeof setTimeout> | undefined
@@ -88,10 +89,15 @@ export const workspaceFeature: UiFeature = {
       workspaceClient.saveState(state)
     }, 400)
 
-    const controller = new WorkspaceController(tabs, host, () => {
-      syncToolbar()
-      persist()
-    })
+    const controller = new WorkspaceController(
+      tabs,
+      host,
+      () => {
+        syncToolbar()
+        persist()
+      },
+      (anyAttention) => workspaceClient.setAttention(anyAttention)
+    )
 
     // 06b: let the templates feature open a workspace from a provider-mix template.
     setWorkspaceOpener((spec) => controller.openFromTemplate(spec))
@@ -193,5 +199,8 @@ function exposeForDev(controller: WorkspaceController): void {
     list: () => controller.list(),
     active: () => controller.activeMeta(),
     count: () => controller.list().length
+  }
+  w.__mogging.attention = {
+    setPaneState: (id: number, state: string) => setPaneState(id as PaneId, state as AgentState)
   }
 }

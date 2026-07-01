@@ -21,7 +21,8 @@ export const ClipboardChannels = {
 export const WorkspaceChannels = {
   loadState: 'workspace:loadState',
   saveState: 'workspace:saveState',
-  openCwd: 'workspace:openCwd' // main -> renderer: open/focus a workspace for a directory
+  openCwd: 'workspace:openCwd', // main -> renderer: open/focus a workspace for a directory
+  attention: 'workspace:attention' // renderer -> main: any workspace needs attention (dock/taskbar badge)
 } as const
 
 export const AgentChannels = {

@@ -8,6 +8,7 @@ import { getBridge } from '../../core/ipc/bridge'
 import { terminalClient } from './terminal.client'
 import { onTerminalTheme } from '../../core/theme/theme-port'
 import { onPaneLabel, getPaneLabel } from '../../core/layout/pane-meta'
+import { setPaneState, clearPaneState } from '../../core/attention/attention-port'
 
 /** A single xterm pane bound to a backend PTY of the same id. */
 export class TerminalPane {
@@ -115,7 +116,10 @@ export class TerminalPane {
     applyLabel(getPaneLabel(this.id) ?? '')
 
     terminalClient.onState((e) => {
-      if (e.id === this.id) state.dataset.state = e.state
+      if (e.id === this.id) {
+        state.dataset.state = e.state
+        setPaneState(this.id, e.state) // feed the workspace-tab / app attention aggregation
+      }
     })
     this.paneLabelUnsub = onPaneLabel((paneId, text) => {
       if (paneId === this.id) applyLabel(text)
@@ -154,6 +158,7 @@ export class TerminalPane {
   }
 
   dispose(): void {
+    clearPaneState(this.id)
     this.themeUnsub?.()
     this.paneLabelUnsub?.()
     this.resizeObs.disconnect()

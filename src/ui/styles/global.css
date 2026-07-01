@@ -152,6 +152,31 @@ body {
   color: var(--text);
 }
 
+/* Phase-2/01: a background tab rings/badges when one of its panes needs attention. */
+.workspace-tab[data-attention="busy"] .ws-dot {
+  background: var(--warn);
+}
+
+.workspace-tab[data-attention="attention"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 8px rgba(74, 222, 128, 0.45);
+}
+
+.workspace-tab[data-attention="attention"] .ws-dot {
+  background: var(--accent);
+  animation: ws-attention-pulse 1.3s ease-in-out infinite;
+}
+
+@keyframes ws-attention-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
 #ws-add {
   width: 24px;
   height: 22px;
