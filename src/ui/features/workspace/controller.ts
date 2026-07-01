@@ -1,6 +1,8 @@
 import type { PaneId } from '@contracts'
 import { GridLayout } from '../layout'
 import { setFocusedPane } from '../../core/layout/focus'
+import { requestAgentLaunch } from '../../core/agents/launch-port'
+import type { TemplateWorkspaceSpec } from '../../core/workspace/open-service'
 import { type WorkspaceMeta, colorForOrdinal, newWorkspaceId } from './model'
 
 interface WorkspaceView {
@@ -17,6 +19,7 @@ export interface CreateOpts {
   ordinal?: number
   paneCount?: number
   activate?: boolean
+  assignments?: string[]
 }
 
 /**
@@ -58,7 +61,8 @@ export class WorkspaceController {
       color: colorForOrdinal(ordinal),
       cwd: opts.cwd ?? '',
       ordinal,
-      paneCount: opts.paneCount ?? 1
+      paneCount: opts.paneCount ?? 1,
+      assignments: opts.assignments
     }
 
     const container = document.createElement('div')
@@ -168,5 +172,34 @@ export class WorkspaceController {
     }
     const name = cwd ? cwd.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || 'Workspace' : undefined
     return this.create({ cwd, name })
+  }
+
+  /** Open a workspace from a template spec (06b): the resolved grid + its provider lineup. */
+  openFromTemplate(spec: TemplateWorkspaceSpec): WorkspaceMeta {
+    const meta = this.create({
+      name: spec.name,
+      cwd: spec.cwd,
+      paneCount: spec.paneCount,
+      assignments: spec.assignments
+    })
+    this.launchLineup(meta.id, false)
+    return meta
+  }
+
+  /** Launch each non-shell pane's assigned CLI (06b). Delayed so the panes' PTYs are spawned
+   *  and ready to accept input. `resume` re-launches the lineup on restore. */
+  launchLineup(id: string, resume: boolean): void {
+    const view = this.views.get(id)
+    const assignments = view?.meta.assignments
+    if (!view || !assignments) return
+    const base = view.meta.ordinal * 100
+    const cwd = view.meta.cwd
+    setTimeout(() => {
+      assignments.forEach((provider, i) => {
+        if (provider && provider !== 'shell') {
+          requestAgentLaunch({ paneId: (base + i + 1) as PaneId, provider, cwd, resume })
+        }
+      })
+    }, 900)
   }
 }

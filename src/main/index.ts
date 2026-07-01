@@ -6,6 +6,7 @@ import { initMainTelemetry } from './telemetry'
 import { registerClipboard } from './clipboard'
 import { registerAppSettings, disposeAppSettings } from './app-settings'
 import { registerAgents } from './agents'
+import { registerTemplates } from './templates'
 import { runSmoke } from './smoke'
 import { runAgentSmoke } from './agent-smoke'
 import { runStateSmoke } from './state-smoke'
@@ -14,6 +15,7 @@ import { runShot } from './shot'
 import { runMultipaneSmoke } from './multipane-smoke'
 import { runWorkspaceSmoke } from './workspace-smoke'
 import { runAgentLaunchSmoke } from './agentlaunch-smoke'
+import { runTemplateSmoke } from './template-smoke'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { registerDeepLink, initialDeepLinkCwd } from './deep-link'
@@ -75,6 +77,7 @@ app.whenReady().then(async () => {
   registerClipboard() // system clipboard IPC (app-layer, Electron-only)
   registerAppSettings() // app-level workspace state (tabs + theme) persistence (Phase-1/05)
   registerAgents() // agent launcher: detect installed CLIs + build launch commands (Phase-1/06)
+  registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
 
   openWindow()
 
@@ -105,6 +108,8 @@ app.whenReady().then(async () => {
     runWorkspaceSmoke(win, process.env.MOGGING_WORKSPACE) // env-gated workspace persist/restore smoke
   } else if (process.env.MOGGING_AGENTLAUNCH && win) {
     runAgentLaunchSmoke(win) // env-gated agent-launcher smoke (picker -> TUI)
+  } else if (process.env.MOGGING_TEMPLATE && win) {
+    runTemplateSmoke(win, process.env.MOGGING_TEMPLATE) // env-gated provider-mix template smoke
   }
 
   app.on('activate', () => {

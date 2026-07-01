@@ -4,6 +4,7 @@ import { TEMPLATE_COUNTS } from '../layout'
 import { WorkspaceController, type CreateOpts } from './controller'
 import { workspaceClient } from './workspace.client'
 import { THEMES, DEFAULT_THEME_ID, applyTheme } from './themes'
+import { setWorkspaceOpener } from '../../core/workspace/open-service'
 
 function debounce(fn: () => void, ms: number): () => void {
   let t: ReturnType<typeof setTimeout> | undefined
@@ -78,7 +79,8 @@ export const workspaceFeature: UiFeature = {
           color: m.color,
           cwd: m.cwd,
           ordinal: m.ordinal,
-          paneCount: m.paneCount
+          paneCount: m.paneCount,
+          assignments: m.assignments
         })),
         activeId: controller.activeMeta()?.id ?? null,
         theme: currentTheme
@@ -90,6 +92,9 @@ export const workspaceFeature: UiFeature = {
       syncToolbar()
       persist()
     })
+
+    // 06b: let the templates feature open a workspace from a provider-mix template.
+    setWorkspaceOpener((spec) => controller.openFromTemplate(spec))
 
     for (const n of TEMPLATE_COUNTS) {
       const btn = document.createElement('button')
@@ -151,8 +156,13 @@ export const workspaceFeature: UiFeature = {
             cwd: w.cwd,
             ordinal: w.ordinal,
             paneCount: w.paneCount,
-            activate: false
+            activate: false,
+            assignments: w.assignments
           })
+        }
+        // 06b: re-launch each template workspace's lineup (each CLI self-auths on resume).
+        for (const w of state.workspaces) {
+          if (w.assignments) controller.launchLineup(w.id, true)
         }
         if (activeId && controller.list().some((m) => m.id === activeId)) controller.switch(activeId)
         else controller.switchByIndex(0)

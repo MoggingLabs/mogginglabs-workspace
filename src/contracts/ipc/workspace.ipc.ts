@@ -38,6 +38,7 @@ export interface WorkspaceStateMeta {
   cwd: string
   ordinal: number
   paneCount: number
+  assignments?: string[] // per-slot provider (06b template lineup); undefined = plain shells
 }
 
 /** Full app-level workspace state persisted across relaunch. */

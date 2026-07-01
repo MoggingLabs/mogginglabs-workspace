@@ -21,3 +21,8 @@ export function disposeAppSettings(): void {
   store?.close()
   store = null
 }
+
+/** The shared app-settings store (also backs 06b provider-mix templates). */
+export function getSettingsStore(): SettingsStore | null {
+  return store
+}

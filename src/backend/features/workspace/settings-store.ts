@@ -1,9 +1,9 @@
-// App-level workspace state (tabs + theme) for Phase-1/05, persisted with the same
-// better-sqlite3 mechanism as the session store (03). Electron-free. Metadata ONLY — no
-// credentials (ADR 0002). Kept in a SEPARATE db from the daemon's sessions.db so the two
-// processes never contend on one file: main owns this; the daemon owns sessions.
+// App-level workspace state (tabs + theme + 06b template lineups) for Phase-1/05-06b,
+// persisted with the same better-sqlite3 mechanism as the session store (03). Electron-free.
+// Metadata ONLY — no credentials (ADR 0002). Kept in a SEPARATE db from the daemon's
+// sessions.db so the two processes never contend on one file: main owns this; daemon owns sessions.
 import Database from 'better-sqlite3'
-import type { WorkspaceState, WorkspaceStateMeta } from '@contracts'
+import type { ProviderCount, ProviderMixTemplate, WorkspaceState, WorkspaceStateMeta } from '@contracts'
 
 export class SettingsStore {
   private readonly db: Database.Database
@@ -19,16 +19,35 @@ export class SettingsStore {
         cwd TEXT NOT NULL,
         ordinal INTEGER NOT NULL,
         pane_count INTEGER NOT NULL,
-        position INTEGER NOT NULL
+        position INTEGER NOT NULL,
+        assignments TEXT
       );
       CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS app_templates (id TEXT PRIMARY KEY, name TEXT NOT NULL, mix TEXT NOT NULL);
     `)
+    // Migrate pre-06b dbs that lack the assignments column (per-workspace template lineup).
+    try {
+      this.db.exec('ALTER TABLE app_workspaces ADD COLUMN assignments TEXT')
+    } catch {
+      /* column already exists */
+    }
   }
 
   load(): WorkspaceState {
-    const workspaces = this.db
-      .prepare('SELECT id, name, color, cwd, ordinal, pane_count AS paneCount FROM app_workspaces ORDER BY position')
-      .all() as WorkspaceStateMeta[]
+    const rows = this.db
+      .prepare(
+        'SELECT id, name, color, cwd, ordinal, pane_count AS paneCount, assignments FROM app_workspaces ORDER BY position'
+      )
+      .all() as Array<WorkspaceStateMeta & { assignments: string | null }>
+    const workspaces: WorkspaceStateMeta[] = rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      color: r.color,
+      cwd: r.cwd,
+      ordinal: r.ordinal,
+      paneCount: r.paneCount,
+      assignments: r.assignments ? (JSON.parse(r.assignments) as string[]) : undefined
+    }))
     const settings = this.db.prepare('SELECT key, value FROM app_settings').all() as Array<{
       key: string
       value: string
@@ -46,9 +65,11 @@ export class SettingsStore {
     const tx = this.db.transaction((s: WorkspaceState) => {
       this.db.prepare('DELETE FROM app_workspaces').run()
       const ins = this.db.prepare(
-        'INSERT INTO app_workspaces (id, name, color, cwd, ordinal, pane_count, position) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO app_workspaces (id, name, color, cwd, ordinal, pane_count, position, assignments) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
       )
-      s.workspaces.forEach((w, i) => ins.run(w.id, w.name, w.color, w.cwd, w.ordinal, w.paneCount, i))
+      s.workspaces.forEach((w, i) =>
+        ins.run(w.id, w.name, w.color, w.cwd, w.ordinal, w.paneCount, i, w.assignments ? JSON.stringify(w.assignments) : null)
+      )
       const set = this.db.prepare(
         'INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
       )
@@ -56,6 +77,29 @@ export class SettingsStore {
       set.run('theme', s.theme)
     })
     tx(state)
+  }
+
+  // --- 06b: saved provider-mix templates (metadata only — providers + counts) ---
+
+  loadTemplates(): ProviderMixTemplate[] {
+    const rows = this.db.prepare('SELECT id, name, mix FROM app_templates ORDER BY rowid').all() as Array<{
+      id: string
+      name: string
+      mix: string
+    }>
+    return rows.map((r) => ({ id: r.id, name: r.name, mix: JSON.parse(r.mix) as ProviderCount[] }))
+  }
+
+  saveTemplate(t: ProviderMixTemplate): void {
+    this.db
+      .prepare(
+        'INSERT INTO app_templates (id, name, mix) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, mix = excluded.mix'
+      )
+      .run(t.id, t.name, JSON.stringify(t.mix))
+  }
+
+  removeTemplate(id: string): void {
+    this.db.prepare('DELETE FROM app_templates WHERE id = ?').run(id)
   }
 
   close(): void {

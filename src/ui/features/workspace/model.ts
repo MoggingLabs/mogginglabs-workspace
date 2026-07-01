@@ -11,6 +11,7 @@ export interface WorkspaceMeta {
   cwd: string
   ordinal: number
   paneCount: number
+  assignments?: string[] // per-slot provider (06b template lineup)
 }
 
 /** Tab accent colors, assigned round-robin by ordinal. */

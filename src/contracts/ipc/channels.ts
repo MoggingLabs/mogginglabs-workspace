@@ -29,9 +29,17 @@ export const AgentChannels = {
   command: 'agents:command' // (AgentCommandRequest) -> launch command string | null
 } as const
 
+export const TemplateChannels = {
+  list: 'templates:list', // -> ProviderMixTemplate[] (presets + custom)
+  resolve: 'templates:resolve', // (ProviderCount[]) -> ResolvedLayout
+  save: 'templates:save', // (ProviderMixTemplate) -> void
+  remove: 'templates:remove' // (id) -> void
+} as const
+
 export const AllChannels: readonly string[] = [
   ...Object.values(TerminalChannels),
   ...Object.values(ClipboardChannels),
   ...Object.values(WorkspaceChannels),
-  ...Object.values(AgentChannels)
+  ...Object.values(AgentChannels),
+  ...Object.values(TemplateChannels)
 ]

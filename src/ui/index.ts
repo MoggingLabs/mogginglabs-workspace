@@ -4,6 +4,7 @@ import { mountFeatures, registerFeature } from './core/registry/feature-registry
 import { workspaceFeature } from './features/workspace'
 import { terminalFeature } from './features/terminal'
 import { agentsFeature } from './features/agents'
+import { templatesFeature } from './features/templates'
 import { agentStateFeature } from './features/agent-state'
 
 export { getTelemetry, setTelemetry } from './core/telemetry'
@@ -21,6 +22,7 @@ export function start(): void {
   registerFeature(workspaceFeature) // owns tabs + per-workspace grids; provides slots
   registerFeature(terminalFeature)
   registerFeature(agentsFeature) // agent launcher (picker -> focused pane)
+  registerFeature(templatesFeature) // provider-mix workspace templates (06b)
   registerFeature(agentStateFeature)
   mountFeatures(shell)
 }
