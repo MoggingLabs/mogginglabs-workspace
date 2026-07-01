@@ -13,6 +13,7 @@ export class TerminalPane {
   private readonly fit = new FitAddon()
   private readonly serializer = new SerializeAddon()
   private readonly resizeObs: ResizeObserver
+  private devHandle: unknown
 
   constructor(
     private readonly id: PaneId,
@@ -21,7 +22,7 @@ export class TerminalPane {
     this.term = new Terminal({
       fontFamily: '"Cascadia Code", "Cascadia Mono", Menlo, Consolas, monospace',
       fontSize: 13,
-      cursorBlink: true,
+      cursorBlink: false, // enabled only while focused (perf: fewer idle repaints across panes)
       allowProposedApi: true,
       scrollback: 10000,
       theme: { background: '#0a0a0a', foreground: '#e6e6e6' }
@@ -58,7 +59,10 @@ export class TerminalPane {
     this.resizeObs.observe(host)
 
     void terminalClient.spawn({ id: this.id, cwd: '', cols: this.term.cols, rows: this.term.rows })
-    this.term.focus()
+
+    // Blink the cursor only while this pane is focused — cuts idle repaints across many panes.
+    this.term.textarea?.addEventListener('focus', () => (this.term.options.cursorBlink = true))
+    this.term.textarea?.addEventListener('blur', () => (this.term.options.cursorBlink = false))
 
     this.exposeForDev(host)
   }
@@ -87,16 +91,25 @@ export class TerminalPane {
    *  import.meta.env.DEV, so it is tree-shaken out of production builds. */
   private exposeForDev(host: HTMLElement): void {
     if (!import.meta.env.DEV) return
-    const w = window as unknown as { __mogging?: { panes: unknown[] } }
-    w.__mogging = w.__mogging ?? { panes: [] }
-    w.__mogging.panes.push({
+    const w = window as unknown as { __mogging?: { panes?: unknown[] } }
+    w.__mogging = w.__mogging ?? {}
+    w.__mogging.panes = w.__mogging.panes ?? []
+    this.devHandle = {
       id: this.id,
       term: this.term,
+      write: (data: string) => terminalClient.write({ id: this.id, data }),
+      text: (): string => {
+        const b = this.term.buffer.active
+        let s = ''
+        for (let i = 0; i < b.length; i++) s += (b.getLine(i)?.translateToString(true) ?? '') + '\n'
+        return s
+      },
       hasCanvas: () => !!host.querySelector('canvas'),
       bufferLines: () => this.term.buffer.active.length,
       rows: () => this.term.rows,
       cols: () => this.term.cols
-    })
+    }
+    w.__mogging.panes.push(this.devHandle)
   }
 
   /** Serialize the rendered buffer (ANSI). The daemon's raw scrollback is the primary
@@ -109,5 +122,10 @@ export class TerminalPane {
     this.resizeObs.disconnect()
     terminalClient.kill({ id: this.id })
     this.term.dispose()
+    if (this.devHandle) {
+      const arr = (window as unknown as { __mogging?: { panes?: unknown[] } }).__mogging?.panes
+      const i = arr?.indexOf(this.devHandle) ?? -1
+      if (arr && i >= 0) arr.splice(i, 1)
+    }
   }
 }

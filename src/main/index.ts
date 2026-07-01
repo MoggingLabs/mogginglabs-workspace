@@ -9,6 +9,7 @@ import { runAgentSmoke } from './agent-smoke'
 import { runStateSmoke } from './state-smoke'
 import { runReloadSmoke } from './reload-smoke'
 import { runShot } from './shot'
+import { runMultipaneSmoke } from './multipane-smoke'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 
@@ -70,6 +71,8 @@ app.whenReady().then(async () => {
     runSmoke(win) // env-gated runtime smoke test
   } else if (process.env.MOGGING_SHOT && win) {
     runShot(win) // env-gated visual smoke: capture the window to out/shot.png
+  } else if (process.env.MOGGING_MULTIPANE && win) {
+    runMultipaneSmoke(win) // env-gated multi-pane isolation smoke
   }
 
   app.on('activate', () => {

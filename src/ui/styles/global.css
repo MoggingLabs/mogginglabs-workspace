@@ -90,11 +90,89 @@ body {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
+  flex-direction: column;
 }
 
-.pane {
+#layout-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+
+#layout-toolbar .layout-toolbar-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  margin-right: 6px;
+}
+
+.layout-btn {
+  min-width: 26px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.layout-btn:hover {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.layout-btn.active {
+  color: var(--bg);
+  background: var(--text);
+  border-color: var(--text);
+}
+
+#layout-grid {
   flex: 1 1 auto;
   min-height: 0;
+  display: grid;
+  overflow: hidden;
+  background: var(--border);
+}
+
+.layout-slot {
   min-width: 0;
-  padding: 6px 8px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 4px 6px;
+  background: var(--bg);
+  border: 1px solid transparent;
+}
+
+.layout-slot.focused {
+  border-color: rgba(74, 222, 128, 0.4);
+}
+
+.layout-gutter {
+  z-index: 2;
+}
+
+.layout-gutter.vertical {
+  cursor: col-resize;
+}
+
+.layout-gutter.horizontal {
+  cursor: row-resize;
+}
+
+.layout-gutter:hover {
+  background: rgba(74, 222, 128, 0.35);
+}
+
+body.resizing,
+body.resizing * {
+  user-select: none;
 }
