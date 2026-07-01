@@ -18,7 +18,14 @@ export const ClipboardChannels = {
   read: 'clipboard:read'
 } as const
 
+export const WorkspaceChannels = {
+  loadState: 'workspace:loadState',
+  saveState: 'workspace:saveState',
+  openCwd: 'workspace:openCwd' // main -> renderer: open/focus a workspace for a directory
+} as const
+
 export const AllChannels: readonly string[] = [
   ...Object.values(TerminalChannels),
-  ...Object.values(ClipboardChannels)
+  ...Object.values(ClipboardChannels),
+  ...Object.values(WorkspaceChannels)
 ]

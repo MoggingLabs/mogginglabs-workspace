@@ -1,5 +1,5 @@
 import type { PaneId } from '@contracts'
-import { publishSlots, type LayoutSlot } from '../../core/layout/slots'
+import { publishSlots, clearSlots, type LayoutSlot } from '../../core/layout/slots'
 import { TEMPLATES, type GridSpec } from './templates'
 
 const GUTTER = 6 // px between tracks (the drag handle)
@@ -18,9 +18,13 @@ export class GridLayout {
   private rowFrs: number[] = [1]
   private readonly slotEls = new Map<number, HTMLElement>()
 
-  constructor(host: HTMLElement) {
+  constructor(
+    host: HTMLElement,
+    private readonly source: string,
+    private readonly baseId = 0
+  ) {
     this.grid = document.createElement('div')
-    this.grid.id = 'layout-grid'
+    this.grid.className = 'layout-grid'
     host.append(this.grid)
     this.grid.addEventListener('mousedown', (e) => {
       const slot = (e.target as HTMLElement).closest('.layout-slot') as HTMLElement | null
@@ -76,10 +80,11 @@ export class GridLayout {
     for (let r = 0; r < spec.rows; r++) {
       for (let c = 0; c < spec.cols; c++) {
         const el = this.ensureSlot(id)
+        el.dataset.paneId = String(this.baseId + id)
         el.style.gridColumn = String(2 * c + 1)
         el.style.gridRow = String(2 * r + 1)
         if (el.parentElement !== this.grid) this.grid.append(el)
-        slots.push({ id: id as PaneId, el })
+        slots.push({ id: (this.baseId + id) as PaneId, el })
         id++
       }
     }
@@ -90,7 +95,7 @@ export class GridLayout {
       const first = this.slotEls.get(1)
       if (first) this.setFocused(first)
     }
-    publishSlots(slots)
+    publishSlots(this.source, slots)
   }
 
   private trackList(frs: number[]): string {
@@ -152,5 +157,11 @@ export class GridLayout {
   private setFocused(slot: HTMLElement): void {
     for (const s of Array.from(this.grid.querySelectorAll('.layout-slot'))) s.classList.remove('focused')
     slot.classList.add('focused')
+  }
+
+  /** Tear down: clear this source's slots (terminal disposes its panes) + remove the grid. */
+  dispose(): void {
+    clearSlots(this.source)
+    this.grid.remove()
   }
 }

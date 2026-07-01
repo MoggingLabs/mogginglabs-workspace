@@ -1,7 +1,7 @@
 import './styles/global.css'
 import { createAppShell } from './shell/app-shell'
 import { mountFeatures, registerFeature } from './core/registry/feature-registry'
-import { layoutFeature } from './features/layout'
+import { workspaceFeature } from './features/workspace'
 import { terminalFeature } from './features/terminal'
 import { agentStateFeature } from './features/agent-state'
 
@@ -17,7 +17,7 @@ export function start(): void {
   if (!root) throw new Error('#root not found')
 
   const shell = createAppShell(root)
-  registerFeature(layoutFeature) // provides slots; must register before terminal fills them
+  registerFeature(workspaceFeature) // owns tabs + per-workspace grids; provides slots
   registerFeature(terminalFeature)
   registerFeature(agentStateFeature)
   mountFeatures(shell)

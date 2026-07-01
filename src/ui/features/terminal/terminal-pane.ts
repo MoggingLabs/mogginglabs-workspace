@@ -6,6 +6,7 @@ import { ClipboardChannels, type PaneId } from '@contracts'
 import '@xterm/xterm/css/xterm.css'
 import { getBridge } from '../../core/ipc/bridge'
 import { terminalClient } from './terminal.client'
+import { onTerminalTheme } from '../../core/theme/theme-port'
 
 /** A single xterm pane bound to a backend PTY of the same id. */
 export class TerminalPane {
@@ -14,6 +15,7 @@ export class TerminalPane {
   private readonly serializer = new SerializeAddon()
   private readonly resizeObs: ResizeObserver
   private devHandle: unknown
+  private themeUnsub?: () => void
 
   constructor(
     private readonly id: PaneId,
@@ -63,6 +65,9 @@ export class TerminalPane {
     // Blink the cursor only while this pane is focused — cuts idle repaints across many panes.
     this.term.textarea?.addEventListener('focus', () => (this.term.options.cursorBlink = true))
     this.term.textarea?.addEventListener('blur', () => (this.term.options.cursorBlink = false))
+
+    // Apply the active theme now (replayed) + on every change (decoupled via the theme port).
+    this.themeUnsub = onTerminalTheme((theme) => (this.term.options.theme = theme))
 
     this.exposeForDev(host)
   }
@@ -119,6 +124,7 @@ export class TerminalPane {
   }
 
   dispose(): void {
+    this.themeUnsub?.()
     this.resizeObs.disconnect()
     terminalClient.kill({ id: this.id })
     this.term.dispose()

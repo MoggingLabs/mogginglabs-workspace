@@ -6,6 +6,9 @@
   "license": "SEE LICENSE IN LICENSE",
   "private": true,
   "main": "./out/main/index.js",
+  "bin": {
+    "mogging": "bin/mogging.mjs"
+  },
   "scripts": {
     "postinstall": "electron-builder install-app-deps",
     "dev": "electron-vite dev",

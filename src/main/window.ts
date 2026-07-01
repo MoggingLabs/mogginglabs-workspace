@@ -21,6 +21,18 @@ export function createMainWindow(): BrowserWindow {
     }
   })
 
+  if (process.env.MOGGING_DEVLOG) {
+    win.webContents.on('console-message', (_e, _level, message, line, source) => {
+      console.log(`[renderer] ${message} (${source}:${line})`)
+    })
+    win.webContents.on('did-fail-load', (_e, code, desc, url) => {
+      console.log(`[did-fail-load] ${code} ${desc} ${url}`)
+    })
+    win.webContents.on('render-process-gone', (_e, details) => {
+      console.log(`[render-process-gone] ${details.reason}`)
+    })
+  }
+
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {

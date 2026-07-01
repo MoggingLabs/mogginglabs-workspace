@@ -93,14 +93,105 @@ body {
   flex-direction: column;
 }
 
-#layout-toolbar {
+#workspace-bar {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   padding: 5px 10px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   user-select: none;
+}
+
+#workspace-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+}
+
+.workspace-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.workspace-tab .ws-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--ws-color, var(--muted));
+  flex: none;
+}
+
+.workspace-tab.active {
+  color: var(--text);
+  border-color: var(--ws-color, var(--border));
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.workspace-tab .ws-close {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 1px;
+}
+
+.workspace-tab .ws-close:hover {
+  color: var(--text);
+}
+
+#ws-add {
+  width: 24px;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  flex: none;
+}
+
+#ws-add:hover {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.ws-spacer {
+  flex: 1 1 auto;
+}
+
+#layout-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#theme-picker {
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  padding: 0 4px;
+  cursor: pointer;
+}
+
+#theme-picker:hover {
+  color: var(--text);
 }
 
 #layout-toolbar .layout-toolbar-label {
@@ -135,9 +226,27 @@ body {
   border-color: var(--text);
 }
 
-#layout-grid {
+#workspace-host {
   flex: 1 1 auto;
   min-height: 0;
+  display: flex;
+}
+
+.workspace-view {
+  display: none;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+.workspace-view.active {
+  display: flex;
+}
+
+.layout-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
   display: grid;
   overflow: hidden;
   background: var(--border);

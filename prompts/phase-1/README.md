@@ -27,7 +27,7 @@ Execute in order; each file is self-contained.
 | 02 | `02-persistent-pty-host.md` | **detached PTY daemon** (ADR 0006), now the **DEFAULT** — agents survive a main crash + app restart (**DONE**; macOS runtime-verify + version carry-over pending) |
 | 03 | `03-sqlite-persistence-and-restore.md` | **DONE** (better-sqlite3 in `@backend/features/workspace`): cwd + scrollback restore across a daemon crash/relaunch; secret-audit clean; CI green. Workspace/layout persistence extends here with 04/05 |
 | 04 | `04-multi-pane-layout.md` | **DONE**: split/grid templates (1/2/4/6/8/9/12/16), drag-resize, focus; 8 panes concurrent + isolated (multi-pane smoke green) |
-| 05 | `05-workspace-tabs.md` | multiple workspace tabs; `mogging .` launcher; themes |
+| 05 | `05-workspace-tabs.md` | **DONE**: color-coded workspace tabs (new/close/switch, Ctrl+T, Ctrl+1..9), each = dir + own layout; `mogging .` launcher (bin + `mogging://` deep link); theme picker; persist/restore via a main-side SettingsStore (workspace smoke green) |
 | 06 | `06-agent-launcher.md` | one-click launch of a CLI into a pane with cwd; BYO auth |
 | 07 | `07-packaging-signing-updates.md` | signed/notarized installers + auto-update for win/mac |
 

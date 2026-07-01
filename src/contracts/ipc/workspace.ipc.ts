@@ -25,3 +25,24 @@ export interface PersistedWorkspace {
   layout?: string // JSON-serialized WorkspaceLayout
   updatedAt: number
 }
+
+// --- App-level workspace state (Phase-1/05: tabs + theme) ------------------------------
+// Persisted by the app layer (main) so tabs/themes restore on relaunch. Metadata ONLY —
+// name/color/cwd/ordinal/paneCount + the theme id. NEVER credentials (ADR 0002).
+
+/** One workspace tab's persisted metadata. `ordinal` maps to its base pane id. */
+export interface WorkspaceStateMeta {
+  id: string
+  name: string
+  color: string
+  cwd: string
+  ordinal: number
+  paneCount: number
+}
+
+/** Full app-level workspace state persisted across relaunch. */
+export interface WorkspaceState {
+  workspaces: WorkspaceStateMeta[]
+  activeId: string | null
+  theme: string
+}

@@ -4,14 +4,18 @@ import { createMainWindow } from './window'
 import { createElectronContext } from './electron-context'
 import { initMainTelemetry } from './telemetry'
 import { registerClipboard } from './clipboard'
+import { registerAppSettings, disposeAppSettings } from './app-settings'
 import { runSmoke } from './smoke'
 import { runAgentSmoke } from './agent-smoke'
 import { runStateSmoke } from './state-smoke'
 import { runReloadSmoke } from './reload-smoke'
 import { runShot } from './shot'
 import { runMultipaneSmoke } from './multipane-smoke'
+import { runWorkspaceSmoke } from './workspace-smoke'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
+import { registerDeepLink, initialDeepLinkCwd } from './deep-link'
+import { WorkspaceChannels } from '@contracts'
 
 // App-wiring layer: compose the backend over an Electron context and open the
 // window. All real logic lives in @backend and @ui; this file only connects them.
@@ -25,6 +29,12 @@ import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 let win: BrowserWindow | null = null
 let disposeBackend: (() => void) | null = null
 
+// Single-instance + mogging:// deep link so `mogging .` focuses a running app. Skipped under
+// smokes (some launch a second instance); normal dev/production runs hold the lock.
+const isSmoke = Object.keys(process.env).some((k) => k.startsWith('MOGGING_'))
+const primaryInstance = isSmoke || app.requestSingleInstanceLock()
+if (!primaryInstance) app.quit()
+
 function openWindow(): void {
   win = createMainWindow()
   win.on('closed', () => {
@@ -33,6 +43,8 @@ function openWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  if (!primaryInstance) return // a second instance; the primary handles the deep link + quits us
+
   // Env-gated app-level survival smoke: two separate launches (A then B) prove an agent
   // in the detached daemon outlives an app quit/relaunch (ADR 0006).
   if (process.env.MOGGING_SURVIVE) {
@@ -59,8 +71,21 @@ app.whenReady().then(async () => {
     }
   }
   registerClipboard() // system clipboard IPC (app-layer, Electron-only)
+  registerAppSettings() // app-level workspace state (tabs + theme) persistence (Phase-1/05)
 
   openWindow()
+
+  if (!isSmoke) {
+    registerDeepLink(() => win) // mogging:// -> open/focus a workspace for a directory
+    const initialCwd = initialDeepLinkCwd()
+    if (initialCwd && win) {
+      const w = win
+      const send = (): void => w.webContents.send(WorkspaceChannels.openCwd, initialCwd)
+      if (w.webContents.isLoading()) w.webContents.once('did-finish-load', send)
+      else send()
+    }
+  }
+
   if (process.env.MOGGING_AGENT && win) {
     runAgentSmoke(win, process.env.MOGGING_AGENT) // env-gated agent-CLI TUI smoke
   } else if (process.env.MOGGING_STATE && win) {
@@ -73,6 +98,8 @@ app.whenReady().then(async () => {
     runShot(win) // env-gated visual smoke: capture the window to out/shot.png
   } else if (process.env.MOGGING_MULTIPANE && win) {
     runMultipaneSmoke(win) // env-gated multi-pane isolation smoke
+  } else if (process.env.MOGGING_WORKSPACE && win) {
+    runWorkspaceSmoke(win, process.env.MOGGING_WORKSPACE) // env-gated workspace persist/restore smoke
   }
 
   app.on('activate', () => {
@@ -85,6 +112,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  disposeAppSettings()
   disposeBackend?.()
   disposeBackend = null
   void getTelemetry().flush(2000)
