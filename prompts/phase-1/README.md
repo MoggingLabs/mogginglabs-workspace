@@ -6,6 +6,9 @@ Sequenced task prompts to turn the validated Phase-0 spike into the MVP: multi-p
 layered architecture or ADR 0002 (never broker auth). Same format as `prompts/phase-0/`.
 Execute in order; each file is self-contained.
 
+> Part of the sequenced master prompts — see [`../README.md`](../README.md) for the full phase
+> map (0 → 4) and where the cross-cutting sets (`observability/`, `features/`) fit.
+
 > **Do NOT start Phase 2 until every step's gate is green** on Windows + macOS.
 
 ## Where Phase 0 left us (context)

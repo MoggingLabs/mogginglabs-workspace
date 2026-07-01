@@ -5,6 +5,9 @@ parity gate. **Execute in order.** Each file is self-contained (its own goal, st
 files, Definition of Done, and green-checks). This README carries the shared context
 that applies to all of them.
 
+> Part of the sequenced master prompts — see [`../README.md`](../README.md) for the full phase
+> map (0 → 4) and where the cross-cutting sets (`observability/`, `features/`) fit.
+
 > **Do NOT start Phase 1 until every step's gate below is green.**
 
 ## Goal
