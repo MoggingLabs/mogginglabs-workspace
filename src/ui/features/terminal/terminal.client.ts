@@ -1,5 +1,6 @@
 import { TerminalChannels } from '@contracts'
 import type {
+  CwdEvent,
   DataEvent,
   ExitEvent,
   KillCommand,
@@ -23,5 +24,7 @@ export const terminalClient = {
   onExit: (cb: (e: ExitEvent) => void): void =>
     getBridge().on(TerminalChannels.exit, (p) => cb(p as ExitEvent)),
   onState: (cb: (e: StateEvent) => void): void =>
-    getBridge().on(TerminalChannels.state, (p) => cb(p as StateEvent))
+    getBridge().on(TerminalChannels.state, (p) => cb(p as StateEvent)),
+  onCwd: (cb: (e: CwdEvent) => void): void =>
+    getBridge().on(TerminalChannels.cwd, (p) => cb(p as CwdEvent))
 }

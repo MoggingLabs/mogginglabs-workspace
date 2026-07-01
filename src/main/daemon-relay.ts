@@ -18,7 +18,8 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
   const client = new DaemonClient(endpoint, {
     onData: (id, data) => getWebContents()?.send(TerminalChannels.data, { id: Number(id), data }),
     onExit: (id, exitCode) => getWebContents()?.send(TerminalChannels.exit, { id: Number(id), exitCode }),
-    onState: (id, state) => getWebContents()?.send(TerminalChannels.state, { id: Number(id), state })
+    onState: (id, state) => getWebContents()?.send(TerminalChannels.state, { id: Number(id), state }),
+    onCwd: (id, cwd) => getWebContents()?.send(TerminalChannels.cwd, { id: Number(id), cwd })
   })
   await client.connect()
 

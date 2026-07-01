@@ -466,6 +466,50 @@ body.resizing * {
   box-shadow: 0 0 6px var(--accent);
 }
 
+/* Per-pane read-only git chip: branch name + a dirty dot (Phase-2/03). Hidden until the pane's
+   cwd resolves to a repo; shows nothing (no error) otherwise. */
+.pane-git {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  font-size: 10px;
+  font-family: ui-monospace, monospace;
+  color: var(--muted);
+  max-width: 220px;
+}
+
+.pane-git.has-git {
+  display: inline-flex;
+}
+
+.pane-branch {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-dirty {
+  display: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--warn); /* amber = uncommitted work */
+  flex: 0 0 auto;
+}
+
+.pane-git.dirty .pane-dirty {
+  display: inline-block;
+}
+
+.pane-git.dirty {
+  color: var(--text);
+  border-color: var(--warn);
+}
+
 /* Provider-mix template dialog (06b) */
 .template-open-btn {
   height: 24px;

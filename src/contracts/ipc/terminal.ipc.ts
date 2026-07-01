@@ -34,3 +34,7 @@ export interface StateEvent {
   id: PaneId
   state: AgentState
 }
+export interface CwdEvent {
+  id: PaneId
+  cwd: string
+}

@@ -2,13 +2,15 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { SerializeAddon } from '@xterm/addon-serialize'
-import { ClipboardChannels, type PaneId } from '@contracts'
+import { ClipboardChannels, type GitStatus, type PaneId } from '@contracts'
 import '@xterm/xterm/css/xterm.css'
 import { getBridge } from '../../core/ipc/bridge'
 import { terminalClient } from './terminal.client'
 import { onTerminalTheme } from '../../core/theme/theme-port'
 import { onPaneLabel, getPaneLabel } from '../../core/layout/pane-meta'
 import { setPaneState, clearPaneState } from '../../core/attention/attention-port'
+import { setPaneCwd, clearPaneCwd } from '../../core/layout/pane-cwd'
+import { onPaneGit, getPaneGit } from '../../core/git/git-port'
 import { BlockTracker } from '../blocks'
 
 /** A single xterm pane bound to a backend PTY of the same id. */
@@ -20,6 +22,7 @@ export class TerminalPane {
   private devHandle: unknown
   private themeUnsub?: () => void
   private paneLabelUnsub?: () => void
+  private paneGitUnsub?: () => void
   private blocks?: BlockTracker
 
   constructor(
@@ -56,6 +59,10 @@ export class TerminalPane {
     })
     terminalClient.onExit((e) => {
       if (e.id === this.id) this.term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n')
+    })
+    // OSC 7 tells us where this pane's shell/agent actually is -> feed per-pane git (2/03).
+    terminalClient.onCwd((e) => {
+      if (e.id === this.id) setPaneCwd(this.id, e.cwd)
     })
     this.term.onData((data) => terminalClient.write({ id: this.id, data }))
 
@@ -111,10 +118,17 @@ export class TerminalPane {
     badge.className = 'pane-badge'
     const label = document.createElement('span')
     label.className = 'pane-label'
+    const git = document.createElement('span')
+    git.className = 'pane-git'
+    const branch = document.createElement('span')
+    branch.className = 'pane-branch'
+    const dirty = document.createElement('span')
+    dirty.className = 'pane-dirty'
+    git.append(branch, dirty)
     const state = document.createElement('span')
     state.className = 'pane-state'
     state.dataset.state = 'idle'
-    badge.append(label, state)
+    badge.append(label, git, state)
     host.append(badge)
 
     const applyLabel = (text: string): void => {
@@ -122,6 +136,24 @@ export class TerminalPane {
       badge.classList.toggle('has-label', !!text)
     }
     applyLabel(getPaneLabel(this.id) ?? '')
+
+    // Read-only git chip (2/03): the `git` feature publishes status on the git port; we just
+    // render it here, next to the agent label + state — so you see the branch + uncommitted work
+    // for each pane at a glance. Nothing here mutates a repo.
+    const applyGit = (status: GitStatus | null): void => {
+      if (!status) {
+        git.classList.remove('has-git')
+        return
+      }
+      const ab =
+        (status.ahead ? `↑${status.ahead}` : '') + (status.behind ? `↓${status.behind}` : '')
+      branch.textContent = `⎇ ${status.branch}${ab ? ' ' + ab : ''}`
+      git.title = `${status.detached ? 'detached @ ' : 'on '}${status.branch}` +
+        `${status.dirty ? ' — uncommitted changes' : ' — clean'}${status.root ? `\n${status.root}` : ''}`
+      git.classList.toggle('dirty', status.dirty)
+      git.classList.add('has-git')
+    }
+    applyGit(getPaneGit(this.id))
 
     terminalClient.onState((e) => {
       if (e.id === this.id) {
@@ -131,6 +163,9 @@ export class TerminalPane {
     })
     this.paneLabelUnsub = onPaneLabel((paneId, text) => {
       if (paneId === this.id) applyLabel(text)
+    })
+    this.paneGitUnsub = onPaneGit((paneId, status) => {
+      if (paneId === this.id) applyGit(status)
     })
   }
 
@@ -178,9 +213,11 @@ export class TerminalPane {
 
   dispose(): void {
     clearPaneState(this.id)
+    clearPaneCwd(this.id) // stops the backend git watch for this pane (git feature unwatches)
     this.blocks?.dispose()
     this.themeUnsub?.()
     this.paneLabelUnsub?.()
+    this.paneGitUnsub?.()
     this.resizeObs.disconnect()
     terminalClient.kill({ id: this.id })
     this.term.dispose()

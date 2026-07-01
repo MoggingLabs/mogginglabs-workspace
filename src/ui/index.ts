@@ -6,6 +6,7 @@ import { terminalFeature } from './features/terminal'
 import { agentsFeature } from './features/agents'
 import { templatesFeature } from './features/templates'
 import { agentStateFeature } from './features/agent-state'
+import { gitFeature } from './features/git'
 
 export { getTelemetry, setTelemetry } from './core/telemetry'
 
@@ -24,5 +25,6 @@ export function start(): void {
   registerFeature(agentsFeature) // agent launcher (picker -> focused pane)
   registerFeature(templatesFeature) // provider-mix workspace templates (06b)
   registerFeature(agentStateFeature)
+  registerFeature(gitFeature) // per-pane read-only git branch + dirty (Phase-2/03)
   mountFeatures(shell)
 }

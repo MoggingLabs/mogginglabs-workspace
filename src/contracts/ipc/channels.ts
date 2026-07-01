@@ -10,7 +10,8 @@ export const TerminalChannels = {
   kill: 'terminal:kill',
   data: 'terminal:data',
   exit: 'terminal:exit',
-  state: 'terminal:state'
+  state: 'terminal:state',
+  cwd: 'terminal:cwd' // backend -> renderer: a pane reported its cwd (OSC 7)
 } as const
 
 export const ClipboardChannels = {
@@ -37,10 +38,18 @@ export const TemplateChannels = {
   remove: 'templates:remove' // (id) -> void
 } as const
 
+export const GitChannels = {
+  query: 'git:query', // (cwd) -> GitStatus | null (one-shot, read-only)
+  watch: 'git:watch', // (GitWatchRequest) -> track a pane's cwd; change events follow
+  unwatch: 'git:unwatch', // (GitUnwatchRequest) -> stop tracking a pane
+  change: 'git:change' // backend -> renderer: GitStatusEvent (status resolved/changed)
+} as const
+
 export const AllChannels: readonly string[] = [
   ...Object.values(TerminalChannels),
   ...Object.values(ClipboardChannels),
   ...Object.values(WorkspaceChannels),
   ...Object.values(AgentChannels),
-  ...Object.values(TemplateChannels)
+  ...Object.values(TemplateChannels),
+  ...Object.values(GitChannels)
 ]

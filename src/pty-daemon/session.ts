@@ -8,7 +8,7 @@
 import * as os from 'node:os'
 import * as pty from 'node-pty'
 import type { SpawnSpec, PaneInfo, AgentState } from '@contracts'
-import { OscParser } from '@backend/features/agent-state'
+import { OscParser, fileUriToPath } from '@backend/features/agent-state'
 import { SessionStore, resumeCommandFor } from '@backend/features/workspace'
 import type { PersistedPane, PersistedWorkspace, WorkspaceLayout } from '@contracts'
 
@@ -18,6 +18,7 @@ export interface PaneSubscriber {
   send(data: string): void
   exit(code: number): void
   state(state: AgentState): void
+  cwd(path: string): void
 }
 
 interface PaneHooks {
@@ -34,6 +35,7 @@ class PaneSession {
   private proc: pty.IPty
   private buffer = ''
   private lastState: AgentState = 'idle'
+  private lastCwd?: string // last OSC-7-reported cwd; replayed to (re)attaching clients
   private subs = new Set<PaneSubscriber>()
 
   constructor(id: string, spec: SpawnSpec, hooks: PaneHooks, restore?: { scrollback: string; resumeCommand?: string | null }) {
@@ -54,12 +56,23 @@ class PaneSession {
       cwd: this.cwd,
       env: process.env as Record<string, string>
     })
-    // Parse OSC agent-state (idle/busy/attention) off the raw stream — same parser as the
-    // in-proc PtyService, so the daemon path has full agent-state parity.
-    const osc = new OscParser((state) => {
-      this.lastState = state
-      for (const s of this.subs) s.state(state)
-    })
+    // Parse OSC off the raw stream — same parser as the in-proc PtyService, so the daemon path
+    // has full parity: agent-state (idle/busy/attention) AND OSC-7 cwd for per-pane git (2/03).
+    const osc = new OscParser(
+      (state) => {
+        this.lastState = state
+        for (const s of this.subs) s.state(state)
+      },
+      (ev) => {
+        if (ev.kind === 'cwd' && ev.payload) {
+          const cwd = fileUriToPath(ev.payload)
+          if (cwd) {
+            this.lastCwd = cwd
+            for (const s of this.subs) s.cwd(cwd)
+          }
+        }
+      }
+    )
     this.proc.onData((d) => {
       this.buffer = (this.buffer + d).slice(-SCROLLBACK_BYTES)
       osc.push(d)
@@ -97,6 +110,7 @@ class PaneSession {
   subscribe(s: PaneSubscriber): void {
     this.subs.add(s)
     s.state(this.lastState) // replay current agent-state to a (re)attaching client
+    if (this.lastCwd) s.cwd(this.lastCwd) // ...and the last known cwd (only if OSC 7 reported one)
   }
   unsubscribe(s: PaneSubscriber): void {
     this.subs.delete(s)

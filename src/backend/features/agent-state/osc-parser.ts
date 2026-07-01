@@ -23,6 +23,25 @@ export interface OscEvent {
   exitCode?: number
 }
 
+/**
+ * Convert an OSC 7 `file://host/path` URI to a local filesystem path (used for per-pane cwd
+ * tracking). Returns null when unparseable. Handles Windows drive paths (`file://host/C:/x` ->
+ * `C:/x`) and percent-encoding. Pure — no Node/Electron deps, so both the in-proc PtyService and
+ * the daemon can share it.
+ */
+export function fileUriToPath(uri: string): string | null {
+  const m = /^file:\/\/[^/]*(\/.*)$/.exec(uri.trim())
+  if (!m) return null
+  let p: string
+  try {
+    p = decodeURIComponent(m[1])
+  } catch {
+    p = m[1]
+  }
+  if (/^\/[a-zA-Z]:/.test(p)) p = p.slice(1) // "/C:/Users/x" -> "C:/Users/x"
+  return p || null
+}
+
 const ESC = 0x1b
 const BEL = 0x07
 const ST_TAIL = 0x5c // '\', the second byte of ST (ESC \)

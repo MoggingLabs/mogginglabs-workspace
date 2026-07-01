@@ -12,7 +12,8 @@ export function createTerminalModule(): FeatureModule {
       service = new PtyService({
         data: (e) => ctx.emit(TerminalChannels.data, e),
         exit: (e) => ctx.emit(TerminalChannels.exit, e),
-        state: (e) => ctx.emit(TerminalChannels.state, e)
+        state: (e) => ctx.emit(TerminalChannels.state, e),
+        cwd: (e) => ctx.emit(TerminalChannels.cwd, e)
       })
       ctx.handle(TerminalChannels.spawn, (p) => service!.spawn(p))
       ctx.on(TerminalChannels.write, (p) => service!.write(p))

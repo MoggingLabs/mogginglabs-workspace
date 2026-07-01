@@ -75,6 +75,8 @@ export interface DaemonEvents {
   onData?: (id: string, data: string) => void
   onExit?: (id: string, code: number) => void
   onState?: (id: string, state: AgentState) => void
+  /** A pane's OSC-7 cwd (also replayed on (re)attach) — feeds per-pane git (2/03). */
+  onCwd?: (id: string, cwd: string) => void
   /** Panes the daemon already had when we connected (reconnect => reattach these). */
   onWelcome?: (panes: PaneInfo[]) => void
   onClose?: () => void
@@ -136,6 +138,9 @@ export class DaemonClient {
         break
       case 'state':
         this.events.onState?.(m.id, m.state)
+        break
+      case 'cwd':
+        this.events.onCwd?.(m.id, m.cwd)
         break
       case 'error':
         // surfaced via logs; a well-behaved client rarely hits this

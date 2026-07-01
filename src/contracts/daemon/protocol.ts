@@ -53,6 +53,7 @@ export type ServerMessage =
   | { t: 'data'; id: string; data: string }
   | { t: 'exit'; id: string; code: number }
   | { t: 'state'; id: string; state: AgentState }
+  | { t: 'cwd'; id: string; cwd: string }
   | { t: 'panes'; panes: PaneInfo[] }
   | { t: 'pong' }
 

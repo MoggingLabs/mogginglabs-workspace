@@ -1,6 +1,7 @@
 import type { AgentState, PaneId } from '@contracts'
 import { GridLayout } from '../layout'
 import { setFocusedPane } from '../../core/layout/focus'
+import { setPaneCwd } from '../../core/layout/pane-cwd'
 import { paneState, onAttentionChange } from '../../core/attention/attention-port'
 import { requestAgentLaunch } from '../../core/agents/launch-port'
 import type { TemplateWorkspaceSpec } from '../../core/workspace/open-service'
@@ -82,10 +83,19 @@ export class WorkspaceController {
 
     this.views.set(meta.id, { meta, tab, container, layout, attentionLatched: false })
     layout.apply(meta.paneCount)
+    this.publishPaneCwds(meta) // seed per-pane git with the workspace cwd (2/03)
 
     if (opts.activate !== false) this.switch(meta.id)
     this.onChange()
     return meta
+  }
+
+  /** Seed each of a workspace's panes with the workspace cwd on the pane-cwd port — the reliable
+   *  default for per-pane git (2/03). OSC 7 later refines a pane's cwd if its shell emits it. */
+  private publishPaneCwds(meta: WorkspaceMeta): void {
+    if (!meta.cwd) return
+    const base = meta.ordinal * 100
+    for (let i = 1; i <= meta.paneCount; i++) setPaneCwd((base + i) as PaneId, meta.cwd)
   }
 
   private makeTab(meta: WorkspaceMeta): HTMLElement {
@@ -188,6 +198,7 @@ export class WorkspaceController {
     if (!a) return
     a.layout.apply(n)
     a.meta.paneCount = n
+    this.publishPaneCwds(a.meta) // seed any newly-added panes' cwd for git (2/03)
     this.onChange()
   }
 

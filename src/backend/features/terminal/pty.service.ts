@@ -2,6 +2,7 @@ import { homedir } from 'node:os'
 import * as pty from 'node-pty'
 import type {
   AgentState,
+  CwdEvent,
   DataEvent,
   ExitEvent,
   KillCommand,
@@ -13,13 +14,14 @@ import type {
 import { defaultShell, shellArgs } from '../../platform/shell'
 import { killPtyTree } from '../../platform/process-tree'
 import { getTelemetry } from '../../core/telemetry'
-import { OscParser } from '../agent-state'
+import { OscParser, fileUriToPath } from '../agent-state'
 
 /** The sink the service pushes pane events into (wired to IPC by the module). */
 export interface TerminalSink {
   data(event: DataEvent): void
   exit(event: ExitEvent): void
   state(event: StateEvent): void
+  cwd(event: CwdEvent): void
 }
 
 /**
@@ -43,7 +45,16 @@ export class PtyService {
         env: process.env as Record<string, string>
       })
 
-      const osc = new OscParser((state: AgentState) => this.sink.state({ id: req.id, state }))
+      const osc = new OscParser(
+        (state: AgentState) => this.sink.state({ id: req.id, state }),
+        (ev) => {
+          // OSC 7 reports the pane's cwd -> surface it for per-pane git (Phase-2/03).
+          if (ev.kind === 'cwd' && ev.payload) {
+            const cwd = fileUriToPath(ev.payload)
+            if (cwd) this.sink.cwd({ id: req.id, cwd })
+          }
+        }
+      )
 
       proc.onData((data) => {
         osc.push(data)

@@ -8,6 +8,7 @@ import { registerAppSettings, disposeAppSettings } from './app-settings'
 import { registerAgents } from './agents'
 import { registerTemplates } from './templates'
 import { registerAttention } from './attention'
+import { registerGit } from './git'
 import { runSmoke } from './smoke'
 import { runAgentSmoke } from './agent-smoke'
 import { runStateSmoke } from './state-smoke'
@@ -19,6 +20,7 @@ import { runAgentLaunchSmoke } from './agentlaunch-smoke'
 import { runTemplateSmoke } from './template-smoke'
 import { runAttentionSmoke } from './attention-smoke'
 import { runBlocksSmoke } from './blocks-smoke'
+import { runGitSmoke } from './git-smoke'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { registerDeepLink, initialDeepLinkCwd } from './deep-link'
@@ -36,6 +38,7 @@ import { WorkspaceChannels } from '@contracts'
 
 let win: BrowserWindow | null = null
 let disposeBackend: (() => void) | null = null
+let disposeGit: (() => void) | null = null
 
 // Single-instance + mogging:// deep link so `mogging .` focuses a running app. Skipped under
 // smokes (some launch a second instance); normal dev/production runs hold the lock.
@@ -83,6 +86,7 @@ app.whenReady().then(async () => {
   registerAgents() // agent launcher: detect installed CLIs + build launch commands (Phase-1/06)
   registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
   registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
+  disposeGit = registerGit(() => win?.webContents ?? null) // read-only per-pane git branch + dirty (Phase-2/03)
 
   openWindow()
 
@@ -120,6 +124,8 @@ app.whenReady().then(async () => {
     runAttentionSmoke(win) // env-gated tab-attention aggregation smoke (Phase-2/01)
   } else if (process.env.MOGGING_BLOCKS && win) {
     runBlocksSmoke(win) // env-gated command-blocks smoke (Phase-2/02)
+  } else if (process.env.MOGGING_GIT && win) {
+    runGitSmoke(win) // env-gated per-pane git smoke (Phase-2/03)
   }
 
   app.on('activate', () => {
@@ -133,6 +139,8 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   disposeAppSettings()
+  disposeGit?.()
+  disposeGit = null
   disposeBackend?.()
   disposeBackend = null
   void getTelemetry().flush(2000)
