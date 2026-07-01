@@ -2,10 +2,14 @@
 // scrollback ring buffer, and fans output out to any number of attached clients. This is
 // purpose-built for the daemon (multi-client + reconnect + scrollback), which is why it
 // does not reuse @backend's single-client PtyService. (ADR 0006.)
+//
+// It also PERSISTS sessions (cwd + command label + scrollback) to a small store, so the
+// daemon self-recovers on a cold start / crash and repaints prior scrollback (Phase-1/03).
 import * as os from 'node:os'
 import * as pty from '@lydell/node-pty'
 import type { SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { OscParser } from '@backend/features/agent-state'
+import { loadPanes, writeNow, type PersistedPane } from './store'
 
 const SCROLLBACK_BYTES = 200_000
 
@@ -15,8 +19,15 @@ export interface PaneSubscriber {
   state(state: AgentState): void
 }
 
+interface PaneHooks {
+  onExit: () => void
+  onChange: () => void
+}
+
 class PaneSession {
   readonly id: string
+  readonly cwd: string
+  readonly command?: string
   cols: number
   rows: number
   private proc: pty.IPty
@@ -24,10 +35,14 @@ class PaneSession {
   private lastState: AgentState = 'idle'
   private subs = new Set<PaneSubscriber>()
 
-  constructor(id: string, spec: SpawnSpec, onExit: () => void) {
+  constructor(id: string, spec: SpawnSpec, hooks: PaneHooks, restore?: { scrollback: string }) {
     this.id = id
     this.cols = spec.cols ?? 80
     this.rows = spec.rows ?? 24
+    this.cwd = spec.cwd ?? os.homedir()
+    this.command = spec.run
+    if (restore?.scrollback) this.buffer = restore.scrollback // seed prior output for repaint
+
     const isWin = process.platform === 'win32'
     const shell = spec.shell ?? (isWin ? process.env.COMSPEC || 'cmd.exe' : process.env.SHELL || '/bin/bash')
     const args = spec.args ?? (isWin ? [] : ['-l'])
@@ -35,7 +50,7 @@ class PaneSession {
       name: 'xterm-256color',
       cols: this.cols,
       rows: this.rows,
-      cwd: spec.cwd ?? os.homedir(),
+      cwd: this.cwd,
       env: process.env as Record<string, string>
     })
     // Parse OSC agent-state (idle/busy/attention) off the raw stream — same parser as the
@@ -48,13 +63,16 @@ class PaneSession {
       this.buffer = (this.buffer + d).slice(-SCROLLBACK_BYTES)
       osc.push(d)
       for (const s of this.subs) s.send(d)
+      hooks.onChange()
     })
     this.proc.onExit(({ exitCode }) => {
       for (const s of this.subs) s.exit(exitCode)
       this.subs.clear()
-      onExit()
+      hooks.onExit()
     })
-    if (spec.run) this.proc.write(spec.run + '\r')
+    // Fresh panes run their launch command; RESTORED panes do NOT (avoid re-launching an
+    // agent) — they repaint prior scrollback in a fresh shell at the same cwd.
+    if (spec.run && !restore) this.proc.write(spec.run + '\r')
   }
 
   get scrollback(): string {
@@ -62,6 +80,9 @@ class PaneSession {
   }
   info(): PaneInfo {
     return { id: this.id, cols: this.cols, rows: this.rows }
+  }
+  snapshot(): PersistedPane {
+    return { id: this.id, cwd: this.cwd, command: this.command, scrollback: this.buffer, updatedAt: Date.now() }
   }
   subscribe(s: PaneSubscriber): void {
     this.subs.add(s)
@@ -93,6 +114,7 @@ class PaneSession {
 
 export class SessionManager {
   private panes = new Map<string, PaneSession>()
+  private persistTimer?: NodeJS.Timeout
 
   has(id: string): boolean {
     return this.panes.has(id)
@@ -106,15 +128,60 @@ export class SessionManager {
   get(id: string): PaneSession | undefined {
     return this.panes.get(id)
   }
+  snapshotAll(): PersistedPane[] {
+    return [...this.panes.values()].map((p) => p.snapshot())
+  }
+
+  private hooks(id: string): PaneHooks {
+    return {
+      onExit: () => {
+        this.panes.delete(id)
+        this.schedulePersist(500)
+      },
+      onChange: () => this.schedulePersist(2000)
+    }
+  }
 
   /** Spawn or return the existing pane (id-guard across the process boundary — a
    *  reconnecting client re-requesting the same id ATTACHES, never duplicates). */
   ensure(id: string, spec: SpawnSpec): { pane: PaneSession; existed: boolean } {
     const existing = this.panes.get(id)
     if (existing) return { pane: existing, existed: true }
-    const pane = new PaneSession(id, spec, () => this.panes.delete(id))
+    const pane = new PaneSession(id, spec, this.hooks(id))
     this.panes.set(id, pane)
+    this.schedulePersist(500)
     return { pane, existed: false }
+  }
+
+  /** Cold-start restore: re-create persisted panes (fresh shell at cwd + seeded scrollback).
+   *  Only runs into an empty manager. Returns how many panes were restored. */
+  restore(): number {
+    if (this.panes.size > 0) return 0
+    const persisted = loadPanes()
+    for (const p of persisted) {
+      const spec: SpawnSpec = { cwd: p.cwd, run: p.command }
+      const pane = new PaneSession(p.id, spec, this.hooks(p.id), { scrollback: p.scrollback })
+      this.panes.set(p.id, pane)
+    }
+    return persisted.length
+  }
+
+  /** Coalesced background write (scrollback churns constantly). */
+  schedulePersist(delayMs = 2000): void {
+    if (this.persistTimer) return
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = undefined
+      writeNow(this.snapshotAll())
+    }, delayMs)
+  }
+
+  /** Flush synchronously (e.g. on graceful shutdown). */
+  persistNow(): void {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer)
+      this.persistTimer = undefined
+    }
+    writeNow(this.snapshotAll())
   }
 
   remove(id: string): void {
@@ -122,6 +189,7 @@ export class SessionManager {
     if (p) {
       p.kill()
       this.panes.delete(id)
+      this.schedulePersist(500)
     }
   }
   killAll(): void {

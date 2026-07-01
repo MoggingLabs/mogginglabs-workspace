@@ -27,6 +27,8 @@ function main(): void {
   }
 
   const sessions = new SessionManager()
+  const restored = sessions.restore() // cold-start recovery: re-create persisted panes
+  if (restored) log('restored ' + restored + ' pane(s) from the session store')
   const token = crypto.randomBytes(24).toString('hex')
   const address = socketAddress(process.pid)
 
@@ -34,6 +36,11 @@ function main(): void {
   let idleTimer: NodeJS.Timeout | undefined
 
   const shutdown = (code: number): void => {
+    try {
+      sessions.persistNow() // flush session state so the next start restores it
+    } catch {
+      /* best effort */
+    }
     clearEndpoint()
     releaseLock()
     try {
