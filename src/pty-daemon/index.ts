@@ -4,7 +4,9 @@
 // PTYs; the app is a thin client that reconnects on each launch.
 import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { DAEMON_PROTOCOL_VERSION } from '@contracts'
+import { SessionStore } from '@backend/features/workspace'
 import { SessionManager } from './session'
 import { createServer } from './transport'
 import {
@@ -13,6 +15,7 @@ import {
   writeEndpoint,
   clearEndpoint,
   socketAddress,
+  runtimeDir,
   otherVersionEndpoints,
   log
 } from './lifecycle'
@@ -26,7 +29,7 @@ function main(): void {
     process.exit(0)
   }
 
-  const sessions = new SessionManager()
+  const sessions = new SessionManager(new SessionStore(path.join(runtimeDir(), 'sessions.db')))
   const restored = sessions.restore() // cold-start recovery: re-create persisted panes
   if (restored) log('restored ' + restored + ' pane(s) from the session store')
   const token = crypto.randomBytes(24).toString('hex')

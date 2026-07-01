@@ -1,6 +1,7 @@
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
+import { SerializeAddon } from '@xterm/addon-serialize'
 import { ClipboardChannels, type PaneId } from '@contracts'
 import '@xterm/xterm/css/xterm.css'
 import { getBridge } from '../../core/ipc/bridge'
@@ -10,6 +11,7 @@ import { terminalClient } from './terminal.client'
 export class TerminalPane {
   private readonly term: Terminal
   private readonly fit = new FitAddon()
+  private readonly serializer = new SerializeAddon()
   private readonly resizeObs: ResizeObserver
 
   constructor(
@@ -25,6 +27,7 @@ export class TerminalPane {
       theme: { background: '#0a0a0a', foreground: '#e6e6e6' }
     })
     this.term.loadAddon(this.fit)
+    this.term.loadAddon(this.serializer)
     this.term.open(host)
 
     // WebGL is the wedge — GPU rendering that stays smooth under many streaming
@@ -94,6 +97,12 @@ export class TerminalPane {
       rows: () => this.term.rows,
       cols: () => this.term.cols
     })
+  }
+
+  /** Serialize the rendered buffer (ANSI). The daemon's raw scrollback is the primary
+   *  persistence source (Phase-1/03); this is available for renderer-side snapshots/export. */
+  serialize(): string {
+    return this.serializer.serialize()
   }
 
   dispose(): void {

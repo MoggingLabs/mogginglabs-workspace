@@ -9,7 +9,8 @@ import * as os from 'node:os'
 import * as pty from '@lydell/node-pty'
 import type { SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { OscParser } from '@backend/features/agent-state'
-import { loadPanes, writeNow, type PersistedPane } from './store'
+import { SessionStore } from '@backend/features/workspace'
+import type { PersistedPane } from '@contracts'
 
 const SCROLLBACK_BYTES = 200_000
 
@@ -116,6 +117,8 @@ export class SessionManager {
   private panes = new Map<string, PaneSession>()
   private persistTimer?: NodeJS.Timeout
 
+  constructor(private readonly store: SessionStore) {}
+
   has(id: string): boolean {
     return this.panes.has(id)
   }
@@ -157,7 +160,7 @@ export class SessionManager {
    *  Only runs into an empty manager. Returns how many panes were restored. */
   restore(): number {
     if (this.panes.size > 0) return 0
-    const persisted = loadPanes()
+    const persisted = this.store.loadPanes()
     for (const p of persisted) {
       const spec: SpawnSpec = { cwd: p.cwd, run: p.command }
       const pane = new PaneSession(p.id, spec, this.hooks(p.id), { scrollback: p.scrollback })
@@ -171,7 +174,7 @@ export class SessionManager {
     if (this.persistTimer) return
     this.persistTimer = setTimeout(() => {
       this.persistTimer = undefined
-      writeNow(this.snapshotAll())
+      this.store.savePanes(this.snapshotAll())
     }, delayMs)
   }
 
@@ -181,7 +184,7 @@ export class SessionManager {
       clearTimeout(this.persistTimer)
       this.persistTimer = undefined
     }
-    writeNow(this.snapshotAll())
+    this.store.savePanes(this.snapshotAll())
   }
 
   remove(id: string): void {

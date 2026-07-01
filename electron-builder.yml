@@ -8,7 +8,9 @@ files:
   - package.json
 # Native modules (node-pty) are unpacked so they load from disk at runtime.
 asarUnpack:
-  - "**/node_modules/node-pty/**"
+  - "**/node_modules/@lydell/node-pty/**"
+  - "**/node_modules/better-sqlite3/**"
+  - "**/node_modules/bindings/**"
 
 win:
   target:
