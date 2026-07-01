@@ -31,7 +31,8 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
       if (subscriptions.has(id)) return
       const sub: PaneSubscriber = {
         send: (d) => send({ t: 'data', id, data: d }),
-        exit: (c) => send({ t: 'exit', id, code: c })
+        exit: (c) => send({ t: 'exit', id, code: c }),
+        state: (st) => send({ t: 'state', id, state: st })
       }
       subscriptions.set(id, sub)
       sessions.get(id)?.subscribe(sub)

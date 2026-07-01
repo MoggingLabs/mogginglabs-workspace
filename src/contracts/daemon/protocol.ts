@@ -3,6 +3,8 @@
 // update never speaks an incompatible protocol to an old daemon (ADR 0006 — the
 // tmux "kill-server on upgrade" pitfall). Depends on nothing (pure types + helpers).
 
+import type { AgentState } from '../domain/agent'
+
 export const DAEMON_PROTOCOL_VERSION = 1
 
 /** Discovery record the daemon writes and the client reads (mode 0600). */
@@ -49,6 +51,7 @@ export type ServerMessage =
   | { t: 'attached'; id: string; scrollback: string }
   | { t: 'data'; id: string; data: string }
   | { t: 'exit'; id: string; code: number }
+  | { t: 'state'; id: string; state: AgentState }
   | { t: 'panes'; panes: PaneInfo[] }
   | { t: 'pong' }
 

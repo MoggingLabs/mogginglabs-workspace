@@ -8,7 +8,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { spawn } from 'node:child_process'
 import { createLineFramer, encodeMessage, DAEMON_PROTOCOL_VERSION } from '@contracts'
-import type { ClientMessage, ServerMessage, DaemonEndpoint, SpawnSpec, PaneInfo } from '@contracts'
+import type { ClientMessage, ServerMessage, DaemonEndpoint, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 
 // --- endpoint discovery paths (MUST match src/pty-daemon/lifecycle.ts) ---
 function runtimeDir(): string {
@@ -74,6 +74,7 @@ export interface DaemonEvents {
   /** Pane output (also delivers scrollback on (re)attach, for repaint). */
   onData?: (id: string, data: string) => void
   onExit?: (id: string, code: number) => void
+  onState?: (id: string, state: AgentState) => void
   /** Panes the daemon already had when we connected (reconnect => reattach these). */
   onWelcome?: (panes: PaneInfo[]) => void
   onClose?: () => void
@@ -132,6 +133,9 @@ export class DaemonClient {
         break
       case 'exit':
         this.events.onExit?.(m.id, m.code)
+        break
+      case 'state':
+        this.events.onState?.(m.id, m.state)
         break
       case 'error':
         // surfaced via logs; a well-behaved client rarely hits this

@@ -4,13 +4,15 @@
 // does not reuse @backend's single-client PtyService. (ADR 0006.)
 import * as os from 'node:os'
 import * as pty from '@lydell/node-pty'
-import type { SpawnSpec, PaneInfo } from '@contracts'
+import type { SpawnSpec, PaneInfo, AgentState } from '@contracts'
+import { OscParser } from '@backend/features/agent-state'
 
 const SCROLLBACK_BYTES = 200_000
 
 export interface PaneSubscriber {
   send(data: string): void
   exit(code: number): void
+  state(state: AgentState): void
 }
 
 class PaneSession {
@@ -19,6 +21,7 @@ class PaneSession {
   rows: number
   private proc: pty.IPty
   private buffer = ''
+  private lastState: AgentState = 'idle'
   private subs = new Set<PaneSubscriber>()
 
   constructor(id: string, spec: SpawnSpec, onExit: () => void) {
@@ -35,8 +38,15 @@ class PaneSession {
       cwd: spec.cwd ?? os.homedir(),
       env: process.env as Record<string, string>
     })
+    // Parse OSC agent-state (idle/busy/attention) off the raw stream — same parser as the
+    // in-proc PtyService, so the daemon path has full agent-state parity.
+    const osc = new OscParser((state) => {
+      this.lastState = state
+      for (const s of this.subs) s.state(state)
+    })
     this.proc.onData((d) => {
       this.buffer = (this.buffer + d).slice(-SCROLLBACK_BYTES)
+      osc.push(d)
       for (const s of this.subs) s.send(d)
     })
     this.proc.onExit(({ exitCode }) => {
@@ -55,6 +65,7 @@ class PaneSession {
   }
   subscribe(s: PaneSubscriber): void {
     this.subs.add(s)
+    s.state(this.lastState) // replay current agent-state to a (re)attaching client
   }
   unsubscribe(s: PaneSubscriber): void {
     this.subs.delete(s)
