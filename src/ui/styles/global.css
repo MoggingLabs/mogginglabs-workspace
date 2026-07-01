@@ -1,0 +1,89 @@
+:root {
+  --bg: #0a0a0a;
+  --panel: #121212;
+  --border: rgba(255, 255, 255, 0.08);
+  --text: #e6e6e6;
+  --muted: rgba(255, 255, 255, 0.45);
+  --accent: #4ade80;
+  --warn: #fbbf24;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+#titlebar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  user-select: none;
+}
+
+#titlebar .brand {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+#titlebar .phase {
+  color: var(--muted);
+}
+
+#titlebar .titlebar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.state {
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-family: ui-monospace, monospace;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+
+.state[data-state="busy"] {
+  color: var(--warn);
+  border-color: rgba(251, 191, 36, 0.4);
+}
+
+.state[data-state="attention"] {
+  color: var(--accent);
+  border-color: rgba(74, 222, 128, 0.5);
+}
+
+#content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+.pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  padding: 6px 8px;
+}

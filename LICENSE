@@ -1,0 +1,11 @@
+Copyright (c) 2026 MoggingLabs. All rights reserved.
+
+This software and its source are proprietary and confidential during the
+experiment stage. No license to use, copy, modify, or distribute is granted at
+this time.
+
+The final license is TBD and will deliberately be NON-AGPL. A permissive or
+source-available posture (e.g. Apache-2.0, or a BSL/Elastic-style
+source-available license) is under consideration as a competitive differentiator
+versus the AGPL/GPL incumbents in this category. See
+docs/adr/ for the decision record when finalized.

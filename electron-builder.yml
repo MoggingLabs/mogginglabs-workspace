@@ -1,0 +1,30 @@
+appId: ai.mogginglabs.workspace
+productName: MoggingLabs Workspace
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+# Native modules (node-pty) are unpacked so they load from disk at runtime.
+asarUnpack:
+  - "**/node_modules/node-pty/**"
+
+win:
+  target:
+    - nsis
+  artifactName: ${productName}-${version}-win-${arch}.${ext}
+  # Authenticode signing is REQUIRED to avoid SmartScreen warnings — wire in early.
+
+mac:
+  target:
+    - dmg
+  category: public.app-category.developer-tools
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+  hardenedRuntime: true
+  # Apple notarization + hardened runtime are REQUIRED for install-without-warnings.
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
