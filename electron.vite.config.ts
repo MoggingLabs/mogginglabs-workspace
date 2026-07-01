@@ -17,7 +17,17 @@ export default defineConfig({
   main: {
     resolve: { alias },
     plugins: [externalizeDepsPlugin()],
-    build: { rollupOptions: { input: { index: resolve(__dirname, 'src/main/index.ts') } } }
+    // Two entries: the Electron main process AND the detached PTY daemon (ADR 0006).
+    // The daemon (out/main/daemon.js) is launched via Electron-as-Node; it imports no
+    // electron APIs, so it bundles clean. node-pty stays external for both.
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve(__dirname, 'src/main/index.ts'),
+          daemon: resolve(__dirname, 'src/pty-daemon/index.ts')
+        }
+      }
+    }
   },
   preload: {
     resolve: { alias },

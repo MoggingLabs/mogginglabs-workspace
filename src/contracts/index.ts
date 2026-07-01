@@ -3,3 +3,4 @@
 export * from './domain'
 export * from './ipc'
 export * from './observability'
+export * from './daemon'

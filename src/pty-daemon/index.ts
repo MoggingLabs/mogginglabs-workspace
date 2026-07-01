@@ -1,0 +1,73 @@
+// Detached PTY daemon entry point (ADR 0006). Launched by the app via Electron-as-Node
+// (`ELECTRON_RUN_AS_NODE=1`, `process.execPath`) so it needs no system Node and shares the
+// app's @lydell/node-pty prebuilt. It outlives the app (spawned detached) and holds the
+// PTYs; the app is a thin client that reconnects on each launch.
+import * as crypto from 'node:crypto'
+import { DAEMON_PROTOCOL_VERSION } from '@contracts'
+import { SessionManager } from './session'
+import { createServer } from './transport'
+import { acquireLock, releaseLock, writeEndpoint, clearEndpoint, socketAddress, log } from './lifecycle'
+
+// Shut down when there are no clients AND no panes for this long (no zombie daemons).
+const IDLE_SHUTDOWN_MS = Number(process.env.MOGGING_DAEMON_IDLE_MS ?? 30 * 60 * 1000)
+
+function main(): void {
+  if (!acquireLock()) {
+    log('another live daemon holds the lock; exiting')
+    process.exit(0)
+  }
+
+  const sessions = new SessionManager()
+  const token = crypto.randomBytes(24).toString('hex')
+  const address = socketAddress(process.pid)
+
+  let clients = 0
+  let idleTimer: NodeJS.Timeout | undefined
+
+  const shutdown = (code: number): void => {
+    clearEndpoint()
+    releaseLock()
+    try {
+      sessions.killAll()
+    } catch {
+      /* best effort */
+    }
+    try {
+      server.close()
+    } catch {
+      /* best effort */
+    }
+    process.exit(code)
+  }
+
+  const armIdle = (): void => {
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => {
+      if (clients === 0 && sessions.count() === 0) {
+        log('idle shutdown')
+        shutdown(0)
+      } else {
+        armIdle()
+      }
+    }, IDLE_SHUTDOWN_MS)
+  }
+
+  const server = createServer(sessions, token, {
+    onActivity: () => armIdle(),
+    onClientCountChange: (delta) => {
+      clients += delta
+    }
+  })
+
+  process.on('SIGTERM', () => shutdown(0))
+  process.on('SIGINT', () => shutdown(0))
+  process.on('uncaughtException', (e) => log('UNCAUGHT ' + (e && e.stack ? e.stack : e)))
+
+  server.listen(address, () => {
+    writeEndpoint({ version: DAEMON_PROTOCOL_VERSION, address, token, pid: process.pid })
+    log('listening ' + address + ' pid ' + process.pid)
+    armIdle()
+  })
+}
+
+main()
