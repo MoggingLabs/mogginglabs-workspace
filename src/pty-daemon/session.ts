@@ -8,6 +8,7 @@
 import * as os from 'node:os'
 import * as pty from 'node-pty'
 import type { SpawnSpec, PaneInfo, AgentState } from '@contracts'
+import { notifyEventToState } from '@contracts'
 import { OscParser, fileUriToPath } from '@backend/features/agent-state'
 import { SessionStore, resumeCommandFor } from '@backend/features/workspace'
 import type { PersistedPane, PersistedWorkspace, WorkspaceLayout } from '@contracts'
@@ -38,7 +39,13 @@ class PaneSession {
   private lastCwd?: string // last OSC-7-reported cwd; replayed to (re)attaching clients
   private subs = new Set<PaneSubscriber>()
 
-  constructor(id: string, spec: SpawnSpec, hooks: PaneHooks, restore?: { scrollback: string; resumeCommand?: string | null }) {
+  constructor(
+    id: string,
+    spec: SpawnSpec,
+    hooks: PaneHooks,
+    restore?: { scrollback: string; resumeCommand?: string | null },
+    extraEnv: Record<string, string> = {}
+  ) {
     this.id = id
     this.cols = spec.cols ?? 80
     this.rows = spec.rows ?? 24
@@ -49,12 +56,16 @@ class PaneSession {
     const isWin = process.platform === 'win32'
     const shell = spec.shell ?? (isWin ? process.env.COMSPEC || 'cmd.exe' : process.env.SHELL || '/bin/bash')
     const args = spec.args ?? (isWin ? [] : ['-l'])
+    // Inject this pane's identity + how to reach the daemon so a command inside the pane can
+    // target ITSELF via `mogging notify` (Phase-2/04). Only the pane id + the endpoint FILE path
+    // go in the env — never the auth token (that stays in the 0600 endpoint file), so the token
+    // can't leak through env dumps / agent context (ADR 0002).
     this.proc = pty.spawn(shell, args, {
       name: 'xterm-256color',
       cols: this.cols,
       rows: this.rows,
       cwd: this.cwd,
-      env: process.env as Record<string, string>
+      env: { ...process.env, ...extraEnv, MOGGING_PANE_ID: this.id } as Record<string, string>
     })
     // Parse OSC off the raw stream — same parser as the in-proc PtyService, so the daemon path
     // has full parity: agent-state (idle/busy/attention) AND OSC-7 cwd for per-pane git (2/03).
@@ -115,6 +126,14 @@ class PaneSession {
   unsubscribe(s: PaneSubscriber): void {
     this.subs.delete(s)
   }
+  /** `mogging notify` (Phase-2/04): map an explicit agent/hook event to a pane state and fan it
+   *  out just like an OSC state change, so it flows through the same state -> attention pipeline
+   *  (badge chip + workspace-tab ring). Replayed to (re)attaching clients via lastState. */
+  applyNotify(event: string): void {
+    const state = notifyEventToState(event)
+    this.lastState = state
+    for (const s of this.subs) s.state(state)
+  }
   write(data: string): void {
     this.proc.write(data)
   }
@@ -140,7 +159,11 @@ export class SessionManager {
   private panes = new Map<string, PaneSession>()
   private persistTimer?: NodeJS.Timeout
 
-  constructor(private readonly store: SessionStore) {}
+  // extraEnv is injected into every pane's shell env (e.g. MOGGING_DAEMON_ENDPOINT for notify).
+  constructor(
+    private readonly store: SessionStore,
+    private readonly extraEnv: Record<string, string> = {}
+  ) {}
 
   has(id: string): boolean {
     return this.panes.has(id)
@@ -185,7 +208,7 @@ export class SessionManager {
   ensure(id: string, spec: SpawnSpec): { pane: PaneSession; existed: boolean } {
     const existing = this.panes.get(id)
     if (existing) return { pane: existing, existed: true }
-    const pane = new PaneSession(id, spec, this.hooks(id))
+    const pane = new PaneSession(id, spec, this.hooks(id), undefined, this.extraEnv)
     this.panes.set(id, pane)
     this.schedulePersist(500)
     return { pane, existed: false }
@@ -201,7 +224,7 @@ export class SessionManager {
       const spec: SpawnSpec = { cwd: p.cwd, run: p.command }
       // Relaunch a known agent via its own resume (step 4) — never a frozen process.
       const resumeCommand = resumeCommandFor(p.command)
-      const pane = new PaneSession(p.id, spec, this.hooks(p.id), { scrollback: p.scrollback, resumeCommand })
+      const pane = new PaneSession(p.id, spec, this.hooks(p.id), { scrollback: p.scrollback, resumeCommand }, this.extraEnv)
       this.panes.set(p.id, pane)
     }
     return persisted.length

@@ -43,6 +43,9 @@ export type ClientMessage =
   | { t: 'list' }
   | { t: 'ping' }
   | { t: 'shutdown' }
+  // `mogging notify` (Phase-2/04): an agent/hook inside a pane raises that pane's attention.
+  // Carries an event label (+ optional short message) ONLY — never PTY content or credentials.
+  | { t: 'notify'; id?: string; event: string; message?: string }
 
 /** daemon -> client */
 export type ServerMessage =
@@ -56,6 +59,24 @@ export type ServerMessage =
   | { t: 'cwd'; id: string; cwd: string }
   | { t: 'panes'; panes: PaneInfo[] }
   | { t: 'pong' }
+  | { t: 'notified'; id: string; ok: boolean } // ack for a `notify` (ok=false: unknown pane id)
+
+/** Notify events an agent/hook can raise via `mogging notify` (Phase-2/04). A small, closed
+ *  vocabulary that maps to a pane AgentState — a label only, never PTY content (ADR 0002). */
+export type NotifyEvent = 'needs-input' | 'done' | 'attention' | 'busy' | 'idle'
+
+/** Map a notify event to the pane state it raises. Unknown events default to `attention` (any
+ *  explicit notify is worth surfacing) — only `busy`/`idle` are the softer, non-ringing states. */
+export function notifyEventToState(event: string): AgentState {
+  switch (event) {
+    case 'busy':
+      return 'busy'
+    case 'idle':
+      return 'idle'
+    default:
+      return 'attention'
+  }
+}
 
 /** Newline-delimited JSON framing (JSON escapes any embedded newline, so this is safe). */
 export function encodeMessage(msg: ClientMessage | ServerMessage): string {

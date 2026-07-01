@@ -16,6 +16,7 @@ import {
   clearEndpoint,
   socketAddress,
   runtimeDir,
+  endpointPath,
   otherVersionEndpoints,
   log
 } from './lifecycle'
@@ -29,7 +30,11 @@ function main(): void {
     process.exit(0)
   }
 
-  const sessions = new SessionManager(new SessionStore(path.join(runtimeDir(), 'sessions.db')))
+  // Inject the endpoint FILE path (not the token) into every pane so `mogging notify` inside a
+  // pane can find + auth to this daemon (Phase-2/04). The token stays in the 0600 endpoint file.
+  const sessions = new SessionManager(new SessionStore(path.join(runtimeDir(), 'sessions.db')), {
+    MOGGING_DAEMON_ENDPOINT: endpointPath()
+  })
   const restored = sessions.restore() // cold-start recovery: re-create persisted panes
   if (restored) log('restored ' + restored + ' pane(s) from the session store')
   const token = crypto.randomBytes(24).toString('hex')

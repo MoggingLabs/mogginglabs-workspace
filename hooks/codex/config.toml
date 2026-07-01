@@ -1,0 +1,9 @@
+# MoggingLabs Workspace notify hook for Codex CLI.
+# Add this line to your USER-level ~/.codex/config.toml (Codex ignores a project-level `notify`).
+#
+# Codex runs this program on turn events, appending a single JSON argument describing the event
+# (e.g. {"type":"agent-turn-complete", ...} or {"type":"approval-requested", ...}). `mogging notify`
+# detects that JSON blob and maps it: agent-turn-complete -> done, approval-requested -> needs-input.
+# It never forwards prompt/output content — only the derived event label reaches the daemon.
+
+notify = ["mogging", "notify"]

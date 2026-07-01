@@ -21,6 +21,7 @@ import { runTemplateSmoke } from './template-smoke'
 import { runAttentionSmoke } from './attention-smoke'
 import { runBlocksSmoke } from './blocks-smoke'
 import { runGitSmoke } from './git-smoke'
+import { runNotifySmoke } from './notify-smoke'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { registerDeepLink, initialDeepLinkCwd } from './deep-link'
@@ -126,6 +127,8 @@ app.whenReady().then(async () => {
     runBlocksSmoke(win) // env-gated command-blocks smoke (Phase-2/02)
   } else if (process.env.MOGGING_GIT && win) {
     runGitSmoke(win) // env-gated per-pane git smoke (Phase-2/03)
+  } else if (process.env.MOGGING_NOTIFY && win) {
+    runNotifySmoke(win) // env-gated `mogging notify` smoke (Phase-2/04)
   }
 
   app.on('activate', () => {

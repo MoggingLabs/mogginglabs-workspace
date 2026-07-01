@@ -1,0 +1,12 @@
+{
+  "//": "Best-effort: requires a Gemini CLI version with hook support. Merge into ~/.gemini/settings.json (or a project's .gemini/settings.json). If your Gemini CLI has no hooks, MoggingLabs still tracks it via OSC agent-state (the baseline).",
+  "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          { "type": "command", "command": "mogging notify --event needs-input" }
+        ]
+      }
+    ]
+  }
+}

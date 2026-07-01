@@ -66,6 +66,14 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
         case 'kill':
           sessions.remove(m.id)
           break
+        case 'notify': {
+          // `mogging notify` (Phase-2/04): raise the target pane's attention. Only reachable
+          // after the token handshake; payload is an event label (+ optional message) only.
+          const target = m.id ? sessions.get(m.id) : undefined
+          target?.applyNotify(m.event)
+          send({ t: 'notified', id: m.id ?? '', ok: !!target })
+          break
+        }
         case 'list':
           send({ t: 'panes', panes: sessions.list() })
           break
