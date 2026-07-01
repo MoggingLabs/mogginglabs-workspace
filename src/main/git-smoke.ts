@@ -98,6 +98,14 @@ export function runGitSmoke(win: BrowserWindow): void {
       appendFileSync(join(repo, 'README.md'), 'a local uncommitted edit\n')
       const dirty = await pollStatus(paneId, (s) => !!s && s.dirty, DIRTY_TIMEOUT)
 
+      // 2b) The user-facing DoD: the pane's .pane-git CHIP (not just the port) renders the branch
+      //     and the dirty dot. Read the actual DOM in the pane's slot.
+      const chip = await exec<{ text: string; hasGit: boolean; dirty: boolean } | null>(
+        `(()=>{const el=document.querySelector('.layout-slot[data-pane-id="${paneId}"] .pane-git');` +
+          `return el?{text:(el.textContent||''),hasGit:el.classList.contains('has-git'),` +
+          `dirty:el.classList.contains('dirty')}:null;})()`
+      )
+
       // 3) A non-repo cwd -> null (nothing shown, no error).
       const none = await exec<SmokeGit | null>(`window.__mogging.git.query(${JSON.stringify(nonRepo)})`)
 
@@ -122,11 +130,15 @@ export function runGitSmoke(win: BrowserWindow): void {
         !!dirty &&
         dirty.dirty === true &&
         dirty.branch === 'mogging-test' &&
+        !!chip &&
+        chip.hasGit === true &&
+        chip.text.includes('mogging-test') &&
+        chip.dirty === true &&
         none === null &&
         headBefore === headAfter &&
         branchAfter === 'mogging-test'
 
-      result = { pass, paneId, clean, dirty, none, headBefore, headAfter, branchAfter, oscRetargeted, retarget }
+      result = { pass, paneId, clean, dirty, chip, none, headBefore, headAfter, branchAfter, oscRetargeted, retarget }
       for (const d of [repo, repo2, nonRepo]) {
         try {
           rmSync(d, { recursive: true, force: true })
