@@ -49,7 +49,10 @@ sessions do — the daemon (ADR 0006), which owns them and survives restarts.
 - **Persist:** the daemon's `SessionManager` owns a `SessionStore`; snapshots panes debounced
   (2s) + on shutdown.
 - **Restore:** on cold start, `restore()` re-creates persisted panes (fresh shell at `cwd` +
-  **seeded scrollback** for repaint; agents are *not* auto-relaunched — `--resume` ties to 06).
+  **seeded scrollback** repaint) and relaunches known agents via their own **`--resume`**
+  (`resume.ts`: `claude --resume` / `codex resume`; never freezes a process). The `default`
+  **workspace + layout** (pane arrangement) is persisted + restored and exposed in the daemon
+  `welcome` (the app rebuilds the visual layout from it in 04/05).
 - **Scrollback:** `@xterm/addon-serialize` is wired into `TerminalPane.serialize()`; the daemon's
   raw PTY scrollback (replayed on attach) is the primary persistence source.
 - **Packaging/CI:** `electron-builder.yml` `asarUnpack` fixed (@lydell/node-pty + better-sqlite3 +
@@ -58,5 +61,6 @@ sessions do — the daemon (ADR 0006), which owns them and survives restarts.
 - **Proven:** `scratchpad/persisttest.cjs` — force-kill the daemon (crash) -> relaunch -> a
   different daemon restores the pane from sqlite (WAL crash-durable) + repaints the marker;
   secret-audit clean; daemon-default UI + CI green.
-- **Deferred to 04/05:** workspace/layout metadata (tabs, split tree) — extends the same store.
-  Also closes the ADR-0006 version-migration carry-over.
+- **Extends in 04/05:** the flat layout becomes a real split tree + multiple workspace tabs
+  (the app rebuilds the visual layout from `welcome.workspaces`). Also closes the ADR-0006
+  version-migration carry-over.
