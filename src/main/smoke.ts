@@ -14,6 +14,10 @@ export function runSmoke(win: BrowserWindow): void {
   const wc = win.webContents
   let done = false
 
+  // Automation robustness: smokes often run with the window unfocused/occluded; a throttled
+  // renderer makes the fixed copy/paste waits below flake. Measure our code, not the scheduler.
+  wc.setBackgroundThrottling(false)
+
   wc.on('console-message', (...args: unknown[]) => {
     const a1 = args[1] as { level?: unknown; message?: unknown } | number | string
     let level: unknown
@@ -109,13 +113,13 @@ export function runSmoke(win: BrowserWindow): void {
           'window.bridge.invoke("clipboard:write",{text:"COPY_MARK_3312"});return s.length;})()'
       )
     )
-    await delay(250)
+    await delay(800)
     const copyClip = clipboard.readText()
 
     // Paste: main sets the OS clipboard; renderer reads it via IPC and writes to the pty.
     clipboard.writeText('PASTE_MARK_5591')
     await ES('window.bridge.invoke("clipboard:read").then(function(t){window.bridge.send("terminal:write",{id:1,data:t+"\\r"});});')
-    await delay(900)
+    await delay(1600)
     const cap2 = String(await ES('window.__cap'))
 
     const echo = cap.includes('MOGGING_ECHO_7788')

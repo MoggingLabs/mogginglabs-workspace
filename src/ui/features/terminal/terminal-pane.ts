@@ -19,6 +19,11 @@ export class TerminalPane {
   private readonly fit = new FitAddon()
   private readonly serializer = new SerializeAddon()
   private readonly resizeObs: ResizeObserver
+  private visObs?: IntersectionObserver
+  private webgl?: WebglAddon
+  private visible = false
+  private glRetry?: ReturnType<typeof setTimeout>
+  private glLosses = 0
   private devHandle: unknown
   private themeUnsub?: () => void
   private paneLabelUnsub?: () => void
@@ -41,13 +46,23 @@ export class TerminalPane {
     this.term.loadAddon(this.serializer)
     this.term.open(host)
 
-    // WebGL is the wedge — GPU rendering that stays smooth under many streaming
-    // agents. Fall back to the DOM renderer if a GPU context isn't available.
-    try {
-      this.term.loadAddon(new WebglAddon())
-    } catch (err) {
-      console.warn('WebGL renderer unavailable; using default renderer.', err)
-    }
+    // WebGL is the wedge — GPU rendering that stays smooth under many streaming agents. But the
+    // browser caps live WebGL contexts (~16 per page in Chromium), which is exactly our largest
+    // grid — so contexts are MANAGED, not assumed (Phase-2/05): only VISIBLE panes hold one
+    // (panes in a hidden background workspace release theirs and fall back to the DOM renderer;
+    // they re-acquire on show), and a lost context (cap eviction / GPU reset) self-heals to the
+    // DOM renderer with bounded retries instead of leaving a dead pane.
+    this.visObs = new IntersectionObserver((entries) => {
+      const last = entries[entries.length - 1]
+      this.visible = last.isIntersecting
+      if (this.visible) {
+        this.glLosses = 0
+        this.acquireWebgl()
+      } else {
+        this.releaseWebgl()
+      }
+    })
+    this.visObs.observe(host)
     this.fit.fit()
 
     // Ctrl+Shift+C / Cmd+C copies the selection; Ctrl+Shift+V / Cmd+V pastes. A bare
@@ -84,6 +99,45 @@ export class TerminalPane {
     this.mountBadge(host)
     this.blocks = new BlockTracker(this.term, host) // Warp-style command blocks from OSC 133 (02)
     this.exposeForDev(host)
+  }
+
+  /** Attach the WebGL renderer (idempotent; only while visible). On failure the pane simply
+   *  stays on the DOM renderer — a pane must always render; fast when it can. */
+  private acquireWebgl(): void {
+    if (this.webgl || !this.visible) return
+    try {
+      const addon = new WebglAddon()
+      addon.onContextLoss(() => {
+        // Evicted (context cap) or GPU reset: drop to the DOM renderer, then retry a few times
+        // while visible — self-healing, never a frozen/blank pane (the BridgeSpace failure mode).
+        this.releaseWebgl()
+        this.glLosses++
+        if (this.visible && this.glLosses <= 3) {
+          this.glRetry = setTimeout(() => this.acquireWebgl(), 1500)
+        }
+      })
+      this.term.loadAddon(addon)
+      this.webgl = addon
+    } catch (err) {
+      console.warn('WebGL renderer unavailable; using default renderer.', err)
+    }
+  }
+
+  /** Detach the WebGL renderer and release its GPU context (idempotent). xterm falls back to
+   *  its DOM renderer, which is fine for a hidden pane (no frames are being painted anyway). */
+  private releaseWebgl(): void {
+    if (this.glRetry) {
+      clearTimeout(this.glRetry)
+      this.glRetry = undefined
+    }
+    if (!this.webgl) return
+    const addon = this.webgl
+    this.webgl = undefined
+    try {
+      addon.dispose()
+    } catch {
+      /* already disposed with the terminal */
+    }
   }
 
   private handleKey(e: KeyboardEvent): boolean {
@@ -187,6 +241,7 @@ export class TerminalPane {
         return s
       },
       hasCanvas: () => !!host.querySelector('canvas'),
+      renderer: (): string => (this.webgl ? 'webgl' : 'dom'),
       bufferLines: () => this.term.buffer.active.length,
       rows: () => this.term.rows,
       cols: () => this.term.cols,
@@ -218,6 +273,8 @@ export class TerminalPane {
     this.themeUnsub?.()
     this.paneLabelUnsub?.()
     this.paneGitUnsub?.()
+    this.visObs?.disconnect()
+    this.releaseWebgl()
     this.resizeObs.disconnect()
     terminalClient.kill({ id: this.id })
     this.term.dispose()

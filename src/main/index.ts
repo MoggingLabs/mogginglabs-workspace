@@ -22,6 +22,7 @@ import { runAttentionSmoke } from './attention-smoke'
 import { runBlocksSmoke } from './blocks-smoke'
 import { runGitSmoke } from './git-smoke'
 import { runNotifySmoke } from './notify-smoke'
+import { runMilestoneSmoke } from './milestone-smoke'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { registerDeepLink, initialDeepLinkCwd } from './deep-link'
@@ -129,6 +130,8 @@ app.whenReady().then(async () => {
     runGitSmoke(win) // env-gated per-pane git smoke (Phase-2/03)
   } else if (process.env.MOGGING_NOTIFY && win) {
     runNotifySmoke(win) // env-gated `mogging notify` smoke (Phase-2/04)
+  } else if (process.env.MOGGING_MILESTONE && win) {
+    runMilestoneSmoke(win) // env-gated 16-agent perf milestone smoke (Phase-2/05)
   }
 
   app.on('activate', () => {
