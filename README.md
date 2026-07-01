@@ -52,11 +52,18 @@ npm install        # builds native modules (node-pty). See note below.
 npm run dev        # launch the app in dev mode
 ```
 
-**Native-module note:** `node-pty` compiles native code. On Windows you need the
-Visual Studio C++ Build Tools + Python; on macOS, Xcode Command Line Tools. If
-prebuilt binaries are preferred, swap `node-pty` for a prebuilt fork
-(e.g. `@lydell/node-pty` or `@homebridge/node-pty-prebuilt-multiarch`) — see
-[`docs/01-architecture.md`](docs/01-architecture.md).
+**Native modules:** the app uses two native deps — `@lydell/node-pty` (prebuilt, N-API) and
+`better-sqlite3` (Electron prebuilds via the `postinstall` = `electron-builder install-app-deps`).
+`npm install` works **out of the box** — no toolchain needed for the prebuilt path.
+
+For **from-source** native builds (unusual arch or a missing prebuild), the toolchain is:
+- **Windows:** VS 2022 **C++ Build Tools** (VCTools workload) + **`node-gyp` ≥ 13** (pinned in
+  devDependencies — older node-gyp fails the MSBuild step on VS 2022 / Node 24) + Python with
+  **`setuptools`** (`pip install setuptools`, since Python ≥ 3.12 dropped `distutils`).
+  Install the tools: `winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"`.
+- **macOS:** Xcode Command Line Tools.
+
+Native modules are `asarUnpack`ed for packaging. See [ADR 0001](docs/adr/0001-electron-over-tauri.md).
 
 ## Project structure
 
