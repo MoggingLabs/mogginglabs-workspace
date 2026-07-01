@@ -25,7 +25,7 @@ Execute in order; each file is self-contained.
 | 00 | `00-commit-to-github.md` | repo committed + pushed under MoggingLabs (**DONE**) |
 | 01 | `01-ci-and-hygiene.md` | CI (typecheck+build on Win+Mac) green; `.gitattributes` LF |
 | 02 | `02-persistent-pty-host.md` | **detached PTY daemon** (ADR 0006), now the **DEFAULT** — agents survive a main crash + app restart (**DONE**; macOS runtime-verify + version carry-over pending) |
-| 03 | `03-sqlite-persistence-and-restore.md` | **DONE** (daemon session store): cwd + scrollback restore across a daemon crash/relaunch; secret-audit clean. Workspace/layout persistence extends here with 04/05 |
+| 03 | `03-sqlite-persistence-and-restore.md` | **DONE** (better-sqlite3 in `@backend/features/workspace`): cwd + scrollback restore across a daemon crash/relaunch; secret-audit clean; CI green. Workspace/layout persistence extends here with 04/05 |
 | 04 | `04-multi-pane-layout.md` | split/grid templates, drag-resize; N panes concurrent, isolated |
 | 05 | `05-workspace-tabs.md` | multiple workspace tabs; `mogging .` launcher; themes |
 | 06 | `06-agent-launcher.md` | one-click launch of a CLI into a pane with cwd; BYO auth |

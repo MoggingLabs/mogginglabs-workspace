@@ -37,19 +37,26 @@ closing the Phase-0 "reloaded pane starts blank" gap.
 ## Guardrails
 - ADR 0002: never store provider credentials (labels/status only). `@backend` Electron-free.
 
-## As built (2026-07-01) — adapted to the daemon architecture
-The daemon (ADR 0006) now owns the sessions + scrollback and survives restarts, so persistence
-was implemented **in the daemon**, and two deps were avoided:
-- **Store:** `src/pty-daemon/store.ts` — a small **atomic JSON** store (tmp + rename) in the
-  per-user runtime dir. *Not* `better-sqlite3` (native; needs a C++ toolchain we don't have) —
-  behind a simple interface, swappable for SQLite once CI/packaging provides toolchains. Fields:
-  `id, cwd, command, scrollback, updatedAt` (**no secrets** — verified).
-- **Persist:** `SessionManager` snapshots panes debounced (2s on output churn) + on shutdown.
+## As built (2026-07-01) — honors the spec, fit to the daemon architecture
+Implemented per this spec; the only structural adaptation is that persistence lives where the
+sessions do — the daemon (ADR 0006), which owns them and survives restarts.
+- **Store:** `better-sqlite3` via `src/backend/features/workspace/session-store.ts`
+  (`SessionStore`, WAL) — Electron-free, verified to load under Electron-as-Node. (`better-sqlite3`
+  IS viable here: the postinstall `electron-builder install-app-deps` rebuilds it for Electron's
+  ABI via a prebuild — no toolchain.) Tables `panes` + `workspaces`; shape contract in
+  `@contracts/workspace.ipc.ts` (`PersistedPane`/`PersistedWorkspace`). **No secrets** —
+  id/cwd/command/scrollback only (secret-audit clean).
+- **Persist:** the daemon's `SessionManager` owns a `SessionStore`; snapshots panes debounced
+  (2s) + on shutdown.
 - **Restore:** on cold start, `restore()` re-creates persisted panes (fresh shell at `cwd` +
   **seeded scrollback** for repaint; agents are *not* auto-relaunched — `--resume` ties to 06).
-- **Scrollback:** uses the daemon's raw PTY scrollback (replayed on attach), so no
-  `@xterm/addon-serialize` round-trip is needed.
+- **Scrollback:** `@xterm/addon-serialize` is wired into `TerminalPane.serialize()`; the daemon's
+  raw PTY scrollback (replayed on attach) is the primary persistence source.
+- **Packaging/CI:** `electron-builder.yml` `asarUnpack` fixed (@lydell/node-pty + better-sqlite3 +
+  bindings); CI uses `npm ci --ignore-scripts` (native modules externalized — no compile for
+  typecheck/build; the Electron rebuild is dev/packaging).
 - **Proven:** `scratchpad/persisttest.cjs` — force-kill the daemon (crash) -> relaunch -> a
-  different daemon restores the pane and repaints the marker; secret-audit clean.
-- **Deferred to 04/05:** workspace/layout metadata (tabs, split tree) persistence — extends the
-  same store once those features exist. Also closes the ADR-0006 version-migration carry-over.
+  different daemon restores the pane from sqlite (WAL crash-durable) + repaints the marker;
+  secret-audit clean; daemon-default UI + CI green.
+- **Deferred to 04/05:** workspace/layout metadata (tabs, split tree) — extends the same store.
+  Also closes the ADR-0006 version-migration carry-over.
