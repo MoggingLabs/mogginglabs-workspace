@@ -18,7 +18,7 @@ order; each step file is < 4000 chars.
 | # | File | Gate |
 |---|------|------|
 | 01 | `01-osc-hardening-and-attention.md` | **DONE**: split-safe OSC parser (9/777/133/7); workspace-tab attention rings + latch + clear-on-focus; dock/taskbar badge (smokes green) |
-| 02 | `02-command-blocks.md` | Warp-style collapsible command blocks (exit color, time, search) |
+| 02 | `02-command-blocks.md` | **DONE**: OSC 133 -> xterm-marker command blocks (exit-code color, duration, collapse cover, search/nav); VS Code-style overlay (smoke green) |
 | 03 | `03-per-pane-git.md` | per-pane branch + dirty, read-only |
 | 04 | `04-mogging-notify-and-hooks.md` | `mogging notify` socket + first-party Claude/Codex hooks |
 | 05 | `05-perf-and-milestone.md` | 16 agents, attention at a glance, nothing freezes (perf gate) |

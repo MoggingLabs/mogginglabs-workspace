@@ -18,6 +18,7 @@ import { runWorkspaceSmoke } from './workspace-smoke'
 import { runAgentLaunchSmoke } from './agentlaunch-smoke'
 import { runTemplateSmoke } from './template-smoke'
 import { runAttentionSmoke } from './attention-smoke'
+import { runBlocksSmoke } from './blocks-smoke'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { registerDeepLink, initialDeepLinkCwd } from './deep-link'
@@ -117,6 +118,8 @@ app.whenReady().then(async () => {
     runTemplateSmoke(win, process.env.MOGGING_TEMPLATE) // env-gated provider-mix template smoke
   } else if (process.env.MOGGING_ATTENTION && win) {
     runAttentionSmoke(win) // env-gated tab-attention aggregation smoke (Phase-2/01)
+  } else if (process.env.MOGGING_BLOCKS && win) {
+    runBlocksSmoke(win) // env-gated command-blocks smoke (Phase-2/02)
   }
 
   app.on('activate', () => {

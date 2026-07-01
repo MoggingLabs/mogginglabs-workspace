@@ -9,6 +9,7 @@ import { terminalClient } from './terminal.client'
 import { onTerminalTheme } from '../../core/theme/theme-port'
 import { onPaneLabel, getPaneLabel } from '../../core/layout/pane-meta'
 import { setPaneState, clearPaneState } from '../../core/attention/attention-port'
+import { BlockTracker } from '../blocks'
 
 /** A single xterm pane bound to a backend PTY of the same id. */
 export class TerminalPane {
@@ -19,6 +20,7 @@ export class TerminalPane {
   private devHandle: unknown
   private themeUnsub?: () => void
   private paneLabelUnsub?: () => void
+  private blocks?: BlockTracker
 
   constructor(
     private readonly id: PaneId,
@@ -73,6 +75,7 @@ export class TerminalPane {
     this.themeUnsub = onTerminalTheme((theme) => (this.term.options.theme = theme))
 
     this.mountBadge(host)
+    this.blocks = new BlockTracker(this.term, host) // Warp-style command blocks from OSC 133 (02)
     this.exposeForDev(host)
   }
 
@@ -91,6 +94,11 @@ export class TerminalPane {
         .then((text) => {
           if (typeof text === 'string' && text) terminalClient.write({ id: this.id, data: text })
         })
+      return false
+    }
+    // Alt+Up / Alt+Down: jump between command blocks (02).
+    if (e.altKey && (k === 'arrowup' || k === 'arrowdown')) {
+      this.blocks?.jump(k === 'arrowdown' ? 1 : -1)
       return false
     }
     return true
@@ -146,7 +154,18 @@ export class TerminalPane {
       hasCanvas: () => !!host.querySelector('canvas'),
       bufferLines: () => this.term.buffer.active.length,
       rows: () => this.term.rows,
-      cols: () => this.term.cols
+      cols: () => this.term.cols,
+      blocks: () =>
+        (this.blocks?.list() ?? []).map((b) => ({
+          id: b.id,
+          command: b.command,
+          exitCode: b.exitCode,
+          durationMs: b.durationMs,
+          collapsed: b.collapsed
+        })),
+      toggleBlock: (blockId: number) => this.blocks?.toggleCollapse(blockId),
+      findBlocks: (q: string) =>
+        (this.blocks?.find(q) ?? []).map((b) => ({ id: b.id, command: b.command, exitCode: b.exitCode }))
     }
     w.__mogging.panes.push(this.devHandle)
   }
@@ -159,6 +178,7 @@ export class TerminalPane {
 
   dispose(): void {
     clearPaneState(this.id)
+    this.blocks?.dispose()
     this.themeUnsub?.()
     this.paneLabelUnsub?.()
     this.resizeObs.disconnect()
