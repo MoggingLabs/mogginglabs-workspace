@@ -8,6 +8,7 @@ import { runSmoke } from './smoke'
 import { runAgentSmoke } from './agent-smoke'
 import { runStateSmoke } from './state-smoke'
 import { runReloadSmoke } from './reload-smoke'
+import { runShot } from './shot'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 
@@ -67,6 +68,8 @@ app.whenReady().then(async () => {
     runReloadSmoke(win) // env-gated renderer-reload survival smoke
   } else if (process.env.MOGGING_SMOKE && win) {
     runSmoke(win) // env-gated runtime smoke test
+  } else if (process.env.MOGGING_SHOT && win) {
+    runShot(win) // env-gated visual smoke: capture the window to out/shot.png
   }
 
   app.on('activate', () => {

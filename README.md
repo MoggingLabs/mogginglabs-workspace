@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="MoggingLabs Workspace" width="240" />
+</p>
+
 # MoggingLabs Workspace
 
 > A neutral, reliable, cross-platform organizer for AI coding-agent CLIs.

@@ -39,8 +39,19 @@ body {
 }
 
 #titlebar .brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 600;
   letter-spacing: 0.02em;
+}
+
+#titlebar .brand-logo {
+  height: 22px;
+  width: 22px;
+  border-radius: 5px;
+  object-fit: cover;
+  display: block;
 }
 
 #titlebar .phase {
