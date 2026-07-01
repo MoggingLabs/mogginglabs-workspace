@@ -30,7 +30,7 @@ Execute in order; each file is self-contained.
 | 05 | `05-workspace-tabs.md` | **DONE**: color-coded workspace tabs (new/close/switch, Ctrl+T, Ctrl+1..9), each = dir + own layout; `mogging .` launcher (bin + `mogging://` deep link); theme picker; persist/restore via a main-side SettingsStore (workspace smoke green) |
 | 06 | `06-agent-launcher.md` | **DONE**: pick an installed CLI (detect on PATH) -> launches into the focused pane at cwd, self-authenticated; per-pane state chip + label (agent-launch smoke green) |
 | 06b | `06b-provider-mix-templates.md` | **DONE**: provider-mix templates (builder + presets) -> a workspace with the resolved grid, each pane launching its assigned CLI (BYO auth); lineup persists + restores (template smoke green) |
-| 07 | `07-packaging-signing-updates.md` | signed/notarized installers + auto-update for win/mac |
+| 07 | `07-packaging-signing-updates.md` | **DONE (config + CI)**: NSIS/DMG+zip per-arch, Authenticode/notarize via CI secrets, electron-updater feed, sourcemaps + opt-in Sentry, tag-triggered `release.yml`; app assembles (win-unpacked verified locally); signing + installer + updates run on CI with secrets |
 
 ## Overall Definition of Done (Phase 1)
 - Multi-pane workspaces with persistent restore (layout + cwd + scrollback).

@@ -21,6 +21,7 @@ export default defineConfig({
     // The daemon (out/main/daemon.js) is launched via Electron-as-Node; it imports no
     // electron APIs, so it bundles clean. node-pty stays external for both.
     build: {
+      sourcemap: true, // uploaded to Sentry on release so crash stacks de-minify (ADR 0005)
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
@@ -32,11 +33,11 @@ export default defineConfig({
   preload: {
     resolve: { alias },
     plugins: [externalizeDepsPlugin()],
-    build: { rollupOptions: { input: { index: resolve(__dirname, 'src/preload/index.ts') } } }
+    build: { sourcemap: true, rollupOptions: { input: { index: resolve(__dirname, 'src/preload/index.ts') } } }
   },
   renderer: {
     resolve: { alias },
     root: resolve(__dirname, 'src/renderer'),
-    build: { rollupOptions: { input: { index: resolve(__dirname, 'src/renderer/index.html') } } }
+    build: { sourcemap: true, rollupOptions: { input: { index: resolve(__dirname, 'src/renderer/index.html') } } }
   }
 })

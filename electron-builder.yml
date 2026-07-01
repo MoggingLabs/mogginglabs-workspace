@@ -9,25 +9,48 @@ directories:
 files:
   - out/**/*
   - package.json
-# Native modules (node-pty) are unpacked so they load from disk at runtime.
+# Native modules (node-pty, better-sqlite3) are unpacked so they load from disk at runtime.
 asarUnpack:
   - "**/node_modules/node-pty/**"
   - "**/node_modules/better-sqlite3/**"
   - "**/node_modules/bindings/**"
 
+# Signed release feed for electron-updater. owner/repo are public; the release token (GH_TOKEN)
+# is a CI secret, never committed.
+publish:
+  provider: github
+  owner: MoggingLabs
+  repo: mogginglabs-workspace
+
 win:
   target:
-    - nsis
+    - target: nsis
+      arch:
+        - x64
   artifactName: ${productName}-${version}-win-${arch}.${ext}
-  # Authenticode signing is REQUIRED to avoid SmartScreen warnings — wire in early.
+  # Authenticode signing runs when CSC_LINK (base64 .pfx) + CSC_KEY_PASSWORD are in the
+  # environment (CI secrets) — required to avoid SmartScreen warnings. No cert is committed.
 
 mac:
   target:
-    - dmg
+    - target: dmg # installer
+      arch:
+        - arm64
+        - x64
+    - target: zip # required by electron-updater for macOS auto-update
+      arch:
+        - arm64
+        - x64
   category: public.app-category.developer-tools
   artifactName: ${productName}-${version}-mac-${arch}.${ext}
   hardenedRuntime: true
-  # Apple notarization + hardened runtime are REQUIRED for install-without-warnings.
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Signing uses CSC_LINK (base64 .p12) + CSC_KEY_PASSWORD; notarization runs when APPLE_ID +
+  # APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID are in the environment (CI secrets). Required for
+  # install-without-warnings.
+  notarize: true
 
 nsis:
   oneClick: false

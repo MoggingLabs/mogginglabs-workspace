@@ -19,6 +19,7 @@ import { runTemplateSmoke } from './template-smoke'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { registerDeepLink, initialDeepLinkCwd } from './deep-link'
+import { initAutoUpdate } from './updater'
 import { WorkspaceChannels } from '@contracts'
 
 // App-wiring layer: compose the backend over an Electron context and open the
@@ -90,6 +91,7 @@ app.whenReady().then(async () => {
       if (w.webContents.isLoading()) w.webContents.once('did-finish-load', send)
       else send()
     }
+    initAutoUpdate() // auto-update against the signed release feed (packaged builds only)
   }
 
   if (process.env.MOGGING_AGENT && win) {

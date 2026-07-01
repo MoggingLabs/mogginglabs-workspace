@@ -1,0 +1,66 @@
+name: Release
+
+# Tag-triggered signed release. Extends the CI (typecheck+build); here we also compile native
+# modules, package per-OS, sign + notarize, publish to the GitHub Releases feed (electron-updater
+# reads it), and upload sourcemaps to Sentry.
+on:
+  push:
+    tags:
+      - 'v*'
+
+# electron-builder publishes the signed artifacts to a GitHub Release.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build + sign + publish (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      # Present only when the Sentry secret is configured; gates the sourcemap upload step
+      # (secrets can't be read directly in `if:`, so we surface it as an env var).
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      # Install deps AND rebuild native modules (node-pty, better-sqlite3) for Electron's ABI
+      # from source — the runners have the C++ toolchain (VS Build Tools / Xcode CLT).
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (emits sourcemaps)
+        run: npm run build
+
+      - name: Package, sign, notarize + publish
+        run: npx electron-builder --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Code signing — base64-encoded cert + password: Authenticode (.pfx) on Windows,
+          # Developer ID (.p12) on macOS. Certs live ONLY in CI secrets — never committed.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # macOS notarization via notarytool.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      # Upload sourcemaps so Sentry de-minifies crash stacks (ADR 0005). Skipped without a token.
+      - name: Upload sourcemaps to Sentry
+        if: ${{ env.SENTRY_AUTH_TOKEN != '' }}
+        uses: getsentry/action-release@v1
+        env:
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+        with:
+          version: ${{ github.ref_name }}
+          sourcemaps: ./out
+          finalize: true
