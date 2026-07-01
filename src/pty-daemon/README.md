@@ -8,7 +8,7 @@ reconnects to it on each launch. See `docs/adr/0006-detached-pty-daemon.md`.
 A `utilityProcess` is a *child* of main and dies with it — it can't survive a main crash.
 Only a truly detached process can. This daemon is spawned `detached` + `unref`ed via
 **Electron-as-Node** (`ELECTRON_RUN_AS_NODE=1`, `process.execPath`), so it needs no system
-Node and reuses the app's `@lydell/node-pty` prebuilt.
+Node and reuses the app's `node-pty` (compiled from source).
 
 ## Files
 - `index.ts` — entry: single-instance lock, endpoint, idle auto-shutdown, wiring.

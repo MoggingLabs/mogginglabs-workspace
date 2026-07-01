@@ -1,5 +1,5 @@
 import { homedir } from 'node:os'
-import * as pty from '@lydell/node-pty'
+import * as pty from 'node-pty'
 import type {
   AgentState,
   DataEvent,

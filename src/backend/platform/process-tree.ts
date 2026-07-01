@@ -1,4 +1,4 @@
-import type { IPty } from '@lydell/node-pty'
+import type { IPty } from 'node-pty'
 
 // Phase 0: a plain kill. Phase 1 replaces this with true process-tree teardown
 // (Windows job objects / `taskkill /T`; Unix process-group kill) so long-running

@@ -1,5 +1,8 @@
 appId: ai.mogginglabs.workspace
 productName: MoggingLabs Workspace
+# Compile native modules FROM SOURCE against Electron's ABI (no prebuilt binaries) — the
+# proper implementation now that the VS C++ Build Tools toolchain is installed.
+buildDependenciesFromSource: true
 directories:
   output: dist
   buildResources: build
@@ -8,7 +11,7 @@ files:
   - package.json
 # Native modules (node-pty) are unpacked so they load from disk at runtime.
 asarUnpack:
-  - "**/node_modules/@lydell/node-pty/**"
+  - "**/node_modules/node-pty/**"
   - "**/node_modules/better-sqlite3/**"
   - "**/node_modules/bindings/**"
 

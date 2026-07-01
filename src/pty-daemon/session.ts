@@ -6,7 +6,7 @@
 // It also PERSISTS sessions (cwd + command label + scrollback) to a small store, so the
 // daemon self-recovers on a cold start / crash and repaints prior scrollback (Phase-1/03).
 import * as os from 'node:os'
-import * as pty from '@lydell/node-pty'
+import * as pty from 'node-pty'
 import type { SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { OscParser } from '@backend/features/agent-state'
 import { SessionStore, resumeCommandFor } from '@backend/features/workspace'
