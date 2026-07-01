@@ -93,21 +93,22 @@ export class DaemonClient {
       this.sock = sock
       sock.setEncoding('utf8')
       let settled = false
-      const framer = createLineFramer((obj) => this.dispatch(obj as ServerMessage, (panes) => {
-        if (!settled) {
-          settled = true
-          resolve(panes)
-        }
-      }))
+      const settle = (fn: () => void): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        fn()
+      }
+      // Never hang: if the daemon doesn't welcome us, fail fast so callers can recover.
+      const timer = setTimeout(() => settle(() => reject(new Error('daemon welcome timeout'))), 8000)
+      const framer = createLineFramer((obj) =>
+        this.dispatch(obj as ServerMessage, (panes) => settle(() => resolve(panes)))
+      )
       sock.on('data', (chunk: string) => framer(chunk))
-      sock.on('error', (e) => {
-        if (!settled) {
-          settled = true
-          reject(e)
-        }
-      })
+      sock.on('error', (e) => settle(() => reject(e)))
       sock.on('close', () => {
         this.sock = null
+        settle(() => reject(new Error('daemon closed before welcome')))
         this.events.onClose?.()
       })
       sock.on('connect', () => {
