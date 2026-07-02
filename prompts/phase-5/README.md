@@ -28,14 +28,16 @@ in order; each step file is < 4000 chars.
 |---|------|------|
 | 01 | `01-linux-full-parity.md` | The ENTIRE 24-gate sweep green on ubuntu CI (platform-aware smokes; nightly job) |
 | 02 | `02-macos-parity-and-manifests.md` | Sweep green on macos CI; winget + homebrew-cask manifests; signing hooks verified end-to-end (dry run) |
-| 03 | `03-browser-pane.md` | A browser is a first-class pane type (WebContentsView): URL bar, per-workspace, preview-what-the-agent-built (smoke green) |
-| 04 | `04-first-run-and-updates.md` | First-run checklist on Home (CLIs detected → profile → first workspace); auto-update toast → one-click restart (smoke green) |
-| 05 | `05-product-milestone.md` | Scripted fresh-machine install→swarm demo asserted; v0.4.0 released on all three platforms; full sweep recorded per-OS |
+| 03 | `03-profile-persistence.md` | Per-slot profile choices survive restarts (persisted manifest + failover follow-through); two subscriptions in parallel stay TRUE across relaunch (smoke green) |
+| 04 | `04-browser-pane.md` | A browser is a first-class pane type (WebContentsView): URL bar, per-workspace, preview-what-the-agent-built (smoke green) |
+| 05 | `05-first-run-and-updates.md` | First-run checklist on Home (CLIs detected → profile → first workspace); auto-update toast → one-click restart (smoke green) |
+| 06 | `06-product-milestone.md` | Scripted fresh-machine install→swarm demo asserted; v0.4.0 released on all three platforms; full sweep recorded per-OS |
 
 ## Overall Definition of Done
 - `bash scripts/qa-smokes.sh` is green on Windows, Linux, AND macOS CI — one gate
   list, zero platform forks in features.
 - A browser pane exists, budget-clean (both perf gates unchanged).
+- Per-workspace profile choices (two subscriptions in parallel) survive restarts.
 - A new user on a fresh machine reaches a working agent workspace in under five
   minutes, guided by the product itself.
 - v0.4.0 live with win/mac/linux artifacts on the auto-update feed.
@@ -55,6 +57,7 @@ in order; each step file is < 4000 chars.
 - The daemon protocol stays at v3 — Phase 5 adds no wire surface.
 
 ## Parallelization
-Lane A (platforms): 01 → 02. Lane B: 03 (browser). Lane C: 04 (first-run/updates).
-All independent after the pack starts; 05 needs A complete and at least B or C
-(recommended: all) — it freezes the sweep and cuts v0.4.0.
+Lane A (platforms): 01 → 02. Lane B: 03 (profile persistence, small) → 04 (browser).
+Lane C: 05 (first-run/updates). All independent after the pack starts; 06 needs A
+complete and at least B or C (recommended: all) — it freezes the sweep and cuts
+v0.4.0.

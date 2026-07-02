@@ -5,18 +5,19 @@ recorded per-OS.
 ## Steps
 1. **Smoke** (`MOGGING_PRODUCT`, two-phase like every milestone):
    - **Phase A — the five-minute path, asserted.** Isolated FRESH boot → first-run
-     checklist present (04) → wizard opened via its CTA → a real workspace with the
+     checklist present (05) → wizard opened via its CTA → a real workspace with the
      Swarm preset (shell provider for determinism) at a temp repo → roles chipped,
-     worktrees created → the checklist collapses (all three rows true) → a browser
-     pane opens beside the agents (03, localhost page served by the smoke) →
+     worktrees created, a per-slot profile chosen (03: it must survive the smoke's
+     restart phase) → the checklist collapses (all three rows true) → a browser
+     pane opens beside the agents (04, localhost page served by the smoke) →
      `mogging mail/claim/approve` one-liners prove the swarm substrate is
      reachable from the panes → review → gated merge lands.
    - **Phase B — budgets with EVERYTHING on.** Board visited, browser pane live,
      checklist rendered, 12+ panes, 3 s torrent + 4 switches: machine budget
      unchanged (≤150 ms / ≥30 fps / ≤300 MB); PERCEPTION re-runs in the sweep.
 2. **Full sweep, three platforms**: run `bash scripts/qa-smokes.sh` locally (Windows)
-   and via the 01/02 CI jobs (Linux, macOS). All gates — now including BROWSER,
-   FIRSTRUN, PRODUCT — must pass on all three. Record the per-OS numbers in
+   and via the 01/02 CI jobs (Linux, macOS). All gates — now including PROFPERSIST,
+   BROWSER, FIRSTRUN, PRODUCT — must pass on all three. Record the per-OS numbers in
    `prompts/phase-5/README.md` (milestone/perception per platform).
 3. **Release v0.4.0 — "Product"**: clean tree, bump, `npm run dist`, commit, push,
    `gh release create v0.4.0` with notes (browser pane, first-run, update UX,
