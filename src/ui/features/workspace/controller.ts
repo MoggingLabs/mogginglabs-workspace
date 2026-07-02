@@ -1,8 +1,11 @@
+import { TerminalChannels } from '@contracts'
 import type { AgentState, PaneId } from '@contracts'
+import { getBridge } from '../../core/ipc/bridge'
 import { GridLayout } from '../layout'
 import { icon } from '../../components'
 import { setFocusedPane } from '../../core/layout/focus'
 import { setPaneCwd } from '../../core/layout/pane-cwd'
+import { setPaneRole } from '../../core/layout/pane-meta'
 import { paneState, onAttentionChange } from '../../core/attention/attention-port'
 import { requestAgentLaunch } from '../../core/agents/launch-port'
 import { activeView, setActiveView } from '../../core/shell/view-port'
@@ -30,6 +33,7 @@ export interface CreateOpts {
   activate?: boolean
   assignments?: string[]
   paneCwds?: (string | null)[]
+  roles?: (string | null)[]
 }
 
 export interface SwitchOpts {
@@ -89,7 +93,8 @@ export class WorkspaceController {
       ordinal,
       paneCount: opts.paneCount ?? 1,
       assignments: opts.assignments,
-      paneCwds: opts.paneCwds
+      paneCwds: opts.paneCwds,
+      roles: opts.roles
     }
 
     const container = document.createElement('div')
@@ -118,6 +123,7 @@ export class WorkspaceController {
 
     layout.apply(meta.paneCount)
     this.publishPaneCwds(meta) // seed per-pane git with the workspace cwd (2/03)
+    this.publishRoles(meta) // swarm manifest -> role chips + daemon PaneInfo (4/01)
 
     if (opts.activate !== false) {
       this.switch(meta.id)
@@ -136,6 +142,23 @@ export class WorkspaceController {
     this.refreshAttention()
     this.onChange()
     return meta
+  }
+
+  /** Swarm manifest (4/01): role chips render from the pane-meta port immediately;
+   *  the daemon learns roles after its panes exist (spawn is async over the socket),
+   *  so `mogging list`/mailbox `from`-roles agree with the UI. */
+  private publishRoles(meta: WorkspaceMeta): void {
+    if (!meta.roles?.some((r) => r)) return
+    const base = meta.ordinal * 100
+    meta.roles.forEach((role, i) => {
+      if (role) setPaneRole((base + i + 1) as PaneId, role)
+    })
+    const roles = meta.roles
+    setTimeout(() => {
+      roles.forEach((role, i) => {
+        if (role) getBridge().send(TerminalChannels.setRole, { id: (base + i + 1) as PaneId, role })
+      })
+    }, 1200)
   }
 
   /** Seed each pane's cwd on the pane-cwd port — the reliable default for per-pane git
@@ -484,7 +507,8 @@ export class WorkspaceController {
       cwd: spec.cwd,
       paneCount: spec.paneCount,
       assignments: spec.assignments,
-      paneCwds: spec.paneCwds
+      paneCwds: spec.paneCwds,
+      roles: spec.roles
     })
     this.launchLineup(meta.id, false)
     return meta

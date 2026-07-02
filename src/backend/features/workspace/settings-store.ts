@@ -56,14 +56,20 @@ export class SettingsStore {
     } catch {
       /* column already exists */
     }
+    // Migrate pre-4/01 dbs: per-slot swarm roles.
+    try {
+      this.db.exec('ALTER TABLE app_workspaces ADD COLUMN pane_roles TEXT')
+    } catch {
+      /* column already exists */
+    }
   }
 
   load(): WorkspaceState {
     const rows = this.db
       .prepare(
-        'SELECT id, name, color, cwd, ordinal, pane_count AS paneCount, assignments, pane_cwds AS paneCwds FROM app_workspaces ORDER BY position'
+        'SELECT id, name, color, cwd, ordinal, pane_count AS paneCount, assignments, pane_cwds AS paneCwds, pane_roles AS paneRoles FROM app_workspaces ORDER BY position'
       )
-      .all() as Array<WorkspaceStateMeta & { assignments: string | null; paneCwds: string | null }>
+      .all() as Array<WorkspaceStateMeta & { assignments: string | null; paneCwds: string | null; paneRoles: string | null }>
     const workspaces: WorkspaceStateMeta[] = rows.map((r) => ({
       id: r.id,
       name: r.name,
@@ -72,7 +78,8 @@ export class SettingsStore {
       ordinal: r.ordinal,
       paneCount: r.paneCount,
       assignments: r.assignments ? (JSON.parse(r.assignments) as string[]) : undefined,
-      paneCwds: r.paneCwds ? (JSON.parse(r.paneCwds) as (string | null)[]) : undefined
+      paneCwds: r.paneCwds ? (JSON.parse(r.paneCwds) as (string | null)[]) : undefined,
+      roles: r.paneRoles ? (JSON.parse(r.paneRoles) as (string | null)[]) : undefined
     }))
     const settings = this.db.prepare('SELECT key, value FROM app_settings').all() as Array<{
       key: string
@@ -99,7 +106,7 @@ export class SettingsStore {
     const tx = this.db.transaction((s: WorkspaceState) => {
       this.db.prepare('DELETE FROM app_workspaces').run()
       const ins = this.db.prepare(
-        'INSERT INTO app_workspaces (id, name, color, cwd, ordinal, pane_count, position, assignments, pane_cwds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO app_workspaces (id, name, color, cwd, ordinal, pane_count, position, assignments, pane_cwds, pane_roles) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       s.workspaces.forEach((w, i) =>
         ins.run(
@@ -111,7 +118,8 @@ export class SettingsStore {
           w.paneCount,
           i,
           w.assignments ? JSON.stringify(w.assignments) : null,
-          w.paneCwds ? JSON.stringify(w.paneCwds) : null
+          w.paneCwds ? JSON.stringify(w.paneCwds) : null,
+          w.roles ? JSON.stringify(w.roles) : null
         )
       )
       const set = this.db.prepare(

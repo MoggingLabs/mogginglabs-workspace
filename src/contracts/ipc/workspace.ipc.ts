@@ -42,6 +42,8 @@ export interface WorkspaceStateMeta {
   /** Per-slot cwd override (worktree isolation, Phase-3/03) — restored workspaces
    *  re-attach panes to their worktrees. Paths only, never credentials. */
   paneCwds?: (string | null)[]
+  /** Per-slot swarm role (Phase-4/01) — the manifest survives restore. */
+  roles?: (string | null)[]
 }
 
 /** A recently-worked-on project (directory) for Home's one-click reopen tiles —

@@ -97,6 +97,31 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           else send({ t: 'error', reason: 'nopane' })
           break
         }
+        // ── Swarm mailbox + roles (Phase-4/01). Mail bodies are user/agent content:
+        // they live in the in-memory ring only and go back to REQUESTING clients only
+        // — never into a PTY, a log, telemetry, or disk. ──────────────────────────
+        case 'mail-send': {
+          const from = typeof m.from === 'string' && m.from ? m.from : '0'
+          const to = typeof m.to === 'string' && m.to ? m.to : 'all'
+          const id = typeof m.body === 'string' ? sessions.mailbox.send(from, to, m.body) : null
+          if (id != null) send({ t: 'mailed', id })
+          else send({ t: 'error', reason: 'badmail' })
+          break
+        }
+        case 'mail-read':
+          send({
+            t: 'mail',
+            messages: sessions.mailbox.read(
+              typeof m.since === 'number' ? m.since : 0,
+              typeof m.for === 'string' && m.for ? m.for : undefined
+            )
+          })
+          break
+        case 'set-role': {
+          const ok = sessions.has(m.id) && sessions.mailbox.setRole(m.id, m.role)
+          send({ t: 'role-set', id: m.id, ok })
+          break
+        }
         case 'ping':
           send({ t: 'pong' })
           break

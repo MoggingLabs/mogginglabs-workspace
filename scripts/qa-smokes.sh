@@ -15,7 +15,7 @@ RESULTS=()
 
 kill_daemon() {
   local iso="$1"
-  local ep="$iso/local/MoggingLabs/run/v1/endpoint.json"
+  local ep="$iso/local/MoggingLabs/run/v3/endpoint.json"
   if [ -f "$ep" ]; then
     local pid
     pid=$(node -e "try{console.log(JSON.parse(require('fs').readFileSync('$ep','utf8')).pid)}catch{}" 2>/dev/null)
@@ -62,6 +62,7 @@ run_smoke WORKTREE    MOGGING_WORKTREE  1 240 worktree
 run_smoke REVIEW      MOGGING_REVIEW    1 240 review
 run_smoke BOARD       MOGGING_BOARD     1 240 board
 run_smoke ORCHESTRATION MOGGING_ORCHESTRATION 1 300 orchestration
+run_smoke SWARM       MOGGING_SWARM     1 240 swarm
 run_smoke TEMPLATE_A  MOGGING_TEMPLATE  A 180 template TEMPLATE
 run_smoke TEMPLATE_B  MOGGING_TEMPLATE  B 180 template TEMPLATE
 

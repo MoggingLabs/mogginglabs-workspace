@@ -165,6 +165,10 @@ export class DaemonClient {
   input(id: string, data: string): void {
     this.send({ t: 'input', id, data })
   }
+  /** Swarm manifest (Phase-4/01): fire-and-forget role naming. */
+  setRole(id: string, role: string): void {
+    this.send({ t: 'set-role', id, role })
+  }
   resize(id: string, cols: number, rows: number): void {
     this.send({ t: 'resize', id, cols, rows })
   }

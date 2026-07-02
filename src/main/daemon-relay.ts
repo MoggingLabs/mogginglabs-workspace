@@ -6,7 +6,7 @@
 import { ipcMain, type WebContents } from 'electron'
 import * as path from 'node:path'
 import { TerminalChannels } from '@contracts'
-import type { SpawnRequest, WriteCommand, ResizeCommand, KillCommand } from '@contracts'
+import type { SpawnRequest, WriteCommand, ResizeCommand, KillCommand, SetRoleCommand } from '@contracts'
 import { ensureDaemon, DaemonClient } from './daemon-client'
 
 /** Connect to (or spawn) the daemon and bridge the terminal channels to it.
@@ -29,6 +29,7 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
   ipcMain.on(TerminalChannels.write, (_e, cmd: WriteCommand) => client.input(String(cmd.id), cmd.data))
   ipcMain.on(TerminalChannels.resize, (_e, cmd: ResizeCommand) => client.resize(String(cmd.id), cmd.cols, cmd.rows))
   ipcMain.on(TerminalChannels.kill, (_e, cmd: KillCommand) => client.kill(String(cmd.id)))
+  ipcMain.on(TerminalChannels.setRole, (_e, cmd: SetRoleCommand) => client.setRole(String(cmd.id), cmd.role))
 
   return () => client.dispose()
 }

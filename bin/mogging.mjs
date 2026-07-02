@@ -19,7 +19,7 @@ import net from 'node:net'
 
 // Keep in sync with DAEMON_PROTOCOL_VERSION in src/contracts/daemon/protocol.ts
 // (this file is plain Node — it cannot import the TS contract).
-const PROTOCOL_VERSION = 2
+const PROTOCOL_VERSION = 3
 
 const argv = process.argv.slice(2)
 const cmd = argv[0]
@@ -29,6 +29,8 @@ else if (cmd === 'list') runList()
 else if (cmd === 'send') runSend(argv.slice(1))
 else if (cmd === 'send-key') runSendKey(argv.slice(1))
 else if (cmd === 'capture') runCapture(argv.slice(1))
+else if (cmd === 'mail') runMail(argv.slice(1))
+else if (cmd === 'role') runRole(argv.slice(1))
 else if (cmd === 'open') runControlOpen(argv.slice(1))
 else if (cmd === 'layout') runControl({ verb: 'layout', panes: Number(argv[1]) }, argv)
 else if (cmd === 'focus') runControl({ verb: 'focus', paneId: Number(argv[1]) }, argv)
@@ -43,9 +45,98 @@ function usage(code) {
     'usage: mogging [<dir>] | notify --event <e> | list | send <pane> <text...> [--no-enter]\n' +
       '       mogging send-key <pane> <key> | capture <pane> [--lines N]\n' +
       '       mogging open <dir> [--panes N] | layout <N> | focus <pane>\n' +
-      '       mogging expand <pane> [full|col|row] | close-pane <pane>   (each: [--no-launch])\n'
+      '       mogging expand <pane> [full|col|row] | close-pane <pane>   (each: [--no-launch])\n' +
+      '       mogging mail send [--to <pane>|all] <text...> | mail read [--since <id>] [--json]\n' +
+      '       mogging role <pane> <architect|worker|reviewer>\n'
   )
   process.exit(code)
+}
+
+// --- mogging mail send/read + mogging role (Phase-4/01 swarm substrate) --------------------------
+// Mail bodies are user/agent content: they travel this authed socket and the caller's
+// stdout ONLY. Inside a pane, identity is implicit via MOGGING_PANE_ID.
+
+function runMail(args) {
+  const sub = args[0]
+  if (sub === 'send') runMailSend(args.slice(1))
+  else if (sub === 'read') runMailRead(args.slice(1))
+  else usage(2)
+}
+
+function runMailSend(args) {
+  let to = 'all'
+  const ti = args.indexOf('--to')
+  if (ti >= 0) {
+    to = args[ti + 1]
+    if (!to) usage(2)
+    args = args.slice(0, ti).concat(args.slice(ti + 2))
+  }
+  const body = args.join(' ')
+  if (!body) usage(2)
+  const from = process.env.MOGGING_PANE_ID || '0'
+  withDaemon(
+    (welcome, api) => {
+      api.send({ t: 'mail-send', from, to: String(to), body })
+    },
+    (m, api) => {
+      if (m.t === 'mailed') {
+        process.stdout.write('mogging: mail #' + m.id + ' sent\n')
+        api.finish(0)
+      } else if (m.t === 'error') {
+        process.stderr.write('mogging mail: rejected (' + m.reason + ')\n')
+        api.finish(1)
+      }
+    }
+  )
+}
+
+function runMailRead(args) {
+  const asJson = args.includes('--json')
+  let since = 0
+  const si = args.indexOf('--since')
+  if (si >= 0) {
+    since = Number(args[si + 1])
+    if (!Number.isInteger(since) || since < 0) usage(2)
+  }
+  const forPane = process.env.MOGGING_PANE_ID // implicit identity; unset = human view
+  withDaemon(
+    (welcome, api) => {
+      api.send({ t: 'mail-read', since, for: forPane })
+    },
+    (m, api) => {
+      if (m.t !== 'mail') return
+      if (asJson) {
+        process.stdout.write(JSON.stringify(m.messages) + '\n')
+      } else if (!m.messages.length) {
+        process.stdout.write('no mail\n')
+      } else {
+        for (const msg of m.messages) {
+          const who = msg.from === '0' ? 'human' : 'pane ' + msg.from + (msg.role ? ':' + msg.role : '')
+          process.stdout.write('#' + msg.id + ' [' + who + ' -> ' + msg.to + '] ' + msg.body + '\n')
+        }
+      }
+      api.finish(0)
+    }
+  )
+}
+
+function runRole(args) {
+  const pane = args[0]
+  const role = args[1]
+  if (!pane || !role) usage(2)
+  withDaemon(
+    (welcome, api) => {
+      api.send({ t: 'set-role', id: String(pane), role })
+    },
+    (m, api) => {
+      if (m.t === 'role-set') {
+        if (!m.ok) {
+          process.stderr.write('mogging role: unknown pane or role (roles: architect, worker, reviewer)\n')
+        }
+        api.finish(m.ok ? 0 : 1)
+      }
+    }
+  )
 }
 
 // --- layout control verbs (Phase-3/02): ride the mogging:// relay ---------------------------------

@@ -17,6 +17,7 @@ import { onTerminalTheme } from '../../core/theme/theme-port'
 import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
 import { setPaneState, clearPaneState } from '../../core/attention/attention-port'
 import { setPaneCwd, clearPaneCwd, getPaneCwd } from '../../core/layout/pane-cwd'
+import { getPaneRole, onPaneRole } from '../../core/layout/pane-meta'
 import { onFocusedPane } from '../../core/layout/focus'
 import { onPaneGit, getPaneGit } from '../../core/git/git-port'
 import { allCommands } from '../../core/commands/command-port'
@@ -64,6 +65,7 @@ export class TerminalPane {
   private paneLabelUnsub?: () => void
   private paneGitUnsub?: () => void
   private focusUnsub?: () => void
+  private roleUnsub?: () => void
   private renameFn?: () => void
   private blocks?: BlockTracker
 
@@ -331,7 +333,20 @@ export class TerminalPane {
     const title = document.createElement('span')
     title.className = 'pane-title pane-label'
     title.title = 'Double-click to rename'
-    left.append(state, title)
+    // Swarm role chip (4/01) — named by the workspace manifest via the pane-meta port.
+    const role = document.createElement('span')
+    role.className = 'pane-role'
+    role.hidden = true
+    const applyRole = (r: string): void => {
+      role.textContent = r
+      role.hidden = !r
+    }
+    const existingRole = getPaneRole(this.id)
+    if (existingRole) applyRole(existingRole)
+    this.roleUnsub = onPaneRole((paneId, r) => {
+      if (paneId === this.id) applyRole(r)
+    })
+    left.append(state, role, title)
 
     // Center: branch chip — a branch icon + name (soft chip, like the reference bar).
     const git = document.createElement('span')
@@ -627,6 +642,7 @@ export class TerminalPane {
     this.paneLabelUnsub?.()
     this.paneGitUnsub?.()
     this.focusUnsub?.()
+    this.roleUnsub?.()
     this.visObs?.disconnect()
     this.releaseWebgl()
     this.resizeObs.disconnect()

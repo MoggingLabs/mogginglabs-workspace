@@ -26,7 +26,7 @@ order; each step file is < 4000 chars.
 ## Sequence
 | # | File | Gate |
 |---|------|------|
-| 01 | `01-swarm-roles-and-mailbox.md` | Swarm manifest (roles per pane) + daemon mailbox; `mogging mail send/read` coordinate two panes (smoke green) |
+| 01 | `01-swarm-roles-and-mailbox.md` | **DONE**: daemon protocol v3 (mail-send/mail-read/set-role, PaneInfo.role, 16 KB body cap, 500-msg ring); `Mailbox` on the session registry (roles die with their pane); CLI `mogging mail send/read [--json]` + `mogging role` (implicit in-pane identity via MOGGING_PANE_ID); wizard Swarm preset (architect·2 workers·reviewer) + per-slot `roles` through spec→controller→persistence (restore keeps the manifest) + `.pane-role` chips; MOGGING_SWARM green (chips, in-pane send → as-pane read w/ from+role, bogus-role exit 1, fake-token exit 4, v2-hello refused, 502-flood → exactly 500 retained) + CONTROL & NOTIFY still green (control-smoke's endpoint path now derives from DAEMON_PROTOCOL_VERSION) |
 | 02 | `02-file-ownership-ledger.md` | Exclusive path claims per agent: `mogging claim/release/owners`; conflicting claims refused; per-pane chip (smoke green) |
 | 03 | `03-reviewer-gate.md` | Merges require a reviewer sign-off (`mogging approve` from the reviewer pane / typed human override); board lanes follow (smoke green) |
 | 04 | `04-profiles-and-failover.md` | Named provider profiles (env POINTERS, never secrets); `usage-limit` notify → failover relaunch on the next profile (smoke green) |

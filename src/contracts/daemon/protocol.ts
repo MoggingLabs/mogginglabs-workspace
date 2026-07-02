@@ -6,10 +6,31 @@
 import type { AgentState } from '../domain/agent'
 import type { PersistedWorkspace } from '../ipc/workspace.ipc'
 
-// v2: Phase-3/01 control API — send-key/capture messages + enriched PaneInfo. The
-// version namespaces the runtime dir + socket, so v1 daemons keep running untouched
-// (ADR 0006 anti-kill-server); the app + CLI simply speak to their own v2 daemon.
-export const DAEMON_PROTOCOL_VERSION = 2
+// v3: Phase-4/01 swarm substrate — mailbox (mail-send/mail-read), per-pane roles
+// (set-role, PaneInfo.role). v2: Phase-3/01 control API — send-key/capture + enriched
+// PaneInfo. The version namespaces the runtime dir + socket, so older daemons keep
+// running untouched (ADR 0006 anti-kill-server); the app + CLI speak their own v3.
+export const DAEMON_PROTOCOL_VERSION = 3
+
+// ── Swarm substrate (Phase-4/01) ───────────────────────────────────────────────
+export const SWARM_ROLES = ['architect', 'worker', 'reviewer'] as const
+export type SwarmRole = (typeof SWARM_ROLES)[number]
+
+/** One coordination message. Body is USER/AGENT content: it lives in the daemon's
+ *  in-memory ring buffer ONLY — never telemetry, logs, notify payloads, or disk. */
+export interface MailMessage {
+  id: number
+  /** Sender pane id ('0' = external/human — no pane binding on that connection). */
+  from: string
+  role?: SwarmRole
+  /** Recipient pane id, or 'all' (the default). */
+  to: string
+  body: string
+  ts: number
+}
+
+export const MAIL_BODY_MAX = 16384 // 16 KB per message
+export const MAIL_RING_MAX = 500 // ring buffer — coordination, not a database
 
 /** Discovery record the daemon writes and the client reads (mode 0600). */
 export interface DaemonEndpoint {
@@ -39,6 +60,8 @@ export interface PaneInfo {
   cwd?: string
   /** Live agent state (idle / busy / attention). */
   state?: AgentState
+  /** Swarm role, when the pane has one (Phase-4/01). */
+  role?: SwarmRole
 }
 
 /** client -> daemon */
@@ -60,6 +83,15 @@ export type ClientMessage =
   | { t: 'send-key'; id: string; key: string }
   // Control API (Phase-3/01): return the retained scrollback tail (≤ 10000 lines).
   | { t: 'capture'; id: string; lastLines?: number }
+  // Swarm mailbox (Phase-4/01). `from` is the sender's own pane binding (env
+  // MOGGING_PANE_ID inside a pane; omitted = external/human -> '0'). The mailbox
+  // never pushes into a PTY — readers PULL with mail-read.
+  | { t: 'mail-send'; body: string; to?: string; from?: string }
+  // Messages for `for` (its own id, or omitted = the human view: everything),
+  // with id > since.
+  | { t: 'mail-read'; since?: number; for?: string }
+  // Swarm manifest: name a pane's role (validated against SWARM_ROLES).
+  | { t: 'set-role'; id: string; role: string }
 
 /** daemon -> client */
 export type ServerMessage =
@@ -76,6 +108,9 @@ export type ServerMessage =
   | { t: 'notified'; id: string; ok: boolean } // ack for a `notify` (ok=false: unknown pane id)
   | { t: 'sent'; id: string; ok: boolean } // ack for a `send-key` (ok=false: unknown pane/key)
   | { t: 'captured'; id: string; data: string } // reply to `capture` — CALLER's stdout only
+  | { t: 'mailed'; id: number } // ack for a mail-send (the assigned message id)
+  | { t: 'mail'; messages: MailMessage[] } // reply to mail-read — CALLER only
+  | { t: 'role-set'; id: string; ok: boolean } // ack for set-role (ok=false: unknown pane/role)
 
 /** Notify events an agent/hook can raise via `mogging notify` (Phase-2/04). A small, closed
  *  vocabulary that maps to a pane AgentState — a label only, never PTY content (ADR 0002). */

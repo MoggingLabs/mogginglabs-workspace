@@ -79,6 +79,7 @@ export const wizardFeature: UiFeature = {
     let customCount = 0
     let isRepo = false // set by the Start step's git probe
     let isolate = false // Phase-3/03: one git worktree per agent pane
+    let swarmRoles: (string | null)[] | null = null // Phase-4/01: per-slot manifest (preset)
 
     let roster: AgentInfo[] = []
     let presets: ProviderMixTemplate[] = []
@@ -239,12 +240,18 @@ export const wizardFeature: UiFeature = {
         }
       }
 
+      const manifest = swarmRoles
+      const roles =
+        !skipAgents && manifest
+          ? resolved.assignments.map((_, i) => manifest[i] ?? null)
+          : undefined
       openWorkspaceFromTemplate({
         name: name.trim() || basename(cwd) || 'Workspace',
         cwd,
         paneCount: resolved.paneCount,
         assignments: resolved.assignments,
-        paneCwds
+        paneCwds,
+        roles
       })
       getTelemetry().captureEvent({
         name: 'wizard.completed',
@@ -554,6 +561,7 @@ export const wizardFeature: UiFeature = {
             ariaLabel: `${a.name} count`,
             onChange: (n) => {
               counts.set(a.id, n)
+              swarmRoles = null // a manual mix is no longer the swarm preset
               refresh()
             }
           })
@@ -579,6 +587,7 @@ export const wizardFeature: UiFeature = {
           ariaLabel: 'Custom command count',
           onChange: (n) => {
             customCount = n
+            swarmRoles = null
             refresh()
           }
         })
@@ -685,10 +694,34 @@ export const wizardFeature: UiFeature = {
       ])
       if (!isRepo) isolate = false
 
+      // Swarm preset (4/01): one click -> architect + 2 workers + reviewer on the
+      // first installed CLI, each pane chipped with its role.
+      const swarmBtn = Button({
+        label: 'Swarm preset — architect · 2 workers · reviewer',
+        icon: 'sparkles',
+        onClick: () => {
+          const provider = roster.find((a) => a.installed) ?? roster[0]
+          if (!provider) return
+          paneCount = 4
+          counts = new Map([[provider.id, 4]])
+          customCount = 0
+          swarmRoles = ['architect', 'worker', 'worker', 'reviewer']
+          renderAgents()
+        }
+      })
+      const swarmRow = el('div', { class: 'wizard-swarm-row' }, [
+        swarmBtn,
+        el('span', {
+          class: 'wizard-isolate-hint',
+          text: swarmRoles ? 'Swarm manifest armed — roles land on the panes.' : ''
+        })
+      ])
+
       body.append(
         el('div', { class: 'wizard-fill-row' }, [meter.el, meterLabel]),
         fills,
         rows,
+        swarmRow,
         isolateRow,
         el('div', { class: 'wizard-agent-footer' }, [
           el('div', { class: 'wizard-preview-wrap' }, [
@@ -728,14 +761,15 @@ export const wizardFeature: UiFeature = {
       w.__mogging.templates = {
         resolve: (m: ProviderCount[]) => wizardClient.resolve(m),
         list: () => wizardClient.listPresets(),
-        open: async (m: ProviderCount[]) => {
+        open: async (m: ProviderCount[], roles?: (string | null)[]) => {
           const r = await wizardClient.resolve(m)
           const cwd = getFocusedPane()?.cwd ?? ''
           openWorkspaceFromTemplate({
             name: 'Smoke',
             cwd,
             paneCount: r.paneCount,
-            assignments: r.assignments
+            assignments: r.assignments,
+            roles
           })
           return r
         },

@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process'
 import { writeFileSync, readFileSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DAEMON_PROTOCOL_VERSION } from '@contracts'
 
 // Env-gated control-API smoke (MOGGING_CONTROL, Phase-3/01): prove tmux-grade
 // scriptability end to end by running the REAL `bin/mogging.mjs` as a child process
@@ -98,7 +99,7 @@ export function runControlSmoke(win: BrowserWindow): void {
           ? process.env.LOCALAPPDATA || join(app.getPath('home'), 'AppData', 'Local')
           : process.env.XDG_RUNTIME_DIR || join(app.getPath('home'), 'Library', 'Application Support')
       const realEp = JSON.parse(
-        readFileSync(join(base, 'MoggingLabs', 'run', 'v2', 'endpoint.json'), 'utf8')
+        readFileSync(join(base, 'MoggingLabs', 'run', 'v' + DAEMON_PROTOCOL_VERSION, 'endpoint.json'), 'utf8')
       ) as Record<string, unknown>
       const fakeDir = mkdtempSync(join(tmpdir(), 'mogging-ctl-'))
       const fakeEp = join(fakeDir, 'endpoint.json')

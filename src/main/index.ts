@@ -38,6 +38,7 @@ import { runWorktreeSmoke } from './worktree-smoke'
 import { runReviewSmoke } from './review-smoke'
 import { runBoardSmoke } from './board-smoke'
 import { runOrchestrationSmoke } from './orchestration-smoke'
+import { runSwarmSmoke } from './swarm-smoke'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { registerDeepLink, initialDeepLinkCwd, initialControlCommand } from './deep-link'
@@ -187,6 +188,8 @@ app.whenReady().then(async () => {
     runBoardSmoke(win) // env-gated Kanban-board smoke (Phase-3/05)
   } else if (process.env.MOGGING_ORCHESTRATION && win) {
     runOrchestrationSmoke(win) // env-gated Phase-3 orchestration milestone (Phase-3/06)
+  } else if (process.env.MOGGING_SWARM && win) {
+    runSwarmSmoke(win) // env-gated swarm mailbox + roles smoke (Phase-4/01)
   }
 
   app.on('activate', () => {

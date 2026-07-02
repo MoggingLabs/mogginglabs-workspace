@@ -11,7 +11,8 @@ export const TerminalChannels = {
   data: 'terminal:data',
   exit: 'terminal:exit',
   state: 'terminal:state',
-  cwd: 'terminal:cwd' // backend -> renderer: a pane reported its cwd (OSC 7)
+  cwd: 'terminal:cwd', // backend -> renderer: a pane reported its cwd (OSC 7)
+  setRole: 'terminal:setRole' // renderer -> daemon: swarm role manifest (Phase-4/01)
 } as const
 
 export const ClipboardChannels = {

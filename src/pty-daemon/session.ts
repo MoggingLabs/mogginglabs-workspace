@@ -11,6 +11,7 @@ import type { SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { notifyEventToState } from '@contracts'
 import { OscParser, fileUriToPath } from '@backend/features/agent-state'
 import { SessionStore, resumeCommandFor } from '@backend/features/workspace'
+import { Mailbox } from './mailbox'
 import type { PersistedPane, PersistedWorkspace, WorkspaceLayout } from '@contracts'
 
 const SCROLLBACK_BYTES = 200_000
@@ -173,6 +174,8 @@ class PaneSession {
 export class SessionManager {
   private panes = new Map<string, PaneSession>()
   private persistTimer?: NodeJS.Timeout
+  /** Swarm substrate (Phase-4/01): the daemon-owned mailbox + role manifest. */
+  readonly mailbox = new Mailbox()
 
   // extraEnv is injected into every pane's shell env (e.g. MOGGING_DAEMON_ENDPOINT for notify).
   constructor(
@@ -187,7 +190,7 @@ export class SessionManager {
     return this.panes.size
   }
   list(): PaneInfo[] {
-    return [...this.panes.values()].map((p) => p.info())
+    return [...this.panes.values()].map((p) => ({ ...p.info(), role: this.mailbox.roleOf(p.id) }))
   }
   get(id: string): PaneSession | undefined {
     return this.panes.get(id)
@@ -268,6 +271,7 @@ export class SessionManager {
     if (p) {
       p.kill()
       this.panes.delete(id)
+      this.mailbox.clearRole(id) // pane ids get reused — a role never outlives its pane
       this.schedulePersist(500)
     }
   }

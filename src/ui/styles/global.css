@@ -1072,6 +1072,19 @@ button {
 .pane-header .pane-actions {
   grid-column: 3;
 }
+/* Swarm role chip (Phase-4/01): tiny uppercase tag between the state dot and title. */
+.pane-role {
+  flex: none;
+  font-size: var(--fs-10);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-wide);
+  color: var(--accent-ink);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 0 4px;
+  line-height: 14px;
+}
 .pane-title {
   min-width: 0;
   overflow: hidden;
@@ -1824,6 +1837,11 @@ body.resizing * {
 }
 .wizard-preset-remove:hover {
   color: var(--danger);
+}
+.wizard-swarm-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
 }
 .wizard-isolate {
   display: flex;

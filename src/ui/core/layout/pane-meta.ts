@@ -21,3 +21,22 @@ export function onPaneLabel(cb: (paneId: PaneId, label: string) => void): () => 
   subscribers.add(cb)
   return () => subscribers.delete(cb)
 }
+
+// ── Swarm role (Phase-4/01): named by the workspace feature from the template
+// manifest; rendered by TerminalPane as a `.pane-role` chip. Same port pattern. ──
+const roles = new Map<PaneId, string>()
+const roleSubscribers = new Set<(paneId: PaneId, role: string) => void>()
+
+export function setPaneRole(paneId: PaneId, role: string): void {
+  roles.set(paneId, role)
+  for (const cb of roleSubscribers) cb(paneId, role)
+}
+
+export function getPaneRole(paneId: PaneId): string | undefined {
+  return roles.get(paneId)
+}
+
+export function onPaneRole(cb: (paneId: PaneId, role: string) => void): () => void {
+  roleSubscribers.add(cb)
+  return () => roleSubscribers.delete(cb)
+}

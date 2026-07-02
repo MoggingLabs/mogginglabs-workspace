@@ -12,6 +12,8 @@ export interface TemplateWorkspaceSpec {
   assignments: string[]
   /** Per-slot cwd overrides (worktree isolation, Phase-3/03). null = workspace cwd. */
   paneCwds?: (string | null)[]
+  /** Per-slot swarm roles (Phase-4/01). null = no role. */
+  roles?: (string | null)[]
 }
 
 /** Identity of the workspace an open created — enough for callers (e.g. the board,

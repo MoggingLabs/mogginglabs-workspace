@@ -21,6 +21,12 @@ export interface KillCommand {
   id: PaneId
 }
 
+/** Swarm manifest (Phase-4/01): name a pane's role on the daemon. */
+export interface SetRoleCommand {
+  id: PaneId
+  role: string
+}
+
 // Events: backend -> UI
 export interface DataEvent {
   id: PaneId
