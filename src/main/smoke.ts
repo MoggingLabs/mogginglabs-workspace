@@ -69,6 +69,15 @@ export function runSmoke(win: BrowserWindow): void {
   }
 
   async function terminalCore(): Promise<Record<string, unknown>> {
+    // Launcher-first boot: the app opens on Home with no workspace. Create Workspace 1
+    // (which reveals its grid + spawns pane 1) and give its shell time to reach a prompt.
+    await ES(
+      '(function(){var m=window.__mogging;' +
+        'if(m&&m.workspace&&m.workspace.count()===0){m.workspace.create({name:"Workspace 1"});}' +
+        'else if(m&&m.workspace){m.workspace.switchByIndex(0);}return true;})()'
+    )
+    await delay(2500)
+
     await ES(
       "window.__cap='';" +
         "if(!window.__capHooked){window.__capHooked=true;" +

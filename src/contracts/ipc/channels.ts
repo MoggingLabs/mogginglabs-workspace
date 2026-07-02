@@ -23,7 +23,8 @@ export const WorkspaceChannels = {
   loadState: 'workspace:loadState',
   saveState: 'workspace:saveState',
   openCwd: 'workspace:openCwd', // main -> renderer: open/focus a workspace for a directory
-  attention: 'workspace:attention' // renderer -> main: any workspace needs attention (dock/taskbar badge)
+  attention: 'workspace:attention', // renderer -> main: any workspace needs attention (dock/taskbar badge)
+  browseDir: 'workspace:browseDir' // -> native directory picker; resolves to a path or null
 } as const
 
 export const AgentChannels = {
@@ -38,6 +39,19 @@ export const TemplateChannels = {
   remove: 'templates:remove' // (id) -> void
 } as const
 
+export const TelemetryChannels = {
+  getConfig: 'telemetry:getConfig', // -> TelemetryRendererConfig (consent + env; no install id)
+  setConsent: 'telemetry:setConsent', // (TelemetryConsent) -> persist + re-init adapters live
+  event: 'telemetry:event', // renderer -> main: forward a curated product event (send)
+  configChanged: 'telemetry:configChanged' // main -> renderer: consent changed, re-init
+} as const
+
+export const ShellChannels = {
+  /** Renderer -> main: retint the native window-control overlay to match the theme
+   *  ({ color, symbolColor }). No-op on platforms without an overlay (macOS). */
+  titlebarOverlay: 'shell:titlebarOverlay'
+} as const
+
 export const GitChannels = {
   query: 'git:query', // (cwd) -> GitStatus | null (one-shot, read-only)
   watch: 'git:watch', // (GitWatchRequest) -> track a pane's cwd; change events follow
@@ -49,6 +63,8 @@ export const AllChannels: readonly string[] = [
   ...Object.values(TerminalChannels),
   ...Object.values(ClipboardChannels),
   ...Object.values(WorkspaceChannels),
+  ...Object.values(TelemetryChannels),
+  ...Object.values(ShellChannels),
   ...Object.values(AgentChannels),
   ...Object.values(TemplateChannels),
   ...Object.values(GitChannels)

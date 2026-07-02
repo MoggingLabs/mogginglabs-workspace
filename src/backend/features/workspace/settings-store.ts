@@ -2,8 +2,15 @@
 // persisted with the same better-sqlite3 mechanism as the session store (03). Electron-free.
 // Metadata ONLY — no credentials (ADR 0002). Kept in a SEPARATE db from the daemon's
 // sessions.db so the two processes never contend on one file: main owns this; daemon owns sessions.
+import { randomUUID } from 'node:crypto'
 import Database from 'better-sqlite3'
-import type { ProviderCount, ProviderMixTemplate, WorkspaceState, WorkspaceStateMeta } from '@contracts'
+import type {
+  ProviderCount,
+  ProviderMixTemplate,
+  RecentWorkspace,
+  WorkspaceState,
+  WorkspaceStateMeta
+} from '@contracts'
 
 export class SettingsStore {
   private readonly db: Database.Database
@@ -53,10 +60,18 @@ export class SettingsStore {
       value: string
     }>
     const map = new Map(settings.map((s) => [s.key, s.value]))
+    let recents: RecentWorkspace[] | undefined
+    try {
+      const raw = map.get('recents')
+      recents = raw ? (JSON.parse(raw) as RecentWorkspace[]) : undefined
+    } catch {
+      recents = undefined
+    }
     return {
       workspaces,
       activeId: map.get('activeId') || null,
-      theme: map.get('theme') || 'midnight'
+      theme: map.get('theme') || 'midnight',
+      recents
     }
   }
 
@@ -75,8 +90,42 @@ export class SettingsStore {
       )
       set.run('activeId', s.activeId ?? '')
       set.run('theme', s.theme)
+      set.run('recents', JSON.stringify(s.recents ?? []))
     })
     tx(state)
+  }
+
+  // --- Telemetry consent + anonymous install id (observability/00, ADR 0005) -----
+  // Stored in the same KV table. The install id is a random UUID minted on first read —
+  // never derived from the machine, account, or provider identity. Consent defaults OFF.
+
+  getTelemetrySettings(): { installId: string; errorReporting: boolean; productAnalytics: boolean } {
+    const rows = this.db
+      .prepare("SELECT key, value FROM app_settings WHERE key LIKE 'telemetry.%'")
+      .all() as Array<{ key: string; value: string }>
+    const map = new Map(rows.map((r) => [r.key, r.value]))
+    let installId = map.get('telemetry.installId') ?? ''
+    if (!installId) {
+      installId = randomUUID()
+      this.db
+        .prepare(
+          'INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+        )
+        .run('telemetry.installId', installId)
+    }
+    return {
+      installId,
+      errorReporting: map.get('telemetry.errorReporting') === '1',
+      productAnalytics: map.get('telemetry.productAnalytics') === '1'
+    }
+  }
+
+  setTelemetryConsent(consent: { errorReporting: boolean; productAnalytics: boolean }): void {
+    const set = this.db.prepare(
+      'INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+    )
+    set.run('telemetry.errorReporting', consent.errorReporting ? '1' : '')
+    set.run('telemetry.productAnalytics', consent.productAnalytics ? '1' : '')
   }
 
   // --- 06b: saved provider-mix templates (metadata only — providers + counts) ---

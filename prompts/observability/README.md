@@ -16,9 +16,13 @@ adapters + composition-root factories) is done; these steps fill in the factorie
 ## Sequence
 | # | File | Gate |
 |---|------|------|
-| 00 | `00-consent-and-config.md` | opt-in consent + `TelemetryConfig` source; factories select adapter vs noop by config; default OFF |
-| 01 | `01-sentry.md` | `@sentry/electron` errors + native crashes wired in both processes, scrubbed; sourcemaps upload |
-| 02 | `02-posthog.md` | *(optional)* `posthog-node` explicit-event analytics from main, opt-in, anonymous |
+| 00 | `00-consent-and-config.md` | **DONE**: consent (2 flags) + anonymous install id persisted in the app-settings store; `telemetry:*` channels (`getConfig`/`setConsent`/`event`/`configChanged`); Settings toggles apply LIVE; default OFF; `DO_NOT_TRACK` honored |
+| 01 | `01-sentry.md` | **DONE** (sourcemap upload pending a DSN/org): `@sentry/electron` main+renderer behind the seam, `sendDefaultPii:false` + scrubber, revoke disables the client without restart; activates only with consent AND `SENTRY_DSN` |
+| 02 | `02-posthog.md` | **DONE**: `posthog-node` in MAIN only (`src/main/posthog-telemetry.ts`), anonymous install id, explicit curated events (~18 across the UI, forwarded over `telemetry:event` with a main-side sanitizer), no autocapture/recording/person profiles; activates only with consent AND `MOGGING_POSTHOG_KEY` |
+
+> Remaining to go live: provision a Sentry DSN + PostHog project key (env/build-time:
+> `SENTRY_DSN`, `MOGGING_POSTHOG_KEY` [+ `MOGGING_POSTHOG_HOST` for EU]) and add the
+> `@sentry/vite-plugin` sourcemap upload once the org exists. Everything else ships.
 
 ## Privacy stance (applies to every step)
 - **Opt-in**, default `enabled: false`; visible toggle; honor `DO_NOT_TRACK`.

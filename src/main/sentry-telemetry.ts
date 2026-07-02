@@ -14,8 +14,14 @@ interface SentryOpts {
  * paths, env, or credentials — features only ever pass PRIMITIVE props, so events stay clean by
  * construction; this is defence in depth.
  */
-export function createSentryTelemetry(opts: SentryOpts): Telemetry {
+export function createSentryTelemetry(opts: SentryOpts): Telemetry & { setEnabled(on: boolean): void } {
   return {
+    /** Consent revoke/re-grant without restart: the SDK's global handlers stay
+     *  installed, but a disabled client sends nothing. */
+    setEnabled(on: boolean): void {
+      const client = Sentry.getClient()
+      if (client) client.getOptions().enabled = on
+    },
     init(): void {
       Sentry.init({
         dsn: opts.dsn,

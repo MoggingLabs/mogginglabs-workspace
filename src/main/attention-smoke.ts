@@ -9,7 +9,11 @@ const SCRIPT = `(async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
   const m = window.__mogging
   if (!m || !m.workspace || !m.attention) return { pass: false, error: 'no dev handles' }
-  for (let i = 0; i < 50 && m.workspace.count() < 1; i++) await sleep(100)
+  // Launcher-first boot: provision Workspace 1 (ordinal 0 -> pane 1) ourselves.
+  if (m.workspace.count() === 0) {
+    m.workspace.create({ name: 'Workspace 1' })
+    await sleep(600)
+  }
   m.workspace.create({ name: 'Foreground' }) // ordinal 1, active -> Workspace 1 (ordinal 0) backgrounded
   await sleep(700)
   const bgTab = document.querySelectorAll('.workspace-tab')[0] // Workspace 1

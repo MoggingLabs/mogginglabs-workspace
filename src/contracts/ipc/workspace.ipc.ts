@@ -41,9 +41,23 @@ export interface WorkspaceStateMeta {
   assignments?: string[] // per-slot provider (06b template lineup); undefined = plain shells
 }
 
+/** A recently-worked-on project (directory) for Home's one-click reopen tiles —
+ *  touched whenever a workspace opens or closes for that folder. Metadata only —
+ *  a folder + layout + provider lineup, never credentials (ADR 0002). */
+export interface RecentWorkspace {
+  name: string
+  cwd: string
+  paneCount: number
+  assignments?: string[]
+  /** Last time this project was opened/worked on (epoch ms). */
+  lastUsedAt: number
+}
+
 /** Full app-level workspace state persisted across relaunch. */
 export interface WorkspaceState {
   workspaces: WorkspaceStateMeta[]
   activeId: string | null
   theme: string
+  /** Recently-worked-on projects, newest first (capped by the writer). */
+  recents?: RecentWorkspace[]
 }

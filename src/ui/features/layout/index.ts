@@ -3,4 +3,4 @@
 // the `terminal` feature fills slots via the ui-core slots port — so `layout` no longer
 // registers a UiFeature of its own; it just exports the components.
 export { GridLayout } from './grid-layout'
-export { TEMPLATE_COUNTS } from './templates'
+export { TEMPLATES, TEMPLATE_COUNTS, type GridSpec } from './templates'

@@ -4,6 +4,9 @@ import { createMainWindow } from './window'
 import { createElectronContext } from './electron-context'
 import { initMainTelemetry } from './telemetry'
 import { registerClipboard } from './clipboard'
+import { registerDialogs } from './dialogs'
+import { registerShellChrome } from './shell-chrome'
+import { flushTelemetry } from './telemetry'
 import { registerAppSettings, disposeAppSettings } from './app-settings'
 import { registerAgents } from './agents'
 import { registerTemplates } from './templates'
@@ -23,6 +26,8 @@ import { runBlocksSmoke } from './blocks-smoke'
 import { runGitSmoke } from './git-smoke'
 import { runNotifySmoke } from './notify-smoke'
 import { runMilestoneSmoke } from './milestone-smoke'
+import { runFlickerSmoke } from './flicker-smoke'
+import { runPaneOpsSmoke } from './paneops-smoke'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { registerDeepLink, initialDeepLinkCwd } from './deep-link'
@@ -37,6 +42,11 @@ import { WorkspaceChannels } from '@contracts'
 // restart, with full terminal + scrollback + agent-state parity (see docs/adr/0006 and
 // src/pty-daemon/). MOGGING_INPROC forces the in-proc backend; daemon startup is also wrapped
 // so any failure falls back to in-proc, keeping the app functional.
+
+// Test-support: smokes isolate their persisted state by pointing MOGGING_USERDATA at a
+// temp dir. Electron resolves userData through the OS known-folders API, so overriding
+// the APPDATA env var alone does NOT isolate it — this explicit hook does.
+if (process.env.MOGGING_USERDATA) app.setPath('userData', process.env.MOGGING_USERDATA)
 
 let win: BrowserWindow | null = null
 let disposeBackend: (() => void) | null = null
@@ -65,7 +75,8 @@ app.whenReady().then(async () => {
     return
   }
 
-  initMainTelemetry() // observability first, so early errors are captured
+  registerAppSettings() // app-level state store first — telemetry reads persisted consent from it
+  initMainTelemetry(() => win) // observability next, so early errors are captured (opt-in, ADR 0005)
 
   // The detached PTY daemon (ADR 0006) is now the DEFAULT — full parity with in-proc plus
   // survival across a main crash / app restart. MOGGING_INPROC forces the in-proc backend.
@@ -84,7 +95,8 @@ app.whenReady().then(async () => {
     }
   }
   registerClipboard() // system clipboard IPC (app-layer, Electron-only)
-  registerAppSettings() // app-level workspace state (tabs + theme) persistence (Phase-1/05)
+  registerDialogs(() => win) // native directory picker for the new-workspace wizard
+  registerShellChrome(() => win) // theme-tinted window-control overlay (organic chrome)
   registerAgents() // agent launcher: detect installed CLIs + build launch commands (Phase-1/06)
   registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
   registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
@@ -132,6 +144,10 @@ app.whenReady().then(async () => {
     runNotifySmoke(win) // env-gated `mogging notify` smoke (Phase-2/04)
   } else if (process.env.MOGGING_MILESTONE && win) {
     runMilestoneSmoke(win) // env-gated 16-agent perf milestone smoke (Phase-2/05)
+  } else if (process.env.MOGGING_FLICKER && win) {
+    runFlickerSmoke(win) // env-gated terminal-artifact smoke: churn without flicker
+  } else if (process.env.MOGGING_PANEOPS && win) {
+    runPaneOpsSmoke(win) // env-gated pane-operations smoke: expand modes + close
   }
 
   app.on('activate', () => {
@@ -144,6 +160,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  void flushTelemetry() // best-effort vendor flush (no-op unless the user opted in)
   disposeAppSettings()
   disposeGit?.()
   disposeGit = null

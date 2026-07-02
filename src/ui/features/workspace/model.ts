@@ -14,16 +14,21 @@ export interface WorkspaceMeta {
   assignments?: string[] // per-slot provider (06b template lineup)
 }
 
-/** Tab accent colors, assigned round-robin by ordinal. */
+/**
+ * Per-workspace accent colors, assigned round-robin by ordinal. Curated to hold AA on
+ * dark surfaces, harmonize with the brand orange, and stay hue-distinct at a glance.
+ * Brand orange is deliberately LAST: the *current* workspace is always marked by the
+ * brand-orange outline, so early workspaces keep their icon accent separable from it.
+ */
 export const WORKSPACE_COLORS = [
-  '#4ade80',
-  '#60a5fa',
-  '#f472b6',
-  '#fbbf24',
-  '#a78bfa',
-  '#f87171',
-  '#34d399',
-  '#fb923c'
+  '#2dd4bf', // teal
+  '#a78bfa', // violet
+  '#38bdf8', // sky
+  '#fb7185', // rose
+  '#a3e635', // lime
+  '#e879f9', // magenta
+  '#fbbf24', // amber
+  '#fd8d03' // brand orange
 ]
 
 export function colorForOrdinal(ordinal: number): string {

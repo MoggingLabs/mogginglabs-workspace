@@ -37,6 +37,13 @@ export function runTemplateSmoke(win: BrowserWindow, phase: string): void {
     done = true
     try {
       await delay(500)
+      // Launcher-first boot: create the base workspace so the template workspace is the
+      // 2nd created (ordinal 1 -> base pane id 100, keeping CLAUDE_PANE = 103).
+      await ES(
+        '(function(){var m=window.__mogging;' +
+          'if(m&&m.workspace&&m.workspace.count()===0)m.workspace.create({name:"Workspace 1"});return 1;})()'
+      )
+      await delay(600)
       const resolved = (await ES(
         "window.__mogging.templates.open([{provider:'shell',count:2},{provider:'claude',count:1}])"
       )) as { paneCount: number; assignments: string[] }

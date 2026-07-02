@@ -1,0 +1,223 @@
+import type { UiFeature } from '../../core/registry/feature-registry'
+import {
+  TemplateChannels,
+  WorkspaceChannels,
+  type ProviderMixTemplate,
+  type RecentWorkspace,
+  type WorkspaceState
+} from '@contracts'
+import { Button, EmptyState, clear, el, icon } from '../../components'
+import { getBridge } from '../../core/ipc/bridge'
+import { onViewChange } from '../../core/shell/view-port'
+import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
+import {
+  getWorkspaces,
+  requestWorkspaceSwitch
+} from '../../core/workspace/workspace-info-port'
+import { openWizard } from '../../core/workspace/wizard-port'
+import { runCommand } from '../../core/commands/command-port'
+import { getTelemetry } from '../../core/telemetry'
+
+const basename = (p: string): string => p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? ''
+
+const isMac = navigator.platform.toUpperCase().includes('MAC')
+const MOD = isMac ? '⌘' : 'Ctrl'
+
+/**
+ * Home / launcher: brand hero + primary actions + one-click recents + presets + a
+ * keyboard-hint bar. First-run shows a designed empty state; returning users get
+ * their recent workspaces back in one click. We are ONE focused organizer — no fake
+ * product tiles here (deliberate divergence from the competitor's launcher).
+ */
+export const homeFeature: UiFeature = {
+  name: 'home',
+  mount(ctx) {
+    const view = el('div', {})
+    view.id = 'view-home'
+    ctx.content.append(view)
+
+    const hero = el('div', { class: 'home-hero' }, [
+      el('img', { class: 'home-logo', attrs: { src: './logo.png', alt: '' } }),
+      el('h1', { class: 'home-title', text: 'MoggingLabs Workspace' }),
+      el('p', {
+        class: 'home-tagline',
+        text: 'Your keys, your CLIs — no subscription to us.'
+      }),
+      el('p', {
+        class: 'home-subline',
+        text: 'Run a fleet of coding agents in fast terminals, and always see who needs you.'
+      }),
+      el('div', { class: 'home-ctas' }, [
+        Button({
+          label: 'New workspace',
+          icon: 'plus',
+          variant: 'primary',
+          size: 'lg',
+          kbd: `${MOD}+T`,
+          onClick: () => {
+            if (!openWizard()) runCommand('workspace:quick')
+          }
+        }),
+        Button({
+          label: 'Quick terminal',
+          icon: 'terminal',
+          size: 'lg',
+          onClick: () => runCommand('workspace:quick')
+        })
+      ])
+    ])
+
+    const recentsList = el('div', { class: 'home-list' })
+    const presetsList = el('div', { class: 'home-list' })
+    const sections = el('div', { class: 'home-sections' }, [
+      el('section', { class: 'home-section' }, [
+        el('h2', { class: 'section-label', text: 'Recent projects' }),
+        recentsList
+      ]),
+      el('section', { class: 'home-section' }, [
+        el('h2', { class: 'section-label', text: 'Presets' }),
+        presetsList
+      ])
+    ])
+
+    const hint = (kbd: string, label: string): HTMLElement =>
+      el('span', { class: 'home-hint' }, [
+        el('span', { class: 'kbd', text: kbd }),
+        el('span', { text: label })
+      ])
+    const hints = el('div', { class: 'home-hints' }, [
+      hint(`${MOD}+T`, 'new workspace'),
+      hint(`${MOD}+K`, 'commands'),
+      hint(`${MOD}+1–9`, 'switch workspace'),
+      hint(`${MOD}+Alt+←→`, 'move between panes'),
+      hint(`${MOD}+⇧+Enter`, 'zoom pane')
+    ])
+
+    view.append(hero, sections, hints)
+
+    function renderRecents(recents: RecentWorkspace[]): void {
+      clear(recentsList)
+      if (!recents.length) {
+        recentsList.append(
+          EmptyState({
+            icon: 'clock',
+            title: 'No recent projects yet',
+            body: 'The five most recent projects you work on show up here — folder, layout and agent lineup included, one click to reopen.'
+          })
+        )
+        return
+      }
+      for (const r of recents) {
+        const agentCount = (r.assignments ?? []).filter((a) => a && a !== 'shell').length
+        recentsList.append(
+          el(
+            'button',
+            {
+              class: 'home-item',
+              type: 'button',
+              title: r.cwd,
+              onClick: () => {
+                getTelemetry().captureEvent({
+                  name: 'home.recent_reopened',
+                  props: { panes: r.paneCount }
+                })
+                // Already open for this folder? Switch instead of duplicating.
+                const openWs = getWorkspaces().workspaces.find((w) => w.cwd && w.cwd === r.cwd)
+                if (openWs) {
+                  requestWorkspaceSwitch(openWs.id)
+                  return
+                }
+                openWorkspaceFromTemplate({
+                  name: r.name || basename(r.cwd) || 'Workspace',
+                  cwd: r.cwd,
+                  paneCount: r.paneCount,
+                  assignments:
+                    r.assignments ?? Array.from({ length: r.paneCount }, () => 'shell')
+                })
+              }
+            },
+            [
+              el('span', { class: 'home-item-icon' }, [icon('folder', 14)]),
+              el('div', { class: 'home-item-body' }, [
+                el('span', { class: 'home-item-name', text: r.name || basename(r.cwd) }),
+                el('span', { class: 'home-item-sub', text: r.cwd || 'no folder' })
+              ]),
+              el('span', {
+                class: 'home-item-meta',
+                text: `${r.paneCount} ${r.paneCount === 1 ? 'pane' : 'panes'}${agentCount ? ` · ${agentCount} agents` : ''}`
+              }),
+              el('span', { class: 'home-item-go' }, [icon('arrow-right', 14)])
+            ]
+          )
+        )
+      }
+    }
+
+    function renderPresets(presets: ProviderMixTemplate[]): void {
+      clear(presetsList)
+      if (!presets.length) {
+        presetsList.append(
+          EmptyState({
+            icon: 'layout-grid',
+            title: 'No presets yet',
+            body: 'Save an agent mix in the workspace wizard and open it from here in one click.'
+          })
+        )
+        return
+      }
+      for (const p of presets) {
+        const total = p.mix.reduce((s, m) => s + m.count, 0)
+        presetsList.append(
+          el(
+            'button',
+            {
+              class: 'home-item',
+              type: 'button',
+              onClick: () => {
+                getTelemetry().captureEvent({ name: 'home.preset_opened' })
+                openWizard({ mix: p.mix })
+              }
+            },
+            [
+              el('span', { class: 'home-item-icon home-item-icon--accent' }, [
+                icon('sparkles', 14)
+              ]),
+              el('div', { class: 'home-item-body' }, [
+                el('span', { class: 'home-item-name', text: p.name }),
+                el('span', {
+                  class: 'home-item-sub',
+                  text: p.mix.map((m) => `${m.count}× ${m.provider.replace(/^custom:.*/, 'custom')}`).join(' · ')
+                })
+              ]),
+              el('span', { class: 'home-item-meta', text: `${total} agents` }),
+              el('span', { class: 'home-item-go' }, [icon('arrow-right', 14)])
+            ]
+          )
+        )
+      }
+    }
+
+    async function refresh(): Promise<void> {
+      try {
+        const state = (await getBridge().invoke(WorkspaceChannels.loadState)) as WorkspaceState | null
+        renderRecents(state?.recents ?? [])
+      } catch {
+        renderRecents([])
+      }
+      try {
+        const presets = (await getBridge().invoke(TemplateChannels.list)) as ProviderMixTemplate[]
+        renderPresets(presets ?? [])
+      } catch {
+        renderPresets([])
+      }
+    }
+
+    // Refresh whenever Home becomes the active view (event-driven, no polling).
+    onViewChange((v) => {
+      if (v === 'home') {
+        void refresh()
+        getTelemetry().captureEvent({ name: 'home.opened' })
+      }
+    })
+  }
+}

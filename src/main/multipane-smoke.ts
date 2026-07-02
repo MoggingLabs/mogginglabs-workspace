@@ -13,6 +13,11 @@ const SCRIPT = `(async () => {
   const N = 8
   const m = window.__mogging
   if (!m || !m.layout) return { pass: false, error: 'no layout dev handle' }
+  // Launcher-first boot: provision the workspace this smoke drives.
+  if (m.workspace && m.workspace.count() === 0) {
+    m.workspace.create({ name: 'Workspace 1' })
+    await sleep(800)
+  }
   m.layout.apply(N)
   for (let i = 0; i < 60 && ((m.panes && m.panes.length) || 0) < N; i++) await sleep(200)
   const panes = (m.panes || []).slice()

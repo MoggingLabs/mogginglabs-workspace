@@ -10,9 +10,21 @@ export function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
-    backgroundColor: '#0a0a0a',
+    backgroundColor: '#0c0d0f', // matches --bg-app: no white flash, no seam behind the chrome
     title: 'MoggingLabs Workspace',
     ...(existsSync(iconPath) ? { icon: iconPath } : {}),
+    // Organic chrome: the app draws its own header (drag regions in CSS); only the
+    // native window controls remain, overlaid by the OS — nothing "glued on top".
+    titleBarStyle: 'hidden',
+    ...(process.platform === 'darwin'
+      ? { trafficLightPosition: { x: 14, y: 13 } }
+      : {
+          titleBarOverlay: {
+            color: '#0c0d0f',
+            symbolColor: '#a9aeb6',
+            height: 40
+          }
+        }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,

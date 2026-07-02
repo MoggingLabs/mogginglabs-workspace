@@ -1,8 +1,12 @@
 /** Where a UI feature is allowed to render itself. */
 export interface ShellContext {
-  /** Main content host (panes, layout). */
+  /** Main content region right of the rail (views: Home, workspace grids). */
   content: HTMLElement
-  /** Right-hand slot in the titlebar (chips, indicators). */
+  /** The left vertical rail (the workspace feature fills it). */
+  rail: HTMLElement
+  /** Left titlebar slot, after the brand (palette trigger, layout picker). */
+  titlebarLeft: HTMLElement
+  /** Right titlebar slot (chips, indicators, launchers). */
   titlebarRight: HTMLElement
 }
 

@@ -1,12 +1,17 @@
+import '@fontsource-variable/jetbrains-mono' // the app typeface — UI and terminals alike
 import './styles/global.css'
 import { createAppShell } from './shell/app-shell'
 import { mountFeatures, registerFeature } from './core/registry/feature-registry'
 import { workspaceFeature } from './features/workspace'
+import { homeFeature } from './features/home'
 import { terminalFeature } from './features/terminal'
 import { agentsFeature } from './features/agents'
-import { templatesFeature } from './features/templates'
+import { wizardFeature } from './features/wizard'
 import { agentStateFeature } from './features/agent-state'
 import { gitFeature } from './features/git'
+import { paletteFeature } from './features/palette'
+import { settingsFeature } from './features/settings'
+import { notifyFeature } from './features/notify'
 
 export { getTelemetry, setTelemetry } from './core/telemetry'
 
@@ -20,11 +25,15 @@ export function start(): void {
   if (!root) throw new Error('#root not found')
 
   const shell = createAppShell(root)
-  registerFeature(workspaceFeature) // owns tabs + per-workspace grids; provides slots
+  registerFeature(workspaceFeature) // owns the rail + per-workspace grids; provides slots
+  registerFeature(homeFeature) // launcher view: hero + recents + presets (net-new)
   registerFeature(terminalFeature)
   registerFeature(agentsFeature) // agent launcher (picker -> focused pane)
-  registerFeature(templatesFeature) // provider-mix workspace templates (06b)
+  registerFeature(wizardFeature) // new-workspace wizard: Start · Layout · Agents (06b contracts)
   registerFeature(agentStateFeature)
   registerFeature(gitFeature) // per-pane read-only git branch + dirty (Phase-2/03)
+  registerFeature(paletteFeature) // Ctrl/Cmd+K command palette over the command port
+  registerFeature(settingsFeature) // theme / defaults / telemetry consent (ADR 0005)
+  registerFeature(notifyFeature) // toasts for background-pane attention (mogging notify)
   mountFeatures(shell)
 }

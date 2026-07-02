@@ -11,7 +11,11 @@ const SCRIPT = `(async () => {
   const CRLF = String.fromCharCode(13) + String.fromCharCode(10)
   const osc = (s) => ESC + ']133;' + s + BEL
   const m = window.__mogging
-  const pane = m && m.panes && m.panes[0]
+  if (!m || !m.workspace) return { pass: false, error: 'no dev handles' }
+  // Launcher-first boot: provision the pane this smoke writes into.
+  if (m.workspace.count() === 0) m.workspace.create({ name: 'Workspace 1' })
+  for (let i = 0; i < 50 && !(m.panes && m.panes[0]); i++) await sleep(200)
+  const pane = m.panes && m.panes[0]
   if (!pane || !pane.blocks) return { pass: false, error: 'no pane/blocks handle' }
   pane.term.write(osc('A') + 'prompt$ ' + osc('B') + 'echo hi' + osc('C') + CRLF + 'hi' + CRLF + osc('D;0'))
   await sleep(300)

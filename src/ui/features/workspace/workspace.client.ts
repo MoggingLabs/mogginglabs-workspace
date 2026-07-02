@@ -13,5 +13,8 @@ export const workspaceClient = {
   },
   setAttention: (anyAttention: boolean): void => {
     getBridge().send(WorkspaceChannels.attention, anyAttention)
-  }
+  },
+  /** Native directory picker (main-owned dialog). Resolves to a path or null on cancel. */
+  browseDir: (): Promise<string | null> =>
+    getBridge().invoke(WorkspaceChannels.browseDir) as Promise<string | null>
 }

@@ -3,6 +3,8 @@ import type { AgentInfo, PaneId } from '@contracts'
 import { getFocusedPane } from '../../core/layout/focus'
 import { setPaneLabel } from '../../core/layout/pane-meta'
 import { onAgentLaunchRequest } from '../../core/agents/launch-port'
+import { setCommands } from '../../core/commands/command-port'
+import { getTelemetry } from '../../core/telemetry'
 import { agentsClient } from './agents.client'
 
 /**
@@ -70,6 +72,16 @@ export const agentsFeature: UiFeature = {
         })
         menu.append(item)
       }
+      // Palette + pane-menu entries: one launch command per installed CLI.
+      setCommands(
+        'agents',
+        installed.map((a) => ({
+          id: `agent:launch:${a.id}`,
+          title: `Launch ${a.name} in focused pane`,
+          hint: 'Agent',
+          run: () => launchInFocused(a.id)
+        }))
+      )
     }
 
     function launchInFocused(agentId: string): void {
@@ -78,13 +90,24 @@ export const agentsFeature: UiFeature = {
     }
 
     /** The one launch path: build the command (never a credential — ADR 0002), write it into
-     *  the pane, label the pane. `shell` is a no-op (the pane is already a shell). */
+     *  the pane, label the pane. `shell` is a no-op (the pane is already a shell). A
+     *  `custom:<command>` provider (wizard custom row) writes the user's own command verbatim. */
     async function launchInPane(paneId: number, provider: string, cwd: string, resume = false): Promise<void> {
       if (paneId < 0 || !provider || provider === 'shell') return
+      if (provider.startsWith('custom:')) {
+        const cmd = provider.slice('custom:'.length).trim()
+        if (!cmd) return
+        agentsClient.launchInto(paneId, cmd)
+        setPaneLabel(paneId as PaneId, cmd.split(/\s+/)[0] || 'custom')
+        // Provider id only — NEVER the command text (ADR 0005/0002).
+        getTelemetry().captureEvent({ name: 'agent.launched', props: { provider: 'custom', resume } })
+        return
+      }
       const command = await agentsClient.command({ agentId: provider, cwd, resume })
       if (!command) return
       agentsClient.launchInto(paneId, command)
       setPaneLabel(paneId as PaneId, nameById.get(provider) ?? provider)
+      getTelemetry().captureEvent({ name: 'agent.launched', props: { provider, resume } })
     }
 
     exposeForDev()

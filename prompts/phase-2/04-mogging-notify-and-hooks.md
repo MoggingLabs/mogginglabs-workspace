@@ -4,7 +4,7 @@
 
 ## Goal
 A richer attention signal than OSC alone: a `mogging notify` command + a socket the daemon
-exposes, plus first-party Claude/Codex hooks that call it — so an agent can explicitly say
+exposes, plus first-party Claude/Codex/Gemini hooks that call it — so an agent can explicitly say
 "done" / "needs input" and raise the RIGHT pane's attention.
 
 ## Steps

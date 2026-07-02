@@ -46,6 +46,11 @@ const SCRIPT = `(async () => {
   if (!m || !m.layout || !m.workspace) return { pass: false, error: 'no dev handles' }
 
   // --- Phase A: 16 panes -------------------------------------------------------------------
+  // Launcher-first boot: provision the workspace whose grid we stress.
+  if (m.workspace.count() === 0) {
+    m.workspace.create({ name: 'Workspace 1' })
+    await sleep(600)
+  }
   m.layout.apply(16)
   for (let i = 0; i < 300 && (m.panes || []).filter((p) => p.id <= 16).length < 16; i++) await sleep(200)
   const panes = (m.panes || []).filter((p) => p.id <= 16)

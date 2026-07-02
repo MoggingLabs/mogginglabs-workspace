@@ -4,14 +4,40 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { ClipboardChannels, type GitStatus, type PaneId } from '@contracts'
 import '@xterm/xterm/css/xterm.css'
+import { icon, type IconName } from '../../components'
 import { getBridge } from '../../core/ipc/bridge'
 import { terminalClient } from './terminal.client'
 import { onTerminalTheme } from '../../core/theme/theme-port'
-import { onPaneLabel, getPaneLabel } from '../../core/layout/pane-meta'
+import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
 import { setPaneState, clearPaneState } from '../../core/attention/attention-port'
-import { setPaneCwd, clearPaneCwd } from '../../core/layout/pane-cwd'
+import { setPaneCwd, clearPaneCwd, getPaneCwd } from '../../core/layout/pane-cwd'
+import { onFocusedPane } from '../../core/layout/focus'
 import { onPaneGit, getPaneGit } from '../../core/git/git-port'
+import { allCommands } from '../../core/commands/command-port'
+import { getTelemetry } from '../../core/telemetry'
 import { BlockTracker } from '../blocks'
+
+// WebGL job serializer: at most ONE attach/detach per animation frame, app-wide.
+// Revealing or hiding a workspace otherwise (re)builds/tears down up to 16 WebGL
+// addons in a single tick (shader compile, glyph-atlas alloc, context teardown +
+// DOM-renderer fallback repaint each), stalling the main thread for hundreds of ms —
+// a visible hitch. Serialized — and with hide-releases debounced — a rapid workspace
+// flip is a pure show/hide (GL stays warm), while a sustained hide still frees its
+// contexts within a second. Panes always render (DOM renderer) while work streams in.
+const glJobQueue: Array<() => void> = []
+let glPumping = false
+function enqueueGlJob(job: () => void): void {
+  glJobQueue.push(job)
+  if (glPumping) return
+  glPumping = true
+  const step = (): void => {
+    const next = glJobQueue.shift()
+    if (next) next()
+    if (glJobQueue.length) requestAnimationFrame(step)
+    else glPumping = false
+  }
+  requestAnimationFrame(step)
+}
 
 /** A single xterm pane bound to a backend PTY of the same id. */
 export class TerminalPane {
@@ -23,11 +49,16 @@ export class TerminalPane {
   private webgl?: WebglAddon
   private visible = false
   private glRetry?: ReturnType<typeof setTimeout>
+  private glDebounce?: ReturnType<typeof setTimeout>
+  private glReleaseDebounce?: ReturnType<typeof setTimeout>
+  private glQueued = false
   private glLosses = 0
   private devHandle: unknown
   private themeUnsub?: () => void
   private paneLabelUnsub?: () => void
   private paneGitUnsub?: () => void
+  private focusUnsub?: () => void
+  private renameFn?: () => void
   private blocks?: BlockTracker
 
   constructor(
@@ -35,16 +66,21 @@ export class TerminalPane {
     host: HTMLElement
   ) {
     this.term = new Terminal({
-      fontFamily: '"Cascadia Code", "Cascadia Mono", Menlo, Consolas, monospace',
+      fontFamily:
+        '"JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace',
       fontSize: 13,
       cursorBlink: false, // enabled only while focused (perf: fewer idle repaints across panes)
       allowProposedApi: true,
       scrollback: 10000,
-      theme: { background: '#0a0a0a', foreground: '#e6e6e6' }
+      theme: { background: '#0c0d0f', foreground: '#f4f5f7' } // corrected by the theme port on mount
     })
     this.term.loadAddon(this.fit)
     this.term.loadAddon(this.serializer)
-    this.term.open(host)
+
+    // Pane frame: a slim header (title · git chip · state · zoom) over the terminal
+    // body. Static DOM — every update below is event-driven, nothing per-frame.
+    const body = this.mountChrome(host)
+    this.term.open(body)
 
     // WebGL is the wedge — GPU rendering that stays smooth under many streaming agents. But the
     // browser caps live WebGL contexts (~16 per page in Chromium), which is exactly our largest
@@ -56,10 +92,19 @@ export class TerminalPane {
       const last = entries[entries.length - 1]
       this.visible = last.isIntersecting
       if (this.visible) {
+        // Back on screen: cancel any pending release (a rapid flip keeps GL warm).
+        if (this.glReleaseDebounce) {
+          clearTimeout(this.glReleaseDebounce)
+          this.glReleaseDebounce = undefined
+        }
         this.glLosses = 0
         this.acquireWebgl()
       } else {
-        this.releaseWebgl()
+        if (this.glDebounce) {
+          clearTimeout(this.glDebounce)
+          this.glDebounce = undefined
+        }
+        this.scheduleRelease()
       }
     })
     this.visObs.observe(host)
@@ -85,7 +130,7 @@ export class TerminalPane {
       this.fit.fit()
       terminalClient.resize({ id: this.id, cols: this.term.cols, rows: this.term.rows })
     })
-    this.resizeObs.observe(host)
+    this.resizeObs.observe(body)
 
     void terminalClient.spawn({ id: this.id, cwd: '', cols: this.term.cols, rows: this.term.rows })
 
@@ -96,22 +141,60 @@ export class TerminalPane {
     // Apply the active theme now (replayed) + on every change (decoupled via the theme port).
     this.themeUnsub = onTerminalTheme((theme) => (this.term.options.theme = theme))
 
-    this.mountBadge(host)
-    this.blocks = new BlockTracker(this.term, host) // Warp-style command blocks from OSC 133 (02)
+    this.blocks = new BlockTracker(this.term, body) // Warp-style command blocks from OSC 133 (02)
+
+    // Focus-follows-selection: when the focus port names this pane (click, keyboard
+    // pane-nav, workspace switch), give the terminal real keyboard focus.
+    this.focusUnsub = onFocusedPane((f) => {
+      if (f?.paneId === this.id && !host.contains(document.activeElement)) this.term.focus()
+    })
+
     this.exposeForDev(host)
+  }
+
+  /** Schedule a WebGL attach: a short visibility debounce (rapid workspace churn skips
+   *  the work entirely) + the app-wide one-per-frame queue (a reveal never stalls the
+   *  main thread). The pane renders via the DOM renderer until its turn. */
+  private acquireWebgl(): void {
+    if (this.webgl || !this.visible || this.glDebounce || this.glQueued) return
+    this.glDebounce = setTimeout(() => {
+      this.glDebounce = undefined
+      if (!this.visible || this.webgl) return
+      this.glQueued = true
+      enqueueGlJob(() => {
+        this.glQueued = false
+        if (this.visible && !this.webgl) this.attachWebglNow()
+      })
+    }, 60)
+  }
+
+  /** Schedule a GL release for a hidden pane: debounced (a rapid flip back cancels it,
+   *  keeping the context warm) + queue-serialized (a hidden 16-pane workspace tears
+   *  down one context per frame, never all at once). */
+  private scheduleRelease(): void {
+    if (!this.webgl || this.glReleaseDebounce) return
+    this.glReleaseDebounce = setTimeout(() => {
+      this.glReleaseDebounce = undefined
+      if (this.visible || !this.webgl) return
+      enqueueGlJob(() => {
+        if (!this.visible) this.releaseWebgl()
+      })
+    }, 400)
   }
 
   /** Attach the WebGL renderer (idempotent; only while visible). On failure the pane simply
    *  stays on the DOM renderer — a pane must always render; fast when it can. */
-  private acquireWebgl(): void {
+  private attachWebglNow(): void {
     if (this.webgl || !this.visible) return
     try {
       const addon = new WebglAddon()
       addon.onContextLoss(() => {
         // Evicted (context cap) or GPU reset: drop to the DOM renderer, then retry a few times
-        // while visible — self-healing, never a frozen/blank pane (the BridgeSpace failure mode).
+        // while visible — self-healing, never a frozen/blank pane (the incumbent's failure mode).
         this.releaseWebgl()
         this.glLosses++
+        // Renderer-health signal (counts only) — the wedge metric we must watch in the field.
+        getTelemetry().captureEvent({ name: 'gl.context_lost', props: { losses: this.glLosses } })
         if (this.visible && this.glLosses <= 3) {
           this.glRetry = setTimeout(() => this.acquireWebgl(), 1500)
         }
@@ -129,6 +212,14 @@ export class TerminalPane {
     if (this.glRetry) {
       clearTimeout(this.glRetry)
       this.glRetry = undefined
+    }
+    if (this.glDebounce) {
+      clearTimeout(this.glDebounce)
+      this.glDebounce = undefined
+    }
+    if (this.glReleaseDebounce) {
+      clearTimeout(this.glReleaseDebounce)
+      this.glReleaseDebounce = undefined
     }
     if (!this.webgl) return
     const addon = this.webgl
@@ -165,35 +256,161 @@ export class TerminalPane {
     return true
   }
 
-  /** Per-pane corner badge: the launched agent's label + its OSC agent-state chip (06). Each
-   *  pane shows its OWN state, so "which agent needs me" is answerable at a glance. */
-  private mountBadge(host: HTMLElement): void {
-    const badge = document.createElement('div')
-    badge.className = 'pane-badge'
-    const label = document.createElement('span')
-    label.className = 'pane-label'
+  /** Pane chrome — the terminal top bar, an exact take on the reference:
+   *  LEFT   ✳ state glyph + the task title the agent set (OSC 0/2), else its label;
+   *  CENTER the read-only git branch chip;
+   *  RIGHT  [⋯ menu] [expand full] [expand horizontal] [expand vertical] [× close].
+   *  Class names (.pane-label/.pane-git/.pane-state/.pane-badge) are the DOM contract
+   *  of the git/milestone smokes. Returns the terminal body. */
+  private mountChrome(host: HTMLElement): HTMLElement {
+    const header = document.createElement('div')
+    header.className = 'pane-header'
+
+    // Left: state + title. (.pane-badge kept on the cluster for selector continuity.)
+    const left = document.createElement('div')
+    left.className = 'pane-head-left pane-badge'
+    const state = document.createElement('span')
+    state.className = 'pane-state'
+    state.dataset.state = 'idle'
+    state.title = 'idle'
+    const title = document.createElement('span')
+    title.className = 'pane-title pane-label'
+    title.title = 'Double-click to rename'
+    left.append(state, title)
+
+    // Center: branch chip — a branch icon + name (soft chip, like the reference bar).
     const git = document.createElement('span')
     git.className = 'pane-git'
     const branch = document.createElement('span')
     branch.className = 'pane-branch'
     const dirty = document.createElement('span')
     dirty.className = 'pane-dirty'
-    git.append(branch, dirty)
-    const state = document.createElement('span')
-    state.className = 'pane-state'
-    state.dataset.state = 'idle'
-    badge.append(label, git, state)
-    host.append(badge)
+    git.append(icon('git-branch', 11), branch, dirty)
 
-    const applyLabel = (text: string): void => {
-      label.textContent = text
-      badge.classList.toggle('has-label', !!text)
+    // Right: menu + expand trio + close.
+    const actions = document.createElement('div')
+    actions.className = 'pane-actions'
+    const act = (
+      name: IconName,
+      label: string,
+      onClick: (e: MouseEvent) => void,
+      extraClass = ''
+    ): HTMLButtonElement => {
+      const b = document.createElement('button')
+      b.className = `pane-act${extraClass ? ' ' + extraClass : ''}`
+      b.type = 'button'
+      b.title = label
+      b.setAttribute('aria-label', label)
+      b.append(icon(name, 12))
+      b.addEventListener('click', (e) => {
+        e.stopPropagation()
+        onClick(e)
+      })
+      return b
     }
-    applyLabel(getPaneLabel(this.id) ?? '')
+    const expand = (mode: 'full' | 'col' | 'row'): void => {
+      host.dispatchEvent(
+        new CustomEvent('mogging:expand-pane', { bubbles: true, detail: { paneId: this.id, mode } })
+      )
+    }
+    const menu = document.createElement('div')
+    menu.className = 'menu pane-menu'
+    menu.hidden = true
+    const menuBtn = act('more', 'Pane menu', () => {
+      if (menu.hidden) this.buildMenu(menu, title)
+      menu.hidden = !menu.hidden
+    })
+    actions.append(
+      menuBtn,
+      act('maximize', 'Expand to whole workspace (Ctrl+Shift+Enter)', () => expand('full')),
+      act('chevrons-left-right', 'Expand across full width', () => expand('row')),
+      act('chevrons-up-down', 'Expand to full height', () => expand('col')),
+      act(
+        'x',
+        'Close terminal',
+        () =>
+          host.dispatchEvent(
+            new CustomEvent('mogging:close-pane', { bubbles: true, detail: { paneId: this.id } })
+          ),
+        'pane-act-close'
+      ),
+      menu
+    )
+    document.addEventListener('click', (e) => {
+      if (!(e.target instanceof Node) || !actions.contains(e.target)) menu.hidden = true
+    })
 
-    // Read-only git chip (2/03): the `git` feature publishes status on the git port; we just
-    // render it here, next to the agent label + state — so you see the branch + uncommitted work
-    // for each pane at a glance. Nothing here mutates a repo.
+    header.append(left, git, actions)
+
+    const body = document.createElement('div')
+    body.className = 'pane-body'
+    host.append(header, body)
+
+    // Hover-only scrollbar: light the thumb only while the cursor rides the pane's
+    // right-edge strip (a class flip on change — no per-move layout work).
+    let scrollHot = false
+    body.addEventListener('mousemove', (e) => {
+      const hot = body.getBoundingClientRect().right - e.clientX <= 16
+      if (hot !== scrollHot) {
+        scrollHot = hot
+        body.classList.toggle('scroll-hot', hot)
+      }
+    })
+    body.addEventListener('mouseleave', () => {
+      if (scrollHot) {
+        scrollHot = false
+        body.classList.remove('scroll-hot')
+      }
+    })
+
+    // Title precedence: what the agent says it's doing (OSC 0/2 window title) → the
+    // launched agent's label → "Terminal N".
+    const fallback = `Terminal ${this.id % 100 || this.id}`
+    let oscTitle = ''
+    const applyTitle = (): void => {
+      const label = getPaneLabel(this.id) ?? ''
+      const text = oscTitle || label || fallback
+      title.textContent = text
+      title.title = text
+      title.classList.toggle('has-label', !!(oscTitle || label))
+    }
+    const applyLabel = (_text: string): void => applyTitle()
+    applyTitle()
+    this.term.onTitleChange((t) => {
+      oscTitle = (t ?? '').trim()
+      applyTitle()
+    })
+
+    // Rename (double-click or menu): runtime metadata on the pane-meta port.
+    const rename = (): void => {
+      if (title.querySelector('input')) return
+      const input = document.createElement('input')
+      input.className = 'pane-title-input'
+      input.value = getPaneLabel(this.id) ?? ''
+      input.setAttribute('aria-label', 'Pane name')
+      title.replaceChildren(input)
+      input.focus()
+      input.select()
+      const commit = (save: boolean): void => {
+        const next = save ? input.value.trim() : (getPaneLabel(this.id) ?? '')
+        input.remove()
+        setPaneLabel(this.id, next)
+        oscTitle = '' // a manual name takes over from the agent's task title
+        applyTitle()
+        if (save) getTelemetry().captureEvent({ name: 'pane.renamed' }) // never the text
+      }
+      input.addEventListener('keydown', (e) => {
+        e.stopPropagation()
+        if (e.key === 'Enter') commit(true)
+        if (e.key === 'Escape') commit(false)
+      })
+      input.addEventListener('blur', () => commit(true))
+    }
+    title.addEventListener('dblclick', rename)
+    this.renameFn = rename
+
+    // Read-only git chip (2/03): the `git` feature publishes status on the git port; we
+    // just render it. Nothing here mutates a repo.
     const applyGit = (status: GitStatus | null): void => {
       if (!status) {
         git.classList.remove('has-git')
@@ -201,7 +418,7 @@ export class TerminalPane {
       }
       const ab =
         (status.ahead ? `↑${status.ahead}` : '') + (status.behind ? `↓${status.behind}` : '')
-      branch.textContent = `⎇ ${status.branch}${ab ? ' ' + ab : ''}`
+      branch.textContent = `${status.branch}${ab ? ' ' + ab : ''}`
       git.title = `${status.detached ? 'detached @ ' : 'on '}${status.branch}` +
         `${status.dirty ? ' — uncommitted changes' : ' — clean'}${status.root ? `\n${status.root}` : ''}`
       git.classList.toggle('dirty', status.dirty)
@@ -212,7 +429,8 @@ export class TerminalPane {
     terminalClient.onState((e) => {
       if (e.id === this.id) {
         state.dataset.state = e.state
-        setPaneState(this.id, e.state) // feed the workspace-tab / app attention aggregation
+        state.title = e.state === 'attention' ? 'needs your input' : e.state
+        setPaneState(this.id, e.state) // feed the rail / app attention aggregation
       }
     })
     this.paneLabelUnsub = onPaneLabel((paneId, text) => {
@@ -221,6 +439,48 @@ export class TerminalPane {
     this.paneGitUnsub = onPaneGit((paneId, status) => {
       if (paneId === this.id) applyGit(status)
     })
+
+    return body
+  }
+
+  /** The ⋯ pane menu: rename, clear, copy cwd, plus a launch entry per installed
+   *  agent (published on the command port by the agents feature — no cross-import). */
+  private buildMenu(menu: HTMLElement, _titleEl: HTMLElement): void {
+    menu.innerHTML = ''
+    const item = (name: IconName, label: string, run: () => void): HTMLButtonElement => {
+      const b = document.createElement('button')
+      b.className = 'menu-item'
+      b.type = 'button'
+      b.append(icon(name, 13), document.createTextNode(label))
+      b.addEventListener('click', (e) => {
+        e.stopPropagation()
+        menu.hidden = true
+        run()
+      })
+      return b
+    }
+    menu.append(
+      item('pencil', 'Rename', () => this.renameFn?.()),
+      item('trash', 'Clear terminal', () => this.term.clear()),
+      item('folder', 'Copy working directory', () => {
+        const cwd = getPaneCwd(this.id)
+        if (cwd) void getBridge().invoke(ClipboardChannels.write, { text: cwd })
+      })
+    )
+    const agents = allCommands().filter((c) => c.hint === 'Agent')
+    if (agents.length) {
+      const sep = document.createElement('div')
+      sep.className = 'menu-sep'
+      menu.append(sep)
+      for (const cmd of agents) {
+        menu.append(
+          item('terminal', cmd.title.replace(' in focused pane', ' here'), () => {
+            this.term.focus() // make THIS the focused pane, then launch into it
+            cmd.run()
+          })
+        )
+      }
+    }
   }
 
   /** Dev-only debug handle so tooling/smoke can inspect the real terminal. Guarded by
@@ -273,6 +533,7 @@ export class TerminalPane {
     this.themeUnsub?.()
     this.paneLabelUnsub?.()
     this.paneGitUnsub?.()
+    this.focusUnsub?.()
     this.visObs?.disconnect()
     this.releaseWebgl()
     this.resizeObs.disconnect()

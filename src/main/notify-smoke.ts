@@ -19,6 +19,11 @@ export function runNotifySmoke(win: BrowserWindow): void {
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
     try {
+      // Launcher-first boot: provision Workspace 1 (pane 1) ourselves.
+      await exec(
+        `(function(){var m=window.__mogging;` +
+          `if(m&&m.workspace&&m.workspace.count()===0)m.workspace.create({name:"Workspace 1"});return 1;})()`
+      )
       // Observe pane 1's state stream.
       await exec(
         `window.__nstates=window.__nstates||[];if(!window.__nhook){window.__nhook=1;` +
