@@ -1,63 +1,68 @@
-# Phase 5 — Product-ready: every platform, every differentiator
+# Phase 5 — UI/UX excellence: look like the product we already are
 
-Sequenced task prompts for Phase 5 of **MoggingLabs Workspace**: the swarm works — now
-make the PRODUCT undeniable. True three-platform parity (the full gate sweep on Linux
-and macOS, not just boot), the built-in browser pane, real distribution (signing
-hooks, winget/homebrew manifests, first-run experience), and a v0.4.0 milestone that
-proves it end to end. Same format
-as `prompts/phase-1..4/` (each step self-contained + pasteable as a `/goal`). Execute
-in order; each step file is < 4000 chars.
+Sequenced task prompts for Phase 5 of **MoggingLabs Workspace**: the engine outruns
+every competitor — the SURFACE doesn't yet. BridgeSpace beats us on color usage,
+selection treatments, and iconography; our own chrome still has artifacts (corner
+clipping, fullscreen gaps, a modal that should be a page). This phase is a full
+UI/UX sweep: audit everything, rebuild the color system around VIVID per-workspace
+identity, upgrade the icon set, fix the window chrome, make top-level views own the
+whole app, and tune terminal comfort. Same format as `prompts/phase-1..4/` (each
+step self-contained + pasteable as a `/goal`). Execute in order — 01's audit ledger
+and design tokens feed every later step. Each step file is < 4000 chars.
 
-> Scope per `docs/02-mvp-and-roadmap.md`: the **built-in browser** leftover + the
-> cross-cutting day-one commitments (signing, CI on three platforms). **Voice input
-> is deliberately OUT of this pack** (not yet decided — its own pack if/when it is).
-> New protocol/daemon work is NOT expected here — Phase 5 is surface, parity, and
-> polish on the frozen v3 substrate.
+> The product identity stays OURS (logo orange #FD8D03, JetBrains Mono, dark-first) —
+> we take BridgeSpace's *standards* (vivid color, weight, intent-revealing icons),
+> never its look. Inspiration screenshots live in `assets/Inspiration/`.
 
-## Where Phase 4 left us
-- The swarm substrate: mailbox + roles, ownership ledger, reviewer gate, profiles +
-  usage-limit failover, remote (SSH) panes — all daemon protocol v3, all smoke-gated.
-- Management UI shipped (Settings § Profiles & Hosts), board ✓-chips, wizard pickers.
-- 24/24 gates green on Windows (`bash scripts/qa-smokes.sh`); Linux BUILDS AND BOOTS
-  in CI (headless SMOKE + AppImage/deb); macOS compiles but has NEVER run the sweep.
-- Budgets enforced: machine (150 ms/30 fps/300 MB) + perception (≤100 ms, zero >100 ms
-  frames). Releases: v0.3.0 feed (win NSIS; linux artifacts on tags); unsigned.
+## Where Phase 4 (+ polish) left us
+- Full feature surface: launcher Home, wizard, 1–16-pane grids, board, review modal,
+  Settings modal (theme/profiles/hosts/telemetry), palette, toasts, pane chrome
+  (state/role/claims/remote/git chips), rail with attention counts.
+- The HOUSE VERIFICATION LOOP is the superpower: `MOGGING_SHOT` screenshots +
+  geometry probes caught every real UI bug so far — every step here must ship
+  before/after shots and probe numbers, not adjectives.
+- Budgets enforced (machine 150 ms/30 fps/300 MB · perception ≤100 ms, zero >100 ms
+  frames) and 24 smoke gates green — several assert LOAD-BEARING DOM contracts
+  (`.workspace-tab[data-attention]`, `.pane-state[data-state]`, `.pane-git.has-git`,
+  `.layout-slot[data-pane-id]`, `.pane-label.has-label`, `.settings-error`,
+  `.board-chip-*`, `.pane-role/.pane-claims/.pane-remote`). Restyle freely; break
+  selectors NEVER (or update the smoke in the same step, intentionally).
 
 ## Sequence
 | # | File | Gate |
 |---|------|------|
-| 01 | `01-linux-full-parity.md` | The ENTIRE 24-gate sweep green on ubuntu CI (platform-aware smokes; nightly job) |
-| 02 | `02-macos-parity-and-manifests.md` | Sweep green on macos CI; winget + homebrew-cask manifests; signing hooks verified end-to-end (dry run) |
-| 03 | `03-profile-persistence.md` | Per-slot profile choices survive restarts (persisted manifest + failover follow-through); two subscriptions in parallel stay TRUE across relaunch (smoke green) |
-| 04 | `04-browser-pane.md` | A browser is a first-class pane type (WebContentsView): URL bar, per-workspace, preview-what-the-agent-built (smoke green) |
-| 05 | `05-first-run-and-updates.md` | First-run checklist on Home (CLIs detected → profile → first workspace); auto-update toast → one-click restart (smoke green) |
-| 06 | `06-product-milestone.md` | Scripted fresh-machine install→swarm demo asserted; v0.4.0 released on all three platforms; full sweep recorded per-OS |
+| 01 | `01-audit-and-color-system.md` | Every surface screenshotted (both themes); findings ledger; vivid per-workspace color ramps + crisp neutrals with an AA-validated table; `docs/11-design-system.md` |
+| 02 | `02-workspace-rail-selection.md` | Selected workspace = full-button treatment in ITS color (outline + inner tint + heavy left bar); attention stays brand-orange; rail typography polish (smoke-safe) |
+| 03 | `03-iconography.md` | A complete, consistent 24-grid icon set (weight-matched, intent-revealing) replacing the sparse hand-rolled one; per-surface picks documented |
+| 04 | `04-window-chrome.md` | Centered command box; F11 fullscreen collapses the controls gap; bottom corners of the content follow the window's rounded corners (no clipped outlines) |
+| 05 | `05-full-app-views.md` | Home, Settings (modal → PAGE), and Board own the ENTIRE app below the titlebar — rail only exists in the grid view; smokes updated intentionally |
+| 06 | `06-terminal-comfort.md` | Terminal type tuned for zero eye strain (size/line-height picked by shot comparison) + a Settings font-size control; geometry probes re-verified |
+| 07 | `07-polish-milestone.md` | Before/after gallery of every surface; full 24-gate sweep green; perception budget re-passed; REPORT + version bump material |
 
 ## Overall Definition of Done
-- `bash scripts/qa-smokes.sh` is green on Windows, Linux, AND macOS CI — one gate
-  list, zero platform forks in features.
-- A browser pane exists, budget-clean (both perf gates unchanged).
-- Per-workspace profile choices (two subscriptions in parallel) survive restarts.
-- A new user on a fresh machine reaches a working agent workspace in under five
-  minutes, guided by the product itself.
-- v0.4.0 live with win/mac/linux artifacts on the auto-update feed.
+- Every surface passes the audit checklist: crisp AA-safe colors, vivid selection in
+  workspace identity colors, consistent icons, no chrome artifacts at any window
+  state (restored/maximized/F11), full-app top-level views, comfortable terminals.
+- Zero regressions: all 24 gates green, MILESTONE + PERCEPTION budgets unchanged,
+  every load-bearing selector intact or intentionally migrated WITH its smoke.
+- The before/after gallery makes the upgrade undeniable at a glance.
 
 ## Global checks (every step)
-- `npm run typecheck` → 0; `npm run build` → ok.
-- Boundary re-grep: backend no `@ui`/electron; ui no `@backend`/node-pty/electron/node.
-- The step's env-gated smoke green **via `scripts/qa-smokes.sh` isolation**; both perf
-  budgets (MILESTONE + PERCEPTION) re-run after any renderer-touching step.
-- No URLs or update metadata in telemetry (counts/booleans only).
+- `npm run typecheck` → 0; `npm run build` → ok; boundary greps clean.
+- EVERY visual change verified by `MOGGING_SHOT` screenshots (and geometry probes
+  where pixels matter) — in BOTH themes — before the step closes.
+- PERCEPTION re-run after any step touching render paths; SMOKE + the step's
+  affected gates isolated via `scripts/qa-smokes.sh`.
 
 ## Guardrails
-- **Platform differences live in `@backend/platform`, smoke helpers, and builder/CI
-  config ONLY** — never forked inside features.
-- The browser pane brokers NOTHING (ADR 0002): no injected sessions, no stored
-  cookies beyond Electron defaults, no auth automation. It is a window, not an agent.
-- The daemon protocol stays at v3 — Phase 5 adds no wire surface.
+- Tokens only: no hard-coded colors in feature CSS — everything routes through the
+  design-token layer 01 establishes (both themes, AA-validated).
+- No new dependencies; icons stay inline SVG; fonts stay JetBrains Mono.
+- The perf/perception budgets are non-negotiable — beauty that stutters is a bug.
+- Smoke DOM contracts: restyle ≠ rename. Any selector change ships WITH its smoke
+  update in the same step and is called out in the step report.
 
 ## Parallelization
-Lane A (platforms): 01 → 02. Lane B: 03 (profile persistence, small) → 04 (browser).
-Lane C: 05 (first-run/updates). All independent after the pack starts; 06 needs A
-complete and at least B or C (recommended: all) — it freezes the sweep and cuts
-v0.4.0.
+01 first (it feeds everything). Then: 02+03 (lane A — rail + icons share the color
+system), 04 (lane B — chrome), 05 (lane C — views), 06 (lane D — terminals). 07
+freezes the phase and needs all lanes.

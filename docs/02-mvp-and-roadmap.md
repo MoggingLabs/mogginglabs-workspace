@@ -62,6 +62,17 @@ End-to-end milestone asserted (`MOGGING_SWARMMILESTONE`): ledger denial, mailbox
 handshake, territory commits, gated + overridden merges — 134.7 fps avg / 41.7 ms
 worst / 21 MB with the swarm up. See `docs/09-swarm.md`.
 
+### Phase 5 — UI/UX excellence (planned — `prompts/phase-5/`)
+Full visual/UX sweep before widening further: audit-driven design-token refresh with
+VIVID per-workspace identity colors, iconography overhaul, window-chrome fixes
+(centered command box, fullscreen bar, rounded-corner harmony), full-app top-level
+views (Home/Settings/Board own the frame; Settings modal → page), terminal type
+comfort — all gated on the existing perf/perception budgets + the 24-smoke sweep.
+
+### Phase 6 — Product-ready (planned — `prompts/phase-6/`)
+Full Linux/macOS gate-sweep parity, browser pane, profile persistence, first-run +
+update UX, signing readiness + manifests, v0.4.0 on all three platforms.
+
 ## Cross-cutting from day one
 Sentry crash reporting · a hard perf budget for N panes · CI that builds + signs for
 win-x64 / mac-arm64 / mac-x64.

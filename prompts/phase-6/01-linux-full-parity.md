@@ -28,11 +28,11 @@ cmd.exe-flavored. One gate list, zero feature forks.
    `$OSTYPE`/`uname` so ONE script serves all platforms.
 5. **Iterate on CI until green** (use `gh run watch`; artifact JSONs tell you which
    assert broke). Record the per-gate Linux numbers (milestone/perception/swarm
-   milestone) in `prompts/phase-5/README.md`.
+   milestone) in `prompts/phase-6/README.md`.
 
 ## Files
 - `src/main/smoke-shell.ts` (new) + the six smokes above · `scripts/qa-smokes.sh`
-- `.github/workflows/ci.yml` · `prompts/phase-5/README.md` (numbers)
+- `.github/workflows/ci.yml` · `prompts/phase-6/README.md` (numbers)
 
 ## Definition of Done
 - `bash scripts/qa-smokes.sh` → 24/24 PASS on ubuntu CI (nightly + dispatchable),

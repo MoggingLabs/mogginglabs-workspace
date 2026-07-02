@@ -118,7 +118,9 @@ other; `main`/`preload`/`renderer` are the only composition root. See
 - **Phase 1** ✅ — MVP core: multi-pane grid, workspaces, detached PTY daemon, SQLite restore.
 - **Phase 2** ✅ — Agent awareness: OSC state detection, command blocks, per-pane git, 16-agent perf budget.
 - **Phase 3** ✅ — Orchestration: control API, worktree isolation, pre-ship review, Kanban board, end-to-end milestone.
-- **Phase 4** ✅ — Swarm core: mailbox + roles, ownership ledger, reviewer gate, profiles + failover, SSH panes, Linux target. *(voice + browser: later packs)*
+- **Phase 4** ✅ — Swarm core: mailbox + roles, ownership ledger, reviewer gate, profiles + failover, SSH panes, Linux target.
+- **Phase 5** — UI/UX excellence: vivid workspace-identity color system, icon overhaul, window-chrome fixes, full-app views, terminal comfort. *(next)*
+- **Phase 6** — Product-ready: full Linux/macOS parity sweeps, browser pane, first-run + updates, v0.4.0. *(voice: undecided, own pack later)*
 
 Full plan: [`docs/02-mvp-and-roadmap.md`](docs/02-mvp-and-roadmap.md).
 
