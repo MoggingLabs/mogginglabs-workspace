@@ -1,4 +1,6 @@
+import { ShellChannels, type WindowStateEvent } from '@contracts'
 import type { ShellContext } from '../core/registry/feature-registry'
+import { getBridge } from '../core/ipc/bridge'
 import { onViewChange } from '../core/shell/view-port'
 import { createTitlebar } from './titlebar'
 
@@ -27,7 +29,7 @@ export function createAppShell(root: HTMLElement): ShellContext {
     }
   }
 
-  const { el: titlebar, left, right } = createTitlebar(toggleRail)
+  const { el: titlebar, left, center, right } = createTitlebar(toggleRail)
 
   const main = document.createElement('div')
   main.id = 'main'
@@ -69,5 +71,19 @@ export function createAppShell(root: HTMLElement): ShellContext {
     content.classList.toggle('view-board', view === 'board')
   })
 
-  return { content, rail, titlebarLeft: left, titlebarRight: right }
+  // Window-state chrome classes (Phase-5/04): fullscreen collapses the native-
+  // controls reserve; maximized drops the rounded bottom corners. Event-driven
+  // from main — the renderer never polls.
+  try {
+    getBridge().on(ShellChannels.windowState, (payload) => {
+      const s = payload as WindowStateEvent
+      app.classList.toggle('is-fullscreen', s.fullscreen === true)
+      app.classList.toggle('is-maximized', s.maximized === true)
+      app.dataset.chromeState = s.fullscreen ? 'fullscreen' : s.maximized ? 'maximized' : 'restored'
+    })
+  } catch {
+    /* no bridge (tests) — chrome classes stay at the restored defaults */
+  }
+
+  return { content, rail, titlebarLeft: left, titlebarCenter: center, titlebarRight: right }
 }

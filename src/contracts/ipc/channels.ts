@@ -56,7 +56,10 @@ export const ControlChannels = {
 export const ShellChannels = {
   /** Renderer -> main: retint the native window-control overlay to match the theme
    *  ({ color, symbolColor }). No-op on platforms without an overlay (macOS). */
-  titlebarOverlay: 'shell:titlebarOverlay'
+  titlebarOverlay: 'shell:titlebarOverlay',
+  /** main -> renderer: WindowStateEvent on fullscreen/maximize changes (events only —
+   *  never polled). The renderer mirrors it as #app chrome classes. */
+  windowState: 'shell:windowState'
 } as const
 
 export const WorktreeChannels = {

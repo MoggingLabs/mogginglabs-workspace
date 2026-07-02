@@ -5,7 +5,7 @@ import { createElectronContext } from './electron-context'
 import { initMainTelemetry } from './telemetry'
 import { registerClipboard } from './clipboard'
 import { registerDialogs } from './dialogs'
-import { registerShellChrome } from './shell-chrome'
+import { registerShellChrome, wireWindowState } from './shell-chrome'
 import { flushTelemetry } from './telemetry'
 import { registerAppSettings, disposeAppSettings } from './app-settings'
 import { registerAgents } from './agents'
@@ -88,6 +88,7 @@ if (!primaryInstance) app.quit()
 
 function openWindow(): void {
   win = createMainWindow()
+  wireWindowState(win) // fullscreen/maximize -> renderer chrome classes (5/04)
   win.on('closed', () => {
     win = null
   })

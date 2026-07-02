@@ -107,6 +107,14 @@
   --rail-w: 288px;
   --rail-w-collapsed: 60px;
   --titlebar-h: 40px;
+  /* Win11 rounds restored windows at ~8px — the app frame's bottom corners match
+     (dropped while maximized/fullscreen, where the OS window is square). */
+  --window-corner: 8px;
+  /* Native window-control overlay width floor (min/max/close at overlay height 40).
+     env(titlebar-area-*) FLAPS on Win11 (measured: reports 0 in some sessions,
+     stale rects in others) — the floor keeps the icon cluster clear of the OS
+     buttons no matter what env() says. */
+  --controls-reserve: 140px;
 
   /* Legacy aliases — keep every pre-redo selector resolving while it migrates. */
   --bg: var(--bg-app);
@@ -223,6 +231,17 @@ button {
   /* The top-bar separator — drawn BELOW the native window-control overlay, so the
      line runs the full window width, controls included. */
   border-top: 1px solid var(--border);
+  /* Corner harmony (5/04): the frame's bottom corners follow the OS window curve —
+     rail/pane borders clip cleanly along it instead of being cut off square. */
+  border-bottom-left-radius: var(--window-corner);
+  border-bottom-right-radius: var(--window-corner);
+  overflow: hidden;
+}
+/* Maximized/fullscreen windows are square — the curve goes with them. */
+#app.is-maximized #main,
+#app.is-fullscreen #main {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
 }
 
 /* ── 4 · PRIMITIVES ────────────────────────────────────────────────────────── */
@@ -640,14 +659,17 @@ button {
 /* The top bar — full width: brand (logo · name · version) left; feature triggers,
    rail toggle, settings, then the native window-control overlay on the right. A drag
    region end to end; interactive children opt out. */
+/* A strict 3-column grid (1fr auto 1fr): the center cell is TRUE window center —
+   the bar itself has no horizontal padding (side insets live on the cells), and the
+   native-controls reserve is padding INSIDE the right cell, so it never shifts the
+   center column. */
 #titlebar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: var(--sp-3);
   height: var(--titlebar-h);
-  padding: 0 var(--sp-3);
-  /* Reserve the native window-control overlay's width (Windows). */
-  padding-right: calc(100% - env(titlebar-area-width, 100%) + var(--sp-2));
+  padding: 0;
   background: var(--bg-surface);
   /* No border here: the OS window-control overlay covers the bar's own bottom pixel
      row, which would cut the separator short. The line lives on #main instead. */
@@ -661,11 +683,20 @@ button {
 #titlebar .titlebar-right {
   -webkit-app-region: no-drag;
 }
+#titlebar .titlebar-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
 #titlebar .brand {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   min-width: 0;
+  overflow: hidden;
+  padding-left: var(--sp-3);
+  justify-self: start;
   font-size: var(--fs-13);
   font-weight: var(--fw-semibold);
   letter-spacing: var(--track-tight);
@@ -685,10 +716,37 @@ button {
   font-weight: var(--fw-regular);
 }
 #titlebar .titlebar-right {
-  margin-left: auto;
+  justify-self: end;
   display: flex;
   align-items: center;
   gap: var(--sp-1);
+  /* The native window-control overlay's reserve, window-relative (100vw), so the
+     grid box stays symmetric and the center cell stays true center. env() when it
+     reports; the fixed floor when it flaps (measured on Win11 — both happen). */
+  padding-right: max(
+    var(--controls-reserve),
+    calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + var(--sp-2))
+  );
+}
+/* macOS: controls sit top-LEFT (cleared by the brand padding) — no right reserve. */
+#app.platform-darwin #titlebar .titlebar-right {
+  padding-right: var(--sp-3);
+}
+/* F11: the controls vanish — the reserve collapses to a normal edge inset, the bar
+   ends flush like it starts. Two detectors, same override: the shell:windowState
+   class (event-driven) and Chromium's own display-mode (belt — the overlay keeps
+   reporting a STALE env() reserve in Win11 fullscreen, measured in the probe). */
+#app.is-fullscreen #titlebar .titlebar-right {
+  padding-right: var(--sp-3);
+}
+@media (display-mode: fullscreen) {
+  #titlebar .titlebar-right {
+    padding-right: var(--sp-3);
+  }
+  #main {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
 }
 #titlebar .titlebar-slot {
   display: flex;
@@ -699,8 +757,11 @@ button {
   display: none;
 }
 /* macOS traffic lights overlay the top-left — clear the brand past them. */
-#app.platform-darwin #titlebar {
+#app.platform-darwin #titlebar .brand {
   padding-left: 84px;
+}
+#app.platform-darwin.is-fullscreen #titlebar .brand {
+  padding-left: var(--sp-3); /* traffic lights auto-hide in macOS fullscreen */
 }
 
 #content {
@@ -1459,8 +1520,9 @@ body.resizing * {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-2);
-  height: 26px;
-  padding: 0 var(--sp-2);
+  height: 28px;
+  width: clamp(240px, 30vw, 380px); /* the command box owns the bar's center */
+  padding: 0 var(--sp-2) 0 var(--sp-3);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--bg-inset);
@@ -1470,6 +1532,9 @@ body.resizing * {
   transition:
     border-color var(--dur-1) var(--ease),
     color var(--dur-1) var(--ease);
+}
+.palette-trigger .kbd {
+  margin-left: auto; /* label leads, the shortcut hint hugs the right edge */
 }
 .palette-trigger:hover {
   border-color: var(--accent);

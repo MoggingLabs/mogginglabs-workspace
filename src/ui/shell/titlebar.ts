@@ -5,15 +5,17 @@ import { runCommand } from '../core/commands/command-port'
 import { activeView, setActiveView } from '../core/shell/view-port'
 
 /**
- * The app's top bar, full width, frameless-native:
- *   LEFT   logo · product name · version — and nothing else.
- *   RIGHT  feature slots (palette / layout triggers mount here) · rail toggle ·
- *          settings · the OS window controls overlaid by the system (min/max/close).
+ * The app's top bar — a strict 3-column grid (1fr auto 1fr), frameless-native:
+ *   LEFT    logo · product name · version — and nothing else.
+ *   CENTER  the command box (palette trigger) — TRUE window center via the grid.
+ *   RIGHT   feature slots (layout trigger) · rail toggle · settings · the OS
+ *           window-control overlay reserve (collapses to a normal gap in F11).
  * The whole strip is a drag region; interactive children opt out in CSS.
  */
 export function createTitlebar(onToggleRail: () => void): {
   el: HTMLElement
   left: HTMLElement
+  center: HTMLElement
   right: HTMLElement
 } {
   const el = document.createElement('header')
@@ -45,6 +47,10 @@ export function createTitlebar(onToggleRail: () => void): {
   } catch {
     /* no bridge (tests) */
   }
+
+  // Center cell: the command box mounts here (true window-center via the grid).
+  const center = document.createElement('div')
+  center.className = 'titlebar-center'
 
   // Right cluster: [feature slots][rail toggle][settings] + OS overlay clearance.
   const cluster = document.createElement('div')
@@ -80,6 +86,6 @@ export function createTitlebar(onToggleRail: () => void): {
   })
   cluster.append(left, right, home, board, toggle, settings)
 
-  el.append(brand, cluster)
-  return { el, left, right }
+  el.append(brand, center, cluster)
+  return { el, left, center, right }
 }

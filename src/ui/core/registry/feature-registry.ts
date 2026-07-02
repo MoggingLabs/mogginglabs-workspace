@@ -4,8 +4,10 @@ export interface ShellContext {
   content: HTMLElement
   /** The left vertical rail (the workspace feature fills it). */
   rail: HTMLElement
-  /** Left titlebar slot, after the brand (palette trigger, layout picker). */
+  /** Left titlebar slot, after the brand (layout picker, chips). */
   titlebarLeft: HTMLElement
+  /** Dead-center titlebar cell — the command box lives here (Phase-5/04). */
+  titlebarCenter: HTMLElement
   /** Right titlebar slot (chips, indicators, launchers). */
   titlebarRight: HTMLElement
 }

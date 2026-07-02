@@ -257,6 +257,81 @@ export function runGallery(win: BrowserWindow): void {
           await sleep(200)
         })
 
+        await part(`${tag}-chrome-states`, async () => {
+          // Window-state matrix (5/04): restored / maximized / fullscreen. The
+          // restored frame shows the rounded bottom corners; maximized/fullscreen
+          // must be square with zero dead gap in the bar.
+          await snap(`${tag}-chrome-restored`)
+          type ChromeMeasure = {
+            gap: number
+            centerDelta: number
+            overflow: boolean
+            cls: string
+            pad: string
+            iw: number
+            barRight: number
+            clusterRight: number
+            clusterW: number
+            wco: { visible: boolean; w: number } | null
+          }
+          const MEASURE = `(() => {
+            const last = document.querySelector('#titlebar .titlebar-right .icon-btn:last-of-type')
+            const trigger = document.querySelector('.palette-trigger')
+            const cluster = document.querySelector('#titlebar .titlebar-right')
+            const bar = document.getElementById('titlebar')
+            const wco = navigator.windowControlsOverlay
+            return {
+              gap: window.innerWidth - (last?.getBoundingClientRect().right ?? 0),
+              centerDelta: trigger ? Math.abs((trigger.getBoundingClientRect().left + trigger.getBoundingClientRect().right) / 2 - window.innerWidth / 2) : -1,
+              overflow: document.documentElement.scrollWidth > window.innerWidth,
+              cls: document.getElementById('app')?.className ?? '',
+              pad: cluster ? getComputedStyle(cluster).paddingRight : '',
+              iw: window.innerWidth,
+              barRight: bar?.getBoundingClientRect().right ?? -1,
+              clusterRight: cluster?.getBoundingClientRect().right ?? -1,
+              clusterW: cluster?.getBoundingClientRect().width ?? -1,
+              wco: wco ? { visible: wco.visible, w: wco.getTitlebarAreaRect().width } : null
+            }
+          })()`
+          const chromeState = (): Promise<unknown> =>
+            ES(`document.getElementById('app')?.dataset.chromeState ?? 'MISSING'`)
+          // Measure RESTORED first — clean state, before any maximize/fullscreen dance.
+          const restored = tag === 'dark' ? ((await ES(MEASURE)) as ChromeMeasure) : null
+          const at_rest = tag === 'dark' ? await chromeState() : ''
+          win.maximize()
+          await sleep(700)
+          const at_max = tag === 'dark' ? await chromeState() : ''
+          await snap(`${tag}-chrome-maximized`)
+          win.unmaximize()
+          await sleep(700)
+          win.setFullScreen(true)
+          await sleep(1000)
+          await snap(`${tag}-chrome-fullscreen`)
+          if (tag === 'dark' && restored) {
+            // Probe (fullscreen): the right cluster ends a normal inset from the
+            // window edge — the native-controls reserve must be gone.
+            const fs = (await ES(MEASURE)) as ChromeMeasure
+            const px = (s: string): number => parseFloat(s) || 0
+            const pass =
+              Math.abs(fs.iw - fs.clusterRight) <= 1 && // cluster flush right (F11)
+              Math.abs(restored.iw - restored.clusterRight) <= 1 && // and restored
+              px(fs.pad) >= 8 && px(fs.pad) <= 24 && // F11: reserve collapsed to ~sp-3
+              px(restored.pad) >= 100 && // restored: the controls reserve/floor holds
+              fs.centerDelta <= 1.5 && restored.centerDelta <= 1.5 && // true window center
+              !fs.overflow && !restored.overflow &&
+              at_max === 'maximized' // corner logic depends on the maximize event
+            writeFileSync(
+              join(dir, 'probe-chrome.json'),
+              JSON.stringify({ pass, at_rest, at_max, fullscreen: fs, restored }, null, 2)
+            )
+            if (!pass) errors.push(`chrome-probe: ${JSON.stringify({ at_rest, at_max, fs, restored })}`)
+          }
+          win.setFullScreen(false)
+          await sleep(1000)
+          win.setSize(1600, 950)
+          await sleep(500)
+        })
+
         await part(`${tag}-palette`, async () => {
           await key(`ctrlKey: true, key: 'k'`)
           await sleep(400)

@@ -161,6 +161,38 @@ readability lives in ink/edge — neither sacrifices the other.
   reduced-motion collapses all to ~0.
 - **Layout**: `--rail-w 288px` · `--rail-w-collapsed 60px` · `--titlebar-h 40px`.
 
+## Window chrome (Phase-5/04)
+
+- **Titlebar** is a strict 3-column grid (`minmax(0,1fr) auto minmax(0,1fr)`), no
+  horizontal padding of its own — so the center cell (the command box) sits at TRUE
+  window center at any width (probed: trigger center within 1.5px of `innerWidth/2`).
+  The native-controls reserve is padding *inside* the right cell:
+  `max(--controls-reserve, calc(100vw − env(titlebar-area-x) − env(titlebar-area-width) + sp-2))`.
+  The `max()` floor exists because Win11's overlay `env()` **flaps** (measured across
+  sessions: sometimes a correct reserve, sometimes 0 with `windowControlsOverlay.
+  visible === false` at rest, sometimes a stale fullscreen-width rect) — the floor
+  keeps icons clear of the OS buttons no matter which mood env() is in. macOS keeps
+  a plain `--sp-3` (controls live top-left, cleared by brand padding).
+  Drag audit: the whole strip drags; buttons/inputs/right-cluster opt out.
+- **Window state is event-driven** (`shell:windowState`, pushed from main on
+  enter/leave-fullscreen + (un)maximize + once per load — never polled). The
+  renderer mirrors it as `#app.is-fullscreen` / `#app.is-maximized`. Main tracks
+  state from the **event identity**, not a re-query — on Windows,
+  `enter-full-screen` fires before `isFullScreen()` flips, so a re-query inside the
+  handler reports the OLD state (measured; the class never applied until fixed).
+  In fullscreen the reserve collapses to `--sp-3` (the class + a
+  `@media (display-mode: fullscreen)` belt both beat stale env()), so the bar ends
+  flush right exactly like it starts left — no dead gap.
+- **Corner harmony**: `--window-corner: 8px` (the Win11 restored-window radius).
+  `#main` rounds its bottom corners and clips (`overflow: hidden`), so the rail's
+  bottom-left and the grid's bottom-right borders follow the OS curve instead of
+  being clipped square. Maximized/fullscreen windows are square → the classes drop
+  the radius. Panes themselves stay hard-cornered (the standing terminal-chrome
+  rule); only the frame curves.
+- Verified by the gallery state matrix (restored/maximized/fullscreen × both
+  themes) + `out/gallery/probe-chrome.json` (fullscreen right gap ≈ sp-3, restored
+  gap = controls reserve, no horizontal overflow, trigger centered).
+
 ## Icons (Phase-5/03)
 
 One family: 24×24 grid, **stroke 1.75**, round caps/joins — lucide-compatible

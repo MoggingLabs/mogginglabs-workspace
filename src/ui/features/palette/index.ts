@@ -44,7 +44,7 @@ export const paletteFeature: UiFeature = {
         el('span', { class: 'kbd', text: `${MOD}+K` })
       ]
     )
-    ctx.titlebarLeft.append(trigger)
+    ctx.titlebarCenter.append(trigger) // the command box sits dead-center of the bar (5/04)
 
     const input = el('input', {
       class: 'palette-input',
