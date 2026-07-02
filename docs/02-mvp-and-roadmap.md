@@ -49,11 +49,18 @@ rendering, input, resize. **Gate:** if rendering diverges, revisit the engine ch
   (measured 130 fps avg / 62.5 ms worst gap / 21 MB heap across 12 live panes).
   See `docs/08-orchestration.md`.
 
-### Phase 4 — Differentiators (ongoing)
-Multi-agent **swarm** (roles / exclusive file ownership / shared mailbox / reviewer
-gate); SSH/remote runtimes; multi-profile account switching + usage-limit failover
-(orchestrating *which* CLI profile is active — still never brokering auth); Linux;
-voice; built-in browser.
+### Phase 4 — Differentiators (swarm core shipped 2026-07)
+- [x] Multi-agent **swarm**: roles + shared mailbox (`mogging mail`/`role`),
+  exclusive file ownership (`mogging claim/release/owners`), reviewer gate
+  (`mogging approve` fronts the merge verb; typed human override).
+- [x] Multi-profile switching + **usage-limit failover** (pointer profiles — still
+  never brokering auth; secret-shaped values refused at save).
+- [x] **SSH/remote panes** (daemon-spawned `ssh -tt`; honest degradation).
+- [x] Linux target (AppImage/deb config + CI build-and-boot job).
+- [ ] Voice; built-in browser. *(own packs, later)*
+End-to-end milestone asserted (`MOGGING_SWARMMILESTONE`): ledger denial, mailbox
+handshake, territory commits, gated + overridden merges — 134.7 fps avg / 41.7 ms
+worst / 21 MB with the swarm up. See `docs/09-swarm.md`.
 
 ## Cross-cutting from day one
 Sentry crash reporting · a hard perf budget for N panes · CI that builds + signs for

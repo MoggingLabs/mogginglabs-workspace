@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -39,3 +39,41 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  # Phase-4/06: the third platform must BUILD AND BOOT — full native install, the
+  # SMOKE gate headless under xvfb, then the AppImage + deb package. The full
+  # 24-gate sweep on Linux is a follow-up; this asserts build + boot.
+  linux-boot:
+    name: linux boot + package
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Toolchain + headless X (node-pty/better-sqlite3 compile from source)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential python3 python3-setuptools xvfb
+
+      - name: Install (compiles native modules)
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Smoke (headless boot gate)
+        run: |
+          ISO=$(mktemp -d)
+          mkdir -p "$ISO/userdata" "$ISO/local"
+          rm -f out/smoke-result.json
+          MOGGING_USERDATA="$ISO/userdata" XDG_RUNTIME_DIR="$ISO/local" MOGGING_SMOKE=1 \
+            xvfb-run -a timeout 180 npm run dev || true
+          node -e "const r=require('./out/smoke-result.json');if(r.pass!==true){console.error(JSON.stringify(r));process.exit(1)};console.log('SMOKE PASS')"
+
+      - name: Package (AppImage + deb)
+        run: npx electron-builder --linux --publish never

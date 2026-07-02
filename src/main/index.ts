@@ -45,6 +45,7 @@ import { runLedgerSmoke } from './ledger-smoke'
 import { runGateSmoke } from './gate-smoke'
 import { runProfilesSmoke } from './profiles-smoke'
 import { runRemoteSmoke } from './remote-smoke'
+import { runSwarmMilestoneSmoke } from './swarmmilestone-smoke'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { registerDeepLink, initialDeepLinkCwd, initialControlCommand } from './deep-link'
@@ -215,6 +216,8 @@ app.whenReady().then(async () => {
     runProfilesSmoke(win) // env-gated profiles + usage-limit failover smoke (Phase-4/04)
   } else if (process.env.MOGGING_REMOTE && win) {
     runRemoteSmoke(win) // env-gated remote (SSH) pane smoke (Phase-4/05)
+  } else if (process.env.MOGGING_SWARMMILESTONE && win) {
+    runSwarmMilestoneSmoke(win) // env-gated Phase-4 swarm milestone (Phase-4/06)
   }
 
   app.on('activate', () => {

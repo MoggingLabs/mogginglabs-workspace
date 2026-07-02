@@ -116,6 +116,26 @@ MOGGING_DAEMON_ENDPOINT=/path/to/forwarded/endpoint.json   # in the remote shell
 > `mogging release --all` when done, then `mogging mail send --to all` a summary and
 > notify the reviewer. Never edit paths you don't own.
 
+## The scripted swarm demo (only `mogging …` + the app)
+
+```sh
+mogging open ~/my-project --panes 3          # or wizard -> Swarm preset
+mogging role 101 worker && mogging role 102 worker && mogging role 103 reviewer
+
+# workers stake territory (from inside their panes / their launch prompts):
+mogging claim "src/api/**"                   # pane 101 - granted
+mogging claim "src/api/router.ts"            # pane 102 - DENIED, owner named
+mogging claim "src/ui/**"                    # pane 102 - granted
+
+# coordinate through the mailbox, not through you:
+mogging mail send --to 102 "API contract frozen; UI can build against it"
+mogging mail read
+
+# when a worker finishes (its branch = mogging/<slug>):
+mogging approve mogging/ab12cd34             # from pane 103, the reviewer
+# then Review -> type "merge" in the app     # or override, deliberately, as a human
+```
+
 ## Wire surface (v3 additions)
 
 | Verb | Message | Reply |
@@ -127,7 +147,12 @@ MOGGING_DAEMON_ENDPOINT=/path/to/forwarded/endpoint.json   # in the remote shell
 | release | `release {from, pattern?/all}` | `released {count}` |
 | owners | `owners {}` | `owners {claims}` — also PUSHED to every client on change |
 
-CLI exit codes: 0 ok · 1 unknown pane · 2 usage/not-in-a-pane/bad pattern · 3 no
-daemon · 4 auth · **5 claim denied**.
+| approve | `approve {from, branch}` | `approved {…}` · `error notreviewer` |
+| approvals | `approvals {}` | `approvals {list}` |
 
-Enforced by `MOGGING_SWARM` + `MOGGING_LEDGER` (isolated, via `scripts/qa-smokes.sh`).
+CLI exit codes: 0 ok · 1 unknown pane · 2 usage/not-in-a-pane/bad pattern · 3 no
+daemon · 4 auth · **5 claim denied** · **6 not the reviewer**.
+
+Enforced by `MOGGING_SWARM`, `MOGGING_LEDGER`, `MOGGING_GATE`, `MOGGING_PROFILES`,
+`MOGGING_REMOTE`, and the end-to-end `MOGGING_SWARMMILESTONE` (isolated, via
+`scripts/qa-smokes.sh`).

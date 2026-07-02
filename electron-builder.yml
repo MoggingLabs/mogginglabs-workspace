@@ -56,3 +56,19 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+
+# Linux (Phase-4/06): the third platform. Built on Linux hosts/CI (electron-builder
+# does not cross-build Linux targets from Windows). No platform logic forks in
+# features — differences live in @backend/platform + this config only.
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-linux-${arch}.${ext}
+  category: Development
+  synopsis: Multi-pane terminal workspace for AI coding agents
+  maintainer: MoggingLabs <hello@mogginglabs.ai>

@@ -43,11 +43,12 @@ renderer is tuned once and behaves identically everywhere. See
 
 ## Quickstart
 
-> **Status: Phase 3 shipped** — launcher-first multi-pane workspaces over a detached
-> PTY daemon (survives restarts), agent awareness (state / attention / git / blocks),
-> a full control API, worktree-per-agent isolation, pre-ship diff review, and a Kanban
-> board whose cards launch agents. Every gate is smoke-asserted:
-> `bash scripts/qa-smokes.sh` proves the whole surface on fresh isolated state.
+> **Status: Phase 4 (swarm core) shipped** — everything from Phase 3 plus: swarm
+> roles + a daemon mailbox (`mogging mail`), an exclusive file-ownership ledger
+> (`mogging claim`), a reviewer gate on merges (`mogging approve` / typed override),
+> provider profiles with usage-limit failover, and remote (SSH) panes. Every gate is
+> smoke-asserted: `bash scripts/qa-smokes.sh` proves the whole surface (24 gates) on
+> fresh isolated state.
 
 ```bash
 npm install        # builds native modules (node-pty). See note below.
@@ -80,6 +81,9 @@ plus `buildDependenciesFromSource: true` in `electron-builder.yml` (the `postins
   (`pip install setuptools`, since Python ≥ 3.12 dropped `distutils`). Install the compiler:
   `winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"`.
 - **macOS:** Xcode Command Line Tools.
+- **Linux (Debian/Ubuntu):** `sudo apt install build-essential python3 python3-setuptools`
+  (Fedora: `sudo dnf install @development-tools python3-setuptools`). Headless smokes
+  need `xvfb`. Packaging: `npx electron-builder --linux` (AppImage + deb).
 
 Native modules are `asarUnpack`ed for packaging. See [ADR 0001](docs/adr/0001-electron-over-tauri.md).
 
@@ -114,7 +118,7 @@ other; `main`/`preload`/`renderer` are the only composition root. See
 - **Phase 1** ✅ — MVP core: multi-pane grid, workspaces, detached PTY daemon, SQLite restore.
 - **Phase 2** ✅ — Agent awareness: OSC state detection, command blocks, per-pane git, 16-agent perf budget.
 - **Phase 3** ✅ — Orchestration: control API, worktree isolation, pre-ship review, Kanban board, end-to-end milestone.
-- **Phase 4** — Differentiators: multi-agent swarm, remote runtimes, profiles. *(next)*
+- **Phase 4** ✅ — Swarm core: mailbox + roles, ownership ledger, reviewer gate, profiles + failover, SSH panes, Linux target. *(voice + browser: later packs)*
 
 Full plan: [`docs/02-mvp-and-roadmap.md`](docs/02-mvp-and-roadmap.md).
 

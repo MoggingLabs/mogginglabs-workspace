@@ -31,15 +31,27 @@ order; each step file is < 4000 chars.
 | 03 | `03-reviewer-gate.md` | **DONE**: protocol v3 += approve/approvals/unapprove (`Approval` memory-only; role resolved DAEMON-side from the pane binding — no payload role field exists); `mergeBranch` gate param checked FIRST (`ungated` refusal; everything else — clean/--no-ff/conflict-pause — unchanged); main consults the daemon fail-CLOSED for diff `approved` flag + merge; worktree removal clears its branch's sign-off; CLI `mogging approve` (exit **6** notreviewer) + `approvals [--json]`; Review modal gate chip + "Override & merge…" demanding the verbatim typed word `override`; REVIEW smoke → human path, ORCHESTRATION loop now includes ungated→role→approve→merged; board ✓-chip deferred to 06 polish (needs branch↔pane plumbing); MOGGING_GATE green (ungated, exit-6, approve, merged, removal-clears, wrong-word stays ungated, verbatim override lands) + REVIEW & ORCHESTRATION still green |
 | 04 | `04-profiles-and-failover.md` | **DONE**: `AgentProfile` pointer sets — save boundary enforces env-name allowlist + shell-safe values + THE deny-list (reuses the review redactor: secret-shaped values cannot be SAVED); `app_profiles` table; launch commands gain a platform-aware env prefix (cmd `set "X=…" &&` / pwsh `$env:X=…;` / posix `X=… `), profileId resolved main-side; default = order 0, palette gets per-profile entries when >1; `usage-limit` notify → distinct `terminal:limit` push → manual failover toast / per-workspace auto (palette toggle, in-memory) → ^C + relaunch SAME pane w/ resume, one hop per event; wizard picker deferred (palette/pane-menu cover choice); MOGGING_PROFILES green (deny-list refusal, env A in pane, toast, auto-failover to B, scrollback survives) + NOTIFY green + AGENTLAUNCH green after INTENTIONAL modernization for Claude Code 2.1.19x (renders on the normal buffer now: TUI detected via protocol signals — alt-screen OR kitty-keyboard OR sync-output — plus onboarding auto-answer resilience) |
 | 05 | `05-remote-runtimes-ssh.md` | **DONE**: `RemoteHost` pointers (`app_remotes`; shape-validated host/user/port — no shell metachars, no auth material EVER); spawn spec carries the MAIN-resolved row (renderer names an id; daemon stays db-free) → daemon spawns `ssh -tt [-p port] [user@]host` as the pane process (arg array; exit of ssh = pane exit; `MOGGING_SSH_SHIM` batch/sh stand-in for networkless smokes); per-slot `remotes` manifest published BEFORE apply (spawn-time), persisted, restored; honesty: git-cwd seed SKIPPED for remote slots (chip absent — a local probe would lie), `.pane-remote` host chip (distinct tint), pane-menu reason note; wizard "Runs on" host select (local folder mutually exclusive); `mogging list` REMOTE column; docs/09 remote §; MOGGING_REMOTE green (argv -tt/-p/user@host, chips, git honesty local-vs-remote, list column, exit semantics) + SMOKE & GIT still green |
-| 06 | `06-swarm-milestone-and-linux.md` | End-to-end swarm demo asserted (2 workers + reviewer on one repo: mailbox, ownership, gated merges) + Linux build target; budgets unchanged |
+| 06 | `06-swarm-milestone-and-linux.md` | **DONE**: `MOGGING_SWARMMILESTONE` asserts the WHOLE swarm on an isolated temp repo — 2 workers (own worktrees) + reviewer, roles set → ledger denies the overlap (owner named) → PING/ACK mailbox handshake (from+role asserted) → each worker commits in ITS territory via real `mogging send` → gate holds (ungated → `mogging approve` from the reviewer → merged; branch 2 via the verbatim typed override) → both changes landed, HEAD clean, approval died with its worktree; Phase B with the swarm up + board visited: **134.7 fps avg · 41.7 ms worst · 21 MB · 11 live panes** vs the unchanged 150/30/300 budget; Linux target (electron-builder AppImage+deb + CI `linux-boot` job: full native install, headless SMOKE under xvfb, package) — built on Linux hosts only (no cross-build from Windows, noted); docs/09 completed (demo + full wire table), roadmap checkboxes, README status |
 
-## Overall Definition of Done
+## Overall Definition of Done — MET (2026-07-02)
 - A 3-agent swarm on ONE repo coordinates through the mailbox, never edits the same
-  file (ledger-enforced), and NOTHING merges without the reviewer gate.
-- Profiles switch/fail over without the app ever seeing a credential (ADR 0002).
-- A remote pane behaves like a local one at a glance (state, attention, title, host).
+  file (ledger-enforced), and NOTHING merges without the reviewer gate. ✅
+- Profiles switch/fail over without the app ever seeing a credential (ADR 0002). ✅
+- A remote pane behaves like a local one at a glance (state, attention, title, host). ✅
 - `bash scripts/qa-smokes.sh` green end to end, including the new gates; the machine
-  AND perception budgets unchanged.
+  AND perception budgets unchanged. ✅
+
+## Phase-close sweep record (2026-07-02, `bash scripts/qa-smokes.sh`, fresh isolated state)
+**24/24 PASS**: SMOKE · MULTIPANE · ATTENTION · BLOCKS · GIT · NOTIFY · MILESTONE ·
+FLICKER · PERCEPTION · PANEOPS · CONTROL · CONTROL2 · WORKTREE · REVIEW · BOARD ·
+ORCHESTRATION · SWARM · LEDGER · GATE · PROFILES · REMOTE · SWARMMILESTONE ·
+TEMPLATE_A · TEMPLATE_B.
+Key numbers: swarm milestone Phase B **134.7 fps avg / 41.7 ms worst / 21 MB heap /
+11 live panes** (budget 150 ms / 30 fps / 300 MB, unchanged); perception + machine
+gates re-passed in the same sweep — mailbox/ledger/gate chatter costs nothing on the
+hot path (pull-based mail, delta ledger pushes, lazy gate checks). Privacy greps
+clean: no mail bodies, claim paths, profile values, or hostnames anywhere near
+telemetry/logs; daemon coordination modules never log or persist.
 
 ## Global checks (every step)
 - `npm run typecheck` → 0; `npm run build` → ok.
