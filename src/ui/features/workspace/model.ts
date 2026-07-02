@@ -19,8 +19,11 @@ export interface WorkspaceMeta {
 }
 
 /**
- * Per-workspace accent colors, assigned round-robin by ordinal. Curated to hold AA on
- * dark surfaces, harmonize with the brand orange, and stay hue-distinct at a glance.
+ * Per-workspace accent colors, assigned round-robin by ordinal. Recalibrated in
+ * Phase-5/01 (measured, not eyeballed — table in docs/11-design-system.md): every
+ * color holds ≥7:1 on the dark app background as-is, and ≥4.5:1 on white through the
+ * light theme's `--ws-ink` ramp stop (color-mix 54% toward black). Hues are spread so
+ * ADJACENT ordinals never collide (min gap ≈49°; the old amber sat 12° from brand).
  * Brand orange is deliberately LAST: the *current* workspace is always marked by the
  * brand-orange outline, so early workspaces keep their icon accent separable from it.
  */
@@ -29,9 +32,9 @@ export const WORKSPACE_COLORS = [
   '#a78bfa', // violet
   '#38bdf8', // sky
   '#fb7185', // rose
-  '#a3e635', // lime
+  '#9bdf2f', // lime
   '#e879f9', // magenta
-  '#fbbf24', // amber
+  '#4ade80', // green (replaced amber — 12° from brand, indistinguishable at a glance)
   '#fd8d03' // brand orange
 ]
 

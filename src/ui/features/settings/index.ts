@@ -127,6 +127,13 @@ export const settingsFeature: UiFeature = {
       ])
     })
 
+    // Dev/gallery handle: switch themes from smokes/shots.
+    if (import.meta.env.DEV) {
+      const w = window as unknown as { __mogging?: Record<string, unknown> }
+      w.__mogging = w.__mogging ?? {}
+      w.__mogging.setTheme = (id: string) => setTheme(id)
+    }
+
     setCommands('settings', [
       {
         id: 'settings:open',

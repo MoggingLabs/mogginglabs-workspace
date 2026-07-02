@@ -52,7 +52,13 @@ const PROBE = `(() => {
  * MOGGING_SHOT=grid first opens a 4-pane workspace (launcher-first boot shows Home
  * otherwise), waits for prompts, then captures.
  */
+import { runGallery } from './gallery'
+
 export function runShot(win: BrowserWindow): void {
+  if (process.env.MOGGING_SHOT === 'all') {
+    runGallery(win) // Phase-5/01: every surface, both themes -> out/gallery/
+    return
+  }
   const grid = process.env.MOGGING_SHOT === 'grid'
   const reveal = process.env.MOGGING_SHOT === 'reveal'
   const capture = async (): Promise<void> => {

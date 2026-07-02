@@ -202,7 +202,7 @@ export class WorkspaceController {
     const tab = document.createElement('div')
     tab.className = 'workspace-tab'
     tab.dataset.wsId = meta.id
-    tab.style.setProperty('--ws-color', meta.color)
+    tab.style.setProperty('--ws-accent', meta.color) // the ONE sanctioned inline style
     tab.setAttribute('role', 'button')
     tab.tabIndex = 0
     tab.title = meta.name

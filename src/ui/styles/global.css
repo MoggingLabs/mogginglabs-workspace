@@ -30,21 +30,23 @@
   --brand-800: #8a4900;
   --brand-900: #5c3100;
 
-  /* Neutrals — dark-first terminal surfaces (overridden per theme). */
+  /* Neutrals — dark-first terminal surfaces (overridden per theme). Layer steps
+     re-tuned Phase-5/01: inset < app < surface < elevated must READ as layers
+     (measured 1.04 / 1.08 / 1.13 luminance steps; borders 1.4:1 on app). */
   --bg-app: #0c0d0f;
-  --bg-surface: #141518;
-  --bg-elevated: #1b1d21;
-  --bg-inset: #08090b;
-  --border: #26282d;
-  --border-strong: #34373d;
+  --bg-surface: #15171c;
+  --bg-elevated: #1f2228;
+  --bg-inset: #060709;
+  --border: #2a2d34;
+  --border-strong: #3b3f48;
   --text-hi: #f4f5f7;
   --text-mid: #a9aeb6;
-  --text-lo: #7c828b;
+  --text-lo: #868d97; /* ≥4.5:1 on every dark surface incl. elevated (4.76) */
 
   /* Accent — brand orange, deployed sparingly on deep neutrals. */
   --accent: var(--brand-500); /* fills, rings, dots */
   --accent-ink: var(--brand-400); /* orange as text/icon — AA on dark surfaces */
-  --accent-contrast: #201200; /* text sitting on an accent fill */
+  --accent-contrast: #201200; /* text on an accent fill — 7.8:1 on brand, BOTH themes */
   --accent-weak: rgba(253, 141, 3, 0.13); /* hover wash / selected tint */
   --accent-glow: rgba(253, 141, 3, 0.4); /* focus + attention halo */
 
@@ -52,9 +54,13 @@
   --success: #3fc873; /* exit 0 */
   --danger: #f0554b; /* non-zero exit */
   --warning: #f5a623; /* busy / dirty */
-  --info: #4da3ff;
+  --info: #4da3ff; /* remote / informational */
   --attention: var(--brand-500);
   --danger-weak: rgba(240, 85, 75, 0.14);
+
+  /* Overlay scrim + text selection — the only translucent inks features may use. */
+  --scrim: rgba(2, 3, 5, 0.55);
+  --selection-bg: rgba(253, 141, 3, 0.28);
 
   /* Typography — JetBrains Mono everywhere (bundled variable face, identical on
      Win + Mac): one voice for chrome AND terminals, differentiated by a deliberate
@@ -62,6 +68,7 @@
   --font-ui: "JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", ui-monospace,
     Menlo, Consolas, monospace;
   --font-mono: var(--font-ui);
+  --fs-10: 10px; /* chip grade — was referenced but undefined (chips fell back to inherited size) */
   --fs-11: 11px;
   --fs-12: 12px;
   --fs-13: 13px;
@@ -115,17 +122,21 @@
    but flips ink/contrast pairs to hold AA. */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme-mode]) {
-    --bg-app: #f6f7f9;
-    --bg-surface: #ffffff;
+    --bg-app: #f2f4f7;
+    --bg-surface: #fbfcfe;
     --bg-elevated: #ffffff;
-    --bg-inset: #eceef2;
-    --border: #dfe2e8;
-    --border-strong: #c6ccd5;
+    --bg-inset: #e7eaef;
+    --border: #d9dde4;
+    --border-strong: #b7bec9;
     --text-hi: #15171b;
     --text-mid: #4b515b;
-    --text-lo: #666b74;
-    --accent-ink: #a55800; /* AA (≈5.2:1) as orange ink on white */
-    --accent-contrast: #fff8ee;
+    --text-lo: #60656e;
+    --accent-ink: #9c5300; /* AA (5.8:1 white, 4.8:1 inset) as orange ink */
+    /* Semantic inks must darken on light to hold AA as text (all ≥4.5:1 on white). */
+    --success: #147a3c;
+    --danger: #c92e25;
+    --warning: #8a5c09;
+    --info: #1d63d8;
   }
 }
 
@@ -161,7 +172,7 @@ button {
 }
 
 ::selection {
-  background: rgba(253, 141, 3, 0.28);
+  background: var(--selection-bg);
 }
 
 * {
@@ -748,6 +759,27 @@ button {
   gap: 3px;
   padding: 0 var(--sp-2) var(--sp-2);
 }
+/* Workspace identity ramp (Phase-5/01). The controller stamps `--ws-accent` inline
+   on each rail item — the ONE sanctioned inline style — and the ramp derives every
+   other stop via color-mix, per theme:
+     --ws-accent  vivid identity color (AA ≥4.5:1 on dark surfaces as-is)
+     --ws-ink     text/icon-grade stop (= accent on dark; darkened 46% on light for AA)
+     --ws-tint    12% surface wash (icon chips, selected-tab fill)
+     --ws-edge    border-weight stop (= accent on dark; = ink on light)
+     --ws-glow    42% soft halo for outer glows
+   Consumers later than 01 (rail selection = 02) read ONLY the ramp stops. */
+.workspace-tab {
+  --ws-accent: var(--text-lo); /* neutral until the controller stamps the identity */
+  --ws-ink: var(--ws-accent);
+  --ws-tint: color-mix(in srgb, var(--ws-accent) 12%, transparent);
+  --ws-edge: var(--ws-accent);
+  --ws-glow: color-mix(in srgb, var(--ws-accent) 42%, transparent);
+}
+[data-theme-mode='light'] .workspace-tab {
+  --ws-ink: color-mix(in srgb, var(--ws-accent) 54%, black);
+  --ws-edge: color-mix(in srgb, var(--ws-accent) 54%, black);
+}
+
 /* Rail item. Root keeps `.workspace-tab` + `data-attention` — the DOM contract the
    attention/milestone smokes assert. Current workspace = brand-orange outline. */
 .workspace-tab {
@@ -779,8 +811,8 @@ button {
   width: 30px;
   height: 30px;
   border-radius: var(--r-sm);
-  background: color-mix(in srgb, var(--ws-color, var(--text-lo)) 18%, transparent);
-  color: var(--ws-color, var(--text-lo));
+  background: var(--ws-tint);
+  color: var(--ws-ink);
   flex: none;
 }
 .workspace-tab .ws-icon svg {
@@ -1078,8 +1110,8 @@ button {
   flex: none;
   font-size: var(--fs-10);
   font-weight: var(--fw-semibold);
-  color: #58a6ff;
-  border: 1px solid #58a6ff;
+  color: var(--info);
+  border: 1px solid var(--info);
   border-radius: 3px;
   padding: 0 4px;
   line-height: 14px;
@@ -1390,7 +1422,7 @@ body.resizing * {
   align-items: flex-start;
   justify-content: center;
   padding-top: 12vh;
-  background: rgba(2, 3, 5, 0.5);
+  background: var(--scrim);
   z-index: 150;
 }
 .palette-overlay[hidden] {
@@ -2171,7 +2203,7 @@ body.resizing * {
   align-items: center;
   justify-content: center;
   padding: var(--sp-5);
-  background: rgba(2, 3, 5, 0.62);
+  background: var(--scrim);
   z-index: 100;
   animation: modal-fade var(--dur-2) var(--ease);
 }
@@ -2575,7 +2607,7 @@ body.resizing * {
   border-color: var(--accent);
 }
 .board-chip-attention {
-  color: #fff;
+  color: var(--accent-contrast); /* 7.8:1 on the accent fill — plain white was 2.3:1 */
   background: var(--accent);
   border-color: var(--accent);
   cursor: pointer;

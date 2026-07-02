@@ -69,7 +69,7 @@ if (process.env.MOGGING_USERDATA) app.setPath('userData', process.env.MOGGING_US
 
 // Remote-pane smoke support (4/05): point the daemon at a FAKE ssh (a node script the
 // smoke writes later) BEFORE the daemon spawns, so no smoke ever needs a network.
-if (process.env.MOGGING_REMOTE && !process.env.MOGGING_SSH_SHIM) {
+if ((process.env.MOGGING_REMOTE || process.env.MOGGING_SHOT === 'all') && !process.env.MOGGING_SSH_SHIM) {
   process.env.MOGGING_SSH_SHIM = require('node:path').join(
     require('node:os').tmpdir(),
     `mogging-ssh-shim-${process.pid}.` + (process.platform === 'win32' ? 'cmd' : 'sh')

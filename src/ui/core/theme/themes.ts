@@ -32,30 +32,36 @@ function terminalFrom(chrome: Record<string, string>, cursor: string): ITheme {
 
 const MIDNIGHT_CHROME: Record<string, string> = {
   '--bg-app': '#0c0d0f',
-  '--bg-surface': '#141518',
-  '--bg-elevated': '#1b1d21',
-  '--bg-inset': '#08090b',
-  '--border': '#26282d',
-  '--border-strong': '#34373d',
+  '--bg-surface': '#15171c',
+  '--bg-elevated': '#1f2228',
+  '--bg-inset': '#060709',
+  '--border': '#2a2d34',
+  '--border-strong': '#3b3f48',
   '--text-hi': '#f4f5f7',
   '--text-mid': '#a9aeb6',
-  '--text-lo': '#7c828b'
+  '--text-lo': '#868d97'
 }
 
 const LIGHT_CHROME: Record<string, string> = {
-  '--bg-app': '#f6f7f9',
-  '--bg-surface': '#ffffff',
+  '--bg-app': '#f2f4f7',
+  '--bg-surface': '#fbfcfe',
   '--bg-elevated': '#ffffff',
-  '--bg-inset': '#eceef2',
-  '--border': '#dfe2e8',
-  '--border-strong': '#c6ccd5',
+  '--bg-inset': '#e7eaef',
+  '--border': '#d9dde4',
+  '--border-strong': '#b7bec9',
   '--text-hi': '#15171b',
   '--text-mid': '#4b515b',
-  '--text-lo': '#666b74',
+  '--text-lo': '#60656e',
   // On light surfaces orange must darken past brand-700 to hold AA as text/icon ink
-  // (#a55800 ≈ 5.2:1 on white), and the on-accent text flips to a warm near-white.
-  '--accent-ink': '#a55800',
-  '--accent-contrast': '#fff8ee',
+  // (#9c5300 = 5.8:1 on white, 4.8:1 on inset). Text ON accent fills stays the
+  // :root #201200 (7.8:1) — the old warm near-white was 2.3:1.
+  '--accent-ink': '#9c5300',
+  // Semantic inks darken on light to hold AA as text (all ≥4.5:1 on white; the
+  // dark-theme values measure 1.9–3.4:1 there). Fills (gutters, dots) still pass 3:1.
+  '--success': '#147a3c',
+  '--danger': '#c92e25',
+  '--warning': '#8a5c09',
+  '--info': '#1d63d8',
   '--shadow-1': '0 1px 2px rgba(21, 23, 27, 0.08)',
   '--shadow-2': '0 8px 24px rgba(21, 23, 27, 0.12)',
   '--shadow-3': '0 24px 64px rgba(21, 23, 27, 0.18)'
@@ -96,7 +102,7 @@ export const THEMES: AppTheme[] = [
       '--border-strong': '#4c566a',
       '--text-hi': '#eceff4',
       '--text-mid': '#c3cad6',
-      '--text-lo': '#8b93a5'
+      '--text-lo': '#a6aebf' // ≥4.5:1 on nord elevated (#8b93a5 was 3.3:1)
     },
     terminal: terminalFrom(
       {
@@ -119,7 +125,7 @@ export const THEMES: AppTheme[] = [
       '--border-strong': '#1a5e6e',
       '--text-hi': '#eee8d5',
       '--text-mid': '#a3b1b1',
-      '--text-lo': '#758a8a'
+      '--text-lo': '#93abab' // ≥4.5:1 on solarized elevated (#758a8a was 3.1:1)
     },
     terminal: terminalFrom(
       {

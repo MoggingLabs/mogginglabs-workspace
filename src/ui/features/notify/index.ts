@@ -21,6 +21,14 @@ const COOLDOWN_MS = 20000
 export const notifyFeature: UiFeature = {
   name: 'notify',
   mount() {
+    // Dev/gallery handle: fire a toast of any tone for screenshots.
+    if (import.meta.env.DEV) {
+      const w = window as unknown as { __mogging?: Record<string, unknown> }
+      w.__mogging = w.__mogging ?? {}
+      w.__mogging.toast = (tone: string, title = 'Preview toast', body = 'Gallery sample body text.') =>
+        showToast({ tone: tone as never, title, body, timeout: 60000 })
+    }
+
     const lastToast = new Map<number, number>()
 
     getBridge().on(TerminalChannels.state, (payload) => {
