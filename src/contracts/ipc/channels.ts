@@ -70,6 +70,10 @@ export const BoardChannels = {
   remove: 'board:remove' // (id) -> void
 } as const
 
+export const LedgerChannels = {
+  owners: 'ledger:owners' // main -> renderer: the live claim set (pushed on change)
+} as const
+
 export const ReviewChannels = {
   diff: 'review:diff', // (ReviewDiffRequest) -> ReviewDiff (REDACTED before transport)
   merge: 'review:merge' // (ReviewMergeRequest) -> ReviewMergeResult (clean-repo gated)
@@ -93,6 +97,7 @@ export const AllChannels: readonly string[] = [
   ...Object.values(TemplateChannels),
   ...Object.values(WorktreeChannels),
   ...Object.values(ReviewChannels),
+  ...Object.values(LedgerChannels),
   ...Object.values(BoardChannels),
   ...Object.values(GitChannels)
 ]

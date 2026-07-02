@@ -32,6 +32,53 @@ export interface MailMessage {
 export const MAIL_BODY_MAX = 16384 // 16 KB per message
 export const MAIL_RING_MAX = 500 // ring buffer — coordination, not a database
 
+// ── Exclusive file-ownership ledger (Phase-4/02) ───────────────────────────────
+/** One live claim: a pane owns a repo-relative glob. In-memory; auto-released when
+ *  the pane's session exits. Patterns are PATHS: local state only, never telemetry. */
+export interface Claim {
+  id: number
+  paneId: string
+  role?: SwarmRole
+  pattern: string
+  ts: number
+}
+
+export const CLAIM_PATTERN_MAX = 256
+
+/** Validate + normalize a claim pattern: repo-relative glob, forward slashes, no
+ *  `..`, no absolute/drive roots. Returns null when the shape is unacceptable. */
+export function normalizeClaimPattern(raw: string): string | null {
+  if (typeof raw !== 'string') return null
+  const p = raw.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '')
+  if (!p || p.length > CLAIM_PATTERN_MAX) return null
+  if (p.startsWith('/') || /^[A-Za-z]:/.test(p)) return null // absolute / drive root
+  if (p.split('/').some((seg) => seg === '..' || seg === '')) return null
+  return p
+}
+
+/** Conservative glob-vs-glob overlap: only a PURE-LITERAL segment mismatch proves
+ *  the branches diverge — `**`, `*`, partial wildcards, prefix containment all count
+ *  as overlap. When in doubt, DENY (the ledger is a referee, not an oracle). */
+export function claimsOverlap(a: string, b: string): boolean {
+  const sa = a.split('/')
+  const sb = b.split('/')
+  for (let i = 0; ; i++) {
+    const x = sa[i]
+    const y = sb[i]
+    if (x === undefined || y === undefined) return true // equal or prefix-contained
+    if (x === '**' || y === '**') return true
+    const literalX = !x.includes('*')
+    const literalY = !y.includes('*')
+    if (literalX && literalY && x !== y) return false // proven divergence
+    if (!literalX || !literalY) {
+      // a wildcard segment may or may not match — conservative: keep walking as if
+      // it matched; a later literal divergence can still separate the branches only
+      // when neither side has wildcards there, so effectively this often denies.
+      continue
+    }
+  }
+}
+
 /** Discovery record the daemon writes and the client reads (mode 0600). */
 export interface DaemonEndpoint {
   version: number
@@ -92,6 +139,11 @@ export type ClientMessage =
   | { t: 'mail-read'; since?: number; for?: string }
   // Swarm manifest: name a pane's role (validated against SWARM_ROLES).
   | { t: 'set-role'; id: string; role: string }
+  // Ownership ledger (Phase-4/02). `from` = the claimant pane's own binding
+  // (MOGGING_PANE_ID). The ledger ADVISES — it never blocks PTY writes or file I/O.
+  | { t: 'claim'; pattern: string; from: string }
+  | { t: 'release'; pattern?: string; all?: boolean; from: string }
+  | { t: 'owners' }
 
 /** daemon -> client */
 export type ServerMessage =
@@ -111,6 +163,10 @@ export type ServerMessage =
   | { t: 'mailed'; id: number } // ack for a mail-send (the assigned message id)
   | { t: 'mail'; messages: MailMessage[] } // reply to mail-read — CALLER only
   | { t: 'role-set'; id: string; ok: boolean } // ack for set-role (ok=false: unknown pane/role)
+  | { t: 'claimed'; id: number } // claim granted
+  | { t: 'claim-denied'; pattern: string; ownerPaneId: string } // overlap — owner named
+  | { t: 'released'; count: number } // ack for release
+  | { t: 'owners'; claims: Claim[] } // reply to `owners` + PUSHED to all clients on change
 
 /** Notify events an agent/hook can raise via `mogging notify` (Phase-2/04). A small, closed
  *  vocabulary that maps to a pane AgentState — a label only, never PTY content (ADR 0002). */

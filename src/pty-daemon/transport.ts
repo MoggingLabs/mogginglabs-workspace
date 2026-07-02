@@ -12,6 +12,14 @@ export interface TransportHooks {
 }
 
 export function createServer(sessions: SessionManager, token: string, hooks: TransportHooks): net.Server {
+  // Ownership-ledger pushes (4/02): every authed client gets a fresh `owners` on any
+  // change (claim, release, pane exit) — the UI chips stay live with zero polling.
+  const authedClients = new Set<(m: ServerMessage) => void>()
+  sessions.ledger.onChange = () => {
+    const msg: ServerMessage = { t: 'owners', claims: sessions.ledger.owners() }
+    for (const push of authedClients) push(msg)
+  }
+
   const server = net.createServer((sock) => {
     sock.setEncoding('utf8')
     let authed = false
@@ -122,6 +130,32 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           send({ t: 'role-set', id: m.id, ok })
           break
         }
+        // ── Ownership ledger (Phase-4/02): claim / release / owners ──────────────
+        case 'claim': {
+          if (typeof m.from !== 'string' || !m.from || !sessions.has(m.from)) {
+            send({ t: 'error', reason: 'nopane' })
+            break
+          }
+          const res = sessions.ledger.claim(m.from, m.pattern, sessions.mailbox.roleOf(m.from))
+          if (res.ok) send({ t: 'claimed', id: res.id })
+          else if (res.reason === 'denied') {
+            send({ t: 'claim-denied', pattern: res.pattern, ownerPaneId: res.ownerPaneId })
+          } else {
+            send({ t: 'error', reason: 'badpattern' })
+          }
+          break
+        }
+        case 'release': {
+          if (typeof m.from !== 'string' || !m.from) {
+            send({ t: 'error', reason: 'nopane' })
+            break
+          }
+          send({ t: 'released', count: sessions.ledger.release(m.from, m.pattern, m.all === true) })
+          break
+        }
+        case 'owners':
+          send({ t: 'owners', claims: sessions.ledger.owners() })
+          break
         case 'ping':
           send({ t: 'pong' })
           break
@@ -138,6 +172,7 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
         if (m.t === 'hello' && m.v === DAEMON_PROTOCOL_VERSION && m.token === token) {
           authed = true
           clearTimeout(authTimer)
+          authedClients.add(send)
           hooks.onClientCountChange(1)
           hooks.onActivity()
           send({ t: 'welcome', v: DAEMON_PROTOCOL_VERSION, panes: sessions.list(), workspaces: sessions.workspaces() })
@@ -157,6 +192,7 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
     })
     sock.on('close', () => {
       clearTimeout(authTimer)
+      authedClients.delete(send)
       for (const [id, sub] of subscriptions) sessions.get(id)?.unsubscribe(sub)
       subscriptions.clear()
       if (authed) hooks.onClientCountChange(-1)

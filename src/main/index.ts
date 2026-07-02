@@ -39,6 +39,7 @@ import { runReviewSmoke } from './review-smoke'
 import { runBoardSmoke } from './board-smoke'
 import { runOrchestrationSmoke } from './orchestration-smoke'
 import { runSwarmSmoke } from './swarm-smoke'
+import { runLedgerSmoke } from './ledger-smoke'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { registerDeepLink, initialDeepLinkCwd, initialControlCommand } from './deep-link'
@@ -190,6 +191,8 @@ app.whenReady().then(async () => {
     runOrchestrationSmoke(win) // env-gated Phase-3 orchestration milestone (Phase-3/06)
   } else if (process.env.MOGGING_SWARM && win) {
     runSwarmSmoke(win) // env-gated swarm mailbox + roles smoke (Phase-4/01)
+  } else if (process.env.MOGGING_LEDGER && win) {
+    runLedgerSmoke(win) // env-gated ownership-ledger smoke (Phase-4/02)
   }
 
   app.on('activate', () => {

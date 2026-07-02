@@ -12,6 +12,7 @@ import { notifyEventToState } from '@contracts'
 import { OscParser, fileUriToPath } from '@backend/features/agent-state'
 import { SessionStore, resumeCommandFor } from '@backend/features/workspace'
 import { Mailbox } from './mailbox'
+import { Ledger } from './ledger'
 import type { PersistedPane, PersistedWorkspace, WorkspaceLayout } from '@contracts'
 
 const SCROLLBACK_BYTES = 200_000
@@ -176,6 +177,8 @@ export class SessionManager {
   private persistTimer?: NodeJS.Timeout
   /** Swarm substrate (Phase-4/01): the daemon-owned mailbox + role manifest. */
   readonly mailbox = new Mailbox()
+  /** Ownership ledger (Phase-4/02): claims die with their pane. */
+  readonly ledger = new Ledger()
 
   // extraEnv is injected into every pane's shell env (e.g. MOGGING_DAEMON_ENDPOINT for notify).
   constructor(
@@ -215,6 +218,8 @@ export class SessionManager {
     return {
       onExit: () => {
         this.panes.delete(id)
+        this.mailbox.clearRole(id)
+        this.ledger.clearPane(id) // exits release territory immediately (4/02)
         this.schedulePersist(500)
       },
       onChange: () => this.schedulePersist(2000)
@@ -272,6 +277,7 @@ export class SessionManager {
       p.kill()
       this.panes.delete(id)
       this.mailbox.clearRole(id) // pane ids get reused — a role never outlives its pane
+      this.ledger.clearPane(id)
       this.schedulePersist(500)
     }
   }

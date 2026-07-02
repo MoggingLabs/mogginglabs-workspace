@@ -31,6 +31,9 @@ else if (cmd === 'send-key') runSendKey(argv.slice(1))
 else if (cmd === 'capture') runCapture(argv.slice(1))
 else if (cmd === 'mail') runMail(argv.slice(1))
 else if (cmd === 'role') runRole(argv.slice(1))
+else if (cmd === 'claim') runClaim(argv.slice(1))
+else if (cmd === 'release') runRelease(argv.slice(1))
+else if (cmd === 'owners') runOwners(argv.slice(1))
 else if (cmd === 'open') runControlOpen(argv.slice(1))
 else if (cmd === 'layout') runControl({ verb: 'layout', panes: Number(argv[1]) }, argv)
 else if (cmd === 'focus') runControl({ verb: 'focus', paneId: Number(argv[1]) }, argv)
@@ -47,9 +50,93 @@ function usage(code) {
       '       mogging open <dir> [--panes N] | layout <N> | focus <pane>\n' +
       '       mogging expand <pane> [full|col|row] | close-pane <pane>   (each: [--no-launch])\n' +
       '       mogging mail send [--to <pane>|all] <text...> | mail read [--since <id>] [--json]\n' +
-      '       mogging role <pane> <architect|worker|reviewer>\n'
+      '       mogging role <pane> <architect|worker|reviewer>\n' +
+      '       mogging claim <pattern> | release <pattern|--all> | owners [--json]   (in-pane)\n'
   )
   process.exit(code)
+}
+
+// --- mogging claim/release/owners (Phase-4/02 ownership ledger) -----------------------------------
+// Claims are made by AGENTS from inside their panes (identity = MOGGING_PANE_ID);
+// a claim from outside a pane is a usage error — humans own the gate, not territory.
+// Exit codes: 0 granted/ok · 2 usage/not-in-a-pane · 5 DENIED (owner on stderr).
+
+function paneIdentityOrUsage() {
+  const id = process.env.MOGGING_PANE_ID
+  if (!id) {
+    process.stderr.write('mogging: not inside a pane (claims are per-agent; humans own the gate)\n')
+    process.exit(2)
+  }
+  return id
+}
+
+function runClaim(args) {
+  const pattern = args[0]
+  if (!pattern) usage(2)
+  const from = paneIdentityOrUsage()
+  withDaemon(
+    (welcome, api) => {
+      api.send({ t: 'claim', pattern, from })
+    },
+    (m, api) => {
+      if (m.t === 'claimed') {
+        process.stdout.write('mogging: claim #' + m.id + ' granted\n')
+        api.finish(0)
+      } else if (m.t === 'claim-denied') {
+        process.stderr.write(
+          'mogging claim: DENIED — overlaps "' + m.pattern + '" owned by pane ' + m.ownerPaneId + '\n'
+        )
+        api.finish(5)
+      } else if (m.t === 'error') {
+        process.stderr.write('mogging claim: rejected (' + m.reason + ')\n')
+        api.finish(m.reason === 'badpattern' ? 2 : 1)
+      }
+    }
+  )
+}
+
+function runRelease(args) {
+  const all = args.includes('--all')
+  const pattern = args.find((a) => a !== '--all')
+  if (!all && !pattern) usage(2)
+  const from = paneIdentityOrUsage()
+  withDaemon(
+    (welcome, api) => {
+      api.send({ t: 'release', pattern, all, from })
+    },
+    (m, api) => {
+      if (m.t === 'released') {
+        process.stdout.write('mogging: released ' + m.count + '\n')
+        api.finish(0)
+      } else if (m.t === 'error') {
+        process.stderr.write('mogging release: rejected (' + m.reason + ')\n')
+        api.finish(1)
+      }
+    }
+  )
+}
+
+function runOwners(args) {
+  const asJson = args.includes('--json')
+  withDaemon(
+    (welcome, api) => {
+      api.send({ t: 'owners' })
+    },
+    (m, api) => {
+      if (m.t !== 'owners') return
+      if (asJson) {
+        process.stdout.write(JSON.stringify(m.claims) + '\n')
+      } else if (!m.claims.length) {
+        process.stdout.write('no claims\n')
+      } else {
+        for (const c of m.claims) {
+          const who = 'pane ' + c.paneId + (c.role ? ':' + c.role : '')
+          process.stdout.write('#' + c.id + ' ' + who + ' owns ' + c.pattern + '\n')
+        }
+      }
+      api.finish(0)
+    }
+  )
 }
 
 // --- mogging mail send/read + mogging role (Phase-4/01 swarm substrate) --------------------------

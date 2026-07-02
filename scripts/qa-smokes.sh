@@ -63,6 +63,7 @@ run_smoke REVIEW      MOGGING_REVIEW    1 240 review
 run_smoke BOARD       MOGGING_BOARD     1 240 board
 run_smoke ORCHESTRATION MOGGING_ORCHESTRATION 1 300 orchestration
 run_smoke SWARM       MOGGING_SWARM     1 240 swarm
+run_smoke LEDGER      MOGGING_LEDGER    1 240 ledger
 run_smoke TEMPLATE_A  MOGGING_TEMPLATE  A 180 template TEMPLATE
 run_smoke TEMPLATE_B  MOGGING_TEMPLATE  B 180 template TEMPLATE
 

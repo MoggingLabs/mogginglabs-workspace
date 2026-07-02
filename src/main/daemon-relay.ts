@@ -5,7 +5,7 @@
 // in-proc path stays the default and the green baseline is untouched.
 import { ipcMain, type WebContents } from 'electron'
 import * as path from 'node:path'
-import { TerminalChannels } from '@contracts'
+import { TerminalChannels, LedgerChannels } from '@contracts'
 import type { SpawnRequest, WriteCommand, ResizeCommand, KillCommand, SetRoleCommand } from '@contracts'
 import { ensureDaemon, DaemonClient } from './daemon-client'
 
@@ -19,9 +19,11 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     onData: (id, data) => getWebContents()?.send(TerminalChannels.data, { id: Number(id), data }),
     onExit: (id, exitCode) => getWebContents()?.send(TerminalChannels.exit, { id: Number(id), exitCode }),
     onState: (id, state) => getWebContents()?.send(TerminalChannels.state, { id: Number(id), state }),
-    onCwd: (id, cwd) => getWebContents()?.send(TerminalChannels.cwd, { id: Number(id), cwd })
+    onCwd: (id, cwd) => getWebContents()?.send(TerminalChannels.cwd, { id: Number(id), cwd }),
+    onOwners: (claims) => getWebContents()?.send(LedgerChannels.owners, { claims })
   })
   await client.connect()
+  client.requestOwners() // seed the renderer's claim chips; pushes keep them live
 
   ipcMain.handle(TerminalChannels.spawn, (_e, req: SpawnRequest) => {
     client.spawn(String(req.id), { cwd: req.cwd, cols: req.cols, rows: req.rows })

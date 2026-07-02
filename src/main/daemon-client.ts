@@ -8,7 +8,8 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { spawn } from 'node:child_process'
 import { createLineFramer, encodeMessage, DAEMON_PROTOCOL_VERSION } from '@contracts'
-import type { ClientMessage, ServerMessage, DaemonEndpoint, SpawnSpec, PaneInfo, AgentState } from '@contracts'
+import type {
+  Claim, ClientMessage, ServerMessage, DaemonEndpoint, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 
 // --- endpoint discovery paths (MUST match src/pty-daemon/lifecycle.ts) ---
 function runtimeDir(): string {
@@ -79,6 +80,8 @@ export interface DaemonEvents {
   onCwd?: (id: string, cwd: string) => void
   /** Panes the daemon already had when we connected (reconnect => reattach these). */
   onWelcome?: (panes: PaneInfo[]) => void
+  /** Ownership-ledger snapshot — replies AND unsolicited pushes on change (4/02). */
+  onOwners?: (claims: Claim[]) => void
   onClose?: () => void
 }
 
@@ -142,6 +145,9 @@ export class DaemonClient {
       case 'cwd':
         this.events.onCwd?.(m.id, m.cwd)
         break
+      case 'owners':
+        this.events.onOwners?.(m.claims)
+        break
       case 'error':
         // surfaced via logs; a well-behaved client rarely hits this
         break
@@ -168,6 +174,10 @@ export class DaemonClient {
   /** Swarm manifest (Phase-4/01): fire-and-forget role naming. */
   setRole(id: string, role: string): void {
     this.send({ t: 'set-role', id, role })
+  }
+  /** Ownership ledger (4/02): ask for the current claim set (pushes follow). */
+  requestOwners(): void {
+    this.send({ t: 'owners' })
   }
   resize(id: string, cols: number, rows: number): void {
     this.send({ t: 'resize', id, cols, rows })

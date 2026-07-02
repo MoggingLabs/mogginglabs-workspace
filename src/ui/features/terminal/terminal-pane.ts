@@ -10,7 +10,7 @@ import {
   type RemoveWorktreeResult
 } from '@contracts'
 import '@xterm/xterm/css/xterm.css'
-import { icon, showToast, type IconName } from '../../components'
+import { createModal, icon, showToast, type IconName } from '../../components'
 import { getBridge } from '../../core/ipc/bridge'
 import { terminalClient } from './terminal.client'
 import { onTerminalTheme } from '../../core/theme/theme-port'
@@ -18,6 +18,7 @@ import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-
 import { setPaneState, clearPaneState } from '../../core/attention/attention-port'
 import { setPaneCwd, clearPaneCwd, getPaneCwd } from '../../core/layout/pane-cwd'
 import { getPaneRole, onPaneRole } from '../../core/layout/pane-meta'
+import { claimsFor, onClaimsChange, workspaceClaims } from './claims-store'
 import { onFocusedPane } from '../../core/layout/focus'
 import { onPaneGit, getPaneGit } from '../../core/git/git-port'
 import { allCommands } from '../../core/commands/command-port'
@@ -66,6 +67,7 @@ export class TerminalPane {
   private paneGitUnsub?: () => void
   private focusUnsub?: () => void
   private roleUnsub?: () => void
+  private claimsUnsub?: () => void
   private renameFn?: () => void
   private blocks?: BlockTracker
 
@@ -346,7 +348,19 @@ export class TerminalPane {
     this.roleUnsub = onPaneRole((paneId, r) => {
       if (paneId === this.id) applyRole(r)
     })
-    left.append(state, role, title)
+    // Ownership chip (4/02): how many globs THIS pane holds; live via ledger pushes.
+    const claimsChip = document.createElement('span')
+    claimsChip.className = 'pane-claims'
+    claimsChip.hidden = true
+    claimsChip.title = 'Files this agent owns (see ⋯ -> Show claims)'
+    const applyClaims = (): void => {
+      const n = claimsFor(this.id).length
+      claimsChip.textContent = `⛿ ${n}`
+      claimsChip.hidden = n === 0
+    }
+    applyClaims()
+    this.claimsUnsub = onClaimsChange(applyClaims)
+    left.append(state, role, claimsChip, title)
 
     // Center: branch chip — a branch icon + name (soft chip, like the reference bar).
     const git = document.createElement('span')
@@ -575,6 +589,34 @@ export class TerminalPane {
         item('trash', 'Remove worktree…', () => remove(false))
       )
     }
+    // Ownership map (4/02): the full claim set of this pane's workspace, at a glance.
+    menu.append(
+      item('folder', 'Show claims…', () => {
+        const list = workspaceClaims(this.id)
+        const bodyEl = document.createElement('div')
+        bodyEl.className = 'claims-list'
+        if (!list.length) {
+          const empty = document.createElement('p')
+          empty.className = 'claims-empty'
+          empty.textContent = 'No claims — no agent owns any files in this workspace yet.'
+          bodyEl.append(empty)
+        }
+        for (const c of list) {
+          const row = document.createElement('div')
+          row.className = 'claims-row'
+          const pat = document.createElement('code')
+          pat.textContent = c.pattern
+          const who = document.createElement('span')
+          who.className = 'claims-owner'
+          who.textContent = `pane ${c.paneId}${c.role ? ' · ' + c.role : ''}`
+          row.append(pat, who)
+          bodyEl.append(row)
+        }
+        const modal = createModal({ title: 'File ownership', subtitle: 'Who owns what in this workspace', width: 460 })
+        modal.setBody(bodyEl)
+        modal.open()
+      })
+    )
     const agents = allCommands().filter((c) => c.hint === 'Agent')
     if (agents.length) {
       const sep = document.createElement('div')
@@ -643,6 +685,7 @@ export class TerminalPane {
     this.paneGitUnsub?.()
     this.focusUnsub?.()
     this.roleUnsub?.()
+    this.claimsUnsub?.()
     this.visObs?.disconnect()
     this.releaseWebgl()
     this.resizeObs.disconnect()
