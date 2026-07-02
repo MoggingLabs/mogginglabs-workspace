@@ -68,6 +68,10 @@ jobs:
 
       - name: Smoke (headless boot gate)
         run: |
+          # Electron's SUID sandbox helper must be root:4755 (never true on a CI
+          # checkout) — fix it rather than disable the sandbox.
+          sudo chown root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
           ISO=$(mktemp -d)
           mkdir -p "$ISO/userdata" "$ISO/local"
           rm -f out/smoke-result.json
