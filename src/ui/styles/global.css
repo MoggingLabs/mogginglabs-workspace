@@ -738,11 +738,14 @@ button {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: var(--sp-4) var(--sp-3) var(--sp-2);
+  /* Horizontal inset = tabs' container pad + tab pad + border, so the title,
+     the + button and the tab icons share one left/right edge. */
+  padding: var(--sp-4) calc(var(--sp-4) + 1px) var(--sp-2);
 }
 .rail-title {
   flex: none;
   font-size: var(--fs-11);
+  color: var(--text-mid); /* the rail's entry point shouldn't be its faintest text */
 }
 .rail-total {
   flex: 1 1 auto;
@@ -772,6 +775,7 @@ button {
   --ws-accent: var(--text-lo); /* neutral until the controller stamps the identity */
   --ws-ink: var(--ws-accent);
   --ws-tint: color-mix(in srgb, var(--ws-accent) 12%, transparent);
+  --ws-tint-hover: color-mix(in srgb, var(--ws-accent) 6%, transparent);
   --ws-edge: var(--ws-accent);
   --ws-glow: color-mix(in srgb, var(--ws-accent) 42%, transparent);
 }
@@ -780,8 +784,16 @@ button {
   --ws-edge: color-mix(in srgb, var(--ws-accent) 54%, black);
 }
 
-/* Rail item. Root keeps `.workspace-tab` + `data-attention` — the DOM contract the
-   attention/milestone smokes assert. Current workspace = brand-orange outline. */
+/* Rail item (Phase-5/02: vivid identity selection). Root keeps `.workspace-tab` +
+   `data-attention` — the DOM contract the attention/milestone smokes assert.
+   States, quiet → loud:
+     rest      neutral text, identity only on the icon glyph
+     hover     6% identity whisper (--ws-tint-hover)
+     press     full 12% tint
+     SELECTED  the full-button treatment — 12% tint across the button, 1px --ws-edge
+               outline, 3px inset left bar (inset shadow: zero layout shift), icon +
+               name in --ws-ink. Selection is the ONLY loud thing in the rail.
+     focus     the global 2px brand focus ring (interaction, not selection). */
 .workspace-tab {
   position: relative;
   display: flex;
@@ -791,7 +803,7 @@ button {
   border: 1px solid transparent;
   border-radius: var(--r-md);
   color: var(--text-mid);
-  font-size: var(--fs-14);
+  font-size: var(--fs-13);
   cursor: pointer;
   transition:
     background var(--dur-1) var(--ease),
@@ -799,7 +811,10 @@ button {
     box-shadow var(--dur-1) var(--ease);
 }
 .workspace-tab:hover {
-  background: var(--bg-elevated);
+  background: var(--ws-tint-hover);
+}
+.workspace-tab:active {
+  background: var(--ws-tint);
 }
 .workspace-tab.dragging {
   opacity: 0.55;
@@ -811,9 +826,10 @@ button {
   width: 30px;
   height: 30px;
   border-radius: var(--r-sm);
-  background: var(--ws-tint);
+  background: var(--bg-inset); /* quiet chip at rest — identity lives in the glyph */
   color: var(--ws-ink);
   flex: none;
+  transition: background var(--dur-1) var(--ease);
 }
 .workspace-tab .ws-icon svg {
   width: 15px;
@@ -823,8 +839,10 @@ button {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: var(--fw-medium);
+  /* Overflow fades out instead of "…" — mask alpha only, no color involved. */
+  mask-image: linear-gradient(90deg, black calc(100% - 16px), transparent);
 }
 .workspace-tab .ws-rename {
   width: 100%;
@@ -869,20 +887,46 @@ button {
   color: var(--danger);
   background: var(--danger-weak);
 }
+/* SELECTED — the workspace's OWN color lights the whole button (BridgeSpace-grade):
+   1px vivid outline + 12% inner wash + a 3px left bar drawn as an INSET shadow so
+   the box never grows (geometry-probed: icon x and tab width identical to rest). */
 .workspace-tab.active {
-  color: var(--text-hi);
-  background: var(--bg-elevated);
-  border-color: var(--accent); /* the current workspace always reads brand-orange */
+  color: var(--ws-ink);
+  background: var(--ws-tint);
+  border-color: var(--ws-edge);
+  box-shadow: inset 3px 0 0 var(--ws-edge);
+}
+.workspace-tab.active:hover {
+  background: var(--ws-tint); /* selection wash wins over the hover whisper */
+}
+.workspace-tab.active .ws-icon {
+  background: var(--ws-tint); /* tint over tint — the chip steps up naturally */
+}
+/* No font-weight flip on select: weight changes reflow the label, and workspace
+   switch is on the perception hot path — selection is carried by paint only
+   (ink + wash + bar). */
+.workspace-tab.active .ws-count {
+  color: var(--text-mid);
 }
 
-/* Attention — the latched background ring (orange glow) + busy cue. The numeric
-   `.ws-attn` badge is live and loud; busy is quiet amber on the icon. */
+/* Attention — semantically distinct from selection: ALWAYS brand orange ("needs
+   you"), never the identity color. The latched ring is a soft OUTER glow (no hard
+   border), so it composes with a vivid selected neighbor; the numeric `.ws-attn`
+   badge stays loud. Busy is quiet amber on the icon. Note: the active workspace
+   never rings (Phase-2 semantics, smoke-asserted) — but its live badge still shows,
+   and the combined rule below keeps both readable if the states ever co-occur. */
 .workspace-tab[data-attention="busy"] .ws-icon {
   box-shadow: 0 0 0 1px var(--warning);
 }
 .workspace-tab[data-attention="attention"] {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent), 0 0 10px var(--accent-glow);
+  box-shadow: 0 0 0 1px var(--accent-glow), 0 0 14px var(--accent-glow);
+}
+.workspace-tab.active[data-attention="attention"] {
+  /* selection bar inside, orange glow outside the identity outline */
+  box-shadow:
+    inset 3px 0 0 var(--ws-edge),
+    0 0 0 1px var(--accent-glow),
+    0 0 14px var(--accent-glow);
 }
 .ws-attn {
   animation: ws-attention-pulse 1.6s ease-in-out infinite;

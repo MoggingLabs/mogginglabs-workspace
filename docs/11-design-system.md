@@ -94,11 +94,34 @@ per theme via `color-mix` — consumers use ONLY the ramp stops:
 | `--ws-accent` | the raw identity color | (same — washes/fills only) | vivid stop |
 | `--ws-ink` | `= accent` | `color-mix(in srgb, accent 54%, black)` | text/icon-grade |
 | `--ws-tint` | `color-mix(accent 12%, transparent)` | (same) | surface wash |
+| `--ws-tint-hover` | `color-mix(accent 6%, transparent)` | (same) | hover whisper |
 | `--ws-edge` | `= accent` | `= ink` | border-weight stop |
 | `--ws-glow` | `color-mix(accent 42%, transparent)` | (same) | soft outer halo |
 
-Step 02 (rail selection) builds the full selected-tab treatment on these stops; in 01
-the rail icon chip already consumes `--ws-tint` + `--ws-ink`.
+### Rail selection spec (Phase-5/02)
+
+The selected workspace lights up in ITS color; selection is the only loud thing in
+the rail. States, quiet → loud (all ramp stops — no per-feature color):
+
+| State | Treatment |
+|---|---|
+| rest | neutral `--text-mid` label, identity only on the icon glyph (`--ws-ink` on a `--bg-inset` chip) |
+| hover | `--ws-tint-hover` wash (6% identity whisper) |
+| press | full `--ws-tint` |
+| **selected** | `--ws-tint` across the button + 1px `--ws-edge` outline + **3px inset left bar** (`box-shadow: inset 3px 0 0` — zero layout shift, geometry-probed) + label/icon in `--ws-ink` (paint-only: no weight flip — switch is on the perception hot path) |
+| focus-visible | the global 2px brand focus ring (interaction ≠ selection) |
+| drag | 0.55 ghost opacity |
+
+**Attention stays brand orange** — it means "needs you", never "which one is active".
+The latched ring is a soft outer glow (`0 0 0 1px --accent-glow, 0 0 14px --accent-glow`
+— no hard border), so a ringing neighbor composes with a vivid selected tab. The
+active workspace never rings (Phase-2 semantics, smoke-asserted) but its live
+`.ws-attn` badge still shows; a combined rule keeps bar-inside/glow-outside readable
+if both states ever co-occur. Label overflow fades via an alpha `mask-image` instead
+of "…". Contrast: selected label ink on its own tint wash ≥4.8:1 light / ≥5.5:1 dark
+for all 8 identities (measured in the table above). The `no-layout-shift` guarantee
+is asserted by `out/gallery/probe-rail.json` (tab width + icon x equal, selected vs
+not, within 0.5px).
 
 ### The 8 identity colors — measured
 
@@ -157,7 +180,7 @@ wins shipped with this step; everything else is LOGGED with its owner step.
 | UX-09 | Feature CSS defined its own scrims/selection rgba (palette 0.5, modal 0.62, ::selection) | — | **fixed 01** (`--scrim`, `--selection-bg`) |
 | UX-10 | Text on accent fills in light (`#fff8ee`) 2.3:1 — primary buttons, wizard step dots, attention badges | light-wizard-start | **fixed 01** (`--accent-contrast #201200` both themes) |
 | UX-11 | Nord/Solarized `--text-lo` 3.3 / 3.1 on their elevated | (theme switch) | **fixed 01** |
-| UX-12 | Active workspace (brand outline) vs attention workspace (brand ring + glow) read nearly identically in the rail — selection must move to the workspace's OWN ramp | dark-rail-attention | 02 |
+| UX-12 | Active workspace (brand outline) vs attention workspace (brand ring + glow) read nearly identically in the rail — selection must move to the workspace's OWN ramp | dark-rail-attention | **fixed 02** (identity selection treatment; attention → soft outer glow) |
 | UX-13 | Role chips (WORKER / REVIEWER) are both accent-orange — roles indistinguishable from each other and from attention semantics | dark-grid-4-chips | 03 |
 | UX-14 | Wizard `PROVIDER_COLORS` duplicates identity hues in TS; the Claude dot is near-brand orange (ambiguous with attention); `--cell-accent` is a second inline-style channel | dark-wizard-agents | 03 |
 | UX-15 | Pane-header action cluster (5 always-visible icons) consumes ~⅓ of header width at 8/16-pane density — titles truncate early | dark-grid-16 | 03 |
@@ -167,7 +190,7 @@ wins shipped with this step; everything else is LOGGED with its owner step.
 | UX-19 | Board empty lanes have no empty-state hint (only the dashed "+ Add card") | dark-board-empty | 05 |
 | UX-20 | Idle pane state dot `--border-strong` on light ≈1.9:1 — acceptably quiet, but header icon hover affordances are also dim on light | light-grid-4-chips | 06 |
 | UX-21 | `--fs-10` was referenced 5× (role/claims/remote/board chips) but never DEFINED — the declarations were invalid and chips rendered at the inherited size | dark-grid-4-chips | **fixed 01** (`--fs-10: 10px`); remaining raw 9/10px literals → 03 |
-| UX-22 | Rail header ("WORKSPACES n" + the `+` button) is 10px `--text-lo` — the primary creation entry point is the faintest thing in the rail | dark-home-empty | 02 |
+| UX-22 | Rail header ("WORKSPACES n" + the `+` button) is 10px `--text-lo` — the primary creation entry point is the faintest thing in the rail | dark-home-empty | **fixed 02** (title → `--text-mid`; header edge-aligned with tab content) |
 | UX-23 | `terminal-pane.ts` carries a hard-coded pre-mount xterm placeholder theme (corrected by the theme port on mount) — acceptable, but keep it in sync with `--bg-app`/`--text-hi` | — | note |
 
 ## Guardrails (how this stays true)

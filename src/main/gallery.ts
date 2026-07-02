@@ -175,6 +175,45 @@ export function runGallery(win: BrowserWindow): void {
           await ES(`window.__mogging.attention.setPaneState(${base + 2}, 'attention')`)
           await sleep(500)
           await snap(`${tag}-rail-attention`)
+
+          // Rail states matrix (5/02): three identity colors; Beta SELECTED (vivid
+          // identity treatment) + its live attention badge (the active workspace
+          // never rings — Phase-2 semantics), Alpha ringing in brand orange.
+          await ES(`window.__mogging.attention.setPaneState(201, 'attention')`)
+          await sleep(500)
+          await snap(`${tag}-rail-states`)
+
+          // Collapsed rail inherits the treatment (left bar + icon ink + badges).
+          await click('.titlebar-right .icon-btn.rail-toggle')
+          await sleep(400)
+          await snap(`${tag}-rail-collapsed`)
+          await click('.titlebar-right .icon-btn.rail-toggle')
+          await sleep(400)
+
+          // Geometry probe: the selected treatment must not shift layout — the 3px
+          // bar is an inset shadow, so tab width and icon x match unselected tabs.
+          if (tag === 'dark') {
+            const probe = (await ES(
+              `(() => {
+                const tabs = [...document.querySelectorAll('#workspace-tabs .workspace-tab')]
+                return tabs.map((t) => ({
+                  active: t.classList.contains('active'),
+                  w: t.getBoundingClientRect().width,
+                  iconX: t.querySelector('.ws-icon')?.getBoundingClientRect().left ?? -1
+                }))
+              })()`
+            )) as { active: boolean; w: number; iconX: number }[]
+            const ws = probe.map((p) => p.w)
+            const xs = probe.map((p) => p.iconX)
+            const pass =
+              probe.some((p) => p.active) &&
+              Math.max(...ws) - Math.min(...ws) < 0.5 &&
+              Math.max(...xs) - Math.min(...xs) < 0.5
+            writeFileSync(join(dir, 'probe-rail.json'), JSON.stringify({ pass, probe }, null, 2))
+            if (!pass) errors.push(`rail-probe: layout shift between selected/unselected: ${JSON.stringify(probe)}`)
+          }
+
+          await ES(`window.__mogging.attention.setPaneState(201, 'idle')`)
           await ES(`window.__mogging.attention.setPaneState(${base + 2}, 'idle')`)
         })
 
