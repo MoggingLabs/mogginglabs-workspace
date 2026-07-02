@@ -84,10 +84,12 @@ export function runSmoke(win: BrowserWindow): void {
         "window.bridge.on('terminal:data',function(e){if(e&&e.id===1){window.__cap+=e.data;}});}"
     )
 
-    // I/O: echo marker, env/PATH, and 50 streamed lines.
+    // I/O: echo marker, env/PATH, and 50 streamed lines. Platform-aware: the pane
+    // shell is cmd.exe on Windows and the login shell (bash/zsh/sh) elsewhere.
+    const isWin = process.platform === 'win32'
     await send('echo MOGGING_ECHO_7788\r')
-    await send('echo PATHSTART[%PATH%]PATHEND\r')
-    await send('for /L %i in (1,1,50) do @echo LN_%i\r')
+    await send(isWin ? 'echo PATHSTART[%PATH%]PATHEND\r' : 'echo "PATHSTART[$PATH]PATHEND"\r')
+    await send(isWin ? 'for /L %i in (1,1,50) do @echo LN_%i\r' : 'for i in $(seq 1 50); do echo LN_$i; done\r')
     await delay(1800)
 
     // Window-resize reflow: shrink the OS window and confirm the grid recomputed.
@@ -132,7 +134,9 @@ export function runSmoke(win: BrowserWindow): void {
     const cap2 = String(await ES('window.__cap'))
 
     const echo = cap.includes('MOGGING_ECHO_7788')
-    const pathOk = /PATHSTART\[[\s\S]*(Windows|System32)[\s\S]*\]PATHEND/i.test(cap)
+    const pathOk = isWin
+      ? /PATHSTART\[[\s\S]*(Windows|System32)[\s\S]*\]PATHEND/i.test(cap)
+      : /PATHSTART\[[\s\S]*\/(usr\/)?bin[\s\S]*\]PATHEND/.test(cap)
     const lines = (cap.match(/LN_\d+/g) || []).length
     const afterResize = cap.includes('AFTER_RESIZE_5150')
     const scrollbackOk = rinfo.bufferLines > rinfo.rows && rinfo.rows > 0
