@@ -48,6 +48,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential python3 python3-setuptools
 
+      # Python >= 3.12 dropped distutils; node-gyp needs setuptools (README-documented).
+      - name: macOS toolchain
+        if: runner.os == 'macOS'
+        run: python3 -m pip install --break-system-packages setuptools
+
       # Install deps AND rebuild native modules (node-pty, better-sqlite3) for Electron's ABI
       # from source — the runners have the C++ toolchain (VS Build Tools / Xcode CLT).
       # npm_config_node_gyp: @electron/rebuild bundles an old node-gyp that cannot
@@ -76,6 +81,9 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # No Developer ID cert yet: skip identity lookup so mac artifacts build
+          # UNSIGNED instead of failing. FLIP TO 'true' when certs land (Phase-5/02).
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
       - name: Upload artifacts to the release
         shell: bash

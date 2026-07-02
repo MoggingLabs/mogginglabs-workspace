@@ -1,7 +1,7 @@
 {
   "name": "mogginglabs-workspace",
   "version": "0.3.0",
-  "description": "A neutral, reliable, cross-platform organizer for AI coding-agent CLIs. Your keys, your CLIs — no subscription to us.",
+  "description": "A neutral, reliable, cross-platform organizer for AI coding-agent CLIs. Your keys, your CLIs \u2014 no subscription to us.",
   "author": "MoggingLabs",
   "license": "SEE LICENSE IN LICENSE",
   "private": true,
@@ -40,5 +40,8 @@
     "node-gyp": "^13.0.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.11"
+  },
+  "overrides": {
+    "node-gyp": "^13.0.0"
   }
 }
