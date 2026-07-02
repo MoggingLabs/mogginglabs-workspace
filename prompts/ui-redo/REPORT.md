@@ -227,6 +227,46 @@ Direction change requested after the first delivery — all landed and re-verifi
   injection-resistant), 05 Kanban board → agent-in-pane, 06 orchestration milestone —
   each with its own env-gated smoke and the standing perf budget as a gate.
 
+## Round 5 (field-report fixes: width bug, top bar, rail sizing)
+
+- **Terminal width bug — instrumented, root-caused, fixed.** A geometry probe
+  (`MOGGING_SHOT=grid` now also writes `out/shot-probe.json`) showed a 57 px dead strip:
+  panes measured cell size inconsistently around JetBrains Mono activation. Fix: on
+  `document.fonts.ready` every pane invalidates xterm's char-metrics cache (fontFamily
+  toggle) + refits, and panes refit on reveal. Probe after: 55 cols × 7.8 px fills the
+  viewport minus only the standard scrollbar reserve.
+- **Pane bar alignment** — probe-verified: actions flush right, branch chip dead-center.
+- **Rail** grew to 288 px with 14 px names + 30 px icons (readability).
+- **Top bar** is a classic full-width bar: logo · name · **v0.1.0** (live from main)
+  left; layout · Commands ⌘K · rail toggle · **settings icon** · native window controls
+  right. macOS traffic-light clearance kept.
+- **“Launch agent” titlebar button removed with zero traces** (grep-verified); the
+  agents feature is headless (detection + palette/pane-menu commands + wizard port).
+  The redundant IDLE titlebar chip went with it; STATE + AGENTLAUNCH smokes were
+  repaired to the new surfaces (+ launcher-first preambles) instead of left broken.
+- **Verified:** typecheck 0 · build ok · SMOKE, PANEOPS, ATTENTION, STATE, AGENTLAUNCH
+  all PASS isolated · fresh `out/shot.png` shows every fix live.
+
+## Round 6 (perception budget: anchored, optimized, enforced)
+
+- **`docs/07-perception-budget.md`** — every visual-latency number now anchors to what
+  humans notice (Card/Nielsen 100 ms "instant" ceiling; ~2 dropped frames = visible
+  hitch; 50–60 ms keystroke-echo threshold; ~50 ms wrong-state = flicker; 1 s flow
+  break), with hard budgets at the notice threshold and targets at ~2× headroom:
+  interactive actions ≤ 100 (target 50), echo ≤ 60 (target 40), ZERO >100 ms frames
+  during interaction or torrent.
+- **Optimizations to sit under it:** GL contexts stay warm for 1.5 s after a pane
+  hides (workspace flips while interacting are pure show/hide — no shader/atlas cost
+  mid-interaction; background workspaces still free contexts promptly, and the
+  context-loss self-heal guards the cap); workspace switching no longer rebuilds
+  command-palette lists (signature-skipped republish).
+- **Enforcement:** new **`MOGGING_PERCEPTION`** smoke measures the app as a human
+  feels it — double-rAF action→painted latency for workspace switch / Home⇄grid /
+  zoom, keystroke→echo median through the real daemon round-trip, and zero->100 ms
+  frames across a 12-flip churn and a 2 s 8-pane torrent. **`MOGGING_FLICKER`'s frame
+  gate tightened 150 → 100 ms** (the perception number; docs/05's 150 stays as the
+  machine floor in MILESTONE).
+
 ## Known deviations / notes
 
 1. ~~Boot lands in the grid~~ — superseded: boot is launcher-first (follow-up round).

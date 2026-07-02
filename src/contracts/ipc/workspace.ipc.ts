@@ -39,6 +39,9 @@ export interface WorkspaceStateMeta {
   ordinal: number
   paneCount: number
   assignments?: string[] // per-slot provider (06b template lineup); undefined = plain shells
+  /** Per-slot cwd override (worktree isolation, Phase-3/03) — restored workspaces
+   *  re-attach panes to their worktrees. Paths only, never credentials. */
+  paneCwds?: (string | null)[]
 }
 
 /** A recently-worked-on project (directory) for Home's one-click reopen tiles —

@@ -5,11 +5,11 @@ import { createTitlebar } from './titlebar'
 const RAIL_COLLAPSED_KEY = 'mogging.railCollapsed'
 
 /**
- * Builds the app chrome as ONE organic surface: a full-height workspace rail (its top
- * corner is the brand + a drag region) beside a content column headed by a slim,
- * draggable toolbar. The window is frameless (titleBarStyle hidden) — only the native
- * window controls overlay the app, so nothing reads as chrome glued on top. The shell
- * owns only structure: rail collapse and which view (home/grid) the content shows.
+ * App chrome: a classic full-width top bar (logo · name · version on the left; feature
+ * triggers, rail toggle, settings and the native window-control overlay on the right)
+ * over a two-column main region (workspace rail + content). Frameless window — the top
+ * bar is the drag surface. The shell owns only structure: rail collapse state and which
+ * view (home/grid) the content shows; it knows nothing about individual features.
  */
 export function createAppShell(root: HTMLElement): ShellContext {
   root.innerHTML = ''
@@ -27,33 +27,20 @@ export function createAppShell(root: HTMLElement): ShellContext {
     }
   }
 
-  // Left: the rail, full height. Its brand corner doubles as a window drag region
-  // (and clears the macOS traffic lights via the platform class).
+  const { el: titlebar, left, right } = createTitlebar(toggleRail)
+
+  const main = document.createElement('div')
+  main.id = 'main'
+
   const rail = document.createElement('nav')
   rail.id = 'rail'
   rail.setAttribute('aria-label', 'Workspaces')
 
-  const brand = document.createElement('div')
-  brand.className = 'rail-brand'
-  const logo = document.createElement('img')
-  logo.className = 'brand-logo'
-  logo.src = './logo.png'
-  logo.alt = ''
-  const name = document.createElement('span')
-  name.className = 'brand-name'
-  name.textContent = 'MoggingLabs Workspace'
-  brand.append(logo, name)
-  rail.append(brand)
-
-  // Right: header strip + content views.
-  const { el: titlebar, left, right } = createTitlebar(toggleRail)
   const content = document.createElement('div')
   content.id = 'content'
-  const column = document.createElement('div')
-  column.id = 'right-col'
-  column.append(titlebar, content)
 
-  app.append(rail, column)
+  main.append(rail, content)
+  app.append(titlebar, main)
   root.append(app)
 
   try {
@@ -79,6 +66,7 @@ export function createAppShell(root: HTMLElement): ShellContext {
   // The content region shows exactly one view: Home or the workspace grids.
   onViewChange((view) => {
     content.classList.toggle('view-home', view === 'home')
+    content.classList.toggle('view-board', view === 'board')
   })
 
   return { content, rail, titlebarLeft: left, titlebarRight: right }

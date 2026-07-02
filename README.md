@@ -43,14 +43,33 @@ renderer is tuned once and behaves identically everywhere. See
 
 ## Quickstart
 
-> **Status: Phase-0 spike.** A single terminal pane that hosts a real shell/agent
-> CLI and renders identically on Windows (ConPTY) and macOS (forkpty). Not yet a
-> product — this is the parity spike that gates the engine choice.
+> **Status: Phase 3 shipped** — launcher-first multi-pane workspaces over a detached
+> PTY daemon (survives restarts), agent awareness (state / attention / git / blocks),
+> a full control API, worktree-per-agent isolation, pre-ship diff review, and a Kanban
+> board whose cards launch agents. Every gate is smoke-asserted:
+> `bash scripts/qa-smokes.sh` proves the whole surface on fresh isolated state.
 
 ```bash
 npm install        # builds native modules (node-pty). See note below.
 npm run dev        # launch the app in dev mode
 ```
+
+### The orchestration loop, scripted (only `mogging …` + the app)
+
+```sh
+mogging open ~/my-project --panes 4   # open the app on your repo (cold or running)
+mogging list                          # see the fleet
+mogging send 101 "claude"             # drive a pane… or use the Board (Ctrl+Shift+G):
+                                      # New card -> ⋯ -> "Start Claude Code on this…"
+                                      # -> isolated worktree pane, task = first prompt
+mogging capture 101 --lines 40        # read scrollback from a script
+# agent hooks fire `mogging notify --event needs-input` -> the card + rail light up
+# pane ⋯ -> Review changes… -> redacted diff -> type "merge" -> landed
+```
+
+Details: [`docs/08-orchestration.md`](docs/08-orchestration.md) ·
+[`docs/06-control-api.md`](docs/06-control-api.md) ·
+perf + perception budgets: [`docs/05`](docs/05-perf-budget.md) / [`docs/07`](docs/07-perception-budget.md).
 
 **Native modules — compiled from source (no prebuilts).** The app uses `node-pty` and
 `better-sqlite3`, built against the exact Node/Electron ABI via `.npmrc` (`build_from_source=true`)
@@ -91,11 +110,11 @@ other; `main`/`preload`/`renderer` are the only composition root. See
 
 ## Roadmap (short form)
 
-- **Phase 0** — Parity spike: one live agent PTY pane, identical on Win + Mac. *(current)*
-- **Phase 1** — MVP core: multi-pane grid, workspaces, persistent PTY-host, SQLite restore, signing.
-- **Phase 2** — Agent awareness: OSC state detection, command blocks, per-pane git.
-- **Phase 2.5** — Memory graph: local `.memory/` markdown knowledge graph + MCP tools.
-- **Phase 3+** — Worktree isolation, Kanban, control API, multi-agent swarm.
+- **Phase 0** ✅ — Parity spike: one live agent PTY pane, identical on Win + Mac.
+- **Phase 1** ✅ — MVP core: multi-pane grid, workspaces, detached PTY daemon, SQLite restore.
+- **Phase 2** ✅ — Agent awareness: OSC state detection, command blocks, per-pane git, 16-agent perf budget.
+- **Phase 3** ✅ — Orchestration: control API, worktree isolation, pre-ship review, Kanban board, end-to-end milestone.
+- **Phase 4** — Differentiators: multi-agent swarm, remote runtimes, profiles. *(next)*
 
 Full plan: [`docs/02-mvp-and-roadmap.md`](docs/02-mvp-and-roadmap.md).
 

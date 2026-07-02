@@ -3,7 +3,9 @@ import {
   GitChannels,
   TemplateChannels,
   WorkspaceChannels,
+  WorktreeChannels,
   type AgentInfo,
+  type CreateWorktreeResult,
   type GitStatus,
   type ProviderCount,
   type ProviderMixTemplate,
@@ -38,5 +40,9 @@ export const wizardClient = {
 
   /** Read persisted state for the recent-folder typeahead (read-only). */
   loadState: (): Promise<WorkspaceState | null> =>
-    getBridge().invoke(WorkspaceChannels.loadState) as Promise<WorkspaceState | null>
+    getBridge().invoke(WorkspaceChannels.loadState) as Promise<WorkspaceState | null>,
+
+  /** One isolated git worktree in the repo (Phase-3/03) — random slug/branch. */
+  createWorktree: (repo: string): Promise<CreateWorktreeResult> =>
+    getBridge().invoke(WorktreeChannels.create, { repo }) as Promise<CreateWorktreeResult>
 }

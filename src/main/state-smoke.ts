@@ -54,9 +54,9 @@ export function runStateSmoke(win: BrowserWindow): void {
     await delay(1600)
     const states = (await ES('window.__states.slice(' + before + ')')) as string[]
     const chip = (await ES(
-      '(function(){var e=document.querySelector(".state");' +
-        'return e?{state:e.getAttribute("data-state"),text:(e.textContent||"").trim()}:null;})()'
-    )) as { state: string; text: string } | null
+      '(function(){var e=document.querySelector(\'.layout-slot[data-pane-id="1"] .pane-state\');' +
+        'return e?{state:e.getAttribute("data-state")}:null;})()'
+    )) as { state: string } | null
     const seen = Array.isArray(states) && (expected === null || states.includes(expected))
     return { payload, expected, seen, states, chip }
   }
@@ -65,6 +65,12 @@ export function runStateSmoke(win: BrowserWindow): void {
     if (done) return
     done = true
     try {
+      // Launcher-first boot: provision Workspace 1 (pane 1) ourselves.
+      await ES(
+        '(function(){var m=window.__mogging;' +
+          'if(m&&m.workspace&&m.workspace.count()===0)m.workspace.create({name:"Workspace 1"});return 1;})()'
+      )
+      await delay(2500)
       await ES(
         "window.__states=[];" +
           "if(!window.__stateHook){window.__stateHook=true;" +

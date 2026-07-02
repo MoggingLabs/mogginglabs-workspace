@@ -106,7 +106,22 @@ class PaneSession {
     return this.buffer
   }
   info(): PaneInfo {
-    return { id: this.id, cols: this.cols, rows: this.rows }
+    return {
+      id: this.id,
+      cols: this.cols,
+      rows: this.rows,
+      title: this.command, // launch label only (e.g. "claude") — never a command line
+      cwd: this.lastCwd ?? this.cwd,
+      state: this.lastState
+    }
+  }
+  /** Control API (Phase-3/01): the retained scrollback tail, capped at 10000 lines.
+   *  Returned to the requesting client ONLY — never persisted beyond the session
+   *  store's existing scrollback, never logged, never telemetry. */
+  captureTail(lastLines?: number): string {
+    const cap = Math.min(Math.max(1, Math.floor(lastLines ?? 1000)), 10000)
+    const lines = this.buffer.split('\n')
+    return lines.slice(-cap).join('\n')
   }
   snapshot(): PersistedPane {
     return {

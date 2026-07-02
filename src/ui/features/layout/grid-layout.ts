@@ -3,7 +3,7 @@ import { publishSlots, clearSlots, type LayoutSlot } from '../../core/layout/slo
 import { getTelemetry } from '../../core/telemetry'
 import { TEMPLATES, type GridSpec } from './templates'
 
-const GUTTER = 5 // px between tracks — a thin seam: enough that adjacent panes never read as one
+const GUTTER = 2 // px between tracks — with each pane's 1px border: a 4px seam, matching the app edge
 const MIN_FR = 0.15 // don't let a track collapse below this
 const RAGGED_COLS = 12 // LCM of 1..4 — lets any last-row remainder span evenly
 
@@ -269,6 +269,12 @@ export class GridLayout {
   /** Legacy alias (keyboard Ctrl+Shift+Enter, dev handle): full-workspace zoom. */
   toggleZoom(paneId?: number): void {
     this.toggleExpand(paneId, 'full')
+  }
+
+  /** Focus a specific pane by global id (control API / cross-feature callers). */
+  focusPane(paneId: number): void {
+    const el = this.slotEls.get(paneId - this.baseId)
+    if (el) this.setFocused(el)
   }
 
   /** Move focus to the neighboring pane in a direction (keyboard pane nav). */

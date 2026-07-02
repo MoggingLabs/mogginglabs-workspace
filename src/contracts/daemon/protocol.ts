@@ -6,7 +6,10 @@
 import type { AgentState } from '../domain/agent'
 import type { PersistedWorkspace } from '../ipc/workspace.ipc'
 
-export const DAEMON_PROTOCOL_VERSION = 1
+// v2: Phase-3/01 control API — send-key/capture messages + enriched PaneInfo. The
+// version namespaces the runtime dir + socket, so v1 daemons keep running untouched
+// (ADR 0006 anti-kill-server); the app + CLI simply speak to their own v2 daemon.
+export const DAEMON_PROTOCOL_VERSION = 2
 
 /** Discovery record the daemon writes and the client reads (mode 0600). */
 export interface DaemonEndpoint {
@@ -30,6 +33,12 @@ export interface PaneInfo {
   id: string
   cols: number
   rows: number
+  /** The pane's launch label (e.g. "claude") — a label only, never a full command line. */
+  title?: string
+  /** Last known working directory (spawn cwd, refined by OSC 7). */
+  cwd?: string
+  /** Live agent state (idle / busy / attention). */
+  state?: AgentState
 }
 
 /** client -> daemon */
@@ -46,6 +55,11 @@ export type ClientMessage =
   // `mogging notify` (Phase-2/04): an agent/hook inside a pane raises that pane's attention.
   // Carries an event label (+ optional short message) ONLY — never PTY content or credentials.
   | { t: 'notify'; id?: string; event: string; message?: string }
+  // Control API (Phase-3/01): named-key press — `key` is a NAME from CONTROL_KEYS;
+  // the daemon maps it to bytes (allowlist — clients never synthesize escapes).
+  | { t: 'send-key'; id: string; key: string }
+  // Control API (Phase-3/01): return the retained scrollback tail (≤ 10000 lines).
+  | { t: 'capture'; id: string; lastLines?: number }
 
 /** daemon -> client */
 export type ServerMessage =
@@ -60,6 +74,8 @@ export type ServerMessage =
   | { t: 'panes'; panes: PaneInfo[] }
   | { t: 'pong' }
   | { t: 'notified'; id: string; ok: boolean } // ack for a `notify` (ok=false: unknown pane id)
+  | { t: 'sent'; id: string; ok: boolean } // ack for a `send-key` (ok=false: unknown pane/key)
+  | { t: 'captured'; id: string; data: string } // reply to `capture` — CALLER's stdout only
 
 /** Notify events an agent/hook can raise via `mogging notify` (Phase-2/04). A small, closed
  *  vocabulary that maps to a pane AgentState — a label only, never PTY content (ADR 0002). */
@@ -76,6 +92,38 @@ export function notifyEventToState(event: string): AgentState {
     default:
       return 'attention'
   }
+}
+
+/**
+ * Named keys the control API may press (Phase-3/01). A CLOSED allowlist mapped to
+ * bytes here — the `mogging send-key` argument is only ever a NAME from this table;
+ * arbitrary escape synthesis from a CLI arg is rejected by the daemon.
+ */
+export const CONTROL_KEYS: Record<string, string> = {
+  enter: '\r',
+  tab: '\t',
+  escape: '\x1b',
+  backspace: '\x7f',
+  space: ' ',
+  up: '\x1b[A',
+  down: '\x1b[B',
+  right: '\x1b[C',
+  left: '\x1b[D',
+  home: '\x1b[H',
+  end: '\x1b[F',
+  'page-up': '\x1b[5~',
+  'page-down': '\x1b[6~',
+  'c-c': '\x03',
+  'c-d': '\x04',
+  'c-z': '\x1a',
+  'c-l': '\x0c',
+  'c-u': '\x15',
+  'c-r': '\x12'
+}
+
+/** Bytes for a named key, or null when the name is not in the allowlist. */
+export function keyToBytes(key: string): string | null {
+  return Object.prototype.hasOwnProperty.call(CONTROL_KEYS, key) ? CONTROL_KEYS[key] : null
 }
 
 /** Newline-delimited JSON framing (JSON escapes any embedded newline, so this is safe). */

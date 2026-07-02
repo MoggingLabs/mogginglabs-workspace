@@ -1,20 +1,97 @@
 #!/usr/bin/env node
-// The `mogging` CLI. Two subcommands:
-//   mogging [<dir>]                 open/focus a MoggingLabs Workspace for a directory (default)
-//   mogging notify --event <e> ...  raise the CURRENT pane's attention (Phase-2/04)
-// Auth is never brokered here (ADR 0002) — `open` just launches a deep link; `notify` sends an
-// event LABEL to the local daemon over its authed socket (no credentials, no PTY content).
+// The `mogging` CLI.
+//   mogging [<dir>]                  open/focus a MoggingLabs Workspace for a directory (default)
+//   mogging notify --event <e> ...   raise the CURRENT pane's attention (Phase-2/04)
+//   mogging list                     enumerate live panes (id, size, state, title)   (Phase-3/01)
+//   mogging send <pane> <text...>    type into a pane (appends Enter unless --no-enter)
+//   mogging send-key <pane> <key>    press a named key (enter, c-c, up, tab, ...)
+//   mogging capture <pane>           print a pane's scrollback tail to stdout [--lines N]
+//
+// Auth is never brokered here (ADR 0002) — `open` launches a deep link; everything else
+// talks to the LOCAL daemon over its authed socket (token from the 0600 endpoint file;
+// nothing listens on TCP). Control verbs carry labels/names/bytes-to-type only; `capture`
+// output goes to YOUR stdout and nowhere else.
 import { spawn } from 'node:child_process'
-import { resolve } from 'node:path'
+import { resolve, join } from 'node:path'
 import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import net from 'node:net'
 
-const argv = process.argv.slice(2)
+// Keep in sync with DAEMON_PROTOCOL_VERSION in src/contracts/daemon/protocol.ts
+// (this file is plain Node — it cannot import the TS contract).
+const PROTOCOL_VERSION = 2
 
-if (argv[0] === 'notify') {
-  runNotify(argv.slice(1))
-} else {
-  runOpen(argv)
+const argv = process.argv.slice(2)
+const cmd = argv[0]
+
+if (cmd === 'notify') runNotify(argv.slice(1))
+else if (cmd === 'list') runList()
+else if (cmd === 'send') runSend(argv.slice(1))
+else if (cmd === 'send-key') runSendKey(argv.slice(1))
+else if (cmd === 'capture') runCapture(argv.slice(1))
+else if (cmd === 'open') runControlOpen(argv.slice(1))
+else if (cmd === 'layout') runControl({ verb: 'layout', panes: Number(argv[1]) }, argv)
+else if (cmd === 'focus') runControl({ verb: 'focus', paneId: Number(argv[1]) }, argv)
+else if (cmd === 'expand')
+  runControl({ verb: 'expand', paneId: Number(argv[1]), mode: argv[2] && !argv[2].startsWith('--') ? argv[2] : 'full' }, argv)
+else if (cmd === 'close-pane') runControl({ verb: 'close-pane', paneId: Number(argv[1]) }, argv)
+else if (cmd === '--help' || cmd === '-h' || cmd === 'help') usage(0)
+else runOpen(argv)
+
+function usage(code) {
+  process.stderr.write(
+    'usage: mogging [<dir>] | notify --event <e> | list | send <pane> <text...> [--no-enter]\n' +
+      '       mogging send-key <pane> <key> | capture <pane> [--lines N]\n' +
+      '       mogging open <dir> [--panes N] | layout <N> | focus <pane>\n' +
+      '       mogging expand <pane> [full|col|row] | close-pane <pane>   (each: [--no-launch])\n'
+  )
+  process.exit(code)
+}
+
+// --- layout control verbs (Phase-3/02): ride the mogging:// relay ---------------------------------
+
+/** Launch/signal the app with a validated-shape control command via the deep link.
+ *  Main re-validates against the closed union before the UI ever sees it. */
+function sendControl(command, opts = {}) {
+  if (opts.noLaunch && !readEndpoint()) {
+    process.stderr.write('mogging: app/daemon not running (--no-launch)\n')
+    process.exit(3)
+  }
+  const url = `mogging://control?c=${encodeURIComponent(JSON.stringify(command))}`
+  const platform = process.platform
+  if (platform === 'win32') {
+    spawn('cmd', ['/c', 'start', '', url.replace(/&/g, '^&')], { detached: true, stdio: 'ignore' }).unref()
+  } else if (platform === 'darwin') {
+    spawn('open', [url], { detached: true, stdio: 'ignore' }).unref()
+  } else {
+    spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref()
+  }
+}
+
+function runControl(command, rawArgs) {
+  const noLaunch = rawArgs.includes('--no-launch')
+  if (
+    (command.verb === 'layout' && !Number.isInteger(command.panes)) ||
+    (command.verb !== 'layout' && command.paneId !== undefined && !Number.isInteger(command.paneId))
+  ) {
+    usage(2)
+  }
+  sendControl(command, { noLaunch })
+  process.stdout.write(`mogging: ${command.verb} sent\n`)
+}
+
+function runControlOpen(args) {
+  const noLaunch = args.includes('--no-launch')
+  const rest = args.filter((a) => a !== '--no-launch')
+  const dir = rest[0]
+  if (!dir) usage(2)
+  const pi = rest.indexOf('--panes')
+  const panes = pi >= 0 ? Number(rest[pi + 1]) : undefined
+  if (pi >= 0 && !Number.isInteger(panes)) usage(2)
+  const command = { verb: 'open', cwd: resolve(dir) }
+  if (panes) command.panes = panes
+  sendControl(command, { noLaunch })
+  process.stdout.write(`mogging: opening ${command.cwd}${panes ? ` (${panes} panes)` : ''}\n`)
 }
 
 // --- mogging . / mogging <dir> ------------------------------------------------------------------
@@ -33,7 +110,191 @@ function runOpen(args) {
   process.stdout.write(`mogging: opening workspace for ${dir}\n`)
 }
 
-// --- mogging notify -----------------------------------------------------------------------------
+// --- daemon endpoint discovery + authed connection (shared) --------------------------------------
+
+/** Inside a pane MOGGING_DAEMON_ENDPOINT is injected; from any other shell we use the
+ *  well-known per-user runtime path (mirrors src/pty-daemon/lifecycle.ts). */
+function endpointFilePath() {
+  if (process.env.MOGGING_DAEMON_ENDPOINT) return process.env.MOGGING_DAEMON_ENDPOINT
+  const base =
+    process.platform === 'win32'
+      ? process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
+      : process.env.XDG_RUNTIME_DIR || join(homedir(), 'Library', 'Application Support')
+  return join(base, 'MoggingLabs', 'run', 'v' + PROTOCOL_VERSION, 'endpoint.json')
+}
+
+function readEndpoint() {
+  try {
+    return JSON.parse(readFileSync(endpointFilePath(), 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Open an authed connection. `onMessage(m, api)` runs per server message AFTER welcome;
+ * call api.send(obj) / api.finish(code). Exit codes: 3 = no daemon/timeout, 4 = auth refused.
+ */
+function withDaemon(onWelcome, onMessage, { timeoutMs = 5000 } = {}) {
+  const ep = readEndpoint()
+  if (!ep) {
+    process.stderr.write('mogging: no daemon endpoint found (is the app or a pane running?)\n')
+    process.exit(3)
+  }
+  const sock = net.connect(ep.address)
+  sock.setEncoding('utf8')
+  let buf = ''
+  let settled = false
+  const finish = (code) => {
+    if (settled) return
+    settled = true
+    clearTimeout(timer)
+    try {
+      sock.destroy()
+    } catch {
+      /* ignore */
+    }
+    process.exit(code)
+  }
+  const timer = setTimeout(() => {
+    process.stderr.write('mogging: daemon did not respond in time\n')
+    finish(3)
+  }, timeoutMs)
+  const api = { send: (obj) => sock.write(JSON.stringify(obj) + '\n'), finish }
+
+  sock.on('connect', () => {
+    api.send({ t: 'hello', v: ep.version, token: ep.token })
+  })
+  sock.on('data', (chunk) => {
+    buf += chunk
+    let i
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i)
+      buf = buf.slice(i + 1)
+      if (!line) continue
+      let m
+      try {
+        m = JSON.parse(line)
+      } catch {
+        continue
+      }
+      if (m.t === 'welcome') onWelcome(m, api)
+      else if (m.t === 'error' && m.reason === 'auth') {
+        process.stderr.write('mogging: daemon refused the token (auth)\n')
+        finish(4)
+      } else onMessage(m, api)
+    }
+  })
+  sock.on('error', (e) => {
+    process.stderr.write('mogging: ' + e.message + '\n')
+    finish(3)
+  })
+}
+
+// --- mogging list ---------------------------------------------------------------------------------
+
+function runList() {
+  withDaemon(
+    (welcome, api) => {
+      const panes = welcome.panes ?? []
+      if (!panes.length) {
+        process.stdout.write('no live panes\n')
+        api.finish(0)
+        return
+      }
+      const rows = panes.map((p) => ({
+        id: String(p.id),
+        size: `${p.cols}x${p.rows}`,
+        state: p.state ?? 'idle',
+        title: p.title ?? ''
+      }))
+      const w = (k, h) => Math.max(h.length, ...rows.map((r) => r[k].length))
+      const wid = w('id', 'ID'),
+        wsz = w('size', 'SIZE'),
+        wst = w('state', 'STATE')
+      const line = (a, b, c, d) =>
+        a.padEnd(wid) + '  ' + b.padEnd(wsz) + '  ' + c.padEnd(wst) + '  ' + d + '\n'
+      process.stdout.write(line('ID', 'SIZE', 'STATE', 'TITLE'))
+      for (const r of rows) process.stdout.write(line(r.id, r.size, r.state, r.title))
+      api.finish(0)
+    },
+    () => {}
+  )
+}
+
+// --- mogging send <pane> <text...> [--no-enter] ---------------------------------------------------
+
+function runSend(args) {
+  const noEnter = args.includes('--no-enter')
+  const rest = args.filter((a) => a !== '--no-enter')
+  const pane = rest[0]
+  const text = rest.slice(1).join(' ')
+  if (!pane || !text) usage(2)
+  withDaemon(
+    (welcome, api) => {
+      if (!(welcome.panes ?? []).some((p) => String(p.id) === String(pane))) {
+        process.stderr.write(`mogging send: unknown pane ${pane}\n`)
+        api.finish(1)
+        return
+      }
+      api.send({ t: 'input', id: String(pane), data: text + (noEnter ? '' : '\r') })
+      api.send({ t: 'ping' }) // ordered stream: pong => the input was processed
+    },
+    (m, api) => {
+      if (m.t === 'pong') api.finish(0)
+    }
+  )
+}
+
+// --- mogging send-key <pane> <key> ----------------------------------------------------------------
+
+function runSendKey(args) {
+  const pane = args[0]
+  const key = args[1]
+  if (!pane || !key) usage(2)
+  withDaemon(
+    (welcome, api) => {
+      api.send({ t: 'send-key', id: String(pane), key })
+    },
+    (m, api) => {
+      if (m.t === 'sent') api.finish(m.ok ? 0 : 1)
+      else if (m.t === 'error') {
+        process.stderr.write(
+          m.reason === 'badkey'
+            ? `mogging send-key: unknown key "${key}" (allowed: enter, tab, escape, backspace, space, up, down, left, right, home, end, page-up, page-down, c-c, c-d, c-z, c-l, c-u, c-r)\n`
+            : `mogging send-key: unknown pane ${pane}\n`
+        )
+        api.finish(m.reason === 'badkey' ? 2 : 1)
+      }
+    }
+  )
+}
+
+// --- mogging capture <pane> [--lines N] -----------------------------------------------------------
+
+function runCapture(args) {
+  const pane = args[0]
+  let lines
+  const li = args.indexOf('--lines')
+  if (li >= 0) lines = Number(args[li + 1])
+  if (!pane || (li >= 0 && (!Number.isFinite(lines) || lines <= 0))) usage(2)
+  withDaemon(
+    (welcome, api) => {
+      api.send({ t: 'capture', id: String(pane), lastLines: lines })
+    },
+    (m, api) => {
+      if (m.t === 'captured') {
+        process.stdout.write(m.data.endsWith('\n') ? m.data : m.data + '\n')
+        api.finish(0)
+      } else if (m.t === 'error') {
+        process.stderr.write(`mogging capture: unknown pane ${pane}\n`)
+        api.finish(1)
+      }
+    }
+  )
+}
+
+// --- mogging notify -------------------------------------------------------------------------------
 
 /** Parse `--event X --message Y --pane Z` plus bare positionals. */
 function parseFlags(args) {

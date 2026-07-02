@@ -5,6 +5,7 @@
 import { randomUUID } from 'node:crypto'
 import Database from 'better-sqlite3'
 import type {
+  BoardCard,
   ProviderCount,
   ProviderMixTemplate,
   RecentWorkspace,
@@ -31,10 +32,27 @@ export class SettingsStore {
       );
       CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS app_templates (id TEXT PRIMARY KEY, name TEXT NOT NULL, mix TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS app_board (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        notes TEXT NOT NULL DEFAULT '',
+        lane TEXT NOT NULL DEFAULT 'todo',
+        pane_id INTEGER,
+        workspace_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0
+      );
     `)
     // Migrate pre-06b dbs that lack the assignments column (per-workspace template lineup).
     try {
       this.db.exec('ALTER TABLE app_workspaces ADD COLUMN assignments TEXT')
+    } catch {
+      /* column already exists */
+    }
+    // Migrate pre-3/03 dbs: per-slot cwd overrides (worktree isolation).
+    try {
+      this.db.exec('ALTER TABLE app_workspaces ADD COLUMN pane_cwds TEXT')
     } catch {
       /* column already exists */
     }
@@ -43,9 +61,9 @@ export class SettingsStore {
   load(): WorkspaceState {
     const rows = this.db
       .prepare(
-        'SELECT id, name, color, cwd, ordinal, pane_count AS paneCount, assignments FROM app_workspaces ORDER BY position'
+        'SELECT id, name, color, cwd, ordinal, pane_count AS paneCount, assignments, pane_cwds AS paneCwds FROM app_workspaces ORDER BY position'
       )
-      .all() as Array<WorkspaceStateMeta & { assignments: string | null }>
+      .all() as Array<WorkspaceStateMeta & { assignments: string | null; paneCwds: string | null }>
     const workspaces: WorkspaceStateMeta[] = rows.map((r) => ({
       id: r.id,
       name: r.name,
@@ -53,7 +71,8 @@ export class SettingsStore {
       cwd: r.cwd,
       ordinal: r.ordinal,
       paneCount: r.paneCount,
-      assignments: r.assignments ? (JSON.parse(r.assignments) as string[]) : undefined
+      assignments: r.assignments ? (JSON.parse(r.assignments) as string[]) : undefined,
+      paneCwds: r.paneCwds ? (JSON.parse(r.paneCwds) as (string | null)[]) : undefined
     }))
     const settings = this.db.prepare('SELECT key, value FROM app_settings').all() as Array<{
       key: string
@@ -80,10 +99,20 @@ export class SettingsStore {
     const tx = this.db.transaction((s: WorkspaceState) => {
       this.db.prepare('DELETE FROM app_workspaces').run()
       const ins = this.db.prepare(
-        'INSERT INTO app_workspaces (id, name, color, cwd, ordinal, pane_count, position, assignments) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO app_workspaces (id, name, color, cwd, ordinal, pane_count, position, assignments, pane_cwds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       s.workspaces.forEach((w, i) =>
-        ins.run(w.id, w.name, w.color, w.cwd, w.ordinal, w.paneCount, i, w.assignments ? JSON.stringify(w.assignments) : null)
+        ins.run(
+          w.id,
+          w.name,
+          w.color,
+          w.cwd,
+          w.ordinal,
+          w.paneCount,
+          i,
+          w.assignments ? JSON.stringify(w.assignments) : null,
+          w.paneCwds ? JSON.stringify(w.paneCwds) : null
+        )
       )
       const set = this.db.prepare(
         'INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
@@ -98,6 +127,43 @@ export class SettingsStore {
   // --- Telemetry consent + anonymous install id (observability/00, ADR 0005) -----
   // Stored in the same KV table. The install id is a random UUID minted on first read —
   // never derived from the machine, account, or provider identity. Consent defaults OFF.
+
+  // ── Kanban board (Phase-3/05). Card text is USER CONTENT: this local table is
+  // its ONLY home — board rows never feed telemetry, notify, or logs (ADR 0005). ──
+  listBoard(): BoardCard[] {
+    const rows = this.db
+      .prepare(
+        'SELECT id, title, notes, lane, pane_id AS paneId, workspace_id AS workspaceId, created_at AS createdAt, updated_at AS updatedAt FROM app_board ORDER BY position, created_at'
+      )
+      .all() as BoardCard[]
+    return rows
+  }
+
+  saveBoardCard(card: BoardCard): void {
+    this.db
+      .prepare(
+        `INSERT INTO app_board (id, title, notes, lane, pane_id, workspace_id, created_at, updated_at)
+         VALUES (@id, @title, @notes, @lane, @paneId, @workspaceId, @createdAt, @updatedAt)
+         ON CONFLICT(id) DO UPDATE SET
+           title = excluded.title, notes = excluded.notes, lane = excluded.lane,
+           pane_id = excluded.pane_id, workspace_id = excluded.workspace_id,
+           updated_at = excluded.updated_at`
+      )
+      .run({
+        id: card.id,
+        title: card.title,
+        notes: card.notes,
+        lane: card.lane,
+        paneId: card.paneId ?? null,
+        workspaceId: card.workspaceId ?? null,
+        createdAt: card.createdAt,
+        updatedAt: card.updatedAt
+      })
+  }
+
+  removeBoardCard(id: string): void {
+    this.db.prepare('DELETE FROM app_board WHERE id = ?').run(id)
+  }
 
   getTelemetrySettings(): { installId: string; errorReporting: boolean; productAnalytics: boolean } {
     const rows = this.db

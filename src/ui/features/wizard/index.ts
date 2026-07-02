@@ -6,6 +6,7 @@ import {
   MiniGridPreview,
   Pill,
   clear,
+  createCheckbox,
   createLayoutGridPicker,
   createMeter,
   createModal,
@@ -76,6 +77,8 @@ export const wizardFeature: UiFeature = {
     let counts = new Map<string, number>() // provider id -> count
     let customCmd = ''
     let customCount = 0
+    let isRepo = false // set by the Start step's git probe
+    let isolate = false // Phase-3/03: one git worktree per agent pane
 
     let roster: AgentInfo[] = []
     let presets: ProviderMixTemplate[] = []
@@ -216,11 +219,32 @@ export const wizardFeature: UiFeature = {
       } catch {
         /* offline fallback: the local expansion mirrors resolveLayout */
       }
+
+      // Worktree isolation (3/03): every agent slot gets its own worktree; the agent
+      // launches there. Failures fall back to the repo cwd — never block the launch.
+      let paneCwds: (string | null)[] | undefined
+      if (!skipAgents && isolate && isRepo && cwd) {
+        paneCwds = []
+        for (const assignment of resolved.assignments) {
+          if (assignment && assignment !== 'shell') {
+            try {
+              const wt = await wizardClient.createWorktree(cwd)
+              paneCwds.push(wt.ok && wt.path ? wt.path : null)
+            } catch {
+              paneCwds.push(null)
+            }
+          } else {
+            paneCwds.push(null)
+          }
+        }
+      }
+
       openWorkspaceFromTemplate({
         name: name.trim() || basename(cwd) || 'Workspace',
         cwd,
         paneCount: resolved.paneCount,
-        assignments: resolved.assignments
+        assignments: resolved.assignments,
+        paneCwds
       })
       getTelemetry().captureEvent({
         name: 'wizard.completed',
@@ -228,7 +252,8 @@ export const wizardFeature: UiFeature = {
           panes: resolved.paneCount,
           agents: resolved.assignments.filter((a) => a && a !== 'shell').length,
           custom: customCount > 0,
-          skipped_agents: skipAgents
+          skipped_agents: skipAgents,
+          isolated: !!paneCwds // a boolean — never the paths (ADR 0005)
         }
       })
       modal.close()
@@ -252,15 +277,18 @@ export const wizardFeature: UiFeature = {
       const probeGit = async (value: string): Promise<void> => {
         cwd = value
         if (!value.trim()) {
+          isRepo = false
           path.setStatus({ kind: 'idle' })
           return
         }
         try {
           const git = await wizardClient.gitQuery(value)
           if (cwd !== value) return // stale probe
+          isRepo = !!git
           if (git) path.setStatus({ kind: 'git', text: `${git.branch}${git.dirty ? ' •' : ''}` })
           else path.setStatus({ kind: 'ok', text: 'no repo — fine' })
         } catch {
+          isRepo = false
           path.setStatus({ kind: 'warn', text: 'unverified' })
         }
       }
@@ -638,10 +666,30 @@ export const wizardFeature: UiFeature = {
         }
       })
 
+      // Worktree isolation toggle — only meaningful when the Start folder is a repo.
+      const isolateBox = createCheckbox({
+        checked: isolate && isRepo,
+        label: 'Isolate each agent in its own git worktree',
+        onChange: (checked) => {
+          isolate = checked
+        }
+      })
+      const isolateRow = el('div', { class: 'wizard-isolate' + (isRepo ? '' : ' is-disabled') }, [
+        isolateBox.el,
+        el('span', {
+          class: 'wizard-isolate-hint',
+          text: isRepo
+            ? 'Each agent works on its own branch in its own folder — no trampling. Review & merge later.'
+            : 'Pick a git repository in Start to enable worktree isolation.'
+        })
+      ])
+      if (!isRepo) isolate = false
+
       body.append(
         el('div', { class: 'wizard-fill-row' }, [meter.el, meterLabel]),
         fills,
         rows,
+        isolateRow,
         el('div', { class: 'wizard-agent-footer' }, [
           el('div', { class: 'wizard-preview-wrap' }, [
             el('span', { class: 'section-label', text: 'Your grid' }),
@@ -690,6 +738,27 @@ export const wizardFeature: UiFeature = {
             assignments: r.assignments
           })
           return r
+        },
+        // Worktree-isolation path (3/03): one worktree per non-shell slot at `repo`.
+        openIsolated: async (repo: string, m: ProviderCount[]) => {
+          const r = await wizardClient.resolve(m)
+          const paneCwds: (string | null)[] = []
+          for (const a of r.assignments) {
+            if (a && a !== 'shell') {
+              const wt = await wizardClient.createWorktree(repo)
+              paneCwds.push(wt.ok && wt.path ? wt.path : null)
+            } else {
+              paneCwds.push(null)
+            }
+          }
+          openWorkspaceFromTemplate({
+            name: 'Isolated',
+            cwd: repo,
+            paneCount: r.paneCount,
+            assignments: r.assignments,
+            paneCwds
+          })
+          return { ...r, paneCwds }
         },
         openWizard: (prefill?: WizardPrefill) => open(prefill)
       }

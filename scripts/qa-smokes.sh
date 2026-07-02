@@ -54,7 +54,14 @@ run_smoke GIT         MOGGING_GIT       1 240 git
 run_smoke NOTIFY      MOGGING_NOTIFY    1 180 notify
 run_smoke MILESTONE   MOGGING_MILESTONE 1 300 milestone
 run_smoke FLICKER     MOGGING_FLICKER   1 240 flicker
+run_smoke PERCEPTION  MOGGING_PERCEPTION 1 240 perception
 run_smoke PANEOPS     MOGGING_PANEOPS   1 180 paneops
+run_smoke CONTROL     MOGGING_CONTROL   1 240 control
+run_smoke CONTROL2    MOGGING_CONTROL2  1 180 control2
+run_smoke WORKTREE    MOGGING_WORKTREE  1 240 worktree
+run_smoke REVIEW      MOGGING_REVIEW    1 240 review
+run_smoke BOARD       MOGGING_BOARD     1 240 board
+run_smoke ORCHESTRATION MOGGING_ORCHESTRATION 1 300 orchestration
 run_smoke TEMPLATE_A  MOGGING_TEMPLATE  A 180 template TEMPLATE
 run_smoke TEMPLATE_B  MOGGING_TEMPLATE  B 180 template TEMPLATE
 

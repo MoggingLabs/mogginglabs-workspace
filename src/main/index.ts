@@ -12,6 +12,9 @@ import { registerAgents } from './agents'
 import { registerTemplates } from './templates'
 import { registerAttention } from './attention'
 import { registerGit } from './git'
+import { registerWorktrees } from './worktrees'
+import { registerReview } from './review'
+import { registerBoard } from './board'
 import { runSmoke } from './smoke'
 import { runAgentSmoke } from './agent-smoke'
 import { runStateSmoke } from './state-smoke'
@@ -28,9 +31,17 @@ import { runNotifySmoke } from './notify-smoke'
 import { runMilestoneSmoke } from './milestone-smoke'
 import { runFlickerSmoke } from './flicker-smoke'
 import { runPaneOpsSmoke } from './paneops-smoke'
+import { runControlSmoke } from './control-smoke'
+import { runControl2Smoke } from './control2-smoke'
+import { runPerceptionSmoke } from './perception-smoke'
+import { runWorktreeSmoke } from './worktree-smoke'
+import { runReviewSmoke } from './review-smoke'
+import { runBoardSmoke } from './board-smoke'
+import { runOrchestrationSmoke } from './orchestration-smoke'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
-import { registerDeepLink, initialDeepLinkCwd } from './deep-link'
+import { registerDeepLink, initialDeepLinkCwd, initialControlCommand } from './deep-link'
+import { ControlChannels } from '@contracts'
 import { initAutoUpdate } from './updater'
 import { WorkspaceChannels } from '@contracts'
 
@@ -101,6 +112,9 @@ app.whenReady().then(async () => {
   registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
   registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
   disposeGit = registerGit(() => win?.webContents ?? null) // read-only per-pane git branch + dirty (Phase-2/03)
+  registerWorktrees() // worktree-per-agent isolation: add/list/remove only (Phase-3/03)
+  registerReview() // pre-ship diff review: redacted diff + guarded merge (Phase-3/04)
+  registerBoard() // local Kanban board: cards that launch agents (Phase-3/05)
 
   openWindow()
 
@@ -110,6 +124,17 @@ app.whenReady().then(async () => {
     if (initialCwd && win) {
       const w = win
       const send = (): void => w.webContents.send(WorkspaceChannels.openCwd, initialCwd)
+      if (w.webContents.isLoading()) w.webContents.once('did-finish-load', send)
+      else send()
+    }
+    // Cold-start layout verb (mogging://control in argv, already validated).
+    const initialControl = initialControlCommand()
+    if (initialControl && win) {
+      const w = win
+      const send = (): void => {
+        // Give restore a beat so `open` lands after existing workspaces re-attach.
+        setTimeout(() => w.webContents.send(ControlChannels.command, initialControl), 800)
+      }
       if (w.webContents.isLoading()) w.webContents.once('did-finish-load', send)
       else send()
     }
@@ -148,6 +173,20 @@ app.whenReady().then(async () => {
     runFlickerSmoke(win) // env-gated terminal-artifact smoke: churn without flicker
   } else if (process.env.MOGGING_PANEOPS && win) {
     runPaneOpsSmoke(win) // env-gated pane-operations smoke: expand modes + close
+  } else if (process.env.MOGGING_CONTROL && win) {
+    runControlSmoke(win) // env-gated control-API smoke: list/send/send-key/capture (Phase-3/01)
+  } else if (process.env.MOGGING_CONTROL2 && win) {
+    runControl2Smoke(win) // env-gated layout-control smoke: open/layout/focus/expand/close (Phase-3/02)
+  } else if (process.env.MOGGING_PERCEPTION && win) {
+    runPerceptionSmoke(win) // env-gated perception-budget smoke (docs/07): humans must not notice
+  } else if (process.env.MOGGING_WORKTREE && win) {
+    runWorktreeSmoke(win) // env-gated worktree-isolation smoke (Phase-3/03)
+  } else if (process.env.MOGGING_REVIEW && win) {
+    runReviewSmoke(win) // env-gated pre-ship review smoke (Phase-3/04)
+  } else if (process.env.MOGGING_BOARD && win) {
+    runBoardSmoke(win) // env-gated Kanban-board smoke (Phase-3/05)
+  } else if (process.env.MOGGING_ORCHESTRATION && win) {
+    runOrchestrationSmoke(win) // env-gated Phase-3 orchestration milestone (Phase-3/06)
   }
 
   app.on('activate', () => {

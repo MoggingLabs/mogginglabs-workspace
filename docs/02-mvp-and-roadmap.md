@@ -36,11 +36,18 @@ rendering, input, resize. **Gate:** if rendering diverges, revisit the engine ch
   `find_backlinks`, `suggest_connections`, …) — our answer to BridgeMemory.
 - Local-first, git-committable; no cloud.
 
-### Phase 3 — Orchestration (6–10 wks)
-- Git **worktree-per-agent** isolation + **pre-ship diff review** (secret-redacting,
-  injection-resistant).
-- **Kanban** board that launches an agent into a pane with task context.
-- **Control API** (`list` / `send` / `send-key` / `capture` / layout ops) — tmux/cmux parity.
+### Phase 3 — Orchestration ✅ (shipped 2026-07)
+- [x] Git **worktree-per-agent** isolation + **pre-ship diff review** (secret-redacting,
+  injection-resistant, guarded `merge --no-ff`).
+- [x] **Kanban** board that launches an agent into a pane with task context (the task
+  IS the first prompt) and follows the pane's live attention.
+- [x] **Control API** (`list` / `send` / `send-key` / `capture` + `open` / `layout` /
+  `focus` / `expand` / `close-pane`) — tmux/cmux parity over the authed daemon socket
+  and the validated deep-link relay.
+- [x] End-to-end milestone asserted (`MOGGING_ORCHESTRATION`): card → isolated agent →
+  notify → redacted review → merge, with the Phase-2 perf budget UNCHANGED and green
+  (measured 130 fps avg / 62.5 ms worst gap / 21 MB heap across 12 live panes).
+  See `docs/08-orchestration.md`.
 
 ### Phase 4 — Differentiators (ongoing)
 Multi-agent **swarm** (roles / exclusive file ownership / shared mailbox / reviewer

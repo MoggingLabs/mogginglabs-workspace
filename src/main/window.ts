@@ -20,7 +20,7 @@ export function createMainWindow(): BrowserWindow {
       ? { trafficLightPosition: { x: 14, y: 13 } }
       : {
           titleBarOverlay: {
-            color: '#0c0d0f',
+            color: '#141518', // --bg-surface: the controls sit ON the top bar, one surface
             symbolColor: '#a9aeb6',
             height: 40
           }

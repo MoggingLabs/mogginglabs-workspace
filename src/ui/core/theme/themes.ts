@@ -156,11 +156,12 @@ function writeTheme(theme: AppTheme): void {
   root.setAttribute('data-theme-mode', concrete.mode) // pins first-paint fallback off
   setTerminalTheme(concrete.terminal)
 
-  // Keep the native window-control overlay on the same surface as the app header
-  // (organic chrome). Best-effort: a no-op on macOS or outside the bridge.
+  // Keep the native window-control overlay on the SAME surface as the top bar — the
+  // min/max/close buttons must read as part of the single bar, every theme.
+  // Best-effort: a no-op on macOS or outside the bridge.
   try {
     void getBridge().invoke(ShellChannels.titlebarOverlay, {
-      color: concrete.chrome['--bg-app'] ?? '#0c0d0f',
+      color: concrete.chrome['--bg-surface'] ?? '#141518',
       symbolColor: concrete.chrome['--text-mid'] ?? '#a9aeb6'
     })
   } catch {

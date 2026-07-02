@@ -35,6 +35,12 @@ export function runAgentLaunchSmoke(win: BrowserWindow): void {
     if (done) return
     done = true
     try {
+      // Launcher-first boot: provision Workspace 1 (pane 1) ourselves.
+      await ES(
+        '(function(){var m=window.__mogging;' +
+          'if(m&&m.workspace&&m.workspace.count()===0)m.workspace.create({name:"Workspace 1"});return 1;})()'
+      )
+      await delay(2500)
       await ES(
         "window.__cap='';if(!window.__capHooked){window.__capHooked=true;" +
           "window.bridge.on('terminal:data',function(e){if(e&&e.id===1){window.__cap+=e.data;}});}"
@@ -61,7 +67,7 @@ export function runAgentLaunchSmoke(win: BrowserWindow): void {
           '(function(){var p=window.__mogging&&window.__mogging.panes&&window.__mogging.panes[0];return p?p.term.buffer.active.type:"?";})()'
         )
       )
-      const labeled = Boolean(await ES("!!document.querySelector('.pane-badge.has-label')"))
+      const labeled = Boolean(await ES("!!document.querySelector('.pane-label.has-label')"))
 
       const altEnter = /\x1b\[\?(?:1049|1047|47)h/.test(cap)
       const altScreen = bufType === 'alternate' || altEnter

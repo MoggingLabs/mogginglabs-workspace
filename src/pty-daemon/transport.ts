@@ -1,7 +1,7 @@
 // Socket/named-pipe server: framing, the version + auth-token handshake (unauthenticated
 // connections are dropped within seconds), and per-connection pane subscriptions. (ADR 0006.)
 import * as net from 'node:net'
-import { createLineFramer, encodeMessage, DAEMON_PROTOCOL_VERSION } from '@contracts'
+import { createLineFramer, encodeMessage, keyToBytes, DAEMON_PROTOCOL_VERSION } from '@contracts'
 import type { ClientMessage, ServerMessage } from '@contracts'
 import type { SessionManager, PaneSubscriber } from './session'
 import { log } from './lifecycle'
@@ -77,6 +77,26 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
         case 'list':
           send({ t: 'panes', panes: sessions.list() })
           break
+        case 'send-key': {
+          // Control API (Phase-3/01): the key is a NAME resolved against the closed
+          // allowlist HERE — a client can never inject arbitrary escape sequences.
+          const pane = sessions.get(m.id)
+          const bytes = keyToBytes(m.key)
+          if (pane && bytes != null) {
+            pane.write(bytes)
+            send({ t: 'sent', id: m.id, ok: true })
+          } else {
+            send({ t: 'error', reason: bytes == null ? 'badkey' : 'nopane' })
+          }
+          break
+        }
+        case 'capture': {
+          // Control API (Phase-3/01): scrollback tail to THIS caller only.
+          const pane = sessions.get(m.id)
+          if (pane) send({ t: 'captured', id: m.id, data: pane.captureTail(m.lastLines) })
+          else send({ t: 'error', reason: 'nopane' })
+          break
+        }
         case 'ping':
           send({ t: 'pong' })
           break

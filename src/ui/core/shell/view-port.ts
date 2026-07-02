@@ -2,7 +2,7 @@
 // The workspace feature reveals 'grid' on user-initiated workspace activation; Home
 // (and the rail's Home button) switches to 'home'. Pure pub/sub — no DOM here.
 
-export type AppView = 'home' | 'grid'
+export type AppView = 'home' | 'grid' | 'board'
 
 type Listener = (view: AppView) => void
 

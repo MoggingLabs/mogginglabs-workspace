@@ -15,7 +15,9 @@ import { join } from 'node:path'
 //     buffer loss), all 8 visible panes re-acquired WebGL, the frame budget held
 //     (worst gap ≤ 150ms — a dropped-frame stutter fails), and the renderer logged
 //     zero errors and never crashed.
-const BUDGET = { maxFrameGapMs: 150 }
+// PERCEPTION-anchored (docs/07): a >100 ms frame is a humanly visible hitch — the gate
+// is what a person can notice, not what the machine can survive (that's docs/05).
+const BUDGET = { maxFrameGapMs: 100 }
 
 const SCRIPT = `(async () => {
   const B = ${JSON.stringify(BUDGET)}

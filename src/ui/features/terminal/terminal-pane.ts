@@ -2,9 +2,15 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { SerializeAddon } from '@xterm/addon-serialize'
-import { ClipboardChannels, type GitStatus, type PaneId } from '@contracts'
+import {
+  ClipboardChannels,
+  WorktreeChannels,
+  type GitStatus,
+  type PaneId,
+  type RemoveWorktreeResult
+} from '@contracts'
 import '@xterm/xterm/css/xterm.css'
-import { icon, type IconName } from '../../components'
+import { icon, showToast, type IconName } from '../../components'
 import { getBridge } from '../../core/ipc/bridge'
 import { terminalClient } from './terminal.client'
 import { onTerminalTheme } from '../../core/theme/theme-port'
@@ -126,11 +132,18 @@ export class TerminalPane {
     })
     this.term.onData((data) => terminalClient.write({ id: this.id, data }))
 
-    this.resizeObs = new ResizeObserver(() => {
-      this.fit.fit()
-      terminalClient.resize({ id: this.id, cols: this.term.cols, rows: this.term.rows })
-    })
+    // ResizeObserver is the one true fit driver: it fires for real resizes AND for
+    // display flips (hidden→shown reports 0→W), including a window resized while this
+    // pane was hidden. Fits are UNGUARDED on purpose — mid-transition style reads can
+    // lie for one pass, and the follow-up observation converges to the true size.
+    this.resizeObs = new ResizeObserver(() => this.refit(true))
     this.resizeObs.observe(body)
+
+    // Font-metrics correctness: if any pane measured its cell size against a fallback
+    // font (or a stale activation state), its canvas renders narrower than the pane —
+    // a dead strip at the right edge. Once ALL faces are active, force a re-measure
+    // (fontFamily must actually change to invalidate xterm's char-size cache) + refit.
+    void document.fonts?.ready?.then(() => this.remeasureFont())
 
     void terminalClient.spawn({ id: this.id, cwd: '', cols: this.term.cols, rows: this.term.rows })
 
@@ -170,7 +183,10 @@ export class TerminalPane {
 
   /** Schedule a GL release for a hidden pane: debounced (a rapid flip back cancels it,
    *  keeping the context warm) + queue-serialized (a hidden 16-pane workspace tears
-   *  down one context per frame, never all at once). */
+   *  down one context per frame, never all at once). The 1.5 s quiet period is a
+   *  PERCEPTION-budget choice (docs/07): workspace switching within it is pure
+   *  show/hide — zero shader/atlas cost while the user is interacting — while a
+   *  workspace left in the background still frees its contexts promptly. */
   private scheduleRelease(): void {
     if (!this.webgl || this.glReleaseDebounce) return
     this.glReleaseDebounce = setTimeout(() => {
@@ -179,7 +195,46 @@ export class TerminalPane {
       enqueueGlJob(() => {
         if (!this.visible) this.releaseWebgl()
       })
-    }, 400)
+    }, 1500)
+  }
+
+  /** Re-fit the grid to the body and tell the PTY. The default path is cheap by
+   *  construction (propose, bail when unchanged/hidden — safe on hot churn paths);
+   *  `force` runs a real fit() for the reveal-settle case, where proposeDimensions
+   *  has been observed reading stale parent style. */
+  private refit(force = false): void {
+    try {
+      if (force) {
+        const before = { cols: this.term.cols, rows: this.term.rows }
+        this.fit.fit()
+        if (this.term.cols !== before.cols || this.term.rows !== before.rows) {
+          terminalClient.resize({ id: this.id, cols: this.term.cols, rows: this.term.rows })
+        }
+        return
+      }
+      const d = this.fit.proposeDimensions()
+      if (!d || !Number.isFinite(d.cols) || !Number.isFinite(d.rows)) return // hidden
+      if (d.cols === this.term.cols && d.rows === this.term.rows) return // nothing changed
+      this.term.resize(d.cols, d.rows)
+      terminalClient.resize({ id: this.id, cols: this.term.cols, rows: this.term.rows })
+    } catch (err) {
+      // Never swallow silently — a failing fit is exactly how "the terminal doesn't
+      // take its space" bugs hide.
+      console.warn(`pane ${this.id}: refit failed`, err)
+    }
+  }
+
+  /** Invalidate xterm's cached character metrics (the option must CHANGE to trigger a
+   *  re-measure) and refit — run once the document's fonts are fully active. */
+  private remeasureFont(): void {
+    try {
+      const fam = this.term.options.fontFamily ?? ''
+      this.term.options.fontFamily = fam + ', monospace' // metric-identical, string differs
+      this.term.options.fontFamily = fam
+      this.refit()
+    } catch {
+      /* disposed mid-flight */
+    }
   }
 
   /** Attach the WebGL renderer (idempotent; only while visible). On failure the pane simply
@@ -467,6 +522,44 @@ export class TerminalPane {
         if (cwd) void getBridge().invoke(ClipboardChannels.write, { text: cwd })
       })
     )
+    // Worktree-isolated pane (3/03): guarded removal. Dirty worktrees are refused with
+    // an explicit force step — an agent's uncommitted work is never silently destroyed.
+    const cwd = getPaneCwd(this.id) ?? ''
+    const wtMatch = /^(.*)[\\/]\.mogging[\\/]worktrees[\\/][^\\/]+$/.exec(cwd)
+    if (wtMatch) {
+      const repo = wtMatch[1]
+      const remove = (force: boolean): void => {
+        void (getBridge().invoke(WorktreeChannels.remove, { repo, path: cwd, force }) as Promise<RemoveWorktreeResult>).then(
+          (res) => {
+            if (res.ok) {
+              showToast({ tone: 'success', title: 'Worktree removed', body: 'Its branch is kept for review.' })
+            } else if (res.reason === 'dirty') {
+              showToast({
+                tone: 'danger',
+                title: 'Worktree has uncommitted changes',
+                body: 'Removing it destroys that work.',
+                timeout: 10000,
+                action: { label: 'Remove anyway', onClick: () => remove(true) }
+              })
+            } else {
+              showToast({ tone: 'danger', title: 'Could not remove worktree' })
+            }
+          }
+        )
+      }
+      const sep2 = document.createElement('div')
+      sep2.className = 'menu-sep'
+      menu.append(
+        sep2,
+        // Pre-ship review (3/04): the review feature owns the modal; this dispatches.
+        item('git-branch', 'Review changes…', () => {
+          document.dispatchEvent(
+            new CustomEvent('mogging:review-pane', { detail: { repo, worktree: cwd } })
+          )
+        }),
+        item('trash', 'Remove worktree…', () => remove(false))
+      )
+    }
     const agents = allCommands().filter((c) => c.hint === 'Agent')
     if (agents.length) {
       const sep = document.createElement('div')

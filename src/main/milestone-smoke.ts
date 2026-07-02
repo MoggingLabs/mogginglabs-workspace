@@ -121,10 +121,18 @@ const SCRIPT = `(async () => {
 
   // --- Phase B: background attention + GL release ------------------------------------------
   m.workspace.create({ name: 'Watch' }) // ws2 active; the 16-pane grid backgrounds
-  await sleep(1500)
+  await sleep(800)
   const ws1Tab = document.querySelectorAll('.workspace-tab')[0]
   const tabRing = ws1Tab ? ws1Tab.getAttribute('data-attention') : null
-  const domHidden = panes.filter((p) => p.renderer() === 'dom').length
+  // Hidden panes release their contexts after a deliberate 1.5s quiet window (the
+  // perception budget keeps GL warm through rapid flips — docs/07). The ASSERTION is
+  // unchanged (all 16 must release); the wait polls instead of assuming the timing.
+  let domHidden = 0
+  for (let i = 0; i < 20; i++) {
+    domHidden = panes.filter((p) => p.renderer() === 'dom').length
+    if (domHidden === 16) break
+    await sleep(400)
+  }
 
   m.workspace.switchByIndex(0) // back to the grid
   await sleep(1500)

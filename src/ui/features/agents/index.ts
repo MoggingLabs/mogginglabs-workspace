@@ -8,36 +8,18 @@ import { getTelemetry } from '../../core/telemetry'
 import { agentsClient } from './agents.client'
 
 /**
- * The agent launcher: a picker of installed CLIs (Claude Code, Codex, Gemini, Aider, OpenCode).
- * Launching one writes its command into a pane at the workspace cwd; the CLI self-authenticates
- * (BYO — ADR 0002). Two entry points, one launch path: the titlebar picker (focused pane) and
- * the ui-core agent-launch port (used by 06b template open + restore). Decoupled — targets panes
- * via the focus/pane-meta/launch ports, never importing `workspace` or `templates`.
+ * Agent launching (headless — no titlebar button by design: launching lives in the
+ * wizard, the pane ⋯ menu, and the command palette). Detects installed CLIs (Claude
+ * Code, Codex, Gemini, Aider, OpenCode), publishes one launch command per installed
+ * CLI on the command port, and services the ui-core agent-launch port (06b template
+ * opens + restore). Launching writes the CLI's own command into a pane; the CLI
+ * self-authenticates (BYO — ADR 0002).
  */
 export const agentsFeature: UiFeature = {
   name: 'agents',
-  mount(ctx) {
-    const wrap = document.createElement('div')
-    wrap.className = 'agent-launcher'
-    const btn = document.createElement('button')
-    btn.className = 'agent-launch-btn'
-    btn.type = 'button'
-    btn.textContent = 'Launch agent'
-    const menu = document.createElement('div')
-    menu.className = 'agent-menu'
-    menu.hidden = true
-    wrap.append(btn, menu)
-    ctx.titlebarRight.prepend(wrap)
-
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation()
-      menu.hidden = !menu.hidden
-    })
-    document.addEventListener('click', (e) => {
-      if (!wrap.contains(e.target as Node)) menu.hidden = true
-    })
-
+  mount() {
     const nameById = new Map<string, string>()
+    let installedIds: string[] = []
 
     void populate()
     // Template opens (06b) + restore drive launches through this port.
@@ -51,27 +33,8 @@ export const agentsFeature: UiFeature = {
         agents = []
       }
       for (const a of agents) nameById.set(a.id, a.name)
-      menu.innerHTML = ''
       const installed = agents.filter((a) => a.installed)
-      if (!installed.length) {
-        const empty = document.createElement('div')
-        empty.className = 'agent-menu-empty'
-        empty.textContent = 'No agent CLIs found on PATH'
-        menu.append(empty)
-        return
-      }
-      for (const agent of installed) {
-        const item = document.createElement('button')
-        item.className = 'agent-menu-item'
-        item.type = 'button'
-        item.textContent = agent.name
-        item.dataset.agentId = agent.id
-        item.addEventListener('click', () => {
-          menu.hidden = true
-          launchInFocused(agent.id)
-        })
-        menu.append(item)
-      }
+      installedIds = installed.map((a) => a.id)
       // Palette + pane-menu entries: one launch command per installed CLI.
       setCommands(
         'agents',
@@ -117,12 +80,8 @@ export const agentsFeature: UiFeature = {
       w.__mogging = w.__mogging ?? {}
       w.__mogging.agents = {
         detect: () => agentsClient.detect(),
-        items: () =>
-          Array.from(menu.querySelectorAll('.agent-menu-item')).map((el) => (el as HTMLElement).dataset.agentId),
-        launch: (agentId: string) => launchInFocused(agentId),
-        open: () => {
-          menu.hidden = false
-        }
+        items: () => installedIds.slice(),
+        launch: (agentId: string) => launchInFocused(agentId)
       }
     }
   }

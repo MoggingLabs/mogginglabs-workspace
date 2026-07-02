@@ -46,10 +46,32 @@ export const TelemetryChannels = {
   configChanged: 'telemetry:configChanged' // main -> renderer: consent changed, re-init
 } as const
 
+export const ControlChannels = {
+  /** main -> renderer: a VALIDATED layout control command (Phase-3/02). */
+  command: 'control:command'
+} as const
+
 export const ShellChannels = {
   /** Renderer -> main: retint the native window-control overlay to match the theme
    *  ({ color, symbolColor }). No-op on platforms without an overlay (macOS). */
   titlebarOverlay: 'shell:titlebarOverlay'
+} as const
+
+export const WorktreeChannels = {
+  create: 'worktrees:create', // (CreateWorktreeRequest) -> CreateWorktreeResult
+  list: 'worktrees:list', // (repo) -> WorktreeInfo[] (managed worktrees only)
+  remove: 'worktrees:remove' // (RemoveWorktreeRequest) -> RemoveWorktreeResult (dirty-safe)
+} as const
+
+export const BoardChannels = {
+  list: 'board:list', // -> BoardCard[] (local db only — card text is user content)
+  save: 'board:save', // (BoardCard) -> upsert
+  remove: 'board:remove' // (id) -> void
+} as const
+
+export const ReviewChannels = {
+  diff: 'review:diff', // (ReviewDiffRequest) -> ReviewDiff (REDACTED before transport)
+  merge: 'review:merge' // (ReviewMergeRequest) -> ReviewMergeResult (clean-repo gated)
 } as const
 
 export const GitChannels = {
@@ -64,8 +86,12 @@ export const AllChannels: readonly string[] = [
   ...Object.values(ClipboardChannels),
   ...Object.values(WorkspaceChannels),
   ...Object.values(TelemetryChannels),
+  ...Object.values(ControlChannels),
   ...Object.values(ShellChannels),
   ...Object.values(AgentChannels),
   ...Object.values(TemplateChannels),
+  ...Object.values(WorktreeChannels),
+  ...Object.values(ReviewChannels),
+  ...Object.values(BoardChannels),
   ...Object.values(GitChannels)
 ]

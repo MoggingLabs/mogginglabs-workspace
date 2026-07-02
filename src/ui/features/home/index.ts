@@ -23,6 +23,28 @@ const basename = (p: string): string => p.replace(/[/\\]+$/, '').split(/[/\\]/).
 const isMac = navigator.platform.toUpperCase().includes('MAC')
 const MOD = isMac ? '⌘' : 'Ctrl'
 
+/** Rotating welcome lines — one per app open (persisted index, not random, so every
+ *  launch greets differently). Name-ready: when accounts land, pass the user's name.
+ *  TODO(accounts): thread the signed-in name into greeting(). */
+const GREETINGS = [
+  'Welcome back',
+  'Good to see you',
+  'Ready when you are',
+  'Let’s ship something',
+  'The fleet awaits'
+]
+function greeting(name = ''): string {
+  let i = 0
+  try {
+    i = Number(localStorage.getItem('mogging.greetIndex') || '0') || 0
+    localStorage.setItem('mogging.greetIndex', String((i + 1) % GREETINGS.length))
+  } catch {
+    /* storage unavailable — first greeting it is */
+  }
+  const base = GREETINGS[i % GREETINGS.length]
+  return name ? `${base}, ${name}.` : `${base}.`
+}
+
 /**
  * Home / launcher: brand hero + primary actions + one-click recents + presets + a
  * keyboard-hint bar. First-run shows a designed empty state; returning users get
@@ -39,14 +61,7 @@ export const homeFeature: UiFeature = {
     const hero = el('div', { class: 'home-hero' }, [
       el('img', { class: 'home-logo', attrs: { src: './logo.png', alt: '' } }),
       el('h1', { class: 'home-title', text: 'MoggingLabs Workspace' }),
-      el('p', {
-        class: 'home-tagline',
-        text: 'Your keys, your CLIs — no subscription to us.'
-      }),
-      el('p', {
-        class: 'home-subline',
-        text: 'Run a fleet of coding agents in fast terminals, and always see who needs you.'
-      }),
+      el('p', { class: 'home-welcome', text: greeting() }),
       el('div', { class: 'home-ctas' }, [
         Button({
           label: 'New workspace',

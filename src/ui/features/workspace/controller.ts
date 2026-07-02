@@ -29,6 +29,7 @@ export interface CreateOpts {
   paneCount?: number
   activate?: boolean
   assignments?: string[]
+  paneCwds?: (string | null)[]
 }
 
 export interface SwitchOpts {
@@ -87,7 +88,8 @@ export class WorkspaceController {
       cwd: opts.cwd ?? '',
       ordinal,
       paneCount: opts.paneCount ?? 1,
-      assignments: opts.assignments
+      assignments: opts.assignments,
+      paneCwds: opts.paneCwds
     }
 
     const container = document.createElement('div')
@@ -137,11 +139,14 @@ export class WorkspaceController {
   }
 
   /** Seed each pane's cwd on the pane-cwd port — the reliable default for per-pane git
-   *  (2/03). OSC 7 later refines a pane's cwd if its shell emits it. */
+   *  (2/03). Worktree-isolated slots (3/03) seed their OWN path, so each pane's chip
+   *  shows its own branch. OSC 7 later refines a pane's cwd if its shell emits it. */
   private publishPaneCwds(meta: WorkspaceMeta): void {
-    if (!meta.cwd) return
     const base = meta.ordinal * 100
-    for (let i = 1; i <= meta.paneCount; i++) setPaneCwd((base + i) as PaneId, meta.cwd)
+    for (let i = 1; i <= meta.paneCount; i++) {
+      const cwd = meta.paneCwds?.[i - 1] || meta.cwd
+      if (cwd) setPaneCwd((base + i) as PaneId, cwd)
+    }
   }
 
   /** Build one rail item. Root keeps the `.workspace-tab` class + `data-attention`
@@ -414,6 +419,36 @@ export class WorkspaceController {
     this.active()?.layout.focusDir(dir)
   }
 
+  /** The workspace whose grid currently hosts a pane id (live panes only). */
+  private viewForPane(paneId: number): WorkspaceView | null {
+    for (const v of this.views.values()) {
+      if (v.layout.paneIds().includes(paneId as PaneId)) return v
+    }
+    return null
+  }
+
+  /** Control API (Phase-3/02): focus a pane anywhere — switches to its workspace. */
+  focusPane(paneId: number): void {
+    const v = this.viewForPane(paneId)
+    if (!v) return
+    this.switch(v.meta.id)
+    v.layout.focusPane(paneId)
+  }
+
+  /** Control API: toggle an expand mode on a pane anywhere. */
+  expandPaneById(paneId: number, mode: 'full' | 'col' | 'row'): void {
+    const v = this.viewForPane(paneId)
+    if (!v) return
+    this.switch(v.meta.id)
+    v.layout.toggleExpand(paneId, mode)
+  }
+
+  /** Control API: close a pane anywhere (last pane closes its workspace). */
+  closePaneById(paneId: number): void {
+    const v = this.viewForPane(paneId)
+    if (v) this.closePane(v.meta.id, paneId)
+  }
+
   /** Zoom/restore the active workspace's focused pane (Ctrl/Cmd+Shift+Enter). */
   toggleZoom(): void {
     this.active()?.layout.toggleZoom()
@@ -448,23 +483,26 @@ export class WorkspaceController {
       name: spec.name,
       cwd: spec.cwd,
       paneCount: spec.paneCount,
-      assignments: spec.assignments
+      assignments: spec.assignments,
+      paneCwds: spec.paneCwds
     })
     this.launchLineup(meta.id, false)
     return meta
   }
 
   /** Launch each non-shell pane's assigned CLI (06b). Delayed so the panes' PTYs are
-   *  spawned and ready. `resume` re-launches the lineup on restore. */
+   *  spawned and ready. `resume` re-launches the lineup on restore. Worktree-isolated
+   *  slots (3/03) launch at their OWN cwd — the agent cd's into its worktree. */
   launchLineup(id: string, resume: boolean): void {
     const view = this.views.get(id)
     const assignments = view?.meta.assignments
     if (!view || !assignments) return
     const base = view.meta.ordinal * 100
-    const cwd = view.meta.cwd
+    const meta = view.meta
     setTimeout(() => {
       assignments.forEach((provider, i) => {
         if (provider && provider !== 'shell') {
+          const cwd = meta.paneCwds?.[i] || meta.cwd
           requestAgentLaunch({ paneId: (base + i + 1) as PaneId, provider, cwd, resume })
         }
       })

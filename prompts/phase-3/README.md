@@ -25,19 +25,29 @@ is < 4000 chars.
 ## Sequence
 | # | File | Gate |
 |---|------|------|
-| 01 | `01-control-api-core.md` | `mogging list / send / send-key / capture` drive real panes over the daemon socket (control smoke green) |
-| 02 | `02-control-layout-ops.md` | `mogging open / layout / focus / expand / close-pane` drive the UI via a main-process control relay (smoke green) |
-| 03 | `03-worktree-per-agent.md` | Wizard/launcher "isolate in worktree" → one git worktree per agent pane, badge shows it, safe cleanup (smoke green) |
-| 04 | `04-preship-diff-review.md` | Per-worktree Review surface: secret-redacting, injection-resistant diff + explicit apply/merge guidance (smoke green) |
-| 05 | `05-kanban-board.md` | Board view: cards → "Start agent" launches into a pane with task context; card state follows pane attention (smoke green) |
-| 06 | `06-orchestration-milestone.md` | End-to-end demo asserted: board card → worktree agent → notify → review → merge, with the Phase-2 perf budget still green |
+| 01 | `01-control-api-core.md` | **DONE**: protocol v2 (send-key/capture + enriched PaneInfo + closed key allowlist); `mogging list/send/send-key/capture` w/ exit codes + well-known endpoint discovery; `docs/06-control-api.md`; MOGGING_CONTROL green (incl. auth exit 4 / badkey exit 2 / nopane exit 1), NOTIFY still green, survival probe verified against a closed app |
+| 02 | `02-control-layout-ops.md` | **DONE**: closed `ControlCommand` union + `sanitizeControl` gate in main; verbs ride `mogging://control` through the existing deep-link/single-instance relay (cold + running app); CLI `open/layout/focus/expand/close-pane` (+`--no-launch`); MOGGING_CONTROL2 green (open→expand→focus→close asserted on the real grid + 5 hostile payloads dropped at the gate); ATTENTION + PANEOPS still green |
+| 03 | `03-worktree-per-agent.md` | **DONE**: `@backend/features/worktrees` (execFile arg-arrays; add/list/remove ONLY; random slugs; dirty-safe removal + path-containment guard); wizard repo-gated "Isolate each agent in its own git worktree" toggle; per-slot `paneCwds` spec→controller→persistence (restore re-attaches, agents launch in their worktree, chips show distinct `mogging/<slug>` branches); pane ⋯ "Remove worktree…" with force-confirm toast; MOGGING_WORKTREE green (porcelain agrees, dirty refused, HEAD untouched) + GIT still green |
+| 04 | `04-preship-diff-review.md` | **DONE**: `@backend/features/review` (merge-base→working-tree diff of committed+uncommitted work, 2 MB cap, base recorded by 03 in the worktree git dir); pure `redact.ts` (PEM/AWS/GCP/GitHub/sk-/Slack/JWT + key=value scrub) runs BEFORE anything leaves the backend; Review modal renders hunks as text nodes only (never innerHTML) with typed-"merge" confirm; merge --no-ff clean-repo-gated, conflicts left paused for a terminal; pane ⋯ + palette entries; MOGGING_REVIEW green (redaction units, planted ghp_/sk- never reach the DOM, `<script>` line stays inert text, dirty→refused / clean→merged / conflict→paused all asserted) + WORKTREE still green |
+| 05 | `05-kanban-board.md` | **DONE**: `app_board` table (main-owned sqlite; card text = user content, local db ONLY — grep-verified zero telemetry/notify/log touches); view union +'board' with titlebar Board button (rail stays workspaces-only per user directive), palette `board:open`, Ctrl+Shift+G; four dnd lanes + card editor; card menu "Start <agent> on this…" → worktree-isolated 1-pane workspace via the open/worktree seams, task written as the agent's FIRST prompt over terminal:write, card binds paneId/workspaceId; live state via attention + pane-cwd ports (attention → orange "needs you" chip → jump; close → unbind, persisted); MOGGING_BOARD green (db round-trip across reload, bind, prompt-in-PTY, attention flag, unbind) + ATTENTION + MILESTONE still green |
+| 06 | `06-orchestration-milestone.md` | **DONE**: `MOGGING_ORCHESTRATION` asserts the WHOLE loop on an isolated temp repo — card → shell-provider start (worktree created, task = first prompt in the PTY) → scripted `mogging send` edits + plants a fake secret + commits → in-pane `mogging notify` flags card AND rail → `review:diff` shows the change with the secret `«redacted»` → `review:merge` lands the branch → card to done; Phase B re-runs the Phase-2 sampler with board visited + 12 live panes (3 isolated): **130.3 fps avg · 62.5 ms worst gap · 21 MB heap** vs the unchanged 150 ms/30 fps/300 MB budget; `docs/08-orchestration.md` (07 taken by the perception budget) + roadmap checkboxes; full qa sweep green (see below) |
 
-## Overall Definition of Done
+## Overall Definition of Done — MET (2026-07-02)
 - A scriptable fleet: everything the UI can do to panes/layouts is reachable from a
-  shell (`mogging …`), token-authed, never echoing credentials.
-- Agents work isolated (worktree each) and NOTHING lands without a human-reviewed diff.
-- The board makes "what should the fleet do next" a first-class surface.
-- `MOGGING_MILESTONE` + `MOGGING_FLICKER` stay green throughout; boundaries intact.
+  shell (`mogging …`), token-authed, never echoing credentials. ✅
+- Agents work isolated (worktree each) and NOTHING lands without a human-reviewed diff. ✅
+- The board makes "what should the fleet do next" a first-class surface. ✅
+- `MOGGING_MILESTONE` + `MOGGING_FLICKER` stay green throughout; boundaries intact. ✅
+
+## Phase-close sweep record (2026-07-02, `bash scripts/qa-smokes.sh`, fresh isolated state)
+**18/18 PASS**: SMOKE · MULTIPANE · ATTENTION · BLOCKS · GIT · NOTIFY · MILESTONE ·
+FLICKER · PERCEPTION · PANEOPS · CONTROL · CONTROL2 · WORKTREE · REVIEW · BOARD ·
+ORCHESTRATION · TEMPLATE_A · TEMPLATE_B.
+Key numbers: milestone 16-pane stress ≈118 fps avg / ≤50 ms worst / ~34 MB heap,
+16/16 GL lease cycle; perception switch 29 ms · zoom 23 ms · echo 1.4 ms · zero
+>100 ms frames; orchestration Phase B (board + 12 live panes, 3 isolated)
+130.3 fps avg / 62.5 ms worst / 21 MB heap vs the unchanged 150 ms/30 fps/300 MB
+budget; 1 planted secret redacted end-to-end.
 
 ## Global checks (every step)
 - `npm run typecheck` → 0; `npm run build` → ok.

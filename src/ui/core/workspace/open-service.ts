@@ -10,14 +10,23 @@ export interface TemplateWorkspaceSpec {
   cwd: string
   paneCount: number
   assignments: string[]
+  /** Per-slot cwd overrides (worktree isolation, Phase-3/03). null = workspace cwd. */
+  paneCwds?: (string | null)[]
 }
 
-let opener: ((spec: TemplateWorkspaceSpec) => void) | null = null
+/** Identity of the workspace an open created — enough for callers (e.g. the board,
+ *  Phase-3/05) to derive pane ids (ordinal*100+slot) without importing the feature. */
+export interface OpenedWorkspace {
+  id: string
+  ordinal: number
+}
 
-export function setWorkspaceOpener(fn: (spec: TemplateWorkspaceSpec) => void): void {
+let opener: ((spec: TemplateWorkspaceSpec) => OpenedWorkspace | null) | null = null
+
+export function setWorkspaceOpener(fn: (spec: TemplateWorkspaceSpec) => OpenedWorkspace | null): void {
   opener = fn
 }
 
-export function openWorkspaceFromTemplate(spec: TemplateWorkspaceSpec): void {
-  opener?.(spec)
+export function openWorkspaceFromTemplate(spec: TemplateWorkspaceSpec): OpenedWorkspace | null {
+  return opener ? opener(spec) : null
 }

@@ -7,8 +7,9 @@ import { homeFeature } from './features/home'
 import { terminalFeature } from './features/terminal'
 import { agentsFeature } from './features/agents'
 import { wizardFeature } from './features/wizard'
-import { agentStateFeature } from './features/agent-state'
 import { gitFeature } from './features/git'
+import { reviewFeature } from './features/review'
+import { boardFeature } from './features/board'
 import { paletteFeature } from './features/palette'
 import { settingsFeature } from './features/settings'
 import { notifyFeature } from './features/notify'
@@ -28,10 +29,11 @@ export function start(): void {
   registerFeature(workspaceFeature) // owns the rail + per-workspace grids; provides slots
   registerFeature(homeFeature) // launcher view: hero + recents + presets (net-new)
   registerFeature(terminalFeature)
-  registerFeature(agentsFeature) // agent launcher (picker -> focused pane)
+  registerFeature(agentsFeature) // agent detection + launch commands (wizard/palette/pane menu)
   registerFeature(wizardFeature) // new-workspace wizard: Start · Layout · Agents (06b contracts)
-  registerFeature(agentStateFeature)
   registerFeature(gitFeature) // per-pane read-only git branch + dirty (Phase-2/03)
+  registerFeature(reviewFeature) // pre-ship diff review: redacted, text-only, guarded merge (Phase-3/04)
+  registerFeature(boardFeature) // local Kanban board: cards that launch agents (Phase-3/05)
   registerFeature(paletteFeature) // Ctrl/Cmd+K command palette over the command port
   registerFeature(settingsFeature) // theme / defaults / telemetry consent (ADR 0005)
   registerFeature(notifyFeature) // toasts for background-pane attention (mogging notify)

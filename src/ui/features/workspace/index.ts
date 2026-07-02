@@ -1,7 +1,15 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import type { AgentState, PaneId, RecentWorkspace, WorkspaceState } from '@contracts'
+import {
+  ControlChannels,
+  type AgentState,
+  type ControlCommand,
+  type PaneId,
+  type RecentWorkspace,
+  type WorkspaceState
+} from '@contracts'
+import { getBridge } from '../../core/ipc/bridge'
 import { TEMPLATE_COUNTS, TEMPLATES } from '../layout'
-import { IconButton, MiniGridPreview, el, icon } from '../../components'
+import { IconButton, MiniGridPreview, el } from '../../components'
 import { WorkspaceController, type CreateOpts } from './controller'
 import { workspaceClient } from './workspace.client'
 import { DEFAULT_THEME_ID } from '../../core/theme/themes'
@@ -13,7 +21,7 @@ import {
 } from '../../core/workspace/workspace-info-port'
 import { openWizard } from '../../core/workspace/wizard-port'
 import { setActiveView, activeView } from '../../core/shell/view-port'
-import { setCommands, runCommand } from '../../core/commands/command-port'
+import { setCommands } from '../../core/commands/command-port'
 import { setPaneState } from '../../core/attention/attention-port'
 
 const MAX_RECENTS = 5 // Home shows the five most recent projects worked on
@@ -54,30 +62,8 @@ export const workspaceFeature: UiFeature = {
     const tabs = el('div', { class: '', role: 'list' })
     tabs.id = 'workspace-tabs'
 
-    const footer = el('div', { class: 'rail-footer' }, [
-      el(
-        'button',
-        {
-          class: 'rail-btn',
-          type: 'button',
-          title: 'Home (Ctrl+Shift+H)',
-          onClick: () => setActiveView(activeView() === 'home' ? 'grid' : 'home')
-        },
-        [icon('home', 14), el('span', { class: 'rail-btn-label', text: 'Home' })]
-      ),
-      el(
-        'button',
-        {
-          class: 'rail-btn',
-          type: 'button',
-          title: 'Settings',
-          onClick: () => runCommand('settings:open')
-        },
-        [icon('settings', 14), el('span', { class: 'rail-btn-label', text: 'Settings' })]
-      )
-    ])
-
-    ctx.rail.append(header, tabs, footer)
+    // The rail is workspaces-only by design — navigation (Home) lives in the top bar.
+    ctx.rail.append(header, tabs)
 
     const host = el('div', {})
     host.id = 'workspace-host'
@@ -97,7 +83,8 @@ export const workspaceFeature: UiFeature = {
           cwd: m.cwd,
           ordinal: m.ordinal,
           paneCount: m.paneCount,
-          assignments: m.assignments
+          assignments: m.assignments,
+          paneCwds: m.paneCwds
         })),
         activeId: controller.activeMeta()?.id ?? null,
         theme: currentThemeId(),
@@ -158,7 +145,10 @@ export const workspaceFeature: UiFeature = {
 
     setWorkspaceSwitcher((id) => controller.switch(id))
     // 06b: the wizard/templates open workspaces from a provider-mix spec.
-    setWorkspaceOpener((spec) => controller.openFromTemplate(spec))
+    setWorkspaceOpener((spec) => {
+      const meta = controller.openFromTemplate(spec)
+      return { id: meta.id, ordinal: meta.ordinal }
+    })
 
     function newWorkspace(): void {
       // The wizard is the rich path; fall back to an instant workspace if it isn't up.
@@ -258,8 +248,43 @@ export const workspaceFeature: UiFeature = {
     // `mogging .` deep link -> open/focus a workspace for the directory.
     workspaceClient.onOpenCwd((cwd) => controller.openForCwd(cwd))
 
+    // Phase-3/02 layout verbs — already VALIDATED in main against the closed union;
+    // the renderer only ever sees clean ControlCommand objects.
+    getBridge().on(ControlChannels.command, (payload) => {
+      const cmd = payload as ControlCommand
+      switch (cmd.verb) {
+        case 'open':
+          if (cmd.cwd) {
+            controller.openForCwd(cmd.cwd)
+            if (cmd.panes) controller.applyTemplate(cmd.panes)
+          }
+          break
+        case 'layout':
+          if (cmd.panes) controller.applyTemplate(cmd.panes)
+          break
+        case 'focus':
+          if (cmd.paneId) controller.focusPane(cmd.paneId)
+          break
+        case 'expand':
+          if (cmd.paneId) controller.expandPaneById(cmd.paneId, cmd.mode ?? 'full')
+          break
+        case 'close-pane':
+          if (cmd.paneId) controller.closePaneById(cmd.paneId)
+          break
+      }
+    })
+
     // ── Command-palette entries ──────────────────────────────────────────────
+    // Republishing is skipped when the workspace SET is unchanged — switching
+    // workspaces must not rebuild command lists (perception budget, docs/07).
+    let commandsSig = ''
     function publishCommands(): void {
+      const sig = controller
+        .list()
+        .map((m) => `${m.id}:${m.name}`)
+        .join('|')
+      if (sig === commandsSig) return
+      commandsSig = sig
       const wsCommands = controller.list().map((m, i) => ({
         id: `workspace:switch:${m.id}`,
         title: `Switch to “${m.name}”`,
@@ -326,7 +351,8 @@ export const workspaceFeature: UiFeature = {
             ordinal: w.ordinal,
             paneCount: w.paneCount,
             activate: false,
-            assignments: w.assignments
+            assignments: w.assignments,
+            paneCwds: w.paneCwds // worktree panes re-attach to their worktrees (3/03)
           })
         }
         // 06b: re-launch each template workspace's lineup (each CLI self-auths on resume).
