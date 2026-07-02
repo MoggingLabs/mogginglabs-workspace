@@ -45,6 +45,17 @@ export interface Claim {
 
 export const CLAIM_PATTERN_MAX = 256
 
+// ── Reviewer gate (Phase-4/03) ─────────────────────────────────────────────────
+/** A reviewer sign-off for a branch. Memory-only coordination data — never
+ *  persisted, never telemetered. The ROLE is resolved daemon-side from the pane
+ *  binding; a client cannot claim reviewer-ness in a payload. */
+export interface Approval {
+  branch: string
+  byPaneId: string
+  byRole: SwarmRole
+  ts: number
+}
+
 /** Validate + normalize a claim pattern: repo-relative glob, forward slashes, no
  *  `..`, no absolute/drive roots. Returns null when the shape is unacceptable. */
 export function normalizeClaimPattern(raw: string): string | null {
@@ -144,6 +155,12 @@ export type ClientMessage =
   | { t: 'claim'; pattern: string; from: string }
   | { t: 'release'; pattern?: string; all?: boolean; from: string }
   | { t: 'owners' }
+  // Reviewer gate (Phase-4/03). `from` is the approver's pane binding; the daemon
+  // checks THAT pane's role — payload role claims don't exist, by design.
+  | { t: 'approve'; branch: string; from: string }
+  | { t: 'approvals' }
+  // App-side hook: a branch's worktree was removed -> its approval dies with it.
+  | { t: 'unapprove'; branch: string }
 
 /** daemon -> client */
 export type ServerMessage =
@@ -167,6 +184,8 @@ export type ServerMessage =
   | { t: 'claim-denied'; pattern: string; ownerPaneId: string } // overlap — owner named
   | { t: 'released'; count: number } // ack for release
   | { t: 'owners'; claims: Claim[] } // reply to `owners` + PUSHED to all clients on change
+  | { t: 'approved'; branch: string; byPaneId: string; byRole: string } // sign-off ack
+  | { t: 'approvals'; list: Approval[] } // reply to `approvals`
 
 /** Notify events an agent/hook can raise via `mogging notify` (Phase-2/04). A small, closed
  *  vocabulary that maps to a pane AgentState — a label only, never PTY content (ADR 0002). */

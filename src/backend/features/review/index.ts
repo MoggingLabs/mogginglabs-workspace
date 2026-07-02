@@ -112,9 +112,15 @@ export async function diffWorktree(repo: string, worktree: string): Promise<Revi
 }
 
 /** The ONE mutating verb: merge a worktree branch into the repo, --no-ff, ONLY when
- *  the repo is clean. Conflicts are reported and left in progress for a human
- *  terminal — never auto-resolved, never abandoned silently. */
-export async function mergeBranch(repo: string, branch: string): Promise<ReviewMergeResult> {
+ *  the repo is clean AND the reviewer gate is open (4/03): a live sign-off, or the
+ *  human override word typed VERBATIM. Conflicts are reported and left in progress
+ *  for a human terminal — never auto-resolved, never abandoned silently. */
+export async function mergeBranch(
+  repo: string,
+  branch: string,
+  gate: { approved: boolean; override?: string } = { approved: false }
+): Promise<ReviewMergeResult> {
+  if (!gate.approved && gate.override !== 'override') return { ok: false, state: 'ungated' }
   if (!/^[A-Za-z0-9._/-]+$/.test(branch)) return { ok: false, state: 'error', error: 'bad branch name' }
   const status = await git(repo, ['status', '--porcelain'])
   if (!status.ok) return { ok: false, state: 'error', error: status.error }

@@ -48,6 +48,31 @@ mogging owners [--json]          # the full map, also live in every pane: ⋯ ->
 - The ledger ADVISES. It never blocks PTY writes or file I/O — the reviewer gate
   (4/03) is where strays get caught, with a diff in hand.
 
+## Reviewer gate (4/03)
+
+Nothing an agent wrote lands without sign-off. The app's merge verb (the Review
+modal, 3/04) is fronted by a gate:
+
+```sh
+mogging approve mogging/<slug>    # from the REVIEWER pane — exit 6 for anyone else
+mogging approvals [--json]        # the live sign-off list
+```
+
+- Roles are checked **at the daemon** against the pane binding — a client cannot
+  claim reviewer-ness in a payload (the field doesn't exist).
+- Unapproved merges return `ungated`; the Review modal then offers **Override &
+  merge…**, demanding the typed word `override` verbatim — a human can always land,
+  deliberately. With a sign-off, the normal typed `merge` applies.
+- Approvals are memory-only coordination data; removing a branch's worktree clears
+  its sign-off (approvals are for live work). Fail-closed: no reachable daemon means
+  no approvals.
+- The gate gates OUR merge verb only — your own `git merge` in a terminal is your
+  right; we never touch your repo's config or hooks.
+
+The reviewer agent's loop, scriptable end to end:
+`mogging mail read` → inspect the diff (`mogging capture`, or its own checkout) →
+`mogging approve mogging/<slug>` → mail the worker back.
+
 ## The contract agents are told (first prompt material)
 
 > You share this repo with other agents. Before editing any file:

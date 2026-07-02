@@ -9,6 +9,12 @@ import { TerminalChannels, LedgerChannels } from '@contracts'
 import type { SpawnRequest, WriteCommand, ResizeCommand, KillCommand, SetRoleCommand } from '@contracts'
 import { ensureDaemon, DaemonClient } from './daemon-client'
 
+// The one live daemon connection, for other main modules (review gate 4/03).
+let activeClient: DaemonClient | null = null
+export function getDaemonClient(): DaemonClient | null {
+  return activeClient
+}
+
 /** Connect to (or spawn) the daemon and bridge the terminal channels to it.
  *  Returns a disposer that detaches the client WITHOUT killing the daemon (survival). */
 export async function startDaemonBackend(getWebContents: () => WebContents | null): Promise<() => void> {
@@ -23,6 +29,7 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     onOwners: (claims) => getWebContents()?.send(LedgerChannels.owners, { claims })
   })
   await client.connect()
+  activeClient = client
   client.requestOwners() // seed the renderer's claim chips; pushes keep them live
 
   ipcMain.handle(TerminalChannels.spawn, (_e, req: SpawnRequest) => {
@@ -33,5 +40,8 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
   ipcMain.on(TerminalChannels.kill, (_e, cmd: KillCommand) => client.kill(String(cmd.id)))
   ipcMain.on(TerminalChannels.setRole, (_e, cmd: SetRoleCommand) => client.setRole(String(cmd.id), cmd.role))
 
-  return () => client.dispose()
+  return () => {
+    if (activeClient === client) activeClient = null
+    client.dispose()
+  }
 }

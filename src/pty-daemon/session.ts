@@ -7,7 +7,7 @@
 // daemon self-recovers on a cold start / crash and repaints prior scrollback (Phase-1/03).
 import * as os from 'node:os'
 import * as pty from 'node-pty'
-import type { SpawnSpec, PaneInfo, AgentState } from '@contracts'
+import type { Approval, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { notifyEventToState } from '@contracts'
 import { OscParser, fileUriToPath } from '@backend/features/agent-state'
 import { SessionStore, resumeCommandFor } from '@backend/features/workspace'
@@ -179,6 +179,8 @@ export class SessionManager {
   readonly mailbox = new Mailbox()
   /** Ownership ledger (Phase-4/02): claims die with their pane. */
   readonly ledger = new Ledger()
+  /** Reviewer gate (Phase-4/03): branch sign-offs. Memory-only coordination data. */
+  readonly approvals = new Map<string, Approval>()
 
   // extraEnv is injected into every pane's shell env (e.g. MOGGING_DAEMON_ENDPOINT for notify).
   constructor(

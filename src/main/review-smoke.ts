@@ -115,11 +115,12 @@ export function runReviewSmoke(win: BrowserWindow): void {
       await ES(`(() => { const m = document.querySelector('.review-modal'); m && m.parentElement.remove(); return 1 })()`)
 
       // ── D. Merge: dirty refused -> clean merges -> conflict pauses ───────────
+      // 4/03: the reviewer gate now fronts the merge verb — this smoke exercises the
+      // HUMAN path (typed override); the reviewer path is MOGGING_GATE's job.
       const mergeVia = (branch: string): Promise<{ ok: boolean; state: string }> =>
-        ES(`window.bridge.invoke('review:merge', ${JSON.stringify({ repo, branch })})`) as Promise<{
-          ok: boolean
-          state: string
-        }>
+        ES(
+          `window.bridge.invoke('review:merge', ${JSON.stringify({ repo, branch, override: 'override' })})`
+        ) as Promise<{ ok: boolean; state: string }>
 
       writeFileSync(join(repo, 'README.md'), 'line one\nline two DIRTY\nline three\n')
       const dirtyRes = await mergeVia(wt.branch)

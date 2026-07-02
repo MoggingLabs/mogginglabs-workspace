@@ -9,6 +9,7 @@ import * as path from 'node:path'
 import { spawn } from 'node:child_process'
 import { createLineFramer, encodeMessage, DAEMON_PROTOCOL_VERSION } from '@contracts'
 import type {
+  Approval,
   Claim, ClientMessage, ServerMessage, DaemonEndpoint, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 
 // --- endpoint discovery paths (MUST match src/pty-daemon/lifecycle.ts) ---
@@ -87,6 +88,7 @@ export interface DaemonEvents {
 
 export class DaemonClient {
   private sock: net.Socket | null = null
+  private approvalWaiters: Array<(list: Approval[]) => void> = []
   constructor(
     private readonly endpoint: DaemonEndpoint,
     private readonly events: DaemonEvents = {}
@@ -148,6 +150,11 @@ export class DaemonClient {
       case 'owners':
         this.events.onOwners?.(m.claims)
         break
+      case 'approvals': {
+        const waiter = this.approvalWaiters.shift()
+        waiter?.(m.list)
+        break
+      }
       case 'error':
         // surfaced via logs; a well-behaved client rarely hits this
         break
@@ -178,6 +185,29 @@ export class DaemonClient {
   /** Ownership ledger (4/02): ask for the current claim set (pushes follow). */
   requestOwners(): void {
     this.send({ t: 'owners' })
+  }
+  /** Reviewer gate (4/03): the live sign-off list (empty on timeout/disconnect —
+   *  fail CLOSED: no reachable daemon means no approvals). */
+  queryApprovals(timeoutMs = 3000): Promise<Approval[]> {
+    return new Promise((resolveQ) => {
+      let settled = false
+      const finish = (list: Approval[]): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolveQ(list)
+      }
+      const timer = setTimeout(() => {
+        this.approvalWaiters = this.approvalWaiters.filter((w) => w !== finish)
+        finish([])
+      }, timeoutMs)
+      this.approvalWaiters.push(finish)
+      this.send({ t: 'approvals' })
+    })
+  }
+  /** Reviewer gate (4/03): a removed worktree's branch loses its sign-off. */
+  unapprove(branch: string): void {
+    this.send({ t: 'unapprove', branch })
   }
   resize(id: string, cols: number, rows: number): void {
     this.send({ t: 'resize', id, cols, rows })

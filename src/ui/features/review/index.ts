@@ -111,6 +111,13 @@ async function openReview(repo: string, worktree: string): Promise<void> {
   const footer = el('div', { class: 'review-footer' })
   const rebuildFooter = (): void => {
     footer.replaceChildren()
+    // Reviewer gate (4/03): the sign-off state is always visible; unapproved merges
+    // demand the DISTINCT typed word "override" — a human can always land, deliberately.
+    const gated = diff.approved !== true
+    const gateChip = el('span', {
+      class: `review-gate ${gated ? 'review-gate-closed' : 'review-gate-open'}`,
+      text: gated ? 'No reviewer sign-off' : 'Approved by reviewer'
+    })
     const copy = Button({
       label: 'Copy patch',
       onClick: () => {
@@ -119,26 +126,34 @@ async function openReview(repo: string, worktree: string): Promise<void> {
         showToast({ tone: 'success', title: 'Patch copied (redacted)' })
       }
     })
+    const confirmWord = gated ? 'override' : 'merge'
     const merge = Button({
-      label: `Merge into ${diff.base}…`,
+      label: gated ? `Override & merge into ${diff.base}…` : `Merge into ${diff.base}…`,
       variant: 'primary',
       disabled: !diff.branch || diff.files.length === 0,
       onClick: () => {
-        // Typed confirmation: the word "merge", exactly — clicks can't land a merge.
+        // Typed confirmation — clicks can't land a merge; ungated needs "override".
         footer.replaceChildren()
         const input = el('input', {
           class: 'review-confirm-input',
-          attrs: { type: 'text', placeholder: `type "merge" to merge ${diff.branch} into ${diff.base}` }
+          attrs: {
+            type: 'text',
+            placeholder: `type "${confirmWord}" to merge ${diff.branch} into ${diff.base}`
+          }
         }) as HTMLInputElement
         const go = Button({
-          label: 'Confirm merge',
+          label: gated ? 'Confirm override' : 'Confirm merge',
           variant: 'primary',
           onClick: () => {
-            if (input.value.trim().toLowerCase() !== 'merge') {
-              showToast({ tone: 'danger', title: 'Type "merge" to confirm' })
+            if (input.value.trim().toLowerCase() !== confirmWord) {
+              showToast({ tone: 'danger', title: `Type "${confirmWord}" to confirm` })
               return
             }
-            void (getBridge().invoke(ReviewChannels.merge, { repo, branch: diff.branch }) as Promise<ReviewMergeResult>).then(
+            void (getBridge().invoke(ReviewChannels.merge, {
+              repo,
+              branch: diff.branch,
+              override: gated ? input.value.trim().toLowerCase() : undefined
+            }) as Promise<ReviewMergeResult>).then(
               (res) => {
                 if (res.state === 'merged') {
                   showToast({ tone: 'success', title: `Merged ${diff.branch} into ${diff.base}` })
@@ -148,6 +163,13 @@ async function openReview(repo: string, worktree: string): Promise<void> {
                     tone: 'danger',
                     title: 'Repo has uncommitted changes',
                     body: 'Commit or stash in the repo first — the merge was not started.'
+                  })
+                  rebuildFooter()
+                } else if (res.state === 'ungated') {
+                  showToast({
+                    tone: 'attention',
+                    title: 'No reviewer sign-off',
+                    body: 'A reviewer pane must `mogging approve` this branch — or use the typed override.'
                   })
                   rebuildFooter()
                 } else if (res.state === 'conflict') {
@@ -173,7 +195,7 @@ async function openReview(repo: string, worktree: string): Promise<void> {
       }
     })
     const close = Button({ label: 'Close', onClick: () => modal.close() })
-    footer.append(copy, merge, close)
+    footer.append(gateChip, copy, merge, close)
   }
   rebuildFooter()
   modal.setFooter(footer)

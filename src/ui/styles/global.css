@@ -2374,6 +2374,23 @@ body.resizing * {
   justify-content: flex-end;
   width: 100%;
 }
+.review-gate {
+  flex: none;
+  margin-right: auto;
+  font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
+  border-radius: 999px;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+}
+.review-gate-open {
+  color: var(--success);
+  border-color: var(--success);
+}
+.review-gate-closed {
+  color: var(--danger);
+  border-color: var(--danger);
+}
 .review-confirm-input {
   flex: 1 1 auto;
   min-width: 0;

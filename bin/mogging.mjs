@@ -34,6 +34,8 @@ else if (cmd === 'role') runRole(argv.slice(1))
 else if (cmd === 'claim') runClaim(argv.slice(1))
 else if (cmd === 'release') runRelease(argv.slice(1))
 else if (cmd === 'owners') runOwners(argv.slice(1))
+else if (cmd === 'approve') runApprove(argv.slice(1))
+else if (cmd === 'approvals') runApprovals(argv.slice(1))
 else if (cmd === 'open') runControlOpen(argv.slice(1))
 else if (cmd === 'layout') runControl({ verb: 'layout', panes: Number(argv[1]) }, argv)
 else if (cmd === 'focus') runControl({ verb: 'focus', paneId: Number(argv[1]) }, argv)
@@ -51,9 +53,62 @@ function usage(code) {
       '       mogging expand <pane> [full|col|row] | close-pane <pane>   (each: [--no-launch])\n' +
       '       mogging mail send [--to <pane>|all] <text...> | mail read [--since <id>] [--json]\n' +
       '       mogging role <pane> <architect|worker|reviewer>\n' +
-      '       mogging claim <pattern> | release <pattern|--all> | owners [--json]   (in-pane)\n'
+      '       mogging claim <pattern> | release <pattern|--all> | owners [--json]   (in-pane)\n' +
+      '       mogging approve <branch> (reviewer pane only) | approvals [--json]\n'
   )
   process.exit(code)
+}
+
+// --- mogging approve/approvals (Phase-4/03 reviewer gate) -----------------------------------------
+// Only a pane whose DAEMON-SIDE role is `reviewer` may approve; the payload carries
+// the pane binding, never a role claim. Exit codes: 0 ok · 2 usage · 3/4 as usual ·
+// **6 notreviewer**.
+
+function runApprove(args) {
+  const branch = args[0]
+  if (!branch) usage(2)
+  const from = paneIdentityOrUsage()
+  withDaemon(
+    (welcome, api) => {
+      api.send({ t: 'approve', branch, from })
+    },
+    (m, api) => {
+      if (m.t === 'approved') {
+        process.stdout.write('mogging: ' + m.branch + ' approved by pane ' + m.byPaneId + '\n')
+        api.finish(0)
+      } else if (m.t === 'error') {
+        if (m.reason === 'notreviewer') {
+          process.stderr.write('mogging approve: this pane is not the reviewer\n')
+          api.finish(6)
+        } else {
+          process.stderr.write('mogging approve: rejected (' + m.reason + ')\n')
+          api.finish(m.reason === 'nopane' ? 1 : 2)
+        }
+      }
+    }
+  )
+}
+
+function runApprovals(args) {
+  const asJson = args.includes('--json')
+  withDaemon(
+    (welcome, api) => {
+      api.send({ t: 'approvals' })
+    },
+    (m, api) => {
+      if (m.t !== 'approvals') return
+      if (asJson) {
+        process.stdout.write(JSON.stringify(m.list) + '\n')
+      } else if (!m.list.length) {
+        process.stdout.write('no approvals\n')
+      } else {
+        for (const a of m.list) {
+          process.stdout.write(a.branch + ' — approved by pane ' + a.byPaneId + '\n')
+        }
+      }
+      api.finish(0)
+    }
+  )
 }
 
 // --- mogging claim/release/owners (Phase-4/02 ownership ledger) -----------------------------------

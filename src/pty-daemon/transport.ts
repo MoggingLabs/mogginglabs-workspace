@@ -156,6 +156,33 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
         case 'owners':
           send({ t: 'owners', claims: sessions.ledger.owners() })
           break
+        // ── Reviewer gate (Phase-4/03): role-checked DAEMON-SIDE against the pane
+        // binding — the payload never carries a role. Approvals are memory-only. ──
+        case 'approve': {
+          if (typeof m.from !== 'string' || !m.from || !sessions.has(m.from)) {
+            send({ t: 'error', reason: 'nopane' })
+            break
+          }
+          const role = sessions.mailbox.roleOf(m.from)
+          if (role !== 'reviewer') {
+            send({ t: 'error', reason: 'notreviewer' })
+            break
+          }
+          if (typeof m.branch !== 'string' || !m.branch || m.branch.length > 256) {
+            send({ t: 'error', reason: 'badbranch' })
+            break
+          }
+          sessions.approvals.set(m.branch, { branch: m.branch, byPaneId: m.from, byRole: role, ts: Date.now() })
+          send({ t: 'approved', branch: m.branch, byPaneId: m.from, byRole: role })
+          break
+        }
+        case 'approvals':
+          send({ t: 'approvals', list: [...sessions.approvals.values()] })
+          break
+        case 'unapprove':
+          // The branch's worktree is gone (app-side removal) — sign-off dies with it.
+          if (typeof m.branch === 'string') sessions.approvals.delete(m.branch)
+          break
         case 'ping':
           send({ t: 'pong' })
           break

@@ -28,18 +28,24 @@ export interface ReviewDiff {
   truncated: boolean
   /** How many secret-pattern hits were scrubbed (a COUNT — never the content). */
   redactions: number
+  /** Reviewer gate (4/03): does this branch hold a live sign-off? */
+  approved?: boolean
   error?: string
 }
 
 export interface ReviewMergeRequest {
   repo: string
   branch: string
+  /** Human override for an unapproved branch: must be the word 'override' VERBATIM
+   *  (typed in the modal). Anything else leaves the gate closed. */
+  override?: string
 }
 
 export interface ReviewMergeResult {
   ok: boolean
   /** merged | conflict (left in progress for a human terminal) | dirty (repo not
-   *  clean — refused) | error. Never auto-resolved. */
-  state: 'merged' | 'conflict' | 'dirty' | 'error'
+   *  clean — refused) | ungated (no reviewer sign-off + no typed override, 4/03) |
+   *  error. Never auto-resolved. */
+  state: 'merged' | 'conflict' | 'dirty' | 'ungated' | 'error'
   error?: string
 }

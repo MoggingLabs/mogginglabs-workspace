@@ -47,13 +47,17 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
   const cliPath = join(app.getAppPath(), 'bin', 'mogging.mjs')
 
-  const cli = (args: string[]): Promise<{ code: number; stdout: string }> =>
+  const cli = (args: string[], extraEnv: Record<string, string> = {}): Promise<{ code: number; stdout: string }> =>
     new Promise((resolveCli) => {
       execFile(
         process.execPath,
         [cliPath, ...args],
-        { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, timeout: 20000, windowsHide: true },
-        (err, stdout) => resolveCli({ code: err ? 1 : 0, stdout: String(stdout) })
+        { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ...extraEnv }, timeout: 20000, windowsHide: true },
+        (err, stdout) =>
+          resolveCli({
+            code: err ? ((err as unknown as { code?: number }).code ?? 1) : 0,
+            stdout: String(stdout)
+          })
       )
     })
 
@@ -147,11 +151,21 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
         diff.files.some((f) => f.path === 'stolen.txt')
       const redactOk = diff.redactions >= 1 && !diffText.includes(SECRET) && diffText.includes('redacted')
 
-      // ── A6. Guarded merge lands the branch ───────────────────────────────────
+      // ── A6. The reviewer gate (4/03), then the guarded merge lands the branch ──
+      // The loop now includes sign-off: an ungated merge is REFUSED; the pane becomes
+      // the reviewer and approves; then the same merge succeeds.
+      const ungated = (await ES(
+        `window.bridge.invoke('review:merge', ${JSON.stringify({ repo, branch: diff.branch })})`
+      )) as { ok: boolean; state: string }
+      await cli(['role', String(paneId), 'reviewer'])
+      const approveRes = await cli(['approve', diff.branch], { MOGGING_PANE_ID: String(paneId) })
       const merge = (await ES(
         `window.bridge.invoke('review:merge', ${JSON.stringify({ repo, branch: diff.branch })})`
       )) as { ok: boolean; state: string }
       const mergeOk =
+        ungated.ok === false &&
+        ungated.state === 'ungated' &&
+        approveRes.code === 0 &&
         merge.ok === true &&
         merge.state === 'merged' &&
         readFileSync(join(repo, 'README.md'), 'utf8').includes(CHANGE)
@@ -240,6 +254,8 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
         redactOk,
         redactions: diff.redactions,
         mergeOk,
+        ungated,
+        approveExit: approveRes.code,
         doneOk,
         phaseB,
         phaseBOk,
