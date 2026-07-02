@@ -1072,6 +1072,29 @@ button {
 .pane-header .pane-actions {
   grid-column: 3;
 }
+/* Remote pane chip (4/05): WHERE the pane lives — a distinct cool tint so remote
+   never reads as local. */
+.pane-remote {
+  flex: none;
+  font-size: var(--fs-10);
+  font-weight: var(--fw-semibold);
+  color: #58a6ff;
+  border: 1px solid #58a6ff;
+  border-radius: 3px;
+  padding: 0 4px;
+  line-height: 14px;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menu-note {
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--text-lo);
+  font-size: var(--fs-10);
+  max-width: 220px;
+}
+
 /* Ownership chip (4/02) + claims modal. */
 .pane-claims {
   flex: none;

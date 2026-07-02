@@ -89,6 +89,25 @@ refused at save — the mistake is impossible, not discouraged.
   CLI is interrupted (^C); the shell/PTY and scrollback survive. One hop per event.
 - Per-workspace auto-failover: palette -> "Toggle auto-failover for this workspace".
 
+## Remote (SSH) panes (4/05)
+
+The fleet doesn't end at this machine. A saved host (`RemoteChannels` — connection
+POINTERS: name/host/user/port; your ssh config + agent do ALL auth, ADR 0002) turns a
+pane into `ssh -tt [-p port] [user@]host` — spawned by the daemon as the pane process,
+exit of ssh = pane exit. Workspaces MIX local and remote panes per slot.
+
+Honesty over convenience: a remote pane wears a distinct host chip; the git chip is
+HIDDEN (a local probe would lie about a remote cwd — OSC 7 from the remote shell may
+refine it honestly); worktrees/review are off with a stated reason in the pane menu.
+
+OSC state, `mogging notify`, mail, and claims all work from the remote side when
+`mogging` is installed there and the endpoint is forwarded, e.g.:
+
+```sh
+ssh -R /tmp/mogging.sock:$(mogging endpoint --path) host   # or set
+MOGGING_DAEMON_ENDPOINT=/path/to/forwarded/endpoint.json   # in the remote shell
+```
+
 ## The contract agents are told (first prompt material)
 
 > You share this repo with other agents. Before editing any file:

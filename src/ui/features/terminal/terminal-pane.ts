@@ -17,7 +17,7 @@ import { onTerminalTheme } from '../../core/theme/theme-port'
 import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
 import { setPaneState, clearPaneState } from '../../core/attention/attention-port'
 import { setPaneCwd, clearPaneCwd, getPaneCwd } from '../../core/layout/pane-cwd'
-import { getPaneRole, onPaneRole } from '../../core/layout/pane-meta'
+import { getPaneRole, onPaneRole, getPaneRemote } from '../../core/layout/pane-meta'
 import { claimsFor, onClaimsChange, workspaceClaims } from './claims-store'
 import { onFocusedPane } from '../../core/layout/focus'
 import { onPaneGit, getPaneGit } from '../../core/git/git-port'
@@ -149,7 +149,16 @@ export class TerminalPane {
     // (fontFamily must actually change to invalidate xterm's char-size cache) + refit.
     void document.fonts?.ready?.then(() => this.remeasureFont())
 
-    void terminalClient.spawn({ id: this.id, cwd: '', cols: this.term.cols, rows: this.term.rows })
+    // Remote pane (4/05): the workspace manifest published this BEFORE apply, so the
+    // spawn itself rides ssh. Local panes are unchanged.
+    const remote = getPaneRemote(this.id)
+    void terminalClient.spawn({
+      id: this.id,
+      cwd: '',
+      cols: this.term.cols,
+      rows: this.term.rows,
+      remoteHostId: remote?.hostId
+    })
 
     // Blink the cursor only while this pane is focused — cuts idle repaints across many panes.
     this.term.textarea?.addEventListener('focus', () => (this.term.options.cursorBlink = true))
@@ -348,6 +357,14 @@ export class TerminalPane {
     this.roleUnsub = onPaneRole((paneId, r) => {
       if (paneId === this.id) applyRole(r)
     })
+    // Remote chip (4/05): WHERE this pane lives — visible at a glance, distinct tint.
+    if (getPaneRemote(this.id)) {
+      const remoteChip = document.createElement('span')
+      remoteChip.className = 'pane-remote'
+      remoteChip.textContent = getPaneRemote(this.id)?.name ?? ''
+      remoteChip.title = 'Remote pane (ssh) — local repo tools are off'
+      left.append(remoteChip)
+    }
     // Ownership chip (4/02): how many globs THIS pane holds; live via ledger pushes.
     const claimsChip = document.createElement('span')
     claimsChip.className = 'pane-claims'
@@ -551,6 +568,13 @@ export class TerminalPane {
         if (cwd) void getBridge().invoke(ClipboardChannels.write, { text: cwd })
       })
     )
+    // Remote pane (4/05): local repo tools are OFF — say so instead of lying.
+    if (getPaneRemote(this.id)) {
+      const note = document.createElement('div')
+      note.className = 'menu-note'
+      note.textContent = 'Remote pane — local repo tools (git, worktrees, review) are off.'
+      menu.append(note)
+    }
     // Worktree-isolated pane (3/03): guarded removal. Dirty worktrees are refused with
     // an explicit force step — an agent's uncommitted work is never silently destroyed.
     const cwd = getPaneCwd(this.id) ?? ''

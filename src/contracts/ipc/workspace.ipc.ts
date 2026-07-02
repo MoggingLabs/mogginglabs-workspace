@@ -44,6 +44,8 @@ export interface WorkspaceStateMeta {
   paneCwds?: (string | null)[]
   /** Per-slot swarm role (Phase-4/01) — the manifest survives restore. */
   roles?: (string | null)[]
+  /** Per-slot remote host (Phase-4/05) — pointers + display name only. */
+  remotes?: ({ hostId: string; name: string } | null)[]
 }
 
 /** A recently-worked-on project (directory) for Home's one-click reopen tiles —

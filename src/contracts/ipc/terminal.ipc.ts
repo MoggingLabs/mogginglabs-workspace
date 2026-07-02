@@ -7,6 +7,8 @@ export interface SpawnRequest {
   cwd: string
   cols: number
   rows: number
+  /** Remote pane (4/05): host id — MAIN resolves the row; values stay main-side. */
+  remoteHostId?: string
 }
 export interface WriteCommand {
   id: PaneId

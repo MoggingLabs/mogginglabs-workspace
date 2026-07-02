@@ -106,6 +106,9 @@ export interface SpawnSpec {
   rows?: number
   /** A line typed into the pane right after spawn (e.g. to launch an agent CLI). */
   run?: string
+  /** Remote pane (Phase-4/05): the RESOLVED host row (the daemon stays db-free).
+   *  Connection pointers only — the user's ssh stack does all auth (ADR 0002). */
+  remote?: { name: string; host: string; user?: string; port?: number }
 }
 
 export interface PaneInfo {
@@ -120,6 +123,8 @@ export interface PaneInfo {
   state?: AgentState
   /** Swarm role, when the pane has one (Phase-4/01). */
   role?: SwarmRole
+  /** Remote pane's host display name (Phase-4/05). */
+  remoteName?: string
 }
 
 /** client -> daemon */

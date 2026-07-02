@@ -5,7 +5,7 @@ import { GridLayout } from '../layout'
 import { icon } from '../../components'
 import { setFocusedPane } from '../../core/layout/focus'
 import { setPaneCwd } from '../../core/layout/pane-cwd'
-import { setPaneRole } from '../../core/layout/pane-meta'
+import { setPaneRole, setPaneRemote } from '../../core/layout/pane-meta'
 import { paneState, onAttentionChange } from '../../core/attention/attention-port'
 import { requestAgentLaunch } from '../../core/agents/launch-port'
 import { activeView, setActiveView } from '../../core/shell/view-port'
@@ -34,6 +34,8 @@ export interface CreateOpts {
   assignments?: string[]
   paneCwds?: (string | null)[]
   roles?: (string | null)[]
+  /** Per-slot remote hosts (Phase-4/05). null = local. Name is display data. */
+  remotes?: ({ hostId: string; name: string } | null)[]
 }
 
 export interface SwitchOpts {
@@ -94,7 +96,8 @@ export class WorkspaceController {
       paneCount: opts.paneCount ?? 1,
       assignments: opts.assignments,
       paneCwds: opts.paneCwds,
-      roles: opts.roles
+      roles: opts.roles,
+      remotes: opts.remotes
     }
 
     const container = document.createElement('div')
@@ -121,6 +124,7 @@ export class WorkspaceController {
       if (paneId != null) this.closePane(meta.id, paneId)
     })
 
+    this.publishRemotes(meta) // BEFORE apply: panes read this at spawn time (4/05)
     layout.apply(meta.paneCount)
     this.publishPaneCwds(meta) // seed per-pane git with the workspace cwd (2/03)
     this.publishRoles(meta) // swarm manifest -> role chips + daemon PaneInfo (4/01)
@@ -167,9 +171,22 @@ export class WorkspaceController {
   private publishPaneCwds(meta: WorkspaceMeta): void {
     const base = meta.ordinal * 100
     for (let i = 1; i <= meta.paneCount; i++) {
+      // REMOTE slots (4/05) are skipped: a local cwd seed would make the git probe
+      // lie about a remote pane. OSC 7 may refine later, honestly.
+      if (meta.remotes?.[i - 1]) continue
       const cwd = meta.paneCwds?.[i - 1] || meta.cwd
       if (cwd) setPaneCwd((base + i) as PaneId, cwd)
     }
+  }
+
+  /** Remote manifest (4/05): published BEFORE layout.apply so each TerminalPane can
+   *  spawn over ssh and chip its host. Sync by design; no lookups here. */
+  private publishRemotes(meta: WorkspaceMeta): void {
+    if (!meta.remotes?.some((r) => r)) return
+    const base = meta.ordinal * 100
+    meta.remotes.forEach((remote, i) => {
+      if (remote) setPaneRemote((base + i + 1) as PaneId, remote)
+    })
   }
 
   /** Build one rail item. Root keeps the `.workspace-tab` class + `data-attention`
@@ -508,7 +525,8 @@ export class WorkspaceController {
       paneCount: spec.paneCount,
       assignments: spec.assignments,
       paneCwds: spec.paneCwds,
-      roles: spec.roles
+      roles: spec.roles,
+      remotes: spec.remotes
     })
     this.launchLineup(meta.id, false)
     return meta

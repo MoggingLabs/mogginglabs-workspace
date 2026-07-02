@@ -40,3 +40,24 @@ export function onPaneRole(cb: (paneId: PaneId, role: string) => void): () => vo
   roleSubscribers.add(cb)
   return () => roleSubscribers.delete(cb)
 }
+
+// ── Remote pane (Phase-4/05): set by the workspace manifest BEFORE panes spawn, so
+// TerminalPane can (a) spawn over ssh and (b) chip the host name. Host names are
+// user data: chip + spawn only, never telemetry. ──
+export interface PaneRemote {
+  hostId: string
+  name: string
+}
+const remotes = new Map<PaneId, PaneRemote>()
+
+export function setPaneRemote(paneId: PaneId, remote: PaneRemote): void {
+  remotes.set(paneId, remote)
+}
+
+export function getPaneRemote(paneId: PaneId): PaneRemote | undefined {
+  return remotes.get(paneId)
+}
+
+export function clearPaneRemote(paneId: PaneId): void {
+  remotes.delete(paneId)
+}

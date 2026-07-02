@@ -16,6 +16,7 @@ import { registerWorktrees } from './worktrees'
 import { registerReview } from './review'
 import { registerBoard } from './board'
 import { registerProfiles } from './profiles'
+import { registerRemotes } from './remotes'
 import { runSmoke } from './smoke'
 import { runAgentSmoke } from './agent-smoke'
 import { runStateSmoke } from './state-smoke'
@@ -43,6 +44,7 @@ import { runSwarmSmoke } from './swarm-smoke'
 import { runLedgerSmoke } from './ledger-smoke'
 import { runGateSmoke } from './gate-smoke'
 import { runProfilesSmoke } from './profiles-smoke'
+import { runRemoteSmoke } from './remote-smoke'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { registerDeepLink, initialDeepLinkCwd, initialControlCommand } from './deep-link'
@@ -63,6 +65,15 @@ import { WorkspaceChannels } from '@contracts'
 // temp dir. Electron resolves userData through the OS known-folders API, so overriding
 // the APPDATA env var alone does NOT isolate it — this explicit hook does.
 if (process.env.MOGGING_USERDATA) app.setPath('userData', process.env.MOGGING_USERDATA)
+
+// Remote-pane smoke support (4/05): point the daemon at a FAKE ssh (a node script the
+// smoke writes later) BEFORE the daemon spawns, so no smoke ever needs a network.
+if (process.env.MOGGING_REMOTE && !process.env.MOGGING_SSH_SHIM) {
+  process.env.MOGGING_SSH_SHIM = require('node:path').join(
+    require('node:os').tmpdir(),
+    `mogging-ssh-shim-${process.pid}.` + (process.platform === 'win32' ? 'cmd' : 'sh')
+  )
+}
 
 let win: BrowserWindow | null = null
 let disposeBackend: (() => void) | null = null
@@ -121,6 +132,7 @@ app.whenReady().then(async () => {
   registerReview() // pre-ship diff review: redacted diff + guarded merge (Phase-3/04)
   registerBoard() // local Kanban board: cards that launch agents (Phase-3/05)
   registerProfiles() // provider profiles: pointer sets, deny-listed at save (Phase-4/04)
+  registerRemotes() // remote (SSH) hosts: connection pointers only (Phase-4/05)
 
   openWindow()
 
@@ -201,6 +213,8 @@ app.whenReady().then(async () => {
     runGateSmoke(win) // env-gated reviewer-gate smoke (Phase-4/03)
   } else if (process.env.MOGGING_PROFILES && win) {
     runProfilesSmoke(win) // env-gated profiles + usage-limit failover smoke (Phase-4/04)
+  } else if (process.env.MOGGING_REMOTE && win) {
+    runRemoteSmoke(win) // env-gated remote (SSH) pane smoke (Phase-4/05)
   }
 
   app.on('activate', () => {

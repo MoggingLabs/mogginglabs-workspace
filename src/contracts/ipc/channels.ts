@@ -71,6 +71,12 @@ export const BoardChannels = {
   remove: 'board:remove' // (id) -> void
 } as const
 
+export const RemoteChannels = {
+  list: 'remotes:list', // -> RemoteHost[] (connection pointers, never secrets)
+  save: 'remotes:save', // (RemoteHost) -> boolean
+  remove: 'remotes:remove' // (id) -> void
+} as const
+
 export const ProfileChannels = {
   list: 'profiles:list', // -> AgentProfile[] (pointer sets, never secrets)
   save: 'profiles:save', // (AgentProfile) -> boolean (false = refused by the deny-list)
@@ -106,6 +112,7 @@ export const AllChannels: readonly string[] = [
   ...Object.values(ReviewChannels),
   ...Object.values(LedgerChannels),
   ...Object.values(ProfileChannels),
+  ...Object.values(RemoteChannels),
   ...Object.values(BoardChannels),
   ...Object.values(GitChannels)
 ]

@@ -439,16 +439,18 @@ function runList() {
         id: String(p.id),
         size: `${p.cols}x${p.rows}`,
         state: p.state ?? 'idle',
+        remote: p.remoteName ?? '',
         title: p.title ?? ''
       }))
       const w = (k, h) => Math.max(h.length, ...rows.map((r) => r[k].length))
       const wid = w('id', 'ID'),
         wsz = w('size', 'SIZE'),
-        wst = w('state', 'STATE')
-      const line = (a, b, c, d) =>
-        a.padEnd(wid) + '  ' + b.padEnd(wsz) + '  ' + c.padEnd(wst) + '  ' + d + '\n'
-      process.stdout.write(line('ID', 'SIZE', 'STATE', 'TITLE'))
-      for (const r of rows) process.stdout.write(line(r.id, r.size, r.state, r.title))
+        wst = w('state', 'STATE'),
+        wrm = w('remote', 'REMOTE')
+      const line = (a, b, c, d, e) =>
+        a.padEnd(wid) + '  ' + b.padEnd(wsz) + '  ' + c.padEnd(wst) + '  ' + d.padEnd(wrm) + '  ' + e + '\n'
+      process.stdout.write(line('ID', 'SIZE', 'STATE', 'REMOTE', 'TITLE'))
+      for (const r of rows) process.stdout.write(line(r.id, r.size, r.state, r.remote, r.title))
       api.finish(0)
     },
     () => {}

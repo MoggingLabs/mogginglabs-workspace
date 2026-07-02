@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import Database from 'better-sqlite3'
 import type {
   AgentProfile,
+  RemoteHost,
   BoardCard,
   ProviderCount,
   ProviderMixTemplate,
@@ -33,6 +34,14 @@ export class SettingsStore {
       );
       CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS app_templates (id TEXT PRIMARY KEY, name TEXT NOT NULL, mix TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS app_remotes (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        host TEXT NOT NULL,
+        user TEXT,
+        port INTEGER,
+        identity_hint TEXT
+      );
       CREATE TABLE IF NOT EXISTS app_profiles (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -70,14 +79,20 @@ export class SettingsStore {
     } catch {
       /* column already exists */
     }
+    // Migrate pre-4/05 dbs: per-slot remote hosts.
+    try {
+      this.db.exec('ALTER TABLE app_workspaces ADD COLUMN pane_remotes TEXT')
+    } catch {
+      /* column already exists */
+    }
   }
 
   load(): WorkspaceState {
     const rows = this.db
       .prepare(
-        'SELECT id, name, color, cwd, ordinal, pane_count AS paneCount, assignments, pane_cwds AS paneCwds, pane_roles AS paneRoles FROM app_workspaces ORDER BY position'
+        'SELECT id, name, color, cwd, ordinal, pane_count AS paneCount, assignments, pane_cwds AS paneCwds, pane_roles AS paneRoles, pane_remotes AS paneRemotes FROM app_workspaces ORDER BY position'
       )
-      .all() as Array<WorkspaceStateMeta & { assignments: string | null; paneCwds: string | null; paneRoles: string | null }>
+      .all() as Array<WorkspaceStateMeta & { assignments: string | null; paneCwds: string | null; paneRoles: string | null; paneRemotes: string | null }>
     const workspaces: WorkspaceStateMeta[] = rows.map((r) => ({
       id: r.id,
       name: r.name,
@@ -87,7 +102,10 @@ export class SettingsStore {
       paneCount: r.paneCount,
       assignments: r.assignments ? (JSON.parse(r.assignments) as string[]) : undefined,
       paneCwds: r.paneCwds ? (JSON.parse(r.paneCwds) as (string | null)[]) : undefined,
-      roles: r.paneRoles ? (JSON.parse(r.paneRoles) as (string | null)[]) : undefined
+      roles: r.paneRoles ? (JSON.parse(r.paneRoles) as (string | null)[]) : undefined,
+      remotes: r.paneRemotes
+        ? (JSON.parse(r.paneRemotes) as ({ hostId: string; name: string } | null)[])
+        : undefined
     }))
     const settings = this.db.prepare('SELECT key, value FROM app_settings').all() as Array<{
       key: string
@@ -114,7 +132,7 @@ export class SettingsStore {
     const tx = this.db.transaction((s: WorkspaceState) => {
       this.db.prepare('DELETE FROM app_workspaces').run()
       const ins = this.db.prepare(
-        'INSERT INTO app_workspaces (id, name, color, cwd, ordinal, pane_count, position, assignments, pane_cwds, pane_roles) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO app_workspaces (id, name, color, cwd, ordinal, pane_count, position, assignments, pane_cwds, pane_roles, pane_remotes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       s.workspaces.forEach((w, i) =>
         ins.run(
@@ -127,7 +145,8 @@ export class SettingsStore {
           i,
           w.assignments ? JSON.stringify(w.assignments) : null,
           w.paneCwds ? JSON.stringify(w.paneCwds) : null,
-          w.roles ? JSON.stringify(w.roles) : null
+          w.roles ? JSON.stringify(w.roles) : null,
+          w.remotes ? JSON.stringify(w.remotes) : null
         )
       )
       const set = this.db.prepare(
@@ -179,6 +198,43 @@ export class SettingsStore {
 
   removeBoardCard(id: string): void {
     this.db.prepare('DELETE FROM app_board WHERE id = ?').run(id)
+  }
+
+  // ── Remote hosts (Phase-4/05): connection POINTERS; auth is the user's ssh stack. ──
+  listRemotes(): RemoteHost[] {
+    const rows = this.db
+      .prepare('SELECT id, name, host, user, port, identity_hint AS identityHint FROM app_remotes ORDER BY name')
+      .all() as Array<RemoteHost & { user: string | null; port: number | null; identityHint: string | null }>
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      host: r.host,
+      user: r.user ?? undefined,
+      port: r.port ?? undefined,
+      identityHint: r.identityHint ?? undefined
+    }))
+  }
+
+  saveRemote(remote: RemoteHost): void {
+    this.db
+      .prepare(
+        `INSERT INTO app_remotes (id, name, host, user, port, identity_hint)
+         VALUES (@id, @name, @host, @user, @port, @identityHint)
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, host = excluded.host,
+           user = excluded.user, port = excluded.port, identity_hint = excluded.identity_hint`
+      )
+      .run({
+        id: remote.id,
+        name: remote.name,
+        host: remote.host,
+        user: remote.user ?? null,
+        port: remote.port ?? null,
+        identityHint: remote.identityHint ?? null
+      })
+  }
+
+  removeRemote(id: string): void {
+    this.db.prepare('DELETE FROM app_remotes WHERE id = ?').run(id)
   }
 
   // ── Provider profiles (Phase-4/04): POINTER SETS, never secrets — the deny-list

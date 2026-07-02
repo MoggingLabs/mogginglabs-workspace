@@ -14,6 +14,8 @@ export interface TemplateWorkspaceSpec {
   paneCwds?: (string | null)[]
   /** Per-slot swarm roles (Phase-4/01). null = no role. */
   roles?: (string | null)[]
+  /** Per-slot remote hosts (Phase-4/05). null = local pane. */
+  remotes?: ({ hostId: string; name: string } | null)[]
 }
 
 /** Identity of the workspace an open created — enough for callers (e.g. the board,

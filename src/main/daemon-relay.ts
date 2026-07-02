@@ -8,6 +8,7 @@ import * as path from 'node:path'
 import { TerminalChannels, LedgerChannels } from '@contracts'
 import type { SpawnRequest, WriteCommand, ResizeCommand, KillCommand, SetRoleCommand } from '@contracts'
 import { ensureDaemon, DaemonClient } from './daemon-client'
+import { getSettingsStore } from './app-settings'
 
 // The one live daemon connection, for other main modules (review gate 4/03).
 let activeClient: DaemonClient | null = null
@@ -34,7 +35,13 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
   client.requestOwners() // seed the renderer's claim chips; pushes keep them live
 
   ipcMain.handle(TerminalChannels.spawn, (_e, req: SpawnRequest) => {
-    client.spawn(String(req.id), { cwd: req.cwd, cols: req.cols, rows: req.rows })
+    // Remote pane (4/05): the renderer names a host ID; MAIN resolves the row here
+    // (the daemon stays db-free, values never round-trip the renderer).
+    const row = req.remoteHostId
+      ? getSettingsStore()?.listRemotes().find((h) => h.id === req.remoteHostId)
+      : undefined
+    const remote = row ? { name: row.name, host: row.host, user: row.user, port: row.port } : undefined
+    client.spawn(String(req.id), { cwd: req.cwd, cols: req.cols, rows: req.rows, remote })
   })
   ipcMain.on(TerminalChannels.write, (_e, cmd: WriteCommand) => client.input(String(cmd.id), cmd.data))
   ipcMain.on(TerminalChannels.resize, (_e, cmd: ResizeCommand) => client.resize(String(cmd.id), cmd.cols, cmd.rows))

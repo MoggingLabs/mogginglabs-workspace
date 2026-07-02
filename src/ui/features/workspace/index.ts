@@ -85,7 +85,8 @@ export const workspaceFeature: UiFeature = {
           paneCount: m.paneCount,
           assignments: m.assignments,
           paneCwds: m.paneCwds,
-          roles: m.roles
+          roles: m.roles,
+          remotes: m.remotes
         })),
         activeId: controller.activeMeta()?.id ?? null,
         theme: currentThemeId(),
@@ -354,7 +355,8 @@ export const workspaceFeature: UiFeature = {
             activate: false,
             assignments: w.assignments,
             paneCwds: w.paneCwds, // worktree panes re-attach to their worktrees (3/03)
-            roles: w.roles // the swarm manifest survives restore (4/01)
+            roles: w.roles, // the swarm manifest survives restore (4/01)
+            remotes: w.remotes // remote panes stay remote across restore (4/05)
           })
         }
         // 06b: re-launch each template workspace's lineup (each CLI self-auths on resume).

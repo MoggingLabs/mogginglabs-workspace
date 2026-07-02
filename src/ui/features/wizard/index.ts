@@ -1,5 +1,6 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import type { AgentInfo, ProviderCount, ProviderMixTemplate, RecentWorkspace } from '@contracts'
+import { RemoteChannels } from '@contracts'
+import type { AgentInfo, ProviderCount, ProviderMixTemplate, RecentWorkspace, RemoteHost } from '@contracts'
 import {
   Button,
   EmptyState,
@@ -24,6 +25,7 @@ import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
 import { setWizardOpener, type WizardPrefill } from '../../core/workspace/wizard-port'
 import { setCommands } from '../../core/commands/command-port'
 import { getTelemetry } from '../../core/telemetry'
+import { getBridge } from '../../core/ipc/bridge'
 import { wizardClient } from './wizard.client'
 
 type StepId = 'start' | 'layout' | 'agents'
@@ -80,6 +82,7 @@ export const wizardFeature: UiFeature = {
     let isRepo = false // set by the Start step's git probe
     let isolate = false // Phase-3/03: one git worktree per agent pane
     let swarmRoles: (string | null)[] | null = null // Phase-4/01: per-slot manifest (preset)
+    let remoteHost: { hostId: string; name: string } | null = null // Phase-4/05
 
     let roster: AgentInfo[] = []
     let presets: ProviderMixTemplate[] = []
@@ -247,11 +250,12 @@ export const wizardFeature: UiFeature = {
           : undefined
       openWorkspaceFromTemplate({
         name: name.trim() || basename(cwd) || 'Workspace',
-        cwd,
+        cwd: remoteHost ? '' : cwd,
         paneCount: resolved.paneCount,
         assignments: resolved.assignments,
-        paneCwds,
-        roles
+        paneCwds: remoteHost ? undefined : paneCwds,
+        roles,
+        remotes: remoteHost ? Array<{ hostId: string; name: string } | null>(resolved.paneCount).fill(remoteHost) : undefined
       })
       getTelemetry().captureEvent({
         name: 'wizard.completed',
@@ -283,6 +287,7 @@ export const wizardFeature: UiFeature = {
       let path: PathInputHandle
       const probeGit = async (value: string): Promise<void> => {
         cwd = value
+        if (remoteHost) return // remote target: no local probing (4/05)
         if (!value.trim()) {
           isRepo = false
           path.setStatus({ kind: 'idle' })
@@ -366,6 +371,30 @@ export const wizardFeature: UiFeature = {
           )
         : null
 
+      // Remote target (4/05): mutually exclusive with a local folder — choosing a
+      // host turns the folder box into a plain remote-cwd string (no local probing).
+      const remoteSelect = el('select', { class: 'input wizard-remote-select', ariaLabel: 'Remote host' }) as HTMLSelectElement
+      remoteSelect.append(new Option('Local folder', ''))
+      void (getBridge().invoke(RemoteChannels.list) as Promise<RemoteHost[]>).then((hosts) => {
+        for (const h of hosts ?? []) {
+          const opt = new Option(`${h.name} (${h.user ? h.user + '@' : ''}${h.host})`, h.id)
+          opt.dataset.name = h.name
+          remoteSelect.append(opt)
+        }
+        if (remoteHost) remoteSelect.value = remoteHost.hostId
+      })
+      remoteSelect.addEventListener('change', () => {
+        const opt = remoteSelect.selectedOptions[0]
+        remoteHost = remoteSelect.value ? { hostId: remoteSelect.value, name: opt?.dataset.name ?? remoteSelect.value } : null
+        if (remoteHost) {
+          isRepo = false
+          isolate = false
+          path.setStatus({ kind: 'ok', text: `remote: ${remoteHost.name} — local repo tools off` })
+        } else {
+          void probeGit(cwd)
+        }
+      })
+
       body.append(
         el('div', { class: 'field' }, [
           el('span', { class: 'field-label' }, [
@@ -373,6 +402,13 @@ export const wizardFeature: UiFeature = {
             el('span', { class: 'field-hint', text: 'where your terminals will start' })
           ]),
           path.el
+        ]),
+        el('div', { class: 'field' }, [
+          el('span', { class: 'field-label' }, [
+            'Runs on',
+            el('span', { class: 'field-hint', text: 'this machine, or a saved SSH host' })
+          ]),
+          remoteSelect
         ]),
         el('div', { class: 'field' }, [
           el('span', { class: 'field-label' }, [
@@ -761,7 +797,11 @@ export const wizardFeature: UiFeature = {
       w.__mogging.templates = {
         resolve: (m: ProviderCount[]) => wizardClient.resolve(m),
         list: () => wizardClient.listPresets(),
-        open: async (m: ProviderCount[], roles?: (string | null)[]) => {
+        open: async (
+          m: ProviderCount[],
+          roles?: (string | null)[],
+          remotes?: ({ hostId: string; name: string } | null)[]
+        ) => {
           const r = await wizardClient.resolve(m)
           const cwd = getFocusedPane()?.cwd ?? ''
           openWorkspaceFromTemplate({
@@ -769,7 +809,8 @@ export const wizardFeature: UiFeature = {
             cwd,
             paneCount: r.paneCount,
             assignments: r.assignments,
-            roles
+            roles,
+            remotes
           })
           return r
         },

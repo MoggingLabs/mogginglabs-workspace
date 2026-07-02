@@ -14,6 +14,7 @@ export interface WorkspaceMeta {
   assignments?: string[] // per-slot provider (06b template lineup)
   paneCwds?: (string | null)[] // per-slot cwd override (worktree isolation, Phase-3/03)
   roles?: (string | null)[] // per-slot swarm role (Phase-4/01)
+  remotes?: ({ hostId: string; name: string } | null)[] // per-slot remote host (Phase-4/05)
 }
 
 /**

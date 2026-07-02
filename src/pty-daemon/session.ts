@@ -35,6 +35,7 @@ class PaneSession {
   readonly id: string
   readonly cwd: string
   readonly command?: string
+  readonly remoteName?: string
   cols: number
   rows: number
   private proc: pty.IPty
@@ -55,11 +56,38 @@ class PaneSession {
     this.rows = spec.rows ?? 24
     this.cwd = spec.cwd ?? os.homedir()
     this.command = spec.run
+    this.remoteName = spec.remote?.name
     if (restore?.scrollback) this.buffer = restore.scrollback // seed prior output for repaint
 
     const isWin = process.platform === 'win32'
-    const shell = spec.shell ?? (isWin ? process.env.COMSPEC || 'cmd.exe' : process.env.SHELL || '/bin/bash')
-    const args = spec.args ?? (isWin ? [] : ['-l'])
+    let shell = spec.shell ?? (isWin ? process.env.COMSPEC || 'cmd.exe' : process.env.SHELL || '/bin/bash')
+    let args = spec.args ?? (isWin ? [] : ['-l'])
+    // Remote pane (4/05): the pane process IS `ssh -tt [-p port] [user@]host` — arg
+    // ARRAY, no shell interpolation; the user's ssh stack does all auth (ADR 0002).
+    // Exit of ssh = pane exit (existing semantics). MOGGING_SSH_SHIM is a test-only
+    // stand-in (a node script) so smokes never need a network.
+    if (spec.remote) {
+      const r = spec.remote
+      const sshArgs = ['-tt', ...(r.port ? ['-p', String(r.port)] : []), (r.user ? r.user + '@' : '') + r.host]
+      const shim = process.env.MOGGING_SSH_SHIM
+      if (shim) {
+        // Test shim: a batch/shell script — run via the PLATFORM shell (running it
+        // through process.execPath would boot Electron's GUI, not a script).
+        if (isWin) {
+          shell = process.env.COMSPEC || 'cmd.exe'
+          args = ['/c', shim, ...sshArgs]
+        } else {
+          shell = 'sh'
+          args = [shim, ...sshArgs]
+        }
+      } else if (isWin) {
+        shell = 'ssh.exe'
+        args = sshArgs
+      } else {
+        shell = 'ssh'
+        args = sshArgs
+      }
+    }
     // Inject this pane's identity + how to reach the daemon so a command inside the pane can
     // target ITSELF via `mogging notify` (Phase-2/04). Only the pane id + the endpoint FILE path
     // go in the env — never the auth token (that stays in the 0600 endpoint file), so the token
@@ -116,7 +144,8 @@ class PaneSession {
       rows: this.rows,
       title: this.command, // launch label only (e.g. "claude") — never a command line
       cwd: this.lastCwd ?? this.cwd,
-      state: this.lastState
+      state: this.lastState,
+      remoteName: this.remoteName
     }
   }
   /** Control API (Phase-3/01): the retained scrollback tail, capped at 10000 lines.
