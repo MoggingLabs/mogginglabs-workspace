@@ -1,6 +1,6 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
 import { TelemetryChannels, type TelemetryRendererConfig } from '@contracts'
-import { Button, createCheckbox, createModal, createSegmented, el, icon } from '../../components'
+import { Button, createCheckbox, createModal, createSegmented, el, icon, ICON_NAMES } from '../../components'
 import { THEMES } from '../../core/theme/themes'
 import { currentThemeId, onThemeChange, setTheme } from '../../core/theme/theme-state'
 import { setCommands } from '../../core/commands/command-port'
@@ -110,7 +110,7 @@ export const settingsFeature: UiFeature = {
         'Both are OFF by default and fully anonymous (a random install id — never your account, machine name, or provider identity). Telemetry NEVER includes terminal output, prompts, code, file paths, environment variables, or credentials. Changes apply immediately; DO_NOT_TRACK is always honored.'
       ),
       el('div', { class: 'settings-note' }, [
-        icon('check-circle', 13),
+        icon('check-circle', 14),
         el('span', {
           text: 'Your keys, your CLIs: agents authenticate themselves with your own accounts. This app has no credential settings — by design.'
         })
@@ -127,11 +127,34 @@ export const settingsFeature: UiFeature = {
       ])
     })
 
-    // Dev/gallery handle: switch themes from smokes/shots.
+    // Dev/gallery handles: switch themes + render the full icon sheet for shots.
     if (import.meta.env.DEV) {
       const w = window as unknown as { __mogging?: Record<string, unknown> }
       w.__mogging = w.__mogging ?? {}
       w.__mogging.setTheme = (id: string) => setTheme(id)
+      w.__mogging.iconSheet = () => {
+        const id = 'mogging-icon-sheet'
+        const prev = document.getElementById(id)
+        if (prev) {
+          prev.remove()
+          return 0
+        }
+        const host = document.createElement('div')
+        host.id = id
+        host.style.cssText =
+          'position:fixed;inset:0;z-index:999;overflow:auto;padding:24px;background:var(--bg-app);' +
+          'display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:6px 16px;' +
+          'font-family:var(--font-mono);font-size:11px;color:var(--text-mid);align-content:start'
+        for (const n of ICON_NAMES) {
+          const cell = document.createElement('div')
+          cell.style.cssText = 'display:flex;align-items:center;gap:10px;padding:4px 0'
+          for (const s of [12, 16, 24]) cell.append(icon(n, s))
+          cell.append(Object.assign(document.createElement('span'), { textContent: n }))
+          host.append(cell)
+        }
+        document.body.append(host)
+        return 1
+      }
     }
 
     setCommands('settings', [

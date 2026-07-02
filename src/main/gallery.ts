@@ -308,6 +308,24 @@ export function runGallery(win: BrowserWindow): void {
           await sleep(300)
         })
 
+        await part(`${tag}-icon-sheet`, async () => {
+          await ES(`window.__mogging.iconSheet()`)
+          await sleep(400)
+          await snap(`${tag}-icon-sheet`)
+          // Crispness at non-integer DPRs (dark pass only): 125% / 150% zoom.
+          if (tag === 'dark') {
+            for (const z of [1.25, 1.5]) {
+              wc.setZoomFactor(z)
+              await sleep(400)
+              await snap(`${tag}-icon-sheet-${z * 100}`)
+            }
+            wc.setZoomFactor(1)
+            await sleep(300)
+          }
+          await ES(`window.__mogging.iconSheet()`)
+          await sleep(200)
+        })
+
         await part(`${tag}-toasts`, async () => {
           // The stack caps at 4 — five tones need two batches or the first drops out.
           const fire = (tones: string[]): Promise<unknown> =>

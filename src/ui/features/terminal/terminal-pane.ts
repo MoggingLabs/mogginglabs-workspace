@@ -361,7 +361,10 @@ export class TerminalPane {
     if (getPaneRemote(this.id)) {
       const remoteChip = document.createElement('span')
       remoteChip.className = 'pane-remote'
-      remoteChip.textContent = getPaneRemote(this.id)?.name ?? ''
+      remoteChip.append(
+        icon('globe', 12),
+        document.createTextNode(getPaneRemote(this.id)?.name ?? '')
+      )
       remoteChip.title = 'Remote pane (ssh) — local repo tools are off'
       left.append(remoteChip)
     }
@@ -372,7 +375,7 @@ export class TerminalPane {
     claimsChip.title = 'Files this agent owns (see ⋯ -> Show claims)'
     const applyClaims = (): void => {
       const n = claimsFor(this.id).length
-      claimsChip.textContent = `⛿ ${n}`
+      claimsChip.replaceChildren(icon('flag', 12), document.createTextNode(String(n)))
       claimsChip.hidden = n === 0
     }
     applyClaims()
@@ -386,7 +389,7 @@ export class TerminalPane {
     branch.className = 'pane-branch'
     const dirty = document.createElement('span')
     dirty.className = 'pane-dirty'
-    git.append(icon('git-branch', 11), branch, dirty)
+    git.append(icon('git-branch', 12), branch, dirty)
 
     // Right: menu + expand trio + close.
     const actions = document.createElement('div')
@@ -423,9 +426,9 @@ export class TerminalPane {
     })
     actions.append(
       menuBtn,
-      act('maximize', 'Expand to whole workspace (Ctrl+Shift+Enter)', () => expand('full')),
-      act('chevrons-left-right', 'Expand across full width', () => expand('row')),
-      act('chevrons-up-down', 'Expand to full height', () => expand('col')),
+      act('expand', 'Expand to whole workspace (Ctrl+Shift+Enter)', () => expand('full')),
+      act('expand-h', 'Expand across full width', () => expand('row')),
+      act('expand-v', 'Expand to full height', () => expand('col')),
       act(
         'x',
         'Close terminal',
@@ -552,7 +555,7 @@ export class TerminalPane {
       const b = document.createElement('button')
       b.className = 'menu-item'
       b.type = 'button'
-      b.append(icon(name, 13), document.createTextNode(label))
+      b.append(icon(name, 14), document.createTextNode(label))
       b.addEventListener('click', (e) => {
         e.stopPropagation()
         menu.hidden = true
@@ -615,7 +618,7 @@ export class TerminalPane {
     }
     // Ownership map (4/02): the full claim set of this pane's workspace, at a glance.
     menu.append(
-      item('folder', 'Show claims…', () => {
+      item('flag', 'Show claims…', () => {
         const list = workspaceClaims(this.id)
         const bodyEl = document.createElement('div')
         bodyEl.className = 'claims-list'

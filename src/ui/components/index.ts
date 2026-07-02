@@ -5,7 +5,7 @@
  * compose these. Nothing here touches the hot terminal path.
  */
 export { el, clear, mount, type ElProps, type ElChild } from './dom'
-export { icon, type IconName } from './icons'
+export { icon, ICON_NAMES, type IconName } from './icons'
 export { Button, IconButton, type ButtonOpts, type IconButtonOpts } from './button'
 export { Pill, CountBadge, type PillOpts, type PillTone } from './pill'
 export {

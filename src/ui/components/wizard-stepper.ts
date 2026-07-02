@@ -20,7 +20,7 @@ export function createWizardStepper(steps: WizardStep[], current: string): Wizar
     el('div', { class: 'wizard-step', dataset: { step: step.id } }, [
       el('span', { class: 'wizard-step-dot' }, [
         el('span', { class: 'wizard-step-num', text: String(i + 1) }),
-        icon('check', 13)
+        icon('check', 14)
       ]),
       el('span', { class: 'wizard-step-label', text: step.label })
     ])

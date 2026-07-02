@@ -161,6 +161,43 @@ readability lives in ink/edge — neither sacrifices the other.
   reduced-motion collapses all to ~0.
 - **Layout**: `--rail-w 288px` · `--rail-w-collapsed 60px` · `--titlebar-h 40px`.
 
+## Icons (Phase-5/03)
+
+One family: 24×24 grid, **stroke 1.75**, round caps/joins — lucide-compatible
+conventions, so future additions match. Inline SVG path strings only (no font, no
+package, no build step). Most paths are vendored from Lucide (ISC — attribution in
+`icons.ts`); ≤12px simplified variants are hand-drawn. Rendering rules in `icon()`:
+**size ≤ 12px → stroke-width 2** (weight compensation) and the SMALL variant kicks
+in where one exists (detail dropped, not squeezed). Rendered sizes are snapped to
+{12, 14, 16, 24} — the old 10/11/13/15px calls were retired. Crispness verified by
+icon-sheet shots at 100/125/150% zoom (`__mogging.iconSheet()`, DEV-only).
+
+### Inventory & mapping (every `icon(` use)
+
+| Icon | Surfaces | Decision (5/03) |
+|---|---|---|
+| `kanban` | titlebar Board | **redrawn** → framed board with three columns (was three floating lines — unreadable) |
+| `home` | titlebar Home | **redrawn** → modern house w/ door (crisper silhouette) |
+| `sliders` | titlebar Settings | **new metaphor** (two knobs) replacing the intricate gear — weight-matched to the line family at 16px; `settings` name deleted |
+| `panel-left` | titlebar rail toggle | keep (standard sidebar toggle) |
+| `expand` / `expand-h` / `expand-v` | pane actions | **new metaphors**: outward diagonal arrows / ↔ / ↕ with arrowheads — the old chevron pairs read as *collapse*; `maximize`, `chevrons-*` deleted |
+| `more`, `x` | pane actions, menus, toasts | keep (universal) |
+| `flag` | claims chip + "Show claims…" menu item | **new** — ownership flag replaces the borrowed `folder` and the `⛿` text glyph; pennant SMALL variant at chip size |
+| `globe` | remote pane chip | **new** — the chip now carries a WHERE glyph, not just a name; one-meridian SMALL variant |
+| `git-branch` | git chip, path status, review menu item | keep (the standard) |
+| `check` | approved chip (was text `✓`), checkbox, stepper | keep |
+| `info` | info toasts | **new** — info no longer borrows the bell |
+| `bell` / `check-circle` / `alert` | toast tones, board attention chip, path status | keep |
+| `terminal` | ws icon, quick terminal, board agent chip, launch menu | keep |
+| `folder` / `folder-open` | path input, recents, copy-cwd | keep (real folder intents only, claims un-borrowed) |
+| `layout-grid`, `plus`, `search`, `sparkles`, `pencil`, `trash`, `clock`, `bookmark`, `arrow-right`, `chevron-left` | launcher/menus/wizard | keep |
+| *(deleted)* `command`, `enter`, `resume`, `minimize`, `chevron-down`, `chevron-right`, `settings`, `maximize`, `chevrons-left-right`, `chevrons-up-down` | — | unused or replaced; names never repurposed |
+
+Deliberate non-icon: role chips (WORKER/REVIEWER) stay text-only — roles are
+freeform strings, and the uppercase tag IS the clearest rendering; a generic badge
+glyph would add noise, not intent. Every icon-only button carries `title` +
+`aria-label` (grep-asserted; `IconButton` requires a label by type).
+
 ## Audit ledger
 
 Walked from `out/gallery/` (46 shots, both themes, 2026-07-02). Shot refs use the
@@ -181,9 +218,9 @@ wins shipped with this step; everything else is LOGGED with its owner step.
 | UX-10 | Text on accent fills in light (`#fff8ee`) 2.3:1 — primary buttons, wizard step dots, attention badges | light-wizard-start | **fixed 01** (`--accent-contrast #201200` both themes) |
 | UX-11 | Nord/Solarized `--text-lo` 3.3 / 3.1 on their elevated | (theme switch) | **fixed 01** |
 | UX-12 | Active workspace (brand outline) vs attention workspace (brand ring + glow) read nearly identically in the rail — selection must move to the workspace's OWN ramp | dark-rail-attention | **fixed 02** (identity selection treatment; attention → soft outer glow) |
-| UX-13 | Role chips (WORKER / REVIEWER) are both accent-orange — roles indistinguishable from each other and from attention semantics | dark-grid-4-chips | 03 |
-| UX-14 | Wizard `PROVIDER_COLORS` duplicates identity hues in TS; the Claude dot is near-brand orange (ambiguous with attention); `--cell-accent` is a second inline-style channel | dark-wizard-agents | 03 |
-| UX-15 | Pane-header action cluster (5 always-visible icons) consumes ~⅓ of header width at 8/16-pane density — titles truncate early | dark-grid-16 | 03 |
+| UX-13 | Role chips (WORKER / REVIEWER) are both accent-orange — roles indistinguishable from each other and from attention semantics | dark-grid-4-chips | 07 (03 kept roles text-only by design — see § Icons; distinct role tones remain open) |
+| UX-14 | Wizard `PROVIDER_COLORS` duplicates identity hues in TS; the Claude dot is near-brand orange (ambiguous with attention); `--cell-accent` is a second inline-style channel | dark-wizard-agents | **partially fixed 03** (Claude dot moved off the brand hue); palette consolidation → 07 |
+| UX-15 | Pane-header action cluster (5 always-visible icons) consumes ~⅓ of header width at 8/16-pane density — titles truncate early | dark-grid-16 | 07 (behavioral — hover-reveal needs a PANEOPS-safe design) |
 | UX-16 | Closing Board/wizard with zero workspaces lands on an EMPTY grid view (blank canvas, no CTA) — the gallery had to work around it | light-home-empty (first run) | 05 |
 | UX-17 | Settings profile form: env-value input overflows the form's right edge (both themes) | dark-settings-profile-error | 05 |
 | UX-18 | Native `<select>` (wizard "Runs on", profile provider) doesn't match `.input` styling | dark-wizard-start | 05 |

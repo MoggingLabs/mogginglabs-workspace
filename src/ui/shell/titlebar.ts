@@ -73,7 +73,7 @@ export function createTitlebar(onToggleRail: () => void): {
     onClick: onToggleRail
   })
   const settings = IconButton({
-    icon: 'settings',
+    icon: 'sliders',
     label: 'Settings',
     title: 'Settings',
     onClick: () => runCommand('settings:open')

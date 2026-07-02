@@ -162,7 +162,8 @@ export const boardFeature: UiFeature = {
       const m = /[\\/]\.mogging[\\/]worktrees[\\/]([^\\/]+)$/.exec(cwd)
       if (!m || !isBranchApproved(`mogging/${m[1]}`)) return null
       return el('span', { class: 'board-chip board-chip-approved', attrs: { title: 'Approved by the reviewer' } }, [
-        el('span', { text: '✓ approved' })
+        icon('check', 12),
+        el('span', { text: 'approved' })
       ])
     }
 
@@ -180,12 +181,12 @@ export const boardFeature: UiFeature = {
               setActiveView('grid')
             }
           },
-          [icon('bell', 11), el('span', { text: 'needs you' })]
+          [icon('bell', 12), el('span', { text: 'needs you' })]
         )
         return btn
       }
       return el('span', { class: `board-chip board-chip-${state}` }, [
-        icon('terminal', 11),
+        icon('terminal', 12),
         el('span', { text: state === 'busy' ? 'working' : 'agent' })
       ])
     }
@@ -203,7 +204,7 @@ export const boardFeature: UiFeature = {
             menu.hidden = !menu.hidden
           }
         },
-        [icon('more', 13)]
+        [icon('more', 14)]
       )
       const host = el(
         'article',

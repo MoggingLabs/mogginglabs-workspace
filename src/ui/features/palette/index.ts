@@ -39,7 +39,7 @@ export const paletteFeature: UiFeature = {
         onClick: () => toggle(true)
       },
       [
-        icon('search', 13),
+        icon('search', 14),
         el('span', { class: 'palette-trigger-label', text: 'Commands' }),
         el('span', { class: 'kbd', text: `${MOD}+K` })
       ]

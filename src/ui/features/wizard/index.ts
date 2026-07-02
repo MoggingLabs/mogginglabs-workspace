@@ -36,9 +36,10 @@ const STEPS = [
   { id: 'agents', label: 'Agents' }
 ]
 
-/** Per-provider accent for assignment previews (initial letter chips). */
+/** Per-provider accent for assignment previews (initial letter chips). Claude sits
+ *  on a coral deliberately OFF the brand orange — the brand hue means attention. */
 const PROVIDER_COLORS: Record<string, string> = {
-  claude: '#fe9c1f',
+  claude: '#e0755f',
   codex: '#4da3ff',
   gemini: '#a78bfa',
   aider: '#3fc873',
@@ -368,7 +369,7 @@ export const wizardFeature: UiFeature = {
                   }
                 },
                 [
-                  icon('folder', 13),
+                  icon('folder', 14),
                   el('span', { class: 'wizard-recent-name', text: r.name || basename(r.cwd) }),
                   el('span', { class: 'wizard-recent-path', text: r.cwd })
                 ]
@@ -698,7 +699,7 @@ export const wizardFeature: UiFeature = {
                       })
                     }
                   },
-                  [icon('x', 10)]
+                  [icon('x', 12)]
                 )
           ])
         )

@@ -19,7 +19,7 @@ const TONE_ICON: Record<ToastTone, IconName> = {
   attention: 'bell',
   success: 'check-circle',
   danger: 'alert',
-  info: 'bell'
+  info: 'info'
 }
 
 let host: HTMLElement | null = null
@@ -53,7 +53,7 @@ export function showToast(opts: ToastOpts): () => void {
   }
 
   const toast = el('div', { class: `toast toast--${tone}`, role: 'status' }, [
-    el('span', { class: 'toast-icon' }, [icon(opts.icon ?? TONE_ICON[tone], 15)]),
+    el('span', { class: 'toast-icon' }, [icon(opts.icon ?? TONE_ICON[tone], 16)]),
     el('div', { class: 'toast-content' }, [
       el('div', { class: 'toast-title', text: opts.title }),
       opts.body ? el('div', { class: 'toast-body', text: opts.body }) : null

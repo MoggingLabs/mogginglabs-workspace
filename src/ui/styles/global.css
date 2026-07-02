@@ -326,8 +326,8 @@ button {
   color: var(--accent-ink);
 }
 .icon-btn svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
 }
 
 .kbd {
@@ -376,8 +376,8 @@ button {
   border-color: color-mix(in srgb, var(--warning) 40%, var(--border));
 }
 .pill svg {
-  width: 11px;
-  height: 11px;
+  width: 12px;
+  height: 12px;
 }
 
 /* Count badge — the rail's numeric indicators. Attention = loud; count = quiet. */
@@ -565,8 +565,8 @@ button {
   color: var(--accent-ink);
 }
 .menu-item svg {
-  width: 13px;
-  height: 13px;
+  width: 14px;
+  height: 14px;
   color: var(--text-lo);
 }
 .menu-item:hover svg {
@@ -1151,6 +1151,9 @@ button {
 /* Remote pane chip (4/05): WHERE the pane lives — a distinct cool tint so remote
    never reads as local. */
 .pane-remote {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   flex: none;
   font-size: var(--fs-10);
   font-weight: var(--fw-semibold);
@@ -1164,6 +1167,11 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.pane-remote svg {
+  flex: none;
+  width: 10px;
+  height: 10px;
+}
 .menu-note {
   padding: var(--sp-1) var(--sp-2);
   color: var(--text-lo);
@@ -1173,6 +1181,9 @@ button {
 
 /* Ownership chip (4/02) + claims modal. */
 .pane-claims {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   flex: none;
   font-size: var(--fs-10);
   color: var(--text-lo);
@@ -1180,6 +1191,11 @@ button {
   border-radius: 3px;
   padding: 0 4px;
   line-height: 14px;
+}
+.pane-claims svg {
+  flex: none;
+  width: 10px;
+  height: 10px;
 }
 .claims-list {
   display: flex;

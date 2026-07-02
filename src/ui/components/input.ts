@@ -66,7 +66,7 @@ export function createPathInput(opts: PathInputOpts = {}): PathInputHandle {
   const status = el('span', { class: 'path-input-status', hidden: true })
 
   const wrap = el('div', { class: 'path-input' }, [
-    el('span', { class: 'path-input-icon' }, [icon('folder', 15)]),
+    el('span', { class: 'path-input-icon' }, [icon('folder', 16)]),
     input,
     status,
     el(
@@ -90,9 +90,9 @@ export function createPathInput(opts: PathInputOpts = {}): PathInputHandle {
       return
     }
     status.hidden = false
-    if (s.kind === 'git') status.append(icon('git-branch', 11))
-    if (s.kind === 'ok') status.append(icon('check-circle', 11))
-    if (s.kind === 'warn') status.append(icon('alert', 11))
+    if (s.kind === 'git') status.append(icon('git-branch', 12))
+    if (s.kind === 'ok') status.append(icon('check-circle', 12))
+    if (s.kind === 'warn') status.append(icon('alert', 12))
     status.append(el('span', { text: s.text }))
   }
 
