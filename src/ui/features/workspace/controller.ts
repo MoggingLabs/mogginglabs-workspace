@@ -36,6 +36,7 @@ export interface CreateOpts {
   roles?: (string | null)[]
   /** Per-slot remote hosts (Phase-4/05). null = local. Name is display data. */
   remotes?: ({ hostId: string; name: string } | null)[]
+  profileIds?: (string | null)[]
 }
 
 export interface SwitchOpts {
@@ -97,7 +98,8 @@ export class WorkspaceController {
       assignments: opts.assignments,
       paneCwds: opts.paneCwds,
       roles: opts.roles,
-      remotes: opts.remotes
+      remotes: opts.remotes,
+      profileIds: opts.profileIds
     }
 
     const container = document.createElement('div')
@@ -526,7 +528,8 @@ export class WorkspaceController {
       assignments: spec.assignments,
       paneCwds: spec.paneCwds,
       roles: spec.roles,
-      remotes: spec.remotes
+      remotes: spec.remotes,
+      profileIds: spec.profileIds
     })
     this.launchLineup(meta.id, false)
     return meta
@@ -545,7 +548,13 @@ export class WorkspaceController {
       assignments.forEach((provider, i) => {
         if (provider && provider !== 'shell') {
           const cwd = meta.paneCwds?.[i] || meta.cwd
-          requestAgentLaunch({ paneId: (base + i + 1) as PaneId, provider, cwd, resume })
+          requestAgentLaunch({
+            paneId: (base + i + 1) as PaneId,
+            provider,
+            cwd,
+            resume,
+            profileId: meta.profileIds?.[i] ?? undefined
+          })
         }
       })
     }, 900)

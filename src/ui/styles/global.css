@@ -2627,3 +2627,112 @@ body.resizing * {
   justify-content: flex-end;
   width: 100%;
 }
+
+/* ── Settings § Profiles & SSH hosts (Phase-4 polish) ─────────────────────────── */
+.ph-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: 100%;
+}
+.ph-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: var(--sp-2);
+}
+.ph-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.ph-empty {
+  margin: 0;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+}
+.ph-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.ph-row-main {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.ph-row-name {
+  font-weight: var(--fw-semibold);
+  font-size: var(--fs-13);
+}
+.ph-row-meta {
+  color: var(--accent-ink);
+  font-size: var(--fs-11);
+}
+.ph-row-env {
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
+}
+.ph-row-actions {
+  display: flex;
+  gap: var(--sp-1);
+  flex: none;
+}
+.ph-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+}
+.ph-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2);
+}
+.ph-env-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.ph-env-row {
+  display: grid;
+  grid-template-columns: 1fr 2fr auto;
+  gap: var(--sp-1);
+}
+.ph-form-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.ph-spacer {
+  flex: 1 1 auto;
+}
+.settings-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--fs-11);
+}
+/* Board approved chip (deferred 4/03) */
+.board-chip-approved {
+  color: var(--success);
+  border-color: var(--success);
+  font-weight: var(--fw-semibold);
+}
+
+.wizard-profile-select {
+  max-width: 140px;
+  font-size: var(--fs-11);
+  height: 28px;
+}

@@ -19,6 +19,12 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
     const msg: ServerMessage = { t: 'owners', claims: sessions.ledger.owners() }
     for (const push of authedClients) push(msg)
   }
+  // Reviewer-gate pushes (4/03 polish): approvals changes reach every client too —
+  // the board's ✓-chips stay live with zero polling.
+  const pushApprovals = (): void => {
+    const msg: ServerMessage = { t: 'approvals', list: [...sessions.approvals.values()] }
+    for (const push of authedClients) push(msg)
+  }
 
   const server = net.createServer((sock) => {
     sock.setEncoding('utf8')
@@ -175,6 +181,7 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           }
           sessions.approvals.set(m.branch, { branch: m.branch, byPaneId: m.from, byRole: role, ts: Date.now() })
           send({ t: 'approved', branch: m.branch, byPaneId: m.from, byRole: role })
+          pushApprovals()
           break
         }
         case 'approvals':
@@ -182,7 +189,7 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           break
         case 'unapprove':
           // The branch's worktree is gone (app-side removal) — sign-off dies with it.
-          if (typeof m.branch === 'string') sessions.approvals.delete(m.branch)
+          if (typeof m.branch === 'string' && sessions.approvals.delete(m.branch)) pushApprovals()
           break
         case 'ping':
           send({ t: 'pong' })

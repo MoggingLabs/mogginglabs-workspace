@@ -16,6 +16,8 @@ export interface TemplateWorkspaceSpec {
   roles?: (string | null)[]
   /** Per-slot remote hosts (Phase-4/05). null = local pane. */
   remotes?: ({ hostId: string; name: string } | null)[]
+  /** Per-slot profile ids (Phase-4/04 picker). null = the provider's default. */
+  profileIds?: (string | null)[]
 }
 
 /** Identity of the workspace an open created — enough for callers (e.g. the board,

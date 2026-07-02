@@ -5,7 +5,7 @@
 // in-proc path stays the default and the green baseline is untouched.
 import { ipcMain, type WebContents } from 'electron'
 import * as path from 'node:path'
-import { TerminalChannels, LedgerChannels } from '@contracts'
+import { TerminalChannels, LedgerChannels, GateChannels } from '@contracts'
 import type { SpawnRequest, WriteCommand, ResizeCommand, KillCommand, SetRoleCommand } from '@contracts'
 import { ensureDaemon, DaemonClient } from './daemon-client'
 import { getSettingsStore } from './app-settings'
@@ -28,11 +28,13 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     onState: (id, state) => getWebContents()?.send(TerminalChannels.state, { id: Number(id), state }),
     onCwd: (id, cwd) => getWebContents()?.send(TerminalChannels.cwd, { id: Number(id), cwd }),
     onOwners: (claims) => getWebContents()?.send(LedgerChannels.owners, { claims }),
-    onLimit: (id) => getWebContents()?.send(TerminalChannels.limit, { id: Number(id) })
+    onLimit: (id) => getWebContents()?.send(TerminalChannels.limit, { id: Number(id) }),
+    onApprovals: (list) => getWebContents()?.send(GateChannels.approvals, { list })
   })
   await client.connect()
   activeClient = client
   client.requestOwners() // seed the renderer's claim chips; pushes keep them live
+  void client.queryApprovals() // seed the board's ✓-chips the same way
 
   ipcMain.handle(TerminalChannels.spawn, (_e, req: SpawnRequest) => {
     // Remote pane (4/05): the renderer names a host ID; MAIN resolves the row here

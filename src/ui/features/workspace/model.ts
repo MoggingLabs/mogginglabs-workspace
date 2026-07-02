@@ -15,6 +15,7 @@ export interface WorkspaceMeta {
   paneCwds?: (string | null)[] // per-slot cwd override (worktree isolation, Phase-3/03)
   roles?: (string | null)[] // per-slot swarm role (Phase-4/01)
   remotes?: ({ hostId: string; name: string } | null)[] // per-slot remote host (Phase-4/05)
+  profileIds?: (string | null)[] // per-slot launch profile (Phase-4/04 picker; launch-time only)
 }
 
 /**

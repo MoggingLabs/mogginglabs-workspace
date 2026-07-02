@@ -6,6 +6,7 @@ import { setPaneLabel } from '../../core/layout/pane-meta'
 import { onAgentLaunchRequest } from '../../core/agents/launch-port'
 import { setCommands } from '../../core/commands/command-port'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
+import { onProfilesChanged } from '../../core/agents/profiles-port'
 import { getTelemetry } from '../../core/telemetry'
 import { showToast } from '../../components'
 import { agentsClient } from './agents.client'
@@ -34,6 +35,7 @@ export const agentsFeature: UiFeature = {
     const failingOver = new Set<number>()
 
     void populate()
+    onProfilesChanged(() => void populate()) // Settings edits -> palette entries follow live
     // Template opens (06b) + restore drive launches through this port.
     onAgentLaunchRequest((req) => void launchInPane(req.paneId as number, req.provider, req.cwd, req.resume, req.profileId))
 

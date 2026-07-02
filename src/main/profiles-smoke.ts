@@ -112,8 +112,43 @@ export function runProfilesSmoke(win: BrowserWindow): void {
       const scrollbackSurvived = (await bufferText()).includes(`MARKVALUE=${MARK_A}`)
       const paneCount = Number(await ES('window.__mogging.layout.paneCount()'))
 
-      const pass = saveOk && envAOk && defaultOk && toastOk && envBOk && failoverOk && scrollbackSurvived && paneCount === 1
-      result = { pass, saveOk, envAOk, defaultOk, toastOk, envBOk, failoverOk, scrollbackSurvived, paneCount, launchCtxA, launchCtxB }
+      // ── 5. The Settings FORM path (4/06 polish): the deny-list refusal renders
+      // inline; a clean pointer saves and appears in the managed list. ──────────
+      await ES(`document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]').click()`)
+      await sleep(900)
+      await ES(`document.querySelector('.icon-btn[aria-label="Add profile"], button[aria-label="Add profile"]').click()`)
+      await sleep(400)
+      const fillAndSave = (name: string, key: string, value: string): Promise<unknown> =>
+        ES(
+          `(() => {
+            const set = (sel, v) => { const i = document.querySelector(sel); i.value = v; i.dispatchEvent(new Event('input')) }
+            set('.prof-name', ${JSON.stringify(name)})
+            set('.prof-env-key', ${JSON.stringify(key)})
+            set('.prof-env-val', ${JSON.stringify(value)})
+            document.querySelector('button[aria-label="Save profile"]').click()
+            return 1
+          })()`
+        )
+      await fillAndSave('FormProf', 'FAKE_KEY', 'sk-FAKEFAKEFAKEFAKE999')
+      let formDenyOk = false
+      for (let i = 0; i < 12 && !formDenyOk; i++) {
+        await sleep(400)
+        formDenyOk = (await ES(
+          `(() => { const e = document.querySelector('.settings-error'); return !!(e && !e.hidden && /secret/i.test(e.textContent || '')) })()`
+        )) as boolean
+      }
+      await fillAndSave('FormProf', 'FAKE_MARK', 'PROFILE_C_OK')
+      let formSaveOk = false
+      for (let i = 0; i < 12 && !formSaveOk; i++) {
+        await sleep(400)
+        formSaveOk = (await ES(
+          `(() => { const l = document.querySelector('.ph-profiles'); return !!(l && (l.textContent || '').includes('FormProf')) })()`
+        )) as boolean
+      }
+
+      const pass =
+        saveOk && envAOk && defaultOk && toastOk && envBOk && failoverOk && scrollbackSurvived && paneCount === 1 && formDenyOk && formSaveOk
+      result = { pass, saveOk, envAOk, defaultOk, toastOk, envBOk, failoverOk, scrollbackSurvived, paneCount, formDenyOk, formSaveOk, launchCtxA, launchCtxB }
     } catch (e) {
       result = { pass: false, error: String(e) }
     }

@@ -1,6 +1,6 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { RemoteChannels } from '@contracts'
-import type { AgentInfo, ProviderCount, ProviderMixTemplate, RecentWorkspace, RemoteHost } from '@contracts'
+import { ProfileChannels, RemoteChannels } from '@contracts'
+import type { AgentInfo, AgentProfile, ProviderCount, ProviderMixTemplate, RecentWorkspace, RemoteHost } from '@contracts'
 import {
   Button,
   EmptyState,
@@ -83,6 +83,8 @@ export const wizardFeature: UiFeature = {
     let isolate = false // Phase-3/03: one git worktree per agent pane
     let swarmRoles: (string | null)[] | null = null // Phase-4/01: per-slot manifest (preset)
     let remoteHost: { hostId: string; name: string } | null = null // Phase-4/05
+    let profilesCache: AgentProfile[] = [] // Phase-4/04 picker (refreshed on open)
+    const profileByProvider = new Map<string, string>()
 
     let roster: AgentInfo[] = []
     let presets: ProviderMixTemplate[] = []
@@ -106,6 +108,9 @@ export const wizardFeature: UiFeature = {
     ])
 
     function open(prefill?: WizardPrefill): void {
+      void (getBridge().invoke(ProfileChannels.list) as Promise<AgentProfile[]>).then((list) => {
+        profilesCache = list ?? []
+      })
       step = 'start'
       name = prefill?.name ?? ''
       cwd = prefill?.cwd ?? ''
@@ -255,7 +260,8 @@ export const wizardFeature: UiFeature = {
         assignments: resolved.assignments,
         paneCwds: remoteHost ? undefined : paneCwds,
         roles,
-        remotes: remoteHost ? Array<{ hostId: string; name: string } | null>(resolved.paneCount).fill(remoteHost) : undefined
+        remotes: remoteHost ? Array<{ hostId: string; name: string } | null>(resolved.paneCount).fill(remoteHost) : undefined,
+        profileIds: resolved.assignments.map((a) => (a && profileByProvider.has(a) ? profileByProvider.get(a)! : null))
       })
       getTelemetry().captureEvent({
         name: 'wizard.completed',
@@ -602,6 +608,18 @@ export const wizardFeature: UiFeature = {
             }
           })
           steppers.set(a.id, s)
+          // Profile picker (4/04): shown only when this provider has >1 profile.
+          const mine = profilesCache.filter((p) => p.provider === a.id).sort((x, y) => x.order - y.order)
+          let profSel: HTMLSelectElement | null = null
+          if (a.installed && mine.length > 1) {
+            profSel = el('select', {
+              class: 'input wizard-profile-select',
+              ariaLabel: `${a.name} profile`
+            }) as HTMLSelectElement
+            for (const p of mine) profSel.append(new Option(p.name, p.id))
+            profSel.value = profileByProvider.get(a.id) ?? mine[0].id
+            profSel.addEventListener('change', () => profileByProvider.set(a.id, profSel!.value))
+          }
           rows.append(
             el('div', { class: 'wizard-agent-row' + (a.installed ? '' : ' is-missing') }, [
               el('span', {
@@ -611,6 +629,7 @@ export const wizardFeature: UiFeature = {
               el('span', { class: 'wizard-agent-name', text: a.name }),
               a.installed ? null : Pill({ text: 'not found on PATH', tone: 'warning' }),
               el('span', { class: 'wizard-agent-spacer' }),
+              profSel,
               a.installed ? s.el : el('span', {})
             ])
           )

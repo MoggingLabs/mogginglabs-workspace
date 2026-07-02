@@ -85,6 +85,8 @@ export interface DaemonEvents {
   onOwners?: (claims: Claim[]) => void
   /** A pane's agent reported a usage limit (4/04 failover). */
   onLimit?: (id: string) => void
+  /** Reviewer-gate sign-off list — replies AND pushes on change (4/03 polish). */
+  onApprovals?: (list: Approval[]) => void
   onClose?: () => void
 }
 
@@ -158,6 +160,7 @@ export class DaemonClient {
       case 'approvals': {
         const waiter = this.approvalWaiters.shift()
         waiter?.(m.list)
+        this.events.onApprovals?.(m.list)
         break
       }
       case 'error':

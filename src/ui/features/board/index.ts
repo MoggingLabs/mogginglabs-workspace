@@ -17,9 +17,10 @@ import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
 import { openWizard } from '../../core/workspace/wizard-port'
 import { getWorkspaces, requestWorkspaceSwitch } from '../../core/workspace/workspace-info-port'
 import { onAttentionChange, paneState } from '../../core/attention/attention-port'
-import { onPaneCwd } from '../../core/layout/pane-cwd'
+import { getPaneCwd, onPaneCwd } from '../../core/layout/pane-cwd'
 import { setCommands } from '../../core/commands/command-port'
 import { Button, createModal, el, icon, showToast } from '../../components'
+import { initApprovals, isBranchApproved, onApprovalsChange } from './approvals-store'
 
 /**
  * Local Kanban board (Phase-3/05): "what should the fleet do next" as a surface whose
@@ -154,6 +155,17 @@ export const boardFeature: UiFeature = {
     }
 
     // ── rendering ─────────────────────────────────────────────────────────────
+    /** ✓ when the card's bound worktree branch holds a live reviewer sign-off. */
+    function approvedChip(card: BoardCard): HTMLElement | null {
+      if (!card.paneId) return null
+      const cwd = getPaneCwd(card.paneId as PaneId) ?? ''
+      const m = /[\\/]\.mogging[\\/]worktrees[\\/]([^\\/]+)$/.exec(cwd)
+      if (!m || !isBranchApproved(`mogging/${m[1]}`)) return null
+      return el('span', { class: 'board-chip board-chip-approved', attrs: { title: 'Approved by the reviewer' } }, [
+        el('span', { text: '✓ approved' })
+      ])
+    }
+
     function cardStateChip(card: BoardCard): HTMLElement | null {
       if (!card.paneId) return null
       const state = paneState(card.paneId as PaneId)
@@ -202,7 +214,7 @@ export const boardFeature: UiFeature = {
             menuBtn
           ]),
           ...(card.notes.trim() ? [el('p', { class: 'board-card-notes', text: card.notes })] : []),
-          el('div', { class: 'board-card-foot' }, [cardStateChip(card) ?? el('span', {})]),
+          el('div', { class: 'board-card-foot' }, [cardStateChip(card) ?? el('span', {}), approvedChip(card)]),
           menu
         ]
       )
@@ -292,6 +304,10 @@ export const boardFeature: UiFeature = {
     // ── live card state: the SAME ports the rail glanceability uses ──────────
     onAttentionChange(() => {
       // Cheap targeted update: re-render only when a bound card's visual would change.
+      if (cards.some((c) => c.paneId)) render()
+    })
+    initApprovals()
+    onApprovalsChange(() => {
       if (cards.some((c) => c.paneId)) render()
     })
     onPaneCwd((paneId, cwd) => {

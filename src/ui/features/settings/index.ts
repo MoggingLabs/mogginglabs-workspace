@@ -7,6 +7,7 @@ import { setCommands } from '../../core/commands/command-port'
 import { getBridge } from '../../core/ipc/bridge'
 import { getTelemetry } from '../../core/telemetry'
 import { TEMPLATE_COUNTS } from '../layout'
+import { createProfilesHostsSection } from './profiles-hosts'
 
 const DEFAULT_LAYOUT_KEY = 'mogging.defaultPaneCount'
 
@@ -93,9 +94,16 @@ export const settingsFeature: UiFeature = {
         control
       ])
 
+    const profilesHosts = createProfilesHostsSection() as HTMLElement & { refresh: () => Promise<void> }
+
     const body = el('div', { class: 'settings' }, [
       row('Theme', themeSeg.el, 'System follows your OS light/dark preference.'),
       row('New-workspace layout', layoutSeg.el, 'How many terminals the wizard suggests.'),
+      row(
+        'Profiles & SSH hosts',
+        profilesHosts,
+        'Pointer sets only: profiles select WHICH of your accounts a CLI uses; hosts are ssh targets. Never keys, tokens, or passwords — secret-shaped values are refused at save (ADR 0002).'
+      ),
       row(
         'Help improve the app',
         el('div', { class: 'settings-consents' }, [errorConsent.el, analyticsConsent.el]),
@@ -111,7 +119,7 @@ export const settingsFeature: UiFeature = {
 
     const modal = createModal({
       title: 'Settings',
-      subtitle: 'Phase 2 · agent awareness',
+      subtitle: 'Theme · profiles · hosts · privacy',
       body,
       footer: el('div', { class: 'settings-footer' }, [
         el('span', {}),
@@ -126,6 +134,7 @@ export const settingsFeature: UiFeature = {
         hint: 'App',
         run: () => {
           void pullConsent()
+          void profilesHosts.refresh()
           modal.open()
           getTelemetry().captureEvent({ name: 'settings.opened' })
         }

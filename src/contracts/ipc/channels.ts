@@ -87,6 +87,10 @@ export const LedgerChannels = {
   owners: 'ledger:owners' // main -> renderer: the live claim set (pushed on change)
 } as const
 
+export const GateChannels = {
+  approvals: 'gate:approvals' // main -> renderer: live reviewer sign-offs (pushed on change)
+} as const
+
 export const ReviewChannels = {
   diff: 'review:diff', // (ReviewDiffRequest) -> ReviewDiff (REDACTED before transport)
   merge: 'review:merge' // (ReviewMergeRequest) -> ReviewMergeResult (clean-repo gated)
@@ -111,6 +115,7 @@ export const AllChannels: readonly string[] = [
   ...Object.values(WorktreeChannels),
   ...Object.values(ReviewChannels),
   ...Object.values(LedgerChannels),
+  ...Object.values(GateChannels),
   ...Object.values(ProfileChannels),
   ...Object.values(RemoteChannels),
   ...Object.values(BoardChannels),
