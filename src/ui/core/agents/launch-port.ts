@@ -11,6 +11,8 @@ export interface AgentLaunchRequest {
   provider: string
   cwd: string
   resume?: boolean
+  /** Launch under this profile (Phase-4/04); omitted = the provider's default. */
+  profileId?: string
 }
 
 const subscribers = new Set<(req: AgentLaunchRequest) => void>()

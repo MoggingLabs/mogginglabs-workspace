@@ -22,6 +22,8 @@ export interface PaneSubscriber {
   exit(code: number): void
   state(state: AgentState): void
   cwd(path: string): void
+  /** Usage-limit signal (Phase-4/04): distinct from state so failover can act. */
+  limit?(): void
 }
 
 interface PaneHooks {
@@ -150,6 +152,9 @@ class PaneSession {
     const state = notifyEventToState(event)
     this.lastState = state
     for (const s of this.subs) s.state(state)
+    // Usage-limit (4/04): a DISTINCT signal alongside the attention state, so the
+    // app can offer profile failover. Event label only — never content.
+    if (event === 'usage-limit') for (const s of this.subs) s.limit?.()
   }
   write(data: string): void {
     this.proc.write(data)

@@ -26,7 +26,8 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     onExit: (id, exitCode) => getWebContents()?.send(TerminalChannels.exit, { id: Number(id), exitCode }),
     onState: (id, state) => getWebContents()?.send(TerminalChannels.state, { id: Number(id), state }),
     onCwd: (id, cwd) => getWebContents()?.send(TerminalChannels.cwd, { id: Number(id), cwd }),
-    onOwners: (claims) => getWebContents()?.send(LedgerChannels.owners, { claims })
+    onOwners: (claims) => getWebContents()?.send(LedgerChannels.owners, { claims }),
+    onLimit: (id) => getWebContents()?.send(TerminalChannels.limit, { id: Number(id) })
   })
   await client.connect()
   activeClient = client

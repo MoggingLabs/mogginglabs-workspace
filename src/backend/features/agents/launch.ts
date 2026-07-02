@@ -12,14 +12,36 @@ function cdPrefix(cwd: string): string {
   return `cd "${cwd}" && ` // bash/zsh
 }
 
+/** Platform/shell-aware env-POINTER prefix (Phase-4/04 profiles). Values are already
+ *  deny-listed at the persistence boundary — never secrets (ADR 0002). */
+function envPrefix(env: Record<string, string> | undefined): string {
+  if (!env) return ''
+  const entries = Object.entries(env).filter(([k, v]) => k && typeof v === 'string')
+  if (!entries.length) return ''
+  if (process.platform === 'win32') {
+    const shell = defaultShell().toLowerCase()
+    if (shell.includes('powershell') || shell.includes('pwsh')) {
+      return entries.map(([k, v]) => `$env:${k}="${v}"; `).join('')
+    }
+    return entries.map(([k, v]) => `set "${k}=${v}" && `).join('') // cmd.exe
+  }
+  return entries.map(([k, v]) => `${k}="${v}" `).join('') // bash/zsh assignment prefix
+}
+
 /**
  * Build the launch COMMAND for an agent CLI in a cwd. It's a command string only — the CLI
  * self-authenticates; NO credentials are ever built, stored, or injected (ADR 0002). `resume`
- * appends the adapter's resume flag. Returns null for an unknown agent id.
+ * appends the adapter's resume flag; `env` (Phase-4/04) selects a PROFILE via pointer
+ * variables. Returns null for an unknown agent id.
  */
-export function buildLaunchCommand(agentId: string, cwd: string, resume = false): string | null {
+export function buildLaunchCommand(
+  agentId: string,
+  cwd: string,
+  resume = false,
+  env?: Record<string, string>
+): string | null {
   const adapter = findAdapter(agentId)
   if (!adapter) return null
   const base = resume && adapter.resumeFlag ? `${adapter.bin} ${adapter.resumeFlag}` : adapter.bin
-  return cdPrefix(cwd) + base
+  return cdPrefix(cwd) + envPrefix(env) + base
 }

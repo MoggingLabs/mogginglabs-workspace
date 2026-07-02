@@ -83,6 +83,8 @@ export interface DaemonEvents {
   onWelcome?: (panes: PaneInfo[]) => void
   /** Ownership-ledger snapshot — replies AND unsolicited pushes on change (4/02). */
   onOwners?: (claims: Claim[]) => void
+  /** A pane's agent reported a usage limit (4/04 failover). */
+  onLimit?: (id: string) => void
   onClose?: () => void
 }
 
@@ -149,6 +151,9 @@ export class DaemonClient {
         break
       case 'owners':
         this.events.onOwners?.(m.claims)
+        break
+      case 'limit':
+        this.events.onLimit?.(m.id)
         break
       case 'approvals': {
         const waiter = this.approvalWaiters.shift()

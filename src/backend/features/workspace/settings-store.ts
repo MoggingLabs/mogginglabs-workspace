@@ -5,6 +5,7 @@
 import { randomUUID } from 'node:crypto'
 import Database from 'better-sqlite3'
 import type {
+  AgentProfile,
   BoardCard,
   ProviderCount,
   ProviderMixTemplate,
@@ -32,6 +33,13 @@ export class SettingsStore {
       );
       CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS app_templates (id TEXT PRIMARY KEY, name TEXT NOT NULL, mix TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS app_profiles (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        env TEXT NOT NULL DEFAULT '{}',
+        ord INTEGER NOT NULL DEFAULT 0
+      );
       CREATE TABLE IF NOT EXISTS app_board (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
@@ -171,6 +179,28 @@ export class SettingsStore {
 
   removeBoardCard(id: string): void {
     this.db.prepare('DELETE FROM app_board WHERE id = ?').run(id)
+  }
+
+  // ── Provider profiles (Phase-4/04): POINTER SETS, never secrets — the deny-list
+  // lives at the IPC boundary (src/main/profiles.ts); this stores what survived it. ──
+  listProfiles(): AgentProfile[] {
+    const rows = this.db
+      .prepare('SELECT id, name, provider, env, ord AS "order" FROM app_profiles ORDER BY provider, ord')
+      .all() as Array<Omit<AgentProfile, 'env'> & { env: string }>
+    return rows.map((r) => ({ ...r, env: JSON.parse(r.env) as Record<string, string> }))
+  }
+
+  saveProfile(profile: AgentProfile): void {
+    this.db
+      .prepare(
+        `INSERT INTO app_profiles (id, name, provider, env, ord) VALUES (@id, @name, @provider, @env, @order)
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, provider = excluded.provider, env = excluded.env, ord = excluded.ord`
+      )
+      .run({ ...profile, env: JSON.stringify(profile.env) })
+  }
+
+  removeProfile(id: string): void {
+    this.db.prepare('DELETE FROM app_profiles WHERE id = ?').run(id)
   }
 
   getTelemetrySettings(): { installId: string; errorReporting: boolean; productAnalytics: boolean } {

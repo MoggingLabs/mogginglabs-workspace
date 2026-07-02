@@ -73,6 +73,22 @@ The reviewer agent's loop, scriptable end to end:
 `mogging mail read` → inspect the diff (`mogging capture`, or its own checkout) →
 `mogging approve mogging/<slug>` → mail the worker back.
 
+## Profiles + usage-limit failover (4/04)
+
+Power users run several accounts. A **profile** is a named POINTER SET — env vars
+whose values select which self-authenticated account a CLI uses
+(`CLAUDE_CONFIG_DIR=~/.claude-work`). ADR 0002 is enforced at the persistence
+boundary: values that LOOK like secrets (the review redactor's own patterns) are
+refused at save — the mistake is impossible, not discouraged.
+
+- Launches use the provider's default profile (order 0) automatically; the palette
+  offers one entry per profile when a provider has several.
+- Agent hooks fire `mogging notify --event usage-limit` when the account caps out:
+  the pane flags attention AND the app offers **"Relaunch on <next profile>"** — one
+  click, same pane, same cwd/worktree, resume where the CLI supports it. Only the
+  CLI is interrupted (^C); the shell/PTY and scrollback survive. One hop per event.
+- Per-workspace auto-failover: palette -> "Toggle auto-failover for this workspace".
+
 ## The contract agents are told (first prompt material)
 
 > You share this repo with other agents. Before editing any file:

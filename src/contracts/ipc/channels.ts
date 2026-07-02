@@ -12,7 +12,8 @@ export const TerminalChannels = {
   exit: 'terminal:exit',
   state: 'terminal:state',
   cwd: 'terminal:cwd', // backend -> renderer: a pane reported its cwd (OSC 7)
-  setRole: 'terminal:setRole' // renderer -> daemon: swarm role manifest (Phase-4/01)
+  setRole: 'terminal:setRole', // renderer -> daemon: swarm role manifest (Phase-4/01)
+  limit: 'terminal:limit' // daemon -> renderer: a pane's agent hit a usage limit (Phase-4/04)
 } as const
 
 export const ClipboardChannels = {
@@ -70,6 +71,12 @@ export const BoardChannels = {
   remove: 'board:remove' // (id) -> void
 } as const
 
+export const ProfileChannels = {
+  list: 'profiles:list', // -> AgentProfile[] (pointer sets, never secrets)
+  save: 'profiles:save', // (AgentProfile) -> boolean (false = refused by the deny-list)
+  remove: 'profiles:remove' // (id) -> void
+} as const
+
 export const LedgerChannels = {
   owners: 'ledger:owners' // main -> renderer: the live claim set (pushed on change)
 } as const
@@ -98,6 +105,7 @@ export const AllChannels: readonly string[] = [
   ...Object.values(WorktreeChannels),
   ...Object.values(ReviewChannels),
   ...Object.values(LedgerChannels),
+  ...Object.values(ProfileChannels),
   ...Object.values(BoardChannels),
   ...Object.values(GitChannels)
 ]

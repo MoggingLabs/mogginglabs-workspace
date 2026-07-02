@@ -175,6 +175,7 @@ export type ServerMessage =
   | { t: 'panes'; panes: PaneInfo[] }
   | { t: 'pong' }
   | { t: 'notified'; id: string; ok: boolean } // ack for a `notify` (ok=false: unknown pane id)
+  | { t: 'limit'; id: string } // a pane's agent reported a usage limit (Phase-4/04 failover)
   | { t: 'sent'; id: string; ok: boolean } // ack for a `send-key` (ok=false: unknown pane/key)
   | { t: 'captured'; id: string; data: string } // reply to `capture` — CALLER's stdout only
   | { t: 'mailed'; id: number } // ack for a mail-send (the assigned message id)

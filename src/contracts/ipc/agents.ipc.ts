@@ -14,4 +14,6 @@ export interface AgentCommandRequest {
   agentId: string
   cwd: string
   resume?: boolean
+  /** Launch under this profile's env pointers (Phase-4/04). */
+  profileId?: string
 }

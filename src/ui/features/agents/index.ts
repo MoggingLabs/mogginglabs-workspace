@@ -1,29 +1,55 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import type { AgentInfo, PaneId } from '@contracts'
+import { ProfileChannels, TerminalChannels, type AgentInfo, type AgentProfile, type PaneId } from '@contracts'
+import { getBridge } from '../../core/ipc/bridge'
 import { getFocusedPane } from '../../core/layout/focus'
 import { setPaneLabel } from '../../core/layout/pane-meta'
 import { onAgentLaunchRequest } from '../../core/agents/launch-port'
 import { setCommands } from '../../core/commands/command-port'
+import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { getTelemetry } from '../../core/telemetry'
+import { showToast } from '../../components'
 import { agentsClient } from './agents.client'
 
 /**
  * Agent launching (headless — no titlebar button by design: launching lives in the
- * wizard, the pane ⋯ menu, and the command palette). Detects installed CLIs (Claude
- * Code, Codex, Gemini, Aider, OpenCode), publishes one launch command per installed
- * CLI on the command port, and services the ui-core agent-launch port (06b template
- * opens + restore). Launching writes the CLI's own command into a pane; the CLI
- * self-authenticates (BYO — ADR 0002).
+ * wizard, the pane ⋯ menu, and the command palette). Detects installed CLIs, publishes
+ * launch commands, and services the ui-core agent-launch port. Launching writes the
+ * CLI's own command into a pane; the CLI self-authenticates (BYO — ADR 0002).
+ *
+ * Phase-4/04: launches can run under a named PROFILE (env pointer set, resolved
+ * main-side), and a `usage-limit` notify offers/performs failover to the next
+ * profile — same pane, same cwd/worktree, resume where supported. One hop per event;
+ * only the CLI is interrupted (^C), never the shell/PTY (scrollback survives).
  */
 export const agentsFeature: UiFeature = {
   name: 'agents',
   mount() {
     const nameById = new Map<string, string>()
     let installedIds: string[] = []
+    /** What launched in each pane — the failover context. Values are ids only. */
+    const lastLaunch = new Map<number, { provider: string; cwd: string; profileId?: string }>()
+    /** Per-workspace auto-failover opt-in (in-memory; the toast is the default). */
+    const autoFailover = new Map<string, boolean>()
+    /** One-hop guard: a pane mid-failover ignores further limit events. */
+    const failingOver = new Set<number>()
 
     void populate()
     // Template opens (06b) + restore drive launches through this port.
-    onAgentLaunchRequest((req) => void launchInPane(req.paneId as number, req.provider, req.cwd, req.resume))
+    onAgentLaunchRequest((req) => void launchInPane(req.paneId as number, req.provider, req.cwd, req.resume, req.profileId))
+
+    // Usage-limit events (4/04) arrive on a dedicated channel from the daemon.
+    getBridge().on(TerminalChannels.limit, (payload) => {
+      const id = Number((payload as { id?: number })?.id)
+      if (Number.isFinite(id)) void onLimit(id)
+    })
+
+    const listProfiles = async (): Promise<AgentProfile[]> => {
+      try {
+        return ((await getBridge().invoke(ProfileChannels.list)) as AgentProfile[]) ?? []
+      } catch {
+        return []
+      }
+    }
 
     async function populate(): Promise<void> {
       let agents: AgentInfo[] = []
@@ -35,27 +61,61 @@ export const agentsFeature: UiFeature = {
       for (const a of agents) nameById.set(a.id, a.name)
       const installed = agents.filter((a) => a.installed)
       installedIds = installed.map((a) => a.id)
-      // Palette + pane-menu entries: one launch command per installed CLI.
-      setCommands(
-        'agents',
-        installed.map((a) => ({
+      const profiles = await listProfiles()
+      // Palette + pane-menu entries: one launch command per installed CLI — and one
+      // per PROFILE when a provider has more than one (the picker, 4/04).
+      const commands = installed.flatMap((a) => {
+        const mine = profiles.filter((p) => p.provider === a.id).sort((x, y) => x.order - y.order)
+        const base = {
           id: `agent:launch:${a.id}`,
           title: `Launch ${a.name} in focused pane`,
           hint: 'Agent',
           run: () => launchInFocused(a.id)
-        }))
-      )
+        }
+        if (mine.length < 2) return [base]
+        return [
+          base,
+          ...mine.map((p) => ({
+            id: `agent:launch:${a.id}:${p.id}`,
+            title: `Launch ${a.name} (${p.name}) in focused pane`,
+            hint: 'Agent',
+            run: () => launchInFocused(a.id, p.id)
+          }))
+        ]
+      })
+      setCommands('agents', commands)
+      setCommands('agents-failover', [
+        {
+          id: 'agents:auto-failover',
+          title: 'Toggle auto-failover for this workspace',
+          hint: 'Profiles',
+          run: () => {
+            const ws = getWorkspaces()
+            const id = ws.activeId
+            if (!id) return
+            const next = !autoFailover.get(id)
+            autoFailover.set(id, next)
+            showToast({ tone: 'info', title: `Auto-failover ${next ? 'ON' : 'OFF'} for this workspace` })
+          }
+        }
+      ])
     }
 
-    function launchInFocused(agentId: string): void {
+    function launchInFocused(agentId: string, profileId?: string): void {
       const focus = getFocusedPane()
-      if (focus) void launchInPane(focus.paneId as number, agentId, focus.cwd)
+      if (focus) void launchInPane(focus.paneId as number, agentId, focus.cwd, false, profileId)
     }
 
     /** The one launch path: build the command (never a credential — ADR 0002), write it into
      *  the pane, label the pane. `shell` is a no-op (the pane is already a shell). A
      *  `custom:<command>` provider (wizard custom row) writes the user's own command verbatim. */
-    async function launchInPane(paneId: number, provider: string, cwd: string, resume = false): Promise<void> {
+    async function launchInPane(
+      paneId: number,
+      provider: string,
+      cwd: string,
+      resume = false,
+      profileId?: string
+    ): Promise<void> {
       if (paneId < 0 || !provider || provider === 'shell') return
       if (provider.startsWith('custom:')) {
         const cmd = provider.slice('custom:'.length).trim()
@@ -66,11 +126,59 @@ export const agentsFeature: UiFeature = {
         getTelemetry().captureEvent({ name: 'agent.launched', props: { provider: 'custom', resume } })
         return
       }
-      const command = await agentsClient.command({ agentId: provider, cwd, resume })
+      // Default profile (order 0) applies when none was named and any exist (4/04).
+      let effectiveProfile = profileId
+      if (!effectiveProfile) {
+        const mine = (await listProfiles()).filter((p) => p.provider === provider).sort((x, y) => x.order - y.order)
+        effectiveProfile = mine[0]?.id
+      }
+      const command = await agentsClient.command({ agentId: provider, cwd, resume, profileId: effectiveProfile })
       if (!command) return
       agentsClient.launchInto(paneId, command)
+      lastLaunch.set(paneId, { provider, cwd, profileId: effectiveProfile })
       setPaneLabel(paneId as PaneId, nameById.get(provider) ?? provider)
-      getTelemetry().captureEvent({ name: 'agent.launched', props: { provider, resume } })
+      // Booleans/ids only — never env values or command text (ADR 0005).
+      getTelemetry().captureEvent({ name: 'agent.launched', props: { provider, resume, profiled: !!effectiveProfile } })
+    }
+
+    /** Usage-limit failover (4/04): next profile, same pane, same cwd. ONE hop. */
+    async function onLimit(paneId: number): Promise<void> {
+      if (failingOver.has(paneId)) return
+      const ctx = lastLaunch.get(paneId)
+      if (!ctx) return
+      const mine = (await listProfiles()).filter((p) => p.provider === ctx.provider).sort((x, y) => x.order - y.order)
+      if (mine.length < 2) {
+        showToast({
+          tone: 'attention',
+          title: `Usage limit in pane ${paneId}`,
+          body: 'Add a second profile in Settings to enable failover.'
+        })
+        return
+      }
+      const curIdx = Math.max(0, mine.findIndex((p) => p.id === ctx.profileId))
+      const next = mine[(curIdx + 1) % mine.length]
+      const cur = mine[curIdx]
+      const doFailover = (): void => {
+        failingOver.add(paneId)
+        // Interrupt ONLY the CLI (^C) — the shell/PTY and its scrollback survive.
+        getBridge().send(TerminalChannels.write, { id: paneId as PaneId, data: '\x03' })
+        setTimeout(() => {
+          void launchInPane(paneId, ctx.provider, ctx.cwd, true, next.id).finally(() => failingOver.delete(paneId))
+        }, 900)
+      }
+      const wsId = getWorkspaces().workspaces.find((w) => w.ordinal === Math.floor(paneId / 100))?.id
+      if (wsId && autoFailover.get(wsId)) {
+        doFailover()
+        showToast({ tone: 'info', title: `Usage limit — relaunching on ${next.name}`, body: `Pane ${paneId} (auto-failover).` })
+        return
+      }
+      showToast({
+        tone: 'attention',
+        title: `Usage limit on ${cur.name}`,
+        body: `Pane ${paneId} hit its limit.`,
+        timeout: 15000,
+        action: { label: `Relaunch on ${next.name}`, onClick: doFailover }
+      })
     }
 
     exposeForDev()
@@ -81,7 +189,16 @@ export const agentsFeature: UiFeature = {
       w.__mogging.agents = {
         detect: () => agentsClient.detect(),
         items: () => installedIds.slice(),
-        launch: (agentId: string) => launchInFocused(agentId)
+        launch: (agentId: string, profileId?: string) => launchInFocused(agentId, profileId),
+        launchIn: (paneId: number, agentId: string, cwd: string, profileId?: string) =>
+          launchInPane(paneId, agentId, cwd, false, profileId),
+        setAutoFailover: (on: boolean) => {
+          const id = getWorkspaces().activeId
+          if (id) autoFailover.set(id, on)
+          return id
+        },
+        lastLaunch: (paneId: number) => ({ ...(lastLaunch.get(paneId) ?? {}) }),
+        refreshCommands: () => populate()
       }
     }
   }

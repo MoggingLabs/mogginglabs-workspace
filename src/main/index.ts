@@ -15,6 +15,7 @@ import { registerGit } from './git'
 import { registerWorktrees } from './worktrees'
 import { registerReview } from './review'
 import { registerBoard } from './board'
+import { registerProfiles } from './profiles'
 import { runSmoke } from './smoke'
 import { runAgentSmoke } from './agent-smoke'
 import { runStateSmoke } from './state-smoke'
@@ -41,6 +42,7 @@ import { runOrchestrationSmoke } from './orchestration-smoke'
 import { runSwarmSmoke } from './swarm-smoke'
 import { runLedgerSmoke } from './ledger-smoke'
 import { runGateSmoke } from './gate-smoke'
+import { runProfilesSmoke } from './profiles-smoke'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { registerDeepLink, initialDeepLinkCwd, initialControlCommand } from './deep-link'
@@ -118,6 +120,7 @@ app.whenReady().then(async () => {
   registerWorktrees() // worktree-per-agent isolation: add/list/remove only (Phase-3/03)
   registerReview() // pre-ship diff review: redacted diff + guarded merge (Phase-3/04)
   registerBoard() // local Kanban board: cards that launch agents (Phase-3/05)
+  registerProfiles() // provider profiles: pointer sets, deny-listed at save (Phase-4/04)
 
   openWindow()
 
@@ -196,6 +199,8 @@ app.whenReady().then(async () => {
     runLedgerSmoke(win) // env-gated ownership-ledger smoke (Phase-4/02)
   } else if (process.env.MOGGING_GATE && win) {
     runGateSmoke(win) // env-gated reviewer-gate smoke (Phase-4/03)
+  } else if (process.env.MOGGING_PROFILES && win) {
+    runProfilesSmoke(win) // env-gated profiles + usage-limit failover smoke (Phase-4/04)
   }
 
   app.on('activate', () => {

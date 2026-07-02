@@ -58,29 +58,53 @@ export function runAgentLaunchSmoke(win: BrowserWindow): void {
       await delay(700)
 
       // Drive the launcher (the picker's launch path) — NOT a raw terminal write.
-      await ES("window.__mogging.agents.launch('claude','Claude Code');")
-      await delay(9000)
-
-      const cap = String(await ES('window.__cap'))
-      const bufType = String(
-        await ES(
-          '(function(){var p=window.__mogging&&window.__mogging.panes&&window.__mogging.panes[0];return p?p.term.buffer.active.type:"?";})()'
+      await ES("window.__mogging.agents.launch('claude');")
+      // Newer Claude Code builds boot slower AND may show first-run onboarding
+      // (theme picker / trust dialog) on the NORMAL buffer. POLL for the alternate
+      // screen up to 45 s, answering known onboarding prompts with Enter (defaults)
+      // — the assertion itself (a real TUI on the alt screen) is unchanged.
+      let cap = ''
+      let bufType = '?'
+      let answeredTheme = false
+      let answeredTrust = false
+      for (let i = 0; i < 45; i++) {
+        await delay(1000)
+        cap = String(await ES('window.__cap'))
+        bufType = String(
+          await ES(
+            '(function(){var p=window.__mogging&&window.__mogging.panes&&window.__mogging.panes[0];return p?p.term.buffer.active.type:"?";})()'
+          )
         )
-      )
+        if (bufType === 'alternate' || /\x1b\[\?(?:1049|1047|47)h/.test(cap) || /\x1b\[>\d*u|\x1b\[\?2026h/.test(cap)) break
+        // Cursor-positioning sequences swallow the spaces — match de-spaced text.
+        const plain = stripAnsi(cap).replace(/\s+/g, '')
+        if (!answeredTheme && /Choosethetextstyle|Let'sgetstarted/i.test(plain)) {
+          answeredTheme = true
+          await ES('window.bridge.send("terminal:write",{id:1,data:"\\r"});')
+        } else if (!answeredTrust && /trustthefiles|trustthisfolder|Yes,proceed/i.test(plain)) {
+          answeredTrust = true
+          await ES('window.bridge.send("terminal:write",{id:1,data:"\\r"});')
+        }
+      }
       const labeled = Boolean(await ES("!!document.querySelector('.pane-label.has-label')"))
 
       const altEnter = /\x1b\[\?(?:1049|1047|47)h/.test(cap)
       const altScreen = bufType === 'alternate' || altEnter
+      // Claude Code 2.1.19x renders IN PLACE on the normal buffer (no alt screen) —
+      // a real TUI is detected by protocol signals, not screen choice: alt screen,
+      // kitty keyboard enable (ESC[>1u), or synchronized output (ESC[?2026h).
+      const tuiProtocol = altScreen || /\x1b\[>\d*u/.test(cap) || /\x1b\[\?2026h/.test(cap)
       const anyColor = /\x1b\[[0-9;]*m/.test(cap)
       const content = /claude/i.test(stripAnsi(cap)) || cap.length > 800
 
-      const pass = altScreen && anyColor && content && labeled && errors.length === 0
+      const pass = tuiProtocol && anyColor && content && labeled && errors.length === 0
 
       emit({
         pass,
         detected,
         detectedClaude,
         altScreen,
+        tuiProtocol,
         altEnter,
         anyColor,
         content,
