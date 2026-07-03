@@ -27,7 +27,7 @@ in order; each step file is < 4000 chars.
 | # | File | Gate |
 |---|------|------|
 | 01 | `01-linux-full-parity.md` | **DONE** (`42fce26`…`c14a2c9`): 24/24 on ubuntu CI (certification run 28645835737) AND Windows local, one script; smoke-shell.ts (zero bare cmd-isms); MOGGING_CI_GPU=soft (frame-timing only, loud); found+fixed 2 product bugs (POSIX profile-env `export` parity, pane-liveness launch gating); CI: direct-gyp rebuild (image hang bisected), gates filter, per-OS cache, uncancellable sweeps |
-| 02 | `02-macos-parity-and-manifests.md` | Sweep green on macos CI; winget + homebrew-cask manifests; signing hooks verified end-to-end (dry run) |
+| 02 | `02-macos-parity-and-manifests.md` | **DONE** (`277b7d9`…`f86603f`): 24/24 on macos CI (certification run 28658947168, which also re-certified linux 24/24) AND Windows local; signing-dryrun READY (config-complete, secrets-pending) on win+mac; winget + homebrew-cask manifests validate in CI, regenerate with one command, pinned to official v0.3.0 artifacts; release green on all three OSes; FLICKER probe made reflow-honest (content, not line count); @electron/rebuild spawn hang bypassed on ALL 2026-07 images (win+mac+linux); runner deprecations cleared, macos-26 pinned |
 | 03 | `03-windows-sweep-ci.md` | The ENTIRE 24-gate sweep green on windows-latest CI (nightly + dispatchable) — regression coverage off the dev machine; same script, same gates, soft-GPU honesty |
 | 04 | `04-profile-persistence.md` | Per-slot profile choices survive restarts (persisted manifest + failover follow-through); two subscriptions in parallel stay TRUE across relaunch (smoke green) |
 | 05 | `05-browser-pane.md` | A browser is a first-class pane type (WebContentsView): URL bar, per-workspace, preview-what-the-agent-built (smoke green) |
@@ -79,3 +79,25 @@ relaxed ×4-6 and printed loudly; correctness, echo latency, and heap strict):
   16 MB heap.
 - Desktop baselines for comparison (Windows, Phase-5 freeze, strict budgets):
   MILESTONE 108.5 fps / 48.7 ms / 41 MB; PERCEPTION switch 49.6 ms, echo 2.4 ms.
+
+## macOS CI numbers (6/02 — certification run 28658947168, 2026-07-03)
+macos-26 arm64 runner, `MOGGING_CI_GPU=soft`. Soft mode here covers a DIFFERENT
+physics than Linux: the VM can be desktop-class but its scheduling is bimodal —
+across three identical-code runs MILESTONE scored 57 fps/gap 200.8 ms, then
+19.8 fps/gap 149.8 ms (opposite budget members failing), and the certification
+run below would have passed every STRICT budget. Frame timing is the host's
+mood, not app health; echo latency, heap, and correctness stay strict.
+
+- **Sweep**: 24/24 PASS, full uncut run — including TEMPLATE_A/B, PROFILES,
+  ORCHESTRATION, REMOTE on zsh `-l` panes.
+- **MILESTONE** (16-pane stress): 42.3 avg fps / worst gap 69.3 ms / heap 40 MB;
+  idle 57.3 fps / 33.3 ms; 16/16 WebGL visible, 16/16 re-acquire.
+- **PERCEPTION**: switch→painted max 32 ms; **echo median 2.4 ms against the
+  STRICT 60 ms budget** — identical to the Windows desktop baseline; churn
+  35 ms / size-churn 31.8 ms / torrent 34.1 ms, zero >100 ms frames.
+- **SWARMMILESTONE** (phase B, 11 live panes): 58 avg fps / 40.7 ms / 20 MB.
+- Platform finds along the way: macOS 26 image ships no GNU timeout (job
+  installs coreutils); 104-byte `sun_path` cap forces the short `/tmp` sweep
+  root; wrapped zsh prompts made FLICKER's line-count probe lie (now asserts
+  buffer CONTENT survival — strictly stronger); the @electron/rebuild spawn
+  hang is the whole 2026-07 image family, win + mac + linux.
