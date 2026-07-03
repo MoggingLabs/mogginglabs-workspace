@@ -361,3 +361,38 @@ jobs:
 
       - name: Verify signing readiness
         run: node scripts/verify-signing-readiness.mjs
+
+  # Phase-6/02: install manifests must VALIDATE continuously where the tooling
+  # exists, so submission day is a copy-paste PR. Dispatch + once nightly (tied
+  # to the linux cron so two crons don't double-run them).
+  manifests-winget:
+    name: winget manifest validation
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *')
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # winget isn't usable out of the box on the server-based runner image —
+      # bootstrap it via the official PowerShell module.
+      - name: Bootstrap winget
+        shell: pwsh
+        run: |
+          Install-Module Microsoft.WinGet.Client -Force -Scope CurrentUser
+          Repair-WinGetPackageManager -Latest
+          winget --version
+
+      - name: winget validate
+        shell: pwsh
+        run: winget validate --manifest packaging/winget
+
+  manifests-brew:
+    name: homebrew cask style
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *')
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: brew style
+        run: brew style --cask packaging/homebrew/mogginglabs-workspace.rb
