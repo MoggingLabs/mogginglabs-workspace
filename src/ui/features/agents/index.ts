@@ -7,6 +7,7 @@ import { onAgentLaunchRequest } from '../../core/agents/launch-port'
 import { setCommands } from '../../core/commands/command-port'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onProfilesChanged } from '../../core/agents/profiles-port'
+import { whenPaneLive } from '../../core/terminal/liveness-port'
 import { getTelemetry } from '../../core/telemetry'
 import { showToast } from '../../components'
 import { agentsClient } from './agents.client'
@@ -119,6 +120,11 @@ export const agentsFeature: UiFeature = {
       profileId?: string
     ): Promise<void> {
       if (paneId < 0 || !provider || provider === 'shell') return
+      // A write raced into a still-spawning PTY is dropped by the daemon — wait for
+      // the pane's first output (bounded; on timeout proceed, matching the old
+      // fixed-delay behavior). Found by the Linux CI sweep: slow machines lost
+      // template-lineup launches entirely.
+      await whenPaneLive(paneId, 15000)
       if (provider.startsWith('custom:')) {
         const cmd = provider.slice('custom:'.length).trim()
         if (!cmd) return

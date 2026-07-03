@@ -15,6 +15,7 @@ import { getBridge } from '../../core/ipc/bridge'
 import { terminalClient } from './terminal.client'
 import { onTerminalTheme } from '../../core/theme/theme-port'
 import { onTerminalFontSize, terminalFontSize, TERMINAL_LINE_HEIGHT } from '../../core/terminal/font-port'
+import { markPaneLive } from '../../core/terminal/liveness-port'
 import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
 import { setPaneState, clearPaneState } from '../../core/attention/attention-port'
 import { setPaneCwd, clearPaneCwd, getPaneCwd } from '../../core/layout/pane-cwd'
@@ -65,6 +66,7 @@ export class TerminalPane {
   private devHandle: unknown
   private themeUnsub?: () => void
   private fontUnsub?: () => void
+  private liveMarked = false
   private paneLabelUnsub?: () => void
   private paneGitUnsub?: () => void
   private focusUnsub?: () => void
@@ -128,7 +130,13 @@ export class TerminalPane {
     this.term.attachCustomKeyEventHandler((e) => this.handleKey(e))
 
     terminalClient.onData((e) => {
-      if (e.id === this.id) this.term.write(e.data)
+      if (e.id === this.id) {
+        if (!this.liveMarked) {
+          this.liveMarked = true
+          markPaneLive(this.id) // first PTY output — lineup launches may proceed
+        }
+        this.term.write(e.data)
+      }
     })
     terminalClient.onExit((e) => {
       if (e.id === this.id) this.term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n')

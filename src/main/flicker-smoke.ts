@@ -18,7 +18,10 @@ import { softGapMs } from './smoke-shell'
 //     zero errors and never crashed.
 // PERCEPTION-anchored (docs/07): a >100 ms frame is a humanly visible hitch — the gate
 // is what a person can notice, not what the machine can survive (that's docs/05).
-const BUDGET = { maxFrameGapMs: softGapMs(100) } // CI soft mode relaxes gaps only, loudly
+// CI soft mode relaxes gaps only, loudly. Factor 6 here (vs the default 4): the
+// churn phase re-creates WebGL contexts, and SwiftShader context churn spikes
+// past 400ms (measured 416.7ms on the 2026-07 ubuntu image — run 28640874102).
+const BUDGET = { maxFrameGapMs: softGapMs(100, 6) }
 
 const SCRIPT = `(async () => {
   const B = ${JSON.stringify(BUDGET)}

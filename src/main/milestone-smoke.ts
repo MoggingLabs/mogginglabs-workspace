@@ -139,7 +139,14 @@ const SCRIPT = `(async () => {
   m.workspace.switchByIndex(0) // back to the grid
   await sleep(1500)
   const ringAfterFocus = ws1Tab ? ws1Tab.getAttribute('data-attention') : null
-  const webglBack = panes.filter((p) => p.renderer() === 'webgl').length
+  // Re-acquire is slower under software GL — POLL for it (the CLAIM is unchanged:
+  // panes must get WebGL back; only the wait is robust instead of a fixed beat).
+  let webglBack = 0
+  for (let i = 0; i < 20; i++) {
+    webglBack = panes.filter((p) => p.renderer() === 'webgl').length
+    if (webglBack >= B.minWebglVisible) break
+    await sleep(500)
+  }
   const idleGaps = await sample(1500)
   const idle = metrics(idleGaps, 1500)
 
