@@ -165,8 +165,8 @@ jobs:
           fi
           echo 'ALL GATES PASS'; sed -n '/SWEEP RESULTS/,$p' sweep.log
 
-      - name: Upload result JSONs on failure
-        if: failure()
+      - name: Upload result JSONs (pass or fail — the green run's numbers get recorded)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: sweep-results

@@ -7,7 +7,7 @@ import { onAgentLaunchRequest } from '../../core/agents/launch-port'
 import { setCommands } from '../../core/commands/command-port'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onProfilesChanged } from '../../core/agents/profiles-port'
-import { whenPaneLive } from '../../core/terminal/liveness-port'
+import { isPaneLive, whenPaneLive } from '../../core/terminal/liveness-port'
 import { getTelemetry } from '../../core/telemetry'
 import { showToast } from '../../components'
 import { agentsClient } from './agents.client'
@@ -206,6 +206,7 @@ export const agentsFeature: UiFeature = {
           return id
         },
         lastLaunch: (paneId: number) => ({ ...(lastLaunch.get(paneId) ?? {}) }),
+        paneLive: (paneId: number) => isPaneLive(paneId),
         refreshCommands: () => populate()
       }
     }

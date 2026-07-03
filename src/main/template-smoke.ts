@@ -51,8 +51,14 @@ export function runTemplateSmoke(win: BrowserWindow, phase: string): void {
       await delay(6000)
       alt = await paneAlt(id)
     }
+    // The claude evidence is checked against the FULL buffer — on hosts with long
+    // (wrapping) prompts, a few-line tail window scrolls the launch line out of
+    // view. The tail is kept purely as the human-readable failure diagnostic.
+    const hasClaude = (await ES(
+      `(function(){var ps=(window.__mogging&&window.__mogging.panes)||[];var p=ps.find(function(x){return x.id===${id}});return !!(p&&/claude/i.test(p.text()));})()`
+    )) as boolean
     const tail = await paneTail(id)
-    return { alt, ui: alt || /claude/i.test(tail), tail }
+    return { alt, ui: alt || hasClaude, tail }
   }
 
   const runA = async (): Promise<void> => {
@@ -85,7 +91,22 @@ export function runTemplateSmoke(win: BrowserWindow, phase: string): void {
       // launchedOk is reported for diagnosis but not load-bearing: on runners
       // without the CLI the recorded context is environment-dependent.
       const pass = resolved?.paneCount === 4 && oneClaude && count === 2 && ui.ui
-      const resultA = { phase: 'A', pass, resolved, count, launchedOk, claudeAlt: ui.alt, uiOk: ui.ui, paneTail: pass ? undefined : ui.tail }
+      // On failure, establish GROUND TRUTH about the write path: does a direct
+      // terminal:write (the exact channel launchInto uses) land in this pane?
+      let probe: unknown
+      if (!pass) {
+        probe = await ES(
+          `(async function(){var d=function(ms){return new Promise(function(r){setTimeout(r,ms)})};` +
+            `var find=function(){var ps=(window.__mogging&&window.__mogging.panes)||[];return ps.find(function(x){return x.id===${CLAUDE_PANE}})};` +
+            `var p=find();var live=window.__mogging.agents.paneLive?window.__mogging.agents.paneLive(${CLAUDE_PANE}):'n/a';` +
+            `var lenBefore=p?p.text().length:-1;` +
+            `window.bridge.send('terminal:write',{id:${CLAUDE_PANE},data:'echo TPLPROBE_4242'+String.fromCharCode(13)});` +
+            `await d(2500);p=find();var t=p?p.text():'';` +
+            `return {live:live,lenBefore:lenBefore,lenAfter:t.length,probeEchoed:t.indexOf('TPLPROBE_4242')>=0,` +
+            `hasClaudeAnywhere:/claude/i.test(t),paneIds:((window.__mogging&&window.__mogging.panes)||[]).map(function(x){return x.id})};})()`
+        )
+      }
+      const resultA = { phase: 'A', pass, resolved, count, launchedOk, claudeAlt: ui.alt, uiOk: ui.ui, paneTail: pass ? undefined : ui.tail, probe }
       emit(resultA)
       // Phase B overwrites template-result.json — keep A's verdict for artifacts.
       try {
