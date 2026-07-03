@@ -8,6 +8,7 @@ on:
   schedule:
     - cron: '30 3 * * *' # linux-sweep
     - cron: '30 4 * * *' # macos-sweep
+    - cron: '30 5 * * *' # windows-sweep
   workflow_dispatch:
     inputs:
       gates:
@@ -15,9 +16,9 @@ on:
         required: false
         default: ''
       sweeps:
-        description: 'Which OS sweeps this dispatch runs: comma list from linux,macos (use "none" to skip sweeps)'
+        description: 'Which OS sweeps this dispatch runs: comma list from linux,macos,windows (use "none" to skip sweeps)'
         required: false
-        default: 'linux,macos'
+        default: 'linux,macos,windows'
       signing_dryrun:
         description: 'Also run the signing/notarization dry run (packages win+mac UNSIGNED, verifies readiness)'
         type: boolean
@@ -307,6 +308,91 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: sweep-results-macos
+          path: |
+            out/*-result.json
+            sweep.log
+          if-no-files-found: warn
+
+  # Phase-6/03: Windows regression coverage stops depending on the dev machine —
+  # the ENTIRE 24-gate sweep on windows-latest. Same script, same gate list:
+  # Git Bash drives qa-smokes.sh through its native MINGW branches (the local-dev
+  # path). No GPU on the runner -> MOGGING_CI_GPU=soft, the same frame-timing-only
+  # honesty as linux/macos. The @electron/rebuild spawn hang is confirmed on this
+  # image too (40 min of zero output, run 28647921078) and node-gyp 13 driven
+  # directly finds VS2026 (same run: gyp info ok) -> direct bypass, no probe needed.
+  # Every run step is shell: bash — pwsh re-tokenizes flags and can't run the
+  # sweep's grep/sed gate.
+  windows-sweep:
+    name: windows full 24-gate sweep
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '30 5 * * *') ||
+      (github.event_name == 'workflow_dispatch' && contains(inputs.sweeps, 'windows'))
+    runs-on: windows-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Cache native node_modules (electron-ABI .node files included)
+        id: nmcache
+        uses: actions/cache@v6
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json') }}-e34
+
+      - name: Install (packages only)
+        if: steps.nmcache.outputs.cache-hit != 'true'
+        shell: bash
+        run: npm ci --ignore-scripts
+
+      - name: Electron binary (its install script was skipped above)
+        if: steps.nmcache.outputs.cache-hit != 'true'
+        shell: bash
+        run: node node_modules/electron/install.js
+
+      - name: Electron-ABI rebuild (direct node-gyp)
+        if: steps.nmcache.outputs.cache-hit != 'true'
+        shell: bash
+        timeout-minutes: 25
+        run: |
+          EV=$(node -p "require('electron/package.json').version")
+          for m in node-pty better-sqlite3; do
+            echo "── rebuilding $m for electron $EV"
+            (cd "node_modules/$m" && node ../node-gyp/bin/node-gyp.js rebuild \
+              --runtime=electron --target="$EV" \
+              --dist-url=https://www.electronjs.org/headers --build-from-source < /dev/null)
+          done
+
+      - name: Build
+        shell: bash
+        run: npm run build
+
+      - name: Full sweep (24 gates, isolated state)
+        shell: bash
+        run: |
+          MOGGING_CI_GPU=soft MOGGING_GATES="${{ inputs.gates }}" bash scripts/qa-smokes.sh | tee sweep.log
+
+      - name: Gate on results
+        shell: bash
+        run: |
+          if ! grep -q 'SWEEP RESULTS' sweep.log; then
+            echo '::error::sweep never printed results'; exit 1
+          fi
+          BAD=$(sed -n '/SWEEP RESULTS/,$p' sweep.log | grep -cE ' (FAIL|MISSING)$' || true)
+          if [ "$BAD" != "0" ]; then
+            echo "::error::$BAD gate(s) failed"; sed -n '/SWEEP RESULTS/,$p' sweep.log; exit 1
+          fi
+          echo 'ALL GATES PASS'; sed -n '/SWEEP RESULTS/,$p' sweep.log
+
+      - name: Upload result JSONs (pass or fail — the green run's numbers get recorded)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sweep-results-windows
           path: |
             out/*-result.json
             sweep.log
