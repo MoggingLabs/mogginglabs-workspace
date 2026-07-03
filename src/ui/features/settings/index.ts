@@ -1,11 +1,12 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
 import { TelemetryChannels, type TelemetryRendererConfig } from '@contracts'
-import { Button, createCheckbox, createModal, createSegmented, el, icon, ICON_NAMES } from '../../components'
+import { Button, createCheckbox, createSegmented, el, icon, ICON_NAMES } from '../../components'
 import { THEMES } from '../../core/theme/themes'
 import { currentThemeId, onThemeChange, setTheme } from '../../core/theme/theme-state'
 import { setCommands } from '../../core/commands/command-port'
 import { getBridge } from '../../core/ipc/bridge'
 import { getTelemetry } from '../../core/telemetry'
+import { activeView, goBack, onViewChange, setActiveView } from '../../core/shell/view-port'
 import { TEMPLATE_COUNTS } from '../layout'
 import { createProfilesHostsSection } from './profiles-hosts'
 
@@ -27,14 +28,18 @@ function setPref(key: string, value: string): void {
 }
 
 /**
- * Settings: theme, default wizard layout, and telemetry CONSENT (observability/00,
- * ADR 0005) — two independent opt-in toggles persisted main-side over IPC; granting or
- * revoking re-initializes the adapters live. BYO-auth is stated, not configured: there
- * are deliberately no credential fields anywhere in this app (ADR 0002).
+ * Settings — a FULL-APP page (Phase-5/05, was a modal): left section nav
+ * (Appearance · Terminal · Profiles & Hosts · Privacy · About) over a scrollable
+ * content column. Theme, default wizard layout, and telemetry CONSENT
+ * (observability/00, ADR 0005) — two independent opt-in toggles persisted
+ * main-side over IPC; granting or revoking re-initializes the adapters live.
+ * BYO-auth is stated, not configured: there are deliberately no credential fields
+ * anywhere in this app (ADR 0002). The page DOM is built ONCE at mount — unsaved
+ * form text survives leaving and returning within a session.
  */
 export const settingsFeature: UiFeature = {
   name: 'settings',
-  mount() {
+  mount(ctx) {
     const themeSeg = createSegmented({
       options: THEMES.map((t) => ({ id: t.id, label: t.name })),
       value: currentThemeId(),
@@ -96,35 +101,137 @@ export const settingsFeature: UiFeature = {
 
     const profilesHosts = createProfilesHostsSection() as HTMLElement & { refresh: () => Promise<void> }
 
-    const body = el('div', { class: 'settings' }, [
-      row('Theme', themeSeg.el, 'System follows your OS light/dark preference.'),
-      row('New-workspace layout', layoutSeg.el, 'How many terminals the wizard suggests.'),
-      row(
-        'Profiles & SSH hosts',
-        profilesHosts,
-        'Pointer sets only: profiles select WHICH of your accounts a CLI uses; hosts are ssh targets. Never keys, tokens, or passwords — secret-shaped values are refused at save (ADR 0002).'
-      ),
-      row(
-        'Help improve the app',
-        el('div', { class: 'settings-consents' }, [errorConsent.el, analyticsConsent.el]),
-        'Both are OFF by default and fully anonymous (a random install id — never your account, machine name, or provider identity). Telemetry NEVER includes terminal output, prompts, code, file paths, environment variables, or credentials. Changes apply immediately; DO_NOT_TRACK is always honored.'
-      ),
-      el('div', { class: 'settings-note' }, [
-        icon('check-circle', 14),
-        el('span', {
-          text: 'Your keys, your CLIs: agents authenticate themselves with your own accounts. This app has no credential settings — by design.'
+    // ── The page: [section nav | scrollable content column] ──────────────────
+    const version = el('span', { class: 'settings-about-version', text: '' })
+    try {
+      void getBridge()
+        .invoke(TelemetryChannels.getConfig)
+        .then((cfg) => {
+          const release = (cfg as TelemetryRendererConfig | null)?.release
+          if (release) version.textContent = `Version ${release}`
         })
+        .catch(() => undefined)
+    } catch {
+      /* no bridge (tests) */
+    }
+
+    const section = (id: string, title: string, children: (Node | null)[]): HTMLElement =>
+      el('section', { class: 'settings-section', dataset: { section: id } }, [
+        el('h2', { class: 'section-label', text: title }),
+        ...children
       ])
+
+    const sections: { id: string; label: string; el: HTMLElement }[] = [
+      {
+        id: 'appearance',
+        label: 'Appearance',
+        el: section('appearance', 'Appearance', [
+          row('Theme', themeSeg.el, 'System follows your OS light/dark preference.')
+        ])
+      },
+      {
+        id: 'terminal',
+        label: 'Terminal',
+        el: section('terminal', 'Terminal', [
+          row('New-workspace layout', layoutSeg.el, 'How many terminals the wizard suggests.')
+        ])
+      },
+      {
+        id: 'profiles',
+        label: 'Profiles & Hosts',
+        el: section('profiles', 'Profiles & SSH hosts', [
+          row(
+            'Pointer sets only',
+            profilesHosts,
+            'Profiles select WHICH of your accounts a CLI uses; hosts are ssh targets. Never keys, tokens, or passwords — secret-shaped values are refused at save (ADR 0002).'
+          )
+        ])
+      },
+      {
+        id: 'privacy',
+        label: 'Privacy',
+        el: section('privacy', 'Privacy', [
+          row(
+            'Help improve the app',
+            el('div', { class: 'settings-consents' }, [errorConsent.el, analyticsConsent.el]),
+            'Both are OFF by default and fully anonymous (a random install id — never your account, machine name, or provider identity). Telemetry NEVER includes terminal output, prompts, code, file paths, environment variables, or credentials. Changes apply immediately; DO_NOT_TRACK is always honored.'
+          ),
+          el('div', { class: 'settings-note' }, [
+            icon('check-circle', 14),
+            el('span', {
+              text: 'Your keys, your CLIs: agents authenticate themselves with your own accounts. This app has no credential settings — by design.'
+            })
+          ])
+        ])
+      },
+      {
+        id: 'about',
+        label: 'About',
+        el: section('about', 'About', [
+          el('div', { class: 'settings-about' }, [
+            el('span', { class: 'settings-about-name', text: 'MoggingLabs Workspace' }),
+            version,
+            el('span', {
+              class: 'settings-row-caption',
+              text: 'A neutral, reliable, cross-platform organizer for AI coding-agent CLIs. Your keys, your CLIs — no subscription to us.'
+            })
+          ])
+        ])
+      }
+    ]
+
+    const contentCol = el('div', { class: 'settings-content' }, sections.map((s) => s.el))
+
+    const navItems = sections.map((s) =>
+      el(
+        'button',
+        {
+          class: 'settings-nav-item',
+          type: 'button',
+          dataset: { target: s.id },
+          onClick: () => {
+            s.el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            for (const b of navItems) b.classList.toggle('is-active', b.dataset.target === s.id)
+          }
+        },
+        [s.label]
+      )
+    )
+    navItems[0].classList.add('is-active')
+
+    const backBtn = Button({
+      label: 'Back',
+      icon: 'chevron-left',
+      variant: 'ghost',
+      size: 'sm',
+      onClick: () => goBack()
+    })
+    backBtn.classList.add('settings-back')
+    const nav = el('nav', { class: 'settings-nav', ariaLabel: 'Settings sections' }, [
+      backBtn,
+      ...navItems
     ])
 
-    const modal = createModal({
-      title: 'Settings',
-      subtitle: 'Theme · profiles · hosts · privacy',
-      body,
-      footer: el('div', { class: 'settings-footer' }, [
-        el('span', {}),
-        Button({ label: 'Done', variant: 'primary', onClick: () => modal.close() })
-      ])
+    const page = el('div', {})
+    page.id = 'view-settings'
+    page.append(el('div', { class: 'settings-page' }, [nav, contentCol]))
+    ctx.content.append(page)
+
+    // Entering the page re-pulls consent + refreshes the managed lists — but never
+    // while a form is open (unsaved text must survive leave/return; page DOM is
+    // never rebuilt). Esc leaves, back to wherever the user came from.
+    onViewChange((v) => {
+      if (v !== 'settings') return
+      void pullConsent()
+      if (!page.querySelector('.ph-form')) void profilesHosts.refresh()
+      getTelemetry().captureEvent({ name: 'settings.opened' })
+    })
+    window.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || activeView() !== 'settings') return
+      // Overlays above the page (palette, dialogs) own their own Esc.
+      if (document.querySelector('.palette-overlay:not([hidden]), .modal-overlay')) return
+      e.preventDefault()
+      goBack()
     })
 
     // Dev/gallery handles: switch themes + render the full icon sheet for shots.
@@ -162,12 +269,7 @@ export const settingsFeature: UiFeature = {
         id: 'settings:open',
         title: 'Open Settings',
         hint: 'App',
-        run: () => {
-          void pullConsent()
-          void profilesHosts.refresh()
-          modal.open()
-          getTelemetry().captureEvent({ name: 'settings.opened' })
-        }
+        run: () => setActiveView('settings')
       },
       ...THEMES.map((t) => ({
         id: `theme:${t.id}`,

@@ -344,6 +344,11 @@ button {
   background: var(--accent-weak);
   color: var(--accent-ink);
 }
+/* The titlebar view-switcher trio: the active view's button reads quietly active. */
+.icon-btn.is-active {
+  background: var(--accent-weak);
+  color: var(--accent-ink);
+}
 .icon-btn svg {
   width: 16px;
   height: 16px;
@@ -772,16 +777,25 @@ button {
   flex-direction: column;
 }
 
-/* View routing: Home fills the content region; the grids hide (their panes release
-   WebGL via the managed leasing — same mechanism as a background workspace). */
-#content.view-home #workspace-host {
+/* View routing (Phase-5/05): exactly one top-level view owns everything below the
+   titlebar. Hidden views are display:none (panes stay mounted — WebGL releases via
+   the managed leasing, same as a background workspace); the RAIL exists only where
+   it means something: the grid. */
+#view-home,
+#view-board,
+#view-settings {
   display: none;
 }
-#view-home {
-  display: none;
-}
-#content.view-home #view-home {
+#content.view-home #view-home,
+#content.view-board #view-board,
+#content.view-settings #view-settings {
   display: flex;
+}
+#content:not(.view-grid) #workspace-host {
+  display: none;
+}
+#app:not(.view-grid) #rail {
+  display: none;
 }
 
 /* ── The workspace rail ─────────────────────────────────────────────────────── */
@@ -1626,7 +1640,85 @@ body.resizing * {
   font-size: var(--fs-12);
 }
 
-/* ── Settings ──────────────────────────────────────────────────────────────── */
+/* ── Settings — a full-app PAGE (5/05): section nav | scrollable content ────── */
+#view-settings {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  justify-content: center;
+}
+.settings-page {
+  display: flex;
+  gap: var(--sp-6);
+  width: min(1040px, 100%);
+  min-height: 0;
+  padding: var(--sp-5);
+}
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 200px;
+  flex: none;
+  align-items: stretch;
+}
+.settings-back {
+  align-self: flex-start;
+  margin-bottom: var(--sp-3);
+}
+.settings-nav-item {
+  padding: 7px var(--sp-3);
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-mid);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
+}
+.settings-nav-item:hover {
+  background: var(--bg-elevated);
+  color: var(--text-hi);
+}
+.settings-nav-item.is-active {
+  background: var(--accent-weak);
+  color: var(--accent-ink);
+}
+.settings-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  padding-right: var(--sp-3);
+  padding-bottom: var(--sp-6);
+}
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  scroll-margin-top: var(--sp-2);
+}
+.settings-about {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.settings-about-name {
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+}
+.settings-about-version {
+  color: var(--text-lo);
+  font-size: var(--fs-12);
+  font-family: var(--font-mono);
+}
+
 .settings {
   display: flex;
   flex-direction: column;
@@ -1744,7 +1836,7 @@ body.resizing * {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: clamp(16px, 2.6vw, 44px);
-  width: min(1080px, 94%);
+  width: min(1180px, 92%); /* full-bleed view (5/05): the launcher owns the width */
 }
 @media (max-width: 900px) {
   .home-sections {
@@ -2586,8 +2678,8 @@ body.resizing * {
 
 /* ── Board (Phase-3/05): local Kanban whose cards launch agents ───────────────── */
 #view-board {
-  display: none;
   flex-direction: column;
+  align-items: center; /* full-bleed view: lanes sit centered at a comfortable width */
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
@@ -2595,12 +2687,9 @@ body.resizing * {
   gap: var(--sp-4);
   overflow: hidden;
 }
-#content.view-board #view-board {
-  display: flex;
-}
-#content.view-board #workspace-host,
-#content.view-board #view-home {
-  display: none;
+.board-head,
+.board-lanes {
+  width: min(1440px, 100%);
 }
 .board-head {
   display: flex;
@@ -2615,6 +2704,11 @@ body.resizing * {
 }
 .board-sub {
   color: var(--text-lo);
+  font-size: var(--fs-12);
+}
+.board-empty-hint {
+  margin-left: auto;
+  color: var(--text-mid);
   font-size: var(--fs-12);
 }
 .board-lanes {
@@ -2865,8 +2959,13 @@ body.resizing * {
 }
 .ph-env-row {
   display: grid;
-  grid-template-columns: 1fr 2fr auto;
+  /* minmax(0,…) — the env-value input must SHRINK, not overflow the form edge */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
   gap: var(--sp-1);
+}
+.ph-form .input {
+  width: 100%;
+  min-width: 0;
 }
 .ph-form-actions {
   display: flex;

@@ -343,14 +343,17 @@ export class WorkspaceController {
       if (on) v.tab.setAttribute('aria-current', 'true')
       else v.tab.removeAttribute('aria-current')
     }
-    // User-initiated selection lands in the grid; restore keeps the launcher up.
-    if (opts.reveal !== false) setActiveView('grid')
     setFocusedPane({
       paneId: view.layout.focusedPaneId() ?? ((view.meta.ordinal * 100 + 1) as PaneId),
       cwd: view.meta.cwd
     })
     this.refreshAttention() // activating a workspace clears its ring (you're looking at it)
     this.onChange()
+    // User-initiated selection lands in the grid; restore keeps the launcher up.
+    // AFTER onChange: the reveal must see the published workspace snapshot — the
+    // view port routes an empty grid Home (UX-16), and on the FIRST create the
+    // snapshot is empty until onChange publishes it.
+    if (opts.reveal !== false) setActiveView('grid')
   }
 
   /** Close one pane of a workspace; closing its last pane closes the workspace. */

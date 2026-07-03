@@ -102,6 +102,23 @@ export function runBoardSmoke(win: BrowserWindow): void {
       )) as { found: boolean; flagged?: boolean; chip?: boolean }
       const attnOk = attn.found && attn.flagged === true && attn.chip === true
 
+      // 4c) 5/05: the Board is a FULL-APP view — while it is open the rail is gone;
+      // toggling back to the grid restores it.
+      await ES(`document.querySelector('.titlebar-right .icon-btn[aria-label="Board"]').click()`)
+      await sleep(500)
+      const noRailOk = (await ES(
+        `(() => {
+          const rail = document.getElementById('rail')
+          return document.querySelector('#content.view-board') !== null &&
+            rail !== null && getComputedStyle(rail).display === 'none'
+        })()`
+      )) as boolean
+      await ES(`document.querySelector('.titlebar-right .icon-btn[aria-label="Board"]').click()`)
+      await sleep(400)
+      const railBackOk = (await ES(
+        `(() => { const rail = document.getElementById('rail'); return rail !== null && getComputedStyle(rail).display !== 'none' })()`
+      )) as boolean
+
       // 4b) reviewer approval -> push-fed ✓-chip; worktree removal clears it.
       const cliPath = join(app.getAppPath(), 'bin', 'mogging.mjs')
       const cli = (args: string[], extraEnv: Record<string, string> = {}): Promise<{ code: number }> =>
@@ -154,8 +171,8 @@ export function runBoardSmoke(win: BrowserWindow): void {
         await sleep(400)
       }
 
-      const pass = persistOk && bindOk && promptOk && attnOk && approvedChipOk && approvedChipGone && unbindOk
-      result = { pass, persistOk, bindOk, promptOk, attnOk, attn, approveExit, approvedChipOk, approvedChipGone, removed, branch, gitQ, wtDirs, unbindOk, paneId, cardId }
+      const pass = persistOk && bindOk && promptOk && attnOk && noRailOk && railBackOk && approvedChipOk && approvedChipGone && unbindOk
+      result = { pass, persistOk, bindOk, promptOk, attnOk, attn, noRailOk, railBackOk, approveExit, approvedChipOk, approvedChipGone, removed, branch, gitQ, wtDirs, unbindOk, paneId, cardId }
     } catch (e) {
       result = { pass: false, error: String(e) }
     }

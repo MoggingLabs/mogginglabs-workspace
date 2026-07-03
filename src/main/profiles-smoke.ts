@@ -112,10 +112,18 @@ export function runProfilesSmoke(win: BrowserWindow): void {
       const scrollbackSurvived = (await bufferText()).includes(`MARKVALUE=${MARK_A}`)
       const paneCount = Number(await ES('window.__mogging.layout.paneCount()'))
 
-      // ── 5. The Settings FORM path (4/06 polish): the deny-list refusal renders
-      // inline; a clean pointer saves and appears in the managed list. ──────────
+      // ── 5. The Settings PAGE path (5/05 — was a modal): the gear opens the
+      // full-app page (rail hidden), the deny-list refusal renders inline, a clean
+      // pointer saves, and Esc returns to the grid with the SAME active workspace.
       await ES(`document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]').click()`)
       await sleep(900)
+      const pageOpenOk = (await ES(
+        `(() => {
+          const rail = document.getElementById('rail')
+          return document.querySelector('#content.view-settings #view-settings') !== null &&
+            rail !== null && getComputedStyle(rail).display === 'none'
+        })()`
+      )) as boolean
       await ES(`document.querySelector('.icon-btn[aria-label="Add profile"], button[aria-label="Add profile"]').click()`)
       await sleep(400)
       const fillAndSave = (name: string, key: string, value: string): Promise<unknown> =>
@@ -146,9 +154,23 @@ export function runProfilesSmoke(win: BrowserWindow): void {
         )) as boolean
       }
 
+      // ── 6. Esc leaves the page back to the grid; rail + active workspace intact.
+      await ES(`(window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })), 1)`)
+      await sleep(600)
+      const returnOk = (await ES(
+        `(() => {
+          const rail = document.getElementById('rail')
+          const ws = window.__mogging.workspace.active()
+          return document.querySelector('#content.view-settings') === null &&
+            rail !== null && getComputedStyle(rail).display !== 'none' &&
+            !!ws && ws.name === 'P'
+        })()`
+      )) as boolean
+
       const pass =
-        saveOk && envAOk && defaultOk && toastOk && envBOk && failoverOk && scrollbackSurvived && paneCount === 1 && formDenyOk && formSaveOk
-      result = { pass, saveOk, envAOk, defaultOk, toastOk, envBOk, failoverOk, scrollbackSurvived, paneCount, formDenyOk, formSaveOk, launchCtxA, launchCtxB }
+        saveOk && envAOk && defaultOk && toastOk && envBOk && failoverOk && scrollbackSurvived && paneCount === 1 &&
+        pageOpenOk && formDenyOk && formSaveOk && returnOk
+      result = { pass, saveOk, envAOk, defaultOk, toastOk, envBOk, failoverOk, scrollbackSurvived, paneCount, pageOpenOk, formDenyOk, formSaveOk, returnOk, launchCtxA, launchCtxB }
     } catch (e) {
       result = { pass: false, error: String(e) }
     }

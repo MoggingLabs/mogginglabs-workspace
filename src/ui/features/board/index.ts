@@ -262,7 +262,13 @@ export const boardFeature: UiFeature = {
       root.replaceChildren()
       const head = el('div', { class: 'board-head' }, [
         el('h1', { class: 'board-title', text: 'Board' }),
-        el('span', { class: 'board-sub', text: 'Cards launch agents — local only, yours.' })
+        el('span', { class: 'board-sub', text: 'Cards launch agents — local only, yours.' }),
+        cards.length === 0
+          ? el('span', {
+              class: 'board-empty-hint',
+              text: 'Empty board — add a card in any lane, then ▸ start an agent on it.'
+            })
+          : null
       ])
       const lanesEl = el('div', { class: 'board-lanes' })
       for (const lane of LANES) {

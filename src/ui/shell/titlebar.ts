@@ -1,8 +1,7 @@
 import { TelemetryChannels, type TelemetryRendererConfig } from '@contracts'
 import { IconButton } from '../components'
 import { getBridge } from '../core/ipc/bridge'
-import { runCommand } from '../core/commands/command-port'
-import { activeView, setActiveView } from '../core/shell/view-port'
+import { activeView, goBack, onViewChange, setActiveView } from '../core/shell/view-port'
 
 /**
  * The app's top bar — a strict 3-column grid (1fr auto 1fr), frameless-native:
@@ -82,9 +81,16 @@ export function createTitlebar(onToggleRail: () => void): {
     icon: 'sliders',
     label: 'Settings',
     title: 'Settings',
-    onClick: () => runCommand('settings:open')
+    onClick: () => (activeView() === 'settings' ? goBack() : setActiveView('settings'))
   })
   cluster.append(left, right, home, board, toggle, settings)
+
+  // The view-switcher trio: the active top-level view's button reads active.
+  onViewChange((v) => {
+    home.classList.toggle('is-active', v === 'home')
+    board.classList.toggle('is-active', v === 'board')
+    settings.classList.toggle('is-active', v === 'settings')
+  })
 
   el.append(brand, center, cluster)
   return { el, left, center, right }

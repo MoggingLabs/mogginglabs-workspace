@@ -193,6 +193,26 @@ readability lives in ink/edge — neither sacrifices the other.
   themes) + `out/gallery/probe-chrome.json` (fullscreen right gap ≈ sp-3, restored
   gap = controls reserve, no horizontal overflow, trigger centered).
 
+## Full-app views (Phase-5/05)
+
+- `AppView = 'home' | 'grid' | 'board' | 'settings'`. Exactly one top-level view
+  owns everything below the titlebar; `#app.view-<x>` (and `#content.view-<x>`)
+  classes route it. The **rail renders only in the grid** (`#app:not(.view-grid)
+  #rail { display:none }`) — a launcher full of workspace tabs made no sense.
+  View trips are pure CSS show/hide: the grid and its panes are NEVER unmounted
+  (GL-warm + scrollback guarantees hold; smoke-asserted).
+- **Settings is a page**, not a modal: left section nav (Appearance · Terminal ·
+  Profiles & Hosts · Privacy · About) + a scrollable content column, built ONCE at
+  mount so unsaved form text survives leave/return. Enter via the titlebar gear or
+  `settings:open`; leave via Esc, the back affordance, or any titlebar view — the
+  view port keeps ONE step of history (`goBack()`), so Settings returns wherever
+  you came from. Real dialogs (wizard, review, card editor) stay modals.
+- With zero workspaces, any road to the grid lands **Home** instead (the empty grid
+  was a dead end — audit UX-16). The titlebar Home/Board/gear trio shows the active
+  view (`.icon-btn.is-active`).
+- Full-bleed rebalance: board lanes/head cap at `min(1440px, 100%)` centered; home
+  sections widen to `min(1180px, 92%)`.
+
 ## Icons (Phase-5/03)
 
 One family: 24×24 grid, **stroke 1.75**, round caps/joins — lucide-compatible
@@ -253,10 +273,10 @@ wins shipped with this step; everything else is LOGGED with its owner step.
 | UX-13 | Role chips (WORKER / REVIEWER) are both accent-orange — roles indistinguishable from each other and from attention semantics | dark-grid-4-chips | 07 (03 kept roles text-only by design — see § Icons; distinct role tones remain open) |
 | UX-14 | Wizard `PROVIDER_COLORS` duplicates identity hues in TS; the Claude dot is near-brand orange (ambiguous with attention); `--cell-accent` is a second inline-style channel | dark-wizard-agents | **partially fixed 03** (Claude dot moved off the brand hue); palette consolidation → 07 |
 | UX-15 | Pane-header action cluster (5 always-visible icons) consumes ~⅓ of header width at 8/16-pane density — titles truncate early | dark-grid-16 | 07 (behavioral — hover-reveal needs a PANEOPS-safe design) |
-| UX-16 | Closing Board/wizard with zero workspaces lands on an EMPTY grid view (blank canvas, no CTA) — the gallery had to work around it | light-home-empty (first run) | 05 |
-| UX-17 | Settings profile form: env-value input overflows the form's right edge (both themes) | dark-settings-profile-error | 05 |
-| UX-18 | Native `<select>` (wizard "Runs on", profile provider) doesn't match `.input` styling | dark-wizard-start | 05 |
-| UX-19 | Board empty lanes have no empty-state hint (only the dashed "+ Add card") | dark-board-empty | 05 |
+| UX-16 | Closing Board/wizard with zero workspaces lands on an EMPTY grid view (blank canvas, no CTA) — the gallery had to work around it | light-home-empty (first run) | **fixed 05** (`setActiveView('grid')` with zero workspaces routes Home) |
+| UX-17 | Settings profile form: env-value input overflows the form's right edge (both themes) | dark-settings-profile-error | **fixed 05** (`minmax(0,…)` env-row columns; form inputs shrink) |
+| UX-18 | Native `<select>` (wizard "Runs on", profile provider) doesn't match `.input` styling | dark-wizard-start | 07 (selects already carry `.input`; a custom chevron needs a color-literal data-URI — breaks the grep gate — or wrapper DOM; deferred with that note) |
+| UX-19 | Board empty lanes have no empty-state hint (only the dashed "+ Add card") | dark-board-empty | **fixed 05** (`.board-empty-hint` in the header when the board is empty) |
 | UX-20 | Idle pane state dot `--border-strong` on light ≈1.9:1 — acceptably quiet, but header icon hover affordances are also dim on light | light-grid-4-chips | 06 |
 | UX-21 | `--fs-10` was referenced 5× (role/claims/remote/board chips) but never DEFINED — the declarations were invalid and chips rendered at the inherited size | dark-grid-4-chips | **fixed 01** (`--fs-10: 10px`); remaining raw 9/10px literals → 03 |
 | UX-22 | Rail header ("WORKSPACES n" + the `+` button) is 10px `--text-lo` — the primary creation entry point is the faintest thing in the rail | dark-home-empty | **fixed 02** (title → `--text-mid`; header edge-aligned with tab content) |

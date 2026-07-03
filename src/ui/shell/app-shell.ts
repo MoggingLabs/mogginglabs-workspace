@@ -65,10 +65,14 @@ export function createAppShell(root: HTMLElement): ShellContext {
     true
   )
 
-  // The content region shows exactly one view: Home or the workspace grids.
+  // The content region shows exactly one view; the ROOT carries the view class too
+  // (Phase-5/05) so top-level views can own the whole app — the rail renders only
+  // in the grid (pure CSS show/hide: panes are never re-mounted by a view trip).
   onViewChange((view) => {
-    content.classList.toggle('view-home', view === 'home')
-    content.classList.toggle('view-board', view === 'board')
+    for (const v of ['home', 'grid', 'board', 'settings'] as const) {
+      app.classList.toggle(`view-${v}`, view === v)
+      content.classList.toggle(`view-${v}`, view === v)
+    }
   })
 
   // Window-state chrome classes (Phase-5/04): fullscreen collapses the native-

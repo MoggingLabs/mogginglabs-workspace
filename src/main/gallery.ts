@@ -365,6 +365,9 @@ export function runGallery(win: BrowserWindow): void {
           await click('.titlebar-right .icon-btn[aria-label="Settings"]')
           await sleep(600)
           await snap(`${tag}-settings`)
+          // The page scrolls — bring the Profiles section into frame for the form shot.
+          await click('.settings-nav-item[data-target="profiles"]')
+          await sleep(600)
           await click('button[aria-label="Add profile"]')
           await sleep(300)
           await ES(
