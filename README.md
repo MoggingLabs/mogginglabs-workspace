@@ -43,10 +43,11 @@ renderer is tuned once and behaves identically everywhere. See
 
 ## Quickstart
 
-> **Status: Phase 4 (swarm core) shipped** — everything from Phase 3 plus: swarm
-> roles + a daemon mailbox (`mogging mail`), an exclusive file-ownership ledger
-> (`mogging claim`), a reviewer gate on merges (`mogging approve` / typed override),
-> provider profiles with usage-limit failover, and remote (SSH) panes. Every gate is
+> **Status: Phase 5 (UI/UX excellence) shipped** — the full redesign on top of the
+> Phase-4 swarm core: an AA-measured design-token system with vivid per-workspace
+> identity colors, a consistent icon family, native-feeling window chrome, full-app
+> Home/Board/Settings views, and an empirically-tuned terminal (14px default, live
+> size control). Before/after receipts in `prompts/phase-5/REPORT.md`. Every gate is
 > smoke-asserted: `bash scripts/qa-smokes.sh` proves the whole surface (24 gates) on
 > fresh isolated state.
 
@@ -119,8 +120,8 @@ other; `main`/`preload`/`renderer` are the only composition root. See
 - **Phase 2** ✅ — Agent awareness: OSC state detection, command blocks, per-pane git, 16-agent perf budget.
 - **Phase 3** ✅ — Orchestration: control API, worktree isolation, pre-ship review, Kanban board, end-to-end milestone.
 - **Phase 4** ✅ — Swarm core: mailbox + roles, ownership ledger, reviewer gate, profiles + failover, SSH panes, Linux target.
-- **Phase 5** — UI/UX excellence: vivid workspace-identity color system, icon overhaul, window-chrome fixes, full-app views, terminal comfort. *(next)*
-- **Phase 6** — Product-ready: full Linux/macOS parity sweeps, browser pane, first-run + updates, v0.4.0. *(voice: undecided, own pack later)*
+- **Phase 5** ✅ — UI/UX excellence: AA-measured token system + vivid workspace identity, icon family, window-chrome fixes, full-app views, 14px terminal comfort (receipts: `prompts/phase-5/REPORT.md`).
+- **Phase 6** — Product-ready: full Linux/macOS parity sweeps, browser pane, first-run + updates, v0.4.0. *(next; voice: undecided, own pack later)*
 
 Full plan: [`docs/02-mvp-and-roadmap.md`](docs/02-mvp-and-roadmap.md).
 

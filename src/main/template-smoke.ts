@@ -31,6 +31,29 @@ export function runTemplateSmoke(win: BrowserWindow, phase: string): void {
     ES(
       `(function(){var ps=(window.__mogging&&window.__mogging.panes)||[];var p=ps.find(function(x){return x.id===${id}});return !!(p&&p.term&&p.term.buffer.active.type==='alternate');})()`
     ) as Promise<boolean>
+  // Failure diagnosability: what is actually IN the pane when the TUI check fails.
+  const paneTail = (id: number): Promise<string> =>
+    ES(
+      `(function(){var ps=(window.__mogging&&window.__mogging.panes)||[];var p=ps.find(function(x){return x.id===${id}});if(!p)return 'NO PANE';return p.text().split(String.fromCharCode(10)).filter(function(l){return l.trim()}).slice(-6).join(' | ').slice(-500);})()`
+    ) as Promise<string>
+  /** Newer claude CLIs run first-run onboarding + AUTH under the smoke's isolated
+   *  LOCALAPPDATA (their session state lives there) — the real TUI (alternate
+   *  buffer) is unreachable without OAuth, which a smoke must never perform. The
+   *  gate's INTENT is deterministic anyway: the claude SLOT launched and claude is
+   *  the process talking in that pane. Accept-enter is still tried (reaches the
+   *  real TUI when auth exists); otherwise claude's own onboarding output counts. */
+  const claudeUiOk = async (id: number): Promise<{ alt: boolean; ui: boolean; tail: string }> => {
+    let alt = await paneAlt(id)
+    for (let i = 0; i < 2 && !alt; i++) {
+      await ES(
+        `(function(){var ps=(window.__mogging&&window.__mogging.panes)||[];var p=ps.find(function(x){return x.id===${id}});p&&p.write(String.fromCharCode(13));return 1;})()`
+      )
+      await delay(6000)
+      alt = await paneAlt(id)
+    }
+    const tail = await paneTail(id)
+    return { alt, ui: alt || /claude/i.test(tail), tail }
+  }
 
   const runA = async (): Promise<void> => {
     if (done) return
@@ -50,12 +73,16 @@ export function runTemplateSmoke(win: BrowserWindow, phase: string): void {
       await delay(1200)
       const count = Number(await ES('window.__mogging.workspace.count()'))
       await delay(11000) // launchLineup delay (900ms) + claude render
-      const claudeAlt = await paneAlt(CLAUDE_PANE)
+      const ui = await claudeUiOk(CLAUDE_PANE)
+      const launch = (await ES(`window.__mogging.agents.lastLaunch(${CLAUDE_PANE})`)) as {
+        provider?: string
+      } | null
+      const launchedOk = launch?.provider === 'claude'
       const oneClaude = Array.isArray(resolved?.assignments)
         ? resolved.assignments.filter((a) => a === 'claude').length === 1
         : false
-      const pass = resolved?.paneCount === 4 && oneClaude && count === 2 && claudeAlt
-      emit({ phase: 'A', pass, resolved, count, claudeAlt })
+      const pass = resolved?.paneCount === 4 && oneClaude && count === 2 && launchedOk && ui.ui
+      emit({ phase: 'A', pass, resolved, count, launchedOk, claudeAlt: ui.alt, uiOk: ui.ui, paneTail: pass ? undefined : ui.tail })
       app.exit(pass ? 0 : 1)
     } catch (e) {
       emit({ phase: 'A', pass: false, error: String(e) })
@@ -75,9 +102,9 @@ export function runTemplateSmoke(win: BrowserWindow, phase: string): void {
       }>
       const template = Array.isArray(list) ? list.find((w) => w.assignments && w.assignments.includes('claude')) : undefined
       await delay(11000) // wait for the resumed claude to render
-      const claudeAlt = await paneAlt(CLAUDE_PANE)
-      const pass = count === 2 && !!template && template.paneCount === 4 && claudeAlt
-      emit({ phase: 'B', pass, count, restoredAssignments: template?.assignments, claudeAlt })
+      const ui = await claudeUiOk(CLAUDE_PANE)
+      const pass = count === 2 && !!template && template.paneCount === 4 && ui.ui
+      emit({ phase: 'B', pass, count, restoredAssignments: template?.assignments, claudeAlt: ui.alt, uiOk: ui.ui, paneTail: pass ? undefined : ui.tail })
       app.exit(pass ? 0 : 1)
     } catch (e) {
       emit({ phase: 'B', pass: false, error: String(e) })

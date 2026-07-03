@@ -386,6 +386,21 @@ export function runGallery(win: BrowserWindow): void {
           await sleep(300)
         })
 
+        await part(`${tag}-focus-walk`, async () => {
+          // Focus-visible audit receipt (5/07): a real keyboard Tab shows the
+          // 01 focus ring (JS .focus() would not match :focus-visible).
+          if (tag === 'dark') {
+            await ES(`(document.activeElement instanceof HTMLElement && document.activeElement.blur(), 1)`)
+            wc.sendInputEvent({ type: 'keyDown', keyCode: 'Tab' })
+            wc.sendInputEvent({ type: 'keyUp', keyCode: 'Tab' })
+            await sleep(200)
+            wc.sendInputEvent({ type: 'keyDown', keyCode: 'Tab' })
+            wc.sendInputEvent({ type: 'keyUp', keyCode: 'Tab' })
+            await sleep(300)
+            await snap(`${tag}-focus-walk`)
+          }
+        })
+
         await part(`${tag}-icon-sheet`, async () => {
           await ES(`window.__mogging.iconSheet()`)
           await sleep(400)

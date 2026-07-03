@@ -31,13 +31,13 @@ and design tokens feed every later step. Each step file is < 4000 chars.
 ## Sequence
 | # | File | Gate |
 |---|------|------|
-| 01 | `01-audit-and-color-system.md` | Every surface screenshotted (both themes); findings ledger; vivid per-workspace color ramps + crisp neutrals with an AA-validated table; `docs/11-design-system.md` |
-| 02 | `02-workspace-rail-selection.md` | Selected workspace = full-button treatment in ITS color (outline + inner tint + heavy left bar); attention stays brand-orange; rail typography polish (smoke-safe) |
-| 03 | `03-iconography.md` | A complete, consistent 24-grid icon set (weight-matched, intent-revealing) replacing the sparse hand-rolled one; per-surface picks documented |
-| 04 | `04-window-chrome.md` | Centered command box; F11 fullscreen collapses the controls gap; bottom corners of the content follow the window's rounded corners (no clipped outlines) |
-| 05 | `05-full-app-views.md` | Home, Settings (modal → PAGE), and Board own the ENTIRE app below the titlebar — rail only exists in the grid view; smokes updated intentionally |
-| 06 | `06-terminal-comfort.md` | Terminal type tuned for zero eye strain (size/line-height picked by shot comparison) + a Settings font-size control; geometry probes re-verified |
-| 07 | `07-polish-milestone.md` | Before/after gallery of every surface; full 24-gate sweep green; perception budget re-passed; REPORT + version bump material |
+| 01 | `01-audit-and-color-system.md` | **DONE** (`7cbc8aa`): MOGGING_SHOT=all gallery (46 shots, both themes); ledger UX-01…23; identity ramps (--ws-accent/ink/tint/edge/glow, amber→green, AA-measured); neutrals/semantics re-tuned both themes; scrim/selection/fs-10 tokenized; docs/11 with contrast tables |
+| 02 | `02-workspace-rail-selection.md` | **DONE** (`93c2f91`): selected tab = tint wash + 1px edge + 3px inset left bar + ink label (zero layout shift, probe-rail.json); attention → soft brand glow + badge, composes with selection; paint-only states (PERCEPTION ×2); collapsed rail inherits |
+| 03 | `03-iconography.md` | **DONE** (`e972e32`): lucide-convention family, size-aware stroke + ≤12px variants; expand trio/kanban/sliders/flag/globe/info; 10 dead names deleted; icon sheet at 100/125/150%; SMOKE+PANEOPS+BOARD+ATTENTION green |
+| 04 | `04-window-chrome.md` | **DONE** (`6160bb1`): 3-col titlebar grid (true-center command box, ≤1.5px probed); shell:windowState events (state from event identity — Windows isFullScreen() lags the event); env()-flap reserve floor; --window-corner harmony; state matrix ×2 themes |
+| 05 | `05-full-app-views.md` | **DONE** (`0ce5501`): AppView+settings, rail grid-only, Settings modal→page (state survives leave/return), goBack history, empty-grid→Home (UX-16); PROFILES/BOARD smokes updated in-step; 7 gates green |
+| 06 | `06-terminal-comfort.md` | **DONE** (`5acaf7f`): empirical 14px/1.3 default (typematrix committed); live 12–16px control via the house remeasure→refit; standing multi-size reveal probe (sizesPass, 110/96/86 cols); perception size-churn gate (27.8 ms max gap) |
+| 07 | `07-polish-milestone.md` | **DONE** (freeze commit): ledger fully closed (19 fixed · 1 by-design · 3 deferred w/ reasons); REPORT.md before/after pairs + the four cross-cutting audits; --dur-2→150 ms; role chips de-collided; full 24-gate sweep green; budgets vs Phase-4 recorded |
 
 ## Overall Definition of Done
 - Every surface passes the audit checklist: crisp AA-safe colors, vivid selection in

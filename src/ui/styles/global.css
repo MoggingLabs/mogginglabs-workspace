@@ -100,7 +100,7 @@
   --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45);
   --shadow-3: 0 24px 64px rgba(0, 0, 0, 0.55);
   --dur-1: 120ms;
-  --dur-2: 200ms;
+  --dur-2: 150ms; /* 5/07 motion audit: no transition anywhere exceeds 150 ms */
   --ease: cubic-bezier(0.2, 0, 0, 1);
 
   /* Layout constants. */
@@ -1303,18 +1303,24 @@ button {
   margin: 0;
 }
 
-/* Swarm role chip (Phase-4/01): tiny uppercase tag between the state dot and title. */
+/* Swarm role chip (Phase-4/01): tiny uppercase tag between the state dot and title.
+   5/07 (UX-13): NEUTRAL by default — brand orange means attention, never a role;
+   the reviewer (the gatekeeping role) is the one that earns a distinct tone. */
 .pane-role {
   flex: none;
   font-size: var(--fs-10);
   font-weight: var(--fw-semibold);
   text-transform: uppercase;
   letter-spacing: var(--track-wide);
-  color: var(--accent-ink);
-  border: 1px solid var(--accent);
+  color: var(--text-mid);
+  border: 1px solid var(--border-strong);
   border-radius: 3px;
   padding: 0 4px;
   line-height: 14px;
+}
+.pane-role[data-role='reviewer'] {
+  color: var(--info);
+  border-color: var(--info);
 }
 .pane-title {
   min-width: 0;

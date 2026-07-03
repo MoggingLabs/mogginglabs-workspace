@@ -62,12 +62,16 @@ End-to-end milestone asserted (`MOGGING_SWARMMILESTONE`): ledger denial, mailbox
 handshake, territory commits, gated + overridden merges — 134.7 fps avg / 41.7 ms
 worst / 21 MB with the swarm up. See `docs/09-swarm.md`.
 
-### Phase 5 — UI/UX excellence (planned — `prompts/phase-5/`)
-Full visual/UX sweep before widening further: audit-driven design-token refresh with
-VIVID per-workspace identity colors, iconography overhaul, window-chrome fixes
-(centered command box, fullscreen bar, rounded-corner harmony), full-app top-level
-views (Home/Settings/Board own the frame; Settings modal → page), terminal type
-comfort — all gated on the existing perf/perception budgets + the 24-smoke sweep.
+### Phase 5 — UI/UX excellence ✅ (`prompts/phase-5/`, REPORT.md has the receipts)
+Full visual/UX sweep, shipped: audit-driven design-token system (AA-measured, one
+token layer, grep-gated) with VIVID per-workspace identity ramps and
+identity-colored rail selection; a lucide-convention icon family (intent-revealing
+expand trio/kanban/sliders, purpose chip glyphs); window-chrome fixes (true-center
+command box, event-driven F11 with zero dead gap, `--window-corner` harmony);
+full-app top-level views (rail is grid-only; Settings modal → page with sections);
+empirical 14px/1.3 terminal default + live 12–16px control through the house
+remeasure→refit path. All 23 audit findings closed or deferred-with-reason;
+budgets unchanged (perception gained a size-change gate); full sweep green.
 
 ### Phase 6 — Product-ready (planned — `prompts/phase-6/`)
 Full Linux/macOS gate-sweep parity, browser pane, profile persistence, first-run +

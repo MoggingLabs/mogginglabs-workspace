@@ -361,6 +361,7 @@ export class TerminalPane {
     role.hidden = true
     const applyRole = (r: string): void => {
       role.textContent = r
+      role.dataset.role = r.toLowerCase() // styling hook only — smokes read textContent
       role.hidden = !r
     }
     const existingRole = getPaneRole(this.id)
