@@ -67,7 +67,19 @@ export function softGapMs(desktopMs: number, factor = 4): number {
   if (process.env.MOGGING_CI_GPU !== 'soft') return desktopMs
   const relaxed = desktopMs * factor
   console.warn(
-    `⚠ MOGGING_CI_GPU=soft — frame-gap budget relaxed ${desktopMs}ms -> ${relaxed}ms (software-GL CI only)`
+    `⚠ MOGGING_CI_GPU=soft — frame-timing budget relaxed ${desktopMs}ms -> ${relaxed}ms (software-GL CI only)`
+  )
+  return relaxed
+}
+
+/** Same contract for fps FLOORS (fps = 1/frame-gap — the same physical phenomenon:
+ *  SwiftShader rasters a 16-pane grid at ~15-19 fps regardless of app health).
+ *  Correctness, echo-latency and heap claims are NEVER relaxed. */
+export function softFps(desktopFps: number, divisor = 3): number {
+  if (process.env.MOGGING_CI_GPU !== 'soft') return desktopFps
+  const relaxed = Math.round(desktopFps / divisor)
+  console.warn(
+    `⚠ MOGGING_CI_GPU=soft — fps floor relaxed ${desktopFps} -> ${relaxed} (software-GL CI only)`
   )
   return relaxed
 }

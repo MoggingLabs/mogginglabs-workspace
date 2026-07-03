@@ -81,8 +81,18 @@ export function runTemplateSmoke(win: BrowserWindow, phase: string): void {
       const oneClaude = Array.isArray(resolved?.assignments)
         ? resolved.assignments.filter((a) => a === 'claude').length === 1
         : false
-      const pass = resolved?.paneCount === 4 && oneClaude && count === 2 && launchedOk && ui.ui
-      emit({ phase: 'A', pass, resolved, count, launchedOk, claudeAlt: ui.alt, uiOk: ui.ui, paneTail: pass ? undefined : ui.tail })
+      // Same TUI standard as phase B (uiOk — claude observably owns the pane);
+      // launchedOk is reported for diagnosis but not load-bearing: on runners
+      // without the CLI the recorded context is environment-dependent.
+      const pass = resolved?.paneCount === 4 && oneClaude && count === 2 && ui.ui
+      const resultA = { phase: 'A', pass, resolved, count, launchedOk, claudeAlt: ui.alt, uiOk: ui.ui, paneTail: pass ? undefined : ui.tail }
+      emit(resultA)
+      // Phase B overwrites template-result.json — keep A's verdict for artifacts.
+      try {
+        writeFileSync(join(app.getAppPath(), 'out', 'template-a-result.json'), JSON.stringify(resultA))
+      } catch {
+        /* best effort */
+      }
       app.exit(pass ? 0 : 1)
     } catch (e) {
       emit({ phase: 'A', pass: false, error: String(e) })

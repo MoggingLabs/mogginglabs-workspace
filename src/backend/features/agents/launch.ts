@@ -25,7 +25,11 @@ function envPrefix(env: Record<string, string> | undefined): string {
     }
     return entries.map(([k, v]) => `set "${k}=${v}" && `).join('') // cmd.exe
   }
-  return entries.map(([k, v]) => `${k}="${v}" `).join('') // bash/zsh assignment prefix
+  // POSIX: `export`, not an assignment prefix — cmd's `set` and PowerShell's $env:
+  // both persist the pointers in the pane session, so the POSIX pane must too
+  // (cross-platform parity; an assignment prefix dies with the agent process,
+  // which also broke usage-limit relaunches inheriting the pane state on Linux).
+  return entries.map(([k, v]) => `export ${k}="${v}" && `).join('')
 }
 
 /**

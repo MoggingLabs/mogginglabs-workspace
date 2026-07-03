@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorktree } from '@backend/features/worktrees'
-import { sh, softGapMs } from './smoke-shell'
+import { sh, softFps, softGapMs } from './smoke-shell'
 
 // Env-gated Phase-4 SWARM MILESTONE (MOGGING_SWARMMILESTONE), two-phase like 2/05+3/06:
 //
@@ -18,7 +18,7 @@ import { sh, softGapMs } from './smoke-shell'
 //
 //  Phase B — perf with the swarm up. Board visited, 11+ live panes, 3 s ANSI torrent
 //  + 4 workspace switches against the UNCHANGED machine budget.
-const BUDGET = { maxFrameGapMs: softGapMs(150), minAvgFps: 30, maxHeapMB: 300 }
+const BUDGET = { maxFrameGapMs: softGapMs(150), minAvgFps: softFps(30), maxHeapMB: 300 }
 const PING = 'SWARM_PING_4242'
 const ACK = 'SWARM_ACK_4242'
 

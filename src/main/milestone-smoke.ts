@@ -1,7 +1,7 @@
 import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { softGapMs } from './smoke-shell'
+import { softFps, softGapMs } from './smoke-shell'
 
 // Env-gated Phase-2 MILESTONE smoke (MOGGING_MILESTONE): "16 agents, see who needs you at a
 // glance, nothing freezes." Two phases, all ASSERTED (not eyeballed):
@@ -32,7 +32,7 @@ const BUDGET = {
    *  MOGGING_CI_GPU=soft (Linux CI, software GL) relaxes ONLY this, loudly. */
   maxFrameGapMs: softGapMs(150),
   /** Average fps floor across the 4s stress window (60fps target; display-rate-independent floor). */
-  minAvgFps: 30,
+  minAvgFps: softFps(30),
   /** Renderer JS heap cap with 16 live panes + scrollback (-1 heap reading skips the check). */
   maxHeapMB: 300,
   /** Visible panes that must hold the WebGL renderer (tolerates a few cap evictions on weak GPUs). */

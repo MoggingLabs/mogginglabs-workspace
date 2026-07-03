@@ -3,7 +3,7 @@ import { execFile, execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { sh } from './smoke-shell'
+import { sh, softFps, softGapMs } from './smoke-shell'
 
 // Env-gated ORCHESTRATION milestone smoke (MOGGING_ORCHESTRATION, Phase-3/06).
 // The whole Phase-3 promise as ONE asserted flow, two-phase like the perf milestone:
@@ -18,7 +18,7 @@ import { sh } from './smoke-shell'
 //  Phase B — perf under orchestration. Board visited (cards bound), 11+ live panes
 //  (3 worktree-isolated), 3 s of ANSI torrent + 4 workspace switches sampled with the
 //  UNCHANGED Phase-2 budget: worst gap ≤ 150 ms, avg fps ≥ 30, heap ≤ 300 MB.
-const BUDGET = { maxFrameGapMs: 150, minAvgFps: 30, maxHeapMB: 300 }
+const BUDGET = { maxFrameGapMs: softGapMs(150), minAvgFps: softFps(30), maxHeapMB: 300 }
 const TASK = 'ORCH_TASK_4242 improve the readme'
 const CHANGE = 'AGENT_CHANGE_LINE_4242'
 const SECRET = 'ghp_' + 'Zz9Yy8Xx7Ww6Vv5Uu4Tt3Ss2Rr1Qq0Pp'
