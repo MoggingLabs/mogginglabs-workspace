@@ -8,6 +8,15 @@
     />
     <title>MoggingLabs Workspace</title>
     <link rel="icon" type="image/png" href="./logo.png" />
+    <!-- The document's own first paint must already be the app canvas: without
+         this, Chromium paints the page white for a frame before the bundled CSS
+         applies (the boot black-white-black flicker). Keep in sync with
+         --bg-app and the BrowserWindow backgroundColor (src/main/window.ts). -->
+    <style>
+      html {
+        background: #0c0d0f;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

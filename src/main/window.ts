@@ -11,6 +11,10 @@ export function createMainWindow(): BrowserWindow {
     width: 1200,
     height: 800,
     backgroundColor: '#0c0d0f', // matches --bg-app: no white flash, no seam behind the chrome
+    // The window stays hidden until the renderer's first paint is ready
+    // (`ready-to-show` below): the user never sees the empty-shell frame —
+    // launch reads as instant instead of black -> white -> black.
+    show: false,
     title: 'MoggingLabs Workspace',
     ...(existsSync(iconPath) ? { icon: iconPath } : {}),
     // Organic chrome: the app draws its own header (drag regions in CSS); only the
@@ -44,6 +48,15 @@ export function createMainWindow(): BrowserWindow {
       console.log(`[render-process-gone] ${details.reason}`)
     })
   }
+
+  // First paint ready -> reveal. The timer is the fail-open: if the renderer
+  // never reaches ready-to-show (crash, dev-server stall), the window must
+  // still appear rather than leave a silently invisible app.
+  const reveal = (): void => {
+    if (!win.isDestroyed() && !win.isVisible()) win.show()
+  }
+  win.once('ready-to-show', reveal)
+  setTimeout(reveal, 4000)
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)

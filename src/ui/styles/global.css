@@ -814,8 +814,9 @@ button {
   align-items: center;
   gap: var(--sp-2);
   /* Horizontal inset = tabs' container pad + tab pad + border, so the title,
-     the + button and the tab icons share one left/right edge. */
-  padding: var(--sp-4) calc(var(--sp-4) + 1px) var(--sp-2);
+     the + button and the tab icons share one left/right edge. Bottom spacing
+     lives INSIDE #workspace-tabs (its padding-top), not here — see below. */
+  padding: var(--sp-4) calc(var(--sp-4) + 1px) 0;
 }
 .rail-title {
   flex: none;
@@ -835,7 +836,12 @@ button {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding: 0 var(--sp-2) var(--sp-2);
+  /* The header/tabs gap sits as padding-top HERE, inside the scroller: the
+     attention ring is an OUTER box-shadow, and a scroll container clips child
+     shadows at its padding edge — with the gap outside (header padding-bottom),
+     the FIRST tab's ring was sheared flat under the "Workspaces" title. Same
+     geometry, room for the glow. */
+  padding: var(--sp-2) var(--sp-2) var(--sp-2);
 }
 /* Workspace identity ramp (Phase-5/01). The controller stamps `--ws-accent` inline
    on each rail item — the ONE sanctioned inline style — and the ramp derives every
@@ -1029,7 +1035,9 @@ button {
 }
 #app.rail-collapsed .rail-header {
   justify-content: center;
-  padding: var(--sp-3) 0 var(--sp-2);
+  /* Bottom gap lives in #workspace-tabs' padding-top (ring clip room) — same
+     deal as the expanded header above. */
+  padding: var(--sp-3) 0 0;
 }
 #app.rail-collapsed .workspace-tab {
   justify-content: center;
