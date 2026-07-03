@@ -810,13 +810,27 @@ button {
   transition: width var(--dur-2) var(--ease);
 }
 .rail-header {
+  position: relative; /* anchors the ::after hairline */
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   /* Horizontal inset = tabs' container pad + tab pad + border, so the title,
-     the + button and the tab icons share one left/right edge. Bottom spacing
-     lives INSIDE #workspace-tabs (its padding-top), not here — see below. */
-  padding: var(--sp-4) calc(var(--sp-4) + 1px) 0;
+     the + button and the tab icons share one left/right edge. The gap below
+     is split by the hairline: sp-3 here, sp-3 as #workspace-tabs padding-top
+     (the list side must sit INSIDE the scroller — attention-ring clip room). */
+  padding: var(--sp-4) calc(var(--sp-4) + 1px) var(--sp-3);
+}
+/* A division, not a wall: quieter than any real border in the rail (the
+   faded stop), inset to the tabs' outer edges so it caps the list column
+   instead of slicing the whole surface. */
+.rail-header::after {
+  content: '';
+  position: absolute;
+  left: var(--sp-2);
+  right: var(--sp-2);
+  bottom: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--border) 55%, transparent);
 }
 .rail-title {
   flex: none;
@@ -836,12 +850,12 @@ button {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  /* The header/tabs gap sits as padding-top HERE, inside the scroller: the
-     attention ring is an OUTER box-shadow, and a scroll container clips child
-     shadows at its padding edge — with the gap outside (header padding-bottom),
-     the FIRST tab's ring was sheared flat under the "Workspaces" title. Same
-     geometry, room for the glow. */
-  padding: var(--sp-2) var(--sp-2) var(--sp-2);
+  /* The list's share of the header gap sits as padding-top HERE, inside the
+     scroller: the attention ring is an OUTER box-shadow, and a scroll container
+     clips child shadows at its padding edge — with the gap outside (header
+     padding-bottom), the FIRST tab's ring was sheared flat under the
+     "Workspaces" title. sp-3 = breathing room below the hairline AND glow room. */
+  padding: var(--sp-3) var(--sp-2) var(--sp-2);
 }
 /* Workspace identity ramp (Phase-5/01). The controller stamps `--ws-accent` inline
    on each rail item — the ONE sanctioned inline style — and the ramp derives every
@@ -1035,9 +1049,9 @@ button {
 }
 #app.rail-collapsed .rail-header {
   justify-content: center;
-  /* Bottom gap lives in #workspace-tabs' padding-top (ring clip room) — same
-     deal as the expanded header above. */
-  padding: var(--sp-3) 0 0;
+  /* Icon-only mode: tighter below the + button; the hairline stays (same
+     ::after), the list's sp-3 padding-top carries the rest of the gap. */
+  padding: var(--sp-3) 0 var(--sp-1);
 }
 #app.rail-collapsed .workspace-tab {
   justify-content: center;
