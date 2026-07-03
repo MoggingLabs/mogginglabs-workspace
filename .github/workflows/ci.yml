@@ -119,10 +119,21 @@ jobs:
       - name: Install (packages only)
         run: npm ci --ignore-scripts
 
+      - name: GYP hang bisect (temporary diagnostic)
+        run: |
+          cd node_modules/better-sqlite3
+          GYPARGS="rebuild --runtime=electron --target=34.5.8 --dist-url=https://www.electronjs.org/headers --build-from-source --verbose"
+          echo "── A: overridden repo gyp ($(node ../node-gyp/bin/node-gyp.js --version)):"
+          timeout 3m node ../node-gyp/bin/node-gyp.js $GYPARGS < /dev/null && echo A_OK || echo "A_EXIT=$?"
+          echo '── B: standalone node-gyp@11:'
+          timeout 5m npx -y node-gyp@11 $GYPARGS < /dev/null && echo B_OK || echo "B_EXIT=$?"
+          echo '── C: standalone node-gyp@13:'
+          timeout 3m npx -y node-gyp@13 $GYPARGS < /dev/null && echo C_OK || echo "C_EXIT=$?"
+
       - name: Electron-ABI rebuild (isolated + verbose)
         run: |
           DEBUG=electron-rebuild,electron-builder npm_config_loglevel=verbose \
-            timeout 15m npx electron-builder install-app-deps
+            timeout 10m npx electron-builder install-app-deps
 
       - name: Build
         run: npm run build
