@@ -124,7 +124,10 @@ jobs:
       # detaches artifacts from gh-created releases. gh upload --clobber always works.
       # Windows/Linux packaging must TRUST the direct-gyp .node files above: the
       # internal rebuild is the same @electron/rebuild spawn that hangs.
+      # shell: bash — windows pwsh re-tokenizes the -c.key=value flags into a
+      # config-file path (see ci.yml signing-dryrun).
       - name: Package (sign/notarize when secrets present)
+        shell: bash
         run: npx electron-builder --publish never ${{ runner.os != 'macOS' && '-c.npmRebuild=false -c.buildDependenciesFromSource=false' || '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

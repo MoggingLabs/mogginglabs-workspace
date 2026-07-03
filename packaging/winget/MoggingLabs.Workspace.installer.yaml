@@ -3,7 +3,7 @@
 PackageIdentifier: MoggingLabs.Workspace
 PackageVersion: 0.3.0
 InstallerLocale: en-US
-InstallerType: nsis
+InstallerType: nullsoft
 Scope: user
 UpgradeBehavior: install
 Installers:

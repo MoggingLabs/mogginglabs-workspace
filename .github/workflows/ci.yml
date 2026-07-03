@@ -241,9 +241,13 @@ jobs:
           node-version: '22'
           cache: npm
 
-      # Python >= 3.12 dropped distutils; node-gyp needs setuptools (README-documented).
+      # setuptools: Python >= 3.12 dropped distutils and node-gyp needs it.
+      # coreutils: the macOS 26 image ships NO GNU timeout/gtimeout, and
+      # qa-smokes refuses to sweep without a watchdog (run 28657315132).
       - name: macOS toolchain
-        run: python3 -m pip install --break-system-packages setuptools
+        run: |
+          python3 -m pip install --break-system-packages setuptools
+          brew install coreutils
 
       - name: Cache native node_modules (electron-ABI .node files included)
         id: nmcache
@@ -354,7 +358,11 @@ jobs:
       # internal rebuild is the hanging spawn). Mac packages arm64 only — the
       # runner-native arch matches those .node files, and one signed-shape
       # artifact set is all the readiness verifier needs.
+      # shell: bash — under windows pwsh the -c.key=value flags get re-tokenized
+      # and electron-builder reads them as a config FILE path (run 28657315132:
+      # "ENOENT: .buildDependenciesFromSource=false").
       - name: Package UNSIGNED (identity discovery off; no signing secrets in env)
+        shell: bash
         run: npx electron-builder --publish never -c.npmRebuild=false -c.buildDependenciesFromSource=false ${{ runner.os == 'macOS' && '--arm64' || '' }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'

@@ -12,12 +12,13 @@ cask "mogginglabs-workspace" do
   homepage "https://github.com/MoggingLabs/mogginglabs-workspace"
 
   auto_updates true
+  depends_on macos: ">= :big_sur"
 
   app "MoggingLabs Workspace.app"
 
   zap trash: [
-    "~/Library/Application Support/MoggingLabs",
     "~/Library/Application Support/MoggingLabs Workspace",
+    "~/Library/Application Support/MoggingLabs",
     "~/Library/Preferences/ai.mogginglabs.workspace.plist",
     "~/Library/Saved Application State/ai.mogginglabs.workspace.savedState",
   ]
