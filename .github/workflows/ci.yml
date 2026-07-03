@@ -115,7 +115,10 @@ jobs:
           node -e "const r=require('./out/smoke-result.json');if(r.pass!==true){console.error(JSON.stringify(r));process.exit(1)};console.log('SMOKE PASS')"
 
       - name: Package (AppImage + deb)
-        run: npx electron-builder --linux --publish never
+        # -c.npmRebuild=false: packaging's INTERNAL rebuild is the same
+        # @electron/rebuild spawn that hangs on this image — the direct node-gyp
+        # step above already produced the electron-ABI .node files it would build.
+        run: npx electron-builder --linux --publish never -c.npmRebuild=false -c.buildDependenciesFromSource=false
 
   # Phase-6/02: the ENTIRE 24-gate sweep on Linux — same script, same gate list as
   # Windows. Nightly + manual (heavy); the fast boot gate above still runs per push.
