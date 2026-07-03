@@ -43,8 +43,18 @@ verdict() {
   node -e "try{const r=JSON.parse(require('fs').readFileSync('$file','utf8'));process.stdout.write(r.pass===true?'PASS':'FAIL')}catch{process.stdout.write('MISSING')}" 2>/dev/null
 }
 
+# MOGGING_GATES: optional comma list (e.g. "TEMPLATE_A,TEMPLATE_B") to run a
+# subset — for ITERATION only; certification is always the full sweep. TEMPLATE_B
+# needs TEMPLATE_A's persisted state: include both or neither.
+GATES="${MOGGING_GATES:-}"
+should_run() {
+  [ -z "$GATES" ] && return 0
+  case ",$GATES," in *",$1,"*) return 0 ;; *) return 1 ;; esac
+}
+
 run_smoke() {
   local name="$1" var="$2" val="$3" timeout_s="$4" result="$5" reuse="${6:-}"
+  should_run "$name" || return 0
   local iso="$TMPBASE/${reuse:-$name}"
   mkdir -p "$iso/userdata" "$iso/local"
   rm -f "out/$result-result.json"

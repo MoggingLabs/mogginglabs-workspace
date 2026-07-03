@@ -8,11 +8,18 @@ on:
   schedule:
     - cron: '30 3 * * *'
   workflow_dispatch:
+    inputs:
+      gates:
+        description: 'Gate subset for linux-sweep, comma list (empty = all 24). Iteration only — certification is the full sweep.'
+        required: false
+        default: ''
 
-# Cancel superseded runs on the same ref.
+# Pushes supersede pushes; sweeps (dispatch/schedule) NEVER cancel anything and
+# never get cancelled — one shared group let a late-firing nightly kill an
+# in-flight dispatched sweep (2026-07-03, runs 28643392895/28643654614).
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref }}-${{ (github.event_name == 'push' || github.event_name == 'pull_request') && 'fast' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
 
 jobs:
   verify:
@@ -64,13 +71,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential python3 python3-setuptools xvfb
 
+      - name: Cache native node_modules (electron-ABI .node files included)
+        id: nmcache
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json') }}-e34
+
       - name: Install (packages only)
+        if: steps.nmcache.outputs.cache-hit != 'true'
         run: npm ci --ignore-scripts
 
       - name: Electron binary (its install script was skipped above)
+        if: steps.nmcache.outputs.cache-hit != 'true'
         run: node node_modules/electron/install.js
 
       - name: Electron-ABI rebuild (direct node-gyp)
+        if: steps.nmcache.outputs.cache-hit != 'true'
         # Same bypass as linux-sweep — see that job's comment (bisected 2026-07-03).
         run: |
           EV=$(node -p "require('electron/package.json').version")
@@ -122,13 +139,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential python3 python3-setuptools xvfb
 
+      - name: Cache native node_modules (electron-ABI .node files included)
+        id: nmcache
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json') }}-e34
+
       - name: Install (packages only)
+        if: steps.nmcache.outputs.cache-hit != 'true'
         run: npm ci --ignore-scripts
 
       - name: Electron binary (its install script was skipped above)
+        if: steps.nmcache.outputs.cache-hit != 'true'
         run: node node_modules/electron/install.js
 
       - name: Electron-ABI rebuild (direct node-gyp)
+        if: steps.nmcache.outputs.cache-hit != 'true'
         # @electron/rebuild's spawned gyp hangs indefinitely on the 2026-07 ubuntu
         # image (its direct invocation builds in ~90s — bisected 2026-07-03, run
         # 28639452382). CI drives node-gyp directly; dev machines and the Windows
@@ -152,7 +179,8 @@ jobs:
 
       - name: Full sweep (24 gates, isolated state)
         run: |
-          MOGGING_CI_GPU=soft xvfb-run -a bash scripts/qa-smokes.sh | tee sweep.log
+          MOGGING_CI_GPU=soft MOGGING_GATES="${{ inputs.gates }}" \
+            xvfb-run -a bash scripts/qa-smokes.sh | tee sweep.log
 
       - name: Gate on results
         run: |
