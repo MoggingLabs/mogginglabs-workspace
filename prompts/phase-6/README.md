@@ -26,7 +26,7 @@ in order; each step file is < 4000 chars.
 ## Sequence
 | # | File | Gate |
 |---|------|------|
-| 01 | `01-linux-full-parity.md` | The ENTIRE 24-gate sweep green on ubuntu CI (platform-aware smokes; nightly job) |
+| 01 | `01-linux-full-parity.md` | **DONE** (`42fce26`…`c14a2c9`): 24/24 on ubuntu CI (certification run 28645835737) AND Windows local, one script; smoke-shell.ts (zero bare cmd-isms); MOGGING_CI_GPU=soft (frame-timing only, loud); found+fixed 2 product bugs (POSIX profile-env `export` parity, pane-liveness launch gating); CI: direct-gyp rebuild (image hang bisected), gates filter, per-OS cache, uncancellable sweeps |
 | 02 | `02-macos-parity-and-manifests.md` | Sweep green on macos CI; winget + homebrew-cask manifests; signing hooks verified end-to-end (dry run) |
 | 03 | `03-windows-sweep-ci.md` | The ENTIRE 24-gate sweep green on windows-latest CI (nightly + dispatchable) — regression coverage off the dev machine; same script, same gates, soft-GPU honesty |
 | 04 | `04-profile-persistence.md` | Per-slot profile choices survive restarts (persisted manifest + failover follow-through); two subscriptions in parallel stay TRUE across relaunch (smoke green) |
@@ -58,7 +58,24 @@ in order; each step file is < 4000 chars.
 - The daemon protocol stays at v3 — Phase 6 adds no wire surface.
 
 ## Parallelization
-Lane A (platforms): 01 → 02. Lane B: 03 (profile persistence, small) → 04 (browser).
-Lane C: 05 (first-run/updates). All independent after the pack starts; 06 needs A
-complete and at least B or C (recommended: all) — it freezes the sweep and cuts
-v0.4.0.
+Lane A (platforms/CI): 01 → 02 → 03 (windows-sweep reuses 02's generalized job
+shape). Lane B: 04 (profile persistence, small) → 05 (browser). Lane C: 06
+(first-run/updates). All independent after the pack starts; 07 needs A complete
+and at least B or C (recommended: all) — it freezes the sweep and cuts v0.4.0.
+
+## Linux CI numbers (6/01 — certification run 28645835737, 2026-07-03)
+ubuntu-latest under xvfb + SwiftShader, `MOGGING_CI_GPU=soft` (frame-TIMING budgets
+relaxed ×4-6 and printed loudly; correctness, echo latency, and heap strict):
+
+- **Sweep**: 24/24 PASS, full uncut run (~65 min; iteration rounds ~10-15 min via
+  the `gates` filter + node_modules cache).
+- **MILESTONE** (16-pane stress): 14.5 avg fps / worst gap 166.7 ms / heap 20 MB;
+  idle 38.7 fps / 150 ms; 16/16 GL release on background, 12/16 re-acquire (polled).
+- **PERCEPTION**: switch→painted max 210.9 ms (soft 400); **echo median 1.4 ms
+  against the STRICT 60 ms budget** — the daemon round-trip is desktop-class on
+  Linux; every relaxed number is SwiftShader raster physics, not app health.
+  Churn 166.7 ms max / 0 over; size-churn 50.1 ms / 0; torrent 133.4 ms / 0.
+- **SWARMMILESTONE** (phase B, 11 live panes): 23.4 avg fps / 150 ms worst gap /
+  16 MB heap.
+- Desktop baselines for comparison (Windows, Phase-5 freeze, strict budgets):
+  MILESTONE 108.5 fps / 48.7 ms / 41 MB; PERCEPTION switch 49.6 ms, echo 2.4 ms.
