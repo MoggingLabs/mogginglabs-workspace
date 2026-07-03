@@ -394,5 +394,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # No --cask flag: with slashes in the arg it resolves a TAP token
+      # ("packaging/homebrew-homebrew" — run 28657315132). A plain file path
+      # under Casks/ engages the cask cops by location.
       - name: brew style
-        run: brew style --cask packaging/homebrew/mogginglabs-workspace.rb
+        run: brew style packaging/homebrew/Casks/mogginglabs-workspace.rb

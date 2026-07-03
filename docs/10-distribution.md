@@ -97,7 +97,8 @@ copy-paste PR.
 
 ### homebrew playbook
 1. **Start with our own tap** — create `MoggingLabs/homebrew-tap`, copy
-   `packaging/homebrew/mogginglabs-workspace.rb` into `Casks/`. Users:
+   `packaging/homebrew/Casks/mogginglabs-workspace.rb` into its `Casks/`
+   (the layout already matches). Users:
    `brew install --cask mogginglabs/tap/mogginglabs-workspace`. No gatekeeping,
    ships today.
 2. `homebrew/cask` core comes later: it expects notability and a signed,
