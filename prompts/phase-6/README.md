@@ -28,7 +28,7 @@ in order; each step file is < 4000 chars.
 |---|------|------|
 | 01 | `01-linux-full-parity.md` | **DONE** (`42fce26`…`c14a2c9`): 24/24 on ubuntu CI (certification run 28645835737) AND Windows local, one script; smoke-shell.ts (zero bare cmd-isms); MOGGING_CI_GPU=soft (frame-timing only, loud); found+fixed 2 product bugs (POSIX profile-env `export` parity, pane-liveness launch gating); CI: direct-gyp rebuild (image hang bisected), gates filter, per-OS cache, uncancellable sweeps |
 | 02 | `02-macos-parity-and-manifests.md` | **DONE** (`277b7d9`…`f86603f`): 24/24 on macos CI (certification run 28658947168, which also re-certified linux 24/24) AND Windows local; signing-dryrun READY (config-complete, secrets-pending) on win+mac; winget + homebrew-cask manifests validate in CI, regenerate with one command, pinned to official v0.3.0 artifacts; release green on all three OSes; FLICKER probe made reflow-honest (content, not line count); @electron/rebuild spawn hang bypassed on ALL 2026-07 images (win+mac+linux); runner deprecations cleared, macos-26 pinned |
-| 03 | `03-windows-sweep-ci.md` | The ENTIRE 24-gate sweep green on windows-latest CI (nightly + dispatchable) — regression coverage off the dev machine; same script, same gates, soft-GPU honesty |
+| 03 | `03-windows-sweep-ci.md` | **DONE** (`f0e850e`…`d07199c`): 24/24 on windows-latest CI (certification run 28670553984), nightly 05:30 + dispatchable; direct-gyp install (spawn hang confirmed on this image too), shell:bash steps, per-OS cache; linux re-certified same campaign (run 28669886364); one probe fix — WORKTREE compares canonical paths (windows runners hand out 8.3 short TEMP) |
 | 04 | `04-profile-persistence.md` | Per-slot profile choices survive restarts (persisted manifest + failover follow-through); two subscriptions in parallel stay TRUE across relaunch (smoke green) |
 | 05 | `05-browser-pane.md` | A browser is a first-class pane type (WebContentsView): URL bar, per-workspace, preview-what-the-agent-built (smoke green) |
 | 06 | `06-first-run-and-updates.md` | First-run checklist on Home (CLIs detected → profile → first workspace); auto-update toast → one-click restart (smoke green) |
@@ -101,3 +101,22 @@ mood, not app health; echo latency, heap, and correctness stay strict.
   root; wrapped zsh prompts made FLICKER's line-count probe lie (now asserts
   buffer CONTENT survival — strictly stronger); the @electron/rebuild spawn
   hang is the whole 2026-07 image family, win + mac + linux.
+
+## Windows CI numbers (6/03 — certification run 28670553984, 2026-07-03)
+windows-latest (2-core, WARP software GL), `MOGGING_CI_GPU=soft`. The probe
+run measured desktop-class capability (45.5 fps stress, echo 1.2 ms — run
+28669538483) but, like macOS, run-to-run allocation varies; soft covers the
+variance, correctness and echo stay strict.
+
+- **Sweep**: 24/24 PASS, full uncut. One probe fix en route: the runner hands
+  out TEMP as an 8.3 short path (`RUNNER~1`) while git prints long-form —
+  WORKTREE now compares canonical (realpathed) paths, claim untouched.
+- **MILESTONE** (16-pane stress): 25.8 avg fps / worst gap 359.3 ms / heap
+  28 MB; idle 43.3 fps; 16/16 WebGL visible, 13/16 re-acquire (polled ≥12).
+- **PERCEPTION**: switch→painted max 277 ms (soft 400); **echo median 1.6 ms
+  against the STRICT 60 ms budget** — the daemon round-trip is desktop-class
+  on every platform we run; churn 203.2 / size-churn 46.9 / torrent 78.1 ms.
+- **SWARMMILESTONE** (phase B, 11 live panes): 32.1 avg fps / 250 ms / 17 MB.
+- Coverage note: with 6/01–6/03 the SAME 24-gate list now certifies on four
+  environments — local Windows, ubuntu CI, macos CI, windows CI — nightly at
+  03:30/04:30/05:30 respectively.
