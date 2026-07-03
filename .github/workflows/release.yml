@@ -87,6 +87,35 @@ jobs:
       - name: Build (emits sourcemaps)
         run: npm run build
 
+      # Code signing — base64-encoded cert + password: Authenticode (.pfx) on Windows,
+      # Developer ID (.p12) on macOS; APPLE_* drive notarytool. Certs live ONLY in
+      # CI secrets — never committed. An UNSET secret must stay ABSENT from the
+      # env: electron-builder treats an empty-string CSC_LINK as a cert path and
+      # dies with "not a file" (bit the mac leg, run 28647922891).
+      - name: Stage signing env (absent secrets stay absent)
+        shell: bash
+        env:
+          S_CSC_LINK: ${{ secrets.CSC_LINK }}
+          S_CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          S_APPLE_ID: ${{ secrets.APPLE_ID }}
+          S_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          S_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          stage() {
+            local name="$1" val="${!2}"
+            if [ -n "$val" ]; then
+              { echo "$name<<__MOG_EOF__"; echo "$val"; echo "__MOG_EOF__"; } >> "$GITHUB_ENV"
+              echo "staged $name"
+            else
+              echo "skipped $name (secret not set)"
+            fi
+          }
+          stage CSC_LINK S_CSC_LINK
+          stage CSC_KEY_PASSWORD S_CSC_KEY_PASSWORD
+          stage APPLE_ID S_APPLE_ID
+          stage APPLE_APP_SPECIFIC_PASSWORD S_APPLE_APP_SPECIFIC_PASSWORD
+          stage APPLE_TEAM_ID S_APPLE_TEAM_ID
+
       # --publish never + explicit gh upload: electron-builder refuses to upload to
       # an already-PUBLISHED release (it only manages drafts), which silently
       # detaches artifacts from gh-created releases. gh upload --clobber always works.
@@ -96,14 +125,6 @@ jobs:
         run: npx electron-builder --publish never ${{ runner.os == 'Linux' && '-c.npmRebuild=false -c.buildDependenciesFromSource=false' || '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Code signing — base64-encoded cert + password: Authenticode (.pfx) on Windows,
-          # Developer ID (.p12) on macOS. Certs live ONLY in CI secrets — never committed.
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          # macOS notarization via notarytool.
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           # No Developer ID cert yet: skip identity lookup so mac artifacts build
           # UNSIGNED instead of failing. FLIP TO 'true' when certs land (Phase-5/02).
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
