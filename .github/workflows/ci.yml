@@ -67,13 +67,16 @@ jobs:
       - name: Install (packages only)
         run: npm ci --ignore-scripts
 
-      - name: Electron-ABI rebuild (isolated + verbose)
-        # The combined postinstall hung inside @electron/rebuild at "preparing
-        # better-sqlite3" on the 2026-07 runner image — run it isolated with gyp
-        # logs so a stall names its phase.
+      - name: Electron-ABI rebuild (direct node-gyp)
+        # Same bypass as linux-sweep — see that job's comment (bisected 2026-07-03).
         run: |
-          DEBUG=electron-rebuild,electron-builder npm_config_loglevel=verbose \
-            timeout 15m npx electron-builder install-app-deps
+          EV=$(node -p "require('electron/package.json').version")
+          for m in node-pty better-sqlite3; do
+            echo "── rebuilding $m for electron $EV"
+            (cd "node_modules/$m" && timeout 10m node ../node-gyp/bin/node-gyp.js rebuild \
+              --runtime=electron --target="$EV" \
+              --dist-url=https://www.electronjs.org/headers --build-from-source < /dev/null)
+          done
 
       - name: Build
         run: npm run build
@@ -119,21 +122,19 @@ jobs:
       - name: Install (packages only)
         run: npm ci --ignore-scripts
 
-      - name: GYP hang bisect (temporary diagnostic)
+      - name: Electron-ABI rebuild (direct node-gyp)
+        # @electron/rebuild's spawned gyp hangs indefinitely on the 2026-07 ubuntu
+        # image (its direct invocation builds in ~90s — bisected 2026-07-03, run
+        # 28639452382). CI drives node-gyp directly; dev machines and the Windows
+        # release path keep the standard electron-builder postinstall.
         run: |
-          cd node_modules/better-sqlite3
-          GYPARGS="rebuild --runtime=electron --target=34.5.8 --dist-url=https://www.electronjs.org/headers --build-from-source --verbose"
-          echo "── A: overridden repo gyp ($(node ../node-gyp/bin/node-gyp.js --version)):"
-          timeout 3m node ../node-gyp/bin/node-gyp.js $GYPARGS < /dev/null && echo A_OK || echo "A_EXIT=$?"
-          echo '── B: standalone node-gyp@11:'
-          timeout 5m npx -y node-gyp@11 $GYPARGS < /dev/null && echo B_OK || echo "B_EXIT=$?"
-          echo '── C: standalone node-gyp@13:'
-          timeout 3m npx -y node-gyp@13 $GYPARGS < /dev/null && echo C_OK || echo "C_EXIT=$?"
-
-      - name: Electron-ABI rebuild (isolated + verbose)
-        run: |
-          DEBUG=electron-rebuild,electron-builder npm_config_loglevel=verbose \
-            timeout 10m npx electron-builder install-app-deps
+          EV=$(node -p "require('electron/package.json').version")
+          for m in node-pty better-sqlite3; do
+            echo "── rebuilding $m for electron $EV"
+            (cd "node_modules/$m" && timeout 10m node ../node-gyp/bin/node-gyp.js rebuild \
+              --runtime=electron --target="$EV" \
+              --dist-url=https://www.electronjs.org/headers --build-from-source < /dev/null)
+          done
 
       - name: Build
         run: npm run build
