@@ -108,7 +108,7 @@ the rail. States, quiet → loud (all ramp stops — no per-feature color):
 | rest | neutral `--text-mid` label, identity only on the icon glyph (`--ws-ink` on a `--bg-inset` chip) |
 | hover | `--ws-tint-hover` wash (6% identity whisper) |
 | press | full `--ws-tint` |
-| **selected** | `--ws-tint` across the button + 1px `--ws-edge` outline + **3px inset left bar** (`box-shadow: inset 3px 0 0` — zero layout shift, geometry-probed) + label/icon in `--ws-ink` (paint-only: no weight flip — switch is on the perception hot path) |
+| **selected** | `--ws-tint` across the button + 1px `--ws-edge` outline + **4px vivid selection bar** (`::before` overlay in `--ws-accent`, pill ends, spanning only the STRAIGHT run of the left edge — vertical insets = the corner radius — floating 1px off the outline; zero layout shift, geometry-probed) + label/icon in `--ws-ink` (paint-only: no weight flip — switch is on the perception hot path) |
 | focus-visible | the global 2px brand focus ring (interaction ≠ selection) |
 | drag | 0.55 ghost opacity |
 

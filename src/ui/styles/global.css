@@ -1017,13 +1017,27 @@ button {
   background: var(--danger-weak);
 }
 /* SELECTED — the workspace's OWN color lights the whole button (BridgeSpace-grade):
-   1px vivid outline + 12% inner wash + a 3px left bar drawn as an INSET shadow so
-   the box never grows (geometry-probed: icon x and tab width identical to rest). */
+   1px vivid outline + 12% inner wash + the selection bar below. */
 .workspace-tab.active {
   color: var(--ws-ink);
   background: var(--ws-tint);
   border-color: var(--ws-edge);
-  box-shadow: inset 3px 0 0 var(--ws-edge);
+}
+/* Selection bar: a DENSE straight segment, not a traced outline — it spans only
+   the flat run of the left edge (vertical insets = the corner radius, so the
+   curves stay clean), floats 1px off the outline for air, and takes the VIVID
+   identity stop at 4px so it reads a step hotter than the 1px edge. Absolute
+   overlay + pill ends: zero layout shift (geometry-probed: icon x and tab
+   width identical to rest, same contract the old inset-shadow bar held). */
+.workspace-tab.active::before {
+  content: '';
+  position: absolute;
+  left: 1px; /* exactly 1px of air — offsets are padding-box-relative, the border sits outside (pixel-verified) */
+  top: var(--r-md);
+  bottom: var(--r-md);
+  width: 4px;
+  border-radius: var(--r-full);
+  background: var(--ws-accent);
 }
 .workspace-tab.active:hover {
   background: var(--ws-tint); /* selection wash wins over the hover whisper */
@@ -1051,9 +1065,8 @@ button {
   box-shadow: 0 0 0 1px var(--accent-glow), 0 0 14px var(--accent-glow);
 }
 .workspace-tab.active[data-attention="attention"] {
-  /* selection bar inside, orange glow outside the identity outline */
+  /* selection bar rides the ::before overlay; orange glow outside the outline */
   box-shadow:
-    inset 3px 0 0 var(--ws-edge),
     0 0 0 1px var(--accent-glow),
     0 0 14px var(--accent-glow);
 }
