@@ -58,10 +58,13 @@ function clearEnvRun(cwd: string, vars: string[], command: string): string {
 export const sh = { cd, chain, echoVar, appendLine, writeLine, mkdirWrite, clearEnvRun }
 
 /**
- * CI software-GL mode (Phase-6/02). `MOGGING_CI_GPU=soft` — set ONLY by the Linux
- * CI sweep (xvfb + SwiftShader) — relaxes FRAME-GAP budgets by the given factor.
- * Desktop budgets are untouched; every use prints loudly so a relaxed run can
- * never masquerade as a real one. Latency/fps/heap claims are never relaxed.
+ * CI soft-GPU mode (Phase-6/02). `MOGGING_CI_GPU=soft` — set ONLY by CI sweep
+ * jobs whose frame timing isn't the app's to control: Linux (xvfb + SwiftShader
+ * raster physics) and macOS (shared-vCPU VMs with bimodal scheduling — 57fps one
+ * run, 19.8fps the next on identical code, runs 28657760100/28658338954). It
+ * relaxes FRAME-GAP budgets by the given factor. Desktop budgets are untouched;
+ * every use prints loudly so a relaxed run can never masquerade as a real one.
+ * Echo-latency/heap/correctness claims are never relaxed.
  */
 export function softGapMs(desktopMs: number, factor = 4): number {
   if (process.env.MOGGING_CI_GPU !== 'soft') return desktopMs

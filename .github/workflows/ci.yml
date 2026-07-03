@@ -223,9 +223,12 @@ jobs:
           if-no-files-found: warn
 
   # Phase-6/02: the third platform runs EVERYTHING — same script, same gate list
-  # as Windows and Linux. macOS arm64 runners may have real (virtualized Metal)
-  # GL, so budgets start STRICT; any relaxation must come from measured probe
-  # evidence, never assumption.
+  # as Windows and Linux. The runner CAN be desktop-class (strict PERCEPTION
+  # passed with 0.9ms echo, run 28657760100) but stress perf is BIMODAL across
+  # runs — 57fps/gap-200.8 one run, 19.8fps/gap-149.8 the next (28658338954),
+  # opposite members on identical code. That's shared-vCPU scheduling, i.e.
+  # frame-timing noise: exactly what MOGGING_CI_GPU=soft covers (loudly,
+  # frame-timing only; echo/heap/correctness stay strict).
   macos-sweep:
     name: macos full 24-gate sweep
     if: >-
@@ -286,7 +289,7 @@ jobs:
 
       - name: Full sweep (24 gates, isolated state)
         run: |
-          MOGGING_GATES="${{ inputs.gates }}" bash scripts/qa-smokes.sh | tee sweep.log
+          MOGGING_CI_GPU=soft MOGGING_GATES="${{ inputs.gates }}" bash scripts/qa-smokes.sh | tee sweep.log
 
       - name: Gate on results
         run: |
