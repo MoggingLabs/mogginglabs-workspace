@@ -3,11 +3,12 @@ import { execFile } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { sh } from './smoke-shell'
 
 // Env-gated profiles + failover smoke (MOGGING_PROFILES, Phase-4/04):
 //   1. two pointer profiles save; a secret-shaped env value CANNOT even be saved
 //   2. a launch under the default profile really changes the pane's environment
-//      (cmd `set` prefix -> `echo %VAR%` expands to profile A's marker)
+//      (env prefix -> sh.echoVar expands to profile A's marker, per-platform)
 //   3. `mogging notify --event usage-limit` in-pane -> the manual failover TOAST
 //   4. auto-failover ON -> a second limit relaunches on profile B in the SAME pane
 //      (same PTY — scrollback survives), environment now shows B's marker
@@ -74,7 +75,7 @@ export function runProfilesSmoke(win: BrowserWindow): void {
             return s
           })()`
         )
-      await cli(['send', String(pane), 'echo MARKVALUE=%FAKE_MARK%'])
+      await cli(['send', String(pane), sh.echoVar('FAKE_MARK', 'MARKVALUE=')])
       let envAOk = false
       for (let i = 0; i < 24 && !envAOk; i++) {
         envAOk = (await bufferText()).includes(`MARKVALUE=${MARK_A}`)
@@ -100,7 +101,7 @@ export function runProfilesSmoke(win: BrowserWindow): void {
       await ES(`window.__mogging.agents.setAutoFailover(true)`)
       await cli(['send', String(pane), `node "${cliPath}" notify --event usage-limit`])
       await sleep(4000) // ^C + 900ms + relaunch settles
-      await cli(['send', String(pane), 'echo MARKVALUE=%FAKE_MARK%'])
+      await cli(['send', String(pane), sh.echoVar('FAKE_MARK', 'MARKVALUE=')])
       let envBOk = false
       for (let i = 0; i < 24 && !envBOk; i++) {
         envBOk = (await bufferText()).includes(`MARKVALUE=${MARK_B}`)

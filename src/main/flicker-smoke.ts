@@ -1,6 +1,7 @@
 import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { softGapMs } from './smoke-shell'
 
 // Env-gated terminal-artifact smoke (MOGGING_FLICKER): prove that rapid view churn —
 // the exact moments where flicker/cross-pane artifacts would appear — stays clean.
@@ -17,7 +18,7 @@ import { join } from 'node:path'
 //     zero errors and never crashed.
 // PERCEPTION-anchored (docs/07): a >100 ms frame is a humanly visible hitch — the gate
 // is what a person can notice, not what the machine can survive (that's docs/05).
-const BUDGET = { maxFrameGapMs: 100 }
+const BUDGET = { maxFrameGapMs: softGapMs(100) } // CI soft mode relaxes gaps only, loudly
 
 const SCRIPT = `(async () => {
   const B = ${JSON.stringify(BUDGET)}

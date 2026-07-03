@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorktree } from '@backend/features/worktrees'
+import { sh, softGapMs } from './smoke-shell'
 
 // Env-gated Phase-4 SWARM MILESTONE (MOGGING_SWARMMILESTONE), two-phase like 2/05+3/06:
 //
@@ -17,7 +18,7 @@ import { createWorktree } from '@backend/features/worktrees'
 //
 //  Phase B — perf with the swarm up. Board visited, 11+ live panes, 3 s ANSI torrent
 //  + 4 workspace switches against the UNCHANGED machine budget.
-const BUDGET = { maxFrameGapMs: 150, minAvgFps: 30, maxHeapMB: 300 }
+const BUDGET = { maxFrameGapMs: softGapMs(150), minAvgFps: 30, maxHeapMB: 300 }
 const PING = 'SWARM_PING_4242'
 const ACK = 'SWARM_ACK_4242'
 
@@ -103,8 +104,12 @@ export function runSwarmMilestoneSmoke(win: BrowserWindow): void {
 
       // ── A4. Each worker commits in ITS territory (real `mogging send`) ───────
       const work = (wt: string, dir: string, file: string, mark: string, msg: string): string =>
-        `cd /d "${wt}" && (if not exist src\\${dir} mkdir src\\${dir}) && echo ${mark}> src\\${dir}\\${file}` +
-        ` && git add -A && git commit -m ${msg}`
+        sh.chain(
+          sh.cd(wt),
+          sh.mkdirWrite(`src/${dir}`, `src/${dir}/${file}`, mark),
+          'git add -A',
+          `git commit -m ${msg}`
+        )
       await cli(['send', String(base + 1), work(wt1.path, 'a', 'one.txt', 'W1_4242', 'worker1')])
       await cli(['send', String(base + 2), work(wt2.path, 'b', 'two.txt', 'W2_4242', 'worker2')])
       let workOk = false
@@ -139,7 +144,7 @@ export function runSwarmMilestoneSmoke(win: BrowserWindow): void {
       const headMoved = git(repo, ['rev-parse', 'HEAD']) !== headBefore
       // Step the worker's shell OUT of its worktree first — Windows refuses to
       // remove a directory that is some process's cwd.
-      await cli(['send', String(base + 1), `cd /d "${repo}"`])
+      await cli(['send', String(base + 1), sh.cd(repo)])
       await sleep(1200)
       const removed = (await ES(
         `window.bridge.invoke('worktrees:remove', ${JSON.stringify({ repo, path: wt1.path, force: true })})`

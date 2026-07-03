@@ -1,6 +1,7 @@
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, type BrowserWindow } from 'electron'
+import { sh } from './smoke-shell'
 
 // Env-gated agent-CLI smoke (set MOGGING_AGENT=claude). Launches a real coding-agent
 // CLI in the pane and verifies full-TUI behaviour: the terminal's ALTERNATE buffer goes
@@ -70,7 +71,7 @@ export function runAgentSmoke(win: BrowserWindow, command: string): void {
       // Launch the agent in the repo dir. Clear nested-Claude env vars so it starts clean
       // (the app was itself launched from a Claude Code session).
       const cwd = app.getAppPath()
-      await send('cd /d "' + cwd + '" & set "CLAUDECODE=" & set "CLAUDE_CODE_ENTRYPOINT=" & ' + command + '\r')
+      await send(sh.clearEnvRun(cwd, ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT'], command) + '\r')
       await delay(9000)
 
       const capA = String(await ES('window.__cap'))

@@ -1,6 +1,7 @@
 import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { softGapMs } from './smoke-shell'
 
 // Env-gated PERCEPTION smoke (MOGGING_PERCEPTION, docs/07-perception-budget.md):
 // measure the app the way a human feels it, and FAIL when any interaction crosses the
@@ -9,9 +10,9 @@ import { join } from 'node:path'
 //   - keystroke -> terminal echo ≤ 60 ms end-to-end       (terminal-latency research)
 //   - zero frames > 100 ms while interacting or under torrent (visible hitch)
 const BUDGET = {
-  actionMs: 100, // workspace switch, view change, zoom -> painted
-  echoMs: 60, // keystroke -> glyph echo through the daemon round-trip
-  hitchMs: 100 // any single frame gap above this is a visible stutter
+  actionMs: 100, // workspace switch, view change, zoom -> painted (NEVER relaxed)
+  echoMs: 60, // keystroke -> glyph echo through the daemon round-trip (NEVER relaxed)
+  hitchMs: softGapMs(100) // frame-gap only — CI soft mode relaxes this, loudly
 }
 
 const SCRIPT = `(async () => {

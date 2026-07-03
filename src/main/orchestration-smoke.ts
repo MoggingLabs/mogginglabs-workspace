@@ -3,6 +3,7 @@ import { execFile, execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { sh } from './smoke-shell'
 
 // Env-gated ORCHESTRATION milestone smoke (MOGGING_ORCHESTRATION, Phase-3/06).
 // The whole Phase-3 promise as ONE asserted flow, two-phase like the perf milestone:
@@ -104,9 +105,13 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
       }
 
       // ── A3. The "agent" works — scripted through the REAL control CLI ───────
-      const work =
-        `cd /d "${worktree}" && echo ${CHANGE}>> README.md && echo ${SECRET}> stolen.txt` +
-        ` && git add -A && git commit -m agent-work`
+      const work = sh.chain(
+        sh.cd(worktree),
+        sh.appendLine(CHANGE, 'README.md'),
+        sh.writeLine(SECRET, 'stolen.txt'),
+        'git add -A',
+        'git commit -m agent-work'
+      )
       const sendRes = await cli(['send', String(paneId), work])
       let workOk = false
       for (let i = 0; i < 40 && !workOk; i++) {

@@ -3,6 +3,7 @@ import { execFile, execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { sh } from './smoke-shell'
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim()
@@ -145,7 +146,7 @@ export function runBoardSmoke(win: BrowserWindow): void {
       }
       // The launch command cd'd the pane INTO its worktree — step it out first
       // (Windows refuses to remove a directory that is a process's cwd).
-      await ES(`window.bridge.send('terminal:write', { id: ${paneId}, data: ${JSON.stringify(`cd /d "${anchor}"\r`)} })`)
+      await ES(`window.bridge.send('terminal:write', { id: ${paneId}, data: ${JSON.stringify(sh.cd(anchor) + '\r')} })`)
       await sleep(1200)
       const removed = await ES(
         `window.bridge.invoke('worktrees:remove', ${JSON.stringify({ repo: anchor, path: join(wtRoot, wtDirs[0] ?? ''), force: true })})`

@@ -1,13 +1,28 @@
 #!/usr/bin/env bash
-# Full env-gated smoke sweep with per-run isolated state:
-#   MOGGING_USERDATA → fresh Electron userData (app-settings.db)
-#   LOCALAPPDATA     → fresh detached PTY daemon
+# Full env-gated smoke sweep with per-run isolated state — ONE script, all platforms:
+#   MOGGING_USERDATA   → fresh Electron userData (app-settings.db)
+#   LOCALAPPDATA (win) / XDG_RUNTIME_DIR (linux) → fresh detached PTY daemon
+#   (both are exported to the same iso dir; each platform reads its own)
 # Verdicts come from each smoke's out/<name>-result.json ("pass") — npm/electron exit
 # codes are unreliable under timeout (a lingering dev server reads as 124 even after
 # the app exited cleanly). Kills each run's daemon afterwards.
-# Usage: bash scripts/qa-smokes.sh
+# Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
+# relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 set -u
 cd "$(dirname "$0")/.."
+
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) IS_WIN=1 ;;
+  *) IS_WIN=0 ;;
+esac
+
+kill_electron() {
+  if [ "$IS_WIN" = 1 ]; then
+    taskkill //F //IM electron.exe >/dev/null 2>&1 || true
+  else
+    pkill -f '[e]lectron' >/dev/null 2>&1 || true
+  fi
+}
 
 TMPBASE="${TMPBASE:-$(mktemp -d)}"
 echo "isolation root: $TMPBASE"
@@ -34,13 +49,13 @@ run_smoke() {
   mkdir -p "$iso/userdata" "$iso/local"
   rm -f "out/$result-result.json"
   echo "── $name ──"
-  MOGGING_USERDATA="$iso/userdata" LOCALAPPDATA="$iso/local" \
+  MOGGING_USERDATA="$iso/userdata" LOCALAPPDATA="$iso/local" XDG_RUNTIME_DIR="$iso/local" \
     env "$var=$val" timeout "$timeout_s" npm run dev >"$iso/$name.log" 2>&1
   local v
   v=$(verdict "$result")
   RESULTS+=("$name $v")
   echo "  $v"
-  taskkill //F //IM electron.exe >/dev/null 2>&1
+  kill_electron
   # Template phase A must leave its daemon+state for phase B; everything else cleans up.
   if [ -z "$reuse" ] || [ "$name" = "TEMPLATE_B" ]; then kill_daemon "$iso"; fi
   return 0
