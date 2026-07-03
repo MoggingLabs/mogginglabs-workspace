@@ -93,16 +93,26 @@ if (mac) {
   check(!!exe, 'NSIS exe packaged')
   check(distFiles.some((f) => f.endsWith('.exe.blockmap')), 'blockmap packaged (differential updates)')
   if (exe) {
-    try {
-      const status = execFileSync(
-        'powershell',
-        ['-NoProfile', '-Command', `(Get-AuthenticodeSignature 'dist/${exe}').Status`],
-        { encoding: 'utf8' }
-      ).trim()
-      notes.push(`Authenticode status: ${status} (NotSigned is the expected dry-run state)`)
-    } catch {
-      notes.push('Authenticode status: unavailable (Get-AuthenticodeSignature failed)')
+    // pwsh first: under the Actions bash step, PSModulePath is pwsh-flavored and
+    // Windows PowerShell 5.1 fails to load Microsoft.PowerShell.Security there.
+    let status = ''
+    for (const shell of ['pwsh', 'powershell']) {
+      try {
+        status = execFileSync(
+          shell,
+          ['-NoProfile', '-Command', `(Get-AuthenticodeSignature 'dist/${exe}').Status`],
+          { encoding: 'utf8' }
+        ).trim()
+        break
+      } catch {
+        /* try the next shell */
+      }
     }
+    notes.push(
+      status
+        ? `Authenticode status: ${status} (NotSigned is the expected dry-run state)`
+        : 'Authenticode status: unavailable (Get-AuthenticodeSignature failed)'
+    )
   }
 }
 

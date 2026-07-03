@@ -3,8 +3,8 @@ cask "mogginglabs-workspace" do
   arch arm: "arm64", intel: "x64"
 
   version "0.3.0"
-  sha256 arm:   "5b75f3412ca73ad7a4f164530b98658d76c7a706fad1791c2e6039d8dee52052",
-         intel: "cec5ca4a7a13b80eb2590530066afe7e887113504672f58ec0ef623d3c85aac3"
+  sha256 arm:   "91b50f6496ee03aae19e84db25890728b489fcb69fdee253bb3e2a5891c09977",
+         intel: "3dbf2332fdcd93b0be8d1941d63e4c9258c7a76e8bf6517650e8287e7a4f7b14"
 
   url "https://github.com/MoggingLabs/mogginglabs-workspace/releases/download/v#{version}/MoggingLabs.Workspace-#{version}-mac-#{arch}.dmg"
   name "MoggingLabs Workspace"
@@ -12,7 +12,7 @@ cask "mogginglabs-workspace" do
   homepage "https://github.com/MoggingLabs/mogginglabs-workspace"
 
   auto_updates true
-  depends_on macos: ">= :big_sur"
+  depends_on macos: :big_sur
 
   app "MoggingLabs Workspace.app"
 

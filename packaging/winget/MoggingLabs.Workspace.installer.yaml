@@ -9,6 +9,6 @@ UpgradeBehavior: install
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/MoggingLabs/mogginglabs-workspace/releases/download/v0.3.0/MoggingLabs.Workspace-0.3.0-win-x64.exe
-    InstallerSha256: 4AE2CBFF91A1A2AE54DA96A87EB33BC96DF01EC381791823468171981773EB29
+    InstallerSha256: 776D5E00FD8913DC6D8B97CFD92C26E955DEE18CEE7AAFEDBF8101B0E4991FE9
 ManifestType: installer
 ManifestVersion: 1.6.0

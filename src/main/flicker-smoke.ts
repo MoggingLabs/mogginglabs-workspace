@@ -64,6 +64,12 @@ const SCRIPT = `(async () => {
   for (const p of panes) p.write('echo FLICK_' + p.id + '_END' + CR)
   await sleep(1600)
   const baseLines = panes.map((p) => p.bufferLines())
+  // The buffer-survival baseline is CONTENT, not line count: reflow (a pane
+  // remeasured wider merges wrapped lines — long runner hostnames wrap zsh
+  // prompts in narrow grid panes) legally shrinks the line count with zero
+  // loss. Found by the macOS CI sweep: 6/8 idle panes "lost" lines while
+  // every marker survived (run 28657760100).
+  const baseTexts = panes.map((p) => p.text().replace(/\\s+/g, ''))
   m.workspace.create({ name: 'Churn' })
   await sleep(900)
 
@@ -100,7 +106,10 @@ const SCRIPT = `(async () => {
       hasOwn: txt.indexOf('FLICK_' + p.id + '_END') >= 0,
       foreign: ids.filter((o) => o !== p.id && txt.indexOf('FLICK_' + o + '_END') >= 0),
       renderer: p.renderer(),
-      bufferKept: p.bufferLines() >= baseLines[i]
+      // Truncation loses characters; reflow only moves line breaks. The claim
+      // ("no buffer loss") is about characters. Line counts stay as diagnostics.
+      bufferKept: txt.replace(/\\s+/g, '').indexOf(baseTexts[i]) >= 0,
+      lines: [baseLines[i], p.bufferLines()]
     }
   })
   const contentIntact = results.every((r) => r.hasOwn && r.foreign.length === 0)
