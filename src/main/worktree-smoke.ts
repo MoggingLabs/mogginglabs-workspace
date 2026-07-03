@@ -1,6 +1,6 @@
 import { app, type BrowserWindow } from 'electron'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -53,8 +53,29 @@ export function runWorktreeSmoke(win: BrowserWindow): void {
       const wtRoot = join(repo, '.mogging', 'worktrees')
       const dirs = existsSync(wtRoot) ? readdirSync(wtRoot) : []
       const porcelain = git(repo, ['worktree', 'list', '--porcelain'])
+      // The CLAIM is "git lists a worktree at each pane's cwd"; the PROBE must
+      // compare CANONICAL paths. windows-latest hands out TEMP in 8.3 short
+      // form (C:\Users\RUNNER~1\...) so the pane cwd and git's long-form
+      // porcelain paths never match textually (found by the 6/03 sweep, run
+      // 28669886364). realpath expands the alias; slashes + case normalize for
+      // NTFS's case-insensitivity (win32 only — POSIX compares exact).
+      const norm = (s: string): string => {
+        const t = s.replaceAll('\\', '/')
+        return process.platform === 'win32' ? t.toLowerCase() : t
+      }
+      const canon = (p: string): string => {
+        try {
+          return norm(realpathSync.native(p))
+        } catch {
+          return norm(p)
+        }
+      }
+      const porcelainNorm = norm(porcelain)
+      // Either form may be the one git recorded (macOS: /var/... symlinks to
+      // /private/var/... and realpath crosses that boundary) — accept both.
       const gitAgrees =
-        dirs.length === 2 && paneCwds.every((p) => porcelain.includes(p.replace(/\\/g, '/')) || porcelain.includes(p))
+        dirs.length === 2 &&
+        paneCwds.every((p) => porcelainNorm.includes(canon(p)) || porcelainNorm.includes(norm(p)))
       const branches = git(repo, ['branch', '--list', 'mogging/*'])
       const branchesOk = branches.split('\n').filter((b) => b.trim()).length === 2
 
