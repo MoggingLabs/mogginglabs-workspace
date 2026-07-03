@@ -153,6 +153,23 @@ readability lives in ink/edge — neither sacrifices the other.
   `--track-wide 0.14em` (uppercase labels). One un-tokenized stragglers set exists at
   9–10px in chips/kbd (logged as UX-21).
 - **Space** (`--sp-1…6`): 4 · 8 · 12 · 16 · 24 · 32 px (4-base).
+  Rhythm rules (6/UI pass — every new surface inherits these for free):
+  - **The division**: where a title heads a content column, the junction is
+    title → `sp-3` → 1px hairline (`--border` at 55%, inset to the content
+    column) → section gap (≥ `sp-3`) → content. Implemented on the rail
+    header, home + settings `.section-label`s, board lane heads, and modal
+    footers (line above, since the body scrolls under them). Small inline
+    cluster labels (wizard "Your grid") stay bare.
+  - **Clip room**: outer effects (attention rings, glows, shadows) need their
+    breathing space INSIDE the scroll container that clips them — the
+    title/list gap lives as the scroller's `padding-top`, never as the
+    header's `padding-bottom` alone.
+  - **Minimum sibling gap**: interactive neighbors keep ≥ `sp-1`; dense
+    terminal chrome (pane-header clusters, chips, icon tiles, kbd hints) may
+    use 3/6px optical half-steps — the ONLY sanctioned off-ramp spacing
+    (policy note at the token block).
+  - **Menus size to content** (`width: max-content`, capped): an item that
+    wraps reads broken, not compact.
 - **Radius**: `--r-sm 6` · `--r-md 10` · `--r-lg 14` · `--r-full 999` px; terminals
   are deliberately square (`border-radius: 0` on `.layout-slot`).
 - **Elevation**: `--shadow-1/2/3` (per-theme alpha); dark leans on surface steps,
@@ -316,7 +333,7 @@ wins shipped with this step; everything else is LOGGED with its owner step.
 ## Guardrails (how this stays true)
 
 - **Grep gates** (run in CI-sized checks; all must return empty):
-  - `grep -nE '#[0-9a-fA-F]{3,8}\b|rgba?\(' src/ui/styles/global.css | awk -F: '$1 > 145'`
+  - `grep -nE '#[0-9a-fA-F]{3,8}\b|rgba?\(' src/ui/styles/global.css | awk -F: '$1 > 152'`
     → no color literals outside the token/theme-fallback blocks.
   - `grep -rn "@backend" src/ui --include='*.ts'` (and the inverse for `@ui`,
     `electron`, `node-pty`) → layer boundaries hold.

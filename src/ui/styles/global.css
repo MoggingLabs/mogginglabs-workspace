@@ -85,7 +85,12 @@
   --track-tight: -0.035em;
   --track-wide: 0.14em;
 
-  /* Spacing (4-base) · radius · elevation · motion. */
+  /* Spacing (4-base) · radius · elevation · motion.
+     Off-ramp literals policy (6/UI pass): 3px and 6px appear ONLY as optical
+     half-steps inside dense terminal chrome (pane-header clusters, chips,
+     icon tiles, kbd hints) where the 4-base ramp is visibly too coarse; any
+     other spacing takes a --sp-* stop. 1-2px values are hairlines/seams and
+     carry their own reasons where non-obvious. */
   --sp-1: 4px;
   --sp-2: 8px;
   --sp-3: 12px;
@@ -560,6 +565,11 @@ button {
 .menu {
   position: absolute;
   min-width: 180px;
+  /* Size to the widest item: a menu that wraps "Copy working directory" onto
+     two lines reads broken, not compact. The cap is a runaway guard — no
+     current item approaches it. */
+  width: max-content;
+  max-width: 320px;
   padding: var(--sp-1);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
@@ -575,6 +585,7 @@ button {
   align-items: center;
   gap: var(--sp-2);
   width: 100%;
+  white-space: nowrap; /* max-content menu sizing does the fitting */
   padding: 6px 10px;
   border: none;
   border-radius: 5px;
@@ -608,6 +619,29 @@ button {
   text-transform: uppercase;
   letter-spacing: var(--track-wide);
   color: var(--text-lo);
+}
+/* House division (6/UI pass): where a title heads a content COLUMN, the
+   junction reads title -> sp-3 -> 1px hairline (--border at 55%) -> section
+   gap -> content — the rhythm established on the rail (.rail-header::after).
+   Scoped to column headings (home sections, settings sections, board lane
+   heads); small inline cluster labels (wizard "Your grid"/"Presets") stay
+   bare — a division under a 3-item chip row is noise, not rhythm. */
+.home-section > .section-label,
+.settings-section > .section-label,
+.board-lane-head {
+  position: relative;
+  padding-bottom: var(--sp-3);
+}
+.home-section > .section-label::after,
+.settings-section > .section-label::after,
+.board-lane-head::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--border) 55%, transparent);
 }
 
 .empty-state {
@@ -849,7 +883,7 @@ button {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--sp-1); /* on-ramp (was 3px): the rail is a nav list, not dense chrome */
   /* The list's share of the header gap sits as padding-top HERE, inside the
      scroller: the attention ring is an OUTER box-shadow, and a scroll container
      clips child shadows at its padding edge — with the gap outside (header
@@ -946,7 +980,7 @@ button {
   background: var(--bg-inset);
   color: var(--text-hi);
   font: inherit;
-  padding: 0 4px;
+  padding: 0 var(--sp-1);
   outline: none;
 }
 .workspace-tab .ws-badges {
@@ -1132,7 +1166,7 @@ button {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-1);
   width: 56px;
   height: 56px;
   padding: 6px 6px 4px;
@@ -1257,7 +1291,7 @@ button {
   color: var(--info);
   border: 1px solid var(--info);
   border-radius: 3px;
-  padding: 0 4px;
+  padding: 0 var(--sp-1);
   line-height: 14px;
   max-width: 90px;
   overflow: hidden;
@@ -1286,7 +1320,7 @@ button {
   color: var(--text-lo);
   border: 1px solid var(--border);
   border-radius: 3px;
-  padding: 0 4px;
+  padding: 0 var(--sp-1);
   line-height: 14px;
 }
 .pane-claims svg {
@@ -1337,7 +1371,7 @@ button {
   color: var(--text-mid);
   border: 1px solid var(--border-strong);
   border-radius: 3px;
-  padding: 0 4px;
+  padding: 0 var(--sp-1);
   line-height: 14px;
 }
 .pane-role[data-role='reviewer'] {
@@ -1609,7 +1643,9 @@ body.resizing * {
   align-items: center;
   gap: var(--sp-2);
   padding: var(--sp-3) var(--sp-4);
-  border-bottom: 1px solid var(--border);
+  /* The input->results junction takes the house division's faded stop — a
+     full-strength border here read heavier than any other title/list seam. */
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
   color: var(--text-lo);
 }
 .palette-input {
@@ -1874,7 +1910,7 @@ body.resizing * {
 .home-section {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-2);
+  gap: var(--sp-3); /* the division's content-side share (title side = label padding) */
   min-width: 0;
 }
 .home-list {
@@ -1983,6 +2019,23 @@ body.resizing * {
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
+}
+/* Modal footers get the division too: the body scrolls UNDER the footer, and
+   without a line the fold is ambiguous (content just stops). */
+.wizard-footer,
+.review-footer {
+  position: relative;
+  padding-top: var(--sp-3);
+}
+.wizard-footer::before,
+.review-footer::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--border) 55%, transparent);
 }
 .wizard-footer {
   display: flex;
@@ -2253,7 +2306,7 @@ body.resizing * {
 .path-input-status {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-1);
   max-width: 180px;
   overflow: hidden;
   color: var(--text-mid);
@@ -2841,7 +2894,7 @@ body.resizing * {
 .board-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-1);
   font-size: var(--fs-10);
   color: var(--text-lo);
   border: 1px solid var(--border);
