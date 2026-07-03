@@ -193,6 +193,37 @@ readability lives in ink/edge — neither sacrifices the other.
   themes) + `out/gallery/probe-chrome.json` (fullscreen right gap ≈ sp-3, restored
   gap = controls reserve, no horizontal overflow, trigger centered).
 
+## Terminal type (Phase-5/06)
+
+**Default: 14px / line-height 1.3 (fixed)** — picked from the shot matrix
+(`MOGGING_SHOT=typematrix` → `out/gallery/typematrix/`, selection committed under
+`docs/assets/gallery/typematrix/`): the same busy specimen (colored agent output,
+box glyphs, a diff, a prompt) at 13 / 13.5 / 14 / 15px × lh 1.2 / 1.3 / 1.35, at
+4-pane and 16-pane densities.
+
+Rationale, from the shots:
+- **13 → 14 is a real legibility jump** at 4-pane: glyph counters open, the
+  `O0 1lI|` set separates cleanly, color-coded diff lines scan at arm's length —
+  the all-day squint is the 13px default, not the family.
+- **15px wraps** typical prompt/path lines at 4-pane half-width — the column
+  budget costs more than the legibility gains. Selectable, not the default.
+- **14px stays useful at the 16-pane wall** (~10 readable rows per pane; long
+  paths wrap identically at 13 and 14 at that width).
+- **lh 1.2 is too dense** for day-long scanning (descenders crowd box rows);
+  1.35 is indistinguishable from 1.3; box-drawing glyphs stay contiguous at 1.3.
+
+Controls: Settings § Terminal exposes **fontSize only** (segmented 12–16px,
+persisted, applied LIVE to every open pane); line-height is fixed by design.
+Every size change rides the house remeasure→refit pipeline (option change →
+xterm re-measure → `refit(force)` → PTY resize) — there is no second metrics
+path. Chrome (28px pane header, fs-10/11 chips, 3px block gutter) is plain CSS
+px and NEVER scales with the buffer type; only block-overlay *positions* follow
+cell metrics, by design. Standing gates: the reveal probe loops fontSize
+12/14/16 and asserts the fill math (screen fills body minus at most one partial
+column + scrollbar reserve, header height constant) — `out/shot-probe.json
+.sizesPass`; the perception smoke includes a live size-change cycle (atlas
+re-warm must not hitch).
+
 ## Full-app views (Phase-5/05)
 
 - `AppView = 'home' | 'grid' | 'board' | 'settings'`. Exactly one top-level view

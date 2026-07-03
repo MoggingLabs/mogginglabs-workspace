@@ -53,10 +53,94 @@ const PROBE = `(() => {
  * otherwise), waits for prompts, then captures.
  */
 import { runGallery } from './gallery'
+import { mkdirSync } from 'node:fs'
+
+/** 5/06 type matrix: the same busy specimen at every candidate size × line-height,
+ *  at 4-pane and 16-pane densities — the empirical basis for the default. */
+function runTypeMatrix(win: BrowserWindow): void {
+  const wc = win.webContents
+  const ES = (js: string): Promise<unknown> => wc.executeJavaScript(js, true)
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+  const dir = join(process.cwd(), 'out', 'gallery', 'typematrix')
+  const SPECIMEN = `(() => {
+    const E = String.fromCharCode(27) + '['
+    const lines = [
+      E+'1;38;5;208m` + '\\u25b6' + ` claude'+E+'0m '+E+'2mrefactoring the reflow path` + '\\u2026' + `'+E+'0m',
+      E+'38;5;114m` + '\\u2713' + `'+E+'0m read '+E+'38;5;75msrc/ui/layout/grid.ts'+E+'0m '+E+'2m(412 lines)'+E+'0m',
+      E+'38;5;114m` + '\\u2713' + `'+E+'0m edit '+E+'38;5;75msrc/ui/features/terminal/terminal-pane.ts'+E+'0m',
+      '` + '\\u250c\\u2500' + ` Test run ` + '\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2510' + `',
+      '` + '\\u2502' + ` '+E+'38;5;114m42 passed'+E+'0m, '+E+'38;5;203m1 failed'+E+'0m, 3 skipped  ` + '\\u2502' + `',
+      '` + '\\u2514\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2518' + `',
+      E+'38;5;203m- if (cols === before.cols) return'+E+'0m',
+      E+'38;5;114m+ if (d.cols === this.term.cols && d.rows === this.term.rows) return'+E+'0m',
+      'ilmnop O0 1lI| ` + '\\u2500\\u2502\\u250c\\u2510' + ` the quick brown fox 0123456789',
+      E+'1;38;5;75m` + '\\u276f' + `'+E+'0m npm run typecheck'
+    ]
+    for (const p of (window.__mogging.panes || [])) { p.term.write(lines.join(String.fromCharCode(13,10)) + String.fromCharCode(13,10)) }
+    return 1
+  })()`
+  const paneRect = async (): Promise<{ x: number; y: number; width: number; height: number }> => {
+    const r = (await ES(
+      `(() => { const b = document.querySelector('.layout-slot[data-pane-id="1"]').getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height } })()`
+    )) as { x: number; y: number; width: number; height: number }
+    return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) }
+  }
+  const spec = (size: number, lh: number): Promise<unknown> =>
+    ES(`((window.__mogging.panes || []).forEach((p) => p.typeSpec(${size}, ${lh})), 1)`)
+  const snap = async (name: string, rect?: Electron.Rectangle): Promise<void> => {
+    await sleep(150)
+    const img = rect ? await wc.capturePage(rect) : await wc.capturePage()
+    writeFileSync(join(dir, `${name}.png`), img.toPNG())
+  }
+  const run = async (): Promise<void> => {
+    try {
+      mkdirSync(dir, { recursive: true })
+      win.setSize(1600, 950)
+      await ES(`(window.__mogging.workspace.count() === 0 && window.__mogging.workspace.create({ name: 'Type' }), 1)`)
+      await sleep(1500)
+      await ES(`(window.__mogging.layout.apply(4), 1)`)
+      await sleep(4000)
+      // 4-pane: the full size × line-height matrix, cropped to pane 1.
+      for (const lh of [1.2, 1.3, 1.35]) {
+        for (const size of [13, 13.5, 14, 15]) {
+          await spec(size, lh)
+          await sleep(400)
+          await ES(SPECIMEN)
+          await sleep(300)
+          await snap(`4p-${String(size).replace('.', '_')}-lh${String(lh).replace('.', '')}`, await paneRect())
+        }
+      }
+      // 16-pane: candidate sizes at the fixed line-height, full window.
+      await ES(`(window.__mogging.layout.apply(16), 1)`)
+      await sleep(6000)
+      for (const size of [13, 14, 15]) {
+        await spec(size, 1.3)
+        await sleep(500)
+        await ES(SPECIMEN)
+        await sleep(400)
+        await snap(`16p-${size}`)
+      }
+      app.exit(0)
+    } catch (e) {
+      try {
+        writeFileSync(join(dir, 'error.txt'), String(e))
+      } catch {
+        /* ignore */
+      }
+      app.exit(1)
+    }
+  }
+  if (wc.isLoading()) wc.once('did-finish-load', () => setTimeout(() => void run(), 1800))
+  else setTimeout(() => void run(), 1800)
+}
 
 export function runShot(win: BrowserWindow): void {
   if (process.env.MOGGING_SHOT === 'all') {
     runGallery(win) // Phase-5/01: every surface, both themes -> out/gallery/
+    return
+  }
+  if (process.env.MOGGING_SHOT === 'typematrix') {
+    runTypeMatrix(win) // Phase-5/06: the empirical terminal-type matrix
     return
   }
   const grid = process.env.MOGGING_SHOT === 'grid'
@@ -74,19 +158,50 @@ export function runShot(win: BrowserWindow): void {
             'if(m&&m.layout)m.layout.apply(4);return 1;})()'
         )
         await sleep(3500) // panes fit at the ORIGINAL window size
-        await ES('window.__mogging.home && 1') // no-op; keep parity
-        await ES('(function(){var h=document.querySelector("#content");return 1;})()')
-        await win.webContents.executeJavaScript(
-          '(function(){var b=document.querySelector(".rail-footer .rail-btn");b&&b.click();return 1;})()',
-          true
-        ) // go Home -> panes hidden
+        await ES(
+          '(function(){var b=document.querySelector(".titlebar-right .icon-btn[aria-label=\\"Home\\"]");b&&b.click();return 1;})()'
+        ) // go Home -> panes hidden (5/05: Home is a full-app view)
         await sleep(600)
         win.setSize(1880, 1000) // resize WHILE hidden — the artifact's trigger
         await sleep(900)
         await ES('window.__mogging.workspace.switchByIndex(0)') // reveal
         await sleep(1200)
-        const probe = await win.webContents.executeJavaScript(PROBE, true)
-        writeFileSync(join(process.cwd(), 'out', 'shot-probe.json'), JSON.stringify(probe, null, 2))
+        const probe = (await win.webContents.executeJavaScript(PROBE, true)) as Record<string, never>
+        // 5/06 standing gate: the fill math must hold at EVERY user-selectable size.
+        // A live size change goes remeasure→refit; afterwards the rendered screen
+        // must fill the body minus at most one partial column + the scrollbar
+        // reserve, and the header (chrome) must not move with the buffer type.
+        type P = {
+          body?: { w: number }
+          screen?: { w: number }
+          header?: { h: number }
+          term?: { cellW: number | null; scrollBarWidth: number | null; cols: number }
+        }
+        const fillOk = (p: P, headerH: number): boolean =>
+          !!(
+            p.body &&
+            p.screen &&
+            p.term &&
+            p.term.cellW &&
+            p.body.w - p.screen.w <= Math.ceil(p.term.cellW) + (p.term.scrollBarWidth ?? 10) + 2 &&
+            p.header &&
+            p.header.h === headerH
+          )
+        const baseHeaderH = (probe as P).header?.h ?? -1
+        const sizes: Record<string, unknown> = {}
+        let sizesPass = true
+        for (const s of [12, 14, 16]) {
+          await ES(`window.__mogging.setTerminalFontSize(${s})`)
+          await sleep(800)
+          const p = (await win.webContents.executeJavaScript(PROBE, true)) as P
+          sizes[String(s)] = p
+          if (!fillOk(p, baseHeaderH)) sizesPass = false
+        }
+        await ES('window.__mogging.setTerminalFontSize(14)') // back to the default
+        writeFileSync(
+          join(process.cwd(), 'out', 'shot-probe.json'),
+          JSON.stringify({ sizesPass, base: probe, sizes }, null, 2)
+        )
       }
       if (grid) {
         win.setSize(1880, 1000) // probe at a maximized-class width

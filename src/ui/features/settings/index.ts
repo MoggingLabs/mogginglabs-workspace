@@ -7,6 +7,7 @@ import { setCommands } from '../../core/commands/command-port'
 import { getBridge } from '../../core/ipc/bridge'
 import { getTelemetry } from '../../core/telemetry'
 import { activeView, goBack, onViewChange, setActiveView } from '../../core/shell/view-port'
+import { setTerminalFontSize, terminalFontSize, TERMINAL_FONT_SIZES } from '../../core/terminal/font-port'
 import { TEMPLATE_COUNTS } from '../layout'
 import { createProfilesHostsSection } from './profiles-hosts'
 
@@ -56,6 +57,18 @@ export const settingsFeature: UiFeature = {
       value: pref(DEFAULT_LAYOUT_KEY) ?? '4',
       ariaLabel: 'Default terminals in a new workspace',
       onChange: (id) => setPref(DEFAULT_LAYOUT_KEY, id)
+    })
+
+    // Terminal type (5/06): fontSize only — applied LIVE to every open pane through
+    // the house remeasure→refit path; line-height is fixed by design.
+    const fontSeg = createSegmented({
+      options: TERMINAL_FONT_SIZES.map((n) => ({ id: String(n), label: `${n}px` })),
+      value: String(terminalFontSize()),
+      ariaLabel: 'Terminal font size',
+      onChange: (id) => {
+        setTerminalFontSize(Number(id))
+        getTelemetry().captureEvent({ name: 'terminal.fontSize', props: { size: Number(id) } })
+      }
     })
 
     // ── Telemetry consent: persisted in main, applied live (opt-in, default off) ──
@@ -133,6 +146,11 @@ export const settingsFeature: UiFeature = {
         id: 'terminal',
         label: 'Terminal',
         el: section('terminal', 'Terminal', [
+          row(
+            'Font size',
+            fontSeg.el,
+            'Applied live to every open terminal. Line height is fixed — only size varies.'
+          ),
           row('New-workspace layout', layoutSeg.el, 'How many terminals the wizard suggests.')
         ])
       },
@@ -239,6 +257,7 @@ export const settingsFeature: UiFeature = {
       const w = window as unknown as { __mogging?: Record<string, unknown> }
       w.__mogging = w.__mogging ?? {}
       w.__mogging.setTheme = (id: string) => setTheme(id)
+      w.__mogging.setTerminalFontSize = (n: number) => (setTerminalFontSize(n), fontSeg.setValue(String(n)))
       w.__mogging.iconSheet = () => {
         const id = 'mogging-icon-sheet'
         const prev = document.getElementById(id)

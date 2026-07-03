@@ -111,6 +111,13 @@ const SCRIPT = `(async () => {
   for (let i = 0; i < 12; i++) { m.workspace.switchByIndex(i % 2); await sleep(220) }
   const churn = s1.stop()
 
+  // ── 5b) Live terminal-size change (5/06): every open pane re-measures, refits
+  // and re-warms its GPU glyph atlas — none of that may produce a visible hitch.
+  const s1b = startSampler()
+  m.setTerminalFontSize(16); await sleep(600)
+  m.setTerminalFontSize(14); await sleep(600)
+  const sizeChurn = s1b.stop()
+
   // ── 6) Torrent: 2 s of colored output into all 8 panes, zero hitches ───────
   m.workspace.switchByIndex(0)
   await sleep(600)
@@ -133,12 +140,13 @@ const SCRIPT = `(async () => {
     zoomMax <= B.actionMs &&
     (echoMedian === -1 || echoMedian <= B.echoMs) &&
     churn.over100 === 0 &&
+    sizeChurn.over100 === 0 &&
     torrent.over100 === 0
 
   return {
     pass, budget: B,
     switchTimes, switchMax, homeTimes, homeMax, zoomTimes, zoomMax,
-    echoSamples, echoMedian, churn, torrent
+    echoSamples, echoMedian, churn, sizeChurn, torrent
   }
 })()`
 

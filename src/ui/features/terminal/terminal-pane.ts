@@ -14,6 +14,7 @@ import { createModal, icon, showToast, type IconName } from '../../components'
 import { getBridge } from '../../core/ipc/bridge'
 import { terminalClient } from './terminal.client'
 import { onTerminalTheme } from '../../core/theme/theme-port'
+import { onTerminalFontSize, terminalFontSize, TERMINAL_LINE_HEIGHT } from '../../core/terminal/font-port'
 import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
 import { setPaneState, clearPaneState } from '../../core/attention/attention-port'
 import { setPaneCwd, clearPaneCwd, getPaneCwd } from '../../core/layout/pane-cwd'
@@ -63,6 +64,7 @@ export class TerminalPane {
   private glLosses = 0
   private devHandle: unknown
   private themeUnsub?: () => void
+  private fontUnsub?: () => void
   private paneLabelUnsub?: () => void
   private paneGitUnsub?: () => void
   private focusUnsub?: () => void
@@ -78,7 +80,8 @@ export class TerminalPane {
     this.term = new Terminal({
       fontFamily:
         '"JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace',
-      fontSize: 13,
+      fontSize: terminalFontSize(), // Settings § Terminal (5/06); default is the matrix pick
+      lineHeight: TERMINAL_LINE_HEIGHT, // fixed by design — only fontSize is user-facing
       cursorBlink: false, // enabled only while focused (perf: fewer idle repaints across panes)
       allowProposedApi: true,
       scrollback: 10000,
@@ -166,6 +169,14 @@ export class TerminalPane {
 
     // Apply the active theme now (replayed) + on every change (decoupled via the theme port).
     this.themeUnsub = onTerminalTheme((theme) => (this.term.options.theme = theme))
+
+    // Live font-size changes ride the HOUSE metrics path: option change (xterm
+    // re-measures) → force refit → PTY resize. No second metrics pipeline (5/06).
+    this.fontUnsub = onTerminalFontSize((size) => {
+      if (this.term.options.fontSize === size) return
+      this.term.options.fontSize = size
+      this.refit(true)
+    })
 
     this.blocks = new BlockTracker(this.term, body) // Warp-style command blocks from OSC 133 (02)
 
@@ -692,7 +703,14 @@ export class TerminalPane {
         })),
       toggleBlock: (blockId: number) => this.blocks?.toggleCollapse(blockId),
       findBlocks: (q: string) =>
-        (this.blocks?.find(q) ?? []).map((b) => ({ id: b.id, command: b.command, exitCode: b.exitCode }))
+        (this.blocks?.find(q) ?? []).map((b) => ({ id: b.id, command: b.command, exitCode: b.exitCode })),
+      // 5/06 type-matrix probe: set arbitrary type metrics through the house
+      // remeasure→refit path (the shipped control only exposes fontSize).
+      typeSpec: (fontSize: number, lineHeight: number) => {
+        this.term.options.fontSize = fontSize
+        this.term.options.lineHeight = lineHeight
+        this.refit(true)
+      }
     }
     w.__mogging.panes.push(this.devHandle)
   }
@@ -708,6 +726,7 @@ export class TerminalPane {
     clearPaneCwd(this.id) // stops the backend git watch for this pane (git feature unwatches)
     this.blocks?.dispose()
     this.themeUnsub?.()
+    this.fontUnsub?.()
     this.paneLabelUnsub?.()
     this.paneGitUnsub?.()
     this.focusUnsub?.()
