@@ -27,6 +27,9 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    # A hung native rebuild must never burn hours of runner time (the 2026-07
+    # ubuntu image hangs @electron/rebuild's spawned node-gyp — see ci.yml).
+    timeout-minutes: 60
     env:
       # Present only when the Sentry secret is configured; gates the sourcemap upload step
       # (secrets can't be read directly in `if:`, so we surface it as an env var).
@@ -59,9 +62,27 @@ jobs:
       # find VS2022 — point it at our devDep node-gyp >= 13 (same fix the README
       # documents for local installs).
       - name: Install dependencies
+        if: runner.os != 'Linux'
         run: npm ci
         env:
           npm_config_node_gyp: ${{ github.workspace }}/node_modules/node-gyp/bin/node-gyp.js
+
+      # Linux: @electron/rebuild's SPAWNED node-gyp produces zero output forever on
+      # the 2026-07 ubuntu image (direct invocation builds in ~90s — bisected in
+      # ci.yml, run 28639452382). Same bypass as the CI sweep jobs: skip install
+      # scripts, fetch Electron's binary explicitly, drive node-gyp directly.
+      - name: Install dependencies (Linux — direct node-gyp bypass)
+        if: runner.os == 'Linux'
+        run: |
+          npm ci --ignore-scripts
+          node node_modules/electron/install.js
+          EV=$(node -p "require('electron/package.json').version")
+          for m in node-pty better-sqlite3; do
+            echo "── rebuilding $m for electron $EV"
+            (cd "node_modules/$m" && timeout 10m node ../node-gyp/bin/node-gyp.js rebuild \
+              --runtime=electron --target="$EV" \
+              --dist-url=https://www.electronjs.org/headers --build-from-source < /dev/null)
+          done
 
       - name: Build (emits sourcemaps)
         run: npm run build
@@ -69,8 +90,10 @@ jobs:
       # --publish never + explicit gh upload: electron-builder refuses to upload to
       # an already-PUBLISHED release (it only manages drafts), which silently
       # detaches artifacts from gh-created releases. gh upload --clobber always works.
+      # Linux packaging must TRUST the direct-gyp .node files above: its internal
+      # rebuild is the same @electron/rebuild spawn that hangs on this image.
       - name: Package (sign/notarize when secrets present)
-        run: npx electron-builder --publish never
+        run: npx electron-builder --publish never ${{ runner.os == 'Linux' && '-c.npmRebuild=false -c.buildDependenciesFromSource=false' || '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Code signing — base64-encoded cert + password: Authenticode (.pfx) on Windows,

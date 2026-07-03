@@ -4,15 +4,25 @@ on:
   push:
     branches: [main]
   pull_request:
-  # The full Linux 24-gate sweep is heavy (~1h): nightly + on demand (Phase-6/02).
+  # Full 24-gate sweeps are heavy (~1h each): nightly, staggered per OS, + on demand.
   schedule:
-    - cron: '30 3 * * *'
+    - cron: '30 3 * * *' # linux-sweep
+    - cron: '30 4 * * *' # macos-sweep
   workflow_dispatch:
     inputs:
       gates:
-        description: 'Gate subset for linux-sweep, comma list (empty = all 24). Iteration only — certification is the full sweep.'
+        description: 'Gate subset for sweep jobs, comma list (empty = all 24). Iteration only — certification is the full sweep.'
         required: false
         default: ''
+      sweeps:
+        description: 'Which OS sweeps this dispatch runs: comma list from linux,macos (use "none" to skip sweeps)'
+        required: false
+        default: 'linux,macos'
+      signing_dryrun:
+        description: 'Also run the signing/notarization dry run (packages win+mac UNSIGNED, verifies readiness)'
+        type: boolean
+        required: false
+        default: false
 
 # Pushes supersede pushes; sweeps (dispatch/schedule) NEVER cancel anything and
 # never get cancelled — one shared group let a late-firing nightly kill an
@@ -126,7 +136,11 @@ jobs:
   # prints loudly in every affected smoke's log; all other claims are untouched.
   linux-sweep:
     name: linux full 24-gate sweep
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Each nightly cron drives exactly ONE OS's sweep (staggered so two heavy
+    # sweeps never contend); a dispatch picks its sweeps via the `sweeps` input.
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') ||
+      (github.event_name == 'workflow_dispatch' && contains(inputs.sweeps, 'linux'))
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -200,8 +214,120 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sweep-results
+          # Per-OS names: one dispatch can run several sweeps in the same run,
+          # and same-named artifacts would collide.
+          name: sweep-results-linux
           path: |
             out/*-result.json
             sweep.log
           if-no-files-found: warn
+
+  # Phase-6/02: the third platform runs EVERYTHING — same script, same gate list
+  # as Windows and Linux. macOS arm64 runners may have real (virtualized Metal)
+  # GL, so budgets start STRICT; any relaxation must come from measured probe
+  # evidence, never assumption.
+  macos-sweep:
+    name: macos full 24-gate sweep
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '30 4 * * *') ||
+      (github.event_name == 'workflow_dispatch' && contains(inputs.sweeps, 'macos'))
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      # Python >= 3.12 dropped distutils; node-gyp needs setuptools (README-documented).
+      - name: macOS toolchain
+        run: python3 -m pip install --break-system-packages setuptools
+
+      - name: Cache native node_modules (electron-ABI .node files included)
+        id: nmcache
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json') }}-e34
+
+      # Full native install — the @electron/rebuild spawn hang is specific to the
+      # 2026-07 ubuntu image; Xcode CLT is preinstalled here. The step timeout is
+      # the tripwire: if this image ever grows the same hang, fail fast and port
+      # the direct node-gyp bypass from linux-sweep.
+      - name: Install dependencies (full native)
+        if: steps.nmcache.outputs.cache-hit != 'true'
+        timeout-minutes: 25
+        run: npm ci
+        env:
+          npm_config_node_gyp: ${{ github.workspace }}/node_modules/node-gyp/bin/node-gyp.js
+
+      - name: Build
+        run: npm run build
+
+      - name: Full sweep (24 gates, isolated state)
+        run: |
+          MOGGING_GATES="${{ inputs.gates }}" bash scripts/qa-smokes.sh | tee sweep.log
+
+      - name: Gate on results
+        run: |
+          if ! grep -q 'SWEEP RESULTS' sweep.log; then
+            echo '::error::sweep never printed results'; exit 1
+          fi
+          BAD=$(sed -n '/SWEEP RESULTS/,$p' sweep.log | grep -cE ' (FAIL|MISSING)$' || true)
+          if [ "$BAD" != "0" ]; then
+            echo "::error::$BAD gate(s) failed"; sed -n '/SWEEP RESULTS/,$p' sweep.log; exit 1
+          fi
+          echo 'ALL GATES PASS'; sed -n '/SWEEP RESULTS/,$p' sweep.log
+
+      - name: Upload result JSONs (pass or fail — the green run's numbers get recorded)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweep-results-macos
+          path: |
+            out/*-result.json
+            sweep.log
+          if-no-files-found: warn
+
+  # Phase-6/02: prove a signed release is a SECRETS-ONLY change away. Packages
+  # win + mac UNSIGNED (no certs/tokens live in this repo — ADR 0002 discipline
+  # applies to our own secrets too), then verifies everything signing would need:
+  # entitlements, hardened runtime, identity plumbing, notarization config.
+  signing-dryrun:
+    name: signing dry run (${{ matrix.os }})
+    if: github.event_name == 'workflow_dispatch' && inputs.signing_dryrun == true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: macOS toolchain
+        if: runner.os == 'macOS'
+        run: python3 -m pip install --break-system-packages setuptools
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          npm_config_node_gyp: ${{ github.workspace }}/node_modules/node-gyp/bin/node-gyp.js
+
+      - name: Build
+        run: npm run build
+
+      - name: Package UNSIGNED (identity discovery off; no signing secrets in env)
+        run: npx electron-builder --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Verify signing readiness
+        run: node scripts/verify-signing-readiness.mjs

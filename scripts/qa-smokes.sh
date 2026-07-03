@@ -16,6 +16,16 @@ case "$(uname -s)" in
   *) IS_WIN=0 ;;
 esac
 
+# GNU timeout: present on Linux and Git Bash; stock macOS only has coreutils'
+# gtimeout (preinstalled on the CI image). Fail loudly rather than sweep without
+# a watchdog.
+if command -v timeout >/dev/null 2>&1; then TIMEOUT_BIN=timeout
+elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT_BIN=gtimeout
+else
+  echo "qa-smokes: neither timeout nor gtimeout on PATH (macOS: brew install coreutils)" >&2
+  exit 1
+fi
+
 kill_electron() {
   if [ "$IS_WIN" = 1 ]; then
     taskkill //F //IM electron.exe >/dev/null 2>&1 || true
@@ -24,7 +34,10 @@ kill_electron() {
   fi
 }
 
-TMPBASE="${TMPBASE:-$(mktemp -d)}"
+# Short temp root, NOT bare mktemp -d: the daemon binds a unix socket at
+# $iso/local/MoggingLabs/run/v3/daemon-<pid>.sock and macOS caps sun_path at
+# 104 bytes — macOS's default $TMPDIR (/var/folders/…) blows that limit.
+TMPBASE="${TMPBASE:-$(mktemp -d /tmp/mog.XXXXXX)}"
 echo "isolation root: $TMPBASE"
 RESULTS=()
 
@@ -60,7 +73,7 @@ run_smoke() {
   rm -f "out/$result-result.json"
   echo "── $name ──"
   MOGGING_USERDATA="$iso/userdata" LOCALAPPDATA="$iso/local" XDG_RUNTIME_DIR="$iso/local" \
-    env "$var=$val" timeout "$timeout_s" npm run dev >"$iso/$name.log" 2>&1
+    env "$var=$val" "$TIMEOUT_BIN" "$timeout_s" npm run dev >"$iso/$name.log" 2>&1
   local v
   v=$(verdict "$result")
   RESULTS+=("$name $v")
