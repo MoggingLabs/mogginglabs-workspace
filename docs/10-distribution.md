@@ -1,0 +1,104 @@
+# Distribution — platforms, signing, install channels
+
+Phase-6/02. What ships on each platform, what stands between today's unsigned
+builds and store-grade installs, and the exact playbook for both package
+ecosystems. Companion to `docs/RELEASING.md` (the mechanics of cutting a release).
+
+## Platform matrix
+
+| | Windows | macOS | Linux |
+|---|---|---|---|
+| **Built in CI** | NSIS x64 + blockmap | dmg + zip, arm64 + x64 | AppImage + deb, x64 |
+| **Swept (24 gates)** | local (windows-sweep CI = Phase-6/03) | `macos-sweep` nightly + dispatch | `linux-sweep` nightly + dispatch |
+| **Signed today** | no — config READY, cert pending | no — config READY (hardened runtime + entitlements + notarize wired), cert pending | n/a (GPG sums optional, later) |
+| **Auto-update** | GitHub releases feed (electron-updater) | feed wired, **inert until signed** — Squirrel.Mac refuses unsigned updates | AppImage via feed; deb manual |
+| **Install channels** | GitHub release · winget (manifest in `packaging/winget/`, not yet submitted) | GitHub release · homebrew cask (`packaging/homebrew/`, not yet submitted) | GitHub release |
+
+The signing **readiness** claim is not aspirational: the dispatchable
+`signing-dryrun` job in `.github/workflows/ci.yml` packages win+mac unsigned and
+runs `scripts/verify-signing-readiness.mjs`, which fails on any config gap and
+prints `SIGNING DRYRUN: READY (config-complete, secrets-pending: …)` when a
+signed release is a secrets-only change. No certificate, token, or Apple
+credential ever lives in this repo (ADR 0002 applies to our own secrets too).
+
+## Certificate shopping list
+
+### Windows (Authenticode)
+
+| Option | Cost | CI fit | SmartScreen |
+|---|---|---|---|
+| **Azure Trusted Signing** | ~$10/mo | best — cloud signing, no hardware | reputation accrues to the durable identity; consistently good reports |
+| OV certificate | ~$200–400/yr | poor since 2023 — private key must live on a hardware token/HSM | reputation builds slowly with install volume |
+| EV certificate | ~$300–500/yr | same HSM problem | immediate reputation |
+
+Our pipeline is wired for the classic `CSC_LINK` (base64 `.pfx`) +
+`CSC_KEY_PASSWORD` pair. Azure Trusted Signing would instead use
+electron-builder's `win.azureSignOptions` — a small, documented config change,
+not a rework.
+
+### macOS (Developer ID + notarization)
+
+One purchase: **Apple Developer Program, $99/yr.** From it:
+1. A **Developer ID Application** certificate, exported as `.p12` →
+   `CSC_LINK` / `CSC_KEY_PASSWORD` secrets.
+2. Notarization credentials for notarytool: `APPLE_ID`,
+   `APPLE_APP_SPECIFIC_PASSWORD` (generated at appleid.apple.com), `APPLE_TEAM_ID`.
+
+Already committed and dry-run-verified: hardened runtime, the entitlements set
+Electron + our from-source native modules need (`allow-jit`,
+`disable-library-validation`, `allow-dyld-environment-variables` for the
+Electron-as-Node daemon), `notarize: true`, and the workflow plumbing for all
+five secrets. Signing also unlocks macOS **auto-update**, which Squirrel.Mac
+gates on a valid signature.
+
+### The flip, exactly
+
+Add the secrets in repo settings → rerun `Release`. The
+`Stage signing env` step exports only non-empty secrets (an empty-string
+`CSC_LINK` breaks electron-builder), signing and notarization activate on their
+own. Verify beforehand any time with the `signing-dryrun` dispatch.
+
+## What unsigned users see today (the honest story)
+
+- **Windows**: browser + SmartScreen show "Windows protected your PC" → More
+  info → Run anyway. Reputation may eventually quiet this even unsigned, but
+  only signing makes it deterministic.
+- **macOS**: Gatekeeper refuses the unsigned, un-notarized app outright; since
+  Sequoia the only path is System Settings → Privacy & Security → "Open
+  Anyway" (right-click-Open no longer suffices). A brew-cask install hits the
+  same quarantine wall at first launch. macOS distribution is effectively
+  gated on the $99 certificate; treat the cask as staged, not shipping.
+- **Linux**: no gatekeeping — `chmod +x` the AppImage or `dpkg -i` the deb.
+
+## Install manifests
+
+Both manifest sets live in `packaging/`, point ONLY at official GitHub release
+artifacts with pinned sha256 hashes, and regenerate from built artifacts with
+one command — never hand-edit hashes:
+
+```sh
+# from a local release build:
+node scripts/update-manifests.mjs            # reads dist/
+# from a published release:
+gh release download v0.3.0 -D /tmp/rel && node scripts/update-manifests.mjs /tmp/rel
+```
+
+CI validates both continuously where the tooling exists (`winget validate` on
+windows-latest, `brew style` on macos-latest) so submission day is a
+copy-paste PR.
+
+### winget submission playbook
+1. Regenerate manifests for the release being submitted; commit.
+2. Fork `microsoft/winget-pkgs`; copy `packaging/winget/*` to
+   `manifests/m/MoggingLabs/Workspace/<version>/`.
+3. PR. The repo's validation pipeline installs the package in a sandbox —
+   NSIS installs silently (`/S`) so no interactivity blockers.
+4. Later versions: same three files, new version + hash (or `wingetcreate update`).
+
+### homebrew playbook
+1. **Start with our own tap** — create `MoggingLabs/homebrew-tap`, copy
+   `packaging/homebrew/mogginglabs-workspace.rb` into `Casks/`. Users:
+   `brew install --cask mogginglabs/tap/mogginglabs-workspace`. No gatekeeping,
+   ships today.
+2. `homebrew/cask` core comes later: it expects notability and a signed,
+   notarized app — revisit after certificates land.

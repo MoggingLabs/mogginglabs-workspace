@@ -37,14 +37,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        os: [windows-latest, macos-26, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       # Native modules (node-pty, better-sqlite3) are EXTERNALIZED in the build and used only
@@ -69,11 +69,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       - name: Toolchain + headless X (node-pty/better-sqlite3 compile from source)
@@ -83,7 +83,7 @@ jobs:
 
       - name: Cache native node_modules (electron-ABI .node files included)
         id: nmcache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: node_modules
           key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json') }}-e34
@@ -144,11 +144,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       - name: Toolchain + headless X
@@ -158,7 +158,7 @@ jobs:
 
       - name: Cache native node_modules (electron-ABI .node files included)
         id: nmcache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: node_modules
           key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json') }}-e34
@@ -173,10 +173,10 @@ jobs:
 
       - name: Electron-ABI rebuild (direct node-gyp)
         if: steps.nmcache.outputs.cache-hit != 'true'
-        # @electron/rebuild's spawned gyp hangs indefinitely on the 2026-07 ubuntu
-        # image (its direct invocation builds in ~90s — bisected 2026-07-03, run
-        # 28639452382). CI drives node-gyp directly; dev machines and the Windows
-        # release path keep the standard electron-builder postinstall.
+        # @electron/rebuild's spawned gyp hangs indefinitely on the 2026-07 images
+        # (ubuntu bisected 2026-07-03, run 28639452382; win + mac reproduced, run
+        # 28647921078 — direct invocation builds fine everywhere). CI drives
+        # node-gyp directly; dev machines keep the standard postinstall.
         run: |
           EV=$(node -p "require('electron/package.json').version")
           for m in node-pty better-sqlite3; do
@@ -212,7 +212,7 @@ jobs:
 
       - name: Upload result JSONs (pass or fail — the green run's numbers get recorded)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           # Per-OS names: one dispatch can run several sweeps in the same run,
           # and same-named artifacts would collide.
@@ -231,14 +231,14 @@ jobs:
     if: >-
       (github.event_name == 'schedule' && github.event.schedule == '30 4 * * *') ||
       (github.event_name == 'workflow_dispatch' && contains(inputs.sweeps, 'macos'))
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       # Python >= 3.12 dropped distutils; node-gyp needs setuptools (README-documented).
@@ -247,21 +247,35 @@ jobs:
 
       - name: Cache native node_modules (electron-ABI .node files included)
         id: nmcache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: node_modules
           key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json') }}-e34
 
-      # Full native install — the @electron/rebuild spawn hang is specific to the
-      # 2026-07 ubuntu image; Xcode CLT is preinstalled here. The step timeout is
-      # the tripwire: if this image ever grows the same hang, fail fast and port
-      # the direct node-gyp bypass from linux-sweep.
-      - name: Install dependencies (full native)
+      # The @electron/rebuild spawn hang is NOT ubuntu-only: this job's original
+      # full `npm ci` sat at "executing @electron/rebuild" for 25 minutes of zero
+      # output (run 28647921078), same fingerprint as the ubuntu bisect. The whole
+      # 2026-07 image family gets the direct node-gyp bypass. No inner timeout —
+      # the step timeout is the watchdog (mac has no GNU `timeout`).
+      - name: Install (packages only)
         if: steps.nmcache.outputs.cache-hit != 'true'
-        timeout-minutes: 25
-        run: npm ci
-        env:
-          npm_config_node_gyp: ${{ github.workspace }}/node_modules/node-gyp/bin/node-gyp.js
+        run: npm ci --ignore-scripts
+
+      - name: Electron binary (its install script was skipped above)
+        if: steps.nmcache.outputs.cache-hit != 'true'
+        run: node node_modules/electron/install.js
+
+      - name: Electron-ABI rebuild (direct node-gyp)
+        if: steps.nmcache.outputs.cache-hit != 'true'
+        timeout-minutes: 20
+        run: |
+          EV=$(node -p "require('electron/package.json').version")
+          for m in node-pty better-sqlite3; do
+            echo "── rebuilding $m for electron $EV"
+            (cd "node_modules/$m" && node ../node-gyp/bin/node-gyp.js rebuild \
+              --runtime=electron --target="$EV" \
+              --dist-url=https://www.electronjs.org/headers --build-from-source < /dev/null)
+          done
 
       - name: Build
         run: npm run build
@@ -283,7 +297,7 @@ jobs:
 
       - name: Upload result JSONs (pass or fail — the green run's numbers get recorded)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sweep-results-macos
           path: |
@@ -301,31 +315,47 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-latest, macos-26]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       - name: macOS toolchain
         if: runner.os == 'macOS'
         run: python3 -m pip install --break-system-packages setuptools
 
-      - name: Install dependencies
-        run: npm ci
-        env:
-          npm_config_node_gyp: ${{ github.workspace }}/node_modules/node-gyp/bin/node-gyp.js
+      # Direct node-gyp on BOTH OSes: the 2026-07 win/mac images hang the
+      # @electron/rebuild spawn exactly like ubuntu (runs 28647921078: win + mac
+      # dry runs both timed out inside `npm ci`).
+      - name: Install dependencies (direct node-gyp bypass)
+        shell: bash
+        timeout-minutes: 25
+        run: |
+          npm ci --ignore-scripts
+          node node_modules/electron/install.js
+          EV=$(node -p "require('electron/package.json').version")
+          for m in node-pty better-sqlite3; do
+            echo "── rebuilding $m for electron $EV"
+            (cd "node_modules/$m" && node ../node-gyp/bin/node-gyp.js rebuild \
+              --runtime=electron --target="$EV" \
+              --dist-url=https://www.electronjs.org/headers --build-from-source < /dev/null)
+          done
 
       - name: Build
         run: npm run build
 
+      # npmRebuild=false: packaging must trust the direct-gyp .node files (its
+      # internal rebuild is the hanging spawn). Mac packages arm64 only — the
+      # runner-native arch matches those .node files, and one signed-shape
+      # artifact set is all the readiness verifier needs.
       - name: Package UNSIGNED (identity discovery off; no signing secrets in env)
-        run: npx electron-builder --publish never
+        run: npx electron-builder --publish never -c.npmRebuild=false -c.buildDependenciesFromSource=false ${{ runner.os == 'macOS' && '--arm64' || '' }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 

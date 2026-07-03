@@ -8,6 +8,9 @@ Phase-1/07. Signed, notarized, auto-updating installers for `win-x64`, `mac-arm6
 3. `.github/workflows/release.yml` fires: per-OS it rebuilds native modules from source, packages
    (NSIS on Windows, DMG + zip on macOS), **signs + notarizes**, publishes to the GitHub Releases
    feed, and uploads sourcemaps to Sentry.
+4. Refresh the install manifests from the published artifacts (winget + homebrew cask —
+   see `docs/10-distribution.md`):
+   `gh release download vX.Y.Z -D /tmp/rel && node scripts/update-manifests.mjs /tmp/rel`
 
 ## Local (unsigned) build
 `npm run dist:win` / `npm run dist:mac` → installers in `dist/`, **unsigned** (no cert in the

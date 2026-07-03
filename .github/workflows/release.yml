@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        os: [windows-latest, macos-26, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     # A hung native rebuild must never burn hours of runner time (the 2026-07
     # ubuntu image hangs @electron/rebuild's spawned node-gyp — see ci.yml).
@@ -35,13 +35,13 @@ jobs:
       # (secrets can't be read directly in `if:`, so we surface it as an env var).
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       # Linux native-module toolchain (Phase-4/06: AppImage + deb ride the same feed).
@@ -56,30 +56,33 @@ jobs:
         if: runner.os == 'macOS'
         run: python3 -m pip install --break-system-packages setuptools
 
-      # Install deps AND rebuild native modules (node-pty, better-sqlite3) for Electron's ABI
-      # from source — the runners have the C++ toolchain (VS Build Tools / Xcode CLT).
-      # npm_config_node_gyp: @electron/rebuild bundles an old node-gyp that cannot
-      # find VS2022 — point it at our devDep node-gyp >= 13 (same fix the README
-      # documents for local installs).
-      - name: Install dependencies
-        if: runner.os != 'Linux'
+      # macOS: full install + electron-builder's per-arch internal rebuild — the
+      # ONLY leg that keeps it, because dual-arch (arm64 + x64) dmgs need per-arch
+      # rebuilds the direct bypass can't provide, and this path is proven green
+      # (run 28648120189). npm_config_node_gyp points @electron/rebuild's bundled
+      # old node-gyp at our devDep >= 13.
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
         run: npm ci
         env:
           npm_config_node_gyp: ${{ github.workspace }}/node_modules/node-gyp/bin/node-gyp.js
 
-      # Linux: @electron/rebuild's SPAWNED node-gyp produces zero output forever on
-      # the 2026-07 ubuntu image (direct invocation builds in ~90s — bisected in
-      # ci.yml, run 28639452382). Same bypass as the CI sweep jobs: skip install
-      # scripts, fetch Electron's binary explicitly, drive node-gyp directly.
-      - name: Install dependencies (Linux — direct node-gyp bypass)
-        if: runner.os == 'Linux'
+      # Windows + Linux: @electron/rebuild's SPAWNED node-gyp is broken across the
+      # 2026-07 images — zero output forever on ubuntu (bisected, run 28639452382)
+      # and windows (run 28647921078), and on old tags the bundled gyp can't find
+      # the image's Visual Studio at all (run 28648120189). Drive node-gyp (>= 13,
+      # a devDep since v0.3.0) directly.
+      - name: Install dependencies (direct node-gyp bypass)
+        if: runner.os != 'macOS'
+        shell: bash
+        timeout-minutes: 25
         run: |
           npm ci --ignore-scripts
           node node_modules/electron/install.js
           EV=$(node -p "require('electron/package.json').version")
           for m in node-pty better-sqlite3; do
             echo "── rebuilding $m for electron $EV"
-            (cd "node_modules/$m" && timeout 10m node ../node-gyp/bin/node-gyp.js rebuild \
+            (cd "node_modules/$m" && node ../node-gyp/bin/node-gyp.js rebuild \
               --runtime=electron --target="$EV" \
               --dist-url=https://www.electronjs.org/headers --build-from-source < /dev/null)
           done
@@ -119,14 +122,16 @@ jobs:
       # --publish never + explicit gh upload: electron-builder refuses to upload to
       # an already-PUBLISHED release (it only manages drafts), which silently
       # detaches artifacts from gh-created releases. gh upload --clobber always works.
-      # Linux packaging must TRUST the direct-gyp .node files above: its internal
-      # rebuild is the same @electron/rebuild spawn that hangs on this image.
+      # Windows/Linux packaging must TRUST the direct-gyp .node files above: the
+      # internal rebuild is the same @electron/rebuild spawn that hangs.
       - name: Package (sign/notarize when secrets present)
-        run: npx electron-builder --publish never ${{ runner.os == 'Linux' && '-c.npmRebuild=false -c.buildDependenciesFromSource=false' || '' }}
+        run: npx electron-builder --publish never ${{ runner.os != 'macOS' && '-c.npmRebuild=false -c.buildDependenciesFromSource=false' || '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # No Developer ID cert yet: skip identity lookup so mac artifacts build
-          # UNSIGNED instead of failing. FLIP TO 'true' when certs land (Phase-5/02).
+          # Keychain identity lookup stays OFF: with no cert it lets mac artifacts
+          # build UNSIGNED instead of failing, and once the CSC_LINK secret lands
+          # signing activates from the imported cert alone — this flag only
+          # suppresses picking up stray keychain identities.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
       - name: Upload artifacts to the release
@@ -142,7 +147,7 @@ jobs:
       # Upload sourcemaps so Sentry de-minifies crash stacks (ADR 0005). Skipped without a token.
       - name: Upload sourcemaps to Sentry
         if: ${{ env.SENTRY_AUTH_TOKEN != '' }}
-        uses: getsentry/action-release@v1
+        uses: getsentry/action-release@v3
         env:
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
