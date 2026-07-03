@@ -67,6 +67,9 @@ jobs:
       - name: Install (packages only)
         run: npm ci --ignore-scripts
 
+      - name: Electron binary (its install script was skipped above)
+        run: node node_modules/electron/install.js
+
       - name: Electron-ABI rebuild (direct node-gyp)
         # Same bypass as linux-sweep — see that job's comment (bisected 2026-07-03).
         run: |
@@ -121,6 +124,9 @@ jobs:
 
       - name: Install (packages only)
         run: npm ci --ignore-scripts
+
+      - name: Electron binary (its install script was skipped above)
+        run: node node_modules/electron/install.js
 
       - name: Electron-ABI rebuild (direct node-gyp)
         # @electron/rebuild's spawned gyp hangs indefinitely on the 2026-07 ubuntu
