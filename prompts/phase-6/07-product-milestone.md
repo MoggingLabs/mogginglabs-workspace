@@ -12,7 +12,7 @@ recorded per-OS.
      pane opens beside the agents (04, localhost page served by the smoke) →
      `mogging mail/claim/approve` one-liners prove the swarm substrate is
      reachable from the panes → review → gated merge lands.
-   - **Phase B — budgets with EVERYTHING on.** Board visited, browser pane live,
+   - **Phase B — budgets with EVERYTHING on.** Board visited, browser dock open,
      checklist rendered, 12+ panes, 3 s torrent + 4 switches: machine budget
      unchanged (≤150 ms / ≥30 fps / ≤300 MB); PERCEPTION re-runs in the sweep.
 2. **Full sweep, three platforms**: run `bash scripts/qa-smokes.sh` locally (Windows)
@@ -20,7 +20,7 @@ recorded per-OS.
    BROWSER, FIRSTRUN, PRODUCT — must pass on all three. Record the per-OS numbers in
    `prompts/phase-6/README.md` (milestone/perception per platform).
 3. **Release v0.4.0 — "Product"**: clean tree, bump, `npm run dist`, commit, push,
-   `gh release create v0.4.0` with notes (browser pane, first-run, update UX,
+   `gh release create v0.4.0` with notes (browser dock, first-run, update UX,
    three-platform parity, per-OS numbers). The tag's release workflow attaches
    win NSIS + mac dmg/zip + linux AppImage/deb to the same release; verify all
    artifacts landed + `latest.yml`/`latest-mac.yml`/`latest-linux.yml` feeds exist.

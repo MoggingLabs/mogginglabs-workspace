@@ -2,7 +2,7 @@
 
 Sequenced task prompts for Phase 6 of **MoggingLabs Workspace**: the swarm works — now
 make the PRODUCT undeniable. True three-platform parity (the full gate sweep on Linux
-and macOS, not just boot), the built-in browser pane, real distribution (signing
+and macOS, not just boot), the built-in browser dock, real distribution (signing
 hooks, winget/homebrew manifests, first-run experience), and a v0.4.0 milestone that
 proves it end to end. Same format
 as `prompts/phase-1..5/` (each step self-contained + pasteable as a `/goal`). Execute
@@ -30,14 +30,15 @@ in order; each step file is < 4000 chars.
 | 02 | `02-macos-parity-and-manifests.md` | **DONE** (`277b7d9`…`f86603f`): 24/24 on macos CI (certification run 28658947168, which also re-certified linux 24/24) AND Windows local; signing-dryrun READY (config-complete, secrets-pending) on win+mac; winget + homebrew-cask manifests validate in CI, regenerate with one command, pinned to official v0.3.0 artifacts; release green on all three OSes; FLICKER probe made reflow-honest (content, not line count); @electron/rebuild spawn hang bypassed on ALL 2026-07 images (win+mac+linux); runner deprecations cleared, macos-26 pinned |
 | 03 | `03-windows-sweep-ci.md` | **DONE** (`f0e850e`…`d07199c`): 24/24 on windows-latest CI (certification run 28670553984), nightly 05:30 + dispatchable; direct-gyp install (spawn hang confirmed on this image too), shell:bash steps, per-OS cache; linux re-certified same campaign (run 28669886364); one probe fix — WORKTREE compares canonical paths (windows runners hand out 8.3 short TEMP) |
 | 04 | `04-profile-persistence.md` | **DONE** (`1738ae1`): profileIds persisted in the manifest (paneCwds pattern, pane_profile_ids column); failover rewrites its slot via a launch-port event; pane ⋯ menu shows the profile NAME; stale ids degrade silently. PROFPERSIST_A/B two-phase smoke — sweep is 26 gates, green locally AND on the 3-OS probe (run 28741462996) |
-| 05 | `05-browser-pane.md` | A browser is a first-class pane type (WebContentsView): URL bar, per-workspace, preview-what-the-agent-built (smoke green) |
+| 05 | `05-browser-dock.md` | The browser is a toggleable right DOCK (WebContentsView over one stable rect): URL bar, per-workspace last URL, preview-what-the-agent-built while EVERY terminal stays visible — the grid stays PTY-only (smoke green) |
 | 06 | `06-first-run-and-updates.md` | First-run checklist on Home (CLIs detected → profile → first workspace); auto-update toast → one-click restart (smoke green) |
 | 07 | `07-product-milestone.md` | Scripted fresh-machine install→swarm demo asserted; v0.4.0 released on all three platforms; full sweep recorded per-OS |
 
 ## Overall Definition of Done
 - `bash scripts/qa-smokes.sh` is green on Windows, Linux, AND macOS CI — one gate
   list, zero platform forks in features.
-- A browser pane exists, budget-clean (both perf gates unchanged).
+- The browser dock exists, budget-clean (both perf gates unchanged) — terminals
+  stay visible and interactive while previewing.
 - Per-workspace profile choices (two subscriptions in parallel) survive restarts.
 - A new user on a fresh machine reaches a working agent workspace in under five
   minutes, guided by the product itself.
@@ -53,7 +54,7 @@ in order; each step file is < 4000 chars.
 ## Guardrails
 - **Platform differences live in `@backend/platform`, smoke helpers, and builder/CI
   config ONLY** — never forked inside features.
-- The browser pane brokers NOTHING (ADR 0002): no injected sessions, no stored
+- The browser dock brokers NOTHING (ADR 0002): no injected sessions, no stored
   cookies beyond Electron defaults, no auth automation. It is a window, not an agent.
 - The daemon protocol stays at v3 — Phase 6 adds no wire surface.
 

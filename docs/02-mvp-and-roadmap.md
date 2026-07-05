@@ -74,7 +74,7 @@ remeasure→refit path. All 23 audit findings closed or deferred-with-reason;
 budgets unchanged (perception gained a size-change gate); full sweep green.
 
 ### Phase 6 — Product-ready (planned — `prompts/phase-6/`)
-Full Linux/macOS gate-sweep parity, browser pane, profile persistence, first-run +
+Full Linux/macOS gate-sweep parity, browser dock (toggleable right sidebar), profile persistence, first-run +
 update UX, signing readiness + manifests, v0.4.0 on all three platforms.
 
 ## Cross-cutting from day one
