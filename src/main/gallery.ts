@@ -217,6 +217,16 @@ export function runGallery(win: BrowserWindow): void {
           await ES(`window.__mogging.attention.setPaneState(${base + 2}, 'idle')`)
         })
 
+        // Browser dock (6/05): the empty state IS the offline-honest shot — the
+        // gallery never touches the network, so no page is loaded.
+        await part(`${tag}-browser-dock`, async () => {
+          await ES('window.__mogging.browser.toggle(true)')
+          await sleep(600)
+          await snap(`${tag}-browser-dock`)
+          await ES('window.__mogging.browser.toggle(false)')
+          await sleep(300)
+        })
+
         await part(`${tag}-densities`, async () => {
           // Beta is active from the previous part.
           for (const count of [1, 8, 16]) {

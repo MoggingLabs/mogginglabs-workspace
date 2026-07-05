@@ -9,6 +9,7 @@ import { registerShellChrome, wireWindowState } from './shell-chrome'
 import { flushTelemetry } from './telemetry'
 import { registerAppSettings, disposeAppSettings } from './app-settings'
 import { registerAgents } from './agents'
+import { registerBrowserDock } from './browser-dock'
 import { registerTemplates } from './templates'
 import { registerAttention } from './attention'
 import { registerGit } from './git'
@@ -27,6 +28,7 @@ import { runWorkspaceSmoke } from './workspace-smoke'
 import { runAgentLaunchSmoke } from './agentlaunch-smoke'
 import { runTemplateSmoke } from './template-smoke'
 import { runProfpersistSmoke } from './profpersist-smoke'
+import { runBrowserSmoke } from './browser-smoke'
 import { runAttentionSmoke } from './attention-smoke'
 import { runBlocksSmoke } from './blocks-smoke'
 import { runGitSmoke } from './git-smoke'
@@ -127,6 +129,7 @@ app.whenReady().then(async () => {
   registerClipboard() // system clipboard IPC (app-layer, Electron-only)
   registerDialogs(() => win) // native directory picker for the new-workspace wizard
   registerShellChrome(() => win) // theme-tinted window-control overlay (organic chrome)
+  registerBrowserDock(() => win) // right browser dock: MAIN owns the WebContentsView (6/05)
   registerAgents() // agent launcher: detect installed CLIs + build launch commands (Phase-1/06)
   registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
   registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
@@ -182,6 +185,8 @@ app.whenReady().then(async () => {
     runTemplateSmoke(win, process.env.MOGGING_TEMPLATE) // env-gated provider-mix template smoke
   } else if (process.env.MOGGING_PROFPERSIST && win) {
     runProfpersistSmoke(win, process.env.MOGGING_PROFPERSIST) // env-gated profile-persistence smoke (6/04)
+  } else if (process.env.MOGGING_BROWSER && win) {
+    runBrowserSmoke(win) // env-gated browser-dock smoke (6/05)
   } else if (process.env.MOGGING_ATTENTION && win) {
     runAttentionSmoke(win) // env-gated tab-attention aggregation smoke (Phase-2/01)
   } else if (process.env.MOGGING_BLOCKS && win) {

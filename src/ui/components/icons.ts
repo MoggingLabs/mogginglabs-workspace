@@ -23,6 +23,7 @@ export type IconName =
   | 'check'
   | 'check-circle'
   | 'chevron-left'
+  | 'chevron-right'
   | 'clock'
   | 'expand'
   | 'expand-h'
@@ -40,6 +41,7 @@ export type IconName =
   | 'panel-left'
   | 'pencil'
   | 'plus'
+  | 'rotate-cw'
   | 'search'
   | 'sliders'
   | 'sparkles'
@@ -56,6 +58,7 @@ const PATHS: Record<IconName, string> = {
   check: '<path d="M20 6 9 17l-5-5"/>',
   'check-circle': '<path d="M21.8 10A10 10 0 1 1 17 3.34"/><path d="m9 11 3 3L22 4"/>',
   'chevron-left': '<path d="m15 18-6-6 6-6"/>',
+  'chevron-right': '<path d="m9 18 6-6-6-6"/>',
   clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
   /* Expand trio — arrows that STRETCH (the old chevron pairs read as collapse). */
   expand:
@@ -84,6 +87,7 @@ const PATHS: Record<IconName, string> = {
   pencil:
     '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
   plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  'rotate-cw': '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
   sliders: '<path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>',
   sparkles:

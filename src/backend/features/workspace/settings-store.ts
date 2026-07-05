@@ -167,6 +167,22 @@ export class SettingsStore {
     tx(state)
   }
 
+  // ── Generic app KV (Phase-6/05): small feature settings that need no schema
+  // (browser dock open/width, per-workspace last preview URL). Same table as
+  // theme/activeId; values are metadata only — never credentials (ADR 0002). ──
+  getSetting(key: string): string | null {
+    const row = this.db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as
+      | { value: string }
+      | undefined
+    return row?.value ?? null
+  }
+
+  setSetting(key: string, value: string): void {
+    this.db
+      .prepare('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+      .run(key, value)
+  }
+
   // --- Telemetry consent + anonymous install id (observability/00, ADR 0005) -----
   // Stored in the same KV table. The install id is a random UUID minted on first read —
   // never derived from the machine, account, or provider identity. Consent defaults OFF.

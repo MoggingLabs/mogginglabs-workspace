@@ -106,7 +106,19 @@ export const GitChannels = {
   change: 'git:change' // backend -> renderer: GitStatusEvent (status resolved/changed)
 } as const
 
+export const BrowserChannels = {
+  init: 'browser:init', // -> BrowserDockInit (persisted open/width, applied at mount)
+  toggle: 'browser:toggle', // ({ open, workspaceId? }) -> void (open restores the workspace's last url)
+  navigate: 'browser:navigate', // ({ url, workspaceId }) -> void (http(s) only; persists lastUrl per workspace)
+  nav: 'browser:nav', // ({ action }) -> void (back | forward | reload)
+  bounds: 'browser:bounds', // renderer -> main: BrowserDockBounds (rAF-throttled view rect)
+  state: 'browser:state', // main -> renderer: BrowserDockState (header truth)
+  lastUrl: 'browser:lastUrl', // (workspaceId) -> string | null ("open this workspace's preview" chip)
+  openExternal: 'browser:openExternal' // ({ url }) -> void (http(s) only, system browser)
+} as const
+
 export const AllChannels: readonly string[] = [
+  ...Object.values(BrowserChannels),
   ...Object.values(TerminalChannels),
   ...Object.values(ClipboardChannels),
   ...Object.values(WorkspaceChannels),
