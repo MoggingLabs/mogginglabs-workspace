@@ -1,10 +1,8 @@
-The dock (6/05) gives HUMANS the preview; this step gives AGENTS the wheel.
-Full browser control as agent tools: navigate, read the page, act on the page,
-run script in it — so an agent can build a web thing, open it, SEE its own
-errors, click through its own flows, and fix what it finds without a human
-alt-tabbing for it. Depends on 6/05 (the dock + driver seam) and on the
-phase-8 MCP server transport (8/02) — browser tools are that server's richest
-toolset, not a new wire of their own.
+The dock (6/05) gives HUMANS the preview; this step gives AGENTS the wheel:
+navigate, read the page, act on it, run script in it — build a web thing,
+SEE its own errors, click its own flows, fix what it finds. Depends on 6/05
+(the driver seam) and the phase-8 MCP server transport (8/02) — browser tools
+are that server's richest toolset, not a new wire of their own.
 
 ## Steps
 1. **The toolset** (main-side `driver`, exposed as MCP tools; every hosted CLI

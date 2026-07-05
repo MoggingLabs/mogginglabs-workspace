@@ -1,14 +1,12 @@
 Agents build web things; users alt-tab to see them. Make the browser a
-**toggleable right DOCK** — chrome beside the grid, not a tenant of it: preview
-what the agent built while EVERY terminal stays visible and interactive. The
-placement is a deliberate design call: the browser is a viewer of the agents'
-output, not a peer — like the rail and the board, it's a view. It also pins
-the WebContentsView to ONE stable rect (toggle/resize only) instead of chasing
-a live grid cell through zoom/expand/switch churn, and it leaves the grid
-model PTY-only: no pane-kind forks in layouts, templates, restore, or pane
-ids. Accepted tradeoff: exactly one in-app browser (comparisons use the system
-browser; a pop-out can be earned later). It is a WINDOW, not an agent: it
-brokers nothing.
+**toggleable right DOCK** — chrome beside the grid, not a tenant of it:
+preview what the agent built while EVERY terminal stays visible. Deliberate
+design call: the browser is a viewer of the agents' output, not a peer (like
+the rail and board, it's a view); the WebContentsView pins to ONE stable rect
+instead of chasing a live grid cell through zoom/expand/switch churn; and the
+grid model stays PTY-only — no pane-kind forks anywhere. Accepted tradeoff:
+one in-app browser (comparisons use the system browser). It is a WINDOW, not
+an agent: it brokers nothing.
 
 ## Steps
 1. **The dock**: `#browser-dock` right of `#content` — toggle via a titlebar
