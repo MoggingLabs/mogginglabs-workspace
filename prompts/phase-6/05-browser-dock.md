@@ -9,10 +9,10 @@ one in-app browser (comparisons use the system browser). It is a WINDOW, not
 an agent: it brokers nothing.
 
 ## Steps
-1. **The dock**: `#browser-dock` right of `#content` — toggle via a titlebar
-   icon (right cluster), `Ctrl+Shift+B`, and a palette command. Width-adjustable
-   drag handle (min 320px, max 60vw; width persisted). The grid simply NARROWS
-   (flex) and pane fit re-runs — pane ids, layouts, and templates untouched.
+1. **The dock**: `#browser-dock` right of `#content` — toggled by a titlebar
+   icon (right cluster), `Ctrl+Shift+B`, and a palette command; drag-resizable
+   (min 320px, max 60vw, width persisted). The grid simply NARROWS (flex) and
+   pane fit re-runs — pane ids, layouts, templates untouched.
 2. **The view**: renderer can't host WebContentsView — MAIN owns it.
    `BrowserChannels = { open, navigate, close, bounds, state }`: the renderer
    reports the dock rect (ResizeObserver → rAF-throttled `bounds`); `state`
@@ -24,11 +24,11 @@ an agent: it brokers nothing.
    bar, open-in-system-browser, close (= toggle). The CHROME paints instantly
    on toggle — the perception claim lives there; page load is async.
 4. **Per-workspace memory, hot-path-free**: each workspace remembers its LAST
-   preview URL (settings-store KV `browser.lastUrl.<workspaceId>` — no manifest
-   column). Switching workspaces NEVER navigates (no reload churn on the
-   perception hot path): when the active workspace's remembered URL differs
-   from the shown one, the header offers a one-click "open this workspace's
-   preview" chip. Dock open/width restore across relaunch.
+   preview URL (settings-store KV `browser.lastUrl.<id>` — no manifest column).
+   Switching workspaces NEVER navigates (no reload churn on the hot path):
+   when the active workspace's remembered URL differs from the shown one, the
+   header offers a one-click "open this workspace's preview" chip. Dock
+   open/width restore across relaunch.
 5. **Safety posture**: `sandbox: true`, no preload/nodeIntegration,
    `setWindowOpenHandler` → deny + `shell.openExternal`, permission requests →
    deny-all. Default session, NOTHING injected or read by us: no auth
@@ -61,9 +61,8 @@ an agent: it brokers nothing.
   green; gallery states for the dock (open, loading, both themes).
 
 ## Guardrails
-- ADR 0002 absolute: no session injection, no credential autofill, no cookie
-  reading, no auth flows automated. The dock is chrome around the user's browsing.
-- URLs are user content: never telemetry/logs (a `browser_dock_opened` count is fine).
-- The grid stays PTY-only — if a future need wants a browser IN the grid, that
-  is a new design call, not scope creep here.
-- No new dependencies; no protocol v3 changes; renderer never gets the WebContents.
+- ADR 0002 absolute: no session injection, credential autofill, cookie
+  reading, or automated auth. The dock is chrome around the user's browsing.
+- URLs are user content: never telemetry/logs (an opened-count is fine).
+- The grid stays PTY-only — a browser IN the grid would be a new design call.
+- No new deps; no protocol v3 changes; renderer never gets the WebContents.
