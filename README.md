@@ -56,6 +56,25 @@ npm install        # builds native modules (node-pty). See note below.
 npm run dev        # launch the app in dev mode
 ```
 
+### Five minutes to your first agent workspace
+
+The app guides this itself — Home shows a live **"Get set up"** checklist on
+first run. The path:
+
+1. **Install an agent CLI.** The checklist detects Claude Code, Codex, Gemini,
+   Aider, and OpenCode on your PATH and shows the provider's own install
+   one-liner with a copy button for any that are missing — e.g.
+   `npm install -g @anthropic-ai/claude-code`. (We never install for you; the
+   CLI is yours and self-authenticates — ADR 0002.)
+2. **Open the app** and hit **New workspace** (`Ctrl/⌘+T`) — pick a folder and
+   an agent lineup in the wizard.
+3. That's it — you're in a working multi-pane agent workspace. The checklist
+   ticks itself off as you go and never returns once done or dismissed.
+
+Packaged builds keep themselves current: a new release downloads in the
+background and offers a one-click **Restart now** (or ignore it — it installs
+on next launch). See [`docs/10-distribution.md`](docs/10-distribution.md).
+
 ### The orchestration loop, scripted (only `mogging …` + the app)
 
 ```sh

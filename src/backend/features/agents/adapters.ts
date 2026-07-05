@@ -8,14 +8,17 @@ export interface AgentAdapter {
   name: string
   bin: string // executable to detect on PATH + run
   resumeFlag?: string // appended to resume a prior session (e.g. "--resume", "resume")
+  // The provider's OWN documented install one-liner (copy-to-clipboard hint; we
+  // NEVER run it — the user installs, ADR 0002 / 6/06 checklist guardrail).
+  installHint?: string
 }
 
 export const AGENT_ADAPTERS: AgentAdapter[] = [
-  { id: 'claude', name: 'Claude Code', bin: 'claude', resumeFlag: '--resume' },
-  { id: 'codex', name: 'Codex', bin: 'codex', resumeFlag: 'resume' },
-  { id: 'gemini', name: 'Gemini', bin: 'gemini' },
-  { id: 'aider', name: 'Aider', bin: 'aider' },
-  { id: 'opencode', name: 'OpenCode', bin: 'opencode' }
+  { id: 'claude', name: 'Claude Code', bin: 'claude', resumeFlag: '--resume', installHint: 'npm install -g @anthropic-ai/claude-code' },
+  { id: 'codex', name: 'Codex', bin: 'codex', resumeFlag: 'resume', installHint: 'npm install -g @openai/codex' },
+  { id: 'gemini', name: 'Gemini', bin: 'gemini', installHint: 'npm install -g @google/gemini-cli' },
+  { id: 'aider', name: 'Aider', bin: 'aider', installHint: 'python -m pip install aider-install && aider-install' },
+  { id: 'opencode', name: 'OpenCode', bin: 'opencode', installHint: 'npm install -g opencode-ai' }
 ]
 
 export function findAdapter(id: string): AgentAdapter | undefined {

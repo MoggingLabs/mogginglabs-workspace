@@ -7,6 +7,9 @@ export interface AgentInfo {
   id: string
   name: string
   installed: boolean
+  /** The provider's own install one-liner — a copyable HINT only; the app never
+   *  runs it (6/06 checklist + wizard empty state). */
+  installHint?: string
 }
 
 /** Request the launch command for an agent in a directory. */

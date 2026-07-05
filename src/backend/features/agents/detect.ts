@@ -27,5 +27,5 @@ export function isOnPath(bin: string): boolean {
 
 /** Which agent CLIs are installed (on PATH). */
 export function detectAgents(): AgentInfo[] {
-  return AGENT_ADAPTERS.map((a) => ({ id: a.id, name: a.name, installed: isOnPath(a.bin) }))
+  return AGENT_ADAPTERS.map((a) => ({ id: a.id, name: a.name, installed: isOnPath(a.bin), installHint: a.installHint }))
 }

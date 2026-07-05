@@ -1,5 +1,5 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { ProfileChannels, RemoteChannels } from '@contracts'
+import { ClipboardChannels, ProfileChannels, RemoteChannels } from '@contracts'
 import type { AgentInfo, AgentProfile, ProviderCount, ProviderMixTemplate, RecentWorkspace, RemoteHost } from '@contracts'
 import {
   Button,
@@ -587,13 +587,31 @@ export const wizardFeature: UiFeature = {
       const renderRows = (): void => {
         clear(rows)
         steppers.clear()
-        if (!roster.length) {
+        // Nothing detected: keep the roster VISIBLE with install hints (below) and
+        // offer a re-check that re-runs detect in place — no reopening the wizard.
+        const noneInstalled = roster.length > 0 && roster.every((a) => !a.installed)
+        if (!roster.length || noneInstalled) {
+          const recheck = el('button', { class: 'wizard-recheck', type: 'button', text: 'Re-check PATH' })
+          recheck.onclick = (): void => {
+            recheck.textContent = 'Checking…'
+            void wizardClient
+              .detectAgents()
+              .then((a) => {
+                roster = a ?? []
+                if (step === 'agents') render()
+              })
+              .catch(() => (roster = []))
+          }
           rows.append(
-            EmptyState({
-              icon: 'terminal',
-              title: 'Looking for agent CLIs…',
-              body: 'Claude Code, Codex, Gemini, Aider and OpenCode are detected from your PATH.'
-            })
+            el('div', { class: 'wizard-agents-empty' }, [
+              el('span', {
+                class: 'wizard-row-caption',
+                text: roster.length
+                  ? 'No agent CLIs on your PATH yet. Copy an install command below, run it in a terminal, then re-check.'
+                  : 'Looking for agent CLIs (Claude Code, Codex, Gemini, Aider, OpenCode) on your PATH…'
+              }),
+              recheck
+            ])
           )
         }
         for (const a of roster) {
@@ -621,6 +639,24 @@ export const wizardFeature: UiFeature = {
             profSel.value = profileByProvider.get(a.id) ?? mine[0].id
             profSel.addEventListener('change', () => profileByProvider.set(a.id, profSel!.value))
           }
+          // Missing CLI: show the provider's OWN install one-liner with a copy
+          // button (we never install — 6/06). Installed: the count stepper.
+          const installHint =
+            !a.installed && a.installHint
+              ? (() => {
+                  const copy = el('button', { class: 'wizard-agent-copy', type: 'button', text: 'Copy' })
+                  copy.title = a.installHint
+                  copy.onclick = (): void => {
+                    void getBridge().invoke(ClipboardChannels.write, { text: a.installHint! })
+                    copy.textContent = 'Copied'
+                    setTimeout(() => (copy.textContent = 'Copy'), 1400)
+                  }
+                  return el('span', { class: 'wizard-agent-install' }, [
+                    el('code', { class: 'wizard-agent-cmd', text: a.installHint }),
+                    copy
+                  ])
+                })()
+              : null
           rows.append(
             el('div', { class: 'wizard-agent-row' + (a.installed ? '' : ' is-missing') }, [
               el('span', {
@@ -630,6 +666,7 @@ export const wizardFeature: UiFeature = {
               el('span', { class: 'wizard-agent-name', text: a.name }),
               a.installed ? null : Pill({ text: 'not found on PATH', tone: 'warning' }),
               el('span', { class: 'wizard-agent-spacer' }),
+              installHint,
               profSel,
               a.installed ? s.el : el('span', {})
             ])

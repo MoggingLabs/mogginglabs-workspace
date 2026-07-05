@@ -17,6 +17,7 @@ import {
 import { openWizard } from '../../core/workspace/wizard-port'
 import { runCommand } from '../../core/commands/command-port'
 import { getTelemetry } from '../../core/telemetry'
+import { createFirstRun } from './firstrun'
 
 const basename = (p: string): string => p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? ''
 
@@ -108,7 +109,9 @@ export const homeFeature: UiFeature = {
       hint(`${MOD}+⇧+Enter`, 'zoom pane')
     ])
 
-    view.append(hero, sections, hints)
+    // First-run checklist (6/06): live, dismissible, sits between hero and sections.
+    const firstrun = createFirstRun()
+    view.append(hero, firstrun.el, sections, hints)
 
     function renderRecents(recents: RecentWorkspace[]): void {
       clear(recentsList)
@@ -231,8 +234,17 @@ export const homeFeature: UiFeature = {
     onViewChange((v) => {
       if (v === 'home') {
         void refresh()
+        void firstrun.refresh() // live checklist state every time Home shows
         getTelemetry().captureEvent({ name: 'home.opened' })
       }
     })
+    void firstrun.refresh() // and once at mount (Home is the boot view)
+
+    // Dev handle for the first-run smoke.
+    if (import.meta.env.DEV) {
+      const w = window as unknown as { __mogging?: Record<string, unknown> }
+      w.__mogging = w.__mogging ?? {}
+      w.__mogging.firstrun = { refresh: () => firstrun.refresh() }
+    }
   }
 }

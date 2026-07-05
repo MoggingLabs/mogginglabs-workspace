@@ -124,7 +124,13 @@ export const BrowserChannels = {
   agentStop: 'browser:agentStop' // renderer -> main: void (the human revokes the grant instantly)
 } as const
 
+export const UpdateChannels = {
+  state: 'update:state', // main -> renderer: UpdateState (checking/available/downloading/ready/error)
+  restart: 'update:restart' // renderer -> main: quitAndInstall (the "Restart now" action)
+} as const
+
 export const AllChannels: readonly string[] = [
+  ...Object.values(UpdateChannels),
   ...Object.values(BrowserChannels),
   ...Object.values(TerminalChannels),
   ...Object.values(ClipboardChannels),

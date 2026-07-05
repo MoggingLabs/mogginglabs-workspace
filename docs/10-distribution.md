@@ -70,6 +70,28 @@ own. Verify beforehand any time with the `signing-dryrun` dispatch.
   gated on the $99 certificate; treat the cask as staged, not shipping.
 - **Linux**: no gatekeeping — `chmod +x` the AppImage or `dpkg -i` the deb.
 
+## Auto-update (the feed, and the UX)
+
+Packaged builds check the signed GitHub Releases feed
+(`electron-builder.yml` `publish`) on launch and every 6 hours via
+`electron-updater`, which verifies each update's signature — an
+unsigned/tampered build is rejected. A newer build downloads in the
+background; `src/main/updater.ts` pushes the lifecycle
+(`checking → available → downloading(%) → ready → error`) to the renderer over
+`UpdateChannels.state`.
+
+What the user sees (6/06): a quiet dot in the titlebar while a build downloads,
+then exactly **one** toast when it's ready — "vX.Y.Z is ready — **Restart now**
+/ **Later**". Restart now calls `quitAndInstall`; Later is a first-class choice
+(the build installs on next quit via `autoInstallOnAppQuit`, and nothing
+re-toasts that version this session — no snooze-nag). Update metadata never
+enters telemetry — booleans only (`update.ready`/`restart`/`later`), ADR 0005.
+
+Practical dependency: mac auto-update is inert until the app is signed +
+notarized (Squirrel.Mac refuses unsigned updates) — see the matrix above. Dev
+builds don't auto-update; `MOGGING_FAKE_UPDATE=<version>` replays the whole
+renderer flow with no network (how the `FIRSTRUN` smoke asserts it).
+
 ## Install manifests
 
 Both manifest sets live in `packaging/`, point ONLY at official GitHub release

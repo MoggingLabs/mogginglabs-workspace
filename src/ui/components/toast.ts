@@ -11,6 +11,8 @@ export interface ToastOpts {
   /** ms until auto-dismiss (0 = sticky). Default 6000. */
   timeout?: number
   action?: { label: string; onClick: () => void }
+  /** A second, quieter labeled choice (e.g. "Later") — dismisses after running. */
+  secondaryAction?: { label: string; onClick: () => void }
 }
 
 const MAX_STACK = 4
@@ -58,6 +60,17 @@ export function showToast(opts: ToastOpts): () => void {
       el('div', { class: 'toast-title', text: opts.title }),
       opts.body ? el('div', { class: 'toast-body', text: opts.body }) : null
     ]),
+    opts.secondaryAction
+      ? el('button', {
+          class: 'toast-action toast-action--secondary',
+          type: 'button',
+          text: opts.secondaryAction.label,
+          onClick: () => {
+            opts.secondaryAction!.onClick()
+            dismiss()
+          }
+        })
+      : null,
     opts.action
       ? el('button', {
           class: 'toast-action',

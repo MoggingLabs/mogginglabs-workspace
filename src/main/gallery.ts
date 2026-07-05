@@ -108,6 +108,15 @@ export function runGallery(win: BrowserWindow): void {
           await sleep(400)
           await snap(`${tag}-home-empty`)
         })
+        // First-run checklist (6/06): fresh state, so it shows live on Home.
+        await part(`${tag}-firstrun`, async () => {
+          await ES(
+            `(document.querySelector('#content.view-home') ? 1 : (document.querySelector('.titlebar-right .icon-btn[aria-label="Home"]')?.click(), 1))`
+          )
+          await ES(`window.__mogging.firstrun && window.__mogging.firstrun.refresh()`)
+          await sleep(600)
+          await snap(`${tag}-firstrun`)
+        })
         await part(`${tag}-board-empty`, async () => {
           await key(`ctrlKey: true, shiftKey: true, code: 'KeyG'`)
           await sleep(500)

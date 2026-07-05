@@ -31,6 +31,7 @@ import { runTemplateSmoke } from './template-smoke'
 import { runProfpersistSmoke } from './profpersist-smoke'
 import { runBrowserSmoke } from './browser-smoke'
 import { runBrowserCtlSmoke } from './browserctl-smoke'
+import { runFirstRunSmoke } from './firstrun-smoke'
 import { runAttentionSmoke } from './attention-smoke'
 import { runBlocksSmoke } from './blocks-smoke'
 import { runGitSmoke } from './git-smoke'
@@ -165,7 +166,11 @@ app.whenReady().then(async () => {
       if (w.webContents.isLoading()) w.webContents.once('did-finish-load', send)
       else send()
     }
-    initAutoUpdate() // auto-update against the signed release feed (packaged builds only)
+    initAutoUpdate(() => win) // auto-update feed -> renderer update UX (packaged; MOGGING_FAKE_UPDATE drives dev/smoke)
+  } else if (process.env.MOGGING_FAKE_UPDATE && win) {
+    // The FIRSTRUN smoke drives the update UX with a fake version; the real
+    // updater stays out of smokes, but this network-free replay must run.
+    initAutoUpdate(() => win)
   }
 
   if (process.env.MOGGING_AGENT && win) {
@@ -192,6 +197,8 @@ app.whenReady().then(async () => {
     runBrowserSmoke(win) // env-gated browser-dock smoke (6/05)
   } else if (process.env.MOGGING_BROWSERCTL && win) {
     runBrowserCtlSmoke(win) // env-gated agent-browser-control smoke (6/05b)
+  } else if (process.env.MOGGING_FIRSTRUN && win) {
+    runFirstRunSmoke(win) // env-gated first-run + update-UX smoke (6/06)
   } else if (process.env.MOGGING_ATTENTION && win) {
     runAttentionSmoke(win) // env-gated tab-attention aggregation smoke (Phase-2/01)
   } else if (process.env.MOGGING_BLOCKS && win) {

@@ -73,8 +73,11 @@ run_smoke() {
   mkdir -p "$iso/userdata" "$iso/local"
   rm -f "out/$result-result.json"
   echo "── $name ──"
+  # FIRSTRUN drives the update UX with a fake version (no network) — 6/06.
+  local extra=""
+  [ "$name" = "FIRSTRUN" ] && extra="MOGGING_FAKE_UPDATE=9.9.9"
   MOGGING_USERDATA="$iso/userdata" LOCALAPPDATA="$iso/local" XDG_RUNTIME_DIR="$iso/local" \
-    env "$var=$val" "$TIMEOUT_BIN" "$timeout_s" npm run dev >"$iso/$name.log" 2>&1
+    env $extra "$var=$val" "$TIMEOUT_BIN" "$timeout_s" npm run dev >"$iso/$name.log" 2>&1
   local v
   v=$(verdict "$result")
   RESULTS+=("$name $v")
@@ -114,6 +117,7 @@ run_smoke PROFPERSIST_A MOGGING_PROFPERSIST A 180 profpersist PROFPERSIST
 run_smoke PROFPERSIST_B MOGGING_PROFPERSIST B 180 profpersist PROFPERSIST
 run_smoke BROWSER      MOGGING_BROWSER   1 180 browser
 run_smoke BROWSERCTL   MOGGING_BROWSERCTL 1 180 browserctl
+run_smoke FIRSTRUN     MOGGING_FIRSTRUN  1 150 firstrun
 
 echo ""
 echo "══ SWEEP RESULTS ══"
