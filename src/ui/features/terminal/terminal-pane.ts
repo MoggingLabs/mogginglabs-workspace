@@ -19,7 +19,7 @@ import { markPaneLive } from '../../core/terminal/liveness-port'
 import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
 import { setPaneState, clearPaneState } from '../../core/attention/attention-port'
 import { setPaneCwd, clearPaneCwd, getPaneCwd } from '../../core/layout/pane-cwd'
-import { getPaneRole, onPaneRole, getPaneRemote } from '../../core/layout/pane-meta'
+import { getPaneRole, onPaneRole, getPaneRemote, getPaneProfile } from '../../core/layout/pane-meta'
 import { claimsFor, onClaimsChange, workspaceClaims } from './claims-store'
 import { onFocusedPane } from '../../core/layout/focus'
 import { onPaneGit, getPaneGit } from '../../core/git/git-port'
@@ -596,6 +596,15 @@ export class TerminalPane {
       const note = document.createElement('div')
       note.className = 'menu-note'
       note.textContent = 'Remote pane — local repo tools (git, worktrees, review) are off.'
+      menu.append(note)
+    }
+    // Launch profile (6/04): read-only truth about WHICH account pointer set this
+    // pane launched under. Name only — env values never reach the renderer.
+    const profileName = getPaneProfile(this.id)
+    if (profileName) {
+      const note = document.createElement('div')
+      note.className = 'menu-note'
+      note.textContent = `Profile: ${profileName}`
       menu.append(note)
     }
     // Worktree-isolated pane (3/03): guarded removal. Dirty worktrees are refused with

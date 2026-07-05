@@ -459,6 +459,24 @@ export class WorkspaceController {
     return this.active()?.layout.paneCount ?? 1
   }
 
+  /** Failover switched a pane's profile (6/04): rewrite that SLOT in the manifest
+   *  so the next restore relaunches on the surviving profile instead of
+   *  resurrecting the capped one. Returns whether a workspace owned the pane —
+   *  the caller persists (once per failover event; ids only, ADR 0002). */
+  noteProfileFailover(paneId: number, profileId: string): boolean {
+    for (const view of this.views.values()) {
+      const slot = paneId - view.meta.ordinal * 100
+      if (slot >= 1 && slot <= view.meta.paneCount) {
+        const ids = view.meta.profileIds ?? []
+        while (ids.length < view.meta.paneCount) ids.push(null)
+        ids[slot - 1] = profileId
+        view.meta.profileIds = ids
+        return true
+      }
+    }
+    return false
+  }
+
   /** Keyboard pane navigation within the active workspace (Ctrl/Cmd+Alt+arrows). */
   focusDir(dir: 'left' | 'right' | 'up' | 'down'): void {
     this.active()?.layout.focusDir(dir)

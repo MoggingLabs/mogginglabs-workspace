@@ -46,6 +46,10 @@ export interface WorkspaceStateMeta {
   roles?: (string | null)[]
   /** Per-slot remote host (Phase-4/05) — pointers + display name only. */
   remotes?: ({ hostId: string; name: string } | null)[]
+  /** Per-slot launch profile (Phase-6/04) — profile IDS only, never env values
+   *  (those stay main-side; ADR 0002). Restored lineups relaunch under the
+   *  chosen profile; failover rewrites the slot it switched. */
+  profileIds?: (string | null)[]
 }
 
 /** A recently-worked-on project (directory) for Home's one-click reopen tiles —

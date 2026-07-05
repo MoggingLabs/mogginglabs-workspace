@@ -2,8 +2,8 @@ import type { UiFeature } from '../../core/registry/feature-registry'
 import { ProfileChannels, TerminalChannels, type AgentInfo, type AgentProfile, type PaneId } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { getFocusedPane } from '../../core/layout/focus'
-import { setPaneLabel } from '../../core/layout/pane-meta'
-import { onAgentLaunchRequest } from '../../core/agents/launch-port'
+import { setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
+import { onAgentLaunchRequest, announceProfileFailover } from '../../core/agents/launch-port'
 import { setCommands } from '../../core/commands/command-port'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onProfilesChanged } from '../../core/agents/profiles-port'
@@ -135,15 +135,15 @@ export const agentsFeature: UiFeature = {
         return
       }
       // Default profile (order 0) applies when none was named and any exist (4/04).
-      let effectiveProfile = profileId
-      if (!effectiveProfile) {
-        const mine = (await listProfiles()).filter((p) => p.provider === provider).sort((x, y) => x.order - y.order)
-        effectiveProfile = mine[0]?.id
-      }
+      const mine = (await listProfiles()).filter((p) => p.provider === provider).sort((x, y) => x.order - y.order)
+      const effectiveProfile = profileId ?? mine[0]?.id
       const command = await agentsClient.command({ agentId: provider, cwd, resume, profileId: effectiveProfile })
       if (!command) return
       agentsClient.launchInto(paneId, command)
       lastLaunch.set(paneId, { provider, cwd, profileId: effectiveProfile })
+      // Pane-meta carries the profile NAME only (⋯ menu note, 6/04) — never env.
+      // A deleted/unknown id resolves to no name: the note simply disappears.
+      setPaneProfile(paneId as PaneId, mine.find((p) => p.id === effectiveProfile)?.name)
       setPaneLabel(paneId as PaneId, nameById.get(provider) ?? provider)
       // Booleans/ids only — never env values or command text (ADR 0005).
       getTelemetry().captureEvent({ name: 'agent.launched', props: { provider, resume, profiled: !!effectiveProfile } })
@@ -173,6 +173,9 @@ export const agentsFeature: UiFeature = {
         setTimeout(() => {
           void launchInPane(paneId, ctx.provider, ctx.cwd, true, next.id).finally(() => failingOver.delete(paneId))
         }, 900)
+        // The workspace manifest follows the switch (6/04) — otherwise the next
+        // restart resurrects the capped profile. Port only, one hop per event.
+        announceProfileFailover({ paneId: paneId as PaneId, profileId: next.id })
       }
       const wsId = getWorkspaces().workspaces.find((w) => w.ordinal === Math.floor(paneId / 100))?.id
       if (wsId && autoFailover.get(wsId)) {

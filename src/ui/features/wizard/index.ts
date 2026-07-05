@@ -820,7 +820,8 @@ export const wizardFeature: UiFeature = {
         open: async (
           m: ProviderCount[],
           roles?: (string | null)[],
-          remotes?: ({ hostId: string; name: string } | null)[]
+          remotes?: ({ hostId: string; name: string } | null)[],
+          profileIds?: (string | null)[]
         ) => {
           const r = await wizardClient.resolve(m)
           const cwd = getFocusedPane()?.cwd ?? ''
@@ -830,7 +831,8 @@ export const wizardFeature: UiFeature = {
             paneCount: r.paneCount,
             assignments: r.assignments,
             roles,
-            remotes
+            remotes,
+            profileIds // per-slot profile choice (6/04) — the profpersist smoke drives this
           })
           return r
         },

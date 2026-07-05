@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       gates:
-        description: 'Gate subset for sweep jobs, comma list (empty = all 24). Iteration only — certification is the full sweep.'
+        description: 'Gate subset for sweep jobs, comma list (empty = all gates). Iteration only — certification is the full sweep.'
         required: false
         default: ''
       sweeps:
@@ -136,7 +136,7 @@ jobs:
   # MOGGING_CI_GPU=soft relaxes ONLY frame-gap budgets (software GL under xvfb) and
   # prints loudly in every affected smoke's log; all other claims are untouched.
   linux-sweep:
-    name: linux full 24-gate sweep
+    name: linux full sweep (all gates)
     # Each nightly cron drives exactly ONE OS's sweep (staggered so two heavy
     # sweeps never contend); a dispatch picks its sweeps via the `sweeps` input.
     if: >-
@@ -195,7 +195,7 @@ jobs:
           sudo chown root node_modules/electron/dist/chrome-sandbox
           sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
 
-      - name: Full sweep (24 gates, isolated state)
+      - name: Full sweep (all gates, isolated state)
         run: |
           MOGGING_CI_GPU=soft MOGGING_GATES="${{ inputs.gates }}" \
             xvfb-run -a bash scripts/qa-smokes.sh | tee sweep.log
@@ -231,7 +231,7 @@ jobs:
   # frame-timing noise: exactly what MOGGING_CI_GPU=soft covers (loudly,
   # frame-timing only; echo/heap/correctness stay strict).
   macos-sweep:
-    name: macos full 24-gate sweep
+    name: macos full sweep (all gates)
     if: >-
       (github.event_name == 'schedule' && github.event.schedule == '30 4 * * *') ||
       (github.event_name == 'workflow_dispatch' && contains(inputs.sweeps, 'macos'))
@@ -288,7 +288,7 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Full sweep (24 gates, isolated state)
+      - name: Full sweep (all gates, isolated state)
         run: |
           MOGGING_CI_GPU=soft MOGGING_GATES="${{ inputs.gates }}" bash scripts/qa-smokes.sh | tee sweep.log
 
@@ -323,7 +323,7 @@ jobs:
   # Every run step is shell: bash — pwsh re-tokenizes flags and can't run the
   # sweep's grep/sed gate.
   windows-sweep:
-    name: windows full 24-gate sweep
+    name: windows full sweep (all gates)
     if: >-
       (github.event_name == 'schedule' && github.event.schedule == '30 5 * * *') ||
       (github.event_name == 'workflow_dispatch' && contains(inputs.sweeps, 'windows'))
@@ -371,7 +371,7 @@ jobs:
         shell: bash
         run: npm run build
 
-      - name: Full sweep (24 gates, isolated state)
+      - name: Full sweep (all gates, isolated state)
         shell: bash
         run: |
           MOGGING_CI_GPU=soft MOGGING_GATES="${{ inputs.gates }}" bash scripts/qa-smokes.sh | tee sweep.log

@@ -25,3 +25,25 @@ export function onAgentLaunchRequest(cb: (req: AgentLaunchRequest) => void): () 
   subscribers.add(cb)
   return () => subscribers.delete(cb)
 }
+
+/**
+ * Usage-limit failover switched a pane to another profile (Phase-6/04). The
+ * `workspace` feature services this by rewriting that slot in the workspace
+ * manifest — otherwise the next restart would resurrect the capped profile.
+ * Same decoupling rule as above: ids only, no cross-feature imports.
+ */
+export interface ProfileFailoverEvent {
+  paneId: PaneId
+  profileId: string
+}
+
+const failoverSubscribers = new Set<(ev: ProfileFailoverEvent) => void>()
+
+export function announceProfileFailover(ev: ProfileFailoverEvent): void {
+  for (const cb of failoverSubscribers) cb(ev)
+}
+
+export function onProfileFailover(cb: (ev: ProfileFailoverEvent) => void): () => void {
+  failoverSubscribers.add(cb)
+  return () => failoverSubscribers.delete(cb)
+}

@@ -26,6 +26,7 @@ import { runMultipaneSmoke } from './multipane-smoke'
 import { runWorkspaceSmoke } from './workspace-smoke'
 import { runAgentLaunchSmoke } from './agentlaunch-smoke'
 import { runTemplateSmoke } from './template-smoke'
+import { runProfpersistSmoke } from './profpersist-smoke'
 import { runAttentionSmoke } from './attention-smoke'
 import { runBlocksSmoke } from './blocks-smoke'
 import { runGitSmoke } from './git-smoke'
@@ -179,6 +180,8 @@ app.whenReady().then(async () => {
     runAgentLaunchSmoke(win) // env-gated agent-launcher smoke (picker -> TUI)
   } else if (process.env.MOGGING_TEMPLATE && win) {
     runTemplateSmoke(win, process.env.MOGGING_TEMPLATE) // env-gated provider-mix template smoke
+  } else if (process.env.MOGGING_PROFPERSIST && win) {
+    runProfpersistSmoke(win, process.env.MOGGING_PROFPERSIST) // env-gated profile-persistence smoke (6/04)
   } else if (process.env.MOGGING_ATTENTION && win) {
     runAttentionSmoke(win) // env-gated tab-attention aggregation smoke (Phase-2/01)
   } else if (process.env.MOGGING_BLOCKS && win) {

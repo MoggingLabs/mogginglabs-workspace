@@ -44,6 +44,13 @@ function mkdirWrite(relDir: string, relFile: string, text: string): string {
   return `mkdir -p "${relDir}" && echo "${text}" > "${relFile}"`
 }
 
+/** Unset an env var in the CURRENT pane session — profile env persists in the
+ *  session by design (cmd `set` / POSIX `export` parity, 6/01), so a probe that
+ *  asserts "the new launch added no env" must clear the residue first. */
+function unsetVar(name: string): string {
+  return WIN ? `set "${name}="` : `unset ${name}`
+}
+
 /** Run `command` in `cwd` with the named env vars CLEARED for that command —
  *  the agent-launch probe (a nested agent must not inherit the outer session). */
 function clearEnvRun(cwd: string, vars: string[], command: string): string {
@@ -55,7 +62,7 @@ function clearEnvRun(cwd: string, vars: string[], command: string): string {
   return `cd "${cwd}" && ${clears} ${command}`
 }
 
-export const sh = { cd, chain, echoVar, appendLine, writeLine, mkdirWrite, clearEnvRun }
+export const sh = { cd, chain, echoVar, appendLine, writeLine, mkdirWrite, clearEnvRun, unsetVar }
 
 /**
  * CI soft-GPU mode (Phase-6/02). `MOGGING_CI_GPU=soft` — set ONLY by CI sweep

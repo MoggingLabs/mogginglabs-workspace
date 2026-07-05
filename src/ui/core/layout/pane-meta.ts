@@ -41,6 +41,21 @@ export function onPaneRole(cb: (paneId: PaneId, role: string) => void): () => vo
   return () => roleSubscribers.delete(cb)
 }
 
+// ── Launch profile NAME (Phase-6/04): set by `agents` at launch for the pane
+// ⋯ menu's read-only note. Display name ONLY — profile env values never cross
+// this port (they stay main-side; ADR 0002). No subscriber: the menu reads
+// lazily when it opens. ──
+const profiles = new Map<PaneId, string>()
+
+export function setPaneProfile(paneId: PaneId, name: string | undefined): void {
+  if (name) profiles.set(paneId, name)
+  else profiles.delete(paneId)
+}
+
+export function getPaneProfile(paneId: PaneId): string | undefined {
+  return profiles.get(paneId)
+}
+
 // ── Remote pane (Phase-4/05): set by the workspace manifest BEFORE panes spawn, so
 // TerminalPane can (a) spawn over ssh and (b) chip the host name. Host names are
 // user data: chip + spawn only, never telemetry. ──

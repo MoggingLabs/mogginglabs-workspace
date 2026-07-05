@@ -20,6 +20,7 @@ import {
   setWorkspaceSwitcher
 } from '../../core/workspace/workspace-info-port'
 import { openWizard } from '../../core/workspace/wizard-port'
+import { onProfileFailover } from '../../core/agents/launch-port'
 import { setActiveView, activeView } from '../../core/shell/view-port'
 import { setCommands } from '../../core/commands/command-port'
 import { setPaneState } from '../../core/attention/attention-port'
@@ -86,7 +87,8 @@ export const workspaceFeature: UiFeature = {
           assignments: m.assignments,
           paneCwds: m.paneCwds,
           roles: m.roles,
-          remotes: m.remotes
+          remotes: m.remotes,
+          profileIds: m.profileIds // ids only — env values never leave main (ADR 0002)
         })),
         activeId: controller.activeMeta()?.id ?? null,
         theme: currentThemeId(),
@@ -146,6 +148,11 @@ export const workspaceFeature: UiFeature = {
     )
 
     setWorkspaceSwitcher((id) => controller.switch(id))
+    // Usage-limit failover switched a pane's profile (6/04): the manifest follows,
+    // one persist per event — otherwise a restart resurrects the capped profile.
+    onProfileFailover((ev) => {
+      if (controller.noteProfileFailover(ev.paneId, ev.profileId)) persist()
+    })
     // 06b: the wizard/templates open workspaces from a provider-mix spec.
     setWorkspaceOpener((spec) => {
       const meta = controller.openFromTemplate(spec)
@@ -356,7 +363,8 @@ export const workspaceFeature: UiFeature = {
             assignments: w.assignments,
             paneCwds: w.paneCwds, // worktree panes re-attach to their worktrees (3/03)
             roles: w.roles, // the swarm manifest survives restore (4/01)
-            remotes: w.remotes // remote panes stay remote across restore (4/05)
+            remotes: w.remotes, // remote panes stay remote across restore (4/05)
+            profileIds: w.profileIds // lineups relaunch under the CHOSEN profile (6/04)
           })
         }
         // 06b: re-launch each template workspace's lineup (each CLI self-auths on resume).

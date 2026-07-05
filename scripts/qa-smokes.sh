@@ -57,8 +57,9 @@ verdict() {
 }
 
 # MOGGING_GATES: optional comma list (e.g. "TEMPLATE_A,TEMPLATE_B") to run a
-# subset — for ITERATION only; certification is always the full sweep. TEMPLATE_B
-# needs TEMPLATE_A's persisted state: include both or neither.
+# subset — for ITERATION only; certification is always the full sweep. Two-phase
+# pairs share persisted state: include TEMPLATE_A/B (and PROFPERSIST_A/B) both
+# or neither.
 GATES="${MOGGING_GATES:-}"
 should_run() {
   [ -z "$GATES" ] && return 0
@@ -79,8 +80,9 @@ run_smoke() {
   RESULTS+=("$name $v")
   echo "  $v"
   kill_electron
-  # Template phase A must leave its daemon+state for phase B; everything else cleans up.
-  if [ -z "$reuse" ] || [ "$name" = "TEMPLATE_B" ]; then kill_daemon "$iso"; fi
+  # A two-phase pair's phase A must leave its daemon+state for phase B; everything
+  # else (including each pair's phase B) cleans up.
+  if [ -z "$reuse" ] || [ "$name" = "TEMPLATE_B" ] || [ "$name" = "PROFPERSIST_B" ]; then kill_daemon "$iso"; fi
   return 0
 }
 
@@ -108,6 +110,8 @@ run_smoke REMOTE      MOGGING_REMOTE    1 240 remote
 run_smoke SWARMMILESTONE MOGGING_SWARMMILESTONE 1 300 swarmmilestone
 run_smoke TEMPLATE_A  MOGGING_TEMPLATE  A 180 template TEMPLATE
 run_smoke TEMPLATE_B  MOGGING_TEMPLATE  B 180 template TEMPLATE
+run_smoke PROFPERSIST_A MOGGING_PROFPERSIST A 180 profpersist PROFPERSIST
+run_smoke PROFPERSIST_B MOGGING_PROFPERSIST B 180 profpersist PROFPERSIST
 
 echo ""
 echo "══ SWEEP RESULTS ══"
