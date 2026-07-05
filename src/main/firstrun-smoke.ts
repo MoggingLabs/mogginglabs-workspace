@@ -42,7 +42,16 @@ export function runFirstRunSmoke(win: BrowserWindow): void {
         ES<boolean>(`!!document.querySelectorAll('.firstrun-row')[${i}]?.classList.contains('is-done')`)
 
       const shown = await cardPresent()
-      const cliDone = await rowDone(0) // claude installed on the dev machine
+      // Row ① must reflect DETECTION TRUTHFULLY, not a fixed answer: its done
+      // state equals whether ANY agent CLI is actually on PATH. True on a dev
+      // machine (claude installed -> done) AND on CI (nothing installed -> not
+      // done, correctly, with install hints shown). Platform-condition the
+      // probe, never the claim (the 6/01 TEMPLATE lesson).
+      const anyCliInstalled = await ES<boolean>(
+        `window.bridge.invoke('agents:detect').then(a => (a||[]).some(x => x.installed))`
+      )
+      const cliRowDone = await rowDone(0)
+      const cliHonest = cliRowDone === anyCliInstalled
       const wsIncomplete = !(await rowDone(1))
 
       // 2. Create a workspace -> row 2 flips done.
@@ -91,8 +100,8 @@ export function runFirstRunSmoke(win: BrowserWindow): void {
       }
       const laterSticks = !reappeared
 
-      const pass = shown && cliDone && wsIncomplete && wsFlips && goneAfterDismiss && staysGone && sawDot && toastOk && laterSticks
-      result = { pass, shown, cliDone, wsIncomplete, wsFlips, goneAfterDismiss, staysGone, sawDot, toastOk, laterSticks }
+      const pass = shown && cliHonest && wsIncomplete && wsFlips && goneAfterDismiss && staysGone && sawDot && toastOk && laterSticks
+      result = { pass, shown, anyCliInstalled, cliRowDone, cliHonest, wsIncomplete, wsFlips, goneAfterDismiss, staysGone, sawDot, toastOk, laterSticks }
     } catch (e) {
       result = { pass: false, error: String(e) }
     }
