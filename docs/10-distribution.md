@@ -8,7 +8,7 @@ ecosystems. Companion to `docs/RELEASING.md` (the mechanics of cutting a release
 
 | | Windows | macOS | Linux |
 |---|---|---|---|
-| **Built in CI** | NSIS x64 + blockmap | dmg + zip, arm64 + x64 | AppImage + deb, x64 |
+| **Built in CI** | NSIS x64 + blockmap | dmg + zip, arm64 (x64 deferred†) | AppImage + deb, x64 |
 | **Swept (24 gates)** | local (windows-sweep CI = Phase-6/03) | `macos-sweep` nightly + dispatch | `linux-sweep` nightly + dispatch |
 | **Signed today** | no — config READY, cert pending | no — config READY (hardened runtime + entitlements + notarize wired), cert pending | n/a (GPG sums optional, later) |
 | **Auto-update** | GitHub releases feed (electron-updater) | feed wired, **inert until signed** — Squirrel.Mac refuses unsigned updates | AppImage via feed; deb manual |
@@ -57,6 +57,15 @@ Add the secrets in repo settings → rerun `Release`. The
 `Stage signing env` step exports only non-empty secrets (an empty-string
 `CSC_LINK` breaks electron-builder), signing and notarization activate on their
 own. Verify beforehand any time with the `signing-dryrun` dispatch.
+
+† **Intel (x64) macOS is deferred for v0.4.0.** The 2026-07 macos runner image
+regressed into the same `@electron/rebuild` spawn hang the ubuntu/windows
+images have (59 min of silence on `preparing better-sqlite3` — run
+28756024650), so the mac release uses the direct node-gyp bypass, which builds
+only the runner-native arch (arm64). Apple Silicon is the overwhelming majority
+of Macs; Intel support returns when the image hang is fixed upstream or a
+dedicated x64 runner is added. Dev machines and `npm run dist:mac` still build
+dual-arch where the toolchain works.
 
 ## What unsigned users see today (the honest story)
 

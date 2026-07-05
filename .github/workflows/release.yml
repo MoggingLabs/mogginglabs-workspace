@@ -56,24 +56,20 @@ jobs:
         if: runner.os == 'macOS'
         run: python3 -m pip install --break-system-packages setuptools
 
-      # macOS: full install + electron-builder's per-arch internal rebuild — the
-      # ONLY leg that keeps it, because dual-arch (arm64 + x64) dmgs need per-arch
-      # rebuilds the direct bypass can't provide, and this path is proven green
-      # (run 28648120189). npm_config_node_gyp points @electron/rebuild's bundled
-      # old node-gyp at our devDep >= 13.
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: npm ci
-        env:
-          npm_config_node_gyp: ${{ github.workspace }}/node_modules/node-gyp/bin/node-gyp.js
-
-      # Windows + Linux: @electron/rebuild's SPAWNED node-gyp is broken across the
-      # 2026-07 images — zero output forever on ubuntu (bisected, run 28639452382)
-      # and windows (run 28647921078), and on old tags the bundled gyp can't find
-      # the image's Visual Studio at all (run 28648120189). Drive node-gyp (>= 13,
-      # a devDep since v0.3.0) directly.
+      # ALL platforms use the direct node-gyp bypass now. @electron/rebuild's
+      # SPAWNED node-gyp is broken across the whole 2026-07 image family — zero
+      # output forever: ubuntu (bisected, run 28639452382), windows (run
+      # 28647921078), and — as of 2026-07-05 — macOS too, hanging 59 min on
+      # `preparing better-sqlite3 arch=arm64` (run 28756024650) where the full
+      # `npm ci` used to work (28648120189, 2026-07-03). Drive node-gyp (>= 13,
+      # a devDep since v0.3.0) directly, for the RUNNER-NATIVE arch.
+      #
+      # macOS consequence: the bypass builds arm64 only (the macos-26 runner's
+      # native arch), so the mac release is arm64-only for now. Apple Silicon is
+      # the overwhelming majority of Macs; Intel x64 is DEFERRED until the image
+      # hang is fixed upstream or a dedicated x64 runner lands (docs/10). The
+      # Package step passes --arm64 to match.
       - name: Install dependencies (direct node-gyp bypass)
-        if: runner.os != 'macOS'
         shell: bash
         timeout-minutes: 25
         run: |
@@ -122,13 +118,15 @@ jobs:
       # --publish never + explicit gh upload: electron-builder refuses to upload to
       # an already-PUBLISHED release (it only manages drafts), which silently
       # detaches artifacts from gh-created releases. gh upload --clobber always works.
-      # Windows/Linux packaging must TRUST the direct-gyp .node files above: the
-      # internal rebuild is the same @electron/rebuild spawn that hangs.
+      # Packaging must TRUST the direct-gyp .node files above on EVERY platform:
+      # the internal rebuild is the same @electron/rebuild spawn that hangs, so
+      # npmRebuild=false. macOS also gets --arm64 (the bypass only built the
+      # runner-native arch — see the install step's note).
       # shell: bash — windows pwsh re-tokenizes the -c.key=value flags into a
       # config-file path (see ci.yml signing-dryrun).
       - name: Package (sign/notarize when secrets present)
         shell: bash
-        run: npx electron-builder --publish never ${{ runner.os != 'macOS' && '-c.npmRebuild=false -c.buildDependenciesFromSource=false' || '' }}
+        run: npx electron-builder --publish never -c.npmRebuild=false -c.buildDependenciesFromSource=false ${{ runner.os == 'macOS' && '--arm64' || '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Keychain identity lookup stays OFF: with no cert it lets mac artifacts
