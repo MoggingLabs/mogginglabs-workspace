@@ -2,11 +2,10 @@ Agents build web things; users alt-tab to see them. Make the browser a
 **toggleable right DOCK** — chrome beside the grid, not a tenant of it:
 preview what the agent built while EVERY terminal stays visible. Deliberate
 design call: the browser is a viewer of the agents' output, not a peer (like
-the rail and board, it's a view); the WebContentsView pins to ONE stable rect
-instead of chasing a live grid cell through zoom/expand/switch churn; and the
-grid model stays PTY-only — no pane-kind forks anywhere. Accepted tradeoff:
-one in-app browser (comparisons use the system browser). It is a WINDOW, not
-an agent: it brokers nothing.
+the rail and board, it's a view); the WebContentsView pins to ONE stable rect,
+not a live grid cell; the grid stays PTY-only — no pane-kind forks. Accepted
+tradeoff: one in-app browser (comparisons use the system browser). It is a
+WINDOW, not an agent: it brokers nothing.
 
 ## Steps
 1. **The dock**: `#browser-dock` right of `#content` — toggled by a titlebar
@@ -16,10 +15,9 @@ an agent: it brokers nothing.
 2. **The view**: renderer can't host WebContentsView — MAIN owns it.
    `BrowserChannels = { open, navigate, close, bounds, state }`: the renderer
    reports the dock rect (ResizeObserver → rAF-throttled `bounds`); `state`
-   pushes url/title/canGoBack/loading to the dock header. Structure the
-   main-side owner as `dock` (view/bounds/lifecycle) + `driver` (navigate/
-   read/act verbs the dock chrome calls) — the driver is the seam 05b exposes
-   to AGENTS later; build it verb-shaped from day one.
+   pushes url/title/canGoBack/loading to the dock header. Split main-side into
+   `dock` (view/bounds) + `driver` (navigate/read/act verbs) — the driver is
+   the seam 05b hands to AGENTS; build it verb-shaped now.
 3. **Dock chrome**: back/forward/reload, URL bar (Enter navigates), loading
    bar, open-in-system-browser, close (= toggle). The CHROME paints instantly
    on toggle — the perception claim lives there; page load is async.
@@ -38,15 +36,14 @@ an agent: it brokers nothing.
    hold unchanged (the grid narrows — fit must stay budget-clean).
 7. **Smoke** (`MOGGING_BROWSER`): toggle on → view bounds match the dock rect
    (±2px), grid narrowed, pane count unchanged; navigate to a smoke-served
-   `http://localhost` page (node http server in the smoke — no external
-   network); header url/title update; `window.open` denied; drag-resize moves
-   bounds; toggle off hides the view + re-widens the grid; width/lastUrl
-   round-trip through the store.
+   `http://localhost` page (smoke-local node http server); header url/title
+   update; `window.open` denied; drag-resize moves bounds; toggle off hides
+   the view + re-widens the grid; width/lastUrl round-trip through the store.
 
 ## Files
 - `src/contracts/ipc/browser.ipc.ts` + channels · `src/main/browser-dock.ts` +
-  `src/main/index.ts` · `src/ui/features/browser/` (dock chrome + toggle) ·
-  `src/ui/shell/app-shell.ts` (dock slot) · settings-store KV only ·
+  `src/main/index.ts` · `src/ui/features/browser/` ·
+  `src/ui/shell/app-shell.ts` · settings-store KV only ·
   `src/main/browser-smoke.ts` · `scripts/qa-smokes.sh`
 
 ## Definition of Done
@@ -58,7 +55,7 @@ an agent: it brokers nothing.
 ## Checks that must be green
 - `npm run typecheck` → 0; build ok; boundary greps clean.
 - `MOGGING_BROWSER` green isolated; MILESTONE + PERCEPTION + PANEOPS still
-  green; gallery states for the dock (open, loading, both themes).
+  green; dock gallery states, both themes.
 
 ## Guardrails
 - ADR 0002 absolute: no session injection, credential autofill, cookie
