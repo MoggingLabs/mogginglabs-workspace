@@ -20,10 +20,9 @@ an agent: it brokers nothing.
    main-side owner as `dock` (view/bounds/lifecycle) + `driver` (navigate/
    read/act verbs the dock chrome calls) — the driver is the seam 05b exposes
    to AGENTS later; build it verb-shaped from day one.
-3. **Dock chrome**: back/forward/reload, a URL bar (Enter navigates), a
-   loading bar, open-in-system-browser, and close (= toggle). The CHROME paints
-   instantly on toggle — the perception claim lives on the chrome; the page
-   load is async behind the loading bar.
+3. **Dock chrome**: back/forward/reload, URL bar (Enter navigates), loading
+   bar, open-in-system-browser, close (= toggle). The CHROME paints instantly
+   on toggle — the perception claim lives there; page load is async.
 4. **Per-workspace memory, hot-path-free**: each workspace remembers its LAST
    preview URL (settings-store KV `browser.lastUrl.<workspaceId>` — no manifest
    column). Switching workspaces NEVER navigates (no reload churn on the
@@ -36,7 +35,7 @@ an agent: it brokers nothing.
    automation, no cookie access, no history beyond the per-workspace last URL.
    http(s): only; anything else → shell.openExternal.
 6. **Perf**: dock closed → `view.setVisible(false)`; MILESTONE + PERCEPTION
-   re-run and hold unchanged (the grid narrows — fit must stay budget-clean).
+   hold unchanged (the grid narrows — fit must stay budget-clean).
 7. **Smoke** (`MOGGING_BROWSER`): toggle on → view bounds match the dock rect
    (±2px), grid narrowed, pane count unchanged; navigate to a smoke-served
    `http://localhost` page (node http server in the smoke — no external
@@ -51,10 +50,10 @@ an agent: it brokers nothing.
   `src/main/browser-smoke.ts` · `scripts/qa-smokes.sh`
 
 ## Definition of Done
-- One keystroke shows localhost beside the FULL grid; terminals stay visible
-  and interactive while browsing; toggle off returns every pixel to the panes.
-- Dock width + per-workspace last URL survive a relaunch. Both perf gates
-  unchanged. Zero changes to the grid model, pane ids, or layout templates.
+- One keystroke shows localhost beside the FULL grid; terminals stay
+  interactive while browsing; toggle off returns every pixel to the panes.
+- Width + per-workspace last URL survive relaunch; both perf gates unchanged;
+  zero grid-model changes.
 
 ## Checks that must be green
 - `npm run typecheck` → 0; build ok; boundary greps clean.
