@@ -43,13 +43,14 @@ renderer is tuned once and behaves identically everywhere. See
 
 ## Quickstart
 
-> **Status: Phase 5 (UI/UX excellence) shipped** — the full redesign on top of the
-> Phase-4 swarm core: an AA-measured design-token system with vivid per-workspace
-> identity colors, a consistent icon family, native-feeling window chrome, full-app
-> Home/Board/Settings views, and an empirically-tuned terminal (14px default, live
-> size control). Before/after receipts in `prompts/phase-5/REPORT.md`. Every gate is
-> smoke-asserted: `bash scripts/qa-smokes.sh` proves the whole surface (24 gates) on
-> fresh isolated state.
+> **Status: Phase 6 (product-ready) shipped — v0.4.0** — three-platform parity
+> (the same 30-gate `qa-smokes.sh` green on Windows, Linux, AND macOS CI), a
+> toggleable **browser dock** that agents can drive via a first-party MCP server,
+> per-slot **profile persistence**, a live **first-run checklist** + one-click
+> **update UX**, and signing readiness + winget/homebrew manifests. Closed by the
+> `MOGGING_PRODUCT` milestone: an installer-fresh machine reaches a working swarm
+> beside a live browser preview in one asserted flow, budgets intact. Per-OS
+> numbers in `prompts/phase-6/README.md`.
 
 ```bash
 npm install        # builds native modules (node-pty). See note below.

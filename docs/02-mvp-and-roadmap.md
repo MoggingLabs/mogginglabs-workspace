@@ -57,7 +57,8 @@ rendering, input, resize. **Gate:** if rendering diverges, revisit the engine ch
   never brokering auth; secret-shaped values refused at save).
 - [x] **SSH/remote panes** (daemon-spawned `ssh -tt`; honest degradation).
 - [x] Linux target (AppImage/deb config + CI build-and-boot job).
-- [ ] Voice; built-in browser. *(own packs, later)*
+- [x] Built-in browser (Phase 6 — a toggleable dock, agent-drivable via MCP).
+- [ ] Voice. *(own pack, later)*
 End-to-end milestone asserted (`MOGGING_SWARMMILESTONE`): ledger denial, mailbox
 handshake, territory commits, gated + overridden merges — 134.7 fps avg / 41.7 ms
 worst / 21 MB with the swarm up. See `docs/09-swarm.md`.
@@ -73,9 +74,14 @@ empirical 14px/1.3 terminal default + live 12–16px control through the house
 remeasure→refit path. All 23 audit findings closed or deferred-with-reason;
 budgets unchanged (perception gained a size-change gate); full sweep green.
 
-### Phase 6 — Product-ready (planned — `prompts/phase-6/`)
-Full Linux/macOS gate-sweep parity, browser dock (toggleable right sidebar), profile persistence, first-run +
-update UX, signing readiness + manifests, v0.4.0 on all three platforms.
+### Phase 6 — Product-ready ✅ (`prompts/phase-6/`)
+Full Linux/macOS/Windows gate-sweep parity (the same 30-gate `qa-smokes.sh` on
+four environments), the browser dock (toggleable right sidebar, agent-drivable
+via a first-party MCP server), per-slot profile persistence, first-run checklist
++ one-click update UX, signing readiness + winget/homebrew manifests. Closed by
+the `MOGGING_PRODUCT` milestone (installer-fresh → guided setup → swarm + browser
+in one asserted flow, budgets held with everything on) and shipped as **v0.4.0**
+on all three platforms. Per-OS numbers in `prompts/phase-6/README.md`.
 
 ## Cross-cutting from day one
 Sentry crash reporting · a hard perf budget for N panes · CI that builds + signs for

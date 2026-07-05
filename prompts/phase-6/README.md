@@ -33,7 +33,7 @@ in order; each step file is < 4000 chars.
 | 05 | `05-browser-dock.md` | **DONE** (`6426729`): toggleable right dock (globe icon, Ctrl+Shift+U, palette), WebContentsView on its own partition (deny-all perms, sandbox, http(s)-only, window.open denied), dock/driver split ready for 05b, per-workspace last-URL chip (switch never navigates). BROWSER gate — sweep is 27; 27/27 local + BROWSER/MILESTONE/PERCEPTION/PANEOPS/FLICKER green on the 3-OS probe (run 28743502082) |
 | 05b | `05b-agent-browser-control.md` | **DONE** (`621eb6f`…`d725451`): agents drive the dock via MCP end to end — `bin/mogging-mcp.mjs` (stdio JSON-RPC MCP server, 14 browser tools) → token-authed main socket (ADR-0006 class, no new TCP, daemon v3 untouched) → driver. Per-workspace consent default OFF (Settings § Browser), AGENT-DRIVING banner + instant Stop, verb+ref-only trail; ADR 0002 intact (no cookie/credential verbs, own empty session partition). BROWSERCTL drives the REAL MCP server as a client (mcpToolsOk/mcpRefusesOff/mcpOk) — sweep is 28; 28/28 local + 3-OS probe green (run 28745327773); docs/13-browser.md. Register today: `claude mcp add mogging-browser`; the automated fan-out is phase-8/04 |
 | 06 | `06-first-run-and-updates.md` | **DONE** (`63e5de4`…`f9d9406`): live dismissible "Get set up" checklist on Home (real detect → copyable install hints, first-workspace flip, power-ups from real stores; persists dismissal); wizard Agents-step install hints + re-check; UpdateChannels lifecycle → titlebar dot + one "Restart now / Later" toast (MOGGING_FAKE_UPDATE drives it network-free). FIRSTRUN gate — sweep is 29; 29/29 local + 3-OS probe green (run 28753092185); one probe fix (row ① asserts detection HONESTLY, not "claude present"). README 5-min path + docs/10 update-feed story |
-| 07 | `07-product-milestone.md` | Scripted fresh-machine install→swarm demo asserted; v0.4.0 released on all three platforms; full sweep recorded per-OS |
+| 07 | `07-product-milestone.md` | **DONE** (`6441b6e`…): PRODUCT smoke asserts installer-fresh → guided setup → Swarm workspace (worktrees/roles/per-slot profile) → browser dock on localhost → ledger/mail/gate substrate → both branches land; Phase B budgets held with EVERYTHING on. Full 30-gate sweep green on Windows local + linux/macos/windows CI (run 28755553116); per-OS numbers below; v0.4.0 released three-platform |
 
 ## Overall Definition of Done
 - `bash scripts/qa-smokes.sh` is green on Windows, Linux, AND macOS CI — one gate
@@ -122,3 +122,33 @@ variance, correctness and echo stay strict.
 - Coverage note: with 6/01–6/03 the SAME 24-gate list now certifies on four
   environments — local Windows, ubuntu CI, macos CI, windows CI — nightly at
   03:30/04:30/05:30 respectively.
+
+## Phase-6 freeze — the 30-gate sweep, three platforms (6/07, run 28755553116, 2026-07-05)
+The SAME 30-gate list (24 base + PROFPERSIST_A/B, BROWSER, BROWSERCTL, FIRSTRUN,
+PRODUCT) green on Windows local AND linux/macos/windows CI. CI is `MOGGING_CI_GPU
+=soft` (software GL / shared-vCPU frame timing relaxed, loud; echo latency, heap,
+and correctness STRICT). Desktop (Windows local) runs strict, unrelaxed.
+
+| metric | Windows (desktop, strict) | ubuntu CI (soft) | macos-26 CI (soft) | windows CI (soft) |
+|---|---|---|---|---|
+| MILESTONE stress fps | 139.5 | 21.3 | 58.8 | 26.8 |
+| MILESTONE worst gap | 27.8 ms | 100 ms | 97.3 ms | 312.5 ms |
+| MILESTONE heap | 38 MB | 24 MB | 40 MB | 25 MB |
+| PERCEPTION switch | 30.6 ms | 265.5 ms | 36.1 ms | 255.4 ms |
+| **PERCEPTION echo (STRICT 60 ms)** | **1.5 ms** | **1.3 ms** | **0.9 ms** | **1.3 ms** |
+| PRODUCT phase-B (dock+19 panes) | 133.4 fps / 48.7 ms / 30 MB | 41.6 / 116.7 / 30 | 53.5 / 116.9 / 37 | 50.8 / 171.9 / 37 |
+
+- **PRODUCT** (6/07): the installer→swarm proof — phase A asserts checklist →
+  Swarm workspace (worktrees, roles, per-slot profile in the manifest) →
+  browser dock on localhost → ledger/mailbox/gate substrate → both branches
+  land; phase B holds the machine budget with the WHOLE surface on (board,
+  dock open, 19 live panes). The browser dock cost zero budget — echo stays
+  desktop-class on every platform (0.9–1.5 ms against the 60 ms strict floor).
+- Every relaxed number on CI is software-GL raster physics, not app health:
+  the strict echo round-trip and heap are flat across all four environments.
+
+## Phase-wide telemetry grep (ADR 0005, recorded at freeze)
+`grep -rnE "captureEvent|captureError" src/ui src/main` audited: every payload
+carries ids/booleans/counts only — no URLs, card/mail text, file paths, env
+values, or hostnames. The browser dock emits `browser.dock {open}` and
+`update.*`/`firstrun.*` booleans; usage/agent verbs never ship content.
