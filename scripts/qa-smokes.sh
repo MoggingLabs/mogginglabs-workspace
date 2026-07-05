@@ -118,6 +118,7 @@ run_smoke PROFPERSIST_B MOGGING_PROFPERSIST B 180 profpersist PROFPERSIST
 run_smoke BROWSER      MOGGING_BROWSER   1 180 browser
 run_smoke BROWSERCTL   MOGGING_BROWSERCTL 1 180 browserctl
 run_smoke FIRSTRUN     MOGGING_FIRSTRUN  1 150 firstrun
+run_smoke PRODUCT      MOGGING_PRODUCT   1 300 product
 
 echo ""
 echo "══ SWEEP RESULTS ══"

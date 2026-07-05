@@ -32,6 +32,7 @@ import { runProfpersistSmoke } from './profpersist-smoke'
 import { runBrowserSmoke } from './browser-smoke'
 import { runBrowserCtlSmoke } from './browserctl-smoke'
 import { runFirstRunSmoke } from './firstrun-smoke'
+import { runProductSmoke } from './product-smoke'
 import { runAttentionSmoke } from './attention-smoke'
 import { runBlocksSmoke } from './blocks-smoke'
 import { runGitSmoke } from './git-smoke'
@@ -199,6 +200,8 @@ app.whenReady().then(async () => {
     runBrowserCtlSmoke(win) // env-gated agent-browser-control smoke (6/05b)
   } else if (process.env.MOGGING_FIRSTRUN && win) {
     runFirstRunSmoke(win) // env-gated first-run + update-UX smoke (6/06)
+  } else if (process.env.MOGGING_PRODUCT && win) {
+    runProductSmoke(win) // env-gated product milestone: installer -> swarm + browser (6/07)
   } else if (process.env.MOGGING_ATTENTION && win) {
     runAttentionSmoke(win) // env-gated tab-attention aggregation smoke (Phase-2/01)
   } else if (process.env.MOGGING_BLOCKS && win) {
