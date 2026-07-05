@@ -1,5 +1,6 @@
 import { app, BrowserWindow } from 'electron'
 import { createServer, type Server } from 'node:http'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type BrowserAgentResult, type BrowserAgentVerb } from '@contracts'
@@ -51,6 +52,51 @@ export function runBrowserCtlSmoke(win: BrowserWindow): void {
     })
 
   const act = (v: BrowserAgentVerb): Promise<BrowserAgentResult> => agentAct(v)
+
+  // A minimal MCP client over stdio: spawn the real server (bin/mogging-mcp.mjs
+  // via Electron-as-Node) and speak JSON-RPC to it, exactly as an agent CLI
+  // would. This proves the tools are reachable VIA MCP, end to end.
+  const mcpClient = (): {
+    rpc: (method: string, params?: unknown) => Promise<Record<string, unknown>>
+    kill: () => void
+  } => {
+    const child: ChildProcessWithoutNullStreams = spawn(
+      process.execPath,
+      [join(app.getAppPath(), 'bin', 'mogging-mcp.mjs')],
+      { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true }
+    ) as ChildProcessWithoutNullStreams
+    let out = ''
+    let id = 0
+    const waiters = new Map<number, (v: Record<string, unknown>) => void>()
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => {
+      out += chunk
+      let i
+      while ((i = out.indexOf('\n')) >= 0) {
+        const line = out.slice(0, i)
+        out = out.slice(i + 1)
+        if (!line.trim()) continue
+        try {
+          const m = JSON.parse(line) as { id?: number; result?: Record<string, unknown> }
+          if (typeof m.id === 'number' && waiters.has(m.id)) {
+            waiters.get(m.id)!(m.result ?? {})
+            waiters.delete(m.id)
+          }
+        } catch {
+          /* ignore non-JSON */
+        }
+      }
+    })
+    return {
+      rpc: (method, params) =>
+        new Promise((resolve) => {
+          const rid = ++id
+          waiters.set(rid, resolve)
+          child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: rid, method, params }) + '\n')
+        }),
+      kill: () => child.kill()
+    }
+  }
 
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
@@ -114,7 +160,42 @@ export function runBrowserCtlSmoke(win: BrowserWindow): void {
         !trailJson.includes('PLANTED_ERR') && // page content never recorded
         trail.some((t) => t.verb === 'type') // but the verb name IS there
 
-      const pass = refusedOff && nav.ok && sawControls && typeOk && clickOk && evalSeen && sawError && revokeOk && trailClean
+      // ── 5. END TO END VIA MCP: an agent CLI's path, exactly ──────────────
+      // Spawn the real MCP server, handshake, list tools, then drive the dock
+      // through tools/call — consent OFF refuses, consent ON works.
+      const mcp = mcpClient()
+      let mcpOk = false
+      let mcpToolsOk = false
+      let mcpRefusesOff = false
+      try {
+        await mcp.rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {} })
+        const tools = (await mcp.rpc('tools/list')) as { tools?: { name: string }[] }
+        mcpToolsOk =
+          !!tools.tools &&
+          ['browser_navigate', 'browser_snapshot', 'browser_click', 'browser_eval'].every((n) =>
+            tools.tools!.some((t) => t.name === n)
+          )
+        // Consent OFF -> the tool call reports an error to the agent.
+        setAgentConsent(false)
+        const off = (await mcp.rpc('tools/call', { name: 'browser_snapshot', arguments: {} })) as { isError?: boolean }
+        mcpRefusesOff = off.isError === true
+        // Consent ON -> navigate + snapshot round-trip through MCP.
+        setAgentConsent(true)
+        await mcp.rpc('tools/call', { name: 'browser_navigate', arguments: { url: `127.0.0.1:${port}` } })
+        await sleep(1200)
+        const snap = (await mcp.rpc('tools/call', { name: 'browser_snapshot', arguments: {} })) as {
+          content?: { text?: string }[]
+          isError?: boolean
+        }
+        const snapText = snap.content?.[0]?.text ?? ''
+        mcpOk = snap.isError !== true && snapText.includes('Go') && snapText.includes(`127.0.0.1:${port}`)
+      } finally {
+        mcp.kill()
+      }
+
+      const pass =
+        refusedOff && nav.ok && sawControls && typeOk && clickOk && evalSeen && sawError && revokeOk && trailClean &&
+        mcpToolsOk && mcpRefusesOff && mcpOk
       result = {
         pass,
         refusedOff,
@@ -126,7 +207,10 @@ export function runBrowserCtlSmoke(win: BrowserWindow): void {
         sawError,
         revokeOk,
         trailClean,
-        trailLen: trail.length
+        trailLen: trail.length,
+        mcpToolsOk,
+        mcpRefusesOff,
+        mcpOk
       }
     } catch (e) {
       result = { pass: false, error: String(e) }

@@ -10,6 +10,7 @@ import { flushTelemetry } from './telemetry'
 import { registerAppSettings, disposeAppSettings } from './app-settings'
 import { registerAgents } from './agents'
 import { registerBrowserDock } from './browser-dock'
+import { startMcpEndpoint, stopMcpEndpoint } from './mcp-endpoint'
 import { registerTemplates } from './templates'
 import { registerAttention } from './attention'
 import { registerGit } from './git'
@@ -131,6 +132,7 @@ app.whenReady().then(async () => {
   registerDialogs(() => win) // native directory picker for the new-workspace wizard
   registerShellChrome(() => win) // theme-tinted window-control overlay (organic chrome)
   registerBrowserDock(() => win) // right browser dock: MAIN owns the WebContentsView (6/05)
+  startMcpEndpoint() // agent-control transport: the MCP server reaches the dock here (6/05b)
   registerAgents() // agent launcher: detect installed CLIs + build launch commands (Phase-1/06)
   registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
   registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
@@ -243,6 +245,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   void flushTelemetry() // best-effort vendor flush (no-op unless the user opted in)
+  stopMcpEndpoint() // tear down the agent-control socket + endpoint file (6/05b)
   disposeAppSettings()
   disposeGit?.()
   disposeGit = null

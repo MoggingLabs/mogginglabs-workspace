@@ -26,13 +26,25 @@ visible text + stable refs — the agent's eyes) · `screenshot` · `click` ·
 `network_failures` (the error feedback loop) · `wait_for`. Together they close
 the build→preview→see-the-error→fix loop without a human alt-tabbing.
 
-**Transport.** The driver is transport-agnostic by design. The intended
-agent-facing transport is the first-party MCP server (phase 8/02): each verb
-registers as an MCP tool, so every hosted CLI gets browser control for free
-over one wire — no new protocol. Until that server lands, the verbs exist and
-are fully exercised (the `MOGGING_BROWSERCTL` smoke drives them end to end);
-what's pending is only the MCP registration layer, a thin wrapper over these
-same `agentAct` verbs.
+**Transport — the MCP server.** Agents reach the tools through a first-party
+MCP server, `bin/mogging-mcp.mjs` (a stdio JSON-RPC 2.0 server any MCP-speaking
+CLI can use). It forwards each `tools/call` to the app's browser-control
+endpoint: the MAIN process opens a token-authed local socket (unix socket /
+named pipe — the same class as the daemon's, ADR 0006; nothing new on TCP, the
+daemon protocol stays v3) and writes `browser-control.json` into the per-user
+runtime dir. The MCP server reads that file, authenticates, and relays verbs to
+`agentAct` — consent is enforced app-side. The whole path (agent CLI → MCP
+stdio → app endpoint → driver → dock) is exercised by `MOGGING_BROWSERCTL`,
+which spawns the real server and drives it as an MCP client.
+
+Register it with a CLI until the phase-8 MCP manager (8/04) automates the fan-out:
+
+```
+claude mcp add mogging-browser -- node <install>/bin/mogging-mcp.mjs
+```
+
+Phase-8/02 generalizes this server (more toolsets, discovery); the browser
+tools are its first and richest.
 
 ### Consent — per workspace, default OFF
 
