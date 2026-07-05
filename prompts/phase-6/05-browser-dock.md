@@ -18,7 +18,10 @@ brokers nothing.
 2. **The view**: renderer can't host WebContentsView — MAIN owns it.
    `BrowserChannels = { open, navigate, close, bounds, state }`: the renderer
    reports the dock rect (ResizeObserver → rAF-throttled `bounds`); `state`
-   pushes url/title/canGoBack/loading to the dock header.
+   pushes url/title/canGoBack/loading to the dock header. Structure the
+   main-side owner as `dock` (view/bounds/lifecycle) + `driver` (navigate/
+   read/act verbs the dock chrome calls) — the driver is the seam 05b exposes
+   to AGENTS later; build it verb-shaped from day one.
 3. **Dock chrome**: back/forward/reload, a URL bar (Enter navigates), a
    loading bar, open-in-system-browser, and close (= toggle). The CHROME paints
    instantly on toggle — the perception claim lives on the chrome; the page
