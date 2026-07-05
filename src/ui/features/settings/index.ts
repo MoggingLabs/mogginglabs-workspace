@@ -1,5 +1,6 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { TelemetryChannels, type TelemetryRendererConfig } from '@contracts'
+import { BrowserChannels, TelemetryChannels, type TelemetryRendererConfig } from '@contracts'
+import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { Button, createCheckbox, createSegmented, el, icon, ICON_NAMES } from '../../components'
 import { THEMES } from '../../core/theme/themes'
 import { currentThemeId, onThemeChange, setTheme } from '../../core/theme/theme-state'
@@ -83,6 +84,19 @@ export const settingsFeature: UiFeature = {
       onChange: () => void pushConsent()
     })
 
+    // Agent-browser-control consent (6/05b): per-workspace, default OFF.
+    const agentBrowserConsent = createCheckbox({
+      checked: false,
+      label: 'Agents may drive the browser (this workspace)',
+      onChange: () => {
+        const wsId = getWorkspaces().activeId
+        if (!wsId) return
+        void getBridge().invoke(BrowserChannels.consentSet, { workspaceId: wsId, allowed: agentBrowserConsent.checked() })
+        // Make it live for the active workspace immediately.
+        getBridge().send(BrowserChannels.consent, { allowed: agentBrowserConsent.checked() })
+      }
+    })
+
     async function pullConsent(): Promise<void> {
       try {
         const cfg = (await getBridge().invoke(TelemetryChannels.getConfig)) as TelemetryRendererConfig
@@ -90,6 +104,13 @@ export const settingsFeature: UiFeature = {
         analyticsConsent.setChecked(!!cfg.productAnalytics)
       } catch {
         /* bridge unavailable — leave off */
+      }
+      try {
+        const wsId = getWorkspaces().activeId
+        const on = !!wsId && (await getBridge().invoke(BrowserChannels.consentGet, wsId)) === true
+        agentBrowserConsent.setChecked(on)
+      } catch {
+        /* leave off */
       }
     }
     async function pushConsent(): Promise<void> {
@@ -180,6 +201,17 @@ export const settingsFeature: UiFeature = {
               text: 'Your keys, your CLIs: agents authenticate themselves with your own accounts. This app has no credential settings — by design.'
             })
           ])
+        ])
+      },
+      {
+        id: 'browser',
+        label: 'Browser',
+        el: section('browser', 'Browser', [
+          row(
+            'Agents may drive the browser',
+            el('div', { class: 'settings-consents' }, [agentBrowserConsent.el]),
+            'OFF by default, per workspace. When on, agents in THIS workspace can navigate, read, and act on the browser dock — you always see when an agent holds the wheel and can Stop it instantly. The dock uses its own empty session (agents never touch your system browser or its logins), and a page an agent reads is untrusted content. Agents can never read cookies or credentials (ADR 0002).'
+          )
         ])
       },
       {

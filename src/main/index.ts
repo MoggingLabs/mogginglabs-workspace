@@ -29,6 +29,7 @@ import { runAgentLaunchSmoke } from './agentlaunch-smoke'
 import { runTemplateSmoke } from './template-smoke'
 import { runProfpersistSmoke } from './profpersist-smoke'
 import { runBrowserSmoke } from './browser-smoke'
+import { runBrowserCtlSmoke } from './browserctl-smoke'
 import { runAttentionSmoke } from './attention-smoke'
 import { runBlocksSmoke } from './blocks-smoke'
 import { runGitSmoke } from './git-smoke'
@@ -187,6 +188,8 @@ app.whenReady().then(async () => {
     runProfpersistSmoke(win, process.env.MOGGING_PROFPERSIST) // env-gated profile-persistence smoke (6/04)
   } else if (process.env.MOGGING_BROWSER && win) {
     runBrowserSmoke(win) // env-gated browser-dock smoke (6/05)
+  } else if (process.env.MOGGING_BROWSERCTL && win) {
+    runBrowserCtlSmoke(win) // env-gated agent-browser-control smoke (6/05b)
   } else if (process.env.MOGGING_ATTENTION && win) {
     runAttentionSmoke(win) // env-gated tab-attention aggregation smoke (Phase-2/01)
   } else if (process.env.MOGGING_BLOCKS && win) {

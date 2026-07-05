@@ -3223,3 +3223,56 @@ body.resizing * {
   font-size: var(--fs-11);
   max-width: 32ch;
 }
+
+/* ── Agent possession (Phase-6/05b): the wheel is visibly held ─────────────
+   When an agent drives the dock, the whole dock wears a brand outline and a
+   banner with an instant Stop — possession is never invisible. */
+.browser-dock.agent-driving {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.browser-agent-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--accent-weak);
+  color: var(--accent-ink);
+  font-size: var(--fs-11);
+}
+.browser-agent-banner[hidden] {
+  display: none;
+}
+.browser-agent-banner svg {
+  flex: none;
+  color: var(--accent-ink);
+}
+.browser-agent-spacer {
+  flex: 1 1 auto;
+}
+.browser-agent-stop {
+  flex: none;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
+  padding: 2px var(--sp-2);
+  cursor: pointer;
+}
+.browser-agent-stop:hover {
+  filter: brightness(1.08);
+}
+.browser-agent-trail {
+  position: absolute;
+  top: 64px;
+  right: var(--sp-2);
+  left: var(--sp-2);
+  max-height: 240px;
+  overflow-y: auto;
+  z-index: 6;
+}
+.browser-trail-row {
+  font-variant-numeric: tabular-nums;
+}

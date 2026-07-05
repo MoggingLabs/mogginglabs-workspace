@@ -114,7 +114,14 @@ export const BrowserChannels = {
   bounds: 'browser:bounds', // renderer -> main: BrowserDockBounds (rAF-throttled view rect)
   state: 'browser:state', // main -> renderer: BrowserDockState (header truth)
   lastUrl: 'browser:lastUrl', // (workspaceId) -> string | null ("open this workspace's preview" chip)
-  openExternal: 'browser:openExternal' // ({ url }) -> void (http(s) only, system browser)
+  openExternal: 'browser:openExternal', // ({ url }) -> void (http(s) only, system browser)
+  // ── Agent control (6/05b) ──────────────────────────────────────────────
+  consentGet: 'browser:consentGet', // (workspaceId) -> boolean (stored per-workspace grant; default OFF)
+  consentSet: 'browser:consentSet', // ({ workspaceId, allowed }) -> void (Settings/wizard toggle writes it)
+  consent: 'browser:consent', // renderer -> main: { allowed } (make the ACTIVE workspace's grant live)
+  agentAct: 'browser:agentAct', // (BrowserAgentVerb) -> BrowserAgentResult (an agent verb; consent-gated)
+  activity: 'browser:activity', // main -> renderer: BrowserAgentActivity (possession state + verb trail; NO page content)
+  agentStop: 'browser:agentStop' // renderer -> main: void (the human revokes the grant instantly)
 } as const
 
 export const AllChannels: readonly string[] = [

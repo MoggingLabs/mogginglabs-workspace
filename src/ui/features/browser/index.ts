@@ -1,6 +1,7 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
 import {
   BrowserChannels,
+  type BrowserAgentActivity,
   type BrowserDockBounds,
   type BrowserDockInit,
   type BrowserDockState,
@@ -52,6 +53,23 @@ export const browserFeature: UiFeature = {
     const loading = el('div', { class: 'browser-loading' })
     const header = el('div', { class: 'browser-dock-header' }, [back, forward, reload, urlInput, external, close])
 
+    // ── Agent possession (6/05b): visible whenever an agent holds the wheel ──
+    const stopBtn = el('button', { class: 'browser-agent-stop', type: 'button', text: 'Stop' }) as HTMLButtonElement
+    stopBtn.title = 'Revoke agent control now'
+    stopBtn.onclick = (): void => bridge.send(BrowserChannels.agentStop, undefined)
+    const agentLabel = el('span', { class: 'browser-agent-label', text: 'Agent driving' })
+    const trailBtn = IconButton({ icon: 'more', label: 'Agent activity', title: 'Recent agent actions', onClick: () => {
+      trailMenu.hidden = !trailMenu.hidden
+    } })
+    const banner = el('div', { class: 'browser-agent-banner', hidden: true }, [
+      icon('sparkles', 14),
+      agentLabel,
+      el('div', { class: 'browser-agent-spacer' }),
+      trailBtn,
+      stopBtn
+    ])
+    const trailMenu = el('div', { class: 'menu browser-agent-trail', hidden: true })
+
     // Workspace-preview chip: shown when the active workspace remembers a
     // DIFFERENT url than the one on screen (switching never auto-navigates).
     const wsChip = el('button', { class: 'browser-ws-chip', type: 'button', hidden: true }) as HTMLButtonElement
@@ -62,7 +80,7 @@ export const browserFeature: UiFeature = {
       el('div', { class: 'browser-empty-hint', text: 'Enter a URL above — your dev server, docs, anything http(s).' })
     ])
     const viewHost = el('div', { class: 'browser-dock-view' }, [empty])
-    dock.append(handle, header, loading, wsChip, viewHost)
+    dock.append(handle, header, banner, trailMenu, loading, wsChip, viewHost)
     // The dock is #content's flex sibling inside #main — inserted, not slotted,
     // so the shell stays feature-agnostic.
     ctx.content.insertAdjacentElement('afterend', dock)
@@ -189,11 +207,46 @@ export const browserFeature: UiFeature = {
     }
     onWorkspacesChange(() => void refreshChip())
 
+    // ── Agent control: consent follows the active workspace (default OFF) ────
+    async function pushConsent(): Promise<void> {
+      const wsId = getWorkspaces().activeId
+      const allowed = !!wsId && (await bridge.invoke(BrowserChannels.consentGet, wsId)) === true
+      bridge.send(BrowserChannels.consent, { allowed })
+    }
+    onWorkspacesChange(() => void pushConsent())
+
+    // Possession state from main: brand the dock, show Stop, list the trail.
+    const VERB_LABEL: Record<string, string> = {
+      navigate: 'Navigated', back: 'Back', forward: 'Forward', reload: 'Reloaded',
+      snapshot: 'Read page', screenshot: 'Screenshot', click: 'Clicked', type: 'Typed',
+      scroll: 'Scrolled', select: 'Selected', eval: 'Ran script', console: 'Read console',
+      network_failures: 'Read failures', wait_for: 'Waited for'
+    }
+    bridge.on(BrowserChannels.activity, (payload) => {
+      const a = payload as BrowserAgentActivity
+      banner.hidden = !a.driving
+      dock.classList.toggle('agent-driving', a.driving)
+      if (a.driving) trailBtn.classList.remove('is-hidden')
+      trailMenu.innerHTML = ''
+      for (const t of [...a.trail].reverse()) {
+        const row = el('div', { class: 'menu-note browser-trail-row' })
+        // Verb + target REF only — never page content, typed text, or eval bodies.
+        row.textContent = t.target ? `${VERB_LABEL[t.verb] ?? t.verb} · ${t.target}` : (VERB_LABEL[t.verb] ?? t.verb)
+        trailMenu.append(row)
+      }
+      if (!a.trail.length) trailMenu.append(el('div', { class: 'menu-note', text: 'No agent actions yet.' }))
+    })
+
     // ── Persisted boot state ─────────────────────────────────────────────────
     void (bridge.invoke(BrowserChannels.init, undefined) as Promise<BrowserDockInit>).then((init) => {
       width = init.width
       applyWidth()
       if (init.open) toggle(true)
+      void pushConsent() // make the active workspace's stored grant live at boot
+    })
+
+    document.addEventListener('click', (e) => {
+      if (!(e.target instanceof Node) || (!trailMenu.contains(e.target) && !banner.contains(e.target))) trailMenu.hidden = true
     })
 
     exposeForDev()
@@ -215,7 +268,17 @@ export const browserFeature: UiFeature = {
           const r = viewHost.getBoundingClientRect()
           return { x: r.x, y: r.y, width: r.width, height: r.height }
         },
-        state: () => ({ ...state })
+        state: () => ({ ...state }),
+        // 6/05b: agent-control surface for the smoke — write per-workspace
+        // consent, make it live, and read the possession banner's live state.
+        setConsent: async (allowed: boolean) => {
+          const wsId = getWorkspaces().activeId
+          if (!wsId) return
+          await bridge.invoke(BrowserChannels.consentSet, { workspaceId: wsId, allowed })
+          await pushConsent()
+        },
+        driving: () => !banner.hidden,
+        trailCount: () => trailMenu.querySelectorAll('.browser-trail-row').length
       }
     }
   }
