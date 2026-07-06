@@ -135,6 +135,7 @@ run_smoke USAGEUI      MOGGING_USAGEUI   1 180 usageui
 run_smoke WEBUSAGE     MOGGING_WEBUSAGE  1 150 webusage
 run_smoke USAGECLI     MOGGING_USAGECLI  1 180 usagecli
 run_smoke USAGESET     MOGGING_USAGESET  1 180 usageset
+run_smoke MCP          MOGGING_MCP       1 240 mcp
 
 echo ""
 echo "══ SWEEP RESULTS ══"

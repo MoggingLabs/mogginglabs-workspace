@@ -1,3 +1,4 @@
+import { copyFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 
@@ -13,10 +14,24 @@ const alias = {
   '@ui': resolve(__dirname, 'src/ui')
 }
 
+// 8/02: `bin/` is plain node and cannot import the TS contracts — the build
+// copies the ONE tool catalog from contracts to `bin/mcp-catalog.json`. BOTH
+// files are committed; the MCP smoke byte-compares them, so drift fails a gate
+// instead of shipping.
+const copyMcpCatalog = {
+  name: 'copy-mcp-catalog',
+  buildStart(): void {
+    copyFileSync(
+      resolve(__dirname, 'src/contracts/integrations/mcp-catalog.json'),
+      resolve(__dirname, 'bin/mcp-catalog.json')
+    )
+  }
+}
+
 export default defineConfig({
   main: {
     resolve: { alias },
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin(), copyMcpCatalog],
     // Two entries: the Electron main process AND the detached PTY daemon (ADR 0006).
     // The daemon (out/main/daemon.js) is launched via Electron-as-Node; it imports no
     // electron APIs, so it bundles clean. node-pty stays external for both.

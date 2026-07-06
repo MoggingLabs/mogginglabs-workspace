@@ -26,25 +26,41 @@ visible text + stable refs — the agent's eyes) · `screenshot` · `click` ·
 `network_failures` (the error feedback loop) · `wait_for`. Together they close
 the build→preview→see-the-error→fix loop without a human alt-tabbing.
 
-**Transport — the MCP server.** Agents reach the tools through a first-party
-MCP server, `bin/mogging-mcp.mjs` (a stdio JSON-RPC 2.0 server any MCP-speaking
-CLI can use). It forwards each `tools/call` to the app's browser-control
-endpoint: the MAIN process opens a token-authed local socket (unix socket /
-named pipe — the same class as the daemon's, ADR 0006; nothing new on TCP, the
-daemon protocol stays v3) and writes `browser-control.json` into the per-user
-runtime dir. The MCP server reads that file, authenticates, and relays verbs to
-`agentAct` — consent is enforced app-side. The whole path (agent CLI → MCP
-stdio → app endpoint → driver → dock) is exercised by `MOGGING_BROWSERCTL`,
-which spawns the real server and drives it as an MCP client.
+**Transport — the house MCP server (`mogging`).** Agents reach the tools
+through the first-party MCP server, `bin/mogging-mcp.mjs` (stdio JSON-RPC 2.0,
+serverInfo `mogging` since 8/02 — any MCP-speaking client can use it; MCP
+Inspector and a real Claude Code session are both dev-verified). Its catalog is
+DATA: `bin/mcp-catalog.json`, build-copied from
+`src/contracts/integrations/mcp-catalog.json` (both committed; the MCP smoke
+byte-compares them and holds served `tools/list` to the file). It is a pure
+CLIENT of two token-authed local sockets it does not own (nothing on TCP, the
+daemon protocol stays v3):
 
-Register it with a CLI until the phase-8 MCP manager (8/04) automates the fan-out:
+- **browser family → the app's browser-control endpoint**: the MAIN process
+  opens a token-authed local socket (unix socket / named pipe — the same class
+  as the daemon's, ADR 0006) and writes `browser-control.json` into the
+  per-user runtime dir; verbs relay to `agentAct`, consent enforced app-side.
+- **control family (READ half, 8/02) → the PTY daemon socket** the `mogging`
+  CLI already speaks: `list_panes` · `capture_pane` (tail ≤ 10000, to the
+  calling model only, like `capture`) · `mail_read` (identity =
+  `MOGGING_PANE_ID`, human view outside a pane) · `list_owners` ·
+  `list_board` (the board lives app-side, so this one rides the app endpoint).
+  The upstreams degrade independently — no daemon means control tools answer a
+  clean JSON-RPC error naming the fix while browser tools keep working, and
+  vice versa. Write tools are NOT served: they arrive behind the 8/03
+  per-workspace grant; calling one today is a spec error that says so.
+
+The whole path is exercised by two gates: `MOGGING_BROWSERCTL` (dock driving)
+and `MOGGING_MCP` (both upstreams, catalog equality, degradation, token
+hygiene).
+
+Register it with a CLI until the phase-8 MCP manager (8/06) automates the
+fan-out (dev machines registered under the old `mogging-browser` name should
+re-register):
 
 ```
-claude mcp add mogging-browser -- node <install>/bin/mogging-mcp.mjs
+claude mcp remove mogging-browser ; claude mcp add mogging -- node <install>/bin/mogging-mcp.mjs
 ```
-
-Phase-8/02 generalizes this server (more toolsets, discovery); the browser
-tools are its first and richest.
 
 ### Consent — per workspace, default OFF
 

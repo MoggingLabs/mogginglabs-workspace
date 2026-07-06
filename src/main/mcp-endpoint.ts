@@ -5,7 +5,8 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { agentAct, agentControlDebug } from './browser-dock'
 import { handleUsageCall } from './usage'
-import type { BrowserAgentVerb, BrowserAgentVerbName } from '@contracts'
+import { getSettingsStore } from './app-settings'
+import { MCP_BROWSER_TOOL_NAMES, type BrowserAgentVerb, type BrowserAgentVerbName } from '@contracts'
 
 /**
  * The agent-control transport (Phase-6/05b). Main opens a token-authed LOCAL
@@ -77,18 +78,21 @@ function toVerb(name: string, args: Record<string, unknown>): BrowserAgentVerb |
   }
 }
 
-export const MCP_TOOL_NAMES: string[] = [
-  'browser_navigate', 'browser_back', 'browser_forward', 'browser_reload',
-  'browser_snapshot', 'browser_screenshot', 'browser_click', 'browser_type',
-  'browser_scroll', 'browser_select', 'browser_eval', 'browser_console',
-  'browser_network_failures', 'browser_wait_for'
-]
+// 8/02: the names come from the ONE catalog (@contracts/integrations) — the
+// hand-written list died with the server's; `toVerb` above is checked against
+// it at startup so the two can never drift silently.
+export const MCP_TOOL_NAMES: string[] = [...MCP_BROWSER_TOOL_NAMES]
 
 let server: net.Server | null = null
 let token = ''
 
 export function startMcpEndpoint(): void {
   if (server) return
+  // Catalog↔dispatch drift check: every browser tool the catalog names must
+  // map to an agentAct verb here. Fails the boot, not a tools/call at 2 AM.
+  for (const n of MCP_BROWSER_TOOL_NAMES) {
+    if (!toVerb(n, {})) throw new Error(`mcp-endpoint: catalog browser tool "${n}" has no verb mapping`)
+  }
   token = randomBytes(24).toString('hex')
   const address = socketAddress()
   try {
@@ -134,6 +138,14 @@ export function startMcpEndpoint(): void {
             void handleUsageCall(msg.name, msg.args ?? {}).then((r) => {
               sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n')
             })
+            continue
+          }
+          // 8/02: the board lives app-side — `board.list` serves the control
+          // read `list_board`. Card text is USER CONTENT: it rides this authed
+          // socket to the CALLING MODEL only (same class as capture — never
+          // telemetry, notify, or logs, ADR 0005).
+          if (msg.name === 'board.list') {
+            sock.write(JSON.stringify({ t: 'result', id, ok: true, cards: getSettingsStore()?.listBoard() ?? [] }) + '\n')
             continue
           }
           const verb = toVerb(msg.name, msg.args ?? {})

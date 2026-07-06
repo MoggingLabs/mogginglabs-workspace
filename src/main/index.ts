@@ -21,6 +21,7 @@ import { registerProfiles } from './profiles'
 import { registerUsage } from './usage'
 import { registerRemotes } from './remotes'
 import { runSmoke } from './smoke'
+import { runMcpSmoke } from './mcp-smoke'
 import { runAgentSmoke } from './agent-smoke'
 import { runStateSmoke } from './state-smoke'
 import { runReloadSmoke } from './reload-smoke'
@@ -217,6 +218,8 @@ app.whenReady().then(async () => {
     runUsageCliSmoke(win) // env-gated usage-CLI smoke: mogging usage verbs over the app endpoint (7/11)
   } else if (process.env.MOGGING_USAGESET && win) {
     runUsageSetSmoke(win) // env-gated Usage-tab smoke: the full Settings § Usage (7/12)
+  } else if (process.env.MOGGING_MCP && win) {
+    runMcpSmoke(win) // env-gated house-MCP-server smoke: both upstreams, catalog-as-data (Phase-8/02)
   } else if (process.env.MOGGING_USAGE && win) {
     runUsageSmoke(win) // env-gated usage-seam smoke: FAKE adapter only (Phase-7/01)
   } else if (process.env.MOGGING_ATTENTION && win) {
