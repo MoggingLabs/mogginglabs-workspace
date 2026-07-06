@@ -5,35 +5,30 @@ webhook"; Slack: "when a pane needs you, the right channel knows." The
 URLs are secrets; the daemon stays v3 (ADR 0008.g).
 
 ## Steps
-1. **The shared vault first**: extract `usage-keys.ts`'s safeStorage
-   mechanics into `src/main/vault.ts` (encrypt/decrypt/slot, write-only
-   discipline, vault-unavailable REFUSAL intact); usage-keys becomes a
-   consumer (zero behavior change — USAGE/USAGESET stay green as proof);
-   the bridge's URL store is consumer two.
-2. **Webhook store** (`@backend/features/integrations/bridge.ts`): 01's
+1. **Webhook store** (`@backend/features/integrations/bridge.ts`): 01's
    `IntegrationWebhook` — the URL is a SECRET by default (Slack/Make
-   embed tokens in paths): pasted once → vault ciphertext, masked as
-   `host/…` forever (0007.a: Replace/Delete only); env-ref alternative.
-   https anywhere; plain http ONLY loopback; private-LAN http needs the
-   explicit, loudly-labeled "insecure URL" acknowledgment (LAN n8n is
-   real).
-3. **The subscription**: the app's main process already sees the
+   embed tokens in paths): pasted once → ciphertext via 08's `vault.ts`
+   (consumer three), masked as `host/…` forever (0007.a: Replace/Delete
+   only); env-ref alternative. https anywhere; plain http ONLY loopback;
+   private-LAN http needs the explicit, loudly-labeled "insecure URL"
+   acknowledgment (LAN n8n is real).
+2. **The subscription**: the app's main process already sees the
    attention/notify stream — subscribe there (daemon untouched). Events
    v1 (01's union): needs-you · notify (the CLI verb — the site's
-   promise) · card-moved · review-changed (09 emits). Payload =
+   promise) · card-moved · review-changed (10 emits). Payload =
    `BridgeEvent` — ids + the short note the user's own notify carried;
    never scrollback, diffs, page content, or origins. Per-webhook event
    filter + optional workspace scope.
-4. **Polite delivery**: per-webhook queue, at-most-once stated honestly:
+3. **Polite delivery**: per-webhook queue, at-most-once stated honestly:
    fire, 3 exponential retries, drop with a `bridge` trail entry (LABEL,
    never the URL). Never blocks notify (queue + 5 s timeout); response
    capped 1 KB; no redirects; a hung receiver costs nothing. Per-webhook
    health chip (ok/failing/off) from outcomes, in-memory.
-5. **Settings block** in 06's module: webhook list, masked URL grammar,
+4. **Settings block** in 06's module: webhook list, masked URL grammar,
    event checkboxes, workspace scope, "Send test event" (a fixture-note
    `notify`), the health chip, the payload schema inline — build the n8n
    side without leaving the app.
-6. **EVBRIDGE smoke** (`MOGGING_EVBRIDGE`, env-gated, in qa-smokes.sh):
+5. **EVBRIDGE smoke** (`MOGGING_EVBRIDGE`, env-gated, in qa-smokes.sh):
    in-process localhost receiver — (a) notify lands with the exact v1
    schema; (b) unchecked kind never arrives; (c) workspace scoping;
    (d) retry/backoff on 500 → drop + trail entry with the LABEL;
@@ -43,8 +38,7 @@ URLs are secrets; the daemon stays v3 (ADR 0008.g).
    secret in logs. Verdict `out/evbridge-result.json`.
 
 ## Files
-- `src/main/vault.ts` · `usage-keys.ts` (consumer) ·
-  `@backend/features/integrations/bridge.ts` · main subscription ·
+- `@backend/features/integrations/bridge.ts` · main subscription ·
   `settings/integrations.ts` block · `src/contracts/ipc` ·
   evbridge-smoke.ts · qa-smokes.sh · gallery (both themes)
 
@@ -52,7 +46,6 @@ URLs are secrets; the daemon stays v3 (ADR 0008.g).
 - Dev-verified (books, dated): a real self-hosted n8n Webhook node
   receives a pane's `mogging notify` and triggers a workflow; a Slack
   incoming webhook receives `needs-you` — the site's sentences literal.
-- USAGE + USAGESET green after the vault extraction (proven).
 - EVBRIDGE gate green; sweep count bumped in the books.
 
 ## Checks that must be green

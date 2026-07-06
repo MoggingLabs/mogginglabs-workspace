@@ -10,7 +10,7 @@ step gives it a store, a viewer, and a gate.
    ring-capped (2000 entries or 1 MB — oldest-half rewrite on overflow).
    NOT the settings KV: entries are high-churn and user-clearable. Entry =
    01's `TrailEntry` verbatim — `target` is an ORIGIN (web), a pane/card
-   ref (mcp), or a webhook LABEL (bridge, 08 — never its URL). Writes are
+   ref (mcp), or a webhook LABEL (bridge, 09 — never its URL). Writes are
    queued fire-and-forget; a full disk drops entries + one loud log line,
    never a crash.
 2. **Wire the emitters**: `recordTrail()` (03's receipts + 04's

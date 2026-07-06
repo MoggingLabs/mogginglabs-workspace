@@ -36,12 +36,12 @@ the numbers.
    verbs too"; sweep counts COUNTED from qa-smokes.sh (live docs only,
    history stays history).
 4. **Four-environment certification** (7/13 convention): ONE dispatch,
-   full uncut sweeps — all nine new gates (MCP, MCPWRITE, AGENTWEB,
-   WEBTRAIL, MCPMGR, MCPCAT, EVBRIDGE, INTEG, INTEGMILESTONE) — green on
-   local Windows AND the three CI OSes. Per-OS numbers + run id in the
-   README; platform finds get root causes; REPORT.md if earned.
-5. **Pack freeze**: the sequence table flips to DONE rows with commit
-   ranges + run ids; verify phase-10's pointer here survived.
+   full uncut sweeps — all ten new gates (MCP, MCPWRITE, AGENTWEB,
+   WEBTRAIL, MCPMGR, MCPCAT, VAULTKEYS, EVBRIDGE, INTEG, INTEGMILESTONE)
+   green on local Windows AND the three CI OSes. Per-OS numbers + run id
+   in the README; platform finds get root causes; REPORT.md if earned.
+5. **Pack freeze**: DONE rows with commit ranges + run ids; verify
+   phase-10's pointer here survived.
 
 ## Files
 - integmilestone-smoke.ts · qa-smokes.sh · `docs/14-integrations.md` ·
@@ -59,7 +59,7 @@ the numbers.
 
 ## Checks that must be green
 - `npm run typecheck` → 0; build ok; boundaries clean.
-- Full sweep on all four environments, all nine new gates; nightly crons
+- Full sweep on all four environments, all ten new gates; nightly crons
   left enabled.
 
 ## Guardrails

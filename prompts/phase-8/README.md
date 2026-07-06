@@ -50,14 +50,16 @@ as a `/goal`, < 4000 chars). Execute in order.
 > **Auth stance (binding, ADR 0002 lineage)**: outbound adapters RIDE
 > sessions the user's own tools already hold (`gh auth token` — in memory,
 > one request, never persisted, logged, or shown). The MCP manager writes
-> server ENTRIES into CLI config files — surgical, backed-up, env-refs only,
-> never a secret literal, never touching auth/credential keys. Third-party
-> service KEYS are env-ref POINTERS (ADR 0007 extended to services in
-> 0008.d); webhook URLs that embed secrets are OS-vault ciphertext,
-> write-only (the 0007.a pattern, generalized in 08); app-held OAuth is
-> deferred behind its own ADR. The agent web profile's sessions are created
-> by the USER logging in inside the dock — the app never reads any other
-> credential store.
+> server ENTRIES into CLI config files — surgical, backed-up, env-ref or
+> vault-slot POINTERS only, never a secret literal, never touching
+> auth/credential keys. Third-party service KEYS are pointers (ADR 0007
+> extended to services in 0008.d): an env-ref, or pasted ONCE into the OS
+> vault — ciphertext at rest, write-only, materialized only into pane
+> environments at launch (08, the phase-7 grammar fleet-wide); webhook
+> URLs that embed secrets ride the same vault (09); app-held OAuth is
+> deferred behind its own ADR. The agent web profile's sessions are
+> created by the USER logging in inside the dock — the app never reads
+> any other credential store.
 
 > **Security stance (binding)**: the server's write tools grant NOTHING an
 > in-pane `mogging send` doesn't already grant — the opt-in is tool-CATALOG
@@ -85,9 +87,10 @@ as a `/goal`, < 4000 chars). Execute in order.
 | 05 | `05-agent-activity-trail.md` | The audit trail with teeth (FINDINGS §4.5): one local ledger for web acts + MCP writes + bridge deliveries, reviewable UI, retention, never telemetry; WEBTRAIL smoke green |
 | 06 | `06-mcp-manager.md` | Settings § Integrations: register any server across claude/codex/gemini config dialects — surgical, backed-up, diff-previewed; the house server is the built-in first row; MCPMGR smoke green on fixture homes |
 | 07 | `07-integrations-catalog.md` | The Integrations Catalog: research-verified presets (n8n + Google Workspace FIRST — founder priority) PLUS the open end — registry search, custom entries, preset import/export; Connect + per-CLI Authorize orchestration (status only, never tokens); the site-roster map begins; MCPCAT smoke green on fixture homes |
-| 08 | `08-event-bridge.md` | The outbound event bridge: pane/board events → user-configured webhooks (n8n · Make · Zapier · Slack incoming) — "a notify call to any webhook"; vault-held URLs, versioned payload, polite delivery; EVBRIDGE smoke green on a localhost fixture receiver |
-| 09 | `09-github-adapter.md` | Board cards link to GitHub PRs/issues with live status chips riding `gh` auth; review-state changes land back on the pane that wrote it; INTEG smoke green on the FAKE adapter |
-| 10 | `10-integrations-milestone.md` | INTEGMILESTONE end-to-end (all five directions composed) + `docs/14-integrations.md` incl. the site-honesty map + books; full sweep green on all four environments |
+| 08 | `08-vault-service-keys.md` | The phase-7 vault, fleet-wide: paste-once service keys (OS-vault ciphertext, write-only) materialized into pane ENVIRONMENTS at launch — api-key MCP servers without dotfile editing, no secret literal ever on disk; `vault.ts` extracted from usage-keys; per-CLI env semantics dev-verified; VAULTKEYS smoke green |
+| 09 | `09-event-bridge.md` | The outbound event bridge: pane/board events → user-configured webhooks (n8n · Make · Zapier · Slack incoming) — "a notify call to any webhook"; vault-held URLs, versioned payload, polite delivery; EVBRIDGE smoke green on a localhost fixture receiver |
+| 10 | `10-github-adapter.md` | Board cards link to GitHub PRs/issues with live status chips riding `gh` auth; review-state changes land back on the pane that wrote it; INTEG smoke green on the FAKE adapter |
+| 11 | `11-integrations-milestone.md` | INTEGMILESTONE end-to-end (all five directions composed) + `docs/14-integrations.md` incl. the site-honesty map + books; full sweep green on all four environments |
 
 ## Overall Definition of Done
 - Any hosted CLI, registered by the app in one click, can list panes, read a
@@ -114,7 +117,11 @@ as a `/goal`, < 4000 chars). Execute in order.
 - Every integration named on the website maps in docs/14 to its on-ramp:
   preset (verified date) · registry · custom entry · event bridge · or an
   honest "no official server yet".
-- The sweep — with all nine new gates — is green on local Windows and all
+- An api-key tool (PostHog) connects with a key pasted ONCE — vault
+  ciphertext at rest, materialized only into pane environments, no
+  plaintext on disk anywhere; a vault-less Linux box refuses and offers
+  the env-ref instead.
+- The sweep — with all ten new gates — is green on local Windows and all
   three CI OSes; both perf budgets unchanged.
 
 ## Global checks (every step)
@@ -150,9 +157,10 @@ as a `/goal`, < 4000 chars). Execute in order.
 
 ## Parallelization
 01 is the root. After it: Lane A (02 → 03 → 04 → 05, the server + the web
-profile + the trail), Lane B (06 → 07 → 08, the manager + catalog + bridge),
-Lane C (09, the service seam) — three lanes, zero shared files beyond
-contracts. 10 needs all lanes. Solo execution runs 01→10 in order (house
+profile + the trail), Lane B (06 → 07 → 08 → 09, the manager + catalog +
+vault keys + bridge),
+Lane C (10, the service seam) — three lanes, zero shared files beyond
+contracts. 11 needs all lanes. Solo execution runs 01→11 in order (house
 rule: no parallel agents); the lanes describe independence, not simultaneity.
 The ecosystem research behind the catalog (per-tool matrix, CLI OAuth
 capabilities, sources): `docs/research/2026-07-third-party-integrations.md`.

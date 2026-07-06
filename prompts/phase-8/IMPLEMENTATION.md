@@ -19,7 +19,8 @@ daemon protocol v3 frozen, smokes network-free.
 | 6/05b consent boolean | KV `kvConsent(wsId)` | migrates to `web:'public'` |
 | Per-CLI install layout | `hooks/{claude-code,codex,gemini}` | the manager generalizes this |
 | OS-vault key store, write-only (0007.a) | `src/main/usage-keys.ts` | 08 extracts the vault mechanics into a shared helper |
-| House notify/attention path | notify verb → pane header/card events | 03 receipts, 08 bridge subscription, 09 review-back |
+| House notify/attention path | notify verb → pane header/card events | 03 receipts, 09 bridge subscription, 10 review-back |
+| Profile env → pane spawn (app → daemon, existing wire) | the profiles feature | 08 merges vault keys into the same map |
 | Settings one-home module pattern | `src/ui/features/settings/usage.ts` (7/12) | § Integrations is ONE module the same way |
 
 ## Phase-7 lessons, binding on this pack
@@ -61,7 +62,7 @@ daemon protocol v3 frozen, smokes network-free.
   A test-only extra pattern comes via `MOGGING_TEST_BLOCK_ORIGIN` for the
   AGENTWEB smoke.
 - New in the remake: `TrailEntry` (05), `IntegrationWebhook` + the versioned
-  `BridgeEvent` payload (08), `McpPreset` (07) all live in this slice from
+  `BridgeEvent` payload (09), `McpPreset` (07) all live in this slice from
   day one — the steps enforce, 01 only shapes.
 
 ## 02 — one server, two upstreams
@@ -178,17 +179,41 @@ daemon protocol v3 frozen, smokes network-free.
 - CLI version floors come from the existing `agents/detect` adapters
   (`installHint` pattern shows where per-adapter data lives).
 
-## 08 — event bridge (new step)
+## 08 — vault service keys (new step; the phase-7 vault, fleet-wide)
+
+- The question this answers: how does a paste-once key reach an api-key
+  MCP server the CLIS consume, when writing a literal into their configs
+  is forbidden? Because WE launch the panes: profile env already flows
+  app → daemon in the spawn message (that's how profile lanes work) — the
+  app resolves vault slots and merges them into that SAME map, pre-spawn.
+  Daemon v3 untouched; the daemon never learns the vault exists.
+- Extract `usage-keys.ts`'s safeStorage mechanics into `src/main/vault.ts`
+  first — encrypt/decrypt/slot, write-only, refusal-when-unavailable —
+  with usage-keys as consumer one and USAGE/USAGESET as the zero-change
+  proof. The key store (this step) and the bridge's URL store (09) are
+  consumers two and three.
+- Security honesty, stated wherever the key is pasted: at rest this is
+  strictly better than a plaintext `export` in dotfiles; at runtime it is
+  IDENTICAL to any env var — the agent process can read it, so injection
+  can exfiltrate it; per-workspace server scoping is the mitigation. And
+  the boundary: vault keys resolve only in panes the Workspace launches —
+  a CLI run in a plain terminal needs the user's own env var (the env-ref
+  option stays, one toggle away).
+- This also closes a standing gap: profiles REFUSE secret literals
+  because profile env rests plaintext in the KV — the vault is now the
+  one sanctioned path for a secret to reach an agent.
+- Per-CLI env expansion/inheritance for MCP entries (`${VAR}` in config
+  vs process-env inheritance) is cliQuirks data, dev-verified per CLI
+  with a real install before any preset claims it (7/01).
+
+## 09 — event bridge (new step)
 
 - The bridge lives in the APP's main process, subscribed to the SAME
   attention/notify events the UI already receives — the daemon stays v3 and
   never learns about webhooks. Nothing listens: outbound POST only.
-- Vault: extract the safeStorage mechanics of `usage-keys.ts` into
-  `src/main/vault.ts` (encrypt/decrypt/slot, write-only discipline intact);
-  usage-keys and the bridge's URL store both consume it. Webhook URLs are
-  SECRETS by default (Slack/Make embed tokens in the path): stored as
-  ciphertext, shown masked as `host + /…` forever; env-ref alternative for
-  the dotfiles crowd.
+- Webhook URLs are SECRETS by default (Slack/Make embed tokens in the
+  path): stored as ciphertext via 08's `vault.ts`, shown masked as
+  `host + /…` forever; env-ref alternative for the dotfiles crowd.
 - Events v1: `needs-you`, `notify` (the CLI verb — the site's exact promise),
   `card-moved`, `review-changed` (09 emits). Payload
   `{v:1, event, ts, workspace, pane?, card?, note?}` — ids and the short
@@ -206,7 +231,7 @@ daemon protocol v3 frozen, smokes network-free.
   no-URL-in-trail/no-secret-in-logs greps, and that a dead receiver never
   stalls a notify.
 
-## 09 — GitHub adapter
+## 10 — GitHub adapter
 
 - **One GraphQL call per refresh** via `gh api graphql`: PR state +
   `reviewDecision` + `statusCheckRollup` in a single bounded request (REST
@@ -223,9 +248,9 @@ daemon protocol v3 frozen, smokes network-free.
 
 ## Execution order (solo, no parallel agents — house rule)
 
-01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → 10. The lanes in the README
-describe INDEPENDENCE (06/07/08 and 09 don't need 02–05), not simultaneous
-execution; if a lane blocks, skip forward and return.
+01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → 10 → 11. The lanes in the
+README describe INDEPENDENCE (06–09 and 10 don't need 02–05), not
+simultaneous execution; if a lane blocks, skip forward and return.
 
 ## Risks worth naming now
 
@@ -249,3 +274,8 @@ execution; if a lane blocks, skip forward and return.
 8. Preset verification is a moving target (the 7/08 statuspage lesson:
    endpoints drift, vendors redirect) — every preset row carries its
    verified date; docs/14's map is re-checkable, not eternal.
+9. Vault keys in pane env are agent-readable BY DESIGN (same as any env
+   var) — the copy must never imply otherwise, and no future step may
+   "optimize" by writing a decrypted value anywhere persistent. The
+   works-in-panes boundary (08) is the other honesty: env-refs remain
+   the answer for CLIs run outside the Workspace.

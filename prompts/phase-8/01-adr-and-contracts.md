@@ -10,8 +10,9 @@ then the contracts every lane builds on. Ships ZERO runtime; lanes fork.
    daemon v3; (c) write tools grant nothing `mogging send` doesn't; grants
    = catalog hygiene vs injection; the reviewer gate is THE boundary;
    `approve` NEVER a tool; (d) service adapters ride the user's own tool
-   sessions (`gh auth token`, in-memory, once); service keys = env-ref
-   pointers (0007 extended); app-held OAuth deferred to its own ADR;
+   sessions (`gh auth token`, in-memory, once); service keys = POINTERS
+   (0007 extended): env-refs or vault slots, never literals; app-held
+   OAuth deferred to its own ADR;
    (e) web sessions: consent-by-login only — Branch C, per-origin grants,
    every act trailed locally; system cookie stores = Branch B, reverses
    0002, own ADR first (`phase-10/FINDINGS.md`); (f) UI extensibility
@@ -43,8 +44,7 @@ then the contracts every lane builds on. Ships ZERO runtime; lanes fork.
    transport, urlOrCommand, authKind, envRefSlots, baseUrlOverride?,
    cliQuirks, grantCopy, verifiedAt); `ServiceLink`/`LinkStatus`/
    `ServiceAdapter` mirroring `@contracts/usage`. Boundaries: contracts
-   depend on nothing; greps keep `@backend`/`@ui` on
-   `@contracts/integrations` only.
+   depend on nothing; the boundary greps hold.
 
 ## Files
 - `docs/adr/0008-integrations-protocols-not-plugins.md` ·
