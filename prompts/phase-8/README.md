@@ -38,9 +38,11 @@ a `/goal`, < 4000 chars). Execute in order.
 > the user's own tools already hold (`gh auth token` — in memory, one request,
 > never persisted, logged, or shown). The MCP manager writes server ENTRIES
 > into CLI config files — surgical, backed-up, env-refs only, never a secret
-> literal, never touching auth/credential keys. The agent web profile's
-> sessions are created by the USER logging in inside the dock — the app never
-> reads any other credential store.
+> literal, never touching auth/credential keys. Third-party service KEYS are env-ref
+> POINTERS (ADR 0007 extended to services in 0008.d); app-held OAuth is
+> deferred behind its own ADR. The agent web profile's sessions are created
+> by the USER logging in inside the dock — the app never reads any other
+> credential store.
 
 > **Security stance (binding)**: the server's write tools grant NOTHING an
 > in-pane `mogging send` doesn't already grant — the opt-in is tool-CATALOG
@@ -58,8 +60,9 @@ a `/goal`, < 4000 chars). Execute in order.
 | 03 | `03-mcp-write-tools.md` | Control-plane write tools behind the workspace grant (default OFF), pane-scoped identity, notify receipts; MCPWRITE smoke green |
 | 04 | `04-agent-web-profile.md` | The agent browser profile: sign-in-here affordance, per-origin action grants + blocklist, clear-logins, origin-change alerts; AGENTWEB smoke green on a localhost fixture login site |
 | 05 | `05-mcp-manager.md` | Settings § Integrations: register any server across claude/codex/gemini config dialects — surgical, backed-up, diff-previewed; the house server is the built-in first row; MCPMGR smoke green on fixture homes |
-| 06 | `06-github-adapter.md` | Board cards link to GitHub PRs/issues with live status chips riding `gh` auth; INTEG smoke green on the FAKE adapter |
-| 07 | `07-integrations-milestone.md` | INTEGMILESTONE end-to-end (all four directions composed) + `docs/14-integrations.md` + books; full sweep green on all four environments |
+| 06 | `06-integrations-catalog.md` | The curated Integrations Catalog: ~20 official-MCP presets as data (research-sourced), Connect + per-CLI Authorize orchestration (status only, never tokens), capability table; MCPCAT smoke green on fixture homes |
+| 07 | `07-github-adapter.md` | Board cards link to GitHub PRs/issues with live status chips riding `gh` auth; INTEG smoke green on the FAKE adapter |
+| 08 | `08-integrations-milestone.md` | INTEGMILESTONE end-to-end (all four directions composed) + `docs/14-integrations.md` + books; full sweep green on all four environments |
 
 ## Overall Definition of Done
 - Any hosted CLI, registered by the app in one click, can list panes, read a
@@ -72,7 +75,10 @@ a `/goal`, < 4000 chars). Execute in order.
   receipted; an ungranted origin refuses ACT verbs and says why.
 - A board card linked to a GitHub PR shows live state without the app holding
   a single credential.
-- The sweep — with all six new gates — is green on local Windows and all
+- A third-party preset (Sentry) reaches every hosted CLI in one click +
+  one browser consent per CLI — the app registering and orchestrating,
+  holding nothing.
+- The sweep — with all seven new gates — is green on local Windows and all
   three CI OSes; both perf budgets unchanged.
 
 ## Global checks (every step)
@@ -103,7 +109,9 @@ a `/goal`, < 4000 chars). Execute in order.
 
 ## Parallelization
 01 is the root. After it: Lane A (02 → 03 → 04, the server + the web
-profile), Lane B (05, the manager), Lane C (06, the service seam) — three
-lanes, zero shared files beyond contracts. 07 needs all lanes. Docs pages
+profile), Lane B (05 → 06, the manager + catalog), Lane C (07, the service
+seam) — three lanes, zero shared files beyond contracts. 08 needs all
+lanes. The ecosystem research behind the catalog (per-tool matrix, CLI
+OAuth capabilities, sources): `docs/research/2026-07-third-party-integrations.md`. Docs pages
 ladder: 12 usage (phase 7) · 13 browser (shipped) · **14 integrations (this
 pack)** · 15 loops (phase 9).

@@ -17,7 +17,7 @@ current phase's gate is green (Windows + macOS). Roadmap: `docs/02-mvp-and-roadm
 | 5 | `phase-5/` | done | UI/UX excellence: token system + workspace identity, icon family, window chrome, full-app views (receipts: `phase-5/REPORT.md`) |
 | 6 | `phase-6/` | done | Product-ready: three-platform 30-gate sweeps, profile persistence, browser dock + agent control via MCP, first-run + updates, v0.4.0 shipped |
 | 7 | `phase-7/` | authored | Usage meters: adapter seam + ADR 0007, pace engine, titlebar gauge + popover, plans × profiles |
-| 8 | `phase-8/` | authored | Integrations: ADR 0008 (protocols, not plugins), control plane joins the shipped MCP server, the agent web profile (phase-10 Comet resolution, Branch C), MCP manager across CLI configs, GitHub adapter |
+| 8 | `phase-8/` | authored | Integrations: ADR 0008 (protocols, not plugins), control plane joins the shipped MCP server, the agent web profile (phase-10 Comet resolution, Branch C), MCP manager + curated catalog of official third-party MCP servers (research: `docs/research/`), GitHub adapter |
 | 9 | `phase-9/` | authored | Loops: standing harnesses — triggers, fresh-worktree iterations, verify gates, budgets, Sentry watcher, staged playbook learning (ADR 0009) |
 | 10 | `phase-10/` | resolved → 8/04 | Agents on real logged-in sessions: Branch A/C implemented as phase-8/04 (agent web profile); Branch B (system-cookie inheritance) stays PARKED behind its own future ADR — `FINDINGS.md` is the map |
 
