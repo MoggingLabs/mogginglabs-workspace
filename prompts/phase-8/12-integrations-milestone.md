@@ -1,6 +1,6 @@
 Freeze the pack: one milestone proving all FIVE directions COMPOSE, the
 docs page making the surface teachable — with the map keeping the
-WEBSITE honest — and the books carrying the numbers.
+WEBSITE honest — and the books carrying numbers.
 
 ## Steps
 1. **INTEGMILESTONE smoke** (`MOGGING_INTEGMILESTONE`, env-gated) — the
@@ -37,12 +37,12 @@ WEBSITE honest — and the books carrying the numbers.
    `prompts/README.md` row; docs/06 gains "the MCP server speaks these
    verbs too"; sweep counts COUNTED from qa-smokes.sh, live docs only.
 4. **Four-environment certification** (7/13): ONE dispatch, full uncut
-   sweeps — all ten new gates (MCP, MCPWRITE, AGENTWEB, WEBTRAIL, MCPMGR,
-   MCPCAT, VAULTKEYS, EVBRIDGE, INTEG, INTEGMILESTONE) green on local
-   Windows AND the three CI OSes. Per-OS numbers + run id in the README;
-   platform finds get root causes; REPORT.md if earned.
-5. **Pack freeze**: DONE rows with commit ranges + run ids; verify the
-   phase-10 pointer survived.
+   sweeps — all eleven new gates (MCP, MCPWRITE, AGENTWEB, WEBTRAIL,
+   MCPMGR, MCPCAT, VAULTKEYS, EVBRIDGE, MCPSTATUS, INTEG, INTEGMILESTONE)
+   green on local Windows AND the three CI OSes. Per-OS numbers + run id
+   in the README; platform finds get root causes; REPORT.md if earned.
+5. **Pack freeze**: DONE rows with commit ranges + run ids; the
+   phase-10 pointer verified.
 
 ## Files
 - integmilestone-smoke.ts · qa-smokes.sh · `docs/14` · `README.md` ·
@@ -59,8 +59,8 @@ WEBSITE honest — and the books carrying the numbers.
 
 ## Checks that must be green
 - `npm run typecheck` → 0; build ok; boundaries clean.
-- Full sweep on all four environments, all ten gates; nightly crons left
-  enabled.
+- Full sweep on all four environments, all eleven gates; nightly crons
+  left enabled.
 
 ## Guardrails
 - The milestone asserts EXISTING behavior composed — new product code

@@ -260,7 +260,34 @@ daemon protocol v3 frozen, smokes network-free.
   no-URL-in-trail/no-secret-in-logs greps, and that a dead receiver never
   stalls a notify.
 
-## 10 — GitHub adapter
+## 10 — MCP connection status (new step; know, don't assume)
+
+- The ONLY honest "connected" signal for a third-party server is the
+  consuming CLI's own verdict: `claude mcp list` prints per-server
+  connection state; Codex and Gemini have list equivalents — each CLI's
+  invocation + parse is CAPABILITY-TABLE data, dev-verified with a real
+  install (7/01), never guessed. We add no probe of vendor endpoints
+  (that would be the app talking to servers it must never authenticate
+  to) and never read a CLI's token store.
+- The registry composes three cheap sources: our config presence + drift
+  hash (06's scanner), the CLI list output (execFile, headless, timeout,
+  serialized per CLI — never concurrent spawns of the same CLI), and
+  vault/env slot presence (08). Poller = the usage seam's manners:
+  jitter, per-CLI backoff, hidden-pause, push-on-change.
+- **Restart-needed** is a timestamp comparison, entirely ours: pane
+  spawn time (the daemon already knows it) vs the last managed-config
+  write per CLI (the manager records it at write time). No daemon
+  change — the app holds both sides.
+- The pane chip is paint-only state (the usage-gauge discipline):
+  count + worst-state class, attention treatment on needs-auth/error;
+  the relaunch path for "restart to pick up" is the existing pane
+  restart verb.
+- needs-auth detection: the CLI's list output marks auth failures
+  (dev-verify the exact wording per CLI, record verbatim in the books) —
+  Re-authorize reuses 07's managed-PTY flow; the button is the ONLY
+  path (no auto-spawned browser, ever).
+
+## 11 — GitHub adapter
 
 - **One GraphQL call per refresh** via `gh api graphql`: PR state +
   `reviewDecision` + `statusCheckRollup` in a single bounded request (REST
@@ -277,8 +304,8 @@ daemon protocol v3 frozen, smokes network-free.
 
 ## Execution order (solo, no parallel agents — house rule)
 
-01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → 10 → 11. The lanes in the
-README describe INDEPENDENCE (06–09 and 10 don't need 02–05), not
+01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → 10 → 11 → 12. The lanes in
+the README describe INDEPENDENCE (06–10 and 11 don't need 02–05), not
 simultaneous execution; if a lane blocks, skip forward and return.
 
 ## Risks worth naming now

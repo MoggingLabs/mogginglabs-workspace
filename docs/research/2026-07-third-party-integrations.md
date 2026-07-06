@@ -11,8 +11,10 @@
 > Google Workspace lead per the site roster), paste-once vault keys
 > materialized into pane envs (the phase-7 0007.a grammar) is **8/08**,
 > the "notify → webhook" outbound direction (§4's n8n/Make rows) is
-> **8/09 event bridge**, the GitHub adapter **8/10**, the milestone
-> **8/11**; the docs page is **`docs/14-integrations.md`**. §7.3's
+> **8/09 event bridge**, the live connection registry (per-server×CLI
+> state from each CLI's own list output, pane chips, re-authorize) is
+> **8/10**, the GitHub adapter **8/11**, the milestone **8/12**; the
+> docs page is **`docs/14-integrations.md`**. §7.3's
 > "ADR 0009 — service keys as pointers" is folded into **ADR 0008 stance
 > (d)** (env-refs OR vault slots); outbound webhooks got stance **(g)**.
 > The 2026-07-05 text below is preserved as written.

@@ -89,8 +89,9 @@ as a `/goal`, < 4000 chars). Execute in order.
 | 07 | `07-integrations-catalog.md` | The Integrations Catalog: research-verified presets (n8n + Google Workspace FIRST — founder priority) PLUS the open end — registry search, custom entries, preset import/export; Connect + per-CLI Authorize orchestration (status only, never tokens); the site-roster map begins; MCPCAT smoke green on fixture homes |
 | 08 | `08-vault-service-keys.md` | The phase-7 vault, fleet-wide: paste-once service keys (OS-vault ciphertext, write-only) materialized into pane ENVIRONMENTS at launch — api-key MCP servers without dotfile editing, no secret literal ever on disk; `vault.ts` extracted from usage-keys; per-CLI env semantics dev-verified; VAULTKEYS smoke green |
 | 09 | `09-event-bridge.md` | The outbound event bridge: pane/board events → user-configured webhooks (n8n · Make · Zapier · Slack incoming) — "a notify call to any webhook"; vault-held URLs, versioned payload, polite delivery; EVBRIDGE smoke green on a localhost fixture receiver |
-| 10 | `10-github-adapter.md` | Board cards link to GitHub PRs/issues with live status chips riding `gh` auth; review-state changes land back on the pane that wrote it; INTEG smoke green on the FAKE adapter |
-| 11 | `11-integrations-milestone.md` | INTEGMILESTONE end-to-end (all five directions composed) + `docs/14-integrations.md` incl. the site-honesty map + books; full sweep green on all four environments |
+| 10 | `10-mcp-connection-status.md` | The app KNOWS: a live connection registry per (server × CLI) — registered/connected/needs-auth/error/drift from each CLI's OWN status output — pushed to a pane-header MCP chip, restart-to-pick-up nudges, "stays signed in for future sessions" copy, one-click Re-authorize; MCPSTATUS smoke green on CLI shims |
+| 11 | `11-github-adapter.md` | Board cards link to GitHub PRs/issues with live status chips riding `gh` auth; review-state changes land back on the pane that wrote it; INTEG smoke green on the FAKE adapter |
+| 12 | `12-integrations-milestone.md` | INTEGMILESTONE end-to-end (all five directions composed) + `docs/14-integrations.md` incl. the site-honesty map + books; full sweep green on all four environments |
 
 ## Overall Definition of Done
 - Any hosted CLI, registered by the app in one click, can list panes, read a
@@ -121,8 +122,13 @@ as a `/goal`, < 4000 chars). Execute in order.
   ciphertext at rest, materialized only into pane environments, no
   plaintext on disk anywhere; a vault-less Linux box refuses and offers
   the env-ref instead.
-- The sweep — with all ten new gates — is green on local Windows and all
-  three CI OSes; both perf budgets unchanged.
+- The app KNOWS its connections: every (server × CLI) shows a live state
+  from the CLI's own output; a pane opened before a Connect gets the
+  restart nudge; an expired token becomes ONE Re-authorize click; the UI
+  says plainly that logins persist for future sessions — nobody logs in
+  twice for the same tool on the same CLI.
+- The sweep — with all eleven new gates — is green on local Windows and
+  all three CI OSes; both perf budgets unchanged.
 
 ## Global checks (every step)
 - `npm run typecheck` → 0; `npm run build` → ok; boundary greps clean.
@@ -166,10 +172,10 @@ as a `/goal`, < 4000 chars). Execute in order.
 
 ## Parallelization
 01 is the root. After it: Lane A (02 → 03 → 04 → 05, the server + the web
-profile + the trail), Lane B (06 → 07 → 08 → 09, the manager + catalog +
-vault keys + bridge),
-Lane C (10, the service seam) — three lanes, zero shared files beyond
-contracts. 11 needs all lanes. Solo execution runs 01→11 in order (house
+profile + the trail), Lane B (06 → 07 → 08 → 09 → 10, the manager +
+catalog + vault keys + bridge + connection status),
+Lane C (11, the service seam) — three lanes, zero shared files beyond
+contracts. 12 needs all lanes. Solo execution runs 01→12 in order (house
 rule: no parallel agents); the lanes describe independence, not simultaneity.
 The ecosystem research behind the catalog (per-tool matrix, CLI OAuth
 capabilities, sources): `docs/research/2026-07-third-party-integrations.md`.
