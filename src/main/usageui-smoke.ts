@@ -23,6 +23,12 @@ import { getSettingsStore } from './app-settings'
 //      a re-armed warn threshold toasts the FORMATTER line verbatim with the
 //      failover suggestion, the suggestion click and tile-Enter both drive
 //      the ONE Phase-4 pointer flip, and the one-line hint appears
+//   8. 7/10 display: a two-provider fixture with DISTINCT severity/usage
+//      winners — merged mirrors the severity winner, auto the usage winner,
+//      pinned honors the pin (all KV-persisted); the header switcher +
+//      sticky top-alert exist; content toggles flip CLASSES (structure
+//      untouched); the reset style restyles every reset line through the
+//      ONE formatter; density + manual order apply
 export function runUsageUiSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 90000) // safety net
   const wc = win.webContents
@@ -51,14 +57,15 @@ export function runUsageUiSmoke(win: BrowserWindow): void {
       }
       await ES(`window.__mogging.usage.close()`)
 
-      // 1 ── gauge presence + fills (active tile = Fake Pro normal: 42 / 31)
+      // 1 ── gauge presence + fills. Default mode is MERGED (7/10): the gauge
+      // mirrors the highest-severity plan — exhausted, 100/100.
       const gaugeOk = await ES<boolean>(
         `!!document.querySelector('.titlebar-right .usage-gauge') && document.querySelector('.usage-gauge').getAttribute('aria-expanded') === 'false'`
       )
       const fills = await ES<string>(
         `[...document.querySelectorAll('.usage-gauge .usage-fill')].map(f => f.style.width).join('|')`
       )
-      const fillsOk = fills === '42%|31%'
+      const fillsOk = fills === '100%|100%'
 
       // 2 ── the CLICK path opens the popover (aria-expanded flips)
       await ES(`document.querySelector('.usage-gauge').click()`)
@@ -236,9 +243,113 @@ export function runUsageUiSmoke(win: BrowserWindow): void {
       kv?.removeProfile('fresh-reset')
       const operationalOk = orderOk && defaultActiveOk && toastCopyOk && activeMarkOk && switchedOk && activeFollowOk && hintOk && enterOk
 
+      // 8 ── 7/10 display. A two-provider world with DISTINCT winners:
+      //      alpha 70% but RUNS-OUT hard (severity winner);
+      //      zeta 96% but ~at reset, not runs-out (usage winner).
+      const ddir = mkdtempSync(join(tmpdir(), 'mog-display-'))
+      const dfx = join(ddir, 'two.json')
+      writeFileSync(
+        dfx,
+        JSON.stringify([
+          { providerId: 'alpha', profileId: 'default', planLabel: 'Alpha Pro', windows: [{ label: 'Session (5h)', usedPct: 70, resetsAt: new Date(Date.now() + 4 * 3600_000).toISOString(), windowMs: 5 * 3600_000 }], fetchedAt: Date.now(), health: 'fresh' },
+          { providerId: 'zeta', profileId: 'default', planLabel: 'Zeta Pro', windows: [{ label: 'Session (5h)', usedPct: 96, resetsAt: new Date(Date.now() + 3 * 60_000).toISOString(), windowMs: 5 * 3600_000 }], fetchedAt: Date.now(), health: 'fresh' }
+        ])
+      )
+      process.env.MOGGING_USAGE_FIXTURE = dfx
+      getUsageService()?.refresh()
+      await ES(`window.__mogging.usage.open()`)
+      tries = 0
+      while ((await ES<number>(`document.querySelectorAll('.usage-tile').length`)) !== 2 && tries++ < 40) await sleep(200)
+      // merged (default): the severity winner drives the gauge
+      let gaugeProv = ''
+      tries = 0
+      while (gaugeProv !== 'alpha' && tries++ < 40) {
+        await sleep(150)
+        gaugeProv = await ES<string>(`document.querySelector('.usage-gauge').dataset.provider ?? ''`)
+      }
+      const mergedOk = gaugeProv === 'alpha'
+      // the header: switcher options + the sticky worst-plan line
+      const switcherOk = await ES<boolean>(
+        `(() => { const s = document.querySelector('.usage-header .usage-switcher'); if (!s) return false; const vals = [...s.options].map((o) => o.value); return s.value === 'merged' && vals.includes('auto') && vals.includes('pin:alpha') && vals.includes('pin:zeta') })()`
+      )
+      const topAlertOk = await ES<boolean>(
+        `(document.querySelector('.usage-header .usage-top-alert')?.textContent ?? '').startsWith('Alpha Pro — ')`
+      )
+      // auto: the usage winner — and the mode persists in the KV
+      await ES(`(() => { const s = document.querySelector('.usage-switcher'); s.value = 'auto'; s.dispatchEvent(new Event('change')) })()`)
+      tries = 0
+      while (gaugeProv !== 'zeta' && tries++ < 40) {
+        await sleep(150)
+        gaugeProv = await ES<string>(`document.querySelector('.usage-gauge').dataset.provider ?? ''`)
+      }
+      const autoOk = gaugeProv === 'zeta' && kv?.getSetting('usage.display.mode') === 'auto'
+      // pinned honors the pin
+      await ES(`(() => { const s = document.querySelector('.usage-switcher'); s.value = 'pin:alpha'; s.dispatchEvent(new Event('change')) })()`)
+      tries = 0
+      while (gaugeProv !== 'alpha' && tries++ < 40) {
+        await sleep(150)
+        gaugeProv = await ES<string>(`document.querySelector('.usage-gauge').dataset.provider ?? ''`)
+      }
+      const pinnedOk = gaugeProv === 'alpha' && kv?.getSetting('usage.display.mode') === 'pinned' && kv?.getSetting('usage.display.pin') === 'alpha'
+      // content toggles change CLASSES, not structure: tracks stay in the DOM
+      await ES(`window.bridge.invoke('usage:displaySet', { showPct: true, showGlyph: true, showLabel: true, showBars: false })`)
+      let contentOk = false
+      tries = 0
+      while (!contentOk && tries++ < 40) {
+        await sleep(150)
+        contentOk = await ES<boolean>(
+          `(() => { const g = document.querySelector('.usage-gauge'); return g.classList.contains('show-pct') && g.classList.contains('show-glyph') && g.classList.contains('show-label') && g.classList.contains('hide-bars') && g.querySelectorAll('.usage-track').length === 2 && /%$/.test(g.querySelector('.usage-pct-num').textContent) && g.querySelector('.usage-glyph').textContent === 'A' })()`
+        )
+      }
+      await ES(`window.bridge.invoke('usage:displaySet', { showPct: false, showGlyph: false, showLabel: false, showBars: true })`)
+      let contentRestoreOk = false
+      tries = 0
+      while (!contentRestoreOk && tries++ < 40) {
+        await sleep(150)
+        contentRestoreOk = await ES<boolean>(
+          `(() => { const g = document.querySelector('.usage-gauge'); return !g.classList.contains('show-pct') && !g.classList.contains('show-glyph') && !g.classList.contains('show-label') && !g.classList.contains('hide-bars') })()`
+        )
+      }
+      // reset style flips EVERY reset line through the ONE formatter
+      await ES(`window.bridge.invoke('usage:displaySet', { resetStyle: 'absolute' })`)
+      let resetAbsOk = false
+      tries = 0
+      while (!resetAbsOk && tries++ < 40) {
+        await sleep(150)
+        resetAbsOk = await ES<boolean>(
+          `(() => { const t = [...document.querySelectorAll('.usage-reset')].map((r) => r.textContent); return t.length >= 2 && t.every((x) => x.startsWith('resets ') && !x.startsWith('resets in ')) })()`
+        )
+      }
+      await ES(`window.bridge.invoke('usage:displaySet', { resetStyle: 'countdown' })`)
+      let resetBackOk = false
+      tries = 0
+      while (!resetBackOk && tries++ < 40) {
+        await sleep(150)
+        resetBackOk = await ES<boolean>(
+          `(() => { const t = [...document.querySelectorAll('.usage-reset')].map((r) => r.textContent); return t.length >= 2 && t.every((x) => x.startsWith('resets in ')) })()`
+        )
+      }
+      // density + manual order (the top-alert keeps the worst plan surfaced)
+      await ES(`window.bridge.invoke('usage:displaySet', { density: 'compact', order: 'manual', pinOrder: ['zeta', 'alpha'] })`)
+      let orderManualOk = false
+      tries = 0
+      while (!orderManualOk && tries++ < 40) {
+        await sleep(150)
+        orderManualOk = await ES<boolean>(
+          `(() => { const pop = document.querySelector('.usage-popover'); return pop.classList.contains('is-compact') && document.querySelector('.usage-group-label').textContent === 'zeta' && !!document.querySelector('.usage-top-alert') })()`
+        )
+      }
+      // restore the minimal defaults for anything after us
+      await ES(`window.bridge.invoke('usage:displaySet', { mode: 'merged', density: 'roomy', order: 'severity', pinOrder: [] })`)
+      await ES(`window.__mogging.usage.close()`)
+      delete process.env.MOGGING_USAGE_FIXTURE
+      getUsageService()?.refresh()
+      const displayOk =
+        mergedOk && switcherOk && topAlertOk && autoOk && pinnedOk && contentOk && contentRestoreOk && resetAbsOk && resetBackOk && orderManualOk
+
       const pass =
-        gaugeOk && fillsOk && openFast && expandedOk && tileCount === 11 && groupCount === 1 && verdictsOk && countdownOk && escClosed && awayClosed && warnOk && staleOk && gearOk && operationalOk
-      result = { pass, gaugeOk, fillsOk, openMs, opens, openBudget, openFast, expandedOk, tileCount, groupCount, verdictsOk, countdownOk, escClosed, awayClosed, warnOk, staleOk, gearOk, operationalOk, orderOk, defaultActiveOk, suggestBody, exPaceText, toastCopyOk, activeMarkOk, switchedOk, activeFollowOk, hintOk, enterOk }
+        gaugeOk && fillsOk && openFast && expandedOk && tileCount === 11 && groupCount === 1 && verdictsOk && countdownOk && escClosed && awayClosed && warnOk && staleOk && gearOk && operationalOk && displayOk
+      result = { pass, gaugeOk, fillsOk, openMs, opens, openBudget, openFast, expandedOk, tileCount, groupCount, verdictsOk, countdownOk, escClosed, awayClosed, warnOk, staleOk, gearOk, operationalOk, orderOk, defaultActiveOk, suggestBody, exPaceText, toastCopyOk, activeMarkOk, switchedOk, activeFollowOk, hintOk, enterOk, displayOk, mergedOk, switcherOk, topAlertOk, autoOk, pinnedOk, contentOk, contentRestoreOk, resetAbsOk, resetBackOk, orderManualOk }
     } catch (e) {
       result = { pass: false, error: e instanceof Error ? e.message : String(e) }
     }

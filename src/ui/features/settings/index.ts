@@ -11,6 +11,7 @@ import { activeView, goBack, onViewChange, setActiveView } from '../../core/shel
 import { setTerminalFontSize, terminalFontSize, TERMINAL_FONT_SIZES } from '../../core/terminal/font-port'
 import { TEMPLATE_COUNTS } from '../layout'
 import { createProfilesHostsSection } from './profiles-hosts'
+import { createUsageDisplayControls } from './usage'
 
 const DEFAULT_LAYOUT_KEY = 'mogging.defaultPaneCount'
 
@@ -282,6 +283,11 @@ export const settingsFeature: UiFeature = {
             'Alerts',
             usageAlerts,
             'Session-window shoulder-taps: a quiet toast at the first threshold, a warning with the pace verdict at the second. Each fires once per window and re-arms at reset. Confetti is optional — quiet is the default.'
+          ),
+          row(
+            'Display',
+            createUsageDisplayControls(),
+            'What the titlebar gauge mirrors (merged severity / auto highest-usage / a pinned provider), what the icon shows, how reset times render, and the popover order and density. All paint-only.'
           )
         ])
       },

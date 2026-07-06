@@ -18,6 +18,9 @@ export interface UsageWindow {
   windowMs?: number
   /** Provider's own wording for this window, when it helps ("resets Tue 14:00"). */
   raw?: string
+  /** VIEW-attached (7/10): the reset line pre-formatted by the ONE backend
+   *  reset formatter in the user's chosen style. Adapters never set this. */
+  resetText?: string
 }
 
 /** Usage for one plan on one (provider, profile) pair — the tile unit. */
@@ -53,6 +56,50 @@ export interface UsageAdapter {
   /** Fetch + normalize. May return several plans. Throws only Error(reason) —
    *  the seam maps it to health 'error'/'stale'; a token NEVER rides an error. */
   fetch(home: string, profileId: string, signal: AbortSignal): Promise<PlanUsage[]>
+}
+
+// ── Display options (Phase-7/10): with ~57 providers possible, ONE gauge
+//    can't show them all — the mode decides WHICH plan the titlebar mirrors,
+//    content toggles decide WHAT the icon shows, and the reset style feeds
+//    the ONE reset formatter. All paint-only; persisted in the KV.
+
+/** Which plan the single titlebar gauge mirrors. */
+export type GaugeMode = 'merged' | 'pinned' | 'auto'
+/** How a reset moment renders, everywhere one renders. */
+export type ResetStyle = 'countdown' | 'absolute' | 'relative'
+export type PopoverDensity = 'roomy' | 'compact'
+export type PopoverOrder = 'severity' | 'manual'
+
+export interface UsageDisplayConfig {
+  /** merged = highest severity · pinned = the chosen provider · auto =
+   *  highest usage (CodexBar's auto-select). */
+  mode: GaugeMode
+  /** Provider id the gauge pins to when mode === 'pinned'. */
+  pin?: string
+  showBars: boolean
+  showPct: boolean
+  showGlyph: boolean
+  showLabel: boolean
+  resetStyle: ResetStyle
+  density: PopoverDensity
+  /** severity (09's rule) or the manual pinOrder; the highest-severity plan
+   *  surfaces in the popover header regardless. */
+  order: PopoverOrder
+  pinOrder: string[]
+}
+
+/** The glance must survive a user who never opens Settings: two bars + the
+ *  dot badge, severity-merged, countdown resets, roomy. */
+export const USAGE_DISPLAY_DEFAULTS: UsageDisplayConfig = {
+  mode: 'merged',
+  showBars: true,
+  showPct: false,
+  showGlyph: false,
+  showLabel: false,
+  resetStyle: 'countdown',
+  density: 'roomy',
+  order: 'severity',
+  pinOrder: []
 }
 
 // ── Threshold alerts (Phase-7/09): the meter taps you on the shoulder through

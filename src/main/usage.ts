@@ -1,6 +1,6 @@
 import { app, ipcMain, type BrowserWindow } from 'electron'
-import { UsageChannels, USAGE_CADENCES, USAGE_PROVIDERS, USAGE_ALERT_DEFAULTS, findProvider, type PlanUsage, type UsageCadence } from '@contracts'
-import type { PlanUsageView, PaceView, UsageConfig, UsageConfigPatch, CostScan, UsageAlertConfig } from '@contracts'
+import { UsageChannels, USAGE_CADENCES, USAGE_PROVIDERS, USAGE_ALERT_DEFAULTS, USAGE_DISPLAY_DEFAULTS, findProvider, type PlanUsage, type UsageCadence } from '@contracts'
+import type { PlanUsageView, PaceView, UsageConfig, UsageConfigPatch, CostScan, UsageAlertConfig, UsageDisplayConfig } from '@contracts'
 import {
   createUsageService,
   fakeAdapter,
@@ -9,6 +9,7 @@ import {
   computePace,
   formatVerdict,
   formatPaceDelta,
+  formatReset,
   PACE_SEVERITY,
   resolveHome,
   scanCost,
@@ -152,12 +153,54 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
     if (st?.state !== 'outage') return p
     return { ...p, reason: `provider outage — ${st.note ?? 'their status page reports an incident'}` }
   }
-  const enrich = (plans: PlanUsage[]): PlanUsageView[] =>
-    plans.map((p) => {
+  // ── 7/10 display prefs: which plan the gauge mirrors, what the icon
+  // shows, how resets render. KV-backed; the renderer paints, never decides.
+  const displayCfg = (): UsageDisplayConfig => {
+    const kv = getSettingsStore()
+    const g = (k: string): string | null => kv?.getSetting(k) ?? null
+    const bool = (k: string, dflt: boolean): boolean => {
+      const v = g(k)
+      return v === null ? dflt : v === '1'
+    }
+    const mode = g('usage.display.mode')
+    const resetStyle = g('usage.display.reset')
+    let pinOrder: string[] = []
+    try {
+      const arr = JSON.parse(g('usage.display.pinorder') ?? '[]') as unknown
+      if (Array.isArray(arr)) pinOrder = arr.filter((x): x is string => typeof x === 'string').slice(0, 64)
+    } catch {
+      /* default */
+    }
+    return {
+      mode: mode === 'pinned' || mode === 'auto' ? mode : USAGE_DISPLAY_DEFAULTS.mode,
+      pin: g('usage.display.pin') ?? undefined,
+      showBars: bool('usage.display.bars', USAGE_DISPLAY_DEFAULTS.showBars),
+      showPct: bool('usage.display.pct', USAGE_DISPLAY_DEFAULTS.showPct),
+      showGlyph: bool('usage.display.glyph', USAGE_DISPLAY_DEFAULTS.showGlyph),
+      showLabel: bool('usage.display.label', USAGE_DISPLAY_DEFAULTS.showLabel),
+      resetStyle: resetStyle === 'absolute' || resetStyle === 'relative' ? resetStyle : USAGE_DISPLAY_DEFAULTS.resetStyle,
+      density: g('usage.display.density') === 'compact' ? 'compact' : USAGE_DISPLAY_DEFAULTS.density,
+      order: g('usage.display.order') === 'manual' ? 'manual' : USAGE_DISPLAY_DEFAULTS.order,
+      pinOrder
+    }
+  }
+
+  const enrich = (plans: PlanUsage[]): PlanUsageView[] => {
+    // Every reset line comes from THE reset formatter, in the ONE chosen style.
+    const style = displayCfg().resetStyle
+    const tz = -new Date().getTimezoneOffset()
+    return plans.map((p) => {
       const relabeled = withOutage(p)
       const view = toView(relabeled)
-      return relabeled !== p && view.pace ? { ...view, pace: undefined } : view
+      const styled: PlanUsageView = {
+        ...(relabeled !== p && view.pace ? { ...view, pace: undefined } : view),
+        windows: view.windows.map((w) =>
+          w.resetsAt ? { ...w, resetText: formatReset(w.resetsAt, style, Date.now(), tz) ?? undefined } : w
+        )
+      }
+      return styled
     })
+  }
 
   // ── 7/09 threshold alerts: evaluated on every poller push (new samples
   // only — a re-enrich for status is not a new sample). Copy composed in the
@@ -206,6 +249,31 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
   ipcMain.handle(UsageChannels.list, () => enrich(service?.list() ?? []))
   ipcMain.handle(UsageChannels.refresh, () => service?.refresh())
   ipcMain.handle(UsageChannels.status, () => statusService?.list() ?? [])
+  // 7/10 display prefs: validate, persist, push both the config and the
+  // re-styled views (resetText follows the style) — paint-only downstream.
+  ipcMain.handle(UsageChannels.displayGet, (): UsageDisplayConfig => displayCfg())
+  ipcMain.handle(UsageChannels.displaySet, (_e, raw: unknown) => {
+    const p = raw as Partial<UsageDisplayConfig> | null
+    const kv = getSettingsStore()
+    if (!p || !kv) return
+    const ID = /^[\w.-]{1,64}$/
+    if (p.mode === 'merged' || p.mode === 'pinned' || p.mode === 'auto') kv.setSetting('usage.display.mode', p.mode)
+    if (typeof p.pin === 'string' && ID.test(p.pin)) kv.setSetting('usage.display.pin', p.pin)
+    if (typeof p.showBars === 'boolean') kv.setSetting('usage.display.bars', p.showBars ? '1' : '0')
+    if (typeof p.showPct === 'boolean') kv.setSetting('usage.display.pct', p.showPct ? '1' : '0')
+    if (typeof p.showGlyph === 'boolean') kv.setSetting('usage.display.glyph', p.showGlyph ? '1' : '0')
+    if (typeof p.showLabel === 'boolean') kv.setSetting('usage.display.label', p.showLabel ? '1' : '0')
+    if (p.resetStyle === 'countdown' || p.resetStyle === 'absolute' || p.resetStyle === 'relative')
+      kv.setSetting('usage.display.reset', p.resetStyle)
+    if (p.density === 'roomy' || p.density === 'compact') kv.setSetting('usage.display.density', p.density)
+    if (p.order === 'severity' || p.order === 'manual') kv.setSetting('usage.display.order', p.order)
+    if (Array.isArray(p.pinOrder))
+      kv.setSetting('usage.display.pinorder', JSON.stringify(p.pinOrder.filter((x): x is string => typeof x === 'string' && ID.test(x)).slice(0, 64)))
+    const win = getWin()
+    win?.webContents.send(UsageChannels.displayChanged, displayCfg())
+    win?.webContents.send(UsageChannels.changed, enrich(service?.list() ?? []))
+  })
+
   // 7/09 alert config: two shoulder-tap pcts + the confetti opt-in.
   ipcMain.handle(UsageChannels.alertCfgGet, (): UsageAlertConfig => alertCfg())
   ipcMain.handle(UsageChannels.alertCfgSet, (_e, raw: unknown) => {

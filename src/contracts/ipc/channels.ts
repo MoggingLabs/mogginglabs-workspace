@@ -156,7 +156,12 @@ export const UsageChannels = {
   // verdict line rides verbatim); single-fire state persisted app-side.
   alert: 'usage:alert', // main -> renderer: UsageAlert (house toast; never OS spam)
   alertCfgGet: 'usage:alertCfgGet', // -> UsageAlertConfig (quiet/warn pcts + confetti opt-in)
-  alertCfgSet: 'usage:alertCfgSet' // (partial UsageAlertConfig) -> void
+  alertCfgSet: 'usage:alertCfgSet', // (partial UsageAlertConfig) -> void
+  // 7/10 display options: which plan the gauge mirrors, what the icon shows,
+  // how resets render. Paint-only on the renderer; persisted in the KV.
+  displayGet: 'usage:displayGet', // -> UsageDisplayConfig
+  displaySet: 'usage:displaySet', // (partial UsageDisplayConfig) -> void (persists + re-pushes views)
+  displayChanged: 'usage:displayChanged' // main -> renderer: UsageDisplayConfig (pushed on change)
 } as const
 
 export const AllChannels: readonly string[] = [

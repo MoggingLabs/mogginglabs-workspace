@@ -1,4 +1,4 @@
-import type { PaceReport, PaceVerdict, UsageWindow } from '@contracts'
+import type { PaceReport, PaceVerdict, ResetStyle, UsageWindow } from '@contracts'
 
 // The pace engine (Phase-7/02). PURE is the contract: zero I/O, zero
 // Date.now(), zero config reads — the clock, the window length, the
@@ -168,6 +168,44 @@ export function formatVerdict(report: PaceReport, windowLabel: string, tzOffsetM
     case 'on-pace':
       return `On pace for the ${windowLabel} window`
   }
+}
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const
+
+/** THE reset formatter (7/10): every surface that renders a reset moment —
+ *  popover rows, the Usage tab, the CLI — renders THIS string in the user's
+ *  ONE chosen style. Pure like the rest of the engine: clock + tz are
+ *  arguments. Countdown keeps the popover's historical wording verbatim. */
+export function formatReset(resetsAt: string, style: ResetStyle, now: number, tzOffsetMinutes = 0): string | null {
+  const t = Date.parse(resetsAt)
+  if (!Number.isFinite(t)) return null
+  const diffMs = Math.max(0, t - now)
+  if (style === 'countdown') {
+    let s = Math.max(0, Math.round(diffMs / 1000))
+    const d = Math.floor(s / 86400)
+    s -= d * 86400
+    const h = Math.floor(s / 3600)
+    const m = Math.floor((s - h * 3600) / 60)
+    if (d > 0) return `resets in ${d}d ${h}h`
+    if (h > 0) return `resets in ${h}h ${m}m`
+    return `resets in ${m}m`
+  }
+  const local = new Date(t + tzOffsetMinutes * 60_000)
+  const localNow = new Date(now + tzOffsetMinutes * 60_000)
+  const hhmm = `${String(local.getUTCHours()).padStart(2, '0')}:${String(local.getUTCMinutes()).padStart(2, '0')}`
+  const sameLocalDay = (a: Date, b: Date): boolean =>
+    a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth() && a.getUTCDate() === b.getUTCDate()
+  if (style === 'absolute') {
+    if (sameLocalDay(local, localNow)) return `resets ${hhmm}`
+    if (diffMs < 7 * DAY_MS) return `resets ${DAY_NAMES[local.getUTCDay()]} ${hhmm}`
+    return `resets ${MONTH_NAMES[local.getUTCMonth()]} ${local.getUTCDate()}`
+  }
+  // relative words: the nearest human phrase, details only when they help
+  if (diffMs < HOUR_MS) return 'resets within the hour'
+  if (sameLocalDay(local, localNow)) return `resets today ${hhmm}`
+  if (sameLocalDay(local, new Date(localNow.getTime() + DAY_MS))) return `resets tomorrow ${hhmm}`
+  if (diffMs < 7 * DAY_MS) return `resets ${DAY_NAMES[local.getUTCDay()]}`
+  return `resets in ${Math.round(diffMs / DAY_MS)} days`
 }
 
 /** Severity ink per verdict (docs/11 tokens; UI maps to classes). */

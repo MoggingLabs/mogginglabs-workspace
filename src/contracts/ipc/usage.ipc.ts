@@ -14,6 +14,8 @@
  *   usage:statusChanged  main -> renderer: ProviderStatus[] (pushed on change)
  *   usage:alert          main -> renderer: UsageAlert (7/09: house toast copy)
  *   usage:alertCfgGet/Set -> UsageAlertConfig (7/09: thresholds + confetti)
+ *   usage:displayGet/Set -> UsageDisplayConfig (7/10: gauge mode + content +
+ *   reset style + popover order/density); usage:displayChanged pushes it
  */
 
 import type { PlanUsage, PaceVerdict, UsageCadence } from '../usage'
@@ -53,4 +55,4 @@ export interface UsageConfigPatch {
   cadence?: UsageCadence
 }
 
-export type { PlanUsage, UsageWindow, UsageHealth, UsageCadence, CostScan, CostDay, ProviderStatus, ProviderStatusState, UsageAlert, UsageAlertConfig } from '../usage'
+export type { PlanUsage, UsageWindow, UsageHealth, UsageCadence, CostScan, CostDay, ProviderStatus, ProviderStatusState, UsageAlert, UsageAlertConfig, UsageDisplayConfig, GaugeMode, ResetStyle, PopoverDensity, PopoverOrder } from '../usage'

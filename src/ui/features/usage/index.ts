@@ -1,5 +1,5 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { ProfileChannels, UsageChannels, type AgentProfile, type PlanUsageView, type ProviderStatus, type UsageAlert } from '@contracts'
+import { ProfileChannels, UsageChannels, USAGE_DISPLAY_DEFAULTS, type AgentProfile, type GaugeMode, type PlanUsageView, type ProviderStatus, type UsageAlert, type UsageDisplayConfig } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { el, icon, showToast } from '../../components'
 import { setActiveView } from '../../core/shell/view-port'
@@ -17,18 +17,8 @@ import { getTelemetry } from '../../core/telemetry'
 
 const BADGE_PCT = 90
 
-function fmtCountdown(resetsAt: string, now: number): string | null {
-  const t = Date.parse(resetsAt)
-  if (!Number.isFinite(t)) return null
-  let s = Math.max(0, Math.round((t - now) / 1000))
-  const d = Math.floor(s / 86400)
-  s -= d * 86400
-  const h = Math.floor(s / 3600)
-  const m = Math.floor((s - h * 3600) / 60)
-  if (d > 0) return `resets in ${d}d ${h}h`
-  if (h > 0) return `resets in ${h}h ${m}m`
-  return `resets in ${m}m`
-}
+// Reset lines arrive PRE-FORMATTED on each window (`resetText`, 7/10) from
+// the ONE backend reset formatter — this file never re-spells them.
 
 function fmtAge(fetchedAt: number, now: number): string {
   const s = Math.max(0, Math.round((now - fetchedAt) / 1000))
@@ -55,6 +45,9 @@ export const usageFeature: UiFeature = {
     // 7/09: the Phase-4 profiles — order 0 is the ACTIVE lane for new launches.
     let profiles: AgentProfile[] = []
     let switchHint = '' // the one-line "running panes untouched" note, post-switch
+    // 7/10: display prefs — WHICH plan the gauge mirrors, WHAT the icon
+    // shows, how resets render. Painted, never decided, on this side.
+    let display: UsageDisplayConfig = { ...USAGE_DISPLAY_DEFAULTS }
 
     /** The active profile id for a provider — order 0, or the seam's 'default'
      *  lane when no profiles exist. */
@@ -63,12 +56,33 @@ export const usageFeature: UiFeature = {
       return mine[0]?.id ?? 'default'
     }
 
-    /** The tile the GAUGE mirrors: the ACTIVE profile's plan when usable,
-     *  else the first plan with usable data. */
-    const activePlan = (all: PlanUsageView[]): PlanUsageView | null =>
-      all.find((p) => (p.health === 'fresh' || p.health === 'stale') && p.profileId === activeIdFor(p.providerId)) ??
-      all.find((p) => p.health === 'fresh' || p.health === 'stale') ??
-      null
+    const usable = (p: PlanUsageView): boolean => p.health === 'fresh' || p.health === 'stale'
+
+    /** Highest severity first, hotter first — the merged-mode pick. */
+    const bestBySeverity = (all: PlanUsageView[]): PlanUsageView | null => {
+      const u = all.filter(usable)
+      if (!u.length) return null
+      return u.slice().sort((a, b) => severityRank(a) - severityRank(b) || (b.windows[0]?.usedPct ?? 0) - (a.windows[0]?.usedPct ?? 0))[0]
+    }
+
+    /** The plan the ONE titlebar gauge mirrors, per display mode (7/10):
+     *  merged = highest severity · pinned = the chosen provider (active lane
+     *  preferred) · auto = highest usage. Falls back to merged when a pin has
+     *  no data — an empty gauge helps nobody. */
+    const gaugePlan = (): PlanUsageView | null => {
+      if (display.mode === 'pinned' && display.pin) {
+        const mine = plans.filter((p) => usable(p) && p.providerId === display.pin)
+        const active = mine.find((p) => p.profileId === activeIdFor(display.pin ?? ''))
+        if (active) return active
+        const best = bestBySeverity(mine)
+        if (best) return best
+      }
+      if (display.mode === 'auto') {
+        const u = plans.filter(usable)
+        if (u.length) return u.slice().sort((a, b) => (b.windows[0]?.usedPct ?? 0) - (a.windows[0]?.usedPct ?? 0))[0]
+      }
+      return bestBySeverity(plans)
+    }
 
     const refreshProfiles = async (): Promise<void> => {
       profiles = ((await bridge.invoke(ProfileChannels.list)) as AgentProfile[]) ?? []
@@ -102,27 +116,44 @@ export const usageFeature: UiFeature = {
     // The incident overlay (7/08): ONE subtle glyph in the badge idiom —
     // armed when any enabled provider reports an outage, never a takeover.
     const incident = el('span', { class: 'usage-incident', hidden: true, title: 'Provider incident reported' })
+    // 7/10 content options: every element always EXISTS — classes decide what
+    // paints (the toggles change classes, never structure).
+    const glyph = el('span', { class: 'usage-glyph' })
+    const pctNum = el('span', { class: 'usage-pct-num' })
+    const glabel = el('span', { class: 'usage-glabel' })
     const gauge = el(
       'button',
       { class: 'icon-btn usage-gauge', type: 'button', ariaLabel: 'Usage', title: 'Usage' },
-      [el('span', { class: 'usage-track' }, [barS]), el('span', { class: 'usage-track' }, [barW]), badge, incident]
+      [glyph, el('span', { class: 'usage-track' }, [barS]), el('span', { class: 'usage-track' }, [barW]), pctNum, glabel, badge, incident]
     )
     gauge.setAttribute('aria-expanded', 'false')
 
     const paintGauge = (): void => {
       // Independent of gauge data: an outage badges even an off/unconfigured icon.
       incident.hidden = !statuses.some((s) => s.state === 'outage')
-      const p = activePlan(plans)
+      gauge.classList.toggle('hide-bars', !display.showBars)
+      gauge.classList.toggle('show-pct', display.showPct)
+      gauge.classList.toggle('show-glyph', display.showGlyph)
+      gauge.classList.toggle('show-label', display.showLabel)
+      gauge.dataset.mode = display.mode
+      const p = gaugePlan()
       gauge.classList.toggle('is-off', !p)
       if (!p) {
         badge.hidden = true
+        delete gauge.dataset.provider
+        delete gauge.dataset.profile
         gauge.title = plans[0]?.reason ? `Usage — ${plans[0].reason}` : 'Usage — not configured yet'
         return
       }
+      gauge.dataset.provider = p.providerId
+      gauge.dataset.profile = p.profileId
       const s = p.windows[0]?.usedPct ?? 0
       const w = p.windows[1]?.usedPct ?? s
       barS.style.width = `${s}%`
       barW.style.width = `${w}%`
+      glyph.textContent = p.providerId.charAt(0).toUpperCase()
+      pctNum.textContent = `${Math.round(s)}%`
+      glabel.textContent = p.providerId
       gauge.classList.toggle('is-warn', p.pace?.verdict === 'runs-out')
       gauge.classList.toggle('is-stale', p.health === 'stale')
       badge.hidden = !p.windows.some((x) => x.usedPct >= BADGE_PCT)
@@ -136,6 +167,7 @@ export const usageFeature: UiFeature = {
 
     const renderPop = (): void => {
       pop.innerHTML = ''
+      pop.classList.toggle('is-compact', display.density === 'compact')
       const now = Date.now()
       if (!plans.length) {
         pop.append(el('div', { class: 'menu-empty', text: 'No usage sources yet — enable a provider in Settings.' }))
@@ -146,7 +178,49 @@ export const usageFeature: UiFeature = {
         list.push(p)
         byProvider.set(p.providerId, list)
       }
-      for (const [providerId, group] of byProvider) {
+      // ── 7/10 header: the gauge switcher + the highest-severity line, which
+      // surfaces regardless of ordering or scroll (the header is sticky).
+      if (plans.length) {
+        const sw = el('select', { class: 'usage-switcher', ariaLabel: 'Gauge shows' }) as HTMLSelectElement
+        sw.append(el('option', { value: 'merged', text: 'Merged — highest severity' }))
+        sw.append(el('option', { value: 'auto', text: 'Auto — highest usage' }))
+        const pinIds = [...new Set([...byProvider.keys(), ...(display.mode === 'pinned' && display.pin ? [display.pin] : [])])]
+        for (const id of pinIds) sw.append(el('option', { value: `pin:${id}`, text: `Pin — ${id}` }))
+        sw.value = display.mode === 'pinned' && display.pin ? `pin:${display.pin}` : display.mode
+        sw.addEventListener('change', () => {
+          const v = sw.value
+          const patch: Partial<UsageDisplayConfig> = v.startsWith('pin:')
+            ? { mode: 'pinned', pin: v.slice(4) }
+            : { mode: v as GaugeMode }
+          display = { ...display, ...patch } // optimistic paint; main echoes via displayChanged
+          paintGauge()
+          void bridge.invoke(UsageChannels.displaySet, patch)
+          // Mode enum ONLY (ADR 0005) — never the pinned provider id.
+          getTelemetry().captureEvent({ name: 'usage.display', props: { mode: display.mode } })
+        })
+        const header = el('div', { class: 'usage-header' }, [sw])
+        const worst = bestBySeverity(plans)
+        if (worst?.pace?.verdict === 'runs-out')
+          header.append(el('div', { class: 'usage-top-alert', text: `${worst.planLabel} — ${worst.pace.text}` }))
+        pop.append(header)
+      }
+      // Group order (7/10): severity by default; a manual pin order when set —
+      // the top-alert above keeps the worst plan visible either way.
+      const groups = [...byProvider.entries()]
+      if (display.order === 'manual' && display.pinOrder.length) {
+        const rank = (id: string): number => {
+          const i = display.pinOrder.indexOf(id)
+          return i === -1 ? 1000 : i
+        }
+        groups.sort((a, b) => rank(a[0]) - rank(b[0]))
+      } else {
+        const gRank = (g: PlanUsageView[]): number => {
+          const best = bestBySeverity(g)
+          return best ? severityRank(best) * 1000 - (best.windows[0]?.usedPct ?? 0) : 9999
+        }
+        groups.sort((a, b) => gRank(a[1]) - gRank(b[1]))
+      }
+      for (const [providerId, group] of groups) {
         pop.append(el('div', { class: 'usage-group-label section-label', text: providerId }))
         // 7/09: severity orders the tiles — runs-out first, hotter first.
         group.sort((a, b) => severityRank(a) - severityRank(b) || (b.windows[0]?.usedPct ?? 0) - (a.windows[0]?.usedPct ?? 0))
@@ -175,7 +249,7 @@ export const usageFeature: UiFeature = {
             ])
           )
           for (const w of p.windows) {
-            const cd = w.resetsAt ? fmtCountdown(w.resetsAt, now) : null
+            const cd = w.resetText ?? null
             const rowEl = el('div', { class: 'usage-row' }, [
               el('span', { class: 'usage-row-label', text: w.label }),
               el('span', { class: 'usage-track usage-track-row' }, [
@@ -309,10 +383,18 @@ export const usageFeature: UiFeature = {
       })
     }
 
+    const applyDisplay = (next: UsageDisplayConfig | null): void => {
+      display = { ...USAGE_DISPLAY_DEFAULTS, ...(next ?? {}) }
+      paintGauge()
+      if (!pop.hidden) renderPop()
+    }
+
     bridge.on(UsageChannels.changed, (payload) => apply((payload as PlanUsageView[]) ?? []))
     bridge.on(UsageChannels.statusChanged, (payload) => applyStatuses((payload as ProviderStatus[]) ?? []))
     bridge.on(UsageChannels.alert, (payload) => onAlert(payload as UsageAlert))
+    bridge.on(UsageChannels.displayChanged, (payload) => applyDisplay(payload as UsageDisplayConfig))
     void refreshProfiles().then(() => paintGauge())
+    void bridge.invoke(UsageChannels.displayGet).then((payload) => applyDisplay(payload as UsageDisplayConfig))
     void bridge.invoke(UsageChannels.list).then((payload) => apply((payload as PlanUsageView[]) ?? []))
     void bridge.invoke(UsageChannels.status).then((payload) => applyStatuses((payload as ProviderStatus[]) ?? []))
 

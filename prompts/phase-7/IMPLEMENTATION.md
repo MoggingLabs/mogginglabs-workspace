@@ -308,6 +308,38 @@ seams; ADR 0007 and docs/12 are both unclaimed. The pack runs BEFORE phase
   (failoverOffered, confetti) — never plan names, percents, or profile
   names; the switch event carries provider id + a boolean.
 
+## display mechanics (10) — shipped 2026-07-06
+
+- **Mode decides WHICH plan the one gauge mirrors** — merged (highest
+  severity; the DEFAULT, so the glance leads with the wall), auto (highest
+  usage, CodexBar's auto-select), pinned (a chosen provider, active lane
+  preferred). Selection is renderer-side over the pushed snapshot —
+  paint-only, zero refetch; the popover header hosts the switcher (one
+  select: merged / auto / pin-per-provider).
+- **Content toggles change CLASSES, never structure**: glyph, `%`, and
+  label spans ALWAYS exist on the gauge; `show-*`/`hide-bars` classes
+  decide what paints (smoke asserts tracks stay in the DOM while hidden).
+  Defaults stay two-bars + dot badge — a user who never opens Settings
+  keeps the 03 glance.
+- **ONE reset formatter** (`formatReset` in pace.ts, pure like the rest):
+  countdown keeps the popover's historical wording verbatim; absolute and
+  relative styles ride the same tz-offset idiom as `formatPaceTime`. Main
+  attaches `resetText` per window at enrich time — popover/tab/CLI render
+  it; no surface re-spells a reset ever.
+- **Ordering + density**: groups order by severity (best plan wins) or a
+  manual pinOrder list; the STICKY popover header carries the worst
+  runs-out plan's label + verdict, so the highest severity surfaces
+  regardless of scroll or manual order. Compact density drops the verdict
+  line, keeps pills + bars.
+- Display prefs persist in the KV (usage.display.*) behind
+  usage:displayGet/Set with a displayChanged push; displaySet re-pushes
+  re-styled views so resetText follows the style everywhere at once.
+- ADR 0005: the display telemetry event carries mode/reset/density/order
+  enums + content booleans — never a provider id (the pin never rides).
+- The smoke's two-provider fixture pins DISTINCT winners (alpha 70% but
+  hard runs-out = severity winner; zeta 96% at 99% elapsed = on-pace usage
+  winner) so merged vs auto are separable assertions.
+
 - **Marathon-tail flake, investigated 2026-07-06 (not a 7/08 defect):**
   WORKTREE failed twice right after the 33-gate marathon (clean AND forced
   worktree removal both refused — the Windows PTY/conhost-teardown lock

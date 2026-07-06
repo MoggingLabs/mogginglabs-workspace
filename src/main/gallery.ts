@@ -191,6 +191,37 @@ export function runGallery(win: BrowserWindow): void {
           })
           await sleep(500)
           await snap(`${tag}-usage-toast-reset-confetti`)
+          // display modes (7/10): a two-provider fixture with distinct
+          // severity/usage winners — merged, auto, pinned, content options.
+          const ddir = mkdtempSync(join(tmpdir(), 'mog-gallery-display-'))
+          const two = join(ddir, 'two.json')
+          writeFileSync(
+            two,
+            JSON.stringify([
+              { providerId: 'alpha', profileId: 'default', planLabel: 'Alpha Pro', windows: [{ label: 'Session (5h)', usedPct: 70, resetsAt: new Date(Date.now() + 4 * 3600_000).toISOString(), windowMs: 5 * 3600_000 }], fetchedAt: Date.now(), health: 'fresh' },
+              { providerId: 'zeta', profileId: 'default', planLabel: 'Zeta Pro', windows: [{ label: 'Session (5h)', usedPct: 96, resetsAt: new Date(Date.now() + 3 * 60_000).toISOString(), windowMs: 5 * 3600_000 }], fetchedAt: Date.now(), health: 'fresh' }
+            ])
+          )
+          process.env.MOGGING_USAGE_FIXTURE = two
+          getUsageService()?.refresh()
+          await sleep(900)
+          await ES(`window.__mogging.usage.open()`)
+          await sleep(400)
+          await snap(`${tag}-usage-display-merged`)
+          await ES(`window.bridge.invoke('usage:displaySet', { mode: 'auto' })`)
+          await sleep(400)
+          await snap(`${tag}-usage-display-auto`)
+          await ES(`window.bridge.invoke('usage:displaySet', { mode: 'pinned', pin: 'zeta' })`)
+          await sleep(400)
+          await snap(`${tag}-usage-display-pinned`)
+          await ES(`window.bridge.invoke('usage:displaySet', { showPct: true, showLabel: true, showGlyph: true, density: 'compact' })`)
+          await sleep(400)
+          await snap(`${tag}-usage-display-content`)
+          await ES(`window.bridge.invoke('usage:displaySet', { mode: 'merged', showPct: false, showLabel: false, showGlyph: false, density: 'roomy' })`)
+          await ES(`window.__mogging.usage.close()`)
+          delete process.env.MOGGING_USAGE_FIXTURE
+          getUsageService()?.refresh()
+          await sleep(600)
           getSettingsStore()?.removeProfile('default')
           getSettingsStore()?.removeProfile('fresh-reset')
           // web-session consent (7/06): the Settings § Usage stub with the
