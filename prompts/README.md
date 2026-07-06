@@ -10,10 +10,16 @@ current phase's gate is green (Windows + macOS). Roadmap: `docs/02-mvp-and-roadm
 |---|---|---|---|
 | 0 | `phase-0/` | done | Parity spike: one PTY pane hosting a real agent CLI, Win/Mac parity (validates ADR 0001) |
 | 1 | `phase-1/` | done | MVP core: daemon PTY-host, SQLite restore, multi-pane, workspace tabs + `mogging .` + themes, agent launcher + provider-mix templates (06b), signed auto-updating packaging |
-| 2 | `phase-2/` | planned | Agent awareness: OSC hardening + tab rings, command blocks, per-pane git, `mogging notify` + hooks, 16-agent perf milestone |
-| 2.5 | *(future)* | — | Memory graph (the differentiator): `.memory/` wikilink graph + MCP tools |
-| 3 | *(future)* | — | Orchestration: worktree-per-agent + diff review, Kanban launcher, control API |
-| 4 | *(future)* | — | Differentiators: swarm, SSH/remote, multi-profile accounts, Linux, voice |
+| 2 | `phase-2/` | done | Agent awareness: OSC hardening + tab rings, command blocks, per-pane git, `mogging notify` + hooks, 16-agent perf milestone |
+| 2.5 | *(future)* | — | Memory graph (the differentiator): `.memory/` wikilink graph — mounts as tools on the phase-8 MCP server |
+| 3 | `phase-3/` | done | Orchestration: worktree-per-agent + diff review, Kanban launcher, control API |
+| 4 | `phase-4/` | done | Differentiators: swarm (mailbox/roles/ledger/gate), SSH/remote, profiles + failover, Linux target |
+| 5 | `phase-5/` | done | UI/UX excellence: token system + workspace identity, icon family, window chrome, full-app views (receipts: `phase-5/REPORT.md`) |
+| 6 | `phase-6/` | done | Product-ready: three-platform 30-gate sweeps, profile persistence, browser dock + agent control via MCP, first-run + updates, v0.4.0 shipped |
+| 7 | `phase-7/` | authored | Usage meters: adapter seam + ADR 0007, pace engine, titlebar gauge + popover, plans × profiles |
+| 8 | `phase-8/` | authored | Integrations: ADR 0008 (protocols, not plugins), control plane joins the shipped MCP server, the agent web profile (phase-10 Comet resolution, Branch C), MCP manager across CLI configs, GitHub adapter |
+| 9 | `phase-9/` | authored | Loops: standing harnesses — triggers, fresh-worktree iterations, verify gates, budgets, Sentry watcher, staged playbook learning (ADR 0009) |
+| 10 | `phase-10/` | resolved → 8/04 | Agents on real logged-in sessions: Branch A/C implemented as phase-8/04 (agent web profile); Branch B (system-cookie inheritance) stays PARKED behind its own future ADR — `FINDINGS.md` is the map |
 
 ## Cross-cutting sets (NOT a single phase)
 - **`observability/`** — turn on real Sentry (+ optional PostHog) behind the vendor-agnostic

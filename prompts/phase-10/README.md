@@ -1,8 +1,13 @@
 # Phase 10 — Agents on real logged-in sessions (the "Comet" question)
 
-**Status: PARKED — findings captured, not yet scheduled.** This folder exists
-so we can pick up a deliberate decision later, not because the work is queued.
-The full analysis lives in `FINDINGS.md`; read it before drafting any step.
+**Status: RESOLVED into Phase 8 (2026-07-06) — Branch B stays PARKED.** The
+fork below was decided: Branch C (the dedicated agent web profile — real
+logins the user creates on purpose, per-origin action grants, sensitive-
+origin blocklist) is now **`prompts/phase-8/04-agent-web-profile.md`**, and
+the boundary against Branch B is codified in ADR 0008.e (phase-8/01) rather
+than living only here. This folder remains as the durable analysis and the
+map for Branch B, which starts — if ever — with its own ADR revising 0002.
+`FINDINGS.md` is unchanged and still the read-first document for that day.
 
 ## The ask
 6/05b gave agents the wheel of the browser dock, but the dock runs an EMPTY,
