@@ -10,6 +10,8 @@
  *   usage:configSet (UsageConfigPatch) -> void (persists + reschedules live)
  *   usage:cost      (providerId) -> CostScan  (7/07: on-demand LOCAL log scan)
  *   usage:history   ({ providerId, window }) -> number[] (7/07: OUR KV ring)
+ *   usage:status    -> ProviderStatus[]       (7/08: public-endpoint feed)
+ *   usage:statusChanged  main -> renderer: ProviderStatus[] (pushed on change)
  */
 
 import type { PlanUsage, PaceVerdict, UsageCadence } from '../usage'
@@ -49,4 +51,4 @@ export interface UsageConfigPatch {
   cadence?: UsageCadence
 }
 
-export type { PlanUsage, UsageWindow, UsageHealth, UsageCadence, CostScan, CostDay } from '../usage'
+export type { PlanUsage, UsageWindow, UsageHealth, UsageCadence, CostScan, CostDay, ProviderStatus, ProviderStatusState } from '../usage'

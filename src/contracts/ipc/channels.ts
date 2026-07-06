@@ -146,7 +146,12 @@ export const UsageChannels = {
   // disk — never on the poll cadence, zero network); history returns OUR own
   // sampled percentages from the KV ring (counts, not content — ADR 0005).
   cost: 'usage:cost', // (providerId) -> CostScan (local JSONL scan; empty+reason when absent)
-  history: 'usage:history' // ({ providerId, window }) -> number[] (bounded sparkline series)
+  history: 'usage:history', // ({ providerId, window }) -> number[] (bounded sparkline series)
+  // 7/08 status feed: PUBLIC endpoints, ENABLED providers only, one shared
+  // jittered cadence. Enum + note text for rendering; nothing here can carry
+  // a credential, and only the enum/booleans may reach telemetry (ADR 0005).
+  status: 'usage:status', // -> ProviderStatus[] (cached snapshot)
+  statusChanged: 'usage:statusChanged' // main -> renderer: ProviderStatus[] (pushed on state change)
 } as const
 
 export const AllChannels: readonly string[] = [

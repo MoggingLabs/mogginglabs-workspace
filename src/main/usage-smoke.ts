@@ -3,9 +3,9 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mkdirSync, mkdtempSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { setFakeMode, computePace, formatVerdict, PACE_GOLDENS, readCodex, API_KEY_SPECS, fetchVertex, fetchBedrock, scanCost, appendHistory, readHistory, HISTORY_MAX } from '@backend/features/usage'
+import { setFakeMode, computePace, formatVerdict, PACE_GOLDENS, readCodex, API_KEY_SPECS, fetchVertex, fetchBedrock, scanCost, appendHistory, readHistory, HISTORY_MAX, normalizeStatusBody, createStatusService } from '@backend/features/usage'
 import { USAGE_PROVIDERS, UsageChannels, AllChannels } from '@contracts'
-import { getUsageService } from './usage'
+import { getUsageService, getUsageStatusService } from './usage'
 import { keySetPlaintext, keySetEnvRef, keyClear, keySlot, resolveKey, setKeyAvailabilityProbeForSmoke, isKeyVaultAvailable } from './usage-keys'
 import { getSettingsStore } from './app-settings'
 
@@ -23,7 +23,12 @@ import { getSettingsStore } from './app-settings'
 //   EXACTLY — dedupe honored, absent dirs degrade labeled, zero network;
 //   14. the history ring accumulates, truncates at HISTORY_MAX, and the REAL
 //   poller feeds it from the fake adapter's own samples)
-export function runUsageSmoke(_win: BrowserWindow): void {
+//   (…7/08: 16. status feed — normalization goldens (statuspage + generic +
+//   junk->unknown), enabled-only polling, unreachable->unknown+backoff,
+//   hidden-pause, and the APP flow: a fixture OUTAGE relabels a failing
+//   tile "provider outage" through the real renderer, arms the ONE-glyph
+//   icon overlay + tile chip, and disarms on recovery)
+export function runUsageSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 90000) // safety net
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -143,6 +148,10 @@ export function runUsageSmoke(_win: BrowserWindow): void {
         ids.add(def.id)
         if (def.windows.length === 0 && !def.credits) catalogFails.push(`${def.id}: no window or credits`)
         if (def.verifiedAt && Number.isNaN(Date.parse(def.verifiedAt))) catalogFails.push(`${def.id}: bad verifiedAt`)
+        // 7/08 guardrail: a statusUrl is a PLAIN https endpoint — never auth,
+        // never a query that could smuggle a key.
+        if (def.statusUrl && (!def.statusUrl.startsWith('https://') || def.statusUrl.includes('?')))
+          catalogFails.push(`${def.id}: statusUrl not a plain https endpoint`)
       }
       const catalogOk = catalogFails.length === 0
 
@@ -344,9 +353,118 @@ export function runUsageSmoke(_win: BrowserWindow): void {
       //       read-only render payloads; the no-getter regexes above stay clean)
       const costChannelsOk = AllChannels.includes('usage:cost') && AllChannels.includes('usage:history')
 
+      // 16 ── provider status feed (7/08). (a) normalization goldens — pure,
+      //       zero network: statuspage indicators, generic up/down, junk.
+      const N = (b: string): string => normalizeStatusBody(b).state
+      const statusNormOk =
+        N(JSON.stringify({ status: { indicator: 'none', description: 'All Systems Operational' } })) === 'operational' &&
+        N(JSON.stringify({ status: { indicator: 'minor', description: 'Partial System Degradation' } })) === 'degraded' &&
+        N(JSON.stringify({ status: { indicator: 'major', description: 'Major outage' } })) === 'outage' &&
+        N(JSON.stringify({ status: { indicator: 'critical' } })) === 'outage' &&
+        N(JSON.stringify({ status: 'ok' })) === 'operational' &&
+        N(JSON.stringify({ status: 'down' })) === 'outage' &&
+        N(JSON.stringify({ ok: true })) === 'operational' &&
+        N('<html>a status PAGE, not an API</html>') === 'unknown' &&
+        N(JSON.stringify({ surprise: 1 })) === 'unknown' &&
+        normalizeStatusBody(JSON.stringify({ status: { indicator: 'minor', description: 'Partially Degraded Service' } })).note === 'Partially Degraded Service'
+
+      // (b) fixture service: ENABLED-only on one pass; unreachable -> unknown
+      //     with polite backoff (the next pass SKIPS, no hammer); hidden pauses.
+      const polledUrls: string[] = []
+      let statusChanges = 0
+      let fxThrow = false
+      const fxStatus = createStatusService({
+        providers: () => [{ id: 'alpha', statusUrl: 'fx://alpha' }, { id: 'beta', statusUrl: 'fx://beta' }, { id: 'gamma' }],
+        isEnabled: (id) => id !== 'beta', // beta disabled; gamma declares no statusUrl
+        fetcher: async (url) => {
+          polledUrls.push(url)
+          if (fxThrow) throw new Error('fixture: unreachable')
+          return JSON.stringify({ status: { indicator: 'none' } })
+        },
+        onChange: () => statusChanges++,
+        cadenceMsOverride: 120_000 // passes driven by hand below
+      })
+      await fxStatus.refresh()
+      const enabledOnlyOk =
+        polledUrls.join(',') === 'fx://alpha' &&
+        fxStatus.list().length === 1 &&
+        fxStatus.list()[0].providerId === 'alpha' &&
+        fxStatus.list()[0].state === 'operational' &&
+        statusChanges === 1
+      fxThrow = true
+      await fxStatus.refresh()
+      const unknownAfterFail = fxStatus.list()[0]?.state === 'unknown' && statusChanges === 2
+      await fxStatus.refresh() // inside alpha's backoff window -> fetch SKIPPED
+      const backoffSkipOk = polledUrls.length === 2 && (fxStatus.debug().errors.alpha ?? 0) === 1
+      fxStatus.stop()
+      let hiddenPolls = 0
+      const fxHidden = createStatusService({
+        providers: () => [{ id: 'h', statusUrl: 'fx://h' }],
+        isEnabled: () => true,
+        fetcher: async () => {
+          hiddenPolls++
+          return JSON.stringify({ ok: true })
+        },
+        onChange: () => {},
+        cadenceMsOverride: 120_000
+      })
+      await fxHidden.refresh()
+      fxHidden.setVisible(false)
+      await fxHidden.refresh()
+      const statusHiddenOk = hiddenPolls === 1 && fxHidden.debug().visible === false
+      fxHidden.setVisible(true)
+      await fxHidden.refresh()
+      const statusResumeOk = hiddenPolls === 2
+      fxHidden.stop()
+      const statusSvcOk = enabledOnlyOk && unknownAfterFail && backoffSkipOk && statusHiddenOk && statusResumeOk
+
+      // (c) the APP flow, full renderer round-trip: fixture OUTAGE -> the
+      //     failing tile relabels "provider outage" (pace muted), the icon
+      //     overlay arms, the popover chip shows — then recovery disarms.
+      const EJ = <T>(js: string): Promise<T> => win.webContents.executeJavaScript(js, true) as Promise<T>
+      process.env.MOGGING_USAGE_STATUS = 'outage'
+      const appStatus = getUsageStatusService()
+      await appStatus?.refresh()
+      const appOutageOk = !!appStatus
+        ?.list()
+        .find((s) => s.providerId === 'fake' && s.state === 'outage' && /Major Service Outage/.test(s.note ?? ''))
+      setFakeMode('error')
+      svc.refresh()
+      let outageRelabeled = false
+      tries = 0
+      while (!outageRelabeled && tries++ < 60) {
+        await sleep(200)
+        const views = await EJ<{ health: string; reason?: string; pace?: unknown }[]>(`window.bridge.invoke('usage:list')`)
+        outageRelabeled = views.some(
+          (p) => (p.health === 'stale' || p.health === 'error') && /provider outage — Major Service Outage/.test(p.reason ?? '') && !p.pace
+        )
+      }
+      let overlayOk = false
+      tries = 0
+      while (!overlayOk && tries++ < 40) {
+        await sleep(200)
+        overlayOk = await EJ<boolean>(`(() => { const i = document.querySelector('.usage-incident'); return !!i && i.hidden === false })()`)
+      }
+      await EJ(`(window.__mogging.usage && window.__mogging.usage.open(), 1)`)
+      await sleep(300)
+      const chipOk = await EJ<boolean>(`!!document.querySelector('.usage-tile .usage-status.is-outage')`)
+      await EJ(`(window.__mogging.usage.close(), 1)`)
+      process.env.MOGGING_USAGE_STATUS = 'operational'
+      await appStatus?.refresh()
+      setFakeMode('ok')
+      svc.refresh()
+      let overlayCleared = false
+      tries = 0
+      while (!overlayCleared && tries++ < 40) {
+        await sleep(200)
+        overlayCleared = await EJ<boolean>(`document.querySelector('.usage-incident').hidden === true`)
+      }
+      const statusAppOk = appOutageOk && outageRelabeled && overlayOk && chipOk && overlayCleared
+      const statusChannelsOk = AllChannels.includes('usage:status') && AllChannels.includes('usage:statusChanged')
+
       const pass =
-        shapeOk && cadenceOk && staleOk && backoffOk && hiddenOk && resumeOk && grepClean && goldenOk && catalogOk && codexOk && codexDegrades && keysOk && noGetterOk && specsOk && cloudOk && costOk && histOk && costChannelsOk
-      result = { pass, shapeOk, cadenceOk, staleOk, backoffOk, hiddenOk, resumeOk, grepClean, goldenOk, goldenFails, catalogOk, catalogFails, codexOk, codexDegrades, vaultAvailable, keysOk, cipherOk, dbBytesOk, roundtripOk, replaceOk, clearOk, refusalOk, envRefOk, envLiteralRefusedOk, noGetterOk, specsOk, cloudOk, costOk, codexScanOk, claudeScanOk, costDegrades, histOk, ringTruncOk, ringClampOk, ringPolledOk, costChannelsOk, providers: USAGE_PROVIDERS.length, goldens: PACE_GOLDENS.length, tiles: snap.length, debug: svc.debug() }
+        shapeOk && cadenceOk && staleOk && backoffOk && hiddenOk && resumeOk && grepClean && goldenOk && catalogOk && codexOk && codexDegrades && keysOk && noGetterOk && specsOk && cloudOk && costOk && histOk && costChannelsOk && statusNormOk && statusSvcOk && statusAppOk && statusChannelsOk
+      result = { pass, shapeOk, cadenceOk, staleOk, backoffOk, hiddenOk, resumeOk, grepClean, goldenOk, goldenFails, catalogOk, catalogFails, codexOk, codexDegrades, vaultAvailable, keysOk, cipherOk, dbBytesOk, roundtripOk, replaceOk, clearOk, refusalOk, envRefOk, envLiteralRefusedOk, noGetterOk, specsOk, cloudOk, costOk, codexScanOk, claudeScanOk, costDegrades, histOk, ringTruncOk, ringClampOk, ringPolledOk, costChannelsOk, statusNormOk, statusSvcOk, enabledOnlyOk, unknownAfterFail, backoffSkipOk, statusHiddenOk, statusResumeOk, statusAppOk, appOutageOk, outageRelabeled, overlayOk, chipOk, overlayCleared, statusChannelsOk, providers: USAGE_PROVIDERS.length, goldens: PACE_GOLDENS.length, tiles: snap.length, debug: svc.debug() }
     } catch (e) {
       result = { pass: false, error: e instanceof Error ? e.message : String(e) }
     }

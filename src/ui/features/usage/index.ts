@@ -1,5 +1,5 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { UsageChannels, type PlanUsageView } from '@contracts'
+import { UsageChannels, type PlanUsageView, type ProviderStatus } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { el, icon } from '../../components'
 import { setActiveView } from '../../core/shell/view-port'
@@ -46,19 +46,27 @@ export const usageFeature: UiFeature = {
   mount(ctx) {
     const bridge = getBridge()
     let plans: PlanUsageView[] = []
+    // 7/08: statuses arrive for ENABLED providers only — any outage in the
+    // list IS an enabled outage (the poller never tracks disabled rows).
+    let statuses: ProviderStatus[] = []
 
     // ── The gauge (paint-only state flips: CSS vars + classes, no layout) ──
     const barS = el('span', { class: 'usage-fill usage-fill-s' })
     const barW = el('span', { class: 'usage-fill usage-fill-w' })
     const badge = el('span', { class: 'usage-badge', hidden: true })
+    // The incident overlay (7/08): ONE subtle glyph in the badge idiom —
+    // armed when any enabled provider reports an outage, never a takeover.
+    const incident = el('span', { class: 'usage-incident', hidden: true, title: 'Provider incident reported' })
     const gauge = el(
       'button',
       { class: 'icon-btn usage-gauge', type: 'button', ariaLabel: 'Usage', title: 'Usage' },
-      [el('span', { class: 'usage-track' }, [barS]), el('span', { class: 'usage-track' }, [barW]), badge]
+      [el('span', { class: 'usage-track' }, [barS]), el('span', { class: 'usage-track' }, [barW]), badge, incident]
     )
     gauge.setAttribute('aria-expanded', 'false')
 
     const paintGauge = (): void => {
+      // Independent of gauge data: an outage badges even an off/unconfigured icon.
+      incident.hidden = !statuses.some((s) => s.state === 'outage')
       const p = activePlan(plans)
       gauge.classList.toggle('is-off', !p)
       if (!p) {
@@ -101,10 +109,16 @@ export const usageFeature: UiFeature = {
             tabIndex: -1,
             dataset: { provider: p.providerId, profile: p.profileId, health: p.health }
           })
+          const st = statuses.find((s) => s.providerId === p.providerId)
+          const chip =
+            st && (st.state === 'degraded' || st.state === 'outage')
+              ? el('span', { class: `pill usage-status is-${st.state}`, text: st.state, title: st.note ?? '' })
+              : null
           tile.append(
             el('div', { class: 'usage-tile-head' }, [
               el('span', { class: 'usage-plan', text: p.planLabel }),
               el('span', { class: 'usage-profile', text: p.profileId }),
+              chip,
               el('span', { class: `pill usage-health is-${p.health}`, text: p.health })
             ])
           )
@@ -188,8 +202,16 @@ export const usageFeature: UiFeature = {
       if (!pop.hidden) renderPop() // refresh in place while open
     }
 
+    const applyStatuses = (next: ProviderStatus[]): void => {
+      statuses = next
+      paintGauge()
+      if (!pop.hidden) renderPop()
+    }
+
     bridge.on(UsageChannels.changed, (payload) => apply((payload as PlanUsageView[]) ?? []))
+    bridge.on(UsageChannels.statusChanged, (payload) => applyStatuses((payload as ProviderStatus[]) ?? []))
     void bridge.invoke(UsageChannels.list).then((payload) => apply((payload as PlanUsageView[]) ?? []))
+    void bridge.invoke(UsageChannels.status).then((payload) => applyStatuses((payload as ProviderStatus[]) ?? []))
 
     // Dev/smoke handle (the firstrun pattern).
     const g = window as unknown as { __mogging?: Record<string, unknown> }

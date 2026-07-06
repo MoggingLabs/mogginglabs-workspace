@@ -3490,6 +3490,21 @@ body.resizing * {
 .usage-badge[hidden] {
   display: none;
 }
+/* 7/08 incident overlay — the badge idiom, one glyph, opposite corner:
+   "somebody you use is down", not "you are out". */
+.usage-incident {
+  position: absolute;
+  bottom: 3px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--danger);
+  box-shadow: 0 0 0 2px var(--surface-1, transparent);
+}
+.usage-incident[hidden] {
+  display: none;
+}
 
 /* The popover rides the shared .menu panel (palette-grade elevation). */
 .usage-popover {
@@ -3541,6 +3556,19 @@ body.resizing * {
 }
 .usage-health.is-unconfigured {
   color: var(--text-mid);
+}
+/* 7/08 provider-status chip — present only when non-operational. */
+.usage-status {
+  font-size: 10px;
+  text-transform: none;
+}
+.usage-status.is-degraded {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 40%, var(--border));
+}
+.usage-status.is-outage {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
 }
 .usage-row {
   display: grid;

@@ -1,5 +1,5 @@
 import { app, ipcMain, type BrowserWindow } from 'electron'
-import { UsageChannels, USAGE_CADENCES, type PlanUsage, type UsageCadence } from '@contracts'
+import { UsageChannels, USAGE_CADENCES, USAGE_PROVIDERS, findProvider, type PlanUsage, type UsageCadence } from '@contracts'
 import type { PlanUsageView, PaceView, UsageConfig, UsageConfigPatch, CostScan } from '@contracts'
 import {
   createUsageService,
@@ -14,6 +14,8 @@ import {
   scanCost,
   costLogDir,
   readHistory,
+  createStatusService,
+  type StatusService,
   type UsageService
 } from '@backend/features/usage'
 import { getSettingsStore } from './app-settings'
@@ -28,10 +30,16 @@ import { keySlot, keySetPlaintext, keySetEnvRef, keyClear, resolveKey } from './
 // string the renderer shows. No token, path, or account id crosses this file.
 
 let service: UsageService | null = null
+let statusService: StatusService | null = null
 
 /** Smoke hook: direct service access (main-side only). */
 export function getUsageService(): UsageService | null {
   return service
+}
+
+/** Smoke/gallery hook: the 7/08 status feed (main-side only). */
+export function getUsageStatusService(): StatusService | null {
+  return statusService
 }
 
 /** Window length inferred from the label until 7/04's catalog carries
@@ -91,7 +99,64 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
   const cadenceEnv = Number(process.env.MOGGING_USAGE_CADENCE_MS)
   const cadenceMsOverride = Number.isFinite(cadenceEnv) && cadenceEnv > 0 ? cadenceEnv : isFixtureWorld ? 400 : undefined
 
-  const enrich = (plans: PlanUsage[]): PlanUsageView[] => plans.map(toView)
+  // ── 7/08: the status feed, on its own (slower) clock. FAKE-under-smoke is
+  // structural: a usage-fixture world registers ONE fake row served by an
+  // env-driven fixture body; any other smoke registers NO fetcher at all;
+  // real PUBLIC endpoints (https, no auth, no cookies) exist only in a real
+  // session. Enabled-only is the seam's own rule, re-checked per pass.
+  const statusRows = isFixtureWorld
+    ? [{ id: 'fake', statusUrl: 'fixture://status' }]
+    : USAGE_PROVIDERS.filter((p) => p.statusUrl).map((p) => ({ id: p.id, statusUrl: p.statusUrl }))
+  const statusFetcher = isFixtureWorld
+    ? async (): Promise<string> => {
+        const s = process.env.MOGGING_USAGE_STATUS ?? 'operational'
+        if (s === 'unknown') return 'not a status body'
+        const indicator = s === 'outage' ? 'major' : s === 'degraded' ? 'minor' : 'none'
+        const description =
+          s === 'outage' ? 'Major Service Outage' : s === 'degraded' ? 'Partially Degraded Service' : 'All Systems Operational'
+        return JSON.stringify({ status: { indicator, description } })
+      }
+    : isSmoke
+      ? null
+      : async (url: string, signal: AbortSignal): Promise<string> => {
+          const res = await fetch(url, { signal, redirect: 'follow' })
+          if (!res.ok) throw new Error(`http ${res.status}`)
+          return res.text()
+        }
+  const statusEnabled = (id: string): boolean => {
+    const v = getSettingsStore()?.getSetting(`usage.enabled.${id}`)
+    if (v === '0') return false
+    if (v === '1') return true
+    const klass = findProvider(id)?.klass
+    return klass === undefined || klass === 'cli-store' || klass === 'local'
+  }
+  statusService = createStatusService({
+    providers: () => statusRows,
+    isEnabled: statusEnabled,
+    fetcher: statusFetcher,
+    onChange: (statuses) => {
+      const win = getWin()
+      win?.webContents.send(UsageChannels.statusChanged, statuses)
+      // An outage relabels failing tiles — re-push the enriched view too.
+      win?.webContents.send(UsageChannels.changed, enrich(service?.list() ?? []))
+    },
+    cadenceMsOverride
+  })
+
+  // "They're down" ≠ "you're out": a provider OUTAGE relabels its failing
+  // tile's reason and mutes the pace line — the red names the right culprit.
+  const withOutage = (p: PlanUsage): PlanUsage => {
+    if (p.health !== 'error' && p.health !== 'stale') return p
+    const st = statusService?.list().find((s) => s.providerId === p.providerId)
+    if (st?.state !== 'outage') return p
+    return { ...p, reason: `provider outage — ${st.note ?? 'their status page reports an incident'}` }
+  }
+  const enrich = (plans: PlanUsage[]): PlanUsageView[] =>
+    plans.map((p) => {
+      const relabeled = withOutage(p)
+      const view = toView(relabeled)
+      return relabeled !== p && view.pace ? { ...view, pace: undefined } : view
+    })
 
   service = createUsageService({
     adapters,
@@ -106,6 +171,7 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
 
   ipcMain.handle(UsageChannels.list, () => enrich(service?.list() ?? []))
   ipcMain.handle(UsageChannels.refresh, () => service?.refresh())
+  ipcMain.handle(UsageChannels.status, () => statusService?.list() ?? [])
 
   // The 7/03 settings stub's surface (12 grows it): enable + cadence per provider.
   ipcMain.handle(UsageChannels.configGet, (): UsageConfig => {
@@ -193,10 +259,25 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
   // Hidden window = paused poller (poll politely). Single-window app: the
   // main window is the only BrowserWindow main creates.
   app.on('browser-window-created', (_e, w) => {
-    w.on('hide', () => service?.setVisible(false))
-    w.on('minimize', () => service?.setVisible(false))
-    w.on('show', () => service?.setVisible(true))
-    w.on('restore', () => service?.setVisible(true))
+    w.on('hide', () => {
+      service?.setVisible(false)
+      statusService?.setVisible(false)
+    })
+    w.on('minimize', () => {
+      service?.setVisible(false)
+      statusService?.setVisible(false)
+    })
+    w.on('show', () => {
+      service?.setVisible(true)
+      statusService?.setVisible(true)
+    })
+    w.on('restore', () => {
+      service?.setVisible(true)
+      statusService?.setVisible(true)
+    })
   })
-  app.on('before-quit', () => service?.stop())
+  app.on('before-quit', () => {
+    service?.stop()
+    statusService?.stop()
+  })
 }

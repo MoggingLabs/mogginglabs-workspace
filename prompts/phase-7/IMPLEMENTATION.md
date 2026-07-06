@@ -232,6 +232,57 @@ seams; ADR 0007 and docs/12 are both unclaimed. The pack runs BEFORE phase
   providers on one shared jittered cadence; an outage relabels a failing
   tile "provider outage" so red reads as "they're down," not "you're out".
 
+## status-feed mechanics (08) — dev-verified 2026-07-06
+
+- **Endpoints dev-verified live (curl, this machine, 2026-07-06)** — all
+  plain statuspage.io `{ status: { indicator, description } }` JSON, https,
+  no auth, no cookies, no query:
+  - claude → `https://status.claude.com/api/v2/status.json`
+    (status.anthropic.com 302s here — the FINAL url is the row)
+  - codex + openai-admin → `https://status.openai.com/api/v2/status.json`
+  - cursor → `https://status.cursor.com/api/v2/status.json`
+  - elevenlabs → `https://status.elevenlabs.io/api/v2/status.json`
+  - deepgram → `https://status.deepgram.com/api/v2/status.json`
+  - OpenRouter/Perplexity/DeepSeek expose NO plain JSON status endpoint
+    (404/HTML/next.js pages) → their rows honestly carry no statusUrl.
+- **The DoD's observed incident happened for real**: on verification day
+  BOTH Claude ("Partially Degraded Service") and OpenAI ("Partial System
+  Degradation") status pages reported live `minor` incidents; the shipped
+  normalizer read both as `degraded` with the page's own wording as the
+  note — a real session would chip both tiles right now. The three healthy
+  pages read `operational`.
+- **Normalization**: statuspage indicator none→operational, minor→degraded,
+  major/critical→outage; generic `{status:"ok"|"down"|…}` and `{ok:bool}`
+  health shapes; ANYTHING else (HTML, junk, surprises) → `unknown`, never a
+  throw, never an error surface — an absent status page is not an incident.
+- **Polling discipline**: ONE shared pass on its own clock (5m default —
+  incidents move in minutes), SEQUENTIAL within the pass (50 providers must
+  never mean 50 concurrent hammers), ±10% jitter, per-provider exponential
+  backoff on fetch failure (capped 1h), hidden-window pause, enabled-only
+  re-checked per pass (a provider disabled mid-flight drops from the feed).
+- **FAKE-under-smoke is structural**: fixture world registers ONE fake row
+  behind `fixture://status` served from `MOGGING_USAGE_STATUS`; any other
+  smoke gets a NULL fetcher (no endpoint may be touched at all); real
+  public endpoints exist only in a real session. Catalog integrity now
+  refuses any statusUrl that isn't plain https (the review guardrail,
+  smoke-asserted).
+- **"They're down" ≠ "you're out"** is wired in the VIEW seam (main
+  enrich): outage + error/stale → reason becomes "provider outage — <the
+  page's wording>" and the pace line is muted so the tile leads with the
+  outage. Overlay = ONE 6px glyph in the existing badge idiom (opposite
+  corner, danger ink) — armed on any enabled outage, never a takeover.
+- ADR 0005: the enum state + booleans may enter telemetry; note text and
+  urls never do (no status telemetry is emitted at all in this step).
+- **Marathon-tail flake, investigated 2026-07-06 (not a 7/08 defect):**
+  WORKTREE failed twice right after the 33-gate marathon (clean AND forced
+  worktree removal both refused — the Windows PTY/conhost-teardown lock
+  window), then passed 4/4 consecutive runs with the same diff; MILESTONE
+  logged one ~1s frame gap on the marathon tail and passed isolated with
+  wide margins (49.8fps / 111ms / 32MB). The worktree smoke now echoes
+  `cleanRemoved`/`forcedRemoved` verbatim so the next flake names itself —
+  the two-FAIL pattern joins 7/06's collision note: marathon contention
+  can FAIL/MISS gates, it has never false-passed one.
+
 ## 11 — the CLI
 
 - `mogging usage/*` are new REQUEST TYPES on the EXISTING 6/05b app endpoint

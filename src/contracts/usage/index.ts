@@ -51,6 +51,22 @@ export interface UsageAdapter {
   fetch(home: string, profileId: string, signal: AbortSignal): Promise<PlanUsage[]>
 }
 
+// ── Provider status feed (Phase-7/08): PUBLIC status endpoints only — no
+//    auth, no cookies, no keys. "They're down" is a different fact from
+//    "you're out"; the feed exists so a red gauge can say which. Only the
+//    enum state + booleans may enter telemetry (ADR 0005) — never note text.
+
+export type ProviderStatusState = 'operational' | 'degraded' | 'outage' | 'unknown'
+
+export interface ProviderStatus {
+  providerId: string
+  state: ProviderStatusState
+  /** The status page's own short wording when non-operational — UI verbatim. */
+  note?: string
+  /** Epoch ms of the check that produced this state. */
+  checkedAt: number
+}
+
 // ── Local cost scan (Phase-7/07, ADR 0007): parse the JSONL session logs the
 //    CLIs ALREADY write, at their KNOWN locations, on demand, read-only —
 //    zero network, never a watch. Closed shapes; the UI renders them verbatim.
@@ -146,6 +162,9 @@ export interface UsageProviderDef {
   /** web-session class: the site origin the cookie belongs to (store-read scope
    *  + sensitive-origin check). */
   origin?: string
+  /** PUBLIC status endpoint (7/08) — a plain statuspage/health JSON, no auth,
+   *  no cookies, https only. Rows carry one only after dev-verification. */
+  statusUrl?: string
   verifiedAt?: string
 }
 
@@ -170,8 +189,10 @@ const w = (kind: WindowKind, label: string): WindowSpec => ({ kind, label, windo
  *  the rest catalog+fixture, honestly `unconfigured` until dev-verified).
  *  api-key / cloud-cli / web-session rows arrive in 7/05–06. */
 export const USAGE_PROVIDERS: readonly UsageProviderDef[] = [
-  { id: 'claude', label: 'Claude', klass: 'cli-store', homePointerEnv: 'CLAUDE_CONFIG_DIR', windows: [w('session', 'Session (5h)'), w('weekly', 'Weekly')], verifiedAt: '2026-07-06' },
-  { id: 'codex', label: 'Codex', klass: 'cli-store', homePointerEnv: 'CODEX_HOME', windows: [w('session', 'Session (5h)'), w('weekly', 'Weekly')], verifiedAt: '2026-07-06' },
+  // statusUrl rows are dev-verified statuspage.io JSON (2026-07-06, books §08);
+  // providers without a PLAIN public JSON endpoint honestly carry none.
+  { id: 'claude', label: 'Claude', klass: 'cli-store', homePointerEnv: 'CLAUDE_CONFIG_DIR', windows: [w('session', 'Session (5h)'), w('weekly', 'Weekly')], statusUrl: 'https://status.claude.com/api/v2/status.json', verifiedAt: '2026-07-06' },
+  { id: 'codex', label: 'Codex', klass: 'cli-store', homePointerEnv: 'CODEX_HOME', windows: [w('session', 'Session (5h)'), w('weekly', 'Weekly')], statusUrl: 'https://status.openai.com/api/v2/status.json', verifiedAt: '2026-07-06' },
   { id: 'gemini', label: 'Gemini', klass: 'cli-store', homePointerEnv: 'GEMINI_CONFIG_DIR', windows: [w('daily', 'Daily')] },
   { id: 'copilot', label: 'GitHub Copilot', klass: 'cli-store', windows: [w('monthly', 'Monthly')] },
   { id: 'zed', label: 'Zed', klass: 'cli-store', windows: [w('monthly', 'Monthly')] },
@@ -186,8 +207,8 @@ export const USAGE_PROVIDERS: readonly UsageProviderDef[] = [
   { id: 'openrouter', label: 'OpenRouter', klass: 'api-key', endpoint: 'https://openrouter.ai/api/v1/credits', windows: [w('rolling', 'Credits')], credits: true },
   { id: 'deepseek', label: 'DeepSeek', klass: 'api-key', endpoint: 'https://api.deepseek.com/user/balance', windows: [w('rolling', 'Balance')], credits: true },
   { id: 'moonshot', label: 'Moonshot / Kimi API', klass: 'api-key', endpoint: 'https://api.moonshot.ai/v1/users/me/balance', windows: [w('rolling', 'Balance')], credits: true },
-  { id: 'elevenlabs', label: 'ElevenLabs', klass: 'api-key', endpoint: 'https://api.elevenlabs.io/v1/user/subscription', windows: [w('monthly', 'Characters')] },
-  { id: 'deepgram', label: 'Deepgram', klass: 'api-key', endpoint: 'https://api.deepgram.com/v1/projects', windows: [w('rolling', 'Balance')], credits: true },
+  { id: 'elevenlabs', label: 'ElevenLabs', klass: 'api-key', endpoint: 'https://api.elevenlabs.io/v1/user/subscription', windows: [w('monthly', 'Characters')], statusUrl: 'https://status.elevenlabs.io/api/v2/status.json' },
+  { id: 'deepgram', label: 'Deepgram', klass: 'api-key', endpoint: 'https://api.deepgram.com/v1/projects', windows: [w('rolling', 'Balance')], credits: true, statusUrl: 'https://status.deepgram.com/api/v2/status.json' },
   { id: 'litellm', label: 'LiteLLM', klass: 'api-key', windows: [w('rolling', 'Budget')], credits: true },
   { id: 'minimax', label: 'MiniMax', klass: 'api-key', windows: [w('rolling', 'Balance')], credits: true },
   { id: 'zai', label: 'z.ai', klass: 'api-key', windows: [w('rolling', 'Quota')], credits: true },
@@ -201,13 +222,13 @@ export const USAGE_PROVIDERS: readonly UsageProviderDef[] = [
   { id: 'doubao', label: 'Doubao', klass: 'api-key', windows: [w('rolling', 'Requests')], credits: true },
   { id: 'warp', label: 'Warp', klass: 'api-key', windows: [w('monthly', 'Requests')] },
   { id: 'alibaba', label: 'Alibaba (key)', klass: 'api-key', windows: [w('rolling', 'Quota')], credits: true },
-  { id: 'openai-admin', label: 'OpenAI (admin spend)', klass: 'api-key', endpoint: 'https://api.openai.com/v1/organization/costs', windows: [w('monthly', 'Spend')] },
+  { id: 'openai-admin', label: 'OpenAI (admin spend)', klass: 'api-key', endpoint: 'https://api.openai.com/v1/organization/costs', windows: [w('monthly', 'Spend')], statusUrl: 'https://status.openai.com/api/v2/status.json' },
   { id: 'claude-admin', label: 'Claude (admin spend)', klass: 'api-key', windows: [w('monthly', 'Spend')] },
   // ── cloud-cli class (7/05): ambient credentials via the vendor CLI ──
   { id: 'vertex', label: 'Vertex AI', klass: 'cloud-cli', windows: [w('rolling', 'Session')] },
   { id: 'bedrock', label: 'AWS Bedrock', klass: 'cloud-cli', windows: [w('monthly', 'Spend')] },
   // ── web-session class (7/06, ADR 0007.b): paste-first; store-read opt-in ──
-  { id: 'cursor', label: 'Cursor', klass: 'web-session', origin: 'cursor.com', cookieName: 'WorkosCursorSessionToken', endpoint: 'https://cursor.com/api/usage', windows: [w('monthly', 'Requests')] },
+  { id: 'cursor', label: 'Cursor', klass: 'web-session', origin: 'cursor.com', cookieName: 'WorkosCursorSessionToken', endpoint: 'https://cursor.com/api/usage', windows: [w('monthly', 'Requests')], statusUrl: 'https://status.cursor.com/api/v2/status.json' },
   { id: 'devin', label: 'Devin', klass: 'web-session', origin: 'app.devin.ai', cookieName: 'session', windows: [w('rolling', 'ACUs')], credits: true },
   { id: 'manus', label: 'Manus', klass: 'web-session', origin: 'manus.im', cookieName: 'session_id', windows: [w('rolling', 'Credits')], credits: true },
   { id: 't3chat', label: 'T3 Chat', klass: 'web-session', origin: 't3.chat', cookieName: 'session', windows: [w('monthly', 'Messages')] },

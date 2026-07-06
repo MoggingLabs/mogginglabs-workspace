@@ -21,6 +21,7 @@ export { fetchVertex, fetchBedrock } from './classes/cloud-cli'
 export { fetchWebSessionUsage, fixtureCookieBackend, realCookieBackend, type WebSessionDeps, type CookieStoreBackend } from './classes/web-session'
 export { scanCost, costLogDir, priceFor, MODEL_PRICES, CACHE_READ_X, CACHE_WRITE_5M_X, CACHE_WRITE_1H_X, COST_LOG_SUBDIR, type CostScanOptions, type ModelPrice } from './cost'
 export { appendHistory, readHistory, HISTORY_MAX, type HistoryKv } from './history'
+export { createStatusService, normalizeStatusBody, STATUS_CADENCE_MS, type StatusService, type StatusServiceDeps, type StatusFetcher, type StatusProviderRow } from './status'
 
 /** Build the REAL adapters from the catalog (Phase-7/04): one per cli-store
  *  row that has a reader. Claude delegates to the shipped 7/01 adapter (already

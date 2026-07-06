@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorktree } from '@backend/features/worktrees'
 import { setFakeMode } from '@backend/features/usage'
-import { getUsageService } from './usage'
+import { getUsageService, getUsageStatusService } from './usage'
 
 // MOGGING_SHOT=all (Phase-5/01): the GALLERY — drive the app through every surface
 // and write numbered PNGs to out/gallery/, in BOTH themes. The audit + before/after
@@ -137,6 +137,19 @@ export function runGallery(win: BrowserWindow): void {
           getUsageService()?.refresh()
           await sleep(900)
           await snap(`${tag}-usage-gauge-stale`)
+          // provider outage (7/08): the ONE-glyph incident overlay + status
+          // chip + "provider outage" relabel on the failing tile (fixture
+          // status body — zero network, like everything else here).
+          process.env.MOGGING_USAGE_STATUS = 'outage'
+          await getUsageStatusService()?.refresh()
+          await sleep(600)
+          await snap(`${tag}-usage-outage-gauge`)
+          await ES(`window.__mogging.usage && window.__mogging.usage.open()`)
+          await sleep(400)
+          await snap(`${tag}-usage-outage-popover`)
+          await ES(`window.__mogging.usage.close()`)
+          process.env.MOGGING_USAGE_STATUS = 'operational'
+          await getUsageStatusService()?.refresh()
           setFakeMode('ok')
           delete process.env.MOGGING_USAGE_FIXTURE
           getUsageService()?.refresh()

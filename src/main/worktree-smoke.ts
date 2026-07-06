@@ -128,6 +128,8 @@ export function runWorktreeSmoke(win: BrowserWindow): void {
         chip2,
         removalOk,
         dirtyRefused,
+        cleanRemoved,
+        forcedRemoved,
         repoIntact,
         dirs
       }
