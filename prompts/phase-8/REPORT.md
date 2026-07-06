@@ -3,8 +3,8 @@
 Receipts for the integrations pack (steps 01–14), same format as
 `prompts/phase-7/REPORT.md`. Per-step mechanics live in `IMPLEMENTATION.md`
 (deviations recorded there, inline); this file keeps dated verification
-records and the finds worth remembering. Sweep count as of 8/02: **36 gates**
-(35 + MCP).
+records and the finds worth remembering. Sweep count as of 8/03: **37 gates**
+(35 + MCP + MCPWRITE).
 
 ## 01 — ADR 0008 + the integrations contracts (2026-07-06)
 
@@ -66,3 +66,43 @@ claude mcp remove mogging-browser ; claude mcp add mogging -- node <install>/bin
 
 **Gates**: MCP PASS (22 asserts, `out/mcp-result.json`); BROWSERCTL re-run
 PASS untouched. Sweep 35 → **36**.
+
+## 03 — write tools behind the per-workspace grant (2026-07-06)
+
+**Shipped**: `WorkspaceIntegrationsGrant` persists in the app-settings KV
+(`integrations.grant.<wsId>`, @backend/features/integrations store; the 6/05b
+consent boolean migrates to `web:'public'` on first read, written back) with
+IPC `integrations:grant:get/set` + a push. The server resolves its session's
+granted write-tool names via the app endpoint (`grant.get`: pane -> workspace
+-> names, fail-closed), serves writes ONLY when granted (ungranted =
+invisible), re-checks the LIVE grant per write call, and emits
+`notifications/tools/list_changed` when a `grantChanged` push flips its set.
+The six write tools dispatch to the existing daemon/app verbs (send = input +
+pipelined ping; send-key's closed allowlist; mail with pane-identity sender;
+claim/release with the exit-5 denial wording; update_card = board.save patch).
+Every granted write emits a receipt (`{t:'receipt', tool, by, pane?, card?}`)
+— the app lands "MCP: … by pane N" attention on the TARGET pane via the house
+notify path and feeds the `recordTrail()` stub (8/05 gives it the store).
+Humans (no pane identity) get no write tools, period.
+
+**Find (caught by the gate)**: the FIRST workspace's ordinal is **0** — pane
+ids 1, 2. The pane->workspace resolver must validate the PANE id (slots start
+at 1) and accept ordinal 0, not reject `ordinal <= 0`. The MCPWRITE gate's
+'all' half failed until the guard moved to the pane number.
+
+**Dev-verify, real CLI (Claude Code 2.1.200, 2026-07-06)** — the DEV-held
+fixture world (`MOGGING_MCPWRITE=DEV`), workspace A granted `'all'`,
+workspace B untouched:
+
+- Session as pane 1 (ws A): reported **6/6 write tools present**; `mail_read`
+  → `DEVVERIFY_WRITE_MAIL_4242`; `claim_files {pattern:'src/dev/**'}` →
+  `claim #1 granted`; `send_to_pane {pane:'2', text:'echo
+  DEVVERIFY_SENT_BY_AGENT'}` → `sent to pane 2`; `capture_pane {pane:'2'}` →
+  the line arrived. The agent read the mailbox, claimed a glob, and sent to
+  its own workspace's pane — the DoD sentence, demonstrated.
+- Session as pane 101 (ws B): listed exactly the 19 read/act tools and
+  reported `WRITE_TOOL_COUNT=0` — the second workspace's session saw none of
+  those tools.
+
+**Gates**: MCPWRITE PASS (19 asserts, `out/mcpwrite-result.json`); MCP +
+BROWSERCTL re-run PASS. Sweep 36 → **37**.

@@ -209,8 +209,10 @@ export function runMcpSmoke(win: BrowserWindow): void {
       const malformed = await callTool(c1, 'capture_pane', {})
       const malformedOk = !!malformed.rpcError && /pane/.test(malformed.rpcError)
 
+      // 8/03: writes exist now but this world never granted them — the default
+      // 'none' refusal must name the grant (and the tool stays unlisted).
       const write = await callTool(c1, 'send_to_pane', { pane: pane1, text: 'nope' })
-      const writeRefusedOk = !!write.rpcError && /grant/.test(write.rpcError) && /8\/03|phase 8\/03/.test(write.rpcError)
+      const writeRefusedOk = !!write.rpcError && /grant/.test(write.rpcError) && /OFF/.test(write.rpcError)
 
       const unknown = await callTool(c1, 'frobnicate', {})
       const unknownToolOk = !!unknown.rpcError && /unknown tool/.test(unknown.rpcError)

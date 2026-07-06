@@ -22,6 +22,8 @@ import { registerUsage } from './usage'
 import { registerRemotes } from './remotes'
 import { runSmoke } from './smoke'
 import { runMcpSmoke } from './mcp-smoke'
+import { runMcpWriteSmoke } from './mcpwrite-smoke'
+import { registerIntegrations } from './integrations'
 import { runAgentSmoke } from './agent-smoke'
 import { runStateSmoke } from './state-smoke'
 import { runReloadSmoke } from './reload-smoke'
@@ -141,7 +143,8 @@ app.whenReady().then(async () => {
   registerDialogs(() => win) // native directory picker for the new-workspace wizard
   registerShellChrome(() => win) // theme-tinted window-control overlay (organic chrome)
   registerBrowserDock(() => win) // right browser dock: MAIN owns the WebContentsView (6/05)
-  startMcpEndpoint() // agent-control transport: the MCP server reaches the dock here (6/05b)
+  registerIntegrations(() => win) // per-workspace integrations grant: store + IPC + fan-out (8/03)
+  startMcpEndpoint() // agent-control transport: the MCP server reaches the dock + grant wire here (6/05b, 8/03)
   registerAgents() // agent launcher: detect installed CLIs + build launch commands (Phase-1/06)
   registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
   registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
@@ -220,6 +223,8 @@ app.whenReady().then(async () => {
     runUsageSetSmoke(win) // env-gated Usage-tab smoke: the full Settings § Usage (7/12)
   } else if (process.env.MOGGING_MCP && win) {
     runMcpSmoke(win) // env-gated house-MCP-server smoke: both upstreams, catalog-as-data (Phase-8/02)
+  } else if (process.env.MOGGING_MCPWRITE && win) {
+    runMcpWriteSmoke(win, process.env.MOGGING_MCPWRITE) // env-gated write-tools-behind-grant smoke (Phase-8/03; DEV = held world)
   } else if (process.env.MOGGING_USAGE && win) {
     runUsageSmoke(win) // env-gated usage-seam smoke: FAKE adapter only (Phase-7/01)
   } else if (process.env.MOGGING_ATTENTION && win) {

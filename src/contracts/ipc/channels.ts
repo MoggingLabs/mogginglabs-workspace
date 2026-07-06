@@ -167,7 +167,16 @@ export const UsageChannels = {
   paceCfgSet: 'usage:paceCfgSet' // (partial UsagePaceConfig) -> void (re-pushes views)
 } as const
 
+export const IntegrationsChannels = {
+  // Phase-8/03: the per-workspace integrations grant (shape: @contracts/integrations).
+  // Grants are tool names + origins — never credentials. Editing UI lands in 06.
+  grantGet: 'integrations:grant:get', // (workspaceId) -> WorkspaceIntegrationsGrant (defaults when absent)
+  grantSet: 'integrations:grant:set', // (WorkspaceIntegrationsGrant) -> sanitized grant | null (refused shape)
+  grantChanged: 'integrations:grant:changed' // main -> renderer: WorkspaceIntegrationsGrant (pushed on any change)
+} as const
+
 export const AllChannels: readonly string[] = [
+  ...Object.values(IntegrationsChannels),
   ...Object.values(UsageChannels),
   ...Object.values(UpdateChannels),
   ...Object.values(BrowserChannels),

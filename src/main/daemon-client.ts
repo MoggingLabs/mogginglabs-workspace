@@ -190,6 +190,11 @@ export class DaemonClient {
   setRole(id: string, role: string): void {
     this.send({ t: 'set-role', id, role })
   }
+  /** House notify (8/03 receipts ride it): raise a pane's attention with a
+   *  short label — the same closed verb `mogging notify` uses, never content. */
+  notify(id: string, event: string, message?: string): void {
+    this.send({ t: 'notify', id, event, message })
+  }
   /** Ownership ledger (4/02): ask for the current claim set (pushes follow). */
   requestOwners(): void {
     this.send({ t: 'owners' })

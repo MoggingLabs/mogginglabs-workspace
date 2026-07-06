@@ -5,9 +5,11 @@
 // daemon-protocol change — v3 untouched):
 //   browser family  -> the app's browser-control endpoint (consent enforced
 //                      app-side, per-workspace, default OFF — ADR 0002)
-//   control family  -> the PTY daemon socket the `mogging` CLI already speaks
-//                      (READ half this step; writes arrive behind the 8/03
-//                      per-workspace grant — never served here, never stubbed)
+//   control family  -> the PTY daemon socket the `mogging` CLI already speaks;
+//                      WRITES (8/03) serve only under the per-workspace grant
+//                      (default OFF, resolved via the app's `grant.get`,
+//                      re-checked LIVE per call, list_changed on flips; no
+//                      pane identity -> no write tools, period)
 // The catalog is DATA: `bin/mcp-catalog.json`, build-copied from
 // `src/contracts/integrations/mcp-catalog.json` (both committed; the MCP smoke
 // byte-compares them). Dispatch derives from each entry's family + verb.
@@ -47,10 +49,40 @@ function daemonEndpointFile() {
 
 // ── The catalog (ONE piece of data; the hand-written array died in 8/02) ─────
 const CATALOG = JSON.parse(readFileSync(join(__dirname, 'mcp-catalog.json'), 'utf8'))
-// Served this step: the browser family + control READS. Write tools are not
-// listed, not flagged, not stubbed — they arrive with the 8/03 grant.
-const SERVED = CATALOG.filter((t) => t.access !== 'write')
 const byName = new Map(CATALOG.map((t) => [t.name, t]))
+
+// ── The per-workspace grant (8/03, ADR 0008.c) ───────────────────────────────
+// Write tools are served ONLY when this session's workspace granted them: the
+// app resolves pane -> workspace -> granted names (`grant.get` over the app
+// endpoint), pushes `grantChanged` on flips, and every write call re-checks
+// LIVE so a revoke lands mid-session. Sessions without a pane identity (a
+// human running the server outside a pane) get no write tools, period.
+// Fail-closed everywhere: no app, no pane, no resolution -> reads only.
+let grantedWrites = new Set()
+
+/** Serve the catalog minus ungranted writes — ungranted means INVISIBLE. */
+const servedTools = () => CATALOG.filter((t) => t.access !== 'write' || grantedWrites.has(t.name))
+
+/** Re-resolve this session's granted writes. Emits tools/list_changed when the
+ *  set changed (unless suppressed — the initialize-time resolve has no
+ *  listener yet). Failure -> empty set (fail closed), never a throw. */
+function applyGrantSet(names, emitChange) {
+  const next = new Set(names)
+  const changed = next.size !== grantedWrites.size || [...next].some((n) => !grantedWrites.has(n))
+  grantedWrites = next
+  if (changed && emitChange) send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
+  return next
+}
+
+async function refreshGrant(emitChange) {
+  if (!paneIdentity()) return applyGrantSet([], emitChange)
+  try {
+    const r = await callApp('grant.get', { pane: paneIdentity() })
+    return applyGrantSet(r.ok && Array.isArray(r.writeTools) ? r.writeTools : [], emitChange)
+  } catch {
+    return applyGrantSet([], emitChange) // app unreachable: fail closed
+  }
+}
 
 let VERSION = '0.0.0'
 try {
@@ -81,6 +113,10 @@ async function callApp(name, args) {
         const resolve = appPending.get(m.id)
         appPending.delete(m.id)
         resolve(m)
+      } else if (m.t === 'grantChanged') {
+        // A grant flipped somewhere — re-resolve and tell the agent when our
+        // tool set changed (revokes land mid-session; calls re-check anyway).
+        void refreshGrant(true)
       }
     })
     // App gone mid-session (quit/crash): drop the session so the next call
@@ -249,6 +285,159 @@ async function handleControlCall(id, def, args) {
   }
 }
 
+// ── The write tools (8/03): granted-only, live-checked, attributable ─────────
+
+/** Tool-specific arg rules the flat schema can't express. */
+function writeArgsProblem(def, args) {
+  if (def.name === 'release_files' && !args.pattern && args.all !== true) {
+    return 'one of "pattern" or all=true is required'
+  }
+  if (def.name === 'update_card' && args.column === undefined && args.note === undefined) {
+    return 'one of "column" or "note" is required'
+  }
+  return null
+}
+
+/** Dispatch one GRANTED write to its existing upstream verb. Returns
+ *  { text, receipt? } or { error } (tool error, CLI wording). Throws e.rpc for
+ *  connection-level failures. NO new daemon capability: same verbs, same
+ *  allowlists, same caps as the `mogging` CLI. */
+async function dispatchWrite(def, args, by) {
+  switch (def.verb) {
+    case 'input': {
+      // The CLI's send, exactly: pane checked against the welcome snapshot,
+      // then input + pipelined ping — pong proves the daemon processed it.
+      let sess
+      try {
+        sess = await connectEndpoint(daemonEndpointFile())
+      } catch (e) {
+        const err = new Error(
+          e.code === 'auth'
+            ? 'the MoggingLabs daemon refused the connection (auth)'
+            : 'the MoggingLabs daemon is not running — open the app (or a pane), or point MOGGING_DAEMON_ENDPOINT at its endpoint file'
+        )
+        err.rpc = true
+        throw err
+      }
+      try {
+        const panes = sess.welcome.panes ?? []
+        if (!panes.some((p) => String(p.id) === String(args.pane))) return { error: `unknown pane ${args.pane}` }
+        const reply = await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            const err = new Error('the MoggingLabs daemon did not respond in time')
+            err.rpc = true
+            reject(err)
+          }, 5000)
+          sess.onMessage((m) => {
+            if (m.t === 'pong' || m.t === 'error') {
+              clearTimeout(timer)
+              resolve(m)
+            }
+          })
+          sess.send({ t: 'input', id: String(args.pane), data: args.text + (args.noEnter ? '' : '\r') })
+          sess.send({ t: 'ping' })
+        })
+        if (reply.t !== 'pong') return { error: `send rejected (${reply.reason || 'error'})` }
+        return { text: `sent to pane ${args.pane}`, receipt: { pane: String(args.pane) } }
+      } finally {
+        sess.close()
+      }
+    }
+    case 'send-key': {
+      const m = await callDaemon({ t: 'send-key', id: String(args.pane), key: args.key }, ['sent'])
+      if (m.t === 'error') {
+        return {
+          error:
+            m.reason === 'badkey'
+              ? `unknown key "${args.key}" (allowed: enter, tab, escape, backspace, space, up, down, left, right, home, end, page-up, page-down, c-c, c-d, c-z, c-l, c-u, c-r)`
+              : `unknown pane ${args.pane}`
+        }
+      }
+      return { text: `key "${args.key}" sent to pane ${args.pane}`, receipt: { pane: String(args.pane) } }
+    }
+    case 'mail-send': {
+      // Sender = pane identity, always (attributable); body capped daemon-side
+      // at 16 KB exactly like `mogging mail send`.
+      const m = await callDaemon({ t: 'mail-send', from: by, to: String(args.to), body: args.body }, ['mailed'])
+      if (m.t === 'error') return { error: `mail rejected (${m.reason || 'error'})` }
+      return {
+        text: `mail #${m.id} sent`,
+        receipt: args.to !== 'all' ? { pane: String(args.to) } : {}
+      }
+    }
+    case 'claim': {
+      const m = await callDaemon({ t: 'claim', pattern: args.pattern, from: by }, ['claimed', 'claim-denied'])
+      if (m.t === 'claim-denied') return { error: `DENIED — overlaps "${m.pattern}" owned by pane ${m.ownerPaneId}` }
+      if (m.t === 'error') return { error: `claim rejected (${m.reason || 'error'})` }
+      return { text: `claim #${m.id} granted`, receipt: {} }
+    }
+    case 'release': {
+      const m = await callDaemon({ t: 'release', pattern: args.pattern, all: args.all === true, from: by }, ['released'])
+      if (m.t === 'error') return { error: `release rejected (${m.reason || 'error'})` }
+      return { text: `released ${m.count}`, receipt: {} }
+    }
+    case 'board.save': {
+      const r = await callApp('board.save', { card: args.card, column: args.column, note: args.note })
+      if (!r.ok) {
+        return { error: r.reason === 'unknown-card' ? `unknown card ${args.card}` : `card update failed: ${r.reason || 'error'}` }
+      }
+      return {
+        text: `card ${args.card} updated`,
+        receipt: { card: String(args.card), ...(r.pane != null ? { pane: String(r.pane) } : {}) }
+      }
+    }
+    default:
+      return { error: `unroutable write verb: ${def.verb}` }
+  }
+}
+
+async function handleWriteCall(id, def, args) {
+  const by = paneIdentity()
+  if (!by) {
+    // Human sessions get no write tools, period — not listed, and a direct
+    // call is a spec error (humans drive panes directly).
+    replyErr(id, -32602, `"${def.name}" is unavailable: write tools exist only inside a pane session`)
+    return
+  }
+  // LIVE grant re-check per call — a revoke lands mid-session even if the
+  // client ignored list_changed. Unverifiable (app down) is a clean refusal.
+  let live
+  try {
+    const r = await callApp('grant.get', { pane: by })
+    live = applyGrantSet(r.ok && Array.isArray(r.writeTools) ? r.writeTools : [], true)
+  } catch {
+    replyErr(id, -32000, 'cannot verify the write grant — the MoggingLabs app is not running')
+    return
+  }
+  if (!live.has(def.name)) {
+    replyErr(
+      id,
+      -32602,
+      `"${def.name}" requires the workspace integrations grant — write tools are OFF for this workspace (default). The human grants them in the app.`
+    )
+    return
+  }
+  const extra = writeArgsProblem(def, args)
+  if (extra) {
+    replyErr(id, -32602, `${def.name}: ${extra}`)
+    return
+  }
+  try {
+    const done = await dispatchWrite(def, args, by)
+    if (done.error) {
+      toolError(id, done.error)
+      return
+    }
+    toolText(id, done.text)
+    // The receipt: attention on the target + the trail, app-side. Fire and
+    // forget — tool NAME and pane ids only, never args or bodies (ADR 0005).
+    if (done.receipt && appSession) appSession.send({ t: 'receipt', tool: def.name, by, ...done.receipt })
+  } catch (e) {
+    if (e.rpc) replyErr(id, -32000, String(e.message || e))
+    else toolError(id, String(e.message || e))
+  }
+}
+
 async function handleToolCall(id, params) {
   const name = params?.name
   const args = params?.arguments ?? {}
@@ -257,18 +446,13 @@ async function handleToolCall(id, params) {
     replyErr(id, -32602, `unknown tool: ${name}`)
     return
   }
-  if (def.access === 'write') {
-    // Never a stub: write tools arrive behind the per-workspace grant (8/03,
-    // default off). Until then a write call is a spec error, plainly worded.
-    replyErr(id, -32602, `"${name}" is a write tool — write tools arrive behind the per-workspace integrations grant (phase 8/03) and are not served yet`)
-    return
-  }
   const problem = argsProblem(def, args)
   if (problem) {
     replyErr(id, -32602, `${name}: ${problem}`)
     return
   }
-  if (def.family === 'browser') await handleBrowserCall(id, def, args)
+  if (def.access === 'write') await handleWriteCall(id, def, args)
+  else if (def.family === 'browser') await handleBrowserCall(id, def, args)
   else await handleControlCall(id, def, args)
 }
 
@@ -289,14 +473,19 @@ process.stdin.on('data', (chunk) => {
     }
     const { id, method, params } = msg
     if (method === 'initialize') {
-      reply(id, {
-        protocolVersion: '2024-11-05',
-        capabilities: { tools: { listChanged: true } },
-        serverInfo: { name: 'mogging', version: VERSION }
-      })
+      // Resolve the session's grant BEFORE replying (bounded) so the first
+      // tools/list is already right; later flips ride list_changed.
+      void (async () => {
+        await Promise.race([refreshGrant(false), new Promise((r) => setTimeout(r, 2000))]).catch(() => {})
+        reply(id, {
+          protocolVersion: '2024-11-05',
+          capabilities: { tools: { listChanged: true } },
+          serverInfo: { name: 'mogging', version: VERSION }
+        })
+      })()
     } else if (method === 'tools/list') {
       reply(id, {
-        tools: SERVED.map((t) => ({
+        tools: servedTools().map((t) => ({
           name: t.name,
           title: t.title,
           description: t.description,

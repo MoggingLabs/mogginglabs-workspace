@@ -6,7 +6,16 @@ import * as path from 'node:path'
 import { agentAct, agentControlDebug } from './browser-dock'
 import { handleUsageCall } from './usage'
 import { getSettingsStore } from './app-settings'
-import { MCP_BROWSER_TOOL_NAMES, type BrowserAgentVerb, type BrowserAgentVerbName } from '@contracts'
+import { onIntegrationsGrantChanged, resolveGrantedWriteTools } from './integrations'
+import { getDaemonClient } from './daemon-relay'
+import { recordTrail } from './trail'
+import {
+  BOARD_LANES,
+  MCP_BROWSER_TOOL_NAMES,
+  type BoardCard,
+  type BrowserAgentVerb,
+  type BrowserAgentVerbName
+} from '@contracts'
 
 /**
  * The agent-control transport (Phase-6/05b). Main opens a token-authed LOCAL
@@ -85,6 +94,47 @@ export const MCP_TOOL_NAMES: string[] = [...MCP_BROWSER_TOOL_NAMES]
 
 let server: net.Server | null = null
 let token = ''
+const authedSocks = new Set<net.Socket>()
+
+/** One wording source for receipt copy — tool name + acting pane, nothing else. */
+function receiptCopy(tool: string, by: string): string {
+  switch (tool) {
+    case 'send_to_pane':
+      return `MCP: sent by pane ${by}`
+    case 'send_key':
+      return `MCP: key press by pane ${by}`
+    case 'mail_send':
+      return `MCP: mail from pane ${by}`
+    case 'update_card':
+      return `MCP: card updated by pane ${by}`
+    default:
+      return `MCP: ${tool} by pane ${by}`
+  }
+}
+
+/** A granted write's receipt: attention on the target pane + the trail stub.
+ *  Every write is attributable — `by` is the acting pane, always present. */
+function handleReceipt(msg: Record<string, unknown>): void {
+  const tool = String(msg.tool ?? '')
+  const by = String(msg.by ?? '')
+  if (!tool || !by) return // anonymous writes don't exist
+  const card = typeof msg.card === 'string' ? msg.card : undefined
+  let targetPane = typeof msg.pane === 'string' && msg.pane ? msg.pane : ''
+  if (!targetPane && card) {
+    const bound = getSettingsStore()?.listBoard().find((c) => c.id === card)?.paneId
+    if (bound != null) targetPane = String(bound)
+  }
+  if (targetPane) getDaemonClient()?.notify(targetPane, 'attention', receiptCopy(tool, by))
+  recordTrail({
+    ts: Date.now(),
+    source: 'mcp',
+    workspaceId: resolveGrantedWriteTools(by).workspaceId ?? '',
+    pane: by,
+    verb: tool,
+    target: targetPane ? `pane ${targetPane}` : card ? `card ${card}` : 'fleet',
+    outcome: 'ok'
+  })
+}
 
 export function startMcpEndpoint(): void {
   if (server) return
@@ -122,11 +172,20 @@ export function startMcpEndpoint(): void {
           authed = msg.token === token
           sock.write(JSON.stringify(authed ? { t: 'welcome', tools: MCP_TOOL_NAMES } : { t: 'error', reason: 'auth' }) + '\n')
           if (!authed) sock.destroy()
+          else authedSocks.add(sock)
           continue
         }
         if (!authed) {
           sock.destroy()
           return
+        }
+        // 8/03: a receipt for a granted write — fire-and-forget from the
+        // server. Lands a subtle attention event on the TARGET pane's header
+        // (the house notify path) and feeds the trail stub. Tool NAME + pane
+        // ids only — args/bodies never ride a receipt (ADR 0005).
+        if (msg.t === 'receipt') {
+          handleReceipt(msg as unknown as Record<string, unknown>)
+          continue
         }
         if (msg.t === 'call' && typeof msg.id === 'number' && typeof msg.name === 'string') {
           const id = msg.id
@@ -148,6 +207,38 @@ export function startMcpEndpoint(): void {
             sock.write(JSON.stringify({ t: 'result', id, ok: true, cards: getSettingsStore()?.listBoard() ?? [] }) + '\n')
             continue
           }
+          // 8/03: `update_card`'s upstream — patch lane/notes on an EXISTING
+          // card (the board:save capability, no new verbs). Reply carries the
+          // card's bound pane so the server's receipt can land on it.
+          if (msg.name === 'board.save') {
+            const args = msg.args ?? {}
+            const store = getSettingsStore()
+            const card = store?.listBoard().find((c) => c.id === String(args.card ?? ''))
+            if (!store || !card) {
+              sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: 'unknown-card' }) + '\n')
+              continue
+            }
+            if (typeof args.column === 'string') {
+              if (!(BOARD_LANES as readonly string[]).includes(args.column)) {
+                sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: 'badlane' }) + '\n')
+                continue
+              }
+              card.lane = args.column as BoardCard['lane']
+            }
+            if (typeof args.note === 'string') card.notes = args.note.slice(0, 10000)
+            card.updatedAt = Date.now()
+            store.saveBoardCard(card)
+            sock.write(JSON.stringify({ t: 'result', id, ok: true, pane: card.paneId ?? undefined }) + '\n')
+            continue
+          }
+          // 8/03: the grant wire. `grant.get` resolves pane -> workspace ->
+          // granted write-tool NAMES (fail-closed); the server filters its
+          // catalog by this list and re-checks it live per write call.
+          if (msg.name === 'grant.get') {
+            const res = resolveGrantedWriteTools(String(msg.args?.pane ?? ''))
+            sock.write(JSON.stringify({ t: 'result', id, ok: true, ...res }) + '\n')
+            continue
+          }
           const verb = toVerb(msg.name, msg.args ?? {})
           if (!verb) {
             sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: 'unknown-tool' }) + '\n')
@@ -160,6 +251,19 @@ export function startMcpEndpoint(): void {
       }
     })
     sock.on('error', () => sock.destroy())
+    sock.on('close', () => authedSocks.delete(sock))
+  })
+
+  // A grant flip anywhere -> every live server session re-resolves (and emits
+  // notifications/tools/list_changed to its agent when its set changed).
+  onIntegrationsGrantChanged(() => {
+    for (const s of authedSocks) {
+      try {
+        s.write(JSON.stringify({ t: 'grantChanged' }) + '\n')
+      } catch {
+        /* peer gone; close handler cleans up */
+      }
+    }
   })
 
   server.on('error', () => {

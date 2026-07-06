@@ -47,8 +47,17 @@ daemon protocol stays v3):
   `list_board` (the board lives app-side, so this one rides the app endpoint).
   The upstreams degrade independently — no daemon means control tools answer a
   clean JSON-RPC error naming the fix while browser tools keep working, and
-  vice versa. Write tools are NOT served: they arrive behind the 8/03
-  per-workspace grant; calling one today is a spec error that says so.
+  vice versa. Control WRITES (8/03: `send_to_pane` · `send_key` · `mail_send`
+  · `claim_files` / `release_files` · `update_card`) serve ONLY under the
+  per-workspace integrations grant (default OFF): ungranted means invisible in
+  `tools/list` AND refused on a direct call; the grant is re-checked LIVE per
+  call so a revoke lands mid-session (`notifications/tools/list_changed`
+  follows flips); sessions without a pane identity get no write tools, period.
+  Every granted write is attributable — a receipt lands "MCP: … by pane N"
+  attention on the target pane and feeds the activity trail (8/05). The write
+  tools add NO daemon capability: same verbs, allowlists, and caps as the
+  `mogging` CLI, and `approve` is never a tool (docs/09 — humans own the
+  review gate).
 
 The whole path is exercised by two gates: `MOGGING_BROWSERCTL` (dock driving)
 and `MOGGING_MCP` (both upstreams, catalog equality, degradation, token

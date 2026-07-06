@@ -167,6 +167,18 @@ daemon protocol v3 frozen, smokes network-free.
   (`{t:'grantGet',pane}` → grant snapshot + workspace resolution, and a
   pushed `{t:'grantChanged'}`). That wire is 6/05b's app transport — ours to
   extend, not daemon protocol.
+  - **Deviation recorded (03, 2026-07-06)**: the request half rides the
+    endpoint's EXISTING `{t:'call', id, name:'grant.get'}` → `{t:'result',
+    id}` correlation (like `usage.*` and `board.list`) instead of a bare
+    `{t:'grantGet'}` t-type — identical semantics, request/response
+    correlation for free. The reply is the RESOLVED granted write-tool NAMES
+    (pane → workspace → names, fail-closed), so the server stays a dumb
+    catalog filter. `{t:'grantChanged'}` (push, all authed clients) and
+    `{t:'receipt', tool, by, pane?, card?}` (fire-and-forget) are new
+    t-frames as specced.
+  - **Find (03)**: the first workspace's ordinal is 0 (panes 1..n) — pane →
+    workspace resolution must validate the pane number (slots start at 1),
+    never reject ordinal 0.
 - On `grantChanged` the server re-reads and emits
   `notifications/tools/list_changed`; every `tools/call` still re-checks
   (revoke lands mid-session even if the client ignores list_changed).
