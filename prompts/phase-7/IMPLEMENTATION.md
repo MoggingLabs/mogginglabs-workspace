@@ -66,7 +66,49 @@ seams; ADR 0007 and docs/12 are both unclaimed. The pack runs BEFORE phase
   exactly those three, defensively. Live read: Session 43%, Weekly 9%,
   health fresh.
 
-## 04 — Codex/OpenAI + Gemini
+## 04–06 — the provider catalog (CodexBar parity, five classes)
+
+- One adapter CLASS per mechanism, every provider a DATA ROW
+  (`UsageProviderDef`). ~57 providers ≠ ~57 adapters — dispatch keys on
+  `klass`. Adding provider #58 on an existing class is a row + a fixture,
+  never a step. Parity map + per-provider mechanism table lives in
+  `docs/research/2026-07-codexbar-parity.md`.
+- Classes: `cli-store` (04, ADR 0007 verbatim — the biggest tier),
+  `api-key` (05, env-ref POINTERS — we store no literal, the deliberate
+  CodexBar divergence), `cloud-cli` (05, gcloud/aws ambient), `web-session`
+  (06, its OWN ADR 0007.b — paste-first, store-read opt-in/OFF/read-only,
+  NEVER agent-facing), `local` (Ollama/Antigravity/cost-scan).
+- **Two carve-outs from "everything", by design, not omission:** no
+  username+password login brokering (StepFun — ADR 0002); app-held device
+  flows deferred to their own ADR (Copilot rides its CLI token instead).
+  Both are stated in the ADRs and docs/12, so "parity" is honest.
+- Each catalog row carries `verifiedAt` — the date its endpoint/shape was
+  dev-checked (the 7/01 discipline; books record the shape). A row with a
+  stale/absent verifiedAt still ships FAKE-covered but is flagged in review.
+- The FAKE adapter grows a fixture per emittable shape (credits, daily
+  quota, spend graph, Prometheus metric, SQLite-backed, XML-backed, cookie
+  paste) — the USAGE gate exercises every normalization path, zero network.
+
+## 07 — cost/spend/history
+
+- Cost scan parses the LOCAL JSONL logs Codex/Claude already write (known
+  path table, on demand, offline — never a watch or a network call).
+- History is OUR sampled percentages ringed in the KV (bounded, counts not
+  content) — every provider gets a sparkline free, no per-provider endpoint.
+
+## 08 — status feed
+
+- Public statuspage endpoints only (no auth/cookies); poll ENABLED
+  providers on one shared jittered cadence; an outage relabels a failing
+  tile "provider outage" so red reads as "they're down," not "you're out".
+
+## 11 — the CLI
+
+- `mogging usage/*` are new REQUEST TYPES on the EXISTING 6/05b app endpoint
+  (token-authed) — NOT a new listener, NOT daemon protocol (stays v3).
+  Verdict strings come from 02's formatter; the CLI never re-spells them.
+
+## (legacy note) 04 — Codex/OpenAI + Gemini
 
 - Prefer **reading the CLI's own local state** over calling provider
   endpoints: Codex persists rate-limit snapshots in its session state

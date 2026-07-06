@@ -1,52 +1,69 @@
 # Phase 7 — Usage meters: know your pace before the limit does
 
 Sequenced task prompts for Phase 7 of **MoggingLabs Workspace**: the swarm burns
-plan quota all day — now the app must SHOW the burn. A CodexBar-grade usage
-surface (steipete's menu-bar app is the reference: session + weekly gauges,
-reset countdowns, pace deltas, run-out forecasts, account switching without
-credential copying) built the house way: provider adapters behind one seam,
-profile-scoped plans, a titlebar gauge with a quick-check popover, and the
-pace engine that says plainly whether you'll run out early, land on pace, or
-leave quota unused. Same format as `prompts/phase-1..6/` (each step
-self-contained + pasteable as a `/goal`, < 4000 chars). Execute in order.
+plan quota all day — now the app must SHOW the burn. **Full CodexBar parity**
+is the bar: steipete's menu-bar app tracks ~57 providers with session/weekly/
+monthly gauges, pace + forecasts, cost/spend scans, usage-history charts,
+provider status badges, merged-icon display, threshold notifications + reset
+confetti, account switching, and a bundled CLI. We match all of it the house
+way — provider adapters behind ONE seam, a catalog-as-data of ~57 providers on
+FIVE mechanism classes, profile-scoped plans, a titlebar gauge + popover, and
+the pace engine that says plainly whether you'll run out early, land on pace,
+or leave quota unused. Parity map: `docs/research/2026-07-codexbar-parity.md`.
+Same format as `prompts/phase-1..6/` (each step self-contained + pasteable as
+a `/goal`, < 4000 chars). Execute in order.
 
-> **Surface decision (made here, binding)**: the primary surface is a POPOVER
-> dropping from a titlebar usage icon — usage is a glance ("can I keep
-> going?"), not a destination, and the reference app is itself a menu-bar
-> dropdown. Configuration gets a FULL Usage tab in Settings (06): its own
-> left-nav section holding every knob, the plans×profiles management table,
-> and the privacy story. The tab configures and explains — it never becomes
-> a dashboard; analytical depth needs a later phase to earn it.
+> **Surface decision (binding)**: the primary surface is a POPOVER dropping
+> from a titlebar usage icon — usage is a glance ("can I keep going?"), not a
+> destination. Configuration gets a FULL Usage tab in Settings (12): its own
+> left-nav section, the searchable ~57-provider grid, plans×profiles table,
+> display options, and the privacy story. The tab configures and explains —
+> it never becomes an analytical dashboard.
 
-> **Auth stance (binding, extends ADR 0002)**: usage adapters RIDE the
-> sessions the CLIs already own — token read from the CLI's own store at
-> request time, held in memory for the one request, never persisted, copied,
-> or displayed. A profile points at WHICH store to read (the same pointer
-> philosophy CodexBar uses for "switchable accounts without copying their
-> credentials"). Codified as ADR 0007 in step 01.
+> **Auth stance (binding, ADR 0007 + 0007.b)**: usage adapters RIDE sessions
+> the user's own tools already own — CLI/editor stores, API keys as env-ref
+> pointers (we store NO key literal, unlike CodexBar), ambient cloud-CLI
+> credentials, or a browser session the user opted in to reading. Read in
+> memory for the one request; never persisted, copied, or displayed. Two
+> honest carve-outs from "everything": we do NOT broker a username+password
+> login (ADR 0002 — what StepFun would need), and app-held device flows are
+> deferred behind their own ADR (Copilot ships via its CLI token instead).
+> Web-session reads are their own ADR (0007.b), opt-in, off by default, and
+> NEVER exposed to agents (that stays parked Branch B).
+
+> **Before executing any step, read `IMPLEMENTATION.md`** — best-path
+> decisions surveyed against shipped code. Steps 04–12 expand the pack for
+> CodexBar parity; the catalog stays DATA so provider #58 is a row, not a step.
 
 ## Sequence
 | # | File | Gate |
 |---|------|------|
-| 01 | `01-usage-core-and-adr.md` | **DONE** (2026-07-06): ADR 0007 + `@contracts/usage` + seam (jitter/backoff/hidden-pause/stale-first-class) + FAKE (7 fixture states, only adapter under smoke envs) + Claude adapter (endpoint shape dev-verified on a real login: Session 43%/Weekly 9%, fresh); USAGE green, full 31-gate local sweep green |
-| 02 | `02-pace-engine.md` | **DONE** (2026-07-06): pure `pace.ts` (clock injected, zero I/O) — blended burn (recent overlay catches the sprint the average misses), projection-gated verdicts, warm-up band, work-day active-time integral (weekend fixture pair flips as designed); 9 goldens assert verdict+delta+EXACT wording in USAGE; strings grep-proven to live in formatter+fixtures only; 31-gate sweep green (PRODUCT re-confirmed in isolation after a load flake: 118fps/69.6ms/32MB) |
-| 03 | `03-titlebar-gauge-and-popover.md` | Two-bar titlebar gauge (session/weekly) + quick-check popover, design-system compliant; USAGEUI smoke + both perf budgets green |
-| 04 | `04-openai-gemini-adapters.md` | Codex/OpenAI + Gemini adapters on the same seam, per-OS credential paths, stale/error states; adapter authoring guide |
-| 05 | `05-profiles-plans-and-alerts.md` | Plans × profiles switcher (N plans per provider), threshold notifications through the house notify system, failover suggestion feed |
-| 06 | `06-usage-settings-tab.md` | The FULL Usage tab in Settings: own nav section, providers block, plans×profiles table, pace/alerts editors, privacy story; USAGESET smoke green |
-| 07 | `07-usage-milestone.md` | All three CI sweeps green with the new gates; docs/12-usage.md; pack freeze + per-OS numbers |
+| 01 | `01-usage-core-and-adr.md` | **DONE** (2026-07-06): ADR 0007 + `@contracts/usage` + seam (jitter/backoff/hidden-pause/stale-first-class) + FAKE + Claude adapter (endpoint dev-verified); USAGE green, 31-gate sweep green |
+| 02 | `02-pace-engine.md` | **DONE** (2026-07-06): pure `pace.ts` (clock injected), projection-gated verdicts, work-day integral, 9 goldens assert verdict+delta+EXACT wording, grep-proven single formatter |
+| 03 | `03-titlebar-gauge-and-popover.md` | Two-bar titlebar gauge + quick-check popover, design-system compliant; USAGEUI smoke + both perf budgets green |
+| 04 | `04-provider-catalog-and-cli-tier.md` | Provider catalog as data (5 classes) + the `cli-store` class: Codex, Gemini, Copilot, Zed, JetBrains, OpenCode, Windsurf, … from CLI/editor stores; USAGE grows |
+| 05 | `05-apikey-and-cloud-tiers.md` | `api-key` class (env-ref pointers — OpenRouter, DeepSeek, ElevenLabs, GroqCloud, LiteLLM, admin spend, …) + `cloud-cli` class (Vertex/gcloud, Bedrock/aws); USAGE grows |
+| 06 | `06-websession-tier-and-adr.md` | ADR 0007.b + the `web-session` class (Cursor, Devin, Perplexity, Kimi, Mistral spend, …): paste-first, store-read opt-in/OFF, read-only, never agent-facing; WEBUSAGE gate |
+| 07 | `07-cost-spend-and-history.md` | Local cost scan (Codex/Claude JSONL) + spend column + history ring/sparklines from the poller's own samples; USAGE grows |
+| 08 | `08-provider-status-feed.md` | Provider status/incident feed (public endpoints, enabled-only, jittered) → tile chip + icon overlay; "they're down" ≠ "you're out"; USAGE grows |
+| 09 | `09-profiles-plans-and-alerts.md` | Plans × profiles switcher (N per provider), threshold notifications + reset confetti (any provider), failover suggestion feed |
+| 10 | `10-titlebar-display-options.md` | Merged/pinned/auto gauge modes + switcher, gauge-content + reset-time style options (CodexBar display parity); USAGEUI grows |
+| 11 | `11-usage-cli-verbs.md` | `mogging usage / cost / providers / refresh` over the existing authed app endpoint (daemon stays v3); USAGECLI gate |
+| 12 | `12-usage-settings-tab.md` | The FULL Usage tab: searchable ~57-provider grid across 5 classes, plans table, pace/display/alerts, history/cost, privacy; USAGESET gate |
+| 13 | `13-usage-milestone.md` | All usage gates green on all 3 CI OSes + docs/12-usage.md (5 classes, parity map, authoring guide); pack freeze + per-OS numbers |
 
 ## Overall Definition of Done
 - One glance at the titlebar answers "can I keep working, and until when?" for
   the ACTIVE profile; one click answers it for every plan on every provider.
-- Claude, OpenAI/Codex, and Gemini usage load from the user's own sessions on
-  Windows, macOS, and Linux — no logins, no stored secrets, no new auth.
-- The pace verdict (run-out / on pace / surplus) is computed by one pure,
-  fixture-tested module and worded identically everywhere it appears.
-- Multiple plans per provider (via profiles) are all visible and switchable.
-- Settings has a full Usage tab — every knob the feature owns lives there,
-  and the plans table renders from the popover's exact snapshot.
-- The full sweep — WITH the new usage gates — is green on all three CI OSes.
+- ~57 providers across five classes (cli-store · api-key · cloud-cli ·
+  web-session · local) all load from the user's own sessions/keys — no logins
+  the app performs, no secret the app stores, on Windows, macOS, and Linux.
+- The pace verdict is computed by one pure fixture-tested module, worded
+  identically in popover, tab, CLI, and notifications.
+- Cost scans, spend, usage history, provider status, merged-icon display, and
+  reset confetti all ship — CodexBar's feature surface, the house way.
+- A bundled `mogging usage` CLI reads it all for scripts/CI (daemon still v3).
+- The full sweep — WITH every usage gate — is green on all three CI OSes.
 
 ## Global checks (every step)
 - `npm run typecheck` → 0; `npm run build` → ok; boundary greps clean.
@@ -55,21 +72,25 @@ self-contained + pasteable as a `/goal`, < 4000 chars). Execute in order.
 - Gallery states staged for every new visual surface (both themes).
 
 ## Guardrails
-- **ADR 0002/0007**: no credential is ever persisted, copied between homes,
-  logged, or shown. Adapters read known per-CLI locations only. A smoke never
-  performs OAuth; smokes run on the FAKE adapter's fixtures exclusively.
-- **ADR 0005**: usage numbers, plan names, and account identifiers NEVER
-  enter telemetry — counts and booleans only.
-- The daemon protocol stays at v3 — usage lives in the app backend, not the
-  daemon; panes carry zero new wire surface.
+- **ADR 0002/0007/0007.b**: no credential is persisted, copied, logged, or
+  shown; keys are env-ref pointers (no literal stored, the CodexBar
+  divergence); web-session store-reads are opt-in/OFF/read-only/never
+  agent-facing; no password-login brokering; app-held OAuth deferred. Adapters
+  read KNOWN locations only. Smokes run FAKE fixtures exclusively.
+- **ADR 0005**: usage numbers, plan names, provider ids, keys, cookies, and
+  account identifiers NEVER enter telemetry — counts and booleans only.
+- The daemon protocol stays at v3 — usage lives in the app backend and the
+  existing authed app endpoint; panes carry zero new wire surface.
 - Platform differences live in adapter path resolution + CI config only.
-- Poll politely: per-provider cadence presets (manual · 1m · 2m · 5m · 15m),
-  jittered, paused when the window is hidden; never hammer on errors
-  (exponential backoff, dimmed-stale UI instead of retries).
+- Poll politely: per-provider cadence presets, jittered, paused when hidden,
+  backoff on error; a 429/incident dims to stale, never a retry storm.
+- The catalog is DATA: a new provider on an existing class is one row + one
+  fixture, never a new step. The FAKE adapter is first-class forever.
 
 ## Parallelization
-01 → 02 → 03 is the spine (each builds on the last). 04 parallels 03 (same
-seam, no UI dependency). 05 needs 03 + 04; 06 needs 05. 07 freezes the
-pack. One lane is fine; two lanes = (03) and (04) after 02 lands.
-Before executing any step, read `IMPLEMENTATION.md` — the best-path
-decisions surveyed against shipped code.
+01 → 02 → 03 is the spine (DONE through 02). After 03: the class lanes
+04 → 05 → 06 grow the catalog (06 needs its ADR first); 07 (cost/history)
+and 08 (status) ride the seam independently; 09 (alerts) needs the fan-out;
+10 (display) needs 03; 11 (CLI) needs the seam; 12 (tab) needs 04–10.
+13 freezes. One lane is fine; the seam steps (04–08, 11) don't touch the UI
+steps (03, 10) beyond contracts.

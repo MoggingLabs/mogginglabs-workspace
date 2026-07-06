@@ -20,7 +20,9 @@ it, switch lanes in one keystroke.
    editable): quiet toast at 80, warning toast at 95 carrying the verdict
    line ("Ahead of pace — runs out ~Tue 14:00"). Each threshold fires ONCE
    per window (re-arms at reset). Window reset gets a single quiet
-   "fresh window" toast — celebration, one notch above silence.
+   "fresh window" toast — and an OPTIONAL reset-confetti flourish (CodexBar's
+   weekly celebration; default quiet, one notch above silence, a Settings
+   toggle). Fires for ANY enabled provider, not just Claude.
 4. **Failover feed**: when the active plan crosses the 95% threshold AND at
    least one sibling profile on the same provider sits under 50%, the toast
    gains an action: "Fail over to {profile}" — invoking the SAME failover

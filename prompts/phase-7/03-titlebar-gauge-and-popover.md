@@ -19,12 +19,12 @@ No page, no navigation — the reference interaction is a menu-bar dropdown.
    - footer: "as of {age}" freshness + a manual refresh glyph + a gear that
      deep-links to Settings § Usage.
    Keyboard: arrows move plan focus, Enter switches the active profile to the
-   focused plan (05 wires the actual switch; render disabled until then).
+   focused plan (09 wires the actual switch; render disabled until then).
 3. **Settings stub only**: a minimal § Usage block — provider enable +
    cadence preset — so the gear has a target and the poller consumes
-   changes live. Step 06 PROMOTES this into the full Usage tab (its own
-   nav section: plans table, thresholds, baseline, privacy) and deletes
-   the stub — don't gold-plate it here.
+   changes live. Step 12 PROMOTES this into the full Usage tab (its own
+   nav section: ~57-provider grid, plans table, thresholds, baseline,
+   privacy) and deletes the stub — don't gold-plate it here.
 4. **Gallery states**: popover open with the three verdicts represented,
    stale + error + unconfigured tiles, gauge icon at rest/warn/stale — both
    themes (FAKE adapter fixtures drive all of it).
