@@ -6,6 +6,7 @@ import { USAGE_PROVIDERS } from '@contracts'
 import { CLI_STORE_READERS, readCodex } from './classes/cli-store'
 import { fetchApiKeyUsage, type ApiKeyDeps } from './classes/api-key'
 import { fetchVertex, fetchBedrock } from './classes/cloud-cli'
+import { fetchWebSessionUsage, type WebSessionDeps } from './classes/web-session'
 import { claudeAdapter } from './claude-adapter'
 
 export { fakeAdapter, setFakeMode } from './fake-adapter'
@@ -16,13 +17,14 @@ export { PACE_GOLDENS } from './pace-fixtures'
 export { CLI_STORE_READERS, readCodex } from './classes/cli-store'
 export { API_KEY_SPECS, API_KEY_PENDING, fetchApiKeyUsage } from './classes/api-key'
 export { fetchVertex, fetchBedrock } from './classes/cloud-cli'
+export { fetchWebSessionUsage, fixtureCookieBackend, realCookieBackend, type WebSessionDeps, type CookieStoreBackend } from './classes/web-session'
 
 /** Build the REAL adapters from the catalog (Phase-7/04): one per cli-store
  *  row that has a reader. Claude delegates to the shipped 7/01 adapter (already
  *  verified); the rest wrap their reader — detect is lenient (the reader
  *  produces the precise unconfigured/error reason). api-key/cloud-cli/
  *  web-session classes join in 7/05–06. */
-export function buildRealAdapters(keys: ApiKeyDeps): UsageAdapter[] {
+export function buildRealAdapters(keys: ApiKeyDeps, web: WebSessionDeps): UsageAdapter[] {
   const out: UsageAdapter[] = []
   for (const def of USAGE_PROVIDERS) {
     if (def.klass === 'cli-store') {
@@ -52,6 +54,12 @@ export function buildRealAdapters(keys: ApiKeyDeps): UsageAdapter[] {
         id: def.id,
         detect: async () => ({ ok: true }),
         fetch: async (_home, profileId) => [await fetcher(profileId)]
+      })
+    } else if (def.klass === 'web-session') {
+      out.push({
+        id: def.id,
+        detect: async () => ({ ok: true }),
+        fetch: async (_home, profileId, signal) => [await fetchWebSessionUsage(def, profileId, signal, web)]
       })
     }
   }

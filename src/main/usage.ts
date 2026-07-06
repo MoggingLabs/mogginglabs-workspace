@@ -5,6 +5,7 @@ import {
   createUsageService,
   fakeAdapter,
   buildRealAdapters,
+  realCookieBackend,
   computePace,
   formatVerdict,
   formatPaceDelta,
@@ -73,7 +74,15 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
   const isSmoke = Object.keys(process.env).some((k) => k.startsWith('MOGGING_'))
   const isFixtureWorld =
     Object.keys(process.env).some((k) => k.startsWith('MOGGING_USAGE')) || !!process.env.MOGGING_GALLERY
-  const adapters = isFixtureWorld ? [fakeAdapter] : isSmoke ? [] : buildRealAdapters({ resolveKey })
+  // web-session deps (ADR 0007.b): a pasted cookie rides the SAME write-only
+  // store as a key; store-read is per-provider opt-in (default OFF) and only
+  // then may the real cookie backend be touched.
+  const webDeps = {
+    pasteValue: (id: string) => resolveKey(id),
+    storeReadEnabled: (id: string) => getSettingsStore()?.getSetting(`usage.webread.${id}`) === '1',
+    readCookie: (origin: string, name: string) => realCookieBackend.read(origin, name)
+  }
+  const adapters = isFixtureWorld ? [fakeAdapter] : isSmoke ? [] : buildRealAdapters({ resolveKey }, webDeps)
 
   const cadenceEnv = Number(process.env.MOGGING_USAGE_CADENCE_MS)
   const cadenceMsOverride = Number.isFinite(cadenceEnv) && cadenceEnv > 0 ? cadenceEnv : isFixtureWorld ? 400 : undefined
@@ -103,7 +112,9 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
         enabled: kv?.getSetting(`usage.enabled.${a.id}`) !== '0',
         cadence: (kv?.getSetting(`usage.cadence.${a.id}`) ?? '5m') as UsageCadence,
         // PRESENCE only (ADR 0007.a) — the kind, never a value.
-        key: keySlot(a.id).kind
+        key: keySlot(a.id).kind,
+        // web-session store-read opt-in (ADR 0007.b), default OFF.
+        webRead: getSettingsStore()?.getSetting(`usage.webread.${a.id}`) === '1'
       }))
     }
   })
@@ -139,6 +150,15 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
     if (typeof providerId !== 'string' || !providerId) return
     keyClear(providerId)
     service?.refresh(providerId)
+    getWin()?.webContents.send(UsageChannels.changed, enrich(service?.list() ?? []))
+  })
+  // web-session store-read consent (ADR 0007.b): per-provider, default OFF.
+  ipcMain.handle(UsageChannels.webReadSet, (_e, raw: unknown) => {
+    const p = raw as { providerId?: string; enabled?: boolean } | null
+    if (!p || typeof p.providerId !== 'string') return
+    getSettingsStore()?.setSetting(`usage.webread.${p.providerId}`, p.enabled ? '1' : '0')
+    if (p.enabled) getSettingsStore()?.setSetting(`usage.enabled.${p.providerId}`, '1')
+    service?.refresh(p.providerId)
     getWin()?.webContents.send(UsageChannels.changed, enrich(service?.list() ?? []))
   })
 

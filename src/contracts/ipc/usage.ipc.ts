@@ -30,7 +30,15 @@ export interface PaceView {
 export type PlanUsageView = PlanUsage & { pace?: PaceView }
 
 export interface UsageConfig {
-  providers: { id: string; enabled: boolean; cadence: UsageCadence }[]
+  providers: {
+    id: string
+    enabled: boolean
+    cadence: UsageCadence
+    /** Key slot KIND (ADR 0007.a) — presence only, never a value. */
+    key?: 'keychain' | 'env-ref' | 'none'
+    /** web-session browser store-read opt-in (ADR 0007.b), default false. */
+    webRead?: boolean
+  }[]
 }
 
 export interface UsageConfigPatch {

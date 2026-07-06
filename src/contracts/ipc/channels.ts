@@ -138,7 +138,10 @@ export const UsageChannels = {
   // Keys are WRITE-ONLY (ADR 0007.a): set encrypts immediately, clear removes.
   // There is deliberately NO usage:keyGet — absence of the channel is the guarantee.
   keySet: 'usage:keySet', // ({ providerId, plaintext } | { providerId, envRef }) -> { ok, reason? }
-  keyClear: 'usage:keyClear' // (providerId) -> void
+  keyClear: 'usage:keyClear', // (providerId) -> void
+  // web-session (ADR 0007.b): a pasted cookie rides the SAME write-only key
+  // store (keySet); this toggles the per-provider browser store-read opt-in.
+  webReadSet: 'usage:webReadSet' // ({ providerId, enabled }) -> void (default OFF)
 } as const
 
 export const AllChannels: readonly string[] = [

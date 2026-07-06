@@ -157,7 +157,22 @@ export const settingsFeature: UiFeature = {
           for (const c of USAGE_CADENCES) cadence.append(el('option', { value: c, text: c }))
           cadence.value = p.cadence
           cadence.addEventListener('change', () => void getBridge().invoke(UsageChannels.configSet, { providerId: p.id, cadence: cadence.value }))
-          usageStub.append(el('div', { class: 'usage-stub-row', dataset: { provider: p.id } }, [enable.el, cadence]))
+          const rowChildren: Node[] = [enable.el, cadence]
+          // web-session store-read opt-in (ADR 0007.b): default OFF, honest copy
+          // naming the keychain touch. Paste always works without it (7/12 makes
+          // this first-class; here it's the minimal gated toggle).
+          if (p.webRead !== undefined) {
+            const webRead = createCheckbox({
+              label: 'read my browser session',
+              ariaLabel: `${p.id}: read my browser session`,
+              checked: p.webRead,
+              onChange: (checked) => void getBridge().invoke(UsageChannels.webReadSet, { providerId: p.id, enabled: checked })
+            })
+            webRead.el.classList.add('usage-webread')
+            webRead.el.title = 'OFF by default. When on, the app decrypts this one site’s cookie via your OS keychain, for the one usage read only — never shared with agents (ADR 0007.b). You can always paste a cookie instead.'
+            rowChildren.push(webRead.el)
+          }
+          usageStub.append(el('div', { class: 'usage-stub-row', dataset: { provider: p.id, klass: p.webRead !== undefined ? 'web-session' : '' } }, rowChildren))
         }
       })
       .catch(() => usageStub.append(el('span', { class: 'settings-row-caption', text: 'Usage config unavailable.' })))

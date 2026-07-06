@@ -115,6 +115,35 @@ seams; ADR 0007 and docs/12 are both unclaimed. The pack runs BEFORE phase
   ladder is what's live-verified (fixture bins keep it deterministic in
   the smoke).
 
+## web-session mechanics (06) — the sharpest class, security-first
+
+- **Paste is the headline and rides the SAME write-only 0007.a store** — a
+  pasted cookie IS a key (`resolveKey`); no separate secret path. Most users
+  never touch the browser store.
+- **Store-read is structurally gated**: `resolveSession` calls the cookie
+  backend ONLY when `storeReadEnabled(id)` is true. The WEBUSAGE smoke wraps
+  the backend in a SPY and asserts `reads === 0` while off — the guarantee is
+  the code path, not a promise.
+- **The real Chrome/Edge decrypt is deferred, honestly.** Reading a real
+  browser cookie needs the OS keychain Safe-Storage key + AES-GCM over the
+  cookie SQLite — a per-OS job Electron's safeStorage can't do (it only
+  decrypts what IT encrypted; the DPAPI/keychain unwrap of Chrome's key needs
+  more). So `realCookieBackend` returns null (honest degrade to "paste your
+  cookie") and the FIXTURE backend (a JSON store) drives the smoke's gating +
+  no-leak proofs. Paste-first means this is opt-in and rare — the security
+  surface ships fully proven; the convenience decrypt lands when dev-verified
+  against a real browser.
+- **Endpoint parses are honest-pending** (no accounts for these ~15
+  providers): a resolved session reports "session found (via paste|store)"
+  and the value is DROPPED — never rides the PlanUsage (grep-asserted). A
+  real login upgrades a row's parse + verifiedAt.
+- **Sensitive-origin blocklist** (`SENSITIVE_ORIGIN_PATTERNS` in contracts,
+  the phase-8/01 concept needed here first): bank/mail/gov origins refuse
+  store-read even when opted in AND named — asserted with a chase.com row.
+- No-getter is STRUCTURAL and asserted: the allowlist has keySet/keyClear/
+  webReadSet (a consent toggle) and NOTHING matching a key/cookie value-
+  getter. configGet returns presence (kind + webRead bool), never a value.
+
 ## 04–06 — the provider catalog (CodexBar parity, five classes)
 
 - One adapter CLASS per mechanism, every provider a DATA ROW

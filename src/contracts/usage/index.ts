@@ -114,7 +114,27 @@ export interface UsageProviderDef {
   windows: WindowSpec[]
   /** True when the provider is credit/balance-based (a `credits` block, no lane). */
   credits?: boolean
+  /** web-session class: the cookie/token name to read for this provider. */
+  cookieName?: string
+  /** web-session class: the site origin the cookie belongs to (store-read scope
+   *  + sensitive-origin check). */
+  origin?: string
   verifiedAt?: string
+}
+
+/** Sensitive-origin blocklist (ADR 0007.b clause d; the phase-8/01 blocklist
+ *  concept, needed here first). A web-session row whose origin matches is
+ *  refused store-read even if it named one — usage is never worth a bank/mail/
+ *  gov cookie. Host suffixes, matched case-insensitively. */
+export const SENSITIVE_ORIGIN_PATTERNS: readonly string[] = [
+  'bank', 'chase.com', 'wellsfargo', 'paypal', 'venmo', 'coinbase', 'stripe.com',
+  'mail.google', 'gmail', 'outlook', 'mail.', 'proton.me',
+  '.gov', 'irs.gov', 'ssa.gov',
+  'icloud.com', 'apple.com/account'
+]
+export function isSensitiveOrigin(origin: string): boolean {
+  const h = origin.toLowerCase()
+  return SENSITIVE_ORIGIN_PATTERNS.some((p) => h.includes(p))
 }
 
 const w = (kind: WindowKind, label: string): WindowSpec => ({ kind, label, windowMs: WINDOW_MS[kind] })
@@ -158,7 +178,23 @@ export const USAGE_PROVIDERS: readonly UsageProviderDef[] = [
   { id: 'claude-admin', label: 'Claude (admin spend)', klass: 'api-key', windows: [w('monthly', 'Spend')] },
   // ── cloud-cli class (7/05): ambient credentials via the vendor CLI ──
   { id: 'vertex', label: 'Vertex AI', klass: 'cloud-cli', windows: [w('rolling', 'Session')] },
-  { id: 'bedrock', label: 'AWS Bedrock', klass: 'cloud-cli', windows: [w('monthly', 'Spend')] }
+  { id: 'bedrock', label: 'AWS Bedrock', klass: 'cloud-cli', windows: [w('monthly', 'Spend')] },
+  // ── web-session class (7/06, ADR 0007.b): paste-first; store-read opt-in ──
+  { id: 'cursor', label: 'Cursor', klass: 'web-session', origin: 'cursor.com', cookieName: 'WorkosCursorSessionToken', endpoint: 'https://cursor.com/api/usage', windows: [w('monthly', 'Requests')] },
+  { id: 'devin', label: 'Devin', klass: 'web-session', origin: 'app.devin.ai', cookieName: 'session', windows: [w('rolling', 'ACUs')], credits: true },
+  { id: 'manus', label: 'Manus', klass: 'web-session', origin: 'manus.im', cookieName: 'session_id', windows: [w('rolling', 'Credits')], credits: true },
+  { id: 't3chat', label: 'T3 Chat', klass: 'web-session', origin: 't3.chat', cookieName: 'session', windows: [w('monthly', 'Messages')] },
+  { id: 'kimi', label: 'Kimi', klass: 'web-session', origin: 'kimi.com', cookieName: 'kimi-auth', windows: [w('rolling', 'Quota')], credits: true },
+  { id: 'perplexity', label: 'Perplexity', klass: 'web-session', origin: 'www.perplexity.ai', cookieName: '__Secure-next-auth.session-token', windows: [w('daily', 'Queries')] },
+  { id: 'mimo', label: 'Xiaomi MiMo', klass: 'web-session', origin: 'mimo.xiaomi.com', cookieName: 'session', windows: [w('rolling', 'Balance')], credits: true },
+  { id: 'sakana', label: 'Sakana AI', klass: 'web-session', origin: 'sakana.ai', cookieName: 'session', windows: [w('rolling', 'Quota')], credits: true },
+  { id: 'abacus', label: 'Abacus AI', klass: 'web-session', origin: 'abacus.ai', cookieName: 'session', windows: [w('monthly', 'Usage')] },
+  { id: 'mistral-web', label: 'Mistral (spend)', klass: 'web-session', origin: 'console.mistral.ai', cookieName: 'session', windows: [w('monthly', 'Spend')] },
+  { id: 'amp', label: 'Amp', klass: 'web-session', origin: 'ampcode.com', cookieName: 'session', windows: [w('rolling', 'Credits')], credits: true },
+  { id: 'commandcode', label: 'Command Code', klass: 'web-session', origin: 'commandcode.ai', cookieName: 'session', windows: [w('rolling', 'Credits')], credits: true },
+  { id: 'opencode-web', label: 'OpenCode (workspace)', klass: 'web-session', origin: 'opencode.ai', cookieName: 'session', windows: [w('monthly', 'Usage')] },
+  { id: 'alibaba-web', label: 'Alibaba (cookie)', klass: 'web-session', origin: 'bailian.console.aliyun.com', cookieName: 'login_aliyunid_ticket', windows: [w('rolling', 'Quota')], credits: true },
+  { id: 'grok-web', label: 'Grok (browser)', klass: 'web-session', origin: 'grok.com', cookieName: 'sso', windows: [w('rolling', 'Quota')], credits: true }
 ]
 
 export const findProvider = (id: string): UsageProviderDef | undefined => USAGE_PROVIDERS.find((p) => p.id === id)
