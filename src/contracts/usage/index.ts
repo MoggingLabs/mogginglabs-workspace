@@ -264,20 +264,10 @@ export interface UsageProviderDef {
   verifiedAt?: string
 }
 
-/** Sensitive-origin blocklist (ADR 0007.b clause d; the phase-8/01 blocklist
- *  concept, needed here first). A web-session row whose origin matches is
- *  refused store-read even if it named one — usage is never worth a bank/mail/
- *  gov cookie. Host suffixes, matched case-insensitively. */
-export const SENSITIVE_ORIGIN_PATTERNS: readonly string[] = [
-  'bank', 'chase.com', 'wellsfargo', 'paypal', 'venmo', 'coinbase', 'stripe.com',
-  'mail.google', 'gmail', 'outlook', 'mail.', 'proton.me',
-  '.gov', 'irs.gov', 'ssa.gov',
-  'icloud.com', 'apple.com/account'
-]
-export function isSensitiveOrigin(origin: string): boolean {
-  const h = origin.toLowerCase()
-  return SENSITIVE_ORIGIN_PATTERNS.some((p) => h.includes(p))
-}
+// Sensitive-origin blocklist: moved to its real home, `@contracts/integrations`
+// (the phase-8/01 blocklist this always was — grant.ts). A web-session row
+// whose origin matches `isSensitiveOrigin` is still refused store-read even
+// if it named one — usage is never worth a bank/mail/gov cookie.
 
 const w = (kind: WindowKind, label: string): WindowSpec => ({ kind, label, windowMs: WINDOW_MS[kind] })
 

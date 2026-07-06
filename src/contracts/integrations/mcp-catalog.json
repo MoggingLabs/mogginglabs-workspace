@@ -1,0 +1,338 @@
+[
+  {
+    "name": "browser_navigate",
+    "title": "Open URL",
+    "description": "Open a URL (http/https) in the dock.",
+    "inputSchema": { "type": "object", "properties": { "url": { "type": "string" } }, "required": ["url"] },
+    "family": "browser",
+    "access": "act",
+    "upstream": "app",
+    "verb": "browser_navigate"
+  },
+  {
+    "name": "browser_back",
+    "title": "Back",
+    "description": "Go back.",
+    "inputSchema": { "type": "object", "properties": {} },
+    "family": "browser",
+    "access": "read",
+    "upstream": "app",
+    "verb": "browser_back"
+  },
+  {
+    "name": "browser_forward",
+    "title": "Forward",
+    "description": "Go forward.",
+    "inputSchema": { "type": "object", "properties": {} },
+    "family": "browser",
+    "access": "read",
+    "upstream": "app",
+    "verb": "browser_forward"
+  },
+  {
+    "name": "browser_reload",
+    "title": "Reload",
+    "description": "Reload the page.",
+    "inputSchema": { "type": "object", "properties": {} },
+    "family": "browser",
+    "access": "read",
+    "upstream": "app",
+    "verb": "browser_reload"
+  },
+  {
+    "name": "browser_snapshot",
+    "title": "Page snapshot",
+    "description": "Read the page: interactive elements (with stable refs to click by) + visible text + url/title.",
+    "inputSchema": { "type": "object", "properties": {} },
+    "family": "browser",
+    "access": "read",
+    "upstream": "app",
+    "verb": "browser_snapshot"
+  },
+  {
+    "name": "browser_screenshot",
+    "title": "Screenshot",
+    "description": "PNG screenshot of the dock (data URL).",
+    "inputSchema": { "type": "object", "properties": {} },
+    "family": "browser",
+    "access": "read",
+    "upstream": "app",
+    "verb": "browser_screenshot"
+  },
+  {
+    "name": "browser_click",
+    "title": "Click",
+    "description": "Click an element by its snapshot ref (or a CSS selector).",
+    "inputSchema": { "type": "object", "properties": { "ref": { "type": "string" } }, "required": ["ref"] },
+    "family": "browser",
+    "access": "act",
+    "upstream": "app",
+    "verb": "browser_click"
+  },
+  {
+    "name": "browser_type",
+    "title": "Type text",
+    "description": "Type text into an input by ref/selector.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "ref": { "type": "string" }, "text": { "type": "string" } },
+      "required": ["ref", "text"]
+    },
+    "family": "browser",
+    "access": "act",
+    "upstream": "app",
+    "verb": "browser_type"
+  },
+  {
+    "name": "browser_scroll",
+    "title": "Scroll",
+    "description": "Scroll the page vertically by dy pixels.",
+    "inputSchema": { "type": "object", "properties": { "dy": { "type": "number" } } },
+    "family": "browser",
+    "access": "read",
+    "upstream": "app",
+    "verb": "browser_scroll"
+  },
+  {
+    "name": "browser_select",
+    "title": "Select option",
+    "description": "Set a <select> value by ref/selector.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "ref": { "type": "string" }, "value": { "type": "string" } },
+      "required": ["ref", "value"]
+    },
+    "family": "browser",
+    "access": "act",
+    "upstream": "app",
+    "verb": "browser_select"
+  },
+  {
+    "name": "browser_eval",
+    "title": "Evaluate JS",
+    "description": "Evaluate a JS expression in the page and return its JSON result.",
+    "inputSchema": { "type": "object", "properties": { "js": { "type": "string" } }, "required": ["js"] },
+    "family": "browser",
+    "access": "act",
+    "upstream": "app",
+    "verb": "browser_eval"
+  },
+  {
+    "name": "browser_console",
+    "title": "Console tail",
+    "description": "Recent console lines (tail).",
+    "inputSchema": { "type": "object", "properties": { "tail": { "type": "number" } } },
+    "family": "browser",
+    "access": "read",
+    "upstream": "app",
+    "verb": "browser_console"
+  },
+  {
+    "name": "browser_network_failures",
+    "title": "Network failures",
+    "description": "Recent failed network requests (tail).",
+    "inputSchema": { "type": "object", "properties": { "tail": { "type": "number" } } },
+    "family": "browser",
+    "access": "read",
+    "upstream": "app",
+    "verb": "browser_network_failures"
+  },
+  {
+    "name": "browser_wait_for",
+    "title": "Wait for selector",
+    "description": "Wait until a selector appears (or timeout).",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "selector": { "type": "string" }, "timeoutMs": { "type": "number" } },
+      "required": ["selector"]
+    },
+    "family": "browser",
+    "access": "read",
+    "upstream": "app",
+    "verb": "browser_wait_for"
+  },
+  {
+    "name": "list_panes",
+    "title": "List panes",
+    "description": "List the live panes in this workspace's fleet: id, size, state (idle/busy/attention), swarm role, remote host, and title.",
+    "inputSchema": { "type": "object", "properties": {} },
+    "family": "control",
+    "access": "read",
+    "upstream": "daemon",
+    "verb": "list"
+  },
+  {
+    "name": "capture_pane",
+    "title": "Capture pane",
+    "description": "Read a pane's scrollback tail (default 1000 lines, max 10000). The text is returned to you and goes nowhere else.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "pane": { "type": "string", "description": "Target pane id (from list_panes)." },
+        "lines": { "type": "number", "description": "Tail length, max 10000 (default 1000)." }
+      },
+      "required": ["pane"]
+    },
+    "family": "control",
+    "access": "read",
+    "upstream": "daemon",
+    "verb": "capture"
+  },
+  {
+    "name": "mail_read",
+    "title": "Read mailbox",
+    "description": "Read the swarm mailbox as yourself (your pane identity): messages addressed to you or to all, with id greater than since.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "since": { "type": "number", "description": "Return messages with id greater than this (default 0)." } }
+    },
+    "family": "control",
+    "access": "read",
+    "upstream": "daemon",
+    "verb": "mail-read"
+  },
+  {
+    "name": "list_owners",
+    "title": "List file owners",
+    "description": "List the live file-ownership claims: which pane owns which repo-relative glob pattern.",
+    "inputSchema": { "type": "object", "properties": {} },
+    "family": "control",
+    "access": "read",
+    "upstream": "daemon",
+    "verb": "owners"
+  },
+  {
+    "name": "list_board",
+    "title": "List board cards",
+    "description": "List the workspace board's cards: id, title, lane (todo/doing/review/done), notes, and the bound pane when an agent was started from the card.",
+    "inputSchema": { "type": "object", "properties": {} },
+    "family": "control",
+    "access": "read",
+    "upstream": "app",
+    "verb": "board.list"
+  },
+  {
+    "name": "send_to_pane",
+    "title": "Send to pane",
+    "description": "Type text into another pane's terminal and press Enter (set noEnter to skip the Enter). Identical to `mogging send`.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "pane": { "type": "string", "description": "Target pane id (from list_panes)." },
+        "text": { "type": "string", "description": "The line to type." },
+        "noEnter": { "type": "boolean", "description": "Type without pressing Enter." }
+      },
+      "required": ["pane", "text"]
+    },
+    "family": "control",
+    "access": "write",
+    "upstream": "daemon",
+    "verb": "input"
+  },
+  {
+    "name": "send_key",
+    "title": "Press key",
+    "description": "Press one named key in a pane — a closed allowlist; escapes are never synthesized from arguments. Identical to `mogging send-key`.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "pane": { "type": "string", "description": "Target pane id (from list_panes)." },
+        "key": {
+          "type": "string",
+          "description": "A key name from the allowlist.",
+          "enum": [
+            "enter",
+            "tab",
+            "escape",
+            "backspace",
+            "space",
+            "up",
+            "down",
+            "right",
+            "left",
+            "home",
+            "end",
+            "page-up",
+            "page-down",
+            "c-c",
+            "c-d",
+            "c-z",
+            "c-l",
+            "c-u",
+            "c-r"
+          ]
+        }
+      },
+      "required": ["pane", "key"]
+    },
+    "family": "control",
+    "access": "write",
+    "upstream": "daemon",
+    "verb": "send-key"
+  },
+  {
+    "name": "mail_send",
+    "title": "Send mail",
+    "description": "Send a mailbox message to one pane id or 'all', as yourself (your pane identity travels as the sender). Body max 16 KB. Identical to `mogging mail send`.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "to": { "type": "string", "description": "Recipient pane id, or 'all'." },
+        "body": { "type": "string", "description": "Message body (max 16 KB)." }
+      },
+      "required": ["to", "body"]
+    },
+    "family": "control",
+    "access": "write",
+    "upstream": "daemon",
+    "verb": "mail-send"
+  },
+  {
+    "name": "claim_files",
+    "title": "Claim files",
+    "description": "Claim exclusive ownership of a repo-relative glob for your pane. An overlapping claim is DENIED with the owning pane named. Identical to `mogging claim`.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "pattern": { "type": "string", "description": "Repo-relative glob (forward slashes, no '..')." } },
+      "required": ["pattern"]
+    },
+    "family": "control",
+    "access": "write",
+    "upstream": "daemon",
+    "verb": "claim"
+  },
+  {
+    "name": "release_files",
+    "title": "Release files",
+    "description": "Release your pane's file claims — one pattern, or all of them with all=true. Identical to `mogging release`.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "pattern": { "type": "string", "description": "The claimed pattern to release." },
+        "all": { "type": "boolean", "description": "Release every claim this pane holds." }
+      }
+    },
+    "family": "control",
+    "access": "write",
+    "upstream": "daemon",
+    "verb": "release"
+  },
+  {
+    "name": "update_card",
+    "title": "Update board card",
+    "description": "Update a board card: move it to a column (todo/doing/review/done) and/or replace its note text.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "card": { "type": "string", "description": "Card id (from list_board)." },
+        "column": { "type": "string", "description": "Destination column.", "enum": ["todo", "doing", "review", "done"] },
+        "note": { "type": "string", "description": "New note text for the card." }
+      },
+      "required": ["card"]
+    },
+    "family": "control",
+    "access": "write",
+    "upstream": "app",
+    "verb": "board.save"
+  }
+]

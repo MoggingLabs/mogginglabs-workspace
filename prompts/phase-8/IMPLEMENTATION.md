@@ -106,9 +106,24 @@ daemon protocol v3 frozen, smokes network-free.
   `release_files`, `update_card`. Browser names stay verbatim from the
   shipped server.
 - Catalog SOURCE OF TRUTH is **JSON**: `src/contracts/integrations/mcp-catalog.json`.
-  `mcp.ts` imports it (resolveJsonModule) and pins it with
-  `satisfies readonly McpToolDef[]` — full type-checking, zero runtime deps,
-  and the bin can consume the same data without a build step.
+  `mcp.ts` imports it (resolveJsonModule) — zero runtime deps, and the bin can
+  consume the same data without a build step.
+  - **Deviation recorded (01, 2026-07-06)**: `satisfies readonly McpToolDef[]`
+    cannot pin a JSON import — TS widens JSON string literals to `string`, so
+    closed unions fail (verified against the repo's tsc 5.6, error TS1360).
+    The pin is a LOAD-TIME structural validator in `mcp.ts` that narrows the
+    JSON into `readonly McpToolDef[]` and doubles as the 01 DoD assert (no
+    `approve` anywhere in a name, names exactly the declared unions in order —
+    browser = the shipped server's 14 verbatim — act set = the §04 gate list,
+    schemas well-formed). Same single JSON source, no generation machinery; an
+    invalid catalog fails every app boot and every smoke at import.
+  - **Deviation recorded (01, 2026-07-06)**: `isSensitiveOrigin` stays in
+    contracts beside the pattern data rather than moving to `@backend` — 7/06
+    already shipped it in contracts and both `@backend` (web-session class)
+    and `src/main` (webusage-smoke) import it from `@contracts`. 01 moved data
+    + helper together from `usage/` to their real home,
+    `integrations/grant.ts` (the usage comment always said it was the 8/01
+    blocklist, needed there first); the barrel keeps every import working.
 - "Generation" for the bin is therefore a **copy**: `npm run build` copies it
   to `bin/mcp-catalog.json`; BOTH files are committed; the MCP smoke
   byte-compares them and compares served `tools/list` against the file.
