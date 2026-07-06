@@ -2,17 +2,18 @@
 
 - **Date:** 2026-07-05 · **Status:** research synthesis, pre-implementation
 
-> **Addendum 2026-07-06 — absorbed into the restructured Phase 8.** The pack
-> was reorganized after this was written (phase 10's Comet resolution merged
-> in); the mapping for this doc's references: the MCP manager is now **8/05**
-> (was 8/04), the GitHub adapter **8/07** (was 8/05), the docs page
-> **`docs/14-integrations.md`** (13 was taken by the shipped browser doc).
-> §7.2's "Phase 8.5 — Integrations Catalog" became a step INSIDE the phase:
-> **`prompts/phase-8/06-integrations-catalog.md`** (presets from §4,
-> Connect/Authorize from §6, capability table + no-proxy rule from §8,
-> MCPCAT smoke). §7.3's "ADR 0009 — service keys as pointers" is folded into
-> **ADR 0008 stance (d)** instead — ADR 0009 belongs to Phase 9's loop laws.
-> The 2026-07-05 text below is preserved as written.
+> **Addendum 2026-07-06 (remade pack — current mapping).** Phase 8 was
+> restructured twice this day: first absorbing phase 10's Comet resolution,
+> then REMADE as 10 steps on the website roster + the phase-10 trail + an
+> outbound event bridge. Current references: the MCP manager is **8/06**,
+> the Integrations Catalog **8/07** (presets from §4, Connect/Authorize
+> from §6, capability table + no-proxy rule from §8, MCPCAT smoke; n8n +
+> Google Workspace lead per the site roster), the "notify → webhook"
+> outbound direction (§4's n8n/Make rows) is **8/08 event bridge**, the
+> GitHub adapter **8/09**, the milestone **8/10**; the docs page is
+> **`docs/14-integrations.md`**. §7.3's "ADR 0009 — service keys as
+> pointers" is folded into **ADR 0008 stance (d)**; outbound webhooks got
+> stance **(g)**. The 2026-07-05 text below is preserved as written.
 - **Question:** how do we integrate third-party tools (n8n, Make, Slack, Sentry, PostHog,
   AWS, Azure, GitHub, GitLab, Vercel, Supabase, Google Workspace/Drive, Google CLI,
   Cloudflare, Stripe, Notion, Tally, fal.ai, ElevenLabs, Higgsfield, ClickUp, …) so users can connect them
