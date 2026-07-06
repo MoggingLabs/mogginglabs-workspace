@@ -3,8 +3,8 @@
 Receipts for the integrations pack (steps 01–14), same format as
 `prompts/phase-7/REPORT.md`. Per-step mechanics live in `IMPLEMENTATION.md`
 (deviations recorded there, inline); this file keeps dated verification
-records and the finds worth remembering. Sweep count as of 8/06: **40 gates**
-(35 + MCP + MCPWRITE + AGENTWEB + WEBTRAIL + MCPMGR).
+records and the finds worth remembering. Sweep count as of 8/07: **41 gates**
+(35 + MCP + MCPWRITE + AGENTWEB + WEBTRAIL + MCPMGR + MCPCAT).
 
 ## 01 — ADR 0008 + the integrations contracts (2026-07-06)
 
