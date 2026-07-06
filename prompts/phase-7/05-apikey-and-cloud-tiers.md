@@ -8,17 +8,15 @@ easier than CodexBar for normal users, stricter at rest. Research:
 1. **ADR 0007.a — keys at rest** (`docs/adr/0007a-usage-keys-at-rest.md`):
    the HEADLINE path is paste-once → Electron `safeStorage` (OS-keychain-
    backed: DPAPI / macOS Keychain / libsecret) → only CIPHERTEXT persists,
-   in the settings KV. Binding semantics: **write-only** — a saved key can
-   be REPLACED or DELETED but never viewed again; no IPC channel that
-   returns plaintext to any renderer EXISTS (absence of the channel is the
-   guarantee, not discipline). Decrypt happens backend-side, in memory, for
+   in the settings KV. Binding: **write-only** — a saved key can be REPLACED
+   or DELETED, never viewed again; no channel returning plaintext EXISTS
+   (absence of the channel is the guarantee, not discipline). Decrypt happens backend-side, in memory, for
    the one usage request, dropped after. If `safeStorage.
    isEncryptionAvailable()` is false (Linux without a keyring), REFUSE to
-   store and offer the env-ref path — never plaintext at rest. The env-ref
-   pointer (`${OPENROUTER_KEY}`, resolved at request time) remains the
-   power alternative. Divergence from CodexBar stated: they write keys to a
-   config file; we hold ciphertext the OS vault controls, and never show it
-   back.
+   store and offer the env-ref path — never plaintext at rest. Env-ref pointers
+   (`${OPENROUTER_KEY}`) remain the power alternative. Divergence stated:
+   CodexBar writes keys to a config file; we hold OS-vault ciphertext and
+   never show it back.
 2. **Key slots** (`@contracts/usage`): `KeySlot = { kind: 'keychain' } |
    { kind: 'env-ref', envRef } | { kind: 'none' }` — the IPC surface is
    `set` (plaintext in, encrypted immediately, never echoed), `clear`, and
