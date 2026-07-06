@@ -15,7 +15,7 @@ URLs are secrets; the daemon stays v3 (ADR 0008.g).
 2. **The subscription**: the app's main process already sees the
    attention/notify stream — subscribe there (daemon untouched). Events
    v1 (01's union): needs-you · notify (the CLI verb — the site's
-   promise) · card-moved · review-changed (10 emits). Payload =
+   promise) · card-moved · review-changed (12 emits). Payload =
    `BridgeEvent` — ids + the short note the user's own notify carried;
    never scrollback, diffs, page content, or origins. Per-webhook event
    filter + optional workspace scope.

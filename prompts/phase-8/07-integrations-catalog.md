@@ -49,11 +49,12 @@ code. Research: `docs/research/2026-07-third-party-integrations.md`
 ## Definition of Done
 - Books: real self-hosted n8n connected (agent lists its workflow tools)
   + one OAuth preset authorized for Claude Code — frames, dated; one
-  registry-found server through the same pipeline.
+  registry-found server through the pipeline.
 - The verification pass recorded: every site-named tool is preset or
   explicitly mapped — no silent drops.
-- Scope-per-workspace is the default UX (grants mitigate catalog bloat).
-- MCPCAT gate green; gallery: the grid, both themes.
+- Scope-per-workspace is the default UX — 09's tool plans are the
+  mechanism; Connect never implies everywhere.
+- MCPCAT gate green; gallery: the grid.
 
 ## Checks that must be green
 - `npm run typecheck` → 0; build ok; boundaries clean.
@@ -62,7 +63,7 @@ code. Research: `docs/research/2026-07-third-party-integrations.md`
 ## Guardrails
 - We never run, proxy, or authenticate a server; tokens live in the CLIs;
   keys are env-ref pointers (0008.d), also on import.
-- App-held OAuth stays DEFERRED behind its own ADR; MCP covers the need.
+- App-held OAuth stays DEFERRED (own ADR); MCP covers the need.
 - Stripe (money) and Slack (speaks as you) get the LOUDEST grantCopy;
   community entries default cautious; the reviewer gate is the boundary.
 - Preset data is public-safe (repo public until ~Aug 2026).

@@ -25,7 +25,7 @@ the user's own `gh` already owns (0008.d).
 4. **Review lands back in the pane**: a `reviewDecision` or merged/closed
    TRANSITION on a linked card lands a house notify on the owning pane
    ("PR #123: changes requested") — attention chip, the shipped path —
-   and emits the bridge's `review-changed` (a no-op stub if 09 hasn't
+   and emits the bridge's `review-changed` (a no-op stub if 10 hasn't
    landed). Observed state only; the adapter never mutates GitHub.
 5. **Card linking UI** (board): the card ⋯ menu gains "Link GitHub
    PR/issue…" — paste a URL or `owner/repo#123` → `ServiceLink`; the card

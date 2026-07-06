@@ -3,21 +3,22 @@
 - **Date:** 2026-07-05 · **Status:** research synthesis, pre-implementation
 
 > **Addendum 2026-07-06 (remade pack — current mapping).** Phase 8 was
-> restructured twice this day: first absorbing phase 10's Comet resolution,
-> then REMADE as 10 steps on the website roster + the phase-10 trail + an
-> outbound event bridge. Current references: the MCP manager is **8/06**,
-> the Integrations Catalog **8/07** (presets from §4, Connect/Authorize
-> from §6, capability table + no-proxy rule from §8, MCPCAT smoke; n8n +
-> Google Workspace lead per the site roster), paste-once vault keys
-> materialized into pane envs (the phase-7 0007.a grammar) is **8/08**,
-> the "notify → webhook" outbound direction (§4's n8n/Make rows) is
-> **8/09 event bridge**, the live connection registry (per-server×CLI
-> state from each CLI's own list output, pane chips, re-authorize) is
-> **8/10**, the GitHub adapter **8/11**, the milestone **8/12**; the
-> docs page is **`docs/14-integrations.md`**. §7.3's
-> "ADR 0009 — service keys as pointers" is folded into **ADR 0008 stance
-> (d)** (env-refs OR vault slots); outbound webhooks got stance **(g)**.
-> The 2026-07-05 text below is preserved as written.
+> REMADE on the website roster + the phase-10 trail and grew to 13 steps.
+> Current references: the MCP manager is **8/06**, the Integrations
+> Catalog **8/07** (presets from §4, Connect/Authorize from §6,
+> capability table + no-proxy rule from §8, MCPCAT smoke; n8n + Google
+> Workspace lead per the site roster), paste-once vault keys
+> materialized into pane envs (the phase-7 0007.a grammar) **8/08**,
+> per-workspace TOOL PLANS (§8's scope-per-workspace risk given a
+> launch-time mechanism) **8/09**, the "notify → webhook" outbound
+> direction (§4's n8n/Make rows) **8/10 event bridge**, the live
+> connection registry (per-server×CLI state from each CLI's own list
+> output, pane chips, re-authorize) **8/11**, the GitHub adapter
+> **8/12**, the milestone **8/13**; the docs page is
+> **`docs/14-integrations.md`**. §7.3's "ADR 0009 — service keys as
+> pointers" is folded into **ADR 0008 stance (d)** (env-refs OR vault
+> slots); outbound webhooks got stance **(g)**. The 2026-07-05 text
+> below is preserved as written.
 - **Question:** how do we integrate third-party tools (n8n, Make, Slack, Sentry, PostHog,
   AWS, Azure, GitHub, GitLab, Vercel, Supabase, Google Workspace/Drive, Google CLI,
   Cloudflare, Stripe, Notion, Tally, fal.ai, ElevenLabs, Higgsfield, ClickUp, …) so users can connect them

@@ -56,7 +56,7 @@ as a `/goal`, < 4000 chars). Execute in order.
 > extended to services in 0008.d): an env-ref, or pasted ONCE into the OS
 > vault — ciphertext at rest, write-only, materialized only into pane
 > environments at launch (08, the phase-7 grammar fleet-wide); webhook
-> URLs that embed secrets ride the same vault (09); app-held OAuth is
+> URLs that embed secrets ride the same vault (10); app-held OAuth is
 > deferred behind its own ADR. The agent web profile's sessions are
 > created by the USER logging in inside the dock — the app never reads
 > any other credential store.
@@ -80,7 +80,7 @@ as a `/goal`, < 4000 chars). Execute in order.
 ## Sequence
 | # | File | Gate |
 |---|------|------|
-| 01 | `01-adr-and-contracts.md` | ADR 0008 (seven stances incl. the browser-session boundary + outbound events) + `@contracts/integrations`: ONE tool catalog as data, ONE grant shape, the trail entry, services seam, preset + webhook shapes; typecheck/boundaries green (ships zero runtime) |
+| 01 | `01-adr-and-contracts.md` | ADR 0008 (eight stances incl. the browser-session boundary, outbound events, the custody rule) + `@contracts/integrations`: ONE tool catalog as data, ONE grant shape, the trail entry, services seam, preset + webhook shapes; typecheck/boundaries green (ships zero runtime) |
 | 02 | `02-mcp-server-read.md` | The shipped server becomes `mogging`: control-plane read tools join the browser tools, catalog served from contracts data, daemon client as second upstream; dev-verified against a NON-CLI MCP client too (protocol citizen, not a Claude-Code trick); MCP smoke green on golden frames |
 | 03 | `03-mcp-write-tools.md` | Control-plane write tools behind the workspace grant (default OFF), pane-scoped identity, receipts; MCPWRITE smoke green |
 | 04 | `04-agent-web-profile.md` | The agent browser profile (Branch C): sign-in-here affordance, per-origin action grants + blocklist, read-vs-act, session-scoped confirm, clear-logins, origin-change alerts, VAULT-CONDITIONED persistence (no OS vault → session-only, never weakly-protected cookies at rest); AGENTWEB smoke green on a localhost fixture login site |
@@ -88,10 +88,11 @@ as a `/goal`, < 4000 chars). Execute in order.
 | 06 | `06-mcp-manager.md` | Settings § Integrations: register any server across claude/codex/gemini config dialects — surgical, backed-up, diff-previewed; the house server is the built-in first row; MCPMGR smoke green on fixture homes |
 | 07 | `07-integrations-catalog.md` | The Integrations Catalog: research-verified presets (n8n + Google Workspace FIRST — founder priority) PLUS the open end — registry search, custom entries, preset import/export; Connect + per-CLI Authorize orchestration (status only, never tokens); the site-roster map begins; MCPCAT smoke green on fixture homes |
 | 08 | `08-vault-service-keys.md` | The phase-7 vault, fleet-wide: paste-once service keys (OS-vault ciphertext, write-only) materialized into pane ENVIRONMENTS at launch — api-key MCP servers without dotfile editing, no secret literal ever on disk; `vault.ts` extracted from usage-keys; per-CLI env semantics dev-verified; VAULTKEYS smoke green |
-| 09 | `09-event-bridge.md` | The outbound event bridge: pane/board events → user-configured webhooks (n8n · Make · Zapier · Slack incoming) — "a notify call to any webhook"; vault-held URLs, versioned payload, polite delivery; EVBRIDGE smoke green on a localhost fixture receiver |
-| 10 | `10-mcp-connection-status.md` | The app KNOWS: a live connection registry per (server × CLI) — registered/connected/needs-auth/error/drift from each CLI's OWN status output — pushed to a pane-header MCP chip, restart-to-pick-up nudges, "stays signed in for future sessions" copy, one-click Re-authorize; MCPSTATUS smoke green on CLI shims |
-| 11 | `11-github-adapter.md` | Board cards link to GitHub PRs/issues with live status chips riding `gh` auth; review-state changes land back on the pane that wrote it; INTEG smoke green on the FAKE adapter |
-| 12 | `12-integrations-milestone.md` | INTEGMILESTONE end-to-end (all five directions composed) + `docs/14-integrations.md` incl. the site-honesty map + books; full sweep green on all four environments |
+| 09 | `09-workspace-tool-plans.md` | Registered ≠ everywhere: per-workspace TOOL PLANS (which servers, per CLI) chosen at creation via a wizard picker, materialized at pane launch (flags/excluded files — nothing git-visible in the worktree), minimal by default, template-seeded; the tools × CLIs matrix answers who-has-what at a glance; TOOLPLAN smoke green |
+| 10 | `10-event-bridge.md` | The outbound event bridge: pane/board events → user-configured webhooks (n8n · Make · Zapier · Slack incoming) — "a notify call to any webhook"; vault-held URLs, versioned payload, polite delivery; EVBRIDGE smoke green on a localhost fixture receiver |
+| 11 | `11-mcp-connection-status.md` | The app KNOWS: a live connection registry per (server × CLI) — registered/connected/needs-auth/error/drift from each CLI's OWN status output — pushed to a pane-header MCP chip, restart-to-pick-up nudges, "stays signed in for future sessions" copy, one-click Re-authorize; MCPSTATUS smoke green on CLI shims |
+| 12 | `12-github-adapter.md` | Board cards link to GitHub PRs/issues with live status chips riding `gh` auth; review-state changes land back on the pane that wrote it; INTEG smoke green on the FAKE adapter |
+| 13 | `13-integrations-milestone.md` | INTEGMILESTONE end-to-end (all five directions composed) + `docs/14-integrations.md` incl. the site-honesty map + books; full sweep green on all four environments |
 
 ## Overall Definition of Done
 - Any hosted CLI, registered by the app in one click, can list panes, read a
@@ -127,7 +128,11 @@ as a `/goal`, < 4000 chars). Execute in order.
   restart nudge; an expired token becomes ONE Re-authorize click; the UI
   says plainly that logins persist for future sessions — nobody logs in
   twice for the same tool on the same CLI.
-- The sweep — with all eleven new gates — is green on local Windows and
+- Context stays clean by DEFAULT: a new workspace's agents carry only
+  the house server + its template's picks; adding Sentry to one
+  workspace pollutes no other; the matrix answers "does this CLI have
+  this tool" in one glance, and a pane's tools/list frames prove it.
+- The sweep — with all twelve new gates — is green on local Windows and
   all three CI OSes; both perf budgets unchanged.
 
 ## Global checks (every step)
@@ -157,13 +162,13 @@ as a `/goal`, < 4000 chars). Execute in order.
 - **The custody rule (ADR 0008.h — the phase-7 bar, pack-wide)**: any
   secret in OUR custody rests as OS-vault ciphertext or does not rest at
   all — vault-unavailable machines get refusal or session-only, never a
-  plaintext downgrade. Covers vault keys (08), webhook URLs (09), and
+  plaintext downgrade. Covers vault keys (08), webhook URLs (10), and
   agent-web cookie persistence (04). What the CLIs store after THEIR own
   logins is theirs (0002, exactly-as-terminal) — docs/14 states both
   halves plainly, and the milestone certifies ours with a disk-wide
   fixture-secret sweep.
 - **One home**: Settings § Integrations is ONE module growing across
-  06/07/08/09 (the 7/12 lesson) — no knob renders anywhere else; the
+  06–11 (the 7/12 lesson) — no knob renders anywhere else; the
   milestone greps it.
 - Platform differences live in path tables + CI config only (6/03 lesson:
   compare canonical paths on win32).
@@ -172,10 +177,10 @@ as a `/goal`, < 4000 chars). Execute in order.
 
 ## Parallelization
 01 is the root. After it: Lane A (02 → 03 → 04 → 05, the server + the web
-profile + the trail), Lane B (06 → 07 → 08 → 09 → 10, the manager +
-catalog + vault keys + bridge + connection status),
-Lane C (11, the service seam) — three lanes, zero shared files beyond
-contracts. 12 needs all lanes. Solo execution runs 01→12 in order (house
+profile + the trail), Lane B (06 → 07 → 08 → 09 → 10 → 11, the manager +
+catalog + vault keys + tool plans + bridge + connection status),
+Lane C (12, the service seam) — three lanes, zero shared files beyond
+contracts. 13 needs all lanes. Solo execution runs 01→13 in order (house
 rule: no parallel agents); the lanes describe independence, not simultaneity.
 The ecosystem research behind the catalog (per-tool matrix, CLI OAuth
 capabilities, sources): `docs/research/2026-07-third-party-integrations.md`.

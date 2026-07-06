@@ -19,7 +19,7 @@ daemon protocol v3 frozen, smokes network-free.
 | 6/05b consent boolean | KV `kvConsent(wsId)` | migrates to `web:'public'` |
 | Per-CLI install layout | `hooks/{claude-code,codex,gemini}` | the manager generalizes this |
 | OS-vault key store, write-only (0007.a) | `src/main/usage-keys.ts` | 08 extracts the vault mechanics into a shared helper |
-| House notify/attention path | notify verb → pane header/card events | 03 receipts, 09 bridge subscription, 10 review-back |
+| House notify/attention path | notify verb → pane header/card events | 03 receipts, 10 bridge subscription, 12 review-back |
 | Profile env → pane spawn (app → daemon, existing wire) | the profiles feature | 08 merges vault keys into the same map |
 | Settings one-home module pattern | `src/ui/features/settings/usage.ts` (7/12) | § Integrations is ONE module the same way |
 
@@ -49,7 +49,7 @@ daemon protocol v3 frozen, smokes network-free.
   rest at all.** Vault-unavailable machines (the 7/05 probe: Linux
   `basic_text` counts as unavailable) get REFUSAL or session-only — never
   a plaintext downgrade. Applies to: vault service keys (08), webhook
-  URLs (09), and agent-web persistence (04 — see below).
+  URLs (10), and agent-web persistence (04 — see below).
 - **Agent-web cookies ride Chromium's cookie encryption, which uses the
   SAME OS facility as our vault.** So the persistent `persist:agent-web`
   partition is vault-conditioned: no real vault → the dock creates the
@@ -62,7 +62,7 @@ daemon protocol v3 frozen, smokes network-free.
   copy, nor "fix" that. docs/14 states both halves plainly — our custody
   is ciphertext-only; their custody is their vendor's posture.
 - **Certified, not promised**: VAULTKEYS greps KV + configs; the
-  milestone (11) ends with a DISK-WIDE sweep — every fixture secret
+  milestone (13) ends with a DISK-WIDE sweep — every fixture secret
   (vault key, webhook URL, the fixture site's session cookie value)
   grepped across the entire fixture userData + fixture CLI homes;
   plaintext absence is the assert, the 7/12 masked-key ladder writ large.
@@ -91,7 +91,7 @@ daemon protocol v3 frozen, smokes network-free.
   A test-only extra pattern comes via `MOGGING_TEST_BLOCK_ORIGIN` for the
   AGENTWEB smoke.
 - New in the remake: `TrailEntry` (05), `IntegrationWebhook` + the versioned
-  `BridgeEvent` payload (09), `McpPreset` (07) all live in this slice from
+  `BridgeEvent` payload (10), `McpPreset` (07) all live in this slice from
   day one — the steps enforce, 01 only shapes.
 
 ## 02 — one server, two upstreams
@@ -219,7 +219,7 @@ daemon protocol v3 frozen, smokes network-free.
 - Extract `usage-keys.ts`'s safeStorage mechanics into `src/main/vault.ts`
   first — encrypt/decrypt/slot, write-only, refusal-when-unavailable —
   with usage-keys as consumer one and USAGE/USAGESET as the zero-change
-  proof. The key store (this step) and the bridge's URL store (09) are
+  proof. The key store (this step) and the bridge's URL store (10) are
   consumers two and three.
 - Security honesty, stated wherever the key is pasted: at rest this is
   strictly better than a plaintext `export` in dotfiles; at runtime it is
@@ -235,7 +235,35 @@ daemon protocol v3 frozen, smokes network-free.
   vs process-env inheritance) is cliQuirks data, dev-verified per CLI
   with a real install before any preset claims it (7/01).
 
-## 09 — event bridge (new step)
+## 09 — workspace tool plans (new step; context hygiene with a mechanism)
+
+- **Why launch-time, not config-time**: the manager's user-home writes
+  are inherently global — every pane of that CLI sees every entry. True
+  scoping rides the same seam as vault keys: WE launch the panes, so the
+  launcher hands each pane exactly its plan. Per-CLI mechanism is
+  capability-table data, dev-verified: Claude Code takes `--mcp-config`
+  pointing at a userData-composed file (preferred — nothing in the
+  worktree); CLIs without a flag get a project-scope file written with
+  the managed marker and appended to the WORKTREE's own
+  `.git/info/exclude` (worktree-local, never the shared repo excludes) —
+  an agent's `git status` must stay clean of our plumbing.
+- **Two tiers, no third**: GLOBAL (06) and WORKSPACE (the plan). A
+  per-PANE tier is deliberately out of v1 — panes inherit their
+  workspace's plan; role-scoped plans are a data-ready extension
+  (entries keyed by role) deferred until swarm demand is real.
+- **Plans vs grants, said once and repeated in docs/14**: plans decide
+  WHERE a server appears (context hygiene); grants decide what OUR
+  server permits (the boundary). A plan never widens a grant.
+- **Templates seed plans**: the template shape gains `tools: serverId[]`
+  — a data field, so the template smokes (TEMPLATE_A/B) extend
+  naturally; the wizard picker pre-checks them.
+- **Composition with 08 and 11**: the launcher resolves the plan AND the
+  vault env in the same pre-spawn pass (one merge point, one place to
+  audit); 11's registry + restart-needed compare against the pane's
+  MATERIALIZED set, not the global config — the chip tells the pane's
+  truth.
+
+## 10 — event bridge (new step)
 
 - The bridge lives in the APP's main process, subscribed to the SAME
   attention/notify events the UI already receives — the daemon stays v3 and
@@ -260,7 +288,7 @@ daemon protocol v3 frozen, smokes network-free.
   no-URL-in-trail/no-secret-in-logs greps, and that a dead receiver never
   stalls a notify.
 
-## 10 — MCP connection status (new step; know, don't assume)
+## 11 — MCP connection status (new step; know, don't assume)
 
 - The ONLY honest "connected" signal for a third-party server is the
   consuming CLI's own verdict: `claude mcp list` prints per-server
@@ -287,7 +315,7 @@ daemon protocol v3 frozen, smokes network-free.
   Re-authorize reuses 07's managed-PTY flow; the button is the ONLY
   path (no auto-spawned browser, ever).
 
-## 11 — GitHub adapter
+## 12 — GitHub adapter
 
 - **One GraphQL call per refresh** via `gh api graphql`: PR state +
   `reviewDecision` + `statusCheckRollup` in a single bounded request (REST
@@ -304,9 +332,10 @@ daemon protocol v3 frozen, smokes network-free.
 
 ## Execution order (solo, no parallel agents — house rule)
 
-01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → 10 → 11 → 12. The lanes in
-the README describe INDEPENDENCE (06–10 and 11 don't need 02–05), not
-simultaneous execution; if a lane blocks, skip forward and return.
+01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → 10 → 11 → 12 → 13. The
+lanes in the README describe INDEPENDENCE (06–11 and 12 don't need
+02–05), not simultaneous execution; if a lane blocks, skip forward and
+return.
 
 ## Risks worth naming now
 
@@ -335,3 +364,9 @@ simultaneous execution; if a lane blocks, skip forward and return.
    "optimize" by writing a decrypted value anywhere persistent. The
    works-in-panes boundary (08) is the other honesty: env-refs remain
    the answer for CLIs run outside the Workspace.
+10. Plan materialization must never dirty a worktree: the exclude entry
+    is per-WORKTREE (`.git/info/exclude` resolves through the worktree
+    gitdir — verify on win32 with canonical paths, 6/03), and the
+    TOOLPLAN smoke's `git status` grep is the tripwire. A CLI whose
+    project-scope discovery ignores excludes entirely gets the
+    launch-flag path or waits — never a tracked file.

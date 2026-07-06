@@ -11,7 +11,7 @@ the copy says where it works.
    `src/main/vault.ts` (encrypt/decrypt/slot, write-only discipline,
    vault-unavailable REFUSAL intact); usage-keys becomes consumer one
    (zero behavior change — USAGE/USAGESET as proof). This key store and
-   09's URL store are consumers two and three.
+   10's URL store are consumers two and three.
 2. **Service-key store**: slots keyed `vault:<name>` in the settings KV
    (ciphertext only). The 06/07 env forms grow the paste-once option: a
    secret-shaped value is OFFERED the vault instead of refused outright —
