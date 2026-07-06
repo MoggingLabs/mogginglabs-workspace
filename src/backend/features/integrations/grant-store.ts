@@ -9,10 +9,38 @@ import {
   MCP_CONTROL_WRITE_TOOL_NAMES,
   defaultIntegrationsGrant,
   grantFromLegacyBrowserConsent,
+  isSensitiveOrigin,
   type McpWriteToolName,
   type WebGrantLevel,
   type WorkspaceIntegrationsGrant
 } from '@contracts'
+
+/** Normalize a user-entered act-origin to a proper ORIGIN string
+ *  ("github.com" -> "https://github.com"); null when unparseable. Grants are
+ *  exact-origin: scheme + host + port all count. */
+export function normalizeActOrigin(raw: string): string | null {
+  const t = String(raw ?? '').trim()
+  if (!t) return null
+  const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(t) ? t : `https://${t}`
+  try {
+    const u = new URL(withScheme)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+    return u.origin
+  } catch {
+    return null
+  }
+}
+
+/** The blocklist, both ends (ADR 0008.e): `SENSITIVE_ORIGIN_PATTERNS` plus the
+ *  test-only extra pattern (`MOGGING_TEST_BLOCK_ORIGIN`, the AGENTWEB smoke's
+ *  hook). The grant editor refuses to SAVE a match; `agentAct` refuses to
+ *  DISPATCH one even if persisted — `actOrigins` never overrides it. */
+export function isBlockedActOrigin(origin: string): boolean {
+  const h = String(origin ?? '').toLowerCase()
+  if (isSensitiveOrigin(h)) return true
+  const test = process.env.MOGGING_TEST_BLOCK_ORIGIN
+  return !!test && h.includes(test.toLowerCase())
+}
 
 /** The two KV verbs the store needs (main adapts the app-settings db to this). */
 export interface GrantKv {
@@ -44,7 +72,15 @@ export function sanitizeGrant(workspaceId: string, raw: unknown): WorkspaceInteg
   }
   if (WEB_LEVELS.includes(r.web as WebGrantLevel)) g.web = r.web as WebGrantLevel
   if (Array.isArray(r.actOrigins)) {
-    g.actOrigins = r.actOrigins.filter((o): o is string => typeof o === 'string' && o.length > 0).slice(0, 200)
+    // Normalized origins only; blocked (sensitive) origins never save — the
+    // editor end of the both-ends rule. Dispatch re-checks independently.
+    g.actOrigins = [
+      ...new Set(
+        r.actOrigins
+          .map((o) => normalizeActOrigin(typeof o === 'string' ? o : ''))
+          .filter((o): o is string => o !== null && !isBlockedActOrigin(o))
+      )
+    ].slice(0, 200)
   }
   return g
 }

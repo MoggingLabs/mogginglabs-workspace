@@ -89,20 +89,48 @@ stolen.
 ### What agents can NEVER touch
 
 ADR 0002 holds at full throttle. There are no cookie, storage, or credential
-tools — the wheel, not the vault. No session injection, no headless second
-browser: the verbs drive the ONE visible dock the human is looking at.
+TOOLS — the wheel, not the vault. No session injection, no headless second
+browser: the verbs drive the ONE visible dock the human is looking at. The
+only cookie store the APP itself ever touches is its own agent-web partition,
+below, at the user's explicit request (Signed-in sites / forget) — never the
+system browser's (Branch B stays parked behind its own future ADR).
 
-**The session, honestly.** The dock uses its own empty partition. It is NOT
-your system browser and does not share its logins — it starts signed out of
-everything, and an agent acts only with whatever the DOCK itself holds (i.e.
-what you signed into inside the dock). Agents can reach a local dev server or
-any public page without touching your real browser sessions.
+**The session, honestly — two profiles (8/04, ADR 0008.e).** The dock has two
+separate session partitions, switched in the header:
+
+- **Preview** (`persist:browser-dock`) — the 6/05 behavior, byte-for-byte: an
+  isolated partition that starts signed out of everything. Agents act here
+  under the workspace consent alone (reads and acts alike) — your dev server,
+  docs, any public page.
+- **Agent web** (`persist:agent-web`) — the dedicated signed-in profile, the
+  FINDINGS Branch-C resolution. You sign into sites here ON PURPOSE; sessions
+  persist in this profile and nowhere else. It is NOT your system browser and
+  never shares its logins. Agents READ freely, but ACT verbs (click / type /
+  select / eval / navigate — `eval` has no read-tier exception) require the
+  page's ORIGIN in this workspace's grant, checked at dispatch inside
+  `agentAct()`, the one choke point every transport funnels through. Sensitive
+  origins (banking/mail/gov) refuse at both ends: the editor won't save them
+  and dispatch refuses them even if persisted. The first act per origin per
+  possession additionally needs the human's one-click banner confirm
+  (session-scoped, cleared on Stop), cross-origin navigation raises an alert,
+  and every act/refusal/confirm lands in the local activity trail (8/05 gives
+  it the store; origins + verbs only, never content).
+
+**The custody rule here (ADR 0008.h).** Chromium encrypts cookies at rest with
+the same OS facility as the app's vault. A machine without a real vault gets a
+NON-persist agent-web partition and the chrome says so plainly ("logins here
+last until the dock closes") — never weakly-protected cookies on disk. What
+you signed into stays inspectable: the Sites & grants panel lists every
+signed-in site in the agent-web partition, each with Forget, plus Clear all
+agent logins.
 
 **Untrusted content.** A page an agent reads via `snapshot`/`screenshot` is
 untrusted input; a hostile page can attempt to steer the agent through its
-text (prompt injection is inherent to browser tools everywhere). The consent
-copy says so. Keep agent-driving off for workspaces where you'd browse
-sensitive or adversarial pages.
+text (prompt injection is inherent to browser tools everywhere). On the
+signed-in profile that risk has real stakes — which is exactly why acts are
+origin-gated, confirmed, alerted, and trailed. The consent copy says so. Keep
+agent-driving off for workspaces where you'd browse sensitive or adversarial
+pages.
 
 ### Telemetry (ADR 0005)
 

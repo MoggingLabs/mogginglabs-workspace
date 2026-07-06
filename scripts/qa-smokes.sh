@@ -137,6 +137,7 @@ run_smoke USAGECLI     MOGGING_USAGECLI  1 180 usagecli
 run_smoke USAGESET     MOGGING_USAGESET  1 180 usageset
 run_smoke MCP          MOGGING_MCP       1 240 mcp
 run_smoke MCPWRITE     MOGGING_MCPWRITE  1 240 mcpwrite
+run_smoke AGENTWEB     MOGGING_AGENTWEB  1 240 agentweb
 
 echo ""
 echo "══ SWEEP RESULTS ══"

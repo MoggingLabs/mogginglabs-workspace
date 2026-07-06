@@ -1,4 +1,4 @@
-import { BrowserWindow, WebContentsView, ipcMain, shell, session } from 'electron'
+import { BrowserWindow, WebContentsView, ipcMain, shell, session, type Session } from 'electron'
 import {
   BrowserChannels,
   type BrowserAgentActivity,
@@ -9,31 +9,63 @@ import {
   type BrowserDockInit,
   type BrowserDockState,
   type BrowserNavAction,
+  type BrowserProfile,
+  type BrowserSignedInSite,
   type BrowserSnapshotNode
 } from '@contracts'
+import { isBlockedActOrigin } from '@backend/features/integrations'
 import { getSettingsStore } from './app-settings'
+import { getIntegrationsGrant } from './integrations'
+import { isKeyVaultAvailable } from './usage-keys'
+import { recordTrail } from './trail'
 
 /**
- * The browser dock's MAIN side (Phase-6/05). Split in two, deliberately:
+ * The browser dock's MAIN side (Phase-6/05; 8/04 adds the agent web profile).
+ * Split in two, deliberately:
  *   `dock`   — WebContentsView lifecycle, bounds, visibility, persistence.
  *   `driver` — verb-shaped navigate/read acts. The dock chrome calls these
  *              over IPC today; 6/05b hands the SAME verbs to agents via the
  *              phase-8 MCP server. Build nothing here that assumes a human.
- * ADR 0002: the view runs its own persistent partition (normal cookies for
- * the user's browsing, isolated from the app's session) and we inject and
- * read NOTHING — no cookie access, no auth automation, no preload.
+ * TWO session profiles, one dock (ADR 0008.e — FINDINGS Branch C):
+ *   preview   — `persist:browser-dock`, the 6/05 behavior byte-for-byte.
+ *   agent-web — the dedicated signed-in profile the user logs into ON
+ *               PURPOSE. Acts (click/type/select/eval/navigate) are gated per
+ *               ORIGIN by the workspace integrations grant, sensitive origins
+ *               refuse always, and every act/refusal/confirm lands in the
+ *               trail. Persistence is VAULT-CONDITIONED (0008.h): no OS vault
+ *               means a NON-persist partition — never weakly-protected
+ *               cookies at rest.
+ * ADR 0002 holds: we inject and read NOTHING from other browsers — the ONLY
+ * cookie store touched is our own agent-web partition, at the user's request
+ * (Signed-in sites / forget). Branch B (system cookie stores) stays parked.
  */
 
 const KV_OPEN = 'browser.open'
 const KV_WIDTH = 'browser.width'
 const kvLastUrl = (workspaceId: string): string => `browser.lastUrl.${workspaceId}`
+const kvProfile = (workspaceId: string): string => `browser.profile.${workspaceId}`
 const DEFAULT_WIDTH = 420
 
-let view: WebContentsView | null = null
+const PREVIEW_PARTITION = 'persist:browser-dock'
+const AGENTWEB_PARTITION = 'persist:agent-web'
+const AGENTWEB_EPHEMERAL = 'agent-web-ephemeral' // no `persist:` -> memory only
+
 let getWin: (() => BrowserWindow | null) | null = null
 let lastBounds: BrowserDockBounds | null = null
 let open = false
 let widthPersistTimer: NodeJS.Timeout | null = null
+
+const views: Record<BrowserProfile, WebContentsView | null> = { preview: null, 'agent-web': null }
+let profile: BrowserProfile = 'preview'
+const activeView = (): WebContentsView | null => views[profile]
+
+/** Resolved at agent-web view creation: false -> the ephemeral partition. */
+let agentWebPersists = true
+let vaultProbe: () => boolean = isKeyVaultAvailable
+/** Smoke-only: force the vault-less arm without a second boot. */
+export function setAgentWebVaultProbeForSmoke(probe: (() => boolean) | null): void {
+  vaultProbe = probe ?? isKeyVaultAvailable
+}
 
 // ── Agent control state (6/05b) ────────────────────────────────────────────
 // Consent is per-workspace, default OFF; the renderer pushes the ACTIVE
@@ -41,11 +73,19 @@ let widthPersistTimer: NodeJS.Timeout | null = null
 // workspace beside it, so its grant governs). `driving` latches while a verb is
 // in flight + a grace beat, so possession is always visible.
 let agentAllowed = false
+let activeWorkspaceId = ''
 let driving = false
 let drivingClearTimer: NodeJS.Timeout | null = null
 const trail: BrowserAgentActivity['trail'] = []
-const consoleBuf: string[] = []
-const netFailBuf: string[] = []
+// 8/04: session-scoped human confirms — first ACT per granted origin raises
+// the banner; cleared on Stop / consent-off / profile switch, never persisted.
+const confirmedOrigins = new Set<string>()
+let pendingConfirm: string | null = null
+// Per-profile error-feedback rings (6/05b), so profiles never interleave.
+const bufs: Record<BrowserProfile, { console: string[]; net: string[] }> = {
+  preview: { console: [], net: [] },
+  'agent-web': { console: [], net: [] }
+}
 const RING = 200 // console/network ring-buffer cap
 
 /** http(s) only — scheme-less input gets http:// (localhost:3000 just works). */
@@ -61,21 +101,32 @@ function normalizeUrl(raw: string): string | null {
   }
 }
 
+const originOf = (url: string): string => {
+  try {
+    return new URL(url).origin
+  } catch {
+    return ''
+  }
+}
+
 function pushState(): void {
   const win = getWin?.()
   if (!win || win.isDestroyed()) return
-  const wc = view?.webContents
+  const wc = activeView()?.webContents
   const state: BrowserDockState = {
     url: wc?.getURL() ?? '',
     title: wc?.getTitle() ?? '',
     canGoBack: wc?.navigationHistory.canGoBack() ?? false,
     canGoForward: wc?.navigationHistory.canGoForward() ?? false,
-    loading: wc?.isLoading() ?? false
+    loading: wc?.isLoading() ?? false,
+    profile,
+    agentWebPersists
   }
   win.webContents.send(BrowserChannels.state, state)
 }
 
 function applyBounds(): void {
+  const view = activeView()
   if (!view || !lastBounds) return
   view.setBounds({
     x: Math.round(lastBounds.x),
@@ -84,17 +135,32 @@ function applyBounds(): void {
     height: Math.round(lastBounds.height)
   })
   view.setVisible(open && lastBounds.visible)
+  // Attach-swap: the inactive profile's view never paints.
+  const other = views[profile === 'preview' ? 'agent-web' : 'preview']
+  other?.setVisible(false)
 }
 
-/** Lazily create the view on first navigation — until then the renderer's
- *  empty state shows through (and the gallery can shoot the dock offline). */
-function ensureView(): WebContentsView {
-  if (view) return view
-  const ses = session.fromPartition('persist:browser-dock')
-  // Deny-all permissions, scoped to the DOCK's partition only (the app's own
-  // session is untouched — a handler on the default session would govern both).
+/** The 6/05 hardening, ONE function for BOTH profiles: deny-all permissions,
+ *  scoped to the given partition only (the app's own session is untouched). */
+function hardenSession(ses: Session): void {
   ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
-  view = new WebContentsView({
+}
+
+/** Lazily create a profile's view on first use — until then the renderer's
+ *  empty state shows through (and the gallery can shoot the dock offline). */
+function ensureView(p: BrowserProfile): WebContentsView {
+  const existing = views[p]
+  if (existing) return existing
+  let partition = PREVIEW_PARTITION
+  if (p === 'agent-web') {
+    // Vault-conditioned persistence (ADR 0008.h): Chromium's cookie encryption
+    // rides the same OS facility as our vault — no vault, no cookies at rest.
+    agentWebPersists = !process.env.MOGGING_TEST_NO_VAULT && vaultProbe()
+    partition = agentWebPersists ? AGENTWEB_PARTITION : AGENTWEB_EPHEMERAL
+  }
+  const ses = session.fromPartition(partition)
+  hardenSession(ses)
+  const view = new WebContentsView({
     webPreferences: {
       session: ses,
       sandbox: true,
@@ -102,6 +168,7 @@ function ensureView(): WebContentsView {
       nodeIntegration: false
     }
   })
+  views[p] = view
   const wc = view.webContents
   wc.setWindowOpenHandler(({ url }) => {
     // New windows never spawn in-app; http(s) goes to the system browser.
@@ -114,7 +181,9 @@ function ensureView(): WebContentsView {
     if (!normalizeUrl(url)) e.preventDefault() // http(s) only, ever
   })
   for (const ev of ['did-navigate', 'did-navigate-in-page', 'page-title-updated', 'did-start-loading', 'did-stop-loading'] as const) {
-    wc.on(ev as never, () => pushState())
+    wc.on(ev as never, () => {
+      if (views[p] === activeView()) pushState()
+    })
   }
   // The error feedback loop (6/05b): buffer console + failed loads so an agent
   // can READ what broke. Ring-capped; a new navigation clears the last page's
@@ -126,24 +195,65 @@ function ensureView(): WebContentsView {
     const a1 = args[1] as { level?: unknown; message?: unknown } | number | string | undefined
     const level = a1 && typeof a1 === 'object' ? String(a1.level ?? '') : String(a1 ?? '')
     const message = a1 && typeof a1 === 'object' ? String(a1.message ?? '') : String(args[2] ?? '')
-    consoleBuf.push(`[${level}] ${message}`)
-    if (consoleBuf.length > RING) consoleBuf.shift()
+    bufs[p].console.push(`[${level}] ${message}`)
+    if (bufs[p].console.length > RING) bufs[p].console.shift()
   })
   wc.on('did-fail-load', (_e, code, desc, url) => {
     if (code === -3) return // ABORTED — user/nav churn, not a failure
-    netFailBuf.push(`${code} ${desc} ${url}`)
-    if (netFailBuf.length > RING) netFailBuf.shift()
+    bufs[p].net.push(`${code} ${desc} ${url}`)
+    if (bufs[p].net.length > RING) bufs[p].net.shift()
   })
   wc.on('did-start-navigation', (_e, _url, _inPage, isMainFrame) => {
     if (isMainFrame) {
-      consoleBuf.length = 0
-      netFailBuf.length = 0
+      bufs[p].console.length = 0
+      bufs[p].net.length = 0
     }
   })
+  if (p === 'agent-web') {
+    // Origin-change watch (8/04): crossing origins in the signed-in profile is
+    // exactly where a hijacked agent (or a hostile redirect) becomes dangerous
+    // — alert the human, land a trail event. ORIGINS only, never page content.
+    let lastOrigin = ''
+    wc.on('did-navigate', (_e, url) => {
+      const next = originOf(url)
+      if (lastOrigin && next && next !== lastOrigin) {
+        const win = getWin?.()
+        if (win && !win.isDestroyed()) win.webContents.send(BrowserChannels.originAlert, { from: lastOrigin, to: next })
+        recordTrail({
+          ts: Date.now(),
+          source: 'web',
+          workspaceId: activeWorkspaceId,
+          verb: 'origin-change',
+          target: next,
+          outcome: 'ok',
+          reason: `from ${lastOrigin}`
+        })
+      }
+      if (next) lastOrigin = next
+    })
+  }
   const win = getWin?.()
   if (win && !win.isDestroyed()) win.contentView.addChildView(view)
   applyBounds()
   return view
+}
+
+/** Switch the dock between profiles (attach-swap; per-workspace persisted by
+ *  the IPC handler). Confirms are session-scoped and do not cross profiles. */
+function setProfile(next: BrowserProfile): void {
+  if (profile === next) return
+  profile = next
+  pendingConfirm = null
+  confirmedOrigins.clear()
+  // Resolve the persistence verdict as soon as the profile shows, so the
+  // banner copy is honest BEFORE the first navigation creates the view.
+  if (next === 'agent-web' && !views['agent-web']) {
+    agentWebPersists = !process.env.MOGGING_TEST_NO_VAULT && vaultProbe()
+  }
+  if (views[next]) applyBounds()
+  else views[profile === 'preview' ? 'agent-web' : 'preview']?.setVisible(false)
+  pushState()
+  pushActivity()
 }
 
 /** The verb seam (6/05b exposes these to agents — keep them human-free). */
@@ -151,24 +261,26 @@ export const browserDriver = {
   navigate(rawUrl: string): boolean {
     const url = normalizeUrl(rawUrl)
     if (!url) return false
-    void ensureView().webContents.loadURL(url)
+    void ensureView(profile).webContents.loadURL(url)
     return true
   },
   nav(action: BrowserNavAction): void {
-    const wc = view?.webContents
+    const wc = activeView()?.webContents
     if (!wc) return
     if (action === 'back' && wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack()
     else if (action === 'forward' && wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward()
     else if (action === 'reload') wc.reload()
   },
   state(): BrowserDockState {
-    const wc = view?.webContents
+    const wc = activeView()?.webContents
     return {
       url: wc?.getURL() ?? '',
       title: wc?.getTitle() ?? '',
       canGoBack: wc?.navigationHistory.canGoBack() ?? false,
       canGoForward: wc?.navigationHistory.canGoForward() ?? false,
-      loading: wc?.isLoading() ?? false
+      loading: wc?.isLoading() ?? false,
+      profile,
+      agentWebPersists
     }
   }
 }
@@ -178,7 +290,12 @@ export const browserDriver = {
 function pushActivity(): void {
   const win = getWin?.()
   if (!win || win.isDestroyed()) return
-  const activity: BrowserAgentActivity = { driving, allowed: agentAllowed, trail: trail.slice(-12) }
+  const activity: BrowserAgentActivity = {
+    driving,
+    allowed: agentAllowed,
+    trail: trail.slice(-12),
+    pendingConfirm: pendingConfirm ?? undefined
+  }
   win.webContents.send(BrowserChannels.activity, activity)
 }
 
@@ -197,23 +314,43 @@ function markDriving(verb: BrowserAgentVerbName, target?: string): void {
 }
 
 /** Revoke the grant instantly (the human's Stop button). Consent stays as the
- *  workspace set it; this just drops the in-flight possession latch. */
+ *  workspace set it; this just drops the in-flight possession latch — and the
+ *  session-scoped origin confirms die with the possession (8/04). */
 export function agentStop(): void {
   driving = false
   if (drivingClearTimer) clearTimeout(drivingClearTimer)
+  confirmedOrigins.clear()
+  pendingConfirm = null
   // A hard stop also halts whatever is loading, so "Stop" is literal.
   try {
-    view?.webContents.stop()
+    activeView()?.webContents.stop()
   } catch {
     /* nothing loading */
   }
   pushActivity()
 }
 
-export function setAgentConsent(allowed: boolean): void {
+export function setAgentConsent(allowed: boolean, workspaceId?: string): void {
   agentAllowed = allowed
+  if (typeof workspaceId === 'string') activeWorkspaceId = workspaceId
   if (!allowed) agentStop()
   else pushActivity()
+}
+
+/** The human's session-scoped allow ("acting on {origin} this session"). */
+export function confirmPendingActOrigin(origin: string): void {
+  if (!origin || origin !== pendingConfirm) return
+  confirmedOrigins.add(origin)
+  pendingConfirm = null
+  recordTrail({
+    ts: Date.now(),
+    source: 'web',
+    workspaceId: activeWorkspaceId,
+    verb: 'confirm',
+    target: origin,
+    outcome: 'confirmed'
+  })
+  pushActivity()
 }
 
 /** Injected once per snapshot: stamp `data-mog-ref` on interactive/labelled
@@ -238,11 +375,63 @@ const SNAPSHOT_JS = `(() => {
 const byRef = (ref: string): string =>
   `document.querySelector('[data-mog-ref=${JSON.stringify(ref)}]') || document.querySelector(${JSON.stringify(ref)})`
 
+/** The verbs that ACT on a page (IMPLEMENTATION §04's gate list — mirrors the
+ *  catalog's `access:'act'` set). `eval` has NO read-tier exception, ever.
+ *  Cross-origin iframes are structurally shut: refs come from the TOP frame's
+ *  DOM (executeJavaScript cannot reach into a cross-origin frame), so no ref
+ *  can name an element there — the gate below governs the top origin. */
+const ACT_VERBS: readonly BrowserAgentVerbName[] = ['navigate', 'click', 'type', 'select', 'eval']
+
+/** 8/04 act gate, AT DISPATCH TIME — the one choke point every transport
+ *  funnels through. Returns null to proceed, or a refusal result (trailed). */
+function gateAct(v: BrowserAgentVerb, wc: Electron.WebContents): BrowserAgentResult | null {
+  if (profile !== 'agent-web' || !ACT_VERBS.includes(v.verb)) return null
+  const origin = v.verb === 'navigate' ? originOf(normalizeUrl(String(v.target ?? '')) ?? '') : originOf(wc.getURL())
+  const refuse = (outcome: 'refused', reason: string): BrowserAgentResult => {
+    recordTrail({
+      ts: Date.now(),
+      source: 'web',
+      workspaceId: activeWorkspaceId,
+      verb: v.verb,
+      target: origin || '(no origin)',
+      outcome,
+      reason
+    })
+    return { ok: false, reason }
+  }
+  if (!origin) return refuse('refused', v.verb === 'navigate' ? 'badtarget' : 'no page to act on')
+  // The blocklist beats any grant, persisted or not (ADR 0008.e).
+  if (isBlockedActOrigin(origin)) {
+    return refuse('refused', `blocked origin ${origin} — sensitive origins never accept act grants`)
+  }
+  const grant = getIntegrationsGrant(activeWorkspaceId)
+  if (grant.web !== 'signed-in' || !grant.actOrigins.includes(origin)) {
+    return refuse(
+      'refused',
+      `ungranted origin ${origin} — acting on a signed-in site needs this workspace's grant (the human adds it under Sites & grants)`
+    )
+  }
+  if (!confirmedOrigins.has(origin)) {
+    pendingConfirm = origin
+    pushActivity()
+    return refuse('refused', `awaiting the human's allow for ${origin} this session (the dock banner) — retry after they confirm`)
+  }
+  recordTrail({
+    ts: Date.now(),
+    source: 'web',
+    workspaceId: activeWorkspaceId,
+    verb: v.verb,
+    target: origin,
+    outcome: 'ok'
+  })
+  return null
+}
+
 /** Dispatch one agent verb. `origin: 'agent'` verbs are consent-gated; the dock
  *  chrome's own navigate/nav go through browserDriver directly (human, ungated). */
 export async function agentAct(v: BrowserAgentVerb): Promise<BrowserAgentResult> {
   if (!agentAllowed) return { ok: false, reason: 'disabled' }
-  const wc = view?.webContents ?? ensureView().webContents
+  const wc = activeView()?.webContents ?? ensureView(profile).webContents
   const run = (js: string): Promise<unknown> => wc.executeJavaScript(js, true)
   // Trail records a REF only — never the eval body, typed text, or a full URL
   // (navigate keeps just the origin). This is the one place content could leak.
@@ -257,6 +446,9 @@ export async function agentAct(v: BrowserAgentVerb): Promise<BrowserAgentResult>
     }
   }
   markDriving(v.verb, trailTarget)
+  // 8/04: the per-origin act gate, at dispatch, inside the choke point.
+  const refusal = gateAct(v, wc)
+  if (refusal) return refusal
   try {
     switch (v.verb) {
       case 'navigate': {
@@ -306,9 +498,9 @@ export async function agentAct(v: BrowserAgentVerb): Promise<BrowserAgentResult>
         return { ok: true, value: String(out ?? '') }
       }
       case 'console':
-        return { ok: true, lines: consoleBuf.slice(-Math.max(1, v.n ?? 30)) }
+        return { ok: true, lines: bufs[profile].console.slice(-Math.max(1, v.n ?? 30)) }
       case 'network_failures':
-        return { ok: true, lines: netFailBuf.slice(-Math.max(1, v.n ?? 30)) }
+        return { ok: true, lines: bufs[profile].net.slice(-Math.max(1, v.n ?? 30)) }
       case 'wait_for': {
         const timeout = Math.min(30000, Math.max(100, v.n ?? 5000))
         const deadline = Date.now() + timeout
@@ -327,19 +519,105 @@ export async function agentAct(v: BrowserAgentVerb): Promise<BrowserAgentResult>
   }
 }
 
-/** Smoke-only: read the possession state main-side. */
-export function agentControlDebug(): { allowed: boolean; driving: boolean; trail: BrowserAgentActivity['trail'] } {
-  return { allowed: agentAllowed, driving, trail: trail.slice() }
+// ── Agent-web session controls (8/04): OUR partition only, ever ─────────────
+
+const agentWebSession = (): Session | null => {
+  const view = views['agent-web']
+  return view ? view.webContents.session : null
 }
+
+async function signedInSites(): Promise<BrowserSignedInSite[]> {
+  const ses = agentWebSession()
+  if (!ses) return []
+  const cookies = await ses.cookies.get({})
+  const byHost = new Map<string, number>()
+  for (const c of cookies) {
+    const host = (c.domain ?? '').replace(/^\./, '')
+    if (host) byHost.set(host, (byHost.get(host) ?? 0) + 1)
+  }
+  return [...byHost.entries()].map(([host, n]) => ({ host, cookies: n })).sort((a, b) => a.host.localeCompare(b.host))
+}
+
+async function forgetSite(host: string): Promise<void> {
+  const ses = agentWebSession()
+  if (!ses || !host) return
+  const cookies = await ses.cookies.get({})
+  for (const c of cookies) {
+    const d = (c.domain ?? '').replace(/^\./, '')
+    if (d !== host && !d.endsWith(`.${host}`)) continue
+    const url = `${c.secure ? 'https' : 'http'}://${d}${c.path ?? '/'}`
+    try {
+      await ses.cookies.remove(url, c.name)
+    } catch {
+      /* already gone */
+    }
+  }
+  for (const scheme of ['https', 'http']) {
+    try {
+      await ses.clearStorageData({ origin: `${scheme}://${host}` })
+    } catch {
+      /* nothing stored */
+    }
+  }
+}
+
+async function clearAgentLogins(): Promise<void> {
+  const ses = agentWebSession()
+  if (!ses) return
+  await ses.clearStorageData() // all storages incl. cookies — OUR partition only
+}
+
+/** Smoke-only: read the possession state main-side. */
+export function agentControlDebug(): {
+  allowed: boolean
+  driving: boolean
+  trail: BrowserAgentActivity['trail']
+  profile: BrowserProfile
+  pendingConfirm: string | null
+  agentWebPersists: boolean
+} {
+  return { allowed: agentAllowed, driving, trail: trail.slice(), profile, pendingConfirm, agentWebPersists }
+}
+
+/** Smoke-only: switch profiles / destroy the agent-web view so persistence and
+ *  the vault-less arm are provable in ONE app run. Never used by features. */
+export function setProfileForSmoke(p: BrowserProfile): void {
+  setProfile(p)
+}
+export async function destroyAgentWebViewForSmoke(): Promise<void> {
+  const view = views['agent-web']
+  if (!view) return
+  try {
+    await view.webContents.session.cookies.flushStore() // disk truth before the view dies
+  } catch {
+    /* ephemeral partition */
+  }
+  const win = getWin?.()
+  try {
+    if (win && !win.isDestroyed()) win.contentView.removeChildView(view)
+  } catch {
+    /* already detached */
+  }
+  try {
+    view.webContents.close()
+  } catch {
+    /* already closed */
+  }
+  views['agent-web'] = null
+}
+export const forgetSiteForSmoke = forgetSite
+export const signedInSitesForSmoke = signedInSites
 
 /** Smoke-only: run script INSIDE the dock page (the window.open denial probe
  *  needs the attempt to originate from page context). Never used by features. */
 export function dockPageEval(js: string): Promise<unknown> | null {
+  const view = activeView()
   return view ? view.webContents.executeJavaScript(js, true) : null
 }
 
 /** Smoke-only ground truth (main-side): where the view actually is. */
 export function dockDebug(): { attached: boolean; visible: boolean; bounds: BrowserDockBounds | null; url: string } {
+  const view = activeView()
   return {
     attached: !!view,
     visible: !!view && open && !!lastBounds?.visible,
@@ -362,8 +640,10 @@ export function registerBrowserDock(winGetter: () => BrowserWindow | null): void
   ipcMain.handle(BrowserChannels.toggle, (_e, payload: { open: boolean; workspaceId?: string }) => {
     open = !!payload?.open
     store()?.setSetting(KV_OPEN, open ? '1' : '')
-    // First open with nothing loaded -> restore this workspace's last preview.
-    if (open && !view && payload?.workspaceId) {
+    // First open with nothing loaded -> restore this workspace's last PREVIEW
+    // url (the agent-web profile restores nothing — signed-in pages reopen on
+    // the user's own navigation, never automatically).
+    if (open && profile === 'preview' && !views.preview && payload?.workspaceId) {
       const last = store()?.getSetting(kvLastUrl(payload.workspaceId))
       if (last) browserDriver.navigate(last)
     }
@@ -373,7 +653,7 @@ export function registerBrowserDock(winGetter: () => BrowserWindow | null): void
 
   ipcMain.handle(BrowserChannels.navigate, (_e, payload: { url: string; workspaceId?: string }) => {
     const ok = browserDriver.navigate(String(payload?.url ?? ''))
-    if (ok && payload?.workspaceId) {
+    if (ok && payload?.workspaceId && profile === 'preview') {
       const url = normalizeUrl(String(payload.url))
       if (url) store()?.setSetting(kvLastUrl(payload.workspaceId), url)
     }
@@ -408,12 +688,29 @@ export function registerBrowserDock(winGetter: () => BrowserWindow | null): void
     store()?.setSetting(kvConsent(String(p?.workspaceId)), p?.allowed ? '1' : '')
   })
   // The renderer makes the ACTIVE workspace's stored grant LIVE (on switch/boot).
-  ipcMain.on(BrowserChannels.consent, (_e, payload: { allowed: boolean }) => {
-    setAgentConsent(!!payload?.allowed)
+  // 8/04: the workspace id rides along — act-origin grants resolve against it.
+  ipcMain.on(BrowserChannels.consent, (_e, payload: { allowed: boolean; workspaceId?: string }) => {
+    setAgentConsent(!!payload?.allowed, payload?.workspaceId)
   })
   // An agent verb. Today the smoke calls this directly; the phase-8 MCP server
   // (8/02) registers each verb as a tool that lands HERE — one driver, one
   // gate, whatever the transport. Consent is re-checked inside agentAct.
   ipcMain.handle(BrowserChannels.agentAct, (_e, v: BrowserAgentVerb) => agentAct(v))
   ipcMain.on(BrowserChannels.agentStop, () => agentStop())
+
+  // ── Agent web profile (8/04) ──────────────────────────────────────────────
+  ipcMain.handle(BrowserChannels.profileGet, (_e, wsId: string): BrowserProfile => {
+    return store()?.getSetting(kvProfile(String(wsId))) === 'agent-web' ? 'agent-web' : 'preview'
+  })
+  ipcMain.handle(BrowserChannels.profileSet, (_e, p: { workspaceId?: string; profile: BrowserProfile }) => {
+    const next: BrowserProfile = p?.profile === 'agent-web' ? 'agent-web' : 'preview'
+    if (p?.workspaceId) store()?.setSetting(kvProfile(String(p.workspaceId)), next)
+    setProfile(next)
+  })
+  ipcMain.on(BrowserChannels.confirmOrigin, (_e, p: { origin: string }) => {
+    confirmPendingActOrigin(String(p?.origin ?? ''))
+  })
+  ipcMain.handle(BrowserChannels.signedInSites, () => signedInSites())
+  ipcMain.handle(BrowserChannels.forgetSite, (_e, host: string) => forgetSite(String(host ?? '')))
+  ipcMain.handle(BrowserChannels.clearAgentLogins, () => clearAgentLogins())
 }

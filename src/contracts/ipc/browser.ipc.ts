@@ -21,12 +21,32 @@ export interface BrowserDockBounds {
   visible: boolean
 }
 
+/** The dock's two session profiles (Phase-8/04, ADR 0008.e — FINDINGS Branch
+ *  C): `preview` = the 6/05 empty-partition preview, byte-for-byte; `agent-web`
+ *  = the dedicated signed-in profile the user logs into ON PURPOSE. Separate
+ *  partitions; sign-ins live ONLY in agent-web; the system browser's sessions
+ *  are NEVER read (Branch B stays parked behind its own ADR). */
+export type BrowserProfile = 'preview' | 'agent-web'
+
 export interface BrowserDockState {
   url: string
   title: string
   canGoBack: boolean
   canGoForward: boolean
   loading: boolean
+  /** Which profile the dock is showing (8/04). */
+  profile: BrowserProfile
+  /** False on a vault-less machine (ADR 0008.h): agent-web runs a NON-persist
+   *  partition there — logins last until the dock closes, never plaintext at
+   *  rest. The chrome renders the honest copy from this flag. */
+  agentWebPersists: boolean
+}
+
+/** One signed-in site in the agent-web partition (OUR own partition — never
+ *  the system browser's): host + how many cookies it holds. */
+export interface BrowserSignedInSite {
+  host: string
+  cookies: number
 }
 
 export type BrowserNavAction = 'back' | 'forward' | 'reload'
@@ -95,4 +115,7 @@ export interface BrowserAgentActivity {
   driving: boolean
   allowed: boolean
   trail: { verb: BrowserAgentVerbName; target?: string; at: number }[]
+  /** 8/04: an ORIGIN awaiting the human's session-scoped "allow acting" click
+   *  (the banner confirm). Origins only — never page content. */
+  pendingConfirm?: string
 }

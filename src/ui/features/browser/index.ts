@@ -1,11 +1,15 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
 import {
   BrowserChannels,
+  IntegrationsChannels,
   type BrowserAgentActivity,
   type BrowserDockBounds,
   type BrowserDockInit,
   type BrowserDockState,
-  type BrowserNavAction
+  type BrowserNavAction,
+  type BrowserProfile,
+  type BrowserSignedInSite,
+  type WorkspaceIntegrationsGrant
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { IconButton, el, icon } from '../../components'
@@ -26,7 +30,15 @@ export const browserFeature: UiFeature = {
     const bridge = getBridge()
     let open = false
     let width = 420
-    let state: BrowserDockState = { url: '', title: '', canGoBack: false, canGoForward: false, loading: false }
+    let state: BrowserDockState = {
+      url: '',
+      title: '',
+      canGoBack: false,
+      canGoForward: false,
+      loading: false,
+      profile: 'preview',
+      agentWebPersists: true
+    }
 
     // ── Dock skeleton: header (chrome) + view host (the WebContentsView's rect) ──
     const dock = el('aside', { class: 'browser-dock', hidden: true })
@@ -51,7 +63,15 @@ export const browserFeature: UiFeature = {
     })
     const close = IconButton({ icon: 'x', label: 'Close browser', title: 'Close (Ctrl+Shift+U)', onClick: () => toggle(false) })
     const loading = el('div', { class: 'browser-loading' })
-    const header = el('div', { class: 'browser-dock-header' }, [back, forward, reload, urlInput, external, close])
+    // Profile switch (8/04): Preview ⇄ Agent web, persisted per workspace.
+    const profilePreviewBtn = el('button', { class: 'browser-profile-opt is-active', type: 'button', text: 'Preview' }) as HTMLButtonElement
+    profilePreviewBtn.title = 'The empty preview profile (no logins)'
+    const profileAgentBtn = el('button', { class: 'browser-profile-opt', type: 'button', text: 'Agent web' }) as HTMLButtonElement
+    profileAgentBtn.title = 'The signed-in profile — agents act only on origins you grant'
+    const profileSwitch = el('div', { class: 'browser-profile-switch' }, [profilePreviewBtn, profileAgentBtn])
+    profilePreviewBtn.onclick = (): void => void setProfile('preview')
+    profileAgentBtn.onclick = (): void => void setProfile('agent-web')
+    const header = el('div', { class: 'browser-dock-header' }, [back, forward, reload, urlInput, profileSwitch, external, close])
 
     // ── Agent possession (6/05b): visible whenever an agent holds the wheel ──
     const stopBtn = el('button', { class: 'browser-agent-stop', type: 'button', text: 'Stop' }) as HTMLButtonElement
@@ -70,6 +90,46 @@ export const browserFeature: UiFeature = {
     ])
     const trailMenu = el('div', { class: 'menu browser-agent-trail', hidden: true })
 
+    // ── Agent web profile chrome (8/04) ─────────────────────────────────────
+    // The quiet notice: sessions persist here (or the vault-less honesty),
+    // plus the door to Sites & grants. Rendered only in the agent-web profile.
+    const noteText = el('span', { class: 'browser-agentweb-note-text' })
+    const sitesBtn = el('button', { class: 'browser-agentweb-sites', type: 'button', text: 'Sites & grants…' }) as HTMLButtonElement
+    const agentWebNote = el('div', { class: 'browser-agentweb-note', hidden: true }, [
+      noteText,
+      el('div', { class: 'browser-agent-spacer' }),
+      sitesBtn
+    ])
+    // The session-scoped confirm: first ACT per granted origin per possession.
+    const confirmBtn = el('button', { class: 'browser-confirm-btn', type: 'button' }) as HTMLButtonElement
+    const confirmBar = el('div', { class: 'browser-confirm-bar', hidden: true }, [
+      el('span', { class: 'browser-confirm-text', text: 'An agent wants to act on a signed-in site:' }),
+      confirmBtn
+    ])
+    let pendingOrigin = ''
+    confirmBtn.onclick = (): void => {
+      if (pendingOrigin) bridge.send(BrowserChannels.confirmOrigin, { origin: pendingOrigin })
+    }
+    // Origin-change alert: the signed-in profile crossed origins (transient).
+    const originAlert = el('div', { class: 'browser-origin-alert', hidden: true })
+    let originAlertTimer: number | undefined
+    bridge.on(BrowserChannels.originAlert, (payload) => {
+      const p = payload as { from: string; to: string }
+      originAlert.textContent = `Crossed origins: ${p.from} → ${p.to}`
+      originAlert.hidden = false
+      window.clearTimeout(originAlertTimer)
+      originAlertTimer = window.setTimeout(() => {
+        originAlert.hidden = true
+      }, 6000)
+    })
+    // Sites & grants panel: signed-in sites in OUR agent-web partition (forget /
+    // clear) + the minimal act-origin grant editor (06 builds the full home).
+    const sitesMenu = el('div', { class: 'menu browser-sites-menu', hidden: true })
+    sitesBtn.onclick = (): void => {
+      sitesMenu.hidden = !sitesMenu.hidden
+      if (!sitesMenu.hidden) void refreshSitesMenu()
+    }
+
     // Workspace-preview chip: shown when the active workspace remembers a
     // DIFFERENT url than the one on screen (switching never auto-navigates).
     const wsChip = el('button', { class: 'browser-ws-chip', type: 'button', hidden: true }) as HTMLButtonElement
@@ -80,7 +140,7 @@ export const browserFeature: UiFeature = {
       el('div', { class: 'browser-empty-hint', text: 'Enter a URL above — your dev server, docs, anything http(s).' })
     ])
     const viewHost = el('div', { class: 'browser-dock-view' }, [empty])
-    dock.append(handle, header, banner, trailMenu, loading, wsChip, viewHost)
+    dock.append(handle, header, agentWebNote, banner, confirmBar, originAlert, trailMenu, sitesMenu, loading, wsChip, viewHost)
     // The dock is #content's flex sibling inside #main — inserted, not slotted,
     // so the shell stays feature-agnostic.
     ctx.content.insertAdjacentElement('afterend', dock)
@@ -175,6 +235,117 @@ export const browserFeature: UiFeature = {
         })
     })
 
+    // ── Profile switch + agent-web chrome (8/04) ─────────────────────────────
+    async function setProfile(p: BrowserProfile): Promise<void> {
+      await bridge.invoke(BrowserChannels.profileSet, { workspaceId: getWorkspaces().activeId ?? undefined, profile: p })
+      getTelemetry().captureEvent({ name: 'browser.profile', props: { agentWeb: p === 'agent-web' } }) // boolean only (ADR 0005)
+    }
+    function renderProfileChrome(): void {
+      const agentWeb = state.profile === 'agent-web'
+      profilePreviewBtn.classList.toggle('is-active', !agentWeb)
+      profileAgentBtn.classList.toggle('is-active', agentWeb)
+      agentWebNote.hidden = !agentWeb
+      noteText.textContent = state.agentWebPersists
+        ? 'Signed-in browser — sessions persist on this machine; agents act only on origins you grant.'
+        : 'No at-rest encryption on this machine — logins here last until the dock closes.'
+      agentWebNote.classList.toggle('no-vault', !state.agentWebPersists)
+      const titleEl = empty.querySelector('.browser-empty-title')
+      const hintEl = empty.querySelector('.browser-empty-hint')
+      if (titleEl && hintEl) {
+        titleEl.textContent = agentWeb ? 'The agents’ signed-in browser' : 'Preview what the agents build'
+        hintEl.textContent = agentWeb
+          ? 'Sign in here on purpose. Sessions stay in this profile — never your system browser.'
+          : 'Enter a URL above — your dev server, docs, anything http(s).'
+      }
+      if (!agentWeb) sitesMenu.hidden = true
+    }
+    // Follow the ACTIVE workspace's stored profile (per-workspace persisted).
+    async function applyWorkspaceProfile(): Promise<void> {
+      const wsId = getWorkspaces().activeId
+      if (!wsId) return
+      const stored = (await bridge.invoke(BrowserChannels.profileGet, wsId)) as BrowserProfile
+      if (stored !== state.profile) await setProfile(stored)
+    }
+    onWorkspacesChange(() => void applyWorkspaceProfile())
+
+    async function refreshSitesMenu(): Promise<void> {
+      const wsId = getWorkspaces().activeId
+      sitesMenu.innerHTML = ''
+      sitesMenu.append(el('div', { class: 'menu-note browser-sites-head', text: 'Signed-in sites (agent web profile)' }))
+      const sites = (await bridge.invoke(BrowserChannels.signedInSites, undefined)) as BrowserSignedInSite[]
+      if (!sites.length) sitesMenu.append(el('div', { class: 'menu-note', text: 'No sign-ins yet — log into a site in this profile.' }))
+      for (const s of sites) {
+        const forget = el('button', { class: 'browser-sites-forget', type: 'button', text: 'Forget' }) as HTMLButtonElement
+        forget.onclick = async (): Promise<void> => {
+          await bridge.invoke(BrowserChannels.forgetSite, s.host)
+          void refreshSitesMenu()
+        }
+        sitesMenu.append(
+          el('div', { class: 'browser-sites-row' }, [
+            el('span', { class: 'browser-sites-host', text: s.host }),
+            el('span', { class: 'browser-sites-count', text: `${s.cookies} cookie${s.cookies === 1 ? '' : 's'}` }),
+            forget
+          ])
+        )
+      }
+      if (sites.length) {
+        const clearAll = el('button', { class: 'browser-sites-clear', type: 'button', text: 'Clear all agent logins' }) as HTMLButtonElement
+        clearAll.onclick = async (): Promise<void> => {
+          await bridge.invoke(BrowserChannels.clearAgentLogins, undefined)
+          void refreshSitesMenu()
+        }
+        sitesMenu.append(clearAll)
+      }
+      // The minimal act-origin grant editor (Settings § Integrations is the
+      // full home, 06). Origins agents may ACT on, for the ACTIVE workspace.
+      sitesMenu.append(el('div', { class: 'menu-note browser-sites-head', text: 'Origins agents may act on (this workspace)' }))
+      if (!wsId) {
+        sitesMenu.append(el('div', { class: 'menu-note', text: 'No active workspace.' }))
+        return
+      }
+      const grant = (await bridge.invoke(IntegrationsChannels.grantGet, wsId)) as WorkspaceIntegrationsGrant
+      for (const origin of grant.actOrigins) {
+        const drop = el('button', { class: 'browser-sites-forget', type: 'button', text: 'Revoke' }) as HTMLButtonElement
+        drop.onclick = async (): Promise<void> => {
+          await bridge.invoke(IntegrationsChannels.grantSet, {
+            ...grant,
+            actOrigins: grant.actOrigins.filter((o) => o !== origin)
+          })
+          void refreshSitesMenu()
+        }
+        sitesMenu.append(
+          el('div', { class: 'browser-sites-row' }, [el('span', { class: 'browser-sites-host', text: origin }), drop])
+        )
+      }
+      if (!grant.actOrigins.length) {
+        sitesMenu.append(el('div', { class: 'menu-note', text: 'None granted — reads always work; acts refuse.' }))
+      }
+      const addInput = el('input', { class: 'browser-sites-input' }) as HTMLInputElement
+      addInput.placeholder = 'github.com'
+      addInput.setAttribute('aria-label', 'Origin to grant')
+      addInput.spellcheck = false
+      addInput.addEventListener('keydown', (e) => e.stopPropagation())
+      const addNote = el('div', { class: 'menu-note browser-sites-refused', hidden: true })
+      const addBtn = el('button', { class: 'browser-sites-add', type: 'button', text: 'Grant origin' }) as HTMLButtonElement
+      addBtn.onclick = async (): Promise<void> => {
+        const raw = addInput.value.trim()
+        if (!raw) return
+        const saved = (await bridge.invoke(IntegrationsChannels.grantSet, {
+          ...grant,
+          web: 'signed-in', // granting an origin IS opting into the signed-in tier
+          actOrigins: [...grant.actOrigins, raw]
+        })) as WorkspaceIntegrationsGrant | null
+        const landed = !!saved && saved.actOrigins.length > grant.actOrigins.length
+        if (!landed) {
+          addNote.textContent = `“${raw}” was refused — sensitive origins never accept act grants.`
+          addNote.hidden = false
+          return
+        }
+        void refreshSitesMenu()
+      }
+      sitesMenu.append(el('div', { class: 'browser-sites-addrow' }, [addInput, addBtn]), addNote)
+    }
+
     // ── State from main (header truth) ───────────────────────────────────────
     bridge.on(BrowserChannels.state, (payload) => {
       state = payload as BrowserDockState
@@ -183,6 +354,7 @@ export const browserFeature: UiFeature = {
       forward.disabled = !state.canGoForward
       loading.classList.toggle('is-loading', state.loading)
       empty.hidden = state.url !== ''
+      renderProfileChrome()
       sendBounds() // visibility depends on url presence
       void refreshChip()
     })
@@ -207,11 +379,12 @@ export const browserFeature: UiFeature = {
     }
     onWorkspacesChange(() => void refreshChip())
 
-    // ── Agent control: consent follows the active workspace (default OFF) ────
+    // ── Agent control: consent follows the active workspace (default OFF).
+    //    8/04: the workspace id rides along so act-origin grants resolve. ────
     async function pushConsent(): Promise<void> {
       const wsId = getWorkspaces().activeId
       const allowed = !!wsId && (await bridge.invoke(BrowserChannels.consentGet, wsId)) === true
-      bridge.send(BrowserChannels.consent, { allowed })
+      bridge.send(BrowserChannels.consent, { allowed, workspaceId: wsId ?? undefined })
     }
     onWorkspacesChange(() => void pushConsent())
 
@@ -226,6 +399,10 @@ export const browserFeature: UiFeature = {
       const a = payload as BrowserAgentActivity
       banner.hidden = !a.driving
       dock.classList.toggle('agent-driving', a.driving)
+      // 8/04: the session-scoped confirm rides the activity push.
+      pendingOrigin = a.pendingConfirm ?? ''
+      confirmBar.hidden = !pendingOrigin
+      if (pendingOrigin) confirmBtn.textContent = `Allow acting on ${pendingOrigin} this session`
       if (a.driving) trailBtn.classList.remove('is-hidden')
       trailMenu.innerHTML = ''
       for (const t of [...a.trail].reverse()) {
@@ -243,10 +420,12 @@ export const browserFeature: UiFeature = {
       applyWidth()
       if (init.open) toggle(true)
       void pushConsent() // make the active workspace's stored grant live at boot
+      void applyWorkspaceProfile() // and its stored profile (8/04)
     })
 
     document.addEventListener('click', (e) => {
       if (!(e.target instanceof Node) || (!trailMenu.contains(e.target) && !banner.contains(e.target))) trailMenu.hidden = true
+      if (e.target instanceof Node && !sitesMenu.contains(e.target) && !agentWebNote.contains(e.target)) sitesMenu.hidden = true
     })
 
     exposeForDev()
@@ -278,7 +457,19 @@ export const browserFeature: UiFeature = {
           await pushConsent()
         },
         driving: () => !banner.hidden,
-        trailCount: () => trailMenu.querySelectorAll('.browser-trail-row').length
+        trailCount: () => trailMenu.querySelectorAll('.browser-trail-row').length,
+        // 8/04: agent-web profile surface for the smoke.
+        profile: () => state.profile,
+        setProfile: (p: BrowserProfile) => setProfile(p),
+        agentWebNote: () => (agentWebNote.hidden ? '' : (noteText.textContent ?? '')),
+        pendingConfirm: () => pendingOrigin || null,
+        confirmPending: () => confirmBtn.click(),
+        originAlertText: () => (originAlert.hidden ? '' : (originAlert.textContent ?? '')),
+        openSites: async () => {
+          sitesMenu.hidden = false
+          await refreshSitesMenu()
+        },
+        sitesText: () => sitesMenu.textContent ?? ''
       }
     }
   }

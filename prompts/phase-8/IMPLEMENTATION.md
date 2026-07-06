@@ -198,6 +198,18 @@ daemon protocol v3 frozen, smokes network-free.
 - Iframe stance: act verbs refuse when the target frame's origin differs
   from the top origin unless BOTH are granted (cheap check via the frame's
   url off the snapshot ref; documents the cross-origin-iframe hole shut).
+  - **Deviation recorded (04, 2026-07-06)**: the hole is shut STRUCTURALLY,
+    no per-call check needed — snapshot refs are stamped by
+    `executeJavaScript` in the TOP frame's DOM, and Chromium forbids that
+    context from reaching into a cross-origin frame's document; no ref can
+    ever name an element there. Documented in the driver comment; the gate
+    governs the top origin.
+  - **Deviation recorded (04, 2026-07-06)**: the session confirm is
+    refuse-then-banner — the first act on a granted-but-unconfirmed origin
+    returns a clean "awaiting the human's allow" refusal and sets
+    `pendingConfirm` (banner button appears; the agent retries after the
+    click) — not a held promise. Deterministic for agents and smokes; no
+    dangling act while a human deliberates.
 - Session-scoped confirm: in-memory `Set<origin>` per possession, cleared on
   Stop/possession end; the banner button flips it via existing IPC channels.
 - Signed-in sites: `ses.cookies.get({})` → unique origins; forget =

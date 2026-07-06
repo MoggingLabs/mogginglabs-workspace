@@ -121,7 +121,16 @@ export const BrowserChannels = {
   consent: 'browser:consent', // renderer -> main: { allowed } (make the ACTIVE workspace's grant live)
   agentAct: 'browser:agentAct', // (BrowserAgentVerb) -> BrowserAgentResult (an agent verb; consent-gated)
   activity: 'browser:activity', // main -> renderer: BrowserAgentActivity (possession state + verb trail; NO page content)
-  agentStop: 'browser:agentStop' // renderer -> main: void (the human revokes the grant instantly)
+  agentStop: 'browser:agentStop', // renderer -> main: void (the human revokes the grant instantly)
+  // ── Agent web profile (8/04, ADR 0008.e). Cookie/session verbs exist ONLY
+  //    for OUR agent-web partition — the system browser is never touched. ──
+  profileGet: 'browser:profileGet', // (workspaceId) -> BrowserProfile (persisted per workspace; default preview)
+  profileSet: 'browser:profileSet', // ({ workspaceId, profile }) -> void (attach-swaps the dock's view)
+  confirmOrigin: 'browser:confirmOrigin', // renderer -> main: { origin } (the banner's session-scoped allow)
+  originAlert: 'browser:originAlert', // main -> renderer: { from, to } (agent-web crossed origins)
+  signedInSites: 'browser:signedInSites', // -> BrowserSignedInSite[] (agent-web partition only)
+  forgetSite: 'browser:forgetSite', // (host) -> void (cookies.remove + clearStorageData for that site)
+  clearAgentLogins: 'browser:clearAgentLogins' // -> void (clear the WHOLE agent-web partition)
 } as const
 
 export const UpdateChannels = {

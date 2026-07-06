@@ -3277,6 +3277,185 @@ body.resizing * {
   font-variant-numeric: tabular-nums;
 }
 
+/* ── Agent web profile (Phase-8/04): the signed-in branch, visibly separate ──
+   Preview ⇄ Agent web switch in the header; a quiet notice line carrying the
+   persistence honesty; the session-scoped act confirm; the origin-change
+   alert; and the Sites & grants panel (signed-in sites + act-origin grants). */
+.browser-profile-switch {
+  display: flex;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.browser-profile-opt {
+  border: 0;
+  background: transparent;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  padding: 2px var(--sp-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.browser-profile-opt.is-active {
+  background: var(--bg-elevated);
+  color: var(--text-hi);
+}
+.browser-agentweb-note {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-11);
+  color: var(--text-mid);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.browser-agentweb-note[hidden] {
+  display: none;
+}
+.browser-agentweb-note.no-vault {
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  color: var(--text-hi);
+}
+.browser-agentweb-sites {
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-mid);
+  font-size: var(--fs-11);
+  padding: 1px var(--sp-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.browser-agentweb-sites:hover {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.browser-confirm-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--text-hi);
+  font-size: var(--fs-11);
+}
+.browser-confirm-bar[hidden] {
+  display: none;
+}
+.browser-confirm-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--warning);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-hi);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
+  padding: 2px var(--sp-2);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-confirm-btn:hover {
+  background: color-mix(in srgb, var(--warning) 22%, transparent);
+}
+.browser-origin-alert {
+  padding: var(--sp-1) var(--sp-2);
+  background: color-mix(in srgb, var(--info) 14%, transparent);
+  color: var(--text-hi);
+  font-size: var(--fs-11);
+}
+.browser-origin-alert[hidden] {
+  display: none;
+}
+.browser-sites-menu {
+  position: absolute;
+  top: 64px;
+  right: var(--sp-2);
+  left: var(--sp-2);
+  max-height: 320px;
+  overflow-y: auto;
+  z-index: 6;
+}
+.browser-sites-head {
+  font-weight: var(--fw-semibold);
+  color: var(--text-mid);
+}
+.browser-sites-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-12);
+}
+.browser-sites-host {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-hi);
+}
+.browser-sites-count {
+  flex: none;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+}
+.browser-sites-forget,
+.browser-sites-add,
+.browser-sites-clear {
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-mid);
+  font-size: var(--fs-11);
+  padding: 1px var(--sp-2);
+  cursor: pointer;
+}
+.browser-sites-forget:hover,
+.browser-sites-clear:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.browser-sites-add:hover {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.browser-sites-clear {
+  margin: var(--sp-1) var(--sp-2);
+}
+.browser-sites-addrow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+}
+.browser-sites-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-hi);
+  font-size: var(--fs-11);
+  padding: 0 var(--sp-2);
+  outline: none;
+}
+.browser-sites-input:focus {
+  border-color: var(--accent);
+}
+.browser-sites-refused {
+  color: var(--danger);
+}
+.browser-sites-refused[hidden] {
+  display: none;
+}
+
 /* ── First-run checklist (Phase-6/06): live, dismissible "Get set up" card ──── */
 .firstrun-card {
   position: relative;

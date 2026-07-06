@@ -350,11 +350,17 @@ export function runGallery(win: BrowserWindow): void {
         })
 
         // Browser dock (6/05): the empty state IS the offline-honest shot — the
-        // gallery never touches the network, so no page is loaded.
+        // gallery never touches the network, so no page is loaded. 8/04 adds
+        // the agent-web profile state (switch + notice line, still offline).
         await part(`${tag}-browser-dock`, async () => {
           await ES('window.__mogging.browser.toggle(true)')
           await sleep(600)
           await snap(`${tag}-browser-dock`)
+          await ES(`window.__mogging.browser.setProfile('agent-web')`)
+          await sleep(600)
+          await snap(`${tag}-browser-agentweb`)
+          await ES(`window.__mogging.browser.setProfile('preview')`)
+          await sleep(400)
           await ES('window.__mogging.browser.toggle(false)')
           await sleep(300)
         })

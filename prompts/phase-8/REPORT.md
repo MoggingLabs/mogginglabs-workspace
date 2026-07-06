@@ -3,8 +3,8 @@
 Receipts for the integrations pack (steps 01–14), same format as
 `prompts/phase-7/REPORT.md`. Per-step mechanics live in `IMPLEMENTATION.md`
 (deviations recorded there, inline); this file keeps dated verification
-records and the finds worth remembering. Sweep count as of 8/03: **37 gates**
-(35 + MCP + MCPWRITE).
+records and the finds worth remembering. Sweep count as of 8/04: **38 gates**
+(35 + MCP + MCPWRITE + AGENTWEB).
 
 ## 01 — ADR 0008 + the integrations contracts (2026-07-06)
 
@@ -106,3 +106,48 @@ workspace B untouched:
 
 **Gates**: MCPWRITE PASS (19 asserts, `out/mcpwrite-result.json`); MCP +
 BROWSERCTL re-run PASS. Sweep 36 → **37**.
+
+## 04 — the agent web profile (Branch C) (2026-07-06)
+
+**Shipped**: two partitions, one dock — `persist:browser-dock` stays the
+preview byte-for-byte; `persist:agent-web` is the signed-in profile
+(`hardenSession()` extracted, applied to both; two lazy views,
+visibility-swapped; per-workspace profile persisted; per-profile console/net
+rings). Persistence is vault-conditioned (0008.h): the `isKeyVaultAvailable`
+probe decides `persist:agent-web` vs an ephemeral partition + the honest
+copy. ACT verbs (click/type/select/eval/navigate) gate per ORIGIN at dispatch
+inside `agentAct()` — blocklist beats grant beats confirm, refusals CLI-worded
+naming grant + origin; reads never gate; preview ignores `actOrigins`.
+Session-scoped confirms ride the possession banner (cleared on Stop);
+cross-origin navigation raises the alert + trail event; `agentAct()` emits
+acts/refusals/confirms/origin-changes through the `recordTrail()` stub
+(origins + verbs only). Sites & grants panel: signed-in sites in OUR
+partition with Forget / Clear all + the minimal act-origin grant editor
+(sensitive origins refuse at save AND dispatch; test hook
+`MOGGING_TEST_BLOCK_ORIGIN`). Gallery: `browser-agentweb` state, both themes.
+
+**Deviations recorded (IMPLEMENTATION §04)**: cross-origin-iframe acts are
+structurally unreachable rather than checked per-call — snapshot refs come
+from the TOP frame's DOM and `executeJavaScript` cannot cross a cross-origin
+frame boundary, so no ref can name an element there; the confirm is
+refuse-then-banner (the act returns a clean "awaiting the human's allow"
+refusal and the agent retries after the click) rather than a held promise.
+
+**Dev-verify, real site + real CLI (Claude Code 2.1.200, saucedemo.com,
+2026-07-06)** — the DEV-held world (`MOGGING_AGENTWEB=DEV`; the human's login
+performed as scripted keystrokes into the dock, stated here; the banner click
+stood in by the DEV arm's auto-confirm — the renderer button path itself is
+gate-asserted):
+
+- Ungranted: `browser_snapshot` read the SIGNED-IN inventory
+  (`URL=https://www.saucedemo.com/inventory.html … SEES_PRODUCTS=yes`);
+  `browser_click` refused verbatim: *"ungranted origin
+  https://www.saucedemo.com — acting on a signed-in site needs this
+  workspace's grant (the human adds it under Sites & grants)"*.
+- Granted + confirmed: `FIRST_CLICK=refused` (pending confirm) →
+  `RETRY=ok CART_BADGE=1 BUTTON_NOW=Remove` — the agent completed a task on
+  the user's session, exactly once granted, never before.
+
+**Gates**: AGENTWEB PASS (16 asserts, `out/agentweb-result.json`); BROWSER +
+BROWSERCTL untouched-green; MCP + MCPWRITE re-run PASS; MILESTONE +
+PERCEPTION re-run PASS (renderer touched). Sweep 37 → **38**.

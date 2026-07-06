@@ -23,6 +23,7 @@ import { registerRemotes } from './remotes'
 import { runSmoke } from './smoke'
 import { runMcpSmoke } from './mcp-smoke'
 import { runMcpWriteSmoke } from './mcpwrite-smoke'
+import { runAgentWebSmoke } from './agentweb-smoke'
 import { registerIntegrations } from './integrations'
 import { runAgentSmoke } from './agent-smoke'
 import { runStateSmoke } from './state-smoke'
@@ -225,6 +226,8 @@ app.whenReady().then(async () => {
     runMcpSmoke(win) // env-gated house-MCP-server smoke: both upstreams, catalog-as-data (Phase-8/02)
   } else if (process.env.MOGGING_MCPWRITE && win) {
     runMcpWriteSmoke(win, process.env.MOGGING_MCPWRITE) // env-gated write-tools-behind-grant smoke (Phase-8/03; DEV = held world)
+  } else if (process.env.MOGGING_AGENTWEB && win) {
+    runAgentWebSmoke(win, process.env.MOGGING_AGENTWEB) // env-gated agent-web-profile smoke (Phase-8/04; DEV = held real-site world)
   } else if (process.env.MOGGING_USAGE && win) {
     runUsageSmoke(win) // env-gated usage-seam smoke: FAKE adapter only (Phase-7/01)
   } else if (process.env.MOGGING_ATTENTION && win) {
