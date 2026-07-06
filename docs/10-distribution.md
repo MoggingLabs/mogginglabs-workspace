@@ -111,12 +111,19 @@ one command — never hand-edit hashes:
 # from a local release build:
 node scripts/update-manifests.mjs            # reads dist/
 # from a published release:
-gh release download v0.3.0 -D /tmp/rel && node scripts/update-manifests.mjs /tmp/rel
+gh release download v0.4.0 -D /tmp/rel && node scripts/update-manifests.mjs /tmp/rel
 ```
 
 CI validates both continuously where the tooling exists (`winget validate` on
 windows-latest, `brew style` on macos-latest) so submission day is a
 copy-paste PR.
+
+**v0.4.0 status:** both manifests regenerated from the shipped v0.4.0 artifacts
+and validation-green in CI; the exe sha256 and the arm64 dmg sha256 are pinned
+to the release (win exe cross-verified against `latest.yml`'s sha512). The cask
+is arm64-only for this release (Intel deferred — see the matrix footnote).
+Neither is submitted yet — the checklists below are the copy-paste path when
+you choose to.
 
 ### winget submission playbook
 1. Regenerate manifests for the release being submitted; commit.
