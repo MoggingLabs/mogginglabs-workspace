@@ -20,10 +20,11 @@ No page, no navigation — the reference interaction is a menu-bar dropdown.
      deep-links to Settings § Usage.
    Keyboard: arrows move plan focus, Enter switches the active profile to the
    focused plan (05 wires the actual switch; render disabled until then).
-3. **Settings § Usage** (new settings section, house division rhythm): per
-   provider — enable toggle, cadence preset (manual · 1m · 2m · 5m · 15m),
-   plus the work-day baseline editor (days + hours). Persisted app-side like
-   other settings; poller consumes changes live.
+3. **Settings stub only**: a minimal § Usage block — provider enable +
+   cadence preset — so the gear has a target and the poller consumes
+   changes live. Step 06 PROMOTES this into the full Usage tab (its own
+   nav section: plans table, thresholds, baseline, privacy) and deletes
+   the stub — don't gold-plate it here.
 4. **Gallery states**: popover open with the three verdicts represented,
    stale + error + unconfigured tiles, gauge icon at rest/warn/stale — both
    themes (FAKE adapter fixtures drive all of it).

@@ -18,9 +18,9 @@ burn rate without a single login.
 3. **`docs/12-usage.md` complete**: what the meter shows and how to read the
    verdicts (the three strings, verbatim), the ADR 0007 privacy story in
    user words ("your sessions, read in place — nothing stored, nothing sent"),
-   per-provider notes (which windows each plan type exposes), the settings
-   reference (cadence/thresholds/baseline), and the adapter authoring guide
-   (04's seed, finished).
+   per-provider notes (which windows each plan type exposes), the Usage-tab
+   reference (providers/cadence/thresholds/baseline/plans table), and the
+   adapter authoring guide (04's seed, finished).
 4. **Gallery + design-system books**: usage surfaces join the audit ledger in
    `docs/11-design-system.md` (icon states, popover anatomy, severity inks);
    `docs/assets/gallery/after/` refreshed with the usage states.

@@ -13,8 +13,10 @@ self-contained + pasteable as a `/goal`, < 4000 chars). Execute in order.
 > **Surface decision (made here, binding)**: the primary surface is a POPOVER
 > dropping from a titlebar usage icon — usage is a glance ("can I keep
 > going?"), not a destination, and the reference app is itself a menu-bar
-> dropdown. Configuration (cadence, thresholds, work-day baseline) lives in
-> Settings § Usage. No dedicated page unless a later phase earns it.
+> dropdown. Configuration gets a FULL Usage tab in Settings (06): its own
+> left-nav section holding every knob, the plans×profiles management table,
+> and the privacy story. The tab configures and explains — it never becomes
+> a dashboard; analytical depth needs a later phase to earn it.
 
 > **Auth stance (binding, extends ADR 0002)**: usage adapters RIDE the
 > sessions the CLIs already own — token read from the CLI's own store at
@@ -31,7 +33,8 @@ self-contained + pasteable as a `/goal`, < 4000 chars). Execute in order.
 | 03 | `03-titlebar-gauge-and-popover.md` | Two-bar titlebar gauge (session/weekly) + quick-check popover, design-system compliant; USAGEUI smoke + both perf budgets green |
 | 04 | `04-openai-gemini-adapters.md` | Codex/OpenAI + Gemini adapters on the same seam, per-OS credential paths, stale/error states; adapter authoring guide |
 | 05 | `05-profiles-plans-and-alerts.md` | Plans × profiles switcher (N plans per provider), threshold notifications through the house notify system, failover suggestion feed |
-| 06 | `06-usage-milestone.md` | All three CI sweeps green with the new gates; docs/12-usage.md; pack freeze + per-OS numbers |
+| 06 | `06-usage-settings-tab.md` | The FULL Usage tab in Settings: own nav section, providers block, plans×profiles table, pace/alerts editors, privacy story; USAGESET smoke green |
+| 07 | `07-usage-milestone.md` | All three CI sweeps green with the new gates; docs/12-usage.md; pack freeze + per-OS numbers |
 
 ## Overall Definition of Done
 - One glance at the titlebar answers "can I keep working, and until when?" for
@@ -41,6 +44,8 @@ self-contained + pasteable as a `/goal`, < 4000 chars). Execute in order.
 - The pace verdict (run-out / on pace / surplus) is computed by one pure,
   fixture-tested module and worded identically everywhere it appears.
 - Multiple plans per provider (via profiles) are all visible and switchable.
+- Settings has a full Usage tab — every knob the feature owns lives there,
+  and the plans table renders from the popover's exact snapshot.
 - The full sweep — WITH the new usage gates — is green on all three CI OSes.
 
 ## Global checks (every step)
@@ -64,5 +69,7 @@ self-contained + pasteable as a `/goal`, < 4000 chars). Execute in order.
 
 ## Parallelization
 01 → 02 → 03 is the spine (each builds on the last). 04 parallels 03 (same
-seam, no UI dependency). 05 needs 03 + 04. 06 freezes the pack. One lane is
-fine; two lanes = (03) and (04) after 02 lands.
+seam, no UI dependency). 05 needs 03 + 04; 06 needs 05. 07 freezes the
+pack. One lane is fine; two lanes = (03) and (04) after 02 lands.
+Before executing any step, read `IMPLEMENTATION.md` — the best-path
+decisions surveyed against shipped code.
