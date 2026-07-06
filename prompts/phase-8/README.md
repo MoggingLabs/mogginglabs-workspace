@@ -52,6 +52,11 @@ a `/goal`, < 4000 chars). Execute in order.
 > origin requires that origin's explicit grant, and sensitive origins refuse
 > grants entirely.
 
+> **Before executing any step, read `IMPLEMENTATION.md`** — the best-path
+> decisions surveyed against shipped code (framing, catalog-as-JSON, the
+> grant wire, writer strategy per config format, the act-gating point,
+> named risks). Steps deviate only by recording why there.
+
 ## Sequence
 | # | File | Gate |
 |---|------|------|
