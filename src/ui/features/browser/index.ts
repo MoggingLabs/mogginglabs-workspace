@@ -9,6 +9,7 @@ import {
   type BrowserNavAction,
   type BrowserProfile,
   type BrowserSignedInSite,
+  type TrailEntry,
   type WorkspaceIntegrationsGrant
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
@@ -110,6 +111,29 @@ export const browserFeature: UiFeature = {
     confirmBtn.onclick = (): void => {
       if (pendingOrigin) bridge.send(BrowserChannels.confirmOrigin, { origin: pendingOrigin })
     }
+    // Recent acts (8/05): the last 3 TRAIL entries for the possessing
+    // workspace — the audit surface's compact face on the possession chrome.
+    const recentActs = el('div', { class: 'browser-recent-acts', hidden: true })
+    let recentActsTimer: number | undefined
+    function refreshRecentActs(): void {
+      window.clearTimeout(recentActsTimer)
+      recentActsTimer = window.setTimeout(async () => {
+        const wsId = getWorkspaces().activeId
+        if (!wsId || state.profile !== 'agent-web') {
+          recentActs.hidden = true
+          return
+        }
+        const entries = (await bridge.invoke(IntegrationsChannels.trailList, wsId)) as TrailEntry[]
+        const last = entries.filter((t) => t.source === 'web').slice(-3).reverse()
+        recentActs.innerHTML = ''
+        for (const t of last) {
+          recentActs.append(
+            el('span', { class: `browser-recent-act is-${t.outcome}`, text: `${t.verb} · ${t.target} · ${t.outcome}` })
+          )
+        }
+        recentActs.hidden = last.length === 0
+      }, 400)
+    }
     // Origin-change alert: the signed-in profile crossed origins (transient).
     const originAlert = el('div', { class: 'browser-origin-alert', hidden: true })
     let originAlertTimer: number | undefined
@@ -140,7 +164,7 @@ export const browserFeature: UiFeature = {
       el('div', { class: 'browser-empty-hint', text: 'Enter a URL above — your dev server, docs, anything http(s).' })
     ])
     const viewHost = el('div', { class: 'browser-dock-view' }, [empty])
-    dock.append(handle, header, agentWebNote, banner, confirmBar, originAlert, trailMenu, sitesMenu, loading, wsChip, viewHost)
+    dock.append(handle, header, agentWebNote, banner, recentActs, confirmBar, originAlert, trailMenu, sitesMenu, loading, wsChip, viewHost)
     // The dock is #content's flex sibling inside #main — inserted, not slotted,
     // so the shell stays feature-agnostic.
     ctx.content.insertAdjacentElement('afterend', dock)
@@ -403,6 +427,7 @@ export const browserFeature: UiFeature = {
       pendingOrigin = a.pendingConfirm ?? ''
       confirmBar.hidden = !pendingOrigin
       if (pendingOrigin) confirmBtn.textContent = `Allow acting on ${pendingOrigin} this session`
+      refreshRecentActs() // debounced; agent verbs are exactly when the trail moves
       if (a.driving) trailBtn.classList.remove('is-hidden')
       trailMenu.innerHTML = ''
       for (const t of [...a.trail].reverse()) {
@@ -469,7 +494,8 @@ export const browserFeature: UiFeature = {
           sitesMenu.hidden = false
           await refreshSitesMenu()
         },
-        sitesText: () => sitesMenu.textContent ?? ''
+        sitesText: () => sitesMenu.textContent ?? '',
+        recentActsText: () => (recentActs.hidden ? '' : (recentActs.textContent ?? ''))
       }
     }
   }

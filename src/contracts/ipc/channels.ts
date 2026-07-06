@@ -181,7 +181,12 @@ export const IntegrationsChannels = {
   // Grants are tool names + origins — never credentials. Editing UI lands in 06.
   grantGet: 'integrations:grant:get', // (workspaceId) -> WorkspaceIntegrationsGrant (defaults when absent)
   grantSet: 'integrations:grant:set', // (WorkspaceIntegrationsGrant) -> sanitized grant | null (refused shape)
-  grantChanged: 'integrations:grant:changed' // main -> renderer: WorkspaceIntegrationsGrant (pushed on any change)
+  grantChanged: 'integrations:grant:changed', // main -> renderer: WorkspaceIntegrationsGrant (pushed on any change)
+  // Phase-8/05: the agent activity trail — LOCAL forever. These three ARE the
+  // viewer's whole surface; entries are refs only and never reach telemetry.
+  trailList: 'integrations:trail:list', // (workspaceId | '') -> TrailEntry[] (oldest first; '' = all workspaces)
+  trailClear: 'integrations:trail:clear', // (workspaceId) -> void (exactly that workspace's file)
+  trailExport: 'integrations:trail:export' // (workspaceId | '') -> boolean (LOCAL save dialog; true = saved)
 } as const
 
 export const AllChannels: readonly string[] = [

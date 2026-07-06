@@ -12,6 +12,7 @@ import { setTerminalFontSize, terminalFontSize, TERMINAL_FONT_SIZES } from '../.
 import { TEMPLATE_COUNTS } from '../layout'
 import { createProfilesHostsSection } from './profiles-hosts'
 import { createUsageSection } from './usage'
+import { createIntegrationsSection } from './integrations'
 
 const DEFAULT_LAYOUT_KEY = 'mogging.defaultPaneCount'
 
@@ -194,6 +195,13 @@ export const settingsFeature: UiFeature = {
         // knob: the provider grid, plans × profiles, pace/alerts/display,
         // history + cost, and the privacy story. The 7/03 stub is gone.
         el: section('usage', 'Usage', [createUsageSection()])
+      },
+      {
+        id: 'integrations',
+        label: 'Integrations',
+        // 8/05 lands the Activity trail; 8/06+ grows this into THE integrations
+        // home (server registration, catalog, grants) — one module, one home.
+        el: section('integrations', 'Integrations', [createIntegrationsSection()])
       },
       {
         id: 'privacy',

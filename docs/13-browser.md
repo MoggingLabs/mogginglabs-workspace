@@ -113,8 +113,13 @@ separate session partitions, switched in the header:
   and dispatch refuses them even if persisted. The first act per origin per
   possession additionally needs the human's one-click banner confirm
   (session-scoped, cleared on Stop), cross-origin navigation raises an alert,
-  and every act/refusal/confirm lands in the local activity trail (8/05 gives
-  it the store; origins + verbs only, never content).
+  and every act/refusal/confirm lands in the local activity trail — the audit
+  ledger (8/05): per-workspace JSONL under userData, ring-capped, reviewable
+  in Settings § Integrations (filters, outcome badges, export, per-workspace
+  clear) with the last acts echoed on the dock's possession surface. Origins
+  + verbs only, structurally (every field length-capped) — never page
+  content, typed text, eval bodies, or cookies; local forever, never
+  telemetry (ADR 0005).
 
 **The custody rule here (ADR 0008.h).** Chromium encrypts cookies at rest with
 the same OS facility as the app's vault. A machine without a real vault gets a

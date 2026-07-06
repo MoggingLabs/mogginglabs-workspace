@@ -3455,6 +3455,137 @@ body.resizing * {
 .browser-sites-refused[hidden] {
   display: none;
 }
+.browser-recent-acts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-11);
+  color: var(--text-lo);
+  font-variant-numeric: tabular-nums;
+}
+.browser-recent-acts[hidden] {
+  display: none;
+}
+.browser-recent-act {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-recent-act.is-refused {
+  color: var(--danger);
+}
+.browser-recent-act.is-confirmed {
+  color: var(--accent-ink);
+}
+
+/* ── The agent activity trail viewer (Phase-8/05, Settings § Integrations) ── */
+.trail-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.trail-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.trail-select {
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-hi);
+  font-size: var(--fs-12);
+  padding: 0 var(--sp-1);
+}
+.trail-btn {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-mid);
+  font-size: var(--fs-11);
+  padding: 2px var(--sp-2);
+  cursor: pointer;
+}
+.trail-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.trail-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.trail-clear:hover,
+.trail-clear.is-armed {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.trail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+.trail-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 2px var(--sp-1);
+  font-size: var(--fs-12);
+  border-radius: var(--r-sm);
+}
+.trail-row:hover {
+  background: var(--bg-elevated);
+}
+.trail-badge {
+  flex: none;
+  width: 72px;
+  text-align: center;
+  border-radius: var(--r-full);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-medium);
+  padding: 0 var(--sp-1);
+}
+.trail-badge.is-ok {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-ink);
+}
+.trail-badge.is-refused {
+  background: var(--danger-weak);
+  color: var(--danger);
+}
+.trail-badge.is-confirmed {
+  background: color-mix(in srgb, var(--info) 14%, transparent);
+  color: var(--text-hi);
+}
+.trail-verb {
+  flex: none;
+  color: var(--text-hi);
+  min-width: 90px;
+}
+.trail-target {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-mid);
+}
+.trail-meta {
+  flex: none;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+}
+.trail-empty[hidden] {
+  display: none;
+}
+.trail-honesty {
+  max-width: 72ch;
+}
 
 /* ── First-run checklist (Phase-6/06): live, dismissible "Get set up" card ──── */
 .firstrun-card {

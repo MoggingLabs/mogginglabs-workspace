@@ -20,7 +20,8 @@ const BADGE_PCT = 90
 // Reset lines arrive PRE-FORMATTED on each window (`resetText`, 7/10) from
 // the ONE backend reset formatter — this file never re-spells them.
 
-function fmtAge(fetchedAt: number, now: number): string {
+/** The ONE relative-age formatter (8/05's trail viewer reuses it verbatim). */
+export function fmtAge(fetchedAt: number, now: number): string {
   const s = Math.max(0, Math.round((now - fetchedAt) / 1000))
   if (s < 60) return `as of ${s}s ago`
   const m = Math.round(s / 60)

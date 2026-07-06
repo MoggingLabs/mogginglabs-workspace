@@ -3,8 +3,8 @@
 Receipts for the integrations pack (steps 01–14), same format as
 `prompts/phase-7/REPORT.md`. Per-step mechanics live in `IMPLEMENTATION.md`
 (deviations recorded there, inline); this file keeps dated verification
-records and the finds worth remembering. Sweep count as of 8/04: **38 gates**
-(35 + MCP + MCPWRITE + AGENTWEB).
+records and the finds worth remembering. Sweep count as of 8/05: **39 gates**
+(35 + MCP + MCPWRITE + AGENTWEB + WEBTRAIL).
 
 ## 01 — ADR 0008 + the integrations contracts (2026-07-06)
 
@@ -151,3 +151,40 @@ gate-asserted):
 **Gates**: AGENTWEB PASS (16 asserts, `out/agentweb-result.json`); BROWSER +
 BROWSERCTL untouched-green; MCP + MCPWRITE re-run PASS; MILESTONE +
 PERCEPTION re-run PASS (renderer touched). Sweep 37 → **38**.
+
+## 05 — the audit trail with teeth (2026-07-06)
+
+**Shipped**: `TrailStore` (@backend/features/integrations/trail.ts) —
+append-only JSONL per workspace under `<userData>/trail/`, ring-capped
+(2000 entries / 1 MB, oldest-half rewrite), queued + idle-flushed
+(250 ms, unref'd — never a hot path, never keeps the process alive), a full
+disk drops entries with ONE loud log line. Entries are refs STRUCTURALLY:
+every string field is length-capped on append (verb 64 · target 256 ·
+reason 256), so page text/eval bodies/cookies physically cannot fit.
+`recordTrail()` (03's receipts + 04's act instrumentation) now lands here —
+no caller changed shape. Viewer: Settings § Integrations (the minimal shell,
+06 absorbs) — reverse-chron, workspace/source filters, outcome badges,
+relative times via the ONE `fmtAge` formatter (exported from the usage
+feature), two-click clear per workspace, LOCAL JSON export via save dialog,
+the retention-honesty + FINDINGS threat-model copy in user words. Plus the
+compact recent-acts strip (last 3 web entries) on the dock possession
+surface, debounced off the activity push. Gallery:
+`integrations-activity`, both themes.
+
+**Dev-verify, real site + real CLI (Claude Code 2.1.200, saucedemo.com,
+2026-07-06)** — the 04 DEV world, trail live underneath; raw file inspected
+(`trail/<wsId>.jsonl`):
+
+- Exactly FOUR entries for four emissions, 1:1 — `click/refused` (ungranted,
+  wording verbatim), `click/refused` (awaiting the human's allow),
+  `confirm/confirmed`, `click/ok` — every target the ORIGIN
+  (`https://www.saucedemo.com`), timestamped.
+- Zero content leakage, grepped: `secret_sauce`, `standard_user`,
+  `Backpack`, `session-username`, `inventory.html` — all absent. The viewer
+  rendering of the same entry shapes is DOM-asserted by the WEBTRAIL gate
+  (h) and shot in the gallery.
+
+**Gates**: WEBTRAIL PASS (a–h + the confirm event,
+`out/webtrail-result.json`; the ring held 1000 after a 2100 seed, restart
+survival via a fresh store instance, clear scoped to one file). Sweep 38 →
+**39**.

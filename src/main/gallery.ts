@@ -8,6 +8,7 @@ import { setFakeMode } from '@backend/features/usage'
 import { UsageChannels } from '@contracts'
 import { getUsageService, getUsageStatusService } from './usage'
 import { getSettingsStore } from './app-settings'
+import { clearTrail, flushTrailForSmoke, recordTrail } from './trail'
 
 // MOGGING_SHOT=all (Phase-5/01): the GALLERY — drive the app through every surface
 // and write numbered PNGs to out/gallery/, in BOTH themes. The audit + before/after
@@ -237,6 +238,20 @@ export function runGallery(win: BrowserWindow): void {
           await ES(`document.querySelector('.usage-privacy-block')?.scrollIntoView({ block: 'center' })`)
           await sleep(300)
           await snap(`${tag}-usage-tab-privacy`)
+          // Settings § Integrations (8/05): the Activity trail with seeded
+          // fixture entries — refs only, offline, both outcomes visible.
+          const galleryWs = 'gallery-fixture-ws'
+          const seedTs = Date.now()
+          recordTrail({ ts: seedTs - 40_000, source: 'web', workspaceId: galleryWs, verb: 'click', target: 'https://staging.example.dev', outcome: 'ok' })
+          recordTrail({ ts: seedTs - 25_000, source: 'web', workspaceId: galleryWs, verb: 'navigate', target: 'https://shop.example.dev', outcome: 'refused', reason: 'ungranted origin' })
+          recordTrail({ ts: seedTs - 12_000, source: 'web', workspaceId: galleryWs, verb: 'confirm', target: 'https://staging.example.dev', outcome: 'confirmed' })
+          recordTrail({ ts: seedTs - 5_000, source: 'mcp', workspaceId: galleryWs, verb: 'send_to_pane', target: 'pane 102', outcome: 'ok', pane: '101' })
+          flushTrailForSmoke()
+          await ES(`document.querySelector('.settings-section[data-section="integrations"]')?.scrollIntoView({ block: 'start' })`)
+          await ES(`(document.querySelector('.trail-block .trail-btn')?.click(), 1)`)
+          await sleep(500)
+          await snap(`${tag}-integrations-activity`)
+          clearTrail(galleryWs)
           await ES(`(document.querySelector('.settings-back')?.click(), 1)`)
           await sleep(300)
         })
