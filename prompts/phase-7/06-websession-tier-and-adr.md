@@ -9,8 +9,8 @@ store-read strictly opt-in. Research:
 1. **ADR 0007.b — usage may read a browser session, on purpose**
    (`docs/adr/`): a companion to ADR 0007 and the usage-only cousin of the
    PARKED agent-web Branch B (phase-10). Defines precisely: (a) DEFAULT is
-   manual cookie-header/token PASTE — the user copies one value, we store
-   only the env-ref/opaque handle, never crawl; (b) automatic cookie-store
+   manual cookie-header/token PASTE — stored via 0007.a's keychain path
+   (ciphertext only, WRITE-ONLY: replace/delete, never viewed again); (b) automatic cookie-store
    READ (Chrome/Edge/Brave Safe-Storage key via the OS keychain; Safari
    needs Full Disk Access on mac) is PER-PROVIDER opt-in, default OFF, and
    READ-ONLY against a usage endpoint; (c) these sessions are NEVER exposed
@@ -18,7 +18,7 @@ store-read strictly opt-in. Research:
    browser store, reading a store for any purpose but the one usage call,
    sensitive-origin cookies. Nothing on this class ships until the ADR lands.
 2. **The `web-session` class adapter**: two sources behind one interface —
-   PASTE (a stored env-ref/handle → header on the one request) and, when the
+   PASTE (decrypted backend-side → header on the one request) and, when the
    provider is opted in, STORE-READ (decrypt the provider's cookie for its
    domain via the platform keychain key; that ONE cookie, that ONE request,
    dropped after). Per-OS cookie-store locations in a path table; a clear
@@ -35,8 +35,8 @@ store-read strictly opt-in. Research:
    FAKE-only — a fixture "browser store" file + fixture endpoints. Assert:
    paste path normalizes; store-read path fires ONLY when opted in (off →
    the fixture keychain is never touched, provider reads `unconfigured`);
-   a pasted secret-shaped literal is stored as a handle, never echoed; the
-   snapshot carries no cookie value (grep). Zero network; verdict via
+   a pasted value is ciphertext at rest, has no read-back channel, and can
+   be replaced/deleted; the snapshot carries no cookie value (grep). Zero network; verdict via
    `out/webusage-result.json`.
 
 ## Files

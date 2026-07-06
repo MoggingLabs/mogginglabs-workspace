@@ -74,10 +74,18 @@ seams; ADR 0007 and docs/12 are both unclaimed. The pack runs BEFORE phase
   never a step. Parity map + per-provider mechanism table lives in
   `docs/research/2026-07-codexbar-parity.md`.
 - Classes: `cli-store` (04, ADR 0007 verbatim — the biggest tier),
-  `api-key` (05, env-ref POINTERS — we store no literal, the deliberate
-  CodexBar divergence), `cloud-cli` (05, gcloud/aws ambient), `web-session`
-  (06, its OWN ADR 0007.b — paste-first, store-read opt-in/OFF/read-only,
-  NEVER agent-facing), `local` (Ollama/Antigravity/cost-scan).
+  `api-key` (05, ADR 0007.a — see below), `cloud-cli` (05, gcloud/aws
+  ambient), `web-session` (06, its OWN ADR 0007.b — paste-first,
+  store-read opt-in/OFF/read-only, NEVER agent-facing), `local`
+  (Ollama/Antigravity/cost-scan).
+- **Keys (0007.a, Pedro's call 2026-07-06): paste-once is the headline.**
+  `safeStorage.encryptString` → ciphertext in the settings KV; decrypt
+  backend-side per request. WRITE-ONLY is structural: the IPC/endpoint
+  surface has set/clear/presence and NO getter — a saved key is
+  replaceable and deletable, never viewable. `isEncryptionAvailable()`
+  false (Linux, no keyring) → REFUSE storage, offer env-ref — never
+  plaintext at rest. Env-ref pointers remain the power path. CLI parity:
+  `mogging usage set-key --stdin` / `clear-key` (stdin, never argv).
 - **Two carve-outs from "everything", by design, not omission:** no
   username+password login brokering (StepFun — ADR 0002); app-held device
   flows deferred to their own ADR (Copilot rides its CLI token instead).

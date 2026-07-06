@@ -17,16 +17,21 @@ protocol never changes. Research:
 3. **`mogging usage providers`**: lists catalog rows with enabled state +
    detected/configured status (the CodexBar `config providers` analog);
    `--json` for scripting. Read-only.
-4. **`mogging usage refresh [--provider <id>]`**: pokes the poller (the
-   `usage:refresh` path) and waits for the next snapshot, then prints it —
-   for CI that wants a fresh read. Bounded wait, clean exit codes (0 ok,
-   3 app-not-running, matching the CLI's existing code semantics).
-5. **App-endpoint message types + smoke**: extend the app endpoint (main
-   side, 6/05b) with `usage.list/cost/providers/refresh` request types
+4. **`mogging usage refresh [--provider <id>]`**: pokes the poller and
+   waits for the next snapshot, then prints it. Bounded wait, clean exit
+   codes (0 ok, 3 app-not-running, the CLI's existing semantics).
+5. **`mogging usage set-key --provider <id> --stdin` / `clear-key`**: the
+   `codexbar config set-api-key` analog — key piped via stdin (never an
+   argv, never echoed), sent over the authed endpoint, stored via 0007.a
+   (ciphertext, WRITE-ONLY). No get-key verb exists, by design.
+6. **App-endpoint message types + smoke**: extend the app endpoint (main
+   side, 6/05b) with `usage.list/cost/providers/refresh/setKey/clearKey`
+   request types
    (token-authed, same handshake). `MOGGING_USAGECLI` smoke: boot the app
-   with the FAKE adapter, spawn `mogging usage --json` + `usage providers`
-   + `usage cost` as children, assert shapes + that the verdict wording
-   equals the formatter output + exit codes. Zero network; verdict via
+   with the FAKE adapter, spawn `mogging usage --json` + `usage providers` +
+   `usage cost` + a `set-key`/`clear-key` round trip (presence flips, the
+   piped value absent from every frame + the result JSON), assert shapes +
+   verdict wording equals the formatter output + exit codes. Zero network; verdict via
    `out/usagecli-result.json`.
 
 ## Files

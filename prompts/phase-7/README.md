@@ -20,10 +20,15 @@ a `/goal`, < 4000 chars). Execute in order.
 > display options, and the privacy story. The tab configures and explains —
 > it never becomes an analytical dashboard.
 
-> **Auth stance (binding, ADR 0007 + 0007.b)**: usage adapters RIDE sessions
-> the user's own tools already own — CLI/editor stores, API keys as env-ref
-> pointers (we store NO key literal, unlike CodexBar), ambient cloud-CLI
-> credentials, or a browser session the user opted in to reading. Read in
+> **Auth stance (binding, ADR 0007 + 0007.a + 0007.b)**: usage adapters RIDE
+> sessions the user's own tools already own — CLI/editor stores, ambient
+> cloud-CLI credentials, or a browser session the user opted in to reading.
+> API keys: PASTE ONCE → OS-keychain-encrypted (`safeStorage`), ciphertext
+> only at rest, and **write-only forever after** — a saved key can be
+> replaced or deleted but never viewed again (no read-back channel exists);
+> env-ref pointers stay the power alternative; encryption unavailable →
+> storage refused, never plaintext (the divergence from CodexBar's
+> config-file keys). Read in
 > memory for the one request; never persisted, copied, or displayed. Two
 > honest carve-outs from "everything": we do NOT broker a username+password
 > login (ADR 0002 — what StepFun would need), and app-held device flows are
@@ -42,13 +47,13 @@ a `/goal`, < 4000 chars). Execute in order.
 | 02 | `02-pace-engine.md` | **DONE** (2026-07-06): pure `pace.ts` (clock injected), projection-gated verdicts, work-day integral, 9 goldens assert verdict+delta+EXACT wording, grep-proven single formatter |
 | 03 | `03-titlebar-gauge-and-popover.md` | Two-bar titlebar gauge + quick-check popover, design-system compliant; USAGEUI smoke + both perf budgets green |
 | 04 | `04-provider-catalog-and-cli-tier.md` | Provider catalog as data (5 classes) + the `cli-store` class: Codex, Gemini, Copilot, Zed, JetBrains, OpenCode, Windsurf, … from CLI/editor stores; USAGE grows |
-| 05 | `05-apikey-and-cloud-tiers.md` | `api-key` class (env-ref pointers — OpenRouter, DeepSeek, ElevenLabs, GroqCloud, LiteLLM, admin spend, …) + `cloud-cli` class (Vertex/gcloud, Bedrock/aws); USAGE grows |
+| 05 | `05-apikey-and-cloud-tiers.md` | ADR 0007.a + `api-key` class: paste-once → OS keychain, WRITE-ONLY (replace/delete, never view) — OpenRouter, DeepSeek, ElevenLabs, GroqCloud, LiteLLM, admin spend, …; env-ref as power path; + `cloud-cli` class (Vertex/gcloud, Bedrock/aws); USAGE grows |
 | 06 | `06-websession-tier-and-adr.md` | ADR 0007.b + the `web-session` class (Cursor, Devin, Perplexity, Kimi, Mistral spend, …): paste-first, store-read opt-in/OFF, read-only, never agent-facing; WEBUSAGE gate |
 | 07 | `07-cost-spend-and-history.md` | Local cost scan (Codex/Claude JSONL) + spend column + history ring/sparklines from the poller's own samples; USAGE grows |
 | 08 | `08-provider-status-feed.md` | Provider status/incident feed (public endpoints, enabled-only, jittered) → tile chip + icon overlay; "they're down" ≠ "you're out"; USAGE grows |
 | 09 | `09-profiles-plans-and-alerts.md` | Plans × profiles switcher (N per provider), threshold notifications + reset confetti (any provider), failover suggestion feed |
 | 10 | `10-titlebar-display-options.md` | Merged/pinned/auto gauge modes + switcher, gauge-content + reset-time style options (CodexBar display parity); USAGEUI grows |
-| 11 | `11-usage-cli-verbs.md` | `mogging usage / cost / providers / refresh` over the existing authed app endpoint (daemon stays v3); USAGECLI gate |
+| 11 | `11-usage-cli-verbs.md` | `mogging usage / cost / providers / refresh / set-key(stdin) / clear-key` over the existing authed app endpoint (daemon stays v3; no get-key exists); USAGECLI gate |
 | 12 | `12-usage-settings-tab.md` | The FULL Usage tab: searchable ~57-provider grid across 5 classes, plans table, pace/display/alerts, history/cost, privacy; USAGESET gate |
 | 13 | `13-usage-milestone.md` | All usage gates green on all 3 CI OSes + docs/12-usage.md (5 classes, parity map, authoring guide); pack freeze + per-OS numbers |
 
@@ -72,10 +77,10 @@ a `/goal`, < 4000 chars). Execute in order.
 - Gallery states staged for every new visual surface (both themes).
 
 ## Guardrails
-- **ADR 0002/0007/0007.b**: no credential is persisted, copied, logged, or
-  shown; keys are env-ref pointers (no literal stored, the CodexBar
-  divergence); web-session store-reads are opt-in/OFF/read-only/never
-  agent-facing; no password-login brokering; app-held OAuth deferred. Adapters
+- **ADR 0002/0007/0007.a/0007.b**: no credential is logged or shown; keys
+  live ONLY as OS-keychain ciphertext (write-only: replace/delete, never
+  view) or env-ref pointers; web-session store-reads are opt-in/OFF/
+  read-only/never agent-facing; no password-login brokering; app-held OAuth deferred. Adapters
   read KNOWN locations only. Smokes run FAKE fixtures exclusively.
 - **ADR 0005**: usage numbers, plan names, provider ids, keys, cookies, and
   account identifiers NEVER enter telemetry — counts and booleans only.

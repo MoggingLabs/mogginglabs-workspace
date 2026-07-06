@@ -24,7 +24,7 @@ One adapter CLASS per mechanism; every provider is a DATA row
 | Class | Mechanism | CodexBar examples | Our stance |
 |---|---|---|---|
 | `cli-store` | read the CLI/editor's OWN stored session (files, SQLite, XML, its keychain entry) | Codex, Claude, Gemini, Copilot (CLI-stored token), Zed, Kiro, Kilo, Augment, Grok CLI, JetBrains (IDE XML), Codebuff (`~/.config/manicode`), OpenCode (local SQLite), Windsurf (local cache) | ADR 0007 verbatim — ships freely |
-| `api-key` | user's own key, ENV-REF pointer (never stored by us; CodexBar stores keys in its config — we deliberately don't) | OpenAI Admin, Claude Admin, OpenRouter, DeepSeek, Moonshot, MiniMax, z.ai, Venice, Poe, Chutes, Deepgram, ElevenLabs, GroqCloud, LiteLLM, LLM-Proxy, ClawRouter, Crof, Doubao, Warp (GraphQL token), Alibaba (key mode) | ADR 0008.d pointers — ships freely |
+| `api-key` | paste-once → OS-keychain ciphertext, WRITE-ONLY (replace/delete, never view; no plaintext at rest, no read-back channel — CodexBar stores keys in a config file, we deliberately don't); env-ref pointer as the power path | OpenAI Admin, Claude Admin, OpenRouter, DeepSeek, Moonshot, MiniMax, z.ai, Venice, Poe, Chutes, Deepgram, ElevenLabs, GroqCloud, LiteLLM, LLM-Proxy, ClawRouter, Crof, Doubao, Warp (GraphQL token), Alibaba (key mode) | ADR 0007.a (pack step 05) — ships freely |
 | `cloud-cli` | ambient cloud credentials via the vendor CLI | Vertex AI (gcloud), AWS Bedrock (aws profile/SSO) | ADR 0007 family — ships freely |
 | `web-session` | the user's BROWSER session: manual cookie-header paste, or opt-in cookie-store read (Chrome/Edge/Brave Safe-Storage key via OS keychain; Safari needs FDA on mac) | Cursor, Devin, Manus, T3 Chat, Kimi, Perplexity, Xiaomi MiMo, Sakana, Abacus, Mistral spend, Amp, Command Code, OpenCode workspace, Alibaba (cookie mode), Grok fallback | **Needs ADR 0007.b** (pack step 06): paste-first, store-read opt-in per provider default OFF, read-only usage endpoints, never agent-facing. This is the usage-only cousin of parked Branch B — consciously decided, not drifted into |
 | `local` | no auth at all | Ollama (localhost), Antigravity probe (experimental), local JSONL cost scans | ships freely |
@@ -52,7 +52,7 @@ One adapter CLASS per mechanism; every provider is a DATA row
 | Threshold notifications, reset confetti | house toasts + optional confetti (quiet default) | 09 |
 | Account switching | profiles × plans (pointer sets — cleaner than CodexBar's copy) | 09 |
 | Merged icons, display config, highest-usage auto-select, reset-time style | titlebar display options | 10 |
-| Settings → Providers grid, per-provider toggles, set-api-key | full Usage tab, searchable grid, env-ref key slots | 10 |
+| Settings → Providers grid, per-provider toggles, set-api-key | full Usage tab, searchable grid, paste-once keychain slots (write-only) + env-ref | 12 |
 | Advanced keychain-access toggles | web-session consent per provider | 06/10 |
 | Bundled CLI (`codexbar config/cost/serve`) | `mogging usage` verbs over the APP endpoint (daemon stays v3) | 11 |
 | Sparkle updates | electron-updater — ALREADY SHIPPED (6/06) | — |
