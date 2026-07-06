@@ -60,7 +60,7 @@ a `/goal`, < 4000 chars). Execute in order.
 | 03 | `03-mcp-write-tools.md` | Control-plane write tools behind the workspace grant (default OFF), pane-scoped identity, notify receipts; MCPWRITE smoke green |
 | 04 | `04-agent-web-profile.md` | The agent browser profile: sign-in-here affordance, per-origin action grants + blocklist, clear-logins, origin-change alerts; AGENTWEB smoke green on a localhost fixture login site |
 | 05 | `05-mcp-manager.md` | Settings § Integrations: register any server across claude/codex/gemini config dialects — surgical, backed-up, diff-previewed; the house server is the built-in first row; MCPMGR smoke green on fixture homes |
-| 06 | `06-integrations-catalog.md` | The curated Integrations Catalog: ~20 official-MCP presets as data (research-sourced), Connect + per-CLI Authorize orchestration (status only, never tokens), capability table; MCPCAT smoke green on fixture homes |
+| 06 | `06-integrations-catalog.md` | The Integrations Catalog: ~20 official-MCP presets as data (research-sourced) PLUS the open end — registry search, custom entries, preset import/export (the 21st tool is data, never code); Connect + per-CLI Authorize orchestration (status only, never tokens); MCPCAT smoke green on fixture homes |
 | 07 | `07-github-adapter.md` | Board cards link to GitHub PRs/issues with live status chips riding `gh` auth; INTEG smoke green on the FAKE adapter |
 | 08 | `08-integrations-milestone.md` | INTEGMILESTONE end-to-end (all four directions composed) + `docs/14-integrations.md` + books; full sweep green on all four environments |
 
@@ -77,7 +77,8 @@ a `/goal`, < 4000 chars). Execute in order.
   a single credential.
 - A third-party preset (Sentry) reaches every hosted CLI in one click +
   one browser consent per CLI — the app registering and orchestrating,
-  holding nothing.
+  holding nothing. Tools BEYOND the presets ride the same pipeline:
+  registry search, custom entry, or imported preset — never a code change.
 - The sweep — with all seven new gates — is green on local Windows and all
   three CI OSes; both perf budgets unchanged.
 
