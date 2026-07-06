@@ -133,8 +133,12 @@ export const UsageChannels = {
   list: 'usage:list', // -> PlanUsageView[] (cached snapshot — instant, never fetches)
   refresh: 'usage:refresh', // renderer -> main: poke the poller (results arrive via the push)
   changed: 'usage:changed', // main -> renderer: PlanUsageView[] (pushed on snapshot change)
-  configGet: 'usage:configGet', // -> UsageConfig (per-provider enable + cadence — the 7/03 settings stub)
-  configSet: 'usage:configSet' // (UsageConfigPatch) -> void (persists + reschedules the poller live)
+  configGet: 'usage:configGet', // -> UsageConfig (per-provider enable + cadence + key PRESENCE — never a key)
+  configSet: 'usage:configSet', // (UsageConfigPatch) -> void (persists + reschedules the poller live)
+  // Keys are WRITE-ONLY (ADR 0007.a): set encrypts immediately, clear removes.
+  // There is deliberately NO usage:keyGet — absence of the channel is the guarantee.
+  keySet: 'usage:keySet', // ({ providerId, plaintext } | { providerId, envRef }) -> { ok, reason? }
+  keyClear: 'usage:keyClear' // (providerId) -> void
 } as const
 
 export const AllChannels: readonly string[] = [

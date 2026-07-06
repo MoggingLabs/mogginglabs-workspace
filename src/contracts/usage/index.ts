@@ -70,6 +70,10 @@ export interface PaceReport {
   surplusPct?: number
 }
 
+// ── Key slots (Phase-7/05, ADR 0007.a): paste-once OS-vault ciphertext,
+//    WRITE-ONLY — the IPC surface is set / clear / presence; NO getter exists.
+export type KeySlot = { kind: 'keychain' } | { kind: 'env-ref'; envRef: string } | { kind: 'none' }
+
 // ── The provider catalog (Phase-7/04): a provider is a DATA ROW, a mechanism
 //    is an adapter CLASS. ~57 CodexBar providers reduce to five classes; adding
 //    a provider on an existing class is one row here + one fixture. ────────────
@@ -130,7 +134,31 @@ export const USAGE_PROVIDERS: readonly UsageProviderDef[] = [
   { id: 'jetbrains', label: 'JetBrains AI', klass: 'cli-store', windows: [w('monthly', 'Quota')] },
   { id: 'codebuff', label: 'Codebuff', klass: 'cli-store', windows: [w('rolling', 'Credits')], credits: true },
   { id: 'opencode', label: 'OpenCode', klass: 'cli-store', windows: [w('monthly', 'Monthly')] },
-  { id: 'windsurf', label: 'Windsurf', klass: 'cli-store', windows: [w('rolling', 'Credits')], credits: true }
+  { id: 'windsurf', label: 'Windsurf', klass: 'cli-store', windows: [w('rolling', 'Credits')], credits: true },
+  // ── api-key class (7/05, ADR 0007.a): paste-once keychain or env-ref ──
+  { id: 'openrouter', label: 'OpenRouter', klass: 'api-key', endpoint: 'https://openrouter.ai/api/v1/credits', windows: [w('rolling', 'Credits')], credits: true },
+  { id: 'deepseek', label: 'DeepSeek', klass: 'api-key', endpoint: 'https://api.deepseek.com/user/balance', windows: [w('rolling', 'Balance')], credits: true },
+  { id: 'moonshot', label: 'Moonshot / Kimi API', klass: 'api-key', endpoint: 'https://api.moonshot.ai/v1/users/me/balance', windows: [w('rolling', 'Balance')], credits: true },
+  { id: 'elevenlabs', label: 'ElevenLabs', klass: 'api-key', endpoint: 'https://api.elevenlabs.io/v1/user/subscription', windows: [w('monthly', 'Characters')] },
+  { id: 'deepgram', label: 'Deepgram', klass: 'api-key', endpoint: 'https://api.deepgram.com/v1/projects', windows: [w('rolling', 'Balance')], credits: true },
+  { id: 'litellm', label: 'LiteLLM', klass: 'api-key', windows: [w('rolling', 'Budget')], credits: true },
+  { id: 'minimax', label: 'MiniMax', klass: 'api-key', windows: [w('rolling', 'Balance')], credits: true },
+  { id: 'zai', label: 'z.ai', klass: 'api-key', windows: [w('rolling', 'Quota')], credits: true },
+  { id: 'venice', label: 'Venice', klass: 'api-key', windows: [w('rolling', 'Balance')], credits: true },
+  { id: 'poe', label: 'Poe', klass: 'api-key', windows: [w('rolling', 'Points')], credits: true },
+  { id: 'chutes', label: 'Chutes', klass: 'api-key', windows: [w('rolling', 'Quota')], credits: true },
+  { id: 'groqcloud', label: 'GroqCloud', klass: 'api-key', windows: [w('rolling', 'Metrics')], credits: true },
+  { id: 'llmproxy', label: 'LLM Proxy', klass: 'api-key', windows: [w('rolling', 'Quota')], credits: true },
+  { id: 'clawrouter', label: 'ClawRouter', klass: 'api-key', windows: [w('monthly', 'Budget')] },
+  { id: 'crof', label: 'Crof', klass: 'api-key', windows: [w('rolling', 'Credits')], credits: true },
+  { id: 'doubao', label: 'Doubao', klass: 'api-key', windows: [w('rolling', 'Requests')], credits: true },
+  { id: 'warp', label: 'Warp', klass: 'api-key', windows: [w('monthly', 'Requests')] },
+  { id: 'alibaba', label: 'Alibaba (key)', klass: 'api-key', windows: [w('rolling', 'Quota')], credits: true },
+  { id: 'openai-admin', label: 'OpenAI (admin spend)', klass: 'api-key', endpoint: 'https://api.openai.com/v1/organization/costs', windows: [w('monthly', 'Spend')] },
+  { id: 'claude-admin', label: 'Claude (admin spend)', klass: 'api-key', windows: [w('monthly', 'Spend')] },
+  // ── cloud-cli class (7/05): ambient credentials via the vendor CLI ──
+  { id: 'vertex', label: 'Vertex AI', klass: 'cloud-cli', windows: [w('rolling', 'Session')] },
+  { id: 'bedrock', label: 'AWS Bedrock', klass: 'cloud-cli', windows: [w('monthly', 'Spend')] }
 ]
 
 export const findProvider = (id: string): UsageProviderDef | undefined => USAGE_PROVIDERS.find((p) => p.id === id)

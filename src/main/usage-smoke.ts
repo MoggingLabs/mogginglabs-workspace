@@ -1,11 +1,13 @@
 import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { mkdirSync, mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { setFakeMode, computePace, formatVerdict, PACE_GOLDENS, readCodex } from '@backend/features/usage'
-import { USAGE_PROVIDERS } from '@contracts'
+import { setFakeMode, computePace, formatVerdict, PACE_GOLDENS, readCodex, API_KEY_SPECS, fetchVertex, fetchBedrock } from '@backend/features/usage'
+import { USAGE_PROVIDERS, UsageChannels, AllChannels } from '@contracts'
 import { getUsageService } from './usage'
+import { keySetPlaintext, keySetEnvRef, keyClear, keySlot, resolveKey, setKeyAvailabilityProbeForSmoke, isKeyVaultAvailable } from './usage-keys'
+import { getSettingsStore } from './app-settings'
 
 // Env-gated usage-seam smoke (MOGGING_USAGE, Phase-7/01). Runs entirely on the
 // FAKE adapter (the registry holds nothing else under this env — zero network
@@ -175,9 +177,99 @@ export function runUsageSmoke(_win: BrowserWindow): void {
       const codexAbsent = await readCodex(join(cdir, 'nope'), 'default', new AbortController().signal)
       const codexDegrades = codexAbsent.health === 'unconfigured' && typeof codexAbsent.reason === 'string'
 
+      // 9 ── keys at rest (7/05, ADR 0007.a): paste-once ciphertext, WRITE-ONLY.
+      //      Vault-dependent PROBES are platform-conditioned (a keyring-less
+      //      Linux CI has no real vault: basic_text counts as unavailable and
+      //      the claim holds via REFUSAL) — the CLAIM never weakens.
+      const SECRET = 'sk-or-v1-SMOKEONLY-0123456789abcdef0123456789abcdef'
+      const SECRET2 = 'sk-or-v1-SMOKEONLY-fedcba9876543210fedcba9876543210'
+      const vaultAvailable = isKeyVaultAvailable()
+      let cipherOk = true
+      let dbBytesOk = true
+      let roundtripOk = true
+      let replaceOk = true
+      let clearOk = true
+      if (vaultAvailable) {
+        const set1 = keySetPlaintext('openrouter', SECRET)
+        const rawCipher = getSettingsStore()?.getSetting('usage.keycipher.openrouter') ?? ''
+        cipherOk = set1.ok && rawCipher.length > 0 && !rawCipher.includes(SECRET) && keySlot('openrouter').kind === 'keychain'
+        // the settings DB bytes (incl. WAL) never contain the plaintext
+        const udata = app.getPath('userData')
+        let dbBytes = ''
+        for (const f of ['app-settings.db', 'app-settings.db-wal']) {
+          const fp = join(udata, f)
+          if (existsSync(fp)) dbBytes += readFileSync(fp, 'latin1')
+        }
+        dbBytesOk = dbBytes.length > 0 && !dbBytes.includes(SECRET)
+        // roundtrip via the ADAPTER path (internal, not a channel), replace, clear
+        roundtripOk = resolveKey('openrouter') === SECRET
+        const set2 = keySetPlaintext('openrouter', SECRET2)
+        const cipher2 = getSettingsStore()?.getSetting('usage.keycipher.openrouter') ?? ''
+        replaceOk = set2.ok && cipher2 !== rawCipher && resolveKey('openrouter') === SECRET2
+        keyClear('openrouter')
+        clearOk = keySlot('openrouter').kind === 'none' && resolveKey('openrouter') === null
+      } else {
+        console.warn('⚠ usage-smoke: no REAL key vault here (basic_text/none) — cipher probes skipped; refusal path asserted instead')
+        const natural = keySetPlaintext('openrouter', SECRET)
+        cipherOk = !natural.ok && /env-ref/i.test(natural.reason ?? '') && keySlot('openrouter').kind === 'none'
+      }
+      // encryption unavailable -> REFUSED with the env-ref hint (never plaintext at rest)
+      setKeyAvailabilityProbeForSmoke(() => false)
+      const refused = keySetPlaintext('openrouter', SECRET)
+      setKeyAvailabilityProbeForSmoke(null)
+      const refusalOk = !refused.ok && /env-ref/i.test(refused.reason ?? '') && keySlot('openrouter').kind === 'none'
+      // env-ref: NAME accepted + resolves from env; secret-shaped LITERAL refused
+      process.env.MOGGING_SMOKE_KEYVAR = 'resolved-from-env'
+      const envSet = keySetEnvRef('openrouter', '${MOGGING_SMOKE_KEYVAR}')
+      const envRefOk = envSet.ok && keySlot('openrouter').kind === 'env-ref' && resolveKey('openrouter') === 'resolved-from-env'
+      const envLit = keySetEnvRef('openrouter', SECRET)
+      const envLiteralRefusedOk = !envLit.ok
+      keyClear('openrouter')
+      delete process.env.MOGGING_SMOKE_KEYVAR
+      const keysOk = cipherOk && dbBytesOk && roundtripOk && replaceOk && clearOk && refusalOk && envRefOk && envLiteralRefusedOk
+
+      // 10 ── no-getter is STRUCTURAL: the channel allowlist has set/clear and
+      //       nothing that could read a key back.
+      const usageChannelNames = Object.values(UsageChannels)
+      const noGetterOk =
+        usageChannelNames.includes('usage:keySet') &&
+        usageChannelNames.includes('usage:keyClear') &&
+        !AllChannels.some((c) => /usage:key(get|read|reveal|show|list)/i.test(c))
+
+      // 11 ── api-key spec parses (fixture bodies, zero network) + shape-drift throws
+      let specsOk = true
+      try {
+        const or = API_KEY_SPECS.openrouter.parse({ data: { total_credits: 10, total_usage: 2.5 } }, Date.now(), 'default')
+        specsOk &&= or.credits?.remaining === 7.5 && or.windows[0].usedPct === 25 && or.health === 'fresh'
+        const el = API_KEY_SPECS.elevenlabs.parse(
+          { character_count: 5000, character_limit: 10000, next_character_count_reset_unix: Math.floor(Date.now() / 1000) + 86400, tier: 'creator' },
+          Date.now(),
+          'default'
+        )
+        specsOk &&= el.windows[0].usedPct === 50 && !!el.windows[0].resetsAt && el.planLabel === 'ElevenLabs (creator)'
+        const ds = API_KEY_SPECS.deepseek.parse({ balance_infos: [{ currency: 'USD', total_balance: 12.34 }] }, Date.now(), 'default')
+        specsOk &&= ds.credits?.remaining === 12.34
+        let threw = false
+        try {
+          API_KEY_SPECS.openrouter.parse({ nope: true }, Date.now(), 'default')
+        } catch {
+          threw = true
+        }
+        specsOk &&= threw
+      } catch {
+        specsOk = false
+      }
+
+      // 12 ── cloud-cli absent-CLI ladder (injected fake bins — deterministic on
+      //       every machine incl. CI images that ship real cloud CLIs; zero network)
+      const vx = await fetchVertex('default', 'mog-definitely-absent-gcloud')
+      const bd = await fetchBedrock('default', 'mog-definitely-absent-aws')
+      const cloudOk =
+        vx.health === 'unconfigured' && /gcloud/.test(vx.reason ?? '') && bd.health === 'unconfigured' && /aws/i.test(bd.reason ?? '')
+
       const pass =
-        shapeOk && cadenceOk && staleOk && backoffOk && hiddenOk && resumeOk && grepClean && goldenOk && catalogOk && codexOk && codexDegrades
-      result = { pass, shapeOk, cadenceOk, staleOk, backoffOk, hiddenOk, resumeOk, grepClean, goldenOk, goldenFails, catalogOk, catalogFails, codexOk, codexDegrades, providers: USAGE_PROVIDERS.length, goldens: PACE_GOLDENS.length, tiles: snap.length, debug: svc.debug() }
+        shapeOk && cadenceOk && staleOk && backoffOk && hiddenOk && resumeOk && grepClean && goldenOk && catalogOk && codexOk && codexDegrades && keysOk && noGetterOk && specsOk && cloudOk
+      result = { pass, shapeOk, cadenceOk, staleOk, backoffOk, hiddenOk, resumeOk, grepClean, goldenOk, goldenFails, catalogOk, catalogFails, codexOk, codexDegrades, vaultAvailable, keysOk, cipherOk, dbBytesOk, roundtripOk, replaceOk, clearOk, refusalOk, envRefOk, envLiteralRefusedOk, noGetterOk, specsOk, cloudOk, providers: USAGE_PROVIDERS.length, goldens: PACE_GOLDENS.length, tiles: snap.length, debug: svc.debug() }
     } catch (e) {
       result = { pass: false, error: e instanceof Error ? e.message : String(e) }
     }

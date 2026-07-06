@@ -12,6 +12,7 @@ import {
   type UsageService
 } from '@backend/features/usage'
 import { getSettingsStore } from './app-settings'
+import { keySlot, keySetPlaintext, keySetEnvRef, keyClear, resolveKey } from './usage-keys'
 
 // App-wiring: usage meters (Phase-7/01+03, ADR 0007). Adapter pick is the
 // zero-network guarantee: under a usage smoke (or the gallery) the registry
@@ -72,7 +73,7 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
   const isSmoke = Object.keys(process.env).some((k) => k.startsWith('MOGGING_'))
   const isFixtureWorld =
     Object.keys(process.env).some((k) => k.startsWith('MOGGING_USAGE')) || !!process.env.MOGGING_GALLERY
-  const adapters = isFixtureWorld ? [fakeAdapter] : isSmoke ? [] : buildRealAdapters()
+  const adapters = isFixtureWorld ? [fakeAdapter] : isSmoke ? [] : buildRealAdapters({ resolveKey })
 
   const cadenceEnv = Number(process.env.MOGGING_USAGE_CADENCE_MS)
   const cadenceMsOverride = Number.isFinite(cadenceEnv) && cadenceEnv > 0 ? cadenceEnv : isFixtureWorld ? 400 : undefined
@@ -100,7 +101,9 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
       providers: adapters.map((a) => ({
         id: a.id,
         enabled: kv?.getSetting(`usage.enabled.${a.id}`) !== '0',
-        cadence: (kv?.getSetting(`usage.cadence.${a.id}`) ?? '5m') as UsageCadence
+        cadence: (kv?.getSetting(`usage.cadence.${a.id}`) ?? '5m') as UsageCadence,
+        // PRESENCE only (ADR 0007.a) — the kind, never a value.
+        key: keySlot(a.id).kind
       }))
     }
   })
@@ -113,6 +116,29 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
       kv?.setSetting(`usage.cadence.${p.providerId}`, p.cadence)
     // Apply live: re-poll (restarts a disabled chain) + push the filtered view.
     if (p.enabled !== false) service?.refresh(p.providerId)
+    getWin()?.webContents.send(UsageChannels.changed, enrich(service?.list() ?? []))
+  })
+
+  // Keys (ADR 0007.a): WRITE-ONLY — set encrypts immediately, clear removes;
+  // there is NO getter handler anywhere, by design.
+  ipcMain.handle(UsageChannels.keySet, (_e, raw: unknown) => {
+    const p = raw as { providerId?: string; plaintext?: string; envRef?: string } | null
+    if (!p || typeof p.providerId !== 'string') return { ok: false, reason: 'bad request' }
+    const out =
+      typeof p.envRef === 'string'
+        ? keySetEnvRef(p.providerId, p.envRef)
+        : keySetPlaintext(p.providerId, String(p.plaintext ?? ''))
+    if (out.ok) {
+      // A configured key turns its provider ON (api-key rows default off).
+      getSettingsStore()?.setSetting(`usage.enabled.${p.providerId}`, '1')
+      service?.refresh(p.providerId)
+    }
+    return out // ok/reason only — the plaintext is never echoed
+  })
+  ipcMain.handle(UsageChannels.keyClear, (_e, providerId: unknown) => {
+    if (typeof providerId !== 'string' || !providerId) return
+    keyClear(providerId)
+    service?.refresh(providerId)
     getWin()?.webContents.send(UsageChannels.changed, enrich(service?.list() ?? []))
   })
 

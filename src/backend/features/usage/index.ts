@@ -1,9 +1,11 @@
 import type { AgentProfile, PlanUsage, UsageAdapter, UsageCadence } from '@contracts'
-import { USAGE_CADENCE_MS } from '@contracts'
+import { USAGE_CADENCE_MS, findProvider } from '@contracts'
 import { resolveHome } from './homes'
 
 import { USAGE_PROVIDERS } from '@contracts'
 import { CLI_STORE_READERS, readCodex } from './classes/cli-store'
+import { fetchApiKeyUsage, type ApiKeyDeps } from './classes/api-key'
+import { fetchVertex, fetchBedrock } from './classes/cloud-cli'
 import { claudeAdapter } from './claude-adapter'
 
 export { fakeAdapter, setFakeMode } from './fake-adapter'
@@ -12,27 +14,46 @@ export { resolveHome } from './homes'
 export { computePace, formatVerdict, formatPaceDelta, formatPaceTime, PACE_SEVERITY, type PaceOptions } from './pace'
 export { PACE_GOLDENS } from './pace-fixtures'
 export { CLI_STORE_READERS, readCodex } from './classes/cli-store'
+export { API_KEY_SPECS, API_KEY_PENDING, fetchApiKeyUsage } from './classes/api-key'
+export { fetchVertex, fetchBedrock } from './classes/cloud-cli'
 
 /** Build the REAL adapters from the catalog (Phase-7/04): one per cli-store
  *  row that has a reader. Claude delegates to the shipped 7/01 adapter (already
  *  verified); the rest wrap their reader — detect is lenient (the reader
  *  produces the precise unconfigured/error reason). api-key/cloud-cli/
  *  web-session classes join in 7/05–06. */
-export function buildRealAdapters(): UsageAdapter[] {
+export function buildRealAdapters(keys: ApiKeyDeps): UsageAdapter[] {
   const out: UsageAdapter[] = []
   for (const def of USAGE_PROVIDERS) {
-    if (def.klass !== 'cli-store') continue
-    if (def.id === 'claude') {
-      out.push(claudeAdapter)
-      continue
+    if (def.klass === 'cli-store') {
+      if (def.id === 'claude') {
+        out.push(claudeAdapter)
+        continue
+      }
+      const reader = CLI_STORE_READERS[def.id]
+      if (!reader) continue
+      out.push({
+        id: def.id,
+        detect: async () => ({ ok: true }),
+        fetch: async (home, profileId, signal) => [await reader(home, profileId, signal)]
+      })
+    } else if (def.klass === 'api-key') {
+      // Key resolved per request by the INJECTED ADR-0007.a store; the key
+      // exists only inside the class's fetch scope.
+      out.push({
+        id: def.id,
+        detect: async () => ({ ok: true }),
+        fetch: async (_home, profileId, signal) => [await fetchApiKeyUsage(def.id, profileId, signal, keys)]
+      })
+    } else if (def.klass === 'cloud-cli') {
+      const fetcher = def.id === 'vertex' ? fetchVertex : def.id === 'bedrock' ? fetchBedrock : null
+      if (!fetcher) continue
+      out.push({
+        id: def.id,
+        detect: async () => ({ ok: true }),
+        fetch: async (_home, profileId) => [await fetcher(profileId)]
+      })
     }
-    const reader = CLI_STORE_READERS[def.id]
-    if (!reader) continue
-    out.push({
-      id: def.id,
-      detect: async () => ({ ok: true }),
-      fetch: async (home, profileId, signal) => [await reader(home, profileId, signal)]
-    })
   }
   return out
 }
@@ -96,8 +117,17 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
     return s
   }
 
-  /** Per-provider enable flag (KV `usage.enabled.<id>`, default ON). */
-  const isEnabled = (id: string): boolean => deps.kv.get(`usage.enabled.${id}`) !== '0'
+  /** Per-provider enable flag. Defaults by CLASS: cli-store (cheap local
+   *  reads) and unknown/test ids are ON; api-key/cloud-cli/web-session are
+   *  OFF until the user configures them (a saved key flips them on) — a real
+   *  session must not poll 20 unconfigured endpoints into the popover. */
+  const isEnabled = (id: string): boolean => {
+    const v = deps.kv.get(`usage.enabled.${id}`)
+    if (v === '0') return false
+    if (v === '1') return true
+    const klass = findProvider(id)?.klass
+    return klass === undefined || klass === 'cli-store' || klass === 'local'
+  }
 
   const cadenceMs = (id: string): number | null => {
     if (deps.cadenceMsOverride) return deps.cadenceMsOverride

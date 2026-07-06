@@ -86,6 +86,35 @@ seams; ADR 0007 and docs/12 are both unclaimed. The pack runs BEFORE phase
   catalog+fixture and read `unconfigured` honestly (`notWired`) until a real
   login verifies each shape — the catalog is data, one row per verification.
 
+## Key store mechanics (05) — dev-verified 2026-07-06
+
+- `safeStorage` on this machine (DPAPI) round-trips: paste → base64 cipher in
+  the KV, plaintext ABSENT from the settings DB bytes (WAL included),
+  adapter-path decrypt returns it, replace changes the cipher, clear kills
+  resolution. The forced-unavailable path refuses with the env-ref hint.
+- **Linux honesty**: `basic_text` is obfuscation, not encryption —
+  `isKeyVaultAvailable()` counts it UNAVAILABLE and storage refuses (the
+  smoke platform-conditions its cipher PROBES on real vault presence; the
+  never-plaintext-at-rest CLAIM holds everywhere via refusal).
+- **OpenRouter live check** (one bounded dev request): `GET /api/v1/credits`
+  answers 401 to a bogus bearer → our exact "key rejected — replace it in
+  Settings" mapping. A 200-path `verifiedAt` awaits a real key — the paste/
+  replace/delete/decrypt path is fully proven without one.
+- api-key specs implemented from documented APIs: OpenRouter (credits),
+  DeepSeek (balance), Moonshot (balance), ElevenLabs (subscription chars),
+  Deepgram (projects). The other 15 rows ship catalog+honest-pending reader
+  (`API_KEY_PENDING`) — a saved key stays ready and the row lights up when
+  its spec is dev-verified.
+- api-key/cloud-cli/web-session rows default DISABLED (class-aware default
+  in the seam) — a real session must not poll 20 unconfigured endpoints;
+  saving a key auto-enables its provider.
+- cloud-cli: presence probed via where/which FIRST (a missing binary must
+  read 'absent' on every OS; shell-mode exit-1 and Node's EINVAL-on-.cmd
+  both mislabel otherwise); gcloud's .cmd shim runs under a shell only
+  after a positive probe. Neither CLI is on this machine — the absent
+  ladder is what's live-verified (fixture bins keep it deterministic in
+  the smoke).
+
 ## 04–06 — the provider catalog (CodexBar parity, five classes)
 
 - One adapter CLASS per mechanism, every provider a DATA ROW
