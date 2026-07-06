@@ -1,0 +1,41 @@
+// The MCP server registry shapes (Phase-8/06, ADR 0008.b/d). A registered
+// server is CONFIG the app writes into the CLIs' own files — the app never
+// runs, proxies, or authenticates one. Env values are `${VAR}` REFERENCES
+// only (0008.d pointers): a secret-shaped literal is refused at save.
+
+import type { HostedCliId, McpTransport } from './presets'
+
+/** One registry row. `builtIn` marks the house server (always first, not
+ *  editable/removable — one entry, whole app). */
+export interface McpServerEntry {
+  /** Config-key slug: [a-z0-9_-], ≤ 48 chars — it names the entry in every
+   *  dialect (`mcpServers.<id>` / `[mcp_servers.<id>]`). */
+  id: string
+  label: string
+  transport: McpTransport
+  /** stdio: the launch command + args (paths, never secrets). */
+  command?: string
+  args?: readonly string[]
+  /** http: the remote server url (https; plain http only for loopback). */
+  url?: string
+  /** Env REFERENCES the CLI resolves at ITS runtime — values must be exactly
+   *  `${VAR}`; literals are refused (the profiles deny-list heuristics). */
+  env?: Readonly<Record<string, string>>
+  builtIn?: boolean
+}
+
+/** The marker every managed config entry carries (the dialect's comment
+ *  equivalent in TOML) — writers touch ONLY blocks wearing it. */
+export const MCP_MANAGED_BY = 'mogginglabs'
+
+/** Per-(server × CLI) apply state the manager surfaces. Drift is DETECTED,
+ *  never auto-healed: re-apply/adopt/forget are explicit user verbs. */
+export type McpApplyState = 'not-applied' | 'applied' | 'drift-edited' | 'drift-missing'
+
+export interface McpCliStatus {
+  cli: HostedCliId
+  installed: boolean
+  /** The resolved target config file (per-OS path table + pointer homes). */
+  file: string
+  state: McpApplyState
+}

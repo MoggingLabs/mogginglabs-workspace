@@ -3,8 +3,8 @@
 Receipts for the integrations pack (steps 01–14), same format as
 `prompts/phase-7/REPORT.md`. Per-step mechanics live in `IMPLEMENTATION.md`
 (deviations recorded there, inline); this file keeps dated verification
-records and the finds worth remembering. Sweep count as of 8/05: **39 gates**
-(35 + MCP + MCPWRITE + AGENTWEB + WEBTRAIL).
+records and the finds worth remembering. Sweep count as of 8/06: **40 gates**
+(35 + MCP + MCPWRITE + AGENTWEB + WEBTRAIL + MCPMGR).
 
 ## 01 — ADR 0008 + the integrations contracts (2026-07-06)
 
@@ -188,3 +188,43 @@ surface, debounced off the activity push. Gallery:
 `out/webtrail-result.json`; the ring held 1000 after a 2100 seed, restart
 survival via a fresh store instance, clear scoped to one file). Sweep 38 →
 **39**.
+
+## 06 — the MCP manager: one registry, three dialects (2026-07-06)
+
+**Shipped**: the server registry (settings KV; the house server as the
+built-in first row — `node <app>/bin/mogging-mcp.mjs`, one entry, whole app;
+env values `${VAR}` references only, secret-shaped literals refused by the
+SAME redactor deny-list the profiles use) + three surgical writers behind one
+adapter interface: Claude Code (`~/.claude.json` JSON, `type:'http'` + `url`
+remotes), Codex (`~/.codex/config.toml` TOML **line-splice**, no parser dep —
+a managed block is `# managed-by: mogginglabs` + the table, spliced to the
+first blank/header line; foreign lines with inline comments never
+re-serialized), Gemini (`settings.json`, the **`httpUrl`** remote quirk).
+Backups `<file>.bak-<stamp>` once per file per session before our first
+write; drift = sha256 of the canonical block in the KV at write time —
+detected read-only (applied / drift-edited / drift-missing), healed only by
+explicit re-apply/adopt/forget. Settings § Integrations is now the ONE
+module: Servers (chips per CLI, diff preview, apply/remove, backups line) +
+Workspace grants (write tools + act origins, 03/04's store) + Activity
+(8/05, absorbed). Gallery: `integrations-settings` + `integrations-activity`.
+
+**Format find (fixture-honesty)**: JSON byte-identity across add+remove holds
+when fixtures are stringify-shaped (multi-line arrays) — the form the CLIs'
+own writers produce. Single-line arrays are HAND formatting and normalize;
+first MCPMGR run failed exactly there, fixtures corrected to realistic.
+
+**Dev-verify (2026-07-06, real machine)**: `MOGGING_MCPMGR=DEV` applied the
+house server to REAL homes for installed CLIs — Claude Code:
+`claude mcp list` → `mogging: node …\bin\mogging-mcp.mjs - ✔ Connected`
+(backup `~/.claude.json.bak-2026-07-06-190655` taken first). DEVREMOVE
+extracted it cleanly; `claude mcp list` no longer shows it; the ONLY residue
+vs the pre-apply snapshot is an empty `mcpServers: {}` where the key had
+been absent (accepted: deleting a key we may not own is riskier; claude
+treats both identically). **Codex and Gemini are not installed on the dev
+machine** — their writers skip (the dimmed-chip rule) and their dialects are
+certified by the MCPMGR fixtures; recorded honestly per the 7/01 discipline.
+Packaged-app note for 8/14: the house row's args use `app.getAppPath()` —
+the packaged bin location needs a distribution decision (asar-external bin).
+
+**Gates**: MCPMGR PASS (16 asserts, `out/mcpmgr-result.json`). Sweep 39 →
+**40**.

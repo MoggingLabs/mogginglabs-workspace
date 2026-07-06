@@ -186,7 +186,20 @@ export const IntegrationsChannels = {
   // viewer's whole surface; entries are refs only and never reach telemetry.
   trailList: 'integrations:trail:list', // (workspaceId | '') -> TrailEntry[] (oldest first; '' = all workspaces)
   trailClear: 'integrations:trail:clear', // (workspaceId) -> void (exactly that workspace's file)
-  trailExport: 'integrations:trail:export' // (workspaceId | '') -> boolean (LOCAL save dialog; true = saved)
+  trailExport: 'integrations:trail:export', // (workspaceId | '') -> boolean (LOCAL save dialog; true = saved)
+  // Phase-8/06: the MCP manager — register once, fan out per CLI dialect.
+  // Registration is CONFIG in files the CLIs own; the app never runs,
+  // proxies, or authenticates a server (ADR 0008.b). Env values are ${VAR}
+  // references only; writes are surgical, backed up, and user-initiated.
+  serversList: 'integrations:servers:list', // -> McpServerEntry[] (the built-in house row first)
+  serversSave: 'integrations:servers:save', // (McpServerEntry) -> { ok, reason? } (secret-shaped literals refused)
+  serversRemove: 'integrations:servers:remove', // (id) -> { ok, reason? } (refused while applied anywhere)
+  mgrStatus: 'integrations:mgr:status', // (serverId) -> McpCliStatus[] (read-only; drift detected, never healed)
+  mgrPreview: 'integrations:mgr:preview', // ({ serverId, cli, action }) -> { file, block, summary }
+  mgrApply: 'integrations:mgr:apply', // ({ serverId, cli }) -> { ok, reason?, backup? } (same-session backup first)
+  mgrRemoveFrom: 'integrations:mgr:removeFrom', // ({ serverId, cli }) -> { ok, reason? } (clean extraction of OUR entry)
+  mgrAdopt: 'integrations:mgr:adopt', // ({ serverId, cli }) -> void (accept the hand-edited block as ours)
+  mgrBackups: 'integrations:mgr:backups' // (cli) -> string[] (this target's .bak files, newest first)
 } as const
 
 export const AllChannels: readonly string[] = [

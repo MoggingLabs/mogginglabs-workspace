@@ -196,7 +196,7 @@ export function runWebTrailSmoke(win: BrowserWindow): void {
       await ES(`(document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click(), 1)`)
       await sleep(600)
       await ES(`document.querySelector('.settings-section[data-section="integrations"]')?.scrollIntoView({ block: 'start' })`)
-      await ES(`(document.querySelector('.trail-block .trail-btn')?.click(), 1)`) // Refresh (repopulates the ws filter)
+      await ES(`(document.querySelector('.trail-activity .trail-btn')?.click(), 1)`) // Refresh (repopulates the ws filter)
       await sleep(600)
       // Filter to THIS workspace (the ring-seed workspace would flood the top).
       await ES(
@@ -204,7 +204,7 @@ export function runWebTrailSmoke(win: BrowserWindow): void {
       )
       await sleep(800)
       const viewer = (await ES(
-        `(() => { const b = document.querySelector('.trail-block'); return { rows: b.querySelectorAll('.trail-row').length, ok: b.querySelectorAll('.trail-badge.is-ok').length, refused: b.querySelectorAll('.trail-badge.is-refused').length, text: b.textContent.slice(0, 4000) } })()`
+        `(() => { const b = document.querySelector('.trail-activity'); return { rows: b.querySelectorAll('.trail-row').length, ok: b.querySelectorAll('.trail-badge.is-ok').length, refused: b.querySelectorAll('.trail-badge.is-refused').length, text: b.textContent.slice(0, 4000) } })()`
       )) as { rows: number; ok: number; refused: number; text: string }
       const hOk =
         viewer.rows > 0 && viewer.ok > 0 && viewer.refused > 0 &&

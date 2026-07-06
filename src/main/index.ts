@@ -25,8 +25,10 @@ import { runMcpSmoke } from './mcp-smoke'
 import { runMcpWriteSmoke } from './mcpwrite-smoke'
 import { runAgentWebSmoke } from './agentweb-smoke'
 import { runWebTrailSmoke } from './webtrail-smoke'
+import { runMcpMgrSmoke } from './mcpmgr-smoke'
 import { registerIntegrations } from './integrations'
 import { registerTrail } from './trail'
+import { registerMcpManager } from './mcp-manager'
 import { runAgentSmoke } from './agent-smoke'
 import { runStateSmoke } from './state-smoke'
 import { runReloadSmoke } from './reload-smoke'
@@ -148,6 +150,7 @@ app.whenReady().then(async () => {
   registerBrowserDock(() => win) // right browser dock: MAIN owns the WebContentsView (6/05)
   registerIntegrations(() => win) // per-workspace integrations grant: store + IPC + fan-out (8/03)
   registerTrail() // the agent activity trail: local store + viewer IPC (8/05)
+  registerMcpManager() // MCP manager: registry + per-CLI config writers (8/06)
   startMcpEndpoint() // agent-control transport: the MCP server reaches the dock + grant wire here (6/05b, 8/03)
   registerAgents() // agent launcher: detect installed CLIs + build launch commands (Phase-1/06)
   registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
@@ -233,6 +236,8 @@ app.whenReady().then(async () => {
     runAgentWebSmoke(win, process.env.MOGGING_AGENTWEB) // env-gated agent-web-profile smoke (Phase-8/04; DEV = held real-site world)
   } else if (process.env.MOGGING_WEBTRAIL && win) {
     runWebTrailSmoke(win) // env-gated agent-activity-trail smoke: store + emitters + viewer (Phase-8/05)
+  } else if (process.env.MOGGING_MCPMGR && win) {
+    runMcpMgrSmoke(win, process.env.MOGGING_MCPMGR) // env-gated MCP-manager smoke (Phase-8/06; DEV/DEVREMOVE = real-home dev-verify)
   } else if (process.env.MOGGING_USAGE && win) {
     runUsageSmoke(win) // env-gated usage-seam smoke: FAKE adapter only (Phase-7/01)
   } else if (process.env.MOGGING_ATTENTION && win) {

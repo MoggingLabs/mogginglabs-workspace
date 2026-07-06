@@ -3587,6 +3587,117 @@ body.resizing * {
   max-width: 72ch;
 }
 
+/* ── The MCP manager (Phase-8/06, Settings § Integrations) ────────────────── */
+.integrations-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.mgr-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.mgr-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-1);
+  border-radius: var(--r-sm);
+  flex-wrap: wrap;
+}
+.mgr-row:hover {
+  background: var(--bg-elevated);
+}
+.mgr-label {
+  flex: none;
+  color: var(--text-hi);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  min-width: 110px;
+}
+.mgr-id {
+  flex: none;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  min-width: 150px;
+}
+.mgr-chips {
+  display: flex;
+  gap: var(--sp-1);
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+}
+.mgr-chip {
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--text-mid);
+  font-size: var(--fs-11);
+  padding: 1px var(--sp-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mgr-chip.is-applied {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  color: var(--accent-ink);
+}
+.mgr-chip.is-drift-edited,
+.mgr-chip.is-drift-missing {
+  border-color: var(--warning);
+  color: var(--text-hi);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+.mgr-chip.is-uninstalled {
+  opacity: 0.5;
+}
+.mgr-chip:disabled {
+  cursor: default;
+}
+.mgr-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2);
+  background: var(--bg-inset);
+}
+.mgr-panel[hidden] {
+  display: none;
+}
+.mgr-panel-summary {
+  font-size: var(--fs-12);
+  color: var(--text-mid);
+}
+.mgr-panel-block {
+  margin: 0;
+  padding: var(--sp-2);
+  background: var(--bg-app);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-11);
+  overflow-x: auto;
+  max-height: 200px;
+  color: var(--text-hi);
+}
+.mgr-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-width: 460px;
+}
+.mgr-form[hidden] {
+  display: none;
+}
+.mgr-save-note[hidden] {
+  display: none;
+}
+.mgr-grant-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
 /* ── First-run checklist (Phase-6/06): live, dismissible "Get set up" card ──── */
 .firstrun-card {
   position: relative;
