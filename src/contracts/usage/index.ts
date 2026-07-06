@@ -338,7 +338,10 @@ export const USAGE_PROVIDERS: readonly UsageProviderDef[] = [
   { id: 'commandcode', label: 'Command Code', klass: 'web-session', origin: 'commandcode.ai', cookieName: 'session', windows: [w('rolling', 'Credits')], credits: true },
   { id: 'opencode-web', label: 'OpenCode (workspace)', klass: 'web-session', origin: 'opencode.ai', cookieName: 'session', windows: [w('monthly', 'Usage')] },
   { id: 'alibaba-web', label: 'Alibaba (cookie)', klass: 'web-session', origin: 'bailian.console.aliyun.com', cookieName: 'login_aliyunid_ticket', windows: [w('rolling', 'Quota')], credits: true },
-  { id: 'grok-web', label: 'Grok (browser)', klass: 'web-session', origin: 'grok.com', cookieName: 'sso', windows: [w('rolling', 'Quota')], credits: true }
+  { id: 'grok-web', label: 'Grok (browser)', klass: 'web-session', origin: 'grok.com', cookieName: 'sso', windows: [w('rolling', 'Quota')], credits: true },
+  // ── local class (7/13): no auth at all — loopback probes and the machine's
+  //    own logs (the 7/07 cost scan is this class's dev-verified citizen).
+  { id: 'ollama', label: 'Ollama', klass: 'local', endpoint: 'http://127.0.0.1:11434/api/tags', windows: [w('rolling', 'Local models')] }
 ]
 
 export const findProvider = (id: string): UsageProviderDef | undefined => USAGE_PROVIDERS.find((p) => p.id === id)

@@ -73,6 +73,25 @@ export function buildRealAdapters(keys: ApiKeyDeps, web: WebSessionDeps): UsageA
         detect: async () => ({ ok: true }),
         fetch: async (_home, profileId, signal) => [await fetchWebSessionUsage(def, profileId, signal, web)]
       })
+    } else if (def.klass === 'local') {
+      // No auth by definition (loopback probe). Honest-pending until the
+      // probe is dev-verified against a real local install.
+      out.push({
+        id: def.id,
+        perProfile: true,
+        detect: async () => ({ ok: true }),
+        fetch: async (_home, profileId) => [
+          {
+            providerId: def.id,
+            profileId,
+            planLabel: '—',
+            windows: [],
+            fetchedAt: Date.now(),
+            health: 'unconfigured',
+            reason: `${def.label} probe is not wired yet — the row reserves the local class`
+          }
+        ]
+      })
     }
   }
   return out

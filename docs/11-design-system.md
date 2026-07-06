@@ -298,9 +298,68 @@ freeform strings, and the uppercase tag IS the clearest rendering; a generic bad
 glyph would add noise, not intent. Every icon-only button carries `title` +
 `aria-label` (grep-asserted; `IconButton` requires a label by type).
 
+## Usage surfaces (Phase-7)
+
+The usage meters joined the system in Phase 7; every state is fixture-driven
+and gallery-verified in both themes (`*-usage-*.png`).
+
+### The titlebar gauge — icon states
+
+Two 14×3px tracks (`--surface-3` base, `--accent` fill), stacked (session
+over weekly), inside a standard `.icon-btn`. All state flips are PAINT-ONLY
+(class + width), measured 15.6–22.7ms popover open against the 100ms budget.
+
+| State | Treatment |
+|---|---|
+| rest | accent fills at the mirrored plan's percentages |
+| `is-warn` | fills flip to `--warning` (verdict = runs-out) |
+| `is-stale` | whole icon at 0.45 opacity (old data, honestly dimmed) |
+| `is-off` | empty outlined tracks (`--text-dim` border) — nothing configured |
+| ≥90% badge | 6px `--warning` dot, top-right, `--surface-1` ring (the attention-badge idiom) |
+| incident overlay | 6px `--danger` dot, bottom-right — "they're down", one glyph, never a takeover |
+| content options (7/10) | glyph / `%` / label spans ALWAYS exist; `show-*`/`hide-bars` classes decide paint — structure never changes |
+
+### Popover anatomy (the glance)
+
+`.menu` panel (`--bg-elevated`, `--shadow-2`), 300px, ≤70vh scroll. Top to
+bottom: **sticky header** (gauge-mode switcher + the worst runs-out plan's
+label + verdict — surfaces regardless of scroll or manual order) · provider
+groups (severity-ordered, or manual pin order) · plan tiles · the one-line
+switch hint · footer (age + refresh + gear → Settings § Usage). Tiles:
+head (plan label · profile · status chip when non-operational · health
+pill) → window rows (label · track · % · reset line) → verdict line. The
+ACTIVE profile's tile speaks the rail's selection grammar: 4px `--accent`
+left bar + `--accent-weak` wash, paint only. Compact density drops verdict
+lines, keeps pills + bars.
+
+### Severity inks (one mapping, everywhere)
+
+| Signal | Ink |
+|---|---|
+| runs-out verdict / warn threshold toast / hot fill (≥90%) | `--warning` |
+| on-pace verdict | neutral (`--text-mid` line, no tint) |
+| surplus verdict / quiet toast / reset toast | quiet (`--text-mid`) |
+| provider outage (chip, incident dot, relabeled reason) | `--danger` |
+| degraded status chip | `--warning` |
+| health `stale`/`error` pills | `--warning` ink on the pill |
+| health `unconfigured` | `--text-mid` — a state, not an alarm |
+
+Wording never varies by surface: the 7/02 verdict formatter and the 7/10
+reset formatter are the only sources; popover, tab, toasts, and CLI render
+their strings verbatim (smoke-asserted DOM === IPC === CLI).
+
+### The Usage tab & confetti
+
+Settings § Usage follows the settings row rhythm (`.settings-row` head +
+control); the provider grid scrolls inside 420px with class group labels in
+`section-label` ink; key controls are password inputs + masked
+`--accent` "Key saved ····" chips. Reset confetti (opt-in) is 14 flecks in
+`--accent`/`--warning`/`--danger`, ~1.1s fall anchored to the toast corner,
+disabled entirely under `prefers-reduced-motion`.
+
 ## Audit ledger
 
-Walked from `out/gallery/` (46 shots, both themes, 2026-07-02). Shot refs use the
+Walked from `out/gallery/` (46 shots at the 5/01 audit; 93 shots incl. usage, 2026-07-06). Shot refs use the
 name suffix (numbering shifts as the gallery grows). **Fixed in 01** = pure-token
 wins shipped with this step; everything else is LOGGED with its owner step.
 
@@ -337,7 +396,7 @@ wins shipped with this step; everything else is LOGGED with its owner step.
     → no color literals outside the token/theme-fallback blocks.
   - `grep -rn "@backend" src/ui --include='*.ts'` (and the inverse for `@ui`,
     `electron`, `node-pty`) → layer boundaries hold.
-- The verification loop: `MOGGING_SHOT=all` regenerates `out/gallery/` (46 shots,
+- The verification loop: `MOGGING_SHOT=all` regenerates `out/gallery/` (93 shots,
   both themes) in one command; before/after pairs live in `docs/assets/gallery/`.
 - Token changes re-run SMOKE + PERCEPTION + MILESTONE — restyle never renames the
   load-bearing selectors (`.workspace-tab[data-attention]`, `.pane-state[data-state]`,

@@ -55,7 +55,24 @@ a `/goal`, < 4000 chars). Execute in order.
 | 10 | `10-titlebar-display-options.md` | **DONE** (2026-07-06): merged (default) / auto / pinned gauge modes — renderer-side pick over the pushed snapshot, paint-only — + the popover-header switcher; content toggles (bars/%/glyph/label) flip CLASSES with structure untouched; ONE `formatReset` (countdown verbatim-legacy / absolute / relative) attached as `resetText` at enrich — no surface re-spells a reset; sticky header surfaces the worst runs-out plan over any order; severity/manual group order + compact density; Settings § Usage display row; KV-persisted via usage:displayGet/Set+push; USAGEUI +10 assertions, gallery ×4 display states |
 | 11 | `11-usage-cli-verbs.md` | **DONE** (2026-07-06): `mogging usage / cost / providers / refresh / set-key(--stdin) / clear-key` as `usage.*` request types on the EXISTING 6/05b authed app endpoint (same frame/handshake, not in the MCP tools list, daemon v3 untouched); verdict+reset strings verbatim from the one formatter (bracket-asserted across the process boundary); stdin-only keys into the 0007.a vault, `get-key` exits 2 by construction; real-session dev check booked (live Claude/Codex lines + real cost table); USAGECLI gate #34, sweep 33→34; docs/12-usage.md seeded w/ the CLI ref |
 | 12 | `12-usage-settings-tab.md` | **DONE** (2026-07-06): the FULL Usage tab as ONE module (`settings/usage.ts`; the 7/03 stub + 09 alerts + 10 display rows absorbed and deleted — one home, smoke-grepped) — searchable five-class catalog grid (detected/enabled first; paste-once masked-forever key controls w/ Replace/Delete + env-ref slot; web-read opt-in), plans × profiles table (same snapshot as the popover, asserted equal; the shared `switchActiveProfile` ui-core path), pace work-day baseline (new `usage:paceCfgGet/Set` feeding 02), alerts + test toast, display, per-provider sparkline + on-demand cost panel, the ADR 0007/.a/.b privacy story; USAGESET gate #35, sweep 34→35; gallery ×3 tab states both themes |
-| 13 | `13-usage-milestone.md` | All usage gates green on all 3 CI OSes + docs/12-usage.md (5 classes, parity map, authoring guide); pack freeze + per-OS numbers |
+| 13 | `13-usage-milestone.md` | **DONE** (2026-07-06, the freeze): three-platform certification — dispatch run **28789330898** on `1a0d5a2`, full uncut 35-gate sweeps green on ubuntu + macos-26 + windows-latest, plus the local Windows sweep (four environments, one script, one gate list); catalog completed to 50 rows across ALL five classes (Ollama reserves `local`); docs/12-usage.md complete (verdicts verbatim, privacy story, 50-row catalog table, parity carve-outs, tab+CLI ref, authoring guide); usage surfaces in the docs/11 ledger + 28 gallery shots in `after/`; REPORT.md carries the campaign finds |
+
+## Phase-7 freeze — the 35-gate sweep, four environments (7/13, run 28789330898, 2026-07-06)
+
+The SAME 35-gate list (30 from phase 6 + USAGE, USAGEUI, WEBUSAGE, USAGECLI,
+USAGESET), commits `4f6b881` → the freeze, certified on the 7/12 code
+(`1a0d5a2`). All usage gates run FAKE-only — zero network structurally.
+
+| Environment | MILESTONE (stress fps / max gap / heap) | Popover open (100ms budget) | Key vault | Verdict |
+|---|---|---|---|---|
+| Windows local (strict) | 49.8fps / 111.1ms / 32MB | 15.6–22.7ms | DPAPI, real round-trip | 35/35 green |
+| windows-latest (soft) | 27.5fps / 171.9ms / 26MB | 17.2ms | DPAPI, real round-trip | 35/35 green |
+| macos-26 (soft) | 25.8fps / 152.4ms / 39MB | 18.8ms | Keychain, real round-trip | 35/35 green |
+| ubuntu-latest (soft) | 23.5fps / 116.7ms / 30MB | 31.1ms | **no keyring — the REFUSAL path is what certified** (never plaintext at rest, the claim held via refusal) | 35/35 green |
+
+`MOGGING_CI_GPU=soft` relaxes frame-timing budgets only, loudly; every
+correctness, security, and wording assertion ran strict on all four.
+Nightly per-OS sweep crons remain enabled (03:30/04:30/05:30 UTC).
 
 ## Overall Definition of Done
 - One glance at the titlebar answers "can I keep working, and until when?" for

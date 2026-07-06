@@ -398,6 +398,31 @@ seams; ADR 0007 and docs/12 are both unclaimed. The pack runs BEFORE phase
   configures and explains; the popover remains the glance.
 - Gate count 34 → **35** (USAGESET).
 
+## milestone mechanics (13) — the freeze, 2026-07-06
+
+- **Gate count, from the script**: 35 `run_smoke` rows (30 phase-6 +
+  USAGE/USAGEUI/WEBUSAGE/USAGECLI/USAGESET). Every live count mention
+  updated (ci.yml ×4); historical records in old phase READMEs untouched.
+- **Zero-network audit (structural, not disciplined)**: under any
+  `MOGGING_USAGE*`/`MOGGING_WEBUSAGE` env the adapter registry holds ONLY
+  the FAKE adapter (or nothing under other smokes), the status poller's
+  fetcher is a fixture body or null, the cost scan reads only
+  `MOGGING_USAGE_COSTDIR`, and `realCookieBackend` returns null by design —
+  the smokes ALSO spy-assert it (web reads === 0 while off, endpoint
+  bodies fixture-only). The OS vault IS touched where the claim needs it
+  (cipher-at-rest proofs), vault-conditioned per platform.
+- **Catalog completed to 50 rows / five classes**: the Ollama row reserves
+  `local` (honest-pending loopback probe); the class's dev-verified citizen
+  is the 7/07 cost scan over real logs. Every class now has catalog rows,
+  fixtures, and a books-recorded real verification.
+- **Certification**: dispatch run 28789330898 on `1a0d5a2` — ubuntu +
+  macos-26 + windows-latest full uncut 35-gate sweeps green, plus the
+  local strict sweep; numbers in README + REPORT. Linux CI has no keyring:
+  the key-store claims certified through the REFUSAL branch — the exact
+  platform-condition-the-probe-never-the-claim discipline 7/05 designed.
+- Nightly per-OS crons stay enabled (03:30/04:30/05:30 UTC); the last
+  scheduled run before the freeze was green.
+
 - **Marathon-tail flake, investigated 2026-07-06 (not a 7/08 defect):**
   WORKTREE failed twice right after the 33-gate marathon (clean AND forced
   worktree removal both refused — the Windows PTY/conhost-teardown lock
