@@ -708,19 +708,56 @@ export function registerBrowserDock(winGetter: () => BrowserWindow | null): void
     persistWidth(b.dockWidth)
   })
 
-  // The freeze signal (8/07 polish). The renderer resizes the CSS chrome alone
-  // at 60 fps during the drag; we snap the native view to the FINAL rect once
-  // on release — no per-frame reflow, no trailing.
+  // Smooth resize (8/07 polish). Resizing the native WebContentsView reflows
+  // the whole page every frame (10–50 ms) — that is the drag lag. Instead we
+  // show a SNAPSHOT of the live page while the CSS chrome resizes at 60 fps,
+  // then restore + snap the real view once on release. The page stays visible
+  // the whole time (no black), and never reflows mid-drag.
   ipcMain.on(BrowserChannels.resizing, (_e, p: { active?: boolean; bounds?: BrowserDockBounds }) => {
-    resizing = !!p?.active
-    if (resizing) {
-      activeView()?.setVisible(false)
-      viewShown = false
+    const win = getWin?.()
+    if (p?.active) {
+      if (resizing) return
+      resizing = true // freezes the bounds handler immediately (no per-frame setBounds)
+      const view = activeView()
+      // Capture the current page, then let the renderer paint it BEFORE we hide
+      // the live view (the ack) — so there is never a black frame. If there is
+      // no page to capture, just hide (the neutral surface shows).
+      if (view && lastBounds && lastBounds.visible) {
+        view.webContents
+          .capturePage()
+          .then((img) => {
+            if (!resizing || !win || win.isDestroyed()) return
+            win.webContents.send(BrowserChannels.resizeShot, {
+              dataUrl: img.toDataURL(),
+              width: Math.round(lastBounds!.width),
+              height: Math.round(lastBounds!.height)
+            })
+          })
+          .catch(() => {
+            activeView()?.setVisible(false)
+            viewShown = false
+          })
+      } else {
+        view?.setVisible(false)
+        viewShown = false
+      }
       return
     }
+    // Ended: snap the real view to the final rect (one reflow), then tell the
+    // renderer to drop the snapshot — the live view (on top) already covers it.
+    resizing = false
     if (p?.bounds) lastBounds = p.bounds
     applyBounds()
     if (lastBounds) persistWidth(lastBounds.dockWidth)
+    if (win && !win.isDestroyed()) win.webContents.send(BrowserChannels.resizeDone, undefined)
+  })
+
+  // The snapshot is painted — NOW hide the live view (revealing the snapshot
+  // that already sits behind it), so the swap has no black flash.
+  ipcMain.on(BrowserChannels.resizePainted, () => {
+    if (!resizing) return
+    activeView()?.setVisible(false)
+    viewShown = false
   })
 
   // ── Agent control (6/05b) ─────────────────────────────────────────────────

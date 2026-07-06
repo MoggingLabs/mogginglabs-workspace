@@ -3214,21 +3214,19 @@ body.resizing * {
 .browser-empty[hidden] {
   display: none;
 }
-/* While the dock is being dragged/window-resized the native view is hidden and
-   NOT reflowed — this faint host label sits over the calm surface so the freeze
-   reads as intentional, and a snappier handle signals the live grab. */
-.browser-resize-hint {
+/* While the dock is being dragged/window-resized the native view is swapped
+   for this SNAPSHOT of the live page — it scales on the compositor at 60 fps
+   (no native reflow, no black screen) and the real view snaps back on release.
+   Pinned top-right so the resized-in/out space appears on the left edge. */
+.browser-resize-snap {
   position: absolute;
   inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-lo);
-  font-size: var(--fs-12);
-  font-variant-numeric: tabular-nums;
+  background-color: var(--bg-app);
+  background-repeat: no-repeat;
+  background-position: top right;
   pointer-events: none;
 }
-.browser-resize-hint[hidden] {
+.browser-resize-snap[hidden] {
   display: none;
 }
 .browser-dock.is-resizing .browser-dock-handle {

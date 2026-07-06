@@ -105,10 +105,13 @@ export function runBrowserSmoke(win: BrowserWindow): void {
       //        is HIDDEN — the CSS chrome grows but the WebContents never
       //        reflows (viewShown stays false); it snaps back on release ─────
       await ES('window.__mogging.browser.beginResize()')
-      await sleep(120)
+      await sleep(600) // capture -> paint snapshot -> ack -> live view hidden
       // frozen: main entered resize mode AND the native view is actually hidden
+      // (the page snapshot is showing in its place)
       const frozenActive = dockDebug().resizing === true && dockDebug().viewShown === false
-      await ES('window.__mogging.browser.setWidth(600)') // chrome grows while the view stays frozen-hidden
+      // the page snapshot is up in the view's place — visible, not a black pane
+      const snapUp = await ES<boolean>('window.__mogging.browser.snapShown()')
+      await ES('window.__mogging.browser.setWidth(600)') // chrome grows; the snapshot scales, the view stays frozen
       await sleep(200)
       const rectFrozenChrome = await ES<{ width: number }>('window.__mogging.browser.viewRect()')
       // the chrome widened, but the native view was NOT shown/reflowed meanwhile
@@ -118,7 +121,7 @@ export function runBrowserSmoke(win: BrowserWindow): void {
       // release: view shown again, snapped to the final (wider) rect in ONE step
       const snappedAfter =
         dockDebug().resizing === false && dockDebug().viewShown === true && (dockDebug().bounds?.width ?? 0) > rect2.width
-      const freezeOk = frozenActive && heldDuringFreeze && snappedAfter
+      const freezeOk = frozenActive && snapUp && heldDuringFreeze && snappedAfter
       await ES('window.__mogging.browser.setWidth(520)') // restore width for the persist assertion
       await sleep(200)
 
@@ -164,6 +167,7 @@ export function runBrowserSmoke(win: BrowserWindow): void {
         resizeOk,
         freezeOk,
         frozenActive,
+        snapUp,
         heldDuringFreeze,
         snappedAfter,
         hiddenOk,

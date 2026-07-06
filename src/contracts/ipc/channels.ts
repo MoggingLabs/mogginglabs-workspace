@@ -112,7 +112,10 @@ export const BrowserChannels = {
   navigate: 'browser:navigate', // ({ url, workspaceId }) -> void (http(s) only; persists lastUrl per workspace)
   nav: 'browser:nav', // ({ action }) -> void (back | forward | reload)
   bounds: 'browser:bounds', // renderer -> main: BrowserDockBounds (rAF-throttled view rect)
-  resizing: 'browser:resizing', // renderer -> main: { active, bounds? } — FREEZE the native view during a continuous resize (handle drag / OS-window drag) so the page doesn't reflow every frame; snap to the final rect on release
+  resizing: 'browser:resizing', // renderer -> main: { active, bounds? } — a continuous resize (handle drag / OS-window drag) started/ended; the live view is swapped for a page SNAPSHOT so it stays visible AND smooth (no per-frame reflow), then restored + snapped on release
+  resizeShot: 'browser:resizeShot', // main -> renderer: { dataUrl, width, height } — paint this frozen page image while the CSS chrome resizes
+  resizePainted: 'browser:resizePainted', // renderer -> main: the snapshot is up — safe to hide the live view now (no black flash)
+  resizeDone: 'browser:resizeDone', // main -> renderer: the live view is restored at the final size — clear the snapshot
   state: 'browser:state', // main -> renderer: BrowserDockState (header truth)
   lastUrl: 'browser:lastUrl', // (workspaceId) -> string | null ("open this workspace's preview" chip)
   openExternal: 'browser:openExternal', // ({ url }) -> void (http(s) only, system browser)

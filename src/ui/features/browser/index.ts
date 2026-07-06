@@ -163,17 +163,12 @@ export const browserFeature: UiFeature = {
       el('div', { class: 'browser-empty-title', text: 'Preview what the agents build' }),
       el('div', { class: 'browser-empty-hint', text: 'Enter a URL above — your dev server, docs, anything http(s).' })
     ])
-    // Shown over the (hidden) native view during a resize so the freeze reads
-    // as intentional — the page's host, faint — not a blank pane.
-    const resizeHint = el('div', { class: 'browser-resize-hint', hidden: true })
-    const viewHost = el('div', { class: 'browser-dock-view' }, [empty, resizeHint])
-    const hostOf = (u: string): string => {
-      try {
-        return new URL(u).host
-      } catch {
-        return ''
-      }
-    }
+    // The live page's SNAPSHOT, shown WHILE the dock resizes so the preview
+    // stays visible and scales on the compositor (no native reflow, no black
+    // screen). Pinned to the right edge — the window edge is stable, so grown/
+    // removed space appears on the left, matching how the dock resizes.
+    const snapEl = el('div', { class: 'browser-resize-snap', hidden: true })
+    const viewHost = el('div', { class: 'browser-dock-view' }, [empty, snapEl])
     dock.append(handle, header, agentWebNote, banner, recentActs, confirmBar, originAlert, trailMenu, sitesMenu, loading, wsChip, viewHost)
     // The dock is #content's flex sibling inside #main — inserted, not slotted,
     // so the shell stays feature-agnostic.
@@ -211,17 +206,31 @@ export const browserFeature: UiFeature = {
       if (resizing) return
       resizing = true
       dock.classList.add('is-resizing')
-      resizeHint.textContent = hostOf(state.url)
-      resizeHint.hidden = !state.url
+      // Ask main for the page snapshot; it paints via resizeShot and the live
+      // view is hidden only once we've painted (no black flash).
       bridge.send(BrowserChannels.resizing, { active: true })
     }
     const endResize = (): void => {
       if (!resizing) return
       resizing = false
       dock.classList.remove('is-resizing')
-      resizeHint.hidden = true
       bridge.send(BrowserChannels.resizing, { active: false, bounds: computeBounds() })
+      // snapEl stays up until resizeDone — the restored native view covers it.
     }
+    bridge.on(BrowserChannels.resizeShot, (payload) => {
+      if (!resizing) return // drag already ended — ignore a late snapshot
+      const s = payload as { dataUrl: string; width: number; height: number }
+      snapEl.style.backgroundImage = `url("${s.dataUrl}")`
+      snapEl.style.backgroundSize = `${s.width}px ${s.height}px`
+      snapEl.hidden = false
+      // Two frames guarantees the snapshot painted before main hides the live
+      // view underneath it — the swap is seamless.
+      requestAnimationFrame(() => requestAnimationFrame(() => bridge.send(BrowserChannels.resizePainted, undefined)))
+    })
+    bridge.on(BrowserChannels.resizeDone, () => {
+      snapEl.hidden = true
+      snapEl.style.backgroundImage = ''
+    })
     new ResizeObserver(sendBounds).observe(viewHost)
     window.addEventListener('resize', () => {
       // The OS window drag fires 'resize' continuously — freeze until it
@@ -532,6 +541,7 @@ export const browserFeature: UiFeature = {
         // 8/07 resize-freeze surface for the BROWSER smoke.
         beginResize: () => beginResize(),
         endResize: () => endResize(),
+        snapShown: () => !snapEl.hidden && snapEl.style.backgroundImage !== '', // the page snapshot is painted (not a black pane)
         // 8/04: agent-web profile surface for the smoke.
         profile: () => state.profile,
         setProfile: (p: BrowserProfile) => setProfile(p),
