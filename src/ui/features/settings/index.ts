@@ -1,5 +1,5 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { BrowserChannels, TelemetryChannels, UsageChannels, USAGE_CADENCES, type TelemetryRendererConfig, type UsageConfig } from '@contracts'
+import { BrowserChannels, TelemetryChannels, UsageChannels, USAGE_CADENCES, type TelemetryRendererConfig, type UsageAlertConfig, type UsageConfig } from '@contracts'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { Button, createCheckbox, createSegmented, el, icon, ICON_NAMES } from '../../components'
 import { THEMES } from '../../core/theme/themes'
@@ -177,6 +177,47 @@ export const settingsFeature: UiFeature = {
       })
       .catch(() => usageStub.append(el('span', { class: 'settings-row-caption', text: 'Usage config unavailable.' })))
 
+    // Threshold alerts (7/09): two shoulder-tap pcts + the reset-confetti
+    // opt-in (default quiet). All persistence rides usage:alertCfgSet.
+    const usageAlerts = el('div', { class: 'settings-consents usage-alert-cfg' })
+    void getBridge()
+      .invoke(UsageChannels.alertCfgGet)
+      .then((raw) => {
+        const cfg = raw as UsageAlertConfig | null
+        if (!cfg) return
+        const pctInput = (cls: string, label: string, value: number, key: 'quiet' | 'warn'): HTMLInputElement => {
+          const input = el('input', { class: `usage-thr ${cls}`, ariaLabel: label }) as HTMLInputElement
+          input.type = 'number'
+          input.min = '1'
+          input.max = '100'
+          input.value = String(value)
+          input.addEventListener('change', () => {
+            const v = Number(input.value)
+            if (Number.isFinite(v) && v >= 1 && v <= 100) void getBridge().invoke(UsageChannels.alertCfgSet, { [key]: v })
+          })
+          return input
+        }
+        const quiet = pctInput('usage-thr-quiet', 'Quiet threshold percent', cfg.quiet, 'quiet')
+        const warn = pctInput('usage-thr-warn', 'Warning threshold percent', cfg.warn, 'warn')
+        const confetti = createCheckbox({
+          label: 'Confetti on window reset',
+          checked: cfg.confetti,
+          onChange: (checked) => void getBridge().invoke(UsageChannels.alertCfgSet, { confetti: checked })
+        })
+        confetti.el.classList.add('usage-confetti-toggle')
+        usageAlerts.append(
+          el('div', { class: 'usage-alert-row' }, [
+            el('span', { class: 'settings-row-caption', text: 'Quiet toast at' }),
+            quiet,
+            el('span', { class: 'settings-row-caption', text: '% · warning at' }),
+            warn,
+            el('span', { class: 'settings-row-caption', text: '%' })
+          ]),
+          confetti.el
+        )
+      })
+      .catch(() => usageAlerts.append(el('span', { class: 'settings-row-caption', text: 'Alert config unavailable.' })))
+
     // ── The page: [section nav | scrollable content column] ──────────────────
     const version = el('span', { class: 'settings-about-version', text: '' })
     try {
@@ -236,6 +277,11 @@ export const settingsFeature: UiFeature = {
             'Usage meters',
             usageStub,
             'Which providers the titlebar gauge polls, and how often. This is a stub — the full Usage tab (providers, plans, thresholds, baseline) lands in 7/12.'
+          ),
+          row(
+            'Alerts',
+            usageAlerts,
+            'Session-window shoulder-taps: a quiet toast at the first threshold, a warning with the pace verdict at the second. Each fires once per window and re-arms at reset. Confetti is optional — quiet is the default.'
           )
         ])
       },

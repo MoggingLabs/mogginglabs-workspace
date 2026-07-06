@@ -151,7 +151,12 @@ export const UsageChannels = {
   // jittered cadence. Enum + note text for rendering; nothing here can carry
   // a credential, and only the enum/booleans may reach telemetry (ADR 0005).
   status: 'usage:status', // -> ProviderStatus[] (cached snapshot)
-  statusChanged: 'usage:statusChanged' // main -> renderer: ProviderStatus[] (pushed on state change)
+  statusChanged: 'usage:statusChanged', // main -> renderer: ProviderStatus[] (pushed on state change)
+  // 7/09 threshold alerts: copy composed main-side (ONE wording source, the
+  // verdict line rides verbatim); single-fire state persisted app-side.
+  alert: 'usage:alert', // main -> renderer: UsageAlert (house toast; never OS spam)
+  alertCfgGet: 'usage:alertCfgGet', // -> UsageAlertConfig (quiet/warn pcts + confetti opt-in)
+  alertCfgSet: 'usage:alertCfgSet' // (partial UsageAlertConfig) -> void
 } as const
 
 export const AllChannels: readonly string[] = [

@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorktree } from '@backend/features/worktrees'
 import { setFakeMode } from '@backend/features/usage'
+import { UsageChannels } from '@contracts'
 import { getUsageService, getUsageStatusService } from './usage'
+import { getSettingsStore } from './app-settings'
 
 // MOGGING_SHOT=all (Phase-5/01): the GALLERY — drive the app through every surface
 // and write numbered PNGs to out/gallery/, in BOTH themes. The audit + before/after
@@ -122,8 +124,13 @@ export function runGallery(win: BrowserWindow): void {
         // Usage glance (7/03): popover with every fixture state; gauge rest/warn/stale
         // (FAKE adapter — gallery runs in the fixture world, zero network).
         await part(`${tag}-usage`, async () => {
+          // 7/09: a Phase-4 profile pair on the fake provider stages the
+          // multi-profile popover — severity ordering + the ACTIVE identity
+          // treatment on the order-0 lane (removed again at part end).
+          getSettingsStore()?.saveProfile({ id: 'default', name: 'Main', provider: 'fake', env: {}, order: 0 })
+          getSettingsStore()?.saveProfile({ id: 'fresh-reset', name: 'Backup', provider: 'fake', env: {}, order: 1 })
           await ES(`window.__mogging.usage && window.__mogging.usage.open()`)
-          await sleep(400)
+          await sleep(600)
           await snap(`${tag}-usage-popover`)
           await ES(`window.__mogging.usage.close()`)
           const dir = mkdtempSync(join(tmpdir(), 'mog-gallery-usage-'))
@@ -154,6 +161,38 @@ export function runGallery(win: BrowserWindow): void {
           delete process.env.MOGGING_USAGE_FIXTURE
           getUsageService()?.refresh()
           await sleep(600)
+          // threshold + suggestion toast and the OPT-IN reset confetti (7/09):
+          // synthesized payloads through the real alert channel — live copy
+          // (formatter-verbatim) is smoke-asserted; this stages the visuals.
+          wc.send(UsageChannels.alert, {
+            kind: 'threshold',
+            level: 'warn',
+            providerId: 'fake',
+            profileId: 'near-limit',
+            planLabel: 'Fake Pro (near limit)',
+            windowLabel: 'Session (5h)',
+            usedPct: 95,
+            title: 'Fake Pro (near limit) — 95% of Session (5h) used',
+            body: 'Ahead of pace — runs out ~Tue 14:00',
+            failover: { profileId: 'fresh-reset', profileName: 'Backup' }
+          })
+          await sleep(500)
+          await snap(`${tag}-usage-toast-suggestion`)
+          wc.send(UsageChannels.alert, {
+            kind: 'reset',
+            providerId: 'fake',
+            profileId: 'default',
+            planLabel: 'Fake Pro (normal)',
+            windowLabel: 'Session (5h)',
+            usedPct: 2,
+            title: 'Fake Pro (normal) — fresh Session (5h) window',
+            body: 'Counters reset — a full window ahead.',
+            confetti: true
+          })
+          await sleep(500)
+          await snap(`${tag}-usage-toast-reset-confetti`)
+          getSettingsStore()?.removeProfile('default')
+          getSettingsStore()?.removeProfile('fresh-reset')
           // web-session consent (7/06): the Settings § Usage stub with the
           // per-provider "read my browser session" opt-in (default OFF).
           await ES(`(document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click(), 1)`)

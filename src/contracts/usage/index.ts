@@ -44,11 +44,51 @@ export interface PlanUsage {
  *  profiles themselves and never look outside `home` + their known endpoint. */
 export interface UsageAdapter {
   id: string
+  /** 7/09 fan-out: read EVERY profile lane (real adapters — one home per
+   *  call). Unset = the active lane only; the FAKE adapter models its own
+   *  multi-profile fan-out inside its fixture set. */
+  perProfile?: boolean
   /** Is this provider readable at `home`? false + reason -> `unconfigured`. */
   detect(home: string): Promise<{ ok: boolean; reason?: string }>
   /** Fetch + normalize. May return several plans. Throws only Error(reason) —
    *  the seam maps it to health 'error'/'stale'; a token NEVER rides an error. */
   fetch(home: string, profileId: string, signal: AbortSignal): Promise<PlanUsage[]>
+}
+
+// ── Threshold alerts (Phase-7/09): the meter taps you on the shoulder through
+//    the HOUSE toast system — no OS spam. Copy is composed in ONE place (main,
+//    with the 7/02 formatter's verdict line as the body) and rendered VERBATIM.
+//    Each threshold fires once per (provider, profile, window-epoch); state is
+//    persisted app-side so a restart never re-fires a spent threshold.
+
+export interface UsageAlertConfig {
+  /** First shoulder-tap, a quiet toast (default 80). */
+  quiet: number
+  /** The warning toast that carries the verdict line (default 95). */
+  warn: number
+  /** Optional reset flourish — default OFF (quiet is the house default). */
+  confetti: boolean
+}
+export const USAGE_ALERT_DEFAULTS: UsageAlertConfig = { quiet: 80, warn: 95, confetti: false }
+
+export interface UsageAlert {
+  kind: 'threshold' | 'reset'
+  /** threshold alerts only: which shoulder-tap this is. */
+  level?: 'quiet' | 'warn'
+  providerId: string
+  profileId: string
+  planLabel: string
+  windowLabel: string
+  usedPct: number
+  /** Composed main-side — the toast renders title/body VERBATIM. */
+  title: string
+  /** The 7/02 formatter's verdict line when the plan paces; else a plain state line. */
+  body: string
+  /** 7/09 failover feed: present ONLY when the ACTIVE plan crossed `warn` and
+   *  a sibling profile sits under 50% — a suggestion, never an auto-switch. */
+  failover?: { profileId: string; profileName: string }
+  /** Reset alerts only: the user opted into the flourish. */
+  confetti?: boolean
 }
 
 // ── Provider status feed (Phase-7/08): PUBLIC status endpoints only — no

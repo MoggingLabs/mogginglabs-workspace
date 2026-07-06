@@ -273,6 +273,41 @@ seams; ADR 0007 and docs/12 are both unclaimed. The pack runs BEFORE phase
   corner, danger ink) — armed on any enabled outage, never a takeover.
 - ADR 0005: the enum state + booleans may enter telemetry; note text and
   urls never do (no status telemetry is emitted at all in this step).
+## plans × profiles mechanics (09) — shipped 2026-07-06
+
+- **Fan-out is an adapter property, not a blanket rule**: `perProfile: true`
+  on every REAL adapter makes the seam read one home per profile lane
+  (three profiles → three tiles); the FAKE adapter stays single-lane
+  because its fixture set IS a modeled fan-out — flagging it would square
+  the fixtures. Lane failure is per-lane: a capped profile dims stale while
+  its siblings stay fresh (single-lane adapters keep the old whole-set
+  stale re-serve).
+- **"Active" is Phase-4's order 0, nothing new**: the popover switch and
+  the failover-toast action are ONE implementation (`switchActive`) that
+  swaps `order` values via the EXISTING sanitized `profiles:save` path and
+  announces on the Phase-4 profiles port (palette + failover data follow
+  live). Pointers flip; nothing re-authenticates; running panes keep the
+  env they were spawned with — the popover says so in a one-line hint.
+- **Thresholds are a pure module** (`thresholds.ts`): primary-window
+  evaluation, state keyed `usage.thr.<provider>.<profile>` with the WINDOW
+  EPOCH (resetsAt) inside, persisted in the settings KV → a restart never
+  re-fires a spent threshold. A new epoch re-arms and emits ONE quiet
+  "fresh window". A 0→97 jump costs ONE toast (both levels spent). Copy is
+  composed in the module ONCE; the warn body is the 7/02 verdict line
+  VERBATIM (smoke-asserted module-level AND DOM-vs-IPC end-to-end).
+- **The suggestion, never a switch**: failover rides the warn alert only
+  when the ACTIVE lane crossed AND a sibling sits under 50% (best = idlest);
+  the human clicks, the pointers flip (the gate philosophy). Auto-failover
+  remains the Phase-4 in-pane behavior, untouched.
+- **Identity treatment** mirrors the rail's selection grammar (dense 4px
+  left bar + quiet wash, paint only); severity orders tiles runs-out-first,
+  hotter-first — ordering is layout, wording never moves out of 7/02.
+- Confetti is OPT-IN (default quiet): ~1s of falling flecks anchored to the
+  toast corner, `prefers-reduced-motion` disables it entirely.
+- ADR 0005: alert telemetry carries kind/level classes + booleans
+  (failoverOffered, confetti) — never plan names, percents, or profile
+  names; the switch event carries provider id + a boolean.
+
 - **Marathon-tail flake, investigated 2026-07-06 (not a 7/08 defect):**
   WORKTREE failed twice right after the 33-gate marathon (clean AND forced
   worktree removal both refused — the Windows PTY/conhost-teardown lock

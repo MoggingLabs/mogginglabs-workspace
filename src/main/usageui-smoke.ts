@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { setFakeMode } from '@backend/features/usage'
 import { softGapMs } from './smoke-shell'
 import { getUsageService } from './usage'
+import { getSettingsStore } from './app-settings'
 
 // Env-gated usage-UI smoke (MOGGING_USAGEUI, Phase-7/03). FAKE-adapter world.
 //   1. the gauge lives in the titlebar right cluster; fills track the ACTIVE
@@ -17,6 +18,11 @@ import { getUsageService } from './usage'
 //   5. gauge states are fixture-driven: a hot fixture arms is-warn + the
 //      >=90% badge; an error flip dims to is-stale
 //   6. the gear lands on Settings with the usage section present
+//   7. 7/09 operational: severity orders tiles (runs-out first), the seam's
+//      'default' lane carries the identity treatment until profiles exist,
+//      a re-armed warn threshold toasts the FORMATTER line verbatim with the
+//      failover suggestion, the suggestion click and tile-Enter both drive
+//      the ONE Phase-4 pointer flip, and the one-line hint appears
 export function runUsageUiSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 90000) // safety net
   const wc = win.webContents
@@ -151,12 +157,88 @@ export function runUsageUiSmoke(win: BrowserWindow): void {
       await ES(`document.querySelector('.usage-gear').click()`)
       await sleep(400)
       const gearOk = await ES<boolean>(
-        `!!document.querySelector('.settings-section[data-section="usage"]') && !!document.querySelector('.usage-stub-row[data-provider="fake"]')`
+        `!!document.querySelector('.settings-section[data-section="usage"]') && !!document.querySelector('.usage-stub-row[data-provider="fake"]') && !!document.querySelector('.usage-alert-cfg .usage-thr-warn')`
       )
 
+      // 7 ── 7/09 operational: ordering, identity, thresholds, switching.
+      const kv = getSettingsStore()
+      await ES(`window.__mogging.usage.open()`)
+      // section 5's single-plan fixture is gone; wait for the full set back
+      tries = 0
+      while ((await ES<number>(`document.querySelectorAll('.usage-tile').length`)) !== 11 && tries++ < 40) await sleep(200)
+      // severity orders tiles: exhausted (100%, runs-out) speaks first
+      const firstProfile = await ES<string>(`document.querySelector('.usage-tile')?.dataset.profile ?? ''`)
+      const orderOk = firstProfile === 'exhausted'
+      // no profiles yet -> the seam's 'default' lane carries the treatment
+      const defaultActiveOk = await ES<boolean>(
+        `document.querySelector('.usage-tile[data-profile="default"]').classList.contains('is-active')`
+      )
+      // stage the Phase-4 pair: exhausted is ACTIVE (order 0), an idle sibling
+      kv?.saveProfile({ id: 'exhausted', name: 'Main', provider: 'fake', env: {}, order: 0 })
+      kv?.saveProfile({ id: 'fresh-reset', name: 'Backup', provider: 'fake', env: {}, order: 1 })
+      // re-arm the warn threshold so the next push refires WITH the suggestion
+      kv?.setSetting('usage.thr.fake.exhausted', '')
+      getUsageService()?.refresh()
+      let suggestBody = ''
+      tries = 0
+      while (!suggestBody && tries++ < 40) {
+        await sleep(250)
+        suggestBody = await ES<string>(
+          `(() => { const t = [...document.querySelectorAll('.toast')].find((x) => [...x.querySelectorAll('.toast-action')].some((b) => b.textContent === 'Fail over to Backup')); return t ? (t.querySelector('.toast-body')?.textContent ?? '') : '' })()`
+        )
+      }
+      // toast copy === the 7/02 formatter output, VERBATIM (IPC is the oracle)
+      const exPaceText = await ES<string>(
+        `window.bridge.invoke('usage:list').then((plans) => plans.find((p) => p.profileId === 'exhausted')?.pace?.text ?? '')`
+      )
+      const toastCopyOk = !!suggestBody && suggestBody === exPaceText
+      // identity follows the store: exhausted (order 0) is now the active tile
+      await ES(`window.__mogging.usage.close()`)
+      await ES(`window.__mogging.usage.open()`)
+      await sleep(400)
+      const activeMarkOk = await ES<boolean>(
+        `document.querySelector('.usage-tile[data-profile="exhausted"]').classList.contains('is-active')`
+      )
+      // the suggestion click drives THE switch (one implementation, trigger #2)
+      await ES(
+        `[...document.querySelectorAll('.toast .toast-action')].find((b) => b.textContent === 'Fail over to Backup').click()`
+      )
+      let switchedOk = false
+      tries = 0
+      while (!switchedOk && tries++ < 40) {
+        await sleep(200)
+        const mine = (kv?.listProfiles() ?? []).filter((p) => p.provider === 'fake').sort((a, b) => a.order - b.order)
+        switchedOk = mine[0]?.id === 'fresh-reset'
+      }
+      // treatment follows immediately + the one-line "running panes" hint
+      await ES(`window.__mogging.usage.close()`)
+      await ES(`window.__mogging.usage.open()`)
+      await sleep(400)
+      const activeFollowOk = await ES<boolean>(
+        `document.querySelector('.usage-tile[data-profile="fresh-reset"]').classList.contains('is-active') && !document.querySelector('.usage-tile[data-profile="exhausted"]').classList.contains('is-active')`
+      )
+      const hintOk = await ES<boolean>(
+        `(document.querySelector('.usage-switch-hint')?.textContent ?? '').includes('running panes keep')`
+      )
+      // Enter on a tile is trigger #1 of the same switch: back to Main
+      await ES(
+        `(() => { const t = document.querySelector('.usage-tile[data-profile="exhausted"]'); t.focus(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })()`
+      )
+      let enterOk = false
+      tries = 0
+      while (!enterOk && tries++ < 40) {
+        await sleep(200)
+        const mine = (kv?.listProfiles() ?? []).filter((p) => p.provider === 'fake').sort((a, b) => a.order - b.order)
+        enterOk = mine[0]?.id === 'exhausted'
+      }
+      await ES(`window.__mogging.usage.close()`)
+      kv?.removeProfile('exhausted')
+      kv?.removeProfile('fresh-reset')
+      const operationalOk = orderOk && defaultActiveOk && toastCopyOk && activeMarkOk && switchedOk && activeFollowOk && hintOk && enterOk
+
       const pass =
-        gaugeOk && fillsOk && openFast && expandedOk && tileCount === 11 && groupCount === 1 && verdictsOk && countdownOk && escClosed && awayClosed && warnOk && staleOk && gearOk
-      result = { pass, gaugeOk, fillsOk, openMs, opens, openBudget, openFast, expandedOk, tileCount, groupCount, verdictsOk, countdownOk, escClosed, awayClosed, warnOk, staleOk, gearOk }
+        gaugeOk && fillsOk && openFast && expandedOk && tileCount === 11 && groupCount === 1 && verdictsOk && countdownOk && escClosed && awayClosed && warnOk && staleOk && gearOk && operationalOk
+      result = { pass, gaugeOk, fillsOk, openMs, opens, openBudget, openFast, expandedOk, tileCount, groupCount, verdictsOk, countdownOk, escClosed, awayClosed, warnOk, staleOk, gearOk, operationalOk, orderOk, defaultActiveOk, suggestBody, exPaceText, toastCopyOk, activeMarkOk, switchedOk, activeFollowOk, hintOk, enterOk }
     } catch (e) {
       result = { pass: false, error: e instanceof Error ? e.message : String(e) }
     }

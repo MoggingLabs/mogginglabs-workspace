@@ -3524,9 +3524,78 @@ body.resizing * {
   padding: var(--sp-2);
   border-radius: var(--r-md, 6px);
   outline: none;
+  position: relative;
+  cursor: pointer;
 }
 .usage-tile:focus {
   background: var(--accent-weak);
+}
+/* 7/09 identity treatment — the ACTIVE profile's plan speaks the rail's
+   selection grammar: dense left bar + quiet wash, paint only. */
+.usage-tile.is-active {
+  background: var(--accent-weak);
+}
+.usage-tile.is-active::before {
+  content: '';
+  position: absolute;
+  left: 1px;
+  top: var(--r-md, 6px);
+  bottom: var(--r-md, 6px);
+  width: 4px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+}
+/* The one-line post-switch hint: pointers flipped for NEW launches only. */
+.usage-switch-hint {
+  padding: var(--sp-1) var(--sp-2);
+  font-size: 11px;
+  color: var(--text-mid);
+}
+/* 7/09 Settings § Usage alert editor. */
+.usage-alert-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.usage-thr {
+  width: 60px;
+}
+/* 7/09 reset confetti — OPT-IN, one notch above silence: a ~1s fleck fall
+   anchored to the toast corner, no layout, no takeover. */
+.usage-confetti {
+  position: fixed;
+  top: 8px;
+  right: 12px;
+  width: 240px;
+  height: 140px;
+  pointer-events: none;
+  z-index: 9999;
+  overflow: hidden;
+}
+.usage-confetti-fleck {
+  position: absolute;
+  top: -8px;
+  width: 5px;
+  height: 8px;
+  border-radius: 1px;
+  opacity: 0;
+  animation: usage-confetti-fall 1.1s ease-in forwards;
+}
+@keyframes usage-confetti-fall {
+  0% {
+    opacity: 0.9;
+    transform: translateY(0) rotate(0deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(130px) rotate(200deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .usage-confetti-fleck {
+    animation: none;
+    opacity: 0;
+  }
 }
 .usage-tile-head {
   display: flex;

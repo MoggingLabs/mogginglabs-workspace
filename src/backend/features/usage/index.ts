@@ -22,6 +22,7 @@ export { fetchWebSessionUsage, fixtureCookieBackend, realCookieBackend, type Web
 export { scanCost, costLogDir, priceFor, MODEL_PRICES, CACHE_READ_X, CACHE_WRITE_5M_X, CACHE_WRITE_1H_X, COST_LOG_SUBDIR, type CostScanOptions, type ModelPrice } from './cost'
 export { appendHistory, readHistory, HISTORY_MAX, type HistoryKv } from './history'
 export { createStatusService, normalizeStatusBody, STATUS_CADENCE_MS, type StatusService, type StatusServiceDeps, type StatusFetcher, type StatusProviderRow } from './status'
+export { evaluateThresholds, suggestFailover, type ThresholdKv } from './thresholds'
 
 /** Build the REAL adapters from the catalog (Phase-7/04): one per cli-store
  *  row that has a reader. Claude delegates to the shipped 7/01 adapter (already
@@ -29,17 +30,21 @@ export { createStatusService, normalizeStatusBody, STATUS_CADENCE_MS, type Statu
  *  produces the precise unconfigured/error reason). api-key/cloud-cli/
  *  web-session classes join in 7/05–06. */
 export function buildRealAdapters(keys: ApiKeyDeps, web: WebSessionDeps): UsageAdapter[] {
+  // All real adapters are perProfile (7/09): one home/lane per call — the
+  // seam fans a provider out across its profiles. The FAKE adapter is not:
+  // its fixture set models a full fan-out already.
   const out: UsageAdapter[] = []
   for (const def of USAGE_PROVIDERS) {
     if (def.klass === 'cli-store') {
       if (def.id === 'claude') {
-        out.push(claudeAdapter)
+        out.push({ ...claudeAdapter, perProfile: true })
         continue
       }
       const reader = CLI_STORE_READERS[def.id]
       if (!reader) continue
       out.push({
         id: def.id,
+        perProfile: true,
         detect: async () => ({ ok: true }),
         fetch: async (home, profileId, signal) => [await reader(home, profileId, signal)]
       })
@@ -48,6 +53,7 @@ export function buildRealAdapters(keys: ApiKeyDeps, web: WebSessionDeps): UsageA
       // exists only inside the class's fetch scope.
       out.push({
         id: def.id,
+        perProfile: true,
         detect: async () => ({ ok: true }),
         fetch: async (_home, profileId, signal) => [await fetchApiKeyUsage(def.id, profileId, signal, keys)]
       })
@@ -56,12 +62,14 @@ export function buildRealAdapters(keys: ApiKeyDeps, web: WebSessionDeps): UsageA
       if (!fetcher) continue
       out.push({
         id: def.id,
+        perProfile: true,
         detect: async () => ({ ok: true }),
         fetch: async (_home, profileId) => [await fetcher(profileId)]
       })
     } else if (def.klass === 'web-session') {
       out.push({
         id: def.id,
+        perProfile: true,
         detect: async () => ({ ok: true }),
         fetch: async (_home, profileId, signal) => [await fetchWebSessionUsage(def, profileId, signal, web)]
       })
@@ -148,13 +156,6 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
     return USAGE_CADENCE_MS[preset] ?? USAGE_CADENCE_MS['5m']
   }
 
-  /** The active profile (order 0) for a provider, or null -> default home. */
-  const activeProfile = (id: string): AgentProfile | null => {
-    const forProvider = deps.profiles().filter((p) => p.provider === id)
-    if (!forProvider.length) return null
-    return forProvider.reduce((a, b) => (a.order <= b.order ? a : b))
-  }
-
   const snapshot = (): PlanUsage[] => {
     const all: PlanUsage[] = []
     for (const a of deps.adapters) {
@@ -183,16 +184,27 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
     s.inFlight = true
     s.lastAttempt = now()
     s.fetches++
-    const profile = activeProfile(a.id)
-    const profileId = profile?.id ?? 'default'
-    const home = resolveHome(a.id, profile)
-    const ctl = new AbortController()
-    const timeout = setTimeout(() => ctl.abort(), 10_000)
-    try {
-      const detect = await a.detect(home)
-      if (!detect.ok) {
-        s.lastGood = [
-          {
+    // 7/09 fan-out: a perProfile adapter reads EVERY profile lane — three
+    // profiles, three plan tiles. Others read the active lane only (the FAKE
+    // adapter's fixture set already models a fan-out). Failure is PER LANE:
+    // one capped profile dims stale while its siblings stay fresh.
+    const forProvider = deps
+      .profiles()
+      .filter((p) => p.provider === a.id)
+      .sort((x, y) => x.order - y.order)
+    const lanes: (AgentProfile | null)[] =
+      a.perProfile && forProvider.length > 0 ? forProvider : [forProvider[0] ?? null]
+    const collected: PlanUsage[] = []
+    let anyError = false
+    for (const profile of lanes) {
+      const profileId = profile?.id ?? 'default'
+      const home = resolveHome(a.id, profile)
+      const ctl = new AbortController()
+      const timeout = setTimeout(() => ctl.abort(), 10_000)
+      try {
+        const detect = await a.detect(home)
+        if (!detect.ok) {
+          collected.push({
             providerId: a.id,
             profileId,
             planLabel: '—',
@@ -200,38 +212,42 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
             fetchedAt: now(),
             health: 'unconfigured',
             reason: detect.reason ?? 'not configured'
-          }
-        ]
-        s.consecutiveErrors = 0
-      } else {
-        const plans = await a.fetch(home, profileId, ctl.signal)
-        s.lastGood = plans.map((p) => ({ ...p, windows: p.windows.map((w) => ({ ...w, usedPct: Math.max(0, Math.min(100, w.usedPct)) })) }))
-        s.consecutiveErrors = 0
-        // 7/07: ring each GOOD sample per (provider, window). Fresh only —
-        // a stale re-serve is old data, not a new point.
-        for (const p of s.lastGood) {
-          if (p.health !== 'fresh') continue
-          for (const w of p.windows) appendHistory(deps.kv, p.providerId, w.label, w.usedPct)
+          })
+        } else {
+          const plans = await a.fetch(home, profileId, ctl.signal)
+          collected.push(
+            ...plans.map((p) => ({ ...p, windows: p.windows.map((w) => ({ ...w, usedPct: Math.max(0, Math.min(100, w.usedPct)) })) }))
+          )
         }
+      } catch (e) {
+        anyError = true
+        const reason = e instanceof Error ? e.message : 'usage fetch failed'
+        // Stale is a state, not an error: re-serve this lane's last good
+        // data, dimmed (single-lane adapters re-serve their whole set).
+        const prev = (s.lastGood ?? []).filter(
+          (p) => (p.health === 'fresh' || p.health === 'stale') && (!a.perProfile || p.profileId === profileId)
+        )
+        if (prev.length) collected.push(...prev.map((p) => ({ ...p, health: 'stale' as const, reason })))
+        else
+          collected.push({ providerId: a.id, profileId, planLabel: '—', windows: [], fetchedAt: now(), health: 'error', reason })
+      } finally {
+        clearTimeout(timeout)
       }
-    } catch (e) {
+    }
+    s.lastGood = collected
+    if (anyError) {
       s.errors++
       s.consecutiveErrors++
-      const reason = e instanceof Error ? e.message : 'usage fetch failed'
-      if (s.lastGood?.some((p) => p.health === 'fresh' || p.health === 'stale')) {
-        // Stale is a state, not an error: re-serve the last good data, dimmed.
-        s.lastGood = s.lastGood.map((p) =>
-          p.health === 'fresh' || p.health === 'stale' ? { ...p, health: 'stale', reason } : p
-        )
-      } else {
-        s.lastGood = [
-          { providerId: a.id, profileId, planLabel: '—', windows: [], fetchedAt: now(), health: 'error', reason }
-        ]
-      }
-    } finally {
-      clearTimeout(timeout)
-      s.inFlight = false
+    } else {
+      s.consecutiveErrors = 0
     }
+    // 7/07: ring each GOOD sample per (provider, window). Fresh only —
+    // a stale re-serve is old data, not a new point.
+    for (const p of collected) {
+      if (p.health !== 'fresh') continue
+      for (const w of p.windows) appendHistory(deps.kv, p.providerId, w.label, w.usedPct)
+    }
+    s.inFlight = false
     emit()
     const base = cadenceMs(a.id)
     if (base !== null) {

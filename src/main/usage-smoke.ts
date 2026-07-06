@@ -3,8 +3,8 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mkdirSync, mkdtempSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { setFakeMode, computePace, formatVerdict, PACE_GOLDENS, readCodex, API_KEY_SPECS, fetchVertex, fetchBedrock, scanCost, appendHistory, readHistory, HISTORY_MAX, normalizeStatusBody, createStatusService } from '@backend/features/usage'
-import { USAGE_PROVIDERS, UsageChannels, AllChannels } from '@contracts'
+import { setFakeMode, computePace, formatVerdict, PACE_GOLDENS, readCodex, API_KEY_SPECS, fetchVertex, fetchBedrock, scanCost, appendHistory, readHistory, HISTORY_MAX, normalizeStatusBody, createStatusService, createUsageService, evaluateThresholds } from '@backend/features/usage'
+import { USAGE_PROVIDERS, UsageChannels, AllChannels, type PlanUsageView } from '@contracts'
 import { getUsageService, getUsageStatusService } from './usage'
 import { keySetPlaintext, keySetEnvRef, keyClear, keySlot, resolveKey, setKeyAvailabilityProbeForSmoke, isKeyVaultAvailable } from './usage-keys'
 import { getSettingsStore } from './app-settings'
@@ -28,6 +28,12 @@ import { getSettingsStore } from './app-settings'
 //   hidden-pause, and the APP flow: a fixture OUTAGE relabels a failing
 //   tile "provider outage" through the real renderer, arms the ONE-glyph
 //   icon overlay + tile chip, and disarms on recovery)
+//   (…7/09: 17. plans × profiles — the fan-out reads every profile lane
+//   (3 profiles -> 3 tiles, service-level); the threshold engine single-fires
+//   per (provider, profile, window-epoch) with the 7/02 verdict line
+//   VERBATIM, re-arms across a simulated reset, spends both levels on one
+//   jump, persists spent state in the KV, and arms the failover suggestion
+//   ONLY for the active lane with an idle sibling)
 export function runUsageSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 90000) // safety net
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -462,9 +468,106 @@ export function runUsageSmoke(win: BrowserWindow): void {
       const statusAppOk = appOutageOk && outageRelabeled && overlayOk && chipOk && overlayCleared
       const statusChannelsOk = AllChannels.includes('usage:status') && AllChannels.includes('usage:statusChanged')
 
+      // 17 ── plans × profiles (7/09). (a) the FAN-OUT: a perProfile adapter
+      //       reads EVERY profile lane — three profiles, three plan tiles.
+      const fanKv = new Map<string, string>()
+      const fanProfiles = [
+        { id: 'lane-a', name: 'Lane A', provider: 'fanout', env: {}, order: 0 },
+        { id: 'lane-b', name: 'Lane B', provider: 'fanout', env: {}, order: 1 },
+        { id: 'lane-c', name: 'Lane C', provider: 'fanout', env: {}, order: 2 }
+      ]
+      const fanSvc = createUsageService({
+        adapters: [
+          {
+            id: 'fanout',
+            perProfile: true,
+            detect: async () => ({ ok: true }),
+            fetch: async (_home, profileId) => [
+              { providerId: 'fanout', profileId, planLabel: `Plan ${profileId}`, windows: [{ label: 'Session (5h)', usedPct: 10 }], fetchedAt: Date.now(), health: 'fresh' as const }
+            ]
+          }
+        ],
+        profiles: () => fanProfiles,
+        kv: { get: (k) => fanKv.get(k) ?? null, set: (k, v) => void fanKv.set(k, v) },
+        onChange: () => {},
+        cadenceMsOverride: 600_000
+      })
+      fanSvc.refresh()
+      tries = 0
+      while (fanSvc.list().length < 3 && tries++ < 50) await sleep(100)
+      const fanoutOk =
+        fanSvc.list().length === 3 &&
+        fanSvc
+          .list()
+          .map((p) => p.profileId)
+          .sort()
+          .join(',') === 'lane-a,lane-b,lane-c'
+      fanSvc.stop()
+
+      // (b) the threshold engine: single-fire per (provider, profile, epoch),
+      //     verdict copy VERBATIM, re-arm at reset, failover-feed condition.
+      const tMem = new Map<string, string>()
+      const tkv = { get: (k: string): string | null => tMem.get(k) ?? null, set: (k: string, v: string): void => void tMem.set(k, v) }
+      const tProfiles = [
+        { id: 'p0', name: 'Main', provider: 'prov', env: {}, order: 0 },
+        { id: 'p1', name: 'Backup', provider: 'prov', env: {}, order: 1 }
+      ]
+      const tcfg = { quiet: 80, warn: 95, confetti: false }
+      const E1 = new Date(Date.now() + 3_600_000).toISOString()
+      const E2 = new Date(Date.now() + 7_200_000).toISOString()
+      const mk = (profileId: string, pct: number, resetsAt: string): PlanUsageView => ({
+        providerId: 'prov',
+        profileId,
+        planLabel: `Prov (${profileId})`,
+        windows: [{ label: 'Session (5h)', usedPct: pct, resetsAt, windowMs: 5 * 3_600_000 }],
+        fetchedAt: Date.now(),
+        health: 'fresh'
+      })
+      // first sight arms silently — no alert for an already-warm lane
+      const armedSilently = evaluateThresholds([mk('p0', 50, E1)], tcfg, tProfiles, tkv).length === 0
+      // quiet fires ONCE and carries the 7/02 formatter line VERBATIM
+      const paceReport = computePace({ label: 'Session (5h)', usedPct: 85, resetsAt: E1, windowMs: 5 * 3_600_000 }, Date.now(), { windowMs: 5 * 3_600_000 })
+      const verdictLine = paceReport ? formatVerdict(paceReport, 'Session (5h)') : ''
+      const quietView: PlanUsageView = paceReport
+        ? { ...mk('p0', 85, E1), pace: { verdict: paceReport.verdict, text: verdictLine, deltaText: '+5%', severity: 'warning' } }
+        : mk('p0', 85, E1)
+      const expectQuietBody = paceReport ? verdictLine : '85% of Session (5h) used'
+      const q1 = evaluateThresholds([quietView], tcfg, tProfiles, tkv)
+      const quietFiredOk =
+        q1.length === 1 && q1[0].kind === 'threshold' && q1[0].level === 'quiet' && q1[0].body === expectQuietBody && q1[0].title === 'Prov (p0) — 80% of Session (5h) used'
+      const singleFireOk = evaluateThresholds([quietView], tcfg, tProfiles, tkv).length === 0
+      // warn on the ACTIVE lane + an idle sibling -> the failover suggestion
+      const w1 = evaluateThresholds([mk('p0', 96, E1), mk('p1', 10, E1)], tcfg, tProfiles, tkv)
+      const warnFailoverOk = w1.length === 1 && w1[0].level === 'warn' && w1[0].failover?.profileId === 'p1' && w1[0].failover?.profileName === 'Backup'
+      const warnOnceOk = evaluateThresholds([mk('p0', 96, E1), mk('p1', 10, E1)], tcfg, tProfiles, tkv).length === 0
+      // a NON-active lane crossing warn never suggests a switch
+      const kvB = new Map<string, string>()
+      const n1 = evaluateThresholds([mk('p1', 96, E1), mk('p0', 10, E1)], tcfg, tProfiles, { get: (k) => kvB.get(k) ?? null, set: (k, v) => void kvB.set(k, v) })
+      const nonActiveNoSuggest = n1.length === 1 && n1[0].level === 'warn' && !n1[0].failover
+      // a hot sibling (>=50%) blocks the suggestion
+      const kvC = new Map<string, string>()
+      const hot1 = evaluateThresholds([mk('p0', 96, E1), mk('p1', 60, E1)], tcfg, tProfiles, { get: (k) => kvC.get(k) ?? null, set: (k, v) => void kvC.set(k, v) })
+      const siblingHotNoSuggest = hot1.length === 1 && hot1[0].level === 'warn' && !hot1[0].failover
+      // a 0->97 jump costs ONE toast (both levels spent)
+      const kvD = new Map<string, string>()
+      const dkv = { get: (k: string): string | null => kvD.get(k) ?? null, set: (k: string, v: string): void => void kvD.set(k, v) }
+      const j1 = evaluateThresholds([mk('p0', 97, E1)], tcfg, tProfiles, dkv)
+      const j2 = evaluateThresholds([mk('p0', 85, E1)], tcfg, tProfiles, dkv)
+      const oneToastPerJump = j1.length === 1 && j1[0].level === 'warn' && j2.length === 0
+      // reset: a NEW epoch re-arms and fires ONE quiet "fresh window"
+      const r1 = evaluateThresholds([mk('p0', 5, E2)], tcfg, tProfiles, tkv)
+      const r2 = evaluateThresholds([mk('p0', 5, E2)], tcfg, tProfiles, tkv)
+      const q2 = evaluateThresholds([mk('p0', 85, E2)], tcfg, tProfiles, tkv)
+      const resetRearmOk = r1.length === 1 && r1[0].kind === 'reset' && r2.length === 0 && q2.length === 1 && q2[0].level === 'quiet'
+      // restart safety is the KV itself: the spent state survives as app state
+      const thrPersistOk = (tMem.get('usage.thr.prov.p0') ?? '').includes(E2)
+      const thrOk =
+        armedSilently && quietFiredOk && singleFireOk && warnFailoverOk && warnOnceOk && nonActiveNoSuggest && siblingHotNoSuggest && oneToastPerJump && resetRearmOk && thrPersistOk
+      const alertChannelsOk = AllChannels.includes('usage:alert') && AllChannels.includes('usage:alertCfgGet') && AllChannels.includes('usage:alertCfgSet')
+
       const pass =
-        shapeOk && cadenceOk && staleOk && backoffOk && hiddenOk && resumeOk && grepClean && goldenOk && catalogOk && codexOk && codexDegrades && keysOk && noGetterOk && specsOk && cloudOk && costOk && histOk && costChannelsOk && statusNormOk && statusSvcOk && statusAppOk && statusChannelsOk
-      result = { pass, shapeOk, cadenceOk, staleOk, backoffOk, hiddenOk, resumeOk, grepClean, goldenOk, goldenFails, catalogOk, catalogFails, codexOk, codexDegrades, vaultAvailable, keysOk, cipherOk, dbBytesOk, roundtripOk, replaceOk, clearOk, refusalOk, envRefOk, envLiteralRefusedOk, noGetterOk, specsOk, cloudOk, costOk, codexScanOk, claudeScanOk, costDegrades, histOk, ringTruncOk, ringClampOk, ringPolledOk, costChannelsOk, statusNormOk, statusSvcOk, enabledOnlyOk, unknownAfterFail, backoffSkipOk, statusHiddenOk, statusResumeOk, statusAppOk, appOutageOk, outageRelabeled, overlayOk, chipOk, overlayCleared, statusChannelsOk, providers: USAGE_PROVIDERS.length, goldens: PACE_GOLDENS.length, tiles: snap.length, debug: svc.debug() }
+        shapeOk && cadenceOk && staleOk && backoffOk && hiddenOk && resumeOk && grepClean && goldenOk && catalogOk && codexOk && codexDegrades && keysOk && noGetterOk && specsOk && cloudOk && costOk && histOk && costChannelsOk && statusNormOk && statusSvcOk && statusAppOk && statusChannelsOk && fanoutOk && thrOk && alertChannelsOk
+      result = { pass, shapeOk, cadenceOk, staleOk, backoffOk, hiddenOk, resumeOk, grepClean, goldenOk, goldenFails, catalogOk, catalogFails, codexOk, codexDegrades, vaultAvailable, keysOk, cipherOk, dbBytesOk, roundtripOk, replaceOk, clearOk, refusalOk, envRefOk, envLiteralRefusedOk, noGetterOk, specsOk, cloudOk, costOk, codexScanOk, claudeScanOk, costDegrades, histOk, ringTruncOk, ringClampOk, ringPolledOk, costChannelsOk, statusNormOk, statusSvcOk, enabledOnlyOk, unknownAfterFail, backoffSkipOk, statusHiddenOk, statusResumeOk, statusAppOk, appOutageOk, outageRelabeled, overlayOk, chipOk, overlayCleared, statusChannelsOk, fanoutOk, thrOk, armedSilently, quietFiredOk, singleFireOk, warnFailoverOk, warnOnceOk, nonActiveNoSuggest, siblingHotNoSuggest, oneToastPerJump, resetRearmOk, thrPersistOk, alertChannelsOk, providers: USAGE_PROVIDERS.length, goldens: PACE_GOLDENS.length, tiles: snap.length, debug: svc.debug() }
     } catch (e) {
       result = { pass: false, error: e instanceof Error ? e.message : String(e) }
     }

@@ -12,6 +12,8 @@
  *   usage:history   ({ providerId, window }) -> number[] (7/07: OUR KV ring)
  *   usage:status    -> ProviderStatus[]       (7/08: public-endpoint feed)
  *   usage:statusChanged  main -> renderer: ProviderStatus[] (pushed on change)
+ *   usage:alert          main -> renderer: UsageAlert (7/09: house toast copy)
+ *   usage:alertCfgGet/Set -> UsageAlertConfig (7/09: thresholds + confetti)
  */
 
 import type { PlanUsage, PaceVerdict, UsageCadence } from '../usage'
@@ -51,4 +53,4 @@ export interface UsageConfigPatch {
   cadence?: UsageCadence
 }
 
-export type { PlanUsage, UsageWindow, UsageHealth, UsageCadence, CostScan, CostDay, ProviderStatus, ProviderStatusState } from '../usage'
+export type { PlanUsage, UsageWindow, UsageHealth, UsageCadence, CostScan, CostDay, ProviderStatus, ProviderStatusState, UsageAlert, UsageAlertConfig } from '../usage'

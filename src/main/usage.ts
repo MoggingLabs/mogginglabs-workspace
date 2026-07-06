@@ -1,6 +1,6 @@
 import { app, ipcMain, type BrowserWindow } from 'electron'
-import { UsageChannels, USAGE_CADENCES, USAGE_PROVIDERS, findProvider, type PlanUsage, type UsageCadence } from '@contracts'
-import type { PlanUsageView, PaceView, UsageConfig, UsageConfigPatch, CostScan } from '@contracts'
+import { UsageChannels, USAGE_CADENCES, USAGE_PROVIDERS, USAGE_ALERT_DEFAULTS, findProvider, type PlanUsage, type UsageCadence } from '@contracts'
+import type { PlanUsageView, PaceView, UsageConfig, UsageConfigPatch, CostScan, UsageAlertConfig } from '@contracts'
 import {
   createUsageService,
   fakeAdapter,
@@ -15,6 +15,7 @@ import {
   costLogDir,
   readHistory,
   createStatusService,
+  evaluateThresholds,
   type StatusService,
   type UsageService
 } from '@backend/features/usage'
@@ -158,6 +159,35 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
       return relabeled !== p && view.pace ? { ...view, pace: undefined } : view
     })
 
+  // ── 7/09 threshold alerts: evaluated on every poller push (new samples
+  // only — a re-enrich for status is not a new sample). Copy composed in the
+  // backend module, single-fire state in the settings KV (restart-safe),
+  // the toast rides the alert channel to the HOUSE toast system.
+  const alertCfg = (): UsageAlertConfig => {
+    const kv = getSettingsStore()
+    const num = (key: string, dflt: number): number => {
+      const v = Number(kv?.getSetting(key))
+      return Number.isFinite(v) && v >= 1 && v <= 100 ? Math.round(v) : dflt
+    }
+    return {
+      quiet: num('usage.alert.quiet', USAGE_ALERT_DEFAULTS.quiet),
+      warn: num('usage.alert.warn', USAGE_ALERT_DEFAULTS.warn),
+      confetti: kv?.getSetting('usage.alert.confetti') === '1'
+    }
+  }
+  const pushAlerts = (views: PlanUsageView[]): void => {
+    const kv = getSettingsStore()
+    const win = getWin()
+    if (!kv || !win) return
+    const cfg = alertCfg()
+    const alerts = evaluateThresholds(views, cfg, kv.listProfiles(), {
+      get: (k) => kv.getSetting(k) ?? null,
+      set: (k, v) => kv.setSetting(k, v)
+    })
+    for (const a of alerts)
+      win.webContents.send(UsageChannels.alert, a.kind === 'reset' && cfg.confetti ? { ...a, confetti: true } : a)
+  }
+
   service = createUsageService({
     adapters,
     profiles: () => getSettingsStore()?.listProfiles() ?? [],
@@ -165,13 +195,27 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
       get: (k) => getSettingsStore()?.getSetting(k) ?? null,
       set: (k, v) => getSettingsStore()?.setSetting(k, v)
     },
-    onChange: (plans) => getWin()?.webContents.send(UsageChannels.changed, enrich(plans)),
+    onChange: (plans) => {
+      const views = enrich(plans)
+      getWin()?.webContents.send(UsageChannels.changed, views)
+      pushAlerts(views) // new samples -> the thresholds get one look
+    },
     cadenceMsOverride
   })
 
   ipcMain.handle(UsageChannels.list, () => enrich(service?.list() ?? []))
   ipcMain.handle(UsageChannels.refresh, () => service?.refresh())
   ipcMain.handle(UsageChannels.status, () => statusService?.list() ?? [])
+  // 7/09 alert config: two shoulder-tap pcts + the confetti opt-in.
+  ipcMain.handle(UsageChannels.alertCfgGet, (): UsageAlertConfig => alertCfg())
+  ipcMain.handle(UsageChannels.alertCfgSet, (_e, raw: unknown) => {
+    const p = raw as { quiet?: number; warn?: number; confetti?: boolean } | null
+    const kv = getSettingsStore()
+    if (!p || !kv) return
+    if (typeof p.quiet === 'number' && p.quiet >= 1 && p.quiet <= 100) kv.setSetting('usage.alert.quiet', String(Math.round(p.quiet)))
+    if (typeof p.warn === 'number' && p.warn >= 1 && p.warn <= 100) kv.setSetting('usage.alert.warn', String(Math.round(p.warn)))
+    if (typeof p.confetti === 'boolean') kv.setSetting('usage.alert.confetti', p.confetti ? '1' : '0')
+  })
 
   // The 7/03 settings stub's surface (12 grows it): enable + cadence per provider.
   ipcMain.handle(UsageChannels.configGet, (): UsageConfig => {
