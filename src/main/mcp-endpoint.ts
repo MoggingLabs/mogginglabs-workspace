@@ -4,6 +4,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { agentAct, agentControlDebug } from './browser-dock'
+import { handleUsageCall } from './usage'
 import type { BrowserAgentVerb, BrowserAgentVerbName } from '@contracts'
 
 /**
@@ -124,8 +125,18 @@ export function startMcpEndpoint(): void {
           return
         }
         if (msg.t === 'call' && typeof msg.id === 'number' && typeof msg.name === 'string') {
-          const verb = toVerb(msg.name, msg.args ?? {})
           const id = msg.id
+          // 7/11: `usage.*` request types for the mogging CLI — SAME frame,
+          // SAME handshake, no new listener (daemon stays v3, untouched).
+          // Deliberately NOT in the welcome tools list: usage verbs are for
+          // the CLI, never advertised to agents through the MCP server.
+          if (msg.name.startsWith('usage.')) {
+            void handleUsageCall(msg.name, msg.args ?? {}).then((r) => {
+              sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n')
+            })
+            continue
+          }
+          const verb = toVerb(msg.name, msg.args ?? {})
           if (!verb) {
             sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: 'unknown-tool' }) + '\n')
             continue

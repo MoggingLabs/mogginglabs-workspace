@@ -17,6 +17,7 @@ import {
   readHistory,
   createStatusService,
   evaluateThresholds,
+  COST_LOG_SUBDIR,
   type StatusService,
   type UsageService
 } from '@backend/features/usage'
@@ -42,6 +43,51 @@ export function getUsageService(): UsageService | null {
 /** Smoke/gallery hook: the 7/08 status feed (main-side only). */
 export function getUsageStatusService(): StatusService | null {
   return statusService
+}
+
+// ── 7/11: the `mogging usage` verbs ride the EXISTING authed app endpoint
+// (6/05b) as `usage.*` call names — no new listener, no daemon change (v3
+// intact). These accessors are assigned by registerUsage; the endpoint
+// dispatches here. Key material flows ONE way (set/clear) — there is no
+// usage.getKey, by design, and no frame ever echoes a value.
+let cliViews: (() => PlanUsageView[]) | null = null
+let cliCost: ((providerId: string) => CostScan) | null = null
+let cliProviders: (() => Record<string, unknown>[]) | null = null
+
+export async function handleUsageCall(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; reason?: string } & Record<string, unknown>> {
+  const provider = typeof args.provider === 'string' && args.provider ? args.provider : undefined
+  if (!cliViews) return { ok: false, reason: 'usage not ready' }
+  switch (name) {
+    case 'usage.list':
+      // The SAME enriched views the popover renders — one formatter, verbatim.
+      return { ok: true, plans: cliViews() }
+    case 'usage.providers':
+      return { ok: true, providers: cliProviders?.() ?? [] }
+    case 'usage.cost': {
+      const ids = !provider || provider === 'all' ? Object.keys(COST_LOG_SUBDIR) : [provider]
+      return { ok: true, scans: ids.map((id) => cliCost?.(id)).filter(Boolean) }
+    }
+    case 'usage.refresh':
+      service?.refresh(provider)
+      return { ok: true }
+    case 'usage.setKey': {
+      const value = typeof args.value === 'string' ? args.value : ''
+      if (!provider || !value) return { ok: false, reason: 'bad request' }
+      const out = keySetPlaintext(provider, value)
+      if (out.ok) {
+        getSettingsStore()?.setSetting(`usage.enabled.${provider}`, '1')
+        service?.refresh(provider)
+      }
+      return out // ok/reason only — the plaintext is NEVER echoed (ADR 0007.a)
+    }
+    case 'usage.clearKey':
+      if (!provider) return { ok: false, reason: 'bad request' }
+      keyClear(provider)
+      service?.refresh(provider)
+      return { ok: true }
+    default:
+      return { ok: false, reason: 'unknown-tool' }
+  }
 }
 
 /** Window length inferred from the label until 7/04's catalog carries
@@ -350,16 +396,41 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
   // any other smoke gets a labeled empty scan; real log dirs are touched in a
   // real session alone. No log path, spend figure, or token count leaves the
   // machine (ADR 0005) — these are render-only payloads.
-  ipcMain.handle(UsageChannels.cost, (_e, providerId: unknown): CostScan => {
-    if (typeof providerId !== 'string' || !providerId)
-      return { providerId: '', days: [], currency: 'USD', reason: 'bad request' }
+  // One cost-scan rule for BOTH consumers (IPC + the 7/11 CLI endpoint):
+  // fixture world scans only the seeded dir; other smokes get a labeled
+  // empty; real known log dirs in a real session alone.
+  const costScanFor = (providerId: string): CostScan => {
     if (isFixtureWorld) return scanCost(providerId, process.env.MOGGING_USAGE_COSTDIR ?? null)
     if (isSmoke) return { providerId, days: [], currency: 'USD', reason: 'cost scan is disabled under smoke' }
     // The ACTIVE profile's home, same rule as the poller (order 0 wins).
     const forProvider = (getSettingsStore()?.listProfiles() ?? []).filter((p) => p.provider === providerId)
     const profile = forProvider.length ? forProvider.reduce((a, b) => (a.order <= b.order ? a : b)) : null
     return scanCost(providerId, costLogDir(providerId, resolveHome(providerId, profile)))
+  }
+  ipcMain.handle(UsageChannels.cost, (_e, providerId: unknown): CostScan => {
+    if (typeof providerId !== 'string' || !providerId)
+      return { providerId: '', days: [], currency: 'USD', reason: 'bad request' }
+    return costScanFor(providerId)
   })
+
+  // 7/11: hand the CLI endpoint its accessors (same enrich, same cost rule,
+  // same provider composition as the Settings stub).
+  cliViews = () => enrich(service?.list() ?? [])
+  cliCost = costScanFor
+  cliProviders = () =>
+    adapters.map((a) => {
+      const def = findProvider(a.id)
+      const kv = getSettingsStore()
+      const plans = service?.list().filter((p) => p.providerId === a.id) ?? []
+      return {
+        id: a.id,
+        label: def?.label ?? a.id,
+        klass: def?.klass ?? 'local',
+        enabled: kv?.getSetting(`usage.enabled.${a.id}`) !== '0',
+        key: keySlot(a.id).kind,
+        health: plans[0]?.health ?? 'unconfigured'
+      }
+    })
   ipcMain.handle(UsageChannels.history, (_e, raw: unknown): number[] => {
     const p = raw as { providerId?: string; window?: string } | null
     if (!p || typeof p.providerId !== 'string' || typeof p.window !== 'string') return []

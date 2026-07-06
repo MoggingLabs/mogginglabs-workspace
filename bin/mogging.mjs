@@ -24,7 +24,8 @@ const PROTOCOL_VERSION = 3
 const argv = process.argv.slice(2)
 const cmd = argv[0]
 
-if (cmd === 'notify') runNotify(argv.slice(1))
+if (cmd === 'usage') runUsage(argv.slice(1))
+else if (cmd === 'notify') runNotify(argv.slice(1))
 else if (cmd === 'list') runList()
 else if (cmd === 'send') runSend(argv.slice(1))
 else if (cmd === 'send-key') runSendKey(argv.slice(1))
@@ -54,9 +55,268 @@ function usage(code) {
       '       mogging mail send [--to <pane>|all] <text...> | mail read [--since <id>] [--json]\n' +
       '       mogging role <pane> <architect|worker|reviewer>\n' +
       '       mogging claim <pattern> | release <pattern|--all> | owners [--json]   (in-pane)\n' +
-      '       mogging approve <branch> (reviewer pane only) | approvals [--json]\n'
+      '       mogging approve <branch> (reviewer pane only) | approvals [--json]\n' +
+      '       mogging usage [--json] | usage cost [--provider <id|all>] [--json]\n' +
+      '       mogging usage providers [--json] | usage refresh [--provider <id>]\n' +
+      '       mogging usage set-key --provider <id> --stdin | usage clear-key --provider <id>\n'
   )
   process.exit(code)
+}
+
+// --- mogging usage (Phase-7/11) --------------------------------------------------------------------
+// Usage verbs ride the APP endpoint (the 6/05b token-authed local socket that
+// already carries browser control) — one more request type, NOT a new listener;
+// the daemon protocol stays at v3, untouched. Verdict + reset strings arrive
+// pre-formatted from the app's ONE formatter (7/02, 7/10) and print VERBATIM.
+// Keys travel stdin -> one authed frame -> the 0007.a write-only vault; there
+// is no get-key verb, by design. Exit codes: 0 ok · 1 rejected · 2 usage ·
+// 3 app-not-running · 4 auth refused.
+
+function runUsage(args) {
+  const sub = args[0] && !args[0].startsWith('--') ? args[0] : null
+  if (sub === 'cost') runUsageCost(args.slice(1))
+  else if (sub === 'providers') runUsageProviders(args.slice(1))
+  else if (sub === 'refresh') runUsageRefresh(args.slice(1))
+  else if (sub === 'set-key') runUsageSetKey(args.slice(1))
+  else if (sub === 'clear-key') runUsageClearKey(args.slice(1))
+  else if (sub === null) runUsageSnapshot(args)
+  else usage(2) // no get-key, no surprises — unknown subverbs are usage errors
+}
+
+function appEndpointFilePath() {
+  const base =
+    process.platform === 'win32'
+      ? process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
+      : process.env.XDG_RUNTIME_DIR || join(homedir(), 'Library', 'Application Support')
+  return join(base, 'MoggingLabs', 'run', 'v' + PROTOCOL_VERSION, 'browser-control.json')
+}
+
+/** An authed session against the APP endpoint (promise-based calls, so a
+ *  verb can make several). Same handshake the MCP server uses; the token
+ *  never leaves this process except in the hello frame. */
+function withApp(onReady, { timeoutMs = 15000 } = {}) {
+  let ep
+  try {
+    ep = JSON.parse(readFileSync(appEndpointFilePath(), 'utf8'))
+  } catch {
+    process.stderr.write('mogging usage: app not running (no app endpoint found)\n')
+    process.exit(3)
+  }
+  const sock = net.connect(ep.address)
+  sock.setEncoding('utf8')
+  let buf = ''
+  let settled = false
+  let nextId = 1
+  const waiters = new Map()
+  const finish = (code) => {
+    if (settled) return
+    settled = true
+    clearTimeout(timer)
+    try {
+      sock.destroy()
+    } catch {
+      /* ignore */
+    }
+    process.exit(code)
+  }
+  const timer = setTimeout(() => {
+    process.stderr.write('mogging usage: app did not respond in time\n')
+    finish(3)
+  }, timeoutMs)
+  const api = {
+    call: (name, args) =>
+      new Promise((res) => {
+        const id = nextId++
+        waiters.set(id, res)
+        sock.write(JSON.stringify({ t: 'call', id, name, args }) + '\n')
+      }),
+    finish
+  }
+  sock.on('connect', () => {
+    sock.write(JSON.stringify({ t: 'hello', token: ep.token }) + '\n')
+  })
+  sock.on('data', (chunk) => {
+    buf += chunk
+    let i
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i)
+      buf = buf.slice(i + 1)
+      if (!line) continue
+      let m
+      try {
+        m = JSON.parse(line)
+      } catch {
+        continue
+      }
+      if (m.t === 'welcome') void onReady(api)
+      else if (m.t === 'error') {
+        process.stderr.write('mogging usage: app refused the token (auth)\n')
+        finish(4)
+      } else if (m.t === 'result') {
+        const w = waiters.get(m.id)
+        waiters.delete(m.id)
+        if (w) w(m)
+      }
+    }
+  })
+  sock.on('error', (e) => {
+    process.stderr.write('mogging usage: ' + e.message + '\n')
+    finish(3)
+  })
+}
+
+function usageFlag(args, name) {
+  const i = args.indexOf(name)
+  return i >= 0 ? args[i + 1] : undefined
+}
+
+/** One line per (provider, plan): windows + reset + THE verdict + health. */
+function printPlans(plans) {
+  if (!plans.length) {
+    process.stdout.write('no usage sources enabled\n')
+    return
+  }
+  for (const p of plans) {
+    const windows = p.windows
+      .map((w) => `${w.label} ${Math.round(w.usedPct)}%${w.resetText ? ` (${w.resetText})` : ''}`)
+      .join(' · ')
+    const verdict = p.pace ? p.pace.text : (p.reason ?? '')
+    const parts = [`${p.providerId}/${p.profileId}`, p.planLabel, windows, verdict, `[${p.health}]`].filter(Boolean)
+    process.stdout.write(parts.join(' · ') + '\n')
+  }
+}
+
+function runUsageSnapshot(args) {
+  const asJson = args.includes('--json')
+  withApp(async (api) => {
+    const m = await api.call('usage.list', {})
+    if (!m.ok) {
+      process.stderr.write('mogging usage: ' + (m.reason || 'error') + '\n')
+      api.finish(1)
+      return
+    }
+    if (asJson) process.stdout.write(JSON.stringify(m.plans) + '\n')
+    else printPlans(m.plans ?? [])
+    api.finish(0)
+  })
+}
+
+function runUsageCost(args) {
+  const asJson = args.includes('--json')
+  const provider = usageFlag(args, '--provider') ?? 'all'
+  withApp(async (api) => {
+    const m = await api.call('usage.cost', { provider })
+    if (!m.ok) {
+      process.stderr.write('mogging usage cost: ' + (m.reason || 'error') + '\n')
+      api.finish(1)
+      return
+    }
+    const scans = m.scans ?? []
+    if (asJson) {
+      process.stdout.write(JSON.stringify(scans) + '\n')
+    } else {
+      for (const scan of scans) {
+        process.stdout.write(scan.providerId + (scan.reason ? ` — ${scan.reason}` : '') + '\n')
+        let total = 0
+        for (const d of scan.days) {
+          total += d.spend
+          process.stdout.write(`  ${d.date}  ${scan.currency} ${d.spend.toFixed(2)}  ${d.tokens.toLocaleString()} tokens\n`)
+        }
+        if (scan.days.length) process.stdout.write(`  total ${scan.currency} ${total.toFixed(2)}\n`)
+      }
+    }
+    api.finish(0)
+  })
+}
+
+function runUsageProviders(args) {
+  const asJson = args.includes('--json')
+  withApp(async (api) => {
+    const m = await api.call('usage.providers', {})
+    if (!m.ok) {
+      process.stderr.write('mogging usage providers: ' + (m.reason || 'error') + '\n')
+      api.finish(1)
+      return
+    }
+    const rows = m.providers ?? []
+    if (asJson) {
+      process.stdout.write(JSON.stringify(rows) + '\n')
+    } else {
+      for (const r of rows) {
+        process.stdout.write(
+          `${r.id}  ${r.klass}  ${r.enabled ? 'enabled' : 'disabled'}  key:${r.key ?? 'none'}  ${r.health ?? ''}\n`
+        )
+      }
+    }
+    api.finish(0)
+  })
+}
+
+function runUsageRefresh(args) {
+  const provider = usageFlag(args, '--provider')
+  const started = Date.now()
+  withApp(async (api) => {
+    const poke = await api.call('usage.refresh', provider ? { provider } : {})
+    if (!poke.ok) {
+      process.stderr.write('mogging usage refresh: ' + (poke.reason || 'error') + '\n')
+      api.finish(1)
+      return
+    }
+    // Bounded wait for the NEXT snapshot (a fetchedAt at/after the poke).
+    for (;;) {
+      const m = await api.call('usage.list', {})
+      const plans = m.ok ? (m.plans ?? []) : []
+      const fresh = plans.some((p) => p.fetchedAt >= started)
+      if (fresh || Date.now() - started > 10_000) {
+        printPlans(plans)
+        api.finish(0)
+        return
+      }
+      await new Promise((r) => setTimeout(r, 400))
+    }
+  })
+}
+
+function runUsageSetKey(args) {
+  const provider = usageFlag(args, '--provider')
+  if (!provider || !args.includes('--stdin')) usage(2)
+  // The key travels stdin -> ONE authed frame -> the 0007.a write-only vault.
+  // Never an argv, never echoed, never readable back (no get-key exists).
+  let data = ''
+  process.stdin.setEncoding('utf8')
+  process.stdin.on('data', (c) => (data += c))
+  process.stdin.on('end', () => {
+    const value = data.replace(/\r?\n$/, '')
+    if (!value) {
+      process.stderr.write('mogging usage set-key: empty key on stdin\n')
+      process.exit(2)
+    }
+    withApp(async (api) => {
+      const m = await api.call('usage.setKey', { provider, value })
+      if (m.ok) {
+        process.stdout.write(`mogging: key for ${provider} stored (write-only)\n`)
+        api.finish(0)
+      } else {
+        process.stderr.write('mogging usage set-key: refused — ' + (m.reason || 'error') + '\n')
+        api.finish(1)
+      }
+    })
+  })
+}
+
+function runUsageClearKey(args) {
+  const provider = usageFlag(args, '--provider')
+  if (!provider) usage(2)
+  withApp(async (api) => {
+    const m = await api.call('usage.clearKey', { provider })
+    if (m.ok) {
+      process.stdout.write(`mogging: key for ${provider} cleared\n`)
+      api.finish(0)
+    } else {
+      process.stderr.write('mogging usage clear-key: ' + (m.reason || 'error') + '\n')
+      api.finish(1)
+    }
+  })
 }
 
 // --- mogging approve/approvals (Phase-4/03 reviewer gate) -----------------------------------------

@@ -340,6 +340,34 @@ seams; ADR 0007 and docs/12 are both unclaimed. The pack runs BEFORE phase
   hard runs-out = severity winner; zeta 96% at 99% elapsed = on-pace usage
   winner) so merged vs auto are separable assertions.
 
+## CLI mechanics (11) — shipped 2026-07-06
+
+- **The verbs are one more request type on the 6/05b app endpoint** —
+  `usage.*` names on the SAME `call` frame, same hello/welcome handshake,
+  same 0600 endpoint file. No new listener, no daemon change (v3 intact).
+  The names are deliberately NOT in the endpoint's welcome tools list: the
+  MCP server never advertises usage verbs to agents.
+- **One wording source holds across process boundaries**: the endpoint
+  serves the SAME enrich the popover renders (verdict = 7/02 formatter,
+  reset = 7/10 formatter); the CLI prints both verbatim. The smoke brackets
+  the CLI call with two endpoint reads so a minute boundary can't flake
+  the equality assert.
+- **Keys ride stdin -> one authed frame -> the 0007.a vault** (WRITE-ONLY);
+  `usage get-key` is a usage error by construction, smoke-asserted; the
+  piped value appears in no CLI output and no verdict JSON (grep).
+- **Real-session dev check (this machine, 2026-07-06)**: against a plain
+  `npm run dev` boot — Claude Session 4% / Weekly 26% with "Behind pace —
+  ~47% likely unused at reset" (popover wording, verbatim), Codex (prolite)
+  22%/42% honest-stale, all not-wired rows honestly unconfigured; the
+  claude cost scan printed the real per-day table (total USD 3490.17 over
+  the window); refresh exit 0.
+- **A finding worth remembering**: the world-detection heuristic treats ANY
+  `MOGGING_*` env as a smoke (adapters empty, cost disabled) — so a
+  MOGGING_USERDATA-isolated boot can never show real adapters. Real-session
+  checks must run env-clean; the smokes are unaffected (qa-smokes always
+  sets the full smoke env).
+- Gate count 33 → **34** (USAGECLI joins the sweep).
+
 - **Marathon-tail flake, investigated 2026-07-06 (not a 7/08 defect):**
   WORKTREE failed twice right after the 33-gate marathon (clean AND forced
   worktree removal both refused — the Windows PTY/conhost-teardown lock

@@ -133,6 +133,7 @@ run_smoke PRODUCT      MOGGING_PRODUCT   1 300 product
 run_smoke USAGE        MOGGING_USAGE     1 150 usage
 run_smoke USAGEUI      MOGGING_USAGEUI   1 180 usageui
 run_smoke WEBUSAGE     MOGGING_WEBUSAGE  1 150 webusage
+run_smoke USAGECLI     MOGGING_USAGECLI  1 180 usagecli
 
 echo ""
 echo "══ SWEEP RESULTS ══"
