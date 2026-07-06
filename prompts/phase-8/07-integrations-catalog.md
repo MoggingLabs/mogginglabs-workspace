@@ -32,8 +32,8 @@ roster: the site's `src/lib/site.ts`.
    doubles as the presets' UPDATE FEED — explicit, previewed, never
    auto-applied, never trusted.
 5. **Authorize**: per CLI, orchestrate its OWN MCP-OAuth in a managed
-   PTY (auth-settings pattern — e.g. `/mcp` authorize). Vendor
-   authenticates; the CLI stores the token; we observe STATUS only —
+   PTY (the auth-settings pattern). Vendor authenticates; the CLI
+   stores the token; we observe STATUS only —
    N approve-clicks, N tokens, per-CLI revocation, zero us. Per-CLI
    capability table: who speaks remote-HTTP+OAuth at which version
    floor; gaps dim the chip. NO `mcp-remote` proxy in v1.
@@ -58,7 +58,7 @@ roster: the site's `src/lib/site.ts`.
   mapped — no silent drops.
 - Scope-per-workspace is the default UX — 09's plans are the mechanism;
   Connect never implies everywhere.
-- MCPCAT gate green; gallery: the grid.
+- MCPCAT gate green; gallery: grid.
 
 ## Checks that must be green
 - `npm run typecheck` → 0; build ok; boundaries clean.
