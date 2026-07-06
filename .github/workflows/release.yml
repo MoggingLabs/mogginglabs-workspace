@@ -124,9 +124,14 @@ jobs:
       # runner-native arch — see the install step's note).
       # shell: bash — windows pwsh re-tokenizes the -c.key=value flags into a
       # config-file path (see ci.yml signing-dryrun).
+      # macOS: `dmg:arm64 zip:arm64` — the explicit target:arch form. A bare
+      # `--arm64` did NOT restrict the build: electron-builder still packaged x64
+      # from the config's arch list, and with npmRebuild=false the x64 app got the
+      # arm64 direct-gyp .node files -> a crash-on-Intel artifact (run 28759409843,
+      # x64 assets deleted). This form builds ONLY arm64, so the feed is honest.
       - name: Package (sign/notarize when secrets present)
         shell: bash
-        run: npx electron-builder --publish never -c.npmRebuild=false -c.buildDependenciesFromSource=false ${{ runner.os == 'macOS' && '--arm64' || '' }}
+        run: npx electron-builder ${{ runner.os == 'macOS' && '--mac dmg:arm64 zip:arm64' || '' }} --publish never -c.npmRebuild=false -c.buildDependenciesFromSource=false
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Keychain identity lookup stays OFF: with no cert it lets mac artifacts
