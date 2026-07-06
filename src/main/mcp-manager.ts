@@ -1,24 +1,35 @@
-import { app, ipcMain } from 'electron'
+import { app, dialog, ipcMain } from 'electron'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import {
   applyState,
+  capabilityFor,
+  fetchRegistry,
+  findPreset,
   findWriter,
   listStoredServers,
+  parseCliMcpList,
+  presetBlockedFor,
+  presetToServerEntries,
   removeStoredServer,
   saveServer,
   sha256,
+  CLI_CAPABILITIES,
+  MCP_PRESETS,
   MCP_WRITERS,
   type CliHomes,
   type GrantKv
 } from '@backend/features/integrations'
 import { detectAgents } from '@backend/features/agents'
+import { execFile } from 'node:child_process'
 import { getSettingsStore } from './app-settings'
 import {
   IntegrationsChannels,
   type HostedCliId,
+  type McpAuthKind,
   type McpCliStatus,
+  type McpPreset,
   type McpServerEntry
 } from '@contracts'
 
@@ -203,6 +214,88 @@ export function mgrBackups(cli: HostedCliId, homes: CliHomes = resolveCliHomes()
   }
 }
 
+// ── The catalog pipeline (8/07): preset -> entries -> save -> 06's writers ──
+const KV_CUSTOM_PRESETS = 'integrations.presets.custom'
+
+function customPresets(): McpPreset[] {
+  try {
+    const raw = kv()?.get(KV_CUSTOM_PRESETS)
+    return raw ? (JSON.parse(raw) as McpPreset[]) : []
+  } catch {
+    return []
+  }
+}
+
+const findAnyPreset = (id: string): McpPreset | undefined => findPreset(id) ?? customPresets().find((p) => p.id === id)
+
+export function catConnect(
+  presetId: string,
+  clis: HostedCliId[],
+  opts: { baseUrl?: string; authKind?: McpAuthKind } = {},
+  homes: CliHomes = resolveCliHomes()
+): { ok: boolean; reason?: string; results?: { cli: HostedCliId; ok: boolean; reason?: string }[] } {
+  const preset = findAnyPreset(String(presetId))
+  const store = kv()
+  if (!preset || !store) return { ok: false, reason: 'unknown preset' }
+  const prep = presetToServerEntries(preset, opts)
+  if (!prep.ok) return prep
+  // ONE pipeline: every entry becomes a registry row (same refusals), then
+  // 06's writers land it per selected CLI — never a side door.
+  for (const entry of prep.entries) {
+    const saved = saveServer(store, entry)
+    if (!saved.ok) return { ok: false, reason: saved.reason }
+  }
+  const results = clis.map((cli) => {
+    const cap = capabilityFor(cli)
+    const blocked = cap ? presetBlockedFor(preset, cap) : 'unknown CLI'
+    if (blocked) return { cli, ok: false, reason: blocked }
+    for (const entry of prep.entries) {
+      const r = mgrApply(entry.id, cli, homes)
+      if (!r.ok) return { cli, ok: false, reason: r.reason }
+    }
+    return { cli, ok: true }
+  })
+  return { ok: results.some((r) => r.ok), results }
+}
+
+/** The update FEED: registry lookup for a preset — PREVIEW text only, never
+ *  applied, never trusted (an explicit user action applies via Connect). */
+export async function catRefresh(presetId: string): Promise<{ ok: boolean; diff?: string; reason?: string }> {
+  const preset = findAnyPreset(String(presetId))
+  if (!preset) return { ok: false, reason: 'unknown preset' }
+  const feed = await fetchRegistry(preset.label)
+  if (!feed.ok || !feed.drafts?.length) return { ok: false, reason: feed.reason ?? 'no registry match' }
+  const match = feed.drafts[0]
+  const current = preset.transport === 'http' ? preset.urlOrCommand : preset.urlOrCommand
+  const proposed = match.entry.url ?? [match.entry.command, ...(match.entry.args ?? [])].join(' ')
+  const diff =
+    current === proposed
+      ? `registry matches the preset (${current})`
+      : `preset: ${current}\nregistry (${match.name}, community): ${proposed}\n— preview only; nothing was changed`
+  return { ok: true, diff }
+}
+
+const CLI_BIN: Record<HostedCliId, string> = { 'claude-code': 'claude', codex: 'codex', gemini: 'gemini' }
+
+/** One-shot status read-back from the CLI's OWN list output (presence only;
+ *  the live registry/poller is 8/11's). Never reads a token store. */
+export function catAuthStatus(serverId: string, cli: HostedCliId): Promise<string> {
+  return new Promise((resolve) => {
+    execFile(
+      CLI_BIN[cli],
+      ['mcp', 'list'],
+      { timeout: 30000, windowsHide: true, shell: process.platform === 'win32' },
+      (err, stdout) => {
+        if (err && !String(stdout)) {
+          resolve('unknown')
+          return
+        }
+        resolve(parseCliMcpList(cli, String(stdout), String(serverId)))
+      }
+    )
+  })
+}
+
 export function registerMcpManager(): void {
   ipcMain.handle(IntegrationsChannels.serversList, () => listServers())
   ipcMain.handle(IntegrationsChannels.serversSave, (_e, raw: unknown) => {
@@ -231,4 +324,69 @@ export function registerMcpManager(): void {
     mgrAdopt(String(p?.serverId), p?.cli, !!p?.forget)
   )
   ipcMain.handle(IntegrationsChannels.mgrBackups, (_e, cli: HostedCliId) => mgrBackups(cli))
+
+  // ── The catalog (8/07) ─────────────────────────────────────────────────────
+  ipcMain.handle(IntegrationsChannels.catList, () => ({ presets: MCP_PRESETS, custom: customPresets() }))
+  ipcMain.handle(IntegrationsChannels.catCapabilities, () => CLI_CAPABILITIES)
+  ipcMain.handle(IntegrationsChannels.catPrepare, (_e, p: { presetId: string; baseUrl?: string; authKind?: McpAuthKind }) => {
+    const preset = findAnyPreset(String(p?.presetId))
+    if (!preset) return { ok: false, reason: 'unknown preset' }
+    return presetToServerEntries(preset, { baseUrl: p?.baseUrl, authKind: p?.authKind })
+  })
+  ipcMain.handle(
+    IntegrationsChannels.catConnect,
+    (_e, p: { presetId: string; clis: HostedCliId[]; baseUrl?: string; authKind?: McpAuthKind }) =>
+      catConnect(String(p?.presetId), Array.isArray(p?.clis) ? p.clis : [], { baseUrl: p?.baseUrl, authKind: p?.authKind })
+  )
+  ipcMain.handle(IntegrationsChannels.catRegistry, (_e, search: string) => fetchRegistry(String(search ?? '')))
+  ipcMain.handle(IntegrationsChannels.catImport, (_e, json: string) => {
+    const store = kv()
+    if (!store) return { ok: false, reason: 'store not ready' }
+    let raw: Record<string, unknown>
+    try {
+      raw = JSON.parse(String(json)) as Record<string, unknown>
+    } catch {
+      return { ok: false, reason: 'not valid JSON' }
+    }
+    const preset: McpPreset = {
+      id: String(raw.id ?? '').replace(/[^a-z0-9_-]/gi, '-').toLowerCase().slice(0, 48),
+      label: String(raw.label ?? raw.id ?? '').slice(0, 80),
+      transport: raw.transport === 'stdio' ? 'stdio' : 'http',
+      urlOrCommand: String(raw.urlOrCommand ?? ''),
+      authKinds: Array.isArray(raw.authKinds) ? (raw.authKinds.filter((k) => k === 'oauth' || k === 'token' || k === 'none') as McpAuthKind[]) : ['none'],
+      envRefSlots: Array.isArray(raw.envRefSlots) ? raw.envRefSlots.map(String) : [],
+      cliQuirks: {},
+      grantCopy: String(raw.grantCopy ?? 'Community preset — not house-vetted. Review before granting anything.').slice(0, 300),
+      verifiedAt: '' // imported = community; a blank date renders the DRAFT badge
+    }
+    if (!preset.id || !preset.urlOrCommand) return { ok: false, reason: 'a preset needs an id and a url/command' }
+    // The SAME refusals as every on-ramp: converting must produce a valid,
+    // secret-free entry (the redactor deny-list runs inside).
+    const probe = presetToServerEntries(preset, { authKind: preset.authKinds[0] })
+    if (!probe.ok) return probe
+    const rows = customPresets().filter((c) => c.id !== preset.id)
+    rows.push(preset)
+    store.set(KV_CUSTOM_PRESETS, JSON.stringify(rows))
+    return { ok: true }
+  })
+  ipcMain.handle(IntegrationsChannels.catExport, async (_e, presetId: string) => {
+    const preset = findAnyPreset(String(presetId))
+    if (!preset) return false
+    const pick = await dialog.showSaveDialog({
+      title: 'Export preset',
+      defaultPath: `mcp-preset-${preset.id}.json`,
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    })
+    if (pick.canceled || !pick.filePath) return false
+    try {
+      writeFileSync(pick.filePath, JSON.stringify(preset, null, 2), 'utf8')
+      return true
+    } catch {
+      return false
+    }
+  })
+  ipcMain.handle(IntegrationsChannels.catRefresh, (_e, presetId: string) => catRefresh(String(presetId)))
+  ipcMain.handle(IntegrationsChannels.catAuthStatus, (_e, p: { serverId: string; cli: HostedCliId }) =>
+    catAuthStatus(String(p?.serverId), p?.cli)
+  )
 }

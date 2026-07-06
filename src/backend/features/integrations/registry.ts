@@ -60,6 +60,26 @@ export function validateServerEntry(raw: unknown): { ok: true; entry: McpServerE
     }
     if (Object.keys(env).length) entry.env = env
   }
+  if (r.headers !== undefined) {
+    if (typeof r.headers !== 'object' || r.headers === null || Array.isArray(r.headers)) {
+      return { ok: false, reason: 'headers must be a name -> ${VAR} map' }
+    }
+    const headers: Record<string, string> = {}
+    for (const [k, v] of Object.entries(r.headers as Record<string, unknown>)) {
+      const key = String(k).trim()
+      const val = String(v ?? '').trim()
+      if (!/^[A-Za-z][A-Za-z0-9-]*$/.test(key)) return { ok: false, reason: `"${key}" is not a valid header name` }
+      // `${VAR}` or `Scheme ${VAR}` — the reference rule, never a literal.
+      if (!/^(?:[A-Za-z][A-Za-z0-9-]* )?\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(val)) {
+        return {
+          ok: false,
+          reason: `header ${key} must be a \${VAR} reference (optionally "Bearer \${VAR}") — token literals are never written into a CLI config.`
+        }
+      }
+      headers[key] = val
+    }
+    if (Object.keys(headers).length) entry.headers = headers
+  }
   // THE deny-list (the profiles rule): a secret-shaped string anywhere refuses.
   const flat = [entry.label, entry.command ?? '', entry.url ?? '', ...(entry.args ?? [])].join('\n')
   if (redactSecrets(flat).redactions > 0) {

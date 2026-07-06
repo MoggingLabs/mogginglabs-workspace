@@ -8,7 +8,12 @@ import { envOf, managedEntry, parseConfig, removeEntry, upsertEntry, type JsonEn
 // hardcoding the wrong spelling is exactly the drift the fixtures guard.
 
 function shape(entry: McpServerEntry): JsonEntryShape {
-  if (entry.transport === 'http') return { httpUrl: entry.url, _managedBy: MCP_MANAGED_BY }
+  if (entry.transport === 'http') {
+    const h: JsonEntryShape = { httpUrl: entry.url }
+    if (entry.headers && Object.keys(entry.headers).length) h.headers = { ...entry.headers }
+    h._managedBy = MCP_MANAGED_BY
+    return h
+  }
   const s: JsonEntryShape = { command: entry.command }
   if (entry.args?.length) s.args = [...entry.args]
   const env = envOf(entry)

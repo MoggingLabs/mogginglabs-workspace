@@ -140,6 +140,7 @@ run_smoke MCPWRITE     MOGGING_MCPWRITE  1 240 mcpwrite
 run_smoke AGENTWEB     MOGGING_AGENTWEB  1 240 agentweb
 run_smoke WEBTRAIL     MOGGING_WEBTRAIL  1 240 webtrail
 run_smoke MCPMGR       MOGGING_MCPMGR    1 180 mcpmgr
+run_smoke MCPCAT       MOGGING_MCPCAT    1 180 mcpcat
 
 echo ""
 echo "══ SWEEP RESULTS ══"

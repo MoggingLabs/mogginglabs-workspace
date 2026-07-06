@@ -199,7 +199,19 @@ export const IntegrationsChannels = {
   mgrApply: 'integrations:mgr:apply', // ({ serverId, cli }) -> { ok, reason?, backup? } (same-session backup first)
   mgrRemoveFrom: 'integrations:mgr:removeFrom', // ({ serverId, cli }) -> { ok, reason? } (clean extraction of OUR entry)
   mgrAdopt: 'integrations:mgr:adopt', // ({ serverId, cli }) -> void (accept the hand-edited block as ours)
-  mgrBackups: 'integrations:mgr:backups' // (cli) -> string[] (this target's .bak files, newest first)
+  mgrBackups: 'integrations:mgr:backups', // (cli) -> string[] (this target's .bak files, newest first)
+  // Phase-8/07: the Integrations Catalog — presets as data, three open
+  // on-ramps (registry search / custom / import), ONE pipeline into the 06
+  // writers. We never run, proxy, or authenticate a server (ADR 0008.b).
+  catList: 'integrations:cat:list', // -> { presets: McpPreset[], custom: McpPreset[] } (roster-ordered; custom = community)
+  catCapabilities: 'integrations:cat:capabilities', // -> CliCapability[] (remote/OAuth floors; gaps dim chips)
+  catPrepare: 'integrations:cat:prepare', // ({ presetId, baseUrl?, authKind? }) -> { ok, entries?, reason? }
+  catConnect: 'integrations:cat:connect', // ({ presetId, baseUrl?, authKind?, clis }) -> per-CLI apply results (save + write pipeline)
+  catRegistry: 'integrations:cat:registry', // (search) -> { ok, drafts?, reason? } (DRAFT-badged, never trusted)
+  catImport: 'integrations:cat:import', // (json string) -> { ok, reason? } (same refusals as every on-ramp)
+  catExport: 'integrations:cat:export', // (presetId) -> boolean (LOCAL save dialog)
+  catRefresh: 'integrations:cat:refresh', // (presetId) -> { ok, diff?, reason? } (update FEED: preview only, never applied)
+  catAuthStatus: 'integrations:cat:authStatus' // ({ serverId, cli }) -> CliServerState (the CLI's own list output, presence only)
 } as const
 
 export const AllChannels: readonly string[] = [

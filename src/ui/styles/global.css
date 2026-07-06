@@ -3698,6 +3698,68 @@ body.resizing * {
   gap: var(--sp-1);
 }
 
+/* ── The Integrations Catalog (Phase-8/07) ─────────────────────────────────── */
+.cat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--sp-2);
+}
+.cat-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2);
+  background: var(--bg-inset);
+}
+.cat-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  justify-content: space-between;
+}
+.cat-card-copy {
+  font-size: var(--fs-11);
+  color: var(--text-mid);
+  min-height: 3em;
+}
+.cat-badge {
+  flex: none;
+  border-radius: var(--r-full);
+  font-size: var(--fs-11);
+  padding: 0 var(--sp-2);
+}
+.cat-badge.is-verified {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent-ink);
+}
+.cat-badge.is-draft {
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  color: var(--text-hi);
+}
+.cat-mini {
+  font-size: var(--fs-11);
+}
+.cat-cli-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-12);
+  color: var(--text-hi);
+  cursor: pointer;
+}
+.cat-cli-label.is-dim {
+  opacity: 0.55;
+}
+.cat-desc {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── First-run checklist (Phase-6/06): live, dismissible "Get set up" card ──── */
 .firstrun-card {
   position: relative;

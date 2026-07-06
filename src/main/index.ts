@@ -26,6 +26,7 @@ import { runMcpWriteSmoke } from './mcpwrite-smoke'
 import { runAgentWebSmoke } from './agentweb-smoke'
 import { runWebTrailSmoke } from './webtrail-smoke'
 import { runMcpMgrSmoke } from './mcpmgr-smoke'
+import { runMcpCatSmoke } from './mcpcat-smoke'
 import { registerIntegrations } from './integrations'
 import { registerTrail } from './trail'
 import { registerMcpManager } from './mcp-manager'
@@ -238,6 +239,8 @@ app.whenReady().then(async () => {
     runWebTrailSmoke(win) // env-gated agent-activity-trail smoke: store + emitters + viewer (Phase-8/05)
   } else if (process.env.MOGGING_MCPMGR && win) {
     runMcpMgrSmoke(win, process.env.MOGGING_MCPMGR) // env-gated MCP-manager smoke (Phase-8/06; DEV/DEVREMOVE = real-home dev-verify)
+  } else if (process.env.MOGGING_MCPCAT && win) {
+    runMcpCatSmoke(win, process.env.MOGGING_MCPCAT) // env-gated Integrations-Catalog smoke (Phase-8/07; DEV = real-machine connect)
   } else if (process.env.MOGGING_USAGE && win) {
     runUsageSmoke(win) // env-gated usage-seam smoke: FAKE adapter only (Phase-7/01)
   } else if (process.env.MOGGING_ATTENTION && win) {

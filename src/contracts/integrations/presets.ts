@@ -27,6 +27,9 @@ export interface McpPreset {
   transport: McpTransport
   /** The remote URL (http) or the launch command line (stdio), verbatim. */
   urlOrCommand: string
+  /** Preset GROUP (8/07): rows sharing a group render as ONE card and connect
+   *  together (Google Workspace = one card, one row per product endpoint). */
+  group?: string
   /** Vendor-preferred first; a second kind is the alternate on-ramp the UI
    *  surfaces with the trade stated (per-CLI OAuth vs one vault token). */
   authKinds: readonly McpAuthKind[]

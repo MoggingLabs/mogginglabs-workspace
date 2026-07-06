@@ -19,6 +19,17 @@ function block(entry: McpServerEntry): string {
   const lines = [TAG, header(entry.id)]
   if (entry.transport === 'http') {
     lines.push(`url = ${tstr(entry.url ?? '')}`)
+    // Codex speaks bearer-env auth for remotes: exactly one Authorization
+    // header of the `Bearer ${VAR}` shape maps to bearer_token_env_var; any
+    // other header shape is a capability gap, not a silent drop.
+    const headers = Object.entries(entry.headers ?? {})
+    if (headers.length) {
+      const bearer = headers.length === 1 && headers[0][0].toLowerCase() === 'authorization'
+        ? /^Bearer \$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(headers[0][1])
+        : null
+      if (!bearer) throw new Error('codex supports bearer env auth only (Authorization: Bearer ${VAR})')
+      lines.push(`bearer_token_env_var = ${tstr(bearer[1])}`)
+    }
   } else {
     lines.push(`command = ${tstr(entry.command ?? '')}`)
     if (entry.args?.length) lines.push(`args = [${entry.args.map(tstr).join(', ')}]`)

@@ -21,6 +21,9 @@ export interface McpServerEntry {
   /** Env REFERENCES the CLI resolves at ITS runtime — values must be exactly
    *  `${VAR}`; literals are refused (the profiles deny-list heuristics). */
   env?: Readonly<Record<string, string>>
+  /** http auth headers (8/07): values are `${VAR}` or `Scheme ${VAR}` — the
+   *  reference rule again; a literal token is refused at save. */
+  headers?: Readonly<Record<string, string>>
   builtIn?: boolean
 }
 

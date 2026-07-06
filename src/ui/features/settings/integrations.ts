@@ -1,15 +1,19 @@
 import {
+  AgentChannels,
   IntegrationsChannels,
+  type McpAuthKind,
   type HostedCliId,
   type McpCliStatus,
+  type McpPreset,
   type McpServerEntry,
   type TrailEntry,
   type TrailSource,
   type WorkspaceIntegrationsGrant
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { el } from '../../components'
+import { el, showToast } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
+import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
 import { fmtAge } from '../usage'
 
 /**
@@ -22,6 +26,275 @@ import { fmtAge } from '../usage'
  */
 
 const CLI_LABEL: Record<HostedCliId, string> = { 'claude-code': 'Claude Code', codex: 'Codex', gemini: 'Gemini' }
+const CLI_PROVIDER: Record<HostedCliId, string> = { 'claude-code': 'claude', codex: 'codex', gemini: 'gemini' }
+const HOSTED: readonly HostedCliId[] = ['claude-code', 'codex', 'gemini']
+
+// ── The Integrations Catalog (8/07): presets as data, one pipeline ───────────
+function createCatalogBlock(): HTMLElement {
+  const bridge = getBridge()
+  type Capability = { cli: HostedCliId; remoteHttp: boolean; oauth: boolean; floor: string; authorizeCommand: string | null }
+  const grid = el('div', { class: 'cat-grid' })
+  const panel = el('div', { class: 'mgr-panel cat-panel', hidden: true })
+
+  let caps: Capability[] = []
+  let installed = new Set<string>()
+
+  function authTradeCopy(kind: McpAuthKind): string {
+    return kind === 'oauth'
+      ? 'OAuth per CLI — vendor-preferred; each CLI holds its own token, revoke per CLI'
+      : 'One token, all agents — an env/vault reference; one paste, shared blast radius'
+  }
+
+  async function openConnect(preset: McpPreset, groupRows: McpPreset[]): Promise<void> {
+    panel.hidden = false
+    panel.innerHTML = ''
+    panel.append(el('div', { class: 'mgr-panel-summary', text: `Connect ${preset.label}` }))
+    panel.append(el('div', { class: 'settings-row-caption', text: preset.grantCopy }))
+    // CLI checkboxes, capability/installed dimming.
+    const checks = new Map<HostedCliId, HTMLInputElement>()
+    const cliRow = el('div', { class: 'trail-controls' })
+    for (const cli of HOSTED) {
+      const cap = caps.find((c) => c.cli === cli)
+      const blocked = !cap?.remoteHttp && preset.transport === 'http' ? `no remote HTTP (floor ${cap?.floor})` : ''
+      const isInstalled = installed.has(CLI_PROVIDER[cli])
+      const box = el('input', { class: 'cat-cli-check' }) as HTMLInputElement
+      box.type = 'checkbox'
+      box.checked = isInstalled && !blocked
+      box.disabled = !!blocked
+      checks.set(cli, box)
+      const lab = el('label', { class: `cat-cli-label${!isInstalled || blocked ? ' is-dim' : ''}` }, [
+        box,
+        el('span', { text: `${CLI_LABEL[cli]}${blocked ? ` · ${blocked}` : isInstalled ? '' : ' · not installed'}` })
+      ])
+      cliRow.append(lab)
+    }
+    panel.append(cliRow)
+    // Base-URL override (self-hosted).
+    let baseInput: HTMLInputElement | null = null
+    if (groupRows.some((r) => r.baseUrlOverride)) {
+      baseInput = el('input', { class: 'browser-sites-input mgr-input' }) as HTMLInputElement
+      baseInput.placeholder = preset.urlOrCommand.includes('YOUR-') ? preset.urlOrCommand : 'https://your-instance… (optional override)'
+      baseInput.setAttribute('aria-label', 'Base URL override')
+      baseInput.spellcheck = false
+      baseInput.addEventListener('keydown', (e) => e.stopPropagation())
+      panel.append(el('div', { class: 'settings-row-caption', text: 'Self-hosted? Paste your instance’s MCP URL:' }), baseInput)
+    }
+    // Auth-kind choice (dual-auth vendors state the trade).
+    let authPick: McpAuthKind = preset.authKinds[0] ?? 'none'
+    if (preset.authKinds.length > 1) {
+      const authRow = el('div', { class: 'mgr-grant-body' })
+      for (const kind of preset.authKinds) {
+        const radio = el('input', { class: 'cat-auth-radio' }) as HTMLInputElement
+        radio.type = 'radio'
+        radio.name = `auth-${preset.id}`
+        radio.checked = kind === authPick
+        radio.onchange = (): void => {
+          if (radio.checked) authPick = kind
+        }
+        authRow.append(el('label', { class: 'cat-cli-label' }, [radio, el('span', { text: authTradeCopy(kind) })]))
+      }
+      panel.append(authRow)
+    }
+    if (preset.envRefSlots.length) {
+      panel.append(
+        el('div', {
+          class: 'settings-row-caption',
+          text: `Key slots (env references, never literals): ${preset.envRefSlots.map((s) => `\${${s}}`).join(', ')} — set the variable yourself, or a vault slot (8/08).`
+        })
+      )
+    }
+    panel.append(
+      el('div', {
+        class: 'settings-row-caption',
+        text: 'Scope stays per workspace: registering makes the server available to a CLI; which WORKSPACES see it is a tool plan (8/09), and what its agents may do here stays this page’s grants.'
+      })
+    )
+    const previewPre = el('pre', { class: 'mgr-panel-block', hidden: true })
+    const note = el('div', { class: 'menu-note trail-empty', hidden: true })
+    const previewBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Preview' }) as HTMLButtonElement
+    previewBtn.onclick = async (): Promise<void> => {
+      const prep = (await bridge.invoke(IntegrationsChannels.catPrepare, {
+        presetId: preset.id,
+        baseUrl: baseInput?.value.trim() || undefined,
+        authKind: authPick
+      })) as { ok: boolean; entries?: McpServerEntry[]; reason?: string }
+      previewPre.hidden = false
+      previewPre.textContent = prep.ok
+        ? prep.entries!.map((en) => JSON.stringify(en, null, 2)).join('\n')
+        : `refused: ${prep.reason}`
+    }
+    const connectBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Connect' }) as HTMLButtonElement
+    connectBtn.onclick = async (): Promise<void> => {
+      const clis = HOSTED.filter((c) => checks.get(c)?.checked)
+      const r = (await bridge.invoke(IntegrationsChannels.catConnect, {
+        presetId: preset.id,
+        clis,
+        baseUrl: baseInput?.value.trim() || undefined,
+        authKind: authPick
+      })) as { ok: boolean; reason?: string; results?: { cli: HostedCliId; ok: boolean; reason?: string }[] }
+      note.hidden = false
+      note.textContent = r.ok
+        ? `Connected: ${r.results?.map((x) => `${CLI_LABEL[x.cli]} ${x.ok ? '✓' : `✗ (${x.reason})`}`).join(' · ')}`
+        : `refused: ${r.reason}`
+      if (r.ok) renderAuthorizeRow(preset, clis)
+    }
+    panel.append(el('div', { class: 'trail-controls' }, [previewBtn, connectBtn]), previewPre, note)
+
+    function renderAuthorizeRow(p: McpPreset, clis: HostedCliId[]): void {
+      const row = el('div', { class: 'trail-controls' })
+      for (const cli of clis) {
+        const cap = caps.find((c) => c.cli === cli)
+        const authorizeCommand = cap?.authorizeCommand
+        if (p.authKinds[0] === 'oauth' && authorizeCommand) {
+          const btn = el('button', { class: 'trail-btn', type: 'button', text: `Authorize in ${CLI_LABEL[cli]}` }) as HTMLButtonElement
+          btn.onclick = (): void => {
+            // The CLI's OWN OAuth, in a managed pane — the vendor authenticates,
+            // the CLI stores the token, we observe status only (ADR 0008.d).
+            const snap = getWorkspaces()
+            const cwd = snap.workspaces.find((w) => w.id === snap.activeId)?.cwd ?? snap.workspaces[0]?.cwd ?? ''
+            if (!cwd) {
+              showToast({ tone: 'info', title: 'Open a workspace first', body: 'Authorize runs the CLI in a pane.' })
+              return
+            }
+            const opened = openWorkspaceFromTemplate({
+              name: `Authorize ${p.label}`.slice(0, 28),
+              cwd,
+              paneCount: 1,
+              assignments: [CLI_PROVIDER[cli]]
+            })
+            if (opened) {
+              showToast({
+                tone: 'info',
+                title: `Finish in the pane`,
+                body: `Run ${authorizeCommand.replace('<id>', p.id)} — the browser consent is the vendor's; the token stays in ${CLI_LABEL[cli]}.`
+              })
+            }
+          }
+          row.append(btn)
+        }
+        const statusBtn = el('button', { class: 'trail-btn', type: 'button', text: `Status (${CLI_LABEL[cli]})` }) as HTMLButtonElement
+        statusBtn.onclick = async (): Promise<void> => {
+          statusBtn.textContent = `Status (${CLI_LABEL[cli]}): …`
+          const s = (await bridge.invoke(IntegrationsChannels.catAuthStatus, { serverId: p.id, cli })) as string
+          statusBtn.textContent = `Status (${CLI_LABEL[cli]}): ${s}`
+        }
+        row.append(statusBtn)
+      }
+      panel.append(row)
+    }
+  }
+
+  async function refresh(): Promise<void> {
+    const { presets, custom } = (await bridge.invoke(IntegrationsChannels.catList, undefined)) as {
+      presets: McpPreset[]
+      custom: McpPreset[]
+    }
+    caps = (await bridge.invoke(IntegrationsChannels.catCapabilities, undefined)) as Capability[]
+    try {
+      const agents = (await bridge.invoke(AgentChannels.detect, undefined)) as { id: string; installed: boolean }[]
+      installed = new Set(agents.filter((a) => a.installed).map((a) => a.id))
+    } catch {
+      installed = new Set()
+    }
+    grid.innerHTML = ''
+    const seenGroups = new Set<string>()
+    for (const preset of [...presets, ...custom]) {
+      if (preset.group) {
+        if (seenGroups.has(preset.group)) continue
+        seenGroups.add(preset.group)
+      }
+      const rows = preset.group ? presets.filter((p) => p.group === preset.group) : [preset]
+      const label = preset.group ? 'Google Workspace' : preset.label
+      const badge = preset.verifiedAt
+        ? el('span', { class: 'cat-badge is-verified', text: `verified ${preset.verifiedAt}` })
+        : el('span', { class: 'cat-badge is-draft', text: 'community — not house-vetted' })
+      const connect = el('button', { class: 'trail-btn', type: 'button', text: 'Connect…' }) as HTMLButtonElement
+      connect.onclick = (): void => void openConnect(preset, rows)
+      const exportBtn = el('button', { class: 'trail-btn cat-mini', type: 'button', text: 'Export' }) as HTMLButtonElement
+      exportBtn.onclick = (): void => void bridge.invoke(IntegrationsChannels.catExport, preset.id)
+      const feedBtn = el('button', { class: 'trail-btn cat-mini', type: 'button', text: 'Check feed' }) as HTMLButtonElement
+      const feedNote = el('div', { class: 'menu-note trail-empty', hidden: true })
+      feedBtn.onclick = async (): Promise<void> => {
+        const r = (await bridge.invoke(IntegrationsChannels.catRefresh, preset.id)) as { ok: boolean; diff?: string; reason?: string }
+        feedNote.hidden = false
+        feedNote.textContent = r.ok ? r.diff ?? '' : r.reason ?? 'registry unavailable'
+      }
+      const card = el('div', { class: 'cat-card' }, [
+        el('div', { class: 'cat-card-head' }, [el('span', { class: 'mgr-label', text: label }), badge]),
+        el('div', { class: 'cat-card-copy', text: preset.group ? `${rows.map((r) => r.label).join(' · ')} — one card, ${rows.length} endpoints.` : preset.grantCopy }),
+        el('div', { class: 'trail-controls' }, [connect, feedBtn, exportBtn]),
+        feedNote
+      ])
+      grid.append(card)
+    }
+  }
+
+  // The open end: registry search + preset import — the SAME pipeline.
+  const searchInput = el('input', { class: 'browser-sites-input mgr-input' }) as HTMLInputElement
+  searchInput.placeholder = 'Search the official MCP registry…'
+  searchInput.setAttribute('aria-label', 'Registry search')
+  searchInput.spellcheck = false
+  searchInput.addEventListener('keydown', (e) => e.stopPropagation())
+  const searchBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Search registry' }) as HTMLButtonElement
+  const searchResults = el('div', { class: 'mgr-list' })
+  searchBtn.onclick = async (): Promise<void> => {
+    searchResults.innerHTML = ''
+    const r = (await bridge.invoke(IntegrationsChannels.catRegistry, searchInput.value.trim())) as {
+      ok: boolean
+      drafts?: { name: string; description: string; entry: McpServerEntry }[]
+      reason?: string
+    }
+    if (!r.ok) {
+      searchResults.append(el('div', { class: 'menu-note', text: r.reason ?? 'registry unavailable' }))
+      return
+    }
+    for (const d of r.drafts ?? []) {
+      const save = el('button', { class: 'trail-btn cat-mini', type: 'button', text: 'Save as server' }) as HTMLButtonElement
+      save.onclick = async (): Promise<void> => {
+        const res = (await bridge.invoke(IntegrationsChannels.serversSave, d.entry)) as { ok: boolean; reason?: string }
+        save.textContent = res.ok ? 'Saved — apply below' : `refused: ${res.reason}`
+      }
+      searchResults.append(
+        el('div', { class: 'mgr-row' }, [
+          el('span', { class: 'mgr-label', text: d.name }),
+          el('span', { class: 'cat-badge is-draft', text: 'community — not house-vetted' }),
+          el('span', { class: 'mgr-id cat-desc', text: d.description }),
+          save
+        ])
+      )
+    }
+    if (!r.drafts?.length) searchResults.append(el('div', { class: 'menu-note', text: 'No matches.' }))
+  }
+  const importInput = el('input', { class: 'browser-sites-input mgr-input' }) as HTMLInputElement
+  importInput.placeholder = 'Paste a preset JSON to import…'
+  importInput.setAttribute('aria-label', 'Import preset JSON')
+  importInput.spellcheck = false
+  importInput.addEventListener('keydown', (e) => e.stopPropagation())
+  const importBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Import' }) as HTMLButtonElement
+  const importNote = el('div', { class: 'menu-note trail-empty', hidden: true })
+  importBtn.onclick = async (): Promise<void> => {
+    const r = (await bridge.invoke(IntegrationsChannels.catImport, importInput.value)) as { ok: boolean; reason?: string }
+    importNote.hidden = false
+    importNote.textContent = r.ok ? 'Imported as a community preset.' : `refused: ${r.reason}`
+    if (r.ok) void refresh()
+  }
+
+  const block = el('div', { class: 'trail-block cat-block' }, [
+    el('div', { class: 'settings-row-label', text: 'Integrations catalog' }),
+    el('div', {
+      class: 'settings-row-caption',
+      text: 'Official servers, verified with dates — Connect writes each CLI’s own config through the manager below. The app never runs, proxies, or authenticates a server; OAuth belongs to each CLI, keys are env references.'
+    }),
+    grid,
+    panel,
+    el('div', { class: 'trail-controls' }, [searchInput, searchBtn]),
+    searchResults,
+    el('div', { class: 'trail-controls' }, [importInput, importBtn]),
+    importNote
+  ])
+  setTimeout(() => void refresh(), 0)
+  return block
+}
 
 // ── Servers: the registry + per-CLI apply surface (8/06) ─────────────────────
 function createServersBlock(): HTMLElement {
@@ -389,5 +662,10 @@ function createActivityBlock(): HTMLElement {
 }
 
 export function createIntegrationsSection(): HTMLElement {
-  return el('div', { class: 'integrations-section' }, [createServersBlock(), createGrantsBlock(), createActivityBlock()])
+  return el('div', { class: 'integrations-section' }, [
+    createCatalogBlock(),
+    createServersBlock(),
+    createGrantsBlock(),
+    createActivityBlock()
+  ])
 }

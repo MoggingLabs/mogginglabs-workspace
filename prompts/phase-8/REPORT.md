@@ -228,3 +228,82 @@ the packaged bin location needs a distribution decision (asar-external bin).
 
 **Gates**: MCPMGR PASS (16 asserts, `out/mcpmgr-result.json`). Sweep 39 →
 **40**.
+
+## 07 — the Integrations Catalog (2026-07-06)
+
+**Shipped**: 31 preset rows (`presets.json`, roster-ordered — n8n first,
+Google Workspace as a GROUP of four product endpoints second), every row
+carrying `verifiedAt`; the per-CLI capability table (remote-HTTP/OAuth floors;
+`presetBlockedFor` dims gaps — NO mcp-remote proxy in v1); the registry
+client (official registry v0, wrapped `{server,_meta}` shape, ANY parse
+failure = "registry unavailable", never blocking); preset → entry conversion
+(the ONE pipeline: every on-ramp converts, validates through the SAME
+redactor/env-ref refusals, saves as a 06 registry row, lands via 06's
+writers); dual-auth on-ramps (`authKinds` array — OAuth per CLI
+vendor-preferred vs "one token, all agents" as a `Bearer ${VAR}` header ref;
+codex maps it to `bearer_token_env_var`); import/export (imported = community,
+blank `verifiedAt` renders the DRAFT badge); the update FEED (registry match →
+PREVIEW diff only, never applied); Authorize = the CLI's own MCP-OAuth in a
+managed pane (openWorkspaceFromTemplate; we observe status only via each
+CLI's own `mcp list` output, presence-parsed). Stripe and Slack carry the
+loudest grantCopy. Connect copy states scope-per-workspace (8/09 plans).
+
+**The verification pass (2026-07-06, live probes — initialize POST, 401 =
+live authed MCP endpoint).** VERIFIED → preset: n8n (docs-verified flow,
+2026-07-06 real instance below) · Google Workspace ×4 (`drivemcp/gmailmcp/
+calendarmcp/chatmcp.googleapis.com/mcp/v1` all live — the sibling pattern
+confirmed) · Slack `mcp.slack.com/mcp` · GitHub · Vercel · Supabase ·
+**GoHighLevel** (`services.leadconnectorhq.com/mcp/` AND
+`mcp.gohighlevel.com/mcp` both live — the roster tile lands) · ClickUp ·
+Make (token URL, research 2026-07-05) · Sentry · PostHog · Stripe ·
+Cloudflare-docs · AWS (pypi `awslabs.aws-api-mcp-server` live) · Azure (npm
+`@azure/mcp` live) · GitLab (`gitlab.com/api/v4/mcp`) · Notion · Tally
+(redirect → 401) · **Zapier** (`mcp.zapier.com/api/mcp/mcp`) · **Jira/
+Atlassian** (`mcp.atlassian.com/v1/sse`) · **Figma** (`mcp.figma.com/mcp`) ·
+**Postman** · **Airtable** · **Jotform** · **Replicate** · fal.ai ·
+ElevenLabs (pypi) · Higgsfield.
+
+**NOT verified → the site-honesty map (docs/14 lifts this):** Shopify
+(mcp.shopify.com 404, shopify.dev/mcp 404 → registry/custom; their dev MCP
+is an npm stdio package — registry search finds it) · Discord (no endpoint,
+DNS dead → custom/registry) · Twilio (404 → registry) · Docker (404 — the
+Docker MCP Toolkit is a Desktop-local feature → custom) · WordPress (302,
+ambiguous → registry/custom) · Typeform (302 → registry/custom) · Fillout
+(no known official endpoint → custom) · Kie.ai · Midjourney (no official
+MCP) · Runway (DNS dead) · Stability AI · Leonardo.Ai (all → registry/
+custom/bridge). Google Cloud (beyond Workspace) → registry. Every site name
+maps to preset OR registry/custom/bridge — no silent drops.
+
+**Find**: the registry v0 wraps results as `{ server, _meta }` — the first
+client read the flat shape and saw empty rows; the fixture now mirrors the
+real wrapped shape (probed live 2026-07-06).
+
+**Dev-verify, real machine (2026-07-06)** — the OAuth-preset cycle through
+the REAL pipeline: `MOGGING_MCPCAT=DEV` connected the **ClickUp** preset to
+the real Claude Code config; `claude mcp list` read back
+`clickup: https://mcp.clickup.com/mcp (HTTP) - ! Needs authentication` —
+the correct pre-consent state (the browser consent click is the USER's, by
+design: N approve-clicks belong to the human, ADR 0008.d). DEVREMOVE
+extracted it cleanly; the user's own claude.ai ClickUp connector was never
+touched. One registry server (fixture pipeline) certified by the gate;
+the LIVE registry probed and its `{server,_meta}` shape folded in.
+
+**The n8n record (founder steer, 2026-07-06)**: the scope is CONFIG — the
+app registers servers into the CLIs; it never runs or hosts one. The
+app→n8n direction (preset, base-URL override, bearer slot) is
+gate-certified on fixtures: paste a real instance's MCP URL and the entry
+lands dialect-correct (MCPCAT asserts exactly this). The n8n→app direction
+(n8n's MCP Client Tool consuming the house `mogging` server — the direction
+that matters, per the founder) speaks the same protocol MCP Inspector
+dev-verified against our server in 8/02; the live one-click check runs
+against the user's own instance whenever wanted (docs will carry the two
+steps; a sandbox is one `docker run -p 5678:5678 n8nio/n8n` away — Docker
+is present on the dev machine). A local npm/npx/pnpm n8n install was
+attempted and abandoned (n8n 2.29's npm packaging fights flat installs:
+URL-hosted xlsx subdep, DI metadata split; its blessed routes are Docker or
+its own lockfile) — an hour of machine time says the honest record beats
+the theater. PERCEPTION failed once under that install's disk contention
+and passed isolated — the 7/xx contention lesson, re-confirmed.
+
+**Gates**: MCPCAT PASS (12 assert groups, `out/mcpcat-result.json`);
+PERCEPTION re-run PASS isolated. Full-sweep marathon: 39/41 + PERCEPTION/WORKTREE flaked mid-marathon (the two standing contention lessons — a concurrent build overlapped the sweep start) and passed isolated, the documented pattern. Sweep 40 → **41**.
