@@ -102,6 +102,15 @@ export const USAGE_DISPLAY_DEFAULTS: UsageDisplayConfig = {
   pinOrder: []
 }
 
+// ── Pace baseline (Phase-7/12, feeds the 7/02 engine): which days/hours count
+//    as ACTIVE time. Null = no baseline — wall-clock pacing (the default).
+export interface UsagePaceConfig {
+  /** Days 0(Sun)–6(Sat) that count as work days; null = every day. */
+  workDays: number[] | null
+  /** Active hours [startHour, endHour) in 0–24; null = all day. */
+  workHours: [number, number] | null
+}
+
 // ── Threshold alerts (Phase-7/09): the meter taps you on the shoulder through
 //    the HOUSE toast system — no OS spam. Copy is composed in ONE place (main,
 //    with the 7/02 formatter's verdict line as the body) and rendered VERBATIM.

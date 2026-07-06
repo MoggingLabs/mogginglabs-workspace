@@ -11,7 +11,7 @@ import { activeView, goBack, onViewChange, setActiveView } from '../../core/shel
 import { setTerminalFontSize, terminalFontSize, TERMINAL_FONT_SIZES } from '../../core/terminal/font-port'
 import { TEMPLATE_COUNTS } from '../layout'
 import { createProfilesHostsSection } from './profiles-hosts'
-import { createUsageDisplayControls } from './usage'
+import { createUsageSection } from './usage'
 
 const DEFAULT_LAYOUT_KEY = 'mogging.defaultPaneCount'
 
@@ -136,89 +136,6 @@ export const settingsFeature: UiFeature = {
 
     const profilesHosts = createProfilesHostsSection() as HTMLElement & { refresh: () => Promise<void> }
 
-    // Usage stub (7/03): provider enable + cadence ONLY, so the popover's
-    // gear has a target and the poller consumes changes live. 7/12 promotes
-    // this into the full Usage tab and deletes it — deliberately unadorned.
-    const usageStub = el('div', { class: 'settings-consents usage-stub' })
-    void getBridge()
-      .invoke(UsageChannels.configGet)
-      .then((raw) => {
-        const cfg = raw as UsageConfig | null
-        if (!cfg?.providers.length) {
-          usageStub.append(el('span', { class: 'settings-row-caption', text: 'No usage providers in this build.' }))
-          return
-        }
-        for (const p of cfg.providers) {
-          const enable = createCheckbox({
-            label: p.id,
-            checked: p.enabled,
-            onChange: (checked) => void getBridge().invoke(UsageChannels.configSet, { providerId: p.id, enabled: checked })
-          })
-          const cadence = el('select', { class: 'usage-cadence', ariaLabel: `${p.id} refresh cadence` }) as HTMLSelectElement
-          for (const c of USAGE_CADENCES) cadence.append(el('option', { value: c, text: c }))
-          cadence.value = p.cadence
-          cadence.addEventListener('change', () => void getBridge().invoke(UsageChannels.configSet, { providerId: p.id, cadence: cadence.value }))
-          const rowChildren: Node[] = [enable.el, cadence]
-          // web-session store-read opt-in (ADR 0007.b): default OFF, honest copy
-          // naming the keychain touch. Paste always works without it (7/12 makes
-          // this first-class; here it's the minimal gated toggle).
-          if (p.webRead !== undefined) {
-            const webRead = createCheckbox({
-              label: 'read my browser session',
-              ariaLabel: `${p.id}: read my browser session`,
-              checked: p.webRead,
-              onChange: (checked) => void getBridge().invoke(UsageChannels.webReadSet, { providerId: p.id, enabled: checked })
-            })
-            webRead.el.classList.add('usage-webread')
-            webRead.el.title = 'OFF by default. When on, the app decrypts this one site’s cookie via your OS keychain, for the one usage read only — never shared with agents (ADR 0007.b). You can always paste a cookie instead.'
-            rowChildren.push(webRead.el)
-          }
-          usageStub.append(el('div', { class: 'usage-stub-row', dataset: { provider: p.id, klass: p.webRead !== undefined ? 'web-session' : '' } }, rowChildren))
-        }
-      })
-      .catch(() => usageStub.append(el('span', { class: 'settings-row-caption', text: 'Usage config unavailable.' })))
-
-    // Threshold alerts (7/09): two shoulder-tap pcts + the reset-confetti
-    // opt-in (default quiet). All persistence rides usage:alertCfgSet.
-    const usageAlerts = el('div', { class: 'settings-consents usage-alert-cfg' })
-    void getBridge()
-      .invoke(UsageChannels.alertCfgGet)
-      .then((raw) => {
-        const cfg = raw as UsageAlertConfig | null
-        if (!cfg) return
-        const pctInput = (cls: string, label: string, value: number, key: 'quiet' | 'warn'): HTMLInputElement => {
-          const input = el('input', { class: `usage-thr ${cls}`, ariaLabel: label }) as HTMLInputElement
-          input.type = 'number'
-          input.min = '1'
-          input.max = '100'
-          input.value = String(value)
-          input.addEventListener('change', () => {
-            const v = Number(input.value)
-            if (Number.isFinite(v) && v >= 1 && v <= 100) void getBridge().invoke(UsageChannels.alertCfgSet, { [key]: v })
-          })
-          return input
-        }
-        const quiet = pctInput('usage-thr-quiet', 'Quiet threshold percent', cfg.quiet, 'quiet')
-        const warn = pctInput('usage-thr-warn', 'Warning threshold percent', cfg.warn, 'warn')
-        const confetti = createCheckbox({
-          label: 'Confetti on window reset',
-          checked: cfg.confetti,
-          onChange: (checked) => void getBridge().invoke(UsageChannels.alertCfgSet, { confetti: checked })
-        })
-        confetti.el.classList.add('usage-confetti-toggle')
-        usageAlerts.append(
-          el('div', { class: 'usage-alert-row' }, [
-            el('span', { class: 'settings-row-caption', text: 'Quiet toast at' }),
-            quiet,
-            el('span', { class: 'settings-row-caption', text: '% · warning at' }),
-            warn,
-            el('span', { class: 'settings-row-caption', text: '%' })
-          ]),
-          confetti.el
-        )
-      })
-      .catch(() => usageAlerts.append(el('span', { class: 'settings-row-caption', text: 'Alert config unavailable.' })))
-
     // ── The page: [section nav | scrollable content column] ──────────────────
     const version = el('span', { class: 'settings-about-version', text: '' })
     try {
@@ -273,23 +190,10 @@ export const settingsFeature: UiFeature = {
       {
         id: 'usage',
         label: 'Usage',
-        el: section('usage', 'Usage', [
-          row(
-            'Usage meters',
-            usageStub,
-            'Which providers the titlebar gauge polls, and how often. This is a stub — the full Usage tab (providers, plans, thresholds, baseline) lands in 7/12.'
-          ),
-          row(
-            'Alerts',
-            usageAlerts,
-            'Session-window shoulder-taps: a quiet toast at the first threshold, a warning with the pace verdict at the second. Each fires once per window and re-arms at reset. Confetti is optional — quiet is the default.'
-          ),
-          row(
-            'Display',
-            createUsageDisplayControls(),
-            'What the titlebar gauge mirrors (merged severity / auto highest-usage / a pinned provider), what the icon shows, how reset times render, and the popover order and density. All paint-only.'
-          )
-        ])
+        // The FULL Usage tab (7/12) — one module, one home for every usage
+        // knob: the provider grid, plans × profiles, pace/alerts/display,
+        // history + cost, and the privacy story. The 7/03 stub is gone.
+        el: section('usage', 'Usage', [createUsageSection()])
       },
       {
         id: 'privacy',

@@ -3,7 +3,7 @@ import { ProfileChannels, UsageChannels, USAGE_DISPLAY_DEFAULTS, type AgentProfi
 import { getBridge } from '../../core/ipc/bridge'
 import { el, icon, showToast } from '../../components'
 import { setActiveView } from '../../core/shell/view-port'
-import { announceProfilesChanged } from '../../core/agents/profiles-port'
+import { switchActiveProfile } from '../../core/agents/profile-switch'
 import { getTelemetry } from '../../core/telemetry'
 
 /**
@@ -88,21 +88,13 @@ export const usageFeature: UiFeature = {
       profiles = ((await bridge.invoke(ProfileChannels.list)) as AgentProfile[]) ?? []
     }
 
-    /** ONE switch implementation, two triggers (tile Enter/click + the failover
-     *  toast action): flip the Phase-4 order pointers so `profileId` becomes
-     *  order 0 for NEW launches. Nothing re-authenticates; running panes keep
-     *  the env they were spawned with. */
+    /** ONE switch implementation (ui-core, shared with the Settings plans
+     *  table), N triggers here: tile Enter/click + the failover toast action. */
     const switchActive = async (providerId: string, profileId: string, viaSuggestion: boolean): Promise<void> => {
+      const targetName = await switchActiveProfile(providerId, profileId)
+      if (!targetName) return
       await refreshProfiles()
-      const mine = profiles.filter((p) => p.provider === providerId).sort((a, b) => a.order - b.order)
-      const target = mine.find((p) => p.id === profileId)
-      const current = mine[0]
-      if (!target || !current || current.id === target.id) return
-      await bridge.invoke(ProfileChannels.save, { ...target, order: current.order })
-      await bridge.invoke(ProfileChannels.save, { ...current, order: target.order })
-      await refreshProfiles()
-      announceProfilesChanged() // palette + failover data follow live (Phase-4 port)
-      switchHint = `New launches use ${target.name} — running panes keep the profile they started with.`
+      switchHint = `New launches use ${targetName} — running panes keep the profile they started with.`
       paintGauge()
       if (!pop.hidden) renderPop()
       // ids + booleans only (ADR 0005) — never plan names or numbers.

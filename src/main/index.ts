@@ -38,6 +38,7 @@ import { runUsageSmoke } from './usage-smoke'
 import { runUsageUiSmoke } from './usageui-smoke'
 import { runWebUsageSmoke } from './webusage-smoke'
 import { runUsageCliSmoke } from './usagecli-smoke'
+import { runUsageSetSmoke } from './usageset-smoke'
 import { runAttentionSmoke } from './attention-smoke'
 import { runBlocksSmoke } from './blocks-smoke'
 import { runGitSmoke } from './git-smoke'
@@ -214,6 +215,8 @@ app.whenReady().then(async () => {
     runWebUsageSmoke(win) // env-gated web-session smoke: paste/store-read consent (7/06)
   } else if (process.env.MOGGING_USAGECLI && win) {
     runUsageCliSmoke(win) // env-gated usage-CLI smoke: mogging usage verbs over the app endpoint (7/11)
+  } else if (process.env.MOGGING_USAGESET && win) {
+    runUsageSetSmoke(win) // env-gated Usage-tab smoke: the full Settings § Usage (7/12)
   } else if (process.env.MOGGING_USAGE && win) {
     runUsageSmoke(win) // env-gated usage-seam smoke: FAKE adapter only (Phase-7/01)
   } else if (process.env.MOGGING_ATTENTION && win) {

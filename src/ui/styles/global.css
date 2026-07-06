@@ -3574,6 +3574,191 @@ body.resizing * {
 .usage-popover.is-compact .usage-verdict {
   display: none;
 }
+/* 7/12 — the FULL Usage tab: configure + explain; the popover stays the glance. */
+.usage-tab {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.usage-search {
+  width: 100%;
+  margin-bottom: var(--sp-2);
+}
+.usage-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  max-height: 420px;
+  overflow-y: auto;
+}
+.usage-class-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.usage-prov-row {
+  padding: 4px var(--sp-2);
+  border-radius: var(--r-md, 6px);
+}
+.usage-prov-row:hover {
+  background: var(--surface-2, rgba(128, 128, 128, 0.06));
+}
+.usage-prov-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.usage-prov-label {
+  font-weight: 600;
+  min-width: 130px;
+}
+.usage-class-chip {
+  font-size: 10px;
+  text-transform: none;
+  color: var(--text-mid);
+}
+.usage-detected {
+  font-size: 10px;
+  text-transform: none;
+}
+.usage-detected.is-found {
+  color: var(--accent);
+}
+.usage-detected.is-missing {
+  color: var(--text-mid);
+}
+.usage-prov-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  padding: 2px 0 2px 26px;
+}
+.usage-key-ctl {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-wrap: wrap;
+}
+.usage-key-input,
+.usage-envref-input {
+  width: 170px;
+}
+.usage-key-saved {
+  color: var(--accent);
+}
+.usage-key-err {
+  color: var(--danger);
+  font-size: 11px;
+}
+.usage-plans-table {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.usage-plan-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  padding: 3px var(--sp-2);
+  border-radius: var(--r-md, 6px);
+}
+.usage-plan-row.is-active {
+  background: var(--accent-weak);
+}
+.usage-plan-row.is-active::before {
+  content: '';
+  position: absolute;
+  left: 1px;
+  top: 4px;
+  bottom: 4px;
+  width: 4px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+}
+.usage-plan-name {
+  font-weight: 600;
+}
+.usage-mini-gauges {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.usage-track-mini {
+  width: 48px;
+  height: 3px;
+  border-radius: var(--r-full);
+  background: var(--surface-3, rgba(128, 128, 128, 0.25));
+  overflow: hidden;
+  display: block;
+}
+.usage-track-mini .usage-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.usage-track-mini .usage-fill.is-hot {
+  background: var(--warning);
+}
+.usage-plan-verdict {
+  flex: 1;
+  min-width: 140px;
+  font-size: 11px;
+  color: var(--text-mid);
+}
+.usage-spend {
+  font-size: 11px;
+  color: var(--text-mid);
+}
+.usage-pace-days {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.usage-pace-hours {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.usage-pace-hour {
+  width: 56px;
+}
+.usage-history-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.usage-history-label {
+  min-width: 150px;
+  font-size: 11px;
+  color: var(--text-mid);
+}
+.usage-sparkline {
+  width: 60px;
+  height: 16px;
+}
+.usage-sparkline polyline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+.usage-cost-out {
+  width: 100%;
+  padding-left: var(--sp-3);
+  font-size: 11px;
+  color: var(--text-mid);
+}
+.usage-cost-total {
+  font-weight: 600;
+}
+.usage-privacy-line {
+  margin: 0;
+  font-size: 12px;
+}
 /* 7/10 Settings § Usage display rows. */
 .usage-display-row {
   display: flex;

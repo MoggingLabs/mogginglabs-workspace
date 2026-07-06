@@ -1,6 +1,6 @@
 import { app, ipcMain, type BrowserWindow } from 'electron'
 import { UsageChannels, USAGE_CADENCES, USAGE_PROVIDERS, USAGE_ALERT_DEFAULTS, USAGE_DISPLAY_DEFAULTS, findProvider, type PlanUsage, type UsageCadence } from '@contracts'
-import type { PlanUsageView, PaceView, UsageConfig, UsageConfigPatch, CostScan, UsageAlertConfig, UsageDisplayConfig } from '@contracts'
+import type { PlanUsageView, PaceView, UsageConfig, UsageConfigPatch, CostScan, UsageAlertConfig, UsageDisplayConfig, UsagePaceConfig } from '@contracts'
 import {
   createUsageService,
   fakeAdapter,
@@ -105,8 +105,9 @@ function windowMsFor(label: string): number | null {
 const SEVERITY_RANK = { 'runs-out': 2, surplus: 1, 'on-pace': 0 } as const
 
 /** Attach the worst window's pace to a plan (fresh/stale only — an
- *  error/unconfigured tile renders its age + reason, never a forecast). */
-function toView(p: PlanUsage): PlanUsageView {
+ *  error/unconfigured tile renders its age + reason, never a forecast).
+ *  `pace` is the 7/12 work-day baseline — nulls mean wall-clock pacing. */
+function toView(p: PlanUsage, pace?: UsagePaceConfig): PlanUsageView {
   if (p.health !== 'fresh' && p.health !== 'stale') return p
   const tz = -new Date().getTimezoneOffset()
   let best: PaceView | undefined
@@ -114,7 +115,11 @@ function toView(p: PlanUsage): PlanUsageView {
   for (const w of p.windows) {
     const windowMs = w.windowMs && w.windowMs > 0 ? w.windowMs : windowMsFor(w.label)
     if (!windowMs) continue
-    const report = computePace(w, Date.now(), { windowMs, tzOffsetMinutes: tz })
+    const report = computePace(w, Date.now(), {
+      windowMs,
+      tzOffsetMinutes: tz,
+      ...(pace?.workDays && pace.workHours ? { workDays: pace.workDays, workHours: pace.workHours } : {})
+    })
     if (!report) continue
     const rank = SEVERITY_RANK[report.verdict]
     if (rank > bestRank) {
@@ -231,13 +236,34 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
     }
   }
 
+  // 7/12 pace baseline: which days/hours count as active time (feeds 02).
+  const paceCfg = (): UsagePaceConfig => {
+    const kv = getSettingsStore()
+    const read = (key: string): unknown => {
+      try {
+        return JSON.parse(kv?.getSetting(key) ?? 'null')
+      } catch {
+        return null
+      }
+    }
+    const days = read('usage.pace.workdays')
+    const hours = read('usage.pace.workhours')
+    const workDays = Array.isArray(days) ? days.filter((d): d is number => Number.isInteger(d) && d >= 0 && d <= 6) : null
+    const workHours =
+      Array.isArray(hours) && hours.length === 2 && hours.every((h) => Number.isFinite(h) && h >= 0 && h <= 24) && hours[0] < hours[1]
+        ? ([hours[0], hours[1]] as [number, number])
+        : null
+    return { workDays: workDays && workDays.length ? workDays : null, workHours }
+  }
+
   const enrich = (plans: PlanUsage[]): PlanUsageView[] => {
     // Every reset line comes from THE reset formatter, in the ONE chosen style.
     const style = displayCfg().resetStyle
+    const pace = paceCfg()
     const tz = -new Date().getTimezoneOffset()
     return plans.map((p) => {
       const relabeled = withOutage(p)
-      const view = toView(relabeled)
+      const view = toView(relabeled, pace)
       const styled: PlanUsageView = {
         ...(relabeled !== p && view.pace ? { ...view, pace: undefined } : view),
         windows: view.windows.map((w) =>
@@ -320,6 +346,23 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
     win?.webContents.send(UsageChannels.changed, enrich(service?.list() ?? []))
   })
 
+  // 7/12 pace baseline get/set — the work-day window the 02 engine uses.
+  ipcMain.handle(UsageChannels.paceCfgGet, (): UsagePaceConfig => paceCfg())
+  ipcMain.handle(UsageChannels.paceCfgSet, (_e, raw: unknown) => {
+    const p = raw as Partial<UsagePaceConfig> | null
+    const kv = getSettingsStore()
+    if (!p || !kv) return
+    if (p.workDays === null) kv.setSetting('usage.pace.workdays', 'null')
+    else if (Array.isArray(p.workDays))
+      kv.setSetting('usage.pace.workdays', JSON.stringify(p.workDays.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6).slice(0, 7)))
+    if (p.workHours === null) kv.setSetting('usage.pace.workhours', 'null')
+    else if (Array.isArray(p.workHours) && p.workHours.length === 2) {
+      const [a, b] = p.workHours
+      if (Number.isFinite(a) && Number.isFinite(b) && a >= 0 && b <= 24 && a < b) kv.setSetting('usage.pace.workhours', JSON.stringify([a, b]))
+    }
+    getWin()?.webContents.send(UsageChannels.changed, enrich(service?.list() ?? []))
+  })
+
   // 7/09 alert config: two shoulder-tap pcts + the confetti opt-in.
   ipcMain.handle(UsageChannels.alertCfgGet, (): UsageAlertConfig => alertCfg())
   ipcMain.handle(UsageChannels.alertCfgSet, (_e, raw: unknown) => {
@@ -331,24 +374,31 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
     if (typeof p.confetti === 'boolean') kv.setSetting('usage.alert.confetti', p.confetti ? '1' : '0')
   })
 
-  // The 7/03 settings stub's surface (12 grows it): enable + cadence per provider.
+  // The Usage tab's surface (7/12): rows are the UNION of the catalog and
+  // the registered adapters (the FAKE world registers only its fixture
+  // adapter, but the tab still shows — and keeps key PRESENCE truthful for —
+  // every catalog row). `enabled` mirrors the SEAM's class-aware default so
+  // the grid never claims a lane the poller isn't reading.
   ipcMain.handle(UsageChannels.configGet, (): UsageConfig => {
     const kv = getSettingsStore()
+    const ids = [...new Set([...USAGE_PROVIDERS.map((p) => p.id), ...adapters.map((a) => a.id)])]
     return {
-      providers: adapters.map((a) => ({
-        id: a.id,
-        enabled: kv?.getSetting(`usage.enabled.${a.id}`) !== '0',
-        cadence: (kv?.getSetting(`usage.cadence.${a.id}`) ?? '5m') as UsageCadence,
+      providers: ids.map((id) => ({
+        id,
+        enabled: statusEnabled(id), // the seam's rule, verbatim
+        cadence: (kv?.getSetting(`usage.cadence.${id}`) ?? '5m') as UsageCadence,
         // PRESENCE only (ADR 0007.a) — the kind, never a value.
-        key: keySlot(a.id).kind,
+        key: keySlot(id).kind,
         // web-session store-read opt-in (ADR 0007.b), default OFF.
-        webRead: getSettingsStore()?.getSetting(`usage.webread.${a.id}`) === '1'
+        webRead: findProvider(id)?.klass === 'web-session' ? kv?.getSetting(`usage.webread.${id}`) === '1' : undefined
       }))
     }
   })
+  const configurable = (id: string): boolean =>
+    adapters.some((a) => a.id === id) || USAGE_PROVIDERS.some((p) => p.id === id)
   ipcMain.handle(UsageChannels.configSet, (_e, raw: unknown) => {
     const p = raw as UsageConfigPatch | null
-    if (!p || typeof p.providerId !== 'string' || !adapters.some((a) => a.id === p.providerId)) return
+    if (!p || typeof p.providerId !== 'string' || !configurable(p.providerId)) return
     const kv = getSettingsStore()
     if (typeof p.enabled === 'boolean') kv?.setSetting(`usage.enabled.${p.providerId}`, p.enabled ? '1' : '0')
     if (p.cadence && (USAGE_CADENCES as readonly string[]).includes(p.cadence))

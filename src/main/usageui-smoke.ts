@@ -164,7 +164,7 @@ export function runUsageUiSmoke(win: BrowserWindow): void {
       await ES(`document.querySelector('.usage-gear').click()`)
       await sleep(400)
       const gearOk = await ES<boolean>(
-        `!!document.querySelector('.settings-section[data-section="usage"]') && !!document.querySelector('.usage-stub-row[data-provider="fake"]') && !!document.querySelector('.usage-alert-cfg .usage-thr-warn')`
+        `!!document.querySelector('.settings-section[data-section="usage"]') && !!document.querySelector('.usage-prov-row[data-provider="fake"]') && !!document.querySelector('.usage-alert-cfg .usage-thr-warn')`
       )
 
       // 7 ── 7/09 operational: ordering, identity, thresholds, switching.

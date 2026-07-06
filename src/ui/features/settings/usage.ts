@@ -1,26 +1,536 @@
-import { UsageChannels, USAGE_DISPLAY_DEFAULTS, type UsageConfig, type UsageDisplayConfig } from '@contracts'
-import { createCheckbox, el } from '../../components'
+import {
+  AgentChannels,
+  ProfileChannels,
+  UsageChannels,
+  USAGE_CADENCES,
+  USAGE_DISPLAY_DEFAULTS,
+  USAGE_PROVIDERS,
+  type AgentInfo,
+  type AgentProfile,
+  type CostScan,
+  type PlanUsageView,
+  type UsageAlertConfig,
+  type UsageConfig,
+  type UsageDisplayConfig,
+  type UsagePaceConfig,
+  type UsageProviderDef
+} from '@contracts'
+import { Button, createCheckbox, el, showToast } from '../../components'
 import { getBridge } from '../../core/ipc/bridge'
 import { getTelemetry } from '../../core/telemetry'
+import { switchActiveProfile } from '../../core/agents/profile-switch'
 
 /**
- * Settings § Usage — display controls (Phase-7/10). What the titlebar gauge
- * mirrors (merged / pinned / auto), what the icon shows, how resets render,
- * and the popover's order/density. Everything persists via usage:displaySet
- * and paints live — display is PAINT-ONLY, never a refetch. The 7/12 full
- * Usage tab grows around this module.
+ * Settings § Usage — the FULL tab (Phase-7/12): the one home for finding,
+ * enabling, keying, and configuring every provider in the ~57-row catalog
+ * across the five classes, plus the plans × profiles table, pace baseline,
+ * alerts, display, history/cost, and the privacy story. The 7/03 stub is
+ * absorbed here. The tab CONFIGURES and explains — the popover stays the
+ * glance. Every mutation rides the poller's own IPC (configSet / keySet /
+ * webReadSet / alertCfgSet / displaySet / paceCfgSet) — no side channel.
+ * Keys are 0007.a WRITE-ONLY: a pasted value leaves the DOM at save and can
+ * never be rendered again. Nothing here emits values to telemetry.
  */
-export function createUsageDisplayControls(): HTMLElement {
+
+const invoke = (channel: string, payload?: unknown): Promise<unknown> => getBridge().invoke(channel, payload)
+
+const CLASS_ORDER = ['cli-store', 'api-key', 'cloud-cli', 'web-session', 'local'] as const
+const CLASS_LABEL: Record<string, string> = {
+  'cli-store': 'CLI stores — read in place',
+  'api-key': 'API keys — paste once, write-only',
+  'cloud-cli': 'Cloud CLIs — ambient credentials',
+  'web-session': 'Browser sessions — paste-first, read opt-in',
+  local: 'Local'
+}
+
+interface GridRow extends Pick<UsageProviderDef, 'id' | 'label' | 'klass'> {
+  enabled: boolean
+  cadence: string
+  key?: string
+  webRead?: boolean
+  health?: string
+}
+
+export function createUsageSection(): HTMLElement {
+  const root = el('div', { class: 'usage-tab' })
+  const block = (cls: string, label: string, caption: string, control: HTMLElement): HTMLElement =>
+    el('div', { class: `settings-row ${cls}` }, [
+      el('div', { class: 'settings-row-head' }, [
+        el('span', { class: 'settings-row-label', text: label }),
+        el('span', { class: 'settings-row-caption', text: caption })
+      ]),
+      control
+    ])
+
+  let plans: PlanUsageView[] = []
+  let profiles: AgentProfile[] = []
+  let detected = new Set<string>()
+
+  // ── 1 · The provider catalog grid (searchable, class-grouped) ─────────────
+  const search = el('input', { class: 'usage-search', ariaLabel: 'Search providers' }) as HTMLInputElement
+  search.type = 'search'
+  search.placeholder = `Search ${USAGE_PROVIDERS.length}+ providers…`
+  const grid = el('div', { class: 'usage-grid' })
+
+  const rowState = new Map<string, GridRow>()
+
+  async function loadGrid(): Promise<void> {
+    const cfg = ((await invoke(UsageChannels.configGet)) as UsageConfig | null)?.providers ?? []
+    const byId = new Map(cfg.map((p) => [p.id, p]))
+    rowState.clear()
+    // The union: the FULL catalog + any adapter row outside it (the FAKE world).
+    for (const def of USAGE_PROVIDERS) {
+      const c = byId.get(def.id)
+      rowState.set(def.id, {
+        id: def.id,
+        label: def.label,
+        klass: def.klass,
+        enabled: c?.enabled ?? false,
+        cadence: c?.cadence ?? '5m',
+        key: c?.key,
+        webRead: c?.webRead,
+        health: plans.find((p) => p.providerId === def.id)?.health
+      })
+    }
+    for (const c of cfg) {
+      if (rowState.has(c.id)) continue
+      rowState.set(c.id, {
+        id: c.id,
+        label: c.id,
+        klass: 'local',
+        enabled: c.enabled,
+        cadence: c.cadence,
+        key: c.key,
+        webRead: c.webRead,
+        health: plans.find((p) => p.providerId === c.id)?.health
+      })
+    }
+    renderGrid()
+  }
+
+  function keyControl(r: GridRow, rerender: () => void): HTMLElement {
+    const host = el('div', { class: 'usage-key-ctl' })
+    const err = el('span', { class: 'settings-error usage-key-err' })
+    err.hidden = true
+    const fail = (reason: string): void => {
+      err.textContent = reason
+      err.hidden = false
+    }
+    if (r.key === 'keychain' || r.key === 'env-ref') {
+      // WRITE-ONLY forever: saved state renders a masked chip — Replace and
+      // Delete exist; a reveal does not (no getter channel exists at all).
+      host.append(
+        el('span', { class: 'pill usage-key-saved', text: r.key === 'keychain' ? 'Key saved ····' : 'env-ref set' }),
+        Button({
+          label: 'Replace',
+          size: 'sm',
+          onClick: () => {
+            r.key = 'none'
+            rerender()
+          }
+        }),
+        Button({
+          label: 'Delete',
+          size: 'sm',
+          onClick: () => {
+            void invoke(UsageChannels.keyClear, r.id).then(() => void loadGrid())
+          }
+        })
+      )
+      return host
+    }
+    // Paste-once: a password field (never readable back after save) + save.
+    const paste = el('input', { class: 'usage-key-input', ariaLabel: `${r.id} API key` }) as HTMLInputElement
+    paste.type = 'password'
+    paste.placeholder = r.klass === 'web-session' ? 'paste cookie value…' : 'paste API key…'
+    const save = Button({
+      label: 'Save',
+      size: 'sm',
+      onClick: () => {
+        const plaintext = paste.value
+        if (!plaintext) return
+        paste.value = '' // the value leaves the DOM before the round trip
+        void invoke(UsageChannels.keySet, { providerId: r.id, plaintext }).then((res) => {
+          const out = res as { ok: boolean; reason?: string }
+          if (out.ok) void loadGrid()
+          else fail(out.reason ?? 'refused')
+        })
+      }
+    })
+    // Advanced: an env-ref POINTER slot (a name, never a secret — a
+    // secret-shaped literal is refused main-side and surfaced here).
+    const envRef = el('input', { class: 'usage-envref-input', ariaLabel: `${r.id} env-ref` }) as HTMLInputElement
+    envRef.type = 'text'
+    envRef.placeholder = '${ENV_VAR} ref…'
+    const saveRef = Button({
+      label: 'Set ref',
+      size: 'sm',
+      onClick: () => {
+        const ref = envRef.value.trim()
+        if (!ref) return
+        void invoke(UsageChannels.keySet, { providerId: r.id, envRef: ref }).then((res) => {
+          const out = res as { ok: boolean; reason?: string }
+          if (out.ok) {
+            envRef.value = ''
+            void loadGrid()
+          } else fail(out.reason ?? 'refused')
+        })
+      }
+    })
+    host.append(paste, save, envRef, saveRef, err)
+    return host
+  }
+
+  function renderGrid(): void {
+    grid.replaceChildren()
+    const q = search.value.trim().toLowerCase()
+    const rows = [...rowState.values()].filter((r) => !q || r.id.includes(q) || r.label.toLowerCase().includes(q))
+    for (const klass of CLASS_ORDER) {
+      const mine = rows.filter((r) => r.klass === klass)
+      if (!mine.length) continue
+      // Detected/enabled first; the rest are one search away.
+      mine.sort(
+        (a, b) =>
+          Number(b.enabled || detected.has(b.id)) - Number(a.enabled || detected.has(a.id)) || a.label.localeCompare(b.label)
+      )
+      const group = el('div', { class: 'usage-class-group', dataset: { klass } })
+      group.append(el('div', { class: 'section-label usage-class-label', text: CLASS_LABEL[klass] ?? klass }))
+      for (const r of mine) {
+        const row = el('div', { class: 'usage-prov-row', dataset: { provider: r.id, klass: r.klass } })
+        const enable = createCheckbox({
+          label: '',
+          ariaLabel: `${r.id} enabled`,
+          checked: r.enabled,
+          onChange: (checked) => {
+            void invoke(UsageChannels.configSet, { providerId: r.id, enabled: checked }).then(() => void loadGrid())
+          }
+        })
+        enable.el.classList.add('usage-prov-enable')
+        const cadence = el('select', { class: 'usage-cadence', ariaLabel: `${r.id} refresh cadence` }) as HTMLSelectElement
+        for (const c of USAGE_CADENCES) cadence.append(el('option', { value: c, text: c }))
+        cadence.value = r.cadence
+        cadence.addEventListener('change', () => void invoke(UsageChannels.configSet, { providerId: r.id, cadence: cadence.value }))
+        const head = el('div', { class: 'usage-prov-head' }, [
+          enable.el,
+          el('span', { class: 'usage-prov-label', text: r.label }),
+          el('span', { class: `pill usage-class-chip is-${r.klass}`, text: r.klass }),
+          r.klass === 'cli-store' || r.klass === 'cloud-cli'
+            ? el('span', {
+                class: `pill usage-detected ${detected.has(r.id) || r.health === 'fresh' || r.health === 'stale' ? 'is-found' : 'is-missing'}`,
+                text: detected.has(r.id) || r.health === 'fresh' || r.health === 'stale' ? 'detected' : 'not found'
+              })
+            : null,
+          r.enabled && r.health ? el('span', { class: `pill usage-health is-${r.health}`, text: r.health }) : null,
+          cadence,
+          r.enabled
+            ? Button({ label: 'Refresh', size: 'sm', onClick: () => void invoke(UsageChannels.refresh, r.id) })
+            : null
+        ])
+        row.append(head)
+        if (r.klass === 'api-key' || r.klass === 'web-session') {
+          const ctl = el('div', { class: 'usage-prov-controls' }, [keyControl(r, renderGrid)])
+          if (r.klass === 'web-session') {
+            const webRead = createCheckbox({
+              label: 'read my browser session',
+              ariaLabel: `${r.id}: read my browser session`,
+              checked: r.webRead ?? false,
+              onChange: (checked) => void invoke(UsageChannels.webReadSet, { providerId: r.id, enabled: checked })
+            })
+            webRead.el.classList.add('usage-webread')
+            webRead.el.title =
+              'OFF by default. When on, the app decrypts this one site’s cookie via your OS keychain, for the one usage read only — never shared with agents (ADR 0007.b). You can always paste a cookie instead.'
+            ctl.append(webRead.el)
+          }
+          row.append(ctl)
+        }
+        group.append(row)
+      }
+      grid.append(group)
+    }
+    if (!grid.childElementCount) grid.append(el('p', { class: 'ph-empty', text: 'No provider matches that search.' }))
+  }
+  search.addEventListener('input', renderGrid)
+
+  // ── 2 · Plans × profiles (the poller's exact fan-out; same snapshot as the
+  //        popover — asserted equal in the smoke) ────────────────────────────
+  const plansTable = el('div', { class: 'usage-plans-table' })
+
+  function renderPlans(): void {
+    plansTable.replaceChildren()
+    if (!plans.length) {
+      plansTable.append(el('p', { class: 'ph-empty', text: 'No plans yet — enable a provider above.' }))
+      return
+    }
+    for (const p of plans) {
+      const mine = profiles.filter((x) => x.provider === p.providerId).sort((a, b) => a.order - b.order)
+      const activeId = mine[0]?.id ?? 'default'
+      const isActive = p.profileId === activeId
+      const rowEl = el('div', {
+        class: 'usage-plan-row' + (isActive ? ' is-active' : ''),
+        dataset: { provider: p.providerId, profile: p.profileId }
+      })
+      const bars = el('span', { class: 'usage-mini-gauges' })
+      for (const w of p.windows.slice(0, 2)) {
+        const track = el('span', { class: 'usage-track usage-track-mini' })
+        const fill = el('span', { class: 'usage-fill' + (w.usedPct >= 90 ? ' is-hot' : '') })
+        fill.style.width = `${Math.max(0, Math.min(100, w.usedPct))}%`
+        track.append(fill)
+        bars.append(track)
+      }
+      const children: (Node | null)[] = [
+        el('span', { class: 'usage-plan-name', text: p.planLabel }),
+        el('span', { class: 'usage-profile', text: p.profileId }),
+        bars,
+        p.spend ? el('span', { class: 'usage-spend', text: `${p.spend.currency} ${p.spend.amount.toFixed(2)}` }) : null,
+        el('span', { class: 'usage-plan-verdict', text: p.pace?.text ?? p.reason ?? '' }),
+        el('span', { class: `pill usage-health is-${p.health}`, text: p.health }),
+        !isActive && mine.some((m) => m.id === p.profileId)
+          ? Button({
+              label: 'Switch for new launches',
+              size: 'sm',
+              onClick: () => {
+                void switchActiveProfile(p.providerId, p.profileId).then((name) => {
+                  if (name) {
+                    void refreshSnapshot()
+                    getTelemetry().captureEvent({ name: 'usage.profileSwitch', props: { provider: p.providerId, viaSuggestion: false } })
+                  }
+                })
+              }
+            })
+          : null
+      ]
+      rowEl.append(...children.filter((c): c is Node => c !== null))
+      plansTable.append(rowEl)
+    }
+  }
+
+  // ── 3 · Pace baseline (feeds the 7/02 engine) ─────────────────────────────
+  const paceHost = el('div', { class: 'usage-pace-cfg settings-consents' })
+  void (async () => {
+    const cfg = ((await invoke(UsageChannels.paceCfgGet)) as UsagePaceConfig | null) ?? { workDays: null, workHours: null }
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    const days = new Set(cfg.workDays ?? [])
+    const dayRow = el('div', { class: 'usage-pace-days' })
+    const push = (): void => {
+      void invoke(UsageChannels.paceCfgSet, { workDays: days.size ? [...days].sort() : null })
+    }
+    for (let d = 0; d < 7; d++) {
+      const c = createCheckbox({
+        label: dayNames[d],
+        checked: days.has(d),
+        onChange: (on) => {
+          if (on) days.add(d)
+          else days.delete(d)
+          push()
+        }
+      })
+      c.el.classList.add('usage-pace-day')
+      dayRow.append(c.el)
+    }
+    const hourInput = (label: string, value: number): HTMLInputElement => {
+      const i = el('input', { class: 'usage-pace-hour', ariaLabel: label }) as HTMLInputElement
+      i.type = 'number'
+      i.min = '0'
+      i.max = '24'
+      i.value = String(value)
+      return i
+    }
+    const from = hourInput('Active from hour', cfg.workHours?.[0] ?? 9)
+    const to = hourInput('Active to hour', cfg.workHours?.[1] ?? 18)
+    const applyHours = (): void => {
+      const a = Number(from.value)
+      const b = Number(to.value)
+      if (Number.isFinite(a) && Number.isFinite(b) && a >= 0 && b <= 24 && a < b) void invoke(UsageChannels.paceCfgSet, { workHours: [a, b] })
+    }
+    from.addEventListener('change', applyHours)
+    to.addEventListener('change', applyHours)
+    paceHost.append(
+      dayRow,
+      el('div', { class: 'usage-pace-hours' }, [
+        el('span', { class: 'settings-row-caption', text: 'Active hours' }),
+        from,
+        el('span', { class: 'settings-row-caption', text: '–' }),
+        to,
+        Button({ label: 'Clear baseline', size: 'sm', onClick: () => void invoke(UsageChannels.paceCfgSet, { workDays: null, workHours: null }) })
+      ])
+    )
+  })()
+
+  // ── 4 · Alerts (the 09 rules) + a fixture test toast ──────────────────────
+  const alertsHost = el('div', { class: 'usage-alert-cfg settings-consents' })
+  void (async () => {
+    const cfg = (await invoke(UsageChannels.alertCfgGet)) as UsageAlertConfig | null
+    if (!cfg) return
+    const pctInput = (cls: string, label: string, value: number, key: 'quiet' | 'warn'): HTMLInputElement => {
+      const input = el('input', { class: `usage-thr ${cls}`, ariaLabel: label }) as HTMLInputElement
+      input.type = 'number'
+      input.min = '1'
+      input.max = '100'
+      input.value = String(value)
+      input.addEventListener('change', () => {
+        const v = Number(input.value)
+        if (Number.isFinite(v) && v >= 1 && v <= 100) void invoke(UsageChannels.alertCfgSet, { [key]: v })
+      })
+      return input
+    }
+    const quiet = pctInput('usage-thr-quiet', 'Quiet threshold percent', cfg.quiet, 'quiet')
+    const warn = pctInput('usage-thr-warn', 'Warning threshold percent', cfg.warn, 'warn')
+    const confetti = createCheckbox({
+      label: 'Confetti on window reset',
+      checked: cfg.confetti,
+      onChange: (checked) => void invoke(UsageChannels.alertCfgSet, { confetti: checked })
+    })
+    confetti.el.classList.add('usage-confetti-toggle')
+    alertsHost.append(
+      el('div', { class: 'usage-alert-row' }, [
+        el('span', { class: 'settings-row-caption', text: 'Quiet toast at' }),
+        quiet,
+        el('span', { class: 'settings-row-caption', text: '% · warning at' }),
+        warn,
+        el('span', { class: 'settings-row-caption', text: '%' })
+      ]),
+      confetti.el,
+      Button({
+        label: 'Test notification',
+        size: 'sm',
+        onClick: () =>
+          // A FIXTURE toast, clearly labeled — the real copy is composed
+          // main-side (09); this only proves the house toast path works.
+          showToast({ tone: 'attention', title: 'Test — Fake Pro at 95% of Session (5h)', body: 'Ahead of pace — a fixture, not a reading.' })
+      })
+    )
+  })()
+
+  // ── 5 · Display (the 10 options — absorbed intact) ────────────────────────
+  const displayHost = createDisplayControls()
+
+  // ── 6 · History + cost (compact — the popover's deferred depth) ───────────
+  const historyHost = el('div', { class: 'usage-history-block' })
+
+  function sparkline(series: number[]): HTMLElement {
+    const svgNs = 'http://www.w3.org/2000/svg'
+    const svg = document.createElementNS(svgNs, 'svg')
+    svg.setAttribute('class', 'usage-sparkline')
+    svg.setAttribute('viewBox', '0 0 60 16')
+    svg.setAttribute('preserveAspectRatio', 'none')
+    const pts = series.length > 1 ? series : [0, ...series]
+    const step = 60 / Math.max(1, pts.length - 1)
+    const line = document.createElementNS(svgNs, 'polyline')
+    line.setAttribute('points', pts.map((v, i) => `${(i * step).toFixed(1)},${(15 - (v / 100) * 14).toFixed(1)}`).join(' '))
+    svg.append(line)
+    return svg as unknown as HTMLElement
+  }
+
+  async function renderHistory(): Promise<void> {
+    historyHost.replaceChildren()
+    const seen = new Set<string>()
+    for (const p of plans) {
+      if (seen.has(p.providerId) || (p.health !== 'fresh' && p.health !== 'stale')) continue
+      seen.add(p.providerId)
+      const w = p.windows[0]
+      if (!w) continue
+      const series = ((await invoke(UsageChannels.history, { providerId: p.providerId, window: w.label })) as number[]) ?? []
+      const rowEl = el('div', { class: 'usage-history-row', dataset: { provider: p.providerId } }, [
+        el('span', { class: 'usage-history-label', text: `${p.providerId} · ${w.label}` }),
+        sparkline(series),
+        ['codex', 'claude'].includes(p.providerId)
+          ? Button({
+              label: 'Scan cost',
+              size: 'sm',
+              onClick: () => {
+                void invoke(UsageChannels.cost, p.providerId).then((raw) => {
+                  const scan = raw as CostScan
+                  const out = el('div', { class: 'usage-cost-out' })
+                  if (!scan.days.length) out.append(el('span', { class: 'settings-row-caption', text: scan.reason ?? 'no data' }))
+                  let total = 0
+                  for (const d of scan.days) {
+                    total += d.spend
+                    out.append(el('div', { class: 'usage-cost-day', text: `${d.date}  ${scan.currency} ${d.spend.toFixed(2)}  ·  ${d.tokens.toLocaleString()} tokens` }))
+                  }
+                  if (scan.days.length) out.append(el('div', { class: 'usage-cost-total', text: `total ${scan.currency} ${total.toFixed(2)}` }))
+                  rowEl.querySelector('.usage-cost-out')?.remove()
+                  rowEl.append(out)
+                })
+              }
+            })
+          : null
+      ])
+      historyHost.append(rowEl)
+    }
+    if (!historyHost.childElementCount)
+      historyHost.append(el('p', { class: 'ph-empty', text: 'History appears once an enabled provider reports usage.' }))
+  }
+
+  // ── 7 · The privacy story, in place (ADR 0007 / .a / .b) ──────────────────
+  const privacy = el('div', { class: 'usage-privacy-block settings-consents' }, [
+    el('p', {
+      class: 'usage-privacy-line',
+      text: 'Sessions are read IN PLACE from your own CLIs — this app performs no logins and copies no credentials (ADR 0007).'
+    }),
+    el('p', {
+      class: 'usage-privacy-line',
+      text: 'Pasted keys are encrypted by your OS immediately and can never be shown again — replace or delete only; no read-back exists (ADR 0007.a).'
+    }),
+    el('p', {
+      class: 'usage-privacy-line',
+      text: 'Browser-session reads are per-provider opt-in, OFF by default, one cookie for one usage request, never shared with agents (ADR 0007.b).'
+    }),
+    el('p', { class: 'settings-row-caption', text: 'The full story: docs/12-usage.md in the repository.' })
+  ])
+
+  // ── Data flow: one snapshot feeds grid health + plans + history ───────────
+  async function refreshSnapshot(): Promise<void> {
+    const [plansRaw, profilesRaw] = await Promise.all([invoke(UsageChannels.list), invoke(ProfileChannels.list)])
+    plans = (plansRaw as PlanUsageView[]) ?? []
+    profiles = (profilesRaw as AgentProfile[]) ?? []
+    renderPlans()
+    void renderHistory()
+  }
+  getBridge().on(UsageChannels.changed, (payload) => {
+    plans = (payload as PlanUsageView[]) ?? []
+    renderPlans()
+    // Profiles may have changed too (a switch, a Settings edit) — cheap re-read
+    // so the active marker and Switch affordances stay truthful.
+    void invoke(ProfileChannels.list).then((raw) => {
+      profiles = (raw as AgentProfile[]) ?? []
+      renderPlans()
+    })
+  })
+  void (async () => {
+    try {
+      const agents = ((await invoke(AgentChannels.detect)) as AgentInfo[]) ?? []
+      detected = new Set(agents.filter((a) => a.installed).map((a) => a.id))
+    } catch {
+      /* detection optional */
+    }
+    await loadGrid()
+    await refreshSnapshot()
+  })()
+
+  root.append(
+    block('usage-grid-block', 'Providers', 'The full catalog, five classes. Enable what you use; the rest is one search away.', el('div', {}, [search, grid])),
+    block('usage-plans-block', 'Plans × profiles', 'Every lane the poller reads. The active lane launches new agents; switching flips pointers, never credentials.', plansTable),
+    block('usage-pace-block', 'Pace baseline', 'Days and hours that count as active time — verdicts integrate over these (all-day when unset).', paceHost),
+    block('usage-alerts-block', 'Alerts', 'A quiet toast at the first threshold, a warning with the verdict at the second; once per window, re-armed at reset.', alertsHost),
+    block('usage-display-block', 'Display', 'What the titlebar gauge mirrors, what the icon shows, how resets render, popover order and density.', displayHost),
+    block('usage-history-block-row', 'History & cost', 'Sampled history per provider and the on-demand local cost scan. Compact by design — the popover stays the glance.', historyHost),
+    block('usage-privacy-row', 'Privacy', 'Where credentials live and what never leaves the machine.', privacy)
+  )
+  return root
+}
+
+/** The 7/10 display controls (absorbed intact — one home). */
+function createDisplayControls(): HTMLElement {
   const root = el('div', { class: 'settings-consents usage-display-cfg' })
   void (async () => {
     try {
       const cfg: UsageDisplayConfig = {
         ...USAGE_DISPLAY_DEFAULTS,
-        ...(((await getBridge().invoke(UsageChannels.displayGet)) as UsageDisplayConfig) ?? {})
+        ...(((await invoke(UsageChannels.displayGet)) as UsageDisplayConfig) ?? {})
       }
-      const providers = (((await getBridge().invoke(UsageChannels.configGet)) as UsageConfig | null)?.providers ?? []).map((p) => p.id)
+      const providers = (((await invoke(UsageChannels.configGet)) as UsageConfig | null)?.providers ?? []).map((p) => p.id)
       const set = (patch: Partial<UsageDisplayConfig>): void => {
-        void getBridge().invoke(UsageChannels.displaySet, patch)
+        void invoke(UsageChannels.displaySet, patch)
         // Enums + booleans ONLY (ADR 0005) — never a provider id or number.
         getTelemetry().captureEvent({
           name: 'usage.display',
@@ -92,7 +602,6 @@ export function createUsageDisplayControls(): HTMLElement {
         cfg.order,
         (v) => set({ order: v as UsageDisplayConfig['order'] })
       )
-      // Manual pin order stays an unadorned id list until 7/12's grid.
       const pinOrder = el('input', { class: 'usage-display-pinorder', ariaLabel: 'Manual provider order (comma-separated ids)' }) as HTMLInputElement
       pinOrder.type = 'text'
       pinOrder.placeholder = 'provider ids, comma-separated'

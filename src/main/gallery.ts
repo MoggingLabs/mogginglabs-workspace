@@ -224,13 +224,19 @@ export function runGallery(win: BrowserWindow): void {
           await sleep(600)
           getSettingsStore()?.removeProfile('default')
           getSettingsStore()?.removeProfile('fresh-reset')
-          // web-session consent (7/06): the Settings § Usage stub with the
-          // per-provider "read my browser session" opt-in (default OFF).
+          // The FULL Usage tab (7/12): the five-class provider grid (top),
+          // then the plans × profiles + pace/alerts blocks, then privacy.
           await ES(`(document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click(), 1)`)
           await sleep(300)
           await ES(`document.querySelector('.settings-section[data-section="usage"]')?.scrollIntoView({ block: 'start' })`)
-          await sleep(300)
+          await sleep(600)
           await snap(`${tag}-usage-settings`)
+          await ES(`document.querySelector('.usage-plans-block')?.scrollIntoView({ block: 'start' })`)
+          await sleep(300)
+          await snap(`${tag}-usage-tab-plans`)
+          await ES(`document.querySelector('.usage-privacy-block')?.scrollIntoView({ block: 'center' })`)
+          await sleep(300)
+          await snap(`${tag}-usage-tab-privacy`)
           await ES(`(document.querySelector('.settings-back')?.click(), 1)`)
           await sleep(300)
         })

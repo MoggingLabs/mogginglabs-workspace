@@ -368,6 +368,36 @@ seams; ADR 0007 and docs/12 are both unclaimed. The pack runs BEFORE phase
   sets the full smoke env).
 - Gate count 33 → **34** (USAGECLI joins the sweep).
 
+## Usage-tab mechanics (12) — shipped 2026-07-06
+
+- **One module, one home**: `settings/usage.ts` exports the whole section
+  (the profiles-hosts pattern; index.ts stays an assembler). The 7/03 stub,
+  the 09 alerts row, and the 10 display row are absorbed and deleted — the
+  smoke greps that `.usage-stub-row` renders nowhere and each knob block
+  exists exactly once in the document.
+- **The grid is the CATALOG, not the adapters**: rows come from
+  `USAGE_PROVIDERS` (contracts data, renderer-importable) unioned with any
+  adapter row outside it (the FAKE world's row lands in a 'local' group —
+  which is also how the smoke gets all FIVE class groups). State per row
+  from configGet; detected chips from `agents:detect` + live plan health.
+  Detected/enabled sort first; the rest are one search away.
+- **Key controls stay 0007.a-shaped in the DOM**: the paste field is a
+  password input whose value is CLEARED before the IPC round trip; the
+  saved state renders a masked chip + Replace + Delete and nothing that
+  could reveal (the smoke greps the section markup and every input for the
+  pasted value, exercises a REAL replace to a second ciphertext, and
+  asserts the env-ref slot refuses a secret-shaped literal).
+- **Plans table = the popover's snapshot**: same usage:changed feed, same
+  (provider, profile) pairs (asserted set-equal), the shared ui-core
+  `switchActiveProfile` (popover tiles, failover toast, and the table are
+  now literally one function).
+- **Pace baseline** is new plumbing: `usage:paceCfgGet/Set` persists
+  workDays/workHours in the KV; enrich passes them into computePace — the
+  02 engine's work-day integral finally has its editor.
+- History/cost stay COMPACT (sparkline + on-demand scan) — the tab
+  configures and explains; the popover remains the glance.
+- Gate count 34 → **35** (USAGESET).
+
 - **Marathon-tail flake, investigated 2026-07-06 (not a 7/08 defect):**
   WORKTREE failed twice right after the 33-gate marathon (clean AND forced
   worktree removal both refused — the Windows PTY/conhost-teardown lock

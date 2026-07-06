@@ -161,7 +161,10 @@ export const UsageChannels = {
   // how resets render. Paint-only on the renderer; persisted in the KV.
   displayGet: 'usage:displayGet', // -> UsageDisplayConfig
   displaySet: 'usage:displaySet', // (partial UsageDisplayConfig) -> void (persists + re-pushes views)
-  displayChanged: 'usage:displayChanged' // main -> renderer: UsageDisplayConfig (pushed on change)
+  displayChanged: 'usage:displayChanged', // main -> renderer: UsageDisplayConfig (pushed on change)
+  // 7/12 pace baseline: the work-day window the 02 engine integrates over.
+  paceCfgGet: 'usage:paceCfgGet', // -> UsagePaceConfig (workDays + workHours, or nulls = off)
+  paceCfgSet: 'usage:paceCfgSet' // (partial UsagePaceConfig) -> void (re-pushes views)
 } as const
 
 export const AllChannels: readonly string[] = [

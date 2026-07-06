@@ -55,4 +55,4 @@ export interface UsageConfigPatch {
   cadence?: UsageCadence
 }
 
-export type { PlanUsage, UsageWindow, UsageHealth, UsageCadence, CostScan, CostDay, ProviderStatus, ProviderStatusState, UsageAlert, UsageAlertConfig, UsageDisplayConfig, GaugeMode, ResetStyle, PopoverDensity, PopoverOrder } from '../usage'
+export type { PlanUsage, UsageWindow, UsageHealth, UsageCadence, CostScan, CostDay, ProviderStatus, ProviderStatusState, UsageAlert, UsageAlertConfig, UsageDisplayConfig, GaugeMode, ResetStyle, PopoverDensity, PopoverOrder, UsagePaceConfig } from '../usage'
