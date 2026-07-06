@@ -117,12 +117,14 @@ ManifestVersion: 1.6.0
 // 2026-07 macos image hang forced arm64-only, see docs/10). The `zap`/`app`
 // tail is identical either way. Tap layout (Casks/) is what a real tap needs
 // and what makes `brew style` engage the cask cops.
-const caskTail = `  name "MoggingLabs Workspace"
+// armOnly threads `depends_on arch:` into the depends_on GROUP — brew style's
+// Cask/StanzaOrder rejects it beside `url` (caught in CI, run 28759865921).
+const caskTail = (armOnly) => `  name "MoggingLabs Workspace"
   desc "Multi-pane terminal workspace for AI coding agents"
   homepage "${REPO_URL}"
 
   auto_updates true
-  depends_on macos: :big_sur
+${armOnly ? '  depends_on arch: :arm64\n' : ''}  depends_on macos: :big_sur
 
   app "MoggingLabs Workspace.app"
 
@@ -148,7 +150,7 @@ if (dmgArm && dmgX64) {
 
   url "${REPO_URL}/releases/download/v#{version}/MoggingLabs.Workspace-#{version}-mac-#{arch}.dmg"
 ` +
-      caskTail
+      caskTail(false)
   )
 } else if (dmgArm) {
   emit(
@@ -159,9 +161,8 @@ if (dmgArm && dmgX64) {
   sha256 "${sha256(dmgArm)}"
 
   url "${REPO_URL}/releases/download/v#{version}/MoggingLabs.Workspace-#{version}-mac-arm64.dmg"
-  depends_on arch: :arm64
 ` +
-      caskTail
+      caskTail(true)
   )
 } else {
   console.warn(`update-manifests: SKIPPED homebrew cask — no *-mac-arm64.dmg in ${dir}`)

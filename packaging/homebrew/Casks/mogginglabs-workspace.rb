@@ -4,12 +4,12 @@ cask "mogginglabs-workspace" do
   sha256 "2492a49f474219baedc56f40b3f318ddc41a188b6940de16845cfcf8defc17c9"
 
   url "https://github.com/MoggingLabs/mogginglabs-workspace/releases/download/v#{version}/MoggingLabs.Workspace-#{version}-mac-arm64.dmg"
-  depends_on arch: :arm64
   name "MoggingLabs Workspace"
   desc "Multi-pane terminal workspace for AI coding agents"
   homepage "https://github.com/MoggingLabs/mogginglabs-workspace"
 
   auto_updates true
+  depends_on arch: :arm64
   depends_on macos: :big_sur
 
   app "MoggingLabs Workspace.app"
