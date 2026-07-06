@@ -3214,6 +3214,26 @@ body.resizing * {
 .browser-empty[hidden] {
   display: none;
 }
+/* While the dock is being dragged/window-resized the native view is hidden and
+   NOT reflowed — this faint host label sits over the calm surface so the freeze
+   reads as intentional, and a snappier handle signals the live grab. */
+.browser-resize-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-lo);
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.browser-resize-hint[hidden] {
+  display: none;
+}
+.browser-dock.is-resizing .browser-dock-handle {
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+}
 .browser-empty-title {
   color: var(--text-mid);
   font-size: var(--fs-13);

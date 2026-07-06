@@ -101,6 +101,27 @@ export function runBrowserSmoke(win: BrowserWindow): void {
       const dbg2 = dockDebug()
       const resizeOk = !!dbg2.bounds && close2(dbg2.bounds.width, rect2.width) && rect2.width > rect.width
 
+      // ── 4b. Resize FREEZE (8/07): during a continuous drag the native view
+      //        is HIDDEN — the CSS chrome grows but the WebContents never
+      //        reflows (viewShown stays false); it snaps back on release ─────
+      await ES('window.__mogging.browser.beginResize()')
+      await sleep(120)
+      // frozen: main entered resize mode AND the native view is actually hidden
+      const frozenActive = dockDebug().resizing === true && dockDebug().viewShown === false
+      await ES('window.__mogging.browser.setWidth(600)') // chrome grows while the view stays frozen-hidden
+      await sleep(200)
+      const rectFrozenChrome = await ES<{ width: number }>('window.__mogging.browser.viewRect()')
+      // the chrome widened, but the native view was NOT shown/reflowed meanwhile
+      const heldDuringFreeze = dockDebug().viewShown === false && rectFrozenChrome.width > rect2.width
+      await ES('window.__mogging.browser.endResize()')
+      await sleep(400)
+      // release: view shown again, snapped to the final (wider) rect in ONE step
+      const snappedAfter =
+        dockDebug().resizing === false && dockDebug().viewShown === true && (dockDebug().bounds?.width ?? 0) > rect2.width
+      const freezeOk = frozenActive && heldDuringFreeze && snappedAfter
+      await ES('window.__mogging.browser.setWidth(520)') // restore width for the persist assertion
+      await sleep(200)
+
       // ── 5. Toggle off: hidden view, grid re-widens ────────────────────────
       await ES('window.__mogging.browser.toggle(false)')
       await sleep(600)
@@ -127,6 +148,7 @@ export function runBrowserSmoke(win: BrowserWindow): void {
         urlOk &&
         windowsOk &&
         resizeOk &&
+        freezeOk &&
         hiddenOk &&
         rewidened &&
         persistOk
@@ -140,6 +162,10 @@ export function runBrowserSmoke(win: BrowserWindow): void {
         urlOk,
         windowsOk,
         resizeOk,
+        freezeOk,
+        frozenActive,
+        heldDuringFreeze,
+        snappedAfter,
         hiddenOk,
         rewidened,
         persist,

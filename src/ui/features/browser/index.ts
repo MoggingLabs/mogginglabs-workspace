@@ -163,7 +163,17 @@ export const browserFeature: UiFeature = {
       el('div', { class: 'browser-empty-title', text: 'Preview what the agents build' }),
       el('div', { class: 'browser-empty-hint', text: 'Enter a URL above — your dev server, docs, anything http(s).' })
     ])
-    const viewHost = el('div', { class: 'browser-dock-view' }, [empty])
+    // Shown over the (hidden) native view during a resize so the freeze reads
+    // as intentional — the page's host, faint — not a blank pane.
+    const resizeHint = el('div', { class: 'browser-resize-hint', hidden: true })
+    const viewHost = el('div', { class: 'browser-dock-view' }, [empty, resizeHint])
+    const hostOf = (u: string): string => {
+      try {
+        return new URL(u).host
+      } catch {
+        return ''
+      }
+    }
     dock.append(handle, header, agentWebNote, banner, recentActs, confirmBar, originAlert, trailMenu, sitesMenu, loading, wsChip, viewHost)
     // The dock is #content's flex sibling inside #main — inserted, not slotted,
     // so the shell stays feature-agnostic.
@@ -171,35 +181,68 @@ export const browserFeature: UiFeature = {
 
     // ── Bounds: the ONE rect main must cover (rAF-throttled) ────────────────
     let rafPending = false
+    let resizing = false
+    let winResizeTimer: number | undefined
+    const computeBounds = (): BrowserDockBounds => {
+      const r = viewHost.getBoundingClientRect()
+      return {
+        x: r.x,
+        y: r.y,
+        width: r.width,
+        height: r.height,
+        dockWidth: width,
+        visible: open && r.width > 0 && state.url !== ''
+      }
+    }
     const sendBounds = (): void => {
       if (rafPending) return
       rafPending = true
       requestAnimationFrame(() => {
         rafPending = false
-        const r = viewHost.getBoundingClientRect()
-        const b: BrowserDockBounds = {
-          x: r.x,
-          y: r.y,
-          width: r.width,
-          height: r.height,
-          dockWidth: width,
-          visible: open && r.width > 0 && state.url !== ''
-        }
-        bridge.send(BrowserChannels.bounds, b)
+        bridge.send(BrowserChannels.bounds, computeBounds())
       })
     }
+    // During a CONTINUOUS resize (dragging the handle, or the OS window drag)
+    // the native WebContentsView reflows the whole page on every frame — on a
+    // real page that is 10–50 ms of relayout, so the preview visibly TRAILS the
+    // chrome. Freeze it: hide the live view, let the CSS chrome resize alone at
+    // 60 fps, and snap the view to the final rect once on release/settle.
+    const beginResize = (): void => {
+      if (resizing) return
+      resizing = true
+      dock.classList.add('is-resizing')
+      resizeHint.textContent = hostOf(state.url)
+      resizeHint.hidden = !state.url
+      bridge.send(BrowserChannels.resizing, { active: true })
+    }
+    const endResize = (): void => {
+      if (!resizing) return
+      resizing = false
+      dock.classList.remove('is-resizing')
+      resizeHint.hidden = true
+      bridge.send(BrowserChannels.resizing, { active: false, bounds: computeBounds() })
+    }
     new ResizeObserver(sendBounds).observe(viewHost)
-    window.addEventListener('resize', sendBounds)
+    window.addEventListener('resize', () => {
+      // The OS window drag fires 'resize' continuously — freeze until it
+      // settles (a quiet gap), then snap. The ResizeObserver above keeps
+      // main's stored rect fresh throughout; main ignores it while frozen.
+      beginResize()
+      window.clearTimeout(winResizeTimer)
+      winResizeTimer = window.setTimeout(endResize, 140)
+    })
 
     // ── Width drag ───────────────────────────────────────────────────────────
     const applyWidth = (): void => {
       width = Math.max(320, Math.min(Math.round(window.innerWidth * 0.6), width))
       dock.style.width = `${width}px`
-      sendBounds()
+      // While frozen, resize the CSS chrome only — no per-frame bounds/reflow.
+      if (!resizing) sendBounds()
     }
     handle.addEventListener('pointerdown', (e) => {
       e.preventDefault()
       handle.setPointerCapture(e.pointerId)
+      beginResize()
       const startX = e.clientX
       const startW = width
       const move = (ev: PointerEvent): void => {
@@ -209,9 +252,12 @@ export const browserFeature: UiFeature = {
       const up = (): void => {
         handle.removeEventListener('pointermove', move)
         handle.removeEventListener('pointerup', up)
+        handle.removeEventListener('pointercancel', up)
+        endResize()
       }
       handle.addEventListener('pointermove', move)
       handle.addEventListener('pointerup', up)
+      handle.addEventListener('pointercancel', up)
     })
 
     // ── Toggle ───────────────────────────────────────────────────────────────
@@ -483,6 +529,9 @@ export const browserFeature: UiFeature = {
         },
         driving: () => !banner.hidden,
         trailCount: () => trailMenu.querySelectorAll('.browser-trail-row').length,
+        // 8/07 resize-freeze surface for the BROWSER smoke.
+        beginResize: () => beginResize(),
+        endResize: () => endResize(),
         // 8/04: agent-web profile surface for the smoke.
         profile: () => state.profile,
         setProfile: (p: BrowserProfile) => setProfile(p),

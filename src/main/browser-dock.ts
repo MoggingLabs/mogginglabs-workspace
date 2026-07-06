@@ -54,6 +54,12 @@ let getWin: (() => BrowserWindow | null) | null = null
 let lastBounds: BrowserDockBounds | null = null
 let open = false
 let widthPersistTimer: NodeJS.Timeout | null = null
+// True while the dock is being dragged/window-resized: the native view is
+// hidden and left un-resized so the page never reflows mid-drag (8/07 polish).
+let resizing = false
+// Mirrors the ACTIVE view's real setVisible state (smoke ground truth — the
+// freeze is proven by this going false mid-resize and true again on release).
+let viewShown = false
 
 const views: Record<BrowserProfile, WebContentsView | null> = { preview: null, 'agent-web': null }
 let profile: BrowserProfile = 'preview'
@@ -134,7 +140,11 @@ function applyBounds(): void {
     width: Math.round(lastBounds.width),
     height: Math.round(lastBounds.height)
   })
-  view.setVisible(open && lastBounds.visible)
+  // Stay hidden while a resize is in flight — never re-show mid-drag (the
+  // resize handler flips `resizing` off before it calls applyBounds to snap).
+  const vis = !resizing && open && lastBounds.visible
+  view.setVisible(vis)
+  viewShown = vis
   // Attach-swap: the inactive profile's view never paints.
   const other = views[profile === 'preview' ? 'agent-web' : 'preview']
   other?.setVisible(false)
@@ -616,13 +626,22 @@ export function dockPageEval(js: string): Promise<unknown> | null {
 }
 
 /** Smoke-only ground truth (main-side): where the view actually is. */
-export function dockDebug(): { attached: boolean; visible: boolean; bounds: BrowserDockBounds | null; url: string } {
+export function dockDebug(): {
+  attached: boolean
+  visible: boolean
+  bounds: BrowserDockBounds | null
+  url: string
+  resizing: boolean
+  viewShown: boolean
+} {
   const view = activeView()
   return {
     attached: !!view,
     visible: !!view && open && !!lastBounds?.visible,
     bounds: lastBounds,
-    url: view?.webContents.getURL() ?? ''
+    url: view?.webContents.getURL() ?? '',
+    resizing,
+    viewShown
   }
 }
 
@@ -673,12 +692,35 @@ export function registerBrowserDock(winGetter: () => BrowserWindow | null): void
     if (url) void shell.openExternal(url)
   })
 
+  const persistWidth = (dockWidth: number): void => {
+    if (widthPersistTimer) clearTimeout(widthPersistTimer)
+    widthPersistTimer = setTimeout(() => store()?.setSetting(KV_WIDTH, String(Math.round(dockWidth))), 500)
+  }
+
   ipcMain.on(BrowserChannels.bounds, (_e, b: BrowserDockBounds) => {
     lastBounds = b
+    // During a CONTINUOUS resize (handle drag / OS-window drag) the view is
+    // FROZEN (hidden) — store the rect but do NOT resize the WebContents every
+    // frame. Resizing a real page relayouts it (10–50 ms); doing that 60×/s is
+    // exactly the lag the user sees, the native layer trailing the chrome.
+    if (resizing) return
     applyBounds()
-    // Persist the dock width, debounced — drags emit a bounds stream.
-    if (widthPersistTimer) clearTimeout(widthPersistTimer)
-    widthPersistTimer = setTimeout(() => store()?.setSetting(KV_WIDTH, String(Math.round(b.dockWidth))), 500)
+    persistWidth(b.dockWidth)
+  })
+
+  // The freeze signal (8/07 polish). The renderer resizes the CSS chrome alone
+  // at 60 fps during the drag; we snap the native view to the FINAL rect once
+  // on release — no per-frame reflow, no trailing.
+  ipcMain.on(BrowserChannels.resizing, (_e, p: { active?: boolean; bounds?: BrowserDockBounds }) => {
+    resizing = !!p?.active
+    if (resizing) {
+      activeView()?.setVisible(false)
+      viewShown = false
+      return
+    }
+    if (p?.bounds) lastBounds = p.bounds
+    applyBounds()
+    if (lastBounds) persistWidth(lastBounds.dockWidth)
   })
 
   // ── Agent control (6/05b) ─────────────────────────────────────────────────

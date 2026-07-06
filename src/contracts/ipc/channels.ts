@@ -112,6 +112,7 @@ export const BrowserChannels = {
   navigate: 'browser:navigate', // ({ url, workspaceId }) -> void (http(s) only; persists lastUrl per workspace)
   nav: 'browser:nav', // ({ action }) -> void (back | forward | reload)
   bounds: 'browser:bounds', // renderer -> main: BrowserDockBounds (rAF-throttled view rect)
+  resizing: 'browser:resizing', // renderer -> main: { active, bounds? } — FREEZE the native view during a continuous resize (handle drag / OS-window drag) so the page doesn't reflow every frame; snap to the final rect on release
   state: 'browser:state', // main -> renderer: BrowserDockState (header truth)
   lastUrl: 'browser:lastUrl', // (workspaceId) -> string | null ("open this workspace's preview" chip)
   openExternal: 'browser:openExternal', // ({ url }) -> void (http(s) only, system browser)
