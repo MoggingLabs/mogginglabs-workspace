@@ -402,6 +402,14 @@ daemon protocol v3 frozen, smokes network-free.
 
 ## 13 — onboarding + polish (new step; UX as spec)
 
+- **Founder directive (2026-07-06, settled)**: MCP-OAuth consent ALWAYS
+  opens in the user's DEFAULT EXTERNAL browser — the CLI's own `mcp login`
+  behavior, untouched. An in-app-dock routing was prototyped (a `mogging
+  browse` control verb into the agent-web profile) and then reverted at the
+  founder's call: the vendor consent is a system-browser flow, and the
+  Authorize UX only launches the CLI in a pane + tells the user the browser
+  will open. No `$BROWSER` interception, no dock routing for OAuth.
+
 - The guided flow is a STATE MACHINE over existing actions (06 Connect,
   07 Authorize, 09 plans) — progress is a KV cursor (roster index +
   per-CLI sub-state), so quit/resume is free and restart-safe. It never

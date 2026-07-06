@@ -288,22 +288,32 @@ extracted it cleanly; the user's own claude.ai ClickUp connector was never
 touched. One registry server (fixture pipeline) certified by the gate;
 the LIVE registry probed and its `{server,_meta}` shape folded in.
 
-**The n8n record (founder steer, 2026-07-06)**: the scope is CONFIG — the
-app registers servers into the CLIs; it never runs or hosts one. The
-app→n8n direction (preset, base-URL override, bearer slot) is
-gate-certified on fixtures: paste a real instance's MCP URL and the entry
-lands dialect-correct (MCPCAT asserts exactly this). The n8n→app direction
-(n8n's MCP Client Tool consuming the house `mogging` server — the direction
-that matters, per the founder) speaks the same protocol MCP Inspector
-dev-verified against our server in 8/02; the live one-click check runs
-against the user's own instance whenever wanted (docs will carry the two
-steps; a sandbox is one `docker run -p 5678:5678 n8nio/n8n` away — Docker
-is present on the dev machine). A local npm/npx/pnpm n8n install was
-attempted and abandoned (n8n 2.29's npm packaging fights flat installs:
-URL-hosted xlsx subdep, DI metadata split; its blessed routes are Docker or
-its own lockfile) — an hour of machine time says the honest record beats
-the theater. PERCEPTION failed once under that install's disk contention
-and passed isolated — the 7/xx contention lesson, re-confirmed.
+**The n8n record (founder steer + LIVE verify, 2026-07-06)**: the scope is
+CONFIG — the app registers servers into the CLIs; it never runs or hosts
+one. Verified live, end to end, on a real self-hosted instance
+(`docker run n8nio/n8n` — the vendor's blessed route; npm/npx/pnpm flat
+installs fight n8n 2.29's packaging — URL-hosted xlsx subdep, DI metadata
+split — and were abandoned after an hour; Docker closed it in minutes):
+
+- owner + MCP-trigger workflow bootstrapped over n8n's REST. Find worth
+  keeping: `/activate` returns 200 WITHOUT `{versionId}` but the workflow
+  stays inactive and the webhook never registers — always re-read `active`.
+- the **n8n preset + base-URL override** registered the trigger URL into
+  real Claude Code through the catalog pipeline;
+- `claude mcp list` → `n8n: http://127.0.0.1:5678/mcp/devverify4242 (HTTP)
+  - ✔ Connected`;
+- a real agent LISTED the workflow's tool (`add_numbers`) and CALLED it —
+  `RESULT={"sum":5}`: a self-hosted n8n workflow executed by an agent
+  through config we wrote. (n8n Code-Tool quirks under MCP, recorded:
+  input arrives as `query`; the tool must return a STRING.)
+
+The n8n→app direction (n8n's MCP Client Tool consuming the house `mogging`
+server — the direction that matters most, per the founder) speaks the same
+protocol MCP Inspector dev-verified against our server in 8/02; a Docker
+container cannot reach the host's stdio/socket server by design (no TCP,
+ADR 0008.b), so that live check belongs on a host-installed n8n — the
+user's own. PERCEPTION failed once under the abandoned install's disk
+contention and passed isolated — the contention lesson, re-confirmed.
 
 **Gates**: MCPCAT PASS (12 assert groups, `out/mcpcat-result.json`);
 PERCEPTION re-run PASS isolated. Full-sweep marathon: 39/41 + PERCEPTION/WORKTREE flaked mid-marathon (the two standing contention lessons — a concurrent build overlapped the sweep start) and passed isolated, the documented pattern. Sweep 40 → **41**.
