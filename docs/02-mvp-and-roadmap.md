@@ -75,7 +75,7 @@ remeasure→refit path. All 23 audit findings closed or deferred-with-reason;
 budgets unchanged (perception gained a size-change gate); full sweep green.
 
 ### Phase 6 — Product-ready ✅ (`prompts/phase-6/`)
-Full Linux/macOS/Windows gate-sweep parity (the same 31-gate `qa-smokes.sh` on
+Full Linux/macOS/Windows gate-sweep parity (the same 32-gate `qa-smokes.sh` on
 four environments), the browser dock (toggleable right sidebar, agent-drivable
 via a first-party MCP server), per-slot profile persistence, first-run checklist
 + one-click update UX, signing readiness + winget/homebrew manifests. Closed by

@@ -67,6 +67,9 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
     return s
   }
 
+  /** Per-provider enable flag (KV `usage.enabled.<id>`, default ON). */
+  const isEnabled = (id: string): boolean => deps.kv.get(`usage.enabled.${id}`) !== '0'
+
   const cadenceMs = (id: string): number | null => {
     if (deps.cadenceMsOverride) return deps.cadenceMsOverride
     const preset = (deps.kv.get(`usage.cadence.${id}`) ?? '5m') as UsageCadence
@@ -84,6 +87,7 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
   const snapshot = (): PlanUsage[] => {
     const all: PlanUsage[] = []
     for (const a of deps.adapters) {
+      if (!isEnabled(a.id)) continue // disabled providers vanish from the glance
       const s = state.get(a.id)
       if (s?.lastGood) all.push(...s.lastGood)
     }
@@ -104,7 +108,7 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
 
   const poll = async (a: UsageAdapter): Promise<void> => {
     const s = st(a.id)
-    if (s.inFlight || stopped || !visible) return
+    if (s.inFlight || stopped || !visible || !isEnabled(a.id)) return
     s.inFlight = true
     s.lastAttempt = now()
     s.fetches++

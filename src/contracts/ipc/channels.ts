@@ -130,9 +130,11 @@ export const UpdateChannels = {
 } as const
 
 export const UsageChannels = {
-  list: 'usage:list', // -> PlanUsage[] (cached snapshot — instant, never fetches)
+  list: 'usage:list', // -> PlanUsageView[] (cached snapshot — instant, never fetches)
   refresh: 'usage:refresh', // renderer -> main: poke the poller (results arrive via the push)
-  changed: 'usage:changed' // main -> renderer: PlanUsage[] (pushed on snapshot change)
+  changed: 'usage:changed', // main -> renderer: PlanUsageView[] (pushed on snapshot change)
+  configGet: 'usage:configGet', // -> UsageConfig (per-provider enable + cadence — the 7/03 settings stub)
+  configSet: 'usage:configSet' // (UsageConfigPatch) -> void (persists + reschedules the poller live)
 } as const
 
 export const AllChannels: readonly string[] = [

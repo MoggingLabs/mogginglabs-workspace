@@ -1,5 +1,5 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { BrowserChannels, TelemetryChannels, type TelemetryRendererConfig } from '@contracts'
+import { BrowserChannels, TelemetryChannels, UsageChannels, USAGE_CADENCES, type TelemetryRendererConfig, type UsageConfig } from '@contracts'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { Button, createCheckbox, createSegmented, el, icon, ICON_NAMES } from '../../components'
 import { THEMES } from '../../core/theme/themes'
@@ -135,6 +135,33 @@ export const settingsFeature: UiFeature = {
 
     const profilesHosts = createProfilesHostsSection() as HTMLElement & { refresh: () => Promise<void> }
 
+    // Usage stub (7/03): provider enable + cadence ONLY, so the popover's
+    // gear has a target and the poller consumes changes live. 7/12 promotes
+    // this into the full Usage tab and deletes it — deliberately unadorned.
+    const usageStub = el('div', { class: 'settings-consents usage-stub' })
+    void getBridge()
+      .invoke(UsageChannels.configGet)
+      .then((raw) => {
+        const cfg = raw as UsageConfig | null
+        if (!cfg?.providers.length) {
+          usageStub.append(el('span', { class: 'settings-row-caption', text: 'No usage providers in this build.' }))
+          return
+        }
+        for (const p of cfg.providers) {
+          const enable = createCheckbox({
+            label: p.id,
+            checked: p.enabled,
+            onChange: (checked) => void getBridge().invoke(UsageChannels.configSet, { providerId: p.id, enabled: checked })
+          })
+          const cadence = el('select', { class: 'usage-cadence', ariaLabel: `${p.id} refresh cadence` }) as HTMLSelectElement
+          for (const c of USAGE_CADENCES) cadence.append(el('option', { value: c, text: c }))
+          cadence.value = p.cadence
+          cadence.addEventListener('change', () => void getBridge().invoke(UsageChannels.configSet, { providerId: p.id, cadence: cadence.value }))
+          usageStub.append(el('div', { class: 'usage-stub-row', dataset: { provider: p.id } }, [enable.el, cadence]))
+        }
+      })
+      .catch(() => usageStub.append(el('span', { class: 'settings-row-caption', text: 'Usage config unavailable.' })))
+
     // ── The page: [section nav | scrollable content column] ──────────────────
     const version = el('span', { class: 'settings-about-version', text: '' })
     try {
@@ -183,6 +210,17 @@ export const settingsFeature: UiFeature = {
             'Pointer sets only',
             profilesHosts,
             'Profiles select WHICH of your accounts a CLI uses; hosts are ssh targets. Never keys, tokens, or passwords — secret-shaped values are refused at save (ADR 0002).'
+          )
+        ])
+      },
+      {
+        id: 'usage',
+        label: 'Usage',
+        el: section('usage', 'Usage', [
+          row(
+            'Usage meters',
+            usageStub,
+            'Which providers the titlebar gauge polls, and how often. This is a stub — the full Usage tab (providers, plans, thresholds, baseline) lands in 7/12.'
           )
         ])
       },

@@ -3435,3 +3435,169 @@ body.resizing * {
   background: transparent;
   color: var(--text-mid);
 }
+
+/* ── Usage glance (Phase-7/03): titlebar two-bar gauge + popover ────────────── */
+.usage-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.usage-gauge {
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  position: relative;
+}
+.usage-gauge .usage-track {
+  width: 14px;
+  height: 3px;
+  border-radius: var(--r-full);
+  background: var(--surface-3, rgba(128, 128, 128, 0.25));
+  overflow: hidden;
+  display: block;
+}
+.usage-gauge .usage-fill {
+  display: block;
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 240ms ease;
+}
+.usage-gauge.is-warn .usage-fill {
+  background: var(--warning);
+}
+.usage-gauge.is-stale {
+  opacity: 0.45;
+}
+.usage-gauge.is-off .usage-track {
+  background: transparent;
+  border: 1px solid var(--text-dim, var(--muted));
+}
+.usage-gauge.is-off .usage-fill {
+  width: 0% !important;
+}
+.usage-badge {
+  position: absolute;
+  top: 3px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--warning);
+  box-shadow: 0 0 0 2px var(--surface-1, transparent);
+}
+.usage-badge[hidden] {
+  display: none;
+}
+
+/* The popover rides the shared .menu panel (palette-grade elevation). */
+.usage-popover {
+  right: 0;
+  top: calc(100% + 6px);
+  left: auto;
+  width: 300px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: var(--sp-2);
+}
+.usage-group-label {
+  padding: var(--sp-1) var(--sp-2) 2px;
+  text-transform: capitalize;
+}
+.usage-tile {
+  padding: var(--sp-2);
+  border-radius: var(--r-md, 6px);
+  outline: none;
+}
+.usage-tile:focus {
+  background: var(--accent-weak);
+}
+.usage-tile-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-1);
+}
+.usage-plan {
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-profile {
+  color: var(--text-mid);
+  font-size: 11px;
+}
+.usage-health {
+  font-size: 10px;
+  text-transform: none;
+}
+.usage-health.is-stale,
+.usage-health.is-error {
+  color: var(--warning);
+}
+.usage-health.is-unconfigured {
+  color: var(--text-mid);
+}
+.usage-row {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) 1fr 34px auto;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 2px 0;
+  font-size: 11px;
+}
+.usage-row-label,
+.usage-reset {
+  color: var(--text-mid);
+  white-space: nowrap;
+}
+.usage-track-row {
+  height: 4px;
+  border-radius: var(--r-full);
+  background: var(--surface-3, rgba(128, 128, 128, 0.25));
+  overflow: hidden;
+  display: block;
+}
+.usage-track-row .usage-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+}
+.usage-track-row .usage-fill.is-hot {
+  background: var(--warning);
+}
+.usage-pct {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.usage-verdict {
+  margin-top: var(--sp-1);
+  font-size: 11px;
+}
+.usage-verdict.sev-warning {
+  color: var(--warning);
+}
+.usage-verdict.sev-neutral {
+  color: var(--text-mid);
+}
+.usage-verdict.sev-quiet {
+  color: var(--text-dim, var(--muted));
+}
+.usage-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding-top: var(--sp-1);
+  margin-top: var(--sp-1);
+  border-top: 1px solid var(--border-1, rgba(128, 128, 128, 0.2));
+}
+.usage-age {
+  flex: 1;
+  color: var(--text-dim, var(--muted));
+  font-size: 10px;
+}

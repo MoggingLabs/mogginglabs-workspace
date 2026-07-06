@@ -15,6 +15,7 @@ import { settingsFeature } from './features/settings'
 import { notifyFeature } from './features/notify'
 import { browserFeature } from './features/browser'
 import { updatesFeature } from './features/updates'
+import { usageFeature } from './features/usage'
 
 export { getTelemetry, setTelemetry } from './core/telemetry'
 
@@ -41,5 +42,6 @@ export function start(): void {
   registerFeature(notifyFeature) // toasts for background-pane attention (mogging notify)
   registerFeature(browserFeature) // toggleable right browser dock: preview what agents build (6/05)
   registerFeature(updatesFeature) // auto-update UX: downloading dot + one-click restart toast (6/06)
+  registerFeature(usageFeature) // usage glance: titlebar two-bar gauge + popover (Phase-7/03)
   mountFeatures(shell)
 }

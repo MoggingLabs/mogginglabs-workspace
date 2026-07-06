@@ -1,14 +1,25 @@
 import { app, ipcMain, type BrowserWindow } from 'electron'
-import { UsageChannels, type PlanUsage } from '@contracts'
-import { createUsageService, fakeAdapter, claudeAdapter, type UsageService } from '@backend/features/usage'
+import { UsageChannels, USAGE_CADENCES, type PlanUsage, type UsageCadence } from '@contracts'
+import type { PlanUsageView, PaceView, UsageConfig, UsageConfigPatch } from '@contracts'
+import {
+  createUsageService,
+  fakeAdapter,
+  claudeAdapter,
+  computePace,
+  formatVerdict,
+  formatPaceDelta,
+  PACE_SEVERITY,
+  type UsageService
+} from '@backend/features/usage'
 import { getSettingsStore } from './app-settings'
 
-// App-wiring: usage meters (Phase-7/01, ADR 0007). Adapter pick is the
-// zero-network guarantee: under a usage smoke the registry holds ONLY the
-// FAKE adapter; under any OTHER smoke it holds nothing (no poller traffic in
-// unrelated gates); real adapters exist only in a real session. Main feeds
-// the poller window visibility (hidden = paused) and fans snapshot changes
-// out on one push channel. No token, path, or account id crosses this file.
+// App-wiring: usage meters (Phase-7/01+03, ADR 0007). Adapter pick is the
+// zero-network guarantee: under a usage smoke (or the gallery) the registry
+// holds ONLY the FAKE adapter; under any OTHER smoke it holds nothing; real
+// adapters exist only in a real session. Main feeds the poller window
+// visibility, fans snapshot changes out on one push channel, and — 7/03 —
+// attaches the PACE VIEW here, so the ONE backend formatter produces every
+// string the renderer shows. No token, path, or account id crosses this file.
 
 let service: UsageService | null = null
 
@@ -17,13 +28,56 @@ export function getUsageService(): UsageService | null {
   return service
 }
 
+/** Window length inferred from the label until 7/04's catalog carries
+ *  explicit WindowSpecs. Unknown length -> no pace (never speculate). */
+function windowMsFor(label: string): number | null {
+  const l = label.toLowerCase()
+  if (l.includes('(5h)') || l.includes('session')) return 5 * 3_600_000
+  if (l.includes('week')) return 7 * 86_400_000
+  if (l.includes('month')) return 30 * 86_400_000
+  if (l.includes('day') || l.includes('daily')) return 86_400_000
+  if (l.includes('hour')) return 3_600_000
+  return null
+}
+
+const SEVERITY_RANK = { 'runs-out': 2, surplus: 1, 'on-pace': 0 } as const
+
+/** Attach the worst window's pace to a plan (fresh/stale only — an
+ *  error/unconfigured tile renders its age + reason, never a forecast). */
+function toView(p: PlanUsage): PlanUsageView {
+  if (p.health !== 'fresh' && p.health !== 'stale') return p
+  const tz = -new Date().getTimezoneOffset()
+  let best: PaceView | undefined
+  let bestRank = -1
+  for (const w of p.windows) {
+    const windowMs = windowMsFor(w.label)
+    if (!windowMs) continue
+    const report = computePace(w, Date.now(), { windowMs, tzOffsetMinutes: tz })
+    if (!report) continue
+    const rank = SEVERITY_RANK[report.verdict]
+    if (rank > bestRank) {
+      bestRank = rank
+      best = {
+        verdict: report.verdict,
+        text: formatVerdict(report, w.label, tz),
+        deltaText: formatPaceDelta(report.paceDelta),
+        severity: PACE_SEVERITY[report.verdict]
+      }
+    }
+  }
+  return best ? { ...p, pace: best } : p
+}
+
 export function registerUsage(getWin: () => BrowserWindow | null): void {
   const isSmoke = Object.keys(process.env).some((k) => k.startsWith('MOGGING_'))
-  const isUsageSmoke = Object.keys(process.env).some((k) => k.startsWith('MOGGING_USAGE'))
-  const adapters = isUsageSmoke ? [fakeAdapter] : isSmoke ? [] : [claudeAdapter]
+  const isFixtureWorld =
+    Object.keys(process.env).some((k) => k.startsWith('MOGGING_USAGE')) || !!process.env.MOGGING_GALLERY
+  const adapters = isFixtureWorld ? [fakeAdapter] : isSmoke ? [] : [claudeAdapter]
 
   const cadenceEnv = Number(process.env.MOGGING_USAGE_CADENCE_MS)
-  const cadenceMsOverride = Number.isFinite(cadenceEnv) && cadenceEnv > 0 ? cadenceEnv : isUsageSmoke ? 400 : undefined
+  const cadenceMsOverride = Number.isFinite(cadenceEnv) && cadenceEnv > 0 ? cadenceEnv : isFixtureWorld ? 400 : undefined
+
+  const enrich = (plans: PlanUsage[]): PlanUsageView[] => plans.map(toView)
 
   service = createUsageService({
     adapters,
@@ -32,12 +86,35 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
       get: (k) => getSettingsStore()?.getSetting(k) ?? null,
       set: (k, v) => getSettingsStore()?.setSetting(k, v)
     },
-    onChange: (plans: PlanUsage[]) => getWin()?.webContents.send(UsageChannels.changed, plans),
+    onChange: (plans) => getWin()?.webContents.send(UsageChannels.changed, enrich(plans)),
     cadenceMsOverride
   })
 
-  ipcMain.handle(UsageChannels.list, () => service?.list() ?? [])
+  ipcMain.handle(UsageChannels.list, () => enrich(service?.list() ?? []))
   ipcMain.handle(UsageChannels.refresh, () => service?.refresh())
+
+  // The 7/03 settings stub's surface (12 grows it): enable + cadence per provider.
+  ipcMain.handle(UsageChannels.configGet, (): UsageConfig => {
+    const kv = getSettingsStore()
+    return {
+      providers: adapters.map((a) => ({
+        id: a.id,
+        enabled: kv?.getSetting(`usage.enabled.${a.id}`) !== '0',
+        cadence: (kv?.getSetting(`usage.cadence.${a.id}`) ?? '5m') as UsageCadence
+      }))
+    }
+  })
+  ipcMain.handle(UsageChannels.configSet, (_e, raw: unknown) => {
+    const p = raw as UsageConfigPatch | null
+    if (!p || typeof p.providerId !== 'string' || !adapters.some((a) => a.id === p.providerId)) return
+    const kv = getSettingsStore()
+    if (typeof p.enabled === 'boolean') kv?.setSetting(`usage.enabled.${p.providerId}`, p.enabled ? '1' : '0')
+    if (p.cadence && (USAGE_CADENCES as readonly string[]).includes(p.cadence))
+      kv?.setSetting(`usage.cadence.${p.providerId}`, p.cadence)
+    // Apply live: re-poll (restarts a disabled chain) + push the filtered view.
+    if (p.enabled !== false) service?.refresh(p.providerId)
+    getWin()?.webContents.send(UsageChannels.changed, enrich(service?.list() ?? []))
+  })
 
   // Hidden window = paused poller (poll politely). Single-window app: the
   // main window is the only BrowserWindow main creates.

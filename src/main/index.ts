@@ -35,6 +35,7 @@ import { runBrowserCtlSmoke } from './browserctl-smoke'
 import { runFirstRunSmoke } from './firstrun-smoke'
 import { runProductSmoke } from './product-smoke'
 import { runUsageSmoke } from './usage-smoke'
+import { runUsageUiSmoke } from './usageui-smoke'
 import { runAttentionSmoke } from './attention-smoke'
 import { runBlocksSmoke } from './blocks-smoke'
 import { runGitSmoke } from './git-smoke'
@@ -205,6 +206,8 @@ app.whenReady().then(async () => {
     runFirstRunSmoke(win) // env-gated first-run + update-UX smoke (6/06)
   } else if (process.env.MOGGING_PRODUCT && win) {
     runProductSmoke(win) // env-gated product milestone: installer -> swarm + browser (6/07)
+  } else if (process.env.MOGGING_USAGEUI && win) {
+    runUsageUiSmoke(win) // env-gated usage-UI smoke: gauge + popover on fixtures (Phase-7/03)
   } else if (process.env.MOGGING_USAGE && win) {
     runUsageSmoke(win) // env-gated usage-seam smoke: FAKE adapter only (Phase-7/01)
   } else if (process.env.MOGGING_ATTENTION && win) {

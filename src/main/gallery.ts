@@ -4,6 +4,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorktree } from '@backend/features/worktrees'
+import { setFakeMode } from '@backend/features/usage'
+import { getUsageService } from './usage'
 
 // MOGGING_SHOT=all (Phase-5/01): the GALLERY — drive the app through every surface
 // and write numbered PNGs to out/gallery/, in BOTH themes. The audit + before/after
@@ -116,6 +118,29 @@ export function runGallery(win: BrowserWindow): void {
           await ES(`window.__mogging.firstrun && window.__mogging.firstrun.refresh()`)
           await sleep(600)
           await snap(`${tag}-firstrun`)
+        })
+        // Usage glance (7/03): popover with every fixture state; gauge rest/warn/stale
+        // (FAKE adapter — gallery runs in the fixture world, zero network).
+        await part(`${tag}-usage`, async () => {
+          await ES(`window.__mogging.usage && window.__mogging.usage.open()`)
+          await sleep(400)
+          await snap(`${tag}-usage-popover`)
+          await ES(`window.__mogging.usage.close()`)
+          const dir = mkdtempSync(join(tmpdir(), 'mog-gallery-usage-'))
+          const hot = join(dir, 'hot.json')
+          writeFileSync(hot, JSON.stringify([{ providerId: 'fake', profileId: 'default', planLabel: 'Fake Pro (hot)', windows: [{ label: 'Session (5h)', usedPct: 93, resetsAt: new Date(Date.now() + 4 * 3600_000).toISOString() }, { label: 'Weekly', usedPct: 88, resetsAt: new Date(Date.now() + 90 * 3600_000).toISOString() }], fetchedAt: Date.now(), health: 'fresh' }]))
+          process.env.MOGGING_USAGE_FIXTURE = hot
+          getUsageService()?.refresh()
+          await sleep(900)
+          await snap(`${tag}-usage-gauge-warn`)
+          setFakeMode('error')
+          getUsageService()?.refresh()
+          await sleep(900)
+          await snap(`${tag}-usage-gauge-stale`)
+          setFakeMode('ok')
+          delete process.env.MOGGING_USAGE_FIXTURE
+          getUsageService()?.refresh()
+          await sleep(600)
         })
         await part(`${tag}-board-empty`, async () => {
           await key(`ctrlKey: true, shiftKey: true, code: 'KeyG'`)
