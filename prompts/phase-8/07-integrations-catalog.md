@@ -52,8 +52,8 @@ code. Research: `docs/research/2026-07-third-party-integrations.md`
   registry-found server through the pipeline.
 - The verification pass recorded: every site-named tool is preset or
   explicitly mapped — no silent drops.
-- Scope-per-workspace is the default UX — 09's tool plans are the
-  mechanism; Connect never implies everywhere.
+- Scope-per-workspace is the default UX — 09's plans are the mechanism;
+  Connect never implies everywhere.
 - MCPCAT gate green; gallery: the grid.
 
 ## Checks that must be green
