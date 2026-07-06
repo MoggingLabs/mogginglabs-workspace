@@ -8,6 +8,17 @@
 # the app exited cleanly). Kills each run's daemon afterwards.
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
+#
+# WHY SEQUENTIAL (investigated 2026-07-06, do not re-litigate blindly): each gate
+# boots a FULL app via `electron-vite dev` — a Vite dev server + Electron + a
+# detached PTY daemon, ~8 processes per gate. Running gates N-at-a-time was
+# measured 3x SLOWER (8 gates: 2m02s serial vs 6m02s at JOBS=4) because 4
+# concurrent app boots saturate disk/GPU/CPU and each gate slows ~12x — the
+# bottleneck is heavyweight per-gate startup, not CPU-parallelizable work. It
+# also flaked timing-sensitive gates (USAGE's poller-pause) under contention.
+# The real speedup lever is a build-once + `electron-vite preview` per gate
+# (skip the per-gate Vite dev compile) — a larger, separate change; parallelism
+# only becomes worthwhile AFTER the per-gate boot is cheap. Verdict: stay serial.
 set -u
 cd "$(dirname "$0")/.."
 

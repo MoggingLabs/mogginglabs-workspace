@@ -66,6 +66,26 @@ seams; ADR 0007 and docs/12 are both unclaimed. The pack runs BEFORE phase
   exactly those three, defensively. Live read: Session 43%, Weekly 9%,
   health fresh.
 
+## Codex adapter mechanics (04) — dev-verified 2026-07-06
+
+- **Codex usage is LOCAL, zero-network** — the cleanest source on the whole
+  catalog. The newest rollout under `~/.codex/sessions/**/*.jsonl` carries a
+  `rate_limits` object: `primary` (window_minutes 300 = the 5h session) and
+  `secondary` (window_minutes 10080 = weekly), each
+  `{ used_percent, window_minutes, resets_at }` with `resets_at` in epoch
+  SECONDS; `plan_type` names the plan. Real read this machine: primary 22%,
+  secondary 42%, plan "prolite", source mtime 2026-05-29 (honest age — as
+  fresh as Codex last ran).
+- The reader walks the CLI's OWN session tree (a known location, not a
+  crawl), scans the newest file from the end for `rate_limits`, and drops
+  the token (never touches auth.json's access_token for a local read). The
+  smoke unit-tests it on a fixture session log AND asserts the token can't
+  ride the normalized shape.
+- Only **Codex** and **Claude** are installed on the dev machine, so those
+  two are `verifiedAt: 2026-07-06`; the other cli-store rows ship
+  catalog+fixture and read `unconfigured` honestly (`notWired`) until a real
+  login verifies each shape — the catalog is data, one row per verification.
+
 ## 04–06 — the provider catalog (CodexBar parity, five classes)
 
 - One adapter CLASS per mechanism, every provider a DATA ROW

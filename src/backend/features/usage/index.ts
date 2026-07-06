@@ -2,11 +2,40 @@ import type { AgentProfile, PlanUsage, UsageAdapter, UsageCadence } from '@contr
 import { USAGE_CADENCE_MS } from '@contracts'
 import { resolveHome } from './homes'
 
+import { USAGE_PROVIDERS } from '@contracts'
+import { CLI_STORE_READERS, readCodex } from './classes/cli-store'
+import { claudeAdapter } from './claude-adapter'
+
 export { fakeAdapter, setFakeMode } from './fake-adapter'
 export { claudeAdapter } from './claude-adapter'
 export { resolveHome } from './homes'
 export { computePace, formatVerdict, formatPaceDelta, formatPaceTime, PACE_SEVERITY, type PaceOptions } from './pace'
 export { PACE_GOLDENS } from './pace-fixtures'
+export { CLI_STORE_READERS, readCodex } from './classes/cli-store'
+
+/** Build the REAL adapters from the catalog (Phase-7/04): one per cli-store
+ *  row that has a reader. Claude delegates to the shipped 7/01 adapter (already
+ *  verified); the rest wrap their reader — detect is lenient (the reader
+ *  produces the precise unconfigured/error reason). api-key/cloud-cli/
+ *  web-session classes join in 7/05–06. */
+export function buildRealAdapters(): UsageAdapter[] {
+  const out: UsageAdapter[] = []
+  for (const def of USAGE_PROVIDERS) {
+    if (def.klass !== 'cli-store') continue
+    if (def.id === 'claude') {
+      out.push(claudeAdapter)
+      continue
+    }
+    const reader = CLI_STORE_READERS[def.id]
+    if (!reader) continue
+    out.push({
+      id: def.id,
+      detect: async () => ({ ok: true }),
+      fetch: async (home, profileId, signal) => [await reader(home, profileId, signal)]
+    })
+  }
+  return out
+}
 
 // The usage seam (Phase-7/01, ADR 0007): adapter registry + a polite poller.
 // Electron-free — main injects the window-visibility signal, the KV, the

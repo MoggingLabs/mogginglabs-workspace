@@ -91,6 +91,36 @@ const builtinFixtures = (): PlanUsage[] => [
     fetchedAt: T0,
     health: 'unconfigured',
     reason: 'CLI not installed'
+  },
+  // ── 7/04 normalization-path fixtures: every shape a cli-store row can emit ──
+  {
+    providerId: 'fake',
+    profileId: 'credits',
+    planLabel: 'Fake (credit balance)',
+    windows: [{ label: 'Credits', usedPct: 0, windowMs: 0 }],
+    credits: { label: 'credits', remaining: 4200 },
+    fetchedAt: T0,
+    health: 'fresh'
+  },
+  {
+    providerId: 'fake',
+    profileId: 'daily',
+    planLabel: 'Fake (daily quota)',
+    windows: [{ label: 'Daily', usedPct: 67, resetsAt: new Date(T0 + 8 * HOUR).toISOString(), windowMs: 24 * HOUR }],
+    fetchedAt: T0,
+    health: 'fresh'
+  },
+  {
+    providerId: 'fake',
+    profileId: 'multi-lane',
+    planLabel: 'Fake (3-lane)',
+    windows: [
+      { label: 'Session (5h)', usedPct: 48, resetsAt: new Date(T0 + 2 * HOUR).toISOString(), windowMs: 5 * HOUR },
+      { label: 'Weekly', usedPct: 61, resetsAt: new Date(T0 + 80 * HOUR).toISOString(), windowMs: 168 * HOUR },
+      { label: 'Monthly', usedPct: 23, resetsAt: new Date(T0 + 500 * HOUR).toISOString(), windowMs: 720 * HOUR }
+    ],
+    fetchedAt: T0,
+    health: 'fresh'
   }
 ]
 

@@ -1,7 +1,10 @@
 import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { setFakeMode, computePace, formatVerdict, PACE_GOLDENS } from '@backend/features/usage'
+import { mkdirSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { setFakeMode, computePace, formatVerdict, PACE_GOLDENS, readCodex } from '@backend/features/usage'
+import { USAGE_PROVIDERS } from '@contracts'
 import { getUsageService } from './usage'
 
 // Env-gated usage-seam smoke (MOGGING_USAGE, Phase-7/01). Runs entirely on the
@@ -40,7 +43,7 @@ export function runUsageSmoke(_win: BrowserWindow): void {
       const profileIds = new Set(snap.map((p) => p.profileId))
       const pctOk = snap.every((p) => p.windows.every((w) => w.usedPct >= 0 && w.usedPct <= 100))
       const shapeOk =
-        snap.length === 7 &&
+        snap.length === 10 &&
         healths.has('fresh') &&
         healths.has('stale') &&
         healths.has('error') &&
@@ -48,6 +51,12 @@ export function runUsageSmoke(_win: BrowserWindow): void {
         profileIds.has('near-limit') &&
         profileIds.has('exhausted') &&
         profileIds.has('fresh-reset') &&
+        profileIds.has('credits') &&
+        profileIds.has('daily') &&
+        profileIds.has('multi-lane') &&
+        // credit fixture carries a balance; multi-lane carries three windows
+        !!snap.find((p) => p.profileId === 'credits')?.credits &&
+        snap.find((p) => p.profileId === 'multi-lane')?.windows.length === 3 &&
         pctOk
 
       // 2 ── cadence: the scheduler keeps polling (400ms base under this env)
@@ -114,8 +123,61 @@ export function runUsageSmoke(_win: BrowserWindow): void {
       }
       const goldenOk = goldenFails.length === 0
 
-      const pass = shapeOk && cadenceOk && staleOk && backoffOk && hiddenOk && resumeOk && grepClean && goldenOk
-      result = { pass, shapeOk, cadenceOk, staleOk, backoffOk, hiddenOk, resumeOk, grepClean, goldenOk, goldenFails, goldens: PACE_GOLDENS.length, tiles: snap.length, debug: svc.debug() }
+      // 7 ── catalog integrity (7/04): valid klass, ≥1 window or credits,
+      //      unique ids, valid verifiedAt when present.
+      const KLASSES = new Set(['cli-store', 'api-key', 'cloud-cli', 'web-session', 'local'])
+      const ids = new Set<string>()
+      const catalogFails: string[] = []
+      for (const def of USAGE_PROVIDERS) {
+        if (!KLASSES.has(def.klass)) catalogFails.push(`${def.id}: bad klass ${def.klass}`)
+        if (ids.has(def.id)) catalogFails.push(`${def.id}: duplicate id`)
+        ids.add(def.id)
+        if (def.windows.length === 0 && !def.credits) catalogFails.push(`${def.id}: no window or credits`)
+        if (def.verifiedAt && Number.isNaN(Date.parse(def.verifiedAt))) catalogFails.push(`${def.id}: bad verifiedAt`)
+      }
+      const catalogOk = catalogFails.length === 0
+
+      // 8 ── the REAL Codex reader normalizes a FIXTURE session log (zero
+      //      network — the exact shape captured on the dev machine 2026-07-06).
+      const cdir = mkdtempSync(join(tmpdir(), 'mog-codex-'))
+      mkdirSync(join(cdir, 'sessions', '2026', '05'), { recursive: true })
+      writeFileSync(join(cdir, 'auth.json'), JSON.stringify({ tokens: { access_token: 'FIXTURE_SECRET' } }))
+      const resetsPrimary = Math.floor(Date.now() / 1000) + 3600
+      const resetsSecondary = Math.floor(Date.now() / 1000) + 3 * 86400
+      writeFileSync(
+        join(cdir, 'sessions', '2026', '05', 'rollout-x.jsonl'),
+        [
+          JSON.stringify({ type: 'message', payload: { text: 'hi' } }),
+          JSON.stringify({
+            type: 'turn',
+            payload: {
+              rate_limits: {
+                primary: { used_percent: 22, window_minutes: 300, resets_at: resetsPrimary },
+                secondary: { used_percent: 42, window_minutes: 10080, resets_at: resetsSecondary },
+                plan_type: 'prolite'
+              }
+            }
+          })
+        ].join('\n')
+      )
+      const codexPlan = await readCodex(cdir, 'default', new AbortController().signal)
+      const codexOk =
+        codexPlan.health === 'fresh' &&
+        codexPlan.planLabel === 'Codex (prolite)' &&
+        codexPlan.windows.length === 2 &&
+        codexPlan.windows[0].usedPct === 22 &&
+        codexPlan.windows[0].windowMs === 300 * 60_000 &&
+        codexPlan.windows[1].usedPct === 42 &&
+        !!codexPlan.windows[0].resetsAt &&
+        // the token NEVER rides the normalized shape
+        !JSON.stringify(codexPlan).includes('FIXTURE_SECRET')
+      // absent store degrades, never throws
+      const codexAbsent = await readCodex(join(cdir, 'nope'), 'default', new AbortController().signal)
+      const codexDegrades = codexAbsent.health === 'unconfigured' && typeof codexAbsent.reason === 'string'
+
+      const pass =
+        shapeOk && cadenceOk && staleOk && backoffOk && hiddenOk && resumeOk && grepClean && goldenOk && catalogOk && codexOk && codexDegrades
+      result = { pass, shapeOk, cadenceOk, staleOk, backoffOk, hiddenOk, resumeOk, grepClean, goldenOk, goldenFails, catalogOk, catalogFails, codexOk, codexDegrades, providers: USAGE_PROVIDERS.length, goldens: PACE_GOLDENS.length, tiles: snap.length, debug: svc.debug() }
     } catch (e) {
       result = { pass: false, error: e instanceof Error ? e.message : String(e) }
     }

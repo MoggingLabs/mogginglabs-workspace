@@ -4,7 +4,7 @@ import type { PlanUsageView, PaceView, UsageConfig, UsageConfigPatch } from '@co
 import {
   createUsageService,
   fakeAdapter,
-  claudeAdapter,
+  buildRealAdapters,
   computePace,
   formatVerdict,
   formatPaceDelta,
@@ -50,7 +50,7 @@ function toView(p: PlanUsage): PlanUsageView {
   let best: PaceView | undefined
   let bestRank = -1
   for (const w of p.windows) {
-    const windowMs = windowMsFor(w.label)
+    const windowMs = w.windowMs && w.windowMs > 0 ? w.windowMs : windowMsFor(w.label)
     if (!windowMs) continue
     const report = computePace(w, Date.now(), { windowMs, tzOffsetMinutes: tz })
     if (!report) continue
@@ -72,7 +72,7 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
   const isSmoke = Object.keys(process.env).some((k) => k.startsWith('MOGGING_'))
   const isFixtureWorld =
     Object.keys(process.env).some((k) => k.startsWith('MOGGING_USAGE')) || !!process.env.MOGGING_GALLERY
-  const adapters = isFixtureWorld ? [fakeAdapter] : isSmoke ? [] : [claudeAdapter]
+  const adapters = isFixtureWorld ? [fakeAdapter] : isSmoke ? [] : buildRealAdapters()
 
   const cadenceEnv = Number(process.env.MOGGING_USAGE_CADENCE_MS)
   const cadenceMsOverride = Number.isFinite(cadenceEnv) && cadenceEnv > 0 ? cadenceEnv : isFixtureWorld ? 400 : undefined
