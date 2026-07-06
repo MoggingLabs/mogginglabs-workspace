@@ -1,6 +1,6 @@
 import { app, ipcMain, type BrowserWindow } from 'electron'
 import { UsageChannels, USAGE_CADENCES, type PlanUsage, type UsageCadence } from '@contracts'
-import type { PlanUsageView, PaceView, UsageConfig, UsageConfigPatch } from '@contracts'
+import type { PlanUsageView, PaceView, UsageConfig, UsageConfigPatch, CostScan } from '@contracts'
 import {
   createUsageService,
   fakeAdapter,
@@ -10,6 +10,10 @@ import {
   formatVerdict,
   formatPaceDelta,
   PACE_SEVERITY,
+  resolveHome,
+  scanCost,
+  costLogDir,
+  readHistory,
   type UsageService
 } from '@backend/features/usage'
 import { getSettingsStore } from './app-settings'
@@ -160,6 +164,30 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
     if (p.enabled) getSettingsStore()?.setSetting(`usage.enabled.${p.providerId}`, '1')
     service?.refresh(p.providerId)
     getWin()?.webContents.send(UsageChannels.changed, enrich(service?.list() ?? []))
+  })
+
+  // 7/07 — cost scan (on demand: it reads disk, NEVER on the poll cadence) +
+  // history ring (our own KV counts). Same FAKE-under-smoke rule as the
+  // poller: a usage-fixture world scans ONLY the seeded MOGGING_USAGE_COSTDIR;
+  // any other smoke gets a labeled empty scan; real log dirs are touched in a
+  // real session alone. No log path, spend figure, or token count leaves the
+  // machine (ADR 0005) — these are render-only payloads.
+  ipcMain.handle(UsageChannels.cost, (_e, providerId: unknown): CostScan => {
+    if (typeof providerId !== 'string' || !providerId)
+      return { providerId: '', days: [], currency: 'USD', reason: 'bad request' }
+    if (isFixtureWorld) return scanCost(providerId, process.env.MOGGING_USAGE_COSTDIR ?? null)
+    if (isSmoke) return { providerId, days: [], currency: 'USD', reason: 'cost scan is disabled under smoke' }
+    // The ACTIVE profile's home, same rule as the poller (order 0 wins).
+    const forProvider = (getSettingsStore()?.listProfiles() ?? []).filter((p) => p.provider === providerId)
+    const profile = forProvider.length ? forProvider.reduce((a, b) => (a.order <= b.order ? a : b)) : null
+    return scanCost(providerId, costLogDir(providerId, resolveHome(providerId, profile)))
+  })
+  ipcMain.handle(UsageChannels.history, (_e, raw: unknown): number[] => {
+    const p = raw as { providerId?: string; window?: string } | null
+    if (!p || typeof p.providerId !== 'string' || typeof p.window !== 'string') return []
+    const kv = getSettingsStore()
+    if (!kv) return []
+    return readHistory({ get: (k) => kv.getSetting(k) ?? null, set: (k, v) => kv.setSetting(k, v) }, p.providerId, p.window)
   })
 
   // Hidden window = paused poller (poll politely). Single-window app: the

@@ -29,6 +29,9 @@ export interface PlanUsage {
   windows: UsageWindow[]
   /** Credit-style balance where a provider has one (label + remaining units). */
   credits?: { label: string; remaining: number }
+  /** Current-window spend where the provider exposes one (Phase-7/07 — the
+   *  api-key admin/spend rows). A display value, never a bill. */
+  spend?: { amount: number; currency: string }
   /** Epoch ms of the fetch that produced this data (stale keeps the OLD stamp). */
   fetchedAt: number
   health: UsageHealth
@@ -46,6 +49,30 @@ export interface UsageAdapter {
   /** Fetch + normalize. May return several plans. Throws only Error(reason) —
    *  the seam maps it to health 'error'/'stale'; a token NEVER rides an error. */
   fetch(home: string, profileId: string, signal: AbortSignal): Promise<PlanUsage[]>
+}
+
+// ── Local cost scan (Phase-7/07, ADR 0007): parse the JSONL session logs the
+//    CLIs ALREADY write, at their KNOWN locations, on demand, read-only —
+//    zero network, never a watch. Closed shapes; the UI renders them verbatim.
+
+/** One LOCAL calendar day of scanned spend/tokens. */
+export interface CostDay {
+  /** Local date, `YYYY-MM-DD` (a user's "per day" is their day, not UTC's). */
+  date: string
+  /** Estimated spend in `CostScan.currency` — a price-table estimate, not a bill. */
+  spend: number
+  /** Total tokens processed that day (input + output + cache, all lanes). */
+  tokens: number
+}
+
+/** Result of one on-demand local log scan. A missing/absent log dir yields an
+ *  EMPTY scan with a human `reason` — never a throw (ADR 0007 rule 5). */
+export interface CostScan {
+  providerId: string
+  days: CostDay[]
+  currency: string
+  /** Present when the scan is empty, capped, or partially unpriced. */
+  reason?: string
 }
 
 /** The three pace verdicts (Phase-7/02). Wording lives in ONE formatter

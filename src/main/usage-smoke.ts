@@ -3,7 +3,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mkdirSync, mkdtempSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { setFakeMode, computePace, formatVerdict, PACE_GOLDENS, readCodex, API_KEY_SPECS, fetchVertex, fetchBedrock } from '@backend/features/usage'
+import { setFakeMode, computePace, formatVerdict, PACE_GOLDENS, readCodex, API_KEY_SPECS, fetchVertex, fetchBedrock, scanCost, appendHistory, readHistory, HISTORY_MAX } from '@backend/features/usage'
 import { USAGE_PROVIDERS, UsageChannels, AllChannels } from '@contracts'
 import { getUsageService } from './usage'
 import { keySetPlaintext, keySetEnvRef, keyClear, keySlot, resolveKey, setKeyAvailabilityProbeForSmoke, isKeyVaultAvailable } from './usage-keys'
@@ -19,6 +19,10 @@ import { getSettingsStore } from './app-settings'
 //      the old fetchedAt kept + a human reason; backoff delay grows past base
 //   4. hidden: setVisible(false) freezes the fetch count; true resumes it
 //   5. grep-clean: no token-shaped key or value anywhere in the snapshot
+//   (…7/07: 13. the LOCAL cost scan sums seeded Codex/Claude JSONL fixtures
+//   EXACTLY — dedupe honored, absent dirs degrade labeled, zero network;
+//   14. the history ring accumulates, truncates at HISTORY_MAX, and the REAL
+//   poller feeds it from the fake adapter's own samples)
 export function runUsageSmoke(_win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 90000) // safety net
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -45,7 +49,7 @@ export function runUsageSmoke(_win: BrowserWindow): void {
       const profileIds = new Set(snap.map((p) => p.profileId))
       const pctOk = snap.every((p) => p.windows.every((w) => w.usedPct >= 0 && w.usedPct <= 100))
       const shapeOk =
-        snap.length === 10 &&
+        snap.length === 11 &&
         healths.has('fresh') &&
         healths.has('stale') &&
         healths.has('error') &&
@@ -56,9 +60,12 @@ export function runUsageSmoke(_win: BrowserWindow): void {
         profileIds.has('credits') &&
         profileIds.has('daily') &&
         profileIds.has('multi-lane') &&
-        // credit fixture carries a balance; multi-lane carries three windows
+        profileIds.has('spend') &&
+        // credit fixture carries a balance; multi-lane carries three windows;
+        // the 7/07 spend fixture carries a current-window spend
         !!snap.find((p) => p.profileId === 'credits')?.credits &&
         snap.find((p) => p.profileId === 'multi-lane')?.windows.length === 3 &&
+        snap.find((p) => p.profileId === 'spend')?.spend?.amount === 12.34 &&
         pctOk
 
       // 2 ── cadence: the scheduler keeps polling (400ms base under this env)
@@ -267,9 +274,79 @@ export function runUsageSmoke(_win: BrowserWindow): void {
       const cloudOk =
         vx.health === 'unconfigured' && /gcloud/.test(vx.reason ?? '') && bd.health === 'unconfigured' && /aws/i.test(bd.reason ?? '')
 
+      // 13 ── the LOCAL cost scan (7/07): seeded JSONL fixtures in the two
+      //       dev-verified log shapes sum EXACTLY; zero network by construction.
+      //       Timestamps are LOCAL-midday so day bucketing is TZ-proof.
+      const midday = (daysAgo: number): string => {
+        const d = new Date(Date.now() - daysAgo * 86_400_000)
+        return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0).toISOString()
+      }
+      const croot = mkdtempSync(join(tmpdir(), 'mog-cost-'))
+      mkdirSync(join(croot, 'codex', '2026', '07'), { recursive: true })
+      writeFileSync(
+        join(croot, 'codex', '2026', '07', 'rollout-fixture.jsonl'),
+        [
+          JSON.stringify({ timestamp: midday(2), type: 'session_meta', payload: { cli_version: '0.133.0' } }),
+          'not json — a malformed line is skipped, never thrown',
+          JSON.stringify({ timestamp: midday(2), type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 1000, cached_input_tokens: 0, output_tokens: 500, total_tokens: 1500 } } } }),
+          JSON.stringify({ timestamp: midday(1), type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 2000, cached_input_tokens: 100, output_tokens: 1000, total_tokens: 3000 } } } })
+        ].join('\n')
+      )
+      const cdxScan = scanCost('codex', join(croot, 'codex'))
+      const codexScanOk =
+        cdxScan.days.length === 2 &&
+        cdxScan.days[0].tokens === 1500 &&
+        cdxScan.days[1].tokens === 3000 &&
+        cdxScan.days.every((d) => d.spend === 0) && // cli 0.133 logs name no model — honestly unpriced
+        /price row/.test(cdxScan.reason ?? '')
+      // claude-shaped: streamed chunks DUPLICATE a requestId -> dedupe holds;
+      // spend prices exactly off the table (opus 4.8 $5/$25, cache 0.1x/1.25x)
+      mkdirSync(join(croot, 'claude', 'proj'), { recursive: true })
+      const cu = { input_tokens: 100, output_tokens: 200, cache_creation_input_tokens: 1000, cache_read_input_tokens: 10000, cache_creation: { ephemeral_5m_input_tokens: 1000, ephemeral_1h_input_tokens: 0 } }
+      writeFileSync(
+        join(croot, 'claude', 'proj', 'session-fixture.jsonl'),
+        [
+          JSON.stringify({ type: 'user', timestamp: midday(1) }),
+          JSON.stringify({ type: 'assistant', requestId: 'req_1', timestamp: midday(1), message: { model: 'claude-opus-4-8', usage: cu } }),
+          JSON.stringify({ type: 'assistant', requestId: 'req_1', timestamp: midday(1), message: { model: 'claude-opus-4-8', usage: cu } }),
+          JSON.stringify({ type: 'assistant', requestId: 'req_2', timestamp: midday(1), message: { model: 'claude-opus-4-8', usage: { input_tokens: 400, output_tokens: 100, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } } })
+        ].join('\n')
+      )
+      const clScan = scanCost('claude', join(croot, 'claude'))
+      // req_1 = (100·5 + 200·25 + 10000·0.5 + 1000·6.25)/1e6 = 0.01675; req_2 = 0.0045
+      const clDay = clScan.days[0]
+      const claudeScanOk =
+        clScan.days.length === 1 && !!clDay && clDay.tokens === 11800 && Math.abs(clDay.spend - 0.02125) < 1e-9 && clScan.currency === 'USD'
+      // absent dir / unknown provider degrade LABELED — never a throw
+      const missingScan = scanCost('codex', join(croot, 'nope'))
+      const nullScan = scanCost('gemini', null)
+      const costDegrades =
+        missingScan.days.length === 0 && typeof missingScan.reason === 'string' && nullScan.days.length === 0 && typeof nullScan.reason === 'string'
+      const costOk = codexScanOk && claudeScanOk && costDegrades
+
+      // 14 ── the history ring (7/07): accumulate -> truncate at HISTORY_MAX,
+      //       clamp junk, and the REAL poller has been ringing the fake
+      //       provider's own samples since boot (counts only, 0..100).
+      const kvStore = getSettingsStore()
+      const hkv = { get: (k: string): string | null => kvStore?.getSetting(k) ?? null, set: (k: string, v: string): void => kvStore?.setSetting(k, v) }
+      for (let i = 0; i < HISTORY_MAX + 7; i++) appendHistory(hkv, 'histtest', 'Session (5h)', i % 100)
+      const series = readHistory(hkv, 'histtest', 'Session (5h)')
+      const ringTruncOk = series.length === HISTORY_MAX && series[0] === 7 && series[series.length - 1] === (HISTORY_MAX + 6) % 100
+      appendHistory(hkv, 'histtest', 'Clamp', 250)
+      appendHistory(hkv, 'histtest', 'Clamp', -5)
+      const clampSeries = readHistory(hkv, 'histtest', 'Clamp')
+      const ringClampOk = clampSeries.length === 2 && clampSeries[0] === 100 && clampSeries[1] === 0
+      const polled = readHistory(hkv, 'fake', 'Session (5h)')
+      const ringPolledOk = polled.length > 0 && polled.length <= HISTORY_MAX && polled.every((n) => n >= 0 && n <= 100)
+      const histOk = ringTruncOk && ringClampOk && ringPolledOk
+
+      // 15 ── the 7/07 channels exist on the allowlist (cost/history are
+      //       read-only render payloads; the no-getter regexes above stay clean)
+      const costChannelsOk = AllChannels.includes('usage:cost') && AllChannels.includes('usage:history')
+
       const pass =
-        shapeOk && cadenceOk && staleOk && backoffOk && hiddenOk && resumeOk && grepClean && goldenOk && catalogOk && codexOk && codexDegrades && keysOk && noGetterOk && specsOk && cloudOk
-      result = { pass, shapeOk, cadenceOk, staleOk, backoffOk, hiddenOk, resumeOk, grepClean, goldenOk, goldenFails, catalogOk, catalogFails, codexOk, codexDegrades, vaultAvailable, keysOk, cipherOk, dbBytesOk, roundtripOk, replaceOk, clearOk, refusalOk, envRefOk, envLiteralRefusedOk, noGetterOk, specsOk, cloudOk, providers: USAGE_PROVIDERS.length, goldens: PACE_GOLDENS.length, tiles: snap.length, debug: svc.debug() }
+        shapeOk && cadenceOk && staleOk && backoffOk && hiddenOk && resumeOk && grepClean && goldenOk && catalogOk && codexOk && codexDegrades && keysOk && noGetterOk && specsOk && cloudOk && costOk && histOk && costChannelsOk
+      result = { pass, shapeOk, cadenceOk, staleOk, backoffOk, hiddenOk, resumeOk, grepClean, goldenOk, goldenFails, catalogOk, catalogFails, codexOk, codexDegrades, vaultAvailable, keysOk, cipherOk, dbBytesOk, roundtripOk, replaceOk, clearOk, refusalOk, envRefOk, envLiteralRefusedOk, noGetterOk, specsOk, cloudOk, costOk, codexScanOk, claudeScanOk, costDegrades, histOk, ringTruncOk, ringClampOk, ringPolledOk, costChannelsOk, providers: USAGE_PROVIDERS.length, goldens: PACE_GOLDENS.length, tiles: snap.length, debug: svc.debug() }
     } catch (e) {
       result = { pass: false, error: e instanceof Error ? e.message : String(e) }
     }

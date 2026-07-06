@@ -182,6 +182,50 @@ seams; ADR 0007 and docs/12 are both unclaimed. The pack runs BEFORE phase
 - History is OUR sampled percentages ringed in the KV (bounded, counts not
   content) — every provider gets a sparkline free, no per-provider endpoint.
 
+## cost/history mechanics (07) — dev-verified 2026-07-06
+
+- **Log shapes read off THIS machine's real logs (the 7/01 discipline):**
+  - Codex `~/.codex/sessions/YYYY/MM/**/rollout-*.jsonl`: a `session_meta`
+    line (cli 0.133 carries `cli_version`/`model_provider` but NO model id),
+    then `event_msg` lines with `payload.type: "token_count"` and
+    `payload.info.last_token_usage { input_tokens, cached_input_tokens,
+    output_tokens, total_tokens }` PER TURN (ISO `timestamp` per line) —
+    summing `last_token_usage` across events equals the session total.
+  - Claude Code `~/.claude/projects/<proj>/<session>.jsonl`: `assistant`
+    lines carry `message.usage { input_tokens, output_tokens,
+    cache_creation_input_tokens, cache_read_input_tokens, cache_creation:
+    { ephemeral_5m_input_tokens, ephemeral_1h_input_tokens } }` +
+    `message.model`; streamed chunks DUPLICATE a message under one
+    `requestId` → the scanner dedupes per file. Current CLI writes no
+    `costUSD`; when an older log carries one it is trusted verbatim.
+- **Spend is an estimate, never invented**: a prefix-matched price table
+  (USD/MTok — Claude rows from the claude-api reference cached 2026-06-24:
+  fable/mythos 10/50, opus 4.5–4.8 5/25, opus 4.0/4.1 15/75, sonnet 3/15,
+  haiku-4 1/5; gpt-5 1.25/10 from OpenAI's public page, knowledge-dated) ×
+  documented cache multipliers (read 0.1×, write 1.25× 5m / 2× 1h on the
+  input rate). Unknown model → TOKENS still counted, spend contributes 0,
+  and `reason` says "spend under-counts". Days bucket on the LOCAL date.
+- **Bounded by construction**: 30-day window (file mtime AND record
+  timestamp), 400-newest-files cap (flagged in `reason` when it fires),
+  depth-6 walk of the CLI's own tree only, malformed lines skipped.
+- **Real-machine manual check (this box, 2026-07-06)**: Claude → 7 days,
+  $24–$988/day API-equivalent (sweep-heavy days dominate; cache reads are
+  most of the tokens), cap fired at 400 of 1093 files and said so; ~1.9s
+  per on-demand scan (why it NEVER rides the poll cadence). Codex → logs
+  present but older than the window → labeled empty scan, correct.
+- **History ring**: `HISTORY_MAX` 96 ints per (provider, window-label slug)
+  in the settings KV (`usage.hist.<id>.<slug>`), appended on every FRESH
+  poll result inside the seam (stale re-serves are not new points), clamped
+  0–100, corrupt value degrades to empty. Counts, not content — ADR 0005.
+- **Smoke is TZ-proof**: fixture timestamps are LOCAL-midday, so per-day
+  bucketing asserts exactly on any CI timezone; the claude fixture's spend
+  golden (0.02125 over 11,800 tokens at opus-4.8 rates) pins the table and
+  the multipliers; the codex fixture (no model id) pins honest unpricing.
+- `usage:cost` runs the scan on demand behind the poller's FAKE-under-smoke
+  rule (fixture world scans only `MOGGING_USAGE_COSTDIR`; other smokes get a
+  labeled empty; real dirs in a real session alone); `usage:history` reads
+  the KV ring. Neither can return a secret — both are counts/labels.
+
 ## 08 — status feed
 
 - Public statuspage endpoints only (no auth/cookies); poll ENABLED

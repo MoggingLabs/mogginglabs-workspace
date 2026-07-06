@@ -110,6 +110,16 @@ const builtinFixtures = (): PlanUsage[] => [
     fetchedAt: T0,
     health: 'fresh'
   },
+  // ── 7/07: the spend shape — a current-window spend rides the plan.
+  {
+    providerId: 'fake',
+    profileId: 'spend',
+    planLabel: 'Fake (monthly spend)',
+    windows: [{ label: 'Monthly', usedPct: 34, resetsAt: new Date(T0 + 400 * HOUR).toISOString(), windowMs: 720 * HOUR }],
+    spend: { amount: 12.34, currency: 'USD' },
+    fetchedAt: T0,
+    health: 'fresh'
+  },
   {
     providerId: 'fake',
     profileId: 'multi-lane',

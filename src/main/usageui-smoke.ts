@@ -10,7 +10,7 @@ import { getUsageService } from './usage'
 //   1. the gauge lives in the titlebar right cluster; fills track the ACTIVE
 //      tile's window pcts; aria-expanded starts false
 //   2. click -> the popover paints in <100ms (cached snapshot, no fetch wait)
-//   3. tiles: all 10 fixtures render, grouped under one provider; verdict
+//   3. tiles: all 11 fixtures render, grouped under one provider; verdict
 //      lines equal the IPC payload's formatter text VERBATIM; countdowns
 //      present on rows with resets
 //   4. dismiss: Esc closes; click-away closes; aria-expanded tracks
@@ -155,7 +155,7 @@ export function runUsageUiSmoke(win: BrowserWindow): void {
       )
 
       const pass =
-        gaugeOk && fillsOk && openFast && expandedOk && tileCount === 10 && groupCount === 1 && verdictsOk && countdownOk && escClosed && awayClosed && warnOk && staleOk && gearOk
+        gaugeOk && fillsOk && openFast && expandedOk && tileCount === 11 && groupCount === 1 && verdictsOk && countdownOk && escClosed && awayClosed && warnOk && staleOk && gearOk
       result = { pass, gaugeOk, fillsOk, openMs, opens, openBudget, openFast, expandedOk, tileCount, groupCount, verdictsOk, countdownOk, escClosed, awayClosed, warnOk, staleOk, gearOk }
     } catch (e) {
       result = { pass: false, error: e instanceof Error ? e.message : String(e) }

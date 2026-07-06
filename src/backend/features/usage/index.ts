@@ -8,6 +8,7 @@ import { fetchApiKeyUsage, type ApiKeyDeps } from './classes/api-key'
 import { fetchVertex, fetchBedrock } from './classes/cloud-cli'
 import { fetchWebSessionUsage, type WebSessionDeps } from './classes/web-session'
 import { claudeAdapter } from './claude-adapter'
+import { appendHistory } from './history'
 
 export { fakeAdapter, setFakeMode } from './fake-adapter'
 export { claudeAdapter } from './claude-adapter'
@@ -18,6 +19,8 @@ export { CLI_STORE_READERS, readCodex } from './classes/cli-store'
 export { API_KEY_SPECS, API_KEY_PENDING, fetchApiKeyUsage } from './classes/api-key'
 export { fetchVertex, fetchBedrock } from './classes/cloud-cli'
 export { fetchWebSessionUsage, fixtureCookieBackend, realCookieBackend, type WebSessionDeps, type CookieStoreBackend } from './classes/web-session'
+export { scanCost, costLogDir, priceFor, MODEL_PRICES, CACHE_READ_X, CACHE_WRITE_5M_X, CACHE_WRITE_1H_X, COST_LOG_SUBDIR, type CostScanOptions, type ModelPrice } from './cost'
+export { appendHistory, readHistory, HISTORY_MAX, type HistoryKv } from './history'
 
 /** Build the REAL adapters from the catalog (Phase-7/04): one per cli-store
  *  row that has a reader. Claude delegates to the shipped 7/01 adapter (already
@@ -203,6 +206,12 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
         const plans = await a.fetch(home, profileId, ctl.signal)
         s.lastGood = plans.map((p) => ({ ...p, windows: p.windows.map((w) => ({ ...w, usedPct: Math.max(0, Math.min(100, w.usedPct)) })) }))
         s.consecutiveErrors = 0
+        // 7/07: ring each GOOD sample per (provider, window). Fresh only —
+        // a stale re-serve is old data, not a new point.
+        for (const p of s.lastGood) {
+          if (p.health !== 'fresh') continue
+          for (const w of p.windows) appendHistory(deps.kv, p.providerId, w.label, w.usedPct)
+        }
       }
     } catch (e) {
       s.errors++

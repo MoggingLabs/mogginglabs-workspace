@@ -141,7 +141,12 @@ export const UsageChannels = {
   keyClear: 'usage:keyClear', // (providerId) -> void
   // web-session (ADR 0007.b): a pasted cookie rides the SAME write-only key
   // store (keySet); this toggles the per-provider browser store-read opt-in.
-  webReadSet: 'usage:webReadSet' // ({ providerId, enabled }) -> void (default OFF)
+  webReadSet: 'usage:webReadSet', // ({ providerId, enabled }) -> void (default OFF)
+  // 7/07 cost + history. The cost scan reads LOCAL logs ON DEMAND (it touches
+  // disk — never on the poll cadence, zero network); history returns OUR own
+  // sampled percentages from the KV ring (counts, not content — ADR 0005).
+  cost: 'usage:cost', // (providerId) -> CostScan (local JSONL scan; empty+reason when absent)
+  history: 'usage:history' // ({ providerId, window }) -> number[] (bounded sparkline series)
 } as const
 
 export const AllChannels: readonly string[] = [
