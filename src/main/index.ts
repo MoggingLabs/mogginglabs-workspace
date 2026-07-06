@@ -18,6 +18,7 @@ import { registerWorktrees } from './worktrees'
 import { registerReview } from './review'
 import { registerBoard } from './board'
 import { registerProfiles } from './profiles'
+import { registerUsage } from './usage'
 import { registerRemotes } from './remotes'
 import { runSmoke } from './smoke'
 import { runAgentSmoke } from './agent-smoke'
@@ -33,6 +34,7 @@ import { runBrowserSmoke } from './browser-smoke'
 import { runBrowserCtlSmoke } from './browserctl-smoke'
 import { runFirstRunSmoke } from './firstrun-smoke'
 import { runProductSmoke } from './product-smoke'
+import { runUsageSmoke } from './usage-smoke'
 import { runAttentionSmoke } from './attention-smoke'
 import { runBlocksSmoke } from './blocks-smoke'
 import { runGitSmoke } from './git-smoke'
@@ -144,6 +146,7 @@ app.whenReady().then(async () => {
   registerBoard() // local Kanban board: cards that launch agents (Phase-3/05)
   registerProfiles() // provider profiles: pointer sets, deny-listed at save (Phase-4/04)
   registerRemotes() // remote (SSH) hosts: connection pointers only (Phase-4/05)
+  registerUsage(() => win) // usage meters: adapters ride CLI-owned sessions (Phase-7/01, ADR 0007)
 
   openWindow()
 
@@ -202,6 +205,8 @@ app.whenReady().then(async () => {
     runFirstRunSmoke(win) // env-gated first-run + update-UX smoke (6/06)
   } else if (process.env.MOGGING_PRODUCT && win) {
     runProductSmoke(win) // env-gated product milestone: installer -> swarm + browser (6/07)
+  } else if (process.env.MOGGING_USAGE && win) {
+    runUsageSmoke(win) // env-gated usage-seam smoke: FAKE adapter only (Phase-7/01)
   } else if (process.env.MOGGING_ATTENTION && win) {
     runAttentionSmoke(win) // env-gated tab-attention aggregation smoke (Phase-2/01)
   } else if (process.env.MOGGING_BLOCKS && win) {

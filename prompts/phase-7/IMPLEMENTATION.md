@@ -58,6 +58,13 @@ seams; ADR 0007 and docs/12 are both unclaimed. The pack runs BEFORE phase
   rate-limit route). **Dev-verify the exact URL + response shape first and
   record both in the books with the date** — then hardcode. Any shape
   drift at runtime = health `error` with a human reason, never a throw.
+- **Dev-verified 2026-07-06 (7/01, this machine, real logged-in CLI):**
+  `GET https://api.anthropic.com/api/oauth/usage` with the store's
+  `claudeAiOauth.accessToken` (+ `anthropic-beta: oauth-2025-04-20`) →
+  200 with `five_hour` / `seven_day` / `seven_day_opus` (each
+  `{ utilization: number, resets_at: ISO }`) among others; adapter parses
+  exactly those three, defensively. Live read: Session 43%, Weekly 9%,
+  health fresh.
 
 ## 04 — Codex/OpenAI + Gemini
 

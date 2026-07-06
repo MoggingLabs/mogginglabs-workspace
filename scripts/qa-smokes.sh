@@ -119,6 +119,7 @@ run_smoke BROWSER      MOGGING_BROWSER   1 180 browser
 run_smoke BROWSERCTL   MOGGING_BROWSERCTL 1 180 browserctl
 run_smoke FIRSTRUN     MOGGING_FIRSTRUN  1 150 firstrun
 run_smoke PRODUCT      MOGGING_PRODUCT   1 300 product
+run_smoke USAGE        MOGGING_USAGE     1 150 usage
 
 echo ""
 echo "══ SWEEP RESULTS ══"

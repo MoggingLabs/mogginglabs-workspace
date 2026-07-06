@@ -1,0 +1,208 @@
+import type { AgentProfile, PlanUsage, UsageAdapter, UsageCadence } from '@contracts'
+import { USAGE_CADENCE_MS } from '@contracts'
+import { resolveHome } from './homes'
+
+export { fakeAdapter, setFakeMode } from './fake-adapter'
+export { claudeAdapter } from './claude-adapter'
+export { resolveHome } from './homes'
+
+// The usage seam (Phase-7/01, ADR 0007): adapter registry + a polite poller.
+// Electron-free — main injects the window-visibility signal, the KV, the
+// profile list, and the change sink. Stale is a FIRST-CLASS state: on error
+// the last good snapshot is re-served (dimmed by the UI), never dropped.
+// Backoff is jittered exponential, capped — an erroring provider dims, it is
+// never hammered.
+
+export interface UsageServiceDeps {
+  adapters: UsageAdapter[]
+  /** Phase-4 profiles (pointer sets). Order 0 = the active/default lane. */
+  profiles(): AgentProfile[]
+  kv: { get(key: string): string | null; set(key: string, value: string): void }
+  /** Pushed whenever the snapshot changes (IPC fan-out lives in main). */
+  onChange(plans: PlanUsage[]): void
+  /** Injected clock (IMPLEMENTATION.md rule — smokes pin time). */
+  now?: () => number
+  /** Base cadence override in ms (smoke uses a short one); presets otherwise. */
+  cadenceMsOverride?: number
+}
+
+interface ProviderState {
+  lastGood: PlanUsage[] | null
+  lastAttempt: number
+  consecutiveErrors: number
+  timer: ReturnType<typeof setTimeout> | null
+  inFlight: boolean
+  fetches: number
+  errors: number
+  lastDelayMs: number
+}
+
+const BACKOFF_CAP_MS = 30 * 60_000
+
+export interface UsageService {
+  list(): PlanUsage[]
+  refresh(providerId?: string): void
+  setVisible(visible: boolean): void
+  stop(): void
+  debug(): {
+    visible: boolean
+    providers: Record<string, { fetches: number; errors: number; lastDelayMs: number; hasLastGood: boolean }>
+  }
+}
+
+export function createUsageService(deps: UsageServiceDeps): UsageService {
+  const now = deps.now ?? Date.now
+  const state = new Map<string, ProviderState>()
+  let visible = true
+  let stopped = false
+
+  const st = (id: string): ProviderState => {
+    let s = state.get(id)
+    if (!s) {
+      s = { lastGood: null, lastAttempt: 0, consecutiveErrors: 0, timer: null, inFlight: false, fetches: 0, errors: 0, lastDelayMs: 0 }
+      state.set(id, s)
+    }
+    return s
+  }
+
+  const cadenceMs = (id: string): number | null => {
+    if (deps.cadenceMsOverride) return deps.cadenceMsOverride
+    const preset = (deps.kv.get(`usage.cadence.${id}`) ?? '5m') as UsageCadence
+    if (preset === 'manual') return null
+    return USAGE_CADENCE_MS[preset] ?? USAGE_CADENCE_MS['5m']
+  }
+
+  /** The active profile (order 0) for a provider, or null -> default home. */
+  const activeProfile = (id: string): AgentProfile | null => {
+    const forProvider = deps.profiles().filter((p) => p.provider === id)
+    if (!forProvider.length) return null
+    return forProvider.reduce((a, b) => (a.order <= b.order ? a : b))
+  }
+
+  const snapshot = (): PlanUsage[] => {
+    const all: PlanUsage[] = []
+    for (const a of deps.adapters) {
+      const s = state.get(a.id)
+      if (s?.lastGood) all.push(...s.lastGood)
+    }
+    return all
+  }
+
+  const emit = (): void => deps.onChange(snapshot())
+
+  const schedule = (a: UsageAdapter, delayMs: number): void => {
+    const s = st(a.id)
+    if (s.timer) clearTimeout(s.timer)
+    if (stopped || !visible) return
+    // ±10% jitter so N providers never align into a thundering herd.
+    const jittered = Math.round(delayMs * (0.9 + Math.random() * 0.2))
+    s.lastDelayMs = jittered
+    s.timer = setTimeout(() => void poll(a), jittered)
+  }
+
+  const poll = async (a: UsageAdapter): Promise<void> => {
+    const s = st(a.id)
+    if (s.inFlight || stopped || !visible) return
+    s.inFlight = true
+    s.lastAttempt = now()
+    s.fetches++
+    const profile = activeProfile(a.id)
+    const profileId = profile?.id ?? 'default'
+    const home = resolveHome(a.id, profile)
+    const ctl = new AbortController()
+    const timeout = setTimeout(() => ctl.abort(), 10_000)
+    try {
+      const detect = await a.detect(home)
+      if (!detect.ok) {
+        s.lastGood = [
+          {
+            providerId: a.id,
+            profileId,
+            planLabel: '—',
+            windows: [],
+            fetchedAt: now(),
+            health: 'unconfigured',
+            reason: detect.reason ?? 'not configured'
+          }
+        ]
+        s.consecutiveErrors = 0
+      } else {
+        const plans = await a.fetch(home, profileId, ctl.signal)
+        s.lastGood = plans.map((p) => ({ ...p, windows: p.windows.map((w) => ({ ...w, usedPct: Math.max(0, Math.min(100, w.usedPct)) })) }))
+        s.consecutiveErrors = 0
+      }
+    } catch (e) {
+      s.errors++
+      s.consecutiveErrors++
+      const reason = e instanceof Error ? e.message : 'usage fetch failed'
+      if (s.lastGood?.some((p) => p.health === 'fresh' || p.health === 'stale')) {
+        // Stale is a state, not an error: re-serve the last good data, dimmed.
+        s.lastGood = s.lastGood.map((p) =>
+          p.health === 'fresh' || p.health === 'stale' ? { ...p, health: 'stale', reason } : p
+        )
+      } else {
+        s.lastGood = [
+          { providerId: a.id, profileId, planLabel: '—', windows: [], fetchedAt: now(), health: 'error', reason }
+        ]
+      }
+    } finally {
+      clearTimeout(timeout)
+      s.inFlight = false
+    }
+    emit()
+    const base = cadenceMs(a.id)
+    if (base !== null) {
+      // Jittered exponential backoff on consecutive errors, capped — never hammer.
+      const next = s.consecutiveErrors > 0 ? Math.min(base * 2 ** s.consecutiveErrors, BACKOFF_CAP_MS) : base
+      schedule(a, next)
+    }
+  }
+
+  for (const a of deps.adapters) {
+    const base = cadenceMs(a.id)
+    if (base !== null) schedule(a, Math.min(base, 1500)) // first read soon after boot
+  }
+
+  return {
+    list: snapshot,
+    refresh(providerId) {
+      for (const a of deps.adapters) {
+        if (providerId && a.id !== providerId) continue
+        void poll(a)
+      }
+    },
+    setVisible(v) {
+      if (v === visible) return
+      visible = v
+      for (const a of deps.adapters) {
+        const s = st(a.id)
+        if (!v) {
+          // Hidden window = no polling at all (the poller PAUSES, not slows).
+          if (s.timer) clearTimeout(s.timer)
+          s.timer = null
+        } else {
+          const base = cadenceMs(a.id)
+          if (base !== null) {
+            const overdue = now() - s.lastAttempt >= base
+            schedule(a, overdue ? 200 : base)
+          }
+        }
+      }
+    },
+    stop() {
+      stopped = true
+      for (const s of state.values()) {
+        if (s.timer) clearTimeout(s.timer)
+        s.timer = null
+      }
+    },
+    debug() {
+      const providers: Record<string, { fetches: number; errors: number; lastDelayMs: number; hasLastGood: boolean }> = {}
+      for (const a of deps.adapters) {
+        const s = st(a.id)
+        providers[a.id] = { fetches: s.fetches, errors: s.errors, lastDelayMs: s.lastDelayMs, hasLastGood: !!s.lastGood }
+      }
+      return { visible, providers }
+    }
+  }
+}

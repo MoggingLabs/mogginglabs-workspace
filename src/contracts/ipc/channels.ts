@@ -129,7 +129,14 @@ export const UpdateChannels = {
   restart: 'update:restart' // renderer -> main: quitAndInstall (the "Restart now" action)
 } as const
 
+export const UsageChannels = {
+  list: 'usage:list', // -> PlanUsage[] (cached snapshot — instant, never fetches)
+  refresh: 'usage:refresh', // renderer -> main: poke the poller (results arrive via the push)
+  changed: 'usage:changed' // main -> renderer: PlanUsage[] (pushed on snapshot change)
+} as const
+
 export const AllChannels: readonly string[] = [
+  ...Object.values(UsageChannels),
   ...Object.values(UpdateChannels),
   ...Object.values(BrowserChannels),
   ...Object.values(TerminalChannels),

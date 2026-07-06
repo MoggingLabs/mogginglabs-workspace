@@ -1,0 +1,38 @@
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import type { AgentProfile } from '@contracts'
+
+// The per-OS / per-provider config-home table (ADR 0007 rule 3: KNOWN
+// locations only, no crawling). A Phase-4 profile relocates a home via its
+// pointer env; absent that, the CLI's documented default applies. `~` here is
+// the OS home dir on every platform (these CLIs use it on Windows too).
+
+/** The pointer env var that relocates each provider's config home. */
+const HOME_POINTER: Record<string, string> = {
+  claude: 'CLAUDE_CONFIG_DIR',
+  codex: 'CODEX_HOME',
+  gemini: 'GEMINI_CONFIG_DIR'
+}
+
+const DEFAULT_HOME: Record<string, () => string> = {
+  claude: () => join(homedir(), '.claude'),
+  codex: () => join(homedir(), '.codex'),
+  gemini: () => join(homedir(), '.gemini')
+}
+
+/** Expand a leading `~` (profiles store pointer values user-style). */
+function expandTilde(p: string): string {
+  if (p === '~') return homedir()
+  if (p.startsWith('~/') || p.startsWith('~\\')) return join(homedir(), p.slice(2))
+  return p
+}
+
+/** Resolve the config home an adapter should READ for (provider, profile).
+ *  Profile pointer wins; otherwise the provider's documented default. */
+export function resolveHome(providerId: string, profile: AgentProfile | null): string {
+  const pointer = HOME_POINTER[providerId]
+  const fromProfile = pointer && profile ? profile.env[pointer] : undefined
+  if (fromProfile) return expandTilde(fromProfile)
+  const dflt = DEFAULT_HOME[providerId]
+  return dflt ? dflt() : join(homedir(), `.${providerId}`)
+}

@@ -44,7 +44,7 @@ renderer is tuned once and behaves identically everywhere. See
 ## Quickstart
 
 > **Status: Phase 6 (product-ready) shipped — v0.4.0** — three-platform parity
-> (the same 30-gate `qa-smokes.sh` green on Windows, Linux, AND macOS CI), a
+> (the same 31-gate `qa-smokes.sh` green on Windows, Linux, AND macOS CI), a
 > toggleable **browser dock** that agents can drive via a first-party MCP server,
 > per-slot **profile persistence**, a live **first-run checklist** + one-click
 > **update UX**, and signing readiness + winget/homebrew manifests. Closed by the
