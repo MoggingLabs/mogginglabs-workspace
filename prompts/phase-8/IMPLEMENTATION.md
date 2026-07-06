@@ -43,8 +43,37 @@ daemon protocol v3 frozen, smokes network-free.
   isolated; `MOGGING_*` env means smoke-world (real-session dev checks run
   env-clean).
 
+## The custody rule (ADR 0008.h — the phase-7 bar, pack-wide)
+
+- **Any secret in OUR custody rests as OS-vault ciphertext or does not
+  rest at all.** Vault-unavailable machines (the 7/05 probe: Linux
+  `basic_text` counts as unavailable) get REFUSAL or session-only — never
+  a plaintext downgrade. Applies to: vault service keys (08), webhook
+  URLs (09), and agent-web persistence (04 — see below).
+- **Agent-web cookies ride Chromium's cookie encryption, which uses the
+  SAME OS facility as our vault.** So the persistent `persist:agent-web`
+  partition is vault-conditioned: no real vault → the dock creates the
+  agent-web view on a NON-persist partition instead, with honest copy
+  ("this machine can't encrypt at rest — logins here last until the dock
+  closes"). Same probe as `isKeyVaultAvailable`, one shared helper.
+- **What the CLIs store after THEIR logins is theirs** (ADR 0002 —
+  exactly as if the user ran the CLI in a plain terminal): some store
+  OAuth tokens as plaintext JSON in their own homes; we neither read,
+  copy, nor "fix" that. docs/14 states both halves plainly — our custody
+  is ciphertext-only; their custody is their vendor's posture.
+- **Certified, not promised**: VAULTKEYS greps KV + configs; the
+  milestone (11) ends with a DISK-WIDE sweep — every fixture secret
+  (vault key, webhook URL, the fixture site's session cookie value)
+  grepped across the entire fixture userData + fixture CLI homes;
+  plaintext absence is the assert, the 7/12 masked-key ladder writ large.
+
 ## 01 — contracts
 
+- The control-tool names (01 step 2 references this list): reads =
+  `list_panes`, `capture_pane`, `mail_read`, `list_owners`, `list_board`;
+  writes = `send_to_pane`, `send_key`, `mail_send`, `claim_files`,
+  `release_files`, `update_card`. Browser names stay verbatim from the
+  shipped server.
 - Catalog SOURCE OF TRUTH is **JSON**: `src/contracts/integrations/mcp-catalog.json`.
   `mcp.ts` imports it (resolveJsonModule) and pins it with
   `satisfies readonly McpToolDef[]` — full type-checking, zero runtime deps,

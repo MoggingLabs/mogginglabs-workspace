@@ -83,7 +83,7 @@ as a `/goal`, < 4000 chars). Execute in order.
 | 01 | `01-adr-and-contracts.md` | ADR 0008 (seven stances incl. the browser-session boundary + outbound events) + `@contracts/integrations`: ONE tool catalog as data, ONE grant shape, the trail entry, services seam, preset + webhook shapes; typecheck/boundaries green (ships zero runtime) |
 | 02 | `02-mcp-server-read.md` | The shipped server becomes `mogging`: control-plane read tools join the browser tools, catalog served from contracts data, daemon client as second upstream; dev-verified against a NON-CLI MCP client too (protocol citizen, not a Claude-Code trick); MCP smoke green on golden frames |
 | 03 | `03-mcp-write-tools.md` | Control-plane write tools behind the workspace grant (default OFF), pane-scoped identity, receipts; MCPWRITE smoke green |
-| 04 | `04-agent-web-profile.md` | The agent browser profile (Branch C): sign-in-here affordance, per-origin action grants + blocklist, read-vs-act, session-scoped confirm, clear-logins, origin-change alerts; AGENTWEB smoke green on a localhost fixture login site |
+| 04 | `04-agent-web-profile.md` | The agent browser profile (Branch C): sign-in-here affordance, per-origin action grants + blocklist, read-vs-act, session-scoped confirm, clear-logins, origin-change alerts, VAULT-CONDITIONED persistence (no OS vault → session-only, never weakly-protected cookies at rest); AGENTWEB smoke green on a localhost fixture login site |
 | 05 | `05-agent-activity-trail.md` | The audit trail with teeth (FINDINGS §4.5): one local ledger for web acts + MCP writes + bridge deliveries, reviewable UI, retention, never telemetry; WEBTRAIL smoke green |
 | 06 | `06-mcp-manager.md` | Settings § Integrations: register any server across claude/codex/gemini config dialects — surgical, backed-up, diff-previewed; the house server is the built-in first row; MCPMGR smoke green on fixture homes |
 | 07 | `07-integrations-catalog.md` | The Integrations Catalog: research-verified presets (n8n + Google Workspace FIRST — founder priority) PLUS the open end — registry search, custom entries, preset import/export; Connect + per-CLI Authorize orchestration (status only, never tokens); the site-roster map begins; MCPCAT smoke green on fixture homes |
@@ -148,8 +148,17 @@ as a `/goal`, < 4000 chars). Execute in order.
   URLs, origins, and webhook payloads never enter telemetry — counts and
   booleans only. The trail is LOCAL — it exists so the user can audit, and
   it never leaves the machine.
-- **One home**: Settings § Integrations is ONE module growing across 06/07/08
-  (the 7/12 lesson) — no knob renders anywhere else; the milestone greps it.
+- **The custody rule (ADR 0008.h — the phase-7 bar, pack-wide)**: any
+  secret in OUR custody rests as OS-vault ciphertext or does not rest at
+  all — vault-unavailable machines get refusal or session-only, never a
+  plaintext downgrade. Covers vault keys (08), webhook URLs (09), and
+  agent-web cookie persistence (04). What the CLIs store after THEIR own
+  logins is theirs (0002, exactly-as-terminal) — docs/14 states both
+  halves plainly, and the milestone certifies ours with a disk-wide
+  fixture-secret sweep.
+- **One home**: Settings § Integrations is ONE module growing across
+  06/07/08/09 (the 7/12 lesson) — no knob renders anywhere else; the
+  milestone greps it.
 - Platform differences live in path tables + CI config only (6/03 lesson:
   compare canonical paths on win32).
 - Phase 2.5's memory tools mount on THIS server later — the catalog stays
