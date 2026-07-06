@@ -14,7 +14,8 @@
 > direction (§4's n8n/Make rows) **8/10 event bridge**, the live
 > connection registry (per-server×CLI state from each CLI's own list
 > output, pane chips, re-authorize) **8/11**, the GitHub adapter
-> **8/12**, the milestone **8/13**; the docs page is
+> **8/12**, the onboarding/UX pass (§6's connect flow made a guided,
+> resumable sequence) **8/13**, the milestone **8/14**; the docs page is
 > **`docs/14-integrations.md`**. §7.3's "ADR 0009 — service keys as
 > pointers" is folded into **ADR 0008 stance (d)** (env-refs OR vault
 > slots); outbound webhooks got stance **(g)**. The 2026-07-05 text

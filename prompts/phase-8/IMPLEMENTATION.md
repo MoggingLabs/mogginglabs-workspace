@@ -62,7 +62,7 @@ daemon protocol v3 frozen, smokes network-free.
   copy, nor "fix" that. docs/14 states both halves plainly — our custody
   is ciphertext-only; their custody is their vendor's posture.
 - **Certified, not promised**: VAULTKEYS greps KV + configs; the
-  milestone (13) ends with a DISK-WIDE sweep — every fixture secret
+  milestone (14) ends with a DISK-WIDE sweep — every fixture secret
   (vault key, webhook URL, the fixture site's session cookie value)
   grepped across the entire fixture userData + fixture CLI homes;
   plaintext absence is the assert, the 7/12 masked-key ladder writ large.
@@ -361,12 +361,34 @@ daemon protocol v3 frozen, smokes network-free.
   the card (attention chip + optional bridge `review-changed` event) —
   observed state only, no new GitHub capability.
 
+## 13 — onboarding + polish (new step; UX as spec)
+
+- The guided flow is a STATE MACHINE over existing actions (06 Connect,
+  07 Authorize, 09 plans) — progress is a KV cursor (roster index +
+  per-CLI sub-state), so quit/resume is free and restart-safe. It never
+  owns a write path; it sequences the ones that exist.
+- needs-auth toasts ride 11's transitions with the 7/09 single-fire
+  grammar: KV key per (server × CLI) storing the token-epoch (the
+  checkedAt of the first needs-auth); fire once per epoch, re-arm when
+  the state returns to connected. Repair action = the SAME Re-authorize
+  route as the grid button.
+- Palette entries register through the existing command registry with
+  args resolved at invoke time (current workspace, pane's CLI) — routes
+  only; capability lives in the one home.
+- The plain diff summary is DERIVED: the writers already know target
+  file, CLI, and scope — the summary renders that tuple ("Adds Sentry
+  to Claude Code — all workspaces" / "— this workspace only"), so it
+  can never drift from the diff below it.
+- Grid grammar mirrors 7/12 verbatim: category groups from the site
+  roster (queue/wall/media), connected-first sort, search, empty-state
+  CTA — one look and feel across Usage and Integrations.
+
 ## Execution order (solo, no parallel agents — house rule)
 
-01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → 10 → 11 → 12 → 13. The
-lanes in the README describe INDEPENDENCE (06–11 and 12 don't need
-02–05), not simultaneous execution; if a lane blocks, skip forward and
-return.
+01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → 10 → 11 → 12 → 13 → 14.
+The lanes in the README describe INDEPENDENCE (06–11 + 13 and 12 don't
+need 02–05), not simultaneous execution; if a lane blocks, skip forward
+and return.
 
 ## Risks worth naming now
 

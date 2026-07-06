@@ -92,7 +92,8 @@ as a `/goal`, < 4000 chars). Execute in order.
 | 10 | `10-event-bridge.md` | The outbound event bridge: pane/board events → user-configured webhooks (n8n · Make · Zapier · Slack incoming) — "a notify call to any webhook"; vault-held URLs, versioned payload, polite delivery; EVBRIDGE smoke green on a localhost fixture receiver |
 | 11 | `11-mcp-connection-status.md` | The app KNOWS: a live connection registry per (server × CLI) — registered/connected/needs-auth/error/drift from each CLI's OWN status output — pushed to a pane-header MCP chip, restart-to-pick-up nudges, "stays signed in for future sessions" copy, one-click Re-authorize; MCPSTATUS smoke green on CLI shims |
 | 12 | `12-github-adapter.md` | Board cards link to GitHub PRs/issues with live status chips riding `gh` auth; review-state changes land back on the pane that wrote it; INTEG smoke green on the FAKE adapter |
-| 13 | `13-integrations-milestone.md` | INTEGMILESTONE end-to-end (all five directions composed) + `docs/14-integrations.md` incl. the site-honesty map + books; full sweep green on all four environments |
+| 13 | `13-integrations-onboarding-and-polish.md` | The UX pass, spec'd with asserts: the "Connect your stack" guided flow (first-run checklist item, skippable, resumable), single-fire needs-auth toasts with Re-authorize (the 7/09 discipline), palette verbs for every integrations action, plain-language diff summaries, empty states, category-grouped connected-first grid, the in-app privacy block; INTEGUX smoke green |
+| 14 | `14-integrations-milestone.md` | INTEGMILESTONE end-to-end (all five directions composed) + `docs/14-integrations.md` incl. the site-honesty map + books; full sweep green on all four environments |
 
 ## Overall Definition of Done
 - Any hosted CLI, registered by the app in one click, can list panes, read a
@@ -132,8 +133,12 @@ as a `/goal`, < 4000 chars). Execute in order.
   the house server + its template's picks; adding Sentry to one
   workspace pollutes no other; the matrix answers "does this CLI have
   this tool" in one glance, and a pane's tools/list frames prove it.
-- The sweep — with all twelve new gates — is green on local Windows and
-  all three CI OSes; both perf budgets unchanged.
+- A stranger on a fresh machine connects their stack in MINUTES: the
+  first-run checklist hands them the guided flow, every action is one
+  palette command away, a broken token is one toast + one click, and no
+  screen speaks config dialect without a plain-language line.
+- The sweep — with all thirteen new gates — is green on local Windows
+  and all three CI OSes; both perf budgets unchanged.
 
 ## Global checks (every step)
 - `npm run typecheck` → 0; `npm run build` → ok; boundary greps clean.
@@ -177,10 +182,11 @@ as a `/goal`, < 4000 chars). Execute in order.
 
 ## Parallelization
 01 is the root. After it: Lane A (02 → 03 → 04 → 05, the server + the web
-profile + the trail), Lane B (06 → 07 → 08 → 09 → 10 → 11, the manager +
-catalog + vault keys + tool plans + bridge + connection status),
-Lane C (12, the service seam) — three lanes, zero shared files beyond
-contracts. 13 needs all lanes. Solo execution runs 01→13 in order (house
+profile + the trail), Lane B (06 → 07 → 08 → 09 → 10 → 11 → 13, the
+manager + catalog + vault keys + tool plans + bridge + connection
+status + the UX pass), Lane C (12, the service seam) — three lanes,
+zero shared files beyond contracts. 14 needs all lanes. Solo execution
+runs 01→14 in order (house
 rule: no parallel agents); the lanes describe independence, not simultaneity.
 The ecosystem research behind the catalog (per-tool matrix, CLI OAuth
 capabilities, sources): `docs/research/2026-07-third-party-integrations.md`.
