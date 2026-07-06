@@ -67,6 +67,37 @@ daemon protocol v3 frozen, smokes network-free.
   grepped across the entire fixture userData + fixture CLI homes;
   plaintext absence is the assert, the 7/12 masked-key ladder writ large.
 
+## The cross-agent question (app-held OAuth), answered
+
+- **One login already serves all agents almost everywhere we hold the
+  credential**: vault keys (08) reach every pane of every CLI from one
+  paste; webhook URLs likewise; an agent-web login (04) is ONE browser
+  session that any CLI's agent drives. The only class with per-CLI
+  logins is OAuth-remote MCP.
+- **Why that class resists app-holding, technically**: OAuth 2.1 refresh
+  tokens ROTATE — concurrent use by independent consumers trips theft
+  detection and revokes the grant, so three CLIs cannot share one
+  refresh token. The app as sole refresher minting access tokens fails
+  too: access tokens expire mid-session and env is set at SPAWN — no
+  re-injection into a running pane. The only working shape is a local
+  token-holding PROXY in every request path — the broker 0002 forbids,
+  plus a listener. This is why app-held OAuth is an ADR-later, not a
+  step: the deferral is engineering, not just philosophy.
+- **The residual cost, stated honestly**: N CLIs = N approve-CLICKS at
+  connect time (the browser holds ONE vendor login; consents 2..N are
+  rubber stamps, no password re-entry), once ever — 07's Authorize runs
+  them as a guided sequence and 11's registry shows which CLI is still
+  pending. Copy never calls this "log in N times".
+- **The mitigation that IS ours**: `authKinds` is an ARRAY
+  (vendor-preferred first). Vendors offering BOTH OAuth and token/header
+  auth (Sentry `Sentry-Bearer`, Supabase PAT, GitHub PAT — research §4)
+  get the second on-ramp surfaced as "one token, all agents" via the
+  vault (08). The UI presents the trade: per-CLI OAuth = per-CLI
+  revocation + vendor-recommended; one vault token = one paste,
+  shared blast radius. User chooses; default = vendor-preferred.
+- **Revisit trigger** for the future ADR: a vendor-blessed multi-client
+  grant model, or a concrete feature agents-with-MCP cannot serve.
+
 ## 01 — contracts
 
 - The control-tool names (01 step 2 references this list): reads =

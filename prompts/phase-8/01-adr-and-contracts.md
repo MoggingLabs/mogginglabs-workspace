@@ -42,10 +42,10 @@ lanes fork.
    { id, label, urlRef, events, workspaceId? }` + `BridgeEvent { v:1,
    event, ts, workspace, pane?, card?, note? }` (closed union: needs-you/
    notify/card-moved/review-changed); `McpPreset` (id, label, transport,
-   urlOrCommand, authKind, envRefSlots, baseUrlOverride?, cliQuirks,
+   urlOrCommand, authKinds[], envRefSlots, baseUrlOverride?, cliQuirks,
    grantCopy, verifiedAt); `ServiceLink`/`LinkStatus`/`ServiceAdapter`
    mirroring `@contracts/usage`. Boundaries: contracts depend on
-   nothing; the boundary greps hold.
+   nothing; the greps hold.
 
 ## Files
 - `docs/adr/0008-integrations-protocols-not-plugins.md` ·
