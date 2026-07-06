@@ -29,7 +29,7 @@ self-contained + pasteable as a `/goal`, < 4000 chars). Execute in order.
 | # | File | Gate |
 |---|------|------|
 | 01 | `01-usage-core-and-adr.md` | **DONE** (2026-07-06): ADR 0007 + `@contracts/usage` + seam (jitter/backoff/hidden-pause/stale-first-class) + FAKE (7 fixture states, only adapter under smoke envs) + Claude adapter (endpoint shape dev-verified on a real login: Session 43%/Weekly 9%, fresh); USAGE green, full 31-gate local sweep green |
-| 02 | `02-pace-engine.md` | Pure pace module: signed pace delta, run-out ETA, the three verdicts with house wording; golden fixtures asserted by the smoke |
+| 02 | `02-pace-engine.md` | **DONE** (2026-07-06): pure `pace.ts` (clock injected, zero I/O) — blended burn (recent overlay catches the sprint the average misses), projection-gated verdicts, warm-up band, work-day active-time integral (weekend fixture pair flips as designed); 9 goldens assert verdict+delta+EXACT wording in USAGE; strings grep-proven to live in formatter+fixtures only; 31-gate sweep green (PRODUCT re-confirmed in isolation after a load flake: 118fps/69.6ms/32MB) |
 | 03 | `03-titlebar-gauge-and-popover.md` | Two-bar titlebar gauge (session/weekly) + quick-check popover, design-system compliant; USAGEUI smoke + both perf budgets green |
 | 04 | `04-openai-gemini-adapters.md` | Codex/OpenAI + Gemini adapters on the same seam, per-OS credential paths, stale/error states; adapter authoring guide |
 | 05 | `05-profiles-plans-and-alerts.md` | Plans × profiles switcher (N plans per provider), threshold notifications through the house notify system, failover suggestion feed |

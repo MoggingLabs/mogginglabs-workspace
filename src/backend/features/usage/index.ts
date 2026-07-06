@@ -5,6 +5,8 @@ import { resolveHome } from './homes'
 export { fakeAdapter, setFakeMode } from './fake-adapter'
 export { claudeAdapter } from './claude-adapter'
 export { resolveHome } from './homes'
+export { computePace, formatVerdict, formatPaceDelta, formatPaceTime, PACE_SEVERITY, type PaceOptions } from './pace'
+export { PACE_GOLDENS } from './pace-fixtures'
 
 // The usage seam (Phase-7/01, ADR 0007): adapter registry + a polite poller.
 // Electron-free — main injects the window-visibility signal, the KV, the

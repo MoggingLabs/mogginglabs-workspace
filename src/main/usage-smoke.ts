@@ -1,7 +1,7 @@
 import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { setFakeMode } from '@backend/features/usage'
+import { setFakeMode, computePace, formatVerdict, PACE_GOLDENS } from '@backend/features/usage'
 import { getUsageService } from './usage'
 
 // Env-gated usage-seam smoke (MOGGING_USAGE, Phase-7/01). Runs entirely on the
@@ -92,8 +92,30 @@ export function runUsageSmoke(_win: BrowserWindow): void {
       const flat = JSON.stringify(svc.list()).toLowerCase()
       const grepClean = !/accesstoken|refreshtoken|"token"|sk-ant|bearer/.test(flat)
 
-      const pass = shapeOk && cadenceOk && staleOk && backoffOk && hiddenOk && resumeOk && grepClean
-      result = { pass, shapeOk, cadenceOk, staleOk, backoffOk, hiddenOk, resumeOk, grepClean, tiles: snap.length, debug: svc.debug() }
+      // 6 ── the golden pace table (7/02): verdict + rounded delta + EXACT
+      // wording for every fixture; any drift — math or words — fails the gate.
+      const goldenFails: string[] = []
+      for (const g of PACE_GOLDENS) {
+        const report = computePace(g.window, g.now, g.opts)
+        if (g.expect === null) {
+          if (report !== null) goldenFails.push(`${g.name}: expected refusal, got ${report.verdict}`)
+          continue
+        }
+        if (!report) {
+          goldenFails.push(`${g.name}: expected ${g.expect.verdict}, engine refused`)
+          continue
+        }
+        if (report.verdict !== g.expect.verdict)
+          goldenFails.push(`${g.name}: verdict ${report.verdict} != ${g.expect.verdict}`)
+        if (Math.round(report.paceDelta) !== g.expect.deltaRounded)
+          goldenFails.push(`${g.name}: delta ${Math.round(report.paceDelta)} != ${g.expect.deltaRounded}`)
+        const text = formatVerdict(report, g.window.label)
+        if (text !== g.expect.text) goldenFails.push(`${g.name}: wording "${text}" != "${g.expect.text}"`)
+      }
+      const goldenOk = goldenFails.length === 0
+
+      const pass = shapeOk && cadenceOk && staleOk && backoffOk && hiddenOk && resumeOk && grepClean && goldenOk
+      result = { pass, shapeOk, cadenceOk, staleOk, backoffOk, hiddenOk, resumeOk, grepClean, goldenOk, goldenFails, goldens: PACE_GOLDENS.length, tiles: snap.length, debug: svc.debug() }
     } catch (e) {
       result = { pass: false, error: e instanceof Error ? e.message : String(e) }
     }

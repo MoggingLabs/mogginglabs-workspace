@@ -45,6 +45,28 @@ export interface UsageAdapter {
   fetch(home: string, profileId: string, signal: AbortSignal): Promise<PlanUsage[]>
 }
 
+/** The three pace verdicts (Phase-7/02). Wording lives in ONE formatter
+ *  (backend pace module); severity inks: runs-out = warning, on-pace =
+ *  neutral, surplus = info-quiet. */
+export type PaceVerdict = 'runs-out' | 'on-pace' | 'surplus'
+
+/** Output of the pure pace engine for one window. Absent report (null from
+ *  the engine) = not enough data to pace — surfaces render snapshot age
+ *  instead of a forecast (never speculate past the data). */
+export interface PaceReport {
+  verdict: PaceVerdict
+  /** Signed points: usedPct − elapsedPct (+12 = hotter than the budget line). */
+  paceDelta: number
+  /** 0–100: share of the window consumed (active-time when a baseline is set). */
+  elapsedPct: number
+  /** Blended burn in pct-points per (active) hour. */
+  burnRatePctPerHour: number
+  /** Epoch ms of projected exhaustion — present only when it lands BEFORE reset. */
+  runOutAt?: number
+  /** Projected unused points at reset — present only when it lands after. */
+  surplusPct?: number
+}
+
 export const USAGE_CADENCES = ['manual', '1m', '2m', '5m', '15m'] as const
 export type UsageCadence = (typeof USAGE_CADENCES)[number]
 
