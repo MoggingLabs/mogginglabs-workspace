@@ -192,6 +192,9 @@ export function runMcpCatSmoke(win: BrowserWindow, mode?: string): void {
         oauth: false,
         floor: '0.30',
         authorizeCommand: null,
+        mcpConfigFlag: null,
+        mcpStrictFlag: null,
+        projectScopeFile: null,
         verifiedAt: ''
       })
       const realCap = capabilityFor('codex')!

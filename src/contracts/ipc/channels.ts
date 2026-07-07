@@ -227,7 +227,12 @@ export const IntegrationsChannels = {
   // the spawn env map, in main; no channel can carry it to a renderer.
   serviceKeySet: 'integrations:serviceKey:set', // ({ name, value }) -> { ok, reason? } (secret VALUE -> vault ciphertext)
   serviceKeyClear: 'integrations:serviceKey:clear', // (name) -> void
-  serviceKeyList: 'integrations:serviceKey:list' // -> string[] (env NAMEs with a stored key; presence only, never values)
+  serviceKeyList: 'integrations:serviceKey:list', // -> string[] (env NAMEs with a stored key; presence only, never values)
+  // Phase-8/09: the per-workspace TOOL PLAN — which servers reach a workspace's
+  // panes, per CLI. Materialized at pane launch; scoping is context hygiene.
+  planGet: 'integrations:plan:get', // (workspaceId) -> WorkspaceToolPlan
+  planSet: 'integrations:plan:set', // (WorkspaceToolPlan) -> WorkspaceToolPlan (sanitized)
+  planChanged: 'integrations:plan:changed' // main -> renderer: WorkspaceToolPlan (a plan edit; 11's restart-needed composes)
 } as const
 
 export const AllChannels: readonly string[] = [

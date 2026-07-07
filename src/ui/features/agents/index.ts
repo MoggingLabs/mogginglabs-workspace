@@ -5,7 +5,7 @@ import { getFocusedPane } from '../../core/layout/focus'
 import { setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
 import { onAgentLaunchRequest, announceProfileFailover } from '../../core/agents/launch-port'
 import { setCommands } from '../../core/commands/command-port'
-import { getWorkspaces } from '../../core/workspace/workspace-info-port'
+import { getWorkspaces, workspaceIdForPane } from '../../core/workspace/workspace-info-port'
 import { onProfilesChanged } from '../../core/agents/profiles-port'
 import { isPaneLive, whenPaneLive } from '../../core/terminal/liveness-port'
 import { getTelemetry } from '../../core/telemetry'
@@ -137,7 +137,8 @@ export const agentsFeature: UiFeature = {
       // Default profile (order 0) applies when none was named and any exist (4/04).
       const mine = (await listProfiles()).filter((p) => p.provider === provider).sort((x, y) => x.order - y.order)
       const effectiveProfile = profileId ?? mine[0]?.id
-      const command = await agentsClient.command({ agentId: provider, cwd, resume, profileId: effectiveProfile })
+      const workspaceId = workspaceIdForPane(paneId)
+      const command = await agentsClient.command({ agentId: provider, cwd, resume, profileId: effectiveProfile, workspaceId })
       if (!command) return
       agentsClient.launchInto(paneId, command)
       lastLaunch.set(paneId, { provider, cwd, profileId: effectiveProfile })

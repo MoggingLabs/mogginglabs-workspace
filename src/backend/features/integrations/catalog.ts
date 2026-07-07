@@ -56,13 +56,29 @@ export interface CliCapability {
   /** The interactive step that runs the CLI's OWN authorize (managed pane).
    *  `<id>` interpolates the server id; null = no known command. */
   authorizeCommand: string | null
+  // ── Tool-plan materialization (Phase-8/09) ──────────────────────────────
+  /** Launch FLAG that loads a scoped MCP config FILE (no worktree file needed).
+   *  null = no flag; fall back to a project-scope file. */
+  mcpConfigFlag: string | null
+  /** Launch FLAG that uses ONLY the scoped config (excludes the CLI's own
+   *  global servers) — lets `inheritGlobal:false` truly isolate. null = the
+   *  CLI can't exclude its global set at launch (plan ADDS to global). */
+  mcpStrictFlag: string | null
+  /** Worktree-relative config file to write when there's no flag (managed +
+   *  git-excluded so agents never see it in `git status`). null = flag path. */
+  projectScopeFile: string | null
   verifiedAt: string
 }
 
 export const CLI_CAPABILITIES: readonly CliCapability[] = [
-  { cli: 'claude-code', remoteHttp: true, oauth: true, floor: '2.x', authorizeCommand: 'claude /mcp', verifiedAt: '2026-07-06' },
-  { cli: 'codex', remoteHttp: true, oauth: true, floor: '0.44', authorizeCommand: 'codex mcp login <id>', verifiedAt: '2026-07-05' },
-  { cli: 'gemini', remoteHttp: true, oauth: true, floor: '0.5', authorizeCommand: 'gemini mcp auth <id>', verifiedAt: '2026-07-05' }
+  // claude-code: `--mcp-config <file> --strict-mcp-config` verified on this
+  // machine 2026-07-07 — the plan file lives in userData, nothing in the worktree.
+  { cli: 'claude-code', remoteHttp: true, oauth: true, floor: '2.x', authorizeCommand: 'claude /mcp', mcpConfigFlag: '--mcp-config', mcpStrictFlag: '--strict-mcp-config', projectScopeFile: null, verifiedAt: '2026-07-07' },
+  // codex/gemini: no verified launch flag — a git-excluded project-scope file
+  // (research floors 2026-07-05; not installed here, so no strict isolation
+  // claimed — the plan file ADDS to the CLI's global set until re-verified).
+  { cli: 'codex', remoteHttp: true, oauth: true, floor: '0.44', authorizeCommand: 'codex mcp login <id>', mcpConfigFlag: null, mcpStrictFlag: null, projectScopeFile: '.codex/config.toml', verifiedAt: '2026-07-05' },
+  { cli: 'gemini', remoteHttp: true, oauth: true, floor: '0.5', authorizeCommand: 'gemini mcp auth <id>', mcpConfigFlag: null, mcpStrictFlag: null, projectScopeFile: '.gemini/settings.json', verifiedAt: '2026-07-05' }
 ]
 
 export const capabilityFor = (cli: HostedCliId): CliCapability | undefined => CLI_CAPABILITIES.find((c) => c.cli === cli)

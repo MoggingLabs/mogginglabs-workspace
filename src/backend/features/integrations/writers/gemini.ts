@@ -32,5 +32,6 @@ export const geminiWriter: McpConfigWriter = {
     return found ? JSON.stringify(found) : null
   },
   upsert: (text, entry) => upsertEntry(text, entry.id, shape(entry)),
-  remove: (text, id) => removeEntry(text, id)
+  remove: (text, id) => removeEntry(text, id),
+  composeScoped: (entries) => JSON.stringify({ mcpServers: Object.fromEntries(entries.map((e) => [e.id, shape(e)])) }, null, 2)
 }

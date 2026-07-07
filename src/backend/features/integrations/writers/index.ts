@@ -35,6 +35,10 @@ export interface McpConfigWriter {
   upsert(text: string | null, entry: McpServerEntry): string
   /** New file text with exactly our entry extracted. */
   remove(text: string, id: string): string
+  /** A STANDALONE scoped config (all `entries`, this dialect) — the file a
+   *  pane is launched against for a tool plan (Phase-8/09). Unlike upsert this
+   *  is a fresh whole-file config, not a surgical splice into a shared one. */
+  composeScoped(entries: McpServerEntry[]): string
 }
 
 export const MCP_WRITERS: readonly McpConfigWriter[] = [claudeWriter, codexWriter, geminiWriter]

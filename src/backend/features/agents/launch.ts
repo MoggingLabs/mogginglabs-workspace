@@ -42,10 +42,14 @@ export function buildLaunchCommand(
   agentId: string,
   cwd: string,
   resume = false,
-  env?: Record<string, string>
+  env?: Record<string, string>,
+  mcpArgs?: string[]
 ): string | null {
   const adapter = findAdapter(agentId)
   if (!adapter) return null
   const base = resume && adapter.resumeFlag ? `${adapter.bin} ${adapter.resumeFlag}` : adapter.bin
-  return cdPrefix(cwd) + envPrefix(env) + base
+  // Tool-plan launch args (Phase-8/09): the CLI's mcp-config flag + path. Quote
+  // args with spaces (userData paths on Windows); flags are literal.
+  const flags = mcpArgs?.length ? ' ' + mcpArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ') : ''
+  return cdPrefix(cwd) + envPrefix(env) + base + flags
 }

@@ -29,6 +29,7 @@ import { runPerWsAgentSmoke } from './perwsagent-smoke'
 import { runVaultKeysSmoke } from './vaultkeys-smoke'
 import { runWsCloseSmoke } from './wsclose-smoke'
 import { runKbShortcutsSmoke } from './kbshortcuts-smoke'
+import { runToolPlanSmoke } from './toolplan-smoke'
 import { runWebTrailSmoke } from './webtrail-smoke'
 import { runMcpMgrSmoke } from './mcpmgr-smoke'
 import { runMcpCatSmoke } from './mcpcat-smoke'
@@ -128,6 +129,13 @@ app.whenReady().then(async () => {
   // in the detached daemon outlives an app quit/relaunch (ADR 0006).
   if (process.env.MOGGING_SURVIVE) {
     await runDaemonSurviveSmoke(process.env.MOGGING_SURVIVE)
+    return
+  }
+
+  // Windowless tool-plan smoke (8/09): pure materialization + a CLI shim + a
+  // real git repo — no daemon, no window.
+  if (process.env.MOGGING_TOOLPLAN) {
+    await runToolPlanSmoke()
     return
   }
 

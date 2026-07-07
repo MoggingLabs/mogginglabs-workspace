@@ -19,4 +19,7 @@ export interface AgentCommandRequest {
   resume?: boolean
   /** Launch under this profile's env pointers (Phase-4/04). */
   profileId?: string
+  /** Materialize this workspace's tool plan into the launch (Phase-8/09) —
+   *  the pane's CLI gets only the planned servers. */
+  workspaceId?: string
 }

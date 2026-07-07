@@ -81,5 +81,6 @@ export const codexWriter: McpConfigWriter = {
     if (start > 0 && lines[start - 1].trim() === '') start--
     const kept = [...lines.slice(0, start), ...lines.slice(end)]
     return kept.join('\n')
-  }
+  },
+  composeScoped: (entries) => entries.map((e) => block(e)).join('\n\n') + '\n'
 }

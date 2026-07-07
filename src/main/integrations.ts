@@ -1,7 +1,10 @@
 import { ipcMain, type BrowserWindow } from 'electron'
 import {
   IntegrationsChannels,
-  type WorkspaceIntegrationsGrant
+  defaultToolPlan,
+  sanitizeToolPlan,
+  type WorkspaceIntegrationsGrant,
+  type WorkspaceToolPlan
 } from '@contracts'
 import { grantedWriteToolNames, readGrant, writeGrant, type GrantKv } from '@backend/features/integrations'
 import { getSettingsStore } from './app-settings'
@@ -34,6 +37,41 @@ export function getIntegrationsGrant(workspaceId: string): WorkspaceIntegrations
 }
 
 let winGetter: (() => BrowserWindow | null) | null = null
+
+// ── The per-workspace tool plan (Phase-8/09) ────────────────────────────────
+const PLAN_KEY = (workspaceId: string): string => `integrations.toolplan.${workspaceId}`
+const planListeners = new Set<() => void>()
+export function onToolPlanChanged(fn: () => void): void {
+  planListeners.add(fn)
+}
+export function getToolPlan(workspaceId: string): WorkspaceToolPlan {
+  const raw = getSettingsStore()?.getSetting(PLAN_KEY(String(workspaceId)))
+  if (!raw) return defaultToolPlan(String(workspaceId))
+  try {
+    return sanitizeToolPlan(JSON.parse(raw), String(workspaceId))
+  } catch {
+    return defaultToolPlan(String(workspaceId))
+  }
+}
+
+/** Has a plan ever been STORED for this workspace? Scoping is OPT-IN: a
+ *  workspace with no stored plan launches unchanged (the CLI's own global
+ *  config), so 8/09 never silently strips a pre-existing user's servers. A new
+ *  workspace stores its plan at creation, which is what turns scoping on. */
+export function hasToolPlan(workspaceId: string): boolean {
+  return !!getSettingsStore()?.getSetting(PLAN_KEY(String(workspaceId)))
+}
+export function setToolPlan(plan: WorkspaceToolPlan): WorkspaceToolPlan {
+  const clean = sanitizeToolPlan(plan, String(plan?.workspaceId ?? ''))
+  getSettingsStore()?.setSetting(PLAN_KEY(clean.workspaceId), JSON.stringify(clean))
+  for (const fn of planListeners) fn()
+  try {
+    winGetter?.()?.webContents.send(IntegrationsChannels.planChanged, clean)
+  } catch {
+    /* window gone; the KV is the truth */
+  }
+  return clean
+}
 
 /** Persist a (sanitized) grant and fan the change out: renderer push + every
  *  registered listener. Returns the sanitized grant, or null without a store. */
@@ -80,4 +118,6 @@ export function registerIntegrations(getWin: () => BrowserWindow | null): void {
   ipcMain.handle(IntegrationsChannels.grantSet, (_e, grant: WorkspaceIntegrationsGrant) =>
     setIntegrationsGrant(grant)
   )
+  ipcMain.handle(IntegrationsChannels.planGet, (_e, workspaceId: string) => getToolPlan(String(workspaceId)))
+  ipcMain.handle(IntegrationsChannels.planSet, (_e, plan: WorkspaceToolPlan) => setToolPlan(plan))
 }

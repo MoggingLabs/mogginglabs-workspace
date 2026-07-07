@@ -31,6 +31,13 @@ export function getWorkspaces(): WorkspacesSnapshot {
   return snapshot
 }
 
+/** The workspace a pane belongs to (pane id = ordinal*100 + slot). Used to
+ *  materialize the right tool plan at launch (Phase-8/09). */
+export function workspaceIdForPane(paneId: number): string | undefined {
+  const ordinal = Math.floor(paneId / 100)
+  return snapshot.workspaces.find((w) => w.ordinal === ordinal)?.id
+}
+
 /** Subscribe (replays the current snapshot immediately). Returns unsubscribe. */
 export function onWorkspacesChange(cb: Listener): () => void {
   listeners.add(cb)
