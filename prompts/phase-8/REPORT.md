@@ -35,7 +35,9 @@ picks, nothing else.
 **The UI.** A wizard Tools row (chips of connected servers, shown only when
 there ARE any — no silent scoping); a Settings › Workspace tools MATRIX
 (tools × CLIs, three cell states planned/global/off, inherit toggle, the
-per-pane truth line); template-seeded plans at creation.
+per-pane truth line); the catalog grid gains an "in N of M workspaces"
+badge (planCoverage over the scoped workspaces, honest denominator);
+template-seeded plans at creation.
 
 **TOOLPLAN gate** (all green): {A,B for claude · A for codex} materializes
 EXACTLY that (claude flag+strict+file, codex project file); a CLI launched

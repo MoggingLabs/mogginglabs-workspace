@@ -4000,6 +4000,10 @@ body.resizing * {
   background: color-mix(in srgb, var(--warning) 14%, transparent);
   color: var(--text-hi);
 }
+.cat-badge.is-planned {
+  background: color-mix(in srgb, var(--info) 14%, transparent);
+  color: var(--info);
+}
 .cat-mini {
   font-size: var(--fs-11);
 }

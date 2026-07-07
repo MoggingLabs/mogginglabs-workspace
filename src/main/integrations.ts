@@ -61,6 +61,21 @@ export function getToolPlan(workspaceId: string): WorkspaceToolPlan {
 export function hasToolPlan(workspaceId: string): boolean {
   return !!getSettingsStore()?.getSetting(PLAN_KEY(String(workspaceId)))
 }
+
+/** How many workspaces plan each server (for the catalog's "in N of M
+ *  workspaces" badge, 8/09 step 4). `total` = workspaces that have a stored
+ *  plan (the honest denominator — un-scoped workspaces aren't in the count). */
+export function toolPlanCoverage(): { counts: Record<string, number>; total: number } {
+  const workspaces = getSettingsStore()?.load()?.workspaces ?? []
+  const counts: Record<string, number> = {}
+  let total = 0
+  for (const w of workspaces) {
+    if (!hasToolPlan(w.id)) continue
+    total++
+    for (const id of Object.keys(getToolPlan(w.id).entries)) counts[id] = (counts[id] ?? 0) + 1
+  }
+  return { counts, total }
+}
 export function setToolPlan(plan: WorkspaceToolPlan): WorkspaceToolPlan {
   const clean = sanitizeToolPlan(plan, String(plan?.workspaceId ?? ''))
   getSettingsStore()?.setSetting(PLAN_KEY(clean.workspaceId), JSON.stringify(clean))
@@ -120,4 +135,5 @@ export function registerIntegrations(getWin: () => BrowserWindow | null): void {
   )
   ipcMain.handle(IntegrationsChannels.planGet, (_e, workspaceId: string) => getToolPlan(String(workspaceId)))
   ipcMain.handle(IntegrationsChannels.planSet, (_e, plan: WorkspaceToolPlan) => setToolPlan(plan))
+  ipcMain.handle(IntegrationsChannels.planCoverage, () => toolPlanCoverage())
 }

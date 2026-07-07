@@ -199,6 +199,8 @@ function createCatalogBlock(): HTMLElement {
       custom: McpPreset[]
     }
     caps = (await bridge.invoke(IntegrationsChannels.catCapabilities, undefined)) as Capability[]
+    // Coverage for the "in N of M workspaces" badge (8/09 step 4).
+    const coverage = ((await bridge.invoke(IntegrationsChannels.planCoverage)) as { counts: Record<string, number>; total: number }) ?? { counts: {}, total: 0 }
     try {
       const agents = (await bridge.invoke(AgentChannels.detect, undefined)) as { id: string; installed: boolean }[]
       installed = new Set(agents.filter((a) => a.installed).map((a) => a.id))
@@ -217,6 +219,12 @@ function createCatalogBlock(): HTMLElement {
       const badge = preset.verifiedAt
         ? el('span', { class: 'cat-badge is-verified', text: `verified ${preset.verifiedAt}` })
         : el('span', { class: 'cat-badge is-draft', text: 'community — not house-vetted' })
+      // "in N of M workspaces" — how many scoped workspaces plan this server.
+      const planned = rows.reduce((n, r) => n + (coverage.counts[r.id] ?? 0), 0)
+      const coverageBadge =
+        planned > 0 && coverage.total > 0
+          ? el('span', { class: 'cat-badge is-planned', text: `in ${planned} of ${coverage.total} workspace${coverage.total === 1 ? '' : 's'}` })
+          : null
       const connect = el('button', { class: 'trail-btn', type: 'button', text: 'Connect…' }) as HTMLButtonElement
       connect.onclick = (): void => void openConnect(preset, rows)
       const exportBtn = el('button', { class: 'trail-btn cat-mini', type: 'button', text: 'Export' }) as HTMLButtonElement
@@ -229,7 +237,7 @@ function createCatalogBlock(): HTMLElement {
         feedNote.textContent = r.ok ? r.diff ?? '' : r.reason ?? 'registry unavailable'
       }
       const card = el('div', { class: 'cat-card' }, [
-        el('div', { class: 'cat-card-head' }, [el('span', { class: 'mgr-label', text: label }), badge]),
+        el('div', { class: 'cat-card-head' }, [el('span', { class: 'mgr-label', text: label }), badge, coverageBadge]),
         el('div', { class: 'cat-card-copy', text: preset.group ? `${rows.map((r) => r.label).join(' · ')} — one card, ${rows.length} endpoints.` : preset.grantCopy }),
         el('div', { class: 'trail-controls' }, [connect, feedBtn, exportBtn]),
         feedNote

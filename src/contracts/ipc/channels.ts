@@ -232,7 +232,8 @@ export const IntegrationsChannels = {
   // panes, per CLI. Materialized at pane launch; scoping is context hygiene.
   planGet: 'integrations:plan:get', // (workspaceId) -> WorkspaceToolPlan
   planSet: 'integrations:plan:set', // (WorkspaceToolPlan) -> WorkspaceToolPlan (sanitized)
-  planChanged: 'integrations:plan:changed' // main -> renderer: WorkspaceToolPlan (a plan edit; 11's restart-needed composes)
+  planChanged: 'integrations:plan:changed', // main -> renderer: WorkspaceToolPlan (a plan edit; 11's restart-needed composes)
+  planCoverage: 'integrations:plan:coverage' // -> { counts: {serverId: n}, total } for the catalog "in N of M workspaces" badge
 } as const
 
 export const AllChannels: readonly string[] = [
