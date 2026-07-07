@@ -10,6 +10,7 @@ import type { SpawnRequest, WriteCommand, ResizeCommand, KillCommand, SetRoleCom
 import { ensureDaemon, DaemonClient } from './daemon-client'
 import { getSettingsStore } from './app-settings'
 import { resolveServiceKeyEnv } from './service-keys'
+import { onPaneStateForBridge } from './event-bridge'
 
 // The one live daemon connection, for other main modules (review gate 4/03).
 let activeClient: DaemonClient | null = null
@@ -26,7 +27,10 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
   const client = new DaemonClient(endpoint, {
     onData: (id, data) => getWebContents()?.send(TerminalChannels.data, { id: Number(id), data }),
     onExit: (id, exitCode) => getWebContents()?.send(TerminalChannels.exit, { id: Number(id), exitCode }),
-    onState: (id, state) => getWebContents()?.send(TerminalChannels.state, { id: Number(id), state }),
+    onState: (id, state) => {
+      getWebContents()?.send(TerminalChannels.state, { id: Number(id), state })
+      onPaneStateForBridge(Number(id), state) // 8/10: needs-you -> webhooks (main-side, daemon untouched)
+    },
     onCwd: (id, cwd) => getWebContents()?.send(TerminalChannels.cwd, { id: Number(id), cwd }),
     onOwners: (claims) => getWebContents()?.send(LedgerChannels.owners, { claims }),
     onLimit: (id) => getWebContents()?.send(TerminalChannels.limit, { id: Number(id) }),

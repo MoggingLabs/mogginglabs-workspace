@@ -30,10 +30,12 @@ import { runVaultKeysSmoke } from './vaultkeys-smoke'
 import { runWsCloseSmoke } from './wsclose-smoke'
 import { runKbShortcutsSmoke } from './kbshortcuts-smoke'
 import { runToolPlanSmoke } from './toolplan-smoke'
+import { runEvBridgeSmoke } from './evbridge-smoke'
 import { runWebTrailSmoke } from './webtrail-smoke'
 import { runMcpMgrSmoke } from './mcpmgr-smoke'
 import { runMcpCatSmoke } from './mcpcat-smoke'
 import { registerIntegrations } from './integrations'
+import { registerEventBridge } from './event-bridge'
 import { registerTrail } from './trail'
 import { registerMcpManager } from './mcp-manager'
 import { runAgentSmoke } from './agent-smoke'
@@ -140,6 +142,14 @@ app.whenReady().then(async () => {
   }
 
   registerAppSettings() // app-level state store first — telemetry reads persisted consent from it
+
+  // Windowless event-bridge smoke (8/10): needs the settings store + vault, no
+  // daemon or window — an in-process loopback receiver proves outbound delivery.
+  if (process.env.MOGGING_EVBRIDGE) {
+    await runEvBridgeSmoke()
+    return
+  }
+
   initMainTelemetry(() => win) // observability next, so early errors are captured (opt-in, ADR 0005)
 
   // The detached PTY daemon (ADR 0006) is now the DEFAULT — full parity with in-proc plus
@@ -163,6 +173,7 @@ app.whenReady().then(async () => {
   registerShellChrome(() => win) // theme-tinted window-control overlay (organic chrome)
   registerBrowserDock(() => win) // right browser dock: MAIN owns the WebContentsView (6/05)
   registerIntegrations(() => win) // per-workspace integrations grant: store + IPC + fan-out (8/03)
+  registerEventBridge(() => win) // outbound event bridge: house events -> user webhooks (8/10)
   registerTrail() // the agent activity trail: local store + viewer IPC (8/05)
   registerMcpManager() // MCP manager: registry + per-CLI config writers (8/06)
   startMcpEndpoint() // agent-control transport: the MCP server reaches the dock + grant wire here (6/05b, 8/03)

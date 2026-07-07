@@ -144,6 +144,7 @@ run_smoke VAULTKEYS    MOGGING_VAULTKEYS 1 240 vaultkeys
 run_smoke WSCLOSE      MOGGING_WSCLOSE   1 240 wsclose
 run_smoke KBSHORTCUTS  MOGGING_KBSHORTCUTS 1 240 kbshortcuts
 run_smoke TOOLPLAN     MOGGING_TOOLPLAN  1 240 toolplan
+run_smoke EVBRIDGE     MOGGING_EVBRIDGE  1 240 evbridge
 run_smoke WEBTRAIL     MOGGING_WEBTRAIL  1 240 webtrail
 run_smoke MCPMGR       MOGGING_MCPMGR    1 180 mcpmgr
 run_smoke MCPCAT       MOGGING_MCPCAT    1 180 mcpcat

@@ -3,9 +3,48 @@
 Receipts for the integrations pack (steps 01–14), same format as
 `prompts/phase-7/REPORT.md`. Per-step mechanics live in `IMPLEMENTATION.md`
 (deviations recorded there, inline); this file keeps dated verification
-records and the finds worth remembering. Sweep count as of 8/09: **47 gates**
+records and the finds worth remembering. Sweep count as of 8/10: **48 gates**
 (35 + MCP + MCPWRITE + AGENTWEB + WEBTRAIL + MCPMGR + MCPCAT + PERWS +
-PERWSAGENT + VAULTKEYS + WSCLOSE + KBSHORTCUTS + TOOLPLAN).
+PERWSAGENT + VAULTKEYS + WSCLOSE + KBSHORTCUTS + TOOLPLAN + EVBRIDGE).
+
+## 10 — the event bridge: house events → your webhooks (2026-07-07)
+
+The website's outbound promise, literal: n8n "trigger self-hosted workflows
+from your panes", Make "from a notify call to any webhook", Slack "when a
+pane needs you, the right channel knows." A doorbell, not a message bus.
+
+**POST only, URLs are secrets.** A webhook's URL is stored as vault
+ciphertext (consumer THREE of 8/08's `vault.ts`) or an env-ref pointer; the
+KV, trail, logs, and telemetry only ever see the LABEL. Masked `host/…`
+forever. URL policy: https anywhere; plain http ONLY loopback; private-LAN
+http (RFC1918 / `.local`) demands the explicit "insecure URL" ack (LAN n8n
+is real); public http refused outright.
+
+**Daemon untouched.** The note the daemon drops (`applyNotify` maps event→
+state, discards the message) means pane-notify bridge events carry ids only,
+honestly — `note` rides the events main synthesizes (the test event, and
+card-moved/review-changed when 12 emits). We subscribe to the attention
+stream main ALREADY sees (`onState` → a transition into attention =
+`needs-you`), so protocol v3 never moves.
+
+**Polite delivery.** Per-webhook serial queue; POST with a 5 s timeout, no
+redirects (`redirect:'error'`), 1 + 3 exponential retries, then DROP with a
+`bridge` trail entry carrying the LABEL. `emitBridgeEvent` never blocks the
+caller (emit returns in ~0 ms; delivery is queued) — a hung receiver costs a
+notify nothing. Per-webhook health chip (ok/failing/off) from outcomes,
+in-memory. The payload is the CONTRACT (`BRIDGE_PAYLOAD_VERSION = 1`):
+growing it bumps `v` + the docs.
+
+**EVBRIDGE gate** (all 8 a–h green): a notify lands with the exact v1 schema
+(`v:1, event, ts, workspace, pane, note`); an unchecked kind never arrives;
+workspace scope holds; a 500 receiver retries (4 hits) then drops with a
+LABEL trail entry; the URL rests as vault ciphertext (the token-in-path
+absent from the on-disk db); public http refused; a dead receiver
+(192.0.2.1, TEST-NET) leaves emit at ~0 ms; the secret URL appears in no
+trail entry. **Dev-verify honesty**: the gate's receiver is an in-process
+loopback server (the site's real n8n/Slack path is the same POST) — a live
+self-hosted n8n webhook receiving a pane's notify is the founder-run
+confirmation. Sweep 47 → **48** (EVBRIDGE).
 
 ## 09 — workspace tool plans: scoping with a mechanism (2026-07-07)
 

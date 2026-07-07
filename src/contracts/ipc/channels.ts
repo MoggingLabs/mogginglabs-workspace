@@ -233,7 +233,13 @@ export const IntegrationsChannels = {
   planGet: 'integrations:plan:get', // (workspaceId) -> WorkspaceToolPlan
   planSet: 'integrations:plan:set', // (WorkspaceToolPlan) -> WorkspaceToolPlan (sanitized)
   planChanged: 'integrations:plan:changed', // main -> renderer: WorkspaceToolPlan (a plan edit; 11's restart-needed composes)
-  planCoverage: 'integrations:plan:coverage' // -> { counts: {serverId: n}, total } for the catalog "in N of M workspaces" badge
+  planCoverage: 'integrations:plan:coverage', // -> { counts: {serverId: n}, total } for the catalog "in N of M workspaces" badge
+  // Phase-8/10: the outbound event bridge — house events -> user webhooks.
+  webhookList: 'integrations:webhook:list', // -> WebhookView[] (masked url + health; never the URL literal)
+  webhookSave: 'integrations:webhook:save', // ({ id?, label, url?, envRef?, events, workspaceId?, insecureAck }) -> { ok, reason? }
+  webhookRemove: 'integrations:webhook:remove', // (id) -> void
+  webhookTest: 'integrations:webhook:test', // (id) -> void (fires a fixture 'notify' event at that webhook)
+  webhookHealthChanged: 'integrations:webhook:health' // main -> renderer: WebhookView[] (health chip updates)
 } as const
 
 export const AllChannels: readonly string[] = [

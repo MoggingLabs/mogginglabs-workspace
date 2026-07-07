@@ -1,9 +1,11 @@
 import {
   AgentChannels,
+  BRIDGE_EVENTS,
   IntegrationsChannels,
   planHasServerForCli,
   planSignature,
   toolCellState,
+  type BridgeEventName,
   type WorkspaceToolPlan,
   type McpAuthKind,
   type HostedCliId,
@@ -15,7 +17,7 @@ import {
   type WorkspaceIntegrationsGrant
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { el, loadingRow, showToast } from '../../components'
+import { confirmDialog, el, loadingRow, showToast } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onToolPlanPanesChange, restartNeededPaneIds } from '../../core/agents/toolplan-panes'
 import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
@@ -904,12 +906,102 @@ function createToolPlanBlock(): HTMLElement {
   return block
 }
 
+// ── Event bridge: house events -> user webhooks (8/10) ───────────────────────
+interface WebhookView {
+  id: string
+  label: string
+  events: BridgeEventName[]
+  workspaceId?: string
+  urlMask: string
+  health: 'ok' | 'failing' | 'off'
+}
+function createEventBridgeBlock(): HTMLElement {
+  const bridge = getBridge()
+  const list = el('div', { class: 'mgr-list' })
+  const note = el('div', { class: 'settings-error mgr-note', role: 'alert', hidden: true })
+
+  const labelInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'Name (e.g. n8n build alerts)' }) as HTMLInputElement
+  const urlInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'Webhook URL (https, or loopback/LAN http)' }) as HTMLInputElement
+  urlInput.type = 'password'
+  const envInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'or env-ref (e.g. N8N_WEBHOOK_URL)' }) as HTMLInputElement
+  for (const i of [labelInput, urlInput, envInput]) i.addEventListener('keydown', (e) => e.stopPropagation())
+  const evBoxes = new Map<BridgeEventName, HTMLInputElement>()
+  const evRow = el('div', { class: 'evbridge-events' }, BRIDGE_EVENTS.map((ev) => {
+    const cb = el('input', { attrs: { type: 'checkbox' } }) as HTMLInputElement
+    if (ev === 'notify' || ev === 'needs-you') cb.checked = true
+    evBoxes.set(ev, cb)
+    return el('label', { class: 'evbridge-ev' }, [cb, el('span', { text: ev })])
+  }))
+  const insecureBox = el('input', { attrs: { type: 'checkbox' } }) as HTMLInputElement
+  const wsSelect = el('select', { class: 'trail-select' }) as HTMLSelectElement
+  wsSelect.append(el('option', { value: '', text: 'All workspaces' }))
+  for (const w of getWorkspaces().workspaces) wsSelect.append(el('option', { value: w.id, text: w.name }))
+  const saveBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Add webhook' }) as HTMLButtonElement
+
+  const HEALTH_TEXT: Record<string, string> = { ok: 'ok', failing: 'failing', off: 'idle' }
+  function row(w: WebhookView): HTMLElement {
+    const del = el('button', { class: 'browser-sites-forget', type: 'button', text: 'Delete' }) as HTMLButtonElement
+    del.onclick = async (): Promise<void> => {
+      const ok = await confirmDialog({ title: `Delete webhook “${w.label}”?`, message: 'It stops receiving events. This can’t be undone.', confirmLabel: 'Delete', danger: true })
+      if (ok) { await bridge.invoke(IntegrationsChannels.webhookRemove, w.id); await refresh() }
+    }
+    const test = el('button', { class: 'trail-btn cat-mini', type: 'button', text: 'Send test' }) as HTMLButtonElement
+    test.onclick = (): void => { void bridge.invoke(IntegrationsChannels.webhookTest, w.id); showToast({ title: 'Test event queued', body: w.label, tone: 'info' }) }
+    return el('div', { class: 'mgr-row' }, [
+      el('span', { class: 'mgr-label', text: w.label }),
+      el('span', { class: `evbridge-health is-${w.health}`, text: HEALTH_TEXT[w.health] }),
+      el('span', { class: 'mgr-id mono', text: `${w.urlMask} · ${w.events.join(', ')}${w.workspaceId ? ' · scoped' : ''}` }),
+      test,
+      del
+    ])
+  }
+
+  async function refresh(): Promise<void> {
+    const hooks = ((await bridge.invoke(IntegrationsChannels.webhookList)) as WebhookView[]) ?? []
+    list.innerHTML = ''
+    if (!hooks.length) list.append(el('div', { class: 'menu-note', text: 'No webhooks yet. A pane’s notify (needs-you) can ring n8n, Make, or Slack.' }))
+    for (const w of hooks) list.append(row(w))
+  }
+
+  saveBtn.onclick = async (): Promise<void> => {
+    const events = [...evBoxes.entries()].filter(([, cb]) => cb.checked).map(([ev]) => ev)
+    const url = urlInput.value
+    urlInput.value = ''
+    const r = (await bridge.invoke(IntegrationsChannels.webhookSave, {
+      label: labelInput.value, url: url || undefined, envRef: envInput.value || undefined, events, workspaceId: wsSelect.value || undefined, insecureAck: insecureBox.checked
+    })) as { ok: boolean; reason?: string }
+    note.hidden = r.ok
+    if (r.ok) { labelInput.value = ''; envInput.value = ''; await refresh() }
+    else note.textContent = r.reason ?? 'refused'
+  }
+  bridge.on(IntegrationsChannels.webhookHealthChanged, (payload) => {
+    const hooks = (payload as WebhookView[]) ?? []
+    list.innerHTML = ''
+    if (!hooks.length) list.append(el('div', { class: 'menu-note', text: 'No webhooks yet.' }))
+    for (const w of hooks) list.append(row(w))
+  })
+
+  const block = el('div', { class: 'trail-block mgr-block' }, [
+    el('div', { class: 'settings-row-label', text: 'Event bridge (webhooks)' }),
+    el('div', {
+      class: 'settings-row-caption',
+      text: 'When a pane needs you — or a card moves, or a review changes — POST a small JSON payload to your own webhook (n8n, Make, Slack). Outbound only, nothing listens. The URL is a secret: pasted once, encrypted, shown masked. Payload: { v, event, ts, workspace, pane?, card?, note? } — ids and your notify’s note, never scrollback or diffs.'
+    }),
+    list,
+    el('div', { class: 'mgr-form' }, [labelInput, urlInput, envInput, evRow, el('label', { class: 'evbridge-ev' }, [insecureBox, el('span', { text: 'allow insecure LAN http' })]), wsSelect, saveBtn]),
+    note
+  ])
+  setTimeout(() => void refresh(), 0)
+  return block
+}
+
 export function createIntegrationsSection(): HTMLElement {
   return el('div', { class: 'integrations-section' }, [
     createCatalogBlock(),
     createServersBlock(),
     createServiceKeysBlock(),
     createToolPlanBlock(),
+    createEventBridgeBlock(),
     createGrantsBlock(),
     createActivityBlock()
   ])

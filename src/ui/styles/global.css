@@ -2638,6 +2638,42 @@ body.resizing * {
   gap: var(--sp-2);
 }
 
+/* Event bridge (8/10): webhook event checkboxes + health chip. */
+.evbridge-events {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+}
+.evbridge-ev {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-12);
+  color: var(--text-mid);
+  font-family: var(--font-mono);
+}
+.evbridge-health {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1px 7px;
+  border-radius: var(--r-full);
+  flex: none;
+}
+.evbridge-health.is-ok {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+.evbridge-health.is-failing {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.evbridge-health.is-off {
+  color: var(--text-lo);
+  background: var(--bg-inset);
+}
+
 /* Wizard Tools row (8/09): scope a new workspace's agents to picked servers. */
 .wizard-tools-row {
   display: flex;
