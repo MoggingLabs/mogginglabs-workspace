@@ -1,6 +1,7 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
 import { ProfileChannels, UsageChannels, USAGE_DISPLAY_DEFAULTS, type AgentProfile, type GaugeMode, type PlanUsageView, type ProviderStatus, type UsageAlert, type UsageDisplayConfig } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
+import { announce } from '../../core/a11y/live-region'
 import { el, icon, showToast } from '../../components'
 import { setActiveView } from '../../core/shell/view-port'
 import { requestSettingsTab } from '../../core/shell/settings-tab-port'
@@ -269,7 +270,10 @@ export const usageFeature: UiFeature = {
       }
       const newest = plans.reduce((m, p) => Math.max(m, p.fetchedAt), 0)
       const refreshBtn = el('button', { class: 'icon-btn usage-refresh', type: 'button', ariaLabel: 'Refresh usage', title: 'Refresh' }, [icon('rotate-cw', 13)])
-      refreshBtn.addEventListener('click', () => void bridge.invoke(UsageChannels.refresh, undefined))
+      refreshBtn.addEventListener('click', () => {
+        announce('Refreshing usage') // A11Y-01: the gauge update is otherwise silent
+        void bridge.invoke(UsageChannels.refresh, undefined)
+      })
       const gearBtn = el('button', { class: 'icon-btn usage-gear', type: 'button', ariaLabel: 'Usage settings', title: 'Usage settings' }, [icon('sliders', 13)])
       gearBtn.addEventListener('click', () => {
         close()

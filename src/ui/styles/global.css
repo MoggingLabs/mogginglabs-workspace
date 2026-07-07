@@ -221,6 +221,27 @@ button {
     transition-duration: 0.01ms !important;
   }
 }
+/* MOTION-01: the attention/possession/update indicators would otherwise pulse
+   forever. Under reduced-motion we don't kill them dead (the state must still
+   read at a glance) — we swap the pulse for a slow, gentle opacity fade. */
+@keyframes ws-attention-fade {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.62;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ws-attn,
+  .workspace-tab.is-agent-driving::after,
+  .pane-state[data-state='busy'],
+  .pane-state[data-state='attention'],
+  .update-dot {
+    animation: ws-attention-fade 3.8s ease-in-out infinite !important;
+  }
+}
 
 /* Classic chrome: a full-width top bar over the rail + content columns. */
 #app {
@@ -2615,6 +2636,44 @@ body.resizing * {
   display: flex;
   justify-content: flex-end;
   gap: var(--sp-2);
+}
+
+/* Loading indicator (STATE-01) for async lists. */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: var(--r-full);
+  animation: spinner-rotate 0.7s linear infinite;
+  flex: none;
+}
+@keyframes spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.loading-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  color: var(--text-mid);
+  font-size: var(--fs-13);
+}
+
+/* Visually-hidden, still read by assistive tech (A11Y-01 live regions). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* Keyboard shortcuts sheet (KB-01) — shared by the ? overlay + Settings page. */

@@ -7,6 +7,7 @@ import { setFocusedPane } from '../../core/layout/focus'
 import { setPaneCwd } from '../../core/layout/pane-cwd'
 import { setPaneRole, setPaneRemote } from '../../core/layout/pane-meta'
 import { paneState, onAttentionChange } from '../../core/attention/attention-port'
+import { announce } from '../../core/a11y/live-region'
 import { requestAgentLaunch } from '../../core/agents/launch-port'
 import { activeView, setActiveView } from '../../core/shell/view-port'
 import { getTelemetry } from '../../core/telemetry'
@@ -61,6 +62,7 @@ export class WorkspaceController {
   // their panes stay ALIVE for a 5-second undo grace, disposed only when it
   // lapses. Key -> the dispose timer + the order index to restore to.
   private readonly pendingClose = new Map<string, { timer: ReturnType<typeof setTimeout>; index: number }>()
+  private lastAttnTotal = 0 // for the A11Y-01 "needs your input" announcement
 
   constructor(
     private readonly tabsEl: HTMLElement,
@@ -388,6 +390,7 @@ export class WorkspaceController {
    */
   private refreshAttention(): void {
     let anyAttention = false
+    let attnTotal = 0
     for (const view of this.views.values()) {
       if (this.pendingClose.has(view.meta.id)) continue // mid-close: hidden, don't ring
       const active = view.meta.id === this.activeId
@@ -398,6 +401,7 @@ export class WorkspaceController {
         if (s === 'attention') attnCount++
         else if (s === 'busy') busy = true
       }
+      attnTotal += attnCount
 
       view.attnBadge.hidden = attnCount === 0
       if (attnCount > 0) {
@@ -413,6 +417,12 @@ export class WorkspaceController {
       else delete view.tab.dataset.attention
       if (indicator === 'attention') anyAttention = true
     }
+    // A11Y-01: the attention ring is silent to screen readers — announce when a
+    // new pane starts needing input (a rise in the total).
+    if (attnTotal > this.lastAttnTotal) {
+      announce(`${attnTotal} ${attnTotal === 1 ? 'pane needs' : 'panes need'} your input`)
+    }
+    this.lastAttnTotal = attnTotal
     this.onAttention?.(anyAttention)
   }
 

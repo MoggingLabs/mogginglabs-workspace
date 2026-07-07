@@ -11,7 +11,7 @@ import {
   type WorkspaceIntegrationsGrant
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { el, showToast } from '../../components'
+import { el, loadingRow, showToast } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
 import { fmtAge } from '../usage'
@@ -113,11 +113,13 @@ function createCatalogBlock(): HTMLElement {
     const note = el('div', { class: 'menu-note trail-empty', hidden: true })
     const previewBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Preview' }) as HTMLButtonElement
     previewBtn.onclick = async (): Promise<void> => {
+      previewBtn.disabled = true
       const prep = (await bridge.invoke(IntegrationsChannels.catPrepare, {
         presetId: preset.id,
         baseUrl: baseInput?.value.trim() || undefined,
         authKind: authPick
       })) as { ok: boolean; entries?: McpServerEntry[]; reason?: string }
+      previewBtn.disabled = false
       previewPre.hidden = false
       previewPre.textContent = prep.ok
         ? prep.entries!.map((en) => JSON.stringify(en, null, 2)).join('\n')
@@ -126,13 +128,17 @@ function createCatalogBlock(): HTMLElement {
     const connectBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Connect' }) as HTMLButtonElement
     connectBtn.onclick = async (): Promise<void> => {
       const clis = HOSTED.filter((c) => checks.get(c)?.checked)
+      connectBtn.disabled = true
+      note.hidden = false
+      note.textContent = ''
+      note.append(loadingRow('Connecting…'))
       const r = (await bridge.invoke(IntegrationsChannels.catConnect, {
         presetId: preset.id,
         clis,
         baseUrl: baseInput?.value.trim() || undefined,
         authKind: authPick
       })) as { ok: boolean; reason?: string; results?: { cli: HostedCliId; ok: boolean; reason?: string }[] }
-      note.hidden = false
+      connectBtn.disabled = false
       note.textContent = r.ok
         ? `Connected: ${r.results?.map((x) => `${CLI_LABEL[x.cli]} ${x.ok ? '✓' : `✗ (${x.reason})`}`).join(' · ')}`
         : `refused: ${r.reason}`
@@ -239,11 +245,13 @@ function createCatalogBlock(): HTMLElement {
   const searchResults = el('div', { class: 'mgr-list' })
   searchBtn.onclick = async (): Promise<void> => {
     searchResults.innerHTML = ''
+    searchResults.append(loadingRow('Searching the registry…'))
     const r = (await bridge.invoke(IntegrationsChannels.catRegistry, searchInput.value.trim())) as {
       ok: boolean
       drafts?: { name: string; description: string; entry: McpServerEntry }[]
       reason?: string
     }
+    searchResults.innerHTML = ''
     if (!r.ok) {
       searchResults.append(el('div', { class: 'menu-note', text: r.reason ?? 'registry unavailable' }))
       return
@@ -301,18 +309,23 @@ function createServersBlock(): HTMLElement {
   const bridge = getBridge()
   const list = el('div', { class: 'mgr-list' })
   const panel = el('div', { class: 'mgr-panel', hidden: true })
-  const saveNote = el('div', { class: 'menu-note trail-empty mgr-save-note', hidden: true })
+  const saveNote = el('div', { class: 'menu-note trail-empty mgr-save-note', role: 'status', attrs: { 'aria-live': 'polite' }, hidden: true })
 
   async function openPanel(server: McpServerEntry, status: McpCliStatus): Promise<void> {
     panel.hidden = false
     panel.innerHTML = ''
+    panel.append(loadingRow('Reading the CLI config…'))
     const action = status.state === 'applied' ? 'remove' : 'apply'
     const preview = (await bridge.invoke(IntegrationsChannels.mgrPreview, {
       serverId: server.id,
       cli: status.cli,
       action
     })) as { file: string; block: string; summary: string } | null
-    if (!preview) return
+    panel.innerHTML = ''
+    if (!preview) {
+      panel.hidden = true
+      return
+    }
     panel.append(el('div', { class: 'mgr-panel-summary', text: preview.summary }))
     if (action === 'apply' && preview.block) {
       const pre = el('pre', { class: 'mgr-panel-block' })
@@ -321,6 +334,8 @@ function createServersBlock(): HTMLElement {
     }
     const actions = el('div', { class: 'trail-controls' })
     const doThen = (fn: () => Promise<unknown>) => async (): Promise<void> => {
+      panel.innerHTML = ''
+      panel.append(loadingRow('Writing the CLI config…'))
       await fn()
       panel.hidden = true
       await refresh()
@@ -698,7 +713,7 @@ function createServiceKeysBlock(): HTMLElement {
   keyInput.type = 'password'
   keyInput.addEventListener('keydown', (e) => e.stopPropagation())
   const saveBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Save key to vault' }) as HTMLButtonElement
-  const note = el('div', { class: 'settings-error mgr-note', hidden: true })
+  const note = el('div', { class: 'settings-error mgr-note', role: 'alert', hidden: true })
 
   async function refresh(): Promise<void> {
     const names = ((await bridge.invoke(IntegrationsChannels.serviceKeyList)) as string[]) ?? []

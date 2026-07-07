@@ -110,7 +110,7 @@ export function createUsageSection(): HTMLElement {
 
   function keyControl(r: GridRow, rerender: () => void): HTMLElement {
     const host = el('div', { class: 'usage-key-ctl' })
-    const err = el('span', { class: 'settings-error usage-key-err' })
+    const err = el('span', { class: 'settings-error usage-key-err', role: 'alert' })
     err.hidden = true
     const fail = (reason: string): void => {
       err.textContent = reason

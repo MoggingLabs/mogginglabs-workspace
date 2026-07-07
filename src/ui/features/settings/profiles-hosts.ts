@@ -23,7 +23,7 @@ const invoke = (channel: string, payload?: unknown): Promise<unknown> => getBrid
 const newId = (prefix: string): string => `${prefix}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e4)}`
 
 function errorLine(): HTMLElement {
-  const e = el('p', { class: 'settings-error' })
+  const e = el('p', { class: 'settings-error', role: 'alert' })
   e.hidden = true
   return e
 }
