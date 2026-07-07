@@ -190,9 +190,13 @@ export function runUsageSetSmoke(win: BrowserWindow): void {
         const mine = kv.listProfiles().filter((p) => p.provider === 'fake').sort((a, b) => a.order - b.order)
         switchOk = mine[0]?.id === 'fresh-reset'
       }
-      const activeFollowOk = await ES<boolean>(
-        `document.querySelector('.usage-plan-row[data-profile="fresh-reset"]')?.classList.contains('is-active') ?? false`
-      )
+      let activeFollowOk = false
+      for (let i = 0; i < 40 && !activeFollowOk; i++) {
+        await sleep(200)
+        activeFollowOk = await ES<boolean>(
+          `document.querySelector('.usage-plan-row[data-profile="fresh-reset"]')?.classList.contains('is-active') ?? false`
+        )
+      }
       kv.removeProfile('exhausted')
       kv.removeProfile('fresh-reset')
 

@@ -105,7 +105,18 @@ export function runWorktreeSmoke(win: BrowserWindow): void {
       writeFileSync(join(paneCwds[0], 'dirty.txt'), 'uncommitted\n')
       const dirtyRefused = await removeVia(paneCwds[0], false)
       const cleanRemoved = await removeVia(paneCwds[1], false) // clean -> no force needed
-      const forcedRemoved = await removeVia(paneCwds[0], true)
+      // Windows refuses to delete a directory that is a live process's CWD — the
+      // pane's own shell keeps paneCwds[0] open, so a forced delete hits
+      // "Permission denied" on windows-latest (never on POSIX, which unlinks a
+      // busy dir). The real "remove worktree" UX closes the pane first; do the
+      // same, then retry while the OS releases the handle.
+      await ES(`window.__mogging.layout.close(${base + 1})`)
+      let forcedRemoved: { ok: boolean; reason?: string } = { ok: false, reason: 'not attempted' }
+      for (let i = 0; i < 14; i++) {
+        await sleep(500)
+        forcedRemoved = await removeVia(paneCwds[0], true)
+        if (forcedRemoved.ok) break
+      }
       const removalOk =
         dirtyRefused.ok === false &&
         dirtyRefused.reason === 'dirty' &&
