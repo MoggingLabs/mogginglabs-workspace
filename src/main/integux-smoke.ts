@@ -79,22 +79,24 @@ export function runIntegUxSmoke(win: BrowserWindow): void {
       await ES(`(document.querySelector('.integux-intro .integux-setup-cta')?.click(), 1)`)
       let walkOk = false
       let endOk = false
+      let firstPreset = ''
+      let secondPreset = ''
+      let progressLen = 0
       if (hasCli) {
         const flowShown = await waitTrue(`!!document.querySelector('.modal-overlay .integux-flow .integux-flow-tool')`)
         const curPreset = (): Promise<string> => ES<string>(`document.querySelector('.integux-flow-tool')?.getAttribute('data-preset') || ''`)
         const clickSkip = (): Promise<unknown> =>
           ES(`[...document.querySelectorAll('.modal-overlay .btn')].find(b=>/^Skip$/.test(b.textContent?.trim()||''))?.click()`)
-        const firstPreset = await curPreset()
+        firstPreset = await curPreset()
         // Skip the current tool -> advances + records progress. The re-render is
         // async; POLL until the tool actually changes (CI is slower than local).
         await clickSkip()
-        let secondPreset = firstPreset
+        secondPreset = firstPreset
         for (let i = 0; i < 24 && secondPreset === firstPreset; i++) {
           await sleep(250)
           secondPreset = await curPreset()
         }
         await clickSkip()
-        let progressLen = 0
         for (let i = 0; i < 24 && progressLen < 2; i++) {
           await sleep(250)
           progressLen = await ES<number>(`(JSON.parse(localStorage.getItem('mogging.integux.done')||'[]')).length`)
