@@ -24,6 +24,7 @@ import {
 import { detectAgents } from '@backend/features/agents'
 import { execFile } from 'node:child_process'
 import { getSettingsStore } from './app-settings'
+import { serviceKeyClear, serviceKeyNames, serviceKeySet } from './service-keys'
 import {
   IntegrationsChannels,
   type HostedCliId,
@@ -389,4 +390,11 @@ export function registerMcpManager(): void {
   ipcMain.handle(IntegrationsChannels.catAuthStatus, (_e, p: { serverId: string; cli: HostedCliId }) =>
     catAuthStatus(String(p?.serverId), p?.cli)
   )
+
+  // ── Vault service keys (8/08) — WRITE-ONLY: set / clear / list-presence ─────
+  ipcMain.handle(IntegrationsChannels.serviceKeySet, (_e, p: { name: string; value: string }) =>
+    serviceKeySet(String(p?.name ?? ''), String(p?.value ?? ''))
+  )
+  ipcMain.handle(IntegrationsChannels.serviceKeyClear, (_e, name: string) => serviceKeyClear(String(name)))
+  ipcMain.handle(IntegrationsChannels.serviceKeyList, () => serviceKeyNames())
 }

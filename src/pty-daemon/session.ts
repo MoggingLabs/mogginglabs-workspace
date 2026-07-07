@@ -97,7 +97,11 @@ class PaneSession {
       cols: this.cols,
       rows: this.rows,
       cwd: this.cwd,
-      env: { ...process.env, ...extraEnv, MOGGING_PANE_ID: this.id } as Record<string, string>
+      // spec.env (Phase-8/08): per-pane env the APP resolved (vault service
+      // keys) — merged into the process env only, NEVER typed into the pane, so
+      // a secret never lands in scrollback/sessions.db. Source-agnostic: the
+      // daemon knows nothing of the vault. MOGGING_PANE_ID wins (identity).
+      env: { ...process.env, ...extraEnv, ...(spec.env ?? {}), MOGGING_PANE_ID: this.id } as Record<string, string>
     })
     // Parse OSC off the raw stream — same parser as the in-proc PtyService, so the daemon path
     // has full parity: agent-state (idle/busy/attention) AND OSC-7 cwd for per-pane git (2/03).

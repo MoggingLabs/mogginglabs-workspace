@@ -16,7 +16,7 @@ import {
 import { isBlockedActOrigin } from '@backend/features/integrations'
 import { getSettingsStore } from './app-settings'
 import { getIntegrationsGrant, workspaceIdForPane } from './integrations'
-import { isKeyVaultAvailable } from './usage-keys'
+import { setVaultProbeForSmoke, vaultAvailable } from './vault'
 import { recordTrail } from './trail'
 
 /**
@@ -61,14 +61,14 @@ const pendingNav = new Map<string, string>()
 const bufs = new Map<number, { console: string[]; net: string[] }>()
 const RING = 200
 
-// Vault-conditioned agent-web persistence (ADR 0008.h) — machine-global.
+// Vault-conditioned agent-web persistence (ADR 0008.h) — machine-global,
+// governed by the ONE shared vault probe (8/08).
 let agentWebPersists = true
-let vaultProbe: () => boolean = isKeyVaultAvailable
 export function setAgentWebVaultProbeForSmoke(probe: (() => boolean) | null): void {
-  vaultProbe = probe ?? isKeyVaultAvailable
+  setVaultProbeForSmoke(probe)
 }
 function refreshVault(): void {
-  agentWebPersists = !process.env.MOGGING_TEST_NO_VAULT && vaultProbe()
+  agentWebPersists = !process.env.MOGGING_TEST_NO_VAULT && vaultAvailable()
 }
 const agentWebPartitionFor = (workspaceId: string): string => browserAgentWebPartition(workspaceId, agentWebPersists)
 

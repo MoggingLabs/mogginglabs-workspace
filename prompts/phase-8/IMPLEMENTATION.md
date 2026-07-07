@@ -305,6 +305,24 @@ daemon protocol v3 frozen, smokes network-free.
   vs process-env inheritance) is cliQuirks data, dev-verified per CLI
   with a real install before any preset claims it (7/01).
 
+- **SHIPPED 2026-07-07 — deviation, corrected premise.** The plan assumed
+  "profile env already flows app → daemon in the spawn message." It does
+  NOT: profile env (4/04) is a TYPED `export NAME=…` prefix in `run`, and
+  `run` echoes into the pane and persists to sessions.db (scrollback).
+  Fine for profile POINTERS (never secret); fatal for a service KEY —
+  routing a secret there rests it plaintext in sessions.db. So I added an
+  OPTIONAL `env` to `SpawnSpec`, merged in the daemon's `pty.spawn`
+  (backward-compatible optional field, no version bump; the daemon stays
+  source-agnostic — it never learns the vault exists). The secret sets the
+  PROCESS env only, never typed, never persisted (the Session stores
+  `spec.run`+cwd+scrollback, not `spec.env`). Main resolves the vault in
+  the spawn RELAY so no value round-trips the renderer; remote panes get
+  none. The service-key STORE lives in `src/main/service-keys.ts` (not
+  `@backend`) because the vault is Electron safeStorage and the backend is
+  electron-free. Env-inheritance verified for MCP stdio servers via the
+  house `mogging-mcp` (MCP/MCPCAT gates); presets use inheritance, not
+  `${VAR}`-in-config. Proof: VAULTKEYS gate. Full REPORT.md § 08.
+
 ## 09 — workspace tool plans (new step; context hygiene with a mechanism)
 
 - **Why launch-time, not config-time**: the manager's user-home writes

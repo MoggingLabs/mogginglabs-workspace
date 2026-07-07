@@ -220,7 +220,14 @@ export const IntegrationsChannels = {
   catImport: 'integrations:cat:import', // (json string) -> { ok, reason? } (same refusals as every on-ramp)
   catExport: 'integrations:cat:export', // (presetId) -> boolean (LOCAL save dialog)
   catRefresh: 'integrations:cat:refresh', // (presetId) -> { ok, diff?, reason? } (update FEED: preview only, never applied)
-  catAuthStatus: 'integrations:cat:authStatus' // ({ serverId, cli }) -> CliServerState (the CLI's own list output, presence only)
+  catAuthStatus: 'integrations:cat:authStatus', // ({ serverId, cli }) -> CliServerState (the CLI's own list output, presence only)
+  // Phase-8/08: vault SERVICE KEYS — paste once, materialized into pane
+  // environments at launch. WRITE-ONLY: set / clear / list-presence only.
+  // There is deliberately NO serviceKey:get — the value materializes only into
+  // the spawn env map, in main; no channel can carry it to a renderer.
+  serviceKeySet: 'integrations:serviceKey:set', // ({ name, value }) -> { ok, reason? } (secret VALUE -> vault ciphertext)
+  serviceKeyClear: 'integrations:serviceKey:clear', // (name) -> void
+  serviceKeyList: 'integrations:serviceKey:list' // -> string[] (env NAMEs with a stored key; presence only, never values)
 } as const
 
 export const AllChannels: readonly string[] = [

@@ -9,6 +9,7 @@ import { TerminalChannels, LedgerChannels, GateChannels } from '@contracts'
 import type { SpawnRequest, WriteCommand, ResizeCommand, KillCommand, SetRoleCommand } from '@contracts'
 import { ensureDaemon, DaemonClient } from './daemon-client'
 import { getSettingsStore } from './app-settings'
+import { resolveServiceKeyEnv } from './service-keys'
 
 // The one live daemon connection, for other main modules (review gate 4/03).
 let activeClient: DaemonClient | null = null
@@ -43,7 +44,12 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
       ? getSettingsStore()?.listRemotes().find((h) => h.id === req.remoteHostId)
       : undefined
     const remote = row ? { name: row.name, host: row.host, user: row.user, port: row.port } : undefined
-    client.spawn(String(req.id), { cwd: req.cwd, cols: req.cols, rows: req.rows, remote })
+    // Vault service keys (8/08): resolved HERE, in main, into the per-pane env —
+    // the renderer never sees a value; the daemon merges it into the PTY env
+    // (never typed, so no secret in scrollback/sessions.db). Remote panes get
+    // none: the key would ride SSH to another machine (not our env to hand out).
+    const env = remote ? undefined : resolveServiceKeyEnv()
+    client.spawn(String(req.id), { cwd: req.cwd, cols: req.cols, rows: req.rows, remote, env })
   })
   ipcMain.on(TerminalChannels.write, (_e, cmd: WriteCommand) => client.input(String(cmd.id), cmd.data))
   ipcMain.on(TerminalChannels.resize, (_e, cmd: ResizeCommand) => client.resize(String(cmd.id), cmd.cols, cmd.rows))

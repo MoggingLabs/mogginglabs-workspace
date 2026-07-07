@@ -3,8 +3,68 @@
 Receipts for the integrations pack (steps 01–14), same format as
 `prompts/phase-7/REPORT.md`. Per-step mechanics live in `IMPLEMENTATION.md`
 (deviations recorded there, inline); this file keeps dated verification
-records and the finds worth remembering. Sweep count as of 8/07: **41 gates**
-(35 + MCP + MCPWRITE + AGENTWEB + WEBTRAIL + MCPMGR + MCPCAT).
+records and the finds worth remembering. Sweep count as of 8/08: **44 gates**
+(35 + MCP + MCPWRITE + AGENTWEB + WEBTRAIL + MCPMGR + MCPCAT + PERWS +
+PERWSAGENT + VAULTKEYS).
+
+## 08 — the vault, fleet-wide: paste-once service keys (2026-07-07)
+
+Phase-7 proved the paste-once vault for USAGE keys (ADR 0007.a); 08 brings
+the SAME grammar to the fleet so an api-key MCP server (PostHog, fal.ai, an
+n8n bearer) works with no secret literal in any CLI config, ever.
+
+**The extraction (consumer one, zero behaviour change).** `usage-keys.ts`'s
+safeStorage mechanics became `src/main/vault.ts` (encrypt / decrypt / KV-slot
+/ the ONE availability probe / the vault-unavailable REFUSAL). usage-keys is
+now a thin consumer — USAGE + USAGESET stayed green across the swap, the
+proof. Agent-web persistence (8/04) folded onto the same shared probe, so
+there is exactly one vault-availability truth machine-wide.
+
+**Where a secret can and can't go — the load-bearing find.** The daemon's
+per-pane env DOESN'T ride the spawn message today: profile env (4/04) is
+typed as an `export NAME=…` PREFIX in `run`, and `run` echoes into the pane
+and PERSISTS to sessions.db (scrollback). Fine for profile POINTERS (never
+secret) — fatal for a service KEY. So routing a secret through the typed
+prefix would rest it in plaintext in sessions.db, the exact thing the vault
+exists to prevent. **Deviation from the goal's "daemon literally untouched":**
+I added an OPTIONAL `env` to `SpawnSpec` and merged it in the daemon's
+`pty.spawn` (`{...process.env, ...extraEnv, ...spec.env, MOGGING_PANE_ID}`).
+This is backward-compatible (an optional field on the existing spawn message,
+no version bump) and the daemon stays source-agnostic — it never learns the
+vault exists; it just gets an env map. The secret is set in the PROCESS env,
+never typed, so it's never in scrollback/sessions.db. Verified: the Session
+stores only `spec.run`+cwd+scrollback — `spec.env` is never assigned to the
+session, so it is never persisted. Main resolves the vault slots in the spawn
+RELAY (`daemon-relay`), so a value never round-trips the renderer; remote
+panes get none (a key would ride SSH to another machine).
+
+**Per-CLI env semantics (dev-verified, 2026-07-07).** MCP stdio servers
+inherit the launching CLI's process env — that's exactly how the house
+`mogging-mcp` reads `MOGGING_PANE_ID` (proven live by the MCP/MCPCAT gates
+under Claude Code). So a vault key placed in the pane's process env is read
+by any stdio MCP server directly via `process.env.<NAME>` — the universal,
+CLI-agnostic path (OS process inheritance, not a CLI feature). `${VAR}`
+expansion INSIDE a CLI's mcp-config value is the secondary path (Claude Code
+expands it; Codex TOML / Gemini rely on inheritance) — the presets use env
+inheritance, so no preset claims `${VAR}`-in-config it hasn't earned. Recorded
+so 10's URL store (consumer three) and future presets inherit the finding.
+
+**Honest copy, both edges.** (a) the works-in-panes boundary is stated at
+paste time, not fine print: "reaches agents in panes MoggingLabs Workspace
+launches — a CLI you run elsewhere needs the same variable in your own
+environment." (b) the grant truth: "any key an MCP server needs is readable
+by that agent's process — the same as any env var; scope servers per
+workspace." The env-ref (`${VAR}`) stays the everywhere-alternative.
+
+**VAULTKEYS gate** (all green): a secret-shaped paste lands as vault
+ciphertext (KV holds ciphertext, not the literal); a REAL fixture pane's env
+carries the value via the spawn-path (`paneLen == secret.length`, delivered
+without echoing the secret); an exhaustive grep of ALL of userData finds the
+plaintext NOWHERE (`offenders: []`); a fixture CLI config carries `${NAME}`;
+delete removes it from the store + next launch's env; a vault-less machine
+REFUSES with the env-ref offer; usage keys still round-trip. Sweep 43 → **44**
+(VAULTKEYS). Guardrail held: no `serviceKey:get` channel exists — the value
+materializes only into the spawn env map, in main.
 
 ## Browser dock: <webview> migration + per-workspace browsers (2026-07-07)
 

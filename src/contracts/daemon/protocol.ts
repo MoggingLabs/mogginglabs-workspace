@@ -106,6 +106,13 @@ export interface SpawnSpec {
   rows?: number
   /** A line typed into the pane right after spawn (e.g. to launch an agent CLI). */
   run?: string
+  /** Extra per-pane environment merged into the PTY's process env (Phase-8/08).
+   *  The app resolves vault SERVICE KEYS here, pre-spawn, so api-key MCP servers
+   *  read them from the env — the value NEVER rides `run`/scrollback (which
+   *  persists), so a SECRET never rests in plaintext (ADR 0008.h). The daemon is
+   *  source-agnostic: it merges the map into `pty.spawn` and knows nothing of
+   *  the vault (no version bump — an optional field on the existing message). */
+  env?: Record<string, string>
   /** Remote pane (Phase-4/05): the RESOLVED host row (the daemon stays db-free).
    *  Connection pointers only — the user's ssh stack does all auth (ADR 0002). */
   remote?: { name: string; host: string; user?: string; port?: number }

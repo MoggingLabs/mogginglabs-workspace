@@ -414,13 +414,30 @@ function createServersBlock(): HTMLElement {
   const commandInput = field('Command', 'command (stdio)')
   const argsInput = field('Arguments', 'args (space-separated; quote nothing)')
   const urlInput = field('URL', 'https://… (http transport)')
-  const envInput = field('Env references', 'env: KEY=${VAR}, comma-separated')
+  const envInput = field('Env references', 'env: KEY=${VAR} (or paste a key value — it’s vaulted), comma-separated')
   const saveBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Save server' }) as HTMLButtonElement
   saveBtn.onclick = async (): Promise<void> => {
     const env: Record<string, string> = {}
+    const vaulted: string[] = []
     for (const pair of envInput.value.split(',').map((s) => s.trim()).filter(Boolean)) {
       const eq = pair.indexOf('=')
-      if (eq > 0) env[pair.slice(0, eq).trim()] = pair.slice(eq + 1).trim()
+      if (eq <= 0) continue
+      const k = pair.slice(0, eq).trim()
+      const v = pair.slice(eq + 1).trim()
+      if (v.includes('${')) {
+        env[k] = v // already an env/vault reference — kept as-is
+      } else {
+        // 8/08: a literal is OFFERED the vault (not refused outright) — paste
+        // once, store as ciphertext, and the config keeps only the ${NAME}.
+        const r = (await bridge.invoke(IntegrationsChannels.serviceKeySet, { name: k, value: v })) as { ok: boolean; reason?: string }
+        if (!r.ok) {
+          saveNote.textContent = r.reason ?? 'refused'
+          saveNote.hidden = false
+          return
+        }
+        env[k] = `\${${k}}`
+        vaulted.push(k)
+      }
     }
     const entry = {
       id: idInput.value.trim(),
@@ -432,7 +449,11 @@ function createServersBlock(): HTMLElement {
       env: Object.keys(env).length ? env : undefined
     }
     const r = (await bridge.invoke(IntegrationsChannels.serversSave, entry)) as { ok: boolean; reason?: string }
-    saveNote.textContent = r.ok ? 'Saved.' : (r.reason ?? 'refused')
+    saveNote.textContent = r.ok
+      ? vaulted.length
+        ? `Saved. ${vaulted.join(', ')} stored in the vault — the config references \${${vaulted[0]}}, never the value.`
+        : 'Saved.'
+      : (r.reason ?? 'refused')
     saveNote.hidden = false
     if (r.ok) {
       form.hidden = true
@@ -449,7 +470,7 @@ function createServersBlock(): HTMLElement {
     el('div', {
       class: 'settings-row-caption',
       text:
-        'Register a server once and apply it to each CLI in its own config dialect. Writes are surgical (only our marked entries), backed up first, and only ever on your click — the app never runs, proxies, or authenticates a server, and env values are ${VAR} references, never secrets.'
+        'Register a server once and apply it to each CLI in its own config dialect. Writes are surgical (only our marked entries), backed up first, and only ever on your click — the app never runs, proxies, or authenticates a server. Env values are ${VAR} references; paste a key value and it’s vaulted (encrypted, materialized into pane env), never written as a literal.'
     }),
     list,
     panel,
@@ -661,10 +682,83 @@ function createActivityBlock(): HTMLElement {
   return block
 }
 
+// ── Service keys: the paste-once fleet vault (8/08) ──────────────────────────
+// A service key pasted ONCE -> OS-vault ciphertext -> materialized into the env
+// of every pane the Workspace launches, so api-key MCP servers read it without
+// a secret literal in any CLI config. WRITE-ONLY, like the 7/12 usage keys: a
+// masked saved chip with Delete/Replace, never a reveal (no getter channel
+// exists). The env forms reference these by ${NAME}; the literal is refused.
+function createServiceKeysBlock(): HTMLElement {
+  const bridge = getBridge()
+  const list = el('div', { class: 'mgr-list' })
+  const nameInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'ENV NAME (e.g. POSTHOG_API_KEY)' }) as HTMLInputElement
+  nameInput.spellcheck = false
+  nameInput.addEventListener('keydown', (e) => e.stopPropagation())
+  const keyInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'paste key value…' }) as HTMLInputElement
+  keyInput.type = 'password'
+  keyInput.addEventListener('keydown', (e) => e.stopPropagation())
+  const saveBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Save key to vault' }) as HTMLButtonElement
+  const note = el('div', { class: 'settings-error mgr-note', hidden: true })
+
+  async function refresh(): Promise<void> {
+    const names = ((await bridge.invoke(IntegrationsChannels.serviceKeyList)) as string[]) ?? []
+    list.innerHTML = ''
+    if (!names.length) list.append(el('div', { class: 'menu-note', text: 'No service keys saved. Paste one below; reference it as ${NAME} in a server’s env.' }))
+    for (const name of names) {
+      const row = el('div', { class: 'mgr-row' }, [
+        el('span', { class: 'mono mgr-server-id', text: `\${${name}}` }),
+        el('span', { class: 'pill usage-key-saved', text: 'saved ····' })
+      ])
+      const del = el('button', { class: 'browser-sites-forget', type: 'button', text: 'Delete' }) as HTMLButtonElement
+      del.onclick = async (): Promise<void> => {
+        await bridge.invoke(IntegrationsChannels.serviceKeyClear, name)
+        await refresh()
+      }
+      row.append(del)
+      list.append(row)
+    }
+  }
+
+  saveBtn.onclick = async (): Promise<void> => {
+    const name = nameInput.value.trim()
+    const value = keyInput.value
+    if (!name || !value) return
+    keyInput.value = '' // the value leaves the DOM before the round trip
+    const r = (await bridge.invoke(IntegrationsChannels.serviceKeySet, { name, value })) as { ok: boolean; reason?: string }
+    note.hidden = r.ok
+    if (r.ok) {
+      nameInput.value = ''
+      await refresh()
+    } else {
+      note.textContent = r.reason ?? 'refused'
+    }
+  }
+
+  const block = el('div', { class: 'trail-block mgr-block' }, [
+    el('div', { class: 'settings-row-label', text: 'Service keys (vault)' }),
+    el('div', {
+      class: 'settings-row-caption',
+      text:
+        'Paste an api key once — it’s encrypted by your OS keychain and reaches agents in panes MoggingLabs Workspace launches, as the env var ${NAME}. No secret ever lands in a CLI config, a log, or on disk in plaintext. A CLI you run elsewhere needs the same variable set in your own environment.'
+    }),
+    el('div', {
+      class: 'settings-row-caption',
+      text:
+        'Honest boundary: any key an MCP server needs is readable by that agent’s process — the same as any env var. Scope servers per workspace so only the agents you intend can reach a given key.'
+    }),
+    list,
+    el('div', { class: 'mgr-form' }, [nameInput, keyInput, saveBtn]),
+    note
+  ])
+  setTimeout(() => void refresh(), 0)
+  return block
+}
+
 export function createIntegrationsSection(): HTMLElement {
   return el('div', { class: 'integrations-section' }, [
     createCatalogBlock(),
     createServersBlock(),
+    createServiceKeysBlock(),
     createGrantsBlock(),
     createActivityBlock()
   ])
