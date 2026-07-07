@@ -2,6 +2,7 @@ import {
   AgentChannels,
   BoardChannels,
   ClipboardChannels,
+  IntegrationsChannels,
   ProfileChannels,
   RemoteChannels,
   type AgentInfo
@@ -10,6 +11,9 @@ import { getBridge } from '../../core/ipc/bridge'
 import { el, icon, showToast } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { openWizard } from '../../core/workspace/wizard-port'
+import { setActiveView } from '../../core/shell/view-port'
+import { requestSettingsTab } from '../../core/shell/settings-tab-port'
+import { requestIntegrationsFocus } from '../../core/shell/integrations-focus-port'
 import { getTelemetry } from '../../core/telemetry'
 
 /**
@@ -41,6 +45,8 @@ function setDismissed(): void {
 
 interface RowState {
   done: boolean
+  /** Optional rows never block the "all done -> collapse" (they're suggestions). */
+  optional?: boolean
   render: (row: HTMLElement) => void
 }
 
@@ -103,11 +109,12 @@ export function createFirstRun(): { el: HTMLElement; refresh: () => Promise<void
     ])
 
   async function computeRows(): Promise<RowState[]> {
-    const [agents, profiles, remotes, board] = await Promise.all([
+    const [agents, profiles, remotes, board, servers] = await Promise.all([
       bridge.invoke(AgentChannels.detect).catch(() => []) as Promise<AgentInfo[]>,
       bridge.invoke(ProfileChannels.list).catch(() => []) as Promise<unknown[]>,
       bridge.invoke(RemoteChannels.list).catch(() => []) as Promise<unknown[]>,
-      bridge.invoke(BoardChannels.list).catch(() => []) as Promise<unknown[]>
+      bridge.invoke(BoardChannels.list).catch(() => []) as Promise<unknown[]>,
+      bridge.invoke(IntegrationsChannels.serversList).catch(() => []) as Promise<{ builtIn?: boolean }[]>
     ])
 
     // ① Agent CLIs — live detection; found ones listed, missing ones get a copyable install line.
@@ -141,10 +148,31 @@ export function createFirstRun(): { el: HTMLElement; refresh: () => Promise<void
 
     // ③ Optional power-ups — a profile, an SSH host, or a board card (real stores).
     const powerDone = profiles.length > 0 || remotes.length > 0 || board.length > 0
+    const intDone = servers.some((s) => !s.builtIn)
 
     return [
       { done: cliDone, render: (r) => r.replaceWith(rowEl({ done: cliDone, title: 'Install an agent CLI', detail: cliDetail })) },
       { done: wsDone, render: (r) => r.replaceWith(rowEl({ done: wsDone, title: 'Open your first workspace', detail: wsDone ? 'Done — you have a workspace.' : 'Pick a folder and an agent lineup.', action: wsAction })) },
+      {
+        done: intDone,
+        optional: true,
+        render: (r) => {
+          const setup = el('button', { class: 'firstrun-action', type: 'button', text: 'Set up…' })
+          setup.onclick = (): void => {
+            requestIntegrationsFocus('flow')
+            requestSettingsTab('integrations')
+            setActiveView('settings')
+          }
+          r.replaceWith(
+            rowEl({
+              done: intDone,
+              title: 'Optional: connect your tools',
+              detail: intDone ? 'Done — you have connected a tool.' : 'Wire n8n, Slack, Sentry, or GitHub to your agents — guided, no dotfiles.',
+              action: intDone ? null : setup
+            })
+          )
+        }
+      },
       {
         done: powerDone,
         render: (r) =>
@@ -169,8 +197,9 @@ export function createFirstRun(): { el: HTMLElement; refresh: () => Promise<void
       card.hidden = true
       return
     }
-    // All three done -> collapse into a one-time "setup complete" toast, and never return.
-    if (rows.every((r) => r.done)) {
+    // Required rows done -> collapse into a one-time "setup complete" toast, and
+    // never return. Optional rows (integrations, power-ups) never block it.
+    if (rows.every((r) => r.done || r.optional)) {
       setDismissed()
       card.hidden = true
       if (!completedToasted) {

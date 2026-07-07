@@ -9,6 +9,7 @@ import { getBridge } from '../../core/ipc/bridge'
 import { getTelemetry } from '../../core/telemetry'
 import { activeView, goBack, onViewChange, setActiveView } from '../../core/shell/view-port'
 import { takeRequestedSettingsTab } from '../../core/shell/settings-tab-port'
+import { requestIntegrationsFocus, type IntegrationsFocus } from '../../core/shell/integrations-focus-port'
 import { renderShortcutList } from '../../core/commands/shortcuts'
 import { setTerminalFontSize, terminalFontSize, TERMINAL_FONT_SIZES } from '../../core/terminal/font-port'
 import { TEMPLATE_COUNTS } from '../layout'
@@ -369,6 +370,13 @@ export const settingsFeature: UiFeature = {
       }
     }
 
+    // Integrations palette verbs (8/13) — routes into the ONE home, not new
+    // capabilities. Every integrations action is reachable from ⌘K.
+    const goIntegrations = (focus: IntegrationsFocus): void => {
+      requestIntegrationsFocus(focus)
+      showSection('integrations')
+      setActiveView('settings')
+    }
     setCommands('settings', [
       {
         id: 'settings:open',
@@ -377,6 +385,12 @@ export const settingsFeature: UiFeature = {
         kbd: 'Ctrl+,',
         run: () => setActiveView('settings')
       },
+      { id: 'integrations:setup', title: 'Set up integrations…', hint: 'Integrations', run: () => goIntegrations('flow') },
+      { id: 'integrations:open', title: 'Open integrations', hint: 'Integrations', run: () => goIntegrations('servers') },
+      { id: 'integrations:matrix', title: 'Open integrations matrix (workspace tools)', hint: 'Integrations', run: () => goIntegrations('matrix') },
+      { id: 'integrations:connect', title: 'Connect an integration…', hint: 'Integrations', run: () => goIntegrations('servers') },
+      { id: 'integrations:webhooks', title: 'Add a webhook (event bridge)', hint: 'Integrations', run: () => goIntegrations('webhooks') },
+      { id: 'integrations:restart', title: 'Restart panes to pick up new tools', hint: 'Integrations', run: () => goIntegrations('matrix') },
       ...THEMES.map((t) => ({
         id: `theme:${t.id}`,
         title: `Theme: ${t.name}`,

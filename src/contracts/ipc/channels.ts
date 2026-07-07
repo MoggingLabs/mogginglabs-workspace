@@ -244,6 +244,7 @@ export const IntegrationsChannels = {
   statusGet: 'integrations:status:get', // -> McpStatusSnapshot (last snapshot, no fetch)
   statusRefresh: 'integrations:status:refresh', // () -> void (poll now — Settings-open / after apply / on demand)
   statusChanged: 'integrations:status:changed', // main -> renderer: McpStatusSnapshot (poller push)
+  authNag: 'integrations:status:authNag', // main -> renderer: { serverId, cli, serverLabel, cliLabel } — ONE per epoch, Re-authorize toast (8/13)
   // Phase-8/12: service links (a board card <-> a GitHub PR/issue).
   linkGet: 'integrations:link:get', // (cardId) -> ServiceLink | null
   linkSet: 'integrations:link:set', // ({ cardId, input, cadence?, kind? }) -> { ok, reason?, link? }

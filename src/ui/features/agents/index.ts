@@ -9,6 +9,8 @@ import { getFocusedPane } from '../../core/layout/focus'
 import { setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
 import { onAgentLaunchRequest, announceProfileFailover } from '../../core/agents/launch-port'
 import { setCommands } from '../../core/commands/command-port'
+import { setActiveView } from '../../core/shell/view-port'
+import { requestSettingsTab } from '../../core/shell/settings-tab-port'
 import { getWorkspaces, workspaceIdForPane } from '../../core/workspace/workspace-info-port'
 import { onProfilesChanged } from '../../core/agents/profiles-port'
 import { isPaneLive, whenPaneLive } from '../../core/terminal/liveness-port'
@@ -33,6 +35,17 @@ export const agentsFeature: UiFeature = {
     // MCP status push (8/11): keep the pane-header chip port fed + seed it.
     getBridge().on(IntegrationsChannels.statusChanged, (p) => setMcpSnapshot(p as McpStatusSnapshot))
     void (getBridge().invoke(IntegrationsChannels.statusGet) as Promise<McpStatusSnapshot>).then((s) => s && setMcpSnapshot(s))
+    // Failure shoulder-tap (8/13): ONE quiet toast on a connected->needs-auth
+    // transition; Re-authorize routes to the integrations home.
+    getBridge().on(IntegrationsChannels.authNag, (p) => {
+      const n = p as { serverLabel: string; cliLabel: string }
+      showToast({
+        tone: 'attention',
+        title: `${n.serverLabel} needs re-authorization`,
+        body: `in ${n.cliLabel}`,
+        action: { label: 'Re-authorize', onClick: () => { requestSettingsTab('integrations'); setActiveView('settings') } }
+      })
+    })
     const nameById = new Map<string, string>()
     let installedIds: string[] = []
     /** What launched in each pane — the failover context. Values are ids only. */

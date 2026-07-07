@@ -18,10 +18,12 @@ import {
   type WorkspaceIntegrationsGrant
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { confirmDialog, el, loadingRow, showToast } from '../../components'
+import { Button, confirmDialog, createModal, el, icon, loadingRow, showToast } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onToolPlanPanesChange, restartNeededPaneIds } from '../../core/agents/toolplan-panes'
 import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
+import { onViewChange } from '../../core/shell/view-port'
+import { requestIntegrationsFocus, takeIntegrationsFocus, type IntegrationsFocus } from '../../core/shell/integrations-focus-port'
 import { fmtAge } from '../usage'
 
 /**
@@ -449,6 +451,12 @@ function createServersBlock(): HTMLElement {
         row.append(drop)
       }
       list.append(row)
+    }
+    // Empty state (8/13, the 5/05 lesson): one CTA into the guided flow.
+    if (servers.filter((s) => !s.builtIn).length === 0) {
+      const cta = Button({ label: 'Set up integrations…', icon: 'sparkles', variant: 'primary', onClick: () => openGuidedFlow() })
+      cta.classList.add('integux-setup-cta')
+      list.append(el('div', { class: 'integux-empty' }, [el('span', { class: 'menu-note', text: 'Only the built-in server so far. Connect your first tool — we’ll walk you through it.' }), cta]))
     }
   }
 
@@ -881,6 +889,10 @@ function createToolPlanBlock(): HTMLElement {
       table.append(el('div', { class: 'toolplan-row' }, [el('span', { class: 'toolplan-tool', text: s.label }), ...cells]))
     }
     body.append(table)
+    // Matrix empty state (8/13): explain plans in one sentence.
+    if (servers.filter((s) => !s.builtIn).length === 0) {
+      body.append(el('div', { class: 'menu-note toolplan-empty', text: 'A plan decides which servers reach this workspace’s agents, per CLI — minimal by default, so panes carry only what the work needs. Connect a server above, then turn it on here.' }))
+    }
 
     const counts = CLI_ORDER.map((cli) => {
       const n = 1 + servers.filter((s) => !s.builtIn && planHasServerForCli(plan, s.id, cli)).length
@@ -1022,14 +1034,141 @@ function createEventBridgeBlock(): HTMLElement {
   return block
 }
 
+// ── The guided "Connect your stack" flow (8/13) — ORCHESTRATES 06/07/09 ─────
+// Walks the catalog in site order, filtered to DETECTED CLIs; per tool
+// Connect -> Authorize -> next; skippable, resumable (progress in localStorage,
+// survives restart), ends on the workspace-plan reminder. Zero new write paths.
+const FLOW_KEY = 'mogging.integux.done'
+function flowDone(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(FLOW_KEY) ?? '[]') as string[]
+  } catch {
+    return []
+  }
+}
+function flowMark(id: string): void {
+  try {
+    localStorage.setItem(FLOW_KEY, JSON.stringify([...new Set([...flowDone(), id])]))
+  } catch {
+    /* storage off */
+  }
+}
+
+export function openGuidedFlow(): void {
+  const bridge = getBridge()
+  const modal = createModal({ title: 'Connect your stack', width: 520 })
+  const body = el('div', { class: 'integux-flow' })
+  modal.setBody(body)
+  modal.open()
+
+  void (async (): Promise<void> => {
+    const { presets } = (await bridge.invoke(IntegrationsChannels.catList)) as { presets: McpPreset[] }
+    const agents = ((await bridge.invoke(AgentChannels.detect)) as { id: string; installed: boolean }[]) ?? []
+    const detected = HOSTED.filter((c) => agents.some((a) => a.installed && a.id === CLI_PROVIDER[c]))
+    const step = (): void => {
+      body.replaceChildren()
+      if (!detected.length) {
+        body.append(el('div', { class: 'settings-row-caption', text: 'Install a coding-agent CLI (Claude Code, Codex, or Gemini) first — then come back and we’ll wire your tools to it.' }))
+        modal.setFooter(el('div', { class: 'confirm-actions' }, [Button({ label: 'Close', variant: 'ghost', onClick: () => modal.close() })]))
+        return
+      }
+      const done = flowDone()
+      const next = presets.find((p) => !done.includes(p.id))
+      if (!next) {
+        // Ends on the workspace-plan reminder (09).
+        body.append(
+          el('div', { class: 'integux-flow-done' }, [
+            el('h3', { class: 'board-card-title', text: 'You’re set up.' }),
+            el('div', { class: 'settings-row-caption', text: 'Last thing: scope tools per workspace — minimal is the default, so agents carry only what the work needs. Open the matrix any time.' })
+          ])
+        )
+        modal.setFooter(
+          el('div', { class: 'confirm-actions' }, [
+            Button({ label: 'Open workspace tools', variant: 'ghost', onClick: () => { requestIntegrationsFocus('matrix'); modal.close() } }),
+            Button({ label: 'Done', variant: 'primary', onClick: () => modal.close() })
+          ])
+        )
+        return
+      }
+      const note = el('div', { class: 'settings-error', role: 'alert', hidden: true })
+      body.append(
+        el('div', { class: 'integux-flow-tool', attrs: { 'data-preset': next.id } }, [
+          el('div', { class: 'settings-row-label', text: `Connect ${next.label}` }),
+          el('div', { class: 'settings-row-caption', text: `${next.grantCopy}` }),
+          el('div', { class: 'settings-row-caption', text: `Will connect to: ${detected.map((c) => CLI_LABEL[c]).join(', ')}` }),
+          note
+        ])
+      )
+      const connectBtn = Button({
+        label: `Connect ${next.label}`,
+        variant: 'primary',
+        onClick: async () => {
+          const r = (await bridge.invoke(IntegrationsChannels.catConnect, { presetId: next.id, clis: detected })) as { ok: boolean; reason?: string }
+          if (!r.ok) {
+            note.textContent = r.reason ?? 'refused'
+            note.hidden = false
+            return
+          }
+          flowMark(next.id)
+          step()
+        }
+      })
+      modal.setFooter(
+        el('div', { class: 'confirm-actions' }, [
+          Button({ label: 'Skip', variant: 'ghost', onClick: () => { flowMark(next.id); step() } }),
+          connectBtn
+        ])
+      )
+    }
+    step()
+  })()
+}
+
+// A one-CTA header into the guided flow (the 5/05 empty-state lesson).
+function createIntegrationsIntro(): HTMLElement {
+  const setup = Button({ label: 'Set up integrations…', icon: 'sparkles', variant: 'primary', onClick: () => openGuidedFlow() })
+  setup.classList.add('integux-setup-cta')
+  return el('div', { class: 'trail-block integux-intro' }, [
+    el('div', { class: 'settings-row-label', text: 'Connect your stack' }),
+    el('div', { class: 'settings-row-caption', text: 'Wire your tools (n8n, Slack, Sentry, GitHub…) to the coding agents you already run — the app never holds a credential; the CLIs own their auth.' }),
+    el('div', { class: 'trail-controls' }, [setup])
+  ])
+}
+
+// The in-app privacy block (the usage-tab pattern) — the custody rule in user
+// words + the docs/14 pointer.
+function createIntegrationsPrivacy(): HTMLElement {
+  return el('div', { class: 'trail-block integux-privacy' }, [
+    el('div', { class: 'settings-row-label', text: 'What the app can and can’t see' }),
+    el('div', { class: 'settings-note' }, [
+      icon('check-circle', 14),
+      el('span', { text: 'Your keys, your CLIs. The agents authenticate with your own accounts; the app never stores an OAuth token. API keys you paste are encrypted by your OS keychain and only ever materialize into a pane’s environment — never a config file, log, or telemetry. Webhook URLs are secrets too. Repo names, tool lists, and titles stay in the app: telemetry is counts and booleans only (docs/14).' })
+    ])
+  ])
+}
+
 export function createIntegrationsSection(): HTMLElement {
-  return el('div', { class: 'integrations-section' }, [
+  const servers = createServersBlock()
+  const matrix = createToolPlanBlock()
+  const webhooks = createEventBridgeBlock()
+  const section = el('div', { class: 'integrations-section' }, [
+    createIntegrationsIntro(),
     createCatalogBlock(),
-    createServersBlock(),
+    servers,
     createServiceKeysBlock(),
-    createToolPlanBlock(),
-    createEventBridgeBlock(),
+    matrix,
+    webhooks,
     createGrantsBlock(),
+    createIntegrationsPrivacy(),
     createActivityBlock()
   ])
+  // Consume a palette/checklist focus request when the page is shown (8/13).
+  const focusTargets: Record<Exclude<IntegrationsFocus, 'flow'>, HTMLElement> = { matrix, webhooks, servers }
+  onViewChange((v) => {
+    if (v !== 'settings') return
+    const t = takeIntegrationsFocus()
+    if (t === 'flow') openGuidedFlow()
+    else if (t) setTimeout(() => focusTargets[t]?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60)
+  })
+  return section
 }

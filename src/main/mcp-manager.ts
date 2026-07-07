@@ -121,13 +121,16 @@ export function mgrPreview(
   const entry = findServer(serverId)
   if (!writer || !entry) return null
   const file = writer.targetFile(homes)
+  // The PLAIN one-liner (8/13) — derived from the SAME writer data, no config
+  // dialect: CLI display name + scope. Global writes reach every workspace.
+  const cliName = CLI_DISPLAY[cli]
   return {
     file,
     block: action === 'apply' ? writer.renderBlock(entry) : '',
     summary:
       action === 'apply'
-        ? `Adds "${entry.label}" to ${cli} — this block lands in ${file}`
-        : `Removes "${entry.label}" from ${cli} — only our managed entry leaves ${file}`
+        ? `Adds ${entry.label} to ${cliName} — all workspaces`
+        : `Removes ${entry.label} from ${cliName} — all workspaces`
   }
 }
 
@@ -277,6 +280,7 @@ export async function catRefresh(presetId: string): Promise<{ ok: boolean; diff?
 }
 
 const CLI_BIN: Record<HostedCliId, string> = { 'claude-code': 'claude', codex: 'codex', gemini: 'gemini' }
+export const CLI_DISPLAY: Record<HostedCliId, string> = { 'claude-code': 'Claude Code', codex: 'Codex', gemini: 'Gemini' }
 
 /** One-shot status read-back from the CLI's OWN list output (presence only;
  *  the live registry/poller is 8/11's). Never reads a token store. */

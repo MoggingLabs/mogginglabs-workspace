@@ -150,6 +150,7 @@ run_smoke INTEG        MOGGING_INTEG     1 240 integ
 run_smoke WEBTRAIL     MOGGING_WEBTRAIL  1 240 webtrail
 run_smoke MCPMGR       MOGGING_MCPMGR    1 180 mcpmgr
 run_smoke MCPCAT       MOGGING_MCPCAT    1 180 mcpcat
+run_smoke INTEGUX      MOGGING_INTEGUX   1 240 integux
 
 echo ""
 echo "══ SWEEP RESULTS ══"

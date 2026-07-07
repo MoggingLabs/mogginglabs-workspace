@@ -3,10 +3,49 @@
 Receipts for the integrations pack (steps 01–14), same format as
 `prompts/phase-7/REPORT.md`. Per-step mechanics live in `IMPLEMENTATION.md`
 (deviations recorded there, inline); this file keeps dated verification
-records and the finds worth remembering. Sweep count as of 8/12: **50 gates**
+records and the finds worth remembering. Sweep count as of 8/13: **51 gates**
 (35 + MCP + MCPWRITE + AGENTWEB + WEBTRAIL + MCPMGR + MCPCAT + PERWS +
 PERWSAGENT + VAULTKEYS + WSCLOSE + KBSHORTCUTS + TOOLPLAN + EVBRIDGE +
-MCPSTATUS + INTEG).
+MCPSTATUS + INTEG + INTEGUX).
+
+## 13 — integrations onboarding + polish: making it feel effortless (2026-07-07)
+
+Four UX debts, one pass — all orchestrating existing steps (06/07/09), zero
+new write paths:
+
+**Connect your stack** — the guided flow: an intro CTA in § Integrations +
+an (optional) first-run checklist row deep-link. Walks the catalog in site
+order, filtered to DETECTED CLIs; per tool Connect → next; skippable,
+resumable (progress in localStorage, survives restart), ends on the
+workspace-plan reminder. Nobody is forced through it.
+
+**Failure shoulder-taps** — a `connected → needs-auth` TRANSITION fires ONE
+quiet toast per (server×cli) per token-epoch (`detectAuthNags`, pure +
+KV-keyed on `integrations.authnag.<server>.<cli>`, re-armed on repair — the
+7/09 single-fire discipline). Re-authorize is the action; recovery is silent.
+
+**Palette verbs** (routes, not capabilities): `Set up integrations…` ·
+`Open integrations` · `Open integrations matrix (workspace tools)` ·
+`Connect an integration…` · `Add a webhook (event bridge)` · `Restart panes
+to pick up new tools` — each routes into the ONE home via a focus port.
+
+**Words + empty states**: the diff summary is now plain, derived from the
+SAME writer data — "Adds MoggingLabs to Claude Code — all workspaces" (no
+config dialect); the § Integrations servers empty state is one CTA into the
+flow (5/05 lesson); the matrix empty state explains plans in a sentence; an
+in-app privacy block states the custody rule in user words + the docs/14
+pointer.
+
+**INTEGUX gate** (8 asserts): the single-fire logic (nag once / stay silent
+/ repair re-arms); the plain summary names the writer's CLI + scope; the
+intro CTA + privacy block + servers empty-state render; ≥2 integrations
+palette verbs are reachable; the guided flow walks (n8n → gw-drive), skip
+advances + records progress (survives as localStorage), and a fully-done
+catalog reopens on the plan-reminder end screen. **Dev-verify honesty**: the
+gate drives the real UI + the pure single-fire/summary logic; a fresh-machine
+wall-clock (checklist → two real tools connected + authorized → a workspace
+scoped) and a real vendor token-revoke → one-toast → repair → silence are the
+founder-run confirmations. Sweep 50 → **51** (INTEGUX).
 
 ## 12 — the GitHub adapter: review lands back in the pane (2026-07-07)
 

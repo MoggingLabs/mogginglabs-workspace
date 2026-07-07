@@ -1,7 +1,8 @@
 import { app, ipcMain, type BrowserWindow } from 'electron'
 import { IntegrationsChannels, type HostedCliId, type McpConnStatus, type McpStatusSnapshot } from '@contracts'
-import { deriveConnState, parseCliMcpList, type CliServerState } from '@backend/features/integrations'
-import { cliMcpListRaw, listServers, mgrStatus } from './mcp-manager'
+import { deriveConnState, detectAuthNags, parseCliMcpList, type CliServerState } from '@backend/features/integrations'
+import { CLI_DISPLAY, cliMcpListRaw, listServers, mgrStatus } from './mcp-manager'
+import { getSettingsStore } from './app-settings'
 
 // The MCP connection-status poller (Phase-8/11). The usage-seam discipline:
 // jittered cadence, refresh on demand (Settings-open / after apply), paused
@@ -46,6 +47,7 @@ async function poll(): Promise<void> {
         statuses.push({ serverId: server.id, cli: st.cli, state: deriveConnState(st.installed, st.state, cliList), checkedAt: now })
       }
     }
+    fireAuthNags(last.statuses, statuses)
     last = { statuses, at: now }
     try {
       winGetter?.()?.webContents.send(IntegrationsChannels.statusChanged, last)
@@ -54,6 +56,31 @@ async function poll(): Promise<void> {
     }
   } finally {
     polling = false
+  }
+}
+
+// Single-fire needs-auth nags (8/13, the 7/09 discipline): fire ONE toast per
+// (server×cli) per token-epoch, KV-keyed; a repair clears the key (re-arm).
+const NAG_KEY = (serverId: string, cli: string): string => `integrations.authnag.${serverId}.${cli}`
+function fireAuthNags(prev: McpConnStatus[], next: McpConnStatus[]): void {
+  const store = getSettingsStore()
+  if (!store) return
+  const { nags, repairs } = detectAuthNags(prev, next)
+  for (const r of repairs) store.setSetting(NAG_KEY(r.serverId, r.cli), '') // re-arm
+  for (const n of nags) {
+    const key = NAG_KEY(n.serverId, n.cli)
+    if (store.getSetting(key) === '1') continue // already nagged this epoch
+    store.setSetting(key, '1')
+    try {
+      winGetter?.()?.webContents.send(IntegrationsChannels.authNag, {
+        serverId: n.serverId,
+        cli: n.cli,
+        serverLabel: listServers().find((s) => s.id === n.serverId)?.label ?? n.serverId,
+        cliLabel: CLI_DISPLAY[n.cli as HostedCliId] ?? n.cli
+      })
+    } catch {
+      /* window gone */
+    }
   }
 }
 

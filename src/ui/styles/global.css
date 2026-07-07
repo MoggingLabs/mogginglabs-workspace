@@ -2638,6 +2638,34 @@ body.resizing * {
   gap: var(--sp-2);
 }
 
+/* Integrations onboarding (8/13): intro CTA, guided flow, empty states. */
+.integux-intro .trail-controls,
+.integux-empty {
+  margin-top: var(--sp-2);
+}
+.integux-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  padding: var(--sp-3);
+}
+.integux-flow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-height: 120px;
+}
+.integux-flow-tool,
+.integux-flow-done {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.integux-privacy .settings-note {
+  align-items: flex-start;
+}
+
 /* Board service-link chip (8/12): PR/issue live state, token-colored, stale dims. */
 .board-link-chip {
   font-family: var(--font-mono);
