@@ -14,7 +14,7 @@ import {
   type WorkspaceIntegrationsGrant
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { IconButton, el, icon } from '../../components'
+import { IconButton, confirmDialog, el, icon } from '../../components'
 import { getWorkspaces, onWorkspacesChange } from '../../core/workspace/workspace-info-port'
 import { setCommands } from '../../core/commands/command-port'
 import { getTelemetry } from '../../core/telemetry'
@@ -417,6 +417,13 @@ export const browserFeature: UiFeature = {
       for (const s of sites) {
         const forget = el('button', { class: 'browser-sites-forget', type: 'button', text: 'Forget' }) as HTMLButtonElement
         forget.onclick = async (): Promise<void> => {
+          const ok = await confirmDialog({
+            title: `Forget ${s.host}?`,
+            message: 'Its saved login for the agent web profile is erased — the agent will need to sign in again.',
+            confirmLabel: 'Forget site',
+            danger: true
+          })
+          if (!ok) return
           await bridge.invoke(BrowserChannels.forgetSite, s.host)
           void refreshSitesMenu()
         }
@@ -431,6 +438,13 @@ export const browserFeature: UiFeature = {
       if (sites.length) {
         const clearAll = el('button', { class: 'browser-sites-clear', type: 'button', text: 'Clear all agent logins' }) as HTMLButtonElement
         clearAll.onclick = async (): Promise<void> => {
+          const ok = await confirmDialog({
+            title: 'Clear all agent logins?',
+            message: 'Every saved sign-in in the agent web profile is erased. This can’t be undone.',
+            confirmLabel: 'Clear all',
+            danger: true
+          })
+          if (!ok) return
           await bridge.invoke(BrowserChannels.clearAgentLogins, undefined)
           void refreshSitesMenu()
         }

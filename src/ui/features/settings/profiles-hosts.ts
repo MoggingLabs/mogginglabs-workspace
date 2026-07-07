@@ -6,7 +6,7 @@ import {
   type AgentProfile,
   type RemoteHost
 } from '@contracts'
-import { Button, el } from '../../components'
+import { Button, confirmDialog, el } from '../../components'
 import { getBridge } from '../../core/ipc/bridge'
 import { announceProfilesChanged } from '../../core/agents/profiles-port'
 
@@ -78,9 +78,17 @@ export function createProfilesHostsSection(): HTMLElement {
               size: 'sm',
               variant: 'ghost',
               onClick: () => {
-                void invoke(ProfileChannels.remove, p.id).then(() => {
-                  announceProfilesChanged()
-                  void refresh()
+                void confirmDialog({
+                  title: `Delete profile “${p.name}”?`,
+                  message: 'This pointer set is removed. Panes already launched keep their env; new launches won’t offer it.',
+                  confirmLabel: 'Delete profile',
+                  danger: true
+                }).then((ok) => {
+                  if (!ok) return
+                  void invoke(ProfileChannels.remove, p.id).then(() => {
+                    announceProfilesChanged()
+                    void refresh()
+                  })
                 })
               }
             })
@@ -201,9 +209,17 @@ export function createProfilesHostsSection(): HTMLElement {
               size: 'sm',
               variant: 'ghost',
               onClick: () => {
-                void invoke(RemoteChannels.remove, h.id).then(() => {
-                  announceProfilesChanged()
-                  void refresh()
+                void confirmDialog({
+                  title: `Delete host “${h.name}”?`,
+                  message: 'This SSH target is removed. Open remote panes stay connected; new panes won’t offer it.',
+                  confirmLabel: 'Delete host',
+                  danger: true
+                }).then((ok) => {
+                  if (!ok) return
+                  void invoke(RemoteChannels.remove, h.id).then(() => {
+                    announceProfilesChanged()
+                    void refresh()
+                  })
                 })
               }
             })
