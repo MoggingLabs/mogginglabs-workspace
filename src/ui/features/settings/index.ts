@@ -322,6 +322,20 @@ export const settingsFeature: UiFeature = {
       e.preventDefault()
       goBack()
     })
+    // NAV-01: Ctrl/Cmd+, opens Settings from anywhere (the platform convention),
+    // toggling back out if it's already up — matching the gear button.
+    window.addEventListener(
+      'keydown',
+      (e) => {
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === ',') {
+          e.preventDefault()
+          e.stopPropagation()
+          if (activeView() === 'settings') goBack()
+          else setActiveView('settings')
+        }
+      },
+      true
+    )
 
     // Dev/gallery handles: switch themes + render the full icon sheet for shots.
     if (import.meta.env.DEV) {
@@ -360,6 +374,7 @@ export const settingsFeature: UiFeature = {
         id: 'settings:open',
         title: 'Open Settings',
         hint: 'App',
+        kbd: 'Ctrl+,',
         run: () => setActiveView('settings')
       },
       ...THEMES.map((t) => ({

@@ -80,7 +80,7 @@ export function createTitlebar(onToggleRail: () => void): {
   const settings = IconButton({
     icon: 'sliders',
     label: 'Settings',
-    title: 'Settings',
+    title: 'Settings (Ctrl+,)',
     onClick: () => (activeView() === 'settings' ? goBack() : setActiveView('settings'))
   })
   cluster.append(left, right, home, board, toggle, settings)
