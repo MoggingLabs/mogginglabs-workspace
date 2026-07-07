@@ -52,8 +52,9 @@ export function runIntegUxSmoke(win: BrowserWindow): void {
 
       // ── (d)(f) empty states + intro CTA + privacy block render ─────────────
       const introOk = await waitTrue(`!!document.querySelector('.integux-intro .integux-setup-cta')`)
-      const privacyOk = await ES<boolean>(`!!document.querySelector('.integux-privacy')`)
-      const serversEmptyOk = await ES<boolean>(`!!document.querySelector('.integux-empty')`)
+      const privacyOk = await waitTrue(`!!document.querySelector('.integux-privacy')`)
+      // The registry list renders async — poll (Linux caught it mid-render once).
+      const serversEmptyOk = await waitTrue(`!!document.querySelector('.integux-empty')`)
       const matrixEmptyOk = await ES<boolean>(`!!document.querySelector('.toolplan-empty')`)
       const emptyOk = serversEmptyOk // the 5/05 empty-state CTA is the DoD-critical one
 
@@ -65,38 +66,59 @@ export function runIntegUxSmoke(win: BrowserWindow): void {
       await ES(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))`)
       await sleep(200)
 
-      // ── (a) the guided flow: walk, skip, progress persists, end screen ─────
+      // ── (a) the guided flow — TWO honest environments ──────────────────────
+      // The flow only walks tools when a coding-agent CLI is installed; on a
+      // CLI-less machine (fresh installs, CI runners) it correctly shows the
+      // "install a CLI first" prompt (integrations.ts openGuidedFlow). Detect
+      // which environment we're in and assert the RIGHT branch — the flow is
+      // detection-honest (the 6/01 lesson), and so is its smoke.
+      const hasCli = await ES<boolean>(
+        `(async()=>{const a=await window.bridge.invoke('agents:detect');return (a||[]).some(x=>x.installed)})()`
+      ).catch(() => false)
       await ES(`localStorage.removeItem('mogging.integux.done')`)
       await ES(`(document.querySelector('.integux-intro .integux-setup-cta')?.click(), 1)`)
-      const flowShown = await waitTrue(`!!document.querySelector('.modal-overlay .integux-flow .integux-flow-tool')`)
-      const curPreset = (): Promise<string> => ES<string>(`document.querySelector('.integux-flow-tool')?.getAttribute('data-preset') || ''`)
-      const clickSkip = (): Promise<unknown> =>
-        ES(`[...document.querySelectorAll('.modal-overlay .btn')].find(b=>/^Skip$/.test(b.textContent?.trim()||''))?.click()`)
-      const firstPreset = await curPreset()
-      // Skip the current tool -> advances + records progress. The re-render is
-      // async; POLL until the tool actually changes (CI is slower than local).
-      await clickSkip()
-      let secondPreset = firstPreset
-      for (let i = 0; i < 24 && secondPreset === firstPreset; i++) {
-        await sleep(250)
-        secondPreset = await curPreset()
-      }
-      await clickSkip()
-      let progressLen = 0
-      for (let i = 0; i < 24 && progressLen < 2; i++) {
-        await sleep(250)
-        progressLen = await ES<number>(`(JSON.parse(localStorage.getItem('mogging.integux.done')||'[]')).length`)
-      }
-      const walkOk = flowShown && !!firstPreset && !!secondPreset && firstPreset !== secondPreset && progressLen === 2
+      let walkOk = false
+      let endOk = false
+      if (hasCli) {
+        const flowShown = await waitTrue(`!!document.querySelector('.modal-overlay .integux-flow .integux-flow-tool')`)
+        const curPreset = (): Promise<string> => ES<string>(`document.querySelector('.integux-flow-tool')?.getAttribute('data-preset') || ''`)
+        const clickSkip = (): Promise<unknown> =>
+          ES(`[...document.querySelectorAll('.modal-overlay .btn')].find(b=>/^Skip$/.test(b.textContent?.trim()||''))?.click()`)
+        const firstPreset = await curPreset()
+        // Skip the current tool -> advances + records progress. The re-render is
+        // async; POLL until the tool actually changes (CI is slower than local).
+        await clickSkip()
+        let secondPreset = firstPreset
+        for (let i = 0; i < 24 && secondPreset === firstPreset; i++) {
+          await sleep(250)
+          secondPreset = await curPreset()
+        }
+        await clickSkip()
+        let progressLen = 0
+        for (let i = 0; i < 24 && progressLen < 2; i++) {
+          await sleep(250)
+          progressLen = await ES<number>(`(JSON.parse(localStorage.getItem('mogging.integux.done')||'[]')).length`)
+        }
+        walkOk = flowShown && !!firstPreset && !!secondPreset && firstPreset !== secondPreset && progressLen === 2
 
-      // Resume + end screen: mark every preset done, reopen -> plan reminder.
-      await ES(`(async()=>{const {presets}=await window.bridge.invoke('integrations:cat:list');localStorage.setItem('mogging.integux.done',JSON.stringify(presets.map(p=>p.id)))})()`)
-      await sleep(300)
-      // close the modal, reopen the flow
-      await ES(`document.querySelector('.modal-overlay .modal-close')?.click()`)
-      await sleep(200)
-      await ES(`(document.querySelector('.integux-intro .integux-setup-cta')?.click(), 1)`)
-      const endOk = await waitTrue(`!!document.querySelector('.modal-overlay .integux-flow-done')`)
+        // Resume + end screen: mark every preset done, reopen -> plan reminder.
+        await ES(`(async()=>{const {presets}=await window.bridge.invoke('integrations:cat:list');localStorage.setItem('mogging.integux.done',JSON.stringify(presets.map(p=>p.id)))})()`)
+        await sleep(300)
+        await ES(`document.querySelector('.modal-overlay .modal-close')?.click()`)
+        await sleep(200)
+        await ES(`(document.querySelector('.integux-intro .integux-setup-cta')?.click(), 1)`)
+        endOk = await waitTrue(`!!document.querySelector('.modal-overlay .integux-flow-done')`)
+      } else {
+        // No CLI: the flow honestly says install one first — that IS the
+        // correct guided-flow terminal for this machine. Both walk + end assert
+        // that one true state (no tool card renders without a CLI to wire to).
+        const installPrompt = await waitTrue(
+          `/install a coding-agent cli/i.test(document.querySelector('.modal-overlay .integux-flow')?.textContent||'')`
+        )
+        const noToolCard = await ES<boolean>(`!document.querySelector('.modal-overlay .integux-flow .integux-flow-tool')`)
+        walkOk = installPrompt && noToolCard
+        endOk = installPrompt
+      }
 
       const pass = nagOk && summaryOk && introOk && privacyOk && emptyOk && paletteOk && walkOk && endOk
       result = { pass, nagOk, summaryOk, introOk, privacyOk, emptyOk, serversEmptyOk, matrixEmptyOk, paletteOk, walkOk, endOk, firstPreset, secondPreset, progressLen }
