@@ -141,6 +141,7 @@ run_smoke AGENTWEB     MOGGING_AGENTWEB  1 240 agentweb
 run_smoke PERWS        MOGGING_PERWS     1 240 perws
 run_smoke PERWSAGENT   MOGGING_PERWSAGENT 1 240 perwsagent
 run_smoke VAULTKEYS    MOGGING_VAULTKEYS 1 240 vaultkeys
+run_smoke WSCLOSE      MOGGING_WSCLOSE   1 240 wsclose
 run_smoke WEBTRAIL     MOGGING_WEBTRAIL  1 240 webtrail
 run_smoke MCPMGR       MOGGING_MCPMGR    1 180 mcpmgr
 run_smoke MCPCAT       MOGGING_MCPCAT    1 180 mcpcat

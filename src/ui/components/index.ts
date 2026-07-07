@@ -29,6 +29,7 @@ export {
 } from './grid-preview'
 export { createWizardStepper, type WizardStep, type WizardStepperHandle } from './wizard-stepper'
 export { createModal, type ModalHandle, type ModalOpts } from './modal'
+export { confirmDialog, resetConfirmSkipsForSmoke, type ConfirmOpts } from './confirm'
 export { showToast, type ToastOpts, type ToastTone } from './toast'
 export { EmptyState, type EmptyStateOpts } from './empty-state'
 export { createSegmented, type SegmentedHandle, type SegmentedOption } from './segmented'

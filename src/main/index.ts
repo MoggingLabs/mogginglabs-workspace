@@ -27,6 +27,7 @@ import { runAgentWebSmoke } from './agentweb-smoke'
 import { runPerWsSmoke } from './perws-smoke'
 import { runPerWsAgentSmoke } from './perwsagent-smoke'
 import { runVaultKeysSmoke } from './vaultkeys-smoke'
+import { runWsCloseSmoke } from './wsclose-smoke'
 import { runWebTrailSmoke } from './webtrail-smoke'
 import { runMcpMgrSmoke } from './mcpmgr-smoke'
 import { runMcpCatSmoke } from './mcpcat-smoke'
@@ -244,6 +245,8 @@ app.whenReady().then(async () => {
     runPerWsAgentSmoke(win) // env-gated per-workspace AGENT-browser smoke: agents drive their own workspace's browser (Phase-8/07c)
   } else if (process.env.MOGGING_VAULTKEYS && win) {
     runVaultKeysSmoke(win) // env-gated service-key vault smoke: paste-once -> pane env, plaintext nowhere at rest (Phase-8/08)
+  } else if (process.env.MOGGING_WSCLOSE && win) {
+    runWsCloseSmoke(win) // env-gated workspace-close smoke: confirm on live work + 5s undo grace (UX audit WS-01)
   } else if (process.env.MOGGING_WEBTRAIL && win) {
     runWebTrailSmoke(win) // env-gated agent-activity-trail smoke: store + emitters + viewer (Phase-8/05)
   } else if (process.env.MOGGING_MCPMGR && win) {

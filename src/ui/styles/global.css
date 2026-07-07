@@ -2603,6 +2603,19 @@ body.resizing * {
 .modal-footer:empty {
   display: none;
 }
+/* Shared confirm dialog (UX audit): optional "don't ask again" above a
+   right-aligned Cancel / destructive action row. */
+.confirm-footer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  width: 100%;
+}
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
 @keyframes modal-fade {
   from {
     opacity: 0;

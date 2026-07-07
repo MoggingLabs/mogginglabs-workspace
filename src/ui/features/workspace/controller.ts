@@ -2,7 +2,7 @@ import { TerminalChannels } from '@contracts'
 import type { AgentState, PaneId } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { GridLayout } from '../layout'
-import { icon } from '../../components'
+import { confirmDialog, icon, showToast } from '../../components'
 import { setFocusedPane } from '../../core/layout/focus'
 import { setPaneCwd } from '../../core/layout/pane-cwd'
 import { setPaneRole, setPaneRemote } from '../../core/layout/pane-meta'
@@ -57,6 +57,10 @@ export class WorkspaceController {
   private order: string[] = []
   private activeId: string | null = null
   private nextOrdinal = 0
+  // Workspaces mid-close (WS-01): removed from the visible order + rail but
+  // their panes stay ALIVE for a 5-second undo grace, disposed only when it
+  // lapses. Key -> the dispose timer + the order index to restore to.
+  private readonly pendingClose = new Map<string, { timer: ReturnType<typeof setTimeout>; index: number }>()
 
   constructor(
     private readonly tabsEl: HTMLElement,
@@ -256,7 +260,7 @@ export class WorkspaceController {
     })
     close.addEventListener('click', (e) => {
       e.stopPropagation()
-      this.close(meta.id)
+      void this.requestClose(meta.id)
     })
     return { tab, label, attnBadge, countBadge }
   }
@@ -385,6 +389,7 @@ export class WorkspaceController {
   private refreshAttention(): void {
     let anyAttention = false
     for (const view of this.views.values()) {
+      if (this.pendingClose.has(view.meta.id)) continue // mid-close: hidden, don't ring
       const active = view.meta.id === this.activeId
       let attnCount = 0
       let busy = false
@@ -415,6 +420,74 @@ export class WorkspaceController {
   switchByIndex(i: number): void {
     const id = this.order[i]
     if (id) this.switch(id)
+  }
+
+  /** The × on a rail tab (WS-01). Closing a workspace disposes every pane in
+   *  it — so when there's live work (an agent busy or waiting), confirm first;
+   *  then soft-close with a 5-second undo grace either way. */
+  async requestClose(id: string): Promise<void> {
+    const view = this.views.get(id)
+    if (!view || this.pendingClose.has(id)) return
+    const liveCount = view.layout.paneIds().filter((p) => paneState(p) !== 'idle').length
+    if (liveCount > 0) {
+      const n = view.meta.paneCount
+      const ok = await confirmDialog({
+        title: `Close “${view.meta.name}”?`,
+        message: `${n} pane${n === 1 ? '' : 's'} will close, including ${liveCount} with an agent still working. You’ll have a few seconds to undo.`,
+        confirmLabel: 'Close workspace',
+        danger: true,
+        rememberKey: 'workspace.close'
+      })
+      if (!ok) return
+    }
+    this.softClose(id)
+  }
+
+  /** Detach a workspace from the rail + view but keep its panes alive; dispose
+   *  for real only after the undo window lapses. */
+  private softClose(id: string): void {
+    const view = this.views.get(id)
+    if (!view) return
+    const index = this.order.indexOf(id)
+    this.order = this.order.filter((o) => o !== id)
+    view.tab.hidden = true
+    view.container.classList.remove('active')
+    if (this.activeId === id) {
+      this.activeId = null
+      const nextId = this.order[0]
+      if (nextId) this.switch(nextId, { reveal: activeView() === 'grid' })
+      else setActiveView('home')
+    }
+    const timer = setTimeout(() => {
+      this.pendingClose.delete(id)
+      this.close(id)
+    }, 5000)
+    this.pendingClose.set(id, { timer, index })
+    this.refreshAttention()
+    this.onChange()
+    const n = view.meta.paneCount
+    showToast({
+      title: `Closed “${view.meta.name}”`,
+      body: `${n} pane${n === 1 ? '' : 's'} — undo to keep it`,
+      timeout: 5000,
+      action: { label: 'Undo', onClick: () => this.undoClose(id) }
+    })
+  }
+
+  /** Bring a mid-close workspace back — its panes never stopped running. */
+  private undoClose(id: string): void {
+    const pending = this.pendingClose.get(id)
+    const view = this.views.get(id)
+    if (!pending || !view) return
+    clearTimeout(pending.timer)
+    this.pendingClose.delete(id)
+    view.tab.hidden = false
+    this.order.splice(Math.min(pending.index, this.order.length), 0, id)
+    if (this.activeId === null) this.switch(id) // was on Home (its last workspace) — reveal it
+    else {
+      this.refreshAttention()
+      this.onChange()
+    }
   }
 
   close(id: string): void {
