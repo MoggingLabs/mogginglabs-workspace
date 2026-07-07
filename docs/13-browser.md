@@ -178,3 +178,9 @@ pages.
 Only counts and booleans (dock opened; a verb ran). URLs beyond origin, page
 content, typed text, eval bodies, and screenshots NEVER enter telemetry or
 logs.
+
+---
+
+The agent-web profile, its origin-grant boundary, the activity trail, and the
+custody rule are the subject of **docs/14 — Integrations** (direction 3). That
+page also maps the house MCP server that drives this dock.

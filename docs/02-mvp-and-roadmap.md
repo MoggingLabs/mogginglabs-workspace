@@ -83,6 +83,41 @@ the `MOGGING_PRODUCT` milestone (installer-fresh → guided setup → swarm + br
 in one asserted flow, budgets held with everything on) and shipped as **v0.4.0**
 on all three platforms. Per-OS numbers in `prompts/phase-6/README.md`.
 
+### Phase 7 — Usage & metering ✅ (`prompts/phase-7/`)
+CLI-owned session adapters behind one seam (ADR 0007), the titlebar usage gauge +
+popover, cost/spend/history, plans × profiles with thresholds + failover, the
+`mogging usage` CLI, and the pointer-grammar key vault. The sweep grew 30→35
+gates. Receipts + per-OS numbers in `prompts/phase-7/README.md`; surface in
+`docs/12-usage.md`.
+
+### Phase 8 — Integrations, five directions ✅ (`prompts/phase-8/`)
+The workspace reaches out and is reached, five directions on one philosophy —
+*nothing runs, proxies, or holds a credential it doesn't have to* (ADR 0008;
+daemon still v3, grant-blind):
+1. **Tools → agents** — register any MCP server across the Claude Code / Codex /
+   Gemini config dialects (surgical, backed-up, drift-detected) from a curated
+   Catalog, the registry, or a pasted preset; per-workspace **tool plans** scope
+   which servers each CLI even sees.
+2. **Agents → the fleet** — the shipped MCP server becomes `mogging`: control-plane
+   reads free to a pane-identity session, the six **write** tools behind a
+   per-workspace grant (default off — invisible and refused); `approve` is never a
+   tool.
+3. **Agents → the web** — a consented **agent-web** browser profile: reads free,
+   acts gated per **origin** + human-confirmed, sensitive origins blocklisted,
+   every act in a local **trail**.
+4. **House → your automations** — an outbound **event bridge**: pane/board events
+   POST to your n8n/Make/Zapier/Slack webhooks (versioned payload, vault-held URLs,
+   a doorbell not a bus).
+5. **The world → the board** — service-link **adapters** (GitHub first, riding your
+   own `gh`): a linked PR/issue chips a card live and a review transition lands a
+   notify on the owning pane.
+
+The **custody rule** runs throughout: what we store rests as OS-vault ciphertext or
+is refused; what the CLIs store after their own logins is theirs. Closed by the
+`MOGGING_INTEGMILESTONE` milestone — all five compose in one fixture world, zero
+network, machine budget unmoved. The sweep grew 35→**52 gates** (thirteen new).
+Surface: `docs/14-integrations.md`; per-OS numbers in `prompts/phase-8/README.md`.
+
 ## Cross-cutting from day one
 Sentry crash reporting · a hard perf budget for N panes · CI that builds + signs for
 win-x64 / mac-arm64 / mac-x64.

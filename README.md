@@ -43,14 +43,21 @@ renderer is tuned once and behaves identically everywhere. See
 
 ## Quickstart
 
-> **Status: Phase 6 (product-ready) shipped — v0.4.0** — three-platform parity
-> (the same 35-gate `qa-smokes.sh` green on Windows, Linux, AND macOS CI), a
-> toggleable **browser dock** that agents can drive via a first-party MCP server,
-> per-slot **profile persistence**, a live **first-run checklist** + one-click
-> **update UX**, and signing readiness + winget/homebrew manifests. Closed by the
-> `MOGGING_PRODUCT` milestone: an installer-fresh machine reaches a working swarm
-> beside a live browser preview in one asserted flow, budgets intact. Per-OS
-> numbers in `prompts/phase-6/README.md`.
+> **Status: Phase 8 (integrations) shipped** — the workspace stops being an
+> island. The one **house MCP server** now exposes the fleet's control plane to
+> agents (reads free, writes behind a per-workspace grant), the browser dock gains
+> a consented **agent-web** profile (per-origin action grants + a local activity
+> **trail**), the app **registers MCP servers** across the Claude Code / Codex /
+> Gemini config dialects and **scopes** them per workspace, an outbound **event
+> bridge** rings your n8n/Make/Slack webhooks, and board cards carry **live GitHub
+> PR/issue** state — all with the app holding no credential it doesn't have to
+> (daemon still v3, grant-blind). Closed by the `MOGGING_INTEGMILESTONE` milestone:
+> all five directions compose in one fixture world, zero network, machine budget
+> unmoved. The `qa-smokes.sh` sweep now runs **52 gates** (thirteen new this phase:
+> MCP · MCPWRITE · AGENTWEB · WEBTRAIL · MCPMGR · MCPCAT · VAULTKEYS · TOOLPLAN ·
+> EVBRIDGE · MCPSTATUS · INTEG · INTEGUX · INTEGMILESTONE). Surface: `docs/14`.
+> Per-OS numbers in `prompts/phase-8/README.md`. (Phase 6 shipped v0.4.0: the
+> browser dock + first-run/update UX + signing readiness.)
 
 ```bash
 npm install        # builds native modules (node-pty). See note below.
@@ -141,7 +148,9 @@ other; `main`/`preload`/`renderer` are the only composition root. See
 - **Phase 3** ✅ — Orchestration: control API, worktree isolation, pre-ship review, Kanban board, end-to-end milestone.
 - **Phase 4** ✅ — Swarm core: mailbox + roles, ownership ledger, reviewer gate, profiles + failover, SSH panes, Linux target.
 - **Phase 5** ✅ — UI/UX excellence: AA-measured token system + vivid workspace identity, icon family, window-chrome fixes, full-app views, 14px terminal comfort (receipts: `prompts/phase-5/REPORT.md`).
-- **Phase 6** — Product-ready: full Linux/macOS parity sweeps, browser pane, first-run + updates, v0.4.0. *(next; voice: undecided, own pack later)*
+- **Phase 6** ✅ — Product-ready: full Linux/macOS parity sweeps, browser dock, first-run + updates, v0.4.0.
+- **Phase 7** ✅ — Usage & metering: CLI-owned session adapters, the usage gauge + Settings § Usage, the pointer-grammar key vault (receipts: `prompts/phase-7/README.md`).
+- **Phase 8** ✅ — Integrations, five directions: the house MCP server (reads free, writes behind a per-workspace grant), the agent-web profile + activity trail, MCP registration across three CLI dialects + per-workspace tool plans, the outbound event bridge, live GitHub PR/issue chips — app holds no credential, daemon still v3. Closed by `MOGGING_INTEGMILESTONE`; surface in [`docs/14`](docs/14-integrations.md).
 
 Full plan: [`docs/02-mvp-and-roadmap.md`](docs/02-mvp-and-roadmap.md).
 
