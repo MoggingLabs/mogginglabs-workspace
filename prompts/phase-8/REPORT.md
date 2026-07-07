@@ -3,9 +3,51 @@
 Receipts for the integrations pack (steps 01–14), same format as
 `prompts/phase-7/REPORT.md`. Per-step mechanics live in `IMPLEMENTATION.md`
 (deviations recorded there, inline); this file keeps dated verification
-records and the finds worth remembering. Sweep count as of 8/08: **44 gates**
+records and the finds worth remembering. Sweep count as of 8/09: **47 gates**
 (35 + MCP + MCPWRITE + AGENTWEB + WEBTRAIL + MCPMGR + MCPCAT + PERWS +
-PERWSAGENT + VAULTKEYS).
+PERWSAGENT + VAULTKEYS + WSCLOSE + KBSHORTCUTS + TOOLPLAN).
+
+## 09 — workspace tool plans: scoping with a mechanism (2026-07-07)
+
+Registered ≠ everywhere. A per-workspace TOOL PLAN says which registered
+servers reach a workspace's panes, per CLI, materialized at pane launch so
+an agent's context carries only the plan — research §8's context-pollution
+risk, answered with a mechanism, not a warning.
+
+**The launch mechanism (dev-verified 2026-07-07).** `claude --help` on this
+machine confirms `--mcp-config <configs...>` + `--strict-mcp-config` ("only
+use MCP servers from --mcp-config"). So Claude Code rides a scoped config
+FILE in userData (nothing in the worktree) + the strict flag: strict = plan
+only (global excluded), non-strict = plan ∪ the CLI's own global. The
+`inheritGlobal` toggle IS that flag. No-flag CLIs (codex/gemini, research
+floors — not installed here) get a git-EXCLUDED project-scope file instead
+(`.git/info/exclude`, worktree-aware), so agents never see a plan file in
+`git status`. Args ride the launch command, env rides spec.env — daemon v3
+untouched. Main materializes it; the renderer never sees it.
+
+**Opt-in, so no regression.** A workspace with NO stored plan launches
+UNCHANGED (the CLI's own global config) — 8/09 never silently strips a
+pre-existing user's servers. A plan is stored at creation (wizard picks /
+template) or when the user edits the matrix; that's what turns scoping on.
+Minimal by default once on: the house server is always present, plus the
+picks, nothing else.
+
+**The UI.** A wizard Tools row (chips of connected servers, shown only when
+there ARE any — no silent scoping); a Settings › Workspace tools MATRIX
+(tools × CLIs, three cell states planned/global/off, inherit toggle, the
+per-pane truth line); template-seeded plans at creation.
+
+**TOOLPLAN gate** (all green): {A,B for claude · A for codex} materializes
+EXACTLY that (claude flag+strict+file, codex project file); a CLI launched
+against the file lists ONLY the planned servers — the frame, verbatim:
+`SERVERS=linear,mogging,sentry|STRICT=true` (no unplanned posthog);
+`inheritGlobal` drops strict; the codex file is git-invisible; template
+picks seed a plan; matrix cells match. **Dev-verify honesty**: a real second
+MCP server (Sentry) wasn't on the dev machine, so a node shim stands in for
+the CLI reading the materialized `--mcp-config` file — the flags themselves
+are verified present in the installed Claude Code. `(e)` restart-needed
+rides 11's connection status — deferred to that step. Sweep 46 → **47**
+(TOOLPLAN).
 
 ## 08 — the vault, fleet-wide: paste-once service keys (2026-07-07)
 

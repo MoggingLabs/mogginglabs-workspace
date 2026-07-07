@@ -351,6 +351,24 @@ daemon protocol v3 frozen, smokes network-free.
   MATERIALIZED set, not the global config — the chip tells the pane's
   truth.
 
+- **SHIPPED 2026-07-07.** As planned, plus two calls worth recording:
+  (1) **OPT-IN, not on-by-default.** A workspace with no STORED plan
+  launches unchanged — `materializeToolPlanAtLaunch` returns [] unless
+  `hasToolPlan(wsId)`. Reason: an empty plan + strict would silently strip
+  a pre-existing user's global servers on every launch. Scoping turns on
+  when a plan is stored (wizard picks / template / matrix edit). The
+  wizard Tools row shows ONLY when there are connected non-house servers,
+  so creation never scopes silently either. Minimal-by-default still holds
+  once a plan exists (house + picks). (2) **`inheritGlobal` IS the strict
+  flag** for flag-CLIs (Claude): strict omitted = global inherited. No-flag
+  CLIs can't exclude their global set at launch, so `addsToGlobal` is
+  surfaced honestly rather than pretending isolation. (3) `(e)`
+  restart-needed on live panes rides 11's connection status — the
+  `planChanged` signal + the matrix truth line are in place; the live-pane
+  chip lands with 11. Dev-verify used a node shim for the second server
+  (no real Sentry on the machine); the `--mcp-config`/`--strict-mcp-config`
+  flags are verified present. TOOLPLAN gate. Full REPORT.md § 09.
+
 ## 10 — event bridge (new step)
 
 - The bridge lives in the APP's main process, subscribed to the SAME
