@@ -9,16 +9,24 @@
 export interface BrowserDockInit {
   open: boolean
   width: number
+  /** False on a vault-less machine — agent-web logins last only until the dock
+   *  closes (the chrome renders the honest copy). Machine-global (ADR 0008.h),
+   *  so both sides derive per-workspace partition names from it. */
+  agentWebPersists: boolean
 }
 
-export interface BrowserDockBounds {
-  x: number
-  y: number
-  width: number
-  height: number
-  /** The dock's OUTER width (drag handle position) — persisted, distinct from the view rect. */
-  dockWidth: number
-  visible: boolean
+/** Per-workspace browser partitions (8/07b): every workspace has its OWN
+ *  browser — its own page state AND its own cookie jar/session, so you can be
+ *  signed into different accounts per workspace. Both main and the renderer
+ *  compute these identically so a guest and its driver agree. */
+export function browserPreviewPartition(workspaceId: string): string {
+  return `persist:bdock.${String(workspaceId).replace(/[^a-zA-Z0-9_-]/g, '')}`
+}
+export function browserAgentWebPartition(workspaceId: string, persists: boolean): string {
+  const id = String(workspaceId).replace(/[^a-zA-Z0-9_-]/g, '')
+  // No `persist:` prefix on a vault-less machine -> in-memory (never weakly-
+  // protected cookies at rest, ADR 0008.h).
+  return persists ? `persist:aweb.${id}` : `aweb-mem.${id}`
 }
 
 /** The dock's two session profiles (Phase-8/04, ADR 0008.e — FINDINGS Branch

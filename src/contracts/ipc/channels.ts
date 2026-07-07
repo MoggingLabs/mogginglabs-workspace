@@ -111,11 +111,14 @@ export const BrowserChannels = {
   toggle: 'browser:toggle', // ({ open, workspaceId? }) -> void (open restores the workspace's last url)
   navigate: 'browser:navigate', // ({ url, workspaceId }) -> void (http(s) only; persists lastUrl per workspace)
   nav: 'browser:nav', // ({ action }) -> void (back | forward | reload)
-  bounds: 'browser:bounds', // renderer -> main: BrowserDockBounds (rAF-throttled view rect)
-  resizing: 'browser:resizing', // renderer -> main: { active, bounds? } — a continuous resize (handle drag / OS-window drag) started/ended; the live view is swapped for a page SNAPSHOT so it stays visible AND smooth (no per-frame reflow), then restored + snapped on release
-  resizeShot: 'browser:resizeShot', // main -> renderer: { dataUrl, width, height } — paint this frozen page image while the CSS chrome resizes
-  resizePainted: 'browser:resizePainted', // renderer -> main: the snapshot is up — safe to hide the live view now (no black flash)
-  resizeDone: 'browser:resizeDone', // main -> renderer: the live view is restored at the final size — clear the snapshot
+  // 8/07 <webview> migration: the guest page is an in-DOM <webview>, so there
+  // is NO main-owned view to position — resize is pure DOM (lockstep, zero
+  // artifacts). The renderer registers each guest's webContents id so main can
+  // still drive it (agent control, screenshots, cookies) via webContents.fromId.
+  guest: 'browser:guest', // renderer -> main: { profile, id } — a guest webview became ready (its webContents id)
+  guestGone: 'browser:guestGone', // renderer -> main: { profile } — a guest webview was destroyed (recreate/agent-web reset)
+  recreateGuest: 'browser:recreateGuest', // main -> renderer: { profile } — tear down + recreate that profile's webview (smoke persistence arm)
+  persistWidth: 'browser:persistWidth', // renderer -> main: { dockWidth } — persist the dock width (debounced by the renderer)
   state: 'browser:state', // main -> renderer: BrowserDockState (header truth)
   lastUrl: 'browser:lastUrl', // (workspaceId) -> string | null ("open this workspace's preview" chip)
   openExternal: 'browser:openExternal', // ({ url }) -> void (http(s) only, system browser)

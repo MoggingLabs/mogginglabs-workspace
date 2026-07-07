@@ -6,6 +6,45 @@ Receipts for the integrations pack (steps 01–14), same format as
 records and the finds worth remembering. Sweep count as of 8/07: **41 gates**
 (35 + MCP + MCPWRITE + AGENTWEB + WEBTRAIL + MCPMGR + MCPCAT).
 
+## Browser dock: <webview> migration + per-workspace browsers (2026-07-07)
+
+Founder-driven, mid-pack (after the 8/07 catalog), while dev-verifying the
+dock. Three commits, each superseding the last as the fix got proper:
+
+1. **The drag lag** — the dock's main-owned `WebContentsView` is a separate
+   Chromium compositor layer; resizing it reflows the page every frame and
+   the native layer trails the CSS chrome. First pass FROZE the view during
+   drag (killed the lag but blanked to black — rejected). Second pass showed
+   a page SNAPSHOT during the drag (visible + smooth, but a static frame that
+   snaps on release — rejected as "not the true solution").
+2. **The proper fix (research-led)** — Electron's own docs + the open issues
+   (webview/BrowserView resize lag, open since 2016) confirm two compositor
+   surfaces can never resize atomically; the only artifact-free answer is to
+   make the page a layout participant in the SAME compositor. Migrated the
+   dock from a main-owned `WebContentsView` to an in-DOM `<webview>` (OOPIF;
+   Chromium surface-sync resizes it atomically with its parent). Now resize
+   is pure DOM — true LOCKSTEP, zero artifacts. Isolation preserved (guest
+   out-of-process, own partition; main drives it by `webContents.fromId`).
+   All dock gates green with a new `resizeLockstepOk` assert (guest rect ==
+   view-host rect while resizing, page not reloaded).
+3. **Per-workspace browsers (the founder's next ask)** — because the page is
+   now a DOM element, each workspace gets its OWN browser: per-workspace
+   `<webview>` guests with WORKSPACE-SCOPED partitions, so each keeps its own
+   live page AND its own logins; switching workspaces switches the browser;
+   LRU-capped (3 live workspaces). New PERWS gate proves it: workspace B on
+   the SAME origin sees `COOKIE_none` while A holds `ws=AAA` (session
+   isolation), and switching back to A restores its exact live page +
+   cookie (state preserved), distinct urls per workspace.
+
+**OAuth stance settled here too**: MCP-OAuth consent always opens in the
+DEFAULT external browser (the CLI's own `mcp login`); an in-dock routing was
+prototyped (`mogging browse`) and reverted at the founder's call.
+
+**Gates**: BROWSER (lockstep) · BROWSERCTL · AGENTWEB · WEBTRAIL · PRODUCT ·
+PERCEPTION/FLICKER/MILESTONE all green; new PERWS gate green. The heavier
+webview gates MISS under back-to-back contention and pass isolated (the
+standing marathon lesson). Sweep 41 → **42** (PERWS).
+
 ## 01 — ADR 0008 + the integrations contracts (2026-07-06)
 
 - ADR 0008 committed (eight stances); `@contracts/integrations` ships the

@@ -33,7 +33,14 @@ export function createMainWindow(): BrowserWindow {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      // The browser dock is an in-DOM <webview> (8/07 resize rework): the guest
+      // page is a layout participant, so it resizes in LOCKSTEP with the chrome
+      // (one compositor, no separate WebContentsView layer, no drag lag/
+      // artifacts). The guest still runs OUT of process, isolated from this
+      // renderer (its own partition/sandbox) — the page never enters the
+      // trusted renderer's context (ADR 0002 / docs/13 posture preserved).
+      webviewTag: true
     }
   })
 

@@ -138,6 +138,7 @@ run_smoke USAGESET     MOGGING_USAGESET  1 180 usageset
 run_smoke MCP          MOGGING_MCP       1 240 mcp
 run_smoke MCPWRITE     MOGGING_MCPWRITE  1 240 mcpwrite
 run_smoke AGENTWEB     MOGGING_AGENTWEB  1 240 agentweb
+run_smoke PERWS        MOGGING_PERWS     1 240 perws
 run_smoke WEBTRAIL     MOGGING_WEBTRAIL  1 240 webtrail
 run_smoke MCPMGR       MOGGING_MCPMGR    1 180 mcpmgr
 run_smoke MCPCAT       MOGGING_MCPCAT    1 180 mcpcat

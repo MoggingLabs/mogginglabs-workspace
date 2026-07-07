@@ -66,7 +66,8 @@ export function runBrowserSmoke(win: BrowserWindow): void {
       const narrowed = wOpen < wBefore - 200 // dock min-width is 320
       const paneCountAfter = await ES<number>('window.__mogging.layout.paneCount()')
 
-      // ── 2. Navigate: view covers the dock rect, header follows ────────────
+      // ── 2. Navigate: the guest <webview> IS the page and FILLS the dock's
+      //       view host (8/07 — no main-owned view; the guest is in the DOM) ──
       await ES(`window.__mogging.browser.navigate('127.0.0.1:${port}')`)
       let titleOk = false
       for (let i = 0; i < 30 && !titleOk; i++) {
@@ -77,15 +78,20 @@ export function runBrowserSmoke(win: BrowserWindow): void {
         'window.__mogging.browser.viewRect()'
       )
       await sleep(400)
-      const dbg = dockDebug()
       const close2 = (a: number, b: number): boolean => Math.abs(a - b) <= 2
-      const boundsOk =
-        !!dbg.bounds &&
-        dbg.visible &&
-        close2(dbg.bounds.x, rect.x) &&
-        close2(dbg.bounds.y, rect.y) &&
-        close2(dbg.bounds.width, rect.width) &&
-        close2(dbg.bounds.height, rect.height)
+      const guestReady = await ES<boolean>('window.__mogging.browser.guestReady()')
+      const guestRect = await ES<{ x: number; y: number; width: number; height: number } | null>(
+        'window.__mogging.browser.guestRect()'
+      )
+      // The guest occupies the whole view host — no separate layer to lag.
+      const guestFillsOk =
+        !!guestRect &&
+        guestReady &&
+        dockDebug().url.includes(`127.0.0.1:${port}`) &&
+        close2(guestRect.x, rect.x) &&
+        close2(guestRect.y, rect.y) &&
+        close2(guestRect.width, rect.width) &&
+        close2(guestRect.height, rect.height)
       const headerUrl = (await ES<{ url: string }>('window.__mogging.browser.state()')).url
       const urlOk = headerUrl.includes(`127.0.0.1:${port}`)
 
@@ -94,41 +100,26 @@ export function runBrowserSmoke(win: BrowserWindow): void {
       await sleep(800)
       const windowsOk = BrowserWindow.getAllWindows().length === 1
 
-      // ── 4. Drag-resize: the view follows ──────────────────────────────────
-      await ES('window.__mogging.browser.setWidth(520)')
+      // ── 4. Resize is LOCKSTEP (8/07): the dock and the guest are one DOM
+      //       layout — after a width change the guest rect EQUALS the view host
+      //       rect exactly, and the page is NOT reloaded (same url) ───────────
+      const urlBeforeResize = dockDebug().url
+      await ES('window.__mogging.browser.setWidth(560)')
       await sleep(400)
       const rect2 = await ES<{ width: number }>('window.__mogging.browser.viewRect()')
-      const dbg2 = dockDebug()
-      const resizeOk = !!dbg2.bounds && close2(dbg2.bounds.width, rect2.width) && rect2.width > rect.width
+      const guestRect2 = await ES<{ width: number; height: number } | null>('window.__mogging.browser.guestRect()')
+      const resizeLockstepOk =
+        rect2.width > rect.width && // the dock grew
+        !!guestRect2 &&
+        close2(guestRect2.width, rect2.width) && // the guest grew WITH it, exactly
+        dockDebug().url === urlBeforeResize // no reflow-from-scratch; same live page
+      await ES('window.__mogging.browser.setWidth(520)') // settle width for the persist assertion
+      await sleep(500) // let the debounced width-persist fire
 
-      // ── 4b. Resize FREEZE (8/07): during a continuous drag the native view
-      //        is HIDDEN — the CSS chrome grows but the WebContents never
-      //        reflows (viewShown stays false); it snaps back on release ─────
-      await ES('window.__mogging.browser.beginResize()')
-      await sleep(600) // capture -> paint snapshot -> ack -> live view hidden
-      // frozen: main entered resize mode AND the native view is actually hidden
-      // (the page snapshot is showing in its place)
-      const frozenActive = dockDebug().resizing === true && dockDebug().viewShown === false
-      // the page snapshot is up in the view's place — visible, not a black pane
-      const snapUp = await ES<boolean>('window.__mogging.browser.snapShown()')
-      await ES('window.__mogging.browser.setWidth(600)') // chrome grows; the snapshot scales, the view stays frozen
-      await sleep(200)
-      const rectFrozenChrome = await ES<{ width: number }>('window.__mogging.browser.viewRect()')
-      // the chrome widened, but the native view was NOT shown/reflowed meanwhile
-      const heldDuringFreeze = dockDebug().viewShown === false && rectFrozenChrome.width > rect2.width
-      await ES('window.__mogging.browser.endResize()')
-      await sleep(400)
-      // release: view shown again, snapped to the final (wider) rect in ONE step
-      const snappedAfter =
-        dockDebug().resizing === false && dockDebug().viewShown === true && (dockDebug().bounds?.width ?? 0) > rect2.width
-      const freezeOk = frozenActive && snapUp && heldDuringFreeze && snappedAfter
-      await ES('window.__mogging.browser.setWidth(520)') // restore width for the persist assertion
-      await sleep(200)
-
-      // ── 5. Toggle off: hidden view, grid re-widens ────────────────────────
+      // ── 5. Toggle off: dock closed, grid re-widens ────────────────────────
       await ES('window.__mogging.browser.toggle(false)')
       await sleep(600)
-      const hiddenOk = !dockDebug().visible
+      const closedOk = dockDebug().open === false
       const wClosed = await contentW()
       const rewidened = Math.abs(wClosed - wBefore) <= 2
 
@@ -147,12 +138,11 @@ export function runBrowserSmoke(win: BrowserWindow): void {
         narrowed &&
         paneCountBefore === paneCountAfter &&
         titleOk &&
-        boundsOk &&
+        guestFillsOk &&
         urlOk &&
         windowsOk &&
-        resizeOk &&
-        freezeOk &&
-        hiddenOk &&
+        resizeLockstepOk &&
+        closedOk &&
         rewidened &&
         persistOk
       result = {
@@ -161,20 +151,14 @@ export function runBrowserSmoke(win: BrowserWindow): void {
         paneCountBefore,
         paneCountAfter,
         titleOk,
-        boundsOk,
+        guestFillsOk,
         urlOk,
         windowsOk,
-        resizeOk,
-        freezeOk,
-        frozenActive,
-        snapUp,
-        heldDuringFreeze,
-        snappedAfter,
-        hiddenOk,
+        resizeLockstepOk,
+        closedOk,
         rewidened,
         persist,
         persistOk,
-        bounds: dbg.bounds,
         rect
       }
     } catch (e) {

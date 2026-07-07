@@ -4,18 +4,42 @@ Phase-6/05 + 05b. A toggleable right dock (`Ctrl+Shift+U`, the titlebar globe,
 or the palette) that previews what the agents build — and, with consent,
 lets agents drive it.
 
-## The dock (6/05)
+## The dock (6/05; in-DOM <webview> since 8/07; per-workspace since 8/07b)
 
-A `WebContentsView` the MAIN process owns and floats over one stable rect
-right of the grid; the grid narrows, terminals stay visible and interactive.
-The renderer owns only the chrome (header, URL bar, empty state); the page
-never enters the renderer. Each workspace remembers its last preview URL
-(switching never navigates — a chip offers it). Dock open/width persist.
+A toggleable right dock; the grid narrows, terminals stay visible and
+interactive. The renderer owns the chrome (header, URL bar, empty state);
+the page is an in-DOM `<webview>` guest.
 
-Security posture (ADR 0002): `sandbox: true`, no preload, no nodeIntegration,
-`window.open` denied (http(s) links open in the system browser), http(s) only.
-The dock runs its OWN session partition (`persist:browser-dock`) with a
-deny-all permission handler — nothing is injected or read by us.
+**Why a `<webview>`, not a `WebContentsView` (8/07).** The dock originally
+floated a main-owned `WebContentsView` over the chrome's rect. That is a
+SEPARATE Chromium compositor layer, so it and the DOM chrome resize on
+different clocks — dragging the dock made the page visibly lag/tear the
+chrome (a documented, unfixable Electron limitation; the migration guide only
+offers an async `resize` listener). Snapshots/freezes hid it but weren't a
+real fix. The proper fix is to make the page a participant in the SAME
+compositor: an in-DOM `<webview>` (an out-of-process iframe Chromium's
+surface-sync resizes atomically with its parent layout). Now the dock resizes
+the page in perfect LOCKSTEP with the chrome — one DOM layout, zero artifacts.
+The guest still runs OUT of process in its own partition/sandbox (the page
+never enters the trusted renderer); MAIN drives it by `getWebContentsId()` →
+`webContents.fromId()` for agent control, screenshots, and cookies.
+
+**Per-workspace browsers (8/07b).** Every workspace has its OWN browser: two
+`<webview>` guests (preview / agent-web) with WORKSPACE-SCOPED partitions
+(`persist:bdock.<wsId>` and the vault-conditioned `persist:aweb.<wsId>`), so
+each workspace keeps its own live page (url/history/scroll) AND its own cookie
+jar/logins — you can be signed into different accounts per workspace.
+Switching workspaces switches the dock to that workspace's browser (its guest
+sits on top; the others stay live underneath). Guests are kept per workspace
+with an LRU cap (3 live workspaces × 2 profiles); an evicted workspace
+re-creates and restores its last url on return. Dock open/width persist
+globally; last-url/profile/consent/grant are per workspace.
+
+Security posture (ADR 0002): each guest is `sandbox: true`, no preload, no
+nodeIntegration, its own partition; `window.open` denied (http(s) links open
+in the system browser), http(s) only; a deny-all permission handler on every
+guest session — nothing is injected or read by us, and the system browser's
+sessions are never touched (Branch B parked).
 
 ## Agent control (6/05b)
 

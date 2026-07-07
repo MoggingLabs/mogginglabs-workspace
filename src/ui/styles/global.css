@@ -3197,40 +3197,39 @@ body.resizing * {
   flex: 1 1 auto;
   min-height: 0;
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   background: var(--bg-app);
+  overflow: hidden;
+}
+/* The guest <webview> IS the page (8/07) — absolutely fills the view host, so
+   it resizes in lockstep with the dock chrome (one DOM layout, one compositor).
+   Both profiles stay live and stacked; the active one sits on top. */
+.browser-guest {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  z-index: 1;
+}
+.browser-guest.is-active {
+  z-index: 2;
 }
 .browser-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 3; /* opaque cover over a guest sitting at about:blank */
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: var(--sp-2);
   padding: var(--sp-4);
+  background: var(--bg-app);
   color: var(--text-lo);
   text-align: center;
 }
 .browser-empty[hidden] {
   display: none;
-}
-/* While the dock is being dragged/window-resized the native view is swapped
-   for this SNAPSHOT of the live page — it scales on the compositor at 60 fps
-   (no native reflow, no black screen) and the real view snaps back on release.
-   Pinned top-right so the resized-in/out space appears on the left edge. */
-.browser-resize-snap {
-  position: absolute;
-  inset: 0;
-  background-color: var(--bg-app);
-  background-repeat: no-repeat;
-  background-position: top right;
-  pointer-events: none;
-}
-.browser-resize-snap[hidden] {
-  display: none;
-}
-.browser-dock.is-resizing .browser-dock-handle {
-  background: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 .browser-empty-title {
   color: var(--text-mid);

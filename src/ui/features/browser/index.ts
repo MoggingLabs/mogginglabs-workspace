@@ -2,8 +2,9 @@ import type { UiFeature } from '../../core/registry/feature-registry'
 import {
   BrowserChannels,
   IntegrationsChannels,
+  browserAgentWebPartition,
+  browserPreviewPartition,
   type BrowserAgentActivity,
-  type BrowserDockBounds,
   type BrowserDockInit,
   type BrowserDockState,
   type BrowserNavAction,
@@ -21,9 +22,10 @@ import { getTelemetry } from '../../core/telemetry'
 /**
  * The browser dock (Phase-6/05): a toggleable right dock previewing what the
  * agents build — chrome beside the grid, never a tenant of it. The renderer
- * owns ONLY the chrome (header, empty state, resize handle) and reports the
- * rect main's WebContentsView must cover; the page itself never enters the
- * renderer. ADR 0002: nothing here touches sessions, cookies, or credentials.
+ * owns the chrome AND hosts the page as in-DOM <webview> guests (8/07), so the
+ * dock resizes them in lockstep with the chrome. The guests run out-of-process
+ * in their own partitions; main drives them by webContents id. ADR 0002: this
+ * renderer touches no sessions, cookies, or credentials — the guest is isolated.
  */
 export const browserFeature: UiFeature = {
   name: 'browser',
@@ -163,95 +165,121 @@ export const browserFeature: UiFeature = {
       el('div', { class: 'browser-empty-title', text: 'Preview what the agents build' }),
       el('div', { class: 'browser-empty-hint', text: 'Enter a URL above — your dev server, docs, anything http(s).' })
     ])
-    // The live page's SNAPSHOT, shown WHILE the dock resizes so the preview
-    // stays visible and scales on the compositor (no native reflow, no black
-    // screen). Pinned to the right edge — the window edge is stable, so grown/
-    // removed space appears on the left, matching how the dock resizes.
-    const snapEl = el('div', { class: 'browser-resize-snap', hidden: true })
-    const viewHost = el('div', { class: 'browser-dock-view' }, [empty, snapEl])
+    // The viewHost holds the guest <webview>s (8/07). They ARE the page — in
+    // the DOM, so the dock resizes them in LOCKSTEP with the chrome (one
+    // compositor, no main-owned view to position). Two guests (preview /
+    // agent-web) stay live and stacked; the active one is on top, the empty
+    // state overlays both when nothing is loaded.
+    const viewHost = el('div', { class: 'browser-dock-view' }, [empty])
     dock.append(handle, header, agentWebNote, banner, recentActs, confirmBar, originAlert, trailMenu, sitesMenu, loading, wsChip, viewHost)
     // The dock is #content's flex sibling inside #main — inserted, not slotted,
     // so the shell stays feature-agnostic.
     ctx.content.insertAdjacentElement('afterend', dock)
 
-    // ── Bounds: the ONE rect main must cover (rAF-throttled) ────────────────
-    let rafPending = false
-    let resizing = false
-    let winResizeTimer: number | undefined
-    const computeBounds = (): BrowserDockBounds => {
-      const r = viewHost.getBoundingClientRect()
-      return {
-        x: r.x,
-        y: r.y,
-        width: r.width,
-        height: r.height,
-        dockWidth: width,
-        visible: open && r.width > 0 && state.url !== ''
+    // ── Per-workspace guest webviews (8/07b) ────────────────────────────────
+    // Every workspace has its OWN browser: two <webview>s (preview / agent-web)
+    // with WORKSPACE-SCOPED partitions, so each keeps its own live page AND its
+    // own cookie jar/logins. Switching workspaces shows that workspace's
+    // browser. Guests are kept per workspace with an LRU cap so memory stays
+    // bounded; an evicted workspace re-creates + restores its last url on return.
+    const GUEST_CAP = 3 // live workspaces with browsers (× 2 profiles)
+    const guests = new Map<string, HTMLElement>()
+    const lru: string[] = [] // workspace ids, most-recent last
+    let agentWebPersists = true
+    const gkey = (wsId: string, p: BrowserProfile): string => `${wsId}:${p}`
+    const activeWsId = (): string => getWorkspaces().activeId ?? ''
+    const activeKey = (): string => gkey(activeWsId(), state.profile)
+
+    function makeGuest(wsId: string, p: BrowserProfile): HTMLElement {
+      const partition = p === 'preview' ? browserPreviewPartition(wsId) : browserAgentWebPartition(wsId, agentWebPersists)
+      const wv = document.createElement('webview')
+      wv.className = 'browser-guest'
+      wv.setAttribute('partition', partition)
+      wv.setAttribute('src', 'about:blank')
+      wv.setAttribute('webpreferences', 'contextIsolation=yes,sandbox=yes,nodeIntegration=no')
+      wv.addEventListener('dom-ready', () => {
+        try {
+          bridge.send(BrowserChannels.guest, { workspaceId: wsId, profile: p, id: (wv as unknown as { getWebContentsId(): number }).getWebContentsId() })
+        } catch {
+          /* not attached yet */
+        }
+      })
+      return wv
+    }
+
+    function evictWorkspace(wsId: string): void {
+      for (const p of ['preview', 'agent-web'] as const) {
+        const k = gkey(wsId, p)
+        const wv = guests.get(k)
+        if (wv) {
+          bridge.send(BrowserChannels.guestGone, { workspaceId: wsId, profile: p })
+          wv.remove()
+          guests.delete(k)
+        }
       }
     }
-    const sendBounds = (): void => {
-      if (rafPending) return
-      rafPending = true
-      requestAnimationFrame(() => {
-        rafPending = false
-        bridge.send(BrowserChannels.bounds, computeBounds())
-      })
+
+    /** Ensure the given workspace's guests exist (lazy per workspace), touch its
+     *  LRU position, and evict the oldest beyond the cap (never the active). */
+    function ensureGuests(wsId: string): void {
+      if (!wsId) return
+      const at = lru.indexOf(wsId)
+      if (at >= 0) lru.splice(at, 1)
+      lru.push(wsId)
+      if (!guests.has(gkey(wsId, 'preview'))) {
+        for (const p of ['preview', 'agent-web'] as const) {
+          const wv = makeGuest(wsId, p)
+          guests.set(gkey(wsId, p), wv)
+          viewHost.append(wv)
+        }
+      }
+      while (lru.length > GUEST_CAP) {
+        const victim = lru[0] === wsId ? lru[1] : lru[0]
+        if (!victim || victim === wsId) break
+        lru.splice(lru.indexOf(victim), 1)
+        evictWorkspace(victim)
+      }
     }
-    // During a CONTINUOUS resize (dragging the handle, or the OS window drag)
-    // the native WebContentsView reflows the whole page on every frame — on a
-    // real page that is 10–50 ms of relayout, so the preview visibly TRAILS the
-    // chrome. Freeze it: hide the live view, let the CSS chrome resize alone at
-    // 60 fps, and snap the view to the final rect once on release/settle.
-    const beginResize = (): void => {
-      if (resizing) return
-      resizing = true
-      dock.classList.add('is-resizing')
-      // Ask main for the page snapshot; it paints via resizeShot and the live
-      // view is hidden only once we've painted (no black flash).
-      bridge.send(BrowserChannels.resizing, { active: true })
+
+    function applyGuestVisibility(): void {
+      const active = open ? activeKey() : ''
+      for (const [k, wv] of guests) wv.classList.toggle('is-active', k === active)
     }
-    const endResize = (): void => {
-      if (!resizing) return
-      resizing = false
-      dock.classList.remove('is-resizing')
-      bridge.send(BrowserChannels.resizing, { active: false, bounds: computeBounds() })
-      // snapEl stays up until resizeDone — the restored native view covers it.
-    }
-    bridge.on(BrowserChannels.resizeShot, (payload) => {
-      if (!resizing) return // drag already ended — ignore a late snapshot
-      const s = payload as { dataUrl: string; width: number; height: number }
-      snapEl.style.backgroundImage = `url("${s.dataUrl}")`
-      snapEl.style.backgroundSize = `${s.width}px ${s.height}px`
-      snapEl.hidden = false
-      // Two frames guarantees the snapshot painted before main hides the live
-      // view underneath it — the swap is seamless.
-      requestAnimationFrame(() => requestAnimationFrame(() => bridge.send(BrowserChannels.resizePainted, undefined)))
-    })
-    bridge.on(BrowserChannels.resizeDone, () => {
-      snapEl.hidden = true
-      snapEl.style.backgroundImage = ''
-    })
-    new ResizeObserver(sendBounds).observe(viewHost)
-    window.addEventListener('resize', () => {
-      // The OS window drag fires 'resize' continuously — freeze until it
-      // settles (a quiet gap), then snap. The ResizeObserver above keeps
-      // main's stored rect fresh throughout; main ignores it while frozen.
-      beginResize()
-      window.clearTimeout(winResizeTimer)
-      winResizeTimer = window.setTimeout(endResize, 140)
+
+    // Recreate one guest on request (smoke persistence arm) — the partition
+    // session outlives the element, so its cookies survive the recreation.
+    bridge.on(BrowserChannels.recreateGuest, (payload) => {
+      const { workspaceId, profile: p } = payload as { workspaceId?: string; profile?: BrowserProfile }
+      if (!workspaceId || !p) return
+      const k = gkey(workspaceId, p)
+      if (!guests.has(k)) return
+      bridge.send(BrowserChannels.guestGone, { workspaceId, profile: p })
+      guests.get(k)?.remove()
+      const wv = makeGuest(workspaceId, p)
+      guests.set(k, wv)
+      viewHost.append(wv)
+      applyGuestVisibility()
     })
 
-    // ── Width drag ───────────────────────────────────────────────────────────
+    // Auto-switch: when the active workspace changes with the dock open, show
+    // that workspace's own browser (creating it on first visit).
+    onWorkspacesChange(() => {
+      if (!open) return
+      ensureGuests(activeWsId())
+      applyGuestVisibility()
+    })
+
+    // ── Width drag (pure DOM now — the webview resizes with the chrome) ──────
+    let widthPersistTimer: number | undefined
     const applyWidth = (): void => {
       width = Math.max(320, Math.min(Math.round(window.innerWidth * 0.6), width))
       dock.style.width = `${width}px`
-      // While frozen, resize the CSS chrome only — no per-frame bounds/reflow.
-      if (!resizing) sendBounds()
+      window.clearTimeout(widthPersistTimer)
+      widthPersistTimer = window.setTimeout(() => bridge.send(BrowserChannels.persistWidth, { dockWidth: width }), 400)
     }
     handle.addEventListener('pointerdown', (e) => {
       e.preventDefault()
       handle.setPointerCapture(e.pointerId)
-      beginResize()
       const startX = e.clientX
       const startW = width
       const move = (ev: PointerEvent): void => {
@@ -262,7 +290,6 @@ export const browserFeature: UiFeature = {
         handle.removeEventListener('pointermove', move)
         handle.removeEventListener('pointerup', up)
         handle.removeEventListener('pointercancel', up)
-        endResize()
       }
       handle.addEventListener('pointermove', move)
       handle.addEventListener('pointerup', up)
@@ -282,8 +309,9 @@ export const browserFeature: UiFeature = {
       open = next
       dock.hidden = !open
       toggleBtn.classList.toggle('is-active', open)
+      if (open) ensureGuests(activeWsId()) // spawn the active workspace's guests on first use
       void bridge.invoke(BrowserChannels.toggle, { open, workspaceId: getWorkspaces().activeId ?? undefined })
-      sendBounds()
+      applyGuestVisibility()
       if (open) urlInput.focus()
       getTelemetry().captureEvent({ name: 'browser.dock', props: { open } }) // boolean only — never URLs (ADR 0005)
     }
@@ -428,13 +456,14 @@ export const browserFeature: UiFeature = {
     // ── State from main (header truth) ───────────────────────────────────────
     bridge.on(BrowserChannels.state, (payload) => {
       state = payload as BrowserDockState
+      agentWebPersists = state.agentWebPersists // machine-global; keeps new-guest partitions truthful
       if (document.activeElement !== urlInput) urlInput.value = state.url
       back.disabled = !state.canGoBack
       forward.disabled = !state.canGoForward
       loading.classList.toggle('is-loading', state.loading)
-      empty.hidden = state.url !== ''
+      empty.hidden = state.url !== '' // the empty overlay covers a guest at about:blank
       renderProfileChrome()
-      sendBounds() // visibility depends on url presence
+      applyGuestVisibility() // the profile may have flipped (active guest on top)
       void refreshChip()
     })
 
@@ -494,10 +523,11 @@ export const browserFeature: UiFeature = {
       if (!a.trail.length) trailMenu.append(el('div', { class: 'menu-note', text: 'No agent actions yet.' }))
     })
 
-    // ── Persisted boot state ─────────────────────────────────────────────────
+    // ── Persisted boot state + guest creation ────────────────────────────────
     void (bridge.invoke(BrowserChannels.init, undefined) as Promise<BrowserDockInit>).then((init) => {
       width = init.width
       applyWidth()
+      agentWebPersists = init.agentWebPersists // per-workspace partitions derive from this
       if (init.open) toggle(true)
       void pushConsent() // make the active workspace's stored grant live at boot
       void applyWorkspaceProfile() // and its stored profile (8/04)
@@ -538,10 +568,16 @@ export const browserFeature: UiFeature = {
         },
         driving: () => !banner.hidden,
         trailCount: () => trailMenu.querySelectorAll('.browser-trail-row').length,
-        // 8/07 resize-freeze surface for the BROWSER smoke.
-        beginResize: () => beginResize(),
-        endResize: () => endResize(),
-        snapShown: () => !snapEl.hidden && snapEl.style.backgroundImage !== '', // the page snapshot is painted (not a black pane)
+        // 8/07: the guest is an in-DOM <webview> now — its rect IS the viewHost
+        // rect, so a resize is atomic with the chrome (proven by guestRect ==
+        // viewRect and the guest being present).
+        guestReady: () => !!guests.get(activeKey()),
+        guestRect: () => {
+          const g = guests.get(activeKey())
+          if (!g) return null
+          const r = g.getBoundingClientRect()
+          return { x: r.x, y: r.y, width: r.width, height: r.height }
+        },
         // 8/04: agent-web profile surface for the smoke.
         profile: () => state.profile,
         setProfile: (p: BrowserProfile) => setProfile(p),

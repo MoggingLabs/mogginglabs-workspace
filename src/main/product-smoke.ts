@@ -136,7 +136,8 @@ export function runProductSmoke(win: BrowserWindow): void {
       for (let i = 0; i < 30 && !dockOk; i++) {
         await sleep(400)
         const st = (await ES(`window.__mogging.browser.state()`)) as { title: string }
-        if (st.title === 'PROD_PREVIEW_4242') dockOk = dockDebug().visible
+        // 8/07: the guest is an in-DOM <webview>; "shown" = dock open + a page loaded.
+        if (st.title === 'PROD_PREVIEW_4242') dockOk = dockDebug().open && dockDebug().url.includes(`127.0.0.1:${port}`)
       }
 
       // ── A5. Swarm substrate reachable from the panes: ledger + mailbox ──────
