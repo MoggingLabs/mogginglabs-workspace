@@ -11,10 +11,21 @@ import { mgrPreview } from './mcp-manager'
 // plain diff summary naming the writer's actual target. Zero network.
 
 export function runIntegUxSmoke(win: BrowserWindow): void {
-  setTimeout(() => app.exit(1), 90000)
+  // 180s (not 90s): CI cold-boot (electron-vite dev compile + launch) can eat
+  // most of a tight net before run() even completes — the old 90s tripped
+  // app.exit(1) MID-run on every CI OS while passing on fast local machines.
+  // qa-smokes still watches at 240s.
+  setTimeout(() => app.exit(1), 180000)
   const wc = win.webContents
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+  const waitTrue = async (js: string, tries = 20, gapMs = 250): Promise<boolean> => {
+    for (let i = 0; i < tries; i++) {
+      if (await ES<boolean>(js).catch(() => false)) return true
+      await sleep(gapMs)
+    }
+    return false
+  }
 
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
@@ -40,7 +51,7 @@ export function runIntegUxSmoke(win: BrowserWindow): void {
       await sleep(400)
 
       // ── (d)(f) empty states + intro CTA + privacy block render ─────────────
-      const introOk = await ES<boolean>(`!!document.querySelector('.integux-intro .integux-setup-cta')`)
+      const introOk = await waitTrue(`!!document.querySelector('.integux-intro .integux-setup-cta')`)
       const privacyOk = await ES<boolean>(`!!document.querySelector('.integux-privacy')`)
       const serversEmptyOk = await ES<boolean>(`!!document.querySelector('.integux-empty')`)
       const matrixEmptyOk = await ES<boolean>(`!!document.querySelector('.toolplan-empty')`)
@@ -50,16 +61,14 @@ export function runIntegUxSmoke(win: BrowserWindow): void {
       await ES(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,bubbles:true,cancelable:true}))`)
       await sleep(300)
       await ES(`(()=>{const i=document.querySelector('.palette-overlay input,.palette input');if(i){i.value='integrations';i.dispatchEvent(new Event('input',{bubbles:true}))}})()`)
-      await sleep(300)
-      const paletteOk = (await ES<number>(`[...document.querySelectorAll('.palette-item, .palette-result')].filter(e=>/integrations/i.test(e.textContent||'')).length`)) >= 2
+      const paletteOk = await waitTrue(`[...document.querySelectorAll('.palette-item, .palette-result')].filter(e=>/integrations/i.test(e.textContent||'')).length >= 2`)
       await ES(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))`)
       await sleep(200)
 
       // ── (a) the guided flow: walk, skip, progress persists, end screen ─────
       await ES(`localStorage.removeItem('mogging.integux.done')`)
       await ES(`(document.querySelector('.integux-intro .integux-setup-cta')?.click(), 1)`)
-      await sleep(700)
-      const flowShown = await ES<boolean>(`!!document.querySelector('.modal-overlay .integux-flow .integux-flow-tool')`)
+      const flowShown = await waitTrue(`!!document.querySelector('.modal-overlay .integux-flow .integux-flow-tool')`)
       const firstPreset = await ES<string>(`document.querySelector('.integux-flow-tool')?.getAttribute('data-preset') || ''`)
       // Skip the current tool -> advances + records progress.
       await ES(`[...document.querySelectorAll('.modal-overlay .btn')].find(b=>/^Skip$/.test(b.textContent?.trim()||''))?.click()`)
@@ -77,8 +86,7 @@ export function runIntegUxSmoke(win: BrowserWindow): void {
       await ES(`document.querySelector('.modal-overlay .modal-close')?.click()`)
       await sleep(200)
       await ES(`(document.querySelector('.integux-intro .integux-setup-cta')?.click(), 1)`)
-      await sleep(700)
-      const endOk = await ES<boolean>(`!!document.querySelector('.modal-overlay .integux-flow-done')`)
+      const endOk = await waitTrue(`!!document.querySelector('.modal-overlay .integux-flow-done')`)
 
       const pass = nagOk && summaryOk && introOk && privacyOk && emptyOk && paletteOk && walkOk && endOk
       result = { pass, nagOk, summaryOk, introOk, privacyOk, emptyOk, serversEmptyOk, matrixEmptyOk, paletteOk, walkOk, endOk, firstPreset, secondPreset, progressLen }

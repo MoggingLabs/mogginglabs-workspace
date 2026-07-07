@@ -116,6 +116,15 @@ let win: BrowserWindow | null = null
 let disposeBackend: (() => void) | null = null
 let disposeGit: (() => void) | null = null
 
+// CI ONLY (Linux headless): force the libsecret safeStorage backend so the vault
+// gates run against a REAL keychain (the CI job stands up an unlocked
+// gnome-keyring on the session bus). Production auto-detects the desktop's own
+// backend — this switch is set only when MOGGING_CI_KEYRING is exported, never
+// in a real install. Must run before app is ready (before any safeStorage use).
+if (process.env.MOGGING_CI_KEYRING && process.platform === 'linux') {
+  app.commandLine.appendSwitch('password-store', 'gnome-libsecret')
+}
+
 // Single-instance + mogging:// deep link so `mogging .` focuses a running app. Skipped under
 // smokes (some launch a second instance); normal dev/production runs hold the lock.
 const isSmoke = Object.keys(process.env).some((k) => k.startsWith('MOGGING_'))
