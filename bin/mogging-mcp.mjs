@@ -96,7 +96,7 @@ let appSession = null
 let nextAppId = 1
 const appPending = new Map()
 
-async function callApp(name, args) {
+async function callApp(name, args, extra) {
   if (!appSession) {
     let sess
     try {
@@ -133,7 +133,7 @@ async function callApp(name, args) {
   const id = nextAppId++
   return new Promise((resolve) => {
     appPending.set(id, resolve)
-    appSession.send({ t: 'call', id, name, args })
+    appSession.send({ t: 'call', id, name, args, ...(extra || {}) })
   })
 }
 
@@ -211,7 +211,8 @@ const paneIdentity = () => process.env.MOGGING_PANE_ID || undefined
 
 async function handleBrowserCall(id, def, args) {
   try {
-    const r = await callApp(def.verb, args)
+    // Carry our pane so the app drives THIS agent's workspace browser (8/07c).
+    const r = await callApp(def.verb, args, { pane: paneIdentity() })
     if (!r.ok) {
       const hint =
         r.reason === 'disabled'

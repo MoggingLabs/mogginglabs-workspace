@@ -185,6 +185,7 @@ export const browserFeature: UiFeature = {
     const GUEST_CAP = 3 // live workspaces with browsers (× 2 profiles)
     const guests = new Map<string, HTMLElement>()
     const lru: string[] = [] // workspace ids, most-recent last
+    const pinnedWs = new Set<string>() // agent-attached — never evicted (8/07c)
     let agentWebPersists = true
     const gkey = (wsId: string, p: BrowserProfile): string => `${wsId}:${p}`
     const activeWsId = (): string => getWorkspaces().activeId ?? ''
@@ -234,8 +235,10 @@ export const browserFeature: UiFeature = {
         }
       }
       while (lru.length > GUEST_CAP) {
-        const victim = lru[0] === wsId ? lru[1] : lru[0]
-        if (!victim || victim === wsId) break
+        // Evict the oldest workspace that is NOT active and NOT agent-attached
+        // (a browser an agent is working in is never torn down).
+        const victim = lru.find((w) => w !== wsId && w !== activeWsId() && !pinnedWs.has(w))
+        if (!victim) break
         lru.splice(lru.indexOf(victim), 1)
         evictWorkspace(victim)
       }
@@ -264,9 +267,39 @@ export const browserFeature: UiFeature = {
     // Auto-switch: when the active workspace changes with the dock open, show
     // that workspace's own browser (creating it on first visit).
     onWorkspacesChange(() => {
-      if (!open) return
-      ensureGuests(activeWsId())
-      applyGuestVisibility()
+      if (open) {
+        ensureGuests(activeWsId())
+        applyGuestVisibility()
+      }
+      applyTabPossession() // tabs rebuilt on switch — re-mark agent-browsing ones
+    })
+
+    // An agent may drive a workspace the human never opened — main asks us to
+    // materialize it (pinned; possession follows). Create even if the dock is
+    // closed so the agent can work headless (its tab shows possession).
+    bridge.on(BrowserChannels.materialize, (payload) => {
+      const wsId = (payload as { workspaceId?: string }).workspaceId
+      if (wsId) ensureGuests(wsId)
+    })
+
+    // Visible possession across workspaces (8/07c): pin agent-attached
+    // workspaces from eviction and mark their tabs.
+    let attachedWs: string[] = []
+    let drivingWs: string[] = []
+    function applyTabPossession(): void {
+      document.querySelectorAll<HTMLElement>('.workspace-tab').forEach((tab) => {
+        const id = tab.dataset.wsId ?? ''
+        tab.classList.toggle('is-agent-browsing', attachedWs.includes(id))
+        tab.classList.toggle('is-agent-driving', drivingWs.includes(id))
+      })
+    }
+    bridge.on(BrowserChannels.possession, (payload) => {
+      const p = payload as { attached?: string[]; driving?: string[] }
+      attachedWs = p.attached ?? []
+      drivingWs = p.driving ?? []
+      pinnedWs.clear()
+      for (const w of attachedWs) pinnedWs.add(w)
+      applyTabPossession()
     })
 
     // ── Width drag (pure DOM now — the webview resizes with the chrome) ──────

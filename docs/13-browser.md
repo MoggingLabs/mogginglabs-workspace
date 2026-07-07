@@ -35,6 +35,18 @@ with an LRU cap (3 live workspaces × 2 profiles); an evicted workspace
 re-creates and restores its last url on return. Dock open/width persist
 globally; last-url/profile/consent/grant are per workspace.
 
+**Agents drive their OWN workspace's browser (8/07c).** Each agent's browser
+tools carry its pane, which resolves to its workspace — so an agent acts on
+THAT workspace's browser, gated by THAT workspace's consent/grant, never
+whatever's in the foreground (no cross-workspace bleed). You can leave an
+agent working in one workspace's browser and go work in another: its browser
+is materialized on demand (even if you never opened it), pinned from eviction
+while the agent is attached, and its workspace tab shows a possession dot
+(pulsing while the agent is driving) so you always see who's at the wheel —
+visible possession, now across workspaces. The dock's Stop button governs the
+browser you're looking at; to approve a signed-in origin you view that
+workspace and click allow (the confirm is scoped to the browser you see).
+
 Security posture (ADR 0002): each guest is `sandbox: true`, no preload, no
 nodeIntegration, its own partition; `window.open` denied (http(s) links open
 in the system browser), http(s) only; a deny-all permission handler on every

@@ -25,6 +25,7 @@ import { runMcpSmoke } from './mcp-smoke'
 import { runMcpWriteSmoke } from './mcpwrite-smoke'
 import { runAgentWebSmoke } from './agentweb-smoke'
 import { runPerWsSmoke } from './perws-smoke'
+import { runPerWsAgentSmoke } from './perwsagent-smoke'
 import { runWebTrailSmoke } from './webtrail-smoke'
 import { runMcpMgrSmoke } from './mcpmgr-smoke'
 import { runMcpCatSmoke } from './mcpcat-smoke'
@@ -238,6 +239,8 @@ app.whenReady().then(async () => {
     runAgentWebSmoke(win, process.env.MOGGING_AGENTWEB) // env-gated agent-web-profile smoke (Phase-8/04; DEV = held real-site world)
   } else if (process.env.MOGGING_PERWS && win) {
     runPerWsSmoke(win) // env-gated per-workspace-browser smoke: distinct live pages + isolated sessions (Phase-8/07b)
+  } else if (process.env.MOGGING_PERWSAGENT && win) {
+    runPerWsAgentSmoke(win) // env-gated per-workspace AGENT-browser smoke: agents drive their own workspace's browser (Phase-8/07c)
   } else if (process.env.MOGGING_WEBTRAIL && win) {
     runWebTrailSmoke(win) // env-gated agent-activity-trail smoke: store + emitters + viewer (Phase-8/05)
   } else if (process.env.MOGGING_MCPMGR && win) {

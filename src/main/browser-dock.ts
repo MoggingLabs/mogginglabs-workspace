@@ -15,7 +15,7 @@ import {
 } from '@contracts'
 import { isBlockedActOrigin } from '@backend/features/integrations'
 import { getSettingsStore } from './app-settings'
-import { getIntegrationsGrant } from './integrations'
+import { getIntegrationsGrant, workspaceIdForPane } from './integrations'
 import { isKeyVaultAvailable } from './usage-keys'
 import { recordTrail } from './trail'
 
@@ -38,7 +38,11 @@ const KV_OPEN = 'browser.open'
 const KV_WIDTH = 'browser.width'
 const kvLastUrl = (workspaceId: string): string => `browser.lastUrl.${workspaceId}`
 const kvProfile = (workspaceId: string): string => `browser.profile.${workspaceId}`
+const kvConsent = (workspaceId: string): string => `browser.agentControl.${workspaceId}`
 const DEFAULT_WIDTH = 420
+// A workspace stays "agent-attached" (pinned from LRU eviction, indicator on
+// its tab) this long after an agent last drove its browser (8/07c).
+const AGENT_ATTACH_MS = 5 * 60_000
 
 let getWin: (() => BrowserWindow | null) | null = null
 let open = false
@@ -68,13 +72,31 @@ function refreshVault(): void {
 }
 const agentWebPartitionFor = (workspaceId: string): string => browserAgentWebPartition(workspaceId, agentWebPersists)
 
-// ── Agent control state (6/05b) ────────────────────────────────────────────
-let agentAllowed = false
-let driving = false
-let drivingClearTimer: NodeJS.Timeout | null = null
-const trail: BrowserAgentActivity['trail'] = []
-const confirmedOrigins = new Set<string>()
-let pendingConfirm: string | null = null
+// ── Agent control state (6/05b), now PER-WORKSPACE (8/07c) ──────────────────
+// Each agent drives ITS OWN workspace's browser (resolved from its pane), gated
+// by that workspace's consent/grant — never the foreground one. So possession,
+// confirms, and the recent-acts trail are all keyed by workspace.
+interface WsAgent {
+  driving: boolean
+  drivingTimer: NodeJS.Timeout | null
+  confirmed: Set<string> // origins the human allowed this possession
+  pendingConfirm: string | null
+  recent: BrowserAgentActivity['trail'] // recent verbs for the dock's ⋯ menu
+}
+const wsAgent = new Map<string, WsAgent>()
+const lastAgentAct = new Map<string, number>() // ws -> last agent verb (pin window)
+function wsa(wsId: string): WsAgent {
+  let s = wsAgent.get(wsId)
+  if (!s) {
+    s = { driving: false, drivingTimer: null, confirmed: new Set(), pendingConfirm: null, recent: [] }
+    wsAgent.set(wsId, s)
+  }
+  return s
+}
+const consentFor = (wsId: string): boolean => getSettingsStore()?.getSetting(kvConsent(wsId)) === '1'
+const profileForWs = (wsId: string): BrowserProfile =>
+  getSettingsStore()?.getSetting(kvProfile(wsId)) === 'agent-web' ? 'agent-web' : 'preview'
+const agentAttached = (wsId: string): boolean => Date.now() - (lastAgentAct.get(wsId) ?? 0) < AGENT_ATTACH_MS
 
 function guestWc(workspaceId: string, p: BrowserProfile): WebContents | null {
   const id = guestIds.get(guestKey(workspaceId, p))
@@ -212,8 +234,12 @@ function registerGuest(wsId: string, p: BrowserProfile, id: number): void {
 function setProfile(next: BrowserProfile): void {
   if (profile === next) return
   profile = next
-  pendingConfirm = null
-  confirmedOrigins.clear()
+  // Switching profiles ends the active workspace's session-scoped confirms.
+  const s = wsAgent.get(activeWorkspaceId)
+  if (s) {
+    s.pendingConfirm = null
+    s.confirmed.clear()
+  }
   refreshVault()
   pushState()
   pushActivity()
@@ -240,63 +266,118 @@ export const browserDriver = {
   }
 }
 
-// ── Agent control (6/05b) ────────────────────────────────────────────────────
+// ── Agent control (6/05b), per-workspace (8/07c) ────────────────────────────
 
+/** The dock shows the ACTIVE workspace's possession (the browser you see). */
 function pushActivity(): void {
   const win = getWin?.()
   if (!win || win.isDestroyed()) return
+  const s = wsAgent.get(activeWorkspaceId)
   const activity: BrowserAgentActivity = {
-    driving,
-    allowed: agentAllowed,
-    trail: trail.slice(-12),
-    pendingConfirm: pendingConfirm ?? undefined
+    driving: s?.driving ?? false,
+    allowed: consentFor(activeWorkspaceId),
+    trail: (s?.recent ?? []).slice(-12),
+    pendingConfirm: s?.pendingConfirm ?? undefined
   }
   win.webContents.send(BrowserChannels.activity, activity)
 }
 
-function markDriving(verb: BrowserAgentVerbName, target?: string): void {
-  trail.push({ verb, target, at: Date.now() })
-  if (trail.length > 50) trail.shift()
-  driving = true
-  if (drivingClearTimer) clearTimeout(drivingClearTimer)
-  drivingClearTimer = setTimeout(() => {
-    driving = false
-    pushActivity()
-  }, 1500)
-  pushActivity()
+/** Which workspaces have an agent attached to (or driving) their browser — the
+ *  renderer pins these from LRU eviction and marks their tabs (visible
+ *  possession, 6/05b, now across workspaces). */
+function pushPossession(): void {
+  const win = getWin?.()
+  if (!win || win.isDestroyed()) return
+  const attached: string[] = []
+  const driving: string[] = []
+  for (const [wsId, s] of wsAgent) {
+    if (s.driving) driving.push(wsId)
+  }
+  for (const wsId of lastAgentAct.keys()) if (agentAttached(wsId)) attached.push(wsId)
+  win.webContents.send(BrowserChannels.possession, { attached, driving })
 }
 
+function markDriving(wsId: string, verb: BrowserAgentVerbName, target?: string): void {
+  const s = wsa(wsId)
+  s.recent.push({ verb, target, at: Date.now() })
+  if (s.recent.length > 50) s.recent.shift()
+  s.driving = true
+  lastAgentAct.set(wsId, Date.now())
+  if (s.drivingTimer) clearTimeout(s.drivingTimer)
+  s.drivingTimer = setTimeout(() => {
+    s.driving = false
+    pushActivity()
+    pushPossession()
+  }, 1500)
+  pushActivity()
+  pushPossession()
+}
+
+/** Revoke possession of the ACTIVE workspace's browser (the dock Stop button —
+ *  it governs the browser you're looking at). */
 export function agentStop(): void {
-  driving = false
-  if (drivingClearTimer) clearTimeout(drivingClearTimer)
-  confirmedOrigins.clear()
-  pendingConfirm = null
+  const s = wsAgent.get(activeWorkspaceId)
+  if (s) {
+    s.driving = false
+    if (s.drivingTimer) clearTimeout(s.drivingTimer)
+    s.confirmed.clear()
+    s.pendingConfirm = null
+  }
+  lastAgentAct.delete(activeWorkspaceId)
   try {
     activeWc()?.stop()
   } catch {
     /* nothing loading */
   }
   pushActivity()
+  pushPossession()
 }
 
 export function setAgentConsent(allowed: boolean, workspaceId?: string): void {
-  agentAllowed = allowed
-  if (typeof workspaceId === 'string' && workspaceId) {
-    if (workspaceId !== activeWorkspaceId) {
-      activeWorkspaceId = workspaceId
+  const wsId = typeof workspaceId === 'string' && workspaceId ? workspaceId : activeWorkspaceId
+  if (wsId) {
+    getSettingsStore()?.setSetting(kvConsent(wsId), allowed ? '1' : '')
+    if (wsId !== activeWorkspaceId) {
+      activeWorkspaceId = wsId
       pushState() // switching workspaces switches the shown browser
     }
   }
-  if (!allowed) agentStop()
-  else pushActivity()
+  if (!allowed && wsId === activeWorkspaceId) agentStop()
+  else {
+    pushActivity()
+    pushPossession()
+  }
 }
 
 export function confirmPendingActOrigin(origin: string): void {
-  if (!origin || origin !== pendingConfirm) return
-  confirmedOrigins.add(origin)
-  pendingConfirm = null
+  const s = wsa(activeWorkspaceId)
+  if (!origin || origin !== s.pendingConfirm) return
+  s.confirmed.add(origin)
+  s.pendingConfirm = null
   recordTrail({ ts: Date.now(), source: 'web', workspaceId: activeWorkspaceId, verb: 'confirm', target: origin, outcome: 'confirmed' })
   pushActivity()
+}
+
+/** Resolve the browser session an agentAct targets: an agent call carries its
+ *  pane -> its OWN workspace; a human/IPC/smoke call (no pane) acts on the
+ *  foreground workspace. */
+function sessionForCtx(ctx?: { pane?: string }): { wsId: string; profile: BrowserProfile; allowed: boolean } {
+  const wsId = ctx?.pane ? (workspaceIdForPane(ctx.pane) ?? activeWorkspaceId) : activeWorkspaceId
+  return { wsId, profile: profileForWs(wsId), allowed: consentFor(wsId) }
+}
+
+/** Materialize a workspace's guest on demand (an agent may drive a workspace
+ *  the human never opened) — ask the renderer to create it, then wait briefly. */
+async function materializeGuest(wsId: string, p: BrowserProfile): Promise<WebContents | null> {
+  let wc = guestWc(wsId, p)
+  if (wc) return wc
+  const win = getWin?.()
+  if (win && !win.isDestroyed()) win.webContents.send(BrowserChannels.materialize, { workspaceId: wsId })
+  for (let i = 0; i < 40 && !wc; i++) {
+    await new Promise((r) => setTimeout(r, 100))
+    wc = guestWc(wsId, p)
+  }
+  return wc
 }
 
 const SNAPSHOT_JS = `(() => {
@@ -320,31 +401,34 @@ const byRef = (ref: string): string =>
 
 const ACT_VERBS: readonly BrowserAgentVerbName[] = ['navigate', 'click', 'type', 'select', 'eval']
 
-function gateAct(v: BrowserAgentVerb, wc: WebContents): BrowserAgentResult | null {
-  if (profile !== 'agent-web' || !ACT_VERBS.includes(v.verb)) return null
+function gateAct(v: BrowserAgentVerb, wc: WebContents, wsId: string, prof: BrowserProfile): BrowserAgentResult | null {
+  if (prof !== 'agent-web' || !ACT_VERBS.includes(v.verb)) return null
   const origin = v.verb === 'navigate' ? originOf(normalizeUrl(String(v.target ?? '')) ?? '') : originOf(wc.getURL())
+  const s = wsa(wsId)
   const refuse = (outcome: 'refused', reason: string): BrowserAgentResult => {
-    recordTrail({ ts: Date.now(), source: 'web', workspaceId: activeWorkspaceId, verb: v.verb, target: origin || '(no origin)', outcome, reason })
+    recordTrail({ ts: Date.now(), source: 'web', workspaceId: wsId, verb: v.verb, target: origin || '(no origin)', outcome, reason })
     return { ok: false, reason }
   }
   if (!origin) return refuse('refused', v.verb === 'navigate' ? 'badtarget' : 'no page to act on')
   if (isBlockedActOrigin(origin)) return refuse('refused', `blocked origin ${origin} — sensitive origins never accept act grants`)
-  const grant = getIntegrationsGrant(activeWorkspaceId)
+  const grant = getIntegrationsGrant(wsId)
   if (grant.web !== 'signed-in' || !grant.actOrigins.includes(origin)) {
     return refuse('refused', `ungranted origin ${origin} — acting on a signed-in site needs this workspace's grant (the human adds it under Sites & grants)`)
   }
-  if (!confirmedOrigins.has(origin)) {
-    pendingConfirm = origin
-    pushActivity()
+  if (!s.confirmed.has(origin)) {
+    s.pendingConfirm = origin
+    if (wsId === activeWorkspaceId) pushActivity()
     return refuse('refused', `awaiting the human's allow for ${origin} this session (the dock banner) — retry after they confirm`)
   }
-  recordTrail({ ts: Date.now(), source: 'web', workspaceId: activeWorkspaceId, verb: v.verb, target: origin, outcome: 'ok' })
+  recordTrail({ ts: Date.now(), source: 'web', workspaceId: wsId, verb: v.verb, target: origin, outcome: 'ok' })
   return null
 }
 
-export async function agentAct(v: BrowserAgentVerb): Promise<BrowserAgentResult> {
-  if (!agentAllowed) return { ok: false, reason: 'disabled' }
-  const wc = activeWc()
+export async function agentAct(v: BrowserAgentVerb, ctx?: { pane?: string }): Promise<BrowserAgentResult> {
+  const sess = sessionForCtx(ctx)
+  if (!sess.allowed) return { ok: false, reason: 'disabled' }
+  let wc = guestWc(sess.wsId, sess.profile)
+  if (!wc) wc = await materializeGuest(sess.wsId, sess.profile) // an agent may drive a workspace the human never opened
   if (!wc) return { ok: false, reason: 'noview' }
   const run = (js: string): Promise<unknown> => wc.executeJavaScript(js, true)
   const refVerbs: BrowserAgentVerbName[] = ['click', 'type', 'select', 'wait_for']
@@ -357,20 +441,27 @@ export async function agentAct(v: BrowserAgentVerb): Promise<BrowserAgentResult>
       /* unparseable — record nothing */
     }
   }
-  markDriving(v.verb, trailTarget)
-  const refusal = gateAct(v, wc)
+  markDriving(sess.wsId, v.verb, trailTarget)
+  const refusal = gateAct(v, wc, sess.wsId, sess.profile)
   if (refusal) return refusal
   const ring = bufs.get(wc.id) ?? { console: [], net: [] }
   try {
     switch (v.verb) {
       case 'navigate': {
-        const ok = browserDriver.navigate(String(v.target ?? ''))
-        return ok ? { ok: true } : { ok: false, reason: 'badtarget' }
+        // Navigate THIS agent's guest (not the foreground one).
+        const url = normalizeUrl(String(v.target ?? ''))
+        if (!url) return { ok: false, reason: 'badtarget' }
+        void wc.loadURL(url)
+        return { ok: true }
       }
       case 'back':
+        if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack()
+        return { ok: true }
       case 'forward':
+        if (wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward()
+        return { ok: true }
       case 'reload':
-        browserDriver.nav(v.verb)
+        wc.reload()
         return { ok: true }
       case 'snapshot': {
         const snap = (await run(SNAPSHOT_JS)) as { nodes: BrowserSnapshotNode[]; text: string; url: string; title: string }
@@ -478,7 +569,26 @@ export function agentControlDebug(): {
   pendingConfirm: string | null
   agentWebPersists: boolean
 } {
-  return { allowed: agentAllowed, driving, trail: trail.slice(), profile, pendingConfirm, agentWebPersists }
+  // The ACTIVE workspace's possession (the browser you see).
+  const s = wsAgent.get(activeWorkspaceId)
+  return {
+    allowed: consentFor(activeWorkspaceId),
+    driving: s?.driving ?? false,
+    trail: (s?.recent ?? []).slice(),
+    profile,
+    pendingConfirm: s?.pendingConfirm ?? null,
+    agentWebPersists
+  }
+}
+
+/** Smoke-only (8/07c): the per-workspace possession snapshot — is an agent
+ *  attached to / driving a NON-foreground workspace's browser. */
+export function agentPossessionDebug(): { attached: string[]; driving: string[] } {
+  const attached: string[] = []
+  const driving: string[] = []
+  for (const [wsId, s] of wsAgent) if (s.driving) driving.push(wsId)
+  for (const wsId of lastAgentAct.keys()) if (agentAttached(wsId)) attached.push(wsId)
+  return { attached, driving }
 }
 
 export function dockPageEval(js: string): Promise<unknown> | null {
@@ -573,7 +683,6 @@ export function registerBrowserDock(winGetter: () => BrowserWindow | null): void
   })
 
   // ── Agent control (6/05b) ─────────────────────────────────────────────────
-  const kvConsent = (wsId: string): string => `browser.agentControl.${wsId}`
   ipcMain.handle(BrowserChannels.consentGet, (_e, wsId: string) => store()?.getSetting(kvConsent(String(wsId))) === '1')
   ipcMain.handle(BrowserChannels.consentSet, (_e, p: { workspaceId: string; allowed: boolean }) => {
     store()?.setSetting(kvConsent(String(p?.workspaceId)), p?.allowed ? '1' : '')

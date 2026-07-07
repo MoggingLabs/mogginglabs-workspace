@@ -162,7 +162,7 @@ export function startMcpEndpoint(): void {
         const line = buf.slice(0, i)
         buf = buf.slice(i + 1)
         if (!line) continue
-        let msg: { t?: string; token?: string; id?: number; name?: string; args?: Record<string, unknown> }
+        let msg: { t?: string; token?: string; id?: number; name?: string; args?: Record<string, unknown>; pane?: string }
         try {
           msg = JSON.parse(line)
         } catch {
@@ -244,7 +244,9 @@ export function startMcpEndpoint(): void {
             sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: 'unknown-tool' }) + '\n')
             continue
           }
-          void agentAct(verb).then((r) => {
+          // 8/07c: carry the calling pane so the browser verb drives the
+          // AGENT'S OWN workspace's browser, not whatever's in the foreground.
+          void agentAct(verb, { pane: typeof msg.pane === 'string' ? msg.pane : undefined }).then((r) => {
             sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n')
           })
         }

@@ -40,10 +40,25 @@ dock. Three commits, each superseding the last as the fix got proper:
 DEFAULT external browser (the CLI's own `mcp login`); an in-dock routing was
 prototyped (`mogging browse`) and reverted at the founder's call.
 
+4. **Per-workspace AGENT browser control (8/07c — the founder caught the
+   gap)**: with per-workspace browsers, "leave an agent working in workspace
+   A and switch to B" needed the agent path to be per-workspace too. Now each
+   agent's browser tools carry its pane -> resolve its OWN workspace, and
+   drive THAT workspace's browser gated by THAT workspace's consent/grant —
+   never the foreground one (closing a real cross-workspace hole: an agent
+   could previously act on whatever workspace was in front). The agent's
+   workspace browser is materialized on demand (even if never opened),
+   pinned from LRU eviction while the agent is attached (5-min window), and
+   its tab shows a possession dot (pulsing while driving) — visible
+   possession, now across workspaces. New PERWSAGENT gate proves it: agent
+   in A drives A's browser while B is foreground, B untouched, A pinned +
+   tab-marked, ungranted origin still refused.
+
 **Gates**: BROWSER (lockstep) · BROWSERCTL · AGENTWEB · WEBTRAIL · PRODUCT ·
-PERCEPTION/FLICKER/MILESTONE all green; new PERWS gate green. The heavier
-webview gates MISS under back-to-back contention and pass isolated (the
-standing marathon lesson). Sweep 41 → **42** (PERWS).
+PERCEPTION/FLICKER/MILESTONE all green; new PERWS + PERWSAGENT gates green.
+The heavier webview gates MISS under back-to-back contention and pass
+isolated (the standing marathon lesson). Sweep 41 → **43** (PERWS +
+PERWSAGENT).
 
 ## 01 — ADR 0008 + the integrations contracts (2026-07-06)
 

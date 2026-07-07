@@ -117,7 +117,9 @@ export const BrowserChannels = {
   // still drive it (agent control, screenshots, cookies) via webContents.fromId.
   guest: 'browser:guest', // renderer -> main: { profile, id } — a guest webview became ready (its webContents id)
   guestGone: 'browser:guestGone', // renderer -> main: { profile } — a guest webview was destroyed (recreate/agent-web reset)
-  recreateGuest: 'browser:recreateGuest', // main -> renderer: { profile } — tear down + recreate that profile's webview (smoke persistence arm)
+  recreateGuest: 'browser:recreateGuest', // main -> renderer: { workspaceId, profile } — tear down + recreate that guest (smoke persistence arm)
+  materialize: 'browser:materialize', // main -> renderer: { workspaceId } — create a workspace's guests on demand (an agent drives a workspace the human never opened, 8/07c)
+  possession: 'browser:possession', // main -> renderer: { attached: string[], driving: string[] } — workspaces an agent is attached to / driving (pin from eviction + tab indicator)
   persistWidth: 'browser:persistWidth', // renderer -> main: { dockWidth } — persist the dock width (debounced by the renderer)
   state: 'browser:state', // main -> renderer: BrowserDockState (header truth)
   lastUrl: 'browser:lastUrl', // (workspaceId) -> string | null ("open this workspace's preview" chip)

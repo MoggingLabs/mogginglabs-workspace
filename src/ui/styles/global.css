@@ -939,6 +939,23 @@ button {
     border-color var(--dur-1) var(--ease),
     box-shadow var(--dur-1) var(--ease);
 }
+/* Visible possession across workspaces (8/07c): a small globe dot marks a tab
+   whose browser an agent is attached to; it pulses while the agent is driving.
+   You always see which workspaces have an agent at the wheel, even from afar. */
+.workspace-tab.is-agent-browsing::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg-app);
+}
+.workspace-tab.is-agent-driving::after {
+  animation: ws-attention-pulse 1.6s ease-in-out infinite;
+}
 .workspace-tab:hover {
   background: var(--ws-tint-hover);
 }

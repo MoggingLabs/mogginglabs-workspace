@@ -55,14 +55,21 @@ export function setIntegrationsGrant(grant: WorkspaceIntegrationsGrant): Workspa
  *  (ordinal*100+slot, the house convention); an unresolvable pane fails
  *  CLOSED: no workspace, no write tools. */
 export function resolveGrantedWriteTools(pane: string): { workspaceId?: string; writeTools: string[] } {
+  const wsId = workspaceIdForPane(pane)
+  if (!wsId) return { writeTools: [] }
+  return { workspaceId: wsId, writeTools: grantedWriteToolNames(getIntegrationsGrant(wsId)) }
+}
+
+/** The workspace a pane belongs to (ordinal*100+slot, the house convention).
+ *  Undefined when unresolvable — callers fail CLOSED. Used to route an agent's
+ *  browser control to its OWN workspace's browser (8/07c). */
+export function workspaceIdForPane(pane: string): string | undefined {
   const paneNum = Number(pane)
-  if (!Number.isInteger(paneNum) || paneNum <= 0) return { writeTools: [] } // slots start at 1; garbage fails closed
+  if (!Number.isInteger(paneNum) || paneNum <= 0) return undefined // slots start at 1
   const ordinal = Math.floor(paneNum / 100) // the FIRST workspace's ordinal is 0
-  const ws = getSettingsStore()
+  return getSettingsStore()
     ?.load()
-    ?.workspaces.find((w) => w.ordinal === ordinal)
-  if (!ws) return { writeTools: [] }
-  return { workspaceId: ws.id, writeTools: grantedWriteToolNames(getIntegrationsGrant(ws.id)) }
+    ?.workspaces.find((w) => w.ordinal === ordinal)?.id
 }
 
 export function registerIntegrations(getWin: () => BrowserWindow | null): void {
