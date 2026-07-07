@@ -195,7 +195,7 @@ export function runWebTrailSmoke(win: BrowserWindow): void {
       // ── (h) the viewer renders the entries ────────────────────────────────
       await ES(`(document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click(), 1)`)
       await sleep(600)
-      await ES(`document.querySelector('.settings-section[data-section="integrations"]')?.scrollIntoView({ block: 'start' })`)
+      await ES(`document.querySelector('.settings-nav-item[data-target="integrations"]')?.click()`) // each tab is its own page (8) — select it
       await ES(`(document.querySelector('.trail-activity .trail-btn')?.click(), 1)`) // Refresh (repopulates the ws filter)
       await sleep(600)
       // Filter to THIS workspace (the ring-seed workspace would flood the top).

@@ -3,6 +3,7 @@ import { ProfileChannels, UsageChannels, USAGE_DISPLAY_DEFAULTS, type AgentProfi
 import { getBridge } from '../../core/ipc/bridge'
 import { el, icon, showToast } from '../../components'
 import { setActiveView } from '../../core/shell/view-port'
+import { requestSettingsTab } from '../../core/shell/settings-tab-port'
 import { switchActiveProfile } from '../../core/agents/profile-switch'
 import { getTelemetry } from '../../core/telemetry'
 
@@ -272,10 +273,8 @@ export const usageFeature: UiFeature = {
       const gearBtn = el('button', { class: 'icon-btn usage-gear', type: 'button', ariaLabel: 'Usage settings', title: 'Usage settings' }, [icon('sliders', 13)])
       gearBtn.addEventListener('click', () => {
         close()
+        requestSettingsTab('usage') // deep-link: open Settings on its own Usage page
         setActiveView('settings')
-        requestAnimationFrame(() => {
-          document.querySelector('.settings-section[data-section="usage"]')?.scrollIntoView({ block: 'start' })
-        })
       })
       // The one-line post-switch hint: pointers flipped for NEW launches only.
       if (switchHint) pop.append(el('div', { class: 'usage-switch-hint', text: switchHint }))

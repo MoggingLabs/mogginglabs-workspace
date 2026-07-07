@@ -8,6 +8,7 @@ import { setCommands } from '../../core/commands/command-port'
 import { getBridge } from '../../core/ipc/bridge'
 import { getTelemetry } from '../../core/telemetry'
 import { activeView, goBack, onViewChange, setActiveView } from '../../core/shell/view-port'
+import { takeRequestedSettingsTab } from '../../core/shell/settings-tab-port'
 import { setTerminalFontSize, terminalFontSize, TERMINAL_FONT_SIZES } from '../../core/terminal/font-port'
 import { TEMPLATE_COUNTS } from '../layout'
 import { createProfilesHostsSection } from './profiles-hosts'
@@ -32,14 +33,16 @@ function setPref(key: string, value: string): void {
 }
 
 /**
- * Settings — a FULL-APP page (Phase-5/05, was a modal): left section nav
- * (Appearance · Terminal · Profiles & Hosts · Privacy · About) over a scrollable
- * content column. Theme, default wizard layout, and telemetry CONSENT
- * (observability/00, ADR 0005) — two independent opt-in toggles persisted
- * main-side over IPC; granting or revoking re-initializes the adapters live.
- * BYO-auth is stated, not configured: there are deliberately no credential fields
- * anywhere in this app (ADR 0002). The page DOM is built ONCE at mount — unsaved
- * form text survives leaving and returning within a session.
+ * Settings — a FULL-APP page (Phase-5/05, was a modal): a left TAB rail
+ * (Appearance · Terminal · Profiles & Hosts · Usage · Integrations · Privacy ·
+ * Browser · About) where each tab is its OWN page — selecting one shows only
+ * that section and hides the rest (not stacked sections on one scroll). Theme,
+ * default wizard layout, and telemetry CONSENT (observability/00, ADR 0005) —
+ * independent opt-in toggles persisted main-side over IPC; granting or revoking
+ * re-initializes the adapters live. BYO-auth is stated, not configured: there
+ * are deliberately no credential fields anywhere in this app (ADR 0002). The
+ * page DOM is built ONCE at mount and tabs HIDE (never rebuild), so unsaved form
+ * text survives tab switches and leave/return; the last-open tab is remembered.
  */
 export const settingsFeature: UiFeature = {
   name: 'settings',
@@ -249,6 +252,11 @@ export const settingsFeature: UiFeature = {
 
     const contentCol = el('div', { class: 'settings-content' }, sections.map((s) => s.el))
 
+    // Each tab is its OWN page (not stacked sections): selecting one shows only
+    // that section and hides the rest. The DOM is still built once, so hiding
+    // (not removing) preserves unsaved form text across tab switches and
+    // leave/return. The last-open tab is remembered per install.
+    const SETTINGS_TAB_KEY = 'mogging.settingsTab'
     const navItems = sections.map((s) =>
       el(
         'button',
@@ -256,15 +264,19 @@ export const settingsFeature: UiFeature = {
           class: 'settings-nav-item',
           type: 'button',
           dataset: { target: s.id },
-          onClick: () => {
-            s.el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-            for (const b of navItems) b.classList.toggle('is-active', b.dataset.target === s.id)
-          }
+          onClick: () => showSection(s.id)
         },
         [s.label]
       )
     )
-    navItems[0].classList.add('is-active')
+    function showSection(id: string): void {
+      const target = sections.some((s) => s.id === id) ? id : sections[0].id
+      for (const s of sections) s.el.hidden = s.id !== target
+      for (const b of navItems) b.classList.toggle('is-active', b.dataset.target === target)
+      contentCol.scrollTop = 0
+      setPref(SETTINGS_TAB_KEY, target)
+    }
+    showSection(pref(SETTINGS_TAB_KEY) ?? sections[0].id)
 
     const backBtn = Button({
       label: 'Back',
@@ -289,6 +301,8 @@ export const settingsFeature: UiFeature = {
     // never rebuilt). Esc leaves, back to wherever the user came from.
     onViewChange((v) => {
       if (v !== 'settings') return
+      const requested = takeRequestedSettingsTab() // a deep-link (e.g. the usage gear)
+      if (requested) showSection(requested)
       void pullConsent()
       if (!page.querySelector('.ph-form')) void profilesHosts.refresh()
       getTelemetry().captureEvent({ name: 'settings.opened' })
@@ -306,6 +320,7 @@ export const settingsFeature: UiFeature = {
       const w = window as unknown as { __mogging?: Record<string, unknown> }
       w.__mogging = w.__mogging ?? {}
       w.__mogging.setTheme = (id: string) => setTheme(id)
+      w.__mogging.settingsTab = (id: string) => showSection(id) // deep-link a tab (smokes/gallery)
       w.__mogging.setTerminalFontSize = (n: number) => (setTerminalFontSize(n), fontSeg.setValue(String(n)))
       w.__mogging.iconSheet = () => {
         const id = 'mogging-icon-sheet'

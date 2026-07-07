@@ -1796,7 +1796,11 @@ body.resizing * {
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
-  scroll-margin-top: var(--sp-2);
+}
+/* Each tab is its own page: the inactive sections are hidden outright (the
+   class rule above would otherwise beat the UA [hidden]=display:none). */
+.settings-section[hidden] {
+  display: none;
 }
 .settings-about {
   display: flex;

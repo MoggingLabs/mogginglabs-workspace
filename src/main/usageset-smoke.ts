@@ -47,7 +47,7 @@ export function runUsageSetSmoke(win: BrowserWindow): void {
       // Open Settings and land on § Usage.
       await ES(`(document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click(), 1)`)
       await sleep(400)
-      await ES(`document.querySelector('.settings-section[data-section="usage"]')?.scrollIntoView({ block: 'start' })`)
+      await ES(`document.querySelector('.settings-nav-item[data-target="usage"]')?.click()`) // each tab is its own page (8) — select it
       tries = 0
       while ((await ES<number>(`document.querySelectorAll('.usage-class-group').length`)) < 5 && tries++ < 40) await sleep(200)
 
