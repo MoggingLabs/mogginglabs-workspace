@@ -30,6 +30,7 @@ import { runVaultKeysSmoke } from './vaultkeys-smoke'
 import { runWsCloseSmoke } from './wsclose-smoke'
 import { runKbShortcutsSmoke } from './kbshortcuts-smoke'
 import { runToolPlanSmoke } from './toolplan-smoke'
+import { runIntegSmoke } from './integ-smoke'
 import { runEvBridgeSmoke } from './evbridge-smoke'
 import { runMcpStatusSmoke } from './mcpstatus-smoke'
 import { runWebTrailSmoke } from './webtrail-smoke'
@@ -40,6 +41,7 @@ import { registerEventBridge } from './event-bridge'
 import { registerTrail } from './trail'
 import { registerMcpManager } from './mcp-manager'
 import { registerMcpStatus } from './mcp-status'
+import { registerServices } from './services'
 import { runAgentSmoke } from './agent-smoke'
 import { runStateSmoke } from './state-smoke'
 import { runReloadSmoke } from './reload-smoke'
@@ -138,6 +140,10 @@ app.whenReady().then(async () => {
 
   // Windowless tool-plan smoke (8/09): pure materialization + a CLI shim + a
   // real git repo — no daemon, no window.
+  if (process.env.MOGGING_INTEG) {
+    await runIntegSmoke()
+    return
+  }
   if (process.env.MOGGING_TOOLPLAN) {
     await runToolPlanSmoke()
     return
@@ -183,6 +189,7 @@ app.whenReady().then(async () => {
   registerTrail() // the agent activity trail: local store + viewer IPC (8/05)
   registerMcpManager() // MCP manager: registry + per-CLI config writers (8/06)
   registerMcpStatus(() => win) // MCP connection-status poller: pushed per-(server×cli) grid (8/11)
+  registerServices(() => win) // service links: board card <-> GitHub PR/issue, live via gh (8/12)
   startMcpEndpoint() // agent-control transport: the MCP server reaches the dock + grant wire here (6/05b, 8/03)
   registerAgents() // agent launcher: detect installed CLIs + build launch commands (Phase-1/06)
   registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)

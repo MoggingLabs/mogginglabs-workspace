@@ -3,13 +3,17 @@ import {
   AgentChannels,
   BoardChannels,
   GitChannels,
+  IntegrationsChannels,
+  SERVICE_LINK_CADENCE_DEFAULT,
   TerminalChannels,
   WorktreeChannels,
   type AgentInfo,
   type BoardCard,
   type BoardLane,
   type CreateWorktreeResult,
-  type PaneId
+  type LinkStatus,
+  type PaneId,
+  type ServiceLink
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { activeView, onViewChange, setActiveView } from '../../core/shell/view-port'
@@ -47,6 +51,9 @@ export const boardFeature: UiFeature = {
     const bridge = getBridge()
     let cards: BoardCard[] = []
     let roster: AgentInfo[] = []
+    // Service links (8/12): a card <-> a GitHub PR/issue, live via gh.
+    let linkSnapshot: { statuses: LinkStatus[]; at: number } = { statuses: [], at: 0 }
+    const linksByCard = new Map<string, ServiceLink>()
 
     const root = el('div', {})
     root.id = 'view-board'
@@ -55,7 +62,73 @@ export const boardFeature: UiFeature = {
     // ── persistence (main-owned sqlite; the ONLY home of card text) ──────────
     const load = async (): Promise<void> => {
       cards = ((await bridge.invoke(BoardChannels.list)) as BoardCard[]) ?? []
+      linksByCard.clear()
+      await Promise.all(
+        cards.map(async (c) => {
+          const l = (await bridge.invoke(IntegrationsChannels.linkGet, c.id)) as ServiceLink | null
+          if (l) linksByCard.set(c.id, l)
+        })
+      )
+      linkSnapshot = ((await bridge.invoke(IntegrationsChannels.linkStatusGet)) as typeof linkSnapshot) ?? linkSnapshot
       render()
+    }
+    // Live status push (8/12) repaints the chips — never a re-fetch.
+    bridge.on(IntegrationsChannels.linkStatusChanged, (snap) => {
+      linkSnapshot = (snap as typeof linkSnapshot) ?? linkSnapshot
+      render()
+    })
+
+    // "as of {age}" — the ONE relative formatter.
+    const fmtAge = (ts: number): string => {
+      const s = Math.max(0, Math.round((Date.now() - ts) / 1000))
+      if (s < 60) return `${s}s ago`
+      if (s < 3600) return `${Math.round(s / 60)}m ago`
+      return `${Math.round(s / 3600)}h ago`
+    }
+
+    const GLYPH: Record<string, string> = { open: '◌', draft: '◍', merged: '✔', closed: '✕' }
+    /** The card-face status chip (state glyph + checks; stale dims). */
+    function serviceLinkChip(card: BoardCard): HTMLElement | null {
+      const link = linksByCard.get(card.id)
+      if (!link) return null
+      const st = linkSnapshot.statuses.find((s) => s.linkId === link.id)
+      const num = link.ref.split('#')[1] ?? '?'
+      if (!st) return el('span', { class: 'board-link-chip is-loading', text: `#${num} …` })
+      const checks = st.checks && st.checks !== 'none' ? ` · ${st.checks}` : ''
+      const glyph = st.state ? GLYPH[st.state] ?? '' : ''
+      const review = st.reviewDecision === 'changes-requested' ? ' ✎' : st.reviewDecision === 'approved' ? ' ✓' : ''
+      const chip = el('span', {
+        class: `board-link-chip is-${st.state ?? 'open'} health-${st.health} checks-${st.checks ?? 'none'}`,
+        text: `${glyph} #${num}${review}${checks}`
+      })
+      chip.title = `${link.ref}${st.title ? ` — ${st.title}` : ''} · ${st.health === 'stale' ? 'stale, ' : ''}as of ${fmtAge(st.fetchedAt)}${st.reason ? ` (${st.reason})` : ''}`
+      return chip
+    }
+
+    function linkCard(card: BoardCard): void {
+      const existing = linksByCard.get(card.id)
+      const input = el('input', { class: 'browser-sites-input', placeholder: 'GitHub PR/issue URL or owner/repo#123' }) as HTMLInputElement
+      if (existing) input.value = existing.ref
+      input.addEventListener('keydown', (e) => e.stopPropagation())
+      const note = el('div', { class: 'settings-error', role: 'alert', hidden: true })
+      const m = createModal({ title: 'Link GitHub PR/issue', width: 460 })
+      const saveBtn = Button({
+        label: 'Link',
+        variant: 'primary',
+        onClick: async () => {
+          const r = (await bridge.invoke(IntegrationsChannels.linkSet, { cardId: card.id, input: input.value, cadence: SERVICE_LINK_CADENCE_DEFAULT })) as { ok: boolean; reason?: string }
+          if (r.ok) {
+            m.close()
+            await load()
+          } else {
+            note.textContent = r.reason ?? 'refused'
+            note.hidden = false
+          }
+        }
+      })
+      m.setBody(el('div', { class: 'mgr-form' }, [input, el('div', { class: 'settings-row-caption', text: 'Read-only: the app observes via your own gh; it never changes the PR.' }), note]))
+      m.setFooter(el('div', { class: 'confirm-actions' }, [Button({ label: 'Cancel', variant: 'ghost', onClick: () => m.close() }), saveBtn]))
+      m.open()
     }
     const save = (card: BoardCard): void => {
       card.updatedAt = Date.now()
@@ -215,7 +288,7 @@ export const boardFeature: UiFeature = {
             menuBtn
           ]),
           ...(card.notes.trim() ? [el('p', { class: 'board-card-notes', text: card.notes })] : []),
-          el('div', { class: 'board-card-foot' }, [cardStateChip(card) ?? el('span', {}), approvedChip(card)]),
+          el('div', { class: 'board-card-foot' }, [cardStateChip(card) ?? el('span', {}), approvedChip(card), serviceLinkChip(card) ?? el('span', {})]),
           menu
         ]
       )
@@ -235,6 +308,12 @@ export const boardFeature: UiFeature = {
             }
           })
         menu.append(item('Edit…', () => edit(card, card.lane)))
+        const linked = linksByCard.get(card.id)
+        menu.append(item(linked ? 'Change GitHub link…' : 'Link GitHub PR/issue…', () => linkCard(card)))
+        if (linked) {
+          menu.append(item('Refresh link', () => void bridge.invoke(IntegrationsChannels.linkRefresh, linked.id)))
+          menu.append(item('Unlink', () => void bridge.invoke(IntegrationsChannels.linkRemove, linked.id).then(() => load())))
+        }
         for (const a of roster.filter((r) => r.installed)) {
           menu.append(item(`Start ${a.name} on this…`, () => void startOnCard(card.id, a.id)))
         }

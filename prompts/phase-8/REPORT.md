@@ -3,10 +3,49 @@
 Receipts for the integrations pack (steps 01–14), same format as
 `prompts/phase-7/REPORT.md`. Per-step mechanics live in `IMPLEMENTATION.md`
 (deviations recorded there, inline); this file keeps dated verification
-records and the finds worth remembering. Sweep count as of 8/11: **49 gates**
+records and the finds worth remembering. Sweep count as of 8/12: **50 gates**
 (35 + MCP + MCPWRITE + AGENTWEB + WEBTRAIL + MCPMGR + MCPCAT + PERWS +
 PERWSAGENT + VAULTKEYS + WSCLOSE + KBSHORTCUTS + TOOLPLAN + EVBRIDGE +
-MCPSTATUS).
+MCPSTATUS + INTEG).
+
+## 12 — the GitHub adapter: review lands back in the pane (2026-07-07)
+
+The service seam's FAKE-first implementation + its first real provider. A
+board card linked to a GitHub PR/issue shows live state — the app holding
+NO credential — and a review/merge transition lands a house notify on the
+OWNING pane (the website's sentence, literal). Read-only: agents create PRs
+with their own `gh`; the app observes and notifies.
+
+**Rides gh's own session — token never enters our process.** The adapter
+calls `gh pr/issue view --json` and lets gh authenticate; we never run `gh
+auth token`, never hold, log, or show a token (stronger than 0008.d's
+letter). Ladder: no gh → `unconfigured`; logged-out → `error` + "run: gh
+auth login"; rate-limited → the engine dims to `stale` (last good re-served),
+never a retry storm. Repo names / URLs / titles are UI-only, never telemetry.
+
+**The engine** (backend, usage-seam discipline): per-link cadence
+(manual/1m/5m/15m, default 5m), jitter, exponential backoff, paused while
+hidden; the last-good `LinkStatus` cached (stale is a STATE). A
+review/merge/close TRANSITION fires `onTransition` → main lands
+`getDaemonClient().notify(card.paneId, 'attention', "PR #123: changes
+requested")` and emits the bridge's `review-changed` (10).
+
+**FAKE-first**: every LinkStatus state has a deterministic fixture (green,
+failing, changes-requested, approved, merged, closed, draft, stale, error);
+smokes + gallery run ONLY fake, zero network. The board card ⋯ menu gains
+"Link GitHub PR/issue…" (URL or owner/repo#123), a face chip (state glyph +
+checks, token-colored, stale dims) with an "as of {age}" tooltip, and
+Refresh/Unlink.
+
+**INTEG gate** (8 asserts): link parse (URL/shorthand/reject); per-fixture
+snapshot shape; stale-after-error keeps the old fetchedAt; a review flip
+fires exactly one transition labelled `PR #123: changes requested` (and a
+first fetch is not a transition); the poller pauses hidden and resumes; unlink
+stops the poll. **Dev-verified 2026-07-07 (real gh 2.92.0)**: the adapter's
+exact call — `gh pr view 13791 --repo cli/cli --json
+state,isDraft,reviewDecision,statusCheckRollup,title` — returned
+`MERGED · REVIEW_REQUIRED · 42 checks`, normalized to `merged`/`review-
+required`/`passing`. Sweep 49 → **50** (INTEG).
 
 ## 11 — MCP connection status: know, don't assume (2026-07-07)
 

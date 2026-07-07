@@ -243,7 +243,14 @@ export const IntegrationsChannels = {
   // Phase-8/11: MCP connection status — a pushed per-(server×cli) grid.
   statusGet: 'integrations:status:get', // -> McpStatusSnapshot (last snapshot, no fetch)
   statusRefresh: 'integrations:status:refresh', // () -> void (poll now — Settings-open / after apply / on demand)
-  statusChanged: 'integrations:status:changed' // main -> renderer: McpStatusSnapshot (poller push)
+  statusChanged: 'integrations:status:changed', // main -> renderer: McpStatusSnapshot (poller push)
+  // Phase-8/12: service links (a board card <-> a GitHub PR/issue).
+  linkGet: 'integrations:link:get', // (cardId) -> ServiceLink | null
+  linkSet: 'integrations:link:set', // ({ cardId, input, cadence?, kind? }) -> { ok, reason?, link? }
+  linkRemove: 'integrations:link:remove', // (linkId) -> void
+  linkStatusGet: 'integrations:link:statusGet', // -> { statuses: LinkStatus[], at }
+  linkRefresh: 'integrations:link:refresh', // (linkId) -> void
+  linkStatusChanged: 'integrations:link:statusChanged' // main -> renderer: { statuses, at }
 } as const
 
 export const AllChannels: readonly string[] = [

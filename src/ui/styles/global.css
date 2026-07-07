@@ -2638,6 +2638,43 @@ body.resizing * {
   gap: var(--sp-2);
 }
 
+/* Board service-link chip (8/12): PR/issue live state, token-colored, stale dims. */
+.board-link-chip {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  padding: 1px 7px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--border);
+  color: var(--text-mid);
+  background: var(--bg-inset);
+  white-space: nowrap;
+}
+.board-link-chip.checks-passing {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
+}
+.board-link-chip.checks-failing {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+.board-link-chip.checks-pending {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+}
+.board-link-chip.is-merged {
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.board-link-chip.is-closed {
+  color: var(--text-lo);
+}
+.board-link-chip.health-stale {
+  opacity: 0.55;
+}
+.board-link-chip.is-loading {
+  color: var(--text-lo);
+}
+
 /* Pane MCP status chip (8/11): connected count / attention / restart nudge. */
 .pane-mcp {
   font-family: var(--font-mono);
