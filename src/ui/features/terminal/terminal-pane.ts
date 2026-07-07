@@ -20,6 +20,7 @@ import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-
 import { setPaneState, clearPaneState } from '../../core/attention/attention-port'
 import { setPaneCwd, clearPaneCwd, getPaneCwd } from '../../core/layout/pane-cwd'
 import { getPaneRole, onPaneRole, getPaneRemote, getPaneProfile } from '../../core/layout/pane-meta'
+import { clearPaneCli, mcpChipForPane, onMcpStatusChange } from '../../core/agents/mcp-status-port'
 import { claimsFor, onClaimsChange, workspaceClaims } from './claims-store'
 import { onFocusedPane } from '../../core/layout/focus'
 import { onPaneGit, getPaneGit } from '../../core/git/git-port'
@@ -72,6 +73,7 @@ export class TerminalPane {
   private focusUnsub?: () => void
   private roleUnsub?: () => void
   private claimsUnsub?: () => void
+  private mcpUnsub?: () => void
   private renameFn?: () => void
   private blocks?: BlockTracker
 
@@ -400,7 +402,26 @@ export class TerminalPane {
     }
     applyClaims()
     this.claimsUnsub = onClaimsChange(applyClaims)
-    left.append(state, role, claimsChip, title)
+    // MCP status chip (8/11): connected count for this pane's CLI; attention on
+    // needs-auth/error; a restart nudge when tools connected after launch.
+    const mcpChip = document.createElement('span')
+    mcpChip.className = 'pane-mcp'
+    mcpChip.hidden = true
+    const applyMcp = (): void => {
+      const c = mcpChipForPane(this.id)
+      if (!c || (c.connected === 0 && !c.attention && c.restartNew === 0)) {
+        mcpChip.hidden = true
+        return
+      }
+      mcpChip.hidden = false
+      mcpChip.classList.toggle('is-attention', c.attention)
+      mcpChip.classList.toggle('is-restart', c.restartNew > 0)
+      mcpChip.textContent = c.restartNew > 0 ? `restart +${c.restartNew}` : c.attention ? `mcp !` : `mcp ${c.connected}`
+      mcpChip.title = c.restartNew > 0 ? `Restart to pick up ${c.restartNew} new tool${c.restartNew === 1 ? '' : 's'}` : c.attention ? 'A tool needs re-authorization (Settings › MCP servers)' : `${c.connected} MCP tools connected`
+    }
+    applyMcp()
+    this.mcpUnsub = onMcpStatusChange(applyMcp)
+    left.append(state, role, claimsChip, mcpChip, title)
 
     // Center: branch chip — a branch icon + name (soft chip, like the reference bar).
     const git = document.createElement('span')
@@ -750,6 +771,8 @@ export class TerminalPane {
     this.focusUnsub?.()
     this.roleUnsub?.()
     this.claimsUnsub?.()
+    this.mcpUnsub?.()
+    clearPaneCli(this.id)
     this.visObs?.disconnect()
     this.releaseWebgl()
     this.resizeObs.disconnect()

@@ -3,9 +3,49 @@
 Receipts for the integrations pack (steps 01–14), same format as
 `prompts/phase-7/REPORT.md`. Per-step mechanics live in `IMPLEMENTATION.md`
 (deviations recorded there, inline); this file keeps dated verification
-records and the finds worth remembering. Sweep count as of 8/10: **48 gates**
+records and the finds worth remembering. Sweep count as of 8/11: **49 gates**
 (35 + MCP + MCPWRITE + AGENTWEB + WEBTRAIL + MCPMGR + MCPCAT + PERWS +
-PERWSAGENT + VAULTKEYS + WSCLOSE + KBSHORTCUTS + TOOLPLAN + EVBRIDGE).
+PERWSAGENT + VAULTKEYS + WSCLOSE + KBSHORTCUTS + TOOLPLAN + EVBRIDGE +
+MCPSTATUS).
+
+## 11 — MCP connection status: know, don't assume (2026-07-07)
+
+Is each connected tool actually LIVE for each CLI — and does the terminal
+reflect it? 06/07 observed one-shot; 11 makes connection state a
+continuously-known, PUSHED signal (registered → connected → needs-auth →
+error → drift), surfaced where the user works, with one-click repair.
+OBSERVATION only — the CLIs' own status output + our config hashes, never a
+token store, a vendor endpoint, or a TUI scrape.
+
+**The derivation** (`status.ts`, pure): compose our apply/drift verdict
+(06's `mgrStatus`) with the CLI's OWN `mcp list` parsed per server (07's
+`parseCliMcpList`). not-applied → registered; drift verdict → drift; applied
++ the CLI lists it → connected; applied + "Needs authentication" →
+needs-auth; applied but absent from the list → error; not installed → off.
+No new source of truth, no probing.
+
+**The poller** — the usage-seam discipline: jittered 15m cadence (spread by
+pid), refresh on Settings-open / after apply / on demand, PAUSED while
+hidden (the tick no-ops), snapshot pushed over IPC. Runs each installed
+CLI's `mcp list` ONCE and parses per server. States + counts are the whole
+vocabulary that leaves the poller.
+
+**Propagated to the terminal**: a quiet pane-header chip (`mcp N`) per the
+pane's CLI, flipping to `mcp !` on needs-auth/error and to `restart +N` when
+tools connected AFTER the pane launched (MCP configs are read at launch) —
+one restart via the existing relaunch. The settings grid shows live
+connection state on each server×CLI chip; `needs-auth` renders a
+Re-authorize that opens the CLI's OWN auth in a pane — never an auto-spawned
+browser (the consent is the user's to give).
+
+**MCPSTATUS gate** (7 asserts a–g green): the five states derive exactly
+from the CLI's own lines; the connected count aggregates; a refresh produces
+a snapshot; a HIDDEN window pauses the tick (no fresh snapshot) and a visible
+one resumes; and the snapshot's JSON carries no URL, tool name, or token —
+states + ids only. **Dev-verify honesty**: the gate exercises the derivation
++ poller headlessly (the states come from real CLI-list strings); a live
+Claude Code + one OAuth server flipping needs-auth on revoke is the
+founder-run confirmation. Sweep 48 → **49** (MCPSTATUS).
 
 ## 10 — the event bridge: house events → your webhooks (2026-07-07)
 

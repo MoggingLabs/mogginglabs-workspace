@@ -280,6 +280,16 @@ const CLI_BIN: Record<HostedCliId, string> = { 'claude-code': 'claude', codex: '
 
 /** One-shot status read-back from the CLI's OWN list output (presence only;
  *  the live registry/poller is 8/11's). Never reads a token store. */
+/** Run the CLI's OWN `mcp list` ONCE and return raw stdout (or null on hard
+ *  failure) — the poller parses it per server (11). Never a token store. */
+export function cliMcpListRaw(cli: HostedCliId): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(CLI_BIN[cli], ['mcp', 'list'], { timeout: 30000, windowsHide: true, shell: process.platform === 'win32' }, (err, stdout) => {
+      resolve(err && !String(stdout) ? null : String(stdout))
+    })
+  })
+}
+
 export function catAuthStatus(serverId: string, cli: HostedCliId): Promise<string> {
   return new Promise((resolve) => {
     execFile(

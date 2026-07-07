@@ -1,6 +1,9 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { IntegrationsChannels, ProfileChannels, TerminalChannels, planSignature, type AgentInfo, type AgentProfile, type PaneId, type WorkspaceToolPlan } from '@contracts'
+import { IntegrationsChannels, ProfileChannels, TerminalChannels, planSignature, type AgentInfo, type AgentProfile, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
 import { recordPaneLaunch } from '../../core/agents/toolplan-panes'
+import { recordPaneCli, setMcpSnapshot } from '../../core/agents/mcp-status-port'
+
+const PROVIDER_CLI: Record<string, HostedCliId | undefined> = { claude: 'claude-code', codex: 'codex', gemini: 'gemini' }
 import { getBridge } from '../../core/ipc/bridge'
 import { getFocusedPane } from '../../core/layout/focus'
 import { setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
@@ -27,6 +30,9 @@ import { agentsClient } from './agents.client'
 export const agentsFeature: UiFeature = {
   name: 'agents',
   mount() {
+    // MCP status push (8/11): keep the pane-header chip port fed + seed it.
+    getBridge().on(IntegrationsChannels.statusChanged, (p) => setMcpSnapshot(p as McpStatusSnapshot))
+    void (getBridge().invoke(IntegrationsChannels.statusGet) as Promise<McpStatusSnapshot>).then((s) => s && setMcpSnapshot(s))
     const nameById = new Map<string, string>()
     let installedIds: string[] = []
     /** What launched in each pane — the failover context. Values are ids only. */
@@ -150,6 +156,10 @@ export const agentsFeature: UiFeature = {
           .catch(() => undefined)
       }
       lastLaunch.set(paneId, { provider, cwd, profileId: effectiveProfile })
+      // Propagate MCP status to this pane's header (8/11): record its CLI +
+      // the connected count it launched with (for the restart nudge).
+      const cli = PROVIDER_CLI[provider]
+      if (cli) recordPaneCli(paneId, cli)
       // Pane-meta carries the profile NAME only (⋯ menu note, 6/04) — never env.
       // A deleted/unknown id resolves to no name: the note simply disappears.
       setPaneProfile(paneId as PaneId, mine.find((p) => p.id === effectiveProfile)?.name)

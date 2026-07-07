@@ -239,7 +239,11 @@ export const IntegrationsChannels = {
   webhookSave: 'integrations:webhook:save', // ({ id?, label, url?, envRef?, events, workspaceId?, insecureAck }) -> { ok, reason? }
   webhookRemove: 'integrations:webhook:remove', // (id) -> void
   webhookTest: 'integrations:webhook:test', // (id) -> void (fires a fixture 'notify' event at that webhook)
-  webhookHealthChanged: 'integrations:webhook:health' // main -> renderer: WebhookView[] (health chip updates)
+  webhookHealthChanged: 'integrations:webhook:health', // main -> renderer: WebhookView[] (health chip updates)
+  // Phase-8/11: MCP connection status — a pushed per-(server×cli) grid.
+  statusGet: 'integrations:status:get', // -> McpStatusSnapshot (last snapshot, no fetch)
+  statusRefresh: 'integrations:status:refresh', // () -> void (poll now — Settings-open / after apply / on demand)
+  statusChanged: 'integrations:status:changed' // main -> renderer: McpStatusSnapshot (poller push)
 } as const
 
 export const AllChannels: readonly string[] = [

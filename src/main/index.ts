@@ -31,6 +31,7 @@ import { runWsCloseSmoke } from './wsclose-smoke'
 import { runKbShortcutsSmoke } from './kbshortcuts-smoke'
 import { runToolPlanSmoke } from './toolplan-smoke'
 import { runEvBridgeSmoke } from './evbridge-smoke'
+import { runMcpStatusSmoke } from './mcpstatus-smoke'
 import { runWebTrailSmoke } from './webtrail-smoke'
 import { runMcpMgrSmoke } from './mcpmgr-smoke'
 import { runMcpCatSmoke } from './mcpcat-smoke'
@@ -38,6 +39,7 @@ import { registerIntegrations } from './integrations'
 import { registerEventBridge } from './event-bridge'
 import { registerTrail } from './trail'
 import { registerMcpManager } from './mcp-manager'
+import { registerMcpStatus } from './mcp-status'
 import { runAgentSmoke } from './agent-smoke'
 import { runStateSmoke } from './state-smoke'
 import { runReloadSmoke } from './reload-smoke'
@@ -149,6 +151,10 @@ app.whenReady().then(async () => {
     await runEvBridgeSmoke()
     return
   }
+  if (process.env.MOGGING_MCPSTATUS) {
+    await runMcpStatusSmoke()
+    return
+  }
 
   initMainTelemetry(() => win) // observability next, so early errors are captured (opt-in, ADR 0005)
 
@@ -176,6 +182,7 @@ app.whenReady().then(async () => {
   registerEventBridge(() => win) // outbound event bridge: house events -> user webhooks (8/10)
   registerTrail() // the agent activity trail: local store + viewer IPC (8/05)
   registerMcpManager() // MCP manager: registry + per-CLI config writers (8/06)
+  registerMcpStatus(() => win) // MCP connection-status poller: pushed per-(server×cli) grid (8/11)
   startMcpEndpoint() // agent-control transport: the MCP server reaches the dock + grant wire here (6/05b, 8/03)
   registerAgents() // agent launcher: detect installed CLIs + build launch commands (Phase-1/06)
   registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)

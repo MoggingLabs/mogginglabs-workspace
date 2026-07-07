@@ -2638,6 +2638,28 @@ body.resizing * {
   gap: var(--sp-2);
 }
 
+/* Pane MCP status chip (8/11): connected count / attention / restart nudge. */
+.pane-mcp {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  padding: 0 6px;
+  border-radius: var(--r-full);
+  color: var(--text-lo);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  flex: none;
+}
+.pane-mcp.is-attention {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 45%, transparent);
+}
+.pane-mcp.is-restart {
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  cursor: default;
+}
+
 /* Event bridge (8/10): webhook event checkboxes + health chip. */
 .evbridge-events {
   display: flex;
@@ -3945,6 +3967,23 @@ body.resizing * {
   border-color: var(--warning);
   color: var(--text-hi);
   background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+/* Live connection states (8/11), from the CLI's own output. */
+.mgr-chip.is-connected {
+  border-color: color-mix(in srgb, var(--success) 55%, transparent);
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+}
+.mgr-chip.is-needs-auth {
+  border-color: color-mix(in srgb, var(--warning) 60%, transparent);
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+.mgr-chip.is-error,
+.mgr-chip.is-drift {
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 .mgr-chip.is-uninstalled {
   opacity: 0.5;

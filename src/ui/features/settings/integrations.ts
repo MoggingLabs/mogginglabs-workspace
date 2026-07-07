@@ -6,6 +6,7 @@ import {
   planSignature,
   toolCellState,
   type BridgeEventName,
+  type McpStatusSnapshot,
   type WorkspaceToolPlan,
   type McpAuthKind,
   type HostedCliId,
@@ -389,20 +390,45 @@ function createServersBlock(): HTMLElement {
     'drift-missing': 'missing'
   }
 
+  const CONN_TEXT: Record<string, string> = { connected: 'connected', 'needs-auth': 'needs auth', error: 'error', drift: 'drift', registered: 'registered', off: 'not installed' }
+  // Re-authorize (11): the CLI's OWN auth, in a managed pane — never an
+  // auto-spawned browser (the consent is the user's to give).
+  function runReauthorize(cli: HostedCliId, serverId: string, cmd: string | null): void {
+    const snap = getWorkspaces()
+    const cwd = snap.workspaces.find((w) => w.id === snap.activeId)?.cwd ?? snap.workspaces[0]?.cwd ?? ''
+    if (!cwd) return void showToast({ tone: 'info', title: 'Open a workspace first', body: 'Re-authorize runs the CLI in a pane.' })
+    const opened = openWorkspaceFromTemplate({ name: `Authorize ${serverId}`.slice(0, 28), cwd, paneCount: 1, assignments: [CLI_PROVIDER[cli]] })
+    if (opened && cmd) showToast({ tone: 'info', title: 'Finish in the pane', body: `Run ${cmd.replace('<id>', serverId)} — the browser consent is the vendor's; the token stays in ${CLI_LABEL[cli]}.` })
+  }
+
   async function refresh(): Promise<void> {
     const servers = (await bridge.invoke(IntegrationsChannels.serversList, undefined)) as McpServerEntry[]
+    const snap = ((await bridge.invoke(IntegrationsChannels.statusGet)) as McpStatusSnapshot | null) ?? { statuses: [], at: 0 }
+    const conn = new Map(snap.statuses.map((s) => [`${s.serverId}:${s.cli}`, s.state]))
+    const caps = ((await bridge.invoke(IntegrationsChannels.catCapabilities)) as { cli: HostedCliId; authorizeCommand: string | null }[]) ?? []
+    void bridge.invoke(IntegrationsChannels.statusRefresh) // poll fresh on open (pushed result repaints)
     list.innerHTML = ''
     for (const server of servers) {
       const statuses = (await bridge.invoke(IntegrationsChannels.mgrStatus, server.id)) as McpCliStatus[]
       const chips = statuses.map((s) => {
+        // The pushed connection state (11) is the LIVE truth when applied.
+        const cs = conn.get(`${server.id}:${s.cli}`)
+        const live = cs && cs !== 'registered' && cs !== 'off' ? cs : null
+        const cls = live ?? s.state
+        const label = s.installed ? (live ? CONN_TEXT[live] : STATE_TEXT[s.state]) : 'not installed'
         const chip = el('button', {
-          class: `mgr-chip is-${s.state}${s.installed ? '' : ' is-uninstalled'}`,
+          class: `mgr-chip is-${cls}${s.installed ? '' : ' is-uninstalled'}`,
           type: 'button',
-          text: `${CLI_LABEL[s.cli]} · ${s.installed ? STATE_TEXT[s.state] : 'not installed'}`
+          text: `${CLI_LABEL[s.cli]} · ${label}`
         }) as HTMLButtonElement
         chip.title = s.file
-        chip.disabled = !s.installed && s.state === 'not-applied' // writer skipped; applied entries stay actionable
-        chip.onclick = (): void => void openPanel(server, s)
+        chip.disabled = !s.installed && s.state === 'not-applied'
+        if (live === 'needs-auth') {
+          const cmd = caps.find((c) => c.cli === s.cli)?.authorizeCommand ?? null
+          chip.onclick = (): void => runReauthorize(s.cli, server.id, cmd)
+        } else {
+          chip.onclick = (): void => void openPanel(server, s)
+        }
         return chip
       })
       const row = el('div', { class: 'mgr-row' }, [
@@ -508,6 +534,7 @@ function createServersBlock(): HTMLElement {
     form,
     saveNote
   ])
+  bridge.on(IntegrationsChannels.statusChanged, () => void refresh()) // 11: live status push repaints the grid
   setTimeout(() => void refresh(), 0)
   return block
 }
