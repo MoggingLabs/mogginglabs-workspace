@@ -2638,6 +2638,114 @@ body.resizing * {
   gap: var(--sp-2);
 }
 
+/* Wizard Tools row (8/09): scope a new workspace's agents to picked servers. */
+.wizard-tools-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: var(--sp-1) 0;
+}
+.wizard-tools-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.wizard-tool-chip {
+  font-size: var(--fs-12);
+  padding: 3px 10px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text-mid);
+  cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease);
+}
+.wizard-tool-chip.is-on {
+  background: var(--accent-weak);
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.wizard-tool-chip:hover {
+  border-color: var(--border-strong);
+}
+
+/* Tool-plan matrix (8/09): tools × CLIs, three cell states. */
+.toolplan-matrix {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: var(--sp-2) 0;
+  overflow-x: auto;
+}
+.toolplan-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.4fr) repeat(3, minmax(64px, 1fr));
+  gap: 6px;
+  align-items: center;
+}
+.toolplan-head {
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 2px;
+}
+.toolplan-tool {
+  font-size: var(--fs-13);
+  color: var(--text-hi);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.toolplan-cell-head {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--text-lo);
+  text-align: center;
+}
+.toolplan-cell {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 4px 0;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text-lo);
+  cursor: pointer;
+  text-align: center;
+  transition:
+    background var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease);
+}
+.toolplan-cell.is-planned {
+  background: var(--accent-weak);
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.toolplan-cell.is-global {
+  color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 40%, transparent);
+  cursor: pointer;
+}
+.toolplan-cell.is-locked {
+  cursor: default;
+  color: var(--success);
+  border-style: dashed;
+}
+.toolplan-cell:not(.is-locked):hover {
+  border-color: var(--border-strong);
+  color: var(--text-hi);
+}
+.toolplan-truth {
+  margin-top: var(--sp-2);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Loading indicator (STATE-01) for async lists. */
 .spinner {
   display: inline-block;

@@ -1,6 +1,6 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { ClipboardChannels, ProfileChannels, RemoteChannels } from '@contracts'
-import type { AgentInfo, AgentProfile, ProviderCount, ProviderMixTemplate, RecentWorkspace, RemoteHost } from '@contracts'
+import { ClipboardChannels, IntegrationsChannels, ProfileChannels, RemoteChannels } from '@contracts'
+import type { AgentInfo, AgentProfile, McpServerEntry, ProviderCount, ProviderMixTemplate, RecentWorkspace, RemoteHost } from '@contracts'
 import {
   Button,
   EmptyState,
@@ -90,6 +90,11 @@ export const wizardFeature: UiFeature = {
     let roster: AgentInfo[] = []
     let presets: ProviderMixTemplate[] = []
     let recents: RecentWorkspace[] = []
+    // Tool plan (8/09): connected (non-house) servers the user can scope this
+    // workspace to. Empty selection = house only (minimal by default). The row
+    // shows only when there ARE connected servers, so no silent scoping.
+    let pickableServers: { id: string; label: string }[] = []
+    const selectedTools = new Set<string>()
 
     const stepper = createWizardStepper(STEPS, step)
     const body = el('div', { class: 'wizard' })
@@ -134,6 +139,14 @@ export const wizardFeature: UiFeature = {
         presets = p ?? []
         if (step === 'agents') render()
       }).catch(() => (presets = []))
+      // Connected (non-house) servers -> the Tools scoping row (8/09).
+      selectedTools.clear()
+      void (getBridge().invoke(IntegrationsChannels.serversList) as Promise<McpServerEntry[]>)
+        .then((servers) => {
+          pickableServers = (servers ?? []).filter((s) => !s.builtIn).map((s) => ({ id: s.id, label: s.label }))
+          if (step === 'agents') render()
+        })
+        .catch(() => (pickableServers = []))
       void wizardClient.loadState().then((s) => {
         const openWs = (s?.workspaces ?? []).filter((w) => w.cwd)
         const closed = s?.recents ?? []
@@ -262,7 +275,10 @@ export const wizardFeature: UiFeature = {
         paneCwds: remoteHost ? undefined : paneCwds,
         roles,
         remotes: remoteHost ? Array<{ hostId: string; name: string } | null>(resolved.paneCount).fill(remoteHost) : undefined,
-        profileIds: resolved.assignments.map((a) => (a && profileByProvider.has(a) ? profileByProvider.get(a)! : null))
+        profileIds: resolved.assignments.map((a) => (a && profileByProvider.has(a) ? profileByProvider.get(a)! : null)),
+        // Scope only when there ARE connected servers to scope (else leave the
+        // CLIs' global config untouched — no silent stripping, 8/09).
+        tools: pickableServers.length ? [...selectedTools] : undefined
       })
       getTelemetry().captureEvent({
         name: 'wizard.completed',
@@ -810,11 +826,38 @@ export const wizardFeature: UiFeature = {
         })
       ])
 
+      // Tools row (8/09): scope this workspace's agents to specific servers.
+      // Only shown when there ARE connected servers — otherwise no scoping.
+      const toolsRow = el('div', { class: 'wizard-tools-row' })
+      if (pickableServers.length) {
+        toolsRow.append(el('span', { class: 'wizard-fills-label', text: 'Agent tools:' }))
+        const chips = el('div', { class: 'wizard-tools-chips' })
+        for (const s of pickableServers) {
+          const chip = el('button', {
+            class: `wizard-tool-chip${selectedTools.has(s.id) ? ' is-on' : ''}`,
+            type: 'button',
+            text: s.label,
+            ariaLabel: `Include ${s.label} in this workspace`
+          }) as HTMLButtonElement
+          chip.onclick = (): void => {
+            if (selectedTools.has(s.id)) selectedTools.delete(s.id)
+            else selectedTools.add(s.id)
+            chip.classList.toggle('is-on')
+          }
+          chips.append(chip)
+        }
+        toolsRow.append(
+          chips,
+          el('span', { class: 'wizard-isolate-hint', text: 'House server always on. Unpicked tools stay out of this workspace’s agents (edit later in Settings › Workspace tools).' })
+        )
+      }
+
       body.append(
         el('div', { class: 'wizard-fill-row' }, [meter.el, meterLabel]),
         fills,
         rows,
         swarmRow,
+        toolsRow,
         isolateRow,
         el('div', { class: 'wizard-agent-footer' }, [
           el('div', { class: 'wizard-preview-wrap' }, [

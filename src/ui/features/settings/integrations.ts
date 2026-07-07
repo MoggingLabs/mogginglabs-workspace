@@ -1,6 +1,9 @@
 import {
   AgentChannels,
   IntegrationsChannels,
+  planHasServerForCli,
+  toolCellState,
+  type WorkspaceToolPlan,
   type McpAuthKind,
   type HostedCliId,
   type McpCliStatus,
@@ -769,11 +772,122 @@ function createServiceKeysBlock(): HTMLElement {
   return block
 }
 
+// ── The tool plan: which servers reach a workspace's panes, per CLI (8/09) ───
+function createToolPlanBlock(): HTMLElement {
+  const bridge = getBridge()
+  const CLI_ORDER: HostedCliId[] = ['claude-code', 'codex', 'gemini']
+  const wsSelect = el('select', { class: 'trail-select' }) as HTMLSelectElement
+  wsSelect.setAttribute('aria-label', 'Workspace')
+  const body = el('div', { class: 'mgr-grant-body' })
+
+  const cliArrayFor = (plan: WorkspaceToolPlan, serverId: string): HostedCliId[] => {
+    const scope = plan.entries[serverId]
+    if (!scope) return []
+    return scope === 'all-clis' ? [...CLI_ORDER] : [...scope]
+  }
+
+  async function render(): Promise<void> {
+    const wsId = wsSelect.value
+    body.innerHTML = ''
+    if (!wsId) return
+    const plan = (await bridge.invoke(IntegrationsChannels.planGet, wsId)) as WorkspaceToolPlan
+    const servers = ((await bridge.invoke(IntegrationsChannels.serversList)) as McpServerEntry[]) ?? []
+    const globalFor = new Map<string, Set<HostedCliId>>()
+    for (const s of servers) {
+      const statuses = ((await bridge.invoke(IntegrationsChannels.mgrStatus, s.id)) as McpCliStatus[]) ?? []
+      globalFor.set(s.id, new Set(statuses.filter((x) => x.state === 'applied').map((x) => x.cli)))
+    }
+    const setPlan = async (next: WorkspaceToolPlan): Promise<void> => {
+      await bridge.invoke(IntegrationsChannels.planSet, next)
+      await render()
+    }
+
+    const inheritBtn = el('button', {
+      class: `trail-btn${plan.inheritGlobal ? ' is-armed' : ''}`,
+      type: 'button',
+      text: plan.inheritGlobal ? 'Inherit global (“everywhere”) tools: ON' : 'Inherit global tools: OFF — plan only'
+    }) as HTMLButtonElement
+    inheritBtn.onclick = (): void => void setPlan({ ...plan, inheritGlobal: !plan.inheritGlobal })
+    body.append(el('div', { class: 'trail-controls' }, [inheritBtn]))
+
+    const table = el('div', { class: 'toolplan-matrix' })
+    table.append(
+      el('div', { class: 'toolplan-row toolplan-head' }, [
+        el('span', { class: 'toolplan-tool', text: 'Tool' }),
+        ...CLI_ORDER.map((c) => el('span', { class: 'toolplan-cell-head', text: CLI_LABEL[c] }))
+      ])
+    )
+    for (const s of servers) {
+      const cells = CLI_ORDER.map((cli) => {
+        if (s.builtIn) return el('span', { class: 'toolplan-cell is-locked', text: 'always', title: 'The house server is always available' })
+        const state = toolCellState(plan, s.id, cli, globalFor.get(s.id)?.has(cli) ?? false)
+        const label = state === 'planned' ? 'on' : state === 'global' ? 'global' : 'off'
+        const cell = el('button', {
+          class: `toolplan-cell is-${state}`,
+          type: 'button',
+          text: label,
+          ariaLabel: `${s.label} on ${CLI_LABEL[cli]}: ${label}`,
+          title: state === 'global' ? 'Inherited from the global tier' : state === 'planned' ? 'In this workspace’s plan' : 'Not in this pane'
+        }) as HTMLButtonElement
+        cell.onclick = (): void => {
+          const arr = cliArrayFor(plan, s.id)
+          const nextArr = arr.includes(cli) ? arr.filter((c) => c !== cli) : [...arr, cli]
+          const entries = { ...plan.entries }
+          if (!nextArr.length) delete entries[s.id]
+          else entries[s.id] = nextArr.length === CLI_ORDER.length ? 'all-clis' : nextArr
+          void setPlan({ ...plan, entries })
+        }
+        return cell
+      })
+      table.append(el('div', { class: 'toolplan-row' }, [el('span', { class: 'toolplan-tool', text: s.label }), ...cells]))
+    }
+    body.append(table)
+
+    const counts = CLI_ORDER.map((cli) => {
+      const n = 1 + servers.filter((s) => !s.builtIn && planHasServerForCli(plan, s.id, cli)).length
+      return `${CLI_LABEL[cli]} ${n}`
+    })
+    body.append(
+      el('div', {
+        class: 'settings-row-caption toolplan-truth',
+        text: `Panes here launch with — ${counts.join(' · ')} — servers (house + plan${plan.inheritGlobal ? ' + global' : ''}). Restart a running pane to apply a change.`
+      })
+    )
+  }
+
+  function refreshWorkspaces(): void {
+    const current = wsSelect.value
+    wsSelect.innerHTML = ''
+    for (const w of getWorkspaces().workspaces) wsSelect.append(el('option', { value: w.id, text: w.name }))
+    wsSelect.value = current || (getWorkspaces().activeId ?? '')
+    if (!wsSelect.value && wsSelect.options.length) wsSelect.selectedIndex = 0
+  }
+  wsSelect.onchange = (): void => void render()
+  // A plan edit elsewhere (or a fresh launch) re-renders the matrix.
+  bridge.on(IntegrationsChannels.planChanged, () => void render())
+
+  const block = el('div', { class: 'trail-block mgr-grants-block' }, [
+    el('div', { class: 'settings-row-label', text: 'Workspace tools' }),
+    el('div', {
+      class: 'settings-row-caption',
+      text: 'Which registered servers reach this workspace’s panes, per CLI — so agents carry only the tools the work needs, not everything connected. The house server is always on; “global” tools are inherited only when you turn inheritance on. Scoping is context hygiene, not a permission — grants stay the boundary.'
+    }),
+    el('div', { class: 'trail-controls' }, [wsSelect]),
+    body
+  ])
+  setTimeout(() => {
+    refreshWorkspaces()
+    void render()
+  }, 0)
+  return block
+}
+
 export function createIntegrationsSection(): HTMLElement {
   return el('div', { class: 'integrations-section' }, [
     createCatalogBlock(),
     createServersBlock(),
     createServiceKeysBlock(),
+    createToolPlanBlock(),
     createGrantsBlock(),
     createActivityBlock()
   ])
