@@ -93,6 +93,13 @@ run_smoke() {
   v=$(verdict "$result")
   RESULTS+=("$name $v")
   echo "  $v"
+  # On a non-PASS, surface the smoke's own flags into the job log (artifacts
+  # don't reliably carry the per-gate result JSON) — the fastest path to a
+  # platform root cause without a second dispatch.
+  if [ "$v" != "PASS" ]; then
+    echo "  ── $result diagnostics ──"
+    node -e "try{console.log(JSON.stringify(JSON.parse(require('fs').readFileSync('out/$result-result.json','utf8')),null,0))}catch(e){console.log('(no result json)')}" 2>/dev/null | sed 's/^/  /'
+  fi
   kill_electron
   # A two-phase pair's phase A must leave its daemon+state for phase B; everything
   # else (including each pair's phase B) cleans up.

@@ -69,15 +69,25 @@ export function runIntegUxSmoke(win: BrowserWindow): void {
       await ES(`localStorage.removeItem('mogging.integux.done')`)
       await ES(`(document.querySelector('.integux-intro .integux-setup-cta')?.click(), 1)`)
       const flowShown = await waitTrue(`!!document.querySelector('.modal-overlay .integux-flow .integux-flow-tool')`)
-      const firstPreset = await ES<string>(`document.querySelector('.integux-flow-tool')?.getAttribute('data-preset') || ''`)
-      // Skip the current tool -> advances + records progress.
-      await ES(`[...document.querySelectorAll('.modal-overlay .btn')].find(b=>/^Skip$/.test(b.textContent?.trim()||''))?.click()`)
-      await sleep(400)
-      const secondPreset = await ES<string>(`document.querySelector('.integux-flow-tool')?.getAttribute('data-preset') || ''`)
-      await ES(`[...document.querySelectorAll('.modal-overlay .btn')].find(b=>/^Skip$/.test(b.textContent?.trim()||''))?.click()`)
-      await sleep(400)
-      const progressLen = await ES<number>(`(JSON.parse(localStorage.getItem('mogging.integux.done')||'[]')).length`)
-      const walkOk = flowShown && firstPreset && secondPreset && firstPreset !== secondPreset && progressLen === 2
+      const curPreset = (): Promise<string> => ES<string>(`document.querySelector('.integux-flow-tool')?.getAttribute('data-preset') || ''`)
+      const clickSkip = (): Promise<unknown> =>
+        ES(`[...document.querySelectorAll('.modal-overlay .btn')].find(b=>/^Skip$/.test(b.textContent?.trim()||''))?.click()`)
+      const firstPreset = await curPreset()
+      // Skip the current tool -> advances + records progress. The re-render is
+      // async; POLL until the tool actually changes (CI is slower than local).
+      await clickSkip()
+      let secondPreset = firstPreset
+      for (let i = 0; i < 24 && secondPreset === firstPreset; i++) {
+        await sleep(250)
+        secondPreset = await curPreset()
+      }
+      await clickSkip()
+      let progressLen = 0
+      for (let i = 0; i < 24 && progressLen < 2; i++) {
+        await sleep(250)
+        progressLen = await ES<number>(`(JSON.parse(localStorage.getItem('mogging.integux.done')||'[]')).length`)
+      }
+      const walkOk = flowShown && !!firstPreset && !!secondPreset && firstPreset !== secondPreset && progressLen === 2
 
       // Resume + end screen: mark every preset done, reopen -> plan reminder.
       await ES(`(async()=>{const {presets}=await window.bridge.invoke('integrations:cat:list');localStorage.setItem('mogging.integux.done',JSON.stringify(presets.map(p=>p.id)))})()`)
