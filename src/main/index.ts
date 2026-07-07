@@ -37,6 +37,7 @@ import { runWebTrailSmoke } from './webtrail-smoke'
 import { runMcpMgrSmoke } from './mcpmgr-smoke'
 import { runMcpCatSmoke } from './mcpcat-smoke'
 import { runIntegUxSmoke } from './integux-smoke'
+import { runIntegMilestoneSmoke } from './integmilestone-smoke'
 import { registerIntegrations } from './integrations'
 import { registerEventBridge } from './event-bridge'
 import { registerTrail } from './trail'
@@ -292,6 +293,8 @@ app.whenReady().then(async () => {
     runMcpCatSmoke(win, process.env.MOGGING_MCPCAT) // env-gated Integrations-Catalog smoke (Phase-8/07; DEV = real-machine connect)
   } else if (process.env.MOGGING_INTEGUX && win) {
     runIntegUxSmoke(win) // env-gated integrations-onboarding smoke: guided flow, single-fire, palette verbs (Phase-8/13)
+  } else if (process.env.MOGGING_INTEGMILESTONE && win) {
+    runIntegMilestoneSmoke(win) // env-gated integrations MILESTONE: all five directions compose, one fixture world (Phase-8/14)
   } else if (process.env.MOGGING_USAGE && win) {
     runUsageSmoke(win) // env-gated usage-seam smoke: FAKE adapter only (Phase-7/01)
   } else if (process.env.MOGGING_ATTENTION && win) {
