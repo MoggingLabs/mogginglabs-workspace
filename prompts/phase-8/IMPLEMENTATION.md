@@ -363,9 +363,11 @@ daemon protocol v3 frozen, smokes network-free.
   flag** for flag-CLIs (Claude): strict omitted = global inherited. No-flag
   CLIs can't exclude their global set at launch, so `addsToGlobal` is
   surfaced honestly rather than pretending isolation. (3) `(e)`
-  restart-needed on live panes rides 11's connection status — the
-  `planChanged` signal + the matrix truth line are in place; the live-pane
-  chip lands with 11. Dev-verify used a node shim for the second server
+  restart-needed is now SELF-CONTAINED: a pane records its launch plan
+  SIGNATURE (`planSignature`), a plan edit flips stale live panes
+  (`restartNeededPanes`), and the matrix truth line + a toast surface it;
+  11 grows only the per-pane chip on the same signal. TOOLPLAN's
+  `restartFlipsOk` asserts the logic. Dev-verify used a node shim for the second server
   (no real Sentry on the machine); the `--mcp-config`/`--strict-mcp-config`
   flags are verified present. TOOLPLAN gate. Full REPORT.md § 09.
 

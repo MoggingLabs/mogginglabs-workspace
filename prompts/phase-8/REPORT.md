@@ -39,17 +39,25 @@ per-pane truth line); the catalog grid gains an "in N of M workspaces"
 badge (planCoverage over the scoped workspaces, honest denominator);
 template-seeded plans at creation.
 
-**TOOLPLAN gate** (all green): {A,B for claude · A for codex} materializes
-EXACTLY that (claude flag+strict+file, codex project file); a CLI launched
-against the file lists ONLY the planned servers — the frame, verbatim:
-`SERVERS=linear,mogging,sentry|STRICT=true` (no unplanned posthog);
-`inheritGlobal` drops strict; the codex file is git-invisible; template
-picks seed a plan; matrix cells match. **Dev-verify honesty**: a real second
-MCP server (Sentry) wasn't on the dev machine, so a node shim stands in for
-the CLI reading the materialized `--mcp-config` file — the flags themselves
-are verified present in the installed Claude Code. `(e)` restart-needed
-rides 11's connection status — deferred to that step. Sweep 46 → **47**
-(TOOLPLAN).
+**Restart-needed (e), self-contained.** A pane records the plan SIGNATURE it
+launched against (`planSignature` — any entry/inheritGlobal edit changes it);
+editing the plan flips every live pane still holding an old signature to
+"restart to apply". Real surface: the matrix truth line shows the live
+pending-restart count, and a plan edit toasts the affected panes. Pure logic
+(`restartNeededPanes`) is what the smoke asserts; 11 grows the per-pane chip
+on top of the same signal.
+
+**TOOLPLAN gate** (all 7 sub-asserts a–g green): {A,B for claude · A for
+codex} materializes EXACTLY that (claude flag+strict+file, codex project
+file); a CLI launched against the file lists ONLY the planned servers — the
+frame, verbatim: `SERVERS=linear,mogging,sentry|STRICT=true` (no unplanned
+posthog); `inheritGlobal` drops strict; the codex file is git-invisible; a
+plan edit flips the launched panes to restart-needed (`restartFlipsOk`);
+template picks seed a plan; matrix cells match. **Dev-verify honesty**: a
+real second MCP server (Sentry) wasn't on the dev machine, so a node shim
+stands in for the CLI reading the materialized `--mcp-config` file — the
+flags themselves are verified present in the installed Claude Code. Sweep
+46 → **47** (TOOLPLAN).
 
 ## 08 — the vault, fleet-wide: paste-once service keys (2026-07-07)
 

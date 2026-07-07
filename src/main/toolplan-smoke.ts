@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { McpServerEntry, WorkspaceToolPlan } from '@contracts'
-import { planFromTemplateTools, toolCellState } from '@contracts'
+import { planFromTemplateTools, planSignature, restartNeededPanes, toolCellState } from '@contracts'
 import { composePlanEntries, materializePlanFor } from '@backend/features/integrations'
 import { gitExcludeInWorktree } from './tool-plan'
 
@@ -91,6 +91,18 @@ process.stdout.write('SERVERS=' + keys.sort().join(',') + '|STRICT=' + a.include
     const status = git(['status', '--porcelain'])
     const gitInvisibleOk = !status.includes('.codex') && status.includes('README.md')
 
+    // ── (e) a plan edit flips restart-needed on the workspace's live panes ──────
+    const sigAtLaunch = planSignature(plan)
+    const livePanes = [
+      { paneId: 1, launchSig: sigAtLaunch },
+      { paneId: 101, launchSig: sigAtLaunch }
+    ]
+    const beforeEdit = restartNeededPanes(livePanes, sigAtLaunch) // nothing changed -> none
+    const editedPlan: WorkspaceToolPlan = { ...plan, entries: { ...plan.entries, sentry: ['claude-code'] } } // A now claude-only
+    const sigAfterEdit = planSignature(editedPlan)
+    const afterEdit = restartNeededPanes(livePanes, sigAfterEdit) // both launched at the old sig -> both flip
+    const restartFlipsOk = sigAtLaunch !== sigAfterEdit && beforeEdit.length === 0 && afterEdit.length === 2
+
     // ── (f) template picks seed a new workspace's plan ──────────────────────────
     const seeded = planFromTemplateTools('ws2', ['sentry', 'linear'])
     const templateOk = seeded.entries.sentry === 'all-clis' && seeded.entries.linear === 'all-clis' && seeded.inheritGlobal === false
@@ -102,8 +114,8 @@ process.stdout.write('SERVERS=' + keys.sort().join(',') + '|STRICT=' + a.include
     const g4 = toolCellState({ ...plan, inheritGlobal: true }, 'posthog', 'claude-code', true) === 'global'
     const matrixOk = g1 && g2 && g3 && g4
 
-    const pass = claudeArgsOk && claudeFileOk && codexOk && listsPlannedOnly && inheritOk && gitInvisibleOk && templateOk && matrixOk
-    result = { pass, claudeArgsOk, claudeFileOk, codexOk, listsPlannedOnly, inheritOk, gitInvisibleOk, templateOk, matrixOk, shimOut }
+    const pass = claudeArgsOk && claudeFileOk && codexOk && listsPlannedOnly && inheritOk && gitInvisibleOk && restartFlipsOk && templateOk && matrixOk
+    result = { pass, claudeArgsOk, claudeFileOk, codexOk, listsPlannedOnly, inheritOk, gitInvisibleOk, restartFlipsOk, templateOk, matrixOk, shimOut }
   } catch (e) {
     result = { pass: false, error: String(e) }
   }

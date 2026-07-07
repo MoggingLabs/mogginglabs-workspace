@@ -58,6 +58,25 @@ export function toolCellState(
   return 'off'
 }
 
+/** A stable signature of a plan — any edit (entries or inheritGlobal) changes
+ *  it. A pane launched at signature X needs a RESTART once its workspace's plan
+ *  moves to a different signature (its running CLI still holds the old set). */
+export function planSignature(plan: WorkspaceToolPlan): string {
+  const entries = Object.keys(plan.entries)
+    .sort()
+    .map((k) => {
+      const v = plan.entries[k]
+      return `${k}:${v === 'all-clis' ? 'all' : [...v].sort().join(',')}`
+    })
+  return `${plan.inheritGlobal ? 'g' : '-'}|${entries.join(';')}`
+}
+
+/** Of the live panes (each carrying the plan signature it launched with), which
+ *  need a restart to pick up `currentSig`. Empty when nothing changed. */
+export function restartNeededPanes(panes: readonly { paneId: number; launchSig: string }[], currentSig: string): number[] {
+  return panes.filter((p) => p.launchSig !== currentSig).map((p) => p.paneId)
+}
+
 /** Sanitize a persisted/plan-wire object into a valid WorkspaceToolPlan. */
 export function sanitizeToolPlan(raw: unknown, workspaceId: string): WorkspaceToolPlan {
   const p = (raw ?? {}) as Record<string, unknown>

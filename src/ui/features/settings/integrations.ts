@@ -2,6 +2,7 @@ import {
   AgentChannels,
   IntegrationsChannels,
   planHasServerForCli,
+  planSignature,
   toolCellState,
   type WorkspaceToolPlan,
   type McpAuthKind,
@@ -16,6 +17,7 @@ import {
 import { getBridge } from '../../core/ipc/bridge'
 import { el, loadingRow, showToast } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
+import { onToolPlanPanesChange, restartNeededPaneIds } from '../../core/agents/toolplan-panes'
 import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
 import { fmtAge } from '../usage'
 
@@ -855,10 +857,13 @@ function createToolPlanBlock(): HTMLElement {
       const n = 1 + servers.filter((s) => !s.builtIn && planHasServerForCli(plan, s.id, cli)).length
       return `${CLI_LABEL[cli]} ${n}`
     })
+    const pending = restartNeededPaneIds(wsId, planSignature(plan)).length
     body.append(
       el('div', {
         class: 'settings-row-caption toolplan-truth',
-        text: `Panes here launch with — ${counts.join(' · ')} — servers (house + plan${plan.inheritGlobal ? ' + global' : ''}). Restart a running pane to apply a change.`
+        text:
+          `Panes here launch with — ${counts.join(' · ')} — servers (house + plan${plan.inheritGlobal ? ' + global' : ''}).` +
+          (pending ? ` ${pending} live pane${pending === 1 ? '' : 's'} pending restart to apply.` : '')
       })
     )
   }
@@ -871,8 +876,17 @@ function createToolPlanBlock(): HTMLElement {
     if (!wsSelect.value && wsSelect.options.length) wsSelect.selectedIndex = 0
   }
   wsSelect.onchange = (): void => void render()
-  // A plan edit elsewhere (or a fresh launch) re-renders the matrix.
-  bridge.on(IntegrationsChannels.planChanged, () => void render())
+  // A plan edit -> re-render + nudge any live panes that now need a restart.
+  bridge.on(IntegrationsChannels.planChanged, (payload) => {
+    const p = payload as WorkspaceToolPlan
+    const stale = restartNeededPaneIds(p.workspaceId, planSignature(p)).length
+    if (stale) {
+      showToast({ title: 'Tool plan changed', body: `${stale} live pane${stale === 1 ? '' : 's'} need a restart to apply`, tone: 'info', timeout: 6000 })
+    }
+    void render()
+  })
+  // A launch/close changes the live-pane set -> refresh the pending count.
+  onToolPlanPanesChange(() => void render())
 
   const block = el('div', { class: 'trail-block mgr-grants-block' }, [
     el('div', { class: 'settings-row-label', text: 'Workspace tools' }),

@@ -1,5 +1,6 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { ProfileChannels, TerminalChannels, type AgentInfo, type AgentProfile, type PaneId } from '@contracts'
+import { IntegrationsChannels, ProfileChannels, TerminalChannels, planSignature, type AgentInfo, type AgentProfile, type PaneId, type WorkspaceToolPlan } from '@contracts'
+import { recordPaneLaunch } from '../../core/agents/toolplan-panes'
 import { getBridge } from '../../core/ipc/bridge'
 import { getFocusedPane } from '../../core/layout/focus'
 import { setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
@@ -141,6 +142,13 @@ export const agentsFeature: UiFeature = {
       const command = await agentsClient.command({ agentId: provider, cwd, resume, profileId: effectiveProfile, workspaceId })
       if (!command) return
       agentsClient.launchInto(paneId, command)
+      // Remember the tool-plan signature this pane launched with (8/09) — a
+      // later plan edit flips it to restart-needed.
+      if (workspaceId) {
+        void (getBridge().invoke(IntegrationsChannels.planGet, workspaceId) as Promise<WorkspaceToolPlan>)
+          .then((plan) => recordPaneLaunch(paneId, workspaceId, planSignature(plan)))
+          .catch(() => undefined)
+      }
       lastLaunch.set(paneId, { provider, cwd, profileId: effectiveProfile })
       // Pane-meta carries the profile NAME only (⋯ menu note, 6/04) — never env.
       // A deleted/unknown id resolves to no name: the note simply disappears.

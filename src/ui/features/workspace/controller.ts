@@ -8,6 +8,7 @@ import { setPaneCwd } from '../../core/layout/pane-cwd'
 import { setPaneRole, setPaneRemote } from '../../core/layout/pane-meta'
 import { paneState, onAttentionChange } from '../../core/attention/attention-port'
 import { announce } from '../../core/a11y/live-region'
+import { clearPaneLaunch } from '../../core/agents/toolplan-panes'
 import { requestAgentLaunch } from '../../core/agents/launch-port'
 import { activeView, setActiveView } from '../../core/shell/view-port'
 import { getTelemetry } from '../../core/telemetry'
@@ -371,6 +372,7 @@ export class WorkspaceController {
       return
     }
     view.layout.closePane(paneId)
+    clearPaneLaunch(paneId) // drop its tool-plan signature (8/09)
     view.meta.paneCount = view.layout.paneCount
     getTelemetry().captureEvent({
       name: 'pane.closed',
@@ -503,6 +505,7 @@ export class WorkspaceController {
   close(id: string): void {
     const view = this.views.get(id)
     if (!view) return
+    for (const pid of view.layout.paneIds()) clearPaneLaunch(pid) // drop tool-plan sigs (8/09)
     view.layout.dispose() // clears slots -> terminal disposes this workspace's panes
     view.tab.remove()
     view.container.remove()
