@@ -9,6 +9,7 @@ import { getBridge } from '../../core/ipc/bridge'
 import { getTelemetry } from '../../core/telemetry'
 import { activeView, goBack, onViewChange, setActiveView } from '../../core/shell/view-port'
 import { takeRequestedSettingsTab } from '../../core/shell/settings-tab-port'
+import { renderShortcutList } from '../../core/commands/shortcuts'
 import { setTerminalFontSize, terminalFontSize, TERMINAL_FONT_SIZES } from '../../core/terminal/font-port'
 import { TEMPLATE_COUNTS } from '../layout'
 import { createProfilesHostsSection } from './profiles-hosts'
@@ -232,6 +233,13 @@ export const settingsFeature: UiFeature = {
             el('div', { class: 'settings-consents' }, [agentBrowserConsent.el]),
             'OFF by default, per workspace. When on, agents in THIS workspace can navigate, read, and act on the browser dock — you always see when an agent holds the wheel and can Stop it instantly. The dock uses its own empty session (agents never touch your system browser or its logins), and a page an agent reads is untrusted content. Agents can never read cookies or credentials (ADR 0002).'
           )
+        ])
+      },
+      {
+        id: 'shortcuts',
+        label: 'Shortcuts',
+        el: section('shortcuts', 'Keyboard shortcuts', [
+          row('All shortcuts', renderShortcutList(), 'Press ? anywhere (outside a terminal or text field) to pull this up as an overlay.')
         ])
       },
       {

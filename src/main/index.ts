@@ -28,6 +28,7 @@ import { runPerWsSmoke } from './perws-smoke'
 import { runPerWsAgentSmoke } from './perwsagent-smoke'
 import { runVaultKeysSmoke } from './vaultkeys-smoke'
 import { runWsCloseSmoke } from './wsclose-smoke'
+import { runKbShortcutsSmoke } from './kbshortcuts-smoke'
 import { runWebTrailSmoke } from './webtrail-smoke'
 import { runMcpMgrSmoke } from './mcpmgr-smoke'
 import { runMcpCatSmoke } from './mcpcat-smoke'
@@ -247,6 +248,8 @@ app.whenReady().then(async () => {
     runVaultKeysSmoke(win) // env-gated service-key vault smoke: paste-once -> pane env, plaintext nowhere at rest (Phase-8/08)
   } else if (process.env.MOGGING_WSCLOSE && win) {
     runWsCloseSmoke(win) // env-gated workspace-close smoke: confirm on live work + 5s undo grace (UX audit WS-01)
+  } else if (process.env.MOGGING_KBSHORTCUTS && win) {
+    runKbShortcutsSmoke(win) // env-gated keyboard-shortcuts smoke: ? overlay + Settings page (UX audit KB-01)
   } else if (process.env.MOGGING_WEBTRAIL && win) {
     runWebTrailSmoke(win) // env-gated agent-activity-trail smoke: store + emitters + viewer (Phase-8/05)
   } else if (process.env.MOGGING_MCPMGR && win) {

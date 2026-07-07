@@ -2616,6 +2616,50 @@ body.resizing * {
   justify-content: flex-end;
   gap: var(--sp-2);
 }
+
+/* Keyboard shortcuts sheet (KB-01) — shared by the ? overlay + Settings page. */
+.shortcuts-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  width: 100%;
+}
+.shortcuts-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.shortcuts-group-title {
+  font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-lo);
+  margin-bottom: var(--sp-1);
+}
+.shortcuts-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+.shortcuts-group:last-child .shortcuts-row:last-child {
+  border-bottom: none;
+}
+.shortcuts-row-label {
+  color: var(--text-mid);
+  font-size: var(--fs-13);
+}
+.shortcuts-row-keys {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-lo);
+  white-space: nowrap;
+  flex: none;
+}
 @keyframes modal-fade {
   from {
     opacity: 0;

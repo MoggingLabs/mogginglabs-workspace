@@ -16,6 +16,7 @@ import { notifyFeature } from './features/notify'
 import { browserFeature } from './features/browser'
 import { updatesFeature } from './features/updates'
 import { usageFeature } from './features/usage'
+import { shortcutsFeature } from './features/shortcuts'
 
 export { getTelemetry, setTelemetry } from './core/telemetry'
 
@@ -43,5 +44,6 @@ export function start(): void {
   registerFeature(browserFeature) // toggleable right browser dock: preview what agents build (6/05)
   registerFeature(updatesFeature) // auto-update UX: downloading dot + one-click restart toast (6/06)
   registerFeature(usageFeature) // usage glance: titlebar two-bar gauge + popover (Phase-7/03)
+  registerFeature(shortcutsFeature) // ? opens the keyboard-shortcuts sheet (UX audit KB-01)
   mountFeatures(shell)
 }
