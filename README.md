@@ -56,8 +56,11 @@ renderer is tuned once and behaves identically everywhere. See
 > unmoved. The `qa-smokes.sh` sweep now runs **52 gates** (thirteen new this phase:
 > MCP · MCPWRITE · AGENTWEB · WEBTRAIL · MCPMGR · MCPCAT · VAULTKEYS · TOOLPLAN ·
 > EVBRIDGE · MCPSTATUS · INTEG · INTEGUX · INTEGMILESTONE). Surface: `docs/14`.
-> Per-OS numbers in `prompts/phase-8/README.md`. (Phase 6 shipped v0.4.0: the
-> browser dock + first-run/update UX + signing readiness.)
+> Certified across **four environments** — all **52/52** green on local Windows
+> AND all three CI OSes (Linux · macOS · Windows) in one dispatch, run
+> **28910043776**; per-OS finds + root causes in `prompts/phase-8/REPORT.md`.
+> (Phase 6 shipped v0.4.0: the browser dock + first-run/update UX + signing
+> readiness.)
 
 ```bash
 npm install        # builds native modules (node-pty). See note below.

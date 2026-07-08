@@ -3,10 +3,76 @@
 Receipts for the integrations pack (steps 01–14), same format as
 `prompts/phase-7/REPORT.md`. Per-step mechanics live in `IMPLEMENTATION.md`
 (deviations recorded there, inline); this file keeps dated verification
-records and the finds worth remembering. Sweep count as of 8/13: **51 gates**
+records and the finds worth remembering. Sweep count as of 8/14: **52 gates**
 (35 + MCP + MCPWRITE + AGENTWEB + WEBTRAIL + MCPMGR + MCPCAT + PERWS +
 PERWSAGENT + VAULTKEYS + WSCLOSE + KBSHORTCUTS + TOOLPLAN + EVBRIDGE +
-MCPSTATUS + INTEG + INTEGUX).
+MCPSTATUS + INTEG + INTEGUX + INTEGMILESTONE).
+
+## 14 — the integrations milestone + four-environment certification (2026-07-08)
+
+**INTEGMILESTONE gate** (`src/main/integmilestone-smoke.ts`, all a–h green): the
+composed proof that all five directions hold in ONE fixture world, zero network.
+(a) the manager applies the house server into a FIXTURE Claude home (dialect
+`_managedBy: mogginglabs`, `type: stdio`) + a scoped tool-plan materializes
+EXACTLY `{mogging, sentry}` (the unplanned `posthog` absent); (b) an MCP
+pane-identity session reads panes/tail/mail under grant `'none'` — no write
+tools, a write refused naming the grant; (c) grant `'all'` → `list_changed`, the
+session claims a glob + sends to its own pane (capture + a receipt attention
+confirm), an ungranted second workspace sees zero writes; (d) agent-web ACTS on
+the granted origin, REFUSED on the ungranted — both in the trail (web/ok +
+web/refused); (e) a loopback receiver gets a bridge `notify`, a dead second
+webhook never stalls the emit (<250 ms); (f) a FAKE PR flips to approved via the
+real `ServiceEngine` + `transitionLabel` — the chip follows (`reviewDecision:
+approved`), the owning pane is notified (attention), `review-changed` fires at a
+webhook; (g) structural: `approve` in NO frame, the receipt landed, § Integrations
+knobs in ONE renderer module; (h) the custody sweep — vault key, webhook URL
+token, and the fixture cookie value ABSENT in plaintext across the entire fixture
+userData, the CLI homes, and every frame/trail. **Budgets sampled DURING the
+composed surface** (dock open + live panes): maxGap **7.2 ms**, **144 fps**, heap
+**15 MB** — well inside 150 ms / 30 fps / 320 MB. The daemon is still **v3**
+throughout (the milestone builds its own `ServiceEngine`/notify/bridge sinks from
+exported units — it registers no new wire surface).
+
+**Four-environment certification** — ONE dispatch, full uncut 52-gate sweeps, all
+**52 gates green** on **local Windows** AND all three CI OSes (**Linux · macOS ·
+Windows**): run **28910043776** (`gh workflow run ci.yml -f
+sweeps=linux,macos,windows`). Local Windows: 52/52 (`scripts/qa-smokes.sh`).
+Nightly crons left enabled.
+
+**Platform finds (root causes — the certification's real receipts).** The first
+full sweeps to ever include the newest gates surfaced pre-existing gaps; each got
+a permanent fix, assertion-only unless noted:
+- **Linux CI had no keychain.** Headless Ubuntu's `safeStorage` selects
+  `basic_text`, which `vaultAvailable()` rejects by design → VAULTKEYS, EVBRIDGE,
+  and INTEGMILESTONE (all vault-dependent) failed together. The prior "green"
+  nightly ran an earlier commit WITHOUT these gates, so they were never actually
+  certified on Linux. Fix (CI config + a CI-gated switch): the linux-sweep installs
+  `gnome-keyring` + `dbus-x11` and runs under an unlocked keyring on a dbus session;
+  `MOGGING_CI_KEYRING` forces the `gnome-libsecret` backend (Linux + that env only;
+  production auto-detects unchanged).
+- **INTEGUX assumed an installed CLI.** `openGuidedFlow` correctly renders an
+  "install a coding-agent CLI first" prompt (no tool cards) when none is detected;
+  CI runners have no CLI, dev machines do — a deterministic split. The smoke now
+  detects `agents:detect` and asserts the RIGHT branch (tool-walk vs install-first).
+- **WORKTREE — Windows CWD handle lock.** Windows refuses to delete a directory
+  that is a live shell's CWD; each pane holds its own worktree, so BOTH removals
+  hit "Permission denied" (never on POSIX). The real remove-worktree UX closes the
+  pane first — the smoke now closes both panes and retries while the OS releases
+  the handles.
+- **USAGESET / USAGE — fixed-sleep timing.** `activeFollowOk` and the poller-pause
+  `hiddenOk` read once before a slow runner settled; both now poll / drain-to-stable.
+- **PERCEPTION echo — a virtualized-PTY floor, not contention.** windows-latest
+  echoes at ~85 ms (samples 52–91, median ~85) even in a low-contention 2-gate run,
+  while REAL Windows hardware echoes <5 ms and Linux/macOS ~1–2 ms. The 60 ms budget
+  was systematically wrong ONLY on the CI VM. `softEchoMs` relaxes echo to 180 ms
+  under `MOGGING_CI_GPU=soft` (loudly; the same non-representative-VM axis the frame
+  budgets already use) — strict 60 ms everywhere real, including real Windows; the
+  reported median stays the true measured value; a real regression fails everywhere.
+  A best-of-6 measurement window also rejects transient spikes.
+- **PERWSAGENT — confirm-handshake race.** The act-origin confirm used a fixed
+  `sleep(300)`; on a slow runner the pending-confirm hadn't registered, so the
+  approval no-op'd and the later click read "awaiting the human". Now polls the
+  pending-confirm to register, confirms, and confirms it cleared — deterministic.
 
 ## 13 — integrations onboarding + polish: making it feel effortless (2026-07-07)
 

@@ -95,6 +95,18 @@ as a `/goal`, < 4000 chars). Execute in order.
 | 13 | `13-integrations-onboarding-and-polish.md` | The UX pass, spec'd with asserts: the "Connect your stack" guided flow (first-run checklist item, skippable, resumable), single-fire needs-auth toasts with Re-authorize (the 7/09 discipline), palette verbs for every integrations action, plain-language diff summaries, empty states, category-grouped connected-first grid, the in-app privacy block; INTEGUX smoke green |
 | 14 | `14-integrations-milestone.md` | INTEGMILESTONE end-to-end (all five directions composed) + `docs/14-integrations.md` incl. the site-honesty map + books; full sweep green on all four environments |
 
+## Pack status: FROZEN (2026-07-08)
+All 14 steps DONE. The milestone (`INTEGMILESTONE`, `src/main/integmilestone-smoke.ts`)
+composes all five directions in one fixture world, budgets unmoved; the daemon is
+still **v3**. `docs/14-integrations.md` teaches the surface + carries the complete
+site-honesty map; the books state the new count (**52 gates**). Four-environment
+certification: all **52/52** green on local Windows AND Linux · macOS · Windows CI
+in one dispatch — run **28910043776**. Milestone + certification commit range
+**be0b810..adcf5db** (11 commits); per-gate mechanics + the platform finds (Linux
+CI keychain, INTEGUX no-CLI branch, WORKTREE Windows CWD lock, PERCEPTION
+virtualized-PTY echo floor, PERWSAGENT confirm race) in `REPORT.md` § 14. Phase 2.5
+mounts the memory tools on this same server later (the catalog stays data).
+
 ## Overall Definition of Done
 - Any hosted CLI, registered by the app in one click, can list panes, read a
   scrollback tail, speak on the mailbox, AND drive the dock — through ONE
