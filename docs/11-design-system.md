@@ -268,6 +268,43 @@ re-warm must not hitch).
 - Full-bleed rebalance: board lanes/head cap at `min(1440px, 100%)` centered; home
   sections widen to `min(1180px, 92%)`.
 
+## The folder browser (Phase-8.5/03)
+
+The wizard's Where card offers three views of ONE selection — a typed path bar, a
+small current-folder line, and a click-through browser. They cannot disagree: the
+bar debounces into `browser.setPath()` (silent), the browser reports back through
+`onSelect`, and both adopt whatever canonical path the main process echoes.
+
+- **Directories only, one level, on demand.** No recursive walk, no watcher, no
+  index, no file contents. The panel's footer says so where the user reads it.
+- **All path arithmetic lives in the main process** (`@backend/features/fs-browse`,
+  Electron-free and unit-tested). A listing ships every child's absolute `path` and
+  a ready-made `crumbs` trail, so `@ui` never joins or splits a path — the only way
+  Windows drive roots are representable at all. The virtual parent of `C:\` is
+  `FS_DRIVE_ROOT` (`''`), whose listing is the drive letters; on POSIX the parent of
+  `/` is `null`, because `/` really is the top.
+- **Canonical, not resolved.** `C:/Users/` and `C:\Users` normalize to one spelling
+  so the bar and the browser agree. Deliberately NOT `realpath`: a symlinked project
+  folder is the path the user meant, and resolving it would teleport them to the target.
+- **Symlinked directories are listed.** `Dirent.isDirectory()` is FALSE for a junction
+  pointing at a folder, so links get a guarded stat; a dead link is skipped.
+- **A refusal is a state, never a throw.** `denied` · `missing` · `not-a-directory` ·
+  `invalid` each render a titled explanation in the list area. An unreadable folder is
+  an ordinary thing to click on.
+- **Cheap by construction.** Sort, cap at `FS_LIST_CAP` (500), *then* probe `.git` — a
+  10k-entry folder costs 500 stats, not 10k. `truncated` says so out loud.
+- **Selection model.** Arriving in a folder selects it (the last breadcrumb fills in).
+  Clicking a row selects that child — one click to pick. Enter, double-click, or right-arrow
+  descends. Selection is always exactly one real directory. Roving tabindex + real
+  focus (the `grid-preview` pattern), `role="listbox"`/`option`, Home/End, Backspace
+  ascends, printable keys filter, and Esc clears the filter *before* the page's Esc
+  can leave the view.
+- **Never for a remote workspace.** Choosing an SSH host hides the browser: that cwd
+  lives on the other machine, and listing this disk would answer a question nobody asked.
+
+Gallery shots open on a synthetic fixture, never `$HOME` — a folder browser
+photographs whatever it is pointed at, and screenshots are committed.
+
 ## Icons (Phase-5/03)
 
 One family: 24×24 grid, **stroke 1.75**, round caps/joins — lucide-compatible

@@ -99,6 +99,11 @@ export const ReviewChannels = {
   merge: 'review:merge' // (ReviewMergeRequest) -> ReviewMergeResult (clean-repo gated)
 } as const
 
+export const FsChannels = {
+  listDir: 'fs:listDir', // (ListDirRequest) -> DirResult  — one level, dirs only, read-only
+  home: 'fs:home' // -> string  (where the folder browser opens before a cwd exists)
+} as const
+
 export const GitChannels = {
   query: 'git:query', // (cwd) -> GitStatus | null (one-shot, read-only)
   watch: 'git:watch', // (GitWatchRequest) -> track a pane's cwd; change events follow
@@ -274,5 +279,6 @@ export const AllChannels: readonly string[] = [
   ...Object.values(ProfileChannels),
   ...Object.values(RemoteChannels),
   ...Object.values(BoardChannels),
-  ...Object.values(GitChannels)
+  ...Object.values(GitChannels),
+  ...Object.values(FsChannels)
 ]

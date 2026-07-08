@@ -274,8 +274,16 @@ export function runGallery(win: BrowserWindow): void {
         await part(`${tag}-wizard`, async () => {
           // 8.5/02: the wizard is a full PAGE beside the rail, not a modal — one
           // scroll, three cards. Never click the footer primary here: it launches.
-          await ES(`window.__mogging.templates.openWizard()`)
-          await sleep(600)
+          //
+          // 8.5/03: open it ON A FIXTURE. With no cwd the folder browser opens at
+          // $HOME and photographs the operator's real directory names straight into
+          // a committed screenshot. Every shot must be of a synthetic tree.
+          const showcase = mkdtempSync(join(tmpdir(), 'mogging-showcase-'))
+          for (const d of ['api', 'design-system', 'docs', 'infra', 'web-app']) mkdirSync(join(showcase, d))
+          mkdirSync(join(showcase, 'web-app', '.git')) // earns the repo pill
+          mkdirSync(join(showcase, 'api', '.git'))
+          await ES(`window.__mogging.templates.openWizard({ cwd: ${JSON.stringify(showcase)} })`)
+          await sleep(700)
           await snap(`${tag}-wizard-page`)
           await ES(`document.querySelector('#view-wizard .wizard')?.scrollTo({ top: 99999 })`)
           await sleep(400)
@@ -289,6 +297,11 @@ export function runGallery(win: BrowserWindow): void {
           await snap(`${tag}-wizard-advanced`)
           await escape()
           await sleep(300)
+          try {
+            rmSync(showcase, { recursive: true, force: true })
+          } catch {
+            /* best effort */
+          }
         })
       }
       await ES(`window.__mogging.setTheme('midnight')`)

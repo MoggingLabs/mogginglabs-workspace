@@ -2700,6 +2700,168 @@ body.resizing * {
   color: var(--accent-ink);
 }
 
+/* Folder browser (8.5/03) — breadcrumb · list · footer. Read-only, one level. */
+.folder-browser {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+.fb-crumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-inset);
+}
+.fb-crumb {
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  padding: var(--sp-1) var(--sp-2);
+  background: transparent;
+  color: var(--text-mid);
+  font: inherit;
+  font-size: var(--fs-12);
+  cursor: pointer;
+}
+.fb-crumb:hover {
+  color: var(--text-hi);
+  background: var(--accent-weak);
+}
+.fb-crumb.is-current {
+  color: var(--text-hi);
+  font-weight: var(--fw-semibold);
+}
+/* The current folder IS the selection — until a child row takes it. */
+.fb-crumb.is-selected {
+  background: var(--accent-weak);
+  border-color: var(--accent);
+}
+.fb-crumb-sep {
+  display: inline-flex;
+  color: var(--text-lo);
+}
+.fb-list {
+  display: flex;
+  flex-direction: column;
+  height: 216px;
+  overflow-y: auto;
+  padding: var(--sp-1);
+}
+.fb-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 32px;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--text-mid);
+  cursor: pointer;
+}
+.fb-row:hover {
+  background: var(--bg-elevated);
+}
+.fb-row:focus-visible {
+  outline: 2px solid var(--accent-glow);
+  outline-offset: -2px;
+}
+.fb-row.is-selected {
+  background: var(--accent-weak);
+  border-color: var(--accent);
+  color: var(--text-hi);
+}
+.fb-row.is-selected .fb-row-icon {
+  color: var(--accent-ink);
+}
+.fb-row--up .fb-row-name {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+}
+.fb-row-icon {
+  display: inline-flex;
+  color: var(--text-lo);
+  flex: none;
+}
+.fb-row-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-13);
+}
+.fb-list .empty-state {
+  margin: auto;
+}
+/* A refused folder is a STATE, not a crash and not an empty list. */
+.fb-refusal {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-5) var(--sp-4);
+}
+.fb-refusal-icon {
+  display: inline-flex;
+  color: var(--warning);
+  flex: none;
+}
+.fb-refusal-title {
+  color: var(--text-hi);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+}
+.fb-refusal-body {
+  max-width: var(--measure);
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+}
+.fb-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--border);
+  background: var(--bg-inset);
+}
+.fb-filter,
+.fb-trunc {
+  color: var(--text-mid);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+}
+.fb-filter:empty,
+.fb-trunc:empty {
+  display: none;
+}
+.fb-note {
+  margin-left: auto;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  text-align: right;
+}
+
+/* The wizard's Where card: bar · chosen line · browser, one stack. */
+.wizard-where {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.wizard-chosen {
+  margin: 0;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+}
+.wizard-chosen strong {
+  color: var(--text-hi);
+  font-weight: var(--fw-medium);
+}
+
 /* Mini grid preview. */
 .grid-preview {
   display: grid;

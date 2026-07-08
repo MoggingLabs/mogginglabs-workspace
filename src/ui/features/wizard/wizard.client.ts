@@ -1,11 +1,14 @@
 import {
   AgentChannels,
+  FsChannels,
   GitChannels,
   TemplateChannels,
   WorkspaceChannels,
   WorktreeChannels,
   type AgentInfo,
   type CreateWorktreeResult,
+  type DirResult,
+  type ListDirRequest,
   type GitStatus,
   type ProviderCount,
   type ProviderMixTemplate,
@@ -33,6 +36,13 @@ export const wizardClient = {
 
   browseDir: (): Promise<string | null> =>
     getBridge().invoke(WorkspaceChannels.browseDir) as Promise<string | null>,
+
+  /** One level of directory names, read-only (8.5/03). Refusals come back typed. */
+  listDir: (req: ListDirRequest): Promise<DirResult> =>
+    getBridge().invoke(FsChannels.listDir, req) as Promise<DirResult>,
+
+  /** Where the folder browser opens before a cwd exists. */
+  homeDir: (): Promise<string> => getBridge().invoke(FsChannels.home) as Promise<string>,
 
   /** Read-only git probe for the folder chip (null = not a repo — perfectly fine). */
   gitQuery: (cwd: string): Promise<GitStatus | null> =>

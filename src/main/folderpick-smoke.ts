@@ -1,0 +1,284 @@
+import { app, type BrowserWindow } from 'electron'
+import { execFileSync } from 'node:child_process'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+// Env-gated folder-browser smoke (MOGGING_FOLDERPICK, Phase-8.5/03). Builds a real
+// fixture tree, then drives BOTH seams: the `fs:listDir` channel directly, and the
+// wizard's Where card through the DOM. Zero network. Asserts:
+//   (a) directories only, sorted case-insensitively, dotfolders hidden, 500-cap +
+//       `truncated`;
+//   (b) the repo pill renders for the folder holding `.git`;
+//   (c) click-to-pick and breadcrumb-ascend move the wizard's cwd AND the path bar;
+//   (d) typing an absolute path in the bar re-roots the browser;
+//   (e) arrows + Enter descend without a mouse;
+//   (f) an unreadable folder renders the refusal state and does not crash;
+//   (g) the hidden toggle reveals the dotfolder;
+//   (h) per-OS roots: the win32 drive list is reachable above `C:\`, POSIX stops at `/`.
+
+const CAP = 500
+
+interface Fixture {
+  root: string
+  locked: string
+  deniedCreated: boolean
+}
+
+function makeFixture(): Fixture {
+  const root = mkdtempSync(join(tmpdir(), 'mog-fpick-'))
+  for (const d of ['alpha', 'Beta', 'Zeta']) mkdirSync(join(root, d))
+  mkdirSync(join(root, 'alpha', 'sub'))
+  mkdirSync(join(root, 'Beta', '.git')) // -> the repo pill
+  mkdirSync(join(root, '.hidden')) // -> filtered unless "show hidden"
+  writeFileSync(join(root, 'notes.txt'), 'a file, never listed\n')
+
+  const many = join(root, 'many')
+  mkdirSync(many)
+  for (let i = 0; i < CAP + 100; i++) mkdirSync(join(many, 'd' + String(i).padStart(3, '0')))
+
+  // A really unreadable folder. icacls on win32 yields EPERM; chmod 000 on POSIX
+  // yields EACCES — but not for root, who bypasses the bit (some CI containers).
+  const locked = join(root, 'locked')
+  mkdirSync(locked)
+  let deniedCreated = false
+  try {
+    if (process.platform === 'win32') {
+      execFileSync('icacls', [locked, '/deny', `${process.env.USERNAME}:(RX)`], { stdio: 'ignore', windowsHide: true })
+      deniedCreated = true
+    } else if (typeof process.getuid === 'function' && process.getuid() !== 0) {
+      chmodSync(locked, 0o000)
+      deniedCreated = true
+    }
+  } catch {
+    /* couldn't create the condition — the smoke says so rather than pretending */
+  }
+  return { root, locked, deniedCreated }
+}
+
+function cleanup(f: Fixture): void {
+  try {
+    if (process.platform === 'win32') execFileSync('icacls', [f.locked, '/remove:d', String(process.env.USERNAME)], { stdio: 'ignore', windowsHide: true })
+    else chmodSync(f.locked, 0o700)
+  } catch {
+    /* best effort */
+  }
+  try {
+    rmSync(f.root, { recursive: true, force: true })
+  } catch {
+    /* best effort */
+  }
+}
+
+export function runFolderPickSmoke(win: BrowserWindow): void {
+  setTimeout(() => app.exit(1), 150000) // safety net (600 mkdirs + a full wizard boot)
+  const wc = win.webContents
+  const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+  // Renderer-side helpers, injected once per call site.
+  const H = `
+    const rows = () => [...document.querySelectorAll('#view-wizard .fb-row')]
+    const rowNames = () => rows().map((r) => r.querySelector('.fb-row-name').textContent)
+    const rowBy = (n) => rows().find((r) => r.querySelector('.fb-row-name').textContent === n)
+    const crumbs = () => [...document.querySelectorAll('#view-wizard .fb-crumb')].map((c) => c.textContent)
+    const bar = () => document.querySelector('#view-wizard .path-input-field').value
+    const key = (node, k) => node.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }))
+  `
+
+  const run = async (): Promise<void> => {
+    let result: Record<string, unknown> = { pass: false }
+    const fx = makeFixture()
+    try {
+      const R = JSON.stringify(fx.root)
+      await sleep(1200)
+
+      // ── (a) the channel itself: dirs only, sorted, hidden filtered ────────────
+      const listed = await ES<{ entries: { name: string; isRepo: boolean }[]; truncated: boolean; parent: string | null }>(
+        `window.bridge.invoke('fs:listDir', { path: ${R} })`
+      )
+      const names = listed.entries.map((e) => e.name)
+      const dirsOnly = !names.includes('notes.txt')
+      const hiddenFiltered = !names.includes('.hidden')
+      const sorted = names.indexOf('alpha') < names.indexOf('Beta') && names.indexOf('Beta') < names.indexOf('Zeta')
+      const repoFlagged = listed.entries.find((e) => e.name === 'Beta')?.isRepo === true
+
+      const big = await ES<{ entries: unknown[]; truncated: boolean }>(
+        `window.bridge.invoke('fs:listDir', { path: ${JSON.stringify(join(fx.root, 'many'))} })`
+      )
+      const capped = big.entries.length === CAP && big.truncated === true
+      const listingOk = dirsOnly && hiddenFiltered && sorted && repoFlagged && capped
+
+      // ── (f) refusals, straight from the channel ───────────────────────────────
+      const denied = await ES<{ ok: boolean; reason?: string }>(`window.bridge.invoke('fs:listDir', { path: ${JSON.stringify(fx.locked)} })`)
+      const missing = await ES<{ ok: boolean; reason?: string }>(`window.bridge.invoke('fs:listDir', { path: ${JSON.stringify(join(fx.root, 'nope'))} })`)
+      const notDir = await ES<{ ok: boolean; reason?: string }>(`window.bridge.invoke('fs:listDir', { path: ${JSON.stringify(join(fx.root, 'notes.txt'))} })`)
+      const deniedOk = fx.deniedCreated ? denied.ok === false && denied.reason === 'denied' : true
+      const refusalsOk = deniedOk && missing.reason === 'missing' && notDir.reason === 'not-a-directory'
+
+      // ── (h) per-OS roots ──────────────────────────────────────────────────────
+      const rootProbe = await ES<{ ok: boolean; entries?: { name: string }[]; parent?: string | null; reason?: string }>(
+        process.platform === 'win32'
+          ? `window.bridge.invoke('fs:listDir', { path: '' })`
+          : `window.bridge.invoke('fs:listDir', { path: '/' })`
+      )
+      const rootsOk =
+        process.platform === 'win32'
+          ? rootProbe.ok === true && (rootProbe.entries ?? []).some((e) => e.name === 'C:') && rootProbe.parent === null
+          : rootProbe.ok === true && rootProbe.parent === null
+
+      // ── the UI. Open the wizard rooted at the fixture. ────────────────────────
+      await ES(`window.__mogging.templates.openWizard({ cwd: ${R} })`)
+      await sleep(900)
+
+      // (b) the repo pill is in the DOM, on Beta's row and nowhere else
+      const pills = await ES<{ betaHasPill: boolean; zetaHasPill: boolean; visible: string[] }>(`(() => {${H}
+        return {
+          betaHasPill: !!rowBy('Beta')?.querySelector('.pill'),
+          zetaHasPill: !!rowBy('Zeta')?.querySelector('.pill'),
+          visible: rowNames()
+        }
+      })()`)
+      const repoPillOk = pills.betaHasPill && !pills.zetaHasPill && !pills.visible.includes('.hidden')
+
+      // (c) one click PICKS a child: cwd and the bar both move, without descending
+      const picked = await ES<{ bar: string; crumbsAfter: string[]; selected: boolean }>(`(() => {${H}
+        rowBy('alpha').click()
+        return { bar: bar(), crumbsAfter: crumbs(), selected: rowBy('alpha').classList.contains('is-selected') }
+      })()`)
+      await sleep(250)
+      const clickPickOk = picked.bar === join(fx.root, 'alpha') && picked.selected
+
+      // ...and Enter DESCENDS into it, making it current
+      const descended = await ES<{ bar: string; last: string }>(`(() => {${H}
+        const r = rowBy('alpha'); r.focus(); key(r, 'Enter')
+        return { bar: bar(), last: '' }
+      })()`)
+      await sleep(500)
+      const afterDescend = await ES<{ bar: string; last: string; names: string[] }>(`(() => {${H}
+        const c = crumbs()
+        return { bar: bar(), last: c[c.length - 1], names: rowNames() }
+      })()`)
+      const descendOk = afterDescend.last === 'alpha' && afterDescend.bar === join(fx.root, 'alpha') && afterDescend.names.includes('sub')
+
+      // breadcrumb-ascend returns to the fixture root, bar follows
+      await ES(`(() => {${H}
+        const cs = [...document.querySelectorAll('#view-wizard .fb-crumb')]
+        cs[cs.length - 2].click()
+      })()`)
+      await sleep(500)
+      const ascended = await ES<{ bar: string; last: string }>(`(() => {${H}
+        const c = crumbs()
+        return { bar: bar(), last: c[c.length - 1] }
+      })()`)
+      const ascendOk = ascended.bar === fx.root && afterDescend.last === 'alpha'
+      const clickWalkOk = clickPickOk && descendOk && ascendOk && descended.bar === join(fx.root, 'alpha')
+
+      // ── (d) typing an absolute path re-roots the browser ──────────────────────
+      await ES(`(() => {
+        const i = document.querySelector('#view-wizard .path-input-field')
+        i.value = ${JSON.stringify(join(fx.root, 'Beta'))}
+        i.dispatchEvent(new Event('input', { bubbles: true }))
+      })()`)
+      await sleep(900) // the bar debounces at 350ms, then one IPC round trip
+      const typed = await ES<{ last: string }>(`(() => {${H} const c = crumbs(); return { last: c[c.length - 1] } })()`)
+      const typeRerootOk = typed.last === 'Beta'
+
+      // ── (e) keyboard: arrows + Enter, no mouse ────────────────────────────────
+      await ES(`window.__mogging.templates.openWizard({ cwd: ${R} })`)
+      await sleep(900)
+      const kb = await ES<{ before: string; focusName: string }>(`(() => {${H}
+        const first = rows()[0]           // the ".." row
+        first.focus()
+        key(first, 'ArrowDown')           // -> alpha
+        const f = document.activeElement
+        return { before: crumbs().slice(-1)[0], focusName: f.querySelector?.('.fb-row-name')?.textContent ?? '' }
+      })()`)
+      await ES(`(() => {${H} key(document.activeElement, 'Enter') })()`)
+      await sleep(600)
+      const kbAfter = await ES<{ last: string; bar: string }>(`(() => {${H} const c = crumbs(); return { last: c[c.length - 1], bar: bar() } })()`)
+      const keyboardOk = kb.focusName === 'alpha' && kbAfter.last === 'alpha' && kbAfter.bar === join(fx.root, 'alpha')
+
+      // ── (f) the refusal STATE renders, and the page survives it ───────────────
+      await ES(`window.__mogging.templates.openWizard({ cwd: ${JSON.stringify(fx.locked)} })`)
+      await sleep(900)
+      const refusalUi = await ES<{ hasRefusal: boolean; title: string; pageAlive: boolean; rows: number }>(`(() => {
+        const r = document.querySelector('#view-wizard .fb-refusal')
+        return {
+          hasRefusal: !!r,
+          title: document.querySelector('#view-wizard .fb-refusal-title')?.textContent ?? '',
+          pageAlive: !!document.querySelector('#view-wizard .wizard-footer .btn--primary'),
+          rows: document.querySelectorAll('#view-wizard .fb-row').length
+        }
+      })()`)
+      // On a host where the denial could not be created, the folder simply lists empty.
+      const refusalUiOk = fx.deniedCreated ? refusalUi.hasRefusal && refusalUi.rows === 0 && refusalUi.pageAlive : refusalUi.pageAlive
+
+      // ── (g) the hidden toggle reveals the dotfolder ───────────────────────────
+      await ES(`window.__mogging.templates.openWizard({ cwd: ${R} })`)
+      await sleep(900)
+      const beforeHidden = await ES<string[]>(`(() => {${H} return rowNames() })()`)
+      await ES(`document.querySelector('#view-wizard .fb-foot .checkbox input').click()`)
+      await sleep(600)
+      const afterHidden = await ES<string[]>(`(() => {${H} return rowNames() })()`)
+      const hiddenToggleOk = !beforeHidden.includes('.hidden') && afterHidden.includes('.hidden')
+
+      // Scope honesty (step 4) is stated where the user reads it.
+      const noteOk = await ES<boolean>(
+        `/nothing is indexed, watched, or sent anywhere/i.test(document.querySelector('#view-wizard .fb-note')?.textContent ?? '')`
+      )
+
+      const pass =
+        listingOk && refusalsOk && rootsOk && repoPillOk && clickWalkOk && typeRerootOk && keyboardOk && refusalUiOk && hiddenToggleOk && noteOk
+      result = {
+        pass,
+        listingOk,
+        dirsOnly,
+        hiddenFiltered,
+        sorted,
+        repoFlagged,
+        capped,
+        entryCount: listed.entries.length,
+        bigCount: big.entries.length,
+        refusalsOk,
+        deniedCreated: fx.deniedCreated,
+        denied,
+        missing: missing.reason,
+        notDir: notDir.reason,
+        rootsOk,
+        rootProbeParent: rootProbe.parent ?? null,
+        repoPillOk,
+        clickWalkOk,
+        clickPickOk,
+        descendOk,
+        ascendOk,
+        afterDescend,
+        ascended,
+        typeRerootOk,
+        typed,
+        keyboardOk,
+        kb,
+        kbAfter,
+        refusalUiOk,
+        refusalUi,
+        hiddenToggleOk,
+        beforeHidden,
+        afterHidden,
+        noteOk,
+        platform: process.platform
+      }
+    } catch (e) {
+      result = { pass: false, error: String(e) }
+    }
+    cleanup(fx)
+    try {
+      writeFileSync(join(process.cwd(), 'out', 'folderpick-result.json'), JSON.stringify(result, null, 2))
+    } catch {
+      /* best effort */
+    }
+    app.exit(result.pass ? 0 : 1)
+  }
+
+  if (wc.isLoading()) wc.once('did-finish-load', () => setTimeout(() => void run(), 3000))
+  else setTimeout(() => void run(), 3000)
+}

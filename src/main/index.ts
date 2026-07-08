@@ -15,6 +15,7 @@ import { registerTemplates } from './templates'
 import { registerAttention } from './attention'
 import { registerGit } from './git'
 import { registerWorktrees } from './worktrees'
+import { registerFsBrowse } from './fs-browse'
 import { registerReview } from './review'
 import { registerBoard } from './board'
 import { registerProfiles } from './profiles'
@@ -39,6 +40,7 @@ import { runMcpCatSmoke } from './mcpcat-smoke'
 import { runIntegUxSmoke } from './integux-smoke'
 import { runIntegMilestoneSmoke } from './integmilestone-smoke'
 import { runWizardUxSmoke } from './wizardux-smoke'
+import { runFolderPickSmoke } from './folderpick-smoke'
 import { registerIntegrations } from './integrations'
 import { registerEventBridge } from './event-bridge'
 import { registerTrail } from './trail'
@@ -208,6 +210,7 @@ app.whenReady().then(async () => {
   registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
   disposeGit = registerGit(() => win?.webContents ?? null) // read-only per-pane git branch + dirty (Phase-2/03)
   registerWorktrees() // worktree-per-agent isolation: add/list/remove only (Phase-3/03)
+  registerFsBrowse() // read-only one-level directory listing for the folder browser (Phase-8.5/03)
   registerReview() // pre-ship diff review: redacted diff + guarded merge (Phase-3/04)
   registerBoard() // local Kanban board: cards that launch agents (Phase-3/05)
   registerProfiles() // provider profiles: pointer sets, deny-listed at save (Phase-4/04)
@@ -307,6 +310,8 @@ app.whenReady().then(async () => {
     runIntegMilestoneSmoke(win) // env-gated integrations MILESTONE: all five directions compose, one fixture world (Phase-8/14)
   } else if (process.env.MOGGING_WIZARDUX && win) {
     runWizardUxSmoke(win) // env-gated one-page-wizard smoke: three cards, one page, rail beside it (Phase-8.5/02)
+  } else if (process.env.MOGGING_FOLDERPICK && win) {
+    runFolderPickSmoke(win) // env-gated folder-browser smoke: listing, refusals, keyboard, per-OS roots (Phase-8.5/03)
   } else if (process.env.MOGGING_USAGE && win) {
     runUsageSmoke(win) // env-gated usage-seam smoke: FAKE adapter only (Phase-7/01)
   } else if (process.env.MOGGING_ATTENTION && win) {

@@ -10,6 +10,7 @@ import {
   SectionHeader,
   clear,
   createCheckbox,
+  createFolderBrowser,
   createLayoutGridPicker,
   createMeter,
   createPathInput,
@@ -17,6 +18,7 @@ import {
   el,
   icon,
   type ElChild,
+  type FolderBrowserHandle,
   type PathInputHandle,
   type StepperHandle
 } from '../../components'
@@ -328,6 +330,8 @@ export const wizardFeature: UiFeature = {
     // Live handles the subtree renderers patch. Assigned in render(); every one
     // is non-null for the lifetime of an open modal.
     let path!: PathInputHandle
+    let browser!: FolderBrowserHandle
+    let chosenLine!: HTMLParagraphElement
     let whereCard!: HTMLElement
     let nameInputEl!: HTMLInputElement
     let recentsHost!: HTMLElement
@@ -377,6 +381,7 @@ export const wizardFeature: UiFeature = {
       clear(footer)
       steppers.clear()
       customStepper = null
+      chosenLine = el('p', { class: 'wizard-chosen' }) // buildWhere's probe writes to it
 
       body.append(buildWhere(), buildLayout(), buildAgents())
       buildFooter()
@@ -391,6 +396,7 @@ export const wizardFeature: UiFeature = {
     function buildWhere(): HTMLElement {
       const probeGit = async (value: string): Promise<void> => {
         cwd = value
+        updateChosen()
         if (remoteHost) return // remote target: no local probing (4/05)
         if (!value.trim()) {
           isRepo = false
@@ -410,28 +416,49 @@ export const wizardFeature: UiFeature = {
         }
         syncIsolate()
       }
+
+      /** The one place a chosen folder lands: bar, browser, name placeholder, git chip. */
+      const adopt = (dir: string, opts: { fromBrowser?: boolean } = {}): void => {
+        path.setValue(dir)
+        if (!opts.fromBrowser && !remoteHost) void browser.setPath(dir) // silent — never bounce back
+        void probeGit(dir)
+        if (!nameInputEl.value) {
+          nameInputEl.value = basename(dir)
+          name = nameInputEl.value
+        }
+      }
+
       let probeTimer: ReturnType<typeof setTimeout> | undefined
       path = createPathInput({
         value: cwd,
         onBrowse: () => {
           void wizardClient.browseDir().then((dir) => {
-            if (!dir) return
-            path.setValue(dir)
-            void probeGit(dir)
-            if (!nameInput.value) {
-              nameInput.value = basename(dir)
-              name = nameInput.value
-            }
+            if (dir) adopt(dir)
           })
         },
         onInput: (v) => {
           cwd = v
+          updateChosen()
           if (probeTimer) clearTimeout(probeTimer)
-          probeTimer = setTimeout(() => void probeGit(v), 350)
+          probeTimer = setTimeout(() => {
+            void probeGit(v)
+            // Typing re-roots the browser; a partial path shows its own refusal. A
+            // remote workspace's path is on another machine — never list this disk.
+            if (!remoteHost) void browser.setPath(v)
+          }, 350)
         },
         // Enter in the folder field launches when the form is valid (8.5/02).
         onEnter: () => void tryLaunch(false)
       })
+
+      // The browser is the same selection, seen a different way. It never fires back
+      // into `setPath`, so the two can't ping-pong.
+      browser = createFolderBrowser({
+        path: cwd || undefined, // undefined => don't load yet; home is on its way
+        listDir: wizardClient.listDir,
+        onSelect: (p) => adopt(p, { fromBrowser: true })
+      })
+      if (!cwd) void wizardClient.homeDir().then((h) => browser.setPath(h)).catch(() => undefined)
       if (cwd) void probeGit(cwd)
 
       const nameInput = el('input', {
@@ -472,11 +499,18 @@ export const wizardFeature: UiFeature = {
         } else {
           void probeGit(cwd)
         }
+        // A remote workspace's cwd lives on the OTHER machine. Browsing this disk
+        // would be answering a question nobody asked.
+        browser.el.hidden = !!remoteHost
+        updateChosen()
         syncIsolate()
       })
 
+      // Bar · chosen line · browser: one control, one label, three views of one path.
+      const whereBox = el('div', { class: 'wizard-where' }, [path.el, chosenLine, browser.el])
+
       whereCard = Card({ header: SectionHeader({ title: 'Where', caption: 'Your terminals start in this folder.' }) }, [
-        FieldGroup({ label: 'Working folder', hint: 'Type a path, or Browse.' }, path.el),
+        FieldGroup({ label: 'Working folder', hint: 'Type a path, click through the browser, or Browse.' }, whereBox),
         FieldGroup({ label: 'Workspace name', hint: 'Optional — defaults to the folder name.' }, nameInput),
         FieldGroup({ label: 'Recent folders' }, recentsHost),
         // Auto-open when a remote host is already chosen.
@@ -484,7 +518,25 @@ export const wizardFeature: UiFeature = {
           FieldGroup({ label: 'Runs on', hint: 'This machine, or a saved SSH host.' }, remoteSelect)
         ])
       ])
+      updateChosen()
       return whereCard
+    }
+
+    /** The small current-folder line between the path bar and the browser. */
+    function updateChosen(): void {
+      if (!chosenLine) return
+      clear(chosenLine)
+      if (remoteHost) {
+        chosenLine.append(`Runs on ${remoteHost.name} — the path above is a folder on that machine.`)
+        return
+      }
+      const dir = cwd.trim()
+      if (!dir) {
+        chosenLine.append('No folder chosen yet — pick one below.')
+        return
+      }
+      chosenLine.title = dir
+      chosenLine.append('Terminals will start in ', el('strong', { text: basename(dir) || dir }))
     }
 
     function renderRecents(): void {
@@ -500,9 +552,12 @@ export const wizardFeature: UiFeature = {
               class: 'wizard-recent',
               type: 'button',
               title: r.cwd,
+              // A recent is a one-click jump: bar, browser, and git chip all follow.
               onClick: () => {
                 path.setValue(r.cwd)
                 cwd = r.cwd
+                updateChosen()
+                void browser.setPath(r.cwd)
                 void wizardClient
                   .gitQuery(r.cwd)
                   .then((git) => {
