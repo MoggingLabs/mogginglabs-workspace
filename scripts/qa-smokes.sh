@@ -183,6 +183,7 @@ run_smoke WEBTRAIL     MOGGING_WEBTRAIL  1 240 webtrail
 run_smoke MCPMGR       MOGGING_MCPMGR    1 180 mcpmgr
 run_smoke MCPCAT       MOGGING_MCPCAT    1 180 mcpcat
 run_smoke INTEGUX      MOGGING_INTEGUX   1 240 integux
+run_smoke SETINTEG     MOGGING_SETINTEG  1 240 setinteg
 run_smoke INTEGMILESTONE MOGGING_INTEGMILESTONE 1 300 integmilestone
 run_smoke WIZARDUX     MOGGING_WIZARDUX  1 180 wizardux
 run_smoke FOLDERPICK   MOGGING_FOLDERPICK 1 240 folderpick

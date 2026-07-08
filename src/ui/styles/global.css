@@ -3251,7 +3251,7 @@ body.resizing * {
 .evbridge-ev {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--sp-2);
   font-size: var(--fs-12);
   color: var(--text-mid);
   font-family: var(--font-mono);
@@ -3261,7 +3261,7 @@ body.resizing * {
   font-size: var(--fs-11);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  padding: 1px 7px;
+  padding: 1px var(--sp-2);
   border-radius: var(--r-full);
   flex: none;
 }
@@ -3327,7 +3327,7 @@ body.resizing * {
   align-items: center;
 }
 .toolplan-head {
-  padding-bottom: 4px;
+  padding-bottom: var(--sp-1);
   border-bottom: 1px solid var(--border);
   margin-bottom: 2px;
 }
@@ -3349,7 +3349,7 @@ body.resizing * {
   font-size: var(--fs-11);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding: 4px 0;
+  padding: var(--sp-1) 0;
   border-radius: var(--r-sm);
   border: 1px solid var(--border);
   background: var(--bg-inset);
@@ -4395,8 +4395,10 @@ body.resizing * {
   gap: var(--sp-2);
   flex-wrap: wrap;
 }
+/* Was 26px, in a `.trail-controls` row that also held 20.5px buttons — three control
+   heights on one line. */
 .trail-select {
-  height: 26px;
+  min-height: 28px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--bg-inset);
@@ -4404,13 +4406,18 @@ body.resizing * {
   font-size: var(--fs-12);
   padding: 0 var(--sp-1);
 }
+/* Preview · Connect · Import · Apply · Remove · Adopt · Forget · Save · Clear trail ·
+   Authorize all render as this. It was 20.5px tall. */
 .trail-btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: transparent;
   color: var(--text-mid);
   font-size: var(--fs-11);
-  padding: 2px var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
   cursor: pointer;
 }
 .trail-btn:hover {
@@ -4425,6 +4432,19 @@ body.resizing * {
 .trail-clear.is-armed {
   border-color: var(--danger);
   color: var(--danger);
+}
+/* `.is-armed` was styled ONLY under `.trail-clear`. The two buttons that carry it
+   without that class — "Write tools: ALL (agents can send/mail/claim/update here)"
+   and "Inherit global tools" — therefore had NO visual on-state: the sole signal that
+   agents may write in this workspace was the word ALL inside the label. A permission
+   whose enabled state looks exactly like its disabled state is not a control.
+   `:not(.trail-clear)` because armed-Clear is DANGER and armed-grant is WARNING — and
+   without it this rule, being later and equally specific, would repaint armed-Clear. */
+.trail-btn.is-armed:not(.trail-clear) {
+  border-color: color-mix(in srgb, var(--warning) 60%, transparent);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--text-hi);
+  font-weight: var(--fw-medium);
 }
 .trail-list {
   display: flex;
@@ -4532,13 +4552,21 @@ body.resizing * {
   flex: 1 1 auto;
   flex-wrap: wrap;
 }
+/* The hit target the spacing gate cannot see: `1px` is a SANCTIONED literal, so
+   check-spacing.mjs reads this rule as clean while it renders an 18.5px button —
+   and it is the ONLY way to reach a needs-auth or drifted server. 28px, like every
+   other control in the app. The gate measures drift, not reachability; 8.5/05's
+   smoke measures the box. */
 .mgr-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
   border: 1px solid var(--border);
   border-radius: var(--r-full);
   background: transparent;
   color: var(--text-mid);
   font-size: var(--fs-11);
-  padding: 1px var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
   cursor: pointer;
   white-space: nowrap;
 }
@@ -5361,4 +5389,144 @@ body.resizing * {
   flex: 1;
   color: var(--text-dim, var(--muted));
   font-size: 10px;
+}
+
+/* Collapsible card (8.5/05) — the unit of progressive disclosure for the mega-tabs.
+   Collapse is not hide: the header keeps its attention chips and its actions when the
+   body folds away. */
+.collapsible-card {
+  gap: var(--sp-3);
+}
+.cc-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.cc-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-hi);
+  font: inherit;
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  text-align: left;
+  cursor: pointer;
+}
+.cc-toggle:hover {
+  color: var(--accent-ink);
+}
+.cc-toggle:focus-visible {
+  outline: 2px solid var(--accent-glow);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+.cc-toggle svg {
+  flex: none;
+  color: var(--text-lo);
+  transition: transform var(--dur-1) var(--ease);
+}
+.collapsible-card.is-open .cc-toggle svg {
+  transform: rotate(90deg);
+}
+.cc-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Attention rides the header, so folding a section can never fold away its signal. */
+.cc-attn {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: none;
+}
+.cc-attn:empty {
+  display: none;
+}
+.cc-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: none;
+}
+.cc-actions:empty {
+  display: none;
+}
+/* The purpose line stays readable while closed — it is why you'd open it. */
+.cc-caption {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-lo);
+  font-size: var(--fs-12);
+}
+.cc-body[hidden] {
+  display: none;
+}
+.collapsible-card.has-attention {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-toggle svg {
+    transition: none;
+  }
+}
+
+/* The header chip a fold can never bury. Tone matches the row it stands for. */
+.cc-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-full);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+.cc-chip.is-failing,
+.cc-chip.is-refused {
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+  background: var(--danger-weak);
+  color: var(--danger-ink);
+}
+.cc-chip.is-needs-auth,
+.cc-chip.is-drift,
+.cc-chip.is-draft,
+.cc-chip.is-pending {
+  border-color: color-mix(in srgb, var(--warning) 60%, transparent);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--text-hi);
+}
+
+/* Overview band (8.5/05): the one thing that answers "is anything wrong?" unopened. */
+.integux-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-5);
+  margin-top: var(--sp-3);
+}
+.integux-stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.integux-stat-label {
+  font-size: var(--fs-11);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-lo);
+}
+.integux-stat-value {
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  color: var(--text-hi);
+  font-variant-numeric: tabular-nums;
 }

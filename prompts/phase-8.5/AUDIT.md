@@ -57,7 +57,7 @@ still hold a bug (see § Bugs, which routes all thirteen).
 | Settings — Appearance / Terminal | B → **A** | **done (04)** | Cards + FieldGroups. Appearance still holds one control — a card's head is that control's label, so it is no longer a bare row |
 | Settings — Profiles & hosts | D → **C** | part (04), **05b** owns the rest | 04 gave it the page frame (a Card with a real head) and killed `row()`. The five placeholder-as-label inputs are `profiles-hosts.ts` internals — now owned by **05b** |
 | Settings — Usage | D− | fix — **05b** | 7 sections always open; 20 controls with zero attention states permanently expanded |
-| **Settings — Integrations** | **F** | fix — **05** | 9 sections at once; `.mgr-chip` is a **1px-vertical-padding button** and the only click target for needs-auth/drift |
+| **Settings — Integrations** | **F → A** | **done (05)** | 9 sections at once; `.mgr-chip` is a **1px-vertical-padding button** and the only click target for needs-auth/drift |
 | Settings — Privacy / Browser | D → **A** | **done (04)** | ToggleRows with per-switch hints; every ADR clause kept, redistributed into a card caption + `.settings-scope` |
 | Settings — Shortcuts | B | keep — **08b** | One source, CI-enforced. Framed in a Card by 04; the `5px` padding + `0.08em` tracking live in `shortcuts.ts`'s own CSS — **08b** fixes them once, and both this and the overlay reach A |
 | Settings — About | A | **done (01)** | Rebuilt on the four primitives |
@@ -150,16 +150,16 @@ Worst: **a board lane has no empty state at all** — `board/index.ts:355` rende
 
 Every entry names its replacement. Executed by the step that owns the surface.
 
-Status: **✅ = executed**. 02 cleared every wizard row.
+Status: **✅ = executed**. 02 cleared every wizard row; 05 cleared every integrations row.
 
 | # | Item | Location | Replacement | Step |
 |---|---|---|---|---|
 | ✅ 1 | palette verb `wizard:open` | `wizard/index.ts:112-114` | `workspace:new` (`workspace/index.ts:305`) — byte-identical title+hint, **plus** a `Ctrl+T` chip and a no-wizard fallback. Two indistinguishable rows today. Keep `setWizardOpener(open)` at `:111` — that is the port. | 02 ✅ |
-| 2 | palette verb `integrations:connect` | `settings/index.ts:391` | `integrations:open` (`:389`) — both call `goIntegrations('servers')`. Safe: `integux-smoke.ts:65` needs ≥2 matches; 5 remain. | 05 |
-| 3 | palette verb `integrations:restart` | `settings/index.ts:393` | `integrations:matrix` (`:390`). Its title promises "Restart panes to pick up new tools"; the `run()` **scrolls the matrix into view and restarts nothing**. A lying verb. | 05 |
+| ✅ 2 | palette verb `integrations:connect` | `settings/index.ts:391` | `integrations:open` (`:389`) — both call `goIntegrations('servers')`. Safe: `integux-smoke.ts:65` needs ≥2 matches; **4 remain**, each carrying the hint `Integrations`. (The old "5 remain" counted against a selector half of which — `.palette-result` — matched nothing: bug #13, fixed first.) | 05 |
+| ✅ 3 | palette verb `integrations:restart` | `settings/index.ts:393` | `integrations:matrix` (`:390`). Its title promises "Restart panes to pick up new tools"; the `run()` **scrolls the matrix into view and restarts nothing**. A lying verb. | 05 |
 | ✅ 4 | `.wizard-layout-preview` + `.wizard-layout-caption` + `renderPreview()` | `wizard/index.ts:467-478,488`; `global.css:2151-2167` | `.layout-tile.is-selected` (`:2471`) + `.layout-tile-count` + the tile's `aria-label` already carry count and shape. | 02 ✅ |
 | ✅ 5 | `.wizard-footer::before` / `.review-footer::before` | `global.css:2085-2094` | `.modal-footer { border-top }` (`:2621`). Removes the double divider. | 02 ✅ / 07 |
-| 6 | Duplicate `Set up integrations…` CTA in `.integux-empty` | `integrations.ts:457-459` | The `.integux-intro` CTA (`:1129`). Two identical primary buttons ~400px apart. Safe: `integux-smoke.ts:57` asserts only that `.integux-empty` exists. | 05 |
+| ✅ 6 | Duplicate `Set up integrations…` CTA in `.integux-empty` | `integrations.ts:457-459` | The `.integux-intro` CTA (`:1129`). Two identical primary buttons ~400px apart. Safe: `integux-smoke.ts:57` asserts only that `.integux-empty` exists. | 05 |
 | 7 | `.board-lane-count` | `global.css:3372-3378` | `CountBadge()` (`pill.ts:22`) — which also brings `tabular-nums`, so **the count stops jittering** as cards drag. | 07 |
 | 8 | `CountBadge` / `TextInput` / `mount` exports | `pill.ts:22`, `input.ts:13`, `dom.ts:76` | Dead — **zero call sites repo-wide**. *(Except: adopt `CountBadge` per #7 first, then it's live.)* | 07 |
 | 9 | `.pill--accent` / `--success` / `--danger` | `global.css:425,430,434` | Dead — `Pill()` has one call site, tone `'warning'`. | 07 |
@@ -205,11 +205,54 @@ fails if any entry loses its owner or its ✅.
 | 10 | collapsed-rail collision (agent dot over `.ws-attn`) | **08** | open |
 | 11 | grid-layout button offered on Home / Board / Settings | **08** | open |
 | 12 | remote pane: state dot is no longer the leading glyph | **08** | open |
-| 13 | `integux-smoke.ts:65` asserts `.palette-result`, a class that exists nowhere | **05** | open |
+| 13 | `integux-smoke.ts:65` asserts `.palette-result`, a class that exists nowhere | **05** | **✅ fixed in 05** |
+| 14 | `.trail-btn.is-armed` has no CSS rule — the **write-tools grant toggle has no on-state** | **05** | **✅ fixed in 05** |
+| 15 | the workspace list is read once at boot, so **Workspace tools and Grants render permanently blank** | **05** | **✅ fixed in 05** |
+| 16 | the catalog's "in N of M workspaces" coverage and its imported presets never repaint — both go stale on any plan edit | **05** | **✅ fixed in 05** |
 
 > **Cross-check neither entry made.** Bug #13 says half of `integux-smoke.ts:65` is
 > dead — and REMOVE #2's safety argument ("≥2 matches; 5 remain") *rests on that very
-> assertion*. 05 therefore fixes the gate **before** removing the verb.
+> assertion*. 05 therefore fixed the gate **before** removing the verb. Four
+> `integrations:*` verbs survive, each carrying the hint `Integrations`, so the real
+> assertion (`.palette-item`, count ≥ 2) still has headroom.
+>
+> **Bugs #14 and #15 were found DURING 05, not by 01.** Neither was in the audit.
+>
+> **#14** is the more serious. `.is-armed` was styled only as `.trail-clear.is-armed`.
+> Two buttons carry `is-armed` *without* that class — "Write tools: ALL (agents can
+> send/mail/claim/update here)" and "Inherit global tools" — so the toggle that decides
+> whether agents may write in a workspace looked **identical on and off**. The sole
+> signal was the word ALL inside its own label. A permission whose enabled state is
+> indistinguishable from its disabled state is not a control. (The fix is scoped
+> `:not(.trail-clear)`: armed-Clear is *danger*, armed-grant is *warning*, and an
+> unscoped rule — later, equally specific — would have repainted armed-Clear.)
+>
+> **#15** was found by 05's own smoke, not by reading. `refreshWorkspaces()` runs once,
+> in the `setTimeout(…, 0)` that follows each block's build — and the Settings page is
+> constructed at BOOT, before any workspace exists. So `wsSelect.value` stayed `''`,
+> `render()` hit `if (!wsId) return`, and **"Workspace tools" and "Grants" rendered
+> blank for the whole session**: no matrix, no dropdown, not even the empty-state
+> sentence that explains what a plan is. The event bridge never repopulated its scope
+> select at all. Every block that depends on the workspace list now re-reads it on
+> entry into Settings (`SyncedBlock`).
+>
+> **#16 fell out of #15's fix, and only because the smoke tried to prove #14's cousin.**
+> To raise `.cat-badge.is-draft` the smoke imports a community preset — and the badge
+> never appeared. The catalog is workspace-dependent too, by exactly #15's test: every
+> card renders "in N of M workspaces" from `planCoverage`, and its `custom` presets live
+> in main's KV, which the guided-flow modal also writes. Neither repainted. Edit a tool
+> plan, return to the catalog, and the coverage counts still show the old numbers.
+>
+> **And a second half-dead assertion, of bug #13's family.** `integux-smoke.ts`
+> computed `matrixEmptyOk`, reported it, and left it OUT of `pass`. It has been `false`
+> every run for four phases — the direct symptom of #15 — and nothing noticed. It now
+> counts toward the verdict.
+>
+> The pattern across #13, #15/#16 and `matrixEmptyOk` is one thing: **a check that
+> cannot fail teaches you nothing.** A selector that matches nothing, a value computed
+> and discarded, a fixture that never creates the state it asserts. SETINTEG seeds the
+> failing webhook and imports the community preset rather than hoping a stock fixture
+> happens to contain them.
 
 The original entries, verbatim:
 
@@ -322,7 +365,7 @@ The rule is mechanical so the milestone can gate on it without judging context:
 ```sh
 node scripts/check-spacing.mjs            # count + per-bucket breakdown
 node scripts/check-spacing.mjs --list     # every violation with file:line, bucketed
-node scripts/check-spacing.mjs --max 27   # today's ceiling; 09 freezes it at --max 0
+node scripts/check-spacing.mjs --max 23   # today's ceiling; 09 freezes it at --max 0
 ```
 
 > **Correction, made in 8.5/02.** 01 shipped this rule as an `awk` one-liner using
@@ -356,7 +399,7 @@ The `—` row is `.segmented-item`; it is now 07b's.
 |---|---|---|---|---|---|
 | **02** | `wizard` | — | 5 | **0 ✓** | 0 |
 | **04** | `settings` (shell) | — | 1 | **0 ✓** | 0 |
-| 05 | `settings` | `.evbridge-ev` `.evbridge-health` `.toolplan-head` `.toolplan-cell` | 4 | 4 | 0 |
+| **05** | `settings` | — | 4 | **0 ✓** | 0 |
 | 05b | `settings` | `.usage-prov-row` `.usage-prov-controls` | 2 | 2 | 0 |
 | 06 | `home` | the four `clamp()`s: `.home-logo{margin-bottom}` `.home-welcome` `.home-ctas` `.home-sections` | 4 | 4 | 0 |
 | 07 | `feedback` | `.board-chip` `.board-lane-count` `.board-link-chip` `.palette-item` | 4 | 4 | 0 |
@@ -364,7 +407,7 @@ The `—` row is `.segmented-item`; it is now 07b's.
 | 08 | `chrome` | `.brand`(darwin `84px`) `#app.rail-collapsed .workspace-tab` `.pane-header` `.pane-title-input` `.pane-git` `.layout-menu-tile` | 6 | 6 | 0 |
 | 08b | `chrome` | `.shortcuts-row` | 1 | 1 | 0 |
 
-Columns sum: **33** at 01, **27** now, **0** at freeze. Every remaining violation is
+Columns sum: **33** at 01, **23** now, **0** at freeze. Every remaining violation is
 named, and every name has exactly one owner — `check-spacing.mjs --list` prints the
 bucket beside each, so the ledger is checkable, not asserted.
 
@@ -377,7 +420,11 @@ bucket beside each, so the ledger is checkable, not asserted.
 
 > The gate measures **drift**, not hitbox size: `.mgr-chip { padding: 1px var(--sp-2) }`
 > and `.trail-btn { padding: 2px var(--sp-2) }` — the two worst click targets in the
-> app — use *sanctioned* px and are invisible to it. 05 must fix them by eye.
+> app — used *sanctioned* px and were invisible to it. **✅ 05**: both now clear 28px,
+> and SETINTEG measures the rendered `getBoundingClientRect().height` rather than the
+> declaration, because a gate that reads CSS text cannot see a hit target. Measured
+> before: `.mgr-chip` **18.5px**, `.trail-btn` **20.5px** (and `.trail-select` was
+> `26px`, so one `.trail-controls` row rendered three different control heights).
 
 Radius is a *separate* ramp with **no** off-ramp (`--r-sm/md/lg/full`). Chrome
 currently ships `3px`, `4px`, `5px` and `6px` radii with no token behind three of

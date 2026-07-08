@@ -18,13 +18,60 @@ import {
   type WorkspaceIntegrationsGrant
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { Button, confirmDialog, createModal, el, icon, loadingRow, showToast } from '../../components'
+import { Button, confirmDialog, createCollapsibleCard, createModal, el, icon, loadingRow, showToast } from '../../components'
+import type { CollapsibleCardHandle } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onToolPlanPanesChange, restartNeededPaneIds } from '../../core/agents/toolplan-panes'
 import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
 import { onViewChange } from '../../core/shell/view-port'
 import { requestIntegrationsFocus, takeIntegrationsFocus, type IntegrationsFocus } from '../../core/shell/integrations-focus-port'
 import { fmtAge } from '../usage'
+
+// ── Attention, reported upward (8.5/05) ──────────────────────────────────────
+// Nine sections became seven folded Cards, and NOT ONE of this file's attention
+// states is knowable at build time — every one arrives from an async refresh or a
+// pushed channel. So a section that discovers it needs you says so, and the shell
+// puts that on the fold's header, where a collapse cannot bury it.
+type SectionId = 'catalog' | 'servers' | 'keys' | 'matrix' | 'webhooks' | 'grants' | 'trail'
+interface SectionSignal {
+  /** Rendered in the collapsed header. Null clears. */
+  chip: Node | null
+  /** One-glance number for the overview band. */
+  stat: string | null
+}
+type SignalListener = (id: SectionId, sig: SectionSignal) => void
+const signalListeners = new Set<SignalListener>()
+const lastSignal = new Map<SectionId, SectionSignal>()
+
+function signal(id: SectionId, sig: SectionSignal): void {
+  lastSignal.set(id, sig)
+  for (const fn of signalListeners) fn(id, sig)
+}
+function onSignal(fn: SignalListener): void {
+  signalListeners.add(fn)
+  for (const [id, sig] of lastSignal) fn(id, sig) // replay: blocks hydrate before the shell subscribes
+}
+/** `state` doubles as the tone class, so the chip reads like the row it stands for. */
+const attnChip = (state: string, text: string): HTMLElement => el('span', { class: `cc-chip is-${state}`, text })
+
+/**
+ * A block whose content depends on the WORKSPACE LIST, and must therefore be re-read
+ * every time this page is shown.
+ *
+ * Found by 8.5/05's own smoke, not by the audit: each of these read `getWorkspaces()`
+ * exactly once, inside the `setTimeout(…, 0)` that follows its build. The Settings page
+ * is constructed at boot — before any workspace exists — so `wsSelect.value` stayed `''`,
+ * `render()` hit its `if (!wsId) return`, and **"Workspace tools" and "Grants" rendered
+ * permanently blank** for the whole session: no matrix, no dropdown, not even the
+ * empty-state sentence explaining what a plan is. Only a plan change or a pane launch
+ * ever repainted them. `integux-smoke.ts` has been computing `matrixEmptyOk` — and
+ * dropping it out of its `pass` — for four phases.
+ */
+interface SyncedBlock {
+  block: HTMLElement
+  /** Re-read the workspace list and repaint. Called on every entry into Settings. */
+  sync: () => void
+}
 
 /**
  * Settings § Integrations — ONE module, one home (the 7/12 lesson; index.ts
@@ -40,7 +87,7 @@ const CLI_PROVIDER: Record<HostedCliId, string> = { 'claude-code': 'claude', cod
 const HOSTED: readonly HostedCliId[] = ['claude-code', 'codex', 'gemini']
 
 // ── The Integrations Catalog (8/07): presets as data, one pipeline ───────────
-function createCatalogBlock(): HTMLElement {
+function createCatalogBlock(): SyncedBlock {
   const bridge = getBridge()
   type Capability = { cli: HostedCliId; remoteHttp: boolean; oauth: boolean; floor: string; authorizeCommand: string | null }
   const grid = el('div', { class: 'cat-grid' })
@@ -109,14 +156,14 @@ function createCatalogBlock(): HTMLElement {
       panel.append(
         el('div', {
           class: 'settings-row-caption',
-          text: `Key slots (env references, never literals): ${preset.envRefSlots.map((s) => `\${${s}}`).join(', ')} — set the variable yourself, or a vault slot (8/08).`
+          text: `Key slots (env references, never literals): ${preset.envRefSlots.map((s) => `\${${s}}`).join(', ')} — set the variable yourself, or save it under Service keys.`
         })
       )
     }
     panel.append(
       el('div', {
         class: 'settings-row-caption',
-        text: 'Scope stays per workspace: registering makes the server available to a CLI; which WORKSPACES see it is a tool plan (8/09), and what its agents may do here stays this page’s grants.'
+        text: 'Scope stays per workspace: registering makes the server available to a CLI; which WORKSPACES see it is a tool plan, and what its agents may do here stays this page’s grants.'
       })
     )
     const previewPre = el('pre', { class: 'mgr-panel-block', hidden: true })
@@ -215,6 +262,7 @@ function createCatalogBlock(): HTMLElement {
       installed = new Set()
     }
     grid.innerHTML = ''
+    let drafts = 0
     const seenGroups = new Set<string>()
     for (const preset of [...presets, ...custom]) {
       if (preset.group) {
@@ -223,6 +271,7 @@ function createCatalogBlock(): HTMLElement {
       }
       const rows = preset.group ? presets.filter((p) => p.group === preset.group) : [preset]
       const label = preset.group ? 'Google Workspace' : preset.label
+      if (!preset.verifiedAt) drafts++
       const badge = preset.verifiedAt
         ? el('span', { class: 'cat-badge is-verified', text: `verified ${preset.verifiedAt}` })
         : el('span', { class: 'cat-badge is-draft', text: 'community — not house-vetted' })
@@ -251,6 +300,14 @@ function createCatalogBlock(): HTMLElement {
       ])
       grid.append(card)
     }
+    // `.cat-badge.is-draft` means "community — not house-vetted". It must reach the
+    // fold's header: a user who has collapsed Connect should still see that some of
+    // what they connected was never vetted. Informational, so it surfaces without
+    // forcing the section open (see `attentionOpens`).
+    signal('catalog', {
+      chip: drafts ? attnChip('draft', `${drafts} unvetted`) : null,
+      stat: null
+    })
   }
 
   // The open end: registry search + preset import — the SAME pipeline.
@@ -306,11 +363,7 @@ function createCatalogBlock(): HTMLElement {
   }
 
   const block = el('div', { class: 'trail-block cat-block' }, [
-    el('div', { class: 'settings-row-label', text: 'Integrations catalog' }),
-    el('div', {
-      class: 'settings-row-caption',
-      text: 'Official servers, verified with dates — Connect writes each CLI’s own config through the manager below. The app never runs, proxies, or authenticates a server; OAuth belongs to each CLI, keys are env references.'
-    }),
+    el('div', { class: 'settings-row-caption', text: 'Official servers, verified with dates — Connect writes each CLI’s own config through the manager below. The app never runs, proxies, or authenticates a server; OAuth belongs to each CLI, keys are env references.' }),
     grid,
     panel,
     el('div', { class: 'trail-controls' }, [searchInput, searchBtn]),
@@ -318,8 +371,13 @@ function createCatalogBlock(): HTMLElement {
     el('div', { class: 'trail-controls' }, [importInput, importBtn]),
     importNote
   ])
-  setTimeout(() => void refresh(), 0)
-  return block
+  // Also workspace-dependent, by the same test as the matrix: every card renders
+  // "in N of M workspaces" from `planCoverage`, and `custom` presets live in main's
+  // KV, which the guided-flow modal writes to. Both go stale the moment you edit a
+  // plan or connect from the modal, and nothing repainted them.
+  const sync = (): void => void refresh()
+  setTimeout(sync, 0)
+  return { block, sync }
 }
 
 // ── Servers: the registry + per-CLI apply surface (8/06) ─────────────────────
@@ -404,6 +462,9 @@ function createServersBlock(): HTMLElement {
   }
 
   async function refresh(): Promise<void> {
+    let needsAuth = 0
+    let drifted = 0
+    let connected = 0
     const servers = (await bridge.invoke(IntegrationsChannels.serversList, undefined)) as McpServerEntry[]
     const snap = ((await bridge.invoke(IntegrationsChannels.statusGet)) as McpStatusSnapshot | null) ?? { statuses: [], at: 0 }
     const conn = new Map(snap.statuses.map((s) => [`${s.serverId}:${s.cli}`, s.state]))
@@ -417,6 +478,9 @@ function createServersBlock(): HTMLElement {
         const cs = conn.get(`${server.id}:${s.cli}`)
         const live = cs && cs !== 'registered' && cs !== 'off' ? cs : null
         const cls = live ?? s.state
+        if (cls === 'needs-auth') needsAuth++
+        else if (cls === 'drift' || cls === 'drift-edited' || cls === 'drift-missing') drifted++
+        else if (cls === 'connected' || cls === 'applied') connected++
         const label = s.installed ? (live ? CONN_TEXT[live] : STATE_TEXT[s.state]) : 'not installed'
         const chip = el('button', {
           class: `mgr-chip is-${cls}${s.installed ? '' : ' is-uninstalled'}`,
@@ -452,12 +516,21 @@ function createServersBlock(): HTMLElement {
       }
       list.append(row)
     }
-    // Empty state (8/13, the 5/05 lesson): one CTA into the guided flow.
+    // Empty state (8/13, the 5/05 lesson). REMOVE #6: the primary CTA that lived here
+    // was a byte-identical twin of the overview band's — on a fresh install, the ONE
+    // state where this note renders, both were on screen at once. The note carries what
+    // the band cannot; the button carried nothing.
     if (servers.filter((s) => !s.builtIn).length === 0) {
-      const cta = Button({ label: 'Set up integrations…', icon: 'sparkles', variant: 'primary', onClick: () => openGuidedFlow() })
-      cta.classList.add('integux-setup-cta')
-      list.append(el('div', { class: 'integux-empty' }, [el('span', { class: 'menu-note', text: 'Only the built-in server so far. Connect your first tool — we’ll walk you through it.' }), cta]))
+      list.append(
+        el('div', { class: 'integux-empty' }, [
+          el('span', { class: 'menu-note', text: 'Only the built-in server so far. Connect your first tool from the catalog above — we’ll walk you through it.' })
+        ])
+      )
     }
+    signal('servers', {
+      chip: needsAuth ? attnChip('needs-auth', `${needsAuth} need auth`) : drifted ? attnChip('drift', `${drifted} drifted`) : null,
+      stat: `${connected} connected`
+    })
   }
 
   // Add-server form (env values are ${VAR} references; literals are refused).
@@ -530,12 +603,7 @@ function createServersBlock(): HTMLElement {
   }
 
   const block = el('div', { class: 'trail-block mgr-block' }, [
-    el('div', { class: 'settings-row-label', text: 'MCP servers' }),
-    el('div', {
-      class: 'settings-row-caption',
-      text:
-        'Register a server once and apply it to each CLI in its own config dialect. Writes are surgical (only our marked entries), backed up first, and only ever on your click — the app never runs, proxies, or authenticates a server. Env values are ${VAR} references; paste a key value and it’s vaulted (encrypted, materialized into pane env), never written as a literal.'
-    }),
+    el('div', { class: 'settings-row-caption', text: 'Register a server once and apply it to each CLI in its own config dialect. Writes are surgical (only our marked entries), backed up first, and only ever on your click — the app never runs, proxies, or authenticates a server. Env values are ${VAR} references; paste a key value and it’s vaulted (encrypted, materialized into pane env), never written as a literal.' }),
     list,
     panel,
     el('div', { class: 'trail-controls' }, [addToggle]),
@@ -548,7 +616,7 @@ function createServersBlock(): HTMLElement {
 }
 
 // ── Grants: the per-workspace boundary knobs (03/04's store) ─────────────────
-function createGrantsBlock(): HTMLElement {
+function createGrantsBlock(): SyncedBlock {
   const bridge = getBridge()
   const wsSelect = el('select', { class: 'trail-select' }) as HTMLSelectElement
   wsSelect.setAttribute('aria-label', 'Workspace')
@@ -613,23 +681,20 @@ function createGrantsBlock(): HTMLElement {
   wsSelect.onchange = (): void => void render()
 
   const block = el('div', { class: 'trail-block mgr-grants-block' }, [
-    el('div', { class: 'settings-row-label', text: 'Workspace grants' }),
-    el('div', {
-      class: 'settings-row-caption',
-      text: 'Per workspace, default closed: which MCP write tools agents get, and which signed-in origins they may act on. The reviewer gate stays the boundary — approve is never a tool.'
-    }),
+    el('div', { class: 'settings-row-caption', text: 'Per workspace, default closed: which MCP write tools agents get, and which signed-in origins they may act on. The reviewer gate stays the boundary — approve is never a tool.' }),
     el('div', { class: 'trail-controls' }, [wsSelect]),
     body
   ])
-  setTimeout(() => {
+  const sync = (): void => {
     refreshWorkspaces()
     void render()
-  }, 0)
-  return block
+  }
+  setTimeout(sync, 0)
+  return { block, sync }
 }
 
 // ── Activity: the audit trail viewer (8/05, absorbed) ────────────────────────
-function createActivityBlock(): HTMLElement {
+function createActivityBlock(): SyncedBlock & { honesty: HTMLElement } {
   const bridge = getBridge()
 
   const wsSelect = el('select', { class: 'trail-select trail-ws' }) as HTMLSelectElement
@@ -678,6 +743,11 @@ function createActivityBlock(): HTMLElement {
       if (t.reason) row.title = t.reason
       list.append(row)
     }
+    const refused = rows.filter((r) => r.outcome === 'refused').length
+    signal('trail', {
+      chip: refused ? attnChip('refused', `${refused} refused`) : null,
+      stat: rows.length ? `${rows.length} act${rows.length === 1 ? '' : 's'}` : 'none yet'
+    })
   }
 
   async function refresh(): Promise<void> {
@@ -730,21 +800,20 @@ function createActivityBlock(): HTMLElement {
   ])
 
   const controls = el('div', { class: 'trail-controls' }, [wsSelect, srcSelect, refreshBtn, exportBtn, clearBtn])
-  const block = el('div', { class: 'trail-block trail-activity' }, [
-    el('div', { class: 'settings-row-label', text: 'Agent activity' }),
-    honesty,
-    controls,
-    emptyNote,
-    list
-  ])
+  // `honesty` leaves the block and becomes the Card's caption — so the retention
+  // promise is legible while the trail is folded shut. It stays INSIDE `.trail-activity`
+  // (now the card root) because WEBTRAIL reads 'never sent anywhere' out of that
+  // subtree's first 4000 characters, and 500 rows would push it past the window.
+  const block = el('div', { class: 'trail-block' }, [controls, emptyNote, list])
 
   // First paint: populate lazily so a fresh settings open shows live data.
-  setTimeout(() => {
+  const sync = (): void => {
     refreshWorkspaceOptions()
     void refresh()
-  }, 0)
+  }
+  setTimeout(sync, 0)
 
-  return block
+  return { block, honesty, sync }
 }
 
 // ── Service keys: the paste-once fleet vault (8/08) ──────────────────────────
@@ -800,12 +869,7 @@ function createServiceKeysBlock(): HTMLElement {
   }
 
   const block = el('div', { class: 'trail-block mgr-block' }, [
-    el('div', { class: 'settings-row-label', text: 'Service keys (vault)' }),
-    el('div', {
-      class: 'settings-row-caption',
-      text:
-        'Paste an api key once — it’s encrypted by your OS keychain and reaches agents in panes MoggingLabs Workspace launches, as the env var ${NAME}. No secret ever lands in a CLI config, a log, or on disk in plaintext. A CLI you run elsewhere needs the same variable set in your own environment.'
-    }),
+    el('div', { class: 'settings-row-caption', text: 'Paste an api key once — it’s encrypted by your OS keychain and reaches agents in panes MoggingLabs Workspace launches, as the env var ${NAME}. No secret ever lands in a CLI config, a log, or on disk in plaintext. A CLI you run elsewhere needs the same variable set in your own environment.' }),
     el('div', {
       class: 'settings-row-caption',
       text:
@@ -820,7 +884,7 @@ function createServiceKeysBlock(): HTMLElement {
 }
 
 // ── The tool plan: which servers reach a workspace's panes, per CLI (8/09) ───
-function createToolPlanBlock(): HTMLElement {
+function createToolPlanBlock(): SyncedBlock {
   const bridge = getBridge()
   const CLI_ORDER: HostedCliId[] = ['claude-code', 'codex', 'gemini']
   const wsSelect = el('select', { class: 'trail-select' }) as HTMLSelectElement
@@ -899,6 +963,10 @@ function createToolPlanBlock(): HTMLElement {
       return `${CLI_LABEL[cli]} ${n}`
     })
     const pending = restartNeededPaneIds(wsId, planSignature(plan)).length
+    signal('matrix', {
+      chip: pending ? attnChip('pending', `${pending} pane${pending === 1 ? '' : 's'} to restart`) : null,
+      stat: counts.join(' · ')
+    })
     body.append(
       el('div', {
         class: 'settings-row-caption toolplan-truth',
@@ -930,19 +998,16 @@ function createToolPlanBlock(): HTMLElement {
   onToolPlanPanesChange(() => void render())
 
   const block = el('div', { class: 'trail-block mgr-grants-block' }, [
-    el('div', { class: 'settings-row-label', text: 'Workspace tools' }),
-    el('div', {
-      class: 'settings-row-caption',
-      text: 'Which registered servers reach this workspace’s panes, per CLI — so agents carry only the tools the work needs, not everything connected. The house server is always on; “global” tools are inherited only when you turn inheritance on. Scoping is context hygiene, not a permission — grants stay the boundary.'
-    }),
+    el('div', { class: 'settings-row-caption', text: 'Which registered servers reach this workspace’s panes, per CLI — so agents carry only the tools the work needs, not everything connected. The house server is always on; “global” tools are inherited only when you turn inheritance on. Scoping is context hygiene, not a permission — grants stay the boundary.' }),
     el('div', { class: 'trail-controls' }, [wsSelect]),
     body
   ])
-  setTimeout(() => {
+  const sync = (): void => {
     refreshWorkspaces()
     void render()
-  }, 0)
-  return block
+  }
+  setTimeout(sync, 0)
+  return { block, sync }
 }
 
 // ── Event bridge: house events -> user webhooks (8/10) ───────────────────────
@@ -954,7 +1019,7 @@ interface WebhookView {
   urlMask: string
   health: 'ok' | 'failing' | 'off'
 }
-function createEventBridgeBlock(): HTMLElement {
+function createEventBridgeBlock(): SyncedBlock {
   const bridge = getBridge()
   const list = el('div', { class: 'mgr-list' })
   const note = el('div', { class: 'settings-error mgr-note', role: 'alert', hidden: true })
@@ -973,8 +1038,16 @@ function createEventBridgeBlock(): HTMLElement {
   }))
   const insecureBox = el('input', { attrs: { type: 'checkbox' } }) as HTMLInputElement
   const wsSelect = el('select', { class: 'trail-select' }) as HTMLSelectElement
-  wsSelect.append(el('option', { value: '', text: 'All workspaces' }))
-  for (const w of getWorkspaces().workspaces) wsSelect.append(el('option', { value: w.id, text: w.name }))
+  // Populated at BUILD only, before boot's first workspace existed — so a webhook could
+  // never be scoped to anything. Repopulated on every entry into Settings.
+  const refreshWorkspaces = (): void => {
+    const current = wsSelect.value
+    wsSelect.innerHTML = ''
+    wsSelect.append(el('option', { value: '', text: 'All workspaces' }))
+    for (const w of getWorkspaces().workspaces) wsSelect.append(el('option', { value: w.id, text: w.name }))
+    wsSelect.value = current
+  }
+  refreshWorkspaces()
   const saveBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Add webhook' }) as HTMLButtonElement
 
   const HEALTH_TEXT: Record<string, string> = { ok: 'ok', failing: 'failing', off: 'idle' }
@@ -995,11 +1068,21 @@ function createEventBridgeBlock(): HTMLElement {
     ])
   }
 
-  async function refresh(): Promise<void> {
-    const hooks = ((await bridge.invoke(IntegrationsChannels.webhookList)) as WebhookView[]) ?? []
+  // ONE painter. `refresh()` and the pushed health change both land here, so a
+  // failing webhook raises the same header chip whichever path discovered it.
+  function paint(hooks: WebhookView[]): void {
     list.innerHTML = ''
     if (!hooks.length) list.append(el('div', { class: 'menu-note', text: 'No webhooks yet. A pane’s notify (needs-you) can ring n8n, Make, or Slack.' }))
     for (const w of hooks) list.append(row(w))
+    const failing = hooks.filter((w) => w.health === 'failing').length
+    signal('webhooks', {
+      chip: failing ? attnChip('failing', `${failing} failing`) : null,
+      stat: !hooks.length ? 'none' : failing ? `${failing} failing` : 'all healthy'
+    })
+  }
+
+  async function refresh(): Promise<void> {
+    paint(((await bridge.invoke(IntegrationsChannels.webhookList)) as WebhookView[]) ?? [])
   }
 
   saveBtn.onclick = async (): Promise<void> => {
@@ -1013,25 +1096,20 @@ function createEventBridgeBlock(): HTMLElement {
     if (r.ok) { labelInput.value = ''; envInput.value = ''; await refresh() }
     else note.textContent = r.reason ?? 'refused'
   }
-  bridge.on(IntegrationsChannels.webhookHealthChanged, (payload) => {
-    const hooks = (payload as WebhookView[]) ?? []
-    list.innerHTML = ''
-    if (!hooks.length) list.append(el('div', { class: 'menu-note', text: 'No webhooks yet.' }))
-    for (const w of hooks) list.append(row(w))
-  })
+  bridge.on(IntegrationsChannels.webhookHealthChanged, (payload) => paint((payload as WebhookView[]) ?? []))
 
   const block = el('div', { class: 'trail-block mgr-block' }, [
-    el('div', { class: 'settings-row-label', text: 'Event bridge (webhooks)' }),
-    el('div', {
-      class: 'settings-row-caption',
-      text: 'When a pane needs you — or a card moves, or a review changes — POST a small JSON payload to your own webhook (n8n, Make, Slack). Outbound only, nothing listens. The URL is a secret: pasted once, encrypted, shown masked. Payload: { v, event, ts, workspace, pane?, card?, note? } — ids and your notify’s note, never scrollback or diffs.'
-    }),
+    el('div', { class: 'settings-row-caption', text: 'When a pane needs you — or a card moves, or a review changes — POST a small JSON payload to your own webhook (n8n, Make, Slack). Outbound only, nothing listens. The URL is a secret: pasted once, encrypted, shown masked. Payload: { v, event, ts, workspace, pane?, card?, note? } — ids and your notify’s note, never scrollback or diffs.' }),
     list,
     el('div', { class: 'mgr-form' }, [labelInput, urlInput, envInput, evRow, el('label', { class: 'evbridge-ev' }, [insecureBox, el('span', { text: 'allow insecure LAN http' })]), wsSelect, saveBtn]),
     note
   ])
-  setTimeout(() => void refresh(), 0)
-  return block
+  const sync = (): void => {
+    refreshWorkspaces()
+    void refresh()
+  }
+  setTimeout(sync, 0)
+  return { block, sync }
 }
 
 // ── The guided "Connect your stack" flow (8/13) — ORCHESTRATES 06/07/09 ─────
@@ -1124,13 +1202,36 @@ export function openGuidedFlow(): void {
   })()
 }
 
-// A one-CTA header into the guided flow (the 5/05 empty-state lesson).
+// The overview band (8.5/05). Not a Card and never folded: it is the one thing on
+// this page that answers "is anything wrong?" without opening anything. Its three
+// stats are fed by `onSignal` — nothing here is knowable at build time.
 function createIntegrationsIntro(): HTMLElement {
   const setup = Button({ label: 'Set up integrations…', icon: 'sparkles', variant: 'primary', onClick: () => openGuidedFlow() })
   setup.classList.add('integux-setup-cta')
+
+  const stat = (label: string): { el: HTMLElement; set: (v: string) => void } => {
+    const value = el('span', { class: 'integux-stat-value', text: '—' })
+    return {
+      el: el('div', { class: 'integux-stat' }, [el('span', { class: 'integux-stat-label', text: label }), value]),
+      set: (v) => (value.textContent = v)
+    }
+  }
+  const servers = stat('Servers')
+  const webhooks = stat('Webhooks')
+  const trail = stat('Activity')
+  const setters: Partial<Record<SectionId, (v: string) => void>> = {
+    servers: servers.set,
+    webhooks: webhooks.set,
+    trail: trail.set
+  }
+  onSignal((id, sig) => {
+    if (sig.stat) setters[id]?.(sig.stat)
+  })
+
   return el('div', { class: 'trail-block integux-intro' }, [
     el('div', { class: 'settings-row-label', text: 'Connect your stack' }),
     el('div', { class: 'settings-row-caption', text: 'Wire your tools (n8n, Slack, Sentry, GitHub…) to the coding agents you already run — the app never holds a credential; the CLIs own their auth.' }),
+    el('div', { class: 'integux-stats' }, [servers.el, webhooks.el, trail.el]),
     el('div', { class: 'trail-controls' }, [setup])
   ])
 }
@@ -1147,28 +1248,108 @@ function createIntegrationsPrivacy(): HTMLElement {
   ])
 }
 
+// Focus targets and the sync bundle outlive any single build, so `goIntegrations` can
+// drive them even when Settings is ALREADY the active view — see enterIntegrations.
+let focusTargets: Record<Exclude<IntegrationsFocus, 'flow'>, CollapsibleCardHandle> | null = null
+let syncAll: (() => void) | null = null
+let entryQueued = false
+
+/**
+ * The page was entered: re-read everything that can go stale, then honour any pending
+ * focus request.
+ *
+ * DEFERRED, and coalesced. Five blocks re-reading their data is real work, and running
+ * it inside the listener means running it inside the frame that swaps the view — before
+ * a single pixel of Settings has painted. A macrotask costs nothing and lets the switch
+ * land first. Coalesced because both `onViewChange` and `goIntegrations` call this, and
+ * a palette verb fired from Home triggers both.
+ */
+export function enterIntegrations(): void {
+  if (entryQueued) return
+  entryQueued = true
+  setTimeout(() => {
+    entryQueued = false
+    syncAll?.()
+    applyIntegrationsFocus() // after the syncs: a focus scroll should measure real content
+  }, 0)
+}
+
+/**
+ * Drain a pending focus request: expand the target, THEN scroll to it.
+ *
+ * Scrolling to a folded card would land the user on a 40px header and reveal nothing —
+ * a no-op shaped like a success. The 60ms still buys the blocks' `setTimeout(…, 0)`
+ * hydration, so the card has its real height before `scrollIntoView` measures it.
+ * The expand is not persisted: you asked to see it once, not to change your layout.
+ */
+export function applyIntegrationsFocus(): void {
+  const t = takeIntegrationsFocus()
+  if (!t) return
+  if (t === 'flow') return openGuidedFlow()
+  const card = focusTargets?.[t]
+  if (!card) return
+  card.setOpen(true, { persist: false })
+  setTimeout(() => card.el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60)
+}
+
 export function createIntegrationsSection(): HTMLElement {
-  const servers = createServersBlock()
-  const matrix = createToolPlanBlock()
-  const webhooks = createEventBridgeBlock()
+  // A second mount would otherwise stack duplicate listeners onto detached DOM.
+  signalListeners.clear()
+  lastSignal.clear()
+
+  const activity = createActivityBlock()
+  const catalogBlock = createCatalogBlock()
+  const toolplan = createToolPlanBlock()
+  const grantsBlock = createGrantsBlock()
+  const eventBridge = createEventBridgeBlock()
+  const card = (
+    id: SectionId,
+    title: string,
+    caption: string | Node,
+    body: HTMLElement,
+    o: { defaultOpen?: boolean; attentionOpens?: boolean; class?: string } = {}
+  ): CollapsibleCardHandle =>
+    createCollapsibleCard({ id, title, caption, storagePrefix: 'integrations', ...o }, [body])
+
+  // Task order, not build order: connect a tool, register it, scope it, grant it,
+  // wire it to your automations, key it, then audit what it did.
+  // One line each. A fold you must read four lines to skip is not a fold — the full
+  // paragraph lives at the top of each body, where it applies. Every purpose line keeps
+  // its load-bearing clause: what the app will never do with your credentials.
+  const catalog = card('catalog', 'Connect', 'Verified servers, wired to the CLIs you already run — the app never authenticates one.', catalogBlock.block, { defaultOpen: true, attentionOpens: false })
+  const servers = card('servers', 'Servers & registry', 'Register once, apply per CLI. Writes are surgical, backed up, and only on your click.', createServersBlock())
+  const matrix = card('matrix', 'Workspace tool plans', 'Which servers reach this workspace’s panes. Context hygiene, not a permission.', toolplan.block)
+  const grants = card('grants', 'Grants', 'What agents may write here, and which origins they may act on. Default closed.', grantsBlock.block)
+  const webhooks = card('webhooks', 'Webhooks', 'POST to your own automations when a pane needs you. Outbound only; the URL is a secret.', eventBridge.block)
+  const keys = card('keys', 'Service keys', 'One paste, encrypted by your OS keychain. Never a config file, a log, or plaintext on disk.', createServiceKeysBlock())
+  // `.trail-activity` moves to the CARD root so its subtree still holds the retention
+  // copy WEBTRAIL reads. Nothing styles the class — it has always been a smoke seam.
+  const trail = card('trail', 'Activity trail', activity.honesty, activity.block, { attentionOpens: false, class: 'trail-activity' })
+
+  const cards: Record<SectionId, CollapsibleCardHandle> = { catalog, servers, matrix, grants, webhooks, keys, trail }
+  onSignal((id, sig) => cards[id]?.setAttention(sig.chip))
+
   const section = el('div', { class: 'integrations-section' }, [
     createIntegrationsIntro(),
-    createCatalogBlock(),
-    servers,
-    createServiceKeysBlock(),
-    matrix,
-    webhooks,
-    createGrantsBlock(),
-    createIntegrationsPrivacy(),
-    createActivityBlock()
+    catalog.el,
+    servers.el,
+    matrix.el,
+    grants.el,
+    webhooks.el,
+    keys.el,
+    trail.el,
+    createIntegrationsPrivacy()
   ])
-  // Consume a palette/checklist focus request when the page is shown (8/13).
-  const focusTargets: Record<Exclude<IntegrationsFocus, 'flow'>, HTMLElement> = { matrix, webhooks, servers }
+
+  focusTargets = { matrix, webhooks, servers }
+  // Every entry into Settings re-reads what can go stale. Reading it once at boot is
+  // what left the matrix and the grants blank on a fresh install (see SyncedBlock).
+  const syncs = [catalogBlock.sync, toolplan.sync, grantsBlock.sync, eventBridge.sync, activity.sync]
+  syncAll = (): void => {
+    for (const sync of syncs) sync()
+  }
   onViewChange((v) => {
-    if (v !== 'settings') return
-    const t = takeIntegrationsFocus()
-    if (t === 'flow') openGuidedFlow()
-    else if (t) setTimeout(() => focusTargets[t]?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60)
+    if (v === 'settings') enterIntegrations()
   })
   return section
 }

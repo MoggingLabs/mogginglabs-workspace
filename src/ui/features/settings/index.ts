@@ -15,7 +15,7 @@ import { setTerminalFontSize, terminalFontSize, TERMINAL_FONT_SIZES } from '../.
 import { TEMPLATE_COUNTS } from '../layout'
 import { createProfilesHostsSection } from './profiles-hosts'
 import { createUsageSection } from './usage'
-import { createIntegrationsSection } from './integrations'
+import { createIntegrationsSection, enterIntegrations } from './integrations'
 
 const DEFAULT_LAYOUT_KEY = 'mogging.defaultPaneCount'
 
@@ -479,6 +479,11 @@ export const settingsFeature: UiFeature = {
       requestIntegrationsFocus(focus)
       showSection('integrations')
       setActiveView('settings')
+      // `setActiveView` early-returns when Settings is ALREADY the view, so its
+      // onViewChange listeners never fire and the token sat pending until the next
+      // fresh entry — which then scrolled somewhere the user hadn't asked for. Enter
+      // here too; `enterIntegrations` coalesces, so the double call does one pass.
+      enterIntegrations()
     }
     setCommands('settings', [
       {
@@ -491,9 +496,11 @@ export const settingsFeature: UiFeature = {
       { id: 'integrations:setup', title: 'Set up integrations…', hint: 'Integrations', run: () => goIntegrations('flow') },
       { id: 'integrations:open', title: 'Open integrations', hint: 'Integrations', run: () => goIntegrations('servers') },
       { id: 'integrations:matrix', title: 'Open integrations matrix (workspace tools)', hint: 'Integrations', run: () => goIntegrations('matrix') },
-      { id: 'integrations:connect', title: 'Connect an integration…', hint: 'Integrations', run: () => goIntegrations('servers') },
+      // REMOVE #2: `integrations:connect` was `integrations:open` under a second name —
+      // both ran goIntegrations('servers'). REMOVE #3: `integrations:restart` promised a
+      // restart in its title and only scrolled to the matrix. A verb that lies is worse
+      // than a missing one; the matrix now reports pending panes on its fold instead.
       { id: 'integrations:webhooks', title: 'Add a webhook (event bridge)', hint: 'Integrations', run: () => goIntegrations('webhooks') },
-      { id: 'integrations:restart', title: 'Restart panes to pick up new tools', hint: 'Integrations', run: () => goIntegrations('matrix') },
       ...THEMES.map((t) => ({
         id: `theme:${t.id}`,
         title: `Theme: ${t.name}`,

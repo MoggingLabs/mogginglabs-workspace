@@ -55,14 +55,22 @@ export function runIntegUxSmoke(win: BrowserWindow): void {
       const privacyOk = await waitTrue(`!!document.querySelector('.integux-privacy')`)
       // The registry list renders async — poll (Linux caught it mid-render once).
       const serversEmptyOk = await waitTrue(`!!document.querySelector('.integux-empty')`)
-      const matrixEmptyOk = await ES<boolean>(`!!document.querySelector('.toolplan-empty')`)
-      const emptyOk = serversEmptyOk // the 5/05 empty-state CTA is the DoD-critical one
+      // `matrixEmptyOk` was computed, reported, and then left OUT of `pass` — it has
+      // been false every run, because the tool-plan matrix never rendered: its block
+      // read the workspace list once, at boot, before any workspace existed (8.5/05
+      // fixed this; see SyncedBlock in integrations.ts). Now that it renders, assert it.
+      const matrixEmptyOk = await waitTrue(`!!document.querySelector('.toolplan-empty')`)
+      const emptyOk = serversEmptyOk && matrixEmptyOk
 
       // ── (c) palette verbs are reachable ────────────────────────────────────
       await ES(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,bubbles:true,cancelable:true}))`)
       await sleep(300)
       await ES(`(()=>{const i=document.querySelector('.palette-overlay input,.palette input');if(i){i.value='integrations';i.dispatchEvent(new Event('input',{bubbles:true}))}})()`)
-      const paletteOk = await waitTrue(`[...document.querySelectorAll('.palette-item, .palette-result')].filter(e=>/integrations/i.test(e.textContent||'')).length >= 2`)
+      // Bug #13: `.palette-result` is emitted NOWHERE in src/ui — the palette renders
+      // `.palette-item` only. Half of this selector was dead, and REMOVE #2/#3's safety
+      // argument ("≥2 matches survive") rested on it. Four `integrations:*` verbs remain,
+      // each carrying the hint 'Integrations', so the real assertion still has headroom.
+      const paletteOk = await waitTrue(`[...document.querySelectorAll('.palette-item')].filter(e=>/integrations/i.test(e.textContent||'')).length >= 2`)
       await ES(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))`)
       await sleep(200)
 

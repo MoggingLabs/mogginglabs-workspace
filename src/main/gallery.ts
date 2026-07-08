@@ -276,9 +276,15 @@ export function runGallery(win: BrowserWindow): void {
           flushTrailForSmoke()
           await ES(`document.querySelector('.settings-nav-item[data-target="integrations"]')?.click()`)
           await sleep(500)
-          await snap(`${tag}-integrations-settings`) // servers registry + grants (8/06)
+          await snap(`${tag}-integrations-settings`) // overview band + the folded cards (8.5/05)
+          // EXPAND, then scroll. The trail is a collapsed Card now, and both of these
+          // lines use `?.`, so a fold would not throw — it would silently photograph a
+          // closed accordion and call it the Activity trail. `.cc-toggle` is idempotent
+          // only in one direction, so check before clicking.
+          await ES(`(() => { const c = document.querySelector('.trail-activity'); if (c && !c.classList.contains('is-open')) c.querySelector('.cc-toggle')?.click() })()`)
+          await sleep(250)
           await ES(`document.querySelector('.trail-activity')?.scrollIntoView({ block: 'start' })`)
-          await ES(`(document.querySelector('.trail-activity .trail-btn')?.click(), 1)`)
+          await ES(`(document.querySelector('.trail-activity .trail-btn')?.click(), 1)`) // Refresh — still first
           await sleep(500)
           await snap(`${tag}-integrations-activity`)
           clearTrail(galleryWs)
