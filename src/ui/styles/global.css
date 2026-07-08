@@ -1017,18 +1017,23 @@ button {
    it means something: the grid. */
 #view-home,
 #view-board,
-#view-settings {
+#view-settings,
+#view-wizard {
   display: none;
 }
 #content.view-home #view-home,
 #content.view-board #view-board,
-#content.view-settings #view-settings {
+#content.view-settings #view-settings,
+#content.view-wizard #view-wizard {
   display: flex;
 }
 #content:not(.view-grid) #workspace-host {
   display: none;
 }
-#app:not(.view-grid) #rail {
+/* The rail lives where it means something: the grid — and the WIZARD (8.5/02),
+   which is the grid's own setup page. You configure the next workspace with the
+   ones you already have still in view. */
+#app:not(.view-grid):not(.view-wizard) #rail {
   display: none;
 }
 
@@ -2243,25 +2248,97 @@ body.resizing * {
   font-size: var(--fs-11);
 }
 
-/* ── New-workspace wizard (Start · Layout · Agents) ────────────────────────── */
-.wizard-shell {
+/* ── New-workspace wizard — a full PAGE, not a modal (8.5/02) ──────────────── */
+/* One scannable page: Where · Layout · Agents as three Cards in a centred column
+   beside the workspace rail. Spacing is --sp-* only. */
+#view-wizard {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  justify-content: center;
+  overflow: hidden;
+}
+.wizard-page {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-4);
+  width: min(var(--page-max), 100%);
+  min-height: 0;
+  padding: var(--sp-6);
+  gap: var(--sp-5);
 }
+.wizard-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex: none;
+}
+.wizard-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.wizard-title {
+  margin: 0;
+  font-size: var(--fs-24);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-tight);
+  color: var(--text-hi);
+}
+.wizard-subtitle {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-lo);
+  font-size: var(--fs-13);
+}
+/* The scrolling card column. --wz-ctl unifies the row control heights that used
+   to be four different values (stepper 24 / select 28 / copy 22 / pill). */
 .wizard {
+  --wz-ctl: 28px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-4);
+  gap: var(--sp-5);
+  padding-bottom: var(--sp-2);
 }
+.wizard-footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+.wizard-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.wizard-byo {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  min-width: 0;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+}
+.wizard-byo svg {
+  color: var(--success);
+  flex: none;
+}
+
 /* Modal footers get the division too: the body scrolls UNDER the footer, and
-   without a line the fold is ambiguous (content just stops). */
-.wizard-footer,
+   without a line the fold is ambiguous (content just stops). The wizard is no
+   longer a modal, so only the review modal carries this now. */
 .review-footer {
   position: relative;
   padding-top: var(--sp-3);
 }
-.wizard-footer::before,
 .review-footer::before {
   content: '';
   position: absolute;
@@ -2271,170 +2348,236 @@ body.resizing * {
   height: 1px;
   background: color-mix(in srgb, var(--border) 55%, transparent);
 }
-.wizard-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  gap: var(--sp-3);
+
+/* A quiet per-card disclosure — native <details>, so Chromium gives us the
+   button semantics, aria-expanded, and Enter/Space for free. */
+.wizard-adv {
+  border-top: 1px solid var(--border);
+  padding-top: var(--sp-3);
 }
-.wizard-footer-actions {
+.wizard-adv-summary {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  list-style: none;
+  cursor: pointer;
+  color: var(--text-mid);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+}
+.wizard-adv-summary::-webkit-details-marker {
+  display: none;
+}
+.wizard-adv-summary:hover {
+  color: var(--text-hi);
+}
+.wizard-adv-summary:focus-visible {
+  outline: 2px solid var(--accent-glow);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+.wizard-adv-summary svg {
+  color: var(--text-lo);
+  transition: transform var(--dur-1) var(--ease);
+}
+.wizard-adv[open] > .wizard-adv-summary svg {
+  transform: rotate(90deg);
+}
+.wizard-adv-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding-top: var(--sp-4);
+}
+.wizard-adv-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+}
+.wizard-cluster-label {
+  color: var(--text-lo);
+  font-size: var(--fs-10);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+}
+.wizard-hint {
+  min-width: 0;
+  max-width: var(--measure);
+  color: var(--text-lo);
+  font-size: var(--fs-11);
 }
 
-/* Step 1: recents. */
+/* Where: recent folders. Bordered at rest — the old 2px seam between two
+   transparent-bordered rows read as a rendering artifact. */
 .wizard-recents {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-1);
 }
 .wizard-recent {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: 6px var(--sp-2);
-  border: 1px solid transparent;
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  background: transparent;
+  background: var(--bg-elevated);
   color: var(--text-mid);
+  font: inherit;
   font-size: var(--fs-12);
-  cursor: pointer;
   text-align: left;
-  min-width: 0;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-1) var(--ease),
+    background var(--dur-1) var(--ease);
 }
 .wizard-recent:hover {
-  background: var(--bg-surface);
-  border-color: var(--border);
-  color: var(--text-hi);
+  border-color: var(--accent);
+  background: var(--accent-weak);
 }
 .wizard-recent svg {
   color: var(--text-lo);
   flex: none;
 }
 .wizard-recent-name {
-  font-weight: var(--fw-medium);
-  flex: none;
-}
-.wizard-recent-path {
-  color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text-hi);
+  font-weight: var(--fw-medium);
+}
+.wizard-recent-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
 }
 
-/* Step 2: layout preview. */
-.wizard-layout-preview {
+/* Agents: the meter groups DOWN with the controls that move it. */
+.wizard-fill {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.wizard-fill-bar {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  padding: var(--sp-3);
-  border: 1px dashed var(--border);
-  border-radius: var(--r-md);
 }
-.wizard-layout-preview .grid-preview {
-  width: 96px;
-  height: 64px;
-  flex: none;
-}
-.wizard-layout-caption {
-  color: var(--text-mid);
-  font-size: var(--fs-12);
-}
-
-/* Step 3: fill meter + quick fills + roster. */
-.wizard-fill-row {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-}
-.wizard-fill-row .meter {
+.wizard-fill-bar .meter {
   flex: 1 1 auto;
 }
 .wizard-fill-label {
+  flex: none;
   color: var(--text-mid);
   font-family: var(--font-mono);
   font-size: var(--fs-11);
   white-space: nowrap;
-  flex: none;
 }
 .wizard-fills {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
   flex-wrap: wrap;
-}
-.wizard-fills-label {
-  color: var(--text-lo);
-  font-size: var(--fs-11);
+  gap: var(--sp-2);
 }
 .wizard-agents {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-1);
 }
 .wizard-agent-row {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: 5px var(--sp-2);
+  min-height: 36px;
+  padding: var(--sp-2);
+  border: 1px solid transparent;
   border-radius: var(--r-sm);
 }
 .wizard-agent-row:hover {
   background: var(--bg-surface);
 }
 .wizard-agent-row.is-missing {
-  opacity: 0.55;
+  opacity: 0.75;
+}
+.wizard-agent-head,
+.wizard-agent-tail {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.wizard-agent-tail {
+  flex: none;
+  margin-left: auto; /* no zero-width spacer element — the audit's REMOVE */
+}
+.wizard-agent-row :is(.stepper, .wizard-profile-select, .wizard-agent-copy, .wizard-recheck) {
+  height: var(--wz-ctl);
 }
 .wizard-agent-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: var(--r-full);
   flex: none;
+  width: var(--sp-2);
+  height: var(--sp-2);
+  border-radius: var(--r-full);
 }
 .wizard-agent-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--fs-13);
-  font-weight: var(--fw-medium);
 }
-.wizard-agent-spacer {
+.wizard-custom-row .wizard-agent-head {
   flex: 1 1 auto;
 }
 .wizard-custom-input {
   flex: 1 1 auto;
   min-width: 0;
-  height: 28px;
+  height: var(--wz-ctl);
   font-size: var(--fs-12);
 }
-.wizard-agent-footer {
+.wizard-agents-empty {
   display: flex;
-  gap: var(--sp-5);
-  align-items: flex-start;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  padding: var(--sp-2);
 }
-.wizard-preview-wrap,
-.wizard-preset-wrap {
+
+/* Agents: the assignment preview — THE at-a-glance truth. */
+.wizard-preview-wrap {
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
 }
-.wizard-preview-wrap .grid-preview {
+.wizard-preview .grid-preview {
   width: 132px;
   height: 88px;
 }
-.wizard-preset-wrap {
-  flex: 1 1 auto;
-  min-width: 0;
+
+/* Agents › Advanced: presets. */
+.wizard-presets-row {
+  gap: var(--sp-2);
 }
 .wizard-presets {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--sp-2);
 }
 .wizard-preset {
   display: inline-flex;
   align-items: center;
+  gap: var(--sp-1); /* a dead zone: apply and delete used to abut exactly */
+  padding-right: var(--sp-1);
   border: 1px solid var(--border);
   border-radius: var(--r-full);
   background: var(--bg-surface);
@@ -2444,8 +2587,9 @@ body.resizing * {
   border: none;
   background: transparent;
   color: var(--text-hi);
+  font: inherit;
   font-size: var(--fs-11);
-  padding: 4px 10px;
+  padding: var(--sp-1) var(--sp-3);
   cursor: pointer;
 }
 .wizard-preset:hover {
@@ -2460,45 +2604,20 @@ body.resizing * {
   border: none;
   background: transparent;
   color: var(--text-lo);
-  padding: 4px 6px 4px 0;
+  padding: var(--sp-1);
+  border-radius: var(--r-full);
   cursor: pointer;
 }
 .wizard-preset-remove:hover {
-  color: var(--danger);
+  color: var(--danger-ink);
+  background: var(--danger-weak);
 }
-.wizard-swarm-row {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-}
-.wizard-isolate {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  padding: var(--sp-2) var(--sp-2);
-  border: 1px dashed var(--border);
-  border-radius: var(--r-md);
-}
-.wizard-isolate.is-disabled {
-  opacity: 0.5;
-  pointer-events: none;
-}
-.wizard-isolate-hint {
-  color: var(--text-lo);
-  font-size: var(--fs-11);
-  min-width: 0;
-}
-.wizard-byo {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  margin: 0;
-  color: var(--text-lo);
-  font-size: var(--fs-11);
-}
-.wizard-byo svg {
-  color: var(--success);
-  flex: none;
+
+/* Agents › Advanced: worktree isolation. A REAL disabled input — never
+   `pointer-events: none`, which left the box focusable and blocked the hint. */
+.checkbox.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 /* ── 6 · SCREEN COMPONENTS ─────────────────────────────────────────────────── */
@@ -2508,8 +2627,8 @@ body.resizing * {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  height: 42px;
-  padding: 0 6px 0 var(--sp-3);
+  height: 40px;
+  padding: 0 var(--sp-2) 0 var(--sp-3);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   background: var(--bg-inset);
@@ -2565,9 +2684,9 @@ body.resizing * {
 .path-input-browse {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 10px;
+  gap: var(--sp-2);
+  height: 28px;
+  padding: 0 var(--sp-3);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--bg-elevated);
@@ -2620,10 +2739,10 @@ body.resizing * {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  width: 74px;
-  height: 74px;
-  padding: var(--sp-2) var(--sp-2) 6px;
+  gap: var(--sp-1);
+  width: 72px;
+  height: 72px;
+  padding: var(--sp-2);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   background: var(--bg-surface);
@@ -2657,76 +2776,6 @@ body.resizing * {
 }
 
 /* Wizard stepper. */
-.wizard-stepper {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--sp-2);
-  user-select: none;
-}
-.wizard-step {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-}
-.wizard-step-dot {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-full);
-  background: var(--bg-surface);
-  color: var(--text-lo);
-  flex: none;
-  transition:
-    background var(--dur-1) var(--ease),
-    border-color var(--dur-1) var(--ease),
-    box-shadow var(--dur-1) var(--ease);
-}
-.wizard-step-num {
-  font-size: var(--fs-12);
-  font-weight: var(--fw-semibold);
-}
-.wizard-step-dot svg {
-  display: none;
-}
-.wizard-step-label {
-  font-size: var(--fs-13);
-  font-weight: var(--fw-medium);
-  color: var(--text-lo);
-}
-.wizard-step-line {
-  width: 44px;
-  height: 1px;
-  background: var(--border-strong);
-  flex: none;
-}
-.wizard-step.is-current .wizard-step-dot {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-contrast);
-  box-shadow: 0 0 0 4px var(--accent-weak);
-}
-.wizard-step.is-current .wizard-step-label {
-  color: var(--text-hi);
-}
-.wizard-step.is-done .wizard-step-dot {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-contrast);
-}
-.wizard-step.is-done .wizard-step-num {
-  display: none;
-}
-.wizard-step.is-done .wizard-step-dot svg {
-  display: block;
-}
-.wizard-step.is-done .wizard-step-label {
-  color: var(--text-mid);
-}
-
 /* Modal / wizard shell. */
 .modal-overlay {
   position: fixed;
@@ -2941,21 +2990,20 @@ body.resizing * {
 }
 
 /* Wizard Tools row (8/09): scope a new workspace's agents to picked servers. */
-.wizard-tools-row {
+.wizard-tools {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-2);
-  margin: var(--sp-1) 0;
 }
 .wizard-tools-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--sp-2);
 }
 .wizard-tool-chip {
   font-size: var(--fs-12);
-  padding: 3px 10px;
+  padding: var(--sp-1) var(--sp-3);
   border-radius: var(--r-full);
   border: 1px solid var(--border);
   background: var(--bg-inset);
@@ -4441,7 +4489,7 @@ body.resizing * {
   color: var(--text-mid);
   background: var(--bg-inset);
   border-radius: var(--r-sm);
-  padding: 1px 6px;
+  padding: var(--sp-1) var(--sp-2);
   overflow-x: auto;
   white-space: nowrap;
 }

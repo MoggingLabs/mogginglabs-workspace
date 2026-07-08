@@ -51,7 +51,7 @@ SANCTIONED; `.pane-badge`'s "smoke DOM contract" comment is a lie.
 
 ## Definition of Done
 - One system: consistent hitboxes, gaps, chip truncation — no wrapped pane
-  headers at any count; the chrome bucket clears § Enforcement (18→0).
+  headers at any count; the chrome bucket clears § Enforcement (6 → 0).
 - Every possession/consent/attention surface as loud as before — and now
   TESTED (step 4's guard).
 - ATTENTION, MULTIPANE, PERWS, PERWSAGENT, KBSHORTCUTS still green;

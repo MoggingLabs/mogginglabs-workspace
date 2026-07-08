@@ -1,21 +1,22 @@
-import type { UiFeature } from '../../core/registry/feature-registry'
+import type { ShellContext, UiFeature } from '../../core/registry/feature-registry'
 import { ClipboardChannels, IntegrationsChannels, ProfileChannels, RemoteChannels } from '@contracts'
 import type { AgentInfo, AgentProfile, McpServerEntry, ProviderCount, ProviderMixTemplate, RecentWorkspace, RemoteHost } from '@contracts'
 import {
   Button,
-  EmptyState,
+  Card,
+  FieldGroup,
   MiniGridPreview,
   Pill,
+  SectionHeader,
   clear,
   createCheckbox,
   createLayoutGridPicker,
   createMeter,
-  createModal,
   createPathInput,
   createStepper,
-  createWizardStepper,
   el,
   icon,
+  type ElChild,
   type PathInputHandle,
   type StepperHandle
 } from '../../components'
@@ -23,18 +24,10 @@ import { TEMPLATES, TEMPLATE_COUNTS } from '../layout'
 import { getFocusedPane } from '../../core/layout/focus'
 import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
 import { setWizardOpener, type WizardPrefill } from '../../core/workspace/wizard-port'
-import { setCommands } from '../../core/commands/command-port'
+import { activeView, goBack, setActiveView } from '../../core/shell/view-port'
 import { getTelemetry } from '../../core/telemetry'
 import { getBridge } from '../../core/ipc/bridge'
 import { wizardClient } from './wizard.client'
-
-type StepId = 'start' | 'layout' | 'agents'
-
-const STEPS = [
-  { id: 'start', label: 'Start' },
-  { id: 'layout', label: 'Layout' },
-  { id: 'agents', label: 'Agents' }
-]
 
 /** Per-provider accent for assignment previews (initial letter chips). Claude sits
  *  on a coral deliberately OFF the brand orange — the brand hue means attention. */
@@ -50,6 +43,8 @@ const CUSTOM_COLOR = '#e879f9'
 const basename = (p: string): string =>
   p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? ''
 
+const plural = (n: number): string => (n === 1 ? 'terminal' : 'terminals')
+
 /** Settings preference for the suggested grid size (falls back to 4). */
 function defaultPaneCount(): number {
   try {
@@ -62,25 +57,36 @@ function defaultPaneCount(): number {
 }
 
 /**
- * The new-workspace wizard: Start (name + working folder) · Layout (how many
- * terminals, live grid preview) · Agents (real CLI roster + quick-fill + assignment
- * preview). Consolidates the old provider-mix dialog, layout toolbar and openCwd
- * pieces into one keyboard-drivable flow, on the same templates/workspace contracts.
- * BYO-auth (ADR 0002): agents are launched as YOUR CLIs under YOUR login — the wizard
- * never asks for or stores a credential.
+ * The new-workspace wizard: ONE full-app PAGE (8.5/02) — not a modal. It owns the
+ * content region beside the workspace rail (`#view-wizard`, the same routing as
+ * Home/Board/Settings), a centred column with real side gutters, so configuring
+ * the next workspace happens with the ones you already have still in view.
+ *
+ * Where (folder + name) · Layout (grid) · Agents (roster + quick-fill + assignment
+ * preview) are three Cards in one scrollable body — the whole decision at once.
+ * Rarely-used controls (remote host, swarm preset, tool plan, worktree isolation,
+ * presets) live behind a quiet per-card "Advanced" disclosure, which auto-opens
+ * when anything inside it is already set.
+ *
+ * Why one page and not a stepper: NN/g says wizards suit novices and infrequent
+ * setup, and to avoid them for repetitive tasks, expert users ("resent the
+ * controlled flow"), and arbitrary-order completion. A desktop workspace launcher
+ * is all three. (prompts/phase-8.5/AUDIT.md § Patterns carries the citation.)
+ *
+ * BYO-auth (ADR 0002): agents are launched as YOUR CLIs under YOUR login — the
+ * wizard never asks for or stores a credential.
  */
 export const wizardFeature: UiFeature = {
   name: 'wizard',
-  mount() {
-    // ── Wizard state (persists across Back / step changes while open) ────────
-    let step: StepId = 'start'
+  mount(ctx: ShellContext) {
+    // ── Wizard state (persists while the modal is open) ──────────────────────
     let name = ''
     let cwd = ''
     let paneCount = 4
     let counts = new Map<string, number>() // provider id -> count
     let customCmd = ''
     let customCount = 0
-    let isRepo = false // set by the Start step's git probe
+    let isRepo = false // set by the folder field's git probe
     let isolate = false // Phase-3/03: one git worktree per agent pane
     let swarmRoles: (string | null)[] | null = null // Phase-4/01: per-slot manifest (preset)
     let remoteHost: { hostId: string; name: string } | null = null // Phase-4/05
@@ -96,77 +102,108 @@ export const wizardFeature: UiFeature = {
     let pickableServers: { id: string; label: string }[] = []
     const selectedTools = new Set<string>()
 
-    const stepper = createWizardStepper(STEPS, step)
     const body = el('div', { class: 'wizard' })
     const footer = el('div', { class: 'wizard-footer' })
 
-    const modal = createModal({
-      title: 'Set up your workspace',
-      variant: 'wizard',
-      closeOnBackdrop: false,
-      body: el('div', { class: 'wizard-shell' }, [stepper.el, body]),
-      footer
+    // The page, mounted once. View routing (display:none on the inactive views)
+    // shows it; nothing is re-mounted on a view trip.
+    const page = el('div', {}, [
+      el('div', { class: 'wizard-page' }, [
+        el('header', { class: 'wizard-head' }, [
+          el('div', { class: 'wizard-head-text' }, [
+            el('h1', { class: 'wizard-title', text: 'New workspace' }),
+            el('p', { class: 'wizard-subtitle', text: 'Folder, grid, and agents — all on one page.' })
+          ]),
+          Button({ label: 'Cancel', icon: 'chevron-left', variant: 'ghost', size: 'sm', onClick: leave })
+        ]),
+        body,
+        footer
+      ])
+    ])
+    page.id = 'view-wizard'
+    ctx.content.append(page)
+
+    // Esc leaves, back to wherever the user came from — the Settings-page contract.
+    // Overlays above the page (palette, dialogs) own their own Esc.
+    window.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || activeView() !== 'wizard') return
+      if (document.querySelector('.palette-overlay:not([hidden]), .modal-overlay')) return
+      e.preventDefault()
+      leave()
     })
 
-    setWizardOpener(open)
-    setCommands('wizard', [
-      { id: 'wizard:open', title: 'New workspace…', hint: 'Workspace', run: () => open() }
-    ])
+    setWizardOpener(open) // the port `workspace:new` (Ctrl+T) and Home's CTA call
+
+    function leave(): void {
+      goBack()
+    }
 
     function open(prefill?: WizardPrefill): void {
       void (getBridge().invoke(ProfileChannels.list) as Promise<AgentProfile[]>).then((list) => {
         profilesCache = list ?? []
       })
-      step = 'start'
       name = prefill?.name ?? ''
       cwd = prefill?.cwd ?? ''
       paneCount = prefill?.paneCount ?? defaultPaneCount()
       counts = new Map()
       customCmd = ''
       customCount = 0
+      isolate = false
+      swarmRoles = null
+      remoteHost = null
+      roster = []
+      presets = []
+      recents = []
+      pickableServers = []
+      selectedTools.clear()
       if (prefill?.mix) applyMix(prefill.mix)
 
-      modal.open()
       render()
+      setActiveView('wizard')
+      requestAnimationFrame(() => path.focus()) // focus only once the view is painted
       getTelemetry().captureEvent({ name: 'wizard.opened', props: { prefilled: !!prefill } })
 
-      // Fresh data every open: installed CLIs, presets, recent folders.
-      void wizardClient.detectAgents().then((a) => {
-        roster = a ?? []
-        if (step === 'agents') render()
-      }).catch(() => (roster = []))
-      void wizardClient.listPresets().then((p) => {
-        presets = p ?? []
-        if (step === 'agents') render()
-      }).catch(() => (presets = []))
-      // Connected (non-house) servers -> the Tools scoping row (8/09).
-      selectedTools.clear()
+      // Fresh data every open. Each arrival patches only its own subtree — a full
+      // re-render would blow away the folder field's focus and caret mid-type.
+      void wizardClient
+        .detectAgents()
+        .then((a) => {
+          roster = a ?? []
+          renderRoster()
+        })
+        .catch(() => (roster = []))
+      void wizardClient
+        .listPresets()
+        .then((p) => {
+          presets = p ?? []
+          renderPresets()
+        })
+        .catch(() => (presets = []))
       void (getBridge().invoke(IntegrationsChannels.serversList) as Promise<McpServerEntry[]>)
         .then((servers) => {
           pickableServers = (servers ?? []).filter((s) => !s.builtIn).map((s) => ({ id: s.id, label: s.label }))
-          if (step === 'agents') render()
+          renderTools()
         })
         .catch(() => (pickableServers = []))
-      void wizardClient.loadState().then((s) => {
-        const openWs = (s?.workspaces ?? []).filter((w) => w.cwd)
-        const closed = s?.recents ?? []
-        const seen = new Set<string>()
-        recents = [
-          ...closed,
-          ...openWs.map((w) => ({
-            name: w.name,
-            cwd: w.cwd,
-            paneCount: w.paneCount,
-            assignments: w.assignments,
-            lastUsedAt: 0
-          }))
-        ].filter((r) => {
-          if (!r.cwd || seen.has(r.cwd)) return false
-          seen.add(r.cwd)
-          return true
-        }).slice(0, 6)
-        if (step === 'start') render()
-      }).catch(() => (recents = []))
+      void wizardClient
+        .loadState()
+        .then((s) => {
+          const openWs = (s?.workspaces ?? []).filter((w) => w.cwd)
+          const closed = s?.recents ?? []
+          const seen = new Set<string>()
+          recents = [
+            ...closed,
+            ...openWs.map((w) => ({ name: w.name, cwd: w.cwd, paneCount: w.paneCount, assignments: w.assignments, lastUsedAt: 0 }))
+          ]
+            .filter((r) => {
+              if (!r.cwd || seen.has(r.cwd)) return false
+              seen.add(r.cwd)
+              return true
+            })
+            .slice(0, 6)
+          renderRecents()
+        })
+        .catch(() => (recents = []))
     }
 
     /** Seed counts/custom from a preset mix; grow the grid to fit the mix. */
@@ -217,12 +254,6 @@ export const wizardFeature: UiFeature = {
       return roster.find((a) => a.id === id)?.name ?? id
     }
 
-    // ── Navigation ───────────────────────────────────────────────────────────
-    function go(next: StepId): void {
-      step = next
-      render()
-    }
-
     async function launch(skipAgents: boolean): Promise<void> {
       const mix: ProviderCount[] = []
       if (!skipAgents) {
@@ -264,9 +295,7 @@ export const wizardFeature: UiFeature = {
 
       const manifest = swarmRoles
       const roles =
-        !skipAgents && manifest
-          ? resolved.assignments.map((_, i) => manifest[i] ?? null)
-          : undefined
+        !skipAgents && manifest ? resolved.assignments.map((_, i) => manifest[i] ?? null) : undefined
       openWorkspaceFromTemplate({
         name: name.trim() || basename(cwd) || 'Workspace',
         cwd: remoteHost ? '' : cwd,
@@ -290,30 +319,70 @@ export const wizardFeature: UiFeature = {
           isolated: !!paneCwds // a boolean — never the paths (ADR 0005)
         }
       })
-      modal.close()
+      // The workspace opener switches the app to the live grid; if no workspace
+      // feature is mounted (tests), fall back to wherever we came from.
+      if (activeView() === 'wizard') leave()
     }
 
-    // ── Rendering ────────────────────────────────────────────────────────────
+    // ── One page ─────────────────────────────────────────────────────────────
+    // Live handles the subtree renderers patch. Assigned in render(); every one
+    // is non-null for the lifetime of an open modal.
+    let path!: PathInputHandle
+    let whereCard!: HTMLElement
+    let recentsHost!: HTMLElement
+    let layoutCaption!: HTMLElement
+    let agentsCaption!: HTMLElement
+    let rosterHost!: HTMLElement
+    let presetsHost!: HTMLElement
+    let toolsHost!: HTMLElement
+    let previewHost!: HTMLElement
+    let meterHandle!: ReturnType<typeof createMeter>
+    let meterLabel!: HTMLElement
+    let launchLabel!: HTMLElement
+    let skipBtn!: HTMLButtonElement
+    let saveBtn!: HTMLButtonElement
+    let swarmHint!: HTMLElement
+    let picker!: ReturnType<typeof createLayoutGridPicker>
+    let isolateBox!: ReturnType<typeof createCheckbox>
+    let isolateHint!: HTMLElement
+    const steppers = new Map<string, StepperHandle>()
+    let customStepper: StepperHandle | null = null
+
+    /** A quiet per-card "Advanced" disclosure. Native <details>: Chromium gives us
+     *  the button semantics, aria-expanded, and Enter/Space for free. */
+    function disclosure(label: string, openNow: boolean, children: ElChild[]): HTMLDetailsElement {
+      const d = el('details', { class: 'wizard-adv' }, [
+        el('summary', { class: 'wizard-adv-summary' }, [icon('chevron-right', 14), el('span', { text: label })]),
+        el('div', { class: 'wizard-adv-body' }, children)
+      ]) as HTMLDetailsElement
+      d.open = openNow
+      return d
+    }
+
     function render(): void {
-      stepper.setCurrent(step)
       clear(body)
       clear(footer)
-      if (step === 'start') renderStart()
-      else if (step === 'layout') renderLayout()
-      else renderAgents()
+      steppers.clear()
+      customStepper = null
+
+      body.append(buildWhere(), buildLayout(), buildAgents())
+      buildFooter()
+
+      renderRecents()
+      renderRoster()
+      renderPresets()
+      renderTools()
     }
 
-    function renderStart(): void {
-      modal.setTitle('Set up your workspace')
-      modal.setSubtitle('Pick a folder to work in — your terminals start there.')
-
-      let path: PathInputHandle
+    // ── Card 1: Where ────────────────────────────────────────────────────────
+    function buildWhere(): HTMLElement {
       const probeGit = async (value: string): Promise<void> => {
         cwd = value
         if (remoteHost) return // remote target: no local probing (4/05)
         if (!value.trim()) {
           isRepo = false
           path.setStatus({ kind: 'idle' })
+          syncIsolate()
           return
         }
         try {
@@ -326,6 +395,7 @@ export const wizardFeature: UiFeature = {
           isRepo = false
           path.setStatus({ kind: 'warn', text: 'unverified' })
         }
+        syncIsolate()
       }
       let probeTimer: ReturnType<typeof setTimeout> | undefined
       path = createPathInput({
@@ -346,7 +416,8 @@ export const wizardFeature: UiFeature = {
           if (probeTimer) clearTimeout(probeTimer)
           probeTimer = setTimeout(() => void probeGit(v), 350)
         },
-        onEnter: () => go('layout')
+        // Enter in the folder field launches when the form is valid (8.5/02).
+        onEnter: () => void tryLaunch(false)
       })
       if (cwd) void probeGit(cwd)
 
@@ -355,49 +426,20 @@ export const wizardFeature: UiFeature = {
         type: 'text',
         value: name,
         placeholder: cwd ? basename(cwd) : 'My project',
-        ariaLabel: 'Workspace name',
         onInput: (e) => {
           name = (e.target as HTMLInputElement).value
         },
         onKeydown: (e) => {
-          if (e.key === 'Enter') go('layout')
+          if (e.key === 'Enter') void tryLaunch(false)
         }
       })
 
-      const recentRows = recents.length
-        ? el(
-            'div',
-            { class: 'wizard-recents' },
-            recents.map((r) =>
-              el(
-                'button',
-                {
-                  class: 'wizard-recent',
-                  type: 'button',
-                  title: r.cwd,
-                  onClick: () => {
-                    path.setValue(r.cwd)
-                    void probeGit(r.cwd)
-                    if (!name) {
-                      name = r.name
-                      nameInput.value = r.name
-                    }
-                  }
-                },
-                [
-                  icon('folder', 14),
-                  el('span', { class: 'wizard-recent-name', text: r.name || basename(r.cwd) }),
-                  el('span', { class: 'wizard-recent-path', text: r.cwd })
-                ]
-              )
-            )
-          )
-        : null
+      recentsHost = el('div', { class: 'wizard-recents' })
 
       // Remote target (4/05): mutually exclusive with a local folder — choosing a
       // host turns the folder box into a plain remote-cwd string (no local probing).
-      const remoteSelect = el('select', { class: 'input wizard-remote-select', ariaLabel: 'Remote host' }) as HTMLSelectElement
-      remoteSelect.append(new Option('Local folder', ''))
+      const remoteSelect = el('select', { class: 'input' }) as HTMLSelectElement
+      remoteSelect.append(new Option('This machine', ''))
       void (getBridge().invoke(RemoteChannels.list) as Promise<RemoteHost[]>).then((hosts) => {
         for (const h of hosts ?? []) {
           const opt = new Option(`${h.name} (${h.user ? h.user + '@' : ''}${h.host})`, h.id)
@@ -416,292 +458,317 @@ export const wizardFeature: UiFeature = {
         } else {
           void probeGit(cwd)
         }
+        syncIsolate()
       })
 
-      body.append(
-        el('div', { class: 'field' }, [
-          el('span', { class: 'field-label' }, [
-            'Working folder',
-            el('span', { class: 'field-hint', text: 'where your terminals will start' })
-          ]),
-          path.el
-        ]),
-        el('div', { class: 'field' }, [
-          el('span', { class: 'field-label' }, [
-            'Runs on',
-            el('span', { class: 'field-hint', text: 'this machine, or a saved SSH host' })
-          ]),
-          remoteSelect
-        ]),
-        el('div', { class: 'field' }, [
-          el('span', { class: 'field-label' }, [
-            'Workspace name',
-            el('span', { class: 'field-hint', text: 'optional — defaults to the folder name' })
-          ]),
-          nameInput
-        ]),
-        recentRows
-          ? el('div', { class: 'field' }, [
-              el('span', { class: 'section-label', text: 'Recent folders' }),
-              recentRows
-            ])
-          : el('div', {})
-      )
-
-      footer.append(
-        el('span', {}),
-        Button({
-          label: 'Continue',
-          iconRight: 'arrow-right',
-          variant: 'primary',
-          onClick: () => go('layout')
-        })
-      )
-      path.focus()
+      whereCard = Card({ header: SectionHeader({ title: 'Where', caption: 'Your terminals start in this folder.' }) }, [
+        FieldGroup({ label: 'Working folder', hint: 'Type a path, or Browse.' }, path.el),
+        FieldGroup({ label: 'Workspace name', hint: 'Optional — defaults to the folder name.' }, nameInput),
+        FieldGroup({ label: 'Recent folders' }, recentsHost),
+        // Auto-open when a remote host is already chosen.
+        disclosure('Advanced', !!remoteHost, [
+          FieldGroup({ label: 'Runs on', hint: 'This machine, or a saved SSH host.' }, remoteSelect)
+        ])
+      ])
+      return whereCard
     }
 
-    function renderLayout(): void {
-      modal.setTitle('How many terminals?')
-      modal.setSubtitle('Pick a grid — you can drag-resize and re-layout any time.')
-
-      const preview = el('div', { class: 'wizard-layout-preview' })
-      const renderPreview = (): void => {
-        clear(preview)
-        const spec = TEMPLATES[paneCount]
-        preview.append(
-          MiniGridPreview({ rows: spec.rows, cols: spec.cols }),
-          el('span', {
-            class: 'wizard-layout-caption',
-            text: `${paneCount} ${paneCount === 1 ? 'terminal' : 'terminals'} · ${spec.rows}×${spec.cols} grid`
-          })
+    function renderRecents(): void {
+      if (!recentsHost) return
+      clear(recentsHost)
+      const group = recentsHost.closest('.field-group') as HTMLElement | null
+      if (group) group.hidden = recents.length === 0
+      for (const r of recents) {
+        recentsHost.append(
+          el(
+            'button',
+            {
+              class: 'wizard-recent',
+              type: 'button',
+              title: r.cwd,
+              onClick: () => {
+                path.setValue(r.cwd)
+                cwd = r.cwd
+                void wizardClient
+                  .gitQuery(r.cwd)
+                  .then((git) => {
+                    isRepo = !!git
+                    path.setStatus(git ? { kind: 'git', text: `${git.branch}${git.dirty ? ' •' : ''}` } : { kind: 'ok', text: 'no repo — fine' })
+                    syncIsolate()
+                  })
+                  .catch(() => undefined)
+                if (!name) {
+                  name = r.name
+                  const input = whereCard.querySelector<HTMLInputElement>('input.input:not(.path-input-field)')
+                  if (input) input.value = r.name
+                }
+              }
+            },
+            [
+              icon('folder', 14),
+              el('span', { class: 'wizard-recent-name', text: r.name || basename(r.cwd) }),
+              el('span', { class: 'wizard-recent-path', text: r.cwd })
+            ]
+          )
         )
       }
+    }
 
-      const picker = createLayoutGridPicker({
+    // ── Card 2: Layout ───────────────────────────────────────────────────────
+    function buildLayout(): HTMLElement {
+      // The selected tile already carries count + shape (its label and aria-label);
+      // the caption states it in words. The old duplicate mini-preview is gone.
+      const header = SectionHeader({ title: 'Layout', caption: layoutText() })
+      layoutCaption = header.querySelector('.section-header-caption') as HTMLElement
+      picker = createLayoutGridPicker({
         specs: TEMPLATE_COUNTS.map((n) => ({ count: n, rows: TEMPLATES[n].rows, cols: TEMPLATES[n].cols })),
         selected: paneCount,
         onSelect: (n) => {
           paneCount = n
-          renderPreview()
+          layoutCaption.textContent = layoutText()
+          refreshAgents()
         }
       })
-      renderPreview()
-
-      body.append(picker.el, preview)
-      footer.append(
-        Button({ label: 'Back', icon: 'chevron-left', variant: 'ghost', onClick: () => go('start') }),
-        Button({
-          label: 'Continue',
-          iconRight: 'arrow-right',
-          variant: 'primary',
-          onClick: () => go('agents')
-        })
-      )
+      return Card({ header }, [picker.el])
     }
 
-    function renderAgents(): void {
-      modal.setTitle('Add AI coding agents')
-      modal.setSubtitle(
-        `Pick which agents launch in your ${paneCount} ${paneCount === 1 ? 'terminal' : 'terminals'} — or skip and keep plain shells.`
-      )
+    function layoutText(): string {
+      const spec = TEMPLATES[paneCount]
+      return `${paneCount} ${plural(paneCount)} · ${spec.rows}×${spec.cols} grid. Re-layout any time.`
+    }
 
-      const meter = createMeter(assignedTotal(), paneCount)
-      const meterLabel = el('span', { class: 'wizard-fill-label' })
-      const preview = el('div', { class: 'wizard-assign-preview' })
-      const launchBtn = Button({
-        label: `Launch ${paneCount} terminals`,
-        icon: 'sparkles',
-        variant: 'primary',
-        onClick: () => void launch(false)
-      })
+    // ── Card 3: Agents ───────────────────────────────────────────────────────
+    function buildAgents(): HTMLElement {
+      const header = SectionHeader({ title: 'Agents', caption: agentsText() })
+      agentsCaption = header.querySelector('.section-header-caption') as HTMLElement
 
-      const steppers = new Map<string, StepperHandle>()
-      let customStepper: StepperHandle
+      meterHandle = createMeter(assignedTotal(), paneCount)
+      meterLabel = el('span', { class: 'wizard-fill-label' })
+      previewHost = el('div', { class: 'wizard-preview' })
+      rosterHost = el('div', { class: 'wizard-agents' })
+      presetsHost = el('div', { class: 'wizard-presets' })
+      toolsHost = el('div', { class: 'wizard-tools' })
 
-      const refresh = (): void => {
-        const total = assignedTotal()
-        meter.set(total, paneCount)
-        meterLabel.textContent = `${total} / ${paneCount} · ${paneCount - total} empty`
-        const remaining = paneCount - total
-        for (const [id, s] of steppers) {
-          s.setMax((counts.get(id) ?? 0) + remaining)
-        }
-        customStepper.setMax(customCount + remaining)
-        clear(preview)
-        const spec = TEMPLATES[paneCount]
-        preview.append(
-          MiniGridPreview({
-            rows: spec.rows,
-            cols: spec.cols,
-            assignments: expandAssignments(),
-            providerColor,
-            providerInitial
-          })
-        )
-        const label = total > 0 ? `Launch ${paneCount} terminals` : `Open ${paneCount} plain terminals`
-        launchBtn.querySelector('span')!.textContent = label
-      }
-
-      // Quick fills — all trivially reversible (Clear resets, steppers correct).
-      const installed = roster.filter((a) => a.installed)
-      const fills = el('div', { class: 'wizard-fills' }, [
-        el('span', { class: 'wizard-fills-label', text: 'Quick fill:' }),
-        Button({
-          label: 'Fill all',
-          size: 'sm',
-          disabled: !installed.length,
-          title: 'Fill every pane, cycling through installed agents',
-          onClick: () => {
-            counts = new Map()
-            customCount = 0
-            for (let i = 0; i < paneCount; i++) {
-              const a = installed[i % installed.length]
-              counts.set(a.id, (counts.get(a.id) ?? 0) + 1)
-            }
-            renderRows()
-          }
-        }),
-        Button({
-          label: 'One of each',
-          size: 'sm',
-          disabled: !installed.length,
-          onClick: () => {
-            counts = new Map()
-            customCount = 0
-            installed.slice(0, paneCount).forEach((a) => counts.set(a.id, 1))
-            renderRows()
-          }
-        }),
-        Button({
-          label: 'Split evenly',
-          size: 'sm',
-          disabled: !installed.length,
-          onClick: () => {
-            counts = new Map()
-            customCount = 0
-            if (installed.length) {
-              const each = Math.floor(paneCount / installed.length)
-              let rem = paneCount - each * installed.length
-              for (const a of installed) counts.set(a.id, each + (rem-- > 0 ? 1 : 0))
-            }
-            renderRows()
-          }
-        }),
-        Button({
-          label: 'Clear',
-          size: 'sm',
-          variant: 'danger',
-          onClick: () => {
-            counts = new Map()
-            customCount = 0
-            renderRows()
-          }
-        })
+      // The meter groups DOWN with the controls that move it, not up toward the
+      // card title (the audit's complaint: it read as a header ornament).
+      const fillRow = el('div', { class: 'wizard-fill' }, [
+        el('div', { class: 'wizard-fill-bar' }, [meterHandle.el, meterLabel]),
+        el('div', { class: 'wizard-fills' }, [
+          el('span', { class: 'wizard-cluster-label', text: 'Quick fill' }),
+          Button({ label: 'Fill all', size: 'sm', title: 'Fill every pane, cycling through installed agents', onClick: () => quickFill('all') }),
+          Button({ label: 'One of each', size: 'sm', onClick: () => quickFill('each') }),
+          Button({ label: 'Split evenly', size: 'sm', onClick: () => quickFill('split') }),
+          Button({ label: 'Clear', size: 'sm', variant: 'danger', onClick: () => quickFill('clear') })
+        ])
       ])
 
-      const rows = el('div', { class: 'wizard-agents' })
-      const renderRows = (): void => {
-        clear(rows)
-        steppers.clear()
-        // Nothing detected: keep the roster VISIBLE with install hints (below) and
-        // offer a re-check that re-runs detect in place — no reopening the wizard.
-        const noneInstalled = roster.length > 0 && roster.every((a) => !a.installed)
-        if (!roster.length || noneInstalled) {
-          const recheck = el('button', { class: 'wizard-recheck', type: 'button', text: 'Re-check PATH' })
-          recheck.onclick = (): void => {
-            recheck.textContent = 'Checking…'
-            void wizardClient
-              .detectAgents()
-              .then((a) => {
-                roster = a ?? []
-                if (step === 'agents') render()
-              })
-              .catch(() => (roster = []))
-          }
-          rows.append(
-            el('div', { class: 'wizard-agents-empty' }, [
-              el('span', {
-                class: 'wizard-row-caption',
-                text: roster.length
-                  ? 'No agent CLIs on your PATH yet. Copy an install command below, run it in a terminal, then re-check.'
-                  : 'Looking for agent CLIs (Claude Code, Codex, Gemini, Aider, OpenCode) on your PATH…'
-              }),
-              recheck
-            ])
-          )
+      // ── Advanced: swarm · tools · worktrees · presets ───────────────────────
+      const swarmBtn = Button({
+        label: 'Swarm preset — architect · 2 workers · reviewer',
+        icon: 'sparkles',
+        onClick: () => {
+          const provider = roster.find((a) => a.installed) ?? roster[0]
+          if (!provider) return
+          paneCount = 4
+          picker.setSelected(4)
+          layoutCaption.textContent = layoutText()
+          counts = new Map([[provider.id, 4]])
+          customCount = 0
+          swarmRoles = ['architect', 'worker', 'worker', 'reviewer']
+          renderRoster() // NOT render(): a self-call to the card builder double-rendered it
         }
-        for (const a of roster) {
-          const s = createStepper({
-            value: counts.get(a.id) ?? 0,
-            min: 0,
-            max: (counts.get(a.id) ?? 0) + (paneCount - assignedTotal()),
-            ariaLabel: `${a.name} count`,
-            onChange: (n) => {
-              counts.set(a.id, n)
-              swarmRoles = null // a manual mix is no longer the swarm preset
-              refresh()
-            }
-          })
-          steppers.set(a.id, s)
-          // Profile picker (4/04): shown only when this provider has >1 profile.
-          const mine = profilesCache.filter((p) => p.provider === a.id).sort((x, y) => x.order - y.order)
-          let profSel: HTMLSelectElement | null = null
-          if (a.installed && mine.length > 1) {
-            profSel = el('select', {
-              class: 'input wizard-profile-select',
-              ariaLabel: `${a.name} profile`
-            }) as HTMLSelectElement
-            for (const p of mine) profSel.append(new Option(p.name, p.id))
-            profSel.value = profileByProvider.get(a.id) ?? mine[0].id
-            profSel.addEventListener('change', () => profileByProvider.set(a.id, profSel!.value))
-          }
-          // Missing CLI: show the provider's OWN install one-liner with a copy
-          // button (we never install — 6/06). Installed: the count stepper.
-          const installHint =
-            !a.installed && a.installHint
-              ? (() => {
-                  const copy = el('button', { class: 'wizard-agent-copy', type: 'button', text: 'Copy' })
-                  copy.title = a.installHint
-                  copy.onclick = (): void => {
-                    void getBridge().invoke(ClipboardChannels.write, { text: a.installHint! })
-                    copy.textContent = 'Copied'
-                    setTimeout(() => (copy.textContent = 'Copy'), 1400)
-                  }
-                  return el('span', { class: 'wizard-agent-install' }, [
-                    el('code', { class: 'wizard-agent-cmd', text: a.installHint }),
-                    copy
-                  ])
-                })()
-              : null
-          rows.append(
-            el('div', { class: 'wizard-agent-row' + (a.installed ? '' : ' is-missing') }, [
-              el('span', {
-                class: 'wizard-agent-dot',
-                style: { background: providerColor(a.id) }
-              }),
-              el('span', { class: 'wizard-agent-name', text: a.name }),
-              a.installed ? null : Pill({ text: 'not found on PATH', tone: 'warning' }),
-              el('span', { class: 'wizard-agent-spacer' }),
-              installHint,
-              profSel,
-              a.installed ? s.el : el('span', {})
-            ])
-          )
+      })
+      swarmHint = el('span', { class: 'wizard-hint' })
+
+      isolateBox = createCheckbox({
+        checked: isolate && isRepo,
+        disabled: !isRepo,
+        label: 'Isolate each agent in its own git worktree',
+        onChange: (checked) => {
+          isolate = checked
         }
-        // Custom command — any CLI, verbatim. Label only; never a stored credential.
-        customStepper = createStepper({
-          value: customCount,
+      })
+      isolateHint = el('span', { class: 'wizard-hint' })
+
+      saveBtn = Button({
+        label: 'Save as preset',
+        size: 'sm',
+        variant: 'ghost',
+        icon: 'bookmark',
+        disabled: assignedTotal() === 0,
+        onClick: savePreset
+      })
+
+      const advanced = disclosure('Advanced', !!swarmRoles || isolate || selectedTools.size > 0, [
+        el('div', { class: 'wizard-adv-row' }, [swarmBtn, swarmHint]),
+        toolsHost,
+        el('div', { class: 'wizard-adv-row' }, [isolateBox.el, isolateHint]),
+        el('div', { class: 'wizard-adv-row wizard-presets-row' }, [
+          el('span', { class: 'wizard-cluster-label', text: 'Presets' }),
+          presetsHost,
+          saveBtn
+        ])
+      ])
+
+      // The BYO-auth reassurance rides the footer bar, where it is always in view
+      // (it used to sit below the fold at the bottom of a 640px modal).
+      return Card({ header }, [
+        fillRow,
+        rosterHost,
+        el('div', { class: 'wizard-preview-wrap' }, [
+          el('span', { class: 'wizard-cluster-label', text: 'Your grid' }),
+          previewHost
+        ]),
+        advanced
+      ])
+    }
+
+    function agentsText(): string {
+      return `Which agents launch in your ${paneCount} ${plural(paneCount)} — or keep plain shells.`
+    }
+
+    function quickFill(kind: 'all' | 'each' | 'split' | 'clear'): void {
+      const installed = roster.filter((a) => a.installed)
+      counts = new Map()
+      customCount = 0
+      swarmRoles = null
+      if (kind !== 'clear' && installed.length) {
+        if (kind === 'all') {
+          for (let i = 0; i < paneCount; i++) {
+            const a = installed[i % installed.length]
+            counts.set(a.id, (counts.get(a.id) ?? 0) + 1)
+          }
+        } else if (kind === 'each') {
+          installed.slice(0, paneCount).forEach((a) => counts.set(a.id, 1))
+        } else {
+          const each = Math.floor(paneCount / installed.length)
+          let rem = paneCount - each * installed.length
+          for (const a of installed) counts.set(a.id, each + (rem-- > 0 ? 1 : 0))
+        }
+      }
+      renderRoster()
+    }
+
+    function savePreset(): void {
+      const presetName = `${expandAssignments().filter((a) => a !== 'shell').length} agents · ${paneCount} panes`
+      const mix: ProviderCount[] = []
+      for (const a of roster) {
+        const n = counts.get(a.id) ?? 0
+        if (n > 0) mix.push({ provider: a.id, count: n })
+      }
+      if (customCount > 0 && customCmd.trim()) mix.push({ provider: `custom:${customCmd.trim()}`, count: customCount })
+      const preset = { id: crypto.randomUUID(), name: presetName, mix }
+      void wizardClient.savePreset(preset).then(() => {
+        presets = [...presets, preset]
+        renderPresets()
+        getTelemetry().captureEvent({ name: 'preset.saved', props: { agents: mix.reduce((s, m) => s + m.count, 0) } })
+      })
+    }
+
+    /** The roster + custom row. Rebuilt when the roster or the mix changes. */
+    function renderRoster(): void {
+      if (!rosterHost) return
+      clear(rosterHost)
+      steppers.clear()
+
+      const noneInstalled = roster.length > 0 && roster.every((a) => !a.installed)
+      if (!roster.length || noneInstalled) {
+        const recheck = el('button', { class: 'wizard-recheck', type: 'button', text: 'Re-check PATH' })
+        recheck.onclick = (): void => {
+          recheck.textContent = 'Checking…'
+          void wizardClient
+            .detectAgents()
+            .then((a) => {
+              roster = a ?? []
+              renderRoster()
+            })
+            .catch(() => (roster = []))
+        }
+        rosterHost.append(
+          el('div', { class: 'wizard-agents-empty' }, [
+            el('span', {
+              class: 'wizard-hint',
+              text: roster.length
+                ? 'No agent CLIs on your PATH yet. Copy an install command below, run it in a terminal, then re-check.'
+                : 'Looking for agent CLIs (Claude Code, Codex, Gemini, Aider, OpenCode) on your PATH…'
+            }),
+            recheck
+          ])
+        )
+      }
+
+      for (const a of roster) {
+        const s = createStepper({
+          value: counts.get(a.id) ?? 0,
           min: 0,
-          max: customCount + (paneCount - assignedTotal()),
-          ariaLabel: 'Custom command count',
+          max: (counts.get(a.id) ?? 0) + (paneCount - assignedTotal()),
+          ariaLabel: `${a.name} count`,
           onChange: (n) => {
-            customCount = n
-            swarmRoles = null
-            refresh()
+            counts.set(a.id, n)
+            swarmRoles = null // a manual mix is no longer the swarm preset
+            refreshAgents()
           }
         })
-        rows.append(
-          el('div', { class: 'wizard-agent-row wizard-custom-row' }, [
+        steppers.set(a.id, s)
+
+        // Profile picker (4/04): shown only when this provider has >1 profile.
+        const mine = profilesCache.filter((p) => p.provider === a.id).sort((x, y) => x.order - y.order)
+        let profSel: HTMLSelectElement | null = null
+        if (a.installed && mine.length > 1) {
+          profSel = el('select', { class: 'input wizard-profile-select', ariaLabel: `${a.name} profile` }) as HTMLSelectElement
+          for (const p of mine) profSel.append(new Option(p.name, p.id))
+          profSel.value = profileByProvider.get(a.id) ?? mine[0].id
+          profSel.addEventListener('change', () => profileByProvider.set(a.id, profSel!.value))
+        }
+
+        // Missing CLI: show the provider's OWN install one-liner with a copy
+        // button (we never install — 6/06). Installed: the count stepper.
+        const installHint =
+          !a.installed && a.installHint
+            ? (() => {
+                const copy = el('button', { class: 'wizard-agent-copy', type: 'button', text: 'Copy' })
+                copy.title = a.installHint
+                copy.onclick = (): void => {
+                  void getBridge().invoke(ClipboardChannels.write, { text: a.installHint! })
+                  copy.textContent = 'Copied'
+                  setTimeout(() => (copy.textContent = 'Copy'), 1400)
+                }
+                return el('span', { class: 'wizard-agent-install' }, [
+                  el('code', { class: 'wizard-agent-cmd', text: a.installHint }),
+                  copy
+                ])
+              })()
+            : null
+
+        // head | tail, tail right-aligned by `margin-left: auto` — no zero-width
+        // spacer element (the audit's REMOVE) and no phantom flex gaps.
+        rosterHost.append(
+          el('div', { class: 'wizard-agent-row' + (a.installed ? '' : ' is-missing') }, [
+            el('span', { class: 'wizard-agent-head' }, [
+              el('span', { class: 'wizard-agent-dot', style: { background: providerColor(a.id) } }),
+              el('span', { class: 'wizard-agent-name', text: a.name }),
+              a.installed ? null : Pill({ text: 'not found on PATH', tone: 'warning' })
+            ]),
+            el('span', { class: 'wizard-agent-tail' }, [installHint, profSel, a.installed ? s.el : null])
+          ])
+        )
+      }
+
+      // Custom command — any CLI, verbatim. Label only; never a stored credential.
+      customStepper = createStepper({
+        value: customCount,
+        min: 0,
+        max: customCount + (paneCount - assignedTotal()),
+        ariaLabel: 'Custom command count',
+        onChange: (n) => {
+          customCount = n
+          swarmRoles = null
+          refreshAgents()
+        }
+      })
+      rosterHost.append(
+        el('div', { class: 'wizard-agent-row wizard-custom-row' }, [
+          el('span', { class: 'wizard-agent-head' }, [
             el('span', { class: 'wizard-agent-dot', style: { background: CUSTOM_COLOR } }),
             el('input', {
               class: 'input input--mono wizard-custom-input',
@@ -711,21 +778,21 @@ export const wizardFeature: UiFeature = {
               ariaLabel: 'Custom command',
               onInput: (e) => {
                 customCmd = (e.target as HTMLInputElement).value
-                refresh()
+                refreshAgents()
               }
-            }),
-            el('span', { class: 'wizard-agent-spacer' }),
-            customStepper.el
-          ])
-        )
-        refresh()
-      }
-      renderRows()
+            })
+          ]),
+          el('span', { class: 'wizard-agent-tail' }, [customStepper.el])
+        ])
+      )
+      refreshAgents()
+    }
 
-      const presetChips = el(
-        'div',
-        { class: 'wizard-presets' },
-        presets.map((p) =>
+    function renderPresets(): void {
+      if (!presetsHost) return
+      clear(presetsHost)
+      for (const p of presets) {
+        presetsHost.append(
           el('span', { class: 'wizard-preset' }, [
             el('button', {
               class: 'wizard-preset-apply',
@@ -733,7 +800,9 @@ export const wizardFeature: UiFeature = {
               text: p.name,
               onClick: () => {
                 applyMix(p.mix)
-                renderRows()
+                picker.setSelected(paneCount)
+                layoutCaption.textContent = layoutText()
+                renderRoster()
                 getTelemetry().captureEvent({ name: 'preset.applied' })
               }
             }),
@@ -748,7 +817,7 @@ export const wizardFeature: UiFeature = {
                     onClick: () => {
                       void wizardClient.removePreset(p.id).then(() => {
                         presets = presets.filter((x) => x.id !== p.id)
-                        render()
+                        renderPresets()
                       })
                     }
                   },
@@ -756,136 +825,108 @@ export const wizardFeature: UiFeature = {
                 )
           ])
         )
-      )
-      const saveBtn = Button({
-        label: 'Save as preset',
-        size: 'sm',
-        variant: 'ghost',
-        icon: 'bookmark',
-        disabled: assignedTotal() === 0,
-        onClick: () => {
-          const presetName = `${expandAssignments().filter((a) => a !== 'shell').length} agents · ${paneCount} panes`
-          const mix: ProviderCount[] = []
-          for (const a of roster) {
-            const n = counts.get(a.id) ?? 0
-            if (n > 0) mix.push({ provider: a.id, count: n })
-          }
-          if (customCount > 0 && customCmd.trim())
-            mix.push({ provider: `custom:${customCmd.trim()}`, count: customCount })
-          const preset = { id: crypto.randomUUID(), name: presetName, mix }
-          void wizardClient.savePreset(preset).then(() => {
-            presets = [...presets, preset]
-            render()
-            getTelemetry().captureEvent({
-              name: 'preset.saved',
-              props: { agents: mix.reduce((s, m) => s + m.count, 0) }
-            })
-          })
-        }
-      })
-
-      // Worktree isolation toggle — only meaningful when the Start folder is a repo.
-      const isolateBox = createCheckbox({
-        checked: isolate && isRepo,
-        label: 'Isolate each agent in its own git worktree',
-        onChange: (checked) => {
-          isolate = checked
-        }
-      })
-      const isolateRow = el('div', { class: 'wizard-isolate' + (isRepo ? '' : ' is-disabled') }, [
-        isolateBox.el,
-        el('span', {
-          class: 'wizard-isolate-hint',
-          text: isRepo
-            ? 'Each agent works on its own branch in its own folder — no trampling. Review & merge later.'
-            : 'Pick a git repository in Start to enable worktree isolation.'
-        })
-      ])
-      if (!isRepo) isolate = false
-
-      // Swarm preset (4/01): one click -> architect + 2 workers + reviewer on the
-      // first installed CLI, each pane chipped with its role.
-      const swarmBtn = Button({
-        label: 'Swarm preset — architect · 2 workers · reviewer',
-        icon: 'sparkles',
-        onClick: () => {
-          const provider = roster.find((a) => a.installed) ?? roster[0]
-          if (!provider) return
-          paneCount = 4
-          counts = new Map([[provider.id, 4]])
-          customCount = 0
-          swarmRoles = ['architect', 'worker', 'worker', 'reviewer']
-          renderAgents()
-        }
-      })
-      const swarmRow = el('div', { class: 'wizard-swarm-row' }, [
-        swarmBtn,
-        el('span', {
-          class: 'wizard-isolate-hint',
-          text: swarmRoles ? 'Swarm manifest armed — roles land on the panes.' : ''
-        })
-      ])
-
-      // Tools row (8/09): scope this workspace's agents to specific servers.
-      // Only shown when there ARE connected servers — otherwise no scoping.
-      const toolsRow = el('div', { class: 'wizard-tools-row' })
-      if (pickableServers.length) {
-        toolsRow.append(el('span', { class: 'wizard-fills-label', text: 'Agent tools:' }))
-        const chips = el('div', { class: 'wizard-tools-chips' })
-        for (const s of pickableServers) {
-          const chip = el('button', {
-            class: `wizard-tool-chip${selectedTools.has(s.id) ? ' is-on' : ''}`,
-            type: 'button',
-            text: s.label,
-            ariaLabel: `Include ${s.label} in this workspace`
-          }) as HTMLButtonElement
-          chip.onclick = (): void => {
-            if (selectedTools.has(s.id)) selectedTools.delete(s.id)
-            else selectedTools.add(s.id)
-            chip.classList.toggle('is-on')
-          }
-          chips.append(chip)
-        }
-        toolsRow.append(
-          chips,
-          el('span', { class: 'wizard-isolate-hint', text: 'House server always on. Unpicked tools stay out of this workspace’s agents (edit later in Settings › Workspace tools).' })
-        )
       }
+    }
 
-      body.append(
-        el('div', { class: 'wizard-fill-row' }, [meter.el, meterLabel]),
-        fills,
-        rows,
-        swarmRow,
-        toolsRow,
-        isolateRow,
-        el('div', { class: 'wizard-agent-footer' }, [
-          el('div', { class: 'wizard-preview-wrap' }, [
-            el('span', { class: 'section-label', text: 'Your grid' }),
-            preview
-          ]),
-          el('div', { class: 'wizard-preset-wrap' }, [
-            el('span', { class: 'section-label', text: 'Presets' }),
-            presetChips,
-            saveBtn
-          ])
-        ]),
-        el('p', { class: 'wizard-byo' }, [
-          icon('check-circle', 12),
-          el('span', {
-            text: 'Agents run your own CLIs under your own login — nothing to configure, no keys stored.'
-          })
-        ])
+    /** Tools scoping (8/09) — rendered only when there ARE connected servers. */
+    function renderTools(): void {
+      if (!toolsHost) return
+      clear(toolsHost)
+      toolsHost.hidden = pickableServers.length === 0
+      if (!pickableServers.length) return
+      const chips = el('div', { class: 'wizard-tools-chips' })
+      for (const s of pickableServers) {
+        const chip = el('button', {
+          class: `wizard-tool-chip${selectedTools.has(s.id) ? ' is-on' : ''}`,
+          type: 'button',
+          text: s.label,
+          ariaLabel: `Include ${s.label} in this workspace`
+        }) as HTMLButtonElement
+        chip.setAttribute('aria-pressed', String(selectedTools.has(s.id)))
+        chip.onclick = (): void => {
+          if (selectedTools.has(s.id)) selectedTools.delete(s.id)
+          else selectedTools.add(s.id)
+          chip.classList.toggle('is-on')
+          chip.setAttribute('aria-pressed', String(selectedTools.has(s.id)))
+        }
+        chips.append(chip)
+      }
+      toolsHost.append(
+        el('span', { class: 'wizard-cluster-label', text: 'Agent tools' }),
+        chips,
+        el('span', {
+          class: 'wizard-hint',
+          text: 'House server always on. Unpicked tools stay out of this workspace’s agents (edit later in Settings › Workspace tools).'
+        })
+      )
+    }
+
+    /** Worktree isolation is only meaningful on a git repo — and only truly OFF
+     *  when the input is really disabled (never `pointer-events: none`). */
+    function syncIsolate(): void {
+      if (!isolateBox) return
+      if (!isRepo) isolate = false
+      isolateBox.setDisabled(!isRepo)
+      isolateBox.setChecked(isolate && isRepo)
+      isolateHint.textContent = isRepo
+        ? 'Each agent works on its own branch in its own folder — no trampling. Review & merge later.'
+        : 'Pick a git repository above to enable worktree isolation.'
+    }
+
+    /** Everything that moves when the mix or the grid changes. */
+    function refreshAgents(): void {
+      const total = assignedTotal()
+      meterHandle.set(total, paneCount)
+      meterLabel.textContent = `${total} / ${paneCount} · ${paneCount - total} empty`
+      agentsCaption.textContent = agentsText()
+
+      const remaining = paneCount - total
+      for (const [id, s] of steppers) s.setMax((counts.get(id) ?? 0) + remaining)
+      customStepper?.setMax(customCount + remaining)
+
+      clear(previewHost)
+      const spec = TEMPLATES[paneCount]
+      previewHost.append(
+        MiniGridPreview({ rows: spec.rows, cols: spec.cols, assignments: expandAssignments(), providerColor, providerInitial })
       )
 
+      swarmHint.textContent = swarmRoles ? 'Swarm manifest armed — roles land on the panes.' : ''
+      saveBtn.disabled = total === 0
+      syncIsolate()
+
+      launchLabel.textContent = total > 0 ? `Launch ${paneCount} ${plural(paneCount)}` : `Open ${paneCount} plain ${plural(paneCount)}`
+      // "Skip" only means something once agents ARE assigned; otherwise the
+      // primary already says "Open N plain terminals".
+      skipBtn.hidden = total === 0
+    }
+
+    // ── Footer: a sticky action bar at the foot of the page ──────────────────
+    function buildFooter(): void {
+      launchLabel = el('span', { text: `Launch ${paneCount} ${plural(paneCount)}` })
+      const launchBtn = el(
+        'button',
+        { class: 'btn btn--primary', type: 'button', ariaLabel: 'Launch workspace', onClick: () => void tryLaunch(false) },
+        [icon('sparkles'), launchLabel]
+      )
+      skipBtn = Button({ label: 'Skip — no agents', variant: 'outline', onClick: () => void tryLaunch(true) })
       footer.append(
-        Button({ label: 'Back', icon: 'chevron-left', variant: 'ghost', onClick: () => go('layout') }),
-        el('div', { class: 'wizard-footer-actions' }, [
-          Button({ label: 'Skip — no agents', variant: 'outline', onClick: () => void launch(true) }),
-          launchBtn
-        ])
+        el('span', { class: 'wizard-byo' }, [
+          icon('check-circle', 12),
+          el('span', { text: 'Your own CLIs, your own login — no keys stored.' })
+        ]),
+        el('div', { class: 'wizard-footer-actions' }, [skipBtn, launchBtn])
       )
-      refresh()
+    }
+
+    /** The validation that used to gate "Continue" now gates "Launch". */
+    async function tryLaunch(skipAgents: boolean): Promise<void> {
+      if (!remoteHost && !cwd.trim()) {
+        path.setStatus({ kind: 'warn', text: 'pick a folder first' })
+        whereCard.scrollIntoView({ block: 'nearest' })
+        path.focus()
+        return
+      }
+      await launch(skipAgents)
     }
 
     exposeForDev()
@@ -893,10 +934,8 @@ export const wizardFeature: UiFeature = {
       if (!import.meta.env.DEV) return
       const w = window as unknown as { __mogging?: Record<string, unknown> }
       w.__mogging = w.__mogging ?? {}
-      // Same dev contract the template smoke drives (resolve a mix -> open a workspace).
+      // The dev contract the template/gate/ledger/mcp/swarm/profpersist smokes drive.
       w.__mogging.templates = {
-        resolve: (m: ProviderCount[]) => wizardClient.resolve(m),
-        list: () => wizardClient.listPresets(),
         open: async (
           m: ProviderCount[],
           roles?: (string | null)[],
@@ -904,10 +943,10 @@ export const wizardFeature: UiFeature = {
           profileIds?: (string | null)[]
         ) => {
           const r = await wizardClient.resolve(m)
-          const cwd = getFocusedPane()?.cwd ?? ''
+          const focused = getFocusedPane()?.cwd ?? ''
           openWorkspaceFromTemplate({
             name: 'Smoke',
-            cwd,
+            cwd: focused,
             paneCount: r.paneCount,
             assignments: r.assignments,
             roles,
@@ -928,13 +967,7 @@ export const wizardFeature: UiFeature = {
               paneCwds.push(null)
             }
           }
-          openWorkspaceFromTemplate({
-            name: 'Isolated',
-            cwd: repo,
-            paneCount: r.paneCount,
-            assignments: r.assignments,
-            paneCwds
-          })
+          openWorkspaceFromTemplate({ name: 'Isolated', cwd: repo, paneCount: r.paneCount, assignments: r.assignments, paneCwds })
           return { ...r, paneCwds }
         },
         openWizard: (prefill?: WizardPrefill) => open(prefill)

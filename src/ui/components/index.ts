@@ -27,7 +27,6 @@ export {
   type LayoutSpec,
   type LayoutGridPickerHandle
 } from './grid-preview'
-export { createWizardStepper, type WizardStep, type WizardStepperHandle } from './wizard-stepper'
 export { createModal, type ModalHandle, type ModalOpts } from './modal'
 export { confirmDialog, resetConfirmSkipsForSmoke, type ConfirmOpts } from './confirm'
 export { Spinner, loadingRow } from './spinner'

@@ -28,15 +28,15 @@ pasteable as a `/goal`, **≤ 3950 chars**). Execute in order.
 > (`src/ui/components/`). No pasted component code, no license ambiguity —
 > patterns in, our code out.
 
-> **The spacing doctrine (the root fix)**: the audit's #1 finding class is
-> density — zero padding/margins on functional surfaces. Step 01 adds a
-> SPACING SCALE to the token system (4/8/12/16/24/32) and a small set of
-> layout primitives (Card, FieldGroup, SectionHeader, TwoColumn). Every later
-> step consumes those — no ad-hoc pixel values, so the fix is systemic, not
-> per-screen.
+> **The spacing doctrine (corrected by 01's audit)**: a scale ALREADY existed
+> (`--sp-1..6`, 277 call sites). The real defects are structural — there is not
+> one `Card` in the app, and separation *between* groups is routinely ≤
+> separation *within* them. So 01 EXTENDS the ramp (`--sp-7/8`) and ships the
+> missing vocabulary: `Card` · `SectionHeader` · `FieldGroup` · `TwoColumn`.
+> Every later step consumes those; `node scripts/check-spacing.mjs` is the gate.
 
-> **Ground truth**: the wizard is `src/ui/features/wizard/index.ts` (3 steps:
-> Start · Layout · Agents, ~944 lines); the folder input is
+> **Ground truth**: the wizard WAS a 3-step modal (`src/ui/features/wizard/
+> index.ts`, ~944 lines); 02 made it a full page (`#view-wizard`); the folder input is
 > `createPathInput` (`src/ui/components/input.ts` — a typed path/`cd` bar +
 > native Browse); Settings is `src/ui/features/settings/` (index 402 ·
 > integrations 1174 · usage 638 · profiles-hosts 296 lines) rendered as one
@@ -47,7 +47,7 @@ pasteable as a `/goal`, **≤ 3950 chars**). Execute in order.
 | # | File | Gate |
 |---|------|------|
 | 01 | `01-ux-audit-and-spacing-tokens.md` | AUDIT.md (every surface graded, keep/fix/remove verdicts, 21st.dev pattern notes) + the spacing scale & layout primitives in tokens/components; typecheck/build green (ships minimal runtime) |
-| 02 | `02-wizard-single-page.md` | The wizard becomes ONE page (folder · layout · agents visible at once, breathing room, live summary); WIZARDUX smoke green |
+| 02 | `02-wizard-single-page.md` | The wizard becomes ONE full-app PAGE beside the rail — not a modal (folder · layout · agents at once, breathing room, live summary); WIZARDUX smoke green |
 | 03 | `03-folder-browser.md` | A real visual folder browser (clickable dirs, breadcrumb, keyboard nav, repo badges) beside the path bar; FOLDERPICK smoke green |
 | 04 | `04-settings-shell-revamp.md` | The Settings shell on the new primitives — cards, section headers, spacing, consistent controls; SETSHELL smoke green |
 | 05 | `05-settings-dense-tabs.md` | Integrations + Usage tabs restructured on the primitives (progressive disclosure, no wall-of-knobs); INTEGUX + USAGESET still green + SETTABS asserts |

@@ -69,7 +69,7 @@ export function createAppShell(root: HTMLElement): ShellContext {
   // (Phase-5/05) so top-level views can own the whole app — the rail renders only
   // in the grid (pure CSS show/hide: panes are never re-mounted by a view trip).
   onViewChange((view) => {
-    for (const v of ['home', 'grid', 'board', 'settings'] as const) {
+    for (const v of ['home', 'grid', 'board', 'settings', 'wizard'] as const) {
       app.classList.toggle(`view-${v}`, view === v)
       content.classList.toggle(`view-${v}`, view === v)
     }

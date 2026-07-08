@@ -272,15 +272,17 @@ export function runGallery(win: BrowserWindow): void {
           await sleep(300)
         })
         await part(`${tag}-wizard`, async () => {
+          // 8.5/02: the wizard is a full PAGE beside the rail, not a modal — one
+          // scroll, three cards. Never click the footer primary here: it launches.
           await ES(`window.__mogging.templates.openWizard()`)
           await sleep(600)
-          await snap(`${tag}-wizard-start`)
-          await click('.wizard-footer .btn--primary')
-          await sleep(400)
-          await snap(`${tag}-wizard-layout`)
-          await click('.wizard-footer .btn--primary')
+          await snap(`${tag}-wizard-page`)
+          await ES(`document.querySelector('#view-wizard .wizard')?.scrollTo({ top: 99999 })`)
           await sleep(400)
           await snap(`${tag}-wizard-agents`)
+          await ES(`(document.querySelectorAll('#view-wizard .wizard-adv').forEach((d) => (d.open = true)), 1)`)
+          await sleep(400)
+          await snap(`${tag}-wizard-advanced`)
           await escape()
           await sleep(300)
         })

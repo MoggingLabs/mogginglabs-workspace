@@ -38,6 +38,7 @@ import { runMcpMgrSmoke } from './mcpmgr-smoke'
 import { runMcpCatSmoke } from './mcpcat-smoke'
 import { runIntegUxSmoke } from './integux-smoke'
 import { runIntegMilestoneSmoke } from './integmilestone-smoke'
+import { runWizardUxSmoke } from './wizardux-smoke'
 import { registerIntegrations } from './integrations'
 import { registerEventBridge } from './event-bridge'
 import { registerTrail } from './trail'
@@ -304,6 +305,8 @@ app.whenReady().then(async () => {
     runIntegUxSmoke(win) // env-gated integrations-onboarding smoke: guided flow, single-fire, palette verbs (Phase-8/13)
   } else if (process.env.MOGGING_INTEGMILESTONE && win) {
     runIntegMilestoneSmoke(win) // env-gated integrations MILESTONE: all five directions compose, one fixture world (Phase-8/14)
+  } else if (process.env.MOGGING_WIZARDUX && win) {
+    runWizardUxSmoke(win) // env-gated one-page-wizard smoke: three cards, one page, rail beside it (Phase-8.5/02)
   } else if (process.env.MOGGING_USAGE && win) {
     runUsageSmoke(win) // env-gated usage-seam smoke: FAKE adapter only (Phase-7/01)
   } else if (process.env.MOGGING_ATTENTION && win) {

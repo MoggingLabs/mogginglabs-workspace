@@ -16,10 +16,9 @@ four-environment certification that freezes the pack.
    (c) board + palette + a toast + a confirm render the one feedback
    family (07); chrome: pane header single-line with fixture chips,
    tabs overflow cleanly (08);
-   (d) **the spacing grep, structural**: walk the stylesheet for feature
-   blocks touched by this pack and assert no hardcoded px
-   margin/padding remains outside the token scale (the 01 § Enforcement
-   grep, now a gate);
+   (d) **the spacing gate, structural**: `node scripts/check-spacing.mjs`
+   reports ZERO violations in every bucket this pack touched (01 shipped a
+   broken awk that over-counted 33 as 94; 02 replaced it with the script);
    (e) **safety undimmed**: possession banner, consent copy, attention
    states, and the trail's "never sent anywhere" line all render at
    their pre-pack prominence (class/visibility asserts);

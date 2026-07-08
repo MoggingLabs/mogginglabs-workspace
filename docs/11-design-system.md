@@ -254,7 +254,12 @@ re-warm must not hitch).
   mount so unsaved form text survives leave/return. Enter via the titlebar gear or
   `settings:open`; leave via Esc, the back affordance, or any titlebar view — the
   view port keeps ONE step of history (`goBack()`), so Settings returns wherever
-  you came from. Real dialogs (wizard, review, card editor) stay modals.
+  you came from.
+- **The new-workspace wizard is a page too** (8.5/02): `#view-wizard`, one
+  scrollable column of three Cards (Where · Layout · Agents) at `--page-max` with
+  `--sp-6` gutters — and it is the ONLY non-grid view that keeps the workspace
+  rail up, because you configure the next workspace alongside the ones you have.
+  Esc / Cancel `goBack()`. Real dialogs (review, card editor, confirms) stay modals.
 - With zero workspaces, any road to the grid lands **Home** instead (the empty grid
   was a dead end — audit UX-16). The titlebar Home/Board/gear trio shows the active
   view (`.icon-btn.is-active`).

@@ -14,7 +14,8 @@ only: an `A` surface can still hold a bug (several do).
 "no padding, no margins, no spacing scale." A scale *already exists* —
 `--sp-1..6` (4/8/12/16/24/32), used **277 times**, with a documented off-ramp for
 1–2px hairlines and 3px/6px optical half-steps in dense terminal chrome. Only
-**94** spacing declarations sit off it. The real defects are three, and none of
+**33** spacing declarations sit off it (01 first reported 94 - an awk word-boundary
+bug, corrected in 02; see § Enforcement). The real defects are three, and none of
 them is "add a scale":
 
 1. **No structural vocabulary.** There is not one `Card` in the app. `.settings-row`
@@ -40,10 +41,10 @@ to `--sp-7/8`, and adds the readable-column caps the app never had.
 
 | Surface | Grade | Verdict | The one-line complaint |
 |---|---|---|---|
-| Wizard — shell/stepper | C | fix | Four structural joints all render at exactly 16px; two hairlines 12px apart above the footer |
-| Wizard — Start | C− | fix | Three fields, three control heights (42/34/34px); a section heading and three form labels are siblings |
-| Wizard — Layout | C | fix | The live preview re-renders what the selected tile already says |
-| **Wizard — Agents** | **F** | fix | `.wizard-agent-row { padding: 5px }` (`global.css:2204`); 8 flat siblings, no cards; four control heights in one row |
+| Wizard — shell/stepper | C → **A** | **done (02)** | Was: four structural joints all at 16px; two hairlines 12px apart above the footer. Now a full PAGE, no stepper, no modal |
+| Wizard — Start | C− → **A** | **done (02)** | Was: three fields, three control heights (42/34/34px); a section heading sibling to form labels |
+| Wizard — Layout | C → **A** | **done (02)** | Was: a live preview re-rendering what the selected tile already says. The caption says it now |
+| **Wizard — Agents** | **F → A** | **done (02)** | Was: `padding: 5px`, 8 flat siblings, no cards, four control heights in one row |
 | Home | C+ | fix | Bordered recents separated by a **4px** seam that reads as a rendering artifact |
 | First-run checklist | B− | keep+fix | Structure sound (one card, per-row icons); the `<code>` chip (1px pad) and copy button (3px pad) share no baseline and wrap |
 | Settings — shell | C | fix | `.settings-content` has no left/top padding; nav items `7px` tall-ish; no cards anywhere |
@@ -143,13 +144,15 @@ Worst: **a board lane has no empty state at all** — `board/index.ts:355` rende
 
 Every entry names its replacement. Executed by the step that owns the surface.
 
+Status: **✅ = executed**. 02 cleared every wizard row.
+
 | # | Item | Location | Replacement | Step |
 |---|---|---|---|---|
-| 1 | palette verb `wizard:open` | `wizard/index.ts:112-114` | `workspace:new` (`workspace/index.ts:305`) — byte-identical title+hint, **plus** a `Ctrl+T` chip and a no-wizard fallback. Two indistinguishable rows today. Keep `setWizardOpener(open)` at `:111` — that is the port. | 02 |
+| ✅ 1 | palette verb `wizard:open` | `wizard/index.ts:112-114` | `workspace:new` (`workspace/index.ts:305`) — byte-identical title+hint, **plus** a `Ctrl+T` chip and a no-wizard fallback. Two indistinguishable rows today. Keep `setWizardOpener(open)` at `:111` — that is the port. | 02 ✅ |
 | 2 | palette verb `integrations:connect` | `settings/index.ts:391` | `integrations:open` (`:389`) — both call `goIntegrations('servers')`. Safe: `integux-smoke.ts:65` needs ≥2 matches; 5 remain. | 05 |
 | 3 | palette verb `integrations:restart` | `settings/index.ts:393` | `integrations:matrix` (`:390`). Its title promises "Restart panes to pick up new tools"; the `run()` **scrolls the matrix into view and restarts nothing**. A lying verb. | 05 |
-| 4 | `.wizard-layout-preview` + `.wizard-layout-caption` + `renderPreview()` | `wizard/index.ts:467-478,488`; `global.css:2151-2167` | `.layout-tile.is-selected` (`:2471`) + `.layout-tile-count` + the tile's `aria-label` already carry count and shape. | 02 |
-| 5 | `.wizard-footer::before` / `.review-footer::before` | `global.css:2085-2094` | `.modal-footer { border-top }` (`:2621`). Removes the double divider. | 02/07 |
+| ✅ 4 | `.wizard-layout-preview` + `.wizard-layout-caption` + `renderPreview()` | `wizard/index.ts:467-478,488`; `global.css:2151-2167` | `.layout-tile.is-selected` (`:2471`) + `.layout-tile-count` + the tile's `aria-label` already carry count and shape. | 02 ✅ |
+| ✅ 5 | `.wizard-footer::before` / `.review-footer::before` | `global.css:2085-2094` | `.modal-footer { border-top }` (`:2621`). Removes the double divider. | 02 ✅ / 07 |
 | 6 | Duplicate `Set up integrations…` CTA in `.integux-empty` | `integrations.ts:457-459` | The `.integux-intro` CTA (`:1129`). Two identical primary buttons ~400px apart. Safe: `integux-smoke.ts:57` asserts only that `.integux-empty` exists. | 05 |
 | 7 | `.board-lane-count` | `global.css:3372-3378` | `CountBadge()` (`pill.ts:22`) — which also brings `tabular-nums`, so **the count stops jittering** as cards drag. | 07 |
 | 8 | `CountBadge` / `TextInput` / `mount` exports | `pill.ts:22`, `input.ts:13`, `dom.ts:76` | Dead — **zero call sites repo-wide**. *(Except: adopt `CountBadge` per #7 first, then it's live.)* | 07 |
@@ -161,7 +164,7 @@ Every entry names its replacement. Executed by the step that owns the surface.
 | 14 | `trailBtn.classList.remove('is-hidden')` | `browser/index.ts:562` | Dead — `is-hidden` is never added and has no rule. | 08 |
 | 15 | `--pct` on the update dot | `updates/index.ts:32` | Dead — nothing reads it; progress survives only in the `title`. | 06 |
 | 16 | `.layout-menu-tile` + the ad-hoc titlebar tile builder | `global.css:1377-1390`; `workspace/index.ts:196-206` | `createLayoutGridPicker()` (`grid-preview.ts:61`) with a `compact` variant. Today `.layout-menu-tile .layout-tile-count` **reaches across to override the other component's class**. | 08 |
-| 17 | `EmptyState` import; `templates.resolve`/`templates.list` dev handles; `el('div',{})`/`el('span',{})` spacers ×3; `.wizard-preset-wrap` dup block | `wizard/index.ts:6, 448, 452, 687, 898-899`; `global.css:2247` | Dead, none needed. | 02 |
+| ✅ 17 | `EmptyState` import; `templates.resolve`/`templates.list` dev handles; `el('div',{})`/`el('span',{})` spacers ×3; `.wizard-preset-wrap` dup block | `wizard/index.ts:6, 448, 452, 687, 898-899`; `global.css:2247` | Dead, none needed. | 02 ✅ |
 | 18 | `?? el('span', {})` ×2 | `board/index.ts:291` | Dead — `el()` drops nulls (`dom.ts:64`). Also drop `.board-card-foot { min-height:16px }`. | 07 |
 | 19 | `buildMenu(menu, _titleEl)` unused param | `terminal-pane.ts:593` | Dead. | 08 |
 | 20 | `.usage-history-block` class; cadence `<select>` on **disabled** providers; the `Test notification` button | `usage.ts:408, 209-228, 393-400` | Class: zero rules, name-collides with `.usage-history-block-row`. Cadence on a disabled provider is a dead toggle. `Test notification` fires a hardcoded fixture toast — its own comment calls it "a fixture, not a reading"; gate behind `import.meta.env.DEV`. | 05 |
@@ -282,28 +285,32 @@ The rule is mechanical so the milestone can gate on it without judging context:
 > A wizard, a settings page, Home, and the board are **not** dense terminal chrome.
 
 ```sh
-awk '
-/^\s*(padding|margin|gap|row-gap|column-gap)[a-z-]*\s*:/ {
-  t = $0; gsub(/\b[1236]px\b/, "", t)
-  if (match(t, /[0-9]+px/)) { n++; print FILENAME ":" NR ": " $0 }
-}
-END { printf "VIOLATIONS=%d\n", n }
-' src/ui/styles/global.css
+node scripts/check-spacing.mjs            # count + per-bucket breakdown
+node scripts/check-spacing.mjs --list     # every violation with file:line
+node scripts/check-spacing.mjs --max 28   # the gate (exits 1 above the ceiling)
 ```
 
-**Baseline at the close of 01: `VIOLATIONS=94`**, plus **4** `clamp()` spacing
-bypasses (`.home-logo`, `.home-welcome`, `.home-ctas`, `.home-sections`).
-Existing violations are *listed, not mass-fixed* — steps 02–08 burn them down per
-surface. The number must **never rise**; step 09 gates on it.
+> **Correction, made in 8.5/02.** 01 shipped this rule as an `awk` one-liner using
+> `\b`, and reported **94** violations. Git Bash's `awk` is **mawk, which silently
+> ignores `\b`** — so its `gsub` stripped nothing and it counted almost every px
+> line. The true number was **33**. Numbers you cannot reproduce are worse than no
+> numbers, so the rule now ships as `scripts/check-spacing.mjs` (node, no deps),
+> which is what step 09 gates on. The buckets below are the corrected ones.
 
-| Owner step | Surface bucket | Violations to clear |
-|---|---|---|
-| 02 | wizard · path-input · layout tiles · grid-preview | **16** |
-| 04 + 05 | settings · integux · trail · mgr · cat · toolplan · usage · evbridge · ph | **25** |
-| 06 | home · firstrun · update | **9** (+ the 4 `clamp()`s) |
-| 07 | board · palette · toast · confirm · review · modal · menu · pill | **16** |
-| 08 | pane · titlebar · workspace-tab · rail · dock · shortcuts · layout-menu | **18** |
-| — | shared primitives / misc | **10** |
+**Baseline at the close of 01: 33 violations.** After 02: **28** (the wizard
+bucket is clear). Plus **4** `clamp()` spacing bypasses (`.home-logo`,
+`.home-welcome`, `.home-ctas`, `.home-sections`) that the px checker cannot see —
+06 owns them. Existing violations are *listed, not mass-fixed*; steps 02–08 burn
+them down per surface. The number must **never rise**.
+
+| Owner step | Surface bucket | At 01 | Now |
+|---|---|---|---|
+| **02** | wizard · path-input · layout tiles · grid-preview | 5 | **0 ✓** |
+| 04 + 05 | settings · integux · trail · mgr · cat · toolplan · usage · evbridge · ph | 7 | 7 |
+| 06 | home · firstrun · update | 4 | 4 (+ the 4 `clamp()`s) |
+| 07 | board · palette · toast · confirm · review · modal · menu · pill | 10 | 10 |
+| 08 | pane · titlebar · workspace-tab · rail · dock · shortcuts · layout-menu | 6 | 6 |
+| — | shared primitives / misc | 1 | 1 |
 
 Radius is a *separate* ramp with **no** off-ramp (`--r-sm/md/lg/full`). Chrome
 currently ships `3px`, `4px`, `5px` and `6px` radii with no token behind three of
