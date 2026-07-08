@@ -9,7 +9,15 @@ and surfaces that made sense at Phase 3 now duplicate or contradict newer
 ones. This pack is one full **audit** followed by a **visual revamp** of every
 user-facing surface, plus removals: things the product outgrew get deleted,
 not restyled. Same format as `prompts/phase-1..8/` (each step self-contained +
-pasteable as a `/goal`, < 4000 chars). Execute in order.
+pasteable as a `/goal`, **≤ 3950 chars**). Execute in order.
+
+> **Why 3950, not 4000.** `/goal` hard-caps the *whole* condition at 4000
+> characters, and you prepend your own preamble ("Use Opus 4.8 / Fable 5 only,
+> …" ≈ 50 chars) before pasting a step. A 3999-char step therefore fails to set.
+> Every step here is kept ≤ 3950 with real headroom (currently 3578–3888, min 62
+> spare). Verify after editing any step:
+> `python3 -c "import sys;[print(len(open(f,encoding='utf-8').read()),f) for f in sys.argv[1:]]" prompts/phase-8.5/[0-9]*.md`
+> — count **characters**, not bytes: these files carry multibyte `·`, `—`, `≥`.
 
 > **Design-source rule (binding)**: 21st.dev (and similar galleries) are a
 > RESEARCH source — browse free components for layout/spacing/interaction

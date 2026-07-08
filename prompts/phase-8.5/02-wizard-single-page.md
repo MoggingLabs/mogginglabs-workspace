@@ -1,14 +1,13 @@
 The one-page wizard (Phase-8.5/02). Three stepper screens (Start · Layout ·
 Agents) become ONE scannable page: folder, grid, and agent lineup at once,
-with 01's ramp giving every group real breathing room. AUDIT.md grades the
-Agents screen **F** — 8 flat siblings, no cards, `padding: 5px`, four
-control heights in one row, and the fill meter grouping upward toward the
-subtitle instead of down toward its own controls. It gets the deepest pass.
-All behavior (prefill, presets, per-slot profiles, swarm roles, remote
-hosts, worktree isolation, tool plans, telemetry) is PRESERVED — layout
-surgery, not a rewrite. AUDIT.md § Patterns carries the NN/g citation that
-settles the format: wizards are wrong for repeated, expert, arbitrary-order
-tasks. This is all three.
+with 01's ramp giving every group breathing room. AUDIT.md grades the Agents
+screen **F** — 8 flat siblings, no cards, `padding: 5px`, four control
+heights in one row, a fill meter grouping upward toward the subtitle instead
+of down toward its own controls. It gets the deepest pass. All behavior
+(prefill, presets, per-slot profiles, swarm roles, remote hosts, worktree
+isolation, tool plans, telemetry) is PRESERVED — layout surgery, not a
+rewrite. AUDIT.md § Patterns carries the NN/g citation settling the format:
+wizards are wrong for repeated, expert, arbitrary-order tasks. All three.
 
 ## Steps
 1. **Structure** (`src/ui/features/wizard/index.ts`): drop
@@ -20,14 +19,13 @@ tasks. This is all three.
    never feels crammed. Footer: one primary `Launch N terminals` + ghost
    Cancel; the validation that gated Continue now gates Launch (folder
    unset → the Where card shows its hint and scrolls into view).
-2. **Progressive disclosure inside cards**: rarely-used controls (remote
-   host — one option for most users, per-slot profiles, swarm roles, tool
-   plan, custom command, preset save/delete) collapse behind a quiet
-   "Advanced" disclosure per card. Prefill and preset application
-   auto-expand whatever they touch.
+2. **Progressive disclosure**: rarely-used controls (remote host — one
+   option for most users, per-slot profiles, swarm roles, tool plan, custom
+   command, preset save/delete) collapse behind a quiet "Advanced"
+   disclosure per card. Prefill and presets auto-expand what they touch.
 3. **The live summary**: the assignment preview stays THE at-a-glance truth
    (letter chips per pane). The launch label tracks `paneCount`; the fill
-   meter regroups DOWN toward its own controls, not up toward the subtitle.
+   meter regroups DOWN toward its own controls, not up to the subtitle.
 4. **Keyboard + audit removals**: Tab order top→bottom; Enter in the folder
    field jumps to Launch when valid; Escape confirms-then-closes;
    `wizard-port`'s prefill contract unchanged. Execute AUDIT.md's wizard

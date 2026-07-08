@@ -44,15 +44,14 @@ are on a breadcrumb, pick with one click. The typed bar stays (it's fast)
    toggle reveals the dotfolder. Verdict `out/folderpick-result.json`.
 
 ## Files
-- `src/contracts/ipc/channels.ts` · `src/main/fs-browse.ts` (+ register)
-  · `src/ui/components/folder-browser.ts` · `components/index.ts` ·
-  `src/ui/features/wizard/index.ts` · `src/main/folderpick-smoke.ts` ·
+- `contracts/ipc/channels.ts` · `src/main/fs-browse.ts` (+ register) ·
+  `components/folder-browser.ts` · `components/index.ts` ·
+  `features/wizard/index.ts` · `src/main/folderpick-smoke.ts` ·
   qa-smokes.sh row · gallery (both themes)
 
 ## Definition of Done
-- A folder anywhere on disk is reachable by clicks alone from the wizard;
-  the breadcrumb always shows where you are; bar and browser never
-  disagree.
+- A folder anywhere on disk is reachable by clicks alone; the breadcrumb
+  always shows where you are; bar and browser never disagree.
 - Works on Windows drive roots and POSIX `/` (smoke covers the fixture;
   dev-verify both notations, recorded in the books).
 - WIZARDUX + TEMPLATE gates still green; FOLDERPICK green; count bumped.

@@ -45,7 +45,7 @@ SANCTIONED; `.pane-badge`'s "smoke DOM contract" comment is a lie.
    `out/chromeux-result.json`.
 
 ## Files
-- titlebar · workspace-tab · pane-header · dock-chrome CSS/TS (`core/shell`,
+- titlebar · workspace-tab · pane-header · dock-chrome (`core/shell`,
   `features/workspace`, `terminal`, `browser`) · `features/shortcuts/` ·
   `src/main/chromeux-smoke.ts` · main dispatch · qa-smokes.sh · gallery
 
@@ -63,7 +63,6 @@ SANCTIONED; `.pane-badge`'s "smoke DOM contract" comment is a lie.
 
 ## Guardrails
 - xterm content and the terminal draw path are OUT of scope; budgets veto.
-- Pane-header 3/6px are SANCTIONED; judge titlebar, rail, dock and overlay
-  strictly, pane headers by the off-ramp.
-- Safety surfaces may be restyled, never dimmed, shrunk, or hidden behind
-  disclosure.
+- Pane-header 3/6px are SANCTIONED; judge titlebar, rail, dock, overlay
+  strictly.
+- Safety surfaces may be restyled, never dimmed, shrunk, or hidden.

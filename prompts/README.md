@@ -2,8 +2,10 @@
 
 Sequenced master prompts that build **MoggingLabs Workspace** phase by phase. Each phase folder
 has a `README.md` (the plan) + numbered step files; every STEP is self-contained and pasteable as
-a `/goal` (kept < 4000 chars). Execute a phase in order; don't start the next phase until the
-current phase's gate is green (Windows + macOS). Roadmap: `docs/02-mvp-and-roadmap.md`.
+a `/goal` (kept **≤ 3950 chars** — `/goal` caps the whole condition at 4000 and you prepend your
+own preamble, so a 3999-char step fails to set; count characters, not bytes). Execute a phase in
+order; don't start the next phase until the current phase's gate is green (Windows + macOS).
+Roadmap: `docs/02-mvp-and-roadmap.md`.
 
 ## Phases
 | Phase | Folder | Status | What |

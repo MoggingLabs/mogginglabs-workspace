@@ -1,6 +1,6 @@
 Where the work lands is where trust is won or lost. Give every loop Seer-style
-STOP-POINTS, make the default stop exactly the Phase-3 human review, deputize
-the Phase-4 reviewer gate for supervised autonomy, and keep autoland a typed,
+STOP-POINTS, make the default stop the Phase-3 human review, deputize the
+Phase-4 reviewer gate for supervised autonomy, and keep autoland a typed,
 stacked opt-in — never a mood.
 
 ## Steps

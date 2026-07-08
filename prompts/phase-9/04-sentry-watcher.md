@@ -5,14 +5,13 @@ own token, in memory, for one request, never persisted.
 
 ## Steps
 1. **Adapter on the Phase-8 seam** (`@backend/features/integrations/sentry/`):
-   a read-only service adapter (list unresolved issues for a project; fetch
-   issue detail: title, culprit, count, first/lastSeen, permalink, top
-   frames). Auth: a user-supplied Sentry auth token via
-   the profile-style POINTER pattern (env name or documented per-OS path —
-   ADR 0007 verbatim: read at request time, in-memory for the one request,
-   never persisted, logged, copied, or displayed; values that look like
-   secrets are refused at save by the existing redactor patterns). Org/project
-   slugs + base URL (self-hosted Sentry supported) live in the spec.
+   a read-only service adapter (list unresolved issues; fetch detail: title,
+   culprit, count, first/lastSeen, permalink, top frames). Auth: a
+   user-supplied Sentry token via the profile-style POINTER pattern (env name
+   or documented per-OS path — ADR 0007 verbatim: read at request time,
+   in-memory for the one request, never persisted, logged, copied, or
+   displayed; secret-shaped values refused at save by the existing redactor).
+   Org/project slugs + base URL (self-hosted supported) live in the spec.
 2. **Qualification filter** (Seer's auto-trigger conditions, tuned per loop):
    an issue becomes a mission only if: unresolved AND `events >= N`
    (default 10) AND `lastSeen` within the recency window (default 14 days)
