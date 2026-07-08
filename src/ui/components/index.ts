@@ -34,3 +34,9 @@ export { Spinner, loadingRow } from './spinner'
 export { showToast, type ToastOpts, type ToastTone } from './toast'
 export { EmptyState, type EmptyStateOpts } from './empty-state'
 export { createSegmented, type SegmentedHandle, type SegmentedOption } from './segmented'
+// Layout primitives (8.5/01) — THE structural vocabulary: every grouped surface
+// is a Card, headed by a SectionHeader, filled with FieldGroups, split by TwoColumn.
+export { Card, type CardOpts } from './card'
+export { SectionHeader, type SectionHeaderOpts } from './section-header'
+export { FieldGroup, type FieldGroupOpts } from './field-group'
+export { TwoColumn, type TwoColumnOpts } from './two-column'

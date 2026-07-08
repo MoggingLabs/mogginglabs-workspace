@@ -1,68 +1,69 @@
 Chrome + terminal-surround UX (Phase-8.5/08). The frame the user lives in
-all day: titlebar, workspace tabs, pane headers, the browser dock's chrome,
-and the shortcuts overlay. Phases 6–8 bolted chips onto these (usage gauge,
-MCP chip, agent-browsing dot, attention states) without a layout pass —
-this step gives the chrome one density rhythm and executes the AUDIT.md
-removals for affordances the product outgrew. Terminal CONTENT is
-untouchable (budgets, docs/07); everything around it is in scope.
+all day: titlebar, workspace rail, pane headers, dock chrome, shortcuts
+overlay. One density rhythm + the AUDIT.md removals. Terminal CONTENT is
+untouchable (docs/05, docs/07). **Read AUDIT.md § Chrome first — premises
+you'd assume are FALSE**: there is no titlebar MCP chip (it's per-pane); the
+center cell is the palette trigger, not tabs; pane-header 3/6px are
+SANCTIONED; `.pane-badge`'s "smoke DOM contract" comment is a lie.
 
 ## Steps
-1. **Titlebar**: one ordered system — left (app/home), center (workspace
-   tabs), right (usage gauge · MCP chip · browser globe · settings) with
-   token gaps and a shared icon-button hitbox size; overflow rules for
-   many tabs (scroll + fade, not shrink-to-unreadable). The
-   window-control overlay + fullscreen chrome classes (5/04) unchanged.
-2. **Workspace tabs**: identity color dot, name, attention/busy state
-   (the `data-attention` contract stays), agent-browsing dot (8/07c),
-   close affordance on hover — spaced on the scale, active tab clearly
-   heavier. Middle-click close if AUDIT.md verdicts want it; drag-reorder
-   only if already present (no new mechanics here).
-3. **Pane headers**: the densest strip in the app — title, branch chip,
-   role chip, state dot, mcp chip, expand/close. One height, one gap
-   token, chips truncate with tooltips instead of wrapping; the header
-   never grows the pane's chrome budget (measure before/after — docs/05).
-   The pane ⋯ menu ordered by frequency; stale items from AUDIT.md
-   removed with rationale.
-4. **Dock chrome + shortcuts overlay**: the dock header (URL, profile
-   toggle, possession banner, consent copy) on the same rhythm — the
-   possession/"agent holds the wheel" surface must stay UNMISSABLE
-   (that's its job) while sitting cleanly; the `?` shortcuts overlay
-   becomes a two-column token grid grouped by area, fed from the same
-   data the Settings page renders (KB-01: one source).
+1. **Titlebar**: fix the port lie — `feature-registry.ts:7` calls
+   `titlebarLeft` "after the brand"; `titlebar.ts:86` mounts BOTH slots
+   inside `.titlebar-right`. Declare the right cluster's order (today it's
+   feature-registration order). Hoist darwin's `padding-left: 84px` (a
+   correct traffic-light inset) to `--traffic-light-inset`, sourced from
+   `main/window.ts:24`. Drop `.update-dot`'s margin. Hitboxes + gaps: keep.
+2. **Workspace rail**: identity ramp, `data-attention` latch and the
+   zero-layout-shift `::before` bar are well-built — KEEP. Add the missing
+   scroll-edge fade. Fix the collapsed-rail collision (agent dot over
+   `.ws-attn`).
+3. **Pane headers**: fixed 28px, chips `flex:none`, title ellipsises —
+   correct, KEEP. Fix: `.pane-head-left` has no `overflow` (four lit chips
+   in a narrow pane spill into the branch chip); `.pane-role` has no
+   `max-width` and no tooltip; `.pane-mcp` breaks its three siblings on
+   every axis (size, padding, radius, unset `line-height`) and lives 1300
+   lines away — co-locate and align. On a remote pane the state dot is no
+   longer the leading glyph (`terminal-pane.ts:391`). ⋯ menu items are all
+   live — KEEP; reorder by frequency only.
+4. **Dock chrome + shortcuts overlay**: dock header on the same rhythm,
+   possession UNMISSABLE; the `?` overlay a two-column token grid fed from
+   Settings' own data (KB-01: one source).
+   **BLOCKER (AUDIT.md § Blockers) — land FIRST, before any dock restyle**:
+   `.browser-agent-label`, `.browser-confirm-text`,
+   `.browser-agentweb-note-text` have NO CSS rule, and NO smoke asserts any
+   `.browser-*` class. Guard it: while `driving`, `.browser-dock` carries
+   `agent-driving`, the banner is not hidden, `.browser-agent-stop` is
+   hit-testable, `.browser-agent-label` has text at computed `>= 11px`,
+   non-transparent.
 5. **CHROMEUX smoke** (`MOGGING_CHROMEUX`, env-gated, qa-smokes.sh):
-   (a) titlebar right-cluster buttons share hitbox size + gap (computed);
-   (b) 8 workspaces → tabs overflow with scroll affordance, none below
-   min readable width; (c) a pane with branch+role+mcp fixtures renders
-   one-line header, chips truncated not wrapped (height assert ==
-   single-line height); (d) the attention data-attribute contract on
-   tabs/panes still fires from a fixture notify (ATTENTION-gate reuse);
-   (e) shortcuts overlay opens on `?`, groups render, and its rows match
-   the Settings page's data (count equality); (f) dock possession banner
-   still renders over agent control (PERWSAGENT hooks intact). Verdict
+   (a) right-cluster buttons share hitbox + gap (computed); (b) 8 workspaces
+   → rail scrolls with an edge fade, tabs never shrink; (c) a pane with
+   remote+role+claims+mcp fixtures renders a ONE-LINE header, chips
+   truncated not wrapped, cluster never overflowing the branch chip; (d) the
+   `data-attention` contract still fires; (e) the `?` overlay's rows match
+   Settings' (count equality); (f) step 4's possession guard. Verdict
    `out/chromeux-result.json`.
 
 ## Files
-- shell/titlebar + workspace-tab + pane-header + dock-chrome CSS/TS
-  (`src/ui/core/shell`, `src/ui/features/workspace`, `terminal`,
-  `browser`) · `src/ui/features/shortcuts/` · `src/main/chromeux-smoke.ts`
-  · main dispatch · qa-smokes.sh row · gallery (both themes)
+- titlebar · workspace-tab · pane-header · dock-chrome CSS/TS (`core/shell`,
+  `features/workspace`, `terminal`, `browser`) · `features/shortcuts/` ·
+  `src/main/chromeux-smoke.ts` · main dispatch · qa-smokes.sh · gallery
 
 ## Definition of Done
-- The chrome reads as one system: consistent hitboxes, gaps, chip
-  truncation — no wrapped pane headers at any pane count.
-- Every attention/possession/consent surface is as loud as before or
-  louder — polish never dims a safety signal.
-- ATTENTION, MULTIPANE, PERWS, PERWSAGENT, KBSHORTCUTS gates still
-  green; CHROMEUX green; count bumped in the books.
+- One system: consistent hitboxes, gaps, chip truncation — no wrapped pane
+  headers at any count; the chrome bucket clears § Enforcement (18→0).
+- Every possession/consent/attention surface as loud as before — and now
+  TESTED (step 4's guard).
+- ATTENTION, MULTIPANE, PERWS, PERWSAGENT, KBSHORTCUTS still green;
+  CHROMEUX green; count bumped.
 
 ## Checks that must be green
 - `npm run typecheck` → 0; build ok; boundaries clean.
-- Full local sweep; PERCEPTION + MILESTONE + FLICKER re-run (chrome
-  touches the frame budget).
+- Full local sweep; PERCEPTION + MILESTONE + FLICKER re-run.
 
 ## Guardrails
-- xterm content, renderer settings, and the terminal draw path are OUT
-  of scope — docs/05 and docs/07 budgets are the veto.
-- Safety surfaces (possession banner, consent copy, attention states)
-  may be restyled, never reduced, relocated behind disclosure, or made
-  subtler.
+- xterm content and the terminal draw path are OUT of scope; budgets veto.
+- Pane-header 3/6px are SANCTIONED; judge titlebar, rail, dock and overlay
+  strictly, pane headers by the off-ramp.
+- Safety surfaces may be restyled, never dimmed, shrunk, or hidden behind
+  disclosure.

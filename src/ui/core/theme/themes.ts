@@ -60,6 +60,10 @@ const LIGHT_CHROME: Record<string, string> = {
   // dark-theme values measure 1.9–3.4:1 there). Fills (gutters, dots) still pass 3:1.
   '--success': '#147a3c',
   '--danger': '#c92e25',
+  // Danger-as-text ink (8.5/01). On light the fill red already reads as ink
+  // (5.24:1 on surface, 4.46:1 on inset), so ink == fill here; the dark themes
+  // need the lightened :root value instead.
+  '--danger-ink': '#c92e25',
   '--warning': '#8a5c09',
   '--info': '#1d63d8',
   '--shadow-1': '0 1px 2px rgba(21, 23, 27, 0.08)',

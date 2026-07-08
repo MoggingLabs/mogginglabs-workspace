@@ -38,7 +38,7 @@ verb, channel, and assert-relied-on hook keeps working.
    beats persistence); (d) every smoke-relied hook still resolves:
    `.integux-intro .integux-setup-cta`, `.integux-privacy`, `.trail-ws`,
    `.trail-activity`, `.usage-plan-row[data-profile]`, the mgr/cat DOM the
-   INTEGUX gate clicks; (e) spacing: adjacent cards' gap ≥ `--space-4`
+   INTEGUX gate clicks; (e) spacing: adjacent cards' gap ≥ `--sp-4`
    (computed). Verdict `out/settabs-result.json`.
 
 ## Files

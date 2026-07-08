@@ -37,7 +37,7 @@ guided integrations flow now does better.
    reopen → Recents card renders name/path/chips and clicking it opens
    the workspace (existing open-service path); (d) dismiss the checklist
    → it never returns across a reopen (persisted); (e) spacing: hero →
-   grid gap ≥ `--space-6`, card padding ≥ `--space-4` (computed); (f)
+   grid gap ≥ `--sp-6`, card padding ≥ `--sp-4` (computed); (f)
    both themes AA on card text (Phase-5 probe). Verdict
    `out/homeux-result.json`.
 

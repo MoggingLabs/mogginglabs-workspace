@@ -57,6 +57,12 @@
   --info: #4da3ff; /* remote / informational */
   --attention: var(--brand-500);
   --danger-weak: rgba(240, 85, 75, 0.14);
+  /* Danger as TEXT/ICON ink, the --accent-ink precedent (8.5/01). --danger is a
+     FILL (dots, gutters, exit chips) and measures only 2.93:1 on nord's elevated
+     surface and 3.24:1 on solarized's — below AA for text. This lightened red
+     holds ≥4.5:1 on every dark theme's surface AND elevated; light overrides it
+     in themes.ts. Anything rendering danger as words takes --danger-ink. */
+  --danger-ink: #fa9b92;
 
   /* Overlay scrim + text selection — the only translucent inks features may use. */
   --scrim: rgba(2, 3, 5, 0.55);
@@ -86,21 +92,34 @@
   --track-wide: 0.14em;
 
   /* Spacing (4-base) · radius · elevation · motion.
+     THE spacing vocabulary (8.5/01). Every padding/margin/gap outside the
+     off-ramp below takes a --sp-* stop; later work may EXTEND this ramp, never
+     bypass it. The stops are named --sp-* (not --space-*) because 277 call
+     sites already speak this name — a rename is churn with zero user value.
+     --sp-7/--sp-8 were added by 8.5/01 for page-level rhythm (section breaks,
+     hero gutters) that the old 6-stop ramp topped out below.
      Off-ramp literals policy (6/UI pass): 3px and 6px appear ONLY as optical
      half-steps inside dense terminal chrome (pane-header clusters, chips,
      icon tiles, kbd hints) where the 4-base ramp is visibly too coarse; any
      other spacing takes a --sp-* stop. 1-2px values are hairlines/seams and
-     carry their own reasons where non-obvious. */
+     carry their own reasons where non-obvious. Chrome-only: a wizard, a
+     settings page, Home, and the board are NOT dense terminal chrome. */
   --sp-1: 4px;
   --sp-2: 8px;
   --sp-3: 12px;
   --sp-4: 16px;
   --sp-5: 24px;
   --sp-6: 32px;
+  --sp-7: 48px;
+  --sp-8: 64px;
   --r-sm: 6px;
   --r-md: 10px;
   --r-lg: 14px;
   --r-full: 999px;
+  /* Readable-column caps. Prose past ~70ch costs the eye its return sweep;
+     pages past --page-max stop feeling like a document. */
+  --measure: 68ch; /* prose / captions inside a card */
+  --page-max: 1040px; /* settings + home content column */
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45);
   --shadow-3: 0 24px 64px rgba(0, 0, 0, 0.55);
@@ -111,6 +130,7 @@
   /* Layout constants. */
   --rail-w: 288px;
   --rail-w-collapsed: 60px;
+  --side-w: 200px; /* TwoColumn's rail (settings nav, preview column) */
   --titlebar-h: 40px;
   /* Win11 rounds restored windows at ~8px — the app frame's bottom corners match
      (dropped while maximized/fullscreen, where the OS window is square). */
@@ -465,6 +485,165 @@ button {
   margin-left: var(--sp-2);
   font-weight: var(--fw-regular);
   color: var(--text-lo);
+}
+
+/* ── Layout primitives (8.5/01) ─────────────────────────────────────────────
+   Card · SectionHeader · FieldGroup · TwoColumn. THE structural vocabulary for
+   every grouped surface. Spacing is --sp-* only: a feature that wants a
+   different rhythm changes the ramp, not a local pixel. AA verified in both
+   themes (card/inset surfaces use --text-hi/--text-lo, both ≥4.5:1 there). */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-surface);
+}
+/* A card nested in a card: quieter fill, tighter ring, one step less padding. */
+.card--inset {
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+}
+.card-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.card-title {
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  color: var(--text-hi);
+}
+.card-caption {
+  max-width: var(--measure);
+  color: var(--text-lo);
+  font-size: var(--fs-12);
+}
+.card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+/* Grid, not flex, and the action column only exists when an action does (:has(),
+   Chromium-native here). A flex space-between re-centers the button when the
+   caption wraps to two lines; the grid pins it to the top-right and lets it span
+   both rows. Pattern from shadcn's CardHeader/CardAction — layout idea only. */
+.section-header {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: start;
+  gap: var(--sp-4);
+}
+.section-header:has(> .section-header-action) {
+  grid-template-columns: 1fr auto;
+}
+.section-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.section-header-title {
+  margin: 0;
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  color: var(--text-hi);
+}
+.section-header-caption {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-lo);
+  font-size: var(--fs-12);
+}
+.section-header-action {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  align-self: start;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.field-group-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.field-group-label {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  color: var(--text-hi);
+}
+.field-group-hint {
+  max-width: var(--measure);
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+}
+/* --danger-ink, not --danger: the fill red measures 2.93:1 on nord's elevated
+   surface. Words take the ink; fills take the fill. */
+.field-group-error {
+  max-width: var(--measure);
+  color: var(--danger-ink);
+  font-size: var(--fs-11);
+}
+.field-group-control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.field-group.is-invalid .input {
+  border-color: var(--danger-ink);
+}
+
+.two-column {
+  display: flex;
+  gap: var(--sp-6);
+  min-height: 0;
+  min-width: 0;
+}
+.two-column-side {
+  flex: none;
+  width: var(--side-w);
+  min-width: 0;
+}
+.two-column-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+.two-column-main--measured {
+  max-width: var(--page-max);
+}
+/* A desktop app still gets narrow windows: stack rather than crush. */
+@media (max-width: 720px) {
+  .two-column {
+    flex-direction: column;
+    gap: var(--sp-4);
+  }
+  .two-column-side {
+    width: auto;
+  }
 }
 .input {
   height: 34px;

@@ -11,7 +11,7 @@ gives them the same page frame so the app stops looking half-styled.
    nav+content two-column moves to the `TwoColumn` primitive — nav gets
    icons per tab, an active-state fill, grouped ordering (Workspace ·
    Agents & tools · Trust · System) with quiet group labels; content gets
-   a readable max-width column, `--space-6` page padding, and a per-tab
+   a readable max-width column, `--sp-6` page padding, and a per-tab
    `SectionHeader` (title + one-line caption saying what lives here).
    Tab-as-own-page behavior, the persisted last-tab key, and every
    `data-target` hook the smokes click stay EXACTLY as-is.
@@ -34,8 +34,8 @@ gives them the same page frame so the app stops looking half-styled.
    opens Settings and asserts (a) the nav renders all tabs with icons +
    group labels, selection persists across a reopen (the stored-tab key);
    (b) computed styles on a light tab: content column max-width applied,
-   card padding ≥ `--space-4`, no zero-margin sibling controls (measure
-   two adjacent FieldGroups' gap ≥ `--space-3`); (c) every tab still
+   card padding ≥ `--sp-4`, no zero-margin sibling controls (measure
+   two adjacent FieldGroups' gap ≥ `--sp-3`); (c) every tab still
    switches by `.settings-nav-item[data-target=…]` click (the contract
    WEBTRAIL/USAGESET/INTEGUX rely on); (d) a theme change from the
    Appearance card still applies live (existing behavior, re-asserted);

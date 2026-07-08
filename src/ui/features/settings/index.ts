@@ -1,7 +1,7 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
 import { BrowserChannels, TelemetryChannels, UsageChannels, USAGE_CADENCES, type TelemetryRendererConfig, type UsageAlertConfig, type UsageConfig } from '@contracts'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
-import { Button, createCheckbox, createSegmented, el, icon, ICON_NAMES } from '../../components'
+import { Button, Card, FieldGroup, SectionHeader, TwoColumn, createCheckbox, createSegmented, el, icon, ICON_NAMES } from '../../components'
 import { THEMES } from '../../core/theme/themes'
 import { currentThemeId, onThemeChange, setTheme } from '../../core/theme/theme-state'
 import { setCommands } from '../../core/commands/command-port'
@@ -246,15 +246,30 @@ export const settingsFeature: UiFeature = {
       {
         id: 'about',
         label: 'About',
+        // 8.5/01: the smallest live customer of the layout primitives — Card +
+        // SectionHeader + TwoColumn + FieldGroup, so none of them can rot
+        // unexercised. Every other surface adopts them in 02–08.
         el: section('about', 'About', [
-          el('div', { class: 'settings-about' }, [
-            el('span', { class: 'settings-about-name', text: 'MoggingLabs Workspace' }),
-            version,
-            el('span', {
-              class: 'settings-row-caption',
-              text: 'A neutral, reliable, cross-platform organizer for AI coding-agent CLIs. Your keys, your CLIs — no subscription to us.'
-            })
-          ])
+          Card(
+            {
+              header: SectionHeader({
+                title: 'MoggingLabs Workspace',
+                caption:
+                  'A neutral, reliable, cross-platform organizer for AI coding-agent CLIs. Your keys, your CLIs — no subscription to us.'
+              })
+            },
+            [
+              TwoColumn(
+                { side: FieldGroup({ label: 'Version', hint: 'New builds download in the background — you choose when to restart.' }, version), sideAt: 'end', measure: false },
+                [
+                  el('p', {
+                    class: 'card-caption',
+                    text: 'Agents run as YOUR CLIs under YOUR login. The app orchestrates config the CLIs own; it never brokers, stores, or proxies a credential (ADR 0002). Terminal output, prompts, and code never leave this machine.'
+                  })
+                ]
+              )
+            ]
+          )
         ])
       }
     ]

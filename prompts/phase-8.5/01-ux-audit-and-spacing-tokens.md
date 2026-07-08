@@ -24,7 +24,7 @@ CSS tokens — no React, no Tailwind, no pasted code, no new runtime deps.
    (layout idea + spacing rhythm only, never code). Note anything NOT
    adaptable to vanilla DOM cheaply — honesty over ambition.
 3. **The spacing scale** (`src/ui/styles/global.css`): tokens
-   `--space-1..8` (4/8/12/16/24/32/48/64) + `--radius-*` and a max-width
+   EXTEND the existing `--sp-1..6` to `--sp-7/8` (48/64) + a max-width
    token for readable columns. Document in the tokens comment block, same
    style as the Phase-5 color system.
 4. **Layout primitives** (`src/ui/components/`): `Card` (padded, bordered,

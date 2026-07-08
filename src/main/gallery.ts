@@ -255,6 +255,12 @@ export function runGallery(win: BrowserWindow): void {
           await sleep(500)
           await snap(`${tag}-integrations-activity`)
           clearTrail(galleryWs)
+          // 8.5/01: About is the layout primitives' first live customer —
+          // Card + SectionHeader + TwoColumn + FieldGroup, staged in both themes
+          // so the ramp's rhythm is reviewable before 02-08 adopt it everywhere.
+          await ES(`(document.querySelector('.settings-nav-item[data-target="about"]')?.click(), 1)`)
+          await sleep(400)
+          await snap(`${tag}-settings-about-primitives`)
           await ES(`(document.querySelector('.settings-back')?.click(), 1)`)
           await sleep(300)
         })
