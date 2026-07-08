@@ -12,7 +12,7 @@ gallery + rail/chrome geometry probes + full 24-gate sweep.
 | 1 | Home | `RECENT PROJECTS` / `PRESETS` titles sat on their lists with no division; 8px gap off-rhythm | **FIXED** — house division on `.home-section > .section-label`; section gap `sp-2 → sp-3` |
 | 2 | Settings | All section headers (`APPEARANCE`, `TERMINAL`, `PROFILES & SSH HOSTS`, `PRIVACY`) lacked the division | **FIXED** — same rule on `.settings-section > .section-label` (content side keeps the section's airier `sp-4`) |
 | 3 | Board | Lane heads (`TO DO` …) sat directly on the card region | **FIXED** — division on `.board-lane-head` (`sp-3` + hairline; lane gap supplies the content side) |
-| 4 | Wizard + Review modals | Scrollable body slid under the footer with nothing marking the fold | **FIXED** — hairline `::before` + `sp-3` on `.wizard-footer` / `.review-footer` |
+| 4 | Wizard + Review modals | Scrollable body slid under the footer with nothing marking the fold | **FIXED** — hairline `::before` + `sp-3` on `.wizard-footer` / `.review-footer`. *(8.5/02: the wizard is no longer a modal and its `::before` was a DOUBLE divider over `.modal-footer`'s own border — the page's footer now carries a single `border-top`. `.review-footer` unchanged; 8.5/07 owns it.)* |
 | 5 | Palette | Input→results seam used a full-strength border — heavier than every other title/list junction | **FIXED** — softened to the division's 55% stop |
 | 6 | Pane context menu | "Copy working directory" and "Launch Claude Code here" wrapped to two lines at `min-width: 200px` | **FIXED** — `.menu { width: max-content; max-width: 320px }` + `white-space: nowrap` items (all menus) |
 | 7 | Rail | Tab list gap was 3px (off-ramp) | **FIXED** — `var(--sp-1)`; the rail is a nav list, not dense chrome |
