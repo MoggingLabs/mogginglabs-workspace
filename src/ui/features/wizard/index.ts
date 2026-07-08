@@ -346,8 +346,20 @@ export const wizardFeature: UiFeature = {
     let picker!: ReturnType<typeof createLayoutGridPicker>
     let isolateBox!: ReturnType<typeof createCheckbox>
     let isolateHint!: HTMLElement
+    let customInput!: HTMLInputElement
+    let advAgents!: HTMLDetailsElement
     const steppers = new Map<string, StepperHandle>()
     let customStepper: StepperHandle | null = null
+
+    const customIsSet = (): boolean => customCount > 0 || customCmd.trim().length > 0
+
+    /** Push a programmatic mix (prefill, preset, Clear) back into the custom row. */
+    function syncCustom(): void {
+      if (!customInput || !customStepper) return
+      if (customInput.value !== customCmd) customInput.value = customCmd
+      customStepper.setValue(customCount)
+      if (customIsSet()) advAgents.open = true // never hide state the user did not set here
+    }
 
     /** A quiet per-card "Advanced" disclosure. Native <details>: Chromium gives us
      *  the button semantics, aria-expanded, and Enter/Space for free. */
@@ -600,7 +612,41 @@ export const wizardFeature: UiFeature = {
         onClick: savePreset
       })
 
-      const advanced = disclosure('Advanced', !!swarmRoles || isolate || selectedTools.size > 0, [
+      // Custom command — any CLI, verbatim. Label only; never a stored credential.
+      customStepper = createStepper({
+        value: customCount,
+        min: 0,
+        max: customCount + (paneCount - assignedTotal()),
+        ariaLabel: 'Custom command count',
+        onChange: (n) => {
+          customCount = n
+          swarmRoles = null
+          refreshAgents()
+        }
+      })
+      customInput = el('input', {
+        class: 'input input--mono wizard-custom-input',
+        type: 'text',
+        value: customCmd,
+        placeholder: 'Custom command — e.g. aider --model …',
+        ariaLabel: 'Custom command',
+        onInput: (e) => {
+          customCmd = (e.target as HTMLInputElement).value
+          refreshAgents()
+        }
+      })
+      const customRow = el('div', { class: 'wizard-agent-row wizard-custom-row' }, [
+        el('span', { class: 'wizard-agent-head' }, [
+          el('span', { class: 'wizard-agent-dot', style: { background: CUSTOM_COLOR } }),
+          customInput
+        ]),
+        el('span', { class: 'wizard-agent-tail' }, [customStepper.el])
+      ])
+
+      // Auto-open when anything inside is already set — including a prefilled
+      // `custom:` mix, whose only controls live in here.
+      const advanced = disclosure('Advanced', !!swarmRoles || isolate || selectedTools.size > 0 || customIsSet(), [
+        customRow,
         el('div', { class: 'wizard-adv-row' }, [swarmBtn, swarmHint]),
         toolsHost,
         el('div', { class: 'wizard-adv-row' }, [isolateBox.el, isolateHint]),
@@ -610,6 +656,7 @@ export const wizardFeature: UiFeature = {
           saveBtn
         ])
       ])
+      advAgents = advanced
 
       // The BYO-auth reassurance rides the footer bar, where it is always in view
       // (it used to sit below the fold at the bottom of a 640px modal).
@@ -755,37 +802,9 @@ export const wizardFeature: UiFeature = {
         )
       }
 
-      // Custom command — any CLI, verbatim. Label only; never a stored credential.
-      customStepper = createStepper({
-        value: customCount,
-        min: 0,
-        max: customCount + (paneCount - assignedTotal()),
-        ariaLabel: 'Custom command count',
-        onChange: (n) => {
-          customCount = n
-          swarmRoles = null
-          refreshAgents()
-        }
-      })
-      rosterHost.append(
-        el('div', { class: 'wizard-agent-row wizard-custom-row' }, [
-          el('span', { class: 'wizard-agent-head' }, [
-            el('span', { class: 'wizard-agent-dot', style: { background: CUSTOM_COLOR } }),
-            el('input', {
-              class: 'input input--mono wizard-custom-input',
-              type: 'text',
-              value: customCmd,
-              placeholder: 'Custom command — e.g. aider --model …',
-              ariaLabel: 'Custom command',
-              onInput: (e) => {
-                customCmd = (e.target as HTMLInputElement).value
-                refreshAgents()
-              }
-            })
-          ]),
-          el('span', { class: 'wizard-agent-tail' }, [customStepper.el])
-        ])
-      )
+      // The custom-command row lives in Advanced (it is built once, in buildAgents),
+      // so a mix that carries one must be pushed back into its controls here.
+      syncCustom()
       refreshAgents()
     }
 

@@ -103,21 +103,32 @@ export function runWizardUxSmoke(win: BrowserWindow): void {
 
       // ── (c) prefill lands in ALL THREE cards at once ────────────────────────
       // A `custom:` mix needs no installed CLI, so this asserts on any machine.
+      // It also exercises the auto-open rule: the custom command's only controls
+      // live inside Agents › Advanced, so a prefilled mix must reveal them.
       await ES(`window.__mogging.templates.openWizard({ cwd: ${cwdJs}, paneCount: 6, mix: [{ provider: 'custom:echo hi', count: 2 }] })`)
       await sleep(800)
-      const prefill = await ES<{ folder: string; grid: string; custom: string; meter: string; advOpen: number }>(`(() => ({
+      const prefill = await ES<{
+        folder: string
+        grid: string
+        custom: string
+        meter: string
+        advOpen: number
+        customInAdvanced: boolean
+      }>(`(() => ({
         folder: document.querySelector('#view-wizard .path-input-field')?.value ?? '',
         grid: document.querySelector('#view-wizard .layout-tile[aria-checked="true"] .layout-tile-count')?.textContent ?? '',
         custom: document.querySelector('#view-wizard .wizard-custom-input')?.value ?? '',
         meter: document.querySelector('#view-wizard .wizard-fill-label')?.textContent ?? '',
-        advOpen: [...document.querySelectorAll('#view-wizard .wizard-adv')].filter((d) => d.open).length
+        advOpen: [...document.querySelectorAll('#view-wizard .wizard-adv')].filter((d) => d.open).length,
+        customInAdvanced: !!document.querySelector('#view-wizard .wizard-adv .wizard-custom-input')
       }))()`)
       const prefillOk =
         prefill.folder === repo && // Where
         prefill.grid === '6' && // Layout
         prefill.custom === 'echo hi' && // Agents
         /2 \/ 6/.test(prefill.meter) &&
-        prefill.advOpen === 0 // a fresh open re-collapses them
+        prefill.customInAdvanced && // the rarely-used control is disclosed, not on the roster
+        prefill.advOpen === 1 // ...and auto-opened, because the mix already set it
 
       // ── (f) launch from the single page opens the workspace with the mix ────
       await ES(`document.querySelector('#view-wizard .wizard-footer .btn--primary').click()`)

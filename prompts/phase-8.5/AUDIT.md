@@ -352,6 +352,15 @@ them (§ Chrome). Step 08 either adds `--r-xs: 3px` or folds them into `--r-sm`.
    matching the existing pattern makes that a swap, not a re-layout.
    `hintPlacement: 'below-control'` is available for result-caveat hints.
 
+7. **02 kept the per-slot profile picker on its agent row**, though the step's
+   brief listed it among the controls to collapse behind "Advanced". A profile is
+   chosen *for a provider*, so the control has to sit beside that provider's name
+   or it needs a second, duplicate roster inside the disclosure. It is already
+   progressive: `renderRoster()` renders the `<select>` only when that provider
+   has **more than one** profile (`wizard/index.ts`), which for most users is
+   never. The other five — remote host, swarm roles, tool plan, custom command,
+   preset save/delete — are disclosed as specified.
+
 ---
 
 ## What 01 shipped
