@@ -2,7 +2,7 @@ Usage + Profiles & hosts (Phase-8.5/05b). The three surfaces nothing owned. The
 Usage TAB (D−) renders 7 sections and 20 controls always-open. The Usage POPOVER
 (D) is styled as dense chrome without being it, and reaches for **nine tokens
 that do not exist**. Profiles & hosts (D) is a CRUD manager of five
-placeholder-as-label inputs — AUDIT § Deviations #8 records it unowned and
+placeholder-as-label inputs — AUDIT § Deviations #7 records it unowned and
 recommends folding it here. One family, one bucket, one step.
 
 ## Steps
@@ -49,7 +49,7 @@ recommends folding it here. One family, one bucket, one step.
 
 ## Definition of Done
 - AUDIT grades **Usage tab D− → A**, **Usage popover D → A**, **Profiles &
-  hosts D → A**. § Deviations #8 discharged.
+  hosts D → A**. § Deviations #7 discharged.
 - USAGESET, USAGEUI, PROFILES, WEBUSAGE, USAGECLI green UNMODIFIED.
 - `settings` bucket **0**; REMOVE #20 ✅; bugs #4, #5 ✅.
 

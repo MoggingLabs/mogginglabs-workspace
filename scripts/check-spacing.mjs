@@ -20,13 +20,20 @@ const SPACING = /^\s*(padding|margin|gap|row-gap|column-gap)[a-z-]*\s*:/
 const PX = /\b(\d+)px\b/g
 const SELECTOR = /^\s*[.#[a-zA-Z]/
 
-/** Which pack step owns a selector's burn-down. */
+/**
+ * Which pack step owns a selector's burn-down. FIRST MATCH WINS, so order encodes
+ * precedence — chrome sits above feedback because `.layout-menu-tile` matches both
+ * (`layout-menu` here, `menu-` there). It is the titlebar's layout menu, owned by
+ * step 08 (REMOVE #16). Bucketed as `feedback` it made 07b's "feedback bucket 0"
+ * unreachable until 08 landed — a step's definition of done must not depend on a
+ * later step.
+ */
 const BUCKETS = [
   ['wizard', /wizard|path-input|layout-tile|layout-picker|grid-preview/],
   ['settings', /settings|integux|trail|mgr-|cat-|toolplan|usage-|evbridge|ph-/],
   ['home', /home-|firstrun|checklist|update/],
-  ['feedback', /board|palette|toast|confirm|review|modal|menu-|pill|count-badge/],
-  ['chrome', /pane-|titlebar|workspace-tab|rail-|brand|icon-btn|dock|shortcut|layout-menu|layout-grid/]
+  ['chrome', /pane-|titlebar|workspace-tab|rail-|brand|icon-btn|dock|shortcut|layout-menu|layout-grid/],
+  ['feedback', /board|palette|toast|confirm|review|modal|menu-|pill|count-badge/]
 ]
 const bucketOf = (sel) => BUCKETS.find(([, re]) => re.test(sel))?.[0] ?? 'shared'
 

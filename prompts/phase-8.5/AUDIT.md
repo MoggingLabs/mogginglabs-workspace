@@ -321,8 +321,8 @@ The rule is mechanical so the milestone can gate on it without judging context:
 
 ```sh
 node scripts/check-spacing.mjs            # count + per-bucket breakdown
-node scripts/check-spacing.mjs --list     # every violation with file:line
-node scripts/check-spacing.mjs --max 28   # the gate (exits 1 above the ceiling)
+node scripts/check-spacing.mjs --list     # every violation with file:line, bucketed
+node scripts/check-spacing.mjs --max 27   # today's ceiling; 09 freezes it at --max 0
 ```
 
 > **Correction, made in 8.5/02.** 01 shipped this rule as an `awk` one-liner using
@@ -340,26 +340,40 @@ step burns down its own surface. The number must **never rise**, and 09 gates on
 > **Correction (8.5/04 audit-of-the-audit).** This section said the four `clamp()`
 > spacing bypasses "the px checker cannot see". It sees them: `clamp(16px, 2.4vh,
 > 36px)` contains px literals, and those four **are** the entire `home` bucket. What
-> the checker genuinely cannot see is any **non-px** unit — exactly two of them:
-> `.home-hero { margin-top: 3vh }` (06) and `.palette-overlay { padding-top: 12vh }`
-> (07). Both are now owned. Note also that `.home-logo`'s *sizing* clamps (w/h/radius)
-> are **keep**; only its `margin-bottom` clamp is a fix — the old text conflated them.
+> the checker genuinely cannot see is any **non-px** unit — exactly two, and they sit
+> **outside** the 27: `.home-hero { margin-top: 3vh }` (06) and
+> `.palette-overlay { padding-top: 12vh }` (07). So the real total is **29**: 27 the
+> gate counts and 2 it never will. Both are named in their steps, because `--max 0`
+> would otherwise certify a clean sweep over two live bypasses. Note also that
+> `.home-logo`'s *sizing* clamps (w/h/radius) are **keep**; only its `margin-bottom`
+> clamp is a fix — the old text conflated them.
 
 The old "04 + 05" row hid the split. The `settings` bucket's 7 was **1 shell** +
 **6 mega-tab**: only `.settings-nav-item { padding: 7px }` belonged to the shell.
 The `—` row is `.segmented-item`; it is now 07b's.
 
-| Owner step | Surface bucket | At 01 | Now | Target |
-|---|---|---|---|---|
-| **02** | wizard · path-input · layout tiles · grid-preview | 5 | **0 ✓** | 0 |
-| **04** | settings shell (nav · page · content · section · row) | 1 | **0 ✓** | 0 |
-| 05 | evbridge ×2 · toolplan ×2 (Integrations) | 4 | 4 | 0 |
-| 05b | usage-prov ×2 (Usage tab) | 2 | 2 | 0 |
-| 06 | home — the four `clamp()`s, **plus** `.home-hero{3vh}` (unseen) | 4 | 4 | 0 |
-| 07 | board chips ×3 · `.palette-item`, **plus** `.palette-overlay{12vh}` (unseen) | 4 | 4 | 0 |
-| 07b | `.toast` · `.menu-item` · `.menu-empty` · `.review-gate` · `.pill` · **`.segmented-item`** (the old `—` row) | 6 | 6 | 0 |
-| 08 | `.brand`(darwin) · collapsed tab · `.pane-git` · `.pane-header` · `.pane-title-input` · `.layout-menu-tile` | 6 | 6 | 0 |
-| 08b | `.shortcuts-row` | 1 | 1 | 0 |
+| Owner | Script bucket | Remaining selectors | At 01 | Now | Target |
+|---|---|---|---|---|---|
+| **02** | `wizard` | — | 5 | **0 ✓** | 0 |
+| **04** | `settings` (shell) | — | 1 | **0 ✓** | 0 |
+| 05 | `settings` | `.evbridge-ev` `.evbridge-health` `.toolplan-head` `.toolplan-cell` | 4 | 4 | 0 |
+| 05b | `settings` | `.usage-prov-row` `.usage-prov-controls` | 2 | 2 | 0 |
+| 06 | `home` | the four `clamp()`s: `.home-logo{margin-bottom}` `.home-welcome` `.home-ctas` `.home-sections` | 4 | 4 | 0 |
+| 07 | `feedback` | `.board-chip` `.board-lane-count` `.board-link-chip` `.palette-item` | 4 | 4 | 0 |
+| 07b | `feedback` + `shared` | `.toast` `.menu-item` `.menu-empty` `.review-gate` `.pill` + **`.segmented-item`** (the old `—` row) | 6 | 6 | 0 |
+| 08 | `chrome` | `.brand`(darwin `84px`) `#app.rail-collapsed .workspace-tab` `.pane-header` `.pane-title-input` `.pane-git` `.layout-menu-tile` | 6 | 6 | 0 |
+| 08b | `chrome` | `.shortcuts-row` | 1 | 1 | 0 |
+
+Columns sum: **33** at 01, **27** now, **0** at freeze. Every remaining violation is
+named, and every name has exactly one owner — `check-spacing.mjs --list` prints the
+bucket beside each, so the ledger is checkable, not asserted.
+
+> **Bucket precedence, fixed in the 8.5/04 audit-of-the-audit.** `BUCKETS` is
+> first-match-wins, and `feedback`'s `menu-` was matching `.layout-menu-tile` before
+> `chrome`'s `layout-menu` could. That is the titlebar's layout menu — step 08's, via
+> REMOVE #16 — so 07b's "`feedback` bucket 0" was **unreachable until 08 landed**. A
+> step's definition of done must never depend on a later step. `chrome` now sits above
+> `feedback`; only that one selector moved (feedback 10 → 9, chrome 6 → 7, total 27).
 
 > The gate measures **drift**, not hitbox size: `.mgr-chip { padding: 1px var(--sp-2) }`
 > and `.trail-btn { padding: 2px var(--sp-2) }` — the two worst click targets in the
@@ -410,7 +424,7 @@ decision and its reason go in docs/11. This is the last unresolved either/or.
    matching the existing pattern makes that a swap, not a re-layout.
    `hintPlacement: 'below-control'` is available for result-caveat hints.
 
-8. **`profiles-hosts.ts`'s internals were unowned.** The Grades table read
+7. **`profiles-hosts.ts`'s internals were unowned.** The Grades table read
    **D / fix**; no step's prompt claimed it — 04 covers "the shell and the light
    tabs", 05 covered "Integrations + Usage". 04 gave it the page frame (a Card with a
    real head, replacing the `row()` labelled "Pointer sets only"), promoting it to
@@ -420,7 +434,7 @@ decision and its reason go in docs/11. This is the last unresolved either/or.
    stretched: a step that never mentions a surface in its Steps is how that surface
    goes unowned.
 
-7. **02 kept the per-slot profile picker on its agent row**, though the step's
+8. **02 kept the per-slot profile picker on its agent row**, though the step's
    brief listed it among the controls to collapse behind "Advanced". A profile is
    chosen *for a provider*, so the control has to sit beside that provider's name
    or it needs a second, duplicate roster inside the disclosure. It is already
