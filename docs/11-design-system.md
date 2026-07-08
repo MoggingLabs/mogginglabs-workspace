@@ -271,9 +271,29 @@ re-warm must not hitch).
 ## The folder browser (Phase-8.5/03)
 
 The wizard's Where card offers three views of ONE selection — a typed path bar, a
-small current-folder line, and a click-through browser. They cannot disagree: the
-bar debounces into `browser.setPath()` (silent), the browser reports back through
-`onSelect`, and both adopt whatever canonical path the main process echoes.
+small current-folder line, and a click-through browser. They cannot disagree,
+because none of them owns the path: `features/wizard/path-selection.ts` does.
+
+**The single source of truth.** Every change names its ORIGIN (`bar` · `browser` ·
+`recent` · `native` · `prefill` · `remote` · `reveal`), and the view that *caused* a
+change is never written back to — so a ping-pong cycle does not form, rather than
+being broken by "silent" setters. Exactly one resolve runs per change and its reply
+is discarded unless it is still the newest (a monotonic token), so a slow `listDir`
+can never drag the user backwards. Typing is debounced in the controller, not the
+bar: `cwd` moves on the first keystroke (Launch validates against what you see)
+while the filesystem is asked once, 350ms later — and `Enter` awaits `settle()`
+rather than racing it. A `browser` origin already holds its listing, so it costs one
+`git:query` and no second `listDir`.
+
+The invariant — *with no refusal and no remote host, `cwd`, the bar's text, and the
+browser's selection are one value* — is exposed as `window.__mogging.wizardPath()`
+and re-asserted by FOLDERPICK after every interaction.
+
+**Looking is not choosing.** A fresh wizard `reveal()`s your home directory: the
+browser shows it, nothing is selected, `cwd` stays empty. `$HOME` never silently
+becomes a workspace root, and Launch still says "pick a folder first". Likewise a
+half-typed path leaves the browser exactly where it is (only the bar warns), and
+Launch declines a path the filesystem refused instead of stranding every pane in it.
 
 - **Directories only, one level, on demand.** No recursive walk, no watcher, no
   index, no file contents. The panel's footer says so where the user reads it.
@@ -302,8 +322,10 @@ bar debounces into `browser.setPath()` (silent), the browser reports back throug
 - **Never for a remote workspace.** Choosing an SSH host hides the browser: that cwd
   lives on the other machine, and listing this disk would answer a question nobody asked.
 
-Gallery shots open on a synthetic fixture, never `$HOME` — a folder browser
-photographs whatever it is pointed at, and screenshots are committed.
+Gallery shots open on a synthetic fixture at a path whose every segment is safe to
+publish (`C:\mogging-showcase`, not a temp dir under `C:\Users\<name>`) — a folder
+browser photographs whatever it is pointed at, breadcrumbs render every segment,
+and screenshots are committed.
 
 ## Icons (Phase-5/03)
 

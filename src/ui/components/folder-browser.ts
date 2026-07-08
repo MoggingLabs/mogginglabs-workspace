@@ -1,4 +1,4 @@
-import { FS_DRIVE_ROOT, FS_LIST_CAP, type DirEntry, type DirListing, type DirResult, type ListDirRequest } from '@contracts'
+import { FS_DRIVE_ROOT, FS_LIST_CAP, type DirEntry, type DirListing, type DirRefusal, type DirResult, type ListDirRequest } from '@contracts'
 import { el, clear } from './dom'
 import { icon } from './icons'
 import { Pill } from './pill'
@@ -22,12 +22,11 @@ import { createCheckbox } from './checkbox'
  */
 
 export interface FolderBrowserOpts {
-  /** Where to open. Empty string is the Windows drive list. */
-  path?: string
   showHidden?: boolean
   /** Injected loader — the wizard passes its typed client. */
   listDir: (req: ListDirRequest) => Promise<DirResult>
-  /** Fires when the chosen folder changes by user action (never from `setPath`). */
+  /** Fires ONLY on user action inside the browser. The owner then updates the
+   *  selection, and (because it caused nothing here) never writes back. */
   onSelect?: (path: string) => void
 }
 
@@ -37,8 +36,14 @@ export interface FolderBrowserHandle {
   path(): string
   /** The chosen folder — the current directory, or a clicked child of it. */
   selected(): string
-  /** Navigate without firing `onSelect` (the path bar drives the browser this way). */
-  setPath(dir: string): Promise<void>
+  /**
+   * Adopt a listing the OWNER already fetched, and the selection the owner holds.
+   * Silent — never fires `onSelect`. `selected` may be `''` (looking, not choosing)
+   * or a child of `listing.path` (the owner's cwd after a pick).
+   */
+  applyListing(listing: DirListing, selected: string): void
+  /** Render a refusal without moving the selection: the last good place stays on screen. */
+  showRefusal(refusal: DirRefusal): void
   refresh(): Promise<void>
   /** Move DOM focus into the list, onto the active row. */
   focusList(): void
@@ -54,8 +59,8 @@ const REFUSALS: Record<string, { title: string; body: string }> = {
 export function createFolderBrowser(opts: FolderBrowserOpts): FolderBrowserHandle {
   let listing: DirListing | null = null
   let refusal: { reason: string; path: string } | null = null
-  let cur = opts.path ?? ''
-  let selected = cur
+  let cur = ''
+  let selected = ''
   let showHidden = opts.showHidden ?? false
   let active = 0 // index into `rows` — roving tabindex, mirrors grid-preview.ts
   let filter = ''
@@ -69,9 +74,12 @@ export function createFolderBrowser(opts: FolderBrowserOpts): FolderBrowserHandl
   const hidden = createCheckbox({
     checked: showHidden,
     label: 'Show hidden folders',
+    // Re-list the same folder. `keepSelection` because revealing dotfolders is not
+    // a navigation — it must not quietly re-select the current directory over a
+    // child the user had picked.
     onChange: (on) => {
       showHidden = on
-      void load(cur, { silent: true })
+      void load(cur, { keepSelection: true })
     }
   })
 
@@ -210,27 +218,61 @@ export function createFolderBrowser(opts: FolderBrowserOpts): FolderBrowserHandl
   }
 
   // ── navigation ───────────────────────────────────────────────────────────────
-  async function load(dir: string, o: { silent?: boolean } = {}): Promise<void> {
+  let nav = 0 // monotonic: a slow listing must never overwrite a newer one
+
+  /** Adopt a listing the owner fetched, plus the owner's selection (may be ''). */
+  function applyListing(l: DirListing, sel: string): void {
+    nav++
+    listing = l
+    refusal = null
+    cur = l.path // canonical: what main says, not what we asked for
+    selected = sel // the OWNER decides what is chosen — looking is not choosing
+    filter = ''
+    active = 0
+    paint()
+  }
+
+  /**
+   * A refused folder is shown WITHOUT moving the selection. Typing `C:\Us` on the way
+   * to `C:\Users` must not throw away where you are, and a vanished folder must not
+   * silently become your workspace root.
+   */
+  function showRefusal(r: DirRefusal): void {
+    nav++
+    listing = null
+    refusal = { reason: r.reason, path: r.path }
+    cur = r.path
+    filter = ''
+    active = 0
+    paint()
+  }
+
+  /** User-initiated navigation: fetch, then tell the owner where we landed. */
+  async function load(dir: string, o: { keepSelection?: boolean } = {}): Promise<void> {
+    const token = ++nav
     let res: DirResult
     try {
       res = await opts.listDir({ path: dir, showHidden })
     } catch {
       res = { ok: false, reason: 'missing', path: dir } // the channel itself failed
     }
+    if (token !== nav) return // a newer navigation already landed
     filter = ''
     active = 0
     if (res.ok) {
       listing = res
       refusal = null
-      cur = res.path // canonical: what main says, not what we asked for
-      selected = cur // arriving in a folder chooses it
-    } else {
-      listing = null
-      refusal = { reason: res.reason, path: res.path }
       cur = res.path
+      if (!o.keepSelection) selected = cur
+      paint()
+      if (!o.keepSelection) opts.onSelect?.(selected) // the owner decides what this means
+      return
     }
+    // Refused: keep `selected` where it was, so the owner's cwd and ours never diverge.
+    listing = null
+    refusal = { reason: res.reason, path: res.path }
+    cur = res.path
     paint()
-    if (!o.silent && res.ok) opts.onSelect?.(selected)
   }
 
   function select(p: string): void {
@@ -290,17 +332,17 @@ export function createFolderBrowser(opts: FolderBrowserOpts): FolderBrowserHandl
     }
   })
 
-  // No `path` means the caller does not know where to open yet (it is fetching the
-  // home directory). Loading `''` would flash the Windows drive list, or a POSIX
-  // "not a full path" refusal, for the width of one IPC round trip.
-  if (opts.path !== undefined) void load(cur, { silent: true })
+  // The browser never opens itself. Its owner holds the selection and hands it the
+  // first listing — so there is exactly one place that decides where we are.
+  paint()
 
   return {
     el: root,
     path: () => cur,
     selected: () => selected,
-    setPath: (dir) => load(dir, { silent: true }),
-    refresh: () => load(cur, { silent: true }),
+    applyListing,
+    showRefusal,
+    refresh: () => load(cur, { keepSelection: true }),
     focusList: () => {
       const node = list.children[active]
       if (node instanceof HTMLElement) node.focus()

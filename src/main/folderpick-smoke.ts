@@ -14,8 +14,16 @@ import { join } from 'node:path'
 //   (d) typing an absolute path in the bar re-roots the browser;
 //   (e) arrows + Enter descend without a mouse;
 //   (f) an unreadable folder renders the refusal state and does not crash;
-//   (g) the hidden toggle reveals the dotfolder;
-//   (h) per-OS roots: the win32 drive list is reachable above `C:\`, POSIX stops at `/`.
+//   (g) the hidden toggle reveals the dotfolder — without stealing the selection;
+//   (h) per-OS roots: the win32 drive list is reachable above `C:\`, POSIX stops at `/`;
+//   (i) THE INVARIANT (8.5/03, after review): with no refusal and no remote host, the
+//       controller's cwd, the path bar, and the browser's selection are ONE value.
+//       Re-checked after every interaction — a ping-pong shows up here first;
+//   (j) looking is not choosing: a fresh wizard opens the browser at $HOME with
+//       NOTHING selected, so `$HOME` never silently becomes the workspace root;
+//   (k) typing a path that does not exist leaves the browser exactly where it was
+//       (a half-typed path used to replace the listing with a refusal), and Launch
+//       declines a path the filesystem refused instead of stranding every pane in it.
 
 const CAP = 500
 
@@ -84,7 +92,16 @@ export function runFolderPickSmoke(win: BrowserWindow): void {
     const crumbs = () => [...document.querySelectorAll('#view-wizard .fb-crumb')].map((c) => c.textContent)
     const bar = () => document.querySelector('#view-wizard .path-input-field').value
     const key = (node, k) => node.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }))
+    const sot = () => window.__mogging.wizardPath()
   `
+
+  /**
+   * The single-source-of-truth invariant. With no refusal and no remote host, the
+   * controller's cwd, the path bar's text, and the browser's selection are ONE value.
+   * Checked after every interaction below — a ping-pong would show up here first.
+   */
+  const agrees = (): Promise<{ agree: boolean; cwd: string | null; bar: string | null; browserSelected: string | null }> =>
+    ES(`window.__mogging.wizardPath()`)
 
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
@@ -127,9 +144,20 @@ export function runFolderPickSmoke(win: BrowserWindow): void {
           ? rootProbe.ok === true && (rootProbe.entries ?? []).some((e) => e.name === 'C:') && rootProbe.parent === null
           : rootProbe.ok === true && rootProbe.parent === null
 
+      // ── looking is not choosing: a fresh wizard must not adopt $HOME ──────────
+      await ES(`window.__mogging.templates.openWizard()`)
+      await sleep(1200) // home listing lands
+      const fresh = await ES<{ cwd: string; bar: string; browserSelected: string; browserPath: string; rows: number }>(`(() => {${H}
+        const s = sot()
+        return { cwd: s.cwd, bar: s.bar, browserSelected: s.browserSelected, browserPath: s.browserPath, rows: rows().length }
+      })()`)
+      // The browser is showing somewhere real, and nothing is chosen.
+      const lookingNotChoosingOk = fresh.cwd === '' && fresh.bar === '' && fresh.browserSelected === '' && fresh.rows > 0
+
       // ── the UI. Open the wizard rooted at the fixture. ────────────────────────
       await ES(`window.__mogging.templates.openWizard({ cwd: ${R} })`)
       await sleep(900)
+      const sotPrefill = await agrees()
 
       // (b) the repo pill is in the DOM, on Beta's row and nowhere else
       const pills = await ES<{ betaHasPill: boolean; zetaHasPill: boolean; visible: string[] }>(`(() => {${H}
@@ -146,8 +174,9 @@ export function runFolderPickSmoke(win: BrowserWindow): void {
         rowBy('alpha').click()
         return { bar: bar(), crumbsAfter: crumbs(), selected: rowBy('alpha').classList.contains('is-selected') }
       })()`)
-      await sleep(250)
-      const clickPickOk = picked.bar === join(fx.root, 'alpha') && picked.selected
+      await sleep(300)
+      const sotPick = await agrees()
+      const clickPickOk = picked.bar === join(fx.root, 'alpha') && picked.selected && sotPick.agree
 
       // ...and Enter DESCENDS into it, making it current
       const descended = await ES<{ bar: string; last: string }>(`(() => {${H}
@@ -171,7 +200,8 @@ export function runFolderPickSmoke(win: BrowserWindow): void {
         const c = crumbs()
         return { bar: bar(), last: c[c.length - 1] }
       })()`)
-      const ascendOk = ascended.bar === fx.root && afterDescend.last === 'alpha'
+      const sotAscend = await agrees()
+      const ascendOk = ascended.bar === fx.root && afterDescend.last === 'alpha' && sotAscend.agree
       const clickWalkOk = clickPickOk && descendOk && ascendOk && descended.bar === join(fx.root, 'alpha')
 
       // ── (d) typing an absolute path re-roots the browser ──────────────────────
@@ -182,7 +212,29 @@ export function runFolderPickSmoke(win: BrowserWindow): void {
       })()`)
       await sleep(900) // the bar debounces at 350ms, then one IPC round trip
       const typed = await ES<{ last: string }>(`(() => {${H} const c = crumbs(); return { last: c[c.length - 1] } })()`)
-      const typeRerootOk = typed.last === 'Beta'
+      const sotTyped = await agrees()
+      const typeRerootOk = typed.last === 'Beta' && sotTyped.agree
+
+      // ...and a path that does NOT exist must leave the browser exactly where it is.
+      // (The old code re-rooted on every debounce, so typing on the way to a folder
+      // replaced the listing with a refusal and threw away where you were.)
+      await ES(`(() => {
+        const i = document.querySelector('#view-wizard .path-input-field')
+        i.value = ${JSON.stringify(join(fx.root, 'Beta', 'no-such-child'))}
+        i.dispatchEvent(new Event('input', { bubbles: true }))
+      })()`)
+      await sleep(900)
+      const afterGarbage = await ES<{ last: string; hasRefusal: boolean; rows: number; barStatus: string }>(`(() => {${H}
+        const c = crumbs()
+        return {
+          last: c[c.length - 1],
+          hasRefusal: !!document.querySelector('#view-wizard .fb-refusal'),
+          rows: rows().length,
+          barStatus: document.querySelector('#view-wizard .path-input-status')?.textContent ?? ''
+        }
+      })()`)
+      const partialTypeKeepsBrowserOk =
+        afterGarbage.last === 'Beta' && !afterGarbage.hasRefusal && afterGarbage.rows > 0 && /no folder there/i.test(afterGarbage.barStatus)
 
       // ── (e) keyboard: arrows + Enter, no mouse ────────────────────────────────
       await ES(`window.__mogging.templates.openWizard({ cwd: ${R} })`)
@@ -197,7 +249,8 @@ export function runFolderPickSmoke(win: BrowserWindow): void {
       await ES(`(() => {${H} key(document.activeElement, 'Enter') })()`)
       await sleep(600)
       const kbAfter = await ES<{ last: string; bar: string }>(`(() => {${H} const c = crumbs(); return { last: c[c.length - 1], bar: bar() } })()`)
-      const keyboardOk = kb.focusName === 'alpha' && kbAfter.last === 'alpha' && kbAfter.bar === join(fx.root, 'alpha')
+      const sotKb = await agrees()
+      const keyboardOk = kb.focusName === 'alpha' && kbAfter.last === 'alpha' && kbAfter.bar === join(fx.root, 'alpha') && sotKb.agree
 
       // ── (f) the refusal STATE renders, and the page survives it ───────────────
       await ES(`window.__mogging.templates.openWizard({ cwd: ${JSON.stringify(fx.locked)} })`)
@@ -221,7 +274,20 @@ export function runFolderPickSmoke(win: BrowserWindow): void {
       await ES(`document.querySelector('#view-wizard .fb-foot .checkbox input').click()`)
       await sleep(600)
       const afterHidden = await ES<string[]>(`(() => {${H} return rowNames() })()`)
-      const hiddenToggleOk = !beforeHidden.includes('.hidden') && afterHidden.includes('.hidden')
+      const sotHidden = await agrees()
+      const hiddenToggleOk = !beforeHidden.includes('.hidden') && afterHidden.includes('.hidden') && sotHidden.agree
+
+      // A refused path is not a workspace root: Launch must decline it, in place.
+      await ES(`window.__mogging.templates.openWizard({ cwd: ${JSON.stringify(join(fx.root, 'nowhere'))} })`)
+      await sleep(900)
+      await ES(`document.querySelector('#view-wizard .wizard-footer .btn--primary').click()`)
+      await sleep(600)
+      const badLaunch = await ES<{ stillWizard: boolean; status: string; workspaces: number }>(`(() => ({
+        stillWizard: !!document.querySelector('#content.view-wizard'),
+        status: document.querySelector('#view-wizard .path-input-status')?.textContent ?? '',
+        workspaces: (window.__mogging.workspace.count?.() ?? 0)
+      }))()`)
+      const refuseLaunchOk = badLaunch.stillWizard && /no folder there/i.test(badLaunch.status) && badLaunch.workspaces === 0
 
       // Scope honesty (step 4) is stated where the user reads it.
       const noteOk = await ES<boolean>(
@@ -229,9 +295,34 @@ export function runFolderPickSmoke(win: BrowserWindow): void {
       )
 
       const pass =
-        listingOk && refusalsOk && rootsOk && repoPillOk && clickWalkOk && typeRerootOk && keyboardOk && refusalUiOk && hiddenToggleOk && noteOk
+        listingOk &&
+        refusalsOk &&
+        rootsOk &&
+        repoPillOk &&
+        clickWalkOk &&
+        typeRerootOk &&
+        keyboardOk &&
+        refusalUiOk &&
+        hiddenToggleOk &&
+        noteOk &&
+        lookingNotChoosingOk &&
+        partialTypeKeepsBrowserOk &&
+        refuseLaunchOk &&
+        sotPrefill.agree
       result = {
         pass,
+        lookingNotChoosingOk,
+        fresh,
+        partialTypeKeepsBrowserOk,
+        afterGarbage,
+        refuseLaunchOk,
+        badLaunch,
+        sotPrefill,
+        sotPick,
+        sotAscend,
+        sotTyped,
+        sotKb,
+        sotHidden,
         listingOk,
         dirsOnly,
         hiddenFiltered,

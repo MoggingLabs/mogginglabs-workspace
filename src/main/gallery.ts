@@ -2,7 +2,7 @@ import { app, type BrowserWindow } from 'electron'
 import { execFile, execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, parse } from 'node:path'
 import { createWorktree } from '@backend/features/worktrees'
 import { setFakeMode } from '@backend/features/usage'
 import { UsageChannels } from '@contracts'
@@ -36,6 +36,30 @@ const SHIM_SRC =
   process.platform === 'win32'
     ? '@echo SSH_SHIM connected\r\n@%COMSPEC%\r\n'
     : '#!/bin/sh\necho "SSH_SHIM connected"\nexec ${SHELL:-/bin/sh}\n'
+
+/**
+ * A synthetic project tree for the folder-browser shots, at a path whose EVERY
+ * SEGMENT is safe to publish. The breadcrumb renders each one, so a temp dir under
+ * `C:\Users\<name>\AppData\Local\Temp` would print the operator's username into a
+ * committed screenshot. Prefer the filesystem root; fall back to temp if it is not
+ * writable (and accept the longer trail rather than fail the gallery).
+ */
+function makeShowcase(): string {
+  const candidates = [join(parse(tmpdir()).root, 'mogging-showcase'), join(tmpdir(), 'mogging-showcase')]
+  for (const dir of candidates) {
+    try {
+      rmSync(dir, { recursive: true, force: true })
+      mkdirSync(dir, { recursive: true })
+      for (const d of ['api', 'design-system', 'docs', 'infra', 'web-app']) mkdirSync(join(dir, d))
+      mkdirSync(join(dir, 'web-app', '.git')) // earns the repo pill
+      mkdirSync(join(dir, 'api', '.git'))
+      return dir
+    } catch {
+      /* not writable — try the next candidate */
+    }
+  }
+  throw new Error('no writable showcase root')
+}
 
 export function runGallery(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 420000) // safety net
@@ -276,12 +300,11 @@ export function runGallery(win: BrowserWindow): void {
           // scroll, three cards. Never click the footer primary here: it launches.
           //
           // 8.5/03: open it ON A FIXTURE. With no cwd the folder browser opens at
-          // $HOME and photographs the operator's real directory names straight into
-          // a committed screenshot. Every shot must be of a synthetic tree.
-          const showcase = mkdtempSync(join(tmpdir(), 'mogging-showcase-'))
-          for (const d of ['api', 'design-system', 'docs', 'infra', 'web-app']) mkdirSync(join(showcase, d))
-          mkdirSync(join(showcase, 'web-app', '.git')) // earns the repo pill
-          mkdirSync(join(showcase, 'api', '.git'))
+          // $HOME and photographs the operator's real directory names straight into a
+          // committed screenshot. Every shot must be of a synthetic tree — AND at a
+          // path with no username in it, because the breadcrumb renders every segment
+          // (a temp dir under C:\Users\<name>\AppData would put it on screen).
+          const showcase = makeShowcase()
           await ES(`window.__mogging.templates.openWizard({ cwd: ${JSON.stringify(showcase)} })`)
           await sleep(700)
           await snap(`${tag}-wizard-page`)

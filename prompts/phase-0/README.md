@@ -17,7 +17,7 @@ available. This validates the Electron + xterm.js + node-pty engine choice (ADR 
 before any Phase-1 work. Compilation is already green; the app has never been run.
 
 ## Current state (don't redo)
-- Repo: `C:\Users\pedro\Documents\GitHub\MoggingLabs-Workspace` (git `master`, uncommitted).
+- Repo: `<workspace root>` (git `master`, uncommitted).
 - Layered/feature-sliced architecture; aliases `@contracts` / `@backend` / `@ui` (see `docs/adr/0004-layered-feature-sliced-architecture.md`).
 - `npm install` -> exit 0 (461 pkgs). `npm run typecheck` -> exit 0 (32 source files, all layers).
 - **Key gap:** `node-pty` was built against system Node, not Electron's ABI — fixed in step `00`.

@@ -423,7 +423,7 @@ standalone daemon world (pane 101, planted scrollback + mail):
 
 - tools listed: all 19 (`mcp__mogging__browser_*` ×14 + `capture_pane`,
   `list_board`, `list_owners`, `list_panes`, `mail_read`) — zero writes.
-- `list_panes` → `[{"id":"101","cols":120,"rows":30,"cwd":"C:\\Users\\pedro","state":"idle"}]`
+- `list_panes` → `[{"id":"101","cols":120,"rows":30,"cwd":"C:\\Projects\\api","state":"idle"}]`
 - `capture_pane {pane:'101',lines:50}` → tail contained `DEVVERIFY_MCP_101`.
 - `mail_read` (identity = `MOGGING_PANE_ID=101`) →
   `[{"id":1,"from":"0","to":"101","body":"DEVVERIFY_MAIL_4242","ts":1783355485170}]`

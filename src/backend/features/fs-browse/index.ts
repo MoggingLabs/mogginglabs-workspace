@@ -48,8 +48,8 @@ function canonical(input: string): string {
 
 /**
  * Breadcrumbs for an absolute path, each segment carrying the path that reaches it.
- *   `C:\Users\pedro` -> This PC · C: · Users · pedro
- *   `/home/pedro`    -> / · home · pedro
+ *   `C:\Projects\api` -> This PC · C: · Projects · api
+ *   `/srv/api`       -> / · srv · api
  */
 function crumbsFor(dir: string): DirCrumb[] {
   if (dir === FS_DRIVE_ROOT) return [{ label: 'This PC', path: FS_DRIVE_ROOT }]

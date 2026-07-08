@@ -6,3 +6,8 @@ dist/
 .env
 .env.*
 *.tsbuildinfo
+
+# Vite writes a transpiled copy of the config next to it, stamped with a timestamp
+# and the ABSOLUTE repo path. One `git add -A` committed it (175e7f8).
+electron.vite.config.*.mjs
+electron.vite.config.*.js

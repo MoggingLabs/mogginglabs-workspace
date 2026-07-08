@@ -1,6 +1,7 @@
 import type { ShellContext, UiFeature } from '../../core/registry/feature-registry'
 import { ClipboardChannels, IntegrationsChannels, ProfileChannels, RemoteChannels } from '@contracts'
 import type { AgentInfo, AgentProfile, McpServerEntry, ProviderCount, ProviderMixTemplate, RecentWorkspace, RemoteHost } from '@contracts'
+import type { PathStatus } from '../../components/input'
 import {
   Button,
   Card,
@@ -30,6 +31,7 @@ import { activeView, goBack, setActiveView } from '../../core/shell/view-port'
 import { getTelemetry } from '../../core/telemetry'
 import { getBridge } from '../../core/ipc/bridge'
 import { wizardClient } from './wizard.client'
+import { createPathSelection, type PathSelectionHandle, type PathState } from './path-selection'
 
 /** Per-provider accent for assignment previews (initial letter chips). Claude sits
  *  on a coral deliberately OFF the brand orange — the brand hue means attention. */
@@ -331,6 +333,7 @@ export const wizardFeature: UiFeature = {
     // is non-null for the lifetime of an open modal.
     let path!: PathInputHandle
     let browser!: FolderBrowserHandle
+    let selection!: PathSelectionHandle
     let chosenLine!: HTMLParagraphElement
     let whereCard!: HTMLElement
     let nameInputEl!: HTMLInputElement
@@ -381,7 +384,9 @@ export const wizardFeature: UiFeature = {
       clear(footer)
       steppers.clear()
       customStepper = null
-      chosenLine = el('p', { class: 'wizard-chosen' }) // buildWhere's probe writes to it
+      chosenLine = el('p', { class: 'wizard-chosen' }) // the selection's subscriber writes it
+      // Rebuilt with the page: its subscribers close over this render's DOM.
+      selection = createPathSelection({ listDir: (p) => wizardClient.listDir({ path: p }), gitQuery: wizardClient.gitQuery })
 
       body.append(buildWhere(), buildLayout(), buildAgents())
       buildFooter()
@@ -394,72 +399,63 @@ export const wizardFeature: UiFeature = {
 
     // ── Card 1: Where ────────────────────────────────────────────────────────
     function buildWhere(): HTMLElement {
-      const probeGit = async (value: string): Promise<void> => {
-        cwd = value
-        updateChosen()
-        if (remoteHost) return // remote target: no local probing (4/05)
-        if (!value.trim()) {
-          isRepo = false
-          path.setStatus({ kind: 'idle' })
-          syncIsolate()
-          return
-        }
-        try {
-          const git = await wizardClient.gitQuery(value)
-          if (cwd !== value) return // stale probe
-          isRepo = !!git
-          if (git) path.setStatus({ kind: 'git', text: `${git.branch}${git.dirty ? ' •' : ''}` })
-          else path.setStatus({ kind: 'ok', text: 'no repo — fine' })
-        } catch {
-          isRepo = false
-          path.setStatus({ kind: 'warn', text: 'unverified' })
-        }
-        syncIsolate()
-      }
-
-      /** The one place a chosen folder lands: bar, browser, name placeholder, git chip. */
-      const adopt = (dir: string, opts: { fromBrowser?: boolean } = {}): void => {
-        path.setValue(dir)
-        if (!opts.fromBrowser && !remoteHost) void browser.setPath(dir) // silent — never bounce back
-        void probeGit(dir)
-        if (!nameInputEl.value) {
-          nameInputEl.value = basename(dir)
-          name = nameInputEl.value
-        }
-      }
-
-      let probeTimer: ReturnType<typeof setTimeout> | undefined
       path = createPathInput({
         value: cwd,
         onBrowse: () => {
           void wizardClient.browseDir().then((dir) => {
-            if (dir) adopt(dir)
+            if (dir) selection.set(dir, 'native')
           })
         },
-        onInput: (v) => {
-          cwd = v
-          updateChosen()
-          if (probeTimer) clearTimeout(probeTimer)
-          probeTimer = setTimeout(() => {
-            void probeGit(v)
-            // Typing re-roots the browser; a partial path shows its own refusal. A
-            // remote workspace's path is on another machine — never list this disk.
-            if (!remoteHost) void browser.setPath(v)
-          }, 350)
-        },
-        // Enter in the folder field launches when the form is valid (8.5/02).
+        onInput: (v) => selection.set(v, 'bar'), // the controller owns the debounce
+        // Enter fires ~0ms after the last keystroke — wait for the resolve, then launch.
         onEnter: () => void tryLaunch(false)
       })
 
-      // The browser is the same selection, seen a different way. It never fires back
-      // into `setPath`, so the two can't ping-pong.
       browser = createFolderBrowser({
-        path: cwd || undefined, // undefined => don't load yet; home is on its way
         listDir: wizardClient.listDir,
-        onSelect: (p) => adopt(p, { fromBrowser: true })
+        // The browser caused this, so the controller will not write back into it.
+        onSelect: (p) => selection.set(p, 'browser')
       })
-      if (!cwd) void wizardClient.homeDir().then((h) => browser.setPath(h)).catch(() => undefined)
-      if (cwd) void probeGit(cwd)
+
+      // ── The ONE subscriber that keeps every view honest ──────────────────────
+      // Ping-pong cannot form: the view that originated a change is never written to.
+      selection.subscribe((s, origin, listing) => {
+        // `reveal` only moves what the browser LOOKS at. Nothing else may react to it.
+        if (origin === 'reveal') {
+          if (listing && !s.remote) browser.applyListing(listing, s.cwd)
+          return
+        }
+        cwd = s.cwd
+        isRepo = s.isRepo
+
+        if (origin !== 'bar') path.setValue(s.cwd) // writing the bar while typing eats the caret
+        path.setStatus(statusFor(s))
+
+        browser.el.hidden = s.remote
+        if (!s.remote && origin !== 'browser') {
+          if (listing) browser.applyListing(listing, s.cwd)
+          // A half-typed path must not throw away where the browser is; anything else
+          // that refuses (a recent folder now gone) should say so on the spot.
+          else if (s.refusal && origin !== 'bar') browser.showRefusal(s.refusal)
+        }
+
+        // Seed the workspace name only from a deliberate PICK. Seeding it from
+        // `prefill` would name a fresh workspace after the user's home directory.
+        if ((origin === 'browser' || origin === 'native') && nameInputEl && !nameInputEl.value) {
+          const base = basename(s.cwd)
+          if (base) {
+            nameInputEl.value = base
+            name = base
+          }
+        }
+        updateChosen()
+        syncIsolate()
+      })
+
+      // Somewhere to start looking. `reveal`, not `set`: opening the browser at $HOME
+      // must not make $HOME the workspace root.
+      if (cwd) selection.set(cwd, 'prefill')
+      else void wizardClient.homeDir().then((h) => selection.reveal(h)).catch(() => undefined)
 
       const nameInput = el('input', {
         class: 'input',
@@ -492,18 +488,10 @@ export const wizardFeature: UiFeature = {
       remoteSelect.addEventListener('change', () => {
         const opt = remoteSelect.selectedOptions[0]
         remoteHost = remoteSelect.value ? { hostId: remoteSelect.value, name: opt?.dataset.name ?? remoteSelect.value } : null
-        if (remoteHost) {
-          isRepo = false
-          isolate = false
-          path.setStatus({ kind: 'ok', text: `remote: ${remoteHost.name} — local repo tools off` })
-        } else {
-          void probeGit(cwd)
-        }
+        if (remoteHost) isolate = false
         // A remote workspace's cwd lives on the OTHER machine. Browsing this disk
-        // would be answering a question nobody asked.
-        browser.el.hidden = !!remoteHost
-        updateChosen()
-        syncIsolate()
+        // would answer a question nobody asked — the controller hides it and stops probing.
+        selection.setRemote(!!remoteHost)
       })
 
       // Bar · chosen line · browser: one control, one label, three views of one path.
@@ -522,21 +510,43 @@ export const wizardFeature: UiFeature = {
       return whereCard
     }
 
+    /** What a refusal reads like in one line, on the bar and on the chosen line. */
+    const REFUSAL_TEXT: Record<string, string> = {
+      denied: 'locked — no permission',
+      missing: 'no folder there',
+      'not-a-directory': "that's a file",
+      invalid: 'not a full path'
+    }
+
+    /** The path bar's chip, derived — never set from a call site. */
+    function statusFor(s: Readonly<PathState>): PathStatus {
+      if (s.remote) return { kind: 'ok', text: `remote: ${remoteHost?.name ?? ''} — local repo tools off` }
+      if (!s.cwd.trim()) return { kind: 'idle' }
+      if (s.probing) return { kind: 'idle' } // no flicker while a keystroke settles
+      if (s.refusal) return { kind: 'warn', text: REFUSAL_TEXT[s.refusal.reason] ?? 'unverified' }
+      if (s.git) return { kind: 'git', text: `${s.git.branch}${s.git.dirty ? ' •' : ''}` }
+      return { kind: 'ok', text: 'no repo — fine' }
+    }
+
     /** The small current-folder line between the path bar and the browser. */
     function updateChosen(): void {
-      if (!chosenLine) return
+      if (!chosenLine || !selection) return
+      const s = selection.state()
       clear(chosenLine)
-      if (remoteHost) {
-        chosenLine.append(`Runs on ${remoteHost.name} — the path above is a folder on that machine.`)
+      chosenLine.title = s.cwd
+      if (s.remote) {
+        chosenLine.append(`Runs on ${remoteHost?.name ?? 'a remote host'} — the path above is a folder on that machine.`)
         return
       }
-      const dir = cwd.trim()
-      if (!dir) {
+      if (!s.cwd.trim()) {
         chosenLine.append('No folder chosen yet — pick one below.')
         return
       }
-      chosenLine.title = dir
-      chosenLine.append('Terminals will start in ', el('strong', { text: basename(dir) || dir }))
+      if (s.refusal) {
+        chosenLine.append('Can’t use that path — ', el('strong', { text: REFUSAL_TEXT[s.refusal.reason] ?? 'unverified' }))
+        return
+      }
+      chosenLine.append('Terminals will start in ', el('strong', { text: basename(s.cwd) || s.cwd }))
     }
 
     function renderRecents(): void {
@@ -552,24 +562,14 @@ export const wizardFeature: UiFeature = {
               class: 'wizard-recent',
               type: 'button',
               title: r.cwd,
-              // A recent is a one-click jump: bar, browser, and git chip all follow.
+              // A recent is a one-click jump. One call: bar, browser, chip, chosen line
+              // and the isolate toggle all follow from the selection changing.
               onClick: () => {
-                path.setValue(r.cwd)
-                cwd = r.cwd
-                updateChosen()
-                void browser.setPath(r.cwd)
-                void wizardClient
-                  .gitQuery(r.cwd)
-                  .then((git) => {
-                    isRepo = !!git
-                    path.setStatus(git ? { kind: 'git', text: `${git.branch}${git.dirty ? ' •' : ''}` } : { kind: 'ok', text: 'no repo — fine' })
-                    syncIsolate()
-                  })
-                  .catch(() => undefined)
                 if (!name) {
                   name = r.name
                   nameInputEl.value = r.name
                 }
+                selection.set(r.cwd, 'recent')
               }
             },
             [
@@ -995,12 +995,17 @@ export const wizardFeature: UiFeature = {
 
     /** The validation that used to gate "Continue" now gates "Launch". */
     async function tryLaunch(skipAgents: boolean): Promise<void> {
-      if (!remoteHost && !cwd.trim()) {
-        path.setStatus({ kind: 'warn', text: 'pick a folder first' })
+      await selection.settle() // Enter can beat the 350ms debounce; don't race it
+      const s = selection.state()
+      const refuse = (text: string): void => {
+        path.setStatus({ kind: 'warn', text })
         whereCard.scrollIntoView({ block: 'nearest' })
         path.focus()
-        return
       }
+      if (!s.remote && !s.cwd.trim()) return refuse('pick a folder first')
+      // A path the filesystem refused is not a workspace root. Launching into one
+      // used to succeed and then strand every pane in a directory that isn't there.
+      if (!selection.isUsable()) return refuse(REFUSAL_TEXT[s.refusal?.reason ?? ''] ?? 'pick a folder first')
       await launch(skipAgents)
     }
 
@@ -1046,6 +1051,22 @@ export const wizardFeature: UiFeature = {
           return { ...r, paneCwds }
         },
         openWizard: (prefill?: WizardPrefill) => open(prefill)
+      }
+      // The single-source-of-truth invariant, made checkable: with no refusal in
+      // play, the bar, the browser's selection, and the controller are one value.
+      // FOLDERPICK asserts this after every interaction.
+      w.__mogging.wizardPath = () => {
+        const s = selection?.state()
+        return {
+          cwd: s?.cwd ?? null,
+          bar: path?.value() ?? null,
+          browserSelected: browser?.selected() ?? null,
+          browserPath: browser?.path() ?? null,
+          refusal: s?.refusal?.reason ?? null,
+          probing: s?.probing ?? false,
+          remote: s?.remote ?? false,
+          agree: !!s && !s.refusal && !s.remote ? s.cwd === path.value() && s.cwd === browser.selected() : true
+        }
       }
     }
   }
