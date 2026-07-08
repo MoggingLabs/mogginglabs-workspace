@@ -2,7 +2,7 @@ import { app, type BrowserWindow } from 'electron'
 import { createServer, type Server } from 'node:http'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { agentAct, agentPossessionDebug, confirmPendingActOrigin, dockDebug, setAgentConsent } from './browser-dock'
+import { agentAct, agentControlDebug, agentPossessionDebug, confirmPendingActOrigin, dockDebug, setAgentConsent } from './browser-dock'
 import { setIntegrationsGrant } from './integrations'
 import type { BrowserAgentResult } from '@contracts'
 
@@ -77,8 +77,14 @@ export function runPerWsAgentSmoke(win: BrowserWindow): void {
       await ES(`window.__mogging.browser.navigate('${origin}/?p=A')`)
       await waitFor(() => dockDebug().url.includes('p=A'))
       await act({ verb: 'click', target: 'button' }, paneA) // -> pending confirm for A (A active)
-      await sleep(300)
+      // Approve A's origin for the session. A fixed sleep races a slow runner:
+      // if the pending-confirm hasn't registered yet, confirmPendingActOrigin
+      // no-ops and A never gets the session-allow (the click later reads
+      // "awaiting the human"). Poll until it registers, confirm, then confirm it
+      // cleared — deterministic, no timing dependence.
+      await waitFor(() => agentControlDebug().pendingConfirm === origin)
       confirmPendingActOrigin(origin)
+      await waitFor(() => agentControlDebug().pendingConfirm !== origin)
 
       // ── Workspace B becomes the FOREGROUND (its own agent-web) ────────────
       await ES(`window.__mogging.workspace.create({ name: 'B' })`)
