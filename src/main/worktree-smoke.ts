@@ -103,20 +103,27 @@ export function runWorktreeSmoke(win: BrowserWindow): void {
           `window.bridge.invoke('worktrees:remove', ${JSON.stringify({ repo, path, force })})`
         ) as Promise<{ ok: boolean; reason?: string }>
       writeFileSync(join(paneCwds[0], 'dirty.txt'), 'uncommitted\n')
+      // The dirty REFUSAL is a git-level check (before any delete), so it holds
+      // whether or not the pane is open.
       const dirtyRefused = await removeVia(paneCwds[0], false)
-      const cleanRemoved = await removeVia(paneCwds[1], false) // clean -> no force needed
-      // Windows refuses to delete a directory that is a live process's CWD — the
-      // pane's own shell keeps paneCwds[0] open, so a forced delete hits
-      // "Permission denied" on windows-latest (never on POSIX, which unlinks a
-      // busy dir). The real "remove worktree" UX closes the pane first; do the
-      // same, then retry while the OS releases the handle.
+      // Windows refuses to delete a directory that is a live process's CWD — each
+      // pane's own shell keeps ITS worktree open, so ANY delete (clean or forced)
+      // hits "Permission denied" on windows-latest (never on POSIX, which unlinks
+      // a busy dir). The real "remove worktree" UX closes the pane first; close
+      // BOTH, then retry each delete while the OS releases the handles.
       await ES(`window.__mogging.layout.close(${base + 1})`)
-      let forcedRemoved: { ok: boolean; reason?: string } = { ok: false, reason: 'not attempted' }
-      for (let i = 0; i < 14; i++) {
-        await sleep(500)
-        forcedRemoved = await removeVia(paneCwds[0], true)
-        if (forcedRemoved.ok) break
+      await ES(`window.__mogging.layout.close(${base + 2})`)
+      const removeRetry = async (path: string, force: boolean): Promise<{ ok: boolean; reason?: string }> => {
+        let r: { ok: boolean; reason?: string } = { ok: false, reason: 'not attempted' }
+        for (let i = 0; i < 14; i++) {
+          await sleep(500)
+          r = await removeVia(path, force)
+          if (r.ok) break
+        }
+        return r
       }
+      const cleanRemoved = await removeRetry(paneCwds[1], false) // clean -> no force needed
+      const forcedRemoved = await removeRetry(paneCwds[0], true)
       const removalOk =
         dirtyRefused.ok === false &&
         dirtyRefused.reason === 'dirty' &&
