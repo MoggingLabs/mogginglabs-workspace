@@ -107,7 +107,17 @@ export function runUsageSmoke(win: BrowserWindow): void {
 
       // 4 ── hidden pauses the poller; visible resumes it
       svc.setVisible(false)
-      await sleep(400) // let any in-flight poll drain
+      // Wait for the fetch count to STABILIZE before opening the observation
+      // window — a slow/contended runner can land an in-flight poll well after a
+      // fixed drain, corrupting h0 (the documented poller-pause flake). Once the
+      // count stops moving, the pause has taken; then confirm it stays put.
+      let drainPrev = -1
+      for (let i = 0; i < 20; i++) {
+        const c = svc.debug().providers.fake.fetches
+        if (c === drainPrev) break
+        drainPrev = c
+        await sleep(300)
+      }
       const h0 = svc.debug().providers.fake.fetches
       await sleep(1400)
       const h1 = svc.debug().providers.fake.fetches
