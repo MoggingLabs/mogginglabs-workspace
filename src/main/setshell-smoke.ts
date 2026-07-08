@@ -34,8 +34,8 @@ const PROBES = [
   '.settings-section-head .section-header-title',
   '.settings-section-head .section-header-caption',
   '.settings-nav-group',
-  '.settings-nav-item',
-  '.settings-nav-item.is-active',
+  '.settings-nav-item:not(.is-active)', // distinct nodes: the active item is first in DOM,
+  '.settings-nav-item.is-active', // so a bare `.settings-nav-item` would measure it twice
   '.card .section-header-title',
   '.card .section-header-caption',
   '.card-caption',
@@ -82,10 +82,22 @@ export function runSetShellSmoke(win: BrowserWindow): void {
     const measure = (sel) => {
       const node = document.querySelector(sel)
       if (!node) return null
+      const bg = bgOf(node)
       const fg = parse(getComputedStyle(node).color)
-      const composited = over(fg, bgOf(node))
-      return Math.round(ratio(composited, bgOf(node)) * 100) / 100
+      return Math.round(ratio(over(fg, bg), bg) * 100) / 100
     }
+    /* A transition mid-flight returns an INTERMEDIATE colour to getComputedStyle.
+       setTheme swaps --accent-ink / --accent-weak, and .settings-nav-item animates
+       both — so under load the probe measured a frame of the fade, not the settled
+       value (2.83:1 in a busy sweep, 7.73:1 idle, same DOM). Freeze, then measure. */
+    const freeze = () => {
+      if (document.getElementById('aa-freeze')) return
+      const st = document.createElement('style')
+      st.id = 'aa-freeze'
+      st.textContent = '*, *::before, *::after { transition: none !important; animation: none !important }'
+      document.head.append(st)
+    }
+    const thaw = () => document.getElementById('aa-freeze')?.remove()
   `
 
   const run = async (): Promise<void> => {
@@ -181,6 +193,7 @@ export function runSetShellSmoke(win: BrowserWindow): void {
         }
       })()`)
 
+      await ES(`(() => {${CONTRAST} freeze() })()`) // measure settled colour, not a fade frame
       const themes = ['midnight', 'light', 'nord', 'solarized']
       const contrast: Record<string, Record<string, number | null>> = {}
       const failures: string[] = []
@@ -203,6 +216,7 @@ export function runSetShellSmoke(win: BrowserWindow): void {
       const contrastOk = failures.length === 0 && missing.length === 0
 
       await ES(`window.__mogging.setTheme('midnight')`)
+      await ES(`(() => {${CONTRAST} thaw() })()`)
       await ES(`document.querySelector('.settings-probe-error')?.remove()`)
 
       const pass = navOk && tabsOk && persistOk && spacingOk && themeLiveOk && contrastOk

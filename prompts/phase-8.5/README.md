@@ -47,15 +47,24 @@ pasteable as a `/goal`, **≤ 3950 chars**). Execute in order.
 ## Sequence
 | # | File | Gate |
 |---|------|------|
-| 01 | `01-ux-audit-and-spacing-tokens.md` | AUDIT.md (every surface graded, keep/fix/remove verdicts, 21st.dev pattern notes) + the spacing scale & layout primitives in tokens/components; typecheck/build green (ships minimal runtime) |
-| 02 | `02-wizard-single-page.md` | The wizard becomes ONE full-app PAGE beside the rail — not a modal (folder · layout · agents at once, breathing room, live summary); WIZARDUX smoke green |
-| 03 | `03-folder-browser.md` | A real visual folder browser (clickable dirs, breadcrumb, keyboard nav, repo badges) under the path bar — one selection, three views; `fs:listDir` read-only; FOLDERPICK smoke green |
-| 04 | `04-settings-shell-revamp.md` | The Settings shell on the new primitives — grouped nav with icons, per-tab SectionHeader, Cards + FieldGroups + a new ToggleRow; AA measured in all four themes (the first real WCAG probe in the repo); SETSHELL smoke green |
-| 05 | `05-settings-dense-tabs.md` | Integrations + Usage tabs restructured on the primitives (progressive disclosure, no wall-of-knobs); INTEGUX + USAGESET still green + SETTABS asserts |
-| 06 | `06-home-firstrun-polish.md` | Home + first-run checklist visual pass + stale-affordance removals from AUDIT.md; HOMEUX smoke green |
-| 07 | `07-board-palette-feedback.md` | Board, palette, toasts, empty states, confirms — one feedback language; BOARDUX smoke green |
-| 08 | `08-chrome-and-terminal-ux.md` | Titlebar, workspace tabs, pane headers, dock chrome, shortcuts overlay — density + consistency + audit removals; CHROMEUX smoke green |
-| 09 | `09-ux-milestone.md` | UXMILESTONE: the revamped surfaces asserted end-to-end, budgets unchanged, gallery restaged (both themes), books + four-environment certification |
+| 01 | `01-ux-audit-and-spacing-tokens.md` | AUDIT.md (every surface graded, keep/fix/remove verdicts, 21st.dev pattern notes) + the ramp extension & layout primitives; typecheck/build green |
+| 02 | `02-wizard-single-page.md` | The wizard becomes ONE full-app PAGE beside the rail — not a modal; WIZARDUX green |
+| 03 | `03-folder-browser.md` | A real visual folder browser under the path bar — one selection, three views; `fs:listDir` read-only; FOLDERPICK green |
+| 04 | `04-settings-shell-revamp.md` | The Settings shell on the primitives — grouped nav, per-tab SectionHeader, Cards + FieldGroups + a new ToggleRow; the repo's first real WCAG probe; SETSHELL green |
+| 05 | `05-settings-integrations.md` | Integrations (**F**) → overview-first with progressive disclosure; `.mgr-chip`/`.trail-btn` hitboxes; SETINTEG green |
+| 05b | `05b-settings-usage-and-profiles.md` | The three surfaces nothing owned: Usage tab (D−), the Usage **popover** (D), Profiles & hosts (D); SETUSAGE green |
+| 06 | `06-home-firstrun-polish.md` | Home + first-run; the checklist that can never self-dismiss; the AA probe extracted for reuse; HOMEUX green |
+| 07 | `07-board-and-palette.md` | Board (D) + palette (C−); `Delete card` gets a confirm; BOARDUX green |
+| 07b | `07b-feedback-family.md` | One feedback language; the opt-out-able destructive confirm; the review modal's safe-last footer; 26 empty states; FEEDBACKUX green |
+| 08 | `08-chrome-titlebar-rail-panes.md` | Titlebar, rail, pane headers; the radius ramp decided; CHROMEUX green |
+| 08b | `08b-dock-and-shortcuts.md` | **§ Blockers #1**: the possession surface has no CSS rule and no test. Guard first, then restyle; DOCKUX green |
+| 09 | `09-ux-milestone.md` | UXMILESTONE + `check-audit.mjs` (no Grades row below A, no unrouted finding) + `check-spacing --max 0` + four-environment certification |
+
+> **Why 12 steps for 9 numbers.** 05, 07 and 08 each tried to carry two surfaces'
+> worth of work, and 05 never even named `profiles-hosts.ts` in its Steps — which is
+> exactly how that surface ended up graded **D** with no owner. A step that cannot
+> state its scope in 3950 characters cannot be executed honestly either. Split, with
+> the `06b` precedent from phase-1.
 
 ## Overall Definition of Done
 - AUDIT.md covers EVERY feature surface with a keep/fix/remove verdict and
@@ -65,10 +74,12 @@ pasteable as a `/goal`, **≤ 3950 chars**). Execute in order.
   wall of unlabeled controls anywhere.
 - All spacing flows from the token scale; `scripts/check-spacing.mjs` finds no
   new hardcoded px margins in feature CSS.
-- Both perf budgets (MILESTONE + PERCEPTION) unchanged; all pre-existing 52
-  gates still green; the new gates green on all four environments.
-- `node scripts/check-spacing.mjs` reports zero violations in every bucket the
-  pack touched, and the total never rises.
+- Both perf budgets (MILESTONE + PERCEPTION) unchanged; all pre-existing gates
+  still green; the new gates green on all four environments.
+- `check-spacing.mjs --max 0` — every bucket zero, including the shared row.
+- `check-audit.mjs` green: **no Grades row below A**, every REMOVE ✅, every one
+  of the 13 bugs owned and resolved, both Blockers discharged, every Deviation
+  resolved. Twelve of those bugs had no owner until the 8.5/04 audit-of-the-audit.
 
 ## Guardrails
 - **No new runtime deps** — 21st.dev informs, house code ships (ADR 0004).
@@ -81,6 +92,6 @@ pasteable as a `/goal`, **≤ 3950 chars**). Execute in order.
   output + run ids, never screenshots-as-proof.
 
 ## Parallelization
-01 is the root. After it: Lane A (02 → 03, the wizard), Lane B (04 → 05,
-Settings), Lane C (06 → 07 → 08, the rest of the app). 09 needs all lanes.
-Solo execution runs 01→09 in order (house rule: no parallel agents).
+01 is the root. After it: Lane A (02 → 03, the wizard), Lane B (04 → 05 → 05b,
+Settings), Lane C (06 → 07 → 07b → 08 → 08b, the rest). 09 needs all lanes.
+Solo execution runs 01 → 09 in order (house rule: no parallel agents).

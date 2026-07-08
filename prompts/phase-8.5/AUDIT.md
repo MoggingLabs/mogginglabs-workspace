@@ -39,35 +39,41 @@ to `--sp-7/8`, and adds the readable-column caps the app never had.
 
 ## Grades
 
+**The pack's definition of done: every row below reads A.** Each non-`done` row now
+names the step that owns it — the Verdict column is `fix|keep|keep+fix — <step>`.
+`scripts/check-audit.mjs` (09) fails the sweep if any row is below A, or if any row
+has a verdict with no owner. Grades are **density/hierarchy**; an `A` surface can
+still hold a bug (see § Bugs, which routes all thirteen).
+
 | Surface | Grade | Verdict | The one-line complaint |
 |---|---|---|---|
 | Wizard — shell/stepper | C → **A** | **done (02)** | Was: four structural joints all at 16px; two hairlines 12px apart above the footer. Now a full PAGE, no stepper, no modal |
 | Wizard — Start | C− → **A** | **done (02)** | Was: three fields, three control heights (42/34/34px); a section heading sibling to form labels |
 | Wizard — Layout | C → **A** | **done (02)** | Was: a live preview re-rendering what the selected tile already says. The caption says it now |
 | **Wizard — Agents** | **F → A** | **done (02)** | Was: `padding: 5px`, 8 flat siblings, no cards, four control heights in one row |
-| Home | C+ | fix | Bordered recents separated by a **4px** seam that reads as a rendering artifact |
-| First-run checklist | B− | keep+fix | Structure sound (one card, per-row icons); the `<code>` chip (1px pad) and copy button (3px pad) share no baseline and wrap |
+| Home | C+ | fix — **06** | Bordered recents separated by a **4px** seam that reads as a rendering artifact |
+| First-run checklist | B− | keep+fix — **06** | Structure sound (one card, per-row icons); the `<code>` chip (1px pad) and copy button (3px pad) share no baseline and wrap |
 | Settings — shell | C → **A** | **done (04)** | Was: no left/top padding, nav items `7px` tall-ish, no cards. Now TwoColumn + grouped nav + Cards; `7px` → `--sp-2`, the only shell spacing violation |
 | Settings — Appearance / Terminal | B → **A** | **done (04)** | Cards + FieldGroups. Appearance still holds one control — a card's head is that control's label, so it is no longer a bare row |
-| Settings — Profiles & hosts | D → **C** | part (04) | 04 gave it the page frame (a Card with a real head) and killed `row()`. The five placeholder-as-label inputs are `profiles-hosts.ts` internals — **unowned by any step**; see § Deviations #8 |
-| Settings — Usage | D− | fix | 7 sections always open; 20 controls with zero attention states permanently expanded |
-| **Settings — Integrations** | **F** | fix | 9 sections at once; `.mgr-chip` is a **1px-vertical-padding button** and the only click target for needs-auth/drift |
+| Settings — Profiles & hosts | D → **C** | part (04), **05b** owns the rest | 04 gave it the page frame (a Card with a real head) and killed `row()`. The five placeholder-as-label inputs are `profiles-hosts.ts` internals — now owned by **05b** |
+| Settings — Usage | D− | fix — **05b** | 7 sections always open; 20 controls with zero attention states permanently expanded |
+| **Settings — Integrations** | **F** | fix — **05** | 9 sections at once; `.mgr-chip` is a **1px-vertical-padding button** and the only click target for needs-auth/drift |
 | Settings — Privacy / Browser | D → **A** | **done (04)** | ToggleRows with per-switch hints; every ADR clause kept, redistributed into a card caption + `.settings-scope` |
-| Settings — Shortcuts | B | keep | One source, CI-enforced. Framed in a Card by 04; the `5px` padding + `0.08em` tracking live in `shortcuts.ts`'s own CSS — 08 owns them |
-| Settings — About | A | **done** | Rebuilt in this step on the four primitives |
-| Board | D | fix | Phantom flex items waste 29% of a bare card; chips overflow; the ⋯ menu is clipped by the lane scroller |
-| Palette | C− | fix | Empty query = "first 12 commands whose feature mounted first"; no rank, no sections, no match highlighting |
-| Toasts / confirms / modal | C | fix | One family, five widths, three radii; only the toast animates out |
-| Review modal | D | fix | Confirm-before-Cancel, the safe action never focused, "Override & merge" is the filled CTA |
-| Titlebar | B | keep+fix | Uniform 26px hitboxes and 4px gaps — but `titlebarLeft` mounts inside `.titlebar-right` |
-| Workspace tabs | A− | keep | Genuinely well-built (identity ramp, attention latch, zero-layout-shift selection). No scroll affordance |
-| Pane headers | B+ | keep | Fixed 28px, chips never wrap, title ellipsises — correct by design. `.pane-mcp` breaks the chip system on every axis |
-| Browser dock chrome | B / **C on contract** | keep+fix | Possession structure is right; three load-bearing strings have **no CSS rule and no test** |
-| Shortcuts overlay | B− | keep | Shared source with Settings, CI-enforced |
-| Update UX | A− | keep | `--pct` is computed and discarded |
+| Settings — Shortcuts | B | keep — **08b** | One source, CI-enforced. Framed in a Card by 04; the `5px` padding + `0.08em` tracking live in `shortcuts.ts`'s own CSS — **08b** fixes them once, and both this and the overlay reach A |
+| Settings — About | A | **done (01)** | Rebuilt on the four primitives |
+| Board | D | fix — **07** | Phantom flex items waste 29% of a bare card; chips overflow; the ⋯ menu is clipped by the lane scroller |
+| Palette | C− | fix — **07** | Empty query = "first 12 commands whose feature mounted first"; no rank, no sections, no match highlighting |
+| Toasts / confirms / modal | C | fix — **07b** | One family, five widths, three radii; only the toast animates out |
+| Review modal | D | fix — **07b** | Confirm-before-Cancel, the safe action never focused, "Override & merge" is the filled CTA |
+| Titlebar | B | keep+fix — **08** | Uniform 26px hitboxes and 4px gaps — but `titlebarLeft` mounts inside `.titlebar-right` |
+| Workspace tabs | A− | keep — **08** | Genuinely well-built (identity ramp, attention latch, zero-layout-shift selection). No scroll affordance |
+| Pane headers | B+ | keep — **08** | Fixed 28px, chips never wrap, title ellipsises — correct by design. `.pane-mcp` breaks the chip system on every axis |
+| Browser dock chrome | B / **C on contract** | keep+fix — **08b** | Possession structure is right; three load-bearing strings have **no CSS rule and no test** |
+| Shortcuts overlay | B− | keep — **08b** | Shared source with Settings, CI-enforced |
+| Update UX | A− | keep — **06** | `--pct` is computed and discarded |
 | Usage gauge (titlebar) | A | keep | All literals sanctioned dense chrome |
-| Usage popover | D | fix | Not dense chrome, but styled as if it were; 9 usages of **tokens that don't exist** |
-| **Empty states** | **F** | fix | **2 of 26** "nothing here" surfaces use the house `EmptyState`. A board lane has none at all |
+| Usage popover | D | fix — **05b** | Not dense chrome, but styled as if it were; 9 usages of **tokens that don't exist** |
+| **Empty states** | **F** | fix — **07b** | **2 of 26** "nothing here" surfaces use the house `EmptyState`. A board lane has none at all |
 
 ---
 
@@ -178,7 +184,35 @@ Status: **✅ = executed**. 02 cleared every wizard row.
 
 ---
 
-## Bugs found (recorded, NOT fixed here — this step is additive)
+## Bugs found — every one routed (8.5/04 audit-of-the-audit)
+
+01 recorded these and moved on. **Twelve of the thirteen named no owner**, and the
+Grades/REMOVE tables both have owner columns while this list had none — the single
+largest coverage hole in the file. Each now names its step. `check-audit.mjs` (09)
+fails if any entry loses its owner or its ✅.
+
+| # | Bug | Owner | Status |
+|---|---|---|---|
+| 1 | first-run card can never self-dismiss (`optional:true` omitted; `product-smoke` masks it) | **06** | open |
+| 2 | `review-smoke.ts:115` removes `<body>` | **07b** | open |
+| 3 | `swarmBtn` double-renders the Agents screen | **02** | **✅ fixed in 02** |
+| 4 | nine usages of tokens that do not exist (`--surface-1/3`, `--text-dim`, `--border-1`) | **05b** | open |
+| 5 | `.usage-tile.is-active::before` uses a RADIUS token as a vertical inset | **05b** | open |
+| 6 | `.btn--danger` carries no emphasis | **07b** | open |
+| 7 | `Delete card` is irreversible with no confirm | **07** | open |
+| 8 | the app's most destructive confirm is opt-out-able (`rememberKey`) | **07b** | open |
+| 9 | `.pane-head-left` chip cluster overflows into the branch chip | **08** | open |
+| 10 | collapsed-rail collision (agent dot over `.ws-attn`) | **08** | open |
+| 11 | grid-layout button offered on Home / Board / Settings | **08** | open |
+| 12 | remote pane: state dot is no longer the leading glyph | **08** | open |
+| 13 | `integux-smoke.ts:65` asserts `.palette-result`, a class that exists nowhere | **05** | open |
+
+> **Cross-check neither entry made.** Bug #13 says half of `integux-smoke.ts:65` is
+> dead — and REMOVE #2's safety argument ("≥2 matches; 5 remain") *rests on that very
+> assertion*. 05 therefore fixes the gate **before** removing the verb.
+
+The original entries, verbatim:
+
 
 1. **The first-run card can never self-dismiss.** `firstrun.ts:176` omits `optional:true` while its title says "Optional:". The gate is `rows.every(r => r.done || r.optional)` (`:202`). `product-smoke.ts:100-102` masks it by saving two profiles before asserting collapse. → REMOVE #21.
 2. **`review-smoke.ts:115` removes `<body>`.** `review/index.ts:108` adds `.review-modal` to `modal.el`, which `modal.ts:102` returns as the **overlay**; `m.parentElement.remove()` therefore targets `document.body`. Latent — nothing after it touches the DOM.
@@ -215,6 +249,7 @@ nothing — not a token, not a rule, not a gate — would object.
 > hit-testable; and `.browser-agent-label` has non-empty `textContent` at a
 > computed `font-size >= 11px` with a non-transparent colour.
 
+**Blocker 2 — owner: step 07b** (it had none until the 8.5/04 audit-of-the-audit).
 Second blocker, lower stakes: `.review-gate-open` / `.review-gate-closed`
 (`global.css:3281-3288`) — the reviewer sign-off indicator, the whole point of
 the 4/03 gate — have **no smoke coverage at all** (`gate-smoke.ts` and
@@ -298,23 +333,33 @@ node scripts/check-spacing.mjs --max 28   # the gate (exits 1 above the ceiling)
 > which is what step 09 gates on. The buckets below are the corrected ones.
 
 **Baseline at the close of 01: 33 violations.** After 02: **28** (the wizard bucket
-is clear). After 04: **27**. Plus **4** `clamp()` spacing bypasses (`.home-logo`,
-`.home-welcome`, `.home-ctas`, `.home-sections`) that the px checker cannot see —
-06 owns them. Existing violations are *listed, not mass-fixed*; steps 02–08 burn
-them down per surface. The number must **never rise**.
+is clear). After 04: **27**. Existing violations are *listed, not mass-fixed*; each
+step burns down its own surface. The number must **never rise**, and 09 gates on
+`--max 0`.
+
+> **Correction (8.5/04 audit-of-the-audit).** This section said the four `clamp()`
+> spacing bypasses "the px checker cannot see". It sees them: `clamp(16px, 2.4vh,
+> 36px)` contains px literals, and those four **are** the entire `home` bucket. What
+> the checker genuinely cannot see is any **non-px** unit — exactly two of them:
+> `.home-hero { margin-top: 3vh }` (06) and `.palette-overlay { padding-top: 12vh }`
+> (07). Both are now owned. Note also that `.home-logo`'s *sizing* clamps (w/h/radius)
+> are **keep**; only its `margin-bottom` clamp is a fix — the old text conflated them.
 
 The old "04 + 05" row hid the split. The `settings` bucket's 7 was **1 shell** +
 **6 mega-tab**: only `.settings-nav-item { padding: 7px }` belonged to the shell.
+The `—` row is `.segmented-item`; it is now 07b's.
 
-| Owner step | Surface bucket | At 01 | Now |
-|---|---|---|---|
-| **02** | wizard · path-input · layout tiles · grid-preview | 5 | **0 ✓** |
-| **04** | settings shell (nav · page · content · section · row) | 1 | **0 ✓** |
-| 05 | integux · trail · mgr · cat · toolplan · usage · evbridge · ph | 6 | 6 |
-| 06 | home · firstrun · update | 4 | 4 (+ the 4 `clamp()`s) |
-| 07 | board · palette · toast · confirm · review · modal · menu · pill | 10 | 10 |
-| 08 | pane · titlebar · workspace-tab · rail · dock · shortcuts · layout-menu | 6 | 6 |
-| — | shared primitives / misc | 1 | 1 |
+| Owner step | Surface bucket | At 01 | Now | Target |
+|---|---|---|---|---|
+| **02** | wizard · path-input · layout tiles · grid-preview | 5 | **0 ✓** | 0 |
+| **04** | settings shell (nav · page · content · section · row) | 1 | **0 ✓** | 0 |
+| 05 | evbridge ×2 · toolplan ×2 (Integrations) | 4 | 4 | 0 |
+| 05b | usage-prov ×2 (Usage tab) | 2 | 2 | 0 |
+| 06 | home — the four `clamp()`s, **plus** `.home-hero{3vh}` (unseen) | 4 | 4 | 0 |
+| 07 | board chips ×3 · `.palette-item`, **plus** `.palette-overlay{12vh}` (unseen) | 4 | 4 | 0 |
+| 07b | `.toast` · `.menu-item` · `.menu-empty` · `.review-gate` · `.pill` · **`.segmented-item`** (the old `—` row) | 6 | 6 | 0 |
+| 08 | `.brand`(darwin) · collapsed tab · `.pane-git` · `.pane-header` · `.pane-title-input` · `.layout-menu-tile` | 6 | 6 | 0 |
+| 08b | `.shortcuts-row` | 1 | 1 | 0 |
 
 > The gate measures **drift**, not hitbox size: `.mgr-chip { padding: 1px var(--sp-2) }`
 > and `.trail-btn { padding: 2px var(--sp-2) }` — the two worst click targets in the
@@ -322,7 +367,8 @@ The old "04 + 05" row hid the split. The `settings` bucket's 7 was **1 shell** +
 
 Radius is a *separate* ramp with **no** off-ramp (`--r-sm/md/lg/full`). Chrome
 currently ships `3px`, `4px`, `5px` and `6px` radii with no token behind three of
-them (§ Chrome). Step 08 either adds `--r-xs: 3px` or folds them into `--r-sm`.
+them (§ Chrome). **Step 08 decides**: add `--r-xs: 3px`, or fold into `--r-sm`. The
+decision and its reason go in docs/11. This is the last unresolved either/or.
 
 ---
 
@@ -364,13 +410,15 @@ them (§ Chrome). Step 08 either adds `--r-xs: 3px` or folds them into `--r-sm`.
    matching the existing pattern makes that a swap, not a re-layout.
    `hintPlacement: 'below-control'` is available for result-caveat hints.
 
-8. **`profiles-hosts.ts`'s internals are unowned.** The Grades table marks
-   "Settings — Profiles & hosts" **D / fix**, but no step's prompt claims it: 04
-   covers "the shell and the light tabs", 05 covers "Integrations + Usage". 04 gave
-   it the page frame (a Card with a real head, replacing the `row()` whose label was
-   "Pointer sets only"), so it is no longer a bare wall. Its five placeholder-as-label
-   inputs remain. **Recommend: fold into 05**, which is already inside this feature
-   folder, rather than leave a D-graded surface with no owner.
+8. **`profiles-hosts.ts`'s internals were unowned.** The Grades table read
+   **D / fix**; no step's prompt claimed it — 04 covers "the shell and the light
+   tabs", 05 covered "Integrations + Usage". 04 gave it the page frame (a Card with a
+   real head, replacing the `row()` labelled "Pointer sets only"), promoting it to
+   **C / part**. **✅ Resolved**: the pack now has **05b**, which owns its internals
+   together with the other two surfaces nothing owned — the Usage tab's sibling
+   popover (graded D, bugs #4/#5) and the Usage tab itself. 05 was split rather than
+   stretched: a step that never mentions a surface in its Steps is how that surface
+   goes unowned.
 
 7. **02 kept the per-slot profile picker on its agent row**, though the step's
    brief listed it among the controls to collapse behind "Advanced". A profile is
@@ -378,8 +426,10 @@ them (§ Chrome). Step 08 either adds `--r-xs: 3px` or folds them into `--r-sm`.
    or it needs a second, duplicate roster inside the disclosure. It is already
    progressive: `renderRoster()` renders the `<select>` only when that provider
    has **more than one** profile (`wizard/index.ts`), which for most users is
-   never. The other five — remote host, swarm roles, tool plan, custom command,
-   preset save/delete — are disclosed as specified.
+   never. The other **six** — remote host, swarm roles, tool plan, custom command,
+   preset save/delete, **worktree isolation** — are disclosed as specified. (01's
+   findings list seven Advanced controls; this note used to say "five" and silently
+   dropped worktree isolation from the count.)
 
 ---
 
