@@ -280,7 +280,11 @@ export function runGallery(win: BrowserWindow): void {
           await ES(`document.querySelector('#view-wizard .wizard')?.scrollTo({ top: 99999 })`)
           await sleep(400)
           await snap(`${tag}-wizard-agents`)
+          // Expand, THEN re-scroll: expanding grows the column, so the disclosure
+          // we came to photograph lands below the fold if we shoot immediately.
           await ES(`(document.querySelectorAll('#view-wizard .wizard-adv').forEach((d) => (d.open = true)), 1)`)
+          await sleep(300)
+          await ES(`document.querySelector('#view-wizard .wizard')?.scrollTo({ top: 99999 })`)
           await sleep(400)
           await snap(`${tag}-wizard-advanced`)
           await escape()
