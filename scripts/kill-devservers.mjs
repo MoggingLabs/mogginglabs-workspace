@@ -16,59 +16,84 @@
 // sweeps 52/52 and a busy one loses three gates. `kill_electron` never caught it:
 // the straggler is node.exe, not electron.exe.
 //
-// SAFETY: only node processes whose command line names electron-vite AND this
-// repository are killed. Another project's vite/next dev server is never touched.
+// ORDER MATTERS. `timeout` kills only `npm`; the tree it spawned survives:
+//     npm run dev -> electron-vite -> electron (+ esbuild)
+// electron-vite is a supervisor — kill electron first and it cheerfully respawns
+// it. So reap PARENT FIRST (electron-vite), then electron, then esbuild, and loop
+// until a pass finds nothing. Killing the child first is why the old
+// `kill_electron` left a 50-77% CPU floor that starved MILESTONE's 16 PTY spawns.
+//
+// SAFETY: only processes whose command line names THIS repository are killed
+// (electron and esbuild live in its node_modules, so their argv[0] carries the
+// path). Another project's vite/next dev server is never touched.
 import { execFileSync } from 'node:child_process'
 
 const repo = process.cwd()
 const isWin = process.platform === 'win32'
 const quiet = process.argv.includes('--quiet')
+const want = repo.replace(/\//g, '\\').toLowerCase()
 
-/** PIDs of this repo's electron-vite processes. */
-function find() {
+/** Parent-first: the supervisor, then what it would respawn. */
+const TIERS = [
+  { name: 'electron-vite', match: (n, c) => n === 'node.exe' && c.includes('electron-vite') },
+  { name: 'electron', match: (n) => n === 'electron.exe' },
+  { name: 'esbuild', match: (n) => n === 'esbuild.exe' }
+]
+
+/** Every running process of this repo, as {pid, name, cmd}. */
+function snapshot() {
   try {
     if (isWin) {
-      // The command line is `"node" "<repo>\node_modules\electron-vite\bin\electron-vite.js" dev`,
-      // so it names both. Match on both; compare paths case-insensitively.
-      const ps = `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*electron-vite*' } | ForEach-Object { "$($_.ProcessId)|$($_.CommandLine)" }`
+      const ps = `Get-CimInstance Win32_Process | Where-Object { $_.Name -in 'node.exe','electron.exe','esbuild.exe' } | ForEach-Object { "$($_.ProcessId)|$($_.Name)|$($_.CommandLine)" }`
       const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore']
       })
-      const want = repo.replace(/\//g, '\\').toLowerCase()
       return out
         .split('\n')
         .map((l) => l.trim())
         .filter(Boolean)
         .map((l) => {
-          const i = l.indexOf('|')
-          return { pid: Number(l.slice(0, i)), cmd: l.slice(i + 1) }
+          const [pid, name, ...rest] = l.split('|')
+          return { pid: Number(pid), name: (name ?? '').toLowerCase(), cmd: rest.join('|').toLowerCase() }
         })
-        .filter((p) => p.pid && p.cmd.toLowerCase().includes(want))
-        .map((p) => p.pid)
+        .filter((p) => p.pid && p.cmd.includes(want))
     }
     const out = execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
     return out
       .split('\n')
-      .filter((l) => l.includes('electron-vite') && l.includes(repo) && !l.includes('kill-devservers'))
-      .map((l) => Number(l.trim().split(/\s+/)[0]))
-      .filter(Boolean)
+      .map((l) => l.trim())
+      .filter((l) => l.includes(repo) && !l.includes('kill-devservers'))
+      .map((l) => {
+        const pid = Number(l.split(/\s+/)[0])
+        const cmd = l.toLowerCase()
+        const name = cmd.includes('electron-vite') ? 'node.exe' : cmd.includes('esbuild') ? 'esbuild.exe' : 'electron.exe'
+        return { pid, name, cmd }
+      })
+      .filter((p) => p.pid)
   } catch {
     return [] // no powershell / no ps — nothing we can do, and nothing we should break
   }
+}
+
+/** PIDs of this repo's dev-tree processes, parent-first. */
+function find() {
+  const procs = snapshot()
+  const out = []
+  for (const tier of TIERS) for (const p of procs) if (tier.match(p.name, p.cmd)) out.push(p.pid)
+  return out
 }
 
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 
 // Kill in a loop, not once-then-wait: a dying electron-vite can still be forking
 // (esbuild service, the renderer's vite server), so a process that did not exist
-// at the first sweep can exist at the second. Keep killing until a full pass
-// finds nothing, or we run out of patience.
+// at the first pass can exist at the second.
 let killed = 0
-const deadline = Date.now() + 10_000
+const deadline = Date.now() + 15_000
 let left = 0
 for (;;) {
-  const pids = find()
+  const pids = find() // parent-first, so the supervisor dies before its child
   left = pids.length
   if (!left || Date.now() > deadline) break
   for (const pid of pids) {
@@ -79,8 +104,8 @@ for (;;) {
       /* already gone — that is the good case */
     }
   }
-  sleep(100)
+  sleep(150) // let the OS reap before we re-check, or we kill the same pid twice
 }
 
-if (!quiet && (killed || left)) console.log(`  reaped ${killed} lingering electron-vite process(es)${left ? `, ${left} STILL ALIVE` : ''}`)
+if (!quiet && (killed || left)) console.log(`  reaped ${killed} dev-tree process(es)${left ? `, ${left} STILL ALIVE` : ''}`)
 process.exit(left ? 1 : 0)

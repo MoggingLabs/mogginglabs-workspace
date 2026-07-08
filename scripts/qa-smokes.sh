@@ -121,8 +121,11 @@ run_smoke() {
       node -e "try{console.log(JSON.stringify(JSON.parse(require('fs').readFileSync('out/$result-result.json','utf8')),null,0))}catch(e){console.log('(no result json)')}" 2>/dev/null | sed 's/^/  /'
     fi
   fi
-  kill_electron
+  # Parent FIRST: electron-vite supervises electron and respawns it on death, so
+  # the old `kill_electron`-only teardown left a CPU floor that starved the heavy
+  # gates. Reap the tree, then sweep any stray electron from another checkout.
   kill_devserver
+  kill_electron
   # A two-phase pair's phase A must leave its daemon+state for phase B; everything
   # else (including each pair's phase B) cleans up.
   if [ -z "$reuse" ] || [ "$name" = "TEMPLATE_B" ] || [ "$name" = "PROFPERSIST_B" ]; then kill_daemon "$iso"; fi
