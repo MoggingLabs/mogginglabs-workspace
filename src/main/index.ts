@@ -41,6 +41,7 @@ import { runIntegUxSmoke } from './integux-smoke'
 import { runIntegMilestoneSmoke } from './integmilestone-smoke'
 import { runWizardUxSmoke } from './wizardux-smoke'
 import { runFolderPickSmoke } from './folderpick-smoke'
+import { runSetShellSmoke } from './setshell-smoke'
 import { registerIntegrations } from './integrations'
 import { registerEventBridge } from './event-bridge'
 import { registerTrail } from './trail'
@@ -312,6 +313,8 @@ app.whenReady().then(async () => {
     runWizardUxSmoke(win) // env-gated one-page-wizard smoke: three cards, one page, rail beside it (Phase-8.5/02)
   } else if (process.env.MOGGING_FOLDERPICK && win) {
     runFolderPickSmoke(win) // env-gated folder-browser smoke: listing, refusals, keyboard, per-OS roots (Phase-8.5/03)
+  } else if (process.env.MOGGING_SETSHELL && win) {
+    runSetShellSmoke(win) // env-gated settings-shell smoke: grouped nav, cards, measured spacing + AA (Phase-8.5/04)
   } else if (process.env.MOGGING_USAGE && win) {
     runUsageSmoke(win) // env-gated usage-seam smoke: FAKE adapter only (Phase-7/01)
   } else if (process.env.MOGGING_ATTENTION && win) {

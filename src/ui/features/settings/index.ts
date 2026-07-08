@@ -1,7 +1,7 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { BrowserChannels, TelemetryChannels, UsageChannels, USAGE_CADENCES, type TelemetryRendererConfig, type UsageAlertConfig, type UsageConfig } from '@contracts'
+import { BrowserChannels, TelemetryChannels, type TelemetryRendererConfig } from '@contracts'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
-import { Button, Card, FieldGroup, SectionHeader, TwoColumn, createCheckbox, createSegmented, el, icon, ICON_NAMES } from '../../components'
+import { Button, Card, FieldGroup, SectionHeader, TwoColumn, createSegmented, createToggleRow, el, icon, ICON_NAMES, type ElChild, type IconName } from '../../components'
 import { THEMES } from '../../core/theme/themes'
 import { currentThemeId, onThemeChange, setTheme } from '../../core/theme/theme-state'
 import { setCommands } from '../../core/commands/command-port'
@@ -19,6 +19,30 @@ import { createIntegrationsSection } from './integrations'
 
 const DEFAULT_LAYOUT_KEY = 'mogging.defaultPaneCount'
 
+/**
+ * The nav is a MAP, not a list (8.5/04). Nine flat rows say only "there are nine";
+ * four named groups say where a knob lives before you read the labels. Grouping is
+ * visual — every knob keeps its tab, and every tab keeps its `data-target` id.
+ */
+const NAV_GROUPS: { label: string; ids: string[] }[] = [
+  { label: 'Workspace', ids: ['appearance', 'terminal'] },
+  { label: 'Agents & tools', ids: ['profiles', 'integrations', 'usage'] },
+  { label: 'Trust', ids: ['privacy', 'browser'] },
+  { label: 'System', ids: ['shortcuts', 'about'] }
+]
+
+const TAB_ICON: Record<string, IconName> = {
+  appearance: 'sliders',
+  terminal: 'terminal',
+  profiles: 'user',
+  integrations: 'plug',
+  usage: 'gauge',
+  privacy: 'shield',
+  browser: 'globe',
+  shortcuts: 'keyboard',
+  about: 'info'
+}
+
 function pref(key: string): string | null {
   try {
     return localStorage.getItem(key)
@@ -35,10 +59,12 @@ function setPref(key: string, value: string): void {
 }
 
 /**
- * Settings — a FULL-APP page (Phase-5/05, was a modal): a left TAB rail
- * (Appearance · Terminal · Profiles & Hosts · Usage · Integrations · Privacy ·
- * Browser · About) where each tab is its OWN page — selecting one shows only
- * that section and hides the rest (not stacked sections on one scroll). Theme,
+ * Settings — a FULL-APP page (Phase-5/05, was a modal): a left TAB rail of NINE
+ * tabs, grouped (Workspace · Agents & tools · Trust · System), where each tab is
+ * its OWN page — selecting one shows only that section and hides the rest (not
+ * stacked sections on one scroll). Every tab is a `SectionHeader` over `Card`s of
+ * `FieldGroup`s / `ToggleRow`s (8.5/04); a card holding ONE knob uses its own head
+ * as that knob's label rather than nesting a second one. Theme,
  * default wizard layout, and telemetry CONSENT (observability/00, ADR 0005) —
  * independent opt-in toggles persisted main-side over IPC; granting or revoking
  * re-initializes the adapters live. BYO-auth is stated, not configured: there
@@ -80,21 +106,24 @@ export const settingsFeature: UiFeature = {
     })
 
     // ── Telemetry consent: persisted in main, applied live (opt-in, default off) ──
-    const errorConsent = createCheckbox({
-      checked: false,
+    // ToggleRow, not Checkbox: a switch means "this is on, now"; a checkbox means
+    // "include this in what I submit". `setChecked()` still never fires onChange,
+    // which is what keeps `pullConsent()` from pushing straight back.
+    const errorConsent = createToggleRow({
       label: 'Error reporting (Sentry)',
+      hint: 'Crash and error reports, so a bug you hit gets fixed.',
       onChange: () => void pushConsent()
     })
-    const analyticsConsent = createCheckbox({
-      checked: false,
+    const analyticsConsent = createToggleRow({
       label: 'Product analytics (PostHog)',
+      hint: 'Which features get used, so the dead ones can go.',
       onChange: () => void pushConsent()
     })
 
     // Agent-browser-control consent (6/05b): per-workspace, default OFF.
-    const agentBrowserConsent = createCheckbox({
-      checked: false,
+    const agentBrowserConsent = createToggleRow({
       label: 'Agents may drive the browser (this workspace)',
+      hint: 'When on, agents in THIS workspace can navigate, read, and act on the browser dock — you always see when an agent holds the wheel and can Stop it instantly.',
       onChange: () => {
         const wsId = getWorkspaces().activeId
         if (!wsId) return
@@ -131,15 +160,6 @@ export const settingsFeature: UiFeature = {
       }
     }
 
-    const row = (label: string, control: Node, caption?: string): HTMLElement =>
-      el('div', { class: 'settings-row' }, [
-        el('div', { class: 'settings-row-head' }, [
-          el('span', { class: 'settings-row-label', text: label }),
-          caption ? el('span', { class: 'settings-row-caption', text: caption }) : null
-        ]),
-        control
-      ])
-
     const profilesHosts = createProfilesHostsSection() as HTMLElement & { refresh: () => Promise<void> }
 
     // ── The page: [section nav | scrollable content column] ──────────────────
@@ -156,9 +176,12 @@ export const settingsFeature: UiFeature = {
       /* no bridge (tests) */
     }
 
-    const section = (id: string, title: string, children: (Node | null)[]): HTMLElement =>
+    /** A tab: one h2 SectionHeader saying what lives here, then Cards. The
+     *  `data-section` hook and the `hidden` semantics are a compatibility surface —
+     *  gallery, KBSHORTCUTS and USAGESET all key off them. */
+    const section = (id: string, title: string, caption: string, children: ElChild[]): HTMLElement =>
       el('section', { class: 'settings-section', dataset: { section: id } }, [
-        el('h2', { class: 'section-label', text: title }),
+        SectionHeader({ title, caption, as: 'h2', class: 'settings-section-head' }),
         ...children
       ])
 
@@ -166,30 +189,51 @@ export const settingsFeature: UiFeature = {
       {
         id: 'appearance',
         label: 'Appearance',
-        el: section('appearance', 'Appearance', [
-          row('Theme', themeSeg.el, 'System follows your OS light/dark preference.')
+        el: section('appearance', 'Appearance', 'How the app looks.', [
+          // One knob, so the card's head IS its label — nesting a FieldGroup here
+          // would print "Theme" twice. Cards with two or more knobs use FieldGroups.
+          Card(
+            {
+              header: SectionHeader({
+                title: 'Theme',
+                caption: 'System follows your OS light/dark preference. Applies immediately, everywhere.'
+              })
+            },
+            [themeSeg.el]
+          )
         ])
       },
       {
         id: 'terminal',
         label: 'Terminal',
-        el: section('terminal', 'Terminal', [
-          row(
-            'Font size',
-            fontSeg.el,
-            'Applied live to every open terminal. Line height is fixed — only size varies.'
-          ),
-          row('New-workspace layout', layoutSeg.el, 'How many terminals the wizard suggests.')
+        el: section('terminal', 'Terminal', 'Type, and what a new workspace starts with.', [
+          Card(
+            {
+              header: SectionHeader({
+                title: 'Terminal defaults',
+                caption: 'Font size applies live to every open terminal; the layout default seeds the new-workspace wizard.'
+              })
+            },
+            [
+              FieldGroup({ label: 'Font size', hint: 'Line height is fixed — only size varies.' }, fontSeg.el),
+              FieldGroup({ label: 'New-workspace layout', hint: 'How many terminals the wizard suggests.' }, layoutSeg.el)
+            ]
+          )
         ])
       },
       {
         id: 'profiles',
         label: 'Profiles & Hosts',
-        el: section('profiles', 'Profiles & SSH hosts', [
-          row(
-            'Pointer sets only',
-            profilesHosts,
-            'Profiles select WHICH of your accounts a CLI uses; hosts are ssh targets. Never keys, tokens, or passwords — secret-shaped values are refused at save (ADR 0002).'
+        el: section('profiles', 'Profiles & SSH hosts', 'Pointers to accounts and machines — never credentials.', [
+          Card(
+            {
+              header: SectionHeader({
+                title: 'Pointer sets only',
+                caption:
+                  'Profiles select WHICH of your accounts a CLI uses; hosts are ssh targets. Never keys, tokens, or passwords — secret-shaped values are refused at save (ADR 0002).'
+              })
+            },
+            [profilesHosts]
           )
         ])
       },
@@ -198,24 +242,43 @@ export const settingsFeature: UiFeature = {
         label: 'Usage',
         // The FULL Usage tab (7/12) — one module, one home for every usage
         // knob: the provider grid, plans × profiles, pace/alerts/display,
-        // history + cost, and the privacy story. The 7/03 stub is gone.
-        el: section('usage', 'Usage', [createUsageSection()])
+        // history + cost, and the privacy story. 8.5/04 gives it the page
+        // frame; 8.5/05 rebuilds its internals.
+        el: section('usage', 'Usage', 'Limits, plans, pace and alerts — read from the CLIs you already use.', [createUsageSection()])
       },
       {
         id: 'integrations',
         label: 'Integrations',
         // 8/05 lands the Activity trail; 8/06+ grows this into THE integrations
         // home (server registration, catalog, grants) — one module, one home.
-        el: section('integrations', 'Integrations', [createIntegrationsSection()])
+        el: section(
+          'integrations',
+          'Integrations',
+          'MCP servers, per-workspace tool plans, grants, webhooks, and the activity trail.',
+          [createIntegrationsSection()]
+        )
       },
       {
         id: 'privacy',
         label: 'Privacy',
-        el: section('privacy', 'Privacy', [
-          row(
-            'Help improve the app',
-            el('div', { class: 'settings-consents' }, [errorConsent.el, analyticsConsent.el]),
-            'Both are OFF by default and fully anonymous (a random install id — never your account, machine name, or provider identity). Telemetry NEVER includes terminal output, prompts, code, file paths, environment variables, or credentials. Changes apply immediately; DO_NOT_TRACK is always honored.'
+        el: section('privacy', 'Privacy', 'Nothing here is on unless you turn it on.', [
+          Card(
+            {
+              header: SectionHeader({
+                title: 'Help improve the app',
+                caption:
+                  'Both are OFF by default and fully anonymous (a random install id — never your account, machine name, or provider identity).'
+              })
+            },
+            [
+              errorConsent.el,
+              analyticsConsent.el,
+              // ADR 0005 wording is load-bearing: the layout changed, the clauses did not.
+              el('p', {
+                class: 'settings-scope',
+                text: 'Telemetry NEVER includes terminal output, prompts, code, file paths, environment variables, or credentials. Changes apply immediately; DO_NOT_TRACK is always honored.'
+              })
+            ]
           ),
           el('div', { class: 'settings-note' }, [
             icon('check-circle', 14),
@@ -228,20 +291,31 @@ export const settingsFeature: UiFeature = {
       {
         id: 'browser',
         label: 'Browser',
-        el: section('browser', 'Browser', [
-          row(
-            'Agents may drive the browser',
-            el('div', { class: 'settings-consents' }, [agentBrowserConsent.el]),
-            'OFF by default, per workspace. When on, agents in THIS workspace can navigate, read, and act on the browser dock — you always see when an agent holds the wheel and can Stop it instantly. The dock uses its own empty session (agents never touch your system browser or its logins), and a page an agent reads is untrusted content. Agents can never read cookies or credentials (ADR 0002).'
+        el: section('browser', 'Browser', 'What agents may do with the browser dock.', [
+          Card(
+            {
+              header: SectionHeader({ title: 'Agent browser control', caption: 'OFF by default, per workspace.' })
+            },
+            [
+              agentBrowserConsent.el,
+              // ADR 0002 wording is load-bearing: same clauses, given room to breathe.
+              el('p', {
+                class: 'settings-scope',
+                text: 'The dock uses its own empty session (agents never touch your system browser or its logins), and a page an agent reads is untrusted content. Agents can never read cookies or credentials (ADR 0002).'
+              })
+            ]
           )
         ])
       },
       {
         id: 'shortcuts',
         label: 'Shortcuts',
-        el: section('shortcuts', 'Keyboard shortcuts', [
-          row('All shortcuts', renderShortcutList(), 'Press ? anywhere (outside a terminal or text field) to pull this up as an overlay.')
-        ])
+        el: section(
+          'shortcuts',
+          'Keyboard shortcuts',
+          'Press ? anywhere (outside a terminal or text field) to pull this up as an overlay.',
+          [Card({}, [renderShortcutList()])]
+        )
       },
       {
         id: 'about',
@@ -249,7 +323,7 @@ export const settingsFeature: UiFeature = {
         // 8.5/01: the smallest live customer of the layout primitives — Card +
         // SectionHeader + TwoColumn + FieldGroup, so none of them can rot
         // unexercised. Every other surface adopts them in 02–08.
-        el: section('about', 'About', [
+        el: section('about', 'About', 'What this app is, and what it refuses to be.', [
           Card(
             {
               header: SectionHeader({
@@ -290,9 +364,10 @@ export const settingsFeature: UiFeature = {
           dataset: { target: s.id },
           onClick: () => showSection(s.id)
         },
-        [s.label]
+        [icon(TAB_ICON[s.id] ?? 'sliders', 16), el('span', { class: 'settings-nav-text', text: s.label })]
       )
     )
+    const navById = new Map(sections.map((s, i) => [s.id, navItems[i]]))
     function showSection(id: string): void {
       const target = sections.some((s) => s.id === id) ? id : sections[0].id
       for (const s of sections) s.el.hidden = s.id !== target
@@ -310,14 +385,27 @@ export const settingsFeature: UiFeature = {
       onClick: () => goBack()
     })
     backBtn.classList.add('settings-back')
-    const nav = el('nav', { class: 'settings-nav', ariaLabel: 'Settings sections' }, [
+
+    // Grouped nav. A tab missing from NAV_GROUPS would silently vanish from the
+    // rail while its section still existed — so the leftovers are appended, loudly.
+    const grouped = new Set(NAV_GROUPS.flatMap((g) => g.ids))
+    const orphans = sections.filter((s) => !grouped.has(s.id)).map((s) => s.id)
+    if (orphans.length && import.meta.env.DEV) console.warn(`settings: tabs missing from NAV_GROUPS: ${orphans.join(', ')}`)
+    const navBox = el('div', { class: 'settings-nav' }, [
       backBtn,
-      ...navItems
+      ...NAV_GROUPS.flatMap((g) => [
+        el('span', { class: 'settings-nav-group', text: g.label }),
+        ...g.ids.map((id) => navById.get(id) ?? null)
+      ]),
+      ...orphans.map((id) => navById.get(id) ?? null)
     ])
 
+    // TwoColumn's first FEATURE customer (8.5/01 § Deviations #5). It builds the
+    // <nav> landmark, so `navBox` stays a plain <div> — nesting navs would give the
+    // rail two landmarks with one name.
     const page = el('div', {})
     page.id = 'view-settings'
-    page.append(el('div', { class: 'settings-page' }, [nav, contentCol]))
+    page.append(TwoColumn({ side: navBox, ariaLabel: 'Settings sections', class: 'settings-page' }, [contentCol]))
     ctx.content.append(page)
 
     // Entering the page re-pulls consent + refreshes the managed lists — but never

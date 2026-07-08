@@ -1,10 +1,19 @@
 # 11 — Design system (Phase-5/01: audit + color system)
 
 The single source of truth for the token layer. Established by the Phase-5/01 audit:
-every surface screenshotted in both themes (`MOGGING_SHOT=all` → `out/gallery/`,
-46 shots), every color claim below **measured** (WCAG 2.x relative-luminance contrast;
-the math lives in the audit script and is reproduced by any WCAG contrast checker).
+every surface screenshotted in both themes (`MOGGING_SHOT=all` → `out/gallery/`),
+every color claim below **measured** (WCAG 2.x relative-luminance contrast).
 AA thresholds used: **4.5:1** for text/icon-grade ink, **3:1** for non-text UI.
+
+> **Provenance, corrected in 8.5/04.** This page used to say "the math lives in the
+> audit script". *There was no audit script* — `git log -S luminance` finds one
+> commit whose only surviving trace is this prose and a few comments in `global.css`.
+> Every AA number here was a claim re-derived by hand. The math now lives in
+> `src/main/setshell-smoke.ts` (sRGB linearization → relative luminance → contrast,
+> with real alpha compositing up the ancestor chain, because `--accent-weak` is an
+> `rgba()` and measuring it against `transparent` scores it as pure black). It runs
+> in **all four themes** on every text class the Settings shell introduces, and it
+> fails the gate below 4.5:1. Worst measured ratio at 8.5/04: **4.71:1**.
 
 Rules (enforced by grep, see § Guardrails):
 
@@ -268,6 +277,38 @@ re-warm must not hitch).
 - Full-bleed rebalance: board lanes/head cap at `min(1440px, 100%)` centered; home
   sections widen to `min(1180px, 92%)`.
 
+## The Settings shell (Phase-8.5/04)
+
+`TwoColumn`'s first *feature* customer. A grouped nav rail | a scrolling column of
+`Card`s — no bare-control walls left outside Integrations and Usage (step 05).
+
+- **The nav is a map, not a list.** Nine flat rows say only "there are nine". Four
+  named groups — Workspace · Agents & tools · Trust · System — plus one icon per tab
+  say *where a knob lives* before you read a label. Grouping is visual: every knob
+  keeps its tab, every tab keeps its `data-target` id, and a tab absent from
+  `NAV_GROUPS` is appended (and warned about in DEV) rather than silently dropped.
+  Nav order is therefore deliberately **not** section order; SETSHELL asserts both.
+- **One knob, one head.** A `Card` holding a single control uses its own
+  `SectionHeader` as that control's label — nesting a `FieldGroup` there would print
+  the name twice. Cards with two or more knobs give each one a `FieldGroup`.
+- **`ToggleRow`, not `Checkbox`, for settings.** A switch means "this is on, now, and
+  it applies immediately"; a checkbox means "include this in what I submit". The
+  consent toggles are switches; the wizard's worktree box and the folder browser's
+  "show hidden" stay checkboxes. `setChecked()` never fires `onChange` — that is what
+  keeps `pullConsent()` from pushing straight back.
+- **Consent copy keeps every clause** (ADR 0002/0005 wording is load-bearing); it
+  gains layout, not edits — a card caption, a hint under each switch, and the scope
+  sentence as `.settings-scope` beneath the toggles it qualifies.
+- **Compatibility surface.** `#view-settings`, `.settings-page`, `.settings-nav-item[data-target]`
+  + `.is-active`, `.settings-back`, `.settings-content` (the scroll parent), and
+  `.settings-section[data-section]` with `hidden` semantics are all clicked or read by
+  KBSHORTCUTS, PROFILES, INTEGUX, USAGESET, WEBTRAIL and the gallery. Restyle around
+  them, never rename them.
+- **`.settings-error` takes `--danger-ink`.** The fill red measures 2.93:1 on nord's
+  elevated surface — below AA as words. The light *first-paint* media block overrides
+  `--danger` but not `--danger-ink`, so that gap is closed too; without it, the fix
+  would have made the pre-JS window worse (≈2.2:1) than the bug.
+
 ## The folder browser (Phase-8.5/03)
 
 The wizard's Where card offers three views of ONE selection — a typed path bar, a
@@ -357,7 +398,9 @@ icon-sheet shots at 100/125/150% zoom (`__mogging.iconSheet()`, DEV-only).
 | `terminal` | ws icon, quick terminal, board agent chip, launch menu | keep |
 | `folder` / `folder-open` | path input, recents, copy-cwd | keep (real folder intents only, claims un-borrowed) |
 | `layout-grid`, `plus`, `search`, `sparkles`, `pencil`, `trash`, `clock`, `bookmark`, `arrow-right`, `chevron-left` | launcher/menus/wizard | keep |
-| *(deleted)* `command`, `enter`, `resume`, `minimize`, `chevron-down`, `chevron-right`, `settings`, `maximize`, `chevrons-left-right`, `chevrons-up-down` | — | unused or replaced; names never repurposed |
+| `chevron-right` | breadcrumb separators, disclosure chevrons | **re-added 8.5** (deleted in 5/03 when unused; a name is never *repurposed*, and this is the same metaphor) |
+| `shield` · `user` · `plug` · `gauge` · `keyboard` | Settings nav (Trust · Profiles · Integrations · Usage · Shortcuts) | **new 8.5/04** — a nav of nine identical rows is a list, not a map. `keyboard` gets a SMALL variant: eight key-dots smudge below 12px, so the frame + spacebar carry it |
+| *(deleted)* `command`, `enter`, `resume`, `minimize`, `chevron-down`, `settings`, `maximize`, `chevrons-left-right`, `chevrons-up-down` | — | unused or replaced; names never repurposed |
 
 Deliberate non-icon: role chips (WORKER/REVIEWER) stay text-only — roles are
 freeform strings, and the uppercase tag IS the clearest rendering; a generic badge

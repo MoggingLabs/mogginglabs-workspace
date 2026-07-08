@@ -1,0 +1,242 @@
+import { app, type BrowserWindow } from 'electron'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+// Env-gated Settings-shell smoke (MOGGING_SETSHELL, Phase-8.5/04). Asserts:
+//   (a) the nav renders all nine tabs with an icon each, under four group heads,
+//       and the selection survives a leave/return (the persisted tab key);
+//   (b) MEASURED, not claimed: the content column is capped, card padding >= --sp-4,
+//       and two adjacent FieldGroups sit >= --sp-3 apart;
+//   (c) every tab still switches by `.settings-nav-item[data-target=…]` click, and
+//       exactly one `.settings-section` is un-hidden — the contract KBSHORTCUTS,
+//       USAGESET, INTEGUX, WEBTRAIL and the gallery all key off;
+//   (d) a theme change from the Appearance card still applies live;
+//   (e) AA CONTRAST, in all four themes, on every text class the shell introduces.
+//
+// (e) needed a WCAG probe. There wasn't one: the prompt says to "reuse the Phase-5
+// contrast probe helper", and no such helper exists — `git log -S luminance` finds
+// one commit whose only surviving trace is prose in docs/11 and comments in
+// global.css. Every AA number in this repo has been a claim, never a check. So the
+// probe ships here: sRGB linearization, relative luminance, and real alpha
+// compositing up the ancestor chain (the nav's active fill is `--accent-weak`,
+// an rgba() — measuring it against `transparent` would score it as pure black).
+
+const AA_TEXT = 4.5
+
+/**
+ * Everything the 8.5/04 shell puts words on, plus the error ink it repoints.
+ * `.card-title` is deliberately absent: Card only emits it for the `title` shorthand,
+ * and every card here passes an explicit `header`. Probing it would read `null` in
+ * every theme, and the `missing` guard below would (correctly) call that a rotted
+ * selector rather than a pass.
+ */
+const PROBES = [
+  '.settings-section-head .section-header-title',
+  '.settings-section-head .section-header-caption',
+  '.settings-nav-group',
+  '.settings-nav-item',
+  '.settings-nav-item.is-active',
+  '.card .section-header-title',
+  '.card .section-header-caption',
+  '.card-caption',
+  '.field-group-label',
+  '.field-group-hint',
+  '.toggle-row-label',
+  '.toggle-row-hint',
+  '.settings-scope',
+  '.settings-probe-error' // a .settings-error clone, injected: it only renders on a failed save
+]
+
+export function runSetShellSmoke(win: BrowserWindow): void {
+  setTimeout(() => app.exit(1), 150000) // safety net
+  const wc = win.webContents
+  const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+  // Section order (the DOM order of `.settings-section`).
+  const TABS = ['appearance', 'terminal', 'profiles', 'usage', 'integrations', 'privacy', 'browser', 'shortcuts', 'about']
+  // Nav order — GROUPED, so it is deliberately not the section order. Asserting both
+  // catches a tab that vanishes from the rail while its section still exists.
+  const NAV_ORDER = ['appearance', 'terminal', 'profiles', 'integrations', 'usage', 'privacy', 'browser', 'shortcuts', 'about']
+
+  // The probe, injected once. Composites rgba() over its ancestors before measuring.
+  const CONTRAST = `
+    const parse = (c) => (c.match(/[\\d.]+/g) || []).map(Number)
+    const lin = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4) }
+    const lum = ([r, g, b]) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    const over = (fg, bg) => { const a = fg[3] === undefined ? 1 : fg[3]; return [0,1,2].map((i) => fg[i] * a + bg[i] * (1 - a)) }
+    /** Real background: walk up compositing every translucent layer onto the one below. */
+    const bgOf = (node) => {
+      const stack = []
+      for (let n = node; n; n = n.parentElement) {
+        const c = parse(getComputedStyle(n).backgroundColor)
+        if (c.length && (c[3] === undefined || c[3] > 0)) stack.push(c)
+        if (c.length && (c[3] === undefined || c[3] === 1)) break
+      }
+      if (!stack.length) return [0, 0, 0]
+      let base = stack[stack.length - 1].slice(0, 3)
+      for (let i = stack.length - 2; i >= 0; i--) base = over(stack[i], base)
+      return base
+    }
+    const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05) }
+    const measure = (sel) => {
+      const node = document.querySelector(sel)
+      if (!node) return null
+      const fg = parse(getComputedStyle(node).color)
+      const composited = over(fg, bgOf(node))
+      return Math.round(ratio(composited, bgOf(node)) * 100) / 100
+    }
+  `
+
+  const run = async (): Promise<void> => {
+    let result: Record<string, unknown> = { pass: false }
+    try {
+      await sleep(1500)
+      await ES(`(document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click(), 1)`)
+      await sleep(700)
+
+      // ── (a) the nav is a map: nine tabs, an icon each, four group heads ──────
+      const nav = await ES<{ items: string[]; withIcon: number; groups: string[]; backBtn: boolean }>(`(() => {
+        const items = [...document.querySelectorAll('.settings-nav-item')]
+        return {
+          items: items.map((b) => b.dataset.target),
+          withIcon: items.filter((b) => b.querySelector('svg')).length,
+          groups: [...document.querySelectorAll('.settings-nav-group')].map((g) => g.textContent),
+          backBtn: !!document.querySelector('.settings-back')
+        }
+      })()`)
+      const navOk =
+        JSON.stringify(nav.items) === JSON.stringify(NAV_ORDER) && // grouped order
+        JSON.stringify([...nav.items].sort()) === JSON.stringify([...TABS].sort()) && // no tab lost
+        nav.withIcon === TABS.length &&
+        JSON.stringify(nav.groups) === JSON.stringify(['Workspace', 'Agents & tools', 'Trust', 'System']) &&
+        nav.backBtn
+
+      // ── (c) every tab switches, and exactly one section is visible ───────────
+      const switched: Record<string, { visible: string[]; active: string | null }> = {}
+      for (const id of TABS) {
+        await ES(`document.querySelector('.settings-nav-item[data-target="${id}"]').click()`)
+        await sleep(120)
+        switched[id] = await ES(`(() => ({
+          visible: [...document.querySelectorAll('.settings-section')].filter((s) => !s.hidden).map((s) => s.dataset.section),
+          active: document.querySelector('.settings-nav-item.is-active')?.dataset.target ?? null
+        }))()`)
+      }
+      const tabsOk = TABS.every((id) => switched[id].visible.length === 1 && switched[id].visible[0] === id && switched[id].active === id)
+
+      // ── (a cont.) the chosen tab survives a leave/return ─────────────────────
+      await ES(`document.querySelector('.settings-nav-item[data-target="browser"]').click()`)
+      await sleep(200)
+      const storedTab = await ES<string | null>(`localStorage.getItem('mogging.settingsTab')`)
+      await ES(`document.querySelector('.settings-back').click()`) // leave
+      await sleep(400)
+      await ES(`(document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click(), 1)`)
+      await sleep(500)
+      const restored = await ES<string | null>(`document.querySelector('.settings-nav-item.is-active')?.dataset.target ?? null`)
+      const persistOk = storedTab === 'browser' && restored === 'browser'
+
+      // ── (b) the spacing CLAIM, measured on a light tab ───────────────────────
+      await ES(`document.querySelector('.settings-nav-item[data-target="terminal"]').click()`)
+      await sleep(250)
+      const spacing = await ES<{ colMax: number; pagePad: number; cardPad: number; fgGap: number; groups: number }>(`(() => {
+        const main = document.querySelector('.settings-page > .two-column-main')
+        const page = document.querySelector('.settings-page')
+        const card = document.querySelector('.settings-section[data-section="terminal"] .card')
+        const body = card.querySelector('.card-body')
+        return {
+          colMax: parseFloat(getComputedStyle(main).maxWidth),
+          pagePad: parseFloat(getComputedStyle(page).paddingLeft),
+          cardPad: parseFloat(getComputedStyle(card).paddingTop),
+          fgGap: parseFloat(getComputedStyle(body).rowGap),
+          groups: body.querySelectorAll(':scope > .field-group').length
+        }
+      })()`)
+      // --sp-6 page padding, --sp-4 card padding, >= --sp-3 between sibling knobs.
+      const spacingOk =
+        spacing.colMax > 0 && spacing.pagePad >= 32 && spacing.cardPad >= 16 && spacing.fgGap >= 12 && spacing.groups === 2
+
+      // ── (d) the theme still applies live from the Appearance card ────────────
+      await ES(`document.querySelector('.settings-nav-item[data-target="appearance"]').click()`)
+      await sleep(200)
+      const before = await ES<string>(`getComputedStyle(document.documentElement).getPropertyValue('--bg-app')`)
+      await ES(`(() => {
+        const seg = document.querySelector('.settings-section[data-section="appearance"] .segmented')
+        const btn = [...seg.querySelectorAll('.segmented-item')].find((b) => /light/i.test(b.textContent))
+        btn.click()
+      })()`)
+      await sleep(400)
+      const after = await ES<string>(`getComputedStyle(document.documentElement).getPropertyValue('--bg-app')`)
+      const themeLiveOk = before.trim() !== after.trim() && !!after.trim()
+
+      // ── (e) AA contrast, every theme, every text class the shell introduces ──
+      // A `.settings-error` only exists after a failed profile save, so its class is
+      // measured on a clone parked in the same card it would render in.
+      await ES(`(() => {
+        const host = document.querySelector('.settings-section[data-section="appearance"] .card-body')
+        if (!document.querySelector('.settings-probe-error')) {
+          const p = document.createElement('p')
+          p.className = 'settings-error settings-probe-error'
+          p.textContent = 'probe'
+          host.append(p)
+        }
+      })()`)
+
+      const themes = ['midnight', 'light', 'nord', 'solarized']
+      const contrast: Record<string, Record<string, number | null>> = {}
+      const failures: string[] = []
+      for (const t of themes) {
+        await ES(`window.__mogging.setTheme('${t}')`)
+        await sleep(300)
+        // The active nav item and the tab head only exist on a selected tab.
+        contrast[t] = await ES(`(() => {${CONTRAST}
+          const out = {}
+          for (const sel of ${JSON.stringify(PROBES)}) out[sel] = measure(sel)
+          return out
+        })()`)
+        for (const [sel, r] of Object.entries(contrast[t])) {
+          if (r != null && r < AA_TEXT) failures.push(`${t} ${sel} = ${r}`)
+        }
+      }
+      // Every probe must have been FOUND in at least one theme — a null everywhere
+      // means the selector rotted and the whole check silently passed on nothing.
+      const missing = PROBES.filter((sel) => themes.every((t) => contrast[t][sel] == null))
+      const contrastOk = failures.length === 0 && missing.length === 0
+
+      await ES(`window.__mogging.setTheme('midnight')`)
+      await ES(`document.querySelector('.settings-probe-error')?.remove()`)
+
+      const pass = navOk && tabsOk && persistOk && spacingOk && themeLiveOk && contrastOk
+      result = {
+        pass,
+        navOk,
+        nav,
+        tabsOk,
+        switched,
+        persistOk,
+        storedTab,
+        restored,
+        spacingOk,
+        spacing,
+        themeLiveOk,
+        before: before.trim(),
+        after: after.trim(),
+        contrastOk,
+        failures,
+        missing,
+        worst: Math.min(...Object.values(contrast).flatMap((m) => Object.values(m).filter((v): v is number => v != null))),
+        contrast
+      }
+    } catch (e) {
+      result = { pass: false, error: String(e) }
+    }
+    try {
+      writeFileSync(join(process.cwd(), 'out', 'setshell-result.json'), JSON.stringify(result, null, 2))
+    } catch {
+      /* best effort */
+    }
+    app.exit(result.pass ? 0 : 1)
+  }
+
+  if (wc.isLoading()) wc.once('did-finish-load', () => setTimeout(() => void run(), 3000))
+  else setTimeout(() => void run(), 3000)
+}

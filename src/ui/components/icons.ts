@@ -31,22 +31,27 @@ export type IconName =
   | 'flag'
   | 'folder'
   | 'folder-open'
+  | 'gauge'
   | 'git-branch'
   | 'globe'
   | 'home'
   | 'info'
   | 'kanban'
+  | 'keyboard'
   | 'layout-grid'
   | 'more'
   | 'panel-left'
   | 'pencil'
+  | 'plug'
   | 'plus'
   | 'rotate-cw'
   | 'search'
+  | 'shield'
   | 'sliders'
   | 'sparkles'
   | 'terminal'
   | 'trash'
+  | 'user'
   | 'x'
 
 const PATHS: Record<IconName, string> = {
@@ -92,6 +97,14 @@ const PATHS: Record<IconName, string> = {
   sliders: '<path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>',
   sparkles:
     '<path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0L14.06 8.5A2 2 0 0 0 15.5 9.94l6.14 1.58a.5.5 0 0 1 0 .96L15.5 14.06a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/>',
+  /* Settings-nav metaphors (8.5/04). A nav of six identical dots is a list, not a map. */
+  gauge: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
+  keyboard:
+    '<rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01"/><path d="M10 8h.01"/><path d="M14 8h.01"/><path d="M18 8h.01"/><path d="M8 12h.01"/><path d="M12 12h.01"/><path d="M16 12h.01"/><path d="M7 16h10"/>',
+  plug: '<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>',
+  shield:
+    '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>',
+  user: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   terminal: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
   trash:
     '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
@@ -103,7 +116,9 @@ const SMALL: Partial<Record<IconName, string>> = {
   // The wavy two-band flag turns to mush at chip size — a plain pennant reads.
   flag: '<path d="M5 21V3"/><path d="M5 4h13l-3 4 3 4H5"/>',
   // Full globe (two meridians) moirés at 12px — one meridian + equator suffices.
-  globe: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20"/>'
+  globe: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20"/>',
+  // Eight key-dots collapse into a smudge at chip size; the frame + spacebar read.
+  keyboard: '<rect width="20" height="16" x="2" y="4" rx="2"/><path d="M7 16h10"/>'
 }
 
 /** Every icon name — the dev icon-sheet renders the whole set from this list. */

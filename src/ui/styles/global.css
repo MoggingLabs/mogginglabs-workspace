@@ -168,6 +168,9 @@
     /* Semantic inks must darken on light to hold AA as text (all ≥4.5:1 on white). */
     --success: #147a3c;
     --danger: #c92e25;
+    /* themes.ts stamps this too, but the pre-JS window would otherwise paint the
+       DARK ink (#fa9b92, ~2.2:1) on a light surface — worse than the bug we fixed. */
+    --danger-ink: #c92e25;
     --warning: #8a5c09;
     --info: #1d63d8;
   }
@@ -827,13 +830,11 @@ button {
    heads); small inline cluster labels (wizard "Your grid"/"Presets") stay
    bare — a division under a 3-item chip row is noise, not rhythm. */
 .home-section > .section-label,
-.settings-section > .section-label,
 .board-lane-head {
   position: relative;
   padding-bottom: var(--sp-3);
 }
 .home-section > .section-label::after,
-.settings-section > .section-label::after,
 .board-lane-head::after {
   content: '';
   position: absolute;
@@ -1939,7 +1940,9 @@ body.resizing * {
   font-size: var(--fs-12);
 }
 
-/* ── Settings — a full-app PAGE (5/05): section nav | scrollable content ────── */
+/* ── Settings — a full-app PAGE (5/05), rebuilt on the primitives (8.5/04) ───── */
+/* The shell is TwoColumn: a grouped nav rail | a scrolling column of Cards. The
+   only spacing here comes from --sp-*; the only widths from --side-w / --page-max. */
 #view-settings {
   flex: 1 1 auto;
   min-height: 0;
@@ -1947,30 +1950,47 @@ body.resizing * {
   justify-content: center;
 }
 .settings-page {
-  display: flex;
-  gap: var(--sp-6);
-  width: min(1040px, 100%);
+  width: min(var(--page-max), 100%);
   min-height: 0;
-  padding: var(--sp-5);
+  padding: var(--sp-6);
+}
+/* TwoColumn's main is the scroll parent's parent — it must be allowed to shrink,
+   or `.settings-content` inherits an auto height and the page scrolls instead. */
+.settings-page > .two-column-main {
+  min-height: 0;
 }
 .settings-nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  width: 200px;
-  flex: none;
+  gap: var(--sp-1);
   align-items: stretch;
 }
 .settings-back {
   align-self: flex-start;
   margin-bottom: var(--sp-3);
 }
+/* Quiet group heads: they name a neighbourhood, they are not controls. */
+.settings-nav-group {
+  padding: var(--sp-3) var(--sp-3) var(--sp-1);
+  color: var(--text-lo);
+  font-size: var(--fs-10);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+}
+.settings-nav-group:first-of-type {
+  padding-top: 0;
+}
 .settings-nav-item {
-  padding: 7px var(--sp-3);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
   border: none;
   border-radius: var(--r-sm);
   background: transparent;
   color: var(--text-mid);
+  font: inherit;
   font-size: var(--fs-13);
   font-weight: var(--fw-medium);
   text-align: left;
@@ -1979,17 +1999,39 @@ body.resizing * {
     background var(--dur-1) var(--ease),
     color var(--dur-1) var(--ease);
 }
+.settings-nav-item svg {
+  flex: none;
+  color: var(--text-lo);
+}
+.settings-nav-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .settings-nav-item:hover {
   background: var(--bg-elevated);
   color: var(--text-hi);
+}
+.settings-nav-item:hover svg {
+  color: var(--text-mid);
+}
+/* A keyboard user could not see where they were: there was no focus rule at all. */
+.settings-nav-item:focus-visible {
+  outline: 2px solid var(--accent-glow);
+  outline-offset: 2px;
 }
 .settings-nav-item.is-active {
   background: var(--accent-weak);
   color: var(--accent-ink);
 }
+.settings-nav-item.is-active svg {
+  color: var(--accent-ink);
+}
 .settings-content {
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -2000,32 +2042,29 @@ body.resizing * {
 .settings-section {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-4);
+  gap: var(--sp-5);
 }
 /* Each tab is its own page: the inactive sections are hidden outright (the
    class rule above would otherwise beat the UA [hidden]=display:none). */
 .settings-section[hidden] {
   display: none;
 }
-.settings-about {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-}
-.settings-about-name {
-  font-size: var(--fs-14);
-  font-weight: var(--fw-semibold);
+/* The tab's own heading outranks the cards under it. */
+.settings-section-head .section-header-title {
+  font-size: var(--fs-20);
+  letter-spacing: var(--track-tight);
 }
 .settings-about-version {
   color: var(--text-lo);
   font-size: var(--fs-12);
   font-family: var(--font-mono);
 }
-
-.settings {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-4);
+/* Consent fine print: the ADR clauses, under the toggles they qualify. */
+.settings-scope {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-lo);
+  font-size: var(--fs-11);
 }
 .settings-row {
   display: flex;
@@ -2035,7 +2074,7 @@ body.resizing * {
 .settings-row-head {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-1);
 }
 .settings-row-label {
   font-size: var(--fs-13);
@@ -2044,7 +2083,7 @@ body.resizing * {
 .settings-row-caption {
   color: var(--text-lo);
   font-size: var(--fs-11);
-  max-width: 52ch;
+  max-width: var(--measure);
 }
 .settings-consents {
   display: flex;
@@ -2066,12 +2105,6 @@ body.resizing * {
   color: var(--success);
   flex: none;
   margin-top: 1px;
-}
-.settings-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
 }
 .checkbox-label {
   font-size: var(--fs-13);
@@ -2618,6 +2651,100 @@ body.resizing * {
 .checkbox.is-disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+/* Toggle row (8.5/04): label left, switch right, hint under the label it explains. */
+.toggle-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+}
+.toggle-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.toggle-row-label {
+  color: var(--text-hi);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+}
+.toggle-row-hint {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+}
+.toggle-row.is-disabled {
+  opacity: 0.55;
+}
+.toggle-row.is-disabled .toggle-row-label,
+.toggle-row.is-disabled .switch {
+  cursor: not-allowed;
+}
+
+/* The switch itself. Sizes are geometry, not spacing — the ramp does not apply. */
+.switch {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  cursor: pointer;
+}
+.switch-input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+.switch-track {
+  display: inline-flex;
+  align-items: center;
+  width: 36px;
+  height: 20px;
+  padding: var(--sp-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  transition:
+    background var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease);
+}
+.switch-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--r-full);
+  background: var(--text-lo);
+  transition:
+    transform var(--dur-1) var(--ease),
+    background var(--dur-1) var(--ease);
+}
+.switch:hover .switch-track {
+  border-color: var(--accent);
+}
+.switch-input:checked + .switch-track {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.switch-input:checked + .switch-track .switch-thumb {
+  transform: translateX(16px);
+  background: var(--accent-contrast);
+}
+.switch-input:focus-visible + .switch-track {
+  outline: 2px solid var(--accent-glow);
+  outline-offset: 2px;
+}
+.switch-input:disabled + .switch-track {
+  cursor: not-allowed;
+}
+@media (prefers-reduced-motion: reduce) {
+  .switch-track,
+  .switch-thumb {
+    transition: none;
+  }
 }
 
 /* ── 6 · SCREEN COMPONENTS ─────────────────────────────────────────────────── */
@@ -3826,9 +3953,12 @@ body.resizing * {
 .ph-spacer {
   flex: 1 1 auto;
 }
+/* --danger-ink, not --danger: the fill red measures 2.93:1 on nord's elevated
+   surface and 3.78:1 on solarized's — below AA for text. Words take the ink. */
 .settings-error {
   margin: 0;
-  color: var(--danger);
+  max-width: var(--measure);
+  color: var(--danger-ink);
   font-size: var(--fs-11);
 }
 /* Board approved chip (deferred 4/03) */

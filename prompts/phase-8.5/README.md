@@ -50,7 +50,7 @@ pasteable as a `/goal`, **≤ 3950 chars**). Execute in order.
 | 01 | `01-ux-audit-and-spacing-tokens.md` | AUDIT.md (every surface graded, keep/fix/remove verdicts, 21st.dev pattern notes) + the spacing scale & layout primitives in tokens/components; typecheck/build green (ships minimal runtime) |
 | 02 | `02-wizard-single-page.md` | The wizard becomes ONE full-app PAGE beside the rail — not a modal (folder · layout · agents at once, breathing room, live summary); WIZARDUX smoke green |
 | 03 | `03-folder-browser.md` | A real visual folder browser (clickable dirs, breadcrumb, keyboard nav, repo badges) under the path bar — one selection, three views; `fs:listDir` read-only; FOLDERPICK smoke green |
-| 04 | `04-settings-shell-revamp.md` | The Settings shell on the new primitives — cards, section headers, spacing, consistent controls; SETSHELL smoke green |
+| 04 | `04-settings-shell-revamp.md` | The Settings shell on the new primitives — grouped nav with icons, per-tab SectionHeader, Cards + FieldGroups + a new ToggleRow; AA measured in all four themes (the first real WCAG probe in the repo); SETSHELL smoke green |
 | 05 | `05-settings-dense-tabs.md` | Integrations + Usage tabs restructured on the primitives (progressive disclosure, no wall-of-knobs); INTEGUX + USAGESET still green + SETTABS asserts |
 | 06 | `06-home-firstrun-polish.md` | Home + first-run checklist visual pass + stale-affordance removals from AUDIT.md; HOMEUX smoke green |
 | 07 | `07-board-palette-feedback.md` | Board, palette, toasts, empty states, confirms — one feedback language; BOARDUX smoke green |

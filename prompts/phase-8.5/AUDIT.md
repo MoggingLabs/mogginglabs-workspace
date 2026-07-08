@@ -47,13 +47,13 @@ to `--sp-7/8`, and adds the readable-column caps the app never had.
 | **Wizard — Agents** | **F → A** | **done (02)** | Was: `padding: 5px`, 8 flat siblings, no cards, four control heights in one row |
 | Home | C+ | fix | Bordered recents separated by a **4px** seam that reads as a rendering artifact |
 | First-run checklist | B− | keep+fix | Structure sound (one card, per-row icons); the `<code>` chip (1px pad) and copy button (3px pad) share no baseline and wrap |
-| Settings — shell | C | fix | `.settings-content` has no left/top padding; nav items `7px` tall-ish; no cards anywhere |
-| Settings — Appearance / Terminal | B | keep | Clean, but Appearance is a tab holding one control |
-| Settings — Profiles & hosts | D | fix | A full CRUD surface wedged into a label/caption/control `row()`; five placeholder-as-label inputs |
+| Settings — shell | C → **A** | **done (04)** | Was: no left/top padding, nav items `7px` tall-ish, no cards. Now TwoColumn + grouped nav + Cards; `7px` → `--sp-2`, the only shell spacing violation |
+| Settings — Appearance / Terminal | B → **A** | **done (04)** | Cards + FieldGroups. Appearance still holds one control — a card's head is that control's label, so it is no longer a bare row |
+| Settings — Profiles & hosts | D → **C** | part (04) | 04 gave it the page frame (a Card with a real head) and killed `row()`. The five placeholder-as-label inputs are `profiles-hosts.ts` internals — **unowned by any step**; see § Deviations #8 |
 | Settings — Usage | D− | fix | 7 sections always open; 20 controls with zero attention states permanently expanded |
 | **Settings — Integrations** | **F** | fix | 9 sections at once; `.mgr-chip` is a **1px-vertical-padding button** and the only click target for needs-auth/drift |
-| Settings — Privacy / Browser | D | fix | One checkbox whose caption is a 340/380-character policy paragraph at 11px |
-| Settings — Shortcuts | B | keep | One source, CI-enforced. Only a `5px` padding + `0.08em` tracking to fix |
+| Settings — Privacy / Browser | D → **A** | **done (04)** | ToggleRows with per-switch hints; every ADR clause kept, redistributed into a card caption + `.settings-scope` |
+| Settings — Shortcuts | B | keep | One source, CI-enforced. Framed in a Card by 04; the `5px` padding + `0.08em` tracking live in `shortcuts.ts`'s own CSS — 08 owns them |
 | Settings — About | A | **done** | Rebuilt in this step on the four primitives |
 | Board | D | fix | Phantom flex items waste 29% of a bare card; chips overflow; the ⋯ menu is clipped by the lane scroller |
 | Palette | C− | fix | Empty query = "first 12 commands whose feature mounted first"; no rank, no sections, no match highlighting |
@@ -157,7 +157,7 @@ Status: **✅ = executed**. 02 cleared every wizard row.
 | 7 | `.board-lane-count` | `global.css:3372-3378` | `CountBadge()` (`pill.ts:22`) — which also brings `tabular-nums`, so **the count stops jittering** as cards drag. | 07 |
 | 8 | `CountBadge` / `TextInput` / `mount` exports | `pill.ts:22`, `input.ts:13`, `dom.ts:76` | Dead — **zero call sites repo-wide**. *(Except: adopt `CountBadge` per #7 first, then it's live.)* | 07 |
 | 9 | `.pill--accent` / `--success` / `--danger` | `global.css:425,430,434` | Dead — `Pill()` has one call site, tone `'warning'`. | 07 |
-| 10 | `.settings-footer` | `global.css:1886-1891` | Dead — vestige of Settings-as-a-modal; Phase-5/05 made it a full page with a left nav + Back. | 04 |
+| ✅ 10 | `.settings-footer` | `global.css:2070-2075` (cited line was stale) | Dead — vestige of Settings-as-a-modal; Phase-5/05 made it a full page with a left nav + Back. Deleted with `.settings-about`, `.settings-about-name` and a bare `.settings` rule, all equally orphaned. | 04 ✅ |
 | 11 | `.pane-badge` CSS block (keep the class) | `global.css:1741-1746` | Duplicates `.pane-head-left`; its `flex:none` is **inert** (the element is a grid item). Its comment — and `terminal-pane.ts:352` — claim it is "the DOM contract of the launch/milestone smokes". **Grep: zero smokes reference `.pane-badge`.** Fix the comments too. | 08 |
 | 12 | `#app.rail-collapsed .workspace-tab:hover .ws-count` | `global.css:1163-1165` | Dead — `.ws-count` is already `display:none` in collapsed rail (`:1144`). | 08 |
 | 13 | `.browser-ws-chip:hover {}` (empty ruleset) | `global.css:3721-3722` | Dead as written. It *is* a `<button>` and the only dock chrome with no hover feedback — give it the `.browser-agentweb-sites:hover` treatment. | 08 |
@@ -297,20 +297,28 @@ node scripts/check-spacing.mjs --max 28   # the gate (exits 1 above the ceiling)
 > numbers, so the rule now ships as `scripts/check-spacing.mjs` (node, no deps),
 > which is what step 09 gates on. The buckets below are the corrected ones.
 
-**Baseline at the close of 01: 33 violations.** After 02: **28** (the wizard
-bucket is clear). Plus **4** `clamp()` spacing bypasses (`.home-logo`,
+**Baseline at the close of 01: 33 violations.** After 02: **28** (the wizard bucket
+is clear). After 04: **27**. Plus **4** `clamp()` spacing bypasses (`.home-logo`,
 `.home-welcome`, `.home-ctas`, `.home-sections`) that the px checker cannot see —
 06 owns them. Existing violations are *listed, not mass-fixed*; steps 02–08 burn
 them down per surface. The number must **never rise**.
 
+The old "04 + 05" row hid the split. The `settings` bucket's 7 was **1 shell** +
+**6 mega-tab**: only `.settings-nav-item { padding: 7px }` belonged to the shell.
+
 | Owner step | Surface bucket | At 01 | Now |
 |---|---|---|---|
 | **02** | wizard · path-input · layout tiles · grid-preview | 5 | **0 ✓** |
-| 04 + 05 | settings · integux · trail · mgr · cat · toolplan · usage · evbridge · ph | 7 | 7 |
+| **04** | settings shell (nav · page · content · section · row) | 1 | **0 ✓** |
+| 05 | integux · trail · mgr · cat · toolplan · usage · evbridge · ph | 6 | 6 |
 | 06 | home · firstrun · update | 4 | 4 (+ the 4 `clamp()`s) |
 | 07 | board · palette · toast · confirm · review · modal · menu · pill | 10 | 10 |
 | 08 | pane · titlebar · workspace-tab · rail · dock · shortcuts · layout-menu | 6 | 6 |
 | — | shared primitives / misc | 1 | 1 |
+
+> The gate measures **drift**, not hitbox size: `.mgr-chip { padding: 1px var(--sp-2) }`
+> and `.trail-btn { padding: 2px var(--sp-2) }` — the two worst click targets in the
+> app — use *sanctioned* px and are invisible to it. 05 must fix them by eye.
 
 Radius is a *separate* ramp with **no** off-ramp (`--r-sm/md/lg/full`). Chrome
 currently ships `3px`, `4px`, `5px` and `6px` radii with no token behind three of
@@ -339,9 +347,13 @@ them (§ Chrome). Step 08 either adds `--r-xs: 3px` or folds them into `--r-sm`.
    precedent, danger-as-**words** now takes `--danger-ink` (`#fa9b92` dark,
    `#c92e25` light); danger-as-**fill** keeps `--danger`. Measured across all four
    themes: **0 failures, worst pair 4.52:1.**
-   *Note for step 04:* `.settings-error` (`global.css:3603`) still renders
-   `var(--danger)` as text — **a pre-existing, app-wide AA failure on nord and
-   solarized.** Repoint it to `--danger-ink`. Not done here: this step is additive.
+   *Note for step 04:* `.settings-error` still renders `var(--danger)` as text —
+   **a pre-existing, app-wide AA failure on nord and solarized.** Repoint it to
+   `--danger-ink`. Not done here: this step is additive.
+   **✅ Done in 04**, plus a gap 01 did not see: the light *first-paint* media block
+   overrides `--danger` but never `--danger-ink`, so the repoint alone would have
+   painted the DARK ink (#fa9b92, ≈2.2:1) on a light surface until JS pinned a
+   theme — worse than the bug. Both are fixed, and SETSHELL now measures it.
 5. **`TwoColumn`'s first *feature* customer is step 04**, not 01. Rewiring the
    Settings shell is 04's explicit scope, and 01's guardrail forbids behavior
    changes beyond the About tab. It ships exercised — the About card lays its
@@ -351,6 +363,14 @@ them (§ Chrome). Step 08 either adds `--r-xs: 3px` or folds them into `--r-sm`.
    label+caption above the control, and 04/05 replace `row()` with `FieldGroup`;
    matching the existing pattern makes that a swap, not a re-layout.
    `hintPlacement: 'below-control'` is available for result-caveat hints.
+
+8. **`profiles-hosts.ts`'s internals are unowned.** The Grades table marks
+   "Settings — Profiles & hosts" **D / fix**, but no step's prompt claims it: 04
+   covers "the shell and the light tabs", 05 covers "Integrations + Usage". 04 gave
+   it the page frame (a Card with a real head, replacing the `row()` whose label was
+   "Pointer sets only"), so it is no longer a bare wall. Its five placeholder-as-label
+   inputs remain. **Recommend: fold into 05**, which is already inside this feature
+   folder, rather than leave a D-graded surface with no owner.
 
 7. **02 kept the per-slot profile picker on its agent row**, though the step's
    brief listed it among the controls to collapse behind "Advanced". A profile is

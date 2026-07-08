@@ -253,7 +253,10 @@ export function runGallery(win: BrowserWindow): void {
           // then the plans × profiles + pace/alerts blocks, then privacy.
           await ES(`(document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click(), 1)`)
           await sleep(300)
-          await ES(`document.querySelector('.settings-section[data-section="usage"]')?.scrollIntoView({ block: 'start' })`)
+          // SELECT the tab, don't just scroll to it. Every inactive section carries
+          // `hidden`, so scrollIntoView on one is a no-op and the shot silently
+          // photographs whichever tab `mogging.settingsTab` happened to restore.
+          await ES(`document.querySelector('.settings-nav-item[data-target="usage"]')?.click()`)
           await sleep(600)
           await snap(`${tag}-usage-settings`)
           await ES(`document.querySelector('.usage-plans-block')?.scrollIntoView({ block: 'start' })`)
@@ -271,7 +274,7 @@ export function runGallery(win: BrowserWindow): void {
           recordTrail({ ts: seedTs - 12_000, source: 'web', workspaceId: galleryWs, verb: 'confirm', target: 'https://staging.example.dev', outcome: 'confirmed' })
           recordTrail({ ts: seedTs - 5_000, source: 'mcp', workspaceId: galleryWs, verb: 'send_to_pane', target: 'pane 102', outcome: 'ok', pane: '101' })
           flushTrailForSmoke()
-          await ES(`document.querySelector('.settings-section[data-section="integrations"]')?.scrollIntoView({ block: 'start' })`)
+          await ES(`document.querySelector('.settings-nav-item[data-target="integrations"]')?.click()`)
           await sleep(500)
           await snap(`${tag}-integrations-settings`) // servers registry + grants (8/06)
           await ES(`document.querySelector('.trail-activity')?.scrollIntoView({ block: 'start' })`)
@@ -279,6 +282,18 @@ export function runGallery(win: BrowserWindow): void {
           await sleep(500)
           await snap(`${tag}-integrations-activity`)
           clearTrail(galleryWs)
+          // 8.5/04: the rebuilt shell — grouped nav with icons, per-tab
+          // SectionHeader, Cards. Appearance and the two consent tabs carry the
+          // ToggleRow; shoot all three so the switch is reviewable in both themes.
+          await ES(`document.querySelector('.settings-nav-item[data-target="appearance"]')?.click()`)
+          await sleep(400)
+          await snap(`${tag}-settings-shell`)
+          await ES(`document.querySelector('.settings-nav-item[data-target="terminal"]')?.click()`)
+          await sleep(350)
+          await snap(`${tag}-settings-terminal`)
+          await ES(`document.querySelector('.settings-nav-item[data-target="privacy"]')?.click()`)
+          await sleep(350)
+          await snap(`${tag}-settings-privacy`)
           // 8.5/01: About is the layout primitives' first live customer —
           // Card + SectionHeader + TwoColumn + FieldGroup, staged in both themes
           // so the ramp's rhythm is reviewable before 02-08 adopt it everywhere.

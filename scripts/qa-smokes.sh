@@ -186,6 +186,7 @@ run_smoke INTEGUX      MOGGING_INTEGUX   1 240 integux
 run_smoke INTEGMILESTONE MOGGING_INTEGMILESTONE 1 300 integmilestone
 run_smoke WIZARDUX     MOGGING_WIZARDUX  1 180 wizardux
 run_smoke FOLDERPICK   MOGGING_FOLDERPICK 1 240 folderpick
+run_smoke SETSHELL     MOGGING_SETSHELL  1 240 setshell
 
 echo ""
 echo "══ SWEEP RESULTS ══"
