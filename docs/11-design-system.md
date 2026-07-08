@@ -14,6 +14,19 @@ AA thresholds used: **4.5:1** for text/icon-grade ink, **3:1** for non-text UI.
 > `rgba()` and measuring it against `transparent` scores it as pure black). It runs
 > in **all four themes** on every text class the Settings shell introduces, and it
 > fails the gate below 4.5:1. Worst measured ratio at 8.5/04: **4.71:1**.
+>
+> **Freeze before you measure.** The probe injects
+> `*, *::before, *::after { transition: none !important; animation: none !important }`
+> and removes it afterwards. Without that it is load-dependent: `.settings-nav-item`
+> transitions `background` and `color`, `setTheme()` swaps `--accent-ink` /
+> `--accent-weak`, and a busy machine leaves the fade mid-flight when
+> `getComputedStyle` samples it. SETSHELL read **1.72:1** inside a 55-gate sweep and
+> **4.71:1** standalone, on identical DOM. It also probes
+> `.settings-nav-item:not(.is-active)` and `.settings-nav-item.is-active` as separate
+> nodes: the active item is first in the DOM, so a bare selector measures it twice and
+> silently never checks the other state. When 8.5/06 lifts the probe into
+> `src/main/aa-probe.ts`, the freeze goes with it — **inside** the exported call, so a
+> caller cannot forget what it never had to remember.
 
 Rules (enforced by grep, see § Guardrails):
 
