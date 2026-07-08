@@ -45,6 +45,18 @@ kill_electron() {
   fi
 }
 
+# `npm run dev` returns the moment the smoke calls app.exit(), but the
+# electron-vite it spawned lingers a few seconds tearing down its watcher — and
+# it is node.exe, so kill_electron never caught it. If the next gate starts
+# inside that window, the dying watcher clears out/main/index.js while the new
+# gate's Electron is loading it: "App threw an error during load / ENOENT". The
+# gate never runs and reads as MISSING. Intermittent by nature (an idle machine
+# sweeps clean; a busy one drops gates), so reap it explicitly, every time.
+# Only THIS repo's electron-vite is killed — see scripts/kill-devservers.mjs.
+kill_devserver() {
+  node scripts/kill-devservers.mjs --quiet >/dev/null 2>&1 || true
+}
+
 # Short temp root, NOT bare mktemp -d: the daemon binds a unix socket at
 # $iso/local/MoggingLabs/run/v3/daemon-<pid>.sock and macOS caps sun_path at
 # 104 bytes — macOS's default $TMPDIR (/var/folders/…) blows that limit.
@@ -91,6 +103,11 @@ run_smoke() {
     env $extra "$var=$val" "$TIMEOUT_BIN" "$timeout_s" npm run dev >"$iso/$name.log" 2>&1
   local v
   v=$(verdict "$result")
+  # A gate that never booted is NOT a gate that failed. Say so, loudly, and once
+  # — a silent MISSING sends you hunting a product bug that never existed.
+  if [ "$v" = "MISSING" ] && grep -q "App threw an error during load" "$iso/$name.log" 2>/dev/null; then
+    v="BOOTFAIL"
+  fi
   RESULTS+=("$name $v")
   echo "  $v"
   # On a non-PASS, surface the smoke's own flags into the job log (artifacts
@@ -98,9 +115,14 @@ run_smoke() {
   # platform root cause without a second dispatch.
   if [ "$v" != "PASS" ]; then
     echo "  ── $result diagnostics ──"
-    node -e "try{console.log(JSON.stringify(JSON.parse(require('fs').readFileSync('out/$result-result.json','utf8')),null,0))}catch(e){console.log('(no result json)')}" 2>/dev/null | sed 's/^/  /'
+    if [ "$v" = "BOOTFAIL" ]; then
+      grep -m3 -A2 "App threw an error during load" "$iso/$name.log" 2>/dev/null | sed 's/^/  /'
+    else
+      node -e "try{console.log(JSON.stringify(JSON.parse(require('fs').readFileSync('out/$result-result.json','utf8')),null,0))}catch(e){console.log('(no result json)')}" 2>/dev/null | sed 's/^/  /'
+    fi
   fi
   kill_electron
+  kill_devserver
   # A two-phase pair's phase A must leave its daemon+state for phase B; everything
   # else (including each pair's phase B) cleans up.
   if [ -z "$reuse" ] || [ "$name" = "TEMPLATE_B" ] || [ "$name" = "PROFPERSIST_B" ]; then kill_daemon "$iso"; fi
@@ -164,3 +186,12 @@ run_smoke WIZARDUX     MOGGING_WIZARDUX  1 180 wizardux
 echo ""
 echo "══ SWEEP RESULTS ══"
 printf '%s\n' "${RESULTS[@]}"
+BAD=$(printf '%s\n' "${RESULTS[@]}" | grep -cv ' PASS$' || true)
+echo ""
+if [ "$BAD" -eq 0 ]; then
+  echo "ALL ${#RESULTS[@]} GATES PASS"
+else
+  echo "$BAD of ${#RESULTS[@]} gates did not pass:"
+  printf '%s\n' "${RESULTS[@]}" | grep -v ' PASS$' | sed 's/^/  /'
+  exit 1
+fi
