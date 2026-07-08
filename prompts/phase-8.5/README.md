@@ -35,13 +35,14 @@ pasteable as a `/goal`, **≤ 3950 chars**). Execute in order.
 > missing vocabulary: `Card` · `SectionHeader` · `FieldGroup` · `TwoColumn`.
 > Every later step consumes those; `node scripts/check-spacing.mjs` is the gate.
 
-> **Ground truth**: the wizard WAS a 3-step modal (`src/ui/features/wizard/
-> index.ts`, ~944 lines); 02 made it a full page (`#view-wizard`); the folder input is
-> `createPathInput` (`src/ui/components/input.ts` — a typed path/`cd` bar +
-> native Browse); Settings is `src/ui/features/settings/` (index 402 ·
+> **Ground truth**: the wizard WAS a 3-step modal (`wizard/index.ts`, ~944
+> lines); **02 made it a full page** (`#view-wizard`, beside the rail). The folder
+> input is `createPathInput` (`src/ui/components/input.ts` — a typed path/`cd`
+> bar + native Browse); Settings is `src/ui/features/settings/` (index 402 ·
 > integrations 1174 · usage 638 · profiles-hosts 296 lines) rendered as one
-> nav + hidden sections. Budgets (docs/05 + docs/07) and the 52-gate sweep
-> are the regression net — every step re-runs the perception-critical gates.
+> nav + hidden sections. Budgets (docs/05 + docs/07) and the sweep (52 gates at
+> the start of this pack) are the regression net — every step re-runs the
+> perception-critical gates.
 
 ## Sequence
 | # | File | Gate |
@@ -62,10 +63,12 @@ pasteable as a `/goal`, **≤ 3950 chars**). Execute in order.
 - The wizard is one uncluttered page; a folder is pickable by click alone.
 - Settings reads as a designed product: cards, spacing, section rhythm — no
   wall of unlabeled controls anywhere.
-- All spacing flows from the token scale; grep finds no new hardcoded px
-  margins in feature CSS.
+- All spacing flows from the token scale; `scripts/check-spacing.mjs` finds no
+  new hardcoded px margins in feature CSS.
 - Both perf budgets (MILESTONE + PERCEPTION) unchanged; all pre-existing 52
   gates still green; the new gates green on all four environments.
+- `node scripts/check-spacing.mjs` reports zero violations in every bucket the
+  pack touched, and the total never rises.
 
 ## Guardrails
 - **No new runtime deps** — 21st.dev informs, house code ships (ADR 0004).

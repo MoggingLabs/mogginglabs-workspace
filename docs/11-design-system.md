@@ -243,10 +243,12 @@ re-warm must not hitch).
 
 ## Full-app views (Phase-5/05)
 
-- `AppView = 'home' | 'grid' | 'board' | 'settings'`. Exactly one top-level view
-  owns everything below the titlebar; `#app.view-<x>` (and `#content.view-<x>`)
-  classes route it. The **rail renders only in the grid** (`#app:not(.view-grid)
-  #rail { display:none }`) — a launcher full of workspace tabs made no sense.
+- `AppView = 'home' | 'grid' | 'board' | 'settings' | 'wizard'`. Exactly one
+  top-level view owns everything below the titlebar; `#app.view-<x>` (and
+  `#content.view-<x>`) classes route it. The **rail renders in the grid and the
+  wizard** (`#app:not(.view-grid):not(.view-wizard) #rail { display:none }`) —
+  a launcher full of workspace tabs made no sense, but the wizard is the grid's
+  own setup page, so you pick the next workspace beside the ones you have.
   View trips are pure CSS show/hide: the grid and its panes are NEVER unmounted
   (GL-warm + scrollback guarantees hold; smoke-asserted).
 - **Settings is a page**, not a modal: left section nav (Appearance · Terminal ·

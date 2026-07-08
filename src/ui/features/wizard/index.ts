@@ -329,6 +329,7 @@ export const wizardFeature: UiFeature = {
     // is non-null for the lifetime of an open modal.
     let path!: PathInputHandle
     let whereCard!: HTMLElement
+    let nameInputEl!: HTMLInputElement
     let recentsHost!: HTMLElement
     let layoutCaption!: HTMLElement
     let agentsCaption!: HTMLElement
@@ -433,6 +434,7 @@ export const wizardFeature: UiFeature = {
           if (e.key === 'Enter') void tryLaunch(false)
         }
       })
+      nameInputEl = nameInput
 
       recentsHost = el('div', { class: 'wizard-recents' })
 
@@ -499,8 +501,7 @@ export const wizardFeature: UiFeature = {
                   .catch(() => undefined)
                 if (!name) {
                   name = r.name
-                  const input = whereCard.querySelector<HTMLInputElement>('input.input:not(.path-input-field)')
-                  if (input) input.value = r.name
+                  nameInputEl.value = r.name
                 }
               }
             },
