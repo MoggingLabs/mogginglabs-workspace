@@ -41,8 +41,8 @@ pasteable as a `/goal`, **≤ 3950 chars**). Execute in order.
 > bar + native Browse); Settings is `src/ui/features/settings/` (index 402 ·
 > integrations 1174 · usage 638 · profiles-hosts 296 lines) rendered as one
 > nav + hidden sections. Budgets (docs/05 + docs/07) and the sweep (52 gates at
-> the start of this pack) are the regression net — every step re-runs the
-> perception-critical gates.
+> the start of this pack; **66 at freeze** — § Freeze) are the regression net —
+> every step re-runs the perception-critical gates.
 
 ## Sequence
 | # | File | Gate |
@@ -99,3 +99,65 @@ pasteable as a `/goal`, **≤ 3950 chars**). Execute in order.
 Settings), Lane C (06 → 07 → 07b → 08 → 08b → 08c, the rest; 08c also needs 05b). 09
 needs all lanes.
 Solo execution runs 01 → 09 in order (house rule: no parallel agents).
+
+## Freeze — Phase-8.5/09 (2026-07-09)
+
+The pack is **frozen**. Every surface shipped at grade **A**, every gate green on
+four environments, both perf budgets unmoved. `check-audit.mjs` is the assertion that
+holds it there: AUDIT.md has no Grades row below A and no unrouted finding.
+
+**Commit range:** `7397938..2d4f765` (pack open → freeze). It landed in phased
+commits — 05b/06/07/07b together in `489ee3a`, 08/08b/08c in `3862a2b`, the
+audit-of-the-audit in `19c2b9a`; the 09 milestone + coverage gate in `638481f`, its two
+certification platform-find fixes in `b6548b1` (pane-header) and `2d4f765` (FOLDERPICK).
+
+| Step | Gate | Done |
+|---|---|---|
+| 01 — audit + layout primitives | AUDIT.md · check-spacing | ✅ `7ce218c` |
+| 02 — wizard, one page | WIZARDUX | ✅ `7937bf1` |
+| 03 — folder browser | FOLDERPICK | ✅ `d07af48` |
+| 04 — Settings shell | SETSHELL | ✅ `5a325be` |
+| 05 — Integrations (F → A) | SETINTEG | ✅ `6c03c35` |
+| 05b — Usage + profiles | SETUSAGE | ✅ `489ee3a` |
+| 06 — Home + first-run | HOMEUX | ✅ `489ee3a` |
+| 07 — board + palette | BOARDUX | ✅ `489ee3a` |
+| 07b — feedback family | FEEDBACKUX | ✅ `489ee3a` |
+| 08 — chrome (radius ramp decided) | CHROMEUX | ✅ `3862a2b` |
+| 08b — dock possession + shortcuts | DOCKUX | ✅ `3862a2b` |
+| 08c — Usage-glance recut | USAGEGLANCE | ✅ `3862a2b` |
+| 09 — milestone + freeze | UXMILESTONE · check-audit | ✅ `638481f`…`2d4f765` |
+
+**The 09 freeze gates (measured, not asserted):**
+- `MOGGING_UXMILESTONE` — the whole revamp composed in one fixture world, zero
+  network; every legacy DOM hook resolves; a seeded attention chip shows through a
+  **collapsed** header on both Settings surfaces. Safety **AA undimmed**: worst
+  **4.72:1** across four themes (possession label, consent copy, an attention chip,
+  the review-gate indicator, the trail's "never sent anywhere" line). Budgets sampled
+  DURING the composed surface against the UNCHANGED `docs/05` numbers — worst frame
+  gap **13.9ms** (budget 150), heap **20MB** (budget 300), 0 frames > 100ms. It also
+  earned its keep: it caught `--danger-ink` on the tinted `--danger-weak` chip fill at
+  4.45:1 on light (below AA on a ground the plain-surface pairs never covered), now
+  darkened to `#c02820` (~4.87:1) — see AUDIT § Deviations 4.
+- `check-audit.mjs` — no Grades row below A, all 21 REMOVE rows ✅, all **16** bugs
+  owned + resolved, both Blockers discharged, all 9 Deviations resolved.
+- `check-spacing.mjs --max 0` — 0 violations, every bucket including the shared row.
+
+**Four-environment certification.** Full uncut sweeps — all **66 gates** (64 Electron
+smokes + the two static gates AUDIT · SPACING) green on local Windows AND all three CI
+OSes in one clean dispatch: run
+[**29006301457**](https://github.com/MoggingLabs/mogginglabs-workspace/actions/runs/29006301457).
+
+| Environment | Gates | Notes |
+|---|---|---|
+| local Windows 11 | **66/66** | full sweep; MILESTONE + BOARDUX green on standalone re-run (the contention pattern; RAM 6.7 GB) |
+| CI Windows | **66/66** | `windows-latest` · Git Bash · `MOGGING_CI_GPU=soft` |
+| CI Linux | **66/66** | `ubuntu-latest` · xvfb · gnome-keyring · `MOGGING_CI_GPU=soft` |
+| CI macOS | **66/66** | `macos-26` · coreutils · `MOGGING_CI_GPU=soft` |
+
+The first dispatch (`29002525980`) surfaced two platform finds — the pane-header
+one-line proxy on soft-GL (CHROMEUX + UXMILESTONE) and the FOLDERPICK deny fixture on
+the windows-CI runner — both root-caused (`b6548b1`, `2d4f765`), then re-certified clean
+above. `REPORT.md` carries the root causes. Nightly crons stay enabled.
+
+**Next:** `prompts/phase-9/` (Loops — standing harnesses; ADR 0009) is authored and
+holds. 8.5 hands off with the sweep at 66 gates and both budgets frozen.

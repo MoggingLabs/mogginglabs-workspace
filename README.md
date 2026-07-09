@@ -64,6 +64,10 @@ renderer is tuned once and behaves identically everywhere. See
 > FOLDERPICK · SETSHELL · SETINTEG · SETUSAGE · HOMEUX · BOARDUX · FEEDBACKUX · CHROMEUX ·
 > DOCKUX · USAGEGLANCE · UXMILESTONE, plus the two static gates AUDIT · SPACING). Design
 > system: [`docs/11`](docs/11-design-system.md).
+> Certified across **four environments** — all **66/66** green on local Windows AND all
+> three CI OSes (Linux · macOS · Windows) in one clean dispatch, run **29006301457**;
+> per-OS numbers + platform-find root causes in `prompts/phase-8.5/README.md` +
+> `prompts/phase-8.5/REPORT.md`.
 > (Phase 8 shipped integrations, five directions — `docs/14`; Phase 6 shipped v0.4.0:
 > the browser dock + first-run/update UX + signing readiness.)
 
