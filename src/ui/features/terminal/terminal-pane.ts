@@ -413,9 +413,14 @@ export class TerminalPane {
     const copyChord =
       (cmd && k === 'c') || (ctrl && e.shiftKey && k === 'c') || (ctrl && k === 'insert')
     const bareCtrlC = ctrl && !e.shiftKey && k === 'c'
-    if ((copyChord || bareCtrlC) && this.term.hasSelection()) {
+    // Guard on the selection TEXT, not hasSelection(): xterm reports a selection RANGE
+    // over blank cells as true while getSelection() is ''. Guarding on the range made
+    // Ctrl+C over empty cells copy '' — silently WIPING the clipboard — and swallowed
+    // the SIGINT the user actually wanted.
+    const selectionText = this.term.getSelection()
+    if ((copyChord || bareCtrlC) && selectionText) {
       e.preventDefault()
-      void copyText(this.term.getSelection(), 'terminal')
+      void copyText(selectionText, 'terminal')
       // Copying consumes the selection, so a second Ctrl+C sends SIGINT as usual —
       // otherwise a stale selection would swallow every interrupt for the rest of the session.
       this.term.clearSelection()
@@ -627,8 +632,9 @@ export class TerminalPane {
         body: 'The inserted path points at a file on THIS machine — the remote host cannot see it unless a mount shares it.'
       })
     }
-    // A trailing space so the next thing typed is a new argument, not a suffix.
-    terminalClient.write({ id: this.id, data: quoted + ' ' })
+    // Padded on BOTH sides (user-specified): the leading space detaches the path from
+    // whatever is already at the cursor, the trailing one starts the next argument.
+    terminalClient.write({ id: this.id, data: ' ' + quoted + ' ' })
     this.term.focus()
 
     // Remembered in the Clipboard tab, but NOT put on the system clipboard — a drag is

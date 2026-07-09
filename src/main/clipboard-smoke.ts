@@ -290,8 +290,133 @@ async function probeRealFileDrop(win: BrowserWindow): Promise<{ realDropPath: st
   }
 }
 
+/**
+ * The user's reported sequence, replayed verbatim: copy A outside the app, copy B
+ * outside the app, click Copy on A's history row, Ctrl+V into a terminal — the paste
+ * MUST produce A. The paste is fired with webContents.paste(), which emits the same
+ * DOM `paste` event a physical Ctrl+V's default action does — unlike the synthetic
+ * ClipboardEvent in the main script, this one carries Chromium's own reading of the
+ * system clipboard, so a stale read is CAUGHT here. Also drives select-to-copy and
+ * the Ctrl+C-with-selection chord, so every copy path the user can perform by hand
+ * is exercised by machine.
+ */
+async function probeUserSequence(win: BrowserWindow): Promise<Record<string, unknown>> {
+  const exec = (code: string): Promise<unknown> => win.webContents.executeJavaScript(code, true)
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+  try {
+    // 1. Two copies "in Windows" — a main-side writeText is indistinguishable from
+    //    another app's copy; the watcher must record both.
+    clipboard.writeText('WINCOPY_A_5591')
+    await sleep(1300) // > one 800 ms poll tick
+    clipboard.writeText('WINCOPY_B_5591')
+    await sleep(1300)
+    const recorded = (await exec(`(async () => {
+      const h = await window.bridge.invoke('clipboard:history')
+      return h.some(e => e.preview === 'WINCOPY_A_5591') && h.some(e => e.preview === 'WINCOPY_B_5591')
+    })()`)) as boolean
+
+    // 2. Copy paths driven from the terminal itself: select-to-copy, then the
+    //    Ctrl+C-with-selection chord (synthetic keydown drives our handler directly).
+    //    Raw values are returned, not just verdicts — a false here must name itself.
+    const termCopies = (await exec(`(async () => {
+      const p = window.__mogging.panes[0]
+      if (!p || !p.term) return { selectCopyOk: false, ctrlCOk: false, error: 'no pane' }
+      // Select the first row that HAS text — row 0 of a restored session can be blank,
+      // and a blank selection tests nothing (and must copy nothing; see handleKey).
+      let textRow = -1
+      const buf = p.term.buffer.active
+      for (let r = 0; r < buf.length; r++) {
+        const line = buf.getLine(r)
+        if (line && line.translateToString(true).trim().length >= 9) { textRow = r; break }
+      }
+      if (textRow === -1) return { selectCopyOk: false, ctrlCOk: false, error: 'no text row' }
+      const row0 = buf.getLine(textRow).translateToString(true)
+      p.term.select(0, textRow, 9)
+      const expectedSel = p.term.getSelection()
+      await new Promise(r => setTimeout(r, 400)) // copy-on-select debounce is 120 ms
+      const clip1 = await window.bridge.invoke('clipboard:read')
+      p.term.select(0, textRow, 5)
+      const expectedChord = p.term.getSelection()
+      p.term.textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, bubbles: true, cancelable: true }))
+      await new Promise(r => setTimeout(r, 300))
+      const clip2 = await window.bridge.invoke('clipboard:read')
+      return {
+        selectCopyOk: !!expectedSel && clip1 === expectedSel,
+        ctrlCOk: !!expectedChord && clip2 === expectedChord,
+        row0: row0.slice(0, 40),
+        expectedSel, clip1: String(clip1).slice(0, 40),
+        expectedChord, clip2: String(clip2).slice(0, 40)
+      }
+    })()`)) as { selectCopyOk: boolean; ctrlCOk: boolean }
+
+    // 3. Restore A's row — the settings tab's Copy button path — and confirm the
+    //    SYSTEM clipboard actually changed.
+    const restoredRead = (await exec(`(async () => {
+      const h = await window.bridge.invoke('clipboard:history')
+      const row = h.find(e => e.preview === 'WINCOPY_A_5591')
+      if (!row) return 'NO-ROW'
+      await window.bridge.invoke('clipboard:restore', { id: row.id })
+      return await window.bridge.invoke('clipboard:read')
+    })()`)) as string
+
+    // 4. The REAL paste into the terminal. A must land; B must not. A window-capture
+    //    spy runs BEFORE the pane's own capture listener (outermost element first), so
+    //    it sees the event even though the pane stops propagation — proving whether
+    //    webContents.paste() produced an event at all, on what, carrying what.
+    await exec(`(() => {
+      window.__pasteSpy = []
+      window.addEventListener('paste', (e) => {
+        const t = e.target
+        window.__pasteSpy.push({
+          target: (t && t.tagName || '?') + '.' + (t && t.className || ''),
+          text: String(e.clipboardData ? e.clipboardData.getData('text/plain') : 'NO-DATA').slice(0, 30)
+        })
+      }, true)
+      const p = window.__mogging.panes[0]
+      // Focus the textarea DIRECTLY: term.focus() no-ops when the pane is not laid out
+      // (Home view showing, workspace hidden) — the paste event then lands on <body>,
+      // outside every pane. The textarea itself is focusable regardless.
+      p.term.textarea.focus()
+      return true
+    })()`)
+    await sleep(250)
+    const focusInfo = (await exec(
+      `(() => { const a = document.activeElement; return (a && a.tagName || '?') + '.' + (a && a.className || '') })()`
+    )) as string
+    win.webContents.paste()
+    await sleep(1500)
+    const counts = (await exec(`(() => {
+      const buf = window.__mogging.panes[0].term.buffer.active
+      let all = ''
+      for (let r = 0; r < buf.length; r++) { const l = buf.getLine(r); if (l) all += l.translateToString(true) }
+      return { a: all.split('WINCOPY_A_5591').length - 1, b: all.split('WINCOPY_B_5591').length - 1, spy: window.__pasteSpy }
+    })()`)) as { a: number; b: number; spy: unknown }
+
+    return {
+      seqRecordedExternal: recorded,
+      seqTermCopies: termCopies,
+      seqSelectCopyOk: termCopies.selectCopyOk,
+      seqCtrlCCopyOk: termCopies.ctrlCOk,
+      seqRestoreRead: restoredRead,
+      seqRestoreOk: restoredRead === 'WINCOPY_A_5591',
+      seqFocus: focusInfo,
+      seqPasteCounts: counts,
+      seqPasteCorrect: counts.a === 1 && counts.b === 0,
+      seqPass:
+        recorded &&
+        termCopies.selectCopyOk &&
+        termCopies.ctrlCOk &&
+        restoredRead === 'WINCOPY_A_5591' &&
+        counts.a === 1 &&
+        counts.b === 0
+    }
+  } catch (e) {
+    return { seqPass: false, seqError: String(e).slice(0, 200) }
+  }
+}
+
 export function runClipboardSmoke(win: BrowserWindow): void {
-  setTimeout(() => app.exit(1), 40000) // safety net
+  setTimeout(() => app.exit(1), 90000) // safety net (the user-sequence probe added ~10 s)
   const run = async (): Promise<void> => {
     // Foreground the window: the overlay-animation check rides requestAnimationFrame,
     // which Chromium suspends for occluded windows — and a smoke window launched from a
@@ -308,12 +433,17 @@ export function runClipboardSmoke(win: BrowserWindow): void {
       ipc = { pass: false, ...{ error: String(e) } }
     }
     const realDrop = await probeRealFileDrop(win)
+    const seq = await probeUserSequence(win)
+    // `pass` LAST: the in-page script returns its own `pass`, and an earlier revision
+    // spread `...ipc` after the computed field, letting the script's value overwrite
+    // the aggregate — a green light that ignored the main-side probes.
     const result = {
-      pass: !!(quoting.pass && ipc.pass && realDrop.realDropOk),
       quoting: quoting.detail,
       quotingPass: quoting.pass,
       ...realDrop,
-      ...ipc
+      ...seq,
+      ...ipc,
+      pass: !!(quoting.pass && ipc.pass && realDrop.realDropOk && seq.seqPass)
     }
     try {
       writeFileSync(join(process.cwd(), 'out', 'clipboard-result.json'), JSON.stringify(result, null, 2))
