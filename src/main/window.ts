@@ -21,6 +21,8 @@ export function createMainWindow(): BrowserWindow {
     // native window controls remain, overlaid by the OS — nothing "glued on top".
     titleBarStyle: 'hidden',
     ...(process.platform === 'darwin'
+      // x:14 puts the three traffic lights ~66px in; the renderer's brand clears them
+      // with a matching inset, --traffic-light-inset in global.css. Move one, move both.
       ? { trafficLightPosition: { x: 14, y: 13 } }
       : {
           titleBarOverlay: {

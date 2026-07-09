@@ -47,6 +47,8 @@ import { runSetUsageSmoke } from './setusage-smoke'
 import { runHomeUxSmoke } from './homeux-smoke'
 import { runBoardUxSmoke } from './boardux-smoke'
 import { runFeedbackUxSmoke } from './feedbackux-smoke'
+import { runChromeUxSmoke } from './chromeux-smoke'
+import { runDockUxSmoke } from './dockux-smoke'
 import { registerIntegrations } from './integrations'
 import { registerEventBridge } from './event-bridge'
 import { registerTrail } from './trail'
@@ -68,6 +70,7 @@ import { runFirstRunSmoke } from './firstrun-smoke'
 import { runProductSmoke } from './product-smoke'
 import { runUsageSmoke } from './usage-smoke'
 import { runUsageUiSmoke } from './usageui-smoke'
+import { runUsageGlanceSmoke } from './usageglance-smoke'
 import { runWebUsageSmoke } from './webusage-smoke'
 import { runUsageCliSmoke } from './usagecli-smoke'
 import { runUsageSetSmoke } from './usageset-smoke'
@@ -280,8 +283,10 @@ app.whenReady().then(async () => {
     runFirstRunSmoke(win) // env-gated first-run + update-UX smoke (6/06)
   } else if (process.env.MOGGING_PRODUCT && win) {
     runProductSmoke(win) // env-gated product milestone: installer -> swarm + browser (6/07)
+  } else if (process.env.MOGGING_USAGEGLANCE && win) {
+    runUsageGlanceSmoke(win) // env-gated Usage-GLANCE smoke: the CodexBar-recut popover on fixtures (Phase-8.5/08c)
   } else if (process.env.MOGGING_USAGEUI && win) {
-    runUsageUiSmoke(win) // env-gated usage-UI smoke: gauge + popover on fixtures (Phase-7/03)
+    runUsageUiSmoke(win) // env-gated usage-UI smoke: gauge (re-baselined gauge-only, popover recut → USAGEGLANCE) (Phase-7/03; 8.5/08c)
   } else if (process.env.MOGGING_WEBUSAGE && win) {
     runWebUsageSmoke(win) // env-gated web-session smoke: paste/store-read consent (7/06)
   } else if (process.env.MOGGING_USAGECLI && win) {
@@ -330,6 +335,10 @@ app.whenReady().then(async () => {
     runBoardUxSmoke(win) // env-gated board + palette smoke: aligned chip row, sticky counts, ⋯ un-clip, delete-confirm, palette rank/highlight (Phase-8.5/07)
   } else if (process.env.MOGGING_FEEDBACKUX && win) {
     runFeedbackUxSmoke(win) // env-gated feedback-language smoke: toast family, safe confirm (bug #8), review gate/footer, empty-state actions (Phase-8.5/07b)
+  } else if (process.env.MOGGING_CHROMEUX && win) {
+    runChromeUxSmoke(win) // env-gated chrome-UX smoke: titlebar cluster, rail scroll-fade, one-line pane header, grid-button scope, AA (Phase-8.5/08)
+  } else if (process.env.MOGGING_DOCKUX && win) {
+    runDockUxSmoke(win) // env-gated dock possession + shortcuts smoke: § Blockers #1 guard, possession restyle, KB-01 (Phase-8.5/08b)
   } else if (process.env.MOGGING_USAGE && win) {
     runUsageSmoke(win) // env-gated usage-seam smoke: FAKE adapter only (Phase-7/01)
   } else if (process.env.MOGGING_ATTENTION && win) {

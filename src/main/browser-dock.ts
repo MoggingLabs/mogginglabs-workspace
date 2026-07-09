@@ -313,6 +313,24 @@ function markDriving(wsId: string, verb: BrowserAgentVerbName, target?: string):
   pushPossession()
 }
 
+/** Force the ACTIVE workspace's driving state for the DOCKUX smoke (8.5/08b): sets
+ *  driving WITHOUT the 1.5 s auto-reset so the possession banner can be measured, and
+ *  pushes the REAL activity + possession events — the same path a live agent act drives.
+ *  Smoke-only; never called in the shipped flow. */
+export function setDrivingForSmoke(wsId: string, on: boolean, pendingConfirm?: string): void {
+  const s = wsa(wsId)
+  s.driving = on
+  if (s.drivingTimer) {
+    clearTimeout(s.drivingTimer)
+    s.drivingTimer = null
+  }
+  s.pendingConfirm = on ? (pendingConfirm ?? s.pendingConfirm) : null
+  if (on) lastAgentAct.set(wsId, Date.now())
+  else lastAgentAct.delete(wsId)
+  pushActivity()
+  pushPossession()
+}
+
 /** Revoke possession of the ACTIVE workspace's browser (the dock Stop button —
  *  it governs the browser you're looking at). */
 export function agentStop(): void {

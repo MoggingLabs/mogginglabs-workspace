@@ -5,30 +5,18 @@ import { tmpdir } from 'node:os'
 import { setFakeMode } from '@backend/features/usage'
 import { softGapMs } from './smoke-shell'
 import { getUsageService } from './usage'
-import { getSettingsStore } from './app-settings'
 
 // Env-gated usage-UI smoke (MOGGING_USAGEUI, Phase-7/03). FAKE-adapter world.
-//   1. the gauge lives in the titlebar right cluster; fills track the ACTIVE
-//      tile's window pcts; aria-expanded starts false
+// RE-BASELINED to GAUGE-ONLY in 8.5/08c: the popover was recut to the CodexBar
+// dropdown, so its grouped-tile / switcher structure moved to USAGEGLANCE. This
+// gate keeps the parts the recut does NOT touch — the titlebar gauge:
+//   1. the gauge lives in the titlebar right cluster; fills track the merged
+//      (highest-severity) plan; aria-expanded starts false
 //   2. click -> the popover paints in <100ms (cached snapshot, no fetch wait)
-//   3. tiles: all 11 fixtures render, grouped under one provider; verdict
-//      lines equal the IPC payload's formatter text VERBATIM; countdowns
-//      present on rows with resets
-//   4. dismiss: Esc closes; click-away closes; aria-expanded tracks
-//   5. gauge states are fixture-driven: a hot fixture arms is-warn + the
+//   3. dismiss: Esc closes; click-away closes; aria-expanded tracks
+//   4. gauge states are fixture-driven: a hot fixture arms is-warn + the
 //      >=90% badge; an error flip dims to is-stale
-//   6. the gear lands on Settings with the usage section present
-//   7. 7/09 operational: severity orders tiles (runs-out first), the seam's
-//      'default' lane carries the identity treatment until profiles exist,
-//      a re-armed warn threshold toasts the FORMATTER line verbatim with the
-//      failover suggestion, the suggestion click and tile-Enter both drive
-//      the ONE Phase-4 pointer flip, and the one-line hint appears
-//   8. 7/10 display: a two-provider fixture with DISTINCT severity/usage
-//      winners — merged mirrors the severity winner, auto the usage winner,
-//      pinned honors the pin (all KV-persisted); the header switcher +
-//      sticky top-alert exist; content toggles flip CLASSES (structure
-//      untouched); the reset style restyles every reset line through the
-//      ONE formatter; density + manual order apply
+//   5. the gear (kept as the popover's Settings… action) lands on Settings § Usage
 export function runUsageUiSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 90000) // safety net
   const wc = win.webContents
@@ -48,7 +36,7 @@ export function runUsageUiSmoke(win: BrowserWindow): void {
     try {
       const svc = getUsageService()
       if (!svc) throw new Error('usage service not registered')
-      // Let the first poll land + the renderer receive it.
+      // Let the first poll land + the renderer receive it (the popover paints tiles).
       let tries = 0
       while ((await ES<number>(`document.querySelectorAll('.usage-tile').length`)) === 0 && tries++ < 50) {
         await ES(`window.__mogging.usage && 1`)
@@ -71,11 +59,8 @@ export function runUsageUiSmoke(win: BrowserWindow): void {
       await ES(`document.querySelector('.usage-gauge').click()`)
       const expandedOk = await ES<boolean>(`document.querySelector('.usage-gauge').getAttribute('aria-expanded') === 'true'`)
 
-      // open latency <100ms perceived (click -> painted, double-rAF). Measure the
-      // MEDIAN of 3 open/close cycles — a single cold sample is noisy under a
-      // full-sweep marathon tail (a real open is ~20ms; the median rejects the
-      // outlier without relaxing the budget). Desktop stays strict; softGapMs
-      // relaxes ONLY under soft-GL CI, loudly.
+      // open latency <100ms perceived (click -> painted, double-rAF). Median of 3
+      // open/close cycles — a single cold sample is noisy under the full-sweep tail.
       const opens: number[] = []
       for (let i = 0; i < 3; i++) {
         await ES(`window.__mogging.usage.close()`)
@@ -93,23 +78,7 @@ export function runUsageUiSmoke(win: BrowserWindow): void {
       const openBudget = softGapMs(100)
       const openFast = openMs < openBudget
 
-      // 3 ── tiles + verdict wording (DOM text === the IPC formatter output)
-      const tileCount = await ES<number>(`document.querySelectorAll('.usage-tile').length`)
-      const groupCount = await ES<number>(`document.querySelectorAll('.usage-group-label').length`)
-      const verdictsOk = await ES<boolean>(`window.bridge.invoke('usage:list').then((plans) => {
-        for (const p of plans) {
-          const tile = document.querySelector('.usage-tile[data-profile="' + p.profileId + '"]')
-          if (!tile) return false
-          const v = tile.querySelector('.usage-verdict')
-          if (p.pace) { if (!v || v.textContent !== p.pace.text) return false }
-        }
-        return true
-      })`)
-      const countdownOk = await ES<boolean>(
-        `[...document.querySelectorAll('.usage-tile[data-profile="default"] .usage-reset')].length >= 2 && document.querySelector('.usage-reset').textContent.startsWith('resets in')`
-      )
-
-      // 4 ── dismiss grammar
+      // 3 ── dismiss grammar
       await ES(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
       const escClosed = await ES<boolean>(`document.querySelector('.usage-popover').hidden === true`)
       await ES(`window.__mogging.usage.open()`)
@@ -118,7 +87,7 @@ export function runUsageUiSmoke(win: BrowserWindow): void {
         `document.querySelector('.usage-popover').hidden === true && document.querySelector('.usage-gauge').getAttribute('aria-expanded') === 'false'`
       )
 
-      // 5 ── fixture-driven gauge states: hot fixture -> warn + badge
+      // 4 ── fixture-driven gauge states: hot fixture -> warn + badge
       const dir = mkdtempSync(join(tmpdir(), 'mog-usageui-'))
       const hot = join(dir, 'hot.json')
       writeFileSync(
@@ -158,198 +127,20 @@ export function runUsageUiSmoke(win: BrowserWindow): void {
       }
       setFakeMode('ok')
       delete process.env.MOGGING_USAGE_FIXTURE
+      svc.refresh()
 
-      // 6 ── the gear deep-links to Settings § Usage
+      // 5 ── the gear (the popover's Settings… action) deep-links to Settings § Usage
       await ES(`window.__mogging.usage.open()`)
+      await sleep(200)
       await ES(`document.querySelector('.usage-gear').click()`)
       await sleep(400)
       const gearOk = await ES<boolean>(
         `!!document.querySelector('.settings-section[data-section="usage"]') && !!document.querySelector('.usage-prov-row[data-provider="fake"]') && !!document.querySelector('.usage-alert-cfg .usage-thr-warn')`
       )
 
-      // 7 ── 7/09 operational: ordering, identity, thresholds, switching.
-      const kv = getSettingsStore()
-      await ES(`window.__mogging.usage.open()`)
-      // section 5's single-plan fixture is gone; wait for the full set back
-      tries = 0
-      while ((await ES<number>(`document.querySelectorAll('.usage-tile').length`)) !== 11 && tries++ < 40) await sleep(200)
-      // severity orders tiles: exhausted (100%, runs-out) speaks first
-      const firstProfile = await ES<string>(`document.querySelector('.usage-tile')?.dataset.profile ?? ''`)
-      const orderOk = firstProfile === 'exhausted'
-      // no profiles yet -> the seam's 'default' lane carries the treatment
-      const defaultActiveOk = await ES<boolean>(
-        `document.querySelector('.usage-tile[data-profile="default"]').classList.contains('is-active')`
-      )
-      // stage the Phase-4 pair: exhausted is ACTIVE (order 0), an idle sibling
-      kv?.saveProfile({ id: 'exhausted', name: 'Main', provider: 'fake', env: {}, order: 0 })
-      kv?.saveProfile({ id: 'fresh-reset', name: 'Backup', provider: 'fake', env: {}, order: 1 })
-      // re-arm the warn threshold so the next push refires WITH the suggestion
-      kv?.setSetting('usage.thr.fake.exhausted', '')
-      getUsageService()?.refresh()
-      let suggestBody = ''
-      tries = 0
-      while (!suggestBody && tries++ < 40) {
-        await sleep(250)
-        suggestBody = await ES<string>(
-          `(() => { const t = [...document.querySelectorAll('.toast')].find((x) => [...x.querySelectorAll('.toast-action')].some((b) => b.textContent === 'Fail over to Backup')); return t ? (t.querySelector('.toast-body')?.textContent ?? '') : '' })()`
-        )
-      }
-      // toast copy === the 7/02 formatter output, VERBATIM (IPC is the oracle)
-      const exPaceText = await ES<string>(
-        `window.bridge.invoke('usage:list').then((plans) => plans.find((p) => p.profileId === 'exhausted')?.pace?.text ?? '')`
-      )
-      const toastCopyOk = !!suggestBody && suggestBody === exPaceText
-      // identity follows the store: exhausted (order 0) is now the active tile
-      await ES(`window.__mogging.usage.close()`)
-      await ES(`window.__mogging.usage.open()`)
-      await sleep(400)
-      const activeMarkOk = await ES<boolean>(
-        `document.querySelector('.usage-tile[data-profile="exhausted"]').classList.contains('is-active')`
-      )
-      // the suggestion click drives THE switch (one implementation, trigger #2)
-      await ES(
-        `[...document.querySelectorAll('.toast .toast-action')].find((b) => b.textContent === 'Fail over to Backup').click()`
-      )
-      let switchedOk = false
-      tries = 0
-      while (!switchedOk && tries++ < 40) {
-        await sleep(200)
-        const mine = (kv?.listProfiles() ?? []).filter((p) => p.provider === 'fake').sort((a, b) => a.order - b.order)
-        switchedOk = mine[0]?.id === 'fresh-reset'
-      }
-      // treatment follows immediately + the one-line "running panes" hint
-      await ES(`window.__mogging.usage.close()`)
-      await ES(`window.__mogging.usage.open()`)
-      await sleep(400)
-      const activeFollowOk = await ES<boolean>(
-        `document.querySelector('.usage-tile[data-profile="fresh-reset"]').classList.contains('is-active') && !document.querySelector('.usage-tile[data-profile="exhausted"]').classList.contains('is-active')`
-      )
-      const hintOk = await ES<boolean>(
-        `(document.querySelector('.usage-switch-hint')?.textContent ?? '').includes('running panes keep')`
-      )
-      // Enter on a tile is trigger #1 of the same switch: back to Main
-      await ES(
-        `(() => { const t = document.querySelector('.usage-tile[data-profile="exhausted"]'); t.focus(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })()`
-      )
-      let enterOk = false
-      tries = 0
-      while (!enterOk && tries++ < 40) {
-        await sleep(200)
-        const mine = (kv?.listProfiles() ?? []).filter((p) => p.provider === 'fake').sort((a, b) => a.order - b.order)
-        enterOk = mine[0]?.id === 'exhausted'
-      }
-      await ES(`window.__mogging.usage.close()`)
-      kv?.removeProfile('exhausted')
-      kv?.removeProfile('fresh-reset')
-      const operationalOk = orderOk && defaultActiveOk && toastCopyOk && activeMarkOk && switchedOk && activeFollowOk && hintOk && enterOk
-
-      // 8 ── 7/10 display. A two-provider world with DISTINCT winners:
-      //      alpha 70% but RUNS-OUT hard (severity winner);
-      //      zeta 96% but ~at reset, not runs-out (usage winner).
-      const ddir = mkdtempSync(join(tmpdir(), 'mog-display-'))
-      const dfx = join(ddir, 'two.json')
-      writeFileSync(
-        dfx,
-        JSON.stringify([
-          { providerId: 'alpha', profileId: 'default', planLabel: 'Alpha Pro', windows: [{ label: 'Session (5h)', usedPct: 70, resetsAt: new Date(Date.now() + 4 * 3600_000).toISOString(), windowMs: 5 * 3600_000 }], fetchedAt: Date.now(), health: 'fresh' },
-          { providerId: 'zeta', profileId: 'default', planLabel: 'Zeta Pro', windows: [{ label: 'Session (5h)', usedPct: 96, resetsAt: new Date(Date.now() + 3 * 60_000).toISOString(), windowMs: 5 * 3600_000 }], fetchedAt: Date.now(), health: 'fresh' }
-        ])
-      )
-      process.env.MOGGING_USAGE_FIXTURE = dfx
-      getUsageService()?.refresh()
-      await ES(`window.__mogging.usage.open()`)
-      tries = 0
-      while ((await ES<number>(`document.querySelectorAll('.usage-tile').length`)) !== 2 && tries++ < 40) await sleep(200)
-      // merged (default): the severity winner drives the gauge
-      let gaugeProv = ''
-      tries = 0
-      while (gaugeProv !== 'alpha' && tries++ < 40) {
-        await sleep(150)
-        gaugeProv = await ES<string>(`document.querySelector('.usage-gauge').dataset.provider ?? ''`)
-      }
-      const mergedOk = gaugeProv === 'alpha'
-      // the header: switcher options + the sticky worst-plan line
-      const switcherOk = await ES<boolean>(
-        `(() => { const s = document.querySelector('.usage-header .usage-switcher'); if (!s) return false; const vals = [...s.options].map((o) => o.value); return s.value === 'merged' && vals.includes('auto') && vals.includes('pin:alpha') && vals.includes('pin:zeta') })()`
-      )
-      const topAlertOk = await ES<boolean>(
-        `(document.querySelector('.usage-header .usage-top-alert')?.textContent ?? '').startsWith('Alpha Pro — ')`
-      )
-      // auto: the usage winner — and the mode persists in the KV
-      await ES(`(() => { const s = document.querySelector('.usage-switcher'); s.value = 'auto'; s.dispatchEvent(new Event('change')) })()`)
-      tries = 0
-      while (gaugeProv !== 'zeta' && tries++ < 40) {
-        await sleep(150)
-        gaugeProv = await ES<string>(`document.querySelector('.usage-gauge').dataset.provider ?? ''`)
-      }
-      const autoOk = gaugeProv === 'zeta' && kv?.getSetting('usage.display.mode') === 'auto'
-      // pinned honors the pin
-      await ES(`(() => { const s = document.querySelector('.usage-switcher'); s.value = 'pin:alpha'; s.dispatchEvent(new Event('change')) })()`)
-      tries = 0
-      while (gaugeProv !== 'alpha' && tries++ < 40) {
-        await sleep(150)
-        gaugeProv = await ES<string>(`document.querySelector('.usage-gauge').dataset.provider ?? ''`)
-      }
-      const pinnedOk = gaugeProv === 'alpha' && kv?.getSetting('usage.display.mode') === 'pinned' && kv?.getSetting('usage.display.pin') === 'alpha'
-      // content toggles change CLASSES, not structure: tracks stay in the DOM
-      await ES(`window.bridge.invoke('usage:displaySet', { showPct: true, showGlyph: true, showLabel: true, showBars: false })`)
-      let contentOk = false
-      tries = 0
-      while (!contentOk && tries++ < 40) {
-        await sleep(150)
-        contentOk = await ES<boolean>(
-          `(() => { const g = document.querySelector('.usage-gauge'); return g.classList.contains('show-pct') && g.classList.contains('show-glyph') && g.classList.contains('show-label') && g.classList.contains('hide-bars') && g.querySelectorAll('.usage-track').length === 2 && /%$/.test(g.querySelector('.usage-pct-num').textContent) && g.querySelector('.usage-glyph').textContent === 'A' })()`
-        )
-      }
-      await ES(`window.bridge.invoke('usage:displaySet', { showPct: false, showGlyph: false, showLabel: false, showBars: true })`)
-      let contentRestoreOk = false
-      tries = 0
-      while (!contentRestoreOk && tries++ < 40) {
-        await sleep(150)
-        contentRestoreOk = await ES<boolean>(
-          `(() => { const g = document.querySelector('.usage-gauge'); return !g.classList.contains('show-pct') && !g.classList.contains('show-glyph') && !g.classList.contains('show-label') && !g.classList.contains('hide-bars') })()`
-        )
-      }
-      // reset style flips EVERY reset line through the ONE formatter
-      await ES(`window.bridge.invoke('usage:displaySet', { resetStyle: 'absolute' })`)
-      let resetAbsOk = false
-      tries = 0
-      while (!resetAbsOk && tries++ < 40) {
-        await sleep(150)
-        resetAbsOk = await ES<boolean>(
-          `(() => { const t = [...document.querySelectorAll('.usage-reset')].map((r) => r.textContent); return t.length >= 2 && t.every((x) => x.startsWith('resets ') && !x.startsWith('resets in ')) })()`
-        )
-      }
-      await ES(`window.bridge.invoke('usage:displaySet', { resetStyle: 'countdown' })`)
-      let resetBackOk = false
-      tries = 0
-      while (!resetBackOk && tries++ < 40) {
-        await sleep(150)
-        resetBackOk = await ES<boolean>(
-          `(() => { const t = [...document.querySelectorAll('.usage-reset')].map((r) => r.textContent); return t.length >= 2 && t.every((x) => x.startsWith('resets in ')) })()`
-        )
-      }
-      // density + manual order (the top-alert keeps the worst plan surfaced)
-      await ES(`window.bridge.invoke('usage:displaySet', { density: 'compact', order: 'manual', pinOrder: ['zeta', 'alpha'] })`)
-      let orderManualOk = false
-      tries = 0
-      while (!orderManualOk && tries++ < 40) {
-        await sleep(150)
-        orderManualOk = await ES<boolean>(
-          `(() => { const pop = document.querySelector('.usage-popover'); return pop.classList.contains('is-compact') && document.querySelector('.usage-group-label').textContent === 'zeta' && !!document.querySelector('.usage-top-alert') })()`
-        )
-      }
-      // restore the minimal defaults for anything after us
-      await ES(`window.bridge.invoke('usage:displaySet', { mode: 'merged', density: 'roomy', order: 'severity', pinOrder: [] })`)
-      await ES(`window.__mogging.usage.close()`)
-      delete process.env.MOGGING_USAGE_FIXTURE
-      getUsageService()?.refresh()
-      const displayOk =
-        mergedOk && switcherOk && topAlertOk && autoOk && pinnedOk && contentOk && contentRestoreOk && resetAbsOk && resetBackOk && orderManualOk
-
       const pass =
-        gaugeOk && fillsOk && openFast && expandedOk && tileCount === 11 && groupCount === 1 && verdictsOk && countdownOk && escClosed && awayClosed && warnOk && staleOk && gearOk && operationalOk && displayOk
-      result = { pass, gaugeOk, fillsOk, openMs, opens, openBudget, openFast, expandedOk, tileCount, groupCount, verdictsOk, countdownOk, escClosed, awayClosed, warnOk, staleOk, gearOk, operationalOk, orderOk, defaultActiveOk, suggestBody, exPaceText, toastCopyOk, activeMarkOk, switchedOk, activeFollowOk, hintOk, enterOk, displayOk, mergedOk, switcherOk, topAlertOk, autoOk, pinnedOk, contentOk, contentRestoreOk, resetAbsOk, resetBackOk, orderManualOk }
+        gaugeOk && fillsOk && openFast && expandedOk && escClosed && awayClosed && warnOk && staleOk && gearOk
+      result = { pass, gaugeOk, fillsOk, openMs, opens, openBudget, openFast, expandedOk, escClosed, awayClosed, warnOk, staleOk, gearOk }
     } catch (e) {
       result = { pass: false, error: e instanceof Error ? e.message : String(e) }
     }

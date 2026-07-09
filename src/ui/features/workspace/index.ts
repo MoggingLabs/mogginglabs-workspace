@@ -9,7 +9,7 @@ import {
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { TEMPLATE_COUNTS, TEMPLATES } from '../layout'
-import { IconButton, MiniGridPreview, el } from '../../components'
+import { IconButton, createLayoutGridPicker, el } from '../../components'
 import { WorkspaceController, type CreateOpts } from './controller'
 import { workspaceClient } from './workspace.client'
 import { DEFAULT_THEME_ID } from '../../core/theme/themes'
@@ -65,6 +65,18 @@ export const workspaceFeature: UiFeature = {
 
     // The rail is workspaces-only by design — navigation (Home) lives in the top bar.
     ctx.rail.append(header, tabs)
+
+    // Scroll-edge fade (the rail's one A− gap): mask ONLY the edge with scrolled-past
+    // content, so a fully-visible tab is never masked and the .ws-attn attention count is
+    // never dimmed (guardrail). Re-evaluated on scroll, content change (onChange, below)
+    // and size change (rail collapse / window resize).
+    const updateRailFade = (): void => {
+      const overflow = tabs.scrollHeight > tabs.clientHeight + 1
+      tabs.classList.toggle('fade-top', overflow && tabs.scrollTop > 1)
+      tabs.classList.toggle('fade-bot', overflow && tabs.scrollTop + tabs.clientHeight < tabs.scrollHeight - 1)
+    }
+    new ResizeObserver(() => updateRailFade()).observe(tabs)
+    tabs.addEventListener('scroll', updateRailFade, { passive: true })
 
     const host = el('div', {})
     host.id = 'workspace-host'
@@ -141,6 +153,7 @@ export const workspaceFeature: UiFeature = {
         publishInfo()
         publishCommands()
         persist()
+        updateRailFade()
       },
       (anyAttention) => workspaceClient.setAttention(anyAttention),
       touchRecent, // closing keeps the project's final layout in recents
@@ -185,27 +198,19 @@ export const workspaceFeature: UiFeature = {
 
     function renderLayoutMenu(): void {
       layoutMenu.innerHTML = ''
-      const current = controller.activePaneCount()
-      for (const n of TEMPLATE_COUNTS) {
-        const spec = TEMPLATES[n]
-        const tile = el(
-          'button',
-          {
-            class: 'layout-menu-tile' + (n === current ? ' is-selected' : ''),
-            type: 'button',
-            ariaLabel: `${n}-pane layout`,
-            onClick: () => {
-              controller.applyTemplate(n)
-              layoutMenu.hidden = true
-            }
-          },
-          [
-            MiniGridPreview({ rows: spec.rows, cols: spec.cols }),
-            el('span', { class: 'layout-tile-count', text: String(n) })
-          ]
-        )
-        layoutMenu.append(tile)
-      }
+      // REMOVE #16: the SHARED grid picker (compact variant) — one component, replacing
+      // the ad-hoc tile builder whose `.layout-menu-tile .layout-tile-count` reached
+      // across to override this very component's class.
+      const picker = createLayoutGridPicker({
+        specs: TEMPLATE_COUNTS.map((n) => ({ count: n, rows: TEMPLATES[n].rows, cols: TEMPLATES[n].cols })),
+        selected: controller.activePaneCount(),
+        compact: true,
+        onSelect: (n) => {
+          controller.applyTemplate(n)
+          layoutMenu.hidden = true
+        }
+      })
+      layoutMenu.append(picker.el)
     }
 
     // ── Keyboard: capture phase + stopPropagation so xterm never sees these ──
@@ -415,4 +420,7 @@ function exposeForDev(controller: WorkspaceController): void {
   w.__mogging.attention = {
     setPaneState: (id: number, state: string) => setPaneState(id as PaneId, state as AgentState)
   }
+  // View switcher for the CHROMEUX smoke (bug #11: the grid picker must be ABSENT off
+  // the grid). setActiveView is the real port the titlebar view buttons call.
+  w.__mogging.view = (v: string) => setActiveView(v as Parameters<typeof setActiveView>[0])
 }

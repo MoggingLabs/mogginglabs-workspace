@@ -7,8 +7,9 @@ import { activeView, goBack, onViewChange, setActiveView } from '../core/shell/v
  * The app's top bar — a strict 3-column grid (1fr auto 1fr), frameless-native:
  *   LEFT    logo · product name · version — and nothing else.
  *   CENTER  the command box (palette trigger) — TRUE window center via the grid.
- *   RIGHT   feature slots (layout trigger) · rail toggle · settings · the OS
- *           window-control overlay reserve (collapses to a normal gap in F11).
+ *   RIGHT   two feature slots (layout trigger et al.) · Home · Board · rail toggle ·
+ *           settings · the OS window-control overlay reserve (a normal gap in F11).
+ *           That left→right order is DECLARED in one place: the cluster.append() below.
  * The whole strip is a drag region; interactive children opt out in CSS.
  */
 export function createTitlebar(onToggleRail: () => void): {
@@ -51,7 +52,11 @@ export function createTitlebar(onToggleRail: () => void): {
   const center = document.createElement('div')
   center.className = 'titlebar-center'
 
-  // Right cluster: [feature slots][rail toggle][settings] + OS overlay clearance.
+  // Right cluster — its left→right order is DECLARED by the cluster.append() below (the
+  // ONLY place it lives; it was previously incidental feature-registration order). Two
+  // feature slots lead (ShellContext.titlebarLeft/Right — features mount their triggers
+  // into them), then the fixed view/rail/settings controls, then the OS window-control
+  // overlay reserve (CSS padding on .titlebar-right).
   const cluster = document.createElement('div')
   cluster.className = 'titlebar-right'
   const left = document.createElement('div')
@@ -83,6 +88,8 @@ export function createTitlebar(onToggleRail: () => void): {
     title: 'Settings (Ctrl+,)',
     onClick: () => (activeView() === 'settings' ? goBack() : setActiveView('settings'))
   })
+  // THE declaration: feature slots (titlebarLeft, titlebarRight) → Home → Board →
+  // rail toggle → settings. Read left-to-right, this is the right cluster.
   cluster.append(left, right, home, board, toggle, settings)
 
   // The view-switcher trio: the active top-level view's button reads active.

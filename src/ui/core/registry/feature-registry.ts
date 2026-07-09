@@ -4,11 +4,15 @@ export interface ShellContext {
   content: HTMLElement
   /** The left vertical rail (the workspace feature fills it). */
   rail: HTMLElement
-  /** Left titlebar slot, after the brand (layout picker, chips). */
+  /** Leading feature slot in the RIGHT cluster — NOT after the brand (the brand cell is
+   *  logo/name/version only). Features mount triggers here (the layout picker is today's
+   *  tenant). It sits ahead of titlebarRight and the fixed view/rail/settings controls;
+   *  titlebar.ts declares that left→right order. */
   titlebarLeft: HTMLElement
   /** Dead-center titlebar cell — the command box lives here (Phase-5/04). */
   titlebarCenter: HTMLElement
-  /** Right titlebar slot (chips, indicators, launchers). */
+  /** Trailing feature slot in the RIGHT cluster (indicators, launchers) — mounts after
+   *  titlebarLeft, before the fixed controls. */
   titlebarRight: HTMLElement
 }
 

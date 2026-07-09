@@ -59,20 +59,20 @@ still hold a bug (see § Bugs, which routes all thirteen).
 | Settings — Usage | D− → **A** | **done (05b)** | Was: 7 sections always open, 20 controls permanently expanded. Now an overview band + collapsible `Card`s, folded except overview and attention |
 | **Settings — Integrations** | **F → A** | **done (05)** | 9 sections at once; `.mgr-chip` is a **1px-vertical-padding button** and the only click target for needs-auth/drift |
 | Settings — Privacy / Browser | D → **A** | **done (04)** | ToggleRows with per-switch hints; every ADR clause kept, redistributed into a card caption + `.settings-scope` |
-| Settings — Shortcuts | B | keep — **08b** | One source, CI-enforced. Framed in a Card by 04; the `5px` padding + `0.08em` tracking live in `shortcuts.ts`'s own CSS — **08b** fixes them once, and both this and the overlay reach A |
+| Settings — Shortcuts | B → **A** | **done (08b)** | The `5px` row padding → `--sp-1`, the raw `0.08em` tracking → `--track-wide`, and the list is now a subgrid two-column table. One source (KB-01), CI-enforced |
 | Settings — About | A | **done (01)** | Rebuilt on the four primitives |
 | Board | D → **A** | **done (07)** | Cards are Cards with ONE aligned chip row (phantom flex items gone), lanes carry CountBadge counts, the ⋯ menu is fixed-positioned so the lane scroller can't clip it, and Delete gets a confirm |
 | Palette | C− → **A** | **done (07)** | Rows on the rhythm (icon · title · hint · shortcut); empty query ranks top verbs by category (+ workspace context), a typed query highlights matches. Verb ids unchanged |
 | Toasts / confirms / modal | C → **A** | **done (07b)** | One family: one radius, one stacking gap, one curve in AND out; `.btn--danger` now reads destructive (bug #6) |
 | Review modal | D → **A** | **done (07b)** | Safe-first footer (Cancel before the danger merge), the merge de-emphasized from filled-primary to danger; the typed confirmation stays the guard |
-| Titlebar | B | keep+fix — **08** | Uniform 26px hitboxes and 4px gaps — but `titlebarLeft` mounts inside `.titlebar-right` |
-| Workspace tabs | A− | keep — **08** | Genuinely well-built (identity ramp, attention latch, zero-layout-shift selection). No scroll affordance |
-| Pane headers | B+ | keep — **08** | Fixed 28px, chips never wrap, title ellipsises — correct by design. `.pane-mcp` breaks the chip system on every axis |
-| Browser dock chrome | B / **C on contract** | keep+fix — **08b** | Possession structure is right; three load-bearing strings have **no CSS rule and no test** |
-| Shortcuts overlay | B− | keep — **08b** | Shared source with Settings, CI-enforced |
+| Titlebar | B → **A** | **done (08)** | Right cluster's order declared in ONE place (titlebar.ts); the `titlebarLeft` port lie corrected; darwin traffic-light inset tokenized (`--traffic-light-inset`). 26px hitboxes / 4px gaps kept |
+| Workspace tabs | A− → **A** | **done (08)** | The one gap closed: scroll-edge fade at 8+ workspaces; `flex:none` makes "scroll, not shrink" true; bug #10 (collapsed collision) fixed. Identity ramp + attention latch kept |
+| Pane headers | B+ → **A** | **done (08)** | `.pane-mcp` co-located + aligned to its siblings; bug #9 (overflow clip + `.pane-role` max-width/tooltip) and bug #12 (state dot leading) fixed. The 28px one-line design kept |
+| Browser dock chrome | B / C → **A** | **done (08b)** | § Blockers #1 discharged: the possession label + consent + honesty spans get real, AA-safe rules (the label was 4.35:1 on nord), controls reach 28px, and DOCKUX gates it. REMOVE #13/#14 |
+| Shortcuts overlay | B− → **A** | **done (08b)** | A two-column subgrid token grid from the single SHORTCUTS source; DOCKUX (d) asserts its row count equals Settings' |
 | Update UX | A− → **A** | **done (06)** | REMOVE #15: the discarded `--pct` deleted; progress lives in the dot's `title` |
 | Usage gauge (titlebar) | A | keep | All literals sanctioned dense chrome |
-| Usage popover | D → **A** | **done (05b)** | Was: styled as dense chrome it isn't — 9 usages of tokens that don't exist (bug #4) + a radius token as a vertical inset (bug #5). Now real house tokens, theme-aware |
+| Usage popover | D → **A** | **done (05b; recut 08c)** | 05b: real house tokens, theme-aware (bugs #4/#5). 08c: recut to the CodexBar dropdown — provider tabs → the selected provider's windows · pace · credits · cost · actions, on OUR IPC data (unbacked slots dropped, never faked). Gauge unchanged; USAGEGLANCE gates it |
 | **Empty states** | **F → A** | **done (07b)** | The substantial surfaces route through `EmptyState` (the empty board lane — the worst — now speaks, and gives `action` its first caller); inline dropdown notes stay inline by design |
 
 ---
@@ -164,15 +164,15 @@ Status: **✅ = executed**. 02 cleared every wizard row; 05 cleared every integr
 | ✅ 8 | `CountBadge` / `TextInput` / `mount` exports | `pill.ts`, `input.ts`, `dom.ts` | `CountBadge` adopted (#7 — now live, generalized with a `label`); `TextInput` + `mount` deleted (zero call sites). | 07 |
 | ✅ 9 | `.pill--success` / `--danger` | `global.css` | Removed (dead). **`.pill--accent` KEPT** — `folder-browser.ts:185` renders `Pill({ tone:'accent' })`, so the "one call site" note was stale. | 07b |
 | ✅ 10 | `.settings-footer` | `global.css:2070-2075` (cited line was stale) | Dead — vestige of Settings-as-a-modal; Phase-5/05 made it a full page with a left nav + Back. Deleted with `.settings-about`, `.settings-about-name` and a bare `.settings` rule, all equally orphaned. | 04 ✅ |
-| 11 | `.pane-badge` CSS block (keep the class) | `global.css:1741-1746` | Duplicates `.pane-head-left`; its `flex:none` is **inert** (the element is a grid item). Its comment — and `terminal-pane.ts:352` — claim it is "the DOM contract of the launch/milestone smokes". **Grep: zero smokes reference `.pane-badge`.** Fix the comments too. | 08 |
-| 12 | `#app.rail-collapsed .workspace-tab:hover .ws-count` | `global.css:1163-1165` | Dead — `.ws-count` is already `display:none` in collapsed rail (`:1144`). | 08 |
-| 13 | `.browser-ws-chip:hover {}` (empty ruleset) | `global.css:3721-3722` | Dead as written. It *is* a `<button>` and the only dock chrome with no hover feedback — give it the `.browser-agentweb-sites:hover` treatment. | 08 |
-| 14 | `trailBtn.classList.remove('is-hidden')` | `browser/index.ts:562` | Dead — `is-hidden` is never added and has no rule. | 08 |
+| ✅ 11 | `.pane-badge` CSS block (keep the class) | `global.css:1741-1746` | Duplicates `.pane-head-left`; its `flex:none` is **inert** (the element is a grid item). Its comment — and `terminal-pane.ts:352` — claim it is "the DOM contract of the launch/milestone smokes". **Grep: zero smokes reference `.pane-badge`.** Fix the comments too. | 08 |
+| ✅ 12 | `#app.rail-collapsed .workspace-tab:hover .ws-count` | `global.css:1163-1165` | Dead — `.ws-count` is already `display:none` in collapsed rail (`:1144`). | 08 |
+| ✅ 13 | `.browser-ws-chip:hover {}` (empty ruleset) | `global.css` | The ws-chip now carries the `.browser-agentweb-sites:hover` treatment (accent border + `--accent-ink`) — no empty ruleset remains; it is no longer the one dock button without hover feedback. | 08b ✅ |
+| ✅ 14 | `trailBtn.classList.remove('is-hidden')` | `browser/index.ts` | Deleted — `is-hidden` was never added and had no rule. | 08b ✅ |
 | ✅ 15 | `--pct` on the update dot | `updates/index.ts` | Deleted — nothing read it; progress survives in the `title`, the dot stays a quiet pulse. | 06 |
-| 16 | `.layout-menu-tile` + the ad-hoc titlebar tile builder | `global.css:1377-1390`; `workspace/index.ts:196-206` | `createLayoutGridPicker()` (`grid-preview.ts:61`) with a `compact` variant. Today `.layout-menu-tile .layout-tile-count` **reaches across to override the other component's class**. | 08 |
+| ✅ 16 | `.layout-menu-tile` + the ad-hoc titlebar tile builder | `global.css:1377-1390`; `workspace/index.ts:196-206` | `createLayoutGridPicker()` (`grid-preview.ts:61`) with a `compact` variant. Today `.layout-menu-tile .layout-tile-count` **reaches across to override the other component's class**. | 08 |
 | ✅ 17 | `EmptyState` import; `templates.resolve`/`templates.list` dev handles; `el('div',{})`/`el('span',{})` spacers ×3; `.wizard-preset-wrap` dup block | `wizard/index.ts:6, 448, 452, 687, 898-899`; `global.css:2247` | Dead, none needed. | 02 ✅ |
 | ✅ 18 | `?? el('span', {})` ×2 | `board/index.ts` | Deleted — `el()` drops nulls; `.board-card-foot { min-height:16px }` dropped with them. | 07 |
-| 19 | `buildMenu(menu, _titleEl)` unused param | `terminal-pane.ts:593` | Dead. | 08 |
+| ✅ 19 | `buildMenu(menu, _titleEl)` unused param | `terminal-pane.ts:593` | Dead. | 08 |
 | ✅ 20 | `.usage-history-block` class; cadence `<select>` on **disabled** providers; the `Test notification` button | `usage.ts` | Class + its `.usage-history-block-row` name-collision both gone with the block→Card restructure. Cadence renders only when enabled. `Test notification` now behind `import.meta.env.DEV`. | 05b |
 | ✅ 21 | Checklist row 4 "Optional: add a profile, SSH host, or board card" | `firstrun.ts` | Deleted — no action button, a 3-way OR, and (bug #1) **missing `optional:true`** so it blocked the card from ever self-dismissing. Gone; "Three steps" is true again. | 06 |
 
@@ -201,10 +201,10 @@ fails if any entry loses its owner or its ✅.
 | 6 | `.btn--danger` carries no emphasis | **07b** | **✅ fixed in 07b** |
 | 7 | `Delete card` is irreversible with no confirm | **07** | **✅ fixed in 07** |
 | 8 | the app's most destructive confirm is opt-out-able (`rememberKey`) | **07b** | **✅ fixed in 07b** |
-| 9 | `.pane-head-left` chip cluster overflows into the branch chip | **08** | open |
-| 10 | collapsed-rail collision (agent dot over `.ws-attn`) | **08** | open |
-| 11 | grid-layout button offered on Home / Board / Settings | **08** | open |
-| 12 | remote pane: state dot is no longer the leading glyph | **08** | open |
+| 9 | `.pane-head-left` chip cluster overflows into the branch chip | **08** | **✅ fixed in 08** |
+| 10 | collapsed-rail collision (agent dot over `.ws-attn`) | **08** | **✅ fixed in 08** |
+| 11 | grid-layout button offered on Home / Board / Settings | **08** | **✅ fixed in 08** |
+| 12 | remote pane: state dot is no longer the leading glyph | **08** | **✅ fixed in 08** |
 | 13 | `integux-smoke.ts:65` asserts `.palette-result`, a class that exists nowhere | **05** | **✅ fixed in 05** |
 | 14 | `.trail-btn.is-armed` has no CSS rule — the **write-tools grant toggle has no on-state** | **05** | **✅ fixed in 05** |
 | 15 | the workspace list is read once at boot, so **Workspace tools and Grants render permanently blank** | **05** | **✅ fixed in 05** |
@@ -286,11 +286,14 @@ nearest coverage is the rail mirror `.workspace-tab[…].is-agent-browsing`
 The pack's guardrail says these surfaces "may be restyled, never dimmed." Today
 nothing — not a token, not a rule, not a gate — would object.
 
-> **Required in step 08, before its restyle:** a smoke asserting that while
-> `driving === true`: `.browser-dock` carries `agent-driving`;
-> `.browser-agent-banner` is not `hidden`; `.browser-agent-stop` is present and
-> hit-testable; and `.browser-agent-label` has non-empty `textContent` at a
-> computed `font-size >= 11px` with a non-transparent colour.
+> **Blocker 1 — DISCHARGED (08b).** The DOCKUX guard was written against today's DOM and
+> watched pass BEFORE any restyle: while `driving === true`, `.browser-dock` carries
+> `agent-driving`, `.browser-agent-banner` is shown, `.browser-agent-stop` is
+> hit-testable, and `.browser-agent-label` is non-empty at `font-size >= 11px`, opaque,
+> AA against its real composited background. The guard immediately caught a real defect —
+> the label was **4.35:1 on nord** — which the restyle fixed (it is `--text-hi` now; worst
+> 7.93:1). The three spans now carry rules of their own (DOCKUX (c)), and the possession
+> chrome is present only while driving (DOCKUX (b)). Written before the restyle, green after.
 
 **Blocker 2 — DISCHARGED (07b).** `.review-gate-open` / `.review-gate-closed` — the
 reviewer sign-off indicator, the whole point of the 4/03 gate — now carry a distinct
@@ -490,6 +493,23 @@ decision and its reason go in docs/11. This is the last unresolved either/or.
    preset save/delete, **worktree isolation** — are disclosed as specified. (01's
    findings list seven Advanced controls; this note used to say "five" and silently
    dropped worktree isolation from the count.)
+
+9. **The Usage popover was RECUT to the CodexBar dropdown (08c), and USAGEUI
+   re-baselined — RESOLVED.** 7/03 built the glance as grouped per-provider tiles; 08c
+   recut it into the CodexBar shape — provider tabs (All · Auto · one per enabled
+   provider), then the selected provider's active lane: header · windows · the pace line
+   (`.usage-verdict` renders `pace.text` VERBATIM + a new `.usage-pace-delta`) ·
+   credits/spend · a local-cost row · icon actions · the profile switch row · the kept
+   footer. The LAYOUT is copied, the DATA is ours: every element is IPC-backed, and the
+   slots CodexBar shows that we cannot back — a `$X/$Y` cap, a faked Sonnet meter,
+   in-popover add-account — are dropped, never invented. The gauge, the display state
+   machine (`usage.display.*`), and the pace/reset formatters are untouched.
+   **USAGEUI was re-baselined to gauge-only**: its grouped-popover asserts
+   (tileCount/groupCount/`.usage-switcher`, in-tile verdicts, the display-mode switcher)
+   moved to the new **USAGEGLANCE** gate (a–g) — the recut is a sanctioned display change,
+   and a smoke that asserts the OLD structure would block it. SETUSAGE/USAGESET/PROFILES
+   and the pace golden pass unmodified (USAGESET's plans-table === popover-tiles check
+   still holds — the fixture world is single-provider, so every profile tile renders).
 
 ---
 

@@ -346,16 +346,19 @@ export class TerminalPane {
   }
 
   /** Pane chrome — the terminal top bar, an exact take on the reference:
-   *  LEFT   ✳ state glyph + the task title the agent set (OSC 0/2), else its label;
+   *  LEFT   ✳ state glyph (the LEADING glyph) + optional remote/role/claims/mcp chips +
+   *         the task title the agent set (OSC 0/2), else its label;
    *  CENTER the read-only git branch chip;
    *  RIGHT  [⋯ menu] [expand full] [expand horizontal] [expand vertical] [× close].
-   *  Class names (.pane-label/.pane-git/.pane-state/.pane-badge) are the DOM contract
-   *  of the git/milestone smokes. Returns the terminal body. */
+   *  The real DOM contracts are .pane-label (agentlaunch-smoke) and .pane-state
+   *  (milestone/state smokes); .pane-badge is NOT one — zero smokes reference it
+   *  (REMOVE #11). Returns the terminal body. */
   private mountChrome(host: HTMLElement): HTMLElement {
     const header = document.createElement('div')
     header.className = 'pane-header'
 
-    // Left: state + title. (.pane-badge kept on the cluster for selector continuity.)
+    // Left: state dot (leading) + chips + title. `.pane-badge` stays on the class list
+    // but carries no rule (REMOVE #11 dropped it) — kept only to avoid churn on the attr.
     const left = document.createElement('div')
     left.className = 'pane-head-left pane-badge'
     const state = document.createElement('span')
@@ -371,6 +374,7 @@ export class TerminalPane {
     role.hidden = true
     const applyRole = (r: string): void => {
       role.textContent = r
+      role.title = r // bug #9: the full role on hover, now the chip ellipsises at 88px
       role.dataset.role = r.toLowerCase() // styling hook only — smokes read textContent
       role.hidden = !r
     }
@@ -380,15 +384,19 @@ export class TerminalPane {
       if (paneId === this.id) applyRole(r)
     })
     // Remote chip (4/05): WHERE this pane lives — visible at a glance, distinct tint.
+    // Built here but appended IN ORDER below (bug #12): the state dot must stay the
+    // leading glyph. This used to left.append() ahead of everything, so on a remote pane
+    // the dot was no longer first — contradicting this header's contract and the
+    // leading-dot note in global.css.
+    let remoteChip: HTMLSpanElement | undefined
     if (getPaneRemote(this.id)) {
-      const remoteChip = document.createElement('span')
+      remoteChip = document.createElement('span')
       remoteChip.className = 'pane-remote'
       remoteChip.append(
         icon('globe', 12),
         document.createTextNode(getPaneRemote(this.id)?.name ?? '')
       )
       remoteChip.title = 'Remote pane (ssh) — local repo tools are off'
-      left.append(remoteChip)
     }
     // Ownership chip (4/02): how many globs THIS pane holds; live via ledger pushes.
     const claimsChip = document.createElement('span')
@@ -421,7 +429,9 @@ export class TerminalPane {
     }
     applyMcp()
     this.mcpUnsub = onMcpStatusChange(applyMcp)
-    left.append(state, role, claimsChip, mcpChip, title)
+    // Ordered, state dot FIRST (the leading glyph). Remote sits right after it — WHERE
+    // before the role/claims/mcp attributes — then the title.
+    left.append(state, ...(remoteChip ? [remoteChip] : []), role, claimsChip, mcpChip, title)
 
     // Center: branch chip — a branch icon + name (soft chip, like the reference bar).
     const git = document.createElement('span')
@@ -462,7 +472,7 @@ export class TerminalPane {
     menu.className = 'menu pane-menu'
     menu.hidden = true
     const menuBtn = act('more', 'Pane menu', () => {
-      if (menu.hidden) this.buildMenu(menu, title)
+      if (menu.hidden) this.buildMenu(menu)
       menu.hidden = !menu.hidden
     })
     actions.append(
@@ -590,7 +600,7 @@ export class TerminalPane {
 
   /** The ⋯ pane menu: rename, clear, copy cwd, plus a launch entry per installed
    *  agent (published on the command port by the agents feature — no cross-import). */
-  private buildMenu(menu: HTMLElement, _titleEl: HTMLElement): void {
+  private buildMenu(menu: HTMLElement): void {
     menu.innerHTML = ''
     const item = (name: IconName, label: string, run: () => void): HTMLButtonElement => {
       const b = document.createElement('button')
@@ -719,6 +729,30 @@ export class TerminalPane {
     w.__mogging.panes = w.__mogging.panes ?? []
     this.devHandle = {
       id: this.id,
+      // CHROMEUX (8.5/08): force role/claims/mcp chips visible with representative text,
+      // so the one-line header contract can be measured with ALL chips lit (the remote
+      // chip is real — built from the workspace manifest). DEV-only, tree-shaken in prod.
+      lightChips: (): void => {
+        const role = host.querySelector<HTMLElement>('.pane-role')
+        if (role) {
+          role.hidden = false
+          if (!role.textContent) {
+            role.textContent = 'REVIEWER'
+            role.title = 'REVIEWER'
+          }
+        }
+        const claims = host.querySelector<HTMLElement>('.pane-claims')
+        if (claims) {
+          claims.hidden = false
+          claims.replaceChildren(icon('flag', 12), document.createTextNode('3'))
+        }
+        const mcp = host.querySelector<HTMLElement>('.pane-mcp')
+        if (mcp) {
+          mcp.hidden = false
+          mcp.textContent = 'restart +2'
+          mcp.classList.add('is-restart')
+        }
+      },
       term: this.term,
       write: (data: string) => terminalClient.write({ id: this.id, data }),
       text: (): string => {

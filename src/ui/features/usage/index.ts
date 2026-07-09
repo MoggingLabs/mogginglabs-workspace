@@ -1,5 +1,5 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { ProfileChannels, UsageChannels, USAGE_DISPLAY_DEFAULTS, type AgentProfile, type GaugeMode, type PlanUsageView, type ProviderStatus, type UsageAlert, type UsageDisplayConfig } from '@contracts'
+import { BrowserChannels, ProfileChannels, UsageChannels, USAGE_DISPLAY_DEFAULTS, findProvider, type AgentProfile, type CostScan, type PlanUsageView, type ProviderStatus, type UsageAlert, type UsageDisplayConfig } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { announce } from '../../core/a11y/live-region'
 import { el, icon, showToast } from '../../components'
@@ -30,6 +30,12 @@ export function fmtAge(fetchedAt: number, now: number): string {
   if (m < 60) return `as of ${m}m ago`
   return `as of ${Math.round(m / 60)}h ago`
 }
+
+/** Cost-line formatters (08c) for the CodexBar cost row — a display estimate,
+ *  never a bill (ADR 0007). Money keeps 2 decimals; tokens go compact. */
+const fmtMoney = (n: number): string => n.toFixed(2)
+const fmtTok = (n: number): string =>
+  n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(Math.round(n))
 
 /** Severity rank for popover ordering (7/09): runs-out speaks first, then
  *  on-pace, surplus, and unpaceable tiles (error/unconfigured) last;
@@ -160,135 +166,225 @@ export const usageFeature: UiFeature = {
     const wrap = el('span', { class: 'usage-wrap' }, [gauge, pop])
     ctx.titlebarRight.append(wrap)
 
-    const renderPop = (): void => {
-      pop.innerHTML = ''
-      pop.classList.toggle('is-compact', display.density === 'compact')
-      const now = Date.now()
-      if (!plans.length) {
-        pop.append(el('div', { class: 'menu-empty', text: 'No usage sources yet — enable a provider in Settings.' }))
-      }
-      const byProvider = new Map<string, PlanUsageView[]>()
-      for (const p of plans) {
-        const list = byProvider.get(p.providerId) ?? []
-        list.push(p)
-        byProvider.set(p.providerId, list)
-      }
-      // ── 7/10 header: the gauge switcher + the highest-severity line, which
-      // surfaces regardless of ordering or scroll (the header is sticky).
-      if (plans.length) {
-        const sw = el('select', { class: 'usage-switcher', ariaLabel: 'Gauge shows' }) as HTMLSelectElement
-        sw.append(el('option', { value: 'merged', text: 'Merged — highest severity' }))
-        sw.append(el('option', { value: 'auto', text: 'Auto — highest usage' }))
-        const pinIds = [...new Set([...byProvider.keys(), ...(display.mode === 'pinned' && display.pin ? [display.pin] : [])])]
-        for (const id of pinIds) sw.append(el('option', { value: `pin:${id}`, text: `Pin — ${id}` }))
-        sw.value = display.mode === 'pinned' && display.pin ? `pin:${display.pin}` : display.mode
-        sw.addEventListener('change', () => {
-          const v = sw.value
-          const patch: Partial<UsageDisplayConfig> = v.startsWith('pin:')
-            ? { mode: 'pinned', pin: v.slice(4) }
-            : { mode: v as GaugeMode }
-          display = { ...display, ...patch } // optimistic paint; main echoes via displayChanged
-          paintGauge()
-          void bridge.invoke(UsageChannels.displaySet, patch)
-          // Mode enum ONLY (ADR 0005) — never the pinned provider id.
-          getTelemetry().captureEvent({ name: 'usage.display', props: { mode: display.mode } })
-        })
-        const header = el('div', { class: 'usage-header' }, [sw])
-        const worst = bestBySeverity(plans)
-        if (worst?.pace?.verdict === 'runs-out')
-          header.append(el('div', { class: 'usage-top-alert', text: `${worst.planLabel} — ${worst.pace.text}` }))
-        pop.append(header)
-      }
-      // Group order (7/10): severity by default; a manual pin order when set —
-      // the top-alert above keeps the worst plan visible either way.
-      const groups = [...byProvider.entries()]
-      if (display.order === 'manual' && display.pinOrder.length) {
-        const rank = (id: string): number => {
-          const i = display.pinOrder.indexOf(id)
-          return i === -1 ? 1000 : i
-        }
-        groups.sort((a, b) => rank(a[0]) - rank(b[0]))
-      } else {
-        const gRank = (g: PlanUsageView[]): number => {
-          const best = bestBySeverity(g)
-          return best ? severityRank(best) * 1000 - (best.windows[0]?.usedPct ?? 0) : 9999
-        }
-        groups.sort((a, b) => gRank(a[1]) - gRank(b[1]))
-      }
-      for (const [providerId, group] of groups) {
-        pop.append(el('div', { class: 'usage-group-label section-label', text: providerId }))
-        // 7/09: severity orders the tiles — runs-out first, hotter first.
-        group.sort((a, b) => severityRank(a) - severityRank(b) || (b.windows[0]?.usedPct ?? 0) - (a.windows[0]?.usedPct ?? 0))
-        const activeId = activeIdFor(providerId)
-        for (const p of group) {
-          const isActive = p.profileId === activeId
-          const tile = el('div', {
-            class: 'usage-tile' + (isActive ? ' is-active' : ''),
-            tabIndex: -1,
-            dataset: { provider: p.providerId, profile: p.profileId, health: p.health }
-          })
-          // Click = switch the active lane (Enter does the same; 7/09). A tile
-          // with no matching Phase-4 profile is display-only — nothing to flip.
-          tile.addEventListener('click', () => void switchActive(p.providerId, p.profileId, false))
-          const st = statuses.find((s) => s.providerId === p.providerId)
-          const chip =
-            st && (st.state === 'degraded' || st.state === 'outage')
-              ? el('span', { class: `pill usage-status is-${st.state}`, text: st.state, title: st.note ?? '' })
-              : null
-          tile.append(
-            el('div', { class: 'usage-tile-head' }, [
-              el('span', { class: 'usage-plan', text: p.planLabel }),
-              el('span', { class: 'usage-profile', text: p.profileId }),
-              chip,
-              el('span', { class: `pill usage-health is-${p.health}`, text: p.health })
-            ])
-          )
-          for (const w of p.windows) {
-            const cd = w.resetText ?? null
-            const rowEl = el('div', { class: 'usage-row' }, [
-              el('span', { class: 'usage-row-label', text: w.label }),
-              el('span', { class: 'usage-track usage-track-row' }, [
-                el('span', {
-                  class: 'usage-fill' + (w.usedPct >= BADGE_PCT ? ' is-hot' : '')
-                })
-              ]),
-              el('span', { class: 'usage-pct', text: `${Math.round(w.usedPct)}%` }),
-              cd ? el('span', { class: 'usage-reset', text: cd }) : null
-            ])
-            const fill = rowEl.querySelector('.usage-fill') as HTMLElement
-            fill.style.width = `${w.usedPct}%`
-            if (w.resetsAt) rowEl.title = new Date(w.resetsAt).toLocaleString()
-            tile.append(rowEl)
-          }
-          if (p.pace) {
-            tile.append(el('div', { class: `usage-verdict sev-${p.pace.severity}`, text: p.pace.text }))
-          } else if (p.reason) {
-            tile.append(el('div', { class: 'usage-verdict sev-quiet', text: `${p.reason} — ${fmtAge(p.fetchedAt, now)}` }))
-          }
-          pop.append(tile)
-        }
-      }
+    /** Persist + reflect a display-mode change (the provider tabs' click). The
+     *  KV (`usage.display.*`) and the state machine are UNCHANGED — only the
+     *  trigger moved from a <select> to tabs. */
+    const setDisplay = (patch: Partial<UsageDisplayConfig>): void => {
+      display = { ...display, ...patch } // optimistic paint; main echoes via displayChanged
+      paintGauge()
+      void bridge.invoke(UsageChannels.displaySet, patch)
+      // Mode enum ONLY (ADR 0005) — never the pinned provider id.
+      getTelemetry().captureEvent({ name: 'usage.display', props: { mode: display.mode } })
+      renderPop() // the popover follows the gauge's selection
+    }
+
+    /** The KEPT footer (05b's theme check): snapshot age + in-place refresh. */
+    const popFoot = (now: number): HTMLElement => {
       const newest = plans.reduce((m, p) => Math.max(m, p.fetchedAt), 0)
       const refreshBtn = el('button', { class: 'icon-btn usage-refresh', type: 'button', ariaLabel: 'Refresh usage', title: 'Refresh' }, [icon('rotate-cw', 13)])
       refreshBtn.addEventListener('click', () => {
         announce('Refreshing usage') // A11Y-01: the gauge update is otherwise silent
         void bridge.invoke(UsageChannels.refresh, undefined)
       })
-      const gearBtn = el('button', { class: 'icon-btn usage-gear', type: 'button', ariaLabel: 'Usage settings', title: 'Usage settings' }, [icon('sliders', 13)])
-      gearBtn.addEventListener('click', () => {
+      return el('div', { class: 'usage-foot' }, [el('span', { class: 'usage-age', text: newest ? fmtAge(newest, now) : '' }), refreshBtn])
+    }
+
+    // ── The popover, recut to the CodexBar dropdown (08c): provider tabs, then
+    //    the selected provider's ACTIVE lane — header · windows · pace · credits ·
+    //    cost · actions · profile switch · footer. The LAYOUT is copied; the DATA
+    //    is ours — every element is backed by IPC, and a slot we can't back (a $
+    //    cap, a faked Sonnet meter, in-popover add-account) is dropped, not invented.
+    const renderPop = (): void => {
+      pop.innerHTML = ''
+      pop.classList.toggle('is-compact', display.density === 'compact')
+      const now = Date.now()
+
+      const byProvider = new Map<string, PlanUsageView[]>()
+      for (const p of plans) {
+        const list = byProvider.get(p.providerId) ?? []
+        list.push(p)
+        byProvider.set(p.providerId, list)
+      }
+      if (!plans.length) {
+        pop.append(el('div', { class: 'menu-empty', text: 'No usage sources yet — enable a provider in Settings.' }))
+        pop.append(popFoot(now))
+        return
+      }
+      // A provider with a plan IS an enabled/polled provider (the poller only
+      // tracks enabled rows) — the tab set, worst-severity first.
+      const providerIds = [...byProvider.keys()].sort((a, b) => {
+        const ra = bestBySeverity(byProvider.get(a)!)
+        const rb = bestBySeverity(byProvider.get(b)!)
+        return (ra ? severityRank(ra) : 9) - (rb ? severityRank(rb) : 9)
+      })
+
+      // ── Provider tabs (step 1): All · Auto · one per enabled provider ──
+      const tabs = el('div', { class: 'usage-tabs', role: 'tablist', ariaLabel: 'Gauge shows' })
+      const modeTab = (id: string, label: string, on: boolean, onClick: () => void): HTMLElement => {
+        const t = el('button', { class: 'usage-tab usage-tab-mode' + (on ? ' is-selected' : ''), type: 'button', role: 'tab', dataset: { tab: id } }, [
+          el('span', { class: 'usage-tab-label', text: label })
+        ])
+        t.setAttribute('aria-selected', String(on))
+        t.addEventListener('click', onClick)
+        return t
+      }
+      tabs.append(modeTab('all', 'All', display.mode === 'merged', () => setDisplay({ mode: 'merged' })))
+      tabs.append(modeTab('auto', 'Auto', display.mode === 'auto', () => setDisplay({ mode: 'auto' })))
+      for (const id of providerIds) {
+        const on = display.mode === 'pinned' && display.pin === id
+        const mine = byProvider.get(id)!
+        const lane = mine.find((p) => p.profileId === activeIdFor(id)) ?? mine[0]
+        const usedPct = lane?.windows[0]?.usedPct ?? 0
+        const t = el('button', { class: 'usage-tab' + (on ? ' is-selected' : ''), type: 'button', role: 'tab', dataset: { tab: id } }, [
+          el('span', { class: 'usage-tab-glyph', text: id.charAt(0).toUpperCase() }),
+          el('span', { class: 'usage-tab-label', text: findProvider(id)?.label ?? id }),
+          el('span', { class: 'usage-tab-track' }, [
+            el('span', { class: 'usage-tab-fill' + (usedPct >= BADGE_PCT ? ' is-hot' : '') })
+          ])
+        ])
+        ;(t.querySelector('.usage-tab-fill') as HTMLElement).style.width = `${usedPct}%`
+        t.setAttribute('aria-selected', String(on))
+        t.addEventListener('click', () => setDisplay({ mode: 'pinned', pin: id }))
+        tabs.append(t)
+      }
+      pop.append(tabs)
+
+      // The focused provider mirrors the gauge's selection; its ACTIVE lane is
+      // the stack, its profiles the switch row.
+      const shown = gaugePlan()
+      const shownProvider = shown?.providerId ?? providerIds[0]
+      const provPlans = byProvider.get(shownProvider) ?? []
+      const activeProfileId = activeIdFor(shownProvider)
+      const activePlan = provPlans.find((p) => p.profileId === activeProfileId) ?? shown ?? provPlans[0]
+      if (!activePlan) {
+        pop.append(popFoot(now))
+        return
+      }
+
+      // Provider status (7/08) is per-PROVIDER; it rides the profile tiles below (where
+      // the outage smoke reads it) — not the header, which stays name · age · tier · health.
+      const provStatus = statuses.find((s) => s.providerId === shownProvider)
+      const outaged = !!provStatus && (provStatus.state === 'degraded' || provStatus.state === 'outage')
+
+      // ── Header (step 2): name (bold) · freshness · plan tier · health ──
+      const head = el('div', { class: 'usage-glance-head' }, [
+        el('span', { class: 'usage-glance-name', text: findProvider(shownProvider)?.label ?? shownProvider }),
+        el('span', { class: 'usage-glance-age', text: fmtAge(activePlan.fetchedAt, now) }),
+        el('span', { class: 'usage-glance-tier', text: activePlan.planLabel }),
+        el('span', { class: `pill usage-health is-${activePlan.health}`, text: activePlan.health })
+      ])
+      pop.append(head)
+
+      // ── Windows (step 3): a row per UsageWindow; the pace line under Weekly.
+      //    .usage-verdict renders pace.text VERBATIM (golden-locked); the delta
+      //    is a separate .usage-pace-delta. Both inked sev-${severity}. ──
+      const paceLine = (): HTMLElement =>
+        el('div', { class: 'usage-pace' }, [
+          el('span', { class: `usage-verdict sev-${activePlan.pace!.severity}`, text: activePlan.pace!.text }),
+          el('span', { class: `usage-pace-delta sev-${activePlan.pace!.severity}`, text: activePlan.pace!.deltaText })
+        ])
+      let paceDone = false
+      for (const w of activePlan.windows) {
+        const row = el('div', { class: 'usage-row' }, [
+          el('span', { class: 'usage-row-label', text: w.label }),
+          el('span', { class: 'usage-track usage-track-row' }, [el('span', { class: 'usage-fill' + (w.usedPct >= BADGE_PCT ? ' is-hot' : '') })]),
+          el('span', { class: 'usage-pct', text: `${Math.round(w.usedPct)}% used` }),
+          w.resetText ? el('span', { class: 'usage-reset', text: w.resetText }) : null
+        ])
+        ;(row.querySelector('.usage-fill') as HTMLElement).style.width = `${w.usedPct}%`
+        if (w.resetsAt) row.title = new Date(w.resetsAt).toLocaleString()
+        pop.append(row)
+        if (!paceDone && activePlan.pace && /weekly/i.test(w.label)) {
+          pop.append(paceLine())
+          paceDone = true
+        }
+      }
+      if (activePlan.pace && !paceDone) pop.append(paceLine())
+      else if (!activePlan.pace && activePlan.reason)
+        pop.append(el('div', { class: 'usage-verdict sev-quiet', text: `${activePlan.reason} — ${fmtAge(activePlan.fetchedAt, now)}` }))
+
+      // ── Credits / spend (step 4) — NEVER a $X/$Y cap (CodexBar's has none) ──
+      if (activePlan.credits)
+        pop.append(el('div', { class: 'usage-credits', text: `${activePlan.credits.remaining} ${activePlan.credits.label}` }))
+      else if (activePlan.spend)
+        pop.append(el('div', { class: 'usage-credits', text: `${activePlan.spend.currency}${fmtMoney(activePlan.spend.amount)}` }))
+
+      // ── Cost (step 4): usage:cost → CostScan, filled async; › to § Usage ──
+      const costRow = el('button', { class: 'usage-cost menu-item', type: 'button', title: 'Local cost log — opens Usage history' }, [
+        icon('clock', 14),
+        el('span', { class: 'usage-cost-text', text: 'Cost…' }),
+        el('span', { class: 'usage-cost-more', text: '›' })
+      ])
+      costRow.addEventListener('click', () => {
         close()
-        requestSettingsTab('usage') // deep-link: open Settings on its own Usage page
+        requestSettingsTab('usage')
         setActiveView('settings')
       })
+      pop.append(costRow)
+      void (bridge.invoke(UsageChannels.cost, shownProvider) as Promise<CostScan>)
+        .then((scan) => {
+          if (pop.hidden || !costRow.isConnected) return
+          const txt = costRow.querySelector('.usage-cost-text') as HTMLElement
+          if (!scan || !scan.days.length) {
+            txt.textContent = 'Cost —' // no cost log
+            return
+          }
+          const cur = scan.currency
+          const today = scan.days[scan.days.length - 1]
+          const sum = scan.days.reduce((a, d) => a + d.spend, 0)
+          const tok = scan.days.reduce((a, d) => a + d.tokens, 0)
+          txt.textContent = `Today ${cur}${fmtMoney(today.spend)} · ${fmtTok(today.tokens)} · Last 30 days ${cur}${fmtMoney(sum)} · ${fmtTok(tok)}`
+        })
+        .catch(() => undefined)
+
+      // ── Actions (step 5): icon rows. Add-account is dropped (can't add in
+      //    the popover); the dashboard/gear open § Usage, About opens § About. ──
+      const action = (name: Parameters<typeof icon>[0], label: string, onClick: () => void, cls = ''): HTMLElement => {
+        const b = el('button', { class: 'usage-action menu-item' + (cls ? ' ' + cls : ''), type: 'button' }, [icon(name, 14), document.createTextNode(label)])
+        b.addEventListener('click', onClick)
+        return b
+      }
+      const goUsage = (): void => {
+        close()
+        requestSettingsTab('usage')
+        setActiveView('settings')
+      }
+      pop.append(action('gauge', 'Usage Dashboard', goUsage))
+      const statusUrl = findProvider(shownProvider)?.statusUrl
+      if (statusUrl) pop.append(action('globe', 'Status Page', () => void bridge.invoke(BrowserChannels.openExternal, { url: statusUrl })))
+      pop.append(action('sliders', 'Settings…', goUsage, 'usage-gear'))
+      pop.append(action('info', 'About', () => {
+        close()
+        requestSettingsTab('about')
+        setActiveView('settings')
+      }))
+
+      // ── Profile switch row (step 5): every profile of the shown provider, the
+      //    active lane marked. Same .usage-tile + data-provider/data-profile
+      //    contract the settings plans-table mirrors; Enter/click drives the ONE
+      //    Phase-4 switch (the popover-wide keydown handler reads .usage-tile). ──
+      const laneOrder = provPlans.slice().sort((a, b) => severityRank(a) - severityRank(b) || (b.windows[0]?.usedPct ?? 0) - (a.windows[0]?.usedPct ?? 0))
+      const switchRow = el('div', { class: 'usage-switch' })
+      for (const p of laneOrder) {
+        const tile = el('div', {
+          class: 'usage-tile' + (p.profileId === activeProfileId ? ' is-active' : ''),
+          tabIndex: -1,
+          dataset: { provider: p.providerId, profile: p.profileId, health: p.health }
+        }, [
+          el('span', { class: 'usage-profile', text: p.profileId }),
+          el('span', { class: 'usage-track usage-track-row usage-track-mini' }, [el('span', { class: 'usage-fill' + ((p.windows[0]?.usedPct ?? 0) >= BADGE_PCT ? ' is-hot' : '') })])
+        ])
+        ;(tile.querySelector('.usage-fill') as HTMLElement).style.width = `${p.windows[0]?.usedPct ?? 0}%`
+        if (provStatus && outaged)
+          tile.append(el('span', { class: `pill usage-status is-${provStatus.state}`, text: provStatus.state, title: provStatus.note ?? '' }))
+        tile.addEventListener('click', () => void switchActive(p.providerId, p.profileId, false))
+        switchRow.append(tile)
+      }
+      pop.append(switchRow)
+
       // The one-line post-switch hint: pointers flipped for NEW launches only.
       if (switchHint) pop.append(el('div', { class: 'usage-switch-hint', text: switchHint }))
-      pop.append(
-        el('div', { class: 'usage-foot' }, [
-          el('span', { class: 'usage-age', text: newest ? fmtAge(newest, now) : '' }),
-          refreshBtn,
-          gearBtn
-        ])
-      )
+      pop.append(popFoot(now))
     }
 
     const open = (): void => {

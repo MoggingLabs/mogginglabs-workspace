@@ -62,6 +62,8 @@ export function createLayoutGridPicker(opts: {
   specs: LayoutSpec[]
   selected: number
   onSelect: (count: number) => void
+  /** Compact tiles for the dense titlebar dropdown (default: the wizard's full size). */
+  compact?: boolean
 }): LayoutGridPickerHandle {
   let selected = opts.selected
   const tiles = new Map<number, HTMLButtonElement>()
@@ -77,7 +79,7 @@ export function createLayoutGridPicker(opts: {
   }
 
   const root = el('div', {
-    class: 'layout-picker',
+    class: 'layout-picker' + (opts.compact ? ' layout-picker--compact' : ''),
     role: 'radiogroup',
     ariaLabel: 'How many terminals',
     onKeydown: (e) => {

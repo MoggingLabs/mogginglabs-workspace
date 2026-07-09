@@ -164,6 +164,7 @@ run_smoke FIRSTRUN     MOGGING_FIRSTRUN  1 150 firstrun
 run_smoke PRODUCT      MOGGING_PRODUCT   1 300 product
 run_smoke USAGE        MOGGING_USAGE     1 150 usage
 run_smoke USAGEUI      MOGGING_USAGEUI   1 180 usageui
+run_smoke USAGEGLANCE  MOGGING_USAGEGLANCE 1 180 usageglance
 run_smoke WEBUSAGE     MOGGING_WEBUSAGE  1 150 webusage
 run_smoke USAGECLI     MOGGING_USAGECLI  1 180 usagecli
 run_smoke USAGESET     MOGGING_USAGESET  1 180 usageset
@@ -192,6 +193,8 @@ run_smoke SETUSAGE     MOGGING_SETUSAGE  1 240 setusage
 run_smoke HOMEUX       MOGGING_HOMEUX    1 240 homeux
 run_smoke BOARDUX      MOGGING_BOARDUX   1 240 boardux
 run_smoke FEEDBACKUX   MOGGING_FEEDBACKUX 1 240 feedbackux
+run_smoke CHROMEUX     MOGGING_CHROMEUX  1 300 chromeux
+run_smoke DOCKUX       MOGGING_DOCKUX    1 240 dockux
 
 echo ""
 echo "══ SWEEP RESULTS ══"

@@ -112,6 +112,12 @@
   --sp-6: 32px;
   --sp-7: 48px;
   --sp-8: 64px;
+  /* Radius ramp. --r-xs is the dense-terminal-chrome stop (pane-header chips, small
+     inputs/buttons). 8.5/08 DECISION (recorded in docs/11): 3px earns a named stop
+     rather than folding into --r-sm — folding would double the corner on 14-16px chips
+     and read as pills, blunting the crisp dense-chrome look the pack sanctions. The
+     accidental 4px/5px drift collapses onto the nearest stop (4→xs, 5→sm). */
+  --r-xs: 3px;
   --r-sm: 6px;
   --r-md: 10px;
   --r-lg: 14px;
@@ -140,6 +146,12 @@
      stale rects in others) — the floor keeps the icon cluster clear of the OS
      buttons no matter what env() says. */
   --controls-reserve: 140px;
+  /* macOS traffic-light inset: clears the three OS window lights that overlay the
+     top-LEFT. Derived from main/window.ts's trafficLightPosition (x:14 → 3×12px lights
+     at 8px pitch ≈ 66px + 18px air). A named token, not a magic literal duplicated from
+     the main process — the Windows side already reserves via --controls-reserve; this is
+     its darwin twin. If window.ts moves the lights, move this with it. */
+  --traffic-light-inset: 84px;
 
   /* Legacy aliases — keep every pre-redo selector resolving while it migrates. */
   --bg: var(--bg-app);
@@ -944,7 +956,7 @@ button {
 #titlebar .brand-logo {
   width: 22px;
   height: 22px;
-  border-radius: 5px;
+  border-radius: var(--r-sm);
   object-fit: cover;
   display: block;
   flex: none;
@@ -995,9 +1007,10 @@ button {
 #titlebar .titlebar-slot:empty {
   display: none;
 }
-/* macOS traffic lights overlay the top-left — clear the brand past them. */
+/* macOS traffic lights overlay the top-left — clear the brand past them. The inset is
+   a token (--traffic-light-inset), coupled to main/window.ts's trafficLightPosition. */
 #app.platform-darwin #titlebar .brand {
-  padding-left: 84px;
+  padding-left: var(--traffic-light-inset);
 }
 #app.platform-darwin.is-fullscreen #titlebar .brand {
   padding-left: var(--sp-3); /* traffic lights auto-hide in macOS fullscreen */
@@ -1095,6 +1108,28 @@ button {
      padding-bottom), the FIRST tab's ring was sheared flat under the
      "Workspaces" title. sp-3 = breathing room below the hairline AND glow room. */
   padding: var(--sp-3) var(--sp-2) var(--sp-2);
+  --rail-fade: 12px;
+}
+/* Scroll-edge fade (the rail's one A− gap): the list masks the edge it can scroll PAST
+   — the vertical twin of .ws-label's edge mask, so a long roster reads as scrollable, not
+   clipped. Only the scrolled-past edge fades, so a FULLY-VISIBLE tab is never masked and
+   the loud .ws-attn attention count is never dimmed (guardrail: attention is never
+   dimmed). workspace/index.ts toggles fade-top/fade-bot from scroll position + overflow
+   (CHROMEUX (b) asserts the fade, (e) asserts data-attention still fires). */
+#workspace-tabs.fade-top {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--rail-fade));
+}
+#workspace-tabs.fade-bot {
+  mask-image: linear-gradient(to top, transparent 0, #000 var(--rail-fade));
+}
+#workspace-tabs.fade-top.fade-bot {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--rail-fade),
+    #000 calc(100% - var(--rail-fade)),
+    transparent 100%
+  );
 }
 /* Workspace identity ramp (Phase-5/01). The controller stamps `--ws-accent` inline
    on each rail item — the ONE sanctioned inline style — and the ramp derives every
@@ -1130,6 +1165,8 @@ button {
      focus     the global 2px brand focus ring (interaction, not selection). */
 .workspace-tab {
   position: relative;
+  flex: none; /* a rail item takes its natural height and never shrinks — the list
+                 scrolls instead ("tabs flex:none → scroll, not shrink", the audit). */
   display: flex;
   align-items: center;
   gap: var(--sp-2);
@@ -1198,7 +1235,7 @@ button {
 .workspace-tab .ws-rename {
   width: 100%;
   border: 1px solid var(--accent);
-  border-radius: 4px;
+  border-radius: var(--r-xs);
   background: var(--bg-inset);
   color: var(--text-hi);
   font: inherit;
@@ -1221,7 +1258,7 @@ button {
   width: 20px;
   height: 20px;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--r-sm);
   background: transparent;
   color: var(--text-lo);
   cursor: pointer;
@@ -1324,15 +1361,21 @@ button {
 }
 #app.rail-collapsed .workspace-tab {
   justify-content: center;
-  padding: 6px 4px;
+  padding: 6px var(--sp-1);
 }
 #app.rail-collapsed .workspace-tab .ws-badges {
   position: absolute;
   top: -2px;
   right: 0;
 }
-#app.rail-collapsed .workspace-tab:hover .ws-count {
-  display: none;
+/* Bug #10: collapsed, .ws-badges (the attention count) sits top-right — and the
+   agent-browsing dot defaults to the SAME corner (top:3px right:3px), stacking two
+   "look here" signals on one 8px square. Drop the agent dot to the bottom so both
+   read; the attention count keeps the top-right, untouched (guardrail: attention
+   surfaces are never moved/shrunk to make room). */
+#app.rail-collapsed .workspace-tab.is-agent-browsing::after {
+  top: auto;
+  bottom: 3px;
 }
 
 /* Command blocks (OSC 133 overlay on xterm — never a fork). Exit code keeps its
@@ -1381,48 +1424,42 @@ button {
   color: var(--text-hi);
 }
 
-/* Grid-layout picker (titlebar popover): one tile per template. */
+/* Grid-layout picker (titlebar popover): the shared createLayoutGridPicker(), compact
+   variant. REMOVE #16 retired the ad-hoc .layout-menu-tile builder — whose
+   `.layout-menu-tile .layout-tile-count` reached across to override the shared
+   component's own class. One picker, one source of truth now. */
 .layout-launcher {
   position: relative;
+}
+/* Bug #11: the grid picker re-grids the ACTIVE workspace — meaningless on Home, Board
+   and Settings, and clicked there it silently re-grids the hidden active workspace.
+   Present ONLY where a grid is on screen. Absent, not merely disabled: display:none
+   drops it from the tab order and hit-testing (CHROMEUX (d) asserts it). */
+#app:not(.view-grid) .layout-launcher {
+  display: none;
 }
 .layout-menu {
   top: 32px;
   left: 0;
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--sp-1);
-  min-width: 0;
   padding: var(--sp-2);
 }
 .layout-menu[hidden] {
   display: none;
 }
-.layout-menu-tile {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+/* Compact tiles for the dense titlebar dropdown (the wizard runs the same picker at
+   full size). Only size/radius shift; hover + selected states come from .layout-tile. */
+.layout-picker--compact {
+  flex-wrap: nowrap;
   gap: var(--sp-1);
+}
+.layout-picker--compact .layout-tile {
   width: 56px;
   height: 56px;
-  padding: 6px 6px 4px;
-  border: 1px solid var(--border);
+  padding: 6px;
   border-radius: var(--r-sm);
-  background: var(--bg-surface);
-  cursor: pointer;
 }
-.layout-menu-tile:hover {
-  border-color: var(--border-strong);
-}
-.layout-menu-tile.is-selected {
-  border-color: var(--accent);
-  background: var(--accent-weak);
-}
-.layout-menu-tile .grid-preview {
-  flex: 1 1 auto;
-  width: 100%;
-}
-.layout-menu-tile .layout-tile-count {
-  font-size: 10px;
+.layout-picker--compact .layout-tile-count {
+  font-size: var(--fs-10);
 }
 
 #workspace-host {
@@ -1489,7 +1526,7 @@ button {
   align-items: center;
   gap: var(--sp-2);
   height: 28px;
-  padding: 0 2px 0 8px; /* actions hug the pane's right edge, like the reference bar */
+  padding: 0 2px 0 var(--sp-2); /* actions hug the pane's right edge, like the reference bar */
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
   flex: none;
@@ -1505,6 +1542,9 @@ button {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  overflow: hidden; /* bug #9: with remote+role+claims+mcp all lit in a narrow pane the
+                       flex:none chips clip at the column edge instead of spilling into
+                       the centre branch chip. One-line always; chips truncate, no wrap. */
   grid-column: 1;
 }
 .pane-header .pane-git {
@@ -1525,7 +1565,7 @@ button {
   font-weight: var(--fw-semibold);
   color: var(--info);
   border: 1px solid var(--info);
-  border-radius: 3px;
+  border-radius: var(--r-xs);
   padding: 0 var(--sp-1);
   line-height: 14px;
   max-width: 90px;
@@ -1554,7 +1594,7 @@ button {
   font-size: var(--fs-10);
   color: var(--text-lo);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--r-xs);
   padding: 0 var(--sp-1);
   line-height: 14px;
 }
@@ -1599,19 +1639,53 @@ button {
    the reviewer (the gatekeeping role) is the one that earns a distinct tone. */
 .pane-role {
   flex: none;
+  max-width: 88px; /* bug #9: a long role ellipsises instead of shoving the cluster into
+                      the branch chip; the full text is in the title tooltip (set in TS). */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--fs-10);
   font-weight: var(--fw-semibold);
   text-transform: uppercase;
   letter-spacing: var(--track-wide);
   color: var(--text-mid);
   border: 1px solid var(--border-strong);
-  border-radius: 3px;
+  border-radius: var(--r-xs);
   padding: 0 var(--sp-1);
   line-height: 14px;
 }
 .pane-role[data-role='reviewer'] {
   color: var(--info);
   border-color: var(--info);
+}
+/* MCP status chip (8/11): connected count / attention / restart nudge. Co-located with
+   its header siblings (was ~1500 lines away) and aligned on every axis the audit
+   flagged — --fs-10 (not --fs-11), --r-xs (not --r-full), 0 var(--sp-1) padding (not
+   6px), and a pinned line-height so it resolves the SAME box inside the 28px bar (its
+   unset line-height gave it a taller one). */
+.pane-mcp {
+  flex: none;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
+  line-height: 14px;
+  color: var(--text-lo);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  padding: 0 var(--sp-1);
+}
+.pane-mcp.is-attention {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 45%, transparent);
+}
+.pane-mcp.is-restart {
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  cursor: default;
 }
 .pane-title {
   min-width: 0;
@@ -1634,11 +1708,11 @@ button {
 .pane-title-input {
   width: 140px;
   border: 1px solid var(--accent);
-  border-radius: 4px;
+  border-radius: var(--r-xs);
   background: var(--bg-inset);
   color: var(--text-hi);
   font-size: var(--fs-11);
-  padding: 1px 4px;
+  padding: 1px var(--sp-1);
   outline: none;
 }
 .pane-actions {
@@ -1656,7 +1730,7 @@ button {
   height: 20px;
   padding: 0;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--r-xs);
   background: transparent;
   color: var(--text-lo);
   cursor: pointer;
@@ -1759,14 +1833,11 @@ body.resizing * {
   user-select: none;
 }
 
-/* Per-pane badge cluster (in the header): state dot + zoom. (.pane-badge/.pane-label/
-   .pane-state are load-bearing selectors for the launch/milestone smokes.) */
-.pane-badge {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: none;
-}
+/* Pane state dot in the header. The real DOM contracts here are .pane-label
+   (agentlaunch-smoke) and .pane-state (milestone/state smokes); the .pane-badge class
+   stays on the cluster in terminal-pane.ts but has NO rule and NO smoke — REMOVE #11
+   deleted its inert `flex:none` (the element is a grid item, so it did nothing) and the
+   comment that claimed it was a smoke contract. */
 .pane-state {
   width: 8px;
   height: 8px;
@@ -1790,7 +1861,7 @@ body.resizing * {
   display: none;
   align-items: center;
   gap: var(--sp-1);
-  padding: 1px 8px;
+  padding: 1px var(--sp-2);
   border: none;
   border-radius: var(--r-full);
   background: var(--bg-elevated);
@@ -3298,27 +3369,9 @@ body.resizing * {
   color: var(--text-lo);
 }
 
-/* Pane MCP status chip (8/11): connected count / attention / restart nudge. */
-.pane-mcp {
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
-  padding: 0 6px;
-  border-radius: var(--r-full);
-  color: var(--text-lo);
-  background: var(--bg-inset);
-  border: 1px solid var(--border);
-  white-space: nowrap;
-  flex: none;
-}
-.pane-mcp.is-attention {
-  color: var(--warning);
-  border-color: color-mix(in srgb, var(--warning) 45%, transparent);
-}
-.pane-mcp.is-restart {
-  color: var(--accent-ink);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  cursor: default;
-}
+/* Pane MCP status chip: co-located with its header siblings (.pane-role/.pane-claims/
+   .pane-remote) up in the pane-header block, 8.5/08 — it used to live down here, ~1500
+   lines from the cluster it belongs to. */
 
 /* Event bridge (8/10): webhook event checkboxes + health chip. */
 .evbridge-events {
@@ -3508,25 +3561,30 @@ body.resizing * {
   gap: var(--sp-4);
   width: 100%;
 }
+/* Two-column token grid (08b): every row's label + keys align to ONE column pair via
+   subgrid, so the sheet reads as a table, not ragged flex rows. Fed from the single
+   SHORTCUTS source (KB-01) — the ? overlay and Settings § Shortcuts render this same list,
+   so their row counts are equal by construction (DOCKUX (d)). */
 .shortcuts-group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: 1fr auto;
 }
 .shortcuts-group-title {
+  grid-column: 1 / -1;
   font-size: var(--fs-11);
   font-weight: var(--fw-semibold);
-  letter-spacing: 0.08em;
+  letter-spacing: var(--track-wide); /* was a raw 0.08em — the house uppercase-tracking token */
   text-transform: uppercase;
   color: var(--text-lo);
   margin-bottom: var(--sp-1);
 }
 .shortcuts-row {
-  display: flex;
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
   align-items: center;
-  justify-content: space-between;
   gap: var(--sp-4);
-  padding: 5px 0;
+  padding: var(--sp-1) 0; /* tokenized off the old 5-pixel literal — the chrome bucket's last row */
   border-bottom: 1px solid var(--border);
 }
 .shortcuts-group:last-child .shortcuts-row:last-child {
@@ -3539,6 +3597,7 @@ body.resizing * {
 .shortcuts-row-keys {
   display: flex;
   align-items: center;
+  justify-self: end;
   gap: 3px;
   color: var(--text-lo);
   white-space: nowrap;
@@ -4147,7 +4206,8 @@ body.resizing * {
 }
 .browser-ws-chip {
   margin: var(--sp-2) var(--sp-2) 0;
-  padding: var(--sp-1) var(--sp-2);
+  min-height: 28px;
+  padding: 0 var(--sp-2);
   border: 1px solid var(--border);
   border-radius: var(--r-full);
   background: var(--bg-elevated);
@@ -4233,18 +4293,31 @@ body.resizing * {
   flex: none;
   color: var(--accent-ink);
 }
+/* The possession message — an agent holds the wheel. A rule of its OWN (AUDIT
+   § Blockers #1: it had none, inheriting the banner's --fs-11): semibold, a step up from
+   the banner chrome, and --text-hi so it clears AA on every theme. accent-ink fell to
+   4.35:1 on nord over the accent wash — the guard caught it. */
+.browser-agent-label {
+  flex: none;
+  font-size: var(--fs-12);
+  font-weight: var(--fw-semibold);
+  color: var(--text-hi);
+}
 .browser-agent-spacer {
   flex: 1 1 auto;
 }
 .browser-agent-stop {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px; /* a real hit target for the possession Stop (DoD 08b: dock controls >= 28px) */
   border: 1px solid var(--accent);
   border-radius: var(--r-sm);
   background: var(--accent);
   color: var(--accent-contrast);
   font-size: var(--fs-11);
   font-weight: var(--fw-semibold);
-  padding: 2px var(--sp-2);
+  padding: 0 var(--sp-2);
   cursor: pointer;
 }
 .browser-agent-stop:hover {
@@ -4275,11 +4348,14 @@ body.resizing * {
   overflow: hidden;
 }
 .browser-profile-opt {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
   border: 0;
   background: transparent;
   color: var(--text-lo);
   font-size: var(--fs-11);
-  padding: 2px var(--sp-2);
+  padding: 0 var(--sp-2);
   cursor: pointer;
   white-space: nowrap;
 }
@@ -4303,14 +4379,27 @@ body.resizing * {
   background: color-mix(in srgb, var(--warning) 14%, transparent);
   color: var(--text-hi);
 }
+/* The persistence-honesty line (ADR 0002) — its OWN rule (AUDIT § Blockers #1: it had
+   none): a step larger than the note chrome and --text-hi, so the consent honesty reads
+   and can never regress to a bare inherited span. */
+.browser-agentweb-note-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-12);
+  line-height: 1.4;
+  color: var(--text-hi);
+}
 .browser-agentweb-sites {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: transparent;
   color: var(--text-mid);
   font-size: var(--fs-11);
-  padding: 1px var(--sp-2);
+  padding: 0 var(--sp-2);
   cursor: pointer;
   white-space: nowrap;
 }
@@ -4330,16 +4419,22 @@ body.resizing * {
 .browser-confirm-bar[hidden] {
   display: none;
 }
+.browser-confirm-text {
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  color: var(--text-hi);
+}
 .browser-confirm-btn {
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 28px;
   border: 1px solid var(--warning);
   border-radius: var(--r-sm);
   background: transparent;
   color: var(--text-hi);
   font-size: var(--fs-11);
   font-weight: var(--fw-semibold);
-  padding: 2px var(--sp-2);
+  padding: 0 var(--sp-2);
   cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5066,36 +5161,167 @@ body.resizing * {
 .usage-gauge.hide-bars .usage-track {
   display: none;
 }
-/* 7/10 popover header: the gauge switcher + the worst plan's line — STICKY,
-   so the highest severity surfaces regardless of scroll or manual order. */
-.usage-header {
+/* ── The usage popover, recut to the CodexBar dropdown (8.5/08c) ──
+   Provider tabs (All · Auto · one per enabled provider), then the selected
+   provider's active lane. The gauge above is UNTOUCHED; every value is IPC-backed. */
+.usage-tabs {
   position: sticky;
   top: 0;
   z-index: 1;
   display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
+  gap: 2px;
   margin: 0 calc(-1 * var(--sp-2));
   padding: var(--sp-2);
+  overflow-x: auto;
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border);
 }
-.usage-switcher {
-  font-size: 11px;
-  width: 100%;
+.usage-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  min-height: 28px;
+  padding: 0 var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-mid);
+  font-size: var(--fs-11);
+  cursor: pointer;
+  white-space: nowrap;
 }
-.usage-top-alert {
-  font-size: 11px;
+.usage-tab:hover {
+  background: var(--bg-inset);
+}
+.usage-tab.is-selected {
+  background: var(--accent-weak);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--text-hi);
+}
+.usage-tab-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--r-xs);
+  background: var(--bg-inset);
+  font-size: var(--fs-10);
+  font-weight: var(--fw-semibold);
+}
+.usage-tab-track {
+  width: 28px;
+  height: 3px;
+  border-radius: var(--r-full);
+  background: var(--border);
+  overflow: hidden;
+}
+.usage-tab-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.usage-tab-fill.is-hot {
+  background: var(--warning);
+}
+/* Header: name (bold) · freshness · plan tier. */
+.usage-glance-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  padding: var(--sp-2) 0 var(--sp-1);
+}
+.usage-glance-name {
+  font-weight: var(--fw-semibold);
+  color: var(--text-hi);
+}
+.usage-glance-age {
+  color: var(--muted);
+  font-size: var(--fs-10);
+}
+.usage-glance-tier {
+  color: var(--text-mid);
+  font-size: var(--fs-11);
+}
+/* The pace line under Weekly: verdict (rendered VERBATIM) + delta, inked by severity. */
+.usage-pace {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+  font-size: var(--fs-11);
+}
+.usage-pace-delta {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--fw-semibold);
+}
+.usage-pace-delta.sev-warning {
   color: var(--warning);
 }
-/* 7/10 density: compact keeps the pills + bars, drops the verdict line. */
+.usage-pace-delta.sev-neutral {
+  color: var(--text-mid);
+}
+.usage-pace-delta.sev-quiet {
+  color: var(--muted);
+}
+/* Credits / spend line — never a $X/$Y cap. */
+.usage-credits {
+  padding: var(--sp-1) 0;
+  font-size: var(--fs-11);
+  color: var(--text-mid);
+  font-variant-numeric: tabular-nums;
+}
+/* Cost row (› opens § Usage history) + the icon-row actions. */
+.usage-cost,
+.usage-action {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: 28px;
+  padding: 0 var(--sp-2);
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-hi);
+  font-size: var(--fs-12);
+  text-align: left;
+  cursor: pointer;
+}
+.usage-cost:hover,
+.usage-action:hover {
+  background: var(--bg-inset);
+}
+.usage-cost-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-mid);
+  font-size: var(--fs-11);
+}
+.usage-cost-more {
+  flex: none;
+  color: var(--muted);
+}
+/* Profile switch row: compact tiles, the active lane marked (the switch contract). */
+.usage-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  padding: var(--sp-1) 0;
+}
+.usage-track-mini {
+  width: 40px;
+}
+/* Compact density: tighter tiles, the pace line folds away. */
 .usage-popover.is-compact .usage-tile {
   padding: 2px var(--sp-2);
 }
-.usage-popover.is-compact .usage-tile-head {
-  margin-bottom: 0;
-}
-.usage-popover.is-compact .usage-verdict {
+.usage-popover.is-compact .usage-pace {
   display: none;
 }
 /* 7/12 — the FULL Usage tab: configure + explain; the popover stays the glance. */
@@ -5360,7 +5586,10 @@ body.resizing * {
   text-transform: capitalize;
 }
 .usage-tile {
-  padding: var(--sp-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
   border-radius: var(--r-md);
   outline: none;
   position: relative;

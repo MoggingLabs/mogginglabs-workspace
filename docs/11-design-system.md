@@ -192,8 +192,9 @@ readability lives in ink/edge — neither sacrifices the other.
     (policy note at the token block).
   - **Menus size to content** (`width: max-content`, capped): an item that
     wraps reads broken, not compact.
-- **Radius**: `--r-sm 6` · `--r-md 10` · `--r-lg 14` · `--r-full 999` px; terminals
-  are deliberately square (`border-radius: 0` on `.layout-slot`).
+- **Radius**: `--r-xs 3` · `--r-sm 6` · `--r-md 10` · `--r-lg 14` · `--r-full 999` px;
+  terminals are deliberately square (`border-radius: 0` on `.layout-slot`). `--r-xs` is
+  the dense-terminal-chrome stop — see § Chrome refinements for the 8.5/08 decision.
 - **Elevation**: `--shadow-1/2/3` (per-theme alpha); dark leans on surface steps,
   light on shadows + borders.
 - **Motion**: `--dur-1 120ms` · `--dur-2 200ms`, `--ease cubic-bezier(.2,0,0,1)`;
@@ -231,6 +232,74 @@ readability lives in ink/edge — neither sacrifices the other.
 - Verified by the gallery state matrix (restored/maximized/fullscreen × both
   themes) + `out/gallery/probe-chrome.json` (fullscreen right gap ≈ sp-3, restored
   gap = controls reserve, no horizontal overflow, trigger centered).
+
+## Chrome refinements (Phase-8.5/08)
+
+The audit graded the three chrome surfaces high but not A, and left one token decision
+open. This step closed all three and the decision.
+
+- **The radius ramp gained an off-ramp: `--r-xs: 3px`.** The ramp was `--r-sm/md/lg/full`
+  with no stop below 6px, yet dense chrome shipped 3px, 4px and 5px radii with no token
+  behind three of them — the audit's "last unresolved either/or." **Decision: add
+  `--r-xs: 3px` rather than fold 3px into `--r-sm`.** Folding would double the corner on
+  the 14–16px pane-header chips (remote/role/claims/mcp), the rename inputs and the ⋯
+  buttons, making crisp dense chrome read as pills — the opposite of the standing
+  terminal-chrome rule that keeps panes square. So 3px earns a named stop; the accidental
+  4px/5px drift collapses onto the nearest one (4→`--r-xs`, 5→`--r-sm`). The ramp is now
+  `3 · 6 · 10 · 14 · 999`. CHROMEUX (f) grep-asserts no un-tokened radius remains in the
+  titlebar/rail/pane chrome. (Browser-dock + shortcuts radii are 08b's.)
+- **The right cluster's order is declared in one place.** `titlebar.ts`'s single
+  `cluster.append(titlebarLeft, titlebarRight, Home, Board, rail-toggle, Settings)` IS
+  the canonical left→right order — previously it was incidental feature-registration
+  order, and `feature-registry.ts` mis-documented `titlebarLeft` as "after the brand." It
+  is in fact the LEADING feature slot *inside* `.titlebar-right` (the brand cell holds
+  only logo/name/version). Both are corrected; nothing renders differently.
+- **The macOS traffic-light inset is a token, not a magic literal.**
+  `--traffic-light-inset: 84px` (the darwin brand's left padding) is coupled by comment
+  to `main/window.ts`'s `trafficLightPosition: { x: 14 }` — the darwin twin of the
+  Windows `--controls-reserve`. Keep the value; the coupling is now visible from both ends.
+- **The rail earns a scroll affordance.** `#workspace-tabs` masks the edge it can scroll
+  PAST (`fade-top`/`fade-bot`, toggled from scroll position + overflow) — the vertical twin
+  of `.ws-label`'s edge mask — so an 8+ workspace roster reads as scrollable, not clipped.
+  Only a scrolled-past edge fades, so a fully-visible tab is never masked and the loud
+  `.ws-attn` count is never dimmed (attention is never dimmed — guardrail). Tabs also gained
+  `flex: none`: they take their natural height and the list scrolls, rather than shrinking.
+- **Four bugs, closed** (audit § Bugs): **#9** `.pane-head-left { overflow: hidden }` (the
+  chips clip instead of spilling into the branch chip) + `.pane-role` gains a `max-width`
+  and hover tooltip; **#10** the collapsed-rail agent-browsing dot drops to the bottom so
+  it stops colliding with the `.ws-attn` count on one 8px corner; **#11**
+  `#app:not(.view-grid) .layout-launcher { display: none }` (the grid button is absent
+  where there is no grid to re-grid); **#12** the remote chip moved into the ordered
+  append so the state dot is again the leading glyph. All asserted by CHROMEUX (a–g),
+  `out/chromeux-result.json`.
+
+## Possession & consent chrome (Phase-8.5/08b)
+
+AUDIT § Blockers #1 — the pack's most serious finding — is discharged here: the surface
+that tells a user an agent holds the wheel of their browser had no CSS rule and no test.
+
+- **The possession spans get rules of their own.** `.browser-agent-label`,
+  `.browser-confirm-text` and `.browser-agentweb-note-text` were unstyled, inheriting
+  `--fs-11`. Each now owns a rule — a step up in size, weight where it earns it, and
+  `--text-hi` — so the possession message, the session-scoped consent question, and the
+  persistence-honesty line (ADR 0002) read, and can never silently regress to a bare span.
+- **AA on the safety text, and a gate that says so.** The label measured **4.35:1 on nord**
+  (accent-ink over the accent wash) — below AA, with nothing to object. It is `--text-hi`
+  now (worst 7.93:1 across four themes). The DOCKUX guard — written and watched green
+  BEFORE the restyle — asserts the possession surface is present, hit-testable, legible and
+  AA while `driving === true`, and absent while idle. Safety surfaces may be restyled,
+  never dimmed; if a restyle needs the guard relaxed, the restyle is wrong.
+- **Dock controls are real hit targets.** The possession/consent/agent-web text buttons
+  (`.browser-agent-stop`, `.browser-confirm-btn`, `.browser-agentweb-sites`,
+  `.browser-profile-opt`) reach `min-height: 28px` (the 26px shared `.icon-btn` is the
+  sanctioned primitive, unchanged). REMOVE #13 (the empty `.browser-ws-chip:hover`) and #14
+  (a dead `is-hidden` toggle) are cleared.
+- **The shortcuts sheet is a two-column subgrid.** `.shortcuts-row` is a `subgrid` row, so
+  every label/keys pair aligns to one column pair across the whole sheet. Its `5px` row
+  padding → `--sp-1` — the `chrome` bucket's last spacing violation, so the bucket (and
+  every bucket) is now **0** — and the raw `0.08em` title tracking → `--track-wide`. The `?`
+  overlay and Settings § Shortcuts render the one SHORTCUTS source (KB-01); DOCKUX (d)
+  asserts their row counts are equal.
 
 ## Terminal type (Phase-5/06)
 

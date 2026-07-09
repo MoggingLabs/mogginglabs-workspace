@@ -559,7 +559,6 @@ export const browserFeature: UiFeature = {
       confirmBar.hidden = !pendingOrigin
       if (pendingOrigin) confirmBtn.textContent = `Allow acting on ${pendingOrigin} this session`
       refreshRecentActs() // debounced; agent verbs are exactly when the trail moves
-      if (a.driving) trailBtn.classList.remove('is-hidden')
       trailMenu.innerHTML = ''
       for (const t of [...a.trail].reverse()) {
         const row = el('div', { class: 'menu-note browser-trail-row' })
