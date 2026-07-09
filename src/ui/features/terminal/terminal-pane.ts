@@ -146,6 +146,15 @@ export class TerminalPane {
     // Ctrl+V / Cmd+V / Ctrl+Shift+V / Shift+Insert paste.
     this.term.attachCustomKeyEventHandler((e) => this.handleKey(e))
 
+    // THE paste path — capture phase, so it runs before xterm's own `paste` listeners
+    // (which write clipboard text to the PTY unsanitised). Every way a paste can happen
+    // — Chromium's default action for the chord, the macOS Edit-menu key equivalent, a
+    // mouse click on Edit > Paste — converges on this one DOM event, so owning it here
+    // makes a double paste structurally impossible and guarantees sanitizePaste runs on
+    // all of them. handleKey deliberately lets paste chords through UNCANCELLED so the
+    // platform generates this event (see the paste branch there).
+    body.addEventListener('paste', (e) => this.handleNativePaste(e), true)
+
     // Copy-on-select (opt-in): mouse-drag a range and it is on the clipboard, X11-style.
     // Guarded on hasSelection so CLEARING a selection never blanks the clipboard.
     //
@@ -369,13 +378,19 @@ export class TerminalPane {
    * without preventDefault every paste ran TWICE — and the second, native run does not
    * strip the ESC[201~ end sentinel, silently bypassing sanitizePaste's paste-jacking
    * guard. Same shape for copy: xterm's native `copy` listener would re-write the
-   * clipboard alongside ours. Cancelling the keydown suppresses the clipboard default
-   * action, which suppresses both native listeners, making this handler the ONLY path.
+   * clipboard alongside ours. So the split of responsibilities is:
    *
-   * macOS caveat to verify on a mac runner: the app sets no application menu, so
-   * Electron's DEFAULT menu binds Cmd+C/Cmd+V through Edit roles. A renderer
-   * preventDefault suppresses non-reserved menu accelerators; if some Electron version
-   * ever lets the role fire anyway, the symptom would be a doubled paste on mac only.
+   *   COPY chords are consumed HERE (preventDefault + IPC write): we need the selection
+   *   text and the 'terminal' history attribution, and cancelling the keydown keeps
+   *   xterm's native copy listener from double-writing the clipboard.
+   *
+   *   PASTE chords are deliberately NOT consumed. Cancelling them would leave paste
+   *   depending on which platform machinery (Chromium default action on Win/Linux, the
+   *   Edit-menu key equivalent on macOS) we managed to suppress — the ambiguity that
+   *   produced a double paste. Instead the chord passes through uncancelled, the
+   *   platform turns it into the single DOM `paste` event, and handleNativePaste owns
+   *   that event in the capture phase. One trigger, one event, one sanitised write —
+   *   including pastes we never see as keystrokes (Edit > Paste clicked by mouse).
    */
   private handleKey(e: KeyboardEvent): boolean {
     if (e.type !== 'keydown') return true
@@ -421,8 +436,15 @@ export class TerminalPane {
       (e.shiftKey && !e.ctrlKey && !e.altKey && k === 'insert') ||
       (ctrl && !e.shiftKey && k === 'v')
     if (pasteChord) {
-      e.preventDefault()
-      void this.pasteFromClipboard().catch(() => undefined)
+      // Return false WITHOUT preventDefault: false keeps xterm's keydown machinery out
+      // (it would otherwise type a literal ^V and cancel the event itself), while the
+      // uncancelled default action becomes the one `paste` event handleNativePaste owns.
+      // Only chords with NO native trigger paste via IPC: on macOS, Chromium binds no
+      // editing action to Ctrl-based combos — Cmd+V is the mac paste, via the Edit menu.
+      if (IS_MAC && !cmd) {
+        e.preventDefault()
+        void this.pasteFromClipboard().catch(() => undefined)
+      }
       return false
     }
 
@@ -434,9 +456,20 @@ export class TerminalPane {
     return true
   }
 
-  /** Read the system clipboard and type it into the PTY, wrapped in bracketed paste when
-   *  the foreground program asked for it. xterm tracks the DECSET 2004 mode the shell (or
-   *  the agent CLI) set, so we honour whatever is actually running in this pane right now. */
+  /** The paste choke point (capture phase — see the listener registration). Consumes the
+   *  event so xterm's own unsanitised paste listener never runs, then types the payload
+   *  into the PTY wrapped in bracketed paste when the foreground program asked for it
+   *  (xterm tracks the DECSET 2004 mode the shell or agent CLI set). */
+  private handleNativePaste(e: ClipboardEvent): void {
+    e.preventDefault()
+    e.stopImmediatePropagation()
+    const text = e.clipboardData?.getData('text/plain') ?? ''
+    if (!text) return
+    terminalClient.write({ id: this.id, data: sanitizePaste(text, this.term.modes.bracketedPasteMode) })
+  }
+
+  /** IPC fallback for paste chords with no native trigger (macOS Ctrl-combos only —
+   *  everywhere else the platform emits a `paste` event and handleNativePaste owns it). */
   private async pasteFromClipboard(): Promise<void> {
     const text = await readText()
     if (!text) return
@@ -564,7 +597,18 @@ export class TerminalPane {
       showToast({ tone: 'danger', title: 'Drag-and-drop needs the desktop app' })
       return
     }
-    const paths = files.map((f) => resolve(f)).filter(Boolean)
+    // Per-file try/catch: getPathForFile THROWS for a File with no disk backing (a
+    // synthetic DataTransfer, some browser-internal drags). One virtual file must not
+    // void a drop that also carried real ones.
+    const paths = files
+      .map((f) => {
+        try {
+          return resolve(f)
+        } catch {
+          return ''
+        }
+      })
+      .filter(Boolean)
     if (!paths.length) return
 
     // A REMOTE pane's shell lives on the ssh host, not this machine: quote for POSIX

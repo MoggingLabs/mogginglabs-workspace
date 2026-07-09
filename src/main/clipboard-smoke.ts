@@ -3,14 +3,21 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { quotePathForShell, shellFlavor } from '@contracts'
 
-// Env-gated clipboard smoke (MOGGING_CLIPBOARD). Three things are checked, because three
+// Env-gated clipboard smoke (MOGGING_CLIPBOARD). Four things are checked, because four
 // things can independently break and each is invisible from the others:
 //
 //   1. The pure quoting rule — asserted HERE, in main, with no window involved. A dropped
 //      path must survive spaces, quotes, `$`, and must never smuggle a newline.
 //   2. The history ring over real IPC — write, list, restore, remove, and the rule that
 //      deleting the CURRENT entry also clears the system clipboard.
-//   3. The pane's drop overlay exists and is hidden until a drag arrives.
+//   3. The drop overlay's lifecycle, driven by synthetic drag events: hidden at rest,
+//      raised with the right message while a file hovers, lowered after the drop.
+//   4. The paste choke point, against a REAL pty: one paste event echoes exactly once —
+//      twice means xterm's own unsanitised paste listener ran alongside ours.
+//
+// What no smoke can drive: a real OS drag, so the webUtils.getPathForFile link (dropped
+// File -> absolute path) still needs one human drag. Everything downstream of it is
+// covered by 1 and 3; everything upstream is DOM the smoke exercises directly.
 
 const SCRIPT = `(async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -107,15 +114,72 @@ const SCRIPT = `(async () => {
   const overlay = document.querySelector('.pane-drop')
   const overlayReady = !!overlay && overlay.hidden === true && !overlay.classList.contains('is-active')
 
+  // 11. The drag animation, driven synthetically: a file-bearing dragenter raises the
+  //     card (translucent, correct message), the drop lowers it, and a drop whose File
+  //     has no disk backing (getPathForFile throws) must not break anything.
+  let overlayShown = false
+  let overlayTitled = false, overlayHiddenAfterDrop = false
+  const paneBody = overlay ? overlay.parentElement : null
+  if (paneBody) {
+    const dt = new DataTransfer()
+    dt.items.add(new File(['x'], 'dropped.txt', { type: 'text/plain' }))
+    const fire = (type) =>
+      paneBody.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }))
+    fire('dragenter')
+    fire('dragover')
+    // POLL for is-active rather than sampling once: the class lands via rAF, and
+    // Chromium suspends rAF entirely for an occluded window — which a smoke window
+    // running behind a terminal often is. (A real drag's target window is visible by
+    // definition, so production never depends on this.)
+    for (let i = 0; i < 12 && !overlayShown; i++) {
+      await sleep(100)
+      overlayShown = overlay.hidden === false && overlay.classList.contains('is-active')
+    }
+    const titleEl = overlay.querySelector('.pane-drop-title')
+    overlayTitled = !!titleEl && titleEl.textContent === 'Drop to insert path'
+    fire('drop')
+    await sleep(500) // fade (150 ms) + the 220 ms fallback, with slack
+    overlayHiddenAfterDrop = overlay.hidden === true && !overlay.classList.contains('is-active')
+  }
+
+  // 12. The paste choke point, end to end: a synthetic 'paste' event on xterm's textarea
+  //     must reach the REAL pty and echo back EXACTLY ONCE. Twice would mean xterm's own
+  //     unsanitised paste listener ran alongside ours — the double-paste regression.
+  let pasteOnce = false, pasteCount = -1
+  const pane = m && m.panes && m.panes[0]
+  if (pane && pane.term && pane.term.textarea) {
+    await sleep(1500) // let the shell prompt settle so the echo has somewhere to land
+    const dtp = new DataTransfer()
+    dtp.setData('text/plain', 'PASTE_E2E_5591')
+    pane.term.textarea.dispatchEvent(
+      new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dtp })
+    )
+    const countMarker = () => {
+      const buf = pane.term.buffer.active
+      let all = ''
+      for (let r = 0; r < buf.length; r++) {
+        const line = buf.getLine(r)
+        if (line) all += line.translateToString(true) + String.fromCharCode(10)
+      }
+      return all.split('PASTE_E2E_5591').length - 1
+    }
+    for (let i = 0; i < 25 && countMarker() === 0; i++) await sleep(200)
+    await sleep(600) // grace: a SECOND echo (the double-paste bug) needs time to show up
+    pasteCount = countMarker()
+    pasteOnce = pasteCount === 1
+  }
+
   return {
     pass: ordered && sourced && stamped && wireStripped && liveIsSecond && restored &&
           removedFromRing && systemCleared && deduped && recordingOff && dropRecorded &&
           dropDidNotClobber && imageRecorded && richIsImage && imageDeleteCleared &&
-          hasFlavor && overlayReady,
+          hasFlavor && overlayReady && overlayShown && overlayTitled &&
+          overlayHiddenAfterDrop && pasteOnce,
     ordered, sourced, stamped, wireStripped, liveIsSecond, restored, removedFromRing,
     systemCleared, deduped, recordingOff, dropRecorded, dropDidNotClobber,
     imageRecorded, richIsImage, imageDeleteCleared,
-    hasFlavor, overlayReady, flavor: env && env.flavor
+    hasFlavor, overlayReady, overlayShown, overlayTitled, overlayHiddenAfterDrop,
+    pasteOnce, pasteCount, flavor: env && env.flavor
   }
 })()`
 
@@ -153,6 +217,13 @@ function checkQuoting(): { pass: boolean; detail: Record<string, unknown> } {
 export function runClipboardSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 40000) // safety net
   const run = async (): Promise<void> => {
+    // Foreground the window: the overlay-animation check rides requestAnimationFrame,
+    // which Chromium suspends for occluded windows — and a smoke window launched from a
+    // terminal usually starts behind it.
+    if (!win.isDestroyed()) {
+      win.show()
+      win.focus()
+    }
     const quoting = checkQuoting()
     let ipc: { pass?: boolean } = { pass: false }
     try {

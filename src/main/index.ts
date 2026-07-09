@@ -4,6 +4,7 @@ import { createMainWindow } from './window'
 import { createElectronContext } from './electron-context'
 import { initMainTelemetry } from './telemetry'
 import { registerClipboard } from './clipboard'
+import { registerAppMenu } from './menu'
 import { registerDialogs } from './dialogs'
 import { registerShellChrome, wireWindowState } from './shell-chrome'
 import { flushTelemetry } from './telemetry'
@@ -205,6 +206,7 @@ app.whenReady().then(async () => {
       startInProc() // daemon unavailable -> in-proc so the app still works
     }
   }
+  registerAppMenu() // explicit menu policy: mac keeps Edit roles, win/linux run menuless
   registerClipboard() // system clipboard IPC (app-layer, Electron-only)
   registerDialogs(() => win) // native directory picker for the new-workspace wizard
   registerShellChrome(() => win) // theme-tinted window-control overlay (organic chrome)

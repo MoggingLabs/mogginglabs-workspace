@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 
@@ -57,6 +57,26 @@ export function createMainWindow(): BrowserWindow {
       console.log(`[render-process-gone] ${details.reason}`)
     })
   }
+
+  // The two default-menu accelerators worth keeping, re-provided deliberately now that
+  // Windows/Linux run menuless (src/main/menu.ts). before-input-event fires BEFORE the
+  // renderer, so nothing goes here that a shell might want — no Ctrl+R (reverse-i-search),
+  // no Ctrl+W (delete-word). F11 and the devtools chords have no terminal meaning.
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return
+    if (input.key === 'F11' && process.platform !== 'darwin') {
+      event.preventDefault()
+      win.setFullScreen(!win.isFullScreen())
+      return
+    }
+    if (
+      !app.isPackaged &&
+      (input.key === 'F12' || (input.control && input.shift && input.key.toUpperCase() === 'I'))
+    ) {
+      event.preventDefault()
+      win.webContents.toggleDevTools()
+    }
+  })
 
   // First paint ready -> reveal. The timer is the fail-open: if the renderer
   // never reaches ready-to-show (crash, dev-server stall), the window must
