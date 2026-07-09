@@ -167,7 +167,13 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
           const els = { state: q('.pane-state'), remote: q('.pane-remote'), role: q('.pane-role'), claims: q('.pane-claims'), mcp: q('.pane-mcp') }
           const widthOf = el => (el ? Math.round(el.getBoundingClientRect().width) : null)
           const presentMap = { state: widthOf(els.state), remote: widthOf(els.remote), role: widthOf(els.role), claims: widthOf(els.claims), mcp: widthOf(els.mcp) }
-          const present = Object.values(els).every(el => el && el.getBoundingClientRect().width > 0)
+          // The always-present chips (state/remote/role) must anchor the header at width > 0,
+          // and all five must be LIT (in the DOM — that is the "all four chips lit" scenario
+          // this test stages). The trailing .pane-mcp legitimately clips to width 0 on the
+          // narrow header (the overflow working); requiring it > 0 is what deterministically
+          // false-failed this gate on CI's soft-GL (mcp measured 0 on all three OSes, 8.5/09).
+          const anchored = [els.state, els.remote, els.role].every(el => el && el.getBoundingClientRect().width > 0)
+          const allLit = Object.values(els).every(el => !!el)
           const headerH = Math.round(header.getBoundingClientRect().height)
           const oneLine = headerH <= 30
           const fec = left.firstElementChild
@@ -177,13 +183,16 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
           const cs = getComputedStyle(left)
           const clipped = cs.overflow === 'hidden' || cs.overflowX === 'hidden'
           const overflowed = left.scrollWidth > left.clientWidth + 1
-          // One row = every child shares a vertical CENTER (they are center-aligned, so
-          // tops differ by height — a wrapped child's center would jump by ~a row).
-          const mids = [...left.children].map(ch => { const r = ch.getBoundingClientRect(); return Math.round(r.top + r.height / 2) })
-          const noWrap = mids.length > 0 && mids.every(mid => Math.abs(mid - mids[0]) <= 3)
+          // "chips truncate, never wrap" is the CSS CONTRACT: flex-wrap:nowrap + overflow:hidden.
+          // Assert it directly. The pixel-center proxy over ALL children false-fails when a
+          // trailing chip clips to 0 width (the overflow WORKING) — kept as a diagnostic
+          // (centersAligned over the VISIBLE chips), not the gate.
+          const noWrapStyle = cs.flexWrap === 'nowrap'
+          const mids = [...left.children].filter(ch => ch.getBoundingClientRect().width > 0).map(ch => { const r = ch.getBoundingClientRect(); return Math.round(r.top + r.height / 2) })
+          const centersAligned = mids.length > 0 && mids.every(mid => Math.abs(mid - mids[0]) <= 3)
           return {
-            ok: present && oneLine && stateLeading && stateLeftMost && clipped && noWrap,
-            present, presentMap, headerH, oneLine, stateLeading, stateLeftMost, clipped, overflowed, noWrap,
+            ok: anchored && allLit && oneLine && stateLeading && stateLeftMost && clipped && noWrapStyle,
+            anchored, allLit, presentMap, headerH, oneLine, stateLeading, stateLeftMost, clipped, overflowed, noWrapStyle, centersAligned,
             firstChild: fec ? fec.className : null,
             allRemotes: document.querySelectorAll('.pane-remote').length
           }

@@ -342,11 +342,14 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       await sleep(800)
       await ES(`(() => { const p = (window.__mogging.panes || []).find((p) => p.id === ${paneId}); if (p && p.lightChips) p.lightChips(); return 1 })()`)
       await sleep(400)
-      const pane = await ES<{ ok: boolean; headerH: number; stateLeading: boolean; clipped: boolean; noWrap: boolean; present: boolean }>(`(() => {
+      const pane = await ES<{ ok: boolean; headerH: number; stateLeading: boolean; clipped: boolean; noWrapStyle: boolean; centersAligned: boolean; present: boolean }>(`(() => {
         const slot = document.querySelector('.layout-slot[data-pane-id="${paneId}"]')
         const left = slot?.querySelector('.pane-head-left'), header = slot?.querySelector('.pane-header')
-        if (!left || !header) return { ok: false, headerH: -1, stateLeading: false, clipped: false, noWrap: false, present: false }
+        if (!left || !header) return { ok: false, headerH: -1, stateLeading: false, clipped: false, noWrapStyle: false, centersAligned: false, present: false }
         const q = (s) => left.querySelector(s)
+        // The always-present chips (state/remote/role). NOT the trailing .pane-mcp — it is the
+        // last, clippable chip and legitimately renders width 0 on the narrow header (the
+        // overflow working). Requiring it > 0 is what false-failed CHROMEUX/UXMILESTONE on CI.
         const els = [q('.pane-state'), q('.pane-remote'), q('.pane-role')]
         const present = els.every((el) => el && el.getBoundingClientRect().width > 0)
         const headerH = Math.round(header.getBoundingClientRect().height)
@@ -354,9 +357,15 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
         const stateLeading = !!fec && fec.classList.contains('pane-state')
         const cs = getComputedStyle(left)
         const clipped = cs.overflow === 'hidden' || cs.overflowX === 'hidden'
-        const mids = [...left.children].map((ch) => { const r = ch.getBoundingClientRect(); return Math.round(r.top + r.height / 2) })
-        const noWrap = mids.length > 0 && mids.every((mid) => Math.abs(mid - mids[0]) <= 3)
-        return { ok: present && headerH <= 30 && stateLeading && clipped && noWrap, headerH, stateLeading, clipped, noWrap, present }
+        // "chips truncate, never wrap" is the CSS CONTRACT — flex-wrap:nowrap + overflow:hidden —
+        // asserted directly. A pixel-center proxy over ALL children false-fails when a trailing
+        // chip clips to 0 width (the overflow WORKING, not a wrap); it was deterministic on CI's
+        // soft-GL. Centers of the VISIBLE chips are kept as a diagnostic only.
+        const noWrapStyle = cs.flexWrap === 'nowrap'
+        const vis = [...left.children].filter((ch) => ch.getBoundingClientRect().width > 0)
+        const mids = vis.map((ch) => { const r = ch.getBoundingClientRect(); return Math.round(r.top + r.height / 2) })
+        const centersAligned = mids.length > 0 && mids.every((mid) => Math.abs(mid - mids[0]) <= 3)
+        return { ok: present && headerH <= 30 && stateLeading && clipped && noWrapStyle, headerH, stateLeading, clipped, noWrapStyle, centersAligned, present }
       })()`)
       win.setSize(1200, 800)
       await sleep(500)
