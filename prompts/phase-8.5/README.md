@@ -58,13 +58,16 @@ pasteable as a `/goal`, **≤ 3950 chars**). Execute in order.
 | 07b | `07b-feedback-family.md` | One feedback language; the opt-out-able destructive confirm; the review modal's safe-last footer; 26 empty states; FEEDBACKUX green |
 | 08 | `08-chrome-titlebar-rail-panes.md` | Titlebar, rail, pane headers; the radius ramp decided; CHROMEUX green |
 | 08b | `08b-dock-and-shortcuts.md` | **§ Blockers #1**: the possession surface has no CSS rule and no test. Guard first, then restyle; DOCKUX green |
+| 08c | `08c-usage-glance-codexbar.md` | The Usage popover **recut** to the CodexBar dropdown — provider tabs + one provider's windows · cost · actions, on our data; gauge untouched; USAGEGLANCE green |
 | 09 | `09-ux-milestone.md` | UXMILESTONE + `check-audit.mjs` (no Grades row below A, no unrouted finding) + `check-spacing --max 0` + four-environment certification |
 
-> **Why 12 steps for 9 numbers.** 05, 07 and 08 each tried to carry two surfaces'
+> **Why 13 steps for 9 numbers.** 05, 07 and 08 each tried to carry two surfaces'
 > worth of work, and 05 never even named `profiles-hosts.ts` in its Steps — which is
 > exactly how that surface ended up graded **D** with no owner. A step that cannot
 > state its scope in 3950 characters cannot be executed honestly either. Split, with
-> the `06b` precedent from phase-1.
+> the `06b` precedent from phase-1. 08c is that move once more: the Usage popover's
+> CodexBar recut is a design change with its own gate (USAGEGLANCE) and an AA re-measure
+> — not a restyle 05b could absorb.
 
 ## Overall Definition of Done
 - AUDIT.md covers EVERY feature surface with a keep/fix/remove verdict and
@@ -93,5 +96,6 @@ pasteable as a `/goal`, **≤ 3950 chars**). Execute in order.
 
 ## Parallelization
 01 is the root. After it: Lane A (02 → 03, the wizard), Lane B (04 → 05 → 05b,
-Settings), Lane C (06 → 07 → 07b → 08 → 08b, the rest). 09 needs all lanes.
+Settings), Lane C (06 → 07 → 07b → 08 → 08b → 08c, the rest; 08c also needs 05b). 09
+needs all lanes.
 Solo execution runs 01 → 09 in order (house rule: no parallel agents).

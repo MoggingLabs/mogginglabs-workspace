@@ -34,7 +34,7 @@ below A and no unrouted finding.**
    from qa-smokes.sh wherever they are stated.
 5. **Four-environment certification**: ONE dispatch, full uncut sweeps — every pack
    gate (WIZARDUX, FOLDERPICK, SETSHELL, SETINTEG, SETUSAGE, HOMEUX, BOARDUX,
-   FEEDBACKUX, CHROMEUX, DOCKUX, UXMILESTONE) + all pre-existing gates green on
+   FEEDBACKUX, CHROMEUX, DOCKUX, USAGEGLANCE, UXMILESTONE) + all pre-existing gates green on
    local Windows AND the three CI OSes. Per-OS numbers + run id in the pack README;
    platform finds get root causes; REPORT.md if earned.
 6. **Pack freeze**: DONE rows, commit ranges + run ids in the pack README; the
