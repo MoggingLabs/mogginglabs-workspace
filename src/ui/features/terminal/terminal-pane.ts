@@ -494,13 +494,17 @@ export class TerminalPane {
     overlay.hidden = true
     const card = document.createElement('div')
     card.className = 'pane-drop-card'
-    const glyph = icon('copy', 28)
+    // The glyph sits in a pulsing accent ring — the card's one moving element, so the
+    // eye lands on WHERE to drop, not on chrome.
+    const ring = document.createElement('div')
+    ring.className = 'pane-drop-ring'
+    ring.append(icon('download', 22))
     const title = document.createElement('div')
     title.className = 'pane-drop-title'
     const hint = document.createElement('div')
     hint.className = 'pane-drop-hint'
-    hint.textContent = 'The full path is inserted, quoted. Nothing runs.'
-    card.append(glyph, title, hint)
+    hint.textContent = 'Full path, quoted for this shell — nothing runs.'
+    card.append(ring, title, hint)
     overlay.append(card)
     body.append(overlay)
 

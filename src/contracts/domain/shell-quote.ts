@@ -17,11 +17,6 @@ export function shellFlavor(shellPath: string, platform: string): ShellFlavor {
   return 'cmd'
 }
 
-// A bare path needs no quotes only if every character is inert in EVERY position
-// for the target shell. We keep this list conservative — over-quoting is harmless,
-// under-quoting splits an argument or (worse) injects a command.
-const POSIX_SAFE = /^[A-Za-z0-9._\-+/@:,=]+$/
-const WIN_SAFE = /^[A-Za-z0-9._\-+\\/@:,=]+$/
 
 /** Characters that cannot occur in a real path, and which would let a dropped
  *  filename forge a newline — i.e. "press Enter" — once written into the PTY. */
@@ -29,7 +24,12 @@ const WIN_SAFE = /^[A-Za-z0-9._\-+\\/@:,=]+$/
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/g
 
 /**
- * Quote `path` for `flavor`. Always returns a single shell word.
+ * Quote `path` for `flavor`. Always returns a single shell word, ALWAYS quoted —
+ * the product contract ("the complete path, inside quotes"), not merely an escape
+ * rule. An earlier revision returned safe-looking paths bare, and the first thing a
+ * real user noticed was the missing quotes. An unconditional rule also cannot be
+ * wrong the way a safe-list heuristic can (one missed character from splitting an
+ * argument).
  *
  * posix       single quotes; an embedded ' closes, escapes, and reopens ('\'').
  *             Single quotes suppress $, `, \, ! and glob chars outright.
@@ -46,13 +46,10 @@ export function quotePathForShell(path: string, flavor: ShellFlavor): string {
   const clean = path.replace(CONTROL_CHARS, '')
   switch (flavor) {
     case 'posix':
-      if (clean.length > 0 && POSIX_SAFE.test(clean)) return clean
       return `'${clean.replace(/'/g, `'\\''`)}'`
     case 'powershell':
-      if (clean.length > 0 && WIN_SAFE.test(clean)) return clean
       return `'${clean.replace(/'/g, `''`)}'`
     case 'cmd':
-      if (clean.length > 0 && WIN_SAFE.test(clean)) return clean
       return `"${clean.replace(/"/g, '')}"`
   }
 }

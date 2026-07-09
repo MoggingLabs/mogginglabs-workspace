@@ -204,6 +204,10 @@ const SCRIPT = `(async () => {
 function checkQuoting(): { pass: boolean; detail: Record<string, unknown> } {
   const NL = String.fromCharCode(10)
   const detail: Record<string, unknown> = {
+    // The product contract: a PLAIN path is quoted too — "the complete path, inside
+    // quotes", not "quoted when the characters demand it".
+    plainPosix: quotePathForShell('/home/me/file.txt', 'posix'),
+    plainCmd: quotePathForShell('C:\\Users\\pedro\\a.txt', 'cmd'),
     posixSpace: quotePathForShell('/a b/c.txt', 'posix'),
     posixQuote: quotePathForShell("/a/it's.txt", 'posix'),
     posixSubshell: quotePathForShell('/a/$(id).txt', 'posix'),
@@ -216,6 +220,8 @@ function checkQuoting(): { pass: boolean; detail: Record<string, unknown> } {
     flavorMac: shellFlavor('/bin/zsh', 'darwin')
   }
   const pass =
+    detail.plainPosix === `'/home/me/file.txt'` &&
+    detail.plainCmd === '"C:\\Users\\pedro\\a.txt"' &&
     detail.posixSpace === `'/a b/c.txt'` &&
     detail.posixQuote === `'/a/it'\\''s.txt'` &&
     detail.posixSubshell === `'/a/$(id).txt'` &&
