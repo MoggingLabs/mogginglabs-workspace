@@ -1,9 +1,12 @@
 import type { PaneId } from '@contracts'
 
 /**
- * The currently-focused pane + the cwd of its workspace. Published by the `workspace` feature
- * (from GridLayout focus + the active workspace's cwd); read by `agents` to launch a CLI into
- * "the focused pane at the right cwd". A port so neither feature imports the other.
+ * The currently-focused pane + ITS OWN cwd (the pane-cwd port's value — a worktree for an
+ * isolated slot (3/03), OSC-7-refined — falling back to the workspace's cwd). Published by
+ * the `workspace` feature; read by `agents` to launch a CLI into "the focused pane at the
+ * right cwd" and by `review` to find the focused pane's worktree. The workspace ROOT here
+ * broke both: a palette launch escaped the pane's worktree into the shared repo, and review
+ * never saw a worktree at all. A port so neither feature imports the other.
  */
 export interface FocusedPane {
   paneId: PaneId

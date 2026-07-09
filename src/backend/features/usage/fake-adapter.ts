@@ -27,7 +27,10 @@ const builtinFixtures = (): PlanUsage[] => [
     planLabel: 'Fake Pro (normal)',
     windows: [
       { label: 'Session (5h)', usedPct: 42, resetsAt: new Date(T0 + 3 * HOUR).toISOString() },
-      { label: 'Weekly', usedPct: 31, resetsAt: new Date(T0 + 96 * HOUR).toISOString() }
+      { label: 'Weekly', usedPct: 31, resetsAt: new Date(T0 + 96 * HOUR).toISOString() },
+      // The model-specific weekly lane (the Fable-era shape) — exercises the
+      // dynamic-lane path end to end: three windows, each with its own pace.
+      { label: 'Weekly (Fable)', usedPct: 18, resetsAt: new Date(T0 + 96 * HOUR).toISOString() }
     ],
     fetchedAt: T0,
     health: 'fresh'

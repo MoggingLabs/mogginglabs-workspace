@@ -33,10 +33,16 @@ const isWin = process.platform === 'win32'
 const quiet = process.argv.includes('--quiet')
 const want = repo.replace(/\//g, '\\').toLowerCase()
 
-/** Parent-first: the supervisor, then what it would respawn. */
+/** Parent-first: the supervisor, then what it would respawn.
+ *  The DETACHED PTY DAEMON is spared even though it is this repo's electron.exe: it is not
+ *  part of any dev-server tree (ADR 0006 — it outlives apps on purpose, holding live agent
+ *  sessions). Sweeping it here is how "run the smokes" used to murder the user's real
+ *  sessions; a smoke's own isolated daemon is reaped by qa-smokes' kill_daemon via the pid
+ *  in its endpoint.json, which is the only scoped way to name one. */
+const isDaemon = (c) => c.includes('daemon.js')
 const TIERS = [
   { name: 'electron-vite', match: (n, c) => n === 'node.exe' && c.includes('electron-vite') },
-  { name: 'electron', match: (n) => n === 'electron.exe' },
+  { name: 'electron', match: (n, c) => n === 'electron.exe' && !isDaemon(c) },
   { name: 'esbuild', match: (n) => n === 'esbuild.exe' }
 ]
 

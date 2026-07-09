@@ -12,10 +12,9 @@ import {
   type UsageAlertConfig,
   type UsageConfig,
   type UsageDisplayConfig,
-  type UsagePaceConfig,
   type UsageProviderDef
 } from '@contracts'
-import { Button, EmptyState, createCheckbox, createCollapsibleCard, el, showToast } from '../../components'
+import { Button, EmptyState, createCheckbox, createCollapsibleCard, el, providerLogo, showToast } from '../../components'
 import { getBridge } from '../../core/ipc/bridge'
 import { getTelemetry } from '../../core/telemetry'
 import { switchActiveProfile } from '../../core/agents/profile-switch'
@@ -204,6 +203,7 @@ export function createUsageSection(): HTMLElement {
         cadence.addEventListener('change', () => void invoke(UsageChannels.configSet, { providerId: r.id, cadence: cadence.value }))
         const head = el('div', { class: 'usage-prov-head' }, [
           enable.el,
+          providerLogo(r.id, 15),
           el('span', { class: 'usage-prov-label', text: r.label }),
           el('span', { class: `pill usage-class-chip is-${r.klass}`, text: r.klass }),
           r.klass === 'cli-store' || r.klass === 'cloud-cli'
@@ -270,7 +270,7 @@ export function createUsageSection(): HTMLElement {
         bars.append(track)
       }
       const children: (Node | null)[] = [
-        el('span', { class: 'usage-plan-name', text: p.planLabel }),
+        el('span', { class: 'usage-plan-name' }, [providerLogo(p.providerId, 13), el('span', { text: p.planLabel })]),
         el('span', { class: 'usage-profile', text: p.profileId }),
         bars,
         p.spend ? el('span', { class: 'usage-spend', text: `${p.spend.currency} ${p.spend.amount.toFixed(2)}` }) : null,
@@ -296,57 +296,181 @@ export function createUsageSection(): HTMLElement {
     }
   }
 
-  // ── 3 · Pace baseline (feeds the 7/02 engine) ─────────────────────────────
-  const paceHost = el('div', { class: 'usage-pace-cfg settings-consents' })
-  void (async () => {
-    const cfg = ((await invoke(UsageChannels.paceCfgGet)) as UsagePaceConfig | null) ?? { workDays: null, workHours: null }
-    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-    const days = new Set(cfg.workDays ?? [])
-    const dayRow = el('div', { class: 'usage-pace-days' })
-    const push = (): void => {
-      void invoke(UsageChannels.paceCfgSet, { workDays: days.size ? [...days].sort() : null })
-    }
-    for (let d = 0; d < 7; d++) {
-      const c = createCheckbox({
-        label: dayNames[d],
-        checked: days.has(d),
-        onChange: (on) => {
-          if (on) days.add(d)
-          else days.delete(d)
-          push()
-        }
-      })
-      c.el.classList.add('usage-pace-day')
-      dayRow.append(c.el)
-    }
-    const hourInput = (label: string, value: number): HTMLInputElement => {
-      const i = el('input', { class: 'usage-pace-hour', ariaLabel: label }) as HTMLInputElement
-      i.type = 'number'
-      i.min = '0'
-      i.max = '24'
-      i.value = String(value)
-      return i
-    }
-    const from = hourInput('Active from hour', cfg.workHours?.[0] ?? 9)
-    const to = hourInput('Active to hour', cfg.workHours?.[1] ?? 18)
-    const applyHours = (): void => {
-      const a = Number(from.value)
-      const b = Number(to.value)
-      if (Number.isFinite(a) && Number.isFinite(b) && a >= 0 && b <= 24 && a < b) void invoke(UsageChannels.paceCfgSet, { workHours: [a, b] })
-    }
-    from.addEventListener('change', applyHours)
-    to.addEventListener('change', applyHours)
-    paceHost.append(
-      dayRow,
-      el('div', { class: 'usage-pace-hours' }, [
-        el('span', { class: 'settings-row-caption', text: 'Active hours' }),
-        from,
-        el('span', { class: 'settings-row-caption', text: '–' }),
-        to,
-        Button({ label: 'Clear baseline', size: 'sm', onClick: () => void invoke(UsageChannels.paceCfgSet, { workDays: null, workHours: null }) })
+  // ── 3 · Cost overview (7/07's scan, recut to the questions people actually
+  //        ask): what did TODAY cost, how does it compare to the window, where
+  //        is the month heading at this pace, and which model burns the money.
+  //        (The old "pace baseline" work-days card lived here — deleted: pace
+  //        is pure burn-rate arithmetic now, nothing for the user to declare.)
+  const costHost = el('div', { class: 'usage-cost-cfg' })
+  const fmtMoney = (cur: string, n: number): string => `${cur === 'USD' ? '$' : cur + ' '}${n.toFixed(2)}`
+  const fmtTok = (n: number): string =>
+    n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(Math.round(n))
+  const localDateOf = (t: number): string => {
+    const d = new Date(t)
+    const p = (n: number): string => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  }
+  const localToday = (): string => localDateOf(Date.now())
+
+  // The window is a display pref (CodexBar's historyDays): renderer-local,
+  // persisted beside the other paint-only choices.
+  const WINDOW_KEY = 'mogging.costWindowDays'
+  const costWindow = (): number => {
+    const v = Number(localStorage.getItem(WINDOW_KEY))
+    return [7, 30, 90, 365].includes(v) ? v : 30
+  }
+
+  async function renderCost(): Promise<void> {
+    costHost.replaceChildren()
+    const windowDays = costWindow()
+    const winSel = el('select', { class: 'usage-cost-window', ariaLabel: 'Cost window' }) as HTMLSelectElement
+    for (const [v, label] of [
+      ['7', 'Last 7 days'],
+      ['30', 'Last 30 days'],
+      ['90', 'Last 90 days'],
+      ['365', 'Last 365 days']
+    ] as const)
+      winSel.append(el('option', { value: v, text: label }))
+    winSel.value = String(windowDays)
+    winSel.addEventListener('change', () => {
+      try {
+        localStorage.setItem(WINDOW_KEY, winSel.value)
+      } catch {
+        /* session-only then */
+      }
+      void renderCost()
+    })
+    costHost.append(el('div', { class: 'usage-cost-windowrow' }, [el('span', { class: 'settings-row-caption', text: 'Window' }), winSel]))
+
+    const providerIds = [...new Set(plans.map((p) => p.providerId))]
+    let any = false
+    for (const id of providerIds) {
+      const scan = (await invoke(UsageChannels.cost, { providerId: id, windowDays })) as CostScan | null
+      if (!scan || (!scan.days.length && !scan.models?.length)) continue
+      any = true
+      const cur = scan.currency
+      const todayStr = localToday()
+      const today = scan.days.find((d) => d.date === todayStr)
+      const total = scan.days.reduce((a, d) => a + d.spend, 0)
+      const totalTok = scan.days.reduce((a, d) => a + d.tokens, 0)
+      const todayPct = total > 0 && today ? (today.spend / total) * 100 : 0
+      const activeAvg = scan.days.length ? total / scan.days.length : 0
+      // Projection rides the RECENT pace (last 7 calendar days), not the whole
+      // window — "at this week's pace" answers where the month is heading.
+      const spendSince = (days: number): number =>
+        scan.days.filter((d) => Date.parse(d.date) >= Date.now() - days * 86_400_000).reduce((a, d) => a + d.spend, 0)
+      const last7 = spendSince(7)
+      const projected = (last7 / 7) * 30
+
+      const stat = (label: string, value: string, hint?: string): HTMLElement =>
+        el('div', { class: 'usage-stat', title: hint ?? '' }, [
+          el('span', { class: 'usage-stat-value', text: value }),
+          el('span', { class: 'usage-stat-label', text: label })
+        ])
+      const block = el('div', { class: 'usage-cost-block', dataset: { provider: id } }, [
+        el('div', { class: 'usage-cost-head' }, [
+          providerLogo(id, 14),
+          el('span', { class: 'usage-cost-provider', text: id }),
+          el('span', { class: 'settings-row-caption', text: `${scan.days.length} active day${scan.days.length === 1 ? '' : 's'} in the window · estimates, never a bill` })
+        ]),
+        el('div', { class: 'usage-cost-stats' }, [
+          stat("Today's cost", today ? fmtMoney(cur, today.spend) : fmtMoney(cur, 0), today ? `${fmtTok(today.tokens)} tokens today` : 'no usage yet today'),
+          stat('Today vs total', `${Math.round(todayPct)}%`, `today's share of the ${windowDays}-day spend`),
+          stat(`Total (${windowDays}d)`, fmtMoney(cur, total), `${fmtTok(totalTok)} tokens in the window`),
+          stat('Daily average', fmtMoney(cur, activeAvg), 'per active day in the window'),
+          stat('Projected monthly', fmtMoney(cur, projected), "last 7 days' pace × 30")
+        ])
       ])
-    )
-  })()
+      // Comparison rows (CodexBar's 7/30/90 summaries): every standard period
+      // SHORTER than the window, so the numbers nest instead of repeating.
+      const comparisons = [7, 30, 90].filter((p) => p < windowDays)
+      if (comparisons.length) {
+        const rows = el('div', { class: 'usage-cost-compare' })
+        for (const p of comparisons)
+          rows.append(
+            el('div', { class: 'usage-cost-compare-row' }, [
+              el('span', { class: 'usage-cost-compare-label', text: `Last ${p} days` }),
+              el('span', { class: 'usage-cost-compare-value', text: fmtMoney(cur, spendSince(p)) })
+            ])
+          )
+        block.append(rows)
+      }
+      // Daily-spend bars (the CodexBar cost-history chart, house-styled): the
+      // FULL calendar window (capped at 90 bars — a year of 3px bars is a
+      // smear, not a chart) — zero days render as baseline stubs so the
+      // timeline is honest, not just the active days squeezed together. One
+      // series, one hue; TODAY carries the only direct label (selective
+      // labeling); every bar answers precisely on hover.
+      if (scan.days.length) {
+        const chartDays = Math.min(windowDays, 90)
+        const maxSpend = Math.max(...scan.days.map((d) => d.spend), 1e-9)
+        const byDate = new Map(scan.days.map((d) => [d.date, d]))
+        const chart = el('div', {
+          class: 'usage-cost-chart',
+          role: 'img',
+          ariaLabel: `Daily spend, last ${chartDays} days — window total ${fmtMoney(cur, total)}, peak day ${fmtMoney(cur, maxSpend)}`
+        })
+        for (let i = chartDays - 1; i >= 0; i--) {
+          const dstr = localDateOf(Date.now() - i * 86_400_000)
+          const d = byDate.get(dstr)
+          const bar = el('span', { class: 'usage-chart-bar' + (i === 0 ? ' is-today' : '') + (d && d.spend > 0 ? '' : ' is-zero') })
+          bar.style.height = d && d.spend > 0 ? `${Math.max(4, (d.spend / maxSpend) * 100)}%` : '2px'
+          bar.title = d ? `${dstr} · ${fmtMoney(cur, d.spend)} · ${fmtTok(d.tokens)} tokens` : `${dstr} · no usage`
+          chart.append(bar)
+        }
+        const todayLabel = today ? el('span', { class: 'usage-chart-today', text: fmtMoney(cur, today.spend) }) : null
+        block.append(
+          el('div', { class: 'usage-chart-row' }, [
+            el('span', { class: 'section-label', text: `Daily spend — last ${chartDays} days` }),
+            todayLabel
+          ]),
+          chart
+        )
+      }
+      // Cost efficiency by model: spend, tokens, and the effective $/MTok the
+      // mix actually paid — an unpriced model shows its tokens and says so.
+      if (scan.models?.length) {
+        const table = el('div', { class: 'usage-cost-models' })
+        for (const m of scan.models) {
+          const rate = m.tokens > 0 && !m.unpriced ? `${fmtMoney(cur, m.spend / (m.tokens / 1e6))}/MTok` : m.unpriced ? 'no price row' : '—'
+          table.append(
+            el('div', { class: 'usage-cost-model-row' + (m.unpriced ? ' is-unpriced' : '') }, [
+              el('span', { class: 'usage-cost-model', text: m.model }),
+              el('span', { class: 'usage-cost-model-spend', text: m.unpriced ? '—' : fmtMoney(cur, m.spend) }),
+              el('span', { class: 'usage-cost-model-tok', text: fmtTok(m.tokens) }),
+              el('span', { class: 'usage-cost-model-rate', text: rate })
+            ])
+          )
+        }
+        block.append(el('div', { class: 'section-label', text: 'Cost efficiency by model' }), table)
+      }
+      // Per-project cut (Codex names its cwd in session_meta): where the money
+      // went, top-heavy, capped so the card stays a card and not a report.
+      if (scan.projects?.length) {
+        const table = el('div', { class: 'usage-cost-projects' })
+        const TOP = 6
+        for (const p of scan.projects.slice(0, TOP)) {
+          table.append(
+            el('div', { class: 'usage-cost-project-row' }, [
+              el('span', { class: 'usage-cost-project', text: p.project }),
+              el('span', { class: 'usage-cost-project-spend', text: fmtMoney(cur, p.spend) }),
+              el('span', { class: 'usage-cost-project-tok', text: fmtTok(p.tokens) })
+            ])
+          )
+        }
+        if (scan.projects.length > TOP)
+          table.append(el('div', { class: 'settings-row-caption', text: `+ ${scan.projects.length - TOP} more project${scan.projects.length - TOP === 1 ? '' : 's'}` }))
+        block.append(el('div', { class: 'section-label', text: 'By project' }), table)
+      }
+      if (scan.reason) block.append(el('p', { class: 'settings-row-caption usage-cost-reason', text: scan.reason }))
+      costHost.append(block)
+    }
+    if (!any)
+      costHost.append(
+        EmptyState({ icon: 'clock', title: 'No cost data yet', body: 'Costs are scanned from the session logs your CLIs already write (Claude Code, Codex) — locally, on demand.' })
+      )
+    costHost.append(Button({ label: 'Rescan', size: 'sm', onClick: () => void renderCost() }))
+  }
 
   // ── 4 · Alerts (the 09 rules) + a fixture test toast ──────────────────────
   const alertsHost = el('div', { class: 'usage-alert-cfg settings-consents' })
@@ -427,30 +551,11 @@ export function createUsageSection(): HTMLElement {
       const w = p.windows[0]
       if (!w) continue
       const series = ((await invoke(UsageChannels.history, { providerId: p.providerId, window: w.label })) as number[]) ?? []
+      // (The per-row "Scan cost" button moved up into the Cost overview card —
+      // one home for cost, history keeps the sampled sparklines.)
       const rowEl = el('div', { class: 'usage-history-row', dataset: { provider: p.providerId } }, [
         el('span', { class: 'usage-history-label', text: `${p.providerId} · ${w.label}` }),
-        sparkline(series),
-        ['codex', 'claude'].includes(p.providerId)
-          ? Button({
-              label: 'Scan cost',
-              size: 'sm',
-              onClick: () => {
-                void invoke(UsageChannels.cost, p.providerId).then((raw) => {
-                  const scan = raw as CostScan
-                  const out = el('div', { class: 'usage-cost-out' })
-                  if (!scan.days.length) out.append(el('span', { class: 'settings-row-caption', text: scan.reason ?? 'no data' }))
-                  let total = 0
-                  for (const d of scan.days) {
-                    total += d.spend
-                    out.append(el('div', { class: 'usage-cost-day', text: `${d.date}  ${scan.currency} ${d.spend.toFixed(2)}  ·  ${d.tokens.toLocaleString()} tokens` }))
-                  }
-                  if (scan.days.length) out.append(el('div', { class: 'usage-cost-total', text: `total ${scan.currency} ${total.toFixed(2)}` }))
-                  rowEl.querySelector('.usage-cost-out')?.remove()
-                  rowEl.append(out)
-                })
-              }
-            })
-          : null
+        sparkline(series)
       ])
       historyHost.append(rowEl)
     }
@@ -486,7 +591,7 @@ export function createUsageSection(): HTMLElement {
     createCollapsibleCard({ id, title, caption, storagePrefix: 'usage', class: `usage-card usage-card-${id}` }, [body])
   const providersCard = card('providers', 'Providers', 'The full catalog, five classes — enable what you use; keys are set per row, the rest is one search away.', el('div', {}, [search, grid]))
   const plansCard = card('plans', 'Plans & profiles', 'Every lane the poller reads. The active lane launches new agents; switching flips pointers, never credentials.', plansTable)
-  const paceCard = card('pace', 'Pace baseline', 'Days and hours that count as active time — verdicts integrate over these (all-day when unset).', paceHost)
+  const costCard = card('cost', 'Cost overview', "Today vs the window, the daily average, where the month is heading at this pace, and which model burns the money — scanned locally from your CLIs' own logs.", costHost)
   const alertsCard = card('alerts', 'Thresholds & alerts', 'A quiet toast at the first threshold, a warning with the verdict at the second; once per window, re-armed at reset.', alertsHost)
   const displayCard = card('display', 'Display', 'What the titlebar gauge mirrors, what the icon shows, how resets render, popover order and density.', displayHost)
   const historyCard = card('history', 'History & cost', 'Sampled history per provider and the on-demand local cost scan. Compact by design — the popover stays the glance.', historyHost)
@@ -573,13 +678,14 @@ export function createUsageSection(): HTMLElement {
     }
     await loadGrid()
     await refreshSnapshot()
+    void renderCost() // after the first snapshot: cost sources = reporting providers
   })()
 
   root.append(
     overview,
     providersCard.el,
     plansCard.el,
-    paceCard.el,
+    costCard.el,
     alertsCard.el,
     displayCard.el,
     historyCard.el,

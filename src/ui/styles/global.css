@@ -49,6 +49,11 @@
   --accent-contrast: #201200; /* text on an accent fill — 7.8:1 on brand, BOTH themes */
   --accent-weak: rgba(253, 141, 3, 0.13); /* hover wash / selected tint */
   --accent-glow: rgba(253, 141, 3, 0.4); /* focus + attention halo */
+  /* The focused pane's inner glow. Derived from --accent (not a second literal), so a
+     theme that restyles the accent carries the glow with it. Deliberately far hotter
+     than --accent-glow: this one is read against the terminal's near-black --bg-app,
+     where a 0.4 alpha over a wide blur washes out to nothing. */
+  --accent-glow-strong: color-mix(in srgb, var(--accent) 80%, transparent);
 
   /* Semantic. */
   --success: #3fc873; /* exit 0 */
@@ -135,9 +140,35 @@
 
   /* Layout constants. */
   --rail-w: 288px;
-  --rail-w-collapsed: 60px;
+  /* The rail's square: a workspace tab's own height, and therefore its width once the
+     label column is gone. NOT chosen — it is what .workspace-tab already computes to
+     (30px icon chip + 2×(--sp-2 + 3px) padding + 2×1px border). Named so the things that
+     must MATCH a tab can say so instead of repeating 54: the collapsed rail below.
+     Change the tab's padding or its icon chip and this number changes with them. */
+  --ws-square: 54px;
+  /* The + button's own square. NOT --ws-square: that one is load-bearing (it is a tab's
+     height AND the collapsed rail's width), so growing it would grow the whole rail. This
+     is free to fill the header row instead. The row's height is this + the header's 2px
+     vertical padding; 60px is the ceiling before the row grows. */
+  --ws-add-size: 56px;
+  /* Icon-only rail. DERIVED, not chosen: a collapsed workspace tab must be the SAME box
+     it is when expanded, minus the label column — i.e. --ws-square. The rail adds the
+     tabs' 2×--sp-2 gutter and its own 1px right border. Collapsing therefore RESIZES the
+     tab and moves nothing: same padding, same icon offset, same row pitch. */
+  --rail-w-collapsed: calc(var(--ws-square) + 2 * var(--sp-2) + 1px);
   --side-w: 200px; /* TwoColumn's rail (settings nav, preview column) */
-  --titlebar-h: 40px;
+  /* Top bar. 40px × 1.3, then dialled back 15% → 44px (net ≈1.1×). Every child scales
+     by the same factor (brand type + logo, the icon buttons, the command box) so the
+     bar reads as one enlarged strip and not as small controls floating in a tall
+     gutter. main/window.ts's titleBarOverlay height MUST match — the OS draws its
+     min/max/close into that band. */
+  --titlebar-h: 44px;
+  /* Terminal top bar. 46px — every .pane-* child is derived from the ORIGINAL 28px bar
+     at this exact ratio (46/28 ≈ 1.643), not nudged one at a time, so the bar stays in
+     proportion whenever this number moves. Spacing snaps to the nearest sanctioned stop
+     (scripts/check-spacing.mjs); sizes round to the nearest px — at this ratio every
+     child rounds to the value it already had, so only the bar itself moves. */
+  --pane-header-h: 46px;
   /* Win11 rounds restored windows at ~8px — the app frame's bottom corners match
      (dropped while maximized/fullscreen, where the OS window is square). */
   --window-corner: 8px;
@@ -259,6 +290,20 @@ button {
     transition-duration: 0.01ms !important;
   }
 }
+/* Calm motion (Settings § Appearance): the SAME becalming, opted into in-app.
+   :root carries .motion-calm (motion-port.ts) and every reduced-motion block in
+   this file has a class twin right beside it, so the switch and the OS preference
+   are one behavior with two doors. The swap twins below ride HIGHER specificity
+   than this clamp (root class + element beats root class + *), exactly as the
+   media swaps beat their * clamp — so MOTION-01's "becalm, don't kill" wins
+   under either door, or both at once. */
+:root.motion-calm *,
+:root.motion-calm *::before,
+:root.motion-calm *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
 /* MOTION-01: the attention/possession/update indicators would otherwise pulse
    forever. Under reduced-motion we don't kill them dead (the state must still
    read at a glance) — we swap the pulse for a slow, gentle opacity fade. */
@@ -279,6 +324,13 @@ button {
   .update-dot {
     animation: ws-attention-fade 3.8s ease-in-out infinite !important;
   }
+}
+:root.motion-calm .ws-attn,
+:root.motion-calm .workspace-tab.is-agent-driving::after,
+:root.motion-calm .pane-state[data-state='busy'],
+:root.motion-calm .pane-state[data-state='attention'],
+:root.motion-calm .update-dot {
+  animation: ws-attention-fade 3.8s ease-in-out infinite !important;
 }
 
 /* Classic chrome: a full-width top bar over the rail + content columns. */
@@ -434,6 +486,34 @@ button {
   font-family: var(--font-mono);
   font-size: 10px;
   line-height: 1.6;
+}
+
+/* Provider marks (components/provider-logo). The SVG is a 1em box — the
+   wrapper's font-size IS the size, set inline by providerLogo(id, px). */
+.provider-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1em;
+  height: 1em;
+  line-height: 1;
+}
+.provider-logo svg {
+  display: block;
+  width: 1em;
+  height: 1em;
+}
+/* Monogram fallback (aider / custom commands / unknown providers). */
+.provider-logo--mono {
+  border-radius: 0.2em;
+}
+.provider-logo-glyph {
+  font-size: 0.62em;
+  font-weight: var(--fw-semibold);
+  font-family: var(--font-mono);
+  color: #fff;
+  line-height: 1;
 }
 
 /* Pills — tones via .pill--{accent,success,danger,warning}. */
@@ -910,8 +990,8 @@ button {
 
 /* ── 5 · SHELL & FEATURES ──────────────────────────────────────────────────── */
 
-/* The top bar — full width: brand (logo · name · version) left; feature triggers,
-   rail toggle, settings, then the native window-control overlay on the right. A drag
+/* The top bar — full width: rail toggle · brand (logo · name · version) left; feature
+   triggers, settings, then the native window-control overlay on the right. A drag
    region end to end; interactive children opt out. */
 /* A strict 3-column grid (1fr auto 1fr): the center cell is TRUE window center —
    the bar itself has no horizontal padding (side insets live on the cells), and the
@@ -943,22 +1023,34 @@ button {
   justify-content: center;
   min-width: 0;
 }
+/* The LEAD cluster owns the bar's left cell: the rail toggle, then the brand. The
+   toggle lives here — beside the thing it toggles — not in the right cluster: it is a
+   layout control for the left column, and every app that has one (VS Code, Warp,
+   Zed) puts it over that column. Its old home was the right cluster, an accident of
+   "the fixed controls all live together". */
+#titlebar .titlebar-lead {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  overflow: hidden;
+  padding-left: var(--sp-2);
+  justify-self: start;
+}
 #titlebar .brand {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   min-width: 0;
   overflow: hidden;
-  padding-left: var(--sp-3);
-  justify-self: start;
-  font-size: var(--fs-13);
+  font-size: var(--fs-14); /* 13px × 1.3 × 0.85 */
   font-weight: var(--fw-semibold);
   letter-spacing: var(--track-tight);
   white-space: nowrap;
 }
 #titlebar .brand-logo {
-  width: 22px;
-  height: 22px;
+  width: 25px; /* 22px × 1.3 × 0.85 */
+  height: 25px;
   border-radius: var(--r-sm);
   object-fit: cover;
   display: block;
@@ -966,8 +1058,18 @@ button {
 }
 #titlebar .brand-version {
   color: var(--text-lo);
-  font-size: var(--fs-11);
+  font-size: var(--fs-12); /* 11px × 1.3 × 0.85 */
   font-weight: var(--fw-regular);
+}
+/* Every control in the bar scales with it — a 26px button in a 44px strip reads as a
+   mistake. Scoped to #titlebar: .icon-btn is a house primitive used at 26px elsewhere. */
+#titlebar .icon-btn {
+  width: 29px; /* 26px × 1.3 × 0.85 */
+  height: 29px;
+}
+#titlebar .icon-btn svg {
+  width: 18px; /* 16px × 1.3 × 0.85 */
+  height: 18px;
 }
 #titlebar .titlebar-right {
   justify-self: end;
@@ -1010,13 +1112,14 @@ button {
 #titlebar .titlebar-slot:empty {
   display: none;
 }
-/* macOS traffic lights overlay the top-left — clear the brand past them. The inset is
-   a token (--traffic-light-inset), coupled to main/window.ts's trafficLightPosition. */
-#app.platform-darwin #titlebar .brand {
+/* macOS traffic lights overlay the top-left — clear the LEAD cluster past them (the
+   rail toggle now leads, so the inset belongs to the cluster, not the brand). The
+   inset is a token (--traffic-light-inset), coupled to window.ts's trafficLightPosition. */
+#app.platform-darwin #titlebar .titlebar-lead {
   padding-left: var(--traffic-light-inset);
 }
-#app.platform-darwin.is-fullscreen #titlebar .brand {
-  padding-left: var(--sp-3); /* traffic lights auto-hide in macOS fullscreen */
+#app.platform-darwin.is-fullscreen #titlebar .titlebar-lead {
+  padding-left: var(--sp-2); /* traffic lights auto-hide in macOS fullscreen */
 }
 
 #content {
@@ -1070,10 +1173,14 @@ button {
   align-items: center;
   gap: var(--sp-2);
   /* Horizontal inset = tabs' container pad + tab pad + border, so the title,
-     the + button and the tab icons share one left/right edge. The gap below
-     is split by the hairline: sp-3 here, sp-3 as #workspace-tabs padding-top
-     (the list side must sit INSIDE the scroller — attention-ring clip room). */
-  padding: var(--sp-4) calc(var(--sp-4) + 1px) var(--sp-3);
+     the + button and the tab icons share one left/right edge.
+     VERTICAL is 2px, not --sp-4/--sp-3: the row's height is set by its tallest child, and
+     that is the + button's --ws-add-size footprint. Generous padding around it gave an
+     80px row that read as a tall empty box. At 2px the button all but fills the row
+     (2 + 56 + 2 = 60px) and the title rides beside it. The gap below the hairline is
+     carried by #workspace-tabs' own --sp-3 padding-top, which must stay INSIDE the
+     scroller (attention-ring clip room). */
+  padding: 2px calc(var(--sp-4) + 1px);
 }
 /* A division, not a wall: quieter than any real border in the rail (the
    faded stop), inset to the tabs' outer edges so it caps the list column
@@ -1089,7 +1196,13 @@ button {
 }
 .rail-title {
   flex: none;
-  font-size: var(--fs-11);
+  /* Steps up from the 10px .section-label it is built on — this is the rail's heading,
+     not a caption. It cannot grow the row: the header's height is set by the 56px
+     --ws-add-size footprint beside it, and this line box is nowhere near that. What it
+     CAN do is run into the + button: uppercase at --track-wide is expensive, so the
+     measured width is the constraint (see the probe in the commit that raised it). */
+  font-size: var(--fs-16);
+  font-weight: var(--fw-bold); /* .section-label ships semibold; a step past it */
   color: var(--text-mid); /* the rail's entry point shouldn't be its faintest text */
 }
 .rail-total {
@@ -1097,6 +1210,52 @@ button {
   color: var(--text-lo);
   font-size: var(--fs-12);
   font-variant-numeric: tabular-nums;
+}
+/* "New workspace" — top of the rail, trailing the title. TWO squares, not one:
+     footprint  --ws-add-size. Always square, never painted — it is the space the button
+                occupies, sized to fill the header row rather than to match a tab (see
+                --ws-add-size on why it is not --ws-square).
+     highlight  a SMALLER centred square that appears only on hover/focus/press. Painting
+                the whole footprint made a slab that read as an empty rectangle; the inner
+                square gives the affordance without the mass.
+   The highlight is a ::before so the footprint stays a clean square for layout, and the
+   inherited .icon-btn hover fill is cancelled below. Overrides the 26px .icon-btn
+   primitive it is built from — that primitive stays 26px everywhere else. */
+#ws-add {
+  position: relative;
+  width: var(--ws-add-size);
+  height: var(--ws-add-size);
+  flex: none;
+  border-radius: var(--r-md);
+  background: transparent;
+}
+#ws-add::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto; /* centres a fixed box in the footprint, both axes */
+  /* The smaller square. It grows freely up to --ws-add-size (56px) without touching the
+     row, since the FOOTPRINT is what sets the row's height — 44px leaves a 6px margin of
+     unpainted footprint on every side, so it still reads as an inset target, not a slab. */
+  width: 44px;
+  height: 44px;
+  border-radius: var(--r-md); /* the tile corner, now that it is tile-sized */
+  background: transparent;
+  transition: background var(--dur-1) var(--ease);
+}
+#ws-add:hover,
+#ws-add:focus-visible {
+  background: transparent; /* the fill lives on the inner square, not the footprint */
+}
+#ws-add:hover::before,
+#ws-add:focus-visible::before,
+#ws-add:active::before {
+  background: var(--accent-weak);
+}
+#ws-add svg {
+  position: relative; /* above the highlight */
+  width: 20px;
+  height: 20px;
 }
 #workspace-tabs {
   flex: 1 1 auto;
@@ -1150,6 +1309,10 @@ button {
   --ws-tint-hover: color-mix(in srgb, var(--ws-accent) 6%, transparent);
   --ws-edge: var(--ws-accent);
   --ws-glow: color-mix(in srgb, var(--ws-accent) 42%, transparent);
+  /* The selected tab's INNER glow. Hotter than --ws-glow for the same reason the pane's
+     --accent-glow-strong is: an inset glow is read against the tab's own 12% wash, where
+     a 42% stop over a soft blur measures ~nothing (+8 on blue, 6px in — probed). */
+  --ws-glow-strong: color-mix(in srgb, var(--ws-accent) 80%, transparent);
 }
 [data-theme-mode='light'] .workspace-tab {
   --ws-ink: color-mix(in srgb, var(--ws-accent) 54%, black);
@@ -1173,7 +1336,13 @@ button {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-2);
+  /* --sp-2 + a 3px optical half-step. Those extra px are what separate the selection
+     nudge from the icon chip: the nudge is pinned to the outline, so the ONLY way to
+     open that gap is to push the icon in. Uniform on all four sides — the collapsed tab
+     must stay a square, and its side is exactly this padding ×2 + the 30px icon + the
+     2px border. That side is --ws-square, and --rail-w-collapsed derives from it, so
+     widening this gap widens the collapsed rail by the same 2px. */
+  padding: calc(var(--sp-2) + 3px);
   border: 1px solid transparent;
   border-radius: var(--r-md);
   color: var(--text-mid);
@@ -1271,8 +1440,13 @@ button {
 .workspace-tab:focus-within .ws-close {
   display: inline-flex;
 }
-.workspace-tab:hover .ws-count {
-  display: none; /* the close button takes the count's slot on hover */
+/* The close button TAKES the count's slot — it never joins it. The reveal and the
+   hide must therefore fire on the same states: the tab is `tabindex=0`, so clicking
+   one focuses it, and a :hover-only hide left the count AND the × crowding the label
+   for as long as the tab kept focus. */
+.workspace-tab:hover .ws-count,
+.workspace-tab:focus-within .ws-count {
+  display: none;
 }
 .workspace-tab .ws-close:hover {
   color: var(--danger);
@@ -1284,21 +1458,43 @@ button {
   color: var(--ws-ink);
   background: var(--ws-tint);
   border-color: var(--ws-edge);
+  /* Two inset paints, in order:
+       ring  +1px of outline, the smallest step there is. NOT border-width: the border is
+             in the box model, so 1px -> 2px would push the icon and the label 1px right
+             on every selection. An inset 1px ring rides INSIDE the existing border and
+             moves nothing (geometry-probed).
+       glow  the outline bleeding INWARD into the tab's own wash — the same read as the
+             focused pane's inner glow. Inset also sidesteps the clip an outward glow
+             fights: #workspace-tabs is a scroller and its --sp-2 padding shears outer
+             shadows. Identity color, never brand: this says "selected", not "needs you".
+     The attention rules below are declared later and win outright, so a ringing tab is
+     never softened by this. */
+  box-shadow:
+    inset 0 0 0 1px var(--ws-edge),
+    inset 0 0 14px -1px var(--ws-glow-strong);
 }
-/* Selection bar: a DENSE straight segment, not a traced outline — it spans only
-   the flat run of the left edge (vertical insets = the corner radius, so the
-   curves stay clean), floats 1px off the outline for air, and takes the VIVID
-   identity stop at 4px so it reads a step hotter than the 1px edge. Absolute
-   overlay + pill ends: zero layout shift (geometry-probed: icon x and tab
-   width identical to rest, same contract the old inset-shadow bar held). */
+/* Selection bar: a DENSE straight segment, not a traced outline. It is ATTACHED to the
+   left outline (left:0 — flush against the border's inner edge, no floating gap) and
+   spans exactly the flat run of that edge: absolute offsets are padding-box-relative,
+   and the padding box's corner radius is the border box's minus the 1px border, so the
+   straight part begins at `--r-md - 1px`. Above and below it, the outline is already
+   curving; the bar stops where the curve starts and never fights it.
+   Its own ends are quarter-circles turned INWARD — square against the outline, rounded
+   on the inner side (radius = the bar's width, so each corner is a true quarter of a
+   circle) — top and bottom mirrored, so the shape flows into the tab's own curvature.
+   The VIVID identity stop at 4px reads a step hotter than the outline, and the 7px that
+   remain before the icon (tab padding, minus this width) are its breathing room. It thickened 1px in step with the outline's inset ring — the smallest unit — so
+   the two edges keep their relative weight.
+   Absolute overlay: zero layout shift (geometry-probed — icon x and tab width identical
+   to rest, the same contract the old inset-shadow bar held). */
 .workspace-tab.active::before {
   content: '';
   position: absolute;
-  left: 1px; /* exactly 1px of air — offsets are padding-box-relative, the border sits outside (pixel-verified) */
-  top: var(--r-md);
-  bottom: var(--r-md);
+  left: 0; /* attached to the outline, not floating off it */
+  top: calc(var(--r-md) - 2px);
+  bottom: calc(var(--r-md) - 2px);
   width: 4px;
-  border-radius: var(--r-full);
+  border-radius: 0 4px 4px 0; /* radius tracks the width — the ends stay true quarter-circles */
   background: var(--ws-accent);
 }
 .workspace-tab.active:hover {
@@ -1307,9 +1503,15 @@ button {
 .workspace-tab.active .ws-icon {
   background: var(--ws-tint); /* tint over tint — the chip steps up naturally */
 }
-/* No font-weight flip on select: weight changes reflow the label, and workspace
-   switch is on the perception hot path — selection is carried by paint only
-   (ink + wash + bar). */
+/* The selected workspace's name goes BOLD. The old rule here refused a weight flip on the
+   grounds that it "reflows the label" — it does not: .ws-label is `flex: 1 1 auto` with
+   `min-width: 0`, so the flex line sizes its box, not its text. The icon chip and the
+   badges keep their exact x (geometry-probed), and wider glyphs simply run further under
+   the label's own overflow mask. So selection is still carried by paint alone — this just
+   adds weight to the list of paints (ink + wash + bar + weight). */
+.workspace-tab.active .ws-label {
+  font-weight: var(--fw-bold);
+}
 .workspace-tab.active .ws-count {
   color: var(--text-mid);
 }
@@ -1327,8 +1529,12 @@ button {
   box-shadow: 0 0 0 1px var(--accent-glow), 0 0 14px var(--accent-glow);
 }
 .workspace-tab.active[data-attention="attention"] {
-  /* selection bar rides the ::before overlay; orange glow outside the outline */
+  /* Selected AND ringing. This rule REPLACES the .active shadow, so the selection's inset
+     ring has to be restated or the outline would thin by 1px the moment a tab needs you.
+     Orange (attention) stays outside the outline and unmistakably dominates; the identity
+     ring stays inside it. The selection bar rides the ::before overlay, untouched. */
   box-shadow:
+    inset 0 0 0 1px var(--ws-edge),
     0 0 0 1px var(--accent-glow),
     0 0 14px var(--accent-glow);
 }
@@ -1345,7 +1551,15 @@ button {
   }
 }
 
-/* Collapsed rail: icon-only — the attention count stays visible (it's the point). */
+/* Collapsed rail: icon-only — the attention count stays visible (it's the point).
+   Collapsing RESIZES; it does not re-lay-out. Nothing here touches the tab's padding,
+   its justification, or the header's vertical padding, so every icon keeps the x it
+   had inside its tab, every tab keeps its y, and the row pitch is untouched. The tab
+   simply loses its label column and lands on the square its own box already implied
+   (see --rail-w-collapsed). The previous rule re-centred the icon (padding 6px/--sp-1
+   + justify-content) and shortened the header (sp-3/sp-1 instead of sp-4/sp-3), so a
+   collapse shifted every icon left AND lifted the whole list ~12px — the "it moves the
+   elements instead of resizing them" bug. */
 #app.rail-collapsed #rail {
   width: var(--rail-w-collapsed);
 }
@@ -1357,25 +1571,37 @@ button {
   display: none;
 }
 #app.rail-collapsed .rail-header {
+  /* Same vertical padding as expanded — the header must keep its height or every tab
+     below it jumps. Only the horizontal inset gives way, so the lone + button centres
+     over the icon column instead of overflowing it. */
   justify-content: center;
-  /* Icon-only mode: tighter below the + button; the hairline stays (same
-     ::after), the list's sp-3 padding-top carries the rest of the gap. */
-  padding: var(--sp-3) 0 var(--sp-1);
+  padding: 2px var(--sp-2);
 }
-#app.rail-collapsed .workspace-tab {
-  justify-content: center;
-  padding: 6px var(--sp-1);
-}
+/* The attention count has no label to sit beside, so it rides the SQUARE's top-right
+   corner, notification-badge style: proportionally reduced (the full 20×18 badge is a
+   third of the 54px square) and overlapping the corner, floated by a keyline. Smaller
+   by explicit direction — the guardrail softened from "never shrunk" to "never dimmed
+   or hidden": the loud fill, the glow-pulse and the count all survive the resize. */
 #app.rail-collapsed .workspace-tab .ws-badges {
   position: absolute;
-  top: -2px;
-  right: 0;
+  top: -4px;
+  right: -4px;
+  z-index: 1; /* above the tab's own border/outline, so the overlap reads as ON TOP */
+}
+#app.rail-collapsed .ws-attn {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 var(--sp-1);
+  font-size: 10px;
+  /* A BORDER keyline in the rail's surface, not a box-shadow ring: the badge's own
+     ws-attention-pulse animates box-shadow, so a shadow keyline would flicker away
+     on every pulse beat. The border cuts the badge out of the square beneath it. */
+  border: 2px solid var(--bg-surface);
 }
 /* Bug #10: collapsed, .ws-badges (the attention count) sits top-right — and the
    agent-browsing dot defaults to the SAME corner (top:3px right:3px), stacking two
    "look here" signals on one 8px square. Drop the agent dot to the bottom so both
-   read; the attention count keeps the top-right, untouched (guardrail: attention
-   surfaces are never moved/shrunk to make room). */
+   read; the attention count keeps the top-right corner. */
 #app.rail-collapsed .workspace-tab.is-agent-browsing::after {
   top: auto;
   bottom: 3px;
@@ -1443,16 +1669,36 @@ button {
 }
 .layout-menu {
   top: 32px;
-  left: 0;
+  /* RIGHT-anchored, growing LEFT toward the window center. The launcher lives in the
+     titlebar's right cluster, and on Windows the min/max/close band is an OS-painted
+     titleBarOverlay that no web content can ever cover — a left-anchored popover grew
+     straight under it and read as "cut off". Growing away from the overlay, it can
+     never meet it. */
+  right: 0;
+  left: auto;
   padding: var(--sp-2);
+  /* The 8 template tiles ride one row (~490px) — the .menu base cap (320px) would
+     clip them. The vw term keeps the right-anchored popover from poking past the
+     window's LEFT edge on a very narrow window (the tiles wrap instead). */
+  max-width: min(520px, calc(100vw - 240px));
 }
 .layout-menu[hidden] {
   display: none;
 }
+/* "New terminal" — the ADD action lives with the layout templates (same decision:
+   how many panes). Full-width row under the tiles; the shortcut hugs the right. */
+.layout-menu-add .kbd {
+  margin-left: auto;
+}
+.layout-menu-add:hover .kbd {
+  color: var(--accent-ink);
+}
 /* Compact tiles for the dense titlebar dropdown (the wizard runs the same picker at
-   full size). Only size/radius shift; hover + selected states come from .layout-tile. */
+   full size). Only size/radius shift; hover + selected states come from .layout-tile.
+   `wrap` engages ONLY when the menu's vw-guarded max-width bites (narrow window) —
+   max-content sizing keeps the row single-line everywhere else. */
 .layout-picker--compact {
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: var(--sp-1);
 }
 .layout-picker--compact .layout-tile {
@@ -1481,25 +1727,30 @@ button {
   display: flex;
 }
 
-/* The grid: slots are live terminals; gutters are real grid tracks. Seams are the
-   recessed --bg-inset showing through — just enough that two panes' characters can
-   never read as one line, and no more. */
+/* The grid: slots are live terminals, absolutely positioned from the split-tree's
+   computed rects (that is what buys per-seam resizing + drag-rearrange); gutters are
+   positioned seam segments. Seams are the recessed --bg-inset showing through — just
+   enough that two panes' characters can never read as one line, and no more. */
 .layout-grid {
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
-  display: grid;
+  position: relative;
   overflow: hidden;
-  /* 3px reveal between the app edge and a terminal; with the slot's 1px border the
-     edge seam totals 4px = exactly one interior seam (1px border + 2px gutter + 1px
-     border), so edge and inner outlines read as the same weight. */
-  padding: 3px;
+  /* Terminals run FLUSH to the window: no reveal between the app edge and a pane, so
+     the grid gives every pixel it has to the buffers. Only the slot's own 1px outline
+     separates a pane from the frame. Interior seams (1px border + 2px gutter + 1px
+     border) are untouched — two panes' characters must still never read as one line.
+     Consequence, accepted: the focused pane's outer halo is clipped by the overflow
+     along the window edge; its accent border is not, and that is what carries focus. */
+  padding: 0;
   background: var(--bg-inset);
 }
 
-/* Terminals are rectangles — hard 90° corners, hairline border, thin seam. */
+/* Terminals are rectangles — hard 90° corners, hairline border, thin seam.
+   Absolutely positioned by GridLayout (left/top/width/height are inline px). */
 .layout-slot {
-  position: relative;
+  position: absolute;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -1517,19 +1768,116 @@ button {
    Pure paint (no layout), cheap under WebGL. */
 .layout-slot.focused {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent), 0 0 14px -2px var(--accent-glow);
+  /* ONLY the soft halo lives out here. The ring itself is drawn INSIDE (::after below),
+     because .layout-grid is `overflow: hidden` and its panes run flush to the window —
+     so an outer ring has no room to draw on any edge that touches the frame. It survived
+     only on edges facing an interior gutter, which read thick while left/top/bottom read
+     thin or vanished outright. An inner ring cannot be clipped, so all four sides match.
+     (The halo is a soft gradient; its clipping at the frame is invisible, and accepted.) */
+  box-shadow: 0 0 14px -2px var(--accent-glow);
   z-index: 1;
+}
+/* The focus ring + the inner glow, on ONE overlay. Neither can be a plain shadow on the
+   slot: .pane-header and .pane-body are opaque and paint over the slot's own background,
+   so an inset shadow there would never be seen. This pseudo-element sits above them —
+   inert (pointer-events:none, so the terminal keeps clicks and text selection), above
+   .block-gutter's z-index 4 and below .menu's 40, so the pane menu still opens over it.
+     ring  a hard 2px inset band, uniform on every side, immune to the grid's clipping;
+           with the slot's own 1px accent border the focused edge reads 3px.
+     glow  TWO inset stops, not one. The single 26px/-6px/0.4-alpha wash it replaces was
+           measurably almost nothing against the terminal's near-black background: +22 on
+           the red channel 4px in, +4 by 16px, and gone by 32px (baseline rgb(13,13,15)).
+           A tight hot stop now hugs the ring and a wide one carries the falloff. Both keep
+           a NEGATIVE spread, so the centre stays fully transparent and no terminal text is
+           ever tinted.
+           Tuning ladder, MEASURED as R-channel lift over the unfocused pane at 4/8/16/32px
+           (baseline rgb(12,13,15) — the terminal's own background):
+             one stop,  26px/-6px/--accent-glow     +22 / +14 /  +4 /  -1   (invisible)
+             two stops, --accent-glow-strong @ 70%  +69 / +47 / +22 /  +8
+             two stops, --accent-glow-strong @ 80%  +78 / +56 / +27 / +10   <- current
+           Dial it with the 80% in --accent-glow-strong; the geometry below stays put. */
+.layout-slot.focused::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
+  box-shadow:
+    inset 0 0 0 2px var(--accent),
+    inset 0 0 20px -2px var(--accent-glow-strong),
+    inset 0 0 68px -12px var(--accent-glow);
+}
+
+/* One-shot attention pulse: opening a workspace flashes each pane whose agent needs
+   input ONCE, then hands the story back to the header dot. The eye lands on the right
+   PANE, not just the right tab — the tab's ring cleared the moment the workspace was
+   focused (Phase-2 semantics), so this is what replaces it inside the grid.
+     geometry   the focused pane's ::after, verbatim — the ONE glow intensity that is
+                measured against the terminal background (see the tuning ladder above).
+                It rides ::before so a pane that is focused AND needing input shows both.
+     color      var(--attention), never --accent: attention is its own token ("needs
+                you"), and a theme that separates the two carries the pulse with it.
+     lifetime   the animation plays once; GridLayout.pulseAttention drops the class
+                after it lands, so the overlay leaves the paint tree entirely. */
+@keyframes pane-attn-pulse {
+  0% {
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.layout-slot.attn-pulse::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
+  opacity: 0;
+  box-shadow:
+    inset 0 0 0 2px var(--attention),
+    inset 0 0 20px -2px color-mix(in srgb, var(--attention) 80%, transparent),
+    inset 0 0 68px -12px color-mix(in srgb, var(--attention) 40%, transparent);
+  animation: pane-attn-pulse 1.1s var(--ease) 1;
+}
+/* MOTION-01: under reduced motion (OS pref OR the Calm-motion switch) the pulse
+   survives as ONE slow opacity fade — no motion, but the call-to-action still
+   lands (the global 0.01ms clamp would otherwise erase it entirely; the
+   !important is how the clamp is outranked). */
+@media (prefers-reduced-motion: reduce) {
+  .layout-slot.attn-pulse::before {
+    animation: pane-attn-pulse 1.8s ease-in-out 1 !important;
+  }
+}
+:root.motion-calm .layout-slot.attn-pulse::before {
+  animation: pane-attn-pulse 1.8s ease-in-out 1 !important;
 }
 
 /* Terminal top bar — the reference layout: [✳ title] · [⑂ branch] · [⋯ ⤢ ↔ ↕ ×].
    A slightly elevated surface over the terminal body; static DOM, event-driven. */
 .pane-header {
+  /* A size container, so the bar reacts to the PANE's width, not the window's — a 4-pane
+     grid and a lone maximised pane are different worlds. Nothing here measures anything:
+     @container does it in the style engine (see the progressive-collapse block below). */
+  container-type: inline-size;
+  container-name: pane-bar;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  /* Was `minmax(0,1fr) auto minmax(0,1fr)` — a TRUE window-centred branch chip, paid for
+     by giving the actions column exactly as much width as the left cluster. The actions
+     need 173px and never more, so half the pane's slack was reserved for empty space: the
+     chips needed a ~1085px pane to all fit. Now the left cluster takes its content width
+     first, the branch chip centres in whatever is left, and the actions shrink to fit —
+     everything fits at ~780px. The chip is centred in the REMAINING span rather than in
+     the pane; it is also the first thing dropped when space runs short, so the difference
+     only shows on a wide pane where there is room to spare either way. */
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr) auto;
   align-items: center;
-  gap: var(--sp-2);
-  height: 28px;
-  padding: 0 2px 0 var(--sp-2); /* actions hug the pane's right edge, like the reference bar */
+  gap: var(--sp-3);
+  height: var(--pane-header-h);
+  padding: 0 3px 0 var(--sp-3); /* actions hug the pane's right edge, like the reference bar */
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
   flex: none;
@@ -1543,7 +1891,7 @@ button {
 .pane-head-left {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-3); /* 6px × 2 × 0.85, snapped to the nearest stop */
   min-width: 0;
   overflow: hidden; /* bug #9: with remote+role+claims+mcp all lit in a narrow pane the
                        flex:none chips clip at the column edge instead of spilling into
@@ -1557,29 +1905,131 @@ button {
 .pane-header .pane-actions {
   grid-column: 3;
 }
+
+/* ── Progressive collapse ───────────────────────────────────────────────────────
+   Two things are NEVER given up: the state glyph on the left (which agent is doing
+   what) and the × on the right (get out). Between them everything retires into the ⋯
+   menu, in a fixed order, least-identifying first:
+
+     1. the branch / worktree chip      2. the expand trio
+     3. the MCP chip   4. claims   5. role   6. remote
+
+   One exception never retires at all: the agent context gauge (Claude Code's own
+   disc + "62% used", in the right action cluster) stays at every width — context
+   nearing full is exactly what you must still see on a cramped grid.
+
+   The title is the last thing standing, never the first to go. That inversion was the
+   bug: the chips are `flex: none` and the actions are fixed, so `.pane-title` was the
+   ONLY shrinkable item in the row and absorbed the entire deficit — measured, it hit
+   0px at a 862px pane while four chips kept their full width and were then clipped
+   away invisibly by .pane-head-left's overflow. The floor below stops that.
+
+   Everything retired here is listed unconditionally in the ⋯ menu (terminal-pane.ts's
+   buildMenu), so narrowing a pane never destroys information — it relocates it.
+
+   TWO THINGS ABOUT THE NUMBERS. They are DERIVED from the measured widths (state 13,
+   remote 123, role 109, claims 47, mcp 62, branch 88, five actions 173 / two 68, a 6ch
+   title floor ≈ 65, --sp-3 gaps): each is the width at which the left cluster would no
+   longer fit, so each item leaves exactly when it must. And a `container-type:
+   inline-size` query resolves against the container's CONTENT box, not its border box —
+   the header's 15px of padding means a `max-width: 590px` rule fires at a 605px PANE.
+   The values below are the content-box ones, which leaves ~15-25px of slack before the
+   cluster would clip. Probed across both the crowded and the common case: nothing is
+   ever clipped away silently. */
+/* 1. THE BRANCH / WORKTREE CHIP — first to go, but only once something is actually
+   competing for the row. A fixed 760px threshold was derived from the worst case (all
+   four chips lit) and was wrong for the common one: a 2×2 grid on a 1600px monitor gives
+   each pane 655px, so the branch vanished on every grid but 1×1 while the row sat half
+   empty. `:has()` asks the real question — is any chip lit? — instead of guessing from
+   width. `.pane-role`/`.pane-claims`/`.pane-mcp` always exist and toggle the `hidden`
+   attribute; `.pane-remote` only exists on a remote pane, so an absent one never matches. */
+@container pane-bar (max-width: 760px) {
+  .pane-header:has(.pane-remote:not([hidden])) .pane-git.has-git,
+  .pane-header:has(.pane-role:not([hidden])) .pane-git.has-git,
+  .pane-header:has(.pane-claims:not([hidden])) .pane-git.has-git,
+  .pane-header:has(.pane-mcp:not([hidden])) .pane-git.has-git {
+    display: none;
+  }
+}
+/* The CONTEXT GAUGE is deliberately NOT in the list above: it never retires and
+   never changes form — Claude Code's own disc + "62% used", a fixed ~90px in the
+   right action cluster at every width (context nearing full is exactly what you
+   must still see on a cramped grid). It is small enough not to out-compete the
+   chips that DO retire. */
+/* An uncrowded bar keeps its branch until the pane is genuinely tiny. Until then the chip
+   ellipsises rather than disappearing (min-width:0 below + .pane-branch's text-overflow). */
+@container pane-bar (max-width: 320px) {
+  .pane-header .pane-git.has-git {
+    display: none;
+  }
+}
+/* 2. THE EXPAND TRIO — same story: it only has to yield when the left cluster is busy. */
+@container pane-bar (max-width: 700px) {
+  .pane-header:has(.pane-remote:not([hidden])) .pane-act-expand,
+  .pane-header:has(.pane-role:not([hidden])) .pane-act-expand,
+  .pane-header:has(.pane-claims:not([hidden])) .pane-act-expand,
+  .pane-header:has(.pane-mcp:not([hidden])) .pane-act-expand {
+    display: none;
+  }
+}
+@container pane-bar (max-width: 380px) {
+  .pane-header .pane-act-expand {
+    display: none;
+  }
+}
+@container pane-bar (max-width: 590px) {
+  .pane-header .pane-mcp {
+    display: none;
+  }
+}
+@container pane-bar (max-width: 515px) {
+  .pane-header .pane-claims {
+    display: none;
+  }
+}
+@container pane-bar (max-width: 455px) {
+  .pane-header .pane-role {
+    display: none;
+  }
+}
+@container pane-bar (max-width: 335px) {
+  .pane-header .pane-remote,
+  .pane-header .pane-agent {
+    display: none;
+  }
+}
+/* Below this there is nothing left to retire — only the state glyph, the title, ⋯ and ×.
+   Give the title's 6ch floor back, or it would overflow .pane-head-left and be CLIPPED
+   (measured: 90px of it, at a 90px pane) instead of ellipsising down gracefully. A floor
+   that outlives the space it was protecting stops protecting anything. */
+@container pane-bar (max-width: 200px) {
+  .pane-header .pane-title {
+    min-width: 0;
+  }
+}
 /* Remote pane chip (4/05): WHERE the pane lives — a distinct cool tint so remote
    never reads as local. */
 .pane-remote {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 6px;
   flex: none;
-  font-size: var(--fs-10);
+  font-size: 16px; /* 10px × 1.643 */
   font-weight: var(--fw-semibold);
   color: var(--info);
   border: 1px solid var(--info);
-  border-radius: var(--r-xs);
-  padding: 0 var(--sp-1);
-  line-height: 14px;
-  max-width: 90px;
+  border-radius: var(--r-sm);
+  padding: 0 6px;
+  line-height: 23px;
+  max-width: 148px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .pane-remote svg {
   flex: none;
-  width: 10px;
-  height: 10px;
+  width: 17px;
+  height: 17px;
 }
 .menu-note {
   padding: var(--sp-1) var(--sp-2);
@@ -1592,19 +2042,19 @@ button {
 .pane-claims {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 6px;
   flex: none;
-  font-size: var(--fs-10);
+  font-size: 16px; /* 10px × 1.643 */
   color: var(--text-lo);
   border: 1px solid var(--border);
-  border-radius: var(--r-xs);
-  padding: 0 var(--sp-1);
-  line-height: 14px;
+  border-radius: var(--r-sm);
+  padding: 0 6px;
+  line-height: 23px;
 }
 .pane-claims svg {
   flex: none;
-  width: 10px;
-  height: 10px;
+  width: 17px;
+  height: 17px;
 }
 .claims-list {
   display: flex;
@@ -1640,22 +2090,28 @@ button {
 /* Swarm role chip (Phase-4/01): tiny uppercase tag between the state dot and title.
    5/07 (UX-13): NEUTRAL by default — brand orange means attention, never a role;
    the reviewer (the gatekeeping role) is the one that earns a distinct tone. */
+/* Agent mark (WHO runs in this pane) — the launched provider's logo, session-scoped. */
+.pane-agent {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
 .pane-role {
   flex: none;
-  max-width: 88px; /* bug #9: a long role ellipsises instead of shoving the cluster into
-                      the branch chip; the full text is in the title tooltip (set in TS). */
+  max-width: 145px; /* bug #9: a long role ellipsises instead of shoving the cluster into
+                       the branch chip; the full text is in the title tooltip (set in TS). */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--fs-10);
+  font-size: 16px; /* 10px × 1.643 */
   font-weight: var(--fw-semibold);
   text-transform: uppercase;
   letter-spacing: var(--track-wide);
   color: var(--text-mid);
   border: 1px solid var(--border-strong);
-  border-radius: var(--r-xs);
-  padding: 0 var(--sp-1);
-  line-height: 14px;
+  border-radius: var(--r-sm);
+  padding: 0 6px;
+  line-height: 23px;
 }
 .pane-role[data-role='reviewer'] {
   color: var(--info);
@@ -1663,23 +2119,23 @@ button {
 }
 /* MCP status chip (8/11): connected count / attention / restart nudge. Co-located with
    its header siblings (was ~1500 lines away) and aligned on every axis the audit
-   flagged — --fs-10 (not --fs-11), --r-xs (not --r-full), 0 var(--sp-1) padding (not
-   6px), and a pinned line-height so it resolves the SAME box inside the 28px bar (its
+   flagged — the same type/radius/padding as its .pane-role and .pane-claims siblings,
+   and a PINNED line-height so it resolves the same box they do inside the bar (its
    unset line-height gave it a taller one). */
 .pane-mcp {
   flex: none;
-  max-width: 96px;
+  max-width: 158px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono);
-  font-size: var(--fs-10);
-  line-height: 14px;
+  font-size: 16px; /* 10px × 1.643 */
+  line-height: 23px;
   color: var(--text-lo);
   background: var(--bg-inset);
   border: 1px solid var(--border);
-  border-radius: var(--r-xs);
-  padding: 0 var(--sp-1);
+  border-radius: var(--r-sm);
+  padding: 0 6px;
 }
 .pane-mcp.is-attention {
   color: var(--warning);
@@ -1690,12 +2146,68 @@ button {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
   cursor: default;
 }
+/* Agent context gauge: how full this pane's agent conversation window is (token
+   counts from the CLI's own session log + statusline relay — never content).
+   Claude Code's OWN indicator, verbatim (decoded from assets/Inspiration/
+   context.png): a SOLID moon disc — the used arc sweeps clockwise from 12 o'clock
+   over a muted full disc, no outline, no hollow centre — followed by "62% used"
+   in quiet text. BARE, not a pill: the reference sits directly on its bar. ONE
+   registered custom property `--ctx` (0–100, set from TS) drives the sweep —
+   registered is what lets it TWEEN (an unregistered custom property snaps). The
+   arc rides the ramp: green = fine, amber = look (≥60), red = act (≥90) — the
+   same grammar as the exit-code green, the dirty amber and the attention red;
+   never color alone (the percent is right there in text). */
+@property --ctx {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}
+.pane-context {
+  --ctx-color: var(--success);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 16px; /* 10px × 1.643, with the sibling chips */
+  line-height: 23px;
+  color: var(--text-mid);
+  white-space: nowrap;
+  transition: --ctx 0.35s ease;
+}
+.pane-context.is-warn {
+  --ctx-color: var(--warning);
+}
+.pane-context.is-hot {
+  --ctx-color: var(--danger);
+}
+.ctx-pct {
+  flex: none;
+}
+.ctx-disc {
+  display: inline-block;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--r-full);
+  background: conic-gradient(var(--ctx-color) calc(var(--ctx) * 1%), color-mix(in srgb, var(--text-lo) 30%, transparent) 0);
+}
+/* In its home — LEADING the right action cluster (status, not identity) — the gauge
+   keeps a step of air before the ⋯ button: the cluster's own 2px gap is tuned for
+   button-to-button, too tight against text. */
+.pane-actions .pane-context {
+  margin-right: var(--sp-1);
+}
 .pane-title {
-  min-width: 0;
+  /* A FLOOR, not 0. Every chip is `flex: none` and the actions are fixed, so the title is
+     the only shrinkable item in the row — with min-width:0 it absorbed the entire deficit
+     and measured 0px on an 862px pane while four chips kept full width and were clipped
+     away invisibly. The pane's name is the last thing to go, never the first. */
+  min-width: 6ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--fs-11);
+  font-size: 18px; /* 11px × 1.679, with the bar */
   font-weight: var(--fw-medium);
   color: var(--text-mid);
   cursor: default;
@@ -1709,13 +2221,13 @@ button {
   color: var(--text-hi);
 }
 .pane-title-input {
-  width: 140px;
+  width: 230px;
   border: 1px solid var(--accent);
-  border-radius: var(--r-xs);
+  border-radius: var(--r-sm);
   background: var(--bg-inset);
   color: var(--text-hi);
-  font-size: var(--fs-11);
-  padding: 1px var(--sp-1);
+  font-size: 18px;
+  padding: 2px 6px;
   outline: none;
 }
 .pane-actions {
@@ -1723,23 +2235,29 @@ button {
   justify-self: end;
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 2px;
 }
 .pane-act {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 33px; /* 20px × 1.643 */
+  height: 33px;
   padding: 0;
   border: none;
-  border-radius: var(--r-xs);
+  border-radius: var(--r-sm);
   background: transparent;
   color: var(--text-lo);
   cursor: pointer;
   transition:
     background var(--dur-1) var(--ease),
     color var(--dur-1) var(--ease);
+}
+/* The glyphs are built at 12px in terminal-pane.ts (an SVG width/height attribute);
+   CSS is what actually sizes them, so the bar's scale lives here, in one place. */
+.pane-act svg {
+  width: 20px; /* 12px × 1.679 */
+  height: 20px;
 }
 .pane-act:hover {
   background: var(--bg-elevated);
@@ -1750,7 +2268,7 @@ button {
   color: var(--danger);
 }
 .pane-menu {
-  top: 24px;
+  top: 39px; /* clears the 33px action button inside the taller bar */
   right: 0;
   min-width: 200px;
 }
@@ -1765,7 +2283,7 @@ button {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  padding: var(--sp-1) 2px var(--sp-1) 6px; /* slim right inset — the scrollbar rides the edge */
+  padding: var(--sp-1) calc(var(--sp-4) + var(--sp-1)) var(--sp-1) 6px; /* right lane: the slide bar + its float gap */
 }
 
 /* Expanded pane (full / full-height / full-width): covered siblings hide entirely
@@ -1777,36 +2295,84 @@ button {
   display: none;
 }
 
-/* Hover-only terminal scrollbar (the reference slider): a slim rounded neutral thumb
-   on an invisible track, revealed only while the cursor rides the pane's right-edge
-   strip; full strength when the thumb itself is under the cursor. Token-driven, so it
-   follows every theme. */
+/* The terminal slide bar, minimalist: the native viewport scrollbar is fully
+   retired — ONLY the accent thumb shows. The full-height rail is an invisible
+   hit area (click jumps, drag scrubs); no arrows, no visible track. */
 .pane-body .xterm-viewport {
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
+  scrollbar-width: none;
 }
 .pane-body .xterm-viewport::-webkit-scrollbar {
-  width: 10px;
+  width: 0;
+  height: 0;
 }
-.pane-body .xterm-viewport::-webkit-scrollbar-track {
-  background: transparent;
+.pane-slider {
+  position: absolute;
+  top: var(--sp-2);
+  right: 5px; /* floats off the pane outline — never flush against it */
+  bottom: var(--sp-2);
+  width: 14px;
+  z-index: 3;
 }
-.pane-body .xterm-viewport::-webkit-scrollbar-thumb {
+.pane-slider.is-idle {
+  display: none; /* nothing above the fold — no scrollback yet (or an alt-screen TUI) */
+}
+/* The rail: full height, INVISIBLE — pure hit area. */
+.pane-slider-track {
+  position: absolute;
+  inset: 0;
   background: transparent;
+  cursor: pointer;
+}
+/* The slider itself — the focused-outline accent at full strength, gently oval
+   ends (a soft radius, deliberately short of a full pill). */
+.pane-slider-thumb {
+  position: absolute;
+  left: 3px;
+  top: 0;
+  width: 8px;
+  border-radius: 3px;
+  background: var(--accent);
+  cursor: grab;
+}
+.pane-slider-thumb:hover,
+.pane-slider-thumb.is-dragging {
+  background: var(--accent-ink);
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+.pane-slider-thumb.is-dragging {
+  cursor: grabbing;
+}
+/* The jump pill: bottom-RIGHT, inset clear of the slide bar's lane, floating
+   just above where prompts are typed. Appears only once you've scrolled up;
+   one tap = latest. */
+.pane-jump {
+  position: absolute;
+  right: 26px;
+  bottom: var(--sp-3);
+  z-index: 3;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-full);
-  border: 3px solid transparent;
-  background-clip: content-box;
+  background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  color: var(--text-mid);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 25%);
 }
-.pane-body.scroll-hot .xterm-viewport::-webkit-scrollbar-thumb {
-  background-color: color-mix(in srgb, var(--text-lo) 55%, transparent);
+.pane-jump:hover {
+  color: var(--text-hi);
+  border-color: var(--accent);
 }
-.pane-body.scroll-hot .xterm-viewport::-webkit-scrollbar-thumb:hover,
-.pane-body .xterm-viewport::-webkit-scrollbar-thumb:active {
-  background-color: var(--text-lo);
+.pane-jump[hidden] {
+  display: none; /* the flex rule above must not defeat the hidden attribute */
 }
 
 .layout-gutter {
-  position: relative;
+  position: absolute;
   z-index: 2;
 }
 /* The visual track is 2px; the DRAG target must not be. An invisible overhang keeps
@@ -1836,14 +2402,46 @@ body.resizing * {
   user-select: none;
 }
 
+/* ── Drag-to-rearrange (pane header drag) ─────────────────────────────────────
+   The dragged pane dims in place; the drop hint previews EXACTLY the space the
+   pane would take — half the target for an edge drop, the whole target for a
+   swap, a workspace-edge band for a full column/row. Inert overlay: hit-testing
+   stays on the real panes underneath. */
+body.pane-dragging,
+body.pane-dragging * {
+  user-select: none;
+  cursor: grabbing !important;
+}
+.layout-slot.drag-source {
+  opacity: 0.45;
+}
+.layout-drop-hint {
+  position: absolute;
+  z-index: 7; /* above the focused pane's ::after ring (6), below menus (40) */
+  pointer-events: none;
+  background: var(--accent-glow);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  transition:
+    left 60ms var(--ease),
+    top 60ms var(--ease),
+    width 60ms var(--ease),
+    height 60ms var(--ease);
+}
+/* Center drop = swap, not insert — dashed to read as "trade places". */
+.layout-drop-hint.is-swap {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  outline-style: dashed;
+}
+
 /* Pane state dot in the header. The real DOM contracts here are .pane-label
    (agentlaunch-smoke) and .pane-state (milestone/state smokes); the .pane-badge class
    stays on the cluster in terminal-pane.ts but has NO rule and NO smoke — REMOVE #11
    deleted its inert `flex:none` (the element is a grid item, so it did nothing) and the
    comment that claimed it was a smoke contract. */
 .pane-state {
-  width: 8px;
-  height: 8px;
+  width: 13px; /* 8px × 1.679 */
+  height: 13px;
   border-radius: var(--r-full);
   background: var(--border-strong);
   flex: none;
@@ -1863,18 +2461,23 @@ body.resizing * {
 .pane-git {
   display: none;
   align-items: center;
-  gap: var(--sp-1);
-  padding: 1px var(--sp-2);
+  gap: 6px;
+  padding: 2px var(--sp-3);
   border: none;
   border-radius: var(--r-full);
   background: var(--bg-elevated);
-  font-size: 10px;
+  font-size: 16px; /* 10px × 1.643, with the bar */
   font-family: var(--font-mono);
   color: var(--text-mid);
-  max-width: 220px;
+  max-width: 361px;
+  /* Shrink before you vanish: without this the chip's min-content width props open the
+     grid's middle column and steals it from the left cluster. .pane-branch ellipsises. */
+  min-width: 0;
 }
 .pane-git svg {
   flex: none;
+  width: 20px;
+  height: 20px;
   color: var(--text-lo);
 }
 .pane-git.has-git {
@@ -1887,8 +2490,8 @@ body.resizing * {
 }
 .pane-dirty {
   display: none;
-  width: 6px;
-  height: 6px;
+  width: 10px; /* 6px × 1.679 */
+  height: 10px;
   border-radius: var(--r-full);
   background: var(--warning); /* amber = uncommitted work */
   flex: none;
@@ -1905,14 +2508,14 @@ body.resizing * {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-2);
-  height: 28px;
+  height: 31px; /* 28px × 1.3 × 0.85 — scales with --titlebar-h */
   width: clamp(240px, 30vw, 380px); /* the command box owns the bar's center */
   padding: 0 var(--sp-2) 0 var(--sp-3);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--bg-inset);
   color: var(--text-lo);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13); /* 12px × 1.3 × 0.85 */
   cursor: pointer;
   transition:
     border-color var(--dur-1) var(--ease),
@@ -1920,6 +2523,7 @@ body.resizing * {
 }
 .palette-trigger .kbd {
   margin-left: auto; /* label leads, the shortcut hint hugs the right edge */
+  font-size: var(--fs-11); /* 10px × 1.3 × 0.85 — the hint scales with the box */
 }
 .palette-trigger:hover {
   border-color: var(--accent);
@@ -2136,22 +2740,72 @@ body.resizing * {
 .settings-section[hidden] {
   display: none;
 }
+/* The tab's HERO: its nav icon in an accent chip beside the h2, over a hairline —
+   the page states what it is before the cards say anything. */
+.settings-hero {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding-bottom: var(--sp-5);
+  border-bottom: 1px solid var(--border);
+}
+.settings-hero-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: var(--r-md);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: var(--accent-weak);
+  color: var(--accent-ink);
+}
 /* The tab's own heading outranks the cards under it. */
 .settings-section-head .section-header-title {
-  font-size: var(--fs-20);
+  font-size: var(--fs-24);
   letter-spacing: var(--track-tight);
 }
+.settings-section-head .section-header-caption {
+  font-size: var(--fs-13);
+}
+/* Cards get one step of lift on this page — surfaces read as panels, not outlines. */
+.settings-section > .card {
+  box-shadow: var(--shadow-1);
+}
+/* A control picks its own width; only text inputs earn the full column. */
+.settings-section .segmented {
+  align-self: flex-start;
+  margin-right: auto;
+}
+/* Sibling switches inside one card read as a list: a hairline between rows. */
+.settings-section .card-body > .toggle-row + .toggle-row {
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+}
 .settings-about-version {
-  color: var(--text-lo);
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-mid);
   font-size: var(--fs-12);
   font-family: var(--font-mono);
 }
-/* Consent fine print: the ADR clauses, under the toggles they qualify. */
+/* Consent fine print: the ADR clauses, under the toggles they qualify — a quiet
+   inset panel, so the promise reads as a fixture of the page, not an afterthought. */
 .settings-scope {
   margin: 0;
   max-width: var(--measure);
+  padding: var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
   color: var(--text-lo);
   font-size: var(--fs-11);
+  line-height: 1.55;
 }
 .settings-row {
   display: flex;
@@ -2195,6 +2849,115 @@ body.resizing * {
 }
 .checkbox-label {
   font-size: var(--fs-13);
+}
+
+/* ── Settings § Appearance: theme SWATCH tiles (see theme-picker.ts) ─────────
+   Each tile paints a miniature of its theme from that theme's own chrome tokens
+   (inline styles); everything here is the frame around those swatches. The mock's
+   internal 1–6px values are geometry, not spacing — the ramp does not apply. */
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: var(--sp-3);
+}
+.theme-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-1) var(--ease),
+    background var(--dur-1) var(--ease);
+}
+.theme-tile:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+}
+.theme-tile:focus-visible {
+  outline: 2px solid var(--accent-glow);
+  outline-offset: 2px;
+}
+.theme-tile.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.theme-tile-preview {
+  display: flex;
+  height: 64px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-strong);
+  overflow: hidden;
+}
+/* System renders two halves (the palettes the OS scheme resolves to). */
+.theme-tile-half {
+  flex: 1 1 0;
+  display: flex;
+  align-items: flex-end;
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-2) 0;
+}
+.theme-tile-mock {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: 6px;
+  border: 1px solid;
+  border-bottom: none;
+  border-radius: 5px 5px 0 0;
+}
+.theme-tile-mockrow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.theme-tile-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: var(--r-full);
+  background: var(--accent);
+}
+.theme-tile-line {
+  height: 3px;
+  border-radius: var(--r-full);
+  opacity: 0.85;
+}
+.theme-tile-name {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-1);
+  color: var(--text-mid);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+}
+.theme-tile.is-active .theme-tile-name {
+  color: var(--text-hi);
+}
+.theme-tile-check {
+  display: inline-flex;
+  color: var(--accent-ink);
+  visibility: hidden;
+}
+.theme-tile.is-active .theme-tile-check {
+  visibility: visible;
+}
+@media (prefers-reduced-motion: reduce) {
+  .theme-tile {
+    transition: none;
+  }
+}
+:root.motion-calm .theme-tile {
+  transition: none;
 }
 
 /* ── Home / launcher ───────────────────────────────────────────────────────── */
@@ -2699,12 +3462,6 @@ body.resizing * {
 .wizard-agent-row :is(.stepper, .wizard-profile-select, .wizard-agent-copy, .wizard-recheck) {
   height: var(--wz-ctl);
 }
-.wizard-agent-dot {
-  flex: none;
-  width: var(--sp-2);
-  height: var(--sp-2);
-  border-radius: var(--r-full);
-}
 .wizard-agent-name {
   flex: 0 1 auto;
   min-width: 0;
@@ -2889,6 +3646,10 @@ body.resizing * {
   .switch-thumb {
     transition: none;
   }
+}
+:root.motion-calm .switch-track,
+:root.motion-calm .switch-thumb {
+  transition: none;
 }
 
 /* ── 6 · SCREEN COMPONENTS ─────────────────────────────────────────────────── */
@@ -3161,6 +3922,25 @@ body.resizing * {
   line-height: 1;
   color: var(--cell-accent, var(--accent-ink));
 }
+.grid-preview-chip--logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Home preset mix line: "2× ✳ · 1× ❋" — count beside each provider's mark. */
+.home-item-mix {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.home-item-mix-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.home-item-mix-sep {
+  color: var(--text-lo);
+}
 
 /* Layout picker tiles. */
 .layout-picker {
@@ -3425,6 +4205,9 @@ body.resizing * {
   gap: var(--sp-2);
 }
 .wizard-tool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
   font-size: var(--fs-12);
   padding: var(--sp-1) var(--sp-3);
   border-radius: var(--r-full);
@@ -3466,9 +4249,15 @@ body.resizing * {
   margin-bottom: 2px;
 }
 .toolplan-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
   font-size: var(--fs-13);
   color: var(--text-hi);
   white-space: nowrap;
+  overflow: hidden;
+}
+.toolplan-tool > span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -3564,6 +4353,19 @@ body.resizing * {
   gap: var(--sp-4);
   width: 100%;
 }
+/* Settings § Shortcuts: the same single-source list, given room — groups tile
+   two-up when the card is wide enough. The ? overlay keeps the single column. */
+.settings-section .shortcuts-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--sp-5) var(--sp-7);
+  align-content: start;
+}
+/* A short group beside a tall one keeps its rows packed at the top — without
+   this the stretched group height spreads its rows apart. */
+.settings-section .shortcuts-list .shortcuts-group {
+  align-content: start;
+}
 /* Two-column token grid (08b): every row's label + keys align to ONE column pair via
    subgrid, so the sheet reads as a table, not ragged flex rows. Fed from the single
    SHORTCUTS source (KB-01) — the ? overlay and Settings § Shortcuts render this same list,
@@ -3587,7 +4389,7 @@ body.resizing * {
   grid-template-columns: subgrid;
   align-items: center;
   gap: var(--sp-4);
-  padding: var(--sp-1) 0; /* tokenized off the old 5-pixel literal — the chrome bucket's last row */
+  padding: var(--sp-2) 0; /* a --sp-* stop (dockux measures this) — was sp-1, cramped */
   border-bottom: 1px solid var(--border);
 }
 .shortcuts-group:last-child .shortcuts-row:last-child {
@@ -4036,10 +4838,16 @@ body.resizing * {
   flex-wrap: wrap;
 }
 .ph-row-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
   font-weight: var(--fw-semibold);
   font-size: var(--fs-13);
 }
 .ph-row-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
   color: var(--accent-ink);
   font-size: var(--fs-11);
 }
@@ -4069,22 +4877,6 @@ body.resizing * {
   grid-template-columns: 1fr 1fr;
   gap: var(--sp-2);
 }
-.ph-env-head {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.ph-env-rows {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-}
-.ph-env-row {
-  display: grid;
-  /* minmax(0,…) — the env-value input must SHRINK, not overflow the form edge */
-  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
-  gap: var(--sp-1);
-}
 .ph-form .input {
   width: 100%;
   min-width: 0;
@@ -4104,6 +4896,116 @@ body.resizing * {
   max-width: var(--measure);
   color: var(--danger-ink);
   font-size: var(--fs-11);
+}
+/* ── Settings § Providers: the availability map + background installs ───────
+   A row is an IDENTITY (initial chip, tinted once available), name + status,
+   and one subline — the provider's install one-liner while it is missing. */
+.prov-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.prov-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.prov-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  transition: border-color var(--dur-1) var(--ease);
+}
+.prov-row:hover {
+  border-color: var(--border-strong);
+}
+.prov-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text-mid);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+}
+.prov-avatar.is-installed {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: var(--accent-weak);
+  color: var(--accent-ink);
+}
+/* A missing CLI's mark goes quiet; it lights up in brand color once installed. */
+.prov-avatar:not(.is-installed) .provider-logo {
+  filter: grayscale(1) opacity(0.55);
+}
+.prov-row-main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.prov-row-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.prov-name {
+  font-weight: var(--fw-semibold);
+  font-size: var(--fs-13);
+}
+.prov-sub {
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+}
+.prov-cmd {
+  align-self: flex-start;
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--text-mid);
+  background: var(--bg-inset);
+  border-radius: var(--r-sm);
+  padding: 2px var(--sp-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.prov-actions {
+  display: flex;
+  gap: var(--sp-1);
+  flex: none;
+}
+.prov-installing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+/* The ephemeral terminal's bounded tail — read-only evidence, not a terminal. */
+.prov-log {
+  margin: 0;
+  padding: var(--sp-1) var(--sp-2);
+  max-height: 180px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  line-height: 1.45;
+  color: var(--text-mid);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 /* Board approved chip (deferred 4/03) */
 .board-chip-approved {
@@ -4277,8 +5179,10 @@ body.resizing * {
    When an agent drives the dock, the whole dock wears a brand outline and a
    banner with an instant Stop — possession is never invisible. */
 .browser-dock.agent-driving {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  /* One step thicker, in step with the focused pane's ring. The negative offset keeps the
+     outline INSIDE the dock's box — a positive one would paint over the grid beside it. */
+  outline: 3px solid var(--accent);
+  outline-offset: -3px;
 }
 .browser-agent-banner {
   display: flex;
@@ -4714,6 +5618,9 @@ body.resizing * {
   background: var(--bg-elevated);
 }
 .mgr-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
   flex: none;
   color: var(--text-hi);
   font-size: var(--fs-12);
@@ -4796,6 +5703,9 @@ body.resizing * {
   display: none;
 }
 .mgr-panel-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
   font-size: var(--fs-12);
   color: var(--text-mid);
 }
@@ -4846,7 +5756,10 @@ body.resizing * {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  justify-content: space-between;
+}
+/* Badges keep their right edge now that the brand mark leads the row. */
+.cat-card-head .cat-badge:first-of-type {
+  margin-left: auto;
 }
 .cat-card-copy {
   font-size: var(--fs-11);
@@ -4965,6 +5878,12 @@ body.resizing * {
 .firstrun-row-detail {
   font-size: var(--fs-11);
   color: var(--text-lo);
+}
+.firstrun-found {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-wrap: wrap;
 }
 .firstrun-clis {
   display: flex;
@@ -5179,7 +6098,11 @@ body.resizing * {
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border);
 }
-.usage-tab {
+/* Scoped under .usage-tabs: Settings § Usage reuses the bare `.usage-tab` class for
+   its PAGE root (a smoke compatibility hook), and an unscoped chip rule once leaked
+   `align-items: center` onto it — every settings card shrink-wrapped and the column
+   overflowed sideways. Chips live only inside the popover's .usage-tabs strip. */
+.usage-tabs .usage-tab {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -5194,10 +6117,10 @@ body.resizing * {
   cursor: pointer;
   white-space: nowrap;
 }
-.usage-tab:hover {
+.usage-tabs .usage-tab:hover {
   background: var(--bg-inset);
 }
-.usage-tab.is-selected {
+.usage-tabs .usage-tab.is-selected {
   background: var(--accent-weak);
   border-color: color-mix(in srgb, var(--accent) 40%, transparent);
   color: var(--text-hi);
@@ -5260,6 +6183,12 @@ body.resizing * {
   font-variant-numeric: tabular-nums;
   font-weight: var(--fw-semibold);
 }
+/* The run-out risk estimate: quiet ink, trailing the verdict it qualifies. */
+.usage-risk {
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+}
 .usage-pace-delta.sev-warning {
   color: var(--warning);
 }
@@ -5310,6 +6239,35 @@ body.resizing * {
   flex: none;
   color: var(--muted);
 }
+/* The popover's cost glance: label/value lines under the Cost row — today's
+   share, the 30-day window, the daily average, the monthly projection. */
+.usage-cost-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* Left inset = the cost row's icon column (sp-2 pad + 14px glyph + sp-2 gap),
+     so the lines align under the row's TEXT, not its icon. sp-6 (32px) is that
+     sum expressed as a stop — the gate's grammar, the same optical result. */
+  padding: 0 var(--sp-2) var(--sp-1) var(--sp-6);
+}
+.usage-cost-lines:empty {
+  display: none;
+}
+.usage-cost-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--fs-11);
+}
+.usage-cost-label {
+  flex: none;
+  min-width: 96px;
+  color: var(--text-lo);
+}
+.usage-cost-value {
+  color: var(--text-mid);
+  font-variant-numeric: tabular-nums;
+}
 /* Profile switch row: compact tiles, the active lane marked (the switch contract). */
 .usage-switch {
   display: flex;
@@ -5327,8 +6285,10 @@ body.resizing * {
 .usage-popover.is-compact .usage-pace {
   display: none;
 }
-/* 7/12 — the FULL Usage tab: configure + explain; the popover stays the glance. */
-.usage-tab {
+/* 7/12 — the FULL Usage tab: configure + explain; the popover stays the glance.
+   Scoped to the settings page: the popover's tab CHIPS carry the same class name
+   (see .usage-tabs above), and this column rule once stacked their content. */
+.settings-section .usage-tab {
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
@@ -5492,6 +6452,9 @@ body.resizing * {
   background: var(--accent);
 }
 .usage-plan-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
   font-weight: 600;
 }
 .usage-mini-gauges {
@@ -5525,18 +6488,156 @@ body.resizing * {
   font-size: 11px;
   color: var(--text-mid);
 }
-.usage-pace-days {
+/* Settings § Usage — the Cost overview card (the pace-baseline card's old
+   slot): stat tiles for the headline numbers, then the per-model efficiency
+   table. Everything is an ESTIMATE from local logs, and each block says so. */
+.usage-cost-cfg {
   display: flex;
-  gap: var(--sp-2);
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: var(--sp-4);
 }
-.usage-pace-hours {
+.usage-cost-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.usage-cost-head {
   display: flex;
   align-items: center;
-  gap: var(--sp-1);
+  gap: var(--sp-2);
 }
-.usage-pace-hour {
-  width: 56px;
+.usage-cost-provider {
+  font-weight: var(--fw-semibold);
+  font-size: var(--fs-12);
+}
+.usage-cost-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: var(--sp-2);
+}
+.usage-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+}
+.usage-stat-value {
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.usage-stat-label {
+  font-size: 11px;
+  color: var(--text-lo);
+}
+.usage-cost-models {
+  display: flex;
+  flex-direction: column;
+}
+.usage-cost-model-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 2fr) 1fr 1fr 1fr;
+  gap: var(--sp-2);
+  padding: 2px 0;
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-mid);
+}
+.usage-cost-model {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-cost-model-row.is-unpriced {
+  color: var(--text-lo);
+}
+/* Daily-spend bars (the cost-history chart): thin marks with a 2px surface
+   gap, 2px rounded data-ends, a recessive hairline baseline — the dataviz
+   grammar. One series, one hue: past days wear a muted accent, TODAY speaks
+   at full strength and carries the one direct label; every bar answers
+   precisely on hover (native tooltip — the values live in `title`). */
+.usage-chart-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+.usage-chart-today {
+  font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-mid);
+}
+.usage-cost-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 72px;
+  padding-top: var(--sp-1);
+  border-bottom: 1px solid var(--border);
+}
+.usage-chart-bar {
+  flex: 1 1 0;
+  min-width: 3px;
+  border-radius: 2px 2px 0 0;
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.usage-chart-bar:hover {
+  background: var(--accent);
+}
+.usage-chart-bar.is-today {
+  background: var(--accent);
+}
+.usage-chart-bar.is-zero {
+  background: var(--border-strong);
+}
+/* The window select + the nested period comparisons (7/30/90 < window). */
+.usage-cost-windowrow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.usage-cost-compare {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+}
+.usage-cost-compare-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--fs-11);
+}
+.usage-cost-compare-label {
+  color: var(--text-lo);
+}
+.usage-cost-compare-value {
+  color: var(--text-mid);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--fw-semibold);
+}
+/* Per-project rows (Codex names its cwd): same quiet table idiom as models. */
+.usage-cost-projects {
+  display: flex;
+  flex-direction: column;
+}
+.usage-cost-project-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 2fr) 1fr 1fr;
+  gap: var(--sp-2);
+  padding: 2px 0;
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-mid);
+}
+.usage-cost-project {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .usage-history-row {
   display: flex;
@@ -5668,6 +6769,10 @@ body.resizing * {
     opacity: 0;
   }
 }
+:root.motion-calm .usage-confetti-fleck {
+  animation: none;
+  opacity: 0;
+}
 .usage-tile-head {
   display: flex;
   align-items: center;
@@ -5685,6 +6790,16 @@ body.resizing * {
 .usage-profile {
   color: var(--text-mid);
   font-size: 11px;
+}
+/* The lane's own pace delta on its switch tile — the projection you compare
+   BEFORE swapping accounts. Severity ink only; the verdict rides the title. */
+.usage-tile-delta {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-lo);
+}
+.usage-tile-delta.sev-warning {
+  color: var(--warning);
 }
 .usage-health {
   font-size: 10px;
@@ -5724,11 +6839,24 @@ body.resizing * {
   white-space: nowrap;
 }
 .usage-track-row {
+  position: relative; /* the expected-pace tick positions against the track */
   height: 4px;
   border-radius: var(--r-full);
   background: var(--border);
   overflow: hidden;
   display: block;
+}
+/* The expected-pace tick: a 2px notch at "where the budget line sits now" —
+   fill past it reads hotter-than-budget without a word. Ink, not accent, so
+   it stays legible over both the empty track and the filled part. */
+.usage-track-row .usage-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text-hi);
+  opacity: 0.55;
 }
 .usage-track-row .usage-fill {
   display: block;
@@ -5856,6 +6984,9 @@ body.resizing * {
   .cc-toggle svg {
     transition: none;
   }
+}
+:root.motion-calm .cc-toggle svg {
+  transition: none;
 }
 
 /* The header chip a fold can never bury. Tone matches the row it stands for. */

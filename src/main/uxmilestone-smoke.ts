@@ -338,7 +338,11 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
         return m.workspace.active().ordinal * 100 + 2
       })()`)
       await sleep(2600)
-      win.setSize(600, 680)
+      // Wide enough that every chip is DRAWN: below ~540px of pane width the pane-bar
+      // container queries retire them into the ⋯ menu by design (chromeux-smoke stage j
+      // owns that contract). This gate is about the one-line/no-wrap layout, so it needs
+      // the chips present — at 600px they are correctly gone, and `present` would fail.
+      win.setSize(1450, 680)
       await sleep(800)
       await ES(`(() => { const p = (window.__mogging.panes || []).find((p) => p.id === ${paneId}); if (p && p.lightChips) p.lightChips(); return 1 })()`)
       await sleep(400)
@@ -365,7 +369,9 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
         const vis = [...left.children].filter((ch) => ch.getBoundingClientRect().width > 0)
         const mids = vis.map((ch) => { const r = ch.getBoundingClientRect(); return Math.round(r.top + r.height / 2) })
         const centersAligned = mids.length > 0 && mids.every((mid) => Math.abs(mid - mids[0]) <= 3)
-        return { ok: present && headerH <= 30 && stateLeading && clipped && noWrapStyle, headerH, stateLeading, clipped, noWrapStyle, centersAligned, present }
+        // <= 50: --pane-header-h (48px) + its 1px bottom rule. Taller means the chips
+        // wrapped — the regression this asserts against — not merely that the bar grew.
+        return { ok: present && headerH <= 50 && stateLeading && clipped && noWrapStyle, headerH, stateLeading, clipped, noWrapStyle, centersAligned, present }
       })()`)
       win.setSize(1200, 800)
       await sleep(500)
@@ -439,10 +445,10 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       const budget = await ES<{ maxGapMs: number; longFrames100: number; frames: number; heapMB: number }>(`(async () => {
         const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
         const m = window.__mogging
-        const home = document.querySelector('.titlebar-right .icon-btn[aria-label="Home"]')
         const board = document.querySelector('.titlebar-right .icon-btn[aria-label="Board"]')
-        // warm: pay each view's first-build cost before the sampler opens.
-        home?.click(); await sleep(350); board?.click(); await sleep(350)
+        // warm: pay each view's first-build cost before the sampler opens. (Home used to
+        // be warmed here too; with workspaces built it is unreachable by design now.)
+        board?.click(); await sleep(350); board?.click(); await sleep(350)
         m.workspace.switchByIndex(0); await sleep(500); m.workspace.switchByIndex(1); await sleep(900); m.workspace.switchByIndex(0); await sleep(500)
         const gaps = []
         let last = performance.now(); let on = true

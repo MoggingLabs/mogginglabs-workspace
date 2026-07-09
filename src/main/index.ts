@@ -8,12 +8,13 @@ import { registerDialogs } from './dialogs'
 import { registerShellChrome, wireWindowState } from './shell-chrome'
 import { flushTelemetry } from './telemetry'
 import { registerAppSettings, disposeAppSettings } from './app-settings'
-import { registerAgents } from './agents'
+import { registerAgents, disposeAgentInstalls } from './agents'
 import { registerBrowserDock } from './browser-dock'
 import { startMcpEndpoint, stopMcpEndpoint } from './mcp-endpoint'
 import { registerTemplates } from './templates'
 import { registerAttention } from './attention'
 import { registerGit } from './git'
+import { registerContext } from './context'
 import { registerWorktrees } from './worktrees'
 import { registerFsBrowse } from './fs-browse'
 import { registerReview } from './review'
@@ -81,6 +82,7 @@ import { runGitSmoke } from './git-smoke'
 import { runNotifySmoke } from './notify-smoke'
 import { runMilestoneSmoke } from './milestone-smoke'
 import { runFlickerSmoke } from './flicker-smoke'
+import { runConptySmoke } from './conpty-smoke'
 import { runPaneOpsSmoke } from './paneops-smoke'
 import { runControlSmoke } from './control-smoke'
 import { runControl2Smoke } from './control2-smoke'
@@ -100,6 +102,9 @@ import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { registerDeepLink, initialDeepLinkCwd, initialControlCommand } from './deep-link'
 import { ControlChannels } from '@contracts'
 import { initAutoUpdate } from './updater'
+import { fatal, installFatalHandlers } from './fatal'
+import { assertNativeModules } from './native-preflight'
+import { assertPtyHostSupported } from '@backend/platform/pty-host'
 import { WorkspaceChannels } from '@contracts'
 
 // App-wiring layer: compose the backend over an Electron context and open the
@@ -115,6 +120,21 @@ import { WorkspaceChannels } from '@contracts'
 // temp dir. Electron resolves userData through the OS known-folders API, so overriding
 // the APPDATA env var alone does NOT isolate it — this explicit hook does.
 if (process.env.MOGGING_USERDATA) app.setPath('userData', process.env.MOGGING_USERDATA)
+// Dev must not share state with the installed app. The packaged package.json carries the SAME
+// `name` (and no productName), so both resolve %APPDATA%/mogginglabs-workspace: one Chromium
+// profile (the "Unable to move the cache: Access is denied" spam when both run), one
+// app-settings.db under two writers (each app's exit clobbers the other's workspace state), and
+// one single-instance lock (Electron keys it on userData). `-dev` splits all three at once.
+else if (!app.isPackaged) app.setPath('userData', app.getPath('userData') + '-dev')
+
+// The RUNTIME side of the same split (contracts/daemon/protocol.ts, ReleaseChannel): daemon dir,
+// control endpoint, and deep-link scheme all key off MOGGING_CHANNEL. Set it here — before any
+// module derives a path — and it propagates by inheritance: daemon at spawn, panes from the
+// daemon, CLIs from the pane env. Packaged apps CLEAR it (an installed app launched from inside a
+// dev pane would otherwise inherit 'dev' and squat the dev channel): derived, never trusted up.
+// Smokes stay prod-shaped — they already isolate the whole runtime tree via LOCALAPPDATA.
+if (app.isPackaged || process.env.MOGGING_USERDATA) delete process.env.MOGGING_CHANNEL
+else process.env.MOGGING_CHANNEL = 'dev'
 
 // Remote-pane smoke support (4/05): point the daemon at a FAKE ssh (a node script the
 // smoke writes later) BEFORE the daemon spawns, so no smoke ever needs a network.
@@ -128,6 +148,7 @@ if ((process.env.MOGGING_REMOTE || process.env.MOGGING_SHOT === 'all') && !proce
 let win: BrowserWindow | null = null
 let disposeBackend: (() => void) | null = null
 let disposeGit: (() => void) | null = null
+let disposeContext: (() => void) | null = null
 
 // CI ONLY (Linux headless): force the libsecret safeStorage backend so the vault
 // gates run against a REAL keychain (the CI job stands up an unlocked
@@ -140,9 +161,23 @@ if (process.env.MOGGING_CI_KEYRING && process.platform === 'linux') {
 
 // Single-instance + mogging:// deep link so `mogging .` focuses a running app. Skipped under
 // smokes (some launch a second instance); normal dev/production runs hold the lock.
-const isSmoke = Object.keys(process.env).some((k) => k.startsWith('MOGGING_'))
+//
+// "Smoke" means a MOGGING_* GATE is set — not any MOGGING_* var. The daemon injects runtime
+// facts (MOGGING_PANE_ID, endpoint paths) into every pane, and a dev app sets MOGGING_CHANNEL;
+// a developer running `npm run dev` INSIDE a MoggingLabs pane — the dogfooding loop — inherits
+// those. Counting them as smoke silently skipped the instance lock and deep-link registration
+// for every such run (and made shared-userData dev+release "work" by never contending the lock).
+const PANE_RUNTIME_ENV = new Set([
+  'MOGGING_PANE_ID',
+  'MOGGING_DAEMON_ENDPOINT',
+  'MOGGING_BROWSER_ENDPOINT',
+  'MOGGING_CHANNEL'
+])
+const isSmoke = Object.keys(process.env).some((k) => k.startsWith('MOGGING_') && !PANE_RUNTIME_ENV.has(k))
 const primaryInstance = isSmoke || app.requestSingleInstanceLock()
 if (!primaryInstance) app.quit()
+
+installFatalHandlers(isSmoke) // before whenReady: early wiring must not fail silently
 
 function openWindow(): void {
   win = createMainWindow()
@@ -154,6 +189,16 @@ function openWindow(): void {
 
 app.whenReady().then(async () => {
   if (!primaryInstance) return // a second instance; the primary handles the deep link + quits us
+
+  assertNativeModules() // stale/missing .node -> exit 1 with the rebuild command, never a broken window
+  // Windows < 18309 would silently get a winpty, whose resize semantics the UI does not model.
+  // Refuse at boot rather than smear a live agent frame ten minutes in.
+  try {
+    assertPtyHostSupported()
+  } catch (err) {
+    fatal(err, 'pty-host')
+    return
+  }
 
   // Env-gated app-level survival smoke: two separate launches (A then B) prove an agent
   // in the detached daemon outlives an app quit/relaunch (ADR 0006).
@@ -201,6 +246,10 @@ app.whenReady().then(async () => {
       disposeBackend = await startDaemonBackend(() => win?.webContents ?? null)
     } catch (err) {
       getTelemetry().captureError(err, { feature: 'daemon', op: 'start', platform: process.platform })
+      // A real degradation (no pane survival across restarts). Telemetry is opt-in, so stderr is
+      // the only channel that always exists — this fallback used to happen with nothing printed.
+      const why = err instanceof Error ? err.message : String(err)
+      console.warn(`[daemon] start failed, falling back to the in-proc backend: ${why}`)
       startInProc() // daemon unavailable -> in-proc so the app still works
     }
   }
@@ -215,10 +264,11 @@ app.whenReady().then(async () => {
   registerMcpStatus(() => win) // MCP connection-status poller: pushed per-(server×cli) grid (8/11)
   registerServices(() => win) // service links: board card <-> GitHub PR/issue, live via gh (8/12)
   startMcpEndpoint() // agent-control transport: the MCP server reaches the dock + grant wire here (6/05b, 8/03)
-  registerAgents() // agent launcher: detect installed CLIs + build launch commands (Phase-1/06)
+  registerAgents(() => win) // agent launcher: detect/install CLIs + build launch commands (Phase-1/06; Providers tab)
   registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
   registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
   disposeGit = registerGit(() => win?.webContents ?? null) // read-only per-pane git branch + dirty (Phase-2/03)
+  disposeContext = registerContext(() => win?.webContents ?? null) // per-pane agent context bar: tails the CLIs' own session logs (counts only)
   registerWorktrees() // worktree-per-agent isolation: add/list/remove only (Phase-3/03)
   registerFsBrowse() // read-only one-level directory listing for the folder browser (Phase-8.5/03)
   registerReview() // pre-ship diff review: redacted diff + guarded merge (Phase-3/04)
@@ -356,6 +406,8 @@ app.whenReady().then(async () => {
     runMilestoneSmoke(win) // env-gated 16-agent perf milestone smoke (Phase-2/05)
   } else if (process.env.MOGGING_FLICKER && win) {
     runFlickerSmoke(win) // env-gated terminal-artifact smoke: churn without flicker
+  } else if (process.env.MOGGING_CONPTY && win) {
+    runConptySmoke(win) // env-gated ConPTY-coherence smoke: resize must never smear the buffer
   } else if (process.env.MOGGING_PANEOPS && win) {
     runPaneOpsSmoke(win) // env-gated pane-operations smoke: expand modes + close
   } else if (process.env.MOGGING_CONTROL && win) {
@@ -390,6 +442,8 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) openWindow()
   })
 })
+  // Boot is async. Unhandled, a throw here left the app running windowless with exit code 0.
+  .catch((err) => fatal(err, 'boot'))
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
@@ -398,9 +452,12 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   void flushTelemetry() // best-effort vendor flush (no-op unless the user opted in)
   stopMcpEndpoint() // tear down the agent-control socket + endpoint file (6/05b)
+  disposeAgentInstalls() // ephemeral install terminals must not outlive the app
   disposeAppSettings()
   disposeGit?.()
   disposeGit = null
+  disposeContext?.()
+  disposeContext = null
   disposeBackend?.()
   disposeBackend = null
   void getTelemetry().flush(2000)

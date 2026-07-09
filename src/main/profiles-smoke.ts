@@ -51,9 +51,12 @@ export function runProfilesSmoke(win: BrowserWindow): void {
         env: { FAKE_KEY: 'sk-FAKEFAKEFAKEFAKEFAKE1234' },
         order: 2
       })
-      type Prof = { id: string }
+      type Prof = { id: string; provider: string }
       const list = (await ES(`window.bridge.invoke('profiles:list')`)) as Prof[]
-      const saveOk = savedA === true && savedB === true && denied === false && list.length === 2 && list.every((p) => p.id !== 'p-x')
+      // Scope to the fixture provider: discovery may truthfully add THIS machine's
+      // real logins (login-claude, …) to the list — they are not under test here.
+      const mine = list.filter((p) => p.provider === 'gemini' && !p.id.startsWith('login-'))
+      const saveOk = savedA === true && savedB === true && denied === false && mine.length === 2 && list.every((p) => p.id !== 'p-x')
 
       // ── 2. Launch under the DEFAULT profile -> env reaches the pane ──────────
       const anchor = mkdtempSync(join(tmpdir(), 'mogging-prof-'))
@@ -114,8 +117,9 @@ export function runProfilesSmoke(win: BrowserWindow): void {
       const paneCount = Number(await ES('window.__mogging.layout.paneCount()'))
 
       // ── 5. The Settings PAGE path (5/05 — was a modal): the gear opens the
-      // full-app page (rail hidden), the deny-list refusal renders inline, a clean
-      // pointer saves, and Esc returns to the grid with the SAME active workspace.
+      // full-app page (rail hidden), a malformed subscription email is refused
+      // inline, a clean name+email saves (env/order derived main-side), and Esc
+      // returns to the grid with the SAME active workspace.
       await ES(`document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]').click()`)
       await sleep(900)
       const pageOpenOk = (await ES(
@@ -127,26 +131,26 @@ export function runProfilesSmoke(win: BrowserWindow): void {
       )) as boolean
       await ES(`document.querySelector('.icon-btn[aria-label="Add profile"], button[aria-label="Add profile"]').click()`)
       await sleep(400)
-      const fillAndSave = (name: string, key: string, value: string): Promise<unknown> =>
+      // The simplified form: name + subscription email only (env/order derived main-side).
+      const fillAndSave = (name: string, email: string): Promise<unknown> =>
         ES(
           `(() => {
             const set = (sel, v) => { const i = document.querySelector(sel); i.value = v; i.dispatchEvent(new Event('input')) }
             set('.prof-name', ${JSON.stringify(name)})
-            set('.prof-env-key', ${JSON.stringify(key)})
-            set('.prof-env-val', ${JSON.stringify(value)})
+            set('.prof-email', ${JSON.stringify(email)})
             document.querySelector('button[aria-label="Save profile"]').click()
             return 1
           })()`
         )
-      await fillAndSave('FormProf', 'FAKE_KEY', 'sk-FAKEFAKEFAKEFAKE999')
+      await fillAndSave('FormProf', 'not-an-email')
       let formDenyOk = false
       for (let i = 0; i < 12 && !formDenyOk; i++) {
         await sleep(400)
         formDenyOk = (await ES(
-          `(() => { const e = document.querySelector('.settings-error'); return !!(e && !e.hidden && /secret/i.test(e.textContent || '')) })()`
+          `(() => { const e = document.querySelector('.settings-error'); return !!(e && !e.hidden && /email/i.test(e.textContent || '')) })()`
         )) as boolean
       }
-      await fillAndSave('FormProf', 'FAKE_MARK', 'PROFILE_C_OK')
+      await fillAndSave('FormProf', 'form@mogging.test')
       let formSaveOk = false
       for (let i = 0; i < 12 && !formSaveOk; i++) {
         await sleep(400)

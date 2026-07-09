@@ -100,18 +100,32 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
       stage = 'a-cluster'
       const a = await ES<Record<string, unknown>>(`(() => {
         const cluster = document.querySelector('.titlebar-right')
+        const lead = document.querySelector('.titlebar-lead')
+        const brand = document.querySelector('#titlebar .brand')
+        const toggle = lead && lead.querySelector('.rail-toggle')
         const all = [...cluster.querySelectorAll('button')]
-        const fixed = [...cluster.querySelectorAll(':scope > button')] // home/board/toggle/settings
-        const size = all.map(el => { const r = el.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height) } })
+        const fixed = [...cluster.querySelectorAll(':scope > button')] // home/board/settings
+        // The rail toggle LEADS the bar's left cell now (it belongs over the column it
+        // collapses), so it is measured with the cluster it shares a hit target with.
+        const size = [...all, ...(toggle ? [toggle] : [])].map(el => { const r = el.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height) } })
         const w0 = size[0] ? size[0].w : 0, h0 = size[0] ? size[0].h : 0
-        const sameHit = size.length >= 4 && size.every(s => s.w === w0 && s.h === h0) && w0 >= 24 && w0 <= 30
+        // 29px = the enlarged bar's icon button (#titlebar .icon-btn). One uniform hit
+        // target across every control in the bar is the contract; the number tracks it.
+        const sameHit = size.length >= 4 && size.every(s => s.w === w0 && s.h === h0) && w0 >= 27 && w0 <= 31
+        const toggleLeads = !!toggle && !!brand &&
+          lead.firstElementChild === toggle &&
+          toggle.getBoundingClientRect().left < brand.getBoundingClientRect().left
         const gaps = []
         for (let i = 1; i < fixed.length; i++) {
           gaps.push(Math.round(fixed[i].getBoundingClientRect().left - fixed[i - 1].getBoundingClientRect().right))
         }
+        // >= 1: the fixed controls are Board + Settings. Home was removed (it is the boot
+        // launcher / zero-workspace empty state, never a destination), so there is one gap
+        // to check, not two. The contract — every gap identical, at --sp-1 — is unchanged.
         const g0 = gaps[0]
-        const sameGap = gaps.length >= 2 && gaps.every(g => Math.abs(g - g0) <= 1) && g0 >= 3 && g0 <= 5
-        return { ok: sameHit && sameGap, count: all.length, fixed: fixed.length, w0, h0, gaps, sameHit, sameGap }
+        const sameGap = gaps.length >= 1 && gaps.every(g => Math.abs(g - g0) <= 1) && g0 >= 3 && g0 <= 5
+        const noHomeBtn = !document.querySelector('#titlebar .icon-btn[aria-label="Home"]')
+        return { ok: sameHit && sameGap && toggleLeads && noHomeBtn, count: all.length, fixed: fixed.length, w0, h0, gaps, sameHit, sameGap, toggleLeads, noHomeBtn }
       })()`)
 
       // ── (e): a non-active workspace's pane needs input → its tab latches the ring. ──
@@ -146,7 +160,9 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         return m.workspace.active().ordinal * 100 + 2
       })()`)
       await sleep(2600)
-      win.setSize(600, 680) // narrow → the 4 chips overflow the pane's head-left cluster
+      // WIDE enough that every chip fits: the pane-bar container queries retire chips
+      // below ~540px of PANE width, and a 2×2 grid gives each pane (win - rail)/2.
+      win.setSize(1450, 680)
       await sleep(800)
       await ES(`(() => {
         const p = (window.__mogging.panes || []).find(p => p.id === ${paneId})
@@ -164,18 +180,22 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
           const left = slot.querySelector('.pane-head-left')
           if (!header || !left) return { ok: false, reason: 'no header/left', hasHeader: !!header, hasLeft: !!left }
           const q = s => left.querySelector(s)
-          const els = { state: q('.pane-state'), remote: q('.pane-remote'), role: q('.pane-role'), claims: q('.pane-claims'), mcp: q('.pane-mcp') }
+          // context = the agent context gauge — it lives in the RIGHT action cluster
+          // (status, not identity), so it is queried from the header, and anchored
+          // like the rest in EITHER form (full bar wide; the disc when compressed).
+          const els = { state: q('.pane-state'), remote: q('.pane-remote'), role: q('.pane-role'), claims: q('.pane-claims'), mcp: q('.pane-mcp'), context: header.querySelector('.pane-context') }
           const widthOf = el => (el ? Math.round(el.getBoundingClientRect().width) : null)
-          const presentMap = { state: widthOf(els.state), remote: widthOf(els.remote), role: widthOf(els.role), claims: widthOf(els.claims), mcp: widthOf(els.mcp) }
-          // The always-present chips (state/remote/role) must anchor the header at width > 0,
-          // and all five must be LIT (in the DOM — that is the "all four chips lit" scenario
-          // this test stages). The trailing .pane-mcp legitimately clips to width 0 on the
-          // narrow header (the overflow working); requiring it > 0 is what deterministically
-          // false-failed this gate on CI's soft-GL (mcp measured 0 on all three OSes, 8.5/09).
-          const anchored = [els.state, els.remote, els.role].every(el => el && el.getBoundingClientRect().width > 0)
+          const presentMap = { state: widthOf(els.state), remote: widthOf(els.remote), role: widthOf(els.role), claims: widthOf(els.claims), mcp: widthOf(els.mcp), context: widthOf(els.context) }
+          // At THIS width (a wide pane) the bar shows everything: every chip is in the DOM
+          // and drawn. Narrow panes retire them into the ⋯ menu instead — that is stage (j),
+          // below. The old form of this check asserted the chips survived a 600px window by
+          // clipping under .pane-head-left's overflow; they no longer clip, they collapse.
+          const anchored = Object.values(els).every(el => el && el.getBoundingClientRect().width > 0)
           const allLit = Object.values(els).every(el => !!el)
           const headerH = Math.round(header.getBoundingClientRect().height)
-          const oneLine = headerH <= 30
+          // ONE LINE, not "short": the bar is --pane-header-h (48px) + its 1px rule.
+          // Anything taller means the chips wrapped, which is the thing under test.
+          const oneLine = headerH <= 50
           const fec = left.firstElementChild
           const stateLeading = !!fec && fec.classList.contains('pane-state')
           const stateLeftMost = els.state && els.remote
@@ -201,7 +221,9 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         }
       })()`)
 
-      // ── (d): the grid-layout button is present in the grid, absent elsewhere. ──
+      // ── (d): the grid-layout button is present in the grid, absent elsewhere — and
+      //    Home is UNREACHABLE while a workspace exists (view('home') must not leave
+      //    the grid). Both halves of the same invariant: the grid owns the app. ──
       win.setSize(1200, 760)
       await sleep(500)
       stage = 'd-views'
@@ -209,14 +231,48 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         const m = window.__mogging
         const sleep = ms => new Promise(r => setTimeout(r, ms))
         const disp = () => { const el = document.querySelector('.layout-launcher'); return el ? getComputedStyle(el).display : 'absent' }
+        const viewClass = () => document.getElementById('content').className
         m.view('grid'); await sleep(180); const grid = disp()
         m.view('home'); await sleep(180); const home = disp()
+        // The workspaces built above make Home a road to nowhere: the port redirects it.
+        const homeBlocked = viewClass().includes('view-grid')
         m.view('board'); await sleep(180); const board = disp()
         m.view('settings'); await sleep(180); const settings = disp()
         m.view('grid'); await sleep(150)
         return {
-          ok: grid !== 'none' && grid !== 'absent' && home === 'none' && board === 'none' && settings === 'none',
-          grid, home, board, settings
+          ok: grid !== 'none' && grid !== 'absent' && homeBlocked && board === 'none' && settings === 'none',
+          grid, home, homeBlocked, board, settings
+        }
+      })()`)
+
+      // ── (h): collapsing the rail RESIZES its tabs; it never re-lays them out. Each
+      //    tab becomes a square, every icon keeps the x it had INSIDE its tab, and no
+      //    tab moves in y. This is the contract the old collapse rule broke (it re-
+      //    centred the icon and shortened the header, shifting the whole list). ──
+      stage = 'h-rail-collapse'
+      const h = await ES<Record<string, unknown>>(`(async () => {
+        const sleep = ms => new Promise(r => setTimeout(r, ms))
+        const app = document.getElementById('app')
+        const read = () => [...document.querySelectorAll('.workspace-tab')].map(t => {
+          const tr = t.getBoundingClientRect(), ir = t.querySelector('.ws-icon').getBoundingClientRect()
+          return { w: Math.round(tr.width), h: Math.round(tr.height), y: Math.round(tr.top), iconDx: Math.round(ir.left - tr.left) }
+        })
+        if (app.classList.contains('rail-collapsed')) { document.querySelector('.rail-toggle').click(); await sleep(400) }
+        const before = read()
+        document.querySelector('.rail-toggle').click()
+        await sleep(500) // past the --dur-2 width transition
+        const collapsed = app.classList.contains('rail-collapsed')
+        const after = read()
+        document.querySelector('.rail-toggle').click(); await sleep(400) // restore
+        const n = Math.min(before.length, after.length)
+        const square = n > 0 && after.slice(0, n).every(t => Math.abs(t.w - t.h) <= 1)
+        const sameIconDx = n > 0 && after.slice(0, n).every((t, i) => t.iconDx === before[i].iconDx)
+        const sameY = n > 0 && after.slice(0, n).every((t, i) => Math.abs(t.y - before[i].y) <= 1)
+        const sameH = n > 0 && after.slice(0, n).every((t, i) => t.h === before[i].h)
+        return {
+          ok: collapsed && square && sameIconDx && sameY && sameH,
+          collapsed, square, sameIconDx, sameY, sameH, n,
+          before: before[0], after: after[0]
         }
       })()`)
 
@@ -232,8 +288,68 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
       })
       const g = { ok: gProbe.failures.length === 0 && gProbe.missing.length === 0, ...gProbe }
 
-      const pass = Boolean(a.ok && b.ok && c.ok && d.ok && e.ok && f.ok && g.ok)
-      result = { pass, a, b, c, d, e, f, g }
+      // ── (i): the close button TAKES the pane-count's slot — it never joins it. The
+      //    reveal fires on :hover AND :focus-within (the tab is tabindex=0, so a click
+      //    focuses it), so the hide must fire on both too, or a clicked tab shows the
+      //    count and the × crowding its label for as long as it keeps focus. ──
+      stage = 'i-tab-badges'
+      const i = await ES<Record<string, unknown>>(`(() => {
+        const tab = document.querySelector('.workspace-tab')
+        if (!tab) return { ok: false, reason: 'no tab' }
+        const disp = sel => { const el = tab.querySelector(sel); return el ? getComputedStyle(el).display : 'absent' }
+        const restCount = disp('.ws-count'), restClose = disp('.ws-close')
+        tab.focus()
+        const focusCount = disp('.ws-count'), focusClose = disp('.ws-close')
+        tab.blur()
+        return {
+          ok: restCount !== 'none' && restClose === 'none' && focusCount === 'none' && focusClose !== 'none',
+          restCount, restClose, focusCount, focusClose
+        }
+      })()`)
+
+      // ── (j): PROGRESSIVE COLLAPSE. Two things are never surrendered — the state glyph
+      //    (which agent, doing what) and the × (get out). Between them the bar retires
+      //    into the ⋯ menu in a FIXED order, least-identifying first: branch → expand trio
+      //    → mcp → claims → role → remote. The title is the last thing standing, never the
+      //    first to go: it used to be the ONLY shrinkable item and hit 0px on an 862px
+      //    pane while four chips kept full width and were clipped away invisibly. ──
+      stage = 'j-collapse'
+      const j = await ES<Record<string, unknown>>(`(async () => {
+        const sleep = ms => new Promise(r => setTimeout(r, ms))
+        const slot = document.querySelector('.layout-slot[data-pane-id="${paneId}"]')
+        if (!slot) return { ok: false, reason: 'no slot' }
+        const shown = sel => { const el = slot.querySelector(sel); return !!el && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0 }
+        const expandShown = () => [...slot.querySelectorAll('.pane-act-expand')].filter(e => getComputedStyle(e).display !== 'none').length
+        // The pane's own width drives the container queries; drive it directly.
+        const host = slot.parentElement
+        const at = async px => { slot.style.width = px + 'px'; await sleep(120)
+          return { git: shown('.pane-git'), expand: expandShown(), mcp: shown('.pane-mcp'),
+                   claims: shown('.pane-claims'), role: shown('.pane-role'), remote: shown('.pane-remote'),
+                   title: shown('.pane-title'), state: shown('.pane-state'), close: shown('.pane-act-close'),
+                   menu: shown('.pane-act:not(.pane-act-expand):not(.pane-act-close)'),
+                   ctxDisc: shown('.pane-context .ctx-disc') } }
+        const steps = { w900: await at(900), w700: await at(700), w600: await at(600),
+                        w500: await at(500), w440: await at(440), w380: await at(380), w300: await at(300) }
+        slot.style.width = ''
+        await sleep(150)
+        const anchorsHold = Object.values(steps).every(s => s.state && s.close && s.menu && s.title)
+        const order =
+          steps.w900.git && steps.w900.expand === 3 &&      // wide: everything
+          !steps.w700.git && steps.w700.expand === 3 &&      // 1st to go: the branch chip
+          !steps.w600.git && steps.w600.expand === 0 &&      // 2nd: the expand trio
+          !steps.w500.mcp && steps.w500.claims &&            // 3rd: mcp
+          !steps.w440.claims && steps.w440.role &&           // 4th: claims
+          !steps.w380.role && steps.w380.remote &&           // 5th: role
+          !steps.w300.remote                                 // 6th: remote
+        // The context gauge (Claude Code's own disc + "62% used") has ONE form and
+        // never retires: visible at every width — context nearing full must stay
+        // visible on the tightest grid.
+        const ctxGauge = steps.w900.ctxDisc && steps.w700.ctxDisc && steps.w300.ctxDisc
+        return { ok: anchorsHold && order && ctxGauge, anchorsHold, order, ctxGauge, steps, hasHost: !!host }
+      })()`)
+
+      const pass = Boolean(a.ok && b.ok && c.ok && d.ok && e.ok && f.ok && g.ok && h.ok && i.ok && j.ok)
+      result = { pass, a, b, c, d, e, f, g, h, i, j }
     } catch (err) {
       result = { pass: false, stage, error: String(err) }
     }

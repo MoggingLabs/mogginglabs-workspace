@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { DAEMON_PROTOCOL_VERSION, channelFromEnv, runtimeSegment } from '@contracts'
 import { agentAct, agentControlDebug } from './browser-dock'
 import { handleUsageCall } from './usage'
 import { getSettingsStore } from './app-settings'
@@ -31,14 +32,19 @@ import {
  */
 
 const APP = 'MoggingLabs'
-const PROTOCOL = 3
+// This is TypeScript: import the contract, never restate it. A hardcoded 3 here (while the daemon
+// moved to v4) would have put browser-control.json in a directory the MCP server never reads —
+// silently, since "no endpoint file" is indistinguishable from "the app is not running".
+const PROTOCOL = DAEMON_PROTOCOL_VERSION
 
 function runtimeDir(): string {
   const base =
     process.platform === 'win32'
       ? process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
       : process.env.XDG_RUNTIME_DIR || path.join(os.homedir(), 'Library', 'Application Support')
-  const dir = path.join(base, APP, 'run', 'v' + PROTOCOL)
+  // Channel segment (run/v4 vs run/dev-v4): the browser-control endpoint belongs to ONE app —
+  // an MCP client wired to dev must never steer an installed release's dock, nor vice versa.
+  const dir = path.join(base, APP, 'run', runtimeSegment(channelFromEnv()))
   fs.mkdirSync(dir, { recursive: true })
   return dir
 }

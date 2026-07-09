@@ -8,6 +8,7 @@ export { el, clear, type ElProps, type ElChild } from './dom'
 export { icon, ICON_NAMES, type IconName } from './icons'
 export { Button, IconButton, type ButtonOpts, type IconButtonOpts } from './button'
 export { Pill, CountBadge, type PillOpts, type PillTone } from './pill'
+export { providerLogo, providerAccent, hasProviderLogo, PROVIDER_ACCENT } from './provider-logo'
 export {
   createPathInput,
   type PathInputHandle,

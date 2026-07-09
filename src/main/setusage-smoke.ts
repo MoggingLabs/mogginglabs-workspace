@@ -45,7 +45,7 @@ export function runSetUsageSmoke(win: BrowserWindow): void {
     await sleep(300)
   }
 
-  const CARDS = ['providers', 'plans', 'pace', 'alerts', 'display', 'history', 'privacy']
+  const CARDS = ['providers', 'plans', 'cost', 'alerts', 'display', 'history', 'privacy']
   const fixture = (plans: unknown[]): void => {
     const dir = mkdtempSync(join(tmpdir(), 'mog-setusage-'))
     const f = join(dir, 'fx.json')
@@ -122,7 +122,7 @@ export function runSetUsageSmoke(win: BrowserWindow): void {
         return n('.usage-class-group') >= 5 && !!q('.usage-prov-row') && !!q('.usage-search') &&
           !!q('.usage-plan-row') && !!q('.usage-display-reset') && !!q('.usage-privacy-block') &&
           !!q('.usage-alert-cfg .usage-thr-warn') &&
-          n('.usage-display-cfg') === 1 && n('.usage-alert-cfg') === 1 && n('.usage-pace-cfg') === 1 &&
+          n('.usage-display-cfg') === 1 && n('.usage-alert-cfg') === 1 && n('.usage-cost-cfg') === 1 &&
           n('.usage-stub-row') === 0
       })()`)
 
@@ -154,7 +154,7 @@ export function runSetUsageSmoke(win: BrowserWindow): void {
       // (e) bug #5 regression: no var(--r-md on a non-radius property in any .usage rule.
       const rmd = rmdScopedOk()
 
-      // (f) the profile form wears FieldGroup labels; a secret is refused inline.
+      // (f) the profile form wears FieldGroup labels; a malformed email is refused inline.
       await ES(`(document.querySelector('.settings-nav-item[data-target="profiles"]')?.click(), 1)`)
       await sleep(300)
       await ES(`document.querySelector('button[aria-label="Add profile"]')?.click()`)
@@ -163,12 +163,11 @@ export function runSetUsageSmoke(win: BrowserWindow): void {
       await ES(`(() => {
         const set = (s, v) => { const i = document.querySelector(s); if (i) { i.value = v; i.dispatchEvent(new Event('input')) } }
         set('.prof-name', 'Smoke')
-        set('.prof-env-key', 'FAKE_KEY')
-        set('.prof-env-val', 'sk-THISLOOKSLIKEASECRET1234567890')
+        set('.prof-email', 'not-an-email')
         const b = document.querySelector('button[aria-label="Save profile"]'); if (b) b.click()
       })()`)
       const refusalOk = await waitTrue(
-        `(() => { const e = document.querySelector('.settings-error'); return !!(e && !e.hidden && /secret/i.test(e.textContent || '')) })()`,
+        `(() => { const e = document.querySelector('.settings-error'); return !!(e && !e.hidden && /email/i.test(e.textContent || '')) })()`,
         20,
         200
       )

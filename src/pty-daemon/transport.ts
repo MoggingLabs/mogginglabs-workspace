@@ -3,6 +3,7 @@
 import * as net from 'node:net'
 import { createLineFramer, encodeMessage, keyToBytes, DAEMON_PROTOCOL_VERSION } from '@contracts'
 import type { ClientMessage, ServerMessage } from '@contracts'
+import { ptyEmulation } from '@backend/platform/pty-host'
 import type { SessionManager, PaneSubscriber } from './session'
 import { log } from './lifecycle'
 
@@ -59,7 +60,8 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
         case 'spawn': {
           const { pane, existed } = sessions.ensure(m.id, m.spec ?? {})
           subscribe(m.id)
-          send({ t: 'spawned', id: m.id, existing: existed, scrollback: pane.scrollback })
+          // The DAEMON owns the pty, so the daemon reports how it behaves — the app never guesses.
+          send({ t: 'spawned', id: m.id, existing: existed, scrollback: pane.scrollback, pty: ptyEmulation() })
           break
         }
         case 'attach': {

@@ -2,6 +2,7 @@ import { app, type BrowserWindow } from 'electron'
 import { createServer, type Server } from 'node:http'
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
+import { DAEMON_PROTOCOL_VERSION } from '@contracts'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { setAgentConsent } from './browser-dock'
@@ -251,7 +252,10 @@ export function runMcpSmoke(win: BrowserWindow): void {
           ? process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
           : process.env.XDG_RUNTIME_DIR || join(homedir(), 'Library', 'Application Support')
       const daemonEpFile =
-        process.env.MOGGING_DAEMON_ENDPOINT || join(runtimeBase, 'MoggingLabs', 'run', 'v3', 'endpoint.json')
+        process.env.MOGGING_DAEMON_ENDPOINT ||
+        // Derived, never a literal: the runtime dir is namespaced by the protocol version
+        // (ADR 0006), so a hardcoded 'v3' silently pointed at a directory no daemon writes.
+        join(runtimeBase, 'MoggingLabs', 'run', `v${DAEMON_PROTOCOL_VERSION}`, 'endpoint.json')
       const daemonEp = JSON.parse(readFileSync(daemonEpFile, 'utf8')) as { token: string }
       const allFrames = frames.join('\n')
       const noTokenLeak =

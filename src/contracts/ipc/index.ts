@@ -1,5 +1,6 @@
 export * from './channels'
 export * from './terminal.ipc'
+export * from './context.ipc'
 export * from './clipboard.ipc'
 export * from './workspace.ipc'
 export * from './telemetry.ipc'

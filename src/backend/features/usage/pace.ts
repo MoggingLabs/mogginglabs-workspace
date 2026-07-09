@@ -11,10 +11,6 @@ import type { PaceReport, PaceVerdict, ResetStyle, UsageWindow } from '@contract
 export interface PaceOptions {
   /** Window length in ms (5h session = 18_000_000; weekly = 604_800_000). */
   windowMs: number
-  /** Work-day baseline: days 0(Sun)–6(Sat) that count as active. */
-  workDays?: number[]
-  /** Active hours within a work day, [startHour, endHour) in 0–24. */
-  workHours?: [number, number]
   /** Offset applied before calendar math (default 0 = UTC). Production passes
    *  the user's local offset; fixtures pass 0 for determinism. */
   tzOffsetMinutes?: number
@@ -36,53 +32,13 @@ export const RECENT_RATE_WEIGHT = 0.6
 const HOUR_MS = 3_600_000
 const DAY_MS = 86_400_000
 
-const hasBaseline = (o: PaceOptions): boolean =>
-  Array.isArray(o.workDays) && o.workDays.length > 0 && Array.isArray(o.workHours)
-
-/** Active milliseconds in [from, to) under the baseline (calendar ms without one). */
-function activeMs(from: number, to: number, o: PaceOptions): number {
-  if (to <= from) return 0
-  if (!hasBaseline(o)) return to - from
-  const off = (o.tzOffsetMinutes ?? 0) * 60_000
-  const [startH, endH] = o.workHours as [number, number]
-  const days = new Set(o.workDays)
-  let total = 0
-  // Walk local-shifted days; overlap each work span with [from, to).
-  let dayStart = Math.floor((from + off) / DAY_MS) * DAY_MS - off
-  for (; dayStart < to; dayStart += DAY_MS) {
-    const dow = new Date(dayStart + off).getUTCDay()
-    if (!days.has(dow)) continue
-    const spanStart = dayStart + startH * HOUR_MS
-    const spanEnd = dayStart + endH * HOUR_MS
-    total += Math.max(0, Math.min(to, spanEnd) - Math.max(from, spanStart))
-  }
-  return total
-}
-
-/** The timestamp at which `hoursNeeded` ACTIVE hours have elapsed after `from`. */
-function activeHoursEnd(from: number, hoursNeeded: number, o: PaceOptions): number {
-  if (!hasBaseline(o)) return from + hoursNeeded * HOUR_MS
-  const off = (o.tzOffsetMinutes ?? 0) * 60_000
-  const [startH, endH] = o.workHours as [number, number]
-  const days = new Set(o.workDays)
-  let remaining = hoursNeeded * HOUR_MS
-  let dayStart = Math.floor((from + off) / DAY_MS) * DAY_MS - off
-  for (let i = 0; i < 800; i++, dayStart += DAY_MS) {
-    const dow = new Date(dayStart + off).getUTCDay()
-    if (!days.has(dow)) continue
-    const spanStart = Math.max(from, dayStart + startH * HOUR_MS)
-    const spanEnd = dayStart + endH * HOUR_MS
-    const avail = spanEnd - spanStart
-    if (avail <= 0) continue
-    if (remaining <= avail) return spanStart + remaining
-    remaining -= avail
-  }
-  return from + hoursNeeded * HOUR_MS // degenerate baseline: fall back to calendar
-}
-
-/** Pace one window. Returns null when there isn't enough data to pace —
- *  no reset time, no window length, or a nonsensical usedPct (the caller
- *  renders snapshot age instead; verdicts never speculate past the data). */
+/** Pace one window — pure burn-rate arithmetic over what the meter itself
+ *  knows: usage consumed, time elapsed, time left to reset. (The 7/12
+ *  work-day baseline is gone: a forecast that needed the user to describe
+ *  their work week was the model apologizing for itself.) Returns null when
+ *  there isn't enough data to pace — no reset time, no window length, or a
+ *  nonsensical usedPct (the caller renders snapshot age instead; verdicts
+ *  never speculate past the data). */
 export function computePace(w: UsageWindow, now: number, opts: PaceOptions): PaceReport | null {
   if (!w.resetsAt || !Number.isFinite(opts.windowMs) || opts.windowMs <= 0) return null
   if (!Number.isFinite(w.usedPct) || w.usedPct < 0) return null
@@ -91,24 +47,18 @@ export function computePace(w: UsageWindow, now: number, opts: PaceOptions): Pac
   const startMs = resetMs - opts.windowMs
   const used = Math.min(100, w.usedPct)
 
-  let elapsedActive = activeMs(startMs, Math.min(now, resetMs), opts)
-  let totalActive = activeMs(startMs, resetMs, opts)
-  if (totalActive <= 0) {
-    // Baseline excludes the whole window — pace against the calendar instead.
-    elapsedActive = Math.min(now, resetMs) - startMs
-    totalActive = opts.windowMs
-  }
-  const elapsedPct = Math.max(0, Math.min(100, (elapsedActive / totalActive) * 100))
+  const elapsed = Math.max(0, Math.min(now, resetMs) - startMs)
+  const elapsedPct = Math.max(0, Math.min(100, (elapsed / opts.windowMs) * 100))
   const paceDelta = used - elapsedPct
 
   // Blended burn: window average, pulled toward a recent observation so a
   // sprint today moves the forecast before the weekly average notices.
-  const elapsedHours = elapsedActive / HOUR_MS
+  const elapsedHours = elapsed / HOUR_MS
   const windowAvg = elapsedHours > 0 ? used / elapsedHours : 0
   let burnRate = windowAvg
   const r = opts.recent
   if (r && r.atMs < now && Number.isFinite(r.usedPct) && used >= r.usedPct) {
-    const recentHours = activeMs(r.atMs, now, opts) / HOUR_MS
+    const recentHours = (now - r.atMs) / HOUR_MS
     if (recentHours > 0) {
       const recentRate = (used - r.usedPct) / recentHours
       burnRate = RECENT_RATE_WEIGHT * recentRate + (1 - RECENT_RATE_WEIGHT) * windowAvg
@@ -120,9 +70,9 @@ export function computePace(w: UsageWindow, now: number, opts: PaceOptions): Pac
   if (used >= 100) {
     runOutAt = now
   } else if (burnRate > 0) {
-    const projected = activeHoursEnd(now, (100 - used) / burnRate, opts)
+    const projected = now + ((100 - used) / burnRate) * HOUR_MS
     if (projected < resetMs) runOutAt = projected
-    else surplusPct = Math.max(0, 100 - (used + (activeMs(now, resetMs, opts) / HOUR_MS) * burnRate))
+    else surplusPct = Math.max(0, 100 - (used + ((resetMs - now) / HOUR_MS) * burnRate))
   } else {
     surplusPct = 100 - used
   }
@@ -135,7 +85,42 @@ export function computePace(w: UsageWindow, now: number, opts: PaceOptions): Pac
     else if (surplusPct !== undefined && surplusPct > ON_PACE_BAND_PCT) verdict = 'surplus'
   }
 
-  return { verdict, paceDelta, elapsedPct, burnRatePctPerHour: burnRate, runOutAt, surplusPct }
+  const runOutRiskPct = warmingUp ? undefined : runOutRisk(used, burnRate, (resetMs - now) / HOUR_MS)
+
+  return { verdict, paceDelta, elapsedPct, burnRatePctPerHour: burnRate, runOutAt, surplusPct, ...(runOutRiskPct !== undefined ? { runOutRiskPct } : {}) }
+}
+
+// ── Run-out risk (the CodexBar "≈ N% run-out risk" idea, honestly modeled):
+//    P(exhaust before reset) under the ONE stated assumption that the blended
+//    burn rate holds ± 50% (a fixed coefficient of variation — a modeling
+//    choice, not a measurement; the copy says "risk", never a certainty).
+//    z = (points left − expected further burn) / (0.5 · expected further burn),
+//    p = 1 − Φ(z), rounded to the nearest 5 like the reference. Suppressed at
+//    the certain ends (< 5 or > 95) and during warm-up — a fresh window must
+//    not speculate.
+
+/** Standard normal CDF via the Abramowitz–Stegun erf approximation (|ε| < 1.5e-7). */
+function phi(z: number): number {
+  const t = 1 / (1 + 0.3275911 * Math.abs(z) / Math.SQRT2)
+  const erf =
+    1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp((-z * z) / 2)
+  return z >= 0 ? 0.5 * (1 + erf) : 0.5 * (1 - erf)
+}
+
+/** Risk in whole percent (5..95, steps of 5), or undefined when it would be
+ *  noise: no burn yet, already exhausted, or a near-certain answer either way
+ *  (the verdict line owns those). */
+export function runOutRisk(usedPct: number, burnRatePctPerHour: number, hoursToReset: number): number | undefined {
+  if (usedPct >= 100 || burnRatePctPerHour <= 0 || hoursToReset <= 0) return undefined
+  const expectedBurn = burnRatePctPerHour * hoursToReset
+  const z = (100 - usedPct - expectedBurn) / (0.5 * expectedBurn)
+  const p = Math.round(((1 - phi(z)) * 100) / 5) * 5
+  return p >= 5 && p <= 95 ? p : undefined
+}
+
+/** THE risk wording — one spelling, appended (never mixed into) the verdict line. */
+export function formatRisk(runOutRiskPct: number): string {
+  return `≈${runOutRiskPct}% run-out risk`
 }
 
 // ── The ONE formatter (binding wording — every surface renders these) ────────

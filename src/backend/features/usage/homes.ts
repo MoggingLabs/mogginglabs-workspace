@@ -7,8 +7,9 @@ import type { AgentProfile } from '@contracts'
 // pointer env; absent that, the CLI's documented default applies. `~` here is
 // the OS home dir on every platform (these CLIs use it on Windows too).
 
-/** The pointer env var that relocates each provider's config home. */
-const HOME_POINTER: Record<string, string> = {
+/** The pointer env var that relocates each provider's config home. Exported:
+ *  profile saves (src/main/profiles.ts) DERIVE a profile's pointer from it. */
+export const HOME_POINTER: Record<string, string> = {
   claude: 'CLAUDE_CONFIG_DIR',
   codex: 'CODEX_HOME',
   gemini: 'GEMINI_CONFIG_DIR'

@@ -38,6 +38,9 @@ export interface WorkspaceStateMeta {
   cwd: string
   ordinal: number
   paneCount: number
+  /** Serialized split-tree layout (v1 JSON: shape + sizes, leaf ids 1..paneCount).
+   *  Geometry only — never content. Absent/invalid → the template grid for paneCount. */
+  layout?: string | null
   assignments?: string[] // per-slot provider (06b template lineup); undefined = plain shells
   /** Per-slot cwd override (worktree isolation, Phase-3/03) — restored workspaces
    *  re-attach panes to their worktrees. Paths only, never credentials. */

@@ -1,15 +1,22 @@
 import { app, type BrowserWindow } from 'electron'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 // Env-gated worktree-isolation smoke (MOGGING_WORKTREE, Phase-3/03):
 //  1. throwaway repo -> open a workspace with TWO isolated agent slots (dev handle;
-//     provider 'gemini' is deliberately not-installed here, so no TUI launches — the
-//     isolation plumbing is what's under test).
+//     a `custom:` provider whose command writes the shell's LIVE branch into a file
+//     at the shell's own cwd — no TUI launches, and the file is the testimony).
 //  2. assert: two worktrees under <repo>/.mogging/worktrees, `git worktree list`
-//     agrees, each pane's branch chip shows its own mogging/<slug> branch.
+//     agrees, each pane's branch chip shows its own mogging/<slug> branch — AND each
+//     pane's SHELL really runs inside its worktree. The chip reads the published
+//     pane-cwd port, so it stays green even when the shell spawned somewhere else
+//     entirely; only the shell can say where it is. (Regression 2026-07-09: the
+//     GridLayout constructor applies a 1-pane grid, which spawned pane 1's PTY before
+//     the controller published its cwd seed — slot 1's shell opened in $HOME while
+//     its chip claimed mogging/<slug>. `custom:` providers launch verbatim, no
+//     `cd` prefix, so they surface the true spawn cwd.)
 //  3. removal is dirty-SAFE: a dirty worktree is refused, force removes it, a clean
 //     one removes first try. Repo HEAD is byte-identical before/after everything.
 function git(cwd: string, args: string[]): string {
@@ -42,9 +49,11 @@ export function runWorktreeSmoke(win: BrowserWindow): void {
       const headBefore = git(repo, ['rev-parse', 'HEAD'])
       await sleep(1500) // launcher-first boot settles
 
-      // Open 2 isolated agent slots (1x2 grid) via the wizard's isolation path.
+      // Open 2 isolated agent slots (1x2 grid) via the wizard's isolation path. The
+      // custom command is each pane's testimony: it runs at the shell's real cwd.
+      const provider = 'custom:git branch --show-current > branch.txt'
       const opened = (await ES(
-        `window.__mogging.templates.openIsolated(${JSON.stringify(repo)}, [{provider:'gemini',count:2}])`
+        `window.__mogging.templates.openIsolated(${JSON.stringify(repo)}, [{provider:${JSON.stringify(provider)},count:2}])`
       )) as { paneCount: number; assignments: string[]; paneCwds: (string | null)[] }
       const paneCwds = (opened?.paneCwds ?? []).filter((p): p is string => !!p)
       const openedOk = opened?.paneCount === 2 && paneCwds.length === 2
@@ -97,6 +106,25 @@ export function runWorktreeSmoke(win: BrowserWindow): void {
       }
       const chipsOk = chip1.includes('mogging/') && chip2.includes('mogging/') && chip1 !== chip2
 
+      // Each pane's shell wrote its live branch AT ITS OWN CWD (lineup launch). Both
+      // files must land inside the worktrees and name two distinct mogging/ branches.
+      // (PowerShell's `>` writes UTF-16LE — strip NULs before comparing.)
+      let shellFiles: Record<string, string> = {}
+      let shellsOk = false
+      for (let i = 0; i < 60 && !shellsOk; i++) {
+        await sleep(500)
+        shellFiles = {}
+        for (const p of paneCwds) {
+          const f = join(p, 'branch.txt')
+          if (existsSync(f)) shellFiles[p] = readFileSync(f, 'utf8').replace(/[\u0000\uFEFF]/g, '').trim()
+        }
+        const vals = Object.values(shellFiles)
+        shellsOk = vals.length === 2 && vals.every((b) => b.startsWith('mogging/')) && new Set(vals).size === 2
+      }
+      // The testimony must not contaminate the dirty-safety phase below — an untracked
+      // file reads as dirty, and worktree #2 is asserted clean-removable.
+      for (const p of paneCwds) rmSync(join(p, 'branch.txt'), { force: true })
+
       // Removal safety — drive the real IPC from the renderer, like the pane menu does.
       const removeVia = (path: string, force: boolean): Promise<{ ok: boolean; reason?: string }> =>
         ES(
@@ -135,7 +163,7 @@ export function runWorktreeSmoke(win: BrowserWindow): void {
       const branchAfter = git(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])
       const repoIntact = headBefore === headAfter && branchAfter === 'main'
 
-      const pass = openedOk && gitAgrees && branchesOk && chipsOk && removalOk && repoIntact
+      const pass = openedOk && gitAgrees && branchesOk && chipsOk && shellsOk && removalOk && repoIntact
       result = {
         pass,
         openedOk,
@@ -144,6 +172,8 @@ export function runWorktreeSmoke(win: BrowserWindow): void {
         chipsOk,
         chip1,
         chip2,
+        shellsOk,
+        shellFiles,
         removalOk,
         dirtyRefused,
         cleanRemoved,

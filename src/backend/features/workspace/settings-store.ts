@@ -91,14 +91,26 @@ export class SettingsStore {
     } catch {
       /* column already exists */
     }
+    // Migrate to simplified profiles: the subscription email (a label — ADR 0002).
+    try {
+      this.db.exec('ALTER TABLE app_profiles ADD COLUMN email TEXT')
+    } catch {
+      /* column already exists */
+    }
+    // Migrate pre-split-tree dbs: the serialized pane arrangement (shape + sizes).
+    try {
+      this.db.exec('ALTER TABLE app_workspaces ADD COLUMN layout_tree TEXT')
+    } catch {
+      /* column already exists */
+    }
   }
 
   load(): WorkspaceState {
     const rows = this.db
       .prepare(
-        'SELECT id, name, color, cwd, ordinal, pane_count AS paneCount, assignments, pane_cwds AS paneCwds, pane_roles AS paneRoles, pane_remotes AS paneRemotes, pane_profile_ids AS paneProfileIds FROM app_workspaces ORDER BY position'
+        'SELECT id, name, color, cwd, ordinal, pane_count AS paneCount, layout_tree AS layoutTree, assignments, pane_cwds AS paneCwds, pane_roles AS paneRoles, pane_remotes AS paneRemotes, pane_profile_ids AS paneProfileIds FROM app_workspaces ORDER BY position'
       )
-      .all() as Array<WorkspaceStateMeta & { assignments: string | null; paneCwds: string | null; paneRoles: string | null; paneRemotes: string | null; paneProfileIds: string | null }>
+      .all() as Array<WorkspaceStateMeta & { layoutTree: string | null; assignments: string | null; paneCwds: string | null; paneRoles: string | null; paneRemotes: string | null; paneProfileIds: string | null }>
     const workspaces: WorkspaceStateMeta[] = rows.map((r) => ({
       id: r.id,
       name: r.name,
@@ -106,6 +118,7 @@ export class SettingsStore {
       cwd: r.cwd,
       ordinal: r.ordinal,
       paneCount: r.paneCount,
+      layout: r.layoutTree ?? undefined,
       assignments: r.assignments ? (JSON.parse(r.assignments) as string[]) : undefined,
       paneCwds: r.paneCwds ? (JSON.parse(r.paneCwds) as (string | null)[]) : undefined,
       roles: r.paneRoles ? (JSON.parse(r.paneRoles) as (string | null)[]) : undefined,
@@ -139,7 +152,7 @@ export class SettingsStore {
     const tx = this.db.transaction((s: WorkspaceState) => {
       this.db.prepare('DELETE FROM app_workspaces').run()
       const ins = this.db.prepare(
-        'INSERT INTO app_workspaces (id, name, color, cwd, ordinal, pane_count, position, assignments, pane_cwds, pane_roles, pane_remotes, pane_profile_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO app_workspaces (id, name, color, cwd, ordinal, pane_count, layout_tree, position, assignments, pane_cwds, pane_roles, pane_remotes, pane_profile_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       s.workspaces.forEach((w, i) =>
         ins.run(
@@ -149,6 +162,7 @@ export class SettingsStore {
           w.cwd,
           w.ordinal,
           w.paneCount,
+          w.layout ?? null,
           i,
           w.assignments ? JSON.stringify(w.assignments) : null,
           w.paneCwds ? JSON.stringify(w.paneCwds) : null,
@@ -265,18 +279,18 @@ export class SettingsStore {
   // lives at the IPC boundary (src/main/profiles.ts); this stores what survived it. ──
   listProfiles(): AgentProfile[] {
     const rows = this.db
-      .prepare('SELECT id, name, provider, env, ord AS "order" FROM app_profiles ORDER BY provider, ord')
-      .all() as Array<Omit<AgentProfile, 'env'> & { env: string }>
-    return rows.map((r) => ({ ...r, env: JSON.parse(r.env) as Record<string, string> }))
+      .prepare('SELECT id, name, provider, email, env, ord AS "order" FROM app_profiles ORDER BY provider, ord')
+      .all() as Array<Omit<AgentProfile, 'env' | 'email'> & { env: string; email: string | null }>
+    return rows.map((r) => ({ ...r, email: r.email ?? undefined, env: JSON.parse(r.env) as Record<string, string> }))
   }
 
   saveProfile(profile: AgentProfile): void {
     this.db
       .prepare(
-        `INSERT INTO app_profiles (id, name, provider, env, ord) VALUES (@id, @name, @provider, @env, @order)
-         ON CONFLICT(id) DO UPDATE SET name = excluded.name, provider = excluded.provider, env = excluded.env, ord = excluded.ord`
+        `INSERT INTO app_profiles (id, name, provider, email, env, ord) VALUES (@id, @name, @provider, @email, @env, @order)
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, provider = excluded.provider, email = excluded.email, env = excluded.env, ord = excluded.ord`
       )
-      .run({ ...profile, env: JSON.stringify(profile.env) })
+      .run({ ...profile, email: profile.email ?? null, env: JSON.stringify(profile.env) })
   }
 
   removeProfile(id: string): void {

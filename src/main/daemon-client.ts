@@ -7,18 +7,20 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { spawn } from 'node:child_process'
-import { createLineFramer, encodeMessage, DAEMON_PROTOCOL_VERSION } from '@contracts'
+import { createLineFramer, encodeMessage, DAEMON_PROTOCOL_VERSION, channelFromEnv, runtimeSegment } from '@contracts'
 import type {
   Approval,
-  Claim, ClientMessage, ServerMessage, DaemonEndpoint, SpawnSpec, PaneInfo, AgentState } from '@contracts'
+  Claim, ClientMessage, ServerMessage, DaemonEndpoint, SpawnSpec, PaneInfo, AgentState, SpawnResult } from '@contracts'
 
 // --- endpoint discovery paths (MUST match src/pty-daemon/lifecycle.ts) ---
+// runtimeSegment(channelFromEnv()): dev and installed releases never share a daemon, even at the
+// same protocol version. The spawned daemon inherits MOGGING_CHANNEL, so it derives the SAME dir.
 function runtimeDir(): string {
   const base =
     process.platform === 'win32'
       ? process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
       : process.env.XDG_RUNTIME_DIR || path.join(os.homedir(), 'Library', 'Application Support')
-  return path.join(base, 'MoggingLabs', 'run', 'v' + DAEMON_PROTOCOL_VERSION)
+  return path.join(base, 'MoggingLabs', 'run', runtimeSegment(channelFromEnv()))
 }
 const endpointPath = (): string => path.join(runtimeDir(), 'endpoint.json')
 const daemonSpawnLogPath = (): string => path.join(runtimeDir(), 'daemon.log')
@@ -93,6 +95,8 @@ export interface DaemonEvents {
 export class DaemonClient {
   private sock: net.Socket | null = null
   private approvalWaiters: Array<(list: Approval[]) => void> = []
+  /** Pane id -> resolvers waiting for that pane's `spawned` reply (`existing` + the pty it got). */
+  private spawnWaiters = new Map<string, Array<(res: SpawnResult) => void>>()
   constructor(
     private readonly endpoint: DaemonEndpoint,
     private readonly events: DaemonEvents = {}
@@ -138,7 +142,17 @@ export class DaemonClient {
       case 'data':
         this.events.onData?.(m.id, m.data)
         break
-      case 'spawned':
+      case 'spawned': {
+        if (m.scrollback) this.events.onData?.(m.id, m.scrollback)
+        // `existing` is how a caller learns the daemon reattached us to a session that
+        // was already running (it is detached — ADR 0006). Nothing else can tell them.
+        const waiters = this.spawnWaiters.get(m.id)
+        if (waiters) {
+          this.spawnWaiters.delete(m.id)
+          for (const done of waiters) done({ existing: m.existing === true, pty: m.pty })
+        }
+        break
+      }
       case 'attached':
         if (m.scrollback) this.events.onData?.(m.id, m.scrollback)
         break
@@ -177,8 +191,31 @@ export class DaemonClient {
     }
   }
 
-  spawn(id: string, spec?: SpawnSpec): void {
-    this.send({ t: 'spawn', id, spec })
+  /** Spawn (or reattach to) a pane's session. Resolves with the daemon's `existing` flag:
+   *  true = a live session was already there. Resolves false if the daemon never answers
+   *  within the timeout — the safe default, matching a cold spawn. */
+  /** Resolves with the daemon's own answer. REJECTS on timeout: a pane whose pty never reported
+   *  its emulation cannot be rendered correctly, and `resolve(false)` used to invent one. */
+  spawn(id: string, spec?: SpawnSpec, timeoutMs = 5000): Promise<SpawnResult> {
+    return new Promise<SpawnResult>((resolve, reject) => {
+      const list = this.spawnWaiters.get(id) ?? []
+      this.spawnWaiters.set(id, list)
+      const timer = setTimeout(() => {
+        const at = this.spawnWaiters.get(id)
+        if (at) {
+          const i = at.indexOf(done)
+          if (i >= 0) at.splice(i, 1)
+          if (!at.length) this.spawnWaiters.delete(id)
+        }
+        reject(new Error(`daemon did not answer spawn for pane ${id} within ${timeoutMs}ms`))
+      }, timeoutMs)
+      const done = (res: SpawnResult): void => {
+        clearTimeout(timer)
+        resolve(res)
+      }
+      list.push(done)
+      this.send({ t: 'spawn', id, spec })
+    })
   }
   attach(id: string): void {
     this.send({ t: 'attach', id })

@@ -48,6 +48,97 @@ function pctWindow(label: string, w: unknown): UsageWindow | null {
   return { label, usedPct, resetsAt }
 }
 
+// ── Lane discovery is DYNAMIC, never a hardcoded model list. The endpoint's
+// model-specific weekly lane has already changed name twice (seven_day_opus
+// in the Opus era; seven_day_fable today, with the Sonnet lane gone) — a
+// hardcoded key silently DROPS the new lane on every model generation. So:
+// every top-level key whose value carries a `utilization` number IS a lane;
+// known keys keep their historical labels, unknown keys derive one from the
+// key itself ("seven_day_fable" -> "Weekly (Fable)"). Order: session first,
+// the all-models weekly second, model lanes after — the popover's grammar.
+const KNOWN_LANES: Record<string, string> = {
+  five_hour: 'Session (5h)',
+  seven_day: 'Weekly',
+  seven_day_opus: 'Weekly (Opus)',
+  seven_day_fable: 'Weekly (Fable)'
+}
+
+const titleCase = (s: string): string => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s)
+
+function laneLabel(key: string): string {
+  const known = KNOWN_LANES[key]
+  if (known) return known
+  if (key.startsWith('seven_day_')) return `Weekly (${titleCase(key.slice('seven_day_'.length))})`
+  if (key.startsWith('five_hour_')) return `Session (${titleCase(key.slice('five_hour_'.length))})`
+  // A shape we've never seen: show it under its own (humanized) name rather
+  // than dropping data — "monthly_fable" reads as "Monthly fable".
+  return titleCase(key.replace(/_/g, ' '))
+}
+
+const laneRank = (key: string): number => (key === 'five_hour' ? 0 : key === 'seven_day' ? 1 : key.startsWith('five_hour') ? 2 : 3)
+
+/** The newer `limits[]` shape (dev-verified against CodexBar 2026-07-09): the
+ *  model-scoped weekly lane rides `{kind: 'weekly_scoped', group: 'weekly',
+ *  percent, resets_at, scope.model.display_name}` entries — the Fable-era
+ *  form; the flat `seven_day_<model>` keys were the previous generation. The
+ *  display name comes from the payload VERBATIM, so the next model tier needs
+ *  zero code here. (`is_active` is deliberately not filtered — enforceable
+ *  scoped limits have been observed reporting false.) */
+function scopedLanes(body: Record<string, unknown>): UsageWindow[] {
+  const limits = body.limits
+  if (!Array.isArray(limits)) return []
+  const out: UsageWindow[] = []
+  for (const raw of limits) {
+    const l = raw as {
+      kind?: unknown
+      group?: unknown
+      percent?: unknown
+      resets_at?: unknown
+      scope?: { model?: { display_name?: unknown; id?: unknown } }
+    } | null
+    if (!l || l.kind !== 'weekly_scoped' || l.group !== 'weekly' || typeof l.percent !== 'number') continue
+    const name =
+      typeof l.scope?.model?.display_name === 'string'
+        ? l.scope.model.display_name
+        : typeof l.scope?.model?.id === 'string'
+          ? l.scope.model.id
+          : 'model'
+    out.push({
+      label: `Weekly (${name})`,
+      usedPct: Math.max(0, Math.min(100, Math.round(l.percent))),
+      ...(typeof l.resets_at === 'string' ? { resetsAt: l.resets_at } : {})
+    })
+  }
+  return out
+}
+
+/** Every utilization-shaped key in the body, ordered session -> weekly ->
+ *  model lanes, plus the `limits[]` scoped weeklies (deduped by label). */
+export function parseLanes(body: Record<string, unknown>): UsageWindow[] {
+  const flat = Object.keys(body)
+    .filter((k) => {
+      const v = body[k] as { utilization?: unknown } | null
+      return !!v && typeof v === 'object' && typeof v.utilization === 'number'
+    })
+    .sort((a, b) => laneRank(a) - laneRank(b) || a.localeCompare(b))
+    .map((k) => pctWindow(laneLabel(k), body[k]))
+    .filter((w): w is UsageWindow => !!w)
+  const seen = new Set(flat.map((w) => w.label))
+  return [...flat, ...scopedLanes(body).filter((w) => !seen.has(w.label))]
+}
+
+/** `extra_usage` (the pay-as-you-go overage box): cents on the wire; a
+ *  display value with its cap, never a bill. */
+export function parseExtraUsage(body: Record<string, unknown>): { amount: number; currency: string; limit?: number } | undefined {
+  const x = body.extra_usage as { is_enabled?: unknown; used_credits?: unknown; monthly_limit?: unknown; currency?: unknown } | null
+  if (!x || typeof x !== 'object' || x.is_enabled !== true || typeof x.used_credits !== 'number') return undefined
+  return {
+    amount: x.used_credits / 100,
+    currency: typeof x.currency === 'string' && x.currency ? x.currency : 'USD',
+    ...(typeof x.monthly_limit === 'number' && x.monthly_limit > 0 ? { limit: x.monthly_limit / 100 } : {})
+  }
+}
+
 export const claudeAdapter: UsageAdapter = {
   id: 'claude',
 
@@ -86,14 +177,9 @@ export const claudeAdapter: UsageAdapter = {
       if (!res.ok) throw new Error(`usage endpoint answered ${res.status}`)
 
       const body = (await res.json()) as Record<string, unknown>
-      const windows: UsageWindow[] = []
-      const session = pctWindow('Session (5h)', body.five_hour)
-      const weekly = pctWindow('Weekly', body.seven_day)
-      const weeklyOpus = pctWindow('Weekly (Opus)', body.seven_day_opus)
-      if (session) windows.push(session)
-      if (weekly) windows.push(weekly)
-      if (weeklyOpus) windows.push(weeklyOpus)
+      const windows = parseLanes(body)
       if (!windows.length) throw new Error('usage endpoint shape changed — adapter needs a look')
+      const spend = parseExtraUsage(body)
 
       return [
         {
@@ -101,6 +187,7 @@ export const claudeAdapter: UsageAdapter = {
           profileId,
           planLabel: 'Claude',
           windows,
+          ...(spend ? { spend } : {}),
           fetchedAt: Date.now(),
           health: 'fresh'
         }

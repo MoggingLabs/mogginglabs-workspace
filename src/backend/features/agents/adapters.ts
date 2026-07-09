@@ -8,8 +8,10 @@ export interface AgentAdapter {
   name: string
   bin: string // executable to detect on PATH + run
   resumeFlag?: string // appended to resume a prior session (e.g. "--resume", "resume")
-  // The provider's OWN documented install one-liner (copy-to-clipboard hint; we
-  // NEVER run it — the user installs, ADR 0002 / 6/06 checklist guardrail).
+  // The provider's OWN documented install one-liner. Copyable everywhere; Settings
+  // § Providers can also RUN it (install.ts) in an ephemeral background pty on an
+  // explicit user click — verbatim, under the user's login, never parsed or
+  // elevated. Credentials still never cross this boundary (ADR 0002).
   installHint?: string
 }
 

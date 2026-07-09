@@ -18,10 +18,21 @@ import { homedir } from 'node:os'
 import net from 'node:net'
 
 // Keep in sync with DAEMON_PROTOCOL_VERSION in src/contracts/daemon/protocol.ts
-// (this file is plain Node — it cannot import the TS contract).
-const PROTOCOL_VERSION = 3
+// (this file is plain Node — it cannot import the TS contract). It is BOTH the handshake
+// version and the runtime directory this CLI looks in, so a stale value here does not
+// degrade — it makes every `mogging` verb miss the daemon entirely.
+const PROTOCOL_VERSION = 4
 
-const argv = process.argv.slice(2)
+// Release channel (keep in sync with contracts/daemon/protocol.ts, ReleaseChannel — gated by
+// scripts/check-protocol-version.mjs). A repo checkout runs on its own channel: run/dev-v4 and
+// mogging-dev:// instead of run/v4 and mogging://, so dev and an installed release never answer
+// each other's commands. Inside a dev pane MOGGING_CHANNEL=dev is inherited from the daemon, so
+// hooks and `mogging notify` target the right app with no flags; outside one, pass --dev.
+const CHANNEL = process.argv.includes('--dev') || process.env.MOGGING_CHANNEL === 'dev' ? 'dev' : 'prod'
+const RUN_SEGMENT = (CHANNEL === 'dev' ? 'dev-v' : 'v') + PROTOCOL_VERSION
+const SCHEME = CHANNEL === 'dev' ? 'mogging-dev' : 'mogging'
+
+const argv = process.argv.slice(2).filter((a) => a !== '--dev')
 const cmd = argv[0]
 
 if (cmd === 'usage') runUsage(argv.slice(1))
@@ -58,7 +69,9 @@ function usage(code) {
       '       mogging approve <branch> (reviewer pane only) | approvals [--json]\n' +
       '       mogging usage [--json] | usage cost [--provider <id|all>] [--json]\n' +
       '       mogging usage providers [--json] | usage refresh [--provider <id>]\n' +
-      '       mogging usage set-key --provider <id> --stdin | usage clear-key --provider <id>\n'
+      '       mogging usage set-key --provider <id> --stdin | usage clear-key --provider <id>\n' +
+      '       any verb: --dev   target a repo-checkout (dev-channel) app instead of the installed\n' +
+      '                 release. Inside dev panes MOGGING_CHANNEL=dev is inherited — no flag needed.\n'
   )
   process.exit(code)
 }
@@ -88,7 +101,7 @@ function appEndpointFilePath() {
     process.platform === 'win32'
       ? process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
       : process.env.XDG_RUNTIME_DIR || join(homedir(), 'Library', 'Application Support')
-  return join(base, 'MoggingLabs', 'run', 'v' + PROTOCOL_VERSION, 'browser-control.json')
+  return join(base, 'MoggingLabs', 'run', RUN_SEGMENT, 'browser-control.json')
 }
 
 /** An authed session against the APP endpoint (promise-based calls, so a
@@ -550,7 +563,7 @@ function sendControl(command, opts = {}) {
     process.stderr.write('mogging: app/daemon not running (--no-launch)\n')
     process.exit(3)
   }
-  const url = `mogging://control?c=${encodeURIComponent(JSON.stringify(command))}`
+  const url = `${SCHEME}://control?c=${encodeURIComponent(JSON.stringify(command))}`
   const platform = process.platform
   if (platform === 'win32') {
     spawn('cmd', ['/c', 'start', '', url.replace(/&/g, '^&')], { detached: true, stdio: 'ignore' }).unref()
@@ -591,7 +604,7 @@ function runControlOpen(args) {
 
 function runOpen(args) {
   const dir = resolve(args[0] ?? '.')
-  const url = `mogging://open?cwd=${encodeURIComponent(dir)}`
+  const url = `${SCHEME}://open?cwd=${encodeURIComponent(dir)}`
   const platform = process.platform
   if (platform === 'win32') {
     spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' }).unref()
@@ -613,7 +626,7 @@ function endpointFilePath() {
     process.platform === 'win32'
       ? process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
       : process.env.XDG_RUNTIME_DIR || join(homedir(), 'Library', 'Application Support')
-  return join(base, 'MoggingLabs', 'run', 'v' + PROTOCOL_VERSION, 'endpoint.json')
+  return join(base, 'MoggingLabs', 'run', RUN_SEGMENT, 'endpoint.json')
 }
 
 function readEndpoint() {

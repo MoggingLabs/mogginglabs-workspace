@@ -4,6 +4,12 @@ import { ShellChannels, type WindowStateEvent } from '@contracts'
 // App-wiring: keep the native window-control overlay tinted to the active theme so the
 // frameless header reads as one organic surface (Windows/Linux; macOS traffic lights
 // need no tinting). Colors only — no window state crosses this channel.
+//
+// A `shell:hostInfo` channel briefly lived here, so the renderer could ask main for the OS
+// build and hand xterm a `windowsPty`. It is gone: the pty's emulation now rides the
+// daemon's own `spawned` answer (protocol v4 — SpawnResult.pty), which is the only place
+// that KNOWS it. Main inferring it from `process.platform` was a guess that could disagree
+// with the process actually holding the pty.
 
 interface OverlayTint {
   color?: string

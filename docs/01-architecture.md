@@ -48,9 +48,19 @@ See [ADR 0001](adr/0001-electron-over-tauri.md) for the Electron-over-Tauri deci
 Window/lifecycle, IPC broker, updater, tray, deep links (`mogging://`, `mogging .`).
 
 ## Windows / ConPTY specifics to plan for
-node-pty uses ConPTY (Win10 1809+) with a winpty fallback. Budget time for resize
-races, signal semantics, the occasional TUI that misbehaves under ConPTY, and
-**AV/SmartScreen** friction on spawned children + unsigned dev builds — **sign early**.
+**ConPTY only — there is no winpty fallback.** node-pty would silently pick winpty below build
+18309; we pass `useConpty: true` and refuse to start below it (`backend/platform/pty-host.ts`,
+surfaced as a fatal by `main/fatal.ts`). One backend cannot disagree with itself, and the winpty
+resize path — which nothing here ever exercised — does not exist. Minimum: **Windows 10 1903**.
+
+The pty's emulation is *reported*, never inferred: `spawnPty()` is the only door to node-pty
+(enforced by `scripts/check-pty-seam.mjs`) and hands back a `PtyEmulation` alongside the process,
+which rides `SpawnResult` to xterm's `windowsPty` option. Getting this wrong is not cosmetic —
+ConPTY answers every resize with a full repaint of conhost's screen buffer, so a viewport offset
+by one row splices stale shell prompts into a live agent's TUI frame.
+
+Budget time for resize races, signal semantics, the occasional TUI that misbehaves under ConPTY,
+and **AV/SmartScreen** friction on spawned children + unsigned dev builds — **sign early**.
 
 ## Build & distribution
 - Native modules (`node-pty`, later `better-sqlite3`) → `electron-rebuild`/prebuilds for

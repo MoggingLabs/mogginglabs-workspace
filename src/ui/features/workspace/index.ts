@@ -9,7 +9,7 @@ import {
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { TEMPLATE_COUNTS, TEMPLATES } from '../layout'
-import { IconButton, createLayoutGridPicker, el } from '../../components'
+import { IconButton, createLayoutGridPicker, el, icon } from '../../components'
 import { WorkspaceController, type CreateOpts } from './controller'
 import { workspaceClient } from './workspace.client'
 import { DEFAULT_THEME_ID } from '../../core/theme/themes'
@@ -21,7 +21,7 @@ import {
 } from '../../core/workspace/workspace-info-port'
 import { openWizard } from '../../core/workspace/wizard-port'
 import { onProfileFailover } from '../../core/agents/launch-port'
-import { setActiveView, activeView } from '../../core/shell/view-port'
+import { setActiveView } from '../../core/shell/view-port'
 import { setCommands } from '../../core/commands/command-port'
 import { setPaneState } from '../../core/attention/attention-port'
 
@@ -58,7 +58,7 @@ export const workspaceFeature: UiFeature = {
       onClick: () => newWorkspace()
     })
     addBtn.id = 'ws-add'
-    header.append(addBtn)
+    header.append(addBtn) // top of the rail, trailing the title — where it belongs
 
     const tabs = el('div', { class: '', role: 'list' })
     tabs.id = 'workspace-tabs'
@@ -100,7 +100,8 @@ export const workspaceFeature: UiFeature = {
           paneCwds: m.paneCwds,
           roles: m.roles,
           remotes: m.remotes,
-          profileIds: m.profileIds // ids only — env values never leave main (ADR 0002)
+          profileIds: m.profileIds, // ids only — env values never leave main (ADR 0002)
+          layout: m.layout // split-tree geometry (shape + sizes) — never content
         })),
         activeId: controller.activeMeta()?.id ?? null,
         theme: currentThemeId(),
@@ -210,7 +211,26 @@ export const workspaceFeature: UiFeature = {
           layoutMenu.hidden = true
         }
       })
-      layoutMenu.append(picker.el)
+      // ADD one terminal — lives IN this popover (templates and "one more" are the
+      // same decision: how many panes). Splits the focused pane; its line re-equalizes.
+      const add = el(
+        'button',
+        {
+          class: 'menu-item layout-menu-add',
+          type: 'button',
+          title: 'Splits the focused pane — the row/column re-equalizes',
+          onClick: () => {
+            layoutMenu.hidden = true
+            controller.splitActive()
+          }
+        },
+        [
+          icon('plus', 14),
+          el('span', { text: 'New terminal' }),
+          el('span', { class: 'kbd', text: 'Ctrl+Shift+D' })
+        ]
+      )
+      layoutMenu.append(picker.el, el('div', { class: 'menu-sep' }), add)
     }
 
     // ── Keyboard: capture phase + stopPropagation so xterm never sees these ──
@@ -239,10 +259,10 @@ export const workspaceFeature: UiFeature = {
           e.preventDefault()
           e.stopPropagation()
           newWorkspace()
-        } else if (k === 'h' && e.shiftKey) {
+        } else if (k === 'd' && e.shiftKey) {
           e.preventDefault()
           e.stopPropagation()
-          setActiveView(activeView() === 'home' ? 'grid' : 'home')
+          controller.splitActive() // Ctrl/Cmd+Shift+D: new terminal in the active grid
         } else if (k === 'enter' && e.shiftKey) {
           e.preventDefault()
           e.stopPropagation()
@@ -320,19 +340,33 @@ export const workspaceFeature: UiFeature = {
           hint: 'Workspace',
           run: () => controller.create()
         },
-        {
-          id: 'home:open',
-          title: 'Go Home',
-          hint: 'View',
-          kbd: 'Ctrl+Shift+H',
-          run: () => setActiveView('home')
-        },
+        // No `home:open` command: Home is the boot launcher and the zero-workspace
+        // empty state, not a destination (see core/shell/view-port.ts).
         {
           id: 'pane:zoom',
           title: 'Zoom / restore focused pane',
           hint: 'Pane',
           kbd: 'Ctrl+Shift+Enter',
           run: () => controller.toggleZoom()
+        },
+        {
+          id: 'pane:new',
+          title: 'New terminal (split focused pane)',
+          hint: 'Pane',
+          kbd: 'Ctrl+Shift+D',
+          run: () => controller.splitActive()
+        },
+        {
+          id: 'pane:split-right',
+          title: 'Split pane right',
+          hint: 'Pane',
+          run: () => controller.splitActive('h')
+        },
+        {
+          id: 'pane:split-down',
+          title: 'Split pane down',
+          hint: 'Pane',
+          run: () => controller.splitActive('v')
         },
         ...TEMPLATE_COUNTS.map((n) => ({
           id: `layout:${n}`,
@@ -369,20 +403,24 @@ export const workspaceFeature: UiFeature = {
             paneCwds: w.paneCwds, // worktree panes re-attach to their worktrees (3/03)
             roles: w.roles, // the swarm manifest survives restore (4/01)
             remotes: w.remotes, // remote panes stay remote across restore (4/05)
-            profileIds: w.profileIds // lineups relaunch under the CHOSEN profile (6/04)
+            profileIds: w.profileIds, // lineups relaunch under the CHOSEN profile (6/04)
+            layout: w.layout // the exact split arrangement + sizes come back
           })
         }
         // 06b: re-launch each template workspace's lineup (each CLI self-auths on resume).
         for (const w of state.workspaces) {
           if (w.assignments) controller.launchLineup(w.id, true)
         }
-        // Re-activate the last workspace WITHOUT revealing its grid — the app always
-        // opens on the launcher; the user picks where to go from there.
+        // Re-activate the last workspace AND reveal its grid. A restore that lands on the
+        // launcher is a dead screen: the workspaces already exist, their PTYs are already
+        // spawning, and Home offers nothing but a way back to them. Home is the
+        // zero-workspace empty state (below) and nothing else — the same invariant
+        // core/shell/view-port.ts enforces for every other road into it.
         const target =
           activeId && controller.list().some((m) => m.id === activeId)
             ? activeId
             : controller.list()[0]?.id
-        if (target) controller.switch(target, { reveal: false })
+        if (target) controller.switch(target) // reveal: the grid owns the app
       }
       // No saved workspaces = a true first run: the launcher IS the empty state.
       restoring = false
@@ -404,6 +442,7 @@ function exposeForDev(controller: WorkspaceController): void {
     paneIds: () => controller.activePaneIds(),
     zoom: () => controller.toggleZoom(),
     expand: (paneId: number, mode: 'full' | 'col' | 'row') => controller.expandPane(paneId, mode),
+    split: (dir?: 'h' | 'v') => controller.splitActive(dir),
     close: (paneId: number) => {
       const id = controller.activeMeta()?.id
       if (id) controller.closePane(id, paneId)

@@ -1,6 +1,6 @@
 import { AgentChannels, ClipboardChannels, IntegrationsChannels, type AgentInfo } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { el, icon, showToast } from '../../components'
+import { el, icon, providerLogo, showToast } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { openWizard } from '../../core/workspace/wizard-port'
 import { setActiveView } from '../../core/shell/view-port'
@@ -112,12 +112,18 @@ export function createFirstRun(): { el: HTMLElement; refresh: () => Promise<void
     const cliDone = found.length > 0
     const cliDetail = el('div', { class: 'firstrun-clis' })
     if (found.length) {
-      cliDetail.append(el('span', { class: 'firstrun-row-detail', text: `Found: ${found.map((a) => a.name).join(', ')}` }))
+      cliDetail.append(
+        el('span', { class: 'firstrun-row-detail firstrun-found' }, [
+          el('span', { text: 'Found:' }),
+          ...found.flatMap((a) => [providerLogo(a.id, 13), el('span', { text: a.name })])
+        ])
+      )
     }
     for (const m of missing) {
       if (!m.installHint) continue
       cliDetail.append(
         el('div', { class: 'firstrun-cli-missing' }, [
+          providerLogo(m.id, 13),
           el('span', { class: 'firstrun-cli-name', text: m.name }),
           el('code', { class: 'firstrun-cli-cmd', text: m.installHint }),
           copyBtn(m.installHint)

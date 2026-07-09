@@ -18,6 +18,8 @@ import {
   createStepper,
   el,
   icon,
+  providerAccent,
+  providerLogo,
   type ElChild,
   type FolderBrowserHandle,
   type PathInputHandle,
@@ -33,16 +35,8 @@ import { getBridge } from '../../core/ipc/bridge'
 import { wizardClient } from './wizard.client'
 import { createPathSelection, type PathSelectionHandle, type PathState } from './path-selection'
 
-/** Per-provider accent for assignment previews (initial letter chips). Claude sits
- *  on a coral deliberately OFF the brand orange — the brand hue means attention. */
-const PROVIDER_COLORS: Record<string, string> = {
-  claude: '#e0755f',
-  codex: '#4da3ff',
-  gemini: '#a78bfa',
-  aider: '#3fc873',
-  opencode: '#2dd4bf'
-}
-const CUSTOM_COLOR = '#e879f9'
+// Provider identity (accent + official mark) lives in components/provider-logo —
+// one source for the wizard, settings, usage, and pane chrome.
 
 const basename = (p: string): string =>
   p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? ''
@@ -249,10 +243,7 @@ export const wizardFeature: UiFeature = {
       return out.slice(0, paneCount)
     }
 
-    function providerColor(id: string): string {
-      if (id.startsWith('custom:')) return CUSTOM_COLOR
-      return PROVIDER_COLORS[id] ?? '#2dd4bf'
-    }
+    const providerColor = (id: string): string => providerAccent(id)
     function providerInitial(id: string): string {
       if (id.startsWith('custom:')) return '›'
       return roster.find((a) => a.id === id)?.name ?? id
@@ -691,10 +682,7 @@ export const wizardFeature: UiFeature = {
         }
       })
       const customRow = el('div', { class: 'wizard-agent-row wizard-custom-row' }, [
-        el('span', { class: 'wizard-agent-head' }, [
-          el('span', { class: 'wizard-agent-dot', style: { background: CUSTOM_COLOR } }),
-          customInput
-        ]),
+        el('span', { class: 'wizard-agent-head' }, [providerLogo('custom:', 16), customInput]),
         el('span', { class: 'wizard-agent-tail' }, [customStepper.el])
       ])
 
@@ -848,7 +836,7 @@ export const wizardFeature: UiFeature = {
         rosterHost.append(
           el('div', { class: 'wizard-agent-row' + (a.installed ? '' : ' is-missing') }, [
             el('span', { class: 'wizard-agent-head' }, [
-              el('span', { class: 'wizard-agent-dot', style: { background: providerColor(a.id) } }),
+              providerLogo(a.id, 18),
               el('span', { class: 'wizard-agent-name', text: a.name }),
               a.installed ? null : Pill({ text: 'not found on PATH', tone: 'warning' })
             ]),
@@ -911,12 +899,15 @@ export const wizardFeature: UiFeature = {
       if (!pickableServers.length) return
       const chips = el('div', { class: 'wizard-tools-chips' })
       for (const s of pickableServers) {
-        const chip = el('button', {
-          class: `wizard-tool-chip${selectedTools.has(s.id) ? ' is-on' : ''}`,
-          type: 'button',
-          text: s.label,
-          ariaLabel: `Include ${s.label} in this workspace`
-        }) as HTMLButtonElement
+        const chip = el(
+          'button',
+          {
+            class: `wizard-tool-chip${selectedTools.has(s.id) ? ' is-on' : ''}`,
+            type: 'button',
+            ariaLabel: `Include ${s.label} in this workspace`
+          },
+          [providerLogo(s.id, 12), el('span', { text: s.label })]
+        ) as HTMLButtonElement
         chip.setAttribute('aria-pressed', String(selectedTools.has(s.id)))
         chip.onclick = (): void => {
           if (selectedTools.has(s.id)) selectedTools.delete(s.id)
@@ -962,7 +953,14 @@ export const wizardFeature: UiFeature = {
       clear(previewHost)
       const spec = TEMPLATES[paneCount]
       previewHost.append(
-        MiniGridPreview({ rows: spec.rows, cols: spec.cols, assignments: expandAssignments(), providerColor, providerInitial })
+        MiniGridPreview({
+          rows: spec.rows,
+          cols: spec.cols,
+          assignments: expandAssignments(),
+          providerColor,
+          providerInitial,
+          providerIcon: (id) => providerLogo(id, 12)
+        })
       )
 
       swarmHint.textContent = swarmRoles ? 'Swarm manifest armed — roles land on the panes.' : ''

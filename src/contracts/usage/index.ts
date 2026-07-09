@@ -33,8 +33,9 @@ export interface PlanUsage {
   /** Credit-style balance where a provider has one (label + remaining units). */
   credits?: { label: string; remaining: number }
   /** Current-window spend where the provider exposes one (Phase-7/07 — the
-   *  api-key admin/spend rows). A display value, never a bill. */
-  spend?: { amount: number; currency: string }
+   *  api-key admin/spend rows; Claude's extra-usage overage box). A display
+   *  value, never a bill. `limit` = the monthly cap, when the provider has one. */
+  spend?: { amount: number; currency: string; limit?: number }
   /** Epoch ms of the fetch that produced this data (stale keeps the OLD stamp). */
   fetchedAt: number
   health: UsageHealth
@@ -102,14 +103,10 @@ export const USAGE_DISPLAY_DEFAULTS: UsageDisplayConfig = {
   pinOrder: []
 }
 
-// ── Pace baseline (Phase-7/12, feeds the 7/02 engine): which days/hours count
-//    as ACTIVE time. Null = no baseline — wall-clock pacing (the default).
-export interface UsagePaceConfig {
-  /** Days 0(Sun)–6(Sat) that count as work days; null = every day. */
-  workDays: number[] | null
-  /** Active hours [startHour, endHour) in 0–24; null = all day. */
-  workHours: [number, number] | null
-}
+// The 7/12 "pace baseline" (work days/hours) is GONE, deliberately: pace is
+// now pure arithmetic over what the meter itself knows — usage consumed, time
+// elapsed, time left to reset. A config that asked the user to describe their
+// work week to make a burn-rate honest was the model apologizing for itself.
 
 // ── Threshold alerts (Phase-7/09): the meter taps you on the shoulder through
 //    the HOUSE toast system — no OS spam. Copy is composed in ONE place (main,
@@ -128,7 +125,9 @@ export interface UsageAlertConfig {
 export const USAGE_ALERT_DEFAULTS: UsageAlertConfig = { quiet: 80, warn: 95, confetti: false }
 
 export interface UsageAlert {
-  kind: 'threshold' | 'reset'
+  /** threshold = a % crossing · pace = the PROJECTION flipped to runs-out
+   *  (predictive — can fire well under the thresholds) · reset = fresh window. */
+  kind: 'threshold' | 'pace' | 'reset'
   /** threshold alerts only: which shoulder-tap this is. */
   level?: 'quiet' | 'warn'
   providerId: string
@@ -177,11 +176,35 @@ export interface CostDay {
   tokens: number
 }
 
+/** Per-model totals over the scan window — the "cost efficiency" cut: which
+ *  model burned what, and at what effective rate. `spend === 0` with tokens
+ *  present = the model had no price row (the honest under-count, labeled). */
+export interface CostModel {
+  /** The model id as the log recorded it, verbatim. */
+  model: string
+  spend: number
+  tokens: number
+  /** True when this model's tokens were counted but couldn't be priced. */
+  unpriced?: boolean
+}
+
+/** Per-project totals (Codex only — `session_meta.cwd` names the project the
+ *  session ran in; Claude logs carry no decodable cwd). Spend-heavy first. */
+export interface CostProject {
+  project: string
+  spend: number
+  tokens: number
+}
+
 /** Result of one on-demand local log scan. A missing/absent log dir yields an
  *  EMPTY scan with a human `reason` — never a throw (ADR 0007 rule 5). */
 export interface CostScan {
   providerId: string
   days: CostDay[]
+  /** Per-model breakdown over the same window, spend-heavy first. */
+  models?: CostModel[]
+  /** Per-project breakdown, when the log names one (Codex). */
+  projects?: CostProject[]
   currency: string
   /** Present when the scan is empty, capped, or partially unpriced. */
   reason?: string
@@ -207,6 +230,9 @@ export interface PaceReport {
   runOutAt?: number
   /** Projected unused points at reset — present only when it lands after. */
   surplusPct?: number
+  /** P(exhaust before reset) in whole percent (5..95, steps of 5) under the
+   *  stated burn-rate ±50% model — absent when it would be noise. */
+  runOutRiskPct?: number
 }
 
 // ── Key slots (Phase-7/05, ADR 0007.a): paste-once OS-vault ciphertext,

@@ -16,6 +16,12 @@ export const TerminalChannels = {
   limit: 'terminal:limit' // daemon -> renderer: a pane's agent hit a usage limit (Phase-4/04)
 } as const
 
+export const ContextChannels = {
+  watch: 'context:watch', // renderer -> main: track a pane's agent session (paneId, provider, cwd)
+  unwatch: 'context:unwatch', // renderer -> main: stop tracking a pane
+  change: 'context:change' // main -> renderer: a pane's context usage changed (null = no bar)
+} as const
+
 export const ClipboardChannels = {
   write: 'clipboard:write',
   read: 'clipboard:read'
@@ -31,7 +37,13 @@ export const WorkspaceChannels = {
 
 export const AgentChannels = {
   detect: 'agents:detect', // -> AgentInfo[] (which CLIs are installed)
-  command: 'agents:command' // (AgentCommandRequest) -> launch command string | null
+  command: 'agents:command', // (AgentCommandRequest) -> launch command string | null
+  // Settings § Providers: install a missing CLI in an EPHEMERAL background pty —
+  // the provider's own one-liner is injected into the user's shell, never parsed
+  // or elevated. Explicit user click only; no credentials involved (ADR 0002).
+  install: 'agents:install', // (agentId) -> AgentInstallStart ({ ok, reason? })
+  installStates: 'agents:installStates', // -> AgentInstallState[] (snapshot, so a late-mounted tab catches up)
+  installChanged: 'agents:installChanged' // main -> renderer: AgentInstallState (progress + verdict pushes)
 } as const
 
 export const TemplateChannels = {
@@ -184,10 +196,9 @@ export const UsageChannels = {
   // how resets render. Paint-only on the renderer; persisted in the KV.
   displayGet: 'usage:displayGet', // -> UsageDisplayConfig
   displaySet: 'usage:displaySet', // (partial UsageDisplayConfig) -> void (persists + re-pushes views)
-  displayChanged: 'usage:displayChanged', // main -> renderer: UsageDisplayConfig (pushed on change)
-  // 7/12 pace baseline: the work-day window the 02 engine integrates over.
-  paceCfgGet: 'usage:paceCfgGet', // -> UsagePaceConfig (workDays + workHours, or nulls = off)
-  paceCfgSet: 'usage:paceCfgSet' // (partial UsagePaceConfig) -> void (re-pushes views)
+  displayChanged: 'usage:displayChanged' // main -> renderer: UsageDisplayConfig (pushed on change)
+  // (The 7/12 pace-baseline channels are gone with the feature: pace is pure
+  // burn-rate arithmetic now — usage consumed vs time elapsed vs time left.)
 } as const
 
 export const IntegrationsChannels = {
@@ -265,6 +276,7 @@ export const AllChannels: readonly string[] = [
   ...Object.values(UpdateChannels),
   ...Object.values(BrowserChannels),
   ...Object.values(TerminalChannels),
+  ...Object.values(ContextChannels),
   ...Object.values(ClipboardChannels),
   ...Object.values(WorkspaceChannels),
   ...Object.values(TelemetryChannels),

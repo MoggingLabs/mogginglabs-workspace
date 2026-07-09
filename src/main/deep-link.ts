@@ -4,6 +4,8 @@ import {
   CONTROL_VERBS,
   ControlChannels,
   WorkspaceChannels,
+  channelFromEnv,
+  deepLinkScheme,
   type ControlCommand
 } from '@contracts'
 
@@ -12,11 +14,19 @@ import {
 // verbs ride the SAME relay (mogging://control?c=<json>) — main VALIDATES the payload
 // against the closed ControlCommand union and forwards only a clean object, so the
 // renderer never parses raw CLI input. No auth is ever involved (ADR 0002).
+//
+// PER-CHANNEL SCHEME. The OS protocol association is a single global slot per scheme and both
+// apps re-register on every launch — so if dev and an installed release shared `mogging://`,
+// whichever launched LAST would receive the other's `mogging open` / layout verbs. A repo
+// checkout therefore owns `mogging-dev://` and never touches the release's association.
+
+/** This process's scheme: `mogging` (release) or `mogging-dev` (repo checkout). */
+const scheme = (): string => deepLinkScheme(channelFromEnv())
 
 export function cwdFromUrl(url: string): string | null {
   try {
     const u = new URL(url)
-    if (u.protocol !== 'mogging:') return null
+    if (u.protocol !== scheme() + ':') return null
     const cwd = u.searchParams.get('cwd')
     return cwd ? cwd : null
   } catch {
@@ -69,11 +79,11 @@ export function sanitizeControl(raw: unknown): ControlCommand | null {
   return cmd
 }
 
-/** Parse + validate a mogging://control URL. Null for anything else/invalid. */
+/** Parse + validate a <scheme>://control URL. Null for anything else/invalid. */
 export function controlFromUrl(url: string): ControlCommand | null {
   try {
     const u = new URL(url)
-    if (u.protocol !== 'mogging:' || u.hostname !== 'control') return null
+    if (u.protocol !== scheme() + ':' || u.hostname !== 'control') return null
     const raw = u.searchParams.get('c')
     if (!raw) return null
     return sanitizeControl(JSON.parse(raw))
@@ -97,13 +107,13 @@ function deliver(getWindow: () => BrowserWindow | null, url: string): void {
 /** Register protocol + second-instance/open-url handlers. Returns the launch cwd, if any. */
 export function registerDeepLink(getWindow: () => BrowserWindow | null): void {
   if (process.defaultApp && process.argv.length >= 2) {
-    // dev: round-trip mogging:// back through this exact electron + entry script
-    app.setAsDefaultProtocolClient('mogging', process.execPath, [process.argv[1]])
+    // dev: round-trip mogging-dev:// back through this exact electron + entry script
+    app.setAsDefaultProtocolClient(scheme(), process.execPath, [process.argv[1]])
   } else {
-    app.setAsDefaultProtocolClient('mogging')
+    app.setAsDefaultProtocolClient(scheme())
   }
   app.on('second-instance', (_e, argv) => {
-    const url = argv.find((a) => a.startsWith('mogging://'))
+    const url = argv.find((a) => a.startsWith(scheme() + '://'))
     if (url) deliver(getWindow, url)
   })
   app.on('open-url', (_e, url) => deliver(getWindow, url))
@@ -111,12 +121,12 @@ export function registerDeepLink(getWindow: () => BrowserWindow | null): void {
 
 /** The cwd from a cold-start deep link (Windows/Linux pass it in argv). */
 export function initialDeepLinkCwd(): string | null {
-  const url = process.argv.find((a) => a.startsWith('mogging://'))
+  const url = process.argv.find((a) => a.startsWith(scheme() + '://'))
   return url ? cwdFromUrl(url) : null
 }
 
 /** A validated control command from a cold-start deep link, if any. */
 export function initialControlCommand(): ControlCommand | null {
-  const url = process.argv.find((a) => a.startsWith('mogging://'))
+  const url = process.argv.find((a) => a.startsWith(scheme() + '://'))
   return url ? controlFromUrl(url) : null
 }

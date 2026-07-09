@@ -1,4 +1,7 @@
-// The agent-state feature is (for now) a library consumed by the terminal feature
-// rather than an IPC module — not every feature owns channels. When it grows a
-// quiescence heuristic or standalone queries, add a FeatureModule here.
+// The agent-state feature is a library consumed by both PTY backends (daemon +
+// in-proc) rather than an IPC module — not every feature owns channels. The
+// OscParser decodes explicit signals; the ActivityTracker (the long-promised
+// quiescence heuristic) fuses them with output activity + the terminal bell into
+// the pane state the dot renders.
 export * from './osc-parser'
+export * from './activity'

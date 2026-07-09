@@ -2,6 +2,16 @@ import { copyFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 
+// Terminals spawned by Electron-based hosts (VS Code, Claude Code desktop) leak
+// ELECTRON_RUN_AS_NODE=1 into child shells. electron-vite passes its env through
+// to the Electron it spawns, which then boots as PLAIN NODE: `electron.app` is
+// undefined and the first main-side import that touches it (@sentry/electron's
+// normalize.js) throws `Cannot read properties of undefined (reading 'getAppPath')`.
+// This config module runs in the electron-vite process before Electron spawns,
+// so clearing it here fixes `npm run dev` from every terminal. The daemon is
+// unaffected — daemon-client sets ELECTRON_RUN_AS_NODE on its OWN spawn env.
+delete process.env.ELECTRON_RUN_AS_NODE
+
 // Path aliases mirror tsconfig "paths" and encode the layer seams:
 //   @contracts  shared IPC + domain types (imported by BOTH sides, depends on nothing)
 //   @backend    Node-side logic (bundled into the main/pty-host build only)

@@ -37,12 +37,13 @@ else
   exit 1
 fi
 
+# Scoped, never by image name: `taskkill //F //IM electron.exe` (and `pkill -f electron`)
+# swept the whole MACHINE — including the user's live dev app and, worse, their REAL detached
+# PTY daemons (a daemon IS electron.exe run as Node), killing live agent sessions every gate.
+# kill-devservers.mjs reaps only THIS repo's dev tree, parent-first, and spares daemons; a
+# gate's own isolated daemon is reaped by kill_daemon below via its endpoint.json pid.
 kill_electron() {
-  if [ "$IS_WIN" = 1 ]; then
-    taskkill //F //IM electron.exe >/dev/null 2>&1 || true
-  else
-    pkill -f '[e]lectron' >/dev/null 2>&1 || true
-  fi
+  node scripts/kill-devservers.mjs --quiet >/dev/null 2>&1 || true
 }
 
 # `npm run dev` returns the moment the smoke calls app.exit(), but the
@@ -58,7 +59,7 @@ kill_devserver() {
 }
 
 # Short temp root, NOT bare mktemp -d: the daemon binds a unix socket at
-# $iso/local/MoggingLabs/run/v3/daemon-<pid>.sock and macOS caps sun_path at
+# $iso/local/MoggingLabs/run/v<N>/daemon-<pid>.sock and macOS caps sun_path at
 # 104 bytes — macOS's default $TMPDIR (/var/folders/…) blows that limit.
 TMPBASE="${TMPBASE:-$(mktemp -d /tmp/mog.XXXXXX)}"
 echo "isolation root: $TMPBASE"
@@ -66,7 +67,11 @@ RESULTS=()
 
 kill_daemon() {
   local iso="$1"
-  local ep="$iso/local/MoggingLabs/run/v3/endpoint.json"
+  # Version-agnostic: the runtime dir is namespaced by DAEMON_PROTOCOL_VERSION (ADR 0006),
+  # so a literal vN here silently stops reaping the moment the protocol is bumped — every
+  # gate then leaks its daemon into the next one. Glob instead; there is only ever one.
+  local ep
+  ep=$(ls "$iso"/local/MoggingLabs/run/v*/endpoint.json 2>/dev/null | head -1)
   if [ -f "$ep" ]; then
     local pid
     pid=$(node -e "try{console.log(JSON.parse(require('fs').readFileSync('$ep','utf8')).pid)}catch{}" 2>/dev/null)
@@ -150,6 +155,8 @@ run_static() {
 }
 run_static AUDIT   node scripts/check-audit.mjs
 run_static SPACING node scripts/check-spacing.mjs --max 0
+run_static PTYSEAM node scripts/check-pty-seam.mjs
+run_static PROTOVER node scripts/check-protocol-version.mjs
 
 run_smoke SMOKE       MOGGING_SMOKE     1 180 smoke
 run_smoke MULTIPANE   MOGGING_MULTIPANE 1 180 multipane
@@ -159,6 +166,7 @@ run_smoke GIT         MOGGING_GIT       1 240 git
 run_smoke NOTIFY      MOGGING_NOTIFY    1 180 notify
 run_smoke MILESTONE   MOGGING_MILESTONE 1 300 milestone
 run_smoke FLICKER     MOGGING_FLICKER   1 240 flicker
+run_smoke CONPTY      MOGGING_CONPTY    1 180 conpty
 run_smoke PERCEPTION  MOGGING_PERCEPTION 1 240 perception
 run_smoke PANEOPS     MOGGING_PANEOPS   1 180 paneops
 run_smoke CONTROL     MOGGING_CONTROL   1 240 control

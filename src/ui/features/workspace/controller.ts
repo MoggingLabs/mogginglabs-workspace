@@ -1,11 +1,11 @@
 import { TerminalChannels } from '@contracts'
 import type { AgentState, PaneId } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { GridLayout } from '../layout'
+import { GridLayout, MAX_PANES, parseTree } from '../layout'
 import { confirmDialog, icon, showToast } from '../../components'
 import { setFocusedPane } from '../../core/layout/focus'
-import { setPaneCwd } from '../../core/layout/pane-cwd'
-import { setPaneRole, setPaneRemote } from '../../core/layout/pane-meta'
+import { setPaneCwd, getPaneCwd } from '../../core/layout/pane-cwd'
+import { setPaneRole, setPaneRemote, clearPaneRemote } from '../../core/layout/pane-meta'
 import { paneState, onAttentionChange } from '../../core/attention/attention-port'
 import { announce } from '../../core/a11y/live-region'
 import { clearPaneLaunch } from '../../core/agents/toolplan-panes'
@@ -39,6 +39,9 @@ export interface CreateOpts {
   /** Per-slot remote hosts (Phase-4/05). null = local. Name is display data. */
   remotes?: ({ hostId: string; name: string } | null)[]
   profileIds?: (string | null)[]
+  /** Serialized split-tree layout (shape + sizes). Absent/invalid → the template
+   *  grid for `paneCount` — a bad persisted row can never wedge a restore. */
+  layout?: string | null
 }
 
 export interface SwitchOpts {
@@ -64,6 +67,7 @@ export class WorkspaceController {
   // lapses. Key -> the dispose timer + the order index to restore to.
   private readonly pendingClose = new Map<string, { timer: ReturnType<typeof setTimeout>; index: number }>()
   private lastAttnTotal = 0 // for the A11Y-01 "needs your input" announcement
+  private readonly attnSeen = new Set<PaneId>() // panes mid-attention-episode (one pulse each)
 
   constructor(
     private readonly tabsEl: HTMLElement,
@@ -106,14 +110,26 @@ export class WorkspaceController {
       paneCwds: opts.paneCwds,
       roles: opts.roles,
       remotes: opts.remotes,
-      profileIds: opts.profileIds
+      profileIds: opts.profileIds,
+      layout: opts.layout ?? undefined
     }
+
+    // BEFORE the grid exists, not merely before `apply`: GridLayout's constructor applies a
+    // 1-pane grid, which synchronously constructs pane 1's TerminalPane — and a pane reads
+    // its remote + cwd seeds at spawn time. Published after construction, pane 1 (and only
+    // pane 1) spawned locally at the daemon's fallback cwd: a worktree-isolated slot 1
+    // opened its shell in $HOME while its branch chip claimed mogging/<slug>.
+    this.publishRemotes(meta)
+    this.publishPaneCwds(meta) // seed the pty's cwd + per-pane git (2/03)
 
     const container = document.createElement('div')
     container.className = 'workspace-view'
     this.hostEl.append(container)
     const layout = new GridLayout(container, meta.id, ordinal * 100, (paneId) =>
-      setFocusedPane({ paneId, cwd: meta.cwd })
+      // The pane's OWN cwd (worktree isolation, 3/03; OSC-7 refined), not the workspace
+      // root: "launch in focused pane" and "review focused pane" act on this value, and
+      // the root made both escape the pane's worktree.
+      setFocusedPane({ paneId, cwd: getPaneCwd(paneId) || meta.cwd })
     )
 
     const view: WorkspaceView = {
@@ -132,10 +148,27 @@ export class WorkspaceController {
       const paneId = (e as CustomEvent<{ paneId: number }>).detail?.paneId
       if (paneId != null) this.closePane(meta.id, paneId)
     })
+    // Pane ⋯ menu "Split right/down" bubbles here — the controller (not the grid)
+    // owns splits, because the new pane's cwd must be seeded before its slot exists.
+    container.addEventListener('mogging:split-pane', (e) => {
+      const d = (e as CustomEvent<{ paneId: number; dir: 'h' | 'v' }>).detail
+      if (d) this.splitPane(meta.id, d.paneId, d.dir)
+    })
 
-    this.publishRemotes(meta) // BEFORE apply: panes read this at spawn time (4/05)
-    layout.apply(meta.paneCount)
-    this.publishPaneCwds(meta) // seed per-pane git with the workspace cwd (2/03)
+    // Any layout mutation (template, split, close, seam resize, drag-rearrange) keeps
+    // the persisted manifest true: pane count + the serialized split tree.
+    layout.onLayoutChange = () => {
+      meta.paneCount = layout.paneCount
+      meta.layout = layout.serialize()
+      this.refreshAttention()
+      this.onChange()
+    }
+
+    // A restored workspace re-applies its exact arrangement (shape + sizes); any
+    // doubt about the persisted tree falls back to the template grid for the count.
+    const restoredTree = opts.layout ? parseTree(opts.layout, meta.paneCount) : null
+    if (restoredTree) layout.applyTree(restoredTree)
+    else layout.apply(meta.paneCount)
     this.publishRoles(meta) // swarm manifest -> role chips + daemon PaneInfo (4/01)
 
     if (opts.activate !== false) {
@@ -350,17 +383,26 @@ export class WorkspaceController {
       if (on) v.tab.setAttribute('aria-current', 'true')
       else v.tab.removeAttribute('aria-current')
     }
-    setFocusedPane({
-      paneId: view.layout.focusedPaneId() ?? ((view.meta.ordinal * 100 + 1) as PaneId),
-      cwd: view.meta.cwd
-    })
+    const focusId = view.layout.focusedPaneId() ?? ((view.meta.ordinal * 100 + 1) as PaneId)
+    // The pane's OWN cwd (worktree isolation, 3/03), workspace root as the fallback —
+    // same contract as the grid's focus callback in `create`.
+    setFocusedPane({ paneId: focusId, cwd: getPaneCwd(focusId) || view.meta.cwd })
     this.refreshAttention() // activating a workspace clears its ring (you're looking at it)
     this.onChange()
     // User-initiated selection lands in the grid; restore keeps the launcher up.
     // AFTER onChange: the reveal must see the published workspace snapshot — the
     // view port routes an empty grid Home (UX-16), and on the FIRST create the
     // snapshot is empty until onChange publishes it.
-    if (opts.reveal !== false) setActiveView('grid')
+    if (opts.reveal !== false) {
+      setActiveView('grid')
+      // The ring the switch just cleared hands off INSIDE the grid: every pane whose
+      // agent needs input flashes once (attention color, focus-glow intensity), so
+      // opening the workspace answers "which pane called me?" without scanning dots.
+      // AFTER the reveal — an animation on a display:none subtree never plays.
+      for (const paneId of view.layout.paneIds()) {
+        if (paneState(paneId) === 'attention') view.layout.pulseAttention(paneId)
+      }
+    }
   }
 
   /** Close one pane of a workspace; closing its last pane closes the workspace. */
@@ -400,8 +442,20 @@ export class WorkspaceController {
       let busy = false
       for (const paneId of view.layout.paneIds()) {
         const s: AgentState = paneState(paneId)
-        if (s === 'attention') attnCount++
-        else if (s === 'busy') busy = true
+        if (s === 'attention') {
+          attnCount++
+          // Rising edge while this workspace is already in front of you: the toast is
+          // deliberately suppressed for the visible world (notify feature), so the pulse
+          // is the call. `attnSeen` makes it ONE pulse per attention episode — a chatty
+          // refresh (any pane, any workspace, re-runs this scan) must not re-flash.
+          if (!this.attnSeen.has(paneId)) {
+            this.attnSeen.add(paneId)
+            if (active && activeView() === 'grid') view.layout.pulseAttention(paneId)
+          }
+        } else {
+          this.attnSeen.delete(paneId) // episode over; the next flip may pulse again
+          if (s === 'busy') busy = true
+        }
       }
       attnTotal += attnCount
 
@@ -534,12 +588,64 @@ export class WorkspaceController {
   applyTemplate(n: number): void {
     const a = this.active()
     if (!a) return
-    a.layout.apply(n)
+    // Count first, then publish, THEN apply: `apply` constructs any new TerminalPanes, and
+    // a pane reads its cwd at spawn time. Published afterwards, a pane added by growing the
+    // grid started its shell in the daemon's directory — the same bug `create` had.
     a.meta.paneCount = n
-    this.publishPaneCwds(a.meta) // seed any newly-added panes' cwd for git (2/03)
+    this.publishPaneCwds(a.meta) // seed the new panes' pty cwd + per-pane git (2/03)
+    a.layout.apply(n)
     getTelemetry().captureEvent({ name: 'layout.applied', props: { panes: n } })
     this.refreshAttention()
     this.onChange()
+  }
+
+  /** Add a terminal by splitting a pane (⋯ menu / titlebar + / palette / shortcut).
+   *  `paneId` null → the workspace's focused pane; `dir` omitted → the pane's longer
+   *  axis. The receiving LINE re-equalizes (every terminal in it gets an equal share). */
+  splitPane(wsId: string, paneId?: number | null, dir?: 'h' | 'v'): void {
+    const view = this.views.get(wsId)
+    if (!view) return
+    if (view.layout.paneCount >= MAX_PANES) {
+      showToast({
+        title: 'Pane limit reached',
+        body: `A workspace holds at most ${MAX_PANES} terminals.`
+      })
+      return
+    }
+    const target = paneId ?? view.layout.focusedPaneId()
+    if (target == null) return
+    // Seed BEFORE the slot exists (a pane reads its cwd/remote at spawn time): a new
+    // terminal is a plain local shell in the split pane's own directory (fallback:
+    // the workspace root). Reusing a closed slot's id must never resurrect that
+    // slot's remote host or swarm role.
+    const newId = view.layout.peekNextPaneId()
+    clearPaneRemote(newId)
+    setPaneRole(newId, '')
+    const cwd = getPaneCwd(target as PaneId) || view.meta.cwd
+    if (cwd) setPaneCwd(newId, cwd)
+    this.scrubManifestSlot(view.meta, newId - view.meta.ordinal * 100 - 1, cwd)
+    if (view.layout.splitPane(target, dir) == null) return
+    getTelemetry().captureEvent({
+      name: 'pane.split',
+      props: { panes: view.layout.paneCount }
+    })
+  }
+
+  /** Split the ACTIVE workspace's focused pane (layout menu +, palette, Ctrl+Shift+D). */
+  splitActive(dir?: 'h' | 'v'): void {
+    const a = this.active()
+    if (a) this.splitPane(a.meta.id, a.layout.focusedPaneId(), dir)
+  }
+
+  /** Reusing slot `i` for a fresh plain terminal: the persisted manifest must agree,
+   *  or the next restore would resurrect the OLD slot's agent/role/remote there. */
+  private scrubManifestSlot(meta: WorkspaceMeta, i: number, cwd: string): void {
+    if (i < 0) return
+    if (meta.assignments && i < meta.assignments.length) meta.assignments[i] = 'shell'
+    if (meta.roles && i < meta.roles.length) meta.roles[i] = null
+    if (meta.remotes && i < meta.remotes.length) meta.remotes[i] = null
+    if (meta.profileIds && i < meta.profileIds.length) meta.profileIds[i] = null
+    if (meta.paneCwds && i < meta.paneCwds.length) meta.paneCwds[i] = cwd || null
   }
 
   activePaneCount(): number {

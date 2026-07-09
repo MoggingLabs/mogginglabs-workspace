@@ -6,6 +6,7 @@ import type {
   KillCommand,
   ResizeCommand,
   SpawnRequest,
+  SpawnResult,
   StateEvent,
   WriteCommand
 } from '@contracts'
@@ -14,8 +15,10 @@ import { getBridge } from '../../core/ipc/bridge'
 /** Typed client for the terminal feature's IPC surface. The only place in the UI
  *  that knows the terminal channel names. */
 export const terminalClient = {
-  spawn: (req: SpawnRequest): Promise<void> =>
-    getBridge().invoke(TerminalChannels.spawn, req) as Promise<void>,
+  /** Resolves with `{ existing }` — true when the backend reattached us to a session it
+   *  already held (a surviving daemon), so nothing must be typed into the pane. */
+  spawn: (req: SpawnRequest): Promise<SpawnResult> =>
+    getBridge().invoke(TerminalChannels.spawn, req) as Promise<SpawnResult>,
   write: (cmd: WriteCommand): void => getBridge().send(TerminalChannels.write, cmd),
   resize: (cmd: ResizeCommand): void => getBridge().send(TerminalChannels.resize, cmd),
   kill: (cmd: KillCommand): void => getBridge().send(TerminalChannels.kill, cmd),

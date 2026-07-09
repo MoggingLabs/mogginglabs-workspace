@@ -21,7 +21,7 @@ const T = (iso: string): number => Date.parse(iso)
 
 // Base weekly window: Mon Jan 5 00:00Z -> Mon Jan 12 00:00Z.
 const RESET_MON = '2026-01-12T00:00:00Z'
-// Work-week window for the baseline pair: Fri Jan 9 00:00Z -> Fri Jan 16 00:00Z.
+// Friday-anchored week for the idle-weekend fixture: Fri Jan 9 -> Fri Jan 16.
 const RESET_FRI = '2026-01-16T00:00:00Z'
 
 export const PACE_GOLDENS: PaceGolden[] = [
@@ -47,18 +47,11 @@ export const PACE_GOLDENS: PaceGolden[] = [
     expect: { verdict: 'runs-out', deltaRounded: 1, text: 'Ahead of pace — runs out ~Thu 07:06 at this rate' }
   },
   {
-    name: 'idle weekend WITHOUT baseline (raw calendar screams)',
+    name: 'idle weekend (calendar pacing: unused share projected honestly)',
     window: { label: 'Weekly', usedPct: 20, resetsAt: RESET_FRI },
     now: T('2026-01-12T09:00:00Z'),
     opts: { windowMs: WEEK_MS },
     expect: { verdict: 'surplus', deltaRounded: -28, text: 'Behind pace — ~59% likely unused at reset' }
-  },
-  {
-    name: 'idle weekend WITH baseline (Mon–Fri 9–18: the weekend stops counting)',
-    window: { label: 'Weekly', usedPct: 20, resetsAt: RESET_FRI },
-    now: T('2026-01-12T09:00:00Z'),
-    opts: { windowMs: WEEK_MS, workDays: [1, 2, 3, 4, 5], workHours: [9, 18] },
-    expect: { verdict: 'on-pace', deltaRounded: 0, text: 'On pace for the Weekly window' }
   },
   {
     name: 'exhausted (100% used mid-window: runs out NOW)',

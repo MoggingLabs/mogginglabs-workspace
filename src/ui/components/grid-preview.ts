@@ -8,6 +8,9 @@ export interface GridPreviewOpts {
   assignments?: (string | null | undefined)[]
   providerColor?: (id: string) => string
   providerInitial?: (id: string) => string
+  /** Optional provider mark for a tile (the wizard passes providerLogo); when it
+   *  returns null the initial-letter chip renders as before. */
+  providerIcon?: (id: string) => HTMLElement | null
 }
 
 /**
@@ -30,11 +33,14 @@ export function MiniGridPreview(opts: GridPreviewOpts): HTMLElement {
     if (assigned && assigned !== 'shell') {
       cell.classList.add('is-filled')
       cell.style.setProperty('--cell-accent', opts.providerColor?.(assigned) ?? 'var(--accent)')
+      const mark = opts.providerIcon?.(assigned)
       cell.append(
-        el('span', {
-          class: 'grid-preview-chip',
-          text: (opts.providerInitial?.(assigned) ?? assigned).slice(0, 1).toUpperCase()
-        })
+        mark
+          ? el('span', { class: 'grid-preview-chip grid-preview-chip--logo' }, [mark])
+          : el('span', {
+              class: 'grid-preview-chip',
+              text: (opts.providerInitial?.(assigned) ?? assigned).slice(0, 1).toUpperCase()
+            })
       )
     }
     grid.append(cell)

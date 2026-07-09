@@ -72,7 +72,7 @@ renderer is tuned once and behaves identically everywhere. See
 > the browser dock + first-run/update UX + signing readiness.)
 
 ```bash
-npm install        # builds native modules (node-pty). See note below.
+npm install        # compiles native modules (node-pty, better-sqlite3). Needs a C++ toolchain — see below.
 npm run dev        # launch the app in dev mode
 ```
 
@@ -116,14 +116,37 @@ perf + perception budgets: [`docs/05`](docs/05-perf-budget.md) / [`docs/07`](doc
 `better-sqlite3`, built against the exact Node/Electron ABI via `.npmrc` (`build_from_source=true`)
 plus `buildDependenciesFromSource: true` in `electron-builder.yml` (the `postinstall` runs
 `electron-builder install-app-deps`). So **`npm install` requires a C++ toolchain:**
-- **Windows:** VS 2022 **C++ Build Tools** (VCTools workload) + **`node-gyp` ≥ 13** (devDep —
-  older node-gyp fails the MSBuild step on VS 2022 / Node 24) + Python with **`setuptools`**
-  (`pip install setuptools`, since Python ≥ 3.12 dropped `distutils`). Install the compiler:
-  `winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"`.
+- **Windows:** VS 2022 **C++ Build Tools** (VCTools workload) + the **Spectre-mitigated MSVC
+  libraries** + **`node-gyp` ≥ 13** (devDep — older node-gyp fails the MSBuild step on VS 2022 /
+  Node 24) + Python with **`setuptools`** (`pip install setuptools`, since Python ≥ 3.12 dropped
+  `distutils`). The Spectre libs are **not optional and not part of the VCTools workload**:
+  `node-pty`'s `binding.gyp` sets `'SpectreMitigation': 'Spectre'` unconditionally, and without
+  them MSBuild stops with `error MSB8040`. Install both together:
+  ```powershell
+  winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --add Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre"
+  ```
+  Already have the Build Tools? Add the component to the existing install (**elevated** shell):
+  ```powershell
+  & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vs_installer.exe" modify --installPath "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools" --add Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre --quiet --norestart
+  ```
 - **macOS:** Xcode Command Line Tools.
 - **Linux (Debian/Ubuntu):** `sudo apt install build-essential python3 python3-setuptools`
   (Fedora: `sudo dnf install @development-tools python3-setuptools`). Headless smokes
   need `xvfb`. Packaging: `npx electron-builder --linux` (AppImage + deb).
+
+**After an Electron major bump — rebuild, or the app will refuse to start.** The compiled `.node`
+files carry an ABI (`NODE_MODULE_VERSION`); Electron 39 wants 140, Electron 37 wanted 132. A stale
+`build/` loads as a mismatch, so `npm run rebuild:native` clears both build trees and recompiles
+them against the installed Electron. (Plain `install-app-deps` cannot do this on a dirty tree:
+node-gyp finishes with `os.rename(tmp, 'binding.sln')`, and Windows rename refuses an existing
+destination — you get `FileExistsError: [WinError 183]`, which looks like a bug and is really a
+stale build dir.) The app **fails loudly** on a stale or missing addon rather than opening a broken
+window: `src/main/native-preflight.ts` dlopens every addon at boot and exits 1 with the rebuild
+command.
+
+*Windows troubleshooting.* If the `node-pty` build dies with `'GetCommitHash.bat' is not recognized`,
+your environment sets `NoDefaultCurrentDirectoryInExePath=1` — `cmd.exe` then refuses to run winpty's
+batch file from its own directory. Clear it for the build shell (`Remove-Item Env:NoDefaultCurrentDirectoryInExePath`).
 
 Native modules are `asarUnpack`ed for packaging. See [ADR 0001](docs/adr/0001-electron-over-tauri.md).
 

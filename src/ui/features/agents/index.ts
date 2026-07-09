@@ -8,12 +8,13 @@ import { getBridge } from '../../core/ipc/bridge'
 import { getFocusedPane } from '../../core/layout/focus'
 import { setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
 import { onAgentLaunchRequest, announceProfileFailover } from '../../core/agents/launch-port'
+import { setPaneAgentSession } from '../../core/agents/agent-session-port'
 import { setCommands } from '../../core/commands/command-port'
 import { setActiveView } from '../../core/shell/view-port'
 import { requestSettingsTab } from '../../core/shell/settings-tab-port'
 import { getWorkspaces, workspaceIdForPane } from '../../core/workspace/workspace-info-port'
 import { onProfilesChanged } from '../../core/agents/profiles-port'
-import { isPaneLive, whenPaneLive } from '../../core/terminal/liveness-port'
+import { isPaneLive, wasPaneReattached, whenPaneLive } from '../../core/terminal/liveness-port'
 import { getTelemetry } from '../../core/telemetry'
 import { showToast } from '../../components'
 import { agentsClient } from './agents.client'
@@ -145,11 +146,33 @@ export const agentsFeature: UiFeature = {
       // fixed-delay behavior). Found by the Linux CI sweep: slow machines lost
       // template-lineup launches entirely.
       await whenPaneLive(paneId, 15000)
+      // RESTORE into a pane the daemon never let die. The PTY outlives the app (ADR 0006),
+      // so on the next launch the pane reattaches to a session whose agent is still running
+      // — and typing `claude --resume` there does not relaunch it, it types the words into
+      // the running agent's prompt. Adopt the session instead: label it, claim its CLI for
+      // the MCP chip, launch nothing. A fresh spawn (cold daemon) reports existing=false
+      // and takes the normal path below.
+      if (resume && wasPaneReattached(paneId)) {
+        const custom = provider.startsWith('custom:')
+        const label = custom
+          ? provider.slice('custom:'.length).trim().split(/\s+/)[0] || 'custom'
+          : (nameById.get(provider) ?? provider)
+        setPaneLabel(paneId as PaneId, label)
+        const reCli = PROVIDER_CLI[provider]
+        if (reCli) recordPaneCli(paneId, reCli)
+        // Context bar: the adopted session predates this app run, so the log
+        // matcher may look back in time (agent-session port -> context feature).
+        setPaneAgentSession(paneId as PaneId, { provider, cwd, adopted: true })
+        return
+      }
       if (provider.startsWith('custom:')) {
         const cmd = provider.slice('custom:'.length).trim()
         if (!cmd) return
         agentsClient.launchInto(paneId, cmd)
         setPaneLabel(paneId as PaneId, cmd.split(/\s+/)[0] || 'custom')
+        // Published even though unsupported: it CLEARS any previous agent's context
+        // bar in this pane (the context feature filters non-context providers).
+        setPaneAgentSession(paneId as PaneId, { provider, cwd })
         // Provider id only — NEVER the command text (ADR 0005/0002).
         getTelemetry().captureEvent({ name: 'agent.launched', props: { provider: 'custom', resume } })
         return
@@ -176,6 +199,9 @@ export const agentsFeature: UiFeature = {
       // Pane-meta carries the profile NAME only (⋯ menu note, 6/04) — never env.
       // A deleted/unknown id resolves to no name: the note simply disappears.
       setPaneProfile(paneId as PaneId, mine.find((p) => p.id === effectiveProfile)?.name)
+      // Context bar: LAUNCH cwd + profile ID (the id names the config home main-side;
+      // env values never ride the port — ADR 0002).
+      setPaneAgentSession(paneId as PaneId, { provider, cwd, profileId: effectiveProfile })
       setPaneLabel(paneId as PaneId, nameById.get(provider) ?? provider)
       // Booleans/ids only — never env values or command text (ADR 0005).
       getTelemetry().captureEvent({ name: 'agent.launched', props: { provider, resume, profiled: !!effectiveProfile } })

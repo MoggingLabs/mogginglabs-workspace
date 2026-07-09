@@ -8,6 +8,7 @@ import { terminalFeature } from './features/terminal'
 import { agentsFeature } from './features/agents'
 import { wizardFeature } from './features/wizard'
 import { gitFeature } from './features/git'
+import { contextFeature } from './features/context'
 import { reviewFeature } from './features/review'
 import { boardFeature } from './features/board'
 import { paletteFeature } from './features/palette'
@@ -36,6 +37,7 @@ export function start(): void {
   registerFeature(agentsFeature) // agent detection + launch commands (wizard/palette/pane menu)
   registerFeature(wizardFeature) // new-workspace wizard: Start · Layout · Agents (06b contracts)
   registerFeature(gitFeature) // per-pane read-only git branch + dirty (Phase-2/03)
+  registerFeature(contextFeature) // per-pane agent context bar: CLI session-log tail -> header bar
   registerFeature(reviewFeature) // pre-ship diff review: redacted, text-only, guarded merge (Phase-3/04)
   registerFeature(boardFeature) // local Kanban board: cards that launch agents (Phase-3/05)
   registerFeature(paletteFeature) // Ctrl/Cmd+K command palette over the command port

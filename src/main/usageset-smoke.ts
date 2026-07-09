@@ -222,7 +222,7 @@ export function runUsageSetSmoke(win: BrowserWindow): void {
         `(() => { const p = document.querySelector('.usage-privacy-block'); return !!p && /encrypted by your OS/.test(p.textContent) && /opt-in, OFF by default/.test(p.textContent) })()`
       )
       const oneHomeOk = await ES<boolean>(
-        `document.querySelectorAll('.usage-stub-row').length === 0 && document.querySelectorAll('.usage-display-cfg').length === 1 && document.querySelectorAll('.usage-alert-cfg').length === 1 && document.querySelectorAll('.usage-pace-cfg').length === 1`
+        `document.querySelectorAll('.usage-stub-row').length === 0 && document.querySelectorAll('.usage-display-cfg').length === 1 && document.querySelectorAll('.usage-alert-cfg').length === 1 && document.querySelectorAll('.usage-cost-cfg').length === 1`
       )
 
       const pass =

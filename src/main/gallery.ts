@@ -129,20 +129,17 @@ export function runGallery(win: BrowserWindow): void {
         const tag = t === 'midnight' ? 'dark' : 'light'
         await ES(`window.__mogging.setTheme('${t}')`)
         await sleep(400)
+        // Home is the ZERO-WORKSPACE surface (and the boot launcher) — there is no Home
+        // button any more, and view('home') is honoured only while no workspace exists,
+        // which is exactly the state these two shots stage.
         await part(`${tag}-home-empty`, async () => {
-          // Closing board/wizard with zero workspaces lands on an empty grid view
-          // (logged as UX finding) — toggle Home back on before the snap.
-          await ES(
-            `(document.querySelector('#content.view-home') ? 1 : (document.querySelector('.titlebar-right .icon-btn[aria-label="Home"]')?.click(), 1))`
-          )
+          await ES(`window.__mogging.view('home')`)
           await sleep(400)
           await snap(`${tag}-home-empty`)
         })
         // First-run checklist (6/06): fresh state, so it shows live on Home.
         await part(`${tag}-firstrun`, async () => {
-          await ES(
-            `(document.querySelector('#content.view-home') ? 1 : (document.querySelector('.titlebar-right .icon-btn[aria-label="Home"]')?.click(), 1))`
-          )
+          await ES(`window.__mogging.view('home')`)
           await ES(`window.__mogging.firstrun && window.__mogging.firstrun.refresh()`)
           await sleep(600)
           await snap(`${tag}-firstrun`)
@@ -652,8 +649,7 @@ export function runGallery(win: BrowserWindow): void {
             `(() => {
               const set = (sel, v) => { const i = document.querySelector(sel); if (i) { i.value = v; i.dispatchEvent(new Event('input')) } }
               set('.prof-name', 'Work')
-              set('.prof-env-key', 'FAKE_KEY')
-              set('.prof-env-val', 'sk-THISLOOKSLIKEASECRET123')
+              set('.prof-email', 'not-an-email')
               const b = document.querySelector('button[aria-label="Save profile"]'); if (b) b.click()
               return 1
             })()`
@@ -718,13 +714,9 @@ export function runGallery(win: BrowserWindow): void {
           await dismissAll()
         })
 
-        await part(`${tag}-home`, async () => {
-          await click('.titlebar-right .icon-btn[aria-label="Home"]')
-          await sleep(500)
-          await snap(`${tag}-home`)
-          await click('.titlebar-right .icon-btn[aria-label="Home"]')
-          await sleep(300)
-        })
+        // (No `${tag}-home` shot here. By this point the gallery has built workspaces, and
+        // Home is unreachable once one exists — the grid owns the app. The launcher is
+        // captured above as `${tag}-home-empty`, in the only state it can be seen.)
       }
 
       writeFileSync(join(dir, 'errors.json'), JSON.stringify({ count: errors.length, errors }, null, 2))

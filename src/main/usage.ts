@@ -1,6 +1,6 @@
 import { app, ipcMain, type BrowserWindow } from 'electron'
 import { UsageChannels, USAGE_CADENCES, USAGE_PROVIDERS, USAGE_ALERT_DEFAULTS, USAGE_DISPLAY_DEFAULTS, findProvider, type PlanUsage, type UsageCadence } from '@contracts'
-import type { PlanUsageView, PaceView, UsageConfig, UsageConfigPatch, CostScan, UsageAlertConfig, UsageDisplayConfig, UsagePaceConfig } from '@contracts'
+import type { PlanUsageView, PaceView, UsageConfig, UsageConfigPatch, CostScan, UsageAlertConfig, UsageDisplayConfig } from '@contracts'
 import {
   createUsageService,
   fakeAdapter,
@@ -9,11 +9,12 @@ import {
   computePace,
   formatVerdict,
   formatPaceDelta,
+  formatRisk,
   formatReset,
   PACE_SEVERITY,
   resolveHome,
   scanCost,
-  costLogDir,
+  costLogDirs,
   readHistory,
   createStatusService,
   evaluateThresholds,
@@ -104,35 +105,37 @@ function windowMsFor(label: string): number | null {
 
 const SEVERITY_RANK = { 'runs-out': 2, surplus: 1, 'on-pace': 0 } as const
 
-/** Attach the worst window's pace to a plan (fresh/stale only — an
- *  error/unconfigured tile renders its age + reason, never a forecast).
- *  `pace` is the 7/12 work-day baseline — nulls mean wall-clock pacing. */
-function toView(p: PlanUsage, pace?: UsagePaceConfig): PlanUsageView {
+/** Attach pace to EVERY paceable window (the session limit AND the weekly
+ *  limit AND any model lane pace themselves — both forecasts, side by side),
+ *  plus the worst window's pace at the plan level (the gauge/alerts read
+ *  that one). Fresh/stale only — an error/unconfigured tile renders its age
+ *  + reason, never a forecast. */
+function toView(p: PlanUsage): PlanUsageView {
   if (p.health !== 'fresh' && p.health !== 'stale') return p
   const tz = -new Date().getTimezoneOffset()
   let best: PaceView | undefined
   let bestRank = -1
-  for (const w of p.windows) {
+  const windows = p.windows.map((w) => {
     const windowMs = w.windowMs && w.windowMs > 0 ? w.windowMs : windowMsFor(w.label)
-    if (!windowMs) continue
-    const report = computePace(w, Date.now(), {
-      windowMs,
-      tzOffsetMinutes: tz,
-      ...(pace?.workDays && pace.workHours ? { workDays: pace.workDays, workHours: pace.workHours } : {})
-    })
-    if (!report) continue
+    if (!windowMs) return w
+    const report = computePace(w, Date.now(), { windowMs, tzOffsetMinutes: tz })
+    if (!report) return w
+    const view: PaceView = {
+      verdict: report.verdict,
+      text: formatVerdict(report, w.label, tz),
+      deltaText: formatPaceDelta(report.paceDelta),
+      severity: PACE_SEVERITY[report.verdict],
+      elapsedPct: Math.round(report.elapsedPct),
+      ...(report.runOutRiskPct !== undefined ? { riskText: formatRisk(report.runOutRiskPct) } : {})
+    }
     const rank = SEVERITY_RANK[report.verdict]
     if (rank > bestRank) {
       bestRank = rank
-      best = {
-        verdict: report.verdict,
-        text: formatVerdict(report, w.label, tz),
-        deltaText: formatPaceDelta(report.paceDelta),
-        severity: PACE_SEVERITY[report.verdict]
-      }
+      best = view
     }
-  }
-  return best ? { ...p, pace: best } : p
+    return { ...w, pace: view }
+  })
+  return best ? { ...p, windows, pace: best } : { ...p, windows }
 }
 
 export function registerUsage(getWin: () => BrowserWindow | null): void {
@@ -239,34 +242,13 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
     }
   }
 
-  // 7/12 pace baseline: which days/hours count as active time (feeds 02).
-  const paceCfg = (): UsagePaceConfig => {
-    const kv = getSettingsStore()
-    const read = (key: string): unknown => {
-      try {
-        return JSON.parse(kv?.getSetting(key) ?? 'null')
-      } catch {
-        return null
-      }
-    }
-    const days = read('usage.pace.workdays')
-    const hours = read('usage.pace.workhours')
-    const workDays = Array.isArray(days) ? days.filter((d): d is number => Number.isInteger(d) && d >= 0 && d <= 6) : null
-    const workHours =
-      Array.isArray(hours) && hours.length === 2 && hours.every((h) => Number.isFinite(h) && h >= 0 && h <= 24) && hours[0] < hours[1]
-        ? ([hours[0], hours[1]] as [number, number])
-        : null
-    return { workDays: workDays && workDays.length ? workDays : null, workHours }
-  }
-
   const enrich = (plans: PlanUsage[]): PlanUsageView[] => {
     // Every reset line comes from THE reset formatter, in the ONE chosen style.
     const style = displayCfg().resetStyle
-    const pace = paceCfg()
     const tz = -new Date().getTimezoneOffset()
     return plans.map((p) => {
       const relabeled = withOutage(p)
-      const view = toView(relabeled, pace)
+      const view = toView(relabeled)
       const styled: PlanUsageView = {
         ...(relabeled !== p && view.pace ? { ...view, pace: undefined } : view),
         windows: view.windows.map((w) =>
@@ -347,23 +329,6 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
     const win = getWin()
     win?.webContents.send(UsageChannels.displayChanged, displayCfg())
     win?.webContents.send(UsageChannels.changed, enrich(service?.list() ?? []))
-  })
-
-  // 7/12 pace baseline get/set — the work-day window the 02 engine uses.
-  ipcMain.handle(UsageChannels.paceCfgGet, (): UsagePaceConfig => paceCfg())
-  ipcMain.handle(UsageChannels.paceCfgSet, (_e, raw: unknown) => {
-    const p = raw as Partial<UsagePaceConfig> | null
-    const kv = getSettingsStore()
-    if (!p || !kv) return
-    if (p.workDays === null) kv.setSetting('usage.pace.workdays', 'null')
-    else if (Array.isArray(p.workDays))
-      kv.setSetting('usage.pace.workdays', JSON.stringify(p.workDays.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6).slice(0, 7)))
-    if (p.workHours === null) kv.setSetting('usage.pace.workhours', 'null')
-    else if (Array.isArray(p.workHours) && p.workHours.length === 2) {
-      const [a, b] = p.workHours
-      if (Number.isFinite(a) && Number.isFinite(b) && a >= 0 && b <= 24 && a < b) kv.setSetting('usage.pace.workhours', JSON.stringify([a, b]))
-    }
-    getWin()?.webContents.send(UsageChannels.changed, enrich(service?.list() ?? []))
   })
 
   // 7/09 alert config: two shoulder-tap pcts + the confetti opt-in.
@@ -449,21 +414,89 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
   // any other smoke gets a labeled empty scan; real log dirs are touched in a
   // real session alone. No log path, spend figure, or token count leaves the
   // machine (ADR 0005) — these are render-only payloads.
+
+  // ── Live pricing (the CodexBar models.dev idea): one bounded PUBLIC request
+  // (no auth, no cookies) to models.dev, at most daily, persisted in the KV —
+  // scanned spend then prices at today's published rates instead of the last
+  // release's built-ins. The scan itself stays network-free: rates arrive as
+  // DATA. Real sessions only (never under smoke); every failure path falls
+  // back to the built-in table silently.
+  const PRICES_TTL_MS = 24 * 3_600_000
+  interface LivePrices {
+    at: number
+    rows: [string, { inPerMTok: number; outPerMTok: number }][]
+  }
+  let livePrices: LivePrices | null = null
+  let pricesFetching = false
+  const loadLivePrices = (): void => {
+    if (livePrices) return
+    try {
+      const raw = getSettingsStore()?.getSetting('usage.prices.modelsdev')
+      if (raw) {
+        const p = JSON.parse(raw) as LivePrices | null
+        if (p && Array.isArray(p.rows) && typeof p.at === 'number') livePrices = p
+      }
+    } catch {
+      /* corrupt cache — refetch below */
+    }
+  }
+  const refreshLivePrices = (): void => {
+    if (isSmoke || pricesFetching) return
+    loadLivePrices()
+    if (livePrices && Date.now() - livePrices.at < PRICES_TTL_MS) return
+    pricesFetching = true
+    void fetch('https://models.dev/api.json', { signal: AbortSignal.timeout(8000) })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body: unknown) => {
+        if (!body || typeof body !== 'object') return
+        const rows: [string, { inPerMTok: number; outPerMTok: number }][] = []
+        for (const providerKey of ['anthropic', 'openai']) {
+          const models = (body as Record<string, { models?: Record<string, { cost?: { input?: unknown; output?: unknown } }> }>)[providerKey]?.models
+          if (!models || typeof models !== 'object') continue
+          for (const [id, m] of Object.entries(models)) {
+            const inP = m?.cost?.input
+            const outP = m?.cost?.output
+            if (typeof inP === 'number' && typeof outP === 'number' && inP >= 0 && outP >= 0)
+              rows.push([id.toLowerCase(), { inPerMTok: inP, outPerMTok: outP }])
+          }
+        }
+        if (!rows.length) return
+        // Longest id first, so "gpt-5.4-mini" wins its prefix race with "gpt-5".
+        rows.sort((a, b) => b[0].length - a[0].length)
+        livePrices = { at: Date.now(), rows: rows.slice(0, 500) }
+        getSettingsStore()?.setSetting('usage.prices.modelsdev', JSON.stringify(livePrices))
+      })
+      .catch(() => undefined) // offline / blocked — built-ins carry on
+      .finally(() => {
+        pricesFetching = false
+      })
+  }
+
   // One cost-scan rule for BOTH consumers (IPC + the 7/11 CLI endpoint):
   // fixture world scans only the seeded dir; other smokes get a labeled
   // empty; real known log dirs in a real session alone.
-  const costScanFor = (providerId: string): CostScan => {
-    if (isFixtureWorld) return scanCost(providerId, process.env.MOGGING_USAGE_COSTDIR ?? null)
+  const costScanFor = (providerId: string, windowDays?: number): CostScan => {
+    const windowOpts = windowDays !== undefined ? { windowDays } : {}
+    if (isFixtureWorld) return scanCost(providerId, process.env.MOGGING_USAGE_COSTDIR ?? null, windowOpts)
     if (isSmoke) return { providerId, days: [], currency: 'USD', reason: 'cost scan is disabled under smoke' }
+    refreshLivePrices() // async; THIS scan uses whatever is cached, the next one the fresh rates
+    const priceOpts = livePrices ? { prices: livePrices.rows, pricesRev: String(livePrices.at) } : {}
     // The ACTIVE profile's home, same rule as the poller (order 0 wins).
     const forProvider = (getSettingsStore()?.listProfiles() ?? []).filter((p) => p.provider === providerId)
     const profile = forProvider.length ? forProvider.reduce((a, b) => (a.order <= b.order ? a : b)) : null
-    return scanCost(providerId, costLogDir(providerId, resolveHome(providerId, profile)))
+    // EVERY root the provider writes (archived sessions, moved config homes) —
+    // the single-root scan silently under-counted both (CodexBar parity).
+    return scanCost(providerId, costLogDirs(providerId, resolveHome(providerId, profile)), { ...priceOpts, ...windowOpts })
   }
-  ipcMain.handle(UsageChannels.cost, (_e, providerId: unknown): CostScan => {
+  // Payload: a bare provider id (the historical shape) or `{ providerId,
+  // windowDays }` — the Cost overview's window select (7..365, clamped).
+  ipcMain.handle(UsageChannels.cost, (_e, req: unknown): CostScan => {
+    const providerId = typeof req === 'string' ? req : ((req as { providerId?: unknown } | null)?.providerId as string | undefined)
     if (typeof providerId !== 'string' || !providerId)
       return { providerId: '', days: [], currency: 'USD', reason: 'bad request' }
-    return costScanFor(providerId)
+    const rawWd = typeof req === 'object' && req ? Number((req as { windowDays?: unknown }).windowDays) : NaN
+    const windowDays = Number.isFinite(rawWd) ? Math.max(1, Math.min(365, Math.round(rawWd))) : undefined
+    return costScanFor(providerId, windowDays)
   })
 
   // 7/11: hand the CLI endpoint its accessors (same enrich, same cost rule,

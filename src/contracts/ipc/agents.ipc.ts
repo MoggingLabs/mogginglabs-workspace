@@ -7,9 +7,36 @@ export interface AgentInfo {
   id: string
   name: string
   installed: boolean
-  /** The provider's own install one-liner — a copyable HINT only; the app never
-   *  runs it (6/06 checklist + wizard empty state). */
+  /** The provider's own install one-liner. Copyable everywhere; Settings § Providers
+   *  can also RUN it on an explicit click, in an ephemeral background pty
+   *  (agents:install). It is never parsed, edited, or elevated. */
   installHint?: string
+}
+
+// ── Provider installs (Settings § Providers) ────────────────────────────────
+// The install runs in an ephemeral pty: the user's own shell, backgrounded,
+// with the provider's documented one-liner injected as typed input. The verdict
+// is a RE-DETECT (is the bin on PATH now?), not the shell's exit code — PATH
+// presence is the same truth `installed` above is built from.
+
+export type AgentInstallPhase = 'running' | 'succeeded' | 'failed'
+
+/** Live/last-known state of one provider's background install. */
+export interface AgentInstallState {
+  agentId: string
+  phase: AgentInstallPhase
+  /** Bounded tail of the ephemeral terminal's output (ANSI stripped — plain text). */
+  tail: string
+  /** The shell's exit code — informational only; the verdict is the re-detect. */
+  exitCode?: number
+  startedAt: number
+  endedAt?: number
+}
+
+/** Answer to agents:install — whether the background install actually started. */
+export interface AgentInstallStart {
+  ok: boolean
+  reason?: string
 }
 
 /** Request the launch command for an agent in a directory. */

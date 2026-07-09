@@ -4,18 +4,21 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { DAEMON_PROTOCOL_VERSION } from '@contracts'
+import { DAEMON_PROTOCOL_VERSION, channelFromEnv, runtimeSegment } from '@contracts'
 
 const APP = 'MoggingLabs'
 
-/** Per-user, per-protocol-version runtime dir. Namespacing by version means different
- *  app versions never collide on socket/lock/endpoint (ADR 0006 anti-kill-server). */
+/** Per-user, per-protocol-version, per-CHANNEL runtime dir. Version namespacing means app
+ *  updates never collide on socket/lock/endpoint (ADR 0006 anti-kill-server); the channel
+ *  segment (run/v4 vs run/dev-v4) means a repo checkout never collides with an installed
+ *  release even at the SAME protocol version. MOGGING_CHANNEL is inherited from the app that
+ *  spawned this daemon (see src/main/index.ts) — the two must derive the same dir. */
 export function runtimeDir(): string {
   const base =
     process.platform === 'win32'
       ? process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
       : process.env.XDG_RUNTIME_DIR || path.join(os.homedir(), 'Library', 'Application Support')
-  const dir = path.join(base, APP, 'run', 'v' + DAEMON_PROTOCOL_VERSION)
+  const dir = path.join(base, APP, 'run', runtimeSegment(channelFromEnv()))
   fs.mkdirSync(dir, { recursive: true })
   if (process.platform !== 'win32') {
     try {
@@ -31,10 +34,12 @@ export const endpointPath = (): string => path.join(runtimeDir(), 'endpoint.json
 export const lockPath = (): string => path.join(runtimeDir(), 'daemon.lock')
 export const logPath = (): string => path.join(runtimeDir(), 'daemon.log')
 
-/** Named pipe (Windows) or unix socket path (macOS/Linux), namespaced by version + pid. */
+/** Named pipe (Windows) or unix socket path (macOS/Linux), namespaced by channel+version+pid.
+ *  Pipe names are a GLOBAL namespace on Windows — the channel segment keeps a dev daemon's pipe
+ *  visibly distinct from a release's even before the pid disambiguates. */
 export function socketAddress(pid: number): string {
   return process.platform === 'win32'
-    ? `\\\\.\\pipe\\mogginglabs-v${DAEMON_PROTOCOL_VERSION}-${pid}`
+    ? `\\\\.\\pipe\\mogginglabs-${runtimeSegment(channelFromEnv())}-${pid}`
     : path.join(runtimeDir(), `daemon-${pid}.sock`)
 }
 
@@ -109,8 +114,11 @@ export function otherVersionEndpoints(): Array<{ version: number; pid: number; a
   const found: Array<{ version: number; pid: number; address: string }> = []
   try {
     const runRoot = path.dirname(runtimeDir())
+    // Channel-scoped on purpose: a dev daemon must only ever surface DEV sessions to migrate.
+    // Matching the other channel here would offer a release's live sessions to a repo checkout.
+    const pattern = channelFromEnv() === 'dev' ? /^dev-v(\d+)$/ : /^v(\d+)$/
     for (const name of fs.readdirSync(runRoot)) {
-      const m = /^v(\d+)$/.exec(name)
+      const m = pattern.exec(name)
       if (!m || Number(m[1]) === DAEMON_PROTOCOL_VERSION) continue
       try {
         const ep = JSON.parse(fs.readFileSync(path.join(runRoot, name, 'endpoint.json'), 'utf8'))

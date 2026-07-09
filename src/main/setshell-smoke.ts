@@ -130,8 +130,8 @@ export function runSetShellSmoke(win: BrowserWindow): void {
       await sleep(200)
       const before = await ES<string>(`getComputedStyle(document.documentElement).getPropertyValue('--bg-app')`)
       await ES(`(() => {
-        const seg = document.querySelector('.settings-section[data-section="appearance"] .segmented')
-        const btn = [...seg.querySelectorAll('.segmented-item')].find((b) => /light/i.test(b.textContent))
+        const grid = document.querySelector('.settings-section[data-section="appearance"] .theme-grid')
+        const btn = [...grid.querySelectorAll('.theme-tile')].find((b) => /light/i.test(b.querySelector('.theme-tile-name').textContent))
         btn.click()
       })()`)
       await sleep(400)

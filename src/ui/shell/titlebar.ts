@@ -5,10 +5,12 @@ import { activeView, goBack, onViewChange, setActiveView } from '../core/shell/v
 
 /**
  * The app's top bar — a strict 3-column grid (1fr auto 1fr), frameless-native:
- *   LEFT    logo · product name · version — and nothing else.
+ *   LEFT    rail toggle · logo · product name · version — and nothing else. The toggle
+ *           leads because it belongs OVER the column it collapses (the workspace rail),
+ *           which is where every editor that ships one puts it.
  *   CENTER  the command box (palette trigger) — TRUE window center via the grid.
- *   RIGHT   two feature slots (layout trigger et al.) · Home · Board · rail toggle ·
- *           settings · the OS window-control overlay reserve (a normal gap in F11).
+ *   RIGHT   two feature slots (layout trigger et al.) · Home · Board · settings ·
+ *           the OS window-control overlay reserve (a normal gap in F11).
  *           That left→right order is DECLARED in one place: the cluster.append() below.
  * The whole strip is a drag region; interactive children opt out in CSS.
  */
@@ -55,7 +57,7 @@ export function createTitlebar(onToggleRail: () => void): {
   // Right cluster — its left→right order is DECLARED by the cluster.append() below (the
   // ONLY place it lives; it was previously incidental feature-registration order). Two
   // feature slots lead (ShellContext.titlebarLeft/Right — features mount their triggers
-  // into them), then the fixed view/rail/settings controls, then the OS window-control
+  // into them), then the fixed view/settings controls, then the OS window-control
   // overlay reserve (CSS padding on .titlebar-right).
   const cluster = document.createElement('div')
   cluster.className = 'titlebar-right'
@@ -63,12 +65,9 @@ export function createTitlebar(onToggleRail: () => void): {
   left.className = 'titlebar-slot'
   const right = document.createElement('div')
   right.className = 'titlebar-slot'
-  const home = IconButton({
-    icon: 'home',
-    label: 'Home',
-    title: 'Home (Ctrl+Shift+H)',
-    onClick: () => setActiveView(activeView() === 'home' ? 'grid' : 'home')
-  })
+  // NO Home button, by design. Home is the boot launcher and the zero-workspace empty
+  // state — never a destination. Once a workspace exists the grid owns the app, and
+  // view-port.ts enforces that; a button here would be a road to a place you cannot go.
   const board = IconButton({
     icon: 'kanban',
     label: 'Board',
@@ -88,17 +87,23 @@ export function createTitlebar(onToggleRail: () => void): {
     title: 'Settings (Ctrl+,)',
     onClick: () => (activeView() === 'settings' ? goBack() : setActiveView('settings'))
   })
-  // THE declaration: feature slots (titlebarLeft, titlebarRight) → Home → Board →
-  // rail toggle → settings. Read left-to-right, this is the right cluster.
-  cluster.append(left, right, home, board, toggle, settings)
+  // THE declaration: feature slots (titlebarLeft, titlebarRight) → Board → settings.
+  // Read left-to-right, this is the right cluster.
+  cluster.append(left, right, board, settings)
 
-  // The view-switcher trio: the active top-level view's button reads active.
+  // THE left cell: the rail toggle, then the brand. The toggle sits over the rail it
+  // collapses; the brand follows it. macOS clears the traffic lights by insetting THIS
+  // cluster (see #app.platform-darwin #titlebar .titlebar-lead).
+  const lead = document.createElement('div')
+  lead.className = 'titlebar-lead'
+  lead.append(toggle, brand)
+
+  // The view-switcher pair: the active top-level view's button reads active.
   onViewChange((v) => {
-    home.classList.toggle('is-active', v === 'home')
     board.classList.toggle('is-active', v === 'board')
     settings.classList.toggle('is-active', v === 'settings')
   })
 
-  el.append(brand, center, cluster)
+  el.append(lead, center, cluster)
   return { el, left, center, right }
 }

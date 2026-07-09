@@ -12,8 +12,11 @@ import { takeRequestedSettingsTab } from '../../core/shell/settings-tab-port'
 import { requestIntegrationsFocus, type IntegrationsFocus } from '../../core/shell/integrations-focus-port'
 import { renderShortcutList } from '../../core/commands/shortcuts'
 import { setTerminalFontSize, terminalFontSize, TERMINAL_FONT_SIZES } from '../../core/terminal/font-port'
+import { calmMotion, setCalmMotion } from '../../core/a11y/motion-port'
 import { TEMPLATE_COUNTS } from '../layout'
 import { createProfilesHostsSection } from './profiles-hosts'
+import { createProvidersSection } from './providers'
+import { createThemePicker } from './theme-picker'
 import { createUsageSection } from './usage'
 import { createIntegrationsSection, enterIntegrations } from './integrations'
 
@@ -26,7 +29,7 @@ const DEFAULT_LAYOUT_KEY = 'mogging.defaultPaneCount'
  */
 const NAV_GROUPS: { label: string; ids: string[] }[] = [
   { label: 'Workspace', ids: ['appearance', 'terminal'] },
-  { label: 'Agents & tools', ids: ['profiles', 'integrations', 'usage'] },
+  { label: 'Agents & tools', ids: ['providers', 'profiles', 'integrations', 'usage'] },
   { label: 'Trust', ids: ['privacy', 'browser'] },
   { label: 'System', ids: ['shortcuts', 'about'] }
 ]
@@ -34,6 +37,7 @@ const NAV_GROUPS: { label: string; ids: string[] }[] = [
 const TAB_ICON: Record<string, IconName> = {
   appearance: 'sliders',
   terminal: 'terminal',
+  providers: 'sparkles',
   profiles: 'user',
   integrations: 'plug',
   usage: 'gauge',
@@ -75,16 +79,16 @@ function setPref(key: string, value: string): void {
 export const settingsFeature: UiFeature = {
   name: 'settings',
   mount(ctx) {
-    const themeSeg = createSegmented({
-      options: THEMES.map((t) => ({ id: t.id, label: t.name })),
+    // Swatch tiles, not a segmented (see theme-picker.ts): each theme previews
+    // itself out of its own chrome tokens. Same non-looping setValue contract.
+    const themePicker = createThemePicker({
       value: currentThemeId(),
-      ariaLabel: 'Theme',
       onChange: (id) => {
         setTheme(id)
         getTelemetry().captureEvent({ name: 'theme.changed', props: { theme: id } })
       }
     })
-    onThemeChange((id) => themeSeg.setValue(id))
+    onThemeChange((id) => themePicker.setValue(id))
 
     const layoutSeg = createSegmented({
       options: TEMPLATE_COUNTS.map((n) => ({ id: String(n), label: String(n) })),
@@ -104,6 +108,21 @@ export const settingsFeature: UiFeature = {
         getTelemetry().captureEvent({ name: 'terminal.fontSize', props: { size: Number(id) } })
       }
     })
+
+    // ── Calm motion (Appearance): the in-app twin of the OS reduce-motion pref ──
+    // One switch, applied live via :root.motion-calm (motion-port): the attention
+    // pulse and the rail's infinite indicator pulses become the MOTION-01 gentle
+    // fades. The OS preference keeps working on its own; this is for turning the
+    // motion down without reconfiguring the whole desktop.
+    const calmMotionToggle = createToggleRow({
+      label: 'Calm motion',
+      hint: 'Trade pulses and flourishes for gentle fades — attention still shows, it just stops waving. Your OS reduce-motion setting always does this automatically.',
+      onChange: () => {
+        setCalmMotion(calmMotionToggle.checked())
+        getTelemetry().captureEvent({ name: 'appearance.calmMotion', props: { on: calmMotionToggle.checked() } })
+      }
+    })
+    calmMotionToggle.setChecked(calmMotion())
 
     // ── Telemetry consent: persisted in main, applied live (opt-in, default off) ──
     // ToggleRow, not Checkbox: a switch means "this is on, now"; a checkbox means
@@ -161,6 +180,7 @@ export const settingsFeature: UiFeature = {
     }
 
     const profilesHosts = createProfilesHostsSection() as HTMLElement & { refresh: () => Promise<void> }
+    const providers = createProvidersSection()
 
     // ── The page: [section nav | scrollable content column] ──────────────────
     const version = el('span', { class: 'settings-about-version', text: '' })
@@ -176,12 +196,16 @@ export const settingsFeature: UiFeature = {
       /* no bridge (tests) */
     }
 
-    /** A tab: one h2 SectionHeader saying what lives here, then Cards. The
-     *  `data-section` hook and the `hidden` semantics are a compatibility surface —
-     *  gallery, KBSHORTCUTS and USAGESET all key off them. */
+    /** A tab: a HERO head (the tab's icon in an accent chip + one h2 SectionHeader
+     *  saying what lives here, over a hairline), then Cards. The `data-section` hook
+     *  and the `hidden` semantics are a compatibility surface — gallery, KBSHORTCUTS
+     *  and USAGESET all key off them; `.settings-section-head` stays for SETSHELL. */
     const section = (id: string, title: string, caption: string, children: ElChild[]): HTMLElement =>
       el('section', { class: 'settings-section', dataset: { section: id } }, [
-        SectionHeader({ title, caption, as: 'h2', class: 'settings-section-head' }),
+        el('div', { class: 'settings-hero' }, [
+          el('div', { class: 'settings-hero-glyph', attrs: { 'aria-hidden': 'true' } }, [icon(TAB_ICON[id] ?? 'sliders', 20)]),
+          SectionHeader({ title, caption, as: 'h2', class: 'settings-section-head' })
+        ]),
         ...children
       ])
 
@@ -199,7 +223,16 @@ export const settingsFeature: UiFeature = {
                 caption: 'System follows your OS light/dark preference. Applies immediately, everywhere.'
               })
             },
-            [themeSeg.el]
+            [themePicker.el]
+          ),
+          Card(
+            {
+              header: SectionHeader({
+                title: 'Motion',
+                caption: 'How much the interface moves to get your attention.'
+              })
+            },
+            [calmMotionToggle.el]
           )
         ])
       },
@@ -220,6 +253,13 @@ export const settingsFeature: UiFeature = {
             ]
           )
         ])
+      },
+      {
+        id: 'providers',
+        label: 'Providers',
+        // The availability map (see providers.ts): which agent CLIs this machine
+        // can run, and a one-click background install for the missing ones.
+        el: section('providers', 'Providers', 'Which agent CLIs this machine can run right now.', [providers])
       },
       {
         id: 'profiles',
@@ -416,6 +456,7 @@ export const settingsFeature: UiFeature = {
       const requested = takeRequestedSettingsTab() // a deep-link (e.g. the usage gear)
       if (requested) showSection(requested)
       void pullConsent()
+      void providers.refresh() // re-detect: a CLI installed since last visit flips to Available
       if (!page.querySelector('.ph-form')) void profilesHosts.refresh()
       getTelemetry().captureEvent({ name: 'settings.opened' })
     })

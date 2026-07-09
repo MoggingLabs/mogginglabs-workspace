@@ -17,6 +17,8 @@ export interface ThresholdKv {
 interface ThrState {
   epoch: string
   fired: number[]
+  /** The predictive runs-out tap — once per window epoch, like the pcts. */
+  paceFired?: boolean
 }
 
 const stateKey = (providerId: string, profileId: string): string => `usage.thr.${providerId}.${profileId}`
@@ -103,11 +105,36 @@ export function evaluateThresholds(
       .filter((l) => l.pct > 0 && l.pct <= 100)
       .sort((a, b) => a.pct - b.pct)
     const crossed = levels.filter((l) => w.usedPct >= l.pct && !state.fired.includes(l.pct))
-    if (!crossed.length) continue
+    if (!crossed.length) {
+      // ── The PREDICTIVE tap (CodexBar's pace warning): the projection flipped
+      // to runs-out while usage sits UNDER every threshold — "you'll hit the
+      // wall before reset", possibly at 60%. Once per window epoch. A forecast
+      // is not a missed crossing, so (unlike the pcts) it fires on first sight;
+      // and it always YIELDS to a same-tick threshold toast, whose body already
+      // carries this exact verdict line — one lane, one voice per tick.
+      if (p.pace?.verdict === 'runs-out' && !state.paceFired && w.usedPct < cfg.warn) {
+        state.paceFired = true
+        kv.set(key, JSON.stringify(state))
+        alerts.push({
+          kind: 'pace',
+          providerId: p.providerId,
+          profileId: p.profileId,
+          planLabel: p.planLabel,
+          windowLabel: w.label,
+          usedPct: Math.round(w.usedPct),
+          title: `${p.planLabel} — on track to run out before reset`,
+          body: p.pace.text
+        })
+      }
+      continue
+    }
     // One toast per tick: the HIGHEST new crossing speaks; every crossed
     // level is spent (a 0->97 jump costs one warning, not a stack).
     const top = crossed[crossed.length - 1]
     state.fired.push(...crossed.map((l) => l.pct))
+    // A threshold toast whose body IS the runs-out verdict has delivered the
+    // predictive message too — the pace tap is spent with it.
+    if (p.pace?.verdict === 'runs-out') state.paceFired = true
     kv.set(key, JSON.stringify(state))
     const alert: UsageAlert = {
       kind: 'threshold',

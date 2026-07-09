@@ -2,6 +2,7 @@ import { ShellChannels, type WindowStateEvent } from '@contracts'
 import type { ShellContext } from '../core/registry/feature-registry'
 import { getBridge } from '../core/ipc/bridge'
 import { onViewChange } from '../core/shell/view-port'
+import { applyCalmMotion } from '../core/a11y/motion-port'
 import { createTitlebar } from './titlebar'
 
 const RAIL_COLLAPSED_KEY = 'mogging.railCollapsed'
@@ -50,6 +51,7 @@ export function createAppShell(root: HTMLElement): ShellContext {
   } catch {
     /* default: expanded */
   }
+  applyCalmMotion() // Settings § Appearance "Calm motion" — stamp :root before first paint
 
   // Ctrl/Cmd+Shift+B toggles the rail. Shift is required on purpose: plain Ctrl+B is a
   // real terminal keystroke (tmux prefix, readline cursor-back) and must reach the PTY.

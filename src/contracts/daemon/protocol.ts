@@ -5,12 +5,43 @@
 
 import type { AgentState } from '../domain/agent'
 import type { PersistedWorkspace } from '../ipc/workspace.ipc'
+import type { PtyEmulation } from '../ipc/terminal.ipc'
 
+// v4: `spawned` carries the pty's emulation (ConPTY vs posix). A v3 daemon CANNOT answer that
+// question — it never asked node-pty which backend it got — so it must not be reattached to. The
+// version bump is the enforcement: the runtime dir + socket embed it, so a v3 daemon keeps running
+// untouched and a v4 app spawns its own. Defaulting the field instead would reintroduce, in the
+// one path nobody tests, exactly the renderer-side inference this change deletes.
 // v3: Phase-4/01 swarm substrate — mailbox (mail-send/mail-read), per-pane roles
 // (set-role, PaneInfo.role). v2: Phase-3/01 control API — send-key/capture + enriched
 // PaneInfo. The version namespaces the runtime dir + socket, so older daemons keep
-// running untouched (ADR 0006 anti-kill-server); the app + CLI speak their own v3.
-export const DAEMON_PROTOCOL_VERSION = 3
+// running untouched (ADR 0006 anti-kill-server); the app + CLI speak their own version.
+export const DAEMON_PROTOCOL_VERSION = 4
+
+// ── Release channel (dev/prod isolation) ───────────────────────────────────────────────
+// A repo checkout and an installed release must be able to run SIDE BY SIDE with zero shared
+// surfaces ("work on the app while using any release"). Version namespacing alone cannot give
+// that: the moment a release ships the protocol version dev is on, run/v<N> collides again.
+// So every per-user runtime surface is namespaced by CHANNEL as well:
+//   prod:  …/MoggingLabs/run/v4      mogging://
+//   dev:   …/MoggingLabs/run/dev-v4  mogging-dev://
+// The channel is DERIVED once, in the app's main (packaged -> prod, repo checkout -> dev), and
+// travels ONLY as the MOGGING_CHANNEL env var: the daemon inherits it at spawn, panes inherit it
+// from the daemon (so `mogging` run inside a dev pane targets the dev channel with no flags), and
+// the CLIs read it. A packaged app clears it at startup — channel is derived, never trusted up.
+export type ReleaseChannel = 'prod' | 'dev'
+
+/** The channel this PROCESS is in. Main sets/clears MOGGING_CHANNEL before anything reads it. */
+export const channelFromEnv = (): ReleaseChannel => (process.env.MOGGING_CHANNEL === 'dev' ? 'dev' : 'prod')
+
+/** The run/<segment> directory name. Keep in sync with bin/mogging.mjs + bin/mogging-mcp.mjs
+ *  (plain Node, cannot import this) — scripts/check-protocol-version.mjs gates the drift. */
+export const runtimeSegment = (channel: ReleaseChannel): string =>
+  (channel === 'dev' ? 'dev-v' : 'v') + DAEMON_PROTOCOL_VERSION
+
+/** The deep-link scheme. Separate per channel or the OS association is winner-takes-all: both
+ *  apps re-register on every launch, so `mogging open` would land on whichever ran LAST. */
+export const deepLinkScheme = (channel: ReleaseChannel): string => (channel === 'dev' ? 'mogging-dev' : 'mogging')
 
 // ── Swarm substrate (Phase-4/01) ───────────────────────────────────────────────
 export const SWARM_ROLES = ['architect', 'worker', 'reviewer'] as const
@@ -178,7 +209,7 @@ export type ClientMessage =
 export type ServerMessage =
   | { t: 'welcome'; v: number; panes: PaneInfo[]; workspaces: PersistedWorkspace[] }
   | { t: 'error'; reason: string }
-  | { t: 'spawned'; id: string; existing: boolean; scrollback: string }
+  | { t: 'spawned'; id: string; existing: boolean; scrollback: string; pty: PtyEmulation }
   | { t: 'attached'; id: string; scrollback: string }
   | { t: 'data'; id: string; data: string }
   | { t: 'exit'; id: string; code: number }

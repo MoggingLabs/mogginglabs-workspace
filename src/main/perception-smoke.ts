@@ -68,8 +68,12 @@ const SCRIPT = `(async () => {
   }
   const switchMax = Math.max.apply(null, switchTimes)
 
-  // ── 2) Home ⇄ grid (via the titlebar Home toggle) ──────────────────────────
-  const homeBtn = document.querySelector('.titlebar-right .icon-btn[aria-label="Home"]')
+  // ── 2) full-app view ⇄ grid (via the titlebar Board toggle) ────────────────
+  // Was the Home toggle. Home is no longer reachable while a workspace exists (it is
+  // the boot launcher / empty state, not a destination), and this smoke builds
+  // workspaces. Board is the same measurement: a full-app view that hides the panes,
+  // toggled back to reveal them. The budget it feeds is unchanged.
+  const homeBtn = document.querySelector('.titlebar-right .icon-btn[aria-label="Board"]')
   const homeTimes = []
   if (homeBtn) {
     for (let i = 0; i < 4; i++) {

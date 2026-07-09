@@ -48,9 +48,10 @@ export async function runDaemonSurviveSmoke(phase: string): Promise<void> {
     const panes = await client.connect()
 
     if (phase === 'A') {
-      client.spawn('sp1', { run: COUNTER })
+      // A cold spawn must report existing=false — the flag the restore path keys off.
+      const { existing: existedA } = await client.spawn('sp1', { run: COUNTER })
       await delay(3200)
-      writeResult({ phase: 'A', maxA: Math.max(-1, ...marks(cap)), daemonPidA: ep.pid })
+      writeResult({ phase: 'A', maxA: Math.max(-1, ...marks(cap)), daemonPidA: ep.pid, existedA })
       client.dispose()
       app.exit(0) // quit the app but leave the detached daemon running
       return
@@ -58,7 +59,20 @@ export async function runDaemonSurviveSmoke(phase: string): Promise<void> {
 
     // phase B — reconnect to the surviving daemon
     const had = panes.some((p) => p.id === 'sp1') // pane was already in the daemon's welcome
-    client.spawn('sp1', { run: COUNTER }) // id-guard: attaches the existing pane (run ignored)
+    // REATTACH must report existing=true, and the app must be able to SEE that: it is the
+    // only signal that the pane's agent is still running, and the restore lineup refuses to
+    // type `claude --resume` into a pane that already has Claude in it (agents/index.ts).
+    const spawnedB = await client.spawn('sp1', { run: COUNTER }) // id-guard: run ignored
+    const existedB = spawnedB.existing
+    // The DAEMON owns the pty, so only the daemon can say how it grows. A reattach that omits
+    // this (a pre-v4 daemon) must never reach xterm: it would render against a guessed backend.
+    // Floor is 18309 (the ConPTY gate pty-host enforces) — NOT xterm's 21376 reflow threshold:
+    // CI's windows-latest is Server 2022 (build 20348), where ConPTY is fine and reflow-off is
+    // xterm's correct conservative path, not a defect.
+    const ptyOk =
+      process.platform === 'win32'
+        ? spawnedB.pty?.backend === 'conpty' && spawnedB.pty.buildNumber >= 18309
+        : spawnedB.pty?.backend === 'posix'
     await delay(3200)
     const mB = marks(cap)
     const prev = readResult()
@@ -68,13 +82,20 @@ export async function runDaemonSurviveSmoke(phase: string): Promise<void> {
     // reset near 0). `had` + `sameDaemon` prove we REATTACHED to the same running pane rather
     // than creating a duplicate. minB is low because reattach replays scrollback (expected).
     const survived = mB.length > 0 && Math.max(...mB) > maxA
-    const pass = had && survived && sameDaemon
+    const existedA = prev.existedA === true
+    const flagOk = existedB === true && !existedA // cold=false, reattach=true
+    const pass = had && survived && sameDaemon && flagOk && ptyOk
     writeResult({
       phase: 'B',
       pass,
       had,
       survived,
       sameDaemon,
+      flagOk,
+      ptyOk,
+      pty: spawnedB.pty,
+      existedA,
+      existedB,
       maxA,
       minB: mB.length ? Math.min(...mB) : -1,
       maxB: mB.length ? Math.max(...mB) : -1,

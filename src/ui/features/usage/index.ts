@@ -2,7 +2,7 @@ import type { UiFeature } from '../../core/registry/feature-registry'
 import { BrowserChannels, ProfileChannels, UsageChannels, USAGE_DISPLAY_DEFAULTS, findProvider, type AgentProfile, type CostScan, type PlanUsageView, type ProviderStatus, type UsageAlert, type UsageDisplayConfig } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { announce } from '../../core/a11y/live-region'
-import { el, icon, showToast } from '../../components'
+import { el, icon, providerLogo, showToast } from '../../components'
 import { setActiveView } from '../../core/shell/view-port'
 import { requestSettingsTab } from '../../core/shell/settings-tab-port'
 import { switchActiveProfile } from '../../core/agents/profile-switch'
@@ -152,7 +152,7 @@ export const usageFeature: UiFeature = {
       const w = p.windows[1]?.usedPct ?? s
       barS.style.width = `${s}%`
       barW.style.width = `${w}%`
-      glyph.textContent = p.providerId.charAt(0).toUpperCase()
+      glyph.replaceChildren(providerLogo(p.providerId, 13))
       pctNum.textContent = `${Math.round(s)}%`
       glabel.textContent = p.providerId
       gauge.classList.toggle('is-warn', p.pace?.verdict === 'runs-out')
@@ -236,7 +236,7 @@ export const usageFeature: UiFeature = {
         const lane = mine.find((p) => p.profileId === activeIdFor(id)) ?? mine[0]
         const usedPct = lane?.windows[0]?.usedPct ?? 0
         const t = el('button', { class: 'usage-tab' + (on ? ' is-selected' : ''), type: 'button', role: 'tab', dataset: { tab: id } }, [
-          el('span', { class: 'usage-tab-glyph', text: id.charAt(0).toUpperCase() }),
+          el('span', { class: 'usage-tab-glyph' }, [providerLogo(id, 13)]),
           el('span', { class: 'usage-tab-label', text: findProvider(id)?.label ?? id }),
           el('span', { class: 'usage-tab-track' }, [
             el('span', { class: 'usage-tab-fill' + (usedPct >= BADGE_PCT ? ' is-hot' : '') })
@@ -268,6 +268,7 @@ export const usageFeature: UiFeature = {
 
       // ── Header (step 2): name (bold) · freshness · plan tier · health ──
       const head = el('div', { class: 'usage-glance-head' }, [
+        providerLogo(shownProvider, 16),
         el('span', { class: 'usage-glance-name', text: findProvider(shownProvider)?.label ?? shownProvider }),
         el('span', { class: 'usage-glance-age', text: fmtAge(activePlan.fetchedAt, now) }),
         el('span', { class: 'usage-glance-tier', text: activePlan.planLabel }),
@@ -275,42 +276,63 @@ export const usageFeature: UiFeature = {
       ])
       pop.append(head)
 
-      // ── Windows (step 3): a row per UsageWindow; the pace line under Weekly.
+      // ── Windows (step 3): a row per UsageWindow, and EVERY paceable window
+      //    carries its own pace line — the session limit and the weekly limit
+      //    (and any model lane) each answer "at this rate, do I make it?".
       //    .usage-verdict renders pace.text VERBATIM (golden-locked); the delta
       //    is a separate .usage-pace-delta. Both inked sev-${severity}. ──
-      const paceLine = (): HTMLElement =>
-        el('div', { class: 'usage-pace' }, [
-          el('span', { class: `usage-verdict sev-${activePlan.pace!.severity}`, text: activePlan.pace!.text }),
-          el('span', { class: `usage-pace-delta sev-${activePlan.pace!.severity}`, text: activePlan.pace!.deltaText })
-        ])
-      let paceDone = false
       for (const w of activePlan.windows) {
+        // The expected-pace TICK (CodexBar): a hairline on the bar at "where
+        // you should be by now" — fill past the tick = hotter than the budget,
+        // readable without the verdict line.
+        const track = el('span', { class: 'usage-track usage-track-row' }, [
+          el('span', { class: 'usage-fill' + (w.usedPct >= BADGE_PCT ? ' is-hot' : '') }),
+          w.pace?.elapsedPct !== undefined ? el('span', { class: 'usage-tick', title: `expected by now: ${w.pace.elapsedPct}%` }) : null
+        ])
         const row = el('div', { class: 'usage-row' }, [
           el('span', { class: 'usage-row-label', text: w.label }),
-          el('span', { class: 'usage-track usage-track-row' }, [el('span', { class: 'usage-fill' + (w.usedPct >= BADGE_PCT ? ' is-hot' : '') })]),
+          track,
           el('span', { class: 'usage-pct', text: `${Math.round(w.usedPct)}% used` }),
           w.resetText ? el('span', { class: 'usage-reset', text: w.resetText }) : null
         ])
         ;(row.querySelector('.usage-fill') as HTMLElement).style.width = `${w.usedPct}%`
+        const tick = row.querySelector('.usage-tick') as HTMLElement | null
+        if (tick && w.pace?.elapsedPct !== undefined) tick.style.left = `${w.pace.elapsedPct}%`
         if (w.resetsAt) row.title = new Date(w.resetsAt).toLocaleString()
         pop.append(row)
-        if (!paceDone && activePlan.pace && /weekly/i.test(w.label)) {
-          pop.append(paceLine())
-          paceDone = true
-        }
+        if (w.pace)
+          pop.append(
+            el('div', { class: 'usage-pace' }, [
+              el('span', { class: `usage-verdict sev-${w.pace.severity}`, text: w.pace.text }),
+              el('span', { class: `usage-pace-delta sev-${w.pace.severity}`, text: w.pace.deltaText }),
+              // The risk estimate rides quietly AFTER the verdict, never inside
+              // it (the verdict wording is golden-locked); absent = no noise.
+              w.pace.riskText ? el('span', { class: 'usage-risk', text: w.pace.riskText }) : null
+            ])
+          )
       }
-      if (activePlan.pace && !paceDone) pop.append(paceLine())
-      else if (!activePlan.pace && activePlan.reason)
+      if (!activePlan.pace && activePlan.reason)
         pop.append(el('div', { class: 'usage-verdict sev-quiet', text: `${activePlan.reason} — ${fmtAge(activePlan.fetchedAt, now)}` }))
 
-      // ── Credits / spend (step 4) — NEVER a $X/$Y cap (CodexBar's has none) ──
+      // ── Credits / spend (step 4): Claude's extra-usage box carries its cap
+      //    ("This month: $used / $limit · N% used" — the CodexBar grammar);
+      //    a spend with no cap stays the plain figure it always was. ──
       if (activePlan.credits)
         pop.append(el('div', { class: 'usage-credits', text: `${activePlan.credits.remaining} ${activePlan.credits.label}` }))
-      else if (activePlan.spend)
-        pop.append(el('div', { class: 'usage-credits', text: `${activePlan.spend.currency}${fmtMoney(activePlan.spend.amount)}` }))
+      else if (activePlan.spend) {
+        const s = activePlan.spend
+        const cur = s.currency === 'USD' ? '$' : s.currency
+        const text = s.limit
+          ? `Extra usage — this month: ${cur}${fmtMoney(s.amount)} / ${cur}${fmtMoney(s.limit)} · ${Math.round((s.amount / s.limit) * 100)}% used`
+          : `${cur}${fmtMoney(s.amount)}`
+        pop.append(el('div', { class: 'usage-credits', text }))
+      }
 
-      // ── Cost (step 4): usage:cost → CostScan, filled async; › to § Usage ──
-      const costRow = el('button', { class: 'usage-cost menu-item', type: 'button', title: 'Local cost log — opens Usage history' }, [
+      // ── Cost (step 4): usage:cost → CostScan, filled async; › opens the full
+      //    Cost overview in § Usage. Beyond the CodexBar two-liner: today's
+      //    share of the window, the daily average, and where the month is
+      //    heading at this week's pace — the glance version of the dashboard. ──
+      const costRow = el('button', { class: 'usage-cost menu-item', type: 'button', title: 'Local cost scan — opens the Cost overview' }, [
         icon('clock', 14),
         el('span', { class: 'usage-cost-text', text: 'Cost…' }),
         el('span', { class: 'usage-cost-more', text: '›' })
@@ -321,6 +343,8 @@ export const usageFeature: UiFeature = {
         setActiveView('settings')
       })
       pop.append(costRow)
+      const costLines = el('div', { class: 'usage-cost-lines' })
+      pop.append(costLines)
       void (bridge.invoke(UsageChannels.cost, shownProvider) as Promise<CostScan>)
         .then((scan) => {
           if (pop.hidden || !costRow.isConnected) return
@@ -329,11 +353,30 @@ export const usageFeature: UiFeature = {
             txt.textContent = 'Cost —' // no cost log
             return
           }
-          const cur = scan.currency
-          const today = scan.days[scan.days.length - 1]
+          txt.textContent = 'Cost'
+          const cur = scan.currency === 'USD' ? '$' : scan.currency
+          const p2 = (n: number): string => `${cur}${fmtMoney(n)}`
+          const todayStr = ((): string => {
+            const d = new Date()
+            const p = (n: number): string => String(n).padStart(2, '0')
+            return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+          })()
+          const today = scan.days.find((d) => d.date === todayStr)
           const sum = scan.days.reduce((a, d) => a + d.spend, 0)
           const tok = scan.days.reduce((a, d) => a + d.tokens, 0)
-          txt.textContent = `Today ${cur}${fmtMoney(today.spend)} · ${fmtTok(today.tokens)} · Last 30 days ${cur}${fmtMoney(sum)} · ${fmtTok(tok)}`
+          const todayPct = sum > 0 && today ? Math.round((today.spend / sum) * 100) : 0
+          const last7 = scan.days.filter((d) => Date.parse(d.date) >= Date.now() - 7 * 86_400_000).reduce((a, d) => a + d.spend, 0)
+          const line = (label: string, value: string): HTMLElement =>
+            el('div', { class: 'usage-cost-line' }, [
+              el('span', { class: 'usage-cost-label', text: label }),
+              el('span', { class: 'usage-cost-value', text: value })
+            ])
+          costLines.append(
+            line('Today', today ? `${p2(today.spend)} · ${fmtTok(today.tokens)} tokens · ${todayPct}% of 30d` : `${p2(0)} · nothing yet`),
+            line('Last 30 days', `${p2(sum)} · ${fmtTok(tok)} tokens`),
+            line('Daily average', `${p2(scan.days.length ? sum / scan.days.length : 0)} per active day`),
+            line('Projected monthly', `${p2((last7 / 7) * 30)} at this week's pace`)
+          )
         })
         .catch(() => undefined)
 
@@ -372,7 +415,10 @@ export const usageFeature: UiFeature = {
           dataset: { provider: p.providerId, profile: p.profileId, health: p.health }
         }, [
           el('span', { class: 'usage-profile', text: p.profileId }),
-          el('span', { class: 'usage-track usage-track-row usage-track-mini' }, [el('span', { class: 'usage-fill' + ((p.windows[0]?.usedPct ?? 0) >= BADGE_PCT ? ' is-hot' : '') })])
+          el('span', { class: 'usage-track usage-track-row usage-track-mini' }, [el('span', { class: 'usage-fill' + ((p.windows[0]?.usedPct ?? 0) >= BADGE_PCT ? ' is-hot' : '') })]),
+          // The swap-with-projection cue (CodexBar): each lane's own pace delta,
+          // so "which account survives the week?" is answered BEFORE switching.
+          p.pace ? el('span', { class: `usage-tile-delta sev-${p.pace.severity}`, text: p.pace.deltaText, title: p.pace.text }) : null
         ])
         ;(tile.querySelector('.usage-fill') as HTMLElement).style.width = `${p.windows[0]?.usedPct ?? 0}%`
         if (provStatus && outaged)
@@ -459,10 +505,10 @@ export const usageFeature: UiFeature = {
     const onAlert = (a: UsageAlert): void => {
       if (!a || typeof a.title !== 'string') return
       showToast({
-        tone: a.kind === 'reset' ? 'neutral' : a.level === 'warn' ? 'attention' : 'info',
+        tone: a.kind === 'reset' ? 'neutral' : a.level === 'warn' || a.kind === 'pace' ? 'attention' : 'info',
         title: a.title,
         body: a.body || undefined,
-        timeout: a.level === 'warn' ? 15000 : 6000,
+        timeout: a.level === 'warn' || a.kind === 'pace' ? 15000 : 6000,
         action: a.failover
           ? { label: `Fail over to ${a.failover.profileName}`, onClick: () => void switchActive(a.providerId, a.failover!.profileId, true) }
           : undefined

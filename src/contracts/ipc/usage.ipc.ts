@@ -18,7 +18,7 @@
  *   reset style + popover order/density); usage:displayChanged pushes it
  */
 
-import type { PlanUsage, PaceVerdict, UsageCadence } from '../usage'
+import type { PlanUsage, PaceVerdict, UsageCadence, UsageWindow } from '../usage'
 
 /** Pace, PRE-FORMATTED by the one backend formatter (7/02) — the renderer
  *  displays these verbatim and never re-spells a verdict. Absent when the
@@ -32,10 +32,21 @@ export interface PaceView {
   deltaText: string
   /** Severity ink class hint: warning | neutral | quiet. */
   severity: 'warning' | 'neutral' | 'quiet'
+  /** 0–100: where the budget line sits RIGHT NOW — the expected-pace tick the
+   *  bars render (usedPct beyond this = hotter than the budget). */
+  elapsedPct?: number
+  /** "≈N% run-out risk" from formatRisk — rendered verbatim when present. */
+  riskText?: string
 }
 
-/** What the UI renders: the plan plus its pace view (worst window wins). */
-export type PlanUsageView = PlanUsage & { pace?: PaceView }
+/** A window as the UI sees it: the adapter's window plus ITS OWN pace — every
+ *  limit paces itself (session AND weekly AND any model lane), not just the
+ *  worst one. Absent pace = this window can't be paced (no reset / rolling). */
+export type WindowView = UsageWindow & { pace?: PaceView }
+
+/** What the UI renders: the plan, per-window pace, and the plan-level view
+ *  (worst window wins — the gauge/alerts read this one). */
+export type PlanUsageView = Omit<PlanUsage, 'windows'> & { windows: WindowView[]; pace?: PaceView }
 
 export interface UsageConfig {
   providers: {
@@ -55,4 +66,4 @@ export interface UsageConfigPatch {
   cadence?: UsageCadence
 }
 
-export type { PlanUsage, UsageWindow, UsageHealth, UsageCadence, CostScan, CostDay, ProviderStatus, ProviderStatusState, UsageAlert, UsageAlertConfig, UsageDisplayConfig, GaugeMode, ResetStyle, PopoverDensity, PopoverOrder, UsagePaceConfig } from '../usage'
+export type { PlanUsage, UsageWindow, UsageHealth, UsageCadence, CostScan, CostDay, CostModel, CostProject, ProviderStatus, ProviderStatusState, UsageAlert, UsageAlertConfig, UsageDisplayConfig, GaugeMode, ResetStyle, PopoverDensity, PopoverOrder } from '../usage'

@@ -16,6 +16,7 @@ export interface WorkspaceMeta {
   roles?: (string | null)[] // per-slot swarm role (Phase-4/01)
   remotes?: ({ hostId: string; name: string } | null)[] // per-slot remote host (Phase-4/05)
   profileIds?: (string | null)[] // per-slot launch profile (4/04 picker; persisted 6/04 — restore + failover keep it true)
+  layout?: string | null // serialized split-tree (shape + sizes); absent/invalid → template grid
 }
 
 /**

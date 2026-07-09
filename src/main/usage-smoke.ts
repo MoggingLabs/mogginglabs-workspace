@@ -1,7 +1,7 @@
 import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { mkdirSync, mkdtempSync, readFileSync, existsSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { setFakeMode, computePace, formatVerdict, PACE_GOLDENS, readCodex, API_KEY_SPECS, fetchVertex, fetchBedrock, scanCost, appendHistory, readHistory, HISTORY_MAX, normalizeStatusBody, createStatusService, createUsageService, evaluateThresholds } from '@backend/features/usage'
 import { USAGE_PROVIDERS, UsageChannels, AllChannels, type PlanUsageView } from '@contracts'
@@ -311,19 +311,38 @@ export function runUsageSmoke(win: BrowserWindow): void {
       writeFileSync(
         join(croot, 'codex', '2026', '07', 'rollout-fixture.jsonl'),
         [
-          JSON.stringify({ timestamp: midday(2), type: 'session_meta', payload: { cli_version: '0.133.0' } }),
+          JSON.stringify({ timestamp: midday(2), type: 'session_meta', payload: { cli_version: '0.133.0', cwd: 'C:\\work\\projA' } }),
           'not json — a malformed line is skipped, never thrown',
           JSON.stringify({ timestamp: midday(2), type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 1000, cached_input_tokens: 0, output_tokens: 500, total_tokens: 1500 } } } }),
           JSON.stringify({ timestamp: midday(1), type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 2000, cached_input_tokens: 100, output_tokens: 1000, total_tokens: 3000 } } } })
         ].join('\n')
       )
       const cdxScan = scanCost('codex', join(croot, 'codex'))
+      // cli 0.133 logs name no model -> priced at gpt-5 (the Codex default,
+      // CodexBar's rule) and LABELED so: day0 (1000·1.25 + 500·10)/1e6,
+      // day1 ((2000−100)·1.25 + 100·0.125 + 1000·10)/1e6.
       const codexScanOk =
         cdxScan.days.length === 2 &&
         cdxScan.days[0].tokens === 1500 &&
         cdxScan.days[1].tokens === 3000 &&
-        cdxScan.days.every((d) => d.spend === 0) && // cli 0.133 logs name no model — honestly unpriced
-        /price row/.test(cdxScan.reason ?? '')
+        Math.abs(cdxScan.days[0].spend - 0.00625) < 1e-6 &&
+        Math.abs(cdxScan.days[1].spend - 0.0123875) < 1e-6 && // day spend rounds to 6 decimals
+
+        /gpt-5 rates/.test(cdxScan.reason ?? '') &&
+        cdxScan.models?.length === 1 &&
+        cdxScan.models[0].model === 'gpt-5 (assumed)' &&
+        // per-project cut: session_meta.cwd's basename carries both turns
+        cdxScan.projects?.length === 1 &&
+        cdxScan.projects[0].project === 'projA' &&
+        cdxScan.projects[0].tokens === 4500
+      // The incremental file cache: an untouched tree re-scans to the SAME
+      // result (served from the per-file contributions, not a re-parse)…
+      const cdxAgain = scanCost('codex', join(croot, 'codex'))
+      const cacheStableOk = JSON.stringify(cdxAgain) === JSON.stringify(cdxScan)
+      // …and a LIVE price row (models.dev shape, passed as data) outranks the
+      // built-ins AND busts the cache via pricesRev: day0 = (1000·2.5 + 500·20)/1e6.
+      const cdxLive = scanCost('codex', join(croot, 'codex'), { prices: [['gpt-5', { inPerMTok: 2.5, outPerMTok: 20 }]], pricesRev: 'live-test' })
+      const livePriceOk = Math.abs((cdxLive.days[0]?.spend ?? 0) - 0.0125) < 1e-6
       // claude-shaped: streamed chunks DUPLICATE a requestId -> dedupe holds;
       // spend prices exactly off the table (opus 4.8 $5/$25, cache 0.1x/1.25x)
       mkdirSync(join(croot, 'claude', 'proj'), { recursive: true })
@@ -341,13 +360,73 @@ export function runUsageSmoke(win: BrowserWindow): void {
       // req_1 = (100·5 + 200·25 + 10000·0.5 + 1000·6.25)/1e6 = 0.01675; req_2 = 0.0045
       const clDay = clScan.days[0]
       const claudeScanOk =
-        clScan.days.length === 1 && !!clDay && clDay.tokens === 11800 && Math.abs(clDay.spend - 0.02125) < 1e-9 && clScan.currency === 'USD'
+        clScan.days.length === 1 && !!clDay && clDay.tokens === 11800 && Math.abs(clDay.spend - 0.02125) < 1e-9 && clScan.currency === 'USD' &&
+        clScan.models?.length === 1 && clScan.models[0].model === 'claude-opus-4-8' && clScan.models[0].tokens === 11800
       // absent dir / unknown provider degrade LABELED — never a throw
       const missingScan = scanCost('codex', join(croot, 'nope'))
       const nullScan = scanCost('gemini', null)
       const costDegrades =
         missingScan.days.length === 0 && typeof missingScan.reason === 'string' && nullScan.days.length === 0 && typeof nullScan.reason === 'string'
-      const costOk = codexScanOk && claudeScanOk && costDegrades
+
+      // 13b ── fork-aware deltas + the archived root (CodexBar parity). A forked
+      // session's totals CONTINUE the parent's counters: the first token_count
+      // must bill only its own turn (last_token_usage), later ones the total
+      // DIFFERENCES — never the 6.2k cumulative. And archived_sessions counts.
+      const croot2 = mkdtempSync(join(tmpdir(), 'mog-cost2-'))
+      mkdirSync(join(croot2, 'sessions'), { recursive: true })
+      mkdirSync(join(croot2, 'archived_sessions'), { recursive: true })
+      const tc = (daysAgo: number, totals: Record<string, number> | null, last: Record<string, number>): string =>
+        JSON.stringify({ timestamp: midday(daysAgo), type: 'event_msg', payload: { type: 'token_count', info: { ...(totals ? { total_token_usage: totals } : {}), last_token_usage: last } } })
+      writeFileSync(
+        join(croot2, 'sessions', 'fork.jsonl'),
+        [
+          JSON.stringify({ timestamp: midday(1), type: 'session_meta', payload: { model: 'gpt-5', forked_from_id: 'parent-1', cwd: 'C:\\w\\forky\\.mogging\\worktrees\\7466ee88' } }),
+          tc(1, { input_tokens: 5000, cached_input_tokens: 0, output_tokens: 1000, total_tokens: 6000 }, { input_tokens: 100, cached_input_tokens: 0, output_tokens: 50, total_tokens: 150 }),
+          tc(1, { input_tokens: 5100, cached_input_tokens: 0, output_tokens: 1100, total_tokens: 6200 }, { input_tokens: 100, cached_input_tokens: 0, output_tokens: 100, total_tokens: 200 })
+        ].join('\n')
+      )
+      writeFileSync(
+        join(croot2, 'archived_sessions', 'old.jsonl'),
+        [
+          JSON.stringify({ timestamp: midday(3), type: 'session_meta', payload: { model: 'gpt-5' } }),
+          tc(3, null, { input_tokens: 400, cached_input_tokens: 0, output_tokens: 100, total_tokens: 500 })
+        ].join('\n')
+      )
+      const forkScan = scanCost('codex', [join(croot2, 'sessions'), join(croot2, 'archived_sessions')])
+      const forkTok = forkScan.days.reduce((a, d) => a + d.tokens, 0)
+      // fork day = 150 + 200 (total-diffs), archived day = 500; spend on the fork
+      // day prices the DELTA components: (100·1.25+50·10 + 100·1.25+100·10)/1e6 = 0.00175.
+      const forkDay = forkScan.days.find((d) => d.tokens === 350)
+      const forkOk = forkTok === 850 && forkScan.days.length === 2 && !!forkDay && Math.abs(forkDay.spend - 0.00175) < 1e-6
+      const archivedOk = forkScan.days.some((d) => d.tokens === 500)
+      // ephemeral worktrees FOLD into their parent project — the slug never shows
+      const worktreeFoldOk = forkScan.projects?.some((p) => p.project === 'forky') === true && !forkScan.projects?.some((p) => p.project === '7466ee88')
+
+      // 13c ── byte-offset resume: a newline-terminated file that GROWS re-parses
+      // only its tail (the carry-over model keeps pricing the appended turn) —
+      // asserted by result equality: the rescan must equal head + tail exactly.
+      const groot = mkdtempSync(join(tmpdir(), 'mog-cost3-'))
+      mkdirSync(join(groot, 'sessions'), { recursive: true })
+      const growFile = join(groot, 'sessions', 'grow.jsonl')
+      writeFileSync(
+        growFile,
+        [
+          JSON.stringify({ timestamp: midday(1), type: 'session_meta', payload: { model: 'gpt-5', cwd: 'C:\\w\\growproj' } }),
+          tc(1, null, { input_tokens: 1000, cached_input_tokens: 0, output_tokens: 200, total_tokens: 1200 })
+        ].join('\n') + '\n'
+      )
+      const growA = scanCost('codex', join(groot, 'sessions'))
+      appendFileSync(growFile, tc(0, null, { input_tokens: 500, cached_input_tokens: 0, output_tokens: 300, total_tokens: 800 }) + '\n')
+      const growB = scanCost('codex', join(groot, 'sessions'))
+      const growTokA = growA.days.reduce((a, d) => a + d.tokens, 0)
+      const growTokB = growB.days.reduce((a, d) => a + d.tokens, 0)
+      const byteResumeOk =
+        growTokA === 1200 && growTokB === 2000 && growB.days.length === 2 && growB.projects?.length === 1 && growB.projects[0].tokens === 2000
+
+      // risk model sanity: mid-window at ~pace → a rounded, bounded estimate
+      const rr = computePace({ label: 'Weekly', usedPct: 52, resetsAt: '2026-01-12T00:00:00Z' }, Date.parse('2026-01-08T12:00:00Z'), { windowMs: 604_800_000 })
+      const riskOk = !!rr && typeof rr.runOutRiskPct === 'number' && rr.runOutRiskPct >= 5 && rr.runOutRiskPct <= 95 && rr.runOutRiskPct % 5 === 0
+      const costOk = codexScanOk && claudeScanOk && costDegrades && cacheStableOk && livePriceOk && forkOk && archivedOk && worktreeFoldOk && byteResumeOk && riskOk
 
       // 14 ── the history ring (7/07): accumulate -> truncate at HISTORY_MAX,
       //       clamp junk, and the REAL poller has been ringing the fake
@@ -571,13 +650,26 @@ export function runUsageSmoke(win: BrowserWindow): void {
       const resetRearmOk = r1.length === 1 && r1[0].kind === 'reset' && r2.length === 0 && q2.length === 1 && q2[0].level === 'quiet'
       // restart safety is the KV itself: the spent state survives as app state
       const thrPersistOk = (tMem.get('usage.thr.prov.p0') ?? '').includes(E2)
+      // the PREDICTIVE tap: a runs-out projection UNDER the warn pct fires once
+      // per epoch (the verdict line verbatim as the body), then stays quiet.
+      const pMem = new Map<string, string>()
+      const pkv = { get: (k: string): string | null => pMem.get(k) ?? null, set: (k: string, v: string): void => void pMem.set(k, v) }
+      const paceView: PlanUsageView = {
+        ...mk('p0', 60, E1),
+        pace: { verdict: 'runs-out', text: 'Ahead of pace — runs out ~Tue 12:00 at this rate', deltaText: '+20%', severity: 'warning' }
+      }
+      // A forecast is not a missed crossing: it fires on FIRST sight (unlike
+      // the pct arms-silently rule), then never again for this window epoch.
+      const pa1 = evaluateThresholds([paceView], tcfg, tProfiles, pkv)
+      const pa2 = evaluateThresholds([paceView], tcfg, tProfiles, pkv)
+      const paceAlertOk = pa1.length === 1 && pa1[0].kind === 'pace' && /runs out/.test(pa1[0].body) && pa2.length === 0
       const thrOk =
-        armedSilently && quietFiredOk && singleFireOk && warnFailoverOk && warnOnceOk && nonActiveNoSuggest && siblingHotNoSuggest && oneToastPerJump && resetRearmOk && thrPersistOk
+        armedSilently && quietFiredOk && singleFireOk && warnFailoverOk && warnOnceOk && nonActiveNoSuggest && siblingHotNoSuggest && oneToastPerJump && resetRearmOk && thrPersistOk && paceAlertOk
       const alertChannelsOk = AllChannels.includes('usage:alert') && AllChannels.includes('usage:alertCfgGet') && AllChannels.includes('usage:alertCfgSet')
 
       const pass =
         shapeOk && cadenceOk && staleOk && backoffOk && hiddenOk && resumeOk && grepClean && goldenOk && catalogOk && codexOk && codexDegrades && keysOk && noGetterOk && specsOk && cloudOk && costOk && histOk && costChannelsOk && statusNormOk && statusSvcOk && statusAppOk && statusChannelsOk && fanoutOk && thrOk && alertChannelsOk
-      result = { pass, shapeOk, cadenceOk, staleOk, backoffOk, hiddenOk, resumeOk, grepClean, goldenOk, goldenFails, catalogOk, catalogFails, codexOk, codexDegrades, vaultAvailable, keysOk, cipherOk, dbBytesOk, roundtripOk, replaceOk, clearOk, refusalOk, envRefOk, envLiteralRefusedOk, noGetterOk, specsOk, cloudOk, costOk, codexScanOk, claudeScanOk, costDegrades, histOk, ringTruncOk, ringClampOk, ringPolledOk, costChannelsOk, statusNormOk, statusSvcOk, enabledOnlyOk, unknownAfterFail, backoffSkipOk, statusHiddenOk, statusResumeOk, statusAppOk, appOutageOk, outageRelabeled, overlayOk, chipOk, overlayCleared, statusChannelsOk, fanoutOk, thrOk, armedSilently, quietFiredOk, singleFireOk, warnFailoverOk, warnOnceOk, nonActiveNoSuggest, siblingHotNoSuggest, oneToastPerJump, resetRearmOk, thrPersistOk, alertChannelsOk, providers: USAGE_PROVIDERS.length, goldens: PACE_GOLDENS.length, tiles: snap.length, debug: svc.debug() }
+      result = { pass, shapeOk, cadenceOk, staleOk, backoffOk, hiddenOk, resumeOk, grepClean, goldenOk, goldenFails, catalogOk, catalogFails, codexOk, codexDegrades, vaultAvailable, keysOk, cipherOk, dbBytesOk, roundtripOk, replaceOk, clearOk, refusalOk, envRefOk, envLiteralRefusedOk, noGetterOk, specsOk, cloudOk, costOk, codexScanOk, claudeScanOk, costDegrades, cacheStableOk, livePriceOk, forkOk, archivedOk, worktreeFoldOk, byteResumeOk, riskOk, paceAlertOk, histOk, ringTruncOk, ringClampOk, ringPolledOk, costChannelsOk, statusNormOk, statusSvcOk, enabledOnlyOk, unknownAfterFail, backoffSkipOk, statusHiddenOk, statusResumeOk, statusAppOk, appOutageOk, outageRelabeled, overlayOk, chipOk, overlayCleared, statusChannelsOk, fanoutOk, thrOk, armedSilently, quietFiredOk, singleFireOk, warnFailoverOk, warnOnceOk, nonActiveNoSuggest, siblingHotNoSuggest, oneToastPerJump, resetRearmOk, thrPersistOk, alertChannelsOk, providers: USAGE_PROVIDERS.length, goldens: PACE_GOLDENS.length, tiles: snap.length, debug: svc.debug() }
     } catch (e) {
       result = { pass: false, error: e instanceof Error ? e.message : String(e) }
     }

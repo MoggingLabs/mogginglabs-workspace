@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // The house MCP server (Phase-6/05b browser tools; Phase-8/02 makes it THE
 // server, `mogging`). Stdio JSON-RPC 2.0 to the agent; a pure CLIENT of two
-// token-authed LOCAL sockets it does not own (nothing listens on TCP, no
-// daemon-protocol change — v3 untouched):
+// token-authed LOCAL sockets it does not own (nothing listens on TCP; it adds no
+// message to the daemon protocol, but it MUST name the same version — see PROTOCOL):
 //   browser family  -> the app's browser-control endpoint (consent enforced
 //                      app-side, per-workspace, default OFF — ADR 0002)
 //   control family  -> the PTY daemon socket the `mogging` CLI already speaks;
@@ -25,7 +25,16 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { connectEndpoint } from './lib/endpoint-client.mjs'
 
-const PROTOCOL = 3
+// Keep in sync with DAEMON_PROTOCOL_VERSION in src/contracts/daemon/protocol.ts (this file is
+// plain Node — it cannot import the TS contract). It names the runtime DIRECTORY both the daemon
+// socket and the app's browser-control endpoint live in, so a stale value does not degrade: every
+// tool silently reports "the daemon is not running". Enforced by scripts/check-protocol-version.mjs.
+const PROTOCOL = 4
+// Release channel (keep in sync with contracts ReleaseChannel; same gate). Inside a pane the
+// MOGGING_*_ENDPOINT envs below pin the exact app, so this only decides the well-known FALLBACK
+// path — run/dev-v4 when MOGGING_CHANNEL=dev is inherited (dev panes) or --dev is passed.
+const CHANNEL = process.argv.includes('--dev') || process.env.MOGGING_CHANNEL === 'dev' ? 'dev' : 'prod'
+const RUN_SEGMENT = (CHANNEL === 'dev' ? 'dev-v' : 'v') + PROTOCOL
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
 function runtimeBase() {
@@ -37,14 +46,14 @@ function runtimeBase() {
 /** App (browser-control) endpoint file — same discovery as 6/05b. */
 function appEndpointFile() {
   if (process.env.MOGGING_BROWSER_ENDPOINT) return process.env.MOGGING_BROWSER_ENDPOINT
-  return join(runtimeBase(), 'MoggingLabs', 'run', 'v' + PROTOCOL, 'browser-control.json')
+  return join(runtimeBase(), 'MoggingLabs', 'run', RUN_SEGMENT, 'browser-control.json')
 }
 
 /** Daemon endpoint file — the `mogging` CLI's discovery, exactly: injected
  *  inside panes, well-known per-user runtime path outside. */
 function daemonEndpointFile() {
   if (process.env.MOGGING_DAEMON_ENDPOINT) return process.env.MOGGING_DAEMON_ENDPOINT
-  return join(runtimeBase(), 'MoggingLabs', 'run', 'v' + PROTOCOL, 'endpoint.json')
+  return join(runtimeBase(), 'MoggingLabs', 'run', RUN_SEGMENT, 'endpoint.json')
 }
 
 // ── The catalog (ONE piece of data; the hand-written array died in 8/02) ─────

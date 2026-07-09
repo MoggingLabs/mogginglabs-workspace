@@ -1,3 +1,5 @@
 export * from './adapters'
 export * from './detect'
 export * from './launch'
+export * from './install'
+export * from './logins'

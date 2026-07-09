@@ -19,7 +19,6 @@ export const SHORTCUTS: ShortcutGroup[] = [
     title: 'Navigation',
     rows: [
       { keys: 'Ctrl+K', label: 'Open the command palette' },
-      { keys: 'Ctrl+Shift+H', label: 'Home' },
       { keys: 'Ctrl+Shift+G', label: 'Board' },
       { keys: 'Ctrl+,', label: 'Settings' },
       { keys: 'Esc', label: 'Back · close an overlay' }
@@ -36,6 +35,7 @@ export const SHORTCUTS: ShortcutGroup[] = [
     title: 'Panes',
     rows: [
       { keys: 'Ctrl+Alt+← ↑ ↓ →', label: 'Move focus between panes' },
+      { keys: 'Ctrl+Shift+D', label: 'New terminal (splits the focused pane)' },
       { keys: 'Ctrl+Shift+Enter', label: 'Zoom the focused pane' }
     ]
   },

@@ -59,6 +59,11 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # The pty seam is a structural invariant (node-pty only via backend/platform/pty-host.ts).
+      # Pure Node, no native deps — cheap enough to run on every push, not just nightly sweeps.
+      - name: PTY seam gate
+        run: node scripts/check-pty-seam.mjs
+
       - name: Build
         run: npm run build
 

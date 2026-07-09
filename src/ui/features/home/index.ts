@@ -6,7 +6,7 @@ import {
   type RecentWorkspace,
   type WorkspaceState
 } from '@contracts'
-import { Button, EmptyState, clear, el, icon } from '../../components'
+import { Button, EmptyState, clear, el, icon, providerLogo } from '../../components'
 import { getBridge } from '../../core/ipc/bridge'
 import { onViewChange } from '../../core/shell/view-port'
 import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
@@ -229,10 +229,18 @@ export const homeFeature: UiFeature = {
               ]),
               el('div', { class: 'home-item-body' }, [
                 el('span', { class: 'home-item-name', text: p.name }),
-                el('span', {
-                  class: 'home-item-sub',
-                  text: p.mix.map((m) => `${m.count}× ${m.provider.replace(/^custom:.*/, 'custom')}`).join(' · ')
-                })
+                // The mix line wears each provider's mark: "2× ✳ · 1× ❋" beats prose.
+                el(
+                  'span',
+                  { class: 'home-item-sub home-item-mix' },
+                  p.mix.flatMap((m, i) => [
+                    i > 0 ? el('span', { class: 'home-item-mix-sep', text: '·' }) : null,
+                    el('span', { class: 'home-item-mix-part' }, [
+                      el('span', { text: `${m.count}×` }),
+                      m.provider === 'shell' ? icon('terminal', 12) : providerLogo(m.provider, 12)
+                    ])
+                  ])
+                )
               ]),
               el('span', { class: 'home-item-meta', text: `${total} agents` }),
               el('span', { class: 'home-item-go' }, [icon('arrow-right', 14)])

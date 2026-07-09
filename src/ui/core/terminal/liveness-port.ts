@@ -8,6 +8,30 @@
 
 const live = new Set<number>()
 const waiters = new Map<number, Set<() => void>>()
+const reattached = new Set<number>()
+
+/**
+ * The pane's PTY was ALREADY running when we asked for it — the daemon is detached
+ * (ADR 0006) and outlived the app, so it handed us the live session instead of starting
+ * a shell. Whatever was in that pane (an agent, mid-conversation) is still in it.
+ *
+ * The restore path reads this before typing: a launch command written into a reattached
+ * pane does not relaunch anything, it lands in the running agent's stdin.
+ */
+export function markPaneReattached(id: number): void {
+  reattached.add(id)
+}
+
+export function wasPaneReattached(id: number): boolean {
+  return reattached.has(id)
+}
+
+/** Pane closed for good — drop both marks so a recycled pane id starts clean. */
+export function forgetPane(id: number): void {
+  live.delete(id)
+  reattached.delete(id)
+  waiters.delete(id)
+}
 
 export function markPaneLive(id: number): void {
   if (live.has(id)) return

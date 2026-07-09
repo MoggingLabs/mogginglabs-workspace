@@ -105,18 +105,26 @@ export function runUsageGlanceSmoke(win: BrowserWindow): void {
       const openBudget = softGapMs(100)
       const openFast = openMs < openBudget
 
-      // ── (c) pace line under Weekly: verdict verbatim + signed delta + reset ──
+      // ── (c) pace under EVERY window (both limits forecast themselves): the
+      //    plan-level verdict (worst window) appears VERBATIM among them, every
+      //    paceable window carries a signed delta, resets render. ──
       stage = 'c-pace'
       const paceText = await ES<string>(
         `window.bridge.invoke('usage:list').then((plans) => plans.find((p) => p.providerId === 'claude' && p.profileId === 'main')?.pace?.text ?? '')`
       )
-      const cInfo = await ES<{ verdict: string; delta: string; reset: string }>(`(() => {
-        const v = document.querySelector('.usage-popover .usage-verdict')
-        const d = document.querySelector('.usage-popover .usage-pace-delta')
+      const cInfo = await ES<{ verdicts: string[]; deltas: string[]; reset: string }>(`(() => {
+        const vs = [...document.querySelectorAll('.usage-popover .usage-verdict')].map((v) => v.textContent || '')
+        const ds = [...document.querySelectorAll('.usage-popover .usage-pace-delta')].map((d) => d.textContent || '')
         const r = document.querySelector('.usage-popover .usage-reset')
-        return { verdict: v ? v.textContent : '', delta: d ? d.textContent : '', reset: r ? r.textContent : '' }
+        return { verdicts: vs, deltas: ds, reset: r ? r.textContent : '' }
       })()`)
-      const cOk = !!paceText && cInfo.verdict === paceText && /[+\-−]?\d+%/.test(cInfo.delta) && cInfo.reset.startsWith('resets in')
+      const cOk =
+        !!paceText &&
+        cInfo.verdicts.includes(paceText) &&
+        cInfo.verdicts.length >= 2 && // session AND weekly each pace themselves
+        cInfo.deltas.length === cInfo.verdicts.length &&
+        cInfo.deltas.every((d) => /[+\-−]?\d+%/.test(d)) &&
+        cInfo.reset.startsWith('resets in')
 
       // ── (g) Status Page → browser:openExternal (captured at shell.openExternal) ──
       stage = 'g-status'

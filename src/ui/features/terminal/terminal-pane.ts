@@ -5,23 +5,28 @@ import { SerializeAddon } from '@xterm/addon-serialize'
 import {
   ClipboardChannels,
   WorktreeChannels,
+  type ContextUsage,
   type GitStatus,
   type PaneId,
   type RemoveWorktreeResult
 } from '@contracts'
 import '@xterm/xterm/css/xterm.css'
-import { createModal, icon, showToast, type IconName } from '../../components'
+import { createModal, icon, providerLogo, showToast, type IconName } from '../../components'
 import { getBridge } from '../../core/ipc/bridge'
 import { terminalClient } from './terminal.client'
 import { onTerminalTheme } from '../../core/theme/theme-port'
 import { onTerminalFontSize, terminalFontSize, TERMINAL_LINE_HEIGHT } from '../../core/terminal/font-port'
-import { markPaneLive } from '../../core/terminal/liveness-port'
+import { windowsPtyFor } from '../../core/terminal/pty-emulation'
+import { forgetPane, markPaneLive, markPaneReattached } from '../../core/terminal/liveness-port'
 import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
 import { setPaneState, clearPaneState } from '../../core/attention/attention-port'
 import { setPaneCwd, clearPaneCwd, getPaneCwd } from '../../core/layout/pane-cwd'
 import { getPaneRole, onPaneRole, getPaneRemote, getPaneProfile } from '../../core/layout/pane-meta'
 import { clearPaneCli, mcpChipForPane, onMcpStatusChange } from '../../core/agents/mcp-status-port'
+import { getPaneContext, onPaneContext, type PaneContext } from '../../core/terminal/context-port'
+import { clearPaneAgentSession, getPaneAgentSession, onPaneAgentSession } from '../../core/agents/agent-session-port'
 import { claimsFor, onClaimsChange, workspaceClaims } from './claims-store'
+import { createPaneScrollbar, type PaneScrollbarHandle } from './pane-scrollbar'
 import { onFocusedPane } from '../../core/layout/focus'
 import { onPaneGit, getPaneGit } from '../../core/git/git-port'
 import { allCommands } from '../../core/commands/command-port'
@@ -50,6 +55,20 @@ function enqueueGlJob(job: () => void): void {
   requestAnimationFrame(step)
 }
 
+/**
+ * How long a resize burst must be quiet before the pane refits. A resize is not free:
+ * ConPTY answers EVERY one by repainting its entire viewport, and it replays conhost's
+ * screen buffer — which still holds the pre-agent shell prompts — over whatever the
+ * agent is drawing. Measured against cmd.exe: the 9 ResizeObserver ticks of a 150 ms
+ * rail transition cost 9 full repaints (3717 bytes); coalesced, they cost 1 (419).
+ *
+ * 120 ms > --dur-2 (the rail's 150 ms transition trails off inside it) and comfortably
+ * covers a window drag's per-frame ticks, while staying under the ~150 ms at which a
+ * settle starts to read as lag. The FIRST tick of a burst still fits immediately — a
+ * discrete change (pane mount, template apply, reveal) must never wait on a timer.
+ */
+const REFIT_SETTLE_MS = 120
+
 /** A single xterm pane bound to a backend PTY of the same id. */
 export class TerminalPane {
   private readonly term: Terminal
@@ -74,8 +93,16 @@ export class TerminalPane {
   private roleUnsub?: () => void
   private claimsUnsub?: () => void
   private mcpUnsub?: () => void
+  private ctxUnsub?: () => void
+  private agentSessionUnsub?: () => void
+  private agentChipUnsub?: () => void
+  private scrollbar?: PaneScrollbarHandle
+  private osc133?: { dispose(): void }
   private renameFn?: () => void
   private blocks?: BlockTracker
+  private refitTimer?: ReturnType<typeof setTimeout>
+  private refitLeading = true
+  private disposed = false
 
   constructor(
     private readonly id: PaneId,
@@ -89,6 +116,9 @@ export class TerminalPane {
       cursorBlink: false, // enabled only while focused (perf: fewer idle repaints across panes)
       allowProposedApi: true,
       scrollback: 10000,
+      // windowsPty is NOT set here: nobody in the renderer knows how this pane's pty grows until
+      // the pty exists. It is applied from the spawn answer below, which arrives before the first
+      // byte of output — the buffer is empty until then, so no resize can have gone wrong yet.
       theme: { background: '#0c0d0f', foreground: '#f4f5f7' } // corrected by the theme port on mount
     })
     this.term.loadAddon(this.fit)
@@ -141,7 +171,13 @@ export class TerminalPane {
       }
     })
     terminalClient.onExit((e) => {
-      if (e.id === this.id) this.term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n')
+      if (e.id === this.id) {
+        this.term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n')
+        // No process, no agent: the context bar (and any future session-scoped
+        // chrome) must not outlive the pane's process (agent-session port -> the
+        // context feature drops every source).
+        clearPaneAgentSession(this.id)
+      }
     })
     // OSC 7 tells us where this pane's shell/agent actually is -> feed per-pane git (2/03).
     terminalClient.onCwd((e) => {
@@ -152,8 +188,10 @@ export class TerminalPane {
     // ResizeObserver is the one true fit driver: it fires for real resizes AND for
     // display flips (hidden→shown reports 0→W), including a window resized while this
     // pane was hidden. Fits are UNGUARDED on purpose — mid-transition style reads can
-    // lie for one pass, and the follow-up observation converges to the true size.
-    this.resizeObs = new ResizeObserver(() => this.refit(true))
+    // lie for one pass, and the follow-up observation converges to the true size. They
+    // are COALESCED, though: the observer fires once per frame through a rail transition
+    // or a window drag, and each surviving fit costs the PTY a full ConPTY repaint.
+    this.resizeObs = new ResizeObserver(() => this.scheduleRefit())
     this.resizeObs.observe(body)
 
     // Font-metrics correctness: if any pane measured its cell size against a fallback
@@ -165,13 +203,34 @@ export class TerminalPane {
     // Remote pane (4/05): the workspace manifest published this BEFORE apply, so the
     // spawn itself rides ssh. Local panes are unchanged.
     const remote = getPaneRemote(this.id)
-    void terminalClient.spawn({
-      id: this.id,
-      cwd: '',
-      cols: this.term.cols,
-      rows: this.term.rows,
-      remoteHostId: remote?.hostId
-    })
+    // The workspace's folder, published by the controller BEFORE it built this pane. This
+    // was a hardcoded '', so the shell started in the daemon's OWN directory and only an
+    // agent launch (`cd /d "<cwd>" && …`) ever moved it — a plain terminal opened in the
+    // app's install folder, whatever the wizard picked. A REMOTE pane sends none: the path
+    // is local and would mean nothing on the far side (publishPaneCwds skips those slots).
+    const cwd = remote ? '' : (getPaneCwd(this.id) ?? '')
+    void terminalClient
+      .spawn({
+        id: this.id,
+        cwd,
+        cols: this.term.cols,
+        rows: this.term.rows,
+        remoteHostId: remote?.hostId
+      })
+      .then((res) => {
+        // The pty told us how it grows. Apply BEFORE any output or resize: xterm re-reads
+        // windowsPty on every resize, and nothing has resized a non-empty buffer yet.
+        const wp = windowsPtyFor(res.pty)
+        if (wp && !this.disposed) this.term.options.windowsPty = wp
+        // Reattached, not started: the detached daemon still held this pane's session, so
+        // its agent is alive and mid-conversation. The restore lineup checks this before
+        // typing (agents/index.ts) — otherwise `claude --resume` lands in Claude's prompt.
+        if (res.existing) markPaneReattached(this.id)
+      })
+      .catch((err) => {
+        // A pane with no pty renders nothing and grows wrong. Never swallow it.
+        console.error(`pane ${this.id}: spawn failed`, err)
+      })
 
     // Blink the cursor only while this pane is focused — cuts idle repaints across many panes.
     this.term.textarea?.addEventListener('focus', () => (this.term.options.cursorBlink = true))
@@ -189,6 +248,38 @@ export class TerminalPane {
     })
 
     this.blocks = new BlockTracker(this.term, body) // Warp-style command blocks from OSC 133 (02)
+
+    // Agent-exit detection (best effort): the launched agent IS the shell's foreground
+    // command, so where the shell emits OSC 133 marks, 133;C is the agent starting and
+    // the next 133;D is the agent EXITING back to the prompt — clear the pane's agent
+    // session then (the context bar must not outlive the agent it describes). Two
+    // guards: C must arrive first (arm), and marks inside a short grace window after
+    // the session was set are ignored — a daemon reattach replays prior scrollback,
+    // OSC marks included, and those must not read as a live exit. Shells without
+    // integration emit no marks: no auto-hide, and never a false one. Registered
+    // AFTER BlockTracker so this handler runs FIRST (xterm calls same-ident handlers
+    // in reverse registration order); returning false passes the mark on to blocks.
+    let agentSetAt = 0
+    let agentArmed = false
+    this.agentSessionUnsub = onPaneAgentSession((paneId, s) => {
+      if (paneId !== this.id) return
+      agentSetAt = s ? Date.now() : 0
+      agentArmed = false
+    })
+    this.osc133 = this.term.parser.registerOscHandler(133, (data) => {
+      const mark = data[0]
+      if (agentSetAt) {
+        // Arm on C at ANY time (a fresh launch's C lands within the grace window);
+        // only the CLEAR respects the grace, so replayed end-marks never fire it.
+        if (mark === 'C') agentArmed = true
+        else if (agentArmed && (mark === 'D' || mark === 'A') && Date.now() - agentSetAt > 1500) {
+          agentSetAt = 0
+          agentArmed = false
+          clearPaneAgentSession(this.id)
+        }
+      }
+      return false
+    })
 
     // Focus-follows-selection: when the focus port names this pane (click, keyboard
     // pane-nav, workspace switch), give the terminal real keyboard focus.
@@ -230,6 +321,25 @@ export class TerminalPane {
         if (!this.visible) this.releaseWebgl()
       })
     }, 1500)
+  }
+
+  /** Leading-edge + trailing-edge coalescer for the ResizeObserver. The first tick of a
+   *  burst fits at once (a pane mount or a reveal must not wait REFIT_SETTLE_MS); every
+   *  tick after it only pushes the trailing fit out, so a 150 ms transition or a window
+   *  drag ends in exactly ONE more fit — and therefore one ConPTY repaint, not one per
+   *  frame. xterm keeps its old grid for the duration, which is what every terminal that
+   *  debounces its fit does (the transient is a clipped canvas, not a smeared buffer). */
+  private scheduleRefit(): void {
+    if (this.refitLeading) {
+      this.refitLeading = false
+      this.refit(true)
+    }
+    if (this.refitTimer) clearTimeout(this.refitTimer)
+    this.refitTimer = setTimeout(() => {
+      this.refitTimer = undefined
+      this.refitLeading = true
+      if (!this.disposed) this.refit(true)
+    }, REFIT_SETTLE_MS)
   }
 
   /** Re-fit the grid to the body and tell the PTY. The default path is cheap by
@@ -429,9 +539,77 @@ export class TerminalPane {
     }
     applyMcp()
     this.mcpUnsub = onMcpStatusChange(applyMcp)
+    // Agent context gauge: how full the pane's agent conversation window is, live
+    // off the context port (session-log tail + statusline relay — counts only,
+    // never content). Claude Code's OWN indicator, verbatim (assets/Inspiration/
+    // context.png): the moon disc followed by "62% used" — ONE form at every pane
+    // width, no bar variant. It exists only while an actual agent session does
+    // (the agent-session lifecycle feeds the port and clears it on every exit
+    // path). Color is a ramp, not a flag: the disc's arc goes green -> warning at
+    // 60 -> danger at 90 (the same "amber means look, red means act" grammar as
+    // the state dot); the text stays quiet like the reference.
+    const ctx = document.createElement('span')
+    ctx.className = 'pane-context'
+    ctx.hidden = true
+    const ctxDisc = document.createElement('span')
+    ctxDisc.className = 'ctx-disc'
+    const ctxPct = document.createElement('span')
+    ctxPct.className = 'ctx-pct'
+    ctx.append(ctxDisc, ctxPct)
+    const fmtTok = (n: number): string => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
+    const applyContext = (u: PaneContext): void => {
+      if (!u) {
+        ctx.hidden = true
+        return
+      }
+      ctx.hidden = false
+      // PENDING: the agent just launched and its log has no usage line yet (that
+      // arrives with the first response). The gauge shows up EMPTY with a "–" —
+      // present from the moment the agent is, but never a made-up number.
+      if (u === 'pending') {
+        ctx.style.setProperty('--ctx', '0')
+        ctxPct.textContent = '–'
+        ctx.classList.remove('is-warn', 'is-hot')
+        ctx.title = 'Agent context: waiting for the session’s first response'
+        return
+      }
+      ctx.style.setProperty('--ctx', String(u.usedPct)) // drives the disc's sweep
+      // A seeded baseline (pre-first-response) is an approximation and SAYS so: "~".
+      ctxPct.textContent = `${u.approx ? '~' : ''}${u.usedPct}% used`
+      ctx.classList.toggle('is-warn', u.usedPct >= 60 && u.usedPct < 90)
+      ctx.classList.toggle('is-hot', u.usedPct >= 90)
+      ctx.title =
+        `Agent context: ${u.approx ? '~' : ''}${u.usedPct}% used — ~${fmtTok(u.usedTokens)} of ${fmtTok(u.windowTokens)} tokens` +
+        (u.model ? ` (${u.model})` : '') +
+        (u.approx ? '\nBaseline from the previous session — refines on the first response' : '')
+    }
+    applyContext(getPaneContext(this.id))
+    this.ctxUnsub = onPaneContext((paneId, usage) => {
+      if (paneId === this.id) applyContext(usage)
+    })
+    // Provider mark (WHO runs in this pane): the launched agent's logo, alive only
+    // while its session is — same lifetime as the context bar. Decorative (the
+    // title carries the words); hidden for plain shells.
+    const agentChip = document.createElement('span')
+    agentChip.className = 'pane-agent'
+    agentChip.hidden = true
+    const applyAgentChip = (provider: string | null): void => {
+      agentChip.replaceChildren()
+      agentChip.hidden = !provider
+      if (provider) {
+        agentChip.append(providerLogo(provider, 18)) // matches the bar's ~1.65× chip scale
+        agentChip.title = provider.startsWith('custom:') ? provider.slice('custom:'.length) : provider
+      }
+    }
+    applyAgentChip(getPaneAgentSession(this.id)?.provider ?? null)
+    this.agentChipUnsub = onPaneAgentSession((paneId, s) => {
+      if (paneId === this.id) applyAgentChip(s?.provider ?? null)
+    })
     // Ordered, state dot FIRST (the leading glyph). Remote sits right after it — WHERE
-    // before the role/claims/mcp attributes — then the title.
-    left.append(state, ...(remoteChip ? [remoteChip] : []), role, claimsChip, mcpChip, title)
+    // before the agent mark (WHO), then the role/claims/mcp attributes — then the title.
+    // The context gauge is NOT here: it reads as pane STATUS, not identity, so it
+    // lives on the RIGHT, leading the action cluster (appended there below).
+    left.append(state, ...(remoteChip ? [remoteChip] : []), agentChip, role, claimsChip, mcpChip, title)
 
     // Center: branch chip — a branch icon + name (soft chip, like the reference bar).
     const git = document.createElement('span')
@@ -475,11 +653,17 @@ export class TerminalPane {
       if (menu.hidden) this.buildMenu(menu)
       menu.hidden = !menu.hidden
     })
+    // The expand trio carries `pane-act-expand`: it is the SECOND thing the bar gives up
+    // when it runs out of room (after the branch chip), and the @container rules in
+    // global.css need a hook to retire it. Both survive in the ⋯ menu — see buildMenu.
+    // The context gauge LEADS the cluster (user ask: the visual lives on the right):
+    // status beside the controls, never between them and the pane edge.
     actions.append(
+      ctx,
       menuBtn,
-      act('expand', 'Expand to whole workspace (Ctrl+Shift+Enter)', () => expand('full')),
-      act('expand-h', 'Expand across full width', () => expand('row')),
-      act('expand-v', 'Expand to full height', () => expand('col')),
+      act('expand', 'Expand to whole workspace (Ctrl+Shift+Enter)', () => expand('full'), 'pane-act-expand'),
+      act('expand-h', 'Expand across full width', () => expand('row'), 'pane-act-expand'),
+      act('expand-v', 'Expand to full height', () => expand('col'), 'pane-act-expand'),
       act(
         'x',
         'Close terminal',
@@ -501,22 +685,10 @@ export class TerminalPane {
     body.className = 'pane-body'
     host.append(header, body)
 
-    // Hover-only scrollbar: light the thumb only while the cursor rides the pane's
-    // right-edge strip (a class flip on change — no per-move layout work).
-    let scrollHot = false
-    body.addEventListener('mousemove', (e) => {
-      const hot = body.getBoundingClientRect().right - e.clientX <= 16
-      if (hot !== scrollHot) {
-        scrollHot = hot
-        body.classList.toggle('scroll-hot', hot)
-      }
-    })
-    body.addEventListener('mouseleave', () => {
-      if (scrollHot) {
-        scrollHot = false
-        body.classList.remove('scroll-hot')
-      }
-    })
+    // The slide bar + bottom-left jump pill (pane-scrollbar.ts) replace the old
+    // hover-only native scrollbar: a persistent grabbable track with to-top /
+    // to-bottom endpoints, and a one-tap return to the latest output.
+    this.scrollbar = createPaneScrollbar(this.term, body)
 
     // Title precedence: what the agent says it's doing (OSC 0/2 window title) → the
     // launched agent's label → "Terminal N".
@@ -532,7 +704,11 @@ export class TerminalPane {
     const applyLabel = (_text: string): void => applyTitle()
     applyTitle()
     this.term.onTitleChange((t) => {
-      oscTitle = (t ?? '').trim()
+      // Strip a LEADING decorative spark: Claude Code titles itself "✳ Claude Code"
+      // (and "✶/✻ <task>" while working), but the header already shows the provider
+      // logo chip right before the title — glyph + logo read as two marks (the
+      // "too many logos" report). The words stay; only the duplicate mark goes.
+      oscTitle = (t ?? '').trim().replace(/^[✳✶✻✽✢·∗*]+\s*/u, '')
       applyTitle()
     })
 
@@ -584,7 +760,9 @@ export class TerminalPane {
     terminalClient.onState((e) => {
       if (e.id === this.id) {
         state.dataset.state = e.state
-        state.title = e.state === 'attention' ? 'needs your input' : e.state
+        // Human words for the three states: gray = idle, amber = working (output
+        // is flowing / an OSC-integrated command runs), pulsing = blocked on you.
+        state.title = e.state === 'attention' ? 'needs your input' : e.state === 'busy' ? 'working' : 'idle'
         setPaneState(this.id, e.state) // feed the rail / app attention aggregation
       }
     })
@@ -614,7 +792,44 @@ export class TerminalPane {
       })
       return b
     }
+    // ── What the BAR gives up when it narrows, the menu always keeps ──────────────
+    // The header is a summary; this menu is the truth. Its first section mirrors, in the
+    // same order, exactly what the @container rules retire: the branch chip, then the
+    // expand trio. They are listed here UNCONDITIONALLY — not "when hidden" — because a
+    // menu whose contents depend on the pane's width is a menu you cannot learn. The bar
+    // and the menu are then always consistent, with no measurement and no sync.
+    const status = getPaneGit(this.id)
+    if (status) {
+      const ab = (status.ahead ? `↑${status.ahead}` : '') + (status.behind ? `↓${status.behind}` : '')
+      const note = document.createElement('div')
+      note.className = 'menu-note'
+      note.textContent =
+        `${status.detached ? 'Detached at' : 'Branch:'} ${status.branch}${ab ? ' ' + ab : ''}` +
+        `${status.dirty ? ' — uncommitted changes' : ''}`
+      menu.append(note)
+    }
+    const expandFromMenu = (mode: 'full' | 'col' | 'row'): void => {
+      // Same event the trio's buttons raise; it bubbles out of the menu to the pane host.
+      menu.dispatchEvent(
+        new CustomEvent('mogging:expand-pane', { bubbles: true, detail: { paneId: this.id, mode } })
+      )
+    }
+    // Split (new terminal beside/below this one): routed through the workspace
+    // controller — the new pane's cwd must be seeded before its slot exists.
+    const splitFromMenu = (dir: 'h' | 'v'): void => {
+      menu.dispatchEvent(
+        new CustomEvent('mogging:split-pane', { bubbles: true, detail: { paneId: this.id, dir } })
+      )
+    }
+    const sepLayout = document.createElement('div')
+    sepLayout.className = 'menu-sep'
     menu.append(
+      item('expand', 'Expand to whole workspace', () => expandFromMenu('full')),
+      item('expand-h', 'Expand across full width', () => expandFromMenu('row')),
+      item('expand-v', 'Expand to full height', () => expandFromMenu('col')),
+      item('plus', 'Split right — new terminal', () => splitFromMenu('h')),
+      item('plus', 'Split down — new terminal', () => splitFromMenu('v')),
+      sepLayout,
       item('pencil', 'Rename', () => this.renameFn?.()),
       item('trash', 'Clear terminal', () => this.term.clear()),
       item('folder', 'Copy working directory', () => {
@@ -636,6 +851,17 @@ export class TerminalPane {
       const note = document.createElement('div')
       note.className = 'menu-note'
       note.textContent = `Profile: ${profileName}`
+      menu.append(note)
+    }
+    // Context bar mirror: on a narrow pane the bar compresses to a ring whose numbers
+    // live in a tooltip — the menu states them plainly (the bar is a summary; this
+    // menu is the truth). Counts only, same as the wire.
+    const ctxUsage = getPaneContext(this.id)
+    if (ctxUsage && ctxUsage !== 'pending') {
+      const k = (n: number): string => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
+      const note = document.createElement('div')
+      note.className = 'menu-note'
+      note.textContent = `Agent context: ${ctxUsage.approx ? '~' : ''}${ctxUsage.usedPct}% used (~${k(ctxUsage.usedTokens)} of ${k(ctxUsage.windowTokens)} tokens)`
       menu.append(note)
     }
     // Worktree-isolated pane (3/03): guarded removal. Dirty worktrees are refused with
@@ -752,6 +978,13 @@ export class TerminalPane {
           mcp.textContent = 'restart +2'
           mcp.classList.add('is-restart')
         }
+        const ctxEl = host.querySelector<HTMLElement>('.pane-context')
+        if (ctxEl) {
+          ctxEl.hidden = false
+          ctxEl.style.setProperty('--ctx', '62')
+          const pctEl = ctxEl.querySelector<HTMLElement>('.ctx-pct')
+          if (pctEl) pctEl.textContent = '62% used'
+        }
       },
       term: this.term,
       write: (data: string) => terminalClient.write({ id: this.id, data }),
@@ -795,8 +1028,14 @@ export class TerminalPane {
   }
 
   dispose(): void {
+    this.disposed = true
+    if (this.refitTimer) {
+      clearTimeout(this.refitTimer)
+      this.refitTimer = undefined
+    }
     clearPaneState(this.id)
     clearPaneCwd(this.id) // stops the backend git watch for this pane (git feature unwatches)
+    forgetPane(this.id) // live/reattached marks die with the pane, not with the id
     this.blocks?.dispose()
     this.themeUnsub?.()
     this.fontUnsub?.()
@@ -806,6 +1045,11 @@ export class TerminalPane {
     this.roleUnsub?.()
     this.claimsUnsub?.()
     this.mcpUnsub?.()
+    this.ctxUnsub?.()
+    this.agentSessionUnsub?.()
+    this.agentChipUnsub?.()
+    this.scrollbar?.dispose()
+    this.osc133?.dispose()
     clearPaneCli(this.id)
     this.visObs?.disconnect()
     this.releaseWebgl()

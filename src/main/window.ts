@@ -21,14 +21,17 @@ export function createMainWindow(): BrowserWindow {
     // native window controls remain, overlaid by the OS — nothing "glued on top".
     titleBarStyle: 'hidden',
     ...(process.platform === 'darwin'
-      // x:14 puts the three traffic lights ~66px in; the renderer's brand clears them
-      // with a matching inset, --traffic-light-inset in global.css. Move one, move both.
-      ? { trafficLightPosition: { x: 14, y: 13 } }
+      // x:14 puts the three traffic lights ~66px in; the renderer's lead cluster clears
+      // them with a matching inset, --traffic-light-inset in global.css. Move one, move
+      // both. y centres the 16px lights in the 44px bar (--titlebar-h).
+      ? { trafficLightPosition: { x: 14, y: 14 } }
       : {
           titleBarOverlay: {
             color: '#141518', // --bg-surface: the controls sit ON the top bar, one surface
             symbolColor: '#a9aeb6',
-            height: 40
+            // MUST equal --titlebar-h in global.css: this is the band the OS paints its
+            // min/max/close into, and .titlebar-right reserves width for exactly it.
+            height: 44
           }
         }),
     webPreferences: {

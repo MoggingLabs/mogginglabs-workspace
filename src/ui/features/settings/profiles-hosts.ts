@@ -4,15 +4,19 @@ import {
   RemoteChannels,
   type AgentInfo,
   type AgentProfile,
+  type AgentProfileDraft,
   type RemoteHost
 } from '@contracts'
-import { Button, Card, confirmDialog, EmptyState, FieldGroup, SectionHeader, el } from '../../components'
+import { Button, Card, confirmDialog, EmptyState, FieldGroup, Pill, SectionHeader, el, providerLogo } from '../../components'
 import { getBridge } from '../../core/ipc/bridge'
 import { announceProfilesChanged } from '../../core/agents/profiles-port'
+import { switchActiveProfile } from '../../core/agents/profile-switch'
 
 /**
- * Settings § Profiles & SSH hosts (Phase-4 polish): full add/edit/remove management
- * for the two pointer stores. ADR 0002 is enforced MAIN-SIDE (`profiles:save` /
+ * Settings § Profiles & SSH hosts (Phase-4 polish, profiles simplified): a profile
+ * asks for exactly TWO things — a name and the subscription email. The env pointer
+ * set and failover order are DERIVED main-side at save (src/main/profiles.ts); the
+ * form never shows them. ADR 0002 is enforced MAIN-SIDE (`profiles:save` /
  * `remotes:save` return false on refusal) — this UI only SURFACES the refusal reason
  * inline; it never weakens or duplicates the deny-list. Values render in this form
  * and nowhere else (never telemetry/logs).
@@ -59,43 +63,70 @@ export function createProfilesHostsSection(): HTMLElement {
       profilesList.append(
         EmptyState({
           icon: 'user',
-          title: 'No profiles yet',
-          body: 'One per provider account (work, personal, …) — pointers only, never credentials.'
+          title: 'No logins detected yet',
+          body: 'Sign in with an agent CLI (e.g. run `claude`) and it appears here — or add a profile for another subscription.'
         })
       )
     }
+    // Default per provider = the lowest failover order (what new launches use).
+    const defaultIds = new Set<string>()
+    for (const p of profiles) {
+      const top = profiles.filter((x) => x.provider === p.provider).sort((a, b) => a.order - b.order)[0]
+      if (top) defaultIds.add(top.id)
+    }
     for (const p of profiles.sort((a, b) => a.provider.localeCompare(b.provider) || a.order - b.order)) {
-      const envSummary = Object.entries(p.env)
-        .map(([k, v]) => `${k}=${v}`)
-        .join(' · ')
+      const home = Object.values(p.env)[0]
+      const detected = p.id.startsWith('login-')
+      const isDefault = defaultIds.has(p.id)
+      const siblings = profiles.filter((x) => x.provider === p.provider).length
       profilesList.append(
         el('div', { class: 'ph-row' }, [
           el('div', { class: 'ph-row-main' }, [
-            el('span', { class: 'ph-row-name', text: p.name }),
-            el('span', { class: 'ph-row-meta', text: `${p.provider} · order ${p.order}` }),
-            el('span', { class: 'ph-row-env', text: envSummary || 'no env pointers' })
+            el('span', { class: 'ph-row-name' }, [
+              el('span', { text: p.name }),
+              isDefault ? Pill({ text: 'Default', tone: 'success', title: 'New launches use this account' }) : null,
+              detected ? Pill({ text: 'detected', title: 'Signed in on this machine — found automatically' }) : null
+            ]),
+            el('span', { class: 'ph-row-meta' }, [
+              providerLogo(p.provider, 13),
+              el('span', { text: `${p.provider}${p.email ? ' · ' + p.email : ''}` })
+            ]),
+            el('span', { class: 'ph-row-env', text: home ? `own config home · ${home}` : 'your CLI’s usual sign-in' })
           ]),
           el('div', { class: 'ph-row-actions' }, [
-            Button({ label: 'Edit', size: 'sm', onClick: () => openProfileForm(p) }),
-            Button({
-              label: 'Delete',
-              size: 'sm',
-              variant: 'ghost',
-              onClick: () => {
-                void confirmDialog({
-                  title: `Delete profile “${p.name}”?`,
-                  message: 'This pointer set is removed. Panes already launched keep their env; new launches won’t offer it.',
-                  confirmLabel: 'Delete profile',
-                  danger: true
-                }).then((ok) => {
-                  if (!ok) return
-                  void invoke(ProfileChannels.remove, p.id).then(() => {
-                    announceProfilesChanged()
-                    void refresh()
-                  })
+            !isDefault && siblings > 1
+              ? Button({
+                  label: 'Make default',
+                  size: 'sm',
+                  onClick: () => {
+                    void switchActiveProfile(p.provider, p.id).then(() => refresh())
+                  }
                 })
-              }
-            })
+              : null,
+            Button({ label: 'Edit', size: 'sm', onClick: () => openProfileForm(p) }),
+            // A detected login can't be deleted away — while the CLI stays signed
+            // in, the next reconcile would truthfully bring it back.
+            detected
+              ? null
+              : Button({
+                  label: 'Delete',
+                  size: 'sm',
+                  variant: 'ghost',
+                  onClick: () => {
+                    void confirmDialog({
+                      title: `Delete profile “${p.name}”?`,
+                      message: 'This pointer set is removed. Panes already launched keep their env; new launches won’t offer it.',
+                      confirmLabel: 'Delete profile',
+                      danger: true
+                    }).then((ok) => {
+                      if (!ok) return
+                      void invoke(ProfileChannels.remove, p.id).then(() => {
+                        announceProfilesChanged()
+                        void refresh()
+                      })
+                    })
+                  }
+                })
           ])
         ])
       )
@@ -109,67 +140,43 @@ export function createProfilesHostsSection(): HTMLElement {
       class: 'input prof-name',
       attrs: { type: 'text', placeholder: 'Profile name (e.g. Work)', value: existing?.name ?? '' }
     }) as HTMLInputElement
+    const email = el('input', {
+      class: 'input prof-email',
+      attrs: { type: 'email', placeholder: 'you@company.com', value: existing?.email ?? '' },
+      ariaLabel: 'Subscription email'
+    }) as HTMLInputElement
+    // The one PICK (defaulted): which CLI this subscription signs into. Fixed on
+    // edit — a profile's provider is its identity (usage lanes, failover, homes).
     const provider = el('select', { class: 'input prof-provider', ariaLabel: 'Provider' }) as HTMLSelectElement
     for (const a of roster) provider.append(new Option(a.name, a.id))
     if (!roster.length) provider.append(new Option('claude', 'claude'))
-    if (existing) provider.value = existing.provider
-    const order = el('input', {
-      class: 'input prof-order',
-      attrs: { type: 'number', min: '0', max: '99', value: String(existing?.order ?? 0) },
-      ariaLabel: 'Failover order (0 = default)'
-    }) as HTMLInputElement
-
-    const envRows = el('div', { class: 'ph-env-rows' })
-    const addEnvRow = (key = '', value = ''): void => {
-      const k = el('input', {
-        class: 'input input--mono prof-env-key',
-        attrs: { type: 'text', placeholder: 'ENV_NAME', value: key, 'aria-label': 'Environment variable name' }
-      }) as HTMLInputElement
-      const v = el('input', {
-        class: 'input input--mono prof-env-val',
-        attrs: {
-          type: 'text',
-          placeholder: 'pointer value (a dir/file/flag — never a secret)',
-          value,
-          'aria-label': 'Pointer value (a dir, file, or flag — never a secret)'
-        }
-      }) as HTMLInputElement
-      const rowEl = el('div', { class: 'ph-env-row' }, [
-        k,
-        v,
-        Button({ label: '×', size: 'sm', variant: 'ghost', ariaLabel: 'Remove variable', onClick: () => rowEl.remove() })
-      ])
-      envRows.append(rowEl)
+    if (existing) {
+      if (!Array.from(provider.options).some((o) => o.value === existing.provider))
+        provider.append(new Option(existing.provider, existing.provider))
+      provider.value = existing.provider
+      provider.disabled = true
     }
-    const existingEnv = Object.entries(existing?.env ?? {})
-    if (existingEnv.length) existingEnv.forEach(([k, v]) => addEnvRow(k, v))
-    else addEnvRow()
 
     const save = Button({
       label: existing ? 'Save profile' : 'Add profile',
       variant: 'primary',
       ariaLabel: 'Save profile',
       onClick: () => {
-        const env: Record<string, string> = {}
-        for (const rowEl of Array.from(envRows.querySelectorAll('.ph-env-row'))) {
-          const k = (rowEl.querySelector('.prof-env-key') as HTMLInputElement).value.trim()
-          const v = (rowEl.querySelector('.prof-env-val') as HTMLInputElement).value.trim()
-          if (k || v) env[k] = v
-        }
-        const profile: AgentProfile = {
+        // Name + subscription email are ALL a profile takes. Env pointers and
+        // failover order are derived main-side (edits keep the stored ones).
+        const draft: AgentProfileDraft = {
           id: existing?.id ?? newId('prof'),
           name: name.value.trim(),
-          provider: provider.value,
-          env,
-          order: Number(order.value) || 0
+          provider: existing?.provider ?? provider.value,
+          email: email.value.trim()
         }
-        void (invoke(ProfileChannels.save, profile) as Promise<boolean>).then((ok) => {
+        if (!draft.name || !draft.email) {
+          showError(err, 'Two fields, both needed — a profile name and the subscription email.')
+          return
+        }
+        void (invoke(ProfileChannels.save, draft) as Promise<boolean>).then((ok) => {
           if (!ok) {
-            showError(
-              err,
-              'Refused: check the fields — env names must be UPPER_SNAKE, and a value that looks like a secret ' +
-                '(key/token shapes) cannot be saved. Profiles hold POINTERS only (ADR 0002).'
-            )
+            showError(err, 'Refused: the email must look like you@example.com (and the name fit in 60 characters).')
             return
           }
           profileFormHost.replaceChildren()
@@ -182,19 +189,16 @@ export function createProfilesHostsSection(): HTMLElement {
       el('div', { class: 'ph-form' }, [
         el('div', { class: 'ph-form-grid' }, [
           FieldGroup({ label: 'Profile name', hint: 'e.g. Work' }, name),
-          FieldGroup({ label: 'Provider' }, provider),
-          FieldGroup({ label: 'Failover order', hint: '0 = the default lane' }, order)
+          FieldGroup({ label: 'Subscription email', hint: 'the account this profile launches under' }, email),
+          FieldGroup({ label: 'Provider' }, provider)
         ]),
-        el('div', { class: 'ph-env-head' }, [
-          el('span', { class: 'field-group-label', text: 'Environment pointers' }),
-          el('span', {
-            class: 'field-group-hint',
-            text: 'UPPER_SNAKE names your CLI reads → a pointer (a dir, file, or flag). Never a secret (ADR 0002).'
-          })
-        ]),
-        envRows,
+        el('span', {
+          class: 'field-group-hint',
+          text:
+            'That’s it — sign-in stays in the CLI (ADR 0002). Your first profile uses the login you already have; ' +
+            'extra profiles get their own config home and the CLI asks you to sign in there on first launch.'
+        }),
         el('div', { class: 'ph-form-actions' }, [
-          Button({ label: '+ variable', size: 'sm', onClick: () => addEnvRow() }),
           el('span', { class: 'ph-spacer' }),
           Button({ label: 'Cancel', size: 'sm', onClick: () => profileFormHost.replaceChildren() }),
           save
@@ -315,7 +319,7 @@ export function createProfilesHostsSection(): HTMLElement {
         tone: 'inset',
         header: SectionHeader({
           title: 'Provider profiles',
-          caption: 'One per provider account (work, personal, …).',
+          caption: 'Every signed-in CLI account, plus any extra subscriptions you add. The default is what launches.',
           action: Button({ label: '+ Add profile', size: 'sm', ariaLabel: 'Add profile', onClick: () => openProfileForm() })
         })
       },

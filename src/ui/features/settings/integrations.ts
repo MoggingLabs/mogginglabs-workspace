@@ -18,7 +18,7 @@ import {
   type WorkspaceIntegrationsGrant
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { Button, EmptyState, confirmDialog, createCollapsibleCard, createModal, el, icon, loadingRow, showToast } from '../../components'
+import { Button, EmptyState, confirmDialog, createCollapsibleCard, createModal, el, icon, loadingRow, providerLogo, showToast } from '../../components'
 import type { CollapsibleCardHandle } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onToolPlanPanesChange, restartNeededPaneIds } from '../../core/agents/toolplan-panes'
@@ -105,7 +105,9 @@ function createCatalogBlock(): SyncedBlock {
   async function openConnect(preset: McpPreset, groupRows: McpPreset[]): Promise<void> {
     panel.hidden = false
     panel.innerHTML = ''
-    panel.append(el('div', { class: 'mgr-panel-summary', text: `Connect ${preset.label}` }))
+    panel.append(
+      el('div', { class: 'mgr-panel-summary' }, [providerLogo(preset.id, 18), el('span', { text: `Connect ${preset.label}` })])
+    )
     panel.append(el('div', { class: 'settings-row-caption', text: preset.grantCopy }))
     // CLI checkboxes, capability/installed dimming.
     const checks = new Map<HostedCliId, HTMLInputElement>()
@@ -293,7 +295,12 @@ function createCatalogBlock(): SyncedBlock {
         feedNote.textContent = r.ok ? r.diff ?? '' : r.reason ?? 'registry unavailable'
       }
       const card = el('div', { class: 'cat-card' }, [
-        el('div', { class: 'cat-card-head' }, [el('span', { class: 'mgr-label', text: label }), badge, coverageBadge]),
+        el('div', { class: 'cat-card-head' }, [
+          providerLogo(preset.group ? 'google' : preset.id, 16),
+          el('span', { class: 'mgr-label', text: label }),
+          badge,
+          coverageBadge
+        ]),
         el('div', { class: 'cat-card-copy', text: preset.group ? `${rows.map((r) => r.label).join(' · ')} — one card, ${rows.length} endpoints.` : preset.grantCopy }),
         el('div', { class: 'trail-controls' }, [connect, feedBtn, exportBtn]),
         feedNote
@@ -498,7 +505,7 @@ function createServersBlock(): HTMLElement {
         return chip
       })
       const row = el('div', { class: 'mgr-row' }, [
-        el('span', { class: 'mgr-label', text: server.label }),
+        el('span', { class: 'mgr-label' }, [providerLogo(server.id, 14), el('span', { text: server.label })]),
         el('span', { class: 'mgr-id', text: `${server.id} · ${server.transport}${server.builtIn ? ' · built-in' : ''}` }),
         el('div', { class: 'mgr-chips' }, chips)
       ])
@@ -956,7 +963,12 @@ function createToolPlanBlock(): SyncedBlock {
         }
         return cell
       })
-      table.append(el('div', { class: 'toolplan-row' }, [el('span', { class: 'toolplan-tool', text: s.label }), ...cells]))
+      table.append(
+        el('div', { class: 'toolplan-row' }, [
+          el('span', { class: 'toolplan-tool' }, [providerLogo(s.id, 13), el('span', { text: s.label })]),
+          ...cells
+        ])
+      )
     }
     body.append(table)
     // Matrix empty state (8/13): explain plans in one sentence.

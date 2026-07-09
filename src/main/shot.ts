@@ -40,7 +40,13 @@ const PROBE = `(() => {
         computedFont: getComputedStyle(slot.querySelector('.xterm')).fontFamily,
         jbmLoaded: document.fonts.check('13px "JetBrains Mono Variable"'),
         fontsStatus: document.fonts.status,
-        scrollBarWidth: core && core.viewport ? core.viewport.scrollBarWidth : null
+        scrollBarWidth: core && core.viewport ? core.viewport.scrollBarWidth : null,
+        // ConPTY compatibility, seeded from the pty's OWN answer (SpawnResult.pty, daemon
+        // protocol v4 -> core/terminal/pty-emulation.ts). On Windows this MUST be
+        // { backend: 'conpty', buildNumber: <os build> }: without it xterm grows rows the
+        // unix way while ConPTY grows them its own, the viewports drift, and ConPTY's
+        // repaint-on-resize smears stale shell rows into a live agent frame.
+        windowsPty: p.term.options.windowsPty || null
       }
     })()
   }
@@ -54,6 +60,48 @@ const PROBE = `(() => {
  */
 import { runGallery } from './gallery'
 import { mkdirSync } from 'node:fs'
+
+/** Settings sweep (MOGGING_SHOT=settings): every settings tab in both principal
+ *  themes → out/gallery/settings/. The fast iteration loop for tab-page design
+ *  work — no staged workspaces, no CLI verbs, ~20s instead of the full gallery. */
+function runSettingsShot(win: BrowserWindow): void {
+  setTimeout(() => app.exit(1), 120000) // safety net
+  const wc = win.webContents
+  wc.setBackgroundThrottling(false)
+  const ES = (js: string): Promise<unknown> => wc.executeJavaScript(js, true)
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+  const dir = join(process.cwd(), 'out', 'gallery', 'settings')
+  const TABS = ['appearance', 'terminal', 'providers', 'profiles', 'integrations', 'usage', 'privacy', 'browser', 'shortcuts', 'about']
+  const run = async (): Promise<void> => {
+    try {
+      mkdirSync(dir, { recursive: true })
+      win.setSize(1600, 950)
+      await sleep(800)
+      await ES(`document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click()`)
+      await sleep(600)
+      for (const theme of ['midnight', 'light']) {
+        await ES(`window.__mogging.setTheme(${JSON.stringify(theme)})`)
+        await sleep(300)
+        for (const tab of TABS) {
+          await ES(`window.__mogging.settingsTab(${JSON.stringify(tab)})`)
+          await sleep(350)
+          const img = await wc.capturePage()
+          writeFileSync(join(dir, `${theme}-${tab}.png`), img.toPNG())
+        }
+      }
+      app.exit(0)
+    } catch (e) {
+      try {
+        writeFileSync(join(dir, 'error.txt'), String(e))
+      } catch {
+        /* ignore */
+      }
+      app.exit(1)
+    }
+  }
+  if (wc.isLoading()) wc.once('did-finish-load', () => setTimeout(() => void run(), 1500))
+  else setTimeout(() => void run(), 1500)
+}
 
 /** 5/06 type matrix: the same busy specimen at every candidate size × line-height,
  *  at 4-pane and 16-pane densities — the empirical basis for the default. */
@@ -143,6 +191,10 @@ export function runShot(win: BrowserWindow): void {
     runTypeMatrix(win) // Phase-5/06: the empirical terminal-type matrix
     return
   }
+  if (process.env.MOGGING_SHOT === 'settings') {
+    runSettingsShot(win) // every settings tab × both themes -> out/gallery/settings/
+    return
+  }
   const grid = process.env.MOGGING_SHOT === 'grid'
   const reveal = process.env.MOGGING_SHOT === 'reveal'
   const capture = async (): Promise<void> => {
@@ -159,8 +211,9 @@ export function runShot(win: BrowserWindow): void {
         )
         await sleep(3500) // panes fit at the ORIGINAL window size
         await ES(
-          '(function(){var b=document.querySelector(".titlebar-right .icon-btn[aria-label=\\"Home\\"]");b&&b.click();return 1;})()'
-        ) // go Home -> panes hidden (5/05: Home is a full-app view)
+          '(function(){var b=document.querySelector(".titlebar-right .icon-btn[aria-label=\\"Board\\"]");b&&b.click();return 1;})()'
+        ) // go to Board -> panes hidden (5/05: Board is a full-app view). Was Home, which
+        // a workspace now makes unreachable; any full-app view stages the same artifact.
         await sleep(600)
         win.setSize(1880, 1000) // resize WHILE hidden — the artifact's trigger
         await sleep(900)

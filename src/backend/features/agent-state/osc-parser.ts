@@ -17,7 +17,7 @@ import type { AgentState } from '@contracts'
 
 /** A decoded OSC event of interest (backend-internal detail, not on the wire). */
 export interface OscEvent {
-  kind: 'notify' | 'prompt' | 'cmd-line' | 'cmd-start' | 'cmd-end' | 'cwd'
+  kind: 'notify' | 'prompt' | 'cmd-line' | 'cmd-start' | 'cmd-end' | 'cwd' | 'bell'
   code: number
   payload?: string
   exitCode?: number
@@ -89,7 +89,13 @@ export class OscParser {
         this.pendingEsc = true
         continue
       }
-      if (!this.inOsc) continue
+      if (!this.inOsc) {
+        // A BEL OUTSIDE any OSC is the terminal bell — the pane ringing for a human
+        // (Claude Code's terminal_bell notify, a TUI's alert). An OSC-terminating
+        // BEL lands in the branch below instead and never reports as a bell.
+        if (code === BEL) this.onEvent?.({ kind: 'bell', code: BEL })
+        continue
+      }
       if (code === BEL) {
         this.flush()
         this.inOsc = false

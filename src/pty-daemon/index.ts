@@ -85,7 +85,11 @@ function main(): void {
 
   process.on('SIGTERM', () => shutdown(0))
   process.on('SIGINT', () => shutdown(0))
+  // The daemon outlives a main crash by design (ADR 0006), so it logs and keeps serving its
+  // live panes rather than exiting. Both channels must reach daemon.log — an unlogged
+  // rejection is a pane that stops responding with nothing to point at.
   process.on('uncaughtException', (e) => log('UNCAUGHT ' + (e && e.stack ? e.stack : e)))
+  process.on('unhandledRejection', (e) => log('UNHANDLED ' + (e instanceof Error && e.stack ? e.stack : String(e))))
 
   server.listen(address, () => {
     // Defense in depth. Unix: restrict the socket to the owner (the dir is already 0700).

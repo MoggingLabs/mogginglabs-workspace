@@ -6,16 +6,31 @@
 // It also PERSISTS sessions (cwd + command label + scrollback) to a small store, so the
 // daemon self-recovers on a cold start / crash and repaints prior scrollback (Phase-1/03).
 import * as os from 'node:os'
-import * as pty from 'node-pty'
+import * as fs from 'node:fs'
+import { spawnPty, type IPty } from '@backend/platform/pty-host'
 import type { Approval, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { notifyEventToState } from '@contracts'
-import { OscParser, fileUriToPath } from '@backend/features/agent-state'
+import { ActivityTracker, OscParser, fileUriToPath } from '@backend/features/agent-state'
 import { SessionStore, resumeCommandFor } from '@backend/features/workspace'
 import { Mailbox } from './mailbox'
 import { Ledger } from './ledger'
 import type { PersistedPane, PersistedWorkspace, WorkspaceLayout } from '@contracts'
 
 const SCROLLBACK_BYTES = 200_000
+
+/** The directory a pane's shell starts in: the requested one when it is a real directory,
+ *  the home directory otherwise. `''` (no cwd asked for) and a path that has since been
+ *  removed both land on home rather than on the daemon's own directory or a spawn error. */
+function pickCwd(requested?: string): string {
+  if (requested) {
+    try {
+      if (fs.statSync(requested).isDirectory()) return requested
+    } catch {
+      /* gone, or not readable — fall through to home */
+    }
+  }
+  return os.homedir()
+}
 
 export interface PaneSubscriber {
   send(data: string): void
@@ -38,9 +53,10 @@ class PaneSession {
   readonly remoteName?: string
   cols: number
   rows: number
-  private proc: pty.IPty
+  private proc: IPty
   private buffer = ''
   private lastState: AgentState = 'idle'
+  private readonly tracker: ActivityTracker
   private lastCwd?: string // last OSC-7-reported cwd; replayed to (re)attaching clients
   private subs = new Set<PaneSubscriber>()
 
@@ -54,7 +70,16 @@ class PaneSession {
     this.id = id
     this.cols = spec.cols ?? 80
     this.rows = spec.rows ?? 24
-    this.cwd = spec.cwd ?? os.homedir()
+    // `||`, not `??`: an EMPTY string is not a cwd. `??` let '' through to node-pty, which
+    // then inherits the daemon's own working directory — the app's install folder, since
+    // the daemon is spawned from the packaged binary. A plain terminal therefore opened in
+    // `…\Programs\MoggingLabs Workspace` no matter which folder the wizard picked.
+    //
+    // The existsSync is the other half. Now that a REAL path arrives here (it used to be
+    // '' always), a stale one — a worktree pruned between sessions, a folder the user moved
+    // — would make pty.spawn throw and the pane would never open at all. A terminal in the
+    // wrong directory is a bug; a terminal that does not exist is worse.
+    this.cwd = pickCwd(spec.cwd)
     this.command = spec.run
     this.remoteName = spec.remote?.name
     if (restore?.scrollback) this.buffer = restore.scrollback // seed prior output for repaint
@@ -92,7 +117,7 @@ class PaneSession {
     // target ITSELF via `mogging notify` (Phase-2/04). Only the pane id + the endpoint FILE path
     // go in the env — never the auth token (that stays in the 0600 endpoint file), so the token
     // can't leak through env dumps / agent context (ADR 0002).
-    this.proc = pty.spawn(shell, args, {
+    this.proc = spawnPty(shell, args, {
       name: 'xterm-256color',
       cols: this.cols,
       rows: this.rows,
@@ -102,15 +127,22 @@ class PaneSession {
       // a secret never lands in scrollback/sessions.db. Source-agnostic: the
       // daemon knows nothing of the vault. MOGGING_PANE_ID wins (identity).
       env: { ...process.env, ...extraEnv, ...(spec.env ?? {}), MOGGING_PANE_ID: this.id } as Record<string, string>
+    }).proc
+    // Pane state = the ActivityTracker's verdict (the dot in the pane header). The
+    // OSC parser feeds it explicit signals (133 C/D, 9/99/777, the bell) but no
+    // longer drives the wire directly — on real setups those signals barely exist
+    // (cmd.exe and Claude Code both emit no OSC 133), which left the dot frozen on
+    // 'idle' forever. The tracker fuses them with OUTPUT ACTIVITY (streaming =
+    // working, quiet = idle) and latches attention until the user answers
+    // (tracker semantics + precedence: agent-state/activity.ts).
+    this.tracker = new ActivityTracker((state) => {
+      this.lastState = state
+      for (const s of this.subs) s.state(state)
     })
-    // Parse OSC off the raw stream — same parser as the in-proc PtyService, so the daemon path
-    // has full parity: agent-state (idle/busy/attention) AND OSC-7 cwd for per-pane git (2/03).
     const osc = new OscParser(
-      (state) => {
-        this.lastState = state
-        for (const s of this.subs) s.state(state)
-      },
+      (state) => this.tracker.notify(state),
       (ev) => {
+        if (ev.kind === 'bell') this.tracker.bell()
         if (ev.kind === 'cwd' && ev.payload) {
           const cwd = fileUriToPath(ev.payload)
           if (cwd) {
@@ -122,11 +154,13 @@ class PaneSession {
     )
     this.proc.onData((d) => {
       this.buffer = (this.buffer + d).slice(-SCROLLBACK_BYTES)
+      this.tracker.data() // BEFORE the parse: a verdict in this chunk must land last
       osc.push(d)
       for (const s of this.subs) s.send(d)
       hooks.onChange()
     })
     this.proc.onExit(({ exitCode }) => {
+      this.tracker.dispose()
       for (const s of this.subs) s.exit(exitCode)
       this.subs.clear()
       hooks.onExit()
@@ -182,14 +216,15 @@ class PaneSession {
    *  out just like an OSC state change, so it flows through the same state -> attention pipeline
    *  (badge chip + workspace-tab ring). Replayed to (re)attaching clients via lastState. */
   applyNotify(event: string): void {
-    const state = notifyEventToState(event)
-    this.lastState = state
-    for (const s of this.subs) s.state(state)
+    // Routed through the tracker so notify keeps its latch/clear semantics (an
+    // explicit busy/idle releases an attention latch; attention latches).
+    this.tracker.notify(notifyEventToState(event))
     // Usage-limit (4/04): a DISTINCT signal alongside the attention state, so the
     // app can offer profile failover. Event label only — never content.
     if (event === 'usage-limit') for (const s of this.subs) s.limit?.()
   }
   write(data: string): void {
+    this.tracker.input() // typing answers whatever the pane was blocked on
     this.proc.write(data)
   }
   resize(cols: number, rows: number): void {
@@ -202,6 +237,7 @@ class PaneSession {
     }
   }
   kill(): void {
+    this.tracker.dispose()
     try {
       this.proc.kill()
     } catch {
