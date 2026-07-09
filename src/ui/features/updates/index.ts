@@ -29,7 +29,8 @@ export const updatesFeature: UiFeature = {
       const downloading = s.phase === 'checking' || s.phase === 'available' || s.phase === 'downloading'
       dot.hidden = !downloading
       if (s.phase === 'downloading' && typeof s.percent === 'number') {
-        dot.style.setProperty('--pct', String(Math.max(0, Math.min(100, s.percent))))
+        // REMOVE #15: `--pct` was computed and handed to the dot, but nothing read it —
+        // progress lived only in the title. The dot is a quiet pulse; the % is the tooltip.
         dot.title = `Downloading an update… ${s.percent}%`
       }
       if (s.phase === 'ready' && s.version && toastedVersion !== s.version) {

@@ -258,11 +258,13 @@ export function runGallery(win: BrowserWindow): void {
           // photographs whichever tab `mogging.settingsTab` happened to restore.
           await ES(`document.querySelector('.settings-nav-item[data-target="usage"]')?.click()`)
           await sleep(600)
-          await snap(`${tag}-usage-settings`)
-          await ES(`document.querySelector('.usage-plans-block')?.scrollIntoView({ block: 'start' })`)
+          await snap(`${tag}-usage-settings`) // 05b: opens overview-only, every Card folded
+          // 05b restructure: expand a Card by its toggle to shoot the disclosed state
+          // (the old `.usage-*-block` rows are gone; sections are collapsible Cards).
+          await ES(`(() => { const c = document.querySelector('.collapsible-card[data-collapsible="plans"]'); const t = c?.querySelector('.cc-toggle'); if (t && !c.classList.contains('is-open')) t.click(); c?.scrollIntoView({ block: 'start' }) })()`)
           await sleep(300)
           await snap(`${tag}-usage-tab-plans`)
-          await ES(`document.querySelector('.usage-privacy-block')?.scrollIntoView({ block: 'center' })`)
+          await ES(`(() => { const c = document.querySelector('.collapsible-card[data-collapsible="privacy"]'); const t = c?.querySelector('.cc-toggle'); if (t && !c.classList.contains('is-open')) t.click(); c?.scrollIntoView({ block: 'center' }) })()`)
           await sleep(300)
           await snap(`${tag}-usage-tab-privacy`)
           // Settings § Integrations (8/05): the Activity trail with seeded

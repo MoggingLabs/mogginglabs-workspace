@@ -1,12 +1,4 @@
-import {
-  AgentChannels,
-  BoardChannels,
-  ClipboardChannels,
-  IntegrationsChannels,
-  ProfileChannels,
-  RemoteChannels,
-  type AgentInfo
-} from '@contracts'
+import { AgentChannels, ClipboardChannels, IntegrationsChannels, type AgentInfo } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { el, icon, showToast } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
@@ -78,7 +70,7 @@ export function createFirstRun(): { el: HTMLElement; refresh: () => Promise<void
   let completedToasted = false
 
   const copyBtn = (text: string): HTMLElement => {
-    const b = el('button', { class: 'firstrun-copy', type: 'button' }, [icon('folder', 12), el('span', { text: 'Copy' })])
+    const b = el('button', { class: 'firstrun-copy', type: 'button' }, [icon('copy', 12), el('span', { text: 'Copy' })])
     b.title = text
     b.onclick = (): void => {
       void bridge.invoke(ClipboardChannels.write, { text })
@@ -109,11 +101,8 @@ export function createFirstRun(): { el: HTMLElement; refresh: () => Promise<void
     ])
 
   async function computeRows(): Promise<RowState[]> {
-    const [agents, profiles, remotes, board, servers] = await Promise.all([
+    const [agents, servers] = await Promise.all([
       bridge.invoke(AgentChannels.detect).catch(() => []) as Promise<AgentInfo[]>,
-      bridge.invoke(ProfileChannels.list).catch(() => []) as Promise<unknown[]>,
-      bridge.invoke(RemoteChannels.list).catch(() => []) as Promise<unknown[]>,
-      bridge.invoke(BoardChannels.list).catch(() => []) as Promise<unknown[]>,
       bridge.invoke(IntegrationsChannels.serversList).catch(() => []) as Promise<{ builtIn?: boolean }[]>
     ])
 
@@ -146,8 +135,6 @@ export function createFirstRun(): { el: HTMLElement; refresh: () => Promise<void
           return b
         })()
 
-    // ③ Optional power-ups — a profile, an SSH host, or a board card (real stores).
-    const powerDone = profiles.length > 0 || remotes.length > 0 || board.length > 0
     const intDone = servers.some((s) => !s.builtIn)
 
     return [
@@ -172,17 +159,6 @@ export function createFirstRun(): { el: HTMLElement; refresh: () => Promise<void
             })
           )
         }
-      },
-      {
-        done: powerDone,
-        render: (r) =>
-          r.replaceWith(
-            rowEl({
-              done: powerDone,
-              title: 'Optional: add a profile, SSH host, or board card',
-              detail: powerDone ? 'Done — you have used a power-up.' : 'Manage accounts in Settings, or plan work on the board.'
-            })
-          )
       }
     ]
   }

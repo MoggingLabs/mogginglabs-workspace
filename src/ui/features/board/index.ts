@@ -23,7 +23,7 @@ import { getWorkspaces, requestWorkspaceSwitch } from '../../core/workspace/work
 import { onAttentionChange, paneState } from '../../core/attention/attention-port'
 import { getPaneCwd, onPaneCwd } from '../../core/layout/pane-cwd'
 import { setCommands } from '../../core/commands/command-port'
-import { Button, createModal, el, icon, showToast } from '../../components'
+import { Button, CountBadge, EmptyState, confirmDialog, createModal, el, icon, showToast } from '../../components'
 import { initApprovals, isBranchApproved, onApprovalsChange } from './approvals-store'
 
 /**
@@ -266,6 +266,13 @@ export const boardFeature: UiFeature = {
 
     function cardEl(card: BoardCard): HTMLElement {
       const menu = el('div', { class: 'menu board-card-menu', hidden: true })
+      function closeMenu(): void {
+        menu.hidden = true
+        document.removeEventListener('pointerdown', onAway, true)
+      }
+      function onAway(e: PointerEvent): void {
+        if (!menu.contains(e.target as Node) && !menuBtn.contains(e.target as Node)) closeMenu()
+      }
       const menuBtn = el(
         'button',
         {
@@ -273,8 +280,17 @@ export const boardFeature: UiFeature = {
           attrs: { type: 'button', 'aria-label': 'Card menu' },
           onClick: (e) => {
             e.stopPropagation()
-            if (menu.hidden) buildMenu()
-            menu.hidden = !menu.hidden
+            if (!menu.hidden) return closeMenu()
+            buildMenu()
+            menu.hidden = false
+            // Position FIXED at the button, clamped into the viewport, so the lane's own
+            // overflow scroller can no longer clip the menu (the audit's ⋯ complaint).
+            const r = menuBtn.getBoundingClientRect()
+            const mw = menu.offsetWidth || 200
+            const mh = menu.offsetHeight || 240
+            menu.style.left = `${Math.max(8, Math.min(r.right - mw, window.innerWidth - mw - 8))}px`
+            menu.style.top = `${Math.max(8, Math.min(r.bottom + 4, window.innerHeight - mh - 8))}px`
+            document.addEventListener('pointerdown', onAway, true)
           }
         },
         [icon('more', 14)]
@@ -288,7 +304,7 @@ export const boardFeature: UiFeature = {
             menuBtn
           ]),
           ...(card.notes.trim() ? [el('p', { class: 'board-card-notes', text: card.notes })] : []),
-          el('div', { class: 'board-card-foot' }, [cardStateChip(card) ?? el('span', {}), approvedChip(card), serviceLinkChip(card) ?? el('span', {})]),
+          el('div', { class: 'board-card-foot' }, [cardStateChip(card), approvedChip(card), serviceLinkChip(card)]),
           menu
         ]
       )
@@ -303,20 +319,22 @@ export const boardFeature: UiFeature = {
             text: label,
             onClick: (e) => {
               e.stopPropagation()
-              menu.hidden = true
+              closeMenu()
               run()
             }
           })
-        menu.append(item('Edit…', () => edit(card, card.lane)))
+        // Ordered by frequency: start an agent (the board's whole point) first, link/manage
+        // next, edit + navigate, and the destructive Delete LAST.
         const linked = linksByCard.get(card.id)
+        for (const a of roster.filter((r) => r.installed)) {
+          menu.append(item(`Start ${a.name} on this…`, () => void startOnCard(card.id, a.id)))
+        }
         menu.append(item(linked ? 'Change GitHub link…' : 'Link GitHub PR/issue…', () => linkCard(card)))
         if (linked) {
           menu.append(item('Refresh link', () => void bridge.invoke(IntegrationsChannels.linkRefresh, linked.id)))
           menu.append(item('Unlink', () => void bridge.invoke(IntegrationsChannels.linkRemove, linked.id).then(() => load())))
         }
-        for (const a of roster.filter((r) => r.installed)) {
-          menu.append(item(`Start ${a.name} on this…`, () => void startOnCard(card.id, a.id)))
-        }
+        menu.append(item('Edit…', () => edit(card, card.lane)))
         if (card.paneId && card.workspaceId) {
           menu.append(
             item('Go to pane', () => {
@@ -325,7 +343,19 @@ export const boardFeature: UiFeature = {
             })
           )
         }
-        menu.append(item('Delete card', () => removeCard(card.id)))
+        // Bug #7: a destructive act gets a confirm, safe action focused (07b danger pattern).
+        menu.append(
+          item('Delete card', () => {
+            void confirmDialog({
+              title: `Delete “${card.title || 'card'}”?`,
+              message: 'This removes the card from the board. A bound pane, if any, keeps running.',
+              confirmLabel: 'Delete card',
+              danger: true
+            }).then((ok) => {
+              if (ok) removeCard(card.id)
+            })
+          })
+        )
       }
 
       host.addEventListener('dragstart', (e) => {
@@ -341,30 +371,45 @@ export const boardFeature: UiFeature = {
       root.replaceChildren()
       const head = el('div', { class: 'board-head' }, [
         el('h1', { class: 'board-title', text: 'Board' }),
-        el('span', { class: 'board-sub', text: 'Cards launch agents — local only, yours.' }),
-        cards.length === 0
-          ? el('span', {
-              class: 'board-empty-hint',
-              text: 'Empty board — add a card in any lane, then ▸ start an agent on it.'
-            })
-          : null
+        el('span', { class: 'board-sub', text: 'Cards launch agents — local only, yours.' })
+        // The empty board now speaks per-lane — each empty lane is a house EmptyState
+        // (8.5/07b) — so the head no longer hand-rolls its own `.board-empty-hint`.
       ])
       const lanesEl = el('div', { class: 'board-lanes' })
       for (const lane of LANES) {
         const inLane = cards.filter((c) => c.lane === lane.id)
-        const list = el('div', { class: 'board-lane-cards' }, inLane.map(cardEl))
+        const list = el(
+          'div',
+          { class: 'board-lane-cards' },
+          inLane.length
+            ? inLane.map(cardEl)
+            : [
+                // An empty lane is a house EmptyState, not silence (8.5/07b). Its action is
+                // EmptyState's FIRST `action` caller — add a card straight to THIS lane.
+                EmptyState({
+                  icon: 'kanban',
+                  title: 'No cards',
+                  body: 'Add one, or drag a card here.',
+                  action: Button({ label: '+ Add card', variant: 'ghost', onClick: () => edit(null, lane.id) })
+                })
+              ]
+        )
         const laneEl = el('section', { class: 'board-lane', attrs: { 'data-lane': lane.id } }, [
           el('div', { class: 'board-lane-head' }, [
             el('h3', { class: 'board-lane-title', text: lane.label }),
-            el('span', { class: 'board-lane-count', text: String(inLane.length) })
+            CountBadge(inLane.length, { label: `${inLane.length} ${inLane.length === 1 ? 'card' : 'cards'}` })
           ]),
           list,
-          el('button', {
-            class: 'board-add',
-            attrs: { type: 'button' },
-            text: '+ Add card',
-            onClick: () => edit(null, lane.id)
-          })
+          // The standalone add button stays for a lane that already has cards; an empty
+          // lane's "+ Add card" lives in its EmptyState action instead (no double button).
+          inLane.length
+            ? el('button', {
+                class: 'board-add',
+                attrs: { type: 'button' },
+                text: '+ Add card',
+                onClick: () => edit(null, lane.id)
+              })
+            : null
         ])
         laneEl.addEventListener('dragover', (e) => {
           e.preventDefault()

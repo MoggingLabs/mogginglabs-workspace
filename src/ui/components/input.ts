@@ -1,29 +1,6 @@
 import { el } from './dom'
 import { icon } from './icons'
 
-export interface TextInputOpts {
-  value?: string
-  placeholder?: string
-  mono?: boolean
-  ariaLabel?: string
-  onInput?: (value: string) => void
-  onEnter?: (value: string) => void
-}
-
-export function TextInput(opts: TextInputOpts = {}): HTMLInputElement {
-  return el('input', {
-    class: opts.mono ? 'input input--mono' : 'input',
-    type: 'text',
-    value: opts.value ?? '',
-    placeholder: opts.placeholder,
-    ariaLabel: opts.ariaLabel,
-    onInput: (e) => opts.onInput?.((e.target as HTMLInputElement).value),
-    onKeydown: (e) => {
-      if (e.key === 'Enter') opts.onEnter?.((e.target as HTMLInputElement).value)
-    }
-  })
-}
-
 export type PathStatusKind = 'idle' | 'git' | 'ok' | 'warn'
 
 export interface PathStatus {

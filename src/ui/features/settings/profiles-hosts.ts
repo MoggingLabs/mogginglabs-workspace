@@ -6,7 +6,7 @@ import {
   type AgentProfile,
   type RemoteHost
 } from '@contracts'
-import { Button, confirmDialog, el } from '../../components'
+import { Button, Card, confirmDialog, EmptyState, FieldGroup, SectionHeader, el } from '../../components'
 import { getBridge } from '../../core/ipc/bridge'
 import { announceProfilesChanged } from '../../core/agents/profiles-port'
 
@@ -57,7 +57,11 @@ export function createProfilesHostsSection(): HTMLElement {
     profilesList.replaceChildren()
     if (!profiles.length) {
       profilesList.append(
-        el('p', { class: 'ph-empty', text: 'No profiles yet — one per provider account (work, personal, …).' })
+        EmptyState({
+          icon: 'user',
+          title: 'No profiles yet',
+          body: 'One per provider account (work, personal, …) — pointers only, never credentials.'
+        })
       )
     }
     for (const p of profiles.sort((a, b) => a.provider.localeCompare(b.provider) || a.order - b.order)) {
@@ -119,11 +123,16 @@ export function createProfilesHostsSection(): HTMLElement {
     const addEnvRow = (key = '', value = ''): void => {
       const k = el('input', {
         class: 'input input--mono prof-env-key',
-        attrs: { type: 'text', placeholder: 'ENV_NAME', value: key }
+        attrs: { type: 'text', placeholder: 'ENV_NAME', value: key, 'aria-label': 'Environment variable name' }
       }) as HTMLInputElement
       const v = el('input', {
         class: 'input input--mono prof-env-val',
-        attrs: { type: 'text', placeholder: 'pointer value (a dir/file/flag — never a secret)', value }
+        attrs: {
+          type: 'text',
+          placeholder: 'pointer value (a dir/file/flag — never a secret)',
+          value,
+          'aria-label': 'Pointer value (a dir, file, or flag — never a secret)'
+        }
       }) as HTMLInputElement
       const rowEl = el('div', { class: 'ph-env-row' }, [
         k,
@@ -171,7 +180,18 @@ export function createProfilesHostsSection(): HTMLElement {
     })
     profileFormHost.append(
       el('div', { class: 'ph-form' }, [
-        el('div', { class: 'ph-form-grid' }, [name, provider, order]),
+        el('div', { class: 'ph-form-grid' }, [
+          FieldGroup({ label: 'Profile name', hint: 'e.g. Work' }, name),
+          FieldGroup({ label: 'Provider' }, provider),
+          FieldGroup({ label: 'Failover order', hint: '0 = the default lane' }, order)
+        ]),
+        el('div', { class: 'ph-env-head' }, [
+          el('span', { class: 'field-group-label', text: 'Environment pointers' }),
+          el('span', {
+            class: 'field-group-hint',
+            text: 'UPPER_SNAKE names your CLI reads → a pointer (a dir, file, or flag). Never a secret (ADR 0002).'
+          })
+        ]),
         envRows,
         el('div', { class: 'ph-form-actions' }, [
           Button({ label: '+ variable', size: 'sm', onClick: () => addEnvRow() }),
@@ -189,7 +209,13 @@ export function createProfilesHostsSection(): HTMLElement {
   function renderHosts(hosts: RemoteHost[]): void {
     hostsList.replaceChildren()
     if (!hosts.length) {
-      hostsList.append(el('p', { class: 'ph-empty', text: 'No SSH hosts yet — your ssh config/agent does all auth.' }))
+      hostsList.append(
+        EmptyState({
+          icon: 'globe',
+          title: 'No SSH hosts yet',
+          body: 'Your ssh config/agent does all auth — add a target to launch panes on it.'
+        })
+      )
     }
     for (const h of hosts) {
       hostsList.append(
@@ -265,7 +291,13 @@ export function createProfilesHostsSection(): HTMLElement {
     })
     hostFormHost.append(
       el('div', { class: 'ph-form' }, [
-        el('div', { class: 'ph-form-grid' }, [name, host, user, port, hint]),
+        el('div', { class: 'ph-form-grid' }, [
+          FieldGroup({ label: 'Display name', hint: 'e.g. buildbox' }, name),
+          FieldGroup({ label: 'Hostname or ssh alias' }, host),
+          FieldGroup({ label: 'User', hint: 'optional' }, user),
+          FieldGroup({ label: 'Port', hint: 'optional' }, port),
+          FieldGroup({ label: 'Identity hint', hint: 'optional note — never a key' }, hint)
+        ]),
         el('div', { class: 'ph-form-actions' }, [
           el('span', { class: 'ph-spacer' }),
           Button({ label: 'Cancel', size: 'sm', onClick: () => hostFormHost.replaceChildren() }),
@@ -278,18 +310,28 @@ export function createProfilesHostsSection(): HTMLElement {
   }
 
   root.append(
-    el('div', { class: 'ph-head' }, [
-      el('span', { class: 'settings-row-label', text: 'Provider profiles' }),
-      Button({ label: '+ Add profile', size: 'sm', ariaLabel: 'Add profile', onClick: () => openProfileForm() })
-    ]),
-    profilesList,
-    profileFormHost,
-    el('div', { class: 'ph-head' }, [
-      el('span', { class: 'settings-row-label', text: 'SSH hosts' }),
-      Button({ label: '+ Add host', size: 'sm', ariaLabel: 'Add host', onClick: () => openHostForm() })
-    ]),
-    hostsList,
-    hostFormHost
+    Card(
+      {
+        tone: 'inset',
+        header: SectionHeader({
+          title: 'Provider profiles',
+          caption: 'One per provider account (work, personal, …).',
+          action: Button({ label: '+ Add profile', size: 'sm', ariaLabel: 'Add profile', onClick: () => openProfileForm() })
+        })
+      },
+      [profilesList, profileFormHost]
+    ),
+    Card(
+      {
+        tone: 'inset',
+        header: SectionHeader({
+          title: 'SSH hosts',
+          caption: 'ssh targets — your own config/agent does the auth.',
+          action: Button({ label: '+ Add host', size: 'sm', ariaLabel: 'Add host', onClick: () => openHostForm() })
+        })
+      },
+      [hostsList, hostFormHost]
+    )
   )
 
   return Object.assign(root, { refresh }) as HTMLElement & { refresh: () => Promise<void> }

@@ -447,8 +447,9 @@ export class WorkspaceController {
         title: `Close “${view.meta.name}”?`,
         message: `${n} pane${n === 1 ? '' : 's'} will close, including ${liveCount} with an agent still working. You’ll have a few seconds to undo.`,
         confirmLabel: 'Close workspace',
-        danger: true,
-        rememberKey: 'workspace.close'
+        danger: true
+        // Bug #8: NO rememberKey. Killing a workspace with live agents is exactly the
+        // act that must never be permanently silenceable — it asks every single time.
       })
       if (!ok) return
     }

@@ -71,9 +71,3 @@ export function el<K extends keyof HTMLElementTagNameMap>(
 export function clear(node: Node): void {
   while (node.firstChild) node.removeChild(node.firstChild)
 }
-
-/** Replace a host's content with a single child. */
-export function mount(host: HTMLElement, child: Node): void {
-  clear(host)
-  host.append(child)
-}

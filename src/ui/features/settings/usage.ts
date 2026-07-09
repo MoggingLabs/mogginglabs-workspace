@@ -15,7 +15,7 @@ import {
   type UsagePaceConfig,
   type UsageProviderDef
 } from '@contracts'
-import { Button, createCheckbox, el, showToast } from '../../components'
+import { Button, EmptyState, createCheckbox, createCollapsibleCard, el, showToast } from '../../components'
 import { getBridge } from '../../core/ipc/bridge'
 import { getTelemetry } from '../../core/telemetry'
 import { switchActiveProfile } from '../../core/agents/profile-switch'
@@ -53,14 +53,6 @@ interface GridRow extends Pick<UsageProviderDef, 'id' | 'label' | 'klass'> {
 
 export function createUsageSection(): HTMLElement {
   const root = el('div', { class: 'usage-tab' })
-  const block = (cls: string, label: string, caption: string, control: HTMLElement): HTMLElement =>
-    el('div', { class: `settings-row ${cls}` }, [
-      el('div', { class: 'settings-row-head' }, [
-        el('span', { class: 'settings-row-label', text: label }),
-        el('span', { class: 'settings-row-caption', text: caption })
-      ]),
-      control
-    ])
 
   let plans: PlanUsageView[] = []
   let profiles: AgentProfile[] = []
@@ -221,7 +213,7 @@ export function createUsageSection(): HTMLElement {
               })
             : null,
           r.enabled && r.health ? el('span', { class: `pill usage-health is-${r.health}`, text: r.health }) : null,
-          cadence,
+          r.enabled ? cadence : null,
           r.enabled
             ? Button({ label: 'Refresh', size: 'sm', onClick: () => void invoke(UsageChannels.refresh, r.id) })
             : null
@@ -258,7 +250,7 @@ export function createUsageSection(): HTMLElement {
   function renderPlans(): void {
     plansTable.replaceChildren()
     if (!plans.length) {
-      plansTable.append(el('p', { class: 'ph-empty', text: 'No plans yet — enable a provider above.' }))
+      plansTable.append(EmptyState({ icon: 'plug', title: 'No plans yet', body: 'Enable a provider above and its plans show up here.' }))
       return
     }
     for (const p of plans) {
@@ -389,23 +381,28 @@ export function createUsageSection(): HTMLElement {
         warn,
         el('span', { class: 'settings-row-caption', text: '%' })
       ]),
-      confetti.el,
-      Button({
-        label: 'Test notification',
-        size: 'sm',
-        onClick: () =>
-          // A FIXTURE toast, clearly labeled — the real copy is composed
-          // main-side (09); this only proves the house toast path works.
-          showToast({ tone: 'attention', title: 'Test — Fake Pro at 95% of Session (5h)', body: 'Ahead of pace — a fixture, not a reading.' })
-      })
+      confetti.el
     )
+    // A FIXTURE toast, clearly labeled — proves the house toast path works but is
+    // NOT a reading (its own comment said so). 05b puts it behind DEV so it never
+    // ships; the real alert copy is composed main-side (09).
+    if (import.meta.env.DEV) {
+      alertsHost.append(
+        Button({
+          label: 'Test notification',
+          size: 'sm',
+          onClick: () =>
+            showToast({ tone: 'attention', title: 'Test — Fake Pro at 95% of Session (5h)', body: 'Ahead of pace — a fixture, not a reading.' })
+        })
+      )
+    }
   })()
 
   // ── 5 · Display (the 10 options — absorbed intact) ────────────────────────
   const displayHost = createDisplayControls()
 
   // ── 6 · History + cost (compact — the popover's deferred depth) ───────────
-  const historyHost = el('div', { class: 'usage-history-block' })
+  const historyHost = el('div', { class: 'usage-history' })
 
   function sparkline(series: number[]): HTMLElement {
     const svgNs = 'http://www.w3.org/2000/svg'
@@ -458,7 +455,7 @@ export function createUsageSection(): HTMLElement {
       historyHost.append(rowEl)
     }
     if (!historyHost.childElementCount)
-      historyHost.append(el('p', { class: 'ph-empty', text: 'History appears once an enabled provider reports usage.' }))
+      historyHost.append(EmptyState({ icon: 'clock', title: 'No history yet', body: 'History appears once an enabled provider reports usage.' }))
   }
 
   // ── 7 · The privacy story, in place (ADR 0007 / .a / .b) ──────────────────
@@ -478,17 +475,88 @@ export function createUsageSection(): HTMLElement {
     el('p', { class: 'settings-row-caption', text: 'The full story: docs/12-usage.md in the repository.' })
   ])
 
+  // ── Overview band + progressive-disclosure Cards (8.5/05b) ────────────────
+  // The mega-tab opens QUIET: only this overview and any section with attention.
+  // Collapse is not hide — every card body stays in the DOM (USAGESET/USAGEUI
+  // reach through display:none), so folding changes nothing they assert.
+  const overview = el('div', { class: 'usage-overview' })
+  const maxPct = (p: PlanUsageView): number => (p.windows.length ? Math.max(...p.windows.map((w) => w.usedPct)) : 0)
+
+  const card = (id: string, title: string, caption: string, body: HTMLElement): ReturnType<typeof createCollapsibleCard> =>
+    createCollapsibleCard({ id, title, caption, storagePrefix: 'usage', class: `usage-card usage-card-${id}` }, [body])
+  const providersCard = card('providers', 'Providers', 'The full catalog, five classes — enable what you use; keys are set per row, the rest is one search away.', el('div', {}, [search, grid]))
+  const plansCard = card('plans', 'Plans & profiles', 'Every lane the poller reads. The active lane launches new agents; switching flips pointers, never credentials.', plansTable)
+  const paceCard = card('pace', 'Pace baseline', 'Days and hours that count as active time — verdicts integrate over these (all-day when unset).', paceHost)
+  const alertsCard = card('alerts', 'Thresholds & alerts', 'A quiet toast at the first threshold, a warning with the verdict at the second; once per window, re-armed at reset.', alertsHost)
+  const displayCard = card('display', 'Display', 'What the titlebar gauge mirrors, what the icon shows, how resets render, popover order and density.', displayHost)
+  const historyCard = card('history', 'History & cost', 'Sampled history per provider and the on-demand local cost scan. Compact by design — the popover stays the glance.', historyHost)
+  const privacyCard = card('privacy', 'Privacy', 'Where credentials live and what never leaves the machine.', privacy)
+
+  function computeAttention(): Node | null {
+    // Surviving collapse (AUDIT § Settings): a hot bar or an errored provider must
+    // read from the folded Providers header — the two signals the popover shows too.
+    const hot = plans.some((p) => p.windows.some((w) => w.usedPct >= 90))
+    const errored = plans.some((p) => p.health === 'error')
+    if (!hot && !errored) return null
+    const box = el('div', { class: 'usage-attn' })
+    if (hot) {
+      const track = el('span', { class: 'usage-track usage-track-row' })
+      const fill = el('span', { class: 'usage-fill is-hot' })
+      fill.style.width = '100%'
+      track.append(fill)
+      box.append(track)
+    }
+    if (errored) box.append(el('span', { class: 'pill usage-health is-error', text: 'error' }))
+    return box
+  }
+  function renderOverview(): void {
+    overview.replaceChildren()
+    const connected = new Set(plans.filter((p) => p.health === 'fresh' || p.health === 'stale').map((p) => p.providerId)).size
+    overview.append(
+      el('div', {
+        class: 'usage-ov-summary',
+        text: plans.length
+          ? `${connected} provider${connected === 1 ? '' : 's'} reporting · ${plans.length} plan${plans.length === 1 ? '' : 's'}`
+          : 'No usage yet — enable a provider in Providers below.'
+      })
+    )
+    const top = plans.length ? [...plans].sort((a, b) => maxPct(b) - maxPct(a))[0] : undefined
+    if (top) {
+      const gauges = el('div', { class: 'usage-ov-gauges' })
+      for (const w of top.windows.slice(0, 2)) {
+        const track = el('span', { class: 'usage-ov-track' })
+        const fill = el('span', { class: 'usage-ov-fill' + (w.usedPct >= 90 ? ' is-hot' : '') })
+        fill.style.width = `${Math.max(0, Math.min(100, w.usedPct))}%`
+        track.append(fill)
+        gauges.append(track)
+      }
+      overview.append(
+        el('div', { class: 'usage-ov-plan' }, [
+          el('span', { class: 'usage-ov-name', text: `${top.providerId} · ${top.planLabel}` }),
+          gauges,
+          el('span', { class: 'usage-ov-verdict', text: top.pace?.text ?? top.reason ?? '' })
+        ])
+      )
+    }
+    // Attention beats persistence: a hot/errored snapshot opens Providers and shows
+    // the signal on its always-visible header (persist:false — never rewrites intent).
+    providersCard.setAttention(computeAttention())
+  }
+  renderOverview()
+
   // ── Data flow: one snapshot feeds grid health + plans + history ───────────
   async function refreshSnapshot(): Promise<void> {
     const [plansRaw, profilesRaw] = await Promise.all([invoke(UsageChannels.list), invoke(ProfileChannels.list)])
     plans = (plansRaw as PlanUsageView[]) ?? []
     profiles = (profilesRaw as AgentProfile[]) ?? []
     renderPlans()
+    renderOverview()
     void renderHistory()
   }
   getBridge().on(UsageChannels.changed, (payload) => {
     plans = (payload as PlanUsageView[]) ?? []
     renderPlans()
+    renderOverview()
     // Profiles may have changed too (a switch, a Settings edit) — cheap re-read
     // so the active marker and Switch affordances stay truthful.
     void invoke(ProfileChannels.list).then((raw) => {
@@ -508,13 +576,14 @@ export function createUsageSection(): HTMLElement {
   })()
 
   root.append(
-    block('usage-grid-block', 'Providers', 'The full catalog, five classes. Enable what you use; the rest is one search away.', el('div', {}, [search, grid])),
-    block('usage-plans-block', 'Plans × profiles', 'Every lane the poller reads. The active lane launches new agents; switching flips pointers, never credentials.', plansTable),
-    block('usage-pace-block', 'Pace baseline', 'Days and hours that count as active time — verdicts integrate over these (all-day when unset).', paceHost),
-    block('usage-alerts-block', 'Alerts', 'A quiet toast at the first threshold, a warning with the verdict at the second; once per window, re-armed at reset.', alertsHost),
-    block('usage-display-block', 'Display', 'What the titlebar gauge mirrors, what the icon shows, how resets render, popover order and density.', displayHost),
-    block('usage-history-block-row', 'History & cost', 'Sampled history per provider and the on-demand local cost scan. Compact by design — the popover stays the glance.', historyHost),
-    block('usage-privacy-row', 'Privacy', 'Where credentials live and what never leaves the machine.', privacy)
+    overview,
+    providersCard.el,
+    plansCard.el,
+    paceCard.el,
+    alertsCard.el,
+    displayCard.el,
+    historyCard.el,
+    privacyCard.el
   )
   return root
 }

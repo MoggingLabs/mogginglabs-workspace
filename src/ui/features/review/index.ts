@@ -8,7 +8,7 @@ import {
 import { getBridge } from '../../core/ipc/bridge'
 import { getFocusedPane } from '../../core/layout/focus'
 import { setCommands } from '../../core/commands/command-port'
-import { Button, createModal, el, showToast } from '../../components'
+import { Button, createModal, el, icon, showToast } from '../../components'
 
 /**
  * Pre-ship diff review (Phase-3/04): NOTHING an agent wrote lands without a human
@@ -97,7 +97,12 @@ function renderDiff(diff: ReviewDiff): HTMLElement {
 
 async function openReview(repo: string, worktree: string): Promise<void> {
   const diff = (await getBridge().invoke(ReviewChannels.diff, { repo, worktree })) as ReviewDiff
+  showReview(diff, repo)
+}
 
+/** Render the review modal for an already-fetched diff. Split from openReview so a
+ *  fixture diff can drive both gate states + the footer with no repo (8.5/07b). */
+function showReview(diff: ReviewDiff, repo: string): void {
   const modal = createModal({
     title: 'Review changes',
     subtitle: diff.branch && diff.base ? `${diff.branch} → ${diff.base}` : 'worktree diff',
@@ -114,10 +119,12 @@ async function openReview(repo: string, worktree: string): Promise<void> {
     // Reviewer gate (4/03): the sign-off state is always visible; unapproved merges
     // demand the DISTINCT typed word "override" — a human can always land, deliberately.
     const gated = diff.approved !== true
-    const gateChip = el('span', {
-      class: `review-gate ${gated ? 'review-gate-closed' : 'review-gate-open'}`,
-      text: gated ? 'No reviewer sign-off' : 'Approved by reviewer'
-    })
+    // Blocker 2: the sign-off state carries a non-colour difference — a distinct glyph
+    // AND a distinct word — so it reads for a colour-blind reviewer and at a glance.
+    const gateChip = el('span', { class: `review-gate ${gated ? 'review-gate-closed' : 'review-gate-open'}` }, [
+      icon(gated ? 'shield' : 'check-circle', 13),
+      el('span', { text: gated ? 'No reviewer sign-off' : 'Approved by reviewer' })
+    ])
     const copy = Button({
       label: 'Copy patch',
       onClick: () => {
@@ -129,7 +136,9 @@ async function openReview(repo: string, worktree: string): Promise<void> {
     const confirmWord = gated ? 'override' : 'merge'
     const merge = Button({
       label: gated ? `Override & merge into ${diff.base}…` : `Merge into ${diff.base}…`,
-      variant: 'primary',
+      // Danger-styled, not the filled primary that invited the click (07b): a destructive
+      // merge should read as "careful", never as "the thing to do".
+      variant: 'danger',
       disabled: !diff.branch || diff.files.length === 0,
       onClick: () => {
         // Typed confirmation — clicks can't land a merge; ungated needs "override".
@@ -143,7 +152,7 @@ async function openReview(repo: string, worktree: string): Promise<void> {
         }) as HTMLInputElement
         const go = Button({
           label: gated ? 'Confirm override' : 'Confirm merge',
-          variant: 'primary',
+          variant: 'danger',
           onClick: () => {
             if (input.value.trim().toLowerCase() !== confirmWord) {
               showToast({ tone: 'danger', title: `Type "${confirmWord}" to confirm` })
@@ -189,13 +198,16 @@ async function openReview(repo: string, worktree: string): Promise<void> {
             )
           }
         })
-        const cancel = Button({ label: 'Cancel', onClick: () => rebuildFooter() })
-        footer.append(input, go, cancel)
+        const cancel = Button({ label: 'Cancel', variant: 'ghost', onClick: () => rebuildFooter() })
+        // Safe-first: Cancel precedes the destructive Confirm (was `input, go, cancel`).
+        footer.append(input, cancel, go)
         input.focus()
       }
     })
-    const close = Button({ label: 'Close', onClick: () => modal.close() })
-    footer.append(gateChip, copy, merge, close)
+    const close = Button({ label: 'Close', variant: 'ghost', onClick: () => modal.close() })
+    // Safe-first: the safe actions precede the danger merge (was `…, merge, close`); the
+    // modal auto-focuses the first button (Copy), never the destructive merge.
+    footer.append(gateChip, copy, close, merge)
   }
   rebuildFooter()
   modal.setFooter(footer)
@@ -227,6 +239,23 @@ export const reviewFeature: UiFeature = {
 
     const g = globalThis as Record<string, unknown>
     const dev = (g.__mogging ?? (g.__mogging = {})) as Record<string, unknown>
-    dev.review = { open: (repo: string, worktree: string) => openReview(repo, worktree) }
+    dev.review = {
+      open: (repo: string, worktree: string) => openReview(repo, worktree),
+      // Fixture renderer (8.5/07b FEEDBACKUX): both gate states + the safe-first footer,
+      // no repo/worktree.
+      showFixture: (approved: boolean) =>
+        showReview(
+          {
+            base: 'main',
+            branch: 'demo/feature',
+            approved,
+            files: [{ path: 'src/app.ts', additions: 3, deletions: 1, hunks: ['@@ -1,2 +1,3 @@\n keep\n+added\n-gone'] }],
+            untracked: [],
+            redactions: 0,
+            truncated: false
+          },
+          'demo-repo'
+        )
+    }
   }
 }

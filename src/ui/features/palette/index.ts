@@ -1,5 +1,6 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { clear, el, icon } from '../../components'
+import { clear, el, icon, type IconName } from '../../components'
+import { activeView } from '../../core/shell/view-port'
 import { allCommands, onCommandsChange, type Command } from '../../core/commands/command-port'
 import { getTelemetry } from '../../core/telemetry'
 
@@ -20,6 +21,21 @@ function score(cmd: Command, q: string): number {
     ti++
   }
   return 20
+}
+
+/** Category → base rank (the empty-query "top verbs" order) and a leading glyph. */
+const HINT_PRI: Record<string, number> = { Workspace: 6, Board: 5, Integrations: 4, App: 3, Trust: 2, Appearance: 1 }
+const HINT_ICON: Record<string, IconName> = { Workspace: 'terminal', Board: 'kanban', Integrations: 'plug', App: 'home', Appearance: 'sliders', Trust: 'shield' }
+const baseRank = (cmd: Command): number => HINT_PRI[cmd.hint ?? ''] ?? 2
+const cmdIcon = (cmd: Command): IconName => HINT_ICON[cmd.hint ?? ''] ?? 'chevron-right'
+
+/** Title split into text + a `<mark>` around the query hit (contiguous match only).
+ *  textContent is unchanged, so a gate that reads it (INTEGUX) still matches. */
+function highlightTitle(title: string, q: string): (Node | string)[] {
+  if (!q) return [title]
+  const i = title.toLowerCase().indexOf(q)
+  if (i < 0) return [title]
+  return [title.slice(0, i), el('mark', { class: 'palette-match', text: title.slice(i, i + q.length) }), title.slice(i + q.length)]
 }
 
 /**
@@ -79,10 +95,19 @@ export const paletteFeature: UiFeature = {
 
     function renderList(): void {
       const q = input.value.trim().toLowerCase()
+      const inWs = activeView() === 'grid' // in a workspace: its verbs rank first
+      const ctxRank = (c: Command): number => (inWs && c.hint === 'Workspace' ? 1 : 0)
       visible = allCommands()
         .map((c) => ({ c, s: score(c, q) }))
         .filter((x) => x.s > 0)
-        .sort((a, b) => b.s - a.s)
+        .sort((a, b) => {
+          if (b.s !== a.s) return b.s - a.s // match strength wins for a typed query
+          // empty query (all s===1) + ties: context, then a top-verbs base rank — never
+          // the feature-mount registration order the old palette fell back to.
+          if (ctxRank(b.c) !== ctxRank(a.c)) return ctxRank(b.c) - ctxRank(a.c)
+          if (baseRank(b.c) !== baseRank(a.c)) return baseRank(b.c) - baseRank(a.c)
+          return a.c.title.localeCompare(b.c.title)
+        })
         .map((x) => x.c)
         .slice(0, 12)
       selected = Math.min(selected, Math.max(0, visible.length - 1))
@@ -92,6 +117,8 @@ export const paletteFeature: UiFeature = {
         return
       }
       visible.forEach((cmd, i) => {
+        const titleEl = el('span', { class: 'palette-item-title' })
+        titleEl.append(...highlightTitle(cmd.title, q))
         const item = el(
           'button',
           {
@@ -101,7 +128,8 @@ export const paletteFeature: UiFeature = {
             onClick: () => run(cmd)
           },
           [
-            el('span', { class: 'palette-item-title', text: cmd.title }),
+            el('span', { class: 'palette-item-icon' }, [icon(cmdIcon(cmd), 14)]),
+            titleEl,
             cmd.hint ? el('span', { class: 'palette-item-hint', text: cmd.hint }) : null,
             cmd.kbd ? el('span', { class: 'kbd', text: cmd.kbd }) : null
           ]

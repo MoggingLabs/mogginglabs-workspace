@@ -18,7 +18,7 @@ import {
   type WorkspaceIntegrationsGrant
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { Button, confirmDialog, createCollapsibleCard, createModal, el, icon, loadingRow, showToast } from '../../components'
+import { Button, EmptyState, confirmDialog, createCollapsibleCard, createModal, el, icon, loadingRow, showToast } from '../../components'
 import type { CollapsibleCardHandle } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onToolPlanPanesChange, restartNeededPaneIds } from '../../core/agents/toolplan-panes'
@@ -522,8 +522,14 @@ function createServersBlock(): HTMLElement {
     // the band cannot; the button carried nothing.
     if (servers.filter((s) => !s.builtIn).length === 0) {
       list.append(
+        // House EmptyState, keeping the `.integux-empty` hook the onboarding smokes assert.
+        // No action — REMOVE #6 (05) deleted the CTA that duplicated the overview band's.
         el('div', { class: 'integux-empty' }, [
-          el('span', { class: 'menu-note', text: 'Only the built-in server so far. Connect your first tool from the catalog above — we’ll walk you through it.' })
+          EmptyState({
+            icon: 'plug',
+            title: 'Only the built-in server so far',
+            body: 'Connect your first tool from the catalog above — we’ll walk you through it.'
+          })
         ])
       )
     }

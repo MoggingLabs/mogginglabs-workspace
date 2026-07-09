@@ -4,14 +4,12 @@
  * (rail items, pane headers, the palette) live inside their feature slices and
  * compose these. Nothing here touches the hot terminal path.
  */
-export { el, clear, mount, type ElProps, type ElChild } from './dom'
+export { el, clear, type ElProps, type ElChild } from './dom'
 export { icon, ICON_NAMES, type IconName } from './icons'
 export { Button, IconButton, type ButtonOpts, type IconButtonOpts } from './button'
 export { Pill, CountBadge, type PillOpts, type PillTone } from './pill'
 export {
-  TextInput,
   createPathInput,
-  type TextInputOpts,
   type PathInputHandle,
   type PathInputOpts,
   type PathStatus,
@@ -29,7 +27,7 @@ export {
   type LayoutGridPickerHandle
 } from './grid-preview'
 export { createModal, type ModalHandle, type ModalOpts } from './modal'
-export { confirmDialog, resetConfirmSkipsForSmoke, type ConfirmOpts } from './confirm'
+export { confirmDialog, type ConfirmOpts } from './confirm'
 export { Spinner, loadingRow } from './spinner'
 export { showToast, type ToastOpts, type ToastTone } from './toast'
 export { EmptyState, type EmptyStateOpts } from './empty-state'

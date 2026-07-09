@@ -63,8 +63,6 @@ export function confirmDialog(opts: ConfirmOpts): Promise<boolean> {
     cancelBtn.focus() // safest default — deliberate reach for the destructive button
   })
 }
-
-/** Test-only: clear the per-session "don't ask again" opt-outs. */
-export function resetConfirmSkipsForSmoke(): void {
-  sessionSkip.clear()
-}
+// (8.5/07b) `resetConfirmSkipsForSmoke` removed — it had no caller anywhere: no smoke,
+// no dev handle, no ES string. (Commit a74a68d's "confirm race" was the browser-dock
+// act-origin approval, a different mechanism — not this dialog's sessionSkip.)

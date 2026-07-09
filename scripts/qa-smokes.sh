@@ -188,6 +188,10 @@ run_smoke INTEGMILESTONE MOGGING_INTEGMILESTONE 1 300 integmilestone
 run_smoke WIZARDUX     MOGGING_WIZARDUX  1 180 wizardux
 run_smoke FOLDERPICK   MOGGING_FOLDERPICK 1 240 folderpick
 run_smoke SETSHELL     MOGGING_SETSHELL  1 240 setshell
+run_smoke SETUSAGE     MOGGING_SETUSAGE  1 240 setusage
+run_smoke HOMEUX       MOGGING_HOMEUX    1 240 homeux
+run_smoke BOARDUX      MOGGING_BOARDUX   1 240 boardux
+run_smoke FEEDBACKUX   MOGGING_FEEDBACKUX 1 240 feedbackux
 
 echo ""
 echo "══ SWEEP RESULTS ══"

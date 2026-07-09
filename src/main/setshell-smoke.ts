@@ -1,6 +1,7 @@
 import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { probeContrastAcrossThemes } from './aa-probe'
 
 // Env-gated Settings-shell smoke (MOGGING_SETSHELL, Phase-8.5/04). Asserts:
 //   (a) the nav renders all nine tabs with an icon each, under four group heads,
@@ -20,8 +21,6 @@ import { join } from 'node:path'
 // probe ships here: sRGB linearization, relative luminance, and real alpha
 // compositing up the ancestor chain (the nav's active fill is `--accent-weak`,
 // an rgba() — measuring it against `transparent` would score it as pure black).
-
-const AA_TEXT = 4.5
 
 /**
  * Everything the 8.5/04 shell puts words on, plus the error ink it repoints.
@@ -58,47 +57,6 @@ export function runSetShellSmoke(win: BrowserWindow): void {
   // Nav order — GROUPED, so it is deliberately not the section order. Asserting both
   // catches a tab that vanishes from the rail while its section still exists.
   const NAV_ORDER = ['appearance', 'terminal', 'profiles', 'integrations', 'usage', 'privacy', 'browser', 'shortcuts', 'about']
-
-  // The probe, injected once. Composites rgba() over its ancestors before measuring.
-  const CONTRAST = `
-    const parse = (c) => (c.match(/[\\d.]+/g) || []).map(Number)
-    const lin = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4) }
-    const lum = ([r, g, b]) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
-    const over = (fg, bg) => { const a = fg[3] === undefined ? 1 : fg[3]; return [0,1,2].map((i) => fg[i] * a + bg[i] * (1 - a)) }
-    /** Real background: walk up compositing every translucent layer onto the one below. */
-    const bgOf = (node) => {
-      const stack = []
-      for (let n = node; n; n = n.parentElement) {
-        const c = parse(getComputedStyle(n).backgroundColor)
-        if (c.length && (c[3] === undefined || c[3] > 0)) stack.push(c)
-        if (c.length && (c[3] === undefined || c[3] === 1)) break
-      }
-      if (!stack.length) return [0, 0, 0]
-      let base = stack[stack.length - 1].slice(0, 3)
-      for (let i = stack.length - 2; i >= 0; i--) base = over(stack[i], base)
-      return base
-    }
-    const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05) }
-    const measure = (sel) => {
-      const node = document.querySelector(sel)
-      if (!node) return null
-      const bg = bgOf(node)
-      const fg = parse(getComputedStyle(node).color)
-      return Math.round(ratio(over(fg, bg), bg) * 100) / 100
-    }
-    /* A transition mid-flight returns an INTERMEDIATE colour to getComputedStyle.
-       setTheme swaps --accent-ink / --accent-weak, and .settings-nav-item animates
-       both — so under load the probe measured a frame of the fade, not the settled
-       value (2.83:1 in a busy sweep, 7.73:1 idle, same DOM). Freeze, then measure. */
-    const freeze = () => {
-      if (document.getElementById('aa-freeze')) return
-      const st = document.createElement('style')
-      st.id = 'aa-freeze'
-      st.textContent = '*, *::before, *::after { transition: none !important; animation: none !important }'
-      document.head.append(st)
-    }
-    const thaw = () => document.getElementById('aa-freeze')?.remove()
-  `
 
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
@@ -193,30 +151,12 @@ export function runSetShellSmoke(win: BrowserWindow): void {
         }
       })()`)
 
-      await ES(`(() => {${CONTRAST} freeze() })()`) // measure settled colour, not a fade frame
-      const themes = ['midnight', 'light', 'nord', 'solarized']
-      const contrast: Record<string, Record<string, number | null>> = {}
-      const failures: string[] = []
-      for (const t of themes) {
-        await ES(`window.__mogging.setTheme('${t}')`)
-        await sleep(300)
-        // The active nav item and the tab head only exist on a selected tab.
-        contrast[t] = await ES(`(() => {${CONTRAST}
-          const out = {}
-          for (const sel of ${JSON.stringify(PROBES)}) out[sel] = measure(sel)
-          return out
-        })()`)
-        for (const [sel, r] of Object.entries(contrast[t])) {
-          if (r != null && r < AA_TEXT) failures.push(`${t} ${sel} = ${r}`)
-        }
-      }
-      // Every probe must have been FOUND in at least one theme — a null everywhere
-      // means the selector rotted and the whole check silently passed on nothing.
-      const missing = PROBES.filter((sel) => themes.every((t) => contrast[t][sel] == null))
+      // The probe — sRGB linearization, alpha compositing, AND the transition freeze
+      // that once made this very check read a fade frame — is src/main/aa-probe.ts now.
+      // 06 extracted it without SETSHELL losing a measured number; the freeze is no
+      // longer something this caller has to remember.
+      const { contrast, failures, missing, worst } = await probeContrastAcrossThemes({ es: ES, sleep, selectors: PROBES })
       const contrastOk = failures.length === 0 && missing.length === 0
-
-      await ES(`window.__mogging.setTheme('midnight')`)
-      await ES(`(() => {${CONTRAST} thaw() })()`)
       await ES(`document.querySelector('.settings-probe-error')?.remove()`)
 
       const pass = navOk && tabsOk && persistOk && spacingOk && themeLiveOk && contrastOk
@@ -237,7 +177,7 @@ export function runSetShellSmoke(win: BrowserWindow): void {
         contrastOk,
         failures,
         missing,
-        worst: Math.min(...Object.values(contrast).flatMap((m) => Object.values(m).filter((v): v is number => v != null))),
+        worst,
         contrast
       }
     } catch (e) {

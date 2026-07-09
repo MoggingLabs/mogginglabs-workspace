@@ -359,13 +359,17 @@ button {
 .btn--outline {
   background: transparent;
 }
+/* Bug #6 (8.5/07b): a destructive verb must READ destructive — a solid danger border
+   (the emphasis) + AA-safe --danger-ink text, not the bare red that looked like a link.
+   Fill only on hover, so the ink keeps its AA ratio on the surface it sits on. */
 .btn--danger {
   background: transparent;
-  border-color: transparent;
-  color: var(--danger);
+  border-color: var(--danger);
+  color: var(--danger-ink);
 }
 .btn--danger:hover {
   background: var(--danger-weak);
+  border-color: var(--danger);
 }
 .btn svg {
   width: 14px;
@@ -422,7 +426,7 @@ button {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
-  padding: 1px 8px;
+  padding: 1px var(--sp-2);
   border: 1px solid var(--border);
   border-radius: var(--r-full);
   background: var(--bg-surface);
@@ -436,14 +440,9 @@ button {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
   background: var(--accent-weak);
 }
-.pill--success {
-  color: var(--success);
-  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
-}
-.pill--danger {
-  color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
-}
+/* REMOVE #9 (8.5/07b): `.pill--success` / `.pill--danger` were unused. `.pill--accent`
+   is KEPT — folder-browser's "repo" pill (tone 'accent') is a live caller, so the audit's
+   "one call site" was stale. */
 .pill--warning {
   color: var(--warning);
   border-color: color-mix(in srgb, var(--warning) 40%, var(--border));
@@ -789,7 +788,7 @@ button {
   gap: var(--sp-2);
   width: 100%;
   white-space: nowrap; /* max-content menu sizing does the fitting */
-  padding: 6px 10px;
+  padding: 6px var(--sp-3);
   border: none;
   border-radius: 5px;
   background: transparent;
@@ -811,7 +810,7 @@ button {
   color: var(--accent-ink);
 }
 .menu-empty {
-  padding: 6px 10px;
+  padding: 6px var(--sp-3);
   color: var(--text-lo);
   font-size: var(--fs-11);
 }
@@ -876,7 +875,7 @@ button {
   background: var(--bg-inset);
 }
 .segmented-item {
-  padding: 4px 10px;
+  padding: var(--sp-1) var(--sp-3);
   border: none;
   border-radius: 4px;
   background: transparent;
@@ -1858,7 +1857,7 @@ body.resizing * {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding-top: 12vh;
+  padding-top: var(--sp-8);
   background: var(--scrim);
   z-index: 150;
 }
@@ -1905,7 +1904,7 @@ body.resizing * {
   align-items: center;
   gap: var(--sp-2);
   width: 100%;
-  padding: 8px var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
   border: none;
   border-radius: var(--r-sm);
   background: transparent;
@@ -1932,6 +1931,20 @@ body.resizing * {
   color: var(--text-lo);
   font-size: var(--fs-11);
   flex: none;
+}
+.palette-item-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-lo);
+}
+.palette-item.is-selected .palette-item-icon {
+  color: var(--accent-ink);
+}
+/* Match highlight — override <mark>'s default yellow fill; ink + weight, no block. */
+.palette-match {
+  background: transparent;
+  color: var(--accent-ink);
+  font-weight: var(--fw-semibold);
 }
 .palette-empty {
   padding: var(--sp-4);
@@ -2126,7 +2139,6 @@ body.resizing * {
   align-items: center;
   gap: var(--sp-2);
   text-align: center;
-  margin-top: 3vh;
 }
 /* The mark, beaming — a breathing orange halo. Everything in the hero scales with
    the window (clamp + vw), so a maximized app gets a bigger logo and bigger type. */
@@ -2135,7 +2147,7 @@ body.resizing * {
   height: clamp(88px, 11vw, 176px);
   border-radius: clamp(16px, 2vw, 30px);
   object-fit: cover;
-  margin-bottom: clamp(8px, 1.2vh, 20px);
+  margin-bottom: var(--sp-3);
   box-shadow: 0 0 44px -8px var(--accent-glow);
   animation: home-beam 3.4s var(--ease) infinite;
 }
@@ -2157,7 +2169,7 @@ body.resizing * {
   letter-spacing: var(--track-tight);
 }
 .home-welcome {
-  margin: clamp(2px, 0.6vh, 10px) 0 0;
+  margin: var(--sp-1) 0 0;
   font-size: clamp(14px, 1.5vw, 24px);
   color: var(--text-mid);
   font-weight: var(--fw-medium);
@@ -2166,12 +2178,12 @@ body.resizing * {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  margin-top: clamp(16px, 2.4vh, 36px);
+  margin-top: var(--sp-5);
 }
 .home-sections {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: clamp(16px, 2.6vw, 44px);
+  gap: var(--sp-6);
   width: min(1180px, 92%); /* full-bleed view (5/05): the launcher owns the width */
 }
 @media (max-width: 900px) {
@@ -2188,7 +2200,79 @@ body.resizing * {
 .home-list {
   display: flex;
   flex-direction: column;
+  gap: var(--sp-2);
+}
+/* 8.5/06 — Recents as a Card grid (was a bare list whose --sp-1 seam read as a
+   rendering artifact between bordered rows — the audit's rhythm-inversion exhibit). */
+.home-recents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--sp-3);
+}
+.home-recent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  color: var(--text-hi);
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+  transition:
+    border-color var(--dur-1) var(--ease),
+    background var(--dur-1) var(--ease);
+}
+.home-recent:hover {
+  border-color: var(--accent);
+  background: var(--bg-elevated);
+}
+.home-recent-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.home-recent-icon {
+  display: inline-flex;
+  color: var(--text-mid);
+  flex: none;
+}
+.home-recent-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-recent-when {
+  flex: none;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+}
+.home-recent-path {
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-recent-chips {
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--sp-1);
+}
+.home-recent-chip {
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-mid);
+  font-size: var(--fs-11);
 }
 .home-item {
   display: flex;
@@ -2365,22 +2449,8 @@ body.resizing * {
   flex: none;
 }
 
-/* Modal footers get the division too: the body scrolls UNDER the footer, and
-   without a line the fold is ambiguous (content just stops). The wizard is no
-   longer a modal, so only the review modal carries this now. */
-.review-footer {
-  position: relative;
-  padding-top: var(--sp-3);
-}
-.review-footer::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  height: 1px;
-  background: color-mix(in srgb, var(--border) 55%, transparent);
-}
+/* REMOVE #5 (8.5/07b): the `.review-footer::before` hairline was the surviving half of
+   the old double divider — `.modal-footer { border-top }` already marks the fold. */
 
 /* A quiet per-card disclosure — native <details>, so Chromium gives us the
    button semantics, aria-expanded, and Enter/Space for free. */
@@ -3088,6 +3158,14 @@ body.resizing * {
   overflow: hidden;
   animation: modal-rise var(--dur-2) var(--ease);
 }
+/* One family, one curve — IN and OUT (8.5/07b). close() adds .is-closing; the same
+   keyframes run in reverse. Detach is on animationend with a ≤260ms JS fallback. */
+.modal-overlay.is-closing {
+  animation: modal-fade var(--dur-2) var(--ease) reverse forwards;
+}
+.modal-overlay.is-closing .modal {
+  animation: modal-rise var(--dur-2) var(--ease) reverse forwards;
+}
 .modal--dialog {
   width: 460px;
 }
@@ -3187,7 +3265,7 @@ body.resizing * {
 .board-link-chip {
   font-family: var(--font-mono);
   font-size: var(--fs-11);
-  padding: 1px 7px;
+  padding: 1px var(--sp-2);
   border-radius: var(--r-full);
   border: 1px solid var(--border);
   color: var(--text-mid);
@@ -3494,10 +3572,10 @@ body.resizing * {
   display: flex;
   align-items: flex-start;
   gap: var(--sp-2);
-  padding: 10px var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
   border: 1px solid var(--border);
   border-left: 3px solid var(--border-strong);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg); /* one family radius (8.5/07b): toast = modal = --r-lg */
   background: var(--bg-elevated);
   box-shadow: var(--shadow-2);
   pointer-events: auto;
@@ -3627,18 +3705,25 @@ body.resizing * {
 .review-gate {
   flex: none;
   margin-right: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
   font-size: var(--fs-11);
   font-weight: var(--fw-semibold);
   border-radius: 999px;
-  padding: 2px 10px;
+  padding: 2px var(--sp-2);
   border: 1px solid var(--border);
+}
+.review-gate svg {
+  width: 13px;
+  height: 13px;
 }
 .review-gate-open {
   color: var(--success);
   border-color: var(--success);
 }
 .review-gate-closed {
-  color: var(--danger);
+  color: var(--danger-ink); /* the fill red measures 2.93:1 on nord elevated — ink is AA */
   border-color: var(--danger);
 }
 .review-confirm-input {
@@ -3684,11 +3769,7 @@ body.resizing * {
   color: var(--text-lo);
   font-size: var(--fs-12);
 }
-.board-empty-hint {
-  margin-left: auto;
-  color: var(--text-mid);
-  font-size: var(--fs-12);
-}
+/* .board-empty-hint removed (8.5/07b) — empty lanes now speak via EmptyState. */
 .board-lanes {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -3704,7 +3785,7 @@ body.resizing * {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
-  padding: var(--sp-3);
+  padding: var(--sp-4);
   gap: var(--sp-3);
 }
 .board-lane.drop {
@@ -3715,6 +3796,8 @@ body.resizing * {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border);
 }
 .board-lane-title {
   margin: 0;
@@ -3724,13 +3807,8 @@ body.resizing * {
   letter-spacing: var(--track-wide);
   color: var(--text-mid);
 }
-.board-lane-count {
-  font-size: var(--fs-11);
-  color: var(--text-lo);
-  background: var(--bg-elevated);
-  border-radius: 999px;
-  padding: 1px 8px;
-}
+/* The lane count is now CountBadge() → .count-badge (8.5/07 REMOVE #7): tabular-nums
+   so the number stops jittering as cards drag between lanes. */
 .board-lane-cards {
   display: flex;
   flex-direction: column;
@@ -3743,8 +3821,8 @@ body.resizing * {
   position: relative;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
+  padding: var(--sp-4);
   cursor: grab;
   display: flex;
   flex-direction: column;
@@ -3752,6 +3830,7 @@ body.resizing * {
 }
 .board-card.dragging {
   opacity: 0.5;
+  cursor: grabbing;
 }
 .board-card[data-attention='true'] {
   border-color: var(--accent);
@@ -3786,7 +3865,6 @@ body.resizing * {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  min-height: 16px;
 }
 .board-chip {
   display: inline-flex;
@@ -3796,7 +3874,7 @@ body.resizing * {
   color: var(--text-lo);
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 1px 8px;
+  padding: 1px var(--sp-2);
   background: transparent;
 }
 .board-chip-busy {
@@ -3811,10 +3889,9 @@ body.resizing * {
   font-weight: var(--fw-semibold);
 }
 .board-card-menu {
-  position: absolute;
-  top: 28px;
-  right: 8px;
-  z-index: 30;
+  position: fixed; /* JS positions it at the ⋯ button, clamped to the viewport, so the
+                      lane's own overflow scroller can no longer clip it (8.5/07) */
+  z-index: 200;
 }
 .board-add {
   border: 1px dashed var(--border);
@@ -3929,6 +4006,11 @@ body.resizing * {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--sp-2);
+}
+.ph-env-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 .ph-env-rows {
   display: flex;
@@ -4797,6 +4879,12 @@ body.resizing * {
   gap: var(--sp-2);
   flex-wrap: wrap;
 }
+/* 8.5/06: the code chip shrinks (and scrolls) so the copy button holds its baseline
+   on the same line instead of wrapping below — the audit's First-run complaint. */
+.firstrun-cli-missing .firstrun-cli-cmd {
+  flex: 1 1 auto;
+  min-width: 0;
+}
 .firstrun-cli-name {
   font-size: var(--fs-11);
   color: var(--text-mid);
@@ -4888,7 +4976,7 @@ body.resizing * {
   width: 14px;
   height: 3px;
   border-radius: var(--r-full);
-  background: var(--surface-3, rgba(128, 128, 128, 0.25));
+  background: var(--border);
   overflow: hidden;
   display: block;
 }
@@ -4908,7 +4996,7 @@ body.resizing * {
 }
 .usage-gauge.is-off .usage-track {
   background: transparent;
-  border: 1px solid var(--text-dim, var(--muted));
+  border: 1px solid var(--muted);
 }
 .usage-gauge.is-off .usage-fill {
   width: 0% !important;
@@ -4921,7 +5009,7 @@ body.resizing * {
   height: 6px;
   border-radius: var(--r-full);
   background: var(--warning);
-  box-shadow: 0 0 0 2px var(--surface-1, transparent);
+  box-shadow: 0 0 0 2px var(--bg-elevated);
 }
 .usage-badge[hidden] {
   display: none;
@@ -4936,7 +5024,7 @@ body.resizing * {
   height: 6px;
   border-radius: var(--r-full);
   background: var(--danger);
-  box-shadow: 0 0 0 2px var(--surface-1, transparent);
+  box-shadow: 0 0 0 2px var(--bg-elevated);
 }
 .usage-incident[hidden] {
   display: none;
@@ -5016,6 +5104,65 @@ body.resizing * {
   flex-direction: column;
   gap: var(--sp-4);
 }
+/* 8.5/05b — the overview band: always visible, the tab's one open surface, with
+   collapsible Cards below (Providers · Plans · Pace · Thresholds · Display · History
+   · Privacy). Collapse is not hide; attention reads from a folded header. */
+.usage-overview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+}
+.usage-ov-summary {
+  font-weight: 600;
+}
+.usage-ov-plan {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.usage-ov-name {
+  font-weight: 600;
+}
+.usage-ov-gauges {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.usage-ov-track {
+  width: 60px;
+  height: 3px;
+  border-radius: var(--r-full);
+  background: var(--border);
+  overflow: hidden;
+  display: block;
+}
+.usage-ov-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.usage-ov-fill.is-hot {
+  background: var(--warning);
+}
+.usage-ov-verdict {
+  flex: 1;
+  min-width: 140px;
+  font-size: 11px;
+  color: var(--text-mid);
+}
+.usage-attn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.usage-attn .usage-track-row {
+  width: 36px;
+}
 .usage-search {
   width: 100%;
   margin-bottom: var(--sp-2);
@@ -5033,8 +5180,8 @@ body.resizing * {
   gap: 2px;
 }
 .usage-prov-row {
-  padding: 4px var(--sp-2);
-  border-radius: var(--r-md, 6px);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-md);
 }
 .usage-prov-row:hover {
   background: var(--surface-2, rgba(128, 128, 128, 0.06));
@@ -5069,7 +5216,7 @@ body.resizing * {
   align-items: center;
   gap: var(--sp-2);
   flex-wrap: wrap;
-  padding: 2px 0 2px 26px;
+  padding: 2px 0 2px calc(var(--sp-5) + 2px);
 }
 .usage-key-ctl {
   display: flex;
@@ -5100,7 +5247,7 @@ body.resizing * {
   gap: var(--sp-2);
   flex-wrap: wrap;
   padding: 3px var(--sp-2);
-  border-radius: var(--r-md, 6px);
+  border-radius: var(--r-md);
 }
 .usage-plan-row.is-active {
   background: var(--accent-weak);
@@ -5127,7 +5274,7 @@ body.resizing * {
   width: 48px;
   height: 3px;
   border-radius: var(--r-full);
-  background: var(--surface-3, rgba(128, 128, 128, 0.25));
+  background: var(--border);
   overflow: hidden;
   display: block;
 }
@@ -5214,7 +5361,7 @@ body.resizing * {
 }
 .usage-tile {
   padding: var(--sp-2);
-  border-radius: var(--r-md, 6px);
+  border-radius: var(--r-md);
   outline: none;
   position: relative;
   cursor: pointer;
@@ -5231,8 +5378,8 @@ body.resizing * {
   content: '';
   position: absolute;
   left: 1px;
-  top: var(--r-md, 6px);
-  bottom: var(--r-md, 6px);
+  top: 4px;
+  bottom: 4px;
   width: 4px;
   border-radius: var(--r-full);
   background: var(--accent);
@@ -5347,7 +5494,7 @@ body.resizing * {
 .usage-track-row {
   height: 4px;
   border-radius: var(--r-full);
-  background: var(--surface-3, rgba(128, 128, 128, 0.25));
+  background: var(--border);
   overflow: hidden;
   display: block;
 }
@@ -5375,7 +5522,7 @@ body.resizing * {
   color: var(--text-mid);
 }
 .usage-verdict.sev-quiet {
-  color: var(--text-dim, var(--muted));
+  color: var(--muted);
 }
 .usage-foot {
   display: flex;
@@ -5383,11 +5530,11 @@ body.resizing * {
   gap: var(--sp-1);
   padding-top: var(--sp-1);
   margin-top: var(--sp-1);
-  border-top: 1px solid var(--border-1, rgba(128, 128, 128, 0.2));
+  border-top: 1px solid var(--border);
 }
 .usage-age {
   flex: 1;
-  color: var(--text-dim, var(--muted));
+  color: var(--muted);
   font-size: 10px;
 }
 

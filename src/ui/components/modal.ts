@@ -93,7 +93,12 @@ export function createModal(opts: ModalOpts = {}): ModalHandle {
     if (!open) return
     open = false
     window.removeEventListener('keydown', onEsc, true)
-    overlay.remove()
+    // One curve out (8.5/07b): fade the overlay, detach on animationend — with a ≤260ms
+    // fallback so reduced-motion / animations-off never strands the overlay in the DOM.
+    overlay.classList.add('is-closing')
+    const drop = (): void => overlay.remove()
+    overlay.addEventListener('animationend', drop, { once: true })
+    setTimeout(drop, 240)
     if (opener instanceof HTMLElement && opener.isConnected) opener.focus()
     opts.onClose?.()
   }

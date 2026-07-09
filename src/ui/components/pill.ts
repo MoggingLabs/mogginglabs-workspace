@@ -18,13 +18,23 @@ export function Pill(opts: PillOpts): HTMLElement {
   ])
 }
 
-/** Small numeric badge. `attention` renders it loud (orange fill + glow). */
-export function CountBadge(count: number, attention = false): HTMLElement {
+export interface CountBadgeOpts {
+  /** Loud (orange fill + glow) — for attention counts. */
+  attention?: boolean
+  /** Accessible label; defaults to a pane-count phrasing (the rail's original use). */
+  label?: string
+}
+
+/** Small numeric badge, tabular-nums so it never jitters as the count changes. */
+export function CountBadge(count: number, opts: CountBadgeOpts = {}): HTMLElement {
+  const attention = opts.attention ?? false
   return el('span', {
     class: attention ? 'count-badge count-badge--attention' : 'count-badge',
     text: String(count),
-    ariaLabel: attention
-      ? `${count} ${count === 1 ? 'pane needs' : 'panes need'} attention`
-      : `${count} ${count === 1 ? 'pane' : 'panes'}`
+    ariaLabel:
+      opts.label ??
+      (attention
+        ? `${count} ${count === 1 ? 'pane needs' : 'panes need'} attention`
+        : `${count} ${count === 1 ? 'pane' : 'panes'}`)
   })
 }

@@ -54,13 +54,17 @@ export function runFirstRunSmoke(win: BrowserWindow): void {
       const cliHonest = cliRowDone === anyCliInstalled
       const wsIncomplete = !(await rowDone(1))
 
-      // 2. Create a workspace -> row 2 flips done.
+      // 2. Create a workspace -> the workspace row advances. On a machine WITH an agent
+      // CLI that completes the REQUIRED set, so the card self-dismisses (8.5/06 fixed
+      // bug #1: there is no longer an immortal non-optional power-up row blocking it) —
+      // and a dismissal IS the row going done. Without a CLI the card stays and row ②
+      // visibly ticks. Either is the row advancing; only the pre-06 bug kept it open here.
       await ES(`window.__mogging.workspace.create({ name: 'FR' })`)
       await sleep(400)
       await ES(`window.__mogging.firstrun.refresh()`)
       let wsFlips = false
       for (let i = 0; i < 20 && !wsFlips; i++) {
-        wsFlips = await rowDone(1)
+        wsFlips = (await rowDone(1)) || !(await cardPresent())
         if (!wsFlips) await sleep(300)
       }
 

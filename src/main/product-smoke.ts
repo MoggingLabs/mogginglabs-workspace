@@ -95,7 +95,10 @@ export function runProductSmoke(win: BrowserWindow): void {
         `window.bridge.invoke('agents:detect').then(a => (a||[]).some(x => x.installed))`
       )
 
-      // ── A1. Power-up (satisfies checklist row 3) + per-slot profile pointers ──
+      // ── A1. Per-slot profile pointers for the Swarm (6/04). These two once ALSO
+      // masked first-run bug #1 by satisfying the "power-up" checklist row; 06's
+      // REMOVE #21 deleted that row, so the checklist below dismisses on cliDone &&
+      // wsDone alone — honestly, not because a fixture pre-satisfied a dead row. ──
       const save = (p: unknown): Promise<boolean> => ES<boolean>(`window.bridge.invoke('profiles:save', ${JSON.stringify(p)})`)
       const savedA = await save({ id: 'p-work', name: 'Work', provider: 'gemini', env: { FAKE_MARK: 'PROD_A' }, order: 0 })
       const savedB = await save({ id: 'p-personal', name: 'Personal', provider: 'gemini', env: { FAKE_MARK: 'PROD_B' }, order: 1 })

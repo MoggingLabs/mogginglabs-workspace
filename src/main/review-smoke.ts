@@ -112,7 +112,8 @@ export function runReviewSmoke(win: BrowserWindow): void {
         })()`
       )) as { present: boolean; scripts: number; imgs: number; hunkHasScriptText: boolean; fileCount: number }
       const domOk = dom.present && dom.scripts === 0 && dom.imgs === 0 && dom.hunkHasScriptText && dom.fileCount === 2
-      await ES(`(() => { const m = document.querySelector('.review-modal'); m && m.parentElement.remove(); return 1 })()`)
+      // Bug #2: `.review-modal` IS the overlay (modal.el) — `.parentElement` was <body>.
+      await ES(`(() => { const m = document.querySelector('.review-modal'); m && m.remove(); return 1 })()`)
 
       // ── D. Merge: dirty refused -> clean merges -> conflict pauses ───────────
       // 4/03: the reviewer gate now fronts the merge verb — this smoke exercises the

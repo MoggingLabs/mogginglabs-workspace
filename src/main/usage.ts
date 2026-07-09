@@ -138,7 +138,9 @@ function toView(p: PlanUsage, pace?: UsagePaceConfig): PlanUsageView {
 export function registerUsage(getWin: () => BrowserWindow | null): void {
   const isSmoke = Object.keys(process.env).some((k) => k.startsWith('MOGGING_'))
   const isFixtureWorld =
-    Object.keys(process.env).some((k) => k.startsWith('MOGGING_USAGE')) || !!process.env.MOGGING_GALLERY
+    Object.keys(process.env).some((k) => k.startsWith('MOGGING_USAGE')) ||
+    !!process.env.MOGGING_SETUSAGE ||
+    !!process.env.MOGGING_GALLERY
   // web-session deps (ADR 0007.b): a pasted cookie rides the SAME write-only
   // store as a key; store-read is per-provider opt-in (default OFF) and only
   // then may the real cookie backend be touched.

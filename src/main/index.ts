@@ -43,6 +43,10 @@ import { runWizardUxSmoke } from './wizardux-smoke'
 import { runFolderPickSmoke } from './folderpick-smoke'
 import { runSetIntegSmoke } from './setinteg-smoke'
 import { runSetShellSmoke } from './setshell-smoke'
+import { runSetUsageSmoke } from './setusage-smoke'
+import { runHomeUxSmoke } from './homeux-smoke'
+import { runBoardUxSmoke } from './boardux-smoke'
+import { runFeedbackUxSmoke } from './feedbackux-smoke'
 import { registerIntegrations } from './integrations'
 import { registerEventBridge } from './event-bridge'
 import { registerTrail } from './trail'
@@ -318,6 +322,14 @@ app.whenReady().then(async () => {
     runSetShellSmoke(win) // env-gated settings-shell smoke: grouped nav, cards, measured spacing + AA (Phase-8.5/04)
   } else if (process.env.MOGGING_SETINTEG && win) {
     runSetIntegSmoke(win) // env-gated integrations smoke: disclosure, attention-through-fold, hit targets (Phase-8.5/05)
+  } else if (process.env.MOGGING_SETUSAGE && win) {
+    runSetUsageSmoke(win) // env-gated usage tab + popover smoke: overview/disclosure, bug #4/#5, profiles FieldGroups (Phase-8.5/05b)
+  } else if (process.env.MOGGING_HOMEUX && win) {
+    runHomeUxSmoke(win) // env-gated Home + first-run smoke: recents cards, checklist bug #1, AA via aa-probe (Phase-8.5/06)
+  } else if (process.env.MOGGING_BOARDUX && win) {
+    runBoardUxSmoke(win) // env-gated board + palette smoke: aligned chip row, sticky counts, ⋯ un-clip, delete-confirm, palette rank/highlight (Phase-8.5/07)
+  } else if (process.env.MOGGING_FEEDBACKUX && win) {
+    runFeedbackUxSmoke(win) // env-gated feedback-language smoke: toast family, safe confirm (bug #8), review gate/footer, empty-state actions (Phase-8.5/07b)
   } else if (process.env.MOGGING_USAGE && win) {
     runUsageSmoke(win) // env-gated usage-seam smoke: FAKE adapter only (Phase-7/01)
   } else if (process.env.MOGGING_ATTENTION && win) {
