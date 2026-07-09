@@ -26,7 +26,7 @@ import { softFps, softGapMs } from './smoke-shell'
  *  135avg fps @144Hz, 28MB heap, 16/16 webgl): each gate carries ~3-10x headroom for slower
  *  machines, yet a real regression (a sync stall, a leak, a dead renderer) blows straight
  *  through it. A regression here FAILS the Phase-2 gate. */
-const BUDGET = {
+export const BUDGET = {
   panes: 16,
   /** Main thread must never be blocked longer than this (worst rAF gap) — during stress OR idle.
    *  MOGGING_CI_GPU=soft (Linux CI, software GL) relaxes ONLY this, loudly. */

@@ -118,6 +118,32 @@ is refused; what the CLIs store after their own logins is theirs. Closed by the
 network, machine budget unmoved. The sweep grew 35→**52 gates** (thirteen new).
 Surface: `docs/14-integrations.md`; per-OS numbers in `prompts/phase-8/README.md`.
 
+### Phase 8.5 — The UI/UX revamp ✅ (`prompts/phase-8.5/`)
+The chrome catches up to the product. Phases 6–8 grew usage, integrations, a browser
+and a swarm faster than the surfaces around them; this pack **audits every
+user-facing surface** (`AUDIT.md` — graded on density/hierarchy, keep/fix/remove
+verdicts, a `file:line` on every finding) and rebuilds them on one **layout
+vocabulary** added to the token system — `Card` · `SectionHeader` · `FieldGroup` ·
+`TwoColumn`, on the ramp extended to `--sp-7/8`:
+- The wizard collapses from three cramped modal screens to **one full page** beside
+  the rail; a folder is pickable by **click** through a real browser (breadcrumb +
+  repo badges), no `cd` bar.
+- The Settings shell + both dense tabs (**Integrations**, **Usage**) open
+  **overview-first** with per-section disclosure that persists, and no attention chip
+  can hide behind a collapsed header.
+- Home + first-run, the board + palette, one **feedback language** (the destructive
+  confirm focuses the safe action and can never be silenced), the titlebar / rail /
+  pane chrome, the browser **possession banner**, and the Usage-glance CodexBar recut.
+
+21st.dev informs (clean-room pattern research only — vanilla TS + house tokens, no
+new deps; ADR 0004). **13 removals executed** (dead affordances deleted, not hidden),
+**16 bugs routed and fixed**. Closed by the `MOGGING_UXMILESTONE` milestone — the
+whole revamp composed in one fixture world, zero network, behind a hard **coverage
+gate** (`check-audit.mjs`: no surface below grade A, no unrouted finding) and the
+spacing drift grep **frozen at `--max 0`**. **Both perf budgets unmoved** — an
+unchanged `docs/05` is the freeze criterion. The sweep grew 52→**66 gates** (fourteen
+new). Design system: `docs/11`; per-OS numbers in `prompts/phase-8.5/README.md`.
+
 ## Cross-cutting from day one
 Sentry crash reporting · a hard perf budget for N panes · CI that builds + signs for
 win-x64 / mac-arm64 / mac-x64.

@@ -49,6 +49,7 @@ import { runBoardUxSmoke } from './boardux-smoke'
 import { runFeedbackUxSmoke } from './feedbackux-smoke'
 import { runChromeUxSmoke } from './chromeux-smoke'
 import { runDockUxSmoke } from './dockux-smoke'
+import { runUxMilestoneSmoke } from './uxmilestone-smoke'
 import { registerIntegrations } from './integrations'
 import { registerEventBridge } from './event-bridge'
 import { registerTrail } from './trail'
@@ -339,6 +340,8 @@ app.whenReady().then(async () => {
     runChromeUxSmoke(win) // env-gated chrome-UX smoke: titlebar cluster, rail scroll-fade, one-line pane header, grid-button scope, AA (Phase-8.5/08)
   } else if (process.env.MOGGING_DOCKUX && win) {
     runDockUxSmoke(win) // env-gated dock possession + shortcuts smoke: § Blockers #1 guard, possession restyle, KB-01 (Phase-8.5/08b)
+  } else if (process.env.MOGGING_UXMILESTONE && win) {
+    runUxMilestoneSmoke(win) // env-gated UX MILESTONE: the whole revamp composed + budgets unchanged, one fixture world, zero network (Phase-8.5/09)
   } else if (process.env.MOGGING_USAGE && win) {
     runUsageSmoke(win) // env-gated usage-seam smoke: FAKE adapter only (Phase-7/01)
   } else if (process.env.MOGGING_ATTENTION && win) {

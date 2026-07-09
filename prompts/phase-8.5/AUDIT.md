@@ -45,35 +45,35 @@ names the step that owns it — the Verdict column is `fix|keep|keep+fix — <st
 has a verdict with no owner. Grades are **density/hierarchy**; an `A` surface can
 still hold a bug (see § Bugs, which routes all thirteen).
 
-| Surface | Grade | Verdict | The one-line complaint |
-|---|---|---|---|
-| Wizard — shell/stepper | C → **A** | **done (02)** | Was: four structural joints all at 16px; two hairlines 12px apart above the footer. Now a full PAGE, no stepper, no modal |
-| Wizard — Start | C− → **A** | **done (02)** | Was: three fields, three control heights (42/34/34px); a section heading sibling to form labels |
-| Wizard — Layout | C → **A** | **done (02)** | Was: a live preview re-rendering what the selected tile already says. The caption says it now |
-| **Wizard — Agents** | **F → A** | **done (02)** | Was: `padding: 5px`, 8 flat siblings, no cards, four control heights in one row |
-| Home | C+ → **A** | **done (06)** | Was: bordered recents on a **4px** seam (rhythm-inversion). Now a Card grid on the token ramp; the four `clamp()` bypasses + the unseeable `3vh` are gone |
-| First-run checklist | B− → **A** | **done (06)** | Chip + copy button hold one baseline now (the chip shrinks, not wraps); bug #1 fixed — REMOVE #21 deleted the immortal power-up row, so "Three steps" is true and the card self-dismisses |
-| Settings — shell | C → **A** | **done (04)** | Was: no left/top padding, nav items `7px` tall-ish, no cards. Now TwoColumn + grouped nav + Cards; `7px` → `--sp-2`, the only shell spacing violation |
-| Settings — Appearance / Terminal | B → **A** | **done (04)** | Cards + FieldGroups. Appearance still holds one control — a card's head is that control's label, so it is no longer a bare row |
-| Settings — Profiles & hosts | D → **A** | **done (05b)** | 04 gave it the page frame; 05b made the five placeholder-as-label inputs real `FieldGroup`s and the two CRUD lists `Card`s with `SectionHeader` + `EmptyState` |
-| Settings — Usage | D− → **A** | **done (05b)** | Was: 7 sections always open, 20 controls permanently expanded. Now an overview band + collapsible `Card`s, folded except overview and attention |
-| **Settings — Integrations** | **F → A** | **done (05)** | 9 sections at once; `.mgr-chip` is a **1px-vertical-padding button** and the only click target for needs-auth/drift |
-| Settings — Privacy / Browser | D → **A** | **done (04)** | ToggleRows with per-switch hints; every ADR clause kept, redistributed into a card caption + `.settings-scope` |
-| Settings — Shortcuts | B → **A** | **done (08b)** | The `5px` row padding → `--sp-1`, the raw `0.08em` tracking → `--track-wide`, and the list is now a subgrid two-column table. One source (KB-01), CI-enforced |
-| Settings — About | A | **done (01)** | Rebuilt on the four primitives |
-| Board | D → **A** | **done (07)** | Cards are Cards with ONE aligned chip row (phantom flex items gone), lanes carry CountBadge counts, the ⋯ menu is fixed-positioned so the lane scroller can't clip it, and Delete gets a confirm |
-| Palette | C− → **A** | **done (07)** | Rows on the rhythm (icon · title · hint · shortcut); empty query ranks top verbs by category (+ workspace context), a typed query highlights matches. Verb ids unchanged |
-| Toasts / confirms / modal | C → **A** | **done (07b)** | One family: one radius, one stacking gap, one curve in AND out; `.btn--danger` now reads destructive (bug #6) |
-| Review modal | D → **A** | **done (07b)** | Safe-first footer (Cancel before the danger merge), the merge de-emphasized from filled-primary to danger; the typed confirmation stays the guard |
-| Titlebar | B → **A** | **done (08)** | Right cluster's order declared in ONE place (titlebar.ts); the `titlebarLeft` port lie corrected; darwin traffic-light inset tokenized (`--traffic-light-inset`). 26px hitboxes / 4px gaps kept |
-| Workspace tabs | A− → **A** | **done (08)** | The one gap closed: scroll-edge fade at 8+ workspaces; `flex:none` makes "scroll, not shrink" true; bug #10 (collapsed collision) fixed. Identity ramp + attention latch kept |
-| Pane headers | B+ → **A** | **done (08)** | `.pane-mcp` co-located + aligned to its siblings; bug #9 (overflow clip + `.pane-role` max-width/tooltip) and bug #12 (state dot leading) fixed. The 28px one-line design kept |
-| Browser dock chrome | B / C → **A** | **done (08b)** | § Blockers #1 discharged: the possession label + consent + honesty spans get real, AA-safe rules (the label was 4.35:1 on nord), controls reach 28px, and DOCKUX gates it. REMOVE #13/#14 |
-| Shortcuts overlay | B− → **A** | **done (08b)** | A two-column subgrid token grid from the single SHORTCUTS source; DOCKUX (d) asserts its row count equals Settings' |
-| Update UX | A− → **A** | **done (06)** | REMOVE #15: the discarded `--pct` deleted; progress lives in the dot's `title` |
-| Usage gauge (titlebar) | A | keep | All literals sanctioned dense chrome |
-| Usage popover | D → **A** | **done (05b; recut 08c)** | 05b: real house tokens, theme-aware (bugs #4/#5). 08c: recut to the CodexBar dropdown — provider tabs → the selected provider's windows · pace · credits · cost · actions, on OUR IPC data (unbacked slots dropped, never faked). Gauge unchanged; USAGEGLANCE gates it |
-| **Empty states** | **F → A** | **done (07b)** | The substantial surfaces route through `EmptyState` (the empty board lane — the worst — now speaks, and gives `action` its first caller); inline dropdown notes stay inline by design |
+| Surface | Grade | Verdict | The one-line complaint | Done |
+|---|---|---|---|---|
+| Wizard — shell/stepper | C → **A** | **done (02)** | Was: four structural joints all at 16px; two hairlines 12px apart above the footer. Now a full PAGE, no stepper, no modal | ✅ |
+| Wizard — Start | C− → **A** | **done (02)** | Was: three fields, three control heights (42/34/34px); a section heading sibling to form labels | ✅ |
+| Wizard — Layout | C → **A** | **done (02)** | Was: a live preview re-rendering what the selected tile already says. The caption says it now | ✅ |
+| **Wizard — Agents** | **F → A** | **done (02)** | Was: `padding: 5px`, 8 flat siblings, no cards, four control heights in one row | ✅ |
+| Home | C+ → **A** | **done (06)** | Was: bordered recents on a **4px** seam (rhythm-inversion). Now a Card grid on the token ramp; the four `clamp()` bypasses + the unseeable `3vh` are gone | ✅ |
+| First-run checklist | B− → **A** | **done (06)** | Chip + copy button hold one baseline now (the chip shrinks, not wraps); bug #1 fixed — REMOVE #21 deleted the immortal power-up row, so "Three steps" is true and the card self-dismisses | ✅ |
+| Settings — shell | C → **A** | **done (04)** | Was: no left/top padding, nav items `7px` tall-ish, no cards. Now TwoColumn + grouped nav + Cards; `7px` → `--sp-2`, the only shell spacing violation | ✅ |
+| Settings — Appearance / Terminal | B → **A** | **done (04)** | Cards + FieldGroups. Appearance still holds one control — a card's head is that control's label, so it is no longer a bare row | ✅ |
+| Settings — Profiles & hosts | D → **A** | **done (05b)** | 04 gave it the page frame; 05b made the five placeholder-as-label inputs real `FieldGroup`s and the two CRUD lists `Card`s with `SectionHeader` + `EmptyState` | ✅ |
+| Settings — Usage | D− → **A** | **done (05b)** | Was: 7 sections always open, 20 controls permanently expanded. Now an overview band + collapsible `Card`s, folded except overview and attention | ✅ |
+| **Settings — Integrations** | **F → A** | **done (05)** | 9 sections at once; `.mgr-chip` is a **1px-vertical-padding button** and the only click target for needs-auth/drift | ✅ |
+| Settings — Privacy / Browser | D → **A** | **done (04)** | ToggleRows with per-switch hints; every ADR clause kept, redistributed into a card caption + `.settings-scope` | ✅ |
+| Settings — Shortcuts | B → **A** | **done (08b)** | The `5px` row padding → `--sp-1`, the raw `0.08em` tracking → `--track-wide`, and the list is now a subgrid two-column table. One source (KB-01), CI-enforced | ✅ |
+| Settings — About | A | **done (01)** | Rebuilt on the four primitives | ✅ |
+| Board | D → **A** | **done (07)** | Cards are Cards with ONE aligned chip row (phantom flex items gone), lanes carry CountBadge counts, the ⋯ menu is fixed-positioned so the lane scroller can't clip it, and Delete gets a confirm | ✅ |
+| Palette | C− → **A** | **done (07)** | Rows on the rhythm (icon · title · hint · shortcut); empty query ranks top verbs by category (+ workspace context), a typed query highlights matches. Verb ids unchanged | ✅ |
+| Toasts / confirms / modal | C → **A** | **done (07b)** | One family: one radius, one stacking gap, one curve in AND out; `.btn--danger` now reads destructive (bug #6) | ✅ |
+| Review modal | D → **A** | **done (07b)** | Safe-first footer (Cancel before the danger merge), the merge de-emphasized from filled-primary to danger; the typed confirmation stays the guard | ✅ |
+| Titlebar | B → **A** | **done (08)** | Right cluster's order declared in ONE place (titlebar.ts); the `titlebarLeft` port lie corrected; darwin traffic-light inset tokenized (`--traffic-light-inset`). 26px hitboxes / 4px gaps kept | ✅ |
+| Workspace tabs | A− → **A** | **done (08)** | The one gap closed: scroll-edge fade at 8+ workspaces; `flex:none` makes "scroll, not shrink" true; bug #10 (collapsed collision) fixed. Identity ramp + attention latch kept | ✅ |
+| Pane headers | B+ → **A** | **done (08)** | `.pane-mcp` co-located + aligned to its siblings; bug #9 (overflow clip + `.pane-role` max-width/tooltip) and bug #12 (state dot leading) fixed. The 28px one-line design kept | ✅ |
+| Browser dock chrome | B / C → **A** | **done (08b)** | § Blockers #1 discharged: the possession label + consent + honesty spans get real, AA-safe rules (the label was 4.35:1 on nord), controls reach 28px, and DOCKUX gates it. REMOVE #13/#14 | ✅ |
+| Shortcuts overlay | B− → **A** | **done (08b)** | A two-column subgrid token grid from the single SHORTCUTS source; DOCKUX (d) asserts its row count equals Settings' | ✅ |
+| Update UX | A− → **A** | **done (06)** | REMOVE #15: the discarded `--pct` deleted; progress lives in the dot's `title` | ✅ |
+| Usage gauge (titlebar) | A | keep | All literals sanctioned dense chrome | ✅ |
+| Usage popover | D → **A** | **done (05b; recut 08c)** | 05b: real house tokens, theme-aware (bugs #4/#5). 08c: recut to the CodexBar dropdown — provider tabs → the selected provider's windows · pace · credits · cost · actions, on OUR IPC data (unbacked slots dropped, never faked). Gauge unchanged; USAGEGLANCE gates it | ✅ |
+| **Empty states** | **F → A** | **done (07b)** | The substantial surfaces route through `EmptyState` (the empty board lane — the worst — now speaks, and gives `action` its first caller); inline dropdown notes stay inline by design | ✅ |
 
 ---
 
@@ -445,7 +445,8 @@ decision and its reason go in docs/11. This is the last unresolved either/or.
    guardrail — *"later steps may extend it, never bypass it"* — is satisfied by
    extension, which is precisely what happened.
 2. **Radius already existed** as `--r-sm/md/lg/full`. No `--radius-*` added, same
-   reasoning.
+   reasoning. **Accepted** — extend, don't fork the vocabulary; identical to
+   deviation 1's reasoning for spacing.
 3. **New: readable-column caps.** `--measure: 68ch` (prose/captions) and
    `--page-max: 1040px` (settings/home column, matching the existing
    `.settings-page` width). `--measure` resolves the app's two competing prose
@@ -454,8 +455,8 @@ decision and its reason go in docs/11. This is the last unresolved either/or.
    shipped a **measured AA failure**: the fill red is **2.93:1** on nord's elevated
    surface and **3.24:1** on solarized's. Following the existing `--accent-ink`
    precedent, danger-as-**words** now takes `--danger-ink` (`#fa9b92` dark,
-   `#c92e25` light); danger-as-**fill** keeps `--danger`. Measured across all four
-   themes: **0 failures, worst pair 4.52:1.**
+   `#c02820` light — darkened past the fill in 09, see below); danger-as-**fill**
+   keeps `--danger`. Measured across all four themes: **0 failures, worst pair 4.52:1.**
    *Note for step 04:* `.settings-error` still renders `var(--danger)` as text —
    **a pre-existing, app-wide AA failure on nord and solarized.** Repoint it to
    `--danger-ink`. Not done here: this step is additive.
@@ -463,15 +464,27 @@ decision and its reason go in docs/11. This is the last unresolved either/or.
    overrides `--danger` but never `--danger-ink`, so the repoint alone would have
    painted the DARK ink (#fa9b92, ≈2.2:1) on a light surface until JS pinned a
    theme — worse than the bug. Both are fixed, and SETSHELL now measures it.
+   **✅ 09**: the 4.52 pair was measured on plain/inset grounds; the milestone (e)
+   then measured `--danger-ink` on the *tinted* `--danger-weak` chip fill
+   (`.cc-chip.is-failing`) at **4.45:1** on light — a hair below AA, and the first
+   gate to measure danger-words on a danger-tinted ground. Light `--danger-ink`
+   darkened past the fill (`#c92e25`→`#c02820`, **~4.87:1** on the chip; strictly
+   improves every light danger-words surface, none regressed). UXMILESTONE (e)
+   re-measures it green across four themes. This is exactly what the milestone is
+   for — a check on a real composited ground, not a claim.
 5. **`TwoColumn`'s first *feature* customer is step 04**, not 01. Rewiring the
    Settings shell is 04's explicit scope, and 01's guardrail forbids behavior
    changes beyond the About tab. It ships exercised — the About card lays its
    description beside a version rail — and is gallery-staged in both themes.
+   **Accepted** — TwoColumn earns its first *feature* customer in 04, exactly where
+   the shell rewire is scoped.
 6. **`FieldGroup` puts the hint under the label**, where shadcn puts the
    description under the control. The house `.settings-row` already pairs
    label+caption above the control, and 04/05 replace `row()` with `FieldGroup`;
    matching the existing pattern makes that a swap, not a re-layout.
    `hintPlacement: 'below-control'` is available for result-caveat hints.
+   **Accepted** — mirrors the house `.settings-row`, so 04/05 swap rather than
+   re-layout.
 
 7. **`profiles-hosts.ts`'s internals were unowned.** The Grades table read
    **D / fix**; no step's prompt claimed it — 04 covers "the shell and the light
@@ -492,7 +505,9 @@ decision and its reason go in docs/11. This is the last unresolved either/or.
    never. The other **six** — remote host, swarm roles, tool plan, custom command,
    preset save/delete, **worktree isolation** — are disclosed as specified. (01's
    findings list seven Advanced controls; this note used to say "five" and silently
-   dropped worktree isolation from the count.)
+   dropped worktree isolation from the count.) **Accepted** — the picker is
+   provider-bound and already progressive; the other six controls are disclosed as
+   specified.
 
 9. **The Usage popover was RECUT to the CodexBar dropdown (08c), and USAGEUI
    re-baselined — RESOLVED.** 7/03 built the glance as grouped per-provider tiles; 08c

@@ -43,24 +43,29 @@ renderer is tuned once and behaves identically everywhere. See
 
 ## Quickstart
 
-> **Status: Phase 8 (integrations) shipped** — the workspace stops being an
-> island. The one **house MCP server** now exposes the fleet's control plane to
-> agents (reads free, writes behind a per-workspace grant), the browser dock gains
-> a consented **agent-web** profile (per-origin action grants + a local activity
-> **trail**), the app **registers MCP servers** across the Claude Code / Codex /
-> Gemini config dialects and **scopes** them per workspace, an outbound **event
-> bridge** rings your n8n/Make/Slack webhooks, and board cards carry **live GitHub
-> PR/issue** state — all with the app holding no credential it doesn't have to
-> (daemon still v3, grant-blind). Closed by the `MOGGING_INTEGMILESTONE` milestone:
-> all five directions compose in one fixture world, zero network, machine budget
-> unmoved. The `qa-smokes.sh` sweep now runs **52 gates** (thirteen new this phase:
-> MCP · MCPWRITE · AGENTWEB · WEBTRAIL · MCPMGR · MCPCAT · VAULTKEYS · TOOLPLAN ·
-> EVBRIDGE · MCPSTATUS · INTEG · INTEGUX · INTEGMILESTONE). Surface: `docs/14`.
-> Certified across **four environments** — all **52/52** green on local Windows
-> AND all three CI OSes (Linux · macOS · Windows) in one dispatch, run
-> **28910043776**; per-OS finds + root causes in `prompts/phase-8/REPORT.md`.
-> (Phase 6 shipped v0.4.0: the browser dock + first-run/update UX + signing
-> readiness.)
+> **Status: Phase 8.5 (the UI/UX revamp) shipped** — the chrome caught up to the
+> product. Phases 6–8 grew usage meters, five integration directions, a browser and a
+> swarm faster than the surfaces around them: the wizard was three cramped modal
+> screens, the folder picker a `cd` bar, Settings an unstyled wall of controls. This
+> pack **audited every user-facing surface** (`prompts/phase-8.5/AUDIT.md` — graded,
+> with keep/fix/remove verdicts and a `file:line` on every finding), then rebuilt them
+> on one **layout vocabulary** (`Card` · `SectionHeader` · `FieldGroup` · `TwoColumn`,
+> on the extended `--sp-*` ramp): the wizard is one full page beside the rail, a folder
+> is pickable by click, Settings / Integrations / Usage open **overview-first** with
+> persisted disclosure, plus Home + first-run, the board + palette, one feedback
+> language, the titlebar / rail / pane chrome, the browser **possession banner**, and
+> the Usage-glance CodexBar recut. **13 removals executed** (dead affordances deleted,
+> not hidden) and **16 bugs routed and fixed**. Closed by the `MOGGING_UXMILESTONE`
+> milestone: the whole revamp composed in one fixture world, zero network, behind a
+> hard **coverage gate** (`check-audit.mjs` — no surface below grade **A**, no unrouted
+> finding) and the spacing drift grep **frozen at zero** (`check-spacing.mjs --max 0`).
+> **Both perf budgets unmoved** — an unchanged `docs/05` is the freeze criterion. The
+> `qa-smokes.sh` sweep now runs **66 gates** (fourteen new this pack: WIZARDUX ·
+> FOLDERPICK · SETSHELL · SETINTEG · SETUSAGE · HOMEUX · BOARDUX · FEEDBACKUX · CHROMEUX ·
+> DOCKUX · USAGEGLANCE · UXMILESTONE, plus the two static gates AUDIT · SPACING). Design
+> system: [`docs/11`](docs/11-design-system.md).
+> (Phase 8 shipped integrations, five directions — `docs/14`; Phase 6 shipped v0.4.0:
+> the browser dock + first-run/update UX + signing readiness.)
 
 ```bash
 npm install        # builds native modules (node-pty). See note below.
@@ -154,6 +159,7 @@ other; `main`/`preload`/`renderer` are the only composition root. See
 - **Phase 6** ✅ — Product-ready: full Linux/macOS parity sweeps, browser dock, first-run + updates, v0.4.0.
 - **Phase 7** ✅ — Usage & metering: CLI-owned session adapters, the usage gauge + Settings § Usage, the pointer-grammar key vault (receipts: `prompts/phase-7/README.md`).
 - **Phase 8** ✅ — Integrations, five directions: the house MCP server (reads free, writes behind a per-workspace grant), the agent-web profile + activity trail, MCP registration across three CLI dialects + per-workspace tool plans, the outbound event bridge, live GitHub PR/issue chips — app holds no credential, daemon still v3. Closed by `MOGGING_INTEGMILESTONE`; surface in [`docs/14`](docs/14-integrations.md).
+- **Phase 8.5** ✅ — The UI/UX revamp: an audit of every surface ([`AUDIT.md`](prompts/phase-8.5/AUDIT.md)), then rebuilt on one layout vocabulary (`Card`/`SectionHeader`/`FieldGroup`/`TwoColumn`, ramp extended to `--sp-7/8`) — one-page wizard, click-to-pick folder browser, overview-first Settings, Home/first-run, board + palette, one feedback language, chrome + possession banner, the Usage-glance recut; 13 removals, 16 bugs fixed; spacing frozen at zero, both budgets unmoved. Closed by `MOGGING_UXMILESTONE` + the `check-audit.mjs` coverage gate (receipts: `prompts/phase-8.5/README.md`).
 
 Full plan: [`docs/02-mvp-and-roadmap.md`](docs/02-mvp-and-roadmap.md).
 

@@ -27,6 +27,18 @@ AA thresholds used: **4.5:1** for text/icon-grade ink, **3:1** for non-text UI.
 > silently never checks the other state. When 8.5/06 lifts the probe into
 > `src/main/aa-probe.ts`, the freeze goes with it — **inside** the exported call, so a
 > caller cannot forget what it never had to remember.
+>
+> **The shared probe, and what it caught at the freeze (8.5/09).** SETSHELL, HOMEUX,
+> BOARDUX, FEEDBACKUX, CHROMEUX and DOCKUX all import `aa-probe.ts`; the UXMILESTONE
+> gate then re-measures every **safety** surface through it in one composed world —
+> the possession label, the consent copy, an attention chip, the review-gate
+> indicator and the trail's "never sent anywhere" line — across all four themes. It
+> earned its keep: it caught `--danger-ink` rendering on the *tinted* `--danger-weak`
+> chip fill (`.cc-chip.is-failing`) at **4.45:1** on light — below AA on a composited
+> ground the plain/inset measurements (worst 4.52) never covered. Light `--danger-ink`
+> was darkened past the fill (`#c92e25` → `#c02820`, **~4.87:1** on the chip; strictly
+> improves every light danger-as-words surface, none regressed) — the same ink≠fill
+> split the dark themes already use. A check on a real composited ground, not a claim.
 
 Rules (enforced by grep, see § Guardrails):
 
@@ -174,7 +186,18 @@ readability lives in ink/edge — neither sacrifices the other.
   (`--fw-regular/medium/semibold/bold`). Tracking: `--track-tight -0.035em` (headings),
   `--track-wide 0.14em` (uppercase labels). One un-tokenized stragglers set exists at
   9–10px in chips/kbd (logged as UX-21).
-- **Space** (`--sp-1…6`): 4 · 8 · 12 · 16 · 24 · 32 px (4-base).
+- **Space** (`--sp-1…8`): 4 · 8 · 12 · 16 · 24 · 32 · **48 · 64** px (4-base). The
+  6-stop ramp topped out below page-level rhythm, so **8.5/01 extended it** —
+  `--sp-7: 48`, `--sp-8: 64` — rather than fork a parallel `--space-*` scale across the
+  277 existing `--sp-*` call sites (AUDIT § Deviations 1: *extend, never bypass*). Two
+  readable-column caps ride alongside: `--measure: 68ch` (prose/captions — it resolved
+  the app's old 52ch-vs-72ch split) and `--page-max: 1040px` (the settings/home
+  column). The drift gate `scripts/check-spacing.mjs` enforces the ramp — no spacing
+  declaration may carry a px literal outside **{0, 1, 2, 3, 6}** (1–2px hairlines,
+  3/6px dense-terminal-chrome half-steps) — and **8.5/09 froze it at `--max 0`**, every
+  bucket zero including the shared row. (01 first shipped this rule as an awk one-liner
+  that reported 94 violations where there were 33 — mawk silently ignores `\b`; the node
+  script is the reproducible replacement.)
   Rhythm rules (6/UI pass — every new surface inherits these for free):
   - **The division**: where a title heads a content column, the junction is
     title → `sp-3` → 1px hairline (`--border` at 55%, inset to the content
@@ -200,6 +223,41 @@ readability lives in ink/edge — neither sacrifices the other.
 - **Motion**: `--dur-1 120ms` · `--dur-2 200ms`, `--ease cubic-bezier(.2,0,0,1)`;
   reduced-motion collapses all to ~0.
 - **Layout**: `--rail-w 288px` · `--rail-w-collapsed 60px` · `--titlebar-h 40px`.
+
+## Layout primitives (Phase-8.5/01)
+
+The 8.5 audit's headline finding was not "no scale" (a scale existed, used 277 times)
+but **no structural vocabulary**: there was not one `Card` in the app, and
+`.settings-row` — a bare `flex column; gap: 8px`, no border/background/padding — was
+asked to hold a full CRUD manager. Sections and rows read identically. 8.5/01 shipped
+the missing pieces (`src/ui/components/`, `el()`-built, token-only CSS, exported from
+`components/index.ts`); every later step consumes them and `check-spacing.mjs` gates
+the result. The rhythm numbers are the convention answers (Geist/shadcn, re-derived
+clean-room — patterns in, our code out; ADR 0004): *card gap ≤ card padding, or cards
+stop reading as a group.*
+
+- **`Card`** — the grouping primitive: `--sp-4` padding, `--sp-4` inter-card gap,
+  `--r-md` corners, one border + one surface step. The collapsible variant
+  (`.collapsible-card`) folds its body via `grid-template-rows: 0fr → 1fr`
+  (Chromium-native here, no ResizeObserver) and keeps an always-visible header an
+  attention chip can ride **even while collapsed** — collapse is not hide.
+- **`SectionHeader`** — title + optional caption + optional action, built on **grid +
+  `:has()`**, not flexbox: the action spans both rows and pins top-right, so a two-line
+  caption never vertically re-centers the button (the one place flexbox
+  `space-between` gets it wrong). The highest-value pattern the research surfaced.
+- **`FieldGroup`** — label → control → hint, wired for a11y: `<label for>`,
+  `role="group"`, `aria-describedby`, `aria-invalid`, `role="alert"` on the error. The
+  hint sits under the **label** (matching the house `.settings-row`) — 8px
+  label→control, 4px label→hint; `hintPlacement: 'below-control'` for caveat hints.
+- **`TwoColumn`** — the page frame (a nav/rail column beside a content column) behind
+  the Settings shell and Home; first *feature* customer 8.5/04.
+
+Supporting primitives the pack generalized or gave first callers: **`EmptyState`**
+(header capped at 384px so it reads as a message, not a paragraph; its `action?: Node`
+finally has callers — the empty board lane), **`CountBadge`** (`tabular-nums`, so lane
+counts don't jitter as cards drag), and the one **feedback family** (`Toast` /
+`confirm` / `modal`: one radius, one stacking gap, one motion curve in AND out; the
+destructive `confirm` focuses the safe action and can never be silenced).
 
 ## Window chrome (Phase-5/04)
 
@@ -550,7 +608,7 @@ disabled entirely under `prefers-reduced-motion`.
 
 ## Audit ledger
 
-Walked from `out/gallery/` (46 shots at the 5/01 audit; 93 shots incl. usage, 2026-07-06). Shot refs use the
+Walked from `out/gallery/` (46 shots at the 5/01 audit; 93 shots incl. usage, 2026-07-06; **113 shots incl. the 8.5 revamp, 2026-07-09**). Shot refs use the
 name suffix (numbering shifts as the gallery grows). **Fixed in 01** = pure-token
 wins shipped with this step; everything else is LOGGED with its owner step.
 
@@ -587,8 +645,9 @@ wins shipped with this step; everything else is LOGGED with its owner step.
     → no color literals outside the token/theme-fallback blocks.
   - `grep -rn "@backend" src/ui --include='*.ts'` (and the inverse for `@ui`,
     `electron`, `node-pty`) → layer boundaries hold.
-- The verification loop: `MOGGING_SHOT=all` regenerates `out/gallery/` (93 shots,
-  both themes) in one command; before/after pairs live in `docs/assets/gallery/`.
+- The verification loop: `MOGGING_SHOT=all MOGGING_GALLERY=1` regenerates
+  `out/gallery/` (113 shots, both themes) in one command; before/after pairs live in
+  `docs/assets/gallery/`.
 - Token changes re-run SMOKE + PERCEPTION + MILESTONE — restyle never renames the
   load-bearing selectors (`.workspace-tab[data-attention]`, `.pane-state[data-state]`,
   `.pane-git.has-git`, `.layout-slot[data-pane-id]`, …).

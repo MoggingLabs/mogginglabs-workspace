@@ -9,6 +9,7 @@ import { UsageChannels } from '@contracts'
 import { getUsageService, getUsageStatusService } from './usage'
 import { getSettingsStore } from './app-settings'
 import { clearTrail, flushTrailForSmoke, recordTrail } from './trail'
+import { setAgentConsent, setDrivingForSmoke } from './browser-dock'
 
 // MOGGING_SHOT=all (Phase-5/01): the GALLERY — drive the app through every surface
 // and write numbered PNGs to out/gallery/, in BOTH themes. The audit + before/after
@@ -448,6 +449,18 @@ export function runGallery(win: BrowserWindow): void {
           await ES(`window.__mogging.browser.setProfile('agent-web')`)
           await sleep(600)
           await snap(`${tag}-browser-agentweb`)
+          // 8.5/08b § Blockers #1 — the possession banner, the ONE surface the pack
+          // forbids dimming. Idle above; here the agent takes the wheel (offline: no
+          // page loads, driving is set for the shot then released). Both themes.
+          const dockWs = String(await ES(`window.__mogging.workspace.active()?.id ?? ''`))
+          if (dockWs) {
+            setAgentConsent(true, dockWs)
+            setDrivingForSmoke(dockWs, true, 'example.com')
+            await sleep(500)
+            await snap(`${tag}-browser-driving`)
+            setDrivingForSmoke(dockWs, false)
+            await sleep(300)
+          }
           await ES(`window.__mogging.browser.setProfile('preview')`)
           await sleep(400)
           await ES('window.__mogging.browser.toggle(false)')
@@ -577,6 +590,16 @@ export function runGallery(win: BrowserWindow): void {
           await sleep(200)
         })
 
+        // 8.5/08b (KB-01): the ? shortcuts overlay — a two-column subgrid from the one
+        // SHORTCUTS source, whose row count DOCKUX asserts equals Settings § Shortcuts'.
+        await part(`${tag}-shortcuts`, async () => {
+          await key(`key: '?'`)
+          await sleep(400)
+          await snap(`${tag}-shortcuts-overlay`)
+          await escape()
+          await sleep(200)
+        })
+
         await part(`${tag}-board-cards`, async () => {
           await key(`ctrlKey: true, shiftKey: true, code: 'KeyG'`)
           await sleep(500)
@@ -596,6 +619,24 @@ export function runGallery(win: BrowserWindow): void {
           await snap(`${tag}-review-approved`)
           await escape()
           await sleep(300)
+        })
+
+        // 8.5/07b (bug #8): the destructive confirm — safe action focused, danger verb
+        // emphasized, never silenceable. Staged on Beta with a busy pane and always
+        // CANCELLED, so the workspace survives (no churn into later shots).
+        await part(`${tag}-confirm-close`, async () => {
+          await ES(`window.__mogging.workspace.switchByIndex(2)`) // Beta
+          await sleep(400)
+          const beta = (await ES(`(() => { const w = window.__mogging.workspace.active(); return { id: w.id, base: w.ordinal * 100 } })()`)) as { id: string; base: number }
+          await ES(`window.__mogging.attention.setPaneState(${beta.base + 1}, 'busy')`)
+          await sleep(300)
+          await ES(`document.querySelector('.workspace-tab[data-ws-id="${beta.id}"] .ws-close')?.click()`)
+          await sleep(500)
+          await snap(`${tag}-confirm-close`)
+          await ES(`document.querySelector('.modal-overlay .btn--ghost')?.click()`) // Cancel — Beta stays
+          await sleep(300)
+          await ES(`window.__mogging.attention.setPaneState(${beta.base + 1}, 'idle')`)
+          await sleep(150)
         })
 
         await part(`${tag}-settings`, async () => {

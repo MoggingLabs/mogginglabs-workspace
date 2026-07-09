@@ -181,8 +181,11 @@
     --success: #147a3c;
     --danger: #c92e25;
     /* themes.ts stamps this too, but the pre-JS window would otherwise paint the
-       DARK ink (#fa9b92, ~2.2:1) on a light surface — worse than the bug we fixed. */
-    --danger-ink: #c92e25;
+       DARK ink (#fa9b92, ~2.2:1) on a light surface — worse than the bug we fixed.
+       Darkened past the fill (#c92e25) so danger-as-words also clears AA on the
+       tinted --danger-weak chip fills (`.cc-chip.is-failing`), not just plain
+       surfaces — the 4.46:1-on-inset case 8.5/09's milestone (e) measured. */
+    --danger-ink: #c02820;
     --warning: #8a5c09;
     --info: #1d63d8;
   }

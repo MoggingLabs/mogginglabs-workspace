@@ -132,6 +132,25 @@ run_smoke() {
   return 0
 }
 
+# Static gates (Phase-8.5/09): no Electron boot — pure Node checks over the repo. Run
+# FIRST so a drifted ledger or a spacing regression fails the sweep in seconds, before
+# minutes of app boots. AUDIT is the coverage gate (no Grades row below A, no unrouted
+# finding); SPACING freezes the drift grep at --max 0 (every bucket zero, shared row too).
+run_static() {
+  local name="$1"; shift
+  should_run "$name" || return 0
+  echo "── $name ──"
+  if "$@" >"$TMPBASE/$name.log" 2>&1; then
+    RESULTS+=("$name PASS"); echo "  PASS"
+  else
+    RESULTS+=("$name FAIL"); echo "  FAIL"
+    echo "  ── $name diagnostics ──"
+    sed 's/^/  /' "$TMPBASE/$name.log" | tail -25
+  fi
+}
+run_static AUDIT   node scripts/check-audit.mjs
+run_static SPACING node scripts/check-spacing.mjs --max 0
+
 run_smoke SMOKE       MOGGING_SMOKE     1 180 smoke
 run_smoke MULTIPANE   MOGGING_MULTIPANE 1 180 multipane
 run_smoke ATTENTION   MOGGING_ATTENTION 1 120 attention
@@ -195,6 +214,7 @@ run_smoke BOARDUX      MOGGING_BOARDUX   1 240 boardux
 run_smoke FEEDBACKUX   MOGGING_FEEDBACKUX 1 240 feedbackux
 run_smoke CHROMEUX     MOGGING_CHROMEUX  1 300 chromeux
 run_smoke DOCKUX       MOGGING_DOCKUX    1 240 dockux
+run_smoke UXMILESTONE  MOGGING_UXMILESTONE 1 360 uxmilestone
 
 echo ""
 echo "══ SWEEP RESULTS ══"
