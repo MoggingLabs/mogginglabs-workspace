@@ -155,6 +155,7 @@ run_smoke SMOKE       MOGGING_SMOKE     1 180 smoke
 run_smoke MULTIPANE   MOGGING_MULTIPANE 1 180 multipane
 run_smoke ATTENTION   MOGGING_ATTENTION 1 120 attention
 run_smoke BLOCKS      MOGGING_BLOCKS    1 150 blocks
+run_smoke CLIPBOARD   MOGGING_CLIPBOARD 1 150 clipboard
 run_smoke GIT         MOGGING_GIT       1 240 git
 run_smoke NOTIFY      MOGGING_NOTIFY    1 180 notify
 run_smoke MILESTONE   MOGGING_MILESTONE 1 300 milestone

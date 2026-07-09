@@ -1,6 +1,7 @@
 import '@fontsource-variable/jetbrains-mono' // the app typeface — UI and terminals alike
 import './styles/global.css'
 import { createAppShell } from './shell/app-shell'
+import { syncHistoryPref } from './core/clipboard/clipboard-port'
 import { mountFeatures, registerFeature } from './core/registry/feature-registry'
 import { workspaceFeature } from './features/workspace'
 import { homeFeature } from './features/home'
@@ -28,6 +29,11 @@ export { getTelemetry, setTelemetry } from './core/telemetry'
 export function start(): void {
   const root = document.getElementById('root')
   if (!root) throw new Error('#root not found')
+
+  // Main boots with clipboard recording ON. If this install turned history off, say so
+  // before any pane can copy anything — otherwise the first copies of the session land
+  // in a ring the user believes is disabled.
+  syncHistoryPref()
 
   const shell = createAppShell(root)
   registerFeature(workspaceFeature) // owns the rail + per-workspace grids; provides slots

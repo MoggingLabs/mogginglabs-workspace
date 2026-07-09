@@ -5909,3 +5909,167 @@ body.resizing * {
   color: var(--text-hi);
   font-variant-numeric: tabular-nums;
 }
+
+/* ── FILE DROP ON A TERMINAL PANE ──────────────────────────────────────────────
+   Shown only while a drag carrying FILES is over a pane (see mountFileDrop). It is
+   deliberately translucent + blurred rather than opaque: you must still be able to
+   read the pane you are about to drop into — that is what tells you it is the right
+   one. `pointer-events: none` is load-bearing; an overlay that swallowed the drag
+   would fire `dragleave` the instant it appeared and strobe itself off. */
+.pane-drop {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--bg-app) 62%, transparent);
+  backdrop-filter: blur(6px) saturate(0.9);
+  -webkit-backdrop-filter: blur(6px) saturate(0.9);
+  opacity: 0;
+  transition: opacity var(--dur-2) var(--ease);
+}
+.pane-drop.is-active {
+  opacity: 1;
+}
+.pane-drop-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-5) var(--sp-6);
+  border-radius: var(--r-lg);
+  border: 1.5px dashed var(--accent);
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  box-shadow: var(--shadow-2), 0 0 0 6px var(--accent-weak);
+  color: var(--text-hi);
+  text-align: center;
+  transform: scale(0.96);
+  transition: transform var(--dur-2) var(--ease);
+}
+.pane-drop.is-active .pane-drop-card {
+  transform: scale(1);
+}
+.pane-drop-card svg {
+  color: var(--accent-ink);
+}
+.pane-drop-title {
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+}
+.pane-drop-hint {
+  font-size: var(--fs-12);
+  color: var(--text-lo);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pane-drop,
+  .pane-drop-card {
+    transition: none;
+  }
+  .pane-drop-card {
+    transform: none;
+  }
+}
+
+/* ── SETTINGS § CLIPBOARD ──────────────────────────────────────────────────────
+   The history list. Each row is [meta + preview | copy · delete]. Previews are
+   pre-wrapped and hard-clamped to three lines: a copied file, a stack trace and a
+   one-word password must all occupy the same row height, or the list stops being
+   scannable the moment anything long lands in it. */
+.clip-tab {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.clip-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.clip-empty {
+  padding: var(--sp-4) 0;
+}
+.clip-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface);
+}
+.clip-row:hover {
+  border-color: var(--border-strong);
+}
+.clip-row-main {
+  flex: 1 1 auto;
+  min-width: 0; /* lets the <pre> below actually shrink instead of forcing a scrollbar */
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.clip-row-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-11);
+  color: var(--text-lo);
+}
+.clip-row-kind {
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  background: var(--accent-weak);
+  color: var(--accent-ink);
+  font-weight: var(--fw-medium);
+}
+.clip-row-kind[data-kind='image'] {
+  background: color-mix(in srgb, var(--info) 16%, transparent);
+  color: var(--info);
+}
+.clip-row-kind[data-kind='files'] {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
+}
+.clip-row-time {
+  color: var(--text-mid);
+  cursor: help; /* the exact timestamp is in the title */
+}
+.clip-row-bytes {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.clip-row-preview {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  color: var(--text-mid);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere; /* a 4 KB base64 blob must wrap, not stretch the card */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.clip-row-image {
+  max-width: 220px;
+  max-height: 120px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border);
+  object-fit: contain;
+  background: var(--bg-inset);
+}
+.clip-row-actions {
+  display: flex;
+  gap: var(--sp-1);
+  flex: 0 0 auto;
+}
+.icon-btn--danger:hover {
+  background: var(--danger-weak);
+  color: var(--danger-ink);
+}

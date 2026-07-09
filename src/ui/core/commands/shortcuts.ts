@@ -40,6 +40,18 @@ export const SHORTCUTS: ShortcutGroup[] = [
     ]
   },
   {
+    // These are intercepted before the terminal, so they behave the same in every agent
+    // CLI (Claude Code, Codex, Gemini) and in a bare shell — see TerminalPane.handleKey.
+    title: 'Clipboard',
+    rows: [
+      { keys: 'Ctrl+C', label: 'Copy the selection · with no selection, interrupt (SIGINT)' },
+      { keys: 'Ctrl+V', label: 'Paste into the terminal' },
+      { keys: 'Ctrl+Shift+C', label: 'Copy the selection' },
+      { keys: 'Ctrl+Shift+V', label: 'Paste into the terminal' },
+      { keys: 'Drag a file in', label: 'Insert its full path, quoted for your shell' }
+    ]
+  },
+  {
     title: 'Tools',
     rows: [
       { keys: 'Ctrl+Shift+B', label: 'Toggle the workspace rail' },

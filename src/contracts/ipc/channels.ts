@@ -17,8 +17,18 @@ export const TerminalChannels = {
 } as const
 
 export const ClipboardChannels = {
-  write: 'clipboard:write',
-  read: 'clipboard:read'
+  write: 'clipboard:write', // (WriteClipboard) -> void   plain text, the legacy path
+  read: 'clipboard:read', // -> string                    plain text, the legacy path
+  writeEntry: 'clipboard:writeEntry', // (WriteClipboardEntry) -> void  text | image
+  recordDrop: 'clipboard:recordDrop', // (RecordDroppedPaths) -> void  history ONLY, never the system clipboard
+  readRich: 'clipboard:readRich', // -> RichClipboard      text + image + file list
+  history: 'clipboard:history', // -> ClipboardEntry[]     newest first
+  historyChanged: 'clipboard:historyChanged', // main -> renderer: ClipboardHistoryEvent
+  restore: 'clipboard:restore', // (ClipboardEntryRef) -> void  put an entry back on the system clipboard
+  remove: 'clipboard:remove', // (ClipboardEntryRef) -> void
+  clear: 'clipboard:clear', // -> void
+  historySet: 'clipboard:historySet', // ({ enabled }) -> void  stop/start RECORDING, main-side
+  env: 'clipboard:env' // -> ClipboardEnv  (shell quoting flavor for dropped paths)
 } as const
 
 export const WorkspaceChannels = {

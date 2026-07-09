@@ -16,6 +16,16 @@ const RAIL_COLLAPSED_KEY = 'mogging.railCollapsed'
 export function createAppShell(root: HTMLElement): ShellContext {
   root.innerHTML = ''
 
+  // A file dropped ANYWHERE a listener has not claimed makes Chromium navigate the window
+  // to that file — the app is simply replaced by the dropped document, with no way back.
+  // This is the backstop for every pixel outside a terminal pane. It sits on `window`, so
+  // it runs LAST as the event bubbles: a pane's own drop handler (deeper in the tree) has
+  // already run and consumed the drop by then. Both call preventDefault, which is what
+  // suppresses the navigation; neither needs to stop propagation.
+  for (const type of ['dragover', 'drop'] as const) {
+    window.addEventListener(type, (e) => e.preventDefault())
+  }
+
   const app = document.createElement('div')
   app.id = 'app'
   if (navigator.platform.toUpperCase().includes('MAC')) app.classList.add('platform-darwin')

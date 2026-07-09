@@ -77,6 +77,7 @@ import { runUsageCliSmoke } from './usagecli-smoke'
 import { runUsageSetSmoke } from './usageset-smoke'
 import { runAttentionSmoke } from './attention-smoke'
 import { runBlocksSmoke } from './blocks-smoke'
+import { runClipboardSmoke } from './clipboard-smoke'
 import { runGitSmoke } from './git-smoke'
 import { runNotifySmoke } from './notify-smoke'
 import { runMilestoneSmoke } from './milestone-smoke'
@@ -346,6 +347,8 @@ app.whenReady().then(async () => {
     runUsageSmoke(win) // env-gated usage-seam smoke: FAKE adapter only (Phase-7/01)
   } else if (process.env.MOGGING_ATTENTION && win) {
     runAttentionSmoke(win) // env-gated tab-attention aggregation smoke (Phase-2/01)
+  } else if (process.env.MOGGING_CLIPBOARD && win) {
+    runClipboardSmoke(win) // env-gated clipboard smoke: quoting + history ring + drop overlay
   } else if (process.env.MOGGING_BLOCKS && win) {
     runBlocksSmoke(win) // env-gated command-blocks smoke (Phase-2/02)
   } else if (process.env.MOGGING_GIT && win) {
