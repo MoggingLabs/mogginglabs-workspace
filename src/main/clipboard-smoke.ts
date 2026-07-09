@@ -142,6 +142,22 @@ const SCRIPT = `(async () => {
     overlayHiddenAfterDrop = overlay.hidden === true && !overlay.classList.contains('is-active')
   }
 
+  // 11b. The path-resolution bridge is ALIVE in the sandboxed preload. A pathless
+  //      synthetic File cannot yield a real path — the point is distinguishing
+  //      "webUtils answered (empty/threw its own error)" from "webUtils missing",
+  //      which would make every real drop a silent no-op.
+  let pathApi = 'bridge-fn-missing'
+  try {
+    if (typeof b.getPathForFile === 'function') {
+      const p = b.getPathForFile(new File(['x'], 'probe.txt'))
+      pathApi = 'ok:' + JSON.stringify(p)
+    }
+  } catch (err) {
+    const s = String(err)
+    pathApi = s.indexOf('undefined') !== -1 ? 'WEBUTILS-MISSING:' + s.slice(0, 60) : 'ok-threw:' + s.slice(0, 60)
+  }
+  const pathApiLive = pathApi.indexOf('ok') === 0
+
   // 12. The paste choke point, end to end: a synthetic 'paste' event on xterm's textarea
   //     must reach the REAL pty and echo back EXACTLY ONCE. Twice would mean xterm's own
   //     unsanitised paste listener ran alongside ours — the double-paste regression.
@@ -174,12 +190,12 @@ const SCRIPT = `(async () => {
           removedFromRing && systemCleared && deduped && recordingOff && dropRecorded &&
           dropDidNotClobber && imageRecorded && richIsImage && imageDeleteCleared &&
           hasFlavor && overlayReady && overlayShown && overlayTitled &&
-          overlayHiddenAfterDrop && pasteOnce,
+          overlayHiddenAfterDrop && pasteOnce && pathApiLive,
     ordered, sourced, stamped, wireStripped, liveIsSecond, restored, removedFromRing,
     systemCleared, deduped, recordingOff, dropRecorded, dropDidNotClobber,
     imageRecorded, richIsImage, imageDeleteCleared,
     hasFlavor, overlayReady, overlayShown, overlayTitled, overlayHiddenAfterDrop,
-    pasteOnce, pasteCount, flavor: env && env.flavor
+    pasteOnce, pasteCount, pathApi, pathApiLive, flavor: env && env.flavor
   }
 })()`
 
