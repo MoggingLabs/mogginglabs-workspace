@@ -1,6 +1,6 @@
 import { app, type BrowserWindow } from 'electron'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -60,6 +60,20 @@ function makeFixture(): Fixture {
     }
   } catch {
     /* couldn't create the condition — the smoke says so rather than pretending */
+  }
+  // VERIFY the deny actually binds. A windows-latest CI runner account holds a privilege
+  // that bypasses a /deny ACE on a folder IT owns, so icacls "succeeds" but the directory is
+  // still readable (denied.ok:true, no refusal — a deterministic FOLDERPICK fail on CI Windows
+  // both dispatches, 8.5/09). If the read goes through, the denied CONDITION could not be
+  // built on this host; fall back to the same graceful path as POSIX-root (skip the
+  // denied-refusal assertion) rather than fail on a fixture the OS would not let us create.
+  if (deniedCreated) {
+    try {
+      readdirSync(locked)
+      deniedCreated = false
+    } catch {
+      /* good — the deny binds, the folder is genuinely unreadable */
+    }
   }
   return { root, locked, deniedCreated }
 }
