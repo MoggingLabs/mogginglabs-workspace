@@ -4,6 +4,7 @@ import { createMainWindow } from './window'
 import { createElectronContext } from './electron-context'
 import { initMainTelemetry } from './telemetry'
 import { registerClipboard } from './clipboard'
+import { registerAppMenu } from './menu'
 import { registerDialogs } from './dialogs'
 import { registerShellChrome, wireWindowState } from './shell-chrome'
 import { flushTelemetry } from './telemetry'
@@ -78,6 +79,7 @@ import { runUsageCliSmoke } from './usagecli-smoke'
 import { runUsageSetSmoke } from './usageset-smoke'
 import { runAttentionSmoke } from './attention-smoke'
 import { runBlocksSmoke } from './blocks-smoke'
+import { runClipboardSmoke } from './clipboard-smoke'
 import { runGitSmoke } from './git-smoke'
 import { runNotifySmoke } from './notify-smoke'
 import { runMilestoneSmoke } from './milestone-smoke'
@@ -253,6 +255,7 @@ app.whenReady().then(async () => {
       startInProc() // daemon unavailable -> in-proc so the app still works
     }
   }
+  registerAppMenu() // explicit menu policy: mac keeps Edit roles, win/linux run menuless
   registerClipboard() // system clipboard IPC (app-layer, Electron-only)
   registerDialogs(() => win) // native directory picker for the new-workspace wizard
   registerShellChrome(() => win) // theme-tinted window-control overlay (organic chrome)
@@ -396,6 +399,8 @@ app.whenReady().then(async () => {
     runUsageSmoke(win) // env-gated usage-seam smoke: FAKE adapter only (Phase-7/01)
   } else if (process.env.MOGGING_ATTENTION && win) {
     runAttentionSmoke(win) // env-gated tab-attention aggregation smoke (Phase-2/01)
+  } else if (process.env.MOGGING_CLIPBOARD && win) {
+    runClipboardSmoke(win) // env-gated clipboard smoke: quoting + history ring + drop overlay
   } else if (process.env.MOGGING_BLOCKS && win) {
     runBlocksSmoke(win) // env-gated command-blocks smoke (Phase-2/02)
   } else if (process.env.MOGGING_GIT && win) {

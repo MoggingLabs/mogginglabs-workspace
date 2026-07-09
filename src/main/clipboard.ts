@@ -1,13 +1,382 @@
-import { clipboard, ipcMain } from 'electron'
-import { ClipboardChannels } from '@contracts'
-import type { WriteClipboard } from '@contracts'
+import { createHash } from 'node:crypto'
+import { app, BrowserWindow, clipboard, ipcMain, nativeImage } from 'electron'
+import {
+  ClipboardChannels,
+  CLIPBOARD_HISTORY_LIMIT,
+  CLIPBOARD_MAX_ENTRY_BYTES,
+  shellFlavor
+} from '@contracts'
+import type {
+  ClipboardEntry,
+  ClipboardEntryRef,
+  ClipboardEnv,
+  ClipboardSource,
+  RecordDroppedPaths,
+  RichClipboard,
+  SetClipboardHistory,
+  WriteClipboard,
+  WriteClipboardEntry
+} from '@contracts'
+import { defaultShell } from '@backend/platform/shell'
 
 // System clipboard IPC. App-layer wiring: Electron's clipboard is a main-process API,
 // and @backend must stay Electron-free — so this registers directly on ipcMain rather
 // than through a backend FeatureModule.
+//
+// The history ring lives HERE, in memory, and is never written to disk (see the ADR
+// 0002 note in clipboard.ipc.ts). ONE ring serves every window: the clipboard is a
+// machine-wide resource, so a per-window ring would immediately disagree with itself.
+
+const HISTORY: ClipboardEntry[] = []
+let seq = 0
+
+/** Recording, not merely display. When the user turns history off, `record` becomes a
+ *  no-op here — the ring is never filled in the first place. The renderer's toggle is a
+ *  mirror of this flag, not the flag itself. */
+let recording = true
+
+/** Watcher cadence. Fast enough that a copy made in another app is already in the tab
+ *  by the time you switch to it; slow enough that the 32x32 hash below costs nothing. */
+const POLL_MS = 800
+
+/** Control characters, minus tab (09) and newline (0a) — those are what make a
+ *  multi-line snippet recognisable in the list. Built via `new RegExp` so the source
+ *  file never carries a raw control byte. */
+const CONTROL_CHARS = new RegExp('[\\u0000-\\u0008\\u000b-\\u001f\\u007f]', 'g')
+
+/** Electron exposes no cross-platform clipboard-change event, so we poll. Text is cheap
+ *  to read. Images are NOT — a full-resolution `toBitmap()` on a 4K screenshot copies
+ *  ~33 MB, and at 800 ms that is a standing memory-bandwidth leak. Instead we fingerprint
+ *  a 32x32 downscale (4 KB), which is still content-sensitive: two different screenshots
+ *  with identical dimensions produce different hashes. */
+function signatureOf(img: Electron.NativeImage): string {
+  if (img.isEmpty()) return ''
+  const { width, height } = img.getSize()
+  const thumb = img.resize({ width: 32, height: 32, quality: 'good' })
+  return `${width}x${height}:${createHash('sha1').update(thumb.toBitmap()).digest('hex')}`
+}
+
+/** The fingerprint of whatever image is on the system clipboard right now. */
+function imageSignature(): string {
+  return signatureOf(clipboard.readImage())
+}
+
+let lastText = ''
+let lastImageSig = ''
+let timer: NodeJS.Timeout | undefined
+
+/** What crosses the bridge. The FULL text never does: the settings list renders only
+ *  `preview`, and restore/remove act by id against the main-side ring — so shipping a
+ *  password-manager copy (or 100 × 256 KB of scrollback) to the renderer on every
+ *  clipboard change would be pure exposure and pure weight, buying nothing. */
+function toWire(e: ClipboardEntry): ClipboardEntry {
+  return { ...e, text: '' }
+}
+
+function broadcast(): void {
+  const payload = { entries: HISTORY.map(toWire) }
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(ClipboardChannels.historyChanged, payload)
+  }
+}
+
+/** Renderable, bounded, and free of the control characters that would otherwise let a
+ *  copied payload move the cursor or forge lines inside the settings list. */
+function makePreview(text: string): string {
+  const stripped = text.replace(CONTROL_CHARS, '')
+  return stripped.length > 400 ? stripped.slice(0, 400) + '…' : stripped
+}
+
+/**
+ * FULL-RESOLUTION image bytes, main-process only, keyed by entry id.
+ *
+ * The renderer is sent a DOWNSCALED data URL for any large image, because shipping a
+ * 30 MB screenshot over IPC to draw a 220 px row would be absurd. But `restore` must put
+ * the ORIGINAL back on the clipboard — restoring a thumbnail and calling it a copy is
+ * silent data loss. So the original lives here and never crosses the bridge.
+ *
+ * `sig` is the same 32x32 fingerprint the watcher uses. It is what lets `remove` decide
+ * whether the image being deleted is the one currently ON the system clipboard.
+ */
+const IMAGE_BLOBS = new Map<string, { png?: Buffer; sig: string }>()
+
+/** Per-image ceiling. Above this we keep the fingerprint but not the bytes, and accept
+ *  that `restore` cannot reproduce the original — a 64 MP paste is not worth pinning. */
+const MAX_IMAGE_BLOB_BYTES = 8 * 1024 * 1024
+/** Ceiling across all retained originals. Oldest bytes are released first. */
+const MAX_IMAGE_MEMORY_BYTES = 48 * 1024 * 1024
+
+/** Drop records whose entry has left the ring, then release retained BYTES from the
+ *  oldest end until we are under the ceiling. HISTORY is newest-first, so walk backwards.
+ *  A released entry keeps its `sig`, so `remove` can still recognise it on the clipboard. */
+function pruneBlobs(): void {
+  const live = new Set(HISTORY.map((e) => e.id))
+  for (const id of IMAGE_BLOBS.keys()) if (!live.has(id)) IMAGE_BLOBS.delete(id)
+
+  let total = 0
+  for (const b of IMAGE_BLOBS.values()) total += b.png?.byteLength ?? 0
+  for (let i = HISTORY.length - 1; i >= 0 && total > MAX_IMAGE_MEMORY_BYTES; i--) {
+    const blob = IMAGE_BLOBS.get(HISTORY[i].id)
+    if (!blob?.png) continue
+    total -= blob.png.byteLength
+    blob.png = undefined // the row and its fingerprint survive; only the full-res original goes
+  }
+}
+
+/** Returns the new entry's id, or '' when nothing was recorded. */
+function record(entry: Omit<ClipboardEntry, 'id' | 'at' | 'preview'> & { preview?: string }): string {
+  if (!recording) return ''
+  if (entry.bytes > CLIPBOARD_MAX_ENTRY_BYTES) return '' // copied, but too big to hold twice
+  if (entry.kind === 'text' && !entry.text.trim()) return '' // whitespace-only: noise
+
+  // Re-copying an identical payload moves the existing row to the top rather than
+  // growing a run of duplicates — the ring holds 100 DISTINCT things, not 100 events.
+  const key = entry.kind === 'image' ? entry.imageDataUrl : entry.text
+  const dupe = HISTORY.findIndex((e) => (e.kind === 'image' ? e.imageDataUrl : e.text) === key)
+  if (dupe !== -1) HISTORY.splice(dupe, 1)
+
+  const id = `clip-${++seq}`
+  HISTORY.unshift({
+    ...entry,
+    preview: entry.preview ?? makePreview(entry.text),
+    id,
+    at: Date.now()
+  })
+  if (HISTORY.length > CLIPBOARD_HISTORY_LIMIT) HISTORY.length = CLIPBOARD_HISTORY_LIMIT
+  pruneBlobs()
+  broadcast()
+  return id
+}
+
+/** Record a text payload we ourselves just wrote, priming the watcher so the very next
+ *  poll does not record it a second time under source 'system'. */
+function recordOurText(text: string, source: ClipboardSource): void {
+  lastText = text
+  record({ kind: 'text', text, bytes: Buffer.byteLength(text), source })
+}
+
+function recordImage(img: Electron.NativeImage, source: ClipboardSource): void {
+  const png = img.toPNG()
+  const { width, height } = img.getSize()
+  // Past the cap the LIST gets a thumbnail — recognisable in a row, never the whole frame.
+  const oversize = png.byteLength > CLIPBOARD_MAX_ENTRY_BYTES
+  const shown = oversize ? img.resize({ width: 240, quality: 'good' }) : img
+  const id = record({
+    kind: 'image',
+    text: '',
+    // The ORIGINAL dimensions, because that is what the user copied...
+    preview: `Image ${width}x${height}`,
+    imageDataUrl: shown.toDataURL(),
+    // ...but the size of what the RENDERER holds, because that is what `bytes` means
+    // everywhere else in this list, and it is what keeps `record`'s cap from dropping
+    // the very entry we just shrank to fit under it.
+    bytes: oversize ? shown.toPNG().byteLength : png.byteLength,
+    source
+  })
+  // Always keep the fingerprint (so `remove` can clear this image off the system
+  // clipboard); keep the original bytes too when they fit, so `restore` hands back what
+  // was actually copied. The signature is taken from THIS image, not from the clipboard —
+  // they agree at every current call site, and relying on that would trap the next caller.
+  if (id) {
+    IMAGE_BLOBS.set(id, {
+      png: png.byteLength <= MAX_IMAGE_BLOB_BYTES ? png : undefined,
+      sig: signatureOf(img)
+    })
+    pruneBlobs()
+  }
+}
+
+function poll(): void {
+  // With recording off, do not even READ the clipboard. Polling what the user asked us
+  // not to remember is access without purpose — and on Windows the clipboard is a locked
+  // shared resource, so gratuitous opens contend with the app the user is actually using.
+  if (!recording) return
+
+  // Reading text is cheap; do it first and bail early on the common no-change path.
+  const text = clipboard.readText()
+  if (text && text !== lastText) {
+    lastText = text
+    // Sourced 'system': this copy happened outside the app (or in a surface that did not
+    // route through writeEntry). Terminal and app copies are recorded at write time.
+    record({ kind: 'text', text, bytes: Buffer.byteLength(text), source: 'system' })
+    return
+  }
+
+  // Image detection is the expensive half: `readImage()` copies the FULL bitmap into
+  // this process (~33 MB for a 4K screenshot) before the 32x32 fingerprint shrinks it.
+  // Paying that every 800 ms while the app sits in the background is a standing tax for
+  // nothing — an image copied in another app only needs to be IN the ring by the time
+  // the user comes back, and the 'browser-window-focus' poll below guarantees exactly
+  // that. So: image work only while a window of ours is focused.
+  if (!BrowserWindow.getFocusedWindow()) return
+
+  const formats = clipboard.availableFormats()
+  if (!formats.some((f) => f.startsWith('image/'))) {
+    lastImageSig = ''
+    return
+  }
+  const sig = imageSignature()
+  if (!sig || sig === lastImageSig) return
+  lastImageSig = sig
+  recordImage(clipboard.readImage(), 'system')
+}
+
+/** Reading a FILE LIST off the system clipboard has no portable Electron API — the raw
+ *  formats differ (`FileNameW`/`CF_HDROP` on Windows, `NSFilenamesPboardType` as a binary
+ *  plist on macOS, `text/uri-list` on Linux) and none round-trip cleanly. Rather than ship
+ *  three fragile parsers behind a cross-platform promise we could not keep, the app takes
+ *  file paths from DRAG-AND-DROP, which hands us real paths on every OS. A 'files' entry
+ *  therefore only ever originates from a drop. */
+function readRich(): RichClipboard {
+  const formats = clipboard.availableFormats()
+  if (formats.some((f) => f.startsWith('image/'))) {
+    const img = clipboard.readImage()
+    if (!img.isEmpty()) {
+      return { kind: 'image', text: clipboard.readText(), imageDataUrl: img.toDataURL() }
+    }
+  }
+  return { kind: 'text', text: clipboard.readText() }
+}
+
 export function registerClipboard(): void {
   ipcMain.handle(ClipboardChannels.write, (_e, payload: WriteClipboard) => {
-    clipboard.writeText(payload?.text ?? '')
+    const text = payload?.text ?? ''
+    clipboard.writeText(text)
+    recordOurText(text, payload?.source ?? 'app')
   })
+
   ipcMain.handle(ClipboardChannels.read, () => clipboard.readText())
+
+  ipcMain.handle(ClipboardChannels.readRich, (): RichClipboard => readRich())
+
+  ipcMain.handle(ClipboardChannels.writeEntry, (_e, payload: WriteClipboardEntry) => {
+    const source = payload?.source ?? 'app'
+    if (payload?.kind === 'image' && payload.imageDataUrl) {
+      const img = nativeImage.createFromDataURL(payload.imageDataUrl)
+      clipboard.writeImage(img)
+      lastImageSig = signatureOf(img) // prime the watcher: this copy is ours, not the system's
+      recordImage(img, source)
+      return
+    }
+    const text = payload?.text ?? ''
+    clipboard.writeText(text)
+    recordOurText(text, source)
+  })
+
+  // A drop is remembered, never copied. The system clipboard is left exactly as the user
+  // left it; the Clipboard tab can hand these paths back on request.
+  ipcMain.handle(ClipboardChannels.recordDrop, (_e, payload: RecordDroppedPaths) => {
+    const files = payload?.files ?? []
+    if (!files.length) return
+    const text = payload.text || files.join(' ')
+    record({ kind: 'files', text, files, bytes: Buffer.byteLength(text), source: 'drop' })
+  })
+
+  ipcMain.handle(ClipboardChannels.history, (): ClipboardEntry[] => HISTORY.map(toWire))
+
+  ipcMain.handle(ClipboardChannels.restore, (_e, ref: ClipboardEntryRef) => {
+    const entry = HISTORY.find((e) => e.id === ref?.id)
+    if (!entry) return
+    if (entry.kind === 'image') {
+      // The FULL-resolution original when we still hold it. Falling back to the row's
+      // thumbnail would hand the user a downscaled copy of their own screenshot and call
+      // it a restore; only images past MAX_IMAGE_BLOB_BYTES can land there.
+      const png = IMAGE_BLOBS.get(entry.id)?.png
+      const img = png
+        ? nativeImage.createFromBuffer(png)
+        : entry.imageDataUrl
+          ? nativeImage.createFromDataURL(entry.imageDataUrl)
+          : undefined
+      if (!img || img.isEmpty()) return
+      clipboard.writeImage(img)
+      lastImageSig = signatureOf(img)
+    } else {
+      clipboard.writeText(entry.text)
+      lastText = entry.text
+    }
+    // Restoring re-dates the entry and floats it to the top: it IS the clipboard now.
+    HISTORY.splice(HISTORY.indexOf(entry), 1)
+    HISTORY.unshift({ ...entry, at: Date.now() })
+    broadcast()
+  })
+
+  ipcMain.handle(ClipboardChannels.remove, (_e, ref: ClipboardEntryRef) => {
+    const i = HISTORY.findIndex((e) => e.id === ref?.id)
+    if (i === -1) return
+    const [gone] = HISTORY.splice(i, 1)
+
+    // Deleting the row that IS the current system clipboard must also clear the system
+    // clipboard — otherwise "delete" leaves the secret exactly one Ctrl+V away. This has
+    // to hold for IMAGES too: a screenshot of a dashboard is exactly the thing someone
+    // deletes on purpose. Images are matched on their 32x32 fingerprint, since the bytes
+    // Electron hands back are not guaranteed identical to the bytes we wrote.
+    if (gone.kind === 'image') {
+      const sig = IMAGE_BLOBS.get(gone.id)?.sig
+      if (sig && imageSignature() === sig) {
+        clipboard.clear()
+        lastImageSig = ''
+      }
+    } else if (gone.text && clipboard.readText() === gone.text) {
+      clipboard.clear()
+      lastText = ''
+    }
+
+    IMAGE_BLOBS.delete(gone.id)
+    broadcast()
+  })
+
+  ipcMain.handle(ClipboardChannels.clear, () => {
+    HISTORY.length = 0
+    IMAGE_BLOBS.clear()
+    clipboard.clear()
+    lastText = ''
+    lastImageSig = ''
+    broadcast()
+  })
+
+  ipcMain.handle(ClipboardChannels.historySet, (_e, payload: SetClipboardHistory) => {
+    const enable = payload?.enabled !== false
+    if (enable && !recording) {
+      // Re-arming: whatever landed on the clipboard WHILE recording was off was copied
+      // under a no-remembering promise — re-prime both watermarks so the next poll
+      // starts from now instead of retroactively recording it.
+      lastText = clipboard.readText()
+      lastImageSig = imageSignature()
+    }
+    recording = enable
+    if (!recording) {
+      // Turning it off drops what was already collected. Leaving the ring populated
+      // would mean "stop remembering" quietly kept the last hundred things.
+      HISTORY.length = 0
+      IMAGE_BLOBS.clear()
+      broadcast()
+    }
+  })
+
+  ipcMain.handle(
+    ClipboardChannels.env,
+    (): ClipboardEnv => ({
+      flavor: shellFlavor(defaultShell(), process.platform),
+      platform: process.platform
+    })
+  )
+
+  // Prime from whatever is already on the clipboard WITHOUT recording it: the ring
+  // should start empty rather than open with a copy made before the app launched.
+  // BOTH channels — an image sitting on the clipboard at launch is also "before us".
+  lastText = clipboard.readText()
+  lastImageSig = imageSignature()
+  timer = setInterval(poll, POLL_MS)
+  timer.unref?.()
+
+  // The interval skips image work while we are blurred (see poll), so regaining focus
+  // polls immediately — an image copied in another app is in the ring before the eye
+  // finishes the alt-tab.
+  app.on('browser-window-focus', () => poll())
+}
+
+/** Test/teardown seam — the interval would otherwise hold the process open. */
+export function stopClipboardWatcher(): void {
+  if (timer) clearInterval(timer)
+  timer = undefined
 }

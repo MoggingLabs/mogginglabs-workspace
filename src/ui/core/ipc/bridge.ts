@@ -5,6 +5,9 @@ export interface Bridge {
   invoke(channel: string, payload?: unknown): Promise<unknown>
   send(channel: string, payload: unknown): void
   on(channel: string, cb: (payload: unknown) => void): void
+  /** Resolve a dropped File to its absolute path (Electron's webUtils; `File.path` was
+   *  removed in v32). Absent in non-Electron hosts, so callers must guard. */
+  getPathForFile?(file: File): string
 }
 
 declare global {

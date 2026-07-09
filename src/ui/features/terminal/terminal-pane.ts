@@ -3,7 +3,6 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import {
-  ClipboardChannels,
   WorktreeChannels,
   type ContextUsage,
   type GitStatus,
@@ -32,6 +31,18 @@ import { onPaneGit, getPaneGit } from '../../core/git/git-port'
 import { allCommands } from '../../core/commands/command-port'
 import { getTelemetry } from '../../core/telemetry'
 import { BlockTracker } from '../blocks'
+import {
+  copyOnSelect,
+  copyText,
+  quoteDroppedPaths,
+  quoteWithFlavor,
+  readText,
+  recordDrop,
+  sanitizePaste
+} from '../../core/clipboard/clipboard-port'
+
+// Same platform probe the app shell uses for its `platform-darwin` class.
+const IS_MAC = navigator.platform.toUpperCase().includes('MAC')
 
 // WebGL job serializer: at most ONE attach/detach per animation frame, app-wide.
 // Revealing or hiding a workspace otherwise (re)builds/tears down up to 16 WebGL
@@ -81,6 +92,9 @@ export class TerminalPane {
   private glRetry?: ReturnType<typeof setTimeout>
   private glDebounce?: ReturnType<typeof setTimeout>
   private glReleaseDebounce?: ReturnType<typeof setTimeout>
+  private selectionCopyTimer?: ReturnType<typeof setTimeout>
+  /** Tears down the window-scoped drag listeners this pane installs (see mountFileDrop). */
+  private readonly dropAbort = new AbortController()
   private glQueued = false
   private glLosses = 0
   private devHandle: unknown
@@ -157,9 +171,38 @@ export class TerminalPane {
     this.visObs.observe(host)
     this.fit.fit()
 
-    // Ctrl+Shift+C / Cmd+C copies the selection; Ctrl+Shift+V / Cmd+V pastes. A bare
-    // Ctrl+C with no selection falls through to the shell as SIGINT.
+    // Every clipboard chord is intercepted here, ahead of the PTY — see handleKey.
+    // Ctrl+C / Cmd+C / Ctrl+Insert copy a selection (bare Ctrl+C with none = SIGINT);
+    // Ctrl+V / Cmd+V / Ctrl+Shift+V / Shift+Insert paste.
     this.term.attachCustomKeyEventHandler((e) => this.handleKey(e))
+
+    // THE paste path — capture phase, so it runs before xterm's own `paste` listeners
+    // (which write clipboard text to the PTY unsanitised). Every way a paste can happen
+    // — Chromium's default action for the chord, the macOS Edit-menu key equivalent, a
+    // mouse click on Edit > Paste — converges on this one DOM event, so owning it here
+    // makes a double paste structurally impossible and guarantees sanitizePaste runs on
+    // all of them. handleKey deliberately lets paste chords through UNCANCELLED so the
+    // platform generates this event (see the paste branch there).
+    body.addEventListener('paste', (e) => this.handleNativePaste(e), true)
+
+    // Copy-on-select (opt-in): mouse-drag a range and it is on the clipboard, X11-style.
+    // Guarded on hasSelection so CLEARING a selection never blanks the clipboard.
+    //
+    // Debounced because onSelectionChange fires on every mousemove of the drag, not once
+    // at the end of it: undebounced, dragging over twenty lines would write the clipboard
+    // (and push a history entry) twenty times, for twenty prefixes of the text you wanted.
+    this.term.onSelectionChange(() => {
+      if (!copyOnSelect() || !this.term.hasSelection()) return
+      if (this.selectionCopyTimer) clearTimeout(this.selectionCopyTimer)
+      this.selectionCopyTimer = setTimeout(() => {
+        this.selectionCopyTimer = undefined
+        if (!this.term.hasSelection()) return
+        const text = this.term.getSelection()
+        if (text) void copyText(text, 'terminal')
+      }, 120)
+    })
+
+    this.mountFileDrop(body)
 
     terminalClient.onData((e) => {
       if (e.id === this.id) {
@@ -430,29 +473,283 @@ export class TerminalPane {
     }
   }
 
+  /**
+   * The clipboard's authority point. This handler runs BEFORE xterm writes a single
+   * byte to the PTY, so returning false means the hosted CLI — Claude Code, Codex,
+   * Gemini, a bare shell — never sees the keystroke. That is how our bindings override
+   * every provider's own, identically on Windows and macOS, without negotiating with any
+   * of them. Nothing below reaches the PTY unless we let it.
+   *
+   * `preventDefault()` on every consumed chord is LOAD-BEARING, not hygiene. Returning
+   * false only makes xterm skip its own keydown handling — it cancels nothing, and
+   * Chromium's default action for an uncancelled Ctrl+V on a focused textarea is to fire
+   * a native `paste` event. xterm listens for that event and writes the clipboard to the
+   * PTY itself (Clipboard.ts wires `paste` on both the textarea and the root element), so
+   * without preventDefault every paste ran TWICE — and the second, native run does not
+   * strip the ESC[201~ end sentinel, silently bypassing sanitizePaste's paste-jacking
+   * guard. Same shape for copy: xterm's native `copy` listener would re-write the
+   * clipboard alongside ours. So the split of responsibilities is:
+   *
+   *   COPY chords are consumed HERE (preventDefault + IPC write): we need the selection
+   *   text and the 'terminal' history attribution, and cancelling the keydown keeps
+   *   xterm's native copy listener from double-writing the clipboard.
+   *
+   *   PASTE chords are deliberately NOT consumed. Cancelling them would leave paste
+   *   depending on which platform machinery (Chromium default action on Win/Linux, the
+   *   Edit-menu key equivalent on macOS) we managed to suppress — the ambiguity that
+   *   produced a double paste. Instead the chord passes through uncancelled, the
+   *   platform turns it into the single DOM `paste` event, and handleNativePaste owns
+   *   that event in the capture phase. One trigger, one event, one sanitised write —
+   *   including pastes we never see as keystrokes (Edit > Paste clicked by mouse).
+   */
   private handleKey(e: KeyboardEvent): boolean {
     if (e.type !== 'keydown') return true
     const k = e.key.toLowerCase()
-    const copy = (e.metaKey && k === 'c') || (e.ctrlKey && e.shiftKey && k === 'c')
-    const paste = (e.metaKey && k === 'v') || (e.ctrlKey && e.shiftKey && k === 'v')
-    if (copy && this.term.hasSelection()) {
-      void getBridge().invoke(ClipboardChannels.write, { text: this.term.getSelection() })
+
+    // AltGr. On Windows a German, Brazilian or Nordic layout reports AltGr as
+    // ctrlKey+altKey, and AltGr is how those users type @ \ [ ] { } € — every character
+    // a developer needs. NO Ctrl-based chord below may fire while Alt is down, or this
+    // app would make it impossible to type a backslash in a terminal on a German
+    // keyboard. Cmd (mac) is unaffected, hence the split.
+    const ctrl = e.ctrlKey && !e.altKey
+    // Meta chords are macOS-only: on Windows `metaKey` is the WINDOWS key, and any
+    // Win+C/Win+V combo the OS lets through must not be eaten as copy/paste.
+    const cmd = IS_MAC && e.metaKey
+
+    // COPY. Cmd+C (mac), Ctrl+Shift+C, and Ctrl+Insert — plus BARE Ctrl+C, but only
+    // when there is a selection to copy. With no selection, bare Ctrl+C must fall
+    // through as SIGINT: interrupting a runaway agent is not negotiable, and a
+    // clipboard feature that ate it would be a regression, not a feature.
+    const copyChord =
+      (cmd && k === 'c') || (ctrl && e.shiftKey && k === 'c') || (ctrl && k === 'insert')
+    const bareCtrlC = ctrl && !e.shiftKey && k === 'c'
+    // Guard on the selection TEXT, not hasSelection(): xterm reports a selection RANGE
+    // over blank cells as true while getSelection() is ''. Guarding on the range made
+    // Ctrl+C over empty cells copy '' — silently WIPING the clipboard — and swallowed
+    // the SIGINT the user actually wanted.
+    const selectionText = this.term.getSelection()
+    if ((copyChord || bareCtrlC) && selectionText) {
+      e.preventDefault()
+      void copyText(selectionText, 'terminal')
+      // Copying consumes the selection, so a second Ctrl+C sends SIGINT as usual —
+      // otherwise a stale selection would swallow every interrupt for the rest of the session.
+      this.term.clearSelection()
       return false
     }
-    if (paste) {
-      void getBridge()
-        .invoke(ClipboardChannels.read)
-        .then((text) => {
-          if (typeof text === 'string' && text) terminalClient.write({ id: this.id, data: text })
-        })
+    if (copyChord) {
+      e.preventDefault()
+      return false // an explicit copy chord with nothing selected is a no-op, not input
+    }
+
+    // PASTE. Cmd+V, Ctrl+Shift+V, Shift+Insert — and BARE Ctrl+V, which is what people
+    // actually press. Ctrl+V's terminal meaning (literal-next, `quoted-insert`) is a
+    // readline nicety almost nobody invokes on purpose; the user asked for paste, and
+    // paste is what the rest of the desktop does with that chord.
+    const pasteChord =
+      (cmd && k === 'v') ||
+      (ctrl && e.shiftKey && k === 'v') ||
+      (e.shiftKey && !e.ctrlKey && !e.altKey && k === 'insert') ||
+      (ctrl && !e.shiftKey && k === 'v')
+    if (pasteChord) {
+      // Return false WITHOUT preventDefault: false keeps xterm's keydown machinery out
+      // (it would otherwise type a literal ^V and cancel the event itself), while the
+      // uncancelled default action becomes the one `paste` event handleNativePaste owns.
+      // Only chords with NO native trigger paste via IPC: on macOS, Chromium binds no
+      // editing action to Ctrl-based combos — Cmd+V is the mac paste, via the Edit menu.
+      if (IS_MAC && !cmd) {
+        e.preventDefault()
+        void this.pasteFromClipboard().catch(() => undefined)
+      }
       return false
     }
+
     // Alt+Up / Alt+Down: jump between command blocks (02).
     if (e.altKey && (k === 'arrowup' || k === 'arrowdown')) {
       this.blocks?.jump(k === 'arrowdown' ? 1 : -1)
       return false
     }
     return true
+  }
+
+  /** The paste choke point (capture phase — see the listener registration). Consumes the
+   *  event so xterm's own unsanitised paste listener never runs, then types the payload
+   *  into the PTY wrapped in bracketed paste when the foreground program asked for it
+   *  (xterm tracks the DECSET 2004 mode the shell or agent CLI set). */
+  private handleNativePaste(e: ClipboardEvent): void {
+    e.preventDefault()
+    e.stopImmediatePropagation()
+    const text = e.clipboardData?.getData('text/plain') ?? ''
+    if (!text) return
+    terminalClient.write({ id: this.id, data: sanitizePaste(text, this.term.modes.bracketedPasteMode) })
+  }
+
+  /** IPC fallback for paste chords with no native trigger (macOS Ctrl-combos only —
+   *  everywhere else the platform emits a `paste` event and handleNativePaste owns it). */
+  private async pasteFromClipboard(): Promise<void> {
+    const text = await readText()
+    if (!text) return
+    const bracketed = this.term.modes.bracketedPasteMode
+    terminalClient.write({ id: this.id, data: sanitizePaste(text, bracketed) })
+  }
+
+  /**
+   * Drop a file — from Finder, Explorer, VS Code's tree, anywhere — and its absolute
+   * path is typed into this pane, quoted for the shell we actually spawned. Nothing is
+   * executed: the path lands as text at the cursor, exactly as if it had been typed, so
+   * it works the same whether the pane holds a bare shell or an agent CLI's prompt.
+   *
+   * `dragleave` fires every time the cursor crosses into a CHILD element (xterm nests
+   * several layers of canvas and helper divs), so a naive enter/leave pair strobes the
+   * overlay. We count enters and leaves instead, and only hide at zero — the standard
+   * fix, and the reason this is more than three lines.
+   */
+  private mountFileDrop(body: HTMLElement): void {
+    const overlay = document.createElement('div')
+    overlay.className = 'pane-drop'
+    overlay.hidden = true
+    const card = document.createElement('div')
+    card.className = 'pane-drop-card'
+    // The glyph sits in a pulsing accent ring — the card's one moving element, so the
+    // eye lands on WHERE to drop, not on chrome.
+    const ring = document.createElement('div')
+    ring.className = 'pane-drop-ring'
+    ring.append(icon('download', 22))
+    const title = document.createElement('div')
+    title.className = 'pane-drop-title'
+    const hint = document.createElement('div')
+    hint.className = 'pane-drop-hint'
+    hint.textContent = 'Full path, quoted for this shell — nothing runs.'
+    card.append(ring, title, hint)
+    overlay.append(card)
+    body.append(overlay)
+
+    // ONE source of truth. Earlier revisions tracked visibility across `depth`, the
+    // `hidden` attribute and the `is-active` class, and every bug lived in the gaps
+    // between them: a show and a hide batched into one frame left the card stranded on
+    // screen, because the deferred rAF re-added `is-active` after the hide had run.
+    // `visible` decides; `gen` invalidates any async work a newer transition supersedes.
+    let depth = 0
+    let visible = false
+    let gen = 0
+
+    const show = (n: number): void => {
+      title.textContent = n === 1 ? 'Drop to insert path' : `Drop to insert ${n} paths`
+      if (visible) return
+      visible = true
+      const mine = ++gen
+      overlay.hidden = false
+      // Next frame, so the transition has a start state to animate FROM — unless a hide
+      // has already overtaken us, in which case this frame belongs to no one.
+      requestAnimationFrame(() => {
+        if (gen === mine && visible) overlay.classList.add('is-active')
+      })
+    }
+
+    const hide = (): void => {
+      depth = 0
+      if (!visible) return
+      visible = false
+      const mine = ++gen
+      overlay.classList.remove('is-active')
+      // Keep it in the tree until the fade finishes, then take it out of hit-testing.
+      // `transitionend` never fires if the pane was hidden mid-drag, hence the timeout;
+      // `gen` stops a stale timeout from hiding an overlay a newer drag just raised.
+      const done = (): void => {
+        if (gen === mine && !visible) overlay.hidden = true
+      }
+      overlay.addEventListener('transitionend', done, { once: true })
+      setTimeout(done, 220)
+    }
+
+    // Only react to a drag that actually carries files. Dragging selected TEXT from
+    // another app also fires these events, and must not put up a "drop a file" card.
+    const hasFiles = (e: DragEvent): boolean => !!e.dataTransfer?.types.includes('Files')
+
+    body.addEventListener('dragenter', (e) => {
+      if (!hasFiles(e)) return
+      e.preventDefault()
+      depth++
+      show(e.dataTransfer?.items.length ?? 1)
+    })
+    body.addEventListener('dragover', (e) => {
+      if (!hasFiles(e)) return
+      e.preventDefault() // without this the drop event never fires
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+      // Self-heal: dragover fires continuously while the cursor is inside, so however the
+      // counter got out of step, the overlay comes back rather than staying silently off.
+      if (!visible) {
+        depth = Math.max(depth, 1)
+        show(e.dataTransfer?.items.length ?? 1)
+      }
+    })
+    body.addEventListener('dragleave', (e) => {
+      if (!hasFiles(e)) return
+      // The COUNTER is authoritative, not `relatedTarget`. dragleave fires each time the
+      // cursor crosses into one of xterm's nested canvas/helper layers, and Chromium does
+      // not reliably name where the cursor went — trusting relatedTarget here made the
+      // card strobe once per child boundary. Counting enters against leaves does not care.
+      depth = Math.max(0, depth - 1)
+      if (depth === 0) hide()
+    })
+    body.addEventListener('drop', (e) => {
+      if (!hasFiles(e)) return
+      e.preventDefault()
+      hide()
+      void this.insertDroppedPaths(Array.from(e.dataTransfer?.files ?? []))
+    })
+    // A drag abandoned with Esc, or ended outside the window, fires neither dragleave nor
+    // drop on this element. Without these the card would hang there until the next drag.
+    // Bound to WINDOW, so they must die with the pane — a closed pane's listener would
+    // otherwise live as long as the app, once per pane ever opened.
+    for (const type of ['dragend', 'drop', 'blur'] as const) {
+      window.addEventListener(type, () => hide(), { signal: this.dropAbort.signal })
+    }
+  }
+
+  /** Resolve dropped Files to absolute paths, quote them for the pane's shell, and type
+   *  them at the cursor. Electron removed `File.path` in v32, so the preload's
+   *  `getPathForFile` is the only route — and a browser-hosted gallery has neither. */
+  private async insertDroppedPaths(files: File[]): Promise<void> {
+    if (!files.length) return
+    const resolve = getBridge().getPathForFile
+    if (!resolve) {
+      showToast({ tone: 'danger', title: 'Drag-and-drop needs the desktop app' })
+      return
+    }
+    // Per-file try/catch: getPathForFile THROWS for a File with no disk backing (a
+    // synthetic DataTransfer, some browser-internal drags). One virtual file must not
+    // void a drop that also carried real ones.
+    const paths = files
+      .map((f) => {
+        try {
+          return resolve(f)
+        } catch {
+          return ''
+        }
+      })
+      .filter(Boolean)
+    if (!paths.length) return
+
+    // A REMOTE pane's shell lives on the ssh host, not this machine: quote for POSIX
+    // (this app's remote panes ride ssh), and say plainly that the path itself is local —
+    // inserting C:\Users\... into a Linux shell is only useful if a share mounts it.
+    const remote = getPaneRemote(this.id)
+    const quoted = remote ? quoteWithFlavor(paths, 'posix') : await quoteDroppedPaths(paths)
+    if (remote) {
+      showToast({
+        tone: 'info',
+        title: 'This pane is remote',
+        body: 'The inserted path points at a file on THIS machine — the remote host cannot see it unless a mount shares it.'
+      })
+    }
+    // Padded on BOTH sides (user-specified): the leading space detaches the path from
+    // whatever is already at the cursor, the trailing one starts the next argument.
+    terminalClient.write({ id: this.id, data: ' ' + quoted + ' ' })
+    this.term.focus()
+
+    // Remembered in the Clipboard tab, but NOT put on the system clipboard — a drag is
+    // not a copy, and clobbering what the user had copied would be a surprise.
+    void recordDrop(paths, quoted)
   }
 
   /** Pane chrome — the terminal top bar, an exact take on the reference:
@@ -834,7 +1131,7 @@ export class TerminalPane {
       item('trash', 'Clear terminal', () => this.term.clear()),
       item('folder', 'Copy working directory', () => {
         const cwd = getPaneCwd(this.id)
-        if (cwd) void getBridge().invoke(ClipboardChannels.write, { text: cwd })
+        if (cwd) void copyText(cwd, 'terminal')
       })
     )
     // Remote pane (4/05): local repo tools are OFF — say so instead of lying.
@@ -1036,6 +1333,8 @@ export class TerminalPane {
     clearPaneState(this.id)
     clearPaneCwd(this.id) // stops the backend git watch for this pane (git feature unwatches)
     forgetPane(this.id) // live/reattached marks die with the pane, not with the id
+    if (this.selectionCopyTimer) clearTimeout(this.selectionCopyTimer) // a pane closed mid-drag must not copy after death
+    this.dropAbort.abort() // drop the window-scoped drag listeners
     this.blocks?.dispose()
     this.themeUnsub?.()
     this.fontUnsub?.()

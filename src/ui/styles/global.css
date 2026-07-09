@@ -7040,3 +7040,204 @@ body.pane-dragging * {
   color: var(--text-hi);
   font-variant-numeric: tabular-nums;
 }
+
+/* ── FILE DROP ON A TERMINAL PANE ──────────────────────────────────────────────
+   Shown only while a drag carrying FILES is over a pane (see mountFileDrop). The
+   backdrop is a blurred radial wash rather than a flat scrim: the pane stays readable
+   at the edges — that is what tells you it is the right pane — while the center gives
+   the card a stage. `pointer-events: none` is load-bearing; an overlay that swallowed
+   the drag would fire `dragleave` the instant it appeared and strobe itself off. */
+.pane-drop {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: radial-gradient(
+    120% 90% at 50% 44%,
+    color-mix(in srgb, var(--bg-app) 34%, transparent) 0%,
+    color-mix(in srgb, var(--bg-app) 80%, transparent) 100%
+  );
+  backdrop-filter: blur(10px) saturate(1.05);
+  -webkit-backdrop-filter: blur(10px) saturate(1.05);
+  opacity: 0;
+  transition: opacity var(--dur-2) var(--ease);
+}
+.pane-drop.is-active {
+  opacity: 1;
+}
+.pane-drop-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 280px;
+  padding: var(--sp-6) var(--sp-7);
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border-strong);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-elevated) 96%, var(--accent) 4%),
+    var(--bg-elevated)
+  );
+  /* Depth stack: house shadow, a 1px inner top highlight (the "machined edge"),
+     and a whisper of accent at the rim. */
+  box-shadow:
+    var(--shadow-3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
+  transform: translateY(8px) scale(0.97);
+  transition: transform var(--dur-2) var(--ease);
+}
+.pane-drop.is-active .pane-drop-card {
+  transform: translateY(0) scale(1);
+}
+/* The one moving element: a sonar pulse on the icon ring, so the eye lands on WHERE
+   to drop. An ANIMATION, not a transition — the 150 ms motion-audit cap governs
+   interaction transitions; this is an ambient state indicator that exists only while
+   a file is held over the pane, and reduced-motion kills it outright. */
+.pane-drop-ring {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--r-full);
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  animation: pane-drop-pulse 1.8s var(--ease) infinite;
+}
+@keyframes pane-drop-pulse {
+  from {
+    box-shadow: 0 0 0 0 var(--accent-glow);
+  }
+  to {
+    box-shadow: 0 0 0 18px color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+}
+.pane-drop-title {
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  letter-spacing: -0.01em;
+  color: var(--text-hi);
+}
+.pane-drop-hint {
+  font-size: var(--fs-12);
+  color: var(--text-lo);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pane-drop,
+  .pane-drop-card {
+    transition: none;
+  }
+  .pane-drop-card {
+    transform: none;
+  }
+  .pane-drop-ring {
+    animation: none;
+  }
+}
+
+/* ── SETTINGS § CLIPBOARD ──────────────────────────────────────────────────────
+   The history list. Each row is [meta + preview | copy · delete]. Previews are
+   pre-wrapped and hard-clamped to three lines: a copied file, a stack trace and a
+   one-word password must all occupy the same row height, or the list stops being
+   scannable the moment anything long lands in it. */
+.clip-tab {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.clip-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.clip-empty {
+  padding: var(--sp-4) 0;
+}
+.clip-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface);
+}
+.clip-row:hover {
+  border-color: var(--border-strong);
+}
+.clip-row-main {
+  flex: 1 1 auto;
+  min-width: 0; /* lets the <pre> below actually shrink instead of forcing a scrollbar */
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.clip-row-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-11);
+  color: var(--text-lo);
+}
+.clip-row-kind {
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  background: var(--accent-weak);
+  color: var(--accent-ink);
+  font-weight: var(--fw-medium);
+}
+.clip-row-kind[data-kind='image'] {
+  background: color-mix(in srgb, var(--info) 16%, transparent);
+  color: var(--info);
+}
+.clip-row-kind[data-kind='files'] {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
+}
+.clip-row-time {
+  color: var(--text-mid);
+  cursor: help; /* the exact timestamp is in the title */
+}
+.clip-row-bytes {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.clip-row-preview {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  color: var(--text-mid);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere; /* a 4 KB base64 blob must wrap, not stretch the card */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.clip-row-image {
+  max-width: 220px;
+  max-height: 120px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border);
+  object-fit: contain;
+  background: var(--bg-inset);
+}
+.clip-row-actions {
+  display: flex;
+  gap: var(--sp-1);
+  flex: 0 0 auto;
+}
+.icon-btn--danger:hover {
+  background: var(--danger-weak);
+  color: var(--danger-ink);
+}

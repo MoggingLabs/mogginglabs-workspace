@@ -14,6 +14,7 @@ import { renderShortcutList } from '../../core/commands/shortcuts'
 import { setTerminalFontSize, terminalFontSize, TERMINAL_FONT_SIZES } from '../../core/terminal/font-port'
 import { calmMotion, setCalmMotion } from '../../core/a11y/motion-port'
 import { TEMPLATE_COUNTS } from '../layout'
+import { createClipboardSection } from './clipboard'
 import { createProfilesHostsSection } from './profiles-hosts'
 import { createProvidersSection } from './providers'
 import { createThemePicker } from './theme-picker'
@@ -28,7 +29,7 @@ const DEFAULT_LAYOUT_KEY = 'mogging.defaultPaneCount'
  * visual — every knob keeps its tab, and every tab keeps its `data-target` id.
  */
 const NAV_GROUPS: { label: string; ids: string[] }[] = [
-  { label: 'Workspace', ids: ['appearance', 'terminal'] },
+  { label: 'Workspace', ids: ['appearance', 'terminal', 'clipboard'] },
   { label: 'Agents & tools', ids: ['providers', 'profiles', 'integrations', 'usage'] },
   { label: 'Trust', ids: ['privacy', 'browser'] },
   { label: 'System', ids: ['shortcuts', 'about'] }
@@ -38,6 +39,7 @@ const TAB_ICON: Record<string, IconName> = {
   appearance: 'sliders',
   terminal: 'terminal',
   providers: 'sparkles',
+  clipboard: 'copy',
   profiles: 'user',
   integrations: 'plug',
   usage: 'gauge',
@@ -253,6 +255,16 @@ export const settingsFeature: UiFeature = {
             ]
           )
         ])
+      },
+      {
+        id: 'clipboard',
+        label: 'Clipboard',
+        el: section(
+          'clipboard',
+          'Clipboard',
+          'Copy, paste and drag-and-drop — ours, not the agent CLI’s.',
+          [createClipboardSection()]
+        )
       },
       {
         id: 'providers',

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { AllChannels } from '@contracts'
 
 // A single generic bridge, but locked to the channels declared in @contracts.
@@ -23,5 +23,11 @@ contextBridge.exposeInMainWorld('bridge', {
   on: (channel: string, cb: (payload: unknown) => void) => {
     assertAllowed(channel)
     ipcRenderer.on(channel, (_e, payload) => cb(payload))
-  }
+  },
+  // Drag-and-drop's ONLY route to a real path. Electron removed the non-standard
+  // `File.path` property in v32 (we ship 39), so a dropped File exposes nothing but a
+  // name and its bytes. `webUtils.getPathForFile` is the sanctioned replacement, and it
+  // is preload-only — hence this one non-channel member on an otherwise generic bridge.
+  // It reads a path the user just handed us by dropping it; it opens no new authority.
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file)
 })
