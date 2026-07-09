@@ -72,11 +72,23 @@ const SCRIPT = `(async () => {
                        hist[0].files && hist[0].files[0] === '/tmp/a b.txt'
   const dropDidNotClobber = (await b.invoke('clipboard:read')) === 'KEEP_ME_5591'
 
-  // 8. The environment names a quoting flavor.
+  // 8. An IMAGE round-trips, and deleting it clears the system clipboard too — the
+  //    guarantee the delete button's tooltip makes, which text got but images did not.
+  const PNG_1x1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+  await b.invoke('clipboard:writeEntry', { kind: 'image', imageDataUrl: PNG_1x1, source: 'app' })
+  await sleep(80)
+  hist = await b.invoke('clipboard:history')
+  const imageRecorded = hist[0].kind === 'image' && !!hist[0].imageDataUrl
+  const richIsImage = (await b.invoke('clipboard:readRich')).kind === 'image'
+  await b.invoke('clipboard:remove', { id: hist[0].id })
+  await sleep(80)
+  const imageDeleteCleared = (await b.invoke('clipboard:readRich')).kind === 'text'
+
+  // 9. The environment names a quoting flavor.
   const env = await b.invoke('clipboard:env')
   const hasFlavor = ['posix', 'cmd', 'powershell'].includes(env && env.flavor)
 
-  // 9. Every terminal pane carries a drop overlay, hidden until a drag arrives.
+  // 10. Every terminal pane carries a drop overlay, hidden until a drag arrives.
   const m = window.__mogging
   if (m && m.workspace && m.workspace.count() === 0) m.workspace.create({ name: 'Workspace 1' })
   for (let i = 0; i < 50 && !document.querySelector('.pane-drop'); i++) await sleep(200)
@@ -86,9 +98,10 @@ const SCRIPT = `(async () => {
   return {
     pass: ordered && sourced && stamped && liveIsSecond && restored && removedFromRing &&
           systemCleared && deduped && recordingOff && dropRecorded && dropDidNotClobber &&
-          hasFlavor && overlayReady,
+          imageRecorded && richIsImage && imageDeleteCleared && hasFlavor && overlayReady,
     ordered, sourced, stamped, liveIsSecond, restored, removedFromRing,
     systemCleared, deduped, recordingOff, dropRecorded, dropDidNotClobber,
+    imageRecorded, richIsImage, imageDeleteCleared,
     hasFlavor, overlayReady, flavor: env && env.flavor
   }
 })()`

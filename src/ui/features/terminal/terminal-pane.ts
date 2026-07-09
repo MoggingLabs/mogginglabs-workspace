@@ -443,22 +443,42 @@ export class TerminalPane {
     overlay.append(card)
     body.append(overlay)
 
+    // ONE source of truth. Earlier revisions tracked visibility across `depth`, the
+    // `hidden` attribute and the `is-active` class, and every bug lived in the gaps
+    // between them: a show and a hide batched into one frame left the card stranded on
+    // screen, because the deferred rAF re-added `is-active` after the hide had run.
+    // `visible` decides; `gen` invalidates any async work a newer transition supersedes.
     let depth = 0
+    let visible = false
+    let gen = 0
+
     const show = (n: number): void => {
       title.textContent = n === 1 ? 'Drop to insert path' : `Drop to insert ${n} paths`
+      if (visible) return
+      visible = true
+      const mine = ++gen
       overlay.hidden = false
-      // Next frame, so the transition has a start state to animate FROM.
-      requestAnimationFrame(() => overlay.classList.add('is-active'))
+      // Next frame, so the transition has a start state to animate FROM — unless a hide
+      // has already overtaken us, in which case this frame belongs to no one.
+      requestAnimationFrame(() => {
+        if (gen === mine && visible) overlay.classList.add('is-active')
+      })
     }
+
     const hide = (): void => {
       depth = 0
+      if (!visible) return
+      visible = false
+      const mine = ++gen
       overlay.classList.remove('is-active')
       // Keep it in the tree until the fade finishes, then take it out of hit-testing.
+      // `transitionend` never fires if the pane was hidden mid-drag, hence the timeout;
+      // `gen` stops a stale timeout from hiding an overlay a newer drag just raised.
       const done = (): void => {
-        if (!overlay.classList.contains('is-active')) overlay.hidden = true
+        if (gen === mine && !visible) overlay.hidden = true
       }
       overlay.addEventListener('transitionend', done, { once: true })
-      setTimeout(done, 220) // transitionend never fires if the pane was hidden mid-drag
+      setTimeout(done, 220)
     }
 
     // Only react to a drag that actually carries files. Dragging selected TEXT from
@@ -469,28 +489,27 @@ export class TerminalPane {
       if (!hasFiles(e)) return
       e.preventDefault()
       depth++
-      if (depth === 1) show(e.dataTransfer?.items.length ?? 1)
+      show(e.dataTransfer?.items.length ?? 1)
     })
     body.addEventListener('dragover', (e) => {
       if (!hasFiles(e)) return
       e.preventDefault() // without this the drop event never fires
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
-      // Self-heal: if the counter ever desyncs (a dragenter swallowed by a child that was
-      // removed mid-drag), dragover still fires continuously while the cursor is inside,
-      // so the overlay reappears rather than staying silently off.
-      if (overlay.hidden) {
-        depth = 1
+      // Self-heal: dragover fires continuously while the cursor is inside, so however the
+      // counter got out of step, the overlay comes back rather than staying silently off.
+      if (!visible) {
+        depth = Math.max(depth, 1)
         show(e.dataTransfer?.items.length ?? 1)
       }
     })
     body.addEventListener('dragleave', (e) => {
       if (!hasFiles(e)) return
-      // relatedTarget is where the cursor went. Null (left the window) or anything outside
-      // this pane means the drag is truly gone — collapse the counter instead of
-      // decrementing it, so an unbalanced enter can never strand the overlay on screen.
-      const to = e.relatedTarget
-      if (!to || !(to instanceof Node) || !body.contains(to)) hide()
-      else depth = Math.max(0, depth - 1)
+      // The COUNTER is authoritative, not `relatedTarget`. dragleave fires each time the
+      // cursor crosses into one of xterm's nested canvas/helper layers, and Chromium does
+      // not reliably name where the cursor went — trusting relatedTarget here made the
+      // card strobe once per child boundary. Counting enters against leaves does not care.
+      depth = Math.max(0, depth - 1)
+      if (depth === 0) hide()
     })
     body.addEventListener('drop', (e) => {
       if (!hasFiles(e)) return
@@ -503,13 +522,7 @@ export class TerminalPane {
     // Bound to WINDOW, so they must die with the pane — a closed pane's listener would
     // otherwise live as long as the app, once per pane ever opened.
     for (const type of ['dragend', 'drop', 'blur'] as const) {
-      window.addEventListener(
-        type,
-        () => {
-          if (!overlay.hidden) hide()
-        },
-        { signal: this.dropAbort.signal }
-      )
+      window.addEventListener(type, () => hide(), { signal: this.dropAbort.signal })
     }
   }
 

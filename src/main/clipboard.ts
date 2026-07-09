@@ -49,12 +49,16 @@ const CONTROL_CHARS = new RegExp('[\\u0000-\\u0008\\u000b-\\u001f\\u007f]', 'g')
  *  ~33 MB, and at 800 ms that is a standing memory-bandwidth leak. Instead we fingerprint
  *  a 32x32 downscale (4 KB), which is still content-sensitive: two different screenshots
  *  with identical dimensions produce different hashes. */
-function imageSignature(): string {
-  const img = clipboard.readImage()
+function signatureOf(img: Electron.NativeImage): string {
   if (img.isEmpty()) return ''
   const { width, height } = img.getSize()
   const thumb = img.resize({ width: 32, height: 32, quality: 'good' })
   return `${width}x${height}:${createHash('sha1').update(thumb.toBitmap()).digest('hex')}`
+}
+
+/** The fingerprint of whatever image is on the system clipboard right now. */
+function imageSignature(): string {
+  return signatureOf(clipboard.readImage())
 }
 
 let lastText = ''
@@ -75,10 +79,47 @@ function makePreview(text: string): string {
   return stripped.length > 400 ? stripped.slice(0, 400) + '…' : stripped
 }
 
-function record(entry: Omit<ClipboardEntry, 'id' | 'at' | 'preview'> & { preview?: string }): void {
-  if (!recording) return
-  if (entry.bytes > CLIPBOARD_MAX_ENTRY_BYTES) return // copied, but too big to hold twice
-  if (entry.kind === 'text' && !entry.text.trim()) return // whitespace-only: noise
+/**
+ * FULL-RESOLUTION image bytes, main-process only, keyed by entry id.
+ *
+ * The renderer is sent a DOWNSCALED data URL for any large image, because shipping a
+ * 30 MB screenshot over IPC to draw a 220 px row would be absurd. But `restore` must put
+ * the ORIGINAL back on the clipboard — restoring a thumbnail and calling it a copy is
+ * silent data loss. So the original lives here and never crosses the bridge.
+ *
+ * `sig` is the same 32x32 fingerprint the watcher uses. It is what lets `remove` decide
+ * whether the image being deleted is the one currently ON the system clipboard.
+ */
+const IMAGE_BLOBS = new Map<string, { png?: Buffer; sig: string }>()
+
+/** Per-image ceiling. Above this we keep the fingerprint but not the bytes, and accept
+ *  that `restore` cannot reproduce the original — a 64 MP paste is not worth pinning. */
+const MAX_IMAGE_BLOB_BYTES = 8 * 1024 * 1024
+/** Ceiling across all retained originals. Oldest bytes are released first. */
+const MAX_IMAGE_MEMORY_BYTES = 48 * 1024 * 1024
+
+/** Drop records whose entry has left the ring, then release retained BYTES from the
+ *  oldest end until we are under the ceiling. HISTORY is newest-first, so walk backwards.
+ *  A released entry keeps its `sig`, so `remove` can still recognise it on the clipboard. */
+function pruneBlobs(): void {
+  const live = new Set(HISTORY.map((e) => e.id))
+  for (const id of IMAGE_BLOBS.keys()) if (!live.has(id)) IMAGE_BLOBS.delete(id)
+
+  let total = 0
+  for (const b of IMAGE_BLOBS.values()) total += b.png?.byteLength ?? 0
+  for (let i = HISTORY.length - 1; i >= 0 && total > MAX_IMAGE_MEMORY_BYTES; i--) {
+    const blob = IMAGE_BLOBS.get(HISTORY[i].id)
+    if (!blob?.png) continue
+    total -= blob.png.byteLength
+    blob.png = undefined // the row and its fingerprint survive; only the full-res original goes
+  }
+}
+
+/** Returns the new entry's id, or '' when nothing was recorded. */
+function record(entry: Omit<ClipboardEntry, 'id' | 'at' | 'preview'> & { preview?: string }): string {
+  if (!recording) return ''
+  if (entry.bytes > CLIPBOARD_MAX_ENTRY_BYTES) return '' // copied, but too big to hold twice
+  if (entry.kind === 'text' && !entry.text.trim()) return '' // whitespace-only: noise
 
   // Re-copying an identical payload moves the existing row to the top rather than
   // growing a run of duplicates — the ring holds 100 DISTINCT things, not 100 events.
@@ -86,14 +127,17 @@ function record(entry: Omit<ClipboardEntry, 'id' | 'at' | 'preview'> & { preview
   const dupe = HISTORY.findIndex((e) => (e.kind === 'image' ? e.imageDataUrl : e.text) === key)
   if (dupe !== -1) HISTORY.splice(dupe, 1)
 
+  const id = `clip-${++seq}`
   HISTORY.unshift({
     ...entry,
     preview: entry.preview ?? makePreview(entry.text),
-    id: `clip-${++seq}`,
+    id,
     at: Date.now()
   })
   if (HISTORY.length > CLIPBOARD_HISTORY_LIMIT) HISTORY.length = CLIPBOARD_HISTORY_LIMIT
+  pruneBlobs()
   broadcast()
+  return id
 }
 
 /** Record a text payload we ourselves just wrote, priming the watcher so the very next
@@ -106,21 +150,32 @@ function recordOurText(text: string, source: ClipboardSource): void {
 function recordImage(img: Electron.NativeImage, source: ClipboardSource): void {
   const png = img.toPNG()
   const { width, height } = img.getSize()
-  // Past the cap we keep a thumbnail — recognisable in the list, never the whole frame.
+  // Past the cap the LIST gets a thumbnail — recognisable in a row, never the whole frame.
   const oversize = png.byteLength > CLIPBOARD_MAX_ENTRY_BYTES
   const shown = oversize ? img.resize({ width: 240, quality: 'good' }) : img
-  record({
+  const id = record({
     kind: 'image',
     text: '',
     // The ORIGINAL dimensions, because that is what the user copied...
     preview: `Image ${width}x${height}`,
     imageDataUrl: shown.toDataURL(),
-    // ...but the size of what we actually HOLD, because that is what `bytes` means
+    // ...but the size of what the RENDERER holds, because that is what `bytes` means
     // everywhere else in this list, and it is what keeps `record`'s cap from dropping
     // the very entry we just shrank to fit under it.
     bytes: oversize ? shown.toPNG().byteLength : png.byteLength,
     source
   })
+  // Always keep the fingerprint (so `remove` can clear this image off the system
+  // clipboard); keep the original bytes too when they fit, so `restore` hands back what
+  // was actually copied. The signature is taken from THIS image, not from the clipboard —
+  // they agree at every current call site, and relying on that would trap the next caller.
+  if (id) {
+    IMAGE_BLOBS.set(id, {
+      png: png.byteLength <= MAX_IMAGE_BLOB_BYTES ? png : undefined,
+      sig: signatureOf(img)
+    })
+    pruneBlobs()
+  }
 }
 
 function poll(): void {
@@ -178,7 +233,7 @@ export function registerClipboard(): void {
     if (payload?.kind === 'image' && payload.imageDataUrl) {
       const img = nativeImage.createFromDataURL(payload.imageDataUrl)
       clipboard.writeImage(img)
-      lastImageSig = imageSignature()
+      lastImageSig = signatureOf(img) // prime the watcher: this copy is ours, not the system's
       recordImage(img, source)
       return
     }
@@ -201,9 +256,19 @@ export function registerClipboard(): void {
   ipcMain.handle(ClipboardChannels.restore, (_e, ref: ClipboardEntryRef) => {
     const entry = HISTORY.find((e) => e.id === ref?.id)
     if (!entry) return
-    if (entry.kind === 'image' && entry.imageDataUrl) {
-      clipboard.writeImage(nativeImage.createFromDataURL(entry.imageDataUrl))
-      lastImageSig = imageSignature()
+    if (entry.kind === 'image') {
+      // The FULL-resolution original when we still hold it. Falling back to the row's
+      // thumbnail would hand the user a downscaled copy of their own screenshot and call
+      // it a restore; only images past MAX_IMAGE_BLOB_BYTES can land there.
+      const png = IMAGE_BLOBS.get(entry.id)?.png
+      const img = png
+        ? nativeImage.createFromBuffer(png)
+        : entry.imageDataUrl
+          ? nativeImage.createFromDataURL(entry.imageDataUrl)
+          : undefined
+      if (!img || img.isEmpty()) return
+      clipboard.writeImage(img)
+      lastImageSig = signatureOf(img)
     } else {
       clipboard.writeText(entry.text)
       lastText = entry.text
@@ -218,17 +283,30 @@ export function registerClipboard(): void {
     const i = HISTORY.findIndex((e) => e.id === ref?.id)
     if (i === -1) return
     const [gone] = HISTORY.splice(i, 1)
+
     // Deleting the row that IS the current system clipboard must also clear the system
-    // clipboard — otherwise "delete" leaves the secret exactly one Ctrl+V away.
-    if (gone.kind !== 'image' && gone.text && clipboard.readText() === gone.text) {
+    // clipboard — otherwise "delete" leaves the secret exactly one Ctrl+V away. This has
+    // to hold for IMAGES too: a screenshot of a dashboard is exactly the thing someone
+    // deletes on purpose. Images are matched on their 32x32 fingerprint, since the bytes
+    // Electron hands back are not guaranteed identical to the bytes we wrote.
+    if (gone.kind === 'image') {
+      const sig = IMAGE_BLOBS.get(gone.id)?.sig
+      if (sig && imageSignature() === sig) {
+        clipboard.clear()
+        lastImageSig = ''
+      }
+    } else if (gone.text && clipboard.readText() === gone.text) {
       clipboard.clear()
       lastText = ''
     }
+
+    IMAGE_BLOBS.delete(gone.id)
     broadcast()
   })
 
   ipcMain.handle(ClipboardChannels.clear, () => {
     HISTORY.length = 0
+    IMAGE_BLOBS.clear()
     clipboard.clear()
     lastText = ''
     lastImageSig = ''
@@ -241,6 +319,7 @@ export function registerClipboard(): void {
       // Turning it off drops what was already collected. Leaving the ring populated
       // would mean "stop remembering" quietly kept the last hundred things.
       HISTORY.length = 0
+      IMAGE_BLOBS.clear()
       broadcast()
     }
   })
