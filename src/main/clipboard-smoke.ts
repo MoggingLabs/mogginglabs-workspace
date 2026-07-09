@@ -21,31 +21,36 @@ const SCRIPT = `(async () => {
   await b.invoke('clipboard:historySet', { enabled: true })
   await b.invoke('clipboard:clear')
 
-  // 1. Write two distinct entries; newest must come first.
+  // 1. Write two distinct entries; newest must come first. Assertions read PREVIEW:
+  //    the wire deliberately carries no full text (see toWire in main/clipboard.ts),
+  //    and for short control-free strings preview === payload.
   await b.invoke('clipboard:writeEntry', { kind: 'text', text: 'FIRST_5591', source: 'terminal' })
   await sleep(50)
   await b.invoke('clipboard:writeEntry', { kind: 'text', text: 'SECOND_5591', source: 'app' })
   await sleep(50)
   let hist = await b.invoke('clipboard:history')
-  const ordered = hist.length === 2 && hist[0].text === 'SECOND_5591' && hist[1].text === 'FIRST_5591'
+  const ordered = hist.length === 2 && hist[0].preview === 'SECOND_5591' && hist[1].preview === 'FIRST_5591'
   const sourced = hist[1].source === 'terminal' && hist[0].source === 'app'
   const stamped = hist.every((e) => typeof e.at === 'number' && e.at > 0)
+  // The privacy property itself, locked down: full text must never cross the bridge.
+  const wireStripped = hist.every((e) => e.text === '')
 
   // 2. The system clipboard holds the newest write.
   const liveIsSecond = (await b.invoke('clipboard:read')) === 'SECOND_5591'
 
-  // 3. Restoring an older entry floats it to the top AND puts it on the system clipboard.
+  // 3. Restoring an older entry floats it to the top AND puts it on the system clipboard
+  //    (the read comes back with FULL text — proof main kept the payload it stopped wiring).
   await b.invoke('clipboard:restore', { id: hist[1].id })
   await sleep(50)
   hist = await b.invoke('clipboard:history')
-  const restored = hist[0].text === 'FIRST_5591' && (await b.invoke('clipboard:read')) === 'FIRST_5591'
+  const restored = hist[0].preview === 'FIRST_5591' && (await b.invoke('clipboard:read')) === 'FIRST_5591'
 
   // 4. Deleting the entry that IS the system clipboard must clear the system clipboard —
   //    otherwise "delete" leaves the secret one paste away.
   await b.invoke('clipboard:remove', { id: hist[0].id })
   await sleep(50)
   hist = await b.invoke('clipboard:history')
-  const removedFromRing = hist.length === 1 && hist[0].text === 'SECOND_5591'
+  const removedFromRing = hist.length === 1 && hist[0].preview === 'SECOND_5591'
   const systemCleared = (await b.invoke('clipboard:read')) === ''
 
   // 5. De-dupe: re-copying an existing payload moves it, never doubles it.
@@ -74,8 +79,15 @@ const SCRIPT = `(async () => {
 
   // 8. An IMAGE round-trips, and deleting it clears the system clipboard too — the
   //    guarantee the delete button's tooltip makes, which text got but images did not.
-  const PNG_1x1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
-  await b.invoke('clipboard:writeEntry', { kind: 'image', imageDataUrl: PNG_1x1, source: 'app' })
+  //    The pixel is generated OPAQUE via canvas: a semi-transparent hardcoded PNG could
+  //    change under the OS clipboard's DIB alpha round-trip and flake the fingerprint.
+  const canvas = document.createElement('canvas')
+  canvas.width = canvas.height = 8
+  const cx = canvas.getContext('2d')
+  cx.fillStyle = '#ff2200'
+  cx.fillRect(0, 0, 8, 8)
+  const PNG_RED = canvas.toDataURL('image/png')
+  await b.invoke('clipboard:writeEntry', { kind: 'image', imageDataUrl: PNG_RED, source: 'app' })
   await sleep(80)
   hist = await b.invoke('clipboard:history')
   const imageRecorded = hist[0].kind === 'image' && !!hist[0].imageDataUrl
@@ -96,10 +108,11 @@ const SCRIPT = `(async () => {
   const overlayReady = !!overlay && overlay.hidden === true && !overlay.classList.contains('is-active')
 
   return {
-    pass: ordered && sourced && stamped && liveIsSecond && restored && removedFromRing &&
-          systemCleared && deduped && recordingOff && dropRecorded && dropDidNotClobber &&
-          imageRecorded && richIsImage && imageDeleteCleared && hasFlavor && overlayReady,
-    ordered, sourced, stamped, liveIsSecond, restored, removedFromRing,
+    pass: ordered && sourced && stamped && wireStripped && liveIsSecond && restored &&
+          removedFromRing && systemCleared && deduped && recordingOff && dropRecorded &&
+          dropDidNotClobber && imageRecorded && richIsImage && imageDeleteCleared &&
+          hasFlavor && overlayReady,
+    ordered, sourced, stamped, wireStripped, liveIsSecond, restored, removedFromRing,
     systemCleared, deduped, recordingOff, dropRecorded, dropDidNotClobber,
     imageRecorded, richIsImage, imageDeleteCleared,
     hasFlavor, overlayReady, flavor: env && env.flavor

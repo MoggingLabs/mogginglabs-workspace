@@ -47,10 +47,11 @@ function setPref(key: string, value: boolean): void {
   }
 }
 
-/** Copy-on-select is OFF by default. It is the single most surprising terminal
- *  behaviour to inherit silently — it silently overwrites the clipboard every time a
- *  user drags across output — so it is opt-in, the way tmux and Windows Terminal ship it. */
-export const copyOnSelect = (): boolean => pref(COPY_ON_SELECT_KEY, false)
+/** Copy-on-select is ON by default — it is an explicit product requirement ("select to
+ *  copy should work in the terminals"), not an inherited default. The cost is real
+ *  (dragging across output overwrites the clipboard), which is why the toggle exists and
+ *  why every such copy still lands in history, one click from recovery. */
+export const copyOnSelect = (): boolean => pref(COPY_ON_SELECT_KEY, true)
 export const setCopyOnSelect = (on: boolean): void => setPref(COPY_ON_SELECT_KEY, on)
 
 export const historyEnabled = (): boolean => pref(HISTORY_ENABLED_KEY, true)

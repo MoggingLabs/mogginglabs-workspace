@@ -30,10 +30,14 @@ import {
   copyOnSelect,
   copyText,
   quoteDroppedPaths,
+  quoteWithFlavor,
   readText,
   recordDrop,
   sanitizePaste
 } from '../../core/clipboard/clipboard-port'
+
+// Same platform probe the app shell uses for its `platform-darwin` class.
+const IS_MAC = navigator.platform.toUpperCase().includes('MAC')
 
 // WebGL job serializer: at most ONE attach/detach per animation frame, app-wide.
 // Revealing or hiding a workspace otherwise (re)builds/tears down up to 16 WebGL
@@ -356,6 +360,22 @@ export class TerminalPane {
    * Gemini, a bare shell — never sees the keystroke. That is how our bindings override
    * every provider's own, identically on Windows and macOS, without negotiating with any
    * of them. Nothing below reaches the PTY unless we let it.
+   *
+   * `preventDefault()` on every consumed chord is LOAD-BEARING, not hygiene. Returning
+   * false only makes xterm skip its own keydown handling — it cancels nothing, and
+   * Chromium's default action for an uncancelled Ctrl+V on a focused textarea is to fire
+   * a native `paste` event. xterm listens for that event and writes the clipboard to the
+   * PTY itself (Clipboard.ts wires `paste` on both the textarea and the root element), so
+   * without preventDefault every paste ran TWICE — and the second, native run does not
+   * strip the ESC[201~ end sentinel, silently bypassing sanitizePaste's paste-jacking
+   * guard. Same shape for copy: xterm's native `copy` listener would re-write the
+   * clipboard alongside ours. Cancelling the keydown suppresses the clipboard default
+   * action, which suppresses both native listeners, making this handler the ONLY path.
+   *
+   * macOS caveat to verify on a mac runner: the app sets no application menu, so
+   * Electron's DEFAULT menu binds Cmd+C/Cmd+V through Edit roles. A renderer
+   * preventDefault suppresses non-reserved menu accelerators; if some Electron version
+   * ever lets the role fire anyway, the symptom would be a doubled paste on mac only.
    */
   private handleKey(e: KeyboardEvent): boolean {
     if (e.type !== 'keydown') return true
@@ -367,33 +387,41 @@ export class TerminalPane {
     // app would make it impossible to type a backslash in a terminal on a German
     // keyboard. Cmd (mac) is unaffected, hence the split.
     const ctrl = e.ctrlKey && !e.altKey
+    // Meta chords are macOS-only: on Windows `metaKey` is the WINDOWS key, and any
+    // Win+C/Win+V combo the OS lets through must not be eaten as copy/paste.
+    const cmd = IS_MAC && e.metaKey
 
     // COPY. Cmd+C (mac), Ctrl+Shift+C, and Ctrl+Insert — plus BARE Ctrl+C, but only
     // when there is a selection to copy. With no selection, bare Ctrl+C must fall
     // through as SIGINT: interrupting a runaway agent is not negotiable, and a
     // clipboard feature that ate it would be a regression, not a feature.
     const copyChord =
-      (e.metaKey && k === 'c') || (ctrl && e.shiftKey && k === 'c') || (ctrl && k === 'insert')
+      (cmd && k === 'c') || (ctrl && e.shiftKey && k === 'c') || (ctrl && k === 'insert')
     const bareCtrlC = ctrl && !e.shiftKey && k === 'c'
     if ((copyChord || bareCtrlC) && this.term.hasSelection()) {
+      e.preventDefault()
       void copyText(this.term.getSelection(), 'terminal')
       // Copying consumes the selection, so a second Ctrl+C sends SIGINT as usual —
       // otherwise a stale selection would swallow every interrupt for the rest of the session.
       this.term.clearSelection()
       return false
     }
-    if (copyChord) return false // an explicit copy chord with nothing selected is a no-op, not input
+    if (copyChord) {
+      e.preventDefault()
+      return false // an explicit copy chord with nothing selected is a no-op, not input
+    }
 
     // PASTE. Cmd+V, Ctrl+Shift+V, Shift+Insert — and BARE Ctrl+V, which is what people
     // actually press. Ctrl+V's terminal meaning (literal-next, `quoted-insert`) is a
     // readline nicety almost nobody invokes on purpose; the user asked for paste, and
     // paste is what the rest of the desktop does with that chord.
     const pasteChord =
-      (e.metaKey && k === 'v') ||
+      (cmd && k === 'v') ||
       (ctrl && e.shiftKey && k === 'v') ||
       (e.shiftKey && !e.ctrlKey && !e.altKey && k === 'insert') ||
       (ctrl && !e.shiftKey && k === 'v')
     if (pasteChord) {
+      e.preventDefault()
       void this.pasteFromClipboard().catch(() => undefined)
       return false
     }
@@ -539,7 +567,18 @@ export class TerminalPane {
     const paths = files.map((f) => resolve(f)).filter(Boolean)
     if (!paths.length) return
 
-    const quoted = await quoteDroppedPaths(paths)
+    // A REMOTE pane's shell lives on the ssh host, not this machine: quote for POSIX
+    // (this app's remote panes ride ssh), and say plainly that the path itself is local —
+    // inserting C:\Users\... into a Linux shell is only useful if a share mounts it.
+    const remote = getPaneRemote(this.id)
+    const quoted = remote ? quoteWithFlavor(paths, 'posix') : await quoteDroppedPaths(paths)
+    if (remote) {
+      showToast({
+        tone: 'info',
+        title: 'This pane is remote',
+        body: 'The inserted path points at a file on THIS machine — the remote host cannot see it unless a mount shares it.'
+      })
+    }
     // A trailing space so the next thing typed is a new argument, not a suffix.
     terminalClient.write({ id: this.id, data: quoted + ' ' })
     this.term.focus()

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { BrowserWindow, clipboard, ipcMain, nativeImage } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, nativeImage } from 'electron'
 import {
   ClipboardChannels,
   CLIPBOARD_HISTORY_LIMIT,
@@ -65,8 +65,16 @@ let lastText = ''
 let lastImageSig = ''
 let timer: NodeJS.Timeout | undefined
 
+/** What crosses the bridge. The FULL text never does: the settings list renders only
+ *  `preview`, and restore/remove act by id against the main-side ring — so shipping a
+ *  password-manager copy (or 100 × 256 KB of scrollback) to the renderer on every
+ *  clipboard change would be pure exposure and pure weight, buying nothing. */
+function toWire(e: ClipboardEntry): ClipboardEntry {
+  return { ...e, text: '' }
+}
+
 function broadcast(): void {
-  const payload = { entries: HISTORY.slice() }
+  const payload = { entries: HISTORY.map(toWire) }
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send(ClipboardChannels.historyChanged, payload)
   }
@@ -179,6 +187,11 @@ function recordImage(img: Electron.NativeImage, source: ClipboardSource): void {
 }
 
 function poll(): void {
+  // With recording off, do not even READ the clipboard. Polling what the user asked us
+  // not to remember is access without purpose — and on Windows the clipboard is a locked
+  // shared resource, so gratuitous opens contend with the app the user is actually using.
+  if (!recording) return
+
   // Reading text is cheap; do it first and bail early on the common no-change path.
   const text = clipboard.readText()
   if (text && text !== lastText) {
@@ -188,6 +201,14 @@ function poll(): void {
     record({ kind: 'text', text, bytes: Buffer.byteLength(text), source: 'system' })
     return
   }
+
+  // Image detection is the expensive half: `readImage()` copies the FULL bitmap into
+  // this process (~33 MB for a 4K screenshot) before the 32x32 fingerprint shrinks it.
+  // Paying that every 800 ms while the app sits in the background is a standing tax for
+  // nothing — an image copied in another app only needs to be IN the ring by the time
+  // the user comes back, and the 'browser-window-focus' poll below guarantees exactly
+  // that. So: image work only while a window of ours is focused.
+  if (!BrowserWindow.getFocusedWindow()) return
 
   const formats = clipboard.availableFormats()
   if (!formats.some((f) => f.startsWith('image/'))) {
@@ -251,7 +272,7 @@ export function registerClipboard(): void {
     record({ kind: 'files', text, files, bytes: Buffer.byteLength(text), source: 'drop' })
   })
 
-  ipcMain.handle(ClipboardChannels.history, (): ClipboardEntry[] => HISTORY.slice())
+  ipcMain.handle(ClipboardChannels.history, (): ClipboardEntry[] => HISTORY.map(toWire))
 
   ipcMain.handle(ClipboardChannels.restore, (_e, ref: ClipboardEntryRef) => {
     const entry = HISTORY.find((e) => e.id === ref?.id)
@@ -314,7 +335,15 @@ export function registerClipboard(): void {
   })
 
   ipcMain.handle(ClipboardChannels.historySet, (_e, payload: SetClipboardHistory) => {
-    recording = payload?.enabled !== false
+    const enable = payload?.enabled !== false
+    if (enable && !recording) {
+      // Re-arming: whatever landed on the clipboard WHILE recording was off was copied
+      // under a no-remembering promise — re-prime both watermarks so the next poll
+      // starts from now instead of retroactively recording it.
+      lastText = clipboard.readText()
+      lastImageSig = imageSignature()
+    }
+    recording = enable
     if (!recording) {
       // Turning it off drops what was already collected. Leaving the ring populated
       // would mean "stop remembering" quietly kept the last hundred things.
@@ -334,9 +363,16 @@ export function registerClipboard(): void {
 
   // Prime from whatever is already on the clipboard WITHOUT recording it: the ring
   // should start empty rather than open with a copy made before the app launched.
+  // BOTH channels — an image sitting on the clipboard at launch is also "before us".
   lastText = clipboard.readText()
+  lastImageSig = imageSignature()
   timer = setInterval(poll, POLL_MS)
   timer.unref?.()
+
+  // The interval skips image work while we are blurred (see poll), so regaining focus
+  // polls immediately — an image copied in another app is in the ring before the eye
+  // finishes the alt-tab.
+  app.on('browser-window-focus', () => poll())
 }
 
 /** Test/teardown seam — the interval would otherwise hold the process open. */

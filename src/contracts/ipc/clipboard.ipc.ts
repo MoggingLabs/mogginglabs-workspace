@@ -21,6 +21,10 @@ export type ClipboardSource = 'terminal' | 'app' | 'system' | 'drop'
 export interface ClipboardEntry {
   id: string
   kind: ClipboardKind
+  /** The full payload — MAIN-SIDE ONLY. Over IPC (`history`, `historyChanged`) this is
+   *  always '' : the list renders `preview`, and copy/delete act by `id`, so the full
+   *  text (a password copied from a manager, a screenful of scrollback) has no reason
+   *  to ever visit the renderer. */
   text: string
   preview: string
   /** Present only when kind === 'image'. A PNG data URL, downscaled for the list. */
