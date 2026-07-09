@@ -117,10 +117,16 @@ export function runSmoke(win: BrowserWindow): void {
     )) as { bufferLines: number; rows: number; cols: number; hasCanvas: boolean }
 
     // Copy: select all -> selection non-empty; write a marker through the clipboard IPC.
+    // The selection is CLEARED before the marker write: copy-on-select (a feature, ON by
+    // default since feat/clipboard) would otherwise copy the whole selection ~120 ms
+    // later and overwrite the marker — the debounced copy re-checks hasSelection() at
+    // fire time, so clearing stands it down. Select-copies-itself has its own assertions
+    // in the CLIPBOARD gate; this one asserts the IPC write path.
     const selLen = Number(
       await ES(
         '(function(){var p=window.__mogging&&window.__mogging.panes&&window.__mogging.panes[0];' +
           'if(!p)return -1;p.term.selectAll();var s=p.term.getSelection();' +
+          'p.term.clearSelection();' +
           'window.bridge.invoke("clipboard:write",{text:"COPY_MARK_3312"});return s.length;})()'
       )
     )
