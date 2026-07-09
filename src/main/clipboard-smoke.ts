@@ -1,5 +1,5 @@
 import { app, clipboard, type BrowserWindow } from 'electron'
-import { writeFileSync } from 'node:fs'
+import { unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { quotePathForShell, shellFlavor } from '@contracts'
 
@@ -230,6 +230,60 @@ function checkQuoting(): { pass: boolean; detail: Record<string, unknown> } {
   return { pass, detail }
 }
 
+/** The one link a synthetic DragEvent cannot carry: a REAL, disk-backed File resolving
+ *  to its absolute path through the sandboxed preload's getPathForFile — the exact call
+ *  a real drop makes. CDP's DOM.setFileInputFiles plants a real file on an input, which
+ *  hands the renderer the same kind of File object an OS drag delivers. The probe file
+ *  has a SPACE in its name on purpose: the path that comes back is the path quoting
+ *  must survive. */
+async function probeRealFileDrop(win: BrowserWindow): Promise<{ realDropPath: string; realDropOk: boolean }> {
+  const probePath = join(app.getPath('temp'), 'mogging drop probe.txt')
+  const dbg = win.webContents.debugger
+  try {
+    writeFileSync(probePath, 'probe')
+    dbg.attach('1.3')
+    await win.webContents.executeJavaScript(
+      `(() => { const i = document.createElement('input'); i.type = 'file'; i.id = '__dropprobe'; document.body.append(i); return true })()`,
+      true
+    )
+    const { root } = (await dbg.sendCommand('DOM.getDocument')) as { root: { nodeId: number } }
+    const { nodeId } = (await dbg.sendCommand('DOM.querySelector', {
+      nodeId: root.nodeId,
+      selector: '#__dropprobe'
+    })) as { nodeId: number }
+    await dbg.sendCommand('DOM.setFileInputFiles', { files: [probePath], nodeId })
+    const resolved = (await win.webContents.executeJavaScript(
+      `(() => {
+        const i = document.getElementById('__dropprobe')
+        const f = i.files && i.files[0]
+        let p = ''
+        try { p = f ? window.bridge.getPathForFile(f) : 'NO-FILE' } catch (e) { p = 'THREW:' + String(e).slice(0, 120) }
+        i.remove()
+        return p
+      })()`,
+      true
+    )) as string
+    return {
+      realDropPath: resolved,
+      // Windows paths compare case-insensitively.
+      realDropOk: resolved.toLowerCase() === probePath.toLowerCase()
+    }
+  } catch (e) {
+    return { realDropPath: 'PROBE-FAILED:' + String(e).slice(0, 120), realDropOk: false }
+  } finally {
+    try {
+      dbg.detach()
+    } catch {
+      /* not attached */
+    }
+    try {
+      unlinkSync(probePath)
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
 export function runClipboardSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 40000) // safety net
   const run = async (): Promise<void> => {
@@ -247,7 +301,14 @@ export function runClipboardSmoke(win: BrowserWindow): void {
     } catch (e) {
       ipc = { pass: false, ...{ error: String(e) } }
     }
-    const result = { pass: !!(quoting.pass && ipc.pass), quoting: quoting.detail, quotingPass: quoting.pass, ...ipc }
+    const realDrop = await probeRealFileDrop(win)
+    const result = {
+      pass: !!(quoting.pass && ipc.pass && realDrop.realDropOk),
+      quoting: quoting.detail,
+      quotingPass: quoting.pass,
+      ...realDrop,
+      ...ipc
+    }
     try {
       writeFileSync(join(process.cwd(), 'out', 'clipboard-result.json'), JSON.stringify(result, null, 2))
     } catch {
