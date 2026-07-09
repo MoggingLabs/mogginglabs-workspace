@@ -1,7 +1,7 @@
 {
   "name": "mogginglabs-workspace",
-  "version": "0.6.0",
-  "description": "A neutral, reliable, cross-platform organizer for AI coding-agent CLIs. Your keys, your CLIs \u2014 no subscription to us.",
+  "version": "0.7.0",
+  "description": "A neutral, reliable, cross-platform organizer for AI coding-agent CLIs. Your keys, your CLIs — no subscription to us.",
   "author": "MoggingLabs",
   "license": "SEE LICENSE IN LICENSE",
   "private": true,
