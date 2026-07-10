@@ -5,9 +5,13 @@ Phase-1/07. Signed, notarized, auto-updating installers for `win-x64`, `mac-arm6
 ## Cut a release
 1. Bump `version` in `package.json`.
 2. Tag + push: `git tag v1.2.3 && git push origin v1.2.3`.
-3. `.github/workflows/release.yml` fires: per-OS it rebuilds native modules from source, packages
-   (NSIS on Windows, DMG + zip on macOS), **signs + notarizes**, publishes to the GitHub Releases
-   feed, and uploads sourcemaps to Sentry.
+3. `.github/workflows/release.yml` fires: it first ensures the GitHub Release exists (creating a
+   **draft** if you didn't hand-create one — `gh release upload` needs a release to exist, and
+   electron-builder never creates it), then per-OS it rebuilds native modules from source, packages
+   (NSIS on Windows, DMG + zip on macOS), **signs + notarizes**, uploads to the release, and
+   uploads sourcemaps to Sentry. If it drafted the release: curate the body (house format — bold
+   thesis line, `## Highlights`, `## Install`, docs line) and **publish** it; electron-updater
+   only sees published releases.
 4. Refresh the install manifests from the published artifacts (winget + homebrew cask —
    see `docs/10-distribution.md`):
    `gh release download vX.Y.Z -D /tmp/rel && node scripts/update-manifests.mjs /tmp/rel`

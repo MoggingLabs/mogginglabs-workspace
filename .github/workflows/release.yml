@@ -20,8 +20,33 @@ permissions:
   contents: write
 
 jobs:
+  # `gh release upload` (below) requires the release to EXIST — electron-builder runs
+  # --publish never and never creates one. A tag pushed without a hand-created release
+  # left all three OS jobs dying at upload with "release not found" (runs 29092932022 /
+  # 29093758908, v0.8.0/v0.7.0). ONE job creates it (a matrix step would race and drafts
+  # don't claim tags — duplicates possible), as a DRAFT so the curated body can land
+  # before it is published to the electron-updater feed. Hand-created releases (the
+  # usual path) short-circuit here.
+  ensure-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Create the release if missing (draft)
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          gh release view "$TAG" >/dev/null 2>&1 && exit 0
+          gh release create "$TAG" --verify-tag --draft \
+            --title "$(git log -1 --format=%s)" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   release:
     name: build + sign + publish (${{ matrix.os }})
+    needs: ensure-release
     strategy:
       fail-fast: false
       matrix:
