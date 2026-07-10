@@ -46,11 +46,35 @@ export function runNotifySmoke(win: BrowserWindow): void {
         await sleep(500)
       }
       const states = await exec<string[]>(`window.__nstates.slice()`)
+
+      // (0.8.1) `done` is a turn ENDING: it lands as idle — the UI's green finished
+      // story — never attention. Red is reserved for needs-input (blocked on you); a
+      // done that rang red made finished and blocked indistinguishable. Typing the
+      // command clears the needs-input latch above (real input, rightly), so anything
+      // red AFTER this reset can only be the done event mismapped.
+      await exec(`window.__nstates=[]`)
+      const doneCmd = `node "${binPath}" notify --event done\r`
+      await exec(`window.bridge.send("terminal:write",{id:1,data:${JSON.stringify(doneCmd)}})`)
+      let sawIdle = false
+      for (let i = 0; i < 30; i++) {
+        const st = await exec<string[]>(`window.__nstates.slice()`)
+        if (Array.isArray(st) && st.includes('idle')) {
+          sawIdle = true
+          break
+        }
+        await sleep(500)
+      }
+      const doneStates = await exec<string[]>(`window.__nstates.slice()`)
+      const doneNeverRang = !doneStates.includes('attention')
+
       const paneTail = await exec<string | null>(
         `(()=>{const p=(window.__mogging.panes||[]).find(x=>x.id===1);` +
           `return p?p.text().replace(/\\s+$/,'').slice(-300):null;})()`
       )
-      result = { pass: sawAttention, sawAttention, states, binPath, paneTail }
+      result = {
+        pass: sawAttention && sawIdle && doneNeverRang,
+        sawAttention, sawIdle, doneNeverRang, states, doneStates, binPath, paneTail
+      }
     } catch (e) {
       result = { pass: false, error: String(e) }
     }

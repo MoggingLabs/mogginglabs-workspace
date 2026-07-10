@@ -95,12 +95,17 @@ export function runBoardUxSmoke(win: BrowserWindow): void {
       await ES(`document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`)
       await sleep(150)
 
-      // (d) Delete card -> confirm; Cancel keeps the card.
+      // (d) Delete card -> confirm; Cancel keeps the card. Bounded WAITS, not fixed
+      // sleeps: the re-open after (c)'s dismissal raced a 200ms sleep in two separate
+      // certification sweeps (menu not yet mounted -> the optional-chained Delete click
+      // silently no-opped -> no modal, confirmShown false).
       await ES(`document.querySelector('.board-card[data-card-id=${JSON.stringify(cardId)}] .board-card-more').click()`)
-      await sleep(200)
+      const menuReopened = await waitTrue(`!!document.querySelector('.board-card-menu:not([hidden]) .menu-item')`)
       await ES(`[...document.querySelectorAll('.board-card-menu:not([hidden]) .menu-item')].find((b) => /Delete card/.test(b.textContent || ''))?.click()`)
-      await sleep(300)
-      const confirmShown = await ES<boolean>(`!!document.querySelector('.modal-overlay') && /delete/i.test(document.querySelector('.modal-overlay')?.textContent || '')`)
+      await waitTrue(`!!document.querySelector('.modal-overlay')`)
+      const confirmShown =
+        menuReopened &&
+        (await ES<boolean>(`!!document.querySelector('.modal-overlay') && /delete/i.test(document.querySelector('.modal-overlay')?.textContent || '')`))
       await ES(`[...document.querySelectorAll('.modal-overlay button')].find((b) => /^Cancel$/.test((b.textContent || '').trim()))?.click()`)
       await sleep(300)
       const cardKept = await ES<boolean>(`window.__mogging.board.list().some((c) => c.id === ${JSON.stringify(cardId)})`)

@@ -23,10 +23,38 @@ const SCRIPT = `(async () => {
   m.workspace.switchByIndex(0) // focus Workspace 1 -> its ring clears
   await sleep(400)
   const afterFocus = bgTab.getAttribute('data-attention')
+
+  // FINISHED derivation (0.8.1): the green halo stamps ONLY a busy->idle edge that
+  // lasted like work (>= 2.5s); an attention->idle edge answered/replayed its latch
+  // away and completed NOTHING (a permission-blocked pane once pulsed green through
+  // that edge — found live 2026-07-10). Port-driven: the chip attribute renders from
+  // the port on every change, so no adopted session is needed to read it.
+  const chip = () => { const e = document.querySelector('.layout-slot[data-pane-id="1"] .pane-state'); return e ? e.getAttribute('data-state') : null }
+  m.attention.setPaneState(1, 'busy')
+  await sleep(2700) // outlive the 2.5s work floor
+  m.attention.setPaneState(1, 'idle')
+  await sleep(300)
+  const finishedFromBusy = chip() === 'finished'
+  // A real click on the pane acknowledges the halo: back to plain idle.
+  const slot1 = document.querySelector('.layout-slot[data-pane-id="1"]')
+  if (slot1) slot1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  await sleep(300)
+  const ackClears = chip() === 'idle'
+  // Same duration, blocked edge: never the green story.
+  m.attention.setPaneState(1, 'attention')
+  await sleep(2700)
+  m.attention.setPaneState(1, 'idle')
+  await sleep(300)
+  const blockedNotFinished = chip() === 'idle'
+
   return {
-    pass: ringed === 'attention' && !afterFocus,
+    pass: ringed === 'attention' && !afterFocus && finishedFromBusy && ackClears && blockedNotFinished,
     ringed,
     afterFocus,
+    finishedFromBusy,
+    ackClears,
+    blockedNotFinished,
+    chipFinal: chip(),
     tabs: document.querySelectorAll('.workspace-tab').length
   }
 })()`

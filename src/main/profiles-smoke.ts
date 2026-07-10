@@ -172,10 +172,32 @@ export function runProfilesSmoke(win: BrowserWindow): void {
         })()`
       )) as boolean
 
+      // ── 7. THE ONE LAUNCH SEAM (0.8.1): a palette/menu launch (launchInFocused) goes
+      // through the launch port, so the workspace manifest records the slot's assignment,
+      // profile and launch cwd — launched any other way it worked live but was invisible
+      // to restore (a pane added after workspace creation lost its whole session identity
+      // on the next app restart while the reattached CLI kept visibly running).
+      await ES(
+        `(() => { const s = document.querySelector('.layout-slot[data-pane-id="${pane}"]');` +
+          `if (s) s.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); return 1 })()`
+      )
+      await sleep(300)
+      await ES(`(window.__mogging.agents.launch('gemini', 'p-b'), 1)`)
+      await sleep(1200)
+      const seamMeta = (await ES(`window.__mogging.workspace.active()`)) as {
+        assignments?: (string | null)[]
+        profileIds?: (string | null)[]
+        paneCwds?: (string | null)[]
+      }
+      const seamOk =
+        seamMeta.assignments?.[0] === 'gemini' &&
+        seamMeta.profileIds?.[0] === 'p-b' &&
+        !!seamMeta.paneCwds?.[0]
+
       const pass =
         saveOk && envAOk && defaultOk && toastOk && envBOk && failoverOk && scrollbackSurvived && paneCount === 1 &&
-        pageOpenOk && formDenyOk && formSaveOk && returnOk
-      result = { pass, saveOk, envAOk, defaultOk, toastOk, envBOk, failoverOk, scrollbackSurvived, paneCount, pageOpenOk, formDenyOk, formSaveOk, returnOk, launchCtxA, launchCtxB }
+        pageOpenOk && formDenyOk && formSaveOk && returnOk && seamOk
+      result = { pass, saveOk, envAOk, defaultOk, toastOk, envBOk, failoverOk, scrollbackSurvived, paneCount, pageOpenOk, formDenyOk, formSaveOk, returnOk, seamOk, seamMeta, launchCtxA, launchCtxB }
     } catch (e) {
       result = { pass: false, error: String(e) }
     }

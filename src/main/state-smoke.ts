@@ -88,9 +88,36 @@ export function runStateSmoke(win: BrowserWindow): void {
       const idle = await step('133;D;0', 'idle')
       const cwd = await step('7;file://host/tmp', null) // OSC 7: no state change, must not error
 
+      // (0.8.1) xterm AUTO-REPLIES are not typing: DA2 + DECRPM answers ride the same
+      // renderer->pty write channel as keystrokes, and each once cleared the attention
+      // latch (a permission-blocked pane's red dot went green — found live 2026-07-10).
+      // Re-latch red, write a chunk of pure replies (DA2, DECRPM, focus in/out) into the
+      // INPUT path, assert the latch held; then one real keystroke must clear it.
+      // RE-ADOPT first: the 133;C→D cycle above read as "the agent exited to shell"
+      // and cleared the adopted session (terminal-pane's end-detector) — the dot went
+      // hidden and the chip froze at idle. The relatch models a FRESH agent session
+      // hitting a permission prompt.
+      await ES('(window.__mogging.agents.adopt(1,"claude",""),1)')
+      await delay(400)
+      const relatch = await step('9;again', 'attention')
+      const chip = (): Promise<unknown> =>
+        ES(
+          '(function(){var e=document.querySelector(\'.layout-slot[data-pane-id="1"] .pane-state\');' +
+            'return e?e.getAttribute("data-state"):null;})()'
+        )
+      await send('\x1b[>0;276;0c\x1b[?2026;2$y\x1b[I\x1b[O')
+      await delay(1400)
+      const afterReplies = String(await chip())
+      const repliesHeld = afterReplies === 'attention'
+      await send('x') // real typing — THIS is what answers a blocked pane
+      await delay(1400)
+      const afterTyping = String(await chip())
+      const typingCleared = afterTyping !== 'attention'
+
       const noErrors = errors.length === 0
       const pass =
-        attention.seen === true && busy.seen === true && idle.seen === true && cwd.seen === true && noErrors
+        attention.seen === true && busy.seen === true && idle.seen === true && cwd.seen === true &&
+        relatch.seen === true && repliesHeld && typingCleared && noErrors
 
       write({
         pass,
@@ -98,6 +125,11 @@ export function runStateSmoke(win: BrowserWindow): void {
         busy,
         idle,
         cwd,
+        relatch,
+        repliesHeld,
+        afterReplies,
+        typingCleared,
+        afterTyping,
         noErrors,
         errors,
         allStates: await ES('window.__states'),
