@@ -10,8 +10,13 @@ import type { AgentState, PaneId } from '@contracts'
  * after I click that pane"). Derived HERE, at the single gate every state transition
  * passes through, so every consumer — the pane dot, the rail badge/outline, the grid
  * pulses — reads one truth and can never disagree:
- *   set      on the finished edge: the pane WAS working or blocked (busy/attention)
- *            and went idle — it stopped, and you haven't looked at it yet.
+ *   set      on the finished edge: the pane WAS WORKING (busy) and went idle — it
+ *            stopped, and you haven't looked at it yet. An attention→idle edge is
+ *            deliberately NOT finished: a blocked pane going idle means its latch was
+ *            torn down (the user answered it, a state replay after a daemon restart,
+ *            an explicit notify) — nothing completed, so it must never tell the green
+ *            "done" story (a permission-blocked pane once pulsed green through this
+ *            edge — found live 2026-07-10).
  *   cleared  by `acknowledgeFinished` (a real click on the pane — grid-layout wires
  *            it), by NEW work (busy/attention reclaims the pane), or with the pane
  *            itself (`clearPaneState` on dispose — pane ids are reused, and a flag
@@ -40,13 +45,17 @@ export function setPaneState(paneId: PaneId, state: AgentState): void {
   if (prev === state) return
   states.set(paneId, state)
   if (state === 'idle') {
-    // prev was busy/attention (the early-return above guarantees it): the episode
-    // ends — it counts as finished work only if it lasted like work.
+    // The episode ends. Finished ONLY from the busy edge (see the header): a blocked
+    // pane going idle answered/replayed its latch away — it completed nothing.
     const start = episodeStart.get(paneId)
     episodeStart.delete(paneId)
-    if (start !== undefined && Date.now() - start >= MIN_WORK_MS) finished.add(paneId)
+    if (prev === 'busy' && start !== undefined && Date.now() - start >= MIN_WORK_MS) finished.add(paneId)
   } else {
-    if (prev === 'idle') episodeStart.set(paneId, Date.now()) // episode begins
+    // The work clock starts when work STARTS: from idle, or from attention→busy (the
+    // prompt was answered — what follows is a new working stretch, so a 1.6s repaint
+    // blip right after an answer stays under the noise floor instead of inheriting
+    // the whole blocked episode's duration).
+    if (prev === 'idle' || state === 'busy') episodeStart.set(paneId, Date.now())
     finished.delete(paneId)
   }
   notify()

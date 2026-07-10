@@ -7,7 +7,7 @@ const PROVIDER_CLI: Record<string, HostedCliId | undefined> = { claude: 'claude-
 import { getBridge } from '../../core/ipc/bridge'
 import { getFocusedPane } from '../../core/layout/focus'
 import { setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
-import { onAgentLaunchRequest, announceProfileFailover } from '../../core/agents/launch-port'
+import { onAgentLaunchRequest, requestAgentLaunch, announceProfileFailover } from '../../core/agents/launch-port'
 import { setPaneAgentSession } from '../../core/agents/agent-session-port'
 import { setCommands } from '../../core/commands/command-port'
 import { setActiveView } from '../../core/shell/view-port'
@@ -127,7 +127,15 @@ export const agentsFeature: UiFeature = {
 
     function launchInFocused(agentId: string, profileId?: string): void {
       const focus = getFocusedPane()
-      if (focus) void launchInPane(focus.paneId as number, agentId, focus.cwd, false, profileId)
+      if (!focus) return
+      // Through the launch PORT, not straight into launchInPane (this feature's own
+      // subscription fulfils the request): the workspace feature records every port
+      // request as that slot's manifest ASSIGNMENT (+ launch cwd), so a palette/menu
+      // launch survives restore exactly like a wizard-lineup one. Launched directly,
+      // the manifest never learned about the agent — a pane added after workspace
+      // creation lost its whole session identity (context bar, agent chip, resume)
+      // on the next app restart, while the reattached CLI kept visibly running.
+      requestAgentLaunch({ paneId: focus.paneId, provider: agentId, cwd: focus.cwd, profileId })
     }
 
     /** The one launch path: build the command (never a credential — ADR 0002), write it into
@@ -160,9 +168,20 @@ export const agentsFeature: UiFeature = {
         setPaneLabel(paneId as PaneId, label)
         const reCli = PROVIDER_CLI[provider]
         if (reCli) recordPaneCli(paneId, reCli)
+        // The adopted agent originally launched under a profile — the named one, or
+        // the provider's order-0 default, the SAME resolution a fresh launch applies.
+        // The context watch resolves the CONFIG HOME from that id (CLAUDE_CONFIG_DIR
+        // et al.); adopting without it pointed the session-log matcher at the default
+        // home, so any profile with a relocated home lost its context bar on every
+        // app restart even though the agent never stopped.
+        const mine = custom
+          ? []
+          : (await listProfiles()).filter((p) => p.provider === provider).sort((x, y) => x.order - y.order)
+        const adoptedProfile = profileId ?? mine[0]?.id
+        setPaneProfile(paneId as PaneId, mine.find((p) => p.id === adoptedProfile)?.name)
         // Context bar: the adopted session predates this app run, so the log
         // matcher may look back in time (agent-session port -> context feature).
-        setPaneAgentSession(paneId as PaneId, { provider, cwd, adopted: true })
+        setPaneAgentSession(paneId as PaneId, { provider, cwd, profileId: adoptedProfile, adopted: true })
         return
       }
       if (provider.startsWith('custom:')) {

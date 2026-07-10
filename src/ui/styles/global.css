@@ -1332,11 +1332,12 @@ button {
   padding: var(--sp-3) var(--sp-2) var(--sp-2);
   --rail-fade: 12px;
 }
-/* Scroll-edge fade (the rail's one A− gap): the list masks the edge it can scroll PAST
-   — the vertical twin of .ws-label's edge mask, so a long roster reads as scrollable, not
-   clipped. Only the scrolled-past edge fades, so a FULLY-VISIBLE tab is never masked and
-   the loud .ws-attn attention count is never dimmed (guardrail: attention is never
-   dimmed). workspace/index.ts toggles fade-top/fade-bot from scroll position + overflow
+/* Scroll-edge fade (the rail's one A− gap): the list masks the edge it can scroll PAST,
+   so a long roster reads as scrollable, not clipped. (Names inside a tab truncate with
+   "…" — see .ws-label — the fade grammar belongs to the SCROLLER only.) Only the
+   scrolled-past edge fades, so a FULLY-VISIBLE tab is never masked and the loud
+   .ws-attn attention count is never dimmed (guardrail: attention is never dimmed).
+   workspace/index.ts toggles fade-top/fade-bot from scroll position + overflow
    (CHROMEUX (b) asserts the fade, (e) asserts data-attention still fires). */
 #workspace-tabs.fade-top {
   mask-image: linear-gradient(to bottom, transparent 0, #000 var(--rail-fade));
@@ -1461,8 +1462,13 @@ button {
   overflow: hidden;
   white-space: nowrap;
   font-weight: var(--fw-medium);
-  /* Overflow fades out instead of "…" — mask alpha only, no color involved. */
-  mask-image: linear-gradient(90deg, black calc(100% - 16px), transparent);
+  /* Explicit direction (2026-07-10): a long name must READ as cut — "…" — not fade
+     away (the old 16px alpha mask ended in empty space, so nothing said "there is
+     more name here"). The ellipsis stops a breath short of the badge cluster: this
+     inner padding plus the tab's --sp-2 flex gap keeps the dots from ever touching
+     the attention/pane counters, even with zero free width. */
+  text-overflow: ellipsis;
+  padding-right: var(--sp-1);
 }
 .workspace-tab .ws-rename {
   width: 100%;

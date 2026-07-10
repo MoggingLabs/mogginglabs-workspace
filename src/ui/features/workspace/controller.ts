@@ -548,11 +548,17 @@ export class WorkspaceController {
     }
     // Prune the flag-lifetime tracking to panes that still exist (see the field
     // comment: reused pane ids must never inherit a closed workspace's history).
+    // attnSeen too: a pane disposed MID-attention leaves its entry behind, and the
+    // reused id would then read "already pulsed" — its first real rising edge would
+    // never flash.
     for (const paneId of this.finSeen) {
       if (!scanned.has(paneId)) this.finSeen.delete(paneId)
     }
     for (const paneId of this.finWsSeen) {
       if (!scanned.has(paneId)) this.finWsSeen.delete(paneId)
+    }
+    for (const paneId of this.attnSeen) {
+      if (!scanned.has(paneId)) this.attnSeen.delete(paneId)
     }
     // A11Y-01: the badge is silent to screen readers — announce when a
     // new pane starts needing input (a rise in the total).
@@ -771,10 +777,14 @@ export class WorkspaceController {
   /** An agent was launched into a pane by any app path — palette, pane ⋯ menu, board
    *  card, wizard lineup, failover relaunch: record it as that SLOT's assignment so
    *  every future restore (app relaunch, daemon cold start, and the cross-protocol
-   *  update migration) relaunches it with resume. Creation lineups re-announce the
-   *  values they were created with, so recording is idempotent — the return value says
-   *  whether anything actually changed (the caller persists only then). */
-  noteAgentLaunch(paneId: number, provider: string, profileId?: string): boolean {
+   *  update migration) relaunches it with resume. The LAUNCH cwd is recorded with it:
+   *  the session log is keyed on where the CLI started (context feature), and a pane
+   *  whose live cwd had drifted from its seeded slot cwd — a split pane, a shell the
+   *  user cd'd — would otherwise adopt-watch the wrong project dir after restore.
+   *  Creation lineups re-announce the values they were created with, so recording is
+   *  idempotent — the return value says whether anything actually changed (the caller
+   *  persists only then). */
+  noteAgentLaunch(paneId: number, provider: string, profileId?: string, cwd?: string): boolean {
     if (!provider || provider === 'shell') return false
     const view = this.viewForPane(paneId)
     if (!view) return false
@@ -796,6 +806,15 @@ export class WorkspaceController {
         changed = true
       }
       view.meta.profileIds = ids
+    }
+    if (cwd) {
+      const cwds = view.meta.paneCwds ?? []
+      while (cwds.length < slot) cwds.push(null)
+      if (cwds[slot - 1] !== cwd) {
+        cwds[slot - 1] = cwd
+        changed = true
+      }
+      view.meta.paneCwds = cwds
     }
     return changed
   }

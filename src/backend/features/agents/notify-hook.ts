@@ -104,8 +104,10 @@ sock.on('error', finish)
 
 /** Claude Code `hooks` settings fragment (rides the generated --settings file — a
  *  session overlay that MERGES with the user's own hooks, never a file of theirs).
- *  Notification = the agent is waiting on you (permission prompt / idle prompt);
- *  Stop = the turn ended. Both map to attention — the pane rings until you type. */
+ *  Notification = the agent is waiting on you (permission prompt / idle prompt) —
+ *  rings attention (red) until you type. Stop = the turn ended — lands as idle, which
+ *  the attention port turns into the sticky green finished halo (until the pane is
+ *  clicked). Two events, two distinct color stories: red = blocked, green = done. */
 export function claudeNotifyHooks(invocation: string): Record<string, unknown> {
   const hook = (event: string): unknown[] => [
     { hooks: [{ type: 'command', command: `${invocation} --event ${event}` }] }

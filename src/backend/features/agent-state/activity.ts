@@ -23,9 +23,15 @@ import type { AgentState } from '@contracts'
 
 /** Output must stay quiet this long before busy settles back to idle. */
 const QUIET_MS = 1500
-/** After a forced idle (133;D / notify idle), output inside this window does not
- *  re-mark busy — the shell's own prompt repaint follows D within a few frames. */
-const IDLE_GRACE_MS = 300
+/** After a forced idle (133;D / notify idle/done), output inside this window does not
+ *  re-mark busy. Sized for the SLOWEST legitimate straggler, not the fastest: a shell's
+ *  prompt repaint follows D within a few frames, but an agent's done-hook races its own
+ *  final repaint — the hook's socket message can beat the trailing frame (statusline
+ *  re-run ~100-500ms of process spawn, ConPTY flush) through to the tracker. A trailing
+ *  frame that lands past a short grace flips busy and CLEARS the just-stamped finished
+ *  flag; the sub-noise-floor busy→idle round that follows never re-stamps it, so the
+ *  green "done" halo silently vanished. Real new work always outlives this window. */
+const IDLE_GRACE_MS = 1200
 
 export class ActivityTracker {
   private state: AgentState = 'idle'

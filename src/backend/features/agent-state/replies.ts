@@ -15,9 +15,14 @@ export function isTerminalReply(data: string): boolean {
   if (!data) return false
   // Each pattern strips one leading reply; bail the moment something else leads.
   // Finals are RESPONSE finals only — cursor keys (CSI A-D), F-keys (CSI ~ / SS3)
-  // and mouse reports (CSI M / CSI < ... M|m) deliberately do NOT match.
+  // and mouse reports (CSI M / CSI < ... M|m) deliberately do NOT match. The set is
+  // xterm.js's EXACT emission repertoire (InputHandler triggerDataEvent sites) — a
+  // reply it can send that isn't matched here reads as typing and falsely clears the
+  // attention latch (found live 2026-07-10: DA2 + DECRPM turned a permission-blocked
+  // pane's red dot green).
   const REPLIES = [
-    /^\x1b\[\??[0-9;]*[Rcn]/, // CPR (CSI r;c R), DA1/DA2 (CSI ? ... c), DSR-ok (CSI 0 n)
+    /^\x1b\[[?>]?[0-9;]*[Rcn]/, // CPR (CSI r;c R), DA1 (CSI ? ... c), DA2 (CSI > ... c), DSR-ok (CSI 0 n)
+    /^\x1b\[\??[0-9;]*\$y/, // DECRPM — DECRQM mode report (CSI ? Ps ; Pm $ y, ANSI form without ?)
     /^\x1b\[[0-9;]*t/, // window-ops report (CSI 8 ; rows ; cols t ...)
     /^\x1b\[[IO]/, // focus in / focus out (mode 1004)
     /^\x1b\][0-9]+;[^\x07\x1b]*(\x07|\x1b\\)/, // OSC query reply (10/11 color, ...)

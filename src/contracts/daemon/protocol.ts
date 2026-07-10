@@ -254,13 +254,18 @@ export type ServerMessage =
  *  vocabulary that maps to a pane AgentState — a label only, never PTY content (ADR 0002). */
 export type NotifyEvent = 'needs-input' | 'done' | 'attention' | 'busy' | 'idle'
 
-/** Map a notify event to the pane state it raises. Unknown events default to `attention` (any
- *  explicit notify is worth surfacing) — only `busy`/`idle` are the softer, non-ringing states. */
+/** Map a notify event to the pane state it raises. `done` is a turn ENDING — it lands as
+ *  `idle`, which the UI's attention port turns into the sticky green "finished" story
+ *  (halo until the pane is clicked). It must NOT ring `attention`: red is reserved for
+ *  "blocked on you" (needs-input), and a done that rang red made finished and blocked
+ *  indistinguishable — and left the green finished layer unreachable. Unknown events
+ *  still default to `attention` (any explicit notify is worth surfacing). */
 export function notifyEventToState(event: string): AgentState {
   switch (event) {
     case 'busy':
       return 'busy'
     case 'idle':
+    case 'done':
       return 'idle'
     default:
       return 'attention'

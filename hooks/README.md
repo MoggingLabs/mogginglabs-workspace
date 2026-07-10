@@ -30,8 +30,8 @@ first-party layer for the CLIs that support hooks.
 
 | event | pane state | typical trigger |
 |-------|-----------|-----------------|
-| `needs-input` | attention | the agent is waiting on you (permission / a question) |
-| `done` | attention | the agent finished its turn |
+| `needs-input` | attention | the agent is waiting on you (permission / a question) — red until you type |
+| `done` | idle | the agent finished its turn — surfaces as the sticky green "finished" halo until you click the pane |
 | `busy` | busy | long-running work started (softer, non-ringing) |
 | `idle` | idle | back to idle |
 

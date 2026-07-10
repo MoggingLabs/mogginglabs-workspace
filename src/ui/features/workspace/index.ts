@@ -173,7 +173,7 @@ export const workspaceFeature: UiFeature = {
     // not just the panes the creation wizard assigned. Lineup replays announce the
     // values already recorded, so this persists only on real change.
     onAgentLaunchRequest((req) => {
-      if (controller.noteAgentLaunch(req.paneId, req.provider, req.profileId)) persist()
+      if (controller.noteAgentLaunch(req.paneId, req.provider, req.profileId, req.cwd)) persist()
     })
     // 06b: the wizard/templates open workspaces from a provider-mix spec.
     setWorkspaceOpener((spec) => {
