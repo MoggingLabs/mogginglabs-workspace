@@ -26,7 +26,7 @@ import type { BrowserAgentVerb, TrailEntry } from '@contracts'
 //   (e) the ring caps: seed 2100 -> ≤2000 kept, oldest gone, newest intact
 //   (f) entries survive "restart" (a fresh store instance on the same dir)
 //   (g) clear-workspace empties exactly that file (the ring ws survives)
-//   (h) the viewer renders the entries (Settings § Integrations, DOM asserts)
+//   (h) the viewer renders the entries (Settings § Activity, DOM asserts)
 // Zero external network: the only page is this smoke's own 127.0.0.1 server.
 
 type Rpc = { result?: Record<string, unknown>; error?: { message?: string } }
@@ -195,7 +195,7 @@ export function runWebTrailSmoke(win: BrowserWindow): void {
       // ── (h) the viewer renders the entries ────────────────────────────────
       await ES(`(document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click(), 1)`)
       await sleep(600)
-      await ES(`document.querySelector('.settings-nav-item[data-target="integrations"]')?.click()`) // each tab is its own page (8) — select it
+      await ES(`document.querySelector('.settings-nav-item[data-target="activity"]')?.click()`) // each tab is its own page (8) — the trail lives on Trust › Activity now
       await ES(`(document.querySelector('.trail-activity .trail-btn')?.click(), 1)`) // Refresh (repopulates the ws filter)
       await sleep(600)
       // Filter to THIS workspace (the ring-seed workspace would flood the top).

@@ -43,7 +43,7 @@ export function runAgentLaunchSmoke(win: BrowserWindow): void {
       await delay(2500)
       await ES(
         "window.__cap='';if(!window.__capHooked){window.__capHooked=true;" +
-          "window.bridge.on('terminal:data',function(e){if(e&&e.id===1){window.__cap+=e.data;}});}"
+          "window.bridge.on('terminal:data',function(e){if(e&&e.id===1){window.__cap+=e.data;}});}1"
       )
       await delay(500)
 

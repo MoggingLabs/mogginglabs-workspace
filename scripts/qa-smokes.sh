@@ -74,8 +74,12 @@ kill_daemon() {
   ep=$(ls "$iso"/local/MoggingLabs/run/v*/endpoint.json 2>/dev/null | head -1)
   if [ -f "$ep" ]; then
     local pid
-    pid=$(node -e "try{console.log(JSON.parse(require('fs').readFileSync('$ep','utf8')).pid)}catch{}" 2>/dev/null)
-    if [ -n "${pid:-}" ]; then kill "$pid" 2>/dev/null && echo "  killed daemon pid $pid"; fi
+    # BOTH halves live in node, fed over STDIN. Two Windows traps here: node resolves
+    # a git-bash /tmp/... argv path drive-relatively (C:\tmp\..., reads nothing), and
+    # git-bash `kill` cannot signal native pids — either one silently leaks the daemon
+    # (measured: 49+ idle daemons starved a full sweep to MISSING verdicts).
+    pid=$(node -e "let s='';process.stdin.on('data',(d)=>s+=d).on('end',()=>{try{const p=JSON.parse(s).pid;process.kill(p);console.log(p)}catch{}})" <"$ep" 2>/dev/null)
+    if [ -n "${pid:-}" ]; then echo "  killed daemon pid $pid"; fi
   fi
 }
 
@@ -86,8 +90,8 @@ verdict() {
 
 # MOGGING_GATES: optional comma list (e.g. "TEMPLATE_A,TEMPLATE_B") to run a
 # subset — for ITERATION only; certification is always the full sweep. Two-phase
-# pairs share persisted state: include TEMPLATE_A/B (and PROFPERSIST_A/B) both
-# or neither.
+# pairs share persisted state: include TEMPLATE_A/B (and PROFPERSIST_A/B,
+# SURVIVE_A/B) both or neither.
 GATES="${MOGGING_GATES:-}"
 should_run() {
   [ -z "$GATES" ] && return 0
@@ -133,7 +137,7 @@ run_smoke() {
   kill_electron
   # A two-phase pair's phase A must leave its daemon+state for phase B; everything
   # else (including each pair's phase B) cleans up.
-  if [ -z "$reuse" ] || [ "$name" = "TEMPLATE_B" ] || [ "$name" = "PROFPERSIST_B" ]; then kill_daemon "$iso"; fi
+  if [ -z "$reuse" ] || [ "$name" = "TEMPLATE_B" ] || [ "$name" = "PROFPERSIST_B" ] || [ "$name" = "SURVIVE_B" ]; then kill_daemon "$iso"; fi
   return 0
 }
 
@@ -165,6 +169,12 @@ run_smoke BLOCKS      MOGGING_BLOCKS    1 150 blocks
 run_smoke CLIPBOARD   MOGGING_CLIPBOARD 1 150 clipboard
 run_smoke GIT         MOGGING_GIT       1 240 git
 run_smoke NOTIFY      MOGGING_NOTIFY    1 180 notify
+run_smoke NOTIFYHOOK  MOGGING_NOTIFYHOOK 1 120 notifyhook
+run_smoke STATE       MOGGING_STATE     1 150 state-smoke
+run_smoke RELOAD      MOGGING_RELOAD    1 150 reload-smoke
+run_smoke MIGRATE     MOGGING_MIGRATE   1 120 migrate
+run_smoke SURVIVE_A   MOGGING_SURVIVE   A 120 survive SURVIVE
+run_smoke SURVIVE_B   MOGGING_SURVIVE   B 120 survive SURVIVE
 run_smoke MILESTONE   MOGGING_MILESTONE 1 300 milestone
 run_smoke FLICKER     MOGGING_FLICKER   1 240 flicker
 run_smoke CONPTY      MOGGING_CONPTY    1 180 conpty

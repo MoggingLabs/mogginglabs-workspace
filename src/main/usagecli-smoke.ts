@@ -114,7 +114,12 @@ export function runUsageCliSmoke(_win: BrowserWindow): void {
 
       // 3 ── cost through the FULL pipe: exact sums off the seeded fixture
       const cost = await cli(['usage', 'cost', '--provider', 'codex', '--json'])
-      let scans: { providerId: string; days: { tokens: number; spend: number }[] }[] = []
+      let scans: {
+        providerId: string
+        days: { tokens: number; spend: number }[]
+        models: { model: string }[]
+        reason?: string
+      }[] = []
       try {
         scans = JSON.parse(cost.stdout) as typeof scans
       } catch {
@@ -127,7 +132,14 @@ export function runUsageCliSmoke(_win: BrowserWindow): void {
         scans[0].days.length === 2 &&
         scans[0].days[0].tokens === 1500 &&
         scans[0].days[1].tokens === 3000 &&
-        scans[0].days.every((d) => d.spend === 0)
+        // Unlabeled codex sessions are priced at assumed gpt-5 rates — HONESTLY:
+        // spend is non-zero, the model row is marked "(assumed)" and the scan
+        // carries the reason (7/07's under-report-honestly contract, tightened
+        // by the assumed-rate pricing in the usage iteration).
+        scans[0].days.every((d) => d.spend > 0) &&
+        scans[0].models.some((m) => m.model.includes('(assumed)')) &&
+        typeof scans[0].reason === 'string' &&
+        scans[0].reason.length > 0
       const costAll = await cli(['usage', 'cost', '--json'])
       let allScans: { providerId: string }[] = []
       try {
@@ -163,7 +175,7 @@ export function runUsageCliSmoke(_win: BrowserWindow): void {
       const noGetVerbOk = getKey.code === 2
 
       const pass = snapshotOk && humanOk && providersOk && costOk && costAllOk && refreshOk && keyOk && grepClean && noGetVerbOk
-      result = { pass, snapshotOk, verdictVerbatim, humanOk, providersOk, costOk, costAllOk, refreshOk, vaultAvailable, keyOk, grepClean, noGetVerbOk, planCount: plans.length, exits: { snap: snap.code, human: human.code, prov: prov.code, cost: cost.code, rf: rf.code, set: setRes.code, getKey: getKey.code } }
+      result = { pass, snapshotOk, verdictVerbatim, humanOk, providersOk, costOk, costAllOk, refreshOk, vaultAvailable, keyOk, grepClean, noGetVerbOk, planCount: plans.length, scans, allScans, exits: { snap: snap.code, human: human.code, prov: prov.code, cost: cost.code, rf: rf.code, set: setRes.code, getKey: getKey.code } }
     } catch (e) {
       result = { pass: false, error: e instanceof Error ? e.message : String(e) }
     }

@@ -124,6 +124,12 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
       }
 
       // ── A4. needs-input INSIDE the pane -> card + rail flag, end to end ─────
+      // The pane-state dot (and the card/rail aggregation behind it) is gated on a
+      // tracked provider session; the real flow launches the agent through the app,
+      // which registers one. This smoke scripts the agent via the control CLI, so
+      // adopt the session the launch path would have created.
+      await ES(`window.__mogging.agents.adopt(${paneId},"claude","");1`)
+      await sleep(400)
       await ES(`window.__mogging.workspace.switchByIndex(0)`) // background the card's workspace
       await sleep(600)
       await cli(['send', String(paneId), `node "${cliPath}" notify --event needs-input`])

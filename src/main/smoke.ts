@@ -81,7 +81,7 @@ export function runSmoke(win: BrowserWindow): void {
     await ES(
       "window.__cap='';" +
         "if(!window.__capHooked){window.__capHooked=true;" +
-        "window.bridge.on('terminal:data',function(e){if(e&&e.id===1){window.__cap+=e.data;}});}"
+        "window.bridge.on('terminal:data',function(e){if(e&&e.id===1){window.__cap+=e.data;}});}1"
     )
 
     // I/O: echo marker, env/PATH, and 50 streamed lines. Platform-aware: the pane

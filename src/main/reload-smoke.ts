@@ -5,8 +5,16 @@ import { app, type BrowserWindow } from 'electron'
 // Env-gated reload smoke (set MOGGING_RELOAD=1). Starts a long-running counter loop in
 // the pane, reloads the renderer, and proves the PTY (owned by main) survived: the
 // counter keeps climbing past its pre-reload value (survived) and does not restart at 0
-// (no duplicate spawn — PtyService's id-guard held). Writes out/reload-smoke-result.json
-// + stdout, then exits (0=pass,1=fail). Dev/test only.
+// (no duplicate spawn — PtyService's id-guard held).
+//
+// It also gates the ATTENTION-LATCH RELIABILITY CONTRACT (2026-07-10): the loop emits
+// one OSC 9 after our last keystroke, latching the pane red BEFORE the reload; after
+// the reload the chip must STILL read attention. That holds only if BOTH fixes hold:
+// (1) the remounting pane PULLS its state (terminal:stateSync) — the change-only push
+//     happened pre-reload and is gone;
+// (2) xterm's remount auto-replies (CPR/DA/focus answers to scrollback replay) are not
+//     classified as typing (isTerminalReply) — typing clears the latch.
+// Writes out/reload-smoke-result.json + stdout, then exits (0=pass,1=fail). Dev only.
 export function runReloadSmoke(win: BrowserWindow): void {
   const errors: string[] = []
   const consoleMsgs: Array<{ level: unknown; message: string }> = []
@@ -44,11 +52,21 @@ export function runReloadSmoke(win: BrowserWindow): void {
     ES('window.bridge.send("terminal:write",{id:1,data:' + JSON.stringify(d) + '});')
 
   // Fresh capture hook (re-run per renderer context — the reload creates a new one).
+  // Ends in `1`, NOT the bridge.on(...) call: bridge.on returns the unsubscriber (a
+  // Function), and a Function completion value makes executeJavaScript reject with
+  // "An object could not be cloned".
   const HOOK =
-    "window.__cap='';window.bridge.on('terminal:data',function(e){if(e&&e.id===1){window.__cap+=e.data;}});"
+    "window.__cap='';window.bridge.on('terminal:data',function(e){if(e&&e.id===1){window.__cap+=e.data;}});1"
   // A node loop that prints MARK_<n> every 400ms forever (until Ctrl-C / pty killed).
-  const LOOP = `node -e "let i=0;setInterval(function(){process.stdout.write('MARK_'+(i++)+String.fromCharCode(10))},400)"\r`
+  // At i===4 (~1.6s in — safely after our last keystroke, which would clear the latch)
+  // it emits ONE OSC 9, latching the pane's attention state for the reload assertion.
+  const LOOP = `node -e "let i=0;setInterval(function(){if(i===4){process.stdout.write(String.fromCharCode(27)+']9;needs input'+String.fromCharCode(7))}process.stdout.write('MARK_'+(i++)+String.fromCharCode(10))},400)"\r`
   const marks = (s: string): number[] => (s.match(/MARK_(\d+)/g) || []).map((m) => Number(m.slice(5)))
+  const chipState = (): Promise<unknown> =>
+    ES(
+      '(function(){var e=document.querySelector(\'.layout-slot[data-pane-id="1"] .pane-state\');' +
+        'return e?e.getAttribute("data-state"):null;})()'
+    )
 
   const failOut = (msg: string): void => {
     if (done) return
@@ -57,18 +75,35 @@ export function runReloadSmoke(win: BrowserWindow): void {
     app.exit(1)
   }
 
-  async function phaseB(beforeMax: number): Promise<void> {
+  async function phaseB(beforeMax: number, stateBefore: string): Promise<void> {
     if (done) return
     try {
       await delay(2200) // let the new pane mount + resubscribe
       const bridge = String(await ES('typeof window.bridge'))
-      const paneExists = Boolean(await ES('!!document.querySelector(".pane")'))
+      const paneExists = Boolean(
+        await ES('!!document.querySelector(\'.layout-slot[data-pane-id="1"] .pane-header\')')
+      )
       await ES(HOOK) // fresh capture in the NEW renderer context
+      // Re-adopt: the agent-session port is renderer state, so the reload wiped it and
+      // the dot is hidden (availability contract). The real product re-adopts through
+      // the restore lineup (agents/index.ts launchInPane resume+wasPaneReattached);
+      // the dev shim mirrors that. The gate's unhide then runs syncState — "appear
+      // with the truth, not the mount default" — which is half the contract under test.
+      await ES('window.__mogging.agents.adopt(1,"claude","");1')
       await delay(3200) // let the still-running loop stream new output into the new pane
       const capAfter = String(await ES('window.__cap'))
       const after = marks(capAfter)
       const afterMax = after.length ? Math.max(...after) : -1
       const afterMin = after.length ? Math.min(...after) : -1
+      // The latch assertion — read BEFORE the Ctrl-C below (real typing, rightly clears
+      // it). Pre-reload the loop's OSC 9 latched red; the remounted chip may only show
+      // that via the stateSync pull, and only keeps it if remount auto-replies were not
+      // classified as typing. No fresh OSC has fired since. The direct invoke reads the
+      // relay's answer without the pane's paint in between — it splits "backend lost
+      // the latch" (isTerminalReply failed) from "the pane painted it wrong" (pull
+      // path failed).
+      const syncAnswer = String(await ES('window.bridge.invoke("terminal:stateSync",{id:1})'))
+      const stateAfter = String(await chipState())
 
       await send('\x03') // stop the loop
       await delay(400)
@@ -76,8 +111,10 @@ export function runReloadSmoke(win: BrowserWindow): void {
       const remounted = bridge === 'object' && paneExists
       const survived = after.length > 0 && afterMax > beforeMax
       const noDuplicate = afterMin > beforeMax // continues above pre-reload max => no restart-at-0, no 2nd loop
+      const latchHeld =
+        stateBefore === 'attention' && syncAnswer === 'attention' && stateAfter === 'attention'
       const noErrors = errors.length === 0
-      const pass = remounted && survived && noDuplicate && noErrors
+      const pass = remounted && survived && noDuplicate && latchHeld && noErrors
 
       done = true
       write({
@@ -85,6 +122,10 @@ export function runReloadSmoke(win: BrowserWindow): void {
         remounted,
         survived,
         noDuplicate,
+        latchHeld,
+        stateBefore,
+        stateAfter,
+        syncAnswer,
         noErrors,
         beforeMax,
         afterMin,
@@ -93,7 +134,7 @@ export function runReloadSmoke(win: BrowserWindow): void {
         bridge,
         paneExists,
         errors,
-        note: 'reloaded pane starts blank (scrollback restore is Phase 1); this proves the PTY survived in main and continued.',
+        note: 'PTY survived in main and continued; the attention latch survived the renderer reload (stateSync pull + auto-reply filter).',
         consoleMsgs
       })
       app.exit(pass ? 0 : 1)
@@ -106,17 +147,26 @@ export function runReloadSmoke(win: BrowserWindow): void {
     if (done) return
     try {
       await delay(1500)
+      // Launcher-first boot: provision Workspace 1 (pane 1) ourselves. The state chip
+      // is gated on a tracked provider session — adopt one so the latch reads are live.
+      await ES(
+        '(function(){var m=window.__mogging;' +
+          'if(m&&m.workspace&&m.workspace.count()===0)m.workspace.create({name:"Workspace 1"});' +
+          'if(m&&m.agents&&m.agents.adopt)m.agents.adopt(1,"claude","");return 1;})()'
+      )
+      await delay(2500)
       await ES(HOOK)
       await send(LOOP)
-      await delay(2600)
+      await delay(3000) // past i===4: the loop's one OSC 9 has latched attention
       const before = marks(String(await ES('window.__cap')))
       const beforeMax = before.length ? Math.max(...before) : -1
+      const stateBefore = String(await chipState())
 
       // Attach the next-load promise BEFORE reloading so we can't miss it.
       const loaded = new Promise<void>((res) => wc.once('did-finish-load', () => res()))
       wc.reload()
       await loaded
-      await phaseB(beforeMax)
+      await phaseB(beforeMax, stateBefore)
     } catch (e) {
       failOut('phaseA exception: ' + String(e))
     }

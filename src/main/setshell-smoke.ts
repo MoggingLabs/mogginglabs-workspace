@@ -53,10 +53,10 @@ export function runSetShellSmoke(win: BrowserWindow): void {
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
   // Section order (the DOM order of `.settings-section`).
-  const TABS = ['appearance', 'terminal', 'profiles', 'usage', 'integrations', 'privacy', 'browser', 'shortcuts', 'about']
+  const TABS = ['appearance', 'terminal', 'clipboard', 'providers', 'profiles', 'usage', 'integrations', 'webhooks', 'privacy', 'browser', 'activity', 'shortcuts', 'about']
   // Nav order — GROUPED, so it is deliberately not the section order. Asserting both
   // catches a tab that vanishes from the rail while its section still exists.
-  const NAV_ORDER = ['appearance', 'terminal', 'profiles', 'integrations', 'usage', 'privacy', 'browser', 'shortcuts', 'about']
+  const NAV_ORDER = ['appearance', 'terminal', 'clipboard', 'providers', 'profiles', 'integrations', 'usage', 'webhooks', 'privacy', 'browser', 'activity', 'shortcuts', 'about']
 
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
@@ -65,7 +65,7 @@ export function runSetShellSmoke(win: BrowserWindow): void {
       await ES(`(document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click(), 1)`)
       await sleep(700)
 
-      // ── (a) the nav is a map: nine tabs, an icon each, four group heads ──────
+      // ── (a) the nav is a map: every tab, an icon each, four group heads ──────
       const nav = await ES<{ items: string[]; withIcon: number; groups: string[]; backBtn: boolean }>(`(() => {
         const items = [...document.querySelectorAll('.settings-nav-item')]
         return {

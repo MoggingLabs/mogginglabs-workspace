@@ -27,7 +27,7 @@ export function runNotifySmoke(win: BrowserWindow): void {
       // Observe pane 1's state stream.
       await exec(
         `window.__nstates=window.__nstates||[];if(!window.__nhook){window.__nhook=1;` +
-          `window.bridge.on('terminal:state',function(e){if(e&&e.id===1)window.__nstates.push(e.state);});}`
+          `window.bridge.on('terminal:state',function(e){if(e&&e.id===1)window.__nstates.push(e.state);});}1`
       )
       await sleep(3500) // let pane 1 spawn + its shell reach a prompt
 

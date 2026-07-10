@@ -160,22 +160,30 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         return m.workspace.active().ordinal * 100 + 2
       })()`)
       await sleep(2600)
-      // WIDE enough that every chip fits: the pane-bar container queries retire chips
-      // below ~540px of PANE width, and a 2×2 grid gives each pane (win - rail)/2.
       win.setSize(1450, 680)
       await sleep(800)
-      await ES(`(() => {
-        const p = (window.__mogging.panes || []).find(p => p.id === ${paneId})
-        if (p && p.lightChips) p.lightChips()
-        return true
-      })()`)
-      await sleep(400)
 
       stage = 'c-measure'
-      const c = await ES<Record<string, unknown>>(`(() => {
+      const c = await ES<Record<string, unknown>>(`(async () => {
         try {
+          const sleep = ms => new Promise(r => setTimeout(r, ms))
+          // The state glyph is gated on a tracked provider session (availability
+          // contract) — adopt one so the anchored/allLit checks have a dot to measure.
+          window.__mogging.agents.adopt(${paneId}, 'claude', '')
           const slot = document.querySelector('.layout-slot[data-pane-id="${paneId}"]')
           if (!slot) return { ok: false, reason: 'no remote pane slot', paneId: ${paneId} }
+          // 900px of pane: above every collapse threshold (the ladder's widest rule
+          // fires at an 835px pane), so "everything fits" is measured on a bar the
+          // ladder provably leaves alone — independent of monitor and rail geometry.
+          slot.style.width = '900px'
+          await sleep(150)
+          // Light the chips INSIDE the measuring task: a real MCP/git status push
+          // between an earlier lightChips call and this read used to re-hide the
+          // forced chips (the sweep's isolated userdata has no MCP servers and the
+          // measured slot is remote, so no port ever lights them for real). Nothing
+          // can interleave between this call and the synchronous reads below.
+          const p = (window.__mogging.panes || []).find(p => p.id === ${paneId})
+          if (p && p.lightChips) p.lightChips()
           const header = slot.querySelector('.pane-header')
           const left = slot.querySelector('.pane-head-left')
           if (!header || !left) return { ok: false, reason: 'no header/left', hasHeader: !!header, hasLeft: !!left }
@@ -210,6 +218,7 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
           const noWrapStyle = cs.flexWrap === 'nowrap'
           const mids = [...left.children].filter(ch => ch.getBoundingClientRect().width > 0).map(ch => { const r = ch.getBoundingClientRect(); return Math.round(r.top + r.height / 2) })
           const centersAligned = mids.length > 0 && mids.every(mid => Math.abs(mid - mids[0]) <= 3)
+          slot.style.width = ''
           return {
             ok: anchored && allLit && oneLine && stateLeading && stateLeftMost && clipped && noWrapStyle,
             anchored, allLit, presentMap, headerH, oneLine, stateLeading, stateLeftMost, clipped, overflowed, noWrapStyle, centersAligned,
@@ -309,42 +318,63 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
 
       // ── (j): PROGRESSIVE COLLAPSE. Two things are never surrendered — the state glyph
       //    (which agent, doing what) and the × (get out). Between them the bar retires
-      //    into the ⋯ menu in a FIXED order, least-identifying first: branch → expand trio
-      //    → mcp → claims → role → remote. The title is the last thing standing, never the
-      //    first to go: it used to be the ONLY shrinkable item and hit 0px on an 862px
-      //    pane while four chips kept full width and were clipped away invisibly. ──
+      //    into the ⋯ menu in a FIXED order, least-identifying first: gauge "% used" text
+      //    → branch → expand trio → mcp → claims → role → remote → (last) the gauge disc.
+      //    The title is the last thing standing, never the first to go: it used to be the
+      //    ONLY shrinkable item and hit 0px on an 862px pane while four chips kept full
+      //    width and were clipped away invisibly. ──
       stage = 'j-collapse'
       const j = await ES<Record<string, unknown>>(`(async () => {
         const sleep = ms => new Promise(r => setTimeout(r, ms))
+        // The state glyph is gated on a tracked provider session (availability
+        // contract) — adopt one so the never-surrendered anchor exists to assert.
+        window.__mogging.agents.adopt(${paneId}, 'claude', '')
         const slot = document.querySelector('.layout-slot[data-pane-id="${paneId}"]')
         if (!slot) return { ok: false, reason: 'no slot' }
         const shown = sel => { const el = slot.querySelector(sel); return !!el && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0 }
         const expandShown = () => [...slot.querySelectorAll('.pane-act-expand')].filter(e => getComputedStyle(e).display !== 'none').length
-        // The pane's own width drives the container queries; drive it directly.
+        // The pane's own width drives the container queries; drive it directly. Chips are
+        // re-lit AFTER each resize settles (a real MCP/git push may re-hide the forced
+        // chips during the sleep), and the reads that follow are synchronous with the
+        // relight, so nothing can interleave.
         const host = slot.parentElement
+        const p = (window.__mogging.panes || []).find(p => p.id === ${paneId})
         const at = async px => { slot.style.width = px + 'px'; await sleep(120)
-          return { git: shown('.pane-git'), expand: expandShown(), mcp: shown('.pane-mcp'),
+          if (p && p.lightChips) p.lightChips()
+          return { pct: shown('.pane-context .ctx-pct'), git: shown('.pane-git'),
+                   expand: expandShown(), mcp: shown('.pane-mcp'),
                    claims: shown('.pane-claims'), role: shown('.pane-role'), remote: shown('.pane-remote'),
                    title: shown('.pane-title'), state: shown('.pane-state'), close: shown('.pane-act-close'),
                    menu: shown('.pane-act:not(.pane-act-expand):not(.pane-act-close)'),
                    ctxDisc: shown('.pane-context .ctx-disc') } }
-        const steps = { w900: await at(900), w700: await at(700), w600: await at(600),
-                        w500: await at(500), w440: await at(440), w380: await at(380), w300: await at(300) }
+        // Checkpoints straddle the 2026-07-10 re-derived ladder (global.css: thresholds
+        // are CONTENT-box widths — each rule fires at a pane ~15px wider than its number).
+        // The bar is CROWDED (every chip lit), so the :has()-gated rules apply: pct 820,
+        // branch 760, trio 740, mcp restart-form 645, claims 525, role 470, remote 355,
+        // disc 135. Each step sits ≥10px from the thresholds on both sides.
+        const steps = { w900: await at(900), w800: await at(800), w765: await at(765),
+                        w700: await at(700), w620: await at(620), w505: await at(505),
+                        w455: await at(455), w340: await at(340), w140: await at(140) }
         slot.style.width = ''
         await sleep(150)
-        const anchorsHold = Object.values(steps).every(s => s.state && s.close && s.menu && s.title)
+        // The title is exempt only at 140px: below the 200px floor-release it may
+        // legitimately ellipsise to nothing while the bare chrome (dot, ⋯, ×) holds.
+        const anchorsHold = Object.entries(steps).every(([k, s]) =>
+          s.state && s.close && s.menu && (k === 'w140' || s.title))
         const order =
-          steps.w900.git && steps.w900.expand === 3 &&      // wide: everything
-          !steps.w700.git && steps.w700.expand === 3 &&      // 1st to go: the branch chip
-          !steps.w600.git && steps.w600.expand === 0 &&      // 2nd: the expand trio
-          !steps.w500.mcp && steps.w500.claims &&            // 3rd: mcp
-          !steps.w440.claims && steps.w440.role &&           // 4th: claims
-          !steps.w380.role && steps.w380.remote &&           // 5th: role
-          !steps.w300.remote                                 // 6th: remote
-        // The context gauge (Claude Code's own disc + "62% used") has ONE form and
-        // never retires: visible at every width — context nearing full must stay
-        // visible on the tightest grid.
-        const ctxGauge = steps.w900.ctxDisc && steps.w700.ctxDisc && steps.w300.ctxDisc
+          steps.w900.pct && steps.w900.git && steps.w900.expand === 3 && steps.w900.mcp &&
+          steps.w900.claims && steps.w900.role && steps.w900.remote &&   // wide: everything
+          !steps.w800.pct && steps.w800.git && steps.w800.expand === 3 && // 1st: the gauge text
+          !steps.w765.git && steps.w765.expand === 3 &&                   // 2nd: the branch chip
+          steps.w700.expand === 0 && steps.w700.mcp &&                    // 3rd: the expand trio
+          !steps.w620.mcp && steps.w620.claims &&                         // 4th: mcp (restart form)
+          !steps.w505.claims && steps.w505.role &&                        // 5th: claims
+          !steps.w455.role && steps.w455.remote &&                        // 6th: role
+          !steps.w340.remote &&                                           // 7th: remote
+          !steps.w140.ctxDisc                                             // 8th: the disc itself
+        // The gauge's DISC (color ramp + sweep) survives every retirement above it and
+        // yields only below 135px of content — where even 16px would push the anchors off.
+        const ctxGauge = steps.w900.ctxDisc && steps.w700.ctxDisc && steps.w340.ctxDisc
         return { ok: anchorsHold && order && ctxGauge, anchorsHold, order, ctxGauge, steps, hasHost: !!host }
       })()`)
 

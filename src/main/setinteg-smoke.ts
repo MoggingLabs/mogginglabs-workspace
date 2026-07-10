@@ -5,17 +5,19 @@ import { emitBridgeEvent, saveWebhook } from './event-bridge'
 
 // Env-gated Integrations smoke (MOGGING_SETINTEG, Phase-8.5/05). The tab was the
 // audit's only F: 1174 lines rendering nine sections at once. It is now an overview
-// band plus seven folded Cards. This gate asserts the restructure did not cost a
-// single behavior — and that folding never buries a signal.
+// band plus five folded Cards — the event bridge and the activity trail earned
+// their OWN tabs (Webhooks under Agents & tools, Activity under Trust). This gate
+// asserts the restructure did not cost a single behavior — and that what stayed
+// folded never buries a signal.
 //
-//   (a) the overview band's three stats come from real fixtures, not placeholders;
+//   (a) the overview band's stats come from real fixtures, not placeholders;
 //   (b) sections collapse/expand and the choice survives a leave/return;
-//   (c) a FAILING webhook auto-expands its section AND its chip stays on the header
-//       after you fold it again — attention beats persistence, and collapse != hide;
+//   (c) a FAILING webhook reads 'failing' on its own tab — per-row health on an
+//       always-open page; there is no fold left to bury it under;
 //   (d) every DOM hook INTEGUX / WEBTRAIL / the gallery key off still resolves —
-//       INCLUDING from inside a collapsed card, because the body is hidden, not unbuilt;
-//   (e) MEASURED: `.mgr-chip` and `.trail-btn` clear a 28px hit target, and adjacent
-//       cards sit >= --sp-4 apart.
+//       the trail hooks on the Activity tab, the rest inside Integrations' cards;
+//   (e) MEASURED: `.mgr-chip` and the trail's `.trail-btn` clear a 28px hit
+//       target, and adjacent cards sit >= --sp-4 apart.
 //
 // (e) is the whole point of the hitbox work. `.mgr-chip { padding: 1px … }` and
 // `.trail-btn { padding: 2px … }` use px literals the spacing gate SANCTIONS, so
@@ -41,23 +43,25 @@ export function runSetIntegSmoke(win: BrowserWindow): void {
     return false
   }
 
-  /** Every selector a pre-existing gate or the gallery reads out of this tab. */
-  const HOOKS = [
+  /** Selectors a pre-existing gate or the gallery reads out of the Integrations tab. */
+  const INTEG_HOOKS = [
     '.integux-intro',
     '.integux-intro .integux-setup-cta',
     '.integux-privacy',
     '.integux-empty', // INTEGUX calls this one DoD-critical
-    '.toolplan-empty',
-    '.trail-activity',
-    '.trail-activity .trail-btn',
-    '.trail-ws',
-    '.trail-list'
+    '.toolplan-empty'
   ]
+  /** …and out of the Activity tab (WEBTRAIL's whole stage h lives here now). */
+  const ACTIVITY_HOOKS = ['.trail-activity', '.trail-activity .trail-btn', '.trail-ws', '.trail-list']
 
-  const openSettings = async (): Promise<void> => {
+  const openSettings = async (tab = 'integrations'): Promise<void> => {
     await ES(`(document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click(), 1)`)
     await sleep(400)
-    await ES(`(document.querySelector('.settings-nav-item[data-target="integrations"]')?.click(), 1)`)
+    await ES(`(document.querySelector('.settings-nav-item[data-target="${tab}"]')?.click(), 1)`)
+    await sleep(400)
+  }
+  const showTab = async (tab: string): Promise<void> => {
+    await ES(`(document.querySelector('.settings-nav-item[data-target="${tab}"]')?.click(), 1)`)
     await sleep(400)
   }
   const leaveAndReturn = async (): Promise<void> => {
@@ -95,39 +99,17 @@ export function runSetIntegSmoke(win: BrowserWindow): void {
 
       await openSettings()
 
-      // ── (d) every legacy hook resolves, with six of seven cards folded shut ──
+      // ── (d) every legacy Integrations hook resolves, cards folded shut ──────
       const hooks: Record<string, boolean> = {}
-      for (const sel of HOOKS) hooks[sel] = await waitTrue(`!!document.querySelector(${JSON.stringify(sel)})`)
-      const hooksOk = Object.values(hooks).every(Boolean)
-
-      // The trail's retention promise must stay inside `.trail-activity`'s first 4000
-      // characters — WEBTRAIL slices exactly that far before searching it.
-      const honestyOk = await ES<boolean>(
-        `(document.querySelector('.trail-activity')?.textContent || '').slice(0, 4000).includes('never sent anywhere')`
-      )
-      // The first `.trail-btn` inside the trail card must still be Refresh: WEBTRAIL
-      // and the gallery both click it blind, and its neighbours are Export (opens a
-      // file dialog, hangs the gate) and Clear (destroys the workspace's trail).
-      const refreshFirstOk = await ES<boolean>(
-        `/^Refresh$/.test(document.querySelector('.trail-activity .trail-btn')?.textContent?.trim() || '')`
-      )
+      for (const sel of INTEG_HOOKS) hooks[sel] = await waitTrue(`!!document.querySelector(${JSON.stringify(sel)})`)
 
       // ── (a) the overview band reads from fixtures, not placeholders ─────────
+      // Two stats since the split (Servers · Service keys) — webhooks and the
+      // trail report on their own tabs now.
       const statsOk = await waitTrue(
-        `[...document.querySelectorAll('.integux-stats .integux-stat-value')].length === 3 &&
+        `[...document.querySelectorAll('.integux-stats .integux-stat-value')].length === 2 &&
          [...document.querySelectorAll('.integux-stats .integux-stat-value')].every(e => (e.textContent||'').trim() && e.textContent.trim() !== '—')`
       )
-
-      // ── (c) attention beats persistence, and survives a fold ────────────────
-      const failChip = `.collapsible-card[data-collapsible="webhooks"] .cc-attn .cc-chip.is-failing`
-      const chipShown = await waitTrue(`!!document.querySelector('${failChip}')`, 40, 250)
-      const autoExpanded = await cardOpen('webhooks')
-      await toggle('webhooks') // fold it by hand
-      await sleep(200)
-      const foldedShut = !(await cardOpen('webhooks'))
-      const chipSurvivesFold = await ES<boolean>(`!!document.querySelector('${failChip}')`)
-      const attentionOk = chipShown && autoExpanded && foldedShut && chipSurvivesFold
-      await toggle('webhooks') // leave it as we found it
 
       // The imported preset renders `.cat-badge.is-draft`, and its chip proves the
       // INFORMATIONAL path: attention that surfaces on the header WITHOUT prising the
@@ -140,7 +122,7 @@ export function runSetIntegSmoke(win: BrowserWindow): void {
       const wiredSections = await ES<string[]>(
         `[...document.querySelectorAll('.collapsible-card')].map(c => c.dataset.collapsible)`
       )
-      const sectionsOk = ['catalog', 'servers', 'matrix', 'grants', 'webhooks', 'keys', 'trail'].every((id) => wiredSections.includes(id))
+      const sectionsOk = ['catalog', 'servers', 'matrix', 'grants', 'keys'].every((id) => wiredSections.includes(id))
 
       // ── (b) disclosure persists across a leave/return ───────────────────────
       const catalogOpenByDefault = await cardOpen('catalog')
@@ -152,11 +134,11 @@ export function runSetIntegSmoke(win: BrowserWindow): void {
       const persistOk =
         catalogOpenByDefault && !(await cardOpen('catalog')) && (await cardOpen('grants')) && !(await cardOpen('keys'))
 
-      // ── (e) hit targets, measured on the real box ───────────────────────────
+      // ── (e/1) Integrations hit targets, measured on the real box ────────────
       // Cards must be open for a box to exist: a `display:none` body measures 0.
       await ES(`document.querySelectorAll('.collapsible-card:not(.is-open) .cc-toggle').forEach(b => b.click())`)
       await sleep(400)
-      const boxes = await ES<{ mgrChip: number | null; trailBtn: number | null; gap: number | null }>(`(() => {
+      const integBoxes = await ES<{ mgrChip: number | null; gap: number | null }>(`(() => {
         const h = (sel) => { const e = document.querySelector(sel); if (!e) return null; const r = e.getBoundingClientRect(); return r.height ? Math.round(r.height * 100) / 100 : null }
         const cards = [...document.querySelectorAll('#view-settings .integrations-section .collapsible-card')]
         let gap = null
@@ -164,11 +146,39 @@ export function runSetIntegSmoke(win: BrowserWindow): void {
           const a = cards[0].getBoundingClientRect(), b = cards[1].getBoundingClientRect()
           gap = Math.round((b.top - a.bottom) * 100) / 100
         }
-        return { mgrChip: h('.mgr-chip'), trailBtn: h('.trail-activity .trail-btn'), gap }
+        return { mgrChip: h('.mgr-chip'), gap }
       })()`)
+
+      // ── (c) the failing webhook reads 'failing' on the Webhooks tab ─────────
+      await showTab('webhooks')
+      const failingShown = await waitTrue(`!!document.querySelector('.evbridge-health.is-failing')`, 40, 250)
+      const hookRowShown = await ES<boolean>(
+        `[...document.querySelectorAll('.mgr-row .mgr-label')].some(e => (e.textContent||'').includes('dead-hook'))`
+      )
+      const attentionOk = failingShown && hookRowShown
+
+      // ── (d/2 + e/2) the Activity tab: WEBTRAIL's hooks, honesty, hit target ──
+      await showTab('activity')
+      for (const sel of ACTIVITY_HOOKS) hooks[sel] = await waitTrue(`!!document.querySelector(${JSON.stringify(sel)})`)
+      const hooksOk = Object.values(hooks).every(Boolean)
+      // The trail's retention promise must stay inside `.trail-activity`'s first 4000
+      // characters — WEBTRAIL slices exactly that far before searching it.
+      const honestyOk = await ES<boolean>(
+        `(document.querySelector('.trail-activity')?.textContent || '').slice(0, 4000).includes('never sent anywhere')`
+      )
+      // The first `.trail-btn` inside the trail card must still be Refresh: WEBTRAIL
+      // and the gallery both click it blind, and its neighbours are Export (opens a
+      // file dialog, hangs the gate) and Clear (destroys the workspace's trail).
+      const refreshFirstOk = await ES<boolean>(
+        `/^Refresh$/.test(document.querySelector('.trail-activity .trail-btn')?.textContent?.trim() || '')`
+      )
+      const trailBtn = await ES<number | null>(
+        `(() => { const e = document.querySelector('.trail-activity .trail-btn'); if (!e) return null; const r = e.getBoundingClientRect(); return r.height ? Math.round(r.height * 100) / 100 : null })()`
+      )
+
       const sp4 = await ES<number>(`parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sp-4')) || 16`)
-      const hitOk = !!boxes.trailBtn && boxes.trailBtn >= HIT && (boxes.mgrChip === null || boxes.mgrChip >= HIT)
-      const gapOk = boxes.gap !== null && boxes.gap >= sp4 - 0.5
+      const hitOk = !!trailBtn && trailBtn >= HIT && (integBoxes.mgrChip === null || integBoxes.mgrChip >= HIT)
+      const gapOk = integBoxes.gap !== null && integBoxes.gap >= sp4 - 0.5
 
       result = {
         pass: saved.ok && imported.ok && hooksOk && honestyOk && refreshFirstOk && statsOk && attentionOk && draftBadge && draftChip && sectionsOk && persistOk && hitOk && gapOk,
@@ -188,8 +198,8 @@ export function runSetIntegSmoke(win: BrowserWindow): void {
         hitOk,
         gapOk,
         missingHooks: Object.entries(hooks).filter(([, v]) => !v).map(([k]) => k),
-        attention: { chipShown, autoExpanded, foldedShut, chipSurvivesFold },
-        boxes,
+        attention: { failingShown, hookRowShown },
+        boxes: { ...integBoxes, trailBtn },
         sp4
       }
     } catch (e) {

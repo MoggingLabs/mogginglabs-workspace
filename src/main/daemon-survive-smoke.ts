@@ -11,6 +11,8 @@ import { ensureDaemon, DaemonClient } from './daemon-client'
 
 // A cwd-independent path both Electron launches (and the test harness) can agree on.
 const RESULT = path.join(os.tmpdir(), 'mogging-daemon-survive-result.json')
+// The sweep's verdict file (qa-smokes.sh reads out/<name>-result.json, pass:true).
+const OUT_RESULT = path.join(app.getAppPath(), 'out', 'survive-result.json')
 const COUNTER =
   'node -e "let i=0;setInterval(function(){process.stdout.write(\'MARK_\'+(i++)+String.fromCharCode(10))},300)"'
 
@@ -19,6 +21,14 @@ const marks = (s: string): number[] => (s.match(/MARK_(\d+)/g) || []).map((x) =>
 function writeResult(o: unknown): void {
   try {
     fs.writeFileSync(RESULT, JSON.stringify(o))
+  } catch {
+    /* ignore */
+  }
+}
+function writeOutResult(o: unknown): void {
+  try {
+    fs.mkdirSync(path.dirname(OUT_RESULT), { recursive: true })
+    fs.writeFileSync(OUT_RESULT, JSON.stringify(o))
   } catch {
     /* ignore */
   }
@@ -35,6 +45,7 @@ export async function runDaemonSurviveSmoke(phase: string): Promise<void> {
   // Hard safety net: never let the app hang if the daemon path stalls.
   setTimeout(() => {
     writeResult({ phase, pass: false, error: 'smoke timeout' })
+    writeOutResult({ phase, pass: false, error: 'smoke timeout' })
     app.exit(1)
   }, 22000)
   try {
@@ -50,10 +61,28 @@ export async function runDaemonSurviveSmoke(phase: string): Promise<void> {
     if (phase === 'A') {
       // A cold spawn must report existing=false — the flag the restore path keys off.
       const { existing: existedA } = await client.spawn('sp1', { run: COUNTER })
+      if (existedA) {
+        // RE-ENTRY (electron-vite dev respawns electron after app.exit): the cold run
+        // already recorded phase A. Overwriting now would poison existedA for phase B.
+        client.dispose()
+        app.exit(0)
+        return
+      }
       await delay(3200)
-      writeResult({ phase: 'A', maxA: Math.max(-1, ...marks(cap)), daemonPidA: ep.pid, existedA })
+      const maxA = Math.max(-1, ...marks(cap))
+      writeResult({ phase: 'A', maxA, daemonPidA: ep.pid, existedA })
+      // Phase A "passes" when the counter pane is demonstrably alive in the daemon.
+      writeOutResult({ phase: 'A', pass: maxA >= 0, maxA, daemonPidA: ep.pid })
       client.dispose()
       app.exit(0) // quit the app but leave the detached daemon running
+      return
+    }
+
+    // Phase B RE-ENTRY guard (same respawn story): the verdict is already written —
+    // recomputing against a consumed tmp file would clobber a real PASS with junk.
+    if (readResult().phase === 'B') {
+      client.dispose()
+      app.exit(0)
       return
     }
 
@@ -85,7 +114,7 @@ export async function runDaemonSurviveSmoke(phase: string): Promise<void> {
     const existedA = prev.existedA === true
     const flagOk = existedB === true && !existedA // cold=false, reattach=true
     const pass = had && survived && sameDaemon && flagOk && ptyOk
-    writeResult({
+    const verdict = {
       phase: 'B',
       pass,
       had,
@@ -101,11 +130,14 @@ export async function runDaemonSurviveSmoke(phase: string): Promise<void> {
       maxB: mB.length ? Math.max(...mB) : -1,
       daemonPidA: prev.daemonPidA,
       daemonPidB: ep.pid
-    })
+    }
+    writeResult(verdict)
+    writeOutResult(verdict)
     client.dispose()
     app.exit(pass ? 0 : 1)
   } catch (e) {
     writeResult({ phase, pass: false, error: String(e) })
+    writeOutResult({ phase, pass: false, error: String(e) })
     app.exit(1)
   }
 }

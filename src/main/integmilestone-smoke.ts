@@ -43,8 +43,9 @@ import { softFps, softGapMs } from './smoke-shell'
 //       stalls the emit;
 //   (f) a FAKE PR flips to approved — the chip follows, the owning pane is
 //       notified (attention), and `review-changed` fires at a webhook;
-//   (g) structural: `approve` in NO tools/list frame; the receipt landed; the
-//       Settings § Integrations knobs live in ONE renderer module;
+//   (g) structural: `approve` in NO tools/list frame; the receipt landed; each
+//       Settings surface keeps ONE renderer module (integrations.ts for the MCP
+//       knobs; webhooks.ts and activity.ts for their own tabs);
 //   (h) the custody sweep: every fixture secret (vault key, webhook URL token,
 //       the fixture cookie value) is ABSENT in plaintext across the whole
 //       fixture userData (our stores), the CLI homes, and every frame/trail.
@@ -456,13 +457,19 @@ export function runIntegMilestoneSmoke(win: BrowserWindow): void {
       const noApprove = !allFrames.toLowerCase().includes('approve')
       const knobsModule = join(root, 'src', 'ui', 'features', 'settings', 'integrations.ts')
       const knobsSrc = existsSync(knobsModule) ? readFileSync(knobsModule, 'utf8') : ''
-      // The Settings § Integrations knobs are wired from this ONE renderer module
-      // — connect (catalog), scoping (tool-plan), grants, webhooks (bridge), the
-      // trail viewer. (Service-links are per-card, not a Settings knob.)
+      // ONE home per concern, three homes total since the tab split: the MCP knobs
+      // — connect (catalog), scoping (tool-plan), grants, keys — stay wired from
+      // integrations.ts; the event bridge renders only from webhooks.ts and the
+      // trail viewer only from activity.ts. (Service-links are per-card, not a
+      // Settings knob.)
+      const webhooksModule = join(root, 'src', 'ui', 'features', 'settings', 'webhooks.ts')
+      const webhooksSrc = existsSync(webhooksModule) ? readFileSync(webhooksModule, 'utf8') : ''
+      const activityModule = join(root, 'src', 'ui', 'features', 'settings', 'activity.ts')
+      const activitySrc = existsSync(activityModule) ? readFileSync(activityModule, 'utf8') : ''
       const knobsInOneModule =
         knobsSrc.length > 0 &&
-        /grant/i.test(knobsSrc) && /webhook/i.test(knobsSrc) && /trail/i.test(knobsSrc) &&
-        /catalog/i.test(knobsSrc) && /plan/i.test(knobsSrc)
+        /grant/i.test(knobsSrc) && /catalog/i.test(knobsSrc) && /plan/i.test(knobsSrc) &&
+        /webhook/i.test(webhooksSrc) && /trail/i.test(activitySrc)
       const gOk = noApprove && receiptAttention && knobsInOneModule
 
       // ══ (h) the custody sweep: the three secrets, plaintext, NOWHERE ours ════

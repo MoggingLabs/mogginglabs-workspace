@@ -90,6 +90,9 @@ const SCRIPT = `(async () => {
 
   // End-to-end attention: run a node one-liner IN panes 13..16 that emits OSC 9 onto the PTY
   // (daemon parses -> state relay -> badge). Sent right as the stress window opens.
+  // The dot is gated on a tracked provider session (availability contract) — adopt one
+  // per pane first, exactly what a launcher launch would have registered.
+  for (const p of panes) m.agents.adopt(p.id, 'claude', '')
   const osc9 = 'node -e "process.stdout.write(String.fromCharCode(27)+' + "']9;milestone'" + '+String.fromCharCode(7))"' + CR
   const flip = [13, 14, 15, 16]
 

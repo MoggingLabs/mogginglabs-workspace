@@ -189,30 +189,34 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       )
 
       stage = 'b-overview'
+      // Two stats since the tab split (Servers · Service keys) — webhooks and the
+      // trail report on their own tabs now.
       const overviewOk = await waitTrue(
-        `[...document.querySelectorAll('.integux-stats .integux-stat-value')].length === 3 &&
+        `[...document.querySelectorAll('.integux-stats .integux-stat-value')].length === 2 &&
          [...document.querySelectorAll('.integux-stats .integux-stat-value')].every(e => (e.textContent||'').trim() && e.textContent.trim() !== '—')`
       )
 
       stage = 'b-legacy-hooks'
       // Every selector a prior gate (INTEGUX / WEBTRAIL / the gallery) reads must resolve
-      // even with the cards folded — the body is hidden, never unbuilt.
-      const HOOKS = ['.integux-intro', '.integux-privacy', '.integux-empty', '.toolplan-empty', '.trail-activity', '.trail-activity .trail-btn', '.trail-ws', '.trail-list']
+      // even with the cards folded — the body is hidden, never unbuilt. (The trail's
+      // hooks moved with it to the Activity tab — asserted in stage e-trail-aa.)
+      const HOOKS = ['.integux-intro', '.integux-privacy', '.integux-empty', '.toolplan-empty']
       const hookMap: Record<string, boolean> = {}
       for (const sel of HOOKS) hookMap[sel] = await waitTrue(`!!document.querySelector(${JSON.stringify(sel)})`, 20, 200)
       const hooksOk = Object.values(hookMap).every(Boolean)
 
       stage = 'b-attention-fold'
-      // The seeded failing webhook auto-expands its card AND keeps its chip on the header
-      // after you fold it — attention beats persistence, collapse is not hide.
-      const failChip = `.collapsible-card[data-collapsible="webhooks"] .cc-attn .cc-chip.is-failing`
-      const chipShown = await waitTrue(`!!document.querySelector('${failChip}')`, 40, 250)
-      const autoExpanded = await cardOpen('webhooks')
-      await toggleCard('webhooks')
-      await sleep(200)
-      const foldedShut = !(await cardOpen('webhooks'))
-      const chipSurvivesFold = await ES<boolean>(`!!document.querySelector('${failChip}')`)
-      const attentionOk = chipShown && autoExpanded && foldedShut && chipSurvivesFold
+      // The seeded failing webhook reads 'failing' on its OWN tab now — per-row
+      // health on an always-open page; there is no fold left to bury it under.
+      await ES(`(document.querySelector('.settings-nav-item[data-target="webhooks"]')?.click(), 1)`)
+      await sleep(400)
+      const failingShown = await waitTrue(`!!document.querySelector('.evbridge-health.is-failing')`, 40, 250)
+      const hookRowShown = await ES<boolean>(
+        `[...document.querySelectorAll('.mgr-row .mgr-label')].some(e => (e.textContent||'').includes('uxm-dead-hook'))`
+      )
+      const attentionOk = failingShown && hookRowShown
+      await ES(`(document.querySelector('.settings-nav-item[data-target="integrations"]')?.click(), 1)`)
+      await sleep(300)
 
       stage = 'b-persist'
       // Disclosure persists across a leave/return: open Grants, fold Catalog, come back.
@@ -347,6 +351,9 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       await ES(`(() => { const p = (window.__mogging.panes || []).find((p) => p.id === ${paneId}); if (p && p.lightChips) p.lightChips(); return 1 })()`)
       await sleep(400)
       const pane = await ES<{ ok: boolean; headerH: number; stateLeading: boolean; clipped: boolean; noWrapStyle: boolean; centersAligned: boolean; present: boolean }>(`(() => {
+        // The state glyph is gated on a tracked provider session (availability
+        // contract) — adopt one so the present check has a dot with real width.
+        window.__mogging.agents.adopt(${paneId}, 'claude', '')
         const slot = document.querySelector('.layout-slot[data-pane-id="${paneId}"]')
         const left = slot?.querySelector('.pane-head-left'), header = slot?.querySelector('.pane-header')
         if (!left || !header) return { ok: false, headerH: -1, stateLeading: false, clipped: false, noWrapStyle: false, centersAligned: false, present: false }
@@ -412,14 +419,18 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       await sleep(400)
 
       // ══ (e-trail + attention) the honesty line and an attention state, in Settings ══
+      // The trail lives on Trust › Activity now (always open, no fold to prise); the
+      // failing-health tone reads on the Webhooks tab. Probe each where it renders.
       stage = 'e-trail-aa'
-      await openSettings('integrations')
-      await ES(`document.querySelectorAll('.collapsible-card[data-collapsible="trail"]:not(.is-open) .cc-toggle, .collapsible-card[data-collapsible="webhooks"]:not(.is-open) .cc-toggle').forEach((b) => b.click())`)
+      await openSettings('activity')
       await sleep(400)
       const trailHonestyOk = await ES<boolean>(
         `(document.querySelector('.trail-honesty')?.textContent || '').includes('never sent anywhere')`
       )
-      foldIn(await probeContrastAcrossThemes({ es: ES, sleep, selectors: ['.trail-honesty', '.cc-chip.is-failing'] }))
+      foldIn(await probeContrastAcrossThemes({ es: ES, sleep, selectors: ['.trail-honesty'] }))
+      await ES(`(document.querySelector('.settings-nav-item[data-target="webhooks"]')?.click(), 1)`)
+      await sleep(400)
+      foldIn(await probeContrastAcrossThemes({ es: ES, sleep, selectors: ['.evbridge-health.is-failing'] }))
       await leaveSettings()
       const e = {
         ok: safety.failures.length === 0 && safety.missing.length === 0 && gate.ok && gate.hasIcon && trailHonestyOk,
