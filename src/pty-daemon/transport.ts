@@ -4,7 +4,7 @@ import * as net from 'node:net'
 import { createLineFramer, encodeMessage, keyToBytes, DAEMON_PROTOCOL_VERSION } from '@contracts'
 import type { ClientMessage, ServerMessage } from '@contracts'
 import { ptyEmulation } from '@backend/platform/pty-host'
-import type { SessionManager, PaneSubscriber } from './session'
+import type { SessionManager, PaneSubscriber, PaneSession } from './session'
 import { log } from './lifecycle'
 
 export interface TransportHooks {
@@ -30,7 +30,12 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
   const server = net.createServer((sock) => {
     sock.setEncoding('utf8')
     let authed = false
-    const subscriptions = new Map<string, PaneSubscriber>()
+    // One entry per pane id THIS connection follows — holding the exact SESSION the sub is
+    // bound to, not just the sub. Pane ids are reused (a split takes the lowest free slot),
+    // so the session reference is what distinguishes generations: an id-keyed guard alone
+    // made a reused id's new session start with ZERO subscribers (its shell ran, its
+    // scrollback grew, but not one byte reached the app — a terminal that opens empty).
+    const subscriptions = new Map<string, { sub: PaneSubscriber; session: PaneSession }>()
     const send = (m: ServerMessage): void => {
       try {
         sock.write(encodeMessage(m))
@@ -42,26 +47,60 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
       if (!authed) sock.destroy()
     }, 3000)
 
+    /** Bind this connection to pane `id`'s CURRENT session. Idempotent for the same
+     *  generation; a NEW generation gets a fresh, gen-stamped subscriber and the old
+     *  generation is explicitly unbound — its pty's late exit (the process dies async,
+     *  after the kill) must never fan into this connection again, or it would print
+     *  "[process exited]" into the reused id's brand-new pane. */
     function subscribe(id: string): void {
-      if (subscriptions.has(id)) return
-      const sub: PaneSubscriber = {
-        send: (d) => send({ t: 'data', id, data: d }),
-        exit: (c) => send({ t: 'exit', id, code: c }),
-        state: (st) => send({ t: 'state', id, state: st }),
-        cwd: (p) => send({ t: 'cwd', id, cwd: p }),
-        limit: () => send({ t: 'limit', id })
+      const session = sessions.get(id)
+      if (!session) return
+      const prev = subscriptions.get(id)
+      if (prev) {
+        if (prev.session === session) {
+          session.subscribe(prev.sub) // same generation — Set-idempotent re-bind
+          return
+        }
+        prev.session.unsubscribe(prev.sub) // dead generation: silence it for good
       }
-      subscriptions.set(id, sub)
-      sessions.get(id)?.subscribe(sub)
+      // Every event this sub emits carries the generation it was bound to, so the client
+      // can gate on (id, gen) even for messages already in flight when the id was reused.
+      const gen = session.gen
+      const sub: PaneSubscriber = {
+        send: (d) => send({ t: 'data', id, gen, data: d }),
+        exit: (c) => {
+          // Self-cleanup: this generation is over. Only clear the entry if it still
+          // belongs to this sub — a later generation may have replaced it already.
+          if (subscriptions.get(id)?.sub === sub) subscriptions.delete(id)
+          send({ t: 'exit', id, gen, code: c })
+        },
+        state: (st) => send({ t: 'state', id, gen, state: st }),
+        cwd: (p) => send({ t: 'cwd', id, gen, cwd: p }),
+        limit: () => send({ t: 'limit', id, gen })
+      }
+      subscriptions.set(id, { sub, session })
+      session.subscribe(sub)
     }
 
     function handle(m: ClientMessage): void {
       switch (m.t) {
         case 'spawn': {
           const { pane, existed } = sessions.ensure(m.id, m.spec ?? {})
-          subscribe(m.id)
+          // Reply FIRST, then bind: subscribe() synchronously replays state/cwd, and the
+          // client gates every pane event on the generation it learns from `spawned` — a
+          // replay arriving ahead of the gen would be dropped as stale. Same tick either
+          // way, so no pty output can land between the scrollback snapshot and the bind.
           // The DAEMON owns the pty, so the daemon reports how it behaves — the app never guesses.
-          send({ t: 'spawned', id: m.id, existing: existed, scrollback: pane.scrollback, pty: ptyEmulation() })
+          send({
+            t: 'spawned',
+            id: m.id,
+            gen: pane.gen,
+            existing: existed,
+            restored: existed && pane.restoredPristine,
+            scrollback: pane.scrollback,
+            pty: ptyEmulation()
+          })
+          subscribe(m.id)
           break
         }
         case 'attach': {
@@ -70,8 +109,9 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
             send({ t: 'error', reason: 'nopane' })
             break
           }
+          // Reply before bind, same reason as `spawn`.
+          send({ t: 'attached', id: m.id, gen: pane.gen, scrollback: pane.scrollback })
           subscribe(m.id)
-          send({ t: 'attached', id: m.id, scrollback: pane.scrollback })
           break
         }
         case 'input':
@@ -230,7 +270,9 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
     sock.on('close', () => {
       clearTimeout(authTimer)
       authedClients.delete(send)
-      for (const [id, sub] of subscriptions) sessions.get(id)?.unsubscribe(sub)
+      // Unbind from the session each sub is ACTUALLY on (stored ref) — `sessions.get(id)`
+      // may already name a newer generation this connection never subscribed to.
+      for (const { sub, session } of subscriptions.values()) session.unsubscribe(sub)
       subscriptions.clear()
       if (authed) hooks.onClientCountChange(-1)
     })

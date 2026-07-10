@@ -268,7 +268,11 @@ export const agentsFeature: UiFeature = {
         },
         lastLaunch: (paneId: number) => ({ ...(lastLaunch.get(paneId) ?? {}) }),
         paneLive: (paneId: number) => isPaneLive(paneId),
-        refreshCommands: () => populate()
+        refreshCommands: () => populate(),
+        // Smoke/dev shim: register an agent session WITHOUT launching (the dot is
+        // gated on tracked sessions — smokes driving OSC into plain panes adopt one).
+        adopt: (paneId: number, provider = 'claude', cwd = '') =>
+          setPaneAgentSession(paneId as PaneId, { provider, cwd, adopted: true })
       }
     }
   }

@@ -1,5 +1,6 @@
 import type { PaneId } from '@contracts'
 import { publishSlots, clearSlots, type LayoutSlot } from '../../core/layout/slots'
+import { acknowledgeFinished } from '../../core/attention/attention-port'
 import { getTelemetry } from '../../core/telemetry'
 import { TEMPLATES, type GridSpec } from './templates'
 import {
@@ -23,11 +24,13 @@ import {
   type SplitDir
 } from './layout-tree'
 
-export { parseTree } from './layout-tree'
+export { parseTree, leafIds } from './layout-tree'
 export type { LayoutTreeNode, SplitDir } from './layout-tree'
 
 const GUTTER = 2 // px between panes — with each pane's 1px border: a 4px seam, matching the app edge
-const MIN_PANE_PX = 90 // resize floor — a pane can be small, never crushed to nothing
+const MIN_PANE_PX = 110 // resize floor — the bar's irreducible chrome (state dot + ⋯ + × +
+// tightened gaps + padding, see global.css's collapse ladder) needs 108px; below that the
+// × clips off the pane. A pane can be small, never crushed past its own controls.
 const DRAG_THRESHOLD = 6 // px of header movement before a click becomes a pane drag
 const ROOT_EDGE_PX = 14 // workspace-edge drop band ("make this a full column/row here")
 
@@ -84,7 +87,16 @@ export class GridLayout {
     host.append(this.grid)
     this.grid.addEventListener('mousedown', (e) => {
       const slot = (e.target as HTMLElement).closest('.layout-slot') as HTMLElement | null
-      if (slot) this.setFocused(slot)
+      if (slot) {
+        this.setFocused(slot)
+        // A CLICK is the acknowledgment that dismisses a sticky finished (green)
+        // dot — deliberately here and in keyboard nav (moveFocus), NOT in
+        // setFocused: reveal/rebuild/programmatic focus paths also run setFocused,
+        // and none of those mean "I looked at this pane" (the flag must survive a
+        // workspace switch that happens to auto-focus the finished pane).
+        const paneId = Number(slot.dataset.paneId)
+        if (paneId) acknowledgeFinished(paneId as PaneId)
+      }
     })
     this.grid.addEventListener('focusin', () => {
       const slot = (document.activeElement as HTMLElement | null)?.closest?.('.layout-slot') as HTMLElement | null
@@ -321,13 +333,22 @@ export class GridLayout {
     this.expandedId = localId
     this.expandMode = mode
     slot.classList.add('expanded')
+    // The header's matching expand button lights up off this stamp (global.css pairs
+    // it with the button's data-expand) — the pressed-state cue for the expand trio.
+    slot.dataset.expandMode = mode
     this.grid.classList.add('has-expand')
     this.reflow()
     this.setFocused(slot)
   }
 
   private clearExpand(): void {
-    if (this.expandedId != null) this.slotEls.get(this.expandedId)?.classList.remove('expanded')
+    if (this.expandedId != null) {
+      const prev = this.slotEls.get(this.expandedId)
+      if (prev) {
+        prev.classList.remove('expanded')
+        delete prev.dataset.expandMode // the header button's pressed cue goes with it
+      }
+    }
     this.expandedId = null
     this.expandMode = null
     this.grid.classList.remove('has-expand')
@@ -345,26 +366,27 @@ export class GridLayout {
     if (el) this.setFocused(el)
   }
 
-  /** One-shot attention flash on a pane's slot — the "you're needed HERE" cue the
-   *  workspace controller fires on activation (and on a flip-to-attention while the
-   *  workspace is already in front of you). Class off -> reflow -> on replays the
+  /** One-shot status flash on a pane's slot — the "look HERE" cue the workspace
+   *  controller fires on activation (and on a flip while the workspace is already in
+   *  front of you). `kind` picks the color: 'input' = blocked on you (vivid red),
+   *  'finished' = done working (vivid green). Class off -> reflow -> on replays the
    *  animation from frame 0 even mid-pulse; the timer (not animationend) removes it,
    *  because reduced-motion swaps the animation and its end event with it. */
-  pulseAttention(paneId: number): void {
+  pulseAttention(paneId: number, kind: 'input' | 'finished' = 'input'): void {
     const localId = paneId - this.baseId
     const el = this.slotEls.get(localId)
     if (!el) return
     const prev = this.pulseTimers.get(localId)
     if (prev != null) clearTimeout(prev)
-    el.classList.remove('attn-pulse')
+    el.classList.remove('attn-pulse', 'pulse-input', 'pulse-finished')
     void el.offsetWidth // commit the removal, so re-adding restarts the one-shot
-    el.classList.add('attn-pulse')
+    el.classList.add('attn-pulse', kind === 'finished' ? 'pulse-finished' : 'pulse-input')
     this.pulseTimers.set(
       localId,
       window.setTimeout(() => {
-        el.classList.remove('attn-pulse')
+        el.classList.remove('attn-pulse', 'pulse-input', 'pulse-finished')
         this.pulseTimers.delete(localId)
-      }, 2000) // > the 1.8s reduced-motion fade, so neither variant is cut short
+      }, 3200) // > the 3s pulse AND the 1.8s reduced-motion fade — neither is cut short
     )
   }
 
@@ -390,7 +412,12 @@ export class GridLayout {
       if (!best || score < best.score) best = { id, score }
     }
     const slot = best ? this.slotEls.get(best.id) : undefined
-    if (slot) this.setFocused(slot)
+    if (slot) {
+      this.setFocused(slot)
+      // Deliberate keyboard navigation INTO a pane counts as looking at it — the
+      // keyboard twin of the click acknowledgment in the grid mousedown handler.
+      if (best) acknowledgeFinished((this.baseId + best.id) as PaneId)
+    }
   }
 
   // ── Seam resize ──────────────────────────────────────────────────────────────

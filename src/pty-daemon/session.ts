@@ -10,7 +10,7 @@ import * as fs from 'node:fs'
 import { spawnPty, type IPty } from '@backend/platform/pty-host'
 import type { Approval, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { notifyEventToState } from '@contracts'
-import { ActivityTracker, OscParser, fileUriToPath } from '@backend/features/agent-state'
+import { ActivityTracker, OscParser, fileUriToPath, isTerminalReply } from '@backend/features/agent-state'
 import { SessionStore, resumeCommandFor } from '@backend/features/workspace'
 import { Mailbox } from './mailbox'
 import { Ledger } from './ledger'
@@ -48,6 +48,9 @@ interface PaneHooks {
 
 class PaneSession {
   readonly id: string
+  /** Session generation (v5): minted by the SessionManager, monotonic per daemon lifetime.
+   *  Pane IDS are reused; (id, gen) is what actually names ONE session on the wire. */
+  readonly gen: number
   readonly cwd: string
   readonly command?: string
   readonly remoteName?: string
@@ -59,15 +62,23 @@ class PaneSession {
   private readonly tracker: ActivityTracker
   private lastCwd?: string // last OSC-7-reported cwd; replayed to (re)attaching clients
   private subs = new Set<PaneSubscriber>()
+  /** True while this session is an UNTOUCHED cold-start restore: a fresh shell repainting
+   *  persisted scrollback, with no live agent in it and nothing typed since. The app reads
+   *  it (via `spawned.restored`) to decide that resume must TYPE — the opposite of a true
+   *  reattach. Cleared by the first client input, and never set when the daemon itself
+   *  typed a resume command (that pane is already handling its own continuity). */
+  private pristineRestore: boolean
 
   constructor(
     id: string,
+    gen: number,
     spec: SpawnSpec,
     hooks: PaneHooks,
     restore?: { scrollback: string; resumeCommand?: string | null },
     extraEnv: Record<string, string> = {}
   ) {
     this.id = id
+    this.gen = gen
     this.cols = spec.cols ?? 80
     this.rows = spec.rows ?? 24
     // `||`, not `??`: an EMPTY string is not a cwd. `??` let '' through to node-pty, which
@@ -83,6 +94,8 @@ class PaneSession {
     this.command = spec.run
     this.remoteName = spec.remote?.name
     if (restore?.scrollback) this.buffer = restore.scrollback // seed prior output for repaint
+    // Pristine only when the daemon is NOT typing the resume itself (see field doc).
+    this.pristineRestore = !!restore && !restore.resumeCommand
 
     const isWin = process.platform === 'win32'
     let shell = spec.shell ?? (isWin ? process.env.COMSPEC || 'cmd.exe' : process.env.SHELL || '/bin/bash')
@@ -175,9 +188,15 @@ class PaneSession {
   get scrollback(): string {
     return this.buffer
   }
+  /** Still an untouched cold-start restore? (See `pristineRestore` — the app's cue that
+   *  resume must type here.) */
+  get restoredPristine(): boolean {
+    return this.pristineRestore
+  }
   info(): PaneInfo {
     return {
       id: this.id,
+      gen: this.gen,
       cols: this.cols,
       rows: this.rows,
       title: this.command, // launch label only (e.g. "claude") — never a command line
@@ -224,6 +243,15 @@ class PaneSession {
     if (event === 'usage-limit') for (const s of this.subs) s.limit?.()
   }
   write(data: string): void {
+    // xterm's auto-replies (CPR/DA/focus/color reports — re-emitted for every query
+    // in a reattach's scrollback replay) ride this same channel but are NOT a human
+    // touching the pane: they must not clear the attention latch (a red pane went
+    // yellow across every renderer reload) nor mark a pristine restore as touched.
+    if (isTerminalReply(data)) {
+      this.proc.write(data)
+      return
+    }
+    this.pristineRestore = false // touched: from here on it's a live shell, not a restore
     this.tracker.input() // typing answers whatever the pane was blocked on
     this.proc.write(data)
   }
@@ -248,6 +276,10 @@ class PaneSession {
 
 export class SessionManager {
   private panes = new Map<string, PaneSession>()
+  /** Generation mint (v5): one stamp per PaneSession ever created by THIS daemon.
+   *  Uniqueness within the daemon's lifetime is all clients need — a reconnecting
+   *  client re-learns current gens from `welcome`/`spawned`, never from memory. */
+  private nextGen = 1
   private persistTimer?: NodeJS.Timeout
   /** Swarm substrate (Phase-4/01): the daemon-owned mailbox + role manifest. */
   readonly mailbox = new Mailbox()
@@ -290,12 +322,18 @@ export class SessionManager {
     this.store.saveWorkspaces(this.workspaces())
   }
 
-  private hooks(id: string): PaneHooks {
+  private hooks(id: string, self: () => PaneSession): PaneHooks {
     return {
       onExit: () => {
-        this.panes.delete(id)
-        this.mailbox.clearRole(id)
-        this.ledger.clearPane(id) // exits release territory immediately (4/02)
+        // Identity-guarded: a killed pane's exit event lands ASYNC (the pty dies after
+        // remove() already deleted it), and by then a reused id may hold a brand-new
+        // session. An unguarded delete orphaned that live session from the map — and
+        // wrongly cleared the NEW pane's role and claims.
+        if (this.panes.get(id) === self()) {
+          this.panes.delete(id)
+          this.mailbox.clearRole(id)
+          this.ledger.clearPane(id) // exits release territory immediately (4/02)
+        }
         this.schedulePersist(500)
       },
       onChange: () => this.schedulePersist(2000)
@@ -307,7 +345,8 @@ export class SessionManager {
   ensure(id: string, spec: SpawnSpec): { pane: PaneSession; existed: boolean } {
     const existing = this.panes.get(id)
     if (existing) return { pane: existing, existed: true }
-    const pane = new PaneSession(id, spec, this.hooks(id), undefined, this.extraEnv)
+    // `pane` is referenced lazily by the hook (onExit fires long after construction).
+    const pane: PaneSession = new PaneSession(id, this.nextGen++, spec, this.hooks(id, () => pane), undefined, this.extraEnv)
     this.panes.set(id, pane)
     this.schedulePersist(500)
     return { pane, existed: false }
@@ -323,7 +362,7 @@ export class SessionManager {
       const spec: SpawnSpec = { cwd: p.cwd, run: p.command }
       // Relaunch a known agent via its own resume (step 4) — never a frozen process.
       const resumeCommand = resumeCommandFor(p.command)
-      const pane = new PaneSession(p.id, spec, this.hooks(p.id), { scrollback: p.scrollback, resumeCommand }, this.extraEnv)
+      const pane: PaneSession = new PaneSession(p.id, this.nextGen++, spec, this.hooks(p.id, () => pane), { scrollback: p.scrollback, resumeCommand }, this.extraEnv)
       this.panes.set(p.id, pane)
     }
     return persisted.length

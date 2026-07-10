@@ -10,6 +10,14 @@ export function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
+    // The floor under user resizing. 600 is sized against the titlebar's rigid parts at
+    // its narrowest CSS state (lead ~70 + right cluster ~300 incl. the 140px Windows
+    // controls reserve + gaps + a usable command box — see the compression block in
+    // global.css; the two are a pair). VS Code ships 400×270 with a sparser bar; our
+    // right cluster alone is ~300px, so 400 would overlap. 400 height keeps one pane
+    // usable below the 44px bar.
+    minWidth: 600,
+    minHeight: 400,
     backgroundColor: '#0c0d0f', // matches --bg-app: no white flash, no seam behind the chrome
     // The window stays hidden until the renderer's first paint is ready
     // (`ready-to-show` below): the user never sees the empty-shell frame —

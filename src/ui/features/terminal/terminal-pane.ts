@@ -6,6 +6,7 @@ import {
   WorktreeChannels,
   type ContextUsage,
   type GitStatus,
+  type AgentState,
   type PaneId,
   type RemoveWorktreeResult
 } from '@contracts'
@@ -18,9 +19,9 @@ import { onTerminalFontSize, terminalFontSize, TERMINAL_LINE_HEIGHT } from '../.
 import { windowsPtyFor } from '../../core/terminal/pty-emulation'
 import { forgetPane, markPaneLive, markPaneReattached } from '../../core/terminal/liveness-port'
 import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
-import { setPaneState, clearPaneState } from '../../core/attention/attention-port'
+import { setPaneState, clearPaneState, paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
 import { setPaneCwd, clearPaneCwd, getPaneCwd } from '../../core/layout/pane-cwd'
-import { getPaneRole, onPaneRole, getPaneRemote, getPaneProfile } from '../../core/layout/pane-meta'
+import { getPaneRole, onPaneRole, getPaneRemote, getPaneProfile, setPaneProfile } from '../../core/layout/pane-meta'
 import { clearPaneCli, mcpChipForPane, onMcpStatusChange } from '../../core/agents/mcp-status-port'
 import { getPaneContext, onPaneContext, type PaneContext } from '../../core/terminal/context-port'
 import { clearPaneAgentSession, getPaneAgentSession, onPaneAgentSession } from '../../core/agents/agent-session-port'
@@ -112,11 +113,20 @@ export class TerminalPane {
   private agentChipUnsub?: () => void
   private scrollbar?: PaneScrollbarHandle
   private osc133?: { dispose(): void }
+  private stateDot?: HTMLSpanElement
+  private syncState?: () => void
+  private dotGateUnsub?: () => void
   private renameFn?: () => void
   private blocks?: BlockTracker
   private refitTimer?: ReturnType<typeof setTimeout>
+  private expandStateObs?: MutationObserver
   private refitLeading = true
   private disposed = false
+  /** Unsubscribers for this pane's terminalClient channel listeners. The channels are
+   *  session-lived while panes die on close — an undetached listener kept running against
+   *  a disposed xterm for the rest of the session (and xterm's WriteBuffer keeps queueing
+   *  into a disposed core, so the leak grew with every byte a reused id streamed). */
+  private readonly clientUnsubs: Array<() => void> = []
 
   constructor(
     private readonly id: PaneId,
@@ -204,28 +214,34 @@ export class TerminalPane {
 
     this.mountFileDrop(body)
 
-    terminalClient.onData((e) => {
-      if (e.id === this.id) {
-        if (!this.liveMarked) {
-          this.liveMarked = true
-          markPaneLive(this.id) // first PTY output — lineup launches may proceed
+    // Detached on dispose (clientUnsubs) and guarded on `disposed`: pane ids are reused,
+    // and a listener that outlived its pane wrote every byte of the SUCCESSOR pane's
+    // stream into a disposed xterm — for the rest of the session.
+    this.clientUnsubs.push(
+      terminalClient.onData((e) => {
+        if (e.id === this.id && !this.disposed) {
+          if (!this.liveMarked) {
+            this.liveMarked = true
+            markPaneLive(this.id) // first PTY output — lineup launches may proceed
+          }
+          this.term.write(e.data)
         }
-        this.term.write(e.data)
-      }
-    })
-    terminalClient.onExit((e) => {
-      if (e.id === this.id) {
-        this.term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n')
-        // No process, no agent: the context bar (and any future session-scoped
-        // chrome) must not outlive the pane's process (agent-session port -> the
-        // context feature drops every source).
-        clearPaneAgentSession(this.id)
-      }
-    })
-    // OSC 7 tells us where this pane's shell/agent actually is -> feed per-pane git (2/03).
-    terminalClient.onCwd((e) => {
-      if (e.id === this.id) setPaneCwd(this.id, e.cwd)
-    })
+      }),
+      terminalClient.onExit((e) => {
+        if (e.id === this.id && !this.disposed) {
+          this.term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n')
+          this.markDead('process exited') // gray dot: nothing lives here anymore
+          // No process, no agent: the context bar (and any future session-scoped
+          // chrome) must not outlive the pane's process (agent-session port -> the
+          // context feature drops every source).
+          clearPaneAgentSession(this.id)
+        }
+      }),
+      // OSC 7 tells us where this pane's shell/agent actually is -> feed per-pane git (2/03).
+      terminalClient.onCwd((e) => {
+        if (e.id === this.id && !this.disposed) setPaneCwd(this.id, e.cwd)
+      })
+    )
     this.term.onData((data) => terminalClient.write({ id: this.id, data }))
 
     // ResizeObserver is the one true fit driver: it fires for real resizes AND for
@@ -268,11 +284,26 @@ export class TerminalPane {
         // Reattached, not started: the detached daemon still held this pane's session, so
         // its agent is alive and mid-conversation. The restore lineup checks this before
         // typing (agents/index.ts) — otherwise `claude --resume` lands in Claude's prompt.
-        if (res.existing) markPaneReattached(this.id)
+        // A RESTORED session must NOT carry the mark: it is a fresh shell repainting
+        // persisted scrollback (daemon cold start, or the cross-version update
+        // migration) — no agent lives in it, so the lineup must type the resume, or the
+        // user gets painted history over a dead conversation.
+        if (res.existing && !res.restored) markPaneReattached(this.id)
+        // Second stateSync pull: the spawn just registered/reattached the session, so
+        // the backend now KNOWS this pane's state (the mountChrome pull may have run
+        // before it existed). Reattach to a busy/attention agent paints correctly here.
+        this.syncState?.()
       })
       .catch((err) => {
-        // A pane with no pty renders nothing and grows wrong. Never swallow it.
+        // A pane with no pty renders nothing and grows wrong. Never swallow it — and
+        // never leave the USER staring at a silently blank pane: say it in the pane,
+        // where the missing prompt would have been.
         console.error(`pane ${this.id}: spawn failed`, err)
+        if (!this.disposed) {
+          const why = err instanceof Error ? err.message : String(err)
+          this.term.write(`\x1b[91m[terminal failed to start]\x1b[0m\r\n\x1b[90m${why}\x1b[0m\r\n`)
+          this.markDead('terminal failed to start') // never lived — same gray as exited
+        }
       })
 
     // Blink the cursor only while this pane is focused — cuts idle repaints across many panes.
@@ -752,6 +783,18 @@ export class TerminalPane {
     void recordDrop(paths, quoted)
   }
 
+  /** Dead pane, dead dot: gray — deliberately NOT one of the three live colors, so
+   *  the last live state can't linger as a lie on a pane with no process. Also drops
+   *  the pane from the attention aggregation (a dead pane must not ring its tab).
+   *  Only for a VISIBLE (tracked) dot: an untracked pane has no dot to gray. */
+  private markDead(title: string): void {
+    if (this.stateDot && !this.stateDot.hidden) {
+      this.stateDot.dataset.state = 'exited'
+      this.stateDot.title = title
+    }
+    clearPaneState(this.id)
+  }
+
   /** Pane chrome — the terminal top bar, an exact take on the reference:
    *  LEFT   ✳ state glyph (the LEADING glyph) + optional remote/role/claims/mcp chips +
    *         the task title the agent set (OSC 0/2), else its label;
@@ -772,6 +815,13 @@ export class TerminalPane {
     state.className = 'pane-state'
     state.dataset.state = 'idle'
     state.title = 'idle'
+    // AVAILABILITY gate: hidden until this pane runs a provider the app wired
+    // end-to-end (a launcher session; custom:<cmd> and plain shells stay untracked —
+    // a dot that cannot know would sit on a yellow lie). The session subscription
+    // registered with the state wiring below unhides it; smokes driving OSC into
+    // plain panes adopt a session first (__mogging.agents.adopt).
+    state.hidden = true
+    this.stateDot = state // the exit paths (mount) gray it out via markDead
     const title = document.createElement('span')
     title.className = 'pane-title pane-label'
     title.title = 'Double-click to rename'
@@ -843,8 +893,8 @@ export class TerminalPane {
     // width, no bar variant. It exists only while an actual agent session does
     // (the agent-session lifecycle feeds the port and clears it on every exit
     // path). Color is a ramp, not a flag: the disc's arc goes green -> warning at
-    // 60 -> danger at 90 (the same "amber means look, red means act" grammar as
-    // the state dot); the text stays quiet like the reference.
+    // 60 -> danger at 90 ("amber means look, red means act"); the text stays
+    // quiet like the reference.
     const ctx = document.createElement('span')
     ctx.className = 'pane-context'
     ctx.hidden = true
@@ -943,6 +993,33 @@ export class TerminalPane {
         new CustomEvent('mogging:expand-pane', { bubbles: true, detail: { paneId: this.id, mode } })
       )
     }
+    // Each expand button carries data-expand=<mode>. The grid stamps the ACTIVE mode on
+    // the slot (data-expand-mode, grid-layout.ts) and global.css matches the pair, so
+    // the control that put the pane in its current mode reads PRESSED — tint + glow.
+    // Because that click now means "restore the grid", the button also TELLS the truth:
+    // both glyphs live in the DOM (the expand icon + its contract inverse) and the same
+    // CSS pair picks one — glow and glyph ride a single attribute, so they can never
+    // disagree. Tooltip/aria mirror via the observer below (CSS can't write attributes).
+    const expandBtns: HTMLButtonElement[] = []
+    const expandAct = (
+      name: IconName,
+      contractName: IconName,
+      label: string,
+      restoreLabel: string,
+      mode: 'full' | 'col' | 'row'
+    ): HTMLButtonElement => {
+      const b = act(name, label, () => expand(mode), 'pane-act-expand')
+      b.dataset.expand = mode
+      b.dataset.labelExpand = label
+      b.dataset.labelRestore = restoreLabel
+      b.setAttribute('aria-pressed', 'false')
+      b.querySelector('svg')?.classList.add('glyph-expand')
+      const alt = icon(contractName, 12)
+      alt.classList.add('glyph-restore')
+      b.append(alt)
+      expandBtns.push(b)
+      return b
+    }
     const menu = document.createElement('div')
     menu.className = 'menu pane-menu'
     menu.hidden = true
@@ -950,17 +1027,18 @@ export class TerminalPane {
       if (menu.hidden) this.buildMenu(menu)
       menu.hidden = !menu.hidden
     })
-    // The expand trio carries `pane-act-expand`: it is the SECOND thing the bar gives up
-    // when it runs out of room (after the branch chip), and the @container rules in
-    // global.css need a hook to retire it. Both survive in the ⋯ menu — see buildMenu.
+    // The expand trio carries `pane-act-expand`: it is the THIRD thing the bar gives up
+    // when it runs out of room (after the gauge's "% used" text and the branch chip),
+    // and the @container rules in global.css need a hook to retire it. Everything
+    // retired survives in the ⋯ menu — see buildMenu.
     // The context gauge LEADS the cluster (user ask: the visual lives on the right):
     // status beside the controls, never between them and the pane edge.
     actions.append(
       ctx,
       menuBtn,
-      act('expand', 'Expand to whole workspace (Ctrl+Shift+Enter)', () => expand('full'), 'pane-act-expand'),
-      act('expand-h', 'Expand across full width', () => expand('row'), 'pane-act-expand'),
-      act('expand-v', 'Expand to full height', () => expand('col'), 'pane-act-expand'),
+      expandAct('expand', 'contract', 'Expand to whole workspace (Ctrl+Shift+Enter)', 'Restore grid (Ctrl+Shift+Enter)', 'full'),
+      expandAct('expand-h', 'contract-h', 'Expand across full width', 'Restore grid', 'row'),
+      expandAct('expand-v', 'contract-v', 'Expand to full height', 'Restore grid', 'col'),
       act(
         'x',
         'Close terminal',
@@ -975,6 +1053,28 @@ export class TerminalPane {
     document.addEventListener('click', (e) => {
       if (!(e.target instanceof Node) || !actions.contains(e.target)) menu.hidden = true
     })
+
+    // Tooltip/aria half of the trio's truth-telling: when the slot's stamped mode
+    // matches a button, its label flips to the restore wording and aria-pressed goes
+    // true. A MutationObserver on the ONE attribute the grid writes — the same signal
+    // the CSS reads — so every path (trio click, ⋯ menu, Ctrl+Shift+Enter, implicit
+    // clears on split/close/template) lands here with no extra plumbing.
+    const slotEl = host.closest('.layout-slot') as HTMLElement | null
+    const syncExpandLabels = (): void => {
+      const active = slotEl?.dataset.expandMode
+      for (const b of expandBtns) {
+        const on = b.dataset.expand === active
+        const label = (on ? b.dataset.labelRestore : b.dataset.labelExpand) ?? ''
+        b.title = label
+        b.setAttribute('aria-label', label)
+        b.setAttribute('aria-pressed', String(on))
+      }
+    }
+    if (slotEl) {
+      this.expandStateObs = new MutationObserver(syncExpandLabels)
+      this.expandStateObs.observe(slotEl, { attributes: true, attributeFilter: ['data-expand-mode'] })
+      syncExpandLabels() // adopt a mode the slot already holds at mount
+    }
 
     header.append(left, git, actions)
 
@@ -1054,13 +1154,75 @@ export class TerminalPane {
     }
     applyGit(getPaneGit(this.id))
 
-    terminalClient.onState((e) => {
-      if (e.id === this.id) {
-        state.dataset.state = e.state
-        // Human words for the three states: gray = idle, amber = working (output
-        // is flowing / an OSC-integrated command runs), pulsing = blocked on you.
-        state.title = e.state === 'attention' ? 'needs your input' : e.state === 'busy' ? 'working' : 'idle'
-        setPaneState(this.id, e.state) // feed the rail / app attention aggregation
+    // ONE painter for both halves of the dot's reliability contract: the push path
+    // (state change events) and the pull path (stateSync below). 'exited' is
+    // terminal — this instance's PTY never comes back, so neither a stale in-flight
+    // event nor a late sync answer may repaint a dead pane as live.
+    // The dot RENDERS FROM THE PORT, not from the event that woke it: the port also
+    // owns the sticky finished flag ("green until the pane is clicked"), and painting
+    // from the one truth keeps dot, rail and pulses agreeing. paintState re-runs on
+    // every port change, so a click's acknowledgeFinished repaints idle right here.
+    const paintState = (): void => {
+      if (this.disposed || state.dataset.state === 'exited') return
+      const st = paneState(this.id)
+      const fin = st === 'idle' && paneFinished(this.id)
+      state.dataset.state = fin ? 'finished' : st
+      // Human words: yellow = idle, green = working (output is flowing / an
+      // OSC-integrated command runs), green + halo = FINISHED and unacknowledged
+      // (sticky until you click the pane), red pulsing = blocked on you. Gray
+      // (exited) is set by markDead, never by an event.
+      state.title = fin
+        ? 'finished working — click the pane to dismiss'
+        : st === 'attention'
+          ? 'needs your input'
+          : st === 'busy'
+            ? 'working'
+            : 'idle'
+    }
+    const applyState = (st: AgentState): void => {
+      // Hidden = untracked: the state machine keeps running backend-side, but an
+      // unavailable dot paints nothing and feeds no attention aggregation.
+      if (this.disposed || state.hidden || state.dataset.state === 'exited') return
+      setPaneState(this.id, st) // the port derives the sticky finished flag from this edge
+      paintState()
+    }
+    this.clientUnsubs.push(onAttentionChange(paintState))
+    this.clientUnsubs.push(
+      terminalClient.onState((e) => {
+        if (e.id === this.id) applyState(e.state)
+      })
+    )
+    // The pull half: change events this pane never HEARD (renderer reload, app boot
+    // against a surviving daemon holding a busy/attention agent) are not coming back
+    // — the backend only pushes on change. Ask now, and mount() asks again once the
+    // spawn settles (a fresh session registers its tracker only then).
+    this.syncState = (): void => {
+      terminalClient
+        .stateSync(this.id)
+        .then((st) => {
+          if (st) applyState(st)
+        })
+        .catch(() => undefined) // a missing handler mid-boot just means nothing to sync yet
+    }
+    this.syncState()
+    // The availability gate (goal: the dot only claims what the wired providers can
+    // back). A launcher session with a real adapter id unhides the dot and paints the
+    // CURRENT state; the session ending (agent exited to shell) hides and resets it.
+    // Two exceptions: dead-gray persists — a death observed while tracked is PTY fact,
+    // and the session-clear that FOLLOWS the exit must not erase it — and a custom:
+    // provider never unhides (we can't wire what we don't know).
+    this.dotGateUnsub = onPaneAgentSession((paneId, s) => {
+      if (paneId !== this.id || this.disposed) return
+      if (state.dataset.state === 'exited') return
+      const tracked = !!s && !s.provider.startsWith('custom:')
+      if (state.hidden === !tracked) return // already in the right visibility
+      state.hidden = !tracked
+      if (tracked) {
+        this.syncState?.() // appear with the truth, not the mount default
+      } else {
+        clearPaneState(this.id) // an untracked pane must not hold the rail's attention
+        state.dataset.state = 'idle'
+        state.title = 'idle'
       }
     })
     this.paneLabelUnsub = onPaneLabel((paneId, text) => {
@@ -1120,10 +1282,23 @@ export class TerminalPane {
     }
     const sepLayout = document.createElement('div')
     sepLayout.className = 'menu-sep'
+    // The menu mirrors the trio's truth-telling. It is REBUILT on every open, so the
+    // slot's stamp read here is always current: the active mode's entry shows the
+    // contract glyph + restore wording, the other two keep offering their switch.
+    const activeMode = (menu.closest('.layout-slot') as HTMLElement | null)?.dataset.expandMode
+    const expandItem = (
+      mode: 'full' | 'col' | 'row',
+      name: IconName,
+      contractName: IconName,
+      label: string
+    ): HTMLButtonElement =>
+      activeMode === mode
+        ? item(contractName, 'Restore grid', () => expandFromMenu(mode))
+        : item(name, label, () => expandFromMenu(mode))
     menu.append(
-      item('expand', 'Expand to whole workspace', () => expandFromMenu('full')),
-      item('expand-h', 'Expand across full width', () => expandFromMenu('row')),
-      item('expand-v', 'Expand to full height', () => expandFromMenu('col')),
+      expandItem('full', 'expand', 'contract', 'Expand to whole workspace'),
+      expandItem('row', 'expand-h', 'contract-h', 'Expand across full width'),
+      expandItem('col', 'expand-v', 'contract-v', 'Expand to full height'),
       item('plus', 'Split right — new terminal', () => splitFromMenu('h')),
       item('plus', 'Split down — new terminal', () => splitFromMenu('v')),
       sepLayout,
@@ -1134,6 +1309,29 @@ export class TerminalPane {
         if (cwd) void copyText(cwd, 'terminal')
       })
     )
+    // Role + MCP status: the ladder retires their chips on narrow panes, and this
+    // menu is where retired things live on — they were the two entries MISSING from
+    // the mirror (an "mcp !" needing re-auth was unfindable below 590px). Same
+    // presence rules as their chips, stated as notes.
+    const roleName = getPaneRole(this.id)
+    if (roleName) {
+      const note = document.createElement('div')
+      note.className = 'menu-note'
+      note.textContent = `Role: ${roleName}`
+      menu.append(note)
+    }
+    const mcp = mcpChipForPane(this.id)
+    if (mcp && (mcp.connected > 0 || mcp.attention || mcp.restartNew > 0)) {
+      const note = document.createElement('div')
+      note.className = 'menu-note'
+      note.textContent =
+        mcp.restartNew > 0
+          ? `MCP: restart to pick up ${mcp.restartNew} new tool${mcp.restartNew === 1 ? '' : 's'}`
+          : mcp.attention
+            ? 'MCP: a tool needs re-authorization (Settings › MCP servers)'
+            : `MCP: ${mcp.connected} tool${mcp.connected === 1 ? '' : 's'} connected`
+      menu.append(note)
+    }
     // Remote pane (4/05): local repo tools are OFF — say so instead of lying.
     if (getPaneRemote(this.id)) {
       const note = document.createElement('div')
@@ -1150,9 +1348,9 @@ export class TerminalPane {
       note.textContent = `Profile: ${profileName}`
       menu.append(note)
     }
-    // Context bar mirror: on a narrow pane the bar compresses to a ring whose numbers
-    // live in a tooltip — the menu states them plainly (the bar is a summary; this
-    // menu is the truth). Counts only, same as the wire.
+    // Context gauge mirror: on a crowded or narrow pane the gauge compresses to its
+    // disc and the "% used" text retires — the menu states the numbers plainly (the
+    // bar is a summary; this menu is the truth). Counts only, same as the wire.
     const ctxUsage = getPaneContext(this.id)
     if (ctxUsage && ctxUsage !== 'pending') {
       const k = (n: number): string => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
@@ -1275,6 +1473,15 @@ export class TerminalPane {
           mcp.textContent = 'restart +2'
           mcp.classList.add('is-restart')
         }
+        // The branch chip too: the smoke's measured pane is a REMOTE slot, which never
+        // gets a local cwd seed (publishPaneCwds skips remotes), so no git port push
+        // ever lights it — force the rendered form the ladder is asserted against.
+        const git = host.querySelector<HTMLElement>('.pane-git')
+        if (git && !git.classList.contains('has-git')) {
+          const branch = git.querySelector<HTMLElement>('.pane-branch')
+          if (branch) branch.textContent = 'feat/collapse-ladder'
+          git.classList.add('has-git')
+        }
         const ctxEl = host.querySelector<HTMLElement>('.pane-context')
         if (ctxEl) {
           ctxEl.hidden = false
@@ -1326,6 +1533,10 @@ export class TerminalPane {
 
   dispose(): void {
     this.disposed = true
+    // Detach from the terminal channels FIRST: from here on, events for this id belong
+    // to whichever pane next takes it — never to this dead xterm.
+    for (const unsub of this.clientUnsubs) unsub()
+    this.clientUnsubs.length = 0
     if (this.refitTimer) {
       clearTimeout(this.refitTimer)
       this.refitTimer = undefined
@@ -1347,10 +1558,19 @@ export class TerminalPane {
     this.ctxUnsub?.()
     this.agentSessionUnsub?.()
     this.agentChipUnsub?.()
+    this.dotGateUnsub?.()
     this.scrollbar?.dispose()
     this.osc133?.dispose()
     clearPaneCli(this.id)
+    // Launch-scoped identity dies with the pane, not with the id: a killed pane's exit
+    // never reaches the renderer (the relay tombstones it), so without these the NEXT
+    // pane to take this id mounted wearing the dead one's agent session (provider chip +
+    // context gauge), launch-profile note, and label.
+    clearPaneAgentSession(this.id)
+    setPaneProfile(this.id, undefined)
+    setPaneLabel(this.id, '')
     this.visObs?.disconnect()
+    this.expandStateObs?.disconnect()
     this.releaseWebgl()
     this.resizeObs.disconnect()
     terminalClient.kill({ id: this.id })

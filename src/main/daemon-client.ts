@@ -15,7 +15,8 @@ import type {
 // --- endpoint discovery paths (MUST match src/pty-daemon/lifecycle.ts) ---
 // runtimeSegment(channelFromEnv()): dev and installed releases never share a daemon, even at the
 // same protocol version. The spawned daemon inherits MOGGING_CHANNEL, so it derives the SAME dir.
-function runtimeDir(): string {
+// Exported for daemon-migrate.ts, which scans SIBLING version dirs under the same root.
+export function runtimeDir(): string {
   const base =
     process.platform === 'win32'
       ? process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
@@ -75,18 +76,22 @@ export async function ensureDaemon(daemonEntry: string): Promise<DaemonEndpoint>
 }
 
 export interface DaemonEvents {
+  /** A pane's CURRENT session generation, learned from a `spawned`/`attached` reply —
+   *  fired BEFORE that reply's scrollback replay, so a consumer that gates events on
+   *  (id, gen) accepts the replay itself. Pane ids are reused; gens are not (v5). */
+  onGen?: (id: string, gen: number) => void
   /** Pane output (also delivers scrollback on (re)attach, for repaint). */
-  onData?: (id: string, data: string) => void
-  onExit?: (id: string, code: number) => void
-  onState?: (id: string, state: AgentState) => void
+  onData?: (id: string, data: string, gen: number) => void
+  onExit?: (id: string, code: number, gen: number) => void
+  onState?: (id: string, state: AgentState, gen: number) => void
   /** A pane's OSC-7 cwd (also replayed on (re)attach) — feeds per-pane git (2/03). */
-  onCwd?: (id: string, cwd: string) => void
+  onCwd?: (id: string, cwd: string, gen: number) => void
   /** Panes the daemon already had when we connected (reconnect => reattach these). */
   onWelcome?: (panes: PaneInfo[]) => void
   /** Ownership-ledger snapshot — replies AND unsolicited pushes on change (4/02). */
   onOwners?: (claims: Claim[]) => void
   /** A pane's agent reported a usage limit (4/04 failover). */
-  onLimit?: (id: string) => void
+  onLimit?: (id: string, gen: number) => void
   /** Reviewer-gate sign-off list — replies AND pushes on change (4/03 polish). */
   onApprovals?: (list: Approval[]) => void
   onClose?: () => void
@@ -140,36 +145,40 @@ export class DaemonClient {
         onWelcome(m.panes)
         break
       case 'data':
-        this.events.onData?.(m.id, m.data)
+        this.events.onData?.(m.id, m.data, m.gen)
         break
       case 'spawned': {
-        if (m.scrollback) this.events.onData?.(m.id, m.scrollback)
+        // Gen FIRST: consumers gate every pane event on (id, gen), and the scrollback
+        // replay below must be accepted by the generation it belongs to.
+        this.events.onGen?.(m.id, m.gen)
+        if (m.scrollback) this.events.onData?.(m.id, m.scrollback, m.gen)
         // `existing` is how a caller learns the daemon reattached us to a session that
         // was already running (it is detached — ADR 0006). Nothing else can tell them.
         const waiters = this.spawnWaiters.get(m.id)
         if (waiters) {
           this.spawnWaiters.delete(m.id)
-          for (const done of waiters) done({ existing: m.existing === true, pty: m.pty })
+          for (const done of waiters) done({ existing: m.existing === true, restored: m.restored === true, pty: m.pty })
         }
         break
       }
       case 'attached':
-        if (m.scrollback) this.events.onData?.(m.id, m.scrollback)
+        this.events.onGen?.(m.id, m.gen)
+        if (m.scrollback) this.events.onData?.(m.id, m.scrollback, m.gen)
         break
       case 'exit':
-        this.events.onExit?.(m.id, m.code)
+        this.events.onExit?.(m.id, m.code, m.gen)
         break
       case 'state':
-        this.events.onState?.(m.id, m.state)
+        this.events.onState?.(m.id, m.state, m.gen)
         break
       case 'cwd':
-        this.events.onCwd?.(m.id, m.cwd)
+        this.events.onCwd?.(m.id, m.cwd, m.gen)
         break
       case 'owners':
         this.events.onOwners?.(m.claims)
         break
       case 'limit':
-        this.events.onLimit?.(m.id)
+        this.events.onLimit?.(m.id, m.gen)
         break
       case 'approvals': {
         const waiter = this.approvalWaiters.shift()

@@ -151,7 +151,7 @@ separate session partitions, switched in the header:
   (session-scoped, cleared on Stop), cross-origin navigation raises an alert,
   and every act/refusal/confirm lands in the local activity trail — the audit
   ledger (8/05): per-workspace JSONL under userData, ring-capped, reviewable
-  in Settings § Integrations (filters, outcome badges, export, per-workspace
+  in Settings § Activity (filters, outcome badges, export, per-workspace
   clear) with the last acts echoed on the dock's possession surface. Origins
   + verbs only, structurally (every field length-capped) — never page
   content, typed text, eval bodies, or cookies; local forever, never

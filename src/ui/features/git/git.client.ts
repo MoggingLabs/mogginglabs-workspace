@@ -11,6 +11,6 @@ export const gitClient = {
     getBridge().invoke(GitChannels.query, cwd) as Promise<GitStatus | null>,
   watch: (paneId: PaneId, cwd: string): void => getBridge().send(GitChannels.watch, { paneId, cwd }),
   unwatch: (paneId: PaneId): void => getBridge().send(GitChannels.unwatch, { paneId }),
-  onChange: (cb: (e: GitStatusEvent) => void): void =>
+  onChange: (cb: (e: GitStatusEvent) => void): (() => void) =>
     getBridge().on(GitChannels.change, (p) => cb(p as GitStatusEvent))
 }

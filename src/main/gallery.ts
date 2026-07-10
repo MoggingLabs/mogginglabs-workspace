@@ -265,8 +265,9 @@ export function runGallery(win: BrowserWindow): void {
           await ES(`(() => { const c = document.querySelector('.collapsible-card[data-collapsible="privacy"]'); const t = c?.querySelector('.cc-toggle'); if (t && !c.classList.contains('is-open')) t.click(); c?.scrollIntoView({ block: 'center' }) })()`)
           await sleep(300)
           await snap(`${tag}-usage-tab-privacy`)
-          // Settings § Integrations (8/05): the Activity trail with seeded
-          // fixture entries — refs only, offline, both outcomes visible.
+          // Settings § Activity (8/05; its own Trust tab since the split): the
+          // trail with seeded fixture entries — refs only, offline, both
+          // outcomes visible.
           const galleryWs = 'gallery-fixture-ws'
           const seedTs = Date.now()
           recordTrail({ ts: seedTs - 40_000, source: 'web', workspaceId: galleryWs, verb: 'click', target: 'https://staging.example.dev', outcome: 'ok' })
@@ -277,16 +278,17 @@ export function runGallery(win: BrowserWindow): void {
           await ES(`document.querySelector('.settings-nav-item[data-target="integrations"]')?.click()`)
           await sleep(500)
           await snap(`${tag}-integrations-settings`) // overview band + the folded cards (8.5/05)
-          // EXPAND, then scroll. The trail is a collapsed Card now, and both of these
-          // lines use `?.`, so a fold would not throw — it would silently photograph a
-          // closed accordion and call it the Activity trail. `.cc-toggle` is idempotent
-          // only in one direction, so check before clicking.
-          await ES(`(() => { const c = document.querySelector('.trail-activity'); if (c && !c.classList.contains('is-open')) c.querySelector('.cc-toggle')?.click() })()`)
-          await sleep(250)
-          await ES(`document.querySelector('.trail-activity')?.scrollIntoView({ block: 'start' })`)
+          // The trail lives on Trust › Activity now — its own tab, always open, no
+          // fold to check before shooting. Refresh is still the first `.trail-btn`.
+          await ES(`document.querySelector('.settings-nav-item[data-target="activity"]')?.click()`)
+          await sleep(400)
           await ES(`(document.querySelector('.trail-activity .trail-btn')?.click(), 1)`) // Refresh — still first
           await sleep(500)
-          await snap(`${tag}-integrations-activity`)
+          await snap(`${tag}-settings-activity`)
+          // The event bridge on its own tab (Agents & tools › Webhooks).
+          await ES(`document.querySelector('.settings-nav-item[data-target="webhooks"]')?.click()`)
+          await sleep(400)
+          await snap(`${tag}-settings-webhooks`)
           clearTrail(galleryWs)
           // 8.5/04: the rebuilt shell — grouped nav with icons, per-tab
           // SectionHeader, Cards. Appearance and the two consent tabs carry the

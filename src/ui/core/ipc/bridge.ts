@@ -4,7 +4,10 @@
 export interface Bridge {
   invoke(channel: string, payload?: unknown): Promise<unknown>
   send(channel: string, payload: unknown): void
-  on(channel: string, cb: (payload: unknown) => void): void
+  /** Subscribe to a channel. Returns the unsubscriber — per-pane consumers (anything
+   *  created and disposed within a session) MUST call it on dispose, or the listener
+   *  runs forever against a dead owner. App-lifetime ports may ignore it. */
+  on(channel: string, cb: (payload: unknown) => void): () => void
   /** Resolve a dropped File to its absolute path (Electron's webUtils; `File.path` was
    *  removed in v32). Absent in non-Electron hosts, so callers must guard. */
   getPathForFile?(file: File): string

@@ -16,6 +16,9 @@ export function createTerminalModule(): FeatureModule {
         cwd: (e) => ctx.emit(TerminalChannels.cwd, e)
       })
       ctx.handle(TerminalChannels.spawn, (p) => service!.spawn(p))
+      // The dot's reliability contract: a mounting pane PULLS its current state —
+      // events fire on change only, and a reloaded renderer heard none of them.
+      ctx.handle(TerminalChannels.stateSync, (p) => service!.stateOf((p as { id: number }).id))
       ctx.on(TerminalChannels.write, (p) => service!.write(p))
       ctx.on(TerminalChannels.resize, (p) => service!.resize(p))
       ctx.on(TerminalChannels.kill, (p) => service!.kill(p))

@@ -4,6 +4,7 @@ import { AgentChannels, type AgentCommandRequest } from '@contracts'
 import { getSettingsStore } from './app-settings'
 import { materializeToolPlanAtLaunch } from './tool-plan'
 import { claudeStatuslineArgs } from './context'
+import { bellLaunchExtras } from './notify-hook'
 
 // App-wiring: expose the agent adapters (detect installed CLIs + build a launch command) to
 // the renderer. The launch itself is just writing the returned command into a pane
@@ -35,8 +36,13 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
     const mcpArgs = materializeToolPlanAtLaunch(req) ?? []
     // Context relay: claude launches carry a generated --settings whose statusline
     // pushes Claude's OWN context numbers to the pane's gauge (src/main/context.ts).
+    // The same file carries claude's notify hooks + terminal_bell (the bell layer).
     const ctxArgs = req.agentId === 'claude' ? claudeStatuslineArgs() : []
-    return buildLaunchCommand(req.agentId, req.cwd, req.resume, profile?.env, [...mcpArgs, ...ctxArgs])
+    // The bell layer for the other CLIs (notify-hook.ts): session-scoped args/env
+    // that make the provider ring its pane. Profile env wins a key collision — a
+    // user who pointed a profile at their own notify setup said so on purpose.
+    const bell = bellLaunchExtras(req.agentId)
+    return buildLaunchCommand(req.agentId, req.cwd, req.resume, { ...bell.env, ...profile?.env }, [...mcpArgs, ...ctxArgs, ...bell.args])
   })
   ipcMain.handle(AgentChannels.install, (_e, agentId: string) => installs!.start(String(agentId)))
   ipcMain.handle(AgentChannels.installStates, () => installs?.states() ?? [])

@@ -25,10 +25,18 @@ export type PtyEmulation = { backend: 'posix' } | { backend: 'conpty'; buildNumb
  *  launch command into the pane: whatever was running is still running, and the text
  *  would land in ITS stdin, not a shell prompt.
  *
+ *  `restored` narrows `existing`: the session exists but is a cold-start RESTORE — a fresh
+ *  shell repainting persisted scrollback, untouched since (no live agent, nothing typed).
+ *  The two must be distinguishable or resume breaks in one direction or the other: typing
+ *  `claude --resume` into a truly-live reattach lands in the running agent's stdin, while
+ *  NOT typing it into a restored pane leaves a dead agent behind painted history. Callers
+ *  treat `existing && !restored` as "hands off" and `restored` as "safe to resume into".
+ *
  *  `pty` rides this answer because it must reach xterm before the first byte of output does,
  *  and spawn is the one message that is always awaited before a pane is used. */
 export interface SpawnResult {
   existing: boolean
+  restored: boolean
   pty: PtyEmulation
 }
 export interface WriteCommand {
@@ -41,6 +49,16 @@ export interface ResizeCommand {
   rows: number
 }
 export interface KillCommand {
+  id: PaneId
+}
+
+/** State-sync PULL (the dot's reliability contract): a pane asks for its CURRENT
+ *  agent state when it mounts. Events alone cannot keep the dot honest — the daemon
+ *  pushes state only on CHANGE, the spawn ack carries none, and a welcome replay
+ *  fired before the pane's listener existed is simply lost (renderer reload, app
+ *  boot against a surviving daemon). Answer is the live state, or null when the
+ *  backend holds no session for the id. */
+export interface StateSyncRequest {
   id: PaneId
 }
 

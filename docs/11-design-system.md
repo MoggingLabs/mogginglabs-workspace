@@ -272,6 +272,18 @@ destructive `confirm` focuses the safe action and can never be silenced).
   keeps icons clear of the OS buttons no matter which mood env() is in. macOS keeps
   a plain `--sp-3` (controls live top-left, cleared by brand padding).
   Drag audit: the whole strip drags; buttons/inputs/right-cluster opt out.
+- **Under compression the bar reorganizes — it never overlaps.** TRUE center prices
+  the bar at ~890px (the 1fr sides are equal, so the rigid right cluster — ~300px
+  with the controls reserve — counts double). Below 900px the grid trades true
+  center for content-sized sides (`auto minmax(0,1fr) auto`; the command box centers
+  in the *remaining* space, VS Code's trade) and sheds ornaments outermost-first:
+  version (900) → brand name (760; the logo stays, like the Win-titlebar icon) →
+  below the floor, kbd hint (560) → label (480). Cluster children are `flex: none` —
+  a squeezed bar never shrink-distorts icons or hit targets (the 29px contract in
+  the CHROMEUX (a) gate holds at every width). The floor is real: `window.ts` sets
+  `minWidth 600 × minHeight 400` (VS Code ships 400×270, but its bar is sparser —
+  our controls reserve alone is 140px). The ladder and the floor are a pair: move
+  one, re-walk the other.
 - **Window state is event-driven** (`shell:windowState`, pushed from main on
   enter/leave-fullscreen + (un)maximize + once per load — never polled). The
   renderer mirrors it as `#app.is-fullscreen` / `#app.is-maximized`. Main tracks
@@ -422,12 +434,15 @@ re-warm must not hitch).
 `TwoColumn`'s first *feature* customer. A grouped nav rail | a scrolling column of
 `Card`s — no bare-control walls left outside Integrations and Usage (step 05).
 
-- **The nav is a map, not a list.** Nine flat rows say only "there are nine". Four
+- **The nav is a map, not a list.** Flat rows say only how many there are. Four
   named groups — Workspace · Agents & tools · Trust · System — plus one icon per tab
   say *where a knob lives* before you read a label. Grouping is visual: every knob
   keeps its tab, every tab keeps its `data-target` id, and a tab absent from
   `NAV_GROUPS` is appended (and warned about in DEV) rather than silently dropped.
   Nav order is therefore deliberately **not** section order; SETSHELL asserts both.
+  The tab split (post-8.5): Webhooks (the event bridge) sits under Agents & tools,
+  and Activity (the agent audit trail) under Trust — neither is an MCP knob, so
+  neither lives inside Integrations anymore.
 - **One knob, one head.** A `Card` holding a single control uses its own
   `SectionHeader` as that control's label — nesting a `FieldGroup` there would print
   the name twice. Cards with two or more knobs give each one a `FieldGroup`.
@@ -540,6 +555,7 @@ icon-sheet shots at 100/125/150% zoom (`__mogging.iconSheet()`, DEV-only).
 | `layout-grid`, `plus`, `search`, `sparkles`, `pencil`, `trash`, `clock`, `bookmark`, `arrow-right`, `chevron-left` | launcher/menus/wizard | keep |
 | `chevron-right` | breadcrumb separators, disclosure chevrons | **re-added 8.5** (deleted in 5/03 when unused; a name is never *repurposed*, and this is the same metaphor) |
 | `shield` · `user` · `plug` · `gauge` · `keyboard` | Settings nav (Trust · Profiles · Integrations · Usage · Shortcuts) | **new 8.5/04** — a nav of nine identical rows is a list, not a map. `keyboard` gets a SMALL variant: eight key-dots smudge below 12px, so the frame + spacebar carry it |
+| `bell` · `activity` | Settings nav (Webhooks · Activity) | **tab split** — the event bridge and the audit trail left Integrations for their own tabs; `bell` was already the notify metaphor, `activity` is the Lucide pulse line |
 | *(deleted)* `command`, `enter`, `resume`, `minimize`, `chevron-down`, `settings`, `maximize`, `chevrons-left-right`, `chevrons-up-down` | — | unused or replaced; names never repurposed |
 
 Deliberate non-icon: role chips (WORKER/REVIEWER) stay text-only — roles are

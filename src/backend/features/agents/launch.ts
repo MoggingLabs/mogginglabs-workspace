@@ -13,7 +13,11 @@ function cdPrefix(cwd: string): string {
 }
 
 /** Platform/shell-aware env-POINTER prefix (Phase-4/04 profiles). Values are already
- *  deny-listed at the persistence boundary — never secrets (ADR 0002). */
+ *  deny-listed at the persistence boundary — never secrets (ADR 0002). A value that
+ *  itself contains a double quote (the bell layer's `node "<script>" --event done`)
+ *  switches to single-quoted rendering on PowerShell/POSIX — the plain double-quoted
+ *  form would end the string at the value's first quote. cmd.exe needs no switch:
+ *  `set "K=V"` strips only the OUTER quotes, inner ones ride through verbatim. */
 function envPrefix(env: Record<string, string> | undefined): string {
   if (!env) return ''
   const entries = Object.entries(env).filter(([k, v]) => k && typeof v === 'string')
@@ -21,7 +25,9 @@ function envPrefix(env: Record<string, string> | undefined): string {
   if (process.platform === 'win32') {
     const shell = defaultShell().toLowerCase()
     if (shell.includes('powershell') || shell.includes('pwsh')) {
-      return entries.map(([k, v]) => `$env:${k}="${v}"; `).join('')
+      return entries
+        .map(([k, v]) => (v.includes('"') ? `$env:${k}='${v.replace(/'/g, "''")}'; ` : `$env:${k}="${v}"; `))
+        .join('')
     }
     return entries.map(([k, v]) => `set "${k}=${v}" && `).join('') // cmd.exe
   }
@@ -29,7 +35,9 @@ function envPrefix(env: Record<string, string> | undefined): string {
   // both persist the pointers in the pane session, so the POSIX pane must too
   // (cross-platform parity; an assignment prefix dies with the agent process,
   // which also broke usage-limit relaunches inheriting the pane state on Linux).
-  return entries.map(([k, v]) => `export ${k}="${v}" && `).join('')
+  return entries
+    .map(([k, v]) => (v.includes('"') ? `export ${k}='${v.replace(/'/g, "'\\''")}' && ` : `export ${k}="${v}" && `))
+    .join('')
 }
 
 /**

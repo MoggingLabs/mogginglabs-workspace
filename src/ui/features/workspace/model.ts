@@ -25,8 +25,8 @@ export interface WorkspaceMeta {
  * color holds ≥7:1 on the dark app background as-is, and ≥4.5:1 on white through the
  * light theme's `--ws-ink` ramp stop (color-mix 54% toward black). Hues are spread so
  * ADJACENT ordinals never collide (min gap ≈49°; the old amber sat 12° from brand).
- * Brand orange is deliberately LAST: the *current* workspace is always marked by the
- * brand-orange outline, so early workspaces keep their icon accent separable from it.
+ * Brand orange is deliberately LAST: brand orange always means "needs you" (the
+ * `.ws-attn` attention badge), so early workspaces keep their accent separable from it.
  */
 export const WORKSPACE_COLORS = [
   '#2dd4bf', // teal

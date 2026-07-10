@@ -1,11 +1,9 @@
 import {
   AgentChannels,
-  BRIDGE_EVENTS,
   IntegrationsChannels,
   planHasServerForCli,
   planSignature,
   toolCellState,
-  type BridgeEventName,
   type McpStatusSnapshot,
   type WorkspaceToolPlan,
   type McpAuthKind,
@@ -13,26 +11,24 @@ import {
   type McpCliStatus,
   type McpPreset,
   type McpServerEntry,
-  type TrailEntry,
-  type TrailSource,
   type WorkspaceIntegrationsGrant
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { Button, EmptyState, confirmDialog, createCollapsibleCard, createModal, el, icon, loadingRow, providerLogo, showToast } from '../../components'
+import { Button, EmptyState, createCollapsibleCard, createModal, el, icon, loadingRow, providerLogo, showToast } from '../../components'
 import type { CollapsibleCardHandle } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onToolPlanPanesChange, restartNeededPaneIds } from '../../core/agents/toolplan-panes'
 import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
 import { onViewChange } from '../../core/shell/view-port'
 import { requestIntegrationsFocus, takeIntegrationsFocus, type IntegrationsFocus } from '../../core/shell/integrations-focus-port'
-import { fmtAge } from '../usage'
 
 // ── Attention, reported upward (8.5/05) ──────────────────────────────────────
-// Nine sections became seven folded Cards, and NOT ONE of this file's attention
-// states is knowable at build time — every one arrives from an async refresh or a
-// pushed channel. So a section that discovers it needs you says so, and the shell
-// puts that on the fold's header, where a collapse cannot bury it.
-type SectionId = 'catalog' | 'servers' | 'keys' | 'matrix' | 'webhooks' | 'grants' | 'trail'
+// Five folded Cards (webhooks and the trail earned their own tabs), and NOT ONE
+// of this file's attention states is knowable at build time — every one arrives
+// from an async refresh or a pushed channel. So a section that discovers it needs
+// you says so, and the shell puts that on the fold's header, where a collapse
+// cannot bury it.
+type SectionId = 'catalog' | 'servers' | 'keys' | 'matrix' | 'grants'
 interface SectionSignal {
   /** Rendered in the collapsed header. Null clears. */
   chip: Node | null
@@ -75,11 +71,12 @@ interface SyncedBlock {
 
 /**
  * Settings § Integrations — ONE module, one home (the 7/12 lesson; index.ts
- * stays an assembler). 8/05 landed the Activity trail; 8/06 grows the section
- * into the manager: the server REGISTRY fanned out per CLI dialect (diff
- * preview, surgical writes, drift chips) and the per-workspace GRANTS
- * (write tools + act origins). 07/08 extend this module in place — no
- * integrations knob renders anywhere else, ever.
+ * stays an assembler): the MCP pipeline end to end — connect (catalog), the
+ * server REGISTRY fanned out per CLI dialect (diff preview, surgical writes,
+ * drift chips), per-workspace tool PLANS, per-workspace GRANTS (write tools +
+ * act origins), and the service-key vault. No integrations knob renders
+ * anywhere else, ever. The event bridge (webhooks.ts) and the activity trail
+ * (activity.ts) each moved to their OWN tab — they were never MCP knobs.
  */
 
 const CLI_LABEL: Record<HostedCliId, string> = { 'claude-code': 'Claude Code', codex: 'Codex', gemini: 'Gemini' }
@@ -165,7 +162,7 @@ function createCatalogBlock(): SyncedBlock {
     panel.append(
       el('div', {
         class: 'settings-row-caption',
-        text: 'Scope stays per workspace: registering makes the server available to a CLI; which WORKSPACES see it is a tool plan, and what its agents may do here stays this page’s grants.'
+        text: 'Scope stays per workspace: registering makes the server available to a CLI; which WORKSPACES see it is a tool plan, and what its agents may WRITE here stays this page’s grants. (Browser act-origins live under Trust › Browser.)'
       })
     )
     const previewPre = el('pre', { class: 'mgr-panel-block', hidden: true })
@@ -628,7 +625,10 @@ function createServersBlock(): HTMLElement {
   return block
 }
 
-// ── Grants: the per-workspace boundary knobs (03/04's store) ─────────────────
+// ── Grants: the per-workspace MCP write boundary (8/03's store) ──────────────
+// The store also carries `web` + `actOrigins`, but those are a BROWSER boundary:
+// their editor lives on Trust › Browser (act-origins.ts) and this knob patches
+// only `writeTools` — two cards, one grant object, no field fought over.
 function createGrantsBlock(): SyncedBlock {
   const bridge = getBridge()
   const wsSelect = el('select', { class: 'trail-select' }) as HTMLSelectElement
@@ -640,10 +640,6 @@ function createGrantsBlock(): SyncedBlock {
     body.innerHTML = ''
     if (!wsId) return
     const grant = (await bridge.invoke(IntegrationsChannels.grantGet, wsId)) as WorkspaceIntegrationsGrant
-    const set = async (patch: Partial<WorkspaceIntegrationsGrant>): Promise<void> => {
-      await bridge.invoke(IntegrationsChannels.grantSet, { ...grant, ...patch })
-      await render()
-    }
     // Write tools: none (default) / all — the catalog boundary (8/03).
     const writesOn = grant.writeTools === 'all'
     const writeBtn = el('button', {
@@ -651,37 +647,11 @@ function createGrantsBlock(): SyncedBlock {
       type: 'button',
       text: writesOn ? 'Write tools: ALL (agents can send/mail/claim/update here)' : 'Write tools: none (default)'
     }) as HTMLButtonElement
-    writeBtn.onclick = (): void => void set({ writeTools: writesOn ? 'none' : 'all' })
-    body.append(el('div', { class: 'trail-controls' }, [writeBtn]))
-    // Act origins: the agent-web boundary (8/04). Sensitive origins refuse.
-    body.append(el('div', { class: 'settings-row-caption', text: `Origins agents may ACT on (web tier: ${grant.web})` }))
-    for (const origin of grant.actOrigins) {
-      const drop = el('button', { class: 'browser-sites-forget', type: 'button', text: 'Revoke' }) as HTMLButtonElement
-      drop.onclick = (): void => void set({ actOrigins: grant.actOrigins.filter((o) => o !== origin) })
-      body.append(el('div', { class: 'browser-sites-row' }, [el('span', { class: 'browser-sites-host', text: origin }), drop]))
-    }
-    const addInput = el('input', { class: 'browser-sites-input' }) as HTMLInputElement
-    addInput.placeholder = 'github.com'
-    addInput.spellcheck = false
-    addInput.addEventListener('keydown', (e) => e.stopPropagation())
-    const refusedNote = el('div', { class: 'menu-note browser-sites-refused', hidden: true })
-    const addBtn = el('button', { class: 'browser-sites-add', type: 'button', text: 'Grant origin' }) as HTMLButtonElement
-    addBtn.onclick = async (): Promise<void> => {
-      const raw = addInput.value.trim()
-      if (!raw) return
-      const saved = (await bridge.invoke(IntegrationsChannels.grantSet, {
-        ...grant,
-        web: 'signed-in',
-        actOrigins: [...grant.actOrigins, raw]
-      })) as WorkspaceIntegrationsGrant | null
-      if (!saved || saved.actOrigins.length === grant.actOrigins.length) {
-        refusedNote.textContent = `“${raw}” was refused — sensitive origins never accept act grants.`
-        refusedNote.hidden = false
-        return
-      }
+    writeBtn.onclick = async (): Promise<void> => {
+      await bridge.invoke(IntegrationsChannels.grantSet, { ...grant, writeTools: writesOn ? 'none' : 'all' })
       await render()
     }
-    body.append(el('div', { class: 'browser-sites-addrow' }, [addInput, addBtn]), refusedNote)
+    body.append(el('div', { class: 'trail-controls' }, [writeBtn]))
   }
 
   function refreshWorkspaces(): void {
@@ -694,7 +664,7 @@ function createGrantsBlock(): SyncedBlock {
   wsSelect.onchange = (): void => void render()
 
   const block = el('div', { class: 'trail-block mgr-grants-block' }, [
-    el('div', { class: 'settings-row-caption', text: 'Per workspace, default closed: which MCP write tools agents get, and which signed-in origins they may act on. The reviewer gate stays the boundary — approve is never a tool.' }),
+    el('div', { class: 'settings-row-caption', text: 'Per workspace, default closed: which MCP write tools agents get. The reviewer gate stays the boundary — approve is never a tool. Which ORIGINS agents may act on is a browser boundary: Trust › Browser.' }),
     el('div', { class: 'trail-controls' }, [wsSelect]),
     body
   ])
@@ -706,136 +676,15 @@ function createGrantsBlock(): SyncedBlock {
   return { block, sync }
 }
 
-// ── Activity: the audit trail viewer (8/05, absorbed) ────────────────────────
-function createActivityBlock(): SyncedBlock & { honesty: HTMLElement } {
-  const bridge = getBridge()
-
-  const wsSelect = el('select', { class: 'trail-select trail-ws' }) as HTMLSelectElement
-  wsSelect.setAttribute('aria-label', 'Filter by workspace')
-  const srcSelect = el('select', { class: 'trail-select trail-src' }) as HTMLSelectElement
-  srcSelect.setAttribute('aria-label', 'Filter by source')
-  for (const [v, label] of [
-    ['', 'All sources'],
-    ['web', 'Web acts'],
-    ['mcp', 'MCP writes'],
-    ['bridge', 'Webhook deliveries']
-  ]) {
-    srcSelect.append(el('option', { value: v, text: label }))
-  }
-
-  const refreshBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Refresh' }) as HTMLButtonElement
-  const exportBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Export JSON…' }) as HTMLButtonElement
-  // Clear is a two-click confirm (house pattern — no native dialogs).
-  const clearBtn = el('button', { class: 'trail-btn trail-clear', type: 'button', text: 'Clear this workspace’s trail' }) as HTMLButtonElement
-  let clearArmed = false
-  const disarmClear = (): void => {
-    clearArmed = false
-    clearBtn.textContent = 'Clear this workspace’s trail'
-    clearBtn.classList.remove('is-armed')
-  }
-
-  const list = el('div', { class: 'trail-list' })
-  const emptyNote = el('div', { class: 'settings-row-caption trail-empty', text: 'No agent activity recorded yet.' })
-
-  const wsName = (id: string): string => getWorkspaces().workspaces.find((w) => w.id === id)?.name ?? id.slice(0, 8)
-
-  function renderRows(entries: TrailEntry[]): void {
-    list.innerHTML = ''
-    const rows = [...entries].reverse().slice(0, 500) // newest first, bounded DOM
-    emptyNote.hidden = rows.length > 0
-    const now = Date.now()
-    for (const t of rows) {
-      const badge = el('span', { class: `trail-badge is-${t.outcome}`, text: t.outcome })
-      const verb = el('span', { class: 'trail-verb', text: t.verb })
-      const target = el('span', { class: 'trail-target', text: t.target })
-      const meta = el('span', {
-        class: 'trail-meta',
-        text: `${t.source} · ${wsName(t.workspaceId)}${t.pane ? ` · pane ${t.pane}` : ''} · ${fmtAge(t.ts, now)}`
-      })
-      const row = el('div', { class: 'trail-row' }, [badge, verb, target, meta])
-      if (t.reason) row.title = t.reason
-      list.append(row)
-    }
-    const refused = rows.filter((r) => r.outcome === 'refused').length
-    signal('trail', {
-      chip: refused ? attnChip('refused', `${refused} refused`) : null,
-      stat: rows.length ? `${rows.length} act${rows.length === 1 ? '' : 's'}` : 'none yet'
-    })
-  }
-
-  async function refresh(): Promise<void> {
-    disarmClear()
-    const wsId = wsSelect.value
-    clearBtn.disabled = !wsId
-    const entries = (await bridge.invoke(IntegrationsChannels.trailList, wsId)) as TrailEntry[]
-    const src = srcSelect.value as TrailSource | ''
-    renderRows(src ? entries.filter((e) => e.source === src) : entries)
-  }
-
-  function refreshWorkspaceOptions(): void {
-    const current = wsSelect.value
-    wsSelect.innerHTML = ''
-    wsSelect.append(el('option', { value: '', text: 'All workspaces' }))
-    for (const w of getWorkspaces().workspaces) wsSelect.append(el('option', { value: w.id, text: w.name }))
-    wsSelect.value = current
-  }
-
-  wsSelect.onchange = (): void => void refresh()
-  srcSelect.onchange = (): void => void refresh()
-  refreshBtn.onclick = (): void => {
-    refreshWorkspaceOptions()
-    void refresh()
-  }
-  exportBtn.onclick = async (): Promise<void> => {
-    await bridge.invoke(IntegrationsChannels.trailExport, wsSelect.value)
-  }
-  clearBtn.onclick = async (): Promise<void> => {
-    if (!wsSelect.value) return
-    if (!clearArmed) {
-      clearArmed = true
-      clearBtn.textContent = 'Really clear? This cannot be undone'
-      clearBtn.classList.add('is-armed')
-      return
-    }
-    await bridge.invoke(IntegrationsChannels.trailClear, wsSelect.value)
-    disarmClear()
-    void refresh()
-  }
-
-  // Retention honesty + the FINDINGS threat model, in user words.
-  const honesty = el('div', { class: 'settings-row-caption trail-honesty' }, [
-    el('span', {
-      text:
-        'An agent on your live sessions can be manipulated into acting as you — this page is how you check what it did. ' +
-        'The trail is kept on this machine only, capped (oldest entries roll off), cleared by you, and never sent anywhere. ' +
-        'Entries carry verbs, origins, and refs — never page content, typed text, or cookies.'
-    })
-  ])
-
-  const controls = el('div', { class: 'trail-controls' }, [wsSelect, srcSelect, refreshBtn, exportBtn, clearBtn])
-  // `honesty` leaves the block and becomes the Card's caption — so the retention
-  // promise is legible while the trail is folded shut. It stays INSIDE `.trail-activity`
-  // (now the card root) because WEBTRAIL reads 'never sent anywhere' out of that
-  // subtree's first 4000 characters, and 500 rows would push it past the window.
-  const block = el('div', { class: 'trail-block' }, [controls, emptyNote, list])
-
-  // First paint: populate lazily so a fresh settings open shows live data.
-  const sync = (): void => {
-    refreshWorkspaceOptions()
-    void refresh()
-  }
-  setTimeout(sync, 0)
-
-  return { block, honesty, sync }
-}
-
 // ── Service keys: the paste-once fleet vault (8/08) ──────────────────────────
 // A service key pasted ONCE -> OS-vault ciphertext -> materialized into the env
 // of every pane the Workspace launches, so api-key MCP servers read it without
 // a secret literal in any CLI config. WRITE-ONLY, like the 7/12 usage keys: a
 // masked saved chip with Delete/Replace, never a reveal (no getter channel
 // exists). The env forms reference these by ${NAME}; the literal is refused.
-function createServiceKeysBlock(): HTMLElement {
+// A SyncedBlock: the add-server form and the guided flow both vault keys from
+// OUTSIDE this block, so the list re-reads on every entry into Settings.
+function createServiceKeysBlock(): SyncedBlock {
   const bridge = getBridge()
   const list = el('div', { class: 'mgr-list' })
   const nameInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'ENV NAME (e.g. POSTHOG_API_KEY)' }) as HTMLInputElement
@@ -864,6 +713,10 @@ function createServiceKeysBlock(): HTMLElement {
       row.append(del)
       list.append(row)
     }
+    signal('keys', {
+      chip: null,
+      stat: names.length ? `${names.length} saved` : 'none'
+    })
   }
 
   saveBtn.onclick = async (): Promise<void> => {
@@ -882,7 +735,7 @@ function createServiceKeysBlock(): HTMLElement {
   }
 
   const block = el('div', { class: 'trail-block mgr-block' }, [
-    el('div', { class: 'settings-row-caption', text: 'Paste an api key once — it’s encrypted by your OS keychain and reaches agents in panes MoggingLabs Workspace launches, as the env var ${NAME}. No secret ever lands in a CLI config, a log, or on disk in plaintext. A CLI you run elsewhere needs the same variable set in your own environment.' }),
+    el('div', { class: 'settings-row-caption', text: 'Paste an api key once — it’s encrypted by your OS keychain and reaches agents in panes MoggingLabs Workspace launches, as the env var ${NAME}. No secret ever lands in a CLI config, a log, or on disk in plaintext. A CLI you run elsewhere needs the same variable set in your own environment. (Keys for usage polling are separate: Usage › Usage sources.)' }),
     el('div', {
       class: 'settings-row-caption',
       text:
@@ -892,8 +745,9 @@ function createServiceKeysBlock(): HTMLElement {
     el('div', { class: 'mgr-form' }, [nameInput, keyInput, saveBtn]),
     note
   ])
-  setTimeout(() => void refresh(), 0)
-  return block
+  const sync = (): void => void refresh()
+  setTimeout(sync, 0)
+  return { block, sync }
 }
 
 // ── The tool plan: which servers reach a workspace's panes, per CLI (8/09) ───
@@ -1028,108 +882,6 @@ function createToolPlanBlock(): SyncedBlock {
   return { block, sync }
 }
 
-// ── Event bridge: house events -> user webhooks (8/10) ───────────────────────
-interface WebhookView {
-  id: string
-  label: string
-  events: BridgeEventName[]
-  workspaceId?: string
-  urlMask: string
-  health: 'ok' | 'failing' | 'off'
-}
-function createEventBridgeBlock(): SyncedBlock {
-  const bridge = getBridge()
-  const list = el('div', { class: 'mgr-list' })
-  const note = el('div', { class: 'settings-error mgr-note', role: 'alert', hidden: true })
-
-  const labelInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'Name (e.g. n8n build alerts)' }) as HTMLInputElement
-  const urlInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'Webhook URL (https, or loopback/LAN http)' }) as HTMLInputElement
-  urlInput.type = 'password'
-  const envInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'or env-ref (e.g. N8N_WEBHOOK_URL)' }) as HTMLInputElement
-  for (const i of [labelInput, urlInput, envInput]) i.addEventListener('keydown', (e) => e.stopPropagation())
-  const evBoxes = new Map<BridgeEventName, HTMLInputElement>()
-  const evRow = el('div', { class: 'evbridge-events' }, BRIDGE_EVENTS.map((ev) => {
-    const cb = el('input', { attrs: { type: 'checkbox' } }) as HTMLInputElement
-    if (ev === 'notify' || ev === 'needs-you') cb.checked = true
-    evBoxes.set(ev, cb)
-    return el('label', { class: 'evbridge-ev' }, [cb, el('span', { text: ev })])
-  }))
-  const insecureBox = el('input', { attrs: { type: 'checkbox' } }) as HTMLInputElement
-  const wsSelect = el('select', { class: 'trail-select' }) as HTMLSelectElement
-  // Populated at BUILD only, before boot's first workspace existed — so a webhook could
-  // never be scoped to anything. Repopulated on every entry into Settings.
-  const refreshWorkspaces = (): void => {
-    const current = wsSelect.value
-    wsSelect.innerHTML = ''
-    wsSelect.append(el('option', { value: '', text: 'All workspaces' }))
-    for (const w of getWorkspaces().workspaces) wsSelect.append(el('option', { value: w.id, text: w.name }))
-    wsSelect.value = current
-  }
-  refreshWorkspaces()
-  const saveBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Add webhook' }) as HTMLButtonElement
-
-  const HEALTH_TEXT: Record<string, string> = { ok: 'ok', failing: 'failing', off: 'idle' }
-  function row(w: WebhookView): HTMLElement {
-    const del = el('button', { class: 'browser-sites-forget', type: 'button', text: 'Delete' }) as HTMLButtonElement
-    del.onclick = async (): Promise<void> => {
-      const ok = await confirmDialog({ title: `Delete webhook “${w.label}”?`, message: 'It stops receiving events. This can’t be undone.', confirmLabel: 'Delete', danger: true })
-      if (ok) { await bridge.invoke(IntegrationsChannels.webhookRemove, w.id); await refresh() }
-    }
-    const test = el('button', { class: 'trail-btn cat-mini', type: 'button', text: 'Send test' }) as HTMLButtonElement
-    test.onclick = (): void => { void bridge.invoke(IntegrationsChannels.webhookTest, w.id); showToast({ title: 'Test event queued', body: w.label, tone: 'info' }) }
-    return el('div', { class: 'mgr-row' }, [
-      el('span', { class: 'mgr-label', text: w.label }),
-      el('span', { class: `evbridge-health is-${w.health}`, text: HEALTH_TEXT[w.health] }),
-      el('span', { class: 'mgr-id mono', text: `${w.urlMask} · ${w.events.join(', ')}${w.workspaceId ? ' · scoped' : ''}` }),
-      test,
-      del
-    ])
-  }
-
-  // ONE painter. `refresh()` and the pushed health change both land here, so a
-  // failing webhook raises the same header chip whichever path discovered it.
-  function paint(hooks: WebhookView[]): void {
-    list.innerHTML = ''
-    if (!hooks.length) list.append(el('div', { class: 'menu-note', text: 'No webhooks yet. A pane’s notify (needs-you) can ring n8n, Make, or Slack.' }))
-    for (const w of hooks) list.append(row(w))
-    const failing = hooks.filter((w) => w.health === 'failing').length
-    signal('webhooks', {
-      chip: failing ? attnChip('failing', `${failing} failing`) : null,
-      stat: !hooks.length ? 'none' : failing ? `${failing} failing` : 'all healthy'
-    })
-  }
-
-  async function refresh(): Promise<void> {
-    paint(((await bridge.invoke(IntegrationsChannels.webhookList)) as WebhookView[]) ?? [])
-  }
-
-  saveBtn.onclick = async (): Promise<void> => {
-    const events = [...evBoxes.entries()].filter(([, cb]) => cb.checked).map(([ev]) => ev)
-    const url = urlInput.value
-    urlInput.value = ''
-    const r = (await bridge.invoke(IntegrationsChannels.webhookSave, {
-      label: labelInput.value, url: url || undefined, envRef: envInput.value || undefined, events, workspaceId: wsSelect.value || undefined, insecureAck: insecureBox.checked
-    })) as { ok: boolean; reason?: string }
-    note.hidden = r.ok
-    if (r.ok) { labelInput.value = ''; envInput.value = ''; await refresh() }
-    else note.textContent = r.reason ?? 'refused'
-  }
-  bridge.on(IntegrationsChannels.webhookHealthChanged, (payload) => paint((payload as WebhookView[]) ?? []))
-
-  const block = el('div', { class: 'trail-block mgr-block' }, [
-    el('div', { class: 'settings-row-caption', text: 'When a pane needs you — or a card moves, or a review changes — POST a small JSON payload to your own webhook (n8n, Make, Slack). Outbound only, nothing listens. The URL is a secret: pasted once, encrypted, shown masked. Payload: { v, event, ts, workspace, pane?, card?, note? } — ids and your notify’s note, never scrollback or diffs.' }),
-    list,
-    el('div', { class: 'mgr-form' }, [labelInput, urlInput, envInput, evRow, el('label', { class: 'evbridge-ev' }, [insecureBox, el('span', { text: 'allow insecure LAN http' })]), wsSelect, saveBtn]),
-    note
-  ])
-  const sync = (): void => {
-    refreshWorkspaces()
-    void refresh()
-  }
-  setTimeout(sync, 0)
-  return { block, sync }
-}
-
 // ── The guided "Connect your stack" flow (8/13) — ORCHESTRATES 06/07/09 ─────
 // Walks the catalog in site order, filtered to DETECTED CLIs; per tool
 // Connect -> Authorize -> next; skippable, resumable (progress in localStorage,
@@ -1180,7 +932,10 @@ export function openGuidedFlow(): void {
         )
         modal.setFooter(
           el('div', { class: 'confirm-actions' }, [
-            Button({ label: 'Open workspace tools', variant: 'ghost', onClick: () => { requestIntegrationsFocus('matrix'); modal.close() } }),
+            // Drain the token NOW: the flow opens from this very page, so no view
+            // change follows to consume it — undrained, it would sit pending and
+            // scroll some FUTURE settings entry somewhere the user never asked for.
+            Button({ label: 'Open workspace tools', variant: 'ghost', onClick: () => { requestIntegrationsFocus('matrix'); modal.close(); enterIntegrations() } }),
             Button({ label: 'Done', variant: 'primary', onClick: () => modal.close() })
           ])
         )
@@ -1235,12 +990,10 @@ function createIntegrationsIntro(): HTMLElement {
     }
   }
   const servers = stat('Servers')
-  const webhooks = stat('Webhooks')
-  const trail = stat('Activity')
+  const keys = stat('Service keys')
   const setters: Partial<Record<SectionId, (v: string) => void>> = {
     servers: servers.set,
-    webhooks: webhooks.set,
-    trail: trail.set
+    keys: keys.set
   }
   onSignal((id, sig) => {
     if (sig.stat) setters[id]?.(sig.stat)
@@ -1248,8 +1001,8 @@ function createIntegrationsIntro(): HTMLElement {
 
   return el('div', { class: 'trail-block integux-intro' }, [
     el('div', { class: 'settings-row-label', text: 'Connect your stack' }),
-    el('div', { class: 'settings-row-caption', text: 'Wire your tools (n8n, Slack, Sentry, GitHub…) to the coding agents you already run — the app never holds a credential; the CLIs own their auth.' }),
-    el('div', { class: 'integux-stats' }, [servers.el, webhooks.el, trail.el]),
+    el('div', { class: 'settings-row-caption', text: 'Wire your tools (Sentry, GitHub, Slack…) to the coding agents you already run — the app never holds a credential; the CLIs own their auth.' }),
+    el('div', { class: 'integux-stats' }, [servers.el, keys.el]),
     el('div', { class: 'trail-controls' }, [setup])
   ])
 }
@@ -1315,11 +1068,10 @@ export function createIntegrationsSection(): HTMLElement {
   signalListeners.clear()
   lastSignal.clear()
 
-  const activity = createActivityBlock()
   const catalogBlock = createCatalogBlock()
   const toolplan = createToolPlanBlock()
   const grantsBlock = createGrantsBlock()
-  const eventBridge = createEventBridgeBlock()
+  const keysBlock = createServiceKeysBlock()
   const card = (
     id: SectionId,
     title: string,
@@ -1330,21 +1082,17 @@ export function createIntegrationsSection(): HTMLElement {
     createCollapsibleCard({ id, title, caption, storagePrefix: 'integrations', ...o }, [body])
 
   // Task order, not build order: connect a tool, register it, scope it, grant it,
-  // wire it to your automations, key it, then audit what it did.
+  // then key it. (Webhooks and the activity trail have their own tabs now.)
   // One line each. A fold you must read four lines to skip is not a fold — the full
   // paragraph lives at the top of each body, where it applies. Every purpose line keeps
   // its load-bearing clause: what the app will never do with your credentials.
   const catalog = card('catalog', 'Connect', 'Verified servers, wired to the CLIs you already run — the app never authenticates one.', catalogBlock.block, { defaultOpen: true, attentionOpens: false })
   const servers = card('servers', 'Servers & registry', 'Register once, apply per CLI. Writes are surgical, backed up, and only on your click.', createServersBlock())
   const matrix = card('matrix', 'Workspace tool plans', 'Which servers reach this workspace’s panes. Context hygiene, not a permission.', toolplan.block)
-  const grants = card('grants', 'Grants', 'What agents may write here, and which origins they may act on. Default closed.', grantsBlock.block)
-  const webhooks = card('webhooks', 'Webhooks', 'POST to your own automations when a pane needs you. Outbound only; the URL is a secret.', eventBridge.block)
-  const keys = card('keys', 'Service keys', 'One paste, encrypted by your OS keychain. Never a config file, a log, or plaintext on disk.', createServiceKeysBlock())
-  // `.trail-activity` moves to the CARD root so its subtree still holds the retention
-  // copy WEBTRAIL reads. Nothing styles the class — it has always been a smoke seam.
-  const trail = card('trail', 'Activity trail', activity.honesty, activity.block, { attentionOpens: false, class: 'trail-activity' })
+  const grants = card('grants', 'Grants', 'Which MCP write tools agents get here. Default closed — approve is never a tool.', grantsBlock.block)
+  const keys = card('keys', 'Service keys', 'One paste, encrypted by your OS keychain. Never a config file, a log, or plaintext on disk.', keysBlock.block)
 
-  const cards: Record<SectionId, CollapsibleCardHandle> = { catalog, servers, matrix, grants, webhooks, keys, trail }
+  const cards: Record<SectionId, CollapsibleCardHandle> = { catalog, servers, matrix, grants, keys }
   onSignal((id, sig) => cards[id]?.setAttention(sig.chip))
 
   const section = el('div', { class: 'integrations-section' }, [
@@ -1353,16 +1101,14 @@ export function createIntegrationsSection(): HTMLElement {
     servers.el,
     matrix.el,
     grants.el,
-    webhooks.el,
     keys.el,
-    trail.el,
     createIntegrationsPrivacy()
   ])
 
-  focusTargets = { matrix, webhooks, servers }
+  focusTargets = { matrix, servers }
   // Every entry into Settings re-reads what can go stale. Reading it once at boot is
   // what left the matrix and the grants blank on a fresh install (see SyncedBlock).
-  const syncs = [catalogBlock.sync, toolplan.sync, grantsBlock.sync, eventBridge.sync, activity.sync]
+  const syncs = [catalogBlock.sync, toolplan.sync, grantsBlock.sync, keysBlock.sync]
   syncAll = (): void => {
     for (const sync of syncs) sync()
   }

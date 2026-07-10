@@ -72,6 +72,12 @@ export class ActivityTracker {
     }
   }
 
+  /** The live verdict, for state-sync PULLS (a mounting pane asking "what am I now").
+   *  Events only fire on CHANGE, so this is the one way to read the current truth. */
+  current(): AgentState {
+    return this.state
+  }
+
   /** The user typed into the pane: whatever it was blocked on has been answered. */
   input(): void {
     if (!this.latched) return

@@ -278,7 +278,9 @@ export function createUsageSection(): HTMLElement {
         el('span', { class: `pill usage-health is-${p.health}`, text: p.health }),
         !isActive && mine.some((m) => m.id === p.profileId)
           ? Button({
-              label: 'Switch for new launches',
+              // The SAME verb as Profiles & Hosts' row button — one action
+              // (switchActiveProfile), one name, recognizable across tabs.
+              label: 'Make default',
               size: 'sm',
               onClick: () => {
                 void switchActiveProfile(p.providerId, p.profileId).then((name) => {
@@ -589,10 +591,13 @@ export function createUsageSection(): HTMLElement {
 
   const card = (id: string, title: string, caption: string, body: HTMLElement): ReturnType<typeof createCollapsibleCard> =>
     createCollapsibleCard({ id, title, caption, storagePrefix: 'usage', class: `usage-card usage-card-${id}` }, [body])
-  const providersCard = card('providers', 'Providers', 'The full catalog, five classes — enable what you use; keys are set per row, the rest is one search away.', el('div', {}, [search, grid]))
+  // 'Usage sources', NOT 'Providers': the nav already has an Agent CLIs tab that
+  // was called Providers too — one word, two doors. The id stays 'providers'
+  // (disclosure keys + the UXMILESTONE hot-chip assert key off it).
+  const providersCard = card('providers', 'Usage sources', 'The full catalog, five classes — enable what you use; keys are set per row (they feed usage reads only — keys for MCP servers live in Integrations › Service keys).', el('div', {}, [search, grid]))
   const plansCard = card('plans', 'Plans & profiles', 'Every lane the poller reads. The active lane launches new agents; switching flips pointers, never credentials.', plansTable)
   const costCard = card('cost', 'Cost overview', "Today vs the window, the daily average, where the month is heading at this pace, and which model burns the money — scanned locally from your CLIs' own logs.", costHost)
-  const alertsCard = card('alerts', 'Thresholds & alerts', 'A quiet toast at the first threshold, a warning with the verdict at the second; once per window, re-armed at reset.', alertsHost)
+  const alertsCard = card('alerts', 'Thresholds & alerts', 'A quiet toast at the first threshold, a warning with the verdict at the second; once per window, re-armed at reset. In-app only — to ring n8n, Make, or Slack, add a webhook (Settings › Webhooks).', alertsHost)
   const displayCard = card('display', 'Display', 'What the titlebar gauge mirrors, what the icon shows, how resets render, popover order and density.', displayHost)
   const historyCard = card('history', 'History & cost', 'Sampled history per provider and the on-demand local cost scan. Compact by design — the popover stays the glance.', historyHost)
   const privacyCard = card('privacy', 'Privacy', 'Where credentials live and what never leaves the machine.', privacy)
@@ -622,7 +627,7 @@ export function createUsageSection(): HTMLElement {
         class: 'usage-ov-summary',
         text: plans.length
           ? `${connected} provider${connected === 1 ? '' : 's'} reporting · ${plans.length} plan${plans.length === 1 ? '' : 's'}`
-          : 'No usage yet — enable a provider in Providers below.'
+          : 'No usage yet — enable a source in Usage sources below.'
       })
     )
     const top = plans.length ? [...plans].sort((a, b) => maxPct(b) - maxPct(a))[0] : undefined

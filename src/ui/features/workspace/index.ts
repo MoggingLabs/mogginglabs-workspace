@@ -20,7 +20,7 @@ import {
   setWorkspaceSwitcher
 } from '../../core/workspace/workspace-info-port'
 import { openWizard } from '../../core/workspace/wizard-port'
-import { onProfileFailover } from '../../core/agents/launch-port'
+import { onAgentLaunchRequest, onProfileFailover } from '../../core/agents/launch-port'
 import { setActiveView } from '../../core/shell/view-port'
 import { setCommands } from '../../core/commands/command-port'
 import { setPaneState } from '../../core/attention/attention-port'
@@ -166,6 +166,14 @@ export const workspaceFeature: UiFeature = {
     // one persist per event — otherwise a restart resurrects the capped profile.
     onProfileFailover((ev) => {
       if (controller.noteProfileFailover(ev.paneId, ev.profileId)) persist()
+    })
+    // EVERY agent launch the app performs (palette, pane ⋯ menu, board card, wizard
+    // lineup) becomes that slot's assignment, so restores — app relaunch, daemon cold
+    // start, the cross-protocol update migration — bring the agent back with resume,
+    // not just the panes the creation wizard assigned. Lineup replays announce the
+    // values already recorded, so this persists only on real change.
+    onAgentLaunchRequest((req) => {
+      if (controller.noteAgentLaunch(req.paneId, req.provider, req.profileId)) persist()
     })
     // 06b: the wizard/templates open workspaces from a provider-mix spec.
     setWorkspaceOpener((spec) => {

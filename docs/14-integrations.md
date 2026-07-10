@@ -109,8 +109,9 @@ workspace's panes — the config is read at launch.
 
 The agent-web profile lets an agent drive the dock on a site **you** signed
 into. Reads (snapshot) are ungated; **acts** (click/type/navigate/eval) demand
-a per-workspace grant naming the **origin**, and the first act on an origin
-raises a pending-confirm the human clicks. Crossing origins raises an alert; a
+a per-workspace grant naming the **origin** (granted in Settings § Browser —
+the browser boundary's home — or the dock's own Sites & grants panel), and the
+first act on an origin raises a pending-confirm the human clicks. Crossing origins raises an alert; a
 blocklisted origin is refused at save *and* at dispatch, even if a hostile
 grant is force-persisted (the blocklist beats anything stored).
 
@@ -168,8 +169,9 @@ nothing else:
 - **no** webhook URL (only the label)
 - **no** message bodies or scrollback
 
-The viewer lives in Settings § Integrations. Its own copy says the content
-"never sent anywhere" — because it never leaves the machine.
+The viewer lives in Settings § Activity (Trust group — it is how you check what
+agents did, not an integrations knob). Its own copy says the content "never sent
+anywhere" — because it never leaves the machine.
 
 ---
 
@@ -208,9 +210,10 @@ public host is never allowed. No redirects, ever.
 
 1. In n8n, add a **Webhook** node. Set method **POST**, copy its **Production
    URL** (it embeds a token — treat it as a secret).
-2. In the workspace, open **Settings § Integrations → Webhooks → Add**. Paste
-   the URL (it vaults; you'll only ever see `your-n8n.host/…` afterward), name
-   it, and check **`notify`** (and any others).
+2. In the workspace, open **Settings § Webhooks → Add** (its own tab under
+   Agents & tools). Paste the URL (it vaults; you'll only ever see
+   `your-n8n.host/…` afterward), name it, and check **`notify`** (and any
+   others).
 3. Scope it to this workspace, or leave it global.
 4. Hit **Test** — the receiver gets a `notify` with `note: "Test event…"`. In
    n8n, pin that run and build the rest of the flow off the pinned JSON above.

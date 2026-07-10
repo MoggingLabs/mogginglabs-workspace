@@ -16,7 +16,10 @@ import { spawnPty, ptyEmulation, type IPty } from '../../platform/pty-host'
 import { defaultShell, shellArgs } from '../../platform/shell'
 import { killPtyTree } from '../../platform/process-tree'
 import { getTelemetry } from '../../core/telemetry'
-import { ActivityTracker, OscParser, fileUriToPath } from '../agent-state'
+import { ActivityTracker, OscParser, fileUriToPath, isTerminalReply } from '../agent-state'
+
+/** Retained per-pane output for reattach repaint — same cap as the daemon's ring. */
+const SCROLLBACK_BYTES = 200_000
 
 /** The directory a pane's shell starts in: the requested one when it is a real directory,
  *  the home directory otherwise. Mirrors pty-daemon/session.ts's pickCwd — the two backends
@@ -51,11 +54,23 @@ export class PtyService {
   private readonly trackers = new Map<number, ActivityTracker>()
   /** Last size each pane's PTY is actually AT (or was asked for before it spawned). */
   private readonly sizes = new Map<number, { cols: number; rows: number }>()
+  /** Per-pane scrollback ring, replayed on an `existing` re-spawn (a renderer reload
+   *  re-requests every pane): parity with the daemon path, whose reattach repaints from
+   *  ITS ring — without this an in-proc reload left every pane blank over a live shell. */
+  private readonly buffers = new Map<number, string>()
 
   constructor(private readonly sink: TerminalSink) {}
 
   spawn(req: SpawnRequest): SpawnResult {
-    if (this.ptys.has(req.id)) return { existing: true, pty: ptyEmulation() }
+    if (this.ptys.has(req.id)) {
+      // Reattach: repaint before the reply resolves — the same wire order as the daemon
+      // (scrollback data precedes `spawned`), which the renderer already handles.
+      // Never `restored`: an in-proc pty lives in THIS process, so an existing session is
+      // by definition continuously alive (a renderer reload), never a cold-start restore.
+      const buf = this.buffers.get(req.id)
+      if (buf) this.sink.data({ id: req.id, data: buf })
+      return { existing: true, restored: false, pty: ptyEmulation() }
+    }
 
     // A resize that lands before the spawn used to hit `ptys.get(id)?.resize` and vanish,
     // leaving the PTY at its spawn size while the renderer's xterm sat at the real one.
@@ -94,22 +109,33 @@ export class PtyService {
         }
       )
 
+      // Both callbacks are identity-guarded on THIS proc: pane ids are reused (a split
+      // takes the lowest free slot), and a killed pty dies asynchronously — its last data
+      // flush and its exit land AFTER kill() returned. Unguarded, that stale exit deleted
+      // the reused id's NEW pty from the map (orphaning a live shell), disposed the new
+      // pane's tracker, and printed "[process exited]" into a healthy terminal; stale data
+      // painted the old shell's bytes into it. Same generation discipline as the daemon
+      // path (transport.ts subscribes per session generation) — here the proc IS the gen.
       proc.onData((data) => {
+        if (this.ptys.get(req.id) !== proc) return // a dead generation talking
+        this.buffers.set(req.id, ((this.buffers.get(req.id) ?? '') + data).slice(-SCROLLBACK_BYTES))
         tracker.data() // BEFORE the parse: a verdict in this chunk must land last
         osc.push(data)
         this.sink.data({ id: req.id, data })
       })
 
       proc.onExit(({ exitCode }) => {
+        if (this.ptys.get(req.id) !== proc) return // kill() (or a successor) already owns cleanup
         this.trackers.get(req.id)?.dispose()
         this.trackers.delete(req.id)
         this.sink.exit({ id: req.id, exitCode })
         this.ptys.delete(req.id)
         this.sizes.delete(req.id)
+        this.buffers.delete(req.id)
       })
 
       this.ptys.set(req.id, proc)
-      return { existing: false, pty: emulation }
+      return { existing: false, restored: false, pty: emulation }
     } catch (err) {
       // Example telemetry use: spawn failures are exactly what we want reported.
       // No terminal content is passed — only structured, primitive context.
@@ -123,8 +149,16 @@ export class PtyService {
   }
 
   write({ id, data }: WriteCommand): void {
-    this.trackers.get(id)?.input() // typing answers whatever the pane was blocked on
+    // Not for auto-replies: xterm answering a query (CPR/DA/focus) is not the user
+    // answering the pane — it must not clear an attention latch (see replies.ts).
+    if (!isTerminalReply(data)) this.trackers.get(id)?.input() // typing answers whatever the pane was blocked on
     this.ptys.get(id)?.write(data)
+  }
+
+  /** State-sync PULL: the CURRENT verdict for a mounting pane (null = no session).
+   *  Trackers only emit on change, so a remounted renderer must ask, not wait. */
+  stateOf(id: number): AgentState | null {
+    return this.trackers.get(id)?.current() ?? null
   }
 
   /**
@@ -157,6 +191,7 @@ export class PtyService {
       this.ptys.delete(id)
     }
     this.sizes.delete(id)
+    this.buffers.delete(id)
   }
 
   disposeAll(): void {
@@ -165,5 +200,6 @@ export class PtyService {
     for (const proc of this.ptys.values()) killPtyTree(proc)
     this.ptys.clear()
     this.sizes.clear()
+    this.buffers.clear()
   }
 }

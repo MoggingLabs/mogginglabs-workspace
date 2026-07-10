@@ -2,6 +2,7 @@ import { app, ipcMain, type WebContents } from 'electron'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ContextMonitor, RELAY_SOURCE } from '@backend/features/context'
+import { claudeNotifyHooks } from '@backend/features/agents'
 import { resolveHome } from '@backend/features/usage'
 import {
   ContextChannels,
@@ -10,6 +11,7 @@ import {
   type ContextWatchRequest
 } from '@contracts'
 import { getSettingsStore } from './app-settings'
+import { notifyHookInvocation } from './notify-hook'
 
 // App-wiring: expose the per-pane context-usage monitor to the renderer. The monitor
 // lives in @backend (Electron-free, tails the CLIs' own session logs read-only); this
@@ -35,7 +37,12 @@ import { getSettingsStore } from './app-settings'
 let statuslineSettingsFile: string | null = null
 
 /** Write (idempotently) the relay script + the settings file that points claude at
- *  it, and return the `--settings` args a claude launch should carry. Empty on any
+ *  it, and return the `--settings` args a claude launch should carry. Since the
+ *  bell work, the same generated file also carries the notify HOOKS (Notification/
+ *  Stop -> the generated notify script) and forces `preferredNotifChannel:
+ *  terminal_bell` — so an app-launched claude always rings its pane, with the raw
+ *  BEL as the fallback when `node` is missing and the hook can't run. The overlay
+ *  MERGES with the user's own settings and never touches their files. Empty on any
  *  filesystem failure — the launch must never break over a nicety. */
 export function claudeStatuslineArgs(): string[] {
   try {
@@ -44,8 +51,16 @@ export function claudeStatuslineArgs(): string[] {
       mkdirSync(dir, { recursive: true })
       const relay = join(dir, 'context-relay.mjs')
       writeFileSync(relay, RELAY_SOURCE)
-      const settings = join(dir, 'claude-statusline.settings.json')
-      writeFileSync(settings, JSON.stringify({ statusLine: { type: 'command', command: `node "${relay}"`, padding: 0 } }))
+      const settings = join(dir, 'claude-launch.settings.json')
+      const overlay: Record<string, unknown> = {
+        statusLine: { type: 'command', command: `node "${relay}"`, padding: 0 }
+      }
+      const notify = notifyHookInvocation()
+      if (notify) {
+        overlay.hooks = claudeNotifyHooks(notify)
+        overlay.preferredNotifChannel = 'terminal_bell'
+      }
+      writeFileSync(settings, JSON.stringify(overlay))
       statuslineSettingsFile = settings
     }
     return ['--settings', statuslineSettingsFile]

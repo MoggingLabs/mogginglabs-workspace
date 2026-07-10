@@ -9,6 +9,6 @@ import { getBridge } from '../../core/ipc/bridge'
 export const contextClient = {
   watch: (req: ContextWatchRequest): void => getBridge().send(ContextChannels.watch, req),
   unwatch: (paneId: PaneId): void => getBridge().send(ContextChannels.unwatch, { paneId }),
-  onChange: (cb: (e: ContextUsageEvent) => void): void =>
+  onChange: (cb: (e: ContextUsageEvent) => void): (() => void) =>
     getBridge().on(ContextChannels.change, (p) => cb(p as ContextUsageEvent))
 }

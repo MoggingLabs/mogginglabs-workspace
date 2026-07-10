@@ -29,9 +29,10 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
     Card(
       {
         header: SectionHeader({
-          title: 'Agent CLIs',
+          // The tab hero says 'Agent CLIs' now — this head says what the card DOES.
+          title: 'Detection & install',
           caption:
-            'Each provider is detected on PATH. Install runs the provider’s own documented one-liner in a background terminal — the exact command shown, under your login, nothing else.'
+            'Each CLI is detected on PATH. Install runs the provider’s own documented one-liner in a background terminal — the exact command shown, under your login, nothing else.'
         })
       },
       [list]

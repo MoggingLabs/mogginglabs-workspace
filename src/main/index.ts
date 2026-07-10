@@ -101,6 +101,8 @@ import { runRemoteSmoke } from './remote-smoke'
 import { runSwarmMilestoneSmoke } from './swarmmilestone-smoke'
 import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
+import { runMigrateSmoke } from './migrate-smoke'
+import { runNotifyHookSmoke } from './notifyhook-smoke'
 import { registerDeepLink, initialDeepLinkCwd, initialControlCommand } from './deep-link'
 import { ControlChannels } from '@contracts'
 import { initAutoUpdate } from './updater'
@@ -209,6 +211,20 @@ app.whenReady().then(async () => {
     return
   }
 
+  // Windowless daemon-migration smoke: MUST run here — before startDaemonBackend
+  // creates this version's sessions.db, the migration's own entry condition.
+  if (process.env.MOGGING_MIGRATE) {
+    await runMigrateSmoke()
+    return
+  }
+
+  // Windowless notify-hook smoke: the generated bell script + per-CLI builders,
+  // proven against a fake daemon socket — no daemon, no window.
+  if (process.env.MOGGING_NOTIFYHOOK) {
+    await runNotifyHookSmoke()
+    return
+  }
+
   // Windowless tool-plan smoke (8/09): pure materialization + a CLI shim + a
   // real git repo — no daemon, no window.
   if (process.env.MOGGING_INTEG) {
@@ -267,7 +283,7 @@ app.whenReady().then(async () => {
   registerMcpStatus(() => win) // MCP connection-status poller: pushed per-(server×cli) grid (8/11)
   registerServices(() => win) // service links: board card <-> GitHub PR/issue, live via gh (8/12)
   startMcpEndpoint() // agent-control transport: the MCP server reaches the dock + grant wire here (6/05b, 8/03)
-  registerAgents(() => win) // agent launcher: detect/install CLIs + build launch commands (Phase-1/06; Providers tab)
+  registerAgents(() => win) // agent launcher: detect/install CLIs + build launch commands (Phase-1/06; Agent CLIs tab)
   registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
   registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
   disposeGit = registerGit(() => win?.webContents ?? null) // read-only per-pane git branch + dirty (Phase-2/03)

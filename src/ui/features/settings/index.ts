@@ -14,11 +14,14 @@ import { renderShortcutList } from '../../core/commands/shortcuts'
 import { setTerminalFontSize, terminalFontSize, TERMINAL_FONT_SIZES } from '../../core/terminal/font-port'
 import { calmMotion, setCalmMotion } from '../../core/a11y/motion-port'
 import { TEMPLATE_COUNTS } from '../layout'
+import { createActOriginsCard } from './act-origins'
+import { createActivitySection } from './activity'
 import { createClipboardSection } from './clipboard'
 import { createProfilesHostsSection } from './profiles-hosts'
 import { createProvidersSection } from './providers'
 import { createThemePicker } from './theme-picker'
 import { createUsageSection } from './usage'
+import { createWebhooksSection } from './webhooks'
 import { createIntegrationsSection, enterIntegrations } from './integrations'
 
 const DEFAULT_LAYOUT_KEY = 'mogging.defaultPaneCount'
@@ -30,8 +33,8 @@ const DEFAULT_LAYOUT_KEY = 'mogging.defaultPaneCount'
  */
 const NAV_GROUPS: { label: string; ids: string[] }[] = [
   { label: 'Workspace', ids: ['appearance', 'terminal', 'clipboard'] },
-  { label: 'Agents & tools', ids: ['providers', 'profiles', 'integrations', 'usage'] },
-  { label: 'Trust', ids: ['privacy', 'browser'] },
+  { label: 'Agents & tools', ids: ['providers', 'profiles', 'integrations', 'usage', 'webhooks'] },
+  { label: 'Trust', ids: ['privacy', 'browser', 'activity'] },
   { label: 'System', ids: ['shortcuts', 'about'] }
 ]
 
@@ -43,8 +46,10 @@ const TAB_ICON: Record<string, IconName> = {
   profiles: 'user',
   integrations: 'plug',
   usage: 'gauge',
+  webhooks: 'bell',
   privacy: 'shield',
   browser: 'globe',
+  activity: 'activity',
   shortcuts: 'keyboard',
   about: 'info'
 }
@@ -268,10 +273,13 @@ export const settingsFeature: UiFeature = {
       },
       {
         id: 'providers',
-        label: 'Providers',
+        label: 'Agent CLIs',
         // The availability map (see providers.ts): which agent CLIs this machine
         // can run, and a one-click background install for the missing ones.
-        el: section('providers', 'Providers', 'Which agent CLIs this machine can run right now.', [providers])
+        // Labeled 'Agent CLIs', not 'Providers' — Usage's source catalog owned
+        // that word too, and one word must not name two doors. The id stays
+        // 'providers' (data-target, smokes, shot sweeps all key off it).
+        el: section('providers', 'Agent CLIs', 'Which agent CLIs this machine can run right now.', [providers])
       },
       {
         id: 'profiles',
@@ -301,13 +309,25 @@ export const settingsFeature: UiFeature = {
       {
         id: 'integrations',
         label: 'Integrations',
-        // 8/05 lands the Activity trail; 8/06+ grows this into THE integrations
-        // home (server registration, catalog, grants) — one module, one home.
+        // THE integrations home (8/06+): catalog, registry, plans, grants, keys —
+        // one module, one home. Webhooks and the activity trail have their own tabs.
         el: section(
           'integrations',
           'Integrations',
-          'MCP servers, per-workspace tool plans, grants, webhooks, and the activity trail.',
+          'MCP servers: connect them, apply them per CLI, scope them per workspace, key them.',
           [createIntegrationsSection()]
+        )
+      },
+      {
+        id: 'webhooks',
+        label: 'Webhooks',
+        // The event bridge (8/10) — house events out to YOUR automations. Its own
+        // tab: nothing here is an MCP knob, and a page of its own needs no fold.
+        el: section(
+          'webhooks',
+          'Webhooks',
+          'When agents need you, POST to your own automations — n8n, Make, Slack.',
+          [createWebhooksSection()]
         )
       },
       {
@@ -335,7 +355,7 @@ export const settingsFeature: UiFeature = {
           el('div', { class: 'settings-note' }, [
             icon('check-circle', 14),
             el('span', {
-              text: 'Your keys, your CLIs: agents authenticate themselves with your own accounts. This app has no credential settings — by design.'
+              text: 'Your keys, your CLIs: agents authenticate themselves with your own accounts — the app never brokers or stores their auth (ADR 0002). The only secrets it holds are keys and webhook URLs you explicitly vault, encrypted by your OS keychain.'
             })
           ])
         ])
@@ -343,7 +363,9 @@ export const settingsFeature: UiFeature = {
       {
         id: 'browser',
         label: 'Browser',
-        el: section('browser', 'Browser', 'What agents may do with the browser dock.', [
+        // The ONE browser-boundary home: the drive-consent switch AND the act-origin
+        // grants (moved from Integrations — same store, but a browser concern).
+        el: section('browser', 'Browser', 'What agents may do with the browser dock, and where they may act.', [
           Card(
             {
               header: SectionHeader({ title: 'Agent browser control', caption: 'OFF by default, per workspace.' })
@@ -356,8 +378,22 @@ export const settingsFeature: UiFeature = {
                 text: 'The dock uses its own empty session (agents never touch your system browser or its logins), and a page an agent reads is untrusted content. Agents can never read cookies or credentials (ADR 0002).'
               })
             ]
-          )
+          ),
+          createActOriginsCard()
         ])
+      },
+      {
+        id: 'activity',
+        label: 'Activity',
+        // The agent audit trail (8/05) — a Trust surface, not an integrations knob:
+        // Privacy and Browser decide what agents MAY do; this is how you check
+        // what they DID (web acts, MCP writes, webhook deliveries).
+        el: section(
+          'activity',
+          'Activity',
+          'What agents did — web acts, MCP writes, webhook deliveries. Kept on this machine.',
+          [createActivitySection()]
+        )
       },
       {
         id: 'shortcuts',
@@ -553,7 +589,10 @@ export const settingsFeature: UiFeature = {
       // both ran goIntegrations('servers'). REMOVE #3: `integrations:restart` promised a
       // restart in its title and only scrolled to the matrix. A verb that lies is worse
       // than a missing one; the matrix now reports pending panes on its fold instead.
-      { id: 'integrations:webhooks', title: 'Add a webhook (event bridge)', hint: 'Integrations', run: () => goIntegrations('webhooks') },
+      // Webhooks and Activity are TABS now, not integrations sub-blocks — their verbs
+      // are plain tab switches, no focus token to drain.
+      { id: 'webhooks:add', title: 'Add a webhook (event bridge)', hint: 'Webhooks', run: () => { showSection('webhooks'); setActiveView('settings') } },
+      { id: 'activity:open', title: 'Open the activity trail', hint: 'Trust', run: () => { showSection('activity'); setActiveView('settings') } },
       ...THEMES.map((t) => ({
         id: `theme:${t.id}`,
         title: `Theme: ${t.name}`,

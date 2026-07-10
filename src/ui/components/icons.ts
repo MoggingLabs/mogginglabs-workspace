@@ -16,6 +16,7 @@
  */
 
 export type IconName =
+  | 'activity'
   | 'alert'
   | 'arrow-down'
   | 'arrow-right'
@@ -28,6 +29,9 @@ export type IconName =
   | 'chevron-right'
   | 'chevron-up'
   | 'clock'
+  | 'contract'
+  | 'contract-h'
+  | 'contract-v'
   | 'copy'
   | 'download'
   | 'expand'
@@ -60,6 +64,8 @@ export type IconName =
   | 'x'
 
 const PATHS: Record<IconName, string> = {
+  activity:
+    '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
   alert:
     '<circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>',
   'arrow-down': '<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>',
@@ -73,6 +79,15 @@ const PATHS: Record<IconName, string> = {
   'chevron-right': '<path d="m9 18 6-6-6-6"/>',
   'chevron-up': '<path d="m18 15-6-6-6 6"/>',
   clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  /* Contract trio (ours) — the expand trio's EXACT inverses, shown on the active
+   * expand control while its click means "restore the grid". `contract` is Lucide's
+   * minimize-2; -h/-v mirror expand-h/-v with the arrows colliding at the middle. */
+  contract:
+    '<polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" x2="21" y1="10" y2="3"/><line x1="3" x2="10" y1="21" y2="14"/>',
+  'contract-h':
+    '<polyline points="5 8 9 12 5 16"/><polyline points="19 8 15 12 19 16"/><line x1="2" x2="9" y1="12" y2="12"/><line x1="15" x2="22" y1="12" y2="12"/>',
+  'contract-v':
+    '<polyline points="8 5 12 9 16 5"/><polyline points="8 19 12 15 16 19"/><line x1="12" x2="12" y1="2" y2="9"/><line x1="12" x2="12" y1="15" y2="22"/>',
   copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
   download:
     '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="3" y2="15"/>',

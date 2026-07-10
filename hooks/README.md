@@ -1,9 +1,17 @@
 # First-party agent hooks — `mogging notify`
 
-These are **opt-in** config snippets that let an agent CLI explicitly raise its pane's attention in
+These are config snippets that let an agent CLI explicitly raise its pane's attention in
 MoggingLabs Workspace — a richer signal than OSC escape sequences alone. When Claude/Codex/Gemini
 **finishes** or **needs your input**, it runs `mogging notify`, and the pane's tab starts ringing
 (and its badge flips to attention) so you know exactly which of many agents needs you.
+
+> **Launched from the app? Already wired.** Every agent launch from a MoggingLabs pane
+> auto-carries the session-scoped equivalent of these snippets — no install, no writes to your
+> config files: Claude Code gets a `--settings` overlay (notify hooks + `terminal_bell`), Codex
+> gets `-c tui.notifications` overrides (OSC 9), Gemini/OpenCode get generated settings via
+> `GEMINI_CLI_SYSTEM_SETTINGS_PATH` / `OPENCODE_TUI_CONFIG` (OSC 9), and aider gets
+> `AIDER_NOTIFICATIONS*` env (the generated notify script). The snippets below remain for
+> agents you start yourself — a plain command typed into a pane, or a terminal outside the app.
 
 OSC-based agent-state stays the baseline for *any* CLI (Phase-2/01); these hooks are the sharper,
 first-party layer for the CLIs that support hooks.

@@ -7,6 +7,16 @@ import type { AgentState } from '../domain/agent'
 import type { PersistedWorkspace } from '../ipc/workspace.ipc'
 import type { PtyEmulation } from '../ipc/terminal.ipc'
 
+// v5: pane sessions are GENERATIONAL. Every pane-scoped server event (data/exit/state/cwd/
+// limit) and every attach point (spawned/attached/welcome PaneInfo) carries the session's
+// `gen` — a per-daemon monotonic stamp minted when the PaneSession is created. Pane IDS are
+// reused (a split takes the lowest free slot), so id alone cannot distinguish a killed pane's
+// in-flight events from its successor's: an untagged late exit printed "[process exited]"
+// into a brand-new healthy pane and deleted its reconnect-replay spec, and an untagged
+// subscription map made a reused id's session start with zero subscribers (the empty-terminal
+// bug). A v4 daemon cannot stamp generations, so it must not be attached to — the bump is the
+// enforcement, exactly as v4 did for pty emulation (defaulting the field would reintroduce
+// the id-only inference this change deletes).
 // v4: `spawned` carries the pty's emulation (ConPTY vs posix). A v3 daemon CANNOT answer that
 // question — it never asked node-pty which backend it got — so it must not be reattached to. The
 // version bump is the enforcement: the runtime dir + socket embed it, so a v3 daemon keeps running
@@ -16,7 +26,7 @@ import type { PtyEmulation } from '../ipc/terminal.ipc'
 // (set-role, PaneInfo.role). v2: Phase-3/01 control API — send-key/capture + enriched
 // PaneInfo. The version namespaces the runtime dir + socket, so older daemons keep
 // running untouched (ADR 0006 anti-kill-server); the app + CLI speak their own version.
-export const DAEMON_PROTOCOL_VERSION = 4
+export const DAEMON_PROTOCOL_VERSION = 5
 
 // ── Release channel (dev/prod isolation) ───────────────────────────────────────────────
 // A repo checkout and an installed release must be able to run SIDE BY SIDE with zero shared
@@ -151,6 +161,10 @@ export interface SpawnSpec {
 
 export interface PaneInfo {
   id: string
+  /** Session generation (v5): minted per PaneSession, monotonic per daemon lifetime.
+   *  Distinguishes a reused pane id's CURRENT session from a dead predecessor's
+   *  in-flight events — clients gate every pane-scoped event on it. */
+  gen: number
   cols: number
   rows: number
   /** The pane's launch label (e.g. "claude") — a label only, never a full command line. */
@@ -205,20 +219,25 @@ export type ClientMessage =
   // App-side hook: a branch's worktree was removed -> its approval dies with it.
   | { t: 'unapprove'; branch: string }
 
-/** daemon -> client */
+/** daemon -> client. Every pane-scoped EVENT carries the session's `gen` (v5): a pane id
+ *  is reused the moment a slot is re-opened, so consumers gate on (id, gen) — an event
+ *  stamped with a dead generation must never touch the living session's pane. */
 export type ServerMessage =
   | { t: 'welcome'; v: number; panes: PaneInfo[]; workspaces: PersistedWorkspace[] }
   | { t: 'error'; reason: string }
-  | { t: 'spawned'; id: string; existing: boolean; scrollback: string; pty: PtyEmulation }
-  | { t: 'attached'; id: string; scrollback: string }
-  | { t: 'data'; id: string; data: string }
-  | { t: 'exit'; id: string; code: number }
-  | { t: 'state'; id: string; state: AgentState }
-  | { t: 'cwd'; id: string; cwd: string }
+  // `restored` narrows `existing`: a cold-start restore (fresh shell + repainted
+  // scrollback, untouched since) rather than a continuously-live session — the app
+  // types resume into the former and must keep its hands off the latter (v5).
+  | { t: 'spawned'; id: string; gen: number; existing: boolean; restored: boolean; scrollback: string; pty: PtyEmulation }
+  | { t: 'attached'; id: string; gen: number; scrollback: string }
+  | { t: 'data'; id: string; gen: number; data: string }
+  | { t: 'exit'; id: string; gen: number; code: number }
+  | { t: 'state'; id: string; gen: number; state: AgentState }
+  | { t: 'cwd'; id: string; gen: number; cwd: string }
   | { t: 'panes'; panes: PaneInfo[] }
   | { t: 'pong' }
   | { t: 'notified'; id: string; ok: boolean } // ack for a `notify` (ok=false: unknown pane id)
-  | { t: 'limit'; id: string } // a pane's agent reported a usage limit (Phase-4/04 failover)
+  | { t: 'limit'; id: string; gen: number } // a pane's agent reported a usage limit (Phase-4/04 failover)
   | { t: 'sent'; id: string; ok: boolean } // ack for a `send-key` (ok=false: unknown pane/key)
   | { t: 'captured'; id: string; data: string } // reply to `capture` — CALLER's stdout only
   | { t: 'mailed'; id: number } // ack for a mail-send (the assigned message id)

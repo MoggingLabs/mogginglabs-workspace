@@ -301,10 +301,14 @@ interface SerializedV1 {
   root: unknown
 }
 
-/** Serialize with leaf ids RENUMBERED 1..n in reading order — restore seeds pane
- *  cwds/roles by slot index, so persisted ids must be the contiguous slot ids. */
+/** Serialize with leaf ids PRESERVED. They used to be renumbered 1..n in reading order,
+ *  which silently broke every restore of a workspace that had closed a middle pane: the
+ *  slot-indexed manifest arrays (cwds/roles/remotes/assignments) shifted onto the wrong
+ *  panes, and — worse — the pane ids the app asked the daemon for stopped matching the
+ *  daemon's surviving/persisted session ids, so panes came back blank while their real
+ *  sessions sat orphaned. Real ids keep both alignments exact; splits reuse the lowest
+ *  free id, so ids stay within 1..MAX_PANES forever. */
 export function serializeTree(root: LayoutTreeNode): string {
-  let next = 1
   const clone = (n: LayoutTreeNode): unknown =>
     isSplit(n)
       ? {
@@ -312,7 +316,7 @@ export function serializeTree(root: LayoutTreeNode): string {
           sizes: n.sizes.map((s) => Math.round(s * 10000) / 10000),
           children: n.children.map(clone)
         }
-      : { id: next++ }
+      : { id: n.id }
   const payload: SerializedV1 = { v: 1, root: clone(root) }
   return JSON.stringify(payload)
 }
@@ -362,9 +366,14 @@ export function parseTree(json: string, expectedCount: number): LayoutTreeNode |
   const root = check(payload.root, 0)
   if (!root) return null
   if (ids.length !== expectedCount) return null
-  const want = new Set(Array.from({ length: expectedCount }, (_, i) => i + 1))
+  // Ids are UNIQUE and bounded, not necessarily dense: a workspace that closed a middle
+  // pane persists real slot ids with gaps (e.g. 1,3,5), and those gaps are load-bearing —
+  // they keep the slot-indexed manifest arrays and the daemon's session ids aligned.
+  // Dense 1..n trees (every layout persisted before this change) remain a valid subset.
+  const seen = new Set<number>()
   for (const id of ids) {
-    if (!want.delete(id)) return null // duplicate or out-of-range id
+    if (id > MAX_LEAVES || seen.has(id)) return null // out-of-range or duplicate id
+    seen.add(id)
   }
   return normalize(root)
 }

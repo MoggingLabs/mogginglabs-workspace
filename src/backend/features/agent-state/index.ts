@@ -5,3 +5,4 @@
 // the pane state the dot renders.
 export * from './osc-parser'
 export * from './activity'
+export * from './replies'

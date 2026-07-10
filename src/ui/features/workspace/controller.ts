@@ -1,12 +1,12 @@
 import { TerminalChannels } from '@contracts'
 import type { AgentState, PaneId } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { GridLayout, MAX_PANES, parseTree } from '../layout'
+import { GridLayout, MAX_PANES, parseTree, leafIds } from '../layout'
 import { confirmDialog, icon, showToast } from '../../components'
 import { setFocusedPane } from '../../core/layout/focus'
 import { setPaneCwd, getPaneCwd } from '../../core/layout/pane-cwd'
-import { setPaneRole, setPaneRemote, clearPaneRemote } from '../../core/layout/pane-meta'
-import { paneState, onAttentionChange } from '../../core/attention/attention-port'
+import { setPaneRole, setPaneRemote, clearPaneRemote, setPaneLabel } from '../../core/layout/pane-meta'
+import { paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
 import { announce } from '../../core/a11y/live-region'
 import { clearPaneLaunch } from '../../core/agents/toolplan-panes'
 import { requestAgentLaunch } from '../../core/agents/launch-port'
@@ -24,6 +24,10 @@ interface WorkspaceView {
   container: HTMLElement
   layout: GridLayout
   attentionLatched: boolean
+  /** The rail outline's latch: ANY alert (blocked or finished) while backgrounded
+   *  holds the orange outline until this workspace is focused — nothing else may
+   *  clear it (spec: "disappears only once I view and select that workspace"). */
+  alertLatched: boolean
 }
 
 export interface CreateOpts {
@@ -52,10 +56,11 @@ export interface SwitchOpts {
 /**
  * Owns the set of workspaces: one rail item + one hidden/visible container + one
  * `GridLayout` each. Switching is pure show/hide (every workspace's panes stay mounted
- * and streaming). The rail item carries the Phase-2 signature: a live NUMERIC count of
- * panes needing attention, next to a quiet pane-count — plus the latched attention ring
- * (`data-attention`, the contract the attention/milestone smokes assert). Emits
- * `onChange` after any mutation (used to persist + publish the info port).
+ * and streaming). The rail item carries the Phase-2 signature: a live NUMERIC alert
+ * count — panes needing attention plus panes finished-while-backgrounded — next to a
+ * quiet pane-count, plus the latched attention attribute (`data-attention`, the
+ * contract the attention/milestone smokes assert). Emits `onChange` after any
+ * mutation (used to persist + publish the info port).
  */
 export class WorkspaceController {
   private readonly views = new Map<string, WorkspaceView>()
@@ -68,6 +73,18 @@ export class WorkspaceController {
   private readonly pendingClose = new Map<string, { timer: ReturnType<typeof setTimeout>; index: number }>()
   private lastAttnTotal = 0 // for the A11Y-01 "needs your input" announcement
   private readonly attnSeen = new Set<PaneId>() // panes mid-attention-episode (one pulse each)
+  // The sticky finished flag lives on the attention PORT (single source of truth,
+  // set on the busy/attention→idle edge, cleared only by a CLICK on the pane or by
+  // new work). The controller layers two lifetimes on top of it:
+  //   finSeen    flag-episodes already processed — one green pulse each, attnSeen's
+  //              twin (a chatty refresh must not re-flash).
+  //   finWsSeen  the flag was up while its workspace was FOCUSED: viewing the
+  //              workspace consumes the rail alert (badge count + outline), while
+  //              the pane's own green dot lives on until the pane is clicked.
+  // Both are pruned to the panes actually scanned — pane ids are ordinal-derived
+  // and REUSED after a workspace closes, so a stale entry would corrupt a new one.
+  private readonly finSeen = new Set<PaneId>()
+  private readonly finWsSeen = new Set<PaneId>()
 
   constructor(
     private readonly tabsEl: HTMLElement,
@@ -114,13 +131,19 @@ export class WorkspaceController {
       layout: opts.layout ?? undefined
     }
 
+    // Parsed BEFORE the seeds are published: persisted trees keep their REAL slot ids
+    // (gaps included — a workspace that closed a middle pane restores 1,3,5, not 1,2,3),
+    // and the cwd seeding below must cover exactly those slots.
+    const restoredTree = opts.layout ? parseTree(opts.layout, meta.paneCount) : null
+    const slots = restoredTree ? leafIds(restoredTree) : undefined
+
     // BEFORE the grid exists, not merely before `apply`: GridLayout's constructor applies a
     // 1-pane grid, which synchronously constructs pane 1's TerminalPane — and a pane reads
     // its remote + cwd seeds at spawn time. Published after construction, pane 1 (and only
     // pane 1) spawned locally at the daemon's fallback cwd: a worktree-isolated slot 1
     // opened its shell in $HOME while its branch chip claimed mogging/<slug>.
     this.publishRemotes(meta)
-    this.publishPaneCwds(meta) // seed the pty's cwd + per-pane git (2/03)
+    this.publishPaneCwds(meta, slots) // seed the pty's cwd + per-pane git (2/03)
 
     const container = document.createElement('div')
     container.className = 'workspace-view'
@@ -137,6 +160,7 @@ export class WorkspaceController {
       container,
       layout,
       attentionLatched: false,
+      alertLatched: false,
       ...this.makeTab(meta)
     }
     this.tabsEl.append(view.tab)
@@ -166,7 +190,6 @@ export class WorkspaceController {
 
     // A restored workspace re-applies its exact arrangement (shape + sizes); any
     // doubt about the persisted tree falls back to the template grid for the count.
-    const restoredTree = opts.layout ? parseTree(opts.layout, meta.paneCount) : null
     if (restoredTree) layout.applyTree(restoredTree)
     else layout.apply(meta.paneCount)
     this.publishRoles(meta) // swarm manifest -> role chips + daemon PaneInfo (4/01)
@@ -209,10 +232,12 @@ export class WorkspaceController {
 
   /** Seed each pane's cwd on the pane-cwd port — the reliable default for per-pane git
    *  (2/03). Worktree-isolated slots (3/03) seed their OWN path, so each pane's chip
-   *  shows its own branch. OSC 7 later refines a pane's cwd if its shell emits it. */
-  private publishPaneCwds(meta: WorkspaceMeta): void {
+   *  shows its own branch. OSC 7 later refines a pane's cwd if its shell emits it.
+   *  `slots` are the ACTUAL local slot ids to seed (a restored tree may have gaps —
+   *  1,3,5 after a middle pane closed); omitted = the dense template ids 1..paneCount. */
+  private publishPaneCwds(meta: WorkspaceMeta, slots?: number[]): void {
     const base = meta.ordinal * 100
-    for (let i = 1; i <= meta.paneCount; i++) {
+    for (const i of slots ?? Array.from({ length: meta.paneCount }, (_, k) => k + 1)) {
       // REMOTE slots (4/05) are skipped: a local cwd seed would make the git probe
       // lie about a remote pane. OSC 7 may refine later, honestly.
       if (meta.remotes?.[i - 1]) continue
@@ -387,7 +412,11 @@ export class WorkspaceController {
     // The pane's OWN cwd (worktree isolation, 3/03), workspace root as the fallback —
     // same contract as the grid's focus callback in `create`.
     setFocusedPane({ paneId: focusId, cwd: getPaneCwd(focusId) || view.meta.cwd })
-    this.refreshAttention() // activating a workspace clears its ring (you're looking at it)
+    // Panes owed a green replay: sticky finished flags on the PORT — cleared only
+    // by a real click on the pane, so re-entering this workspace keeps replaying
+    // the green pulse until each finished pane has actually been acknowledged.
+    const finishedToPulse = view.layout.paneIds().filter((p) => paneFinished(p))
+    this.refreshAttention() // activating a workspace clears its alert (you're looking at it)
     this.onChange()
     // User-initiated selection lands in the grid; restore keeps the launcher up.
     // AFTER onChange: the reveal must see the published workspace snapshot — the
@@ -395,12 +424,15 @@ export class WorkspaceController {
     // snapshot is empty until onChange publishes it.
     if (opts.reveal !== false) {
       setActiveView('grid')
-      // The ring the switch just cleared hands off INSIDE the grid: every pane whose
-      // agent needs input flashes once (attention color, focus-glow intensity), so
-      // opening the workspace answers "which pane called me?" without scanning dots.
-      // AFTER the reveal — an animation on a display:none subtree never plays.
+      // The outline the switch just cleared hands off INSIDE the grid: every alerting
+      // pane flashes once in its status color — green = finished while you were away,
+      // red = still blocked on you — so opening the workspace answers "which pane
+      // called me?" without scanning dots. Finished pulses first: a pane somehow owed
+      // both replays as red, blocked outranks done. AFTER the reveal — an animation
+      // on a display:none subtree never plays.
+      for (const paneId of finishedToPulse) view.layout.pulseAttention(paneId, 'finished')
       for (const paneId of view.layout.paneIds()) {
-        if (paneState(paneId) === 'attention') view.layout.pulseAttention(paneId)
+        if (paneState(paneId) === 'attention') view.layout.pulseAttention(paneId, 'input')
       }
     }
   }
@@ -426,22 +458,49 @@ export class WorkspaceController {
 
   /**
    * Recompute every rail item's indicators + the app-level any-attention flag.
-   *  - `.ws-attn`  — LIVE numeric count of panes currently needing attention (the
-   *    Phase-2 signature; shown for every workspace, active included).
-   *  - `data-attention` — the latched background ring: attention latches until the
-   *    workspace is focused; busy shows a softer cue. The active workspace never rings.
-   *    (Exact Phase-2/01 semantics — asserted by the attention + milestone smokes.)
+   *  - `.ws-attn`  — LIVE numeric alert count: panes currently needing attention (the
+   *    Phase-2 signature) PLUS panes holding an unacknowledged finished flag this
+   *    workspace hasn't been focused over yet. Focusing the workspace consumes the
+   *    finished half of the COUNT (finWsSeen); the flag itself — and the pane's
+   *    green dot — lives on until the pane is clicked (port acknowledge).
+   *  - `.is-alerting` — the ANIMATED orange outline around the whole bar, on
+   *    background tabs. LATCHED (alertLatched): once armed it survives everything
+   *    except focusing the workspace — the spec's "disappears only once I view it".
+   *  - pane pulses — a finished flag rising in the ACTIVE workspace pulses that pane
+   *    green right here (finSeen = one pulse per episode; backgrounded flags replay
+   *    on switch instead); a rising attention edge in the active workspace pulses
+   *    red (attnSeen, same contract).
+   *  - `data-attention` — the latched attribute (paint-free): attention latches until
+   *    the workspace is focused; busy marks activity. The active workspace never
+   *    latches. Finished deliberately does NOT latch it — the attribute keeps its
+   *    exact Phase-2/01 semantics, asserted by the attention + milestone smokes.
    */
   private refreshAttention(): void {
     let anyAttention = false
     let attnTotal = 0
+    const scanned = new Set<PaneId>()
     for (const view of this.views.values()) {
       if (this.pendingClose.has(view.meta.id)) continue // mid-close: hidden, don't ring
       const active = view.meta.id === this.activeId
       let attnCount = 0
+      let finishedCount = 0
       let busy = false
       for (const paneId of view.layout.paneIds()) {
         const s: AgentState = paneState(paneId)
+        scanned.add(paneId)
+        if (paneFinished(paneId)) {
+          if (!this.finSeen.has(paneId)) {
+            this.finSeen.add(paneId) // rising flag: one green pulse per episode
+            if (active && activeView() === 'grid') view.layout.pulseAttention(paneId, 'finished')
+          }
+          // Focusing the workspace consumes the RAIL alert; the flag itself (and the
+          // pane's green dot) lives on until the pane is clicked (port acknowledge).
+          if (active) this.finWsSeen.add(paneId)
+          if (!this.finWsSeen.has(paneId)) finishedCount++
+        } else {
+          this.finSeen.delete(paneId) // flag gone (clicked or working again) — rearm
+          this.finWsSeen.delete(paneId)
+        }
         if (s === 'attention') {
           attnCount++
           // Rising edge while this workspace is already in front of you: the toast is
@@ -450,7 +509,7 @@ export class WorkspaceController {
           // refresh (any pane, any workspace, re-runs this scan) must not re-flash.
           if (!this.attnSeen.has(paneId)) {
             this.attnSeen.add(paneId)
-            if (active && activeView() === 'grid') view.layout.pulseAttention(paneId)
+            if (active && activeView() === 'grid') view.layout.pulseAttention(paneId, 'input')
           }
         } else {
           this.attnSeen.delete(paneId) // episode over; the next flip may pulse again
@@ -459,10 +518,16 @@ export class WorkspaceController {
       }
       attnTotal += attnCount
 
-      view.attnBadge.hidden = attnCount === 0
-      if (attnCount > 0) {
-        view.attnBadge.textContent = String(attnCount)
-        view.attnBadge.title = `${attnCount} ${attnCount === 1 ? 'pane needs' : 'panes need'} your input`
+      const alertCount = attnCount + finishedCount
+      view.attnBadge.hidden = alertCount === 0
+      if (alertCount > 0) {
+        view.attnBadge.textContent = String(alertCount)
+        const parts: string[] = []
+        if (attnCount > 0)
+          parts.push(`${attnCount} ${attnCount === 1 ? 'pane needs' : 'panes need'} your input`)
+        if (finishedCount > 0)
+          parts.push(`${finishedCount} finished working`)
+        view.attnBadge.title = parts.join(' · ')
       }
       view.countBadge.textContent = String(view.meta.paneCount)
 
@@ -472,8 +537,24 @@ export class WorkspaceController {
       if (indicator) view.tab.dataset.attention = indicator
       else delete view.tab.dataset.attention
       if (indicator === 'attention') anyAttention = true
+      // The outline's own LATCH: any alert while backgrounded arms it, and ONLY
+      // focusing this workspace disarms it — the alert may not fade on its own
+      // (spec), even if the flagged pane starts working again meanwhile.
+      if (active) view.alertLatched = false
+      else if (alertCount > 0) view.alertLatched = true
+      // The animated orange outline around the whole bar — background tabs only,
+      // so it never fights the active tab's identity selection paint.
+      view.tab.classList.toggle('is-alerting', !active && (view.alertLatched || alertCount > 0))
     }
-    // A11Y-01: the attention ring is silent to screen readers — announce when a
+    // Prune the flag-lifetime tracking to panes that still exist (see the field
+    // comment: reused pane ids must never inherit a closed workspace's history).
+    for (const paneId of this.finSeen) {
+      if (!scanned.has(paneId)) this.finSeen.delete(paneId)
+    }
+    for (const paneId of this.finWsSeen) {
+      if (!scanned.has(paneId)) this.finWsSeen.delete(paneId)
+    }
+    // A11Y-01: the badge is silent to screen readers — announce when a
     // new pane starts needing input (a rise in the total).
     if (attnTotal > this.lastAttnTotal) {
       announce(`${attnTotal} ${attnTotal === 1 ? 'pane needs' : 'panes need'} your input`)
@@ -588,6 +669,21 @@ export class WorkspaceController {
   applyTemplate(n: number): void {
     const a = this.active()
     if (!a) return
+    // Slots this apply will CREATE get the same scrub a split gives its new pane: a
+    // template that re-grows over a closed slot's id must not resurrect that slot's
+    // remote host (the pane would silently spawn over ssh), swarm role, agent label,
+    // or manifest assignment. Same contract as splitPane — a re-opened slot is a fresh
+    // plain terminal at the workspace root.
+    const live = new Set(a.layout.paneIds())
+    const base = a.meta.ordinal * 100
+    for (let i = 1; i <= n; i++) {
+      const paneId = (base + i) as PaneId
+      if (live.has(paneId)) continue
+      clearPaneRemote(paneId)
+      setPaneRole(paneId, '')
+      setPaneLabel(paneId, '')
+      this.scrubManifestSlot(a.meta, i - 1, '')
+    }
     // Count first, then publish, THEN apply: `apply` constructs any new TerminalPanes, and
     // a pane reads its cwd at spawn time. Published afterwards, a pane added by growing the
     // grid started its shell in the daemon's directory — the same bug `create` had.
@@ -621,6 +717,7 @@ export class WorkspaceController {
     const newId = view.layout.peekNextPaneId()
     clearPaneRemote(newId)
     setPaneRole(newId, '')
+    setPaneLabel(newId, '') // nor the closed slot's agent label ("Claude Code" on a fresh shell)
     const cwd = getPaneCwd(target as PaneId) || view.meta.cwd
     if (cwd) setPaneCwd(newId, cwd)
     this.scrubManifestSlot(view.meta, newId - view.meta.ordinal * 100 - 1, cwd)
@@ -657,17 +754,50 @@ export class WorkspaceController {
    *  resurrecting the capped one. Returns whether a workspace owned the pane —
    *  the caller persists (once per failover event; ids only, ADR 0002). */
   noteProfileFailover(paneId: number, profileId: string): boolean {
-    for (const view of this.views.values()) {
-      const slot = paneId - view.meta.ordinal * 100
-      if (slot >= 1 && slot <= view.meta.paneCount) {
-        const ids = view.meta.profileIds ?? []
-        while (ids.length < view.meta.paneCount) ids.push(null)
-        ids[slot - 1] = profileId
-        view.meta.profileIds = ids
-        return true
-      }
+    // By LIVE pane id, not a paneCount range check: slot ids can exceed paneCount after
+    // a middle pane closed (live ids 1,3,5 with count 3), and the range check silently
+    // dropped the failover note for exactly those slots.
+    const view = this.viewForPane(paneId)
+    if (!view) return false
+    const slot = paneId - view.meta.ordinal * 100
+    if (slot < 1) return false
+    const ids = view.meta.profileIds ?? []
+    while (ids.length < slot) ids.push(null)
+    ids[slot - 1] = profileId
+    view.meta.profileIds = ids
+    return true
+  }
+
+  /** An agent was launched into a pane by any app path — palette, pane ⋯ menu, board
+   *  card, wizard lineup, failover relaunch: record it as that SLOT's assignment so
+   *  every future restore (app relaunch, daemon cold start, and the cross-protocol
+   *  update migration) relaunches it with resume. Creation lineups re-announce the
+   *  values they were created with, so recording is idempotent — the return value says
+   *  whether anything actually changed (the caller persists only then). */
+  noteAgentLaunch(paneId: number, provider: string, profileId?: string): boolean {
+    if (!provider || provider === 'shell') return false
+    const view = this.viewForPane(paneId)
+    if (!view) return false
+    const slot = paneId - view.meta.ordinal * 100
+    if (slot < 1) return false
+    const assignments = view.meta.assignments ?? []
+    let changed = false
+    while (assignments.length < slot) assignments.push('shell')
+    if (assignments[slot - 1] !== provider) {
+      assignments[slot - 1] = provider
+      changed = true
     }
-    return false
+    view.meta.assignments = assignments
+    if (profileId) {
+      const ids = view.meta.profileIds ?? []
+      while (ids.length < slot) ids.push(null)
+      if (ids[slot - 1] !== profileId) {
+        ids[slot - 1] = profileId
+        changed = true
+      }
+      view.meta.profileIds = ids
+    }
+    return changed
   }
 
   /** Keyboard pane navigation within the active workspace (Ctrl/Cmd+Alt+arrows). */
@@ -759,8 +889,12 @@ export class WorkspaceController {
     const base = view.meta.ordinal * 100
     const meta = view.meta
     setTimeout(() => {
+      // Only into panes that EXIST: slot ids are sparse after closes (live 1,3,5), and
+      // assignment arrays can name slots the layout no longer has — a launch typed at a
+      // nonexistent pane id is at best lost, at worst delivered to a future pane.
+      const live = new Set<number>(view.layout.paneIds())
       assignments.forEach((provider, i) => {
-        if (provider && provider !== 'shell') {
+        if (provider && provider !== 'shell' && live.has(base + i + 1)) {
           const cwd = meta.paneCwds?.[i] || meta.cwd
           requestAgentLaunch({
             paneId: (base + i + 1) as PaneId,

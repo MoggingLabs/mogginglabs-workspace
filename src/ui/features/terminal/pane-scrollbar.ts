@@ -3,8 +3,11 @@ import { icon } from '../../components'
 
 /**
  * The pane slide bar, minimalist cut: ONLY the slider shows — no arrows, no
- * visible rail — a bright accent-orange thumb (the focused-outline color)
- * floating just off the pane's right edge. The full-height rail still exists
+ * visible rail — a bright accent-orange pill (the focused-outline color)
+ * floating just off the pane's right edge. It appears only when BOTH hold:
+ * there is scrollback to scroll (`is-idle` hides it otherwise) and the mouse
+ * is over the pane (CSS hover-reveal; a drag in flight keeps it visible even
+ * if pointer capture leaves the pane). The full-height rail still exists
  * as an INVISIBLE hit area, so click-to-jump and drag work along the whole
  * edge. The jump pill: a small ⬇ floating near the bottom-RIGHT, shown only
  * once you've scrolled up; one tap returns to the latest output.

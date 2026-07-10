@@ -149,7 +149,8 @@ export const browserFeature: UiFeature = {
       }, 6000)
     })
     // Sites & grants panel: signed-in sites in OUR agent-web partition (forget /
-    // clear) + the minimal act-origin grant editor (06 builds the full home).
+    // clear) + the minimal act-origin grant editor (Settings § Browser is the
+    // full home).
     const sitesMenu = el('div', { class: 'menu browser-sites-menu', hidden: true })
     sitesBtn.onclick = (): void => {
       sitesMenu.hidden = !sitesMenu.hidden
@@ -450,8 +451,8 @@ export const browserFeature: UiFeature = {
         }
         sitesMenu.append(clearAll)
       }
-      // The minimal act-origin grant editor (Settings § Integrations is the
-      // full home, 06). Origins agents may ACT on, for the ACTIVE workspace.
+      // The minimal act-origin grant editor (Settings § Browser is the full
+      // home). Origins agents may ACT on, for the ACTIVE workspace.
       sitesMenu.append(el('div', { class: 'menu-note browser-sites-head', text: 'Origins agents may act on (this workspace)' }))
       if (!wsId) {
         sitesMenu.append(el('div', { class: 'menu-note', text: 'No active workspace.' }))
