@@ -1,6 +1,7 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
 import {
   ControlChannels,
+  TerminalChannels,
   type AgentState,
   type ControlCommand,
   type PaneId,
@@ -24,6 +25,7 @@ import { onAgentLaunchRequest, onProfileFailover } from '../../core/agents/launc
 import { setActiveView } from '../../core/shell/view-port'
 import { setCommands } from '../../core/commands/command-port'
 import { setPaneState } from '../../core/attention/attention-port'
+import { setPaneRole } from '../../core/layout/pane-meta'
 
 const MAX_RECENTS = 5 // Home shows the five most recent projects worked on
 
@@ -468,7 +470,17 @@ function exposeForDev(controller: WorkspaceController): void {
     openForCwd: (cwd: string) => controller.openForCwd(cwd),
     list: () => controller.list(),
     active: () => controller.activeMeta(),
-    count: () => controller.list().length
+    count: () => controller.list().length,
+    // Naming a reviewer, exactly as the manifest does it (controller.publishRoles): the chip
+    // port paints it, and the terminal:setRole IPC is what actually CONFERS it — main records
+    // that as the app's own answer to "who may sign off" (daemon-relay: appRoles) and forwards
+    // it to the daemon. Both halves, or the role is decoration. Not a back door: the renderer
+    // IS the trusted side — a pane is a PTY child with no IPC at all — and this whole block is
+    // DEV-only and tree-shaken out of production.
+    setRole: (paneId: number, role: string) => {
+      setPaneRole(paneId as PaneId, role)
+      getBridge().send(TerminalChannels.setRole, { id: paneId as PaneId, role })
+    }
   }
   w.__mogging.attention = {
     setPaneState: (id: number, state: string) => setPaneState(id as PaneId, state as AgentState)

@@ -7,11 +7,18 @@ import { createWorktree } from '@backend/features/worktrees'
 
 // Env-gated reviewer-gate smoke (MOGGING_GATE, Phase-4/03). The DoD, asserted:
 // an unapproved branch cannot merge through the app — not by click, not by CLI —
-// except via the verbatim typed human override; role checks live at the daemon.
-//   ungated refusal -> approve from a NON-reviewer pane (exit 6) -> role reviewer ->
-//   approve (exit 0) -> merge lands -> approvals list it -> worktree removal clears
-//   the sign-off -> second branch: wrong override word stays ungated, verbatim
+// except via the verbatim typed human override.
+//   ungated refusal -> approve from a NON-reviewer pane (exit 6) -> the USER names a
+//   reviewer -> approve (exit 0) -> merge lands -> approvals list it -> worktree removal
+//   clears the sign-off -> second branch: wrong override word stays ungated, verbatim
 //   'override' lands.
+//
+// WHO may sign off is the app's answer, not the daemon's. This smoke used to make its
+// reviewer with `mogging role <pane> reviewer` and merge on the strength of it — which is
+// precisely the forgery: `set-role` is open to every pane, so a worker agent could promote
+// ITSELF and land its own unreviewed branch with two CLI calls. The role now comes from the
+// workspace manifest (the user's UI), and step 2b asserts the attack is inert: a pane that
+// self-promotes through the CLI still cannot open the gate.
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim()
 }
@@ -52,10 +59,18 @@ export function runGateSmoke(win: BrowserWindow): void {
     try {
       const repo = makeRepo()
       await sleep(1500)
-      await ES(`window.__mogging.templates.open([{provider:'shell',count:2}])`)
+      await ES(`window.__mogging.templates.open([{provider:'shell',count:3}])`)
       await sleep(3000)
       const base = ((await ES('window.__mogging.workspace.active()')) as { ordinal: number }).ordinal * 100
       const asPane = (n: number): Record<string, string> => ({ MOGGING_PANE_ID: String(base + n) })
+
+      // The USER names the reviewer. This is the ONE channel that confers sign-off authority:
+      // setPaneRole -> the terminal:setRole ipcMain message, sent by the renderer. A pane is a
+      // PTY child that speaks the daemon protocol and nothing else — it has no IPC, so it can
+      // never send this. (`mogging role`, which any pane CAN send, writes only the daemon's
+      // coordination map. Step 2b proves that map no longer opens anything.)
+      await ES(`window.__mogging.workspace.setRole(${base + 2}, 'reviewer')`)
+      await sleep(800) // the role reaches main (appRoles) and the daemon
 
       // Branch 1: committed work in a worktree.
       const wt = await createWorktree(repo)
@@ -72,11 +87,23 @@ export function runGateSmoke(win: BrowserWindow): void {
       // 1) no sign-off, no override -> ungated (the lock works)
       const ungated = await mergeVia(wt.branch)
 
-      // 2) a non-reviewer pane cannot approve (role-checked at the daemon)
+      // 2) a non-reviewer pane cannot approve — the daemon refuses it outright (exit 6)
       const notReviewer = await cli(['approve', wt.branch], asPane(1))
 
-      // 3) the reviewer pane approves; the same merge now lands
-      await cli(['role', String(base + 2), 'reviewer'])
+      // 2b) THE ATTACK. Pane 3 (a worker) promotes ITSELF through the open `set-role` verb
+      // and signs off on the branch. The daemon, whose role map it just rewrote, accepts the
+      // approve — so `mogging approvals` may even list it. The APP must not care: it never
+      // made pane 3 a reviewer, so the merge stays shut. This is the whole fix, asserted.
+      const selfPromote = await cli(['role', String(base + 3), 'reviewer'])
+      const selfApprove = await cli(['approve', wt.branch], asPane(3))
+      const mergeAfterForgery = await mergeVia(wt.branch)
+      // ...and the board's ✓ must not appear either: main filters the sign-off at the
+      // boundary, so the renderer is never told a forged approval exists.
+      const forgedDiff = (await ES(
+        `window.bridge.invoke('review:diff', ${JSON.stringify({ repo, worktree: wt.path })})`
+      )) as { approved?: boolean }
+
+      // 3) the pane the USER made a reviewer approves; the same merge now lands
       const approved = await cli(['approve', wt.branch], asPane(2))
       const approvalsList = JSON.parse((await cli(['approvals', '--json'])).stdout) as { branch: string }[]
       const merged = await mergeVia(wt.branch)
@@ -100,6 +127,13 @@ export function runGateSmoke(win: BrowserWindow): void {
         ungated.ok === false &&
         ungated.state === 'ungated' &&
         notReviewer.code === 6 &&
+        // The forgery is INERT: whatever the daemon was told, the gate stayed shut and the
+        // renderer was never handed an approval to paint. (We do not assert the CLI's own
+        // exit codes here — the daemon may well have accepted both calls. That is the point:
+        // the app's answer no longer depends on the daemon's.)
+        mergeAfterForgery.ok === false &&
+        mergeAfterForgery.state === 'ungated' &&
+        forgedDiff.approved !== true &&
         approved.code === 0 &&
         approvalsList.some((a) => a.branch === wt.branch) &&
         merged.ok === true &&
@@ -114,6 +148,10 @@ export function runGateSmoke(win: BrowserWindow): void {
         pass,
         ungated,
         notReviewerExit: notReviewer.code,
+        selfPromoteExit: selfPromote.code,
+        selfApproveExit: selfApprove.code,
+        mergeAfterForgery,
+        forgedDiffApproved: forgedDiff.approved,
         approvedExit: approved.code,
         approvalsList,
         merged,

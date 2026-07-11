@@ -218,14 +218,15 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
         // own was a claim, not a fact, and a worker could sign off on its own branch by
         // naming the reviewer's id. A sender that presents a token must present the right one.
         //
-        // HONEST LIMIT, and it is a real one: this makes `from` unforgeable, it does NOT make
-        // the gate unforgeable. `set-role` above is itself unbound — any authenticated client
-        // may name any pane's role — so a pane can promote ITSELF to reviewer and then approve
-        // with its own perfectly valid token. Closing that needs a privileged app client (an
-        // app-only secret the daemon withholds from pane env, gating set-role/kill), which
-        // changes what `mogging role` may do from inside a pane — a product decision, not a
-        // patch. Until then the gate REFEREES cooperating agents; it does not withstand a
-        // hostile one. Do not describe it as a security boundary. ──
+        // The role check below is a COURTESY, not the gate: `set-role` is open to any
+        // authenticated client (i.e. any pane), so a pane can promote itself and this check
+        // will wave it through. It stays because it gives `mogging approve` from an ordinary
+        // pane a fast, honest refusal (exit 6) instead of a sign-off that dies silently later.
+        //
+        // THE gate is in the app, where a pane cannot reach: main only believes a sign-off
+        // from a pane the USER made a reviewer, recorded on the renderer-only setRole IPC
+        // (src/main/daemon-relay.ts, `appRoles` — read that comment for the whole argument).
+        // Nothing the daemon can be told about roles opens a merge. ──
         case 'approve': {
           if (typeof m.from !== 'string' || !m.from || !sessions.has(m.from)) {
             send({ t: 'error', reason: 'nopane' })

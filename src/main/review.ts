@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { diffWorktree, mergeBranch } from '@backend/features/review'
 import { isManaged } from '@backend/features/worktrees'
-import { getDaemonClient } from './daemon-relay'
+import { getAuthoritativeApprovals } from './daemon-relay'
 import {
   ReviewChannels,
   type ReviewDiffRequest,
@@ -24,8 +24,10 @@ export function registerReview(): void {
     return (async () => {
       const diff = await diffWorktree(req.repo, req.worktree)
       // Reviewer gate (4/03): surface the live sign-off state with the diff. Fail
-      // CLOSED — no daemon means no approvals.
-      const approvals = (await getDaemonClient()?.queryApprovals()) ?? []
+      // CLOSED — no daemon means no approvals. Only sign-offs from a pane the USER made a
+      // reviewer count: the daemon's role map is open to any pane (see daemon-relay's
+      // appRoles), so it can say "reviewer" about a pane that promoted itself.
+      const approvals = await getAuthoritativeApprovals()
       return { ...diff, approved: approvals.some((a) => a.branch === diff.branch) }
     })()
   })
@@ -36,7 +38,10 @@ export function registerReview(): void {
     return (async () => {
       // Gate consultation happens HERE in main — the renderer's payload can carry the
       // typed override word, but never an approval claim. Fail closed without a daemon.
-      const approvals = (await getDaemonClient()?.queryApprovals()) ?? []
+      // THE authority check: an approval only counts if the app itself made its signer a
+      // reviewer. Without this, `mogging role <self> reviewer` un-gated the merge, and an
+      // agent could land its own unreviewed work with two CLI calls.
+      const approvals = await getAuthoritativeApprovals()
       const approved = approvals.some((a) => a.branch === req.branch)
       return mergeBranch(req.repo, req.branch, {
         approved,

@@ -135,7 +135,11 @@ export function runBoardSmoke(win: BrowserWindow): void {
       const wtRoot = join(anchor, '.mogging', 'worktrees')
       const wtDirs = existsSync(wtRoot) ? readdirSync(wtRoot) : []
       const branch = wtDirs.length === 1 ? `mogging/${wtDirs[0]}` : ''
-      await cli(['role', String(paneId), 'reviewer'])
+      // The USER names the reviewer. `mogging role` writes only the DAEMON's map, which every
+      // pane can write and which no longer confers sign-off authority (daemon-relay: appRoles)
+      // — a reviewer named that way would produce an approval the app correctly ignores.
+      await ES(`window.__mogging.workspace.setRole(${paneId}, 'reviewer')`)
+      await sleep(400) // the role reaches main (the trusted IPC) and the daemon
       const approveExit = (await cli(['approve', branch], { MOGGING_PANE_ID: String(paneId) })).code
       let approvedChipOk = false
       for (let i = 0; i < 20 && !approvedChipOk; i++) {
