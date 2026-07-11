@@ -1,10 +1,24 @@
 {
-  "//": "Best-effort: requires a Gemini CLI version with hook support. Merge into ~/.gemini/settings.json (or a project's .gemini/settings.json). If your Gemini CLI has no hooks, MoggingLabs still tracks it via OSC agent-state (the baseline).",
+  "//": "Merge into ~/.gemini/settings.json (or a project's .gemini/settings.json). Hooks are ON by default in Gemini CLI; verified against 0.50.",
+  "//2": "Gemini needs BOTH channels. `enableNotifications` is ONE switch covering 'action-required prompts AND session completion' (its own words), so on its own it cannot say which -- read as 'needs you', it painted every COMPLETED pane red. `AfterAgent` fires when the agent loop completes: that is the `done` the app reads the chime against.",
+  "//3": "  completes     -> chime + AfterAgent done -> the done wins  -> GREEN (finished)",
+  "//4": "  needs a human -> chime alone, uncontradicted             -> RED   (blocked)",
+  "//5": "AfterAgent is the MAIN loop only -- Gemini's subagents run through a different executor and fire no agent hooks -- so subagents stay invisible, which is the house rule. Do NOT wire the Notification hook: it fires for errors/warnings/info, which are not 'blocked on you', and mapping it to needs-input rings the pane red for a warning.",
+  "general": {
+    "enableNotifications": true
+  },
   "hooks": {
-    "Notification": [
+    "BeforeAgent": [
       {
         "hooks": [
-          { "type": "command", "command": "mogging notify --event needs-input" }
+          { "type": "command", "command": "mogging notify --event turn-start" }
+        ]
+      }
+    ],
+    "AfterAgent": [
+      {
+        "hooks": [
+          { "type": "command", "command": "mogging notify --event done" }
         ]
       }
     ]

@@ -7,6 +7,8 @@ import {
   aiderBellEnv,
   codexBellArgs,
   geminiSystemSettings,
+  opencodeConfig,
+  opencodePluginSource,
   opencodeTuiConfig
 } from '@backend/features/agents'
 
@@ -76,23 +78,45 @@ function geminiRealSystemSettingsPath(): string {
 }
 
 /** Session-scoped launch extras that make a provider ring its pane's bell: extra
- *  launch ARGS and/or env vars, per the CLI's own dialect. Codex/Gemini/OpenCode
- *  notify via OSC 9/BEL on the PTY stream (the OscParser latches those); aider runs
- *  the generated notify script. Claude is wired in claudeStatuslineArgs (context.ts).
- *  Unknown/custom providers get nothing — the output-activity baseline still holds. */
+ *  launch ARGS and/or env vars, per the CLI's own dialect. Claude is wired in
+ *  claudeStatuslineArgs (context.ts); aider and codex additionally run the generated
+ *  notify script, which is what lets their COMPLETION read as green instead of red.
+*  Unknown/custom providers get nothing — the output-activity baseline still holds.
+ *
+ *  Every CLI here now speaks BOTH halves: an ambiguous "look at me" chime (which fires on
+ *  completion as much as on a block) AND an explicit `done` that contradicts it, so the
+ *  tracker's bell window can tell the two apart. Codex: OSC 9 + its notify program.
+ *  Gemini: enableNotifications + the AfterAgent hook. OpenCode: its attention chime + a
+ *  generated plugin. Aider has no chime at all — only a done — which is already honest. */
 export function bellLaunchExtras(agentId: string): { args: string[]; env: Record<string, string> } {
   const none = { args: [], env: {} }
   switch (agentId) {
     case 'codex':
-      return { args: codexBellArgs(), env: {} }
+      // Hand Codex the notify script too: its OSC 9 alone cannot tell turn-complete from
+      // wants-approval, and the notify program (turn-complete ONLY) is what disambiguates.
+      return { args: codexBellArgs(notifyHookPath() ?? undefined), env: {} }
     case 'gemini': {
-      const file = writeGenerated('gemini-system-settings.json', geminiSystemSettings(readJson(geminiRealSystemSettingsPath())))
+      // The notification alone cannot say WHICH ("action-required prompts and session
+      // completion" are one switch); the AfterAgent hook is the done that disambiguates it.
+      const file = writeGenerated(
+        'gemini-system-settings.json',
+        geminiSystemSettings(readJson(geminiRealSystemSettingsPath()), notifyHookInvocation() ?? undefined)
+      )
       return file ? { args: [], env: { GEMINI_CLI_SYSTEM_SETTINGS_PATH: file } } : none
     }
     case 'opencode': {
       const userTui = readJson(join(homedir(), '.config', 'opencode', 'tui.json'))
-      const file = writeGenerated('opencode-tui.json', opencodeTuiConfig(userTui))
-      return file ? { args: [], env: { OPENCODE_TUI_CONFIG: file } } : none
+      const tui = writeGenerated('opencode-tui.json', opencodeTuiConfig(userTui))
+      if (!tui) return none
+      const env: Record<string, string> = { OPENCODE_TUI_CONFIG: tui }
+      // OpenCode has no hook config: its only verdict channel is a plugin. Both files must
+      // land or we ship the chime alone — which is the ambiguous half, so the pane would
+      // read every completion as attention.
+      const script = notifyHookPath()
+      const plugin = script ? writeGenerated('opencode-notify-plugin.mjs', opencodePluginSource(script)) : null
+      const cfg = plugin ? writeGenerated('opencode-config.json', opencodeConfig(plugin)) : null
+      if (cfg) env.OPENCODE_CONFIG = cfg
+      return { args: [], env }
     }
     case 'aider': {
       const inv = notifyHookInvocation()

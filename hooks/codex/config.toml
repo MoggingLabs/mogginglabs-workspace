@@ -1,9 +1,28 @@
 # MoggingLabs Workspace notify hook for Codex CLI.
-# Add this line to your USER-level ~/.codex/config.toml (Codex ignores a project-level `notify`).
+# Add these to your USER-level ~/.codex/config.toml (Codex ignores a project-level `notify`).
 #
-# Codex runs this program on turn events, appending a single JSON argument describing the event
-# (e.g. {"type":"agent-turn-complete", ...} or {"type":"approval-requested", ...}). `mogging notify`
-# detects that JSON blob and maps it: agent-turn-complete -> done, approval-requested -> needs-input.
-# It never forwards prompt/output content — only the derived event label reaches the daemon.
+# Codex needs BOTH channels, and the pair is what makes it legible:
+#
+#   notify           runs this program on turn events, appending a JSON argument describing the
+#                    event. It fires ONLY on turn-complete ({"type":"agent-turn-complete"}) —
+#                    there is no approval event on this channel. `mogging notify` detects the
+#                    blob and takes the type ALONE: agent-turn-complete -> done. It never
+#                    forwards prompt/output content; only the derived event label reaches the
+#                    daemon.
+#   tui.notifications  fires an OSC 9 on the PTY for turn-complete AND for approval requests.
+#                    On its own it is ambiguous — it cannot say WHICH — so read as "needs you"
+#                    it painted every COMPLETED pane red, and green was unreachable.
+#
+# Together they disambiguate: the app holds an OSC 9 for a beat, and
+#   turn complete  -> OSC 9 + a `done` behind it  -> the done wins        -> GREEN (finished)
+#   wants approval -> OSC 9 with nothing behind it -> the bell stands     -> RED  (blocked)
+#
+# `notification_condition = always`: the default `unfocused` suppresses the ring exactly when
+# the pane is focused — but the pane's DOT must flip regardless of focus.
 
 notify = ["mogging", "notify"]
+
+[tui]
+notifications = true
+notification_method = "osc9"
+notification_condition = "always"

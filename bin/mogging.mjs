@@ -36,7 +36,7 @@ const argv = process.argv.slice(2).filter((a) => a !== '--dev')
 const cmd = argv[0]
 
 if (cmd === 'usage') runUsage(argv.slice(1))
-else if (cmd === 'notify') runNotify(argv.slice(1))
+else if (cmd === 'notify') runNotify(argv.slice(1)).catch(() => process.exit(0)) // a hook must never fail its agent
 else if (cmd === 'list') runList()
 else if (cmd === 'send') runSend(argv.slice(1))
 else if (cmd === 'send-key') runSendKey(argv.slice(1))
@@ -836,7 +836,70 @@ function bail(msg) {
   process.exit(0)
 }
 
-function runNotify(args) {
+/** Claude Code's `Notification` hook is MULTIPLEXED: one event carrying eleven different `type`s,
+ *  from "I need permission" to "<label> finished". Mapping the whole event to needs-input painted
+ *  COMPLETED panes red — `agent_completed` fires the instant an agent finishes and raced the Stop
+ *  hook's green (both ~130ms process spawns; last one wins, and attention is a latch, so the red
+ *  stuck). `idle_prompt` is worse: an idle TIMER, so a finished green pane turned red a minute
+ *  later just by sitting there. So WHITELIST the types that genuinely block on a human; everything
+ *  else is not an alert and says nothing. Verified against the 2.1.207 bundle's notificationType
+ *  producers. The `type` field ONLY: message/title never leave the process (ADR 0002). */
+function notifTypeToEvent(type) {
+  switch (type) {
+    case 'permission_prompt':
+    case 'worker_permission_prompt':
+    case 'agent_needs_input':
+    case 'elicitation_dialog':
+      return 'needs-input' // a human is genuinely blocking the agent -> red
+    case 'idle_prompt':
+      return 'idle-prompt' // "waiting for your input" nudge -> parked, not blocked
+    case 'agent_completed':
+    case 'auth_success':
+    case 'elicitation_complete':
+    case 'elicitation_response':
+    case 'computer_use_enter':
+    case 'computer_use_exit':
+    case 'push_notification':
+      return null // not an alert at all -> stay silent
+    default:
+      return 'needs-input' // an unrecognized notification is still worth surfacing
+  }
+}
+
+/** The hook payload rides stdin. Bounded: a TTY (a human running this by hand) or no payload
+ *  within 400ms keeps the argv event; a hook must never hang the agent it's attached to. */
+function readStdinType() {
+  return new Promise((resolve) => {
+    if (process.stdin.isTTY) return resolve(null)
+    let buf = ''
+    let settled = false
+    const done = () => {
+      if (settled) return
+      settled = true
+      try {
+        resolve(JSON.parse(buf).type ?? null)
+      } catch {
+        resolve(null)
+      }
+    }
+    const timer = setTimeout(done, 400)
+    timer.unref?.()
+    process.stdin.setEncoding('utf8')
+    process.stdin.on('data', (c) => {
+      buf += c
+    })
+    process.stdin.on('end', () => {
+      clearTimeout(timer)
+      done()
+    })
+    process.stdin.on('error', () => {
+      clearTimeout(timer)
+      done()
+    })
+  })
+}
+
+async function runNotify(args) {
   const opts = parseFlags(args)
   const paneId = opts.pane ?? process.env.MOGGING_PANE_ID
   const endpointFile = process.env.MOGGING_DAEMON_ENDPOINT
@@ -857,6 +920,16 @@ function runNotify(args) {
     }
   }
   if (!event) event = 'needs-input'
+
+  // Only the Notification hook is ambiguous — don't stall any other event on stdin.
+  if (event === 'needs-input') {
+    const type = await readStdinType()
+    if (type !== null) {
+      const mapped = notifTypeToEvent(type)
+      if (mapped === null) process.exit(0) // a completion / info notice: never an alert
+      event = mapped
+    }
+  }
 
   if (!paneId || !endpointFile) {
     bail('not inside a MoggingLabs pane (MOGGING_PANE_ID / MOGGING_DAEMON_ENDPOINT unset); skipping')
