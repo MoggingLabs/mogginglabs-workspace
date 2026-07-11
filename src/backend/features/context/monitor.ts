@@ -17,6 +17,7 @@ import {
   readTail
 } from './readers'
 import { claudeWindowForModel, codexPercentUsed, geminiWindowForModel, learnClaudeWindow } from './window'
+import { aiderWindowForModel, opencodeWindowFor, readAiderUsage, readOpencodeUsage } from './providers'
 
 /** Gemini keeps a project's session logs one level down, in `chats/`. */
 function geminiChatsDir(projectDir: string | null): string | null {
@@ -60,6 +61,8 @@ export interface ContextPaneSpec {
   home: string
   /** Pane adopted from the detached daemon — its session predates the watch. */
   adopted?: boolean
+  /** Test seam: opencode's offline model catalogue (defaults to its real cache path). */
+  opencodeModels?: string
   /** The earliest this session's log can have been written (ms epoch). Typed-launch detection
    *  knows this EXACTLY — the moment the agent's process was first seen, minus the detection
    *  lag — which beats both guesses below: a fresh launch's slack, and an adopted pane's blind
@@ -307,6 +310,41 @@ export class ContextMonitor {
           return
         }
       }
+    }
+    // 3b. THE TWO PROVIDERS THAT ARE NOT A LOG TAIL. Aider reports into a per-pane analytics
+    //     log the daemon points it at (exact integers, typed or launched); opencode keeps
+    //     everything in one SQLite store keyed by directory. Neither needs the file-locking
+    //     machinery below — there is exactly one place to look, and it is this pane's.
+    if (t.provider === 'aider') {
+      const r = readAiderUsage(paneId)
+      if (!r || r.mtimeMs < this.floorFor(t)) return // no reading yet, or a previous session's
+      const window = aiderWindowForModel(t.home, r.model)
+      if (!window) return // no litellm cache / unknown model: no denominator, so no digit
+      this.emit(paneId, t, {
+        provider: t.provider,
+        usedTokens: r.usedTokens,
+        windowTokens: window,
+        usedPct: Math.max(0, Math.round((r.usedTokens / window) * 100)),
+        model: r.model,
+        at: this.now()
+      })
+      return
+    }
+    if (t.provider === 'opencode') {
+      const r = readOpencodeUsage(t.home, t.cwd)
+      if (!r) return
+      const window = opencodeWindowFor(r.provider, r.model, t.opencodeModels)
+      if (!window) return
+      this.emit(paneId, t, {
+        provider: t.provider,
+        usedTokens: r.usedTokens,
+        windowTokens: window,
+        // Its sidebar rounds and reserves nothing.
+        usedPct: Math.max(0, Math.round((r.usedTokens / window) * 100)),
+        model: r.model,
+        at: this.now()
+      })
+      return
     }
     if (!t.file) return // nothing else to read yet; pending "–" stays
 

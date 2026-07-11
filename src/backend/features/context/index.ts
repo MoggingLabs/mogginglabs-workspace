@@ -4,6 +4,7 @@
 // see readers.ts for the dev-verified log shapes and monitor.ts for the session-locking
 // rules. Electron-free — the app layer (src/main/context.ts) wires the sink to IPC.
 export * from './readers'
+export * from './providers'
 export * from './window'
 export * from './monitor'
 export * from './relay'

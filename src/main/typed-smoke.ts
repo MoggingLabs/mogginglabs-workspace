@@ -179,12 +179,12 @@ export function runTypedSmoke(win: BrowserWindow): void {
       // what makes a wall of agents readable. Adopt each provider into a pane and assert the
       // gauge appears (pending "–" until that CLI's log states a number — never a made-up 0).
       const gaugeForProvider: Record<string, boolean> = {}
-      for (const provider of ['codex', 'gemini']) {
+      for (const provider of ['codex', 'gemini', 'opencode', 'aider']) {
         await ES(`window.__mogging.agents.adopt(1, ${JSON.stringify(provider)}, ${JSON.stringify(added ? 'C:\\\\Windows' : '')});`)
         const g = await until(() => gauge(1), (x) => x.shown, 12000)
         gaugeForProvider[provider] = g.present && g.shown
       }
-      const everyAgentHasGauge = gaugeForProvider.codex === true && gaugeForProvider.gemini === true
+      const everyAgentHasGauge = ['codex', 'gemini', 'opencode', 'aider'].every((p) => gaugeForProvider[p] === true)
 
       const pass =
         splitOk &&

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app } from 'electron'
-import { ContextMonitor, claudeWindowForModel, learnClaudeWindow } from '@backend/features/context'
+import { ContextMonitor, aiderLogPath, claudeWindowForModel, learnClaudeWindow } from '@backend/features/context'
 import type { ContextUsage } from '@contracts'
 
 // Env-gated CONTEXT-ACCURACY gate (MOGGING_CTXACCURACY). Windowless: no daemon, no pane. It
@@ -32,14 +32,16 @@ import type { ContextUsage } from '@contracts'
 
 interface Case {
   name: string
-  provider: 'claude' | 'codex' | 'gemini'
+  provider: 'claude' | 'codex' | 'gemini' | 'opencode' | 'aider'
+  /** opencode reads its denominator from a models.dev cache; the gate points it at a fixture. */
+  opencodeModels?: string
   /** The percentage that CLI would print for this exact log. */
   expectPct: number
   expectUsedTokens: number
   expectWindow: number
   /** What a naive `used/window` would have shown — recorded so a regression is legible. */
   naivePct?: number
-  build: (home: string, cwd: string) => void
+  build: (home: string, cwd: string, paneId: number) => void
 }
 
 /** `C:\x\y` -> `C--x-y` (claude's project-dir munge). */
@@ -163,6 +165,87 @@ const CASES: Case[] = [
       }
       writeFileSync(join(dir, 'chats', 'session-2026-07-11T00-01-ffff0000.jsonl'), JSON.stringify(rec) + '\n')
     }
+  },
+  {
+    // OPENCODE keeps everything in ONE SQLite store (WAL), keyed by the session's directory.
+    // Its sidebar sums FIVE token fields of the last answered assistant message and divides by
+    // the model's raw limit.context — reserving nothing. The fixture is built with the schema
+    // read off the real database on this machine, in WAL mode with the rows left UNCHECKPOINTED,
+    // because a reader that ignores the -wal sees zero rows and shows nothing at all.
+    //
+    // 90,000 + 1,200 + 800 + 40,000 + 8,000 = 140,000 of a 200,000 window -> 70%.
+    // (limit.context 200000 = claude-opus-4-5, verified in this machine's models.dev cache.)
+    name: 'opencode: five fields summed, over the raw limit (WAL, uncheckpointed)',
+    provider: 'opencode',
+    expectUsedTokens: 140_000,
+    expectWindow: 200_000,
+    expectPct: 70,
+    opencodeModels: '', // filled in by build()
+    build: (home, cwd) => {
+      const Database = require('better-sqlite3') as new (p: string) => {
+        pragma: (s: string) => unknown
+        exec: (s: string) => void
+        prepare: (s: string) => { run: (...a: unknown[]) => void }
+        close: () => void
+      }
+      const db = new Database(join(home, 'opencode.db'))
+      db.pragma('journal_mode = WAL')
+      db.exec(
+        'CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, time_created INTEGER,' +
+          ' tokens_input INTEGER, tokens_output INTEGER);' +
+          'CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, data TEXT);'
+      )
+      // The lifetime accumulators on `session` are deliberately absurd here: a gauge built on
+      // them (the trap) would read 1000%+ instead of 70%.
+      db.prepare('INSERT INTO session VALUES (?,?,?,?,?)').run('sess-1', cwd, 1, 9_000_000, 9_000_000)
+      const data = {
+        providerID: 'anthropic',
+        modelID: 'claude-opus-4-5',
+        tokens: { input: 90_000, output: 1_200, reasoning: 800, cache: { read: 40_000, write: 8_000 } }
+      }
+      // An earlier step that has not been answered yet (output 0) must NOT be the reading.
+      db.prepare('INSERT INTO session_message VALUES (?,?,?,?,?)').run(
+        'm0',
+        'sess-1',
+        'assistant',
+        1,
+        JSON.stringify({ providerID: 'anthropic', modelID: 'claude-opus-4-5', tokens: { input: 5, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } })
+      )
+      db.prepare('INSERT INTO session_message VALUES (?,?,?,?,?)').run('m1', 'sess-1', 'assistant', 2, JSON.stringify(data))
+      db.close() // leaves the -wal in place, uncheckpointed — exactly the live shape
+      writeFileSync(
+        join(home, 'models.json'),
+        JSON.stringify({ anthropic: { models: { 'claude-opus-4-5': { limit: { context: 200_000, output: 64_000 } } } } })
+      )
+    }
+  },
+  {
+    // AIDER shows no percentage anywhere and rounds its printed token counts to the nearest 1k.
+    // So the source is the analytics log every pane points it at (AIDER_ANALYTICS_LOG), whose
+    // `message_send` events carry the EXACT prompt size — and litellm's cached max_input_tokens,
+    // the same denominator `/tokens` uses. 47,500 / 200,000 = 23.75% -> 24%.
+    // (The 1k-rounded line aider PRINTS would have said "48k sent" — i.e. 24%, but by luck.)
+    name: 'aider: exact prompt_tokens from its own analytics log',
+    provider: 'aider',
+    expectUsedTokens: 47_500,
+    expectWindow: 200_000,
+    expectPct: 24,
+    build: (home, _cwd, paneId) => {
+      mkdirSync(join(home, 'caches'), { recursive: true })
+      writeFileSync(
+        join(home, 'caches', 'model_prices_and_context_window.json'),
+        JSON.stringify({ 'claude-sonnet-4-5': { max_input_tokens: 200_000 } })
+      )
+      const log = aiderLogPath(paneId)
+      mkdirSync(join(log, '..'), { recursive: true })
+      const events = [
+        { event: 'message_send', properties: { main_model: 'claude-sonnet-4-5', prompt_tokens: 12_000, completion_tokens: 80 }, time: 1 },
+        // a later, unrelated event must not be mistaken for a reading
+        { event: 'command_tokens', properties: {}, time: 2 },
+        { event: 'message_send', properties: { main_model: 'claude-sonnet-4-5', prompt_tokens: 47_500, completion_tokens: 120 }, time: 3 }
+      ]
+      writeFileSync(log, events.map((e) => JSON.stringify(e)).join('\n') + '\n')
+    }
   }
 ]
 
@@ -180,8 +263,13 @@ export async function runCtxAccuracySmoke(): Promise<void> {
     CASES.forEach((c, i) => {
       const home = join(root, c.provider + i)
       mkdirSync(home, { recursive: true })
-      c.build(home, cwd)
-      monitor.setPane(i + 1, { provider: c.provider, cwd, home })
+      c.build(home, cwd, i + 1)
+      monitor.setPane(i + 1, {
+        provider: c.provider,
+        cwd,
+        home,
+        opencodeModels: c.provider === 'opencode' ? join(home, 'models.json') : undefined
+      })
     })
 
     // The monitor's first read is synchronous inside setPane; give its poll a couple of turns

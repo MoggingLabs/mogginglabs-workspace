@@ -24,10 +24,17 @@ import type { PaneId } from '../domain/pane'
  *    codex   its own reserved-baseline formula (window.ts) — a plain used/window reads ~4 points
  *            low against the "% context left" printed in the very same pane
  *    gemini  promptTokenCount / tokenLimit(model) — what its own "N% used" footer divides
+ *    opencode  the five token fields of the last assistant message, over the model's raw
+ *            limit.context — what its sidebar sums (its COMPACTION formula differs; the user
+ *            is not shown that one, so neither are we)
+ *    aider   the only one that shows NO percentage anywhere: it prints 1k-ROUNDED token
+ *            counts and computes a real figure only inside `/tokens`. So we read what
+ *            `/tokens` reads — the exact prompt size aider logs for every call, over
+ *            litellm's max_input_tokens — rather than round-tripping its own rounding
  *
  *  Anything else (a custom command) reports no usage at all. We never estimate a number we
  *  cannot read: no source, no digit. */
-export const CONTEXT_PROVIDERS = ['claude', 'codex', 'gemini'] as const
+export const CONTEXT_PROVIDERS = ['claude', 'codex', 'gemini', 'opencode', 'aider'] as const
 export type ContextProvider = (typeof CONTEXT_PROVIDERS)[number]
 
 export const isContextProvider = (id: string): id is ContextProvider =>

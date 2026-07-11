@@ -18,6 +18,7 @@ import { defaultShell, shellArgs, shellIntegrationEnv } from '../../platform/she
 import { killPtyTree } from '../../platform/process-tree'
 import { getTelemetry } from '../../core/telemetry'
 import { ActivityTracker, AgentProcessDetector, OscParser, fileUriToPath, isTerminalReply } from '../agent-state'
+import { aiderLogPath } from '../context'
 
 /** Retained per-pane output for reattach repaint — same cap as the daemon's ring. */
 const SCROLLBACK_BYTES = 200_000
@@ -109,7 +110,8 @@ export class PtyService {
         cwd: spawnCwd,
         // Shell integration (cwd reporting): the same env the daemon injects — a cmd.exe pane
         // that never told anyone where it was now does, on every prompt.
-        env: { ...process.env, ...shellIntegrationEnv(shell) } as Record<string, string>
+        // AIDER_ANALYTICS_LOG: the daemon's twin — aider's only exact source (see providers.ts).
+        env: { ...process.env, ...shellIntegrationEnv(shell), AIDER_ANALYTICS_LOG: aiderLogPath(req.id) } as Record<string, string>
       })
       this.sizes.set(req.id, { cols, rows })
       this.spawnCwds.set(req.id, spawnCwd)

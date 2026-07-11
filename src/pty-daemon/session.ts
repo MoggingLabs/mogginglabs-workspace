@@ -9,6 +9,7 @@ import * as os from 'node:os'
 import * as fs from 'node:fs'
 import { spawnPty, type IPty } from '@backend/platform/pty-host'
 import { shellIntegrationEnv } from '@backend/platform/shell'
+import { aiderLogPath } from '@backend/features/context'
 import type { Approval, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { notifyEventToState } from '@contracts'
 import { ActivityTracker, AgentProcessDetector, OscParser, fileUriToPath, isTerminalReply, type DetectedAgentProc } from '@backend/features/agent-state'
@@ -158,6 +159,11 @@ class PaneSession {
       env: {
         ...process.env,
         ...shellIntegrationEnv(shell),
+        // Aider has no statusline and no percentage: the only exact source is the analytics log
+        // it writes when pointed at one, and every aider flag has an AIDER_* env twin. Pointing
+        // the PANE at a log means a HAND-TYPED aider reports exactly like a launched one — the
+        // thing claude's `--settings` relay cannot do (context/providers.ts).
+        AIDER_ANALYTICS_LOG: aiderLogPath(this.id),
         ...extraEnv,
         ...(spec.env ?? {}),
         MOGGING_PANE_ID: this.id

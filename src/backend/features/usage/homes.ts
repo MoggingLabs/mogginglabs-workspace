@@ -18,7 +18,11 @@ export const HOME_POINTER: Record<string, string> = {
 const DEFAULT_HOME: Record<string, () => string> = {
   claude: () => join(homedir(), '.claude'),
   codex: () => join(homedir(), '.codex'),
-  gemini: () => join(homedir(), '.gemini')
+  gemini: () => join(homedir(), '.gemini'),
+  // opencode keeps its SQLite store in the XDG DATA dir, not a dotfile home (verified on this
+  // machine); aider caches litellm's model catalogue under its own.
+  opencode: () => join(homedir(), '.local', 'share', 'opencode'),
+  aider: () => join(homedir(), '.aider')
 }
 
 /** Expand a leading `~` (profiles store pointer values user-style). */
