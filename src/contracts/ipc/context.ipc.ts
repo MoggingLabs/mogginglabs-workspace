@@ -45,8 +45,10 @@ export interface ContextUsage {
    *  window (sourced table in @backend/features/context/window.ts); codex: stated on
    *  every token_count line. Never guessed — no source, no reading. */
   windowTokens: number
-  /** `usedTokens / windowTokens`, clamped to 0–100 and rounded — the CLI's own
-   *  rounding (h1n), so the percent agrees with `/context` digit-for-digit. */
+  /** The percentage THAT CLI would display for this reading — computed with its formula, not
+   *  ours (see CONTEXT_PROVIDERS above). Usually 0–100, but not by decree: gemini's ratio is
+   *  unclamped and its footer says "101% used" once a prompt outgrows the window, so this may
+   *  exceed 100 and the pane says so too. The disc simply stops at full. */
   usedPct: number
   /** The model id the CLI logged (e.g. "claude-opus-4-8"). A label — never a credential. */
   model?: string

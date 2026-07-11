@@ -920,7 +920,10 @@ export class TerminalPane {
         ctx.title = 'Agent context: waiting for the session’s first response'
         return
       }
-      ctx.style.setProperty('--ctx', String(u.usedPct)) // drives the disc's sweep
+      // The DISC is a fraction of a circle, so it stops at full. The NUMBER does not: a gemini
+      // pane whose prompt has outgrown its window says "101% used" in its own footer, and the
+      // header must say the same thing rather than a comfortable lie (context.ipc.ts).
+      ctx.style.setProperty('--ctx', String(Math.min(100, u.usedPct))) // drives the disc's sweep
       // A seeded baseline (pre-first-response) is an approximation and SAYS so: "~".
       ctxPct.textContent = `${u.approx ? '~' : ''}${u.usedPct}% used`
       ctx.classList.toggle('is-warn', u.usedPct >= 60 && u.usedPct < 90)

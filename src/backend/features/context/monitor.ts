@@ -378,7 +378,13 @@ export class ContextMonitor {
     const usedPct =
       t.provider === 'codex'
         ? codexPercentUsed(reading.usedTokens, window)
-        : Math.max(0, Math.min(100, Math.round((reading.usedTokens / window) * 100)))
+        : t.provider === 'gemini'
+          ? // NOT clamped at 100. Gemini's ratio is unclamped and its footer will happily say
+            // "101% used" once the prompt outgrows the limit (verified against the shipped
+            // bundle: at 1,053,819 tokens of 1,048,576 it renders 101). Clamping would make the
+            // header disagree with the pane in the one place a context gauge matters most.
+            Math.max(0, Math.round((reading.usedTokens / window) * 100))
+          : Math.max(0, Math.min(100, Math.round((reading.usedTokens / window) * 100)))
     if (usedPct === null) return // codex logged no usable window — it shows no percent either
     this.emit(paneId, t, {
       provider: t.provider,

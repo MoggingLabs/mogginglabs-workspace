@@ -137,6 +137,32 @@ const CASES: Case[] = [
       ]
       writeFileSync(join(dir, 'chats', 'session-2026-07-11T00-00-abcd1234.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
     }
+  },
+  {
+    // Gemini does NOT clamp. Once a prompt outgrows the window its footer says "101% used", and
+    // so must the header — a gauge that quietly reports 100% at the exact moment the context has
+    // overflowed is lying in the one place it matters. (Verified against the shipped bundle:
+    // 1,053,819 / 1,048,576 renders 101.)
+    name: 'gemini: over the limit reads 101%, not a comfortable 100',
+    provider: 'gemini',
+    expectUsedTokens: 1_053_819,
+    expectWindow: 1_048_576,
+    expectPct: 101,
+    build: (home, cwd) => {
+      const slug = 'overflow-project'
+      writeFileSync(join(home, 'projects.json'), JSON.stringify({ [cwd.toLowerCase()]: slug }))
+      const dir = join(home, 'tmp', slug)
+      mkdirSync(join(dir, 'chats'), { recursive: true })
+      writeFileSync(join(dir, '.project_root'), cwd)
+      const rec = {
+        id: 'm9',
+        type: 'gemini',
+        content: 'x',
+        tokens: { input: 1_053_819, output: 1, cached: 0, thoughts: 0, tool: 0, total: 1_053_820 },
+        model: 'gemini-2.5-pro'
+      }
+      writeFileSync(join(dir, 'chats', 'session-2026-07-11T00-01-ffff0000.jsonl'), JSON.stringify(rec) + '\n')
+    }
   }
 ]
 
