@@ -235,6 +235,7 @@ run_smoke CHROMEUX     MOGGING_CHROMEUX  1 300 chromeux
 run_smoke DOCKUX       MOGGING_DOCKUX    1 240 dockux
 run_smoke UXMILESTONE  MOGGING_UXMILESTONE 1 360 uxmilestone
 run_smoke TYPED        MOGGING_TYPED     1 300 typed
+run_smoke TYPEDCOST    MOGGING_TYPEDCOST 1 120 typedcost
 
 echo ""
 echo "══ SWEEP RESULTS ══"

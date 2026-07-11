@@ -83,10 +83,8 @@ export function registerContext(getWebContents: () => WebContents | null): () =>
       cwd: req.cwd,
       home: resolveHome(req.provider, profile),
       adopted: req.adopted === true,
-      // Typed-launch detection: the process table found this agent, so the matcher knows
-      // exactly how far back to look — and that the cwd is a hint (a `cd` can have moved it
-      // deeper). See ContextWatchRequest.
-      detected: req.detected === true,
+      // Typed-launch detection saw the agent's process start, so the matcher gets a TRUE floor
+      // for how far back this pane's session log may lie, instead of a guess.
       since: typeof req.since === 'number' && req.since > 0 ? req.since : undefined
     })
   })

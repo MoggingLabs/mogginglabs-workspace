@@ -28,7 +28,6 @@ export function runTypedSmoke(win: BrowserWindow): void {
   const wc = win.webContents
   const errors: string[] = []
   let done = false
-
   wc.on('render-process-gone', (_e, d) => errors.push('render-process-gone: ' + JSON.stringify(d)))
 
   const ES = (js: string): Promise<unknown> => wc.executeJavaScript(js)

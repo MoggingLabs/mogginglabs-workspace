@@ -70,10 +70,8 @@ export const contextFeature: UiFeature = {
         cwd: session.cwd,
         profileId: session.profileId,
         adopted: session.adopted,
-        // A DETECTED session (the user typed the CLI): the backend found the process, so it
-        // knows exactly when it started — and that its cwd may sit a directory below the one
-        // the pane last reported. Both refine the log matcher's lock.
-        detected: session.detected,
+        // A DETECTED session (the user typed the CLI): the backend watched its process start,
+        // so the log matcher gets a true floor rather than a guess.
         since: session.since
       })
     })

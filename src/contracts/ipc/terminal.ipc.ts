@@ -94,12 +94,23 @@ export interface CwdEvent {
  *  launches the APP performed.
  *
  *  `agentId` is an adapter id ('claude', 'codex', …), or null when the pane's agent exited.
- *  `cwd` is the agent process's OWN working directory where the platform can report it
- *  (POSIX), else the pane's last known cwd — it names the session log, so it is the launch
- *  cwd, not the pane's seed. `sinceMs` is when the agent was first seen (minus the detection
- *  lag): the floor a context watch may look back to for a session that predates it — which is
- *  every session after an app restart, since the daemon keeps the agent alive and replays
- *  this event on reattach. Ids and counts only — never a command line (ADR 0002/0005). */
+ *
+ *  `cwd` is where the agent RUNS — it names the session log, so it is the agent's directory,
+ *  not the pane's seed. POSIX reads it from the process itself (exact). Windows cannot read a
+ *  process's cwd without native code, so it uses the pane's last reported cwd — which is why
+ *  panes carry shell integration (backend/platform/shell.ts): cmd.exe now announces its
+ *  directory on every prompt, so a `cd` inside the pane is reflected. The one case that stays
+ *  out of reach there is a compound line — `cd sub && claude` — where the shell never prints a
+ *  prompt between the two, so the agent's directory is one level below the last one reported.
+ *  Its session log is then not found and the gauge stays on its honest "–" (everything else —
+ *  the provider mark, the chip, resume — is unaffected). Guessing at descendants instead would
+ *  risk locking on to a session belonging to another window, which is worse than no number.
+ *
+ *  `sinceMs` is when the agent was first seen (minus the detection lag): the floor a context
+ *  watch may look back to for a session that predates it — which is every session after an app
+ *  restart, since the daemon keeps the agent alive and replays this event on reattach.
+ *
+ *  Ids and counts only — never a command line (ADR 0002/0005). */
 export interface AgentDetectedEvent {
   id: PaneId
   agentId: string | null

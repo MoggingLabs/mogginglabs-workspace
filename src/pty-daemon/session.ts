@@ -48,10 +48,10 @@ export interface PaneSubscriber {
 interface PaneHooks {
   onExit: () => void
   onChange: () => void
-  /** Something in this pane may have STARTED or ENDED a command (an activity-state edge, or
-   *  a submitted line). The agent-process detector spends its one process snapshot here —
-   *  see agent-state/agent-proc.ts for why that is the whole cost model. */
-  onCommandEdge: () => void
+  /** A LINE was submitted into this pane — something may be starting. */
+  onCommandSubmitted: () => void
+  /** The pane's shell is back at its PROMPT — whatever was submitted has finished. */
+  onPrompt: () => void
 }
 
 class PaneSession {
@@ -173,18 +173,20 @@ class PaneSession {
     this.tracker = new ActivityTracker((state) => {
       this.lastState = state
       for (const s of this.subs) s.state(state)
-      // An activity EDGE is the cheap "a command started/ended here" signal the agent-process
-      // detector spends its snapshot on. A streaming agent stays busy — one edge, not one per
-      // chunk — so an idle wall of panes and a running agent both cost nothing.
-      hooks.onCommandEdge()
     })
     const osc = new OscParser(
       (state) => this.tracker.notify(state),
       (ev) => {
         if (ev.kind === 'bell') this.tracker.bell()
         if (ev.kind === 'cwd' && ev.payload) {
-          // De-duped on VALUE: a cmd.exe pane reports its cwd twice per prompt (OSC 9;9 +
-          // OSC 7 — whichever survives ConPTY), and an unchanged cwd is not news.
+          // OSC 9;9 is the SHELL's prompt marker (we inject it — platform/shell.ts), so it says
+          // more than a path: the foreground command has ended. The agent detector spends — and
+          // above all SAVES — its process listings on that (agent-state/agent-proc.ts). OSC 7 is
+          // not treated the same way: a TUI could emit one, and a wrong "the shell is idle"
+          // would cancel the very probe that was about to find the agent.
+          if (ev.code === 9) hooks.onPrompt()
+          // De-duped on VALUE: a cmd.exe pane reports its cwd twice per prompt (9;9 then 7 —
+          // whichever survives ConPTY), and an unchanged cwd is not news.
           const cwd = fileUriToPath(ev.payload)
           if (cwd && cwd !== this.lastCwd) {
             this.lastCwd = cwd
@@ -304,9 +306,11 @@ class PaneSession {
     }
     this.pristineRestore = false // touched: from here on it's a live shell, not a restore
     this.tracker.input() // typing answers whatever the pane was blocked on
-    // A submitted LINE is the most precise "a command is starting" signal there is — it beats
-    // the output edge to the punch, so a hand-typed `claude` is detected as it boots.
-    if (data.includes('\r') || data.includes('\n')) this.hooks.onCommandEdge()
+    // A submitted LINE is the only moment a shell can start something — the detector arms one
+    // probe on it, and the prompt coming back cancels that probe, so ordinary commands cost
+    // nothing. (Enter pressed INSIDE an agent is a message to the agent; the detector knows an
+    // agent owns this pane and ignores it.)
+    if (data.includes('\r') || data.includes('\n')) this.hooks.onCommandSubmitted()
     this.proc.write(data)
   }
   resize(cols: number, rows: number): void {
@@ -395,14 +399,20 @@ export class SessionManager {
         this.schedulePersist(500)
       },
       onChange: () => this.schedulePersist(2000),
-      onCommandEdge: () => this.agentProcs.poke(id)
+      onCommandSubmitted: () => this.agentProcs.commandSubmitted(id),
+      onPrompt: () => this.agentProcs.promptSeen(id)
     }
   }
 
-  /** Start watching a pane's subtree for agent processes. REMOTE panes are skipped: their
-   *  agent runs on the far machine and the only thing in our local subtree is `ssh`. */
-  private trackAgentProcs(pane: PaneSession): void {
-    if (!pane.isRemote) this.agentProcs.track(pane.id, pane.pid)
+  /** Start watching a pane's subtree for agent processes. REMOTE panes are skipped: their agent
+   *  runs on the far machine and the only thing in our local subtree is `ssh`.
+   *
+   *  `expectAgent` says whether this pane can produce an agent NOBODY announced: a restore types
+   *  its own resume command into a booting shell, so its agent simply appears. A fresh pane
+   *  cannot — it starts empty, and every launch into it is typed (and therefore announced). That
+   *  distinction is why opening a workspace of plain terminals costs zero process listings. */
+  private trackAgentProcs(pane: PaneSession, expectAgent = false): void {
+    if (!pane.isRemote) this.agentProcs.track(pane.id, pane.pid, expectAgent)
   }
 
   /** Spawn or return the existing pane (id-guard across the process boundary — a
@@ -413,7 +423,10 @@ export class SessionManager {
     // `pane` is referenced lazily by the hook (onExit fires long after construction).
     const pane: PaneSession = new PaneSession(id, this.nextGen++, spec, this.hooks(id, () => pane), undefined, this.extraEnv)
     this.panes.set(id, pane)
-    this.trackAgentProcs(pane)
+    // `spec.run` is typed by the SESSION itself, not through write(), so nothing would announce
+    // it. Every launch the app performs is a normal write and announces itself; a fresh pane
+    // without a run command starts empty, and is therefore never looked at.
+    this.trackAgentProcs(pane, !!spec.run)
     this.schedulePersist(500)
     return { pane, existed: false }
   }
@@ -430,7 +443,8 @@ export class SessionManager {
       const resumeCommand = resumeCommandFor(p.command)
       const pane: PaneSession = new PaneSession(p.id, this.nextGen++, spec, this.hooks(p.id, () => pane), { scrollback: p.scrollback, resumeCommand }, this.extraEnv)
       this.panes.set(p.id, pane)
-      this.trackAgentProcs(pane)
+      // A resumed agent is the one that appears with nobody to announce it (see trackAgentProcs).
+      this.trackAgentProcs(pane, !!resumeCommand)
     }
     return persisted.length
   }

@@ -66,6 +66,7 @@ import { runMultipaneSmoke } from './multipane-smoke'
 import { runWorkspaceSmoke } from './workspace-smoke'
 import { runAgentLaunchSmoke } from './agentlaunch-smoke'
 import { runTypedSmoke } from './typed-smoke'
+import { runTypedCostSmoke } from './typedcost-smoke'
 import { runTemplateSmoke } from './template-smoke'
 import { runProfpersistSmoke } from './profpersist-smoke'
 import { runBrowserSmoke } from './browser-smoke'
@@ -234,6 +235,13 @@ app.whenReady().then(async () => {
   }
   if (process.env.MOGGING_TOOLPLAN) {
     await runToolPlanSmoke()
+    return
+  }
+  // Windowless COST gate for typed-launch detection: the detector on a fake clock over a fake
+  // process table, asserting how many process listings each real-life scenario performs. No
+  // daemon, no window — the number it protects is invisible in review (typedcost-smoke.ts).
+  if (process.env.MOGGING_TYPEDCOST) {
+    await runTypedCostSmoke()
     return
   }
 

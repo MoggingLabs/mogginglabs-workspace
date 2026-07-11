@@ -116,12 +116,8 @@ export class PtyService {
 
       // Pane state = the ActivityTracker's verdict, with the OscParser feeding it
       // explicit signals — the same fusion as the daemon path (parity; see
-      // agent-state/activity.ts for the precedence rules). A state EDGE also pokes the
-      // agent-process detector: something in this pane started or ended a command.
-      const tracker = new ActivityTracker((state: AgentState) => {
-        this.sink.state({ id: req.id, state })
-        this.agentProcs.poke(String(req.id))
-      })
+      // agent-state/activity.ts for the precedence rules).
+      const tracker = new ActivityTracker((state: AgentState) => this.sink.state({ id: req.id, state }))
       this.trackers.set(req.id, tracker)
       const osc = new OscParser(
         (state: AgentState) => tracker.notify(state),
@@ -129,7 +125,10 @@ export class PtyService {
           if (ev.kind === 'bell') tracker.bell()
           // OSC 7 / 9;9 report the pane's cwd -> per-pane git (Phase-2/03), and the launch
           // dir of a hand-typed agent. De-duped on value: a cmd.exe prompt emits both forms.
+          // 9;9 is also the SHELL's prompt marker — the detector's cheapest signal (it says a
+          // foreground command has ENDED). Daemon parity: pty-daemon/session.ts.
           if (ev.kind === 'cwd' && ev.payload) {
+            if (ev.code === 9) this.agentProcs.promptSeen(String(req.id))
             const cwd = fileUriToPath(ev.payload)
             if (cwd && cwd !== this.cwds.get(req.id)) {
               this.cwds.set(req.id, cwd)
@@ -168,7 +167,10 @@ export class PtyService {
       })
 
       this.ptys.set(req.id, proc)
-      this.agentProcs.track(String(req.id), proc.pid) // watch this pane's subtree for agent CLIs
+      // Watch this pane's subtree. No `expectAgent`: an in-proc pane is always a FRESH shell
+      // (this backend has no restore), so it starts empty and every launch into it is typed —
+      // and therefore announces itself. It is never looked at unprompted.
+      this.agentProcs.track(String(req.id), proc.pid)
       return { existing: false, restored: false, pty: emulation }
     } catch (err) {
       // Example telemetry use: spawn failures are exactly what we want reported.
@@ -187,8 +189,8 @@ export class PtyService {
     // answering the pane — it must not clear an attention latch (see replies.ts).
     if (!isTerminalReply(data)) {
       this.trackers.get(id)?.input() // typing answers whatever the pane was blocked on
-      // A submitted LINE is the most precise "a command is starting" signal there is.
-      if (data.includes('\r') || data.includes('\n')) this.agentProcs.poke(String(id))
+      // A submitted LINE is the only moment a shell can start something (see the daemon's twin).
+      if (data.includes('\r') || data.includes('\n')) this.agentProcs.commandSubmitted(String(id))
     }
     this.ptys.get(id)?.write(data)
   }

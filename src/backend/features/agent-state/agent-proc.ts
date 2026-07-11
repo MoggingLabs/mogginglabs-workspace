@@ -14,13 +14,33 @@ import { AGENT_ADAPTERS } from '../agents/adapters'
 // subtree and reports transitions — "pane 103 runs claude (pid 1234, since T)" / "pane 103's
 // agent is gone". Both PTY backends (daemon + in-proc) wire one detector across their panes.
 //
-// COST. A full process snapshot is the expensive part (one PowerShell CIM query on Windows,
-// one `ps` on POSIX), so it is only spent on DISCOVERY — panes that have no known agent and
-// whose output says a command just started. A pane whose agent is already known is confirmed
-// with process.kill(pid, 0), which costs nothing, on a cheap timer. So a wall of idle panes
-// costs zero snapshots, a running agent costs zero snapshots, and only "a command started
-// somewhere" pays — rate-limited to one snapshot for ALL panes. A slow re-anchor snapshot
-// re-verifies everything periodically (pid reuse can't fool the liveness check forever).
+// COST — the design is shaped by it. A process listing is EXPENSIVE on Windows: measured at
+// 700-1100 ms for a PowerShell CIM query over ~350 processes (and `wmic`, the cheap one, has
+// been removed from Windows). So the question is never "how fast is a probe" but "how few
+// probes can be correct", and the answer is: probe only when the pane can have GAINED or LOST
+// a foreground program.
+//
+//   a line was submitted, and 2 s later the shell has NOT come back to its prompt
+//                                    -> something is still running in there. Probe.
+//   the shell came back to its prompt while we believed an agent was running
+//                                    -> it is gone. Its pid is checked for FREE first; only a
+//                                       pid that still looks alive (recycled) costs a probe.
+//   a pane was tracked (spawn / cold-restore / reattach)
+//                                    -> it may already hold an agent. Probe (+ one retry, for
+//                                       a restore that types its own resume).
+//
+// Nothing else. An agent CONVERSATION costs zero probes (input goes to the agent, not the
+// shell). A running agent costs zero probes — it is confirmed with process.kill(pid, 0), which
+// is free, on a cheap timer that stops itself when no pane has an agent. Ordinary commands
+// cost zero probes: the shell's prompt comes back long before the armed probe fires and
+// cancels it. A pane streaming output forever (a dev server, a watch task) costs zero probes —
+// which is exactly what an earlier version of this file got wrong, by probing on every
+// busy/idle EDGE: bursty output flips that edge every couple of seconds, and a workspace with
+// one `npm run dev` pane would have burned a snapshot every 3 s for as long as it ran.
+//
+// The prompt marker is OSC 9;9 — what a pane's shell emits because we inject it (see
+// platform/shell.ts). It is never treated as a VERDICT, only as a trigger: a backgrounded
+// agent still shows up in the subtree, and the snapshot, not the prompt, decides.
 //
 // MATCHING is by construction, never by grepping the command line for a word:
 //   - the executable's NAME is an adapter bin (claude.exe, codex, gemini, aider…), or
@@ -47,7 +67,7 @@ export interface DetectedAgentProc {
   sinceMs: number
 }
 
-interface ProcRow {
+export interface ProcRow {
   pid: number
   ppid: number
   /** Executable basename, lowercased, `.exe`/`.cmd`/`.bat`/`.com` stripped. */
@@ -72,21 +92,31 @@ const PKG_SEGMENT_TO_AGENT = new Map<string, string>([
   ['opencode-ai', 'opencode']
 ])
 
-/** First discovery probe after a pane starts being tracked. */
-const TRACK_PROBE_DELAY_MS = 1200
-/** Discovery probe this long after the output that suggests a command started. */
-const POKE_PROBE_DELAY_MS = 700
-/** Never snapshot the process table more often than this (ALL panes share one snapshot). */
+/** After a submitted line: long enough that the shell has printed its prompt back for any
+ *  ordinary command (milliseconds) and cancelled this probe, and that an agent's process has
+ *  certainly SPAWNED (a CLI appears in the table within ~200 ms of Enter, long before it
+ *  paints) — but short enough that the gauge follows the agent by a couple of seconds. */
+const SUBMIT_PROBE_MS = 2000
+/** After a pane is tracked: the first probe, then one retry — a cold restore types its own
+ *  resume into a shell that is still booting, so its agent can appear several seconds late. */
+const TRACK_PROBE_MS = 2000
+const TRACK_RETRY_MS = 5000
+/** The shell prompted while we still believed an agent was running, and its pid still looks
+ *  alive: a recycled pid wearing a dead agent's face. Verify (rare — the free pid check
+ *  answers the normal case). */
+const CONFIRM_PROBE_MS = 250
+/** Never list processes more often than this — ALL panes share one listing. */
 const MIN_SNAPSHOT_GAP_MS = 3000
-/** Cheap liveness sweep for panes whose agent pid is already known. */
+/** Cheap liveness sweep (a signal-0 per known agent). Stops itself when no pane has one. */
 const LIVENESS_TICK_MS = 3000
-/** Re-anchor: a full snapshot even when every pane looks settled (pid reuse, missed edges). */
-const REANCHOR_MS = 60_000
+/** The backstop for a shell that emits no prompt marker (so the confirm path above cannot
+ *  run): re-verify a pane's agent occasionally. Slow on purpose — it is pure insurance. */
+const REANCHOR_MS = 300_000
 /** The agent existed for up to one detection lag before we saw it — the watch floor slack. */
 const FIRST_SEEN_SLACK_MS = 15_000
 /** A wedged probe is killed rather than allowed to pile up. */
 const PROBE_TIMEOUT_MS = 15_000
-/** Retries for a failing process listing before backing off to the slow cadence. */
+/** Retries for a failing process listing before backing off. */
 const MAX_SNAPSHOT_RETRIES = 3
 
 /** Split a command line into argv-ish tokens, honoring double quotes. */
@@ -210,14 +240,43 @@ function isAlive(pid: number): boolean {
 interface TrackedPane {
   rootPid: number
   current: DetectedAgentProc | null
-  /** Discovery wanted: this pane has no known agent and its output says something started. */
-  poked: boolean
+  /** When this pane wants a process listing (ms epoch), or null when it wants none. The whole
+   *  cost model is this field being null almost all of the time. */
+  probeAt: number | null
+  /** A prompt must NOT cancel this probe. Set when the SESSION typed the command itself (a
+   *  restore's resume): the shell's prompt then arrives BEFORE that command has even run, so
+   *  reading it as "nothing is running" would cancel the one probe that finds the resumed
+   *  agent — and a machine reboot would bring the agent back with no identity at all. */
+  probeSticky: boolean
+  /** Lines submitted that the shell has not finished yet. A prompt retires ONE of them; only
+   *  the last one going quiet means nothing is running. Typing ahead — `npm install`, then
+   *  `claude` before it finishes — is the case a naive "any prompt cancels" gets wrong: the
+   *  install's prompt would cancel the probe that was meant for the agent. */
+  pendingSubmits: number
+  /** Follow-up listings still owed (only a restoring pane asks for one). */
+  retries: number
+  /** This pane's shell announces its prompt (it has shell integration). Then we are TOLD when
+   *  a foreground command ends, and the re-anchor below — the blind backstop for shells that
+   *  cannot tell us — is pure waste here. */
+  hasPromptMarker: boolean
+}
+
+/** Everything this class touches outside itself. Injected by the COST gate, which drives the
+ *  whole schedule on a fake clock and a fake process table and asserts how many listings each
+ *  scenario performs — the cost model above is a contract, not a hope. */
+export interface AgentProcDeps {
+  snapshot?: () => Promise<ProcRow[] | null>
+  procCwd?: (pid: number) => Promise<string | null>
+  alive?: (pid: number) => boolean
+  /** One timer primitive (the class self-reschedules rather than holding an interval). */
+  setTimer?: (fn: () => void, ms: number) => unknown
+  clearTimer?: (handle: unknown) => void
 }
 
 export class AgentProcessDetector {
   private readonly panes = new Map<string, TrackedPane>()
-  private snapshotTimer: NodeJS.Timeout | undefined
-  private tickTimer: NodeJS.Timeout | undefined
+  private snapshotTimer: unknown
+  private tickTimer: unknown
   private lastSnapshotAt = 0
   private snapshotting = false
   private disposed = false
@@ -227,38 +286,90 @@ export class AgentProcessDetector {
   constructor(
     private readonly emit: (paneId: string, detected: DetectedAgentProc | null) => void,
     private readonly now: () => number = Date.now,
-    /** Injected by the gate; production uses the real system snapshot + cwd read. */
-    private readonly deps: {
-      snapshot?: () => Promise<ProcRow[] | null>
-      procCwd?: (pid: number) => Promise<string | null>
-      alive?: (pid: number) => boolean
-    } = {}
+    private readonly deps: AgentProcDeps = {}
   ) {}
 
-  /** Watch a pane's PTY subtree. `rootPid` is the pane shell's pid (node-pty's `IPty.pid`:
-   *  the ConPTY inner pid on Windows, the forked shell on POSIX — the shell either way). */
-  track(paneId: string, rootPid: number): void {
-    if (this.disposed || !Number.isFinite(rootPid) || rootPid <= 0) return
-    this.panes.set(paneId, { rootPid, current: null, poked: true })
-    this.scheduleSnapshot(TRACK_PROBE_DELAY_MS)
-    this.ensureTick()
+  private setTimer(fn: () => void, ms: number): unknown {
+    if (this.deps.setTimer) return this.deps.setTimer(fn, ms)
+    const h = setTimeout(fn, ms)
+    h.unref?.()
+    return h
   }
 
-  /** The pane's activity state changed — a command may have started or ended here. The
-   *  cheap edge: an agent CLI always paints something when it starts and when it dies. */
-  poke(paneId: string): void {
+  private clearTimer(handle: unknown): void {
+    if (!handle) return
+    if (this.deps.clearTimer) this.deps.clearTimer(handle)
+    else clearTimeout(handle as NodeJS.Timeout)
+  }
+
+  /** Watch a pane's PTY subtree. `rootPid` is the pane shell's pid (node-pty's `IPty.pid`:
+   *  the ConPTY inner pid on Windows, the forked shell on POSIX — the shell either way).
+   *
+   *  `expectAgent` is the difference between a workspace of shells costing NOTHING and costing
+   *  a process listing per pane on open. A brand-new shell cannot already contain an agent, and
+   *  anything the app types into it afterwards announces itself (commandSubmitted). The one
+   *  pane that must be looked at unprompted is a RESTORING one: it types its own resume into a
+   *  shell that is still booting, so its agent arrives seconds later, with nobody to say so. */
+  track(paneId: string, rootPid: number, expectAgent = false): void {
+    if (this.disposed || !Number.isFinite(rootPid) || rootPid <= 0) return
+    this.panes.set(paneId, {
+      rootPid,
+      current: null,
+      probeAt: expectAgent ? this.now() + TRACK_PROBE_MS : null,
+      probeSticky: expectAgent,
+      pendingSubmits: 0,
+      retries: expectAgent ? 1 : 0,
+      hasPromptMarker: false
+    })
+    this.reschedule()
+  }
+
+  /** A LINE was submitted into the pane (the user, or the app, pressed Enter). Something may be
+   *  starting. Arm one probe — the shell coming back to its prompt cancels it, so an ordinary
+   *  command costs nothing at all. Ignored while an agent is running: those keystrokes are a
+   *  conversation with the agent, not a command to the shell. */
+  commandSubmitted(paneId: string): void {
     const t = this.panes.get(paneId)
-    if (!t || t.current) return // a known agent is confirmed by liveness, not by snapshots
-    t.poked = true
-    this.scheduleSnapshot(POKE_PROBE_DELAY_MS)
+    if (!t || t.current) return
+    t.pendingSubmits++
+    const at = this.now() + SUBMIT_PROBE_MS
+    if (t.probeAt === null || at < t.probeAt) t.probeAt = at
+    this.reschedule()
+  }
+
+  /** The pane's shell is back at its PROMPT (its OSC 9;9 marker). Two meanings, both free.
+   *
+   *  One submitted line has finished. If it was the LAST one outstanding, nothing is running in
+   *  there and an armed probe has nothing to find — cancel it, and an ordinary command has cost
+   *  nothing. If lines are still queued behind it (the user typed ahead), keep watching: the
+   *  agent may be in one of them.
+   *
+   *  And if we believed an agent was running here, it isn't any more — the shell would not be
+   *  prompting. That is settled with a signal-0, no listing; only a pid that still answers
+   *  (recycled onto some other process) is worth the cost of one. The prompt is never the
+   *  verdict, only the trigger: a backgrounded agent still shows up in the subtree, and the
+   *  listing decides. */
+  promptSeen(paneId: string): void {
+    const t = this.panes.get(paneId)
+    if (!t) return
+    t.hasPromptMarker = true // this shell tells us when a command ends — the re-anchor can rest
+    if (t.pendingSubmits > 0) t.pendingSubmits--
+    if (t.pendingSubmits > 0) t.probeAt = this.now() + SUBMIT_PROBE_MS // more lines queued behind it
+    else if (!t.probeSticky) t.probeAt = null
+    if (t.current) {
+      if (!(this.deps.alive ?? isAlive)(t.current.pid)) {
+        t.current = null
+        this.emit(paneId, null) // free: no listing needed to know a dead pid is dead
+      } else {
+        t.probeAt = this.now() + CONFIRM_PROBE_MS // its pid still answers — a recycled one?
+      }
+    }
+    this.reschedule()
   }
 
   untrack(paneId: string): void {
     this.panes.delete(paneId)
-    if (this.panes.size === 0 && this.tickTimer) {
-      clearInterval(this.tickTimer)
-      this.tickTimer = undefined
-    }
+    this.reschedule()
   }
 
   current(paneId: string): DetectedAgentProc | null {
@@ -267,66 +378,97 @@ export class AgentProcessDetector {
 
   dispose(): void {
     this.disposed = true
-    if (this.snapshotTimer) clearTimeout(this.snapshotTimer)
-    if (this.tickTimer) clearInterval(this.tickTimer)
+    this.clearTimer(this.snapshotTimer)
+    this.clearTimer(this.tickTimer)
     this.snapshotTimer = undefined
     this.tickTimer = undefined
     this.panes.clear()
   }
 
-  /** One snapshot serves every pane; requests inside the window coalesce into it. */
-  private scheduleSnapshot(delayMs: number): void {
-    if (this.disposed || this.snapshotTimer) return
-    const gap = this.lastSnapshotAt + MIN_SNAPSHOT_GAP_MS - this.now()
-    this.snapshotTimer = setTimeout(() => void this.snapshot(), Math.max(delayMs, gap))
-    this.snapshotTimer.unref?.()
+  /** The earliest moment any pane wants a listing — null when nobody does, which is the
+   *  normal state of the world. */
+  private nextProbeAt(): number | null {
+    let at: number | null = null
+    for (const t of this.panes.values()) {
+      if (t.probeAt !== null && (at === null || t.probeAt < at)) at = t.probeAt
+    }
+    return at
   }
 
-  /** The cheap sweep: confirm known agents by pid (free), and re-anchor slowly. */
+  /** Re-aim the ONE probe timer at whatever the panes now want (nothing, usually). Cancelling
+   *  matters as much as scheduling: a prompt clears an armed probe, and that must really stop
+   *  it — an un-cancelled timer would spend the listing anyway. */
+  private reschedule(): void {
+    if (this.disposed) return
+    this.clearTimer(this.snapshotTimer)
+    this.snapshotTimer = undefined
+    this.ensureTick() // a pane may have just gained an agent to keep alive
+    const at = this.nextProbeAt()
+    if (at === null) return
+    const gap = this.lastSnapshotAt + MIN_SNAPSHOT_GAP_MS - this.now()
+    this.snapshotTimer = this.setTimer(() => void this.snapshot(), Math.max(at - this.now(), gap, 0))
+  }
+
+  /** The free sweep: confirm known agents by pid. It exists only while some pane HAS an agent —
+   *  a workspace of plain shells keeps no timer at all — and stops itself when the last one
+   *  goes. */
   private ensureTick(): void {
     if (this.tickTimer || this.disposed) return
+    if (![...this.panes.values()].some((t) => t.current)) return
+    this.tickTimer = this.setTimer(() => this.tick(), LIVENESS_TICK_MS)
+  }
+
+  private tick(): void {
+    this.tickTimer = undefined
+    if (this.disposed) return
     const alive = this.deps.alive ?? isAlive
-    this.tickTimer = setInterval(() => {
-      let died = false
-      let anyAgent = false
-      for (const [paneId, t] of this.panes) {
-        if (!t.current) continue
-        if (alive(t.current.pid)) {
-          anyAgent = true
-          continue
-        }
-        t.current = null
-        t.poked = true // the shell is back — a new agent may start here at any moment
-        died = true
-        this.emit(paneId, null)
+    let anyAgent = false
+    for (const [paneId, t] of this.panes) {
+      if (!t.current) continue
+      if (alive(t.current.pid)) {
+        anyAgent = true
+        continue
       }
-      // A death is the one moment a pane goes from "confirmed, costs nothing" back to
-      // "unknown": re-discover at once rather than waiting for the shell's next edge.
-      if (died) this.scheduleSnapshot(0)
-      // The re-anchor exists for the one thing a pid check cannot see: a recycled pid
-      // wearing a dead agent's face. So it only runs while some pane HAS an agent — a
-      // workspace of idle shells never pays for a process listing it cannot learn from.
-      else if (anyAgent && this.now() - this.lastSnapshotAt >= REANCHOR_MS) this.scheduleSnapshot(0)
-    }, LIVENESS_TICK_MS)
-    this.tickTimer.unref?.()
+      t.current = null // the agent died and no shell told us (this pane has no prompt marker)
+      this.emit(paneId, null)
+    }
+    if (!anyAgent) return // nothing left to keep alive: the timer simply stops existing
+    // The re-anchor covers exactly one hole: an agent that died and had its pid RECYCLED onto
+    // another process, in a pane whose shell never announces its prompt — so promptSeen's free
+    // check can never run there. A shell WITH integration (every cmd.exe pane we spawn) needs
+    // none of it, and a 30-minute agent session there costs zero listings instead of six.
+    if (this.now() - this.lastSnapshotAt >= REANCHOR_MS) {
+      for (const t of this.panes.values()) {
+        if (t.current && !t.hasPromptMarker) t.probeAt = this.now()
+      }
+    }
+    this.tickTimer = this.setTimer(() => this.tick(), LIVENESS_TICK_MS)
+    if (this.nextProbeAt() !== null) this.reschedule()
   }
 
   private async snapshot(): Promise<void> {
     this.snapshotTimer = undefined
-    if (this.snapshotting || this.disposed || this.panes.size === 0) return
+    if (this.snapshotting || this.disposed) return
+    // Everything that wanted a listing may have stopped wanting one while the timer ran — the
+    // shell came back to its prompt, the pane closed. Then there is nothing here to learn, and
+    // the most expensive thing this file does must simply not happen.
+    const due = [...this.panes.values()].filter((t) => t.probeAt !== null && t.probeAt <= this.now())
+    if (!due.length) {
+      this.reschedule() // a later deadline may still be pending
+      return
+    }
     this.snapshotting = true
     this.lastSnapshotAt = this.now()
     try {
       const rows = await (this.deps.snapshot ?? snapshotProcesses)()
-      // A failed probe is NO DATA — never "no agents": every verdict stands. But a pane still
-      // waiting to be discovered must not be stranded by one bad listing, so retry — a few
-      // times, then fall back to the slow cadence rather than hammering a broken tool.
+      // A failed listing is NO DATA — never "no agents": every verdict stands. But a pane still
+      // waiting to be discovered must not be stranded by one bad listing, so retry a few times,
+      // then give up rather than hammer a tool that is not working.
       if (!rows || this.disposed) {
         if (rows) return
         this.failures++
-        if (this.failures <= MAX_SNAPSHOT_RETRIES && [...this.panes.values()].some((t) => t.poked)) {
-          this.scheduleSnapshot(MIN_SNAPSHOT_GAP_MS)
-        }
+        const retry = this.failures <= MAX_SNAPSHOT_RETRIES
+        for (const t of due) t.probeAt = retry ? this.now() + MIN_SNAPSHOT_GAP_MS : null
         return
       }
       this.failures = 0
@@ -336,16 +478,29 @@ export class AgentProcessDetector {
         if (kids) kids.push(r)
         else byParent.set(r.ppid, [r])
       }
+      // Read EVERY pane off this one listing, not just the ones that asked for it: it is
+      // already paid for, and a verdict that costs nothing more is worth having.
       for (const [paneId, t] of this.panes) {
-        t.poked = false
+        t.probeAt = null
+        t.probeSticky = false
         const found = this.findAgentIn(byParent, t.rootPid)
         const prev = t.current
         if (!found) {
+          // A restoring pane gets one more look: it typed its own resume into a shell that was
+          // still booting, so its agent can arrive after this listing — and nothing will ever
+          // announce it. Sticky, because the shell's prompt is not evidence either way here.
+          if (t.retries > 0) {
+            t.retries--
+            t.probeAt = this.now() + TRACK_RETRY_MS
+            t.probeSticky = true
+          }
           if (!prev) continue
           t.current = null
           this.emit(paneId, null)
           continue
         }
+        t.retries = 0
+        t.pendingSubmits = 0 // from here the pane's keystrokes belong to the agent, not the shell
         if (prev && prev.pid === found.pid && prev.agentId === found.agentId) continue
         const cwd = await (this.deps.procCwd ?? readProcessCwd)(found.pid)
         if (this.disposed || this.panes.get(paneId) !== t) return // pane replaced under the await
@@ -360,6 +515,7 @@ export class AgentProcessDetector {
       }
     } finally {
       this.snapshotting = false
+      this.reschedule() // start the liveness tick for anything newly found; re-aim any retry
     }
   }
 
