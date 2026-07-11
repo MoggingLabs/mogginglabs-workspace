@@ -12,15 +12,22 @@
 
 import type { PaneId } from '../domain/pane'
 
-/** Agent CLIs whose LOCAL SESSION LOG is a dev-verified context source (see
- *  @backend/features/context) — what this wire CAN serve. What the pane SHOWS is a
- *  separate, narrower decision the context feature makes: codex and gemini paint
- *  their own "% context left" gauge in the terminal (dev-verified strings in both),
- *  so rendering ours beside theirs would state the number twice — only claude,
- *  whose CLI shows nothing until context runs LOW, gets the header bar. Anything
- *  else (custom commands) reports no usage at all. We never estimate a number we
- *  cannot read. */
-export const CONTEXT_PROVIDERS = ['claude', 'codex'] as const
+/** Agent CLIs whose LOCAL SESSION LOG is a source-verified context reading. EVERY one of them
+ *  gets the gauge — including the two that already draw their own in the terminal. That used to
+ *  be the argument against it ("the number would be stated twice"), and it was the wrong call:
+ *  a pane's own footer is legible only in the pane you are LOOKING at, while the header gauge is
+ *  what makes a wall of agents readable at a glance. Stating the same number twice costs
+ *  nothing. Stating a DIFFERENT number twice would cost everything — so each provider's percent
+ *  is computed with THAT CLI's formula, never with one of ours:
+ *
+ *    claude  used / window, over the window its statusline reports (h1n — what `/context` prints)
+ *    codex   its own reserved-baseline formula (window.ts) — a plain used/window reads ~4 points
+ *            low against the "% context left" printed in the very same pane
+ *    gemini  promptTokenCount / tokenLimit(model) — what its own "N% used" footer divides
+ *
+ *  Anything else (a custom command) reports no usage at all. We never estimate a number we
+ *  cannot read: no source, no digit. */
+export const CONTEXT_PROVIDERS = ['claude', 'codex', 'gemini'] as const
 export type ContextProvider = (typeof CONTEXT_PROVIDERS)[number]
 
 export const isContextProvider = (id: string): id is ContextProvider =>

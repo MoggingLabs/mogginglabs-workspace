@@ -5,16 +5,23 @@ import {
   codexDayDirs,
   contextSinkPath,
   findClaudeProjectDir,
+  findGeminiProjectDir,
   parseClaudeHead,
   parseClaudeTail,
   parseCodexTail,
+  parseGeminiTail,
   pathKey,
   readCodexSessionCwd,
   readContextSink,
   readHead,
   readTail
 } from './readers'
-import { claudeWindowForModel } from './window'
+import { claudeWindowForModel, codexPercentUsed, geminiWindowForModel, learnClaudeWindow } from './window'
+
+/** Gemini keeps a project's session logs one level down, in `chats/`. */
+function geminiChatsDir(projectDir: string | null): string | null {
+  return projectDir ? join(projectDir, 'chats') : null
+}
 
 // Tracks the agent session log behind each pane and emits that pane's context usage
 // whenever it changes. Same discipline as the git monitor next door: ONE shared poll
@@ -166,8 +173,13 @@ export class ContextMonitor {
     const floor = this.floorFor(t)
 
     const out: Array<{ file: string; mtimeMs: number }> = []
-    if (t.provider === 'claude') {
-      const dir = findClaudeProjectDir(t.home, t.cwd)
+    if (t.provider === 'claude' || t.provider === 'gemini') {
+      // Both keep ONE directory per project cwd, holding that project's session logs — claude
+      // under a munged path, gemini under a slug it maps for itself. Same shape from here.
+      const dir =
+        t.provider === 'claude'
+          ? findClaudeProjectDir(t.home, t.cwd)
+          : geminiChatsDir(findGeminiProjectDir(t.home, t.cwd))
       if (!dir) return out
       let names: string[]
       try {
@@ -276,6 +288,12 @@ export class ContextMonitor {
       const floor = this.floorFor(t)
       if (sink && sink.mtimeMs >= floor && !(t.lastMtimeMs > sink.mtimeMs + 5000)) {
         if (sink.windowTokens) t.window = sink.windowTokens
+        // TEACH the window table from the horse's mouth. This pane's relay knows the window
+        // THIS session runs with, and a model id alone can never settle it (an Opus 4.8
+        // transcript reads the same at 200K and at 1M). A hand-typed claude in another pane
+        // has no relay of its own — this is how it gets a true denominator instead of a
+        // documented one. See window.ts.
+        learnClaudeWindow(sink.model, sink.windowTokens)
         const window = sink.windowTokens ?? t.window ?? claudeWindowForModel(sink.model)
         if (sink.usedPct !== null && sink.usedTokens !== undefined && window) {
           this.emit(paneId, t, {
@@ -306,7 +324,8 @@ export class ContextMonitor {
     //    `approx: true`, and replaced by the first real reading. One shot per lock.
     const tail = readTail(t.file)
     if (tail === null) return
-    const reading = t.provider === 'claude' ? parseClaudeTail(tail) : parseCodexTail(tail)
+    const reading =
+      t.provider === 'claude' ? parseClaudeTail(tail) : t.provider === 'gemini' ? parseGeminiTail(tail) : parseCodexTail(tail)
     if (!reading) {
       if (t.provider !== 'claude' || t.seeded) return
       t.seeded = true
@@ -329,21 +348,38 @@ export class ContextMonitor {
       return
     }
 
-    // 5. Resolve the window. Claude: the sink's true per-session window when the
-    //    relay has stated it, the logged model's DOCUMENTED window otherwise (see
-    //    window.ts for the sourced table). Codex: stated on the line (kept across
-    //    lines that drop it). No window, no bar — a percent of a guessed
-    //    denominator would be a lie.
+    // 5. Resolve the window, and then the PERCENT — with the formula that CLI uses, not with
+    //    a formula of our own. This is the whole contract of the gauge: the number beside the
+    //    pane must be the number inside it.
+    //
+    //    claude  window: the relay's true per-session size, else what a relay has taught us for
+    //            this model, else the documented table (window.ts). percent: used / window —
+    //            the CLI's own h1n sum over its own window.
+    //    codex   window: stated on the line, verbatim (codex already scaled it). percent: NOT
+    //            used/window — codex reserves a 12K baseline on BOTH sides of the ratio, so its
+    //            own formula is reproduced (codexPercentUsed). Skipping it reads ~4 points low
+    //            against the footer in the very same pane.
+    //    gemini  window: its flat limit table (1,048,576; Gemma-4 256,000). percent:
+    //            promptTokenCount / limit — what its "N% used" footer divides.
+    //
+    //    No window, no number: a percent of a guessed denominator is a lie, and the pane keeps
+    //    its honest "–".
     let window: number | undefined
     if (t.provider === 'claude') {
       window = t.window ?? claudeWindowForModel(reading.model) ?? undefined
+    } else if (t.provider === 'gemini') {
+      window = geminiWindowForModel(reading.model)
     } else {
       if (reading.windowTokens) t.window = reading.windowTokens
       window = t.window
     }
     if (!window) return
 
-    const usedPct = Math.max(0, Math.min(100, Math.round((reading.usedTokens / window) * 100)))
+    const usedPct =
+      t.provider === 'codex'
+        ? codexPercentUsed(reading.usedTokens, window)
+        : Math.max(0, Math.min(100, Math.round((reading.usedTokens / window) * 100)))
+    if (usedPct === null) return // codex logged no usable window — it shows no percent either
     this.emit(paneId, t, {
       provider: t.provider,
       usedTokens: reading.usedTokens,

@@ -173,10 +173,24 @@ export function runTypedSmoke(win: BrowserWindow): void {
         realTyped = 'claude-not-installed'
       }
 
+      // ── EVERY agent gets the gauge — including the two that draw their own ──────────────
+      // codex and gemini render a context figure in their own footers, and used to be excluded
+      // for that reason. A footer is legible only in the pane you are looking AT; the header is
+      // what makes a wall of agents readable. Adopt each provider into a pane and assert the
+      // gauge appears (pending "–" until that CLI's log states a number — never a made-up 0).
+      const gaugeForProvider: Record<string, boolean> = {}
+      for (const provider of ['codex', 'gemini']) {
+        await ES(`window.__mogging.agents.adopt(1, ${JSON.stringify(provider)}, ${JSON.stringify(added ? 'C:\\\\Windows' : '')});`)
+        const g = await until(() => gauge(1), (x) => x.shown, 12000)
+        gaugeForProvider[provider] = g.present && g.shown
+      }
+      const everyAgentHasGauge = gaugeForProvider.codex === true && gaugeForProvider.gemini === true
+
       const pass =
         splitOk &&
         !before.session &&
         !before.gauge.shown &&
+        everyAgentHasGauge &&
         cwdReported &&
         detectedTyped &&
         cwdIsLive &&
@@ -209,6 +223,8 @@ export function runTypedSmoke(win: BrowserWindow): void {
         plainSession,
         retired,
         afterKill: { session: s2, gauge: g2 },
+        everyAgentHasGauge,
+        gaugeForProvider,
         installed,
         realTyped,
         errors

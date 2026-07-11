@@ -67,6 +67,7 @@ import { runWorkspaceSmoke } from './workspace-smoke'
 import { runAgentLaunchSmoke } from './agentlaunch-smoke'
 import { runTypedSmoke } from './typed-smoke'
 import { runTypedCostSmoke } from './typedcost-smoke'
+import { runCtxAccuracySmoke } from './ctxaccuracy-smoke'
 import { runTemplateSmoke } from './template-smoke'
 import { runProfpersistSmoke } from './profpersist-smoke'
 import { runBrowserSmoke } from './browser-smoke'
@@ -242,6 +243,12 @@ app.whenReady().then(async () => {
   // daemon, no window — the number it protects is invisible in review (typedcost-smoke.ts).
   if (process.env.MOGGING_TYPEDCOST) {
     await runTypedCostSmoke()
+    return
+  }
+  // Windowless CONTEXT-ACCURACY gate: the real monitor over each CLI's real on-disk format,
+  // asserting that the gauge's number is the CLI's own number (ctxaccuracy-smoke.ts).
+  if (process.env.MOGGING_CTXACCURACY) {
+    await runCtxAccuracySmoke()
     return
   }
 

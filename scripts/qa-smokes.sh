@@ -236,6 +236,7 @@ run_smoke DOCKUX       MOGGING_DOCKUX    1 240 dockux
 run_smoke UXMILESTONE  MOGGING_UXMILESTONE 1 360 uxmilestone
 run_smoke TYPED        MOGGING_TYPED     1 300 typed
 run_smoke TYPEDCOST    MOGGING_TYPEDCOST 1 120 typedcost
+run_smoke CTXACCURACY  MOGGING_CTXACCURACY 1 120 ctxaccuracy
 
 echo ""
 echo "══ SWEEP RESULTS ══"

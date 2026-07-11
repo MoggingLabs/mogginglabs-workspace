@@ -283,7 +283,11 @@ export function codexDayDirs(home: string, now: number): string[] {
 }
 
 /** Last token_count reading in a Codex rollout tail: the last request's total IS the
- *  current context, and the window rides the same line. */
+ *  current context, and the window rides the same line.
+ *
+ *  Both numbers are the RAW ones codex logged — the percentage is NOT `used / window`. Codex
+ *  reserves a fixed baseline before it divides (window.ts, codexPercentUsed), and its footer
+ *  is that reserved figure. Anything else disagrees with what the pane is showing. */
 export function parseCodexTail(tail: string): TailReading | null {
   const lines = tail.split('\n')
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -310,6 +314,76 @@ export function parseCodexTail(tail: string): TailReading | null {
       return { usedTokens, windowTokens }
     } catch {
       continue
+    }
+  }
+  return null
+}
+
+// ── Gemini ─────────────────────────────────────────────────────────────────────
+// Gemini CLI's ChatRecordingService writes one JSONL per session — unconditionally (no setting
+// gates it) and with appendFileSync, so it lands the instant the data does:
+//
+//   <home>/tmp/<project-slug>/chats/session-<YYYY-MM-DDTHH-MM>-<sessionId8>.jsonl
+//
+// The number its footer shows is `usageMetadata.promptTokenCount`, recorded as `tokens.input`
+// on `type: "gemini"` records. THE PARSING RULE THAT MATTERS: the same message id is appended
+// TWICE — first with `"tokens": null` while the text streams, then again with the counts once
+// the final chunk carries usageMetadata. So the reading is the last record with a NON-NULL
+// `tokens.input`; a naive "last gemini record" reads the null and reports nothing, forever.
+// (Verified against @google/gemini-cli 0.50.0 — packages/core/src/services/
+// chatRecordingService.ts:674 — and against bytes produced by the published service itself.)
+
+/** The project dir gemini keeps a cwd's sessions under. It is a SLUG, not a hash: the CLI maps
+ *  lowercased-abs-path -> slug in `<home>/projects.json`, and drops the abs path into
+ *  `<home>/tmp/<slug>/.project_root`. The map is read first (exact, one file); the reverse
+ *  lookup covers a map that has not been written yet. Null = gemini has never run in this cwd. */
+export function findGeminiProjectDir(home: string, cwd: string): string | null {
+  const want = pathKey(cwd)
+  try {
+    const map = JSON.parse(fs.readFileSync(join(home, 'projects.json'), 'utf8')) as Record<string, unknown>
+    for (const [abs, slug] of Object.entries(map)) {
+      if (typeof slug !== 'string' || pathKey(abs) !== want) continue
+      const dir = join(home, 'tmp', slug)
+      try {
+        if (fs.statSync(dir).isDirectory()) return dir
+      } catch {
+        break // the map named a dir that is gone — fall through to the scan
+      }
+    }
+  } catch {
+    /* no map, or unreadable */
+  }
+  try {
+    for (const name of fs.readdirSync(join(home, 'tmp'))) {
+      const dir = join(home, 'tmp', name)
+      try {
+        if (pathKey(fs.readFileSync(join(dir, '.project_root'), 'utf8').trim()) === want) return dir
+      } catch {
+        /* not a project dir */
+      }
+    }
+  } catch {
+    /* the CLI has never run under this home */
+  }
+  return null
+}
+
+/** The newest usage reading in a gemini session-log tail: the LAST record that actually carries
+ *  counts (see the append-and-supersede note above). `usedTokens` is promptTokenCount — exactly
+ *  what the CLI's own footer divides. */
+export function parseGeminiTail(tail: string): TailReading | null {
+  const lines = tail.split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]
+    if (!line.includes('"tokens"') || !line.includes('"gemini"')) continue // cheap prefilter
+    try {
+      const o = JSON.parse(line) as { type?: string; model?: unknown; tokens?: { input?: unknown } | null }
+      if (o?.type !== 'gemini' || !o.tokens) continue
+      const input = o.tokens.input
+      if (typeof input !== 'number' || !Number.isFinite(input)) continue
+      return { usedTokens: input, model: typeof o.model === 'string' ? o.model : undefined }
+    } catch {
+      continue // a line cut at the tail window's edge, or a foreign shape
     }
   }
   return null
