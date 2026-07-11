@@ -877,7 +877,12 @@ function readStdinType() {
       if (settled) return
       settled = true
       try {
-        resolve(JSON.parse(buf).type ?? null)
+        // 'notification_type' is the REAL discriminator -- verified against a live Claude Code
+        // turn (the docs call it 'type'; it is not). Reading 'type' yielded undefined, which fell
+        // through to the argv event 'needs-input', so every notification -- completions included
+        // -- still painted the pane red. 'type' stays only as a fallback for other dialects.
+        const p = JSON.parse(buf)
+        resolve(p.notification_type ?? p.type ?? null)
       } catch {
         resolve(null)
       }

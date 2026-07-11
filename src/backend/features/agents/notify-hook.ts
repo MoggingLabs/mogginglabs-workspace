@@ -100,7 +100,17 @@ const readStdinType = () =>
       if (settled) return
       settled = true
       try {
-        resolve(JSON.parse(buf).type ?? null)
+        // 'notification_type' is the REAL discriminator -- VERIFIED against a live Claude Code
+        // turn, which hands a Notification hook exactly this:
+        //   {"hook_event_name":"Notification","notification_type":"idle_prompt",
+        //    "message":"Claude is waiting for your input","session_id":..,"cwd":..}
+        // The docs call it 'type'. It is not. Reading 'type' yielded undefined, undefined fell
+        // through to the argv event ('needs-input'), and so EVERY notification still painted the
+        // pane red -- completions included. That was the entire bug, and no unit test could have
+        // caught it: the tests fed the same wrong shape the code read. Only a live turn did.
+        // 'type' stays as a fallback for any other dialect that uses it.
+        const p = JSON.parse(buf)
+        resolve(p.notification_type ?? p.type ?? null)
       } catch {
         resolve(null)
       }
