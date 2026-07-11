@@ -8,9 +8,10 @@
 import * as os from 'node:os'
 import * as fs from 'node:fs'
 import { spawnPty, type IPty } from '@backend/platform/pty-host'
+import { shellIntegrationEnv } from '@backend/platform/shell'
 import type { Approval, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { notifyEventToState } from '@contracts'
-import { ActivityTracker, OscParser, fileUriToPath, isTerminalReply } from '@backend/features/agent-state'
+import { ActivityTracker, AgentProcessDetector, OscParser, fileUriToPath, isTerminalReply, type DetectedAgentProc } from '@backend/features/agent-state'
 import { SessionStore, resumeCommandFor } from '@backend/features/workspace'
 import { Mailbox } from './mailbox'
 import { Ledger } from './ledger'
@@ -39,11 +40,18 @@ export interface PaneSubscriber {
   cwd(path: string): void
   /** Usage-limit signal (Phase-4/04): distinct from state so failover can act. */
   limit?(): void
+  /** Typed-launch detection: an agent CLI process appeared in / vanished from the
+   *  pane's PTY subtree (process-table truth, not output heuristics). */
+  agent?(agentId: string | null, cwd?: string, sinceMs?: number): void
 }
 
 interface PaneHooks {
   onExit: () => void
   onChange: () => void
+  /** Something in this pane may have STARTED or ENDED a command (an activity-state edge, or
+   *  a submitted line). The agent-process detector spends its one process snapshot here —
+   *  see agent-state/agent-proc.ts for why that is the whole cost model. */
+  onCommandEdge: () => void
 }
 
 class PaneSession {
@@ -61,7 +69,12 @@ class PaneSession {
   private lastState: AgentState = 'idle'
   private readonly tracker: ActivityTracker
   private lastCwd?: string // last OSC-7-reported cwd; replayed to (re)attaching clients
+  /** The agent process the detector last saw in this pane's subtree (typed-launch
+   *  detection) — replayed to (re)attaching clients so an app restart re-learns a
+   *  hand-typed session it never launched. */
+  private lastAgent: { agentId: string; cwd: string; sinceMs: number } | null = null
   private subs = new Set<PaneSubscriber>()
+  private readonly hooks: PaneHooks
   /** True while this session is an UNTOUCHED cold-start restore: a fresh shell repainting
    *  persisted scrollback, with no live agent in it and nothing typed since. The app reads
    *  it (via `spawned.restored`) to decide that resume must TYPE — the opposite of a true
@@ -79,6 +92,7 @@ class PaneSession {
   ) {
     this.id = id
     this.gen = gen
+    this.hooks = hooks
     this.cols = spec.cols ?? 80
     this.rows = spec.rows ?? 24
     // `||`, not `??`: an EMPTY string is not a cwd. `??` let '' through to node-pty, which
@@ -139,7 +153,15 @@ class PaneSession {
       // keys) — merged into the process env only, NEVER typed into the pane, so
       // a secret never lands in scrollback/sessions.db. Source-agnostic: the
       // daemon knows nothing of the vault. MOGGING_PANE_ID wins (identity).
-      env: { ...process.env, ...extraEnv, ...(spec.env ?? {}), MOGGING_PANE_ID: this.id } as Record<string, string>
+      // shellIntegrationEnv makes the shell REPORT its cwd (cmd.exe never did): per-pane
+      // git follows a `cd`, and a hand-typed agent's session log can be found at all.
+      env: {
+        ...process.env,
+        ...shellIntegrationEnv(shell),
+        ...extraEnv,
+        ...(spec.env ?? {}),
+        MOGGING_PANE_ID: this.id
+      } as Record<string, string>
     }).proc
     // Pane state = the ActivityTracker's verdict (the dot in the pane header). The
     // OSC parser feeds it explicit signals (133 C/D, 9/99/777, the bell) but no
@@ -151,14 +173,20 @@ class PaneSession {
     this.tracker = new ActivityTracker((state) => {
       this.lastState = state
       for (const s of this.subs) s.state(state)
+      // An activity EDGE is the cheap "a command started/ended here" signal the agent-process
+      // detector spends its snapshot on. A streaming agent stays busy — one edge, not one per
+      // chunk — so an idle wall of panes and a running agent both cost nothing.
+      hooks.onCommandEdge()
     })
     const osc = new OscParser(
       (state) => this.tracker.notify(state),
       (ev) => {
         if (ev.kind === 'bell') this.tracker.bell()
         if (ev.kind === 'cwd' && ev.payload) {
+          // De-duped on VALUE: a cmd.exe pane reports its cwd twice per prompt (OSC 9;9 +
+          // OSC 7 — whichever survives ConPTY), and an unchanged cwd is not news.
           const cwd = fileUriToPath(ev.payload)
-          if (cwd) {
+          if (cwd && cwd !== this.lastCwd) {
             this.lastCwd = cwd
             for (const s of this.subs) s.cwd(cwd)
           }
@@ -187,6 +215,25 @@ class PaneSession {
 
   get scrollback(): string {
     return this.buffer
+  }
+  /** The pane shell's pid — the root the agent-process detector walks from. */
+  get pid(): number {
+    return this.proc.pid
+  }
+  /** Remote panes run ssh locally — nothing in their local subtree is the agent. */
+  get isRemote(): boolean {
+    return !!this.remoteName
+  }
+  /** Detector verdict changed: resolve WHERE the agent runs, remember it (replayed on
+   *  subscribe), and fan it out. The agent's own cwd is exact where the platform reports it
+   *  (POSIX); on Windows it falls back to the pane's reported cwd — the OSC-7/9;9 prompt the
+   *  shell now emits — and finally to the cwd the pane was spawned in. That path names the
+   *  CLI's session log, so getting it right IS the feature. */
+  applyAgentProc(det: DetectedAgentProc | null): void {
+    this.lastAgent = det
+      ? { agentId: det.agentId, cwd: det.cwd ?? this.lastCwd ?? this.cwd, sinceMs: det.sinceMs }
+      : null
+    for (const s of this.subs) s.agent?.(this.lastAgent?.agentId ?? null, this.lastAgent?.cwd, this.lastAgent?.sinceMs)
   }
   /** Still an untouched cold-start restore? (See `pristineRestore` — the app's cue that
    *  resume must type here.) */
@@ -227,6 +274,10 @@ class PaneSession {
     this.subs.add(s)
     s.state(this.lastState) // replay current agent-state to a (re)attaching client
     if (this.lastCwd) s.cwd(this.lastCwd) // ...and the last known cwd (only if OSC 7 reported one)
+    // ...and the agent DETECTED in this pane: an app restart reattaches to a session the
+    // daemon kept alive, and this replay is how the new app learns what runs in it — the
+    // one path by which a hand-typed agent survives a restart with its identity intact.
+    if (this.lastAgent) s.agent?.(this.lastAgent.agentId, this.lastAgent.cwd, this.lastAgent.sinceMs)
   }
   unsubscribe(s: PaneSubscriber): void {
     this.subs.delete(s)
@@ -253,6 +304,9 @@ class PaneSession {
     }
     this.pristineRestore = false // touched: from here on it's a live shell, not a restore
     this.tracker.input() // typing answers whatever the pane was blocked on
+    // A submitted LINE is the most precise "a command is starting" signal there is — it beats
+    // the output edge to the punch, so a hand-typed `claude` is detected as it boots.
+    if (data.includes('\r') || data.includes('\n')) this.hooks.onCommandEdge()
     this.proc.write(data)
   }
   resize(cols: number, rows: number): void {
@@ -287,6 +341,9 @@ export class SessionManager {
   readonly ledger = new Ledger()
   /** Reviewer gate (Phase-4/03): branch sign-offs. Memory-only coordination data. */
   readonly approvals = new Map<string, Approval>()
+  /** Typed-launch detection: ONE detector across all panes (one process snapshot per
+   *  probe, edge-driven by pane output). Verdicts land on the pane and fan to clients. */
+  private readonly agentProcs = new AgentProcessDetector((id, det) => this.panes.get(id)?.applyAgentProc(det))
 
   // extraEnv is injected into every pane's shell env (e.g. MOGGING_DAEMON_ENDPOINT for notify).
   constructor(
@@ -333,11 +390,19 @@ export class SessionManager {
           this.panes.delete(id)
           this.mailbox.clearRole(id)
           this.ledger.clearPane(id) // exits release territory immediately (4/02)
+          this.agentProcs.untrack(id) // no pty, no subtree to watch
         }
         this.schedulePersist(500)
       },
-      onChange: () => this.schedulePersist(2000)
+      onChange: () => this.schedulePersist(2000),
+      onCommandEdge: () => this.agentProcs.poke(id)
     }
+  }
+
+  /** Start watching a pane's subtree for agent processes. REMOTE panes are skipped: their
+   *  agent runs on the far machine and the only thing in our local subtree is `ssh`. */
+  private trackAgentProcs(pane: PaneSession): void {
+    if (!pane.isRemote) this.agentProcs.track(pane.id, pane.pid)
   }
 
   /** Spawn or return the existing pane (id-guard across the process boundary — a
@@ -348,6 +413,7 @@ export class SessionManager {
     // `pane` is referenced lazily by the hook (onExit fires long after construction).
     const pane: PaneSession = new PaneSession(id, this.nextGen++, spec, this.hooks(id, () => pane), undefined, this.extraEnv)
     this.panes.set(id, pane)
+    this.trackAgentProcs(pane)
     this.schedulePersist(500)
     return { pane, existed: false }
   }
@@ -364,6 +430,7 @@ export class SessionManager {
       const resumeCommand = resumeCommandFor(p.command)
       const pane: PaneSession = new PaneSession(p.id, this.nextGen++, spec, this.hooks(p.id, () => pane), { scrollback: p.scrollback, resumeCommand }, this.extraEnv)
       this.panes.set(p.id, pane)
+      this.trackAgentProcs(pane)
     }
     return persisted.length
   }
@@ -393,12 +460,14 @@ export class SessionManager {
       this.panes.delete(id)
       this.mailbox.clearRole(id) // pane ids get reused — a role never outlives its pane
       this.ledger.clearPane(id)
+      this.agentProcs.untrack(id) // ...nor does an agent verdict
       this.schedulePersist(500)
     }
   }
   killAll(): void {
     for (const p of this.panes.values()) p.kill()
     this.panes.clear()
+    this.agentProcs.dispose()
   }
 }
 

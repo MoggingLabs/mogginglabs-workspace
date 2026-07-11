@@ -65,6 +65,7 @@ import { runShot } from './shot'
 import { runMultipaneSmoke } from './multipane-smoke'
 import { runWorkspaceSmoke } from './workspace-smoke'
 import { runAgentLaunchSmoke } from './agentlaunch-smoke'
+import { runTypedSmoke } from './typed-smoke'
 import { runTemplateSmoke } from './template-smoke'
 import { runProfpersistSmoke } from './profpersist-smoke'
 import { runBrowserSmoke } from './browser-smoke'
@@ -341,6 +342,8 @@ app.whenReady().then(async () => {
     runWorkspaceSmoke(win, process.env.MOGGING_WORKSPACE) // env-gated workspace persist/restore smoke
   } else if (process.env.MOGGING_AGENTLAUNCH && win) {
     runAgentLaunchSmoke(win) // env-gated agent-launcher smoke (picker -> TUI)
+  } else if (process.env.MOGGING_TYPED && win) {
+    runTypedSmoke(win) // env-gated typed-launch DETECTION smoke (a hand-typed agent gets a real identity)
   } else if (process.env.MOGGING_TEMPLATE && win) {
     runTemplateSmoke(win, process.env.MOGGING_TEMPLATE) // env-gated provider-mix template smoke
   } else if (process.env.MOGGING_PROFPERSIST && win) {

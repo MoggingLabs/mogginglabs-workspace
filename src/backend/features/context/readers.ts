@@ -111,6 +111,39 @@ export function findClaudeProjectDir(home: string, cwd: string): string | null {
   return null
 }
 
+/** The project dirs a session launched AT `cwd` — or anywhere BELOW it — can live in.
+ *
+ *  For a DETECTED (hand-typed) session the pane's cwd is a hint, not a certainty: `cd sub &&
+ *  claude` starts the CLI one directory deeper than the shell last reported, and its log then
+ *  sits under the SUB-directory's project dir. The munge is a per-character map (readers'
+ *  claudeProjectDirName), so a path prefix is a NAME prefix — a descendant's dir name is
+ *  exactly `<parent's name>-<something>`. That makes "at or below this cwd" a precise string
+ *  test, not a guess: an unrelated project can never match, and a parent never does either.
+ *  Newest-modified first, so the caller's newest-wins lock reads naturally. */
+export function claudeProjectDirs(home: string, cwd: string): string[] {
+  const projects = join(home, 'projects')
+  const wanted = claudeProjectDirName(cwd).toLowerCase() // Windows drive-letter case drifts
+  const out: Array<{ dir: string; mtimeMs: number }> = []
+  let names: string[]
+  try {
+    names = fs.readdirSync(projects)
+  } catch {
+    return [] // the CLI has never run under this home
+  }
+  for (const name of names) {
+    const lower = name.toLowerCase()
+    if (lower !== wanted && !lower.startsWith(wanted + '-')) continue
+    const dir = join(projects, name)
+    try {
+      const st = fs.statSync(dir)
+      if (st.isDirectory()) out.push({ dir, mtimeMs: st.mtimeMs })
+    } catch {
+      /* raced away */
+    }
+  }
+  return out.sort((a, b) => b.mtimeMs - a.mtimeMs).map((d) => d.dir)
+}
+
 /** Last main-chain assistant reading in a Claude session-log tail. Scanned from the END
  *  (the newest turn wins); unparseable/foreign lines are skipped, never thrown on. */
 export function parseClaudeTail(tail: string): TailReading | null {

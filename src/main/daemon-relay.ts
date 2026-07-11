@@ -98,6 +98,12 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
       onLimit: (id, gen) => {
         if (current(id, gen)) getWebContents()?.send(TerminalChannels.limit, { id: Number(id) })
       },
+      // Typed-launch detection: the daemon watched the pane's PTY subtree and an agent CLI
+      // appeared (or left). Gen-gated like every other pane event — a dead generation's
+      // verdict must never claim the reused id's brand-new pane.
+      onAgent: (id, agentId, cwd, sinceMs, gen) => {
+        if (current(id, gen)) getWebContents()?.send(TerminalChannels.agent, { id: Number(id), agentId, cwd, sinceMs })
+      },
       onApprovals: (list) => getWebContents()?.send(GateChannels.approvals, { list }),
       // The daemon died (or was killed) under us. Without this the app kept a dead socket
       // forever — no state events (grey dots, no attention toasts), every spawn timing out —

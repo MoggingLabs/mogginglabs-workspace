@@ -82,7 +82,12 @@ export function registerContext(getWebContents: () => WebContents | null): () =>
       provider: req.provider,
       cwd: req.cwd,
       home: resolveHome(req.provider, profile),
-      adopted: req.adopted === true
+      adopted: req.adopted === true,
+      // Typed-launch detection: the process table found this agent, so the matcher knows
+      // exactly how far back to look — and that the cwd is a hint (a `cd` can have moved it
+      // deeper). See ContextWatchRequest.
+      detected: req.detected === true,
+      since: typeof req.since === 'number' && req.since > 0 ? req.since : undefined
     })
   })
   ipcMain.on(ContextChannels.unwatch, (_e, req: ContextUnwatchRequest) => {

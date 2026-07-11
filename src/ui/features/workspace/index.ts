@@ -21,6 +21,7 @@ import {
 } from '../../core/workspace/workspace-info-port'
 import { openWizard } from '../../core/workspace/wizard-port'
 import { onAgentLaunchRequest, onProfileFailover } from '../../core/agents/launch-port'
+import { onPaneAgentSession } from '../../core/agents/agent-session-port'
 import { setActiveView } from '../../core/shell/view-port'
 import { setCommands } from '../../core/commands/command-port'
 import { setPaneState } from '../../core/attention/attention-port'
@@ -174,6 +175,15 @@ export const workspaceFeature: UiFeature = {
     // values already recorded, so this persists only on real change.
     onAgentLaunchRequest((req) => {
       if (controller.noteAgentLaunch(req.paneId, req.provider, req.profileId, req.cwd)) persist()
+    })
+    // ...and every agent the app did NOT launch: one the user typed at the pane's own prompt,
+    // found by the backend in the pane's PTY subtree (typed-launch detection). Without this
+    // the slot stays a 'shell' in the manifest and a cold-daemon restart — a reboot — brings
+    // back an empty terminal where a live agent used to be. Detection is the only path that
+    // reaches here: a launch already recorded itself above, through the port.
+    onPaneAgentSession((paneId, session) => {
+      if (!session?.detected) return
+      if (controller.noteAgentLaunch(paneId, session.provider, session.profileId, session.cwd)) persist()
     })
     // 06b: the wizard/templates open workspaces from a provider-mix spec.
     setWorkspaceOpener((spec) => {

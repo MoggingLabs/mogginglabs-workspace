@@ -1,7 +1,8 @@
 import * as fs from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { ContextProvider, ContextUsage } from '@contracts'
 import {
+  claudeProjectDirs,
   codexDayDirs,
   contextSinkPath,
   findClaudeProjectDir,
@@ -53,6 +54,13 @@ export interface ContextPaneSpec {
   home: string
   /** Pane adopted from the detached daemon — its session predates the watch. */
   adopted?: boolean
+  /** DETECTED session (the user typed the CLI; the process table found it). `cwd` is then a
+   *  HINT, not a certainty — a shell can `cd` deeper in the same line it launches — so the
+   *  lock also considers session logs under DESCENDANTS of it. */
+  detected?: boolean
+  /** The earliest this session's log can have been written (ms epoch) — detection knows it
+   *  exactly. Overrides the launch/adopt lookback windows below. */
+  since?: number
 }
 
 interface Track extends ContextPaneSpec {
@@ -145,38 +153,55 @@ export class ContextMonitor {
     }
   }
 
+  /** How far back THIS pane's lock may reach. Detection reports exactly when it first saw the
+   *  agent (`since`), which beats both guesses: a fresh launch's slack, and an adopted pane's
+   *  blind 30-minute window. */
+  private floorFor(t: Track): number {
+    if (t.since) return t.since
+    return t.watchStart - (t.adopted ? ADOPT_LOOKBACK_MS : LAUNCH_SLACK_MS)
+  }
+
   /** Candidate session logs for a pane, newest first. Only files a pane could lock:
    *  recent enough for ITS lock rule, not locked by any other pane. */
   private candidates(paneId: number, t: Track): Array<{ file: string; mtimeMs: number }> {
     const lockedByOthers = new Set<string>()
     for (const [id, other] of this.panes) if (id !== paneId && other.file) lockedByOthers.add(other.file)
-    const floor = t.watchStart - (t.adopted ? ADOPT_LOOKBACK_MS : LAUNCH_SLACK_MS)
+    const floor = this.floorFor(t)
 
     const out: Array<{ file: string; mtimeMs: number }> = []
     if (t.provider === 'claude') {
-      const dir = findClaudeProjectDir(t.home, t.cwd)
-      if (!dir) return out
-      let names: string[]
-      try {
-        names = fs.readdirSync(dir)
-      } catch {
-        return out
-      }
-      for (const name of names) {
-        if (!name.endsWith('.jsonl')) continue
-        const file = join(dir, name)
-        if (lockedByOthers.has(file)) continue
+      // A DETECTED (hand-typed) session's cwd is a hint: `cd sub && claude` launches one
+      // directory deeper than the shell last reported. So its lock also considers project
+      // dirs BELOW the pane's cwd — never above, never elsewhere.
+      const dirs = t.detected ? claudeProjectDirs(t.home, t.cwd) : [findClaudeProjectDir(t.home, t.cwd)].filter((d): d is string => !!d)
+      if (!dirs.length) return out
+      for (const dir of dirs) {
+        let names: string[]
         try {
-          const st = fs.statSync(file)
-          if (st.mtimeMs >= floor) out.push({ file, mtimeMs: st.mtimeMs })
+          names = fs.readdirSync(dir)
         } catch {
-          /* raced away */
+          continue
+        }
+        for (const name of names) {
+          if (!name.endsWith('.jsonl')) continue
+          const file = join(dir, name)
+          if (lockedByOthers.has(file)) continue
+          try {
+            const st = fs.statSync(file)
+            if (st.mtimeMs >= floor) out.push({ file, mtimeMs: st.mtimeMs })
+          } catch {
+            /* raced away */
+          }
         }
       }
     } else {
       // codex: day dirs are shared across ALL cwds — match each recent rollout's
-      // session_meta cwd to the pane's (cached; a session's cwd never changes).
+      // session_meta cwd to the pane's (cached; a session's cwd never changes). A DETECTED
+      // session's cwd is a hint, so a rollout started BELOW it counts as this pane's too
+      // (same rule as claude's project dirs above).
       const key = pathKey(t.cwd)
+      const matches = (rollout: string | null | undefined): boolean =>
+        rollout === key || (!!t.detected && !!rollout && rollout.startsWith(key + '/'))
       for (const dir of codexDayDirs(t.home, this.now())) {
         let names: string[]
         try {
@@ -196,7 +221,7 @@ export class ContextMonitor {
               const cwd = readCodexSessionCwd(file)
               this.codexCwd.set(file, cwd === null ? null : pathKey(cwd))
             }
-            if (this.codexCwd.get(file) === key) out.push({ file, mtimeMs: st.mtimeMs })
+            if (matches(this.codexCwd.get(file))) out.push({ file, mtimeMs: st.mtimeMs })
           } catch {
             /* raced away */
           }
@@ -260,7 +285,7 @@ export class ContextMonitor {
     //    to the transcript path below.
     if (t.provider === 'claude') {
       const sink = readContextSink(paneId)
-      const floor = t.watchStart - (t.adopted ? ADOPT_LOOKBACK_MS : LAUNCH_SLACK_MS)
+      const floor = this.floorFor(t)
       if (sink && sink.mtimeMs >= floor && !(t.lastMtimeMs > sink.mtimeMs + 5000)) {
         if (sink.windowTokens) t.window = sink.windowTokens
         const window = sink.windowTokens ?? t.window ?? claudeWindowForModel(sink.model)
@@ -343,9 +368,13 @@ export class ContextMonitor {
 
   /** The baseline seed: the smallest OPENING-turn usage among this project's three
    *  newest sibling session logs (excluding the pane's own lock). Null when the
-   *  project has no prior sessions — the pane then stays on its pending "–". */
+   *  project has no prior sessions — the pane then stays on its pending "–".
+   *
+   *  Siblings are read from the LOCKED file's own directory, never re-derived from the
+   *  pane's cwd: a detected session may have locked a log one directory deeper (see
+   *  candidates()), and its baseline must come from ITS project, not the pane's. */
   private claudeBaselineSeed(t: Track): { usedTokens: number; model?: string } | null {
-    const dir = findClaudeProjectDir(t.home, t.cwd)
+    const dir = t.file ? dirname(t.file) : findClaudeProjectDir(t.home, t.cwd)
     if (!dir) return null
     let names: string[]
     try {

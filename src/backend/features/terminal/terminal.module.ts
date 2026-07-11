@@ -13,7 +13,8 @@ export function createTerminalModule(): FeatureModule {
         data: (e) => ctx.emit(TerminalChannels.data, e),
         exit: (e) => ctx.emit(TerminalChannels.exit, e),
         state: (e) => ctx.emit(TerminalChannels.state, e),
-        cwd: (e) => ctx.emit(TerminalChannels.cwd, e)
+        cwd: (e) => ctx.emit(TerminalChannels.cwd, e),
+        agent: (e) => ctx.emit(TerminalChannels.agent, e) // typed-launch detection
       })
       ctx.handle(TerminalChannels.spawn, (p) => service!.spawn(p))
       // The dot's reliability contract: a mounting pane PULLS its current state —

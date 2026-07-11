@@ -1,6 +1,7 @@
 import { homedir } from 'node:os'
 import { statSync } from 'node:fs'
 import type {
+  AgentDetectedEvent,
   AgentState,
   CwdEvent,
   DataEvent,
@@ -13,10 +14,10 @@ import type {
   WriteCommand
 } from '@contracts'
 import { spawnPty, ptyEmulation, type IPty } from '../../platform/pty-host'
-import { defaultShell, shellArgs } from '../../platform/shell'
+import { defaultShell, shellArgs, shellIntegrationEnv } from '../../platform/shell'
 import { killPtyTree } from '../../platform/process-tree'
 import { getTelemetry } from '../../core/telemetry'
-import { ActivityTracker, OscParser, fileUriToPath, isTerminalReply } from '../agent-state'
+import { ActivityTracker, AgentProcessDetector, OscParser, fileUriToPath, isTerminalReply } from '../agent-state'
 
 /** Retained per-pane output for reattach repaint — same cap as the daemon's ring. */
 const SCROLLBACK_BYTES = 200_000
@@ -43,6 +44,8 @@ export interface TerminalSink {
   exit(event: ExitEvent): void
   state(event: StateEvent): void
   cwd(event: CwdEvent): void
+  /** Typed-launch detection: an agent CLI process appeared in / left the pane's subtree. */
+  agent(event: AgentDetectedEvent): void
 }
 
 /**
@@ -58,6 +61,20 @@ export class PtyService {
    *  re-requests every pane): parity with the daemon path, whose reattach repaints from
    *  ITS ring — without this an in-proc reload left every pane blank over a live shell. */
   private readonly buffers = new Map<number, string>()
+  /** Last cwd each pane reported (OSC 7 / 9;9) — the fallback the agent detector needs on
+   *  Windows, where a process's own cwd is not readable. */
+  private readonly cwds = new Map<number, string>()
+  /** Typed-launch detection (the in-proc twin of the daemon's — one detector, all panes). */
+  private readonly agentProcs = new AgentProcessDetector((paneId, det) =>
+    this.sink.agent({
+      id: Number(paneId),
+      agentId: det?.agentId ?? null,
+      cwd: det ? (det.cwd ?? this.cwds.get(Number(paneId)) ?? this.spawnCwds.get(Number(paneId))) : undefined,
+      sinceMs: det?.sinceMs
+    })
+  )
+  /** Where each pane's shell STARTED — the last-resort cwd for a detected agent. */
+  private readonly spawnCwds = new Map<number, string>()
 
   constructor(private readonly sink: TerminalSink) {}
 
@@ -83,28 +100,41 @@ export class PtyService {
     try {
       // spawnPty is the only door to node-pty: it decides useConpty and hands back the emulation
       // that describes THIS process, so the descriptor can never disagree with the pty.
-      const { proc, emulation } = spawnPty(defaultShell(), shellArgs(), {
+      const shell = defaultShell()
+      const spawnCwd = pickCwd(req.cwd)
+      const { proc, emulation } = spawnPty(shell, shellArgs(), {
         name: 'xterm-256color',
         cols,
         rows,
-        cwd: pickCwd(req.cwd),
-        env: process.env as Record<string, string>
+        cwd: spawnCwd,
+        // Shell integration (cwd reporting): the same env the daemon injects — a cmd.exe pane
+        // that never told anyone where it was now does, on every prompt.
+        env: { ...process.env, ...shellIntegrationEnv(shell) } as Record<string, string>
       })
       this.sizes.set(req.id, { cols, rows })
+      this.spawnCwds.set(req.id, spawnCwd)
 
       // Pane state = the ActivityTracker's verdict, with the OscParser feeding it
       // explicit signals — the same fusion as the daemon path (parity; see
-      // agent-state/activity.ts for the precedence rules).
-      const tracker = new ActivityTracker((state: AgentState) => this.sink.state({ id: req.id, state }))
+      // agent-state/activity.ts for the precedence rules). A state EDGE also pokes the
+      // agent-process detector: something in this pane started or ended a command.
+      const tracker = new ActivityTracker((state: AgentState) => {
+        this.sink.state({ id: req.id, state })
+        this.agentProcs.poke(String(req.id))
+      })
       this.trackers.set(req.id, tracker)
       const osc = new OscParser(
         (state: AgentState) => tracker.notify(state),
         (ev) => {
           if (ev.kind === 'bell') tracker.bell()
-          // OSC 7 reports the pane's cwd -> surface it for per-pane git (Phase-2/03).
+          // OSC 7 / 9;9 report the pane's cwd -> per-pane git (Phase-2/03), and the launch
+          // dir of a hand-typed agent. De-duped on value: a cmd.exe prompt emits both forms.
           if (ev.kind === 'cwd' && ev.payload) {
             const cwd = fileUriToPath(ev.payload)
-            if (cwd) this.sink.cwd({ id: req.id, cwd })
+            if (cwd && cwd !== this.cwds.get(req.id)) {
+              this.cwds.set(req.id, cwd)
+              this.sink.cwd({ id: req.id, cwd })
+            }
           }
         }
       )
@@ -128,13 +158,17 @@ export class PtyService {
         if (this.ptys.get(req.id) !== proc) return // kill() (or a successor) already owns cleanup
         this.trackers.get(req.id)?.dispose()
         this.trackers.delete(req.id)
+        this.agentProcs.untrack(String(req.id))
         this.sink.exit({ id: req.id, exitCode })
         this.ptys.delete(req.id)
         this.sizes.delete(req.id)
         this.buffers.delete(req.id)
+        this.cwds.delete(req.id)
+        this.spawnCwds.delete(req.id)
       })
 
       this.ptys.set(req.id, proc)
+      this.agentProcs.track(String(req.id), proc.pid) // watch this pane's subtree for agent CLIs
       return { existing: false, restored: false, pty: emulation }
     } catch (err) {
       // Example telemetry use: spawn failures are exactly what we want reported.
@@ -151,7 +185,11 @@ export class PtyService {
   write({ id, data }: WriteCommand): void {
     // Not for auto-replies: xterm answering a query (CPR/DA/focus) is not the user
     // answering the pane — it must not clear an attention latch (see replies.ts).
-    if (!isTerminalReply(data)) this.trackers.get(id)?.input() // typing answers whatever the pane was blocked on
+    if (!isTerminalReply(data)) {
+      this.trackers.get(id)?.input() // typing answers whatever the pane was blocked on
+      // A submitted LINE is the most precise "a command is starting" signal there is.
+      if (data.includes('\r') || data.includes('\n')) this.agentProcs.poke(String(id))
+    }
     this.ptys.get(id)?.write(data)
   }
 
@@ -185,6 +223,7 @@ export class PtyService {
   kill({ id }: KillCommand): void {
     this.trackers.get(id)?.dispose()
     this.trackers.delete(id)
+    this.agentProcs.untrack(String(id))
     const proc = this.ptys.get(id)
     if (proc) {
       killPtyTree(proc)
@@ -192,14 +231,19 @@ export class PtyService {
     }
     this.sizes.delete(id)
     this.buffers.delete(id)
+    this.cwds.delete(id)
+    this.spawnCwds.delete(id)
   }
 
   disposeAll(): void {
     for (const tracker of this.trackers.values()) tracker.dispose()
     this.trackers.clear()
+    this.agentProcs.dispose()
     for (const proc of this.ptys.values()) killPtyTree(proc)
     this.ptys.clear()
     this.sizes.clear()
     this.buffers.clear()
+    this.cwds.clear()
+    this.spawnCwds.clear()
   }
 }

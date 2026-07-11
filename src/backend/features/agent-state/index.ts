@@ -6,3 +6,4 @@
 export * from './osc-parser'
 export * from './activity'
 export * from './replies'
+export * from './agent-proc'

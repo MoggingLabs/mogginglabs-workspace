@@ -1,14 +1,15 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { IntegrationsChannels, ProfileChannels, TerminalChannels, planSignature, type AgentInfo, type AgentProfile, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
+import { IntegrationsChannels, ProfileChannels, TerminalChannels, planSignature, type AgentDetectedEvent, type AgentInfo, type AgentProfile, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
 import { recordPaneLaunch } from '../../core/agents/toolplan-panes'
 import { recordPaneCli, setMcpSnapshot } from '../../core/agents/mcp-status-port'
 
 const PROVIDER_CLI: Record<string, HostedCliId | undefined> = { claude: 'claude-code', codex: 'codex', gemini: 'gemini' }
 import { getBridge } from '../../core/ipc/bridge'
 import { getFocusedPane } from '../../core/layout/focus'
+import { getPaneCwd } from '../../core/layout/pane-cwd'
 import { setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
 import { onAgentLaunchRequest, requestAgentLaunch, announceProfileFailover } from '../../core/agents/launch-port'
-import { setPaneAgentSession } from '../../core/agents/agent-session-port'
+import { clearPaneAgentSession, getPaneAgentSession, setPaneAgentSession, type PaneAgentSession } from '../../core/agents/agent-session-port'
 import { setCommands } from '../../core/commands/command-port'
 import { setActiveView } from '../../core/shell/view-port'
 import { requestSettingsTab } from '../../core/shell/settings-tab-port'
@@ -55,6 +56,24 @@ export const agentsFeature: UiFeature = {
     const autoFailover = new Map<string, boolean>()
     /** One-hop guard: a pane mid-failover ignores further limit events. */
     const failingOver = new Set<number>()
+    /** When this feature last WROTE a pane's session, and when detection last SAW an agent
+     *  in it. Ordering the two is what keeps a relaunch honest: the dying old agent's "gone"
+     *  verdict is still in flight while the new one is being typed, and clearing on it would
+     *  wipe the session (profile and all) that the relaunch just established. A `null`
+     *  verdict may only retire the session it actually refers to — one that began no later
+     *  than the agent it watched. */
+    const sessionSetAt = new Map<number, number>()
+    const detectedAt = new Map<number, number>()
+
+    /** The ONE writer of the agent-session port (the port's contract), stamped so the
+     *  detection reconciler above can tell a stale verdict from a current one. `at` lets a
+     *  DETECTED session share the exact stamp of the detection that produced it: written a
+     *  tick later, the session would forever look NEWER than the agent it describes, and that
+     *  agent's own "gone" verdict could never retire it — a gauge for a dead agent. */
+    const writeSession = (paneId: number, session: PaneAgentSession, at = Date.now()): void => {
+      sessionSetAt.set(paneId, at)
+      setPaneAgentSession(paneId as PaneId, session)
+    }
 
     void populate()
     onProfilesChanged(() => void populate()) // Settings edits -> palette entries follow live
@@ -66,6 +85,73 @@ export const agentsFeature: UiFeature = {
       const id = Number((payload as { id?: number })?.id)
       if (Number.isFinite(id)) void onLimit(id)
     })
+
+    // TYPED-LAUNCH DETECTION. The backend watches each pane's PTY subtree and says which
+    // agent CLI is really running in it (process table, not output parsing). This is the
+    // path for every agent the app did NOT launch: a `claude` typed at the pane's own
+    // prompt, and — after a restart — any agent the detached daemon kept alive. Fulfilled
+    // HERE because `agents` is the port's one writer, so a detected session is the same
+    // object as a launched one: context gauge, provider mark, MCP chip, failover, resume.
+    getBridge().on(TerminalChannels.agent, (payload) => void onAgentDetected(payload as AgentDetectedEvent))
+
+    async function onAgentDetected(ev: AgentDetectedEvent): Promise<void> {
+      const paneId = Number(ev?.id)
+      if (!Number.isFinite(paneId)) return
+      const existing = getPaneAgentSession(paneId as PaneId)
+
+      // The pane's agent is GONE. Retire the session — process truth, so this is the honest
+      // version of the OSC-133 guess TerminalPane also makes. But only for the session this
+      // verdict actually describes: a launch typed AFTER the agent we watched (a failover
+      // relaunch, a user relaunching by hand) is a different session, and its identity must
+      // survive its predecessor's death rattle.
+      if (!ev.agentId) {
+        if ((detectedAt.get(paneId) ?? 0) >= (sessionSetAt.get(paneId) ?? 0)) clearPaneAgentSession(paneId as PaneId)
+        return
+      }
+      // ONE stamp for this verdict and for any session it writes below — see writeSession.
+      const at = Date.now()
+      detectedAt.set(paneId, at)
+
+      // The app launched this very CLI here: its own record is strictly richer (the exact
+      // launch cwd, the profile it chose). Detection only CONFIRMS it — rewriting would
+      // restart the log watch and drop the profile for nothing.
+      if (existing && existing.provider === ev.agentId && !existing.detected) return
+      const cwd = ev.cwd || getPaneCwd(paneId as PaneId) || ''
+      if (existing && existing.provider === ev.agentId && existing.cwd === cwd) return // same session, no news
+
+      // A profile's env pointers are `set`/`export`ed INTO the pane's shell (see the launch
+      // builder), so they outlive the agent that was launched with them: a CLI re-typed in
+      // that pane runs under the same profile, and its config home must resolve the same way
+      // — otherwise the bar looks for the session log under the default home and finds none.
+      const prior = lastLaunch.get(paneId)
+      const profileId = prior?.provider === ev.agentId ? prior.profileId : undefined
+
+      // Everything that establishes the session is SYNCHRONOUS, in one tick: an `await` here
+      // would open a window for this pane's next verdict — the agent exiting — to land first
+      // and be overwritten, leaving a session (and a gauge) for a process that is already
+      // gone. The profile's display NAME is the one thing worth a round trip, so it follows
+      // afterwards; it is a note on the pane, not the session's identity.
+      writeSession(
+        paneId,
+        { provider: ev.agentId, cwd, profileId, detected: true, since: ev.sinceMs },
+        at // the session and the agent it names are the same event
+      )
+      lastLaunch.set(paneId, { provider: ev.agentId, cwd, profileId }) // failover works here too
+      setPaneLabel(paneId as PaneId, nameById.get(ev.agentId) ?? ev.agentId)
+      const cli = PROVIDER_CLI[ev.agentId]
+      if (cli) recordPaneCli(paneId, cli) // the pane's MCP chip, same as a launched agent
+      // Provider id only — never the command the user typed (ADR 0005/0002).
+      getTelemetry().captureEvent({ name: 'agent.detected', props: { provider: ev.agentId } })
+
+      if (!profileId) {
+        setPaneProfile(paneId as PaneId, undefined) // a previous launch's note is not this agent's
+        return
+      }
+      const name = (await listProfiles()).find((p) => p.id === profileId)?.name
+      // The pane may have moved on while we asked (the agent quit, another CLI started):
+      // only note the profile if this session is still the one running.
+      if (getPaneAgentSession(paneId as PaneId)?.profileId === profileId) setPaneProfile(paneId as PaneId, name)
+    }
 
     const listProfiles = async (): Promise<AgentProfile[]> => {
       try {
@@ -181,7 +267,11 @@ export const agentsFeature: UiFeature = {
         setPaneProfile(paneId as PaneId, mine.find((p) => p.id === adoptedProfile)?.name)
         // Context bar: the adopted session predates this app run, so the log
         // matcher may look back in time (agent-session port -> context feature).
-        setPaneAgentSession(paneId as PaneId, { provider, cwd, profileId: adoptedProfile, adopted: true })
+        writeSession(paneId, { provider, cwd, profileId: adoptedProfile, adopted: true })
+        // The failover context, which an adopted pane never had: a usage limit in a pane
+        // whose agent survived a restart could not offer the next profile, because nothing
+        // remembered what was running in it.
+        lastLaunch.set(paneId, { provider, cwd, profileId: adoptedProfile })
         return
       }
       if (provider.startsWith('custom:')) {
@@ -191,7 +281,7 @@ export const agentsFeature: UiFeature = {
         setPaneLabel(paneId as PaneId, cmd.split(/\s+/)[0] || 'custom')
         // Published even though unsupported: it CLEARS any previous agent's context
         // bar in this pane (the context feature filters non-context providers).
-        setPaneAgentSession(paneId as PaneId, { provider, cwd })
+        writeSession(paneId, { provider, cwd })
         // Provider id only — NEVER the command text (ADR 0005/0002).
         getTelemetry().captureEvent({ name: 'agent.launched', props: { provider: 'custom', resume } })
         return
@@ -220,7 +310,7 @@ export const agentsFeature: UiFeature = {
       setPaneProfile(paneId as PaneId, mine.find((p) => p.id === effectiveProfile)?.name)
       // Context bar: LAUNCH cwd + profile ID (the id names the config home main-side;
       // env values never ride the port — ADR 0002).
-      setPaneAgentSession(paneId as PaneId, { provider, cwd, profileId: effectiveProfile })
+      writeSession(paneId, { provider, cwd, profileId: effectiveProfile })
       setPaneLabel(paneId as PaneId, nameById.get(provider) ?? provider)
       // Booleans/ids only — never env values or command text (ADR 0005).
       getTelemetry().captureEvent({ name: 'agent.launched', props: { provider, resume, profiled: !!effectiveProfile } })
@@ -291,7 +381,11 @@ export const agentsFeature: UiFeature = {
         // Smoke/dev shim: register an agent session WITHOUT launching (the dot is
         // gated on tracked sessions — smokes driving OSC into plain panes adopt one).
         adopt: (paneId: number, provider = 'claude', cwd = '') =>
-          setPaneAgentSession(paneId as PaneId, { provider, cwd, adopted: true })
+          writeSession(paneId, { provider, cwd, adopted: true }),
+        // Smoke/dev shim: replay a detection event exactly as the backend sends it, so a
+        // gate can prove the whole typed-launch path without a real agent process.
+        detected: (ev: AgentDetectedEvent) => onAgentDetected(ev),
+        session: (paneId: number) => getPaneAgentSession(paneId as PaneId) ?? null
       }
     }
   }

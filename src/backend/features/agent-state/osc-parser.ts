@@ -4,6 +4,10 @@ import type { AgentState } from '@contracts'
 // starts with ESC ] and ends with BEL (0x07) or ST (ESC \).
 //
 //   OSC 9 / 99 / 777          notifications              -> "attention"
+//   OSC 9 ; 9 ; path          current working directory  (the ConEmu/Windows-Terminal form —
+//                             NOT a notification: it is how cmd.exe reports its cwd through
+//                             ConPTY. Parsed before the notify branch, or every prompt would
+//                             ring the attention dot.)
 //   OSC 133 ; A               prompt start                            (mark, for command blocks)
 //   OSC 133 ; B               command line start                      (mark, for command blocks)
 //   OSC 133 ; C               command execution start    -> "busy"    (mark)
@@ -24,14 +28,21 @@ export interface OscEvent {
 }
 
 /**
- * Convert an OSC 7 `file://host/path` URI to a local filesystem path (used for per-pane cwd
- * tracking). Returns null when unparseable. Handles Windows drive paths (`file://host/C:/x` ->
- * `C:/x`) and percent-encoding. Pure — no Node/Electron deps, so both the in-proc PtyService and
- * the daemon can share it.
+ * Convert an OSC cwd payload to a local filesystem path (used for per-pane cwd tracking).
+ * Accepts BOTH forms a shell can report: the OSC 7 `file://host/path` URI (bash/zsh, and the
+ * cmd.exe prompt we inject), and the bare absolute path OSC 9;9 carries (the ConEmu/Windows-
+ * Terminal form). Returns null when it is neither. Handles Windows drive paths
+ * (`file://host/C:/x` -> `C:/x`) and percent-encoding. Pure — no Node/Electron deps, so both
+ * the in-proc PtyService and the daemon can share it.
  */
 export function fileUriToPath(uri: string): string | null {
-  const m = /^file:\/\/[^/]*(\/.*)$/.exec(uri.trim())
-  if (!m) return null
+  const raw = uri.trim()
+  const m = /^file:\/\/[^/]*(\/.*)$/.exec(raw)
+  if (!m) {
+    // OSC 9;9 reports the path itself, not a URI. Absolute paths only — a relative one
+    // names nothing we can resolve, and a shell never reports one.
+    return /^([a-zA-Z]:[\\/]|[\\/])/.test(raw) ? raw : null
+  }
   let p: string
   try {
     p = decodeURIComponent(m[1])
@@ -119,6 +130,16 @@ export class OscParser {
 
     switch (code) {
       case 9:
+        // `9;9;<path>` is a CWD report (ConEmu/Windows Terminal), not a notification — it is
+        // how cmd.exe tells us where it is (see shellIntegrationEnv). Ringing attention on it
+        // would light the dot on every single prompt.
+        if (rest.startsWith('9;')) {
+          this.onEvent?.({ kind: 'cwd', code, payload: rest.slice(2) })
+          break
+        }
+        this.onState('attention')
+        this.onEvent?.({ kind: 'notify', code, payload: rest })
+        break
       case 99:
       case 777:
         this.onState('attention')

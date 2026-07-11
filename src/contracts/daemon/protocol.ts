@@ -7,6 +7,15 @@ import type { AgentState } from '../domain/agent'
 import type { PersistedWorkspace } from '../ipc/workspace.ipc'
 import type { PtyEmulation } from '../ipc/terminal.ipc'
 
+// v6: the daemon KNOWS which agent CLI runs in each pane — it watches the pane's PTY subtree
+// in the process table and reports it (`agent`), instead of knowing only what the app itself
+// typed. That is what gives a hand-typed `claude` the same identity as a launched one (context
+// gauge, provider mark, resume), and it is also why the bump exists rather than a
+// backward-compatible add: the daemon SURVIVES app updates by design, so a v5 daemon — which
+// has no detector and injects no shell-integration env — would keep every pane it owns blind
+// to typed launches until the machine reboots. The bump retires it through the existing
+// hand-off (daemon-migrate.ts): its live panes are captured, it shuts down, and the v6 daemon
+// restores them with resume. Same enforcement reasoning as v5 and v4 below.
 // v5: pane sessions are GENERATIONAL. Every pane-scoped server event (data/exit/state/cwd/
 // limit) and every attach point (spawned/attached/welcome PaneInfo) carries the session's
 // `gen` — a per-daemon monotonic stamp minted when the PaneSession is created. Pane IDS are
@@ -26,7 +35,7 @@ import type { PtyEmulation } from '../ipc/terminal.ipc'
 // (set-role, PaneInfo.role). v2: Phase-3/01 control API — send-key/capture + enriched
 // PaneInfo. The version namespaces the runtime dir + socket, so older daemons keep
 // running untouched (ADR 0006 anti-kill-server); the app + CLI speak their own version.
-export const DAEMON_PROTOCOL_VERSION = 5
+export const DAEMON_PROTOCOL_VERSION = 6
 
 // ── Release channel (dev/prod isolation) ───────────────────────────────────────────────
 // A repo checkout and an installed release must be able to run SIDE BY SIDE with zero shared
@@ -238,6 +247,13 @@ export type ServerMessage =
   | { t: 'pong' }
   | { t: 'notified'; id: string; ok: boolean } // ack for a `notify` (ok=false: unknown pane id)
   | { t: 'limit'; id: string; gen: number } // a pane's agent reported a usage limit (Phase-4/04 failover)
+  // Typed-launch detection: an agent CLI process appeared in (or vanished from) the pane's
+  // PTY subtree — the daemon KNOWS this from the process table, not from output heuristics.
+  // `agentId` is an adapter id ('claude', …) or null (the agent exited); `cwd` is where the
+  // agent itself runs (it names the session log); `sinceMs` floors how far back a context
+  // watch may look for that log. Replayed on (re)attach, so an app restart re-learns a
+  // hand-typed session it never launched. Ids only, never a command line (ADR 0002/0005).
+  | { t: 'agent'; id: string; gen: number; agentId: string | null; cwd?: string; sinceMs?: number }
   | { t: 'sent'; id: string; ok: boolean } // ack for a `send-key` (ok=false: unknown pane/key)
   | { t: 'captured'; id: string; data: string } // reply to `capture` — CALLER's stdout only
   | { t: 'mailed'; id: number } // ack for a mail-send (the assigned message id)

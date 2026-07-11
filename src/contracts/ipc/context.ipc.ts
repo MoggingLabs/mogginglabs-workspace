@@ -64,6 +64,16 @@ export interface ContextWatchRequest {
   cwd: string
   profileId?: string
   adopted?: boolean
+  /** DETECTED session (the user typed the CLI themselves — process-table truth, see
+   *  AgentDetectedEvent). Two consequences for the log matcher: `since` below is exact
+   *  rather than a guess, and `cwd` is a HINT — a shell can `cd` deeper in the same
+   *  breath it launches (`cd sub && claude`), so a session log under a DESCENDANT of
+   *  this cwd is this pane's too. An app launch knows its cwd exactly and never widens. */
+  detected?: boolean
+  /** The earliest this session's log can have been written (ms epoch). Detection knows it
+   *  exactly (when the process was first seen, minus the detection lag); without it the
+   *  matcher falls back to its own launch/adopt windows. */
+  since?: number
 }
 
 /** UI -> backend: stop tracking a pane (it was disposed, or its agent exited). */

@@ -92,6 +92,10 @@ export interface DaemonEvents {
   onOwners?: (claims: Claim[]) => void
   /** A pane's agent reported a usage limit (4/04 failover). */
   onLimit?: (id: string, gen: number) => void
+  /** TYPED-LAUNCH DETECTION: an agent CLI process appeared in / left this pane's PTY subtree
+   *  (`agentId` null = gone). Also REPLAYED on (re)attach, which is how a restarted app
+   *  re-learns the identity of an agent the daemon kept alive but the app never launched. */
+  onAgent?: (id: string, agentId: string | null, cwd: string | undefined, sinceMs: number | undefined, gen: number) => void
   /** Reviewer-gate sign-off list — replies AND pushes on change (4/03 polish). */
   onApprovals?: (list: Approval[]) => void
   onClose?: () => void
@@ -179,6 +183,9 @@ export class DaemonClient {
         break
       case 'limit':
         this.events.onLimit?.(m.id, m.gen)
+        break
+      case 'agent':
+        this.events.onAgent?.(m.id, m.agentId, m.cwd, m.sinceMs, m.gen)
         break
       case 'approvals': {
         const waiter = this.approvalWaiters.shift()

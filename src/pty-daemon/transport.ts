@@ -76,7 +76,8 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
         },
         state: (st) => send({ t: 'state', id, gen, state: st }),
         cwd: (p) => send({ t: 'cwd', id, gen, cwd: p }),
-        limit: () => send({ t: 'limit', id, gen })
+        limit: () => send({ t: 'limit', id, gen }),
+        agent: (agentId, cwd, sinceMs) => send({ t: 'agent', id, gen, agentId, cwd, sinceMs })
       }
       subscriptions.set(id, { sub, session })
       session.subscribe(sub)

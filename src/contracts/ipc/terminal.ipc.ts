@@ -85,3 +85,24 @@ export interface CwdEvent {
   id: PaneId
   cwd: string
 }
+
+/** TYPED-LAUNCH DETECTION: an agent CLI process appeared in — or vanished from — this pane's
+ *  PTY subtree. The backend knows this from the PROCESS TABLE (the pane's shell is its child,
+ *  so the agent is its descendant), not from parsing terminal output: a user who types
+ *  `claude` at the pane's own prompt gets the same session identity as an app-launched one
+ *  (context gauge, provider mark, manifest resume) — the launch port only ever saw the
+ *  launches the APP performed.
+ *
+ *  `agentId` is an adapter id ('claude', 'codex', …), or null when the pane's agent exited.
+ *  `cwd` is the agent process's OWN working directory where the platform can report it
+ *  (POSIX), else the pane's last known cwd — it names the session log, so it is the launch
+ *  cwd, not the pane's seed. `sinceMs` is when the agent was first seen (minus the detection
+ *  lag): the floor a context watch may look back to for a session that predates it — which is
+ *  every session after an app restart, since the daemon keeps the agent alive and replays
+ *  this event on reattach. Ids and counts only — never a command line (ADR 0002/0005). */
+export interface AgentDetectedEvent {
+  id: PaneId
+  agentId: string | null
+  cwd?: string
+  sinceMs?: number
+}
