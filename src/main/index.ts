@@ -107,6 +107,7 @@ import { installDeepLinkListeners, registerDeepLink, initialDeepLinkCwd, initial
 import { ControlChannels } from '@contracts'
 import { initAutoUpdate } from './updater'
 import { fatal, installFatalHandlers } from './fatal'
+import { scrubInheritedPaneEnv } from './pane-env'
 import { assertNativeModules } from './native-preflight'
 import { assertPtyHostSupported } from '@backend/platform/pty-host'
 import { WorkspaceChannels } from '@contracts'
@@ -139,6 +140,19 @@ else if (!app.isPackaged) app.setPath('userData', app.getPath('userData') + '-de
 // Smokes stay prod-shaped — they already isolate the whole runtime tree via LOCALAPPDATA.
 if (app.isPackaged || process.env.MOGGING_USERDATA) delete process.env.MOGGING_CHANNEL
 else process.env.MOGGING_CHANNEL = 'dev'
+
+// The SAME rule, for the same reason, applied to the pane identity the daemon injects: an app
+// launched from inside a MoggingLabs pane inherits WHICH pane it came from and WHERE that
+// pane's daemon is, then hands both to every child it spawns. `mogging` prefers the inherited
+// endpoint over the runtime dir (inside a real pane that is the right answer), so the app's own
+// CLI children — every gate's `mogging` call — talked to the HOST's daemon instead of ours, and
+// a colliding pane id would have let them mutate the user's live session. Not a pane; do not
+// wear a pane's name. (pane-env.ts has the full account; the daemon re-injects the true values
+// into each pane it spawns, which is the only place they mean anything.)
+const inheritedPaneEnv = scrubInheritedPaneEnv(process.env)
+if (inheritedPaneEnv.length) {
+  console.warn(`[env] launched from inside a pane — dropped inherited ${inheritedPaneEnv.join(', ')}`)
+}
 
 // Remote-pane smoke support (4/05): point the daemon at a FAKE ssh (a node script the
 // smoke writes later) BEFORE the daemon spawns, so no smoke ever needs a network.

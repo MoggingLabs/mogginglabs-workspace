@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorktree } from '@backend/features/worktrees'
+import { INHERITED_PANE_ENV, scrubInheritedPaneEnv } from './pane-env'
 
 // Env-gated reviewer-gate smoke (MOGGING_GATE, Phase-4/03). The DoD, asserted:
 // an unapproved branch cannot merge through the app — not by click, not by CLI —
@@ -21,6 +22,40 @@ import { createWorktree } from '@backend/features/worktrees'
 // self-promotes through the CLI still cannot open the gate.
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim()
+}
+
+/**
+ * The CLI calls below are only worth anything if they reach THIS app's daemon. They did not:
+ * an app launched from inside a MoggingLabs pane inherited that pane's MOGGING_PANE_ID and
+ * MOGGING_DAEMON_ENDPOINT and passed both to every `mogging` it spawned, and `mogging` prefers
+ * that endpoint over the runtime dir — so every call here went to the USER'S LIVE DAEMON, past
+ * MOGGING_USERDATA and LOCALAPPDATA isolation, and answered `nopane` about someone else's
+ * panes. A colliding pane id would have had `role`/`approve`/`kill` mutating a real session.
+ * main scrubs it now (pane-env.ts); this asserts BOTH halves, because the live half is silent
+ * on a machine that never leaks (CI) and the pure half is silent about the wiring.
+ */
+function checkPaneEnvIsolation(): { pass: boolean; detail: Record<string, unknown> } {
+  // Pure: the rule drops exactly the pane identity, and nothing else. MOGGING_GATE and
+  // MOGGING_USERDATA are OURS — the app's own launch flags — and must survive.
+  const fake: Record<string, string | undefined> = {
+    MOGGING_PANE_ID: '3',
+    MOGGING_DAEMON_ENDPOINT: 'C:/host/endpoint.json',
+    MOGGING_BROWSER_ENDPOINT: 'C:/host/browser.json',
+    MOGGING_GATE: '1',
+    MOGGING_USERDATA: 'C:/iso/userdata',
+    PATH: 'keep me'
+  }
+  const dropped = scrubInheritedPaneEnv(fake)
+  const pureOk =
+    dropped.length === 3 &&
+    INHERITED_PANE_ENV.every((n) => fake[n] === undefined) &&
+    fake.MOGGING_GATE === '1' &&
+    fake.MOGGING_USERDATA === 'C:/iso/userdata' &&
+    fake.PATH === 'keep me'
+  // Live: whatever this app was launched from, it is not wearing a pane's name NOW — so the
+  // CLI children it spawns discover the daemon through the isolated runtime dir, like they must.
+  const liveOk = INHERITED_PANE_ENV.every((n) => process.env[n] === undefined)
+  return { pass: pureOk && liveOk, detail: { pureOk, liveOk, dropped } }
 }
 
 function makeRepo(): string {
@@ -123,7 +158,10 @@ export function runGateSmoke(win: BrowserWindow): void {
       const wrongWord = await mergeVia(wt2.branch, 'Override')
       const overridden = await mergeVia(wt2.branch, 'override')
 
+      const paneEnv = checkPaneEnvIsolation()
+
       const pass =
+        paneEnv.pass &&
         ungated.ok === false &&
         ungated.state === 'ungated' &&
         notReviewer.code === 6 &&
@@ -146,6 +184,7 @@ export function runGateSmoke(win: BrowserWindow): void {
         git(repo, ['log', '--oneline', '-4']).includes('human work')
       result = {
         pass,
+        paneEnvIsolation: paneEnv.detail,
         ungated,
         notReviewerExit: notReviewer.code,
         selfPromoteExit: selfPromote.code,
