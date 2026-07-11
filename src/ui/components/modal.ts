@@ -71,6 +71,7 @@ export function createModal(opts: ModalOpts = {}): ModalHandle {
 
   let open = false
   let opener: Element | null = null
+  let dropTimer: ReturnType<typeof setTimeout> | undefined
 
   const onEsc = (e: KeyboardEvent): void => {
     if (e.key === 'Escape') {
@@ -84,6 +85,20 @@ export function createModal(opts: ModalOpts = {}): ModalHandle {
     if (open) return
     open = true
     opener = document.activeElement
+    // The SAME overlay element is re-appended on every open (a cached handle — the ?
+    // shortcuts sheet — reopens this exact node), so the last close's leftovers must go
+    // first, or the second open is a trap:
+    //   is-closing  its `fill: forwards` pins the overlay at opacity 0 — the sheet came
+    //               back INVISIBLE while still covering the screen (fixed, inset:0,
+    //               z-index 100), eating every click, and `open` was true so ? could not
+    //               reopen it either.
+    //   dropTimer   the close's deferred detach (below) would otherwise fire ~240ms into
+    //               this new life and rip the overlay we just opened back out.
+    overlay.classList.remove('is-closing')
+    if (dropTimer) {
+      clearTimeout(dropTimer)
+      dropTimer = undefined
+    }
     document.body.append(overlay)
     window.addEventListener('keydown', onEsc, true)
     panel.querySelector<HTMLElement>('input, select, button:not(.modal-close)')?.focus()
@@ -96,9 +111,19 @@ export function createModal(opts: ModalOpts = {}): ModalHandle {
     // One curve out (8.5/07b): fade the overlay, detach on animationend — with a ≤260ms
     // fallback so reduced-motion / animations-off never strands the overlay in the DOM.
     overlay.classList.add('is-closing')
-    const drop = (): void => overlay.remove()
+    const drop = (): void => {
+      // A reopen overtook this close (its doOpen already stripped is-closing): the
+      // overlay on screen belongs to the NEW open — dropping it now would detach a
+      // live modal. The stale animationend listener lands here too, harmlessly.
+      if (open) return
+      if (dropTimer) {
+        clearTimeout(dropTimer)
+        dropTimer = undefined
+      }
+      overlay.remove()
+    }
     overlay.addEventListener('animationend', drop, { once: true })
-    setTimeout(drop, 240)
+    dropTimer = setTimeout(drop, 240)
     if (opener instanceof HTMLElement && opener.isConnected) opener.focus()
     opts.onClose?.()
   }

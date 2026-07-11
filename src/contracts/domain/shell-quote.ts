@@ -40,7 +40,24 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/g
  *             is an illegal character in a Windows filename, so a quoted path
  *             can never legitimately contain one. We strip any that appear
  *             anyway (such a path is malformed or hostile) rather than emit a
- *             string that would break out of the quotes.
+ *             string that would break out of the quotes. A TRAILING backslash is
+ *             DOUBLED: `"C:\"` (a drive root) ends in `\"`, which every argv parser
+ *             following CommandLineToArgvW/MSVCRT rules reads as an ESCAPED quote —
+ *             measured, the program receives one argument `C:\" SECOND` with the next
+ *             token glued in. `"C:\\"` delivers `C:\` and leaves the next token alone.
+ *
+ *             RESIDUAL — cmd expands %NAME% even inside double quotes, and we do NOT
+ *             neutralize it. There is no form that can: percent expansion runs before,
+ *             and blind to, quoting, and a caret is LITERAL inside quotes. Measured at
+ *             an interactive prompt with FOO=BAR: "…%FOO%…" -> …BAR… (expanded);
+ *             "…%^FOO%…" -> …%^FOO%… (unexpanded, but the caret survives — a path that
+ *             does not exist); "…%%FOO%%…" -> …%BAR%… (expands anyway). The one
+ *             neutralization that works, ^%FOO^%, needs the quotes GONE — which breaks
+ *             the always-quoted contract above and this string's other consumer, an agent
+ *             CLI reading the line as plain TEXT (no caret is an escape there). So a
+ *             dropped path whose NAME literally contains a defined %NAME% types the
+ *             expanded path. % is legal in a Windows filename but effectively unused,
+ *             and the line is visible before the user presses Enter.
  */
 export function quotePathForShell(path: string, flavor: ShellFlavor): string {
   const clean = path.replace(CONTROL_CHARS, '')
@@ -50,7 +67,7 @@ export function quotePathForShell(path: string, flavor: ShellFlavor): string {
     case 'powershell':
       return `'${clean.replace(/'/g, `''`)}'`
     case 'cmd':
-      return `"${clean.replace(/"/g, '')}"`
+      return `"${clean.replace(/"/g, '').replace(/(\\+)$/, '$1$1')}"`
   }
 }
 

@@ -73,14 +73,25 @@ export class GridLayout {
 
   /** Fired after any user-visible layout mutation (apply/split/close/resize/move) —
    *  the workspace controller persists the serialized tree through it. Assigned
-   *  AFTER construction, so the constructor's initial 1-pane apply stays silent. */
+   *  AFTER construction, so the constructor's initial apply stays silent. */
   onLayoutChange?: () => void
 
   constructor(
     host: HTMLElement,
     private readonly source: string,
     private readonly baseId = 0,
-    private readonly onFocus?: (paneId: PaneId) => void
+    private readonly onFocus?: (paneId: PaneId) => void,
+    /** The tree this grid OPENS with (a restored workspace's exact arrangement, gaps
+     *  included). It has to arrive HERE, not in an applyTree after construction: the
+     *  initial apply PUBLISHES its slots synchronously, and the terminal feature builds
+     *  a pane — and spawns its PTY — for every slot it is handed. In front of a restored
+     *  tree with no id 1 (the user closed pane 1 and kept 2,3 — parseTree preserves that
+     *  gap), the default 1-pane grid therefore spawned a pane the tree does not have and
+     *  disposed it a moment later, sending `kill` while the `spawn` was still in flight:
+     *  the kill found no session yet, the spawn then completed, and the daemon — which
+     *  outlives the app by design (ADR 0006) — was left holding an ORPHAN shell no
+     *  renderer object owns. Omitted = the 1-pane default (a fresh workspace). */
+    initial?: LayoutTreeNode
   ) {
     this.grid = document.createElement('div')
     this.grid.className = 'layout-grid'
@@ -117,7 +128,8 @@ export class GridLayout {
     // 0→W flip when a hidden workspace is switched to (display:none reports 0).
     this.resizeObs = new ResizeObserver(() => this.reflow())
     this.resizeObs.observe(this.grid)
-    this.apply(1)
+    if (initial) this.applyTree(initial)
+    else this.apply(1)
   }
 
   get paneCount(): number {

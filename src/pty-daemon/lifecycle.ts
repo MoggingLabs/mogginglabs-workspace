@@ -52,6 +52,34 @@ export function isAlive(pid: number): boolean {
   }
 }
 
+/** Is a Windows named pipe currently held? Pipes are kernel objects that die WITH their
+ *  process, so this is an identity check a recycled pid cannot fake. Non-pipe addresses
+ *  (unix sockets persist on disk after death) prove nothing — report true (undecided). */
+export function pipeAlive(address: string): boolean {
+  if (process.platform !== 'win32' || !address.startsWith('\\\\.\\pipe\\')) return true
+  try {
+    return fs.existsSync(address)
+  } catch {
+    return false
+  }
+}
+
+/** Does `owner` still look like a live DAEMON (not merely a live pid)? `kill(pid, 0)` is
+ *  not identity: Windows recycles pids aggressively, and a crashed daemon whose pid was
+ *  handed to an unrelated process would otherwise hold the lock forever (no daemon could
+ *  ever start again on this channel). The daemon's own named pipe is the identity proof;
+ *  a young lock (owner may not have created its pipe yet) trusts the pid alone. */
+function ownerHoldsLock(owner: number, lockFile: string): boolean {
+  if (!isAlive(owner)) return false
+  if (process.platform !== 'win32') return true
+  if (pipeAlive(socketAddress(owner))) return true
+  try {
+    return Date.now() - fs.statSync(lockFile).mtimeMs < 30_000 // startup grace: pipe not up yet
+  } catch {
+    return false
+  }
+}
+
 /** Atomic single-instance lock via exclusive create. Takes over a stale lock whose owner
  *  is dead. Returns true iff this process now owns the lock. */
 export function acquireLock(): boolean {
@@ -67,8 +95,24 @@ export function acquireLock(): boolean {
   } catch {
     try {
       const owner = Number(fs.readFileSync(p, 'utf8'))
-      if (owner && isAlive(owner)) return false // a live daemon owns it
-      fs.unlinkSync(p) // stale — take over
+      if (owner && ownerHoldsLock(owner, p)) return false // a live daemon owns it
+      // Stale takeover, TOCTOU-safe: never unlink the lock path itself — two racing
+      // takeovers can both read the same dead pid, and the slower unlink would destroy
+      // the faster contender's FRESHLY CLAIMED lock (two daemons both "owning" the
+      // singleton, both restoring sessions.db, duplicate resumes). Renaming the stale
+      // file aside is atomic and succeeds for exactly ONE contender; everyone then
+      // funnels through claim(), where O_EXCL picks the single winner.
+      const aside = `${p}.stale.${process.pid}`
+      try {
+        fs.renameSync(p, aside)
+      } catch {
+        /* another contender moved it first — claim() below decides the winner */
+      }
+      try {
+        fs.unlinkSync(aside)
+      } catch {
+        /* best effort */
+      }
       return claim()
     } catch {
       return false
@@ -122,7 +166,9 @@ export function otherVersionEndpoints(): Array<{ version: number; pid: number; a
       if (!m || Number(m[1]) === DAEMON_PROTOCOL_VERSION) continue
       try {
         const ep = JSON.parse(fs.readFileSync(path.join(runRoot, name, 'endpoint.json'), 'utf8'))
-        if (ep && typeof ep.pid === 'number' && isAlive(ep.pid)) {
+        // pipeAlive: same pid-recycling honesty as the lock — a recycled pid must not
+        // surface a phantom "live" old-version daemon whose sessions we then try to migrate.
+        if (ep && typeof ep.pid === 'number' && isAlive(ep.pid) && typeof ep.address === 'string' && pipeAlive(ep.address)) {
           found.push({ version: ep.version, pid: ep.pid, address: ep.address })
         }
       } catch {

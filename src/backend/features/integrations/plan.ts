@@ -35,8 +35,11 @@ export function composePlanEntries(
 export interface PlanMaterialization {
   /** Args appended to the launch command (the config flag + path, maybe strict). */
   launchArgs: string[]
-  /** Absolute files to write (main), each a whole scoped config in the dialect. */
-  files: { path: string; content: string }[]
+  /** Absolute files to write (main), each a whole scoped config in the dialect.
+   *  `projectScoped` files live in the USER'S WORKTREE (a repo may even track its
+   *  own `.codex/config.toml`): main writes one only when nothing but our managed
+   *  blocks is there to lose (writer.isManagedScoped) — never a blind clobber. */
+  files: { path: string; content: string; projectScoped?: boolean }[]
   /** Worktree-relative paths main must add to `.git/info/exclude` (project-scope
    *  files only) so agents never see a plan file in `git status`. */
   excludeRelPaths: string[]
@@ -75,7 +78,7 @@ export function materializePlanFor(opts: {
   if (cap.projectScopeFile) {
     const path = join(cwd, cap.projectScopeFile)
     // No strict flag -> the project file adds to the CLI's global set.
-    return { launchArgs: [], files: [{ path, content }], excludeRelPaths: [cap.projectScopeFile], addsToGlobal: true }
+    return { launchArgs: [], files: [{ path, content, projectScoped: true }], excludeRelPaths: [cap.projectScopeFile], addsToGlobal: true }
   }
   return empty
 }

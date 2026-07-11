@@ -87,9 +87,12 @@ export interface Claim {
 export const CLAIM_PATTERN_MAX = 256
 
 // ── Reviewer gate (Phase-4/03) ─────────────────────────────────────────────────
-/** A reviewer sign-off for a branch. Memory-only coordination data — never
- *  persisted, never telemetered. The ROLE is resolved daemon-side from the pane
- *  binding; a client cannot claim reviewer-ness in a payload. */
+/** A reviewer sign-off for a branch. Memory-only coordination data — never persisted,
+ *  never telemetered. The ROLE is resolved daemon-side from the pane manifest; a client
+ *  cannot claim reviewer-ness in a payload. WHICH pane is speaking is proven by the
+ *  approve message's `token` (that pane's env-only MOGGING_PANE_TOKEN) when the sender
+ *  has one — the pane id alone is public (`mogging list` prints it) and was, on its own,
+ *  forgeable by any pane that shares the user's daemon. */
 export interface Approval {
   branch: string
   byPaneId: string
@@ -212,9 +215,14 @@ export type ClientMessage =
   | { t: 'claim'; pattern: string; from: string }
   | { t: 'release'; pattern?: string; all?: boolean; from: string }
   | { t: 'owners' }
-  // Reviewer gate (Phase-4/03). `from` is the approver's pane binding; the daemon
-  // checks THAT pane's role — payload role claims don't exist, by design.
-  | { t: 'approve'; branch: string; from: string }
+  // Reviewer gate (Phase-4/03). `from` names the approver's pane and the daemon checks
+  // THAT pane's role — a payload can never claim a role. `token` is the pane's own
+  // MOGGING_PANE_TOKEN (minted per session, injected into that pane's env and nowhere
+  // else): it PROVES the sender is running inside `from`. Optional on the wire only so a
+  // pane the daemon restored cold — env re-created, no token in hand — and any older CLI
+  // keep working; when it IS present the daemon enforces it, so the shipped CLI (which
+  // always sends it from a real pane) cannot be impersonated by a pane that sends its own.
+  | { t: 'approve'; branch: string; from: string; token?: string }
   | { t: 'approvals' }
   // App-side hook: a branch's worktree was removed -> its approval dies with it.
   | { t: 'unapprove'; branch: string }

@@ -204,7 +204,13 @@ export function fetchRegistry(
 export type CliServerState = 'connected' | 'needs-auth' | 'listed' | 'absent'
 
 export function parseCliMcpList(cli: HostedCliId, output: string, id: string): CliServerState {
-  const line = output.split('\n').find((l) => l.trim().startsWith(`${id}:`) || new RegExp(`\\b${id}\\b`).test(l))
+  // The id must OWN its line: `posthog: <url> - ✔ Connected` (claude) or a leading
+  // column in a list row (`posthog  enabled`), bullets allowed. A bare word match
+  // ANYWHERE false-positived short ids — `git` inside an error sentence or another
+  // server's URL read as "listed", which 11 then upgrades to connected.
+  const esc = String(id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const owns = new RegExp(`^\\s*(?:[-*•·>✓✔✗×]\\s*)?${esc}(?=\\s*:|\\s|$)`)
+  const line = output.split('\n').find((l) => owns.test(l))
   if (!line) return 'absent'
   if (cli === 'claude-code') {
     if (/Connected/i.test(line)) return 'connected'

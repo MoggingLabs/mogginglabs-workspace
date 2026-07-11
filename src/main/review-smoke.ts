@@ -50,7 +50,19 @@ export function runReviewSmoke(win: BrowserWindow): void {
         ['AKIAIOSFODNN7EXAMPLE', true],
         ['password: hunter2secret', true],
         ['eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9P', true],
-        ['const total = items.length + 3 // benign', false]
+        // The 0.8.2 KV-scrub regression set: `\b(token)` never matched after `_`,
+        // so every SCREAMING_SNAKE secret name sailed through; quoted multi-word
+        // values and Authorization headers had no rule at all.
+        ['AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiFAKEKEY', true],
+        ['DB_PASSWORD=hunter22secret', true],
+        ['MY_API_TOKEN=abcd1234efgh5678', true],
+        ['password = "two words here"', true],
+        ['Authorization: Bearer faketoken1234567890', true],
+        ['const total = items.length + 3 // benign', false],
+        // Segment matching, not substring: identifiers that merely CONTAIN a keyword
+        // (author ⊃ auth, tokenizer ⊃ token) must stay untouched.
+        ['"author": "Pedro Veloso"', false],
+        ['tokenizer = new Tokenizer()', false]
       ]
       const unitOk = cases.every(([text, shouldHit]) => {
         const r = redactSecrets(text)

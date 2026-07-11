@@ -177,7 +177,7 @@ export class ContextMonitor {
       // codex: day dirs are shared across ALL cwds — match each recent rollout's
       // session_meta cwd to the pane's (cached; a session's cwd never changes).
       const key = pathKey(t.cwd)
-      for (const dir of codexDayDirs(t.home, this.now())) {
+      for (const dir of codexDayDirs(t.home)) {
         let names: string[]
         try {
           names = fs.readdirSync(dir)

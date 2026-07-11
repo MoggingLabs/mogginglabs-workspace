@@ -84,10 +84,14 @@ export const workspaceFeature: UiFeature = {
 
     // ── State ────────────────────────────────────────────────────────────────
     let restoring = true
+    // A FAILED load must never be followed by a save: saveState replaces the whole
+    // store, so saving after a load error would overwrite the user's intact state
+    // with an empty one. Persistence stays off for the session instead.
+    let loadFailed = false
     let recents: RecentWorkspace[] = []
 
     const persist = debounce(() => {
-      if (restoring) return
+      if (restoring || loadFailed) return
       const state: WorkspaceState = {
         workspaces: controller.list().map((m) => ({
           id: m.id,
@@ -392,8 +396,10 @@ export const workspaceFeature: UiFeature = {
       let state: WorkspaceState | null = null
       try {
         state = await workspaceClient.loadState()
-      } catch {
+      } catch (err) {
         state = null
+        loadFailed = true
+        console.error('workspace state load failed — persistence disabled for this session to protect the stored state', err)
       }
       setTheme(state?.theme || DEFAULT_THEME_ID)
       recents = state?.recents ?? []

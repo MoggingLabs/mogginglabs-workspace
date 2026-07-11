@@ -36,14 +36,21 @@ const DAY_MS = 86_400_000
  *  knows: usage consumed, time elapsed, time left to reset. (The 7/12
  *  work-day baseline is gone: a forecast that needed the user to describe
  *  their work week was the model apologizing for itself.) Returns null when
- *  there isn't enough data to pace — no reset time, no window length, or a
- *  nonsensical usedPct (the caller renders snapshot age instead; verdicts
- *  never speculate past the data). */
+ *  there isn't enough data to pace — no reset time, no window length, a
+ *  nonsensical usedPct, or a window whose reset has already PASSED (the
+ *  caller renders snapshot age instead; verdicts never speculate past the
+ *  data). */
 export function computePace(w: UsageWindow, now: number, opts: PaceOptions): PaceReport | null {
   if (!w.resetsAt || !Number.isFinite(opts.windowMs) || opts.windowMs <= 0) return null
   if (!Number.isFinite(w.usedPct) || w.usedPct < 0) return null
   const resetMs = Date.parse(w.resetsAt)
   if (!Number.isFinite(resetMs)) return null
+  // A window that already reset is not a window: its counters describe a budget
+  // that no longer exists (the CLI stopped writing before it rolled over). Every
+  // forecast below reads `resetMs - now` as time REMAINING, so a dead window
+  // would run the arithmetic on negative time and promise ">100% likely unused
+  // at reset". The snapshot is still real data — but it is history, not a pace.
+  if (now >= resetMs) return null
   const startMs = resetMs - opts.windowMs
   const used = Math.min(100, w.usedPct)
 

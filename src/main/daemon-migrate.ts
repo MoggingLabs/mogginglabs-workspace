@@ -39,6 +39,8 @@ const CONNECT_TIMEOUT_MS = 3_000
 const LIST_TIMEOUT_MS = 2_000
 const CAPTURE_TIMEOUT_MS = 2_500
 const SHUTDOWN_WAIT_MS = 4_000
+/** How long we let the `shutdown` frame drain before tearing the socket down anyway. */
+const SHUTDOWN_FLUSH_MS = 500
 
 function isAlive(pid: number): boolean {
   try {
@@ -156,15 +158,33 @@ function captureAndRetireOldDaemon(ep: DaemonEndpoint, deadlineAt: number): Prom
     }
 
     const done = (): void => {
-      // Retire the old daemon LAST, after its state is safely in hand. Its `shutdown`
-      // verb exits immediately; the caller separately waits for the pid to die.
-      send({ t: 'shutdown' })
-      finish({
+      const result: LiveCapture = {
         panes: (panes ?? []).map((p) => ({
           info: { id: p.id, cwd: p.cwd, title: p.title },
           scrollback: captured.get(p.id) ?? null
         }))
-      })
+      }
+      // Retire the old daemon LAST, after its state is safely in hand — and only once the
+      // frame is actually FLUSHED. finish() destroys the socket, and destroy() discards
+      // queued writes: a dropped `shutdown` left the old daemon alive, the caller's pid
+      // wait then timed out and seeded the store anyway, and the new daemon respawned every
+      // migrated agent while the originals kept running invisibly (duplicate live agents
+      // after an update). The write callback fires when the bytes reach the OS; the grace
+      // timer keeps a stalled flush from hanging the migration, and the caller's
+      // SHUTDOWN_WAIT_MS pid check stays the outer guard either way.
+      let settledAfterWrite = false
+      const settle = (): void => {
+        if (settledAfterWrite) return
+        settledAfterWrite = true
+        finish(result)
+      }
+      try {
+        sock.write(JSON.stringify({ t: 'shutdown' }) + '\n', () => settle())
+      } catch {
+        settle()
+        return
+      }
+      setTimeout(settle, SHUTDOWN_FLUSH_MS)
     }
 
     const startCapture = (): void => {

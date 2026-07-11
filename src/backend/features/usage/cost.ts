@@ -269,8 +269,11 @@ function parseClaudeLines(lines: string[], cutoffMs: number, prices?: CostScanOp
   // snapshot carries the usage SO FAR, and only the LAST one is complete.
   // Keeping the FIRST (the old rule) silently under-counted every streamed
   // response's output tokens. The CodexBar-verified key is message.id +
-  // requestId; older logs missing message.id fall back to requestId alone,
-  // then uuid; a row with no id at all is distinct — folding those would
+  // requestId; a log carrying only ONE of them keys on the one it has —
+  // EITHER identifies the message across its chunks, while uuid is per LINE,
+  // so reaching past a present message.id for it made every chunk its own
+  // record and MULTIPLIED that message's spend by the chunk count. uuid is the
+  // last resort; a row with no id at all is distinct — folding those would
   // drop real usage. Largest-output snapshot wins.
   const byKey = new Map<string, ClaudeRec>()
   let anon = 0
@@ -302,7 +305,7 @@ function parseClaudeLines(lines: string[], cutoffMs: number, prices?: CostScanOp
     const msgId = typeof msg?.id === 'string' ? msg.id : null
     const reqId = typeof o.requestId === 'string' ? o.requestId : null
     const uuid = typeof o.uuid === 'string' ? o.uuid : null
-    const key = msgId && reqId ? `${msgId}:${reqId}` : (reqId ?? uuid ?? `anon-${anon++}`)
+    const key = msgId && reqId ? `${msgId}:${reqId}` : (msgId ?? reqId ?? uuid ?? `anon-${anon++}`)
     const prev = byKey.get(key)
     if (!prev || rec.outTok >= prev.outTok) byKey.set(key, rec)
   }

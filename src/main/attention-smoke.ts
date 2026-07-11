@@ -1,10 +1,62 @@
 import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { OscParser } from '@backend/features/agent-state'
 
 // Env-gated tab-attention smoke (MOGGING_ATTENTION): create a 2nd workspace so Workspace 1 is
 // backgrounded, flip a pane in that background workspace to attention, assert its tab rings, then
 // focus it and assert the ring clears. Exercises the per-workspace attention aggregation + latch.
+// Plus (A) a main-side unit assert on the ONE parser rule that manufactures false attention.
+
+/** Count the terminal bells a chunk sequence produces — the signal that latches a pane red. */
+function bellsFor(chunks: string[]): number {
+  let bells = 0
+  const p = new OscParser(
+    () => {},
+    (ev) => {
+      if (ev.kind === 'bell') bells++
+    }
+  )
+  for (const c of chunks) p.push(c)
+  return bells
+}
+
+/** A. An OSC body over MAX_OSC used to drop the parser to ground state mid-sequence, so the
+ *  sequence's OWN terminator scanned as output: a >4KB OSC 52 clipboard write (vim/tmux emit
+ *  exactly this) rang a bell and latched the pane red — "needs your input" for a yank. The
+ *  overflow now discards to the real terminator instead. Both halves are asserted: the false
+ *  bell is gone, and a GENUINE bell still rings (an overzealous swallow would be the same bug
+ *  wearing the other mask). */
+function oscOverflowAsserts(): { pass: boolean; falseBells: number; realBell: number; splitBells: number; stBells: number; cwdOk: boolean } {
+  const big = 'A'.repeat(5000)
+  const falseBells = bellsFor(['\x1b]52;c;' + big + '\x07'])
+  // Same payload, arriving in small chunks: the discard state must survive push() boundaries.
+  const payload = '\x1b]52;c;' + 'B'.repeat(6000) + '\x07'
+  const chunks: string[] = []
+  for (let i = 0; i < payload.length; i += 137) chunks.push(payload.slice(i, i + 137))
+  const splitBells = bellsFor(chunks)
+  // ST-terminated overflow with ESC and '\' landing in DIFFERENT chunks.
+  const stBells = bellsFor(['\x1b]52;c;' + 'C'.repeat(5000) + '\x1b', '\\', 'plain output\n'])
+  // The other half of the contract: a real bell, and a normal OSC 7, still work.
+  const realBell = bellsFor(['some output\x07more'])
+  let cwd: string | undefined
+  const p = new OscParser(
+    () => {},
+    (ev) => {
+      if (ev.kind === 'cwd') cwd = ev.payload
+    }
+  )
+  p.push('\x1b]7;file:///C:/repo\x07')
+  const cwdOk = cwd === 'file:///C:/repo'
+  return {
+    pass: falseBells === 0 && splitBells === 0 && stBells === 0 && realBell === 1 && cwdOk,
+    falseBells,
+    splitBells,
+    stBells,
+    realBell,
+    cwdOk
+  }
+}
 const SCRIPT = `(async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
   const m = window.__mogging
@@ -62,11 +114,13 @@ const SCRIPT = `(async () => {
 export function runAttentionSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 30000) // safety net
   const run = async (): Promise<void> => {
-    let result: { pass?: boolean } = { pass: false }
+    let result: { pass?: boolean; osc?: unknown; error?: string } = { pass: false }
+    const osc = oscOverflowAsserts()
     try {
-      result = (await win.webContents.executeJavaScript(SCRIPT, true)) as { pass?: boolean }
+      const ui = (await win.webContents.executeJavaScript(SCRIPT, true)) as { pass?: boolean }
+      result = { ...ui, osc, pass: ui.pass === true && osc.pass }
     } catch (e) {
-      result = { pass: false, ...{ error: String(e) } }
+      result = { pass: false, osc, ...{ error: String(e) } }
     }
     try {
       writeFileSync(join(process.cwd(), 'out', 'attention-result.json'), JSON.stringify(result))

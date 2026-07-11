@@ -19,7 +19,7 @@ import { onTerminalFontSize, terminalFontSize, TERMINAL_LINE_HEIGHT } from '../.
 import { windowsPtyFor } from '../../core/terminal/pty-emulation'
 import { forgetPane, markPaneLive, markPaneReattached } from '../../core/terminal/liveness-port'
 import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
-import { setPaneState, clearPaneState, paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
+import { setPaneState, adoptPaneState, clearPaneState, paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
 import { setPaneCwd, clearPaneCwd, getPaneCwd } from '../../core/layout/pane-cwd'
 import { getPaneRole, onPaneRole, getPaneRemote, getPaneProfile, setPaneProfile } from '../../core/layout/pane-meta'
 import { clearPaneCli, mcpChipForPane, onMcpStatusChange } from '../../core/agents/mcp-status-port'
@@ -114,14 +114,22 @@ export class TerminalPane {
   private scrollbar?: PaneScrollbarHandle
   private osc133?: { dispose(): void }
   private stateDot?: HTMLSpanElement
-  private syncState?: () => void
+  private syncState?: (adopted?: boolean) => void
   private dotGateUnsub?: () => void
   private renameFn?: () => void
+  /** The ⋯ menu's outside-click closer. Bound to DOCUMENT, so it must die with the pane
+   *  like every other subscription in this class: undetached, one leaked per pane ever
+   *  created, each closure pinning that dead pane's header + menu DOM for the session. */
+  private menuCloser?: (e: MouseEvent) => void
   private blocks?: BlockTracker
   private refitTimer?: ReturnType<typeof setTimeout>
   private expandStateObs?: MutationObserver
   private refitLeading = true
   private disposed = false
+  /** When this pane started WATCHING. An adopted session (a restore against the surviving
+   *  daemon) was already working by then, so the attention port times that first episode
+   *  from here rather than from the adoption — see adoptPaneState. */
+  private readonly mountedAt = Date.now()
   /** Unsubscribers for this pane's terminalClient channel listeners. The channels are
    *  session-lived while panes die on close — an undetached listener kept running against
    *  a disposed xterm for the rest of the session (and xterm's WriteBuffer keeps queueing
@@ -287,8 +295,12 @@ export class TerminalPane {
         // A RESTORED session must NOT carry the mark: it is a fresh shell repainting
         // persisted scrollback (daemon cold start, or the cross-version update
         // migration) — no agent lives in it, so the lineup must type the resume, or the
-        // user gets painted history over a dead conversation.
-        if (res.existing && !res.restored) markPaneReattached(this.id)
+        // user gets painted history over a dead conversation. Neither may a DISPOSED pane:
+        // dispose() scrubs this id's marks (forgetPane), and a spawn landing after that
+        // would re-mark an id whose pane is gone — the NEXT pane to take it would take the
+        // adopt branch on restore (agents/index.ts), labelling a session that isn't there
+        // instead of typing its resume, and the agent would never come back.
+        if (res.existing && !res.restored && !this.disposed) markPaneReattached(this.id)
         // Second stateSync pull: the spawn just registered/reattached the session, so
         // the backend now KNOWS this pane's state (the mountChrome pull may have run
         // before it existed). Reattach to a busy/attention agent paints correctly here.
@@ -375,7 +387,11 @@ export class TerminalPane {
       this.glQueued = true
       enqueueGlJob(() => {
         this.glQueued = false
-        if (this.visible && !this.webgl) this.attachWebglNow()
+        // `disposed` too: an enqueued job cannot be cancelled, so a pane closed inside the
+        // ≤1-frame window between enqueue and pump would attach a WebGL addon to a disposed
+        // xterm — a context spent against the ~16 the page gets, with no owner left to
+        // release it. `visible` is not enough: dispose() never unsets it.
+        if (!this.disposed && this.visible && !this.webgl) this.attachWebglNow()
       })
     }, 60)
   }
@@ -1050,9 +1066,10 @@ export class TerminalPane {
       ),
       menu
     )
-    document.addEventListener('click', (e) => {
+    this.menuCloser = (e: MouseEvent): void => {
       if (!(e.target instanceof Node) || !actions.contains(e.target)) menu.hidden = true
-    })
+    }
+    document.addEventListener('click', this.menuCloser)
 
     // Tooltip/aria half of the trio's truth-telling: when the slot's stamped mode
     // matches a button, its label flips to the restore wording and aria-pressed goes
@@ -1179,11 +1196,18 @@ export class TerminalPane {
             ? 'working'
             : 'idle'
     }
-    const applyState = (st: AgentState): void => {
+    const applyState = (st: AgentState, adopted = false): void => {
       // Hidden = untracked: the state machine keeps running backend-side, but an
       // unavailable dot paints nothing and feeds no attention aggregation.
       if (this.disposed || state.hidden || state.dataset.state === 'exited') return
-      setPaneState(this.id, st) // the port derives the sticky finished flag from this edge
+      // The port derives the sticky finished flag from this edge. `adopted` = a state read
+      // off a session the daemon was ALREADY running (a restore — the daemon outlives the
+      // app, ADR 0006), so its work predates this pane and the port times that episode from
+      // our MOUNT. Timed from the adoption instead — ~1s into the app, after the restore
+      // lineup's delay — an agent that landed its task right as we picked it up scored
+      // under the noise floor and silently lost its green dot (see adoptPaneState).
+      if (adopted) adoptPaneState(this.id, st, this.mountedAt)
+      else setPaneState(this.id, st)
       paintState()
     }
     this.clientUnsubs.push(onAttentionChange(paintState))
@@ -1196,11 +1220,11 @@ export class TerminalPane {
     // against a surviving daemon holding a busy/attention agent) are not coming back
     // — the backend only pushes on change. Ask now, and mount() asks again once the
     // spawn settles (a fresh session registers its tracker only then).
-    this.syncState = (): void => {
+    this.syncState = (adopted = false): void => {
       terminalClient
         .stateSync(this.id)
         .then((st) => {
-          if (st) applyState(st)
+          if (st) applyState(st, adopted)
         })
         .catch(() => undefined) // a missing handler mid-boot just means nothing to sync yet
     }
@@ -1218,7 +1242,11 @@ export class TerminalPane {
       if (state.hidden === !tracked) return // already in the right visibility
       state.hidden = !tracked
       if (tracked) {
-        this.syncState?.() // appear with the truth, not the mount default
+        // An ADOPTED session is one the detached daemon kept running across the app's
+        // death, so this pull is our FIRST look at an episode that may already be minutes
+        // old — the port is told, or the noise floor would judge it by the seconds since
+        // adoption and silently deny a finished agent its green dot.
+        this.syncState?.(!!s?.adopted) // appear with the truth, not the mount default
       } else {
         clearPaneState(this.id) // an untracked pane must not hold the rail's attention
         state.dataset.state = 'idle'
@@ -1546,6 +1574,7 @@ export class TerminalPane {
     forgetPane(this.id) // live/reattached marks die with the pane, not with the id
     if (this.selectionCopyTimer) clearTimeout(this.selectionCopyTimer) // a pane closed mid-drag must not copy after death
     this.dropAbort.abort() // drop the window-scoped drag listeners
+    if (this.menuCloser) document.removeEventListener('click', this.menuCloser) // …and the document-scoped one
     this.blocks?.dispose()
     this.themeUnsub?.()
     this.fontUnsub?.()

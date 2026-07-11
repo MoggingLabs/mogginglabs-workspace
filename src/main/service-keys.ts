@@ -54,7 +54,12 @@ export function serviceKeySet(nameRaw: string, plaintext: string): { ok: boolean
       reason: `OS keychain encryption is unavailable here — set ${name} as an env var in your own environment and reference it as \${${name}} instead`
     }
   }
-  vaultStore(KV_CIPHER(name), plaintext.trim())
+  // vaultStore returns false when the settings store is gone (called before registerAppSettings
+  // or after dispose — shutdown-ordered IPC). Ignoring it reported "key saved" while the
+  // ciphertext was dropped on the floor, and the user's pasted secret was simply gone.
+  if (!vaultStore(KV_CIPHER(name), plaintext.trim())) {
+    return { ok: false, reason: 'the settings store is not available right now — the key was not saved; try again' }
+  }
   setNames([...names(), name])
   return { ok: true }
 }

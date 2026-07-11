@@ -7,6 +7,7 @@
 // daemon self-recovers on a cold start / crash and repaints prior scrollback (Phase-1/03).
 import * as os from 'node:os'
 import * as fs from 'node:fs'
+import * as crypto from 'node:crypto'
 import { spawnPty, type IPty } from '@backend/platform/pty-host'
 import type { Approval, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { notifyEventToState } from '@contracts'
@@ -17,6 +18,22 @@ import { Ledger } from './ledger'
 import type { PersistedPane, PersistedWorkspace, WorkspaceLayout } from '@contracts'
 
 const SCROLLBACK_BYTES = 200_000
+
+/** How far past a fresh cap cut we'll look for a clean line start. */
+const TEAR_SCAN = 400
+
+/** A blind `.slice(-SCROLLBACK_BYTES)` can land mid escape sequence or between surrogate
+ *  halves, and the reattach repaint then feeds xterm a sequence's tail as literal text (or
+ *  a lone surrogate). Drop a split surrogate's low half, then cut forward to the next
+ *  newline: at most one partial line of scrollback lost, cheap next to a garbled repaint.
+ *  No newline nearby (one giant TUI frame) keeps the tear — same cap semantics either way.
+ *  Mirrors trimTornStart in @backend/features/terminal/pty.service.ts. */
+function trimTornStart(s: string): string {
+  const c0 = s.charCodeAt(0)
+  if (c0 >= 0xdc00 && c0 <= 0xdfff) s = s.slice(1)
+  const nl = s.indexOf('\n')
+  return nl !== -1 && nl < TEAR_SCAN ? s.slice(nl + 1) : s
+}
 
 /** The directory a pane's shell starts in: the requested one when it is a real directory,
  *  the home directory otherwise. `''` (no cwd asked for) and a path that has since been
@@ -52,8 +69,22 @@ class PaneSession {
    *  Pane IDS are reused; (id, gen) is what actually names ONE session on the wire. */
   readonly gen: number
   readonly cwd: string
+  /** The cwd that was ASKED for, verbatim — persisted instead of `cwd` so a directory
+   *  that is merely unavailable right now (network share not yet mounted at login, a
+   *  transiently locked folder) is not permanently rewritten to the home-dir fallback.
+   *  Once the directory is back, the next cold start restores into the real path. */
+  private readonly requestedCwd?: string
+  /** True when `requestedCwd` existed but was not a usable directory at spawn time. */
+  private readonly cwdFellBack: boolean
   readonly command?: string
   readonly remoteName?: string
+  /** This session's pane-binding secret (Phase-4/03 reviewer gate). Injected into the pane's
+   *  own process env as MOGGING_PANE_TOKEN and disclosed NOWHERE else — not in PaneInfo, not
+   *  in `spawned`, not in the session store. A pane id is public (`mogging list` prints it),
+   *  so `from: <reviewer-id>` alone proved nothing: every pane can read the 0600 endpoint file
+   *  and authenticate, which is exactly the population the reviewer gate referees. Holding
+   *  this token is what proves a sender is running INSIDE the pane it claims to be. */
+  readonly paneToken: string
   cols: number
   rows: number
   private proc: IPty
@@ -90,12 +121,18 @@ class PaneSession {
     // '' always), a stale one — a worktree pruned between sessions, a folder the user moved
     // — would make pty.spawn throw and the pane would never open at all. A terminal in the
     // wrong directory is a bug; a terminal that does not exist is worse.
+    this.paneToken = crypto.randomBytes(16).toString('hex')
     this.cwd = pickCwd(spec.cwd)
+    this.requestedCwd = spec.cwd || undefined
+    this.cwdFellBack = !!this.requestedCwd && this.cwd !== this.requestedCwd
     this.command = spec.run
     this.remoteName = spec.remote?.name
     if (restore?.scrollback) this.buffer = restore.scrollback // seed prior output for repaint
-    // Pristine only when the daemon is NOT typing the resume itself (see field doc).
-    this.pristineRestore = !!restore && !restore.resumeCommand
+    // Pristine only when the daemon is NOT typing the resume itself (see field doc) —
+    // and never when the cwd fell back to home: `restored: true` cues the app to TYPE
+    // the resume command, which must not happen in the wrong directory (an agent
+    // resumed in `~` picks up the wrong project's sessions).
+    this.pristineRestore = !!restore && !restore.resumeCommand && !this.cwdFellBack
 
     const isWin = process.platform === 'win32'
     let shell = spec.shell ?? (isWin ? process.env.COMSPEC || 'cmd.exe' : process.env.SHELL || '/bin/bash')
@@ -139,7 +176,16 @@ class PaneSession {
       // keys) — merged into the process env only, NEVER typed into the pane, so
       // a secret never lands in scrollback/sessions.db. Source-agnostic: the
       // daemon knows nothing of the vault. MOGGING_PANE_ID wins (identity).
-      env: { ...process.env, ...extraEnv, ...(spec.env ?? {}), MOGGING_PANE_ID: this.id } as Record<string, string>
+      // MOGGING_PANE_TOKEN rides with the id: identity, and its proof. It is per-pane, so a
+      // pane that dumps its own env leaks only the authority it already has (being itself),
+      // and it is useless without the daemon token in the 0600 endpoint file.
+      env: {
+        ...process.env,
+        ...extraEnv,
+        ...(spec.env ?? {}),
+        MOGGING_PANE_ID: this.id,
+        MOGGING_PANE_TOKEN: this.paneToken
+      } as Record<string, string>
     }).proc
     // Pane state = the ActivityTracker's verdict (the dot in the pane header). The
     // OSC parser feeds it explicit signals (133 C/D, 9/99/777, the bell) but no
@@ -166,7 +212,8 @@ class PaneSession {
       }
     )
     this.proc.onData((d) => {
-      this.buffer = (this.buffer + d).slice(-SCROLLBACK_BYTES)
+      const grown = this.buffer + d
+      this.buffer = grown.length > SCROLLBACK_BYTES ? trimTornStart(grown.slice(-SCROLLBACK_BYTES)) : grown
       this.tracker.data() // BEFORE the parse: a verdict in this chunk must land last
       osc.push(d)
       for (const s of this.subs) s.send(d)
@@ -182,7 +229,10 @@ class PaneSession {
     // shell at the same cwd, and relaunch a known agent via its own resume (step 4) — never a
     // frozen process; a pane with no resumable agent just restores its shell.
     if (spec.run && !restore) this.proc.write(spec.run + '\r')
-    else if (restore?.resumeCommand) this.proc.write(restore.resumeCommand + '\r')
+    // A restore whose cwd fell back to home must NOT resume: `claude --resume` typed in
+    // the home directory resumes the wrong project's sessions. The shell restores with
+    // its scrollback; the real cwd stays persisted (requestedCwd) for the next start.
+    else if (restore?.resumeCommand && !this.cwdFellBack) this.proc.write(restore.resumeCommand + '\r')
   }
 
   get scrollback(): string {
@@ -217,7 +267,9 @@ class PaneSession {
     return {
       id: this.id,
       workspaceId: 'default',
-      cwd: this.cwd,
+      // The REQUESTED cwd, not the effective one — a home-dir fallback for a
+      // temporarily missing directory must not become permanent (see requestedCwd).
+      cwd: this.requestedCwd ?? this.cwd,
       command: this.command,
       scrollback: this.buffer,
       updatedAt: Date.now()

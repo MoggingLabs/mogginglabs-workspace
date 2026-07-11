@@ -77,7 +77,15 @@ export function registerServices(getWin: () => BrowserWindow | null): void {
   engine = new ServiceEngine({
     adapters: { github: createGitHubAdapter(), fake: createFakeAdapter() },
     onPush: pushSnapshot,
-    onTransition
+    onTransition,
+    // A `owner/repo#123` shorthand cannot tell a PR from an issue, so it is stored as a PR and
+    // the adapter corrects it on the first fetch. PERSIST that correction: without this the
+    // repair lives only in the engine's memory and every app start pays another failing
+    // `gh pr view` before re-learning the same thing.
+    onLinkRepaired: (repaired) => {
+      const links = loadLinks().map((l) => (l.id === repaired.id ? { ...l, kind: repaired.kind } : l))
+      saveLinks(links)
+    }
   })
   engine.setLinks(loadLinks())
 
@@ -87,11 +95,18 @@ export function registerServices(getWin: () => BrowserWindow | null): void {
   ipcMain.handle(IntegrationsChannels.linkStatusGet, () => engine?.snapshot() ?? { statuses: [], at: 0 })
   ipcMain.handle(IntegrationsChannels.linkRefresh, (_e, id: string) => engine?.refresh(String(id)))
 
+  // Only the MAIN window's visibility governs polling: a SECONDARY window (any other
+  // BrowserWindow the app opens) hiding used to pause link-status polling app-wide while the
+  // main window sat visible. The identity check must happen when the event ARRIVES, not here —
+  // this fires from inside createMainWindow, before index.ts has assigned `win`.
   app.on('browser-window-created', (_e, w) => {
-    w.on('hide', () => engine?.setVisible(false))
-    w.on('minimize', () => engine?.setVisible(false))
-    w.on('show', () => engine?.setVisible(true))
-    w.on('restore', () => engine?.setVisible(true))
+    const visible = (on: boolean) => (): void => {
+      if (w === getWin()) engine?.setVisible(on)
+    }
+    w.on('hide', visible(false))
+    w.on('minimize', visible(false))
+    w.on('show', visible(true))
+    w.on('restore', visible(true))
   })
 }
 

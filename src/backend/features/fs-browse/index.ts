@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, statSync, type Dirent } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { isAbsolute, join, normalize, parse, sep } from 'node:path'
 import { FS_DRIVE_ROOT, FS_LIST_CAP, type DirCrumb, type DirEntry, type DirResult, type ListDirRequest } from '@contracts'
 
@@ -18,19 +19,36 @@ import { FS_DRIVE_ROOT, FS_LIST_CAP, type DirCrumb, type DirEntry, type DirResul
  * Electron-free on purpose, so it is testable without booting an app.
  */
 
-/** Windows drive letters that currently exist. One stat per candidate; ~26 syscalls. */
-function listDrives(): DirEntry[] {
-  const out: DirEntry[] = []
-  for (let c = 'A'.charCodeAt(0); c <= 'Z'.charCodeAt(0); c++) {
-    const root = `${String.fromCharCode(c)}:${sep}`
+/** How long one drive letter gets to answer. A mapped-but-DISCONNECTED network drive does not
+ *  fail fast: its stat blocks for the SMB timeout — seconds, per dead mapping. Done with
+ *  statSync (what this used to do) that ran inside the folder browser's IPC handler, so the
+ *  main process froze: no listing, and every IPC queued behind it stalled too. */
+const DRIVE_PROBE_MS = 300
+
+/** Windows drive letters that currently exist. All 26 probed in PARALLEL and each abandoned
+ *  after DRIVE_PROBE_MS — a dead mapping is simply left out of the list rather than allowed to
+ *  hang the browser (a live drive answers in microseconds; nothing real is lost to the timeout). */
+async function listDrives(): Promise<DirEntry[]> {
+  const probe = async (root: string): Promise<DirEntry | null> => {
+    let timer: NodeJS.Timeout | undefined
     try {
-      statSync(root)
-      out.push({ name: root.slice(0, 2), path: root, isRepo: false })
+      await Promise.race([
+        stat(root),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('probe timeout')), DRIVE_PROBE_MS)
+        })
+      ])
+      return { name: root.slice(0, 2), path: root, isRepo: false }
     } catch {
-      /* no such drive — the overwhelmingly common case */
+      return null // no such drive (the overwhelmingly common case), or a mapping that never answered
+    } finally {
+      clearTimeout(timer)
     }
   }
-  return out
+  const roots: string[] = []
+  for (let c = 'A'.charCodeAt(0); c <= 'Z'.charCodeAt(0); c++) roots.push(`${String.fromCharCode(c)}:${sep}`)
+  const found = await Promise.all(roots.map(probe))
+  return found.filter((d): d is DirEntry => d !== null)
 }
 
 /**
@@ -91,11 +109,14 @@ function isDir(dir: string, d: Dirent): boolean {
   }
 }
 
-export function listDir(req: ListDirRequest): DirResult {
+/** Async ONLY for the drive-root listing (see listDrives) — the per-directory work below is
+ *  local-disk and stays synchronous. Both IPC seams already await: `fs:listDir` is an
+ *  ipcMain.handle (src/main/fs-browse.ts) and the wizard's browser awaits the invoke. */
+export async function listDir(req: ListDirRequest): Promise<DirResult> {
   if (req?.path === FS_DRIVE_ROOT) {
     const path = FS_DRIVE_ROOT
     if (process.platform !== 'win32') return { ok: false, reason: 'invalid', path }
-    return { ok: true, path, parent: null, crumbs: crumbsFor(path), entries: listDrives(), truncated: false }
+    return { ok: true, path, parent: null, crumbs: crumbsFor(path), entries: await listDrives(), truncated: false }
   }
   if (typeof req?.path !== 'string') return { ok: false, reason: 'invalid', path: '' }
 

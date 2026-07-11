@@ -10,6 +10,11 @@ import { log } from './lifecycle'
 export interface TransportHooks {
   onActivity(): void
   onClientCountChange(delta: number): void
+  /** Terminate via the daemon's GRACEFUL shutdown (persist, clear endpoint, release lock).
+   *  A bare process.exit here would drop the coalesced persist — a pane killed within the
+   *  500ms window would resurrect (and type its resume) on the next start — and would
+   *  leave a stale lock/endpoint pointing at a dead pid. */
+  onShutdown(code: number): void
 }
 
 export function createServer(sessions: SessionManager, token: string, hooks: TransportHooks): net.Server {
@@ -205,17 +210,40 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
         case 'owners':
           send({ t: 'owners', claims: sessions.ledger.owners() })
           break
-        // ── Reviewer gate (Phase-4/03): role-checked DAEMON-SIDE against the pane
-        // binding — the payload never carries a role. Approvals are memory-only. ──
+        // ── Reviewer gate (Phase-4/03). Memory-only coordination data.
+        //
+        // `token` (the pane's env-only MOGGING_PANE_TOKEN) proves the sender really is the
+        // pane named in `from`. It has to: pane ids are public — `mogging list` prints them —
+        // and EVERY pane can read the 0600 endpoint file and authenticate, so `from` on its
+        // own was a claim, not a fact, and a worker could sign off on its own branch by
+        // naming the reviewer's id. A sender that presents a token must present the right one.
+        //
+        // HONEST LIMIT, and it is a real one: this makes `from` unforgeable, it does NOT make
+        // the gate unforgeable. `set-role` above is itself unbound — any authenticated client
+        // may name any pane's role — so a pane can promote ITSELF to reviewer and then approve
+        // with its own perfectly valid token. Closing that needs a privileged app client (an
+        // app-only secret the daemon withholds from pane env, gating set-role/kill), which
+        // changes what `mogging role` may do from inside a pane — a product decision, not a
+        // patch. Until then the gate REFEREES cooperating agents; it does not withstand a
+        // hostile one. Do not describe it as a security boundary. ──
         case 'approve': {
           if (typeof m.from !== 'string' || !m.from || !sessions.has(m.from)) {
             send({ t: 'error', reason: 'nopane' })
+            break
+          }
+          const claimed = sessions.get(m.from)
+          if (typeof m.token === 'string' && m.token !== claimed?.paneToken) {
+            log(`approve REFUSED: token does not bind the sender to pane ${m.from}`)
+            send({ t: 'error', reason: 'notreviewer' })
             break
           }
           const role = sessions.mailbox.roleOf(m.from)
           if (role !== 'reviewer') {
             send({ t: 'error', reason: 'notreviewer' })
             break
+          }
+          if (typeof m.token !== 'string') {
+            log(`approve accepted for pane ${m.from} WITHOUT a pane-token binding — sender identity unproven`)
           }
           if (typeof m.branch !== 'string' || !m.branch || m.branch.length > 256) {
             send({ t: 'error', reason: 'badbranch' })
@@ -238,7 +266,7 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           break
         case 'shutdown':
           log('shutdown requested by client')
-          process.exit(0)
+          hooks.onShutdown(0)
           break
       }
     }
@@ -280,7 +308,7 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
 
   server.on('error', (e) => {
     log('server error ' + e)
-    process.exit(1)
+    hooks.onShutdown(1)
   })
   return server
 }

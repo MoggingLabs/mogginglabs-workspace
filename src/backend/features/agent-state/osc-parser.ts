@@ -51,6 +51,7 @@ const MAX_OSC = 4096
 export class OscParser {
   private buf = ''
   private inOsc = false
+  private discarding = false // an OSC body blew past MAX_OSC; swallow until its real terminator
   private pendingEsc = false // saw an ESC as the last byte; its meaning depends on the NEXT byte
 
   constructor(
@@ -64,14 +65,16 @@ export class OscParser {
 
       if (this.pendingEsc) {
         this.pendingEsc = false
-        if (this.inOsc) {
+        if (this.inOsc || this.discarding) {
           if (code === ST_TAIL) {
-            this.flush() // ESC \ = ST terminator
+            if (this.inOsc) this.flush() // ESC \ = ST terminator (an overflowed body just ends)
             this.inOsc = false
+            this.discarding = false
             continue
           }
           // ESC not followed by '\' inside an OSC terminates it (discard); re-arm on ESC.
           this.inOsc = false
+          this.discarding = false
           this.buf = ''
           if (code === ESC) this.pendingEsc = true
           continue
@@ -89,6 +92,13 @@ export class OscParser {
         this.pendingEsc = true
         continue
       }
+      if (this.discarding) {
+        // Oversized OSC (vim/tmux OSC 52 clipboard >4KB): the body is dropped, but its
+        // BEL terminator is still THIS sequence's, not the terminal bell — swallowing
+        // it here is what keeps a big clipboard write from ringing a false attention.
+        if (code === BEL) this.discarding = false
+        continue
+      }
       if (!this.inOsc) {
         // A BEL OUTSIDE any OSC is the terminal bell — the pane ringing for a human
         // (Claude Code's terminal_bell notify, a TUI's alert). An OSC-terminating
@@ -104,7 +114,10 @@ export class OscParser {
 
       this.buf += data[i]
       if (this.buf.length > MAX_OSC) {
+        // Too big to be one of ours — but dropping to ground here would let the
+        // sequence's real terminator scan as output. Discard until it arrives.
         this.inOsc = false
+        this.discarding = true
         this.buf = ''
       }
     }

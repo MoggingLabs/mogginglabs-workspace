@@ -1,7 +1,16 @@
 import { join } from 'node:path'
 import { MCP_MANAGED_BY, type McpServerEntry } from '@contracts'
 import type { CliHomes, McpConfigWriter } from './index'
-import { envOf, managedEntry, parseConfig, removeEntry, upsertEntry, type JsonEntryShape } from './json-dialect'
+import {
+  envOf,
+  hasJsonEntry,
+  isManagedScopedJson,
+  managedEntry,
+  parseConfig,
+  removeEntry,
+  upsertEntry,
+  type JsonEntryShape
+} from './json-dialect'
 
 // Gemini CLI dialect: `<GEMINI_CONFIG_DIR|~/.gemini>/settings.json`,
 // `mcpServers` key. THE quirk: remote servers use `httpUrl`, not `url` —
@@ -33,5 +42,7 @@ export const geminiWriter: McpConfigWriter = {
   },
   upsert: (text, entry) => upsertEntry(text, entry.id, shape(entry)),
   remove: (text, id) => removeEntry(text, id),
+  hasEntry: (text, id) => hasJsonEntry(text, id),
+  isManagedScoped: (text) => isManagedScopedJson(text),
   composeScoped: (entries) => JSON.stringify({ mcpServers: Object.fromEntries(entries.map((e) => [e.id, shape(e)])) }, null, 2)
 }
