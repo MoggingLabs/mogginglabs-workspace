@@ -12,8 +12,9 @@ import { sh } from './smoke-shell'
 //   3. `mogging notify --event usage-limit` in-pane -> the manual failover TOAST
 //   4. auto-failover ON -> a second limit relaunches on profile B in the SAME pane
 //      (same PTY — scrollback survives), environment now shows B's marker
-// Provider 'gemini': adapter exists (command builds), CLI not installed here — the
-// env plumbing is what's under test, deterministically.
+// Provider 'gemini' is a REAL launch, and on a machine that HAS the CLI it behaves like
+// one: it owns the keyboard and takes the alternate screen. Every shell probe below
+// interrupts it first (see interruptAgent) — the env plumbing is still what's under test.
 const MARK_A = 'PROFILE_A_4242'
 const MARK_B = 'PROFILE_B_4242'
 
@@ -78,6 +79,21 @@ export function runProfilesSmoke(win: BrowserWindow): void {
             return s
           })()`
         )
+      // gemini is a real TUI: it owns the keyboard and switches the terminal to the
+      // ALTERNATE screen, which clears it. A shell command typed now lands in gemini's
+      // prompt, not the shell, and the echoed marker this probe scrapes for is wiped the
+      // moment gemini takes the screen. The gate only ever passed on machines where gemini
+      // was NOT installed and the launch quietly no-opped. Interrupt the agent first (twice
+      // — one ^C cancels the CLI's current input, the second exits it), which is what the
+      // app's OWN usage-limit failover does before it relaunches (^C + 900ms, below). Not a
+      // workaround: it is the sequence the product requires, and the gate was skipping it.
+      const interruptAgent = async (): Promise<void> => {
+        await ES(`window.bridge.send('terminal:write', { id: ${pane}, data: '\\u0003' })`)
+        await sleep(700)
+        await ES(`window.bridge.send('terminal:write', { id: ${pane}, data: '\\u0003' })`)
+        await sleep(900)
+      }
+      await interruptAgent()
       await cli(['send', String(pane), sh.echoVar('FAKE_MARK', 'MARKVALUE=')])
       let envAOk = false
       for (let i = 0; i < 24 && !envAOk; i++) {
@@ -104,6 +120,9 @@ export function runProfilesSmoke(win: BrowserWindow): void {
       await ES(`window.__mogging.agents.setAutoFailover(true)`)
       await cli(['send', String(pane), `node "${cliPath}" notify --event usage-limit`])
       await sleep(4000) // ^C + 900ms + relaunch settles
+      // The failover relaunched gemini on profile B — a NEW agent, holding the keyboard and
+      // the alt screen again. The app's ^C killed the capped one, not this one.
+      await interruptAgent()
       await cli(['send', String(pane), sh.echoVar('FAKE_MARK', 'MARKVALUE=')])
       let envBOk = false
       for (let i = 0; i < 24 && !envBOk; i++) {

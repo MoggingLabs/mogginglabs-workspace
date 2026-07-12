@@ -17,8 +17,13 @@ function git(cwd: string, args: string[]): string {
 //   4. the reviewer's approval flags the card with a push-fed ✓-chip; removing the
 //      worktree clears it (4/03 polish)
 //   5. closing the pane unbinds the card (paneId cleared, persisted)
-// Provider 'gemini' is deliberately not installed here: the launch no-ops, but the
-// prompt write + binding (the board's own responsibilities) are fully exercised.
+// Provider 'gemini' is a REAL launch. This once read "deliberately not installed here: the
+// launch no-ops" — an assumption about the machine, written into a gate, and it rotted the day
+// gemini got installed. A real agent owns the keyboard and takes the alternate screen, so every
+// shell command this smoke types went into the AGENT's prompt and every line it scraped for was
+// wiped. The gate did not fail loudly; it failed as "the board is broken". Nothing here assumes
+// what is on the PATH any more: the agent is interrupted before its shell is driven, which is
+// what a person has to do, and what the app itself does before a failover relaunch.
 const MARKER = 'TASK_MARKER_4242'
 
 export function runBoardSmoke(win: BrowserWindow): void {
@@ -148,10 +153,20 @@ export function runBoardSmoke(win: BrowserWindow): void {
           `(() => { const c = document.querySelector('.board-card[data-card-id="${cardId}"] .board-chip-approved'); return !!c })()`
         )) as boolean
       }
-      // The launch command cd'd the pane INTO its worktree — step it out first
-      // (Windows refuses to remove a directory that is a process's cwd).
+      // The launch command cd'd the pane INTO its worktree, and Windows refuses to remove a
+      // directory that is a process's cwd — so the pane has to step out. But an AGENT is in
+      // the foreground and it owns the keyboard: a `cd` typed now goes into the agent's
+      // prompt, not the shell, the pane never moves, and the removal fails with a permission
+      // error that looks like anything but what it is. Interrupt the agent first (twice — one
+      // ^C cancels the CLI's current input, the second exits it), THEN cd, which is exactly
+      // what a person has to do. Not a workaround for the gate: it is the sequence the product
+      // requires, and the gate was quietly skipping it.
+      await ES(`window.bridge.send('terminal:write', { id: ${paneId}, data: '\\u0003' })`)
+      await sleep(700)
+      await ES(`window.bridge.send('terminal:write', { id: ${paneId}, data: '\\u0003' })`)
+      await sleep(900)
       await ES(`window.bridge.send('terminal:write', { id: ${paneId}, data: ${JSON.stringify(sh.cd(anchor) + '\r')} })`)
-      await sleep(1200)
+      await sleep(1500)
       const removed = await ES(
         `window.bridge.invoke('worktrees:remove', ${JSON.stringify({ repo: anchor, path: join(wtRoot, wtDirs[0] ?? ''), force: true })})`
       )

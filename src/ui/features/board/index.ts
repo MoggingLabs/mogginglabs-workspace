@@ -21,6 +21,7 @@ import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
 import { openWizard } from '../../core/workspace/wizard-port'
 import { getWorkspaces, requestWorkspaceSwitch } from '../../core/workspace/workspace-info-port'
 import { onAttentionChange, paneState } from '../../core/attention/attention-port'
+import { onPaneAgentSession } from '../../core/agents/agent-session-port'
 import { getPaneCwd, onPaneCwd } from '../../core/layout/pane-cwd'
 import { setCommands } from '../../core/commands/command-port'
 import { Button, CountBadge, EmptyState, confirmDialog, createModal, el, icon, showToast } from '../../components'
@@ -217,13 +218,35 @@ export const boardFeature: UiFeature = {
       card.lane = card.lane === 'todo' ? 'doing' : card.lane
       save(card)
       render()
-      // The task IS the agent's first prompt: one write through the existing terminal
-      // path, after the launch command has had time to boot the CLI. User content
-      // travels renderer -> PTY only (never telemetry/notify/logs).
+      // The task IS the agent's first prompt: one write through the existing terminal path.
+      // User content travels renderer -> PTY only (never telemetry/notify/logs).
+      //
+      // WHEN, though, is the whole problem. This used to fire on a 4.5s timer — a guess about
+      // how long a CLI takes to boot, and it lost the race often enough to matter: a slower
+      // agent is still starting, so the task lands in the SHELL behind it, gets echoed, and is
+      // then wiped the moment the CLI takes over the alternate screen. The task is gone and the
+      // agent never saw it — the one thing this feature exists to do.
+      //
+      // The daemon now says when an agent actually appears in the pane's process subtree
+      // (typed-launch detection), so wait for THAT and hand the task to something listening.
+      // The fallback still fires: an agent we cannot detect must not silently lose its task.
       const prompt = `${card.title}\n\n${card.notes}`.trim().replace(/\r/g, '')
-      setTimeout(() => {
+      let handed = false
+      let offSession: (() => void) | undefined
+      let fallback: ReturnType<typeof setTimeout> | undefined
+      const hand = (): void => {
+        if (handed) return
+        handed = true
+        offSession?.()
+        if (fallback) clearTimeout(fallback)
         bridge.send(TerminalChannels.write, { id: paneId as PaneId, data: prompt + '\r' })
-      }, 4500)
+      }
+      offSession = onPaneAgentSession((id, session) => {
+        // A pane's agent going AWAY is not a cue to type into it.
+        if (id !== (paneId as PaneId) || !session) return
+        setTimeout(hand, 800) // it is running; give it a beat to paint a prompt to type into
+      })
+      fallback = setTimeout(hand, 9000)
       return true
     }
 

@@ -57,6 +57,21 @@ export function runProfpersistSmoke(win: BrowserWindow, phase: string): void {
       })()`
     )
 
+  /** ^C the agent holding this pane, twice, and let the shell prompt come back.
+   *  gemini is a real TUI: it owns the keyboard and switches the terminal to the ALTERNATE
+   *  screen, which clears it. An `echo` typed now lands in gemini's prompt, not the shell,
+   *  and the result line probeEnv scrapes for is wiped with the screen — so every probe
+   *  below returned '' and the gate only ever passed on machines where gemini was NOT
+   *  installed and the launch quietly no-opped. One ^C cancels the CLI's current input, the
+   *  second exits it — the same interrupt the app's own usage-limit failover sends before it
+   *  relaunches an agent. The product requires this sequence; the gate was skipping it. */
+  const interruptAgent = async (): Promise<void> => {
+    await ES(`window.bridge.send('terminal:write', { id: ${PANE}, data: '\\u0003' })`)
+    await sleep(700)
+    await ES(`window.bridge.send('terminal:write', { id: ${PANE}, data: '\\u0003' })`)
+    await sleep(900)
+  }
+
   /** Echo the pointer var with a distinct prefix and poll for its result line. */
   const probeEnv = async (prefix: string): Promise<string> => {
     await cli(['send', String(PANE), sh.echoVar('FAKE_MARK', `${prefix}=`)])
@@ -86,6 +101,7 @@ export function runProfpersistSmoke(win: BrowserWindow, phase: string): void {
       await ES(`window.__mogging.templates.open([{provider:'gemini',count:1}], undefined, undefined, ['p-personal'])`)
       await sleep(4500) // launchLineup (+900ms) + env prefix lands at the prompt
 
+      await interruptAgent() // the lineup launched gemini into the slot; it owns the pane
       const envB = await probeEnv('MARKA1')
       const pass = savedA === true && savedB === true && envB === MARK_B
       const result = { phase: 'A', pass, savedA, savedB, envB }
@@ -111,6 +127,7 @@ export function runProfpersistSmoke(win: BrowserWindow, phase: string): void {
       await sleep(4500)
 
       // The restored pane must carry B's env — the DEFAULT (A) would be the 6/04 bug.
+      await interruptAgent() // restore relaunched the lineup: gemini is back on the screen
       const restored = await probeEnv('MARKB1')
       const restoredOnB = restored === MARK_B
       const neverA = !(await bufferText()).includes(`=${MARK_A}`)
@@ -125,6 +142,7 @@ export function runProfpersistSmoke(win: BrowserWindow, phase: string): void {
       await sleep(800)
       await ES(`window.__mogging.agents.launchIn(${PANE}, 'gemini', '', 'p-personal')`)
       await sleep(3500)
+      await interruptAgent() // the degraded launch is a NEW gemini — same keyboard, same alt screen
       const degraded = await probeEnv('MARKB2')
       const relaunched = (await ES(`window.__mogging.agents.lastLaunch(${PANE})`)) as { provider?: string } | null
       const degradedOk = degraded !== MARK_B && degraded !== MARK_A && relaunched?.provider === 'gemini'
