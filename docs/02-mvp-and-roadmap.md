@@ -5,6 +5,13 @@
 layer. They are *sequenced*, not truly parallel — the memory graph is lower-risk and
 mostly independent, so it slots in as Phase 2.5 once the core renders reliably.
 
+> **Status, 2026-07-12.** The core shipped and then some: Phases 0–8.5 and 11 are done
+> (orchestration, swarm, usage, integrations, the explorer). **The memory graph never
+> was** — the one differentiator the scope named, still unbuilt, while eight phases of
+> chrome and plumbing went out around it. **Phase 12 is that debt, repaid and widened**
+> (a *code* graph the agents query, not only a note graph the human reads); Phases 13–19
+> are the next arc. See "The next arc" below.
+
 ## Phases
 
 ### Phase 0 — Parity spike (1–2 wks) · *current*
@@ -29,12 +36,15 @@ rendering, input, resize. **Gate:** if rendering diverges, revisit the engine ch
 - `mogging notify` socket + first-party Claude/Codex hooks.
 - **Milestone demo:** "16 agents, see who needs you at a glance, nothing freezes."
 
-### Phase 2.5 — Memory graph (the chosen differentiator)
+### Phase 2.5 — Memory graph (the chosen differentiator) → **superseded by Phase 12**
 - Local `.memory/` markdown knowledge graph with `[[wikilinks]]`, backlinks, a
   force-directed graph view.
 - Exposed to every hosted agent via **MCP tools** (`create_memory`, `search_memories`,
   `find_backlinks`, `suggest_connections`, …) — our answer to BridgeMemory.
 - Local-first, git-committable; no cloud.
+- **Never built.** The instinct was right and the scope was half of one: a *human*
+  note graph, when the expensive gap is a *code* graph the agents query. Phase 12
+  absorbs this whole bullet list and adds the half that pays for itself.
 
 ### Phase 3 — Orchestration ✅ (shipped 2026-07)
 - [x] Git **worktree-per-agent** isolation + **pre-ship diff review** (secret-redacting,
@@ -144,6 +154,28 @@ spacing drift grep **frozen at `--max 0`**. **Both perf budgets unmoved** — an
 unchanged `docs/05` is the freeze criterion. The sweep grew 52→**66 gates** (fourteen
 new). Design system: `docs/11`; per-OS numbers in `prompts/phase-8.5/README.md`.
 
+### Phase 9 — Loops: the harness that keeps working after you stop 🔨 (`prompts/phase-9/`)
+**Authored, not yet built** — seven steps + `RESEARCH.md`, sequenced to run after
+Phase 8. Everything the app does today is a SESSION: someone starts it, someone
+ends it. A **loop** is a standing harness — a trigger fires (schedule, queued card,
+Sentry spike), an iteration launches the user's own CLI in a fresh worktree pane, an
+**objective verify command** judges the work, the Phase-3/4 review gates land it, and
+a staged playbook rewrite makes the next pass start sharper. Codified as ADR 0009:
+fresh context per iteration · one work item per pass · **nothing lands without the
+verify gate green AND a sign-off** (autoland is a typed per-loop opt-in stacked on
+top of both, never a default) · budgets as the primary safety mechanism.
+*Neutrality (binding, extends ADR 0002): the loop is OURS, the intelligence is
+THEIRS — we ship no agent, broker no auth, take no cut.*
+**Phase 12+ adds two organs it was missing** — see Phase 9′ below.
+
+### Phase 10 — Agents on real logged-in sessions ✅ *resolved, not built* (`prompts/phase-10/`)
+The "Comet question", forked and decided (2026-07-06): **Branch C** (a dedicated
+agent-web profile — real logins the user creates on purpose, per-origin action
+grants, sensitive-origin blocklist, local trail) shipped **inside Phase 8**; **Branch
+B** (inheriting the system browser's cookie stores + OS keychain) **stays PARKED** —
+it reverses ADR 0002 and starts, if ever, with its own ADR. `FINDINGS.md` remains the
+durable analysis and the map for that day. The boundary itself now lives in ADR 0008(e).
+
 ### Phase 11 — Files: the sidebar that watches your agents work ✅ (`prompts/phase-11/`)
 Sixteen agents can be writing into a workspace at once, and the app showed their
 **output** (terminals, blocks, attention) but never their **footprint**. This pack adds
@@ -178,6 +210,130 @@ composed surface** (16 panes + the explorer open + a write torrent: 142.8 avg fp
 gap 25.1ms, heap 20MB). The sweep grew 76→**83 gates** (seven new). The book: `docs/16`;
 receipts + platform finds: `prompts/phase-11/REPORT.md`.
 
+---
+
+## The next arc — Phases 12–19 (planned)
+
+Sourced from the 2026-07 ecosystem sweep: **`docs/research/2026-07-vibe-coding-ecosystem.md`**
+(what to absorb, what to refuse, the licence map). Ordered by value to *this* app,
+not by the popularity of the projects behind them.
+
+Three rules bind every phase below, and they are why these land as **capabilities,
+not dependencies**:
+- **ADR 0008** — protocols, not plugins. Foreign code never runs in our processes;
+  ideas enter as data over MCP/hooks/the control API, or they don't enter.
+- **ADR 0002** — we broker nothing. Every one of these works on the user's own CLIs,
+  keys, and machine.
+- **Risk #5** — clean-room only. The loudest projects in this space (claude-squad,
+  cmux, opcode, coder/mux) are **AGPL/GPL**: read them, never link them. asciinema's
+  `.cast` **format** is fair game; its GPL code is not.
+
+*What the sweep found already shipped — worktrees, the board, notifications, the
+usage gauge, MCP registration — is listed in the research doc's "do not re-buy"
+table. It is not repeated here.*
+
+### Phase 12 — The Workspace Brain (the differentiator, finally) 🔨
+*Absorbs Phase 2.5. The flagship.* One **context daemon per workspace**, mounted into
+every pane over MCP, so sixteen agents share one map instead of re-scanning one tree
+sixteen times.
+- **The code graph** (Graphify's shape, MIT, clean-room): tree-sitter AST across the
+  workspace — **deterministic, no LLM, no embeddings, no vector store**, which is the
+  only kind of index that fits a free, local-first, no-account app. Queried as
+  `query_graph` / `get_node` / `get_neighbors` / `shortest_path`.
+- **Symbol-level writes** (Serena's shape): panes edit *by symbol*, not by blind file
+  rewrite — the same LSP truth the graph reads. Directly reduces the cross-pane
+  collisions Phase 13 then polices.
+- **The one thing a local graph cannot know** (Context7's shape): version-correct
+  third-party library docs, registered once at workspace level, killing hallucinated
+  APIs in every pane at once.
+- **Ranked injection at spawn** (Aider's repomap algorithm — tree-sitter + PageRank):
+  a cold pane starts *already oriented*, instead of burning its first 20k tokens
+  rediscovering the repo.
+- **Phase 2.5's `.memory/` graph, kept whole**: `[[wikilinks]]`, backlinks, the
+  force-directed view, git-committable — now one lens on the Brain rather than a
+  separate feature.
+- **The economic claim this unlocks** (and no single-pane tool can make it): *many
+  agents become cheaper per question than one agent working badly.* Our core feature
+  stops being an ergonomic story and becomes an economic one.
+
+### Phase 13 — Contention: sixteen agents, one repo, zero collisions 🔨
+The failure mode **our own product creates**, and the highest value-per-hour work on
+this list. Phase 3 gave every agent its own worktree; it did not give them their own
+*ports*, dev servers, or a way home.
+- **Ports & dev servers per worktree** (uzi's idea, MIT, ~200 lines): auto-assigned,
+  auto-started, shown in the pane chrome. Six agents each running `npm run dev` on
+  :3000 is the single most-felt bug in parallel agent work and **no desktop rival
+  advertises solving it**.
+- **Race the agents** (Crystal's idea): N attempts at *one* task in N worktrees, then
+  diff-compare and keep the winner — a first-class flow, not a manual ritual.
+- **The way home** (Sculptor's Pairing Mode): sync an isolated agent's tree back into
+  the user's real checkout. Isolation without a return path is a dead end; this is the
+  missing half of every sandbox story, including Phase 15's.
+
+### Phase 14 — ACP: from scraped bytes to a control plane 🔨
+The structural bet. Today attention, busy/idle, and approvals are inferred from **TTY
+text**; Phase 2's OSC parser is a good guess and still a guess.
+- **Speak ACP** (Zed's Agent Client Protocol, Apache-2.0): structured turns, typed
+  tool-call approvals, real diffs. `mogging send` stops being a keystroke injector and
+  becomes an API; every ACP-speaking agent becomes a drop-in pane.
+- **Degrade honestly** (ccmanager's per-CLI heuristics): CLIs that don't speak ACP keep
+  the OSC/scrape path — **one seam, two fidelities**, never two products.
+- **Typed approval events** (HumanLayer's shape): "this pane is blocked on a decision"
+  becomes a routable event — which is what makes Phase 17 worth having.
+- Respects risk #4 (*prefer OSC over brittle hooks*) by making ACP the **richer** path,
+  never the required one.
+
+### Phase 9′ — Loops, enriched (fold into `prompts/phase-9/` before building) 🔨
+Phase 9's harness is sound; the sweep gives it the two organs it lacks:
+- **Where the work comes from** (spec-kit's shape): `/specify` → `/plan` → `/tasks`, one
+  spec fanning out to N panes — the workflow our grid has never had.
+- **Where the work lives** (Backlog.md's shape): tasks as **committed markdown in the
+  repo**, human- and agent-readable. Git is the database: zero infra, survives restarts,
+  syncs across machines, and it is the natural memory for a loop that must start fresh
+  each iteration (ADR 0009's law 1).
+- **The board pulls** (vibe-kanban's queueing, the one thing our board doesn't do): the
+  backlog auto-spawns the next agent when a pane frees.
+
+### Phase 15 — Sandboxed panes, opt-in and account-free 🔨
+Answers the objection every rival leads with — *"I won't let an agent loose on my
+machine"* — **without** surrendering local-first.
+- **Agents opt into isolation themselves** (container-use, Apache-2.0, MCP-native): a
+  container + branch per agent, exposed as a *tool*. We write no runtime.
+- **The local backend** (microsandbox, Apache-2.0): microVM isolation with **no cloud
+  account** — the only sandbox story that doesn't contradict our pitch. E2B stays the
+  escape hatch for shops that want hosted.
+- **Secret hygiene under autonomy** (vibekit's redaction): what an unattended agent may
+  never see. Pairs with Phase 13's way home; an alternate **spawn target** for an
+  existing pane, never a rewrite of it.
+
+### Phase 16 — Replay: every agent run, watchable and searchable 🔨
+- **`.cast` per pane** (asciinema's *format only* — ⛔ GPL code, clean-room): shareable
+  replays straight out of the PTY stream we already own.
+- **A typed event stream beside it** (OpenHands' action/observation log): pixels show
+  *what happened*, the log shows *what it meant* — so a replay is searchable, and pane
+  history becomes resumable.
+- **Tapes** (VHS's shape): our control API is already a tape runtime — scripted demos
+  and repeatable UI smokes become **one artifact**, paying the gate sweep back directly.
+
+### Phase 17 — Remote attach 🔨
+The daemon already outlives the app (ADR 0006), so the hard part is done: serve a
+running pane to a browser (vibetunnel's shape, MIT) and let Phase 14's typed approvals
+be answered from a phone. *Check your agents from the couch.* Ships only behind a real
+security review — nothing listens on TCP today (ADR 0008(b)) and that is a promise.
+
+### Phase 18 — The review pane 🔨
+Sixteen agents produce more diff than a human can read: the fix for our own success.
+A dedicated pane critiques what the others just wrote (pr-agent's shape, MIT), verifies
+its claims **structurally** rather than by re-reading files (ast-grep, MIT — "find every
+caller" as one command), and hands the human a ranked diff at the Phase-3 review gate.
+Mostly composition of Phases 12 and 13; cheap once they land.
+
+### Phase 19 — Portable workspaces 🔨
+A layout says *where the panes go* (zellij's layout-file shape, MIT); **AGENTS.md**
+(openai/agents.md, MIT) says *how each agent behaves* once it's there — vendor-neutral,
+which is our whole neutrality stance in a file. Together: clone the repo, open the
+workspace, six agents spawn correctly configured. The onboarding and team story.
+
 ## Cross-cutting from day one
 Sentry crash reporting · a hard perf budget for N panes · CI that builds + signs for
 win-x64 / mac-arm64 / mac-x64.
@@ -185,6 +341,11 @@ win-x64 / mac-arm64 / mac-x64.
 ## Top risks (see 03-research-synthesis §8)
 1. **Rendering perf at high pane counts** — the make-or-break; BridgeSpace's exact
    failure mode. Electron de-risks *divergence*, not raw perf. Perf budget + throttling.
+   *Insurance (2026-07 sweep):* the cheap wins are xterm.js's own WebGL + serialize
+   addons (already on WebGL); the escape hatch, if 16 streaming panes ever cap out the
+   DOM renderer, is an embeddable GPU VT core — **libghostty** (MIT, Zig). Kept on the
+   shelf deliberately: a swap that large is only justified by a measured ceiling, and
+   the budgets say we are nowhere near one (142.8 avg fps at 16 panes + explorer).
 2. **Windows/ConPTY quirks + AV/SmartScreen** — where cross-platform projects bleed.
 3. **BYO-auth boundary** — never store/broker credentials; keep it crisp in code + copy.
 4. **Agent-CLI churn** — prefer OSC (works for any CLI) over brittle hook integrations.

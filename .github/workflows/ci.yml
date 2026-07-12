@@ -79,6 +79,11 @@ jobs:
       - name: Gate registry gate
         run: node scripts/check-gates.mjs
 
+      # The docs are the product's memory and they cite each other constantly. A renamed
+      # doc leaves every citation reading as true while the link 404s — the quiet kind.
+      - name: Docs reference gate
+        run: node scripts/check-docs-refs.mjs
+
       # A space in artifactName 404s every update download, on every platform, silently — it
       # shipped nine times. Same class as the two above: a list that must agree with itself,
       # invisible when wrong, free to check.
