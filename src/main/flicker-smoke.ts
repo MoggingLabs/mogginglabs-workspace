@@ -271,7 +271,18 @@ const SCRIPT = `(async () => {
     thumbHeight: thumb?.style.height ?? null,
     thumbTransform: thumb?.style.transform ?? null
   })
-  scrollTerm.scrollToLine(Math.floor(scrollTerm.buffer.active.baseY / 2))
+  // Park the viewport up in history AS A HUMAN WOULD. The pane now follows its newest
+  // output and only a human may leave the bottom (pane-anchor.ts): a bare scrollToLine is
+  // a stray, non-user scroll, and the anchor correctly undoes it — which would leave this
+  // check parked at the bottom with a thumb that has nowhere to move. So it does what the
+  // user it stands for does: a wheel, and then the scroll that wheel is worth. The wheel
+  // event is what the anchor reads; the delta does not matter, only that a hand is on it.
+  const scrollBody = scrollSlot?.querySelector('.pane-body')
+  const asUser = (scroll) => {
+    scrollBody?.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true }))
+    scroll()
+  }
+  asUser(() => scrollTerm.scrollToLine(Math.floor(scrollTerm.buffer.active.baseY / 2)))
   await twoFrames()
   const deferredBefore = {
     baseY: scrollTerm.buffer.active.baseY,
@@ -315,7 +326,7 @@ const SCRIPT = `(async () => {
   const hasScrollback = scrollTerm.buffer.active.baseY > 0
   const sliderActive = !!slider && !slider.classList.contains('is-idle')
   const nativeHidden = nativeBars.length > 0 && nativeBars.every((el) => getComputedStyle(el).display === 'none')
-  scrollTerm.scrollToTop()
+  asUser(() => scrollTerm.scrollToTop()) // a human going back through the conversation
   await twoFrames()
   const scrolled = scrollTerm.buffer.active.viewportY < scrollTerm.buffer.active.baseY
   const jumpShown = !!jump && !jump.hidden
