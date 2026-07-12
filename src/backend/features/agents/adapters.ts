@@ -3,8 +3,11 @@
 // an adapter builds a launch COMMAND only — it never handles credentials. The CLI
 // self-authenticates (proven in Phase-0/03).
 
+import type { AgentCliId } from '@contracts'
+import { AGENT_CLI_REGISTRY } from '../../core/agent-clis'
+
 export interface AgentAdapter {
-  id: string
+  id: AgentCliId
   name: string
   bin: string // executable to detect on PATH + run
   resumeFlag?: string // appended to resume a prior session (e.g. "--resume", "resume")
@@ -15,13 +18,13 @@ export interface AgentAdapter {
   installHint?: string
 }
 
-export const AGENT_ADAPTERS: AgentAdapter[] = [
-  { id: 'claude', name: 'Claude Code', bin: 'claude', resumeFlag: '--resume', installHint: 'npm install -g @anthropic-ai/claude-code' },
-  { id: 'codex', name: 'Codex', bin: 'codex', resumeFlag: 'resume', installHint: 'npm install -g @openai/codex' },
-  { id: 'gemini', name: 'Gemini', bin: 'gemini', installHint: 'npm install -g @google/gemini-cli' },
-  { id: 'aider', name: 'Aider', bin: 'aider', installHint: 'python -m pip install aider-install && aider-install' },
-  { id: 'opencode', name: 'OpenCode', bin: 'opencode', installHint: 'npm install -g opencode-ai' }
-]
+export const AGENT_ADAPTERS: AgentAdapter[] = AGENT_CLI_REGISTRY.map((definition) => ({
+  id: definition.id,
+  name: definition.name,
+  bin: definition.bin,
+  resumeFlag: definition.resumeArgs?.[0],
+  installHint: definition.installHint
+}))
 
 export function findAdapter(id: string): AgentAdapter | undefined {
   return AGENT_ADAPTERS.find((a) => a.id === id)

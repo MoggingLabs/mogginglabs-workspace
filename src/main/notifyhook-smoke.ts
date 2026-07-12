@@ -192,14 +192,19 @@ export async function runNotifyHookSmoke(): Promise<void> {
     // OpenCode has no hook config — its only verdict channel is the generated PLUGIN, and the
     // spec MUST be a file:// URL: a bare path is read as an npm package and OpenCode HANGS
     // fetching it, freezing the launch.
-    const ocCfg = JSON.parse(opencodeConfig('C:\\App Data\\plugin.mjs')) as { plugin?: string[] }
+    const ocCfg = JSON.parse(opencodeConfig(
+      'C:\\App Data\\plugin.mjs',
+      { nested: { session: true }, plugin: ['session-plugin'] },
+      { nested: { inherited: true }, plugin: ['inherited-plugin'] }
+    )) as { plugin?: string[]; nested?: { inherited?: boolean; session?: boolean } }
     const ocPlugin = opencodePluginSource('C:\\App Data\\notify.mjs')
     const opencodeOk =
       oc.attention?.enabled === true &&
       oc.attention?.notifications === true &&
       oc.attention?.sound === false && // the user's sound preference survives, never forced
       oc.theme === 'mono' &&
-      ocCfg.plugin?.[0] === 'file:///C:/App Data/plugin.mjs' &&
+      ocCfg.plugin?.join('|') === 'inherited-plugin|session-plugin|file:///C:/App Data/plugin.mjs' &&
+      ocCfg.nested?.inherited === true && ocCfg.nested?.session === true &&
       // The plugin must split root from child: a subagent going idle is NOT the main's done.
       ocPlugin.includes('session.idle') &&
       ocPlugin.includes('parentID') &&
@@ -218,6 +223,7 @@ export async function runNotifyHookSmoke(): Promise<void> {
     const exAider = bellLaunchExtras('aider')
     const exClaude = bellLaunchExtras('claude') // Claude rides its --settings overlay (context.ts)
     const exUnknown = bellLaunchExtras('custom-thing')
+    const opencodeInline = JSON.parse(exOpencode.env.OPENCODE_CONFIG_CONTENT ?? '{}') as { plugin?: string[] }
     // resolve() both sides: userData may arrive as a forward-slash MOGGING_USERDATA
     // while join() builds backslash paths — a raw startsWith can never match.
     const userData = path.resolve(app.getPath('userData'))
@@ -233,7 +239,7 @@ export async function runNotifyHookSmoke(): Promise<void> {
       inUserData(exOpencode.env.OPENCODE_TUI_CONFIG) &&
       // OpenCode's verdict channel: the generated plugin must actually be routed, or the
       // pane only ever sees the ambiguous chime and reads every completion as attention.
-      inUserData(exOpencode.env.OPENCODE_CONFIG) &&
+      opencodeInline.plugin?.some((plugin) => plugin.startsWith('file:///')) === true &&
       exAider.env.AIDER_NOTIFICATIONS === 'true' &&
       exClaude.args.length === 0 && Object.keys(exClaude.env).length === 0 &&
       exUnknown.args.length === 0 && Object.keys(exUnknown.env).length === 0

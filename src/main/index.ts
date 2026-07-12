@@ -10,6 +10,7 @@ import { registerShellChrome, wireWindowState } from './shell-chrome'
 import { flushTelemetry } from './telemetry'
 import { registerAppSettings, disposeAppSettings } from './app-settings'
 import { registerAgents, disposeAgentInstalls } from './agents'
+import { registerAgentSettings, disposeAgentSettings } from './agent-settings'
 import { registerBrowserDock } from './browser-dock'
 import { startMcpEndpoint, stopMcpEndpoint } from './mcp-endpoint'
 import { registerTemplates } from './templates'
@@ -20,6 +21,7 @@ import { registerWorktrees } from './worktrees'
 import { registerFsBrowse } from './fs-browse'
 import { registerExplorer } from './explorer'
 import { runFsListSmoke } from './fslist-smoke'
+import { runAgentSettingsSmoke } from './agentsettings-smoke'
 import { registerReview } from './review'
 import { registerBoard } from './board'
 import { registerProfiles } from './profiles'
@@ -53,6 +55,7 @@ import { runFileActSmoke } from './fileact-smoke'
 import { runFilesMilestoneSmoke } from './filesmilestone-smoke'
 import { runSetIntegSmoke } from './setinteg-smoke'
 import { runSetShellSmoke } from './setshell-smoke'
+import { runSetAgentConfigSmoke } from './setagentcfg-smoke'
 import { runSetUsageSmoke } from './setusage-smoke'
 import { runHomeUxSmoke } from './homeux-smoke'
 import { runBoardUxSmoke } from './boardux-smoke'
@@ -212,7 +215,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
   'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_WSCLOSE', 'MOGGING_KBSHORTCUTS', 'MOGGING_WEBTRAIL',
   'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX',
-  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETINTEG', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX',
+  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX',
   'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_UXMILESTONE',
   'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT',
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS',
@@ -223,7 +226,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
   // Phase 11 — Files: the explorer's seven.
   'MOGGING_FSLIST', 'MOGGING_FILETREE', 'MOGGING_EXPLORER', 'MOGGING_TREELIVE', 'MOGGING_TREEGIT',
-  'MOGGING_FILEACT', 'MOGGING_FILESMILESTONE'
+  'MOGGING_FILEACT', 'MOGGING_FILESMILESTONE', 'MOGGING_AGENTCFG'
 ]
 const isSmoke = SMOKE_ENV.some((k) => !!process.env[k])
 const primaryInstance = isSmoke || app.requestSingleInstanceLock()
@@ -302,6 +305,10 @@ app.whenReady().then(async () => {
     await runFsListSmoke()
     return
   }
+  if (process.env.MOGGING_AGENTCFG) {
+    await runAgentSettingsSmoke()
+    return
+  }
 
   // Windowless tool-plan smoke (8/09): pure materialization + a CLI shim + a
   // real git repo — no daemon, no window.
@@ -374,6 +381,11 @@ app.whenReady().then(async () => {
   registerMcpStatus(() => win) // MCP connection-status poller: pushed per-(server×cli) grid (8/11)
   registerServices(() => win) // service links: board card <-> GitHub PR/issue, live via gh (8/12)
   startMcpEndpoint() // agent-control transport: the MCP server reaches the dock + grant wire here (6/05b, 8/03)
+  // The bundled catalog and IPC surface are installed synchronously before the
+  // first await inside registerAgentSettings. Cache/version discovery and startup
+  // reconciliation can continue behind first paint; each launch still reconciles
+  // its exact target and fails closed.
+  const agentSettingsStartup = registerAgentSettings(() => win, isSmoke)
   registerAgents(() => win) // agent launcher: detect/install CLIs + build launch commands (Phase-1/06; Agent CLIs tab)
   registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
   registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
@@ -389,6 +401,10 @@ app.whenReady().then(async () => {
   registerUsage(() => win) // usage meters: adapters ride CLI-owned sessions (Phase-7/01, ADR 0007)
 
   openWindow()
+  void agentSettingsStartup.catch((err) => {
+    getTelemetry().captureError(err, { feature: 'agent-settings', op: 'startup' })
+    console.warn('[agent-settings] startup initialization failed')
+  })
 
   if (!isSmoke) {
     registerDeepLink(ensureWindow) // mogging:// -> open/focus a workspace for a directory
@@ -501,6 +517,8 @@ app.whenReady().then(async () => {
     runFilesMilestoneSmoke(win) // env-gated Phase-11 MILESTONE: the whole files promise composed + budgets on the composed surface (Phase-11/07)
   } else if (process.env.MOGGING_SETSHELL && win) {
     runSetShellSmoke(win) // env-gated settings-shell smoke: grouped nav, cards, measured spacing + AA (Phase-8.5/04)
+  } else if (process.env.MOGGING_SETAGENTCFG && win) {
+    runSetAgentConfigSmoke(win) // five-provider settings catalog, typed controls, real scope writes, remote honesty
   } else if (process.env.MOGGING_SETINTEG && win) {
     runSetIntegSmoke(win) // env-gated integrations smoke: disclosure, attention-through-fold, hit targets (Phase-8.5/05)
   } else if (process.env.MOGGING_SETUSAGE && win) {
@@ -580,6 +598,7 @@ app.on('before-quit', () => {
   void flushTelemetry() // best-effort vendor flush (no-op unless the user opted in)
   stopMcpEndpoint() // tear down the agent-control socket + endpoint file (6/05b)
   disposeAgentInstalls() // ephemeral install terminals must not outlive the app
+  disposeAgentSettings()
   disposeAppSettings()
   disposeGit?.()
   disposeGit = null

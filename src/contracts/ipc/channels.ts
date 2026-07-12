@@ -49,13 +49,23 @@ export const WorkspaceChannels = {
 
 export const AgentChannels = {
   detect: 'agents:detect', // -> AgentInfo[] (which CLIs are installed)
-  command: 'agents:command', // (AgentCommandRequest) -> launch command string | null
+  command: 'agents:command', // (AgentCommandRequest) -> AgentCommandResult
   // Settings § Providers: install a missing CLI in an EPHEMERAL background pty —
   // the provider's own one-liner is injected into the user's shell, never parsed
   // or elevated. Explicit user click only; no credentials involved (ADR 0002).
   install: 'agents:install', // (agentId) -> AgentInstallStart ({ ok, reason? })
   installStates: 'agents:installStates', // -> AgentInstallState[] (snapshot, so a late-mounted tab catches up)
   installChanged: 'agents:installChanged' // main -> renderer: AgentInstallState (progress + verdict pushes)
+} as const
+
+export const AgentConfigChannels = {
+  providers: 'agentConfig:providers',
+  catalog: 'agentConfig:catalog',
+  snapshot: 'agentConfig:snapshot',
+  set: 'agentConfig:set',
+  release: 'agentConfig:release',
+  refresh: 'agentConfig:refresh',
+  changed: 'agentConfig:changed'
 } as const
 
 export const TemplateChannels = {
@@ -326,6 +336,7 @@ export const AllChannels: readonly string[] = [
   ...Object.values(ControlChannels),
   ...Object.values(ShellChannels),
   ...Object.values(AgentChannels),
+  ...Object.values(AgentConfigChannels),
   ...Object.values(TemplateChannels),
   ...Object.values(WorktreeChannels),
   ...Object.values(ReviewChannels),

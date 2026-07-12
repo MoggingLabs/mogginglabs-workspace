@@ -55,6 +55,20 @@ function envPrefix(env: Record<string, string> | undefined): string {
   return entries.map(([k, v]) => `export ${k}=${shq(v)} && `).join('')
 }
 
+/** Quote one provider argument for the interactive shell that receives the line. */
+function shellArg(value: string): string {
+  if (/^[A-Za-z0-9_./:\\=@,+\-\[\]]+$/.test(value)) return value
+  if (process.platform !== 'win32') return shq(value)
+  const shell = defaultShell().toLowerCase()
+  if (shell.includes('powershell') || shell.includes('pwsh')) return psq(value)
+  // Standard Windows argv quoting. Percent/bang values emitted by session
+  // codecs use TOML unicode escapes, so cmd expansion cannot change them.
+  const escaped = value
+    .replace(/(\\*)"/g, '$1$1\\"')
+    .replace(/(\\*)$/g, '$1$1')
+  return `"${escaped}"`
+}
+
 /**
  * Build the launch COMMAND for an agent CLI in a cwd. It's a command string only — the CLI
  * self-authenticates; NO credentials are ever built, stored, or injected (ADR 0002). `resume`
@@ -73,6 +87,6 @@ export function buildLaunchCommand(
   const base = resume && adapter.resumeFlag ? `${adapter.bin} ${adapter.resumeFlag}` : adapter.bin
   // Tool-plan launch args (Phase-8/09): the CLI's mcp-config flag + path. Quote
   // args with spaces (userData paths on Windows); flags are literal.
-  const flags = mcpArgs?.length ? ' ' + mcpArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ') : ''
+  const flags = mcpArgs?.length ? ' ' + mcpArgs.map(shellArg).join(' ') : ''
   return cdPrefix(cwd) + envPrefix(env) + base + flags
 }

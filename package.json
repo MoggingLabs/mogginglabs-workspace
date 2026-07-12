@@ -17,6 +17,8 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit",
+    "catalog:agent-settings:update": "node scripts/update-agent-settings-catalog.mjs",
+    "catalog:agent-settings:check": "node scripts/check-agent-settings-catalog.mjs",
     "dist": "electron-vite build && electron-builder --publish never",
     "dist:win": "electron-vite build && electron-builder --win --publish never",
     "dist:mac": "electron-vite build && electron-builder --mac --publish never"
@@ -31,11 +33,16 @@
     "@xterm/xterm": "^5.5.0",
     "better-sqlite3": "^12.11.1",
     "electron-updater": "^6.3.0",
+    "jsonc-parser": "^3.3.1",
     "node-pty": "1.1.0",
-    "posthog-node": "^5.39.2"
+    "posthog-node": "^5.39.2",
+    "toml-eslint-parser": "^1.0.3",
+    "write-file-atomic": "^7.0.0",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "@types/write-file-atomic": "^4.0.3",
     "electron": "^39.8.10",
     "electron-builder": "^26.15.6",
     "electron-vite": "^5.0.0",

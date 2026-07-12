@@ -74,6 +74,9 @@ jobs:
       - name: Gate registry gate
         run: node scripts/check-gates.mjs
 
+      - name: Agent settings catalog gate
+        run: npm run catalog:agent-settings:check
+
       - name: Build
         run: npm run build
 

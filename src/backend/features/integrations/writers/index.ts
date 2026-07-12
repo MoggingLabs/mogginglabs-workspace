@@ -16,7 +16,7 @@ export interface CliHomes {
   home: string
   /** Codex config dir (`CODEX_HOME` || `~/.codex`). */
   codexDir: string
-  /** Gemini config dir (`GEMINI_CONFIG_DIR` || `~/.gemini`). */
+  /** Gemini config dir (`GEMINI_CLI_HOME/.gemini`; legacy `GEMINI_CONFIG_DIR` accepted). */
   geminiDir: string
 }
 

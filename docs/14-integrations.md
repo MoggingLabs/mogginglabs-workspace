@@ -232,7 +232,7 @@ never auto-healed.
 
 | | Claude Code | Codex | Gemini |
 |---|---|---|---|
-| File | `~/.claude.json` | `~/.codex/config.toml` (`CODEX_HOME`) | `~/.gemini/settings.json` (`GEMINI_CONFIG_DIR`) |
+| File | `~/.claude.json` | `~/.codex/config.toml` (`CODEX_HOME`) | `~/.gemini/settings.json` (`GEMINI_CLI_HOME` relocates the parent home; legacy `GEMINI_CONFIG_DIR` profiles remain readable) |
 | Shape | `mcpServers` map, `"type":"stdio"` | `[mcp_servers.<id>]` TOML table | `mcpServers` map |
 | Our marker | `"_managedBy":"mogginglabs"` | `# managed-by: mogginglabs` comment line | `"_managedBy":"mogginglabs"` |
 | **Remote quirk** | writes `"url"` + `"type":"http"` | `bearer_token_env_var` for token auth | writes **`"httpUrl"`**, never `"url"` |

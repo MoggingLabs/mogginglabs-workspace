@@ -1,5 +1,5 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { IntegrationsChannels, ProfileChannels, TerminalChannels, planSignature, type AgentDetectedEvent, type AgentInfo, type AgentProfile, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
+import { IntegrationsChannels, ProfileChannels, TerminalChannels, isAgentCliId, planSignature, type AgentDetectedEvent, type AgentInfo, type AgentProfile, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
 import { recordPaneLaunch } from '../../core/agents/toolplan-panes'
 import { recordPaneCli, setMcpSnapshot } from '../../core/agents/mcp-status-port'
 
@@ -298,13 +298,21 @@ export const agentsFeature: UiFeature = {
         getTelemetry().captureEvent({ name: 'agent.launched', props: { provider: 'custom', resume } })
         return
       }
+      if (!isAgentCliId(provider)) return
       // Default profile (order 0) applies when none was named and any exist (4/04).
       const mine = (await listProfiles()).filter((p) => p.provider === provider).sort((x, y) => x.order - y.order)
       const effectiveProfile = profileId ?? mine[0]?.id
       const workspaceId = workspaceIdForPane(paneId)
-      const command = await agentsClient.command({ agentId: provider, cwd, resume, profileId: effectiveProfile, workspaceId })
-      if (!command) return
-      agentsClient.launchInto(paneId, command)
+      const result = await agentsClient.command({ agentId: provider, cwd, resume, profileId: effectiveProfile, workspaceId })
+      if (!result.ok || !result.command) {
+        showToast({
+          tone: 'attention',
+          title: `${nameById.get(provider) ?? provider} settings need attention`,
+          body: result.reason || 'The saved configuration could not be synchronized before launch.'
+        })
+        return
+      }
+      agentsClient.launchInto(paneId, result.command)
       // Remember the tool-plan signature this pane launched with (8/09) — a
       // later plan edit flips it to restart-needed.
       if (workspaceId) {

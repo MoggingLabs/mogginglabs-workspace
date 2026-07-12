@@ -1,4 +1,7 @@
 import { ipcMain } from 'electron'
+import { mkdirSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { isAbsolute, join, resolve } from 'node:path'
 import { getSettingsStore } from './app-settings'
 import type { SettingsStore } from '@backend/features/workspace'
 import { discoverLogins } from '@backend/features/agents'
@@ -28,6 +31,23 @@ const slugify = (name: string): string =>
     .replace(/^-+|-+$/g, '')
     .slice(0, 24) || 'profile'
 
+function absoluteProfileHome(value: string): string {
+  if (value === '~') return homedir()
+  if (value.startsWith('~/') || value.startsWith('~\\')) return join(homedir(), value.slice(2))
+  return isAbsolute(value) ? value : resolve(homedir(), value)
+}
+
+/** Normalize legacy tilde pointers and ensure provider homes exist before a CLI
+ * launch. Only the provider's canonical home pointer is touched. */
+export function materializeProfileEnv(provider: string, env: Record<string, string> | undefined): Record<string, string> {
+  if (!env) return {}
+  const pointer = HOME_POINTER[provider]
+  if (!pointer || !env[pointer]) return { ...env }
+  const home = absoluteProfileHome(env[pointer])
+  mkdirSync(home, { recursive: true })
+  return { ...env, [pointer]: home }
+}
+
 /** Fill in what the simplified form no longer asks for. An EDIT keeps the stored
  *  env/order (a profile's config home is an identity — it must never move under a
  *  rename); a NEW profile appends to the failover order and derives its pointer.
@@ -52,8 +72,8 @@ export function deriveProfileDefaults(raw: unknown, existing: AgentProfile[]): u
       if (!pointer || !siblings.length) {
         out.env = {} // first profile = the CLI's default home (the login you already have)
       } else {
-        const taken = new Set(siblings.map((s) => s.env[pointer]).filter(Boolean))
-        const base = `~/.${provider}-${slugify(String(p.name ?? ''))}`
+        const taken = new Set(siblings.map((s) => s.env[pointer]).filter(Boolean).map(absoluteProfileHome))
+        const base = join(homedir(), `.${provider}-${slugify(String(p.name ?? ''))}`)
         let home = base
         for (let n = 2; taken.has(home); n++) home = `${base}-${n}`
         out.env = { [pointer]: home }
@@ -146,6 +166,10 @@ export function registerProfiles(): void {
     return true
   })
   ipcMain.handle(ProfileChannels.remove, (_e, id: unknown) => {
-    if (typeof id === 'string' && id) getSettingsStore()?.removeProfile(id)
+    if (typeof id === 'string' && id) {
+      const store = getSettingsStore()
+      store?.removeProfile(id)
+      store?.removeAgentConfigTarget('profile', id)
+    }
   })
 }

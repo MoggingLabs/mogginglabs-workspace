@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import type { McpServerEntry, WorkspaceToolPlan } from '@contracts'
 import { planFromTemplateTools, planSignature, restartNeededPanes, toolCellState } from '@contracts'
 import { composePlanEntries, materializePlanFor } from '@backend/features/integrations'
-import { gitExcludeInWorktree } from './tool-plan'
+import { gitExcludeInWorktree, mergeToolPlanProjectConfig } from './tool-plan'
 
 // Env-gated tool-plan smoke (MOGGING_TOOLPLAN, Phase-8/09). Proves scoping is a
 // real mechanism, not a label:
@@ -61,6 +61,21 @@ export async function runToolPlanSmoke(): Promise<void> {
     const codexNoLinear = !/\[mcp_servers\.linear\]/.test(codexMat.files[0].content) // linear was claude-only
     const codexOk = codexMat.launchArgs.length === 0 && codexMat.excludeRelPaths[0] === '.codex/config.toml' && codexTomlHasSentry && codexNoLinear
 
+    // Ordinary provider settings and scoped MCP blocks now coexist in the same
+    // file. Replanning replaces only our tagged entries and preserves comments.
+    const codexForeign = 'model = "gpt-5" # user setting\n\n[features]\nweb_search = true\n'
+    const codexMerged = mergeToolPlanProjectConfig('codex', codexForeign, codexEntries)
+    const codexReplanned = mergeToolPlanProjectConfig('codex', codexMerged, [HOUSE])
+    const codexCoexistOk = codexMerged.includes('model = "gpt-5" # user setting') &&
+      codexMerged.includes('[mcp_servers.sentry]') && codexReplanned.includes('[mcp_servers.mogging]') &&
+      !codexReplanned.includes('[mcp_servers.sentry]') && codexReplanned.includes('[features]')
+    const geminiForeign = '{\n  // user setting\n  "general": { "previewFeatures": true },\n}\n'
+    const geminiMerged = mergeToolPlanProjectConfig('gemini', geminiForeign, [HOUSE, A])
+    const geminiReplanned = mergeToolPlanProjectConfig('gemini', geminiMerged, [HOUSE])
+    const geminiCoexistOk = geminiMerged.includes('// user setting') && geminiMerged.includes('"sentry"') &&
+      geminiReplanned.includes('// user setting') && !geminiReplanned.includes('"sentry"') && geminiReplanned.includes('"general"')
+    const coexistOk = codexCoexistOk && geminiCoexistOk
+
     // ── (b) a CLI launched against the file sees ONLY the planned servers ───────
     const shim = join(dir, 'claude-shim.mjs')
     writeFileSync(
@@ -114,8 +129,8 @@ process.stdout.write('SERVERS=' + keys.sort().join(',') + '|STRICT=' + a.include
     const g4 = toolCellState({ ...plan, inheritGlobal: true }, 'posthog', 'claude-code', true) === 'global'
     const matrixOk = g1 && g2 && g3 && g4
 
-    const pass = claudeArgsOk && claudeFileOk && codexOk && listsPlannedOnly && inheritOk && gitInvisibleOk && restartFlipsOk && templateOk && matrixOk
-    result = { pass, claudeArgsOk, claudeFileOk, codexOk, listsPlannedOnly, inheritOk, gitInvisibleOk, restartFlipsOk, templateOk, matrixOk, shimOut }
+    const pass = claudeArgsOk && claudeFileOk && codexOk && coexistOk && listsPlannedOnly && inheritOk && gitInvisibleOk && restartFlipsOk && templateOk && matrixOk
+    result = { pass, claudeArgsOk, claudeFileOk, codexOk, coexistOk, codexCoexistOk, geminiCoexistOk, listsPlannedOnly, inheritOk, gitInvisibleOk, restartFlipsOk, templateOk, matrixOk, shimOut }
   } catch (e) {
     result = { pass: false, error: String(e) }
   }

@@ -9,8 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 83 gates at the Phase-11 freeze: 4 static (AUDIT · SPACING · PTYSEAM · PROTOVER) + 79
-# app-boot gates. Phase 11 (Files — the explorer) added seven, and they run LAST:
+# The registry below is the source of truth for gate count. Agent settings adds
+# one windowless control-plane gate and one composed Settings UI gate.
+# Phase 11 (Files — the explorer) added seven, and they run LAST:
 #   FSLIST          the read service, zero UI (files+dirs, caps, typed refusals)
 #   FILETREE        the virtualized tree (10k rows, APG keyboard, tree ARIA)
 #   EXPLORER        the dock (four doors, re-rooting, per-workspace memory)
@@ -173,6 +174,7 @@ run_static AUDIT   node scripts/check-audit.mjs
 run_static SPACING node scripts/check-spacing.mjs --max 0
 run_static PTYSEAM node scripts/check-pty-seam.mjs
 run_static PROTOVER node scripts/check-protocol-version.mjs
+run_static AGENTCAT node scripts/check-agent-settings-catalog.mjs
 
 run_smoke SMOKE       MOGGING_SMOKE     1 180 smoke
 run_smoke MULTIPANE   MOGGING_MULTIPANE 1 180 multipane
@@ -221,6 +223,7 @@ run_smoke USAGESET     MOGGING_USAGESET  1 180 usageset
 run_smoke MCP          MOGGING_MCP       1 240 mcp
 run_smoke MCPWRITE     MOGGING_MCPWRITE  1 240 mcpwrite
 run_smoke AGENTWEB     MOGGING_AGENTWEB  1 240 agentweb
+run_smoke AGENTLAUNCH  MOGGING_AGENTLAUNCH 1 240 agentlaunch
 run_smoke PERWS        MOGGING_PERWS     1 240 perws
 run_smoke PERWSAGENT   MOGGING_PERWSAGENT 1 240 perwsagent
 run_smoke VAULTKEYS    MOGGING_VAULTKEYS 1 240 vaultkeys
@@ -239,6 +242,7 @@ run_smoke INTEGMILESTONE MOGGING_INTEGMILESTONE 1 300 integmilestone
 run_smoke WIZARDUX     MOGGING_WIZARDUX  1 180 wizardux
 run_smoke FOLDERPICK   MOGGING_FOLDERPICK 1 240 folderpick
 run_smoke SETSHELL     MOGGING_SETSHELL  1 240 setshell
+run_smoke SETAGENTCFG  MOGGING_SETAGENTCFG 1 240 setagentcfg
 run_smoke SETUSAGE     MOGGING_SETUSAGE  1 240 setusage
 run_smoke HOMEUX       MOGGING_HOMEUX    1 240 homeux
 run_smoke BOARDUX      MOGGING_BOARDUX   1 240 boardux
@@ -249,6 +253,7 @@ run_smoke UXMILESTONE  MOGGING_UXMILESTONE 1 360 uxmilestone
 run_smoke TYPED        MOGGING_TYPED     1 300 typed
 run_smoke TYPEDCOST    MOGGING_TYPEDCOST 1 120 typedcost
 run_smoke CTXACCURACY  MOGGING_CTXACCURACY 1 120 ctxaccuracy
+run_smoke AGENTCFG     MOGGING_AGENTCFG 1 180 agentsettings
 run_smoke FSLIST       MOGGING_FSLIST    1 120 fslist
 run_smoke FILETREE     MOGGING_FILETREE  1 300 filetree
 run_smoke EXPLORER     MOGGING_EXPLORER  1 240 explorer

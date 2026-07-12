@@ -1,4 +1,6 @@
 export * from './agent'
+export * from './agent-cli'
+export * from './agent-settings'
 export * from './pane'
 export * from './shell-quote'
 export * from './workspace'

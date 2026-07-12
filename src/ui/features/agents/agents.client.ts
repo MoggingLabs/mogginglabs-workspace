@@ -1,4 +1,4 @@
-import { AgentChannels, TerminalChannels, type AgentInfo, type AgentCommandRequest } from '@contracts'
+import { AgentChannels, TerminalChannels, type AgentInfo, type AgentCommandRequest, type AgentCommandResult } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 
 /**
@@ -8,8 +8,8 @@ import { getBridge } from '../../core/ipc/bridge'
  */
 export const agentsClient = {
   detect: (): Promise<AgentInfo[]> => getBridge().invoke(AgentChannels.detect) as Promise<AgentInfo[]>,
-  command: (req: AgentCommandRequest): Promise<string | null> =>
-    getBridge().invoke(AgentChannels.command, req) as Promise<string | null>,
+  command: (req: AgentCommandRequest): Promise<AgentCommandResult> =>
+    getBridge().invoke(AgentChannels.command, req) as Promise<AgentCommandResult>,
   launchInto: (paneId: number, command: string): void =>
     getBridge().send(TerminalChannels.write, { id: paneId, data: command + '\r' })
 }

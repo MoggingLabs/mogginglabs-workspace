@@ -4,9 +4,9 @@ import { SettingsStore } from '@backend/features/workspace'
 import { clearGrant } from '@backend/features/integrations'
 import { WorkspaceChannels, type WorkspaceState } from '@contracts'
 
-// App-wiring: persist app-level workspace state (tabs + theme) via the 03 store mechanism
-// (better-sqlite3), in a main-owned db separate from the daemon's sessions. Metadata only —
-// never credentials (ADR 0002).
+// App-wiring: persist app-level workspace state and non-secret feature desired state via the
+// 03 store mechanism (better-sqlite3), in a main-owned db separate from daemon sessions.
+// Provider credentials never enter this database (ADR 0002).
 
 let store: SettingsStore | null = null
 
@@ -26,8 +26,13 @@ export function registerAppSettings(): void {
     for (const w of gone) {
       try {
         clearGrant({ get: (k) => s.getSetting(k), set: (k, v) => s.setSetting(k, v) }, w.id)
+        // A project/local/session intent must not resurrect if this workspace id
+        // is later reused for a different directory (same custody rule as grants).
+        s.removeAgentConfigTarget('project', w.id)
+        s.removeAgentConfigTarget('local', w.id)
+        s.removeAgentConfigTarget('session', w.id)
       } catch {
-        /* best effort — a stale grant must never block a save */
+        /* best effort — stale feature state must never block a workspace save */
       }
     }
   })

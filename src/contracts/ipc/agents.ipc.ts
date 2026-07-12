@@ -2,9 +2,11 @@
 // self-authenticates (ADR 0002). No credentials ever cross this boundary — only agent ids,
 // a cwd, and the resulting command string.
 
+import type { AgentCliId, AgentExecutionTarget } from '../domain/agent-cli'
+
 /** An agent CLI + whether it's installed (on PATH). */
 export interface AgentInfo {
-  id: string
+  id: AgentCliId
   name: string
   installed: boolean
   /** The provider's own install one-liner. Copyable everywhere; Settings § Providers
@@ -23,7 +25,7 @@ export type AgentInstallPhase = 'running' | 'succeeded' | 'failed'
 
 /** Live/last-known state of one provider's background install. */
 export interface AgentInstallState {
-  agentId: string
+  agentId: AgentCliId
   phase: AgentInstallPhase
   /** Bounded tail of the ephemeral terminal's output (ANSI stripped — plain text). */
   tail: string
@@ -41,12 +43,21 @@ export interface AgentInstallStart {
 
 /** Request the launch command for an agent in a directory. */
 export interface AgentCommandRequest {
-  agentId: string
+  agentId: AgentCliId
   cwd: string
+  /** Omitted by legacy callers means local; config reconciliation refuses ssh targets. */
+  execution?: AgentExecutionTarget
   resume?: boolean
   /** Launch under this profile's env pointers (Phase-4/04). */
   profileId?: string
   /** Materialize this workspace's tool plan into the launch (Phase-8/09) —
    *  the pane's CLI gets only the planned servers. */
   workspaceId?: string
+}
+
+/** A failed source-of-truth reconciliation must be visible, never a silent null launch. */
+export interface AgentCommandResult {
+  ok: boolean
+  command?: string
+  reason?: string
 }

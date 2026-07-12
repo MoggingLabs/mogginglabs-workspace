@@ -305,7 +305,7 @@ export const USAGE_PROVIDERS: readonly UsageProviderDef[] = [
   // providers without a PLAIN public JSON endpoint honestly carry none.
   { id: 'claude', label: 'Claude', klass: 'cli-store', homePointerEnv: 'CLAUDE_CONFIG_DIR', windows: [w('session', 'Session (5h)'), w('weekly', 'Weekly')], statusUrl: 'https://status.claude.com/api/v2/status.json', verifiedAt: '2026-07-06' },
   { id: 'codex', label: 'Codex', klass: 'cli-store', homePointerEnv: 'CODEX_HOME', windows: [w('session', 'Session (5h)'), w('weekly', 'Weekly')], statusUrl: 'https://status.openai.com/api/v2/status.json', verifiedAt: '2026-07-06' },
-  { id: 'gemini', label: 'Gemini', klass: 'cli-store', homePointerEnv: 'GEMINI_CONFIG_DIR', windows: [w('daily', 'Daily')] },
+  { id: 'gemini', label: 'Gemini', klass: 'cli-store', homePointerEnv: 'GEMINI_CLI_HOME', windows: [w('daily', 'Daily')] },
   { id: 'copilot', label: 'GitHub Copilot', klass: 'cli-store', windows: [w('monthly', 'Monthly')] },
   { id: 'zed', label: 'Zed', klass: 'cli-store', windows: [w('monthly', 'Monthly')] },
   { id: 'kiro', label: 'Kiro', klass: 'cli-store', windows: [w('monthly', 'Monthly')] },

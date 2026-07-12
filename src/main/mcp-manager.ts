@@ -57,7 +57,7 @@ export function resolveCliHomes(): CliHomes {
   return {
     home,
     codexDir: process.env.CODEX_HOME || join(home, '.codex'),
-    geminiDir: process.env.GEMINI_CONFIG_DIR || join(home, '.gemini')
+    geminiDir: process.env.GEMINI_CONFIG_DIR || join(process.env.GEMINI_CLI_HOME || home, '.gemini')
   }
 }
 
