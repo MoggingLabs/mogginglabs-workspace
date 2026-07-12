@@ -178,6 +178,53 @@ composed surface** (16 panes + the explorer open + a write torrent: 142.8 avg fp
 gap 25.1ms, heap 20MB). The sweep grew 76→**83 gates** (seven new). The book: `docs/16`;
 receipts + platform finds: `prompts/phase-11/REPORT.md`.
 
+### Phase 12 — Scroll: the conversation you are actually having ✅
+Sixteen agents can be talking at once, and the app had spent eleven phases making sure you
+could *see* them — then dropped you at the **top of every conversation** the moment you
+walked into a workspace. Reported against codex, but it was never about codex: the **pane**
+owns the viewport, not the CLI, so the same defect was one stray scroll away for Claude,
+Gemini and a plain shell. This pack fixes the reading position and then rebuilds the
+scrollbar the whole app draws.
+
+- **The scroll ANCHOR — the pane follows its newest output, and only a human may leave it**
+  (`terminal/pane-anchor.ts`). Not a patch to whichever sequence in the reattach replay does
+  the scrolling: an **invariant**. A replay burst, a reveal refit, a reflow, a zoom — anything
+  that moves the viewport off the bottom is corrected on the next frame; a wheel, a drag, a
+  scroll key or the slide bar is obeyed and *remembered* (output no longer yanks you back).
+  Typing and the jump pill re-arm it; **auto-replies never do** — xterm answers CPR/DA queries
+  on the same `onData` channel typing uses, and agents poll them constantly.
+- **Intent is a POSITION, not an event** — the finding that shaped the design. xterm's viewport
+  is a natively scrollable div: the wheel's default action moves it and xterm syncs its buffer
+  from the `scrollTop`, often emitting **no `onScroll` at all**. An anchor that listened for
+  scroll events would never learn you had scrolled away, and the next line of agent output
+  would drag you back down. So a gesture opens a window, and the anchor reads where the
+  viewport comes to **rest**. It also **yields while a human is driving**: a pin already queued
+  for the frame would land between the wheel and xterm's sync and undo it.
+- **OVERLAY scrollbars, app-wide** (`core/scroll/overlay-scroll.ts`) — the macOS/VS Code model,
+  in the panes *and* in every settings panel, file tree, board column and menu: invisible at
+  rest, lit while you scroll (fading 900ms after you stop), and lit when the pointer is in the
+  **bar's own lane** at the edge. Hovering the container is deliberately **not** a reveal — a bar
+  that appears whenever the pointer is anywhere inside the box is the noise this removes, and it
+  is the one thing a CSS `:hover` cannot express. Two delegated listeners for the entire app; no
+  per-container wiring, and no layout read except while the pointer is over a scrollable. The
+  pane's rail is now **full height**, so the ends mean what they say — flush on the floor at the
+  newest line, flush against the ceiling at the oldest.
+- **The anchor deliberately did not travel.** Stick-to-bottom is *terminal* semantics; Settings
+  and the file tree would be worse for it. Panes likewise opt out of the native bar: they own a
+  real, draggable, click-pageable one.
+
+Closed by two gates the sweep now carries (83→**85**). `MOGGING_PANESCROLL` drives the shipped
+listeners with real events and **fails without the anchor at `viewportY 0` of `baseY 950`** — the
+reported symptom, exactly — then proves the guarantee is the pane's and not the CLI's by streaming
+each agent's characteristic output (Claude's OSC 133 turn marks, **codex's repaint traffic** —
+cursor save/restore, DECSTBM scroll region, the CPR polling that breaks the naive fix — Gemini's
+SGR rewrites, a plain shell) into its own pane, stranding each one and requiring all of them back
+at the end of their conversation, across a full 8-pane grid. `MOGGING_APPSCROLL` holds the overlay
+contract in **both** scrollbar systems (Chromium honours `scrollbar-color` when set and then
+ignores the `::-webkit-*` pseudos — a rule written in only one is one Electron bump from a
+permanently visible bar), and asserts a pane never grows a second bar. Zero new dependencies;
+both perf budgets unmoved.
+
 ## Cross-cutting from day one
 Sentry crash reporting · a hard perf budget for N panes · CI that builds + signs for
 win-x64 / mac-arm64 / mac-x64.
