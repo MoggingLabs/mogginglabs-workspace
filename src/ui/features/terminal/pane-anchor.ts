@@ -101,6 +101,15 @@ export function createPaneAnchor(term: Terminal, body: HTMLElement): PaneAnchorH
     }
   }
   const pin = (): void => {
+    // The hot path is a pane that is already where it should be: sixteen agents streaming,
+    // every one of them at the bottom and following. Scheduling a frame callback to discover
+    // that costs a rAF per pane per render — thousands of no-op callbacks a second across a
+    // full grid, on the exact path the perception budget (docs/07) is measured on. The two
+    // buffer reads that answer "is there anything to do?" are cheaper than the callback that
+    // would answer it later, so ask now and schedule nothing.
+    // (A pane the user has scrolled away from has nothing to do either: repin would find
+    // `follow` false and return. Both no-op cases are answered here, before the frame.)
+    if (!follow || atBottom()) return
     if (!raf) raf = requestAnimationFrame(repin)
   }
 
