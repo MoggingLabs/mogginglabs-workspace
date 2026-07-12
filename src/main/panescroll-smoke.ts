@@ -59,18 +59,23 @@ const SCRIPT = `(async () => {
   // the gate performs it. This is exactly why the anchor may not decide from scroll EVENTS
   // alone — the native path can move the user without emitting one.
   const SETTLE_MS = 600 // > the anchor's gesture window: the gesture must come to rest
+  // A wheel over a terminal is TWO things, and a gate can only ever dispatch the first:
+  //   1. the EVENT, which the pane's anchor observes (a human is driving) — dispatched here
+  //      onto the real element, so the listener that runs is the shipped one; and
+  //   2. the resulting SCROLL, which no dispatched event can produce: untrusted events get no
+  //      default action, and xterm 6 refuses them outright (verified against every candidate
+  //      element — .xterm, .xterm-screen, .xterm-viewport, .xterm-scrollable-element — none
+  //      move the buffer). Under xterm 5 this half was the viewport div's scrollTop; xterm 6
+  //      retired that for its own scrollable element, so the gate performs the engine's own
+  //      action instead: scroll the buffer by the lines that delta is worth.
+  // What is under test is the ANCHOR and the BAR — does a human leaving the bottom detach the
+  // pane, and does the agent's next output then leave them where they stopped — not xterm's
+  // wheel plumbing.
   const wheel = (p, dy) => {
-    // xterm 6 retired the natively-scrollable viewport for its own scrollable element, so a
-    // wheel is now handled in JS — dispatching the event drives the real path, and there is
-    // no scrollTop to push. (xterm 5 was the reverse: the wheel's DEFAULT ACTION scrolled a
-    // real div and the gate had to perform it, because a dispatched event is untrusted.) The
-    // legacy fallback stays for the older element, so the gate does not silently stop
-    // exercising anything if the engine moves again.
-    const el = q(p, '.xterm-scrollable-element') || q(p, '.xterm-viewport')
+    const el = q(p, '.xterm-scrollable-element') || q(p, '.xterm-viewport') || q(p, '.xterm')
     el.dispatchEvent(new WheelEvent('wheel', { deltaY: dy, deltaMode: 0, bubbles: true, cancelable: true }))
-    if (el.scrollHeight > el.clientHeight + 1) {
-      el.scrollTop = Math.max(0, Math.min(el.scrollHeight, el.scrollTop + dy))
-    }
+    const cell = Math.max(1, el.getBoundingClientRect().height / Math.max(1, p.rows()))
+    p.term.scrollLines(Math.round(dy / cell)) // the default action the engine would have run
   }
   const opacity = (p) => Number(getComputedStyle(q(p, '.pane-slider')).opacity)
 
