@@ -86,6 +86,12 @@ export function createPaneScrollbar(term: Terminal, body: HTMLElement, anchor: P
 
   const sync = (): void => {
     raf = 0
+    // xterm 6 buffers terminal row paints while DEC synchronized output mode
+    // (CSI ? 2026 h) is active, but buffer/viewport scroll events still escape
+    // immediately. Do not let our app-owned slider reveal that intermediate
+    // geometry. ESU always requests a terminal refresh, whose onRender schedules
+    // one final sync against the completed frame.
+    if (term.modes.synchronizedOutputMode) return
     const buf = term.buffer.active
     const max = buf.baseY
     if (max <= 0) {
@@ -123,8 +129,18 @@ export function createPaneScrollbar(term: Terminal, body: HTMLElement, anchor: P
     if (!raf) raf = requestAnimationFrame(sync)
   }
 
-  /** Light the bar for the scroll that just happened, then fade it back out. */
+  /** Light the bar for the scroll that just happened, then fade it back out.
+   *
+   *  Only for a scroll through HISTORY. A pane at the bottom of a streaming agent emits an
+   *  onScroll for every line that arrives — flashing on those would leave the bar lit for as
+   *  long as the agent is talking, which is the opposite of an overlay bar, and it would also
+   *  paint into frames the terminal is holding atomic (DEC synchronized output): a TUI's
+   *  repaint would tear around a bar sliding in. Nothing is being indicated at the bottom
+   *  anyway — you are already where the newest output is. */
   const flash = (): void => {
+    const buf = term.buffer.active
+    if (buf.viewportY >= buf.baseY) return // at the newest line: nothing to say
+    if (term.modes.synchronizedOutputMode) return // never paint into a held frame
     slider.classList.add('is-active')
     if (activeTimer) clearTimeout(activeTimer)
     activeTimer = setTimeout(() => {

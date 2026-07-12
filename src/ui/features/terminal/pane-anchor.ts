@@ -88,6 +88,13 @@ export function createPaneAnchor(term: Terminal, body: HTMLElement): PaneAnchorH
     // wheel would do nothing at all. Yield for the window; the gesture's own scroll then
     // decides whether we are still following.
     if (Date.now() <= gestureUntil) return
+    // Never move the viewport mid-frame. xterm 6 holds row paints while DEC synchronized
+    // output (CSI ? 2026 h) is active so a TUI's repaint lands as ONE atomic frame — but a
+    // scroll still takes effect immediately, so re-pinning here would tear the very frame
+    // the mode exists to protect: the pane would show a half-drawn codex repaint. The ESU
+    // that ends the frame always requests a refresh, and its onRender calls us right back —
+    // against the completed frame. (FLICKER's pixel-atomicity check caught this.)
+    if (term.modes.synchronizedOutputMode) return
     if (follow && !atBottom()) {
       dbg.repins++
       term.scrollToBottom()

@@ -89,12 +89,39 @@ background; `src/main/updater.ts` pushes the lifecycle
 (`checking → available → downloading(%) → ready → error`) to the renderer over
 `UpdateChannels.state`.
 
-What the user sees (6/06): a quiet dot in the titlebar while a build downloads,
-then exactly **one** toast when it's ready — "vX.Y.Z is ready — **Restart now**
-/ **Later**". Restart now calls `quitAndInstall`; Later is a first-class choice
-(the build installs on next quit via `autoInstallOnAppQuit`, and nothing
-re-toasts that version this session — no snooze-nag). Update metadata never
-enters telemetry — booleans only (`update.ready`/`restart`/`later`), ADR 0005.
+What the user sees: a row pinned to the **bottom of the workspaces rail**, which
+walks the lifecycle — "Update is available" → "Downloading… 42%" (the row fills
+as a progress track) → "**Restart to update**". It is hidden entirely while idle.
+Alongside it: a quiet dot in the titlebar while a build downloads, and exactly
+**one** toast when it's ready ("vX.Y.Z is ready — **Restart now** / **Later**").
+Restart calls `quitAndInstall(true, true)` — silent reinstall, then relaunch.
+Later is a first-class choice: the build installs on next quit via
+`autoInstallOnAppQuit`, nothing re-toasts that version this session (no
+snooze-nag), and the rail row stays put as the way back. Nothing is lost across
+the restart — terminal sessions live in the detached daemon (ADR 0006), which
+survives the swap and hands the panes back. Update metadata never enters
+telemetry — booleans only (`update.ready`/`restart`/`later`), ADR 0005.
+
+### `artifactName` MUST NOT contain a space
+
+This is load-bearing, and it silently broke every update from v0.3.0 to v0.9.0.
+
+`productName` is "MoggingLabs Workspace". With `artifactName: ${productName}-…`
+three different names existed for one file: the build wrote `MoggingLabs
+Workspace-x-win-x64.exe`, electron-updater derives its download URL by replacing
+spaces with **hyphens** (`GitHubProvider`, "for backward compatibility"), and
+GitHub's asset upload rewrites the space to a **dot**. So `latest.yml` pointed at
+`MoggingLabs-Workspace-…` while the asset was `MoggingLabs.Workspace-…`, and
+every download — and every `.blockmap`, so every differential update — 404'd. The
+only symptom was an `error` phase in an app nobody could see.
+
+The names are now hard-coded space-free (`MoggingLabs-Workspace-${version}-…`),
+and the Release workflow's **"Verify the update feed resolves"** step cross-checks
+every `url:` in `latest*.yml` against the release's actual asset list, failing the
+release rather than shipping a dead feed. Do not reintroduce `${productName}`
+here, and avoid renaming artifacts at all: electron-updater finds the *previous*
+blockmap by string-substituting the version into the current name, so any rename
+silently downgrades that one update to a full download.
 
 Practical dependency: mac auto-update is inert until the app is signed +
 notarized (Squirrel.Mac refuses unsigned updates) — see the matrix above. Dev

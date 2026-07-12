@@ -34,3 +34,11 @@ export function onClaimsChange(cb: () => void): () => void {
   subs.add(cb)
   return () => subs.delete(cb)
 }
+
+/** Dev/smoke fixture seam. Production builds compile this guard to a no-op; real
+ *  claims still enter exclusively through the daemon-owned ledger push above. */
+export function setClaimsForDev(next: Claim[]): void {
+  if (!import.meta.env.DEV) return
+  claims = [...next]
+  for (const cb of subs) cb()
+}

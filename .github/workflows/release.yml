@@ -165,13 +165,59 @@ jobs:
           # suppresses picking up stray keychain identities.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
+      # *.blockmap (unqualified) so the mac zip's blockmap rides along too — the old glob
+      # only matched *.exe.blockmap, so macOS could never download differentially.
       - name: Upload artifacts to the release
         shell: bash
         run: |
           TAG="${{ inputs.tag || github.ref_name }}"
           shopt -s nullglob
-          FILES=(dist/*.exe dist/*.exe.blockmap dist/*.dmg dist/*.zip dist/*.AppImage dist/*.deb dist/latest*.yml)
+          FILES=(dist/*.exe dist/*.dmg dist/*.zip dist/*.AppImage dist/*.deb dist/*.blockmap dist/latest*.yml)
           gh release upload "$TAG" "${FILES[@]}" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # THE GATE THAT WAS MISSING. Every latest*.yml names the file electron-updater will
+      # fetch; if that name is not an asset on the release, every update 404s — silently,
+      # because the only symptom is an `error` phase in an app we cannot see.
+      #
+      # That is exactly what shipped from v0.3.0 to v0.9.0: productName carries a space, so
+      # the built file was "MoggingLabs Workspace-x-win-x64.exe", the yml pointed at the
+      # hyphenated name electron-updater derives, and GitHub stored the upload with the space
+      # turned into a DOT. Three names, no update. artifactName is now space-free — this step
+      # makes sure it STAYS that way, and fails the release instead of shipping a dead feed.
+      - name: Verify the update feed resolves
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          gh release view "$TAG" --json assets -q '.assets[].name' | tr -d '\r' | sort > assets.txt
+          echo "── assets on $TAG:"; sed 's/^/    /' assets.txt
+
+          # every `url:` under files:, plus the legacy top-level `path:` — the names
+          # electron-updater will actually request.
+          cat dist/latest*.yml \
+            | grep -E '^[[:space:]]*(-[[:space:]]*url|path):' \
+            | sed -E 's/^[^:]*:[[:space:]]*//' | tr -d '\r' | sort -u > wanted.txt
+
+          rc=0
+          for name in $(cat wanted.txt); do
+            if grep -qxF "$name" assets.txt; then
+              echo "  ok      feed -> $name"
+            else
+              echo "  MISSING feed -> $name   (electron-updater will 404 on this)"
+              rc=1
+            fi
+            # The blockmap is derived as <installer-url>.blockmap and is never listed in the
+            # yml. Absent, updates still work — they just silently lose differential download,
+            # so this warns rather than fails.
+            case "$name" in
+              *.exe|*.zip)
+                grep -qxF "$name.blockmap" assets.txt \
+                  && echo "  ok      delta -> $name.blockmap" \
+                  || echo "  WARN    no $name.blockmap — updates fall back to a FULL download" ;;
+            esac
+          done
+          exit $rc
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

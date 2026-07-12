@@ -8,11 +8,14 @@ import {
   isSplit,
   leafCount,
   leafIds,
+  MIN_PANE_WIDTH_PX,
+  minimumLayoutWidth,
   moveLeaf,
   moveLeafToRootEdge,
   nodeAtPath,
   normalize,
   removeLeaf,
+  resizeSplitWeights,
   serializeTree,
   splitLine,
   swapLeaves,
@@ -24,13 +27,11 @@ import {
   type SplitDir
 } from './layout-tree'
 
-export { parseTree, leafIds } from './layout-tree'
+export { parseTree, leafIds, MIN_PANE_WIDTH_PX, minimumLayoutWidth } from './layout-tree'
 export type { LayoutTreeNode, SplitDir } from './layout-tree'
 
 const GUTTER = 2 // px between panes — with each pane's 1px border: a 4px seam, matching the app edge
-const MIN_PANE_PX = 110 // resize floor — the bar's irreducible chrome (state dot + ⋯ + × +
-// tightened gaps + padding, see global.css's collapse ladder) needs 108px; below that the
-// × clips off the pane. A pane can be small, never crushed past its own controls.
+const MIN_PANE_HEIGHT_PX = 110 // retain the existing direct vertical-gutter drag floor
 const DRAG_THRESHOLD = 6 // px of header movement before a click becomes a pane drag
 const ROOT_EDGE_PX = 14 // workspace-edge drop band ("make this a full column/row here")
 
@@ -59,6 +60,7 @@ type DropZone =
  */
 export class GridLayout {
   private readonly grid: HTMLElement
+  private readonly scrollHost: HTMLElement
   private root: LayoutTreeNode = { id: 1 }
   private expandedId: number | null = null
   private expandMode: ExpandMode | null = null
@@ -70,6 +72,9 @@ export class GridLayout {
   private gutterSpecs: GutterSpec[] = []
   private readonly resizeObs: ResizeObserver
   private dropHint: HTMLElement | null = null
+  private readonly followExpandedViewport = (): void => {
+    if (this.expandedId != null && this.expandMode !== 'col') this.reflow()
+  }
 
   /** Fired after any user-visible layout mutation (apply/split/close/resize/move) —
    *  the workspace controller persists the serialized tree through it. Assigned
@@ -93,6 +98,9 @@ export class GridLayout {
      *  renderer object owns. Omitted = the 1-pane default (a fresh workspace). */
     initial?: LayoutTreeNode
   ) {
+    this.scrollHost = host
+    this.scrollHost.classList.add('layout-scroll-host')
+    this.scrollHost.addEventListener('scroll', this.followExpandedViewport, { passive: true })
     this.grid = document.createElement('div')
     this.grid.className = 'layout-grid'
     host.append(this.grid)
@@ -128,6 +136,10 @@ export class GridLayout {
     // 0→W flip when a hidden workspace is switched to (display:none reports 0).
     this.resizeObs = new ResizeObserver(() => this.reflow())
     this.resizeObs.observe(this.grid)
+    // Under horizontal overflow the grid is pinned at its recursive minimum and may
+    // not resize when the rail, a dock or the window changes. The viewport still does,
+    // and full/row expansion is sized to that viewport, so observe both boxes.
+    this.resizeObs.observe(this.scrollHost)
     if (initial) this.applyTree(initial)
     else this.apply(1)
   }
@@ -281,21 +293,28 @@ export class GridLayout {
   /** Geometry-only pass: recompute rects from the tree and restyle in place (drag
    *  moves, container resizes). No DOM churn, no republish. */
   private reflow(): void {
-    const W = this.grid.clientWidth
+    // The grid is the inner canvas. Its flex host may become narrower (window resize,
+    // rail expansion or either right dock), but the canvas keeps the recursive tree
+    // requirement and the host scrolls horizontally instead of crushing leaf headers.
+    const requiredWidth = minimumLayoutWidth(this.root, GUTTER, MIN_PANE_WIDTH_PX)
+    this.grid.style.minWidth = `${requiredWidth}px`
+    const W = Math.max(this.grid.clientWidth, requiredWidth)
     const H = this.grid.clientHeight
-    const layout = computeLayout(this.root, { x: 0, y: 0, w: W, h: H }, GUTTER)
+    const layout = computeLayout(this.root, { x: 0, y: 0, w: W, h: H }, GUTTER, MIN_PANE_WIDTH_PX)
     this.leafRects = layout.leaves
     this.splitRects = layout.splits
     this.gutterSpecs = layout.gutters
 
     const target = this.expandedId != null ? layout.leaves.get(this.expandedId) : undefined
+    const viewportWidth = Math.min(W, Math.max(MIN_PANE_WIDTH_PX, this.scrollHost.clientWidth))
+    const viewportX = Math.min(Math.max(0, this.scrollHost.scrollLeft), Math.max(0, W - viewportWidth))
     for (const [id, rect] of layout.leaves) {
       const el = this.slotEls.get(id)
       if (!el) continue
       let r = rect
       let covered = false
       if (this.expandedId != null && target) {
-        if (id === this.expandedId) r = this.expandedRect(target, W, H)
+        if (id === this.expandedId) r = this.expandedRect(target, viewportX, viewportWidth, H)
         else covered = this.coveredByExpand(target, rect)
       }
       el.classList.toggle('covered', covered)
@@ -307,10 +326,10 @@ export class GridLayout {
     }
   }
 
-  private expandedRect(target: Rect, W: number, H: number): Rect {
+  private expandedRect(target: Rect, viewportX: number, viewportWidth: number, H: number): Rect {
     if (this.expandMode === 'col') return { x: target.x, y: 0, w: target.w, h: H }
-    if (this.expandMode === 'row') return { x: 0, y: target.y, w: W, h: target.h }
-    return { x: 0, y: 0, w: W, h: H }
+    if (this.expandMode === 'row') return { x: viewportX, y: target.y, w: viewportWidth, h: target.h }
+    return { x: viewportX, y: 0, w: viewportWidth, h: H }
   }
 
   /** Does the expanded pane's new footprint hide this sibling? Overlap by RECT, not
@@ -456,13 +475,28 @@ export class GridLayout {
     const a0 = split.sizes[index - 1]!
     const b0 = split.sizes[index]!
     const pair = a0 + b0
-    const minFr = Math.min(MIN_PANE_PX / innerPx, pair / 2)
+    const startSizes = split.sizes.slice()
+    if (!(pair > 0)) return
+
+    // Capture the RENDERED pixel geometry. A constrained water-fill can make stored
+    // weights differ from visible fractions (for example, a 10% child clamped at
+    // 132px). Dragging must still move only the two children touching this seam: keep
+    // every sibling span and the pair's outer boundary fixed, change the adjacent
+    // pixels, then persist that exact whole-line geometry as fractions.
+    const childMinimums = horizontal
+      ? split.children.map((child) => minimumLayoutWidth(child, GUTTER, MIN_PANE_WIDTH_PX))
+      : []
     const move = (ev: MouseEvent): void => {
       const pos = horizontal ? ev.clientX : ev.clientY
-      const delta = (pos - startPos) / innerPx
-      const na = Math.min(Math.max(a0 + delta, minFr), pair - minFr)
-      split.sizes[index - 1] = na
-      split.sizes[index] = pair - na
+      if (horizontal) {
+        split.sizes = resizeSplitWeights(innerPx, startSizes, childMinimums, index, pos - startPos)
+      } else {
+        const minFr = Math.min(MIN_PANE_HEIGHT_PX / innerPx, pair / 2)
+        const delta = (pos - startPos) / innerPx
+        const na = Math.min(Math.max(a0 + delta, minFr), pair - minFr)
+        split.sizes[index - 1] = na
+        split.sizes[index] = pair - na
+      }
       this.reflow()
     }
     const up = (): void => {
@@ -630,8 +664,10 @@ export class GridLayout {
   /** Tear down: clear this source's slots (terminal disposes its panes) + remove the grid. */
   dispose(): void {
     this.resizeObs.disconnect()
+    this.scrollHost.removeEventListener('scroll', this.followExpandedViewport)
     clearSlots(this.source)
     this.grid.remove()
+    this.scrollHost.classList.remove('layout-scroll-host')
   }
 }
 

@@ -60,9 +60,17 @@ const SCRIPT = `(async () => {
   // alone — the native path can move the user without emitting one.
   const SETTLE_MS = 600 // > the anchor's gesture window: the gesture must come to rest
   const wheel = (p, dy) => {
-    const vp = q(p, '.xterm-viewport')
-    vp.dispatchEvent(new WheelEvent('wheel', { deltaY: dy, deltaMode: 0, bubbles: true, cancelable: true }))
-    vp.scrollTop = Math.max(0, Math.min(vp.scrollHeight, vp.scrollTop + dy))
+    // xterm 6 retired the natively-scrollable viewport for its own scrollable element, so a
+    // wheel is now handled in JS — dispatching the event drives the real path, and there is
+    // no scrollTop to push. (xterm 5 was the reverse: the wheel's DEFAULT ACTION scrolled a
+    // real div and the gate had to perform it, because a dispatched event is untrusted.) The
+    // legacy fallback stays for the older element, so the gate does not silently stop
+    // exercising anything if the engine moves again.
+    const el = q(p, '.xterm-scrollable-element') || q(p, '.xterm-viewport')
+    el.dispatchEvent(new WheelEvent('wheel', { deltaY: dy, deltaMode: 0, bubbles: true, cancelable: true }))
+    if (el.scrollHeight > el.clientHeight + 1) {
+      el.scrollTop = Math.max(0, Math.min(el.scrollHeight, el.scrollTop + dy))
+    }
   }
   const opacity = (p) => Number(getComputedStyle(q(p, '.pane-slider')).opacity)
 
