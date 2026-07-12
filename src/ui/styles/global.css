@@ -2591,6 +2591,12 @@ button {
   width: 0;
   height: 0;
 }
+/* xterm 6 moved its native scrollbar out of .xterm-viewport and into a direct
+   child of .xterm-scrollable-element. The pane slider below remains the single
+   scroll affordance, so retire the new implementation as well. */
+.pane-body .xterm-scrollable-element > .scrollbar {
+  display: none !important;
+}
 .pane-slider {
   position: absolute;
   top: var(--sp-2);
