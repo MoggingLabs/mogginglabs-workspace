@@ -6662,6 +6662,40 @@ body.pane-dragging * {
   padding-bottom: var(--sp-2);
 }
 
+/* ── Settings § About: the update status row ────────────────────────────────────
+   The version and the thing that can change it, on one line. */
+.update-status-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+.update-status-main {
+  min-width: 0; /* so a long status line ellipsizes instead of shoving the buttons off */
+}
+.update-version {
+  display: block;
+  color: var(--text-hi);
+  font-size: var(--fs-16);
+  font-weight: var(--fw-semibold);
+}
+.update-status {
+  margin-top: var(--sp-1);
+}
+/* Last-checked is the quietest line on the card and the most important one: it is the only
+   thing that can tell "nothing to report" apart from "this has been broken for nine
+   releases". Quiet, but never absent. */
+.update-checked {
+  margin-top: var(--sp-1);
+}
+.update-status-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: none;
+}
+
 /* ── Auto-update UX: the rail's update row ──────────────────────────────────────
    Pinned to the bottom of the workspaces rail (#workspace-tabs is flex:1, so this
    sibling sits on the floor). Hidden entirely until there is something to say —

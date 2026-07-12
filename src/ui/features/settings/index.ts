@@ -20,6 +20,7 @@ import { createClipboardSection } from './clipboard'
 import { createProfilesHostsSection } from './profiles-hosts'
 import { createProvidersSection } from './providers'
 import { createThemePicker } from './theme-picker'
+import { createUpdatesSection } from './updates'
 import { createUsageSection } from './usage'
 import { createWebhooksSection } from './webhooks'
 import { createIntegrationsSection, enterIntegrations } from './integrations'
@@ -190,18 +191,9 @@ export const settingsFeature: UiFeature = {
     const providers = createProvidersSection()
 
     // ── The page: [section nav | scrollable content column] ──────────────────
-    const version = el('span', { class: 'settings-about-version', text: '' })
-    try {
-      void getBridge()
-        .invoke(TelemetryChannels.getConfig)
-        .then((cfg) => {
-          const release = (cfg as TelemetryRendererConfig | null)?.release
-          if (release) version.textContent = `Version ${release}`
-        })
-        .catch(() => undefined)
-    } catch {
-      /* no bridge (tests) */
-    }
+    // The version used to be read out of the telemetry config's `release` field — which meant
+    // the number went blank for anyone with telemetry off. It now comes from the updater's own
+    // state (app.getVersion()), next to the control that can change it.
 
     /** A tab: a HERO head (the tab's icon in an accent chip + one h2 SectionHeader
      *  saying what lives here, over a hairline), then Cards. The `data-section` hook
@@ -411,7 +403,15 @@ export const settingsFeature: UiFeature = {
         // 8.5/01: the smallest live customer of the layout primitives — Card +
         // SectionHeader + TwoColumn + FieldGroup, so none of them can rot
         // unexercised. Every other surface adopts them in 02–08.
-        el: section('about', 'About', 'What this app is, and what it refuses to be.', [
+        // Updates live HERE, not in a section of their own. The convention for apps this
+        // size is that About IS the update surface — Obsidian, GitHub Desktop, Figma, and
+        // Chrome (whose About page literally performs the check). A dedicated pane is what
+        // Docker and JetBrains need because their updates have components, channels and
+        // restart semantics; ours has four controls and would rattle around in an empty tab.
+        // It goes FIRST: "what am I running, and is there a newer one" is the question people
+        // actually open this page to answer.
+        el: section('about', 'About', 'What version you are running, what this app is, and what it refuses to be.', [
+          createUpdatesSection(),
           Card(
             {
               header: SectionHeader({
@@ -421,15 +421,13 @@ export const settingsFeature: UiFeature = {
               })
             },
             [
-              TwoColumn(
-                { side: FieldGroup({ label: 'Version', hint: 'New builds download in the background — you choose when to restart.' }, version), sideAt: 'end', measure: false },
-                [
-                  el('p', {
-                    class: 'card-caption',
-                    text: 'Agents run as YOUR CLIs under YOUR login. The app orchestrates config the CLIs own; it never brokers, stores, or proxies a credential (ADR 0002). Terminal output, prompts, and code never leave this machine.'
-                  })
-                ]
-              )
+              // The Version row moved up into the Updates card, where the number sits next to
+              // the thing that can change it. Two places claiming to tell you what you are
+              // running is one place too many.
+              el('p', {
+                class: 'card-caption',
+                text: 'Agents run as YOUR CLIs under YOUR login. The app orchestrates config the CLIs own; it never brokers, stores, or proxies a credential (ADR 0002). Terminal output, prompts, and code never leave this machine.'
+              })
             ]
           )
         ])

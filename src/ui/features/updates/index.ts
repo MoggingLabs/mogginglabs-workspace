@@ -3,6 +3,7 @@ import { UpdateChannels, type UpdateState } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { showToast, el, icon } from '../../components'
 import { getTelemetry } from '../../core/telemetry'
+import { setCommands } from '../../core/commands/command-port'
 
 /**
  * Auto-update UX. The primary affordance is a button pinned to the BOTTOM of the
@@ -56,6 +57,18 @@ export const updatesFeature: UiFeature = {
       // 'available'/'downloading': the download is already in flight — the row is a
       // status, not a trigger. Clicking it does nothing rather than lying.
     })
+
+    // Every other desktop app puts "Check for Updates…" in the Help menu. This one has no
+    // menu on Windows/Linux ON PURPOSE (menu.ts: a live Ctrl+R would reload a workspace full
+    // of running agents), so the palette is where that verb belongs.
+    setCommands('updates', [
+      {
+        id: 'update:check',
+        title: 'Check for updates',
+        hint: 'Updates',
+        run: () => void bridge.invoke(UpdateChannels.check, undefined)
+      }
+    ])
 
     // Toast at most once per ready version per session.
     let toastedVersion: string | null = null
