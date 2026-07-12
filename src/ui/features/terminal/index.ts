@@ -1,7 +1,9 @@
 import type { PaneId } from '@contracts'
 import type { UiFeature } from '../../core/registry/feature-registry'
 import { onSlots } from '../../core/layout/slots'
+import { setPaneWriter } from '../../core/terminal/pane-input-port'
 import { TerminalPane } from './terminal-pane'
+import { terminalClient } from './terminal.client'
 import { initClaims } from './claims-store'
 
 export { TerminalPane } from './terminal-pane'
@@ -17,6 +19,10 @@ export const terminalFeature: UiFeature = {
   name: 'terminal',
   mount() {
     initClaims() // ownership-ledger mirror (4/02): push-fed, read by pane chips
+    // The one real writer behind `typeIntoPane` (11/06). Surfaces that hand the user
+    // something to run — the explorer today — type through the port, so neither feature
+    // imports the other. The port types; it cannot submit.
+    setPaneWriter((id, text) => terminalClient.write({ id, data: text }))
     const panes = new Map<PaneId, TerminalPane>()
     onSlots((slots) => {
       const wanted = new Set<PaneId>(slots.map((s) => s.id))

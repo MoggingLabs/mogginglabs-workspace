@@ -144,6 +144,40 @@ spacing drift grep **frozen at `--max 0`**. **Both perf budgets unmoved** — an
 unchanged `docs/05` is the freeze criterion. The sweep grew 52→**66 gates** (fourteen
 new). Design system: `docs/11`; per-OS numbers in `prompts/phase-8.5/README.md`.
 
+### Phase 11 — Files: the sidebar that watches your agents work ✅ (`prompts/phase-11/`)
+Sixteen agents can be writing into a workspace at once, and the app showed their
+**output** (terminals, blocks, attention) but never their **footprint**. This pack adds
+the **file explorer**: a right-side dock with the workspace's folder open in a
+virtualized, git-decorated tree that updates live as agents write, toggled from the
+**far right** of the app bar (`panel-right`, mirroring the rail's `panel-left` at the far
+left) or `Ctrl+Shift+E`.
+
+- **The custody stance is the whole design** — [ADR 0010](adr/0010-explorer-window-not-manager.md):
+  the explorer is a **window, not a manager**. v1 is read-only (browse · open · reveal ·
+  copy · send-to-pane); create/rename/delete/move and an in-app editor are **deferred with
+  rationale, not refused**. Opening delegates to the OS and the user's own tools (ADR 0002's
+  neutrality, extended to files). **We type; the user executes** — nothing ever presses
+  Enter in a pane.
+- **The tree**: one virtualized flat list wearing tree semantics (the VS Code shape,
+  clean-room), tree ARIA because rows virtualize, APG keyboard verbatim. **10k rows scroll
+  with 32 DOM rows and zero long frames.**
+- **The liveness law — watch what's visible, nothing else**: per-expanded-dir
+  non-recursive `fs.watch`, LRU-capped at 64 handles with a jittered poll fallback,
+  coalesced into batches. **A collapsed dir, a hidden window, and a closed explorer each
+  cost exactly zero** — measured, not asserted.
+- **The decorations add ZERO pollers**: `git/probe.ts` already ran `status --porcelain=v2`
+  every 2.5s and threw the file lines away; we parse what we already pay for. M/A/U/D/C on
+  files, colour-only propagation to folders (VS Code's `propagate`), ignore-dimming via
+  `check-ignore` (never our own `.gitignore` parser), and the **Changes lens** — the
+  changed-files view every orchestrator converged on, except it is the same tree, filtered.
+
+Zero new runtime dependencies (no tree, watcher, or icon library). Closed by the
+`MOGGING_FILESMILESTONE` milestone: a **real shell pane** writes into the workspace and the
+explorer shows it — decorated, live, actionable — with the budgets measured **on the
+composed surface** (16 panes + the explorer open + a write torrent: 142.8 avg fps, worst
+gap 25.1ms, heap 20MB). The sweep grew 76→**83 gates** (seven new). The book: `docs/16`;
+receipts + platform finds: `prompts/phase-11/REPORT.md`.
+
 ## Cross-cutting from day one
 Sentry crash reporting · a hard perf budget for N panes · CI that builds + signs for
 win-x64 / mac-arm64 / mac-x64.

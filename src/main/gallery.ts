@@ -1,6 +1,6 @@
 import { app, type BrowserWindow } from 'electron'
 import { execFile, execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, parse } from 'node:path'
 import { createWorktree } from '@backend/features/worktrees'
@@ -54,12 +54,66 @@ function makeShowcase(): string {
       for (const d of ['api', 'design-system', 'docs', 'infra', 'web-app']) mkdirSync(join(dir, d))
       mkdirSync(join(dir, 'web-app', '.git')) // earns the repo pill
       mkdirSync(join(dir, 'api', '.git'))
+      // 11/03: the EXPLORER lists files as well as folders (`fs:listDir` never does —
+      // it is dirs-only by contract), so the showcase grows leaves for the tree shot,
+      // and `web-app` gets children worth expanding into.
+      mkdirSync(join(dir, 'web-app', 'src'))
+      writeFileSync(join(dir, 'web-app', 'package.json'), '{}\n')
+      writeFileSync(join(dir, 'web-app', 'src', 'main.ts'), 'export {}\n')
+      writeFileSync(join(dir, 'README.md'), '# showcase\n')
       return dir
     } catch {
       /* not writable — try the next candidate */
     }
   }
   throw new Error('no writable showcase root')
+}
+
+/**
+ * 11/05: a REAL, deliberately dirty repo for the explorer shot — the decorations must be
+ * photographed, not mocked. Its own fixture rather than `makeShowcase()`: that tree carries
+ * FAKE `.git` directories (they earn the folder browser's repo pill), and a real `git init`
+ * over them would make git treat each as a nested repo and collapse the whole subtree into
+ * one untracked entry — no letters, no propagation, nothing worth shooting.
+ *
+ * Root-level path, for the same reason makeShowcase() is: the dock header renders the root,
+ * and a temp dir under C:\Users\<name> would print the operator's username into a committed
+ * screenshot.
+ */
+function makeShowcaseRepo(): string {
+  const candidates = [join(parse(tmpdir()).root, 'mogging-showcase-repo'), join(tmpdir(), 'mogging-showcase-repo')]
+  for (const dir of candidates) {
+    try {
+      rmSync(dir, { recursive: true, force: true })
+      mkdirSync(dir, { recursive: true })
+      git(dir, ['init'])
+      git(dir, ['symbolic-ref', 'HEAD', 'refs/heads/main'])
+      git(dir, ['config', 'user.email', 'gallery@mogging.test'])
+      git(dir, ['config', 'user.name', 'Gallery'])
+      git(dir, ['config', 'commit.gpgsign', 'false'])
+      for (const d of ['api', 'design-system', 'docs', 'web-app', 'web-app/src', 'build']) mkdirSync(join(dir, ...d.split('/')))
+      writeFileSync(join(dir, '.gitignore'), 'build/\n*.log\n')
+      writeFileSync(join(dir, 'README.md'), '# showcase\n')
+      writeFileSync(join(dir, 'design-system', 'tokens.css'), ':root {}\n')
+      writeFileSync(join(dir, 'docs', 'architecture.md'), '# architecture\n')
+      writeFileSync(join(dir, 'web-app', 'package.json'), '{}\n')
+      writeFileSync(join(dir, 'web-app', 'src', 'main.ts'), 'export {}\n')
+      writeFileSync(join(dir, 'build', 'bundle.js'), 'ignored\n')
+      writeFileSync(join(dir, 'debug.log'), 'ignored\n')
+      git(dir, ['add', '-A'])
+      git(dir, ['commit', '-m', 'baseline'])
+      // …then the agents get to work: modified, staged, untracked.
+      writeFileSync(join(dir, 'web-app', 'src', 'main.ts'), 'export const shipped = true\n') // M
+      writeFileSync(join(dir, 'design-system', 'tokens.css'), ':root { --brand: #fd8d03 }\n') // M
+      writeFileSync(join(dir, 'api', 'routes.ts'), 'export const routes = []\n')
+      git(dir, ['add', join('api', 'routes.ts')]) // A
+      writeFileSync(join(dir, 'docs', 'roadmap.md'), '# roadmap\n') // U
+      return dir
+    } catch {
+      /* not writable, or no git — try the next candidate */
+    }
+  }
+  throw new Error('no writable showcase repo root')
 }
 
 export function runGallery(win: BrowserWindow): void {
@@ -463,6 +517,97 @@ export function runGallery(win: BrowserWindow): void {
           await ES(`window.__mogging.browser.setProfile('preview')`)
           await sleep(400)
           await ES('window.__mogging.browser.toggle(false)')
+          await sleep(300)
+        })
+
+        // The explorer dock (11/03): the workspace's folder in a right sidebar, the
+        // far-right toggle lit. Staged on the SHOWCASE tree, not the active workspace's
+        // real cwd — the header renders the root path, and a temp dir under
+        // C:\Users\<name> would print the operator's username into a committed shot
+        // (the `openWizard({ cwd })` precedent). Both docks open in the second shot:
+        // the grid keeps its floor, and the dock order reads content | browser | explorer.
+        await part(`${tag}-explorer`, async () => {
+          // 11/05: shot on a REAL dirty repo, so the decorations in the frame are the ones
+          // the code actually computes — M/A/U letters, folder colour propagated up, the
+          // ignored build/ dimmed, and a truthful Changes count.
+          const showcase = makeShowcaseRepo()
+          await ES(`window.__mogging.explorer.toggle(true)`)
+          await sleep(400)
+          await ES(`window.__mogging.explorer.setRootForShot(${JSON.stringify(showcase)})`)
+          await sleep(600)
+          for (const d of ['web-app', 'design-system', 'docs']) {
+            await ES(`window.__mogging.explorer.expand(${JSON.stringify(join(showcase, d))})`)
+            await sleep(300)
+          }
+          await ES(`window.__mogging.explorer.expand(${JSON.stringify(join(showcase, 'web-app', 'src'))})`)
+          await sleep(1800) // the git tick lands + the check-ignore batches answer
+          await snap(`${tag}-explorer-dock`)
+          // 11/06: the house context menu, on a real row. Its FIRST customer is the
+          // explorer, but the primitive is feature-free — this shot is the component's
+          // gallery state as much as the explorer's.
+          await ES(`window.__mogging.explorer.menuFor(${JSON.stringify(join(showcase, 'web-app', 'src', 'main.ts'))})`)
+          await sleep(500)
+          await snap(`${tag}-explorer-context-menu`)
+          await ES(`document.querySelector('.ctx-menu')?.remove()`)
+          await sleep(200)
+          // The Changes lens: the same tree, filtered to what the agents touched.
+          await ES(`window.__mogging.explorer.setLens(true)`)
+          await sleep(900)
+          await snap(`${tag}-explorer-changes-lens`)
+          await ES(`window.__mogging.explorer.setLens(false)`)
+          await sleep(600)
+          await ES('window.__mogging.browser.toggle(true)')
+          await sleep(700)
+          await snap(`${tag}-explorer-both-docks`)
+          await ES('window.__mogging.browser.toggle(false)')
+          await sleep(300)
+
+          // The states a tree spends most of its life NOT in — and which therefore never
+          // get looked at unless the gallery stages them. A REFUSAL row (a folder the OS
+          // will not open) and the no-folder EMPTY STATE.
+          const locked = join(parse(tmpdir()).root, 'mogging-showcase-locked')
+          try {
+            rmSync(locked, { recursive: true, force: true })
+            mkdirSync(join(locked, 'unreadable'), { recursive: true })
+            if (process.platform === 'win32') {
+              execFileSync('icacls', [join(locked, 'unreadable'), '/deny', `${process.env.USERNAME}:(RX)`], {
+                stdio: 'ignore',
+                windowsHide: true
+              })
+            } else {
+              chmodSync(join(locked, 'unreadable'), 0o000)
+            }
+            writeFileSync(join(locked, 'readable.txt'), 'fine\n')
+            await ES(`window.__mogging.explorer.setRootForShot(${JSON.stringify(locked)})`)
+            await sleep(600)
+            await ES(`window.__mogging.explorer.expand(${JSON.stringify(join(locked, 'unreadable'))})`)
+            await sleep(800)
+            await snap(`${tag}-explorer-refusal-row`)
+          } catch {
+            errors.push(`${tag}-explorer-refusal-row: could not build the denied folder`)
+          } finally {
+            try {
+              if (process.platform === 'win32')
+                execFileSync('icacls', [join(locked, 'unreadable'), '/remove:d', String(process.env.USERNAME)], {
+                  stdio: 'ignore',
+                  windowsHide: true
+                })
+              else chmodSync(join(locked, 'unreadable'), 0o700)
+              rmSync(locked, { recursive: true, force: true })
+            } catch {
+              /* best effort */
+            }
+          }
+
+          // The no-folder EmptyState: a workspace started without a folder has nothing to
+          // show, and says so — it does not pretend to be an empty directory.
+          await ES(`window.__mogging.workspace.create({ name: 'No folder' })`)
+          await sleep(1500)
+          await snap(`${tag}-explorer-no-folder`)
+          await ES(`window.__mogging.workspace.switchByIndex(0)`)
+          await sleep(800)
+
+          await ES(`window.__mogging.explorer.toggle(false)`)
           await sleep(300)
         })
 

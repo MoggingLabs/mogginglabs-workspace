@@ -56,6 +56,7 @@ export const SHORTCUTS: ShortcutGroup[] = [
     rows: [
       { keys: 'Ctrl+Shift+B', label: 'Toggle the workspace rail' },
       { keys: 'Ctrl+Shift+U', label: 'Toggle the browser dock' },
+      { keys: 'Ctrl+Shift+E', label: 'Toggle the file explorer' },
       { keys: '?', label: 'Show this shortcuts sheet' }
     ]
   }

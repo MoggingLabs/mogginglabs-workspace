@@ -3,6 +3,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import {
+  EXPLORER_DRAG_TYPE,
   WorktreeChannels,
   type ContextUsage,
   type GitStatus,
@@ -695,26 +696,31 @@ export class TerminalPane {
     // Only react to a drag that actually carries files. Dragging selected TEXT from
     // another app also fires these events, and must not put up a "drop a file" card.
     const hasFiles = (e: DragEvent): boolean => !!e.dataTransfer?.types.includes('Files')
+    // …or a row dragged out of OUR explorer (11/06). It is recognised by a private
+    // dataTransfer type, NEVER by text/plain: a drag of arbitrary text from another app
+    // must never type itself into a terminal, and only our own marker can say otherwise.
+    const hasOurPath = (e: DragEvent): boolean => !!e.dataTransfer?.types.includes(EXPLORER_DRAG_TYPE)
+    const accepts = (e: DragEvent): boolean => hasFiles(e) || hasOurPath(e)
 
     body.addEventListener('dragenter', (e) => {
-      if (!hasFiles(e)) return
+      if (!accepts(e)) return
       e.preventDefault()
       depth++
-      show(e.dataTransfer?.items.length ?? 1)
+      show(hasOurPath(e) ? 1 : (e.dataTransfer?.items.length ?? 1))
     })
     body.addEventListener('dragover', (e) => {
-      if (!hasFiles(e)) return
+      if (!accepts(e)) return
       e.preventDefault() // without this the drop event never fires
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
       // Self-heal: dragover fires continuously while the cursor is inside, so however the
       // counter got out of step, the overlay comes back rather than staying silently off.
       if (!visible) {
         depth = Math.max(depth, 1)
-        show(e.dataTransfer?.items.length ?? 1)
+        show(hasOurPath(e) ? 1 : (e.dataTransfer?.items.length ?? 1))
       }
     })
     body.addEventListener('dragleave', (e) => {
-      if (!hasFiles(e)) return
+      if (!accepts(e)) return
       // The COUNTER is authoritative, not `relatedTarget`. dragleave fires each time the
       // cursor crosses into one of xterm's nested canvas/helper layers, and Chromium does
       // not reliably name where the cursor went — trusting relatedTarget here made the
@@ -723,9 +729,20 @@ export class TerminalPane {
       if (depth === 0) hide()
     })
     body.addEventListener('drop', (e) => {
-      if (!hasFiles(e)) return
+      if (!accepts(e)) return
       e.preventDefault()
       hide()
+      if (hasOurPath(e)) {
+        // The explorer already quoted it for this machine's shell, and the quoter strips
+        // control characters — so this cannot carry a newline, and therefore cannot press
+        // Enter. Typed at the cursor, padded like a dropped file. Nothing runs.
+        const text = e.dataTransfer?.getData('text/plain') ?? ''
+        if (text) {
+          terminalClient.write({ id: this.id, data: ' ' + text + ' ' })
+          this.term.focus()
+        }
+        return
+      }
       void this.insertDroppedPaths(Array.from(e.dataTransfer?.files ?? []))
     })
     // A drag abandoned with Esc, or ended outside the window, fires neither dragleave nor

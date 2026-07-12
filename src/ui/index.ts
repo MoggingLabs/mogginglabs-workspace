@@ -19,6 +19,8 @@ import { browserFeature } from './features/browser'
 import { updatesFeature } from './features/updates'
 import { usageFeature } from './features/usage'
 import { shortcutsFeature } from './features/shortcuts'
+import { explorerFeature } from './features/explorer'
+import { filetreeDevFeature } from './features/filetree-dev'
 
 export { getTelemetry, setTelemetry } from './core/telemetry'
 
@@ -53,5 +55,9 @@ export function start(): void {
   registerFeature(updatesFeature) // auto-update UX: downloading dot + one-click restart toast (6/06)
   registerFeature(usageFeature) // usage glance: titlebar two-bar gauge + popover (Phase-7/03)
   registerFeature(shortcutsFeature) // ? opens the keyboard-shortcuts sheet (UX audit KB-01)
+  // AFTER browser, deliberately: each dock appends itself into #main, so registration
+  // order IS the left→right dock order — #content | .browser-dock | .explorer-dock (11/03).
+  registerFeature(explorerFeature) // right-side file explorer: the workspace's folder, read-only (Phase-11/03)
+  registerFeature(filetreeDevFeature) // DEV-only file-tree harness for the FILETREE smoke (11/02); no-op in prod
   mountFeatures(shell)
 }

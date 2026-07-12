@@ -127,11 +127,42 @@ export const FsChannels = {
   home: 'fs:home' // -> string  (where the folder browser opens before a cwd exists)
 } as const
 
+export const ExplorerChannels = {
+  // The file explorer's read surface (ADR 0010: a window, not a manager). READ-ONLY
+  // BY CONSTRUCTION: no write verb exists here to typecheck against.
+  list: 'explorer:list', // (ExplorerListRequest) -> ExplorerResult — one level, files + dirs, typed refusals
+  // Liveness (ADR 0010.d) — defined in 11/01, IMPLEMENTED in 11/04:
+  watch: 'explorer:watch', // (ExplorerWatchRequest) -> void — the CURRENT expanded set, whole and idempotent
+  unwatch: 'explorer:unwatch', // renderer -> main: drop every watcher (explorer closed / workspace switched)
+  changed: 'explorer:changed', // main -> renderer: ExplorerChangedEvent (stale dirs, coalesced)
+  stats: 'explorer:stats', // -> ExplorerWatchStats (live handle + poll counts; COUNTS only, never a path)
+  // Dock CHROME state (11/03), persisted in the app's own KV — the `browser.width`
+  // precedent. NOT a write verb in ADR 0010's sense: these reach the settings store,
+  // never a mutating fs API on the user's files. The read-only custody stance holds.
+  init: 'explorer:init', // -> ExplorerDockInit (open + width + showHidden, read before first paint)
+  setOpen: 'explorer:setOpen', // renderer -> main: { open } (persists explorer.open)
+  setWidth: 'explorer:setWidth', // renderer -> main: { width } (persists explorer.width; renderer debounces)
+  setShowHidden: 'explorer:setShowHidden', // renderer -> main: { showHidden } (persists explorer.showHidden)
+  // Phase-11/06 — DELEGATION, not execution. These hand a path to the OS and step back;
+  // there is STILL no verb here that writes, renames, moves, deletes, or runs anything.
+  root: 'explorer:root', // renderer -> main: (path) the folder on screen — the ACTION GUARD's boundary
+  open: 'explorer:open', // (path) -> ExplorerActionResult — shell.openPath: the user's own default app
+  reveal: 'explorer:reveal' // (path) -> ExplorerActionResult — shell.showItemInFolder: their own file manager
+} as const
+
 export const GitChannels = {
   query: 'git:query', // (cwd) -> GitStatus | null (one-shot, read-only)
   watch: 'git:watch', // (GitWatchRequest) -> track a pane's cwd; change events follow
   unwatch: 'git:unwatch', // (GitUnwatchRequest) -> stop tracking a pane
-  change: 'git:change' // backend -> renderer: GitStatusEvent (status resolved/changed)
+  change: 'git:change', // backend -> renderer: GitStatusEvent (status resolved/changed)
+  // Phase-11/05 — file-level status for the explorer's decorations. These ride the
+  // monitor's EXISTING 2.5s tick and its existing per-root spawn: the porcelain lines
+  // were already being read and discarded. No new cadence; no per-file poller.
+  filesQuery: 'git:filesQuery', // (cwd) -> GitFiles | null (one-shot; null = not a repo, and NO git spawn)
+  filesWatch: 'git:filesWatch', // (cwd) -> register a repo root for file-level status (emits at once, then on change)
+  filesUnwatch: 'git:filesUnwatch', // (cwd) -> stop; the last root out stops the tick, as before
+  filesChange: 'git:filesChange', // backend -> renderer: GitFilesEvent (change-only — an idle repo is silent)
+  checkIgnore: 'git:checkIgnore' // (GitCheckIgnoreRequest) -> string[] ignored subset (ONE spawn; the caller caches)
 } as const
 
 export const BrowserChannels = {
@@ -303,5 +334,6 @@ export const AllChannels: readonly string[] = [
   ...Object.values(RemoteChannels),
   ...Object.values(BoardChannels),
   ...Object.values(GitChannels),
-  ...Object.values(FsChannels)
+  ...Object.values(FsChannels),
+  ...Object.values(ExplorerChannels)
 ]

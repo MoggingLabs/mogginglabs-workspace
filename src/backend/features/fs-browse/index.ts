@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, statSync, type Dirent } from 'node:fs'
-import { isAbsolute, join, normalize, parse, sep } from 'node:path'
+import { isAbsolute, join, parse, sep } from 'node:path'
 import { FS_DRIVE_ROOT, FS_LIST_CAP, type DirCrumb, type DirEntry, type DirResult, type ListDirRequest } from '@contracts'
+import { canonical, driveRoots, parentOf } from '../../platform/fs-paths'
 
 /**
  * Read-only one-level directory listing for the wizard's folder browser (8.5/03).
@@ -15,35 +16,15 @@ import { FS_DRIVE_ROOT, FS_LIST_CAP, type DirCrumb, type DirEntry, type DirResul
  * roots are representable — the virtual parent of `C:\` is `FS_DRIVE_ROOT`, whose
  * listing is the drive letters.
  *
+ * Path meaning (canonical form, parents, drive roots) is shared with the explorer
+ * via `platform/fs-paths` (Phase-11/01 extracted it from here, verbatim).
+ *
  * Electron-free on purpose, so it is testable without booting an app.
  */
 
-/** Windows drive letters that currently exist. One stat per candidate; ~26 syscalls. */
+/** Windows drives as pickable entries. Never repos: nobody roots a workspace at `C:\`. */
 function listDrives(): DirEntry[] {
-  const out: DirEntry[] = []
-  for (let c = 'A'.charCodeAt(0); c <= 'Z'.charCodeAt(0); c++) {
-    const root = `${String.fromCharCode(c)}:${sep}`
-    try {
-      statSync(root)
-      out.push({ name: root.slice(0, 2), path: root, isRepo: false })
-    } catch {
-      /* no such drive — the overwhelmingly common case */
-    }
-  }
-  return out
-}
-
-/**
- * One spelling per directory. `C:/Users/` and `C:\Users` are the same folder, and if
- * a listing echoed back whichever the user typed, the path bar and the browser would
- * disagree about where they are. Normalize separators; drop a trailing one (never
- * from a root). Deliberately NOT `realpath`: a symlinked project folder is the path
- * the user meant, and resolving it would teleport them to the link target.
- */
-function canonical(input: string): string {
-  const n = normalize(input)
-  const { root } = parse(n)
-  return n === root ? n : n.replace(/[\\/]+$/, '')
+  return driveRoots().map(({ name, path }) => ({ name, path, isRepo: false }))
 }
 
 /**
@@ -64,15 +45,6 @@ function crumbsFor(dir: string): DirCrumb[] {
     crumbs.push({ label: seg, path: acc })
   }
   return crumbs
-}
-
-/** The parent of `dir`, or null when there is nowhere further up. */
-function parentOf(dir: string): string | null {
-  if (dir === FS_DRIVE_ROOT) return null // the drive list IS the top
-  const { root } = parse(dir)
-  if (dir === root) return process.platform === 'win32' ? FS_DRIVE_ROOT : null
-  const up = join(dir, '..')
-  return up === dir ? null : up
 }
 
 /**

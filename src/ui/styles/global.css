@@ -4155,6 +4155,416 @@ body.pane-dragging * {
   text-align: right;
 }
 
+/* ── File tree (Phase-11/02, ADR 0010) — ONE virtualized flat list wearing tree
+   semantics. Rows are absolutely positioned over a full-height spacer (.ft-body),
+   pitch fixed at --ft-row-h so scroll math never measures the DOM. Tokens only;
+   row inks hold AA over hover/selection fills in both themes (--text-mid ≥4.5:1 on
+   elevated, --text-hi on the accent wash). ─────────────────────────────────────── */
+.file-tree {
+  --ft-row-h: 28px; /* the house hitbox floor; FILE_TREE_ROW_H mirrors it in JS */
+  --ft-indent: 16px;
+  position: relative;
+  height: 100%;
+  overflow: auto;
+  outline: none;
+  background: var(--bg-surface);
+}
+.ft-body {
+  position: relative;
+}
+.file-tree .empty-state {
+  margin: var(--sp-6) auto;
+}
+.ft-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: var(--ft-row-h);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--sp-2);
+  color: var(--text-mid);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ft-row:hover {
+  background: var(--bg-elevated);
+}
+.ft-row:focus-visible {
+  outline: 2px solid var(--accent-glow);
+  outline-offset: -2px;
+}
+.ft-row.is-selected {
+  background: var(--accent-weak);
+  color: var(--text-hi);
+}
+.ft-row.is-selected .ft-ico {
+  color: var(--accent-ink);
+}
+/* Indent guides — 1px verticals per ancestor level (the v1.36 pattern); the
+   focused row's own chain reads at --border-strong so depth is legible at a glance. */
+.ft-guide {
+  flex: none;
+  width: var(--ft-indent);
+  align-self: stretch;
+  border-left: 1px solid var(--border);
+  margin-left: var(--sp-1); /* the guide sits under the parent's chevron column */
+}
+.ft-row.is-active .ft-guide {
+  border-left-color: var(--border-strong);
+}
+.ft-twist {
+  flex: none;
+  width: 14px;
+  display: inline-flex;
+  justify-content: center;
+  color: var(--text-lo);
+  transition: transform var(--dur-1) var(--ease);
+}
+.ft-twist.is-open {
+  transform: rotate(90deg);
+}
+.ft-ico {
+  flex: none;
+  display: inline-flex;
+  color: var(--text-lo);
+  margin-right: var(--sp-2);
+  margin-left: var(--sp-1);
+}
+.ft-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--fs-13);
+}
+.ft-row .pill {
+  flex: none;
+  margin-left: var(--sp-2);
+}
+/* Soft "you are here" (11/03): the FOCUSED pane's own cwd, marked only when its row is
+   already on screen — never expanded to, never scrolled to. An inset marker rather than
+   a fill, so it coexists with the selection wash on the same row. */
+.ft-row.is-here {
+  box-shadow: inset 2px 0 0 var(--info);
+}
+.ft-row.is-here .ft-name {
+  color: var(--text-hi);
+}
+
+/* ── Git decorations (11/05) — VS Code's split (RESEARCH §2): a FILE wears the letter AND
+   the colour; a FOLDER wears only the colour its descendants propagated up to it. Paint
+   only — nothing here reorders, hides, or resizes a row.
+
+   INK NOTE, deliberate: `--danger` is a FILL token, and the token block says plainly that
+   "anything rendering danger as words takes --danger-ink" (--danger measures 2.93:1 on
+   nord's elevated surface). Deleted and conflicted are WORDS here, so both take
+   --danger-ink and are told apart by FORM instead — deleted is struck through (the shape of
+   the thing), conflicted is heavier. TREEGIT measures both across four themes on plain,
+   hover, and selected fills rather than trusting this comment. ─────────────────────────── */
+.ft-badge {
+  flex: none;
+  margin-left: var(--sp-2);
+  min-width: 12px;
+  color: var(--text-lo);
+  font-size: var(--fs-10);
+  font-weight: var(--fw-bold);
+  text-align: center;
+}
+.ft-row.is-git-modified .ft-name,
+.ft-row.is-git-modified .ft-badge {
+  color: var(--warning);
+}
+.ft-row.is-git-added .ft-name,
+.ft-row.is-git-added .ft-badge,
+.ft-row.is-git-untracked .ft-name,
+.ft-row.is-git-untracked .ft-badge {
+  color: var(--success);
+}
+.ft-row.is-git-deleted .ft-name,
+.ft-row.is-git-deleted .ft-badge,
+.ft-row.is-git-conflicted .ft-name,
+.ft-row.is-git-conflicted .ft-badge {
+  color: var(--danger-ink);
+}
+.ft-row.is-git-deleted .ft-name {
+  text-decoration: line-through;
+}
+.ft-row.is-git-conflicted .ft-name,
+.ft-row.is-git-conflicted .ft-badge {
+  font-weight: var(--fw-semibold);
+}
+/* Ignored: dimmed, never hidden — it is still a real file you may need to open. A row that
+   is BOTH ignored and changed keeps its badge; only the name recedes. */
+.ft-row.is-ignored .ft-name {
+  color: var(--text-lo);
+}
+
+/* THE SELECTED ROW, AA-corrected — and TREEGIT is why this block exists rather than a hope.
+   The selection wash (--accent-weak, a warm rgba over the surface) lifts the background just
+   enough that several decoration inks land in the 4.1–4.43 band: --success on nord (4.23),
+   --danger-ink on nord (4.43), the ignored --text-lo on midnight (4.36) and nord (4.10).
+   Measured, in all four themes, on the real fills.
+
+   The inks are mixed toward --text-hi, which strengthens them in BOTH directions — lighter on
+   dark themes, darker on light — while keeping the hue that carries the meaning. The ignored
+   DIM simply yields: a selected row is the one you are reading, so it earns full legibility,
+   and the dim returns the moment you move on (mixing it toward --text-hi would invert the
+   affordance on light themes, where "dimmer" means lighter, not darker). */
+.ft-row.is-selected.is-git-modified .ft-name,
+.ft-row.is-selected.is-git-modified .ft-badge {
+  color: color-mix(in srgb, var(--warning) 70%, var(--text-hi));
+}
+.ft-row.is-selected.is-git-added .ft-name,
+.ft-row.is-selected.is-git-added .ft-badge,
+.ft-row.is-selected.is-git-untracked .ft-name,
+.ft-row.is-selected.is-git-untracked .ft-badge {
+  color: color-mix(in srgb, var(--success) 70%, var(--text-hi));
+}
+.ft-row.is-selected.is-git-deleted .ft-name,
+.ft-row.is-selected.is-git-deleted .ft-badge,
+.ft-row.is-selected.is-git-conflicted .ft-name,
+.ft-row.is-selected.is-git-conflicted .ft-badge {
+  color: color-mix(in srgb, var(--danger-ink) 70%, var(--text-hi));
+}
+.ft-row.is-selected.is-ignored .ft-name {
+  color: inherit; /* the selection's own --text-hi */
+}
+/* Synthetic rows (loading · refusal · capped tail · empty) — states, not entries. */
+.ft-row--meta {
+  color: var(--text-lo);
+  font-style: italic;
+  cursor: default;
+}
+.ft-row--meta:hover {
+  background: transparent;
+}
+.ft-row--refusal .ft-ico {
+  color: var(--warning);
+}
+/* DEV-only harness host (the FILETREE smoke mounts one standalone into #content). */
+.ft-dev-host {
+  flex: none;
+  width: 360px;
+  height: 420px; /* 15 rows exactly — the smoke's viewport math stays whole */
+  margin: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+
+/* ── The explorer dock (Phase-11/03) — the tree given a home. The browser dock is the
+   precedent: an <aside> flex sibling of #content inside #main, its own pointer-capture
+   width handle, KV-persisted open/width. This one is the OUTERMOST right column. ──── */
+.explorer-dock {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  width: 300px; /* the JS clamp is the real authority: [240px, min(40vw, room)] */
+  min-width: 240px;
+  max-width: 40vw;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border);
+}
+.explorer-dock[hidden] {
+  display: none;
+}
+.explorer-dock-handle {
+  position: absolute;
+  left: -3px; /* straddles the border for a fatter grab target */
+  top: 0;
+  bottom: 0;
+  width: 6px; /* optical half-step: dense chrome (see the token-block policy) */
+  cursor: col-resize;
+  z-index: 5;
+}
+.explorer-dock-handle:hover {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.explorer-dock-header {
+  position: relative; /* anchors the division hairline */
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-2) var(--sp-3);
+}
+/* House division: the header caps the tree column (docs/11 rhythm rules). */
+.explorer-dock-header::after {
+  content: '';
+  position: absolute;
+  left: var(--sp-2);
+  right: var(--sp-2);
+  bottom: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--border) 55%, transparent);
+}
+.explorer-dock-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.explorer-ws {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+/* The workspace's own colour — the same dot the rail tab wears, so the dock says
+   WHOSE folder this is without a word. */
+.explorer-ws-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-full);
+}
+.explorer-ws-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-hi);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+}
+/* Middle-truncated in JS (the head and the tail are what identify a path); the full
+   path rides the title attribute. */
+.explorer-root {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+}
+.explorer-dock-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+/* ── The house context menu (11/06) — a GENERIC primitive: the explorer is its first
+   customer, not its owner. Elevated surface, house radius, one shadow step above the panel
+   it floats over. Items are ≥ 28px (the house hitbox floor, same as a tree row). ─────── */
+.ctx-menu {
+  position: fixed;
+  z-index: 60; /* above the docks and the pane chrome; below a modal's scrim */
+  min-width: 200px;
+  max-width: 320px;
+  padding: var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-2);
+}
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: 28px;
+  padding: var(--sp-1) var(--sp-2);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-mid);
+  font-family: inherit;
+  font-size: var(--fs-12);
+  text-align: left;
+  cursor: pointer;
+}
+.ctx-item:hover:not(:disabled),
+.ctx-item:focus-visible {
+  background: var(--accent-weak);
+  color: var(--text-hi);
+  outline: none;
+}
+.ctx-item:disabled {
+  color: var(--text-lo);
+  cursor: default;
+}
+.ctx-icon {
+  flex: none;
+  display: inline-flex;
+  width: 14px;
+  color: var(--text-lo);
+}
+.ctx-item:hover:not(:disabled) .ctx-icon,
+.ctx-item:focus-visible .ctx-icon {
+  color: var(--accent-ink);
+}
+.ctx-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx-hint {
+  flex: none;
+  color: var(--text-lo);
+  font-size: var(--fs-10);
+  font-family: var(--font-mono);
+}
+.ctx-sep {
+  height: 1px;
+  margin: var(--sp-1) var(--sp-2);
+  background: var(--border);
+}
+
+/* The Changes lens chip (11/05) — the changed-files view every orchestrator converged on
+   (RESEARCH §5), except it is the SAME tree filtered, so you never lose the project's shape.
+   Hidden entirely outside a repo: a lens over nothing would be a lie. */
+.explorer-dock-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-2) var(--sp-2);
+}
+.explorer-dock-bar:empty {
+  display: none;
+}
+.explorer-lens {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 3px var(--sp-2); /* optical half-step: dense chrome */
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--text-mid);
+  font-family: inherit;
+  font-size: var(--fs-11);
+  cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
+}
+.explorer-lens:hover {
+  border-color: var(--border-strong);
+  color: var(--text-hi);
+}
+.explorer-lens.is-active {
+  border-color: var(--accent);
+  background: var(--accent-weak);
+  color: var(--text-hi);
+}
+.explorer-dock-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.explorer-dock-body .file-tree {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.explorer-empty {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  padding: var(--sp-4);
+}
+
 /* The wizard's Where card: bar · chosen line · browser, one stack. */
 .wizard-where {
   display: flex;

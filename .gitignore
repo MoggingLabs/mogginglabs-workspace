@@ -11,3 +11,8 @@ dist/
 # and the ABSOLUTE repo path. One `git add -A` committed it (175e7f8).
 electron.vite.config.*.mjs
 electron.vite.config.*.js
+
+# Claude Code creates isolated worktrees here (each is a registered git worktree of
+# THIS repo). They are working copies, not source — the same trap as the Vite config
+# above: one `git add -A` and the whole tree lands in a commit.
+.claude/worktrees/

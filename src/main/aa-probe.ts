@@ -25,7 +25,26 @@ export const AA_TEXT = 4.5
  * drive the renderer over `executeJavaScript`, not an import graph.
  */
 export const AA_PROBE_JS = `
-  const parse = (c) => (c.match(/[\\d.]+/g) || []).map(Number)
+  /**
+   * Colour strings, into 0-255 channels (+ optional alpha).
+   *
+   * Chromium serializes a resolved color-mix() as \`color(srgb 0.96 0.71 0.31 / 0.5)\` — the
+   * components are 0..1 FLOATS, not 0..255. The naive number-scrape read those as ~black,
+   * which silently mis-measures every mixed colour: an ink reads as near-black, and a
+   * translucent color-mix BACKGROUND poisons the whole composite (bgOf walks ancestors).
+   * The stylesheet uses color-mix in dozens of places, so this is scaled explicitly.
+   * Found by TREEGIT (11/05), whose selected-row inks are mixed toward --text-hi.
+   */
+  const parse = (c) => {
+    const m = /^color\\(\\s*srgb\\s+([^)]+)\\)/.exec(c)
+    if (m) {
+      const [head, tail] = m[1].split('/')
+      const rgb = (head.match(/[\\d.]+/g) || []).map(Number).map((v) => v * 255)
+      const a = tail ? Number((tail.match(/[\\d.]+/g) || ['1'])[0]) : undefined
+      return a === undefined ? rgb : [rgb[0], rgb[1], rgb[2], a]
+    }
+    return (c.match(/[\\d.]+/g) || []).map(Number)
+  }
   const lin = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4) }
   const lum = ([r, g, b]) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
   const over = (fg, bg) => { const a = fg[3] === undefined ? 1 : fg[3]; return [0,1,2].map((i) => fg[i] * a + bg[i] * (1 - a)) }

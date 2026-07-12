@@ -14,6 +14,10 @@ export interface ShellContext {
   /** Trailing feature slot in the RIGHT cluster (indicators, launchers) — mounts after
    *  titlebarLeft, before the fixed controls. */
   titlebarRight: HTMLElement
+  /** THE FAR-RIGHT slot — after Settings, last before the OS window-control reserve
+   *  (Phase-11/03). The explorer's toggle lives here so it sits over the dock it
+   *  opens, mirroring the rail toggle at the far left. */
+  titlebarEnd: HTMLElement
 }
 
 /** A self-contained UI feature. */

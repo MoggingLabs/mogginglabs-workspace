@@ -131,3 +131,59 @@ authored-and-holding phase-9.
 01 → 02 → 03 is the spine. After 03, two lanes: Lane A (04 → 05, the live
 + decorated tree), Lane B (06, actions). 07 needs both lanes. Solo
 execution runs 01 → 07 in order (house rule: no parallel agents).
+
+## Freeze — Phase-11/07 (2026-07-12)
+
+Every step shipped with its gate green, and `MOGGING_FILESMILESTONE` — the pack's
+**only authority on "Phase 11 done"** — composes the whole promise in one fixture
+world: a **real shell pane** writes into the workspace, and the explorer shows it,
+decorated, live, and actionable. Receipts, measured numbers, and platform finds:
+[`REPORT.md`](REPORT.md). The book: [`docs/16-files.md`](../../docs/16-files.md).
+
+| Step | Gate | Done |
+|---|---|---|
+| 01 — ADR 0010 + contracts + the read service | FSLIST | ✅ |
+| 02 — the virtualized tree | FILETREE | ✅ |
+| 03 — the dock + the far-right toggle | EXPLORER | ✅ |
+| 04 — the liveness law | TREELIVE | ✅ |
+| 05 — git decorations + the Changes lens | TREEGIT | ✅ |
+| 06 — actions + the house context menu | FILEACT | ✅ |
+| 07 — the book, the gallery, the milestone | FILESMILESTONE | ✅ |
+
+**The freeze gates (measured, not asserted):**
+
+- **The composed surface holds both budgets.** 16 panes + the explorer OPEN + a
+  write torrent: **142.8 avg fps** (≥30) · **worst gap 25.1ms** (≤150) · **heap
+  20MB** (≤300) · **0 frames > 100ms**. Workspace switch with the explorer open:
+  **50ms** (≤100).
+- **An agent's footprint appears within a second.** A scripted shell pane created a
+  file (**185ms**) and deleted one (**177ms**), in **2** coalesced batches.
+- **Zero costs zero.** A collapsed dir: **0 batches** from 20 writes. A hidden
+  window: **0 handles, 0 polls**. A closed explorer: **0 handles, 0 polls, 0 git
+  events**. A non-repo workspace: **0 git traffic**.
+- **Attention is sacred.** A pane that needed input at the start still needed it at
+  the end of the whole composed run.
+- **ADR 0005 sweep**: exactly ONE telemetry call in the entire Phase-11 surface, and
+  its props are `{ open }` — a boolean. No path, no filename, anywhere.
+- **ADR 0010 sweep**: twelve explorer channels, **zero write verbs**, and **zero
+  mutating fs APIs** reachable from the explorer's backend or main. Read-only holds
+  *by construction*, not by vigilance. Protocol still **v5**.
+- **Nothing executes.** After typing eight hostile filenames (`$(rm -rf).txt`,
+  `&echo pwned&.txt`, …) into a live shell, the pane still showed **one prompt**.
+
+**Certification — PENDING the operator.** Two things are deliberately not done here:
+
+1. The **full uncut local sweep** (83 gates). House rule: Claude runs targeted gate
+   subsets, never the full sweep — that run is the operator's. All seven new gates
+   are green, as is every gate they could plausibly disturb (REPORT.md §5).
+2. The **three-OS CI dispatch**, which needs a push. `ci.yml` requires **no edit**:
+   its sweep jobs take a `MOGGING_GATES` input where empty = *all* gates, so the
+   seven new `qa-smokes.sh` rows are swept automatically.
+
+Until both land, the certification row below stays honest rather than decorative.
+
+| Environment | Sweep | Result |
+|---|---|---|
+| local Windows (targeted) | the 7 new gates + every gate they touch | ✅ green |
+| local Windows (full, 83 gates) | — | **PENDING** (operator) |
+| CI linux · macOS · windows | — | **PENDING** (operator dispatch) |

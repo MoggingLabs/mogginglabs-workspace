@@ -19,6 +19,7 @@ export function createTitlebar(onToggleRail: () => void): {
   left: HTMLElement
   center: HTMLElement
   right: HTMLElement
+  end: HTMLElement
 } {
   const el = document.createElement('header')
   el.id = 'titlebar'
@@ -65,6 +66,11 @@ export function createTitlebar(onToggleRail: () => void): {
   left.className = 'titlebar-slot'
   const right = document.createElement('div')
   right.className = 'titlebar-slot'
+  // The FAR-RIGHT slot (11/03): after Settings, last before the OS window-control
+  // reserve. A toggle belongs over the thing it opens — the rail toggle leads the bar
+  // at the far left, so the explorer's toggle ends it at the far right.
+  const end = document.createElement('div')
+  end.className = 'titlebar-slot'
   // NO Home button, by design. Home is the boot launcher and the zero-workspace empty
   // state — never a destination. Once a workspace exists the grid owns the app, and
   // view-port.ts enforces that; a button here would be a road to a place you cannot go.
@@ -87,9 +93,10 @@ export function createTitlebar(onToggleRail: () => void): {
     title: 'Settings (Ctrl+,)',
     onClick: () => (activeView() === 'settings' ? goBack() : setActiveView('settings'))
   })
-  // THE declaration: feature slots (titlebarLeft, titlebarRight) → Board → settings.
-  // Read left-to-right, this is the right cluster.
-  cluster.append(left, right, board, settings)
+  // THE declaration: feature slots (titlebarLeft, titlebarRight) → Board → settings →
+  // titlebarEnd. Read left-to-right, this is the right cluster. `end` is a SLOT, not a
+  // direct button, so the fixed controls' gap contract (Board→Settings) is untouched.
+  cluster.append(left, right, board, settings, end)
 
   // THE left cell: the rail toggle, then the brand. The toggle sits over the rail it
   // collapses; the brand follows it. macOS clears the traffic lights by insetting THIS
@@ -105,5 +112,5 @@ export function createTitlebar(onToggleRail: () => void): {
   })
 
   el.append(lead, center, cluster)
-  return { el, left, center, right }
+  return { el, left, center, right, end }
 }

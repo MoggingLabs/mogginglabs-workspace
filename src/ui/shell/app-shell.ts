@@ -40,7 +40,7 @@ export function createAppShell(root: HTMLElement): ShellContext {
     }
   }
 
-  const { el: titlebar, left, center, right } = createTitlebar(toggleRail)
+  const { el: titlebar, left, center, right, end } = createTitlebar(toggleRail)
 
   const main = document.createElement('div')
   main.id = 'main'
@@ -101,5 +101,5 @@ export function createAppShell(root: HTMLElement): ShellContext {
     /* no bridge (tests) — chrome classes stay at the restored defaults */
   }
 
-  return { content, rail, titlebarLeft: left, titlebarCenter: center, titlebarRight: right }
+  return { content, rail, titlebarLeft: left, titlebarCenter: center, titlebarRight: right, titlebarEnd: end }
 }

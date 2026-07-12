@@ -43,33 +43,38 @@ renderer is tuned once and behaves identically everywhere. See
 
 ## Quickstart
 
-> **Status: Phase 8.5 (the UI/UX revamp) shipped** — the chrome caught up to the
-> product. Phases 6–8 grew usage meters, five integration directions, a browser and a
-> swarm faster than the surfaces around them: the wizard was three cramped modal
-> screens, the folder picker a `cd` bar, Settings an unstyled wall of controls. This
-> pack **audited every user-facing surface** (`prompts/phase-8.5/AUDIT.md` — graded,
-> with keep/fix/remove verdicts and a `file:line` on every finding), then rebuilt them
-> on one **layout vocabulary** (`Card` · `SectionHeader` · `FieldGroup` · `TwoColumn`,
-> on the extended `--sp-*` ramp): the wizard is one full page beside the rail, a folder
-> is pickable by click, Settings / Integrations / Usage open **overview-first** with
-> persisted disclosure, plus Home + first-run, the board + palette, one feedback
-> language, the titlebar / rail / pane chrome, the browser **possession banner**, and
-> the Usage-glance CodexBar recut. **13 removals executed** (dead affordances deleted,
-> not hidden) and **16 bugs routed and fixed**. Closed by the `MOGGING_UXMILESTONE`
-> milestone: the whole revamp composed in one fixture world, zero network, behind a
-> hard **coverage gate** (`check-audit.mjs` — no surface below grade **A**, no unrouted
-> finding) and the spacing drift grep **frozen at zero** (`check-spacing.mjs --max 0`).
-> **Both perf budgets unmoved** — an unchanged `docs/05` is the freeze criterion. The
-> `qa-smokes.sh` sweep now runs **66 gates** (fourteen new this pack: WIZARDUX ·
-> FOLDERPICK · SETSHELL · SETINTEG · SETUSAGE · HOMEUX · BOARDUX · FEEDBACKUX · CHROMEUX ·
-> DOCKUX · USAGEGLANCE · UXMILESTONE, plus the two static gates AUDIT · SPACING). Design
-> system: [`docs/11`](docs/11-design-system.md).
-> Certified across **four environments** — all **66/66** green on local Windows AND all
-> three CI OSes (Linux · macOS · Windows) in one clean dispatch, run **29006301457**;
-> per-OS numbers + platform-find root causes in `prompts/phase-8.5/README.md` +
-> `prompts/phase-8.5/REPORT.md`.
-> (Phase 8 shipped integrations, five directions — `docs/14`; Phase 6 shipped v0.4.0:
-> the browser dock + first-run/update UX + signing readiness.)
+> **Status: Phase 11 (Files — the explorer sidebar) shipped.** Sixteen agents can be
+> writing into a workspace at once, and the app showed their **output** — terminals,
+> blocks, attention — but never their **footprint**. Now it does: a right-side dock with
+> the workspace's folder open in a **virtualized, git-decorated, live** tree, toggled from
+> the **far right** of the app bar (mirroring the rail toggle at the far left) or
+> `Ctrl+Shift+E`.
+>
+> The stance is the design — [**ADR 0010**](docs/adr/0010-explorer-window-not-manager.md):
+> the explorer is a **window, not a manager**. Read-only v1 (browse · open · reveal · copy ·
+> send-to-pane); opening delegates to the OS and *your* tools; **we type, you execute** —
+> it never presses Enter in a pane. **Watch what's visible, nothing else**: per-expanded-dir
+> `fs.watch`, LRU-capped, coalesced — a collapsed folder, a hidden window, and a closed
+> explorer each cost **exactly zero** (measured, not asserted). The M/A/U/D/C badges add
+> **zero new pollers**: `git status --porcelain=v2` already ran every 2.5s and threw its
+> file lines away, so we parse what we were already paying for — plus colour-only folder
+> propagation, ignore-dimming, and the **Changes lens**. **Zero new runtime dependencies**
+> (no tree, watcher, or icon library). The book: [`docs/16`](docs/16-files.md).
+>
+> Closed by the `MOGGING_FILESMILESTONE` milestone — a **real shell pane** writes into the
+> workspace and the explorer shows it, decorated, live, actionable — with both budgets
+> measured **on the composed surface** (16 panes + the explorer open + a write torrent:
+> **142.8 avg fps · worst gap 25.1ms · heap 20MB · 0 frames > 100ms**). The `qa-smokes.sh`
+> sweep now runs **83 gates** (seven new this pack: FSLIST · FILETREE · EXPLORER · TREELIVE ·
+> TREEGIT · FILEACT · FILESMILESTONE). Receipts, measured numbers and platform finds:
+> `prompts/phase-11/REPORT.md`.
+>
+> *Full-sweep + three-OS CI certification is the operator's run — see
+> `prompts/phase-11/README.md` § Freeze.*
+>
+> (Phase 8.5 shipped the UI/UX revamp — `docs/11`, certified 66/66 across four
+> environments, run **29006301457**. Phase 8 shipped integrations, five directions —
+> `docs/14`. Phase 6 shipped v0.4.0: the browser dock + first-run/update UX.)
 
 ```bash
 npm install        # compiles native modules (node-pty, better-sqlite3). Needs a C++ toolchain — see below.

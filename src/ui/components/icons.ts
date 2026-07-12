@@ -37,6 +37,7 @@ export type IconName =
   | 'expand'
   | 'expand-h'
   | 'expand-v'
+  | 'file'
   | 'flag'
   | 'folder'
   | 'folder-open'
@@ -50,6 +51,7 @@ export type IconName =
   | 'layout-grid'
   | 'more'
   | 'panel-left'
+  | 'panel-right'
   | 'pencil'
   | 'plug'
   | 'plus'
@@ -98,6 +100,9 @@ const PATHS: Record<IconName, string> = {
     '<polyline points="18 8 22 12 18 16"/><polyline points="6 8 2 12 6 16"/><line x1="2" x2="22" y1="12" y2="12"/>',
   'expand-v':
     '<polyline points="8 18 12 22 16 18"/><polyline points="8 6 12 2 16 6"/><line x1="12" x2="12" y1="2" y2="22"/>',
+  /* File leaf (ours) — the classic dog-eared sheet, drawn plain so it reads at
+   * 14px in the file tree without competing with the folder silhouette. */
+  file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
   flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" x2="4" y1="22" y2="15"/>',
   folder:
     '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
@@ -115,6 +120,9 @@ const PATHS: Record<IconName, string> = {
     '<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>',
   more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
   'panel-left': '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>',
+  /* The rail toggle's mirror (11/03) — same frame, divider on the RIGHT. The two
+   * toggles bookend the app bar, each sitting over the column it opens. */
+  'panel-right': '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/>',
   pencil:
     '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
   plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',

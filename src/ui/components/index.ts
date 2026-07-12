@@ -28,11 +28,29 @@ export {
   type LayoutGridPickerHandle
 } from './grid-preview'
 export { createModal, type ModalHandle, type ModalOpts } from './modal'
+export {
+  openContextMenu,
+  closeContextMenu,
+  type ContextMenuEntry,
+  type ContextMenuHandle,
+  type ContextMenuItem,
+  type ContextMenuOpts,
+  type ContextMenuSeparator
+} from './context-menu'
 export { confirmDialog, type ConfirmOpts } from './confirm'
 export { Spinner, loadingRow } from './spinner'
 export { showToast, type ToastOpts, type ToastTone } from './toast'
 export { EmptyState, type EmptyStateOpts } from './empty-state'
 export { createFolderBrowser, type FolderBrowserHandle, type FolderBrowserOpts } from './folder-browser'
+export {
+  createFileTree,
+  FILE_TREE_ROW_H,
+  FILE_TREE_OVERSCAN,
+  type FileTreeDecoration,
+  type FileTreeHandle,
+  type FileTreeOpts,
+  type FileTreeRow
+} from './file-tree'
 export { createSegmented, type SegmentedHandle, type SegmentedOption } from './segmented'
 // Layout primitives (8.5/01) — THE structural vocabulary: every grouped surface
 // is a Card, headed by a SectionHeader, filled with FieldGroups, split by TwoColumn.

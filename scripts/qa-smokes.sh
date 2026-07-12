@@ -9,6 +9,18 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
+# 83 gates at the Phase-11 freeze: 4 static (AUDIT · SPACING · PTYSEAM · PROTOVER) + 79
+# app-boot gates. Phase 11 (Files — the explorer) added seven, and they run LAST:
+#   FSLIST          the read service, zero UI (files+dirs, caps, typed refusals)
+#   FILETREE        the virtualized tree (10k rows, APG keyboard, tree ARIA)
+#   EXPLORER        the dock (four doors, re-rooting, per-workspace memory)
+#   TREELIVE        the liveness law (coalescing, capped pool + poll tier, suspend rules)
+#   TREEGIT         the decorations (badges, propagation, ignore dim, the Changes lens)
+#   FILEACT         the actions (open/reveal via a SPY, copy, send-to-pane, hostile names)
+#   FILESMILESTONE  THE authority on "Phase 11 done" — the whole promise composed, and
+#                   both perf budgets measured ON the composed surface (16 panes + the
+#                   explorer open + a write torrent)
+#
 # WHY SEQUENTIAL (investigated 2026-07-06, do not re-litigate blindly): each gate
 # boots a FULL app via `electron-vite dev` — a Vite dev server + Electron + a
 # detached PTY daemon, ~8 processes per gate. Running gates N-at-a-time was
@@ -234,6 +246,13 @@ run_smoke FEEDBACKUX   MOGGING_FEEDBACKUX 1 240 feedbackux
 run_smoke CHROMEUX     MOGGING_CHROMEUX  1 300 chromeux
 run_smoke DOCKUX       MOGGING_DOCKUX    1 240 dockux
 run_smoke UXMILESTONE  MOGGING_UXMILESTONE 1 360 uxmilestone
+run_smoke FSLIST       MOGGING_FSLIST    1 120 fslist
+run_smoke FILETREE     MOGGING_FILETREE  1 300 filetree
+run_smoke EXPLORER     MOGGING_EXPLORER  1 240 explorer
+run_smoke TREELIVE     MOGGING_TREELIVE  1 300 treelive
+run_smoke TREEGIT      MOGGING_TREEGIT   1 360 treegit
+run_smoke FILEACT      MOGGING_FILEACT   1 300 fileact
+run_smoke FILESMILESTONE MOGGING_FILESMILESTONE 1 420 filesmilestone
 
 echo ""
 echo "══ SWEEP RESULTS ══"

@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Full 35-gate sweeps are heavy (~1h each): nightly, staggered per OS, + on demand.
+  # Full 83-gate sweeps are heavy (~4h each): nightly, staggered per OS, + on demand.
   schedule:
     - cron: '30 3 * * *' # linux-sweep
     - cron: '30 4 * * *' # macos-sweep

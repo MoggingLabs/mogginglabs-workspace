@@ -18,6 +18,8 @@ import { registerGit } from './git'
 import { registerContext } from './context'
 import { registerWorktrees } from './worktrees'
 import { registerFsBrowse } from './fs-browse'
+import { registerExplorer } from './explorer'
+import { runFsListSmoke } from './fslist-smoke'
 import { registerReview } from './review'
 import { registerBoard } from './board'
 import { registerProfiles } from './profiles'
@@ -43,6 +45,12 @@ import { runIntegUxSmoke } from './integux-smoke'
 import { runIntegMilestoneSmoke } from './integmilestone-smoke'
 import { runWizardUxSmoke } from './wizardux-smoke'
 import { runFolderPickSmoke } from './folderpick-smoke'
+import { runFileTreeSmoke } from './filetree-smoke'
+import { runExplorerSmoke } from './explorer-smoke'
+import { runTreeLiveSmoke } from './treelive-smoke'
+import { runTreeGitSmoke } from './treegit-smoke'
+import { runFileActSmoke } from './fileact-smoke'
+import { runFilesMilestoneSmoke } from './filesmilestone-smoke'
 import { runSetIntegSmoke } from './setinteg-smoke'
 import { runSetShellSmoke } from './setshell-smoke'
 import { runSetUsageSmoke } from './setusage-smoke'
@@ -225,6 +233,13 @@ app.whenReady().then(async () => {
     return
   }
 
+  // Windowless explorer-list smoke (11/01): the read service through the exact
+  // `explorer:list` validation seam, on a fixture tree — no daemon, no window, zero UI.
+  if (process.env.MOGGING_FSLIST) {
+    await runFsListSmoke()
+    return
+  }
+
   // Windowless tool-plan smoke (8/09): pure materialization + a CLI shim + a
   // real git repo — no daemon, no window.
   if (process.env.MOGGING_INTEG) {
@@ -290,6 +305,7 @@ app.whenReady().then(async () => {
   disposeContext = registerContext(() => win?.webContents ?? null) // per-pane agent context bar: tails the CLIs' own session logs (counts only)
   registerWorktrees() // worktree-per-agent isolation: add/list/remove only (Phase-3/03)
   registerFsBrowse() // read-only one-level directory listing for the folder browser (Phase-8.5/03)
+  registerExplorer(() => win) // the explorer: read-only listing + the liveness law's watcher pool (Phase-11/01, /04)
   registerReview() // pre-ship diff review: redacted diff + guarded merge (Phase-3/04)
   registerBoard() // local Kanban board: cards that launch agents (Phase-3/05)
   registerProfiles() // provider profiles: pointer sets, deny-listed at save (Phase-4/04)
@@ -339,7 +355,7 @@ app.whenReady().then(async () => {
     runMultipaneSmoke(win) // env-gated multi-pane isolation smoke
   } else if (process.env.MOGGING_WORKSPACE && win) {
     runWorkspaceSmoke(win, process.env.MOGGING_WORKSPACE) // env-gated workspace persist/restore smoke
-  } else if (process.env.MOGGING_AGENTLAUNCH && win) {
+        } else if (process.env.MOGGING_AGENTLAUNCH && win) {
     runAgentLaunchSmoke(win) // env-gated agent-launcher smoke (picker -> TUI)
   } else if (process.env.MOGGING_TEMPLATE && win) {
     runTemplateSmoke(win, process.env.MOGGING_TEMPLATE) // env-gated provider-mix template smoke
@@ -393,6 +409,18 @@ app.whenReady().then(async () => {
     runWizardUxSmoke(win) // env-gated one-page-wizard smoke: three cards, one page, rail beside it (Phase-8.5/02)
   } else if (process.env.MOGGING_FOLDERPICK && win) {
     runFolderPickSmoke(win) // env-gated folder-browser smoke: listing, refusals, keyboard, per-OS roots (Phase-8.5/03)
+  } else if (process.env.MOGGING_FILETREE && win) {
+    runFileTreeSmoke(win) // env-gated virtualized file-tree smoke: 10k rows, APG keyboard, tree ARIA, refusal row (Phase-11/02)
+  } else if (process.env.MOGGING_EXPLORER && win) {
+    runExplorerSmoke(win) // env-gated explorer-dock smoke: four doors, re-rooting, per-workspace memory, zero-cost-closed (Phase-11/03)
+  } else if (process.env.MOGGING_TREELIVE && win) {
+    runTreeLiveSmoke(win) // env-gated liveness smoke: coalesced batches, capped pool + poll tier, suspend rules (Phase-11/04)
+  } else if (process.env.MOGGING_TREEGIT && win) {
+    runTreeGitSmoke(win) // env-gated git-decoration smoke: badges + propagation + ignore dim + the Changes lens (Phase-11/05)
+  } else if (process.env.MOGGING_FILEACT && win) {
+    runFileActSmoke(win) // env-gated file-actions smoke: open/reveal via a SPY, copy, send-to-pane, hostile names inert (Phase-11/06)
+  } else if (process.env.MOGGING_FILESMILESTONE && win) {
+    runFilesMilestoneSmoke(win) // env-gated Phase-11 MILESTONE: the whole files promise composed + budgets on the composed surface (Phase-11/07)
   } else if (process.env.MOGGING_SETSHELL && win) {
     runSetShellSmoke(win) // env-gated settings-shell smoke: grouped nav, cards, measured spacing + AA (Phase-8.5/04)
   } else if (process.env.MOGGING_SETINTEG && win) {
