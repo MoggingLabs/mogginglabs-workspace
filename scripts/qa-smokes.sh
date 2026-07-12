@@ -174,6 +174,10 @@ run_static SPACING node scripts/check-spacing.mjs --max 0
 run_static PTYSEAM node scripts/check-pty-seam.mjs
 run_static PROTOVER node scripts/check-protocol-version.mjs
 run_static LAYOUT  node scripts/check-layout-invariants.mjs
+# DOCSREFS: the docs cite each other constantly (the roadmap points at ADRs, ADRs at
+# research, phases at the pack that shipped them). Rename a doc and every citation keeps
+# reading as true while the link 404s. Free to check, invisible when wrong.
+run_static DOCSREFS node scripts/check-docs-refs.mjs
 
 run_smoke SMOKE       MOGGING_SMOKE     1 180 smoke
 run_smoke MULTIPANE   MOGGING_MULTIPANE 1 180 multipane
