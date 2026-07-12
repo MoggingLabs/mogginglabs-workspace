@@ -97,19 +97,35 @@ interface Db {
 }
 
 const SESSIONS_SQL = 'SELECT id, directory FROM session ORDER BY time_created DESC LIMIT 200'
-const NEWEST_ASSISTANT_SQL = [
-  "SELECT json_extract(data,'$.tokens.input') i,",
-  "       json_extract(data,'$.tokens.output') o,",
-  "       json_extract(data,'$.tokens.reasoning') r,",
-  "       json_extract(data,'$.tokens.cache.read') cr,",
-  "       json_extract(data,'$.tokens.cache.write') cw,",
-  "       json_extract(data,'$.providerID') p,",
-  "       json_extract(data,'$.modelID') m",
-  '  FROM session_message',
-  " WHERE session_id = ? AND type = 'assistant'",
-  "   AND json_extract(data,'$.tokens.output') > 0",
+
+/** The token columns, however this opencode names its message store. LIVE-VERIFIED against a
+ *  real run: the shipped CLI writes to `message` (role + tokens inside a JSON `data` blob), NOT
+ *  to `session_message` — which a fixture built on the documented schema could never have
+ *  caught, because the fixture and the reader shared the same wrong assumption. Both shapes are
+ *  accepted so a version change in either direction cannot blank the gauge. */
+const TOKENS_COLS =
+  "SELECT json_extract(data,'$.tokens.input') i," +
+  " json_extract(data,'$.tokens.output') o," +
+  " json_extract(data,'$.tokens.reasoning') r," +
+  " json_extract(data,'$.tokens.cache.read') cr," +
+  " json_extract(data,'$.tokens.cache.write') cw," +
+  " COALESCE(json_extract(data,'$.providerID'), json_extract(data,'$.model.providerID')) p," +
+  " COALESCE(json_extract(data,'$.modelID'), json_extract(data,'$.model.modelID')) m"
+
+/** The shipped shape: one `message` row per turn, role inside the JSON. */
+const MESSAGE_SQL =
+  TOKENS_COLS +
+  ' FROM message WHERE session_id = ?' +
+  "   AND json_extract(data,'$.role') = 'assistant'" +
+  "   AND json_extract(data,'$.tokens.output') > 0" +
+  ' ORDER BY time_created DESC LIMIT 1'
+
+/** The projected shape (role in a `type` column, ordered by `seq`). */
+const SESSION_MESSAGE_SQL =
+  TOKENS_COLS +
+  " FROM session_message WHERE session_id = ? AND type = 'assistant'" +
+  "   AND json_extract(data,'$.tokens.output') > 0" +
   ' ORDER BY seq DESC LIMIT 1'
-].join('\n')
 
 /** The five fields opencode's own sidebar sums, from the newest answered assistant message of
  *  the session rooted at `cwd`. Null when opencode has never run there, or has yet to answer. */
@@ -129,9 +145,17 @@ export function readOpencodeUsage(home: string, cwd: string): (TailReading & { p
     const sessions = db.prepare(SESSIONS_SQL).all() as Array<{ id: string; directory: string | null }>
     const session = sessions.find((s) => s.directory && pathKey(s.directory) === want)
     if (!session) return null
-    const row = db.prepare(NEWEST_ASSISTANT_SQL).get(session.id) as
-      | { i?: number; o?: number; r?: number; cr?: number; cw?: number; p?: string; m?: string }
-      | undefined
+    type Row = { i?: number; o?: number; r?: number; cr?: number; cw?: number; p?: string; m?: string }
+    let row: Row | undefined
+    for (const sql of [MESSAGE_SQL, SESSION_MESSAGE_SQL]) {
+      try {
+        row = db.prepare(sql).get(session.id) as Row | undefined
+      } catch {
+        continue // that table does not exist in this version — try the other
+      }
+      if (row && typeof row.i === 'number') break
+      row = undefined
+    }
     if (!row || typeof row.i !== 'number') return null
     const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
     return {
