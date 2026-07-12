@@ -3,6 +3,7 @@ import './styles/global.css'
 import { createAppShell } from './shell/app-shell'
 import { syncHistoryPref } from './core/clipboard/clipboard-port'
 import { mountFeatures, registerFeature } from './core/registry/feature-registry'
+import { installOverlayScrollbars } from './core/scroll/overlay-scroll'
 import { workspaceFeature } from './features/workspace'
 import { homeFeature } from './features/home'
 import { terminalFeature } from './features/terminal'
@@ -37,6 +38,11 @@ export function start(): void {
   // before any pane can copy anything — otherwise the first copies of the session land
   // in a ring the user believes is disabled.
   syncHistoryPref()
+
+  // Overlay scrollbars, app-wide: invisible at rest, revealed while scrolling and in the
+  // bar's own lane. Two delegated listeners for every scrollable surface there will ever
+  // be — nothing to remember to wire when a feature adds one (core/scroll/overlay-scroll).
+  installOverlayScrollbars()
 
   const shell = createAppShell(root)
   registerFeature(workspaceFeature) // owns the rail + per-workspace grids; provides slots

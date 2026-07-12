@@ -95,6 +95,7 @@ import { runGitSmoke } from './git-smoke'
 import { runNotifySmoke } from './notify-smoke'
 import { runMilestoneSmoke } from './milestone-smoke'
 import { runFlickerSmoke } from './flicker-smoke'
+import { runAppScrollSmoke } from './appscroll-smoke'
 import { runConptySmoke } from './conpty-smoke'
 import { runPaneOpsSmoke } from './paneops-smoke'
 import { runControlSmoke } from './control-smoke'
@@ -533,6 +534,8 @@ app.whenReady().then(async () => {
     runMilestoneSmoke(win) // env-gated 16-agent perf milestone smoke (Phase-2/05)
   } else if (process.env.MOGGING_FLICKER && win) {
     runFlickerSmoke(win) // env-gated terminal-artifact smoke: churn without flicker
+  } else if (process.env.MOGGING_APPSCROLL && win) {
+    runAppScrollSmoke(win) // env-gated app-wide overlay-scrollbar smoke
   } else if (process.env.MOGGING_CONPTY && win) {
     runConptySmoke(win) // env-gated ConPTY-coherence smoke: resize must never smear the buffer
   } else if (process.env.MOGGING_PANEOPS && win) {

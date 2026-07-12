@@ -257,12 +257,25 @@ button {
   background: var(--selection-bg);
 }
 
+/* App-wide OVERLAY scrollbars — the terminal pane's contract, everywhere (overlay-scroll.ts
+   sets the two classes): INVISIBLE at rest, revealed while you scroll (`ovs-scrolling`,
+   fading 900ms after you stop) and while the pointer is in the bar's own lane at the
+   container's edge (`ovs-hot`). Hovering the container is deliberately NOT a reveal — a
+   bar that appears whenever the pointer is anywhere inside the box is the noise this
+   replaces. The gutter is reserved at all times (the bar is painted, not laid out, so
+   revealing it never reflows the content beneath it).
+
+   Styled in BOTH scrollbar systems on purpose: Chromium honours `scrollbar-color` when it
+   is set and then ignores the ::-webkit-* pseudos, so a rule written in only one of them
+   is one Electron bump away from a permanently visible — or permanently invisible — bar. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-color: transparent transparent;
 }
-/* App-wide scrollbars share the terminal's slider language: invisible track, slim
-   rounded neutral thumb (subtle at rest, solid under the cursor). */
+.ovs-hot,
+.ovs-scrolling {
+  scrollbar-color: color-mix(in srgb, var(--text-lo) 40%, transparent) transparent;
+}
 *::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -271,12 +284,18 @@ button {
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--text-lo) 40%, transparent);
+  background: transparent;
   border-radius: var(--r-full);
   border: 3px solid transparent;
   background-clip: content-box;
 }
-*::-webkit-scrollbar-thumb:hover {
+.ovs-hot::-webkit-scrollbar-thumb,
+.ovs-scrolling::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-lo) 40%, transparent);
+  background-clip: content-box;
+}
+/* ...and solid under the cursor, once the lane has revealed it. */
+.ovs-hot::-webkit-scrollbar-thumb:hover {
   background: var(--text-lo);
   background-clip: content-box;
 }
