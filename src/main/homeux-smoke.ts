@@ -6,8 +6,10 @@ import { probeContrastAcrossThemes } from './aa-probe'
 
 // Env-gated Home + first-run smoke (MOGGING_HOMEUX, Phase-8.5/06). Fresh userData.
 //   (a) the hero + a house EmptyState render; the hero CTA opens the wizard;
-//   (b) checklist rows are detection-HONEST — a missing CLI shows an install row + a
-//       copy chip, and row ①'s done-state equals real PATH detection (never a fixed answer);
+//   (b) checklist rows are detection-HONEST, in both directions: row ①'s done-state equals
+//       real PATH detection, the install rows are EXACTLY the CLIs that are really missing
+//       (here: none — asserted as absence), and an agent forced to read as missing renders
+//       the install row it promises, with its command and a copy chip that carries it;
 //   (c) a seeded recent renders as a Card and reopens the workspace on click;
 //   (d) bug #1: with every REQUIRED row done and NOTHING saved by fixture, the card
 //       self-dismisses and never returns. Detection is real (no fixture), so where a CLI
@@ -44,12 +46,57 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
         `!!document.querySelector('.home-recents-grid .empty-state') && !!document.querySelector('.home-recents-grid .empty-state button')`
       )
 
-      // (b) the checklist is detection-honest: row ① tracks real PATH detection, and a
-      // missing CLI carries an install row + a copy chip.
-      const anyCli = await ES<boolean>(`window.bridge.invoke('agents:detect').then((a) => (a||[]).some((x) => x.installed))`)
+      // (b) the checklist is detection-honest, in BOTH directions.
+      type Agent = { id: string; name: string; installed: boolean; installHint?: string }
+      const agents = await ES<Agent[]>(`window.bridge.invoke('agents:detect')`)
+      const anyCli = agents.some((a) => a.installed)
       const cliRowDone = await ES<boolean>(`!!document.querySelectorAll('.firstrun-row')[0]?.classList.contains('is-done')`)
       const cliHonest = cliRowDone === anyCli
-      const installChipOk = await ES<boolean>(`!!document.querySelector('.firstrun-cli-missing .firstrun-copy')`)
+
+      // (b1) The install rows are EXACTLY the CLIs that are really missing — no more, no fewer.
+      // On this machine every CLI is installed, so the honest answer is NO rows, and that is
+      // asserted here as a positive claim. The gate used to demand a row unconditionally, i.e.
+      // it demanded the checklist lie; it "passed" only where the CLIs were absent.
+      const trulyMissing = agents.filter((a) => !a.installed && a.installHint)
+      const rowsWhenNoneMissing = await ES<number>(`document.querySelectorAll('.firstrun-cli-missing').length`)
+      const missingHonest = rowsWhenNoneMissing === trulyMissing.length
+
+      // (b2) The OTHER branch — the one a new user actually meets, and the one no machine here
+      // can reach by itself. Force an installed agent to read as missing through the DEV seam
+      // (firstrun.forceMissing fakes the detection INPUT only) and hold the real render path to
+      // its promise: one new row, naming that agent, carrying its install command verbatim, with
+      // a copy chip that would copy exactly that command.
+      const victim = agents.find((a) => a.installed && a.installHint) ?? agents.find((a) => a.installHint)
+      if (!victim) throw new Error('no agent adapter carries an installHint — the row can never render')
+      await ES(`window.__mogging.firstrun.forceMissing([${JSON.stringify(victim.id)}])`)
+      await ES(`window.__mogging.firstrun.refresh()`)
+      const row = await (async (): Promise<{ found: boolean; rows: number; cmd: string; copy: boolean; copies: string }> => {
+        for (let i = 0; i < 25; i++) {
+          const r = await ES<{ found: boolean; rows: number; cmd: string; copy: boolean; copies: string }>(`(() => {
+            const rows = [...document.querySelectorAll('.firstrun-cli-missing')]
+            const r = rows.find((x) => (x.querySelector('.firstrun-cli-name')?.textContent || '') === ${JSON.stringify(victim.name)})
+            const copy = r ? r.querySelector('.firstrun-copy') : null
+            return {
+              found: !!r,
+              rows: rows.length,
+              cmd: r ? (r.querySelector('.firstrun-cli-cmd')?.textContent || '') : '',
+              copy: !!copy,
+              copies: copy ? (copy.title || '') : ''
+            }
+          })()`)
+          if (r.found) return r
+          await sleep(200)
+        }
+        return { found: false, rows: 0, cmd: '', copy: false, copies: '' }
+      })()
+      // The chip is asserted by what it WOULD copy (its title is the command it writes to the
+      // clipboard). Clicking it would clobber the clipboard of whoever is running this.
+      const installChipOk =
+        row.found &&
+        row.rows === trulyMissing.length + (victim.installed ? 1 : 0) &&
+        row.cmd === victim.installHint &&
+        row.copy &&
+        row.copies === victim.installHint
 
       // Seed a recent, then re-read Home.
       const anchor = mkdtempSync(join(tmpdir(), 'mog-homeux-'))
@@ -77,9 +124,16 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
       const spacingOk = measured.gap >= measured.sp6 - 0.5 && measured.pad >= measured.sp4 - 0.5
 
       // (f) AA on the card text, four themes, via the shared probe (which owns the freeze).
+      // .firstrun-cli-cmd is measured on the row (b2) forced into existence — before this, the
+      // selector matched nothing here and the probe scored a contrast nobody was reading.
       const PROBES = ['.home-recent-name', '.home-recent-path', '.home-recent-when', '.home-recent-chip', '.firstrun-row-title', '.firstrun-cli-cmd']
       const aa = await probeContrastAcrossThemes({ es: ES, sleep, selectors: PROBES })
       const aaOk = aa.failures.length === 0 && aa.missing.length === 0
+
+      // Detection is honest again for everything below — (d) turns on what is REALLY installed.
+      await ES(`window.__mogging.firstrun.forceMissing([])`)
+      await ES(`window.__mogging.firstrun.refresh()`)
+      await sleep(300)
 
       // (c) the recent Card reopens the workspace on click.
       const wsBefore = await ES<number>(`window.__mogging.workspace.list().length`)
@@ -110,7 +164,8 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
         200
       )
 
-      const pass = heroOk && emptyOk && cliHonest && installChipOk && cardOk && spacingOk && aaOk && openedOk && dismissOk && wizardOk
+      const pass =
+        heroOk && emptyOk && cliHonest && missingHonest && installChipOk && cardOk && spacingOk && aaOk && openedOk && dismissOk && wizardOk
       result = {
         pass,
         heroOk,
@@ -118,6 +173,10 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
         anyCli,
         cliRowDone,
         cliHonest,
+        missingHonest,
+        trulyMissing: trulyMissing.map((a) => a.id),
+        forcedMissing: victim.id,
+        row,
         installChipOk,
         cardOk,
         measured,

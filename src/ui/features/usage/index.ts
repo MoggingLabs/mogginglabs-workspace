@@ -194,7 +194,7 @@ export const usageFeature: UiFeature = {
     //    cost · actions · profile switch · footer. The LAYOUT is copied; the DATA
     //    is ours — every element is backed by IPC, and a slot we can't back (a $
     //    cap, a faked Sonnet meter, in-popover add-account) is dropped, not invented.
-    const renderPop = (): void => {
+    const paintPop = (): void => {
       pop.innerHTML = ''
       pop.classList.toggle('is-compact', display.density === 'compact')
       const now = Date.now()
@@ -431,6 +431,30 @@ export const usageFeature: UiFeature = {
       // The one-line post-switch hint: pointers flipped for NEW launches only.
       if (switchHint) pop.append(el('div', { class: 'usage-switch-hint', text: switchHint }))
       pop.append(popFoot(now))
+    }
+
+    /**
+     * A repaint MUST NOT steal the focus. Usage polls in the background and every snapshot that
+     * arrives repaints this popover — and `pop.innerHTML = ''` destroys the very node the user
+     * has focused. Focus falls back to <body>, and the Enter they were lining up (the profile
+     * switch, the one thing you can do from here with the keyboard) silently does nothing: they
+     * arrowed to a lane, a refresh landed, and the popover stopped answering. The keydown handler
+     * is right to demand a focused tile — a switch must go where the user is looking. The repaint
+     * was the wrong half. Focus follows the LANE (provider + profile) rather than the node, since
+     * the node is gone by definition, and lands back on the tile that replaced it.
+     */
+    const renderPop = (): void => {
+      const active = document.activeElement
+      const held =
+        active instanceof HTMLElement && pop.contains(active) && active.classList.contains('usage-tile')
+          ? { provider: active.dataset.provider, profile: active.dataset.profile }
+          : null
+      paintPop()
+      if (!held) return
+      const back = [...pop.querySelectorAll<HTMLElement>('.usage-tile')].find(
+        (t) => t.dataset.provider === held.provider && t.dataset.profile === held.profile
+      )
+      back?.focus() // the lane survived the repaint, so the user's next Enter still means it
     }
 
     const open = (): void => {

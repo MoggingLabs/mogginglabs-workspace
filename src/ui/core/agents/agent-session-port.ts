@@ -24,6 +24,16 @@ export interface PaneAgentSession {
    *  simply arrived without the app's help, so its cwd is the agent's own (a hint that may
    *  be refined DOWN a directory) and it carries no profile the app chose. */
   detected?: boolean
+  /** RUNNING, not merely launched: the backend has SEEN this agent's process in the pane's PTY
+   *  subtree. A launch writes this session the moment it types the command into the shell — the
+   *  CLI has not started yet, and for a second or two the pane is a shell with a command in
+   *  flight. `detected` cannot carry that difference: it answers WHO started the agent, not
+   *  WHETHER it is up. So anything that must hand something TO the agent waits for this instead
+   *  — the board's card task, which IS the agent's first prompt: typed a beat too early it lands
+   *  in the shell behind a booting CLI, which wipes the screen when it takes it, and the task is
+   *  gone. A detected session is running by definition; a launched one is confirmed when the
+   *  process table shows it (or never, for a CLI nothing can detect — those keep a fallback). */
+  running?: boolean
   /** When this session was first known to exist (ms epoch). Detection reports it exactly;
    *  the log matcher uses it as the floor for how far back this pane's session log may lie. */
   since?: number

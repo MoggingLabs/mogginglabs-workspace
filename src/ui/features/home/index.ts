@@ -279,7 +279,12 @@ export const homeFeature: UiFeature = {
     if (import.meta.env.DEV) {
       const w = window as unknown as { __mogging?: Record<string, unknown> }
       w.__mogging = w.__mogging ?? {}
-      w.__mogging.firstrun = { refresh: () => firstrun.refresh() }
+      w.__mogging.firstrun = {
+        refresh: () => firstrun.refresh(),
+        // HOMEUX drives the missing-CLI branch: the install row can only be exercised on a
+        // machine that is missing a CLI, and this one is missing none.
+        forceMissing: (agentIds: string[]) => firstrun.forceMissing(agentIds)
+      }
       w.__mogging.home = { refresh: () => refresh() } // recents/presets re-read (HOMEUX seeds a recent)
     }
   }

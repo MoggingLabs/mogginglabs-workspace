@@ -14,7 +14,9 @@ import { softGapMs } from './smoke-shell'
 //   (b) the popover opens <100ms from cache (median of 3, double-rAF);
 //   (c) .usage-verdict === pace.text VERBATIM, .usage-pace-delta matches a signed %,
 //       .usage-reset starts "resets in";
-//   (d) Enter on a sibling flips order-0 and the .usage-switch-hint says "running panes keep";
+//   (d) focus SURVIVES a background repaint (the poll used to destroy the focused tile, so a
+//       keyboard user's Enter went nowhere), and Enter on a sibling flips order-0 with the
+//       .usage-switch-hint saying "running panes keep";
 //   (e) Esc and click-away both close;
 //   (f) the gauge track + .usage-foot border RE-THEME (bug #4 — real house tokens);
 //   (g) "Status Page" calls browser:openExternal with the provider's statusUrl.
@@ -164,17 +166,54 @@ export function runUsageGlanceSmoke(win: BrowserWindow): void {
 
       // ── (d) Enter on the sibling flips order-0 + the switch hint ──
       stage = 'd-switch'
-      await ES(`(() => { const t = document.querySelector('.usage-popover .usage-tile[data-profile="backup"]'); t.focus(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })()`)
-      let flipped = false
+      // First, the bug this used to die on. A background snapshot repaints the popover, which
+      // DESTROYS the focused tile — so a keyboard user's Enter went nowhere, and this gate flaked
+      // on the same race. Mark the focused node, drive a REAL refresh through the push path, and
+      // require: the node was genuinely replaced, and the focus came back with the lane.
+      const marked = await ES<boolean>(`(() => {
+        const t = document.querySelector('.usage-popover .usage-tile[data-profile="backup"]')
+        if (!t) return false
+        t.dataset.smokeMark = '1'
+        t.focus()
+        return document.activeElement === t
+      })()`)
+      svc.refresh() // the poll that used to land under the user's hands and take the focus away
+      let repaint = { repainted: false, focused: false }
       tries = 0
-      while (!flipped && tries++ < 40) {
-        await sleep(200)
-        const mine = (kv.listProfiles() ?? []).filter((p) => p.provider === 'claude').sort((a, b) => a.order - b.order)
-        flipped = mine[0]?.id === 'backup'
+      while (!repaint.repainted && tries++ < 40) {
+        await sleep(150)
+        repaint = await ES<{ repainted: boolean; focused: boolean }>(`(() => {
+          const t = document.querySelector('.usage-popover .usage-tile[data-profile="backup"]')
+          if (!t) return { repainted: false, focused: false }
+          return { repainted: t.dataset.smokeMark !== '1', focused: document.activeElement === t }
+        })()`)
+      }
+      const focusSurvivesRefresh = marked && repaint.repainted && repaint.focused
+
+      // Now the switch itself. focus + check + dispatch inside ONE synchronous script: nothing
+      // can repaint between them, so the handler cannot find a stale activeElement. The switch is
+      // idempotent (it makes `backup` the order-0 lane), so a retry is safe if it did not land.
+      let flipped = false
+      let sent = ''
+      const isFlipped = (): boolean =>
+        (kv.listProfiles() ?? []).filter((p) => p.provider === 'claude').sort((a, b) => a.order - b.order)[0]?.id === 'backup'
+      for (let attempt = 0; attempt < 3 && !flipped; attempt++) {
+        sent = await ES<string>(`(() => {
+          const t = document.querySelector('.usage-popover .usage-tile[data-profile="backup"]')
+          if (!t) return 'no-tile'
+          t.focus()
+          if (document.activeElement !== t) return 'not-focused'
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+          return 'sent'
+        })()`)
+        for (tries = 0; !flipped && tries < 25; tries++) {
+          await sleep(200)
+          flipped = isFlipped()
+        }
       }
       await sleep(200)
       const hintOk = (await ES<string>(`document.querySelector('.usage-popover .usage-switch-hint')?.textContent ?? ''`)).includes('running panes keep')
-      const dOk = flipped && hintOk
+      const dOk = flipped && hintOk && focusSurvivesRefresh
 
       // ── (e) Esc + click-away both close ──
       stage = 'e-dismiss'
@@ -192,7 +231,7 @@ export function runUsageGlanceSmoke(win: BrowserWindow): void {
       getUsageService()?.refresh()
 
       const pass = Boolean(aOk && openFast && cOk && dOk && eOk && fOk && gOk)
-      result = { pass, aOk, openFast, openMs, openBudget, cOk, paceText, cInfo, dOk, flipped, hintOk, eOk, escClosed, awayClosed, fOk, dark, light, gOk, openedUrl: cap.url, gClick }
+      result = { pass, aOk, openFast, openMs, openBudget, cOk, paceText, cInfo, dOk, flipped, sent, hintOk, focusSurvivesRefresh, marked, repaint, eOk, escClosed, awayClosed, fOk, dark, light, gOk, openedUrl: cap.url, gClick }
     } catch (e) {
       result = { pass: false, stage, error: e instanceof Error ? e.message : String(e) }
     }

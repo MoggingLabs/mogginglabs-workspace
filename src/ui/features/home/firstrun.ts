@@ -42,10 +42,21 @@ interface RowState {
   render: (row: HTMLElement) => void
 }
 
-export function createFirstRun(): { el: HTMLElement; refresh: () => Promise<void> } {
+export function createFirstRun(): {
+  el: HTMLElement
+  refresh: () => Promise<void>
+  forceMissing: (agentIds: string[]) => void
+} {
   const bridge = getBridge()
   const card = el('section', { class: 'firstrun-card', hidden: true })
   card.setAttribute('aria-label', 'Get set up')
+
+  /** DEV-only fixture (HOMEUX). The install row below exists only for a MISSING CLI, so on a
+   *  machine that has them all it correctly renders nothing — and the branch that matters most
+   *  to a new user is the one nobody here can test. This forces named agents to READ as missing.
+   *  It fakes the DETECTION INPUT and nothing else: the row, its command, its copy chip and its
+   *  contrast are all produced by the real path. Empty in production (and tree-shaken). */
+  let forcedMissing = new Set<string>()
 
   const dismissBtn = el(
     'button',
@@ -101,10 +112,13 @@ export function createFirstRun(): { el: HTMLElement; refresh: () => Promise<void
     ])
 
   async function computeRows(): Promise<RowState[]> {
-    const [agents, servers] = await Promise.all([
+    const [detected, servers] = await Promise.all([
       bridge.invoke(AgentChannels.detect).catch(() => []) as Promise<AgentInfo[]>,
       bridge.invoke(IntegrationsChannels.serversList).catch(() => []) as Promise<{ builtIn?: boolean }[]>
     ])
+    const agents = forcedMissing.size
+      ? detected.map((a) => (forcedMissing.has(a.id) ? { ...a, installed: false } : a))
+      : detected
 
     // ① Agent CLIs — live detection; found ones listed, missing ones get a copyable install line.
     const found = agents.filter((a) => a.installed)
@@ -202,5 +216,12 @@ export function createFirstRun(): { el: HTMLElement; refresh: () => Promise<void
     card.hidden = false
   }
 
-  return { el: card, refresh }
+  return {
+    el: card,
+    refresh,
+    forceMissing: (agentIds: string[]): void => {
+      if (!import.meta.env.DEV) return
+      forcedMissing = new Set(agentIds)
+    }
+  }
 }

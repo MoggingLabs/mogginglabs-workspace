@@ -30,6 +30,11 @@ export const contextFeature: UiFeature = {
   mount() {
     /** Panes with a live log watch — the set that renders a gauge (real or pending). */
     const watched = new Set<PaneId>()
+    /** What each watched pane is watching. A session event that changes none of it is a
+     *  CONFIRMATION, not a new session — the process table catching up with a launch we already
+     *  knew about (agent-session-port: `running`). Re-watching on it would blank a live gauge
+     *  back to "–" for nothing, once per launch, for no reason a user could ever explain. */
+    const watching = new Map<PaneId, string>()
 
     // Backend usage updates (session-log tails) -> context port -> pane bars. A null
     // from the backend (locked log deleted) on a still-watched pane re-pends the
@@ -38,6 +43,7 @@ export const contextFeature: UiFeature = {
 
     const drop = (paneId: PaneId): void => {
       watched.delete(paneId)
+      watching.delete(paneId)
       contextClient.unwatch(paneId)
       clearPaneContext(paneId)
     }
@@ -57,7 +63,13 @@ export const contextFeature: UiFeature = {
       // the footer can never disagree (contracts/ipc/context.ipc.ts). A provider with no
       // readable source at all (a custom command) still gets nothing — never a guessed number.
       if (!isContextProvider(session.provider)) return drop(paneId)
+      // Nothing about WHAT we watch has changed — same agent, same directory, same profile — so
+      // this is the process table confirming a launch we already watch, not a new session. Watch
+      // it once; re-watching would blank the gauge to "–" for a moment nobody asked for.
+      const key = `${session.provider} | ${session.cwd} | ${session.profileId ?? ''} | ${session.adopted ? 1 : 0} | ${session.since ?? ''}`
+      if (watched.has(paneId) && watching.get(paneId) === key) return
       watched.add(paneId)
+      watching.set(paneId, key)
       // The gauge exists from the moment the agent does: pending ("–", empty disc)
       // until the session's FIRST response writes a usage line — never a made-up 0%.
       setPaneContext(paneId, 'pending')

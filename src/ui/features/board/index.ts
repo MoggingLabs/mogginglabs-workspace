@@ -242,9 +242,12 @@ export const boardFeature: UiFeature = {
         bridge.send(TerminalChannels.write, { id: paneId as PaneId, data: prompt + '\r' })
       }
       offSession = onPaneAgentSession((id, session) => {
-        // A pane's agent going AWAY is not a cue to type into it.
-        if (id !== (paneId as PaneId) || !session) return
-        setTimeout(hand, 800) // it is running; give it a beat to paint a prompt to type into
+        // A pane's agent going AWAY is not a cue to type into it — and neither is the app's own
+        // LAUNCH, which writes this session the instant it types the command, while the CLI is
+        // still booting. Only `running` (the backend saw the process in the pane's PTY subtree)
+        // means there is something on the other end of the keyboard.
+        if (id !== (paneId as PaneId) || !session?.running) return
+        setTimeout(hand, 800) // it is up; give it a beat to paint a prompt to type into
       })
       fallback = setTimeout(hand, 9000)
       return true

@@ -1,9 +1,10 @@
-import { app, type BrowserWindow } from 'electron'
+import { app, ipcMain, type BrowserWindow } from 'electron'
+import { TerminalChannels } from '@contracts'
 import { execFile, execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { sh } from './smoke-shell'
+import { settleToShell, sh } from './smoke-shell'
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim()
@@ -12,19 +13,26 @@ function git(cwd: string, args: string[]): string {
 // Env-gated Kanban-board smoke (MOGGING_BOARD, Phase-3/05):
 //   1. a card persists across a renderer reload (db round-trip, not memory)
 //   2. "Start agent on card" binds a pane (paneId = ordinal*100+1, lane -> doing)
-//      and the task text reaches the PTY as the first prompt (marker in the buffer)
+//      and the task text is WRITTEN to that pane's PTY, once the agent is listening
 //   3. flipping the bound pane to attention flags the card (orange + "needs you")
 //   4. the reviewer's approval flags the card with a push-fed ✓-chip; removing the
 //      worktree clears it (4/03 polish)
 //   5. closing the pane unbinds the card (paneId cleared, persisted)
-// Provider 'gemini' is a REAL launch. This once read "deliberately not installed here: the
-// launch no-ops" — an assumption about the machine, written into a gate, and it rotted the day
-// gemini got installed. A real agent owns the keyboard and takes the alternate screen, so every
-// shell command this smoke types went into the AGENT's prompt and every line it scraped for was
-// wiped. The gate did not fail loudly; it failed as "the board is broken". Nothing here assumes
-// what is on the PATH any more: the agent is interrupted before its shell is driven, which is
-// what a person has to do, and what the app itself does before a failover relaunch.
+//
+// Provider 'gemini' is a REAL launch. (2) used to scrape the pane's xterm buffer for the task
+// text — an assertion about GEMINI's rendering, which the board neither owns nor can promise:
+// a real agent takes the ALTERNATE screen, so the text it was handed is never echoed there and
+// the gate failed as "the board is broken". The board's contract is the task IS the agent's
+// first prompt: it must WRITE that text to that pane, once something is listening. So we
+// witness the write itself, at the terminal effect (main's terminal:write, the same seam the
+// pane's PTY is fed from), and we witness the daemon's typed-launch DETECTION for the pane —
+// then assert the write carried the exact prompt, to the exact pane, AFTER the agent was seen
+// running. That is stronger than the scrape ever was, and it is true whatever is on the PATH.
 const MARKER = 'TASK_MARKER_4242'
+const NOTES = 'Reverse the polarity of the neutron flow.'
+/** The board's own fallback timer (startOnCard). A write that lands a beat after DETECTION is
+ *  the feature working; one that lands on this timer is the feature guessing. */
+const HAND_AFTER_DETECT_MS = 3000
 
 export function runBoardSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 120000) // safety net
@@ -32,20 +40,42 @@ export function runBoardSmoke(win: BrowserWindow): void {
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
+  // THE WITNESS. Every byte the renderer sends to a PTY arrives here (daemon-relay listens on
+  // the same channel and forwards it to the daemon) — so this sees the board's write exactly as
+  // the pane's shell will, with no TUI in between to decide whether to echo it.
+  const writes: { at: number; id: number; data: string }[] = []
+  const onWrite = (_e: unknown, cmd: { id?: number; data?: string }): void => {
+    writes.push({ at: Date.now(), id: Number(cmd?.id), data: String(cmd?.data ?? '') })
+  }
+  ipcMain.on(TerminalChannels.write, onWrite)
+
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
     try {
       await sleep(1500) // launcher-first boot settles
 
       // 1) create -> reload -> still there (proves the db, not the cache).
+      const title = `${MARKER} fix the flux capacitor`
       const cardId = String(
-        await ES(`window.__mogging.board.createCard(${JSON.stringify(MARKER + ' fix the flux capacitor')}, 'Reverse the polarity of the neutron flow.')`)
+        await ES(`window.__mogging.board.createCard(${JSON.stringify(title)}, ${JSON.stringify(NOTES)})`)
       )
       await sleep(600)
       const reloaded = new Promise<void>((res) => wc.once('did-finish-load', () => res()))
       wc.reload()
       await reloaded
       await sleep(3000) // features remount, board loads from db
+
+      // The second witness, registered AFTER the reload (which wipes the window): the daemon's
+      // typed-launch detection — an agent CLI really appeared in the pane's PTY subtree. This is
+      // the cue startOnCard now waits for, so it is the cue we hold it to.
+      await ES(`(() => {
+        const w = window
+        w.__boardDetections = []
+        window.bridge.on('terminal:agent', (p) => {
+          if (p && p.agentId) w.__boardDetections.push({ id: Number(p.id), agentId: String(p.agentId), at: Date.now() })
+        })
+        return 1
+      })()`)
       type Card = { id: string; title: string; lane: string; paneId?: number | null }
       const afterReload = (await ES(`window.__mogging.board.list()`)) as Card[]
       const persisted = afterReload.find((c) => c.id === cardId)
@@ -71,26 +101,26 @@ export function runBoardSmoke(win: BrowserWindow): void {
       const paneId = bound?.paneId ?? 0
       const bindOk = started && !!bound && !!paneId && paneId % 100 === 1 && bound.lane === 'doing'
 
-      // 3) the task IS the first prompt: the marker lands in the pane's buffer.
-      const bufferText = (id: number): Promise<string> =>
-        ES<string>(
-          `(() => {
-            const p = (window.__mogging.panes || []).find((x) => x.id === ${id})
-            if (!p) return ''
-            const b = p.term.buffer.active
-            let s = ''
-            for (let i = 0; i < b.length; i++) { const l = b.getLine(i); if (l) s += l.translateToString(true) + '\\n' }
-            return s
-          })()`
-        )
-      let promptOk = false
-      for (let i = 0; i < 30; i++) {
-        if ((await bufferText(paneId)).includes(MARKER)) {
-          promptOk = true
-          break
-        }
-        await sleep(500)
+      // 3) the task IS the first prompt — the board's actual contract, in three parts: the
+      //    exact text, to the exact pane, only once an agent is really there to read it.
+      const expected = `${title}\n\n${NOTES}\r`
+      type Detection = { id: number; agentId: string; at: number }
+      const detections = (): Promise<Detection[]> => ES<Detection[]>(`(window.__boardDetections || []).slice()`)
+      let promptWrite: { at: number; id: number; data: string } | undefined
+      let detected: Detection | undefined
+      for (let i = 0; i < 40 && !promptWrite; i++) {
+        promptWrite = writes.find((w) => w.id === paneId && w.data.includes(MARKER))
+        detected = detected ?? (await detections()).find((d) => d.id === paneId)
+        if (!promptWrite) await sleep(500)
       }
+      detected = detected ?? (await detections()).find((d) => d.id === paneId)
+      const textOk = promptWrite?.data === expected // the WHOLE task — title, blank line, notes
+      const handMs = promptWrite && detected ? promptWrite.at - detected.at : null
+      // Ordering, not duration: the write must FOLLOW the daemon's verdict that an agent is
+      // running in this pane, and follow it by a beat — a write that arrived first, or minutes
+      // later, is the 9s fallback timer firing, which means detection never worked.
+      const afterDetectOk = handMs != null && handMs >= 0 && handMs <= HAND_AFTER_DETECT_MS
+      const promptOk = textOk && !!detected && afterDetectOk
 
       // 4) attention flip -> the card flags orange with a "needs you" chip.
       await ES(`window.__mogging.attention.setPaneState(${paneId}, 'attention')`)
@@ -154,17 +184,12 @@ export function runBoardSmoke(win: BrowserWindow): void {
         )) as boolean
       }
       // The launch command cd'd the pane INTO its worktree, and Windows refuses to remove a
-      // directory that is a process's cwd — so the pane has to step out. But an AGENT is in
-      // the foreground and it owns the keyboard: a `cd` typed now goes into the agent's
-      // prompt, not the shell, the pane never moves, and the removal fails with a permission
-      // error that looks like anything but what it is. Interrupt the agent first (twice — one
-      // ^C cancels the CLI's current input, the second exits it), THEN cd, which is exactly
-      // what a person has to do. Not a workaround for the gate: it is the sequence the product
-      // requires, and the gate was quietly skipping it.
-      await ES(`window.bridge.send('terminal:write', { id: ${paneId}, data: '\\u0003' })`)
-      await sleep(700)
-      await ES(`window.bridge.send('terminal:write', { id: ${paneId}, data: '\\u0003' })`)
-      await sleep(900)
+      // directory that is a process's cwd — so the pane has to step out. But the AGENT owns the
+      // keyboard: a `cd` typed at it goes into the agent's prompt, the pane never moves, and the
+      // removal fails with a permission error that looks like anything but what it is. Get the
+      // shell back and PROVE it before typing at it (settleToShell) — the sequence the product
+      // requires of a person, which the gate used to sleep through.
+      const settled = await settleToShell({ es: ES, sleep, paneId })
       await ES(`window.bridge.send('terminal:write', { id: ${paneId}, data: ${JSON.stringify(sh.cd(anchor) + '\r')} })`)
       await sleep(1500)
       const removed = await ES(
@@ -192,10 +217,11 @@ export function runBoardSmoke(win: BrowserWindow): void {
       }
 
       const pass = persistOk && bindOk && promptOk && attnOk && noRailOk && railBackOk && approvedChipOk && approvedChipGone && unbindOk
-      result = { pass, persistOk, bindOk, promptOk, attnOk, attn, noRailOk, railBackOk, approveExit, approvedChipOk, approvedChipGone, removed, branch, gitQ, wtDirs, unbindOk, paneId, cardId }
+      result = { pass, persistOk, bindOk, promptOk, textOk, afterDetectOk, handMs, detected, wrote: promptWrite, settled, attnOk, attn, noRailOk, railBackOk, approveExit, approvedChipOk, approvedChipGone, removed, branch, gitQ, wtDirs, unbindOk, paneId, cardId }
     } catch (e) {
       result = { pass: false, error: String(e) }
     }
+    ipcMain.off(TerminalChannels.write, onWrite)
     try {
       writeFileSync(join(process.cwd(), 'out', 'board-result.json'), JSON.stringify(result, null, 2))
     } catch {

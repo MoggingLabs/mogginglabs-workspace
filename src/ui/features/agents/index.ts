@@ -112,10 +112,21 @@ export const agentsFeature: UiFeature = {
       const at = Date.now()
       detectedAt.set(paneId, at)
 
-      // The app launched this very CLI here: its own record is strictly richer (the exact
-      // launch cwd, the profile it chose). Detection only CONFIRMS it — rewriting would
-      // restart the log watch and drop the profile for nothing.
-      if (existing && existing.provider === ev.agentId && !existing.detected) return
+      // The app launched this very CLI here: its own record is strictly richer (the exact launch
+      // cwd, the profile it chose), so detection only CONFIRMS it — rewriting would restart the
+      // log watch and drop the profile for nothing. But it has to confirm it OUT LOUD. Returning
+      // in silence left the port unable to say the one thing only the process table knows: the
+      // agent is actually UP. A launch writes its session the moment it types the command, so
+      // "there is a session here" has always meant "a command was typed", and a reader that
+      // needed "something is listening" had nothing to wait for. The board hands a card's task to
+      // the pane as the agent's first prompt and waited on exactly this — so it fired 800ms after
+      // typing, into the shell behind a still-booting CLI, which then took the alternate screen
+      // and wiped it: the task gone, the agent never saw it, the one thing the board exists to do.
+      // The identity stays byte-for-byte; all we add is the verdict that the process is real.
+      if (existing && existing.provider === ev.agentId && !existing.detected) {
+        if (!existing.running) writeSession(paneId, { ...existing, running: true }, at)
+        return
+      }
       const cwd = ev.cwd || getPaneCwd(paneId as PaneId) || ''
       if (existing && existing.provider === ev.agentId && existing.cwd === cwd) return // same session, no news
 
@@ -133,7 +144,8 @@ export const agentsFeature: UiFeature = {
       // afterwards; it is a note on the pane, not the session's identity.
       writeSession(
         paneId,
-        { provider: ev.agentId, cwd, profileId, detected: true, since: ev.sinceMs },
+        // Detected means the process table SAW it: a detected session is running by definition.
+        { provider: ev.agentId, cwd, profileId, detected: true, running: true, since: ev.sinceMs },
         at // the session and the agent it names are the same event
       )
       lastLaunch.set(paneId, { provider: ev.agentId, cwd, profileId }) // failover works here too
