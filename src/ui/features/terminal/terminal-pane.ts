@@ -27,6 +27,7 @@ import { clearPaneCli, mcpChipForPane, onMcpStatusChange } from '../../core/agen
 import { getPaneContext, onPaneContext, type PaneContext } from '../../core/terminal/context-port'
 import { clearPaneAgentSession, getPaneAgentSession, onPaneAgentSession } from '../../core/agents/agent-session-port'
 import { claimsFor, onClaimsChange, workspaceClaims } from './claims-store'
+import { createPaneAnchor, type PaneAnchorHandle } from './pane-anchor'
 import { createPaneScrollbar, type PaneScrollbarHandle } from './pane-scrollbar'
 import { onFocusedPane } from '../../core/layout/focus'
 import { onPaneGit, getPaneGit } from '../../core/git/git-port'
@@ -113,6 +114,7 @@ export class TerminalPane {
   private agentSessionUnsub?: () => void
   private agentChipUnsub?: () => void
   private scrollbar?: PaneScrollbarHandle
+  private anchor?: PaneAnchorHandle
   private osc133?: { dispose(): void }
   private stateDot?: HTMLSpanElement
   private syncState?: (adopted?: boolean) => void
@@ -172,7 +174,13 @@ export class TerminalPane {
       const last = entries[entries.length - 1]
       this.visible = last.isIntersecting
       if (this.visible) {
-        // Back on screen: cancel any pending release (a rapid flip keeps GL warm).
+        // Back on screen. A pane that was hidden fitted against a zero-height body and
+        // took its stream blind; if it was following its output, it must come back AT
+        // that output — entering a workspace must never dump you at the top of every
+        // conversation. A pane you deliberately scrolled up keeps its place (`pin` is a
+        // no-op unless the anchor is still following).
+        this.anchor?.pin()
+        // Cancel any pending release (a rapid flip keeps GL warm).
         if (this.glReleaseDebounce) {
           clearTimeout(this.glReleaseDebounce)
           this.glReleaseDebounce = undefined
@@ -302,6 +310,10 @@ export class TerminalPane {
         // adopt branch on restore (agents/index.ts), labelling a session that isn't there
         // instead of typing its resume, and the agent would never come back.
         if (res.existing && !res.restored && !this.disposed) markPaneReattached(this.id)
+        // The reattach/restore REPLAY arrives right after this: thousands of scrollback
+        // lines in a burst, into a grid that is about to be refitted. Land at the end of
+        // the conversation, which is the only place it makes sense to land.
+        this.anchor?.pin()
         // Second stateSync pull: the spawn just registered/reattached the session, so
         // the backend now KNOWS this pane's state (the mountChrome pull may have run
         // before it existed). Reattach to a busy/attention agent paints correctly here.
@@ -445,6 +457,9 @@ export class TerminalPane {
         if (this.term.cols !== before.cols || this.term.rows !== before.rows) {
           terminalClient.resize({ id: this.id, cols: this.term.cols, rows: this.term.rows })
         }
+        // A fit REFLOWS the buffer under a viewport nobody asked to move (a reveal, a
+        // zoom, a window drag). If this pane was following its output, it still is.
+        this.anchor?.pin()
         return
       }
       const d = this.fit.proposeDimensions()
@@ -452,6 +467,7 @@ export class TerminalPane {
       if (d.cols === this.term.cols && d.rows === this.term.rows) return // nothing changed
       this.term.resize(d.cols, d.rows)
       terminalClient.resize({ id: this.id, cols: this.term.cols, rows: this.term.rows })
+      this.anchor?.pin()
     } catch (err) {
       // Never swallow silently — a failing fit is exactly how "the terminal doesn't
       // take its space" bugs hide.
@@ -1119,10 +1135,13 @@ export class TerminalPane {
     body.className = 'pane-body'
     host.append(header, body)
 
-    // The slide bar + bottom-left jump pill (pane-scrollbar.ts) replace the old
-    // hover-only native scrollbar: a persistent grabbable track with to-top /
-    // to-bottom endpoints, and a one-tap return to the latest output.
-    this.scrollbar = createPaneScrollbar(this.term, body)
+    // The anchor comes FIRST: the pane follows its newest output unless a human says
+    // otherwise (pane-anchor.ts), and the slide bar is one of the humans who can say it.
+    this.anchor = createPaneAnchor(this.term, body)
+    // The slide bar + jump pill (pane-scrollbar.ts) replace the native scrollbar with an
+    // overlay one: invisible until you reach into its lane or the viewport moves, a
+    // full-height grabbable rail, and a one-tap return to following the latest output.
+    this.scrollbar = createPaneScrollbar(this.term, body, this.anchor)
 
     // Title precedence: what the agent says it's doing (OSC 0/2 window title) → the
     // launched agent's label → "Terminal N".
@@ -1547,10 +1566,49 @@ export class TerminalPane {
         return s
       },
       hasCanvas: () => !!host.querySelector('canvas'),
+      /** The pane's root element — PANESCROLL dispatches real wheel/pointer/key events
+       *  at the real targets inside it, so the gate exercises the shipped listeners. */
+      el: (): HTMLElement => host,
       renderer: (): string => (this.webgl ? 'webgl' : 'dom'),
       bufferLines: () => this.term.buffer.active.length,
       rows: () => this.term.rows,
       cols: () => this.term.cols,
+      // PANESCROLL (scroll-anchor gate): the viewport's position, whether the pane is
+      // still following its output, and what the overlay bar is showing for it.
+      scroll: (): {
+        viewportY: number
+        baseY: number
+        atBottom: boolean
+        following: boolean
+        sliderOpacity: number
+        sliderClasses: string
+        jumpShown: boolean
+        anchor?: { gestures: number; scrolls: number; inWindow: number; repins: number }
+      } => {
+        const b = this.term.buffer.active
+        const slider = host.querySelector<HTMLElement>('.pane-slider')
+        const jump = host.querySelector<HTMLElement>('.pane-jump')
+        return {
+          viewportY: b.viewportY,
+          baseY: b.baseY,
+          atBottom: b.viewportY >= b.baseY,
+          following: this.anchor?.following() ?? false,
+          sliderOpacity: slider ? Number(getComputedStyle(slider).opacity) : -1,
+          sliderClasses: slider?.className ?? '',
+          jumpShown: !!jump && !jump.hidden,
+          anchor: this.anchor?.debug()
+        }
+      },
+      /** The rail's box and the thumb's, in pane-body coordinates — the gate proves the
+       *  thumb reaches the true floor at the newest line and the true ceiling at the oldest. */
+      sliderGeometry: (): { trackTop: number; trackBottom: number; thumbTop: number; thumbBottom: number } | null => {
+        const track = host.querySelector<HTMLElement>('.pane-slider-track')
+        const thumb = host.querySelector<HTMLElement>('.pane-slider-thumb')
+        if (!track || !thumb) return null
+        const t = track.getBoundingClientRect()
+        const h = thumb.getBoundingClientRect()
+        return { trackTop: t.top, trackBottom: t.bottom, thumbTop: h.top, thumbBottom: h.bottom }
+      },
       blocks: () =>
         (this.blocks?.list() ?? []).map((b) => ({
           id: b.id,
@@ -1609,6 +1667,7 @@ export class TerminalPane {
     this.agentChipUnsub?.()
     this.dotGateUnsub?.()
     this.scrollbar?.dispose()
+    this.anchor?.dispose()
     this.osc133?.dispose()
     clearPaneCli(this.id)
     // Launch-scoped identity dies with the pane, not with the id: a killed pane's exit

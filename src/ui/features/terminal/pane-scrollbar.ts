@@ -1,33 +1,40 @@
 import type { Terminal } from '@xterm/xterm'
 import { icon } from '../../components'
+import type { PaneAnchorHandle } from './pane-anchor'
 
 /**
- * The pane slide bar, minimalist cut: ONLY the slider shows — no arrows, no
- * visible rail — a bright accent-orange pill (the focused-outline color)
- * floating just off the pane's right edge. It appears only when BOTH hold:
- * there is scrollback to scroll (`is-idle` hides it otherwise) and the mouse
- * is over the pane (CSS hover-reveal; a drag in flight keeps it visible even
- * if pointer capture leaves the pane). The full-height rail still exists
- * as an INVISIBLE hit area, so click-to-jump and drag work along the whole
- * edge. The jump pill: a small ⬇ floating near the bottom-RIGHT, shown only
- * once you've scrolled up; one tap returns to the latest output.
+ * The pane slide bar — an OVERLAY scrollbar, the macOS / VS Code / mobile model:
+ * it costs zero layout, it is invisible at rest, and it appears only when it is
+ * relevant to you. Three states reveal it, and nothing else does:
  *
- * Behavior is the PROVEN native model (macOS/Windows/VS Code terminal alike):
- * thumb length = visible/total ratio (clamped to a grabbable minimum), position
- * = scroll offset ratio, track press pages to the spot, drag maps linearly. The
- * thumb shrinking as scrollback grows is that standard, not a defect.
+ *   1. HOT    — the pointer is inside the bar's OWN lane at the right edge. This is the
+ *               only hover that reveals it: being somewhere in the pane does not. The
+ *               lane is an invisible hit strip (opacity 0 still hit-tests), so the bar
+ *               is grabbable the instant the pointer arrives, with no dead frame.
+ *   2. ACTIVE — the viewport is moving. Every overlay scrollbar in the industry flashes
+ *               while you scroll (mid-flick, the position readout is exactly what you
+ *               want) and fades ~900 ms after the motion stops.
+ *   3. DRAG   — a scrub in flight keeps it lit even when pointer capture leaves the pane.
+ * With scrollback but none of the three it is fully transparent; with no scrollback at
+ * all (`is-idle`) it is not even displayed.
+ *
+ * Geometry is the proven native model: thumb length = visible/total (clamped to a
+ * grabbable minimum), position = scroll offset, drag maps linearly, a track press pages
+ * to the spot. The rail spans the pane's FULL height, so the ends mean what they say:
+ * at the newest line the thumb sits flush on the floor, at the oldest flush against the
+ * ceiling — no inset lying about how much history is left.
+ *
+ * Every interaction here is a human's, so each one tells the anchor (pane-anchor.ts):
+ * scrubbing off the bottom stops the pane following its output, scrubbing back onto it
+ * resumes it, and the jump pill re-arms it outright.
  *
  * Performance model — why "scroll all the way up" costs nothing:
- *  - Scrollback MEMORY is bounded: xterm keeps a ring buffer capped by the
- *    `scrollback` option (10k lines); old lines drop off. Nothing "loads" when
- *    you scroll — the lines are already in the ring, and only there.
- *  - RENDERING is viewport-only: xterm (WebGL or DOM) draws just the visible
- *    rows wherever you are in history. Scrolled to the top, it renders the same
- *    ~40 rows it renders at the bottom.
- *  - THIS bar is O(1): updates are rAF-coalesced off onScroll/onRender, the
- *    sync does no DOM reads (track height arrives from a ResizeObserver), and
- *    it skips the two style writes when the computed geometry didn't change —
- *    a long-running stream sitting at the bottom writes nothing at all.
+ *  - Scrollback MEMORY is bounded: xterm keeps a ring buffer capped by the `scrollback`
+ *    option (10k lines); old lines drop off. Nothing "loads" when you scroll.
+ *  - RENDERING is viewport-only: xterm draws just the visible rows wherever you are.
+ *  - THIS bar is O(1): rAF-coalesced, no DOM reads on the hot path (the track height
+ *    arrives from a ResizeObserver), and it skips the two style writes when the computed
+ *    geometry didn't change — a long stream sitting at the bottom writes nothing at all.
  */
 
 export interface PaneScrollbarHandle {
@@ -36,8 +43,10 @@ export interface PaneScrollbarHandle {
 
 /** Grabbable floor for the thumb (the native standard: never a sliver). */
 const MIN_THUMB_PX = 24
+/** How long the bar stays lit after the last scroll — the native overlay fade-out. */
+const ACTIVE_MS = 900
 
-export function createPaneScrollbar(term: Terminal, body: HTMLElement): PaneScrollbarHandle {
+export function createPaneScrollbar(term: Terminal, body: HTMLElement, anchor: PaneAnchorHandle): PaneScrollbarHandle {
   const mk = (cls: string): HTMLDivElement => {
     const d = document.createElement('div')
     d.className = cls
@@ -73,6 +82,7 @@ export function createPaneScrollbar(term: Terminal, body: HTMLElement): PaneScro
   let idle = true
   let jumpShown = false
   let raf = 0
+  let activeTimer: ReturnType<typeof setTimeout> | undefined
 
   const sync = (): void => {
     raf = 0
@@ -93,6 +103,8 @@ export function createPaneScrollbar(term: Terminal, body: HTMLElement): PaneScro
       idle = false
       slider.classList.remove('is-idle')
     }
+    // The jump pill is the anchor's affordance: it shows exactly when the pane has
+    // STOPPED following (you scrolled up), and one tap puts you back on the stream.
     const showJump = buf.viewportY < max
     if (showJump !== jumpShown) {
       jumpShown = showJump
@@ -111,8 +123,30 @@ export function createPaneScrollbar(term: Terminal, body: HTMLElement): PaneScro
     if (!raf) raf = requestAnimationFrame(sync)
   }
 
-  const onScroll = term.onScroll(schedule)
+  /** Light the bar for the scroll that just happened, then fade it back out. */
+  const flash = (): void => {
+    slider.classList.add('is-active')
+    if (activeTimer) clearTimeout(activeTimer)
+    activeTimer = setTimeout(() => {
+      activeTimer = undefined
+      slider.classList.remove('is-active')
+    }, ACTIVE_MS)
+  }
+
+  const onScroll = term.onScroll(() => {
+    schedule()
+    flash()
+  })
   const onRender = term.onRender(schedule) // buffer growth + refits move the thumb too
+  // xterm's viewport scrolls NATIVELY: a wheel moves a real scrollable div and xterm syncs
+  // its buffer from it, emitting NO onScroll. Without this, the single most common way
+  // anyone scrolls — the wheel — would move the terminal without ever flashing the bar or
+  // moving the thumb. Capture-phase because `scroll` does not bubble.
+  const onNativeScroll = (): void => {
+    schedule()
+    flash()
+  }
+  body.addEventListener('scroll', onNativeScroll, true)
   const ro = new ResizeObserver((entries) => {
     const box = entries[entries.length - 1]?.contentBoxSize?.[0]
     trackH = box ? Math.round(box.blockSize) : track.clientHeight
@@ -121,9 +155,17 @@ export function createPaneScrollbar(term: Terminal, body: HTMLElement): PaneScro
   ro.observe(track)
   schedule()
 
+  // ── The lane's own hover. A :hover on the PANE would reveal the bar whenever the
+  // pointer was anywhere in the terminal; the contract is the right-edge lane only.
+  // Held as a class, not a :hover rule, so the reveal state is one thing — shared with
+  // the active/drag states, and observable by the gate. ──
+  slider.addEventListener('pointerenter', () => slider.classList.add('is-hot'))
+  slider.addEventListener('pointerleave', () => slider.classList.remove('is-hot'))
+
   // ── Interactions. pointerdown is prevented so the terminal keeps focus. ──
   const scrollToViewportY = (line: number): void => {
     const max = term.buffer.active.baseY
+    anchor.noteUserScroll() // a human's scroll: it may leave the bottom — or return to it
     term.scrollToLine(Math.max(0, Math.min(max, Math.round(line))))
   }
 
@@ -165,14 +207,16 @@ export function createPaneScrollbar(term: Terminal, body: HTMLElement): PaneScro
       term.focus()
     })
   }
-  tap(jump, () => term.scrollToBottom())
+  tap(jump, () => anchor.stick()) // follow the stream again — not merely a one-shot scroll
 
   return {
     dispose(): void {
       onScroll.dispose()
       onRender.dispose()
+      body.removeEventListener('scroll', onNativeScroll, true)
       ro.disconnect()
       if (raf) cancelAnimationFrame(raf)
+      if (activeTimer) clearTimeout(activeTimer)
       slider.remove()
       jump.remove()
     }

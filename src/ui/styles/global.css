@@ -2549,17 +2549,20 @@ button {
 }
 .pane-slider {
   position: absolute;
-  top: var(--sp-2);
+  top: 0; /* FULL height: the floor is the newest line, the ceiling the oldest — an */
+  bottom: 0; /* inset rail would lie about how much history is left at the ends. */
   right: 5px; /* floats off the pane outline — never flush against it */
-  bottom: var(--sp-2);
   width: 14px;
   z-index: 3;
-  opacity: 0; /* revealed on pane hover — still hit-testable, so the lane works instantly */
+  /* Invisible at rest, and ONLY at rest. opacity (not visibility/display) so the lane
+     still hit-tests: the pointer entering it reveals a bar that is already grabbable. */
+  opacity: 0;
   transition: opacity 140ms ease;
 }
-.pane-body:hover .pane-slider,
-.pane-slider:has(.pane-slider-thumb.is-dragging) {
-  opacity: 1; /* the drag case: pointer capture can leave the pane mid-scrub */
+.pane-slider.is-hot, /* the pointer is in the bar's own lane — the only hover that counts */
+.pane-slider.is-active, /* the viewport is moving: flash the position, then fade (900ms) */
+.pane-slider:has(.pane-slider-thumb.is-dragging) /* a scrub whose capture left the pane */ {
+  opacity: 1;
 }
 .pane-slider.is-idle {
   display: none; /* nothing above the fold — no scrollback yet (or an alt-screen TUI) */
