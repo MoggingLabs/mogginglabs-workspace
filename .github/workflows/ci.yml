@@ -64,6 +64,16 @@ jobs:
       - name: PTY seam gate
         run: node scripts/check-pty-seam.mjs
 
+      # Two more lists-that-must-agree, same cost, same reason. Both failed silently before
+      # they were gated: a stale PROTOCOL_VERSION points the CLI at a directory no daemon
+      # writes ("the daemon is not running", against a live one), and a gate missing from
+      # SMOKE_ENV runs as a REAL app — taking the instance lock and the mogging:// scheme.
+      - name: Protocol version gate
+        run: node scripts/check-protocol-version.mjs
+
+      - name: Gate registry gate
+        run: node scripts/check-gates.mjs
+
       - name: Build
         run: npm run build
 
