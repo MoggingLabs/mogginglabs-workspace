@@ -96,6 +96,7 @@ import { runNotifySmoke } from './notify-smoke'
 import { runMilestoneSmoke } from './milestone-smoke'
 import { runFlickerSmoke } from './flicker-smoke'
 import { runPaneScrollSmoke } from './panescroll-smoke'
+import { runAppScrollSmoke } from './appscroll-smoke'
 import { runConptySmoke } from './conpty-smoke'
 import { runPaneOpsSmoke } from './paneops-smoke'
 import { runControlSmoke } from './control-smoke'
@@ -535,7 +536,9 @@ app.whenReady().then(async () => {
   } else if (process.env.MOGGING_FLICKER && win) {
     runFlickerSmoke(win) // env-gated terminal-artifact smoke: churn without flicker
   } else if (process.env.MOGGING_PANESCROLL && win) {
-    runPaneScrollSmoke(win) // env-gated scroll-anchor + overlay-scrollbar smoke
+    runPaneScrollSmoke(win) // env-gated pane scroll-anchor + overlay slide-bar smoke
+  } else if (process.env.MOGGING_APPSCROLL && win) {
+    runAppScrollSmoke(win) // env-gated app-wide overlay-scrollbar smoke
   } else if (process.env.MOGGING_CONPTY && win) {
     runConptySmoke(win) // env-gated ConPTY-coherence smoke: resize must never smear the buffer
   } else if (process.env.MOGGING_PANEOPS && win) {
