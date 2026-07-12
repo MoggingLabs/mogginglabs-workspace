@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Full 83-gate sweeps are heavy (~4h each): nightly, staggered per OS, + on demand.
+  # Full 87-gate sweeps are heavy (~4h each): nightly, staggered per OS, + on demand.
   schedule:
     - cron: '30 3 * * *' # linux-sweep
     - cron: '30 4 * * *' # macos-sweep
@@ -58,6 +58,11 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      # Pure split-tree regression gate: persisted ratios, the 132px leaf floor and
+      # seam-local gutter drags. Fast and DOM-free, so run it on every platform.
+      - name: Layout invariants gate
+        run: node scripts/check-layout-invariants.mjs
 
       # The pty seam is a structural invariant (node-pty only via backend/platform/pty-host.ts).
       # Pure Node, no native deps — cheap enough to run on every push, not just nightly sweeps.

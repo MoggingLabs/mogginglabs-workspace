@@ -1819,6 +1819,15 @@ button {
   display: flex;
 }
 
+/* A workspace view is the viewport for GridLayout's non-shrinking inner canvas.
+   Window, rail and dock compression therefore reveal a horizontal scrollbar instead
+   of forcing any terminal below the split tree's hard per-leaf width requirement. */
+.workspace-view.layout-scroll-host {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+}
+
 /* The grid: slots are live terminals, absolutely positioned from the split-tree's
    computed rects (that is what buys per-seam resizing + drag-rearrange); gutters are
    positioned seam segments. Seams are the recessed --bg-inset showing through — just
@@ -2010,6 +2019,15 @@ button {
      @container does it in the style engine (see the progressive-collapse block below). */
   container-type: inline-size;
   container-name: pane-bar;
+  height: var(--pane-header-h);
+  padding: 0 3px 0 var(--sp-3); /* actions hug the pane's right edge, like the reference bar */
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+  min-width: 0;
+  user-select: none;
+}
+.pane-header-grid {
   display: grid;
   /* Was `minmax(0,1fr) auto minmax(0,1fr)` — a TRUE window-centred branch chip, paid for
      by giving the actions column exactly as much width as the left cluster. The actions
@@ -2022,13 +2040,9 @@ button {
   grid-template-columns: minmax(0, max-content) minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--sp-3);
-  height: var(--pane-header-h);
-  padding: 0 3px 0 var(--sp-3); /* actions hug the pane's right edge, like the reference bar */
-  background: var(--bg-surface);
-  border-bottom: 1px solid var(--border);
-  flex: none;
+  width: 100%;
+  height: 100%;
   min-width: 0;
-  user-select: none;
 }
 /* Explicit column pins: the git chip is display:none outside repos, and a hidden grid
    item generates NO box — auto-placement would then drop the actions into the CENTER
@@ -2053,14 +2067,14 @@ button {
 }
 
 /* ── Progressive collapse ───────────────────────────────────────────────────────
-   Two things are NEVER given up: the state glyph on the left (which agent is doing
-   what) and the × on the right (get out). Between them everything retires into the ⋯
-   menu, in a fixed order, least-identifying first:
+   Four anchors are NEVER given up while an agent session exists: the state glyph and
+   agent-CLI mark on the left, then ⋯ and × on the right. Everything else retires into
+   the portaled menu, in a fixed order, least-identifying first:
 
      1. the "% used" text of the context gauge (the disc keeps the color+arc signal)
      2. the branch / worktree chip      3. the expand trio
-     4. the MCP chip   5. claims   6. role   7. remote (+ the provider logo)
-     8. the gauge disc itself — only once even 16px would crowd the anchors out
+     4. the MCP chip   5. claims   6. role   7. remote
+     8. the title      9. the gauge disc itself
 
    The context gauge's ARC never lies but its FORM yields: the disc (color ramp +
    sweep) survives to ~150px panes; the "% used" text is the first thing retired,
@@ -2069,7 +2083,7 @@ button {
    whole contract: at 210px the state dot was crushed to 0, at 200px the × began
    to clip, at 150px ⋯ and × were BOTH gone — while "62% used" kept its 99px.
 
-   The title is the last thing standing, never the first to go. That inversion was the
+   The title is the last descriptive thing standing, never the first to go. That inversion was the
    bug: the chips are `flex: none` and the actions are fixed, so `.pane-title` was the
    ONLY shrinkable item in the row and absorbed the entire deficit — measured, it hit
    0px at a 862px pane while four chips kept their full width and were then clipped
@@ -2167,11 +2181,9 @@ button {
     display: none;
   }
 }
-/* 7. REMOTE + the provider logo: 351 = state+remote+logo+title floor (237) + gaps (24)
-   + disc actions (90). */
+/* 7. REMOTE. Agent identity is one of the compact floor's four anchors and stays. */
 @container pane-bar (max-width: 355px) {
-  .pane-header .pane-remote,
-  .pane-header .pane-agent {
+  .pane-header .pane-remote {
     display: none;
   }
 }
@@ -2182,35 +2194,49 @@ button {
     display: none;
   }
 }
-/* Below this there is nothing left to retire — only the state glyph, the title, the
-   disc, ⋯ and ×. Give the title's 6ch floor back, or it would overflow .pane-head-left
-   and be CLIPPED (measured: 90px of it, at a 90px pane) instead of ellipsising down
-   gracefully. A floor that outlives the space it was protecting stops protecting
-   anything. */
+/* 8. TITLE. At the final compact rung the menu carries the complete current title and
+   a portaled Rename dialog. Remove the title box entirely: leaving a zero-width flex
+   child would still consume a gap and raise the four-anchor floor for no information. */
 @container pane-bar (max-width: 200px) {
   .pane-header .pane-title {
-    min-width: 0;
+    display: none;
   }
 }
-/* 8. THE DISC ITSELF. 133 = state (13+6) + gaps (24) + disc actions (90): below that
-   even 16px of gauge starts pushing the anchors (⋯, ×, the dot) off the pane. The
+/* 9. THE DISC ITSELF. Below this, even 16px of gauge starts pushing the anchors
+   (dot, agent mark, ⋯, ×) off the pane. The
    anchors win — the ⋯ menu still states the context numbers. */
 @container pane-bar (max-width: 135px) {
   .pane-header .pane-context {
     display: none;
   }
 }
-/* The floor of the floor: state + ⋯ + × alone need 111px of content with --sp-3 gaps
-   (19 + 24 + 68). Tighten the gaps — NEVER the header's own padding: padding changes
-   this container's content box, and a container query that resizes its own container
-   oscillates. With --sp-1 gaps the bare chrome fits from 93px of content up, which is
-   what MIN_PANE_PX (grid-layout.ts) is set against. */
-@container pane-bar (max-width: 115px) {
-  .pane-header {
-    gap: var(--sp-1);
+/* Once the title retires, the three compact signals become one measured rhythm:
+   dot → agent and agent → context are both --sp-2 (8px). `display:contents` lets the
+   context gauge join that left cluster while ⋯ and × remain pinned to the right.
+   Below 135px the gauge yields, leaving 107px of fixed chrome in the 115px content
+   box at the 132px pane floor — an 8px rounding/drag guard. NEVER change the header's
+   own padding from a query: that changes the queried content box and can oscillate. */
+@container pane-bar (max-width: 200px) {
+  .pane-header-grid {
+    grid-template-columns: max-content auto minmax(0, 1fr) auto auto;
+    gap: 0;
   }
   .pane-head-left {
-    gap: var(--sp-1);
+    gap: var(--sp-2);
+  }
+  .pane-header .pane-actions {
+    display: contents;
+  }
+  .pane-actions .pane-context {
+    grid-column: 2;
+    margin: 0 0 0 var(--sp-2);
+  }
+  .pane-act-menu {
+    grid-column: 4;
+  }
+  .pane-act-close {
+    grid-column: 5;
+    margin-left: 2px;
   }
 }
 /* Remote pane chip (4/05): WHERE the pane lives — a distinct cool tint so remote
@@ -2242,6 +2268,14 @@ button {
   color: var(--text-lo);
   font-size: var(--fs-10);
   max-width: 220px;
+  line-height: 1.4;
+  border-radius: var(--r-sm);
+  outline: none;
+}
+.menu-note:focus-visible {
+  background: var(--bg-inset);
+  color: var(--text-mid);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 
 /* Ownership chip (4/02) + claims modal. */
@@ -2431,14 +2465,20 @@ button {
   color: var(--text-hi);
 }
 .pane-title-input {
-  width: 230px;
-  border: 1px solid var(--accent);
-  border-radius: var(--r-sm);
-  background: var(--bg-inset);
-  color: var(--text-hi);
-  font-size: 18px;
-  padding: 2px 6px;
-  outline: none;
+  width: 100%;
+}
+.pane-rename-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  color: var(--text-mid);
+  font-size: var(--fs-12);
+}
+.pane-rename-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  width: 100%;
 }
 .pane-actions {
   position: relative;
@@ -2510,9 +2550,13 @@ button {
   display: block;
 }
 .pane-menu {
-  top: 39px; /* clears the 33px action button inside the taller bar */
-  right: 0;
+  position: fixed;
+  z-index: 60;
   min-width: 200px;
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .menu-sep {
   height: 1px;
