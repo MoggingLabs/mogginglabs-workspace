@@ -28,6 +28,11 @@ export interface EngineDeps {
   onPush: () => void
   /** A review/merge/close TRANSITION on a linked card — main lands the notify. */
   onTransition: (link: ServiceLink, label: string) => void
+  /** An adapter CORRECTED the link on fetch (the `owner/repo#123` shorthand
+   *  guesses `pr`; github.ts repairs an issue). The engine's own copy is already
+   *  fixed — wire this to persist it, or the guess costs one extra call per app
+   *  session, forever. */
+  onLinkRepaired?: (link: ServiceLink) => void
   jitter?: () => number // 0..1; injectable so smokes are deterministic
 }
 
@@ -122,10 +127,12 @@ export class ServiceEngine {
     }
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
+    const kindAtFetch = rt.link.kind
     try {
       const status = await adapter.fetch(rt.link, ctrl.signal)
       rt.backoff = 0
       rt.status = status
+      if (rt.link.kind !== kindAtFetch) this.deps.onLinkRepaired?.(rt.link) // the adapter knew better
       const label = transitionLabel(rt.link, prev, status)
       if (label) this.deps.onTransition(rt.link, label)
     } catch (e) {

@@ -14,8 +14,11 @@ export function parseServiceLink(input: string): { ref: string; kind: ServiceLin
   if (!t) return null
   const u = URL_RE.exec(t)
   if (u) return { ref: `${u[1]}/${u[2]}#${u[4]}`, kind: u[3].toLowerCase() === 'issues' ? 'issue' : 'pr' }
+  // The shorthand cannot say pr vs issue (GitHub shares the number space), so it
+  // GUESSES pr — and github.ts corrects it on the first fetch: a pr view that
+  // reports not-found retries as an issue and repairs the link's kind.
   const s = SHORT_RE.exec(t)
-  if (s) return { ref: `${s[1]}/${s[2]}#${s[3]}`, kind: 'pr' } // shorthand defaults to PR; the adapter corrects on fetch
+  if (s) return { ref: `${s[1]}/${s[2]}#${s[3]}`, kind: 'pr' }
   return null
 }
 

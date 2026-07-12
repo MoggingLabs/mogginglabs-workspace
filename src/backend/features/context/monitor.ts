@@ -1,20 +1,28 @@
 import * as fs from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { ContextProvider, ContextUsage } from '@contracts'
 import {
   codexDayDirs,
   contextSinkPath,
   findClaudeProjectDir,
+  findGeminiProjectDir,
   parseClaudeHead,
   parseClaudeTail,
   parseCodexTail,
+  parseGeminiTail,
   pathKey,
   readCodexSessionCwd,
   readContextSink,
   readHead,
   readTail
 } from './readers'
-import { claudeWindowForModel } from './window'
+import { claudeWindowForModel, codexPercentUsed, geminiWindowForModel, learnClaudeWindow } from './window'
+import { aiderWindowForModel, opencodeWindowFor, readAiderUsage, readOpencodeUsage } from './providers'
+
+/** Gemini keeps a project's session logs one level down, in `chats/`. */
+function geminiChatsDir(projectDir: string | null): string | null {
+  return projectDir ? join(projectDir, 'chats') : null
+}
 
 // Tracks the agent session log behind each pane and emits that pane's context usage
 // whenever it changes. Same discipline as the git monitor next door: ONE shared poll
@@ -53,6 +61,13 @@ export interface ContextPaneSpec {
   home: string
   /** Pane adopted from the detached daemon — its session predates the watch. */
   adopted?: boolean
+  /** Test seam: opencode's offline model catalogue (defaults to its real cache path). */
+  opencodeModels?: string
+  /** The earliest this session's log can have been written (ms epoch). Typed-launch detection
+   *  knows this EXACTLY — the moment the agent's process was first seen, minus the detection
+   *  lag — which beats both guesses below: a fresh launch's slack, and an adopted pane's blind
+   *  30-minute window. */
+  since?: number
 }
 
 interface Track extends ContextPaneSpec {
@@ -145,16 +160,29 @@ export class ContextMonitor {
     }
   }
 
+  /** How far back THIS pane's lock may reach. Detection reports exactly when it first saw the
+   *  agent (`since`), which beats both guesses: a fresh launch's slack, and an adopted pane's
+   *  blind 30-minute window. */
+  private floorFor(t: Track): number {
+    if (t.since) return t.since
+    return t.watchStart - (t.adopted ? ADOPT_LOOKBACK_MS : LAUNCH_SLACK_MS)
+  }
+
   /** Candidate session logs for a pane, newest first. Only files a pane could lock:
    *  recent enough for ITS lock rule, not locked by any other pane. */
   private candidates(paneId: number, t: Track): Array<{ file: string; mtimeMs: number }> {
     const lockedByOthers = new Set<string>()
     for (const [id, other] of this.panes) if (id !== paneId && other.file) lockedByOthers.add(other.file)
-    const floor = t.watchStart - (t.adopted ? ADOPT_LOOKBACK_MS : LAUNCH_SLACK_MS)
+    const floor = this.floorFor(t)
 
     const out: Array<{ file: string; mtimeMs: number }> = []
-    if (t.provider === 'claude') {
-      const dir = findClaudeProjectDir(t.home, t.cwd)
+    if (t.provider === 'claude' || t.provider === 'gemini') {
+      // Both keep ONE directory per project cwd, holding that project's session logs — claude
+      // under a munged path, gemini under a slug it maps for itself. Same shape from here.
+      const dir =
+        t.provider === 'claude'
+          ? findClaudeProjectDir(t.home, t.cwd)
+          : geminiChatsDir(findGeminiProjectDir(t.home, t.cwd))
       if (!dir) return out
       let names: string[]
       try {
@@ -177,7 +205,7 @@ export class ContextMonitor {
       // codex: day dirs are shared across ALL cwds — match each recent rollout's
       // session_meta cwd to the pane's (cached; a session's cwd never changes).
       const key = pathKey(t.cwd)
-      for (const dir of codexDayDirs(t.home, this.now())) {
+      for (const dir of codexDayDirs(t.home)) {
         let names: string[]
         try {
           names = fs.readdirSync(dir)
@@ -260,9 +288,15 @@ export class ContextMonitor {
     //    to the transcript path below.
     if (t.provider === 'claude') {
       const sink = readContextSink(paneId)
-      const floor = t.watchStart - (t.adopted ? ADOPT_LOOKBACK_MS : LAUNCH_SLACK_MS)
+      const floor = this.floorFor(t)
       if (sink && sink.mtimeMs >= floor && !(t.lastMtimeMs > sink.mtimeMs + 5000)) {
         if (sink.windowTokens) t.window = sink.windowTokens
+        // TEACH the window table from the horse's mouth. This pane's relay knows the window
+        // THIS session runs with, and a model id alone can never settle it (an Opus 4.8
+        // transcript reads the same at 200K and at 1M). A hand-typed claude in another pane
+        // has no relay of its own — this is how it gets a true denominator instead of a
+        // documented one. See window.ts.
+        learnClaudeWindow(sink.model, sink.windowTokens)
         const window = sink.windowTokens ?? t.window ?? claudeWindowForModel(sink.model)
         if (sink.usedPct !== null && sink.usedTokens !== undefined && window) {
           this.emit(paneId, t, {
@@ -276,6 +310,41 @@ export class ContextMonitor {
           return
         }
       }
+    }
+    // 3b. THE TWO PROVIDERS THAT ARE NOT A LOG TAIL. Aider reports into a per-pane analytics
+    //     log the daemon points it at (exact integers, typed or launched); opencode keeps
+    //     everything in one SQLite store keyed by directory. Neither needs the file-locking
+    //     machinery below — there is exactly one place to look, and it is this pane's.
+    if (t.provider === 'aider') {
+      const r = readAiderUsage(paneId)
+      if (!r || r.mtimeMs < this.floorFor(t)) return // no reading yet, or a previous session's
+      const window = aiderWindowForModel(t.home, r.model)
+      if (!window) return // no litellm cache / unknown model: no denominator, so no digit
+      this.emit(paneId, t, {
+        provider: t.provider,
+        usedTokens: r.usedTokens,
+        windowTokens: window,
+        usedPct: Math.max(0, Math.round((r.usedTokens / window) * 100)),
+        model: r.model,
+        at: this.now()
+      })
+      return
+    }
+    if (t.provider === 'opencode') {
+      const r = readOpencodeUsage(t.home, t.cwd)
+      if (!r) return
+      const window = opencodeWindowFor(r.provider, r.model, t.opencodeModels)
+      if (!window) return
+      this.emit(paneId, t, {
+        provider: t.provider,
+        usedTokens: r.usedTokens,
+        windowTokens: window,
+        // Its sidebar rounds and reserves nothing.
+        usedPct: Math.max(0, Math.round((r.usedTokens / window) * 100)),
+        model: r.model,
+        at: this.now()
+      })
+      return
     }
     if (!t.file) return // nothing else to read yet; pending "–" stays
 
@@ -293,7 +362,8 @@ export class ContextMonitor {
     //    `approx: true`, and replaced by the first real reading. One shot per lock.
     const tail = readTail(t.file)
     if (tail === null) return
-    const reading = t.provider === 'claude' ? parseClaudeTail(tail) : parseCodexTail(tail)
+    const reading =
+      t.provider === 'claude' ? parseClaudeTail(tail) : t.provider === 'gemini' ? parseGeminiTail(tail) : parseCodexTail(tail)
     if (!reading) {
       if (t.provider !== 'claude' || t.seeded) return
       t.seeded = true
@@ -316,21 +386,44 @@ export class ContextMonitor {
       return
     }
 
-    // 5. Resolve the window. Claude: the sink's true per-session window when the
-    //    relay has stated it, the logged model's DOCUMENTED window otherwise (see
-    //    window.ts for the sourced table). Codex: stated on the line (kept across
-    //    lines that drop it). No window, no bar — a percent of a guessed
-    //    denominator would be a lie.
+    // 5. Resolve the window, and then the PERCENT — with the formula that CLI uses, not with
+    //    a formula of our own. This is the whole contract of the gauge: the number beside the
+    //    pane must be the number inside it.
+    //
+    //    claude  window: the relay's true per-session size, else what a relay has taught us for
+    //            this model, else the documented table (window.ts). percent: used / window —
+    //            the CLI's own h1n sum over its own window.
+    //    codex   window: stated on the line, verbatim (codex already scaled it). percent: NOT
+    //            used/window — codex reserves a 12K baseline on BOTH sides of the ratio, so its
+    //            own formula is reproduced (codexPercentUsed). Skipping it reads ~4 points low
+    //            against the footer in the very same pane.
+    //    gemini  window: its flat limit table (1,048,576; Gemma-4 256,000). percent:
+    //            promptTokenCount / limit — what its "N% used" footer divides.
+    //
+    //    No window, no number: a percent of a guessed denominator is a lie, and the pane keeps
+    //    its honest "–".
     let window: number | undefined
     if (t.provider === 'claude') {
       window = t.window ?? claudeWindowForModel(reading.model) ?? undefined
+    } else if (t.provider === 'gemini') {
+      window = geminiWindowForModel(reading.model)
     } else {
       if (reading.windowTokens) t.window = reading.windowTokens
       window = t.window
     }
     if (!window) return
 
-    const usedPct = Math.max(0, Math.min(100, Math.round((reading.usedTokens / window) * 100)))
+    const usedPct =
+      t.provider === 'codex'
+        ? codexPercentUsed(reading.usedTokens, window)
+        : t.provider === 'gemini'
+          ? // NOT clamped at 100. Gemini's ratio is unclamped and its footer will happily say
+            // "101% used" once the prompt outgrows the limit (verified against the shipped
+            // bundle: at 1,053,819 tokens of 1,048,576 it renders 101). Clamping would make the
+            // header disagree with the pane in the one place a context gauge matters most.
+            Math.max(0, Math.round((reading.usedTokens / window) * 100))
+          : Math.max(0, Math.min(100, Math.round((reading.usedTokens / window) * 100)))
+    if (usedPct === null) return // codex logged no usable window — it shows no percent either
     this.emit(paneId, t, {
       provider: t.provider,
       usedTokens: reading.usedTokens,
@@ -343,9 +436,13 @@ export class ContextMonitor {
 
   /** The baseline seed: the smallest OPENING-turn usage among this project's three
    *  newest sibling session logs (excluding the pane's own lock). Null when the
-   *  project has no prior sessions — the pane then stays on its pending "–". */
+   *  project has no prior sessions — the pane then stays on its pending "–".
+   *
+   *  Siblings are read from the LOCKED file's own directory, never re-derived from the
+   *  pane's cwd: a detected session may have locked a log one directory deeper (see
+   *  candidates()), and its baseline must come from ITS project, not the pane's. */
   private claudeBaselineSeed(t: Track): { usedTokens: number; model?: string } | null {
-    const dir = findClaudeProjectDir(t.home, t.cwd)
+    const dir = t.file ? dirname(t.file) : findClaudeProjectDir(t.home, t.cwd)
     if (!dir) return null
     let names: string[]
     try {

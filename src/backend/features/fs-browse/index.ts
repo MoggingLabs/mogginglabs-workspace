@@ -22,9 +22,12 @@ import { canonical, driveRoots, parentOf } from '../../platform/fs-paths'
  * Electron-free on purpose, so it is testable without booting an app.
  */
 
-/** Windows drives as pickable entries. Never repos: nobody roots a workspace at `C:\`. */
-function listDrives(): DirEntry[] {
-  return driveRoots().map(({ name, path }) => ({ name, path, isRepo: false }))
+/** Windows drives as pickable entries. Never repos: nobody roots a workspace at `C:\`.
+ *  Async only because driveRoots is: a mapped-but-disconnected network drive used to block
+ *  the whole main process for its SMB timeout, and the fix belongs in the shared helper so the
+ *  explorer's tree inherits it too (platform/fs-paths.ts). */
+async function listDrives(): Promise<DirEntry[]> {
+  return (await driveRoots()).map(({ name, path }) => ({ name, path, isRepo: false }))
 }
 
 /**
@@ -63,11 +66,14 @@ function isDir(dir: string, d: Dirent): boolean {
   }
 }
 
-export function listDir(req: ListDirRequest): DirResult {
+/** Async ONLY for the drive-root listing (see listDrives) — the per-directory work below is
+ *  local-disk and stays synchronous. Both IPC seams already await: `fs:listDir` is an
+ *  ipcMain.handle (src/main/fs-browse.ts) and the wizard's browser awaits the invoke. */
+export async function listDir(req: ListDirRequest): Promise<DirResult> {
   if (req?.path === FS_DRIVE_ROOT) {
     const path = FS_DRIVE_ROOT
     if (process.platform !== 'win32') return { ok: false, reason: 'invalid', path }
-    return { ok: true, path, parent: null, crumbs: crumbsFor(path), entries: listDrives(), truncated: false }
+    return { ok: true, path, parent: null, crumbs: crumbsFor(path), entries: await listDrives(), truncated: false }
   }
   if (typeof req?.path !== 'string') return { ok: false, reason: 'invalid', path: '' }
 

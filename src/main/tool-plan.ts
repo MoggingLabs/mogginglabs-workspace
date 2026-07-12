@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 import type { HostedCliId } from '@contracts'
-import { composePlanEntries, materializePlanFor } from '@backend/features/integrations'
+import { composePlanEntries, findWriter, materializePlanFor } from '@backend/features/integrations'
 import { getToolPlan, hasToolPlan } from './integrations'
 import { houseServerEntry, listServers } from './mcp-manager'
 
@@ -16,6 +16,12 @@ import { houseServerEntry, listServers } from './mcp-manager'
 const AGENT_TO_CLI: Record<string, HostedCliId | undefined> = { claude: 'claude-code', codex: 'codex', gemini: 'gemini' }
 export const cliForAgent = (agentId: string): HostedCliId | undefined => AGENT_TO_CLI[agentId]
 
+/** Why a launch could NOT scope a CLI, per workspace — the worktree already held
+ *  a `.codex/config.toml` / `.gemini/settings.json` that isn't ours. Kept for the
+ *  caller/UI to read; the launch itself never fails on it. */
+const skippedScopes = new Map<string, string>()
+export const toolPlanSkipReason = (workspaceId: string): string | undefined => skippedScopes.get(String(workspaceId))
+
 export function materializeToolPlanAtLaunch(req: { agentId: string; cwd: string; workspaceId?: string }): string[] {
   const cli = cliForAgent(req.agentId)
   // Scoping is OPT-IN: aider/opencode, plan-less launches, and workspaces that
@@ -25,15 +31,30 @@ export function materializeToolPlanAtLaunch(req: { agentId: string; cwd: string;
   const entries = composePlanEntries(plan, cli, listServers(), houseServerEntry())
   const planDir = join(app.getPath('userData'), 'toolplans')
   const mat = materializePlanFor({ cli, entries, inheritGlobal: plan.inheritGlobal, planDir, cwd: req.cwd, workspaceId: req.workspaceId })
+  const writer = findWriter(cli)
+  skippedScopes.delete(req.workspaceId)
+  let refused = false
   for (const f of mat.files) {
     try {
+      // A project-scope plan file lives in the USER'S WORKTREE — and a repo may
+      // TRACK its own .codex/config.toml. Overwrite it only when there is nothing
+      // there but our own managed blocks; otherwise leave the user's file alone
+      // and launch on the CLI's global config (what a plan-less pane gets).
+      if (f.projectScoped && existsSync(f.path) && writer && !writer.isManagedScoped(readFileSync(f.path, 'utf8'))) {
+        refused = true
+        const reason = `${f.path} is the repo's own config — not overwriting it, so this pane keeps ${cli}'s global servers`
+        skippedScopes.set(req.workspaceId, reason)
+        console.warn(`tool-plan: ${reason}`) // the one loud line — evidence, never a blocked launch
+        continue
+      }
       mkdirSync(dirname(f.path), { recursive: true })
       writeFileSync(f.path, f.content)
     } catch {
       /* best effort — a failed write just means that server won't load */
     }
   }
-  if (mat.excludeRelPaths.length) gitExcludeInWorktree(req.cwd, mat.excludeRelPaths)
+  // Nothing of ours in the worktree = nothing to hide from `git status`.
+  if (mat.excludeRelPaths.length && !refused) gitExcludeInWorktree(req.cwd, mat.excludeRelPaths)
   return mat.launchArgs
 }
 

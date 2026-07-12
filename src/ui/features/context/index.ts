@@ -25,13 +25,6 @@ import { contextClient } from './context.client'
  * shell integration marks that (OSC 133, also TerminalPane).
  */
 
-/** Providers whose CLI paints its OWN context gauge in the terminal — codex and
- *  gemini both render "% context left" in their footers (dev-verified: the string
- *  ships in codex.exe, and gemini's footer shows it live). A header bar beside a
- *  footer gauge states the same number twice, so those panes get none. Claude Code
- *  shows nothing until context runs LOW — it gets ours. */
-const NATIVE_GAUGE = new Set(['codex', 'gemini'])
-
 export const contextFeature: UiFeature = {
   name: 'context',
   mount() {
@@ -57,9 +50,13 @@ export const contextFeature: UiFeature = {
       // Remote panes: the session log lives on the far machine — no bar (the same
       // "local repo tools are off" stance as the worktree menu).
       if (getPaneRemote(paneId)) return drop(paneId)
-      // The CLI already shows its own gauge, or there is no readable source at all
-      // (custom commands): no bar either way.
-      if (NATIVE_GAUGE.has(session.provider) || !isContextProvider(session.provider)) return drop(paneId)
+      // EVERY agent with a readable source gets the gauge — claude, codex and gemini alike.
+      // The two that draw their own in the terminal get it too: a footer is legible only in the
+      // pane you are looking at, and the header is what makes a wall of agents readable at a
+      // glance. Each one's percent is computed with that CLI's own formula, so the header and
+      // the footer can never disagree (contracts/ipc/context.ipc.ts). A provider with no
+      // readable source at all (a custom command) still gets nothing — never a guessed number.
+      if (!isContextProvider(session.provider)) return drop(paneId)
       watched.add(paneId)
       // The gauge exists from the moment the agent does: pending ("–", empty disc)
       // until the session's FIRST response writes a usage line — never a made-up 0%.
@@ -69,7 +66,10 @@ export const contextFeature: UiFeature = {
         provider: session.provider,
         cwd: session.cwd,
         profileId: session.profileId,
-        adopted: session.adopted
+        adopted: session.adopted,
+        // A DETECTED session (the user typed the CLI): the backend watched its process start,
+        // so the log matcher gets a true floor rather than a guess.
+        since: session.since
       })
     })
 

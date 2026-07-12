@@ -246,6 +246,9 @@ run_smoke FEEDBACKUX   MOGGING_FEEDBACKUX 1 240 feedbackux
 run_smoke CHROMEUX     MOGGING_CHROMEUX  1 300 chromeux
 run_smoke DOCKUX       MOGGING_DOCKUX    1 240 dockux
 run_smoke UXMILESTONE  MOGGING_UXMILESTONE 1 360 uxmilestone
+run_smoke TYPED        MOGGING_TYPED     1 300 typed
+run_smoke TYPEDCOST    MOGGING_TYPEDCOST 1 120 typedcost
+run_smoke CTXACCURACY  MOGGING_CTXACCURACY 1 120 ctxaccuracy
 run_smoke FSLIST       MOGGING_FSLIST    1 120 fslist
 run_smoke FILETREE     MOGGING_FILETREE  1 300 filetree
 run_smoke EXPLORER     MOGGING_EXPLORER  1 240 explorer

@@ -20,11 +20,19 @@ const slug = (label: string): string =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
 
-const ringKey = (providerId: string, windowLabel: string): string => `usage.hist.${providerId}.${slug(windowLabel)}`
+/** One ring per LANE. The 7/09 fan-out reads every profile of a provider, and
+ *  folding those into one (provider, window) ring interleaved them — work at 90%
+ *  and personal at 10% sampled a 90/10/90/10 sawtooth that is no one's usage,
+ *  at half the depth. `default` (the seam's id when NO profile targets the
+ *  provider) keeps the historical 2-part key, so single-profile rings carry on. */
+const ringKey = (providerId: string, windowLabel: string, profileId?: string): string =>
+  profileId && profileId !== 'default'
+    ? `usage.hist.${providerId}.${profileId}.${slug(windowLabel)}`
+    : `usage.hist.${providerId}.${slug(windowLabel)}`
 
 /** The stored series, oldest first. Never throws; junk reads as empty. */
-export function readHistory(kv: HistoryKv, providerId: string, windowLabel: string): number[] {
-  const raw = kv.get(ringKey(providerId, windowLabel))
+export function readHistory(kv: HistoryKv, providerId: string, windowLabel: string, profileId?: string): number[] {
+  const raw = kv.get(ringKey(providerId, windowLabel, profileId))
   if (!raw) return []
   try {
     const arr = JSON.parse(raw) as unknown
@@ -35,9 +43,9 @@ export function readHistory(kv: HistoryKv, providerId: string, windowLabel: stri
 }
 
 /** Append one sample (clamped, rounded) and truncate to the last HISTORY_MAX. */
-export function appendHistory(kv: HistoryKv, providerId: string, windowLabel: string, usedPct: number): void {
-  const ring = readHistory(kv, providerId, windowLabel)
+export function appendHistory(kv: HistoryKv, providerId: string, windowLabel: string, usedPct: number, profileId?: string): void {
+  const ring = readHistory(kv, providerId, windowLabel, profileId)
   ring.push(Math.max(0, Math.min(100, Math.round(usedPct))))
   if (ring.length > HISTORY_MAX) ring.splice(0, ring.length - HISTORY_MAX)
-  kv.set(ringKey(providerId, windowLabel), JSON.stringify(ring))
+  kv.set(ringKey(providerId, windowLabel, profileId), JSON.stringify(ring))
 }

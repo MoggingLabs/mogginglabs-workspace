@@ -15,10 +15,16 @@ export function isOnPath(bin: string): boolean {
     process.platform === 'win32' ? ['', ...(process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';')] : ['']
   for (const dir of dirs) {
     for (const ext of exts) {
+      const candidate = path.join(dir, bin + ext)
       try {
-        if (fs.existsSync(path.join(dir, bin + ext))) return true
+        // isFile: a DIRECTORY named like the bin (a `codex/` folder on PATH) is not an
+        // install — existsSync said yes and blocked the real installer. On POSIX the
+        // file must also be executable, or the shell can't run it either.
+        if (!fs.statSync(candidate).isFile()) continue
+        if (process.platform !== 'win32') fs.accessSync(candidate, fs.constants.X_OK)
+        return true
       } catch {
-        /* unreadable dir */
+        /* missing, unreadable, or not executable */
       }
     }
   }

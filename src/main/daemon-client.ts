@@ -34,6 +34,28 @@ function isAlive(pid: number): boolean {
     return (e as NodeJS.ErrnoException).code === 'EPERM'
   }
 }
+
+/** Does the daemon's named pipe still exist? A pipe is a kernel object that dies WITH its
+ *  process, so this is an IDENTITY check that `kill(pid, 0)` cannot give us: Windows recycles
+ *  pids aggressively, and a crashed daemon whose pid was handed to some unrelated process
+ *  looked alive forever — connect() failed, we never respawned, and every pane sat grey until
+ *  endpoint.json was deleted by hand. Unix sockets persist on disk after death and prove
+ *  nothing, so off-Windows this stays undecided (true) and connect() remains the judge.
+ *  Mirrors pipeAlive in src/pty-daemon/lifecycle.ts (main can't import the daemon bundle). */
+function pipeAlive(address: string): boolean {
+  if (process.platform !== 'win32' || !address.startsWith('\\\\.\\pipe\\')) return true
+  try {
+    return fs.existsSync(address)
+  } catch {
+    return false
+  }
+}
+
+/** An endpoint we may trust: our protocol version, a live pid, and a pipe still held. */
+function endpointLive(ep: DaemonEndpoint | null): ep is DaemonEndpoint {
+  return !!ep && ep.version === DAEMON_PROTOCOL_VERSION && isAlive(ep.pid) && pipeAlive(ep.address)
+}
+
 function readEndpoint(): DaemonEndpoint | null {
   try {
     return JSON.parse(fs.readFileSync(endpointPath(), 'utf8')) as DaemonEndpoint
@@ -48,7 +70,7 @@ async function waitForLiveEndpoint(timeoutMs: number): Promise<DaemonEndpoint | 
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
     const ep = readEndpoint()
-    if (ep && ep.version === DAEMON_PROTOCOL_VERSION && isAlive(ep.pid)) return ep
+    if (endpointLive(ep)) return ep
     await delay(100)
   }
   return null
@@ -57,7 +79,19 @@ async function waitForLiveEndpoint(timeoutMs: number): Promise<DaemonEndpoint | 
 /** Discover a running daemon or spawn one (detached, via Electron-as-Node). */
 export async function ensureDaemon(daemonEntry: string): Promise<DaemonEndpoint> {
   const existing = readEndpoint()
-  if (existing && existing.version === DAEMON_PROTOCOL_VERSION && isAlive(existing.pid)) return existing
+  if (endpointLive(existing)) return existing
+  // A stale endpoint must not survive this call. Left in place it poisons every retry:
+  // waitForLiveEndpoint below re-reads it and "succeeds" against a daemon that isn't there,
+  // and the relay's reconnect loop (which re-runs discovery each attempt) dials the same
+  // dead address forever instead of spawning a fresh daemon. Only ever unlinked when it
+  // failed endpointLive — a live daemon's endpoint is never touched.
+  if (existing) {
+    try {
+      fs.unlinkSync(endpointPath())
+    } catch {
+      /* already gone */
+    }
+  }
 
   fs.mkdirSync(runtimeDir(), { recursive: true })
   const logFd = fs.openSync(daemonSpawnLogPath(), 'a')
@@ -92,6 +126,10 @@ export interface DaemonEvents {
   onOwners?: (claims: Claim[]) => void
   /** A pane's agent reported a usage limit (4/04 failover). */
   onLimit?: (id: string, gen: number) => void
+  /** TYPED-LAUNCH DETECTION: an agent CLI process appeared in / left this pane's PTY subtree
+   *  (`agentId` null = gone). Also REPLAYED on (re)attach, which is how a restarted app
+   *  re-learns the identity of an agent the daemon kept alive but the app never launched. */
+  onAgent?: (id: string, agentId: string | null, cwd: string | undefined, sinceMs: number | undefined, gen: number) => void
   /** Reviewer-gate sign-off list — replies AND pushes on change (4/03 polish). */
   onApprovals?: (list: Approval[]) => void
   onClose?: () => void
@@ -179,6 +217,9 @@ export class DaemonClient {
         break
       case 'limit':
         this.events.onLimit?.(m.id, m.gen)
+        break
+      case 'agent':
+        this.events.onAgent?.(m.id, m.agentId, m.cwd, m.sinceMs, m.gen)
         break
       case 'approvals': {
         const waiter = this.approvalWaiters.shift()

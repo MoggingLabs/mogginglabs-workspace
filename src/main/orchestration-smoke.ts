@@ -168,7 +168,11 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
       const ungated = (await ES(
         `window.bridge.invoke('review:merge', ${JSON.stringify({ repo, branch: diff.branch })})`
       )) as { ok: boolean; state: string }
-      await cli(['role', String(paneId), 'reviewer'])
+      // The USER names the reviewer (the renderer-only IPC). `mogging role` writes the daemon's
+      // map, which any pane can write — so it no longer opens the merge gate (daemon-relay:
+      // appRoles). Naming the reviewer here is what a person does in the UI.
+      await ES(`window.__mogging.workspace.setRole(${paneId}, 'reviewer')`)
+      await sleep(400) // the role reaches main (the trusted IPC) and the daemon
       const approveRes = await cli(['approve', diff.branch], { MOGGING_PANE_ID: String(paneId) })
       const merge = (await ES(
         `window.bridge.invoke('review:merge', ${JSON.stringify({ repo, branch: diff.branch })})`

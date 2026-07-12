@@ -77,8 +77,10 @@ function guard(p: unknown): { path: string } | ExplorerActionResult {
 }
 
 /** The exact function the channel runs, exported so the FSLIST smoke exercises the
- *  validation seam with zero UI. Junk in -> an `invalid` refusal out, never a throw. */
-export function handleExplorerList(req: unknown): ExplorerResult {
+ *  validation seam with zero UI. Junk in -> an `invalid` refusal out, never a throw.
+ *  Async only because the drive-root listing is (a dead network mapping must not block the
+ *  main process — see platform/fs-paths driveRoots); ipcMain.handle awaits a promise anyway. */
+export async function handleExplorerList(req: unknown): Promise<ExplorerResult> {
   const r = req as { path?: unknown; showHidden?: unknown } | null | undefined
   if (typeof r?.path !== 'string') return { ok: false, reason: 'invalid', path: '' }
   return listExplorer({ path: r.path, showHidden: r.showHidden === true })

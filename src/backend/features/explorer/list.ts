@@ -43,13 +43,16 @@ function kindOf(dir: string, d: Dirent): 'dir' | 'file' {
   return 'file'
 }
 
-export function listExplorer(req: ExplorerListRequest): ExplorerResult {
+/** Async ONLY for the drive-root listing: a mapped-but-disconnected network drive blocks its
+ *  stat for the SMB timeout, and probing 26 letters synchronously inside an IPC handler froze
+ *  the main process (see driveRoots). Everything below is local-disk and stays synchronous. */
+export async function listExplorer(req: ExplorerListRequest): Promise<ExplorerResult> {
   if (req?.path === FS_DRIVE_ROOT) {
     const path = FS_DRIVE_ROOT
     if (process.platform !== 'win32') return { ok: false, reason: 'invalid', path }
     // Drives are expandable and never repos (nobody roots a workspace at `C:\`) —
     // the fs-browse stance, kept in lockstep.
-    const entries: ExplorerEntry[] = driveRoots().map(({ name, path: p }) => ({ name, path: p, kind: 'dir', isRepo: false }))
+    const entries: ExplorerEntry[] = (await driveRoots()).map(({ name, path: p }) => ({ name, path: p, kind: 'dir', isRepo: false }))
     return { ok: true, path, parent: null, entries, truncated: false }
   }
   if (typeof req?.path !== 'string') return { ok: false, reason: 'invalid', path: '' }

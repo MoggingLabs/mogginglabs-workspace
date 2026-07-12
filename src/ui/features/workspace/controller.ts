@@ -137,22 +137,32 @@ export class WorkspaceController {
     const restoredTree = opts.layout ? parseTree(opts.layout, meta.paneCount) : null
     const slots = restoredTree ? leafIds(restoredTree) : undefined
 
-    // BEFORE the grid exists, not merely before `apply`: GridLayout's constructor applies a
-    // 1-pane grid, which synchronously constructs pane 1's TerminalPane — and a pane reads
-    // its remote + cwd seeds at spawn time. Published after construction, pane 1 (and only
-    // pane 1) spawned locally at the daemon's fallback cwd: a worktree-isolated slot 1
-    // opened its shell in $HOME while its branch chip claimed mogging/<slug>.
+    // BEFORE the grid exists, not merely before `apply`: GridLayout's constructor applies
+    // its OPENING tree (the restored one, else a 1-pane grid), which synchronously
+    // constructs those TerminalPanes — and a pane reads its remote + cwd seeds at spawn
+    // time. Published after construction, pane 1 (and only pane 1) spawned locally at the
+    // daemon's fallback cwd: a worktree-isolated slot 1 opened its shell in $HOME while
+    // its branch chip claimed mogging/<slug>.
     this.publishRemotes(meta)
     this.publishPaneCwds(meta, slots) // seed the pty's cwd + per-pane git (2/03)
 
     const container = document.createElement('div')
     container.className = 'workspace-view'
     this.hostEl.append(container)
-    const layout = new GridLayout(container, meta.id, ordinal * 100, (paneId) =>
-      // The pane's OWN cwd (worktree isolation, 3/03; OSC-7 refined), not the workspace
-      // root: "launch in focused pane" and "review focused pane" act on this value, and
-      // the root made both escape the pane's worktree.
-      setFocusedPane({ paneId, cwd: getPaneCwd(paneId) || meta.cwd })
+    const layout = new GridLayout(
+      container,
+      meta.id,
+      ordinal * 100,
+      (paneId) =>
+        // The pane's OWN cwd (worktree isolation, 3/03; OSC-7 refined), not the workspace
+        // root: "launch in focused pane" and "review focused pane" act on this value, and
+        // the root made both escape the pane's worktree.
+        setFocusedPane({ paneId, cwd: getPaneCwd(paneId) || meta.cwd }),
+      // The restored tree OPENS the grid, rather than being applied over a default one:
+      // that default publishes slot 1 synchronously, so a tree with a GAP there (pane 1
+      // closed, 2+3 kept) spawned a phantom pane and killed it mid-spawn — orphaning its
+      // shell inside the daemon forever. See GridLayout's constructor.
+      restoredTree ?? undefined
     )
 
     const view: WorkspaceView = {
@@ -188,8 +198,11 @@ export class WorkspaceController {
       this.onChange()
     }
 
-    // A restored workspace re-applies its exact arrangement (shape + sizes); any
-    // doubt about the persisted tree falls back to the template grid for the count.
+    // The restored arrangement is already live — it OPENED the grid above. Re-applying it
+    // here, with onLayoutChange now wired, is what writes the canonical form (normalized
+    // shape + sizes) back into the manifest; the slot set is identical, so no pane is
+    // built or torn down by it. Any doubt about the persisted tree (parseTree returned
+    // null) falls back to the template grid for the count.
     if (restoredTree) layout.applyTree(restoredTree)
     else layout.apply(meta.paneCount)
     this.publishRoles(meta) // swarm manifest -> role chips + daemon PaneInfo (4/01)
@@ -400,6 +413,13 @@ export class WorkspaceController {
   switch(id: string, opts: SwitchOpts = {}): void {
     const view = this.views.get(id)
     if (!view) return
+    // Switching INTO a workspace that is mid-close IS an undo: its panes never stopped
+    // running — only its rail tab left. Several paths can still name one: the control API
+    // (`mogging focus`/`expand` resolve panes by LIVE id, and a soft-closed workspace's
+    // panes are exactly that) and `mogging .` on its folder. Revealing it without
+    // cancelling the pending dispose put the user inside a workspace that the grace timer
+    // then tore down under them seconds later, snapping to order[0]/Home.
+    this.revivePending(id)
     this.activeId = id
     for (const [vid, v] of this.views) {
       const on = vid === id
@@ -628,20 +648,28 @@ export class WorkspaceController {
     })
   }
 
-  /** Bring a mid-close workspace back — its panes never stopped running. */
+  /** Bring a mid-close workspace back — its panes never stopped running (the toast's
+   *  Undo; `switch` does the same for anything that navigates INTO one). */
   private undoClose(id: string): void {
-    const pending = this.pendingClose.get(id)
-    const view = this.views.get(id)
-    if (!pending || !view) return
-    clearTimeout(pending.timer)
-    this.pendingClose.delete(id)
-    view.tab.hidden = false
-    this.order.splice(Math.min(pending.index, this.order.length), 0, id)
+    if (!this.revivePending(id)) return
     if (this.activeId === null) this.switch(id) // was on Home (its last workspace) — reveal it
     else {
       this.refreshAttention()
       this.onChange()
     }
+  }
+
+  /** Cancel a pending close: stop the dispose timer, put the rail tab and its position
+   *  back. Returns false when the workspace was not mid-close (nothing to undo). */
+  private revivePending(id: string): boolean {
+    const pending = this.pendingClose.get(id)
+    const view = this.views.get(id)
+    if (!pending || !view) return false
+    clearTimeout(pending.timer)
+    this.pendingClose.delete(id)
+    view.tab.hidden = false
+    this.order.splice(Math.min(pending.index, this.order.length), 0, id)
+    return true
   }
 
   close(id: string): void {

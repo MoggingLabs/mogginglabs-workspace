@@ -29,7 +29,7 @@ import { connectEndpoint } from './lib/endpoint-client.mjs'
 // plain Node — it cannot import the TS contract). It names the runtime DIRECTORY both the daemon
 // socket and the app's browser-control endpoint live in, so a stale value does not degrade: every
 // tool silently reports "the daemon is not running". Enforced by scripts/check-protocol-version.mjs.
-const PROTOCOL = 5
+const PROTOCOL = 6
 // Release channel (keep in sync with contracts ReleaseChannel; same gate). Inside a pane the
 // MOGGING_*_ENDPOINT envs below pin the exact app, so this only decides the well-known FALLBACK
 // path — run/dev-v4 when MOGGING_CHANNEL=dev is inherited (dev panes) or --dev is passed.
@@ -102,47 +102,67 @@ try {
 
 // ── App upstream (browser + app-side control reads): one lazy authed session ─
 let appSession = null
+let appConnecting = null // the IN-FLIGHT connect, shared (see callApp)
 let nextAppId = 1
 const appPending = new Map()
 
-async function callApp(name, args, extra) {
-  if (!appSession) {
-    let sess
-    try {
-      sess = await connectEndpoint(appEndpointFile())
-    } catch (e) {
-      throw new Error(
-        e.code === 'auth'
-          ? 'the MoggingLabs app refused the connection (auth)'
-          : 'the MoggingLabs app is not running (no browser-control endpoint)'
-      )
+async function connectApp() {
+  let sess
+  try {
+    sess = await connectEndpoint(appEndpointFile())
+  } catch (e) {
+    throw new Error(
+      e.code === 'auth'
+        ? 'the MoggingLabs app refused the connection (auth)'
+        : 'the MoggingLabs app is not running (no browser-control endpoint)'
+    )
+  }
+  sess.onMessage((m) => {
+    if (m.t === 'result' && appPending.has(m.id)) {
+      const resolve = appPending.get(m.id)
+      appPending.delete(m.id)
+      resolve(m)
+    } else if (m.t === 'grantChanged') {
+      // A grant flipped somewhere — re-resolve and tell the agent when our
+      // tool set changed (revokes land mid-session; calls re-check anyway).
+      void refreshGrant(true)
     }
-    sess.onMessage((m) => {
-      if (m.t === 'result' && appPending.has(m.id)) {
-        const resolve = appPending.get(m.id)
-        appPending.delete(m.id)
-        resolve(m)
-      } else if (m.t === 'grantChanged') {
-        // A grant flipped somewhere — re-resolve and tell the agent when our
-        // tool set changed (revokes land mid-session; calls re-check anyway).
-        void refreshGrant(true)
-      }
-    })
-    // App gone mid-session (quit/crash): drop the session so the next call
-    // re-discovers, and answer every in-flight call cleanly — never a hang,
-    // never a write to a dead socket.
-    sess.onClose(() => {
-      if (appSession === sess) appSession = null
-      const waiting = [...appPending.values()]
-      appPending.clear()
-      for (const resolve of waiting) resolve({ ok: false, reason: 'the MoggingLabs app closed the connection' })
-    })
-    appSession = sess
+  })
+  // App gone mid-session (quit/crash): drop the session so the next call
+  // re-discovers, and answer every in-flight call cleanly — never a hang,
+  // never a write to a dead socket.
+  sess.onClose(() => {
+    if (appSession === sess) appSession = null
+    const waiting = [...appPending.values()]
+    appPending.clear()
+    for (const resolve of waiting) resolve({ ok: false, reason: 'the MoggingLabs app closed the connection' })
+  })
+  appSession = sess
+  return sess
+}
+
+async function callApp(name, args, extra) {
+  let sess = appSession
+  if (!sess) {
+    // SINGLE-FLIGHT. Clients pipeline tool calls: two calls with no session both awaited their
+    // own connectEndpoint, the last assignment won appSession, and the loser's socket was never
+    // closed — a leaked connection whose grantChanged then double-fired refreshGrant.
+    appConnecting =
+      appConnecting ??
+      connectApp().finally(() => {
+        appConnecting = null
+      })
+    sess = await appConnecting
   }
   const id = nextAppId++
   return new Promise((resolve) => {
     appPending.set(id, resolve)
-    appSession.send({ t: 'call', id, name, args, ...(extra || {}) })
+    // The socket can die between our read of appSession and this write; onClose has already
+    // drained appPending by then, so an unanswerable call must resolve itself, not hang.
+    if (!sess.send({ t: 'call', id, name, args, ...(extra || {}) })) {
+      appPending.delete(id)
+      resolve({ ok: false, reason: 'the MoggingLabs app closed the connection' })
+    }
   })
 }
 

@@ -128,7 +128,7 @@ export async function runFsListSmoke(): Promise<void> {
   const fx = makeFixture()
   try {
     // ── (a) files AND dirs, dirs first, case-insensitive within each group ────────
-    const rootList = handleExplorerList({ path: fx.root })
+    const rootList = await handleExplorerList({ path: fx.root })
     const n = names(rootList)
     const entryByName = (name: string): ExplorerEntry | undefined => (rootList.ok ? rootList.entries.find((e) => e.name === name) : undefined)
     const kinds = rootList.ok ? rootList.entries.map((e) => e.kind) : []
@@ -136,7 +136,7 @@ export async function runFsListSmoke(): Promise<void> {
     const dirsFirst = kinds.lastIndexOf('dir') < kinds.indexOf('file')
     const dirsSorted = before(n, 'Apple', 'banana') && before(n, 'banana', 'repo') && before(n, 'repo', 'Zeta')
     const filesSorted = before(n, 'alpha.txt', 'Beta.md') && before(n, 'Beta.md', 'zulu.log')
-    const nested = handleExplorerList({ path: join(fx.root, 'Apple') })
+    const nested = await handleExplorerList({ path: join(fx.root, 'Apple') })
     const nestedOk =
       nested.ok &&
       nested.parent === fx.root &&
@@ -144,11 +144,11 @@ export async function runFsListSmoke(): Promise<void> {
     const listingOk = rootList.ok && filesAndDirs && dirsFirst && dirsSorted && filesSorted && nestedOk && rootList.truncated === false
 
     // Canonical form: a trailing separator and the bare spelling are ONE directory.
-    const trailing = handleExplorerList({ path: fx.root + sep })
+    const trailing = await handleExplorerList({ path: fx.root + sep })
     const parentOk = rootList.ok && trailing.ok && trailing.path === rootList.path && rootList.parent === dirname(fx.root)
 
     // ── (b) hidden filtered by default; showHidden reveals both kinds ─────────────
-    const shown = handleExplorerList({ path: fx.root, showHidden: true })
+    const shown = await handleExplorerList({ path: fx.root, showHidden: true })
     const sn = names(shown)
     const hiddenOk =
       !n.includes('.hushdir') &&
@@ -158,15 +158,15 @@ export async function runFsListSmoke(): Promise<void> {
       (shown.ok ? shown.entries.find((e) => e.name === '.hushdir')?.kind === 'dir' && shown.entries.find((e) => e.name === '.hushfile')?.kind === 'file' : false)
 
     // ── (c) cap + truncated ────────────────────────────────────────────────────────
-    const big = handleExplorerList({ path: join(fx.root, 'many') })
+    const big = await handleExplorerList({ path: join(fx.root, 'many') })
     const capOk = big.ok && big.entries.length === EXPLORER_LIST_CAP && big.truncated === true
 
     // ── (d) typed refusals, all four reasons — junk never throws ──────────────────
-    const denied = handleExplorerList({ path: fx.locked })
-    const missing = handleExplorerList({ path: join(fx.root, 'nope') })
-    const notDir = handleExplorerList({ path: join(fx.root, 'alpha.txt') })
-    const relative = handleExplorerList({ path: join('not', 'absolute') })
-    const junk = [handleExplorerList(null), handleExplorerList(undefined), handleExplorerList({}), handleExplorerList({ path: 42 }), handleExplorerList('junk')]
+    const denied = await handleExplorerList({ path: fx.locked })
+    const missing = await handleExplorerList({ path: join(fx.root, 'nope') })
+    const notDir = await handleExplorerList({ path: join(fx.root, 'alpha.txt') })
+    const relative = await handleExplorerList({ path: join('not', 'absolute') })
+    const junk = await Promise.all([handleExplorerList(null), handleExplorerList(undefined), handleExplorerList({}), handleExplorerList({ path: 42 }), handleExplorerList('junk')])
     const deniedOk = fx.deniedCreated ? !denied.ok && denied.reason === 'denied' : true
     const refusalsOk =
       deniedOk &&
@@ -186,17 +186,22 @@ export async function runFsListSmoke(): Promise<void> {
     const linkOk = fx.linkCreated ? entryByName('dead-link')?.kind === 'file' : true
 
     // ── per-OS roots, the FS_DRIVE_ROOT precedent ──────────────────────────────────
-    const driveList = handleExplorerList({ path: '' })
+    const driveList = await handleExplorerList({ path: '' })
     const rootsOk =
       process.platform === 'win32'
         ? driveList.ok && driveList.parent === null && driveList.entries.some((e) => e.name === 'C:') && driveList.entries.every((e) => e.kind === 'dir')
-        : !driveList.ok && driveList.reason === 'invalid' && (() => { const r = handleExplorerList({ path: '/' }); return r.ok && r.parent === null })()
+        : !driveList.ok &&
+          driveList.reason === 'invalid' &&
+          (await (async () => {
+            const r = await handleExplorerList({ path: '/' })
+            return r.ok && r.parent === null
+          })())
 
     // ── (g) FOLDERPICK parity: fs:listDir behaves byte-identically post-refactor ──
-    const fsRoot = listDir({ path: fx.root })
+    const fsRoot = await listDir({ path: fx.root })
     const fsNames = fsRoot.ok ? fsRoot.entries.map((e) => e.name) : []
-    const fsTrailing = listDir({ path: fx.root + sep })
-    const fsDrives = process.platform === 'win32' ? listDir({ path: '' }) : null
+    const fsTrailing = await listDir({ path: fx.root + sep })
+    const fsDrives = process.platform === 'win32' ? await listDir({ path: '' }) : null
     const folderpickOk =
       fsRoot.ok &&
       fsNames.join(',') === ['Apple', 'banana', 'locked', 'many', 'repo', 'Zeta'].join(',') && // dirs only, sorted, hidden filtered — files never listed

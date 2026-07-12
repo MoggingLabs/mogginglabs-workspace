@@ -6,7 +6,7 @@
 import { ipcMain, type WebContents } from 'electron'
 import * as path from 'node:path'
 import { TerminalChannels, LedgerChannels, GateChannels } from '@contracts'
-import type { AgentState, SpawnRequest, SpawnResult, SpawnSpec, StateSyncRequest, WriteCommand, ResizeCommand, KillCommand, SetRoleCommand } from '@contracts'
+import type { AgentState, Approval, SpawnRequest, SpawnResult, SpawnSpec, StateSyncRequest, WriteCommand, ResizeCommand, KillCommand, SetRoleCommand } from '@contracts'
 import { getTelemetry } from '@backend'
 import { ensureDaemon, DaemonClient } from './daemon-client'
 import { migrateOlderDaemonSessions } from './daemon-migrate'
@@ -18,6 +18,44 @@ import { onPaneStateForBridge } from './event-bridge'
 let activeClient: DaemonClient | null = null
 export function getDaemonClient(): DaemonClient | null {
   return activeClient
+}
+
+// ── WHO IS A REVIEWER: the app's own answer, and the only one that counts ──────────────
+//
+// Roles used to be authority wherever the DAEMON held them, and the daemon's `set-role` is
+// open to any authenticated client — which is every pane, since each one can read the 0600
+// endpoint file. So a worker agent could run
+//     mogging role <its own pane> reviewer && mogging approve <its own branch>
+// and the merge gate (backend/features/review: no merge without `approved`) swung open on
+// its own say-so. The pane-token binding on `approve` closed the OTHER half of that (a pane
+// can no longer speak AS another pane), but it cannot help here: the forger was never lying
+// about which pane it was — it was lying about what that pane is allowed to be.
+//
+// Authority therefore lives where a pane cannot reach: role assignment arrives ONLY over
+// TerminalChannels.setRole, an ipcMain channel, and panes are PTY children with no IPC —
+// they speak the daemon protocol and nothing else. The renderer sends it straight from the
+// user's workspace manifest (controller.publishRoles). The daemon keeps its own role map
+// for what it is good for — mailbox routing, ledger labels, `mogging list` — and `mogging
+// role` still writes it. It just no longer decides who may sign off.
+const appRoles = new Map<string, string>()
+
+/** The role the APP assigned to this pane, or undefined. Never what the daemon was told. */
+export function appAssignedRole(paneId: string): string | undefined {
+  return appRoles.get(paneId)
+}
+
+/** Approvals that the app is willing to believe: signed by a pane the USER made a reviewer.
+ *  Everything the daemon reports passes through here before it can gate a merge or paint a
+ *  ✓ — a self-promoted pane's sign-off is not filtered late, it is simply never an approval. */
+export function authoritativeApprovals(list: readonly Approval[]): Approval[] {
+  return list.filter((a) => appAssignedRole(a.byPaneId) === 'reviewer')
+}
+
+/** The live sign-off list, already filtered to app-assigned reviewers. Fails CLOSED: no
+ *  daemon, no approvals (the review gate's existing stance). */
+export async function getAuthoritativeApprovals(): Promise<Approval[]> {
+  const list = (await activeClient?.queryApprovals()) ?? []
+  return authoritativeApprovals(list)
 }
 
 /** Connect to (or spawn) the daemon and bridge the terminal channels to it.
@@ -98,7 +136,16 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
       onLimit: (id, gen) => {
         if (current(id, gen)) getWebContents()?.send(TerminalChannels.limit, { id: Number(id) })
       },
-      onApprovals: (list) => getWebContents()?.send(GateChannels.approvals, { list }),
+      // Typed-launch detection: the daemon watched the pane's PTY subtree and an agent CLI
+      // appeared (or left). Gen-gated like every other pane event — a dead generation's
+      // verdict must never claim the reused id's brand-new pane.
+      onAgent: (id, agentId, cwd, sinceMs, gen) => {
+        if (current(id, gen)) getWebContents()?.send(TerminalChannels.agent, { id: Number(id), agentId, cwd, sinceMs })
+      },
+      // Filtered at the boundary, not at the consumer: this push paints the board's
+      // "Approved by the reviewer" ✓, and a chip that lies is the same bug as a gate that
+      // opens. A self-promoted pane's sign-off never becomes an approval anywhere in the app.
+      onApprovals: (list) => getWebContents()?.send(GateChannels.approvals, { list: authoritativeApprovals(list) }),
       // The daemon died (or was killed) under us. Without this the app kept a dead socket
       // forever — no state events (grey dots, no attention toasts), every spawn timing out —
       // a zombie session only an app restart fixed. Only the CURRENT client may trigger a
@@ -189,6 +236,13 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     // flush, the async exit) is dropped until the next `spawned` re-opens the gate.
     gens.set(String(cmd.id), 'killed')
     lastStates.delete(String(cmd.id))
+    // A role dies with the SLOT, not with the process. Pane ids are reused (a split takes
+    // the lowest free one), so a reviewer's id outliving its pane would hand reviewer
+    // authority to whatever opens there next — which the renderer, having no role to push
+    // for an ordinary pane, would never correct. Closing the pane retires the assignment;
+    // the app must name a reviewer again. (Deliberately NOT cleared on process exit: a
+    // reviewer whose agent quit still reviewed the branch, and their sign-off stands.)
+    appRoles.delete(String(cmd.id))
     client.kill(String(cmd.id))
   })
   // The dot's reliability contract: a mounting pane PULLS its current state (the
@@ -196,7 +250,13 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
   ipcMain.handle(TerminalChannels.stateSync, (_e, req: StateSyncRequest) =>
     lastStates.get(String(req.id)) ?? null
   )
-  ipcMain.on(TerminalChannels.setRole, (_e, cmd: SetRoleCommand) => client.setRole(String(cmd.id), cmd.role))
+  ipcMain.on(TerminalChannels.setRole, (_e, cmd: SetRoleCommand) => {
+    // THE trusted channel (see appRoles): this arrives from the renderer — the user's own
+    // manifest — and a pane has no way to send it. Recorded here as the app's answer to
+    // "who is a reviewer", then forwarded so the daemon's coordination map agrees with the UI.
+    appRoles.set(String(cmd.id), cmd.role)
+    client.setRole(String(cmd.id), cmd.role)
+  })
 
   return () => {
     disposed = true // stops the reconnect loop; a close caused by our own dispose stays quiet

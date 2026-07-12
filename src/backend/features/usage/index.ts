@@ -260,11 +260,13 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
     } else {
       s.consecutiveErrors = 0
     }
-    // 7/07: ring each GOOD sample per (provider, window). Fresh only —
-    // a stale re-serve is old data, not a new point.
+    // 7/07: ring each GOOD sample per (provider, PROFILE, window). Fresh only —
+    // a stale re-serve is old data, not a new point. The profile is part of the
+    // key because the fan-out samples every lane: one ring per provider mixed
+    // them into a sawtooth of whichever lane sampled last.
     for (const p of collected) {
       if (p.health !== 'fresh') continue
-      for (const w of p.windows) appendHistory(deps.kv, p.providerId, w.label, w.usedPct)
+      for (const w of p.windows) appendHistory(deps.kv, p.providerId, w.label, w.usedPct, p.profileId)
     }
     s.inFlight = false
     emit()

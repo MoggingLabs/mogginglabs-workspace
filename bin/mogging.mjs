@@ -21,7 +21,7 @@ import net from 'node:net'
 // (this file is plain Node — it cannot import the TS contract). It is BOTH the handshake
 // version and the runtime directory this CLI looks in, so a stale value here does not
 // degrade — it makes every `mogging` verb miss the daemon entirely.
-const PROTOCOL_VERSION = 5
+const PROTOCOL_VERSION = 6
 
 // Release channel (keep in sync with contracts/daemon/protocol.ts, ReleaseChannel — gated by
 // scripts/check-protocol-version.mjs). A repo checkout runs on its own channel: run/dev-v4 and
@@ -163,8 +163,17 @@ function withApp(onReady, { timeoutMs = 15000 } = {}) {
       }
       if (m.t === 'welcome') void onReady(api)
       else if (m.t === 'error') {
-        process.stderr.write('mogging usage: app refused the token (auth)\n')
-        finish(4)
+        // Only `auth` is a refused token (exit 4). Any other error frame is the app
+        // REJECTING the request — reporting every one as an auth failure sent people
+        // hunting a token problem they did not have.
+        const why = m.reason || 'error'
+        if (why === 'auth') {
+          process.stderr.write('mogging usage: app refused the token (auth)\n')
+          finish(4)
+        } else {
+          process.stderr.write('mogging usage: app rejected the request (' + why + ')\n')
+          finish(1)
+        }
       } else if (m.t === 'result') {
         const w = waiters.get(m.id)
         waiters.delete(m.id)
@@ -336,14 +345,21 @@ function runUsageClearKey(args) {
 // Only a pane whose DAEMON-SIDE role is `reviewer` may approve; the payload carries
 // the pane binding, never a role claim. Exit codes: 0 ok · 2 usage · 3/4 as usual ·
 // **6 notreviewer**.
+//
+// MOGGING_PANE_TOKEN is the pane's own secret: the daemon mints one per session and injects
+// it into that pane's env and nowhere else. Sending it PROVES we are the pane named in `from`
+// — a pane id is public (`mogging list` prints it) and every pane can read the endpoint file
+// and authenticate, so `from` alone was a claim rather than a fact. Absent outside a pane
+// (nothing to prove), and the daemon then falls back to the legacy unbound path.
 
 function runApprove(args) {
   const branch = args[0]
   if (!branch) usage(2)
   const from = paneIdentityOrUsage()
+  const token = process.env.MOGGING_PANE_TOKEN
   withDaemon(
     (welcome, api) => {
-      api.send({ t: 'approve', branch, from })
+      api.send({ t: 'approve', branch, from, ...(token ? { token } : {}) })
     },
     (m, api) => {
       if (m.t === 'approved') {
@@ -556,11 +572,50 @@ function runRole(args) {
 
 // --- layout control verbs (Phase-3/02): ride the mogging:// relay ---------------------------------
 
+/** Is the APP up? --no-launch exists to keep a control verb from cold-starting the whole app, so
+ *  the daemon's endpoint is the WRONG gate: the daemon deliberately OUTLIVES the app (ADR 0006),
+ *  so after you quit the window `mogging focus 3 --no-launch` still passed and launched it — and
+ *  under the in-proc fallback (MOGGING_INPROC) a RUNNING app has no daemon endpoint and was
+ *  refused. The app publishes browser-control.json for as long as it runs (6/05b) and unlinks it
+ *  on quit; a crash can leave the file, so connect too — a dead pipe/socket answers instantly. */
+function appRunning(timeoutMs = 1500) {
+  let ep
+  try {
+    ep = JSON.parse(readFileSync(appEndpointFilePath(), 'utf8'))
+  } catch {
+    return Promise.resolve(false)
+  }
+  return new Promise((res) => {
+    const sock = net.connect(ep.address)
+    const done = (alive) => {
+      clearTimeout(timer)
+      try {
+        sock.destroy()
+      } catch {
+        /* ignore */
+      }
+      res(alive)
+    }
+    const timer = setTimeout(() => done(false), timeoutMs)
+    sock.on('connect', () => done(true))
+    sock.on('error', () => done(false))
+  })
+}
+
+/** Mirror main's sanitizeControl bounds (src/main/deep-link.ts): out of range there is a SILENT
+ *  drop of the WHOLE command, so a CLI that printed "opening … (20 panes)" opened nothing. */
+function boundedOrUsage(label, n, min, max) {
+  if (!Number.isInteger(n) || n < min || n > max) {
+    process.stderr.write(`mogging: ${label} must be a whole number ${min}-${max}\n`)
+    process.exit(2)
+  }
+}
+
 /** Launch/signal the app with a validated-shape control command via the deep link.
  *  Main re-validates against the closed union before the UI ever sees it. */
-function sendControl(command, opts = {}) {
-  if (opts.noLaunch && !readEndpoint()) {
-    process.stderr.write('mogging: app/daemon not running (--no-launch)\n')
+async function sendControl(command, opts = {}) {
+  if (opts.noLaunch && !(await appRunning())) {
+    process.stderr.write('mogging: app not running (--no-launch)\n')
     process.exit(3)
   }
   const url = `${SCHEME}://control?c=${encodeURIComponent(JSON.stringify(command))}`
@@ -574,29 +629,29 @@ function sendControl(command, opts = {}) {
   }
 }
 
-function runControl(command, rawArgs) {
+async function runControl(command, rawArgs) {
   const noLaunch = rawArgs.includes('--no-launch')
-  if (
-    (command.verb === 'layout' && !Number.isInteger(command.panes)) ||
-    (command.verb !== 'layout' && command.paneId !== undefined && !Number.isInteger(command.paneId))
-  ) {
-    usage(2)
+  if (command.verb === 'layout') boundedOrUsage('panes', command.panes, 1, 16)
+  else if (command.paneId !== undefined) boundedOrUsage('pane', command.paneId, 1, 99999)
+  if (command.mode !== undefined && !['full', 'col', 'row'].includes(command.mode)) {
+    process.stderr.write('mogging: mode must be one of: full, col, row\n')
+    process.exit(2)
   }
-  sendControl(command, { noLaunch })
+  await sendControl(command, { noLaunch })
   process.stdout.write(`mogging: ${command.verb} sent\n`)
 }
 
-function runControlOpen(args) {
+async function runControlOpen(args) {
   const noLaunch = args.includes('--no-launch')
   const rest = args.filter((a) => a !== '--no-launch')
   const dir = rest[0]
   if (!dir) usage(2)
   const pi = rest.indexOf('--panes')
   const panes = pi >= 0 ? Number(rest[pi + 1]) : undefined
-  if (pi >= 0 && !Number.isInteger(panes)) usage(2)
+  if (pi >= 0) boundedOrUsage('panes', panes, 1, 16)
   const command = { verb: 'open', cwd: resolve(dir) }
   if (panes) command.panes = panes
-  sendControl(command, { noLaunch })
+  await sendControl(command, { noLaunch })
   process.stdout.write(`mogging: opening ${command.cwd}${panes ? ` (${panes} panes)` : ''}\n`)
 }
 
@@ -726,7 +781,14 @@ function runList() {
       for (const r of rows) process.stdout.write(line(r.id, r.size, r.state, r.remote, r.title))
       api.finish(0)
     },
-    () => {}
+    // A non-auth error frame used to be dropped on the floor: the daemon HAD answered, and
+    // `mogging list` still died 5 s later on the timeout, blaming a daemon that "did not respond".
+    (m, api) => {
+      if (m.t === 'error') {
+        process.stderr.write('mogging list: rejected (' + (m.reason || 'error') + ')\n')
+        api.finish(1)
+      }
+    }
   )
 }
 

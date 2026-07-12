@@ -80,5 +80,15 @@ export const PACE_GOLDENS: PaceGolden[] = [
     now: T('2026-01-08T12:00:00Z'),
     opts: { windowMs: WEEK_MS },
     expect: null
+  },
+  {
+    // The quit-and-come-back shape: a CLI drove the session to 85%, stopped
+    // writing, and the window rolled over hours ago. Pacing the dead window
+    // forecast ">100% likely unused at reset" off negative remaining time.
+    name: 'expired window (reset already passed): refuse to pace',
+    window: { label: 'Session (5h)', usedPct: 85, resetsAt: '2026-01-07T17:00:00Z' },
+    now: T('2026-01-07T23:00:00Z'),
+    opts: { windowMs: FIVE_H_MS },
+    expect: null
   }
 ]

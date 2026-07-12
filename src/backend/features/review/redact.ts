@@ -22,8 +22,33 @@ const PATTERNS: RegExp[] = [
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{6,}\b/g
 ]
 
+// Authorization / Proxy-Authorization headers — the scheme is kept, the token replaced.
+const AUTH_HEADER = /\b((?:proxy-)?authorization)(["']?\s*[:=]\s*["']?)((?:basic|bearer|token)\s+)?([A-Za-z0-9._~+/=-]{8,})/gi
+
 // password/token/secret/api_key = <value> pairs — the VALUE is replaced, the key kept.
-const KV = /\b(password|passwd|pwd|secret|token|api[_-]?key|apikey|auth|credential)((?:["']?)\s*[:=]\s*)(["']?)([^\s"'`;,)}\]]{4,})\3/gi
+// The key side matches a WHOLE identifier (AWS_SECRET_ACCESS_KEY, DB_PASSWORD, apiToken)
+// and the callback checks its segments against the keyword list — a leading `\b(token)`
+// never matches after `_` (a word character), which let every SCREAMING_SNAKE secret
+// name straight through. Segment matching (not substring) keeps `author`/`monotonic`
+// style identifiers unredacted. Values may be bare (no spaces, as before) or quoted
+// (spaces allowed — `password = "two words"` previously escaped the scrub).
+const KV_KEYWORDS = new Set(['password', 'passwd', 'pwd', 'secret', 'token', 'apikey', 'auth', 'credential', 'credentials'])
+const KV = /([A-Za-z][A-Za-z0-9_.-]*)((?:["']?)\s*[:=]\s*)(?:(["'])((?:(?!\3).){4,}?)\3|([^\s"'`;,)}\]]{4,}))/g
+
+function keyLooksSecret(key: string): boolean {
+  // Split on separators and camelCase boundaries; also try joining adjacent
+  // segments so `api_key`/`api-key`/`apiKey` all hit the `apikey` keyword.
+  const segs = key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+  for (let i = 0; i < segs.length; i++) {
+    if (KV_KEYWORDS.has(segs[i])) return true
+    if (i + 1 < segs.length && KV_KEYWORDS.has(segs[i] + segs[i + 1])) return true
+  }
+  return false
+}
 
 /** Scrub secrets from arbitrary text. Returns the clean text + how many hits. */
 export function redactSecrets(text: string): { text: string; redactions: number } {
@@ -35,9 +60,16 @@ export function redactSecrets(text: string): { text: string; redactions: number 
       return REDACTED
     })
   }
-  out = out.replace(KV, (_m, key: string, sep: string, quote: string) => {
+  out = out.replace(AUTH_HEADER, (_m, key: string, sep: string, scheme: string | undefined) => {
     redactions++
-    return `${key}${sep}${quote}${REDACTED}${quote}`
+    return `${key}${sep}${scheme ?? ''}${REDACTED}`
+  })
+  out = out.replace(KV, (m, key: string, sep: string, quote: string | undefined, quoted: string | undefined, bare: string | undefined) => {
+    if (!keyLooksSecret(key)) return m
+    redactions++
+    const q = quoted !== undefined ? (quote as string) : ''
+    void bare
+    return `${key}${sep}${q}${REDACTED}${q}`
   })
   return { text: out, redactions }
 }

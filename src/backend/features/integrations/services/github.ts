@@ -25,16 +25,28 @@ const mapState = (s: string, isDraft: boolean): ServiceLinkState =>
 const mapReview = (r: string): ServiceReviewDecision | undefined =>
   r === 'APPROVED' ? 'approved' : r === 'CHANGES_REQUESTED' ? 'changes-requested' : r === 'REVIEW_REQUIRED' ? 'review-required' : undefined
 
+// gh's own verdict, mirrored (cli: success passes, skipped/neutral count for
+// nothing, every other COMPLETED conclusion fails). ACTION_REQUIRED, STALE and
+// STARTUP_FAILURE used to match neither list and fell through to green — a PR
+// whose checks all ask for a human is not passing.
+const CHECK_FAILING = new Set(['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STALE', 'STARTUP_FAILURE'])
+const CHECK_SKIPPED = new Set(['SKIPPED', 'NEUTRAL'])
+
 function mapChecks(rollup: unknown): ServiceChecksState {
   const arr = Array.isArray(rollup) ? rollup : []
   if (!arr.length) return 'none'
   let pending = false
+  let passed = false
   for (const c of arr as { state?: string; conclusion?: string; status?: string }[]) {
     const v = String(c.conclusion || c.state || c.status || '').toUpperCase()
-    if (v === 'FAILURE' || v === 'ERROR' || v === 'CANCELLED' || v === 'TIMED_OUT') return 'failing'
-    if (v === 'PENDING' || v === 'IN_PROGRESS' || v === 'QUEUED' || v === 'WAITING' || v === '') pending = true
+    if (CHECK_FAILING.has(v)) return 'failing'
+    if (v === 'SUCCESS') passed = true
+    else if (!CHECK_SKIPPED.has(v)) pending = true // queued/in-progress/expected — or a word we don't know yet
   }
-  return pending ? 'pending' : 'passing'
+  if (pending) return 'pending'
+  // Nothing failed, nothing ran: an all-skipped rollup is 'none' (the chip's
+  // neutral), never the green that says the checks passed.
+  return passed ? 'passing' : 'none'
 }
 
 export function createGitHubAdapter(): ServiceAdapter {
@@ -53,14 +65,28 @@ export function createGitHubAdapter(): ServiceAdapter {
       if (!parts) throw new Error('unreadable ref')
       const repo = `${parts.owner}/${parts.repo}`
       const now = Date.now()
-      if (link.kind === 'issue') {
+      const asIssue = async (): Promise<LinkStatus> => {
         const r = await gh(['issue', 'view', String(parts.number), '--repo', repo, '--json', 'state,title'], signal)
         if (!r.ok) throw new Error(ghReason(r.stderr))
         const j = JSON.parse(r.stdout) as { state: string; title: string }
         return { linkId: link.id, health: 'fresh', fetchedAt: now, state: j.state === 'CLOSED' ? 'closed' : 'open', title: j.title }
       }
+      if (link.kind === 'issue') return asIssue()
       const r = await gh(['pr', 'view', String(parts.number), '--repo', repo, '--json', 'state,isDraft,reviewDecision,statusCheckRollup,title'], signal)
-      if (!r.ok) throw new Error(ghReason(r.stderr))
+      if (!r.ok) {
+        // THE correction parse.ts promises: `owner/repo#123` guessed pr, and a
+        // number that isn't a PR is very often an ISSUE. Retry once — and if it
+        // IS one, repair the link's kind so every later poll goes straight there
+        // instead of asking `gh pr view` the same wrong question forever.
+        if (/could not resolve|not found|no such/i.test(r.stderr)) {
+          const corrected = await asIssue().catch(() => null)
+          if (corrected) {
+            link.kind = 'issue' // the engine reads this back and hands main the repair
+            return corrected
+          }
+        }
+        throw new Error(ghReason(r.stderr)) // a genuinely missing ref keeps its honest reason
+      }
       const j = JSON.parse(r.stdout) as { state: string; isDraft: boolean; reviewDecision: string; statusCheckRollup: unknown; title: string }
       return {
         linkId: link.id,

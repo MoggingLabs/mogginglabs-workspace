@@ -40,7 +40,11 @@ export function keySetPlaintext(providerId: string, plaintext: string): { ok: bo
       reason: 'OS keychain encryption is unavailable on this system — use an env-ref instead (e.g. ${OPENROUTER_KEY})'
     }
   }
-  vaultStore(KV_CIPHER(providerId), plaintext.trim())
+  // A dropped write must not read as a save: vaultStore returns false when the settings store
+  // is absent, and reporting ok there loses the user's pasted key silently (see service-keys).
+  if (!vaultStore(KV_CIPHER(providerId), plaintext.trim())) {
+    return { ok: false, reason: 'the settings store is not available right now — the key was not saved; try again' }
+  }
   getSettingsStore()?.setSetting(KV_ENVREF(providerId), '') // keychain replaces any env-ref
   return { ok: true }
 }

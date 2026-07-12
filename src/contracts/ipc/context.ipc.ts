@@ -12,15 +12,29 @@
 
 import type { PaneId } from '../domain/pane'
 
-/** Agent CLIs whose LOCAL SESSION LOG is a dev-verified context source (see
- *  @backend/features/context) — what this wire CAN serve. What the pane SHOWS is a
- *  separate, narrower decision the context feature makes: codex and gemini paint
- *  their own "% context left" gauge in the terminal (dev-verified strings in both),
- *  so rendering ours beside theirs would state the number twice — only claude,
- *  whose CLI shows nothing until context runs LOW, gets the header bar. Anything
- *  else (custom commands) reports no usage at all. We never estimate a number we
- *  cannot read. */
-export const CONTEXT_PROVIDERS = ['claude', 'codex'] as const
+/** Agent CLIs whose LOCAL SESSION LOG is a source-verified context reading. EVERY one of them
+ *  gets the gauge — including the two that already draw their own in the terminal. That used to
+ *  be the argument against it ("the number would be stated twice"), and it was the wrong call:
+ *  a pane's own footer is legible only in the pane you are LOOKING at, while the header gauge is
+ *  what makes a wall of agents readable at a glance. Stating the same number twice costs
+ *  nothing. Stating a DIFFERENT number twice would cost everything — so each provider's percent
+ *  is computed with THAT CLI's formula, never with one of ours:
+ *
+ *    claude  used / window, over the window its statusline reports (h1n — what `/context` prints)
+ *    codex   its own reserved-baseline formula (window.ts) — a plain used/window reads ~4 points
+ *            low against the "% context left" printed in the very same pane
+ *    gemini  promptTokenCount / tokenLimit(model) — what its own "N% used" footer divides
+ *    opencode  the five token fields of the last assistant message, over the model's raw
+ *            limit.context — what its sidebar sums (its COMPACTION formula differs; the user
+ *            is not shown that one, so neither are we)
+ *    aider   the only one that shows NO percentage anywhere: it prints 1k-ROUNDED token
+ *            counts and computes a real figure only inside `/tokens`. So we read what
+ *            `/tokens` reads — the exact prompt size aider logs for every call, over
+ *            litellm's max_input_tokens — rather than round-tripping its own rounding
+ *
+ *  Anything else (a custom command) reports no usage at all. We never estimate a number we
+ *  cannot read: no source, no digit. */
+export const CONTEXT_PROVIDERS = ['claude', 'codex', 'gemini', 'opencode', 'aider'] as const
 export type ContextProvider = (typeof CONTEXT_PROVIDERS)[number]
 
 export const isContextProvider = (id: string): id is ContextProvider =>
@@ -38,8 +52,10 @@ export interface ContextUsage {
    *  window (sourced table in @backend/features/context/window.ts); codex: stated on
    *  every token_count line. Never guessed — no source, no reading. */
   windowTokens: number
-  /** `usedTokens / windowTokens`, clamped to 0–100 and rounded — the CLI's own
-   *  rounding (h1n), so the percent agrees with `/context` digit-for-digit. */
+  /** The percentage THAT CLI would display for this reading — computed with its formula, not
+   *  ours (see CONTEXT_PROVIDERS above). Usually 0–100, but not by decree: gemini's ratio is
+   *  unclamped and its footer says "101% used" once a prompt outgrows the window, so this may
+   *  exceed 100 and the pane says so too. The disc simply stops at full. */
   usedPct: number
   /** The model id the CLI logged (e.g. "claude-opus-4-8"). A label — never a credential. */
   model?: string
@@ -64,6 +80,11 @@ export interface ContextWatchRequest {
   cwd: string
   profileId?: string
   adopted?: boolean
+  /** The earliest this session's log can have been written (ms epoch). Typed-launch detection
+   *  knows this exactly — when the agent's process was first seen, minus the detection lag —
+   *  so the log matcher gets a true floor instead of the guess it makes for a launch (a few
+   *  seconds' slack) or an adopted pane (a blind 30-minute window). Absent = use the guess. */
+  since?: number
 }
 
 /** UI -> backend: stop tracking a pane (it was disposed, or its agent exited). */

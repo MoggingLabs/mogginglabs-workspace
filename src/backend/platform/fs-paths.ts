@@ -1,4 +1,4 @@
-import { statSync } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { join, normalize, parse, sep } from 'node:path'
 import { FS_DRIVE_ROOT } from '@contracts'
 
@@ -50,18 +50,36 @@ export function parentOf(dir: string): string | null {
   return up === dir ? null : up
 }
 
-/** Windows drive letters that currently exist (name `C:`, path `C:\`).
- *  One stat per candidate; ~26 syscalls. */
-export function driveRoots(): { name: string; path: string }[] {
-  const out: { name: string; path: string }[] = []
-  for (let c = 'A'.charCodeAt(0); c <= 'Z'.charCodeAt(0); c++) {
-    const root = `${String.fromCharCode(c)}:${sep}`
+/** How long one drive letter gets to answer. A mapped-but-DISCONNECTED network drive does not
+ *  fail fast: its stat blocks for the SMB timeout — SECONDS, per dead mapping. This ran
+ *  synchronously inside an IPC handler, so the main process froze: no drive list, and every
+ *  IPC queued behind it stalled with it. A live drive answers in microseconds, so nothing real
+ *  is lost to the cap. */
+const DRIVE_PROBE_MS = 300
+
+/** Windows drive letters that currently exist (name `C:`, path `C:\`). All 26 probed in
+ *  PARALLEL, each abandoned after DRIVE_PROBE_MS: a dead mapping is left out of the list
+ *  rather than allowed to hang the caller. Async for that reason alone — both listings that
+ *  use it (the wizard's folder browser and the explorer's tree) already await their work. */
+export async function driveRoots(): Promise<{ name: string; path: string }[]> {
+  const probe = async (root: string): Promise<{ name: string; path: string } | null> => {
+    let timer: NodeJS.Timeout | undefined
     try {
-      statSync(root)
-      out.push({ name: root.slice(0, 2), path: root })
+      await Promise.race([
+        stat(root),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('probe timeout')), DRIVE_PROBE_MS)
+        })
+      ])
+      return { name: root.slice(0, 2), path: root }
     } catch {
-      /* no such drive — the overwhelmingly common case */
+      return null // no such drive (the overwhelmingly common case), or a mapping that never answered
+    } finally {
+      clearTimeout(timer)
     }
   }
-  return out
+  const roots: string[] = []
+  for (let c = 'A'.charCodeAt(0); c <= 'Z'.charCodeAt(0); c++) roots.push(`${String.fromCharCode(c)}:${sep}`)
+  const found = await Promise.all(roots.map(probe))
+  return found.filter((d): d is { name: string; path: string } => d !== null)
 }

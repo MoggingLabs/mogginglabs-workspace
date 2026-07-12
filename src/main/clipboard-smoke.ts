@@ -1,5 +1,6 @@
 import { app, clipboard, type BrowserWindow } from 'electron'
-import { unlinkSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { quotePathForShell, shellFlavor } from '@contracts'
 
@@ -215,6 +216,14 @@ function checkQuoting(): { pass: boolean; detail: Record<string, unknown> } {
     psDollar: quotePathForShell('C:\\$Recycle.Bin\\x', 'powershell'),
     psQuote: quotePathForShell("C:\\o'brien\\x", 'powershell'),
     newline: quotePathForShell('/a' + NL + 'rm -rf ~', 'posix'),
+    // cmd expands %NAME% even inside double quotes, so a filename is an INJECTION vector:
+    // unspliced, `"C:\tmp\100%PATHX%end"` retargets the user's next command at whatever
+    // PATHX holds. Each % must ride BETWEEN quoted runs (see cmdQuote) — and a backslash
+    // abutting any quote we emit, spliced or final, must be doubled or the argv parser
+    // reads it as an escaped quote and swallows the next token.
+    cmdPercent: quotePathForShell('C:\\tmp\\100%PATHX%end', 'cmd'),
+    cmdPercentTail: quotePathForShell('C:\\dir\\%FOO%', 'cmd'),
+    cmdDriveRoot: quotePathForShell('C:\\', 'cmd'),
     flavorWin: shellFlavor('C:\\Windows\\system32\\cmd.exe', 'win32'),
     flavorPwsh: shellFlavor('pwsh.exe', 'win32'),
     flavorMac: shellFlavor('/bin/zsh', 'darwin')
@@ -230,9 +239,70 @@ function checkQuoting(): { pass: boolean; detail: Record<string, unknown> } {
     detail.psQuote === `'C:\\o''brien\\x'` &&
     // The newline is stripped, so the quoted word can never become two commands.
     !String(detail.newline).includes(NL) &&
+    detail.cmdPercent === '"C:\\tmp\\100"%"PATHX"%"end"' &&
+    detail.cmdPercentTail === '"C:\\dir\\\\"%"FOO"%""' &&
+    detail.cmdDriveRoot === '"C:\\\\"' &&
+    // A %-free path is untouched by the splice — the normal case must not move a byte.
+    detail.plainCmd === '"C:\\Users\\pedro\\a.txt"' &&
     detail.flavorWin === 'cmd' &&
     detail.flavorPwsh === 'powershell' &&
     detail.flavorMac === 'posix'
+  return { pass, detail }
+}
+
+/** The shape asserts above prove we EMIT what we meant to. This proves cmd.exe HONORS it:
+ *  type the quoted path at a real prompt (stdin to cmd.exe is the interactive parser — the
+ *  same percent expansion a pane gets) and read back the argv the program actually
+ *  received. Without this, the rule is only as true as our reading of the docs, and the
+ *  docs are exactly what got this wrong before. win32 only; elsewhere there is no cmd. */
+function checkCmdRoundTrip(): { pass: boolean; detail: Record<string, unknown> } {
+  if (process.platform !== 'win32') return { pass: true, detail: { skipped: 'not win32' } }
+  const paths = [
+    'C:\\tmp\\100%PATHX%end', // a DEFINED var in the name — the injection
+    'C:\\Users\\pedro\\%FOO%\\bin',
+    'C:\\dir\\%FOO%', // backslash abuts a spliced quote
+    'C:\\a&b%FOO%c', // a cmd metachar rides along, and must stay literal
+    'C:\\a%my var%b', // a space inside the spliced pair — still ONE argument
+    'C:\\', // drive root: the trailing-backslash escape
+    'C:\\Program Files\\My App' // the ordinary case
+  ]
+  const detail: Record<string, unknown> = {}
+  const sink = join(app.getPath('temp'), 'mogging-cmdquote-argv.json')
+  let pass = true
+  for (const p of paths) {
+    // ELECTRON_RUN_AS_NODE turns our own binary into a plain Node — no extra dependency,
+    // and its argv goes through the very CommandLineToArgvW rules the quoting targets.
+    // The argv goes to a FILE, not stdout: cmd echoes piped input, so stdout carries the
+    // command line as well as its output and any parse of it can match the wrong one.
+    // `-e` puts NO script path in argv: argv[1] is the first real argument, not argv[2].
+    const probe = `require('fs').writeFileSync(process.argv[1],JSON.stringify(process.argv.slice(2)))`
+    const line = `"${process.execPath}" -e "${probe}" "${sink}" ${quotePathForShell(p, 'cmd')}\r\n`
+    let got: string[] | null = null
+    try {
+      unlinkSync(sink)
+    } catch {
+      /* first run */
+    }
+    try {
+      execFileSync('cmd.exe', [], {
+        input: `@echo off\r\nset FOO=BAR\r\nset PATHX=INJECTED\r\n${line}exit\r\n`,
+        encoding: 'utf8',
+        windowsHide: true,
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+      })
+      got = JSON.parse(readFileSync(sink, 'utf8')) as string[]
+    } catch {
+      got = null
+    }
+    detail[p] = got
+    // ONE argument, and byte-exactly the path we quoted.
+    if (!Array.isArray(got) || got.length !== 1 || got[0] !== p) pass = false
+  }
+  try {
+    unlinkSync(sink)
+  } catch {
+    /* best effort */
+  }
   return { pass, detail }
 }
 
@@ -426,6 +496,7 @@ export function runClipboardSmoke(win: BrowserWindow): void {
       win.focus()
     }
     const quoting = checkQuoting()
+    const cmdTrip = checkCmdRoundTrip()
     let ipc: { pass?: boolean } = { pass: false }
     try {
       ipc = (await win.webContents.executeJavaScript(SCRIPT, true)) as { pass?: boolean }
@@ -440,10 +511,12 @@ export function runClipboardSmoke(win: BrowserWindow): void {
     const result = {
       quoting: quoting.detail,
       quotingPass: quoting.pass,
+      cmdRoundTrip: cmdTrip.detail,
+      cmdRoundTripPass: cmdTrip.pass,
       ...realDrop,
       ...seq,
       ...ipc,
-      pass: !!(quoting.pass && ipc.pass && realDrop.realDropOk && seq.seqPass)
+      pass: !!(quoting.pass && cmdTrip.pass && ipc.pass && realDrop.realDropOk && seq.seqPass)
     }
     try {
       writeFileSync(join(process.cwd(), 'out', 'clipboard-result.json'), JSON.stringify(result, null, 2))

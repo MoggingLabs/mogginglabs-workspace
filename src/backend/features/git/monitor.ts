@@ -128,7 +128,12 @@ export class GitMonitor {
     const cwd = this.cwds.get(paneId)
     if (cwd === undefined) return
     const { status } = await this.probeRepo(cwd, cache)
-    if (!this.cwds.has(paneId)) return // pane removed while probing
+    // The pane must still be on the cwd we probed. `has` is not enough: a slow probe of repo A
+    // (big repo, cold disk) still in flight when the shell reports a cd into repo B would land
+    // AFTER B's probe and overwrite the chip with A's branch and dirty state — the chip lies
+    // until the next tick heals it. A retargeted pane's stale probe is simply dropped; setCwd
+    // already emitted B.
+    if (this.cwds.get(paneId) !== cwd) return // pane removed, or moved on, while probing
     // The pane's signature is its STATUS and nothing else — the file list rides the same probe
     // but must never make a chip re-emit, or every keystroke an agent saves would churn the bar.
     const sig = JSON.stringify(status)
