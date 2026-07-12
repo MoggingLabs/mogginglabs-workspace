@@ -3,7 +3,8 @@ import type { AgentState } from '@contracts'
 // Incremental scanner for OSC (Operating System Command) sequences on a raw PTY stream. An OSC
 // starts with ESC ] and ends with BEL (0x07) or ST (ESC \).
 //
-//   OSC 9 / 99 / 777          notifications              -> "attention"
+//   OSC 9 ; <text>            notification               -> "attention"  (NOT 9;4 — see below)
+//   OSC 99 / 777;notify       notifications              -> "attention"
 //   OSC 133 ; A               prompt start                            (mark, for command blocks)
 //   OSC 133 ; B               command line start                      (mark, for command blocks)
 //   OSC 133 ; C               command execution start    -> "busy"    (mark)
@@ -132,8 +133,26 @@ export class OscParser {
 
     switch (code) {
       case 9:
-      case 99:
+        // OSC 9 is OVERLOADED on Windows. `OSC 9 ; <text>` is the ConEmu/iTerm2 desktop
+        // notification, but `OSC 9 ; 4 ; <state> ; <pct>` is the taskbar PROGRESS report
+        // that Windows Terminal, ConPTY and half the build tools speak (cargo, npm, pip,
+        // winget). Reading a progress tick as "this pane needs a human" turned a pane RED
+        // for the crime of running a build with a progress bar — and latched it there.
+        // Progress is not a notification: the pane is WORKING, which output activity is
+        // already saying. Drop it.
+        if (/^4(;|$)/.test(rest)) break
+        this.onState('attention')
+        this.onEvent?.({ kind: 'notify', code, payload: rest })
+        break
       case 777:
+        // `OSC 777 ; notify ; <title> ; <body>` (rxvt/urxvt). 777 carries OTHER
+        // subcommands too (precmd, preexec, …) which say nothing about needing a human.
+        // Only the notify subcommand is a notification.
+        if (!/^notify(;|$)/.test(rest)) break
+        this.onState('attention')
+        this.onEvent?.({ kind: 'notify', code, payload: rest })
+        break
+      case 99:
         this.onState('attention')
         this.onEvent?.({ kind: 'notify', code, payload: rest })
         break

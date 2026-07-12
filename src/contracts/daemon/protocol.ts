@@ -260,7 +260,28 @@ export type ServerMessage =
 
 /** Notify events an agent/hook can raise via `mogging notify` (Phase-2/04). A small, closed
  *  vocabulary that maps to a pane AgentState — a label only, never PTY content (ADR 0002). */
-export type NotifyEvent = 'needs-input' | 'done' | 'attention' | 'busy' | 'idle'
+export type NotifyEvent =
+  | 'needs-input'
+  | 'done'
+  | 'attention'
+  | 'busy'
+  | 'idle'
+  // Subagent lifecycle (Claude Code SubagentStart/SubagentStop hooks). A GATE, never a
+  // source: alerts are the MAIN agent's story, and these only hold the pane busy and
+  // swallow the main's premature verdicts (a `done` fired while it's merely parked on
+  // its subagents, a quiet terminal, an idle prompt). They never author a pane state.
+  // Handled statefully by the tracker (session.applyNotify routes them; see
+  // agent-state/activity.ts) — notifyEventToState is only their stateless fallback.
+  | 'subagent-start'
+  | 'subagent-stop'
+  // Claude Code's "Claude is waiting for your input" notice. Fired on an idle TIMER, not
+  // by a block — so it NEVER rings red (that turned a finished pane's green halo red a
+  // minute after it finished). It settles the pane instead, and is dropped outright while
+  // subagents are pending or a real block is latched.
+  | 'idle-prompt'
+  // UserPromptSubmit: a new turn. Resets the pending-subagent counter, so a stop event
+  // lost to a hard kill can't swallow every future done and strand the pane on busy.
+  | 'turn-start'
 
 /** Map a notify event to the pane state it raises. `done` is a turn ENDING — it lands as
  *  `idle`, which the UI's attention port turns into the sticky green "finished" story
@@ -271,9 +292,13 @@ export type NotifyEvent = 'needs-input' | 'done' | 'attention' | 'busy' | 'idle'
 export function notifyEventToState(event: string): AgentState {
   switch (event) {
     case 'busy':
+    case 'turn-start':
+    case 'subagent-start':
+    case 'subagent-stop': // stateless fallback only — the tracker owns the real counter
       return 'busy'
     case 'idle':
     case 'done':
+    case 'idle-prompt': // a parked prompt is idle, never blocked (the tracker gates it)
       return 'idle'
     default:
       return 'attention'

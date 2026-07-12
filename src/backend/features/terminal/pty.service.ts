@@ -113,7 +113,10 @@ export class PtyService {
       const tracker = new ActivityTracker((state: AgentState) => this.sink.state({ id: req.id, state }))
       this.trackers.set(req.id, tracker)
       const osc = new OscParser(
-        (state: AgentState) => tracker.notify(state),
+        // Parity with the daemon path: an OSC 9/99/777 notification is a GUESS (CLIs ring
+        // it on completion too), so it goes through the bell's confirmation window rather
+        // than latching red outright. Only 133;C/D is an explicit verdict.
+        (state: AgentState) => (state === 'attention' ? tracker.bell() : tracker.notify(state)),
         (ev) => {
           if (ev.kind === 'bell') tracker.bell()
           // OSC 7 reports the pane's cwd -> surface it for per-pane git (Phase-2/03).

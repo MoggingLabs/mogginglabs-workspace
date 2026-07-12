@@ -48,10 +48,17 @@ export function runStateSmoke(win: BrowserWindow): void {
   const emitOsc = (payload: string): string =>
     `node -e "process.stdout.write(String.fromCharCode(27)+']${payload}'+String.fromCharCode(7))"\r`
 
-  async function step(payload: string, expected: string | null): Promise<Record<string, unknown>> {
+  // An OSC 9/99/777 notification is a low-confidence GUESS, not a verdict: every agent CLI
+  // rings it on COMPLETION as much as when blocked, so the tracker holds it for
+  // BELL_CONFIRM_MS to see whether an explicit done/needs-input contradicts it, and only an
+  // UNCLAIMED bell rings (agent-state/activity.ts). Nothing contradicts these, so they still
+  // reach attention — just deliberately later. Outwait the window, or the very next step's
+  // 133;C would cancel the pending bell and the ring would never land at all.
+  const BELL_WAIT_MS = 2800
+  async function step(payload: string, expected: string | null, wait = 1600): Promise<Record<string, unknown>> {
     const before = Number(await ES('window.__states.length'))
     await send(emitOsc(payload))
-    await delay(1600)
+    await delay(wait)
     const states = (await ES('window.__states.slice(' + before + ')')) as string[]
     const chip = (await ES(
       '(function(){var e=document.querySelector(\'.layout-slot[data-pane-id="1"] .pane-state\');' +
@@ -83,7 +90,7 @@ export function runStateSmoke(win: BrowserWindow): void {
       )
       await delay(600)
 
-      const attention = await step('9;hi', 'attention')
+      const attention = await step('9;hi', 'attention', BELL_WAIT_MS)
       const busy = await step('133;C', 'busy')
       const idle = await step('133;D;0', 'idle')
       const cwd = await step('7;file://host/tmp', null) // OSC 7: no state change, must not error
@@ -99,7 +106,7 @@ export function runStateSmoke(win: BrowserWindow): void {
       // hitting a permission prompt.
       await ES('(window.__mogging.agents.adopt(1,"claude",""),1)')
       await delay(400)
-      const relatch = await step('9;again', 'attention')
+      const relatch = await step('9;again', 'attention', BELL_WAIT_MS)
       const chip = (): Promise<unknown> =>
         ES(
           '(function(){var e=document.querySelector(\'.layout-slot[data-pane-id="1"] .pane-state\');' +

@@ -199,7 +199,10 @@ class PaneSession {
       for (const s of this.subs) s.state(state)
     })
     const osc = new OscParser(
-      (state) => this.tracker.notify(state),
+      // An OSC 9/99/777 notification is the same GUESS a raw BEL is — CLIs fire it on
+      // completion as much as on a block — so it takes the bell's confirmation path, not
+      // the explicit-verdict one. Only 133;C/D (real shell integration) is a verdict here.
+      (state) => (state === 'attention' ? this.tracker.bell() : this.tracker.notify(state)),
       (ev) => {
         if (ev.kind === 'bell') this.tracker.bell()
         if (ev.kind === 'cwd' && ev.payload) {
@@ -288,8 +291,14 @@ class PaneSession {
    *  (badge chip + workspace-tab ring). Replayed to (re)attaching clients via lastState. */
   applyNotify(event: string): void {
     // Routed through the tracker so notify keeps its latch/clear semantics (an
-    // explicit busy/idle releases an attention latch; attention latches).
-    this.tracker.notify(notifyEventToState(event))
+    // explicit busy/idle releases an attention latch; attention latches). The
+    // subagent lifecycle + idle-prompt events are STATEFUL — the tracker's pending
+    // counter decides what they mean — so they bypass the stateless event->state map.
+    if (event === 'subagent-start') this.tracker.subagentStart()
+    else if (event === 'subagent-stop') this.tracker.subagentStop()
+    else if (event === 'idle-prompt') this.tracker.idlePrompt()
+    else if (event === 'turn-start') this.tracker.turnStart()
+    else this.tracker.notify(notifyEventToState(event))
     // Usage-limit (4/04): a DISTINCT signal alongside the attention state, so the
     // app can offer profile failover. Event label only — never content.
     if (event === 'usage-limit') for (const s of this.subs) s.limit?.()

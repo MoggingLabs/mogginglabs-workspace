@@ -157,7 +157,18 @@ export function runReloadSmoke(win: BrowserWindow): void {
       await delay(2500)
       await ES(HOOK)
       await send(LOOP)
-      await delay(3000) // past i===4: the loop's one OSC 9 has latched attention
+      // WAIT for the latch rather than guessing at a deadline. An OSC 9 is a low-confidence
+      // GUESS — every agent CLI rings one on COMPLETION as much as when blocked — so the
+      // tracker holds it for BELL_CONFIRM_MS to see whether an explicit done contradicts it
+      // (agent-state/activity.ts). Nothing contradicts this one, so it still latches
+      // attention, just ~2s later than it used to. A fixed delay was the wrong tool: the
+      // ring lands at node-startup + the loop's 5th tick + the bell window, and any estimate
+      // of that sits right on the boundary (measured: a 4.4s guess read 'busy', and the latch
+      // looked lost when it was merely late). Poll instead.
+      for (let i = 0; i < 40; i++) {
+        if (String(await chipState()) === 'attention') break
+        await delay(250)
+      }
       const before = marks(String(await ES('window.__cap')))
       const beforeMax = before.length ? Math.max(...before) : -1
       const stateBefore = String(await chipState())
