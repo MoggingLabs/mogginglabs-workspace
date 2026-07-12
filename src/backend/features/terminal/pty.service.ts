@@ -23,6 +23,21 @@ import { aiderLogPath } from '../context'
 /** Retained per-pane output for reattach repaint — same cap as the daemon's ring. */
 const SCROLLBACK_BYTES = 200_000
 
+/** How far past a fresh cap cut we'll look for a clean line start. */
+const TEAR_SCAN = 400
+
+/** A blind `.slice(-SCROLLBACK_BYTES)` can land mid escape sequence or between surrogate
+ *  halves, and the reattach repaint then feeds xterm a sequence's tail as literal text (or
+ *  a lone surrogate). Drop a split surrogate's low half, then cut forward to the next
+ *  newline: at most one partial line of scrollback lost, cheap next to a garbled repaint.
+ *  No newline nearby (one giant TUI frame) keeps the tear — same cap semantics either way. */
+function trimTornStart(s: string): string {
+  const c0 = s.charCodeAt(0)
+  if (c0 >= 0xdc00 && c0 <= 0xdfff) s = s.slice(1)
+  const nl = s.indexOf('\n')
+  return nl !== -1 && nl < TEAR_SCAN ? s.slice(nl + 1) : s
+}
+
 /** The directory a pane's shell starts in: the requested one when it is a real directory,
  *  the home directory otherwise. Mirrors pty-daemon/session.ts's pickCwd — the two backends
  *  must not disagree about where a pane opens. `''` means "none asked for" (never the
@@ -122,7 +137,10 @@ export class PtyService {
       const tracker = new ActivityTracker((state: AgentState) => this.sink.state({ id: req.id, state }))
       this.trackers.set(req.id, tracker)
       const osc = new OscParser(
-        (state: AgentState) => tracker.notify(state),
+        // Parity with the daemon path: an OSC 9/99/777 notification is a GUESS (CLIs ring
+        // it on completion too), so it goes through the bell's confirmation window rather
+        // than latching red outright. Only 133;C/D is an explicit verdict.
+        (state: AgentState) => (state === 'attention' ? tracker.bell() : tracker.notify(state)),
         (ev) => {
           if (ev.kind === 'bell') tracker.bell()
           // OSC 7 / 9;9 report the pane's cwd -> per-pane git (Phase-2/03), and the launch
@@ -149,7 +167,11 @@ export class PtyService {
       // path (transport.ts subscribes per session generation) — here the proc IS the gen.
       proc.onData((data) => {
         if (this.ptys.get(req.id) !== proc) return // a dead generation talking
-        this.buffers.set(req.id, ((this.buffers.get(req.id) ?? '') + data).slice(-SCROLLBACK_BYTES))
+        const grown = (this.buffers.get(req.id) ?? '') + data
+        this.buffers.set(
+          req.id,
+          grown.length > SCROLLBACK_BYTES ? trimTornStart(grown.slice(-SCROLLBACK_BYTES)) : grown
+        )
         tracker.data() // BEFORE the parse: a verdict in this chunk must land last
         osc.push(data)
         this.sink.data({ id: req.id, data })

@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, type WebContents } from 'electron'
 import { getTelemetry, startBackend } from '@backend'
 import { createMainWindow } from './window'
 import { createElectronContext } from './electron-context'
@@ -106,10 +106,11 @@ import { startDaemonBackend } from './daemon-relay'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { runMigrateSmoke } from './migrate-smoke'
 import { runNotifyHookSmoke } from './notifyhook-smoke'
-import { registerDeepLink, initialDeepLinkCwd, initialControlCommand } from './deep-link'
+import { installDeepLinkListeners, registerDeepLink, initialDeepLinkCwd, initialControlCommand } from './deep-link'
 import { ControlChannels } from '@contracts'
 import { initAutoUpdate } from './updater'
 import { fatal, installFatalHandlers } from './fatal'
+import { scrubInheritedPaneEnv } from './pane-env'
 import { assertNativeModules } from './native-preflight'
 import { assertPtyHostSupported } from '@backend/platform/pty-host'
 import { WorkspaceChannels } from '@contracts'
@@ -143,6 +144,19 @@ else if (!app.isPackaged) app.setPath('userData', app.getPath('userData') + '-de
 if (app.isPackaged || process.env.MOGGING_USERDATA) delete process.env.MOGGING_CHANNEL
 else process.env.MOGGING_CHANNEL = 'dev'
 
+// The SAME rule, for the same reason, applied to the pane identity the daemon injects: an app
+// launched from inside a MoggingLabs pane inherits WHICH pane it came from and WHERE that
+// pane's daemon is, then hands both to every child it spawns. `mogging` prefers the inherited
+// endpoint over the runtime dir (inside a real pane that is the right answer), so the app's own
+// CLI children — every gate's `mogging` call — talked to the HOST's daemon instead of ours, and
+// a colliding pane id would have let them mutate the user's live session. Not a pane; do not
+// wear a pane's name. (pane-env.ts has the full account; the daemon re-injects the true values
+// into each pane it spawns, which is the only place they mean anything.)
+const inheritedPaneEnv = scrubInheritedPaneEnv(process.env)
+if (inheritedPaneEnv.length) {
+  console.warn(`[env] launched from inside a pane — dropped inherited ${inheritedPaneEnv.join(', ')}`)
+}
+
 // Remote-pane smoke support (4/05): point the daemon at a FAKE ssh (a node script the
 // smoke writes later) BEFORE the daemon spawns, so no smoke ever needs a network.
 if ((process.env.MOGGING_REMOTE || process.env.MOGGING_SHOT === 'all') && !process.env.MOGGING_SSH_SHIM) {
@@ -169,29 +183,70 @@ if (process.env.MOGGING_CI_KEYRING && process.platform === 'linux') {
 // Single-instance + mogging:// deep link so `mogging .` focuses a running app. Skipped under
 // smokes (some launch a second instance); normal dev/production runs hold the lock.
 //
-// "Smoke" means a MOGGING_* GATE is set — not any MOGGING_* var. The daemon injects runtime
-// facts (MOGGING_PANE_ID, endpoint paths) into every pane, and a dev app sets MOGGING_CHANNEL;
-// a developer running `npm run dev` INSIDE a MoggingLabs pane — the dogfooding loop — inherits
-// those. Counting them as smoke silently skipped the instance lock and deep-link registration
-// for every such run (and made shared-userData dev+release "work" by never contending the lock).
-const PANE_RUNTIME_ENV = new Set([
-  'MOGGING_PANE_ID',
-  'MOGGING_DAEMON_ENDPOINT',
-  'MOGGING_BROWSER_ENDPOINT',
-  'MOGGING_CHANNEL'
-])
-const isSmoke = Object.keys(process.env).some((k) => k.startsWith('MOGGING_') && !PANE_RUNTIME_ENV.has(k))
+// "Smoke" means a MOGGING_* GATE is set — not any MOGGING_* var. This was a DENYLIST (any
+// MOGGING_* var outside four pane-runtime names counted as a smoke) and it failed OPEN: every
+// var it did not know — MOGGING_INPROC (the documented daemon-failure workaround below),
+// MOGGING_DEVLOG, MOGGING_DAEMON_IDLE_MS — silently dropped the instance lock, the deep link,
+// and auto-update from a REAL run, letting a second full instance share one userData: exactly
+// the clobbering the -dev split above exists to prevent. An ALLOWLIST fails CLOSED — an unknown
+// var is a normal run. It cannot rot in the sweep either: every gate (scripts/qa-smokes.sh, and
+// the single-gate recipe) also sets MOGGING_USERDATA, so a NEW gate is still recognized even if
+// its name never lands here — and an isolated userData must not register the OS-global
+// deep-link scheme in any case. Dev needs no bypass: it holds its OWN lock via the -dev userData
+// (Electron keys the lock on userData), so a dev build runs alongside the installed release.
+const SMOKE_ENV: readonly string[] = [
+  'MOGGING_USERDATA', 'MOGGING_GATES', 'MOGGING_GALLERY', // isolation + sweep markers, set by every gate
+  'MOGGING_SURVIVE', 'MOGGING_MIGRATE', 'MOGGING_NOTIFYHOOK', 'MOGGING_INTEG', 'MOGGING_TOOLPLAN',
+  'MOGGING_EVBRIDGE', 'MOGGING_MCPSTATUS', 'MOGGING_AGENT', 'MOGGING_STATE', 'MOGGING_RELOAD',
+  'MOGGING_SMOKE', 'MOGGING_SHOT', 'MOGGING_MULTIPANE', 'MOGGING_WORKSPACE', 'MOGGING_AGENTLAUNCH',
+  'MOGGING_TEMPLATE', 'MOGGING_PROFPERSIST', 'MOGGING_BROWSER', 'MOGGING_BROWSERCTL', 'MOGGING_FIRSTRUN',
+  'MOGGING_PRODUCT', 'MOGGING_USAGEGLANCE', 'MOGGING_USAGEUI', 'MOGGING_WEBUSAGE', 'MOGGING_USAGECLI',
+  'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
+  'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_WSCLOSE', 'MOGGING_KBSHORTCUTS', 'MOGGING_WEBTRAIL',
+  'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX',
+  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETINTEG', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX',
+  'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_UXMILESTONE',
+  'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT',
+  'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS',
+  'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW',
+  'MOGGING_BOARD', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
+  'MOGGING_PROFILES', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE'
+]
+const isSmoke = SMOKE_ENV.some((k) => !!process.env[k])
 const primaryInstance = isSmoke || app.requestSingleInstanceLock()
 if (!primaryInstance) app.quit()
+// The lock is held from HERE, but registerDeepLink is ~25 s of boot away (daemon migrate +
+// start + feature registration). A `mogging .` fired into that gap reached an app with no
+// 'second-instance' listener: the second instance exited 0 and the command vanished. Listen
+// now — deliveries queue until the window exists.
+else if (!isSmoke) installDeepLinkListeners()
 
 installFatalHandlers(isSmoke) // before whenReady: early wiring must not fail silently
 
 function openWindow(): void {
-  win = createMainWindow()
-  wireWindowState(win) // fullscreen/maximize -> renderer chrome classes (5/04)
-  win.on('closed', () => {
-    win = null
+  const w = createMainWindow()
+  win = w
+  wireWindowState(w) // fullscreen/maximize -> renderer chrome classes (5/04)
+  // Only the CURRENT window may clear the pointer: a window re-created for a deep link
+  // (ensureWindow) must not be nulled by its predecessor's late 'closed'.
+  w.on('closed', () => {
+    if (win === w) win = null
   })
+}
+
+/** The window, recreated if it is gone (macOS keeps the app alive without one). */
+function ensureWindow(): BrowserWindow {
+  if (!win || win.isDestroyed()) openWindow()
+  return win as BrowserWindow
+}
+
+/** The renderer target for every backend/daemon event. `win` is nulled on 'closed', but the
+ *  webContents dies BEFORE that event: a daemon socket event landing in the gap threw inside
+ *  send(), and the uncaughtException handler turns that into app.exit(1) — closing a window
+ *  while agents streamed output hard-exited the app. */
+function liveWebContents(): WebContents | null {
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return null
+  return win.webContents
 }
 
 app.whenReady().then(async () => {
@@ -270,14 +325,14 @@ app.whenReady().then(async () => {
   // The detached PTY daemon (ADR 0006) is now the DEFAULT — full parity with in-proc plus
   // survival across a main crash / app restart. MOGGING_INPROC forces the in-proc backend.
   const startInProc = (): void => {
-    const ctx = createElectronContext(() => win?.webContents ?? null)
+    const ctx = createElectronContext(liveWebContents)
     disposeBackend = startBackend(ctx)
   }
   if (process.env.MOGGING_INPROC) {
     startInProc()
   } else {
     try {
-      disposeBackend = await startDaemonBackend(() => win?.webContents ?? null)
+      disposeBackend = await startDaemonBackend(liveWebContents)
     } catch (err) {
       getTelemetry().captureError(err, { feature: 'daemon', op: 'start', platform: process.platform })
       // A real degradation (no pane survival across restarts). Telemetry is opt-in, so stderr is
@@ -291,7 +346,7 @@ app.whenReady().then(async () => {
   registerClipboard() // system clipboard IPC (app-layer, Electron-only)
   registerDialogs(() => win) // native directory picker for the new-workspace wizard
   registerShellChrome(() => win) // theme-tinted window-control overlay (organic chrome)
-  registerBrowserDock(() => win) // right browser dock: MAIN owns the WebContentsView (6/05)
+  registerBrowserDock(() => win, isSmoke) // right browser dock: MAIN owns the WebContentsView (6/05)
   registerIntegrations(() => win) // per-workspace integrations grant: store + IPC + fan-out (8/03)
   registerEventBridge(() => win) // outbound event bridge: house events -> user webhooks (8/10)
   registerTrail() // the agent activity trail: local store + viewer IPC (8/05)
@@ -302,8 +357,8 @@ app.whenReady().then(async () => {
   registerAgents(() => win) // agent launcher: detect/install CLIs + build launch commands (Phase-1/06; Agent CLIs tab)
   registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
   registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
-  disposeGit = registerGit(() => win?.webContents ?? null) // read-only per-pane git branch + dirty (Phase-2/03)
-  disposeContext = registerContext(() => win?.webContents ?? null) // per-pane agent context bar: tails the CLIs' own session logs (counts only)
+  disposeGit = registerGit(liveWebContents) // read-only per-pane git branch + dirty (Phase-2/03)
+  disposeContext = registerContext(liveWebContents) // per-pane agent context bar: tails the CLIs' own session logs (counts only)
   registerWorktrees() // worktree-per-agent isolation: add/list/remove only (Phase-3/03)
   registerFsBrowse() // read-only one-level directory listing for the folder browser (Phase-8.5/03)
   registerReview() // pre-ship diff review: redacted diff + guarded merge (Phase-3/04)
@@ -315,7 +370,7 @@ app.whenReady().then(async () => {
   openWindow()
 
   if (!isSmoke) {
-    registerDeepLink(() => win) // mogging:// -> open/focus a workspace for a directory
+    registerDeepLink(ensureWindow) // mogging:// -> open/focus a workspace for a directory
     const initialCwd = initialDeepLinkCwd()
     if (initialCwd && win) {
       const w = win

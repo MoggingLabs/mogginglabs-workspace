@@ -45,6 +45,7 @@ const DEFAULT_WIDTH = 420
 const AGENT_ATTACH_MS = 5 * 60_000
 
 let getWin: (() => BrowserWindow | null) | null = null
+let smokeRun = false // set by registerBrowserDock from main's ONE smoke predicate (index.ts)
 let open = false
 let profile: BrowserProfile = 'preview' // the ACTIVE workspace's profile
 let activeWorkspaceId = ''
@@ -161,7 +162,11 @@ function wireGuest(p: BrowserProfile, wc: WebContents, wsId: string): void {
   const ring = bufs.get(wc.id)!
   wc.setWindowOpenHandler(({ url }) => {
     const ok = normalizeUrl(url)
-    if (ok && !Object.keys(process.env).some((k) => k.startsWith('MOGGING_'))) void shell.openExternal(ok)
+    // A smoke must never launch the user's real browser. The old test — ANY MOGGING_* var —
+    // was true for every dev run (main sets MOGGING_CHANNEL) and for a PACKAGED app launched
+    // from inside a pane (MOGGING_PANE_ID/MOGGING_DAEMON_ENDPOINT are inherited), so
+    // window.open / target=_blank links were silently dead in real use.
+    if (ok && !smokeRun) void shell.openExternal(ok)
     return { action: 'deny' }
   })
   wc.on('will-navigate', (e, url) => {
@@ -639,8 +644,9 @@ export function destroyAgentWebViewForSmoke(): Promise<void> {
 export const forgetSiteForSmoke = forgetSite
 export const signedInSitesForSmoke = signedInSites
 
-export function registerBrowserDock(winGetter: () => BrowserWindow | null): void {
+export function registerBrowserDock(winGetter: () => BrowserWindow | null, isSmoke = false): void {
   getWin = winGetter
+  smokeRun = isSmoke
   const store = (): ReturnType<typeof getSettingsStore> => getSettingsStore()
   refreshVault()
 

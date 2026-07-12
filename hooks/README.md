@@ -34,6 +34,102 @@ first-party layer for the CLIs that support hooks.
 | `done` | idle | the agent finished its turn — surfaces as the sticky green "finished" halo until you click the pane |
 | `busy` | busy | long-running work started (softer, non-ringing) |
 | `idle` | idle | back to idle |
+| `subagent-start` | *(gate only — holds busy)* | work fanned out to a subagent |
+| `subagent-stop` | *(gate only — emits nothing)* | a subagent landed |
+| `turn-start` | busy | a new prompt was submitted |
+| `idle-prompt` | idle *(never red)* | "Claude is waiting for your input" — parked, not blocked |
+
+### Not every `Notification` is a call for help
+
+Claude Code's `Notification` hook is **multiplexed** — one event carrying eleven different `type`s.
+Only four of them mean a human is actually blocking the agent:
+
+| ringing (red) | silent |
+|---------------|--------|
+| `permission_prompt`, `worker_permission_prompt`, `agent_needs_input`, `elicitation_dialog` | `agent_completed`, `auth_success`, `elicitation_complete`, `elicitation_response`, `computer_use_enter`, `computer_use_exit`, `push_notification` |
+
+`agent_completed` fires the instant an agent **finishes** (its message is literally
+"`<label> finished`"). Mapping the whole `Notification` event to `needs-input` therefore painted
+*completed* panes red — racing the `Stop` hook's green, and winning often enough to be maddening
+(both are ~130ms process spawns; whichever lands last wins, and attention is a **latch**, so the red
+stuck until you typed).
+
+`idle_prompt` ("Claude is waiting for your input") is fired by an idle **timer**, so it turned a
+finished pane's green halo red a minute later purely for sitting there. It is not a block — it is an
+*idle* verdict, and green already carries "come look".
+
+So `mogging notify` reads the payload's `type` off stdin and whitelists the four that block. An
+unrecognized type still rings, on the theory that a notification nobody understands is worth
+surfacing. The `type` field **only** ever leaves the process — never the message or title.
+
+### The bell is a guess, not a verdict
+
+The same trap sits one layer down. A terminal bell (`BEL`) or an `OSC 9`/`99`/`777` notification on
+the PTY reads like "I need you" — but **every CLI also rings it when it finishes.** Codex fires
+OSC 9 on turn-complete *and* on approval requests; Claude's `terminal_bell` channel fires for
+`agent_completed`. Taken as "blocked", a bell painted finished panes red.
+
+So a bell is **held for a beat** rather than latching. If an explicit verdict lands inside that
+window — the `done` or `needs-input` riding a hook, ~130-260ms behind — the verdict wins and the
+guess is discarded. Only an *unclaimed* bell, from a CLI with no hook wired at all, actually rings;
+there it is the only signal there is, so it must.
+
+This is what makes Codex legible, and it's why its snippet wires **both** channels: its OSC 9 fires
+on both events, but its `notify` program fires only on turn-complete. A bell with a `done` behind it
+is a completion (green); a bell alone is an approval (red).
+
+Output does **not** count as a contradiction — an agent painting its approval dialog *after* ringing
+is exactly the case that still has to go red.
+
+### Every CLI needs two channels
+
+That is the shape of the whole problem, and it is the same for all of them. Each CLI has an
+**ambiguous chime** (it rings for completion *and* for a block), so each also needs an **explicit
+`done`** for the chime to be read against. Verified against the real CLIs:
+
+| CLI | ambiguous chime (the guess) | explicit `done` (the verdict) |
+|-----|-----------------------------|-------------------------------|
+| **Claude Code** | `terminal_bell` channel (fires for `agent_completed`) | `Stop` hook |
+| **Codex** | OSC 9 — fires on turn-complete **and** on approval | its `notify` program (turn-complete **only**) |
+| **Gemini** | `enableNotifications` — one switch for *"action-required prompts and session completion"* | the `AfterAgent` hook |
+| **OpenCode** | its attention chime — `question`/`permission`/`error`/`done`/`subagent_done` | a generated **plugin** (`session.idle`) |
+| **aider** | *(none)* | `AIDER_NOTIFICATIONS_COMMAND` |
+
+aider is the one that was always honest: it has no chime, only a done.
+
+**Subagents stay invisible everywhere**, which is the house rule. Gemini's `AfterAgent` fires only
+for the main loop (its subagents run through a different executor that fires no agent hooks at all).
+OpenCode's `session.idle` *does* fire for subagent sessions, so its plugin splits root from child on
+`parentID` — a child going idle sends `subagent-stop`, which authors no state and exists only to
+cancel the `subagent_done` chime that would otherwise ring the pane red for a subagent finishing.
+
+### The subagent gate
+
+**Every alert you see is the main agent's story.** The pane dot, the workspace-rail badge, the
+pulses — all of them are authored by the main agent's own events. Subagents are invisible: the
+`subagent-*` events only raise and lower a counter, and **never emit a pane state of their own**.
+
+They exist because an agent that fans work out **ends its own turn** while the subagents run: it
+fires `Stop`, goes quiet, and (after 60s at the prompt) fires an idle `Notification`. Read literally,
+those say "finished" and then "blocked on you" — so a pane flashed green and then rang red with the
+work still very much in flight.
+
+While the count is above zero:
+
+- a quiet terminal does **not** settle to idle (the work is elsewhere, not absent);
+- the main's `done` is **dropped** — that's the main *parking*, not finishing. The green belongs to
+  its **next** `done`, once the subagent results re-invoke it and it ends for real;
+- an `idle-prompt` is **dropped** — parked-on-subagents is not blocked-on-you.
+
+A real permission prompt still rings red instantly (that one *is* blocked on you), and a sibling
+subagent starting never clears it.
+
+`turn-start` (UserPromptSubmit) resets the count: if a subagent is killed hard and its stop event
+never arrives, the stale count can't swallow every future `done` and strand the pane on busy past
+your next prompt.
+
+`mogging notify` reads Claude Code's hook payload on stdin to tell an idle `Notification` from a
+permission one — it takes the `type` field **only**, never the message text.
 
 ## Prerequisite
 
@@ -47,10 +143,14 @@ Each snippet **merges** into your existing config — don't overwrite the whole 
 
 - **Claude Code** → merge [`claude-code/settings.json`](./claude-code/settings.json) into
   `~/.claude/settings.json` (or a project's `.claude/settings.json`).
-- **Codex** → add the `notify` line from [`codex/config.toml`](./codex/config.toml) to
-  `~/.codex/config.toml` (must be user-level; Codex ignores a project-level `notify`).
+- **Codex** → add the `notify` line **and** the `[tui]` block from
+  [`codex/config.toml`](./codex/config.toml) to `~/.codex/config.toml` (must be user-level; Codex
+  ignores a project-level `notify`). Both are needed — see below.
 - **Gemini CLI** → merge [`gemini/settings.json`](./gemini/settings.json) into
-  `~/.gemini/settings.json` (best-effort — requires a Gemini CLI version with hook support).
+  `~/.gemini/settings.json`. Hooks are on by default.
+- **OpenCode** → drop [`opencode/plugin/mogging-notify.js`](./opencode/plugin/mogging-notify.js)
+  into `~/.config/opencode/plugin/` (auto-loaded), and enable the chime in
+  `~/.config/opencode/tui.json`: `{ "attention": { "enabled": true, "notifications": true } }`.
 
 ## Verify
 

@@ -16,7 +16,12 @@ export function createElectronContext(getWebContents: () => WebContents | null):
       ipcMain.on(channel, (_e, payload) => handler(payload))
     },
     emit: (channel, payload) => {
-      getWebContents()?.send(channel, payload)
+      // A destroyed webContents throws on send, and a backend event can land in the gap between
+      // the window's destruction and the 'closed' that nulls the getter's window — inside
+      // installFatalHandlers' uncaughtException, which exits the app. Closing a window while
+      // agents stream output must not kill the process.
+      const wc = getWebContents()
+      if (wc && !wc.isDestroyed()) wc.send(channel, payload)
     }
   }
 }

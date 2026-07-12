@@ -42,10 +42,13 @@ export function isBlockedActOrigin(origin: string): boolean {
   return !!test && h.includes(test.toLowerCase())
 }
 
-/** The two KV verbs the store needs (main adapts the app-settings db to this). */
+/** The two KV verbs the store needs (main adapts the app-settings db to this).
+ *  `del` is optional — the app-settings table has no delete verb, so clearGrant
+ *  falls back to overwriting with the closed fist. */
 export interface GrantKv {
   get(key: string): string | null
   set(key: string, value: string): void
+  del?(key: string): void
 }
 
 const kvGrant = (wsId: string): string => `integrations.grant.${wsId}`
@@ -111,6 +114,22 @@ export function writeGrant(kv: GrantKv, grant: WorkspaceIntegrationsGrant): Work
   const clean = sanitizeGrant(String(grant?.workspaceId ?? ''), grant)
   kv.set(kvGrant(clean.workspaceId), JSON.stringify(clean))
   return clean
+}
+
+/** A workspace is GONE — drop its grant. Ids get reused, and `workspaceIdForPane`
+ *  resolves a pane by ORDINAL, so a surviving `integrations.grant.<wsId>` row can
+ *  hand a brand-new workspace the deleted one's writeTools/actOrigins. Where the
+ *  KV can't delete, the closed fist is written over it (writeGrant's rule: a row
+ *  of defaults IS the revoke — and it stops the legacy-consent migration from
+ *  re-opening `web` behind the user's back). Best-effort; call it on delete. */
+export function clearGrant(kv: GrantKv, workspaceId: string): void {
+  const id = String(workspaceId ?? '')
+  if (!id) return
+  if (kv.del) {
+    kv.del(kvGrant(id))
+    return
+  }
+  kv.set(kvGrant(id), JSON.stringify(defaultIntegrationsGrant(id)))
 }
 
 /** The write-tool names `grant` exposes, resolved against the closed catalog

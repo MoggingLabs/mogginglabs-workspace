@@ -111,7 +111,8 @@ export function saveWebhook(p: {
     const allowed = urlAllowed(p.url.trim(), !!p.insecureAck)
     if (!allowed.ok) return { ok: false, reason: allowed.reason }
     if (!vaultAvailable()) return { ok: false, reason: 'OS keychain unavailable — reference the URL as an env var instead (${N8N_WEBHOOK_URL})' }
-    vaultStore(KV_URLCIPHER(id), p.url.trim())
+    // A dropped ciphertext must not save a webhook that can never resolve its URL.
+    if (!vaultStore(KV_URLCIPHER(id), p.url.trim())) return { ok: false, reason: 'could not store the URL — the settings store is unavailable' }
     urlKind = 'keychain'
   } else if (p.id) {
     // Editing an existing webhook without touching the URL — keep it.
@@ -170,8 +171,11 @@ export function emitBridgeEvent(event: BridgeEventName, fields: { workspace: str
           health.set(w.id, 'ok')
         } else {
           health.set(w.id, 'failing')
-          // Dropped after retries: a trail entry with the LABEL, never the URL.
-          recordTrail({ ts: Date.now(), source: 'bridge', workspaceId: fields.workspace, verb: event, target: label, outcome: 'ok', reason: `delivery dropped after ${r.attempts} attempts` })
+          // Dropped after retries: a trail entry with the LABEL, never the URL. The outcome is
+          // NOT 'ok' — the viewer badges outcome, so a failed delivery read as a success with the
+          // truth buried in `reason`. 'refused' is the union's only non-success value (the store
+          // rewrites anything else back to 'ok'), and the event did not reach the receiver.
+          recordTrail({ ts: Date.now(), source: 'bridge', workspaceId: fields.workspace, verb: event, target: label, outcome: 'refused', reason: `delivery dropped after ${r.attempts} attempts` })
         }
         pushViews()
       })

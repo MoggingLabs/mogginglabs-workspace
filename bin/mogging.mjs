@@ -36,7 +36,7 @@ const argv = process.argv.slice(2).filter((a) => a !== '--dev')
 const cmd = argv[0]
 
 if (cmd === 'usage') runUsage(argv.slice(1))
-else if (cmd === 'notify') runNotify(argv.slice(1))
+else if (cmd === 'notify') runNotify(argv.slice(1)).catch(() => process.exit(0)) // a hook must never fail its agent
 else if (cmd === 'list') runList()
 else if (cmd === 'send') runSend(argv.slice(1))
 else if (cmd === 'send-key') runSendKey(argv.slice(1))
@@ -163,8 +163,17 @@ function withApp(onReady, { timeoutMs = 15000 } = {}) {
       }
       if (m.t === 'welcome') void onReady(api)
       else if (m.t === 'error') {
-        process.stderr.write('mogging usage: app refused the token (auth)\n')
-        finish(4)
+        // Only `auth` is a refused token (exit 4). Any other error frame is the app
+        // REJECTING the request — reporting every one as an auth failure sent people
+        // hunting a token problem they did not have.
+        const why = m.reason || 'error'
+        if (why === 'auth') {
+          process.stderr.write('mogging usage: app refused the token (auth)\n')
+          finish(4)
+        } else {
+          process.stderr.write('mogging usage: app rejected the request (' + why + ')\n')
+          finish(1)
+        }
       } else if (m.t === 'result') {
         const w = waiters.get(m.id)
         waiters.delete(m.id)
@@ -336,14 +345,21 @@ function runUsageClearKey(args) {
 // Only a pane whose DAEMON-SIDE role is `reviewer` may approve; the payload carries
 // the pane binding, never a role claim. Exit codes: 0 ok · 2 usage · 3/4 as usual ·
 // **6 notreviewer**.
+//
+// MOGGING_PANE_TOKEN is the pane's own secret: the daemon mints one per session and injects
+// it into that pane's env and nowhere else. Sending it PROVES we are the pane named in `from`
+// — a pane id is public (`mogging list` prints it) and every pane can read the endpoint file
+// and authenticate, so `from` alone was a claim rather than a fact. Absent outside a pane
+// (nothing to prove), and the daemon then falls back to the legacy unbound path.
 
 function runApprove(args) {
   const branch = args[0]
   if (!branch) usage(2)
   const from = paneIdentityOrUsage()
+  const token = process.env.MOGGING_PANE_TOKEN
   withDaemon(
     (welcome, api) => {
-      api.send({ t: 'approve', branch, from })
+      api.send({ t: 'approve', branch, from, ...(token ? { token } : {}) })
     },
     (m, api) => {
       if (m.t === 'approved') {
@@ -556,11 +572,50 @@ function runRole(args) {
 
 // --- layout control verbs (Phase-3/02): ride the mogging:// relay ---------------------------------
 
+/** Is the APP up? --no-launch exists to keep a control verb from cold-starting the whole app, so
+ *  the daemon's endpoint is the WRONG gate: the daemon deliberately OUTLIVES the app (ADR 0006),
+ *  so after you quit the window `mogging focus 3 --no-launch` still passed and launched it — and
+ *  under the in-proc fallback (MOGGING_INPROC) a RUNNING app has no daemon endpoint and was
+ *  refused. The app publishes browser-control.json for as long as it runs (6/05b) and unlinks it
+ *  on quit; a crash can leave the file, so connect too — a dead pipe/socket answers instantly. */
+function appRunning(timeoutMs = 1500) {
+  let ep
+  try {
+    ep = JSON.parse(readFileSync(appEndpointFilePath(), 'utf8'))
+  } catch {
+    return Promise.resolve(false)
+  }
+  return new Promise((res) => {
+    const sock = net.connect(ep.address)
+    const done = (alive) => {
+      clearTimeout(timer)
+      try {
+        sock.destroy()
+      } catch {
+        /* ignore */
+      }
+      res(alive)
+    }
+    const timer = setTimeout(() => done(false), timeoutMs)
+    sock.on('connect', () => done(true))
+    sock.on('error', () => done(false))
+  })
+}
+
+/** Mirror main's sanitizeControl bounds (src/main/deep-link.ts): out of range there is a SILENT
+ *  drop of the WHOLE command, so a CLI that printed "opening … (20 panes)" opened nothing. */
+function boundedOrUsage(label, n, min, max) {
+  if (!Number.isInteger(n) || n < min || n > max) {
+    process.stderr.write(`mogging: ${label} must be a whole number ${min}-${max}\n`)
+    process.exit(2)
+  }
+}
+
 /** Launch/signal the app with a validated-shape control command via the deep link.
  *  Main re-validates against the closed union before the UI ever sees it. */
-function sendControl(command, opts = {}) {
-  if (opts.noLaunch && !readEndpoint()) {
-    process.stderr.write('mogging: app/daemon not running (--no-launch)\n')
+async function sendControl(command, opts = {}) {
+  if (opts.noLaunch && !(await appRunning())) {
+    process.stderr.write('mogging: app not running (--no-launch)\n')
     process.exit(3)
   }
   const url = `${SCHEME}://control?c=${encodeURIComponent(JSON.stringify(command))}`
@@ -574,29 +629,29 @@ function sendControl(command, opts = {}) {
   }
 }
 
-function runControl(command, rawArgs) {
+async function runControl(command, rawArgs) {
   const noLaunch = rawArgs.includes('--no-launch')
-  if (
-    (command.verb === 'layout' && !Number.isInteger(command.panes)) ||
-    (command.verb !== 'layout' && command.paneId !== undefined && !Number.isInteger(command.paneId))
-  ) {
-    usage(2)
+  if (command.verb === 'layout') boundedOrUsage('panes', command.panes, 1, 16)
+  else if (command.paneId !== undefined) boundedOrUsage('pane', command.paneId, 1, 99999)
+  if (command.mode !== undefined && !['full', 'col', 'row'].includes(command.mode)) {
+    process.stderr.write('mogging: mode must be one of: full, col, row\n')
+    process.exit(2)
   }
-  sendControl(command, { noLaunch })
+  await sendControl(command, { noLaunch })
   process.stdout.write(`mogging: ${command.verb} sent\n`)
 }
 
-function runControlOpen(args) {
+async function runControlOpen(args) {
   const noLaunch = args.includes('--no-launch')
   const rest = args.filter((a) => a !== '--no-launch')
   const dir = rest[0]
   if (!dir) usage(2)
   const pi = rest.indexOf('--panes')
   const panes = pi >= 0 ? Number(rest[pi + 1]) : undefined
-  if (pi >= 0 && !Number.isInteger(panes)) usage(2)
+  if (pi >= 0) boundedOrUsage('panes', panes, 1, 16)
   const command = { verb: 'open', cwd: resolve(dir) }
   if (panes) command.panes = panes
-  sendControl(command, { noLaunch })
+  await sendControl(command, { noLaunch })
   process.stdout.write(`mogging: opening ${command.cwd}${panes ? ` (${panes} panes)` : ''}\n`)
 }
 
@@ -726,7 +781,14 @@ function runList() {
       for (const r of rows) process.stdout.write(line(r.id, r.size, r.state, r.remote, r.title))
       api.finish(0)
     },
-    () => {}
+    // A non-auth error frame used to be dropped on the floor: the daemon HAD answered, and
+    // `mogging list` still died 5 s later on the timeout, blaming a daemon that "did not respond".
+    (m, api) => {
+      if (m.t === 'error') {
+        process.stderr.write('mogging list: rejected (' + (m.reason || 'error') + ')\n')
+        api.finish(1)
+      }
+    }
   )
 }
 
@@ -836,7 +898,75 @@ function bail(msg) {
   process.exit(0)
 }
 
-function runNotify(args) {
+/** Claude Code's `Notification` hook is MULTIPLEXED: one event carrying eleven different `type`s,
+ *  from "I need permission" to "<label> finished". Mapping the whole event to needs-input painted
+ *  COMPLETED panes red — `agent_completed` fires the instant an agent finishes and raced the Stop
+ *  hook's green (both ~130ms process spawns; last one wins, and attention is a latch, so the red
+ *  stuck). `idle_prompt` is worse: an idle TIMER, so a finished green pane turned red a minute
+ *  later just by sitting there. So WHITELIST the types that genuinely block on a human; everything
+ *  else is not an alert and says nothing. Verified against the 2.1.207 bundle's notificationType
+ *  producers. The `type` field ONLY: message/title never leave the process (ADR 0002). */
+function notifTypeToEvent(type) {
+  switch (type) {
+    case 'permission_prompt':
+    case 'worker_permission_prompt':
+    case 'agent_needs_input':
+    case 'elicitation_dialog':
+      return 'needs-input' // a human is genuinely blocking the agent -> red
+    case 'idle_prompt':
+      return 'idle-prompt' // "waiting for your input" nudge -> parked, not blocked
+    case 'agent_completed':
+    case 'auth_success':
+    case 'elicitation_complete':
+    case 'elicitation_response':
+    case 'computer_use_enter':
+    case 'computer_use_exit':
+    case 'push_notification':
+      return null // not an alert at all -> stay silent
+    default:
+      return 'needs-input' // an unrecognized notification is still worth surfacing
+  }
+}
+
+/** The hook payload rides stdin. Bounded: a TTY (a human running this by hand) or no payload
+ *  within 400ms keeps the argv event; a hook must never hang the agent it's attached to. */
+function readStdinType() {
+  return new Promise((resolve) => {
+    if (process.stdin.isTTY) return resolve(null)
+    let buf = ''
+    let settled = false
+    const done = () => {
+      if (settled) return
+      settled = true
+      try {
+        // 'notification_type' is the REAL discriminator -- verified against a live Claude Code
+        // turn (the docs call it 'type'; it is not). Reading 'type' yielded undefined, which fell
+        // through to the argv event 'needs-input', so every notification -- completions included
+        // -- still painted the pane red. 'type' stays only as a fallback for other dialects.
+        const p = JSON.parse(buf)
+        resolve(p.notification_type ?? p.type ?? null)
+      } catch {
+        resolve(null)
+      }
+    }
+    const timer = setTimeout(done, 400)
+    timer.unref?.()
+    process.stdin.setEncoding('utf8')
+    process.stdin.on('data', (c) => {
+      buf += c
+    })
+    process.stdin.on('end', () => {
+      clearTimeout(timer)
+      done()
+    })
+    process.stdin.on('error', () => {
+      clearTimeout(timer)
+      done()
+    })
+  })
+}
+
+async function runNotify(args) {
   const opts = parseFlags(args)
   const paneId = opts.pane ?? process.env.MOGGING_PANE_ID
   const endpointFile = process.env.MOGGING_DAEMON_ENDPOINT
@@ -857,6 +987,16 @@ function runNotify(args) {
     }
   }
   if (!event) event = 'needs-input'
+
+  // Only the Notification hook is ambiguous — don't stall any other event on stdin.
+  if (event === 'needs-input') {
+    const type = await readStdinType()
+    if (type !== null) {
+      const mapped = notifTypeToEvent(type)
+      if (mapped === null) process.exit(0) // a completion / info notice: never an alert
+      event = mapped
+    }
+  }
 
   if (!paneId || !endpointFile) {
     bail('not inside a MoggingLabs pane (MOGGING_PANE_ID / MOGGING_DAEMON_ENDPOINT unset); skipping')

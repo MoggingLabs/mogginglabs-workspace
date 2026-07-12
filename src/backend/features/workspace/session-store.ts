@@ -33,6 +33,18 @@ export class SessionStore {
         updated_at INTEGER NOT NULL
       );
     `)
+    // Migrate pre-workspace dbs: panes gained a workspace binding. CREATE TABLE IF NOT EXISTS
+    // NO-OPS on a db whose panes table predates the column, so without this every loadPanes()
+    // throws `no such column: workspace_id` — and the two callers fail in the two worst ways:
+    // the daemon's cold-start restore() (src/pty-daemon/index.ts) does not catch it, so the
+    // DAEMON never starts, and the cross-version hand-off (readPersistedPanes in
+    // src/main/daemon-migrate.ts) swallows it to [], silently dropping every old session it
+    // was there to rescue. Same guarded pattern as settings-store's migrations next door.
+    try {
+      this.db.exec("ALTER TABLE panes ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'")
+    } catch {
+      /* column already exists */
+    }
   }
 
   loadPanes(): PersistedPane[] {

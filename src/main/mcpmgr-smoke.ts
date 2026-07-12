@@ -210,10 +210,41 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
       }
       const vintageBOk = vintageB && vintageBParsed.mcpServers?.mogging?._managedBy === 'mogginglabs'
 
+      // ── COLLISION: a foreign entry under OUR id is refused, never clobbered ──
+      // The user already hand-wrote a server called `mogging`. Both dialects used to
+      // charge ahead: codex appended a SECOND `[mcp_servers.mogging]` table (TOML forbids
+      // redefining a table — codex rejects the whole file and the user loses ALL of its
+      // config), and the JSON writers silently overwrote the user's entry, stamped it
+      // `_managedBy`, and would have deleted it outright on a later Remove. An id we do
+      // not own is a refusal, and the file must not move by a single byte.
+      const homesC: CliHomes = {
+        home: join(fixRoot, 'home-c'),
+        codexDir: join(fixRoot, 'codex-c'),
+        geminiDir: join(fixRoot, 'gemini-c')
+      }
+      mkdirSync(homesC.home, { recursive: true })
+      mkdirSync(homesC.codexDir, { recursive: true })
+      mkdirSync(homesC.geminiDir, { recursive: true })
+      const cCodex = join(homesC.codexDir, 'config.toml')
+      const cClaude = join(homesC.home, '.claude.json')
+      // Untagged (no `# managed-by:` line) — a config the user wrote themselves.
+      const HAND_CODEX = '[mcp_servers.mogging]\ncommand = "my-own-binary"\nargs = ["--serve"]\n'
+      const HAND_CLAUDE = '{\n  "mcpServers": {\n    "mogging": {\n      "command": "my-own-binary"\n    }\n  }\n}\n'
+      writeFileSync(cCodex, HAND_CODEX, 'utf8')
+      writeFileSync(cClaude, HAND_CLAUDE, 'utf8')
+      const codexCollision = mgrApply('mogging', 'codex', homesC)
+      const claudeCollision = mgrApply('mogging', 'claude-code', homesC)
+      const collisionRefused = !codexCollision.ok && !claudeCollision.ok
+      const collisionBytesKept =
+        readFileSync(cCodex, 'utf8') === HAND_CODEX && readFileSync(cClaude, 'utf8') === HAND_CLAUDE
+      // And the refusal SAYS why — a silent no is its own bug.
+      const collisionExplained = /not managed|already/i.test(String(codexCollision.reason ?? ''))
+
       const pass =
         secretRefused && envRefAccepted && applied && dialectClaude && dialectCodex && dialectGemini &&
         httpQuirkOk && statusApplied && backupsExist && driftDetected &&
-        removed && bytesClaude && bytesCodex && bytesGemini && statusGone && vintageBOk
+        removed && bytesClaude && bytesCodex && bytesGemini && statusGone && vintageBOk &&
+        collisionRefused && collisionBytesKept && collisionExplained
       result = {
         pass,
         secretRefused,
@@ -231,7 +262,12 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
         bytesCodex,
         bytesGemini,
         statusGone,
-        vintageBOk
+        vintageBOk,
+        collisionRefused,
+        collisionBytesKept,
+        collisionExplained,
+        codexCollisionReason: codexCollision.reason ?? null,
+        claudeCollisionReason: claudeCollision.reason ?? null
       }
     } catch (e) {
       result = { pass: false, error: String(e) }

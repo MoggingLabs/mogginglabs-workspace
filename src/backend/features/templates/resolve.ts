@@ -3,6 +3,7 @@ import type { ProviderCount, ResolvedLayout } from '@contracts'
 // The 05 grid sizes. A mix's total selects the smallest grid that fits; the remainder is
 // padded with `shell` panes. (Kept in sync with the layout feature's TEMPLATE_COUNTS.)
 const GRIDS = [1, 2, 4, 6, 8, 9, 12, 16]
+const MAX_PANES = 16
 
 /**
  * Map a provider mix -> a concrete grid: the smallest 05 grid >= the total pane count, with
@@ -12,10 +13,15 @@ const GRIDS = [1, 2, 4, 6, 8, 9, 12, 16]
 export function resolveLayout(mix: ProviderCount[]): ResolvedLayout {
   const expanded: string[] = []
   for (const m of mix) {
-    for (let i = 0; i < Math.max(0, Math.floor(m.count)); i++) expanded.push(m.provider)
+    // The cap binds INSIDE the loop. `mix` is renderer input (TemplateChannels.resolve passes
+    // it straight in), so capping only the RESULT still expanded a count of 1e9 — or Infinity —
+    // into an array on the main process first, freezing the app before the cap was reached.
+    const n = Math.min(Math.max(0, Math.floor(m.count)), MAX_PANES - expanded.length)
+    for (let i = 0; i < n; i++) expanded.push(m.provider)
+    if (expanded.length >= MAX_PANES) break
   }
-  const total = Math.min(expanded.length, 16)
-  const paneCount = GRIDS.find((g) => g >= total) ?? 16
+  const total = expanded.length
+  const paneCount = GRIDS.find((g) => g >= total) ?? MAX_PANES
   const assignments = expanded.slice(0, total)
   while (assignments.length < paneCount) assignments.push('shell')
   return { paneCount: Math.max(1, paneCount), assignments: assignments.length ? assignments : ['shell'] }

@@ -29,10 +29,19 @@ const git = (cwd: string, args: string[]): Promise<{ ok: boolean; stdout: string
 
 const worktreesRoot = (repo: string): string => join(repo, '.mogging', 'worktrees')
 
-/** Is `p` inside the repo's managed worktrees dir? (removal + review guard) */
+/** Is `p` inside the repo's managed worktrees dir? (removal + review guard)
+ *
+ *  Case-FOLDED on win32, where the filesystem is case-insensitive and the two sides reach us
+ *  spelled differently all the time: git prints the worktree path with the casing it recorded
+ *  at `worktree add`, while `repo` comes from the IPC caller (a workspace re-added as
+ *  `c:\github\repo` instead of `C:\GitHub\repo`). A raw startsWith then answers false for the
+ *  app's OWN worktrees — listWorktrees filters every one of them out (the UI shows none) and
+ *  removeWorktree refuses with 'not-managed': invisible AND undeletable. The trailing `sep`
+ *  keeps this a path-BOUNDARY test, so `…\worktrees-2\x` is never read as inside `…\worktrees`. */
 export function isManaged(repo: string, p: string): boolean {
-  const root = resolve(worktreesRoot(repo)) + sep
-  return resolve(p).startsWith(root)
+  const fold = (s: string): string => (process.platform === 'win32' ? s.toLowerCase() : s)
+  const root = fold(resolve(worktreesRoot(repo)) + sep)
+  return fold(resolve(p)).startsWith(root)
 }
 
 /** Create one isolated worktree on a fresh random branch. Never touches HEAD/index. */

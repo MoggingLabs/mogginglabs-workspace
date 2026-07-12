@@ -3,11 +3,12 @@ import type { AgentState } from '@contracts'
 // Incremental scanner for OSC (Operating System Command) sequences on a raw PTY stream. An OSC
 // starts with ESC ] and ends with BEL (0x07) or ST (ESC \).
 //
-//   OSC 9 / 99 / 777          notifications              -> "attention"
-//   OSC 9 ; 9 ; path          current working directory  (the ConEmu/Windows-Terminal form —
-//                             NOT a notification: it is how cmd.exe reports its cwd through
-//                             ConPTY. Parsed before the notify branch, or every prompt would
-//                             ring the attention dot.)
+//   OSC 9 ; <text>            notification               -> "attention"  (see `case 9` — 9;9
+//                             and 9;4 wear the same code and are NOT notifications)
+//   OSC 9 ; 9 ; path          current working directory  (ConEmu/Windows-Terminal form: how
+//                             cmd.exe reports its cwd through ConPTY)
+//   OSC 9 ; 4 ; state ; pct   taskbar progress           (the pane is WORKING, not blocked)
+//   OSC 99 / 777;notify       notifications              -> "attention"
 //   OSC 133 ; A               prompt start                            (mark, for command blocks)
 //   OSC 133 ; B               command line start                      (mark, for command blocks)
 //   OSC 133 ; C               command execution start    -> "busy"    (mark)
@@ -62,6 +63,7 @@ const MAX_OSC = 4096
 export class OscParser {
   private buf = ''
   private inOsc = false
+  private discarding = false // an OSC body blew past MAX_OSC; swallow until its real terminator
   private pendingEsc = false // saw an ESC as the last byte; its meaning depends on the NEXT byte
 
   constructor(
@@ -75,14 +77,16 @@ export class OscParser {
 
       if (this.pendingEsc) {
         this.pendingEsc = false
-        if (this.inOsc) {
+        if (this.inOsc || this.discarding) {
           if (code === ST_TAIL) {
-            this.flush() // ESC \ = ST terminator
+            if (this.inOsc) this.flush() // ESC \ = ST terminator (an overflowed body just ends)
             this.inOsc = false
+            this.discarding = false
             continue
           }
           // ESC not followed by '\' inside an OSC terminates it (discard); re-arm on ESC.
           this.inOsc = false
+          this.discarding = false
           this.buf = ''
           if (code === ESC) this.pendingEsc = true
           continue
@@ -100,6 +104,13 @@ export class OscParser {
         this.pendingEsc = true
         continue
       }
+      if (this.discarding) {
+        // Oversized OSC (vim/tmux OSC 52 clipboard >4KB): the body is dropped, but its
+        // BEL terminator is still THIS sequence's, not the terminal bell — swallowing
+        // it here is what keeps a big clipboard write from ringing a false attention.
+        if (code === BEL) this.discarding = false
+        continue
+      }
       if (!this.inOsc) {
         // A BEL OUTSIDE any OSC is the terminal bell — the pane ringing for a human
         // (Claude Code's terminal_bell notify, a TUI's alert). An OSC-terminating
@@ -115,7 +126,10 @@ export class OscParser {
 
       this.buf += data[i]
       if (this.buf.length > MAX_OSC) {
+        // Too big to be one of ours — but dropping to ground here would let the
+        // sequence's real terminator scan as output. Discard until it arrives.
         this.inOsc = false
+        this.discarding = true
         this.buf = ''
       }
     }
@@ -130,18 +144,37 @@ export class OscParser {
 
     switch (code) {
       case 9:
-        // `9;9;<path>` is a CWD report (ConEmu/Windows Terminal), not a notification — it is
-        // how cmd.exe tells us where it is (see shellIntegrationEnv). Ringing attention on it
-        // would light the dot on every single prompt.
+        // OSC 9 is OVERLOADED on Windows: three different things wear the same code, and only
+        // ONE of them means a human is needed. Both of the others reached this branch once and
+        // both lit the dot for nothing — so both are checked BEFORE we ring anything.
+        //
+        //   9 ; 9 ; <path>           a CWD report (ConEmu/Windows Terminal). It is how cmd.exe
+        //                            tells us where it is through ConPTY (shellIntegrationEnv).
+        //                            Ringing on it lit the attention dot at every prompt.
+        //   9 ; 4 ; <state> ; <pct>  the taskbar PROGRESS report (Windows Terminal, ConPTY, and
+        //                            half the build tools — cargo, npm, pip, winget). Reading a
+        //                            progress tick as "this pane needs a human" turned a pane RED
+        //                            for the crime of running a build with a progress bar, and
+        //                            latched it there. Progress means the pane is WORKING, which
+        //                            output activity already says.
+        //   9 ; <text>               the actual ConEmu/iTerm2 desktop notification.
         if (rest.startsWith('9;')) {
           this.onEvent?.({ kind: 'cwd', code, payload: rest.slice(2) })
           break
         }
+        if (/^4(;|$)/.test(rest)) break
+        this.onState('attention')
+        this.onEvent?.({ kind: 'notify', code, payload: rest })
+        break
+      case 777:
+        // `OSC 777 ; notify ; <title> ; <body>` (rxvt/urxvt). 777 carries OTHER
+        // subcommands too (precmd, preexec, …) which say nothing about needing a human.
+        // Only the notify subcommand is a notification.
+        if (!/^notify(;|$)/.test(rest)) break
         this.onState('attention')
         this.onEvent?.({ kind: 'notify', code, payload: rest })
         break
       case 99:
-      case 777:
         this.onState('attention')
         this.onEvent?.({ kind: 'notify', code, payload: rest })
         break

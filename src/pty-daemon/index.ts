@@ -80,7 +80,8 @@ function main(): void {
     onActivity: () => armIdle(),
     onClientCountChange: (delta) => {
       clients += delta
-    }
+    },
+    onShutdown: (code) => shutdown(code)
   })
 
   process.on('SIGTERM', () => shutdown(0))

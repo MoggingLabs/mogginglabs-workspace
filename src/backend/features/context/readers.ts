@@ -1,6 +1,7 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import { join } from 'node:path'
+import { channelFromEnv, runtimeSegment } from '@contracts'
 
 // Session-log readers for the per-pane context bar (see contracts/ipc/context.ipc.ts).
 // ADR 0007 rule 3 applies verbatim: read the JSONL logs the CLIs ALREADY write, at their
@@ -176,10 +177,19 @@ export function parseClaudeHead(head: string): TailReading | null {
 // TRUE window — into a per-pane file on every update. The relay runs inside the
 // pane (it knows MOGGING_PANE_ID from the daemon's env injection) and this monitor
 // runs in main, so the rendezvous is a WELL-KNOWN path neither has to be told:
-// tmpdir + username + pane id. Counts and a model id only — never content.
+// tmpdir + username + runtime segment + pane id. Counts and a model id only — never content.
+//
+// The segment is runtimeSegment(channelFromEnv()) — the SAME channel/version namespace the
+// socket, lock and endpoint use (src/pty-daemon/lifecycle.ts). Pane ids are per-app, so a dev
+// build and an installed release both have a pane 1: keyed by username alone, their two relays
+// overwrote each other's sink file, each app's bar then showed the OTHER instance's numbers
+// (the sink outranks the transcript), and remove() unlinked the other's live sink. relay.ts
+// derives this same dir inside the pane from the MOGGING_CHANNEL the daemon injected — the two
+// derivations must stay identical.
 
 export function contextSinkPath(paneId: number | string): string {
-  return join(os.tmpdir(), `mogging-ctx-${os.userInfo().username}`, `${paneId}.json`)
+  const dir = `mogging-ctx-${os.userInfo().username}-${runtimeSegment(channelFromEnv())}`
+  return join(os.tmpdir(), dir, `${paneId}.json`)
 }
 
 export interface SinkReading {
@@ -259,24 +269,46 @@ export function readCodexSessionCwd(file: string): string | null {
   }
 }
 
-/** The Codex day dirs (`<home>/sessions/YYYY/MM/DD`) that can hold a session started
- *  today or yesterday, LOCAL time (dir dates follow the local clock — verified: a
- *  16:14Z session sits in the 17:14 local date's dir). Existing dirs only. */
-export function codexDayDirs(home: string, now: number): string[] {
+/** How many day dirs the codex scan reaches back over. A rollout lives in the dir of its
+ *  START date and is appended to for as long as the session lives — a codex agent the
+ *  detached daemon kept alive since Friday is still writing into FRIDAY's dir on Monday.
+ *  Generating today+yesterday (what this used to do) could never see that file, so an
+ *  adopted pane could never lock its session and showed no bar for the rest of its life.
+ *  Ten days covers a long weekend or a holiday; the mtime freshness gates in monitor.ts
+ *  still decide which of these rollouts are actually live. */
+const MAX_DAY_DIRS = 10
+/** Walk cap: a `sessions` tree with years of history must not turn one poll tick into a
+ *  full-tree crawl. The newest month dirs hold the newest days, so the walk stops early. */
+const MAX_MONTH_DIRS = 24
+
+/** Numeric-named child dirs of `dir`, NEWEST first (names are zero-padded, so lexicographic
+ *  descending IS newest-first). Empty when the dir is absent/unreadable. */
+function dayTreeChildren(dir: string, width: number): string[] {
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && d.name.length === width && /^\d+$/.test(d.name))
+      .map((d) => d.name)
+      .sort((a, b) => b.localeCompare(a))
+  } catch {
+    return [] // no sessions tree under this home
+  }
+}
+
+/** The Codex day dirs (`<home>/sessions/YYYY/MM/DD`) worth scanning, newest first. The dirs
+ *  that EXIST are enumerated rather than dates generated — see MAX_DAY_DIRS for why a
+ *  today/yesterday window was a bug and not a saving. */
+export function codexDayDirs(home: string): string[] {
+  const root = join(home, 'sessions')
   const dirs: string[] = []
-  for (const backDays of [0, 1]) {
-    const d = new Date(now - backDays * 86_400_000)
-    const dir = join(
-      home,
-      'sessions',
-      String(d.getFullYear()),
-      String(d.getMonth() + 1).padStart(2, '0'),
-      String(d.getDate()).padStart(2, '0')
-    )
-    try {
-      if (fs.statSync(dir).isDirectory()) dirs.push(dir)
-    } catch {
-      /* that day has no sessions */
+  let months = 0
+  for (const year of dayTreeChildren(root, 4)) {
+    for (const month of dayTreeChildren(join(root, year), 2)) {
+      if (++months > MAX_MONTH_DIRS) return dirs
+      for (const day of dayTreeChildren(join(root, year, month), 2)) {
+        dirs.push(join(root, year, month, day))
+        if (dirs.length >= MAX_DAY_DIRS) return dirs
+      }
     }
   }
   return dirs

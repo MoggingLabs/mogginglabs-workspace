@@ -28,7 +28,9 @@ import type { AgentState, PaneId } from '@contracts'
  *  round of exactly burst + the tracker's 1.5s quiet window ≈ 1.6s. Without this
  *  floor, every workspace switch would stamp every pane "finished". 2.5s clears
  *  the noise band with margin; genuinely quick commands (an instant `ls`) fall
- *  under it by design — there is nothing to come back for. */
+ *  under it by design — there is nothing to come back for. An ADOPTED episode is timed
+ *  from the pane's MOUNT rather than from the event we happened to hear (adoptPaneState)
+ *  — the floor itself never bends. */
 const MIN_WORK_MS = 2500
 
 const states = new Map<PaneId, AgentState>()
@@ -59,6 +61,33 @@ export function setPaneState(paneId: PaneId, state: AgentState): void {
     finished.delete(paneId)
   }
   notify()
+}
+
+/**
+ * Adopt the state of a session the daemon was ALREADY running (the daemon outlives the
+ * app — ADR 0006 — so a relaunch inherits its agents mid-task). `since` is when the pane
+ * began watching: its mount.
+ *
+ * The work clock is BACKDATED to it, because an adopted episode did not start when we
+ * heard about it. The pane only adopts its session ~1s in (the restore lineup's delay +
+ * whenPaneLive), and stamping the episode there timed a task that had been running for
+ * MINUTES as if it began at adoption: an agent landing its work inside the next 2.5s
+ * failed the floor and got no finished flag at all — no green dot, no rail alert, for the
+ * whole job. Backdating gives the episode the time it visibly ran on our watch.
+ *
+ * Not an exemption, deliberately. The pane's own arrival makes noise — the mount fit
+ * resizes the pty, and ConPTY answers a resize by repainting its entire viewport (see
+ * terminal-pane's refit note), which reads as output, i.e. BUSY, for the tracker's quiet
+ * window — and that burst is still in flight at adoption. Exempting adopted episodes from
+ * the floor would stamp "finished working" on every reattached pane at every relaunch,
+ * agent idle or not. Timed from mount, that repaint dies inside the noise band exactly as
+ * it does everywhere else, while genuine work — still running when the band lapses —
+ * keeps its green.
+ */
+export function adoptPaneState(paneId: PaneId, state: AgentState, since: number): void {
+  setPaneState(paneId, state)
+  const start = episodeStart.get(paneId)
+  if (state === 'busy' && start !== undefined) episodeStart.set(paneId, Math.min(start, since))
 }
 
 /** The pane was clicked: its sticky finished (green) dot is dismissed. */

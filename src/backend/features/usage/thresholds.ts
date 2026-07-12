@@ -1,4 +1,4 @@
-import type { AgentProfile, PlanUsageView, UsageAlert, UsageAlertConfig } from '@contracts'
+import type { AgentProfile, PaceView, PlanUsageView, UsageAlert, UsageAlertConfig, WindowView } from '@contracts'
 
 // Threshold alerts (Phase-7/09): evaluate each GOOD plan's PRIMARY window
 // against the configured shoulder-taps (quiet 80 / warn 95 by default) and
@@ -34,6 +34,15 @@ function readState(kv: ThresholdKv, key: string): ThrState | null {
   }
 }
 
+/** The pace of the window this alert NAMES. A plan's own `pace` is the WORST
+ *  window's (main ranks by severity), so on a multi-lane plan it can be the
+ *  WEEKLY forecast — which the alert would then present as the session's, under
+ *  the session's label and pct. A single-window plan has just the one pace, so
+ *  there the plan-level view IS the window's (and hand-built views carry only
+ *  that one). */
+const paceOf = (p: PlanUsageView, w: WindowView): PaceView | undefined =>
+  w.pace ?? (p.windows.length <= 1 ? p.pace : undefined)
+
 /** The 7/09 failover-feed condition: the ACTIVE lane (order-0 profile) crossed
  *  `warn` AND a sibling profile on the same provider sits under 50% on its
  *  primary window. Returns the best sibling (lowest usage) — a SUGGESTION the
@@ -68,13 +77,21 @@ export function evaluateThresholds(
   plans: PlanUsageView[],
   cfg: UsageAlertConfig,
   profiles: AgentProfile[],
-  kv: ThresholdKv
+  kv: ThresholdKv,
+  now: number = Date.now()
 ): UsageAlert[] {
   const alerts: UsageAlert[] = []
   for (const p of plans) {
     if (p.health !== 'fresh') continue // stale is old data, never a new tap
     const w = p.windows[0] // the primary (session) lane thresholds watch
     if (!w) continue
+    // A window whose reset has PASSED is old data too, however 'fresh' the
+    // snapshot: a local-file reader (Codex) honestly serves the last rollout it
+    // found — so drive the session to 85%, quit, come back six hours later, and
+    // that is still a live-looking 85% of a window which closed while the CLI was
+    // shut. Tapping the shoulder for it warns about usage the user no longer has.
+    // The next real sample carries the new epoch and re-arms everything.
+    if (w.resetsAt && Date.parse(w.resetsAt) <= now) continue
     const epoch = w.resetsAt ?? 'static' // rolling windows never re-arm (no reset exists)
     const key = stateKey(p.providerId, p.profileId)
     let state = readState(kv, key)
@@ -96,6 +113,7 @@ export function evaluateThresholds(
       state = { epoch, fired: [] } // first sight of this lane: arm silently
       kv.set(key, JSON.stringify(state))
     }
+    const pace = paceOf(p, w) // the forecast for THIS window — never a sibling's
     const levels = (
       [
         { pct: cfg.quiet, level: 'quiet' },
@@ -112,7 +130,7 @@ export function evaluateThresholds(
       // is not a missed crossing, so (unlike the pcts) it fires on first sight;
       // and it always YIELDS to a same-tick threshold toast, whose body already
       // carries this exact verdict line — one lane, one voice per tick.
-      if (p.pace?.verdict === 'runs-out' && !state.paceFired && w.usedPct < cfg.warn) {
+      if (pace?.verdict === 'runs-out' && !state.paceFired && w.usedPct < cfg.warn) {
         state.paceFired = true
         kv.set(key, JSON.stringify(state))
         alerts.push({
@@ -123,22 +141,27 @@ export function evaluateThresholds(
           windowLabel: w.label,
           usedPct: Math.round(w.usedPct),
           title: `${p.planLabel} — on track to run out before reset`,
-          body: p.pace.text
+          body: pace.text
         })
       }
       continue
     }
-    // One toast per tick: the HIGHEST new crossing speaks; every crossed
-    // level is spent (a 0->97 jump costs one warning, not a stack).
+    // One toast per tick: the HIGHEST new crossing names the pct; every crossed
+    // level is spent (a 0->97 jump costs one warning, not a stack). SEVERITY is
+    // the loudest level crossed, not the level that happens to sit highest on
+    // the scale — a user who saves quiet=95/warn=80 has an odd config, not a
+    // demoted emergency (that ordering used to whisper the crossing AND silence
+    // the failover suggestion, which reads `warn`).
     const top = crossed[crossed.length - 1]
+    const level = crossed.some((l) => l.level === 'warn') ? 'warn' : 'quiet'
     state.fired.push(...crossed.map((l) => l.pct))
     // A threshold toast whose body IS the runs-out verdict has delivered the
     // predictive message too — the pace tap is spent with it.
-    if (p.pace?.verdict === 'runs-out') state.paceFired = true
+    if (pace?.verdict === 'runs-out') state.paceFired = true
     kv.set(key, JSON.stringify(state))
     const alert: UsageAlert = {
       kind: 'threshold',
-      level: top.level,
+      level,
       providerId: p.providerId,
       profileId: p.profileId,
       planLabel: p.planLabel,
@@ -146,9 +169,9 @@ export function evaluateThresholds(
       usedPct: Math.round(w.usedPct),
       title: `${p.planLabel} — ${top.pct}% of ${w.label} used`,
       // THE verdict line, verbatim — or a plain state line when unpaceable.
-      body: p.pace?.text ?? `${Math.round(w.usedPct)}% of ${w.label} used`
+      body: pace?.text ?? `${Math.round(w.usedPct)}% of ${w.label} used`
     }
-    if (top.level === 'warn') {
+    if (level === 'warn') {
       const failover = suggestFailover(p, plans, profiles)
       if (failover) alert.failover = failover
     }

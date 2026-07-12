@@ -74,16 +74,22 @@ if (restated.length) {
 }
 
 // The CHANNEL literals are the same class of unavoidable duplication: contracts derives
-// run/dev-v<N> + mogging-dev://, and the two plain-Node CLIs restate the derivation. If a bin
+// run/dev-v<N> + mogging-dev://, and the plain-Node satellites restate the derivation. If one
 // drifts (e.g. someone renames the dev segment in contracts only), the dev CLI looks in a
 // directory no daemon writes — the same silent "not running" failure the version gate exists for.
+// The statusline relay is the third satellite: its SOURCE is a plain-Node script (generated to
+// disk, run by Claude Code inside a pane), so it cannot import the contract either. It derives the
+// same segment to name the context SINK dir, and a drift there is just as quiet — the dev app and
+// the installed release would write and poll different dirs, and the context bar simply stays
+// empty. It is gated here for exactly the reason the two bins are.
 const CHANNEL_SOURCES = [
   {
     file: 'src/contracts/daemon/protocol.ts',
     checks: [/'dev-v' : 'v'/, /'mogging-dev' : 'mogging'/]
   },
   { file: 'bin/mogging.mjs', checks: [/'dev-v' : 'v'/, /'mogging-dev' : 'mogging'/] },
-  { file: 'bin/mogging-mcp.mjs', checks: [/'dev-v' : 'v'/] }
+  { file: 'bin/mogging-mcp.mjs', checks: [/'dev-v' : 'v'/] },
+  { file: 'src/backend/features/context/relay.ts', checks: [/'dev-v' : 'v'/] }
 ]
 for (const { file, checks } of CHANNEL_SOURCES) {
   const src = readFileSync(file, 'utf8')

@@ -105,6 +105,19 @@ export class SettingsStore {
     }
   }
 
+  /** Guarded per-field JSON parse: one corrupt cell drops that FIELD, never the row —
+   *  and never throws out of load(). A throwing load() looks like a brand-new install
+   *  to the renderer, whose next save (DELETE FROM app_workspaces) would wipe every
+   *  intact row. Corruption must degrade, not cascade. */
+  private static parseCell<T>(raw: string | null): T | undefined {
+    if (!raw) return undefined
+    try {
+      return JSON.parse(raw) as T
+    } catch {
+      return undefined
+    }
+  }
+
   load(): WorkspaceState {
     const rows = this.db
       .prepare(
@@ -119,13 +132,11 @@ export class SettingsStore {
       ordinal: r.ordinal,
       paneCount: r.paneCount,
       layout: r.layoutTree ?? undefined,
-      assignments: r.assignments ? (JSON.parse(r.assignments) as string[]) : undefined,
-      paneCwds: r.paneCwds ? (JSON.parse(r.paneCwds) as (string | null)[]) : undefined,
-      roles: r.paneRoles ? (JSON.parse(r.paneRoles) as (string | null)[]) : undefined,
-      remotes: r.paneRemotes
-        ? (JSON.parse(r.paneRemotes) as ({ hostId: string; name: string } | null)[])
-        : undefined,
-      profileIds: r.paneProfileIds ? (JSON.parse(r.paneProfileIds) as (string | null)[]) : undefined
+      assignments: SettingsStore.parseCell<string[]>(r.assignments),
+      paneCwds: SettingsStore.parseCell<(string | null)[]>(r.paneCwds),
+      roles: SettingsStore.parseCell<(string | null)[]>(r.paneRoles),
+      remotes: SettingsStore.parseCell<({ hostId: string; name: string } | null)[]>(r.paneRemotes),
+      profileIds: SettingsStore.parseCell<(string | null)[]>(r.paneProfileIds)
     }))
     const settings = this.db.prepare('SELECT key, value FROM app_settings').all() as Array<{
       key: string
@@ -281,7 +292,11 @@ export class SettingsStore {
     const rows = this.db
       .prepare('SELECT id, name, provider, email, env, ord AS "order" FROM app_profiles ORDER BY provider, ord')
       .all() as Array<Omit<AgentProfile, 'env' | 'email'> & { env: string; email: string | null }>
-    return rows.map((r) => ({ ...r, email: r.email ?? undefined, env: JSON.parse(r.env) as Record<string, string> }))
+    return rows.map((r) => ({
+      ...r,
+      email: r.email ?? undefined,
+      env: SettingsStore.parseCell<Record<string, string>>(r.env) ?? {}
+    }))
   }
 
   saveProfile(profile: AgentProfile): void {
@@ -334,7 +349,9 @@ export class SettingsStore {
       name: string
       mix: string
     }>
-    return rows.map((r) => ({ id: r.id, name: r.name, mix: JSON.parse(r.mix) as ProviderCount[] }))
+    return rows
+      .map((r) => ({ id: r.id, name: r.name, mix: SettingsStore.parseCell<ProviderCount[]>(r.mix) }))
+      .filter((t): t is ProviderMixTemplate => t.mix !== undefined)
   }
 
   saveTemplate(t: ProviderMixTemplate): void {

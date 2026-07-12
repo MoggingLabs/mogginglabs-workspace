@@ -1,6 +1,6 @@
 import { app, ipcMain, type BrowserWindow } from 'electron'
 import { UsageChannels, USAGE_CADENCES, USAGE_PROVIDERS, USAGE_ALERT_DEFAULTS, USAGE_DISPLAY_DEFAULTS, findProvider, type PlanUsage, type UsageCadence } from '@contracts'
-import type { PlanUsageView, PaceView, UsageConfig, UsageConfigPatch, CostScan, UsageAlertConfig, UsageDisplayConfig } from '@contracts'
+import type { AgentProfile, PlanUsageView, PaceView, UsageConfig, UsageConfigPatch, CostScan, UsageAlertConfig, UsageDisplayConfig } from '@contracts'
 import {
   createUsageService,
   fakeAdapter,
@@ -103,6 +103,12 @@ function windowMsFor(label: string): number | null {
   return null
 }
 
+/** The zone offset AT the instant being rendered. Sampling it "now" and applying
+ *  it to a FUTURE moment — a reset, a projected run-out — prints the wall clock
+ *  an hour wrong on the far side of a DST change: the formatters shift by
+ *  whatever offset they are handed, and the offset is not the same all week. */
+const tzAt = (atMs: number): number => -new Date(atMs).getTimezoneOffset()
+
 const SEVERITY_RANK = { 'runs-out': 2, surplus: 1, 'on-pace': 0 } as const
 
 /** Attach pace to EVERY paceable window (the session limit AND the weekly
@@ -112,17 +118,18 @@ const SEVERITY_RANK = { 'runs-out': 2, surplus: 1, 'on-pace': 0 } as const
  *  + reason, never a forecast. */
 function toView(p: PlanUsage): PlanUsageView {
   if (p.health !== 'fresh' && p.health !== 'stale') return p
-  const tz = -new Date().getTimezoneOffset()
+  const now = Date.now() // ONE clock for every window of the plan
   let best: PaceView | undefined
   let bestRank = -1
   const windows = p.windows.map((w) => {
     const windowMs = w.windowMs && w.windowMs > 0 ? w.windowMs : windowMsFor(w.label)
     if (!windowMs) return w
-    const report = computePace(w, Date.now(), { windowMs, tzOffsetMinutes: tz })
+    const report = computePace(w, now, { windowMs, tzOffsetMinutes: tzAt(now) })
     if (!report) return w
     const view: PaceView = {
       verdict: report.verdict,
-      text: formatVerdict(report, w.label, tz),
+      // "runs out ~Thu 07:06" is a FUTURE wall clock — read the offset there.
+      text: formatVerdict(report, w.label, tzAt(report.runOutAt ?? now)),
       deltaText: formatPaceDelta(report.paceDelta),
       severity: PACE_SEVERITY[report.verdict],
       elapsedPct: Math.round(report.elapsedPct),
@@ -245,14 +252,16 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
   const enrich = (plans: PlanUsage[]): PlanUsageView[] => {
     // Every reset line comes from THE reset formatter, in the ONE chosen style.
     const style = displayCfg().resetStyle
-    const tz = -new Date().getTimezoneOffset()
+    const now = Date.now()
     return plans.map((p) => {
       const relabeled = withOutage(p)
       const view = toView(relabeled)
       const styled: PlanUsageView = {
         ...(relabeled !== p && view.pace ? { ...view, pace: undefined } : view),
         windows: view.windows.map((w) =>
-          w.resetsAt ? { ...w, resetText: formatReset(w.resetsAt, style, Date.now(), tz) ?? undefined } : w
+          // The reset's OWN offset — "resets Sun 09:00" must hold across a DST
+          // change, not shift by the hour the user has today.
+          w.resetsAt ? { ...w, resetText: formatReset(w.resetsAt, style, now, tzAt(Date.parse(w.resetsAt))) ?? undefined } : w
         )
       }
       return styled
@@ -472,6 +481,13 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
       })
   }
 
+  // The ACTIVE lane of a provider: order 0 wins, the poller's own rule. Null
+  // when no profile targets it (the seam calls that lane 'default').
+  const activeProfile = (providerId: string): AgentProfile | null => {
+    const forProvider = (getSettingsStore()?.listProfiles() ?? []).filter((p) => p.provider === providerId)
+    return forProvider.length ? forProvider.reduce((a, b) => (a.order <= b.order ? a : b)) : null
+  }
+
   // One cost-scan rule for BOTH consumers (IPC + the 7/11 CLI endpoint):
   // fixture world scans only the seeded dir; other smokes get a labeled
   // empty; real known log dirs in a real session alone.
@@ -481,9 +497,7 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
     if (isSmoke) return { providerId, days: [], currency: 'USD', reason: 'cost scan is disabled under smoke' }
     refreshLivePrices() // async; THIS scan uses whatever is cached, the next one the fresh rates
     const priceOpts = livePrices ? { prices: livePrices.rows, pricesRev: String(livePrices.at) } : {}
-    // The ACTIVE profile's home, same rule as the poller (order 0 wins).
-    const forProvider = (getSettingsStore()?.listProfiles() ?? []).filter((p) => p.provider === providerId)
-    const profile = forProvider.length ? forProvider.reduce((a, b) => (a.order <= b.order ? a : b)) : null
+    const profile = activeProfile(providerId) // the ACTIVE profile's home
     // EVERY root the provider writes (archived sessions, moved config homes) —
     // the single-root scan silently under-counted both (CodexBar parity).
     return scanCost(providerId, costLogDirs(providerId, resolveHome(providerId, profile)), { ...priceOpts, ...windowOpts })
@@ -518,11 +532,15 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
       }
     })
   ipcMain.handle(UsageChannels.history, (_e, raw: unknown): number[] => {
-    const p = raw as { providerId?: string; window?: string } | null
+    const p = raw as { providerId?: string; window?: string; profileId?: string } | null
     if (!p || typeof p.providerId !== 'string' || typeof p.window !== 'string') return []
     const kv = getSettingsStore()
     if (!kv) return []
-    return readHistory({ get: (k) => kv.getSetting(k) ?? null, set: (k, v) => kv.setSetting(k, v) }, p.providerId, p.window)
+    // Rings are per LANE (7/07). A caller that names no profile wants the lane
+    // the user is actually on — the ACTIVE one, the same rule the cost scan
+    // resolves a home by. No profile on the provider = the 'default' ring.
+    const profileId = typeof p.profileId === 'string' && p.profileId ? p.profileId : activeProfile(p.providerId)?.id
+    return readHistory({ get: (k) => kv.getSetting(k) ?? null, set: (k, v) => kv.setSetting(k, v) }, p.providerId, p.window, profileId)
   })
 
   // Hidden window = paused poller (poll politely). Single-window app: the

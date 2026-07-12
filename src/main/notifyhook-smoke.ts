@@ -21,6 +21,8 @@ import {
   claudeNotifyHooks,
   codexBellArgs,
   geminiSystemSettings,
+  opencodeConfig,
+  opencodePluginSource,
   opencodeTuiConfig
 } from '@backend/features/agents'
 import { bellLaunchExtras, notifyHookInvocation, notifyHookPath } from './notify-hook'
@@ -141,29 +143,69 @@ export async function runNotifyHookSmoke(): Promise<void> {
     const claudeOk =
       claude.Notification?.[0]?.hooks?.[0]?.command === 'INV --event needs-input' &&
       claude.Notification?.[0]?.hooks?.[0]?.type === 'command' &&
-      claude.Stop?.[0]?.hooks?.[0]?.command === 'INV --event done'
+      claude.Stop?.[0]?.hooks?.[0]?.command === 'INV --event done' &&
+      claude.SubagentStart?.[0]?.hooks?.[0]?.command === 'INV --event subagent-start' &&
+      claude.SubagentStop?.[0]?.hooks?.[0]?.command === 'INV --event subagent-stop' &&
+      claude.UserPromptSubmit?.[0]?.hooks?.[0]?.command === 'INV --event turn-start'
 
-    const codex = codexBellArgs()
+    // Codex needs BOTH channels: OSC 9 (ambiguous — fires on complete AND on approval) and
+    // the notify program (turn-complete ONLY), whose `done` is what lets the tracker resolve
+    // a completion to green instead of red. The notify value is a TOML LITERAL array: single
+    // quotes (no cmd/sh/PowerShell escaping) and the inner spaces force buildLaunchCommand's
+    // outer double-quoting, which is what keeps those single quotes literal under sh.
+    const codexBase = '-c tui.notifications=true -c tui.notification_method=osc9 -c tui.notification_condition=always'
     const codexOk =
-      codex.join(' ') ===
-      '-c tui.notifications=true -c tui.notification_method=osc9 -c tui.notification_condition=always'
+      codexBellArgs().join(' ') === codexBase &&
+      codexBellArgs('C:\\App Data\\notify.mjs').join(' ') ===
+        `${codexBase} -c notify=[ 'node', 'C:/App Data/notify.mjs' ]` &&
+      // A path a TOML literal cannot express (an apostrophe) must DROP the arg, never emit
+      // broken TOML — a launch must never break over the bell.
+      codexBellArgs("C:\\Users\\O'Brien\\notify.mjs").join(' ') === codexBase
 
-    // Merge-through: the admin's/user's own keys survive; only the switch is added.
-    const gem = JSON.parse(geminiSystemSettings({ general: { vimMode: true }, telemetry: false })) as {
+    // Merge-through: the admin's/user's own keys survive; only the switch is added. Gemini's
+    // notification covers "action-required prompts AND session completion" in ONE switch, so
+    // it needs the AfterAgent hook (its done) to be legible — and an admin's own hooks must
+    // survive alongside ours (the schema's own mergeStrategy for hook arrays is CONCAT).
+    type GemHook = { hooks: Array<{ type: string; command: string }> }
+    const gem = JSON.parse(
+      geminiSystemSettings({ general: { vimMode: true }, telemetry: false, hooks: { AfterAgent: ['ADMIN'] } }, 'INV')
+    ) as {
       general?: { enableNotifications?: boolean; vimMode?: boolean }
       telemetry?: boolean
+      hooks?: { AfterAgent?: unknown[]; BeforeAgent?: GemHook[] }
     }
-    const geminiOk = gem.general?.enableNotifications === true && gem.general?.vimMode === true && gem.telemetry === false
+    const gemAfter = gem.hooks?.AfterAgent
+    const geminiOk =
+      gem.general?.enableNotifications === true &&
+      gem.general?.vimMode === true &&
+      gem.telemetry === false &&
+      gemAfter?.[0] === 'ADMIN' && // the admin's hook is not clobbered
+      (gemAfter?.[1] as GemHook)?.hooks?.[0]?.command === 'INV --event done' &&
+      gem.hooks?.BeforeAgent?.[0]?.hooks?.[0]?.command === 'INV --event turn-start' &&
+      // No script -> no hooks, and the notification-only baseline still applies.
+      JSON.parse(geminiSystemSettings({}, undefined) as string).hooks === undefined
 
     const oc = JSON.parse(opencodeTuiConfig({ theme: 'mono', attention: { sound: false } })) as {
       theme?: string
       attention?: { enabled?: boolean; notifications?: boolean; sound?: boolean }
     }
+    // OpenCode has no hook config — its only verdict channel is the generated PLUGIN, and the
+    // spec MUST be a file:// URL: a bare path is read as an npm package and OpenCode HANGS
+    // fetching it, freezing the launch.
+    const ocCfg = JSON.parse(opencodeConfig('C:\\App Data\\plugin.mjs')) as { plugin?: string[] }
+    const ocPlugin = opencodePluginSource('C:\\App Data\\notify.mjs')
     const opencodeOk =
       oc.attention?.enabled === true &&
       oc.attention?.notifications === true &&
       oc.attention?.sound === false && // the user's sound preference survives, never forced
-      oc.theme === 'mono'
+      oc.theme === 'mono' &&
+      ocCfg.plugin?.[0] === 'file:///C:/App Data/plugin.mjs' &&
+      // The plugin must split root from child: a subagent going idle is NOT the main's done.
+      ocPlugin.includes('session.idle') &&
+      ocPlugin.includes('parentID') &&
+      ocPlugin.includes("'subagent-stop'") &&
+      ocPlugin.includes("'done'") &&
+      ocPlugin.includes(JSON.stringify('C:\\App Data\\notify.mjs'))
 
     const aider = aiderBellEnv('INV')
     const aiderOk = aider.AIDER_NOTIFICATIONS === 'true' && aider.AIDER_NOTIFICATIONS_COMMAND === 'INV --event done'
@@ -182,9 +224,16 @@ export async function runNotifyHookSmoke(): Promise<void> {
     const inUserData = (p: string | undefined): boolean =>
       !!p && path.resolve(p).startsWith(userData) && fs.existsSync(p)
     const extrasOk =
-      exCodex.args.join(' ') === codex.join(' ') &&
+      // Routed WITH the notify script: the real launch must carry codex's done channel,
+      // and its path must be the generated script inside userData.
+      exCodex.args.join(' ').startsWith(codexBase) &&
+      exCodex.args.join(' ').includes("-c notify=[ 'node', '") &&
+      inUserData(notifyHookPath() ?? undefined) &&
       inUserData(exGemini.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH) &&
       inUserData(exOpencode.env.OPENCODE_TUI_CONFIG) &&
+      // OpenCode's verdict channel: the generated plugin must actually be routed, or the
+      // pane only ever sees the ambiguous chime and reads every completion as attention.
+      inUserData(exOpencode.env.OPENCODE_CONFIG) &&
       exAider.env.AIDER_NOTIFICATIONS === 'true' &&
       exClaude.args.length === 0 && Object.keys(exClaude.env).length === 0 &&
       exUnknown.args.length === 0 && Object.keys(exUnknown.env).length === 0

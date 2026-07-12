@@ -1,6 +1,7 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
 import {
   ControlChannels,
+  TerminalChannels,
   type AgentState,
   type ControlCommand,
   type PaneId,
@@ -25,6 +26,7 @@ import { onPaneAgentSession } from '../../core/agents/agent-session-port'
 import { setActiveView } from '../../core/shell/view-port'
 import { setCommands } from '../../core/commands/command-port'
 import { setPaneState } from '../../core/attention/attention-port'
+import { setPaneRole } from '../../core/layout/pane-meta'
 
 const MAX_RECENTS = 5 // Home shows the five most recent projects worked on
 
@@ -85,10 +87,14 @@ export const workspaceFeature: UiFeature = {
 
     // ── State ────────────────────────────────────────────────────────────────
     let restoring = true
+    // A FAILED load must never be followed by a save: saveState replaces the whole
+    // store, so saving after a load error would overwrite the user's intact state
+    // with an empty one. Persistence stays off for the session instead.
+    let loadFailed = false
     let recents: RecentWorkspace[] = []
 
     const persist = debounce(() => {
-      if (restoring) return
+      if (restoring || loadFailed) return
       const state: WorkspaceState = {
         workspaces: controller.list().map((m) => ({
           id: m.id,
@@ -402,8 +408,10 @@ export const workspaceFeature: UiFeature = {
       let state: WorkspaceState | null = null
       try {
         state = await workspaceClient.loadState()
-      } catch {
+      } catch (err) {
         state = null
+        loadFailed = true
+        console.error('workspace state load failed — persistence disabled for this session to protect the stored state', err)
       }
       setTheme(state?.theme || DEFAULT_THEME_ID)
       recents = state?.recents ?? []
@@ -472,7 +480,17 @@ function exposeForDev(controller: WorkspaceController): void {
     openForCwd: (cwd: string) => controller.openForCwd(cwd),
     list: () => controller.list(),
     active: () => controller.activeMeta(),
-    count: () => controller.list().length
+    count: () => controller.list().length,
+    // Naming a reviewer, exactly as the manifest does it (controller.publishRoles): the chip
+    // port paints it, and the terminal:setRole IPC is what actually CONFERS it — main records
+    // that as the app's own answer to "who may sign off" (daemon-relay: appRoles) and forwards
+    // it to the daemon. Both halves, or the role is decoration. Not a back door: the renderer
+    // IS the trusted side — a pane is a PTY child with no IPC at all — and this whole block is
+    // DEV-only and tree-shaken out of production.
+    setRole: (paneId: number, role: string) => {
+      setPaneRole(paneId as PaneId, role)
+      getBridge().send(TerminalChannels.setRole, { id: paneId as PaneId, role })
+    }
   }
   w.__mogging.attention = {
     setPaneState: (id: number, state: string) => setPaneState(id as PaneId, state as AgentState)

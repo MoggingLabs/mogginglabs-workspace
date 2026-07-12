@@ -31,9 +31,18 @@ export interface McpConfigWriter {
   /** The canonical form of the CURRENT managed block in `text`, or null when
    *  no managed entry with this id exists. Throws on an unparseable file. */
   readCanonical(text: string, id: string): string | null
+  /** Is `id` DEFINED in this file at all — ours or the user's own? The honesty
+   *  probe behind remove(): an entry we cannot splice is still an entry the CLI
+   *  loads every session, and "removed" would be a lie. */
+  hasEntry(text: string, id: string): boolean
+  /** Does `text` hold NOTHING but managed blocks (a composeScoped file we wrote,
+   *  or a blank one)? False for anything the user owns — a repo may TRACK its own
+   *  `.codex/config.toml` / `.gemini/settings.json`, and 09 never clobbers it. */
+  isManagedScoped(text: string): boolean
   /** New file text with our entry upserted (text null = file absent). */
   upsert(text: string | null, entry: McpServerEntry): string
-  /** New file text with exactly our entry extracted. */
+  /** New file text with exactly our entry extracted. Throws when a hand edit has
+   *  made a CLEAN extraction impossible — a lossy splice is worse than a no. */
   remove(text: string, id: string): string
   /** A STANDALONE scoped config (all `entries`, this dialect) — the file a
    *  pane is launched against for a tool plan (Phase-8/09). Unlike upsert this

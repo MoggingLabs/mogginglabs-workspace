@@ -92,31 +92,62 @@ export function controlFromUrl(url: string): ControlCommand | null {
   }
 }
 
-function deliver(getWindow: () => BrowserWindow | null, url: string): void {
-  const win = getWindow()
-  if (!win) return
+function deliver(ensureWindow: () => BrowserWindow, url: string): void {
   const control = controlFromUrl(url)
   const cwd = control ? null : cwdFromUrl(url)
-  if (!control && cwd == null) return
+  if (!control && cwd == null) return // parse BEFORE the window exists: junk must not open one
+  // On macOS the app outlives its window (window-all-closed does not quit, index.ts) and `win`
+  // is nulled on 'closed' — `mogging .` then did NOTHING AT ALL. Recreate, exactly like the
+  // 'activate' handler, and deliver once the renderer can receive it.
+  const win = ensureWindow()
   if (win.isMinimized()) win.restore()
   win.focus()
-  if (control) win.webContents.send(ControlChannels.command, control)
-  else win.webContents.send(WorkspaceChannels.openCwd, cwd)
+  const send = (): void => {
+    if (win.isDestroyed()) return
+    if (control) win.webContents.send(ControlChannels.command, control)
+    else win.webContents.send(WorkspaceChannels.openCwd, cwd)
+  }
+  if (!win.webContents.isLoading()) send()
+  // A window we had to CREATE is a cold start: wait for the renderer, and give restore the same
+  // beat index.ts gives a cold-start control verb — `open` must land after the restored
+  // workspaces re-attach, not before them.
+  else win.webContents.once('did-finish-load', () => (control ? setTimeout(send, 800) : send()))
 }
 
-/** Register protocol + second-instance/open-url handlers. Returns the launch cwd, if any. */
-export function registerDeepLink(getWindow: () => BrowserWindow | null): void {
+// Deliveries that arrived before the window existed. The lock is taken at module scope but the
+// window is up to ~25 s of boot away (daemon migrate + start + feature registration): a
+// `mogging .` fired into that gap made the SECOND instance exit 0 ("opening workspace…") while
+// the primary had no 'second-instance' listener yet — the command vanished. Bounded: a flood of
+// deep links is a bug, not a workload.
+let ensureWin: (() => BrowserWindow) | null = null
+const pending: string[] = []
+const QUEUE_MAX = 16
+
+function accept(url: string): void {
+  if (ensureWin) deliver(ensureWin, url)
+  else if (pending.length < QUEUE_MAX) pending.push(url)
+}
+
+/** Attach the OS handlers the INSTANT the single-instance lock is taken — before any boot work.
+ *  Deliveries queue until registerDeepLink hands us the window. */
+export function installDeepLinkListeners(): void {
+  app.on('second-instance', (_e, argv) => {
+    const url = argv.find((a) => a.startsWith(scheme() + '://'))
+    if (url) accept(url)
+  })
+  app.on('open-url', (_e, url) => accept(url))
+}
+
+/** Register the protocol association and drain anything that arrived during boot. */
+export function registerDeepLink(ensureWindow: () => BrowserWindow): void {
   if (process.defaultApp && process.argv.length >= 2) {
     // dev: round-trip mogging-dev:// back through this exact electron + entry script
     app.setAsDefaultProtocolClient(scheme(), process.execPath, [process.argv[1]])
   } else {
     app.setAsDefaultProtocolClient(scheme())
   }
-  app.on('second-instance', (_e, argv) => {
-    const url = argv.find((a) => a.startsWith(scheme() + '://'))
-    if (url) deliver(getWindow, url)
-  })
-  app.on('open-url', (_e, url) => deliver(getWindow, url))
+  ensureWin = ensureWindow
+  for (const url of pending.splice(0)) deliver(ensureWindow, url)
 }
 
 /** The cwd from a cold-start deep link (Windows/Linux pass it in argv). */

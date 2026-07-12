@@ -13,6 +13,27 @@
           { "type": "command", "command": "mogging notify --event done" }
         ]
       }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "mogging notify --event subagent-start" }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "mogging notify --event subagent-stop" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "mogging notify --event turn-start" }
+        ]
+      }
     ]
   }
 }

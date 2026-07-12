@@ -52,7 +52,11 @@ export const API_KEY_SPECS: Record<string, ApiKeySpec> = {
     parse: (body, now, profileId) => {
       const infos = (body as { balance_infos?: { currency?: string; total_balance?: unknown }[] })?.balance_infos
       const first = Array.isArray(infos) ? infos[0] : undefined
-      const bal = num(first?.total_balance ? Number(first.total_balance) : null)
+      // A DRAINED account is a legitimate balance, not a shape change: `0` is
+      // falsy, so a truthiness guard here reported empty pockets as a broken
+      // adapter. Only an ABSENT or unparsable field is drift.
+      const raw = first?.total_balance
+      const bal = raw === undefined || raw === null ? null : num(Number(raw))
       if (bal === null) throw new Error('DeepSeek balance shape changed — adapter needs a look')
       return plan('deepseek', profileId, 'DeepSeek', now, [{ label: 'Balance', usedPct: 0, windowMs: 0, raw: `${bal} ${first?.currency ?? ''}`.trim() }], {
         label: first?.currency ?? 'balance',

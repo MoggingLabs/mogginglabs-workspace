@@ -56,7 +56,11 @@ export function vaultDecrypt(cipher: string): string | null {
 export function vaultStore(kvKey: string, plaintext: string): boolean {
   const cipher = vaultEncrypt(plaintext)
   if (cipher === null) return false
-  getSettingsStore()?.setSetting(kvKey, cipher)
+  // No store (before registerAppSettings / after disposeAppSettings) means the ciphertext is
+  // DROPPED. `?.` swallowed that and returned true — the caller told the user "key saved".
+  const store = getSettingsStore()
+  if (!store) return false
+  store.setSetting(kvKey, cipher)
   return true
 }
 export function vaultHas(kvKey: string): boolean {

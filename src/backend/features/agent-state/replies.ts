@@ -21,6 +21,12 @@ export function isTerminalReply(data: string): boolean {
   // attention latch (found live 2026-07-10: DA2 + DECRPM turned a permission-blocked
   // pane's red dot green).
   const REPLIES = [
+    // Known collision, accepted: a MODIFIED F3 (xterm keeps VT100's PF3 legacy, so
+    // Shift/Ctrl/Alt+F3 is CSI 1;<mod> R — plain F3 is SS3 R and doesn't match) is
+    // byte-identical to a CPR with the cursor on row 1. There is no stateless rule
+    // that splits them — a real CPR can be `1;2R` too — so modified-F3 fails to clear
+    // the latch. Any other key (or plain F3) still clears it; disambiguating for real
+    // would mean tracking outstanding DSR queries in the output stream.
     /^\x1b\[[?>]?[0-9;]*[Rcn]/, // CPR (CSI r;c R), DA1 (CSI ? ... c), DA2 (CSI > ... c), DSR-ok (CSI 0 n)
     /^\x1b\[\??[0-9;]*\$y/, // DECRPM — DECRQM mode report (CSI ? Ps ; Pm $ y, ANSI form without ?)
     /^\x1b\[[0-9;]*t/, // window-ops report (CSI 8 ; rows ; cols t ...)

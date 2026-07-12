@@ -36,11 +36,11 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/g
  * powershell  single quotes; an embedded ' is doubled (''). Single-quoted
  *             PowerShell strings do NOT interpolate $ or backtick, so a path
  *             like `C:\$Recycle.Bin` survives — double quotes would not.
- * cmd         double quotes. cmd has no escape INSIDE a quoted string, but `"`
- *             is an illegal character in a Windows filename, so a quoted path
- *             can never legitimately contain one. We strip any that appear
- *             anyway (such a path is malformed or hostile) rather than emit a
- *             string that would break out of the quotes.
+ * cmd         double quotes, spliced at every `%` (see cmdQuote). cmd has no escape
+ *             INSIDE a quoted string, but `"` is an illegal character in a Windows
+ *             filename, so a quoted path can never legitimately contain one. We strip
+ *             any that appear anyway (such a path is malformed or hostile) rather than
+ *             emit a string that would break out of the quotes.
  */
 export function quotePathForShell(path: string, flavor: ShellFlavor): string {
   const clean = path.replace(CONTROL_CHARS, '')
@@ -50,8 +50,45 @@ export function quotePathForShell(path: string, flavor: ShellFlavor): string {
     case 'powershell':
       return `'${clean.replace(/'/g, `''`)}'`
     case 'cmd':
-      return `"${clean.replace(/"/g, '')}"`
+      return cmdQuote(clean)
   }
+}
+
+/**
+ * cmd is the only dialect with no in-string escape, and two of its rules bite paths:
+ *
+ * 1. `%NAME%` expands EVEN INSIDE double quotes. Percent expansion is cmd's phase 1 —
+ *    it runs before, and blind to, quoting, and a caret is literal inside quotes, so
+ *    none of the usual escapes reach it. Measured against real cmd.exe with PATHX
+ *    defined: `"C:\tmp\100%PATHX%end"` delivers `C:\tmp\100INJECTEDend` — a dropped
+ *    filename silently retargets the user's next command at a DIFFERENT directory.
+ *    That is the same threat this module already answers for control characters (a
+ *    filename must not be able to forge input), so it gets the same treatment.
+ *
+ *    The fix is to break the pair, not to escape it: emit each `%` BETWEEN quoted runs
+ *    rather than inside one. cmd's phase-1 scanner then looks for a variable literally
+ *    named `"PATHX"`, quotes and all — a name no variable can have — so it expands
+ *    nothing and leaves the text verbatim (at the prompt an unknown `%name%` is kept,
+ *    not deleted). CommandLineToArgvW then strips the quotes and concatenates the
+ *    adjacent runs, so the program receives the exact path as ONE argument:
+ *      C:\tmp\100%PATHX%end  ->  "C:\tmp\100"%"PATHX"%"end"  ->  C:\tmp\100%PATHX%end
+ *    Every literal character still sits inside quotes (the always-quoted contract holds;
+ *    a space or `&` inside a spliced segment stays quoted and literal), and a path with
+ *    no `%` — which is very nearly all of them — emits byte-identically to before.
+ *
+ * 2. A backslash RUN abutting a closing quote is an escape to every argv parser that
+ *    follows CommandLineToArgvW/MSVCRT rules: `"C:\"` (a drive root) ends in `\"`, which
+ *    reads as an escaped quote and glues the next token into the argument (measured: one
+ *    argument, `C:\" SECOND`). Doubling the run fixes it — `"C:\\"` delivers `C:\`. This
+ *    applies to EVERY quote we emit, including the ones the splice above introduces, or
+ *    `C:\dir\%FOO%` would hand the parser a `\"` of its own making.
+ */
+function cmdQuote(clean: string): string {
+  return clean
+    .replace(/"/g, '')
+    .split('%')
+    .map((seg) => `"${seg.replace(/(\\+)$/, '$1$1')}"`)
+    .join('%')
 }
 
 /** Join several dropped paths into one line of shell input, space-separated. */

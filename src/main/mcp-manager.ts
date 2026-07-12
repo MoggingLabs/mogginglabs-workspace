@@ -1,5 +1,5 @@
 import { app, dialog, ipcMain } from 'electron'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import {
@@ -36,8 +36,10 @@ import {
 
 // The MCP manager's app wiring (Phase-8/06, ADR 0008.b). The app ORCHESTRATES
 // config files the CLIs own — it never runs, proxies, or authenticates a
-// server. Every write: explicit user action + a same-session timestamped
-// backup first; drift is detected read-only and never auto-healed. The smoke
+// server. Every write: explicit user action, a timestamped backup of the bytes
+// we are about to replace, and a temp-file+rename so the CLI reading the same
+// file never sees half a config; a file that changed under us refuses rather
+// than clobbers. Drift is detected read-only and never auto-healed. The smoke
 // passes fixture homes; real homes resolve from the pointer envs the CLIs
 // themselves honor.
 
@@ -78,21 +80,48 @@ export function listServers(): McpServerEntry[] {
 
 const findServer = (id: string): McpServerEntry | undefined => listServers().find((s) => s.id === id)
 
-// One backup per file per session, taken before OUR first write to it.
-const backedUpThisSession = new Set<string>()
-function ensureBackup(file: string): string | undefined {
-  if (backedUpThisSession.has(file) || !existsSync(file)) {
-    backedUpThisSession.add(file)
-    return undefined
-  }
+// A backup before OUR write — of the bytes that are actually there. Keyed by the
+// CONTENT we last saved, not by "did we back this file up once this session": the
+// live CLI rewrites ~/.claude.json constantly, so a second apply in one session
+// was landing on state no backup had ever seen.
+const backedUp = new Map<string, string>()
+function ensureBackup(file: string, current: string | null): string | undefined {
+  if (current === null) return undefined // nothing on disk to lose
+  const hash = sha256(current)
+  if (backedUp.get(file) === hash) return undefined // these exact bytes are already saved
   const stamp = new Date().toISOString().replace(/[:.]/g, '').replace('T', '-').slice(0, 17)
   const backup = `${file}.bak-${stamp}`
   copyFileSync(file, backup)
-  backedUpThisSession.add(file)
+  backedUp.set(file, hash)
   return backup
 }
 
+/** Temp file in the SAME directory, then rename: a reader (the running CLI) sees
+ *  either the old file or the new one, never a half-written config — and a crash
+ *  mid-write leaves the original intact. */
+function writeAtomic(file: string, text: string): void {
+  mkdirSync(dirname(file), { recursive: true })
+  const tmp = `${file}.tmp-${process.pid}-${Date.now().toString(36)}`
+  try {
+    writeFileSync(tmp, text, 'utf8')
+    renameSync(tmp, file)
+  } catch (e) {
+    try {
+      unlinkSync(tmp)
+    } catch {
+      /* never written */
+    }
+    throw e
+  }
+}
+
 const readIfExists = (file: string): string | null => (existsSync(file) ? readFileSync(file, 'utf8') : null)
+
+/** Optimistic concurrency, one line: the file we are about to replace must still
+ *  be the file we READ. `~/.claude.json` also holds the CLI's own unrelated state
+ *  and the CLI rewrites it whenever it likes — a write that lands in our
+ *  read→write window would be silently eaten by our stale copy. */
+const changedUnderUs = (file: string, seen: string | null): boolean => readIfExists(file) !== seen
 
 const CLI_DETECT_ID: Record<HostedCliId, string> = { 'claude-code': 'claude', codex: 'codex', gemini: 'gemini' }
 
@@ -147,9 +176,11 @@ export function mgrApply(
   try {
     const current = readIfExists(file)
     const next = writer.upsert(current, entry)
-    const backup = ensureBackup(file)
-    mkdirSync(dirname(file), { recursive: true })
-    writeFileSync(file, next, 'utf8')
+    if (changedUnderUs(file, current)) {
+      return { ok: false, reason: `${file} changed while we were preparing the write — nothing was written; try again` }
+    }
+    const backup = ensureBackup(file, current)
+    writeAtomic(file, next)
     store.set(hashKey(cli, serverId), sha256(writer.canonical(entry)))
     return { ok: true, backup }
   } catch (e) {
@@ -170,9 +201,21 @@ export function mgrRemoveFrom(
     const current = readIfExists(file)
     if (current !== null) {
       const next = writer.remove(current, serverId)
-      if (next !== current) {
-        ensureBackup(file)
-        writeFileSync(file, next, 'utf8')
+      if (next === current) {
+        // Nothing spliced. If the id is STILL in the file, it is not ours to cut
+        // (the _managedBy marker was stripped, or the codex tag/header adjacency
+        // was hand-edited): reporting "removed" would leave the user believing the
+        // server is off this CLI while the CLI loads it every session. A truly
+        // absent entry still reports ok — removing nothing IS the state asked for.
+        if (writer.hasEntry(current, serverId)) {
+          return { ok: false, reason: `${serverId} is still defined in ${file} but isn't ours to splice out — remove that entry by hand` }
+        }
+      } else {
+        if (changedUnderUs(file, current)) {
+          return { ok: false, reason: `${file} changed while we were preparing the write — nothing was written; try again` }
+        }
+        ensureBackup(file, current)
+        writeAtomic(file, next)
       }
     }
     store.set(hashKey(cli, serverId), '')
@@ -241,25 +284,37 @@ export function catConnect(
   const preset = findAnyPreset(String(presetId))
   const store = kv()
   if (!preset || !store) return { ok: false, reason: 'unknown preset' }
+  if (!clis.length) return { ok: false, reason: 'pick at least one CLI' }
   const prep = presetToServerEntries(preset, opts)
   if (!prep.ok) return prep
   // ONE pipeline: every entry becomes a registry row (same refusals), then
   // 06's writers land it per selected CLI — never a side door.
+  // A GROUP preset is several rows: probe them ALL against the same refusals
+  // first (a dry-run store — reads real rows, writes none), so a refusal on the
+  // last row can't strand the first ones in the registry.
+  const dryRun: GrantKv = { get: (k) => store.get(k), set: () => {} }
   for (const entry of prep.entries) {
-    const saved = saveServer(store, entry)
-    if (!saved.ok) return { ok: false, reason: saved.reason }
+    const probe = saveServer(dryRun, entry)
+    if (!probe.ok) return { ok: false, reason: probe.reason }
   }
+  for (const entry of prep.entries) saveServer(store, entry)
   const results = clis.map((cli) => {
     const cap = capabilityFor(cli)
     const blocked = cap ? presetBlockedFor(preset, cap) : 'unknown CLI'
     if (blocked) return { cli, ok: false, reason: blocked }
-    for (const entry of prep.entries) {
-      const r = mgrApply(entry.id, cli, homes)
-      if (!r.ok) return { cli, ok: false, reason: r.reason }
-    }
+    // Continue on error: stopping at the first failing row left the EARLIER rows
+    // written into this CLI's config while the card called the whole thing off.
+    const failed = prep.entries
+      .map((entry) => ({ id: entry.id, r: mgrApply(entry.id, cli, homes) }))
+      .filter((x) => !x.r.ok)
+    if (failed.length) return { cli, ok: false, reason: failed.map((f) => `${f.id}: ${f.r.reason}`).join('; ').slice(0, 240) }
     return { cli, ok: true }
   })
-  return { ok: results.some((r) => r.ok), results }
+  // Connected means CONNECTED: every selected CLI took every row. `some` called a
+  // card green when one CLI landed and the rest silently didn't.
+  const bad = results.filter((r) => !r.ok)
+  if (!bad.length) return { ok: true, results }
+  return { ok: false, reason: bad.map((b) => `${CLI_DISPLAY[b.cli]} — ${b.reason}`).join(' · ').slice(0, 300), results }
 }
 
 /** The update FEED: registry lookup for a preset — PREVIEW text only, never

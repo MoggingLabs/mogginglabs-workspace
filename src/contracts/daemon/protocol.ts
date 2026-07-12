@@ -96,9 +96,12 @@ export interface Claim {
 export const CLAIM_PATTERN_MAX = 256
 
 // ── Reviewer gate (Phase-4/03) ─────────────────────────────────────────────────
-/** A reviewer sign-off for a branch. Memory-only coordination data — never
- *  persisted, never telemetered. The ROLE is resolved daemon-side from the pane
- *  binding; a client cannot claim reviewer-ness in a payload. */
+/** A reviewer sign-off for a branch. Memory-only coordination data — never persisted,
+ *  never telemetered. The ROLE is resolved daemon-side from the pane manifest; a client
+ *  cannot claim reviewer-ness in a payload. WHICH pane is speaking is proven by the
+ *  approve message's `token` (that pane's env-only MOGGING_PANE_TOKEN) when the sender
+ *  has one — the pane id alone is public (`mogging list` prints it) and was, on its own,
+ *  forgeable by any pane that shares the user's daemon. */
 export interface Approval {
   branch: string
   byPaneId: string
@@ -221,9 +224,14 @@ export type ClientMessage =
   | { t: 'claim'; pattern: string; from: string }
   | { t: 'release'; pattern?: string; all?: boolean; from: string }
   | { t: 'owners' }
-  // Reviewer gate (Phase-4/03). `from` is the approver's pane binding; the daemon
-  // checks THAT pane's role — payload role claims don't exist, by design.
-  | { t: 'approve'; branch: string; from: string }
+  // Reviewer gate (Phase-4/03). `from` names the approver's pane and the daemon checks
+  // THAT pane's role — a payload can never claim a role. `token` is the pane's own
+  // MOGGING_PANE_TOKEN (minted per session, injected into that pane's env and nowhere
+  // else): it PROVES the sender is running inside `from`. Optional on the wire only so a
+  // pane the daemon restored cold — env re-created, no token in hand — and any older CLI
+  // keep working; when it IS present the daemon enforces it, so the shipped CLI (which
+  // always sends it from a real pane) cannot be impersonated by a pane that sends its own.
+  | { t: 'approve'; branch: string; from: string; token?: string }
   | { t: 'approvals' }
   // App-side hook: a branch's worktree was removed -> its approval dies with it.
   | { t: 'unapprove'; branch: string }
@@ -268,7 +276,28 @@ export type ServerMessage =
 
 /** Notify events an agent/hook can raise via `mogging notify` (Phase-2/04). A small, closed
  *  vocabulary that maps to a pane AgentState — a label only, never PTY content (ADR 0002). */
-export type NotifyEvent = 'needs-input' | 'done' | 'attention' | 'busy' | 'idle'
+export type NotifyEvent =
+  | 'needs-input'
+  | 'done'
+  | 'attention'
+  | 'busy'
+  | 'idle'
+  // Subagent lifecycle (Claude Code SubagentStart/SubagentStop hooks). A GATE, never a
+  // source: alerts are the MAIN agent's story, and these only hold the pane busy and
+  // swallow the main's premature verdicts (a `done` fired while it's merely parked on
+  // its subagents, a quiet terminal, an idle prompt). They never author a pane state.
+  // Handled statefully by the tracker (session.applyNotify routes them; see
+  // agent-state/activity.ts) — notifyEventToState is only their stateless fallback.
+  | 'subagent-start'
+  | 'subagent-stop'
+  // Claude Code's "Claude is waiting for your input" notice. Fired on an idle TIMER, not
+  // by a block — so it NEVER rings red (that turned a finished pane's green halo red a
+  // minute after it finished). It settles the pane instead, and is dropped outright while
+  // subagents are pending or a real block is latched.
+  | 'idle-prompt'
+  // UserPromptSubmit: a new turn. Resets the pending-subagent counter, so a stop event
+  // lost to a hard kill can't swallow every future done and strand the pane on busy.
+  | 'turn-start'
 
 /** Map a notify event to the pane state it raises. `done` is a turn ENDING — it lands as
  *  `idle`, which the UI's attention port turns into the sticky green "finished" story
@@ -279,9 +308,13 @@ export type NotifyEvent = 'needs-input' | 'done' | 'attention' | 'busy' | 'idle'
 export function notifyEventToState(event: string): AgentState {
   switch (event) {
     case 'busy':
+    case 'turn-start':
+    case 'subagent-start':
+    case 'subagent-stop': // stateless fallback only — the tracker owns the real counter
       return 'busy'
     case 'idle':
     case 'done':
+    case 'idle-prompt': // a parked prompt is idle, never blocked (the tracker gates it)
       return 'idle'
     default:
       return 'attention'

@@ -12,5 +12,8 @@ const RESUME: Record<string, string> = {
 export function resumeCommandFor(command?: string): string | null {
   if (!command) return null
   const first = command.trim().split(/\s+/)[0]?.toLowerCase()
-  return (first && RESUME[first]) || null
+  // hasOwn guard: a plain-object lookup with a hostile first token ('constructor',
+  // 'toString', …) hits Object.prototype and returns a FUNCTION where a string is
+  // expected — which the restore path would happily type into the shell.
+  return (first && Object.hasOwn(RESUME, first) && RESUME[first]) || null
 }
