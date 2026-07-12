@@ -1659,8 +1659,19 @@ button {
 #app.rail-collapsed .rail-total,
 #app.rail-collapsed .ws-label,
 #app.rail-collapsed .ws-count,
-#app.rail-collapsed .ws-close {
+#app.rail-collapsed .ws-close,
+#app.rail-collapsed .rail-update-label {
   display: none;
+}
+/* Collapsed, the update row keeps its icon and centres it on the icon column —
+   the same treatment the + button gets. It must never be the reason the rail
+   is wider than --rail-w-collapsed. */
+#app.rail-collapsed .rail-footer {
+  padding: var(--sp-2);
+}
+#app.rail-collapsed .rail-update-btn {
+  justify-content: center;
+  padding: var(--sp-2);
 }
 #app.rail-collapsed .rail-header {
   /* Same vertical padding as expanded — the header must keep its height or every tab
@@ -6649,6 +6660,87 @@ body.pane-dragging * {
   justify-content: space-between;
   gap: var(--sp-2);
   padding-bottom: var(--sp-2);
+}
+
+/* ── Auto-update UX: the rail's update row ──────────────────────────────────────
+   Pinned to the bottom of the workspaces rail (#workspace-tabs is flex:1, so this
+   sibling sits on the floor). Hidden entirely until there is something to say —
+   an empty rail footer is a permanent apology for nothing. */
+.rail-footer {
+  position: relative; /* anchors the ::after hairline */
+  flex: none;
+  padding: var(--sp-2);
+}
+.rail-footer[hidden] {
+  display: none;
+}
+/* The header's divider, mirrored: a division, not a wall — inset to the tabs'
+   outer edges so it caps the list column rather than slicing the whole surface. */
+.rail-footer::before {
+  content: '';
+  position: absolute;
+  left: var(--sp-2);
+  right: var(--sp-2);
+  top: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--border) 55%, transparent);
+}
+.rail-update-btn {
+  /* --pct is set only while downloading; the track fills left-to-right beneath the
+     label. At rest the gradient is a no-op, so one element carries all four states. */
+  --pct: 0%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background:
+    linear-gradient(to right, var(--accent-weak) var(--pct), transparent var(--pct));
+  color: var(--text-mid);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
+}
+.rail-update-btn svg {
+  flex: none;
+}
+.rail-update-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 'available' and 'downloading' are STATUS, not a trigger — the download is already
+   in flight. Say so with the cursor rather than offering a click that does nothing. */
+.rail-update-btn.is-status {
+  cursor: default;
+}
+/* 'ready' is the one row that asks for a decision, so it is the one row that gets
+   the accent. Everything before it stays quiet. */
+.rail-update-btn.is-ready {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.rail-update-btn.is-ready:hover,
+.rail-update-btn.is-ready:focus-visible {
+  background: color-mix(in srgb, var(--accent) 88%, var(--text-hi));
+}
+.rail-update-btn.is-error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.rail-update-btn:not(.is-status):not(.is-ready):hover,
+.rail-update-btn:not(.is-status):not(.is-ready):focus-visible {
+  border-color: var(--border-strong);
+  color: var(--text-hi);
 }
 
 /* ── Auto-update UX (Phase-6/06): quiet downloading dot ─────────────────────── */

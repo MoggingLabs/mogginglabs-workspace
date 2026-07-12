@@ -204,7 +204,8 @@ export const BrowserChannels = {
 
 export const UpdateChannels = {
   state: 'update:state', // main -> renderer: UpdateState (checking/available/downloading/ready/error)
-  restart: 'update:restart' // renderer -> main: quitAndInstall (the "Restart now" action)
+  restart: 'update:restart', // renderer -> main: quitAndInstall (the "Restart now" action)
+  check: 'update:check' // renderer -> main: re-check now (the rail row's "retry" after an error)
 } as const
 
 export const UsageChannels = {
