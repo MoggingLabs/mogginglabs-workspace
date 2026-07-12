@@ -93,7 +93,14 @@ export function runWorkspaceSmoke(win: BrowserWindow, phase: string): void {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
     const ws = window.__mogging && window.__mogging.workspace
     if (!ws) return { ok: false, error: 'no workspace dev handle' }
-    for (let i = 0; i < 50 && ws.count() < 1; i++) await sleep(100)
+    // Launcher-first boot: a fresh profile has NO workspaces, so waiting for one to appear
+    // just burns the 5s and leaves a ONE-workspace store — phase B then finds a single
+    // workspace and the two-workspace restore this gate exists to prove is never exercised.
+    // Provision the first one ourselves, exactly as the ATTENTION smoke does.
+    for (let i = 0; i < 50 && ws.count() < 1; i++) {
+      if (i === 5) ws.create({ name: 'Workspace 1' }) // give the launcher a beat, then seed it
+      await sleep(100)
+    }
     ws.create({ name: 'Server', cwd: 'C:/tmp/server', paneCount: 4 })
     await sleep(300)
     ws.switchByIndex(0)
