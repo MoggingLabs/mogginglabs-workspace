@@ -74,6 +74,12 @@ jobs:
       - name: Gate registry gate
         run: node scripts/check-gates.mjs
 
+      # A space in artifactName 404s every update download, on every platform, silently — it
+      # shipped nine times. Same class as the two above: a list that must agree with itself,
+      # invisible when wrong, free to check.
+      - name: Update-feed gate
+        run: node scripts/check-update-feed.mjs
+
       - name: Build
         run: npm run build
 
