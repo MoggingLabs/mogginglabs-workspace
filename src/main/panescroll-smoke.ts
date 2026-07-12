@@ -233,11 +233,69 @@ const SCRIPT = `(async () => {
   await sleep(400)
   check('I pill from the top', p0.scroll().atBottom)
 
-  return { pass: fail.length === 0, failures: fail, diag, panes: panes.map((p) => p.scroll()) }
+  // --- J · EVERY TERMINAL, EVERY CLI --------------------------------------------------
+  // The anchor and the bar belong to the PANE, so they cannot be a property of which CLI
+  // is running in it — an agent is just a process the pane hosts. This step refuses to
+  // take that on architecture alone and proves it: each CLI's characteristic output shape
+  // is streamed into its own pane, each pane is then stranded exactly as the bug strands
+  // it, and every one of them must come back to the end of its conversation with a working
+  // overlay bar. If someone ever gives one CLI a bespoke terminal, this fails.
+  const CR = String.fromCharCode(13)
+  const ESC = String.fromCharCode(27)
+  const CLIS = [
+    // claude: OSC 133 command marks around its turns, OSC 0 window titles.
+    { name: 'claude', line: (i) => ESC + ']133;C' + String.fromCharCode(7) + 'claude turn ' + i + CR +
+        ESC + ']0;claude' + String.fromCharCode(7) + 'thinking...' + CR + ESC + ']133;D;0' + String.fromCharCode(7) },
+    // codex: the reported offender — heavy repaint traffic. Cursor save/restore, a scroll
+    // REGION (DECSTBM), cursor addressing, and the CPR query it polls constantly.
+    { name: 'codex', line: (i) => ESC + '7' + ESC + '[1;40r' + ESC + '[2K' + 'codex step ' + i + CR +
+        ESC + '[6n' + ESC + '8' + ESC + '[?25h' + 'tool call ' + i + CR },
+    // gemini: SGR-heavy streaming with erase-in-line rewrites.
+    { name: 'gemini', line: (i) => ESC + '[38;5;33m' + 'gemini ' + i + ESC + '[0m' + ESC + '[K' + CR },
+    // ...and a plain shell, which must be no different.
+    { name: 'shell', line: (i) => '$ echo ' + i + CR + 'out ' + i + CR }
+  ]
+  m.layout.apply(4)
+  await sleep(800)
+  const jp = (m.panes || []).slice(0, 4)
+  const jRes = []
+  for (let i = 0; i < CLIS.length; i++) {
+    const p = jp[i]
+    const cli = CLIS[i]
+    let s = ''
+    for (let n = 0; n < 300; n++) s += cli.line(n)
+    await new Promise((r) => p.term.write(s, r))
+    await sleep(200)
+    const streaming = p.scroll()
+    p.term.scrollToTop() // strand it, exactly as the bug does
+    await sleep(500)
+    const recovered = p.scroll()
+    jRes.push({ cli: cli.name, streamedAtBottom: streaming.atBottom, recovered: recovered.atBottom,
+      following: recovered.following, hasBar: !!q(p, '.pane-slider'), hasPill: !!q(p, '.pane-jump') })
+  }
+  check('J every CLI streams at the bottom', jRes.every((r) => r.streamedAtBottom), JSON.stringify(jRes))
+  check('J every CLI recovers from a stray scroll', jRes.every((r) => r.recovered && r.following), JSON.stringify(jRes))
+  check('J every CLI pane has the overlay bar', jRes.every((r) => r.hasBar && r.hasPill), JSON.stringify(jRes))
+
+  // ...and across a FULL grid, not just the panes this gate happened to poke: every pane
+  // the app can show carries the same anchor and the same bar.
+  m.layout.apply(8)
+  for (let i = 0; i < 60 && (m.panes || []).length < 8; i++) await sleep(200)
+  await sleep(1500)
+  const all = (m.panes || []).slice(0, 8)
+  for (const p of all) {
+    await feed(p, 200, 'GRID')
+    p.term.scrollToTop()
+  }
+  await sleep(900)
+  const grid = all.map((p) => ({ id: p.id, ok: p.scroll().atBottom && !!q(p, '.pane-slider') }))
+  check('J whole grid anchored + barred', grid.length === 8 && grid.every((r) => r.ok), JSON.stringify(grid))
+
+  return { pass: fail.length === 0, failures: fail, diag, cli: jRes, panes: panes.map((p) => p.scroll()) }
 })()`
 
 export function runPaneScrollSmoke(win: BrowserWindow): void {
-  setTimeout(() => app.exit(1), 150000) // safety net
+  setTimeout(() => app.exit(1), 210000) // safety net
   const wc = win.webContents
   wc.setBackgroundThrottling(false) // hidden-workspace phases must keep their rAFs
 

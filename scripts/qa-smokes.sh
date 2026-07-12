@@ -189,7 +189,7 @@ run_smoke SURVIVE_A   MOGGING_SURVIVE   A 120 survive SURVIVE
 run_smoke SURVIVE_B   MOGGING_SURVIVE   B 120 survive SURVIVE
 run_smoke MILESTONE   MOGGING_MILESTONE 1 300 milestone
 run_smoke FLICKER     MOGGING_FLICKER   1 240 flicker
-run_smoke PANESCROLL  MOGGING_PANESCROLL 1 240 panescroll
+run_smoke PANESCROLL  MOGGING_PANESCROLL 1 300 panescroll
 run_smoke CONPTY      MOGGING_CONPTY    1 180 conpty
 run_smoke PERCEPTION  MOGGING_PERCEPTION 1 240 perception
 run_smoke PANEOPS     MOGGING_PANEOPS   1 180 paneops
