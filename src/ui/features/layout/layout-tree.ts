@@ -29,6 +29,11 @@ export interface SplitNode {
 }
 export type LayoutTreeNode = LeafNode | SplitNode
 
+/** Hard width floor for one terminal pane. At the most compact header state this is
+ *  the status dot, agent icon, overflow menu and close button (including their gaps,
+ *  padding and borders). Horizontal layout may scroll, but a leaf never gets narrower. */
+export const MIN_PANE_WIDTH_PX = 132
+
 export interface Rect {
   x: number
   y: number
@@ -51,6 +56,27 @@ export interface ComputedLayout {
   /** Each split node's own rect, by path — the resize drag converts px to fractions
    *  against the split's inner size, so a seam deep in the tree feels 1:1. */
   splits: Map<string, Rect>
+}
+
+/** Recursive width required by a subtree for every leaf to keep `minLeafWidthPx`.
+ *  Horizontal children consume width in series (including their seams); vertical
+ *  children share the same width, so only the widest child requirement matters. */
+export function minimumLayoutWidth(
+  root: LayoutTreeNode,
+  gutterPx: number,
+  minLeafWidthPx = MIN_PANE_WIDTH_PX
+): number {
+  const gutter = Math.max(0, Math.round(gutterPx))
+  const leafWidth = Math.max(0, Math.round(minLeafWidthPx))
+  const visit = (node: LayoutTreeNode): number => {
+    if (!isSplit(node)) return leafWidth
+    const childWidths = node.children.map(visit)
+    if (node.dir === 'h') {
+      return childWidths.reduce((sum, width) => sum + width, 0) + gutter * Math.max(0, childWidths.length - 1)
+    }
+    return childWidths.reduce((widest, width) => Math.max(widest, width), 0)
+  }
+  return visit(root)
 }
 
 export function isSplit(n: LayoutTreeNode): n is SplitNode {
@@ -248,11 +274,135 @@ export function moveLeafToRootEdge(root: LayoutTreeNode, srcId: number, edge: Dr
   })
 }
 
-/** Compute every leaf/gutter/split rect for a container rect. Pixel-exact: children
- *  are placed at rounded cumulative boundaries so nothing drifts, and the LAST child
- *  absorbs the remainder. */
-export function computeLayout(root: LayoutTreeNode, rect: Rect, gutterPx: number): ComputedLayout {
+interface ExactSpanAllocation {
+  total: number
+  minimums: number[]
+  weights: number[]
+  exact: number[]
+  /** Pixels per active weight unit after the final water-fill clamp set settles. */
+  scale: number
+}
+
+/** Continuous weighted water-fill. Kept separate from pixel rounding because gutter
+ *  dragging must preserve latent persisted weights while moving the exact seam. */
+function exactSpanAllocation(
+  totalPx: number,
+  sizes: readonly number[],
+  minimums: readonly number[]
+): ExactSpanAllocation {
+  const mins = minimums.map((minimum) => Math.max(0, Math.round(minimum)))
+  const minimumTotal = mins.reduce((sum, minimum) => sum + minimum, 0)
+  const total = Math.max(minimumTotal, Math.round(totalPx))
+  const weights = mins.map((_, i) => {
+    const size = sizes[i]
+    return Number.isFinite(size) && size! > 0 ? size! : 0
+  })
+  if (!(weights.reduce((sum, weight) => sum + weight, 0) > 0)) weights.fill(1)
+
+  const exact = mins.map(() => 0)
+  const active = new Set(mins.map((_, i) => i))
+  let remainingPx = total
+  let remainingWeight = weights.reduce((sum, weight) => sum + weight, 0)
+  let scale = 0
+  while (active.size) {
+    const equalShare = remainingPx / active.size
+    const clamped: number[] = []
+    for (const i of active) {
+      const share = remainingWeight > 0 ? (remainingPx * weights[i]!) / remainingWeight : equalShare
+      if (share + 1e-9 < mins[i]!) clamped.push(i)
+    }
+    if (!clamped.length) {
+      scale = remainingWeight > 0 ? remainingPx / remainingWeight : 0
+      for (const i of active) {
+        exact[i] = scale > 0 ? scale * weights[i]! : equalShare
+      }
+      break
+    }
+    for (const i of clamped) {
+      exact[i] = mins[i]!
+      remainingPx -= mins[i]!
+      remainingWeight -= weights[i]!
+      active.delete(i)
+    }
+  }
+  return { total, minimums: mins, weights, exact, scale }
+}
+
+/** Split a pixel span according to persisted fractions, clamping only children whose
+ *  proportional share would cross their hard minimum. The remaining children divide
+ *  the remaining WHOLE span by their original weights (weighted water-filling), so an
+ *  unconstrained persisted 60/40 split still reopens as 60/40 rather than having a
+ *  minimum added to both sides first. Cumulative rounding keeps the result pixel-exact. */
+export function allocateSpans(
+  totalPx: number,
+  sizes: readonly number[],
+  minimums: readonly number[]
+): number[] {
+  if (!minimums.length) return []
+  const allocation = exactSpanAllocation(totalPx, sizes, minimums)
+
+  const spans: number[] = []
+  let targetEnd = 0
+  let previousCut = 0
+  for (let i = 0; i < allocation.exact.length; i++) {
+    targetEnd += allocation.exact[i]!
+    const cut = i === allocation.exact.length - 1 ? allocation.total : Math.round(targetEnd)
+    spans.push(cut - previousCut)
+    previousCut = cut
+  }
+  return spans
+}
+
+/** Move one gutter without rewriting any nonadjacent child's latent preference.
+ *
+ * The allocator's rendered pixels may differ from stored weights when a sibling is
+ * clamped. Replacing every weight with `renderedSpan / total` preserves only today's
+ * pixels and silently changes how that untouched sibling grows later. Instead, move
+ * the adjacent pair in the continuous water-fill geometry and invert only those two
+ * weights through the settled scale. Integer pointer deltas then move the rendered
+ * seam 1:1, the pair boundary and every sibling stay put, and future reflows retain
+ * every nonadjacent persisted ratio. `index` is the child RIGHT of the seam. */
+export function resizeSplitWeights(
+  totalPx: number,
+  sizes: readonly number[],
+  minimums: readonly number[],
+  index: number,
+  deltaPx: number
+): number[] {
+  const original = sizes.slice()
+  if (!Number.isInteger(index) || index <= 0 || index >= minimums.length || !Number.isFinite(deltaPx)) {
+    return original
+  }
+  const allocation = exactSpanAllocation(totalPx, sizes, minimums)
+  if (!(allocation.scale > 0)) return original
+  const left = allocation.exact[index - 1]!
+  const right = allocation.exact[index]!
+  const pair = left + right
+  const leftMinimum = allocation.minimums[index - 1]!
+  const rightMinimum = allocation.minimums[index]!
+  if (pair < leftMinimum + rightMinimum) return original // no valid pixel solution
+  const desiredLeft = Math.min(Math.max(left + deltaPx, leftMinimum), pair - rightMinimum)
+  if (Math.abs(desiredLeft - left) < 1e-9) return original
+
+  const next = allocation.weights.slice()
+  next[index - 1] = desiredLeft / allocation.scale
+  next[index] = (pair - desiredLeft) / allocation.scale
+  const weightTotal = next.reduce((sum, weight) => sum + weight, 0)
+  return weightTotal > 0 ? next.map((weight) => weight / weightTotal) : original
+}
+
+/** Compute every leaf/gutter/split rect for a container rect. The root canvas expands
+ *  past `rect.w` when needed so recursive leaf-width minima remain hard even when the
+ *  host is narrower. Horizontal splits reserve subtree minima first; fractions govern
+ *  the remaining width. Vertical split heights continue to follow their fractions. */
+export function computeLayout(
+  root: LayoutTreeNode,
+  rect: Rect,
+  gutterPx: number,
+  minLeafWidthPx = MIN_PANE_WIDTH_PX
+): ComputedLayout {
   const out: ComputedLayout = { leaves: new Map(), gutters: [], splits: new Map() }
+  const requiredWidth = minimumLayoutWidth(root, gutterPx, minLeafWidthPx)
   const walk = (n: LayoutTreeNode, r: Rect, path: string): void => {
     if (!isSplit(n)) {
       out.leaves.set(n.id, r)
@@ -262,14 +412,11 @@ export function computeLayout(root: LayoutTreeNode, rect: Rect, gutterPx: number
     const k = n.children.length
     const total = n.dir === 'h' ? r.w : r.h
     const inner = Math.max(0, total - gutterPx * (k - 1))
-    let acc = 0
-    let prevCut = 0
+    const minimums = n.dir === 'h' ? n.children.map((child) => minimumLayoutWidth(child, gutterPx, minLeafWidthPx)) : n.children.map(() => 0)
+    const spans = allocateSpans(inner, n.sizes, minimums)
     let offset = 0
     for (let i = 0; i < k; i++) {
-      acc += n.sizes[i]!
-      const cut = i === k - 1 ? inner : Math.round(inner * acc)
-      const span = Math.max(0, cut - prevCut)
-      prevCut = cut
+      const span = spans[i]!
       const childRect: Rect =
         n.dir === 'h'
           ? { x: r.x + offset, y: r.y, w: span, h: r.h }
@@ -290,7 +437,7 @@ export function computeLayout(root: LayoutTreeNode, rect: Rect, gutterPx: number
       }
     }
   }
-  walk(root, rect, '')
+  walk(root, { ...rect, w: Math.max(rect.w, requiredWidth) }, '')
   return out
 }
 

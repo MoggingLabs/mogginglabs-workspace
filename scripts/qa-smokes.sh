@@ -9,8 +9,8 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 83 gates at the Phase-11 freeze: 4 static (AUDIT · SPACING · PTYSEAM · PROTOVER) + 79
-# app-boot gates. Phase 11 (Files — the explorer) added seven, and they run LAST:
+# 87 gates: 5 static (AUDIT · SPACING · PTYSEAM · PROTOVER · LAYOUT) + 82 app-boot
+# gates. Phase 11 (Files — the explorer) added seven, and they run LAST:
 #   FSLIST          the read service, zero UI (files+dirs, caps, typed refusals)
 #   FILETREE        the virtualized tree (10k rows, APG keyboard, tree ARIA)
 #   EXPLORER        the dock (four doors, re-rooting, per-workspace memory)
@@ -173,6 +173,7 @@ run_static AUDIT   node scripts/check-audit.mjs
 run_static SPACING node scripts/check-spacing.mjs --max 0
 run_static PTYSEAM node scripts/check-pty-seam.mjs
 run_static PROTOVER node scripts/check-protocol-version.mjs
+run_static LAYOUT  node scripts/check-layout-invariants.mjs
 
 run_smoke SMOKE       MOGGING_SMOKE     1 180 smoke
 run_smoke MULTIPANE   MOGGING_MULTIPANE 1 180 multipane

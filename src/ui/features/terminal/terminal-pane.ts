@@ -12,7 +12,15 @@ import {
   type RemoveWorktreeResult
 } from '@contracts'
 import '@xterm/xterm/css/xterm.css'
-import { createModal, icon, providerLogo, showToast, type IconName } from '../../components'
+import {
+  Button,
+  createModal,
+  icon,
+  providerLogo,
+  showToast,
+  type IconName,
+  type ModalHandle
+} from '../../components'
 import { getBridge } from '../../core/ipc/bridge'
 import { terminalClient } from './terminal.client'
 import { onTerminalTheme } from '../../core/theme/theme-port'
@@ -23,13 +31,19 @@ import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-
 import { setPaneState, adoptPaneState, clearPaneState, paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
 import { setPaneCwd, clearPaneCwd, getPaneCwd } from '../../core/layout/pane-cwd'
 import { getPaneRole, onPaneRole, getPaneRemote, getPaneProfile, setPaneProfile } from '../../core/layout/pane-meta'
-import { clearPaneCli, mcpChipForPane, onMcpStatusChange } from '../../core/agents/mcp-status-port'
+import {
+  clearPaneCli,
+  mcpChipForPane,
+  onMcpStatusChange,
+  recordPaneCli,
+  setMcpSnapshot
+} from '../../core/agents/mcp-status-port'
 import { getPaneContext, onPaneContext, type PaneContext } from '../../core/terminal/context-port'
 import { clearPaneAgentSession, getPaneAgentSession, onPaneAgentSession } from '../../core/agents/agent-session-port'
-import { claimsFor, onClaimsChange, workspaceClaims } from './claims-store'
+import { claimsFor, onClaimsChange, setClaimsForDev, workspaceClaims } from './claims-store'
 import { createPaneScrollbar, type PaneScrollbarHandle } from './pane-scrollbar'
 import { onFocusedPane } from '../../core/layout/focus'
-import { onPaneGit, getPaneGit } from '../../core/git/git-port'
+import { onPaneGit, getPaneGit, setPaneGit } from '../../core/git/git-port'
 import { allCommands } from '../../core/commands/command-port'
 import { getTelemetry } from '../../core/telemetry'
 import { BlockTracker } from '../blocks'
@@ -118,10 +132,10 @@ export class TerminalPane {
   private syncState?: (adopted?: boolean) => void
   private dotGateUnsub?: () => void
   private renameFn?: () => void
-  /** The ⋯ menu's outside-click closer. Bound to DOCUMENT, so it must die with the pane
-   *  like every other subscription in this class: undetached, one leaked per pane ever
-   *  created, each closure pinning that dead pane's header + menu DOM for the session. */
-  private menuCloser?: (e: MouseEvent) => void
+  private renameModal?: ModalHandle
+  /** The portaled pane menu owns document/window listeners plus DOM outside the pane.
+   *  One cleanup tears all of it down when the pane id is retired. */
+  private menuCleanup?: () => void
   private blocks?: BlockTracker
   private refitTimer?: ReturnType<typeof setTimeout>
   private expandStateObs?: MutationObserver
@@ -979,9 +993,16 @@ export class TerminalPane {
     const applyAgentChip = (provider: string | null): void => {
       agentChip.replaceChildren()
       agentChip.hidden = !provider
+      agentChip.removeAttribute('role')
+      agentChip.removeAttribute('aria-label')
       if (provider) {
         agentChip.append(providerLogo(provider, 18)) // matches the bar's ~1.65× chip scale
-        agentChip.title = provider.startsWith('custom:') ? provider.slice('custom:'.length) : provider
+        const label = provider.startsWith('custom:') ? provider.slice('custom:'.length) : provider
+        agentChip.title = label
+        // The logo component is deliberately aria-hidden. At the compact floor the
+        // neighbouring title retires, so the surviving identity mark must name itself.
+        agentChip.setAttribute('role', 'img')
+        agentChip.setAttribute('aria-label', `Agent CLI: ${label}`)
       }
     }
     applyAgentChip(getPaneAgentSession(this.id)?.provider ?? null)
@@ -1056,13 +1077,131 @@ export class TerminalPane {
       expandBtns.push(b)
       return b
     }
+    const slotEl = host.closest('.layout-slot') as HTMLElement | null
     const menu = document.createElement('div')
+    menu.id = `pane-menu-${this.id}`
     menu.className = 'menu pane-menu'
+    menu.setAttribute('role', 'menu')
+    menu.setAttribute('aria-label', 'Pane details and actions')
     menu.hidden = true
-    const menuBtn = act('more', 'Pane menu', () => {
-      if (menu.hidden) this.buildMenu(menu)
-      menu.hidden = !menu.hidden
+
+    let menuBtn: HTMLButtonElement
+    let menuFactsObserver: MutationObserver | undefined
+    let menuVisibilityObserver: MutationObserver | undefined
+    let startMenuWatch = (): void => undefined
+    const menuEntries = (): HTMLElement[] =>
+      Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+    const focusEntry = (entry: HTMLElement | undefined): void => {
+      if (!entry) return
+      for (const other of menuEntries()) other.tabIndex = other === entry ? 0 : -1
+      entry.focus()
+    }
+    const closeMenu = (returnFocus = true): void => {
+      if (menu.hidden) return
+      menu.hidden = true
+      menuBtn.setAttribute('aria-expanded', 'false')
+      menuFactsObserver?.disconnect()
+      menuVisibilityObserver?.disconnect()
+      if (returnFocus && menuBtn.isConnected) menuBtn.focus()
+    }
+    const positionMenu = (): void => {
+      const anchor = menuBtn.getBoundingClientRect()
+      const rect = menu.getBoundingClientRect()
+      const pad = 8
+      const gap = 4
+      const left = Math.max(pad, Math.min(anchor.right - rect.width, window.innerWidth - rect.width - pad))
+      const below = anchor.bottom + gap
+      const above = anchor.top - rect.height - gap
+      const top = below + rect.height <= window.innerHeight - pad ? below : Math.max(pad, above)
+      menu.style.left = `${Math.round(left)}px`
+      menu.style.top = `${Math.round(top)}px`
+    }
+    menuBtn = act(
+      'more',
+      'Pane menu',
+      () => {
+        if (!menu.hidden) return closeMenu(true)
+        this.buildMenu(menu, closeMenu, title.textContent?.trim() ?? '', slotEl?.dataset.expandMode, host)
+        menu.scrollTop = 0
+        menu.hidden = false
+        menuBtn.setAttribute('aria-expanded', 'true')
+        positionMenu()
+        focusEntry(menu.querySelector<HTMLElement>('.menu-item') ?? menuEntries()[0])
+        startMenuWatch()
+      },
+      'pane-act-menu'
+    )
+    menuBtn.setAttribute('aria-haspopup', 'menu')
+    menuBtn.setAttribute('aria-expanded', 'false')
+    menuBtn.setAttribute('aria-controls', menu.id)
+
+    menu.addEventListener('keydown', (e) => {
+      const entries = menuEntries()
+      const at = entries.indexOf(document.activeElement as HTMLElement)
+      const move = (next: number): void => {
+        e.preventDefault()
+        focusEntry(entries[(next + entries.length) % entries.length])
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        closeMenu(true)
+      } else if (e.key === 'Tab') {
+        // Hand normal tab order back to the pane controls. Moving focus to the
+        // opener before hiding the portaled menu lets the browser advance to the
+        // next/previous control instead of restarting at the document root.
+        menuBtn.focus()
+        closeMenu(false)
+      } else if (entries.length && e.key === 'ArrowDown') move(at < 0 ? 0 : at + 1)
+      else if (entries.length && e.key === 'ArrowUp') move(at < 0 ? entries.length - 1 : at - 1)
+      else if (entries.length && e.key === 'Home') move(0)
+      else if (entries.length && e.key === 'End') move(entries.length - 1)
+      else if (entries.length && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const key = e.key.toLocaleLowerCase()
+        const ordered = entries.slice(at + 1).concat(entries.slice(0, at + 1))
+        const hit = ordered.find((entry) => (entry.textContent ?? '').trim().toLocaleLowerCase().startsWith(key))
+        if (hit) {
+          e.preventDefault()
+          focusEntry(hit)
+        }
+      }
     })
+
+    const closeFromOutside = (e: Event): void => {
+      if (menu.hidden || !(e.target instanceof Node) || menu.contains(e.target) || menuBtn.contains(e.target)) return
+      closeMenu(false)
+    }
+    const closeFromViewportChange = (): void => closeMenu(menu.contains(document.activeElement))
+    const closeFromWindowBlur = (): void => closeMenu(false)
+    document.addEventListener('pointerdown', closeFromOutside, true)
+    window.addEventListener('blur', closeFromWindowBlur)
+    window.addEventListener('resize', closeFromViewportChange)
+    const scrollHost = host.closest<HTMLElement>('.layout-scroll-host')
+    scrollHost?.addEventListener('scroll', closeFromViewportChange, { passive: true })
+    const workspaceView = host.closest<HTMLElement>('.workspace-view')
+    if (workspaceView) {
+      const closeWhenWorkspaceHides = (): void => {
+        if (workspaceView.classList.contains('active') && !workspaceView.hidden) return
+        const focused = menu.contains(document.activeElement)
+        const active = document.activeElement
+        closeMenu(false)
+        // The opener belongs to the workspace that just disappeared, so returning
+        // focus there would be worse than dropping it. Explicitly release a focused
+        // portaled entry; the newly active workspace owns the next focus decision.
+        if (focused && active instanceof HTMLElement) active.blur()
+      }
+      menuVisibilityObserver = new MutationObserver(closeWhenWorkspaceHides)
+    }
+    document.body.append(menu)
+    this.menuCleanup = (): void => {
+      document.removeEventListener('pointerdown', closeFromOutside, true)
+      window.removeEventListener('blur', closeFromWindowBlur)
+      window.removeEventListener('resize', closeFromViewportChange)
+      scrollHost?.removeEventListener('scroll', closeFromViewportChange)
+      menuFactsObserver?.disconnect()
+      menuVisibilityObserver?.disconnect()
+      menu.remove()
+    }
     // The expand trio carries `pane-act-expand`: it is the THIRD thing the bar gives up
     // when it runs out of room (after the gauge's "% used" text and the branch chip),
     // and the @container rules in global.css need a hook to retire it. Everything
@@ -1083,20 +1222,14 @@ export class TerminalPane {
             new CustomEvent('mogging:close-pane', { bubbles: true, detail: { paneId: this.id } })
           ),
         'pane-act-close'
-      ),
-      menu
+      )
     )
-    this.menuCloser = (e: MouseEvent): void => {
-      if (!(e.target instanceof Node) || !actions.contains(e.target)) menu.hidden = true
-    }
-    document.addEventListener('click', this.menuCloser)
 
     // Tooltip/aria half of the trio's truth-telling: when the slot's stamped mode
     // matches a button, its label flips to the restore wording and aria-pressed goes
     // true. A MutationObserver on the ONE attribute the grid writes — the same signal
     // the CSS reads — so every path (trio click, ⋯ menu, Ctrl+Shift+Enter, implicit
     // clears on split/close/template) lands here with no extra plumbing.
-    const slotEl = host.closest('.layout-slot') as HTMLElement | null
     const syncExpandLabels = (): void => {
       const active = slotEl?.dataset.expandMode
       for (const b of expandBtns) {
@@ -1113,7 +1246,41 @@ export class TerminalPane {
       syncExpandLabels() // adopt a mode the slot already holds at mount
     }
 
-    header.append(left, git, actions)
+    // The header itself is the size-query container. Its child owns the grid so the
+    // compact query can tighten column gaps; CSS cannot query and restyle a container
+    // element with its own dimensions.
+    const headerGrid = document.createElement('div')
+    headerGrid.className = 'pane-header-grid'
+    headerGrid.append(left, git, actions)
+    header.append(headerGrid)
+    // Menu facts are a snapshot rebuilt on open. If any live header fact changes
+    // underneath an open portal (state, title, agent, context, MCP, claims or git),
+    // close it so it can never continue presenting stale status. The menu button's
+    // own aria-expanded mutation is merely open/close bookkeeping and is ignored.
+    menuFactsObserver = new MutationObserver((records) => {
+      const bookkeepingOnly = records.every(
+        (record) =>
+          record.type === 'attributes' && record.target === menuBtn && record.attributeName === 'aria-expanded'
+      )
+      if (!bookkeepingOnly) closeMenu(false)
+    })
+    // These observers are useful only while the snapshot is visible. Keeping one
+    // subtree observer hot per pane made normal 16-pane status traffic pay menu costs
+    // even though every menu was closed (and showed up as a long frame in MILESTONE).
+    startMenuWatch = (): void => {
+      menuFactsObserver?.observe(headerGrid, {
+        attributes: true,
+        childList: true,
+        characterData: true,
+        subtree: true
+      })
+      if (workspaceView) {
+        menuVisibilityObserver?.observe(workspaceView, {
+          attributes: true,
+          attributeFilter: ['class', 'hidden']
+        })
+      }
+    }
 
     const body = document.createElement('div')
     body.className = 'pane-body'
@@ -1146,30 +1313,58 @@ export class TerminalPane {
       applyTitle()
     })
 
-    // Rename (double-click or menu): runtime metadata on the pane-meta port.
+    // Rename (double-click or menu): a body-portaled dialog, so a compact pane never
+    // has to fit an editor inside the title track it deliberately retired.
     const rename = (): void => {
-      if (title.querySelector('input')) return
+      if (this.renameModal?.isOpen()) {
+        const existing = this.renameModal.el.querySelector<HTMLInputElement>('.pane-title-input')
+        existing?.focus()
+        existing?.select()
+        return
+      }
       const input = document.createElement('input')
-      input.className = 'pane-title-input'
+      input.className = 'input pane-title-input'
       input.value = getPaneLabel(this.id) ?? ''
       input.setAttribute('aria-label', 'Pane name')
-      title.replaceChildren(input)
-      input.focus()
-      input.select()
-      const commit = (save: boolean): void => {
-        const next = save ? input.value.trim() : (getPaneLabel(this.id) ?? '')
-        input.remove()
-        setPaneLabel(this.id, next)
+
+      const field = document.createElement('label')
+      field.className = 'pane-rename-field'
+      const fieldLabel = document.createElement('span')
+      fieldLabel.textContent = 'Pane name'
+      field.append(fieldLabel, input)
+
+      const modal: ModalHandle = createModal({
+        title: 'Rename pane',
+        width: 380,
+        body: field,
+        onClose: () => {
+          if (this.renameModal === modal) this.renameModal = undefined
+        }
+      })
+      this.renameModal = modal
+      const commit = (): void => {
+        setPaneLabel(this.id, input.value.trim())
         oscTitle = '' // a manual name takes over from the agent's task title
         applyTitle()
-        if (save) getTelemetry().captureEvent({ name: 'pane.renamed' }) // never the text
+        getTelemetry().captureEvent({ name: 'pane.renamed' }) // never the text
+        modal.close()
       }
+      const footer = document.createElement('div')
+      footer.className = 'pane-rename-actions'
+      footer.append(
+        Button({ label: 'Cancel', variant: 'ghost', onClick: () => modal.close() }),
+        Button({ label: 'Save', variant: 'primary', onClick: commit })
+      )
+      modal.setFooter(footer)
       input.addEventListener('keydown', (e) => {
         e.stopPropagation()
-        if (e.key === 'Enter') commit(true)
-        if (e.key === 'Escape') commit(false)
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          commit()
+        }
       })
-      input.addEventListener('blur', () => commit(true))
+      modal.open()
+      input.select()
     }
     title.addEventListener('dblclick', rename)
     this.renameFn = rename
@@ -1285,55 +1480,123 @@ export class TerminalPane {
 
   /** The ⋯ pane menu: rename, clear, copy cwd, plus a launch entry per installed
    *  agent (published on the command port by the agents feature — no cross-import). */
-  private buildMenu(menu: HTMLElement): void {
-    menu.innerHTML = ''
+  private buildMenu(
+    menu: HTMLElement,
+    closeMenu: (returnFocus?: boolean) => void,
+    displayTitle: string,
+    activeMode: string | undefined,
+    eventHost: HTMLElement
+  ): void {
+    menu.replaceChildren()
     const item = (name: IconName, label: string, run: () => void): HTMLButtonElement => {
       const b = document.createElement('button')
       b.className = 'menu-item'
       b.type = 'button'
+      b.role = 'menuitem'
+      b.tabIndex = -1
       b.append(icon(name, 14), document.createTextNode(label))
       b.addEventListener('click', (e) => {
         e.stopPropagation()
-        menu.hidden = true
+        closeMenu(true)
         run()
       })
       return b
     }
+    const note = (text: string): HTMLDivElement => {
+      const el = document.createElement('div')
+      el.className = 'menu-note'
+      el.role = 'menuitem'
+      el.tabIndex = -1
+      el.setAttribute('aria-disabled', 'true')
+      el.textContent = text
+      return el
+    }
+    const separator = (): HTMLDivElement => {
+      const el = document.createElement('div')
+      el.className = 'menu-sep'
+      el.role = 'separator'
+      return el
+    }
     // ── What the BAR gives up when it narrows, the menu always keeps ──────────────
-    // The header is a summary; this menu is the truth. Its first section mirrors, in the
-    // same order, exactly what the @container rules retire: the branch chip, then the
-    // expand trio. They are listed here UNCONDITIONALLY — not "when hidden" — because a
-    // menu whose contents depend on the pane's width is a menu you cannot learn. The bar
-    // and the menu are then always consistent, with no measurement and no sync.
+    // The header is a summary; this first section is the complete textual truth. It is
+    // unconditional rather than width-dependent, so the menu stays learnable and the
+    // compact four-anchor bar never makes identity or status undiscoverable.
+    const info: HTMLElement[] = [note(`Pane: ${displayTitle || `Terminal ${this.id % 100 || this.id}`}`)]
+    const session = getPaneAgentSession(this.id)
+    if (session) {
+      const provider = session.provider.startsWith('custom:')
+        ? session.provider.slice('custom:'.length)
+        : session.provider
+      info.push(note(`Agent CLI: ${provider}`))
+    }
+    // State is rendered from multiple lifecycle sources, including the terminal
+    // process's terminal gray `exited` state after its agent session has cleared.
+    // Read the visible dot itself so menu and bar cannot disagree on that last case.
+    const renderedStatus = this.stateDot && !this.stateDot.hidden ? this.stateDot.title.trim() : ''
+    if (renderedStatus) info.push(note(`Status: ${renderedStatus}`))
+    const remote = getPaneRemote(this.id)
+    if (remote) {
+      info.push(note(`Remote: ${remote.name} — local repo tools (git, worktrees, review) are off`))
+    }
+    const profileName = getPaneProfile(this.id)
+    if (profileName) info.push(note(`Profile: ${profileName}`))
+    const roleName = getPaneRole(this.id)
+    if (roleName) info.push(note(`Role: ${roleName}`))
+    const ownClaims = claimsFor(this.id).length
+    if (ownClaims) info.push(note(`Claims: ${ownClaims} file pattern${ownClaims === 1 ? '' : 's'}`))
+
+    const mcp = mcpChipForPane(this.id)
+    if (mcp && (mcp.connected > 0 || mcp.attention || mcp.restartNew > 0)) {
+      const facts: string[] = []
+      if (mcp.connected > 0) facts.push(`${mcp.connected} tool${mcp.connected === 1 ? '' : 's'} connected`)
+      if (mcp.attention) facts.push('a tool needs re-authorization (Settings › MCP servers)')
+      if (mcp.restartNew > 0) {
+        facts.push(`restart to pick up ${mcp.restartNew} new tool${mcp.restartNew === 1 ? '' : 's'}`)
+      }
+      info.push(note(`MCP: ${facts.join(' · ')}`))
+    }
+
+    const ctxUsage = getPaneContext(this.id)
+    if (ctxUsage === 'pending') {
+      info.push(note('Agent context: waiting for the session’s first response'))
+    } else if (ctxUsage) {
+      const k = (n: number): string => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
+      info.push(
+        note(
+          `Agent context: ${ctxUsage.approx ? '~' : ''}${ctxUsage.usedPct}% used ` +
+            `(~${k(ctxUsage.usedTokens)} of ${k(ctxUsage.windowTokens)} tokens)`
+        )
+      )
+    }
+
     const status = getPaneGit(this.id)
     if (status) {
       const ab = (status.ahead ? `↑${status.ahead}` : '') + (status.behind ? `↓${status.behind}` : '')
-      const note = document.createElement('div')
-      note.className = 'menu-note'
-      note.textContent =
-        `${status.detached ? 'Detached at' : 'Branch:'} ${status.branch}${ab ? ' ' + ab : ''}` +
-        `${status.dirty ? ' — uncommitted changes' : ''}`
-      menu.append(note)
+      info.push(
+        note(
+          `${status.detached ? 'Detached at' : 'Branch:'} ${status.branch}${ab ? ' ' + ab : ''}` +
+            `${status.dirty ? ' — uncommitted changes' : ''}`
+        )
+      )
     }
+    menu.append(...info, separator())
+
     const expandFromMenu = (mode: 'full' | 'col' | 'row'): void => {
-      // Same event the trio's buttons raise; it bubbles out of the menu to the pane host.
-      menu.dispatchEvent(
+      // The menu is portaled to body, so pane-scoped events originate at the pane host.
+      eventHost.dispatchEvent(
         new CustomEvent('mogging:expand-pane', { bubbles: true, detail: { paneId: this.id, mode } })
       )
     }
     // Split (new terminal beside/below this one): routed through the workspace
     // controller — the new pane's cwd must be seeded before its slot exists.
     const splitFromMenu = (dir: 'h' | 'v'): void => {
-      menu.dispatchEvent(
+      eventHost.dispatchEvent(
         new CustomEvent('mogging:split-pane', { bubbles: true, detail: { paneId: this.id, dir } })
       )
     }
-    const sepLayout = document.createElement('div')
-    sepLayout.className = 'menu-sep'
     // The menu mirrors the trio's truth-telling. It is REBUILT on every open, so the
     // slot's stamp read here is always current: the active mode's entry shows the
     // contract glyph + restore wording, the other two keep offering their switch.
-    const activeMode = (menu.closest('.layout-slot') as HTMLElement | null)?.dataset.expandMode
     const expandItem = (
       mode: 'full' | 'col' | 'row',
       name: IconName,
@@ -1349,7 +1612,7 @@ export class TerminalPane {
       expandItem('col', 'expand-v', 'contract-v', 'Expand to full height'),
       item('plus', 'Split right — new terminal', () => splitFromMenu('h')),
       item('plus', 'Split down — new terminal', () => splitFromMenu('v')),
-      sepLayout,
+      separator(),
       item('pencil', 'Rename', () => this.renameFn?.()),
       item('trash', 'Clear terminal', () => this.term.clear()),
       item('folder', 'Copy working directory', () => {
@@ -1357,56 +1620,6 @@ export class TerminalPane {
         if (cwd) void copyText(cwd, 'terminal')
       })
     )
-    // Role + MCP status: the ladder retires their chips on narrow panes, and this
-    // menu is where retired things live on — they were the two entries MISSING from
-    // the mirror (an "mcp !" needing re-auth was unfindable below 590px). Same
-    // presence rules as their chips, stated as notes.
-    const roleName = getPaneRole(this.id)
-    if (roleName) {
-      const note = document.createElement('div')
-      note.className = 'menu-note'
-      note.textContent = `Role: ${roleName}`
-      menu.append(note)
-    }
-    const mcp = mcpChipForPane(this.id)
-    if (mcp && (mcp.connected > 0 || mcp.attention || mcp.restartNew > 0)) {
-      const note = document.createElement('div')
-      note.className = 'menu-note'
-      note.textContent =
-        mcp.restartNew > 0
-          ? `MCP: restart to pick up ${mcp.restartNew} new tool${mcp.restartNew === 1 ? '' : 's'}`
-          : mcp.attention
-            ? 'MCP: a tool needs re-authorization (Settings › MCP servers)'
-            : `MCP: ${mcp.connected} tool${mcp.connected === 1 ? '' : 's'} connected`
-      menu.append(note)
-    }
-    // Remote pane (4/05): local repo tools are OFF — say so instead of lying.
-    if (getPaneRemote(this.id)) {
-      const note = document.createElement('div')
-      note.className = 'menu-note'
-      note.textContent = 'Remote pane — local repo tools (git, worktrees, review) are off.'
-      menu.append(note)
-    }
-    // Launch profile (6/04): read-only truth about WHICH account pointer set this
-    // pane launched under. Name only — env values never reach the renderer.
-    const profileName = getPaneProfile(this.id)
-    if (profileName) {
-      const note = document.createElement('div')
-      note.className = 'menu-note'
-      note.textContent = `Profile: ${profileName}`
-      menu.append(note)
-    }
-    // Context gauge mirror: on a crowded or narrow pane the gauge compresses to its
-    // disc and the "% used" text retires — the menu states the numbers plainly (the
-    // bar is a summary; this menu is the truth). Counts only, same as the wire.
-    const ctxUsage = getPaneContext(this.id)
-    if (ctxUsage && ctxUsage !== 'pending') {
-      const k = (n: number): string => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
-      const note = document.createElement('div')
-      note.className = 'menu-note'
-      note.textContent = `Agent context: ${ctxUsage.approx ? '~' : ''}${ctxUsage.usedPct}% used (~${k(ctxUsage.usedTokens)} of ${k(ctxUsage.windowTokens)} tokens)`
-      menu.append(note)
-    }
     // Worktree-isolated pane (3/03): guarded removal. Dirty worktrees are refused with
     // an explicit force step — an agent's uncommitted work is never silently destroyed.
     const cwd = getPaneCwd(this.id) ?? ''
@@ -1432,10 +1645,8 @@ export class TerminalPane {
           }
         )
       }
-      const sep2 = document.createElement('div')
-      sep2.className = 'menu-sep'
       menu.append(
-        sep2,
+        separator(),
         // Pre-ship review (3/04): the review feature owns the modal; this dispatches.
         item('git-branch', 'Review changes…', () => {
           document.dispatchEvent(
@@ -1475,9 +1686,7 @@ export class TerminalPane {
     )
     const agents = allCommands().filter((c) => c.hint === 'Agent')
     if (agents.length) {
-      const sep = document.createElement('div')
-      sep.className = 'menu-sep'
-      menu.append(sep)
+      menu.append(separator())
       for (const cmd of agents) {
         menu.append(
           item('terminal', cmd.title.replace(' in focused pane', ' here'), () => {
@@ -1538,6 +1747,31 @@ export class TerminalPane {
           if (pctEl) pctEl.textContent = '62% used'
         }
       },
+      // Unlike lightChips (a pure geometry fixture), this seeds the backing ports
+      // buildMenu reads. CHROMEUX uses it to prove every retired fact survives in ⋯.
+      seedMenuFacts: (): void => {
+        const now = Date.now()
+        setClaimsForDev([
+          { id: 1, paneId: String(this.id), role: 'reviewer', pattern: 'src/**', ts: now },
+          { id: 2, paneId: String(this.id), role: 'reviewer', pattern: 'tests/**', ts: now + 1 }
+        ])
+        setMcpSnapshot({
+          statuses: [
+            { serverId: 'fixture-one', cli: 'claude-code', state: 'connected', checkedAt: now },
+            { serverId: 'fixture-two', cli: 'claude-code', state: 'connected', checkedAt: now }
+          ],
+          at: now
+        })
+        recordPaneCli(this.id, 'claude-code')
+        setPaneGit(this.id, {
+          root: 'C:\\fixture',
+          branch: 'feat/menu-facts',
+          detached: false,
+          ahead: 2,
+          behind: 1,
+          dirty: true
+        })
+      },
       term: this.term,
       write: (data: string) => terminalClient.write({ id: this.id, data }),
       text: (): string => {
@@ -1594,7 +1828,9 @@ export class TerminalPane {
     forgetPane(this.id) // live/reattached marks die with the pane, not with the id
     if (this.selectionCopyTimer) clearTimeout(this.selectionCopyTimer) // a pane closed mid-drag must not copy after death
     this.dropAbort.abort() // drop the window-scoped drag listeners
-    if (this.menuCloser) document.removeEventListener('click', this.menuCloser) // …and the document-scoped one
+    this.menuCleanup?.() // document/window listeners + the body-portaled menu
+    this.renameModal?.close()
+    this.renameModal = undefined
     this.blocks?.dispose()
     this.themeUnsub?.()
     this.fontUnsub?.()

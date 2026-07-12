@@ -76,6 +76,12 @@ export function createPaneScrollbar(term: Terminal, body: HTMLElement): PaneScro
 
   const sync = (): void => {
     raf = 0
+    // xterm 6 buffers terminal row paints while DEC synchronized output mode
+    // (CSI ? 2026 h) is active, but buffer/viewport scroll events still escape
+    // immediately. Do not let our app-owned slider reveal that intermediate
+    // geometry. ESU always requests a terminal refresh, whose onRender schedules
+    // one final sync against the completed frame.
+    if (term.modes.synchronizedOutputMode) return
     const buf = term.buffer.active
     const max = buf.baseY
     if (max <= 0) {
