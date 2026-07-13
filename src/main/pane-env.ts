@@ -22,8 +22,15 @@
 // into each pane it spawns (pty-daemon/index.ts + session.ts), which is the only place they
 // are ever true.
 
-/** Pane identity the app must never inherit, and must never pass on as its own. */
-export const INHERITED_PANE_ENV = ['MOGGING_PANE_ID', 'MOGGING_DAEMON_ENDPOINT', 'MOGGING_BROWSER_ENDPOINT'] as const
+/** Pane identity/capabilities the app must never inherit or pass on as its own.
+ * The token proves pane identity; leaving it behind lets a nested app present
+ * the parent pane's credential alongside a different public pane id. */
+export const INHERITED_PANE_ENV = [
+  'MOGGING_PANE_ID',
+  'MOGGING_PANE_TOKEN',
+  'MOGGING_DAEMON_ENDPOINT',
+  'MOGGING_BROWSER_ENDPOINT'
+] as const
 
 /**
  * Delete the inherited pane identity from `env`. Returns the names that were actually present

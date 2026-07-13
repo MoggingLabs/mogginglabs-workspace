@@ -39,6 +39,7 @@ function checkPaneEnvIsolation(): { pass: boolean; detail: Record<string, unknow
   // MOGGING_USERDATA are OURS — the app's own launch flags — and must survive.
   const fake: Record<string, string | undefined> = {
     MOGGING_PANE_ID: '3',
+    MOGGING_PANE_TOKEN: 'parent-pane-secret',
     MOGGING_DAEMON_ENDPOINT: 'C:/host/endpoint.json',
     MOGGING_BROWSER_ENDPOINT: 'C:/host/browser.json',
     MOGGING_GATE: '1',
@@ -47,7 +48,7 @@ function checkPaneEnvIsolation(): { pass: boolean; detail: Record<string, unknow
   }
   const dropped = scrubInheritedPaneEnv(fake)
   const pureOk =
-    dropped.length === 3 &&
+    dropped.length === INHERITED_PANE_ENV.length &&
     INHERITED_PANE_ENV.every((n) => fake[n] === undefined) &&
     fake.MOGGING_GATE === '1' &&
     fake.MOGGING_USERDATA === 'C:/iso/userdata' &&

@@ -38,6 +38,7 @@ let settings: AgentSettingsService | null = null
 let offlineMode = false
 let isolatedSettingsHome: string | undefined
 let catalogTimer: ReturnType<typeof setInterval> | undefined
+let startupCatalogTimer: ReturnType<typeof setTimeout> | undefined
 let settingsWindow: (() => BrowserWindow | null) | undefined
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -358,30 +359,30 @@ export async function registerAgentSettings(getWin: () => BrowserWindow | null, 
       : { ok: false, refreshed, reason: 'One or more providers kept their last-known-good catalog.' }
   })
 
-  const installed: Partial<Record<AgentConfigProviderId, string>> = {}
-  await Promise.all(AGENT_CLI_REGISTRY.map(async ({ id }) => {
-    const version = (await providerInstallation(id)).version
-    if (version) installed[id] = version
-  }))
-  await catalogs.initialize(installed, false)
+  // The bundled catalog is already in memory; load the LKG cache and reconcile
+  // enforced values now, but keep five executable/version probes off the first
+  // interaction path. Launch reconciliation remains independently fail-closed.
+  await catalogs.initialize({}, false)
   const reconciled = await settings.reconcileAll()
   if (!reconciled.ok) console.warn(`[agent-settings] startup reconciliation incomplete: ${reconciled.reason}`)
   if (!offlineMode) {
-    void catalogs.refreshDue(installed).then(async () => {
+    const refreshInstalledCatalogs = async (forceDetection: boolean): Promise<void> => {
+      const versions: Partial<Record<AgentConfigProviderId, string>> = {}
+      await Promise.all(AGENT_CLI_REGISTRY.map(async ({ id }) => {
+        const version = (await providerInstallation(id, forceDetection)).version
+        if (version) versions[id] = version
+      }))
+      await catalogs?.refreshDue(versions)
       await settings?.reconcileAll()
       for (const { id } of AGENT_CLI_REGISTRY) emitChanged(getWin, id)
-    }).catch(() => console.warn('[agent-settings] background catalog refresh failed'))
+    }
+    startupCatalogTimer = setTimeout(() => {
+      startupCatalogTimer = undefined
+      void refreshInstalledCatalogs(false).catch(() => console.warn('[agent-settings] background catalog refresh failed'))
+    }, 10_000)
+    startupCatalogTimer.unref?.()
     catalogTimer = setInterval(() => {
-      void (async () => {
-        const versions: Partial<Record<AgentConfigProviderId, string>> = {}
-        await Promise.all(AGENT_CLI_REGISTRY.map(async ({ id }) => {
-          const version = (await providerInstallation(id, true)).version
-          if (version) versions[id] = version
-        }))
-        await catalogs?.refreshDue(versions)
-        await settings?.reconcileAll()
-        for (const { id } of AGENT_CLI_REGISTRY) emitChanged(getWin, id)
-      })().catch(() => console.warn('[agent-settings] periodic catalog refresh failed'))
+      void refreshInstalledCatalogs(true).catch(() => console.warn('[agent-settings] periodic catalog refresh failed'))
     }, 60 * 60 * 1_000)
     catalogTimer.unref?.()
   }
@@ -397,6 +398,8 @@ export function disposeAgentSettings(): void {
     AgentConfigChannels.refresh
   ]) ipcMain.removeHandler(channel)
   versionCache.clear()
+  if (startupCatalogTimer) clearTimeout(startupCatalogTimer)
+  startupCatalogTimer = undefined
   if (catalogTimer) clearInterval(catalogTimer)
   catalogTimer = undefined
   settingsWindow = undefined
