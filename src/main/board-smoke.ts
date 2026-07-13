@@ -4,7 +4,7 @@ import { execFile, execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { settleToShell, sh } from './smoke-shell'
+import { capturePaneTokenForSmoke, settleToShell, sh } from './smoke-shell'
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim()
@@ -175,7 +175,20 @@ export function runBoardSmoke(win: BrowserWindow): void {
       // — a reviewer named that way would produce an approval the app correctly ignores.
       await ES(`window.__mogging.workspace.setRole(${paneId}, 'reviewer')`)
       await sleep(400) // the role reaches main (the trusted IPC) and the daemon
-      const approveExit = (await cli(['approve', branch], { MOGGING_PANE_ID: String(paneId) })).code
+      const settled = await settleToShell({ es: ES, sleep, paneId })
+      const paneToken = await capturePaneTokenForSmoke({
+        write: async (command) => {
+          const sent = await cli(['send', String(paneId), command])
+          if (sent.code !== 0) throw new Error(`could not probe pane ${paneId}`)
+        },
+        sleep
+      })
+      const approveExit = (
+        await cli(['approve', branch], {
+          MOGGING_PANE_ID: String(paneId),
+          MOGGING_PANE_TOKEN: paneToken
+        })
+      ).code
       let approvedChipOk = false
       for (let i = 0; i < 20 && !approvedChipOk; i++) {
         await sleep(500)
@@ -189,7 +202,6 @@ export function runBoardSmoke(win: BrowserWindow): void {
       // removal fails with a permission error that looks like anything but what it is. Get the
       // shell back and PROVE it before typing at it (settleToShell) — the sequence the product
       // requires of a person, which the gate used to sleep through.
-      const settled = await settleToShell({ es: ES, sleep, paneId })
       await ES(`window.bridge.send('terminal:write', { id: ${paneId}, data: ${JSON.stringify(sh.cd(anchor) + '\r')} })`)
       await sleep(1500)
       const removed = await ES(

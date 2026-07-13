@@ -212,6 +212,25 @@
     "verb": "board.list"
   },
   {
+    "name": "report_working_directory",
+    "title": "Report working directory",
+    "description": "Declare this pane's primary working directory to MoggingLabs. Call this at session start and immediately whenever you switch the primary checkout or worktree. Pass an absolute path; do not report transient subprocess directories. This tool is self-scoped to your pane and never needs a workspace write grant.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Absolute path of the primary directory or worktree where this agent is working."
+        }
+      },
+      "required": ["path"]
+    },
+    "family": "control",
+    "access": "self",
+    "upstream": "daemon",
+    "verb": "cwd-report"
+  },
+  {
     "name": "send_to_pane",
     "title": "Send to pane",
     "description": "Type text into another pane's terminal and press Enter (set noEnter to skip the Enter). Identical to `mogging send`.",

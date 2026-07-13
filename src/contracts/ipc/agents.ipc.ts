@@ -53,6 +53,8 @@ export interface AgentCommandRequest {
   /** Materialize this workspace's tool plan into the launch (Phase-8/09) —
    *  the pane's CLI gets only the planned servers. */
   workspaceId?: string
+  /** The command is typed into the POSIX shell on the far side of SSH. */
+  remote?: boolean
 }
 
 /** A failed source-of-truth reconciliation must be visible, never a silent null launch. */

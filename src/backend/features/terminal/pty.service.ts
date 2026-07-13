@@ -1,5 +1,6 @@
 import { homedir } from 'node:os'
 import { statSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import type {
   AgentDetectedEvent,
   AgentState,
@@ -14,10 +15,23 @@ import type {
   WriteCommand
 } from '@contracts'
 import { spawnPty, ptyEmulation, type IPty } from '../../platform/pty-host'
-import { defaultShell, shellArgs, shellIntegrationEnv } from '../../platform/shell'
+import { defaultShell, paneShellLaunch } from '../../platform/shell'
 import { killPtyTree } from '../../platform/process-tree'
 import { getTelemetry } from '../../core/telemetry'
-import { ActivityTracker, AgentProcessDetector, OscParser, fileUriToPath, isTerminalReply } from '../agent-state'
+import {
+  ActivityTracker,
+  AgentProcessDetector,
+  GitContextObserver,
+  OscParser,
+  PaneCwdState,
+  countSubmittedLines,
+  fileUriToPath,
+  isTerminalReply,
+  normalizePaneCwd,
+  type DetectedAgentProc,
+  type DetectedProcessContext,
+  type PaneCwdSnapshot
+} from '../agent-state'
 import { aiderLogPath } from '../context'
 
 /** Retained per-pane output for reattach repaint — same cap as the daemon's ring. */
@@ -77,24 +91,61 @@ export class PtyService {
    *  re-requests every pane): parity with the daemon path, whose reattach repaints from
    *  ITS ring — without this an in-proc reload left every pane blank over a live shell. */
   private readonly buffers = new Map<number, string>()
-  /** Last cwd each pane reported (OSC 7 / 9;9) — the fallback the agent detector needs on
-   *  Windows, where a process's own cwd is not readable. */
-  private readonly cwds = new Map<number, string>()
+  /** Source-aware cwd state for each pane. Shell reports are the conservative fallback when a
+   * foreground process cannot be inspected (permissions or platform policy). */
+  private readonly cwdStates = new Map<number, PaneCwdState>()
+  private readonly gitContexts = new Map<number, GitContextObserver>()
+  private readonly generations = new Map<number, string>()
+  private nextGeneration = 1
   /** Typed-launch detection (the in-proc twin of the daemon's — one detector, all panes). */
-  private readonly agentProcs = new AgentProcessDetector((paneId, det) =>
-    this.sink.agent({
-      id: Number(paneId),
-      agentId: det?.agentId ?? null,
-      cwd: det ? (det.cwd ?? this.cwds.get(Number(paneId)) ?? this.spawnCwds.get(Number(paneId))) : undefined,
-      sinceMs: det?.sinceMs
-    })
+  private readonly agentProcs = new AgentProcessDetector(
+    (paneId, det) => this.applyAgentProc(Number(paneId), det),
+    Date.now,
+    {},
+    (paneId, context) => this.applyProcessContext(Number(paneId), context)
   )
-  /** Where each pane's shell STARTED — the last-resort cwd for a detected agent. */
-  private readonly spawnCwds = new Map<number, string>()
-
   constructor(private readonly sink: TerminalSink) {}
 
+  private publishCwd(id: number, changed?: PaneCwdSnapshot | null): void {
+    const generation = this.generations.get(id)
+    if (!changed || !generation) return
+    this.sink.cwd({
+      id,
+      cwd: changed.cwd,
+      generation,
+      revision: changed.revision,
+      source: changed.source,
+      locality: changed.locality
+    })
+  }
+
+  private applyAgentProc(id: number, det: DetectedAgentProc | null): void {
+    const state = this.cwdStates.get(id)
+    if (!state) return
+    const detectedCwd = det?.cwd
+      ? normalizePaneCwd(det.cwd, { mustExist: false }) ?? undefined
+      : undefined
+    this.sink.agent({
+      id,
+      agentId: det?.agentId ?? null,
+      cwd: det ? (detectedCwd ?? state.passiveCwd()) : undefined,
+      sinceMs: det?.sinceMs
+    })
+  }
+
+  private applyProcessContext(id: number, context: DetectedProcessContext | null): void {
+    const state = this.cwdStates.get(id)
+    if (!state) return
+    const cwd = context?.cwd ? normalizePaneCwd(context.cwd, { mustExist: false }) ?? undefined : undefined
+    this.publishCwd(id, state.acceptDetected(context ? { pid: context.pid, cwd } : null))
+  }
+
   spawn(req: SpawnRequest): SpawnResult {
+    // Remote intent must never degrade into a local shell. The in-process backend has
+    // no SSH implementation; only the detached daemon may accept remote spawn requests.
+    if (req.remoteHostId || req.remoteCwd !== undefined) {
+      throw new Error('Remote panes require the detached daemon backend')
+    }
     if (this.ptys.has(req.id)) {
       // Reattach: repaint before the reply resolves — the same wire order as the daemon
       // (scrollback data precedes `spawned`), which the renderer already handles.
@@ -102,6 +153,7 @@ export class PtyService {
       // by definition continuously alive (a renderer reload), never a cold-start restore.
       const buf = this.buffers.get(req.id)
       if (buf) this.sink.data({ id: req.id, data: buf })
+      this.publishCwd(req.id, this.cwdStates.get(req.id)?.current())
       return { existing: true, restored: false, pty: ptyEmulation() }
     }
 
@@ -118,7 +170,15 @@ export class PtyService {
       // that describes THIS process, so the descriptor can never disagree with the pty.
       const shell = defaultShell()
       const spawnCwd = pickCwd(req.cwd)
-      const { proc, emulation } = spawnPty(shell, shellArgs(), {
+      const paneToken = randomBytes(16).toString('hex')
+      const generation = `${process.pid}:inproc:${this.nextGeneration++}`
+      const cwdState = new PaneCwdState(spawnCwd, 'local')
+      const inheritedEnv: NodeJS.ProcessEnv = {
+        ...process.env,
+        AIDER_ANALYTICS_LOG: aiderLogPath(req.id)
+      }
+      const shellLaunch = paneShellLaunch(shell, inheritedEnv, `${process.pid}-${req.id}-${generation}`)
+      const { proc, emulation } = spawnPty(shell, shellLaunch.args, {
         name: 'xterm-256color',
         cols,
         rows,
@@ -126,10 +186,22 @@ export class PtyService {
         // Shell integration (cwd reporting): the same env the daemon injects — a cmd.exe pane
         // that never told anyone where it was now does, on every prompt.
         // AIDER_ANALYTICS_LOG: the daemon's twin — aider's only exact source (see providers.ts).
-        env: { ...process.env, ...shellIntegrationEnv(shell), AIDER_ANALYTICS_LOG: aiderLogPath(req.id) } as Record<string, string>
+        env: {
+          ...inheritedEnv,
+          ...shellLaunch.env,
+          MOGGING_PANE_ID: String(req.id),
+          MOGGING_PANE_TOKEN: paneToken
+        } as Record<string, string>
       })
       this.sizes.set(req.id, { cols, rows })
-      this.spawnCwds.set(req.id, spawnCwd)
+      this.cwdStates.set(req.id, cwdState)
+      this.generations.set(req.id, generation)
+      if (shellLaunch.gitTraceFile) {
+        this.gitContexts.set(req.id, new GitContextObserver(shellLaunch.gitTraceFile, (raw) => {
+          const cwd = normalizePaneCwd(raw, { mustExist: true })
+          if (cwd) this.publishCwd(req.id, cwdState.acceptWorktree(cwd))
+        }))
+      }
 
       // Pane state = the ActivityTracker's verdict, with the OscParser feeding it
       // explicit signals — the same fusion as the daemon path (parity; see
@@ -143,16 +215,48 @@ export class PtyService {
         (state: AgentState) => (state === 'attention' ? tracker.bell() : tracker.notify(state)),
         (ev) => {
           if (ev.kind === 'bell') tracker.bell()
+          if (ev.kind === 'prompt') {
+            this.gitContexts.get(req.id)?.resetAtPrompt()
+            this.agentProcs.promptSeen(String(req.id), 'osc133')
+            this.publishCwd(req.id, cwdState.acceptPrompt(Date.now(), 'osc133'))
+          }
+          if (ev.kind === 'shell-prompt') {
+            this.gitContexts.get(req.id)?.resetAtPrompt()
+            this.agentProcs.promptSeen(String(req.id), 'mogging')
+            const cwd = ev.payload ? normalizePaneCwd(ev.payload, { mustExist: false }) : null
+            this.publishCwd(
+              req.id,
+              cwd
+                ? cwdState.acceptShell(cwd, true, Date.now(), 'mogging')
+                : cwdState.acceptPrompt(Date.now(), 'mogging')
+            )
+          }
           // OSC 7 / 9;9 report the pane's cwd -> per-pane git (Phase-2/03), and the launch
           // dir of a hand-typed agent. De-duped on value: a cmd.exe prompt emits both forms.
           // 9;9 is also the SHELL's prompt marker — the detector's cheapest signal (it says a
           // foreground command has ENDED). Daemon parity: pty-daemon/session.ts.
           if (ev.kind === 'cwd' && ev.payload) {
-            if (ev.code === 9) this.agentProcs.promptSeen(String(req.id))
-            const cwd = fileUriToPath(ev.payload)
-            if (cwd && cwd !== this.cwds.get(req.id)) {
-              this.cwds.set(req.id, cwd)
-              this.sink.cwd({ id: req.id, cwd })
+            const prompt = ev.code === 9
+            if (prompt) {
+              this.gitContexts.get(req.id)?.resetAtPrompt()
+              this.agentProcs.promptSeen(String(req.id), 'osc9')
+            }
+            const raw = fileUriToPath(ev.payload)
+            const cwd = raw ? normalizePaneCwd(raw, { mustExist: false }) : null
+            if (cwd) {
+              this.publishCwd(
+                req.id,
+                cwdState.acceptShell(cwd, prompt, Date.now(), prompt ? 'osc9' : 'generic')
+              )
+            } else if (prompt) {
+              this.publishCwd(req.id, cwdState.acceptPrompt(Date.now(), 'osc9'))
+            }
+          }
+          if (ev.kind === 'agent-cwd' && ev.payload) {
+            const cwd = normalizePaneCwd(ev.payload, { mustExist: true })
+            if (cwd) {
+              const result = cwdState.acceptReport(cwd, Date.now())
+              this.publishCwd(req.id, result.changed)
             }
           }
         }
@@ -174,6 +278,7 @@ export class PtyService {
         )
         tracker.data() // BEFORE the parse: a verdict in this chunk must land last
         osc.push(data)
+        this.gitContexts.get(req.id)?.drain()
         this.sink.data({ id: req.id, data })
       })
 
@@ -182,12 +287,14 @@ export class PtyService {
         this.trackers.get(req.id)?.dispose()
         this.trackers.delete(req.id)
         this.agentProcs.untrack(String(req.id))
+        this.gitContexts.get(req.id)?.dispose()
+        this.gitContexts.delete(req.id)
         this.sink.exit({ id: req.id, exitCode })
         this.ptys.delete(req.id)
         this.sizes.delete(req.id)
         this.buffers.delete(req.id)
-        this.cwds.delete(req.id)
-        this.spawnCwds.delete(req.id)
+        this.cwdStates.delete(req.id)
+        this.generations.delete(req.id)
       })
 
       this.ptys.set(req.id, proc)
@@ -195,6 +302,7 @@ export class PtyService {
       // (this backend has no restore), so it starts empty and every launch into it is typed —
       // and therefore announces itself. It is never looked at unprompted.
       this.agentProcs.track(String(req.id), proc.pid)
+      this.publishCwd(req.id, cwdState.current())
       return { existing: false, restored: false, pty: emulation }
     } catch (err) {
       // Example telemetry use: spawn failures are exactly what we want reported.
@@ -214,7 +322,11 @@ export class PtyService {
     if (!isTerminalReply(data)) {
       this.trackers.get(id)?.input() // typing answers whatever the pane was blocked on
       // A submitted LINE is the only moment a shell can start something (see the daemon's twin).
-      if (data.includes('\r') || data.includes('\n')) this.agentProcs.commandSubmitted(String(id))
+      const submissions = countSubmittedLines(data)
+      for (let i = 0; i < submissions; i++) {
+        this.agentProcs.commandSubmitted(String(id))
+        this.publishCwd(id, this.cwdStates.get(id)?.acceptCommandStart())
+      }
     }
     this.ptys.get(id)?.write(data)
   }
@@ -250,6 +362,8 @@ export class PtyService {
     this.trackers.get(id)?.dispose()
     this.trackers.delete(id)
     this.agentProcs.untrack(String(id))
+    this.gitContexts.get(id)?.dispose()
+    this.gitContexts.delete(id)
     const proc = this.ptys.get(id)
     if (proc) {
       killPtyTree(proc)
@@ -257,19 +371,21 @@ export class PtyService {
     }
     this.sizes.delete(id)
     this.buffers.delete(id)
-    this.cwds.delete(id)
-    this.spawnCwds.delete(id)
+    this.cwdStates.delete(id)
+    this.generations.delete(id)
   }
 
   disposeAll(): void {
     for (const tracker of this.trackers.values()) tracker.dispose()
     this.trackers.clear()
     this.agentProcs.dispose()
+    for (const observer of this.gitContexts.values()) observer.dispose()
+    this.gitContexts.clear()
     for (const proc of this.ptys.values()) killPtyTree(proc)
     this.ptys.clear()
     this.sizes.clear()
     this.buffers.clear()
-    this.cwds.clear()
-    this.spawnCwds.clear()
+    this.cwdStates.clear()
+    this.generations.clear()
   }
 }

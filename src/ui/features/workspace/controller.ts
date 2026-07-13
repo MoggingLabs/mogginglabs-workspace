@@ -4,8 +4,8 @@ import { getBridge } from '../../core/ipc/bridge'
 import { GridLayout, MAX_PANES, parseTree, leafIds } from '../layout'
 import { confirmDialog, icon, showToast } from '../../components'
 import { setFocusedPane } from '../../core/layout/focus'
-import { setPaneCwd, getPaneCwd } from '../../core/layout/pane-cwd'
-import { setPaneRole, setPaneRemote, clearPaneRemote, setPaneLabel } from '../../core/layout/pane-meta'
+import { setPaneCwd, getPaneCwd, getPaneCwdProjection } from '../../core/layout/pane-cwd'
+import { setPaneRole, setPaneRemote, clearPaneRemote, setPaneLabel, getPaneRemote } from '../../core/layout/pane-meta'
 import { paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
 import { announce } from '../../core/a11y/live-region'
 import { clearPaneLaunch } from '../../core/agents/toolplan-panes'
@@ -41,7 +41,7 @@ export interface CreateOpts {
   paneCwds?: (string | null)[]
   roles?: (string | null)[]
   /** Per-slot remote hosts (Phase-4/05). null = local. Name is display data. */
-  remotes?: ({ hostId: string; name: string } | null)[]
+  remotes?: ({ hostId: string; name: string; cwd?: string } | null)[]
   profileIds?: (string | null)[]
   /** Serialized split-tree layout (shape + sizes). Absent/invalid → the template
    *  grid for `paneCount` — a bad persisted row can never wedge a restore. */
@@ -157,7 +157,7 @@ export class WorkspaceController {
         // The pane's OWN cwd (worktree isolation, 3/03; OSC-7 refined), not the workspace
         // root: "launch in focused pane" and "review focused pane" act on this value, and
         // the root made both escape the pane's worktree.
-        setFocusedPane({ paneId, cwd: getPaneCwd(paneId) || meta.cwd }),
+        setFocusedPane({ paneId, cwd: getPaneCwd(paneId) || getPaneRemote(paneId)?.cwd || meta.cwd }),
       // The restored tree OPENS the grid, rather than being applied over a default one:
       // that default publishes slot 1 synchronously, so a tree with a GAP there (pane 1
       // closed, 2+3 kept) spawned a phantom pane and killed it mid-spawn — orphaning its
@@ -431,7 +431,7 @@ export class WorkspaceController {
     const focusId = view.layout.focusedPaneId() ?? ((view.meta.ordinal * 100 + 1) as PaneId)
     // The pane's OWN cwd (worktree isolation, 3/03), workspace root as the fallback —
     // same contract as the grid's focus callback in `create`.
-    setFocusedPane({ paneId: focusId, cwd: getPaneCwd(focusId) || view.meta.cwd })
+    setFocusedPane({ paneId: focusId, cwd: getPaneCwd(focusId) || getPaneRemote(focusId)?.cwd || view.meta.cwd })
     // Panes owed a green replay: sticky finished flags on the PORT — cleared only
     // by a real click on the pane, so re-entering this workspace keeps replaying
     // the green pulse until each finished pane has actually been acknowledged.
@@ -752,7 +752,10 @@ export class WorkspaceController {
     clearPaneRemote(newId)
     setPaneRole(newId, '')
     setPaneLabel(newId, '') // nor the closed slot's agent label ("Claude Code" on a fresh shell)
-    const cwd = getPaneCwd(target as PaneId) || view.meta.cwd
+    const targetCwd = getPaneCwdProjection(target as PaneId)
+    // A split always creates a LOCAL terminal. A remote path belongs to the far side and
+    // must never be passed to the local spawn; fall back to the workspace root instead.
+    const cwd = targetCwd?.locality === 'local' ? targetCwd.cwd : view.meta.cwd
     if (cwd) setPaneCwd(newId, cwd)
     this.scrubManifestSlot(view.meta, newId - view.meta.ordinal * 100 - 1, cwd)
     if (view.layout.splitPane(target, dir) == null) return
@@ -835,7 +838,13 @@ export class WorkspaceController {
       }
       view.meta.profileIds = ids
     }
-    if (cwd) {
+    if (cwd && view.meta.remotes?.[slot - 1]) {
+      const remote = view.meta.remotes[slot - 1]!
+      if (remote.cwd !== cwd) {
+        remote.cwd = cwd
+        changed = true
+      }
+    } else if (cwd) {
       const cwds = view.meta.paneCwds ?? []
       while (cwds.length < slot) cwds.push(null)
       if (cwds[slot - 1] !== cwd) {
@@ -845,6 +854,36 @@ export class WorkspaceController {
       view.meta.paneCwds = cwds
     }
     return changed
+  }
+
+  /** Project a pane cwd into focus state and, for explicit agent declarations only,
+   *  persist it as that slot's restore/relaunch worktree. Returns whether persistence
+   *  changed; focus refreshes are intentionally independent from manifest writes. */
+  notePaneCwd(paneId: number, cwd: string, persistSlot: boolean): boolean {
+    if (!cwd) return false
+    const view = this.viewForPane(paneId)
+    if (!view) return false
+
+    if (this.activeId === view.meta.id && view.layout.focusedPaneId() === paneId) {
+      setFocusedPane({ paneId: paneId as PaneId, cwd })
+    }
+    if (!persistSlot) return false
+
+    const slot = paneId - view.meta.ordinal * 100
+    if (slot < 1) return false
+    const remote = view.meta.remotes?.[slot - 1]
+    if (remote) {
+      if (remote.cwd === cwd) return false
+      remote.cwd = cwd
+      return true
+    }
+
+    const cwds = view.meta.paneCwds ?? []
+    while (cwds.length < slot) cwds.push(null)
+    if (cwds[slot - 1] === cwd) return false
+    cwds[slot - 1] = cwd
+    view.meta.paneCwds = cwds
+    return true
   }
 
   /** Keyboard pane navigation within the active workspace (Ctrl/Cmd+Alt+arrows). */
@@ -942,7 +981,8 @@ export class WorkspaceController {
       const live = new Set<number>(view.layout.paneIds())
       assignments.forEach((provider, i) => {
         if (provider && provider !== 'shell' && live.has(base + i + 1)) {
-          const cwd = meta.paneCwds?.[i] || meta.cwd
+          const remote = meta.remotes?.[i]
+          const cwd = remote ? (remote.cwd ?? '') : (meta.paneCwds?.[i] || meta.cwd)
           requestAgentLaunch({
             paneId: (base + i + 1) as PaneId,
             provider,

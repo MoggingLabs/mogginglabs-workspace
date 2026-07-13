@@ -10,7 +10,17 @@ import { spawn } from 'node:child_process'
 import { createLineFramer, encodeMessage, DAEMON_PROTOCOL_VERSION, channelFromEnv, runtimeSegment } from '@contracts'
 import type {
   Approval,
-  Claim, ClientMessage, ServerMessage, DaemonEndpoint, SpawnSpec, PaneInfo, AgentState, SpawnResult } from '@contracts'
+  Claim,
+  ClientMessage,
+  ServerMessage,
+  DaemonEndpoint,
+  SpawnSpec,
+  PaneInfo,
+  AgentState,
+  SpawnResult,
+  PaneCwdLocality,
+  PaneCwdSource
+} from '@contracts'
 
 // --- endpoint discovery paths (MUST match src/pty-daemon/lifecycle.ts) ---
 // runtimeSegment(channelFromEnv()): dev and installed releases never share a daemon, even at the
@@ -119,7 +129,14 @@ export interface DaemonEvents {
   onExit?: (id: string, code: number, gen: number) => void
   onState?: (id: string, state: AgentState, gen: number) => void
   /** A pane's OSC-7 cwd (also replayed on (re)attach) — feeds per-pane git (2/03). */
-  onCwd?: (id: string, cwd: string, gen: number) => void
+  onCwd?: (
+    id: string,
+    cwd: string,
+    gen: number,
+    revision: number,
+    source: PaneCwdSource,
+    locality: PaneCwdLocality
+  ) => void
   /** Panes the daemon already had when we connected (reconnect => reattach these). */
   onWelcome?: (panes: PaneInfo[]) => void
   /** Ownership-ledger snapshot — replies AND unsolicited pushes on change (4/02). */
@@ -139,7 +156,10 @@ export class DaemonClient {
   private sock: net.Socket | null = null
   private approvalWaiters: Array<(list: Approval[]) => void> = []
   /** Pane id -> resolvers waiting for that pane's `spawned` reply (`existing` + the pty it got). */
-  private spawnWaiters = new Map<string, Array<(res: SpawnResult) => void>>()
+  private spawnWaiters = new Map<
+    string,
+    Array<{ resolve: (res: SpawnResult) => void; reject: (err: Error) => void }>
+  >()
   constructor(
     private readonly endpoint: DaemonEndpoint,
     private readonly events: DaemonEvents = {}
@@ -195,7 +215,9 @@ export class DaemonClient {
         const waiters = this.spawnWaiters.get(m.id)
         if (waiters) {
           this.spawnWaiters.delete(m.id)
-          for (const done of waiters) done({ existing: m.existing === true, restored: m.restored === true, pty: m.pty })
+          for (const waiter of waiters) {
+            waiter.resolve({ existing: m.existing === true, restored: m.restored === true, pty: m.pty })
+          }
         }
         break
       }
@@ -210,7 +232,7 @@ export class DaemonClient {
         this.events.onState?.(m.id, m.state, m.gen)
         break
       case 'cwd':
-        this.events.onCwd?.(m.id, m.cwd, m.gen)
+        this.events.onCwd?.(m.id, m.cwd, m.gen, m.rev, m.source, m.locality)
         break
       case 'owners':
         this.events.onOwners?.(m.claims)
@@ -227,9 +249,14 @@ export class DaemonClient {
         this.events.onApprovals?.(m.list)
         break
       }
-      case 'error':
-        // surfaced via logs; a well-behaved client rarely hits this
+      case 'error': {
+        const waiters = m.id ? this.spawnWaiters.get(m.id) : undefined
+        if (m.id && waiters) {
+          this.spawnWaiters.delete(m.id)
+          for (const waiter of waiters) waiter.reject(new Error(`daemon rejected pane ${m.id}: ${m.reason}`))
+        }
         break
+      }
     }
   }
 
@@ -253,17 +280,23 @@ export class DaemonClient {
       const timer = setTimeout(() => {
         const at = this.spawnWaiters.get(id)
         if (at) {
-          const i = at.indexOf(done)
+          const i = at.indexOf(waiter)
           if (i >= 0) at.splice(i, 1)
           if (!at.length) this.spawnWaiters.delete(id)
         }
         reject(new Error(`daemon did not answer spawn for pane ${id} within ${timeoutMs}ms`))
       }, timeoutMs)
-      const done = (res: SpawnResult): void => {
-        clearTimeout(timer)
-        resolve(res)
+      const waiter = {
+        resolve: (res: SpawnResult): void => {
+          clearTimeout(timer)
+          resolve(res)
+        },
+        reject: (err: Error): void => {
+          clearTimeout(timer)
+          reject(err)
+        }
       }
-      list.push(done)
+      list.push(waiter)
       this.send({ t: 'spawn', id, spec })
     })
   }
@@ -314,6 +347,21 @@ export class DaemonClient {
   }
   kill(id: string): void {
     this.send({ t: 'kill', id })
+  }
+  /** Graceful daemon restart hook (maintenance/smokes): persistence and endpoint cleanup run. */
+  shutdown(): void {
+    const sock = this.sock
+    if (!sock) return
+    try {
+      // Do not depend on the server process exiting quickly enough to close our side of the
+      // connection. Once the request is in the kernel, closing this socket deterministically
+      // drives the relay's existing onClose -> reconnect loop.
+      sock.write(encodeMessage({ t: 'shutdown' }), () => {
+        if (this.sock === sock) sock.destroy()
+      })
+    } catch {
+      sock.destroy()
+    }
   }
   dispose(): void {
     this.sock?.destroy()

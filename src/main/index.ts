@@ -1,4 +1,4 @@
-import { app, BrowserWindow, type WebContents } from 'electron'
+import { app, BrowserWindow, dialog, type WebContents } from 'electron'
 import { getTelemetry, startBackend } from '@backend'
 import { createMainWindow } from './window'
 import { createElectronContext } from './electron-context'
@@ -95,6 +95,7 @@ import { runAttentionSmoke } from './attention-smoke'
 import { runBlocksSmoke } from './blocks-smoke'
 import { runClipboardSmoke } from './clipboard-smoke'
 import { runGitSmoke } from './git-smoke'
+import { runCwdSmoke } from './cwd-smoke'
 import { runNotifySmoke } from './notify-smoke'
 import { runMilestoneSmoke } from './milestone-smoke'
 import { runFlickerSmoke } from './flicker-smoke'
@@ -116,6 +117,7 @@ import { runProfilesSmoke } from './profiles-smoke'
 import { runRemoteSmoke } from './remote-smoke'
 import { runSwarmMilestoneSmoke } from './swarmmilestone-smoke'
 import { startDaemonBackend } from './daemon-relay'
+import { DaemonMigrationDeferredError } from './daemon-migrate'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { runMigrateSmoke } from './migrate-smoke'
 import { runNotifyHookSmoke } from './notifyhook-smoke'
@@ -124,6 +126,7 @@ import { ControlChannels } from '@contracts'
 import { initAutoUpdate } from './updater'
 import { fatal, installFatalHandlers } from './fatal'
 import { scrubInheritedPaneEnv } from './pane-env'
+import { installCliRuntime } from './cli-runtime'
 import { assertNativeModules } from './native-preflight'
 import { assertPtyHostSupported } from '@backend/platform/pty-host'
 import { WorkspaceChannels } from '@contracts'
@@ -219,7 +222,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX',
   'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX',
   'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_UXMILESTONE',
-  'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT',
+  'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT', 'MOGGING_CWD',
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS',
   'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW',
@@ -270,6 +273,16 @@ function liveWebContents(): WebContents | null {
 
 app.whenReady().then(async () => {
   if (!primaryInstance) return // a second instance; the primary handles the deep link + quits us
+
+  // A desktop install does not get npm's package-bin links. Copy the CLI/MCP satellites into
+  // the persistent private runtime, generate `mogging`, and seed PATH before either PTY backend
+  // starts so every local pane and agent gets the protocol without provider-specific setup.
+  try {
+    installCliRuntime()
+  } catch (err) {
+    fatal(err, 'cli-runtime')
+    return
+  }
 
   assertNativeModules() // stale/missing .node -> exit 1 with the rebuild command, never a broken window
   // Windows < 18309 would silently get a winpty, whose resize semantics the UI does not model.
@@ -369,6 +382,17 @@ app.whenReady().then(async () => {
       // the only channel that always exists — this fallback used to happen with nothing printed.
       const why = err instanceof Error ? err.message : String(err)
       console.warn(`[daemon] start failed, falling back to the in-proc backend: ${why}`)
+      if (err instanceof DaemonMigrationDeferredError) {
+        await dialog.showMessageBox({
+          type: 'warning',
+          title: 'Legacy remote sessions are still active',
+          message: 'MoggingLabs left your older remote sessions running to avoid losing work.',
+          detail:
+            'This launch will use non-persistent local terminals. In Settings, confirm each legacy SSH host as POSIX, then restart MoggingLabs to complete the session upgrade.',
+          buttons: ['Continue'],
+          defaultId: 0
+        })
+      }
       startInProc() // daemon unavailable -> in-proc so the app still works
     }
   }
@@ -552,6 +576,8 @@ app.whenReady().then(async () => {
     runClipboardSmoke(win) // env-gated clipboard smoke: quoting + history ring + drop overlay
   } else if (process.env.MOGGING_BLOCKS && win) {
     runBlocksSmoke(win) // env-gated command-blocks smoke (Phase-2/02)
+  } else if (process.env.MOGGING_CWD && win) {
+    runCwdSmoke(win, process.env.MOGGING_CWD) // universal cwd protocol: daemon auth + in-proc OSC fallback
   } else if (process.env.MOGGING_GIT && win) {
     runGitSmoke(win) // env-gated per-pane git smoke (Phase-2/03)
   } else if (process.env.MOGGING_NOTIFY && win) {

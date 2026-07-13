@@ -4,9 +4,16 @@
 // tmux "kill-server on upgrade" pitfall). Depends on nothing (pure types + helpers).
 
 import type { AgentState } from '../domain/agent'
+import type { PaneCwdLocality, PaneCwdSource } from '../domain/cwd'
+import type { RemoteConnection } from '../domain/remote'
 import type { PersistedWorkspace } from '../ipc/workspace.ipc'
 import type { PtyEmulation } from '../ipc/terminal.ipc'
 
+// v7: pane-originated state is capability-bound. Cwd is a first-class declaration; every cwd
+// event carries source, locality, and a per-generation revision, and `cwd-report` requires the
+// session-only pane token. Reviewer approvals now require that token too. A v6 daemon would
+// silently ignore cwd reports and accept unbound approvals, so the version bump forces the normal
+// session hand-off instead of pretending these are additive v6 assumptions.
 // v6: the daemon KNOWS which agent CLI runs in each pane — it watches the pane's PTY subtree
 // in the process table and reports it (`agent`), instead of knowing only what the app itself
 // typed. That is what gives a hand-typed `claude` the same identity as a launched one (context
@@ -35,7 +42,7 @@ import type { PtyEmulation } from '../ipc/terminal.ipc'
 // (set-role, PaneInfo.role). v2: Phase-3/01 control API — send-key/capture + enriched
 // PaneInfo. The version namespaces the runtime dir + socket, so older daemons keep
 // running untouched (ADR 0006 anti-kill-server); the app + CLI speak their own version.
-export const DAEMON_PROTOCOL_VERSION = 6
+export const DAEMON_PROTOCOL_VERSION = 7
 
 // ── Release channel (dev/prod isolation) ───────────────────────────────────────────────
 // A repo checkout and an installed release must be able to run SIDE BY SIDE with zero shared
@@ -99,9 +106,9 @@ export const CLAIM_PATTERN_MAX = 256
 /** A reviewer sign-off for a branch. Memory-only coordination data — never persisted,
  *  never telemetered. The ROLE is resolved daemon-side from the pane manifest; a client
  *  cannot claim reviewer-ness in a payload. WHICH pane is speaking is proven by the
- *  approve message's `token` (that pane's env-only MOGGING_PANE_TOKEN) when the sender
- *  has one — the pane id alone is public (`mogging list` prints it) and was, on its own,
- *  forgeable by any pane that shares the user's daemon. */
+ *  approve message's required `token` (that pane's env-only MOGGING_PANE_TOKEN) — the
+ *  pane id alone is public (`mogging list` prints it) and was, on its own, forgeable by
+ *  any pane that shares the user's daemon. */
 export interface Approval {
   branch: string
   byPaneId: string
@@ -168,7 +175,7 @@ export interface SpawnSpec {
   env?: Record<string, string>
   /** Remote pane (Phase-4/05): the RESOLVED host row (the daemon stays db-free).
    *  Connection pointers only — the user's ssh stack does all auth (ADR 0002). */
-  remote?: { name: string; host: string; user?: string; port?: number }
+  remote?: RemoteConnection & { cwd?: string }
 }
 
 export interface PaneInfo {
@@ -183,6 +190,9 @@ export interface PaneInfo {
   title?: string
   /** Last known working directory (spawn cwd, refined by OSC 7). */
   cwd?: string
+  cwdRevision?: number
+  cwdSource?: PaneCwdSource
+  cwdLocality?: PaneCwdLocality
   /** Live agent state (idle / busy / attention). */
   state?: AgentState
   /** Swarm role, when the pane has one (Phase-4/01). */
@@ -205,6 +215,9 @@ export type ClientMessage =
   // `mogging notify` (Phase-2/04): an agent/hook inside a pane raises that pane's attention.
   // Carries an event label (+ optional short message) ONLY — never PTY content or credentials.
   | { t: 'notify'; id?: string; event: string; message?: string }
+  // Active-context declaration. Endpoint auth proves same-user; the pane token proves THIS pane.
+  // `observedAt` orders independent short-lived reporter processes without trusting arrival order.
+  | { t: 'cwd-report'; id: string; token: string; cwd: string; observedAt: number }
   // Control API (Phase-3/01): named-key press — `key` is a NAME from CONTROL_KEYS;
   // the daemon maps it to bytes (allowlist — clients never synthesize escapes).
   | { t: 'send-key'; id: string; key: string }
@@ -227,11 +240,9 @@ export type ClientMessage =
   // Reviewer gate (Phase-4/03). `from` names the approver's pane and the daemon checks
   // THAT pane's role — a payload can never claim a role. `token` is the pane's own
   // MOGGING_PANE_TOKEN (minted per session, injected into that pane's env and nowhere
-  // else): it PROVES the sender is running inside `from`. Optional on the wire only so a
-  // pane the daemon restored cold — env re-created, no token in hand — and any older CLI
-  // keep working; when it IS present the daemon enforces it, so the shipped CLI (which
-  // always sends it from a real pane) cannot be impersonated by a pane that sends its own.
-  | { t: 'approve'; branch: string; from: string; token?: string }
+  // else): it PROVES the sender is running inside `from`. A missing token is an unbound,
+  // forgeable pane-id claim and is refused exactly like a mismatched token.
+  | { t: 'approve'; branch: string; from: string; token: string }
   | { t: 'approvals' }
   // App-side hook: a branch's worktree was removed -> its approval dies with it.
   | { t: 'unapprove'; branch: string }
@@ -241,7 +252,7 @@ export type ClientMessage =
  *  stamped with a dead generation must never touch the living session's pane. */
 export type ServerMessage =
   | { t: 'welcome'; v: number; panes: PaneInfo[]; workspaces: PersistedWorkspace[] }
-  | { t: 'error'; reason: string }
+  | { t: 'error'; reason: string; id?: string }
   // `restored` narrows `existing`: a cold-start restore (fresh shell + repainted
   // scrollback, untouched since) rather than a continuously-live session — the app
   // types resume into the former and must keep its hands off the latter (v5).
@@ -250,10 +261,19 @@ export type ServerMessage =
   | { t: 'data'; id: string; gen: number; data: string }
   | { t: 'exit'; id: string; gen: number; code: number }
   | { t: 'state'; id: string; gen: number; state: AgentState }
-  | { t: 'cwd'; id: string; gen: number; cwd: string }
+  | {
+      t: 'cwd'
+      id: string
+      gen: number
+      cwd: string
+      rev: number
+      source: PaneCwdSource
+      locality: PaneCwdLocality
+    }
   | { t: 'panes'; panes: PaneInfo[] }
   | { t: 'pong' }
   | { t: 'notified'; id: string; ok: boolean } // ack for a `notify` (ok=false: unknown pane id)
+  | { t: 'cwd-reported'; id: string; gen: number; cwd: string; rev: number }
   | { t: 'limit'; id: string; gen: number } // a pane's agent reported a usage limit (Phase-4/04 failover)
   // Typed-launch detection: an agent CLI process appeared in (or vanished from) the pane's
   // PTY subtree — the daemon KNOWS this from the process table, not from output heuristics.

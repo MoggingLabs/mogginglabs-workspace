@@ -12,9 +12,9 @@ export interface WorkspaceMeta {
   ordinal: number
   paneCount: number
   assignments?: string[] // per-slot provider (06b template lineup)
-  paneCwds?: (string | null)[] // per-slot cwd override (worktree isolation, Phase-3/03)
+  paneCwds?: (string | null)[] // per-slot restore/relaunch cwd (isolated or explicitly reported worktree)
   roles?: (string | null)[] // per-slot swarm role (Phase-4/01)
-  remotes?: ({ hostId: string; name: string } | null)[] // per-slot remote host (Phase-4/05)
+  remotes?: ({ hostId: string; name: string; cwd?: string } | null)[] // per-slot remote host + remote cwd (Phase-4/05)
   profileIds?: (string | null)[] // per-slot launch profile (4/04 picker; persisted 6/04 — restore + failover keep it true)
   layout?: string | null // serialized split-tree (shape + sizes); absent/invalid → template grid
 }

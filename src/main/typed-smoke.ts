@@ -103,9 +103,9 @@ export function runTypedSmoke(win: BrowserWindow): void {
       const before = { session: await session(added), gauge: await gauge(added) }
 
       // ── SHELL INTEGRATION: cmd.exe now reports its cwd (it never did) ────────────────────
-      // This is what makes a typed agent's directory knowable at all on Windows, where a
-      // process's cwd cannot be read: the pane's shell announces it on every prompt. Prove it
-      // by cd-ing somewhere the pane was NOT seeded to, and watching the report arrive.
+      // The shell lane remains the immediate, conservative Windows baseline before a foreground
+      // process snapshot. Prove it by cd-ing somewhere the pane was NOT seeded to and watching
+      // the prompt report arrive.
       await ES("window.__cwds=[];window.bridge.on('terminal:cwd',function(e){window.__cwds.push(e);});1")
       await delay(300)
       await type(added, 'cd /d C:\\Windows')

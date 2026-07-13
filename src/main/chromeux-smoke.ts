@@ -318,8 +318,8 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
 
       // ── (j): PROGRESSIVE COLLAPSE. Four things are never surrendered — the state
       //    glyph, agent-CLI mark, ⋯ menu and ×. Between them the bar retires
-      //    into the ⋯ menu in a FIXED order, least-identifying first: gauge "% used" text
-      //    → branch → expand trio → mcp → claims → role → remote → (last) the gauge disc.
+      //    into the ⋯ menu in a FIXED order, least-identifying first: detailed Git
+      //    state, expand trio, mcp, claims, role, remote, branch, then the gauge disc.
       //    The title is the last thing standing, never the first to go: it used to be the
       //    ONLY shrinkable item and hit 0px on an 862px pane while four chips kept full
       //    width and were clipped away invisibly. ──
@@ -342,6 +342,8 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         const at = async px => { slot.style.width = px + 'px'; await sleep(120)
           if (p && p.lightChips) p.lightChips()
           return { pct: shown('.pane-context .ctx-pct'), git: shown('.pane-git'),
+                   gitWorktree: shown('.pane-worktree'), gitState: shown('.pane-git-state'),
+                   gitStaged: shown('.pane-git-staged'), gitComparison: shown('.pane-git-comparison'),
                    expand: expandShown(), mcp: shown('.pane-mcp'),
                    claims: shown('.pane-claims'), role: shown('.pane-role'), remote: shown('.pane-remote'),
                    title: shown('.pane-title'), state: shown('.pane-state'), agent: shown('.pane-agent'), close: shown('.pane-act-close'),
@@ -349,9 +351,9 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
                    ctxDisc: shown('.pane-context .ctx-disc') } }
         // Checkpoints straddle the 2026-07-10 re-derived ladder (global.css: thresholds
         // are CONTENT-box widths — each rule fires at a pane ~15px wider than its number).
-        // The bar is CROWDED (every chip lit), so the :has()-gated rules apply: pct 820,
-        // branch 760, trio 740, mcp restart-form 645, claims 525, role 470, remote 355,
-        // disc 135. Each step sits ≥10px from the thresholds on both sides.
+        // The bar is CROWDED (every chip lit), so the :has()-gated Git ladder applies:
+        // worktree 900, staged 820, comparison 760, state 700; branch stays. The remaining
+        // thresholds are trio 740, mcp 645, claims 525, role 470, remote 355, disc 135.
         const steps = { w900: await at(900), w800: await at(800), w765: await at(765),
                         w700: await at(700), w620: await at(620), w505: await at(505),
                         w455: await at(455), w340: await at(340), w140: await at(140) }
@@ -362,16 +364,20 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         const anchorsHold = Object.entries(steps).every(([k, s]) =>
           s.state && s.agent && s.close && s.menu && (k === 'w140' || s.title))
         const order =
-          steps.w900.pct && steps.w900.git && steps.w900.expand === 3 && steps.w900.mcp &&
-          steps.w900.claims && steps.w900.role && steps.w900.remote &&   // wide: everything
-          !steps.w800.pct && steps.w800.git && steps.w800.expand === 3 && // 1st: the gauge text
-          !steps.w765.git && steps.w765.expand === 3 &&                   // 2nd: the branch chip
-          steps.w700.expand === 0 && steps.w700.mcp &&                    // 3rd: the expand trio
-          !steps.w620.mcp && steps.w620.claims &&                         // 4th: mcp (restart form)
-          !steps.w505.claims && steps.w505.role &&                        // 5th: claims
-          !steps.w455.role && steps.w455.remote &&                        // 6th: role
-          !steps.w340.remote &&                                           // 7th: remote
-          !steps.w140.title && !steps.w140.ctxDisc                        // 8th/9th: title, then disc
+          steps.w900.pct && steps.w900.git && !steps.w900.gitWorktree &&
+          steps.w900.gitState && steps.w900.gitStaged && steps.w900.gitComparison &&
+          steps.w900.expand === 3 && steps.w900.mcp && steps.w900.claims &&
+          steps.w900.role && steps.w900.remote &&                         // wide: identity + core detail
+          !steps.w800.pct && !steps.w800.gitStaged && steps.w800.gitComparison &&
+          steps.w800.gitState && steps.w800.git && steps.w800.expand === 3 &&
+          !steps.w765.gitComparison && steps.w765.gitState && steps.w765.git &&
+          !steps.w700.gitState && steps.w700.git &&                       // branch identity survives
+          steps.w700.expand === 0 && steps.w700.mcp &&                    // expand trio retires
+          !steps.w620.mcp && steps.w620.claims &&                         // mcp (restart form)
+          !steps.w505.claims && steps.w505.role &&                        // claims
+          !steps.w455.role && steps.w455.remote &&                        // role
+          !steps.w340.remote &&                                           // remote
+          !steps.w140.git && !steps.w140.ctxDisc                          // true minimum chrome
         // The gauge's DISC (color ramp + sweep) survives every retirement above it and
         // yields only below 135px of content — where even 16px would push the anchors off.
         const ctxGauge = steps.w900.ctxDisc && steps.w700.ctxDisc && steps.w340.ctxDisc

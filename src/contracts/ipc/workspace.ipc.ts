@@ -7,6 +7,11 @@ export interface PersistedPane {
   id: string
   workspaceId?: string // which workspace this pane belongs to (default: "default")
   cwd: string
+  /** Last explicit agent context, stored separately from the shell's requested launch cwd. */
+  reportedCwd?: string
+  reportedCwdAt?: number
+  /** SSH connection pointer only; required to restore a remote pane as remote. */
+  remote?: { name: string; host: string; user?: string; port?: number; cwd?: string; platform?: 'posix' }
   command?: string // launch label (e.g. "claude") — NEVER a credential
   scrollback: string // raw PTY output for repaint (local terminal content)
   updatedAt: number
@@ -42,13 +47,13 @@ export interface WorkspaceStateMeta {
    *  Geometry only — never content. Absent/invalid → the template grid for paneCount. */
   layout?: string | null
   assignments?: string[] // per-slot provider (06b template lineup); undefined = plain shells
-  /** Per-slot cwd override (worktree isolation, Phase-3/03) — restored workspaces
-   *  re-attach panes to their worktrees. Paths only, never credentials. */
+  /** Per-slot cwd override (worktree isolation or an explicit agent cwd report) —
+   *  restored workspaces re-attach/relaunch panes in their worktrees. Paths only. */
   paneCwds?: (string | null)[]
   /** Per-slot swarm role (Phase-4/01) — the manifest survives restore. */
   roles?: (string | null)[]
   /** Per-slot remote host (Phase-4/05) — pointers + display name only. */
-  remotes?: ({ hostId: string; name: string } | null)[]
+  remotes?: ({ hostId: string; name: string; cwd?: string } | null)[]
   /** Per-slot launch profile (Phase-6/04) — profile IDS only, never env values
    *  (those stay main-side; ADR 0002). Restored lineups relaunch under the
    *  chosen profile; failover rewrites the slot it switched. */

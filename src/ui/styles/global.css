@@ -2064,9 +2064,8 @@ button {
      need 173px and never more, so half the pane's slack was reserved for empty space: the
      chips needed a ~1085px pane to all fit. Now the left cluster takes its content width
      first, the branch chip centres in whatever is left, and the actions shrink to fit —
-     everything fits at ~780px. The chip is centred in the REMAINING span rather than in
-     the pane; it is also the first thing dropped when space runs short, so the difference
-     only shows on a wide pane where there is room to spare either way. */
+     everything fits at ~780px. The Git summary is centred in the REMAINING span rather
+     than the pane and sheds detail progressively while keeping branch identity visible. */
   grid-template-columns: minmax(0, max-content) minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--sp-3);
@@ -2102,9 +2101,9 @@ button {
    the portaled menu, in a fixed order, least-identifying first:
 
      1. the "% used" text of the context gauge (the disc keeps the color+arc signal)
-     2. the branch / worktree chip      3. the expand trio
-     4. the MCP chip   5. claims   6. role   7. remote
-     8. the title      9. the gauge disc itself
+     2. Git worktree/staged/base detail (branch stays)      3. the expand trio
+     4. the MCP chip   5. claims   6. role   7. remote (+ the provider logo)
+     8. the title      9. branch identity      10. the gauge disc itself
 
    The context gauge's ARC never lies but its FORM yields: the disc (color ramp +
    sweep) survives to ~150px panes; the "% used" text is the first thing retired,
@@ -2145,25 +2144,69 @@ button {
     display: none;
   }
 }
-/* 2. THE BRANCH / WORKTREE CHIP — next, but only once something is actually
+/* 2. GIT DETAIL — next, but only once something is actually
    competing for the row. A fixed 760px threshold was derived from the worst case (all
    four chips lit) and was wrong for the common one: a 2×2 grid on a 1600px monitor gives
    each pane 655px, so the branch vanished on every grid but 1×1 while the row sat half
    empty. `:has()` asks the real question — is any chip lit? — instead of guessing from
    width. `.pane-role`/`.pane-claims`/`.pane-mcp` always exist and toggle the `hidden`
    attribute; `.pane-remote` only exists on a remote pane, so an absent one never matches. */
+@container pane-bar (max-width: 900px) {
+  .pane-header:has(.pane-remote:not([hidden])) .pane-worktree,
+  .pane-header:has(.pane-role:not([hidden])) .pane-worktree,
+  .pane-header:has(.pane-claims:not([hidden])) .pane-worktree,
+  .pane-header:has(.pane-mcp:not([hidden])) .pane-worktree {
+    display: none;
+  }
+}
+@container pane-bar (max-width: 820px) {
+  .pane-header:has(.pane-remote:not([hidden])) .pane-git-staged,
+  .pane-header:has(.pane-role:not([hidden])) .pane-git-staged,
+  .pane-header:has(.pane-claims:not([hidden])) .pane-git-staged,
+  .pane-header:has(.pane-mcp:not([hidden])) .pane-git-staged {
+    display: none;
+  }
+}
 @container pane-bar (max-width: 760px) {
-  .pane-header:has(.pane-remote:not([hidden])) .pane-git.has-git,
-  .pane-header:has(.pane-role:not([hidden])) .pane-git.has-git,
-  .pane-header:has(.pane-claims:not([hidden])) .pane-git.has-git,
-  .pane-header:has(.pane-mcp:not([hidden])) .pane-git.has-git {
+  .pane-header:has(.pane-remote:not([hidden])) .pane-git-comparison,
+  .pane-header:has(.pane-role:not([hidden])) .pane-git-comparison,
+  .pane-header:has(.pane-claims:not([hidden])) .pane-git-comparison,
+  .pane-header:has(.pane-mcp:not([hidden])) .pane-git-comparison {
+    display: none;
+  }
+}
+@container pane-bar (max-width: 700px) {
+  .pane-header:has(.pane-remote:not([hidden])) .pane-git-state,
+  .pane-header:has(.pane-role:not([hidden])) .pane-git-state,
+  .pane-header:has(.pane-claims:not([hidden])) .pane-git-state,
+  .pane-header:has(.pane-mcp:not([hidden])) .pane-git-state {
     display: none;
   }
 }
 /* An uncrowded bar keeps its branch until the pane is genuinely tiny. Until then the chip
    ellipsises rather than disappearing (max-width:100% on .pane-git + .pane-branch's
    text-overflow). */
-@container pane-bar (max-width: 320px) {
+@container pane-bar (max-width: 620px) {
+  .pane-header .pane-worktree {
+    display: none;
+  }
+}
+@container pane-bar (max-width: 520px) {
+  .pane-header .pane-git-staged {
+    display: none;
+  }
+}
+@container pane-bar (max-width: 430px) {
+  .pane-header .pane-git-comparison {
+    display: none;
+  }
+}
+@container pane-bar (max-width: 330px) {
+  .pane-header .pane-git-state {
+    display: none;
+  }
+}
+@container pane-bar (max-width: 225px) {
   .pane-header .pane-git.has-git {
     display: none;
   }
@@ -2831,7 +2874,7 @@ body.pane-dragging * {
      its left and the gauge on its right (measured on a 780px pane with every chip lit:
      the branch text and "62% used" rendered on top of each other). Capped, the chip
      shrinks with its track and .pane-branch ellipsises. */
-  max-width: min(361px, 100%);
+  max-width: min(680px, 100%);
   min-width: 0;
 }
 .pane-git svg {
@@ -2844,9 +2887,43 @@ body.pane-dragging * {
   display: inline-flex;
 }
 .pane-branch {
+  flex: 1 1 12ch;
+  min-width: 4ch;
+  max-width: 28ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.pane-worktree,
+.pane-git-state,
+.pane-git-staged,
+.pane-git-comparison {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: none;
+  white-space: nowrap;
+  padding-left: var(--sp-2);
+  border-left: 1px solid var(--border);
+  font-size: 0.78em;
+  color: var(--text-lo);
+}
+.pane-worktree[hidden],
+.pane-git-staged[hidden],
+.pane-git-comparison[hidden] {
+  display: none;
+}
+.pane-worktree {
+  min-width: 0;
+  max-width: 15ch;
+}
+.pane-worktree > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pane-git .pane-worktree svg {
+  width: 12px;
+  height: 12px;
 }
 .pane-dirty {
   display: none;
@@ -2858,6 +2935,20 @@ body.pane-dragging * {
 }
 .pane-git.dirty .pane-dirty {
   display: inline-block;
+}
+.pane-git.dirty .pane-git-state,
+.pane-git.dirty .pane-git-staged {
+  color: var(--warning);
+}
+.pane-git.conflicted .pane-dirty {
+  display: inline-block;
+  background: var(--danger);
+}
+.pane-git.conflicted .pane-git-state {
+  color: var(--danger);
+}
+.pane-git.unavailable .pane-git-state {
+  color: var(--text-lo);
 }
 .pane-git.dirty {
   color: var(--text-hi); /* + the amber dot — dirty never relies on color alone */

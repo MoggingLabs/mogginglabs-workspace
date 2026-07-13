@@ -10,6 +10,7 @@ import { getUsageService, getUsageStatusService } from './usage'
 import { getSettingsStore } from './app-settings'
 import { clearTrail, flushTrailForSmoke, recordTrail } from './trail'
 import { setAgentConsent, setDrivingForSmoke } from './browser-dock'
+import { capturePaneTokenForSmoke } from './smoke-shell'
 
 // MOGGING_SHOT=all (Phase-5/01): the GALLERY — drive the app through every surface
 // and write numbered PNGs to out/gallery/, in BOTH themes. The audit + before/after
@@ -409,7 +410,7 @@ export function runGallery(win: BrowserWindow): void {
 
       // ── Stage the full world once ─────────────────────────────────────────────
       await part('staging', async () => {
-        await ES(`window.bridge.invoke('remotes:save', ${JSON.stringify({ id: 'h1', name: 'buildbox', host: 'build.example', user: 'dev' })})`)
+        await ES(`window.bridge.invoke('remotes:save', ${JSON.stringify({ id: 'h1', name: 'buildbox', host: 'build.example', platform: 'posix', user: 'dev' })})`)
         await ES(
           `window.__mogging.workspace.create({ name: 'Alpha', cwd: ${JSON.stringify(repo)}, paneCount: 4, ` +
             `roles: ['worker','worker','reviewer',null], remotes: [null, null, null, { hostId: 'h1', name: 'buildbox' }] })`
@@ -417,7 +418,17 @@ export function runGallery(win: BrowserWindow): void {
         await sleep(4500) // spawns + git chips + roles reach the daemon
         const base = ((await ES('window.__mogging.workspace.active()')) as { ordinal: number }).ordinal * 100
         await cli(['claim', 'src/ui/**'], { MOGGING_PANE_ID: String(base + 1) })
-        await cli(['approve', wt1.branch ?? ''], { MOGGING_PANE_ID: String(base + 3) }) // pane 3 is reviewer
+        const reviewerToken = await capturePaneTokenForSmoke({
+          write: async (command) => {
+            const code = await cli(['send', String(base + 3), command])
+            if (code !== 0) throw new Error(`could not probe pane ${base + 3}`)
+          },
+          sleep
+        })
+        await cli(['approve', wt1.branch ?? ''], {
+          MOGGING_PANE_ID: String(base + 3),
+          MOGGING_PANE_TOKEN: reviewerToken
+        }) // pane 3 is reviewer
         // Board cards (one bound via start-on-card while Alpha is active).
         await ES(`window.__mogging.board.createCard('Ship the parser rewrite', 'Tokens, AST, tests.')`)
         await ES(`window.__mogging.board.createCard('Audit the color system', 'AA everywhere.')`)

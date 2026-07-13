@@ -1,5 +1,6 @@
 // Per-pane git contract (Phase-2/03). Strictly READ-ONLY: the backend probes a pane's cwd for
-// its branch + dirty state and streams changes; no command on this wire ever mutates a repo.
+// its branch, worktree, commit divergence, and working-tree state; no command on this wire ever
+// mutates a repo.
 // No credentials or file CONTENT cross this boundary — only a cwd (in) and a small status (out).
 
 import type { PaneId } from '../domain/pane'
@@ -12,12 +13,36 @@ export interface GitStatus {
   branch: string
   /** HEAD is detached (no branch); `branch` is then a short SHA. */
   detached: boolean
+  /** Full HEAD oid, or null for an unborn branch / unavailable Git binary. */
+  head: string | null
+  /** This root is a linked worktree (its `.git` entry points at a shared common git dir). */
+  linkedWorktree: boolean
+  /** Git produced the status. False means branch-only fallback; clean/dirty is then unknown. */
+  available: boolean
+  /** Configured upstream ref, or null when this branch has none. */
+  upstream: string | null
   /** Commits ahead of the upstream (0 when no upstream). */
   ahead: number
   /** Commits behind the upstream (0 when no upstream). */
   behind: number
+  /** Base ref used for local work progress (`mogging-base`, then main/master/default remote). */
+  baseBranch: string | null
+  /** Commits HEAD has that the named base does not. */
+  baseAhead: number
+  /** Commits the named base has that HEAD does not. */
+  baseBehind: number
   /** Working tree has uncommitted changes (staged, unstaged, or untracked). */
   dirty: boolean
+  /** Unique changed paths, including conflicts and untracked files. */
+  changed: number
+  /** Paths with an index change ready to commit. A path may also be counted in `unstaged`. */
+  staged: number
+  /** Tracked paths with working-tree changes not staged. A path may also be in `staged`. */
+  unstaged: number
+  /** Untracked paths. */
+  untracked: number
+  /** Unmerged paths. Kept separate because they block a normal commit. */
+  conflicted: number
 }
 
 /** UI -> backend: begin tracking a pane's cwd; `git:change` events follow as it changes. */

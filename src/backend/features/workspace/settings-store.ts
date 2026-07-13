@@ -44,6 +44,7 @@ export class SettingsStore {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         host TEXT NOT NULL,
+        platform TEXT CHECK (platform = 'posix'),
         user TEXT,
         port INTEGER,
         identity_hint TEXT
@@ -115,6 +116,13 @@ export class SettingsStore {
     } catch {
       /* column already exists */
     }
+    // Remote terminal bootstrapping is intentionally POSIX-only. Existing rows remain
+    // NULL/unconfirmed until the user explicitly confirms the platform in Settings.
+    try {
+      this.db.exec("ALTER TABLE app_remotes ADD COLUMN platform TEXT CHECK (platform = 'posix')")
+    } catch {
+      /* column already exists */
+    }
     // Migrate pre-6/04 dbs: per-slot launch profiles (ids only — ADR 0002).
     try {
       this.db.exec('ALTER TABLE app_workspaces ADD COLUMN pane_profile_ids TEXT')
@@ -171,7 +179,7 @@ export class SettingsStore {
       assignments: SettingsStore.parseCell<string[]>(r.assignments),
       paneCwds: SettingsStore.parseCell<(string | null)[]>(r.paneCwds),
       roles: SettingsStore.parseCell<(string | null)[]>(r.paneRoles),
-      remotes: SettingsStore.parseCell<({ hostId: string; name: string } | null)[]>(r.paneRemotes),
+      remotes: SettingsStore.parseCell<({ hostId: string; name: string; cwd?: string } | null)[]>(r.paneRemotes),
       profileIds: SettingsStore.parseCell<(string | null)[]>(r.paneProfileIds)
     }))
     const settings = this.db.prepare('SELECT key, value FROM app_settings').all() as Array<{
@@ -452,30 +460,33 @@ export class SettingsStore {
   // ── Remote hosts (Phase-4/05): connection POINTERS; auth is the user's ssh stack. ──
   listRemotes(): RemoteHost[] {
     const rows = this.db
-      .prepare('SELECT id, name, host, user, port, identity_hint AS identityHint FROM app_remotes ORDER BY name')
-      .all() as Array<RemoteHost & { user: string | null; port: number | null; identityHint: string | null }>
+      .prepare('SELECT id, name, host, platform, user, port, identity_hint AS identityHint FROM app_remotes ORDER BY name')
+      .all() as Array<Omit<RemoteHost, 'platform'> & { platform: string | null; user: string | null; port: number | null; identityHint: string | null }>
     return rows.map((r) => ({
       id: r.id,
       name: r.name,
       host: r.host,
+      platform: r.platform === 'posix' ? 'posix' : undefined,
       user: r.user ?? undefined,
       port: r.port ?? undefined,
       identityHint: r.identityHint ?? undefined
     }))
   }
 
-  saveRemote(remote: RemoteHost): void {
+  saveRemote(remote: RemoteHost & { platform: 'posix' }): void {
     this.db
       .prepare(
-        `INSERT INTO app_remotes (id, name, host, user, port, identity_hint)
-         VALUES (@id, @name, @host, @user, @port, @identityHint)
+        `INSERT INTO app_remotes (id, name, host, platform, user, port, identity_hint)
+         VALUES (@id, @name, @host, @platform, @user, @port, @identityHint)
          ON CONFLICT(id) DO UPDATE SET name = excluded.name, host = excluded.host,
-           user = excluded.user, port = excluded.port, identity_hint = excluded.identity_hint`
+           platform = excluded.platform, user = excluded.user, port = excluded.port,
+           identity_hint = excluded.identity_hint`
       )
       .run({
         id: remote.id,
         name: remote.name,
         host: remote.host,
+        platform: remote.platform,
         user: remote.user ?? null,
         port: remote.port ?? null,
         identityHint: remote.identityHint ?? null

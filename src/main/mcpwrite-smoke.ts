@@ -155,7 +155,10 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
       clients.push(c1)
       await c1.rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {} })
       const namesNone = await listNames(c1)
-      const invisibleWhenNone = countWrites(namesNone) === 0 && namesNone.length === 19
+      const invisibleWhenNone =
+        countWrites(namesNone) === 0 &&
+        namesNone.length === 20 &&
+        namesNone.includes('report_working_directory')
       const refusedNone = await callTool(c1, 'send_to_pane', { pane: a2, text: 'nope' })
       const refusedWhenNone = !!refusedNone.rpcError && /grant/.test(refusedNone.rpcError)
 
@@ -169,7 +172,10 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
         c1.notifications.includes('notifications/tools/list_changed')
       )
       const namesAll = await listNames(c1)
-      const visibleWhenAll = countWrites(namesAll) === 6 && namesAll.length === 25
+      const visibleWhenAll =
+        countWrites(namesAll) === 6 &&
+        namesAll.length === 26 &&
+        namesAll.includes('report_working_directory')
 
       // send_to_pane: text arrives (capture proves it; the pong already
       // confirmed processing server-side).

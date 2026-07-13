@@ -3,7 +3,7 @@ import { execFile, execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { sh, softFps, softGapMs } from './smoke-shell'
+import { capturePaneTokenForSmoke, sh, softFps, softGapMs } from './smoke-shell'
 
 // Env-gated ORCHESTRATION milestone smoke (MOGGING_ORCHESTRATION, Phase-3/06).
 // The whole Phase-3 promise as ONE asserted flow, two-phase like the perf milestone:
@@ -173,7 +173,17 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
       // appRoles). Naming the reviewer here is what a person does in the UI.
       await ES(`window.__mogging.workspace.setRole(${paneId}, 'reviewer')`)
       await sleep(400) // the role reaches main (the trusted IPC) and the daemon
-      const approveRes = await cli(['approve', diff.branch], { MOGGING_PANE_ID: String(paneId) })
+      const paneToken = await capturePaneTokenForSmoke({
+        write: async (command) => {
+          const sent = await cli(['send', String(paneId), command])
+          if (sent.code !== 0) throw new Error(`could not probe pane ${paneId}`)
+        },
+        sleep
+      })
+      const approveRes = await cli(['approve', diff.branch], {
+        MOGGING_PANE_ID: String(paneId),
+        MOGGING_PANE_TOKEN: paneToken
+      })
       const merge = (await ES(
         `window.bridge.invoke('review:merge', ${JSON.stringify({ repo, branch: diff.branch })})`
       )) as { ok: boolean; state: string }

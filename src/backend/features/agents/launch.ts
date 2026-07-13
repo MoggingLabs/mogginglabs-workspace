@@ -17,9 +17,9 @@ const psq = (s: string): string => `'${s.replace(/'/g, "''")}'`
 const shq = (s: string): string => `'${s.replace(/'/g, "'\\''")}'`
 
 /** Platform/shell-aware `cd` prefix so the agent starts in the workspace cwd. */
-function cdPrefix(cwd: string): string {
+function cdPrefix(cwd: string, target: 'local' | 'posix'): string {
   if (!cwd) return ''
-  if (process.platform === 'win32') {
+  if (target === 'local' && process.platform === 'win32') {
     const shell = defaultShell().toLowerCase()
     // -ErrorAction Stop makes a failed Set-Location abort the whole typed line (5.1-safe;
     // `&&` is pwsh-7-only) — parity with the `&&` gating below, so a vanished workspace
@@ -37,11 +37,11 @@ function cdPrefix(cwd: string): string {
  *  and embedded double quotes (the bell layer's `node "<script>" --event done`) all
  *  arrive verbatim. cmd.exe stays `set "K=V"` — it strips only the OUTER quotes, inner
  *  ones ride through verbatim; %DEFINED% inside a value expands (see quoting note above). */
-function envPrefix(env: Record<string, string> | undefined): string {
+function envPrefix(env: Record<string, string> | undefined, target: 'local' | 'posix'): string {
   if (!env) return ''
   const entries = Object.entries(env).filter(([k, v]) => k && typeof v === 'string')
   if (!entries.length) return ''
-  if (process.platform === 'win32') {
+  if (target === 'local' && process.platform === 'win32') {
     const shell = defaultShell().toLowerCase()
     if (shell.includes('powershell') || shell.includes('pwsh')) {
       return entries.map(([k, v]) => `$env:${k}=${psq(v)}; `).join('')
@@ -56,8 +56,9 @@ function envPrefix(env: Record<string, string> | undefined): string {
 }
 
 /** Quote one provider argument for the interactive shell that receives the line. */
-function shellArg(value: string): string {
+function shellArg(value: string, target: 'local' | 'posix'): string {
   if (/^[A-Za-z0-9_./:\\=@,+\-\[\]]+$/.test(value)) return value
+  if (target === 'posix') return shq(value)
   if (process.platform !== 'win32') return shq(value)
   const shell = defaultShell().toLowerCase()
   if (shell.includes('powershell') || shell.includes('pwsh')) return psq(value)
@@ -80,13 +81,16 @@ export function buildLaunchCommand(
   cwd: string,
   resume = false,
   env?: Record<string, string>,
-  mcpArgs?: string[]
+  mcpArgs?: string[],
+  target: 'local' | 'posix' = 'local'
 ): string | null {
   const adapter = findAdapter(agentId)
   if (!adapter) return null
   const base = resume && adapter.resumeFlag ? `${adapter.bin} ${adapter.resumeFlag}` : adapter.bin
   // Tool-plan launch args (Phase-8/09): the CLI's mcp-config flag + path. Quote
   // args with spaces (userData paths on Windows); flags are literal.
-  const flags = mcpArgs?.length ? ' ' + mcpArgs.map(shellArg).join(' ') : ''
-  return cdPrefix(cwd) + envPrefix(env) + base + flags
+  const flags = mcpArgs?.length
+    ? ' ' + mcpArgs.map((arg) => shellArg(arg, target)).join(' ')
+    : ''
+  return cdPrefix(cwd, target) + envPrefix(env, target) + base + flags
 }

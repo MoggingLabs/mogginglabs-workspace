@@ -121,6 +121,7 @@ run_smoke() {
   # FIRSTRUN drives the update UX with a fake version (no network) — 6/06.
   local extra=""
   [ "$name" = "FIRSTRUN" ] && extra="MOGGING_FAKE_UPDATE=9.9.9"
+  [ "$name" = "CWD_INPROC" ] && extra="MOGGING_INPROC=1"
   MOGGING_USERDATA="$iso/userdata" LOCALAPPDATA="$iso/local" XDG_RUNTIME_DIR="$iso/local" \
     env $extra "$var=$val" "$TIMEOUT_BIN" "$timeout_s" npm run dev >"$iso/$name.log" 2>&1
   local v
@@ -180,12 +181,16 @@ run_static LAYOUT  node scripts/check-layout-invariants.mjs
 # research, phases at the pack that shipped them). Rename a doc and every citation keeps
 # reading as true while the link 404s. Free to check, invisible when wrong.
 run_static DOCSREFS node scripts/check-docs-refs.mjs
+run_static GITPURE npm run smoke:git-pure
+run_static REMOTEBOOT npm run smoke:remote-bootstrap-pure
 
 run_smoke SMOKE       MOGGING_SMOKE     1 180 smoke
 run_smoke MULTIPANE   MOGGING_MULTIPANE 1 180 multipane
 run_smoke ATTENTION   MOGGING_ATTENTION 1 120 attention
 run_smoke BLOCKS      MOGGING_BLOCKS    1 150 blocks
 run_smoke CLIPBOARD   MOGGING_CLIPBOARD 1 150 clipboard
+run_smoke CWD         MOGGING_CWD       DAEMON 240 cwd
+run_smoke CWD_INPROC  MOGGING_CWD       INPROC 180 cwd-inproc
 run_smoke GIT         MOGGING_GIT       1 240 git
 run_smoke NOTIFY      MOGGING_NOTIFY    1 180 notify
 run_smoke NOTIFYHOOK  MOGGING_NOTIFYHOOK 1 120 notifyhook

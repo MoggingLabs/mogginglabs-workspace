@@ -1,5 +1,5 @@
-import { app, dialog, ipcMain } from 'electron'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { dialog, ipcMain } from 'electron'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import {
@@ -24,6 +24,7 @@ import {
 import { detectAgents } from '@backend/features/agents'
 import { execFile } from 'node:child_process'
 import { getSettingsStore } from './app-settings'
+import { getCliRuntime } from './cli-runtime'
 import { serviceKeyClear, serviceKeyNames, serviceKeySet } from './service-keys'
 import {
   IntegrationsChannels,
@@ -36,12 +37,13 @@ import {
 
 // The MCP manager's app wiring (Phase-8/06, ADR 0008.b). The app ORCHESTRATES
 // config files the CLIs own — it never runs, proxies, or authenticates a
-// server. Every write: explicit user action, a timestamped backup of the bytes
+// server. Every feature write: explicit user action, a timestamped backup of the bytes
 // we are about to replace, and a temp-file+rename so the CLI reading the same
 // file never sees half a config; a file that changed under us refuses rather
 // than clobbers. Drift is detected read-only and never auto-healed. The smoke
 // passes fixture homes; real homes resolve from the pointer envs the CLIs
-// themselves honor.
+// themselves honor. The one boot migration below only refreshes an unchanged,
+// hash-verified house entry whose old protocol-versioned runtime path would stop working.
 
 const kv = (): GrantKv | null => {
   const store = getSettingsStore()
@@ -61,26 +63,16 @@ export function resolveCliHomes(): CliHomes {
   }
 }
 
-/**
- * Where `bin/` really is on disk.
- *
- * The house server is spawned as a separate plain-`node` process, and node has no asar
- * support — it cannot read a path inside app.asar. In a packaged build getAppPath() ends in
- * `app.asar`, so the honest path is the unpacked twin (electron-builder.yml asarUnpack puts
- * bin/ there). In dev there is no asar and the substitution is a no-op.
- */
-function binDir(): string {
-  return join(app.getAppPath().replace(/app\.asar([\\/]|$)/, 'app.asar.unpacked$1'), 'bin')
-}
-
 /** The built-in house row — one entry, whole app; never stored, never edited. */
 export function houseServerEntry(): McpServerEntry {
+  const runtime = getCliRuntime()
   return {
     id: 'mogging',
     label: 'MoggingLabs',
     transport: 'stdio',
-    command: 'node',
-    args: [join(binDir(), 'mogging-mcp.mjs')],
+    command: runtime.executable,
+    args: [runtime.mcpEntry],
+    env: { ELECTRON_RUN_AS_NODE: '1' },
     builtIn: true
   }
 }
@@ -101,8 +93,10 @@ function ensureBackup(file: string, current: string | null): string | undefined 
   if (current === null) return undefined // nothing on disk to lose
   const hash = sha256(current)
   if (backedUp.get(file) === hash) return undefined // these exact bytes are already saved
-  const stamp = new Date().toISOString().replace(/[:.]/g, '').replace('T', '-').slice(0, 17)
-  const backup = `${file}.bak-${stamp}`
+  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '')
+  const base = `${file}.bak-${stamp}-${process.pid}`
+  let backup = base
+  for (let suffix = 1; existsSync(backup); suffix++) backup = `${base}-${suffix}`
   copyFileSync(file, backup)
   backedUp.set(file, hash)
   return backup
@@ -111,11 +105,26 @@ function ensureBackup(file: string, current: string | null): string | undefined 
 /** Temp file in the SAME directory, then rename: a reader (the running CLI) sees
  *  either the old file or the new one, never a half-written config — and a crash
  *  mid-write leaves the original intact. */
-function writeAtomic(file: string, text: string): void {
+class ConcurrentConfigWriteError extends Error {}
+
+function writeAtomic(file: string, text: string, expected: string | null): void {
   mkdirSync(dirname(file), { recursive: true })
   const tmp = `${file}.tmp-${process.pid}-${Date.now().toString(36)}`
   try {
-    writeFileSync(tmp, text, 'utf8')
+    let mode = 0o600
+    if (expected !== null) {
+      try {
+        mode = statSync(file).mode & 0o777
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new ConcurrentConfigWriteError()
+        throw err
+      }
+    }
+    writeFileSync(tmp, text, { encoding: 'utf8', mode })
+    if (process.platform !== 'win32') chmodSync(tmp, mode)
+    // Recheck after the replacement bytes exist, immediately before rename. External CLIs do
+    // not honor our locks, so this is the narrowest honest compare-before-swap boundary.
+    if (!fileMatchesExpected(file, expected)) throw new ConcurrentConfigWriteError()
     renameSync(tmp, file)
   } catch (e) {
     try {
@@ -127,13 +136,31 @@ function writeAtomic(file: string, text: string): void {
   }
 }
 
-const readIfExists = (file: string): string | null => (existsSync(file) ? readFileSync(file, 'utf8') : null)
+const readIfExists = (file: string): string | null => {
+  try {
+    return readFileSync(file, 'utf8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw err
+  }
+}
+
+/** Compare the actual file bytes, not two UTF-8-decoded strings. Invalid text fails closed. */
+function fileMatchesExpected(file: string, expected: string | null): boolean {
+  try {
+    if (expected === null) return !existsSync(file)
+    return readFileSync(file).equals(Buffer.from(expected, 'utf8'))
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return expected === null
+    throw err
+  }
+}
 
 /** Optimistic concurrency, one line: the file we are about to replace must still
  *  be the file we READ. `~/.claude.json` also holds the CLI's own unrelated state
  *  and the CLI rewrites it whenever it likes — a write that lands in our
  *  read→write window would be silently eaten by our stale copy. */
-const changedUnderUs = (file: string, seen: string | null): boolean => readIfExists(file) !== seen
+const changedUnderUs = (file: string, seen: string | null): boolean => !fileMatchesExpected(file, seen)
 
 const CLI_DETECT_ID: Record<HostedCliId, string> = { 'claude-code': 'claude', codex: 'codex', gemini: 'gemini' }
 
@@ -178,7 +205,8 @@ export function mgrPreview(
 export function mgrApply(
   serverId: string,
   cli: HostedCliId,
-  homes: CliHomes = resolveCliHomes()
+  homes: CliHomes = resolveCliHomes(),
+  expected?: { current: string | null }
 ): { ok: boolean; reason?: string; backup?: string } {
   const writer = findWriter(cli)
   const entry = findServer(serverId)
@@ -187,17 +215,53 @@ export function mgrApply(
   const file = writer.targetFile(homes)
   try {
     const current = readIfExists(file)
+    // Boot-time runtime migration first proves that the exact managed block is still ours,
+    // then arrives here. Recheck the whole file before deriving a replacement so a CLI/user
+    // edit in that gap is never folded into an automatic write.
+    if (expected && (current !== expected.current || !fileMatchesExpected(file, expected.current))) {
+      return { ok: false, reason: `${file} changed while we were preparing the write — nothing was written; try again` }
+    }
     const next = writer.upsert(current, entry)
     if (changedUnderUs(file, current)) {
       return { ok: false, reason: `${file} changed while we were preparing the write — nothing was written; try again` }
     }
     const backup = ensureBackup(file, current)
-    writeAtomic(file, next)
+    writeAtomic(file, next, current)
     store.set(hashKey(cli, serverId), sha256(writer.canonical(entry)))
     return { ok: true, backup }
   } catch (e) {
+    if (e instanceof ConcurrentConfigWriteError) {
+      return { ok: false, reason: `${file} changed while we were preparing the write — nothing was written; try again` }
+    }
     return { ok: false, reason: `could not update ${file}: ${String(e).slice(0, 160)}` }
   }
+}
+
+/**
+ * Upgrade only the exact managed house blocks this app last wrote. User-edited/drifted entries
+ * are left alone. Refreshing every hash-matching canonical difference also repairs a moved or
+ * reinstalled Electron executable, not only the one-time versioned-MCP-path transition.
+ */
+export function refreshManagedHouseRuntime(homes: CliHomes = resolveCliHomes()): HostedCliId[] {
+  const store = kv()
+  if (!store) return []
+  const refreshed: HostedCliId[] = []
+  const desired = houseServerEntry()
+  for (const writer of MCP_WRITERS) {
+    try {
+      const file = writer.targetFile(homes)
+      const current = readIfExists(file)
+      const stored = store.get(hashKey(writer.cli, 'mogging'))
+      if (current === null || !stored) continue
+      const block = writer.readCanonical(current, 'mogging')
+      if (!block || sha256(block) !== stored) continue
+      if (sha256(writer.canonical(desired)) === stored) continue
+      if (mgrApply('mogging', writer.cli, homes, { current }).ok) refreshed.push(writer.cli)
+    } catch {
+      /* malformed or concurrently edited config: preserve it and retry on a later launch */
+    }
+  }
+  return refreshed
 }
 
 export function mgrRemoveFrom(
@@ -227,12 +291,15 @@ export function mgrRemoveFrom(
           return { ok: false, reason: `${file} changed while we were preparing the write — nothing was written; try again` }
         }
         ensureBackup(file, current)
-        writeAtomic(file, next)
+        writeAtomic(file, next, current)
       }
     }
     store.set(hashKey(cli, serverId), '')
     return { ok: true }
   } catch (e) {
+    if (e instanceof ConcurrentConfigWriteError) {
+      return { ok: false, reason: `${file} changed while we were preparing the write — nothing was written; try again` }
+    }
     return { ok: false, reason: `could not update ${file}: ${String(e).slice(0, 160)}` }
   }
 }
@@ -379,6 +446,7 @@ export function catAuthStatus(serverId: string, cli: HostedCliId): Promise<strin
 }
 
 export function registerMcpManager(): void {
+  refreshManagedHouseRuntime()
   ipcMain.handle(IntegrationsChannels.serversList, () => listServers())
   ipcMain.handle(IntegrationsChannels.serversSave, (_e, raw: unknown) => {
     const store = kv()

@@ -7,8 +7,10 @@
  */
 
 const live = new Set<number>()
-const waiters = new Map<number, Set<() => void>>()
+const waiters = new Map<number, Set<(ready: boolean) => void>>()
 const reattached = new Set<number>()
+const remoteReady = new Set<number>()
+const remoteWaiters = new Map<number, Set<(ready: boolean) => void>>()
 
 /**
  * The pane's PTY was ALREADY running when we asked for it — the daemon is detached
@@ -28,9 +30,15 @@ export function wasPaneReattached(id: number): boolean {
 
 /** Pane closed for good — drop both marks so a recycled pane id starts clean. */
 export function forgetPane(id: number): void {
+  const waiting = waiters.get(id)
+  const waitingRemote = remoteWaiters.get(id)
+  if (waiting) for (const done of waiting) done(false)
+  if (waitingRemote) for (const done of waitingRemote) done(false)
   live.delete(id)
   reattached.delete(id)
   waiters.delete(id)
+  remoteReady.delete(id)
+  remoteWaiters.delete(id)
 }
 
 export function markPaneLive(id: number): void {
@@ -39,12 +47,40 @@ export function markPaneLive(id: number): void {
   const w = waiters.get(id)
   if (w) {
     waiters.delete(id)
-    for (const fn of w) fn()
+    for (const fn of w) fn(true)
   }
 }
 
 export function isPaneLive(id: number): boolean {
   return live.has(id)
+}
+
+/** A remote shell reported cwd after SSH authentication and login initialization. */
+export function markPaneRemoteReady(id: number): void {
+  if (remoteReady.has(id)) return
+  remoteReady.add(id)
+  const w = remoteWaiters.get(id)
+  if (w) {
+    remoteWaiters.delete(id)
+    for (const fn of w) fn(true)
+  }
+}
+
+/** Unlike generic PTY output, this cannot be an SSH host-key/password prompt. */
+export function whenPaneRemoteReady(id: number, timeoutMs?: number): Promise<boolean> {
+  if (remoteReady.has(id)) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const set = remoteWaiters.get(id) ?? new Set()
+    remoteWaiters.set(id, set)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const done = (ready: boolean): void => {
+      if (timer) clearTimeout(timer)
+      set.delete(done)
+      resolve(ready)
+    }
+    if (timeoutMs !== undefined) timer = setTimeout(() => done(false), timeoutMs)
+    set.add(done)
+  })
 }
 
 /** Resolve true once the pane is live, false after `timeoutMs` (callers proceed
@@ -58,9 +94,10 @@ export function whenPaneLive(id: number, timeoutMs: number): Promise<boolean> {
       set.delete(done)
       resolve(false)
     }, timeoutMs)
-    const done = (): void => {
+    const done = (ready: boolean): void => {
       clearTimeout(timer)
-      resolve(true)
+      set.delete(done)
+      resolve(ready)
     }
     set.add(done)
   })

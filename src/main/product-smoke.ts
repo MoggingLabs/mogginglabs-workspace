@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorktree } from '@backend/features/worktrees'
 import { dockDebug } from './browser-dock'
-import { sh, softFps, softGapMs } from './smoke-shell'
+import { capturePaneTokenForSmoke, sh, softFps, softGapMs } from './smoke-shell'
 
 // Env-gated PRODUCT MILESTONE (MOGGING_PRODUCT, Phase-6/07) — the freeze proof.
 // ONE asserted flow: an installer-fresh machine reaches a working swarm + browser,
@@ -177,7 +177,17 @@ export function runProductSmoke(win: BrowserWindow): void {
       const mergeVia = (branch: string, override?: string): Promise<{ ok: boolean; state: string }> =>
         ES(`window.bridge.invoke('review:merge', ${JSON.stringify({ repo, branch, override })})`) as Promise<{ ok: boolean; state: string }>
       const ungated = await mergeVia(wt1.branch)
-      const approve = await cli(['approve', wt1.branch], asPane(3))
+      const reviewerToken = await capturePaneTokenForSmoke({
+        write: async (command) => {
+          const sent = await cli(['send', String(base + 3), command])
+          if (sent.code !== 0) throw new Error(`could not probe pane ${base + 3}`)
+        },
+        sleep
+      })
+      const approve = await cli(['approve', wt1.branch], {
+        ...asPane(3),
+        MOGGING_PANE_TOKEN: reviewerToken
+      })
       const merged1 = await mergeVia(wt1.branch)
       const merged2 = await mergeVia(wt2.branch, 'override')
       const gateOk = ungated.state === 'ungated' && approve.code === 0 && merged1.state === 'merged' && merged2.state === 'merged'

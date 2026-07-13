@@ -28,6 +28,10 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
 
   ipcMain.handle(AgentChannels.detect, () => detectAgents())
   ipcMain.handle(AgentChannels.command, async (_e, req: AgentCommandRequest): Promise<AgentCommandResult> => {
+    if (req.remote === true) {
+      const command = buildLaunchCommand(req.agentId, req.cwd, req.resume, undefined, [], 'posix')
+      return command ? { ok: true, command } : { ok: false, reason: 'Unknown agent CLI.' }
+    }
     // Profile env (4/04): resolved HERE from the store — the renderer only ever
     // names a profile id; values (pointers, never secrets) stay main-side until
     // they become part of the launch command.

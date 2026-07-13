@@ -37,7 +37,7 @@ export function runSetAgentConfigSmoke(win: BrowserWindow): void {
         activeId: 'agentcfg-ui-workspace',
         theme: 'midnight'
       })
-      store.saveRemote({ id: 'agentcfg-remote', name: 'Smoke remote', host: 'smoke.example' })
+      store.saveRemote({ id: 'agentcfg-remote', name: 'Smoke remote', host: 'smoke.example', platform: 'posix' })
 
       const home = join(app.getPath('userData'), 'agent-settings-home')
       const claudeFile = join(home, '.claude', 'settings.json')

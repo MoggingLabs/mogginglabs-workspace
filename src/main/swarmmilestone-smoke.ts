@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorktree } from '@backend/features/worktrees'
-import { sh, softFps, softGapMs } from './smoke-shell'
+import { capturePaneTokenForSmoke, sh, softFps, softGapMs } from './smoke-shell'
 
 // Env-gated Phase-4 SWARM MILESTONE (MOGGING_SWARMMILESTONE), two-phase like 2/05+3/06:
 //
@@ -130,7 +130,17 @@ export function runSwarmMilestoneSmoke(win: BrowserWindow): void {
           `window.bridge.invoke('review:merge', ${JSON.stringify({ repo, branch, override })})`
         ) as Promise<{ ok: boolean; state: string }>
       const ungated = await mergeVia(wt1.branch)
-      const approve = await cli(['approve', wt1.branch], asPane(3))
+      const reviewerToken = await capturePaneTokenForSmoke({
+        write: async (command) => {
+          const sent = await cli(['send', String(base + 3), command])
+          if (sent.code !== 0) throw new Error(`could not probe pane ${base + 3}`)
+        },
+        sleep
+      })
+      const approve = await cli(['approve', wt1.branch], {
+        ...asPane(3),
+        MOGGING_PANE_TOKEN: reviewerToken
+      })
       const merged1 = await mergeVia(wt1.branch)
       // Worker 2's branch: the HUMAN path (typed override, verbatim).
       const merged2 = await mergeVia(wt2.branch, 'override')

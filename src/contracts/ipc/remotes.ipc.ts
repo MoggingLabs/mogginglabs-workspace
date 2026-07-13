@@ -9,6 +9,9 @@ export interface RemoteHost {
   name: string
   /** Hostname or ssh_config alias. */
   host: string
+  /** Explicitly confirmed remote shell platform. Legacy rows omit this and remain
+   *  unavailable for launch until the user confirms them in Settings. */
+  platform?: 'posix'
   user?: string
   port?: number
   /** A NOTE about which identity to use (e.g. "work ed25519") — never a key path

@@ -1,10 +1,14 @@
 import { app, type BrowserWindow } from 'electron'
 import { execFile, execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import * as net from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { createWorktree } from '@backend/features/worktrees'
+import type { DaemonEndpoint } from '@contracts'
+import { runtimeDir } from './daemon-client'
 import { INHERITED_PANE_ENV, scrubInheritedPaneEnv } from './pane-env'
+import { capturePaneTokenForSmoke } from './smoke-shell'
 
 // Env-gated reviewer-gate smoke (MOGGING_GATE, Phase-4/03). The DoD, asserted:
 // an unapproved branch cannot merge through the app — not by click, not by CLI —
@@ -35,6 +39,15 @@ function git(cwd: string, args: string[]): string {
  * on a machine that never leaks (CI) and the pure half is silent about the wiring.
  */
 function checkPaneEnvIsolation(): { pass: boolean; detail: Record<string, unknown> } {
+  const inheritedCli = join(
+    tmpdir(),
+    'MoggingLabs',
+    'run',
+    'v123',
+    'bin',
+    process.platform === 'win32' ? 'mogging.cmd' : 'mogging'
+  )
+  const arbitraryCli = join(tmpdir(), 'host-runtime', 'bin', process.platform === 'win32' ? 'mogging.cmd' : 'mogging')
   // Pure: the rule drops exactly the pane identity, and nothing else. MOGGING_GATE and
   // MOGGING_USERDATA are OURS — the app's own launch flags — and must survive.
   const fake: Record<string, string | undefined> = {
@@ -42,20 +55,32 @@ function checkPaneEnvIsolation(): { pass: boolean; detail: Record<string, unknow
     MOGGING_PANE_TOKEN: 'parent-pane-secret',
     MOGGING_DAEMON_ENDPOINT: 'C:/host/endpoint.json',
     MOGGING_BROWSER_ENDPOINT: 'C:/host/browser.json',
+    MOGGING_PTY: '1',
+    MOGGING_CLI: inheritedCli,
     MOGGING_GATE: '1',
     MOGGING_USERDATA: 'C:/iso/userdata',
-    PATH: 'keep me'
+    PATH: [dirname(inheritedCli), dirname(arbitraryCli), 'keep me'].join(delimiter)
   }
   const dropped = scrubInheritedPaneEnv(fake)
+  const hostile: Record<string, string | undefined> = {
+    MOGGING_CLI: arbitraryCli,
+    PATH: [dirname(arbitraryCli), 'keep me'].join(delimiter)
+  }
+  scrubInheritedPaneEnv(hostile)
   const pureOk =
     dropped.length === INHERITED_PANE_ENV.length &&
     INHERITED_PANE_ENV.every((n) => fake[n] === undefined) &&
     fake.MOGGING_GATE === '1' &&
     fake.MOGGING_USERDATA === 'C:/iso/userdata' &&
-    fake.PATH === 'keep me'
-  // Live: whatever this app was launched from, it is not wearing a pane's name NOW — so the
-  // CLI children it spawns discover the daemon through the isolated runtime dir, like they must.
-  const liveOk = INHERITED_PANE_ENV.every((n) => process.env[n] === undefined)
+    fake.PATH === [dirname(arbitraryCli), 'keep me'].join(delimiter) &&
+    hostile.PATH === [dirname(arbitraryCli), 'keep me'].join(delimiter)
+  // Live: inherited pane identity is absent. Main then installs its OWN MOGGING_CLI, which must
+  // be present so children resolve this app's private runtime rather than their parent pane's.
+  const liveOk =
+    INHERITED_PANE_ENV.filter((n) => n !== 'MOGGING_CLI').every((n) => process.env[n] === undefined) &&
+    !!process.env.MOGGING_CLI &&
+    existsSync(process.env.MOGGING_CLI) &&
+    process.env.PATH?.split(delimiter)[0] === dirname(process.env.MOGGING_CLI)
   return { pass: pureOk && liveOk, detail: { pureOk, liveOk, dropped } }
 }
 
@@ -70,6 +95,48 @@ function makeRepo(): string {
   git(repo, ['add', '-A'])
   git(repo, ['commit', '-m', 'init'])
   return repo
+}
+
+/** An old or hostile client can still omit fields at runtime despite the TypeScript contract.
+ * Send that exact frame so the gate proves transport enforcement, not only CLI enforcement. */
+function unboundApprovalVerdict(from: string, branch: string): Promise<string> {
+  const endpoint = JSON.parse(readFileSync(join(runtimeDir(), 'endpoint.json'), 'utf8')) as DaemonEndpoint
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(endpoint.address)
+    socket.setEncoding('utf8')
+    let buffer = ''
+    let welcomed = false
+    let settled = false
+    const finish = (verdict?: string, error?: Error): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      socket.destroy()
+      if (error) reject(error)
+      else resolve(verdict ?? 'closed')
+    }
+    const timer = setTimeout(() => finish(undefined, new Error('unbound approval probe timed out')), 5000)
+    socket.on('connect', () => {
+      socket.write(JSON.stringify({ t: 'hello', v: endpoint.version, token: endpoint.token }) + '\n')
+    })
+    socket.on('data', (chunk: string) => {
+      buffer += chunk
+      let newline: number
+      while ((newline = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, newline)
+        buffer = buffer.slice(newline + 1)
+        if (!line) continue
+        const message = JSON.parse(line) as { t?: string; reason?: string }
+        if (!welcomed && message.t === 'welcome') {
+          welcomed = true
+          socket.write(JSON.stringify({ t: 'approve', branch, from }) + '\n')
+        } else if (welcomed && message.t === 'error') finish(message.reason ?? 'error')
+        else if (welcomed && message.t === 'approved') finish('approved')
+      }
+    })
+    socket.on('error', (error) => finish(undefined, error))
+    socket.on('close', () => finish())
+  })
 }
 
 export function runGateSmoke(win: BrowserWindow): void {
@@ -98,7 +165,20 @@ export function runGateSmoke(win: BrowserWindow): void {
       await ES(`window.__mogging.templates.open([{provider:'shell',count:3}])`)
       await sleep(3000)
       const base = ((await ES('window.__mogging.workspace.active()')) as { ordinal: number }).ordinal * 100
-      const asPane = (n: number): Record<string, string> => ({ MOGGING_PANE_ID: String(base + n) })
+      const paneTokens: Record<number, string> = {}
+      for (const n of [1, 2, 3]) {
+        paneTokens[n] = await capturePaneTokenForSmoke({
+          write: async (command) => {
+            const sent = await cli(['send', String(base + n), command])
+            if (sent.code !== 0) throw new Error(`could not probe pane ${base + n}`)
+          },
+          sleep
+        })
+      }
+      const asPane = (n: number): Record<string, string> => ({
+        MOGGING_PANE_ID: String(base + n),
+        MOGGING_PANE_TOKEN: paneTokens[n]
+      })
 
       // The USER names the reviewer. This is the ONE channel that confers sign-off authority:
       // setPaneRole -> the terminal:setRole ipcMain message, sent by the renderer. A pane is a
@@ -124,6 +204,14 @@ export function runGateSmoke(win: BrowserWindow): void {
       const ungated = await mergeVia(wt.branch)
 
       // 2) a non-reviewer pane cannot approve — the daemon refuses it outright (exit 6)
+      // A public pane id without its capability, or with another pane's capability, cannot
+      // impersonate the reviewer. An honestly bound non-reviewer is still refused by role.
+      const unboundReviewer = await cli(['approve', wt.branch], { MOGGING_PANE_ID: String(base + 2) })
+      const unboundWireVerdict = await unboundApprovalVerdict(String(base + 2), `gate-probe-${Date.now()}`)
+      const impersonatedReviewer = await cli(['approve', wt.branch], {
+        MOGGING_PANE_ID: String(base + 2),
+        MOGGING_PANE_TOKEN: paneTokens[1]
+      })
       const notReviewer = await cli(['approve', wt.branch], asPane(1))
 
       // 2b) THE ATTACK. Pane 3 (a worker) promotes ITSELF through the open `set-role` verb
@@ -165,6 +253,9 @@ export function runGateSmoke(win: BrowserWindow): void {
         paneEnv.pass &&
         ungated.ok === false &&
         ungated.state === 'ungated' &&
+        unboundReviewer.code === 2 &&
+        unboundWireVerdict === 'notreviewer' &&
+        impersonatedReviewer.code === 6 &&
         notReviewer.code === 6 &&
         // The forgery is INERT: whatever the daemon was told, the gate stayed shut and the
         // renderer was never handed an approval to paint. (We do not assert the CLI's own
@@ -187,6 +278,9 @@ export function runGateSmoke(win: BrowserWindow): void {
         pass,
         paneEnvIsolation: paneEnv.detail,
         ungated,
+        unboundReviewerExit: unboundReviewer.code,
+        unboundWireVerdict,
+        impersonatedReviewerExit: impersonatedReviewer.code,
         notReviewerExit: notReviewer.code,
         selfPromoteExit: selfPromote.code,
         selfApproveExit: selfApprove.code,

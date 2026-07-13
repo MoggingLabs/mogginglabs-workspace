@@ -7,7 +7,7 @@ import {
   type AgentProfileDraft,
   type RemoteHost
 } from '@contracts'
-import { Button, Card, confirmDialog, EmptyState, FieldGroup, Pill, SectionHeader, el, providerLogo } from '../../components'
+import { Button, Card, confirmDialog, createCheckbox, EmptyState, FieldGroup, Pill, SectionHeader, el, providerLogo } from '../../components'
 import { getBridge } from '../../core/ipc/bridge'
 import { announceProfilesChanged } from '../../core/agents/profiles-port'
 import { switchActiveProfile } from '../../core/agents/profile-switch'
@@ -226,6 +226,7 @@ export function createProfilesHostsSection(): HTMLElement {
         el('div', { class: 'ph-row' }, [
           el('div', { class: 'ph-row-main' }, [
             el('span', { class: 'ph-row-name', text: h.name }),
+            h.platform ? null : Pill({ text: 'Platform confirmation required', tone: 'warning' }),
             el('span', {
               class: 'ph-row-meta',
               text: `${h.user ? h.user + '@' : ''}${h.host}${h.port ? ':' + h.port : ''}`
@@ -269,22 +270,32 @@ export function createProfilesHostsSection(): HTMLElement {
     const user = mk('host-user', 'User (optional)', existing?.user ?? '')
     const port = mk('host-port', 'Port (optional)', existing?.port ? String(existing.port) : '')
     const hint = mk('host-hint', 'Identity hint (optional note — never a key)', existing?.identityHint ?? '')
+    const posix = createCheckbox({
+      checked: existing?.platform === 'posix',
+      label: 'POSIX-compatible shell (Linux, macOS, or BSD)',
+      ariaLabel: 'Confirm this SSH host uses a POSIX-compatible shell'
+    })
     const save = Button({
       label: existing ? 'Save host' : 'Add host',
       variant: 'primary',
       ariaLabel: 'Save host',
       onClick: () => {
+        if (!posix.checked()) {
+          showError(err, 'Confirm the remote shell platform before saving this host.')
+          return
+        }
         const remote: RemoteHost = {
           id: existing?.id ?? newId('host'),
           name: name.value.trim(),
           host: host.value.trim(),
+          platform: 'posix',
           user: user.value.trim() || undefined,
           port: port.value.trim() ? Number(port.value) : undefined,
           identityHint: hint.value.trim() || undefined
         }
         void (invoke(RemoteChannels.save, remote) as Promise<boolean>).then((ok) => {
           if (!ok) {
-            showError(err, 'Refused: hostname/user/port shape invalid (no spaces or shell characters; port 1–65535).')
+            showError(err, 'Refused: hostname/user/port shape invalid (no leading dash, spaces, or shell characters; port 1–65535).')
             return
           }
           hostFormHost.replaceChildren()
@@ -300,6 +311,7 @@ export function createProfilesHostsSection(): HTMLElement {
           FieldGroup({ label: 'Hostname or ssh alias' }, host),
           FieldGroup({ label: 'User', hint: 'optional' }, user),
           FieldGroup({ label: 'Port', hint: 'optional' }, port),
+          FieldGroup({ label: 'Remote shell', hint: 'required for terminal integration' }, posix.el),
           FieldGroup({ label: 'Identity hint', hint: 'optional note — never a key' }, hint)
         ]),
         el('div', { class: 'ph-form-actions' }, [
