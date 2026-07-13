@@ -6,14 +6,30 @@ buildDependenciesFromSource: true
 directories:
   output: dist
   buildResources: build
+# `out/**/*` swept the WHOLE build directory into app.asar — and `out/` is also where the
+# smoke gates write. v0.9.0 shipped 13MB of gallery screenshots (127 PNGs), 91 *-result.json
+# gate verdicts, 43 logs and every .js.map: ~14MB of the 22MB asar was test debris the app
+# never reads. That is dead weight in the download, in the NSIS extraction (which blocks the
+# installer's UI thread — the "not responding" freeze at the end of an install), and in the
+# first-run Defender scan. Name the three real bundles instead of globbing the directory.
 files:
-  - out/**/*
+  - out/main/**/*
+  - out/preload/**/*
+  - out/renderer/**/*
+  - '!**/*.map' # sourcemaps are BUILT (for the Sentry upload) but must never ship
+  # bin/ was NEVER packaged, so the built-in "MoggingLabs" MCP server (mcp-manager.ts
+  # houseServerEntry -> <appPath>/bin/mogging-mcp.mjs) pointed at a path that does not exist
+  # in any shipped build. It has been dead in production since it was written.
+  - bin/**/*
   - package.json
 # Native modules (node-pty, better-sqlite3) are unpacked so they load from disk at runtime.
+# bin/ joins them: those scripts are spawned as a SEPARATE plain-`node` process, and node has
+# no asar support — it cannot read a path inside app.asar. Unpacked, the path is a real file.
 asarUnpack:
   - "**/node_modules/node-pty/**"
   - "**/node_modules/better-sqlite3/**"
   - "**/node_modules/bindings/**"
+  - "bin/**"
 
 # Signed release feed for electron-updater. owner/repo are public; the release token (GH_TOKEN)
 # is a CI secret, never committed.
@@ -27,7 +43,7 @@ win:
     - target: nsis
       arch:
         - x64
-  artifactName: ${productName}-${version}-win-${arch}.${ext}
+  artifactName: MoggingLabs-Workspace-${version}-win-${arch}.${ext}
   # Authenticode signing runs when CSC_LINK (base64 .pfx) + CSC_KEY_PASSWORD are in the
   # environment (CI secrets) — required to avoid SmartScreen warnings. No cert is committed.
 
@@ -42,7 +58,7 @@ mac:
         - arm64
         - x64
   category: public.app-category.developer-tools
-  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+  artifactName: MoggingLabs-Workspace-${version}-mac-${arch}.${ext}
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
@@ -56,6 +72,17 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+  # Scrubs ELECTRON_RUN_AS_NODE + the MOGGING_* gate vars from the installer's environment
+  # before it launches anything. See build/installer.nsh for the full story: an app that
+  # inherits ELECTRON_RUN_AS_NODE=1 boots as plain Node and exits 0 without a window.
+  include: build/installer.nsh
+  # Emits the .exe.blockmap that electron-updater range-downloads against, so an update
+  # transfers only the changed blocks instead of the whole 125MB installer. Default true —
+  # pinned because losing it silently degrades every future update to a full download.
+  differentialPackage: true
+  # The uninstaller must never touch userData: it holds the workspaces, the sessions DB and
+  # the agent history. Default is false; pinned because flipping it would be unrecoverable.
+  deleteAppDataOnUninstall: false
 
 # Linux (Phase-4/06): the third platform. Built on Linux hosts/CI (electron-builder
 # does not cross-build Linux targets from Windows). No platform logic forks in
@@ -68,7 +95,7 @@ linux:
     - target: deb
       arch:
         - x64
-  artifactName: ${productName}-${version}-linux-${arch}.${ext}
+  artifactName: MoggingLabs-Workspace-${version}-linux-${arch}.${ext}
   category: Development
   synopsis: Multi-pane terminal workspace for AI coding agents
   maintainer: MoggingLabs <hello@mogginglabs.ai>

@@ -83,6 +83,17 @@ export function runFirstRunSmoke(win: BrowserWindow): void {
         sawDot = await ES<boolean>(`!document.querySelector('.update-dot').hidden`)
         if (!sawDot) await sleep(300)
       }
+      // The rail's update row: the persistent affordance at the bottom of the workspaces
+      // sidebar. It must SAY "Update is available" while the download runs (the replay goes
+      // available -> downloading, so accept either wording of the in-flight row).
+      let sawRailAvailable = false
+      for (let i = 0; i < 30 && !sawRailAvailable; i++) {
+        sawRailAvailable = await ES<boolean>(
+          `(() => { const b = document.querySelector('.rail-update-btn'); if (!b || b.closest('.rail-footer').hidden) return false; return /Update is available|Downloading/.test(b.textContent||''); })()`
+        )
+        if (!sawRailAvailable) await sleep(300)
+      }
+
       // The ready toast, with BOTH actions.
       let toastOk = false
       for (let i = 0; i < 40 && !toastOk; i++) {
@@ -104,8 +115,17 @@ export function runFirstRunSmoke(win: BrowserWindow): void {
       }
       const laterSticks = !reappeared
 
-      const pass = shown && cliHonest && wsIncomplete && wsFlips && goneAfterDismiss && staysGone && sawDot && toastOk && laterSticks
-      result = { pass, shown, anyCliInstalled, cliRowDone, cliHonest, wsIncomplete, wsFlips, goneAfterDismiss, staysGone, sawDot, toastOk, laterSticks }
+      // ...and dismissing the toast must NOT take the update away. The whole point of the
+      // rail row is that "Later" costs nothing: the way back is still sitting there, now
+      // reading "Restart to update". This is the assertion that protects the design.
+      const railReady = await ES<boolean>(
+        `(() => { const b = document.querySelector('.rail-update-btn'); if (!b || b.closest('.rail-footer').hidden) return false; return b.classList.contains('is-ready') && /Restart to update/.test(b.textContent||''); })()`
+      )
+
+      const pass =
+        shown && cliHonest && wsIncomplete && wsFlips && goneAfterDismiss && staysGone &&
+        sawDot && sawRailAvailable && toastOk && laterSticks && railReady
+      result = { pass, shown, anyCliInstalled, cliRowDone, cliHonest, wsIncomplete, wsFlips, goneAfterDismiss, staysGone, sawDot, sawRailAvailable, toastOk, laterSticks, railReady }
     } catch (e) {
       result = { pass: false, error: String(e) }
     }

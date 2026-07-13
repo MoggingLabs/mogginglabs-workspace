@@ -316,8 +316,8 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         }
       })()`)
 
-      // ── (j): PROGRESSIVE COLLAPSE. Two things are never surrendered — the state glyph
-      //    (which agent, doing what) and the × (get out). Between them the bar retires
+      // ── (j): PROGRESSIVE COLLAPSE. Four things are never surrendered — the state
+      //    glyph, agent-CLI mark, ⋯ menu and ×. Between them the bar retires
       //    into the ⋯ menu in a FIXED order, least-identifying first: gauge "% used" text
       //    → branch → expand trio → mcp → claims → role → remote → (last) the gauge disc.
       //    The title is the last thing standing, never the first to go: it used to be the
@@ -344,7 +344,7 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
           return { pct: shown('.pane-context .ctx-pct'), git: shown('.pane-git'),
                    expand: expandShown(), mcp: shown('.pane-mcp'),
                    claims: shown('.pane-claims'), role: shown('.pane-role'), remote: shown('.pane-remote'),
-                   title: shown('.pane-title'), state: shown('.pane-state'), close: shown('.pane-act-close'),
+                   title: shown('.pane-title'), state: shown('.pane-state'), agent: shown('.pane-agent'), close: shown('.pane-act-close'),
                    menu: shown('.pane-act:not(.pane-act-expand):not(.pane-act-close)'),
                    ctxDisc: shown('.pane-context .ctx-disc') } }
         // Checkpoints straddle the 2026-07-10 re-derived ladder (global.css: thresholds
@@ -357,10 +357,10 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
                         w455: await at(455), w340: await at(340), w140: await at(140) }
         slot.style.width = ''
         await sleep(150)
-        // The title is exempt only at 140px: below the 200px floor-release it may
-        // legitimately ellipsise to nothing while the bare chrome (dot, ⋯, ×) holds.
+        // The title is exempt only at 140px: below the 200px retirement rung it moves
+        // into the menu while the compact four-anchor chrome holds.
         const anchorsHold = Object.entries(steps).every(([k, s]) =>
-          s.state && s.close && s.menu && (k === 'w140' || s.title))
+          s.state && s.agent && s.close && s.menu && (k === 'w140' || s.title))
         const order =
           steps.w900.pct && steps.w900.git && steps.w900.expand === 3 && steps.w900.mcp &&
           steps.w900.claims && steps.w900.role && steps.w900.remote &&   // wide: everything
@@ -371,15 +371,312 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
           !steps.w505.claims && steps.w505.role &&                        // 5th: claims
           !steps.w455.role && steps.w455.remote &&                        // 6th: role
           !steps.w340.remote &&                                           // 7th: remote
-          !steps.w140.ctxDisc                                             // 8th: the disc itself
+          !steps.w140.title && !steps.w140.ctxDisc                        // 8th/9th: title, then disc
         // The gauge's DISC (color ramp + sweep) survives every retirement above it and
         // yields only below 135px of content — where even 16px would push the anchors off.
         const ctxGauge = steps.w900.ctxDisc && steps.w700.ctxDisc && steps.w340.ctxDisc
         return { ok: anchorsHold && order && ctxGauge, anchorsHold, order, ctxGauge, steps, hasHost: !!host }
       })()`)
 
-      const pass = Boolean(a.ok && b.ok && c.ok && d.ok && e.ok && f.ok && g.ok && h.ok && i.ok && j.ok)
-      result = { pass, a, b, c, d, e, f, g, h, i, j }
+      // ── (k): THE 132px COMPACT CONTRACT. At the hard floor the exact four
+      //    anchors fit without overlap. The overflow menu is body-portaled, remains in
+      //    the viewport, carries retired facts, and Rename works from that menu. ──
+      stage = 'k-compact-contract'
+      win.setSize(600, 480)
+      await sleep(700)
+      const k = await ES<Record<string, unknown>>(`(async () => {
+        const sleep = ms => new Promise(r => setTimeout(r, ms))
+        const slot = document.querySelector('.layout-slot[data-pane-id="${paneId}"]')
+        if (!slot) return { ok: false, reason: 'no slot' }
+        const pane = (window.__mogging.panes || []).find(p => p.id === ${paneId})
+        window.__mogging.agents.adopt(${paneId}, 'claude', '')
+        window.__mogging.context.set(${paneId}, 62)
+        slot.style.width = '132px'
+        await sleep(120)
+        if (pane && pane.lightChips) pane.lightChips()
+        if (pane && pane.seedMenuFacts) pane.seedMenuFacts()
+
+        const selectors = {
+          state: '.pane-state', agent: '.pane-agent',
+          menu: '[aria-label="Pane menu"]', close: '[aria-label="Close terminal"]'
+        }
+        const probe = async px => {
+          slot.style.width = px + 'px'
+          await sleep(45)
+          const nodes = Object.fromEntries(Object.entries(selectors).map(([name, sel]) => [name, slot.querySelector(sel)]))
+          const header = slot.querySelector('.pane-header')
+          const grid = slot.querySelector('.pane-header-grid')
+          const left = slot.querySelector('.pane-head-left')
+          const actions = slot.querySelector('.pane-actions')
+          const context = slot.querySelector('.pane-context .ctx-disc')
+          const rect = el => el && el.getBoundingClientRect()
+          const inside = (child, ancestor) => {
+            const c = rect(child), a = rect(ancestor)
+            return !!c && !!a && c.left >= a.left - 1 && c.right <= a.right + 1 && c.top >= a.top - 1 && c.bottom <= a.bottom + 1
+          }
+          const rects = Object.fromEntries(Object.entries(nodes).map(([name, el]) => {
+            const r = rect(el)
+            return [name, r ? { left: r.left, right: r.right, width: r.width } : null]
+          }))
+          const ordered = Object.values(rects).filter(Boolean).sort((a, b) => a.left - b.left)
+          const hs = getComputedStyle(header)
+          const queryWidth = Math.round(header.clientWidth - parseFloat(hs.paddingLeft) - parseFloat(hs.paddingRight))
+          const anchorsVisible = Object.values(nodes).every(el => el && getComputedStyle(el).display !== 'none' && rect(el).width >= 8)
+          const noOverlap = ordered.every((r, index) => index === 0 || r.left >= ordered[index - 1].right - 0.5)
+          const shown = sel => { const el = slot.querySelector(sel); return !!el && getComputedStyle(el).display !== 'none' && rect(el).width > 0 }
+          const contextShown = shown('.pane-context')
+          const actionContainer = getComputedStyle(actions).display === 'contents' ? grid : actions
+          const ancestry = [
+            [nodes.state, left], [nodes.agent, left], [left, grid],
+            [nodes.menu, actionContainer], [nodes.close, actionContainer], [actionContainer, grid],
+            [grid, header], [header, slot]
+          ]
+          if (contextShown) ancestry.push([context, actionContainer])
+          const ancestorContained = ancestry.every(([child, ancestor]) => inside(child, ancestor))
+          const clustersSeparated = rect(left).right <= rect(contextShown ? context : nodes.menu).left + 0.5
+          const dotAgentGap = rect(nodes.agent).left - rect(nodes.state).right
+          const agentContextGap = contextShown ? rect(context).left - rect(nodes.agent).right : null
+          const signalGapMatched = agentContextGap == null || Math.abs(dotAgentGap - agentContextGap) <= 0.5
+          return {
+            px, paneWidth: rect(slot).width, queryWidth, rects, anchorsVisible,
+            noOverlap, ancestorContained, clustersSeparated,
+            contextShown, titleShown: shown('.pane-title'),
+            dotAgentGap, agentContextGap, signalGapMatched
+          }
+        }
+        const exact = await probe(132)
+        const aboveContext = await probe(153) // 136px content: immediately above max-width:135
+        const aboveCompactGaps = await probe(175) // 158px content: immediately above max-width:157
+        const aboveTitle = await probe(218) // 201px content: immediately above max-width:200
+        const samples = [exact, aboveContext, aboveCompactGaps, aboveTitle]
+        const sampleGeometry = samples.every(s => s.anchorsVisible && s.noOverlap && s.ancestorContained && s.clustersSeparated)
+        const signalRhythm = [exact, aboveContext, aboveCompactGaps].every(s =>
+          Math.abs(s.dotAgentGap - 8) <= 0.5 &&
+          (s.agentContextGap == null || Math.abs(s.agentContextGap - 8) <= 0.5) &&
+          s.signalGapMatched)
+        const transitions = Math.abs(exact.paneWidth - 132) <= 0.5 && exact.queryWidth === 115 && !exact.contextShown && !exact.titleShown &&
+          aboveContext.queryWidth === 136 && aboveContext.contextShown && !aboveContext.titleShown &&
+          aboveCompactGaps.queryWidth === 158 && aboveCompactGaps.contextShown && !aboveCompactGaps.titleShown &&
+          aboveTitle.queryWidth === 201 && aboveTitle.contextShown && aboveTitle.titleShown
+        await probe(132)
+        const retiredInline = ['.pane-title', '.pane-remote', '.pane-role', '.pane-claims', '.pane-mcp', '.pane-git', '.pane-act-expand', '.pane-context']
+          .every(sel => [...slot.querySelectorAll(sel)].every(el => getComputedStyle(el).display === 'none'))
+
+        const menuButton = slot.querySelector('[aria-label="Pane menu"]')
+        menuButton.click()
+        await sleep(80)
+        const menu = document.getElementById('pane-menu-${paneId}')
+        if (!menu || menu.hidden) return { ok: false, reason: 'menu did not open', exact, transitions }
+        const menuRect = menu.getBoundingClientRect()
+        const portaled = menu.parentElement === document.body && !slot.contains(menu)
+        const viewportContained = menuRect.left >= 7 && menuRect.top >= 7 && menuRect.right <= innerWidth - 7 && menuRect.bottom <= innerHeight - 7
+        const menuText = (menu.textContent || '').replace(/\\s+/g, ' ').trim()
+        const paneFact = 'Pane: ' + (slot.querySelector('.pane-title').textContent || '').trim()
+        const factNeedles = [
+          paneFact, 'Agent CLI: claude', 'Status:', 'Remote: devbox-01', 'Role: Reviewer',
+          'Claims: 2 file patterns', 'MCP: 2 tools connected', 'Agent context: 62% used',
+          'Branch: feat/menu-facts'
+        ]
+        const retiredFacts = factNeedles.every(needle => menuText.includes(needle))
+        const actionNeedles = [
+          'Expand to whole workspace', 'Expand across full width', 'Expand to full height',
+          'Split right', 'Split down', 'Rename', 'Clear terminal',
+          'Copy working directory', 'Show claims'
+        ]
+        const retiredActions = actionNeedles.every(needle => menuText.includes(needle))
+
+        const renameItem = [...menu.querySelectorAll('.menu-item')].find(el => (el.textContent || '').trim() === 'Rename')
+        if (!renameItem) return { ok: false, reason: 'no Rename item', menuText }
+        renameItem.click()
+        await sleep(50)
+        const overlay = document.querySelector('.modal-overlay:not(.is-closing)')
+        const input = overlay && overlay.querySelector('.pane-title-input')
+        const renamePortaled = !!overlay && overlay.parentElement === document.body && !!input
+        if (input) {
+          input.value = 'Compact smoke pane'
+          input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+        }
+        await sleep(300)
+        const titleUpdated = (slot.querySelector('.pane-title').textContent || '').trim() === 'Compact smoke pane'
+        menuButton.click()
+        await sleep(80)
+        const renamedInMenu = (menu.textContent || '').includes('Pane: Compact smoke pane')
+
+        const menuItem = needle => [...menu.querySelectorAll('.menu-item')]
+          .find(el => (el.textContent || '').includes(needle))
+        const expandItem = menuItem('Expand to whole workspace')
+        if (!expandItem) return { ok: false, reason: 'no Expand menu item' }
+        expandItem.click()
+        await sleep(100)
+        const expandedViaMenu = slot.dataset.expandMode === 'full'
+        menuButton.click()
+        await sleep(80)
+        const restoreItem = menuItem('Restore grid')
+        if (!restoreItem) return { ok: false, reason: 'no Restore menu item', expandedViaMenu }
+        restoreItem.click()
+        await sleep(100)
+        const restoredViaMenu = !slot.dataset.expandMode
+
+        const beforeSplitIds = window.__mogging.layout.paneIds()
+        menuButton.click()
+        await sleep(80)
+        const splitItem = menuItem('Split right')
+        if (!splitItem) return { ok: false, reason: 'no Split menu item' }
+        splitItem.click()
+        await sleep(180)
+        const afterSplitIds = window.__mogging.layout.paneIds()
+        const addedPaneId = afterSplitIds.find(id => !beforeSplitIds.includes(id))
+        const splitViaMenu = afterSplitIds.length === beforeSplitIds.length + 1 && addedPaneId != null
+        if (addedPaneId != null) window.__mogging.layout.close(addedPaneId)
+        await sleep(160)
+        const splitCleanup = window.__mogging.layout.paneCount() === beforeSplitIds.length
+
+        menuButton.click()
+        await sleep(80)
+        const activeWorkspaceId = window.__mogging.workspace.active().id
+        const workspaces = window.__mogging.workspace.list()
+        const otherIndex = workspaces.findIndex(ws => ws.id !== activeWorkspaceId)
+        window.__mogging.workspace.switchByIndex(otherIndex)
+        await sleep(100)
+        const closesOnWorkspaceSwitch = menu.hidden && !menu.contains(document.activeElement)
+        window.__mogging.workspace.switchByIndex(workspaces.findIndex(ws => ws.id === activeWorkspaceId))
+        await sleep(100)
+        slot.style.width = ''
+        return {
+          ok: sampleGeometry && signalRhythm && transitions && retiredInline && portaled && viewportContained &&
+            retiredFacts && retiredActions && renamePortaled && titleUpdated && renamedInMenu &&
+            expandedViaMenu && restoredViaMenu && splitViaMenu && splitCleanup && closesOnWorkspaceSwitch,
+          sampleGeometry, signalRhythm, transitions, samples, retiredInline,
+          portaled, viewportContained, menuRect: { left: menuRect.left, top: menuRect.top, right: menuRect.right, bottom: menuRect.bottom },
+          retiredFacts, factNeedles, retiredActions, actionNeedles,
+          renamePortaled, titleUpdated, renamedInMenu,
+          expandedViaMenu, restoredViaMenu, splitViaMenu, splitCleanup, closesOnWorkspaceSwitch
+        }
+      })()`)
+
+      // ── (l): HARD WIDTH FLOOR. Exercise the real allocator through every curated
+      //    template, a wide→minimum window resize, and alternating nested splits. ──
+      stage = 'l-pane-floor'
+      win.setSize(1200, 760)
+      await sleep(650)
+      const lWide = await ES<Record<string, unknown>>(`(async () => {
+        window.__mogging.layout.apply(16)
+        await new Promise(r => setTimeout(r, 300))
+        const widths = [...document.querySelectorAll('.workspace-view.active .layout-slot')].map(el => el.getBoundingClientRect().width)
+        return { ok: widths.length === 16 && widths.every(w => w >= 131.5), widths }
+      })()`)
+      win.setSize(600, 760)
+      await sleep(800)
+      const l = await ES<Record<string, unknown>>(`(async () => {
+        const sleep = ms => new Promise(r => setTimeout(r, ms))
+        const m = window.__mogging
+        const read = expected => {
+          const host = document.querySelector('.workspace-view.active')
+          const slots = [...host.querySelectorAll(':scope > .layout-grid > .layout-slot')]
+          const widths = slots.map(el => el.getBoundingClientRect().width)
+          const canvas = host.querySelector(':scope > .layout-grid')
+          const maxScrollLeft = Math.max(0, host.scrollWidth - host.clientWidth)
+          const beforeScrollLeft = host.scrollLeft
+          if (maxScrollLeft > 0) host.scrollLeft = Math.min(17, maxScrollLeft)
+          const overflowX = getComputedStyle(host).overflowX
+          const scrollReachable = maxScrollLeft === 0 ||
+            ((overflowX === 'auto' || overflowX === 'scroll') && host.scrollLeft > 0)
+          host.scrollLeft = beforeScrollLeft
+          return {
+            ok: slots.length === expected && widths.every(w => w >= 131.5),
+            count: slots.length, min: widths.length ? Math.min(...widths) : 0,
+            widths, hostClientWidth: host.clientWidth, hostScrollWidth: host.scrollWidth,
+            canvasWidth: canvas.getBoundingClientRect().width,
+            overflowX, maxScrollLeft, scrollReachable
+          }
+        }
+        const shrink16 = read(16)
+        const scrollDismiss = async () => {
+          const host = document.querySelector('.workspace-view.active')
+          const menuButton = host.querySelector('.pane-act-menu')
+          host.scrollLeft = 0
+          await sleep(40)
+          menuButton.click()
+          await sleep(80)
+          const menu = document.getElementById(menuButton.getAttribute('aria-controls'))
+          const opened = !!menu && !menu.hidden
+          host.scrollLeft = Math.min(31, Math.max(0, host.scrollWidth - host.clientWidth))
+          await sleep(80)
+          const closed = !!menu && menu.hidden && !menu.contains(document.activeElement)
+          host.scrollLeft = 0
+          return { ok: opened && closed, opened, closed }
+        }
+        const scrollDismissesMenu = await scrollDismiss()
+        const expandedViewport = async mode => {
+          const host = document.querySelector('.workspace-view.active')
+          const paneId = m.layout.paneIds()[0]
+          const maxScrollLeft = Math.max(0, host.scrollWidth - host.clientWidth)
+          host.scrollLeft = Math.min(23, maxScrollLeft)
+          await sleep(40)
+          m.layout.expand(paneId, mode)
+          await sleep(100)
+          const slot = host.querySelector('.layout-slot[data-pane-id="' + paneId + '"]')
+          const measure = () => {
+            const hr = host.getBoundingClientRect(), sr = slot.getBoundingClientRect()
+            return Math.abs(sr.left - hr.left) <= 1 && Math.abs(sr.width - host.clientWidth) <= 1
+          }
+          const initial = measure()
+          if (maxScrollLeft > 30) {
+            host.scrollLeft = Math.min(47, maxScrollLeft)
+            await sleep(80)
+          }
+          const followsScroll = measure()
+          const originalStyle = host.getAttribute('style')
+          const originalWidth = host.clientWidth
+          const resizedTargetWidth = Math.max(132, originalWidth - 24)
+          host.style.flex = 'none'
+          host.style.width = resizedTargetWidth + 'px'
+          await sleep(100)
+          const resizedHostWidth = host.clientWidth
+          const hostResized = Math.abs(resizedHostWidth - resizedTargetWidth) <= 1
+          const followsResize = measure()
+          if (originalStyle == null) host.removeAttribute('style')
+          else host.setAttribute('style', originalStyle)
+          await sleep(100)
+          const restoredHostWidth = host.clientWidth
+          const hostRestored = Math.abs(restoredHostWidth - originalWidth) <= 1
+          const restoresResize = measure()
+          m.layout.expand(paneId, mode)
+          await sleep(80)
+          host.scrollLeft = 0
+          return {
+            ok: initial && followsScroll && hostResized && followsResize && hostRestored && restoresResize,
+            initial, followsScroll, hostResized, resizedHostWidth, resizedTargetWidth,
+            followsResize, hostRestored, restoredHostWidth, originalWidth, restoresResize, mode
+          }
+        }
+        const fullViewport = await expandedViewport('full')
+        const rowViewport = await expandedViewport('row')
+        const templates = {}
+        for (const count of [1, 2, 4, 6, 8, 9, 12, 16]) {
+          m.layout.apply(count)
+          await sleep(140)
+          templates[count] = read(count)
+        }
+        m.layout.apply(1)
+        await sleep(120)
+        m.layout.split('h'); await sleep(120)
+        m.layout.split('v'); await sleep(120)
+        m.layout.split('h'); await sleep(180)
+        const nested = read(4)
+        const scrollsWhenNeeded = shrink16.hostScrollWidth > shrink16.hostClientWidth && shrink16.scrollReachable &&
+          nested.hostScrollWidth > nested.hostClientWidth && nested.scrollReachable
+        return {
+          ok: shrink16.ok && Object.values(templates).every(x => x.ok) && nested.ok &&
+            scrollsWhenNeeded && scrollDismissesMenu.ok && fullViewport.ok && rowViewport.ok,
+          shrink16, templates, nested, scrollsWhenNeeded, scrollDismissesMenu, fullViewport, rowViewport
+        }
+      })()`)
+      l.ok = Boolean(l.ok && lWide.ok)
+      l.wide16 = lWide
+
+      const pass = Boolean(a.ok && b.ok && c.ok && d.ok && e.ok && f.ok && g.ok && h.ok && i.ok && j.ok && k.ok && l.ok)
+      result = { pass, a, b, c, d, e, f, g, h, i, j, k, l }
     } catch (err) {
       result = { pass: false, stage, error: String(err) }
     }

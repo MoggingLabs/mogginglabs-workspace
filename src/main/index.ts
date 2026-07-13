@@ -98,6 +98,8 @@ import { runGitSmoke } from './git-smoke'
 import { runNotifySmoke } from './notify-smoke'
 import { runMilestoneSmoke } from './milestone-smoke'
 import { runFlickerSmoke } from './flicker-smoke'
+import { runPaneScrollSmoke } from './panescroll-smoke'
+import { runAppScrollSmoke } from './appscroll-smoke'
 import { runConptySmoke } from './conpty-smoke'
 import { runPaneOpsSmoke } from './paneops-smoke'
 import { runControlSmoke } from './control-smoke'
@@ -219,6 +221,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_UXMILESTONE',
   'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT',
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS',
+  'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW',
   'MOGGING_BOARD', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
   'MOGGING_PROFILES', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
@@ -427,9 +430,15 @@ app.whenReady().then(async () => {
       else send()
     }
     initAutoUpdate(() => win) // auto-update feed -> renderer update UX (packaged; MOGGING_FAKE_UPDATE drives dev/smoke)
-  } else if (process.env.MOGGING_FAKE_UPDATE && win) {
-    // The FIRSTRUN smoke drives the update UX with a fake version; the real
-    // updater stays out of smokes, but this network-free replay must run.
+  } else if (win) {
+    // Smokes too. The updater's FEED is what must stay out of them, and it already does —
+    // `feedLive` is `app.isPackaged && !MOGGING_FAKE_UPDATE`, so an unpackaged smoke run
+    // touches no network whatever we do here. What initAutoUpdate ALSO does is register
+    // update:stateGet / update:prefsGet, and the renderer's update UX calls both the moment
+    // it mounts: skipping it left every gate with two unhandled-IPC console.errors, which is
+    // an error the app would never survive in production and which any smoke that fails on
+    // console errors (FLICKER, and the two scroll gates) reads as a real fault. It was one:
+    // just not the one they were looking for.
     initAutoUpdate(() => win)
   }
 
@@ -551,6 +560,10 @@ app.whenReady().then(async () => {
     runMilestoneSmoke(win) // env-gated 16-agent perf milestone smoke (Phase-2/05)
   } else if (process.env.MOGGING_FLICKER && win) {
     runFlickerSmoke(win) // env-gated terminal-artifact smoke: churn without flicker
+  } else if (process.env.MOGGING_PANESCROLL && win) {
+    runPaneScrollSmoke(win) // env-gated pane scroll-anchor + overlay slide-bar smoke
+  } else if (process.env.MOGGING_APPSCROLL && win) {
+    runAppScrollSmoke(win) // env-gated app-wide overlay-scrollbar smoke
   } else if (process.env.MOGGING_CONPTY && win) {
     runConptySmoke(win) // env-gated ConPTY-coherence smoke: resize must never smear the buffer
   } else if (process.env.MOGGING_PANEOPS && win) {

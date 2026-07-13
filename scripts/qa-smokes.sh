@@ -9,8 +9,8 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# The registry below is the source of truth for gate count. Agent settings adds
-# one windowless control-plane gate and one composed Settings UI gate.
+# The registry below is the source of truth for gate count. Agent settings adds a
+# catalog gate, a windowless control-plane gate, and a composed Settings UI gate.
 # Phase 11 (Files — the explorer) added seven, and they run LAST:
 #   FSLIST          the read service, zero UI (files+dirs, caps, typed refusals)
 #   FILETREE        the virtualized tree (10k rows, APG keyboard, tree ARIA)
@@ -175,6 +175,11 @@ run_static SPACING node scripts/check-spacing.mjs --max 0
 run_static PTYSEAM node scripts/check-pty-seam.mjs
 run_static PROTOVER node scripts/check-protocol-version.mjs
 run_static AGENTCAT node scripts/check-agent-settings-catalog.mjs
+run_static LAYOUT  node scripts/check-layout-invariants.mjs
+# DOCSREFS: the docs cite each other constantly (the roadmap points at ADRs, ADRs at
+# research, phases at the pack that shipped them). Rename a doc and every citation keeps
+# reading as true while the link 404s. Free to check, invisible when wrong.
+run_static DOCSREFS node scripts/check-docs-refs.mjs
 
 run_smoke SMOKE       MOGGING_SMOKE     1 180 smoke
 run_smoke MULTIPANE   MOGGING_MULTIPANE 1 180 multipane
@@ -191,6 +196,8 @@ run_smoke SURVIVE_A   MOGGING_SURVIVE   A 120 survive SURVIVE
 run_smoke SURVIVE_B   MOGGING_SURVIVE   B 120 survive SURVIVE
 run_smoke MILESTONE   MOGGING_MILESTONE 1 300 milestone
 run_smoke FLICKER     MOGGING_FLICKER   1 240 flicker
+run_smoke PANESCROLL  MOGGING_PANESCROLL 1 300 panescroll
+run_smoke APPSCROLL   MOGGING_APPSCROLL 1 180 appscroll
 run_smoke CONPTY      MOGGING_CONPTY    1 180 conpty
 run_smoke PERCEPTION  MOGGING_PERCEPTION 1 240 perception
 run_smoke PANEOPS     MOGGING_PANEOPS   1 180 paneops

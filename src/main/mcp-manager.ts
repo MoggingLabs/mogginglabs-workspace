@@ -61,6 +61,18 @@ export function resolveCliHomes(): CliHomes {
   }
 }
 
+/**
+ * Where `bin/` really is on disk.
+ *
+ * The house server is spawned as a separate plain-`node` process, and node has no asar
+ * support — it cannot read a path inside app.asar. In a packaged build getAppPath() ends in
+ * `app.asar`, so the honest path is the unpacked twin (electron-builder.yml asarUnpack puts
+ * bin/ there). In dev there is no asar and the substitution is a no-op.
+ */
+function binDir(): string {
+  return join(app.getAppPath().replace(/app\.asar([\\/]|$)/, 'app.asar.unpacked$1'), 'bin')
+}
+
 /** The built-in house row — one entry, whole app; never stored, never edited. */
 export function houseServerEntry(): McpServerEntry {
   return {
@@ -68,7 +80,7 @@ export function houseServerEntry(): McpServerEntry {
     label: 'MoggingLabs',
     transport: 'stdio',
     command: 'node',
-    args: [join(app.getAppPath(), 'bin', 'mogging-mcp.mjs')],
+    args: [join(binDir(), 'mogging-mcp.mjs')],
     builtIn: true
   }
 }

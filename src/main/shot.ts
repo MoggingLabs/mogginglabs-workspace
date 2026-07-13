@@ -40,7 +40,12 @@ const PROBE = `(() => {
         computedFont: getComputedStyle(slot.querySelector('.xterm')).fontFamily,
         jbmLoaded: document.fonts.check('13px "JetBrains Mono Variable"'),
         fontsStatus: document.fonts.status,
-        scrollBarWidth: core && core.viewport ? core.viewport.scrollBarWidth : null,
+        // FitAddon 0.11 (xterm 6) no longer exposes viewport.scrollBarWidth.
+        // Mirror its public-option formula so the fill gate measures the reserve
+        // the addon actually subtracted instead of falling back to a stale 10px.
+        scrollBarWidth: p.term.options.scrollback === 0
+          ? 0
+          : (p.term.options.overviewRuler?.width || 14),
         // ConPTY compatibility, seeded from the pty's OWN answer (SpawnResult.pty, daemon
         // protocol v4 -> core/terminal/pty-emulation.ts). On Windows this MUST be
         // { backend: 'conpty', buildNumber: <os build> }: without it xterm grows rows the

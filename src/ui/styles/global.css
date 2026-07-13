@@ -257,12 +257,25 @@ button {
   background: var(--selection-bg);
 }
 
+/* App-wide OVERLAY scrollbars — the terminal pane's contract, everywhere (overlay-scroll.ts
+   sets the two classes): INVISIBLE at rest, revealed while you scroll (`ovs-scrolling`,
+   fading 900ms after you stop) and while the pointer is in the bar's own lane at the
+   container's edge (`ovs-hot`). Hovering the container is deliberately NOT a reveal — a
+   bar that appears whenever the pointer is anywhere inside the box is the noise this
+   replaces. The gutter is reserved at all times (the bar is painted, not laid out, so
+   revealing it never reflows the content beneath it).
+
+   Styled in BOTH scrollbar systems on purpose: Chromium honours `scrollbar-color` when it
+   is set and then ignores the ::-webkit-* pseudos, so a rule written in only one of them
+   is one Electron bump away from a permanently visible — or permanently invisible — bar. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-color: transparent transparent;
 }
-/* App-wide scrollbars share the terminal's slider language: invisible track, slim
-   rounded neutral thumb (subtle at rest, solid under the cursor). */
+.ovs-hot,
+.ovs-scrolling {
+  scrollbar-color: color-mix(in srgb, var(--text-lo) 40%, transparent) transparent;
+}
 *::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -271,12 +284,18 @@ button {
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--text-lo) 40%, transparent);
+  background: transparent;
   border-radius: var(--r-full);
   border: 3px solid transparent;
   background-clip: content-box;
 }
-*::-webkit-scrollbar-thumb:hover {
+.ovs-hot::-webkit-scrollbar-thumb,
+.ovs-scrolling::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-lo) 40%, transparent);
+  background-clip: content-box;
+}
+/* ...and solid under the cursor, once the lane has revealed it. */
+.ovs-hot::-webkit-scrollbar-thumb:hover {
   background: var(--text-lo);
   background-clip: content-box;
 }
@@ -1659,8 +1678,19 @@ button {
 #app.rail-collapsed .rail-total,
 #app.rail-collapsed .ws-label,
 #app.rail-collapsed .ws-count,
-#app.rail-collapsed .ws-close {
+#app.rail-collapsed .ws-close,
+#app.rail-collapsed .rail-update-label {
   display: none;
+}
+/* Collapsed, the update row keeps its icon and centres it on the icon column —
+   the same treatment the + button gets. It must never be the reason the rail
+   is wider than --rail-w-collapsed. */
+#app.rail-collapsed .rail-footer {
+  padding: var(--sp-2);
+}
+#app.rail-collapsed .rail-update-btn {
+  justify-content: center;
+  padding: var(--sp-2);
 }
 #app.rail-collapsed .rail-header {
   /* Same vertical padding as expanded — the header must keep its height or every tab
@@ -1817,6 +1847,15 @@ button {
 }
 .workspace-view.active {
   display: flex;
+}
+
+/* A workspace view is the viewport for GridLayout's non-shrinking inner canvas.
+   Window, rail and dock compression therefore reveal a horizontal scrollbar instead
+   of forcing any terminal below the split tree's hard per-leaf width requirement. */
+.workspace-view.layout-scroll-host {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
 }
 
 /* The grid: slots are live terminals, absolutely positioned from the split-tree's
@@ -2010,6 +2049,15 @@ button {
      @container does it in the style engine (see the progressive-collapse block below). */
   container-type: inline-size;
   container-name: pane-bar;
+  height: var(--pane-header-h);
+  padding: 0 3px 0 var(--sp-3); /* actions hug the pane's right edge, like the reference bar */
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+  min-width: 0;
+  user-select: none;
+}
+.pane-header-grid {
   display: grid;
   /* Was `minmax(0,1fr) auto minmax(0,1fr)` — a TRUE window-centred branch chip, paid for
      by giving the actions column exactly as much width as the left cluster. The actions
@@ -2022,13 +2070,9 @@ button {
   grid-template-columns: minmax(0, max-content) minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--sp-3);
-  height: var(--pane-header-h);
-  padding: 0 3px 0 var(--sp-3); /* actions hug the pane's right edge, like the reference bar */
-  background: var(--bg-surface);
-  border-bottom: 1px solid var(--border);
-  flex: none;
+  width: 100%;
+  height: 100%;
   min-width: 0;
-  user-select: none;
 }
 /* Explicit column pins: the git chip is display:none outside repos, and a hidden grid
    item generates NO box — auto-placement would then drop the actions into the CENTER
@@ -2053,14 +2097,14 @@ button {
 }
 
 /* ── Progressive collapse ───────────────────────────────────────────────────────
-   Two things are NEVER given up: the state glyph on the left (which agent is doing
-   what) and the × on the right (get out). Between them everything retires into the ⋯
-   menu, in a fixed order, least-identifying first:
+   Four anchors are NEVER given up while an agent session exists: the state glyph and
+   agent-CLI mark on the left, then ⋯ and × on the right. Everything else retires into
+   the portaled menu, in a fixed order, least-identifying first:
 
      1. the "% used" text of the context gauge (the disc keeps the color+arc signal)
      2. the branch / worktree chip      3. the expand trio
-     4. the MCP chip   5. claims   6. role   7. remote (+ the provider logo)
-     8. the gauge disc itself — only once even 16px would crowd the anchors out
+     4. the MCP chip   5. claims   6. role   7. remote
+     8. the title      9. the gauge disc itself
 
    The context gauge's ARC never lies but its FORM yields: the disc (color ramp +
    sweep) survives to ~150px panes; the "% used" text is the first thing retired,
@@ -2069,7 +2113,7 @@ button {
    whole contract: at 210px the state dot was crushed to 0, at 200px the × began
    to clip, at 150px ⋯ and × were BOTH gone — while "62% used" kept its 99px.
 
-   The title is the last thing standing, never the first to go. That inversion was the
+   The title is the last descriptive thing standing, never the first to go. That inversion was the
    bug: the chips are `flex: none` and the actions are fixed, so `.pane-title` was the
    ONLY shrinkable item in the row and absorbed the entire deficit — measured, it hit
    0px at a 862px pane while four chips kept their full width and were then clipped
@@ -2167,11 +2211,9 @@ button {
     display: none;
   }
 }
-/* 7. REMOTE + the provider logo: 351 = state+remote+logo+title floor (237) + gaps (24)
-   + disc actions (90). */
+/* 7. REMOTE. Agent identity is one of the compact floor's four anchors and stays. */
 @container pane-bar (max-width: 355px) {
-  .pane-header .pane-remote,
-  .pane-header .pane-agent {
+  .pane-header .pane-remote {
     display: none;
   }
 }
@@ -2182,35 +2224,49 @@ button {
     display: none;
   }
 }
-/* Below this there is nothing left to retire — only the state glyph, the title, the
-   disc, ⋯ and ×. Give the title's 6ch floor back, or it would overflow .pane-head-left
-   and be CLIPPED (measured: 90px of it, at a 90px pane) instead of ellipsising down
-   gracefully. A floor that outlives the space it was protecting stops protecting
-   anything. */
+/* 8. TITLE. At the final compact rung the menu carries the complete current title and
+   a portaled Rename dialog. Remove the title box entirely: leaving a zero-width flex
+   child would still consume a gap and raise the four-anchor floor for no information. */
 @container pane-bar (max-width: 200px) {
   .pane-header .pane-title {
-    min-width: 0;
+    display: none;
   }
 }
-/* 8. THE DISC ITSELF. 133 = state (13+6) + gaps (24) + disc actions (90): below that
-   even 16px of gauge starts pushing the anchors (⋯, ×, the dot) off the pane. The
+/* 9. THE DISC ITSELF. Below this, even 16px of gauge starts pushing the anchors
+   (dot, agent mark, ⋯, ×) off the pane. The
    anchors win — the ⋯ menu still states the context numbers. */
 @container pane-bar (max-width: 135px) {
   .pane-header .pane-context {
     display: none;
   }
 }
-/* The floor of the floor: state + ⋯ + × alone need 111px of content with --sp-3 gaps
-   (19 + 24 + 68). Tighten the gaps — NEVER the header's own padding: padding changes
-   this container's content box, and a container query that resizes its own container
-   oscillates. With --sp-1 gaps the bare chrome fits from 93px of content up, which is
-   what MIN_PANE_PX (grid-layout.ts) is set against. */
-@container pane-bar (max-width: 115px) {
-  .pane-header {
-    gap: var(--sp-1);
+/* Once the title retires, the three compact signals become one measured rhythm:
+   dot → agent and agent → context are both --sp-2 (8px). `display:contents` lets the
+   context gauge join that left cluster while ⋯ and × remain pinned to the right.
+   Below 135px the gauge yields, leaving 107px of fixed chrome in the 115px content
+   box at the 132px pane floor — an 8px rounding/drag guard. NEVER change the header's
+   own padding from a query: that changes the queried content box and can oscillate. */
+@container pane-bar (max-width: 200px) {
+  .pane-header-grid {
+    grid-template-columns: max-content auto minmax(0, 1fr) auto auto;
+    gap: 0;
   }
   .pane-head-left {
-    gap: var(--sp-1);
+    gap: var(--sp-2);
+  }
+  .pane-header .pane-actions {
+    display: contents;
+  }
+  .pane-actions .pane-context {
+    grid-column: 2;
+    margin: 0 0 0 var(--sp-2);
+  }
+  .pane-act-menu {
+    grid-column: 4;
+  }
+  .pane-act-close {
+    grid-column: 5;
+    margin-left: 2px;
   }
 }
 /* Remote pane chip (4/05): WHERE the pane lives — a distinct cool tint so remote
@@ -2242,6 +2298,14 @@ button {
   color: var(--text-lo);
   font-size: var(--fs-10);
   max-width: 220px;
+  line-height: 1.4;
+  border-radius: var(--r-sm);
+  outline: none;
+}
+.menu-note:focus-visible {
+  background: var(--bg-inset);
+  color: var(--text-mid);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 
 /* Ownership chip (4/02) + claims modal. */
@@ -2431,14 +2495,20 @@ button {
   color: var(--text-hi);
 }
 .pane-title-input {
-  width: 230px;
-  border: 1px solid var(--accent);
-  border-radius: var(--r-sm);
-  background: var(--bg-inset);
-  color: var(--text-hi);
-  font-size: 18px;
-  padding: 2px 6px;
-  outline: none;
+  width: 100%;
+}
+.pane-rename-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  color: var(--text-mid);
+  font-size: var(--fs-12);
+}
+.pane-rename-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  width: 100%;
 }
 .pane-actions {
   position: relative;
@@ -2510,9 +2580,13 @@ button {
   display: block;
 }
 .pane-menu {
-  top: 39px; /* clears the 33px action button inside the taller bar */
-  right: 0;
+  position: fixed;
+  z-index: 60;
   min-width: 200px;
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .menu-sep {
   height: 1px;
@@ -2547,19 +2621,28 @@ button {
   width: 0;
   height: 0;
 }
+/* xterm 6 moved its native scrollbar out of .xterm-viewport and into a direct
+   child of .xterm-scrollable-element. The pane slider below remains the single
+   scroll affordance, so retire the new implementation as well. */
+.pane-body .xterm-scrollable-element > .scrollbar {
+  display: none !important;
+}
 .pane-slider {
   position: absolute;
-  top: var(--sp-2);
+  top: 0; /* FULL height: the floor is the newest line, the ceiling the oldest — an */
+  bottom: 0; /* inset rail would lie about how much history is left at the ends. */
   right: 5px; /* floats off the pane outline — never flush against it */
-  bottom: var(--sp-2);
   width: 14px;
   z-index: 3;
-  opacity: 0; /* revealed on pane hover — still hit-testable, so the lane works instantly */
+  /* Invisible at rest, and ONLY at rest. opacity (not visibility/display) so the lane
+     still hit-tests: the pointer entering it reveals a bar that is already grabbable. */
+  opacity: 0;
   transition: opacity 140ms ease;
 }
-.pane-body:hover .pane-slider,
-.pane-slider:has(.pane-slider-thumb.is-dragging) {
-  opacity: 1; /* the drag case: pointer capture can leave the pane mid-scrub */
+.pane-slider.is-hot, /* the pointer is in the bar's own lane — the only hover that counts */
+.pane-slider.is-active, /* the viewport is moving: flash the position, then fade (900ms) */
+.pane-slider:has(.pane-slider-thumb.is-dragging) /* a scrub whose capture left the pane */ {
+  opacity: 1;
 }
 .pane-slider.is-idle {
   display: none; /* nothing above the fold — no scrollback yet (or an alt-screen TUI) */
@@ -7063,6 +7146,121 @@ body.pane-dragging * {
   justify-content: space-between;
   gap: var(--sp-2);
   padding-bottom: var(--sp-2);
+}
+
+/* ── Settings § About: the update status row ────────────────────────────────────
+   The version and the thing that can change it, on one line. */
+.update-status-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+.update-status-main {
+  min-width: 0; /* so a long status line ellipsizes instead of shoving the buttons off */
+}
+.update-version {
+  display: block;
+  color: var(--text-hi);
+  font-size: var(--fs-16);
+  font-weight: var(--fw-semibold);
+}
+.update-status {
+  margin-top: var(--sp-1);
+}
+/* Last-checked is the quietest line on the card and the most important one: it is the only
+   thing that can tell "nothing to report" apart from "this has been broken for nine
+   releases". Quiet, but never absent. */
+.update-checked {
+  margin-top: var(--sp-1);
+}
+.update-status-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: none;
+}
+
+/* ── Auto-update UX: the rail's update row ──────────────────────────────────────
+   Pinned to the bottom of the workspaces rail (#workspace-tabs is flex:1, so this
+   sibling sits on the floor). Hidden entirely until there is something to say —
+   an empty rail footer is a permanent apology for nothing. */
+.rail-footer {
+  position: relative; /* anchors the ::after hairline */
+  flex: none;
+  padding: var(--sp-2);
+}
+.rail-footer[hidden] {
+  display: none;
+}
+/* The header's divider, mirrored: a division, not a wall — inset to the tabs'
+   outer edges so it caps the list column rather than slicing the whole surface. */
+.rail-footer::before {
+  content: '';
+  position: absolute;
+  left: var(--sp-2);
+  right: var(--sp-2);
+  top: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--border) 55%, transparent);
+}
+.rail-update-btn {
+  /* --pct is set only while downloading; the track fills left-to-right beneath the
+     label. At rest the gradient is a no-op, so one element carries all four states. */
+  --pct: 0%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background:
+    linear-gradient(to right, var(--accent-weak) var(--pct), transparent var(--pct));
+  color: var(--text-mid);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
+}
+.rail-update-btn svg {
+  flex: none;
+}
+.rail-update-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 'available' and 'downloading' are STATUS, not a trigger — the download is already
+   in flight. Say so with the cursor rather than offering a click that does nothing. */
+.rail-update-btn.is-status {
+  cursor: default;
+}
+/* 'ready' is the one row that asks for a decision, so it is the one row that gets
+   the accent. Everything before it stays quiet. */
+.rail-update-btn.is-ready {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.rail-update-btn.is-ready:hover,
+.rail-update-btn.is-ready:focus-visible {
+  background: color-mix(in srgb, var(--accent) 88%, var(--text-hi));
+}
+.rail-update-btn.is-error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.rail-update-btn:not(.is-status):not(.is-ready):hover,
+.rail-update-btn:not(.is-status):not(.is-ready):focus-visible {
+  border-color: var(--border-strong);
+  color: var(--text-hi);
 }
 
 /* ── Auto-update UX (Phase-6/06): quiet downloading dot ─────────────────────── */

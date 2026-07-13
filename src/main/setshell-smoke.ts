@@ -159,11 +159,39 @@ export function runSetShellSmoke(win: BrowserWindow): void {
       const contrastOk = failures.length === 0 && missing.length === 0
       await ES(`document.querySelector('.settings-probe-error')?.remove()`)
 
-      const pass = navOk && tabsOk && persistOk && spacingOk && themeLiveOk && contrastOk
+      // Settings § About IS the update surface (no dedicated Updates tab — that is the
+      // convention for an app this size: Obsidian, GitHub Desktop, Chrome). The card must
+      // carry the version, a check button, the last-checked line and BOTH toggles.
+      //
+      // The last-checked line is the one that must never quietly disappear. A dead feed and a
+      // healthy-but-quiet feed are both SILENCE; only a timestamp tells them apart, and its
+      // absence is exactly how a 404ing updater survived nine releases. If a future refactor
+      // tidies it away, this fails.
+      await ES(`document.querySelector('.settings-nav-item[data-target="about"]').click()`)
+      await sleep(200)
+      const updates = await ES<{ version: boolean; check: boolean; checked: boolean; toggles: number }>(
+        `(() => {
+           const root = document.querySelector('.settings-section[data-section="about"]')
+           if (!root) return { version: false, check: false, checked: false, toggles: -1 }
+           return {
+             version: !!root.querySelector('.update-version'),
+             check: [...root.querySelectorAll('button')].some(b => /Check for updates/i.test(b.textContent||'')),
+             checked: !!root.querySelector('.update-checked'),
+             toggles: [...root.querySelectorAll('.switch-input')].length
+           }
+         })()`
+      )
+      // Two toggles, and only two: pre-release + install-on-quit. A third appearing here is
+      // very likely the "turn updates off" switch this design deliberately refuses to ship.
+      const updatesOk = updates.version && updates.check && updates.checked && updates.toggles === 2
+
+      const pass = navOk && tabsOk && persistOk && spacingOk && themeLiveOk && contrastOk && updatesOk
       result = {
         pass,
         navOk,
         nav,
+        updatesOk,
+        updates,
         tabsOk,
         switched,
         persistOk,

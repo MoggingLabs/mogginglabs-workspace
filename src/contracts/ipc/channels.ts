@@ -214,7 +214,11 @@ export const BrowserChannels = {
 
 export const UpdateChannels = {
   state: 'update:state', // main -> renderer: UpdateState (checking/available/downloading/ready/error)
-  restart: 'update:restart' // renderer -> main: quitAndInstall (the "Restart now" action)
+  restart: 'update:restart', // renderer -> main: quitAndInstall (the "Restart now" action)
+  check: 'update:check', // renderer -> main: re-check now (the rail row's retry; the "Check now" button)
+  stateGet: 'update:stateGet', // -> UpdateState (a PULL: settings mounts long after the last push)
+  prefsGet: 'update:prefsGet', // -> UpdatePrefs
+  prefsSet: 'update:prefsSet' // (UpdatePrefs) -> void (applied immediately, persisted)
 } as const
 
 export const UsageChannels = {
