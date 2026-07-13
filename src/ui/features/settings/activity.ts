@@ -1,4 +1,5 @@
 import { IntegrationsChannels, type TrailEntry, type TrailSource } from '@contracts'
+import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
 import { Card, el } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
@@ -67,13 +68,31 @@ export function createActivitySection(): HTMLElement {
     }
   }
 
+  // Finding 39: FOUR things fire refresh() — both selects, the Refresh button, and the view-entry
+  // sync — and the workspace id was baked into the REQUEST while renderRows painted whatever came
+  // back. Any two firing close together let a slow answer for the OLD filter land after, and over,
+  // the fast answer for the new one. The generation guard is the whole fix: a superseded call
+  // never renders.
+  const trailGuard = createAsyncGuard<TrailEntry[]>()
+
   async function refresh(): Promise<void> {
     disarmClear()
     const wsId = wsSelect.value
     clearBtn.disabled = !wsId
-    const entries = (await bridge.invoke(IntegrationsChannels.trailList, wsId)) as TrailEntry[]
-    const src = srcSelect.value as TrailSource | ''
-    renderRows(src ? entries.filter((e) => e.source === src) : entries)
+    await trailGuard.run(() => bridge.invoke(IntegrationsChannels.trailList, wsId) as Promise<TrailEntry[]>, {
+      action: 'load the activity trail',
+      // "No agent activity recorded yet" is a claim about a read that SUCCEEDED and came back
+      // empty. Never leave it standing over one that is still in flight — or that failed.
+      onLoading: () => {
+        emptyNote.hidden = true
+      },
+      onSuccess: (entries) => {
+        const src = srcSelect.value as TrailSource | ''
+        renderRows(src ? entries.filter((e) => e.source === src) : entries)
+      },
+      // onError stays the default danger toast — Refresh is one button away, right above the list.
+      timeoutMs: 15_000
+    })
   }
 
   function refreshWorkspaceOptions(): void {

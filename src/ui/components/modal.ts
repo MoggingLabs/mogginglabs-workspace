@@ -1,5 +1,10 @@
 import { el, clear } from './dom'
 import { IconButton } from './button'
+import { trapOverlay, type OverlayTrap } from '../core/a11y/overlay-trap'
+
+/** Ids for aria-labelledby. A modal's name has to survive setTitle(), and the only name that
+ *  does that for free is one POINTING at the heading instead of copying it. */
+let seq = 0
 
 export interface ModalOpts {
   title?: string
@@ -30,7 +35,8 @@ export interface ModalHandle {
  * on close. Detached until open() appends it to <body>.
  */
 export function createModal(opts: ModalOpts = {}): ModalHandle {
-  const title = el('h2', { class: 'modal-title', text: opts.title ?? '' })
+  const titleId = `modal-title-${++seq}`
+  const title = el('h2', { class: 'modal-title', text: opts.title ?? '', attrs: { id: titleId } })
   const subtitle = el('p', {
     class: 'modal-subtitle',
     text: opts.subtitle ?? '',
@@ -44,8 +50,14 @@ export function createModal(opts: ModalOpts = {}): ModalHandle {
     {
       class: `modal modal--${opts.variant ?? 'dialog'}`,
       role: 'dialog',
-      ariaLabel: opts.title,
-      attrs: { 'aria-modal': 'true' },
+      // aria-labelledby, not aria-label: the label was copied from opts.title ONCE at
+      // construction, so setTitle() renamed the visible heading and left the accessible
+      // name behind — a screen reader announced the old dialog. Pointing at the heading
+      // means the name simply cannot go stale (finding 30).
+      attrs: { 'aria-modal': 'true', 'aria-labelledby': titleId },
+      // A last-resort focus target for a panel with no controls at all. tabindex=-1 keeps it
+      // OUT of the Tab ring — it can be focused programmatically, never tabbed to.
+      tabIndex: -1,
       style: opts.width ? { width: `${opts.width}px` } : {}
     },
     [
@@ -72,6 +84,7 @@ export function createModal(opts: ModalOpts = {}): ModalHandle {
   let open = false
   let opener: Element | null = null
   let dropTimer: ReturnType<typeof setTimeout> | undefined
+  let trap: OverlayTrap | undefined
 
   const onEsc = (e: KeyboardEvent): void => {
     if (e.key === 'Escape') {
@@ -101,13 +114,30 @@ export function createModal(opts: ModalOpts = {}): ModalHandle {
     }
     document.body.append(overlay)
     window.addEventListener('keydown', onEsc, true)
-    panel.querySelector<HTMLElement>('input, select, button:not(.modal-close)')?.focus()
+    // Inert the shell BEFORE focusing in: aria-modal told the screen reader this was modal
+    // and told Tab nothing, so the background stayed reachable. The overlay is a sibling of
+    // #app under <body>, so inerting the shell never inerts us.
+    trap = trapOverlay(panel)
+    // Focus the first thing worth acting on; failing that the close button; failing THAT the
+    // panel itself. The old line looked only for `input, select, button:not(.modal-close)` and,
+    // when a panel had none of those — the ? shortcuts sheet has nothing but its × — it focused
+    // nothing at all and left focus where it was: OUTSIDE the dialog, on an element trapOverlay
+    // had just made inert. The user was holding a focus that no longer existed.
+    const entry =
+      panel.querySelector<HTMLElement>('input, select, textarea, button:not(.modal-close)') ??
+      panel.querySelector<HTMLElement>('.modal-close') ??
+      panel
+    entry.focus()
   }
 
   function close(): void {
     if (!open) return
     open = false
     window.removeEventListener('keydown', onEsc, true)
+    // Release BEFORE returning focus: the opener lives inside #app, and you cannot focus
+    // an element that is still inert.
+    trap?.release()
+    trap = undefined
     // One curve out (8.5/07b): fade the overlay, detach on animationend — with a ≤260ms
     // fallback so reduced-motion / animations-off never strands the overlay in the DOM.
     overlay.classList.add('is-closing')

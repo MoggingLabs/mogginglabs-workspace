@@ -54,7 +54,8 @@ function setPref(key: string, value: boolean): void {
 export const copyOnSelect = (): boolean => pref(COPY_ON_SELECT_KEY, true)
 export const setCopyOnSelect = (on: boolean): void => setPref(COPY_ON_SELECT_KEY, on)
 
-export const historyEnabled = (): boolean => pref(HISTORY_ENABLED_KEY, true)
+// Machine-wide clipboard polling is opt-in. A missing/corrupt preference must fail closed.
+export const historyEnabled = (): boolean => pref(HISTORY_ENABLED_KEY, false)
 
 /** Mirrors the pref locally AND tells main to stop RECORDING. Both, always: the local
  *  value survives restart, the main-side flag is what actually stops the ring filling. */

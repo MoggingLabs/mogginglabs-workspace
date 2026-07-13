@@ -312,10 +312,13 @@ button {
 /* Calm motion (Settings § Appearance): the SAME becalming, opted into in-app.
    :root carries .motion-calm (motion-port.ts) and every reduced-motion block in
    this file has a class twin right beside it, so the switch and the OS preference
-   are one behavior with two doors. The swap twins below ride HIGHER specificity
-   than this clamp (root class + element beats root class + *), exactly as the
-   media swaps beat their * clamp — so MOTION-01's "becalm, don't kill" wins
-   under either door, or both at once. */
+   are one behavior with two doors. A twin CAN outrank this clamp — root class +
+   element beats root class + *, exactly as the media twins outrank their * clamp —
+   which is how a becalmed-but-still-legible state survives the 0.01ms erasure (see
+   .layout-slot.attn-pulse::before, whose fade is bounded to a single pass). That
+   escape hatch is also a loaded gun: whatever a twin swaps in must be FINITE, or
+   the reduced-motion rule becomes the thing installing the animation. It did once —
+   see MOTION-01 below — which is why scripts/check-reduced-motion.mjs now guards it. */
 :root.motion-calm *,
 :root.motion-calm *::before,
 :root.motion-calm *::after {
@@ -323,25 +326,28 @@ button {
   animation-iteration-count: 1 !important;
   transition-duration: 0.01ms !important;
 }
-/* MOTION-01: the attention/possession/update indicators would otherwise pulse
-   forever. Under reduced-motion we don't kill them dead (the state must still
-   read at a glance) — we swap the pulse for a slow, gentle opacity fade. */
-@keyframes ws-attention-fade {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.62;
-  }
-}
+/* MOTION-01 (audit 36): the attention/possession/update indicators pulse forever at
+   full motion. These twins used to swap that pulse for a slow opacity fade — but
+   declared it `infinite`, and their higher specificity + !important beat the blanket
+   clamp above. So the reduced-motion rule was itself installing an endless animation:
+   precisely the thing the preference asks us not to do.
+   Now they HOLD STILL — `animation: none`, not a bounded finite count. All five rest
+   at opacity 1 and are legible the moment they mount: background color, halo and
+   sheer presence ARE the state, so stillness loses nothing and there is no "arrived"
+   cue a fade could carry. (Contrast .layout-slot.attn-pulse::before, which IS bounded
+   to one pass — it has to be, because its base state is opacity 0 and the fade is its
+   only appearance.) This is the app's stated policy, applied: "under reduced-motion
+   the ring stops and the label carries the meaning" — components/spinner.ts.
+   The resting opacity is restated for the same reason .workspace-tab.is-alerting
+   restates its glow: the landing pose is written down, not inferred. */
 @media (prefers-reduced-motion: reduce) {
   .ws-attn,
   .workspace-tab.is-agent-driving::after,
   .pane-state[data-state='busy'],
   .pane-state[data-state='attention'],
   .update-dot {
-    animation: ws-attention-fade 3.8s ease-in-out infinite !important;
+    animation: none !important;
+    opacity: 1;
   }
 }
 :root.motion-calm .ws-attn,
@@ -349,7 +355,8 @@ button {
 :root.motion-calm .pane-state[data-state='busy'],
 :root.motion-calm .pane-state[data-state='attention'],
 :root.motion-calm .update-dot {
-  animation: ws-attention-fade 3.8s ease-in-out infinite !important;
+  animation: none !important;
+  opacity: 1;
 }
 
 /* Classic chrome: a full-width top bar over the rail + content columns. */
@@ -360,6 +367,7 @@ button {
 }
 
 #main {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
@@ -1459,6 +1467,27 @@ button {
 .workspace-tab.dragging {
   opacity: 0.55;
 }
+/* The switch control. It carries no chrome of its own — it re-creates the row's flex line so
+   the icon and label sit exactly where they did back when they were the tab's own children.
+   The tab became a plain div (finding 30): it contains the close BUTTON, so it could not go on
+   being a div[role=button] itself, and these two needed a real button to live in. */
+.workspace-tab .ws-tab-activate {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 1 1 auto;
+  min-width: 0;
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
 .workspace-tab .ws-icon {
   display: inline-flex;
   align-items: center;
@@ -1490,7 +1519,11 @@ button {
   padding-right: var(--sp-1);
 }
 .workspace-tab .ws-rename {
-  width: 100%;
+  /* A direct flex child of the tab now: it REPLACES the activate button while renaming,
+     rather than nesting an input inside it. It therefore sizes like the button it stands in
+     for, not like the label it used to sit inside. */
+  flex: 1 1 auto;
+  min-width: 0;
   border: 1px solid var(--accent);
   border-radius: var(--r-xs);
   background: var(--bg-inset);
@@ -1674,6 +1707,27 @@ button {
 #app.rail-collapsed #rail {
   width: var(--rail-w-collapsed);
 }
+#app.rail-auto-collapsed #rail {
+  width: var(--rail-w-collapsed);
+}
+#app.rail-auto-collapsed .rail-title,
+#app.rail-auto-collapsed .rail-total,
+#app.rail-auto-collapsed .ws-label,
+#app.rail-auto-collapsed .ws-count,
+#app.rail-auto-collapsed .ws-close,
+#app.rail-auto-collapsed .rail-update-label {
+  display: none;
+}
+#app.rail-auto-collapsed .rail-footer {
+  padding: var(--sp-2);
+}
+#app.rail-auto-collapsed .rail-update-btn,
+#app.rail-auto-collapsed .rail-header {
+  justify-content: center;
+}
+#app.rail-auto-collapsed .rail-header {
+  padding: 2px var(--sp-2);
+}
 #app.rail-collapsed .rail-title,
 #app.rail-collapsed .rail-total,
 #app.rail-collapsed .ws-label,
@@ -1837,6 +1891,67 @@ button {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
+}
+
+/* Persistence + detached-daemon degradation stays in the primary content flow:
+   visible in every view, compact enough not to cover terminal controls, and with
+   recovery/export actions reachable by keyboard. Healthy rows take no space. */
+.runtime-health-host {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+}
+.runtime-health-host[hidden],
+.runtime-health-row[hidden] {
+  display: none;
+}
+.runtime-health-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 42px;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid color-mix(in srgb, var(--warning) 42%, var(--border));
+  background: color-mix(in srgb, var(--warning) 8%, var(--bg-surface));
+  color: var(--text-hi);
+}
+.runtime-health-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--warning);
+}
+.runtime-health-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: var(--fs-12);
+  line-height: 1.35;
+}
+.runtime-health-copy strong {
+  font-weight: var(--fw-semibold);
+}
+.runtime-health-copy span {
+  color: var(--text-mid);
+}
+.runtime-health-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+@media (max-width: 700px) {
+  .runtime-health-row {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .runtime-health-actions {
+    width: 100%;
+    padding-left: calc(var(--sp-4) + var(--sp-3));
+    flex-wrap: wrap;
+  }
 }
 
 .workspace-view {
@@ -2705,6 +2820,15 @@ button {
 .layout-gutter {
   position: absolute;
   z-index: 2;
+}
+/* The grid seam is a tab stop now (role=separator, arrow keys resize it — finding 31), so it
+   needs the same visible ring the dock handles already have. The universal :focus-visible rule
+   would draw one, but a 2px track with an outset outline reads as a floating box; inset it and
+   tint the seam, exactly as the docks do. */
+.layout-gutter:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 /* The visual track is 2px; the DRAG target must not be. An invisible overhang keeps
    the resize grab area ~8px wide without touching layout. */
@@ -4462,6 +4586,12 @@ body.pane-dragging * {
   cursor: col-resize;
   z-index: 5;
 }
+.explorer-dock-handle:focus-visible,
+.browser-dock-handle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
 .explorer-dock-handle:hover {
   background: color-mix(in srgb, var(--accent) 25%, transparent);
 }
@@ -5528,11 +5658,10 @@ body.pane-dragging * {
   cursor: pointer;
   font-weight: var(--fw-semibold);
 }
-.board-card-menu {
-  position: fixed; /* JS positions it at the ⋯ button, clamped to the viewport, so the
-                      lane's own overflow scroller can no longer clip it (8.5/07) */
-  z-index: 200;
-}
+/* .board-card-menu is gone: the card ⋯ was a hand-rolled div.menu with no menu semantics, no
+   keyboard, no Escape and a leaked document listener. It is the shared context-menu primitive
+   now (.ctx-menu — role=menu, roving focus, focus return), which owns its own positioning and
+   clamping, so this rule had nothing left to style (finding 31/37). */
 .board-add {
   border: 1px dashed var(--border);
   background: transparent;
@@ -5814,6 +5943,25 @@ body.pane-dragging * {
 .browser-dock[hidden] {
   display: none;
 }
+#app.browser-budget-overlay .browser-dock:not([hidden]) {
+  position: absolute;
+  top: 0;
+  right: var(--explorer-budget-width, 0px);
+  bottom: 0;
+  z-index: 18;
+  min-width: 240px;
+  max-width: none;
+  box-shadow: -10px 0 24px rgb(0 0 0 / 28%);
+}
+#app.explorer-budget-overlay .explorer-dock:not([hidden]) {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 19;
+  max-width: calc(100vw - var(--rail-w-collapsed));
+  box-shadow: -10px 0 24px rgb(0 0 0 / 28%);
+}
 .browser-dock-handle {
   position: absolute;
   left: -3px; /* straddles the border for a fatter grab target */
@@ -5950,6 +6098,28 @@ body.pane-dragging * {
   font-size: var(--fs-11);
   max-width: 32ch;
 }
+/* Zero workspaces (finding 33): the globe is in the titlebar of EVERY view, so the dock
+   opens over the home screen — where a browser has nowhere to live (guest, cookie jar,
+   last url and consent are all keyed by workspace). Its controls are `disabled` for real
+   now; this is what that has to LOOK like, because .browser-url paints its own background
+   and colour and would otherwise render a dead field as a live one. Close is never
+   disabled and never dims — you must always be able to shut a dock. */
+.browser-dock.is-no-workspace .browser-url,
+.browser-dock.is-no-workspace .browser-profile-switch,
+.browser-dock.is-no-workspace .browser-dock-header .icon-btn:disabled {
+  opacity: 0.5;
+}
+.browser-dock.is-no-workspace .browser-url {
+  cursor: not-allowed;
+}
+/* Settings § Browser (finding 33b): the drive-consent switch is disabled outright with no
+   workspace, and this is the sentence that says why. It has to survive the dimming that
+   disabling applies — .toggle-row.is-disabled drops the whole row to 55% and a child can
+   never be more opaque than its parent — so it starts from the brightest ink and lands
+   back at a readable contrast. The reason a control is dead is the last thing to fade. */
+.browser-consent-note {
+  color: var(--text-hi);
+}
 
 /* ── Agent possession (Phase-6/05b): the wheel is visibly held ─────────────
    When an agent drives the dock, the whole dock wears a brand outline and a
@@ -6005,6 +6175,33 @@ body.pane-dragging * {
 }
 .browser-agent-stop:hover {
   filter: brightness(1.08);
+}
+.browser-global-possession {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 28px;
+  padding: 0 var(--sp-1) 0 var(--sp-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-pill);
+  background: var(--accent-weak);
+  color: var(--text-hi);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+}
+.browser-global-possession[hidden] {
+  display: none;
+}
+.browser-global-stop {
+  min-height: 22px;
+  border: 0;
+  border-radius: var(--r-sm);
+  padding: 0 var(--sp-2);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font: inherit;
+  cursor: pointer;
 }
 .browser-agent-trail {
   position: absolute;

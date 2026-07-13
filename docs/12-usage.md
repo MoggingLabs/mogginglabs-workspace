@@ -2,8 +2,10 @@
 
 The titlebar gauge answers one question at a glance — **"can I keep working,
 and until when?"** — for every AI provider you already use, across five
-credential mechanisms and ~50 catalog providers, **without this app ever
-holding a credential**. Frozen at Phase 7/13; the parity map lives in
+credential mechanisms and ~50 catalog providers, **without holding a
+credential it doesn't have to**. The one exception is a usage key you paste
+yourself — encrypted at rest by your OS, never read back (see below). Frozen
+at Phase 7/13; the parity map lives in
 `docs/research/2026-07-codexbar-parity.md`, the auth stance in ADR 0007 /
 0007.a / 0007.b, per-step mechanics in `prompts/phase-7/IMPLEMENTATION.md`.
 
@@ -217,9 +219,9 @@ involves any credential the app would hold, stop: that is the line ADR
 ## Scriptability & CI
 
 `mogging usage --json` + `usage cost --json` are stable contracts
-(`PlanUsage[]`, `CostScan[]`) for scripts and CI. The five usage gates
-(USAGE, USAGEUI, WEBUSAGE, USAGECLI, USAGESET) run in the same 35-gate
-sweep as everything else, on Windows, macOS, and Linux — entirely on the
-FAKE adapter: under any usage smoke env the registry holds no real adapter,
+(`PlanUsage[]`, `CostScan[]`) for scripts and CI. The six usage gates
+(USAGE, USAGEUI, USAGEGLANCE, WEBUSAGE, USAGECLI, USAGESET) run in the same
+114-gate sweep as everything else, on Windows, macOS, and Linux — entirely on
+the FAKE adapter: under any usage smoke env the registry holds no real adapter,
 the status poller holds no fetcher, and the cost scan reads only a seeded
 fixture dir. Zero network is structural, not disciplined.

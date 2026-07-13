@@ -49,4 +49,13 @@ export interface AgentCommandRequest {
   /** Materialize this workspace's tool plan into the launch (Phase-8/09) —
    *  the pane's CLI gets only the planned servers. */
   workspaceId?: string
+  /** When present, main resolves the saved target and builds for its shell dialect. */
+  remoteHostId?: string
+}
+
+export interface AgentCommandResult {
+  ok: boolean
+  command?: string
+  /** Honest launch refusal (unknown agent, missing remote, or scoped-plan conflict). */
+  reason?: string
 }

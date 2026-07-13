@@ -13,11 +13,18 @@ import { migrateOlderDaemonSessions } from './daemon-migrate'
 import { getSettingsStore } from './app-settings'
 import { resolveServiceKeyEnv } from './service-keys'
 import { onPaneStateForBridge } from './event-bridge'
+import { setDaemonHealth, setDaemonHealthRetry } from './runtime-health'
 
 // The one live daemon connection, for other main modules (review gate 4/03).
 let activeClient: DaemonClient | null = null
+const livePaneIds = new Set<string>()
 export function getDaemonClient(): DaemonClient | null {
   return activeClient
+}
+
+/** Main-process liveness view used by pane-scoped capability consumers. */
+export function isLivePane(id: string): boolean {
+  return livePaneIds.has(id)
 }
 
 // ── WHO IS A REVIEWER: the app's own answer, and the only one that counts ──────────────
@@ -65,6 +72,7 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
 
   let disposed = false
   let reconnecting = false
+  let retryWake: (() => void) | null = null
   let client!: DaemonClient
   /** The last spec this app sent per pane. Replayed on reconnect: `spawn` is an ensure —
    *  it reattaches to a session the (new) daemon restored, or respawns a lost one — and its
@@ -90,7 +98,10 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     const c: DaemonClient = new DaemonClient(endpoint, {
       // Fired from `spawned`/`attached` BEFORE their scrollback replay, so the replay
       // itself passes the gate it establishes.
-      onGen: (id, gen) => gens.set(id, gen),
+      onGen: (id, gen) => {
+        gens.set(id, gen)
+        livePaneIds.add(id)
+      },
       onData: (id, data, gen) => {
         if (current(id, gen)) getWebContents()?.send(TerminalChannels.data, { id: Number(id), data })
       },
@@ -98,6 +109,7 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
         if (!current(id, gen)) return // a dead generation's late exit — not this pane's news
         specs.delete(id) // an exited pane must not be resurrected by a reconnect replay
         lastStates.delete(id) // no session, no state — a late sync must not repaint a dead pane
+        livePaneIds.delete(id)
         getWebContents()?.send(TerminalChannels.exit, { id: Number(id), exitCode })
       },
       onState: (id, state, gen) => {
@@ -112,6 +124,7 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
       // It also carries every pane's CURRENT gen: seed the gate from it, so the replayed
       // states pass and stragglers from before a daemon restart cannot.
       onWelcome: (panes) => {
+        livePaneIds.clear()
         for (const p of panes) {
           // The app closed this pane but its kill died with the old connection (send
           // into a dead socket is silently dropped): finish the job on the new one, and
@@ -122,6 +135,7 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
             lastStates.delete(p.id)
             continue
           }
+          livePaneIds.add(p.id)
           gens.set(p.id, p.gen)
           if (p.state) {
             lastStates.set(p.id, p.state)
@@ -164,10 +178,27 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     void c.queryApprovals() // seed the board's ✓-chips the same way
   }
 
+  const bindRole = async (id: string, role: string): Promise<boolean> => {
+    const deadline = Date.now() + 15000
+    while (!disposed && Date.now() < deadline) {
+      // Read the current client each attempt: a disconnect during role publication
+      // must continue against the replacement, not spend the deadline on a dead socket.
+      if (await client.setRole(id, role, 1500)) return true
+      await new Promise((resolve) => setTimeout(resolve, 150))
+    }
+    return false
+  }
+
   const reconnect = async (): Promise<void> => {
     if (reconnecting) return
     reconnecting = true
     activeClient = null
+    setDaemonHealth({
+      mode: 'daemon',
+      state: 'reconnecting',
+      message: 'The terminal service connection was lost. Reconnecting automatically; existing terminals may continue in the background.',
+      sessionSurvival: true
+    })
     console.warn('[daemon] connection lost — reconnecting')
     let delayMs = 500
     while (!disposed) {
@@ -175,19 +206,60 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
         const next = await makeClient() // re-runs discovery: spawns a fresh daemon if none is live
         client = next
         activeClient = next
-        for (const [id, spec] of specs) next.spawn(id, spec).catch(() => {}) // repaint rides the reply's scrollback
+        for (const [id, spec] of specs) {
+          // Repaint rides the reply's scrollback. Role state lives in the daemon's
+          // mailbox and may have vanished with a restarted daemon, so replay it only
+          // after spawn/attach is acknowledged; absent-session role writes are refused.
+          void next
+            .spawn(id, spec)
+            .then(async () => {
+              const role = appRoles.get(id)
+              if (role) await bindRole(id, role)
+            })
+            .catch(() => {})
+        }
         seed(next)
+        setDaemonHealth({
+          mode: 'daemon',
+          state: 'connected',
+          message: 'Detached terminal service connected.',
+          sessionSurvival: true
+        })
         console.warn(`[daemon] reconnected (${specs.size} pane(s) reattached)`)
         break
       } catch (err) {
         const why = err instanceof Error ? err.message : String(err)
         console.warn(`[daemon] reconnect failed (${why}); retrying in ${delayMs}ms`)
-        await new Promise((r) => setTimeout(r, delayMs))
+        setDaemonHealth({
+          mode: 'daemon',
+          state: 'reconnecting',
+          message: 'The terminal service is still unavailable. Automatic retries continue; use Retry now to skip the current wait.',
+          sessionSurvival: true
+        })
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(() => {
+            retryWake = null
+            resolve()
+          }, delayMs)
+          retryWake = () => {
+            clearTimeout(timer)
+            retryWake = null
+            resolve()
+          }
+        })
         delayMs = Math.min(delayMs * 2, 15000)
       }
     }
+    retryWake = null
     reconnecting = false
   }
+
+  setDaemonHealthRetry(async () => {
+    if (disposed) return { ok: false, reason: 'The terminal service is shutting down.' }
+    if (reconnecting) retryWake?.()
+    else if (!activeClient) void reconnect()
+    return { ok: true }
+  })
 
   // Cross-version hand-off, BEFORE the first daemon spawn: on the first launch of a new
   // protocol version this pulls the previous daemon's sessions into our (still absent)
@@ -199,9 +271,21 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     getTelemetry().captureError(err, { feature: 'daemon', op: 'migrate', platform: process.platform })
   }
 
+  setDaemonHealth({
+    mode: 'daemon',
+    state: 'starting',
+    message: 'Starting the detached terminal service…',
+    sessionSurvival: false
+  })
   client = await makeClient()
   activeClient = client
   seed(client)
+  setDaemonHealth({
+    mode: 'daemon',
+    state: 'connected',
+    message: 'Detached terminal service connected.',
+    sessionSurvival: true
+  })
 
   ipcMain.handle(TerminalChannels.spawn, async (_e, req: SpawnRequest): Promise<SpawnResult> => {
     // Remote pane (4/05): the renderer names a host ID; MAIN resolves the row here
@@ -209,12 +293,29 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     const row = req.remoteHostId
       ? getSettingsStore()?.listRemotes().find((h) => h.id === req.remoteHostId)
       : undefined
-    const remote = row ? { name: row.name, host: row.host, user: row.user, port: row.port } : undefined
+    if (req.remoteHostId && !row) {
+      throw new Error(
+        `Remote host "${req.remoteHostId}" no longer exists. This pane was not started locally; choose or restore its SSH host.`
+      )
+    }
+    const remote = row
+      ? {
+          name: row.name,
+          host: row.host,
+          user: row.user,
+          port: row.port,
+          cwd: req.remoteCwd,
+          platform: row.platform ?? 'posix',
+          shell: row.shell ?? (row.platform === 'windows' ? 'powershell' : 'sh')
+        }
+      : undefined
     // Vault service keys (8/08): resolved HERE, in main, into the per-pane env —
     // the renderer never sees a value; the daemon merges it into the PTY env
     // (never typed, so no secret in scrollback/sessions.db). Remote panes get
     // none: the key would ride SSH to another machine (not our env to hand out).
-    const env = remote ? undefined : resolveServiceKeyEnv()
+    const workspaceId = typeof req.workspaceId === 'string' ? req.workspaceId : undefined
+    const agentId = typeof req.agentId === 'string' ? req.agentId : undefined
+    const env = remote ? undefined : resolveServiceKeyEnv(workspaceId, agentId)
     const spec: SpawnSpec = { cwd: req.cwd, cols: req.cols, rows: req.rows, remote, env }
     // Recorded BEFORE the reply: a spawn that lands in a dying daemon still replays once the
     // connection is back, so the pane comes alive instead of staying blank until app restart.
@@ -236,6 +337,7 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     // flush, the async exit) is dropped until the next `spawned` re-opens the gate.
     gens.set(String(cmd.id), 'killed')
     lastStates.delete(String(cmd.id))
+    livePaneIds.delete(String(cmd.id))
     // A role dies with the SLOT, not with the process. Pane ids are reused (a split takes
     // the lowest free one), so a reviewer's id outliving its pane would hand reviewer
     // authority to whatever opens there next — which the renderer, having no role to push
@@ -250,17 +352,25 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
   ipcMain.handle(TerminalChannels.stateSync, (_e, req: StateSyncRequest) =>
     lastStates.get(String(req.id)) ?? null
   )
-  ipcMain.on(TerminalChannels.setRole, (_e, cmd: SetRoleCommand) => {
+  ipcMain.handle(TerminalChannels.setRole, async (_e, cmd: SetRoleCommand) => {
     // THE trusted channel (see appRoles): this arrives from the renderer — the user's own
     // manifest — and a pane has no way to send it. Recorded here as the app's answer to
     // "who is a reviewer", then forwarded so the daemon's coordination map agrees with the UI.
-    appRoles.set(String(cmd.id), cmd.role)
-    client.setRole(String(cmd.id), cmd.role)
+    const id = String(cmd.id)
+    if (await bindRole(id, cmd.role)) {
+      appRoles.set(id, cmd.role)
+      return true
+    }
+    return false
   })
 
   return () => {
     disposed = true // stops the reconnect loop; a close caused by our own dispose stays quiet
+    retryWake?.()
+    retryWake = null
+    setDaemonHealthRetry(null)
     activeClient = null
+    livePaneIds.clear()
     client.dispose()
   }
 }

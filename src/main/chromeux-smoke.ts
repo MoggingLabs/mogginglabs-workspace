@@ -103,11 +103,27 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         const lead = document.querySelector('.titlebar-lead')
         const brand = document.querySelector('#titlebar .brand')
         const toggle = lead && lead.querySelector('.rail-toggle')
-        const all = [...cluster.querySelectorAll('button')]
-        const fixed = [...cluster.querySelectorAll(':scope > button')] // home/board/settings
+        // The bar's CHROME CONTROLS — its icon buttons — and nothing else.
+        //
+        // This was a bare querySelectorAll('button'), which happened to name the same set
+        // right up until the cluster gained a button that is not a control. It has two now:
+        //   .browser-global-stop  — the "Agent driving browser" possession banner's Stop.
+        //     browser/index.ts PREPENDS that banner into .titlebar-right, hidden until an
+        //     agent actually drives a browser. Hidden measures 0x0, and prepended it LEADS
+        //     the descendant order — so it became w0/h0 and the entire bar was measured
+        //     against a button that is not on screen.
+        //   the usage popover's rows, whenever it is open (it is a child of the cluster).
+        // Neither was ever in this contract. "One uniform hit target" is a statement about
+        // #titlebar .icon-btn — which is exactly what the 29px below has always tracked —
+        // not about a text button inside a transient role=status banner, and not about the
+        // innards of a popover. Popovers (.menu covers both the usage popover and the
+        // layout menu) are excluded structurally rather than by their hidden-ness, so an
+        // OPEN one cannot silently rejoin the measurement either.
+        const all = [...cluster.querySelectorAll('.icon-btn')].filter(el => !el.closest('.menu'))
+        const fixed = [...cluster.querySelectorAll(':scope > .icon-btn')] // board/settings
         // The rail toggle LEADS the bar's left cell now (it belongs over the column it
         // collapses), so it is measured with the cluster it shares a hit target with.
-        const size = [...all, ...(toggle ? [toggle] : [])].map(el => { const r = el.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height) } })
+        const size = [...all, ...(toggle ? [toggle] : [])].map(el => { const r = el.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height), cls: el.className, name: el.getAttribute('aria-label') } })
         const w0 = size[0] ? size[0].w : 0, h0 = size[0] ? size[0].h : 0
         // 29px = the enlarged bar's icon button (#titlebar .icon-btn). One uniform hit
         // target across every control in the bar is the contract; the number tracks it.
@@ -125,7 +141,20 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         const g0 = gaps[0]
         const sameGap = gaps.length >= 1 && gaps.every(g => Math.abs(g - g0) <= 1) && g0 >= 3 && g0 <= 5
         const noHomeBtn = !document.querySelector('#titlebar .icon-btn[aria-label="Home"]')
-        return { ok: sameHit && sameGap && toggleLeads && noHomeBtn, count: all.length, fixed: fixed.length, w0, h0, gaps, sameHit, sameGap, toggleLeads, noHomeBtn }
+        // ...and the banner that broke this stage becomes an ASSERTION rather than an ambush.
+        // Filtering it out and saying nothing would hide the regression that actually matters:
+        // a possession banner shipped VISIBLE at rest would sail through every check above,
+        // and it would be shouting "Agent driving browser" at a user with no agent. So: it is
+        // in the cluster, it is quiet until an agent drives, and its Stop is not a hit target.
+        const banner = cluster.querySelector('.browser-global-possession')
+        const stop = banner && banner.querySelector('.browser-global-stop')
+        const bannerQuiet = !!banner && banner.hidden === true && !!stop &&
+          !stop.classList.contains('icon-btn') && stop.getBoundingClientRect().width === 0
+        return {
+          ok: sameHit && sameGap && toggleLeads && noHomeBtn && bannerQuiet,
+          count: all.length, fixed: fixed.length, w0, h0, gaps, sizes: size,
+          sameHit, sameGap, toggleLeads, noHomeBtn, bannerQuiet
+        }
       })()`)
 
       // ── (e): a non-active workspace's pane needs input → its tab latches the ring. ──
@@ -298,18 +327,25 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
       const g = { ok: gProbe.failures.length === 0 && gProbe.missing.length === 0, ...gProbe }
 
       // ── (i): the close button TAKES the pane-count's slot — it never joins it. The
-      //    reveal fires on :hover AND :focus-within (the tab is tabindex=0, so a click
-      //    focuses it), so the hide must fire on both too, or a clicked tab shows the
-      //    count and the × crowding its label for as long as it keeps focus. ──
+      //    reveal fires on :hover AND :focus-within, so the hide must fire on both too, or a
+      //    clicked tab shows the count and the × crowding its label for as long as it keeps
+      //    focus.
+      //    The focus now lands on `.ws-tab-activate`, not the tab itself: the tab used to be
+      //    a div[role=button] wrapping the close BUTTON — invalid content whose keydown
+      //    handler also ate Enter/Space before close could ever see them (finding 30). The
+      //    tab is a plain div now; the two real buttons inside it are what focus. The CSS
+      //    keys on :focus-within, so the reveal contract this stage guards is unchanged. ──
       stage = 'i-tab-badges'
       const i = await ES<Record<string, unknown>>(`(() => {
         const tab = document.querySelector('.workspace-tab')
         if (!tab) return { ok: false, reason: 'no tab' }
+        const activate = tab.querySelector('.ws-tab-activate')
+        if (!activate) return { ok: false, reason: 'no activate button' }
         const disp = sel => { const el = tab.querySelector(sel); return el ? getComputedStyle(el).display : 'absent' }
         const restCount = disp('.ws-count'), restClose = disp('.ws-close')
-        tab.focus()
+        activate.focus()
         const focusCount = disp('.ws-count'), focusClose = disp('.ws-close')
-        tab.blur()
+        activate.blur()
         return {
           ok: restCount !== 'none' && restClose === 'none' && focusCount === 'none' && focusClose !== 'none',
           restCount, restClose, focusCount, focusClose
@@ -556,20 +592,52 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
 
       // ── (l): HARD WIDTH FLOOR. Exercise the real allocator through every curated
       //    template, a wide→minimum window resize, and alternating nested splits. ──
+      //
+      // THE SHRINK ASKS FIRST NOW, and this stage has to answer it. `layout.apply` is the
+      // centralized close policy's entry point for a layout shrink (audit finding 10 — the
+      // same dialog WSCLOSE drives from pane chrome, the control API and the rail's Delete
+      // key): a template that would close panes holding LIVE WORK confirms before destroying
+      // them, and the promise apply() returns does not resolve until that dialog is answered.
+      //
+      // This gate adopts a claude session on the measured pane back in (c), so every shrink
+      // below is precisely the case the policy exists for. Firing apply() and walking away
+      // left the modal standing and the grid stuck at 16 panes for every template after the
+      // first — the floor was never re-measured, and the stage failed on a dialog it had
+      // simply declined to read.
+      //
+      // So: confirm, because shrinking IS what this stage came to measure — and record the
+      // answer, which turns the policy from the thing that broke the stage into one more
+      // thing it proves.
+      const APPLY_TEMPLATE = `const applyTemplate = async n => {
+        const done = window.__mogging.layout.apply(n) // may raise the confirm — do NOT await it yet
+        await sleep(140)
+        const danger = document.querySelector('.modal-overlay:not(.is-closing) .btn--danger')
+        if (danger) danger.click()
+        const applied = await done
+        await sleep(180) // the grid re-lays out behind the dialog's close
+        return { applied, confirmed: !!danger }
+      }`
       stage = 'l-pane-floor'
       win.setSize(1200, 760)
       await sleep(650)
       const lWide = await ES<Record<string, unknown>>(`(async () => {
-        window.__mogging.layout.apply(16)
-        await new Promise(r => setTimeout(r, 300))
+        const sleep = ms => new Promise(r => setTimeout(r, ms))
+        ${APPLY_TEMPLATE}
+        // GROWTH is non-destructive and must never ask — a policy that nagged on every layout
+        // change would be its own regression, so the silence is asserted, not assumed.
+        const grow = await applyTemplate(16)
         const widths = [...document.querySelectorAll('.workspace-view.active .layout-slot')].map(el => el.getBoundingClientRect().width)
-        return { ok: widths.length === 16 && widths.every(w => w >= 131.5), widths }
+        return {
+          ok: widths.length === 16 && widths.every(w => w >= 131.5) && grow.applied === true && grow.confirmed === false,
+          grow, widths
+        }
       })()`)
       win.setSize(600, 760)
       await sleep(800)
       const l = await ES<Record<string, unknown>>(`(async () => {
         const sleep = ms => new Promise(r => setTimeout(r, ms))
         const m = window.__mogging
+        ${APPLY_TEMPLATE}
         const read = expected => {
           const host = document.querySelector('.workspace-view.active')
           const slots = [...host.querySelectorAll(':scope > .layout-grid > .layout-slot')]
@@ -654,12 +722,10 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         const rowViewport = await expandedViewport('row')
         const templates = {}
         for (const count of [1, 2, 4, 6, 8, 9, 12, 16]) {
-          m.layout.apply(count)
-          await sleep(140)
-          templates[count] = read(count)
+          const applied = await applyTemplate(count)
+          templates[count] = { ...read(count), ...applied }
         }
-        m.layout.apply(1)
-        await sleep(120)
+        await applyTemplate(1)
         m.layout.split('h'); await sleep(120)
         m.layout.split('v'); await sleep(120)
         m.layout.split('h'); await sleep(180)

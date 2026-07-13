@@ -62,6 +62,8 @@ export function getPaneProfile(paneId: PaneId): string | undefined {
 export interface PaneRemote {
   hostId: string
   name: string
+  /** Path on the target host; never interpreted as a local path. */
+  cwd?: string
 }
 const remotes = new Map<PaneId, PaneRemote>()
 

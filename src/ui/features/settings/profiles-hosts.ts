@@ -1,16 +1,19 @@
 import {
-  AgentChannels,
   ProfileChannels,
   RemoteChannels,
   type AgentInfo,
   type AgentProfile,
   type AgentProfileDraft,
-  type RemoteHost
+  type ProfileRemoveResult,
+  type RemoteHost,
+  type RemoteRemoveResult
 } from '@contracts'
-import { Button, Card, confirmDialog, EmptyState, FieldGroup, Pill, SectionHeader, el, providerLogo } from '../../components'
+import { Button, Card, confirmDialog, EmptyState, FieldGroup, Pill, SectionHeader, el, loadingRow, providerLogo, showToast } from '../../components'
+import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
 import { announceProfilesChanged } from '../../core/agents/profiles-port'
 import { switchActiveProfile } from '../../core/agents/profile-switch'
+import { refreshAgentRegistry } from '../../core/agents/registry'
 
 /**
  * Settings § Profiles & SSH hosts (Phase-4 polish, profiles simplified): a profile
@@ -45,15 +48,53 @@ export function createProfilesHostsSection(): HTMLElement {
   const hostFormHost = el('div', {})
   let roster: AgentInfo[] = []
 
+  // Finding 39: one un-caught Promise.all fed BOTH lists, so any rejection skipped both render
+  // calls and left the tab literally blank — the lists are born as empty <div>s. Two reads, two
+  // containers, two guards: a failure now names itself in the list it belongs to, and the other
+  // list still loads.
+  const profilesGuard = createAsyncGuard<[AgentProfile[], readonly AgentInfo[]]>()
+  const hostsGuard = createAsyncGuard<RemoteHost[]>()
+
+  /** An error state IS an EmptyState (alert icon + the guard's human sentence + a retry) — the same
+   *  primitive the empty lists use, so "we could not ask" can never be read as "you have none". */
+  function renderLoadError(host: HTMLElement, title: string, message: string): void {
+    host.replaceChildren(
+      EmptyState({
+        icon: 'alert',
+        title,
+        body: message,
+        action: Button({ label: 'Retry', icon: 'rotate-cw', size: 'sm', onClick: () => void refresh() })
+      })
+    )
+  }
+
+  /** Spinner only when there is nothing real on screen: refresh() also runs after every save and
+   *  delete, and a mutation must not blink its own list back to a loading row. */
+  function showLoading(host: HTMLElement, label: string): void {
+    if (!host.querySelector('.ph-row')) host.replaceChildren(loadingRow(label))
+  }
+
   async function refresh(): Promise<void> {
-    const [profiles, hosts, agents] = await Promise.all([
-      invoke(ProfileChannels.list) as Promise<AgentProfile[]>,
-      invoke(RemoteChannels.list) as Promise<RemoteHost[]>,
-      invoke(AgentChannels.detect) as Promise<AgentInfo[]>
+    await Promise.all([
+      // The roster rides with the profiles: it is what the form's provider picker offers.
+      profilesGuard.run(() => Promise.all([invoke(ProfileChannels.list) as Promise<AgentProfile[]>, refreshAgentRegistry()]), {
+        action: 'load your profiles',
+        onLoading: () => showLoading(profilesList, 'Loading profiles…'),
+        onSuccess: ([profiles, agents]) => {
+          roster = (agents ?? []).filter((a) => a.installed)
+          renderProfiles(profiles ?? [])
+        },
+        onError: (message) => renderLoadError(profilesList, 'Profiles didn’t load', message),
+        timeoutMs: 15_000
+      }),
+      hostsGuard.run(() => invoke(RemoteChannels.list) as Promise<RemoteHost[]>, {
+        action: 'load your SSH hosts',
+        onLoading: () => showLoading(hostsList, 'Loading SSH hosts…'),
+        onSuccess: (hosts) => renderHosts(hosts ?? []),
+        onError: (message) => renderLoadError(hostsList, 'SSH hosts didn’t load', message),
+        timeoutMs: 15_000
+      })
     ])
-    roster = (agents ?? []).filter((a) => a.installed)
-    renderProfiles(profiles ?? [])
-    renderHosts(hosts ?? [])
   }
 
   // ── Profiles ───────────────────────────────────────────────────────────────
@@ -79,6 +120,48 @@ export function createProfilesHostsSection(): HTMLElement {
       const detected = p.id.startsWith('login-')
       const isDefault = defaultIds.has(p.id)
       const siblings = profiles.filter((x) => x.provider === p.provider).length
+      const deleteButton = detected
+        ? null
+        : Button({
+            label: 'Delete',
+            size: 'sm',
+            variant: 'ghost',
+            onClick: () => {
+              deleteButton!.disabled = true
+              void (async () => {
+                try {
+                  const ok = await confirmDialog({
+                    title: `Delete profile “${p.name}”?`,
+                    message: 'A profile assigned to a saved workspace cannot be deleted until those panes use another profile.',
+                    confirmLabel: 'Delete profile',
+                    danger: true
+                  })
+                  if (!ok) return
+                  const result = (await invoke(ProfileChannels.remove, p.id)) as ProfileRemoveResult
+                  if (!result.ok) {
+                    const where = result.workspaces?.length ? ` Used by: ${result.workspaces.join(', ')}.` : ''
+                    showToast({
+                      tone: 'danger',
+                      title: 'Profile was not deleted',
+                      body:
+                        result.reason === 'referenced'
+                          ? `Choose another profile for every saved workspace first.${where}`
+                          : result.reason === 'missing'
+                            ? 'The profile no longer exists.'
+                            : 'The profile could not be deleted.'
+                    })
+                    return
+                  }
+                  announceProfilesChanged()
+                  await refresh()
+                } catch (error) {
+                  showToast({ tone: 'danger', title: 'Profile was not deleted', body: String(error) })
+                } finally {
+                  if (deleteButton?.isConnected) deleteButton.disabled = false
+                }
+              })()
+            }
+          })
       profilesList.append(
         el('div', { class: 'ph-row' }, [
           el('div', { class: 'ph-row-main' }, [
@@ -98,35 +181,25 @@ export function createProfilesHostsSection(): HTMLElement {
               ? Button({
                   label: 'Make default',
                   size: 'sm',
-                  onClick: () => {
-                    void switchActiveProfile(p.provider, p.id).then(() => refresh())
+                  onClick: (event) => {
+                    const button = event.currentTarget as HTMLButtonElement
+                    button.disabled = true
+                    button.setAttribute('aria-busy', 'true')
+                    void switchActiveProfile(p.provider, p.id)
+                      .then(() => refresh())
+                      .catch((error) => showToast({ tone: 'danger', title: 'Default profile was not changed', body: String(error) }))
+                      .finally(() => {
+                        if (!button.isConnected) return
+                        button.disabled = false
+                        button.removeAttribute('aria-busy')
+                      })
                   }
                 })
               : null,
             Button({ label: 'Edit', size: 'sm', onClick: () => openProfileForm(p) }),
             // A detected login can't be deleted away — while the CLI stays signed
             // in, the next reconcile would truthfully bring it back.
-            detected
-              ? null
-              : Button({
-                  label: 'Delete',
-                  size: 'sm',
-                  variant: 'ghost',
-                  onClick: () => {
-                    void confirmDialog({
-                      title: `Delete profile “${p.name}”?`,
-                      message: 'This pointer set is removed. Panes already launched keep their env; new launches won’t offer it.',
-                      confirmLabel: 'Delete profile',
-                      danger: true
-                    }).then((ok) => {
-                      if (!ok) return
-                      void invoke(ProfileChannels.remove, p.id).then(() => {
-                        announceProfilesChanged()
-                        void refresh()
-                      })
-                    })
-                  }
-                })
+            deleteButton
           ])
         ])
       )
@@ -228,7 +301,9 @@ export function createProfilesHostsSection(): HTMLElement {
             el('span', { class: 'ph-row-name', text: h.name }),
             el('span', {
               class: 'ph-row-meta',
-              text: `${h.user ? h.user + '@' : ''}${h.host}${h.port ? ':' + h.port : ''}`
+              text:
+                `${h.user ? h.user + '@' : ''}${h.host}${h.port ? ':' + h.port : ''}` +
+                ` · ${h.platform ?? 'posix'}/${h.shell ?? 'sh'}`
             }),
             h.identityHint ? el('span', { class: 'ph-row-env', text: h.identityHint }) : null
           ]),
@@ -241,12 +316,21 @@ export function createProfilesHostsSection(): HTMLElement {
               onClick: () => {
                 void confirmDialog({
                   title: `Delete host “${h.name}”?`,
-                  message: 'This SSH target is removed. Open remote panes stay connected; new panes won’t offer it.',
+                  message: 'A host assigned to a saved workspace cannot be deleted until those remote panes are changed or removed.',
                   confirmLabel: 'Delete host',
                   danger: true
                 }).then((ok) => {
                   if (!ok) return
-                  void invoke(RemoteChannels.remove, h.id).then(() => {
+                  void invoke(RemoteChannels.remove, h.id).then((raw) => {
+                    const result = raw as RemoteRemoveResult
+                    if (!result.ok) {
+                      showToast({
+                        tone: 'danger',
+                        title: 'SSH host was not deleted',
+                        body: result.reason ?? 'The host is still in use.'
+                      })
+                      return
+                    }
                     announceProfilesChanged()
                     void refresh()
                   })
@@ -269,6 +353,20 @@ export function createProfilesHostsSection(): HTMLElement {
     const user = mk('host-user', 'User (optional)', existing?.user ?? '')
     const port = mk('host-port', 'Port (optional)', existing?.port ? String(existing.port) : '')
     const hint = mk('host-hint', 'Identity hint (optional note — never a key)', existing?.identityHint ?? '')
+    const platform = el('select', { class: 'input host-platform' }) as HTMLSelectElement
+    platform.append(new Option('POSIX (Linux/macOS/BSD)', 'posix'), new Option('Windows', 'windows'))
+    platform.value = existing?.platform ?? 'posix'
+    const remoteShell = el('select', { class: 'input host-shell' }) as HTMLSelectElement
+    const syncShells = (): void => {
+      const before = remoteShell.value
+      remoteShell.replaceChildren()
+      const names = platform.value === 'windows' ? ['powershell', 'cmd'] : ['sh', 'bash', 'zsh']
+      for (const value of names) remoteShell.append(new Option(value, value))
+      remoteShell.value = names.includes(before) ? before : names[0]
+    }
+    syncShells()
+    remoteShell.value = existing?.shell ?? (platform.value === 'windows' ? 'powershell' : 'sh')
+    platform.onchange = syncShells
     const save = Button({
       label: existing ? 'Save host' : 'Add host',
       variant: 'primary',
@@ -280,6 +378,8 @@ export function createProfilesHostsSection(): HTMLElement {
           host: host.value.trim(),
           user: user.value.trim() || undefined,
           port: port.value.trim() ? Number(port.value) : undefined,
+          platform: platform.value as RemoteHost['platform'],
+          shell: remoteShell.value as RemoteHost['shell'],
           identityHint: hint.value.trim() || undefined
         }
         void (invoke(RemoteChannels.save, remote) as Promise<boolean>).then((ok) => {
@@ -300,6 +400,8 @@ export function createProfilesHostsSection(): HTMLElement {
           FieldGroup({ label: 'Hostname or ssh alias' }, host),
           FieldGroup({ label: 'User', hint: 'optional' }, user),
           FieldGroup({ label: 'Port', hint: 'optional' }, port),
+          FieldGroup({ label: 'Remote operating system' }, platform),
+          FieldGroup({ label: 'Remote shell' }, remoteShell),
           FieldGroup({ label: 'Identity hint', hint: 'optional note — never a key' }, hint)
         ]),
         el('div', { class: 'ph-form-actions' }, [

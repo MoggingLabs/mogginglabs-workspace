@@ -1,17 +1,16 @@
 import {
-  AgentChannels,
   FsChannels,
   GitChannels,
   TemplateChannels,
   WorkspaceChannels,
   WorktreeChannels,
-  type AgentInfo,
   type CreateWorktreeResult,
   type DirResult,
   type ListDirRequest,
   type GitStatus,
   type ProviderCount,
   type ProviderMixTemplate,
+  type RemoveWorktreeResult,
   type ResolvedLayout,
   type WorkspaceState
 } from '@contracts'
@@ -20,9 +19,6 @@ import { getBridge } from '../../core/ipc/bridge'
 /** Thin typed IPC client for the new-workspace wizard (read-mostly; ADR 0002 — the
  *  wizard trades in provider ids and paths, never credentials). */
 export const wizardClient = {
-  detectAgents: (): Promise<AgentInfo[]> =>
-    getBridge().invoke(AgentChannels.detect) as Promise<AgentInfo[]>,
-
   listPresets: (): Promise<ProviderMixTemplate[]> =>
     getBridge().invoke(TemplateChannels.list) as Promise<ProviderMixTemplate[]>,
 
@@ -54,5 +50,9 @@ export const wizardClient = {
 
   /** One isolated git worktree in the repo (Phase-3/03) — random slug/branch. */
   createWorktree: (repo: string): Promise<CreateWorktreeResult> =>
-    getBridge().invoke(WorktreeChannels.create, { repo }) as Promise<CreateWorktreeResult>
+    getBridge().invoke(WorktreeChannels.create, { repo }) as Promise<CreateWorktreeResult>,
+
+  /** Roll back a worktree created by a launch transaction that never opened. */
+  removeWorktree: (repo: string, path: string): Promise<RemoveWorktreeResult> =>
+    getBridge().invoke(WorktreeChannels.remove, { repo, path, force: true }) as Promise<RemoveWorktreeResult>
 }

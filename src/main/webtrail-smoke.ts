@@ -1,6 +1,6 @@
 import { app, type BrowserWindow } from 'electron'
 import { createServer, type Server } from 'node:http'
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { TrailStore } from '@backend/features/integrations'
@@ -13,6 +13,7 @@ import {
 } from './browser-dock'
 import { clearTrail, flushTrailForSmoke, readTrail, recordTrail } from './trail'
 import { setIntegrationsGrant } from './integrations'
+import { spawnPaneMcpSmokeClient, type PaneMcpSmokeClient } from './pane-mcp-smoke-client'
 import type { BrowserAgentVerb, TrailEntry } from '@contracts'
 
 // Env-gated trail smoke (MOGGING_WEBTRAIL, Phase-8/05 — FINDINGS §4.5). One
@@ -28,8 +29,6 @@ import type { BrowserAgentVerb, TrailEntry } from '@contracts'
 //   (g) clear-workspace empties exactly that file (the ring ws survives)
 //   (h) the viewer renders the entries (Settings § Activity, DOM asserts)
 // Zero external network: the only page is this smoke's own 127.0.0.1 server.
-
-type Rpc = { result?: Record<string, unknown>; error?: { message?: string } }
 
 export function runWebTrailSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 180000) // safety net
@@ -47,49 +46,17 @@ export function runWebTrailSmoke(win: BrowserWindow): void {
     }
   }
 
-  const cli = (args: string[], extraEnv: Record<string, string> = {}): Promise<{ code: number }> =>
+  const cli = (
+    args: string[],
+    extraEnv: Record<string, string> = {}
+  ): Promise<{ code: number; stdout: string; stderr: string }> =>
     new Promise((res) => {
       execFile(
         process.execPath,
         [join(root, 'bin', 'mogging.mjs'), ...args],
         { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ...extraEnv }, timeout: 15000, windowsHide: true },
-        (err) => res({ code: err ? 1 : 0 })
+        (err, stdout, stderr) => res({ code: err ? 1 : 0, stdout: String(stdout), stderr: String(stderr) })
       )
-    })
-
-  const mcpCall = (env: Record<string, string>, name: string, args: Record<string, unknown>): Promise<Rpc> =>
-    new Promise((resolve) => {
-      const child: ChildProcessWithoutNullStreams = spawn(
-        process.execPath,
-        [join(root, 'bin', 'mogging-mcp.mjs')],
-        { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ...env }, windowsHide: true }
-      ) as ChildProcessWithoutNullStreams
-      let out = ''
-      child.stdout.setEncoding('utf8')
-      child.stdout.on('data', (chunk: string) => {
-        out += chunk
-        let i
-        while ((i = out.indexOf('\n')) >= 0) {
-          const line = out.slice(0, i)
-          out = out.slice(i + 1)
-          try {
-            const m = JSON.parse(line) as { id?: number } & Rpc
-            if (m.id === 2) {
-              child.kill()
-              resolve({ result: m.result, error: m.error })
-              return
-            }
-          } catch {
-            /* ignore */
-          }
-        }
-      })
-      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }) + '\n')
-      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } }) + '\n')
-      setTimeout(() => {
-        child.kill()
-        resolve({ error: { message: 'timeout' } })
-      }, 20000)
     })
 
   const serveSite = (): Promise<number> =>
@@ -113,6 +80,7 @@ export function runWebTrailSmoke(win: BrowserWindow): void {
 
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
+    let mcpClient: PaneMcpSmokeClient | null = null
     try {
       await sleep(1500)
       const port = await serveSite()
@@ -148,9 +116,27 @@ export function runWebTrailSmoke(win: BrowserWindow): void {
       await act({ verb: 'eval', target: `document.title /*EVALBODY_4242*/` }) // web/ok; body stays out of the file
 
       // ── (c) MCP write -> mcp/ok with a pane ref ────────────────────────────
-      await cli(['send', pane2, 'echo hello'], {}) // pane exists & alive
-      const sent = await mcpCall({ MOGGING_PANE_ID: pane1 }, 'send_to_pane', { pane: pane2, text: 'MCPBODY_4242' })
-      const mcpSendOk = !sent.error
+      // The write, and the RECEIPT it must leave, are both attributed to the pane that made
+      // them — and a pane is now something an MCP session PROVES, not something it claims. The
+      // app endpoint binds a session to a pane only on the daemon-minted MOGGING_PANE_TOKEN,
+      // which lives nowhere but inside that pane; a server spawned from here with a hand-set
+      // MOGGING_PANE_ID is exactly the forgery mcpwrite-smoke asserts gets nothing. So run the
+      // REAL server where a real agent runs it — inside the pane — and let the token arrive the
+      // way production delivers it (spawnPaneMcpSmokeClient). `by` on the receipt is then a
+      // fact, which is the whole point of an activity trail.
+      await cli(['send', pane2, 'echo hello'], {}) // the write TARGET: exists & alive
+      const mcp = await spawnPaneMcpSmokeClient({
+        cli,
+        paneId: pane1,
+        mcpPath: join(root, 'bin', 'mogging-mcp.mjs')
+      })
+      mcpClient = mcp
+      await mcp.rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {} })
+      const sent = await mcp.rpc('tools/call', {
+        name: 'send_to_pane',
+        arguments: { pane: pane2, text: 'MCPBODY_4242' }
+      })
+      const mcpSendOk = !sent.error && (sent.result as { isError?: boolean } | undefined)?.isError !== true
       await sleep(1500) // receipt is fire-and-forget; let it land + flush
 
       flushTrailForSmoke()
@@ -235,6 +221,7 @@ export function runWebTrailSmoke(win: BrowserWindow): void {
     } catch (e) {
       result = { pass: false, error: String(e) }
     }
+    mcpClient?.kill()
     site?.close()
     emit(result)
     app.exit(result.pass ? 0 : 1)

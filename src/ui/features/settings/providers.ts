@@ -4,9 +4,11 @@ import {
   type AgentInstallStart,
   type AgentInstallState
 } from '@contracts'
-import { Button, Card, Pill, SectionHeader, Spinner, el, providerLogo, showToast } from '../../components'
+import { Button, Card, EmptyState, Pill, SectionHeader, Spinner, el, loadingRow, providerLogo, showToast } from '../../components'
+import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
 import { getTelemetry } from '../../core/telemetry'
+import { onAgentRegistryChange, refreshAgentRegistry } from '../../core/agents/registry'
 
 /**
  * Settings § Providers (the availability map): one row per agent CLI the app
@@ -106,18 +108,49 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
     list.replaceChildren(...agents.map(row))
   }
 
+  // Finding 39: the same defect as Profiles — an un-caught Promise.all feeding a list that starts
+  // as an empty <div>, so a rejection skipped render() and the tab was BLANK. One guard for the
+  // one read; the generation guard also settles the race between mount and an install verdict,
+  // which both call refresh().
+  const detectGuard = createAsyncGuard<[readonly AgentInfo[], AgentInstallState[]]>()
+
   async function refresh(): Promise<void> {
-    const [detected, states] = await Promise.all([
-      invoke(AgentChannels.detect) as Promise<AgentInfo[]>,
-      invoke(AgentChannels.installStates) as Promise<AgentInstallState[]>
-    ])
-    agents = detected ?? []
-    installs.clear()
-    for (const s of states ?? []) installs.set(s.agentId, s)
-    render()
+    await detectGuard.run(
+      () => Promise.all([refreshAgentRegistry(), invoke(AgentChannels.installStates) as Promise<AgentInstallState[]>]),
+      {
+        action: 'detect your agent CLIs',
+        // Spinner only when no rows are up: an install verdict re-refreshes, and a live tab must
+        // not blink back to a loading row every time one lands.
+        onLoading: () => {
+          if (!list.querySelector('.prov-item')) list.replaceChildren(loadingRow('Detecting agent CLIs…'))
+        },
+        onSuccess: ([detected, states]) => {
+          agents = [...detected]
+          installs.clear()
+          for (const s of states ?? []) installs.set(s.agentId, s)
+          render()
+        },
+        // An error state IS an EmptyState with an alert icon and a retry — never a blank card,
+        // which reads as "no CLIs exist" when the truth is that we never found out.
+        onError: (message) =>
+          list.replaceChildren(
+            EmptyState({
+              icon: 'alert',
+              title: 'Agent CLIs didn’t load',
+              body: message,
+              action: Button({ label: 'Retry', icon: 'rotate-cw', size: 'sm', onClick: () => void refresh() })
+            })
+          ),
+        timeoutMs: 15_000
+      }
+    )
   }
 
   // One subscription for the section's lifetime (the settings DOM is built once).
+  onAgentRegistryChange((next) => {
+    agents = [...next]
+    render()
+  })
   getBridge().on(AgentChannels.installChanged, (payload) => {
     const state = payload as AgentInstallState
     const prev = installs.get(state.agentId)
@@ -125,7 +158,7 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
     if (state.phase === 'succeeded') {
       const name = agents.find((a) => a.id === state.agentId)?.name ?? state.agentId
       showToast({ title: `${name} installed`, tone: 'success' })
-      void refresh() // re-detect flips the row to Available
+      void refresh() // refreshes install-state detail; the shared roster flips every launch surface
       return
     }
     if (state.phase !== prev?.phase) {

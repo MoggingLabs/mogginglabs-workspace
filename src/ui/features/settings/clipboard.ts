@@ -117,6 +117,7 @@ function entryRow(entry: ClipboardEntry, now: number, refresh: () => void): HTML
 
 export function createClipboardSection(): HTMLElement {
   const list = el('ul', { class: 'clip-list' })
+  let enabled = historyEnabled()
 
   const clearBtn = Button({
     label: 'Clear history',
@@ -133,7 +134,19 @@ export function createClipboardSection(): HTMLElement {
 
   const render = (entries: ClipboardEntry[]): void => {
     clear(list)
-    clearBtn.disabled = entries.length === 0
+    clearBtn.disabled = !enabled || entries.length === 0
+    if (!enabled) {
+      list.append(
+        el('li', { class: 'clip-empty' }, [
+          EmptyState({
+            icon: 'shield',
+            title: 'Clipboard history is off',
+            body: 'The app is not reading or remembering the system clipboard. Turn on Keep a history above to opt in.'
+          })
+        ])
+      )
+      return
+    }
     if (!entries.length) {
       list.append(
         el('li', { class: 'clip-empty' }, [
@@ -176,11 +189,16 @@ export function createClipboardSection(): HTMLElement {
 
   const historyRow = createToggleRow({
     label: 'Keep a history',
-    hint: 'Remember what you copy so you can put an earlier entry back. Never written to disk — it clears when the app quits.',
-    checked: historyEnabled(),
+    hint: 'Off by default. When on, the app checks the machine-wide clipboard about every 800 ms — including copies made in other apps — and keeps up to 100 non-secret entries in memory until you turn it off or quit. Secret-shaped text is never retained.',
+    checked: enabled,
     // setHistoryEnabled stops main from RECORDING and drops what it already holds —
     // no separate clearHistory() call, which would only race it.
-    onChange: setHistoryEnabled
+    onChange: (on) => {
+      enabled = on
+      setHistoryEnabled(on)
+      if (on) refresh()
+      else render([])
+    }
   })
 
   return el('div', { class: 'clip-tab' }, [

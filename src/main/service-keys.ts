@@ -1,5 +1,8 @@
 import { getSettingsStore } from './app-settings'
 import { vaultAvailable, vaultClearKey, vaultHas, vaultLoad, vaultStore } from './vault'
+import { planHasServerForCli, type HostedCliId } from '@contracts'
+import { listStoredServers, type GrantKv } from '@backend/features/integrations'
+import { getToolPlan, hasToolPlan } from './integrations'
 
 // Service-key store (Phase-8/08). A service key (e.g. POSTHOG_API_KEY) pasted
 // ONCE -> vault ciphertext at a KV slot; the CLI config references ${NAME}, and
@@ -70,13 +73,41 @@ export function serviceKeyClear(nameRaw: string): void {
   setNames(names().filter((n) => n !== name))
 }
 
-/** Materialize ALL stored service keys into an env map — in memory, at pane
- *  spawn ONLY (main injects it into the spawn message; the daemon merges it
- *  into the PTY env, never typed, never in scrollback). Never returned to a
- *  renderer, never logged. Removal takes effect on the NEXT launch. */
-export function resolveServiceKeyEnv(): Record<string, string> {
+/** Map app provider ids to hosted CLI config dialects. Only a supported agent
+ *  with an explicit workspace tool plan can receive referenced vault keys. */
+const AGENT_TO_CLI: Readonly<Record<string, HostedCliId | undefined>> = {
+  claude: 'claude-code',
+  codex: 'codex',
+  gemini: 'gemini'
+}
+
+/** Vault names referenced by servers explicitly planned for this workspace+CLI.
+ *  Plain shells, unsupported agents, absent plans and unrelated servers all fail closed. */
+export function referencedServiceKeyNames(workspaceId?: string, agentId?: string): string[] {
+  const cli = agentId ? AGENT_TO_CLI[agentId] : undefined
+  if (!workspaceId || !cli || !hasToolPlan(workspaceId)) return []
+  const plan = getToolPlan(workspaceId)
+  const wanted = new Set<string>()
+  const addRefs = (values: Record<string, string> | undefined): void => {
+    for (const value of Object.values(values ?? {})) {
+      for (const match of value.matchAll(/\$\{([A-Z][A-Z0-9_]{2,64})\}/g)) wanted.add(match[1])
+    }
+  }
+  const store = getSettingsStore()
+  const kv: GrantKv | null = store
+    ? { get: (key) => store.getSetting(key), set: (key, value) => store.setSetting(key, value) }
+    : null
+  for (const server of kv ? listStoredServers(kv) : []) {
+    if (!planHasServerForCli(plan, server.id, cli)) continue
+    addRefs(server.env)
+    addRefs(server.headers)
+  }
+  return [...wanted]
+}
+
+export function resolveServiceKeyEnv(workspaceId?: string, agentId?: string): Record<string, string> {
   const env: Record<string, string> = {}
-  for (const name of names()) {
+  for (const name of referencedServiceKeyNames(workspaceId, agentId)) {
     const v = vaultLoad(KV_CIPHER(name))
     if (v != null) env[name] = v
   }

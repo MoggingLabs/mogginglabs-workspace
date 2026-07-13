@@ -1,7 +1,7 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
 import { BrowserChannels, TelemetryChannels, type TelemetryRendererConfig } from '@contracts'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
-import { Button, Card, FieldGroup, SectionHeader, TwoColumn, createSegmented, createToggleRow, el, icon, ICON_NAMES, type ElChild, type IconName } from '../../components'
+import { Button, Card, FieldGroup, SectionHeader, TwoColumn, createSegmented, createToggleRow, el, icon, showToast, ICON_NAMES, type ElChild, type IconName } from '../../components'
 import { THEMES } from '../../core/theme/themes'
 import { currentThemeId, onThemeChange, setTheme } from '../../core/theme/theme-state'
 import { setCommands } from '../../core/commands/command-port'
@@ -148,17 +148,78 @@ export const settingsFeature: UiFeature = {
     })
 
     // Agent-browser-control consent (6/05b): per-workspace, default OFF.
+    //
+    // This is a native <input type=checkbox>: the browser flips `.checked` BEFORE onChange
+    // runs. So the switch sliding over is not evidence of anything — it is the START of a
+    // request, and it was being treated as the end of one (finding 33b). The old handler
+    // fired `void invoke(consentSet)` and walked away: no await, no catch, no rollback —
+    // and main's handler silently dropped the write whenever its store was gone. With ZERO
+    // workspaces it was worse: `if (!wsId) return` left the box sitting there ON, having
+    // never called anything, and pullConsent() only re-syncs on entering Settings, so the
+    // lie persisted for the rest of the visit. The grant that decides whether AGENTS MAY
+    // DRIVE A BROWSER is the last switch in this app that should be optimistic.
+    //
+    // Now: disabled outright with no workspace (with the reason under it), and otherwise
+    // held disabled across the round-trip, reverted on failure, and made live ONLY after
+    // main confirms it saved.
+    const agentBrowserConsentNote = el('p', {
+      class: 'toggle-row-hint browser-consent-note',
+      text: 'No workspace open — this grant is per-workspace. Create or open one, then decide here.',
+      hidden: true
+    })
     const agentBrowserConsent = createToggleRow({
       label: 'Agents may drive the browser (this workspace)',
       hint: 'When on, agents in THIS workspace can navigate, read, and act on the browser dock — you always see when an agent holds the wheel and can Stop it instantly.',
-      onChange: () => {
-        const wsId = getWorkspaces().activeId
-        if (!wsId) return
-        void getBridge().invoke(BrowserChannels.consentSet, { workspaceId: wsId, allowed: agentBrowserConsent.checked() })
-        // Make it live for the active workspace immediately.
-        getBridge().send(BrowserChannels.consent, { allowed: agentBrowserConsent.checked() })
-      }
+      extra: agentBrowserConsentNote,
+      onChange: () => void applyAgentBrowserConsent()
     })
+
+    /** No workspace, no per-workspace grant: the switch is dead, and says why. */
+    function syncAgentBrowserConsentAvailability(): void {
+      const wsId = getWorkspaces().activeId
+      agentBrowserConsent.setDisabled(!wsId)
+      agentBrowserConsentNote.hidden = !!wsId
+      if (!wsId) agentBrowserConsent.setChecked(false) // nothing is granted when nothing is open
+    }
+
+    async function applyAgentBrowserConsent(): Promise<void> {
+      const next = agentBrowserConsent.checked()
+      const wsId = getWorkspaces().activeId
+      if (!wsId) {
+        // Belt and braces — the control is disabled without a workspace, so this cannot
+        // normally fire. If it ever does, the box does not get to sit there lying.
+        syncAgentBrowserConsentAvailability()
+        showToast({
+          tone: 'danger',
+          title: 'No workspace open',
+          body: 'This grant is per-workspace — open a workspace, then grant its agents the wheel.'
+        })
+        return
+      }
+      agentBrowserConsent.setDisabled(true) // no second click racing the first
+      try {
+        const saved = (await getBridge().invoke(BrowserChannels.consentSet, {
+          workspaceId: wsId,
+          allowed: next
+        })) as { ok?: boolean } | undefined
+        if (!saved?.ok) {
+          agentBrowserConsent.setChecked(!next) // put the switch back where the truth is
+          showToast({
+            tone: 'danger',
+            title: 'Consent was not saved',
+            body: 'The settings store did not accept the change — nothing was granted or revoked. Try again.'
+          })
+          return
+        }
+        // Live only once it is SAVED: a grant that survives no restart is not a grant.
+        getBridge().send(BrowserChannels.consent, { allowed: next, workspaceId: wsId })
+      } catch (error) {
+        agentBrowserConsent.setChecked(!next)
+        showToast({ tone: 'danger', title: 'Consent was not saved', body: String(error) })
+      } finally {
+        syncAgentBrowserConsentAvailability() // re-enable — unless the workspace left while we waited
+      }
+    }
 
     async function pullConsent(): Promise<void> {
       try {
@@ -175,6 +236,7 @@ export const settingsFeature: UiFeature = {
       } catch {
         /* leave off */
       }
+      syncAgentBrowserConsentAvailability() // entering Settings re-derives whether it may be touched at all
     }
     async function pushConsent(): Promise<void> {
       try {
@@ -426,7 +488,7 @@ export const settingsFeature: UiFeature = {
               // running is one place too many.
               el('p', {
                 class: 'card-caption',
-                text: 'Agents run as YOUR CLIs under YOUR login. The app orchestrates config the CLIs own; it never brokers, stores, or proxies a credential (ADR 0002). Terminal output, prompts, and code never leave this machine.'
+                text: 'Agents run as YOUR CLIs under YOUR login. The app orchestrates config the CLIs own; it never brokers, stores, or proxies your CLI login (ADR 0002). The only secrets it ever holds are integration keys and webhook URLs you explicitly vault — see Privacy. Terminal output, prompts, and code never leave this machine.'
               })
             ]
           )
@@ -454,12 +516,15 @@ export const settingsFeature: UiFeature = {
       )
     )
     const navById = new Map(sections.map((s, i) => [s.id, navItems[i]]))
+    let currentSection = ''
     function showSection(id: string): void {
       const target = sections.some((s) => s.id === id) ? id : sections[0].id
+      currentSection = target
       for (const s of sections) s.el.hidden = s.id !== target
       for (const b of navItems) b.classList.toggle('is-active', b.dataset.target === target)
       contentCol.scrollTop = 0
       setPref(SETTINGS_TAB_KEY, target)
+      if (target === 'integrations' && activeView() === 'settings') enterIntegrations()
     }
     showSection(pref(SETTINGS_TAB_KEY) ?? sections[0].id)
 
@@ -501,6 +566,7 @@ export const settingsFeature: UiFeature = {
       if (v !== 'settings') return
       const requested = takeRequestedSettingsTab() // a deep-link (e.g. the usage gear)
       if (requested) showSection(requested)
+      else if (currentSection === 'integrations') enterIntegrations()
       void pullConsent()
       void providers.refresh() // re-detect: a CLI installed since last visit flips to Available
       if (!page.querySelector('.ph-form')) void profilesHosts.refresh()

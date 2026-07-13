@@ -20,6 +20,11 @@ export interface WorkspaceToolPlan {
   inheritGlobal: boolean
 }
 
+/** Atomic UI mutation against the latest plan (never a captured stale matrix). */
+export type ToolPlanMutation =
+  | { workspaceId: string; kind: 'inherit'; value: boolean }
+  | { workspaceId: string; kind: 'cell'; serverId: string; cli: HostedCliId; enabled: boolean }
+
 export function defaultToolPlan(workspaceId: string): WorkspaceToolPlan {
   return { workspaceId, entries: {}, inheritGlobal: false }
 }

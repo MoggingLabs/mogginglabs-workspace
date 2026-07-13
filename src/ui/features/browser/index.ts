@@ -14,10 +14,15 @@ import {
   type WorkspaceIntegrationsGrant
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { IconButton, confirmDialog, el, icon } from '../../components'
+import { IconButton, confirmDialog, el, icon, showToast } from '../../components'
 import { getWorkspaces, onWorkspacesChange } from '../../core/workspace/workspace-info-port'
 import { setCommands } from '../../core/commands/command-port'
+import { isModKey } from '../../core/commands/shortcuts'
+import { createAsyncGuard } from '../../core/async/async-state'
+import { shortcutsBlocked } from '../../core/commands/context'
 import { getTelemetry } from '../../core/telemetry'
+import { normalizeBrowserOrigin } from '../../core/browser-origin'
+import { dockLayoutBudget, onDockLayoutChange, requestDockLayout } from '../../core/layout/dock-budget'
 
 /**
  * The browser dock (Phase-6/05): a toggleable right dock previewing what the
@@ -34,6 +39,7 @@ export const browserFeature: UiFeature = {
     let open = false
     let width = 420
     let state: BrowserDockState = {
+      workspaceId: '',
       url: '',
       title: '',
       canGoBack: false,
@@ -47,7 +53,10 @@ export const browserFeature: UiFeature = {
     const dock = el('aside', { class: 'browser-dock', hidden: true })
     dock.setAttribute('aria-label', 'Browser preview')
     const handle = el('div', { class: 'browser-dock-handle' })
-    handle.setAttribute('aria-hidden', 'true')
+    handle.tabIndex = 0
+    handle.setAttribute('role', 'separator')
+    handle.setAttribute('aria-orientation', 'vertical')
+    handle.setAttribute('aria-label', 'Resize browser dock')
 
     const back = IconButton({ icon: 'chevron-left', label: 'Back', title: 'Back', onClick: () => nav('back') })
     const forward = IconButton({ icon: 'chevron-right', label: 'Forward', title: 'Forward', onClick: () => nav('forward') })
@@ -79,7 +88,10 @@ export const browserFeature: UiFeature = {
     // ── Agent possession (6/05b): visible whenever an agent holds the wheel ──
     const stopBtn = el('button', { class: 'browser-agent-stop', type: 'button', text: 'Stop' }) as HTMLButtonElement
     stopBtn.title = 'Revoke agent control now'
-    stopBtn.onclick = (): void => bridge.send(BrowserChannels.agentStop, undefined)
+    let activityWorkspaceId = ''
+    stopBtn.onclick = (): void => {
+      if (activityWorkspaceId) bridge.send(BrowserChannels.agentStop, { workspaceId: activityWorkspaceId })
+    }
     const agentLabel = el('span', { class: 'browser-agent-label', text: 'Agent driving' })
     const trailBtn = IconButton({ icon: 'more', label: 'Agent activity', title: 'Recent agent actions', onClick: () => {
       trailMenu.hidden = !trailMenu.hidden
@@ -111,7 +123,9 @@ export const browserFeature: UiFeature = {
     ])
     let pendingOrigin = ''
     confirmBtn.onclick = (): void => {
-      if (pendingOrigin) bridge.send(BrowserChannels.confirmOrigin, { origin: pendingOrigin })
+      if (pendingOrigin && activityWorkspaceId) {
+        bridge.send(BrowserChannels.confirmOrigin, { workspaceId: activityWorkspaceId, origin: pendingOrigin })
+      }
     }
     // Recent acts (8/05): the last 3 TRAIL entries for the possessing
     // workspace — the audit surface's compact face on the possession chrome.
@@ -120,12 +134,14 @@ export const browserFeature: UiFeature = {
     function refreshRecentActs(): void {
       window.clearTimeout(recentActsTimer)
       recentActsTimer = window.setTimeout(async () => {
-        const wsId = getWorkspaces().activeId
+        const capture = captureWorkspace()
+        const wsId = capture.id
         if (!wsId || state.profile !== 'agent-web') {
           recentActs.hidden = true
           return
         }
         const entries = (await bridge.invoke(IntegrationsChannels.trailList, wsId)) as TrailEntry[]
+        if (!workspaceStillCurrent(capture) || state.profile !== 'agent-web') return
         const last = entries.filter((t) => t.source === 'web').slice(-3).reverse()
         recentActs.innerHTML = ''
         for (const t of last) {
@@ -140,7 +156,8 @@ export const browserFeature: UiFeature = {
     const originAlert = el('div', { class: 'browser-origin-alert', hidden: true })
     let originAlertTimer: number | undefined
     bridge.on(BrowserChannels.originAlert, (payload) => {
-      const p = payload as { from: string; to: string }
+      const p = payload as { workspaceId?: string; from: string; to: string }
+      if (p.workspaceId !== activeWsId()) return
       originAlert.textContent = `Crossed origins: ${p.from} → ${p.to}`
       originAlert.hidden = false
       window.clearTimeout(originAlertTimer)
@@ -161,11 +178,12 @@ export const browserFeature: UiFeature = {
     // DIFFERENT url than the one on screen (switching never auto-navigates).
     const wsChip = el('button', { class: 'browser-ws-chip', type: 'button', hidden: true }) as HTMLButtonElement
 
-    const empty = el('div', { class: 'browser-empty' }, [
-      icon('globe', 28),
-      el('div', { class: 'browser-empty-title', text: 'Preview what the agents build' }),
-      el('div', { class: 'browser-empty-hint', text: 'Enter a URL above — your dev server, docs, anything http(s).' })
-    ])
+    // The empty state is the only place the dock explains itself, so ONE function writes
+    // its copy (renderEmptyCopy) — it must never chirp "Enter a URL above" over a URL bar
+    // that cannot be typed into (finding 33).
+    const emptyTitle = el('div', { class: 'browser-empty-title' })
+    const emptyHint = el('div', { class: 'browser-empty-hint' })
+    const empty = el('div', { class: 'browser-empty' }, [icon('globe', 28), emptyTitle, emptyHint])
     // The viewHost holds the guest <webview>s (8/07). They ARE the page — in
     // the DOM, so the dock resizes them in LOCKSTEP with the chrome (one
     // compositor, no main-owned view to position). Two guests (preview /
@@ -190,6 +208,13 @@ export const browserFeature: UiFeature = {
     let agentWebPersists = true
     const gkey = (wsId: string, p: BrowserProfile): string => `${wsId}:${p}`
     const activeWsId = (): string => getWorkspaces().activeId ?? ''
+    let workspaceGeneration = 0
+    const captureWorkspace = (): { id: string; generation: number } => ({
+      id: activeWsId(),
+      generation: workspaceGeneration
+    })
+    const workspaceStillCurrent = (capture: { id: string; generation: number }): boolean =>
+      capture.id === activeWsId() && capture.generation === workspaceGeneration
     const activeKey = (): string => gkey(activeWsId(), state.profile)
 
     function makeGuest(wsId: string, p: BrowserProfile): HTMLElement {
@@ -268,8 +293,24 @@ export const browserFeature: UiFeature = {
     // Auto-switch: when the active workspace changes with the dock open, show
     // that workspace's own browser (creating it on first visit).
     onWorkspacesChange(() => {
+      workspaceGeneration++
+      const workspaceId = activeWsId()
+      // Workspace-scoped async surfaces must go blank at the switch boundary;
+      // generation checks stop late writes, while this prevents already-rendered
+      // controls from the previous workspace remaining actionable meanwhile.
+      sitesMenu.hidden = true
+      sitesMenu.replaceChildren()
+      wsChip.hidden = true
+      wsChip.onclick = null
+      recentActs.hidden = true
+      recentActs.replaceChildren()
+      // The LAST workspace closing is a workspace change too (finding 33): the dock stays
+      // open over the home screen, so its controls must go back to disabled-and-explained
+      // here, not wait for main's reply.
+      applyWorkspaceGating()
+      void bridge.invoke(BrowserChannels.activate, { workspaceId })
       if (open) {
-        ensureGuests(activeWsId())
+        ensureGuests(workspaceId)
         applyGuestVisibility()
       }
       applyTabPossession() // tabs rebuilt on switch — re-mark agent-browsing ones
@@ -287,6 +328,20 @@ export const browserFeature: UiFeature = {
     // workspaces from eviction and mark their tabs.
     let attachedWs: string[] = []
     let drivingWs: string[] = []
+    const globalPossession = el('div', {
+      class: 'browser-global-possession',
+      role: 'status',
+      hidden: true,
+      attrs: { 'aria-live': 'polite' }
+    })
+    const globalPossessionLabel = el('span', { text: 'Agent driving browser' })
+    const globalStop = el('button', { class: 'browser-global-stop', type: 'button', text: 'Stop' }) as HTMLButtonElement
+    globalStop.onclick = (): void => {
+      const workspaceId = drivingWs[0]
+      if (workspaceId) bridge.send(BrowserChannels.agentStop, { workspaceId })
+    }
+    globalPossession.append(icon('sparkles', 12), globalPossessionLabel, globalStop)
+    document.querySelector('.titlebar-right')?.prepend(globalPossession)
     function applyTabPossession(): void {
       document.querySelectorAll<HTMLElement>('.workspace-tab').forEach((tab) => {
         const id = tab.dataset.wsId ?? ''
@@ -298,6 +353,9 @@ export const browserFeature: UiFeature = {
       const p = payload as { attached?: string[]; driving?: string[] }
       attachedWs = p.attached ?? []
       drivingWs = p.driving ?? []
+      globalPossession.hidden = drivingWs.length === 0
+      globalPossessionLabel.textContent =
+        drivingWs.length > 1 ? `${drivingWs.length} agents driving browsers` : 'Agent driving browser'
       pinnedWs.clear()
       for (const w of attachedWs) pinnedWs.add(w)
       applyTabPossession()
@@ -305,9 +363,14 @@ export const browserFeature: UiFeature = {
 
     // ── Width drag (pure DOM now — the webview resizes with the chrome) ──────
     let widthPersistTimer: number | undefined
-    const applyWidth = (): void => {
-      width = Math.max(320, Math.min(Math.round(window.innerWidth * 0.6), width))
+    const applyWidth = (persist = true): void => {
+      const budget = dockLayoutBudget()
+      width = Math.max(budget.browserMin, Math.min(budget.browserMax, Math.round(width)))
       dock.style.width = `${width}px`
+      handle.setAttribute('aria-valuemin', String(budget.browserMin))
+      handle.setAttribute('aria-valuemax', String(Math.round(budget.browserMax)))
+      handle.setAttribute('aria-valuenow', String(width))
+      if (!persist) return
       window.clearTimeout(widthPersistTimer)
       widthPersistTimer = window.setTimeout(() => bridge.send(BrowserChannels.persistWidth, { dockWidth: width }), 400)
     }
@@ -329,6 +392,17 @@ export const browserFeature: UiFeature = {
       handle.addEventListener('pointerup', up)
       handle.addEventListener('pointercancel', up)
     })
+    handle.addEventListener('keydown', (e) => {
+      const budget = dockLayoutBudget()
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
+      e.preventDefault()
+      if (e.key === 'ArrowLeft') width += e.shiftKey ? 64 : 16
+      else if (e.key === 'ArrowRight') width -= e.shiftKey ? 64 : 16
+      else if (e.key === 'Home') width = budget.browserMin
+      else width = budget.browserMax
+      applyWidth()
+    })
+    onDockLayoutChange(() => applyWidth(false))
 
     // ── Toggle ───────────────────────────────────────────────────────────────
     const toggleBtn = IconButton({
@@ -342,43 +416,84 @@ export const browserFeature: UiFeature = {
     function toggle(next: boolean): void {
       open = next
       dock.hidden = !open
+      requestDockLayout()
       toggleBtn.classList.toggle('is-active', open)
+      // Honest the instant it opens: main's state push is an IPC round-trip away, and the
+      // globe is reachable from the zero-workspace home screen.
+      applyWorkspaceGating()
       if (open) ensureGuests(activeWsId()) // spawn the active workspace's guests on first use
       void bridge.invoke(BrowserChannels.toggle, { open, workspaceId: getWorkspaces().activeId ?? undefined })
       applyGuestVisibility()
-      if (open) urlInput.focus()
+      if (open && !urlInput.disabled) urlInput.focus() // never park the caret in a dead field
       getTelemetry().captureEvent({ name: 'browser.dock', props: { open } }) // boolean only — never URLs (ADR 0005)
     }
 
     document.addEventListener('keydown', (e) => {
-      if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyU') {
-        e.preventDefault()
-        toggle(!open)
-      }
+      // Finding 28: this read `e.ctrlKey` alone, so the dock's ONE shortcut was dead on
+      // every Mac. isModKey is the single correct way to ask (Ctrl or ⌘).
+      if (!isModKey(e) || !e.shiftKey || e.altKey || e.code !== 'KeyU') return
+      // Finding 29: a raw global listener owes the user this question BEFORE it acts.
+      // The app's shortcuts are CAPTURE-phase, so the stopPropagation() calls sprinkled
+      // through its text fields never blocked them — nothing had begun to bubble yet.
+      // Sliding a dock out from under an open modal, or eating a keystroke mid-sentence,
+      // is not a shortcut; it is a surprise.
+      if (shortcutsBlocked(e.target)) return
+      e.preventDefault()
+      toggle(!open)
     })
     setCommands('browser', [
       { id: 'browser.toggle', title: 'Toggle browser dock', hint: 'Browser', kbd: 'Ctrl+Shift+U', run: () => toggle(!open) }
     ])
 
     // ── Navigation ───────────────────────────────────────────────────────────
+    // Both of these were `void invoke(...)` with no catch: a rejected IPC was an unhandled
+    // promise, and a REFUSED url (ok === false) was indistinguishable from a successful one —
+    // in both cases the dock simply sat there looking like it had done what you asked
+    // (finding 39). A navigation that does not happen has to say so.
+    const NAV_LABEL: Record<BrowserNavAction, string> = {
+      back: 'go back',
+      forward: 'go forward',
+      reload: 'reload the page'
+    }
+    const navGuard = createAsyncGuard<void>()
+    const urlGuard = createAsyncGuard<boolean>()
+
     function nav(action: BrowserNavAction): void {
-      void bridge.invoke(BrowserChannels.nav, { action })
+      const workspaceId = activeWsId()
+      if (!workspaceId) return
+      void navGuard.run(
+        () => bridge.invoke(BrowserChannels.nav, { action, workspaceId }) as Promise<void>,
+        { action: NAV_LABEL[action] }
+      )
     }
     urlInput.addEventListener('keydown', (e) => {
       e.stopPropagation()
       if (e.key !== 'Enter') return
       const raw = urlInput.value.trim()
       if (!raw) return
-      void bridge
-        .invoke(BrowserChannels.navigate, { url: raw, workspaceId: getWorkspaces().activeId ?? undefined })
-        .then((ok) => {
-          if (ok) empty.hidden = true
-        })
+      const capture = captureWorkspace()
+      if (!capture.id) return
+      void urlGuard.run(
+        () => bridge.invoke(BrowserChannels.navigate, { url: raw, workspaceId: capture.id }) as Promise<boolean>,
+        {
+          action: `open ${raw}`,
+          onSuccess: (ok) => {
+            if (!workspaceStillCurrent(capture)) return
+            if (ok) empty.hidden = true
+            // Not a failure — a REFUSAL (blocked host, unsupported scheme). It deserves a
+            // different sentence than a crash, and it used to get no sentence at all.
+            else showToast({ tone: 'danger', title: 'That address was refused', body: raw })
+          }
+        }
+      )
     })
 
     // ── Profile switch + agent-web chrome (8/04) ─────────────────────────────
     async function setProfile(p: BrowserProfile): Promise<void> {
-      await bridge.invoke(BrowserChannels.profileSet, { workspaceId: getWorkspaces().activeId ?? undefined, profile: p })
+      const capture = captureWorkspace()
+      if (!capture.id) return
+      await bridge.invoke(BrowserChannels.profileSet, { workspaceId: capture.id, profile: p })
+      if (!workspaceStillCurrent(capture)) return
       getTelemetry().captureEvent({ name: 'browser.profile', props: { agentWeb: p === 'agent-web' } }) // boolean only (ADR 0005)
     }
     function renderProfileChrome(): void {
@@ -390,30 +505,82 @@ export const browserFeature: UiFeature = {
         ? 'Signed-in browser — sessions persist on this machine; agents act only on origins you grant.'
         : 'No at-rest encryption on this machine — logins here last until the dock closes.'
       agentWebNote.classList.toggle('no-vault', !state.agentWebPersists)
-      const titleEl = empty.querySelector('.browser-empty-title')
-      const hintEl = empty.querySelector('.browser-empty-hint')
-      if (titleEl && hintEl) {
-        titleEl.textContent = agentWeb ? 'The agents’ signed-in browser' : 'Preview what the agents build'
-        hintEl.textContent = agentWeb
-          ? 'Sign in here on purpose. Sessions stay in this profile — never your system browser.'
-          : 'Enter a URL above — your dev server, docs, anything http(s).'
-      }
       if (!agentWeb) sitesMenu.hidden = true
+    }
+
+    /** The empty state's words, profile-aware — and workspace-aware, which is the whole
+     *  point: with no workspace there is no URL to enter, so it must not say to enter one. */
+    function renderEmptyCopy(hasWorkspace: boolean): void {
+      if (!hasWorkspace) {
+        emptyTitle.textContent = 'No workspace open'
+        emptyHint.textContent =
+          'The browser is per-workspace — its own page, its own logins. Create or open a workspace to preview its dev server here.'
+        return
+      }
+      const agentWeb = state.profile === 'agent-web'
+      emptyTitle.textContent = agentWeb ? 'The agents’ signed-in browser' : 'Preview what the agents build'
+      emptyHint.textContent = agentWeb
+        ? 'Sign in here on purpose. Sessions stay in this profile — never your system browser.'
+        : 'Enter a URL above — your dev server, docs, anything http(s).'
+    }
+
+    /**
+     * The zero-workspace dock (finding 33). The titlebar globe renders in EVERY view —
+     * including the zero-workspace home screen — but a browser has nowhere to live here:
+     * every concept in the dock is keyed BY workspace (browser-dock.ts: guestKey,
+     * kvLastUrl, kvProfile, kvConsent) and ensureGuests() has always refused to create a
+     * guest without one. What shipped was the entire chrome — URL bar, back/forward/reload,
+     * profile switch — rendered live and silently inert: typing a URL and pressing Enter
+     * fell out at `if (!capture.id)` and did NOTHING, with an empty state cheerfully
+     * saying "Enter a URL above". A control that cannot act must not look like it can.
+     * (A real workspace-less guest was the other option, and it would have meant inventing
+     * where an orphan session's state goes when the first workspace appears. It doesn't.)
+     */
+    function applyWorkspaceGating(): void {
+      // Re-derived from the renderer's OWN truth, not from the last state push: with zero
+      // workspaces main pushes nothing until the dock is toggled, so a gate that only ran
+      // in the state handler would render one dishonest frame on the way in. Inside that
+      // handler the two agree by construction — it drops any push whose workspaceId isn't
+      // the active one, so `state.workspaceId === activeWsId()` there by the time we run.
+      const hasWorkspace = !!activeWsId()
+      dock.classList.toggle('is-no-workspace', !hasWorkspace)
+      urlInput.disabled = !hasWorkspace
+      // The nav verbs stay bound to their own truth when a workspace IS open — a workspace
+      // does not make Back possible, history does.
+      back.disabled = !hasWorkspace || !state.canGoBack
+      forward.disabled = !hasWorkspace || !state.canGoForward
+      reload.disabled = !hasWorkspace
+      external.disabled = !hasWorkspace || !state.url // it opens state.url; with none it was a live-looking no-op
+      profilePreviewBtn.disabled = !hasWorkspace
+      profileAgentBtn.disabled = !hasWorkspace
+      // Nothing can be loaded without a workspace, so the explanation is always on screen.
+      empty.hidden = hasWorkspace && state.url !== ''
+      renderEmptyCopy(hasWorkspace)
+      // Close (and the resize handle) stay live: you must always be able to shut a dock.
     }
     // Follow the ACTIVE workspace's stored profile (per-workspace persisted).
     async function applyWorkspaceProfile(): Promise<void> {
-      const wsId = getWorkspaces().activeId
-      if (!wsId) return
-      const stored = (await bridge.invoke(BrowserChannels.profileGet, wsId)) as BrowserProfile
-      if (stored !== state.profile) await setProfile(stored)
+      const capture = captureWorkspace()
+      if (!capture.id) return
+      const stored = (await bridge.invoke(BrowserChannels.profileGet, capture.id)) as BrowserProfile
+      if (!workspaceStillCurrent(capture)) return
+      if (stored !== state.profile) {
+        await bridge.invoke(BrowserChannels.profileSet, { workspaceId: capture.id, profile: stored })
+      }
     }
     onWorkspacesChange(() => void applyWorkspaceProfile())
 
     async function refreshSitesMenu(): Promise<void> {
-      const wsId = getWorkspaces().activeId
+      const capture = captureWorkspace()
+      const wsId = capture.id
       sitesMenu.innerHTML = ''
       sitesMenu.append(el('div', { class: 'menu-note browser-sites-head', text: 'Signed-in sites (agent web profile)' }))
-      const sites = (await bridge.invoke(BrowserChannels.signedInSites, undefined)) as BrowserSignedInSite[]
+      if (!wsId) {
+        sitesMenu.append(el('div', { class: 'menu-note', text: 'No active workspace.' }))
+        return
+      }
+      const sites = (await bridge.invoke(BrowserChannels.signedInSites, wsId)) as BrowserSignedInSite[]
+      if (!workspaceStillCurrent(capture)) return
       if (!sites.length) sitesMenu.append(el('div', { class: 'menu-note', text: 'No sign-ins yet — log into a site in this profile.' }))
       for (const s of sites) {
         const forget = el('button', { class: 'browser-sites-forget', type: 'button', text: 'Forget' }) as HTMLButtonElement
@@ -424,8 +591,9 @@ export const browserFeature: UiFeature = {
             confirmLabel: 'Forget site',
             danger: true
           })
-          if (!ok) return
-          await bridge.invoke(BrowserChannels.forgetSite, s.host)
+          if (!ok || !workspaceStillCurrent(capture)) return
+          await bridge.invoke(BrowserChannels.forgetSite, { workspaceId: wsId, host: s.host })
+          if (!workspaceStillCurrent(capture)) return
           void refreshSitesMenu()
         }
         sitesMenu.append(
@@ -445,8 +613,9 @@ export const browserFeature: UiFeature = {
             confirmLabel: 'Clear all',
             danger: true
           })
-          if (!ok) return
-          await bridge.invoke(BrowserChannels.clearAgentLogins, undefined)
+          if (!ok || !workspaceStillCurrent(capture)) return
+          await bridge.invoke(BrowserChannels.clearAgentLogins, wsId)
+          if (!workspaceStillCurrent(capture)) return
           void refreshSitesMenu()
         }
         sitesMenu.append(clearAll)
@@ -454,19 +623,26 @@ export const browserFeature: UiFeature = {
       // The minimal act-origin grant editor (Settings § Browser is the full
       // home). Origins agents may ACT on, for the ACTIVE workspace.
       sitesMenu.append(el('div', { class: 'menu-note browser-sites-head', text: 'Origins agents may act on (this workspace)' }))
-      if (!wsId) {
-        sitesMenu.append(el('div', { class: 'menu-note', text: 'No active workspace.' }))
-        return
-      }
       const grant = (await bridge.invoke(IntegrationsChannels.grantGet, wsId)) as WorkspaceIntegrationsGrant
+      if (!workspaceStillCurrent(capture)) return
       for (const origin of grant.actOrigins) {
         const drop = el('button', { class: 'browser-sites-forget', type: 'button', text: 'Revoke' }) as HTMLButtonElement
         drop.onclick = async (): Promise<void> => {
-          await bridge.invoke(IntegrationsChannels.grantSet, {
-            ...grant,
-            actOrigins: grant.actOrigins.filter((o) => o !== origin)
-          })
-          void refreshSitesMenu()
+          if (!workspaceStillCurrent(capture)) return
+          drop.disabled = true
+          try {
+            await bridge.invoke(IntegrationsChannels.grantMutate, {
+              workspaceId: wsId,
+              field: 'origin',
+              op: 'remove',
+              origin
+            })
+            if (workspaceStillCurrent(capture)) void refreshSitesMenu()
+          } catch (error) {
+            showToast({ tone: 'danger', title: 'Origin was not revoked', body: String(error) })
+          } finally {
+            if (drop.isConnected) drop.disabled = false
+          }
         }
         sitesMenu.append(
           el('div', { class: 'browser-sites-row' }, [el('span', { class: 'browser-sites-host', text: origin }), drop])
@@ -483,51 +659,67 @@ export const browserFeature: UiFeature = {
       const addNote = el('div', { class: 'menu-note browser-sites-refused', hidden: true })
       const addBtn = el('button', { class: 'browser-sites-add', type: 'button', text: 'Grant origin' }) as HTMLButtonElement
       addBtn.onclick = async (): Promise<void> => {
+        if (!workspaceStillCurrent(capture)) return
         const raw = addInput.value.trim()
         if (!raw) return
-        const saved = (await bridge.invoke(IntegrationsChannels.grantSet, {
-          ...grant,
-          web: 'signed-in', // granting an origin IS opting into the signed-in tier
-          actOrigins: [...grant.actOrigins, raw]
-        })) as WorkspaceIntegrationsGrant | null
-        const landed = !!saved && saved.actOrigins.length > grant.actOrigins.length
-        if (!landed) {
-          addNote.textContent = `“${raw}” was refused — sensitive origins never accept act grants.`
-          addNote.hidden = false
-          return
+        addBtn.disabled = true
+        try {
+          const saved = (await bridge.invoke(IntegrationsChannels.grantMutate, {
+            workspaceId: wsId,
+            field: 'origin',
+            op: 'add',
+            origin: raw
+          })) as WorkspaceIntegrationsGrant | null
+          if (!workspaceStillCurrent(capture)) return
+          const normalized = normalizeBrowserOrigin(raw)
+          if (!saved || !normalized || !saved.actOrigins.includes(normalized)) {
+            addNote.textContent = `“${raw}” was refused — sensitive or invalid origins never accept act grants.`
+            addNote.hidden = false
+            return
+          }
+          void refreshSitesMenu()
+        } catch (error) {
+          showToast({ tone: 'danger', title: 'Origin was not granted', body: String(error) })
+        } finally {
+          if (addBtn.isConnected) addBtn.disabled = false
         }
-        void refreshSitesMenu()
       }
       sitesMenu.append(el('div', { class: 'browser-sites-addrow' }, [addInput, addBtn]), addNote)
     }
 
     // ── State from main (header truth) ───────────────────────────────────────
     bridge.on(BrowserChannels.state, (payload) => {
-      state = payload as BrowserDockState
+      const next = payload as BrowserDockState
+      if (next.workspaceId !== activeWsId()) return
+      state = next
       agentWebPersists = state.agentWebPersists // machine-global; keeps new-guest partitions truthful
       if (document.activeElement !== urlInput) urlInput.value = state.url
-      back.disabled = !state.canGoBack
-      forward.disabled = !state.canGoForward
       loading.classList.toggle('is-loading', state.loading)
-      empty.hidden = state.url !== '' // the empty overlay covers a guest at about:blank
       renderProfileChrome()
+      // Owns the nav/url/profile enablement and the empty overlay (which covers a guest
+      // sitting at about:blank) — one writer, so a workspace-less dock can't be re-enabled
+      // from under it by a stale push.
+      applyWorkspaceGating()
       applyGuestVisibility() // the profile may have flipped (active guest on top)
       void refreshChip()
     })
 
     // ── The per-workspace preview chip (switching never navigates) ──────────
     async function refreshChip(): Promise<void> {
-      const wsId = getWorkspaces().activeId
+      const capture = captureWorkspace()
+      const wsId = capture.id
       if (!wsId || !open) {
         wsChip.hidden = true
         return
       }
       const last = (await bridge.invoke(BrowserChannels.lastUrl, wsId)) as string | null
+      if (!workspaceStillCurrent(capture)) return
       const differs = !!last && last !== state.url
       wsChip.hidden = !differs
       if (differs && last) {
         wsChip.textContent = `Open this workspace's preview — ${new URL(last).host}`
         wsChip.onclick = (): void => {
+          if (!workspaceStillCurrent(capture)) return
           void bridge.invoke(BrowserChannels.navigate, { url: last, workspaceId: wsId })
           wsChip.hidden = true
         }
@@ -538,9 +730,10 @@ export const browserFeature: UiFeature = {
     // ── Agent control: consent follows the active workspace (default OFF).
     //    8/04: the workspace id rides along so act-origin grants resolve. ────
     async function pushConsent(): Promise<void> {
-      const wsId = getWorkspaces().activeId
-      const allowed = !!wsId && (await bridge.invoke(BrowserChannels.consentGet, wsId)) === true
-      bridge.send(BrowserChannels.consent, { allowed, workspaceId: wsId ?? undefined })
+      const capture = captureWorkspace()
+      const allowed = !!capture.id && (await bridge.invoke(BrowserChannels.consentGet, capture.id)) === true
+      if (!workspaceStillCurrent(capture)) return
+      bridge.send(BrowserChannels.consent, { allowed, workspaceId: capture.id || undefined })
     }
     onWorkspacesChange(() => void pushConsent())
 
@@ -553,6 +746,8 @@ export const browserFeature: UiFeature = {
     }
     bridge.on(BrowserChannels.activity, (payload) => {
       const a = payload as BrowserAgentActivity
+      if (a.workspaceId !== activeWsId()) return
+      activityWorkspaceId = a.workspaceId
       banner.hidden = !a.driving
       dock.classList.toggle('agent-driving', a.driving)
       // 8/04: the session-scoped confirm rides the activity push.
@@ -585,6 +780,10 @@ export const browserFeature: UiFeature = {
       if (e.target instanceof Node && !sitesMenu.contains(e.target) && !agentWebNote.contains(e.target)) sitesMenu.hidden = true
     })
 
+    // Paint the gate once at mount, hidden dock and all: the chrome should never EXIST in
+    // the live-looking/dead-underneath state, not even for the frame before it is shown.
+    applyWorkspaceGating()
+
     exposeForDev()
     function exposeForDev(): void {
       if (!import.meta.env.DEV) return
@@ -607,11 +806,17 @@ export const browserFeature: UiFeature = {
         state: () => ({ ...state }),
         // 6/05b: agent-control surface for the smoke — write per-workspace
         // consent, make it live, and read the possession banner's live state.
-        setConsent: async (allowed: boolean) => {
+        // Returns whether main actually SAVED it (33b) — a consent that was dropped is
+        // never made live, here or in Settings.
+        setConsent: async (allowed: boolean): Promise<boolean> => {
           const wsId = getWorkspaces().activeId
-          if (!wsId) return
-          await bridge.invoke(BrowserChannels.consentSet, { workspaceId: wsId, allowed })
+          if (!wsId) return false
+          const saved = (await bridge.invoke(BrowserChannels.consentSet, { workspaceId: wsId, allowed })) as
+            | { ok?: boolean }
+            | undefined
+          if (!saved?.ok) return false
           await pushConsent()
+          return true
         },
         driving: () => !banner.hidden,
         trailCount: () => trailMenu.querySelectorAll('.browser-trail-row').length,

@@ -125,11 +125,14 @@ stolen.
 ### What agents can NEVER touch
 
 ADR 0002 holds at full throttle. There are no cookie, storage, or credential
-TOOLS — the wheel, not the vault. No session injection, no headless second
-browser: the verbs drive the ONE visible dock the human is looking at. The
-only cookie store the APP itself ever touches is its own agent-web partition,
-below, at the user's explicit request (Signed-in sites / forget) — never the
-system browser's (Branch B stays parked behind its own future ADR).
+TOOLS — the wheel, not the vault. No session injection, no hidden second
+browser: the verbs drive the ONE visible dock the human is looking at.
+("Hidden" as in offscreen — the app never drives a browser the user cannot
+see. Not the CI sense of *headless*, where `xvfb` hands the ONE real window a
+virtual display.) The only cookie store the APP itself ever touches is its own
+agent-web partition, below, at the user's explicit request (Signed-in sites /
+forget) — never the system browser's (Branch B stays parked behind its own
+future ADR).
 
 **The session, honestly — two profiles (8/04, ADR 0008.e).** The dock has two
 separate session partitions, switched in the header:

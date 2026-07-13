@@ -51,10 +51,11 @@ export interface DirListing {
  *  - `missing`      ENOENT — typed a path that isn't there, or it vanished mid-browse.
  *  - `not-a-directory` ENOTDIR — a file path.
  *  - `invalid`      not an absolute path (we never resolve against a cwd).
+ *  - `unavailable`  the validation transport failed; never treat this as a usable folder.
  */
 export interface DirRefusal {
   ok: false
-  reason: 'denied' | 'missing' | 'not-a-directory' | 'invalid'
+  reason: 'denied' | 'missing' | 'not-a-directory' | 'invalid' | 'unavailable'
   path: string
 }
 

@@ -2,7 +2,7 @@
 // connections are dropped within seconds), and per-connection pane subscriptions. (ADR 0006.)
 import * as net from 'node:net'
 import { createLineFramer, encodeMessage, keyToBytes, DAEMON_PROTOCOL_VERSION } from '@contracts'
-import type { ClientMessage, ServerMessage } from '@contracts'
+import type { ClientMessage, ServerMessage, ReviewSnapshot } from '@contracts'
 import { ptyEmulation } from '@backend/platform/pty-host'
 import type { SessionManager, PaneSubscriber, PaneSession } from './session'
 import { log } from './lifecycle'
@@ -16,6 +16,20 @@ export interface TransportHooks {
    *  leave a stale lock/endpoint pointing at a dead pid. */
   onShutdown(code: number): void
 }
+
+const OID = /^[0-9a-f]{40,64}$/i
+const refShape = (value: unknown): value is string =>
+  typeof value === 'string' && value.length > 0 && value.length <= 256 && /^[A-Za-z0-9._/-]+$/.test(value)
+const validReviewSnapshot = (value: unknown): value is ReviewSnapshot => {
+  const s = value as Partial<ReviewSnapshot> | null
+  return !!s &&
+    typeof s.repoId === 'string' && s.repoId.length > 0 && s.repoId.length <= 2048 &&
+    refShape(s.branch) && refShape(s.base) &&
+    typeof s.head === 'string' && OID.test(s.head) &&
+    typeof s.baseHead === 'string' && OID.test(s.baseHead) &&
+    typeof s.mergeBase === 'string' && OID.test(s.mergeBase)
+}
+const approvalKey = (repoId: string, branch: string): string => `${repoId}\0${branch}`
 
 export function createServer(sessions: SessionManager, token: string, hooks: TransportHooks): net.Server {
   // Ownership-ledger pushes (4/02): every authed client gets a fresh `owners` on any
@@ -91,22 +105,30 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
     function handle(m: ClientMessage): void {
       switch (m.t) {
         case 'spawn': {
-          const { pane, existed } = sessions.ensure(m.id, m.spec ?? {})
-          // Reply FIRST, then bind: subscribe() synchronously replays state/cwd, and the
-          // client gates every pane event on the generation it learns from `spawned` — a
-          // replay arriving ahead of the gen would be dropped as stale. Same tick either
-          // way, so no pty output can land between the scrollback snapshot and the bind.
-          // The DAEMON owns the pty, so the daemon reports how it behaves — the app never guesses.
-          send({
-            t: 'spawned',
-            id: m.id,
-            gen: pane.gen,
-            existing: existed,
-            restored: existed && pane.restoredPristine,
-            scrollback: pane.scrollback,
-            pty: ptyEmulation()
-          })
-          subscribe(m.id)
+          const spawn = (): void => {
+            if (sock.destroyed) return
+            const { pane, existed } = sessions.ensure(m.id, m.spec ?? {})
+            // Reply FIRST, then bind: subscribe() synchronously replays state/cwd, and the
+            // client gates every pane event on the generation it learns from `spawned` — a
+            // replay arriving ahead of the gen would be dropped as stale. Same tick either
+            // way, so no pty output can land between the scrollback snapshot and the bind.
+            // The DAEMON owns the pty, so the daemon reports how it behaves — the app never guesses.
+            send({
+              t: 'spawned',
+              id: m.id,
+              gen: pane.gen,
+              existing: existed,
+              restored: existed && pane.restoredPristine,
+              scrollback: pane.scrollback,
+              pty: ptyEmulation()
+            })
+            subscribe(m.id)
+          }
+          // Failure-injection seam for the role-binding gate: production has no
+          // delay, while the gate holds spawn past the retired 1.2 s timeout.
+          const injectedDelay = Math.min(10000, Math.max(0, Number(process.env.MOGGING_DAEMON_SPAWN_DELAY_MS) || 0))
+          if (injectedDelay) setTimeout(spawn, injectedDelay)
+          else spawn()
           break
         }
         case 'attach': {
@@ -140,6 +162,16 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
         case 'list':
           send({ t: 'panes', panes: sessions.list() })
           break
+        case 'verify-pane': {
+          const pane = typeof m.id === 'string' ? sessions.get(m.id) : undefined
+          const valid =
+            Number.isInteger(m.requestId) &&
+            typeof m.token === 'string' &&
+            !!m.token &&
+            m.token === pane?.paneToken
+          send({ t: 'pane-verified', requestId: m.requestId, id: String(m.id ?? ''), valid })
+          break
+        }
         case 'send-key': {
           // Control API (Phase-3/01): the key is a NAME resolved against the closed
           // allowlist HERE — a client can never inject arbitrary escape sequences.
@@ -234,7 +266,7 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
             break
           }
           const claimed = sessions.get(m.from)
-          if (typeof m.token === 'string' && m.token !== claimed?.paneToken) {
+          if (typeof m.token !== 'string' || !m.token || m.token !== claimed?.paneToken) {
             log(`approve REFUSED: token does not bind the sender to pane ${m.from}`)
             send({ t: 'error', reason: 'notreviewer' })
             break
@@ -244,15 +276,20 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
             send({ t: 'error', reason: 'notreviewer' })
             break
           }
-          if (typeof m.token !== 'string') {
-            log(`approve accepted for pane ${m.from} WITHOUT a pane-token binding — sender identity unproven`)
-          }
-          if (typeof m.branch !== 'string' || !m.branch || m.branch.length > 256) {
+          if (!validReviewSnapshot(m.snapshot)) {
             send({ t: 'error', reason: 'badbranch' })
             break
           }
-          sessions.approvals.set(m.branch, { branch: m.branch, byPaneId: m.from, byRole: role, ts: Date.now() })
-          send({ t: 'approved', branch: m.branch, byPaneId: m.from, byRole: role })
+          const approval = {
+            snapshot: m.snapshot,
+            branch: m.snapshot.branch,
+            repoId: m.snapshot.repoId,
+            byPaneId: m.from,
+            byRole: role,
+            ts: Date.now()
+          }
+          sessions.approvals.set(approvalKey(approval.repoId, approval.branch), approval)
+          send({ t: 'approved', branch: approval.branch, byPaneId: m.from, byRole: role })
           pushApprovals()
           break
         }
@@ -261,7 +298,11 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           break
         case 'unapprove':
           // The branch's worktree is gone (app-side removal) — sign-off dies with it.
-          if (typeof m.branch === 'string' && sessions.approvals.delete(m.branch)) pushApprovals()
+          if (
+            typeof m.repoId === 'string' &&
+            typeof m.branch === 'string' &&
+            sessions.approvals.delete(approvalKey(m.repoId, m.branch))
+          ) pushApprovals()
           break
         case 'ping':
           send({ t: 'pong' })

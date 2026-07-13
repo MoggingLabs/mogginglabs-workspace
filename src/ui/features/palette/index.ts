@@ -1,8 +1,13 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
 import { clear, el, icon, type IconName } from '../../components'
 import { activeView } from '../../core/shell/view-port'
-import { allCommands, onCommandsChange, type Command } from '../../core/commands/command-port'
+import { allCommands, availability, onCommandsChange, type Command } from '../../core/commands/command-port'
+import { isModKey } from '../../core/commands/shortcuts'
+import { trapOverlay, type OverlayTrap } from '../../core/a11y/overlay-trap'
 import { getTelemetry } from '../../core/telemetry'
+
+const LISTBOX_ID = 'palette-listbox'
+const optionId = (i: number): string => `palette-option-${i}`
 
 const isMac = navigator.platform.toUpperCase().includes('MAC')
 const MOD = isMac ? '⌘' : 'Ctrl'
@@ -62,13 +67,22 @@ export const paletteFeature: UiFeature = {
     )
     ctx.titlebarCenter.append(trigger) // the command box sits dead-center of the bar (5/04)
 
+    // A combobox, spelled out. Real focus never leaves this input by design — which is
+    // exactly why aria-activedescendant is not optional: without it, arrowing through the
+    // list moved a highlight a screen-reader user was never told about (finding 30).
     const input = el('input', {
       class: 'palette-input',
       type: 'text',
       placeholder: 'Type a command…',
-      ariaLabel: 'Search commands'
+      ariaLabel: 'Search commands',
+      role: 'combobox',
+      attrs: {
+        'aria-autocomplete': 'list',
+        'aria-expanded': 'false',
+        'aria-controls': LISTBOX_ID
+      }
     })
-    const list = el('div', { class: 'palette-list', role: 'listbox' })
+    const list = el('div', { class: 'palette-list', role: 'listbox', attrs: { id: LISTBOX_ID } })
     const panel = el('div', { class: 'palette', role: 'dialog', ariaLabel: 'Command palette' }, [
       el('div', { class: 'palette-search' }, [icon('search', 14), input]),
       list
@@ -79,17 +93,28 @@ export const paletteFeature: UiFeature = {
     let openState = false
     let selected = 0
     let visible: Command[] = []
+    let opener: Element | null = null
+    let trap: OverlayTrap | undefined
 
     function toggle(next: boolean): void {
       if (next === openState) return
       openState = next
       overlay.hidden = !next
+      input.setAttribute('aria-expanded', String(next))
       if (next) {
+        opener = document.activeElement // whatever the user left to get here
         input.value = ''
         selected = 0
         renderList()
+        trap = trapOverlay(panel)
         input.focus()
         getTelemetry().captureEvent({ name: 'palette.opened' })
+      } else {
+        // Release before focusing back: the opener lives inside the shell we just inerted.
+        trap?.release()
+        trap = undefined
+        if (opener instanceof HTMLElement && opener.isConnected) opener.focus()
+        opener = null
       }
     }
 
@@ -114,32 +139,48 @@ export const paletteFeature: UiFeature = {
       clear(list)
       if (!visible.length) {
         list.append(el('div', { class: 'palette-empty', text: 'No matching commands' }))
+        input.setAttribute('aria-activedescendant', '')
         return
       }
       visible.forEach((cmd, i) => {
         const titleEl = el('span', { class: 'palette-item-title' })
         titleEl.append(...highlightTitle(cmd.title, q))
+        // A command that cannot run right now says so HERE, next to itself. The old habit
+        // was to run it anyway and toast an apology after the fact (finding 29).
+        const avail = availability(cmd)
         const item = el(
           'button',
           {
-            class: 'palette-item' + (i === selected ? ' is-selected' : ''),
+            class:
+              'palette-item' +
+              (i === selected ? ' is-selected' : '') +
+              (avail !== true ? ' is-disabled' : ''),
             type: 'button',
             role: 'option',
+            attrs: { id: optionId(i) },
+            tabIndex: -1, // one tab stop — the input. Options are reached with the arrows.
             onClick: () => run(cmd)
           },
           [
             el('span', { class: 'palette-item-icon' }, [icon(cmdIcon(cmd), 14)]),
             titleEl,
+            avail !== true ? el('span', { class: 'palette-item-reason', text: avail.reason }) : null,
             cmd.hint ? el('span', { class: 'palette-item-hint', text: cmd.hint }) : null,
             cmd.kbd ? el('span', { class: 'kbd', text: cmd.kbd }) : null
           ]
         )
         item.setAttribute('aria-selected', String(i === selected))
+        if (avail !== true) item.setAttribute('aria-disabled', 'true')
         list.append(item)
       })
+      // The highlight the input never announced.
+      input.setAttribute('aria-activedescendant', optionId(selected))
     }
 
     function run(cmd: Command): void {
+      // The row already prints why it cannot run. Clicking it must not run it — and must not
+      // close the palette either, or the explanation leaves with the click.
+      if (availability(cmd) !== true) return
       toggle(false)
       cmd.run()
       // Command FAMILY only (e.g. "workspace:switch") — ids can embed per-user uuids.

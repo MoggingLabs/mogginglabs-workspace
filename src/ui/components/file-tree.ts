@@ -112,6 +112,13 @@ const REFUSAL_TEXT: Record<string, string> = {
   invalid: 'Unreadable path'
 }
 
+/**
+ * The APG type-ahead window. The buffer MUST die on its own. An immortal one turns the next
+ * lone keystroke into a search for "za" — which matches nothing, so focus stays stuck where
+ * the 'z' left it — and it goes on swallowing the Escape that belonged to the view around us.
+ */
+const TYPE_AHEAD_MS = 500
+
 interface DirState {
   children: ExplorerEntry[] | null
   refusal: FileTreeRow['refusal'] | null
@@ -137,6 +144,7 @@ export function createFileTree(opts: FileTreeOpts): FileTreeHandle {
   let selectedPath = ''
   let herePath = ''
   let typeAhead = ''
+  let typeAheadTimer: ReturnType<typeof setTimeout> | null = null
   let decorations: Map<string, FileTreeDecoration> | null = null
   let filter: Set<string> | null = null // the Changes lens
 
@@ -219,8 +227,11 @@ export function createFileTree(opts: FileTreeOpts): FileTreeHandle {
     const all = st.children ?? []
     const kids = filter ? all.filter((e) => filter?.has(e.path)) : all
     if (!kids.length) {
-      // An expanded empty SUBdir gets one dimmed row; an empty ROOT gets the EmptyState.
-      if (level > 1 && !filter) rows.push({ entry: holder, level, empty: true, posinset: 1, setsize: 1 })
+      // An expanded empty dir gets one dimmed row — the ROOT included. The root used to get
+      // an EmptyState instead: a roleless <div>, appended straight into role="tree", which
+      // left the tree's only child not a treeitem. A tree owns treeitems and groups and
+      // nothing else, and a screen reader cannot walk what has no role.
+      if (!filter) rows.push({ entry: holder, level, empty: true, posinset: 1, setsize: 1 })
       return
     }
     const capped = st.truncated && !filter
@@ -255,7 +266,15 @@ export function createFileTree(opts: FileTreeOpts): FileTreeHandle {
     if (!rows.length) {
       body.style.height = ''
       const root = nodes.get(rootPath)
-      if (root?.children) body.append(EmptyState({ icon: 'folder', title: 'This folder is empty', body: 'Nothing here yet — agents will change that.' }))
+      // Only the Changes lens can empty a LISTED tree now — an empty folder renders its own
+      // (empty) treeitem (see walk). The panel still rides inside a `group`, because that and
+      // `treeitem` are the only things a tree may own, and a bare <div> is neither.
+      if (root?.children)
+        body.append(
+          el('div', { role: 'group' }, [
+            EmptyState({ icon: 'folder', title: 'This folder is empty', body: 'Nothing here yet — agents will change that.' })
+          ])
+        )
       return
     }
     body.style.height = rows.length * FILE_TREE_ROW_H + 'px'
@@ -318,10 +337,16 @@ export function createFileTree(opts: FileTreeOpts): FileTreeHandle {
         title: meta ? undefined : r.entry.path,
         attrs,
         style: { top: i * FILE_TREE_ROW_H + 'px' },
-        onClick: () => {
+        onClick: (e) => {
           if (meta) return setActive(i, { select: false })
           setActive(i)
-          if (isDir) void toggle(r.entry.path)
+          // A native double-click is click, click, dblclick. Click 1 toggles the dir open and
+          // renderWindow rebuilds the row under the pointer; click 2 then lands on that NEW
+          // node and toggles it straight back shut — double-clicking a folder netted a flicker
+          // and nothing else. `detail` counts the clicks in the sequence (1, then 2), so the
+          // toggle belongs to the first one alone. A synthetic .click() carries detail 0 — a
+          // real single click, and it still opens.
+          if (isDir && e.detail <= 1) void toggle(r.entry.path)
         },
         onDblclick: () => {
           if (!meta && r.entry.kind === 'file') opts.onActivate?.(r.entry)
@@ -405,10 +430,22 @@ export function createFileTree(opts: FileTreeOpts): FileTreeHandle {
   }
 
   // ── keyboard: the APG tree map, verbatim ──────────────────────────────────────
+  /** Drop the buffer AND the timer that would have dropped it — navigation ends a search. */
+  function clearAhead(): void {
+    typeAhead = ''
+    if (typeAheadTimer != null) clearTimeout(typeAheadTimer)
+    typeAheadTimer = null
+  }
+
+  /** Restart the window on every keystroke: a search is only alive while it is being typed. */
+  function armAhead(): void {
+    if (typeAheadTimer != null) clearTimeout(typeAheadTimer)
+    typeAheadTimer = setTimeout(clearAhead, TYPE_AHEAD_MS)
+  }
+
   scroller.addEventListener('keydown', (e: KeyboardEvent) => {
     const k = e.key
     const r = rows[active]
-    const clearAhead = (): void => void (typeAhead = '')
     if (k === 'ArrowDown') return (e.preventDefault(), clearAhead(), setActive(active + 1))
     if (k === 'ArrowUp') return (e.preventDefault(), clearAhead(), setActive(active - 1))
     if (k === 'Home') return (e.preventDefault(), clearAhead(), setActive(0))
@@ -459,18 +496,25 @@ export function createFileTree(opts: FileTreeOpts): FileTreeHandle {
     if (k === 'Escape' && typeAhead) {
       e.preventDefault()
       e.stopPropagation() // this Esc clears the type-ahead, not the surrounding view
-      typeAhead = ''
+      clearAhead() // …and the timer with it: nothing is left to fire into the next search
       return
     }
-    // Type-ahead within visible rows (the folder-browser precedent): printable
-    // characters only, never a chord; the buffer grows until Esc or navigation.
+    // Type-ahead within visible rows (the folder-browser precedent): printable characters
+    // only, never a chord. The buffer grows until Esc, navigation, or TYPE_AHEAD_MS of
+    // silence — it used to grow until Esc and nothing else, so a search never really ended.
     if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault()
       typeAhead += k.toLowerCase()
+      armAhead()
+      // APG's same-letter rule. A buffer of ONE repeated character is not a search for "aa"
+      // — nothing is named that, so the old loop simply sat on the first 'a' forever. It
+      // means "the NEXT thing starting with a", and because the scan always begins one row
+      // BELOW the active one, pressing the key again walks to the following match.
+      const needle = /^(.)\1*$/.test(typeAhead) ? typeAhead[0] : typeAhead
       for (let step = 1; step <= rows.length; step++) {
         const j = (active + step) % rows.length
         const c = rows[j]
-        if (!c.loading && !c.refusal && !c.truncated && !c.empty && c.entry.name.toLowerCase().startsWith(typeAhead)) {
+        if (!c.loading && !c.refusal && !c.truncated && !c.empty && c.entry.name.toLowerCase().startsWith(needle)) {
           return setActive(j)
         }
       }
@@ -493,7 +537,7 @@ export function createFileTree(opts: FileTreeOpts): FileTreeHandle {
     activePath = ''
     selectedPath = ''
     herePath = ''
-    typeAhead = ''
+    clearAhead() // a pending timer would fire into the NEXT root and clear a live search there
     scroller.scrollTop = 0
     refresh()
   }

@@ -27,13 +27,14 @@ import {
 } from '../../components'
 import { TEMPLATES, TEMPLATE_COUNTS } from '../layout'
 import { getFocusedPane } from '../../core/layout/focus'
-import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
+import { openPlannedWorkspaceFromTemplate, openWorkspaceFromTemplate } from '../../core/workspace/open-service'
 import { setWizardOpener, type WizardPrefill } from '../../core/workspace/wizard-port'
 import { activeView, goBack, setActiveView } from '../../core/shell/view-port'
 import { getTelemetry } from '../../core/telemetry'
 import { getBridge } from '../../core/ipc/bridge'
 import { wizardClient } from './wizard.client'
 import { createPathSelection, type PathSelectionHandle, type PathState } from './path-selection'
+import { getAgentRegistry, onAgentRegistryChange, refreshAgentRegistry } from '../../core/agents/registry'
 
 // Provider identity (accent + official mark) lives in components/provider-logo —
 // one source for the wizard, settings, usage, and pane chrome.
@@ -90,6 +91,8 @@ export const wizardFeature: UiFeature = {
     let remoteHost: { hostId: string; name: string } | null = null // Phase-4/05
     let profilesCache: AgentProfile[] = [] // Phase-4/04 picker (refreshed on open)
     const profileByProvider = new Map<string, string>()
+    let openGeneration = 0
+    let launching = false
 
     let roster: AgentInfo[] = []
     let presets: ProviderMixTemplate[] = []
@@ -132,14 +135,34 @@ export const wizardFeature: UiFeature = {
 
     setWizardOpener(open) // the port `workspace:new` (Ctrl+T) and Home's CTA call
 
+    const currentOpen = (generation: number): boolean =>
+      generation === openGeneration && activeView() === 'wizard'
+
+    const applyRoster = (next: readonly AgentInfo[]): void => {
+      roster = [...next]
+      // A CLI removed while this page is open cannot remain invisibly assigned.
+      for (const [id] of counts) {
+        if (roster.some((agent) => agent.id === id && agent.installed)) continue
+        counts.delete(id)
+      }
+      normalizeAssignmentsToCapacity()
+      renderRoster()
+    }
+
+    onAgentRegistryChange((next) => {
+      if (activeView() === 'wizard') applyRoster(next)
+    })
+
     function leave(): void {
+      openGeneration++
+      selection?.dispose()
+      launching = false
       goBack()
     }
 
     function open(prefill?: WizardPrefill): void {
-      void (getBridge().invoke(ProfileChannels.list) as Promise<AgentProfile[]>).then((list) => {
-        profilesCache = list ?? []
-      })
+      const generation = ++openGeneration
+      selection?.dispose()
       name = prefill?.name ?? ''
       cwd = prefill?.cwd ?? ''
       paneCount = prefill?.paneCount ?? defaultPaneCount()
@@ -149,10 +172,13 @@ export const wizardFeature: UiFeature = {
       isolate = false
       swarmRoles = null
       remoteHost = null
-      roster = []
+      roster = [...getAgentRegistry()]
       presets = []
       recents = []
       pickableServers = []
+      profilesCache = []
+      profileByProvider.clear()
+      launching = false
       selectedTools.clear()
       if (prefill?.mix) applyMix(prefill.mix)
 
@@ -163,29 +189,41 @@ export const wizardFeature: UiFeature = {
 
       // Fresh data every open. Each arrival patches only its own subtree — a full
       // re-render would blow away the folder field's focus and caret mid-type.
-      void wizardClient
-        .detectAgents()
-        .then((a) => {
-          roster = a ?? []
+      void refreshAgentRegistry()
+        .then((agents) => {
+          if (currentOpen(generation)) applyRoster(agents)
+        })
+        .catch(() => undefined)
+      void (getBridge().invoke(ProfileChannels.list) as Promise<AgentProfile[]>)
+        .then((list) => {
+          if (!currentOpen(generation)) return
+          profilesCache = list ?? []
           renderRoster()
         })
-        .catch(() => (roster = []))
+        .catch(() => undefined)
       void wizardClient
         .listPresets()
         .then((p) => {
+          if (!currentOpen(generation)) return
           presets = p ?? []
           renderPresets()
         })
-        .catch(() => (presets = []))
+        .catch(() => {
+          if (currentOpen(generation)) presets = []
+        })
       void (getBridge().invoke(IntegrationsChannels.serversList) as Promise<McpServerEntry[]>)
         .then((servers) => {
+          if (!currentOpen(generation)) return
           pickableServers = (servers ?? []).filter((s) => !s.builtIn).map((s) => ({ id: s.id, label: s.label }))
           renderTools()
         })
-        .catch(() => (pickableServers = []))
+        .catch(() => {
+          if (currentOpen(generation)) pickableServers = []
+        })
       void wizardClient
         .loadState()
         .then((s) => {
+          if (!currentOpen(generation)) return
           const openWs = (s?.workspaces ?? []).filter((w) => w.cwd)
           const closed = s?.recents ?? []
           const seen = new Set<string>()
@@ -201,7 +239,9 @@ export const wizardFeature: UiFeature = {
             .slice(0, 6)
           renderRecents()
         })
-        .catch(() => (recents = []))
+        .catch(() => {
+          if (currentOpen(generation)) recents = []
+        })
     }
 
     /** Seed counts/custom from a preset mix; grow the grid to fit the mix. */
@@ -225,10 +265,28 @@ export const wizardFeature: UiFeature = {
       }
       const fit = TEMPLATE_COUNTS.find((n) => n >= total)
       if (fit && fit > paneCount) paneCount = fit
+      normalizeAssignmentsToCapacity()
+    }
+
+    /** Keep the persisted model, steppers, preview, and eventual manifest within
+     * the selected grid. Earlier assignments win deterministically on shrink. */
+    function normalizeAssignmentsToCapacity(): void {
+      let remaining = paneCount
+      const next = new Map<string, number>()
+      for (const [id, raw] of counts) {
+        const count = Math.min(remaining, Math.max(0, Math.floor(Number(raw) || 0)))
+        if (count) next.set(id, count)
+        remaining -= count
+      }
+      counts = next
+      customCount = customCmd.trim()
+        ? Math.min(remaining, Math.max(0, Math.floor(Number(customCount) || 0)))
+        : 0
+      if (swarmRoles) swarmRoles = swarmRoles.slice(0, paneCount)
     }
 
     const assignedTotal = (): number =>
-      Array.from(counts.values()).reduce((s, n) => s + n, 0) + customCount
+      Array.from(counts.values()).reduce((s, n) => s + n, 0) + (customCmd.trim() ? customCount : 0)
 
     /** Slot-order assignment expansion (mirrors the backend's resolveLayout). */
     function expandAssignments(): string[] {
@@ -249,7 +307,32 @@ export const wizardFeature: UiFeature = {
       return roster.find((a) => a.id === id)?.name ?? id
     }
 
-    async function launch(skipAgents: boolean): Promise<void> {
+    async function launch(skipAgents: boolean, generation: number): Promise<boolean> {
+      normalizeAssignmentsToCapacity()
+      const refuse = (message: string): false => {
+        path.setStatus({ kind: 'warn', text: message })
+        whereCard.scrollIntoView({ block: 'nearest' })
+        path.focus()
+        return false
+      }
+      if (!currentOpen(generation)) return false
+      if (!skipAgents && customCount > 0 && !customCmd.trim()) {
+        return refuse('Enter a custom command or set its count to zero.')
+      }
+
+      const selectedProfileIds = [...new Set(profileByProvider.values())]
+      if (!skipAgents && selectedProfileIds.length) {
+        let latestProfiles: AgentProfile[]
+        try {
+          latestProfiles = ((await getBridge().invoke(ProfileChannels.list)) as AgentProfile[]) ?? []
+        } catch {
+          return refuse('Could not verify the selected agent profiles. Try again before launching.')
+        }
+        if (!currentOpen(generation)) return false
+        const missing = selectedProfileIds.find((id) => !latestProfiles.some((profile) => profile.id === id))
+        if (missing) return refuse('A selected agent profile no longer exists. Choose a profile again before launching.')
+      }
+
       const mix: ProviderCount[] = []
       if (!skipAgents) {
         for (const a of roster) {
@@ -262,25 +345,55 @@ export const wizardFeature: UiFeature = {
       const assigned = mix.reduce((s, m) => s + m.count, 0)
       if (paneCount - assigned > 0) mix.push({ provider: 'shell', count: paneCount - assigned })
 
-      let resolved = { paneCount, assignments: expandAssignments() }
+      let resolved: { paneCount: number; assignments: string[] }
       try {
         resolved = await wizardClient.resolve(mix)
       } catch {
-        /* offline fallback: the local expansion mirrors resolveLayout */
+        return refuse('Could not resolve the workspace layout. No workspace or agent was started.')
       }
+      if (!currentOpen(generation)) return false
 
-      // Worktree isolation (3/03): every agent slot gets its own worktree; the agent
-      // launches there. Failures fall back to the repo cwd — never block the launch.
+      // Worktree isolation (3/03): every agent slot gets its own worktree before
+      // anything opens. A partial failure rolls this transaction back.
       let paneCwds: (string | null)[] | undefined
+      const createdWorktrees: string[] = []
+      const rollbackWorktrees = async (): Promise<boolean> => {
+        let clean = true
+        for (const worktreePath of [...createdWorktrees].reverse()) {
+          try {
+            const removed = await wizardClient.removeWorktree(cwd, worktreePath)
+            if (!removed.ok) clean = false
+          } catch {
+            clean = false
+          }
+        }
+        return clean
+      }
       if (!skipAgents && isolate && isRepo && cwd) {
         paneCwds = []
         for (const assignment of resolved.assignments) {
           if (assignment && assignment !== 'shell') {
+            if (!currentOpen(generation)) {
+              await rollbackWorktrees()
+              return false
+            }
             try {
               const wt = await wizardClient.createWorktree(cwd)
-              paneCwds.push(wt.ok && wt.path ? wt.path : null)
-            } catch {
-              paneCwds.push(null)
+              if (!wt.ok || !wt.path) {
+                const cleaned = await rollbackWorktrees()
+                return refuse(
+                  `Could not isolate every agent${wt.error ? `: ${wt.error}` : '.'} No workspace was opened.` +
+                    (cleaned ? '' : ' A temporary worktree also needs manual cleanup.')
+                )
+              }
+              createdWorktrees.push(wt.path)
+              paneCwds.push(wt.path)
+            } catch (error) {
+              const cleaned = await rollbackWorktrees()
+              return refuse(
+                `Could not isolate every agent: ${error instanceof Error ? error.message : String(error)}. No workspace was opened.` +
+                  (cleaned ? '' : ' A temporary worktree also needs manual cleanup.')
+              )
             }
           } else {
             paneCwds.push(null)
@@ -291,19 +404,28 @@ export const wizardFeature: UiFeature = {
       const manifest = swarmRoles
       const roles =
         !skipAgents && manifest ? resolved.assignments.map((_, i) => manifest[i] ?? null) : undefined
-      openWorkspaceFromTemplate({
-        name: name.trim() || basename(cwd) || 'Workspace',
-        cwd: remoteHost ? '' : cwd,
-        paneCount: resolved.paneCount,
-        assignments: resolved.assignments,
-        paneCwds: remoteHost ? undefined : paneCwds,
-        roles,
-        remotes: remoteHost ? Array<{ hostId: string; name: string } | null>(resolved.paneCount).fill(remoteHost) : undefined,
-        profileIds: resolved.assignments.map((a) => (a && profileByProvider.has(a) ? profileByProvider.get(a)! : null)),
-        // Scope only when there ARE connected servers to scope (else leave the
-        // CLIs' global config untouched — no silent stripping, 8/09).
-        tools: pickableServers.length ? [...selectedTools] : undefined
-      })
+      try {
+        const opened = await openPlannedWorkspaceFromTemplate({
+          name: name.trim() || basename(cwd) || 'Workspace',
+          cwd: remoteHost ? '' : cwd,
+          paneCount: resolved.paneCount,
+          assignments: resolved.assignments,
+          paneCwds: remoteHost ? Array<string>(resolved.paneCount).fill(cwd) : paneCwds,
+          roles,
+          remotes: remoteHost ? Array<{ hostId: string; name: string } | null>(resolved.paneCount).fill(remoteHost) : undefined,
+          profileIds: resolved.assignments.map((a) => (a && profileByProvider.has(a) ? profileByProvider.get(a)! : null)),
+          // Scope only when there ARE connected servers to scope (else leave the
+          // CLIs' global config untouched — no silent stripping, 8/09).
+          tools: pickableServers.length ? [...selectedTools] : undefined
+        })
+        if (!opened) throw new Error('The workspace service is unavailable. No workspace or agent was started.')
+      } catch (error) {
+        const cleaned = await rollbackWorktrees()
+        return refuse(
+          (error instanceof Error ? error.message : String(error)) +
+            (cleaned ? '' : ' A temporary worktree also needs manual cleanup.')
+        )
+      }
       getTelemetry().captureEvent({
         name: 'wizard.completed',
         props: {
@@ -311,12 +433,13 @@ export const wizardFeature: UiFeature = {
           agents: resolved.assignments.filter((a) => a && a !== 'shell').length,
           custom: customCount > 0,
           skipped_agents: skipAgents,
-          isolated: !!paneCwds // a boolean — never the paths (ADR 0005)
+          isolated: paneCwds !== undefined // a boolean — never the paths (ADR 0005)
         }
       })
       // The workspace opener switches the app to the live grid; if no workspace
       // feature is mounted (tests), fall back to wherever we came from.
       if (activeView() === 'wizard') leave()
+      return true
     }
 
     // ── One page ─────────────────────────────────────────────────────────────
@@ -338,6 +461,7 @@ export const wizardFeature: UiFeature = {
     let meterHandle!: ReturnType<typeof createMeter>
     let meterLabel!: HTMLElement
     let launchLabel!: HTMLElement
+    let launchBtn!: HTMLButtonElement
     let skipBtn!: HTMLButtonElement
     let saveBtn!: HTMLButtonElement
     let swarmHint!: HTMLElement
@@ -356,6 +480,7 @@ export const wizardFeature: UiFeature = {
       if (!customInput || !customStepper) return
       if (customInput.value !== customCmd) customInput.value = customCmd
       customStepper.setValue(customCount)
+      customStepper.setDisabled(!customCmd.trim())
       if (customIsSet()) advAgents.open = true // never hide state the user did not set here
     }
 
@@ -371,6 +496,7 @@ export const wizardFeature: UiFeature = {
     }
 
     function render(): void {
+      selection?.dispose()
       clear(body)
       clear(footer)
       steppers.clear()
@@ -390,14 +516,16 @@ export const wizardFeature: UiFeature = {
 
     // ── Card 1: Where ────────────────────────────────────────────────────────
     function buildWhere(): HTMLElement {
+      const generation = openGeneration
+      const ownedSelection = selection
       path = createPathInput({
         value: cwd,
         onBrowse: () => {
           void wizardClient.browseDir().then((dir) => {
-            if (dir) selection.set(dir, 'native')
+            if (dir && currentOpen(generation) && selection === ownedSelection) ownedSelection.set(dir, 'native')
           })
         },
-        onInput: (v) => selection.set(v, 'bar'), // the controller owns the debounce
+        onInput: (v) => ownedSelection.set(v, 'bar'), // the controller owns the debounce
         // Enter fires ~0ms after the last keystroke — wait for the resolve, then launch.
         onEnter: () => void tryLaunch(false)
       })
@@ -405,7 +533,7 @@ export const wizardFeature: UiFeature = {
       browser = createFolderBrowser({
         listDir: wizardClient.listDir,
         // The browser caused this, so the controller will not write back into it.
-        onSelect: (p) => selection.set(p, 'browser')
+        onSelect: (p) => ownedSelection.set(p, 'browser')
       })
 
       // ── The ONE subscriber that keeps every view honest ──────────────────────
@@ -445,8 +573,14 @@ export const wizardFeature: UiFeature = {
 
       // Somewhere to start looking. `reveal`, not `set`: opening the browser at $HOME
       // must not make $HOME the workspace root.
-      if (cwd) selection.set(cwd, 'prefill')
-      else void wizardClient.homeDir().then((h) => selection.reveal(h)).catch(() => undefined)
+      if (cwd) ownedSelection.set(cwd, 'prefill')
+      else {
+        void wizardClient.homeDir()
+          .then((h) => {
+            if (currentOpen(generation) && selection === ownedSelection) ownedSelection.reveal(h)
+          })
+          .catch(() => undefined)
+      }
 
       const nameInput = el('input', {
         class: 'input',
@@ -469,20 +603,21 @@ export const wizardFeature: UiFeature = {
       const remoteSelect = el('select', { class: 'input' }) as HTMLSelectElement
       remoteSelect.append(new Option('This machine', ''))
       void (getBridge().invoke(RemoteChannels.list) as Promise<RemoteHost[]>).then((hosts) => {
+        if (!currentOpen(generation) || selection !== ownedSelection || !remoteSelect.isConnected) return
         for (const h of hosts ?? []) {
           const opt = new Option(`${h.name} (${h.user ? h.user + '@' : ''}${h.host})`, h.id)
           opt.dataset.name = h.name
           remoteSelect.append(opt)
         }
         if (remoteHost) remoteSelect.value = remoteHost.hostId
-      })
+      }).catch(() => undefined)
       remoteSelect.addEventListener('change', () => {
         const opt = remoteSelect.selectedOptions[0]
         remoteHost = remoteSelect.value ? { hostId: remoteSelect.value, name: opt?.dataset.name ?? remoteSelect.value } : null
         if (remoteHost) isolate = false
         // A remote workspace's cwd lives on the OTHER machine. Browsing this disk
         // would answer a question nobody asked — the controller hides it and stops probing.
-        selection.setRemote(!!remoteHost)
+        ownedSelection.setRemote(!!remoteHost)
       })
 
       // Bar · chosen line · browser: one control, one label, three views of one path.
@@ -506,7 +641,8 @@ export const wizardFeature: UiFeature = {
       denied: 'locked — no permission',
       missing: 'no folder there',
       'not-a-directory': "that's a file",
-      invalid: 'not a full path'
+      invalid: 'not a full path',
+      unavailable: 'could not verify this folder â€” try again'
     }
 
     /** The path bar's chip, derived — never set from a call site. */
@@ -584,7 +720,9 @@ export const wizardFeature: UiFeature = {
         selected: paneCount,
         onSelect: (n) => {
           paneCount = n
+          normalizeAssignmentsToCapacity()
           layoutCaption.textContent = layoutText()
+          renderRoster()
           refreshAgents()
         }
       })
@@ -678,9 +816,15 @@ export const wizardFeature: UiFeature = {
         ariaLabel: 'Custom command',
         onInput: (e) => {
           customCmd = (e.target as HTMLInputElement).value
+          if (!customCmd.trim()) {
+            customCount = 0
+            customStepper?.setValue(0)
+          }
+          customStepper?.setDisabled(!customCmd.trim())
           refreshAgents()
         }
       })
+      customStepper.setDisabled(!customCmd.trim())
       const customRow = el('div', { class: 'wizard-agent-row wizard-custom-row' }, [
         el('span', { class: 'wizard-agent-head' }, [providerLogo('custom:', 16), customInput]),
         el('span', { class: 'wizard-agent-tail' }, [customStepper.el])
@@ -759,6 +903,7 @@ export const wizardFeature: UiFeature = {
     /** The roster + custom row. Rebuilt when the roster or the mix changes. */
     function renderRoster(): void {
       if (!rosterHost) return
+      normalizeAssignmentsToCapacity()
       clear(rosterHost)
       steppers.clear()
 
@@ -766,14 +911,20 @@ export const wizardFeature: UiFeature = {
       if (!roster.length || noneInstalled) {
         const recheck = el('button', { class: 'wizard-recheck', type: 'button', text: 'Re-check PATH' })
         recheck.onclick = (): void => {
+          const generation = openGeneration
           recheck.textContent = 'Checking…'
-          void wizardClient
-            .detectAgents()
-            .then((a) => {
-              roster = a ?? []
-              renderRoster()
+          recheck.disabled = true
+          void refreshAgentRegistry()
+            .then((agents) => {
+              if (currentOpen(generation)) applyRoster(agents)
             })
-            .catch(() => (roster = []))
+            .catch(() => undefined)
+            .finally(() => {
+              if (recheck.isConnected) {
+                recheck.disabled = false
+                recheck.textContent = 'Re-check PATH'
+              }
+            })
         }
         rosterHost.append(
           el('div', { class: 'wizard-agents-empty' }, [
@@ -941,6 +1092,7 @@ export const wizardFeature: UiFeature = {
 
     /** Everything that moves when the mix or the grid changes. */
     function refreshAgents(): void {
+      normalizeAssignmentsToCapacity()
       const total = assignedTotal()
       meterHandle.set(total, paneCount)
       meterLabel.textContent = `${total} / ${paneCount} · ${paneCount - total} empty`
@@ -976,7 +1128,7 @@ export const wizardFeature: UiFeature = {
     // ── Footer: a sticky action bar at the foot of the page ──────────────────
     function buildFooter(): void {
       launchLabel = el('span', { text: `Launch ${paneCount} ${plural(paneCount)}` })
-      const launchBtn = el(
+      launchBtn = el(
         'button',
         { class: 'btn btn--primary', type: 'button', ariaLabel: 'Launch workspace', onClick: () => void tryLaunch(false) },
         [icon('sparkles'), launchLabel]
@@ -985,7 +1137,7 @@ export const wizardFeature: UiFeature = {
       footer.append(
         el('span', { class: 'wizard-byo' }, [
           icon('check-circle', 12),
-          el('span', { text: 'Your own CLIs, your own login — no keys stored.' })
+          el('span', { text: 'Your own CLIs, your own login — this app never touches it.' })
         ]),
         el('div', { class: 'wizard-footer-actions' }, [skipBtn, launchBtn])
       )
@@ -993,18 +1145,37 @@ export const wizardFeature: UiFeature = {
 
     /** The validation that used to gate "Continue" now gates "Launch". */
     async function tryLaunch(skipAgents: boolean): Promise<void> {
-      await selection.settle() // Enter can beat the 350ms debounce; don't race it
-      const s = selection.state()
-      const refuse = (text: string): void => {
-        path.setStatus({ kind: 'warn', text })
-        whereCard.scrollIntoView({ block: 'nearest' })
-        path.focus()
+      if (launching) return
+      const generation = openGeneration
+      const ownedSelection = selection
+      launching = true
+      launchBtn.disabled = true
+      skipBtn.disabled = true
+      footer.setAttribute('aria-busy', 'true')
+      try {
+        await ownedSelection.settle() // Enter can beat the 350ms debounce; don't race it
+        if (!currentOpen(generation) || selection !== ownedSelection) return
+        const s = ownedSelection.state()
+        const refuse = (text: string): void => {
+          path.setStatus({ kind: 'warn', text })
+          whereCard.scrollIntoView({ block: 'nearest' })
+          path.focus()
+        }
+        if (!s.remote && !s.cwd.trim()) return refuse('pick a folder first')
+        // A path the filesystem refused is not a workspace root. Launching into one
+        // used to succeed and then strand every pane in a directory that isn't there.
+        if (!ownedSelection.isUsable()) {
+          return refuse(REFUSAL_TEXT[s.refusal?.reason ?? ''] ?? 'pick a folder first')
+        }
+        await launch(skipAgents, generation)
+      } finally {
+        if (currentOpen(generation)) {
+          launching = false
+          launchBtn.disabled = false
+          skipBtn.disabled = false
+          footer.removeAttribute('aria-busy')
+        }
       }
-      if (!s.remote && !s.cwd.trim()) return refuse('pick a folder first')
-      // A path the filesystem refused is not a workspace root. Launching into one
-      // used to succeed and then strand every pane in a directory that isn't there.
-      if (!selection.isUsable()) return refuse(REFUSAL_TEXT[s.refusal?.reason ?? ''] ?? 'pick a folder first')
-      await launch(skipAgents)
     }
 
     exposeForDev()
@@ -1048,6 +1219,16 @@ export const wizardFeature: UiFeature = {
           openWorkspaceFromTemplate({ name: 'Isolated', cwd: repo, paneCount: r.paneCount, assignments: r.assignments, paneCwds })
           return { ...r, paneCwds }
         },
+        // Remote audit path: drive the same resolved-spec service as Launch,
+        // including the per-pane TARGET cwd that a low-level workspace.create
+        // helper deliberately does not interpret or launch.
+        openRemote: (spec: {
+          name: string
+          cwd: string
+          assignments: string[]
+          paneCwds: (string | null)[]
+          remotes: ({ hostId: string; name: string } | null)[]
+        }) => openWorkspaceFromTemplate({ ...spec, paneCount: spec.assignments.length }),
         openWizard: (prefill?: WizardPrefill) => open(prefill)
       }
       // The single-source-of-truth invariant, made checkable: with no refusal in

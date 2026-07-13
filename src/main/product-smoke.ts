@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { createWorktree } from '@backend/features/worktrees'
 import { dockDebug } from './browser-dock'
 import { sh, softFps, softGapMs } from './smoke-shell'
+import { approvalListed, sendApprovalFromPane } from './reviewer-smoke-helper'
 
 // Env-gated PRODUCT MILESTONE (MOGGING_PRODUCT, Phase-6/07) — the freeze proof.
 // ONE asserted flow: an installer-fresh machine reaches a working swarm + browser,
@@ -174,12 +175,14 @@ export function runProductSmoke(win: BrowserWindow): void {
 
       // ── A7. The review GATE: ungated -> reviewer approves -> lands; the human
       // override lands the second branch. Both changes in the repo, HEAD clean. ─
-      const mergeVia = (branch: string, override?: string): Promise<{ ok: boolean; state: string }> =>
-        ES(`window.bridge.invoke('review:merge', ${JSON.stringify({ repo, branch, override })})`) as Promise<{ ok: boolean; state: string }>
-      const ungated = await mergeVia(wt1.branch)
-      const approve = await cli(['approve', wt1.branch], asPane(3))
-      const merged1 = await mergeVia(wt1.branch)
-      const merged2 = await mergeVia(wt2.branch, 'override')
+      const mergeVia = (worktree: string, override?: string): Promise<{ ok: boolean; state: string }> =>
+        ES(`window.bridge.invoke('review:merge', ${JSON.stringify({ repo, worktree, override })})`) as Promise<{ ok: boolean; state: string }>
+      const ungated = await mergeVia(wt1.path)
+      const approvalSent = await sendApprovalFromPane(cli, cliPath, base + 3, wt1.branch, { repo, base: 'main' })
+      const approvalSeen = approvalSent && (await approvalListed(cli, wt1.branch))
+      const approve = { code: approvalSeen ? 0 : 1 }
+      const merged1 = await mergeVia(wt1.path)
+      const merged2 = await mergeVia(wt2.path, 'override')
       const gateOk = ungated.state === 'ungated' && approve.code === 0 && merged1.state === 'merged' && merged2.state === 'merged'
       const bothLanded = existsSync(join(repo, 'src', 'a', 'one.txt')) && existsSync(join(repo, 'src', 'b', 'two.txt'))
       const headClean = git(repo, ['status', '--porcelain']) === ''

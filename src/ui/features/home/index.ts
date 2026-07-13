@@ -6,7 +6,8 @@ import {
   type RecentWorkspace,
   type WorkspaceState
 } from '@contracts'
-import { Button, EmptyState, clear, el, icon, providerLogo } from '../../components'
+import { Button, EmptyState, clear, el, icon, loadingRow, providerLogo } from '../../components'
+import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
 import { onViewChange } from '../../core/shell/view-port'
 import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
@@ -250,19 +251,46 @@ export const homeFeature: UiFeature = {
       }
     }
 
+    /** An error state IS an EmptyState — alert icon, the guard's human sentence, a retry. It is
+     *  emphatically NOT the calm copy above: "no recent projects yet" and "we could not ask" are
+     *  different facts, and rendering the first when the second is true is the audit's worst lie
+     *  (finding 39) precisely because nothing looks wrong. */
+    function renderLoadError(host: HTMLElement, title: string, message: string): void {
+      clear(host)
+      host.append(
+        EmptyState({
+          icon: 'alert',
+          title,
+          body: message,
+          action: Button({ label: 'Retry', icon: 'rotate-cw', size: 'sm', onClick: () => void refresh() })
+        })
+      )
+    }
+
+    // One guard per call, both held here for the feature's lifetime: a fresh guard per call would
+    // have no memory of the previous one, and the memory IS the generation guard.
+    const recentsGuard = createAsyncGuard<WorkspaceState | null>()
+    const presetsGuard = createAsyncGuard<ProviderMixTemplate[]>()
+
     async function refresh(): Promise<void> {
-      try {
-        const state = (await getBridge().invoke(WorkspaceChannels.loadState)) as WorkspaceState | null
-        renderRecents(state?.recents ?? [])
-      } catch {
-        renderRecents([])
-      }
-      try {
-        const presets = (await getBridge().invoke(TemplateChannels.list)) as ProviderMixTemplate[]
-        renderPresets(presets ?? [])
-      } catch {
-        renderPresets([])
-      }
+      // Both settled before this resolves — HOMEUX awaits __mogging.home.refresh() then reads DOM.
+      await Promise.all([
+        recentsGuard.run(() => getBridge().invoke(WorkspaceChannels.loadState) as Promise<WorkspaceState | null>, {
+          action: 'load your recent projects',
+          onLoading: () => recentsList.replaceChildren(loadingRow('Loading recent projects…')),
+          onSuccess: (state) => renderRecents(state?.recents ?? []),
+          onError: (message) => renderLoadError(recentsList, 'Recent projects didn’t load', message),
+          // A store that never answers must not leave a spinner on the launcher forever.
+          timeoutMs: 15_000
+        }),
+        presetsGuard.run(() => getBridge().invoke(TemplateChannels.list) as Promise<ProviderMixTemplate[]>, {
+          action: 'load your presets',
+          onLoading: () => presetsList.replaceChildren(loadingRow('Loading presets…')),
+          onSuccess: (presets) => renderPresets(presets ?? []),
+          onError: (message) => renderLoadError(presetsList, 'Presets didn’t load', message),
+          timeoutMs: 15_000
+        })
+      ])
     }
 
     // Refresh whenever Home becomes the active view (event-driven, no polling).

@@ -11,9 +11,9 @@
 // talks to the LOCAL daemon over its authed socket (token from the 0600 endpoint file;
 // nothing listens on TCP). Control verbs carry labels/names/bytes-to-type only; `capture`
 // output goes to YOUR stdout and nowhere else.
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { resolve, join } from 'node:path'
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import net from 'node:net'
 
@@ -21,7 +21,7 @@ import net from 'node:net'
 // (this file is plain Node — it cannot import the TS contract). It is BOTH the handshake
 // version and the runtime directory this CLI looks in, so a stale value here does not
 // degrade — it makes every `mogging` verb miss the daemon entirely.
-const PROTOCOL_VERSION = 6
+const PROTOCOL_VERSION = 7
 
 // Release channel (keep in sync with contracts/daemon/protocol.ts, ReleaseChannel — gated by
 // scripts/check-protocol-version.mjs). A repo checkout runs on its own channel: run/dev-v4 and
@@ -349,17 +349,50 @@ function runUsageClearKey(args) {
 // MOGGING_PANE_TOKEN is the pane's own secret: the daemon mints one per session and injects
 // it into that pane's env and nowhere else. Sending it PROVES we are the pane named in `from`
 // — a pane id is public (`mogging list` prints it) and every pane can read the endpoint file
-// and authenticate, so `from` alone was a claim rather than a fact. Absent outside a pane
-// (nothing to prove), and the daemon then falls back to the legacy unbound path.
+// and authenticate, so `from` alone was a claim rather than a fact. Approval therefore
+// fails closed outside a live pane.
 
 function runApprove(args) {
   const branch = args[0]
   if (!branch) usage(2)
   const from = paneIdentityOrUsage()
   const token = process.env.MOGGING_PANE_TOKEN
+  if (!token) {
+    process.stderr.write('mogging approve: run this inside the reviewer pane (pane credential missing)\n')
+    process.exit(6)
+  }
+  const flag = (name) => {
+    const i = args.indexOf(name)
+    return i >= 0 && typeof args[i + 1] === 'string' ? args[i + 1] : undefined
+  }
+  const repo = resolve(flag('--repo') || process.cwd())
+  const git = (gitArgs) => {
+    try {
+      return String(execFileSync('git', ['-C', repo, ...gitArgs], {
+        encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 1024 * 1024
+      })).trim()
+    } catch {
+      return ''
+    }
+  }
+  let common = git(['rev-parse', '--path-format=absolute', '--git-common-dir'])
+  if (common && !/^(?:[A-Za-z]:[\\/]|\/)/.test(common)) common = resolve(repo, common)
+  try { common = realpathSync.native(common) } catch { common = resolve(common || repo) }
+  const repoIdRaw = common.replace(/\\/g, '/').replace(/\/+$/, '')
+  const repoId = process.platform === 'win32' ? repoIdRaw.toLowerCase() : repoIdRaw
+  const base = flag('--base') || git(['rev-parse', '--abbrev-ref', 'HEAD'])
+  const head = git(['rev-parse', `${branch}^{commit}`])
+  const baseHead = git(['rev-parse', `${base}^{commit}`])
+  const mergeBase = head && baseHead ? git(['merge-base', baseHead, head]) : ''
+  const oid = /^[0-9a-f]{40,64}$/i
+  if (!repoId || !base || !oid.test(head) || !oid.test(baseHead) || !oid.test(mergeBase)) {
+    process.stderr.write('mogging approve: could not resolve the repository, base, and branch snapshot\n')
+    process.exit(2)
+  }
+  const snapshot = { repoId, branch, head, base, baseHead, mergeBase }
   withDaemon(
     (welcome, api) => {
-      api.send({ t: 'approve', branch, from, ...(token ? { token } : {}) })
+      api.send({ t: 'approve', snapshot, from, token })
     },
     (m, api) => {
       if (m.t === 'approved') {

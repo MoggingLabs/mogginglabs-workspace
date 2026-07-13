@@ -18,13 +18,15 @@ terminal escapes), with secrets redacted, and an explicit, guarded path to merge
    `sk-…`, JWT-shaped, `password/token/secret = <value>` pairs) → replace the value with
    `«redacted»`. Patterns in one reviewed module with unit-style asserts in the smoke.
 3. **Contracts**: `ReviewChannels = { diff:'review:diff', merge:'review:merge' }`;
-   `ReviewDiff { files: { path, additions, deletions, hunks: string[] }[], truncated }`.
-   `merge` performs `git -C <repo> merge --no-ff <branch>` ONLY when the repo is clean,
-   returns a typed success/conflict result — never auto-resolves.
+   `ReviewDiff` carries a canonical repository identity and immutable source/base commit
+   snapshot alongside the rendered hunks. `merge` re-reads the managed worktree, rejects
+   dirty/truncated/non-renderable changes, then merges that exact reviewed commit only
+   when the destination is still the reviewed clean base; it never merges a movable name.
 4. **UI** (`src/ui/features/review/`): pane ⋯ menu + palette: **"Review changes…"** →
    a wizard-shell modal: file list (stat) → per-file hunks rendered as TEXT NODES into
    `<pre>` (never innerHTML — injection-resistant by construction), add/del line tinting
-   via `--success`/`--danger`, mono everything. Footer: [Copy patch] [Merge into <base>…]
+   via `--success`/`--danger`, mono everything. Footer: [Copy visible hunks]
+   [Merge into <base>…]
    (typed confirm) [Close]. Merge conflicts surface as a neutral "resolve in a terminal"
    state — we never mutate beyond the guarded merge.
 5. **Smoke** (`MOGGING_REVIEW`): temp repo + worktree with (a) a normal edit and (b) a

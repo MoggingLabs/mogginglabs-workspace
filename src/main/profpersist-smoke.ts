@@ -11,9 +11,9 @@ import { settleToShell, sh } from './smoke-shell'
 //      manifest persists (ids only — ADR 0002). Quit.
 //   B: fresh app, SAME state dir: restore relaunches the lineup — the pane must come
 //      back on B's marker (the pre-6/04 bug relaunched on the DEFAULT, i.e. A).
-//      Then delete profile B and relaunch with its now-stale id: the launch must
-//      DEGRADE to the provider default silently (main returns default env for
-//      unknown ids) — no marker, no error.
+//      Then prove profile B cannot be deleted while the manifest references it.
+//      Finally delete an unreferenced profile and prove a launch with that stale
+//      id is refused instead of silently using a different subscription.
 // The template workspace is created 2nd -> ordinal 1 -> slot 1 = pane 101.
 const MARK_A = 'PROFILE_A_4242'
 const MARK_B = 'PROFILE_B_4242'
@@ -124,23 +124,57 @@ export function runProfpersistSmoke(win: BrowserWindow, phase: string): void {
       const restoredOnB = restored === MARK_B
       const neverA = !(await bufferText()).includes(`=${MARK_A}`)
 
-      // Stale-profile hygiene: delete B, relaunch with its now-unknown id -> the
-      // launch must proceed on the provider DEFAULT, silently. Profile env
-      // persists in the pane session by design (6/01 parity), so clear the
-      // residue first — the assertion is "the degraded launch added NOTHING".
-      await ES(`window.bridge.invoke('profiles:remove', 'p-personal')`)
-      await sleep(400)
-      await cli(['send', String(PANE), sh.unsetVar('FAKE_MARK')])
-      await sleep(800)
-      await ES(`window.__mogging.agents.launchIn(${PANE}, 'gemini', '', 'p-personal')`)
-      await sleep(3500)
-      const settled2 = await settle() // the degraded launch is a NEW gemini — same keyboard, same alt screen
-      const degraded = await probeEnv('MARKB2')
-      const relaunched = (await ES(`window.__mogging.agents.lastLaunch(${PANE})`)) as { provider?: string } | null
-      const degradedOk = degraded !== MARK_B && degraded !== MARK_A && relaunched?.provider === 'gemini'
+      const referencedRemoval = (await ES(`window.bridge.invoke('profiles:remove', 'p-personal')`)) as {
+        ok?: boolean
+        reason?: string
+        workspaces?: string[]
+      }
+      const profileRemained = Boolean(
+        await ES(`window.bridge.invoke('profiles:list').then(ps => ps.some(p => p.id === 'p-personal'))`)
+      )
 
-      const pass = count === 2 && restoredOnB && neverA && degradedOk
-      emit({ phase: 'B', pass, count, restored, restoredOnB, neverA, degraded, relaunched, degradedOk, settled, settled2 })
+      const staleSaved = await ES<boolean>(
+        `window.bridge.invoke('profiles:save', ${JSON.stringify({
+          id: 'p-stale',
+          name: 'Disposable',
+          provider: 'gemini',
+          email: 'disposable@example.test',
+          env: { FAKE_MARK: 'PROFILE_STALE_4242' },
+          order: 2
+        })})`
+      )
+      const staleRemoval = (await ES(`window.bridge.invoke('profiles:remove', 'p-stale')`)) as {
+        ok?: boolean
+        reason?: string
+      }
+      const staleLaunch = (await ES(
+        `window.bridge.invoke('agents:command', { agentId: 'gemini', cwd: '', profileId: 'p-stale' })`
+      )) as { ok?: boolean; reason?: string }
+
+      const referencedBlocked =
+        referencedRemoval.ok === false && referencedRemoval.reason === 'referenced' && Boolean(referencedRemoval.workspaces?.length)
+      const staleRefused =
+        staleSaved === true &&
+        staleRemoval.ok === true &&
+        staleLaunch.ok === false &&
+        String(staleLaunch.reason ?? '').includes('no longer exists')
+      const pass = count === 2 && restoredOnB && neverA && referencedBlocked && profileRemained && staleRefused
+      emit({
+        phase: 'B',
+        pass,
+        count,
+        restored,
+        restoredOnB,
+        neverA,
+        referencedRemoval,
+        referencedBlocked,
+        profileRemained,
+        staleSaved,
+        staleRemoval,
+        staleLaunch,
+        staleRefused,
+        settled
+      })
       app.exit(pass ? 0 : 1)
     } catch (e) {
       emit({ phase: 'B', pass: false, error: String(e) })

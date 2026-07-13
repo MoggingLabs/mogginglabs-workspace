@@ -3,11 +3,24 @@ import {
   IntegrationsChannels,
   defaultToolPlan,
   sanitizeToolPlan,
+  type HostedCliId,
+  type IntegrationsGrantMutation,
+  type ToolPlanMutation,
   type WorkspaceIntegrationsGrant,
   type WorkspaceToolPlan
 } from '@contracts'
-import { grantedWriteToolNames, readGrant, writeGrant, type GrantKv } from '@backend/features/integrations'
+import {
+  grantedWriteToolNames,
+  isBlockedActOrigin,
+  normalizeActOrigin,
+  readGrant,
+  writeGrant,
+  type GrantKv
+} from '@backend/features/integrations'
 import { getSettingsStore } from './app-settings'
+import { wizardAuditFaults } from './wizard-audit-faults'
+import { maybeMutationFault } from './fault-port'
+import { waitForBrowserRaceAudit } from './browser-race-audit-faults'
 
 // App-wiring for the per-workspace integrations grant (Phase-8/03, ADR
 // 0008.c). Storage rides the app-settings KV via the @backend store; this file
@@ -88,6 +101,30 @@ export function setToolPlan(plan: WorkspaceToolPlan): WorkspaceToolPlan {
   return clean
 }
 
+export function mutateToolPlan(raw: ToolPlanMutation): WorkspaceToolPlan {
+  const mutation = raw as ToolPlanMutation | null
+  const workspaceId = String(mutation?.workspaceId ?? '')
+  if (!mutation || !workspaceId) return defaultToolPlan('')
+  const current = getToolPlan(workspaceId)
+  if (mutation.kind === 'inherit') {
+    return setToolPlan({ ...current, inheritGlobal: mutation.value === true })
+  }
+  if (mutation.kind !== 'cell') return current
+  const cli = mutation.cli as HostedCliId
+  if (!['claude-code', 'codex', 'gemini'].includes(cli) || !/^[a-z0-9_-]{1,64}$/i.test(mutation.serverId)) {
+    return current
+  }
+  const scope = current.entries[mutation.serverId]
+  const clis: HostedCliId[] = scope === 'all-clis'
+    ? ['claude-code', 'codex', 'gemini']
+    : Array.isArray(scope) ? [...scope] : []
+  const next = mutation.enabled ? [...new Set([...clis, cli])] : clis.filter((item) => item !== cli)
+  const entries = { ...current.entries }
+  if (!next.length) delete entries[mutation.serverId]
+  else entries[mutation.serverId] = next.length === 3 ? 'all-clis' : next
+  return setToolPlan({ ...current, entries })
+}
+
 /** Persist a (sanitized) grant and fan the change out: renderer push + every
  *  registered listener. Returns the sanitized grant, or null without a store. */
 export function setIntegrationsGrant(grant: WorkspaceIntegrationsGrant): WorkspaceIntegrationsGrant | null {
@@ -101,6 +138,32 @@ export function setIntegrationsGrant(grant: WorkspaceIntegrationsGrant): Workspa
   }
   for (const fn of listeners) fn()
   return clean
+}
+
+export function mutateIntegrationsGrant(raw: IntegrationsGrantMutation): WorkspaceIntegrationsGrant | null {
+  const mutation = raw as IntegrationsGrantMutation | null
+  const workspaceId = String(mutation?.workspaceId ?? '')
+  if (!mutation || !workspaceId) return null
+  const current = getIntegrationsGrant(workspaceId)
+  if (mutation.field === 'writeTools') {
+    if (mutation.value !== 'none' && mutation.value !== 'all' && !Array.isArray(mutation.value)) return current
+    return setIntegrationsGrant({ ...current, writeTools: mutation.value })
+  }
+  if (mutation.field === 'web') {
+    if (!['off', 'public', 'signed-in'].includes(mutation.value)) return current
+    return setIntegrationsGrant({ ...current, web: mutation.value })
+  }
+  if (mutation.field !== 'origin' || (mutation.op !== 'add' && mutation.op !== 'remove')) return current
+  const origin = normalizeActOrigin(String(mutation.origin ?? ''))
+  if (!origin || isBlockedActOrigin(origin)) return current
+  const origins = mutation.op === 'remove'
+    ? current.actOrigins.filter((item) => item !== origin)
+    : [...new Set([...current.actOrigins, origin])]
+  return setIntegrationsGrant({
+    ...current,
+    web: mutation.op === 'add' ? 'signed-in' : current.web,
+    actOrigins: origins
+  })
 }
 
 /** Resolve a pane's workspace + granted write-tool names — what the app
@@ -127,13 +190,30 @@ export function workspaceIdForPane(pane: string): string | undefined {
 
 export function registerIntegrations(getWin: () => BrowserWindow | null): void {
   winGetter = getWin
-  ipcMain.handle(IntegrationsChannels.grantGet, (_e, workspaceId: string) =>
-    getIntegrationsGrant(String(workspaceId))
-  )
+  ipcMain.handle(IntegrationsChannels.grantGet, async (_e, workspaceId: string) => {
+    const wsId = String(workspaceId)
+    await waitForBrowserRaceAudit('grantGet', wsId)
+    return getIntegrationsGrant(wsId)
+  })
   ipcMain.handle(IntegrationsChannels.grantSet, (_e, grant: WorkspaceIntegrationsGrant) =>
     setIntegrationsGrant(grant)
   )
+  ipcMain.handle(IntegrationsChannels.grantMutate, async (_e, mutation: IntegrationsGrantMutation) => {
+    await maybeMutationFault('grant')
+    return mutateIntegrationsGrant(mutation)
+  })
   ipcMain.handle(IntegrationsChannels.planGet, (_e, workspaceId: string) => getToolPlan(String(workspaceId)))
-  ipcMain.handle(IntegrationsChannels.planSet, (_e, plan: WorkspaceToolPlan) => setToolPlan(plan))
+  ipcMain.handle(IntegrationsChannels.planSet, (_e, plan: WorkspaceToolPlan) => {
+    const fault = wizardAuditFaults()
+    if (fault) {
+      fault.planSetCalls++
+      if (fault.planSetReject) return null
+    }
+    return setToolPlan(plan)
+  })
+  ipcMain.handle(IntegrationsChannels.planMutate, async (_e, mutation: ToolPlanMutation) => {
+    await maybeMutationFault('plan')
+    return mutateToolPlan(mutation)
+  })
   ipcMain.handle(IntegrationsChannels.planCoverage, () => toolPlanCoverage())
 }

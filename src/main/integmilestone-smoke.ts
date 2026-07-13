@@ -1,6 +1,6 @@
 import { app, type BrowserWindow } from 'electron'
 import { createServer, type Server } from 'node:http'
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,9 +13,21 @@ import type {
   ServiceLink,
   WorkspaceToolPlan
 } from '@contracts'
-import { ServiceEngine, composePlanEntries, materializePlanFor, type CliHomes } from '@backend/features/integrations'
+import {
+  ServiceEngine,
+  composePlanEntries,
+  materializePlanFor,
+  saveServer,
+  type CliHomes,
+  type GrantKv
+} from '@backend/features/integrations'
 import { mgrApply, mgrStatus, houseServerEntry } from './mcp-manager'
-import { setIntegrationsGrant } from './integrations'
+import { setIntegrationsGrant, setToolPlan } from './integrations'
+import {
+  spawnLocalMcpSmokeClient,
+  spawnPaneMcpSmokeClient,
+  type PaneMcpSmokeClient
+} from './pane-mcp-smoke-client'
 import { agentAct, browserDriver, confirmPendingActOrigin, dockPageEval, setAgentConsent } from './browser-dock'
 import { emitBridgeEvent, saveWebhook } from './event-bridge'
 import { flushTrailForSmoke, readTrail } from './trail'
@@ -51,7 +63,6 @@ import { softFps, softGapMs } from './smoke-shell'
 //       fixture userData (our stores), the CLI homes, and every frame/trail.
 // Budgets are sampled DURING the composed surface (dock open + live panes).
 
-type Rpc = { result?: Record<string, unknown>; error?: { code?: number; message?: string } }
 type ToolResult = { content?: { type?: string; text?: string }[]; isError?: boolean }
 type ToolRow = { name: string }
 
@@ -77,7 +88,8 @@ export function runIntegMilestoneSmoke(win: BrowserWindow): void {
   const root = app.getAppPath()
   const frames: string[] = [] // every MCP child frame — the 'approve' + custody grep surface
   const servers: Server[] = []
-  const clients: ReturnType<typeof mcpClient>[] = [] // every spawned MCP child — killed at the end
+  const clients: PaneMcpSmokeClient[] = [] // every spawned MCP child — killed at the end
+  const mcpPath = join(root, 'bin', 'mogging-mcp.mjs')
 
   const emit = (o: object): void => {
     try {
@@ -87,57 +99,37 @@ export function runIntegMilestoneSmoke(win: BrowserWindow): void {
     }
   }
 
-  /** The real house MCP server as a child; records every frame + notifications. */
-  const mcpClient = (
+  const cli = (
+    args: string[],
     extraEnv: Record<string, string> = {}
-  ): { rpc: (method: string, params?: unknown) => Promise<Rpc>; notifications: string[]; kill: () => void } => {
-    const child: ChildProcessWithoutNullStreams = spawn(
-      process.execPath,
-      [join(root, 'bin', 'mogging-mcp.mjs')],
-      { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ...extraEnv }, windowsHide: true }
-    ) as ChildProcessWithoutNullStreams
-    let out = ''
-    let id = 0
-    const waiters = new Map<number, (v: Rpc) => void>()
-    const notifications: string[] = []
-    child.stdout.setEncoding('utf8')
-    child.stderr.setEncoding('utf8')
-    child.stderr.on('data', (c: string) => frames.push(c))
-    child.stdout.on('data', (chunk: string) => {
-      out += chunk
-      let i
-      while ((i = out.indexOf('\n')) >= 0) {
-        const line = out.slice(0, i)
-        out = out.slice(i + 1)
-        if (!line.trim()) continue
-        frames.push(line)
-        try {
-          const m = JSON.parse(line) as { id?: number; method?: string } & Rpc
-          if (typeof m.id === 'number' && waiters.has(m.id)) {
-            waiters.get(m.id)!({ result: m.result, error: m.error })
-            waiters.delete(m.id)
-          } else if (m.id === undefined && typeof m.method === 'string') {
-            notifications.push(m.method)
-          }
-        } catch {
-          /* non-JSON */
-        }
-      }
+  ): Promise<{ code: number; stdout: string; stderr: string }> =>
+    new Promise((res) => {
+      execFile(
+        process.execPath,
+        [join(root, 'bin', 'mogging.mjs'), ...args],
+        { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ...extraEnv }, timeout: 15000, windowsHide: true },
+        (err, stdout, stderr) => res({ code: err ? 1 : 0, stdout: String(stdout), stderr: String(stderr) })
+      )
     })
-    return {
-      rpc: (method, params) =>
-        new Promise((resolve) => {
-          const rid = ++id
-          waiters.set(rid, resolve)
-          child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: rid, method, params }) + '\n')
-        }),
-      notifications,
-      kill: () => child.kill()
-    }
+
+  /**
+   * A pane-bound MCP session: the REAL server, launched INSIDE the pane, exactly as an agent
+   * launches it. That is the only place the daemon-minted MOGGING_PANE_TOKEN exists, and the app
+   * endpoint now binds a session to a pane on that token alone — a server spawned from the main
+   * process with a hand-set MOGGING_PANE_ID is a claim, not a proof, and gets a read-only session
+   * with no grant and no browser (the forgery mcpwrite-smoke asserts). (b) and (c) below are ABOUT
+   * the grant reaching a pane's session, so they have to hold a session that really is one.
+   *
+   * One live session per pane — the bridge holds the pane's foreground (pane-mcp-smoke-client.ts).
+   */
+  const paneMcpClient = async (paneId: string): Promise<PaneMcpSmokeClient> => {
+    const c = await spawnPaneMcpSmokeClient({ cli, paneId, mcpPath, onFrame: (frame) => frames.push(frame) })
+    clients.push(c)
+    return c
   }
 
   const callTool = async (
-    c: ReturnType<typeof mcpClient>,
+    c: PaneMcpSmokeClient,
     name: string,
     args: Record<string, unknown> = {}
   ): Promise<{ text: string; isError: boolean; rpcError: string | null }> => {
@@ -146,7 +138,7 @@ export function runIntegMilestoneSmoke(win: BrowserWindow): void {
     const r = (m.result ?? {}) as ToolResult
     return { text: r.content?.[0]?.text ?? '', isError: r.isError === true, rpcError: null }
   }
-  const listNames = async (c: ReturnType<typeof mcpClient>): Promise<string[]> =>
+  const listNames = async (c: PaneMcpSmokeClient): Promise<string[]> =>
     (((await c.rpc('tools/list')).result as { tools?: ToolRow[] })?.tools ?? []).map((t) => t.name)
   const countWrites = (names: string[]): number => names.filter((n) => WRITES.includes(n)).length
   const waitFor = async (probe: () => Promise<boolean>, tries = 15, gapMs = 400): Promise<boolean> => {
@@ -191,9 +183,15 @@ export function runIntegMilestoneSmoke(win: BrowserWindow): void {
       })
     })
 
-  // Poll list_panes (through a fresh short-lived session) for a pane's attention.
+  // Poll list_panes (through a fresh short-lived session) for a pane's attention. `list_panes` is
+  // a control READ — it goes to the daemon, on the daemon's own token, and needs no pane binding
+  // — so this one stays an ordinary out-of-pane session and never occupies the pane it watches.
   const waitForPaneAttention = async (pane: string): Promise<boolean> => {
-    const c = mcpClient({ MOGGING_PANE_ID: pane })
+    const c = spawnLocalMcpSmokeClient({
+      mcpPath,
+      childEnv: { MOGGING_PANE_ID: pane },
+      onFrame: (frame) => frames.push(frame)
+    })
     clients.push(c)
     await c.rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {} })
     for (let i = 0; i < 15; i++) {
@@ -260,8 +258,7 @@ export function runIntegMilestoneSmoke(win: BrowserWindow): void {
       const a2 = String(wsA.ordinal * 100 + 2)
 
       // ══ (b) MCP session, pane identity, grant 'none' ════════════════════════
-      const c1 = mcpClient({ MOGGING_PANE_ID: a1 })
-      clients.push(c1)
+      const c1 = await paneMcpClient(a1)
       await c1.rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {} })
       const namesNone = await listNames(c1)
       const noneNoWrites = countWrites(namesNone) === 0
@@ -304,8 +301,7 @@ export function runIntegMilestoneSmoke(win: BrowserWindow): void {
       await sleep(2500)
       const wsB = (await ES('window.__mogging.workspace.active()')) as { id: string; ordinal: number }
       const b1 = String(wsB.ordinal * 100 + 1)
-      const cB = mcpClient({ MOGGING_PANE_ID: b1 })
-      clients.push(cB)
+      const cB = await paneMcpClient(b1)
       await cB.rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {} })
       const namesB = await listNames(cB)
       const refusedB = await callTool(cB, 'mail_send', { to: a1, body: 'nope' })
@@ -477,7 +473,32 @@ export function runIntegMilestoneSmoke(win: BrowserWindow): void {
       const keySet = serviceKeySet(VAULT_NAME, VAULT_SECRET)
       const keyCipher = store?.getSetting(`integrations.vaultkey.${VAULT_NAME}`) ?? ''
       const keyStoredAsCipher = keySet.ok && serviceKeyNames().includes(VAULT_NAME) && keyCipher.length > 0 && !keyCipher.includes(VAULT_SECRET)
-      const keyResolves = resolveServiceKeyEnv()[VAULT_NAME] === VAULT_SECRET
+
+      // A stored key is no longer a key every pane gets. It is materialized into a pane's env
+      // ONLY where something actually asked for it: an MCP server that REFERENCES ${NAME}, which
+      // this workspace's tool plan PLANNED for that pane's CLI (service-keys.ts,
+      // referencedServiceKeyNames). Custody is the point of (h), and "who may hold this" is
+      // custody — so hold the resolver to BOTH halves: the planned CLI gets the secret, and the
+      // plain shell, and any workspace that never planned the server, get nothing at all.
+      const keyWsId = 'integmile-scoped-ws'
+      const kv: GrantKv | null = store
+        ? { get: (key) => store.getSetting(key), set: (key, value) => store.setSetting(key, value) }
+        : null
+      const serverSaved =
+        !!kv &&
+        saveServer(kv, {
+          id: 'integmile-vault',
+          label: 'Integmile vault fixture',
+          transport: 'stdio',
+          command: 'integmile-mcp',
+          env: { [VAULT_NAME]: `\${${VAULT_NAME}}` } // the REFERENCE ships; the value never does
+        }).ok
+      setToolPlan({ workspaceId: keyWsId, entries: { 'integmile-vault': 'all-clis' }, inheritGlobal: false })
+      const keyResolves =
+        serverSaved &&
+        resolveServiceKeyEnv(keyWsId, 'claude')[VAULT_NAME] === VAULT_SECRET && // planned + referenced
+        resolveServiceKeyEnv(keyWsId, 'shell')[VAULT_NAME] === undefined && // a plain shell is not an agent
+        resolveServiceKeyEnv(wsA.id, 'claude')[VAULT_NAME] === undefined // a workspace that planned nothing
 
       const SECRETS = [VAULT_SECRET, HOOK_TOKEN, COOKIE_VAL]
       // Our custody = userData EXCEPT the browser session partitions (the site's

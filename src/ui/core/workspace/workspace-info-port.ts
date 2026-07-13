@@ -9,6 +9,8 @@ export interface WorkspaceInfo {
   cwd: string
   ordinal: number
   paneCount: number
+  /** Per-slot provider assignment; used only to scope launch-time pane capabilities. */
+  assignments?: string[]
 }
 
 export interface WorkspacesSnapshot {
@@ -36,6 +38,14 @@ export function getWorkspaces(): WorkspacesSnapshot {
 export function workspaceIdForPane(paneId: number): string | undefined {
   const ordinal = Math.floor(paneId / 100)
   return snapshot.workspaces.find((w) => w.ordinal === ordinal)?.id
+}
+
+/** The provider assigned to this exact slot, or undefined for a plain/unassigned shell. */
+export function assignmentForPane(paneId: number): string | undefined {
+  const ordinal = Math.floor(paneId / 100)
+  const slot = paneId - ordinal * 100 - 1
+  if (slot < 0) return undefined
+  return snapshot.workspaces.find((w) => w.ordinal === ordinal)?.assignments?.[slot]
 }
 
 /** Subscribe (replays the current snapshot immediately). Returns unsubscribe. */

@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sh, softFps, softGapMs } from './smoke-shell'
+import { approvalListed, sendApprovalFromPane } from './reviewer-smoke-helper'
 
 // Env-gated ORCHESTRATION milestone smoke (MOGGING_ORCHESTRATION, Phase-3/06).
 // The whole Phase-3 promise as ONE asserted flow, two-phase like the perf milestone:
@@ -86,6 +87,23 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
       const worktreeOk =
         !!worktree && git(repo, ['worktree', 'list', '--porcelain']).includes(wtDirs[0])
 
+      // The board hands a card's task to a pane ONLY once the backend has SEEN an agent RUNNING
+      // in it. Detection failure fails CLOSED: card text is arbitrary user prose, and typing it
+      // into a pane whose agent never appeared turns that prose into shell input (BOARDFAIL).
+      //
+      // This milestone's "agent" is the 'shell' provider — deterministic on purpose, because A3
+      // scripts its work through the REAL control CLI rather than hoping a language model edits a
+      // file. But a shell launch is a launch NO-OP (launch-port): it registers no agent session,
+      // so nothing here would ever say "an agent is up", and the board would rightly refuse to
+      // type the task at all. Replay the daemon's own typed-launch verdict — the same event, the
+      // same shape, the same shim boardfail-smoke uses — so the REAL hand-off path runs and A2
+      // asserts the product, not a timer.
+      if (paneId) {
+        await ES(
+          `window.__mogging.agents.detected({ id: ${paneId}, agentId: 'claude', cwd: ${JSON.stringify(worktree)}, sinceMs: Date.now() })`
+        )
+      }
+
       // ── A2. Task marker = the pane's first prompt ───────────────────────────
       const bufferText = (): Promise<string> =>
         ES<string>(
@@ -155,7 +173,7 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
       // ── A5. Review: the change arrives, the secret does NOT ──────────────────
       const diff = (await ES(
         `window.bridge.invoke('review:diff', ${JSON.stringify({ repo, worktree })})`
-      )) as { branch: string; files: { path: string; hunks: string[] }[]; redactions: number }
+      )) as { base: string; branch: string; files: { path: string; hunks: string[] }[]; redactions: number }
       const diffText = JSON.stringify(diff)
       const diffOk =
         diff.files.some((f) => f.path === 'README.md' && f.hunks.join('\n').includes(CHANGE)) &&
@@ -166,16 +184,18 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
       // The loop now includes sign-off: an ungated merge is REFUSED; the pane becomes
       // the reviewer and approves; then the same merge succeeds.
       const ungated = (await ES(
-        `window.bridge.invoke('review:merge', ${JSON.stringify({ repo, branch: diff.branch })})`
+        `window.bridge.invoke('review:merge', ${JSON.stringify({ repo, worktree })})`
       )) as { ok: boolean; state: string }
       // The USER names the reviewer (the renderer-only IPC). `mogging role` writes the daemon's
       // map, which any pane can write — so it no longer opens the merge gate (daemon-relay:
       // appRoles). Naming the reviewer here is what a person does in the UI.
       await ES(`window.__mogging.workspace.setRole(${paneId}, 'reviewer')`)
       await sleep(400) // the role reaches main (the trusted IPC) and the daemon
-      const approveRes = await cli(['approve', diff.branch], { MOGGING_PANE_ID: String(paneId) })
+      const approvalSent = await sendApprovalFromPane(cli, cliPath, paneId, diff.branch, { repo, base: diff.base })
+      const approvalSeen = approvalSent && (await approvalListed(cli, diff.branch))
+      const approveRes = { code: approvalSeen ? 0 : 1 }
       const merge = (await ES(
-        `window.bridge.invoke('review:merge', ${JSON.stringify({ repo, branch: diff.branch })})`
+        `window.bridge.invoke('review:merge', ${JSON.stringify({ repo, worktree })})`
       )) as { ok: boolean; state: string }
       const mergeOk =
         ungated.ok === false &&

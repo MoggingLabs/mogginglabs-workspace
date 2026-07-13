@@ -5,6 +5,7 @@ import {
   type ReviewDiff,
   type ReviewMergeResult
 } from '@contracts'
+import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
 import { getFocusedPane } from '../../core/layout/focus'
 import { setCommands } from '../../core/commands/command-port'
@@ -95,14 +96,36 @@ function renderDiff(diff: ReviewDiff): HTMLElement {
   return body
 }
 
+/** One guard for the one call site. Both callers do `void openReview(...)`, so before finding 39 a
+ *  rejected diff was an unhandled promise and the UI just SAT there — no modal, no error, and no
+ *  way for the user to tell "still working" from "already dead". */
+const diffGuard = createAsyncGuard<ReviewDiff>()
+let dismissDiffLoading: (() => void) | null = null
+
 async function openReview(repo: string, worktree: string): Promise<void> {
-  const diff = (await getBridge().invoke(ReviewChannels.diff, { repo, worktree })) as ReviewDiff
-  showReview(diff, repo)
+  await diffGuard.run(() => getBridge().invoke(ReviewChannels.diff, { repo, worktree }) as Promise<ReviewDiff>, {
+    action: 'read the diff',
+    onLoading: () => {
+      // The modal only exists once the diff lands, so the waiting state has nowhere else to live.
+      // Dismiss any previous one first: a second open supersedes the first, whose onSettle will
+      // never run — and a sticky toast nobody takes down is its own bug.
+      dismissDiffLoading?.()
+      dismissDiffLoading = showToast({ tone: 'info', title: 'Reading the diff…', timeout: 0 })
+    },
+    onSuccess: (diff) => showReview(diff, repo, worktree),
+    // onError stays the default danger toast: there is no panel of ours on screen to render into.
+    onSettle: () => {
+      dismissDiffLoading?.()
+      dismissDiffLoading = null
+    },
+    // git is local — 15s of silence is a hang, and a hang must not strand "Reading the diff…".
+    timeoutMs: 15_000
+  })
 }
 
 /** Render the review modal for an already-fetched diff. Split from openReview so a
  *  fixture diff can drive both gate states + the footer with no repo (8.5/07b). */
-function showReview(diff: ReviewDiff, repo: string): void {
+function showReview(diff: ReviewDiff, repo: string, worktree: string): void {
   const modal = createModal({
     title: 'Review changes',
     subtitle: diff.branch && diff.base ? `${diff.branch} → ${diff.base}` : 'worktree diff',
@@ -119,18 +142,35 @@ function showReview(diff: ReviewDiff, repo: string): void {
     // Reviewer gate (4/03): the sign-off state is always visible; unapproved merges
     // demand the DISTINCT typed word "override" — a human can always land, deliberately.
     const gated = diff.approved !== true
+    const incomplete = diff.dirty || diff.truncated || diff.unreviewable || diff.untracked.length > 0 || !diff.snapshot
+    const blockers = [
+      diff.dirty ? 'uncommitted changes' : '',
+      diff.untracked.length > 0 ? 'untracked files' : '',
+      diff.truncated ? 'truncated diff' : '',
+      diff.unreviewable ? 'binary, mode-only, or other non-rendered changes' : '',
+      !diff.snapshot ? 'snapshot unavailable' : ''
+    ].filter(Boolean)
     // Blocker 2: the sign-off state carries a non-colour difference — a distinct glyph
     // AND a distinct word — so it reads for a colour-blind reviewer and at a glance.
     const gateChip = el('span', { class: `review-gate ${gated ? 'review-gate-closed' : 'review-gate-open'}` }, [
       icon(gated ? 'shield' : 'check-circle', 13),
       el('span', { text: gated ? 'No reviewer sign-off' : 'Approved by reviewer' })
     ])
+    const visibleHunks = diff.files.flatMap((file) => file.hunks).join('\n')
     const copy = Button({
-      label: 'Copy patch',
-      onClick: () => {
-        const patch = diff.files.map((f) => f.hunks.join('\n')).join('\n')
-        void getBridge().invoke(ClipboardChannels.write, { text: patch })
-        showToast({ tone: 'success', title: 'Patch copied (redacted)' })
+      label: 'Copy visible hunks',
+      disabled: !visibleHunks.trim(),
+      onClick: async () => {
+        try {
+          await getBridge().invoke(ClipboardChannels.write, { text: visibleHunks })
+          showToast({ tone: 'success', title: 'Visible redacted hunks copied' })
+        } catch (error) {
+          showToast({
+            tone: 'danger',
+            title: 'Could not copy visible hunks',
+            body: error instanceof Error ? error.message : String(error)
+          })
+        }
       }
     })
     const confirmWord = gated ? 'override' : 'merge'
@@ -139,7 +179,7 @@ function showReview(diff: ReviewDiff, repo: string): void {
       // Danger-styled, not the filled primary that invited the click (07b): a destructive
       // merge should read as "careful", never as "the thing to do".
       variant: 'danger',
-      disabled: !diff.branch || diff.files.length === 0,
+      disabled: !diff.branch || diff.files.length === 0 || incomplete,
       onClick: () => {
         // Typed confirmation — clicks can't land a merge; ungated needs "override".
         footer.replaceChildren()
@@ -160,7 +200,7 @@ function showReview(diff: ReviewDiff, repo: string): void {
             }
             void (getBridge().invoke(ReviewChannels.merge, {
               repo,
-              branch: diff.branch,
+              worktree,
               override: gated ? input.value.trim().toLowerCase() : undefined
             }) as Promise<ReviewMergeResult>).then(
               (res) => {
@@ -179,6 +219,20 @@ function showReview(diff: ReviewDiff, repo: string): void {
                     tone: 'attention',
                     title: 'No reviewer sign-off',
                     body: 'A reviewer pane must `mogging approve` this branch — or use the typed override.'
+                  })
+                  rebuildFooter()
+                } else if (res.state === 'unreviewable') {
+                  showToast({
+                    tone: 'danger',
+                    title: 'Commit and review the complete change first',
+                    body: res.error ?? 'Dirty, untracked, truncated, binary, or mode-only changes cannot be merged from this review.'
+                  })
+                  rebuildFooter()
+                } else if (res.state === 'stale') {
+                  showToast({
+                    tone: 'attention',
+                    title: 'Review is stale',
+                    body: res.error ?? 'The source or destination changed. Close this dialog and review again.'
                   })
                   rebuildFooter()
                 } else if (res.state === 'conflict') {
@@ -207,7 +261,17 @@ function showReview(diff: ReviewDiff, repo: string): void {
     const close = Button({ label: 'Close', variant: 'ghost', onClick: () => modal.close() })
     // Safe-first: the safe actions precede the danger merge (was `…, merge, close`); the
     // modal auto-focuses the first button (Copy), never the destructive merge.
-    footer.append(gateChip, copy, close, merge)
+    footer.append(gateChip)
+    if (blockers.length > 0) {
+      footer.append(
+        el('span', {
+          class: 'review-gate review-gate-closed review-merge-blocked',
+          attrs: { role: 'status' },
+          text: `Merge unavailable: ${blockers.join(', ')}.`
+        })
+      )
+    }
+    footer.append(copy, close, merge)
   }
   rebuildFooter()
   modal.setFooter(footer)
@@ -243,18 +307,31 @@ export const reviewFeature: UiFeature = {
       open: (repo: string, worktree: string) => openReview(repo, worktree),
       // Fixture renderer (8.5/07b FEEDBACKUX): both gate states + the safe-first footer,
       // no repo/worktree.
-      showFixture: (approved: boolean) =>
+      showFixture: (approved: boolean, empty = false) =>
         showReview(
           {
             base: 'main',
             branch: 'demo/feature',
             approved,
-            files: [{ path: 'src/app.ts', additions: 3, deletions: 1, hunks: ['@@ -1,2 +1,3 @@\n keep\n+added\n-gone'] }],
+            files: empty
+              ? []
+              : [{ path: 'src/app.ts', additions: 3, deletions: 1, hunks: ['@@ -1,2 +1,3 @@\n keep\n+added\n-gone'] }],
             untracked: [],
             redactions: 0,
-            truncated: false
+            truncated: false,
+            dirty: false,
+            unreviewable: false,
+            snapshot: {
+              repoId: 'demo-repo',
+              branch: 'demo/feature',
+              head: '1111111111111111111111111111111111111111',
+              base: 'main',
+              baseHead: '2222222222222222222222222222222222222222',
+              mergeBase: '2222222222222222222222222222222222222222'
+            }
           },
-          'demo-repo'
+          'demo-repo',
+          'demo-worktree'
         )
     }
   }

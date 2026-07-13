@@ -9,6 +9,8 @@
 const live = new Set<number>()
 const waiters = new Map<number, Set<() => void>>()
 const reattached = new Set<number>()
+const remoteReady = new Set<number>()
+const remoteWaiters = new Map<number, Set<(ready: boolean) => void>>()
 
 /**
  * The pane's PTY was ALREADY running when we asked for it — the daemon is detached
@@ -31,6 +33,10 @@ export function forgetPane(id: number): void {
   live.delete(id)
   reattached.delete(id)
   waiters.delete(id)
+  remoteReady.delete(id)
+  const pending = remoteWaiters.get(id)
+  remoteWaiters.delete(id)
+  for (const done of pending ?? []) done(false)
 }
 
 export function markPaneLive(id: number): void {
@@ -62,6 +68,38 @@ export function whenPaneLive(id: number, timeoutMs: number): Promise<boolean> {
       clearTimeout(timer)
       resolve(true)
     }
+    set.add(done)
+  })
+}
+
+/** SSH bootstrap reached the target command after host-key/password auth. */
+export function markPaneRemoteReady(id: number): void {
+  if (remoteReady.has(id)) return
+  remoteReady.add(id)
+  const pending = remoteWaiters.get(id)
+  remoteWaiters.delete(id)
+  for (const done of pending ?? []) done(true)
+}
+
+export function isPaneRemoteReady(id: number): boolean {
+  return remoteReady.has(id)
+}
+
+/** Auth prompts and SSH banners do not satisfy this waiter. */
+export function whenPaneRemoteReady(id: number, timeoutMs: number): Promise<boolean> {
+  if (remoteReady.has(id)) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const set = remoteWaiters.get(id) ?? new Set<(ready: boolean) => void>()
+    remoteWaiters.set(id, set)
+    let settled = false
+    const done = (ready: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      set.delete(done)
+      resolve(ready)
+    }
+    const timer = setTimeout(() => done(false), timeoutMs)
     set.add(done)
   })
 }

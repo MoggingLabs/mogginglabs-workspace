@@ -23,7 +23,12 @@ import { join } from 'node:path'
 //       NOTHING selected, so `$HOME` never silently becomes the workspace root;
 //   (k) typing a path that does not exist leaves the browser exactly where it was
 //       (a half-typed path used to replace the listing with a refusal), and Launch
-//       declines a path the filesystem refused instead of stranding every pane in it.
+//       declines a path the filesystem refused instead of stranding every pane in it;
+//   (l) type-to-filter survives its own repaint: focus stays INSIDE the list after every
+//       keystroke, so the second character still reaches a component that had gone
+//       keyboard-dead after the first — and the Esc that clears the filter arrives too;
+//   (m) a refusal stays navigable. Entering a locked folder used to leave a picture with
+//       no way out of it: no rows, no crumbs, nothing anywhere that could take focus.
 
 const CAP = 500
 
@@ -281,6 +286,69 @@ export function runFolderPickSmoke(win: BrowserWindow): void {
       // On a host where the denial could not be created, the folder simply lists empty.
       const refusalUiOk = fx.deniedCreated ? refusalUi.hasRefusal && refusalUi.rows === 0 && refusalUi.pageAlive : refusalUi.pageAlive
 
+      // ── (l) the filter must not eat the keyboard ──────────────────────────────
+      // Every keystroke repaints the whole list, and the repaint used to throw the focused
+      // row on the floor: focus fell to <body>, and since the keydown listener lives on
+      // `.fb-list`, the SECOND character never arrived. One letter, and the browser was dead.
+      await ES(`window.__mogging.templates.openWizard({ cwd: ${R} })`)
+      await sleep(900)
+      const filterKeys = await ES<{ inList: boolean[]; chip: string; names: string[]; cleared: string; restored: string[] }>(`(() => {${H}
+        const box = document.querySelector('#view-wizard .fb-list')
+        const start = box.querySelector('.fb-row[tabindex="0"]') ?? box.querySelector('.fb-row')
+        start.focus()
+        const inList = []
+        // Typed at whatever holds focus, which is what a keyboard does. Dispatching at the row
+        // BY NAME would keep working with focus on the floor, and would prove nothing at all.
+        for (const c of ['a', 'l', 'p']) {
+          document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: c, bubbles: true, cancelable: true }))
+          inList.push(box.contains(document.activeElement))
+        }
+        const chip = document.querySelector('#view-wizard .fb-filter').textContent
+        const names = rowNames()
+        // And Esc only reaches the component BECAUSE focus never left it — the clear is the proof.
+        document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+        return { inList, chip, names, cleared: document.querySelector('#view-wizard .fb-filter').textContent, restored: rowNames() }
+      })()`)
+      const filterFocusOk =
+        filterKeys.inList.length === 3 &&
+        filterKeys.inList.every(Boolean) && // today: false from the very first keystroke
+        filterKeys.chip === 'filter: alp' && // today: 'filter: a' — chars 2 and 3 fell into <body>
+        filterKeys.names.includes('alpha') &&
+        !filterKeys.names.includes('locked') && // the filter really did narrow the list
+        filterKeys.cleared === '' &&
+        filterKeys.restored.includes('locked')
+
+      // ── (m) a refused folder stays navigable ──────────────────────────────────
+      // Enter on `locked` refuses. The refusal used to null the listing, which took the rows
+      // AND the crumbs with it: nothing in the component was focusable, so the keyboard user
+      // who walked in here had no key left that could walk them out.
+      const refusalNav = await ES<{ reached: boolean; hasRefusal: boolean; focusables: number; focusInside: boolean; crumbs: number }>(`(async () => {${H}
+        // Walked to, not clicked to: Enter acts on the ACTIVE row, and only the arrows move
+        // it. This is the journey that stranded the user — keyboard the whole way in.
+        const focName = () => document.activeElement?.querySelector?.('.fb-row-name')?.textContent ?? ''
+        rows()[0].focus()
+        for (let i = 0; i < 12 && focName() !== 'locked'; i++) key(document.activeElement, 'ArrowDown')
+        const reached = focName() === 'locked'
+        key(document.activeElement, 'Enter')
+        await new Promise((res) => setTimeout(res, 900)) // the refusal round-trips through main
+        // Counted INSIDE the component that is actually refusing — not somewhere else on the page.
+        const fb = document.querySelector('#view-wizard .folder-browser')
+        return {
+          reached,
+          hasRefusal: !!fb.querySelector('.fb-refusal'),
+          focusables: fb.querySelectorAll('button, [tabindex]:not([tabindex="-1"])').length,
+          focusInside: fb.contains(document.activeElement),
+          crumbs: crumbs().length
+        }
+      })()`)
+      // Where the OS would not let us build the denial, `locked` just lists empty — the browser
+      // must still be navigable, which is the same claim one state over.
+      const refusalNavOk =
+        refusalNav.reached && // the arrows really did land on `locked`, or this proves nothing
+        (fx.deniedCreated
+          ? refusalNav.hasRefusal && refusalNav.focusables > 0 && refusalNav.focusInside
+          : refusalNav.focusables > 0)
+
       // ── (g) the hidden toggle reveals the dotfolder ───────────────────────────
       await ES(`window.__mogging.templates.openWizard({ cwd: ${R} })`)
       await sleep(900)
@@ -322,9 +390,15 @@ export function runFolderPickSmoke(win: BrowserWindow): void {
         lookingNotChoosingOk &&
         partialTypeKeepsBrowserOk &&
         refuseLaunchOk &&
+        filterFocusOk &&
+        refusalNavOk &&
         sotPrefill.agree
       result = {
         pass,
+        filterFocusOk,
+        filterKeys,
+        refusalNavOk,
+        refusalNav,
         lookingNotChoosingOk,
         fresh,
         partialTypeKeepsBrowserOk,

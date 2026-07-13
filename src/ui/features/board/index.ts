@@ -1,6 +1,5 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
 import {
-  AgentChannels,
   BoardChannels,
   GitChannels,
   IntegrationsChannels,
@@ -16,16 +15,33 @@ import {
   type ServiceLink
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
+import { createAsyncGuard } from '../../core/async/async-state'
 import { activeView, onViewChange, setActiveView } from '../../core/shell/view-port'
 import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
 import { openWizard } from '../../core/workspace/wizard-port'
 import { getWorkspaces, requestWorkspaceSwitch } from '../../core/workspace/workspace-info-port'
 import { onAttentionChange, paneState } from '../../core/attention/attention-port'
 import { onPaneAgentSession } from '../../core/agents/agent-session-port'
+import { paneInstance } from '../../core/terminal/pane-instance-port'
 import { getPaneCwd, onPaneCwd } from '../../core/layout/pane-cwd'
 import { setCommands } from '../../core/commands/command-port'
-import { Button, CountBadge, EmptyState, confirmDialog, createModal, el, icon, showToast } from '../../components'
+import { shortcutsBlocked } from '../../core/commands/context'
+import { isModKey } from '../../core/commands/shortcuts'
+import {
+  Button,
+  CountBadge,
+  EmptyState,
+  closeContextMenu,
+  confirmDialog,
+  createModal,
+  el,
+  icon,
+  openContextMenu,
+  showToast,
+  type ContextMenuEntry
+} from '../../components'
 import { initApprovals, isBranchApproved, onApprovalsChange } from './approvals-store'
+import { onAgentRegistryChange } from '../../core/agents/registry'
 
 /**
  * Local Kanban board (Phase-3/05): "what should the fleet do next" as a surface whose
@@ -131,13 +147,53 @@ export const boardFeature: UiFeature = {
       m.setFooter(el('div', { class: 'confirm-actions' }, [Button({ label: 'Cancel', variant: 'ghost', onClick: () => m.close() }), saveBtn]))
       m.open()
     }
+    // The board mutates optimistically — the card moves on screen before the write lands, which
+    // is the right feel and was, until now, a lie: `void invoke(...)` with no catch meant a
+    // REJECTED write left the card exactly where the user dropped it, in a board that silently
+    // disagreed with the database and would keep disagreeing until the next reload (finding 39).
+    //
+    // The rollback re-reads `board:list` rather than restoring a snapshot. A snapshot taken here
+    // is already too late — callers mutate the card in place (moveCard sets card.lane) BEFORE
+    // calling save — and a snapshot taken at every call site would be a guess about what the
+    // database thinks. Asking it is not a guess.
+    const saveGuard = createAsyncGuard<void>()
+    const removeGuard = createAsyncGuard<void>()
+    const reconcile = async (): Promise<void> => {
+      await load()
+      render()
+    }
     const save = (card: BoardCard): void => {
       card.updatedAt = Date.now()
-      void bridge.invoke(BoardChannels.save, card)
+      void saveGuard.run(() => bridge.invoke(BoardChannels.save, card) as Promise<void>, {
+        action: 'save the card',
+        onError: (message) => {
+          showToast({ tone: 'danger', title: 'That change was not saved', body: message })
+          void reconcile() // put the board back to what is actually stored
+        }
+      })
     }
     const removeCard = (id: string): void => {
       cards = cards.filter((c) => c.id !== id)
-      void bridge.invoke(BoardChannels.remove, id)
+      render()
+      void removeGuard.run(() => bridge.invoke(BoardChannels.remove, id) as Promise<void>, {
+        action: 'delete the card',
+        onError: (message) => {
+          showToast({ tone: 'danger', title: 'The card was not deleted', body: message })
+          void reconcile() // the card is still there — show that, rather than pretending
+        }
+      })
+    }
+    /**
+     * Move a card between lanes — the board's central verb, and until now reachable ONLY by
+     * dragging (finding 31). Drag is a mouse-only gesture: a keyboard user could create a card,
+     * launch an agent on it, link a PR and delete it, but could not move it from "Doing" to
+     * "Review". This is the ONE mutation, and BOTH doors — the lane's drop handler and the ⋯
+     * menu's "Move to …" items — call it, so the two paths cannot drift apart.
+     */
+    const moveCard = (card: BoardCard, lane: BoardLane): void => {
+      if (card.lane === lane) return
+      card.lane = lane
+      save(card)
       render()
     }
 
@@ -213,6 +269,7 @@ export const boardFeature: UiFeature = {
       })
       if (!opened) return false
       const paneId = opened.ordinal * 100 + 1
+      const targetInstance = paneInstance(paneId as PaneId)
       card.paneId = paneId
       card.workspaceId = opened.id
       card.lane = card.lane === 'todo' ? 'doing' : card.lane
@@ -229,16 +286,38 @@ export const boardFeature: UiFeature = {
       //
       // The daemon now says when an agent actually appears in the pane's process subtree
       // (typed-launch detection), so wait for THAT and hand the task to something listening.
-      // The fallback still fires: an agent we cannot detect must not silently lose its task.
+      // Detection failure must fail CLOSED. Card text is arbitrary user prose; typing it into
+      // a pane whose agent never appeared turns that prose into shell input. Keep the failed
+      // pane visible for diagnosis and tell the user the task was NOT sent.
       const prompt = `${card.title}\n\n${card.notes}`.trim().replace(/\r/g, '')
       let handed = false
       let offSession: (() => void) | undefined
       let fallback: ReturnType<typeof setTimeout> | undefined
-      const hand = (): void => {
-        if (handed) return
-        handed = true
+      let settle: ReturnType<typeof setTimeout> | undefined
+      const stillBound = (): boolean => {
+        const current = cards.find((c) => c.id === cardId)
+        return (
+          targetInstance !== undefined &&
+          paneInstance(paneId as PaneId) === targetInstance &&
+          current?.paneId === paneId &&
+          current.workspaceId === opened.id
+        )
+      }
+      const cleanup = (): void => {
         offSession?.()
+        offSession = undefined
         if (fallback) clearTimeout(fallback)
+        fallback = undefined
+        if (settle) clearTimeout(settle)
+        settle = undefined
+      }
+      const hand = (): void => {
+        if (handed || !stillBound()) {
+          cleanup()
+          return
+        }
+        handed = true
+        cleanup()
         bridge.send(TerminalChannels.write, { id: paneId as PaneId, data: prompt + '\r' })
       }
       offSession = onPaneAgentSession((id, session) => {
@@ -247,9 +326,33 @@ export const boardFeature: UiFeature = {
         // still booting. Only `running` (the backend saw the process in the pane's PTY subtree)
         // means there is something on the other end of the keyboard.
         if (id !== (paneId as PaneId) || !session?.running) return
-        setTimeout(hand, 800) // it is up; give it a beat to paint a prompt to type into
+        // Positive readiness arrived inside the bounded window. Retire the failure
+        // deadline now; the short settle beat belongs to the successful handoff and
+        // may legitimately finish just after the nine-second startup budget.
+        if (fallback) clearTimeout(fallback)
+        fallback = undefined
+        if (settle) clearTimeout(settle)
+        settle = setTimeout(hand, 800) // it is up; give it a beat to paint a prompt to type into
       })
-      fallback = setTimeout(hand, 9000)
+      fallback = setTimeout(() => {
+        if (handed) return
+        const bound = stillBound()
+        cleanup()
+        if (!bound) return
+        showToast({
+          tone: 'danger',
+          title: 'Agent did not start',
+          body: 'The task was not sent. Open the pane to inspect the CLI error, then retry from the card.',
+          timeout: 0,
+          action: {
+            label: 'Open pane',
+            onClick: () => {
+              requestWorkspaceSwitch(opened.id)
+              setActiveView('grid')
+            }
+          }
+        })
+      }, 9000)
       return true
     }
 
@@ -290,37 +393,152 @@ export const boardFeature: UiFeature = {
       ])
     }
 
+    // ── the card ⋯ menu ───────────────────────────────────────────────────────
+    /**
+     * Finding 31. The ⋯ was a hand-rolled `div.menu` toggled by `.hidden`: no role=menu, no
+     * menuitems, no keydown handler at all — no arrows, no Escape, no focus management, no focus
+     * return — and a trigger with no aria-haspopup/expanded. It closed on one document-level
+     * outside click and nothing else. Every verb the board exists for (start an agent, link a PR,
+     * edit, delete) lived behind that mouse-only door.
+     *
+     * It is also a PURE COMMAND LIST — which is precisely what the house context menu (11/06)
+     * already is. So it PORTS onto that primitive instead of growing a second, worse one:
+     * role=menu/menuitem, roving focus, Home/End/typeahead, Escape, focus return on every exit
+     * path, viewport clamping, single-instance. All of it, for free, and none of it ours to
+     * maintain twice. The old menu's document-level `pointerdown` listener — the one render()
+     * orphaned on every push (finding 37b) — is DELETED with it; the primitive removes its own
+     * on every close.
+     */
+    /** Which card's menu is up, and the ⋯ it hangs from. null whenever no board menu is open. */
+    let openMenu: { cardId: string; trigger: HTMLElement } | null = null
+    /**
+     * The ⋯ whose OWN pointerdown just dismissed its menu. The primitive's outside-close listens
+     * in CAPTURE on document, so it fires on the way DOWN — a beat before the `click` that same
+     * gesture produces. Without this note, that click would re-open the menu its own pointerdown
+     * had just closed, and ⋯ would stutter instead of toggle. Time-boxed: an abandoned press
+     * (pointer down on ⋯, then away, no click) must not swallow a later keyboard Enter on it.
+     */
+    let dismissed: { cardId: string; at: number } | null = null
+    document.addEventListener(
+      'pointerdown',
+      (e) => {
+        // Registered ONCE, at mount — and therefore BEFORE any menu's own outside-close, since
+        // registration order decides among capture listeners on the same node. That ordering is
+        // the entire point: this is the last moment at which the menu about to be closed is still
+        // observably open. (Mount-scoped, not per-render: it cannot accumulate.)
+        const trigger = e.target instanceof Element ? e.target.closest<HTMLElement>('.board-card-more') : null
+        const cardId = trigger?.closest<HTMLElement>('.board-card')?.dataset.cardId ?? null
+        dismissed = cardId && cardId === openMenu?.cardId ? { cardId, at: performance.now() } : null
+      },
+      true
+    )
+
+    /** The card's verbs, in frequency order: start an agent (the board's whole point), move it,
+     *  link/manage, edit + navigate, and the destructive Delete LAST. */
+    function cardMenuItems(card: BoardCard): ContextMenuEntry[] {
+      const items: ContextMenuEntry[] = []
+      const linked = linksByCard.get(card.id)
+      for (const a of roster.filter((r) => r.installed)) {
+        items.push({ label: `Start ${a.name} on this…`, icon: 'sparkles', onSelect: () => void startOnCard(card.id, a.id) })
+      }
+      if (items.length) items.push({ separator: true })
+      // Finding 31: the keyboard's road out of drag-and-drop. LANES is a fixed constant — there is
+      // no ordering within a lane to reproduce, only "which lane" — so one item per OTHER lane is
+      // the whole feature, and moveCard() is the same mutation the drop handler performs.
+      for (const lane of LANES) {
+        if (lane.id === card.lane) continue
+        items.push({ label: `Move to ${lane.label}`, icon: 'arrow-right', onSelect: () => moveCard(card, lane.id) })
+      }
+      items.push({ separator: true })
+      items.push({
+        label: linked ? 'Change GitHub link…' : 'Link GitHub PR/issue…',
+        icon: 'git-branch',
+        onSelect: () => linkCard(card)
+      })
+      if (linked) {
+        items.push({ label: 'Refresh link', icon: 'rotate-cw', onSelect: () => void bridge.invoke(IntegrationsChannels.linkRefresh, linked.id) })
+        items.push({
+          label: 'Unlink',
+          icon: 'x',
+          onSelect: () => void bridge.invoke(IntegrationsChannels.linkRemove, linked.id).then(() => load())
+        })
+      }
+      items.push({ label: 'Edit…', icon: 'pencil', onSelect: () => edit(card, card.lane) })
+      if (card.paneId && card.workspaceId) {
+        items.push({
+          label: 'Go to pane',
+          icon: 'terminal',
+          onSelect: () => {
+            requestWorkspaceSwitch(card.workspaceId as string)
+            setActiveView('grid')
+          }
+        })
+      }
+      items.push({ separator: true })
+      // Bug #7: a destructive act gets a confirm, safe action focused (07b danger pattern).
+      items.push({
+        label: 'Delete card',
+        icon: 'trash',
+        onSelect: () => {
+          void confirmDialog({
+            title: `Delete “${card.title || 'card'}”?`,
+            message: 'This removes the card from the board. A bound pane, if any, keeps running.',
+            confirmLabel: 'Delete card',
+            danger: true
+          }).then((ok) => {
+            if (ok) removeCard(card.id)
+          })
+        }
+      })
+      return items
+    }
+
+    function showCardMenu(card: BoardCard, trigger: HTMLElement): void {
+      const r = trigger.getBoundingClientRect()
+      openContextMenu({
+        items: cardMenuItems(card),
+        // Hangs down-left from the ⋯ (200 is .ctx-menu's min-width). The primitive clamps the
+        // result into the viewport itself, which is what keeps the lane's own overflow scroller
+        // from clipping the menu — the 8.5/07 fix, now inherited rather than hand-rolled.
+        x: r.right - 200,
+        y: r.bottom + 4,
+        returnFocus: trigger,
+        ariaLabel: `Actions for ${card.title || 'card'}`
+      })
+      // AFTER, never before: openContextMenu() evicts whatever menu was already up (it is
+      // single-instance), and that eviction returns focus to the OLD trigger — whose focus handler
+      // clears `openMenu`. Claim the slot first and that eviction would wipe the claim we just
+      // made, leaving an open menu the board believes is closed.
+      openMenu = { cardId: card.id, trigger }
+      trigger.setAttribute('aria-expanded', 'true')
+    }
+
     function cardEl(card: BoardCard): HTMLElement {
-      const menu = el('div', { class: 'menu board-card-menu', hidden: true })
-      function closeMenu(): void {
-        menu.hidden = true
-        document.removeEventListener('pointerdown', onAway, true)
-      }
-      function onAway(e: PointerEvent): void {
-        if (!menu.contains(e.target as Node) && !menuBtn.contains(e.target as Node)) closeMenu()
-      }
       const menuBtn = el(
         'button',
         {
           class: 'icon-btn board-card-more',
-          attrs: { type: 'button', 'aria-label': 'Card menu' },
+          // aria-haspopup tells AT this button OPENS something rather than doing something;
+          // aria-expanded says whether it is open right now. The old ⋯ announced neither.
+          attrs: { type: 'button', 'aria-label': 'Card menu', 'aria-haspopup': 'menu', 'aria-expanded': 'false' },
           onClick: (e) => {
             e.stopPropagation()
-            if (!menu.hidden) return closeMenu()
-            buildMenu()
-            menu.hidden = false
-            // Position FIXED at the button, clamped into the viewport, so the lane's own
-            // overflow scroller can no longer clip the menu (the audit's ⋯ complaint).
-            const r = menuBtn.getBoundingClientRect()
-            const mw = menu.offsetWidth || 200
-            const mh = menu.offsetHeight || 240
-            menu.style.left = `${Math.max(8, Math.min(r.right - mw, window.innerWidth - mw - 8))}px`
-            menu.style.top = `${Math.max(8, Math.min(r.bottom + 4, window.innerHeight - mh - 8))}px`
-            document.addEventListener('pointerdown', onAway, true)
+            const swallow = dismissed?.cardId === card.id && performance.now() - dismissed.at < 500
+            dismissed = null
+            if (swallow) return // this click's own pointerdown already closed it: ⋯ toggles
+            showCardMenu(card, menuBtn)
           }
         },
         [icon('more', 14)]
       )
+      // The primitive returns focus HERE on every exit path (Escape, outside click, picking an
+      // item), and opening the menu always moved focus off this button — so focus landing back on
+      // it means "the menu is gone". That is the close hook ContextMenuHandle does not expose, and
+      // it is what keeps aria-expanded from lying to a screen reader.
+      menuBtn.addEventListener('focus', () => {
+        if (openMenu?.trigger === menuBtn) openMenu = null
+        menuBtn.setAttribute('aria-expanded', 'false')
+      })
       const host = el(
         'article',
         { class: 'board-card', attrs: { draggable: 'true', 'data-card-id': card.id } },
@@ -330,59 +548,10 @@ export const boardFeature: UiFeature = {
             menuBtn
           ]),
           ...(card.notes.trim() ? [el('p', { class: 'board-card-notes', text: card.notes })] : []),
-          el('div', { class: 'board-card-foot' }, [cardStateChip(card), approvedChip(card), serviceLinkChip(card)]),
-          menu
+          el('div', { class: 'board-card-foot' }, [cardStateChip(card), approvedChip(card), serviceLinkChip(card)])
         ]
       )
       if (card.paneId && paneState(card.paneId as PaneId) === 'attention') host.dataset.attention = 'true'
-
-      function buildMenu(): void {
-        menu.replaceChildren()
-        const item = (label: string, run: () => void): HTMLElement =>
-          el('button', {
-            class: 'menu-item',
-            attrs: { type: 'button' },
-            text: label,
-            onClick: (e) => {
-              e.stopPropagation()
-              closeMenu()
-              run()
-            }
-          })
-        // Ordered by frequency: start an agent (the board's whole point) first, link/manage
-        // next, edit + navigate, and the destructive Delete LAST.
-        const linked = linksByCard.get(card.id)
-        for (const a of roster.filter((r) => r.installed)) {
-          menu.append(item(`Start ${a.name} on this…`, () => void startOnCard(card.id, a.id)))
-        }
-        menu.append(item(linked ? 'Change GitHub link…' : 'Link GitHub PR/issue…', () => linkCard(card)))
-        if (linked) {
-          menu.append(item('Refresh link', () => void bridge.invoke(IntegrationsChannels.linkRefresh, linked.id)))
-          menu.append(item('Unlink', () => void bridge.invoke(IntegrationsChannels.linkRemove, linked.id).then(() => load())))
-        }
-        menu.append(item('Edit…', () => edit(card, card.lane)))
-        if (card.paneId && card.workspaceId) {
-          menu.append(
-            item('Go to pane', () => {
-              requestWorkspaceSwitch(card.workspaceId as string)
-              setActiveView('grid')
-            })
-          )
-        }
-        // Bug #7: a destructive act gets a confirm, safe action focused (07b danger pattern).
-        menu.append(
-          item('Delete card', () => {
-            void confirmDialog({
-              title: `Delete “${card.title || 'card'}”?`,
-              message: 'This removes the card from the board. A bound pane, if any, keeps running.',
-              confirmLabel: 'Delete card',
-              danger: true
-            }).then((ok) => {
-              if (ok) removeCard(card.id)
-            })
-          })
-        )
-      }
 
       host.addEventListener('dragstart', (e) => {
         e.dataTransfer?.setData('text/mogging-card', card.id)
@@ -393,7 +562,103 @@ export const boardFeature: UiFeature = {
       return host
     }
 
+    /**
+     * WHAT A FULL REBUILD DESTROYS — and why render() has to put it back (finding 37a).
+     *
+     * render() is a teardown: replaceChildren() and build the whole board again. It runs on every
+     * EXTERNAL push — a GitHub link status, an attention change, an approval, a pane's cwd going
+     * away, the agent roster reloading — none of which the user asked for and any of which can
+     * land mid-gesture. `.board-lane-cards` is a scroll container, so each of those pushes used to
+     * slam every lane back to scrollTop 0, and whatever inside the board had focus (a ⋯ button, a
+     * "needs you" chip, + Add card) was thrown out with the node holding it. A board that scrolls
+     * itself to the top and drops your caret every few seconds is unusable by keyboard and merely
+     * infuriating with a mouse.
+     *
+     * This is capture-and-restore, NOT reconciliation: record where the user is (which card, which
+     * control, how far each lane is scrolled), rebuild, put them back — and no-op silently when the
+     * target is gone (the card was deleted, the chip changed state). Honest minimum. A keyed diff
+     * would be a great deal more machinery for the same promise, and one more thing to get wrong.
+     */
+    /** The board's focusable controls, each with the scope that identifies WHICH one. */
+    const FOCUSABLE = [
+      { key: 'more', sel: '.board-card-more', scope: 'card' },
+      { key: 'attention', sel: '.board-chip-attention', scope: 'card' },
+      { key: 'add', sel: '.board-add', scope: 'lane' },
+      { key: 'empty-add', sel: '.empty-state button', scope: 'lane' }
+    ] as const
+    type FocusMark = { key: string; cardId: string | null; lane: string | null }
+
+    function captureFocus(): FocusMark | null {
+      const a = document.activeElement
+      if (!(a instanceof HTMLElement) || !root.contains(a)) return null
+      for (const f of FOCUSABLE) {
+        const hit = a.closest<HTMLElement>(f.sel)
+        if (!hit) continue
+        return {
+          key: f.key,
+          cardId: hit.closest<HTMLElement>('.board-card')?.dataset.cardId ?? null,
+          lane: hit.closest<HTMLElement>('.board-lane')?.dataset.lane ?? null
+        }
+      }
+      return null
+    }
+
+    function restoreFocus(mark: FocusMark | null): void {
+      if (!mark) return
+      const f = FOCUSABLE.find((x) => x.key === mark.key)
+      if (!f) return
+      // Re-find by IDENTITY, not by position: a card that moved lanes keeps its id, so its ⋯ is
+      // still its ⋯. A card that was deleted resolves to nothing, and we take focus nowhere —
+      // yanking the caret to some neighbour is worse than leaving it where the browser put it.
+      const scope =
+        f.scope === 'card' && mark.cardId
+          ? root.querySelector<HTMLElement>(`.board-card[data-card-id="${CSS.escape(mark.cardId)}"]`)
+          : mark.lane
+            ? root.querySelector<HTMLElement>(`.board-lane[data-lane="${CSS.escape(mark.lane)}"]`)
+            : null
+      // preventScroll is LOAD-BEARING, not a nicety. focus() scrolls its element into view by
+      // default, and the control we are restoring lives inside `.board-lane-cards` — the very
+      // scroller restoreScroll() has just put back. Without this, repairing the focus would undo
+      // the scroll repair a line above it: refocus a ⋯ near the top of a lane the user had scrolled
+      // down, and the lane snaps back up. The user never moved focus; the browser must not scroll.
+      scope?.querySelector<HTMLElement>(f.sel)?.focus({ preventScroll: true })
+    }
+
+    /** scrollTop per lane, keyed by data-lane — the identity that survives a rebuild. */
+    function captureScroll(): Map<string, number> {
+      const tops = new Map<string, number>()
+      for (const list of root.querySelectorAll<HTMLElement>('.board-lane-cards')) {
+        const lane = list.closest<HTMLElement>('.board-lane')?.dataset.lane
+        if (lane) tops.set(lane, list.scrollTop)
+      }
+      return tops
+    }
+
+    function restoreScroll(tops: Map<string, number>): void {
+      for (const list of root.querySelectorAll<HTMLElement>('.board-lane-cards')) {
+        const lane = list.closest<HTMLElement>('.board-lane')?.dataset.lane
+        const top = lane ? tops.get(lane) : undefined
+        // The browser clamps for us: a lane that lost cards simply lands at its new bottom.
+        if (top) list.scrollTop = top
+      }
+    }
+
     function render(): void {
+      // A menu anchored to a card we are about to destroy has to go FIRST. The primitive hands
+      // focus back to that card's ⋯ while it is still in the DOM — which is exactly what
+      // captureFocus() wants to find a line later — and it removes its own document-level
+      // pointerdown listener on the way out. Skip this and the menu outlives the board it belongs
+      // to: floating over a rebuilt lane, anchored to a detached button, its listener orphaned
+      // until the next click anywhere (finding 37b).
+      if (openMenu) {
+        closeContextMenu()
+        // Belt AND braces. The trigger's focus handler normally clears this, but only if the
+        // trigger was still attached to take focus back. Leave a stale entry here and the NEXT
+        // render would close a menu that is not ours — the explorer's, say.
+        openMenu = null
+      }
+      const focusMark = captureFocus()
+      const scrollTops = captureScroll()
       root.replaceChildren()
       const head = el('div', { class: 'board-head' }, [
         el('h1', { class: 'board-title', text: 'Board' }),
@@ -447,15 +712,16 @@ export const boardFeature: UiFeature = {
           laneEl.classList.remove('drop')
           const id = e.dataTransfer?.getData('text/mogging-card')
           const card = id ? cards.find((c) => c.id === id) : null
-          if (card && card.lane !== lane.id) {
-            card.lane = lane.id
-            save(card)
-            render()
-          }
+          if (card) moveCard(card, lane.id) // the SAME mutation the ⋯ menu's "Move to …" runs
         })
         lanesEl.append(laneEl)
       }
       root.append(head, lanesEl)
+      // Both restores run against the LIVE tree (setting scrollTop on a detached node is a no-op),
+      // and scroll goes first: focusing a control inside a lane must not fight a scroll that is
+      // about to move it.
+      restoreScroll(scrollTops)
+      restoreFocus(focusMark)
     }
 
     // ── live card state: the SAME ports the rail glanceability uses ──────────
@@ -492,14 +758,25 @@ export const boardFeature: UiFeature = {
       }
     ])
     window.addEventListener('keydown', (e) => {
-      if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyG') {
+      // Finding 29. A global shortcut that fires while a modal is up, or while the caret is in a
+      // text field, is a keystroke stolen from the user: type a G into a card title with Ctrl (or
+      // ⌘) still down and the whole Board would vanish from under the modal you were typing into.
+      // The `stopPropagation()` calls scattered through the app's inputs never stopped this,
+      // because the app's shortcut layer listens in CAPTURE — the event is ours before the input
+      // ever sees it. The guard is the only thing that can say no.
+      if (shortcutsBlocked(e.target)) return
+      // Finding 28. `e.ctrlKey` alone left this shortcut DEAD on macOS, where the platform modifier
+      // is ⌘ and ctrlKey is false. isModKey is the one true test — spelled out longhand, this idiom
+      // drifts (the Browser dock had the identical bug).
+      if (isModKey(e) && e.shiftKey && !e.altKey && e.code === 'KeyG') {
         e.preventDefault()
         setActiveView(activeView() === 'board' ? 'grid' : 'board')
       }
     })
 
-    void (bridge.invoke(AgentChannels.detect) as Promise<AgentInfo[]>).then((r) => {
-      roster = r ?? []
+    onAgentRegistryChange((agents) => {
+      roster = [...agents]
+      if (activeView() === 'board') render()
     })
     void load()
 

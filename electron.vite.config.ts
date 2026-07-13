@@ -38,7 +38,25 @@ const copyMcpCatalog = {
   }
 }
 
-export default defineConfig({
+// The main entry is chosen by COMMAND, and that is the whole of audit finding 41's fix.
+//
+//   command === 'build'  →  src/main/index.ts       production: boot.ts and nothing else
+//   command === 'serve'  →  src/main/index.dev.ts   dev/test:   boot.ts PLUS the smoke harness
+//
+// `npm run dev` (electron-vite dev — what every gate in scripts/qa-smokes.sh runs) is `serve`;
+// `npm run build` and `npm run dist*` are `build`, and electron-builder packages what `build`
+// produced. So the ~100 harness modules, the SMOKE_ENV allowlist and the MOGGING_<GATE> dispatcher
+// are simply not in the shipped module graph — while dev keeps every gate it ever had.
+//
+// Code-splitting was NOT an option: electron-builder.yml globs `out/main/**/*` into app.asar, so
+// rollup's chunks would have shipped anyway, and the trigger strings + dispatcher would still have
+// sat in index.js (they are what DECIDES whether to import a chunk). Only leaving the harness out
+// of the entry's graph removes it. scripts/check-prod-artifact.mjs builds this entry and fails on
+// any harness symbol or gate trigger string that reaches the bundle.
+//
+// Both keep the rollup input KEY `index`, so both emit out/main/index.js and nothing downstream
+// (package.json `main`, electron-builder's files globs) changes.
+export default defineConfig(({ command }) => ({
   main: {
     resolve: { alias },
     plugins: [externalizeDepsPlugin(), copyMcpCatalog],
@@ -49,7 +67,7 @@ export default defineConfig({
       sourcemap: true, // uploaded to Sentry on release so crash stacks de-minify (ADR 0005)
       rollupOptions: {
         input: {
-          index: resolve(__dirname, 'src/main/index.ts'),
+          index: resolve(__dirname, command === 'build' ? 'src/main/index.ts' : 'src/main/index.dev.ts'),
           daemon: resolve(__dirname, 'src/pty-daemon/index.ts')
         }
       }
@@ -65,4 +83,4 @@ export default defineConfig({
     root: resolve(__dirname, 'src/renderer'),
     build: { sourcemap: true, rollupOptions: { input: { index: resolve(__dirname, 'src/renderer/index.html') } } }
   }
-})
+}))

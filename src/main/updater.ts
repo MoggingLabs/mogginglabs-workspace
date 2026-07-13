@@ -5,6 +5,7 @@ import { autoUpdater } from 'electron-updater'
 import { UpdateChannels, UPDATE_PREFS_DEFAULT, type UpdatePrefs, type UpdateState } from '@contracts'
 import { getTelemetry } from '@backend'
 import { getSettingsStore } from './app-settings'
+import { updateDriver } from './fixture-port'
 
 // App-wiring: auto-update via electron-updater against the signed GitHub Releases feed
 // (electron-builder.yml `publish`). Runs ONLY in a packaged build — never in dev/smokes. It
@@ -88,8 +89,21 @@ function createUpdaterLog(): UpdaterLog {
 export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
   getWin = winGetter
 
-  const feedLive = app.isPackaged && !process.env.MOGGING_FAKE_UPDATE
-  last = { phase: 'idle', currentVersion: app.getVersion(), supported: feedLive }
+  const fake = process.env.MOGGING_FAKE_UPDATE
+  // The FAILING feed (the UPDATEFAIL gate) is INSTALLED by the dev entry, not read from the
+  // environment. It used to be `process.env.MOGGING_UPDATEFAIL`, right here, in a module that
+  // ships — so a signed install carried an environment variable that could make its own updater
+  // report a dead feed (audit finding 41). Null in production, always: src/main/fixture-port.ts.
+  //
+  // MOGGING_FAKE_UPDATE above STAYS. It is not harness — it is the documented safety valve that
+  // drives the real renderer flow with no network, and the artifact gate allows it by name.
+  const driveFailure = updateDriver()
+  const feedLive = app.isPackaged && !fake && !driveFailure
+  last = {
+    phase: 'idle',
+    currentVersion: app.getVersion(),
+    supported: feedLive || !!fake || !!driveFailure
+  }
 
   ipcMain.handle(UpdateChannels.stateGet, (): UpdateState => last)
   ipcMain.handle(UpdateChannels.prefsGet, (): UpdatePrefs => readPrefs())
@@ -121,12 +135,15 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
   // The rail row's retry after a failed check. Idempotent — the updater coalesces a check
   // that is already in flight.
   ipcMain.handle(UpdateChannels.check, () => {
-    if (!app.isPackaged || process.env.MOGGING_FAKE_UPDATE) return
+    if (driveFailure) {
+      driveFailure(push)
+      return
+    }
+    if (!app.isPackaged || fake) return
     void autoUpdater.checkForUpdates()
   })
 
   // Dev/smoke driver: replay the whole lifecycle to the renderer, no network.
-  const fake = process.env.MOGGING_FAKE_UPDATE
   if (fake) {
     // Wait for the window's first paint so the renderer's listener is attached.
     const run = (): void => {
@@ -147,6 +164,14 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
       }, 1200)
     }
     const win = winGetter()
+    if (win && !win.webContents.isLoading()) setTimeout(run, 1500)
+    else win?.webContents.once('did-finish-load', () => setTimeout(run, 1500))
+    return
+  }
+
+  if (driveFailure) {
+    const win = winGetter()
+    const run = (): void => driveFailure(push)
     if (win && !win.webContents.isLoading()) setTimeout(run, 1500)
     else win?.webContents.once('did-finish-load', () => setTimeout(run, 1500))
     return

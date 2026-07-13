@@ -9,8 +9,10 @@ import {
   type GitStatus,
   type AgentState,
   type PaneId,
-  type RemoveWorktreeResult
+  type RemoveWorktreeResult,
+  type WorktreeInfo
 } from '@contracts'
+import { REMOTE_READY_OSC } from '@contracts'
 import '@xterm/xterm/css/xterm.css'
 import {
   Button,
@@ -26,7 +28,8 @@ import { terminalClient } from './terminal.client'
 import { onTerminalTheme } from '../../core/theme/theme-port'
 import { onTerminalFontSize, terminalFontSize, TERMINAL_LINE_HEIGHT } from '../../core/terminal/font-port'
 import { windowsPtyFor } from '../../core/terminal/pty-emulation'
-import { forgetPane, markPaneLive, markPaneReattached } from '../../core/terminal/liveness-port'
+import { registerPaneInstance, retirePaneInstance } from '../../core/terminal/pane-instance-port'
+import { forgetPane, markPaneLive, markPaneReattached, markPaneRemoteReady } from '../../core/terminal/liveness-port'
 import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
 import { setPaneState, adoptPaneState, clearPaneState, paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
 import { setPaneCwd, clearPaneCwd, getPaneCwd } from '../../core/layout/pane-cwd'
@@ -40,6 +43,7 @@ import {
 } from '../../core/agents/mcp-status-port'
 import { getPaneContext, onPaneContext, type PaneContext } from '../../core/terminal/context-port'
 import { clearPaneAgentSession, getPaneAgentSession, onPaneAgentSession } from '../../core/agents/agent-session-port'
+import { assignmentForPane, workspaceIdForPane } from '../../core/workspace/workspace-info-port'
 import { claimsFor, onClaimsChange, setClaimsForDev, workspaceClaims } from './claims-store'
 import { createPaneAnchor, type PaneAnchorHandle } from './pane-anchor'
 import { createPaneScrollbar, type PaneScrollbarHandle } from './pane-scrollbar'
@@ -99,6 +103,7 @@ const REFIT_SETTLE_MS = 120
 
 /** A single xterm pane bound to a backend PTY of the same id. */
 export class TerminalPane {
+  private readonly instance: number
   private readonly term: Terminal
   private readonly fit = new FitAddon()
   private readonly serializer = new SerializeAddon()
@@ -118,6 +123,8 @@ export class TerminalPane {
   private themeUnsub?: () => void
   private fontUnsub?: () => void
   private liveMarked = false
+  private remoteReadyProbe = ''
+  private remoteReadyMarked = false
   private paneLabelUnsub?: () => void
   private paneGitUnsub?: () => void
   private focusUnsub?: () => void
@@ -130,6 +137,7 @@ export class TerminalPane {
   private scrollbar?: PaneScrollbarHandle
   private anchor?: PaneAnchorHandle
   private osc133?: { dispose(): void }
+  private remoteReadyOsc?: { dispose(): void }
   private stateDot?: HTMLSpanElement
   private syncState?: (adopted?: boolean) => void
   private dotGateUnsub?: () => void
@@ -157,6 +165,7 @@ export class TerminalPane {
     private readonly id: PaneId,
     host: HTMLElement
   ) {
+    this.instance = registerPaneInstance(this.id)
     this.term = new Terminal({
       fontFamily:
         '"JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace',
@@ -177,6 +186,9 @@ export class TerminalPane {
     // body. Static DOM — every update below is event-driven, nothing per-frame.
     const body = this.mountChrome(host)
     this.term.open(body)
+    this.retireXtermScrollbar() // its viewport exists now — see the method
+
+
 
     // WebGL is the wedge — GPU rendering that stays smooth under many streaming agents. But the
     // browser caps live WebGL contexts (~16 per page in Chromium), which is exactly our largest
@@ -245,12 +257,37 @@ export class TerminalPane {
 
     this.mountFileDrop(body)
 
+    // Let xterm's incremental parser recognize the private readiness OSC too.
+    // The raw-stream probe below covers the pre-paint fast path; this handler
+    // covers arbitrary PTY chunk boundaries using the terminal parser itself.
+    this.remoteReadyOsc = this.term.parser.registerOscHandler(777, (data) => {
+      if (data !== 'mogging-remote-ready') return false
+      if (!this.remoteReadyMarked) {
+        this.remoteReadyMarked = true
+        this.remoteReadyProbe = ''
+        markPaneRemoteReady(this.id)
+      }
+      return true
+    })
+
     // Detached on dispose (clientUnsubs) and guarded on `disposed`: pane ids are reused,
     // and a listener that outlived its pane wrote every byte of the SUCCESSOR pane's
     // stream into a disposed xterm — for the rest of the session.
     this.clientUnsubs.push(
       terminalClient.onData((e) => {
         if (e.id === this.id && !this.disposed) {
+          if (!this.remoteReadyMarked) {
+            const probe = this.remoteReadyProbe + e.data
+            if (probe.includes(REMOTE_READY_OSC)) {
+              this.remoteReadyMarked = true
+              this.remoteReadyProbe = ''
+              markPaneRemoteReady(this.id)
+            } else {
+              // OSC sequences are ordinary PTY bytes and may be split at any
+              // boundary. Preserve only the possible marker prefix.
+              this.remoteReadyProbe = probe.slice(-(REMOTE_READY_OSC.length - 1))
+            }
+          }
           if (!this.liveMarked) {
             this.liveMarked = true
             markPaneLive(this.id) // first PTY output — lineup launches may proceed
@@ -305,7 +342,10 @@ export class TerminalPane {
         cwd,
         cols: this.term.cols,
         rows: this.term.rows,
-        remoteHostId: remote?.hostId
+        workspaceId: workspaceIdForPane(this.id),
+        agentId: assignmentForPane(this.id),
+        remoteHostId: remote?.hostId,
+        remoteCwd: remote?.cwd
       })
       .then((res) => {
         // The pty told us how it grows. Apply BEFORE any output or resize: xterm re-reads
@@ -401,6 +441,59 @@ export class TerminalPane {
     })
 
     this.exposeForDev(host)
+  }
+
+  /**
+   * Retire xterm 6's OWN scrollbar — in JS, not just in CSS.
+   *
+   * xterm 6 replaced its viewport with a VS-Code-derived ScrollableElement that owns a real
+   * scrollbar, and that bar does work on EVERY scroll event in EVERY pane: it reveals itself,
+   * arms a 500 ms auto-hide timer (a clearTimeout + a setTimeout, every time), and re-renders
+   * its slider (setTop/setHeight). This app retired that bar the day it shipped its own overlay
+   * slider (pane-scrollbar.ts is "the single scroll affordance") — but only the PIXELS were
+   * retired: global.css sets `.xterm-scrollable-element > .scrollbar` to display:none, and the
+   * machinery kept running underneath, on the hottest path the product has — terminal output.
+   *
+   * MEASURED (MILESTONE, renderer CPU profile, 2026-07-13): during a 16-pane output torrent
+   * this was 46% of the entire xterm write path — 97 ms of one 208 ms frame spent revealing,
+   * hiding and re-sliding a scrollbar that is display:none. It is why a 16-pane grid froze for
+   * a fifth of a second the moment every agent started talking at once: xterm's WriteBuffer
+   * yields only every 12 ms, so sixteen buffers each doing twice the work they needed to pile
+   * up back-to-back and starve the frame. Retiring it halves the cost of every byte a pane
+   * prints, so it is both the long-frame fix and a systemic one.
+   *
+   * The scroll path is ONE line inside the ScrollableElement, and it separates cleanly:
+   *
+   *   scrollable.onScroll(e => { this._onWillScroll.fire(e); this._onDidScroll(e); this._onScroll.fire(e) })
+   *                                                          ^^^^^^^^^^^^^^^^^^^^^  the SCROLLBAR
+   *                                                                                 (reveal, auto-hide
+   *                                                                                 timer, slider render)
+   *
+   * `_onDidScroll` drives the bar and NOTHING else. The scrolled CONTENT is driven by the two
+   * `fire()` calls around it — that is what xterm's own viewport, our slider (pane-scrollbar) and
+   * our anchor (pane-anchor) all subscribe to, and they are untouched. So retiring the bar is
+   * exactly this: make `_onDidScroll` a no-op, and every wheel, drag, keypress and PTY write
+   * still scrolls precisely as before. The bar's DOM nodes stay in the tree, still display:none
+   * (FLICKER asserts exactly that), and hover still reveals it for anyone who un-hides it.
+   *
+   * Belt and braces, in the order they degrade: the public `setRevealOnScroll(false)` alone kills
+   * the timer churn (the larger half) even if the private name below ever moves. Everything is
+   * guarded and a miss simply leaves the bar as it ships — the fallback is the performance we
+   * have today, never a broken pane.
+   */
+  private retireXtermScrollbar(): void {
+    try {
+      const core = (this.term as unknown as { _core?: unknown })._core
+      const viewport = (core as { _viewport?: unknown } | undefined)?._viewport
+      const bar = (viewport as { _scrollableElement?: unknown } | undefined)?._scrollableElement as
+        | { setRevealOnScroll?: (on: boolean) => void; _onDidScroll?: (e: unknown) => void }
+        | undefined
+      if (!bar) return
+      if (typeof bar.setRevealOnScroll === 'function') bar.setRevealOnScroll(false)
+      if (typeof bar._onDidScroll === 'function') bar._onDidScroll = (): void => undefined
+    } catch {
+      /* xterm moved its internals: keep its bar and its cost — never a broken pane */
+    }
   }
 
   /** Schedule a WebGL attach: a short visibility debounce (rapid workspace churn skips
@@ -639,6 +732,41 @@ export class TerminalPane {
         void this.pasteFromClipboard().catch(() => undefined)
       }
       return false
+    }
+
+    // SCROLLBACK — the whole keyboard contract, in one place, because half of it was MISSING and
+    // the other half was not ours. xterm's own key table (common/input/Keyboard.ts) answers only
+    // two of the four: Shift+PageUp/PageDown become KeyboardResultType.PAGE_UP/PAGE_DOWN and
+    // scroll by rows-1. Shift+Home and Shift+End are not scroll keys to it at all — they fall
+    // into the CURSOR-key cases (keyCode 36/35 with a modifier) and are typed at the SHELL as
+    // ESC[1;2H / ESC[1;2F. So the two ENDS of the history were unreachable without a mouse (the
+    // slide bar is a pointer scrub by construction, and the jump pill is a click), and every
+    // press of them leaked an escape sequence into whatever agent CLI held the pane.
+    //
+    // Owning all four here makes them ONE behavior — the one every terminal already trains
+    // people on (GNOME Terminal, Konsole, Windows Terminal, iTerm2, VS Code): page through
+    // history, and jump to its ends. scrollPages(∓1) is the same rows-1 page xterm itself would
+    // have scrolled, so nothing about the two that worked changes. Consumed (preventDefault +
+    // `false`), so the shell sees none of them — and so the helper textarea's own Shift+Home
+    // "select to line start" default action cannot fight the scroll.
+    //
+    // The ANCHOR (pane-anchor.ts) needs no change: its capture-phase keydown listener on the
+    // pane body sees this same event BEFORE xterm hands it to us, and it already watches exactly
+    // this key set. So a Shift+PageUp opens its gesture window — it yields the viewport to us for
+    // the length of it, then reads where we came to REST: off the bottom, so it stops following
+    // the output and the jump pill appears. Shift+End is the one that must not merely land at the
+    // bottom but RE-ARM the follow, and only the app can know that: it calls the very `stick()`
+    // the jump pill calls, so "put me back on the stream" is one behavior with two doors.
+    if (e.shiftKey && !ctrl && !cmd && !e.altKey) {
+      if (k === 'pageup' || k === 'pagedown' || k === 'home' || k === 'end') {
+        e.preventDefault()
+        if (k === 'pageup') this.term.scrollPages(-1)
+        else if (k === 'pagedown') this.term.scrollPages(1)
+        else if (k === 'home') this.term.scrollToTop()
+        else if (this.anchor) this.anchor.stick()
+        else this.term.scrollToBottom() // no anchor (impossible after mount): still land at the newest line
+        return false
+      }
     }
 
     // Alt+Up / Alt+Down: jump between command blocks (02).
@@ -1646,8 +1774,33 @@ export class TerminalPane {
     if (wtMatch) {
       const repo = wtMatch[1]
       const remove = (force: boolean): void => {
-        void (getBridge().invoke(WorktreeChannels.remove, { repo, path: cwd, force }) as Promise<RemoveWorktreeResult>).then(
-          (res) => {
+        void (async () => {
+          if (!force) {
+            const list = (await getBridge().invoke(WorktreeChannels.list, repo)) as WorktreeInfo[]
+            const norm = (value: string): string =>
+              (navigator.platform.toUpperCase().includes('WIN') ? value.toLowerCase() : value)
+                .replaceAll('\\', '/')
+                .replace(/\/+$/, '')
+            if (list.find((entry) => norm(entry.path) === norm(cwd))?.dirty) {
+              showToast({
+                tone: 'danger',
+                title: 'Worktree has uncommitted changes',
+                body: 'Removing it destroys that work.',
+                timeout: 10000,
+                action: { label: 'Remove anyway', onClick: () => remove(true) }
+              })
+              return
+            }
+          }
+          const res = await new Promise<RemoveWorktreeResult>((resolve) => {
+            eventHost.dispatchEvent(
+              new CustomEvent('mogging:remove-worktree', {
+                bubbles: true,
+                detail: { paneId: this.id, repo, path: cwd, force, resolve }
+              })
+            )
+          })
+          {
             if (res.ok) {
               showToast({ tone: 'success', title: 'Worktree removed', body: 'Its branch is kept for review.' })
             } else if (res.reason === 'dirty') {
@@ -1659,10 +1812,12 @@ export class TerminalPane {
                 action: { label: 'Remove anyway', onClick: () => remove(true) }
               })
             } else {
-              showToast({ tone: 'danger', title: 'Could not remove worktree' })
+              showToast({ tone: 'danger', title: 'Could not remove worktree', body: res.error })
             }
           }
-        )
+        })().catch((error) => {
+          showToast({ tone: 'danger', title: 'Could not inspect or remove worktree', body: String(error) })
+        })
       }
       menu.append(
         separator(),
@@ -1873,6 +2028,7 @@ export class TerminalPane {
 
   dispose(): void {
     this.disposed = true
+    retirePaneInstance(this.id, this.instance)
     // Detach from the terminal channels FIRST: from here on, events for this id belong
     // to whichever pane next takes it — never to this dead xterm.
     for (const unsub of this.clientUnsubs) unsub()
@@ -1905,6 +2061,7 @@ export class TerminalPane {
     this.scrollbar?.dispose()
     this.anchor?.dispose()
     this.osc133?.dispose()
+    this.remoteReadyOsc?.dispose()
     clearPaneCli(this.id)
     // Launch-scoped identity dies with the pane, not with the id: a killed pane's exit
     // never reaches the renderer (the relay tombstones it), so without these the NEXT

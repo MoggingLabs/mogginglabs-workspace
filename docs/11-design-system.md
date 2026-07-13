@@ -319,11 +319,16 @@ open. This step closed all three and the decision.
   `3 · 6 · 10 · 14 · 999`. CHROMEUX (f) grep-asserts no un-tokened radius remains in the
   titlebar/rail/pane chrome. (Browser-dock + shortcuts radii are 08b's.)
 - **The right cluster's order is declared in one place.** `titlebar.ts`'s single
-  `cluster.append(titlebarLeft, titlebarRight, Home, Board, rail-toggle, Settings)` IS
-  the canonical left→right order — previously it was incidental feature-registration
-  order, and `feature-registry.ts` mis-documented `titlebarLeft` as "after the brand." It
-  is in fact the LEADING feature slot *inside* `.titlebar-right` (the brand cell holds
-  only logo/name/version). Both are corrected; nothing renders differently.
+  `cluster.append(titlebarLeft, titlebarRight, Board, Settings, titlebarEnd)` IS the
+  canonical left→right order — previously it was incidental feature-registration order,
+  and `feature-registry.ts` mis-documented `titlebarLeft` as "after the brand." It is in
+  fact the LEADING feature slot *inside* `.titlebar-right` (the brand cell holds only
+  logo/name/version). Two things are NOT in this cluster, and neither is an oversight:
+  there is **no Home button** (Home is the boot launcher and the zero-workspace empty
+  state, never a destination — see Full-app views below), and the **rail toggle** leads
+  `.titlebar-lead` at the far left, over the rail it collapses, which is exactly why
+  `titlebarEnd` (11/03) closes the right cluster for the explorer's toggle: a toggle
+  belongs over the thing it opens. Both docs are corrected; nothing renders differently.
 - **The macOS traffic-light inset is a token, not a magic literal.**
   `--traffic-light-inset: 84px` (the darwin brand's left padding) is coupled by comment
   to `main/window.ts`'s `trafficLightPosition: { x: 14 }` — the darwin twin of the
@@ -424,8 +429,15 @@ re-warm must not hitch).
   rail up, because you configure the next workspace alongside the ones you have.
   Esc / Cancel `goBack()`. Real dialogs (review, card editor, confirms) stay modals.
 - With zero workspaces, any road to the grid lands **Home** instead (the empty grid
-  was a dead end — audit UX-16). The titlebar Home/Board/gear trio shows the active
-  view (`.icon-btn.is-active`).
+  was a dead end — audit UX-16) — **and the converse is enforced too**: with a workspace
+  in existence, any road to Home lands on the **grid** (`view-port.ts`). Home and the
+  grid are two halves of one invariant, and the workspace count decides which is right.
+  So Home is the launcher and the zero-workspace empty state, **never a destination** —
+  there is no Home button, no shortcut, no command, by design. Its two contents (recents,
+  presets) are fully carried by the wizard, which is reachable at any time (Ctrl+T); a
+  permanent Home entry would only re-open the dead end UX-16 closed. The titlebar
+  Board/gear **pair** shows the active view (`.icon-btn.is-active`); HOMEUX (g) asserts
+  both halves — the grid lands, and no Home affordance exists in the titlebar.
 - Full-bleed rebalance: board lanes/head cap at `min(1440px, 100%)` centered; home
   sections widen to `min(1180px, 92%)`.
 
@@ -539,7 +551,7 @@ icon-sheet shots at 100/125/150% zoom (`__mogging.iconSheet()`, DEV-only).
 | Icon | Surfaces | Decision (5/03) |
 |---|---|---|
 | `kanban` | titlebar Board | **redrawn** → framed board with three columns (was three floating lines — unreadable) |
-| `home` | titlebar Home | **redrawn** → modern house w/ door (crisper silhouette) |
+| `home` | palette group glyph (App) | **redrawn** → modern house w/ door (crisper silhouette). The titlebar Home button it was drawn for is **gone** (Home is not a destination — see Full-app views); the name survives on the one surface that still means "the app itself" |
 | `sliders` | titlebar Settings | **new metaphor** (two knobs) replacing the intricate gear — weight-matched to the line family at 16px; `settings` name deleted |
 | `panel-left` | titlebar rail toggle | keep (standard sidebar toggle) |
 | `expand` / `expand-h` / `expand-v` | pane actions | **new metaphors**: outward diagonal arrows / ↔ / ↕ with arrowheads — the old chevron pairs read as *collapse*; `maximize`, `chevrons-*` deleted |

@@ -7,9 +7,19 @@ export interface SpawnRequest {
   cwd: string
   cols: number
   rows: number
+  /** Trusted renderer context for least-privilege pane environment materialization.
+   *  Missing/unknown values fail closed: no workspace-scoped secrets are injected. */
+  workspaceId?: string
+  /** The slot's assigned agent provider. Plain/unassigned shells receive no service keys. */
+  agentId?: string
   /** Remote pane (4/05): host id — MAIN resolves the row; values stay main-side. */
   remoteHostId?: string
+  /** Working directory on the remote host; never probed as a local path. */
+  remoteCwd?: string
 }
+
+/** Private OSC emitted by the SSH bootstrap only after remote command execution starts. */
+export const REMOTE_READY_OSC = '\x1b]777;mogging-remote-ready\x07'
 /**
  * How the pty backing a pane behaves when its viewport grows. ConPTY appends empty rows at the
  * bottom and leaves scrollback alone; a unix pty pulls scrollback back down. xterm must be told

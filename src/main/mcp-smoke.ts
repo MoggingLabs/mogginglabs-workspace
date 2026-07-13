@@ -1,12 +1,13 @@
 import { app, type BrowserWindow } from 'electron'
 import { createServer, type Server } from 'node:http'
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { DAEMON_PROTOCOL_VERSION } from '@contracts'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { setAgentConsent } from './browser-dock'
 import { mcpEndpointDebug } from './mcp-endpoint'
+import { spawnPaneMcpSmokeClient, type PaneMcpSmokeClient } from './pane-mcp-smoke-client'
 
 // Env-gated house-MCP-server smoke (MOGGING_MCP, Phase-8/02): the ONE server,
 // both upstreams, catalog-as-data. Fixture world (daemon + app endpoint up,
@@ -53,53 +54,8 @@ export function runMcpSmoke(win: BrowserWindow): void {
       )
     })
 
-  /** Spawn the REAL server as a child and speak JSON-RPC to it over stdio. */
-  const mcpClient = (
-    extraEnv: Record<string, string> = {}
-  ): { rpc: (method: string, params?: unknown) => Promise<Rpc>; kill: () => void } => {
-    const child: ChildProcessWithoutNullStreams = spawn(
-      process.execPath,
-      [join(root, 'bin', 'mogging-mcp.mjs')],
-      { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ...extraEnv }, windowsHide: true }
-    ) as ChildProcessWithoutNullStreams
-    let out = ''
-    let id = 0
-    const waiters = new Map<number, (v: Rpc) => void>()
-    child.stdout.setEncoding('utf8')
-    child.stderr.setEncoding('utf8')
-    child.stderr.on('data', (c: string) => frames.push(c)) // stderr greps too
-    child.stdout.on('data', (chunk: string) => {
-      out += chunk
-      let i
-      while ((i = out.indexOf('\n')) >= 0) {
-        const line = out.slice(0, i)
-        out = out.slice(i + 1)
-        if (!line.trim()) continue
-        frames.push(line)
-        try {
-          const m = JSON.parse(line) as { id?: number } & Rpc
-          if (typeof m.id === 'number' && waiters.has(m.id)) {
-            waiters.get(m.id)!({ result: m.result, error: m.error })
-            waiters.delete(m.id)
-          }
-        } catch {
-          /* ignore non-JSON */
-        }
-      }
-    })
-    return {
-      rpc: (method, params) =>
-        new Promise((resolve) => {
-          const rid = ++id
-          waiters.set(rid, resolve)
-          child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: rid, method, params }) + '\n')
-        }),
-      kill: () => child.kill()
-    }
-  }
-
   const callTool = async (
-    c: ReturnType<typeof mcpClient>,
+    c: PaneMcpSmokeClient,
     name: string,
     args: Record<string, unknown> = {}
   ): Promise<{ text: string; isError: boolean; rpcError: string | null }> => {
@@ -123,16 +79,26 @@ export function runMcpSmoke(win: BrowserWindow): void {
 
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
-    const clients: ReturnType<typeof mcpClient>[] = []
+    const clients: PaneMcpSmokeClient[] = []
     try {
       await sleep(1500)
 
-      // ── Fixture world: 2 shell panes, planted scrollback/mail/claim/card ──
-      await ES(`window.__mogging.templates.open([{provider:'shell',count:2}])`)
+      // ── Fixture world: 4 shell panes, planted scrollback/mail/claim/card ──
+      // FOUR, not two, and the reason is the identity path itself. The MCP server now proves
+      // WHICH pane it is with the daemon-minted MOGGING_PANE_TOKEN, which exists nowhere but
+      // inside that pane — so a pane-bound session is a REAL process launched in a REAL pane
+      // (spawnPaneMcpSmokeClient types it there). That process then HOLDS the pane's foreground
+      // for as long as the session is open: a second `mogging send` into the same pane hands its
+      // bytes to the running bridge's stdin, the shell never sees a command, and the second
+      // session simply never connects. One live pane-bound session per pane. The three sessions
+      // below are three panes; pane2 stays free as the write/mail TARGET.
+      await ES(`window.__mogging.templates.open([{provider:'shell',count:4}])`)
       await sleep(3000)
       const base = ((await ES('window.__mogging.workspace.active()')) as { ordinal: number }).ordinal * 100
       const pane1 = String(base + 1)
       const pane2 = String(base + 2)
+      const pane3 = String(base + 3) // the daemon-less session (c2)
+      const pane4 = String(base + 4) // the app-less session (c3)
       await cli(['send', pane1, 'echo MCP_CAPTURE_4242'])
       await cli(['mail', 'send', '--to', pane1, 'MCP_MAIL_4242'], { MOGGING_PANE_ID: pane2 })
       await cli(['claim', 'src/mcp/**'], { MOGGING_PANE_ID: pane1 })
@@ -149,7 +115,12 @@ export function runMcpSmoke(win: BrowserWindow): void {
       const catalogBytesOk = contractsCatalog === binCatalog
 
       // ── Session 1: the real path (both upstreams in ONE session) ──────────
-      const c1 = mcpClient({ MOGGING_PANE_ID: pane1 })
+      const c1 = await spawnPaneMcpSmokeClient({
+        cli,
+        paneId: pane1,
+        mcpPath: join(root, 'bin', 'mogging-mcp.mjs'),
+        onFrame: (frame) => frames.push(frame)
+      })
       clients.push(c1)
       const init = (await c1.rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {} })).result as {
         serverInfo?: { name?: string }
@@ -224,7 +195,13 @@ export function runMcpSmoke(win: BrowserWindow): void {
 
       // ── Independent degradation: no daemon -> control names the fix, browser
       //    still works (one session, before AND after the control failure) ────
-      const c2 = mcpClient({ MOGGING_PANE_ID: pane1, MOGGING_DAEMON_ENDPOINT: join(root, 'out', 'absent-daemon.json') })
+      const c2 = await spawnPaneMcpSmokeClient({
+        cli,
+        paneId: pane3,
+        mcpPath: join(root, 'bin', 'mogging-mcp.mjs'),
+        childEnv: { MOGGING_DAEMON_ENDPOINT: join(root, 'out', 'absent-daemon.json') },
+        onFrame: (frame) => frames.push(frame)
+      })
       clients.push(c2)
       await c2.rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {} })
       const c2snap1 = await callTool(c2, 'browser_snapshot')
@@ -236,7 +213,13 @@ export function runMcpSmoke(win: BrowserWindow): void {
         !c2snap2.isError && !c2snap2.rpcError
 
       // ── ...and the reverse: no app -> browser errors, control still works ──
-      const c3 = mcpClient({ MOGGING_PANE_ID: pane1, MOGGING_BROWSER_ENDPOINT: join(root, 'out', 'absent-app.json') })
+      const c3 = await spawnPaneMcpSmokeClient({
+        cli,
+        paneId: pane4,
+        mcpPath: join(root, 'bin', 'mogging-mcp.mjs'),
+        childEnv: { MOGGING_BROWSER_ENDPOINT: join(root, 'out', 'absent-app.json') },
+        onFrame: (frame) => frames.push(frame)
+      })
       clients.push(c3)
       await c3.rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {} })
       const c3snap = await callTool(c3, 'browser_snapshot')

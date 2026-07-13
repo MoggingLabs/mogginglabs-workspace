@@ -1,10 +1,11 @@
 import { app, BrowserWindow } from 'electron'
 import { createServer, type Server } from 'node:http'
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type BrowserAgentResult, type BrowserAgentVerb } from '@contracts'
-import { agentAct, agentStop, agentControlDebug, setAgentConsent } from './browser-dock'
+import { agentAct, agentControlDebug, setAgentConsent } from './browser-dock'
+import { spawnPaneMcpSmokeClient } from './pane-mcp-smoke-client'
 
 // Env-gated agent-browser-control smoke (MOGGING_BROWSERCTL, Phase-6/05b):
 //   1. consent OFF -> every verb refuses with reason 'disabled'
@@ -53,48 +54,33 @@ export function runBrowserCtlSmoke(win: BrowserWindow): void {
 
   const act = (v: BrowserAgentVerb): Promise<BrowserAgentResult> => agentAct(v)
 
-  // A minimal MCP client over stdio: spawn the real server (bin/mogging-mcp.mjs
-  // via Electron-as-Node) and speak JSON-RPC to it, exactly as an agent CLI
-  // would. This proves the tools are reachable VIA MCP, end to end.
-  const mcpClient = (): {
+  const cli = (args: string[]): Promise<{ code: number; stdout: string; stderr: string }> =>
+    new Promise((resolve) => {
+      execFile(
+        process.execPath,
+        [join(app.getAppPath(), 'bin', 'mogging.mjs'), ...args],
+        { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, timeout: 15000, windowsHide: true },
+        (error, stdout, stderr) => resolve({ code: error ? 1 : 0, stdout: String(stdout), stderr: String(stderr) })
+      )
+    })
+
+  // The official MCP server is launched inside the pane so its app connection
+  // is bound by the real daemon-issued pane capability.
+  const mcpClient = async (paneId: string): Promise<{
     rpc: (method: string, params?: unknown) => Promise<Record<string, unknown>>
     kill: () => void
-  } => {
-    const child: ChildProcessWithoutNullStreams = spawn(
-      process.execPath,
-      [join(app.getAppPath(), 'bin', 'mogging-mcp.mjs')],
-      { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true }
-    ) as ChildProcessWithoutNullStreams
-    let out = ''
-    let id = 0
-    const waiters = new Map<number, (v: Record<string, unknown>) => void>()
-    child.stdout.setEncoding('utf8')
-    child.stdout.on('data', (chunk: string) => {
-      out += chunk
-      let i
-      while ((i = out.indexOf('\n')) >= 0) {
-        const line = out.slice(0, i)
-        out = out.slice(i + 1)
-        if (!line.trim()) continue
-        try {
-          const m = JSON.parse(line) as { id?: number; result?: Record<string, unknown> }
-          if (typeof m.id === 'number' && waiters.has(m.id)) {
-            waiters.get(m.id)!(m.result ?? {})
-            waiters.delete(m.id)
-          }
-        } catch {
-          /* ignore non-JSON */
-        }
-      }
+  }> => {
+    const child = await spawnPaneMcpSmokeClient({
+      cli,
+      paneId,
+      mcpPath: join(app.getAppPath(), 'bin', 'mogging-mcp.mjs')
     })
     return {
-      rpc: (method, params) =>
-        new Promise((resolve) => {
-          const rid = ++id
-          waiters.set(rid, resolve)
-          child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: rid, method, params }) + '\n')
-        }),
-      kill: () => child.kill()
+      rpc: async (method, params) => {
+        const response = await child.rpc(method, params)
+        return response.error ? { error: response.error } : (response.result ?? {})
+      },
+      kill: child.kill
     }
   }
 
@@ -106,6 +92,7 @@ export function runBrowserCtlSmoke(win: BrowserWindow): void {
       // Open the dock so the view exists (agent verbs create it lazily too).
       await ES(`window.__mogging.workspace.create({ name: 'Web' })`)
       await sleep(1500)
+      const paneId = String(((await ES<{ ordinal: number }>('window.__mogging.workspace.active()')).ordinal * 100) + 1)
       await ES('window.__mogging.browser.toggle(true)')
       await sleep(500)
 
@@ -143,12 +130,45 @@ export function runBrowserCtlSmoke(win: BrowserWindow): void {
       const con = await act({ verb: 'console', n: 50 })
       const sawError = (con.lines ?? []).some((l) => l.includes('PLANTED_ERR_4242'))
 
-      // ── 3. Stop mid-sequence, then revoke consent ────────────────────────
-      agentStop()
-      const afterStopDriving = agentControlDebug().driving // Stop drops the latch immediately
-      setAgentConsent(false)
+      // ── 3. A real long operation owns possession until Stop. The global
+      // indicator remains visible with the dock closed in both Board and
+      // Settings. Exercise the human-facing global Stop button, not the main
+      // process helper directly.
+      await ES(`window.__mogging.browser.toggle(false)`)
+      const longWait = act({ verb: 'wait_for', target: '#never-arrives', n: 10000 })
+      await sleep(500)
+      const duringWaitDriving = agentControlDebug().driving
+      await ES(`window.__mogging.view('board')`)
+      await sleep(150)
+      const boardPossessionVisible = await ES<boolean>(`(() => {
+        const el = document.querySelector('.browser-global-possession')
+        return !!el && !el.hidden && el.getBoundingClientRect().height > 0
+      })()`)
+      await ES(`window.__mogging.view('settings')`)
+      await sleep(150)
+      const settingsPossessionVisible = await ES<boolean>(`(() => {
+        const el = document.querySelector('.browser-global-possession')
+        return !!el && !el.hidden && el.getBoundingClientRect().height > 0
+      })()`)
+      const globalStopClicked = await ES<boolean>(`(() => {
+        const button = document.querySelector('.browser-global-stop')
+        if (!(button instanceof HTMLButtonElement) || button.hidden || button.disabled) return false
+        button.click()
+        return true
+      })()`)
+      const stoppedWait = await longWait
+      await sleep(150)
+      const afterStopDriving = agentControlDebug().driving
+      const globalHiddenAfterStop = await ES<boolean>(`(() => {
+        const el = document.querySelector('.browser-global-possession')
+        return !!el && el.hidden
+      })()`)
       const afterRevoke = await act({ verb: 'snapshot' })
-      const revokeOk = afterStopDriving === false && afterRevoke.reason === 'disabled'
+      const revokeOk =
+        duringWaitDriving && boardPossessionVisible && settingsPossessionVisible &&
+        globalStopClicked && globalHiddenAfterStop &&
+        stoppedWait.reason === 'stopped' && afterStopDriving === false &&
+        afterRevoke.reason === 'disabled'
 
       // ── 4. Trail carries verb names + refs only, NEVER content ───────────
       const trail = agentControlDebug().trail
@@ -163,7 +183,7 @@ export function runBrowserCtlSmoke(win: BrowserWindow): void {
       // ── 5. END TO END VIA MCP: an agent CLI's path, exactly ──────────────
       // Spawn the real MCP server, handshake, list tools, then drive the dock
       // through tools/call — consent OFF refuses, consent ON works.
-      const mcp = mcpClient()
+      const mcp = await mcpClient(paneId)
       let mcpOk = false
       let mcpToolsOk = false
       let mcpRefusesOff = false
@@ -206,6 +226,12 @@ export function runBrowserCtlSmoke(win: BrowserWindow): void {
         evalSeen,
         sawError,
         revokeOk,
+        duringWaitDriving,
+        boardPossessionVisible,
+        settingsPossessionVisible,
+        globalStopClicked,
+        globalHiddenAfterStop,
+        stoppedWait,
         trailClean,
         trailLen: trail.length,
         mcpToolsOk,

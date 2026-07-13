@@ -24,6 +24,9 @@ import {
 import { detectAgents } from '@backend/features/agents'
 import { execFile } from 'node:child_process'
 import { getSettingsStore } from './app-settings'
+import { maybeFault } from './fault-port'
+import { authRunnerAuditCapabilities, interceptAuthRunnerConnect } from './authrunner-audit-faults'
+import { consumeServerRegisterFailure } from './secretform-audit-faults'
 import { serviceKeyClear, serviceKeyNames, serviceKeySet } from './service-keys'
 import {
   IntegrationsChannels,
@@ -312,7 +315,8 @@ export function catConnect(
   for (const entry of prep.entries) saveServer(store, entry)
   const results = clis.map((cli) => {
     const cap = capabilityFor(cli)
-    const blocked = cap ? presetBlockedFor(preset, cap) : 'unknown CLI'
+    const selectedAuth = opts.authKind && preset.authKinds.includes(opts.authKind) ? opts.authKind : preset.authKinds[0]
+    const blocked = cap ? presetBlockedFor(preset, cap, selectedAuth) : 'unknown CLI'
     if (blocked) return { cli, ok: false, reason: blocked }
     // Continue on error: stopping at the first failing row left the EARLIER rows
     // written into this CLI's config while the card called the whole thing off.
@@ -381,6 +385,11 @@ export function catAuthStatus(serverId: string, cli: HostedCliId): Promise<strin
 export function registerMcpManager(): void {
   ipcMain.handle(IntegrationsChannels.serversList, () => listServers())
   ipcMain.handle(IntegrationsChannels.serversSave, (_e, raw: unknown) => {
+    // The audit seam (finding 35). saveServer never touches the vault — which is exactly why
+    // a register that refuses AFTER the add-server form vaulted its env literals leaves them
+    // ORPHANED. The gate fails the register right here to prove the form rolls them back.
+    // Inert (a null check) unless the SECRETFORMS gate armed it.
+    if (consumeServerRegisterFailure()) return { ok: false, reason: 'injected register failure' }
     const store = kv()
     return store ? saveServer(store, raw) : { ok: false, reason: 'store not ready' }
   })
@@ -409,16 +418,33 @@ export function registerMcpManager(): void {
 
   // ── The catalog (8/07) ─────────────────────────────────────────────────────
   ipcMain.handle(IntegrationsChannels.catList, () => ({ presets: MCP_PRESETS, custom: customPresets() }))
-  ipcMain.handle(IntegrationsChannels.catCapabilities, () => CLI_CAPABILITIES)
-  ipcMain.handle(IntegrationsChannels.catPrepare, (_e, p: { presetId: string; baseUrl?: string; authKind?: McpAuthKind }) => {
+  ipcMain.handle(IntegrationsChannels.catCapabilities, () => authRunnerAuditCapabilities(CLI_CAPABILITIES))
+  ipcMain.handle(IntegrationsChannels.catPrepare, async (_e, p: { presetId: string; baseUrl?: string; authKind?: McpAuthKind }) => {
+    // Finding 39's seam: the Preview button's ONE read. It disabled itself on click and re-enabled
+    // on the line AFTER the await — reject this and the button was stranded disabled forever, so
+    // the gate must be able to fail the same handler the panel really calls.
+    await maybeFault(IntegrationsChannels.catPrepare)
     const preset = findAnyPreset(String(p?.presetId))
     if (!preset) return { ok: false, reason: 'unknown preset' }
     return presetToServerEntries(preset, { baseUrl: p?.baseUrl, authKind: p?.authKind })
   })
   ipcMain.handle(
     IntegrationsChannels.catConnect,
-    (_e, p: { presetId: string; clis: HostedCliId[]; baseUrl?: string; authKind?: McpAuthKind }) =>
-      catConnect(String(p?.presetId), Array.isArray(p?.clis) ? p.clis : [], { baseUrl: p?.baseUrl, authKind: p?.authKind })
+    async (_e, p: { presetId: string; clis: HostedCliId[]; baseUrl?: string; authKind?: McpAuthKind }) => {
+      // Finding 39's seam: the same stranding on Connect, and worse — a Connect button that never
+      // comes back is an integration you cannot even retry into place.
+      await maybeFault(IntegrationsChannels.catConnect)
+      const payload = {
+        presetId: String(p?.presetId),
+        clis: Array.isArray(p?.clis) ? p.clis : [],
+        baseUrl: p?.baseUrl,
+        authKind: p?.authKind
+      }
+      return interceptAuthRunnerConnect(payload) ?? catConnect(payload.presetId, payload.clis, {
+        baseUrl: payload.baseUrl,
+        authKind: payload.authKind
+      })
+    }
   )
   ipcMain.handle(IntegrationsChannels.catRegistry, (_e, search: string) => fetchRegistry(String(search ?? '')))
   ipcMain.handle(IntegrationsChannels.catImport, (_e, json: string) => {

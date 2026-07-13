@@ -27,6 +27,12 @@ import { join } from 'node:path'
 //                 reintroduce that), plus a flash while scrolling that fades.
 //   I ENDS        the rail is full height: at the newest line the thumb sits flush on the
 //                 floor, at the oldest flush against the ceiling.
+//   K KEYBOARD    the same scrollback with no mouse at all (audit 31): Shift+PageUp/PageDown
+//                 page, Shift+Home/End reach its ends, Shift+End re-arms the anchor — and not
+//                 one of them reaches the shell (Shift+Home/End used to type ESC[1;2H/F into
+//                 the agent, because xterm reads them as cursor keys, not scroll keys). The
+//                 rail is aria-hidden decoration once the buffer is keyboard-reachable; the
+//                 jump pill, a real button, is not.
 //
 // Every step drives the SHIPPED listeners with real events at real targets (wheel on the
 // xterm viewport, pointerenter on the lane, click on the pill, keydown on the pane) —
@@ -304,7 +310,83 @@ const SCRIPT = `(async () => {
   const grid = all.map((p) => ({ id: p.id, ok: p.scroll().atBottom && !!q(p, '.pane-slider') }))
   check('J whole grid anchored + barred', grid.length === 8 && grid.every((r) => r.ok), JSON.stringify(grid))
 
-  return { pass: fail.length === 0, failures: fail, diag, cli: jRes, panes: panes.map((p) => p.scroll()) }
+  // --- K · THE KEYBOARD: the same scrollback, without a mouse --------------------------
+  // Everything above drives a POINTER. But the slide bar is a pointer scrub by construction and
+  // the jump pill is a click, so the keyboard needs its own door — and half of it was missing:
+  // xterm answers Shift+PageUp/PageDown itself, but Shift+Home/End are cursor keys to it, so the
+  // two ENDS of the history were unreachable AND every press typed ESC[1;2H / ESC[1;2F straight
+  // into the agent. The pane owns all four now (terminal-pane.ts handleKey), and they must behave
+  // exactly as the wheel does: move the real viewport, detach the anchor, and — for Shift+End —
+  // re-attach it. Real KeyboardEvents at the REAL target (xterm's helper textarea, which is where
+  // its keydown listener lives), carrying the keyCodes a real key press carries: xterm's key table
+  // switches on keyCode, so an event without one would silently exercise nothing.
+  const kp = (m.panes || [])[0]
+  const KEYS = { PageUp: 33, PageDown: 34, End: 35, Home: 36 }
+  const ta = () => q(kp, '.xterm-helper-textarea') || kp.term.textarea
+  // term.onData IS the wire to the PTY — terminal-pane.ts pipes it straight to terminalClient.write.
+  // Anything landing here is a byte the shell would have seen.
+  const sent = []
+  const wire = kp.term.onData((d) => { sent.push(d) })
+  const key = async (name, shift) => {
+    ta().dispatchEvent(new KeyboardEvent('keydown', {
+      key: name, code: name, keyCode: KEYS[name], which: KEYS[name],
+      shiftKey: !!shift, bubbles: true, cancelable: true
+    }))
+    await sleep(150)
+  }
+  await feed(kp, 400, 'KEYS')
+  await sleep(400)
+  const kBase = kp.scroll()
+  check('K starts at the bottom', kBase.atBottom && kBase.baseY > 0, JSON.stringify(kBase))
+
+  await key('PageUp', true)
+  const kUp = kp.scroll()
+  check('K Shift+PageUp scrolls up', kUp.viewportY < kBase.viewportY && !kUp.atBottom, JSON.stringify(kUp))
+  // A page is a screenful minus one line of overlap — xterm's own scrollPages(rows-1), unchanged.
+  check('K a page is a screenful', kBase.viewportY - kUp.viewportY === kp.rows() - 1,
+    'moved=' + (kBase.viewportY - kUp.viewportY) + ' rows=' + kp.rows())
+  await sleep(SETTLE_MS) // the anchor's gesture window closes and it reads where we came to rest
+  const kRested = kp.scroll()
+  check('K anchor released by the keyboard', !kRested.following && kRested.jumpShown, JSON.stringify(kRested))
+  await feed(kp, 120, 'AFTER-KEYS') // ...and the agent's next output must not yank the reader back
+  await sleep(400)
+  check('K viewport held under output', kp.scroll().viewportY === kUp.viewportY, JSON.stringify(kp.scroll()))
+
+  await key('PageDown', true)
+  check('K Shift+PageDown pages back down', kp.scroll().viewportY > kUp.viewportY, JSON.stringify(kp.scroll()))
+  await key('Home', true)
+  check('K Shift+Home reaches the oldest line', kp.scroll().viewportY === 0, JSON.stringify(kp.scroll()))
+  await key('End', true)
+  const kEnd = kp.scroll()
+  check('K Shift+End returns to the newest', kEnd.atBottom && !kEnd.jumpShown, JSON.stringify(kEnd))
+  check('K Shift+End re-arms the anchor', kEnd.following, JSON.stringify(kEnd))
+  await feed(kp, 40, 'FOLLOW') // re-armed for REAL: the next output follows on its own
+  await sleep(300)
+  check('K follows again after Shift+End', kp.scroll().atBottom, JSON.stringify(kp.scroll()))
+  wire.dispose()
+  // THE NEGATIVE: not one byte of any of that reached the shell. Before the fix, Shift+Home and
+  // Shift+End alone would have put ESC[1;2H and ESC[1;2F on this wire.
+  check('K no scroll key reached the shell', sent.length === 0, JSON.stringify(sent))
+  // ...and the positive control, on the SAME dispatch path: the pane did not simply go deaf.
+  const typed = []
+  const wire2 = kp.term.onData((d) => { typed.push(d) })
+  ta().dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'x', code: 'KeyX', keyCode: 88, which: 88, bubbles: true, cancelable: true
+  }))
+  await sleep(200)
+  wire2.dispose()
+  check('K ordinary keys still reach the shell', typed.join('') === 'x', JSON.stringify(typed))
+
+  // The rail is DECORATION now that the buffer is keyboard-reachable, and it says so — a
+  // pointer-only scrub must not sit in a screen reader's tree announcing a position it cannot act
+  // on. The JUMP PILL is the exception and stays announced: it is a real labelled button.
+  const decor = ['.pane-slider', '.pane-slider-track', '.pane-slider-thumb'].map((sel) => q(kp, sel)?.getAttribute('aria-hidden'))
+  check('K the slide bar is declared decorative', decor.every((v) => v === 'true'), JSON.stringify(decor))
+  const pill = q(kp, '.pane-jump')
+  check('K the jump pill stays announced', !!pill && !pill.hasAttribute('aria-hidden') && !!pill.getAttribute('aria-label'),
+    pill ? pill.className + ' aria-hidden=' + pill.getAttribute('aria-hidden') : 'no pill')
+
+  return { pass: fail.length === 0, failures: fail, diag, cli: jRes, keys: { sent, typed, decor }, panes: panes.map((p) => p.scroll()) }
 })()`
 
 export function runPaneScrollSmoke(win: BrowserWindow): void {

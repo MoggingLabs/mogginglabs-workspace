@@ -31,3 +31,15 @@ export interface AgentProfileDraft {
   env?: Record<string, string>
   order?: number
 }
+
+export interface ProfileRemoveResult {
+  ok: boolean
+  reason?: 'referenced' | 'missing' | 'error'
+  workspaces?: string[]
+}
+
+export interface ProfileActivateResult {
+  ok: boolean
+  name?: string
+  reason?: string
+}

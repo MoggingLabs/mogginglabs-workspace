@@ -3,6 +3,10 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { quotePathForShell, shellFlavor } from '@contracts'
+import {
+  clipboardAuditState,
+  resetClipboardReadAudit
+} from './clipboard-audit-faults'
 
 // Env-gated clipboard smoke (MOGGING_CLIPBOARD). Four things are checked, because four
 // things can independently break and each is invisible from the others:
@@ -29,6 +33,17 @@ const SCRIPT = `(async () => {
   await b.invoke('clipboard:historySet', { enabled: true })
   await b.invoke('clipboard:clear')
 
+  // Privacy: an explicitly copied secret still reaches the system clipboard, but the
+  // history ring must refuse it. Clearing history also clears that live system value.
+  const secretText = 'password=' + 'smoke-secret-5591'
+  await b.invoke('clipboard:writeEntry', { kind: 'text', text: secretText, source: 'app' })
+  await sleep(50)
+  let hist = await b.invoke('clipboard:history')
+  const sensitiveNotRetained = hist.length === 0
+  const sensitiveStillCopied = (await b.invoke('clipboard:read')) === secretText
+  await b.invoke('clipboard:clear')
+  const privacyClearWorked = (await b.invoke('clipboard:read')) === ''
+
   // 1. Write two distinct entries; newest must come first. Assertions read PREVIEW:
   //    the wire deliberately carries no full text (see toWire in main/clipboard.ts),
   //    and for short control-free strings preview === payload.
@@ -36,7 +51,7 @@ const SCRIPT = `(async () => {
   await sleep(50)
   await b.invoke('clipboard:writeEntry', { kind: 'text', text: 'SECOND_5591', source: 'app' })
   await sleep(50)
-  let hist = await b.invoke('clipboard:history')
+  hist = await b.invoke('clipboard:history')
   const ordered = hist.length === 2 && hist[0].preview === 'SECOND_5591' && hist[1].preview === 'FIRST_5591'
   const sourced = hist[1].source === 'terminal' && hist[0].source === 'app'
   const stamped = hist.every((e) => typeof e.at === 'number' && e.at > 0)
@@ -187,11 +202,13 @@ const SCRIPT = `(async () => {
   }
 
   return {
-    pass: ordered && sourced && stamped && wireStripped && liveIsSecond && restored &&
+    pass: sensitiveNotRetained && sensitiveStillCopied && privacyClearWorked &&
+          ordered && sourced && stamped && wireStripped && liveIsSecond && restored &&
           removedFromRing && systemCleared && deduped && recordingOff && dropRecorded &&
           dropDidNotClobber && imageRecorded && richIsImage && imageDeleteCleared &&
           hasFlavor && overlayReady && overlayShown && overlayTitled &&
           overlayHiddenAfterDrop && pasteOnce && pathApiLive,
+    sensitiveNotRetained, sensitiveStillCopied, privacyClearWorked,
     ordered, sourced, stamped, wireStripped, liveIsSecond, restored, removedFromRing,
     systemCleared, deduped, recordingOff, dropRecorded, dropDidNotClobber,
     imageRecorded, richIsImage, imageDeleteCleared,
@@ -497,6 +514,32 @@ export function runClipboardSmoke(win: BrowserWindow): void {
     }
     const quoting = checkQuoting()
     const cmdTrip = checkCmdRoundTrip()
+    const defaultUi = (await win.webContents.executeJavaScript(`(() => {
+      const section = document.querySelector('[data-section="clipboard"]')
+      const row = [...(section?.querySelectorAll('.toggle-row') || [])]
+        .find((el) => el.querySelector('.toggle-row-label')?.textContent?.trim() === 'Keep a history')
+      const input = row?.querySelector('input.switch-input')
+      const hint = row?.querySelector('.toggle-row-hint')?.textContent || ''
+      const empty = section?.querySelector('.clip-empty')?.textContent || ''
+      const pref = localStorage.getItem('mogging.clipboard.historyEnabled')
+      const pass = input instanceof HTMLInputElement && !input.checked && pref === '0' &&
+        hint.includes('Off by default') && hint.includes('800 ms') &&
+        hint.includes('other apps') && empty.includes('Clipboard history is off') &&
+        empty.includes('not reading')
+      return { pass, checked: input instanceof HTMLInputElement ? input.checked : null, pref, hint, empty }
+    })()`, true)) as Record<string, unknown> & { pass?: boolean }
+
+    // Direct proof of the negative promise: boot + more than one poll interval + an
+    // explicit focus event while opted out must produce no Electron clipboard reads.
+    const bootReadAudit = clipboardAuditState()
+    const bootReadsNone =
+      bootReadAudit.textReads === 0 && bootReadAudit.imageReads === 0 && bootReadAudit.formatReads === 0
+    resetClipboardReadAudit()
+    app.emit('browser-window-focus', {}, win)
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    const offReadAudit = clipboardAuditState()
+    const offReadsNone =
+      offReadAudit.textReads === 0 && offReadAudit.imageReads === 0 && offReadAudit.formatReads === 0
     let ipc: { pass?: boolean } = { pass: false }
     try {
       ipc = (await win.webContents.executeJavaScript(SCRIPT, true)) as { pass?: boolean }
@@ -505,6 +548,8 @@ export function runClipboardSmoke(win: BrowserWindow): void {
     }
     const realDrop = await probeRealFileDrop(win)
     const seq = await probeUserSequence(win)
+    const finalClipboardAudit = clipboardAuditState()
+    const sensitiveFilterObserved = finalClipboardAudit.blockedSensitiveEntries >= 1
     // `pass` LAST: the in-page script returns its own `pass`, and an earlier revision
     // spread `...ipc` after the computed field, letting the script's value overwrite
     // the aggregate — a green light that ignored the main-side probes.
@@ -513,10 +558,27 @@ export function runClipboardSmoke(win: BrowserWindow): void {
       quotingPass: quoting.pass,
       cmdRoundTrip: cmdTrip.detail,
       cmdRoundTripPass: cmdTrip.pass,
+      defaultUi,
+      bootReadAudit,
+      bootReadsNone,
+      offReadAudit,
+      offReadsNone,
+      finalClipboardAudit,
+      sensitiveFilterObserved,
       ...realDrop,
       ...seq,
       ...ipc,
-      pass: !!(quoting.pass && cmdTrip.pass && ipc.pass && realDrop.realDropOk && seq.seqPass)
+      pass: !!(
+        quoting.pass &&
+        cmdTrip.pass &&
+        defaultUi.pass &&
+        bootReadsNone &&
+        offReadsNone &&
+        sensitiveFilterObserved &&
+        ipc.pass &&
+        realDrop.realDropOk &&
+        seq.seqPass
+      )
     }
     try {
       writeFileSync(join(process.cwd(), 'out', 'clipboard-result.json'), JSON.stringify(result, null, 2))

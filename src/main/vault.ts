@@ -1,5 +1,6 @@
 import { safeStorage } from 'electron'
 import { getSettingsStore } from './app-settings'
+import { consumeVaultWriteFailure } from './secretform-audit-faults'
 
 // The OS-vault ciphertext primitive (Phase-8/08, extracted from the 7/05 key
 // store — ADR 0007.a / 0008.h). Encrypt IN, decrypt only at the point of use;
@@ -54,6 +55,12 @@ export function vaultDecrypt(cipher: string): string | null {
 // Presence-only reads for the UI (vaultHas); the plaintext is materialized ONLY
 // via vaultLoad at the point of use and never returned to a renderer.
 export function vaultStore(kvKey: string, plaintext: string): boolean {
+  // The audit seam (finding 35). This ONE write sits behind service keys, usage keys and
+  // webhook URLs, so failing it here exercises the refusal branch of three of the four
+  // secret-taking FORMS — the branch that used to clear the field before it ran. Consumed
+  // before anything is encrypted or stored: a fault must leave no half-written slot. Inert
+  // (a null check) unless the SECRETFORMS gate armed it.
+  if (consumeVaultWriteFailure()) return false
   const cipher = vaultEncrypt(plaintext)
   if (cipher === null) return false
   // No store (before registerAppSettings / after disposeAppSettings) means the ciphertext is

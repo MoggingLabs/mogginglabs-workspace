@@ -18,6 +18,12 @@ import type {
   WriteClipboardEntry
 } from '@contracts'
 import { defaultShell } from '@backend/platform/shell'
+import { redactSecrets } from '@backend/features/review'
+import {
+  consumeClipboardWriteFailure,
+  noteClipboardRead,
+  noteSensitiveClipboardEntryBlocked
+} from './clipboard-audit-faults'
 
 // System clipboard IPC. App-layer wiring: Electron's clipboard is a main-process API,
 // and @backend must stay Electron-free — so this registers directly on ipcMain rather
@@ -33,7 +39,7 @@ let seq = 0
 /** Recording, not merely display. When the user turns history off, `record` becomes a
  *  no-op here — the ring is never filled in the first place. The renderer's toggle is a
  *  mirror of this flag, not the flag itself. */
-let recording = true
+let recording = false
 
 /** Watcher cadence. Fast enough that a copy made in another app is already in the tab
  *  by the time you switch to it; slow enough that the 32x32 hash below costs nothing. */
@@ -58,7 +64,32 @@ function signatureOf(img: Electron.NativeImage): string {
 
 /** The fingerprint of whatever image is on the system clipboard right now. */
 function imageSignature(): string {
-  return signatureOf(clipboard.readImage())
+  return signatureOf(readClipboardImage())
+}
+
+function readClipboardText(): string {
+  noteClipboardRead('text')
+  return clipboard.readText()
+}
+
+function readClipboardImage(): Electron.NativeImage {
+  noteClipboardRead('image')
+  return clipboard.readImage()
+}
+
+function clipboardFormats(): string[] {
+  noteClipboardRead('formats')
+  return clipboard.availableFormats()
+}
+
+function writeClipboardText(text: string): void {
+  if (consumeClipboardWriteFailure()) throw new Error('clipboard write failed')
+  clipboard.writeText(text)
+}
+
+function writeClipboardImage(img: Electron.NativeImage): void {
+  if (consumeClipboardWriteFailure()) throw new Error('clipboard write failed')
+  clipboard.writeImage(img)
 }
 
 let lastText = ''
@@ -128,6 +159,13 @@ function record(entry: Omit<ClipboardEntry, 'id' | 'at' | 'preview'> & { preview
   if (!recording) return ''
   if (entry.bytes > CLIPBOARD_MAX_ENTRY_BYTES) return '' // copied, but too big to hold twice
   if (entry.kind === 'text' && !entry.text.trim()) return '' // whitespace-only: noise
+  // History is a convenience cache, never a password-manager shadow. A secret-shaped
+  // text copy still goes to the system clipboard (the user's requested action), but is
+  // deliberately absent from the ring and from every renderer/history event.
+  if (entry.kind === 'text' && redactSecrets(entry.text).redactions > 0) {
+    noteSensitiveClipboardEntryBlocked()
+    return ''
+  }
 
   // Re-copying an identical payload moves the existing row to the top rather than
   // growing a run of duplicates — the ring holds 100 DISTINCT things, not 100 events.
@@ -193,7 +231,7 @@ function poll(): void {
   if (!recording) return
 
   // Reading text is cheap; do it first and bail early on the common no-change path.
-  const text = clipboard.readText()
+  const text = readClipboardText()
   if (text && text !== lastText) {
     lastText = text
     // Sourced 'system': this copy happened outside the app (or in a surface that did not
@@ -210,7 +248,7 @@ function poll(): void {
   // that. So: image work only while a window of ours is focused.
   if (!BrowserWindow.getFocusedWindow()) return
 
-  const formats = clipboard.availableFormats()
+  const formats = clipboardFormats()
   if (!formats.some((f) => f.startsWith('image/'))) {
     lastImageSig = ''
     return
@@ -218,7 +256,7 @@ function poll(): void {
   const sig = imageSignature()
   if (!sig || sig === lastImageSig) return
   lastImageSig = sig
-  recordImage(clipboard.readImage(), 'system')
+  recordImage(readClipboardImage(), 'system')
 }
 
 /** Reading a FILE LIST off the system clipboard has no portable Electron API — the raw
@@ -228,24 +266,24 @@ function poll(): void {
  *  file paths from DRAG-AND-DROP, which hands us real paths on every OS. A 'files' entry
  *  therefore only ever originates from a drop. */
 function readRich(): RichClipboard {
-  const formats = clipboard.availableFormats()
+  const formats = clipboardFormats()
   if (formats.some((f) => f.startsWith('image/'))) {
-    const img = clipboard.readImage()
+    const img = readClipboardImage()
     if (!img.isEmpty()) {
-      return { kind: 'image', text: clipboard.readText(), imageDataUrl: img.toDataURL() }
+      return { kind: 'image', text: readClipboardText(), imageDataUrl: img.toDataURL() }
     }
   }
-  return { kind: 'text', text: clipboard.readText() }
+  return { kind: 'text', text: readClipboardText() }
 }
 
 export function registerClipboard(): void {
   ipcMain.handle(ClipboardChannels.write, (_e, payload: WriteClipboard) => {
     const text = payload?.text ?? ''
-    clipboard.writeText(text)
+    writeClipboardText(text)
     recordOurText(text, payload?.source ?? 'app')
   })
 
-  ipcMain.handle(ClipboardChannels.read, () => clipboard.readText())
+  ipcMain.handle(ClipboardChannels.read, () => readClipboardText())
 
   ipcMain.handle(ClipboardChannels.readRich, (): RichClipboard => readRich())
 
@@ -253,13 +291,13 @@ export function registerClipboard(): void {
     const source = payload?.source ?? 'app'
     if (payload?.kind === 'image' && payload.imageDataUrl) {
       const img = nativeImage.createFromDataURL(payload.imageDataUrl)
-      clipboard.writeImage(img)
+      writeClipboardImage(img)
       lastImageSig = signatureOf(img) // prime the watcher: this copy is ours, not the system's
       recordImage(img, source)
       return
     }
     const text = payload?.text ?? ''
-    clipboard.writeText(text)
+    writeClipboardText(text)
     recordOurText(text, source)
   })
 
@@ -288,10 +326,10 @@ export function registerClipboard(): void {
           ? nativeImage.createFromDataURL(entry.imageDataUrl)
           : undefined
       if (!img || img.isEmpty()) return
-      clipboard.writeImage(img)
+      writeClipboardImage(img)
       lastImageSig = signatureOf(img)
     } else {
-      clipboard.writeText(entry.text)
+      writeClipboardText(entry.text)
       lastText = entry.text
     }
     // Restoring re-dates the entry and floats it to the top: it IS the clipboard now.
@@ -316,7 +354,7 @@ export function registerClipboard(): void {
         clipboard.clear()
         lastImageSig = ''
       }
-    } else if (gone.text && clipboard.readText() === gone.text) {
+    } else if (gone.text && readClipboardText() === gone.text) {
       clipboard.clear()
       lastText = ''
     }
@@ -335,12 +373,12 @@ export function registerClipboard(): void {
   })
 
   ipcMain.handle(ClipboardChannels.historySet, (_e, payload: SetClipboardHistory) => {
-    const enable = payload?.enabled !== false
+    const enable = payload?.enabled === true
     if (enable && !recording) {
       // Re-arming: whatever landed on the clipboard WHILE recording was off was copied
       // under a no-remembering promise — re-prime both watermarks so the next poll
       // starts from now instead of retroactively recording it.
-      lastText = clipboard.readText()
+      lastText = readClipboardText()
       lastImageSig = imageSignature()
     }
     recording = enable
@@ -364,8 +402,6 @@ export function registerClipboard(): void {
   // Prime from whatever is already on the clipboard WITHOUT recording it: the ring
   // should start empty rather than open with a copy made before the app launched.
   // BOTH channels — an image sitting on the clipboard at launch is also "before us".
-  lastText = clipboard.readText()
-  lastImageSig = imageSignature()
   timer = setInterval(poll, POLL_MS)
   timer.unref?.()
 

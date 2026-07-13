@@ -47,9 +47,20 @@ const MIN_THUMB_PX = 24
 const ACTIVE_MS = 900
 
 export function createPaneScrollbar(term: Terminal, body: HTMLElement, anchor: PaneAnchorHandle): PaneScrollbarHandle {
+  /** Every piece of the rail — lane, track, thumb — is DECORATION, and now says so.
+   *
+   *  Each one is a pointer-only affordance by construction (a scrub IS a pointer drag), and the
+   *  thing they indicate — the scrollback — is reachable from the keyboard through the pane
+   *  itself: Shift+PageUp/PageDown/Home/End (terminal-pane.ts handleKey). Announcing them would
+   *  put a second, redundant control in the tab order for a buffer the user is already standing
+   *  in, and read them a position they cannot act on from there. The `aria-hidden` is on all
+   *  three rather than inherited from the lane, so re-parenting the track can never quietly
+   *  un-hide it. The JUMP PILL is deliberately NOT hidden: it is a real labelled button with a
+   *  real action ("follow the latest output"), and it stays in the tree for everyone. */
   const mk = (cls: string): HTMLDivElement => {
     const d = document.createElement('div')
     d.className = cls
+    d.setAttribute('aria-hidden', 'true')
     return d
   }
   const btn = (cls: string, glyph: 'chevron-up' | 'chevron-down' | 'arrow-down', label: string, size: number): HTMLButtonElement => {

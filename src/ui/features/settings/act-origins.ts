@@ -1,8 +1,9 @@
 import { IntegrationsChannels, type WorkspaceIntegrationsGrant } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { Card, SectionHeader, el } from '../../components'
+import { Card, SectionHeader, el, showToast } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onViewChange } from '../../core/shell/view-port'
+import { normalizeBrowserOrigin } from '../../core/browser-origin'
 
 /**
  * Settings § Browser — act origins (8/04), split OUT of the Integrations
@@ -18,18 +19,33 @@ export function createActOriginsCard(): HTMLElement {
   const wsSelect = el('select', { class: 'trail-select' }) as HTMLSelectElement
   wsSelect.setAttribute('aria-label', 'Workspace')
   const body = el('div', { class: 'mgr-grant-body' })
+  let renderGeneration = 0
 
   async function render(): Promise<void> {
+    const generation = ++renderGeneration
     const wsId = wsSelect.value
     body.innerHTML = ''
     if (!wsId) return
     const grant = (await bridge.invoke(IntegrationsChannels.grantGet, wsId)) as WorkspaceIntegrationsGrant
+    if (generation !== renderGeneration || wsSelect.value !== wsId) return
     body.append(el('div', { class: 'settings-row-caption', text: `Origins agents may ACT on (web tier: ${grant.web})` }))
     for (const origin of grant.actOrigins) {
       const drop = el('button', { class: 'browser-sites-forget', type: 'button', text: 'Revoke' }) as HTMLButtonElement
       drop.onclick = async (): Promise<void> => {
-        await bridge.invoke(IntegrationsChannels.grantSet, { ...grant, actOrigins: grant.actOrigins.filter((o) => o !== origin) })
-        await render()
+        drop.disabled = true
+        try {
+          await bridge.invoke(IntegrationsChannels.grantMutate, {
+            workspaceId: wsId,
+            field: 'origin',
+            op: 'remove',
+            origin
+          })
+          if (wsSelect.value === wsId) await render()
+        } catch (error) {
+          showToast({ tone: 'danger', title: 'Origin was not revoked', body: String(error) })
+        } finally {
+          if (drop.isConnected) drop.disabled = false
+        }
       }
       body.append(el('div', { class: 'browser-sites-row' }, [el('span', { class: 'browser-sites-host', text: origin }), drop]))
     }
@@ -46,17 +62,27 @@ export function createActOriginsCard(): HTMLElement {
     addBtn.onclick = async (): Promise<void> => {
       const raw = addInput.value.trim()
       if (!raw) return
-      const saved = (await bridge.invoke(IntegrationsChannels.grantSet, {
-        ...grant,
-        web: 'signed-in', // granting an origin IS opting into the signed-in tier
-        actOrigins: [...grant.actOrigins, raw]
-      })) as WorkspaceIntegrationsGrant | null
-      if (!saved || saved.actOrigins.length === grant.actOrigins.length) {
-        refusedNote.textContent = `“${raw}” was refused — sensitive origins never accept act grants.`
-        refusedNote.hidden = false
-        return
+      addBtn.disabled = true
+      try {
+        const saved = (await bridge.invoke(IntegrationsChannels.grantMutate, {
+          workspaceId: wsId,
+          field: 'origin',
+          op: 'add',
+          origin: raw
+        })) as WorkspaceIntegrationsGrant | null
+        if (wsSelect.value !== wsId) return
+        const normalized = normalizeBrowserOrigin(raw)
+        if (!saved || !normalized || !saved.actOrigins.includes(normalized)) {
+          refusedNote.textContent = `“${raw}” was refused — sensitive or invalid origins never accept act grants.`
+          refusedNote.hidden = false
+          return
+        }
+        await render()
+      } catch (error) {
+        showToast({ tone: 'danger', title: 'Origin was not granted', body: String(error) })
+      } finally {
+        if (addBtn.isConnected) addBtn.disabled = false
       }
-      await render()
     }
     body.append(el('div', { class: 'browser-sites-addrow' }, [addInput, addBtn]), refusedNote)
   }

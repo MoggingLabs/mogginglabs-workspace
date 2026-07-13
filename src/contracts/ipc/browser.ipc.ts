@@ -37,6 +37,8 @@ export function browserAgentWebPartition(workspaceId: string, persists: boolean)
 export type BrowserProfile = 'preview' | 'agent-web'
 
 export interface BrowserDockState {
+  /** Workspace whose guest produced this state; renderer drops late foreign replies. */
+  workspaceId: string
   url: string
   title: string
   canGoBack: boolean
@@ -120,6 +122,8 @@ export interface BrowserAgentResult {
 /** Possession state + verb trail pushed to the dock chrome. Carries verb NAMES
  *  and target refs ONLY — never page content, typed text, or eval bodies. */
 export interface BrowserAgentActivity {
+  /** Workspace whose possession this describes. */
+  workspaceId: string
   driving: boolean
   allowed: boolean
   trail: { verb: BrowserAgentVerbName; target?: string; at: number }[]

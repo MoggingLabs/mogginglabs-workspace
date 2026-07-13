@@ -3,6 +3,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { TrailStore } from '@backend/features/integrations'
 import { IntegrationsChannels, type TrailEntry } from '@contracts'
+import { maybeFault } from './fault-port'
 
 // The agent activity trail's ONE emission point (Phase-8/03 stub; 8/05 wires
 // the real store — FINDINGS §4.5). Every receipt/act flows through here: one
@@ -47,9 +48,12 @@ export function flushTrailForSmoke(): void {
 }
 
 export function registerTrail(): void {
-  ipcMain.handle(IntegrationsChannels.trailList, (_e, workspaceId: string) =>
-    readTrail(String(workspaceId ?? '') || undefined)
-  )
+  ipcMain.handle(IntegrationsChannels.trailList, async (_e, workspaceId: string) => {
+    // Finding 39's seam: Activity's read. The gate DELAYS call #1 past call #2 here — the only way
+    // to prove a generation guard is to make the past arrive after the future.
+    await maybeFault(IntegrationsChannels.trailList)
+    return readTrail(String(workspaceId ?? '') || undefined)
+  })
   ipcMain.handle(IntegrationsChannels.trailClear, (_e, workspaceId: string) => clearTrail(String(workspaceId ?? '')))
   // Export = a LOCAL save dialog; the file goes where the user points, and
   // nowhere else. Returns true when saved.

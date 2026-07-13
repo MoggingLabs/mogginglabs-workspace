@@ -5,6 +5,16 @@ import { el } from '../../components'
 // so the map can't drift from the real bindings. Keys use Ctrl (which the
 // handlers accept on every platform via ctrlKey/metaKey); ⌘ works too on macOS.
 
+/**
+ * The platform modifier, in one place. Ctrl on Windows/Linux, ⌘ on macOS — and the ONLY
+ * correct way to ask. Written out longhand at each call site, the idiom drifted: the Board
+ * and the Browser each checked `e.ctrlKey` alone, so their shortcuts were dead on a Mac
+ * (finding 28). A named function is harder to half-remember than a two-term boolean.
+ */
+export function isModKey(e: KeyboardEvent): boolean {
+  return e.ctrlKey || e.metaKey
+}
+
 export interface ShortcutRow {
   keys: string
   label: string

@@ -26,7 +26,7 @@ export function readEndpoint(file) {
  * pre-welcome error is a connection failure). Rejects with err.code:
  * 'no-endpoint' | 'auth' | 'timeout' | 'conn'.
  */
-export function connectEndpoint(file, { timeoutMs = 5000 } = {}) {
+export function connectEndpoint(file, { timeoutMs = 5000, hello = {} } = {}) {
   return new Promise((resolve, reject) => {
     const ep = readEndpoint(file)
     if (!ep) {
@@ -85,7 +85,7 @@ export function connectEndpoint(file, { timeoutMs = 5000 } = {}) {
       if (!welcomed) fail('timeout')
     }, timeoutMs)
     sock.on('connect', () => {
-      sock.write(JSON.stringify({ t: 'hello', v: ep.version, token: ep.token }) + '\n')
+      sock.write(JSON.stringify({ t: 'hello', v: ep.version, token: ep.token, ...hello }) + '\n')
     })
     sock.on('data', (chunk) => {
       buf += chunk

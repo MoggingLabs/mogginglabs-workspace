@@ -113,8 +113,18 @@ export function runBrowserSmoke(win: BrowserWindow): void {
         !!guestRect2 &&
         close2(guestRect2.width, rect2.width) && // the guest grew WITH it, exactly
         dockDebug().url === urlBeforeResize // no reflow-from-scratch; same live page
-      await ES('window.__mogging.browser.setWidth(520)') // settle width for the persist assertion
-      await sleep(500) // let the debounced width-persist fire
+      // Settle at a width the window can actually GIVE. The dock is no longer free to be any
+      // width it likes: it lives inside the responsive budget (src/ui/core/layout/dock-budget.ts),
+      // which keeps a 480px floor under the pane grid — so at this window (1200) the dock tops
+      // out at 432, and the 520 this gate used to ask for was a dock there is no room for. The
+      // product clamped it and persisted the clamp, honestly; the gate then failed the product
+      // for obeying its own layout law. 380 is INSIDE the budget and is neither the boot default
+      // (420) nor the clamp (432) — so the store round-trip below still proves it is the width
+      // the user CHOSE that came back, and not a default or a ceiling wearing its clothes.
+      const SETTLE_W = 380
+      await ES(`window.__mogging.browser.setWidth(${SETTLE_W})`)
+      await sleep(600) // let the debounced width-persist (400ms) fire
+      const settledWidth = await ES<number>('window.__mogging.browser.width()') // what the dock TOOK
 
       // ── 5. Toggle off: dock closed, grid re-widens ────────────────────────
       await ES('window.__mogging.browser.toggle(false)')
@@ -131,8 +141,12 @@ export function runBrowserSmoke(win: BrowserWindow): void {
         width: store?.getSetting('browser.width') ?? null,
         lastUrl: store?.getSetting(`browser.lastUrl.${wsId}`) ?? null
       }
+      // The width the DOCK settled on is the width the STORE holds — one number, no drift.
       const persistOk =
-        persist.open === '' && persist.width === '520' && persist.lastUrl === `http://127.0.0.1:${port}/`
+        persist.open === '' &&
+        settledWidth === SETTLE_W &&
+        persist.width === String(SETTLE_W) &&
+        persist.lastUrl === `http://127.0.0.1:${port}/`
 
       const pass =
         narrowed &&
@@ -158,6 +172,7 @@ export function runBrowserSmoke(win: BrowserWindow): void {
         closedOk,
         rewidened,
         persist,
+        settledWidth,
         persistOk,
         rect
       }

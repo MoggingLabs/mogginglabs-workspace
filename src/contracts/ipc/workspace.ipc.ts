@@ -75,3 +75,15 @@ export interface WorkspaceState {
   /** Recently-worked-on projects, newest first (capped by the writer). */
   recents?: RecentWorkspace[]
 }
+
+export interface WorkspaceSaveResult {
+  ok: boolean
+  reason?: string
+}
+
+export interface WorkspaceExportResult {
+  ok: boolean
+  canceled?: boolean
+  path?: string
+  reason?: string
+}

@@ -85,9 +85,13 @@ export const capabilityFor = (cli: HostedCliId): CliCapability | undefined => CL
 
 /** Why a preset can't land on a CLI (chip dims with this reason), or null.
  *  Pure over the table so the smoke can probe gap cases directly. */
-export function presetBlockedFor(preset: McpPreset, cap: CliCapability): string | null {
+export function presetBlockedFor(
+  preset: McpPreset,
+  cap: CliCapability,
+  authKind: McpAuthKind = preset.authKinds[0] ?? 'none'
+): string | null {
   if (preset.transport === 'http' && !cap.remoteHttp) return `${cap.cli} cannot speak remote HTTP servers (floor ${cap.floor})`
-  if (preset.transport === 'http' && preset.authKinds[0] === 'oauth' && !cap.oauth) {
+  if (preset.transport === 'http' && authKind === 'oauth' && !cap.oauth) {
     return `${cap.cli} cannot run MCP OAuth (floor ${cap.floor}) — no mcp-remote proxy in v1`
   }
   return null

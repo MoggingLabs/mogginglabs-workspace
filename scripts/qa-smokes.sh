@@ -9,7 +9,8 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 87 gates: 5 static (AUDIT · SPACING · PTYSEAM · PROTOVER · LAYOUT) + 82 app-boot
+# 114 gates: 11 static (AUDIT · SPACING · PTYSEAM · PROTOVER · LAYOUT · DOCSREFS ·
+# CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT) + 103 app-boot
 # gates. Phase 11 (Files — the explorer) added seven, and they run LAST:
 #   FSLIST          the read service, zero UI (files+dirs, caps, typed refusals)
 #   FILETREE        the virtualized tree (10k rows, APG keyboard, tree ARIA)
@@ -120,6 +121,7 @@ run_smoke() {
   # FIRSTRUN drives the update UX with a fake version (no network) — 6/06.
   local extra=""
   [ "$name" = "FIRSTRUN" ] && extra="MOGGING_FAKE_UPDATE=9.9.9"
+  [ "$name" = "ROLERACE" ] && extra="MOGGING_DAEMON_SPAWN_DELAY_MS=2500"
   MOGGING_USERDATA="$iso/userdata" LOCALAPPDATA="$iso/local" XDG_RUNTIME_DIR="$iso/local" \
     env $extra "$var=$val" "$TIMEOUT_BIN" "$timeout_s" npm run dev >"$iso/$name.log" 2>&1
   local v
@@ -178,6 +180,35 @@ run_static LAYOUT  node scripts/check-layout-invariants.mjs
 # research, phases at the pack that shipped them). Rename a doc and every citation keeps
 # reading as true while the link 404s. Free to check, invisible when wrong.
 run_static DOCSREFS node scripts/check-docs-refs.mjs
+# CUSTODY: "no keys stored" is a sentence that FEELS like the brand and is false — the
+# vault holds the integration keys you paste. The CLI login is the thing we never touch.
+# Five surfaces had drifted into the broad claim before anyone noticed (finding 27).
+run_static CUSTODY node scripts/check-credential-wording.mjs
+# MOTION: the becalming rules are themselves CSS, and CSS has a cascade — a twin with enough
+# specificity outranks the blanket clamp. Finding 36: five indicators had their pulse "becalmed"
+# into an INFINITE fade, so prefers-reduced-motion installed the very thing it exists to decline.
+run_static MOTION  node scripts/check-reduced-motion.mjs
+# NPMCONFIG: .npmrc carried `build_from_source=true` — a key npm has NEVER supported. It warned on
+# every install and hard-fails in npm's next major; electron-builder.yml's buildDependenciesFromSource
+# was doing the work all along. Two layers: no unsanctioned key in a root .npmrc, and a real
+# `npm install --dry-run` that must print no config warning (so it also catches keys arriving from
+# ~/.npmrc or the environment). Lockfile-only, offline-safe, writes nothing, ~1.3s.
+run_static NPMCONFIG node scripts/check-npm-config.mjs
+# PRODARTIFACT: the harness used to SHIP. src/main/index.ts imported ~100 run*Smoke modules, so a
+# third of out/main/index.js — which electron-builder globs into app.asar — was a test rig every
+# user downloaded and loaded into the main process, wakeable by an env var (finding 41). Dev and
+# build now take different entries (index.dev.ts / index.ts) over one boot.ts. This gate BUILDS the
+# production entry itself and greps the bundles: one stray harness import puts it all back. It is
+# the twin of check-gates.mjs — that one asserts the DEV entry knows every gate, this one asserts
+# the PRODUCTION entry knows none. ~15s (it must build; it leaves out/ holding the prod bundle,
+# which the first `npm run dev` below overwrites).
+run_static PRODARTIFACT node scripts/check-prod-artifact.mjs
+# GATECOUNT: finding 40. Every doc that stated the sweep's size stated a different one — 24, 35
+# (x3), 83, 87 — and ci.yml contradicted ITSELF, claiming 87 on line 7 and 35 on three others.
+# Each was true the day it was typed. This gate DERIVES the count from the run_smoke/run_static
+# rows below and fails any doc that disagrees; it also pins docs/10's release commands to
+# package.json's version (they still said v0.4.0 at v0.9.0). Dated changelog lines are scoped out.
+run_static GATECOUNT node scripts/check-gate-count.mjs
 
 run_smoke SMOKE       MOGGING_SMOKE     1 180 smoke
 run_smoke MULTIPANE   MOGGING_MULTIPANE 1 180 multipane
@@ -203,7 +234,19 @@ run_smoke CONTROL     MOGGING_CONTROL   1 240 control
 run_smoke CONTROL2    MOGGING_CONTROL2  1 180 control2
 run_smoke WORKTREE    MOGGING_WORKTREE  1 240 worktree
 run_smoke REVIEW      MOGGING_REVIEW    1 240 review
+run_smoke REVIEWSNAP  MOGGING_REVIEWSNAP 1 180 reviewsnap
 run_smoke BOARD       MOGGING_BOARD     1 240 board
+run_smoke BOARDFAIL   MOGGING_BOARDFAIL 1 120 boardfail
+run_smoke PERSISTHEALTH MOGGING_PERSISTHEALTH 1 120 persisthealth
+run_smoke ROLERACE    MOGGING_ROLERACE 1 120 rolerace
+run_smoke AGENTREGISTRY MOGGING_AGENTREGISTRY 1 120 agentregistry
+run_smoke UPDATEFAIL  MOGGING_UPDATEFAIL 1 120 updatefail
+run_smoke A11YMODAL   MOGGING_A11YMODAL 1 180 a11ymodal
+run_smoke BROWSERZERO MOGGING_BROWSERZERO 1 180 browserzero
+run_smoke SECRETFORMS MOGGING_SECRETFORMS 1 240 secretforms
+run_smoke BOARDRENDER MOGGING_BOARDRENDER 1 240 boardrender
+run_smoke KBAPG       MOGGING_KBAPG     1 240 kbapg
+run_smoke ASYNCSTATE  MOGGING_ASYNCSTATE 1 360 asyncstate
 run_smoke ORCHESTRATION MOGGING_ORCHESTRATION 1 300 orchestration
 run_smoke SWARM       MOGGING_SWARM     1 240 swarm
 run_smoke LEDGER      MOGGING_LEDGER    1 240 ledger
@@ -217,6 +260,7 @@ run_smoke PROFPERSIST_A MOGGING_PROFPERSIST A 180 profpersist PROFPERSIST
 run_smoke PROFPERSIST_B MOGGING_PROFPERSIST B 180 profpersist PROFPERSIST
 run_smoke BROWSER      MOGGING_BROWSER   1 180 browser
 run_smoke BROWSERCTL   MOGGING_BROWSERCTL 1 180 browserctl
+run_smoke BROWSERRACE  MOGGING_BROWSERRACE 1 180 browserrace
 run_smoke FIRSTRUN     MOGGING_FIRSTRUN  1 150 firstrun
 run_smoke PRODUCT      MOGGING_PRODUCT   1 300 product
 run_smoke USAGE        MOGGING_USAGE     1 150 usage
@@ -236,6 +280,7 @@ run_smoke KBSHORTCUTS  MOGGING_KBSHORTCUTS 1 240 kbshortcuts
 run_smoke TOOLPLAN     MOGGING_TOOLPLAN  1 240 toolplan
 run_smoke EVBRIDGE     MOGGING_EVBRIDGE  1 240 evbridge
 run_smoke MCPSTATUS    MOGGING_MCPSTATUS 1 240 mcpstatus
+run_smoke MCPLOOP      MOGGING_MCPLOOP   1 120 mcploop
 run_smoke INTEG        MOGGING_INTEG     1 240 integ
 run_smoke WEBTRAIL     MOGGING_WEBTRAIL  1 240 webtrail
 run_smoke MCPMGR       MOGGING_MCPMGR    1 180 mcpmgr
@@ -244,6 +289,9 @@ run_smoke INTEGUX      MOGGING_INTEGUX   1 240 integux
 run_smoke SETINTEG     MOGGING_SETINTEG  1 240 setinteg
 run_smoke INTEGMILESTONE MOGGING_INTEGMILESTONE 1 300 integmilestone
 run_smoke WIZARDUX     MOGGING_WIZARDUX  1 180 wizardux
+run_smoke WIZARDFAIL   MOGGING_WIZARDFAIL 1 180 wizardfail
+run_smoke MUTATIONRACE MOGGING_MUTATIONRACE 1 180 mutationrace
+run_smoke AUTHRUNNER   MOGGING_AUTHRUNNER 1 180 authrunner
 run_smoke FOLDERPICK   MOGGING_FOLDERPICK 1 240 folderpick
 run_smoke SETSHELL     MOGGING_SETSHELL  1 240 setshell
 run_smoke SETUSAGE     MOGGING_SETUSAGE  1 240 setusage
@@ -252,6 +300,7 @@ run_smoke BOARDUX      MOGGING_BOARDUX   1 240 boardux
 run_smoke FEEDBACKUX   MOGGING_FEEDBACKUX 1 240 feedbackux
 run_smoke CHROMEUX     MOGGING_CHROMEUX  1 300 chromeux
 run_smoke DOCKUX       MOGGING_DOCKUX    1 240 dockux
+run_smoke RESPONSIVE   MOGGING_RESPONSIVE 1 180 responsive
 run_smoke UXMILESTONE  MOGGING_UXMILESTONE 1 360 uxmilestone
 run_smoke TYPED        MOGGING_TYPED     1 300 typed
 run_smoke TYPEDCOST    MOGGING_TYPEDCOST 1 120 typedcost
@@ -259,6 +308,7 @@ run_smoke CTXACCURACY  MOGGING_CTXACCURACY 1 120 ctxaccuracy
 run_smoke FSLIST       MOGGING_FSLIST    1 120 fslist
 run_smoke FILETREE     MOGGING_FILETREE  1 300 filetree
 run_smoke EXPLORER     MOGGING_EXPLORER  1 240 explorer
+run_smoke EXPLORERRACE MOGGING_EXPLORERRACE 1 180 explorerrace
 run_smoke TREELIVE     MOGGING_TREELIVE  1 300 treelive
 run_smoke TREEGIT      MOGGING_TREEGIT   1 360 treegit
 run_smoke FILEACT      MOGGING_FILEACT   1 300 fileact

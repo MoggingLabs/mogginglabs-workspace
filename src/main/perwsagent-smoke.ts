@@ -115,8 +115,25 @@ export function runPerWsAgentSmoke(win: BrowserWindow): void {
       const refused = await act({ verb: 'navigate', target: `http://localhost:${port}/?p=A` }, paneA)
       const ungrantedRefused = !refused.ok && /ungranted origin|awaiting the human/.test(refused.reason ?? '')
 
-      const pass = foregroundIsB && drivenA && bUntouched && aAttached && tabMarked && ungrantedRefused
-      result = { pass, foregroundIsB, drivenA, bUntouched, aAttached, tabMarked, ungrantedRefused, clickReason: clickA.reason, attached: poss.attached }
+      // A public/guessed pane id that has no live daemon session must not
+      // inherit B's foreground consent, profile, origin grant, or page.
+      const unknown = await act({ verb: 'snapshot' }, '99999')
+      const unknownRefused = !unknown.ok && unknown.reason === 'unknown-pane' && dockDebug().workspaceId === wsB.id
+
+      const pass = foregroundIsB && drivenA && bUntouched && aAttached && tabMarked && ungrantedRefused && unknownRefused
+      result = {
+        pass,
+        foregroundIsB,
+        drivenA,
+        bUntouched,
+        aAttached,
+        tabMarked,
+        ungrantedRefused,
+        unknownRefused,
+        unknownReason: unknown.reason,
+        clickReason: clickA.reason,
+        attached: poss.attached
+      }
     } catch (e) {
       result = { pass: false, error: String(e) }
     }

@@ -1,10 +1,17 @@
 import { ipcMain } from 'electron'
 import { getSettingsStore } from './app-settings'
+import { maybeFault, maybeMutationFault } from './fault-port'
+import { auditDelay, wizardAuditFaults } from './wizard-audit-faults'
 import type { SettingsStore } from '@backend/features/workspace'
 import { discoverLogins } from '@backend/features/agents'
 import { redactSecrets } from '@backend/features/review'
 import { HOME_POINTER } from '@backend/features/usage/homes'
-import { ProfileChannels, type AgentProfile } from '@contracts'
+import {
+  ProfileChannels,
+  type AgentProfile,
+  type ProfileActivateResult,
+  type ProfileRemoveResult
+} from '@contracts'
 
 // App-wiring: provider profiles (Phase-4/04, simplified). The user supplies a NAME
 // and the SUBSCRIPTION EMAIL — everything else is derived HERE at save time: the
@@ -128,7 +135,14 @@ function syncDiscoveredLogins(store: SettingsStore): void {
 }
 
 export function registerProfiles(): void {
-  ipcMain.handle(ProfileChannels.list, () => {
+  ipcMain.handle(ProfileChannels.list, async () => {
+    await maybeFault(ProfileChannels.list) // finding 39's seam: half of Settings § Profiles' blank-tab defect
+    const fault = wizardAuditFaults()
+    const injected = fault?.profileListSequence?.shift()
+    if (injected) {
+      await auditDelay(injected.delayMs)
+      return injected.profiles
+    }
     const store = getSettingsStore()
     if (!store) return []
     try {
@@ -146,6 +160,25 @@ export function registerProfiles(): void {
     return true
   })
   ipcMain.handle(ProfileChannels.remove, (_e, id: unknown) => {
-    if (typeof id === 'string' && id) getSettingsStore()?.removeProfile(id)
+    const store = getSettingsStore()
+    if (!store || typeof id !== 'string' || !id) return { ok: false, reason: 'error' } satisfies ProfileRemoveResult
+    if (!store.listProfiles().some((profile) => profile.id === id)) {
+      return { ok: false, reason: 'missing' } satisfies ProfileRemoveResult
+    }
+    const workspaces = store.load().workspaces
+      .filter((workspace) => workspace.profileIds?.includes(id))
+      .map((workspace) => workspace.name)
+    if (workspaces.length) return { ok: false, reason: 'referenced', workspaces } satisfies ProfileRemoveResult
+    store.removeProfile(id)
+    return { ok: true } satisfies ProfileRemoveResult
+  })
+  ipcMain.handle(ProfileChannels.activate, async (_e, raw: { providerId?: string; profileId?: string }) => {
+    await maybeMutationFault('profile')
+    const providerId = String(raw?.providerId ?? '')
+    const profileId = String(raw?.profileId ?? '')
+    const target = getSettingsStore()?.activateProfile(providerId, profileId)
+    return target
+      ? ({ ok: true, name: target.name } satisfies ProfileActivateResult)
+      : ({ ok: false, reason: 'Profile is missing or belongs to another provider.' } satisfies ProfileActivateResult)
   })
 }

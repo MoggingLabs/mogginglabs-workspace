@@ -7,7 +7,7 @@ const PROVIDER_CLI: Record<string, HostedCliId | undefined> = { claude: 'claude-
 import { getBridge } from '../../core/ipc/bridge'
 import { getFocusedPane } from '../../core/layout/focus'
 import { getPaneCwd } from '../../core/layout/pane-cwd'
-import { setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
+import { getPaneRemote, setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
 import { onAgentLaunchRequest, requestAgentLaunch, announceProfileFailover } from '../../core/agents/launch-port'
 import { clearPaneAgentSession, getPaneAgentSession, setPaneAgentSession, type PaneAgentSession } from '../../core/agents/agent-session-port'
 import { setCommands } from '../../core/commands/command-port'
@@ -15,10 +15,11 @@ import { setActiveView } from '../../core/shell/view-port'
 import { requestSettingsTab } from '../../core/shell/settings-tab-port'
 import { getWorkspaces, workspaceIdForPane } from '../../core/workspace/workspace-info-port'
 import { onProfilesChanged } from '../../core/agents/profiles-port'
-import { isPaneLive, wasPaneReattached, whenPaneLive } from '../../core/terminal/liveness-port'
+import { isPaneLive, isPaneRemoteReady, wasPaneReattached, whenPaneLive, whenPaneRemoteReady } from '../../core/terminal/liveness-port'
 import { getTelemetry } from '../../core/telemetry'
 import { showToast } from '../../components'
 import { agentsClient } from './agents.client'
+import { getAgentRegistry, onAgentRegistryChange, refreshAgentRegistry } from '../../core/agents/registry'
 
 /**
  * Agent launching (headless — no titlebar button by design: launching lives in the
@@ -75,7 +76,8 @@ export const agentsFeature: UiFeature = {
       setPaneAgentSession(paneId as PaneId, session)
     }
 
-    void populate()
+    let populateGeneration = 0
+    onAgentRegistryChange((agents) => void populate(agents))
     onProfilesChanged(() => void populate()) // Settings edits -> palette entries follow live
     // Template opens (06b) + restore drive launches through this port.
     onAgentLaunchRequest((req) => void launchInPane(req.paneId as number, req.provider, req.cwd, req.resume, req.profileId))
@@ -173,17 +175,23 @@ export const agentsFeature: UiFeature = {
       }
     }
 
-    async function populate(): Promise<void> {
-      let agents: AgentInfo[] = []
-      try {
-        agents = await agentsClient.detect()
-      } catch {
-        agents = []
+    async function populate(nextAgents?: readonly AgentInfo[]): Promise<void> {
+      const generation = ++populateGeneration
+      let agents = [...(nextAgents ?? getAgentRegistry())]
+      if (!nextAgents && !agents.length) {
+        try {
+          agents = [...(await refreshAgentRegistry())]
+        } catch {
+          agents = []
+        }
       }
+      if (generation !== populateGeneration) return
+      nameById.clear()
       for (const a of agents) nameById.set(a.id, a.name)
       const installed = agents.filter((a) => a.installed)
       installedIds = installed.map((a) => a.id)
       const profiles = await listProfiles()
+      if (generation !== populateGeneration) return
       // Palette + pane-menu entries: one launch command per installed CLI — and one
       // per PROFILE when a provider has more than one (the picker, 4/04).
       const commands = installed.flatMap((a) => {
@@ -251,7 +259,20 @@ export const agentsFeature: UiFeature = {
       // the pane's first output (bounded; on timeout proceed, matching the old
       // fixed-delay behavior). Found by the Linux CI sweep: slow machines lost
       // template-lineup launches entirely.
-      await whenPaneLive(paneId, 15000)
+      const remote = getPaneRemote(paneId as PaneId)
+      if (remote) {
+        const ready = await whenPaneRemoteReady(paneId, 30000)
+        if (!ready) {
+          showToast({
+            tone: 'danger',
+            title: `Remote agent was not started in pane ${paneId}`,
+            body: 'SSH did not reach the remote shell. Finish or cancel the host-key/password prompt, then launch the agent again.'
+          })
+          return
+        }
+      } else {
+        await whenPaneLive(paneId, 15000)
+      }
       // RESTORE into a pane the daemon never let die. The PTY outlives the app (ADR 0006),
       // so on the next launch the pane reattaches to a session whose agent is still running
       // — and typing `claude --resume` there does not relaunch it, it types the words into
@@ -302,9 +323,23 @@ export const agentsFeature: UiFeature = {
       const mine = (await listProfiles()).filter((p) => p.provider === provider).sort((x, y) => x.order - y.order)
       const effectiveProfile = profileId ?? mine[0]?.id
       const workspaceId = workspaceIdForPane(paneId)
-      const command = await agentsClient.command({ agentId: provider, cwd, resume, profileId: effectiveProfile, workspaceId })
-      if (!command) return
-      agentsClient.launchInto(paneId, command)
+      const built = await agentsClient.command({
+        agentId: provider,
+        cwd,
+        resume,
+        profileId: effectiveProfile,
+        workspaceId,
+        remoteHostId: remote?.hostId
+      })
+      if (!built.ok || !built.command) {
+        showToast({
+          tone: 'danger',
+          title: `Agent was not launched in pane ${paneId}`,
+          body: built.reason ?? 'The launch command could not be prepared.'
+        })
+        return
+      }
+      agentsClient.launchInto(paneId, built.command)
       // Remember the tool-plan signature this pane launched with (8/09) — a
       // later plan edit flips it to restart-needed.
       if (workspaceId) {
@@ -377,11 +412,12 @@ export const agentsFeature: UiFeature = {
       const w = window as unknown as { __mogging?: Record<string, unknown> }
       w.__mogging = w.__mogging ?? {}
       w.__mogging.agents = {
-        detect: () => agentsClient.detect(),
+        detect: () => refreshAgentRegistry(),
         items: () => installedIds.slice(),
         launch: (agentId: string, profileId?: string) => launchInFocused(agentId, profileId),
         launchIn: (paneId: number, agentId: string, cwd: string, profileId?: string) =>
           launchInPane(paneId, agentId, cwd, false, profileId),
+        remoteReady: (paneId: number) => isPaneRemoteReady(paneId),
         setAutoFailover: (on: boolean) => {
           const id = getWorkspaces().activeId
           if (id) autoFailover.set(id, on)
@@ -389,7 +425,7 @@ export const agentsFeature: UiFeature = {
         },
         lastLaunch: (paneId: number) => ({ ...(lastLaunch.get(paneId) ?? {}) }),
         paneLive: (paneId: number) => isPaneLive(paneId),
-        refreshCommands: () => populate(),
+        refreshCommands: () => refreshAgentRegistry().then((agents) => populate(agents)),
         // Smoke/dev shim: register an agent session WITHOUT launching (the dot is
         // gated on tracked sessions — smokes driving OSC into plain panes adopt one).
         adopt: (paneId: number, provider = 'claude', cwd = '') =>

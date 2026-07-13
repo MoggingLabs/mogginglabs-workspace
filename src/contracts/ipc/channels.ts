@@ -42,14 +42,21 @@ export const ClipboardChannels = {
 export const WorkspaceChannels = {
   loadState: 'workspace:loadState',
   saveState: 'workspace:saveState',
+  exportState: 'workspace:exportState', // explicit save dialog for current metadata when persistence is paused
   openCwd: 'workspace:openCwd', // main -> renderer: open/focus a workspace for a directory
   attention: 'workspace:attention', // renderer -> main: any workspace needs attention (dock/taskbar badge)
   browseDir: 'workspace:browseDir' // -> native directory picker; resolves to a path or null
 } as const
 
+export const RuntimeHealthChannels = {
+  get: 'runtime-health:get',
+  changed: 'runtime-health:changed',
+  retryDaemon: 'runtime-health:retryDaemon'
+} as const
+
 export const AgentChannels = {
   detect: 'agents:detect', // -> AgentInfo[] (which CLIs are installed)
-  command: 'agents:command', // (AgentCommandRequest) -> launch command string | null
+  command: 'agents:command', // (AgentCommandRequest) -> AgentCommandResult
   // Settings § Providers: install a missing CLI in an EPHEMERAL background pty —
   // the provider's own one-liner is injected into the user's shell, never parsed
   // or elevated. Explicit user click only; no credentials involved (ADR 0002).
@@ -107,7 +114,8 @@ export const RemoteChannels = {
 export const ProfileChannels = {
   list: 'profiles:list', // -> AgentProfile[] (pointer sets, never secrets)
   save: 'profiles:save', // (AgentProfile) -> boolean (false = refused by the deny-list)
-  remove: 'profiles:remove' // (id) -> void
+  remove: 'profiles:remove', // (id) -> typed refusal while a workspace references it
+  activate: 'profiles:activate' // atomic order swap for one provider
 } as const
 
 export const LedgerChannels = {
@@ -168,6 +176,7 @@ export const GitChannels = {
 
 export const BrowserChannels = {
   init: 'browser:init', // -> BrowserDockInit (persisted open/width, applied at mount)
+  activate: 'browser:activate', // ({ workspaceId }) -> void; switches state source without navigating
   toggle: 'browser:toggle', // ({ open, workspaceId? }) -> void (open restores the workspace's last url)
   navigate: 'browser:navigate', // ({ url, workspaceId }) -> void (http(s) only; persists lastUrl per workspace)
   nav: 'browser:nav', // ({ action }) -> void (back | forward | reload)
@@ -253,6 +262,7 @@ export const IntegrationsChannels = {
   // Grants are tool names + origins — never credentials. Editing UI lands in 06.
   grantGet: 'integrations:grant:get', // (workspaceId) -> WorkspaceIntegrationsGrant (defaults when absent)
   grantSet: 'integrations:grant:set', // (WorkspaceIntegrationsGrant) -> sanitized grant | null (refused shape)
+  grantMutate: 'integrations:grant:mutate', // operation against the latest stored grant
   grantChanged: 'integrations:grant:changed', // main -> renderer: WorkspaceIntegrationsGrant (pushed on any change)
   // Phase-8/05: the agent activity trail — LOCAL forever. These three ARE the
   // viewer's whole surface; entries are refs only and never reach telemetry.
@@ -295,6 +305,7 @@ export const IntegrationsChannels = {
   // panes, per CLI. Materialized at pane launch; scoping is context hygiene.
   planGet: 'integrations:plan:get', // (workspaceId) -> WorkspaceToolPlan
   planSet: 'integrations:plan:set', // (WorkspaceToolPlan) -> WorkspaceToolPlan (sanitized)
+  planMutate: 'integrations:plan:mutate', // cell/inherit operation against the latest plan
   planChanged: 'integrations:plan:changed', // main -> renderer: WorkspaceToolPlan (a plan edit; 11's restart-needed composes)
   planCoverage: 'integrations:plan:coverage', // -> { counts: {serverId: n}, total } for the catalog "in N of M workspaces" badge
   // Phase-8/10: the outbound event bridge — house events -> user webhooks.
@@ -326,6 +337,7 @@ export const AllChannels: readonly string[] = [
   ...Object.values(ContextChannels),
   ...Object.values(ClipboardChannels),
   ...Object.values(WorkspaceChannels),
+  ...Object.values(RuntimeHealthChannels),
   ...Object.values(TelemetryChannels),
   ...Object.values(ControlChannels),
   ...Object.values(ShellChannels),

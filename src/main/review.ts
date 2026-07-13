@@ -1,12 +1,64 @@
 import { ipcMain } from 'electron'
 import { diffWorktree, mergeBranch } from '@backend/features/review'
 import { isManaged } from '@backend/features/worktrees'
+import { maybeFault } from './fault-port'
 import { getAuthoritativeApprovals } from './daemon-relay'
 import {
   ReviewChannels,
+  type Approval,
   type ReviewDiffRequest,
-  type ReviewMergeRequest
+  type ReviewMergeRequest,
+  type ReviewSnapshot
 } from '@contracts'
+
+export function approvalMatchesSnapshot(approval: Approval, snapshot: ReviewSnapshot): boolean {
+  const a = approval.snapshot
+  return (
+    approval.repoId === snapshot.repoId &&
+    approval.branch === snapshot.branch &&
+    a.repoId === snapshot.repoId &&
+    a.branch === snapshot.branch &&
+    a.head === snapshot.head &&
+    a.base === snapshot.base &&
+    a.baseHead === snapshot.baseHead &&
+    a.mergeBase === snapshot.mergeBase
+  )
+}
+
+const badDiff = (error: string) => ({
+  base: '', branch: '', files: [], untracked: [], truncated: false,
+  dirty: false, unreviewable: true, redactions: 0, error
+})
+
+/** Re-read and merge one managed worktree against an explicit approval set. Exported so the
+ *  snapshot regression gate exercises the same decision path as IPC. */
+export async function mergeReviewedWorktree(
+  req: ReviewMergeRequest,
+  approvals: readonly Approval[]
+) {
+  if (typeof req?.repo !== 'string' || typeof req?.worktree !== 'string' || !req.repo || !req.worktree) {
+    return { ok: false, state: 'error' as const, error: 'bad request' }
+  }
+  if (!isManaged(req.repo, req.worktree)) {
+    return { ok: false, state: 'error' as const, error: 'not a managed worktree' }
+  }
+  const diff = await diffWorktree(req.repo, req.worktree)
+  if (diff.error || !diff.snapshot) {
+    return { ok: false, state: 'error' as const, error: diff.error ?? 'snapshot unavailable' }
+  }
+  if (diff.dirty || diff.truncated || diff.unreviewable || diff.untracked.length) {
+    return {
+      ok: false,
+      state: 'unreviewable' as const,
+      error: 'commit or remove every working-tree change and review the complete renderable diff first'
+    }
+  }
+  const approved = approvals.some((a) => approvalMatchesSnapshot(a, diff.snapshot!))
+  return mergeBranch(req.repo, diff.snapshot, {
+    approved,
+    override: typeof req.override === 'string' ? req.override : undefined
+  })
+}
 
 // App-wiring: bind the review module (Phase-3/04) to IPC. Diffs are redacted INSIDE
 // @backend before they reach this layer; nothing here logs, persists, or forwards
@@ -14,12 +66,15 @@ import {
 // manage (same containment guard as removal); merge is branch-name-validated in the
 // backend and clean-repo gated.
 export function registerReview(): void {
-  ipcMain.handle(ReviewChannels.diff, (_e, req: ReviewDiffRequest) => {
+  ipcMain.handle(ReviewChannels.diff, async (_e, req: ReviewDiffRequest) => {
+    // Finding 39's seam: the review modal's ONE read. Reject it and the UI must say so out loud;
+    // hang it and the "Reading the diff…" affordance must give up on its own.
+    await maybeFault(ReviewChannels.diff)
     if (typeof req?.repo !== 'string' || typeof req?.worktree !== 'string' || !req.repo || !req.worktree) {
-      return { base: '', branch: '', files: [], untracked: [], truncated: false, redactions: 0, error: 'bad request' }
+      return badDiff('bad request')
     }
     if (!isManaged(req.repo, req.worktree)) {
-      return { base: '', branch: '', files: [], untracked: [], truncated: false, redactions: 0, error: 'not a managed worktree' }
+      return badDiff('not a managed worktree')
     }
     return (async () => {
       const diff = await diffWorktree(req.repo, req.worktree)
@@ -28,13 +83,15 @@ export function registerReview(): void {
       // reviewer count: the daemon's role map is open to any pane (see daemon-relay's
       // appRoles), so it can say "reviewer" about a pane that promoted itself.
       const approvals = await getAuthoritativeApprovals()
-      return { ...diff, approved: approvals.some((a) => a.branch === diff.branch) }
+      const approved =
+        !!diff.snapshot &&
+        !diff.dirty &&
+        !diff.unreviewable &&
+        approvals.some((a) => approvalMatchesSnapshot(a, diff.snapshot!))
+      return { ...diff, approved }
     })()
   })
   ipcMain.handle(ReviewChannels.merge, (_e, req: ReviewMergeRequest) => {
-    if (typeof req?.repo !== 'string' || typeof req?.branch !== 'string' || !req.repo || !req.branch) {
-      return { ok: false, state: 'error', error: 'bad request' }
-    }
     return (async () => {
       // Gate consultation happens HERE in main — the renderer's payload can carry the
       // typed override word, but never an approval claim. Fail closed without a daemon.
@@ -42,11 +99,7 @@ export function registerReview(): void {
       // reviewer. Without this, `mogging role <self> reviewer` un-gated the merge, and an
       // agent could land its own unreviewed work with two CLI calls.
       const approvals = await getAuthoritativeApprovals()
-      const approved = approvals.some((a) => a.branch === req.branch)
-      return mergeBranch(req.repo, req.branch, {
-        approved,
-        override: typeof req.override === 'string' ? req.override : undefined
-      })
+      return mergeReviewedWorktree(req, approvals)
     })()
   })
 }

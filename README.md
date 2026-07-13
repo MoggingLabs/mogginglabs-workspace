@@ -65,7 +65,7 @@ renderer is tuned once and behaves identically everywhere. See
 > workspace and the explorer shows it, decorated, live, actionable — with both budgets
 > measured **on the composed surface** (16 panes + the explorer open + a write torrent:
 > **142.8 avg fps · worst gap 25.1ms · heap 20MB · 0 frames > 100ms**). The `qa-smokes.sh`
-> sweep now runs **83 gates** (seven new this pack: FSLIST · FILETREE · EXPLORER · TREELIVE ·
+> sweep now runs **114 gates** (seven new this pack: FSLIST · FILETREE · EXPLORER · TREELIVE ·
 > TREEGIT · FILEACT · FILESMILESTONE). Receipts, measured numbers and platform finds:
 > `prompts/phase-11/REPORT.md`.
 >
@@ -118,9 +118,13 @@ Details: [`docs/08-orchestration.md`](docs/08-orchestration.md) ·
 perf + perception budgets: [`docs/05`](docs/05-perf-budget.md) / [`docs/07`](docs/07-perception-budget.md).
 
 **Native modules — compiled from source (no prebuilts).** The app uses `node-pty` and
-`better-sqlite3`, built against the exact Node/Electron ABI via `.npmrc` (`build_from_source=true`)
-plus `buildDependenciesFromSource: true` in `electron-builder.yml` (the `postinstall` runs
-`electron-builder install-app-deps`). So **`npm install` requires a C++ toolchain:**
+`better-sqlite3`, built against the exact Electron ABI by `buildDependenciesFromSource: true` in
+`electron-builder.yml` — applied by the `postinstall` (`electron-builder install-app-deps`) on every
+install, and again by `npm run dist*` at packaging. That is the whole mechanism. An `.npmrc` carrying
+`build_from_source=true` used to sit beside it, but npm has never supported that key — it warned on
+every install and will hard-fail in the next major — and electron-builder was doing the work anyway.
+It's gone; `scripts/check-npm-config.mjs` keeps it gone. Compiling from source does mean
+**`npm install` requires a C++ toolchain:**
 - **Windows:** VS 2022 **C++ Build Tools** (VCTools workload) + the **Spectre-mitigated MSVC
   libraries** + **`node-gyp` ≥ 13** (devDep — older node-gyp fails the MSBuild step on VS 2022 /
   Node 24) + Python with **`setuptools`** (`pip install setuptools`, since Python ≥ 3.12 dropped
@@ -190,7 +194,7 @@ other; `main`/`preload`/`renderer` are the only composition root. See
 - **Phase 5** ✅ — UI/UX excellence: AA-measured token system + vivid workspace identity, icon family, window-chrome fixes, full-app views, 14px terminal comfort (receipts: `prompts/phase-5/REPORT.md`).
 - **Phase 6** ✅ — Product-ready: full Linux/macOS parity sweeps, browser dock, first-run + updates, v0.4.0.
 - **Phase 7** ✅ — Usage & metering: CLI-owned session adapters, the usage gauge + Settings § Usage, the pointer-grammar key vault (receipts: `prompts/phase-7/README.md`).
-- **Phase 8** ✅ — Integrations, five directions: the house MCP server (reads free, writes behind a per-workspace grant), the agent-web profile + activity trail, MCP registration across three CLI dialects + per-workspace tool plans, the outbound event bridge, live GitHub PR/issue chips — app holds no credential, daemon still v3. Closed by `MOGGING_INTEGMILESTONE`; surface in [`docs/14`](docs/14-integrations.md).
+- **Phase 8** ✅ — Integrations, five directions: the house MCP server (reads free, writes behind a per-workspace grant), the agent-web profile + activity trail, MCP registration across three CLI dialects + per-workspace tool plans, the outbound event bridge, live GitHub PR/issue chips — nothing runs, proxies, or holds a credential it doesn't have to, daemon still v3. Closed by `MOGGING_INTEGMILESTONE`; surface in [`docs/14`](docs/14-integrations.md).
 - **Phase 8.5** ✅ — The UI/UX revamp: an audit of every surface ([`AUDIT.md`](prompts/phase-8.5/AUDIT.md)), then rebuilt on one layout vocabulary (`Card`/`SectionHeader`/`FieldGroup`/`TwoColumn`, ramp extended to `--sp-7/8`) — one-page wizard, click-to-pick folder browser, overview-first Settings, Home/first-run, board + palette, one feedback language, chrome + possession banner, the Usage-glance recut; 13 removals, 16 bugs fixed; spacing frozen at zero, both budgets unmoved. Closed by `MOGGING_UXMILESTONE` + the `check-audit.mjs` coverage gate (receipts: `prompts/phase-8.5/README.md`).
 
 Full plan: [`docs/02-mvp-and-roadmap.md`](docs/02-mvp-and-roadmap.md).

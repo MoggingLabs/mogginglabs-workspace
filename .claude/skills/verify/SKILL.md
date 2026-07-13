@@ -7,9 +7,17 @@ description: How to run one env-gated smoke against the live app to verify a cha
 
 The smokes in `src/main/*-smoke.ts` boot the REAL app and drive it via
 `webContents.executeJavaScript` — they are the fastest runtime handle. Gate env
-vars are dispatched in `src/main/index.ts` (~line 312): `MOGGING_STATE=1`,
+vars are dispatched in **`src/main/index.dev.ts`**: `MOGGING_STATE=1`,
 `MOGGING_SMOKE=1`, `MOGGING_MULTIPANE=1`, … Verdict is `out/<name>-result.json`
 (`pass: true`), never the exit code.
+
+`index.DEV.ts`, not `index.ts` — the harness is not in the shipped app (audit
+finding 41). There are two entries over one `src/main/boot.ts`, and
+electron-vite picks by command: `serve` (i.e. `npm run dev`) gets
+`index.dev.ts` + every gate; `build` gets the production `index.ts`, which
+dispatches nothing. Add a new gate to `index.dev.ts` — `scripts/check-gates.mjs`
+reconciles it against the sweep, and `scripts/check-prod-artifact.mjs` fails the
+build if it ever lands in the production entry.
 
 ## Launch one gate directly (no qa-smokes.sh, no sweep teardown)
 

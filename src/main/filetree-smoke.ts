@@ -17,6 +17,12 @@ import { join } from 'node:path'
 //   (e) type-ahead jumps within visible rows; Esc clears the buffer;
 //   (f) a denied dir renders an inline refusal row — no crash, tree stays live;
 //   (g) a hostile filename renders as TEXT — no element injected, no handler run;
+//   (h) a REAL double-click (click, click, dblclick) OPENS a directory. It used to net a
+//       flicker: click 2 landed on the row click 1 had just rebuilt, and shut it again;
+//   (i) the type-ahead buffer TIMES OUT (an immortal buffer made the next lone keystroke a
+//       search for "za", stuck), and a repeated letter CYCLES to the next match (APG);
+//   (j) an empty ROOT is still a tree: every child of role="tree" is a treeitem or a group.
+//       The root-empty case used to append a roleless EmptyState <div> into the tree;
 //   plus: the capped tail row on a 10k-file dir, the repo pill, the (empty) row.
 // Verdict: out/filetree-result.json.
 
@@ -178,6 +184,23 @@ export function runFileTreeSmoke(win: BrowserWindow): void {
         atEnd === 'zulu.txt' && atHome === 'Apple' &&
         afterPg.foc === 'zulu.txt' && afterPg.roving === 1 // 7 rows < one page: clamps to the last row
 
+      // ── (h) a REAL double-click opens a dir — it does not flicker shut ────────
+      // The APG walk above left c1 CLOSED (`before` proves it, or this test is vacuous). A
+      // native double-click is click, click, dblclick: click 1 opened c1 and repainted the
+      // window, and click 2 hit the NEW node and toggled it right back. The gesture did
+      // nothing. `detail` is what tells the second click of a sequence to stand down.
+      const dbl = await ES<{ before: string | null; expanded: string | null; hasC2: boolean }>(`(async () => {${H}
+        const before = aria('c1')?.expanded ?? null
+        const hit = (node, type, detail) => node.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, detail }))
+        hit(rowBy('c1'), 'click', 1)
+        const again = rowBy('c1') // click 1 rebuilt the row the pointer is still sitting on
+        hit(again, 'click', 2)
+        hit(again, 'dblclick', 2)
+        await new Promise((r) => setTimeout(r, 800)) // c1's children land
+        return { before, expanded: aria('c1')?.expanded ?? null, hasC2: names().includes('c2') }
+      })()`)
+      const dblclickOk = dbl.before === 'false' && dbl.expanded === 'true' && dbl.hasC2
+
       // ── (d) virtualized-tree ARIA on the 5-deep chain ─────────────────────────
       await ES(`window.__mogging.filetree.reveal(${JSON.stringify(join(fx.root, 'c1', 'c2', 'c3', 'c4', 'c5', 'n5.txt'))})`)
       await sleep(800)
@@ -200,6 +223,20 @@ export function runFileTreeSmoke(win: BrowserWindow): void {
       // 'a' finds the first match AFTER zulu.txt, wrapping — 'Apple'. A stale buffer
       // ('za') would match nothing and leave focus on zulu.txt.
       const typeAheadOk = atZ === 'zulu.txt' && atA === 'Apple'
+
+      // ── (i) the buffer times out, and a repeated letter cycles ────────────────
+      // Esc was the ONLY way the buffer ever died. Press 'z', walk away, come back and press
+      // 'a': the tree searched for "za", matched nothing, and left you standing on zulu.txt.
+      await ES(`(() => {${H} key('End'); key('z') })()`) // -> zulu.txt (the last row), buffer 'z'
+      await sleep(900) // past TYPE_AHEAD_MS: the buffer must be gone on its own, with no Esc
+      await ES(`(() => {${H} key('a') })()`)
+      const afterTimeout = await ES<string>(`(() => {${H} return focName() })()`)
+      // APG's same-letter rule: 'aa' is not a search for "aa" — nothing is named that, and the
+      // old loop sat on the first match forever. It means "the next thing starting with a", so
+      // from zulu.txt the first press wraps to Apple and the second CYCLES on to alpha.txt.
+      await ES(`(() => {${H} key('End'); key('a'); key('a') })()`) // one tick: well inside the window
+      const cycled = await ES<string>(`(() => {${H} return focName() })()`)
+      const typeAheadResetOk = afterTimeout === 'Apple' && cycled === 'alpha.txt'
 
       // ── the (empty) meta row on an expanded empty dir ─────────────────────────
       await ES(`(() => {${H} rowBy('Apple').click() })()`)
@@ -229,6 +266,23 @@ export function runFileTreeSmoke(win: BrowserWindow): void {
         }
       })()`)
       const capOk = capped.tail && capped.dom <= capped.bound && capped.height >= 1000 * 28
+
+      // ── (j) an empty ROOT is still a tree ─────────────────────────────────────
+      // `Apple` is the fixture's empty dir; mounted AS the root it has zero children. That
+      // case used to append an EmptyState — a roleless <div> — straight into role="tree", so
+      // the tree's only child was not a treeitem: invalid ARIA, and nothing a screen reader
+      // can walk. (Re-rooting here rather than making a sixth fixture dir keeps (a)'s order
+      // assertion honest.) A tree owns treeitems and groups. Nothing else.
+      await ES(`window.__mogging.filetree.mount(${JSON.stringify(join(fx.root, 'Apple'))})`)
+      await sleep(600)
+      const hollow = await ES<{ roles: string[]; names: string[] }>(`(() => {${H}
+        const kids = [...document.querySelectorAll('.ft-dev-host .file-tree[role="tree"] .ft-body > *')]
+        return { roles: kids.map((k) => k.getAttribute('role') ?? ''), names: names() }
+      })()`)
+      const emptyRootOk =
+        hollow.roles.length > 0 && // never vacuous: the tree must actually be showing something
+        hollow.roles.every((r) => r === 'treeitem' || r === 'group') &&
+        hollow.names.includes('(empty)')
 
       // ── (g) hostile filename + (a) the 10k-row synthetic scroll ──────────────
       await ES(`window.__mogging.filetree.mountSynthetic(10, 1000, ${JSON.stringify(HOSTILE)})`)
@@ -282,14 +336,18 @@ export function runFileTreeSmoke(win: BrowserWindow): void {
       const scrollOk = perf.total >= 10010 && perf.maxDom <= perf.bound && (gpuSoft ? perf.slow <= 5 : perf.slow === 0)
 
       const pass =
-        orderOk && lazyOk && apgOk && ariaOk && typeAheadOk && emptyRowOk && refusalOk && capOk && hostileOk && pillOk && scrollOk
+        orderOk && lazyOk && apgOk && ariaOk && typeAheadOk && emptyRowOk && refusalOk && capOk && hostileOk && pillOk && scrollOk &&
+        dblclickOk && typeAheadResetOk && emptyRootOk
       result = {
         pass,
         orderOk, initial,
         lazyOk, lazyMountOk, lazyExpandOk,
         apgOk, walk1, atC1, opened, atC2, backAtC1, closed, atEnd, atHome, afterPg,
+        dblclickOk, dbl,
         ariaOk, chain,
         typeAheadOk, atZ, atA,
+        typeAheadResetOk, afterTimeout, cycled,
+        emptyRootOk, hollow,
         emptyRowOk,
         refusalOk, deniedCreated: fx.deniedCreated, denied,
         capOk, capped,

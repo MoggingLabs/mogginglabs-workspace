@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { settleToShell, sh } from './smoke-shell'
+import { approvalListed, sendApprovalFromPane } from './reviewer-smoke-helper'
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim()
@@ -123,10 +124,21 @@ export function runBoardSmoke(win: BrowserWindow): void {
       const promptOk = textOk && !!detected && afterDetectOk
 
       // 4) attention flip -> the card flags orange with a "needs you" chip.
-      await ES(`window.__mogging.attention.setPaneState(${paneId}, 'attention')`)
-      await sleep(600)
+      // Set and READ in ONE synchronous renderer expression. attention-port's setPaneState calls
+      // its subscribers inline and the board's is a synchronous render(), so the card is already
+      // repainted when the querySelector below runs — there is no frame to wait for.
+      //
+      // The 600ms sleep this replaces was a race the gate could only lose once (3) started
+      // working. The task now reaches a RUNNING gemini (that is the fix (3) proves), so gemini
+      // takes the prompt and starts working on it — and the backend's honest verdict for that
+      // pane, `busy`, correctly supersedes a state the gate forced a moment earlier. The pane
+      // state was right; the gate was reading it a second too late. What (4) owns is the RENDER
+      // — a pane in attention flags its card — and that is what this reads, with no window for
+      // the live agent's real state to overwrite the input. The end-to-end backend path
+      // (`mogging notify --event needs-input` -> card + rail) is ORCHESTRATION's A4.
       const attn = (await ES(
         `(() => {
+          window.__mogging.attention.setPaneState(${paneId}, 'attention')
           const card = document.querySelector('.board-card[data-card-id="${cardId}"]')
           if (!card) return { found: false }
           return {
@@ -157,25 +169,37 @@ export function runBoardSmoke(win: BrowserWindow): void {
 
       // 4b) reviewer approval -> push-fed ✓-chip; worktree removal clears it.
       const cliPath = join(app.getAppPath(), 'bin', 'mogging.mjs')
-      const cli = (args: string[], extraEnv: Record<string, string> = {}): Promise<{ code: number }> =>
+      const cli = (args: string[], extraEnv: Record<string, string> = {}): Promise<{ code: number; stdout: string; stderr: string }> =>
         new Promise((resolveCli) => {
           execFile(
             process.execPath,
             [cliPath, ...args],
             { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ...extraEnv }, timeout: 15000, windowsHide: true },
-            (err) => resolveCli({ code: err ? 1 : 0 })
+            (err, stdout, stderr) => resolveCli({ code: err ? 1 : 0, stdout: String(stdout), stderr: String(stderr) })
           )
         })
       const gitQ = await ES(`window.bridge.invoke('git:query', ${JSON.stringify(anchor)})`)
       const wtRoot = join(anchor, '.mogging', 'worktrees')
       const wtDirs = existsSync(wtRoot) ? readdirSync(wtRoot) : []
       const branch = wtDirs.length === 1 ? `mogging/${wtDirs[0]}` : ''
+      // GET THE SHELL BACK FIRST — the approval is a COMMAND, and gemini owns the keyboard.
+      //
+      // `mogging approve` now fails closed outside a live pane: it must carry the pane's
+      // daemon-minted MOGGING_PANE_TOKEN, which exists nowhere but that pane's own env. So the
+      // approval can only be executed INSIDE the pane — and this pane is running a real agent,
+      // which has the keyboard and the alternate screen. Typed at gemini, `mogging approve …`
+      // is prose in a chat box: it never runs, no approval is ever recorded, and the ✓-chip that
+      // depends on it never appears. Exactly the trap settleToShell exists for (smoke-shell.ts),
+      // and exactly the sequence the product asks of a person: leave the agent, then type.
+      const settled = await settleToShell({ es: ES, sleep, paneId })
       // The USER names the reviewer. `mogging role` writes only the DAEMON's map, which every
       // pane can write and which no longer confers sign-off authority (daemon-relay: appRoles)
       // — a reviewer named that way would produce an approval the app correctly ignores.
       await ES(`window.__mogging.workspace.setRole(${paneId}, 'reviewer')`)
       await sleep(400) // the role reaches main (the trusted IPC) and the daemon
-      const approveExit = (await cli(['approve', branch], { MOGGING_PANE_ID: String(paneId) })).code
+      const approvalSent = await sendApprovalFromPane(cli, cliPath, paneId, branch, { repo: anchor, base: 'main' })
+      const approvalSeen = approvalSent && (await approvalListed(cli, branch))
+      const approveExit = approvalSeen ? 0 : 1
       let approvedChipOk = false
       for (let i = 0; i < 20 && !approvedChipOk; i++) {
         await sleep(500)
@@ -184,12 +208,9 @@ export function runBoardSmoke(win: BrowserWindow): void {
         )) as boolean
       }
       // The launch command cd'd the pane INTO its worktree, and Windows refuses to remove a
-      // directory that is a process's cwd — so the pane has to step out. But the AGENT owns the
-      // keyboard: a `cd` typed at it goes into the agent's prompt, the pane never moves, and the
-      // removal fails with a permission error that looks like anything but what it is. Get the
-      // shell back and PROVE it before typing at it (settleToShell) — the sequence the product
-      // requires of a person, which the gate used to sleep through.
-      const settled = await settleToShell({ es: ES, sleep, paneId })
+      // directory that is a process's cwd — so the pane has to step out. It can only step out
+      // now: the ✓-chip above keys on the pane's cwd BEING the worktree (approvedChip reads
+      // getPaneCwd), so the `cd` has to follow the assertion it would otherwise erase.
       await ES(`window.bridge.send('terminal:write', { id: ${paneId}, data: ${JSON.stringify(sh.cd(anchor) + '\r')} })`)
       await sleep(1500)
       const removed = await ES(

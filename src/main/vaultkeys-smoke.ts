@@ -5,6 +5,8 @@ import { getSettingsStore } from './app-settings'
 import { setVaultProbeForSmoke } from './vault'
 import { resolveServiceKeyEnv, serviceKeyClear, serviceKeyNames, serviceKeySet } from './service-keys'
 import { keyClear, keySetPlaintext, resolveKey } from './usage-keys'
+import { setToolPlan } from './integrations'
+import { saveServer, type GrantKv } from '@backend/features/integrations'
 
 // Env-gated service-key vault smoke (MOGGING_VAULTKEYS, Phase-8/08). Proves the
 // paste-once fleet vault end to end:
@@ -30,7 +32,8 @@ export function runVaultKeysSmoke(win: BrowserWindow): void {
   const ES = (js: string): Promise<unknown> => wc.executeJavaScript(js, true)
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
   const outDir = join(app.getAppPath(), 'out')
-  const envFile = join(outDir, 'vaultkeys-env.txt')
+  const plainEnvFile = join(outDir, 'vaultkeys-env-plain.txt')
+  const scopedEnvFile = join(outDir, 'vaultkeys-env-scoped.txt')
   const configFile = join(outDir, 'vaultkeys-config.json')
 
   const emit = (o: object): void => {
@@ -80,7 +83,8 @@ export function runVaultKeysSmoke(win: BrowserWindow): void {
     try {
       const store = getSettingsStore()
       try {
-        rmSync(envFile)
+        rmSync(plainEnvFile)
+        rmSync(scopedEnvFile)
       } catch {
         /* fresh */
       }
@@ -97,8 +101,26 @@ export function runVaultKeysSmoke(win: BrowserWindow): void {
       const storedAsCipher = set.ok && serviceKeyNames().includes(NAME) && cipher.length > 0 && !cipher.includes(SECRET)
 
       // Main-side value correctness (the env map materialization resolves it).
-      const resolved = resolveServiceKeyEnv()
-      const resolveOk = resolved[NAME] === SECRET
+      const kv: GrantKv | null = store
+        ? { get: (key) => store.getSetting(key), set: (key, value) => store.setSetting(key, value) }
+        : null
+      const workspaceId = 'vaultkeys-scoped-workspace'
+      const serverSaved =
+        !!kv &&
+        saveServer(kv, {
+          id: 'vault-fixture',
+          label: 'Vault fixture',
+          transport: 'stdio',
+          command: 'vault-fixture',
+          env: { [NAME]: `\${${NAME}}` }
+        }).ok
+      setToolPlan({ workspaceId, entries: { 'vault-fixture': 'all-clis' }, inheritGlobal: false })
+      const resolved = resolveServiceKeyEnv(workspaceId, 'codex')
+      const resolveOk =
+        serverSaved &&
+        resolved[NAME] === SECRET &&
+        resolveServiceKeyEnv(workspaceId, 'shell')[NAME] === undefined &&
+        resolveServiceKeyEnv('another-workspace', 'codex')[NAME] === undefined
 
       // Fixture CLI config carries ${NAME}, never the literal.
       const cfg = JSON.stringify({ mcpServers: { posthog: { command: 'posthog-mcp', env: { POSTHOG_API_KEY: `\${${NAME}}` } } } }, null, 2)
@@ -107,25 +129,41 @@ export function runVaultKeysSmoke(win: BrowserWindow): void {
 
       // (b) a fixture pane's ENV carries the value (spawn-path). Key is set
       // BEFORE the pane spawns, so main injects it into the spawn env.
-      await ES('(function(){var m=window.__mogging;if(m&&m.workspace&&m.workspace.count()===0)m.workspace.create({name:"Workspace 1"});return 1;})()')
+      await ES(`window.__mogging.workspace.create({ id: ${JSON.stringify(workspaceId)}, name: 'Vault scope', assignments: ['shell'] })`)
       await sleep(3000)
-      const envFileFwd = envFile.replace(/\\/g, '/')
+      const commandFor = (file: string): string =>
+        `node -e "require('fs').writeFileSync('${file.replace(/\\/g, '/')}', String((process.env.${NAME}||'').length))"\r`
       // The pane writes the LENGTH of its env var to a marker file — proves the
       // value arrived WITHOUT echoing the secret into scrollback.
-      const cmd = `node -e "require('fs').writeFileSync('${envFileFwd}', String((process.env.${NAME}||'').length))"\r`
-      let paneLen = ''
-      for (let i = 0; i < 3 && !paneLen; i++) {
-        await ES(`window.bridge.send("terminal:write",{id:1,data:${JSON.stringify(cmd)}});`)
-        for (let j = 0; j < 12 && !paneLen; j++) {
-          await sleep(700)
-          try {
-            paneLen = readFileSync(envFile, 'utf8').trim()
-          } catch {
-            /* not yet */
-          }
+      await ES(`window.bridge.send('terminal:write',{id:1,data:${JSON.stringify(commandFor(plainEnvFile))}})`)
+      let plainLen = ''
+      for (let i = 0; i < 12 && !plainLen; i++) {
+        await sleep(500)
+        try {
+          plainLen = readFileSync(plainEnvFile, 'utf8').trim()
+        } catch {
+          /* not yet */
         }
       }
-      const paneEnvOk = paneLen === String(SECRET.length)
+      const plainPaneNoKey = plainLen === '0'
+
+      await ES(`window.bridge.invoke('terminal:spawn', {
+        id: 99, cwd: ${JSON.stringify(outDir)}, cols: 80, rows: 24,
+        workspaceId: ${JSON.stringify(workspaceId)}, agentId: 'codex'
+      })`)
+      await sleep(1200)
+      await ES(`window.bridge.send('terminal:write',{id:99,data:${JSON.stringify(commandFor(scopedEnvFile))}})`)
+      let scopedLen = ''
+      for (let i = 0; i < 16 && !scopedLen; i++) {
+        await sleep(500)
+        try {
+          scopedLen = readFileSync(scopedEnvFile, 'utf8').trim()
+        } catch {
+          /* not yet */
+        }
+      }
+      await ES(`window.bridge.send('terminal:kill',{id:99})`)
+      const paneEnvOk = scopedLen === String(SECRET.length)
 
       // (g) usage keys (consumer one) still round-trip.
       keySetPlaintext('vaulttest', 'usage-secret-xyz-778899')
@@ -138,18 +176,45 @@ export function runVaultKeysSmoke(win: BrowserWindow): void {
 
       // (d) delete -> absent from store + next launch's env.
       serviceKeyClear(NAME)
-      const deletedOk = !serviceKeyNames().includes(NAME) && resolveServiceKeyEnv()[NAME] === undefined && !(store?.getSetting(CIPHER_KV) ?? '')
+      const deletedOk =
+        !serviceKeyNames().includes(NAME) &&
+        resolveServiceKeyEnv(workspaceId, 'codex')[NAME] === undefined &&
+        !(store?.getSetting(CIPHER_KV) ?? '')
 
       // Cleanup the deliberate env-length marker + fixture config.
       try {
-        rmSync(envFile)
+        rmSync(plainEnvFile)
+        rmSync(scopedEnvFile)
         rmSync(configFile)
       } catch {
         /* best effort */
       }
 
-      const pass = vaultlessRefused && storedAsCipher && resolveOk && configOk && paneEnvOk && usageOk && noPlaintextAtRest && deletedOk
-      result = { pass, vaultlessRefused, storedAsCipher, resolveOk, configOk, paneEnvOk, paneLen, usageOk, noPlaintextAtRest, offenders: offenders.slice(0, 5), deletedOk }
+      const pass =
+        vaultlessRefused &&
+        storedAsCipher &&
+        resolveOk &&
+        configOk &&
+        plainPaneNoKey &&
+        paneEnvOk &&
+        usageOk &&
+        noPlaintextAtRest &&
+        deletedOk
+      result = {
+        pass,
+        vaultlessRefused,
+        storedAsCipher,
+        resolveOk,
+        configOk,
+        plainPaneNoKey,
+        plainLen,
+        paneEnvOk,
+        scopedLen,
+        usageOk,
+        noPlaintextAtRest,
+        offenders: offenders.slice(0, 5),
+        deletedOk
+      }
     } catch (e) {
       result = { pass: false, error: String(e) }
     }

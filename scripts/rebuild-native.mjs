@@ -16,7 +16,10 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, rmSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
-// Every dependency with a binding.gyp. Both are compiled from source (.npmrc build_from_source).
+// Every dependency with a binding.gyp. Both compile from source against Electron's ABI — that is
+// `buildDependenciesFromSource: true` in electron-builder.yml, which the install-app-deps call at
+// the bottom of this script honours. It never came from .npmrc (that file is gone: npm never
+// supported its `build_from_source` key — see scripts/check-npm-config.mjs).
 const NATIVE = ['better-sqlite3', 'node-pty']
 
 const repo = process.cwd()

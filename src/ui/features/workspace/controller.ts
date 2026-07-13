@@ -1,5 +1,5 @@
-import { TerminalChannels } from '@contracts'
-import type { AgentState, PaneId } from '@contracts'
+import { TerminalChannels, WorktreeChannels } from '@contracts'
+import type { AgentState, PaneId, RemoveWorktreeResult } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { GridLayout, MAX_PANES, parseTree, leafIds } from '../layout'
 import { confirmDialog, icon, showToast } from '../../components'
@@ -10,6 +10,7 @@ import { paneState, paneFinished, onAttentionChange } from '../../core/attention
 import { announce } from '../../core/a11y/live-region'
 import { clearPaneLaunch } from '../../core/agents/toolplan-panes'
 import { requestAgentLaunch } from '../../core/agents/launch-port'
+import { getPaneAgentSession } from '../../core/agents/agent-session-port'
 import { activeView, setActiveView } from '../../core/shell/view-port'
 import { getTelemetry } from '../../core/telemetry'
 import type { TemplateWorkspaceSpec } from '../../core/workspace/open-service'
@@ -18,6 +19,10 @@ import { type WorkspaceMeta, colorForOrdinal, newWorkspaceId } from './model'
 interface WorkspaceView {
   meta: WorkspaceMeta
   tab: HTMLElement
+  /** The real button that switches to this workspace. The tab itself is a plain div: a
+   *  div[role=button] wrapping the close BUTTON was invalid content, and its keydown
+   *  handler swallowed Enter/Space before the close button could ever see them. */
+  activate: HTMLButtonElement
   label: HTMLElement
   attnBadge: HTMLElement
   countBadge: HTMLElement
@@ -85,6 +90,14 @@ export class WorkspaceController {
   // and REUSED after a workspace closes, so a stale entry would corrupt a new one.
   private readonly finSeen = new Set<PaneId>()
   private readonly finWsSeen = new Set<PaneId>()
+  private readonly worktreeRemovalEvents: Array<{
+    paneId: number
+    stage: 'request' | 'pane-closed' | 'remove-attempt' | 'remove-result'
+    attempt?: number
+    paneStillMounted: boolean
+    ok?: boolean
+    reason?: string
+  }> = []
 
   constructor(
     private readonly tabsEl: HTMLElement,
@@ -180,7 +193,61 @@ export class WorkspaceController {
     // Pane × buttons bubble a close request up through the grid to here.
     container.addEventListener('mogging:close-pane', (e) => {
       const paneId = (e as CustomEvent<{ paneId: number }>).detail?.paneId
-      if (paneId != null) this.closePane(meta.id, paneId)
+      if (paneId != null) void this.requestClosePane(meta.id, paneId)
+    })
+    container.addEventListener('mogging:remove-worktree', (e) => {
+      const detail = (e as CustomEvent<{
+        paneId: number
+        repo: string
+        path: string
+        force: boolean
+        resolve: (result: RemoveWorktreeResult) => void
+      }>).detail
+      if (!detail) return
+      void (async () => {
+        this.worktreeRemovalEvents.push({
+          paneId: detail.paneId,
+          stage: 'request',
+          paneStillMounted: view.layout.paneIds().includes(detail.paneId)
+        })
+        const closed = await this.requestClosePane(meta.id, detail.paneId, { replacementCwd: detail.repo })
+        this.worktreeRemovalEvents.push({
+          paneId: detail.paneId,
+          stage: 'pane-closed',
+          paneStillMounted: view.layout.paneIds().includes(detail.paneId)
+        })
+        if (!closed) {
+          detail.resolve({ ok: false, reason: 'error', error: 'Pane close was cancelled.' })
+          return
+        }
+        // node-pty exits asynchronously; on Windows its former cwd cannot be removed until
+        // the process handle is gone. Retry the same guarded backend operation, bounded.
+        let result: RemoveWorktreeResult = { ok: false, reason: 'error' }
+        for (let attempt = 0; attempt < 20; attempt++) {
+          if (attempt) await new Promise((resolve) => setTimeout(resolve, 150))
+          this.worktreeRemovalEvents.push({
+            paneId: detail.paneId,
+            stage: 'remove-attempt',
+            attempt: attempt + 1,
+            paneStillMounted: view.layout.paneIds().includes(detail.paneId)
+          })
+          result = (await getBridge().invoke(WorktreeChannels.remove, {
+            repo: detail.repo,
+            path: detail.path,
+            force: detail.force
+          })) as RemoveWorktreeResult
+          this.worktreeRemovalEvents.push({
+            paneId: detail.paneId,
+            stage: 'remove-result',
+            attempt: attempt + 1,
+            paneStillMounted: view.layout.paneIds().includes(detail.paneId),
+            ok: result.ok,
+            reason: result.reason
+          })
+          if (result.ok || result.reason !== 'error') break
+        }
+        detail.resolve(result)
+      })()
     })
     // Pane ⋯ menu "Split right/down" bubbles here — the controller (not the grid)
     // owns splits, because the new pane's cwd must be seeded before its slot exists.
@@ -235,12 +302,9 @@ export class WorkspaceController {
     meta.roles.forEach((role, i) => {
       if (role) setPaneRole((base + i + 1) as PaneId, role)
     })
-    const roles = meta.roles
-    setTimeout(() => {
-      roles.forEach((role, i) => {
-        if (role) getBridge().send(TerminalChannels.setRole, { id: (base + i + 1) as PaneId, role })
-      })
-    }, 1200)
+    meta.roles.forEach((role, i) => {
+      if (role) void getBridge().invoke(TerminalChannels.setRole, { id: (base + i + 1) as PaneId, role })
+    })
   }
 
   /** Seed each pane's cwd on the pane-cwd port — the reliable default for per-pane git
@@ -265,7 +329,7 @@ export class WorkspaceController {
     if (!meta.remotes?.some((r) => r)) return
     const base = meta.ordinal * 100
     meta.remotes.forEach((remote, i) => {
-      if (remote) setPaneRemote((base + i + 1) as PaneId, remote)
+      if (remote) setPaneRemote((base + i + 1) as PaneId, { ...remote, cwd: meta.paneCwds?.[i] ?? undefined })
     })
   }
 
@@ -273,18 +337,27 @@ export class WorkspaceController {
    *  attribute — the DOM contract of the attention/milestone smokes. */
   private makeTab(meta: WorkspaceMeta): {
     tab: HTMLElement
+    activate: HTMLButtonElement
     label: HTMLElement
     attnBadge: HTMLElement
     countBadge: HTMLElement
   } {
+    // A plain div — NOT role=button. It contains a real close button, and a button inside a
+    // button is invalid content whose only observable behaviour was a bug: the wrapper's
+    // Enter/Space handler preventDefault()ed the keystroke and switched workspaces, so the
+    // close button could never be activated from the keyboard at all (finding 30).
     const tab = document.createElement('div')
     tab.className = 'workspace-tab'
     tab.dataset.wsId = meta.id
     tab.style.setProperty('--ws-accent', meta.color) // the ONE sanctioned inline style
-    tab.setAttribute('role', 'button')
-    tab.tabIndex = 0
     tab.title = meta.name
     tab.draggable = true
+
+    // Switching is a real button, so Enter/Space/click come free and correct from the
+    // platform. It is a SIBLING of the close button, not its ancestor.
+    const activate = document.createElement('button')
+    activate.className = 'ws-tab-activate'
+    activate.type = 'button'
 
     const iconEl = document.createElement('span')
     iconEl.className = 'ws-icon'
@@ -293,6 +366,7 @@ export class WorkspaceController {
     const label = document.createElement('span')
     label.className = 'ws-label'
     label.textContent = meta.name
+    activate.append(iconEl, label)
 
     const badges = document.createElement('span')
     badges.className = 'ws-badges'
@@ -311,21 +385,25 @@ export class WorkspaceController {
     close.append(icon('x', 12))
     badges.append(attnBadge, countBadge, close)
 
-    tab.append(iconEl, label, badges)
+    tab.append(activate, badges)
 
-    tab.addEventListener('mousedown', (e) => {
-      if (!(e.target instanceof Node) || !close.contains(e.target)) this.switch(meta.id)
-    })
+    // click, not mousedown: a native button already answers to mouse AND to Enter/Space, and
+    // switching on press meant that merely STARTING a drag-to-reorder switched workspaces.
+    activate.addEventListener('click', () => this.switch(meta.id))
+    // The wrapper keeps only the verbs no button owns. Enter/Space are gone from here on
+    // purpose — the two real buttons handle their own activation now.
     tab.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault()
-        this.switch(meta.id)
-      } else if (e.key === 'F2') {
+      if (e.key === 'F2') {
         e.preventDefault()
         this.beginRename(meta.id)
       } else if (e.key === 'Delete') {
         e.preventDefault()
-        this.close(meta.id)
+        void this.requestClose(meta.id)
+      } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        // Reorder was drag-only (finding 31). The rail stacks vertically, so up/down is
+        // the same axis the drag already uses.
+        e.preventDefault()
+        this.moveTab(meta.id, e.key === 'ArrowUp' ? -1 : 1)
       }
     })
     label.addEventListener('dblclick', (e) => {
@@ -336,25 +414,47 @@ export class WorkspaceController {
       e.stopPropagation()
       void this.requestClose(meta.id)
     })
-    return { tab, label, attnBadge, countBadge }
+    return { tab, activate, label, attnBadge, countBadge }
   }
 
-  /** Inline rename: swap the label for an input; Enter/blur commits, Esc cancels. */
+  /** Move a tab one slot along the rail, keeping focus on it — the keyboard's answer to
+   *  drag-to-reorder. Clamped at the ends: a no-op, not a wrap. */
+  moveTab(id: string, delta: number): void {
+    const from = this.order.indexOf(id)
+    if (from < 0) return
+    const to = from + delta
+    if (to < 0 || to >= this.order.length) return
+    this.order.splice(from, 1)
+    this.order.splice(to, 0, id)
+    const view = this.views.get(id)
+    if (!view) return
+    const next = this.order[to + 1]
+    const before = next ? (this.views.get(next)?.tab ?? null) : null
+    this.tabsEl.insertBefore(view.tab, before)
+    view.activate.focus() // the moved tab keeps the keyboard, so the next press repeats
+    this.onChange()
+  }
+
+  /** Inline rename: the activate button steps aside for an input; Enter/blur commits, Esc
+   *  cancels. The input used to be appended INSIDE the label — which now lives in a real
+   *  button, and an input inside a button is both invalid and unusable (every keystroke
+   *  would activate the tab). It replaces the button instead, for the edit's lifetime. */
   beginRename(id: string): void {
     const view = this.views.get(id)
-    if (!view || view.label.querySelector('input')) return
+    if (!view || view.tab.querySelector('input.ws-rename')) return
     const input = document.createElement('input')
     input.className = 'ws-rename'
     input.value = view.meta.name
     input.setAttribute('aria-label', 'Workspace name')
-    view.label.textContent = ''
-    view.label.append(input)
+    view.activate.hidden = true
+    view.activate.before(input)
     input.focus()
     input.select()
 
     const commit = (save: boolean): void => {
       const next = save ? input.value.trim() : ''
       input.remove()
+      view.activate.hidden = false
       if (next && next !== view.meta.name) {
         view.meta.name = next
         view.tab.title = next
@@ -457,7 +557,7 @@ export class WorkspaceController {
     }
   }
 
-  /** Close one pane of a workspace; closing its last pane closes the workspace. */
+  /** Destructive primitive. Callers use requestClosePane so live agents are gated. */
   closePane(wsId: string, paneId: number): void {
     const view = this.views.get(wsId)
     if (!view) return
@@ -474,6 +574,35 @@ export class WorkspaceController {
     })
     this.refreshAttention()
     this.onChange()
+  }
+
+  /** One close policy for pane chrome, shortcuts, control API, and the last pane. */
+  async requestClosePane(
+    wsId: string,
+    paneId: number,
+    opts: { replacementCwd?: string } = {}
+  ): Promise<boolean> {
+    const view = this.views.get(wsId)
+    if (!view || !view.layout.paneIds().includes(paneId)) return false
+    if (view.layout.paneCount <= 1 && !opts.replacementCwd) {
+      await this.requestClose(wsId)
+      return true
+    }
+    if (getPaneAgentSession(paneId as PaneId) || paneState(paneId as PaneId) !== 'idle') {
+      const ok = await confirmDialog({
+        title: `Close pane ${paneId}?`,
+        message: 'An agent session is still assigned to this pane. Closing it stops that session and cannot be undone.',
+        confirmLabel: 'Close pane',
+        danger: true
+      })
+      if (!ok) return false
+    }
+    if (view.layout.paneCount <= 1 && opts.replacementCwd) {
+      this.splitPane(wsId, paneId, 'h', opts.replacementCwd)
+      if (view.layout.paneCount <= 1) return false
+    }
+    this.closePane(wsId, paneId)
+    return true
   }
 
   /**
@@ -601,7 +730,9 @@ export class WorkspaceController {
   async requestClose(id: string): Promise<void> {
     const view = this.views.get(id)
     if (!view || this.pendingClose.has(id)) return
-    const liveCount = view.layout.paneIds().filter((p) => paneState(p) !== 'idle').length
+    const liveCount = view.layout
+      .paneIds()
+      .filter((p) => !!getPaneAgentSession(p as PaneId) || paneState(p as PaneId) !== 'idle').length
     if (liveCount > 0) {
       const n = view.meta.paneCount
       const ok = await confirmDialog({
@@ -729,10 +860,35 @@ export class WorkspaceController {
     this.onChange()
   }
 
+  /** Layout shrink shares the pane-close policy; growth is non-destructive. */
+  async requestApplyTemplate(n: number): Promise<boolean> {
+    const view = this.active()
+    if (!view) return false
+    const keep = new Set(Array.from({ length: n }, (_, index) => view.meta.ordinal * 100 + index + 1))
+    const closingLive = view.layout
+      .paneIds()
+      .filter(
+        (paneId) =>
+          !keep.has(paneId) &&
+          (!!getPaneAgentSession(paneId as PaneId) || paneState(paneId as PaneId) !== 'idle')
+      )
+    if (closingLive.length > 0) {
+      const ok = await confirmDialog({
+        title: `Switch to ${n} pane${n === 1 ? '' : 's'}?`,
+        message: `${closingLive.length} pane${closingLive.length === 1 ? '' : 's'} with live agent sessions would close.`,
+        confirmLabel: 'Close panes and apply layout',
+        danger: true
+      })
+      if (!ok) return false
+    }
+    this.applyTemplate(n)
+    return true
+  }
+
   /** Add a terminal by splitting a pane (⋯ menu / titlebar + / palette / shortcut).
    *  `paneId` null → the workspace's focused pane; `dir` omitted → the pane's longer
    *  axis. The receiving LINE re-equalizes (every terminal in it gets an equal share). */
-  splitPane(wsId: string, paneId?: number | null, dir?: 'h' | 'v'): void {
+  splitPane(wsId: string, paneId?: number | null, dir?: 'h' | 'v', newCwd?: string): void {
     const view = this.views.get(wsId)
     if (!view) return
     if (view.layout.paneCount >= MAX_PANES) {
@@ -752,7 +908,7 @@ export class WorkspaceController {
     clearPaneRemote(newId)
     setPaneRole(newId, '')
     setPaneLabel(newId, '') // nor the closed slot's agent label ("Claude Code" on a fresh shell)
-    const cwd = getPaneCwd(target as PaneId) || view.meta.cwd
+    const cwd = newCwd ?? getPaneCwd(target as PaneId) ?? view.meta.cwd
     if (cwd) setPaneCwd(newId, cwd)
     this.scrubManifestSlot(view.meta, newId - view.meta.ordinal * 100 - 1, cwd)
     if (view.layout.splitPane(target, dir) == null) return
@@ -781,6 +937,11 @@ export class WorkspaceController {
 
   activePaneCount(): number {
     return this.active()?.layout.paneCount ?? 1
+  }
+
+  /** DEV smoke testimony for the destructive ordering invariant. */
+  worktreeRemovalAudit(): ReadonlyArray<Readonly<(typeof this.worktreeRemovalEvents)[number]>> {
+    return this.worktreeRemovalEvents.map((event) => ({ ...event }))
   }
 
   /** Failover switched a pane's profile (6/04): rewrite that SLOT in the manifest
@@ -879,7 +1040,7 @@ export class WorkspaceController {
   /** Control API: close a pane anywhere (last pane closes its workspace). */
   closePaneById(paneId: number): void {
     const v = this.viewForPane(paneId)
-    if (v) this.closePane(v.meta.id, paneId)
+    if (v) void this.requestClosePane(v.meta.id, paneId)
   }
 
   /** Zoom/restore the active workspace's focused pane (Ctrl/Cmd+Shift+Enter). */
@@ -913,6 +1074,7 @@ export class WorkspaceController {
   /** Open a workspace from a template spec (06b): the resolved grid + its lineup. */
   openFromTemplate(spec: TemplateWorkspaceSpec): WorkspaceMeta {
     const meta = this.create({
+      id: spec.id,
       name: spec.name,
       cwd: spec.cwd,
       paneCount: spec.paneCount,

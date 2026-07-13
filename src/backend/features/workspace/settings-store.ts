@@ -40,7 +40,9 @@ export class SettingsStore {
         host TEXT NOT NULL,
         user TEXT,
         port INTEGER,
-        identity_hint TEXT
+        identity_hint TEXT,
+        platform TEXT,
+        shell TEXT
       );
       CREATE TABLE IF NOT EXISTS app_profiles (
         id TEXT PRIMARY KEY,
@@ -100,6 +102,16 @@ export class SettingsStore {
     // Migrate pre-split-tree dbs: the serialized pane arrangement (shape + sizes).
     try {
       this.db.exec('ALTER TABLE app_workspaces ADD COLUMN layout_tree TEXT')
+    } catch {
+      /* column already exists */
+    }
+    try {
+      this.db.exec('ALTER TABLE app_remotes ADD COLUMN platform TEXT')
+    } catch {
+      /* column already exists */
+    }
+    try {
+      this.db.exec('ALTER TABLE app_remotes ADD COLUMN shell TEXT')
     } catch {
       /* column already exists */
     }
@@ -252,7 +264,7 @@ export class SettingsStore {
   // ── Remote hosts (Phase-4/05): connection POINTERS; auth is the user's ssh stack. ──
   listRemotes(): RemoteHost[] {
     const rows = this.db
-      .prepare('SELECT id, name, host, user, port, identity_hint AS identityHint FROM app_remotes ORDER BY name')
+      .prepare('SELECT id, name, host, user, port, identity_hint AS identityHint, platform, shell FROM app_remotes ORDER BY name')
       .all() as Array<RemoteHost & { user: string | null; port: number | null; identityHint: string | null }>
     return rows.map((r) => ({
       id: r.id,
@@ -260,6 +272,8 @@ export class SettingsStore {
       host: r.host,
       user: r.user ?? undefined,
       port: r.port ?? undefined,
+      platform: r.platform ?? 'posix',
+      shell: r.shell ?? 'sh',
       identityHint: r.identityHint ?? undefined
     }))
   }
@@ -267,10 +281,11 @@ export class SettingsStore {
   saveRemote(remote: RemoteHost): void {
     this.db
       .prepare(
-        `INSERT INTO app_remotes (id, name, host, user, port, identity_hint)
-         VALUES (@id, @name, @host, @user, @port, @identityHint)
+        `INSERT INTO app_remotes (id, name, host, user, port, identity_hint, platform, shell)
+         VALUES (@id, @name, @host, @user, @port, @identityHint, @platform, @shell)
          ON CONFLICT(id) DO UPDATE SET name = excluded.name, host = excluded.host,
-           user = excluded.user, port = excluded.port, identity_hint = excluded.identity_hint`
+           user = excluded.user, port = excluded.port, identity_hint = excluded.identity_hint,
+           platform = excluded.platform, shell = excluded.shell`
       )
       .run({
         id: remote.id,
@@ -278,6 +293,8 @@ export class SettingsStore {
         host: remote.host,
         user: remote.user ?? null,
         port: remote.port ?? null,
+        platform: remote.platform ?? 'posix',
+        shell: remote.shell ?? (remote.platform === 'windows' ? 'powershell' : 'sh'),
         identityHint: remote.identityHint ?? null
       })
   }
@@ -306,6 +323,24 @@ export class SettingsStore {
          ON CONFLICT(id) DO UPDATE SET name = excluded.name, provider = excluded.provider, email = excluded.email, env = excluded.env, ord = excluded.ord`
       )
       .run({ ...profile, email: profile.email ?? null, env: JSON.stringify(profile.env) })
+  }
+
+  /** Make one profile order-0 atomically. Two renderer clicks can never leave both
+   * profiles half-swapped or lose a concurrent edit between separate saves. */
+  activateProfile(provider: string, profileId: string): AgentProfile | null {
+    const tx = this.db.transaction(() => {
+      const mine = this.listProfiles().filter((profile) => profile.provider === provider).sort((a, b) => a.order - b.order)
+      const target = mine.find((profile) => profile.id === profileId)
+      const current = mine[0]
+      if (!target || !current) return null
+      if (target.id !== current.id) {
+        const update = this.db.prepare('UPDATE app_profiles SET ord = ? WHERE id = ? AND provider = ?')
+        update.run(current.order, target.id, provider)
+        update.run(target.order, current.id, provider)
+      }
+      return target
+    })
+    return tx()
   }
 
   removeProfile(id: string): void {

@@ -33,7 +33,12 @@ const AUTH_HEADER = /\b((?:proxy-)?authorization)(["']?\s*[:=]\s*["']?)((?:basic
 // style identifiers unredacted. Values may be bare (no spaces, as before) or quoted
 // (spaces allowed — `password = "two words"` previously escaped the scrub).
 const KV_KEYWORDS = new Set(['password', 'passwd', 'pwd', 'secret', 'token', 'apikey', 'auth', 'credential', 'credentials'])
-const KV = /([A-Za-z][A-Za-z0-9_.-]*)((?:["']?)\s*[:=]\s*)(?:(["'])((?:(?!\3).){4,}?)\3|([^\s"'`;,)}\]]{4,}))/g
+// Bound the identifier length and require a word boundary at its start. Besides matching
+// real configuration keys more precisely, this prevents a large ordinary diff line (for
+// example a generated 2 MiB run of `x`) from being reconsidered from every character while
+// the engine searches for a separator. Review must stay responsive even for a patch that is
+// ultimately rejected as oversized.
+const KV = /\b([A-Za-z][A-Za-z0-9_.-]{0,127})((?:["']?)\s*[:=]\s*)(?:(["'])((?:(?!\3).){4,}?)\3|([^\s"'`;,)}\]]{4,}))/g
 
 function keyLooksSecret(key: string): boolean {
   // Split on separators and camelCase boundaries; also try joining adjacent

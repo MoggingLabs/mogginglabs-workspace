@@ -16,15 +16,25 @@ const psq = (s: string): string => `'${s.replace(/'/g, "''")}'`
 /** POSIX literal string: single quotes, embedded quotes via the '\'' dance. */
 const shq = (s: string): string => `'${s.replace(/'/g, "'\\''")}'`
 
-/** Platform/shell-aware `cd` prefix so the agent starts in the workspace cwd. */
-function cdPrefix(cwd: string): string {
+export interface LaunchTarget {
+  platform: 'posix' | 'windows'
+  shell: 'sh' | 'bash' | 'zsh' | 'powershell' | 'cmd'
+}
+
+function localTarget(): LaunchTarget {
+  if (process.platform !== 'win32') return { platform: 'posix', shell: 'sh' }
+  const shell = defaultShell().toLowerCase()
+  return { platform: 'windows', shell: shell.includes('powershell') || shell.includes('pwsh') ? 'powershell' : 'cmd' }
+}
+
+/** Target-shell-aware `cd` prefix so the agent starts in the workspace cwd. */
+function cdPrefix(cwd: string, target: LaunchTarget): string {
   if (!cwd) return ''
-  if (process.platform === 'win32') {
-    const shell = defaultShell().toLowerCase()
+  if (target.platform === 'windows') {
     // -ErrorAction Stop makes a failed Set-Location abort the whole typed line (5.1-safe;
     // `&&` is pwsh-7-only) — parity with the `&&` gating below, so a vanished workspace
     // dir never launches the agent in whatever directory the pane happened to be in.
-    if (shell.includes('powershell') || shell.includes('pwsh'))
+    if (target.shell === 'powershell')
       return `Set-Location ${psq(cwd)} -ErrorAction Stop; `
     return `cd /d "${cwd}" && ` // cmd.exe
   }
@@ -37,13 +47,12 @@ function cdPrefix(cwd: string): string {
  *  and embedded double quotes (the bell layer's `node "<script>" --event done`) all
  *  arrive verbatim. cmd.exe stays `set "K=V"` — it strips only the OUTER quotes, inner
  *  ones ride through verbatim; %DEFINED% inside a value expands (see quoting note above). */
-function envPrefix(env: Record<string, string> | undefined): string {
+function envPrefix(env: Record<string, string> | undefined, target: LaunchTarget): string {
   if (!env) return ''
   const entries = Object.entries(env).filter(([k, v]) => k && typeof v === 'string')
   if (!entries.length) return ''
-  if (process.platform === 'win32') {
-    const shell = defaultShell().toLowerCase()
-    if (shell.includes('powershell') || shell.includes('pwsh')) {
+  if (target.platform === 'windows') {
+    if (target.shell === 'powershell') {
       return entries.map(([k, v]) => `$env:${k}=${psq(v)}; `).join('')
     }
     return entries.map(([k, v]) => `set "${k}=${v}" && `).join('') // cmd.exe
@@ -66,7 +75,8 @@ export function buildLaunchCommand(
   cwd: string,
   resume = false,
   env?: Record<string, string>,
-  mcpArgs?: string[]
+  mcpArgs?: string[],
+  target: LaunchTarget = localTarget()
 ): string | null {
   const adapter = findAdapter(agentId)
   if (!adapter) return null
@@ -74,5 +84,5 @@ export function buildLaunchCommand(
   // Tool-plan launch args (Phase-8/09): the CLI's mcp-config flag + path. Quote
   // args with spaces (userData paths on Windows); flags are literal.
   const flags = mcpArgs?.length ? ' ' + mcpArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ') : ''
-  return cdPrefix(cwd) + envPrefix(env) + base + flags
+  return cdPrefix(cwd, target) + envPrefix(env, target) + base + flags
 }

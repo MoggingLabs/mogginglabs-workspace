@@ -138,6 +138,9 @@ export interface DaemonEvents {
 export class DaemonClient {
   private sock: net.Socket | null = null
   private approvalWaiters: Array<(list: Approval[]) => void> = []
+  private roleWaiters = new Map<string, Array<(ok: boolean) => void>>()
+  private paneVerifyWaiters = new Map<number, (valid: boolean) => void>()
+  private nextVerifyRequestId = 1
   /** Pane id -> resolvers waiting for that pane's `spawned` reply (`existing` + the pty it got). */
   private spawnWaiters = new Map<string, Array<(res: SpawnResult) => void>>()
   constructor(
@@ -227,6 +230,21 @@ export class DaemonClient {
         this.events.onApprovals?.(m.list)
         break
       }
+      case 'pane-verified': {
+        const done = this.paneVerifyWaiters.get(m.requestId)
+        if (done) {
+          this.paneVerifyWaiters.delete(m.requestId)
+          done(m.valid === true)
+        }
+        break
+      }
+      case 'role-set': {
+        const waiters = this.roleWaiters.get(m.id)
+        const done = waiters?.shift()
+        if (waiters && !waiters.length) this.roleWaiters.delete(m.id)
+        done?.(m.ok === true)
+        break
+      }
       case 'error':
         // surfaced via logs; a well-behaved client rarely hits this
         break
@@ -273,9 +291,30 @@ export class DaemonClient {
   input(id: string, data: string): void {
     this.send({ t: 'input', id, data })
   }
-  /** Swarm manifest (Phase-4/01): fire-and-forget role naming. */
-  setRole(id: string, role: string): void {
-    this.send({ t: 'set-role', id, role })
+  /** Swarm manifest (Phase-4/01): acknowledged role naming. */
+  setRole(id: string, role: string, timeoutMs = 2000): Promise<boolean> {
+    return new Promise((resolve) => {
+      let settled = false
+      const done = (ok: boolean): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(ok)
+      }
+      const timer = setTimeout(() => {
+        const list = this.roleWaiters.get(id)
+        if (list) {
+          const at = list.indexOf(done)
+          if (at >= 0) list.splice(at, 1)
+          if (!list.length) this.roleWaiters.delete(id)
+        }
+        done(false)
+      }, timeoutMs)
+      const list = this.roleWaiters.get(id) ?? []
+      list.push(done)
+      this.roleWaiters.set(id, list)
+      this.send({ t: 'set-role', id, role })
+    })
   }
   /** House notify (8/03 receipts ride it): raise a pane's attention with a
    *  short label — the same closed verb `mogging notify` uses, never content. */
@@ -305,9 +344,25 @@ export class DaemonClient {
       this.send({ t: 'approvals' })
     })
   }
+  /** Validate a pane capability without ever disclosing the daemon's stored token. */
+  verifyPaneToken(id: string, token: string, timeoutMs = 2000): Promise<boolean> {
+    if (!id || !token) return Promise.resolve(false)
+    const requestId = this.nextVerifyRequestId++
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.paneVerifyWaiters.delete(requestId)
+        resolve(false)
+      }, timeoutMs)
+      this.paneVerifyWaiters.set(requestId, (valid) => {
+        clearTimeout(timer)
+        resolve(valid)
+      })
+      this.send({ t: 'verify-pane', requestId, id, token })
+    })
+  }
   /** Reviewer gate (4/03): a removed worktree's branch loses its sign-off. */
-  unapprove(branch: string): void {
-    this.send({ t: 'unapprove', branch })
+  unapprove(repoId: string, branch: string): void {
+    this.send({ t: 'unapprove', repoId, branch })
   }
   resize(id: string, cols: number, rows: number): void {
     this.send({ t: 'resize', id, cols, rows })
@@ -316,6 +371,8 @@ export class DaemonClient {
     this.send({ t: 'kill', id })
   }
   dispose(): void {
+    for (const waiters of this.roleWaiters.values()) for (const done of waiters) done(false)
+    this.roleWaiters.clear()
     this.sock?.destroy()
     this.sock = null
   }

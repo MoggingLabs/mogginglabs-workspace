@@ -1,6 +1,7 @@
 import { FS_DRIVE_ROOT, FS_LIST_CAP, type DirEntry, type DirListing, type DirRefusal, type DirResult, type ListDirRequest } from '@contracts'
 import { el, clear } from './dom'
 import { icon } from './icons'
+import { Button } from './button'
 import { Pill } from './pill'
 import { EmptyState } from './empty-state'
 import { createCheckbox } from './checkbox'
@@ -56,8 +57,16 @@ const REFUSALS: Record<string, { title: string; body: string }> = {
   invalid: { title: 'Not a full path', body: 'Type an absolute path — one that starts at a drive or at /.' }
 }
 
+REFUSALS.unavailable = {
+  title: 'Could not verify this folder',
+  body: 'The filesystem service did not answer. Try again before launching.'
+}
+
 export function createFolderBrowser(opts: FolderBrowserOpts): FolderBrowserHandle {
   let listing: DirListing | null = null
+  /** The last listing that actually OPENED. A refusal keeps it, because it is the only way
+   *  back out of one: the crumbs are drawn from it, and the refusal panel's escape goes to it. */
+  let lastGood: DirListing | null = null
   let refusal: { reason: string; path: string } | null = null
   let cur = ''
   let selected = ''
@@ -67,7 +76,11 @@ export function createFolderBrowser(opts: FolderBrowserOpts): FolderBrowserHandl
   let rows: { label: string; path: string; entry: DirEntry | null }[] = []
 
   const crumbs = el('nav', { class: 'fb-crumbs', ariaLabel: 'Folder path' })
-  const list = el('div', { class: 'fb-list', role: 'listbox', ariaLabel: 'Folders' })
+  // tabIndex -1: the list is the focus of LAST resort. The keydown listener lives here, so
+  // when a branch renders no rows at all (a filter that matches nothing), something inside
+  // must still be able to take a keystroke — or the Esc that clears it never arrives. Never
+  // in the tab order; the roving row is the tab stop.
+  const list = el('div', { class: 'fb-list', role: 'listbox', ariaLabel: 'Folders', tabIndex: -1 })
   const filterChip = el('span', { class: 'fb-filter' })
   const truncNote = el('span', { class: 'fb-trunc' })
 
@@ -99,7 +112,10 @@ export function createFolderBrowser(opts: FolderBrowserOpts): FolderBrowserHandl
   // ── rendering ────────────────────────────────────────────────────────────────
   function renderCrumbs(): void {
     clear(crumbs)
-    const trail = listing?.crumbs ?? []
+    // A refusal nulls `listing` — but the trail is how you climb OUT of one. Keep the last
+    // good crumbs on screen, or a locked folder leaves the component with nothing focusable
+    // in it anywhere: the refusal used to be a picture with no way back.
+    const trail = (listing ?? lastGood)?.crumbs ?? []
     trail.forEach((c, i) => {
       if (i > 0) crumbs.append(el('span', { class: 'fb-crumb-sep' }, [icon('chevron-right', 12)]))
       const isCurrent = i === trail.length - 1
@@ -121,22 +137,82 @@ export function createFolderBrowser(opts: FolderBrowserOpts): FolderBrowserHandl
     return f ? ents.filter((e) => e.name.toLowerCase().includes(f)) : ents
   }
 
+  /** The list only CLAIMS to be a listbox while it holds options. A refusal panel, an empty
+   *  state, and the refusal's own button are not `option`s, and a listbox may own nothing
+   *  else — so the role leaves with the rows instead of lying about what is inside. */
+  function listRole(hasOptions: boolean): void {
+    if (hasOptions) list.setAttribute('role', 'listbox')
+    else list.removeAttribute('role')
+  }
+
+  /**
+   * The way OUT of a dead end. A refusal renders no rows, and it used to render no crumbs
+   * either, so NOTHING in the component could take a keystroke: press Enter on a locked
+   * folder and focus fell to <body> — and since the keydown listener lives on `list`, the
+   * browser went keyboard-dead where it stood. It cannot offer "up": a refusal carries no
+   * `parent` (fs.ipc.ts) and @ui may not derive one (ADR 0004). So it goes back to the last
+   * folder that opened — which, when you descended INTO the refusal, is exactly where up was.
+   */
+  function refusalWayOut(): HTMLElement {
+    const back = lastGood
+    const b = back
+      ? Button({
+          label: 'Go back',
+          icon: 'chevron-left',
+          variant: 'ghost',
+          size: 'sm',
+          title: back.path || 'This PC',
+          onClick: () => void load(back.path)
+        })
+      : // Nothing has opened yet (the owner handed us a bad path on arrival). Re-asking is
+        // the only honest offer — and it is the one the `unavailable` copy already makes.
+        Button({ label: 'Try again', icon: 'rotate-cw', variant: 'ghost', size: 'sm', title: cur, onClick: () => void load(cur) })
+    b.style.marginTop = 'var(--sp-3)'
+    return b
+  }
+
+  /** Focus whatever the list is currently offering: the active row, else the refusal's own
+   *  escape, else the list itself. One of the three must always hold focus — see renderList. */
+  function focusActive(): void {
+    const node = rows.length ? list.children[active] : (list.querySelector('.fb-refusal button') ?? list)
+    if (node instanceof HTMLElement) node.focus()
+  }
+
   function renderList(): void {
+    // Type-to-filter repaints the WHOLE list on every keystroke, and clear() drops the
+    // focused row on the floor: focus falls to <body>, and because the keydown listener
+    // lives on `list`, the SECOND character never arrives — one letter and the browser is
+    // dead. So remember whether we held focus, and hand it to whatever replaced the row.
+    // (file-tree.ts's setActive has done exactly this from the start.)
+    const hadFocus = list.contains(document.activeElement)
+    drawList()
+    if (hadFocus) focusActive()
+  }
+
+  function drawList(): void {
     clear(list)
     rows = []
+    // The chip is the only proof the filter exists, so every branch below must leave it
+    // true — including the ones that return early, which used to leave it stale.
+    filterChip.textContent = filter ? `filter: ${filter}` : ''
 
     // Before the first listing lands: nothing. Not an EmptyState — "this folder is
     // empty" would be a claim we have not checked yet.
-    if (!listing && !refusal) return
+    if (!listing && !refusal) {
+      listRole(false)
+      return
+    }
 
     if (refusal) {
+      listRole(false)
       const r = REFUSALS[refusal.reason] ?? REFUSALS.missing
       list.append(
         el('div', { class: 'fb-refusal' }, [
           el('span', { class: 'fb-refusal-icon' }, [icon('alert', 20)]),
           el('div', {}, [
             el('div', { class: 'fb-refusal-title', text: r.title }),
-            el('div', { class: 'fb-refusal-body', text: r.body })
+            el('div', { class: 'fb-refusal-body', text: r.body }),
+            refusalWayOut()
           ])
         ])
       )
@@ -151,6 +227,9 @@ export function createFolderBrowser(opts: FolderBrowserOpts): FolderBrowserHandl
     for (const e of visibleEntries()) rows.push({ label: e.name, path: e.path, entry: e })
 
     if (!rows.length) {
+      // No options — so no listbox, and no row to focus either: renderList parks focus on
+      // the list itself, which is what makes "Press Esc to clear" a promise we can keep.
+      listRole(false)
       list.append(
         filter
           ? EmptyState({ icon: 'search', title: 'No folder matches', body: `Nothing here contains “${filter}”. Press Esc to clear.` })
@@ -160,6 +239,7 @@ export function createFolderBrowser(opts: FolderBrowserOpts): FolderBrowserHandl
       return
     }
 
+    listRole(true)
     if (active >= rows.length) active = rows.length - 1
     if (active < 0) active = 0
 
@@ -190,7 +270,6 @@ export function createFolderBrowser(opts: FolderBrowserOpts): FolderBrowserHandl
     paintSelection()
 
     truncNote.textContent = listing?.truncated ? `First ${FS_LIST_CAP} folders — type to narrow.` : ''
-    filterChip.textContent = filter ? `filter: ${filter}` : ''
   }
 
   /** Selection is a CLASS change, never a re-render — see the onClick note above. */
@@ -224,6 +303,7 @@ export function createFolderBrowser(opts: FolderBrowserOpts): FolderBrowserHandl
   function applyListing(l: DirListing, sel: string): void {
     nav++
     listing = l
+    lastGood = l
     refusal = null
     cur = l.path // canonical: what main says, not what we asked for
     selected = sel // the OWNER decides what is chosen — looking is not choosing
@@ -261,6 +341,7 @@ export function createFolderBrowser(opts: FolderBrowserOpts): FolderBrowserHandl
     active = 0
     if (res.ok) {
       listing = res
+      lastGood = res
       refusal = null
       cur = res.path
       if (!o.keepSelection) selected = cur
@@ -343,10 +424,7 @@ export function createFolderBrowser(opts: FolderBrowserOpts): FolderBrowserHandl
     applyListing,
     showRefusal,
     refresh: () => load(cur, { keepSelection: true }),
-    focusList: () => {
-      const node = list.children[active]
-      if (node instanceof HTMLElement) node.focus()
-    }
+    focusList: () => focusActive() // a refusal has no rows — it hands focus to its own way out
   }
 }
 

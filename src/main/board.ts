@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import { getSettingsStore } from './app-settings'
+import { maybeFault } from './fault-port'
 import { BOARD_LANES, BoardChannels, type BoardCard } from '@contracts'
 
 // App-wiring: bind the Kanban board (Phase-3/05) to the app-settings db. Card text is
@@ -28,12 +29,14 @@ function sanitizeCard(raw: unknown): BoardCard | null {
 
 export function registerBoard(): void {
   ipcMain.handle(BoardChannels.list, () => getSettingsStore()?.listBoard() ?? [])
-  ipcMain.handle(BoardChannels.save, (_e, raw: unknown) => {
+  ipcMain.handle(BoardChannels.save, async (_e, raw: unknown) => {
+    await maybeFault(BoardChannels.save) // ASYNCSTATE seam (finding 39) — inert unless armed
     const card = sanitizeCard(raw)
     if (card) getSettingsStore()?.saveBoardCard(card)
     return card != null
   })
-  ipcMain.handle(BoardChannels.remove, (_e, id: unknown) => {
+  ipcMain.handle(BoardChannels.remove, async (_e, id: unknown) => {
+    await maybeFault(BoardChannels.remove)
     if (typeof id === 'string' && id) getSettingsStore()?.removeBoardCard(id)
   })
 }

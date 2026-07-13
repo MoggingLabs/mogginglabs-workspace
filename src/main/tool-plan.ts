@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 import type { HostedCliId } from '@contracts'
 import { composePlanEntries, findWriter, materializePlanFor } from '@backend/features/integrations'
@@ -16,24 +16,38 @@ import { houseServerEntry, listServers } from './mcp-manager'
 const AGENT_TO_CLI: Record<string, HostedCliId | undefined> = { claude: 'claude-code', codex: 'codex', gemini: 'gemini' }
 export const cliForAgent = (agentId: string): HostedCliId | undefined => AGENT_TO_CLI[agentId]
 
-/** Why a launch could NOT scope a CLI, per workspace — the worktree already held
- *  a `.codex/config.toml` / `.gemini/settings.json` that isn't ours. Kept for the
- *  caller/UI to read; the launch itself never fails on it. */
+/** Why a scoped launch was refused. It never falls through to global servers. */
 const skippedScopes = new Map<string, string>()
 export const toolPlanSkipReason = (workspaceId: string): string | undefined => skippedScopes.get(String(workspaceId))
 
-export function materializeToolPlanAtLaunch(req: { agentId: string; cwd: string; workspaceId?: string }): string[] {
+export interface ToolPlanMaterialization {
+  ok: boolean
+  args: string[]
+  reason?: string
+}
+
+export function materializeToolPlanAtLaunch(req: { agentId: string; cwd: string; workspaceId?: string }): ToolPlanMaterialization {
   const cli = cliForAgent(req.agentId)
   // Scoping is OPT-IN: aider/opencode, plan-less launches, and workspaces that
   // never stored a plan all launch UNCHANGED (the CLI's own global config).
-  if (!cli || !req.workspaceId || !hasToolPlan(req.workspaceId)) return []
+  if (!cli || !req.workspaceId || !hasToolPlan(req.workspaceId)) return { ok: true, args: [] }
   const plan = getToolPlan(req.workspaceId)
   const entries = composePlanEntries(plan, cli, listServers(), houseServerEntry())
   const planDir = join(app.getPath('userData'), 'toolplans')
   const mat = materializePlanFor({ cli, entries, inheritGlobal: plan.inheritGlobal, planDir, cwd: req.cwd, workspaceId: req.workspaceId })
   const writer = findWriter(cli)
   skippedScopes.delete(req.workspaceId)
-  let refused = false
+  const before: Array<{ path: string; existed: boolean; content: string }> = []
+  const rollback = (): void => {
+    for (const prior of [...before].reverse()) {
+      try {
+        if (prior.existed) writeFileSync(prior.path, prior.content)
+        else rmSync(prior.path, { force: true })
+      } catch {
+        /* launch remains refused; never fall back to global config */
+      }
+    }
+  }
   for (const f of mat.files) {
     try {
       // A project-scope plan file lives in the USER'S WORKTREE — and a repo may
@@ -41,36 +55,44 @@ export function materializeToolPlanAtLaunch(req: { agentId: string; cwd: string;
       // there but our own managed blocks; otherwise leave the user's file alone
       // and launch on the CLI's global config (what a plan-less pane gets).
       if (f.projectScoped && existsSync(f.path) && writer && !writer.isManagedScoped(readFileSync(f.path, 'utf8'))) {
-        refused = true
-        const reason = `${f.path} is the repo's own config — not overwriting it, so this pane keeps ${cli}'s global servers`
+        const reason = `${f.path} is the repo's own config. The scoped agent was not launched; it did not fall back to global servers.`
         skippedScopes.set(req.workspaceId, reason)
-        console.warn(`tool-plan: ${reason}`) // the one loud line — evidence, never a blocked launch
-        continue
+        rollback()
+        return { ok: false, args: [], reason }
       }
+      const existed = existsSync(f.path)
+      before.push({ path: f.path, existed, content: existed ? readFileSync(f.path, 'utf8') : '' })
       mkdirSync(dirname(f.path), { recursive: true })
       writeFileSync(f.path, f.content)
-    } catch {
-      /* best effort — a failed write just means that server won't load */
+    } catch (error) {
+      rollback()
+      const reason = `Could not materialize the scoped tool plan: ${error instanceof Error ? error.message : String(error)}`
+      skippedScopes.set(req.workspaceId, reason)
+      return { ok: false, args: [], reason }
     }
   }
-  // Nothing of ours in the worktree = nothing to hide from `git status`.
-  if (mat.excludeRelPaths.length && !refused) gitExcludeInWorktree(req.cwd, mat.excludeRelPaths)
-  return mat.launchArgs
+  if (mat.excludeRelPaths.length && !gitExcludeInWorktree(req.cwd, mat.excludeRelPaths)) {
+    rollback()
+    const reason = 'Could not hide the managed tool-plan file from Git. The scoped agent was not launched.'
+    skippedScopes.set(req.workspaceId, reason)
+    return { ok: false, args: [], reason }
+  }
+  return { ok: true, args: mat.launchArgs }
 }
 
 /** Append paths to the worktree's `.git/info/exclude` (never `.gitignore`, which
  *  IS tracked) so a materialized project-scope plan file is invisible to git.
  *  Handles a linked worktree, where `.git` is a FILE pointing at the real dir. */
-export function gitExcludeInWorktree(cwd: string, relPaths: string[]): void {
+export function gitExcludeInWorktree(cwd: string, relPaths: string[]): boolean {
   try {
     const dotGit = join(cwd, '.git')
-    if (!existsSync(dotGit)) return
+    if (!existsSync(dotGit)) return false
     let gitDir: string
     if (statSync(dotGit).isDirectory()) {
       gitDir = dotGit
     } else {
       const m = /gitdir:\s*(.+)/.exec(readFileSync(dotGit, 'utf8'))
-      if (!m) return
+      if (!m) return false
       gitDir = m[1].trim()
       if (!isAbsolute(gitDir)) gitDir = join(cwd, gitDir)
     }
@@ -80,10 +102,11 @@ export function gitExcludeInWorktree(cwd: string, relPaths: string[]): void {
     const current = existsSync(file) ? readFileSync(file, 'utf8') : ''
     const have = new Set(current.split(/\r?\n/).map((s) => s.trim()))
     const toAdd = relPaths.map((p) => p.replace(/\\/g, '/')).filter((p) => !have.has(p))
-    if (!toAdd.length) return
+    if (!toAdd.length) return true
     const sep = current && !current.endsWith('\n') ? '\n' : ''
     appendFileSync(file, sep + '# MoggingLabs tool-plan (managed)\n' + toAdd.join('\n') + '\n')
+    return true
   } catch {
-    /* exclude is best-effort; the plan file still loads */
+    return false
   }
 }

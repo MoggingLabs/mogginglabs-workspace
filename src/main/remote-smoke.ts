@@ -1,8 +1,10 @@
-import { app, type BrowserWindow } from 'electron'
+import { app, ipcMain, type BrowserWindow } from 'electron'
 import { execFile, execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { getSettingsStore } from './app-settings'
+import { REMOTE_READY_OSC, TerminalChannels, type AgentCommandResult, type RemoteRemoveResult } from '@contracts'
 
 // Env-gated remote-pane smoke (MOGGING_REMOTE, Phase-4/05). No real network: the
 // daemon spawns the MOGGING_SSH_SHIM script (set by main BEFORE the daemon started;
@@ -29,12 +31,14 @@ function makeRepo(): string {
   return repo
 }
 
-// A batch (win) / sh (posix) script: print the argv marker, then hand over to an
-// interactive local shell so the pane behaves like a real ssh session.
+// A batch (win) / sh (posix) script: print the argv marker, delay like an SSH
+// auth prompt, then hand over to an interactive local shell. The smoke injects
+// the daemon's readiness data event explicitly after asserting no early write;
+// batch/ConPTY does not preserve private OSCs consistently across Windows builds.
 const SHIM_SRC =
   process.platform === 'win32'
-    ? '@echo SSH_SHIM argv=%*\r\n@%COMSPEC%\r\n'
-    : '#!/bin/sh\necho "SSH_SHIM argv=$@"\nexec ${SHELL:-/bin/sh}\n'
+    ? '@echo SSH_SHIM argv=%*\r\n@>nul ping -n 3 127.0.0.1\r\n@%COMSPEC%\r\n'
+    : '#!/bin/sh\necho "SSH_SHIM argv=$@"\nsleep 2\nexec ${SHELL:-/bin/sh}\n'
 
 export function runRemoteSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 150000) // safety net
@@ -42,6 +46,11 @@ export function runRemoteSmoke(win: BrowserWindow): void {
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
   const cliPath = join(app.getAppPath(), 'bin', 'mogging.mjs')
+  const rendererWrites: { id: number; data: string; at: number }[] = []
+  const onRendererWrite = (_event: unknown, payload: { id?: number; data?: string }): void => {
+    rendererWrites.push({ id: Number(payload?.id), data: String(payload?.data ?? ''), at: Date.now() })
+  }
+  ipcMain.on(TerminalChannels.write, onRendererWrite)
 
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
@@ -56,13 +65,24 @@ export function runRemoteSmoke(win: BrowserWindow): void {
 
       // Saved host (pointers only) -> mixed workspace: slot 1 local repo, slot 2 remote.
       const saved = await ES<boolean>(
-        `window.bridge.invoke('remotes:save', ${JSON.stringify({ id: 'h1', name: 'buildbox', host: 'build.example', user: 'dev', port: 2222 })})`
+        `window.bridge.invoke('remotes:save', ${JSON.stringify({ id: 'h1', name: 'buildbox', host: 'build.example', user: 'dev', port: 2222, platform: 'posix', shell: 'bash' })})`
       )
       await ES(
-        `window.__mogging.workspace.create({ name: 'Mix', cwd: ${JSON.stringify(repo)}, paneCount: 2, remotes: [null, { hostId: 'h1', name: 'buildbox' }] })`
+        `window.__mogging.templates.openRemote({ name: 'Mix', cwd: ${JSON.stringify(repo)}, assignments: ['shell', 'codex'], paneCwds: [null, '/srv/remote project'], remotes: [null, { hostId: 'h1', name: 'buildbox' }] })`
       )
-      await sleep(4000)
+      await sleep(1400)
       const base = ((await ES('window.__mogging.workspace.active()')) as { ordinal: number }).ordinal * 100
+      const typedIntoAuthPrompt = rendererWrites.some((write) => write.id === base + 2 && /codex/.test(write.data))
+      const cuts = [REMOTE_READY_OSC.slice(0, 5), REMOTE_READY_OSC.slice(5, 19), REMOTE_READY_OSC.slice(19)]
+      for (const data of cuts) {
+        wc.send(TerminalChannels.data, { id: base + 2, data })
+        await sleep(20)
+      }
+      await sleep(80)
+      const readySeen = await ES<boolean>(`window.__mogging.agents.remoteReady(${base + 2})`)
+      await sleep(3000)
+      const remoteAgentWrite = rendererWrites.find((write) => write.id === base + 2 && /codex/.test(write.data))
+      const readinessGateOk = !typedIntoAuthPrompt && !!remoteAgentWrite
 
       const bufferText = (id: number): Promise<string> =>
         ES<string>(
@@ -83,7 +103,10 @@ export function runRemoteSmoke(win: BrowserWindow): void {
       for (let i = 0; i < 24 && !argvOk; i++) {
         buf2 = await bufferText(base + 2)
         const flat = buf2.replace(/[\r\n]/g, '')
-        argvOk = flat.includes('SSH_SHIM') && flat.includes('-tt') && flat.includes('2222') && flat.includes('dev@build.example')
+        argvOk =
+          flat.includes('SSH_SHIM') && flat.includes('-tt') && flat.includes('2222') &&
+          flat.includes('dev@build.example') && flat.includes('/srv/remote project') &&
+          flat.includes('mogging-remote-ready') && flat.includes('exec bash -l')
         if (!argvOk) await sleep(500)
       }
 
@@ -125,6 +148,26 @@ export function runRemoteSmoke(win: BrowserWindow): void {
       })
       const listOk = /REMOTE/.test(listOut) && /buildbox/.test(listOut)
 
+      // Launch commands use the TARGET dialect, not the OS running the app.
+      const posixBuilt = await ES<AgentCommandResult>(
+        `window.bridge.invoke('agents:command', { agentId: 'codex', cwd: '/srv/remote project', remoteHostId: 'h1' })`
+      )
+      const posixCommand = posixBuilt.command ?? ''
+      const savedWindows = await ES<boolean>(
+        `window.bridge.invoke('remotes:save', ${JSON.stringify({ id: 'hwin', name: 'winbox', host: 'win.example', platform: 'windows', shell: 'powershell' })})`
+      )
+      const windowsCwd = "D:\\Repo O'Hare"
+      const windowsBuilt = await ES<AgentCommandResult>(
+        `window.bridge.invoke('agents:command', { agentId: 'codex', cwd: ${JSON.stringify(windowsCwd)}, remoteHostId: 'hwin' })`
+      )
+      const windowsCommand = windowsBuilt.command ?? ''
+      const removedWindows = (await ES(`window.bridge.invoke('remotes:remove', 'hwin')`)) as RemoteRemoveResult
+      const crossOsCommandsOk =
+        posixBuilt.ok && windowsBuilt.ok &&
+        /cd '\/srv\/remote project' && codex/.test(posixCommand) &&
+        windowsCommand.includes("Set-Location 'D:\\Repo O''Hare' -ErrorAction Stop; codex") &&
+        savedWindows && removedWindows.ok
+
       // 5) exit of the shimmed ssh = pane exit
       await ES(`window.bridge.send('terminal:write', { id: ${base + 2}, data: 'exit\\r' })`)
       let exitOk = false
@@ -133,22 +176,75 @@ export function runRemoteSmoke(win: BrowserWindow): void {
         if (!exitOk) await sleep(500)
       }
 
-      const pass = saved === true && argvOk && chipOk && gitOk && listOk && exitOk
+      // A referenced host cannot be deleted through the product. This keeps
+      // saved remote panes resolvable instead of converting them to local.
+      const blockedDelete = (await ES(
+        `window.bridge.invoke('remotes:remove', 'h1')`
+      )) as RemoteRemoveResult
+      const referencedDeleteBlocked = !blockedDelete.ok && blockedDelete.referencedBy?.includes('Mix') === true
+
+      // Simulate a stale reference left by an older build/manual DB edit, then
+      // reload the renderer so the saved workspace takes the real restore path.
+      // Main must reject spawn before a local shell or local service-key env is
+      // constructed, while the UI keeps the remote chip and explains the fault.
+      getSettingsStore()?.removeRemote('h1')
+      const loaded = new Promise<void>((resolve) => wc.once('did-finish-load', () => resolve()))
+      wc.reload()
+      await loaded
+      await sleep(4500)
+      const staleRestore = (await ES(
+        `(() => {
+          const slot = document.querySelector('.layout-slot[data-pane-id="${base + 2}"]')
+          const pane = (window.__mogging.panes || []).find((item) => item.id === ${base + 2})
+          let text = ''
+          if (pane) {
+            const b = pane.term.buffer.active
+            for (let i = 0; i < b.length; i++) { const line = b.getLine(i); if (line) text += line.translateToString(true) + '\\n' }
+          }
+          return {
+            chip: slot?.querySelector('.pane-remote')?.textContent || '',
+            text,
+            failed: slot?.querySelector('.pane-state')?.getAttribute('title') || ''
+          }
+        })()`
+      )) as { chip: string; text: string; failed: string }
+      const staleFlat = staleRestore.text.replace(/[\r\n]/g, '')
+      const staleRestoreRefused =
+        staleRestore.chip === 'buildbox' &&
+        /terminal failed to start/i.test(staleFlat) &&
+        /no longer exists|not started locally/i.test(staleFlat) &&
+        !/SSH_SHIM/.test(staleFlat)
+
+      const pass =
+        saved === true && argvOk && readinessGateOk && chipOk && gitOk && listOk && crossOsCommandsOk && exitOk &&
+        referencedDeleteBlocked && staleRestoreRefused
       result = {
         pass,
         saved,
         argvOk,
+        readinessGateOk,
+        readySeen,
+        typedIntoAuthPrompt,
+        remoteAgentWrite,
         chipOk,
         chips,
         gitOk,
         listOk,
+        crossOsCommandsOk,
+        posixCommand,
+        windowsCommand,
         exitOk,
+        referencedDeleteBlocked,
+        blockedDelete,
+        staleRestoreRefused,
+        staleRestore,
         buf2Tail: buf2.slice(-500),
         listOut: listOut.slice(0, 400)
       }
     } catch (e) {
       result = { pass: false, error: String(e) }
     }
+    ipcMain.off(TerminalChannels.write, onRendererWrite)
     try {
       writeFileSync(join(process.cwd(), 'out', 'remote-result.json'), JSON.stringify(result, null, 2))
     } catch {

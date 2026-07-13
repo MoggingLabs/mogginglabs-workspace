@@ -1,9 +1,14 @@
 import { app, type BrowserWindow } from 'electron'
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getIntegrationsGrant, setIntegrationsGrant } from './integrations'
 import { mcpEndpointDebug } from './mcp-endpoint'
+import {
+  spawnLocalMcpSmokeClient,
+  spawnPaneMcpSmokeClient,
+  type PaneMcpSmokeClient
+} from './pane-mcp-smoke-client'
 
 // Env-gated write-tools-behind-the-grant smoke (MOGGING_MCPWRITE, Phase-8/03):
 // two workspaces, scripted JSON-RPC frames against the REAL server —
@@ -51,61 +56,8 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
       )
     })
 
-  /** The real server as a child; records every frame + surfaces notifications. */
-  const mcpClient = (
-    extraEnv: Record<string, string> = {}
-  ): {
-    rpc: (method: string, params?: unknown) => Promise<Rpc>
-    notifications: string[]
-    kill: () => void
-  } => {
-    const child: ChildProcessWithoutNullStreams = spawn(
-      process.execPath,
-      [join(root, 'bin', 'mogging-mcp.mjs')],
-      { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ...extraEnv }, windowsHide: true }
-    ) as ChildProcessWithoutNullStreams
-    let out = ''
-    let id = 0
-    const waiters = new Map<number, (v: Rpc) => void>()
-    const notifications: string[] = []
-    child.stdout.setEncoding('utf8')
-    child.stderr.setEncoding('utf8')
-    child.stderr.on('data', (c: string) => frames.push(c))
-    child.stdout.on('data', (chunk: string) => {
-      out += chunk
-      let i
-      while ((i = out.indexOf('\n')) >= 0) {
-        const line = out.slice(0, i)
-        out = out.slice(i + 1)
-        if (!line.trim()) continue
-        frames.push(line)
-        try {
-          const m = JSON.parse(line) as { id?: number; method?: string } & Rpc
-          if (typeof m.id === 'number' && waiters.has(m.id)) {
-            waiters.get(m.id)!({ result: m.result, error: m.error })
-            waiters.delete(m.id)
-          } else if (m.id === undefined && typeof m.method === 'string') {
-            notifications.push(m.method)
-          }
-        } catch {
-          /* ignore non-JSON */
-        }
-      }
-    })
-    return {
-      rpc: (method, params) =>
-        new Promise((resolve) => {
-          const rid = ++id
-          waiters.set(rid, resolve)
-          child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: rid, method, params }) + '\n')
-        }),
-      notifications,
-      kill: () => child.kill()
-    }
-  }
-
   const callTool = async (
-    c: ReturnType<typeof mcpClient>,
+    c: PaneMcpSmokeClient,
     name: string,
     args: Record<string, unknown> = {}
   ): Promise<{ text: string; isError: boolean; rpcError: string | null }> => {
@@ -115,7 +67,7 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
     return { text: r.content?.[0]?.text ?? '', isError: r.isError === true, rpcError: null }
   }
 
-  const listNames = async (c: ReturnType<typeof mcpClient>): Promise<string[]> =>
+  const listNames = async (c: PaneMcpSmokeClient): Promise<string[]> =>
     (((await c.rpc('tools/list')).result as { tools?: ToolRow[] })?.tools ?? []).map((t) => t.name)
 
   const WRITES = ['send_to_pane', 'send_key', 'mail_send', 'claim_files', 'release_files', 'update_card']
@@ -131,7 +83,7 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
 
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
-    const clients: ReturnType<typeof mcpClient>[] = []
+    const clients: PaneMcpSmokeClient[] = []
     try {
       await sleep(1500)
 
@@ -151,7 +103,12 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
       await sleep(1500) // let the workspace state persist (grant.get resolves from it)
 
       // ── Grant 'none' (the default): invisible AND refused ─────────────────
-      const c1 = mcpClient({ MOGGING_PANE_ID: a1 })
+      const c1 = await spawnPaneMcpSmokeClient({
+        cli,
+        paneId: a1,
+        mcpPath: join(root, 'bin', 'mogging-mcp.mjs'),
+        onFrame: (frame) => frames.push(frame)
+      })
       clients.push(c1)
       await c1.rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {} })
       const namesNone = await listNames(c1)
@@ -202,7 +159,12 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
       // claim_files: granted here; a SECOND session (pane a2) claiming an
       // overlap is DENIED with the owner named — exit-5 wording, exactly.
       const claimed = await callTool(c1, 'claim_files', { pattern: 'src/write/**' })
-      const c2 = mcpClient({ MOGGING_PANE_ID: a2 })
+      const c2 = await spawnPaneMcpSmokeClient({
+        cli,
+        paneId: a2,
+        mcpPath: join(root, 'bin', 'mogging-mcp.mjs'),
+        onFrame: (frame) => frames.push(frame)
+      })
       clients.push(c2)
       await c2.rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {} })
       const denied = await callTool(c2, 'claim_files', { pattern: 'src/write/x.ts' })
@@ -233,7 +195,12 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
       const badCardOk = badCard.isError && /unknown card/.test(badCard.text)
 
       // ── Workspace-scoped: B's session sees ZERO writes while A is 'all' ───
-      const cB = mcpClient({ MOGGING_PANE_ID: b1 })
+      const cB = await spawnPaneMcpSmokeClient({
+        cli,
+        paneId: b1,
+        mcpPath: join(root, 'bin', 'mogging-mcp.mjs'),
+        onFrame: (frame) => frames.push(frame)
+      })
       clients.push(cB)
       await cB.rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {} })
       const namesB = await listNames(cB)
@@ -241,12 +208,46 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
       const scopedOk = countWrites(namesB) === 0 && !!refusedB.rpcError && /grant/.test(refusedB.rpcError)
 
       // ── Human session (no pane identity): zero writes, period ─────────────
-      const cH = mcpClient()
+      const cH = spawnLocalMcpSmokeClient({
+        mcpPath: join(root, 'bin', 'mogging-mcp.mjs'),
+        onFrame: (frame) => frames.push(frame)
+      })
       clients.push(cH)
       await cH.rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {} })
       const namesH = await listNames(cH)
       const refusedH = await callTool(cH, 'send_to_pane', { pane: a2, text: 'nope' })
       const humanOk = countWrites(namesH) === 0 && !!refusedH.rpcError && /pane session/.test(refusedH.rpcError)
+
+      // A caller can forge the public pane id in its environment, but without
+      // the daemon-minted pane token the app endpoint binds it as read-only.
+      // It gets neither A's grant nor A's browser consent/session.
+      const cForged = spawnLocalMcpSmokeClient({
+        mcpPath: join(root, 'bin', 'mogging-mcp.mjs'),
+        childEnv: { MOGGING_PANE_ID: a1 },
+        onFrame: (frame) => frames.push(frame)
+      })
+      clients.push(cForged)
+      await cForged.rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {} })
+      const namesForged = await listNames(cForged)
+      const forgedWrite = await callTool(cForged, 'send_to_pane', { pane: a2, text: 'forged' })
+      const forgedBrowser = await callTool(cForged, 'browser_snapshot')
+      const forgedPaneRefused =
+        countWrites(namesForged) === 0 &&
+        !!forgedWrite.rpcError && /grant/.test(forgedWrite.rpcError) &&
+        forgedBrowser.isError && /nopane|pane/i.test(forgedBrowser.text)
+
+      const cWrongToken = spawnLocalMcpSmokeClient({
+        mcpPath: join(root, 'bin', 'mogging-mcp.mjs'),
+        childEnv: { MOGGING_PANE_ID: a1, MOGGING_PANE_TOKEN: 'wrong-pane-capability' },
+        onFrame: (frame) => frames.push(frame)
+      })
+      clients.push(cWrongToken)
+      await cWrongToken.rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {} })
+      const namesWrongToken = await listNames(cWrongToken)
+      const wrongTokenBrowser = await callTool(cWrongToken, 'browser_snapshot')
+      const wrongTokenRefused =
+        countWrites(namesWrongToken) === 0 &&
+        wrongTokenBrowser.isError && /refused the connection \(auth\)/i.test(wrongTokenBrowser.text)
 
       // ── Revoke mid-session: list_changed + the very next call refused ─────
       const changedBefore = c1.notifications.filter((n) => n === 'notifications/tools/list_changed').length
@@ -265,7 +266,7 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
       const pass =
         invisibleWhenNone && refusedWhenNone && defaultIsNone && sawListChanged && visibleWhenAll &&
         sendOk && mailOk && receiptAttention && claimOk && releaseOk && keyOk && cardOk && badCardOk &&
-        scopedOk && humanOk && sawRevokeChange && revokeOk && noApproveAnywhere
+        scopedOk && humanOk && forgedPaneRefused && wrongTokenRefused && sawRevokeChange && revokeOk && noApproveAnywhere
       result = {
         pass,
         invisibleWhenNone,
@@ -286,6 +287,11 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
         scopedOk,
         humanOk,
         humanMsg: refusedH.rpcError,
+        forgedPaneRefused,
+        forgedWriteMsg: forgedWrite.rpcError,
+        forgedBrowserMsg: forgedBrowser.text,
+        wrongTokenRefused,
+        wrongTokenBrowserMsg: wrongTokenBrowser.text,
         sawRevokeChange,
         revokeOk,
         noApproveAnywhere,

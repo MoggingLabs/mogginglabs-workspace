@@ -120,9 +120,9 @@ function receiptCopy(tool: string, by: string): string {
 
 /** A granted write's receipt: attention on the target pane + the trail stub.
  *  Every write is attributable — `by` is the acting pane, always present. */
-function handleReceipt(msg: Record<string, unknown>): void {
+function handleReceipt(msg: Record<string, unknown>, boundPane: string | undefined): void {
   const tool = String(msg.tool ?? '')
-  const by = String(msg.by ?? '')
+  const by = boundPane ?? ''
   if (!tool || !by) return // anonymous writes don't exist
   const card = typeof msg.card === 'string' ? msg.card : undefined
   let targetPane = typeof msg.pane === 'string' && msg.pane ? msg.pane : ''
@@ -161,6 +161,8 @@ export function startMcpEndpoint(): void {
     sock.setEncoding('utf8')
     let buf = ''
     let authed = false
+    let authPending = false
+    let boundPane: string | undefined
     sock.on('data', (chunk) => {
       buf += chunk
       let i
@@ -168,17 +170,46 @@ export function startMcpEndpoint(): void {
         const line = buf.slice(0, i)
         buf = buf.slice(i + 1)
         if (!line) continue
-        let msg: { t?: string; token?: string; id?: number; name?: string; args?: Record<string, unknown>; pane?: string }
+        let msg: { t?: string; token?: string; paneToken?: string; id?: number; name?: string; args?: Record<string, unknown>; pane?: string }
         try {
           msg = JSON.parse(line)
         } catch {
           continue
         }
         if (msg.t === 'hello') {
-          authed = msg.token === token
-          sock.write(JSON.stringify(authed ? { t: 'welcome', tools: MCP_TOOL_NAMES } : { t: 'error', reason: 'auth' }) + '\n')
-          if (!authed) sock.destroy()
-          else authedSocks.add(sock)
+          if (msg.token !== token || authPending || authed) {
+            sock.write(JSON.stringify({ t: 'error', reason: 'auth' }) + '\n')
+            sock.destroy()
+            continue
+          }
+          const wantsPane = typeof msg.pane === 'string' || typeof msg.paneToken === 'string'
+          if (!wantsPane) {
+            authed = true // human/read-only app client; pane-scoped verbs still fail closed
+            authedSocks.add(sock)
+            sock.write(JSON.stringify({ t: 'welcome', tools: MCP_TOOL_NAMES, paneBound: false }) + '\n')
+            continue
+          }
+          if (typeof msg.pane !== 'string' || !msg.pane || typeof msg.paneToken !== 'string' || !msg.paneToken) {
+            sock.write(JSON.stringify({ t: 'error', reason: 'auth' }) + '\n')
+            sock.destroy()
+            continue
+          }
+          authPending = true
+          const pane = msg.pane
+          const verifier = getDaemonClient()
+          void (verifier ? verifier.verifyPaneToken(pane, msg.paneToken) : Promise.resolve(false)).then((valid) => {
+            authPending = false
+            if (sock.destroyed) return
+            if (!valid) {
+              sock.write(JSON.stringify({ t: 'error', reason: 'auth' }) + '\n')
+              sock.destroy()
+              return
+            }
+            boundPane = pane
+            authed = true
+            authedSocks.add(sock)
+            sock.write(JSON.stringify({ t: 'welcome', tools: MCP_TOOL_NAMES, paneBound: true }) + '\n')
+          })
           continue
         }
         if (!authed) {
@@ -190,7 +221,7 @@ export function startMcpEndpoint(): void {
         // (the house notify path) and feeds the trail stub. Tool NAME + pane
         // ids only — args/bodies never ride a receipt (ADR 0005).
         if (msg.t === 'receipt') {
-          handleReceipt(msg as unknown as Record<string, unknown>)
+          if (boundPane) handleReceipt(msg as unknown as Record<string, unknown>, boundPane)
           continue
         }
         if (msg.t === 'call' && typeof msg.id === 'number' && typeof msg.name === 'string') {
@@ -217,6 +248,10 @@ export function startMcpEndpoint(): void {
           // card (the board:save capability, no new verbs). Reply carries the
           // card's bound pane so the server's receipt can land on it.
           if (msg.name === 'board.save') {
+            if (!boundPane || !resolveGrantedWriteTools(boundPane).writeTools.includes('update_card')) {
+              sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: 'forbidden' }) + '\n')
+              continue
+            }
             const args = msg.args ?? {}
             const store = getSettingsStore()
             const card = store?.listBoard().find((c) => c.id === String(args.card ?? ''))
@@ -241,7 +276,7 @@ export function startMcpEndpoint(): void {
           // granted write-tool NAMES (fail-closed); the server filters its
           // catalog by this list and re-checks it live per write call.
           if (msg.name === 'grant.get') {
-            const res = resolveGrantedWriteTools(String(msg.args?.pane ?? ''))
+            const res = boundPane ? resolveGrantedWriteTools(boundPane) : { writeTools: [] }
             sock.write(JSON.stringify({ t: 'result', id, ok: true, ...res }) + '\n')
             continue
           }
@@ -250,9 +285,13 @@ export function startMcpEndpoint(): void {
             sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: 'unknown-tool' }) + '\n')
             continue
           }
+          if (!boundPane) {
+            sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: 'nopane' }) + '\n')
+            continue
+          }
           // 8/07c: carry the calling pane so the browser verb drives the
           // AGENT'S OWN workspace's browser, not whatever's in the foreground.
-          void agentAct(verb, { pane: typeof msg.pane === 'string' ? msg.pane : undefined }).then((r) => {
+          void agentAct(verb, { pane: boundPane }).then((r) => {
             sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n')
           })
         }

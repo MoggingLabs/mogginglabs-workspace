@@ -29,7 +29,7 @@ import { connectEndpoint } from './lib/endpoint-client.mjs'
 // plain Node — it cannot import the TS contract). It names the runtime DIRECTORY both the daemon
 // socket and the app's browser-control endpoint live in, so a stale value does not degrade: every
 // tool silently reports "the daemon is not running". Enforced by scripts/check-protocol-version.mjs.
-const PROTOCOL = 6
+const PROTOCOL = 7
 // Release channel (keep in sync with contracts ReleaseChannel; same gate). Inside a pane the
 // MOGGING_*_ENDPOINT envs below pin the exact app, so this only decides the well-known FALLBACK
 // path — run/dev-v4 when MOGGING_CHANNEL=dev is inherited (dev panes) or --dev is passed.
@@ -86,7 +86,7 @@ function applyGrantSet(names, emitChange) {
 async function refreshGrant(emitChange) {
   if (!paneIdentity()) return applyGrantSet([], emitChange)
   try {
-    const r = await callApp('grant.get', { pane: paneIdentity() })
+    const r = await callApp('grant.get', {})
     return applyGrantSet(r.ok && Array.isArray(r.writeTools) ? r.writeTools : [], emitChange)
   } catch {
     return applyGrantSet([], emitChange) // app unreachable: fail closed
@@ -109,7 +109,11 @@ const appPending = new Map()
 async function connectApp() {
   let sess
   try {
-    sess = await connectEndpoint(appEndpointFile())
+    const pane = paneIdentity()
+    const paneToken = process.env.MOGGING_PANE_TOKEN || undefined
+    sess = await connectEndpoint(appEndpointFile(), {
+      hello: pane && paneToken ? { pane, paneToken } : {}
+    })
   } catch (e) {
     throw new Error(
       e.code === 'auth'
@@ -240,8 +244,8 @@ const paneIdentity = () => process.env.MOGGING_PANE_ID || undefined
 
 async function handleBrowserCall(id, def, args) {
   try {
-    // Carry our pane so the app drives THIS agent's workspace browser (8/07c).
-    const r = await callApp(def.verb, args, { pane: paneIdentity() })
+    // The app endpoint bound this socket to our pane during hello; per-call identity is ignored.
+    const r = await callApp(def.verb, args)
     if (!r.ok) {
       const hint =
         r.reason === 'disabled'
@@ -433,7 +437,7 @@ async function handleWriteCall(id, def, args) {
   // client ignored list_changed. Unverifiable (app down) is a clean refusal.
   let live
   try {
-    const r = await callApp('grant.get', { pane: by })
+    const r = await callApp('grant.get', {})
     live = applyGrantSet(r.ok && Array.isArray(r.writeTools) ? r.writeTools : [], true)
   } catch {
     replyErr(id, -32000, 'cannot verify the write grant — the MoggingLabs app is not running')
@@ -461,7 +465,7 @@ async function handleWriteCall(id, def, args) {
     toolText(id, done.text)
     // The receipt: attention on the target + the trail, app-side. Fire and
     // forget — tool NAME and pane ids only, never args or bodies (ADR 0005).
-    if (done.receipt && appSession) appSession.send({ t: 'receipt', tool: def.name, by, ...done.receipt })
+    if (done.receipt && appSession) appSession.send({ t: 'receipt', tool: def.name, ...done.receipt })
   } catch (e) {
     if (e.rpc) replyErr(id, -32000, String(e.message || e))
     else toolError(id, String(e.message || e))

@@ -85,8 +85,11 @@ export function runBoardUxSmoke(win: BrowserWindow): void {
       // (c) ⋯ menu opens fully inside the viewport.
       await ES(`document.querySelector('.board-card[data-card-id=${JSON.stringify(cardId)}] .board-card-more').click()`)
       await sleep(200)
+      // The card ⋯ is a REAL menu now (role=menu/menuitem, roving focus, Escape, focus return),
+      // portaled to <body> by the shared context-menu primitive — it is no longer a hand-rolled
+      // `div.menu[hidden]` inside the card. Same contract, new selectors (finding 31).
       const menu = await ES<{ ok: boolean }>(`(() => {
-        const m = document.querySelector('.board-card-menu:not([hidden])')
+        const m = document.querySelector('.ctx-menu')
         if (!m) return { ok: false }
         const r = m.getBoundingClientRect()
         return { ok: r.left >= 0 && r.top >= 0 && r.right <= window.innerWidth && r.bottom <= window.innerHeight }
@@ -100,8 +103,8 @@ export function runBoardUxSmoke(win: BrowserWindow): void {
       // certification sweeps (menu not yet mounted -> the optional-chained Delete click
       // silently no-opped -> no modal, confirmShown false).
       await ES(`document.querySelector('.board-card[data-card-id=${JSON.stringify(cardId)}] .board-card-more').click()`)
-      const menuReopened = await waitTrue(`!!document.querySelector('.board-card-menu:not([hidden]) .menu-item')`)
-      await ES(`[...document.querySelectorAll('.board-card-menu:not([hidden]) .menu-item')].find((b) => /Delete card/.test(b.textContent || ''))?.click()`)
+      const menuReopened = await waitTrue(`!!document.querySelector('.ctx-menu .ctx-item')`)
+      await ES(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((b) => /Delete card/.test(b.textContent || ''))?.click()`)
       await waitTrue(`!!document.querySelector('.modal-overlay')`)
       const confirmShown =
         menuReopened &&

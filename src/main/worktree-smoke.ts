@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setWorktreeAuditFault, worktreeAuditFault } from './worktree-audit-faults'
 
 // Env-gated worktree-isolation smoke (MOGGING_WORKTREE, Phase-3/03):
 //  1. throwaway repo -> open a workspace with TWO isolated agent slots (dev handle;
@@ -130,33 +131,140 @@ export function runWorktreeSmoke(win: BrowserWindow): void {
         ES(
           `window.bridge.invoke('worktrees:remove', ${JSON.stringify({ repo, path, force })})`
         ) as Promise<{ ok: boolean; reason?: string }>
+      const clickMenuItem = (paneId: number, label: string): Promise<boolean> =>
+        ES<boolean>(`(() => {
+          const slot = document.querySelector('.layout-slot[data-pane-id="${paneId}"]')
+          const opener = slot?.querySelector('.pane-act-menu')
+          if (!(opener instanceof HTMLButtonElement)) return false
+          opener.click()
+          const item = Array.from(document.querySelectorAll('#pane-menu-${paneId} .menu-item'))
+            .find((el) => (el.textContent ?? '').trim() === ${JSON.stringify(label)})
+          if (!(item instanceof HTMLButtonElement)) return false
+          item.click()
+          return true
+        })()`)
+      const clickToastAction = (label: string): Promise<boolean> =>
+        ES<boolean>(`(() => {
+          const button = Array.from(document.querySelectorAll('.toast-action'))
+            .find((el) => (el.textContent ?? '').trim() === ${JSON.stringify(label)})
+          if (!(button instanceof HTMLButtonElement)) return false
+          button.click()
+          return true
+        })()`)
+      const confirmPaneClose = async (): Promise<boolean> => {
+        for (let i = 0; i < 50; i++) {
+          const clicked = await ES<boolean>(`(() => {
+            const button = Array.from(document.querySelectorAll('.modal-overlay:not(.is-closing) .confirm-actions button'))
+              .find((el) => (el.textContent ?? '').trim() === 'Close pane')
+            if (!(button instanceof HTMLButtonElement)) return false
+            button.click()
+            return true
+          })()`)
+          if (clicked) return true
+          await sleep(100)
+        }
+        return false
+      }
+      const waitGone = async (path: string): Promise<boolean> => {
+        for (let i = 0; i < 120; i++) {
+          if (!existsSync(path)) return true
+          await sleep(100)
+        }
+        return false
+      }
+      const waitRemovalComplete = async (paneId: number): Promise<boolean> => {
+        for (let i = 0; i < 120; i++) {
+          const complete = await ES<boolean>(`(() => {
+            const events = window.__mogging.workspace.worktreeRemovalAudit()
+              .filter((event) => event.paneId === ${paneId} && event.stage === 'remove-result')
+            return events.at(-1)?.ok === true
+          })()`)
+          if (complete) return true
+          await sleep(100)
+        }
+        return false
+      }
       writeFileSync(join(paneCwds[0], 'dirty.txt'), 'uncommitted\n')
       // The dirty REFUSAL is a git-level check (before any delete), so it holds
       // whether or not the pane is open.
       const dirtyRefused = await removeVia(paneCwds[0], false)
+      const dirtyMenuClicked = await clickMenuItem(base + 1, 'Remove worktree…')
+      await sleep(700)
+      const dirtyUiRefused = await ES<boolean>(`(() => {
+        const pane = document.querySelector('.layout-slot[data-pane-id="${base + 1}"]')
+        const toast = Array.from(document.querySelectorAll('.toast'))
+          .find((el) => el.querySelector('.toast-title')?.textContent === 'Worktree has uncommitted changes')
+        return !!pane && !!toast && !!Array.from(toast.querySelectorAll('.toast-action'))
+          .find((el) => (el.textContent ?? '').trim() === 'Remove anyway')
+      })()`)
+      const noRemovalBeforeForce =
+        existsSync(paneCwds[0]) &&
+        (await ES<unknown[]>(`window.__mogging.workspace.worktreeRemovalAudit()`)).length === 0
+      const forceClicked = await clickToastAction('Remove anyway')
+      const dirtyCloseConfirmed = await confirmPaneClose()
+      const forcedGone = await waitGone(paneCwds[0])
+      const dirtyRemovalComplete = await waitRemovalComplete(base + 1)
       // Windows refuses to delete a directory that is a live process's CWD — each
       // pane's own shell keeps ITS worktree open, so ANY delete (clean or forced)
       // hits "Permission denied" on windows-latest (never on POSIX, which unlinks
       // a busy dir). The real "remove worktree" UX closes the pane first; close
       // BOTH, then retry each delete while the OS releases the handles.
-      await ES(`window.__mogging.layout.close(${base + 1})`)
-      await ES(`window.__mogging.layout.close(${base + 2})`)
-      const removeRetry = async (path: string, force: boolean): Promise<{ ok: boolean; reason?: string }> => {
-        let r: { ok: boolean; reason?: string } = { ok: false, reason: 'not attempted' }
-        for (let i = 0; i < 14; i++) {
-          await sleep(500)
-          r = await removeVia(path, force)
-          if (r.ok) break
-        }
-        return r
+      setWorktreeAuditFault({ lockPath: paneCwds[1], failures: 2 })
+      const cleanMenuClicked = await clickMenuItem(base + 2, 'Remove worktree…')
+      const cleanCloseConfirmed = await confirmPaneClose()
+      const cleanGone = await waitGone(paneCwds[1])
+      const cleanRemovalComplete = await waitRemovalComplete(base + 2)
+      const lockAttempts = worktreeAuditFault()?.attempts ?? 0
+      setWorktreeAuditFault(null)
+
+      type OrderEvent = {
+        paneId: number
+        stage: 'request' | 'pane-closed' | 'remove-attempt' | 'remove-result'
+        attempt?: number
+        paneStillMounted: boolean
+        ok?: boolean
+        reason?: string
       }
-      const cleanRemoved = await removeRetry(paneCwds[1], false) // clean -> no force needed
-      const forcedRemoved = await removeRetry(paneCwds[0], true)
+      const orderEvents = await ES<OrderEvent[]>(`window.__mogging.workspace.worktreeRemovalAudit()`)
+      const orderedFor = (paneId: number): boolean => {
+        const events = orderEvents.filter((event) => event.paneId === paneId)
+        const requested = events.findIndex((event) => event.stage === 'request')
+        const closed = events.findIndex((event) => event.stage === 'pane-closed')
+        const firstRemove = events.findIndex((event) => event.stage === 'remove-attempt')
+        const attempts = events.filter((event) => event.stage === 'remove-attempt')
+        const results = events.filter((event) => event.stage === 'remove-result')
+        return requested >= 0 && closed > requested && firstRemove > closed &&
+          events[requested]?.paneStillMounted === true && events[closed]?.paneStillMounted === false &&
+          attempts.length > 0 && attempts.every((event) => event.paneStillMounted === false) &&
+          results.at(-1)?.ok === true
+      }
+      const dirtyOrderOk = orderedFor(base + 1)
+      const cleanOrderOk = orderedFor(base + 2)
+      const cleanResults = orderEvents.filter(
+        (event) => event.paneId === base + 2 && event.stage === 'remove-result'
+      )
+      const lockRetryOk =
+        lockAttempts >= 3 &&
+        cleanResults.length >= 3 &&
+        cleanResults[0]?.reason === 'error' &&
+        cleanResults[1]?.reason === 'error' &&
+        cleanResults.at(-1)?.ok === true
+      const activeAfter = await ES<{ paneCwds?: (string | null)[] }>(`window.__mogging.workspace.active()`)
+      const liveAfter = await ES<number[]>(`window.__mogging.layout.paneIds()`)
+      const replacementSlot = liveAfter[0] - base - 1
+      const replacementOk =
+        liveAfter.length === 1 &&
+        !liveAfter.includes(base + 2) &&
+        activeAfter.paneCwds?.[replacementSlot] === repo
+      const cleanRemoved = { ok: cleanGone }
+      const forcedRemoved = { ok: forcedGone }
       const removalOk =
         dirtyRefused.ok === false &&
         dirtyRefused.reason === 'dirty' &&
-        cleanRemoved.ok === true &&
-        forcedRemoved.ok === true
+        dirtyMenuClicked && dirtyUiRefused && noRemovalBeforeForce && forceClicked && dirtyCloseConfirmed &&
+        dirtyRemovalComplete && cleanMenuClicked && cleanCloseConfirmed && cleanRemovalComplete &&
+        cleanRemoved.ok === true && forcedRemoved.ok === true &&
+        dirtyOrderOk && cleanOrderOk && lockRetryOk && replacementOk
 
       // Read-only guarantee: the repo's HEAD/branch never moved.
       const headAfter = git(repo, ['rev-parse', 'HEAD'])
@@ -176,8 +284,23 @@ export function runWorktreeSmoke(win: BrowserWindow): void {
         shellFiles,
         removalOk,
         dirtyRefused,
+        dirtyMenuClicked,
+        dirtyUiRefused,
+        noRemovalBeforeForce,
+        forceClicked,
+        dirtyCloseConfirmed,
+        dirtyRemovalComplete,
         cleanRemoved,
         forcedRemoved,
+        cleanCloseConfirmed,
+        cleanRemovalComplete,
+        dirtyOrderOk,
+        cleanOrderOk,
+        lockRetryOk,
+        lockAttempts,
+        replacementOk,
+        liveAfter,
+        orderEvents,
         repoIntact,
         dirs
       }

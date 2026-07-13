@@ -3,7 +3,6 @@ import { UsageChannels, USAGE_CADENCES, USAGE_PROVIDERS, USAGE_ALERT_DEFAULTS, U
 import type { AgentProfile, PlanUsageView, PaceView, UsageConfig, UsageConfigPatch, CostScan, UsageAlertConfig, UsageDisplayConfig } from '@contracts'
 import {
   createUsageService,
-  fakeAdapter,
   buildRealAdapters,
   realCookieBackend,
   computePace,
@@ -23,6 +22,8 @@ import {
   type UsageService
 } from '@backend/features/usage'
 import { getSettingsStore } from './app-settings'
+import { maybeFault } from './fault-port'
+import { usageWorld } from './fixture-port'
 import { keySlot, keySetPlaintext, keySetEnvRef, keyClear, resolveKey } from './usage-keys'
 
 // App-wiring: usage meters (Phase-7/01+03, ADR 0007). Adapter pick is the
@@ -32,6 +33,16 @@ import { keySlot, keySetPlaintext, keySetEnvRef, keyClear, resolveKey } from './
 // visibility, fans snapshot changes out on one push channel, and — 7/03 —
 // attaches the PACE VIEW here, so the ONE backend formatter produces every
 // string the renderer shows. No token, path, or account id crosses this file.
+//
+// That pick used to be made HERE, by reading the environment — and it shipped
+// (audit finding 41). MOGGING_USAGE / MOGGING_SETUSAGE / MOGGING_UXMILESTONE
+// were live strings in out/main/index.js, which means a real, signed install,
+// handed one environment variable, would have swapped the FAKE adapter in and
+// shown a user FABRICATED usage and spend as if they were their own. The world
+// now arrives through src/main/fixture-port.ts: null in production (real
+// adapters, real status, real cost), non-null only in the dev/serve entry. The
+// fakes are not in this module's graph any more — the guarantee is structural,
+// not a branch.
 
 let service: UsageService | null = null
 let statusService: StatusService | null = null
@@ -146,12 +157,9 @@ function toView(p: PlanUsage): PlanUsageView {
 }
 
 export function registerUsage(getWin: () => BrowserWindow | null): void {
-  const isSmoke = Object.keys(process.env).some((k) => k.startsWith('MOGGING_'))
-  const isFixtureWorld =
-    Object.keys(process.env).some((k) => k.startsWith('MOGGING_USAGE')) ||
-    !!process.env.MOGGING_SETUSAGE ||
-    !!process.env.MOGGING_GALLERY ||
-    !!process.env.MOGGING_UXMILESTONE // the 8.5/09 composed smoke shows Usage on the FAKE adapter — offline, like SETUSAGE
+  // Null in the shipped app — always. Non-null ONLY under the dev/test entry, and then it is the
+  // whole difference: the adapters, the poll cadence, the status feed, and the cost scan.
+  const world = usageWorld()
   // web-session deps (ADR 0007.b): a pasted cookie rides the SAME write-only
   // store as a key; store-read is per-provider opt-in (default OFF) and only
   // then may the real cookie backend be touched.
@@ -160,35 +168,25 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
     storeReadEnabled: (id: string) => getSettingsStore()?.getSetting(`usage.webread.${id}`) === '1',
     readCookie: (origin: string, name: string) => realCookieBackend.read(origin, name)
   }
-  const adapters = isFixtureWorld ? [fakeAdapter] : isSmoke ? [] : buildRealAdapters({ resolveKey }, webDeps)
-
-  const cadenceEnv = Number(process.env.MOGGING_USAGE_CADENCE_MS)
-  const cadenceMsOverride = Number.isFinite(cadenceEnv) && cadenceEnv > 0 ? cadenceEnv : isFixtureWorld ? 400 : undefined
+  const adapters = world ? world.adapters : buildRealAdapters({ resolveKey }, webDeps)
+  const cadenceMsOverride = world?.cadenceMsOverride
 
   // ── 7/08: the status feed, on its own (slower) clock. FAKE-under-smoke is
   // structural: a usage-fixture world registers ONE fake row served by an
   // env-driven fixture body; any other smoke registers NO fetcher at all;
   // real PUBLIC endpoints (https, no auth, no cookies) exist only in a real
   // session. Enabled-only is the seam's own rule, re-checked per pass.
-  const statusRows = isFixtureWorld
-    ? [{ id: 'fake', statusUrl: 'fixture://status' }]
-    : USAGE_PROVIDERS.filter((p) => p.statusUrl).map((p) => ({ id: p.id, statusUrl: p.statusUrl }))
-  const statusFetcher = isFixtureWorld
-    ? async (): Promise<string> => {
-        const s = process.env.MOGGING_USAGE_STATUS ?? 'operational'
-        if (s === 'unknown') return 'not a status body'
-        const indicator = s === 'outage' ? 'major' : s === 'degraded' ? 'minor' : 'none'
-        const description =
-          s === 'outage' ? 'Major Service Outage' : s === 'degraded' ? 'Partially Degraded Service' : 'All Systems Operational'
-        return JSON.stringify({ status: { indicator, description } })
+  const statusRows =
+    world?.statusRows ?? USAGE_PROVIDERS.filter((p) => p.statusUrl).map((p) => ({ id: p.id, statusUrl: p.statusUrl }))
+  // A harness world's fetcher may be null — that is the seam's own way of saying "no endpoint may
+  // be touched at all", and it is why a non-usage gate reaches no network by construction.
+  const statusFetcher = world
+    ? world.statusFetcher
+    : async (url: string, signal: AbortSignal): Promise<string> => {
+        const res = await fetch(url, { signal, redirect: 'follow' })
+        if (!res.ok) throw new Error(`http ${res.status}`)
+        return res.text()
       }
-    : isSmoke
-      ? null
-      : async (url: string, signal: AbortSignal): Promise<string> => {
-          const res = await fetch(url, { signal, redirect: 'follow' })
-          if (!res.ok) throw new Error(`http ${res.status}`)
-          return res.text()
-        }
   const statusEnabled = (id: string): boolean => {
     const v = getSettingsStore()?.getSetting(`usage.enabled.${id}`)
     if (v === '0') return false
@@ -450,7 +448,7 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
     }
   }
   const refreshLivePrices = (): void => {
-    if (isSmoke || pricesFetching) return
+    if (world || pricesFetching) return // real sessions only — a harness world never reaches out
     loadLivePrices()
     if (livePrices && Date.now() - livePrices.at < PRICES_TTL_MS) return
     pricesFetching = true
@@ -488,13 +486,12 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
     return forProvider.length ? forProvider.reduce((a, b) => (a.order <= b.order ? a : b)) : null
   }
 
-  // One cost-scan rule for BOTH consumers (IPC + the 7/11 CLI endpoint):
-  // fixture world scans only the seeded dir; other smokes get a labeled
-  // empty; real known log dirs in a real session alone.
+  // One cost-scan rule for BOTH consumers (IPC + the 7/11 CLI endpoint): a
+  // harness world scans what IT says (a seeded fixture dir, or a labeled
+  // refusal); the real known log dirs are read in a real session alone.
   const costScanFor = (providerId: string, windowDays?: number): CostScan => {
+    if (world) return world.costScan(providerId, windowDays)
     const windowOpts = windowDays !== undefined ? { windowDays } : {}
-    if (isFixtureWorld) return scanCost(providerId, process.env.MOGGING_USAGE_COSTDIR ?? null, windowOpts)
-    if (isSmoke) return { providerId, days: [], currency: 'USD', reason: 'cost scan is disabled under smoke' }
     refreshLivePrices() // async; THIS scan uses whatever is cached, the next one the fresh rates
     const priceOpts = livePrices ? { prices: livePrices.rows, pricesRev: String(livePrices.at) } : {}
     const profile = activeProfile(providerId) // the ACTIVE profile's home
@@ -504,7 +501,11 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
   }
   // Payload: a bare provider id (the historical shape) or `{ providerId,
   // windowDays }` — the Cost overview's window select (7..365, clamped).
-  ipcMain.handle(UsageChannels.cost, (_e, req: unknown): CostScan => {
+  ipcMain.handle(UsageChannels.cost, async (_e, req: unknown): Promise<CostScan> => {
+    // Finding 39's seam: BOTH cost surfaces read this one channel — the popover row (which used to
+    // sit on "Cost…" forever when the scan never came back) and the Settings § Usage card (whose
+    // per-provider loop had no catch at all). Hang it, reject it, and both must give up out loud.
+    await maybeFault(UsageChannels.cost)
     const providerId = typeof req === 'string' ? req : ((req as { providerId?: unknown } | null)?.providerId as string | undefined)
     if (typeof providerId !== 'string' || !providerId)
       return { providerId: '', days: [], currency: 'USD', reason: 'bad request' }

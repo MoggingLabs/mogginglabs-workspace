@@ -27,6 +27,12 @@ export interface WorkspaceIntegrationsGrant {
   actOrigins: readonly string[]
 }
 
+/** Field/operation-level mutation applied to the latest stored grant. */
+export type IntegrationsGrantMutation =
+  | { workspaceId: string; field: 'writeTools'; value: WriteToolsGrant }
+  | { workspaceId: string; field: 'web'; value: WebGrantLevel }
+  | { workspaceId: string; field: 'origin'; op: 'add' | 'remove'; origin: string }
+
 /** The closed-fist default: no pen, no web, no origins. */
 export const INTEGRATIONS_GRANT_DEFAULTS: Readonly<Omit<WorkspaceIntegrationsGrant, 'workspaceId'>> = {
   writeTools: 'none',

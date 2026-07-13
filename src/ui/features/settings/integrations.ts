@@ -13,14 +13,14 @@ import {
   type McpServerEntry,
   type WorkspaceIntegrationsGrant
 } from '@contracts'
+import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
-import { Button, EmptyState, createCollapsibleCard, createModal, el, icon, loadingRow, providerLogo, showToast } from '../../components'
+import { Button, EmptyState, createCollapsibleCard, createModal, el, icon, loadingRow, providerLogo, scrubFields, showToast, submitWithRetain } from '../../components'
 import type { CollapsibleCardHandle } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onToolPlanPanesChange, restartNeededPaneIds } from '../../core/agents/toolplan-panes'
-import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
-import { onViewChange } from '../../core/shell/view-port'
 import { requestIntegrationsFocus, takeIntegrationsFocus, type IntegrationsFocus } from '../../core/shell/integrations-focus-port'
+import { integrationAuthState, onIntegrationAuthState, runIntegrationAuthorization } from './auth-runner'
 
 // ── Attention, reported upward (8.5/05) ──────────────────────────────────────
 // Five folded Cards (webhooks and the trail earned their own tabs), and NOT ONE
@@ -38,6 +38,10 @@ interface SectionSignal {
 type SignalListener = (id: SectionId, sig: SectionSignal) => void
 const signalListeners = new Set<SignalListener>()
 const lastSignal = new Map<SectionId, SectionSignal>()
+// Dev-gate counters for the status transport contract. They count causes, not rows:
+// entering Integrations requests one poll; a resulting push only repaints.
+let statusPollRequests = 0
+let statusPushPaints = 0
 
 function signal(id: SectionId, sig: SectionSignal): void {
   lastSignal.set(id, sig)
@@ -165,71 +169,159 @@ function createCatalogBlock(): SyncedBlock {
         text: 'Scope stays per workspace: registering makes the server available to a CLI; which WORKSPACES see it is a tool plan, and what its agents may WRITE here stays this page’s grants. (Browser act-origins live under Trust › Browser.)'
       })
     )
-    const previewPre = el('pre', { class: 'mgr-panel-block', hidden: true })
-    const note = el('div', { class: 'menu-note trail-empty', hidden: true })
-    const previewBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Preview' }) as HTMLButtonElement
-    previewBtn.onclick = async (): Promise<void> => {
-      previewBtn.disabled = true
-      const prep = (await bridge.invoke(IntegrationsChannels.catPrepare, {
-        presetId: preset.id,
-        baseUrl: baseInput?.value.trim() || undefined,
-        authKind: authPick
-      })) as { ok: boolean; entries?: McpServerEntry[]; reason?: string }
-      previewBtn.disabled = false
-      previewPre.hidden = false
-      previewPre.textContent = prep.ok
-        ? prep.entries!.map((en) => JSON.stringify(en, null, 2)).join('\n')
-        : `refused: ${prep.reason}`
+    const previewPre = el('pre', { class: 'mgr-panel-block cat-preview-out', hidden: true })
+    const note = el('div', { class: 'menu-note trail-empty cat-note', hidden: true })
+
+    // Finding 39: both buttons disabled themselves on click and re-enabled on the line AFTER the
+    // await, with no try/finally — so a rejected prepare/connect stranded the button disabled
+    // FOREVER, and the one thing the user needed (retry the call that just failed) was the one
+    // thing they could not do. This file already knew better everywhere else: writeBtn, mutatePlan
+    // and requestStatusRefresh all re-enable inside a `finally`. The guard's onSettle IS that
+    // finally; the re-enabled button IS the retry; and the generation makes an impatient
+    // double-click harmless. The timeout cannot ABORT the write (there is no cancel) — it only
+    // refuses to leave the panel dead when a handler never answers. catConnect is idempotent
+    // (save + apply by server id), so retrying after one cannot double-write.
+    type PrepareResult = { ok: boolean; entries?: McpServerEntry[]; reason?: string }
+    type ConnectResult = { ok: boolean; reason?: string; results?: { cli: HostedCliId; ok: boolean; reason?: string }[] }
+    const previewGuard = createAsyncGuard<PrepareResult>()
+    const connectGuard = createAsyncGuard<ConnectResult>()
+
+    const previewBtn = el('button', { class: 'trail-btn cat-preview', type: 'button', text: 'Preview' }) as HTMLButtonElement
+    previewBtn.onclick = (): void => {
+      void previewGuard.run(
+        () =>
+          bridge.invoke(IntegrationsChannels.catPrepare, {
+            presetId: preset.id,
+            baseUrl: baseInput?.value.trim() || undefined,
+            authKind: authPick
+          }) as Promise<PrepareResult>,
+        {
+          action: 'preview this server’s config',
+          onLoading: () => {
+            previewBtn.disabled = true
+          },
+          onSuccess: (prep) => {
+            previewPre.hidden = false
+            previewPre.textContent = prep.ok
+              ? prep.entries!.map((en) => JSON.stringify(en, null, 2)).join('\n')
+              : `refused: ${prep.reason}`
+          },
+          // Inline, in the block the preview would have filled: this is not news arriving from
+          // elsewhere, it is the answer to the click the user is still looking at.
+          onError: (message) => {
+            previewPre.hidden = false
+            previewPre.textContent = message
+          },
+          onSettle: () => {
+            if (previewBtn.isConnected) previewBtn.disabled = false
+          },
+          timeoutMs: 15_000
+        }
+      )
     }
-    const connectBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Connect' }) as HTMLButtonElement
-    connectBtn.onclick = async (): Promise<void> => {
+    const connectBtn = el('button', { class: 'trail-btn cat-connect', type: 'button', text: 'Connect' }) as HTMLButtonElement
+    connectBtn.onclick = (): void => {
       const clis = HOSTED.filter((c) => checks.get(c)?.checked)
-      connectBtn.disabled = true
-      note.hidden = false
-      note.textContent = ''
-      note.append(loadingRow('Connecting…'))
-      const r = (await bridge.invoke(IntegrationsChannels.catConnect, {
-        presetId: preset.id,
-        clis,
-        baseUrl: baseInput?.value.trim() || undefined,
-        authKind: authPick
-      })) as { ok: boolean; reason?: string; results?: { cli: HostedCliId; ok: boolean; reason?: string }[] }
-      connectBtn.disabled = false
-      note.textContent = r.ok
-        ? `Connected: ${r.results?.map((x) => `${CLI_LABEL[x.cli]} ${x.ok ? '✓' : `✗ (${x.reason})`}`).join(' · ')}`
-        : `refused: ${r.reason}`
-      if (r.ok) renderAuthorizeRow(preset, clis)
+      const selectedAuth = authPick
+      void connectGuard.run(
+        () =>
+          bridge.invoke(IntegrationsChannels.catConnect, {
+            presetId: preset.id,
+            clis,
+            baseUrl: baseInput?.value.trim() || undefined,
+            authKind: selectedAuth
+          }) as Promise<ConnectResult>,
+        {
+          action: 'connect this server to your CLIs',
+          onLoading: () => {
+            connectBtn.disabled = true
+            note.hidden = false
+            note.textContent = ''
+            note.append(loadingRow('Connecting…'))
+          },
+          onSuccess: (r) => {
+            note.textContent = r.ok
+              ? `Connected: ${r.results?.map((x) => `${CLI_LABEL[x.cli]} ${x.ok ? '✓' : `✗ (${x.reason})`}`).join(' · ')}`
+              : `refused: ${r.reason}`
+            if (r.ok) renderAuthorizeRow(preset, clis, selectedAuth)
+          },
+          // The note is where "Connecting…" was standing: the failure replaces the promise it
+          // broke, in place. No authorize row — nothing was written to authorize against.
+          onError: (message) => {
+            note.hidden = false
+            note.textContent = message
+          },
+          onSettle: () => {
+            if (connectBtn.isConnected) connectBtn.disabled = false
+          },
+          timeoutMs: 15_000
+        }
+      )
     }
     panel.append(el('div', { class: 'trail-controls' }, [previewBtn, connectBtn]), previewPre, note)
 
-    function renderAuthorizeRow(p: McpPreset, clis: HostedCliId[]): void {
+    function renderAuthorizeRow(p: McpPreset, clis: HostedCliId[], authKind: McpAuthKind): void {
       const row = el('div', { class: 'trail-controls' })
+      if (authKind === 'token') {
+        row.append(
+          el('span', {
+            class: 'menu-note',
+            text: 'Token auth selected: save the named env value under Service keys, or provide it in your own shell. No OAuth command will run.'
+          })
+        )
+      }
       for (const cli of clis) {
         const cap = caps.find((c) => c.cli === cli)
         const authorizeCommand = cap?.authorizeCommand
-        if (p.authKinds[0] === 'oauth' && authorizeCommand) {
-          const btn = el('button', { class: 'trail-btn', type: 'button', text: `Authorize in ${CLI_LABEL[cli]}` }) as HTMLButtonElement
-          btn.onclick = (): void => {
-            // The CLI's OWN OAuth, in a managed pane — the vendor authenticates,
-            // the CLI stores the token, we observe status only (ADR 0008.d).
-            const snap = getWorkspaces()
-            const cwd = snap.workspaces.find((w) => w.id === snap.activeId)?.cwd ?? snap.workspaces[0]?.cwd ?? ''
-            if (!cwd) {
-              showToast({ tone: 'info', title: 'Open a workspace first', body: 'Authorize runs the CLI in a pane.' })
-              return
-            }
-            const opened = openWorkspaceFromTemplate({
-              name: `Authorize ${p.label}`.slice(0, 28),
-              cwd,
-              paneCount: 1,
-              assignments: [CLI_PROVIDER[cli]]
+        if (authKind === 'oauth' && authorizeCommand) {
+          const prior = integrationAuthState(cli, p.id)
+          const btn = el('button', {
+            class: 'trail-btn',
+            type: 'button',
+            text:
+              prior?.phase === 'running'
+                ? `Authorizing in ${CLI_LABEL[cli]}…`
+                : prior?.phase === 'succeeded'
+                  ? `Authorized in ${CLI_LABEL[cli]}`
+                  : prior?.phase === 'failed'
+                    ? `Retry authorization in ${CLI_LABEL[cli]}`
+                    : `Authorize in ${CLI_LABEL[cli]}`
+          }) as HTMLButtonElement
+          btn.disabled = prior?.phase === 'running'
+          if (prior?.phase === 'running') btn.setAttribute('aria-busy', 'true')
+          btn.onclick = async (): Promise<void> => {
+            btn.disabled = true
+            btn.setAttribute('aria-busy', 'true')
+            btn.textContent = `Starting ${CLI_LABEL[cli]}…`
+            const stateKey = `${cli}:${p.id}`
+            const off = onIntegrationAuthState((changedKey, state) => {
+              if (changedKey !== stateKey) return
+              btn.disabled = state.phase === 'running'
+              if (state.phase === 'running') {
+                btn.setAttribute('aria-busy', 'true')
+                btn.textContent = `Authorizing in ${CLI_LABEL[cli]}…`
+                return
+              }
+              btn.removeAttribute('aria-busy')
+              btn.textContent = state.phase === 'succeeded'
+                ? `Authorized in ${CLI_LABEL[cli]}`
+                : `Retry authorization in ${CLI_LABEL[cli]}`
+              btn.title = state.message
+              off()
             })
-            if (opened) {
-              showToast({
-                tone: 'info',
-                title: `Finish in the pane`,
-                body: `Run ${authorizeCommand.replace('<id>', p.id)} — the browser consent is the vendor's; the token stays in ${CLI_LABEL[cli]}.`
-              })
+            const started = await runIntegrationAuthorization({
+              cli,
+              cliLabel: CLI_LABEL[cli],
+              serverId: p.id,
+              serverLabel: p.label,
+              command: authorizeCommand
+            })
+            if (!started.ok) {
+              off()
+              btn.disabled = false
+              btn.removeAttribute('aria-busy')
+              btn.textContent = `Authorize in ${CLI_LABEL[cli]}`
+              showToast({ tone: 'danger', title: 'Authorization did not start', body: started.reason })
             }
           }
           row.append(btn)
@@ -385,7 +477,7 @@ function createCatalogBlock(): SyncedBlock {
 }
 
 // ── Servers: the registry + per-CLI apply surface (8/06) ─────────────────────
-function createServersBlock(): HTMLElement {
+function createServersBlock(): SyncedBlock {
   const bridge = getBridge()
   const list = el('div', { class: 'mgr-list' })
   const panel = el('div', { class: 'mgr-panel', hidden: true })
@@ -455,14 +547,34 @@ function createServersBlock(): HTMLElement {
   }
 
   const CONN_TEXT: Record<string, string> = { connected: 'connected', 'needs-auth': 'needs auth', error: 'error', drift: 'drift', registered: 'registered', off: 'not installed' }
-  // Re-authorize (11): the CLI's OWN auth, in a managed pane — never an
-  // auto-spawned browser (the consent is the user's to give).
-  function runReauthorize(cli: HostedCliId, serverId: string, cmd: string | null): void {
-    const snap = getWorkspaces()
-    const cwd = snap.workspaces.find((w) => w.id === snap.activeId)?.cwd ?? snap.workspaces[0]?.cwd ?? ''
-    if (!cwd) return void showToast({ tone: 'info', title: 'Open a workspace first', body: 'Re-authorize runs the CLI in a pane.' })
-    const opened = openWorkspaceFromTemplate({ name: `Authorize ${serverId}`.slice(0, 28), cwd, paneCount: 1, assignments: [CLI_PROVIDER[cli]] })
-    if (opened && cmd) showToast({ tone: 'info', title: 'Finish in the pane', body: `Run ${cmd.replace('<id>', serverId)} — the browser consent is the vendor's; the token stays in ${CLI_LABEL[cli]}.` })
+  // Re-authorize (11): run the CLI's catalog-owned OAuth command in a visible
+  // plain terminal. A token-configured server routes back to its env reference.
+  function runReauthorize(cli: HostedCliId, server: McpServerEntry, cmd: string | null): void {
+    if (server.headers && Object.keys(server.headers).length) {
+      showToast({
+        tone: 'attention',
+        title: `${server.label} uses token auth`,
+        body: 'Check its Service key or shell environment; no OAuth command applies.'
+      })
+      return
+    }
+    if (!cmd) {
+      showToast({
+        tone: 'danger',
+        title: 'No authorization command is available',
+        body: `The ${CLI_LABEL[cli]} capability table has no OAuth command.`
+      })
+      return
+    }
+    void runIntegrationAuthorization({
+      cli,
+      cliLabel: CLI_LABEL[cli],
+      serverId: server.id,
+      serverLabel: server.label,
+      command: cmd
+    }).then((started) => {
+      if (!started.ok) showToast({ tone: 'danger', title: 'Authorization did not start', body: started.reason })
+    })
   }
 
   async function refresh(): Promise<void> {
@@ -473,7 +585,6 @@ function createServersBlock(): HTMLElement {
     const snap = ((await bridge.invoke(IntegrationsChannels.statusGet)) as McpStatusSnapshot | null) ?? { statuses: [], at: 0 }
     const conn = new Map(snap.statuses.map((s) => [`${s.serverId}:${s.cli}`, s.state]))
     const caps = ((await bridge.invoke(IntegrationsChannels.catCapabilities)) as { cli: HostedCliId; authorizeCommand: string | null }[]) ?? []
-    void bridge.invoke(IntegrationsChannels.statusRefresh) // poll fresh on open (pushed result repaints)
     list.innerHTML = ''
     for (const server of servers) {
       const statuses = (await bridge.invoke(IntegrationsChannels.mgrStatus, server.id)) as McpCliStatus[]
@@ -495,7 +606,7 @@ function createServersBlock(): HTMLElement {
         chip.disabled = !s.installed && s.state === 'not-applied'
         if (live === 'needs-auth') {
           const cmd = caps.find((c) => c.cli === s.cli)?.authorizeCommand ?? null
-          chip.onclick = (): void => runReauthorize(s.cli, server.id, cmd)
+          chip.onclick = (): void => runReauthorize(s.cli, server, cmd)
         } else {
           chip.onclick = (): void => void openPanel(server, s)
         }
@@ -543,86 +654,161 @@ function createServersBlock(): HTMLElement {
     })
   }
 
-  // Add-server form (env values are ${VAR} references; literals are refused).
-  const addToggle = el('button', { class: 'trail-btn', type: 'button', text: 'Add server…' }) as HTMLButtonElement
-  const form = el('div', { class: 'mgr-form', hidden: true })
-  const field = (label: string, placeholder: string): HTMLInputElement => {
-    const input = el('input', { class: 'browser-sites-input mgr-input' }) as HTMLInputElement
+  // Add-server form (env values are ${VAR} references; a literal is vaulted, never written).
+  const addToggle = el('button', {
+    class: 'trail-btn',
+    type: 'button',
+    text: 'Add server…',
+    dataset: { mgrAction: 'add-server' }
+  }) as HTMLButtonElement
+  const statusRefreshBtn = el('button', {
+    class: 'trail-btn',
+    type: 'button',
+    text: 'Refresh connection status',
+    attrs: { 'data-mcp-status-refresh': 'true' }
+  }) as HTMLButtonElement
+  const requestStatusRefresh = async (): Promise<void> => {
+    if (statusRefreshBtn.disabled) return
+    statusPollRequests++
+    statusRefreshBtn.disabled = true
+    try {
+      await bridge.invoke(IntegrationsChannels.statusRefresh)
+    } catch (error) {
+      showToast({
+        tone: 'danger',
+        title: 'Could not refresh connection status',
+        body: error instanceof Error ? error.message : String(error)
+      })
+    } finally {
+      statusRefreshBtn.disabled = false
+    }
+  }
+  statusRefreshBtn.onclick = (): void => void requestStatusRefresh()
+  const form = el('div', { class: 'mgr-form', hidden: true, dataset: { mgrForm: 'add-server' } })
+  const field = (label: string, placeholder: string, hook: string): HTMLInputElement => {
+    const input = el('input', { class: 'browser-sites-input mgr-input', dataset: { mgrField: hook } }) as HTMLInputElement
     input.placeholder = placeholder
     input.setAttribute('aria-label', label)
     input.spellcheck = false
     input.addEventListener('keydown', (e) => e.stopPropagation())
     return input
   }
-  const idInput = field('Server id', 'id (e.g. sentry)')
-  const labelInput = field('Label', 'Label')
+  const idInput = field('Server id', 'id (e.g. sentry)', 'id')
+  const labelInput = field('Label', 'Label', 'label')
   const transportSel = el('select', { class: 'trail-select' }) as HTMLSelectElement
   transportSel.append(el('option', { value: 'stdio', text: 'stdio' }), el('option', { value: 'http', text: 'http' }))
-  const commandInput = field('Command', 'command (stdio)')
-  const argsInput = field('Arguments', 'args (space-separated; quote nothing)')
-  const urlInput = field('URL', 'https://… (http transport)')
-  const envInput = field('Env references', 'env: KEY=${VAR} (or paste a key value — it’s vaulted), comma-separated')
-  const saveBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Save server' }) as HTMLButtonElement
-  saveBtn.onclick = async (): Promise<void> => {
-    const env: Record<string, string> = {}
+  const commandInput = field('Command', 'command (stdio)', 'command')
+  const argsInput = field('Arguments', 'args (space-separated; quote nothing)', 'args')
+  const urlInput = field('URL', 'https://… (http transport)', 'url')
+  // The one SECRET-bearing field on this form: `KEY=<literal>` is a key value, typed once.
+  const envInput = field('Env references', 'env: KEY=${VAR} (or paste a key value — it’s vaulted), comma-separated', 'env')
+  const formFields = [idInput, labelInput, commandInput, argsInput, urlInput]
+  const saveBtn = el('button', {
+    class: 'trail-btn',
+    type: 'button',
+    text: 'Save server',
+    dataset: { mgrAction: 'save-server' }
+  }) as HTMLButtonElement
+  saveBtn.onclick = (): void => {
+    // Hoisted OUT of submit() so a THROWN failure can still be compensated: a `vaulted`
+    // living inside the submit closure dies with the stack that threw, and the literals it
+    // had already written would stay in the vault with nothing left to name them.
     const vaulted: string[] = []
-    for (const pair of envInput.value.split(',').map((s) => s.trim()).filter(Boolean)) {
-      const eq = pair.indexOf('=')
-      if (eq <= 0) continue
-      const k = pair.slice(0, eq).trim()
-      const v = pair.slice(eq + 1).trim()
-      if (v.includes('${')) {
-        env[k] = v // already an env/vault reference — kept as-is
-      } else {
-        // 8/08: a literal is OFFERED the vault (not refused outright) — paste
-        // once, store as ciphertext, and the config keeps only the ${NAME}.
-        const r = (await bridge.invoke(IntegrationsChannels.serviceKeySet, { name: k, value: v })) as { ok: boolean; reason?: string }
-        if (!r.ok) {
-          saveNote.textContent = r.reason ?? 'refused'
-          saveNote.hidden = false
-          return
+    void submitWithRetain<{ ok: boolean; reason?: string; vaulted: string[] }>({
+      trigger: saveBtn,
+      // envInput may hold `POSTHOG_API_KEY=phc_live…` — a real key, pasted once. It is
+      // retained on every refusal and scrubbed only when the server is really registered.
+      retainFields: [envInput],
+      clearFields: formFields,
+      errorEl: saveNote,
+      submit: async () => {
+        const env: Record<string, string> = {}
+        for (const pair of envInput.value.split(',').map((s) => s.trim()).filter(Boolean)) {
+          const eq = pair.indexOf('=')
+          if (eq <= 0) continue
+          const k = pair.slice(0, eq).trim()
+          const v = pair.slice(eq + 1).trim()
+          if (v.includes('${')) {
+            env[k] = v // already an env/vault reference — kept as-is
+            continue
+          }
+          // 8/08: a literal is OFFERED the vault (not refused outright) — paste once, store
+          // as ciphertext, and the config keeps only the ${NAME}. Each pair is a SEPARATE
+          // vault write, so a refusal here (or at serversSave below) lands mid-transaction:
+          // `vaulted` is the ledger onFailure needs to undo the writes that did land.
+          const r = (await bridge.invoke(IntegrationsChannels.serviceKeySet, { name: k, value: v })) as { ok: boolean; reason?: string }
+          if (!r.ok) return { ok: false, reason: r.reason ?? 'refused', vaulted }
+          env[k] = `\${${k}}`
+          vaulted.push(k)
         }
-        env[k] = `\${${k}}`
-        vaulted.push(k)
+        const entry = {
+          id: idInput.value.trim(),
+          label: labelInput.value.trim(),
+          transport: transportSel.value,
+          command: commandInput.value.trim() || undefined,
+          args: argsInput.value.trim() ? argsInput.value.trim().split(/\s+/) : undefined,
+          url: urlInput.value.trim() || undefined,
+          env: Object.keys(env).length ? env : undefined
+        }
+        const r = (await bridge.invoke(IntegrationsChannels.serversSave, entry)) as { ok: boolean; reason?: string }
+        return { ok: r.ok, reason: r.reason, vaulted }
+      },
+      onSuccess: async (r) => {
+        saveNote.textContent = r.vaulted.length
+          ? `Saved. ${r.vaulted.join(', ')} stored in the vault — the config references \${${r.vaulted[0]}}, never the value.`
+          : 'Saved.'
+        saveNote.hidden = false
+        form.hidden = true
+        await refresh()
+      },
+      onFailure: async () => {
+        // ROLLBACK — the orphan bug. serversSave never touches the vault, so a register that
+        // refuses AFTER the literals were vaulted (a bad id, a store not ready) used to leave
+        // them there FOREVER: secrets the user never chose to store, under names they never
+        // chose to keep, invisible from this form and silently overwritten by the next retry.
+        // Best-effort per name: one failing clear must not strand the rest.
+        for (const name of vaulted) {
+          try {
+            await bridge.invoke(IntegrationsChannels.serviceKeyClear, name)
+          } catch {
+            /* the refusal is already on screen; a stranded name must not also throw here */
+          }
+        }
       }
-    }
-    const entry = {
-      id: idInput.value.trim(),
-      label: labelInput.value.trim(),
-      transport: transportSel.value,
-      command: commandInput.value.trim() || undefined,
-      args: argsInput.value.trim() ? argsInput.value.trim().split(/\s+/) : undefined,
-      url: urlInput.value.trim() || undefined,
-      env: Object.keys(env).length ? env : undefined
-    }
-    const r = (await bridge.invoke(IntegrationsChannels.serversSave, entry)) as { ok: boolean; reason?: string }
-    saveNote.textContent = r.ok
-      ? vaulted.length
-        ? `Saved. ${vaulted.join(', ')} stored in the vault — the config references \${${vaulted[0]}}, never the value.`
-        : 'Saved.'
-      : (r.reason ?? 'refused')
-    saveNote.hidden = false
-    if (r.ok) {
-      form.hidden = true
-      await refresh()
-    }
+    })
   }
   form.append(idInput, labelInput, transportSel, commandInput, argsInput, urlInput, envInput, saveBtn)
   addToggle.onclick = (): void => {
     form.hidden = !form.hidden
+    // Collapsing is a CANCEL, and this form is only display-toggled — the node survives. A
+    // half-typed `KEY=secret` would otherwise sit in a live input for the rest of the session
+    // and reappear, verbatim, on the next open (in any workspace). Scrub on the way out.
+    if (form.hidden) scrubFields(envInput, ...formFields)
   }
 
   const block = el('div', { class: 'trail-block mgr-block' }, [
     el('div', { class: 'settings-row-caption', text: 'Register a server once and apply it to each CLI in its own config dialect. Writes are surgical (only our marked entries), backed up first, and only ever on your click — the app never runs, proxies, or authenticates a server. Env values are ${VAR} references; paste a key value and it’s vaulted (encrypted, materialized into pane env), never written as a literal.' }),
     list,
     panel,
-    el('div', { class: 'trail-controls' }, [addToggle]),
+    el('div', { class: 'trail-controls' }, [statusRefreshBtn, addToggle]),
     form,
     saveNote
   ])
-  bridge.on(IntegrationsChannels.statusChanged, () => void refresh()) // 11: live status push repaints the grid
-  setTimeout(() => void refresh(), 0)
-  return block
+  // A push repaints from the snapshot already produced by main. It must never request another
+  // poll: request -> push -> request was an unbounded subprocess/IPC feedback loop.
+  bridge.on(IntegrationsChannels.statusChanged, () => {
+    statusPushPaints++
+    void refresh()
+  })
+  return {
+    block,
+    sync: () => {
+      // Exactly one on-demand poll when the Integrations page is entered. The resulting push
+      // only repaints via the listener above.
+      void requestStatusRefresh()
+      void refresh()
+    }
+  }
 }
 
 // ── Grants: the per-workspace MCP write boundary (8/03's store) ──────────────
@@ -634,12 +820,23 @@ function createGrantsBlock(): SyncedBlock {
   const wsSelect = el('select', { class: 'trail-select' }) as HTMLSelectElement
   wsSelect.setAttribute('aria-label', 'Workspace')
   const body = el('div', { class: 'mgr-grant-body' })
+  let renderGeneration = 0
 
   async function render(): Promise<void> {
+    const generation = ++renderGeneration
     const wsId = wsSelect.value
     body.innerHTML = ''
     if (!wsId) return
-    const grant = (await bridge.invoke(IntegrationsChannels.grantGet, wsId)) as WorkspaceIntegrationsGrant
+    let grant: WorkspaceIntegrationsGrant
+    try {
+      grant = (await bridge.invoke(IntegrationsChannels.grantGet, wsId)) as WorkspaceIntegrationsGrant
+    } catch (error) {
+      if (generation === renderGeneration && wsSelect.value === wsId) {
+        body.append(el('div', { class: 'menu-note', text: `Grant state is unavailable: ${String(error)}` }))
+      }
+      return
+    }
+    if (generation !== renderGeneration || wsSelect.value !== wsId) return
     // Write tools: none (default) / all — the catalog boundary (8/03).
     const writesOn = grant.writeTools === 'all'
     const writeBtn = el('button', {
@@ -648,8 +845,23 @@ function createGrantsBlock(): SyncedBlock {
       text: writesOn ? 'Write tools: ALL (agents can send/mail/claim/update here)' : 'Write tools: none (default)'
     }) as HTMLButtonElement
     writeBtn.onclick = async (): Promise<void> => {
-      await bridge.invoke(IntegrationsChannels.grantSet, { ...grant, writeTools: writesOn ? 'none' : 'all' })
-      await render()
+      writeBtn.disabled = true
+      writeBtn.setAttribute('aria-busy', 'true')
+      try {
+        await bridge.invoke(IntegrationsChannels.grantMutate, {
+          workspaceId: wsId,
+          field: 'writeTools',
+          value: writesOn ? 'none' : 'all'
+        })
+        if (wsSelect.value === wsId) await render()
+      } catch (error) {
+        showToast({ tone: 'danger', title: 'Write-tool permission was not changed', body: String(error) })
+      } finally {
+        if (writeBtn.isConnected) {
+          writeBtn.disabled = false
+          writeBtn.removeAttribute('aria-busy')
+        }
+      }
     }
     body.append(el('div', { class: 'trail-controls' }, [writeBtn]))
   }
@@ -687,13 +899,26 @@ function createGrantsBlock(): SyncedBlock {
 function createServiceKeysBlock(): SyncedBlock {
   const bridge = getBridge()
   const list = el('div', { class: 'mgr-list' })
-  const nameInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'ENV NAME (e.g. POSTHOG_API_KEY)' }) as HTMLInputElement
+  const nameInput = el('input', {
+    class: 'browser-sites-input mgr-input',
+    placeholder: 'ENV NAME (e.g. POSTHOG_API_KEY)',
+    dataset: { mgrField: 'key-name' }
+  }) as HTMLInputElement
   nameInput.spellcheck = false
   nameInput.addEventListener('keydown', (e) => e.stopPropagation())
-  const keyInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'paste key value…' }) as HTMLInputElement
+  const keyInput = el('input', {
+    class: 'browser-sites-input mgr-input',
+    placeholder: 'paste key value…',
+    dataset: { mgrField: 'key-value' }
+  }) as HTMLInputElement
   keyInput.type = 'password'
   keyInput.addEventListener('keydown', (e) => e.stopPropagation())
-  const saveBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Save key to vault' }) as HTMLButtonElement
+  const saveBtn = el('button', {
+    class: 'trail-btn',
+    type: 'button',
+    text: 'Save key to vault',
+    dataset: { mgrAction: 'save-key' }
+  }) as HTMLButtonElement
   const note = el('div', { class: 'settings-error mgr-note', role: 'alert', hidden: true })
 
   async function refresh(): Promise<void> {
@@ -719,19 +944,23 @@ function createServiceKeysBlock(): SyncedBlock {
     })
   }
 
-  saveBtn.onclick = async (): Promise<void> => {
+  saveBtn.onclick = (): void => {
     const name = nameInput.value.trim()
     const value = keyInput.value
     if (!name || !value) return
-    keyInput.value = '' // the value leaves the DOM before the round trip
-    const r = (await bridge.invoke(IntegrationsChannels.serviceKeySet, { name, value })) as { ok: boolean; reason?: string }
-    note.hidden = r.ok
-    if (r.ok) {
-      nameInput.value = ''
-      await refresh()
-    } else {
-      note.textContent = r.reason ?? 'refused'
-    }
+    // The secret used to leave the DOM BEFORE the round trip — and `serviceKeySet` refuses
+    // for reasons the user can fix and retry: a name that isn't SHOUTY_SNAKE, a settings
+    // store not up yet, a locked keychain. Each refusal ate a key that was pasted once and
+    // exists nowhere else. It now leaves only when the vault says it holds the ciphertext.
+    void submitWithRetain({
+      trigger: saveBtn,
+      retainFields: [keyInput],
+      clearFields: [nameInput],
+      errorEl: note,
+      submit: () =>
+        bridge.invoke(IntegrationsChannels.serviceKeySet, { name, value }) as Promise<{ ok: boolean; reason?: string }>,
+      onSuccess: () => refresh()
+    })
   }
 
   const block = el('div', { class: 'trail-block mgr-block' }, [
@@ -757,14 +986,10 @@ function createToolPlanBlock(): SyncedBlock {
   const wsSelect = el('select', { class: 'trail-select' }) as HTMLSelectElement
   wsSelect.setAttribute('aria-label', 'Workspace')
   const body = el('div', { class: 'mgr-grant-body' })
-
-  const cliArrayFor = (plan: WorkspaceToolPlan, serverId: string): HostedCliId[] => {
-    const scope = plan.entries[serverId]
-    if (!scope) return []
-    return scope === 'all-clis' ? [...CLI_ORDER] : [...scope]
-  }
+  let renderGeneration = 0
 
   async function render(): Promise<void> {
+    const generation = ++renderGeneration
     const wsId = wsSelect.value
     body.innerHTML = ''
     if (!wsId) return
@@ -775,9 +1000,21 @@ function createToolPlanBlock(): SyncedBlock {
       const statuses = ((await bridge.invoke(IntegrationsChannels.mgrStatus, s.id)) as McpCliStatus[]) ?? []
       globalFor.set(s.id, new Set(statuses.filter((x) => x.state === 'applied').map((x) => x.cli)))
     }
-    const setPlan = async (next: WorkspaceToolPlan): Promise<void> => {
-      await bridge.invoke(IntegrationsChannels.planSet, next)
-      await render()
+    if (generation !== renderGeneration || wsSelect.value !== wsId) return
+    const mutatePlan = async (mutation: Record<string, unknown>, button: HTMLButtonElement): Promise<void> => {
+      button.disabled = true
+      button.setAttribute('aria-busy', 'true')
+      try {
+        await bridge.invoke(IntegrationsChannels.planMutate, { workspaceId: wsId, ...mutation })
+        if (wsSelect.value === wsId) await render()
+      } catch (error) {
+        showToast({ tone: 'danger', title: 'Tool plan was not changed', body: String(error) })
+      } finally {
+        if (button.isConnected) {
+          button.disabled = false
+          button.removeAttribute('aria-busy')
+        }
+      }
     }
 
     const inheritBtn = el('button', {
@@ -785,7 +1022,7 @@ function createToolPlanBlock(): SyncedBlock {
       type: 'button',
       text: plan.inheritGlobal ? 'Inherit global (“everywhere”) tools: ON' : 'Inherit global tools: OFF — plan only'
     }) as HTMLButtonElement
-    inheritBtn.onclick = (): void => void setPlan({ ...plan, inheritGlobal: !plan.inheritGlobal })
+    inheritBtn.onclick = (): void => void mutatePlan({ kind: 'inherit', value: !plan.inheritGlobal }, inheritBtn)
     body.append(el('div', { class: 'trail-controls' }, [inheritBtn]))
 
     const table = el('div', { class: 'toolplan-matrix' })
@@ -808,12 +1045,7 @@ function createToolPlanBlock(): SyncedBlock {
           title: state === 'global' ? 'Inherited from the global tier' : state === 'planned' ? 'In this workspace’s plan' : 'Not in this pane'
         }) as HTMLButtonElement
         cell.onclick = (): void => {
-          const arr = cliArrayFor(plan, s.id)
-          const nextArr = arr.includes(cli) ? arr.filter((c) => c !== cli) : [...arr, cli]
-          const entries = { ...plan.entries }
-          if (!nextArr.length) delete entries[s.id]
-          else entries[s.id] = nextArr.length === CLI_ORDER.length ? 'all-clis' : nextArr
-          void setPlan({ ...plan, entries })
+          void mutatePlan({ kind: 'cell', serverId: s.id, cli, enabled: state !== 'planned' }, cell)
         }
         return cell
       })
@@ -1001,7 +1233,7 @@ function createIntegrationsIntro(): HTMLElement {
 
   return el('div', { class: 'trail-block integux-intro' }, [
     el('div', { class: 'settings-row-label', text: 'Connect your stack' }),
-    el('div', { class: 'settings-row-caption', text: 'Wire your tools (Sentry, GitHub, Slack…) to the coding agents you already run — the app never holds a credential; the CLIs own their auth.' }),
+    el('div', { class: 'settings-row-caption', text: 'Wire your tools (Sentry, GitHub, Slack…) to the coding agents you already run — the CLIs own their auth. Keys you paste here are vaulted, not brokered.' }),
     el('div', { class: 'integux-stats' }, [servers.el, keys.el]),
     el('div', { class: 'trail-controls' }, [setup])
   ])
@@ -1069,6 +1301,7 @@ export function createIntegrationsSection(): HTMLElement {
   lastSignal.clear()
 
   const catalogBlock = createCatalogBlock()
+  const serversBlock = createServersBlock()
   const toolplan = createToolPlanBlock()
   const grantsBlock = createGrantsBlock()
   const keysBlock = createServiceKeysBlock()
@@ -1087,7 +1320,7 @@ export function createIntegrationsSection(): HTMLElement {
   // paragraph lives at the top of each body, where it applies. Every purpose line keeps
   // its load-bearing clause: what the app will never do with your credentials.
   const catalog = card('catalog', 'Connect', 'Verified servers, wired to the CLIs you already run — the app never authenticates one.', catalogBlock.block, { defaultOpen: true, attentionOpens: false })
-  const servers = card('servers', 'Servers & registry', 'Register once, apply per CLI. Writes are surgical, backed up, and only on your click.', createServersBlock())
+  const servers = card('servers', 'Servers & registry', 'Register once, apply per CLI. Writes are surgical, backed up, and only on your click.', serversBlock.block)
   const matrix = card('matrix', 'Workspace tool plans', 'Which servers reach this workspace’s panes. Context hygiene, not a permission.', toolplan.block)
   const grants = card('grants', 'Grants', 'Which MCP write tools agents get here. Default closed — approve is never a tool.', grantsBlock.block)
   const keys = card('keys', 'Service keys', 'One paste, encrypted by your OS keychain. Never a config file, a log, or plaintext on disk.', keysBlock.block)
@@ -1108,12 +1341,17 @@ export function createIntegrationsSection(): HTMLElement {
   focusTargets = { matrix, servers }
   // Every entry into Settings re-reads what can go stale. Reading it once at boot is
   // what left the matrix and the grants blank on a fresh install (see SyncedBlock).
-  const syncs = [catalogBlock.sync, toolplan.sync, grantsBlock.sync, keysBlock.sync]
+  const syncs = [catalogBlock.sync, serversBlock.sync, toolplan.sync, grantsBlock.sync, keysBlock.sync]
   syncAll = (): void => {
     for (const sync of syncs) sync()
   }
-  onViewChange((v) => {
-    if (v === 'settings') enterIntegrations()
-  })
+  if (import.meta.env.DEV) {
+    const w = window as unknown as { __mogging?: Record<string, unknown> }
+    w.__mogging = w.__mogging ?? {}
+    w.__mogging.integrationsStatusDebug = (): { pollRequests: number; pushPaints: number } => ({
+      pollRequests: statusPollRequests,
+      pushPaints: statusPushPaints
+    })
+  }
   return section
 }

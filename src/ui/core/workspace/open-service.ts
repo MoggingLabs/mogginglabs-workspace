@@ -9,6 +9,8 @@ import { getBridge } from '../ipc/bridge'
  * `templates` from reaching into `workspace` internals.
  */
 export interface TemplateWorkspaceSpec {
+  /** Preallocated identity used when a tool plan must commit before creation. */
+  id?: string
   name: string
   cwd: string
   paneCount: number
@@ -41,16 +43,24 @@ export function setWorkspaceOpener(fn: (spec: TemplateWorkspaceSpec) => OpenedWo
 }
 
 export function openWorkspaceFromTemplate(spec: TemplateWorkspaceSpec): OpenedWorkspace | null {
-  const opened = opener ? opener(spec) : null
-  // Seed the tool plan (8/09) so the workspace arrives pre-scoped. Only when
-  // `tools` is provided — undefined leaves the workspace un-scoped (the CLIs'
-  // own global config, unchanged). Fire-and-forget over IPC.
-  if (opened && spec.tools) {
-    try {
-      getBridge().invoke(IntegrationsChannels.planSet, planFromTemplateTools(opened.id, spec.tools))
-    } catch {
-      /* no bridge (tests) — the workspace still opened */
-    }
+  if (spec.tools !== undefined) throw new Error('tool-scoped workspaces must persist their plan before opening')
+  return opener ? opener(spec) : null
+}
+
+/** Persist and validate the scoped plan before any pane or agent can exist. */
+export async function openPlannedWorkspaceFromTemplate(
+  spec: TemplateWorkspaceSpec
+): Promise<OpenedWorkspace | null> {
+  if (spec.tools === undefined) return openWorkspaceFromTemplate(spec)
+  const id = spec.id ?? crypto.randomUUID()
+  const requested = planFromTemplateTools(id, spec.tools)
+  const stored = (await getBridge().invoke(IntegrationsChannels.planSet, requested)) as {
+    workspaceId?: string
+    entries?: Record<string, unknown>
+  } | null
+  if (!stored || stored.workspaceId !== id || !stored.entries) {
+    throw new Error('The workspace tool plan could not be saved. No workspace or agent was started.')
   }
-  return opened
+  const { tools: _tools, ...ready } = spec
+  return opener ? opener({ ...ready, id }) : null
 }

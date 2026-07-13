@@ -21,6 +21,27 @@ import type { PersistedPane, PersistedWorkspace, WorkspaceLayout } from '@contra
 
 const SCROLLBACK_BYTES = 200_000
 
+const posixQuote = (value: string): string => `'${value.replace(/'/g, `'"'"'`)}'`
+
+/** Command executed by ssh only after authentication succeeds. It emits a
+ *  private OSC readiness marker, enters the requested target cwd, then becomes
+ *  the configured interactive shell. No pane input is sent to an auth prompt. */
+function remoteBootstrap(remote: NonNullable<SpawnSpec['remote']>): string {
+  const platform = remote.platform ?? 'posix'
+  if (platform === 'windows') {
+    const cwd = remote.cwd
+      ? `Set-Location -LiteralPath '${remote.cwd.replace(/'/g, "''")}' -ErrorAction Stop; `
+      : ''
+    const shell = remote.shell === 'cmd' ? '& cmd.exe /K' : '& powershell.exe -NoLogo -NoExit'
+    const script = `[Console]::Write([char]27 + ']777;mogging-remote-ready' + [char]7); ${cwd}${shell}`
+    return `powershell.exe -NoLogo -NoProfile -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`
+  }
+  const shell = remote.shell === 'bash' || remote.shell === 'zsh' ? remote.shell : 'sh'
+  const cd = remote.cwd ? `cd -- ${posixQuote(remote.cwd)} && ` : ''
+  const script = `printf '\\033]777;mogging-remote-ready\\007'; ${cd}exec ${shell} -l`
+  return `sh -lc ${posixQuote(script)}`
+}
+
 /** How far past a fresh cap cut we'll look for a clean line start. */
 const TEAR_SCAN = 400
 
@@ -158,7 +179,12 @@ class PaneSession {
     // stand-in (a node script) so smokes never need a network.
     if (spec.remote) {
       const r = spec.remote
-      const sshArgs = ['-tt', ...(r.port ? ['-p', String(r.port)] : []), (r.user ? r.user + '@' : '') + r.host]
+      const sshArgs = [
+        '-tt',
+        ...(r.port ? ['-p', String(r.port)] : []),
+        (r.user ? r.user + '@' : '') + r.host,
+        remoteBootstrap(r)
+      ]
       const shim = process.env.MOGGING_SSH_SHIM
       if (shim) {
         // Test shim: a batch/shell script — run via the PLATFORM shell (running it

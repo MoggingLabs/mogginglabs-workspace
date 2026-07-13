@@ -12,7 +12,7 @@ const APP = 'MoggingLabs'
  *  updates never collide on socket/lock/endpoint (ADR 0006 anti-kill-server); the channel
  *  segment (run/v4 vs run/dev-v4) means a repo checkout never collides with an installed
  *  release even at the SAME protocol version. MOGGING_CHANNEL is inherited from the app that
- *  spawned this daemon (see src/main/index.ts) — the two must derive the same dir. */
+ *  spawned this daemon (set in src/main/boot.ts, prepareRuntime) — the two must derive the same dir. */
 export function runtimeDir(): string {
   const base =
     process.platform === 'win32'

@@ -11,7 +11,17 @@ export interface RemoteHost {
   host: string
   user?: string
   port?: number
+  /** Command dialect on the target. Defaults to posix/sh for older saved rows. */
+  platform?: 'posix' | 'windows'
+  shell?: 'sh' | 'bash' | 'zsh' | 'powershell' | 'cmd'
   /** A NOTE about which identity to use (e.g. "work ed25519") — never a key path
    *  we read, never key material. Purely informational. */
   identityHint?: string
+}
+
+export interface RemoteRemoveResult {
+  ok: boolean
+  /** A referenced host is retained; panes never silently become local. */
+  reason?: string
+  referencedBy?: string[]
 }

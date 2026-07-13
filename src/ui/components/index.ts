@@ -52,6 +52,9 @@ export {
   type FileTreeRow
 } from './file-tree'
 export { createSegmented, type SegmentedHandle, type SegmentedOption } from './segmented'
+// Secret-bearing forms (audit finding 35): a pasted key leaves the DOM only once the
+// round trip says it is safe somewhere else. Every form that takes a secret submits here.
+export { submitWithRetain, scrubFields, type SubmitWithRetainOpts } from './submit-with-retain'
 // Layout primitives (8.5/01) — THE structural vocabulary: every grouped surface
 // is a Card, headed by a SectionHeader, filled with FieldGroups, split by TwoColumn.
 export { Card, type CardOpts } from './card'

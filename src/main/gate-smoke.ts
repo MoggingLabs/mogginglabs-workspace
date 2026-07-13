@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorktree } from '@backend/features/worktrees'
 import { INHERITED_PANE_ENV, scrubInheritedPaneEnv } from './pane-env'
+import { approvalListed, sendApprovalFromPane } from './reviewer-smoke-helper'
 
 // Env-gated reviewer-gate smoke (MOGGING_GATE, Phase-4/03). The DoD, asserted:
 // an unapproved branch cannot merge through the app — not by click, not by CLI —
@@ -39,6 +40,7 @@ function checkPaneEnvIsolation(): { pass: boolean; detail: Record<string, unknow
   // MOGGING_USERDATA are OURS — the app's own launch flags — and must survive.
   const fake: Record<string, string | undefined> = {
     MOGGING_PANE_ID: '3',
+    MOGGING_PANE_TOKEN: 'parent-pane-secret',
     MOGGING_DAEMON_ENDPOINT: 'C:/host/endpoint.json',
     MOGGING_BROWSER_ENDPOINT: 'C:/host/browser.json',
     MOGGING_GATE: '1',
@@ -47,7 +49,7 @@ function checkPaneEnvIsolation(): { pass: boolean; detail: Record<string, unknow
   }
   const dropped = scrubInheritedPaneEnv(fake)
   const pureOk =
-    dropped.length === 3 &&
+    dropped.length === INHERITED_PANE_ENV.length &&
     INHERITED_PANE_ENV.every((n) => fake[n] === undefined) &&
     fake.MOGGING_GATE === '1' &&
     fake.MOGGING_USERDATA === 'C:/iso/userdata' &&
@@ -114,24 +116,34 @@ export function runGateSmoke(win: BrowserWindow): void {
       git(wt.path, ['add', '-A'])
       git(wt.path, ['commit', '-m', 'gated work'])
 
-      const mergeVia = (branch: string, override?: string): Promise<{ ok: boolean; state: string }> =>
+      const mergeVia = (worktree: string, override?: string): Promise<{ ok: boolean; state: string }> =>
         ES(
-          `window.bridge.invoke('review:merge', ${JSON.stringify({ repo, branch, override })})`
+          `window.bridge.invoke('review:merge', ${JSON.stringify({ repo, worktree, override })})`
         ) as Promise<{ ok: boolean; state: string }>
 
       // 1) no sign-off, no override -> ungated (the lock works)
-      const ungated = await mergeVia(wt.branch)
+      const ungated = await mergeVia(wt.path)
 
       // 2) a non-reviewer pane cannot approve — the daemon refuses it outright (exit 6)
+      // An external process can still claim a public pane id, but without that pane's
+      // credential the daemon refuses it. Then exercise the stronger case: a real worker
+      // pane has its own valid credential, but its non-reviewer role still cannot sign.
       const notReviewer = await cli(['approve', wt.branch], asPane(1))
+      const boundNonReviewerSent = await sendApprovalFromPane(cli, cliPath, base + 1, wt.branch, { repo, base: 'main' })
+      const boundNonReviewerListed =
+        boundNonReviewerSent &&
+        (await approvalListed(cli, wt.branch, { attempts: 6, sleepMs: 200, byPaneId: base + 1 }))
 
       // 2b) THE ATTACK. Pane 3 (a worker) promotes ITSELF through the open `set-role` verb
       // and signs off on the branch. The daemon, whose role map it just rewrote, accepts the
       // approve — so `mogging approvals` may even list it. The APP must not care: it never
       // made pane 3 a reviewer, so the merge stays shut. This is the whole fix, asserted.
       const selfPromote = await cli(['role', String(base + 3), 'reviewer'])
-      const selfApprove = await cli(['approve', wt.branch], asPane(3))
-      const mergeAfterForgery = await mergeVia(wt.branch)
+      const selfApprovalSent = await sendApprovalFromPane(cli, cliPath, base + 3, wt.branch, { repo, base: 'main' })
+      const selfApprovalListed =
+        selfApprovalSent && (await approvalListed(cli, wt.branch, { byPaneId: base + 3 }))
+      const selfApprove = { code: selfApprovalListed ? 0 : 1 }
+      const mergeAfterForgery = await mergeVia(wt.path)
       // ...and the board's ✓ must not appear either: main filters the sign-off at the
       // boundary, so the renderer is never told a forged approval exists.
       const forgedDiff = (await ES(
@@ -139,9 +151,11 @@ export function runGateSmoke(win: BrowserWindow): void {
       )) as { approved?: boolean }
 
       // 3) the pane the USER made a reviewer approves; the same merge now lands
-      const approved = await cli(['approve', wt.branch], asPane(2))
+      const approvedSent = await sendApprovalFromPane(cli, cliPath, base + 2, wt.branch, { repo, base: 'main' })
+      const approvedListed = approvedSent && (await approvalListed(cli, wt.branch, { byPaneId: base + 2 }))
+      const approved = { code: approvedListed ? 0 : 1 }
       const approvalsList = JSON.parse((await cli(['approvals', '--json'])).stdout) as { branch: string }[]
-      const merged = await mergeVia(wt.branch)
+      const merged = await mergeVia(wt.path)
 
       // 4) removing the worktree clears its sign-off (approvals are for live work)
       await ES(`window.bridge.invoke('worktrees:remove', ${JSON.stringify({ repo, path: wt.path, force: true })})`)
@@ -155,8 +169,8 @@ export function runGateSmoke(win: BrowserWindow): void {
       writeFileSync(join(wt2.path, 'human.txt'), 'human-landed\n')
       git(wt2.path, ['add', '-A'])
       git(wt2.path, ['commit', '-m', 'human work'])
-      const wrongWord = await mergeVia(wt2.branch, 'Override')
-      const overridden = await mergeVia(wt2.branch, 'override')
+      const wrongWord = await mergeVia(wt2.path, 'Override')
+      const overridden = await mergeVia(wt2.path, 'override')
 
       const paneEnv = checkPaneEnvIsolation()
 
@@ -165,6 +179,8 @@ export function runGateSmoke(win: BrowserWindow): void {
         ungated.ok === false &&
         ungated.state === 'ungated' &&
         notReviewer.code === 6 &&
+        boundNonReviewerSent &&
+        !boundNonReviewerListed &&
         // The forgery is INERT: whatever the daemon was told, the gate stayed shut and the
         // renderer was never handed an approval to paint. (We do not assert the CLI's own
         // exit codes here — the daemon may well have accepted both calls. That is the point:
@@ -187,6 +203,8 @@ export function runGateSmoke(win: BrowserWindow): void {
         paneEnvIsolation: paneEnv.detail,
         ungated,
         notReviewerExit: notReviewer.code,
+        boundNonReviewerSent,
+        boundNonReviewerListed,
         selfPromoteExit: selfPromote.code,
         selfApproveExit: selfApprove.code,
         mergeAfterForgery,

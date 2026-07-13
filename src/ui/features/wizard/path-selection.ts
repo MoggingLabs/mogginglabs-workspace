@@ -56,6 +56,8 @@ export interface PathSelectionHandle {
   setRemote(remote: boolean): void
   /** Fresh wizard. Cancels anything in flight. */
   reset(cwd: string): void
+  /** Permanently cancel timers/replies and release subscribers from an old render. */
+  dispose(): void
   subscribe(fn: PathListener): () => void
   /** Resolves once nothing is in flight — so Enter never races the debounce. */
   settle(): Promise<void>
@@ -78,8 +80,10 @@ export function createPathSelection(deps: PathSelectionDeps): PathSelectionHandl
   let seq = 0 // monotonic: only the newest resolve may write
   let timer: ReturnType<typeof setTimeout> | undefined
   let settlers: (() => void)[] = []
+  let disposed = false
 
   const emit = (origin: PathOrigin, listing?: DirListing): void => {
+    if (disposed) return
     for (const fn of [...listeners]) fn(st, origin, listing)
     if (!st.probing) {
       const waiting = settlers
@@ -99,11 +103,15 @@ export function createPathSelection(deps: PathSelectionDeps): PathSelectionHandl
     const token = ++seq
     const wantListing = origin !== 'browser'
     const jobs: [Promise<DirResult | null>, Promise<GitStatus | null>] = [
-      wantListing ? deps.listDir(target).catch(() => null) : Promise.resolve(null),
+      wantListing
+        ? deps.listDir(target).catch(
+            (): DirRefusal => ({ ok: false, reason: 'unavailable', path: target })
+          )
+        : Promise.resolve(null),
       deps.gitQuery(target).catch(() => null)
     ]
     void Promise.all(jobs).then(([dir, git]) => {
-      if (token !== seq || st.cwd !== target) return // superseded: a newer change owns the state
+      if (disposed || token !== seq || st.cwd !== target) return // superseded: a newer change owns the state
       st.probing = false
       st.git = git
       st.isRepo = !!git
@@ -113,6 +121,7 @@ export function createPathSelection(deps: PathSelectionDeps): PathSelectionHandl
   }
 
   function set(next: string, origin: PathOrigin): void {
+    if (disposed) return
     cancel()
     st.cwd = next
     st.refusal = null
@@ -167,6 +176,16 @@ export function createPathSelection(deps: PathSelectionDeps): PathSelectionHandl
       st.probing = false
       if (cwd.trim()) set(cwd, 'prefill')
       else emit('prefill')
+    },
+    dispose: () => {
+      if (disposed) return
+      disposed = true
+      cancel()
+      st.probing = false
+      listeners.clear()
+      const waiting = settlers
+      settlers = []
+      for (const done of waiting) done()
     },
     subscribe: (fn) => {
       listeners.add(fn)

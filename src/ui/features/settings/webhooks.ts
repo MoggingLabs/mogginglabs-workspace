@@ -1,6 +1,6 @@
 import { BRIDGE_EVENTS, IntegrationsChannels, type BridgeEventName } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { Card, confirmDialog, el, showToast } from '../../components'
+import { Card, confirmDialog, el, showToast, submitWithRetain } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onViewChange } from '../../core/shell/view-port'
 
@@ -25,10 +25,10 @@ export function createWebhooksSection(): HTMLElement {
   const list = el('div', { class: 'mgr-list' })
   const note = el('div', { class: 'settings-error mgr-note', role: 'alert', hidden: true })
 
-  const labelInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'Name (e.g. n8n build alerts)' }) as HTMLInputElement
-  const urlInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'Webhook URL (https, or loopback/LAN http)' }) as HTMLInputElement
+  const labelInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'Name (e.g. n8n build alerts)', dataset: { whField: 'label' } }) as HTMLInputElement
+  const urlInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'Webhook URL (https, or loopback/LAN http)', dataset: { whField: 'url' } }) as HTMLInputElement
   urlInput.type = 'password'
-  const envInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'or env-ref (e.g. N8N_WEBHOOK_URL)' }) as HTMLInputElement
+  const envInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'or env-ref (e.g. N8N_WEBHOOK_URL)', dataset: { whField: 'envref' } }) as HTMLInputElement
   for (const i of [labelInput, urlInput, envInput]) i.addEventListener('keydown', (e) => e.stopPropagation())
   const evBoxes = new Map<BridgeEventName, HTMLInputElement>()
   const evRow = el('div', { class: 'evbridge-events' }, BRIDGE_EVENTS.map((ev) => {
@@ -49,7 +49,7 @@ export function createWebhooksSection(): HTMLElement {
     wsSelect.value = current
   }
   refreshWorkspaces()
-  const saveBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Add webhook' }) as HTMLButtonElement
+  const saveBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Add webhook', dataset: { whAction: 'save' } }) as HTMLButtonElement
 
   const HEALTH_TEXT: Record<string, string> = { ok: 'ok', failing: 'failing', off: 'idle' }
   function row(w: WebhookView): HTMLElement {
@@ -81,16 +81,28 @@ export function createWebhooksSection(): HTMLElement {
     paint(((await bridge.invoke(IntegrationsChannels.webhookList)) as WebhookView[]) ?? [])
   }
 
-  saveBtn.onclick = async (): Promise<void> => {
-    const events = [...evBoxes.entries()].filter(([, cb]) => cb.checked).map(([ev]) => ev)
-    const url = urlInput.value
-    urlInput.value = ''
-    const r = (await bridge.invoke(IntegrationsChannels.webhookSave, {
-      label: labelInput.value, url: url || undefined, envRef: envInput.value || undefined, events, workspaceId: wsSelect.value || undefined, insecureAck: insecureBox.checked
-    })) as { ok: boolean; reason?: string }
-    note.hidden = r.ok
-    if (r.ok) { labelInput.value = ''; envInput.value = ''; await refresh() }
-    else note.textContent = r.reason ?? 'refused'
+  saveBtn.onclick = (): void => {
+    // The URL is the secret here (for n8n/Make/Slack it IS the bearer token — the caption
+    // says so). It used to be wiped BEFORE the await, so every refusal `saveWebhook` can
+    // return — no name, no event ticked, a plain-http host without the LAN ack, an
+    // unavailable keychain — took the URL with it, and the user had to go dig it out of
+    // n8n again to fix a missing NAME. It now survives every refusal.
+    void submitWithRetain({
+      trigger: saveBtn,
+      retainFields: [urlInput],
+      clearFields: [labelInput, envInput],
+      errorEl: note,
+      submit: () =>
+        bridge.invoke(IntegrationsChannels.webhookSave, {
+          label: labelInput.value,
+          url: urlInput.value || undefined,
+          envRef: envInput.value || undefined,
+          events: [...evBoxes.entries()].filter(([, cb]) => cb.checked).map(([ev]) => ev),
+          workspaceId: wsSelect.value || undefined,
+          insecureAck: insecureBox.checked
+        }) as Promise<{ ok: boolean; reason?: string }>,
+      onSuccess: () => refresh()
+    })
   }
   bridge.on(IntegrationsChannels.webhookHealthChanged, (payload) => paint((payload as WebhookView[]) ?? []))
 

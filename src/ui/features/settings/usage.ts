@@ -14,7 +14,8 @@ import {
   type UsageDisplayConfig,
   type UsageProviderDef
 } from '@contracts'
-import { Button, EmptyState, createCheckbox, createCollapsibleCard, el, providerLogo, showToast } from '../../components'
+import { Button, EmptyState, createCheckbox, createCollapsibleCard, el, loadingRow, providerLogo, showToast, submitWithRetain } from '../../components'
+import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
 import { getTelemetry } from '../../core/telemetry'
 import { switchActiveProfile } from '../../core/agents/profile-switch'
@@ -134,17 +135,24 @@ export function createUsageSection(): HTMLElement {
     const paste = el('input', { class: 'usage-key-input', ariaLabel: `${r.id} API key` }) as HTMLInputElement
     paste.type = 'password'
     paste.placeholder = r.klass === 'web-session' ? 'paste cookie value…' : 'paste API key…'
-    const save = Button({
+    const save: HTMLButtonElement = Button({
       label: 'Save',
       size: 'sm',
       onClick: () => {
         const plaintext = paste.value
         if (!plaintext) return
-        paste.value = '' // the value leaves the DOM before the round trip
-        void invoke(UsageChannels.keySet, { providerId: r.id, plaintext }).then((res) => {
-          const out = res as { ok: boolean; reason?: string }
-          if (out.ok) void loadGrid()
-          else fail(out.reason ?? 'refused')
+        // The clear used to run BEFORE the invoke, so every refusal `keySetPlaintext` can
+        // return — vault unavailable (use an env-ref instead), settings store not up — was
+        // shown to an EMPTY password field. The user pasted that key once; the refusal is
+        // survivable, losing the key is not. It leaves the DOM only on a real save.
+        void submitWithRetain({
+          trigger: save,
+          retainFields: [paste],
+          errorEl: err,
+          submit: () =>
+            invoke(UsageChannels.keySet, { providerId: r.id, plaintext }) as Promise<{ ok: boolean; reason?: string }>,
+          // The grid re-reads key PRESENCE and repaints this row as the masked saved chip.
+          onSuccess: () => void loadGrid()
         })
       }
     })
@@ -282,13 +290,23 @@ export function createUsageSection(): HTMLElement {
               // (switchActiveProfile), one name, recognizable across tabs.
               label: 'Make default',
               size: 'sm',
-              onClick: () => {
-                void switchActiveProfile(p.providerId, p.profileId).then((name) => {
-                  if (name) {
-                    void refreshSnapshot()
-                    getTelemetry().captureEvent({ name: 'usage.profileSwitch', props: { provider: p.providerId, viaSuggestion: false } })
-                  }
-                })
+              onClick: (event) => {
+                const button = event.currentTarget as HTMLButtonElement
+                button.disabled = true
+                button.setAttribute('aria-busy', 'true')
+                void switchActiveProfile(p.providerId, p.profileId)
+                  .then((name) => {
+                    if (name) {
+                      void refreshSnapshot()
+                      getTelemetry().captureEvent({ name: 'usage.profileSwitch', props: { provider: p.providerId, viaSuggestion: false } })
+                    }
+                  })
+                  .catch((error) => showToast({ tone: 'danger', title: 'Default profile was not changed', body: String(error) }))
+                  .finally(() => {
+                    if (!button.isConnected) return
+                    button.disabled = false
+                    button.removeAttribute('aria-busy')
+                  })
               }
             })
           : null
@@ -322,6 +340,16 @@ export function createUsageSection(): HTMLElement {
     return [7, 30, 90, 365].includes(v) ? v : 30
   }
 
+  // Finding 39 in its worst shape: the loop below `await`ed usage:cost per provider with NO catch
+  // at all — so a rejected scan was an unhandled rejection AND an abort. The render died on the
+  // spot, which meant the empty state and the Rescan button (this card's ONLY retry) were never
+  // appended: the user was left with a window select over nothing and no way back. A scan that
+  // never answered left the same dead stub, forever. One guard for the whole render: the scans
+  // ride ONE Promise.all — all-or-nothing exactly as it already was, except now it SAYS so —
+  // onSettle appends Rescan whatever happened, and the generation stops a slow scan for the
+  // window you just left from appending its blocks into the render that replaced it.
+  const costGuard = createAsyncGuard<(CostScan | null)[]>()
+
   async function renderCost(): Promise<void> {
     costHost.replaceChildren()
     const windowDays = costWindow()
@@ -345,9 +373,42 @@ export function createUsageSection(): HTMLElement {
     costHost.append(el('div', { class: 'usage-cost-windowrow' }, [el('span', { class: 'settings-row-caption', text: 'Window' }), winSel]))
 
     const providerIds = [...new Set(plans.map((p) => p.providerId))]
+    const scanning = loadingRow('Scanning your local cost logs…')
+    await costGuard.run(
+      () =>
+        Promise.all(
+          providerIds.map((id) => invoke(UsageChannels.cost, { providerId: id, windowDays }) as Promise<CostScan | null>)
+        ),
+      {
+        action: 'scan your local cost logs',
+        onLoading: () => costHost.append(scanning),
+        onSuccess: (scans) => {
+          scanning.remove()
+          paintCostBlocks(providerIds, scans, windowDays)
+        },
+        // "No cost data yet" is a claim about a scan that SUCCEEDED and came back empty. It must
+        // never stand in for one that failed — that is the audit's calmest lie, the failure that
+        // looks like an answer. A failed scan says it failed, in the card, in words.
+        onError: (message) => {
+          scanning.remove()
+          costHost.append(EmptyState({ icon: 'alert', title: 'The cost scan didn’t run', body: message }))
+        },
+        // The `finally` this loop never had. Rescan is the retry, so it is appended whatever
+        // happened — a failure the user cannot re-attempt is a failure they are stuck in.
+        onSettle: () => costHost.append(Button({ label: 'Rescan', size: 'sm', onClick: () => void renderCost() })),
+        // A local JSONL scan that has not answered in 8s is not answering.
+        timeoutMs: 8000
+      }
+    )
+  }
+
+  /** Paint the finished scans. Called ONLY from the guard's onSuccess — i.e. only ever for the
+   *  NEWEST render, which is exactly why it may append straight into costHost without checking
+   *  anything: the render it belongs to is the render on screen. */
+  function paintCostBlocks(providerIds: string[], scans: (CostScan | null)[], windowDays: number): void {
     let any = false
-    for (const id of providerIds) {
-      const scan = (await invoke(UsageChannels.cost, { providerId: id, windowDays })) as CostScan | null
+    for (const [i, id] of providerIds.entries()) {
+      const scan = scans[i]
       if (!scan || (!scan.days.length && !scan.models?.length)) continue
       any = true
       const cur = scan.currency
@@ -471,7 +532,6 @@ export function createUsageSection(): HTMLElement {
       costHost.append(
         EmptyState({ icon: 'clock', title: 'No cost data yet', body: 'Costs are scanned from the session logs your CLIs already write (Claude Code, Codex) — locally, on demand.' })
       )
-    costHost.append(Button({ label: 'Rescan', size: 'sm', onClick: () => void renderCost() }))
   }
 
   // ── 4 · Alerts (the 09 rules) + a fixture test toast ──────────────────────

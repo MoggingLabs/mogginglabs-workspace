@@ -12,6 +12,7 @@ import {
   type ExplorerWatchStats
 } from '@contracts'
 import { getSettingsStore } from './app-settings'
+import { waitForExplorerRaceAudit } from './explorer-race-audit-faults'
 
 // App-wiring: the explorer's read-only listing (Phase-11/01, ADR 0010) + the dock's
 // chrome state (11/03). The logic lives in @backend (Electron-free, testable); main
@@ -87,7 +88,13 @@ export async function handleExplorerList(req: unknown): Promise<ExplorerResult> 
 }
 
 export function registerExplorer(getWin: () => BrowserWindow | null): void {
-  ipcMain.handle(ExplorerChannels.list, (_e, req: unknown) => handleExplorerList(req))
+  ipcMain.handle(ExplorerChannels.list, async (_e, req: unknown) => {
+    const path = typeof (req as { path?: unknown } | null)?.path === 'string'
+      ? String((req as { path: string }).path)
+      : ''
+    await waitForExplorerRaceAudit(path)
+    return handleExplorerList(req)
+  })
 
   // ── The liveness law (11/04, ADR 0010.d) ──────────────────────────────────
   // A coalesced batch of DIR PATHS — never a file, never a byte of content, never

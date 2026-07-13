@@ -24,7 +24,8 @@ import {
   type GutterSpec,
   type LayoutTreeNode,
   type Rect,
-  type SplitDir
+  type SplitDir,
+  type SplitNode
 } from './layout-tree'
 
 export { parseTree, leafIds, MIN_PANE_WIDTH_PX, minimumLayoutWidth } from './layout-tree'
@@ -34,6 +35,36 @@ const GUTTER = 2 // px between panes — with each pane's 1px border: a 4px seam
 const MIN_PANE_HEIGHT_PX = 110 // retain the existing direct vertical-gutter drag floor
 const DRAG_THRESHOLD = 6 // px of header movement before a click becomes a pane drag
 const ROOT_EDGE_PX = 14 // workspace-edge drop band ("make this a full column/row here")
+/** Keyboard seam travel per arrow press — the cadence the dock separators already ship
+ *  (browser/explorer dock handles): a fine step you can aim with, and a coarse one under
+ *  Shift for crossing a wide pane without holding the key down. */
+const SEAM_STEP_PX = 16
+const SEAM_STEP_COARSE_PX = 64
+/** A key BURST is one gesture. A mouse drag persists (and reports) exactly once, at mouseup;
+ *  an arrow key held down would otherwise serialize + write the workspace manifest on every
+ *  repeat. Long enough to swallow a key-repeat train, short enough that a single press lands
+ *  in the manifest before anything can close the window on it. */
+const SEAM_PERSIST_MS = 200
+
+/** One seam's world, in PIXELS: the two subtrees it separates, their floors, and how far it
+ *  can actually travel. The drag, the arrow keys and the ARIA a screen reader announces all
+ *  read THIS one derivation — so the number the keyboard hears is by construction the number
+ *  the mouse can reach, and an attribute cannot drift from the pixels. */
+interface SeamGeometry {
+  split: SplitNode
+  /** The SPLIT is horizontal (children side by side) — so the seam itself is a vertical line. */
+  horizontal: boolean
+  /** The split's span minus its gutters: the px the children's fractions divide up. */
+  innerPx: number
+  /** Every child's px floor (horizontal seams only — `resizeSplitWeights` water-fills against them). */
+  childMinimums: number[]
+  /** The rendered span of the child BEFORE the seam — the value the seam's ARIA advertises. */
+  aPx: number
+  /** ...and the two adjacent children together: the seam moves inside this, nothing else moves. */
+  pairPx: number
+  aMin: number
+  bMin: number
+}
 
 /** WebGL context budget (Chromium caps ~16 live contexts — see the feature README). */
 export const MAX_PANES = 16
@@ -72,6 +103,7 @@ export class GridLayout {
   private gutterSpecs: GutterSpec[] = []
   private readonly resizeObs: ResizeObserver
   private dropHint: HTMLElement | null = null
+  private seamPersistTimer?: ReturnType<typeof setTimeout>
   private readonly followExpandedViewport = (): void => {
     if (this.expandedId != null && this.expandMode !== 'col') this.reflow()
   }
@@ -281,6 +313,9 @@ export class GridLayout {
         this.grid.append(el)
       }
       setRect(el, g.rect)
+      // A gutter created in THIS pass missed the reflow above (it did not exist yet), so its
+      // axis and ARIA are seeded here — a seam must never be announced from a stale spec.
+      this.syncGutter(el, g)
     }
 
     if (!this.grid.querySelector('.layout-slot.focused')) {
@@ -322,7 +357,12 @@ export class GridLayout {
     }
     for (const g of layout.gutters) {
       const el = this.gutterEls.get(`${g.path}:${g.index}`)
-      if (el) setRect(el, g.rect)
+      if (!el) continue
+      setRect(el, g.rect)
+      // The seam's ARIA rides the same pass its RECT does. Anything that moves a seam moves
+      // both, so the announced position cannot drift from the pixels — including the moves no
+      // one asked for (window resize, rail collapse, a sibling closing).
+      this.syncGutter(el, g)
     }
   }
 
@@ -455,60 +495,183 @@ export class GridLayout {
 
   private makeGutter(spec: GutterSpec): HTMLElement {
     const g = document.createElement('div')
-    g.className = `layout-gutter ${spec.dir === 'h' ? 'vertical' : 'horizontal'}`
+    g.className = 'layout-gutter' // the axis class + every ARIA value: syncGutter, off the live tree
     g.dataset.path = spec.path
     g.dataset.index = String(spec.index)
+    // A FOCUSABLE separator (APG), on the same contract the two dock handles already ship —
+    // and this is the higher-traffic one: it exists the moment a workspace has two panes.
+    // It was a bare <div> with a single mousedown listener, so a keyboard-only user could not
+    // rebalance a workspace AT ALL, and a screen reader saw nothing but a decorative box.
+    // role + orientation + the live aria-value* (syncGutter) + a tab stop + keys (onGutterKey)
+    // are the whole of what makes a separator operable; nothing here invents a new resize.
+    g.setAttribute('role', 'separator')
+    g.tabIndex = 0
     g.addEventListener('mousedown', (e) => this.startGutterDrag(e, g.dataset.path ?? '', Number(g.dataset.index)))
+    g.addEventListener('keydown', (e) => this.onGutterKey(e, g.dataset.path ?? '', Number(g.dataset.index)))
     return g
   }
 
-  /** Drag ONE seam of ONE line: only `sizes[index-1]`/`sizes[index]` of the split at
-   *  `path` change, so panes on other lines never move — the whole point of the tree. */
-  private startGutterDrag(e: MouseEvent, path: string, index: number): void {
+  /** The RENDERED rect of one child of the split at `path` — a leaf's own, or a child split's.
+   *  Both fall out of the SAME reflow pass, so anything derived from them is the pixels on the
+   *  screen, not a stored fraction the water-fill may have clamped away (a 10% child pinned at
+   *  132px renders 132px, and that is the number the seam must honour and announce). */
+  private childRect(path: string, i: number): Rect | undefined {
+    const childPath = path === '' ? String(i) : `${path}.${i}`
+    const child = nodeAtPath(this.root, childPath)
+    if (!child) return undefined
+    return isSplit(child) ? this.splitRects.get(childPath) : this.leafRects.get(child.id)
+  }
+
+  /** Everything a seam move needs, derived once from the live tree + the rendered rects. */
+  private seamGeometry(path: string, index: number): SeamGeometry | null {
     const split = nodeAtPath(this.root, path)
     const rect = this.splitRects.get(path)
-    if (!split || !isSplit(split) || !rect) return
-    e.preventDefault()
+    if (!split || !isSplit(split) || !rect) return null
+    if (!Number.isInteger(index) || index <= 0 || index >= split.children.length) return null
+    const a = this.childRect(path, index - 1)
+    const b = this.childRect(path, index)
+    if (!a || !b) return null
     const horizontal = split.dir === 'h'
     const innerPx = Math.max(1, (horizontal ? rect.w : rect.h) - GUTTER * (split.children.length - 1))
-    const startPos = horizontal ? e.clientX : e.clientY
-    const a0 = split.sizes[index - 1]!
-    const b0 = split.sizes[index]!
-    const pair = a0 + b0
-    const startSizes = split.sizes.slice()
-    if (!(pair > 0)) return
-
-    // Capture the RENDERED pixel geometry. A constrained water-fill can make stored
-    // weights differ from visible fractions (for example, a 10% child clamped at
-    // 132px). Dragging must still move only the two children touching this seam: keep
-    // every sibling span and the pair's outer boundary fixed, change the adjacent
-    // pixels, then persist that exact whole-line geometry as fractions.
+    const aPx = horizontal ? a.w : a.h
+    const pairPx = aPx + (horizontal ? b.w : b.h)
+    // The floors are the ones the resize ALREADY enforces, restated in px — not new ones. A
+    // horizontal seam owes each subtree its recursive width requirement (what resizeSplitWeights
+    // clamps to); a vertical seam owes MIN_PANE_HEIGHT_PX, halving the pair when even that will
+    // not fit — the same `Math.min(…, pair / 2)` the drag's minFr does, read in px not fractions.
     const childMinimums = horizontal
       ? split.children.map((child) => minimumLayoutWidth(child, GUTTER, MIN_PANE_WIDTH_PX))
       : []
+    const floor = Math.min(MIN_PANE_HEIGHT_PX, pairPx / 2)
+    return {
+      split,
+      horizontal,
+      innerPx,
+      childMinimums,
+      aPx,
+      pairPx,
+      aMin: horizontal ? childMinimums[index - 1]! : floor,
+      bMin: horizontal ? childMinimums[index]! : floor
+    }
+  }
+
+  /** THE seam move — whichever gesture asked for it. Only `sizes[index-1]`/`sizes[index]` of
+   *  the split change, so panes on other lines never move: the whole point of the tree.
+   *
+   *  `base` is the sizes array the GESTURE started from and `deltaPx` its total travel since,
+   *  so a drag applies one absolute delta from mousedown (accumulating per-frame deltas would
+   *  drift by a pixel a frame), and a key press is simply a one-shot gesture of ±step from now.
+   *  Horizontal seams go through resizeSplitWeights, which moves the pair inside the water-fill
+   *  geometry and leaves every non-adjacent child's LATENT preference intact; vertical seams
+   *  have no width minimum in the allocator, so they clamp their two fractions directly. */
+  private moveSeam(geom: SeamGeometry, index: number, base: number[], deltaPx: number): void {
+    const { split, horizontal, innerPx } = geom
+    if (horizontal) {
+      split.sizes = resizeSplitWeights(innerPx, base, geom.childMinimums, index, deltaPx)
+    } else {
+      const a0 = base[index - 1]!
+      const pair = a0 + base[index]!
+      if (!(pair > 0)) return
+      const minFr = Math.min(MIN_PANE_HEIGHT_PX / innerPx, pair / 2)
+      const na = Math.min(Math.max(a0 + deltaPx / innerPx, minFr), pair - minFr)
+      split.sizes = base.slice()
+      split.sizes[index - 1] = na
+      split.sizes[index] = pair - na
+    }
+    this.reflow()
+  }
+
+  /** Drag ONE seam of ONE line. */
+  private startGutterDrag(e: MouseEvent, path: string, index: number): void {
+    const geom = this.seamGeometry(path, index)
+    if (!geom) return
+    const base = geom.split.sizes.slice()
+    if (!(base[index - 1]! + base[index]! > 0)) return
+    e.preventDefault()
+    const startPos = geom.horizontal ? e.clientX : e.clientY
     const move = (ev: MouseEvent): void => {
-      const pos = horizontal ? ev.clientX : ev.clientY
-      if (horizontal) {
-        split.sizes = resizeSplitWeights(innerPx, startSizes, childMinimums, index, pos - startPos)
-      } else {
-        const minFr = Math.min(MIN_PANE_HEIGHT_PX / innerPx, pair / 2)
-        const delta = (pos - startPos) / innerPx
-        const na = Math.min(Math.max(a0 + delta, minFr), pair - minFr)
-        split.sizes[index - 1] = na
-        split.sizes[index] = pair - na
-      }
-      this.reflow()
+      this.moveSeam(geom, index, base, (geom.horizontal ? ev.clientX : ev.clientY) - startPos)
     }
     const up = (): void => {
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', up)
       document.body.classList.remove('resizing')
-      getTelemetry().captureEvent({ name: 'layout.resized', props: { dir: split.dir } })
+      getTelemetry().captureEvent({ name: 'layout.resized', props: { dir: geom.split.dir } })
       this.onLayoutChange?.()
     }
     document.body.classList.add('resizing')
     window.addEventListener('mousemove', move)
     window.addEventListener('mouseup', up)
+  }
+
+  /** Arrow keys / Home / End on a focused seam — the SAME resize the mouse performs, down to
+   *  the same clamps, because it runs the same moveSeam. The seam FOLLOWS the arrow (right/down
+   *  grows the pane before it), so aria-valuenow rises as the seam travels toward its max, and
+   *  Home/End park it on the two floors: the pane before it at its minimum, or the one after it.
+   *  An arrow ACROSS the seam is not this separator's business — it is left to bubble. */
+  private onGutterKey(e: KeyboardEvent, path: string, index: number): void {
+    if (e.ctrlKey || e.metaKey || e.altKey) return
+    const geom = this.seamGeometry(path, index)
+    if (!geom) return
+    const step = e.shiftKey ? SEAM_STEP_COARSE_PX : SEAM_STEP_PX
+    const forward = geom.horizontal ? 'ArrowRight' : 'ArrowDown'
+    const backward = geom.horizontal ? 'ArrowLeft' : 'ArrowUp'
+    let delta: number
+    if (e.key === forward) delta = step
+    else if (e.key === backward) delta = -step
+    else if (e.key === 'Home') delta = geom.aMin - geom.aPx
+    else if (e.key === 'End') delta = geom.pairPx - geom.bMin - geom.aPx
+    else return
+    e.preventDefault() // Home/End would otherwise scroll the layout host under the seam
+    this.moveSeam(geom, index, geom.split.sizes.slice(), delta)
+    // One gesture, one persist (SEAM_PERSIST_MS) — a held arrow key is not fifty resizes.
+    if (this.seamPersistTimer) clearTimeout(this.seamPersistTimer)
+    this.seamPersistTimer = setTimeout(() => {
+      this.seamPersistTimer = undefined
+      getTelemetry().captureEvent({ name: 'layout.resized', props: { dir: geom.split.dir } })
+      this.onLayoutChange?.()
+    }, SEAM_PERSIST_MS)
+  }
+
+  /** Publish a seam's live axis + position. Re-derived on EVERY reflow, because plenty moves a
+   *  seam that nobody touched (a window resize, a sibling closing, a rail collapse) — an
+   *  aria-valuenow that only updated when the seam was dragged would be a lie the moment the
+   *  window changed size. Two more reasons it is derived, never remembered:
+   *
+   *   - gutter elements are REUSED by seam key (`path:index`), and a drag-rearrange can flip the
+   *     split at that key from 'h' to 'v' — a reused element would otherwise keep the old cursor
+   *     class AND announce the old axis;
+   *   - a seam whose two neighbours are BOTH already at their floor (a grid pinned at its
+   *     recursive minimum) has nowhere to go, and resizeSplitWeights rightly refuses to move it.
+   *     It therefore advertises a ZERO-width range AT its own position rather than a range it
+   *     cannot reach: aria-valuenow outside [min,max] is a lie no assistive tech can recover from. */
+  private syncGutter(el: HTMLElement, spec: GutterSpec): void {
+    const vertical = spec.dir === 'h' // children side by side ⇒ the seam between them is a vertical line
+    el.classList.toggle('vertical', vertical)
+    el.classList.toggle('horizontal', !vertical)
+    el.setAttribute('aria-orientation', vertical ? 'vertical' : 'horizontal')
+    el.setAttribute('aria-label', vertical ? 'Resize panes left and right' : 'Resize panes up and down')
+    const geom = this.seamGeometry(spec.path, spec.index)
+    if (!geom) return
+    const at = Math.round(geom.aPx)
+    let lo = Math.round(geom.aMin)
+    let hi = Math.round(geom.pairPx - geom.bMin)
+    if (hi < lo) lo = hi = at // pinned: the pair cannot even hold its own floors
+    const min = String(lo)
+    const max = String(hi)
+    const now = String(Math.max(lo, Math.min(hi, at)))
+    // Skip the writes when nothing moved: a reflow storm (a window drag) and a streaming grid at
+    // rest both re-derive the same three numbers, and every setAttribute dirties the a11y tree.
+    if (
+      el.getAttribute('aria-valuenow') === now &&
+      el.getAttribute('aria-valuemin') === min &&
+      el.getAttribute('aria-valuemax') === max
+    ) {
+      return
+    }
+    el.setAttribute('aria-valuemin', min)
+    el.setAttribute('aria-valuemax', max)
+    el.setAttribute('aria-valuenow', now)
   }
 
   // ── Drag-to-rearrange ────────────────────────────────────────────────────────
@@ -664,6 +827,7 @@ export class GridLayout {
   /** Tear down: clear this source's slots (terminal disposes its panes) + remove the grid. */
   dispose(): void {
     this.resizeObs.disconnect()
+    if (this.seamPersistTimer) clearTimeout(this.seamPersistTimer) // a workspace closed mid-nudge must not persist into it
     this.scrollHost.removeEventListener('scroll', this.followExpandedViewport)
     clearSlots(this.source)
     this.grid.remove()

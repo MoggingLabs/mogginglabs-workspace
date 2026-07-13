@@ -10,6 +10,7 @@ import { getUsageService, getUsageStatusService } from './usage'
 import { getSettingsStore } from './app-settings'
 import { clearTrail, flushTrailForSmoke, recordTrail } from './trail'
 import { setAgentConsent, setDrivingForSmoke } from './browser-dock'
+import { approvalListed, sendApprovalFromPane } from './reviewer-smoke-helper'
 
 // MOGGING_SHOT=all (Phase-5/01): the GALLERY — drive the app through every surface
 // and write numbered PNGs to out/gallery/, in BOTH themes. The audit + before/after
@@ -127,13 +128,14 @@ export function runGallery(win: BrowserWindow): void {
   const errors: string[] = []
   let n = 0
 
-  const cli = (args: string[], extraEnv: Record<string, string> = {}): Promise<number> =>
+  const cli = (args: string[], extraEnv: Record<string, string> = {}): Promise<{ code: number; stdout: string; stderr: string }> =>
     new Promise((resolveCli) => {
       execFile(
         process.execPath,
         [cliPath, ...args],
         { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ...extraEnv }, timeout: 15000, windowsHide: true },
-        (err) => resolveCli(err ? 1 : 0)
+        (err, stdout, stderr) =>
+          resolveCli({ code: err ? ((err as unknown as { code?: number }).code ?? 1) : 0, stdout: String(stdout), stderr: String(stderr) })
       )
     })
 
@@ -417,7 +419,10 @@ export function runGallery(win: BrowserWindow): void {
         await sleep(4500) // spawns + git chips + roles reach the daemon
         const base = ((await ES('window.__mogging.workspace.active()')) as { ordinal: number }).ordinal * 100
         await cli(['claim', 'src/ui/**'], { MOGGING_PANE_ID: String(base + 1) })
-        await cli(['approve', wt1.branch ?? ''], { MOGGING_PANE_ID: String(base + 3) }) // pane 3 is reviewer
+        if (wt1.branch) {
+          await sendApprovalFromPane(cli, cliPath, base + 3, wt1.branch, { repo, base: 'main' })
+          await approvalListed(cli, wt1.branch)
+        }
         // Board cards (one bound via start-on-card while Alpha is active).
         await ES(`window.__mogging.board.createCard('Ship the parser rewrite', 'Tokens, AST, tests.')`)
         await ES(`window.__mogging.board.createCard('Audit the color system', 'AA everywhere.')`)
@@ -865,6 +870,31 @@ export function runGallery(win: BrowserWindow): void {
         // Home is unreachable once one exists — the grid owns the app. The launcher is
         // captured above as `${tag}-home-empty`, in the only state it can be seen.)
       }
+
+      // ── Narrow widths. The audit's finding: this gallery had NO 600px coverage — 125 shots,
+      //    both themes, every one of them 1600x950. So the responsive contract (a 600px hard
+      //    floor, the rail auto-collapsing, the docks yielding to the grid) was ASSERTED by the
+      //    RESPONSIVE gate and never once LOOKED at. A number can be right while the thing it
+      //    describes is unusable, and only a picture shows you which.
+      //    600 is the floor; 800 is where the rail comes back. Captured once, not per-theme:
+      //    layout does not vary by theme, and the palettes are already exercised above. ──
+      await part('narrow', async () => {
+        for (const w of [600, 800]) {
+          win.setSize(w, 900)
+          await sleep(800) // the rail's auto-collapse and the dock budget re-derive on resize
+          await snap(`narrow-${w}-grid`)
+          await click('.titlebar-right .icon-btn[aria-label="Board"]')
+          await sleep(500)
+          await snap(`narrow-${w}-board`)
+          await click('.titlebar-right .icon-btn[aria-label="Settings"]')
+          await sleep(500)
+          await snap(`narrow-${w}-settings`)
+          await click('.settings-back')
+          await sleep(400)
+        }
+        win.setSize(1600, 950) // leave the window as every other shot found it
+        await sleep(400)
+      })
 
       writeFileSync(join(dir, 'errors.json'), JSON.stringify({ count: errors.length, errors }, null, 2))
       app.exit(0)

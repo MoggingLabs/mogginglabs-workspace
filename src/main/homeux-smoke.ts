@@ -18,6 +18,10 @@ import { probeContrastAcrossThemes } from './aa-probe'
 //       immortal-checklist bug (a non-optional power-up row, now REMOVED #21) is gone.
 //   (e) MEASURED, not claimed: hero→grid gap >= --sp-6, recent-card padding >= --sp-4;
 //   (f) AA >= 4.5 on the card text in all four themes, via the shared src/main/aa-probe.ts.
+//   (g) audit 34 — the IA contract: opening a recent lands on the GRID (never back on
+//       Home — view-port.ts enforces the invariant both ways), and there is NO titlebar
+//       Home affordance, by design. Home is the boot launcher and the zero-workspace
+//       empty state; its recents and presets are fully covered by the wizard.
 export function runHomeUxSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 150000) // safety net
   const wc = win.webContents
@@ -140,6 +144,27 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
       await ES(`document.querySelector('.home-recent').click()`)
       const openedOk = await waitTrue(`window.__mogging.workspace.list().length > ${wsBefore}`, 30, 200)
 
+      // (g) audit 34 — the navigation contract, RATIFIED. Home and the grid are the two
+      // halves of ONE invariant: exactly one of them can be right, and the workspace
+      // count decides which. A workspace now exists (from (c)), so the app must be on
+      // the GRID and Home must be gone — view-port.ts:41 sends every road to Home
+      // there, because an empty grid was a dead end (UX-16) and a permanent Home
+      // entry is its mirror image: a door to a room that is no longer furnished.
+      const gridOk = await waitTrue(
+        `document.querySelector('#app').classList.contains('view-grid') && !document.querySelector('#app').classList.contains('view-home')`,
+        30,
+        200
+      )
+      // ...and the static half of the same contract: there is NO titlebar Home
+      // affordance, BY DESIGN (titlebar.ts says so in a comment; this says so in a
+      // gate). Recents and presets — the only two things Home carries — are fully
+      // duplicated by the wizard, which is reachable at any time (Ctrl+T), so a Home
+      // button would buy nothing and re-open the dead end a prior audit closed. A
+      // future half-applied "add a Home button" change trips HERE, not in production.
+      const noHomeBtn = await ES<boolean>(
+        `!document.querySelector('.titlebar-right [aria-label="Home" i]') && !document.querySelector('.titlebar-right [title="Home" i]')`
+      )
+
       // (d) bug #1: required rows done (a workspace now exists from (c)), NOTHING saved by
       // fixture → the card self-dismisses & stays gone where a CLI is installed; else it
       // honestly stays (row ① truthfully undone).
@@ -165,7 +190,19 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
       )
 
       const pass =
-        heroOk && emptyOk && cliHonest && missingHonest && installChipOk && cardOk && spacingOk && aaOk && openedOk && dismissOk && wizardOk
+        heroOk &&
+        emptyOk &&
+        cliHonest &&
+        missingHonest &&
+        installChipOk &&
+        cardOk &&
+        spacingOk &&
+        aaOk &&
+        openedOk &&
+        gridOk &&
+        noHomeBtn &&
+        dismissOk &&
+        wizardOk
       result = {
         pass,
         heroOk,
@@ -186,6 +223,8 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
         aaMissing: aa.missing,
         aaWorst: aa.worst,
         openedOk,
+        gridOk,
+        noHomeBtn,
         dismissOk,
         wizardOk
       }

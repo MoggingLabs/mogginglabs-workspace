@@ -6,7 +6,11 @@
 import type { AgentState } from '../domain/agent'
 import type { PersistedWorkspace } from '../ipc/workspace.ipc'
 import type { PtyEmulation } from '../ipc/terminal.ipc'
+import type { ReviewSnapshot } from '../ipc/review.ipc'
 
+// v7: reviewer sign-offs require the pane credential and bind to repository identity plus
+// exact source/base commits. The daemon protocol must reject v6 clients because their
+// branch-only approvals cannot satisfy the review boundary.
 // v6: the daemon KNOWS which agent CLI runs in each pane — it watches the pane's PTY subtree
 // in the process table and reports it (`agent`), instead of knowing only what the app itself
 // typed. That is what gives a hand-typed `claude` the same identity as a launched one (context
@@ -35,7 +39,7 @@ import type { PtyEmulation } from '../ipc/terminal.ipc'
 // (set-role, PaneInfo.role). v2: Phase-3/01 control API — send-key/capture + enriched
 // PaneInfo. The version namespaces the runtime dir + socket, so older daemons keep
 // running untouched (ADR 0006 anti-kill-server); the app + CLI speak their own version.
-export const DAEMON_PROTOCOL_VERSION = 6
+export const DAEMON_PROTOCOL_VERSION = 7
 
 // ── Release channel (dev/prod isolation) ───────────────────────────────────────────────
 // A repo checkout and an installed release must be able to run SIDE BY SIDE with zero shared
@@ -99,11 +103,13 @@ export const CLAIM_PATTERN_MAX = 256
 /** A reviewer sign-off for a branch. Memory-only coordination data — never persisted,
  *  never telemetered. The ROLE is resolved daemon-side from the pane manifest; a client
  *  cannot claim reviewer-ness in a payload. WHICH pane is speaking is proven by the
- *  approve message's `token` (that pane's env-only MOGGING_PANE_TOKEN) when the sender
- *  has one — the pane id alone is public (`mogging list` prints it) and was, on its own,
- *  forgeable by any pane that shares the user's daemon. */
+ *  approve message's mandatory `token` (that pane's env-only MOGGING_PANE_TOKEN).
+ *  The pane id alone is public (`mogging list` prints it) and is never identity proof. */
 export interface Approval {
+  snapshot: ReviewSnapshot
+  /** Convenience display/index fields; must equal snapshot.branch/repoId. */
   branch: string
+  repoId: string
   byPaneId: string
   byRole: SwarmRole
   ts: number
@@ -168,7 +174,15 @@ export interface SpawnSpec {
   env?: Record<string, string>
   /** Remote pane (Phase-4/05): the RESOLVED host row (the daemon stays db-free).
    *  Connection pointers only — the user's ssh stack does all auth (ADR 0002). */
-  remote?: { name: string; host: string; user?: string; port?: number }
+  remote?: {
+    name: string
+    host: string
+    user?: string
+    port?: number
+    cwd?: string
+    platform?: 'posix' | 'windows'
+    shell?: 'sh' | 'bash' | 'zsh' | 'powershell' | 'cmd'
+  }
 }
 
 export interface PaneInfo {
@@ -200,6 +214,7 @@ export type ClientMessage =
   | { t: 'resize'; id: string; cols: number; rows: number }
   | { t: 'kill'; id: string }
   | { t: 'list' }
+  | { t: 'verify-pane'; requestId: number; id: string; token: string }
   | { t: 'ping' }
   | { t: 'shutdown' }
   // `mogging notify` (Phase-2/04): an agent/hook inside a pane raises that pane's attention.
@@ -226,15 +241,13 @@ export type ClientMessage =
   | { t: 'owners' }
   // Reviewer gate (Phase-4/03). `from` names the approver's pane and the daemon checks
   // THAT pane's role — a payload can never claim a role. `token` is the pane's own
-  // MOGGING_PANE_TOKEN (minted per session, injected into that pane's env and nowhere
-  // else): it PROVES the sender is running inside `from`. Optional on the wire only so a
-  // pane the daemon restored cold — env re-created, no token in hand — and any older CLI
-  // keep working; when it IS present the daemon enforces it, so the shipped CLI (which
-  // always sends it from a real pane) cannot be impersonated by a pane that sends its own.
-  | { t: 'approve'; branch: string; from: string; token?: string }
+  // MOGGING_PANE_TOKEN (minted per session and injected into that pane's env): it PROVES
+  // the sender is running inside `from`. Missing credentials fail closed; compatibility
+  // cannot outrank the human-review boundary.
+  | { t: 'approve'; snapshot: ReviewSnapshot; from: string; token: string }
   | { t: 'approvals' }
   // App-side hook: a branch's worktree was removed -> its approval dies with it.
-  | { t: 'unapprove'; branch: string }
+  | { t: 'unapprove'; repoId: string; branch: string }
 
 /** daemon -> client. Every pane-scoped EVENT carries the session's `gen` (v5): a pane id
  *  is reused the moment a slot is re-opened, so consumers gate on (id, gen) — an event
@@ -273,6 +286,7 @@ export type ServerMessage =
   | { t: 'owners'; claims: Claim[] } // reply to `owners` + PUSHED to all clients on change
   | { t: 'approved'; branch: string; byPaneId: string; byRole: string } // sign-off ack
   | { t: 'approvals'; list: Approval[] } // reply to `approvals`
+  | { t: 'pane-verified'; requestId: number; id: string; valid: boolean }
 
 /** Notify events an agent/hook can raise via `mogging notify` (Phase-2/04). A small, closed
  *  vocabulary that maps to a pane AgentState — a label only, never PTY content (ADR 0002). */

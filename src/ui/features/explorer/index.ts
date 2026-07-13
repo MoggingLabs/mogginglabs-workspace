@@ -1,6 +1,5 @@
 import {
   EXPLORER_DRAG_TYPE,
-  EXPLORER_MIN_CONTENT,
   EXPLORER_MIN_WIDTH,
   quotePathForShell,
   type ExplorerEntry,
@@ -42,6 +41,7 @@ import {
   watchDirs,
   watchStats
 } from './explorer.client'
+import { dockLayoutBudget, onDockLayoutChange, requestDockLayout } from '../../core/layout/dock-budget'
 
 /**
  * The explorer dock (Phase-11/03, ADR 0010): the 02 tree given a home — a right-side
@@ -97,6 +97,17 @@ const parentOf = (abs: string): string => {
   return i <= 0 ? '' : abs.slice(0, i)
 }
 
+/** Path-boundary containment without importing host path APIs into the renderer. */
+const pathKey = (value: string): string => {
+  const slash = value.replace(/\\/g, '/').replace(/\/+$/, '')
+  return /^[a-z]:\//i.test(slash) ? slash.toLowerCase() : slash
+}
+const isWithin = (root: string, candidate: string, allowRoot = false): boolean => {
+  const r = pathKey(root)
+  const c = pathKey(candidate)
+  return !!r && (allowRoot && c === r ? true : c.startsWith(`${r}/`))
+}
+
 /** A rename IS a modification you can see the shape of — VS Code shows R, we render M and
  *  spend the sixth letter nowhere (RESEARCH §2: the badge letters are community-documented,
  *  the SPLIT is the part that matters). */
@@ -123,6 +134,7 @@ export const explorerFeature: UiFeature = {
     let rootPath = '' // '' = nothing rooted (no workspace, or no folder)
     let wsId = ''
     let selection = ''
+    let rootGeneration = 0
     const memory = new Map<string, WsMemory>()
     const listCalls: string[] = [] // DEV spy (the smoke proves laziness + zero-cost-closed)
 
@@ -206,7 +218,10 @@ export const explorerFeature: UiFeature = {
     const emptyHost = el('div', { class: 'explorer-empty', hidden: true })
     const body = el('div', { class: 'explorer-dock-body' }, [tree.el, emptyHost])
     const handle = el('div', { class: 'explorer-dock-handle' })
-    handle.setAttribute('aria-hidden', 'true')
+    handle.tabIndex = 0
+    handle.setAttribute('role', 'separator')
+    handle.setAttribute('aria-orientation', 'vertical')
+    handle.setAttribute('aria-label', 'Resize file explorer')
 
     const dock = el('aside', { class: 'explorer-dock', hidden: true, ariaLabel: 'File explorer' }, [handle, header, bar, body])
     // Esc leaves the lens — but only when focus is INSIDE the dock, so a pane's Esc still
@@ -234,17 +249,19 @@ export const explorerFeature: UiFeature = {
     // ── Width: clamped so the grid always keeps room ──────────────────────────
     let widthTimer: number | undefined
     function clamp(w: number): number {
-      const rail = document.getElementById('rail')?.getBoundingClientRect().width ?? 0
-      const browser = document.querySelector('.browser-dock:not([hidden])')?.getBoundingClientRect().width ?? 0
       // The panes' floor is the real cap: with BOTH docks open a drag can never squeeze
       // the terminals below EXPLORER_MIN_CONTENT — the grid is what this app is for.
-      const room = Math.round(window.innerWidth - rail - browser - EXPLORER_MIN_CONTENT)
-      const cap = Math.min(Math.round(window.innerWidth * 0.4), Math.max(EXPLORER_MIN_WIDTH, room))
+      const cap = Math.min(Math.round(window.innerWidth * 0.4), dockLayoutBudget().explorerMax)
       return Math.max(EXPLORER_MIN_WIDTH, Math.min(Math.round(w), cap))
     }
     function applyWidth(persist = true): void {
       width = clamp(width)
       dock.style.width = `${width}px`
+      handle.setAttribute('aria-valuemin', String(EXPLORER_MIN_WIDTH))
+      // `clamp` also applies the 40vw cap; ARIA must advertise the maximum the
+      // keyboard can actually reach, not only the shared budget's looser cap.
+      handle.setAttribute('aria-valuemax', String(clamp(Number.MAX_SAFE_INTEGER)))
+      handle.setAttribute('aria-valuenow', String(width))
       if (!persist) return
       window.clearTimeout(widthTimer)
       widthTimer = window.setTimeout(() => persistWidth(width), 400) // the browser.width cadence
@@ -271,7 +288,17 @@ export const explorerFeature: UiFeature = {
       handle.addEventListener('pointerup', up)
       handle.addEventListener('pointercancel', up)
     })
-    window.addEventListener('resize', () => applyWidth(false)) // a shrunk window re-clamps; nothing to persist
+    handle.addEventListener('keydown', (e) => {
+      const budget = dockLayoutBudget()
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
+      e.preventDefault()
+      if (e.key === 'ArrowLeft') width += e.shiftKey ? 64 : 16
+      else if (e.key === 'ArrowRight') width -= e.shiftKey ? 64 : 16
+      else if (e.key === 'Home') width = EXPLORER_MIN_WIDTH
+      else width = budget.explorerMax
+      applyWidth()
+    })
+    onDockLayoutChange(() => applyWidth(false))
 
     // ── The liveness law (11/04, ADR 0010.d) ──────────────────────────────────
     // What is VISIBLE is the root plus every expanded dir — that, and nothing else, is
@@ -298,7 +325,7 @@ export const explorerFeature: UiFeature = {
     // ── Git decorations (11/05) ───────────────────────────────────────────────
     // Not one new poller: these arrive on the tick `git/probe.ts` has always run, carrying
     // the porcelain lines it always read and always threw away.
-    const isUnderRoot = (abs: string): boolean => !!rootPath && abs.length > rootPath.length && abs.startsWith(rootPath)
+    const isUnderRoot = (abs: string): boolean => isWithin(rootPath, abs)
 
     /** Files wear a letter AND a colour; folders inherit the colour of the loudest thing
      *  beneath them and NO letter — VS Code's `FileDecoration.propagate`, exactly. */
@@ -460,7 +487,7 @@ export const explorerFeature: UiFeature = {
     function insertTextFor(entry: ExplorerEntry): string {
       const focused = getFocusedPane()
       const cwd = focused?.cwd ?? ''
-      const under = cwd && entry.path.length > cwd.length && entry.path.startsWith(cwd)
+      const under = !!cwd && isWithin(cwd, entry.path)
       const rel = under ? entry.path.slice(cwd.length).replace(/^[\\/]+/, '') : ''
       const raw = rel || entry.path
       // A REMOTE pane's shell lives on the ssh host: quote POSIX (the terminal's own rule).
@@ -540,6 +567,7 @@ export const explorerFeature: UiFeature = {
     /** Re-root to the active workspace. Called ONLY while open — a closed dock lists
      *  nothing, ever (the smoke counts the calls). */
     async function root(): Promise<void> {
+      const generation = ++rootGeneration
       const ws = activeWs()
       const nextId = ws?.id ?? ''
       const nextRoot = ws?.cwd ?? ''
@@ -547,6 +575,9 @@ export const explorerFeature: UiFeature = {
 
       saveMemory() // remember where we were before we leave
       dropGit()
+      // No action is valid between roots. Clear the main-process guard before the first
+      // await, then publish the new boundary only if this generation still owns the dock.
+      setActionRoot('')
       wsId = nextId
       rootPath = nextRoot
       selection = ''
@@ -579,11 +610,14 @@ export const explorerFeature: UiFeature = {
       emptyHost.hidden = true
 
       await tree.setRoot(nextRoot)
+      if (generation !== rootGeneration || activeWs()?.id !== nextId) return
       const mem = memory.get(nextId)
       if (mem) {
         // Coming back should feel like returning, not like arriving.
         await tree.setExpanded(mem.expandedDirs)
+        if (generation !== rootGeneration || activeWs()?.id !== nextId) return
         if (mem.selection) await tree.reveal(mem.selection)
+        if (generation !== rootGeneration || activeWs()?.id !== nextId) return
         tree.el.scrollTop = mem.scrollTop // last: reveal() may have scrolled to the selection
       }
       applyHere()
@@ -606,7 +640,7 @@ export const explorerFeature: UiFeature = {
     // not navigating — the sidebar answers "where am I", it does not move you.
     let focusedCwd = ''
     function applyHere(): void {
-      const under = !!rootPath && !!focusedCwd && focusedCwd.startsWith(rootPath) && focusedCwd !== rootPath
+      const under = !!rootPath && !!focusedCwd && isWithin(rootPath, focusedCwd)
       tree.setHere(under ? focusedCwd : null)
     }
     onFocusedPane((f) => {
@@ -649,6 +683,7 @@ export const explorerFeature: UiFeature = {
       if (open === next) return
       open = next
       dock.hidden = !open
+      requestDockLayout()
       toggleBtn.classList.toggle('is-active', open)
       persistOpen(open)
       if (open) {
@@ -704,6 +739,7 @@ export const explorerFeature: UiFeature = {
         isOpen: () => open,
         width: () => width,
         rootPath: () => rootPath,
+        within: (root: string, candidate: string, allowRoot = false) => isWithin(root, candidate, allowRoot),
         expandedDirs: () => tree.expandedDirs(),
         showHidden: () => showHidden,
         // The listing spy: proves laziness, the no-cwd zero, and closed-costs-zero.

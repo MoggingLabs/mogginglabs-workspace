@@ -1,20 +1,25 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
 import {
   ControlChannels,
+  RuntimeHealthChannels,
   TerminalChannels,
   type AgentState,
   type ControlCommand,
+  type DaemonHealthState,
   type PaneId,
   type RecentWorkspace,
+  type RuntimeHealthRetryResult,
   type WorkspaceState
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { TEMPLATE_COUNTS, TEMPLATES } from '../layout'
-import { IconButton, createLayoutGridPicker, el, icon } from '../../components'
+import { Button, IconButton, createLayoutGridPicker, el, icon, showToast } from '../../components'
 import { WorkspaceController, type CreateOpts } from './controller'
 import { workspaceClient } from './workspace.client'
 import { DEFAULT_THEME_ID } from '../../core/theme/themes'
 import { setTheme, currentThemeId, onThemeChange } from '../../core/theme/theme-state'
+import { isModKey } from '../../core/commands/shortcuts'
+import { requiresGrid, shortcutsBlocked } from '../../core/commands/context'
 import { setWorkspaceOpener } from '../../core/workspace/open-service'
 import {
   publishWorkspaces,
@@ -23,18 +28,18 @@ import {
 import { openWizard } from '../../core/workspace/wizard-port'
 import { onAgentLaunchRequest, onProfileFailover } from '../../core/agents/launch-port'
 import { onPaneAgentSession } from '../../core/agents/agent-session-port'
-import { setActiveView } from '../../core/shell/view-port'
+import { activeView, setActiveView } from '../../core/shell/view-port'
 import { setCommands } from '../../core/commands/command-port'
 import { setPaneState } from '../../core/attention/attention-port'
 import { setPaneRole } from '../../core/layout/pane-meta'
 
 const MAX_RECENTS = 5 // Home shows the five most recent projects worked on
 
-function debounce(fn: () => void, ms: number): () => void {
+function debounce(fn: () => void | Promise<void>, ms: number): () => void {
   let t: ReturnType<typeof setTimeout> | undefined
   return () => {
     if (t) clearTimeout(t)
-    t = setTimeout(fn, ms)
+    t = setTimeout(() => void fn(), ms)
   }
 }
 
@@ -66,7 +71,10 @@ export const workspaceFeature: UiFeature = {
     const tabs = el('div', { class: '', role: 'list' })
     tabs.id = 'workspace-tabs'
 
-    // The rail is workspaces-only by design — navigation (Home) lives in the top bar.
+    // The rail is workspaces-only by design. Home is NOT in the top bar — it has no entry
+    // point at all once a workspace exists, on purpose: core/shell/view-port.ts rewrites
+    // 'home' to 'grid' whenever one does. Home is the boot launcher and the zero-workspace
+    // empty state, and a button leading there would be a road to a place you cannot go.
     ctx.rail.append(header, tabs)
 
     // Scroll-edge fade (the rail's one A− gap): mask ONLY the edge with scrolled-past
@@ -81,40 +89,286 @@ export const workspaceFeature: UiFeature = {
     new ResizeObserver(() => updateRailFade()).observe(tabs)
     tabs.addEventListener('scroll', updateRailFade, { passive: true })
 
+    const healthHost = el('div', {
+      class: 'runtime-health-host',
+      hidden: true,
+      attrs: { 'aria-live': 'polite' }
+    })
+    const persistenceRow = el('section', { class: 'runtime-health-row is-persistence', hidden: true })
+    const daemonRow = el('section', { class: 'runtime-health-row is-daemon', hidden: true })
+    healthHost.append(persistenceRow, daemonRow)
+
     const host = el('div', {})
     host.id = 'workspace-host'
-    ctx.content.append(host)
+    ctx.content.append(healthHost, host)
 
     // ── State ────────────────────────────────────────────────────────────────
     let restoring = true
     // A FAILED load must never be followed by a save: saveState replaces the whole
     // store, so saving after a load error would overwrite the user's intact state
     // with an empty one. Persistence stays off for the session instead.
-    let loadFailed = false
+    let persistencePaused = false
+    let persistenceState: 'healthy' | 'load-failed' | 'save-failed' | 'readable-paused' = 'healthy'
+    let persistenceReason = ''
+    let persistenceBusy = false
+    let saveInFlight = false
+    let saveQueued = false
     let recents: RecentWorkspace[] = []
+    let controller: WorkspaceController
 
-    const persist = debounce(() => {
-      if (restoring || loadFailed) return
-      const state: WorkspaceState = {
-        workspaces: controller.list().map((m) => ({
-          id: m.id,
-          name: m.name,
-          color: m.color,
-          cwd: m.cwd,
-          ordinal: m.ordinal,
-          paneCount: m.paneCount,
-          assignments: m.assignments,
-          paneCwds: m.paneCwds,
-          roles: m.roles,
-          remotes: m.remotes,
-          profileIds: m.profileIds, // ids only — env values never leave main (ADR 0002)
-          layout: m.layout // split-tree geometry (shape + sizes) — never content
-        })),
-        activeId: controller.activeMeta()?.id ?? null,
-        theme: currentThemeId(),
-        recents
+    const buildState = (): WorkspaceState => ({
+      workspaces: controller.list().map((m) => ({
+        id: m.id,
+        name: m.name,
+        color: m.color,
+        cwd: m.cwd,
+        ordinal: m.ordinal,
+        paneCount: m.paneCount,
+        assignments: m.assignments,
+        paneCwds: m.paneCwds,
+        roles: m.roles,
+        remotes: m.remotes,
+        profileIds: m.profileIds, // ids only — env values never leave main (ADR 0002)
+        layout: m.layout // split-tree geometry (shape + sizes) — never content
+      })),
+      activeId: controller.activeMeta()?.id ?? null,
+      theme: currentThemeId(),
+      recents
+    })
+
+    const updateHealthVisibility = (): void => {
+      healthHost.hidden = persistenceRow.hidden && daemonRow.hidden
+    }
+
+    const errorText = (error: unknown, fallback: string): string => {
+      const text = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+      return text.trim() || fallback
+    }
+
+    const exportMetadata = async (): Promise<void> => {
+      if (persistenceBusy) return
+      persistenceBusy = true
+      renderPersistence()
+      try {
+        const result = await workspaceClient.exportState(buildState())
+        if (result.ok) {
+          showToast({ tone: 'success', title: 'Workspace metadata exported', body: result.path })
+        } else if (!result.canceled) {
+          showToast({
+            tone: 'danger',
+            title: 'Workspace export failed',
+            body: result.reason ?? 'The export file could not be written.'
+          })
+        }
+      } catch (error) {
+        showToast({
+          tone: 'danger',
+          title: 'Workspace export failed',
+          body: errorText(error, 'The export dialog could not be opened.')
+        })
+      } finally {
+        persistenceBusy = false
+        renderPersistence()
       }
-      workspaceClient.saveState(state)
+    }
+
+    const retryPersistence = async (): Promise<void> => {
+      if (persistenceBusy) return
+      persistenceBusy = true
+      renderPersistence()
+      try {
+        if (persistenceState === 'save-failed') {
+          const result = await workspaceClient.saveState(buildState())
+          if (!result.ok) {
+            persistenceReason = result.reason ?? 'The workspace store rejected the save.'
+            showToast({ tone: 'danger', title: 'Workspace save still failing', body: persistenceReason })
+            return
+          }
+          persistencePaused = false
+          persistenceState = 'healthy'
+          persistenceReason = ''
+          saveQueued = false
+          showToast({ tone: 'success', title: 'Workspace saving resumed' })
+          return
+        }
+
+        // A successful read proves only that storage is readable now. It cannot prove
+        // that the in-memory state was restored from the complete persisted snapshot,
+        // so this session stays read-only rather than replacing data it never loaded.
+        await workspaceClient.loadState()
+        persistenceState = 'readable-paused'
+        persistenceReason = ''
+        showToast({
+          tone: 'info',
+          title: 'Storage is readable again',
+          body: 'Saving remains paused until the app restarts and completes a clean restore.'
+        })
+      } catch (error) {
+        persistenceReason = errorText(error, 'Workspace storage is still unavailable.')
+        showToast({ tone: 'danger', title: 'Workspace storage still unavailable', body: persistenceReason })
+      } finally {
+        persistenceBusy = false
+        renderPersistence()
+      }
+    }
+
+    function renderPersistence(): void {
+      const visible = persistenceState !== 'healthy'
+      persistenceRow.hidden = !visible
+      persistenceRow.replaceChildren()
+      if (visible) {
+        const loadWasIncomplete = persistenceState === 'load-failed' || persistenceState === 'readable-paused'
+        const title =
+          persistenceState === 'save-failed'
+            ? 'Workspace saving is paused'
+            : persistenceState === 'readable-paused'
+              ? 'Workspace storage needs a clean restart'
+              : 'Workspace history could not be loaded'
+        const message =
+          persistenceState === 'save-failed'
+            ? `The last metadata save failed. No further automatic saves will run until a retry succeeds.${persistenceReason ? ` ${persistenceReason}` : ''}`
+            : persistenceState === 'readable-paused'
+              ? 'Storage is readable again, but saving remains paused until restart so incomplete in-memory state cannot replace stored workspaces.'
+              : `Saving is paused for this session to protect the existing store.${persistenceReason ? ` ${persistenceReason}` : ''}`
+        persistenceRow.append(
+          el('span', { class: 'runtime-health-icon', attrs: { 'aria-hidden': 'true' } }, [icon('alert', 16)]),
+          el('div', { class: 'runtime-health-copy' }, [
+            el('strong', { text: title }),
+            el('span', { text: message })
+          ]),
+          el('div', { class: 'runtime-health-actions' }, [
+            Button({
+              label: loadWasIncomplete ? 'Re-check storage' : 'Retry save now',
+              variant: 'outline',
+              size: 'sm',
+              disabled: persistenceBusy,
+              onClick: () => void retryPersistence()
+            }),
+            Button({
+              label: 'Export current metadata',
+              variant: 'ghost',
+              size: 'sm',
+              disabled: persistenceBusy,
+              onClick: () => void exportMetadata()
+            })
+          ])
+        )
+      }
+      updateHealthVisibility()
+    }
+
+    let daemonState: DaemonHealthState | null = null
+    let daemonRetryBusy = false
+    const retryDaemon = async (): Promise<void> => {
+      if (daemonRetryBusy) return
+      daemonRetryBusy = true
+      renderDaemon()
+      try {
+        const result = (await getBridge().invoke(RuntimeHealthChannels.retryDaemon)) as RuntimeHealthRetryResult
+        if (!result.ok) {
+          showToast({
+            tone: 'danger',
+            title: 'Terminal service retry unavailable',
+            body: result.reason ?? 'Restart the app to try the detached terminal service again.'
+          })
+        }
+      } catch (error) {
+        showToast({
+          tone: 'danger',
+          title: 'Terminal service retry failed',
+          body: errorText(error, 'The retry request could not be sent.')
+        })
+      } finally {
+        daemonRetryBusy = false
+        renderDaemon()
+      }
+    }
+
+    function renderDaemon(): void {
+      const visible = daemonState?.state === 'reconnecting' || daemonState?.state === 'degraded'
+      daemonRow.hidden = !visible
+      daemonRow.replaceChildren()
+      if (visible && daemonState) {
+        daemonRow.append(
+          el('span', { class: 'runtime-health-icon', attrs: { 'aria-hidden': 'true' } }, [icon('alert', 16)]),
+          el('div', { class: 'runtime-health-copy' }, [
+            el('strong', {
+              text: daemonState.state === 'reconnecting' ? 'Terminal service reconnecting' : 'Terminal continuity reduced'
+            }),
+            el('span', { text: daemonState.message })
+          ])
+        )
+        if (daemonState.state === 'reconnecting') {
+          daemonRow.append(
+            el('div', { class: 'runtime-health-actions' }, [
+              Button({
+                label: daemonRetryBusy ? 'Retrying…' : 'Retry now',
+                variant: 'outline',
+                size: 'sm',
+                disabled: daemonRetryBusy,
+                onClick: () => void retryDaemon()
+              })
+            ])
+          )
+        }
+      }
+      updateHealthVisibility()
+    }
+
+    let daemonRevision = 0
+    getBridge().on(RuntimeHealthChannels.changed, (payload) => {
+      daemonRevision++
+      daemonState = payload as DaemonHealthState
+      renderDaemon()
+    })
+    const daemonPullRevision = daemonRevision
+    void getBridge()
+      .invoke(RuntimeHealthChannels.get)
+      .then((payload) => {
+        if (daemonRevision !== daemonPullRevision) return
+        daemonState = payload as DaemonHealthState
+        renderDaemon()
+      })
+      .catch((error) => {
+        if (daemonRevision !== daemonPullRevision) return
+        daemonState = {
+          mode: 'starting',
+          state: 'degraded',
+          message: errorText(error, 'Terminal service status is unavailable.'),
+          sessionSurvival: false
+        }
+        renderDaemon()
+      })
+
+    const persist = debounce(async () => {
+      if (restoring || persistencePaused) return
+      if (saveInFlight) {
+        saveQueued = true
+        return
+      }
+      saveInFlight = true
+      try {
+        const result = await workspaceClient.saveState(buildState())
+        if (!result.ok) {
+          persistencePaused = true
+          persistenceState = 'save-failed'
+          persistenceReason = result.reason ?? 'The workspace store rejected the save.'
+          saveQueued = false
+          renderPersistence()
+        }
+      } catch (error) {
+        persistencePaused = true
+        persistenceState = 'save-failed'
+        persistenceReason = errorText(error, 'The workspace save request failed.')
+        saveQueued = false
+        renderPersistence()
+      } finally {
+        saveInFlight = false
+        if (saveQueued && !persistencePaused) {
+          saveQueued = false
+          persist()
+        }
+      }
     }, 400)
 
     const publishInfo = (): void => {
@@ -125,7 +379,8 @@ export const workspaceFeature: UiFeature = {
           color: m.color,
           cwd: m.cwd,
           ordinal: m.ordinal,
-          paneCount: m.paneCount
+          paneCount: m.paneCount,
+          assignments: m.assignments ? [...m.assignments] : undefined
         })),
         activeId: controller.activeMeta()?.id ?? null
       })
@@ -153,7 +408,7 @@ export const workspaceFeature: UiFeature = {
       persist()
     }
 
-    const controller = new WorkspaceController(
+    controller = new WorkspaceController(
       tabs,
       host,
       () => {
@@ -231,7 +486,7 @@ export const workspaceFeature: UiFeature = {
         selected: controller.activePaneCount(),
         compact: true,
         onSelect: (n) => {
-          controller.applyTemplate(n)
+          void controller.requestApplyTemplate(n)
           layoutMenu.hidden = true
         }
       })
@@ -267,34 +522,46 @@ export const workspaceFeature: UiFeature = {
     window.addEventListener(
       'keydown',
       (e) => {
-        const mod = e.ctrlKey || e.metaKey
-        if (!mod) return
+        // This listener is CAPTURE-phase: it fires before the event ever reaches a focused
+        // <input>. That is why the stopPropagation() calls sprinkled through the app's text
+        // fields never protected them — there was nothing bubbling yet. The guard has to be
+        // here, or Ctrl+Shift+D splits a pane while you are typing a webhook URL (finding 29).
+        if (shortcutsBlocked(e.target)) return
+        if (!isModKey(e)) return
         const k = e.key.toLowerCase()
+        // The pane verbs act on the grid. Fired from the Board or Settings they used to
+        // mutate a workspace whose host is display:none and whose rail tab is display:none
+        // too — a split you could neither see nor find. Refuse, and say why.
+        const paneVerb = (): boolean => {
+          if (activeView() === 'grid') return true
+          showToast({ tone: 'attention', title: 'Open a workspace first — this acts on its panes.' })
+          return false
+        }
         if (e.altKey) {
           const dir = NAV[k]
           if (dir) {
             e.preventDefault()
             e.stopPropagation()
-            controller.focusDir(dir) // Ctrl/Cmd+Alt+arrows: pane navigation
+            if (paneVerb()) controller.focusDir(dir) // Ctrl/Cmd+Alt+arrows: pane navigation
           }
           return
         }
         if (k === 't' && !e.shiftKey) {
           e.preventDefault()
           e.stopPropagation()
-          newWorkspace()
+          newWorkspace() // always allowed: it CREATES the grid it needs
         } else if (k === 'd' && e.shiftKey) {
           e.preventDefault()
           e.stopPropagation()
-          controller.splitActive() // Ctrl/Cmd+Shift+D: new terminal in the active grid
+          if (paneVerb()) controller.splitActive() // Ctrl/Cmd+Shift+D: new terminal in the grid
         } else if (k === 'enter' && e.shiftKey) {
           e.preventDefault()
           e.stopPropagation()
-          controller.toggleZoom()
+          if (paneVerb()) controller.toggleZoom()
         } else if (!e.shiftKey && k >= '1' && k <= '9') {
           e.preventDefault()
           e.stopPropagation()
-          controller.switchByIndex(Number(k) - 1)
+          controller.switchByIndex(Number(k) - 1) // always allowed: switch() reveals the grid
         }
       },
       true
@@ -314,11 +581,11 @@ export const workspaceFeature: UiFeature = {
         case 'open':
           if (cmd.cwd) {
             controller.openForCwd(cmd.cwd)
-            if (cmd.panes) controller.applyTemplate(cmd.panes)
+            if (cmd.panes) void controller.requestApplyTemplate(cmd.panes)
           }
           break
         case 'layout':
-          if (cmd.panes) controller.applyTemplate(cmd.panes)
+          if (cmd.panes) void controller.requestApplyTemplate(cmd.panes)
           break
         case 'focus':
           if (cmd.paneId) controller.focusPane(cmd.paneId)
@@ -366,11 +633,14 @@ export const workspaceFeature: UiFeature = {
         },
         // No `home:open` command: Home is the boot launcher and the zero-workspace
         // empty state, not a destination (see core/shell/view-port.ts).
+        // Every pane verb declares WHEN it can run. The palette dims the row and prints the
+        // reason, instead of the old habit: run it anyway, into a workspace nobody can see.
         {
           id: 'pane:zoom',
           title: 'Zoom / restore focused pane',
           hint: 'Pane',
           kbd: 'Ctrl+Shift+Enter',
+          enabled: requiresGrid,
           run: () => controller.toggleZoom()
         },
         {
@@ -378,25 +648,28 @@ export const workspaceFeature: UiFeature = {
           title: 'New terminal (split focused pane)',
           hint: 'Pane',
           kbd: 'Ctrl+Shift+D',
+          enabled: requiresGrid,
           run: () => controller.splitActive()
         },
         {
           id: 'pane:split-right',
           title: 'Split pane right',
           hint: 'Pane',
+          enabled: requiresGrid,
           run: () => controller.splitActive('h')
         },
         {
           id: 'pane:split-down',
           title: 'Split pane down',
           hint: 'Pane',
+          enabled: requiresGrid,
           run: () => controller.splitActive('v')
         },
         ...TEMPLATE_COUNTS.map((n) => ({
           id: `layout:${n}`,
           title: `Layout: ${n} pane${n === 1 ? '' : 's'}`,
           hint: 'Layout',
-          run: () => controller.applyTemplate(n)
+          run: () => void controller.requestApplyTemplate(n)
         })),
         ...wsCommands
       ])
@@ -410,7 +683,10 @@ export const workspaceFeature: UiFeature = {
         state = await workspaceClient.loadState()
       } catch (err) {
         state = null
-        loadFailed = true
+        persistencePaused = true
+        persistenceState = 'load-failed'
+        persistenceReason = errorText(err, 'The workspace store could not be read.')
+        renderPersistence()
         console.error('workspace state load failed — persistence disabled for this session to protect the stored state', err)
       }
       setTheme(state?.theme || DEFAULT_THEME_ID)
@@ -463,7 +739,7 @@ function exposeForDev(controller: WorkspaceController): void {
   const w = window as unknown as { __mogging?: Record<string, unknown> }
   w.__mogging = w.__mogging ?? {}
   w.__mogging.layout = {
-    apply: (n: number) => controller.applyTemplate(n),
+    apply: (n: number) => controller.requestApplyTemplate(n),
     paneCount: () => controller.activePaneCount(),
     paneIds: () => controller.activePaneIds(),
     zoom: () => controller.toggleZoom(),
@@ -471,7 +747,7 @@ function exposeForDev(controller: WorkspaceController): void {
     split: (dir?: 'h' | 'v') => controller.splitActive(dir),
     close: (paneId: number) => {
       const id = controller.activeMeta()?.id
-      if (id) controller.closePane(id, paneId)
+      if (id) void controller.requestClosePane(id, paneId)
     }
   }
   w.__mogging.workspace = {
@@ -481,6 +757,7 @@ function exposeForDev(controller: WorkspaceController): void {
     list: () => controller.list(),
     active: () => controller.activeMeta(),
     count: () => controller.list().length,
+    worktreeRemovalAudit: () => controller.worktreeRemovalAudit(),
     // Naming a reviewer, exactly as the manifest does it (controller.publishRoles): the chip
     // port paints it, and the terminal:setRole IPC is what actually CONFERS it — main records
     // that as the app's own answer to "who may sign off" (daemon-relay: appRoles) and forwards
@@ -489,7 +766,7 @@ function exposeForDev(controller: WorkspaceController): void {
     // DEV-only and tree-shaken out of production.
     setRole: (paneId: number, role: string) => {
       setPaneRole(paneId as PaneId, role)
-      getBridge().send(TerminalChannels.setRole, { id: paneId as PaneId, role })
+      return getBridge().invoke(TerminalChannels.setRole, { id: paneId as PaneId, role })
     }
   }
   w.__mogging.attention = {

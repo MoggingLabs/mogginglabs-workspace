@@ -6,7 +6,8 @@ import { join } from 'node:path'
 import type { McpServerEntry, WorkspaceToolPlan } from '@contracts'
 import { planFromTemplateTools, planSignature, restartNeededPanes, toolCellState } from '@contracts'
 import { composePlanEntries, materializePlanFor } from '@backend/features/integrations'
-import { gitExcludeInWorktree } from './tool-plan'
+import { gitExcludeInWorktree, materializeToolPlanAtLaunch, toolPlanSkipReason } from './tool-plan'
+import { setToolPlan } from './integrations'
 
 // Env-gated tool-plan smoke (MOGGING_TOOLPLAN, Phase-8/09). Proves scoping is a
 // real mechanism, not a label:
@@ -114,8 +115,38 @@ process.stdout.write('SERVERS=' + keys.sort().join(',') + '|STRICT=' + a.include
     const g4 = toolCellState({ ...plan, inheritGlobal: true }, 'posthog', 'claude-code', true) === 'global'
     const matrixOk = g1 && g2 && g3 && g4
 
-    const pass = claudeArgsOk && claudeFileOk && codexOk && listsPlannedOnly && inheritOk && gitInvisibleOk && restartFlipsOk && templateOk && matrixOk
-    result = { pass, claudeArgsOk, claudeFileOk, codexOk, listsPlannedOnly, inheritOk, gitInvisibleOk, restartFlipsOk, templateOk, matrixOk, shimOut }
+    // A scoped launch that collides with the repo's own config is refused
+    // truthfully. The user file stays byte-identical and no global fallback
+    // command is produced.
+    const foreign = '[user]\nkeep = true\n'
+    writeFileSync(join(repo, '.codex', 'config.toml'), foreign)
+    setToolPlan({ workspaceId: 'ws-conflict', entries: {}, inheritGlobal: false })
+    const refused = materializeToolPlanAtLaunch({ agentId: 'codex', cwd: repo, workspaceId: 'ws-conflict' })
+    const foreignRefused =
+      !refused.ok &&
+      refused.args.length === 0 &&
+      readFileSync(join(repo, '.codex', 'config.toml'), 'utf8') === foreign &&
+      /not launched|did not fall back/.test(refused.reason ?? '') &&
+      toolPlanSkipReason('ws-conflict') === refused.reason
+
+    const pass =
+      claudeArgsOk && claudeFileOk && codexOk && listsPlannedOnly && inheritOk &&
+      gitInvisibleOk && restartFlipsOk && templateOk && matrixOk && foreignRefused
+    result = {
+      pass,
+      claudeArgsOk,
+      claudeFileOk,
+      codexOk,
+      listsPlannedOnly,
+      inheritOk,
+      gitInvisibleOk,
+      restartFlipsOk,
+      templateOk,
+      matrixOk,
+      foreignRefused,
+      refused,
+      shimOut
+    }
   } catch (e) {
     result = { pass: false, error: String(e) }
   }
