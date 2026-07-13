@@ -1,12 +1,12 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { IntegrationsChannels, ProfileChannels, TerminalChannels, planSignature, type AgentDetectedEvent, type AgentInfo, type AgentProfile, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
+import { IntegrationsChannels, ProfileChannels, TerminalChannels, isAgentCliId, planSignature, type AgentDetectedEvent, type AgentInfo, type AgentProfile, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
 import { recordPaneLaunch } from '../../core/agents/toolplan-panes'
 import { recordPaneCli, setMcpSnapshot } from '../../core/agents/mcp-status-port'
 
 const PROVIDER_CLI: Record<string, HostedCliId | undefined> = { claude: 'claude-code', codex: 'codex', gemini: 'gemini' }
 import { getBridge } from '../../core/ipc/bridge'
 import { getFocusedPane } from '../../core/layout/focus'
-import { getPaneCwd } from '../../core/layout/pane-cwd'
+import { getPaneCwd, getPaneCwdProjection, onPaneCwdProjection, setPaneCwd } from '../../core/layout/pane-cwd'
 import { getPaneRemote, setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
 import { onAgentLaunchRequest, requestAgentLaunch, announceProfileFailover } from '../../core/agents/launch-port'
 import { clearPaneAgentSession, getPaneAgentSession, setPaneAgentSession, type PaneAgentSession } from '../../core/agents/agent-session-port'
@@ -15,7 +15,14 @@ import { setActiveView } from '../../core/shell/view-port'
 import { requestSettingsTab } from '../../core/shell/settings-tab-port'
 import { getWorkspaces, workspaceIdForPane } from '../../core/workspace/workspace-info-port'
 import { onProfilesChanged } from '../../core/agents/profiles-port'
-import { isPaneLive, isPaneRemoteReady, wasPaneReattached, whenPaneLive, whenPaneRemoteReady } from '../../core/terminal/liveness-port'
+import {
+  isPaneLive,
+  isPaneRemoteReady,
+  markPaneRemoteReady,
+  wasPaneReattached,
+  whenPaneLive,
+  whenPaneRemoteReady
+} from '../../core/terminal/liveness-port'
 import { getTelemetry } from '../../core/telemetry'
 import { showToast } from '../../components'
 import { agentsClient } from './agents.client'
@@ -65,6 +72,28 @@ export const agentsFeature: UiFeature = {
      *  than the agent it watched. */
     const sessionSetAt = new Map<number, number>()
     const detectedAt = new Map<number, number>()
+
+    /** A launch intent updates the header immediately, before its shell command/process report
+     * returns. Remote launch paths stay remote metadata and can never arm local Git. */
+    const projectLaunchCwd = (paneId: number, cwd: string): void => {
+      setPaneCwd(paneId as PaneId, cwd, {
+        source: 'spawn',
+        locality: getPaneRemote(paneId as PaneId) ? 'remote' : 'local'
+      })
+    }
+
+    // An explicit agent declaration is the current worktree for relaunch/failover. Keep the
+    // agent-session cwd untouched: it identifies the original session log, not live navigation.
+    onPaneCwdProjection((paneId, projection) => {
+      if (projection?.source !== 'agent') return
+      const id = Number(paneId)
+      const prior = lastLaunch.get(id)
+      const session = getPaneAgentSession(paneId)
+      if (prior) lastLaunch.set(id, { ...prior, cwd: projection.cwd })
+      else if (session) {
+        lastLaunch.set(id, { provider: session.provider, cwd: projection.cwd, profileId: session.profileId })
+      }
+    })
 
     /** The ONE writer of the agent-session port (the port's contract), stamped so the
      *  detection reconciler above can tell a stale verdict from a current one. `at` lets a
@@ -129,6 +158,9 @@ export const agentsFeature: UiFeature = {
         if (!existing.running) writeSession(paneId, { ...existing, running: true }, at)
         return
       }
+      // Process cwd is the session-log identity for a hand-typed CLI. Canonical live cwd comes
+      // only through the source-aware terminal cwd stream; writing it here was a competing,
+      // unrevisioned path that could roll an explicit report back to an older process snapshot.
       const cwd = ev.cwd || getPaneCwd(paneId as PaneId) || ''
       if (existing && existing.provider === ev.agentId && existing.cwd === cwd) return // same session, no news
 
@@ -150,7 +182,9 @@ export const agentsFeature: UiFeature = {
         { provider: ev.agentId, cwd, profileId, detected: true, running: true, since: ev.sinceMs },
         at // the session and the agent it names are the same event
       )
-      lastLaunch.set(paneId, { provider: ev.agentId, cwd, profileId }) // failover works here too
+      const projection = getPaneCwdProjection(paneId as PaneId)
+      const failoverCwd = projection?.source === 'agent' ? projection.cwd : cwd
+      lastLaunch.set(paneId, { provider: ev.agentId, cwd: failoverCwd, profileId }) // failover works here too
       setPaneLabel(paneId as PaneId, nameById.get(ev.agentId) ?? ev.agentId)
       const cli = PROVIDER_CLI[ev.agentId]
       if (cli) recordPaneCli(paneId, cli) // the pane's MCP chip, same as a launched agent
@@ -255,23 +289,23 @@ export const agentsFeature: UiFeature = {
       profileId?: string
     ): Promise<void> {
       if (paneId < 0 || !provider || provider === 'shell') return
-      // A write raced into a still-spawning PTY is dropped by the daemon — wait for
-      // the pane's first output (bounded; on timeout proceed, matching the old
-      // fixed-delay behavior). Found by the Linux CI sweep: slow machines lost
-      // template-lineup launches entirely.
-      const remote = getPaneRemote(paneId as PaneId)
-      if (remote) {
-        const ready = await whenPaneRemoteReady(paneId, 30000)
-        if (!ready) {
-          showToast({
-            tone: 'danger',
-            title: `Remote agent was not started in pane ${paneId}`,
-            body: 'SSH did not reach the remote shell. Finish or cancel the host-key/password prompt, then launch the agent again.'
-          })
-          return
-        }
-      } else {
-        await whenPaneLive(paneId, 15000)
+      // A write raced into a still-spawning PTY is dropped by the daemon — wait for the
+      // pane's first output (bounded; on timeout proceed, matching the old fixed-delay
+      // behavior). Found by the Linux CI sweep: slow machines lost template-lineup launches.
+      // Remote output may instead be an SSH password/host-key prompt, so only the
+      // bootstrap's live cwd report proves the far-side shell is ready. Keep remote intent
+      // queued through arbitrarily slow password, MFA, or host-key confirmation; pane
+      // disposal cancels the waiter and still fails closed.
+      const remoteTarget = getPaneRemote(paneId as PaneId)
+      const remote = !!remoteTarget
+      const ready = remote ? await whenPaneRemoteReady(paneId) : await whenPaneLive(paneId, 15000)
+      if (remote && !ready) {
+        showToast({
+          tone: 'danger',
+          title: `Remote agent was not started in pane ${paneId}`,
+          body: 'SSH did not reach the remote shell. Finish or cancel the host-key/password prompt, then launch the agent again.'
+        })
+        return
       }
       // RESTORE into a pane the daemon never let die. The PTY outlives the app (ADR 0006),
       // so on the next launch the pane reattaches to a session whose agent is still running
@@ -297,6 +331,7 @@ export const agentsFeature: UiFeature = {
           ? []
           : (await listProfiles()).filter((p) => p.provider === provider).sort((x, y) => x.order - y.order)
         const adoptedProfile = profileId ?? mine[0]?.id
+        projectLaunchCwd(paneId, cwd)
         setPaneProfile(paneId as PaneId, mine.find((p) => p.id === adoptedProfile)?.name)
         // Context bar: the adopted session predates this app run, so the log
         // matcher may look back in time (agent-session port -> context feature).
@@ -310,6 +345,7 @@ export const agentsFeature: UiFeature = {
       if (provider.startsWith('custom:')) {
         const cmd = provider.slice('custom:'.length).trim()
         if (!cmd) return
+        projectLaunchCwd(paneId, cwd)
         agentsClient.launchInto(paneId, cmd)
         setPaneLabel(paneId as PaneId, cmd.split(/\s+/)[0] || 'custom')
         // Published even though unsupported: it CLEARS any previous agent's context
@@ -319,27 +355,32 @@ export const agentsFeature: UiFeature = {
         getTelemetry().captureEvent({ name: 'agent.launched', props: { provider: 'custom', resume } })
         return
       }
+      if (!isAgentCliId(provider)) return
       // Default profile (order 0) applies when none was named and any exist (4/04).
       const mine = (await listProfiles()).filter((p) => p.provider === provider).sort((x, y) => x.order - y.order)
       const effectiveProfile = profileId ?? mine[0]?.id
       const workspaceId = workspaceIdForPane(paneId)
-      const built = await agentsClient.command({
+      const result = await agentsClient.command({
         agentId: provider,
         cwd,
         resume,
         profileId: effectiveProfile,
         workspaceId,
-        remoteHostId: remote?.hostId
+        // Both facts main-side needs: WHICH saved host to build for, and that the command
+        // is typed into the POSIX shell on the far side of SSH.
+        remoteHostId: remoteTarget?.hostId,
+        remote
       })
-      if (!built.ok || !built.command) {
+      if (!result.ok || !result.command) {
         showToast({
           tone: 'danger',
           title: `Agent was not launched in pane ${paneId}`,
-          body: built.reason ?? 'The launch command could not be prepared.'
+          body: result.reason || 'The saved configuration could not be synchronized before launch.'
         })
         return
       }
-      agentsClient.launchInto(paneId, built.command)
+      projectLaunchCwd(paneId, cwd)
+      agentsClient.launchInto(paneId, result.command)
       // Remember the tool-plan signature this pane launched with (8/09) — a
       // later plan edit flips it to restart-needed.
       if (workspaceId) {
@@ -425,6 +466,7 @@ export const agentsFeature: UiFeature = {
         },
         lastLaunch: (paneId: number) => ({ ...(lastLaunch.get(paneId) ?? {}) }),
         paneLive: (paneId: number) => isPaneLive(paneId),
+        markRemoteReady: (paneId: number) => markPaneRemoteReady(paneId),
         refreshCommands: () => refreshAgentRegistry().then((agents) => populate(agents)),
         // Smoke/dev shim: register an agent session WITHOUT launching (the dot is
         // gated on tracked sessions — smokes driving OSC into plain panes adopt one).

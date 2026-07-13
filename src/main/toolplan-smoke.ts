@@ -1,13 +1,20 @@
 import { app } from 'electron'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { McpServerEntry, WorkspaceToolPlan } from '@contracts'
 import { planFromTemplateTools, planSignature, restartNeededPanes, toolCellState } from '@contracts'
-import { composePlanEntries, materializePlanFor } from '@backend/features/integrations'
-import { gitExcludeInWorktree, materializeToolPlanAtLaunch, toolPlanSkipReason } from './tool-plan'
+import { composePlanEntries, findWriter, materializePlanFor } from '@backend/features/integrations'
+import { getCliRuntime, stableMcpLauncherSource, stableRuntimeExecutable } from './cli-runtime'
 import { setToolPlan } from './integrations'
+import { houseServerEntry } from './mcp-manager'
+import {
+  gitExcludeInWorktree,
+  materializeToolPlanAtLaunch,
+  mergeToolPlanProjectConfig,
+  toolPlanSkipReason
+} from './tool-plan'
 
 // Env-gated tool-plan smoke (MOGGING_TOOLPLAN, Phase-8/09). Proves scoping is a
 // real mechanism, not a label:
@@ -23,7 +30,6 @@ import { setToolPlan } from './integrations'
 //   (g) the matrix cell states match the materialized truth.
 // Zero network. (e) restart-needed rides 11's connection status — deferred.
 
-const HOUSE: McpServerEntry = { id: 'mogging', label: 'MoggingLabs', transport: 'stdio', command: 'node', args: ['mogging-mcp.mjs'], builtIn: true }
 const A: McpServerEntry = { id: 'sentry', label: 'Sentry', transport: 'stdio', command: 'sentry-mcp', args: [] }
 const B: McpServerEntry = { id: 'linear', label: 'Linear', transport: 'stdio', command: 'linear-mcp', args: [] }
 const GLOBAL_ONLY: McpServerEntry = { id: 'posthog', label: 'PostHog', transport: 'stdio', command: 'posthog-mcp', args: [] }
@@ -36,6 +42,77 @@ export async function runToolPlanSmoke(): Promise<void> {
     const repo = join(dir, 'repo')
     mkdirSync(repo, { recursive: true })
     const servers = [A, B, GLOBAL_ONLY]
+    const fakeAppDir = join(dir, 'appimage-mount')
+    const fakeAppImage = join(dir, 'MoggingLabs.AppImage')
+    const fakeMountedExecutable = join(fakeAppDir, 'electron')
+    mkdirSync(fakeAppDir, { recursive: true })
+    writeFileSync(fakeAppImage, 'appimage fixture')
+    writeFileSync(fakeMountedExecutable, 'mounted executable fixture')
+    const fakeAppImageEnv = { APPIMAGE: fakeAppImage, APPDIR: fakeAppDir }
+    const appImageExecutableOk =
+      stableRuntimeExecutable('linux', fakeMountedExecutable, fakeAppImageEnv, true) === fakeAppImage &&
+      stableRuntimeExecutable('linux', process.execPath, fakeAppImageEnv, true) === process.execPath &&
+      stableRuntimeExecutable('linux', fakeMountedExecutable, fakeAppImageEnv, false) === fakeMountedExecutable &&
+      stableRuntimeExecutable('win32', fakeMountedExecutable, fakeAppImageEnv, true) === fakeMountedExecutable
+
+    // The protocol-neutral launcher follows an authenticated pane's exact runtime segment, but
+    // a path outside the private run root cannot redirect its dynamic import.
+    const fakeRunRoot = join(dir, 'launcher-runtime', 'run')
+    const fakeCurrentTarget = join(fakeRunRoot, 'v8', 'bin', 'mogging-mcp.mjs')
+    const fakePaneTarget = join(fakeRunRoot, 'v7', 'bin', 'mogging-mcp.mjs')
+    const fakeLauncher = join(fakeRunRoot, 'mcp', 'mogging-mcp.mjs')
+    mkdirSync(dirname(fakeCurrentTarget), { recursive: true })
+    mkdirSync(dirname(fakePaneTarget), { recursive: true })
+    mkdirSync(dirname(fakeLauncher), { recursive: true })
+    writeFileSync(fakeCurrentTarget, "process.stdout.write('current')\n")
+    writeFileSync(fakePaneTarget, "process.stdout.write('pane')\n")
+    writeFileSync(fakeLauncher, stableMcpLauncherSource(fakeCurrentTarget))
+    const launchFixture = (endpoint?: string): string => {
+      const env: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+      if (endpoint) env.MOGGING_DAEMON_ENDPOINT = endpoint
+      else delete env.MOGGING_DAEMON_ENDPOINT
+      return execFileSync(process.execPath, [fakeLauncher], { encoding: 'utf8', env, windowsHide: true })
+    }
+    const paneLauncherSelectOk =
+      launchFixture() === 'current' &&
+      launchFixture(join(fakeRunRoot, 'v7', 'endpoint.json')) === 'pane' &&
+      launchFixture(join(dir, 'outside', 'v7', 'endpoint.json')) === 'current'
+    const runtime = getCliRuntime()
+    const house = houseServerEntry()
+    const mcpProbe = execFileSync(runtime.executable, [runtime.mcpEntry], {
+      encoding: 'utf8',
+      input: `${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })}\n`,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      timeout: 10000,
+      windowsHide: true
+    })
+    const stableMcpLaunchOk =
+      /"id":1/.test(mcpProbe) &&
+      /"protocolVersion"/.test(mcpProbe) &&
+      mcpProbe.includes(`"version":"${app.getVersion()}"`)
+    const packageMeta = JSON.parse(readFileSync(runtime.packageMeta, 'utf8')) as Record<string, unknown>
+    const packageMetaOk =
+      Object.keys(packageMeta).length === 1 &&
+      packageMeta.version === app.getVersion()
+    const runtimeExact =
+      runtime.executable === house.command &&
+      house.args?.length === 1 &&
+      house.args[0] === runtime.mcpEntry &&
+      dirname(runtime.mcpEntry) !== runtime.binDir &&
+      dirname(dirname(runtime.mcpEntry)) === dirname(dirname(runtime.binDir)) &&
+      !/(?:^|[\\/])(?:dev-)?v\d+(?:[\\/]|$)/i.test(runtime.mcpEntry.slice(dirname(dirname(runtime.mcpEntry)).length)) &&
+      readFileSync(runtime.mcpEntry, 'utf8') === stableMcpLauncherSource(runtime.mcpTarget) &&
+      Object.keys(house.env ?? {}).length === 1 &&
+      house.env?.ELECTRON_RUN_AS_NODE === '1' &&
+      [
+        runtime.executable,
+        runtime.cliEntry,
+        runtime.mcpEntry,
+        runtime.mcpTarget,
+        runtime.packageMeta,
+        join(runtime.binDir, 'mcp-catalog.json'),
+        join(runtime.binDir, 'lib', 'endpoint-client.mjs')
+      ].every(existsSync)
 
     const plan: WorkspaceToolPlan = {
       workspaceId: 'ws1',
@@ -44,7 +121,7 @@ export async function runToolPlanSmoke(): Promise<void> {
     }
 
     // ── (a) claude materialization: flag + strict + a file of EXACTLY the plan ──
-    const claudeEntries = composePlanEntries(plan, 'claude-code', servers, HOUSE)
+    const claudeEntries = composePlanEntries(plan, 'claude-code', servers, house)
     const claudeMat = materializePlanFor({ cli: 'claude-code', entries: claudeEntries, inheritGlobal: false, planDir, cwd: repo, workspaceId: 'ws1' })
     for (const f of claudeMat.files) {
       mkdirSync(join(f.path, '..'), { recursive: true })
@@ -52,15 +129,54 @@ export async function runToolPlanSmoke(): Promise<void> {
     }
     const claudeArgsOk =
       claudeMat.launchArgs[0] === '--mcp-config' && claudeMat.launchArgs.includes('--strict-mcp-config') && claudeMat.excludeRelPaths.length === 0
-    const claudeFileKeys = Object.keys((JSON.parse(claudeMat.files[0].content) as { mcpServers: object }).mcpServers).sort()
+    const claudeConfig = JSON.parse(claudeMat.files[0].content) as {
+      mcpServers: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>
+    }
+    const claudeFileKeys = Object.keys(claudeConfig.mcpServers).sort()
     const claudeFileOk = JSON.stringify(claudeFileKeys) === JSON.stringify(['linear', 'mogging', 'sentry']) // planned exactly, no posthog
+    const claudeHouse = claudeConfig.mcpServers.mogging
+    const claudeHouseExact =
+      claudeHouse.command === runtime.executable &&
+      claudeHouse.args?.length === 1 &&
+      claudeHouse.args[0] === runtime.mcpEntry &&
+      Object.keys(claudeHouse.env ?? {}).length === 1 &&
+      claudeHouse.env?.ELECTRON_RUN_AS_NODE === '1'
 
     // ── (a) codex materialization: project-scope file, no flag, git-excluded ────
-    const codexEntries = composePlanEntries(plan, 'codex', servers, HOUSE)
+    const codexEntries = composePlanEntries(plan, 'codex', servers, house)
     const codexMat = materializePlanFor({ cli: 'codex', entries: codexEntries, inheritGlobal: false, planDir, cwd: repo, workspaceId: 'ws1' })
     const codexTomlHasSentry = /\[mcp_servers\.sentry\]/.test(codexMat.files[0].content) && /\[mcp_servers\.mogging\]/.test(codexMat.files[0].content)
     const codexNoLinear = !/\[mcp_servers\.linear\]/.test(codexMat.files[0].content) // linear was claude-only
-    const codexOk = codexMat.launchArgs.length === 0 && codexMat.excludeRelPaths[0] === '.codex/config.toml' && codexTomlHasSentry && codexNoLinear
+    const codexHouseCanonical = findWriter('codex')?.canonical(house) ?? ''
+    const codexHouseExact = codexHouseCanonical.length > 0 && codexMat.files[0].content.includes(codexHouseCanonical)
+    const codexOk =
+      codexMat.launchArgs.length === 0 &&
+      codexMat.excludeRelPaths[0] === '.codex/config.toml' &&
+      codexTomlHasSentry &&
+      codexNoLinear &&
+      codexHouseExact
+
+    // Provider settings and scoped MCP blocks coexist in the same file. Replanning
+    // replaces only app-managed entries and preserves unrelated user settings.
+    const codexForeign = 'model = "gpt-5" # user setting\n\n[features]\nweb_search = true\n'
+    const codexMerged = mergeToolPlanProjectConfig('codex', codexForeign, codexEntries)
+    const codexReplanned = mergeToolPlanProjectConfig('codex', codexMerged, [house])
+    const codexCoexistOk =
+      codexMerged.includes('model = "gpt-5" # user setting') &&
+      codexMerged.includes('[mcp_servers.sentry]') &&
+      codexReplanned.includes('[mcp_servers.mogging]') &&
+      !codexReplanned.includes('[mcp_servers.sentry]') &&
+      codexReplanned.includes('[features]')
+    const geminiForeign = '{\n  // user setting\n  "general": { "previewFeatures": true },\n}\n'
+    const geminiMerged = mergeToolPlanProjectConfig('gemini', geminiForeign, [house, A])
+    const geminiReplanned = mergeToolPlanProjectConfig('gemini', geminiMerged, [house])
+    const geminiCoexistOk =
+      geminiMerged.includes('// user setting') &&
+      geminiMerged.includes('"sentry"') &&
+      geminiReplanned.includes('// user setting') &&
+      !geminiReplanned.includes('"sentry"') &&
+      geminiReplanned.includes('"general"')
+    const coexistOk = codexCoexistOk && geminiCoexistOk
 
     // ── (b) a CLI launched against the file sees ONLY the planned servers ───────
     const shim = join(dir, 'claude-shim.mjs')
@@ -121,7 +237,8 @@ process.stdout.write('SERVERS=' + keys.sort().join(',') + '|STRICT=' + a.include
     const foreign = '[user]\nkeep = true\n'
     writeFileSync(join(repo, '.codex', 'config.toml'), foreign)
     setToolPlan({ workspaceId: 'ws-conflict', entries: {}, inheritGlobal: false })
-    const refused = materializeToolPlanAtLaunch({ agentId: 'codex', cwd: repo, workspaceId: 'ws-conflict' })
+    // materializeToolPlanAtLaunch is ASYNC now (it writes through the atomic file port).
+    const refused = await materializeToolPlanAtLaunch({ agentId: 'codex', cwd: repo, workspaceId: 'ws-conflict' })
     const foreignRefused =
       !refused.ok &&
       refused.args.length === 0 &&
@@ -130,13 +247,24 @@ process.stdout.write('SERVERS=' + keys.sort().join(',') + '|STRICT=' + a.include
       toolPlanSkipReason('ws-conflict') === refused.reason
 
     const pass =
-      claudeArgsOk && claudeFileOk && codexOk && listsPlannedOnly && inheritOk &&
-      gitInvisibleOk && restartFlipsOk && templateOk && matrixOk && foreignRefused
+      appImageExecutableOk && paneLauncherSelectOk && runtimeExact && stableMcpLaunchOk && packageMetaOk &&
+      claudeArgsOk && claudeFileOk && claudeHouseExact && codexOk && coexistOk && listsPlannedOnly &&
+      inheritOk && gitInvisibleOk && restartFlipsOk && templateOk && matrixOk && foreignRefused
     result = {
       pass,
+      appImageExecutableOk,
+      paneLauncherSelectOk,
+      runtimeExact,
+      stableMcpLaunchOk,
+      packageMetaOk,
       claudeArgsOk,
       claudeFileOk,
+      claudeHouseExact,
       codexOk,
+      codexHouseExact,
+      coexistOk,
+      codexCoexistOk,
+      geminiCoexistOk,
       listsPlannedOnly,
       inheritOk,
       gitInvisibleOk,

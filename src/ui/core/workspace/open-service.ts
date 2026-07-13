@@ -20,7 +20,7 @@ export interface TemplateWorkspaceSpec {
   /** Per-slot swarm roles (Phase-4/01). null = no role. */
   roles?: (string | null)[]
   /** Per-slot remote hosts (Phase-4/05). null = local pane. */
-  remotes?: ({ hostId: string; name: string } | null)[]
+  remotes?: ({ hostId: string; name: string; cwd?: string } | null)[]
   /** Per-slot profile ids (Phase-4/04 picker). null = the provider's default. */
   profileIds?: (string | null)[]
   /** The tool plan's server picks (Phase-8/09) — the workspace arrives scoped to

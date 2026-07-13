@@ -12,7 +12,7 @@ import type { AgentProfile } from '@contracts'
 export const HOME_POINTER: Record<string, string> = {
   claude: 'CLAUDE_CONFIG_DIR',
   codex: 'CODEX_HOME',
-  gemini: 'GEMINI_CONFIG_DIR'
+  gemini: 'GEMINI_CLI_HOME'
 }
 
 const DEFAULT_HOME: Record<string, () => string> = {
@@ -37,7 +37,13 @@ function expandTilde(p: string): string {
 export function resolveHome(providerId: string, profile: AgentProfile | null): string {
   const pointer = HOME_POINTER[providerId]
   const fromProfile = pointer && profile ? profile.env[pointer] : undefined
-  if (fromProfile) return expandTilde(fromProfile)
+  if (providerId === 'gemini') {
+    const legacy = profile?.env.GEMINI_CONFIG_DIR
+    if (legacy) return expandTilde(legacy)
+    if (fromProfile) return join(expandTilde(fromProfile), '.gemini')
+  } else if (fromProfile) {
+    return expandTilde(fromProfile)
+  }
   const dflt = DEFAULT_HOME[providerId]
   return dflt ? dflt() : join(homedir(), `.${providerId}`)
 }

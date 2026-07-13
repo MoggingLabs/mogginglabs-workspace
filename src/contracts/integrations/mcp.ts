@@ -12,11 +12,12 @@
 import catalogJson from './mcp-catalog.json'
 
 export type McpToolFamily = 'browser' | 'control'
-/** `read` is never gated · `write` is gated by the workspace grant's
- *  `writeTools` (03) · `act` is gated per signed-in ORIGIN (04). */
-export type McpToolAccess = 'read' | 'write' | 'act'
+/** `read` is never gated · `self` is bound to the calling pane's session capability
+ *  · `write` is gated by the workspace grant's `writeTools` (03) · `act` is gated
+ *  per signed-in ORIGIN (04). */
+export type McpToolAccess = 'read' | 'self' | 'write' | 'act'
 /** Which authed socket the server forwards this tool to (it owns neither):
- *  `app` = the browser-control endpoint · `daemon` = the PTY daemon (v3). */
+ *  `app` = the browser-control endpoint · `daemon` = the versioned PTY daemon. */
 export type McpToolUpstream = 'app' | 'daemon'
 
 /** Plain JSON-Schema data (closed to what the catalog uses) — the contracts
@@ -72,6 +73,11 @@ export const MCP_CONTROL_READ_TOOL_NAMES = [
   'list_board'
 ] as const
 
+/** Self-scoped control declarations. They are always served because the daemon
+ *  authenticates the calling pane with its per-session capability; they can never
+ *  target another pane and therefore do not belong behind the general write grant. */
+export const MCP_CONTROL_SELF_TOOL_NAMES = ['report_working_directory'] as const
+
 /** Control-plane writes (03) — behind the workspace grant, default OFF. Each
  *  maps 1:1 onto a verb `mogging` already speaks; none adds capability. */
 export const MCP_CONTROL_WRITE_TOOL_NAMES = [
@@ -86,11 +92,13 @@ export const MCP_CONTROL_WRITE_TOOL_NAMES = [
 export const MCP_TOOL_NAMES = [
   ...MCP_BROWSER_TOOL_NAMES,
   ...MCP_CONTROL_READ_TOOL_NAMES,
+  ...MCP_CONTROL_SELF_TOOL_NAMES,
   ...MCP_CONTROL_WRITE_TOOL_NAMES
 ] as const
 
 export type McpBrowserToolName = (typeof MCP_BROWSER_TOOL_NAMES)[number]
 export type McpControlReadToolName = (typeof MCP_CONTROL_READ_TOOL_NAMES)[number]
+export type McpControlSelfToolName = (typeof MCP_CONTROL_SELF_TOOL_NAMES)[number]
 export type McpWriteToolName = (typeof MCP_CONTROL_WRITE_TOOL_NAMES)[number]
 export type McpToolName = (typeof MCP_TOOL_NAMES)[number]
 
@@ -172,20 +180,31 @@ function validateMcpCatalog(raw: unknown): readonly McpToolDef[] {
     const family = entry.family
     if (family !== 'browser' && family !== 'control') fail(name + '.family must be browser|control')
     const access = entry.access
-    if (access !== 'read' && access !== 'write' && access !== 'act') fail(name + '.access must be read|write|act')
+    if (access !== 'read' && access !== 'self' && access !== 'write' && access !== 'act') {
+      fail(name + '.access must be read|self|write|act')
+    }
     const upstream = entry.upstream
     if (upstream !== 'app' && upstream !== 'daemon') fail(name + '.upstream must be app|daemon')
     const isBrowser = (MCP_BROWSER_TOOL_NAMES as readonly string[]).includes(name)
     if (isBrowser !== (family === 'browser')) fail(name + '.family disagrees with the name lists')
     if (family === 'browser' && upstream !== 'app') fail(name + ': browser tools ride the app endpoint')
-    if (family === 'browser' && access === 'write') fail(name + ': browser tools are read or act, never write')
-    if (family === 'control' && access === 'act') fail(name + ': act is a browser tier; control tools are read or write')
+    if (family === 'browser' && (access === 'write' || access === 'self')) {
+      fail(name + ': browser tools are read or act, never self/write')
+    }
+    if (family === 'control' && access === 'act') {
+      fail(name + ': act is a browser tier; control tools are read, self, or write')
+    }
     const isAct = (MCP_BROWSER_ACT_TOOL_NAMES as readonly string[]).includes(name)
     if (isAct !== (access === 'act')) fail(name + '.access disagrees with the §04 act list')
+    const isSelf = (MCP_CONTROL_SELF_TOOL_NAMES as readonly string[]).includes(name)
+    if (isSelf !== (access === 'self')) fail(name + '.access disagrees with the self-tool list')
     const isWrite = (MCP_CONTROL_WRITE_TOOL_NAMES as readonly string[]).includes(name)
     if (isWrite !== (access === 'write')) fail(name + '.access disagrees with the write-tool list')
     const verb = requireText(entry.verb, name + '.verb')
     if (family === 'browser' && verb !== name) fail(name + ': the app endpoint dispatches browser tools by name')
+    if (isSelf && (upstream !== 'daemon' || verb !== 'cwd-report')) {
+      fail(name + ': the self-scoped cwd declaration must ride daemon cwd-report')
+    }
     out.push({
       name: name as McpToolName,
       title: requireText(entry.title, name + '.title'),
@@ -205,7 +224,7 @@ function validateMcpCatalog(raw: unknown): readonly McpToolDef[] {
 }
 
 /** THE catalog: the 14 shipped browser tools (names/schemas verbatim) + 5
- *  control reads + 6 control writes. Validated at load. */
+ *  control reads + 1 self-scoped declaration + 6 control writes. Validated at load. */
 export const MCP_TOOLS: readonly McpToolDef[] = validateMcpCatalog(catalogJson)
 
 export const findMcpTool = (name: string): McpToolDef | undefined => MCP_TOOLS.find((t) => t.name === name)

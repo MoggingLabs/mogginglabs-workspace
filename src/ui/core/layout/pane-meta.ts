@@ -62,7 +62,7 @@ export function getPaneProfile(paneId: PaneId): string | undefined {
 export interface PaneRemote {
   hostId: string
   name: string
-  /** Path on the target host; never interpreted as a local path. */
+  /** Bootstrap/relaunch folder on the remote host; never pass to local filesystem APIs. */
   cwd?: string
 }
 const remotes = new Map<PaneId, PaneRemote>()

@@ -9,9 +9,14 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 114 gates: 11 static (AUDIT · SPACING · PTYSEAM · PROTOVER · LAYOUT · DOCSREFS ·
-# CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT) + 103 app-boot
-# gates. Phase 11 (Files — the explorer) added seven, and they run LAST:
+# 122 gates: 14 static (AUDIT · SPACING · PTYSEAM · PROTOVER · AGENTCAT · LAYOUT ·
+# DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · GITPURE ·
+# REMOTEBOOT) + 108 app-boot
+# The registry below is the source of truth for the gate count, and check-gate-count.mjs
+# DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
+# stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
+# windowless control-plane gate, and a composed Settings UI gate.
+# Phase 11 (Files — the explorer) added seven, and they run LAST:
 #   FSLIST          the read service, zero UI (files+dirs, caps, typed refusals)
 #   FILETREE        the virtualized tree (10k rows, APG keyboard, tree ARIA)
 #   EXPLORER        the dock (four doors, re-rooting, per-workspace memory)
@@ -122,6 +127,7 @@ run_smoke() {
   local extra=""
   [ "$name" = "FIRSTRUN" ] && extra="MOGGING_FAKE_UPDATE=9.9.9"
   [ "$name" = "ROLERACE" ] && extra="MOGGING_DAEMON_SPAWN_DELAY_MS=2500"
+  [ "$name" = "CWD_INPROC" ] && extra="MOGGING_INPROC=1"
   MOGGING_USERDATA="$iso/userdata" LOCALAPPDATA="$iso/local" XDG_RUNTIME_DIR="$iso/local" \
     env $extra "$var=$val" "$TIMEOUT_BIN" "$timeout_s" npm run dev >"$iso/$name.log" 2>&1
   local v
@@ -175,6 +181,7 @@ run_static AUDIT   node scripts/check-audit.mjs
 run_static SPACING node scripts/check-spacing.mjs --max 0
 run_static PTYSEAM node scripts/check-pty-seam.mjs
 run_static PROTOVER node scripts/check-protocol-version.mjs
+run_static AGENTCAT node scripts/check-agent-settings-catalog.mjs
 run_static LAYOUT  node scripts/check-layout-invariants.mjs
 # DOCSREFS: the docs cite each other constantly (the roadmap points at ADRs, ADRs at
 # research, phases at the pack that shipped them). Rename a doc and every citation keeps
@@ -209,12 +216,16 @@ run_static PRODARTIFACT node scripts/check-prod-artifact.mjs
 # rows below and fails any doc that disagrees; it also pins docs/10's release commands to
 # package.json's version (they still said v0.4.0 at v0.9.0). Dated changelog lines are scoped out.
 run_static GATECOUNT node scripts/check-gate-count.mjs
+run_static GITPURE npm run smoke:git-pure
+run_static REMOTEBOOT npm run smoke:remote-bootstrap-pure
 
 run_smoke SMOKE       MOGGING_SMOKE     1 180 smoke
 run_smoke MULTIPANE   MOGGING_MULTIPANE 1 180 multipane
 run_smoke ATTENTION   MOGGING_ATTENTION 1 120 attention
 run_smoke BLOCKS      MOGGING_BLOCKS    1 150 blocks
 run_smoke CLIPBOARD   MOGGING_CLIPBOARD 1 150 clipboard
+run_smoke CWD         MOGGING_CWD       DAEMON 240 cwd
+run_smoke CWD_INPROC  MOGGING_CWD       INPROC 180 cwd-inproc
 run_smoke GIT         MOGGING_GIT       1 240 git
 run_smoke NOTIFY      MOGGING_NOTIFY    1 180 notify
 run_smoke NOTIFYHOOK  MOGGING_NOTIFYHOOK 1 120 notifyhook
@@ -272,6 +283,7 @@ run_smoke USAGESET     MOGGING_USAGESET  1 180 usageset
 run_smoke MCP          MOGGING_MCP       1 240 mcp
 run_smoke MCPWRITE     MOGGING_MCPWRITE  1 240 mcpwrite
 run_smoke AGENTWEB     MOGGING_AGENTWEB  1 240 agentweb
+run_smoke AGENTLAUNCH  MOGGING_AGENTLAUNCH 1 240 agentlaunch
 run_smoke PERWS        MOGGING_PERWS     1 240 perws
 run_smoke PERWSAGENT   MOGGING_PERWSAGENT 1 240 perwsagent
 run_smoke VAULTKEYS    MOGGING_VAULTKEYS 1 240 vaultkeys
@@ -294,6 +306,7 @@ run_smoke MUTATIONRACE MOGGING_MUTATIONRACE 1 180 mutationrace
 run_smoke AUTHRUNNER   MOGGING_AUTHRUNNER 1 180 authrunner
 run_smoke FOLDERPICK   MOGGING_FOLDERPICK 1 240 folderpick
 run_smoke SETSHELL     MOGGING_SETSHELL  1 240 setshell
+run_smoke SETAGENTCFG  MOGGING_SETAGENTCFG 1 240 setagentcfg
 run_smoke SETUSAGE     MOGGING_SETUSAGE  1 240 setusage
 run_smoke HOMEUX       MOGGING_HOMEUX    1 240 homeux
 run_smoke BOARDUX      MOGGING_BOARDUX   1 240 boardux
@@ -305,6 +318,7 @@ run_smoke UXMILESTONE  MOGGING_UXMILESTONE 1 360 uxmilestone
 run_smoke TYPED        MOGGING_TYPED     1 300 typed
 run_smoke TYPEDCOST    MOGGING_TYPEDCOST 1 120 typedcost
 run_smoke CTXACCURACY  MOGGING_CTXACCURACY 1 120 ctxaccuracy
+run_smoke AGENTCFG     MOGGING_AGENTCFG 1 180 agentsettings
 run_smoke FSLIST       MOGGING_FSLIST    1 120 fslist
 run_smoke FILETREE     MOGGING_FILETREE  1 300 filetree
 run_smoke EXPLORER     MOGGING_EXPLORER  1 240 explorer

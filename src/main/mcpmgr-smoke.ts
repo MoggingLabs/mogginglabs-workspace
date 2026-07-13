@@ -1,9 +1,10 @@
 import { app, type BrowserWindow } from 'electron'
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { removeStoredServer, saveServer, validateServerEntry, type CliHomes, type GrantKv } from '@backend/features/integrations'
-import { mgrApply, mgrRemoveFrom, mgrStatus } from './mcp-manager'
+import { findWriter, removeStoredServer, saveServer, sha256, validateServerEntry, type CliHomes, type GrantKv } from '@backend/features/integrations'
+import { houseServerEntry, mgrApply, mgrRemoveFrom, mgrStatus, refreshManagedHouseRuntime } from './mcp-manager'
 import { getSettingsStore } from './app-settings'
+import { getCliRuntime } from './cli-runtime'
 
 // Env-gated MCP-manager smoke (MOGGING_MCPMGR, Phase-8/06). FIXTURE config
 // homes only — temp dirs with realistic files, foreign entries, and odd (but
@@ -118,6 +119,10 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
       writeFileSync(claudeFile, FOREIGN_CLAUDE, 'utf8')
       writeFileSync(codexFile, FOREIGN_CODEX, 'utf8')
       writeFileSync(geminiFile, FOREIGN_GEMINI, 'utf8')
+      if (process.platform !== 'win32') {
+        for (const file of [claudeFile, codexFile, geminiFile]) chmodSync(file, 0o600)
+      }
+      const privateMode = (file: string): boolean => process.platform === 'win32' || (statSync(file).mode & 0o777) === 0o600
 
       // ── secret-literal refused at save (the profiles deny-list) ────────────
       const refused = validateServerEntry({
@@ -137,29 +142,132 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
       }).ok
 
       // ── apply the house server to all three fixture homes ──────────────────
+      const runtime = getCliRuntime()
+      const house = houseServerEntry()
+      const runtimeExact =
+        runtime.binDir === dirname(runtime.cliEntry) &&
+        runtime.binDir === dirname(runtime.mcpTarget) &&
+        runtime.binDir !== dirname(runtime.mcpEntry) &&
+        !/(?:dev-)?v\d+$/i.test(dirname(runtime.mcpEntry)) &&
+        runtime.executable === house.command &&
+        house.args?.length === 1 &&
+        house.args[0] === runtime.mcpEntry &&
+        Object.keys(house.env ?? {}).length === 1 &&
+        house.env?.ELECTRON_RUN_AS_NODE === '1' &&
+        [
+          runtime.executable,
+          runtime.cliEntry,
+          runtime.mcpEntry,
+          runtime.mcpTarget,
+          runtime.packageMeta,
+          join(runtime.binDir, 'mcp-catalog.json'),
+          join(runtime.binDir, 'lib', 'endpoint-client.mjs')
+        ].every(existsSync)
       const applyResults = (['claude-code', 'codex', 'gemini'] as const).map((cli) => mgrApply('mogging', cli, homes))
       const applied = applyResults.every((r) => r.ok)
       const claudeAfter = readFileSync(claudeFile, 'utf8')
       const codexAfter = readFileSync(codexFile, 'utf8')
       const geminiAfter = readFileSync(geminiFile, 'utf8')
+      const modesPreservedAfterApply = [claudeFile, codexFile, geminiFile].every(privateMode)
       const claudeParsed = JSON.parse(claudeAfter) as {
         numStartups?: number
-        mcpServers?: Record<string, { type?: string; command?: string; _managedBy?: string }>
+        mcpServers?: Record<string, {
+          type?: string
+          command?: string
+          args?: string[]
+          env?: Record<string, string>
+          _managedBy?: string
+        }>
       }
+      const claudeHouse = claudeParsed.mcpServers?.mogging
       const dialectClaude =
-        claudeParsed.mcpServers?.mogging?.type === 'stdio' &&
-        claudeParsed.mcpServers?.mogging?._managedBy === 'mogginglabs' &&
+        claudeHouse?.type === 'stdio' &&
+        claudeHouse.command === runtime.executable &&
+        claudeHouse.args?.length === 1 &&
+        claudeHouse.args[0] === runtime.mcpEntry &&
+        Object.keys(claudeHouse.env ?? {}).length === 1 &&
+        claudeHouse.env?.ELECTRON_RUN_AS_NODE === '1' &&
+        claudeHouse._managedBy === 'mogginglabs' &&
         claudeParsed.numStartups === 42 &&
         claudeParsed.mcpServers?.['foreign-tool']?.command === 'npx'
+      const codexHouseCanonical = findWriter('codex')?.canonical(house) ?? ''
       const dialectCodex =
-        /# managed-by: mogginglabs\n\[mcp_servers\.mogging\]\ncommand = "node"/.test(codexAfter) &&
+        codexHouseCanonical.length > 0 &&
+        codexAfter.includes(codexHouseCanonical) &&
         codexAfter.includes('command = "npx" # hand-written, do not touch') &&
         codexAfter.includes('[profiles.work]')
       const geminiParsed = JSON.parse(geminiAfter) as { mcpServers?: Record<string, Record<string, unknown>>; theme?: string }
+      const geminiHouse = geminiParsed.mcpServers?.mogging
       const dialectGemini =
-        typeof geminiParsed.mcpServers?.mogging?.command === 'string' &&
+        geminiHouse?.command === runtime.executable &&
+        Array.isArray(geminiHouse.args) &&
+        geminiHouse.args.length === 1 &&
+        geminiHouse.args[0] === runtime.mcpEntry &&
+        typeof geminiHouse.env === 'object' &&
+        geminiHouse.env !== null &&
+        Object.keys(geminiHouse.env).length === 1 &&
+        (geminiHouse.env as Record<string, string>).ELECTRON_RUN_AS_NODE === '1' &&
         geminiParsed.theme === 'Default' &&
         !!geminiParsed.mcpServers?.['foreign-tool']
+
+      // A pre-upgrade house block is still ours only when its persisted hash matches exactly.
+      // Plant that vN path in all dialects, then prove boot migration rewrites it to the stable
+      // launcher while preserving every foreign byte around it.
+      const oldExecutable = join(fixRoot, 'old-install', process.platform === 'win32' ? 'MoggingLabs.exe' : 'mogginglabs')
+      const settings = getSettingsStore()
+      for (const cli of ['claude-code', 'codex', 'gemini'] as const) {
+        const writer = findWriter(cli)
+        if (!writer) throw new Error(`missing ${cli} writer`)
+        const file = writer.targetFile(homes)
+        // Cover both upgrade shapes: the original protocol-versioned MCP target and an
+        // already-stable entry whose app executable moved after reinstall/relocation.
+        const legacyHouse = cli === 'gemini'
+          ? { ...house, command: oldExecutable }
+          : { ...house, args: [runtime.mcpTarget] }
+        writeFileSync(file, writer.upsert(readFileSync(file, 'utf8'), legacyHouse), 'utf8')
+        settings?.setSetting(`integrations.mgr.hash.${cli}.mogging`, sha256(writer.canonical(legacyHouse)))
+      }
+      const runtimeRefreshed = refreshManagedHouseRuntime(homes)
+      const protocolUpgradeSafe =
+        runtimeRefreshed.length === 3 &&
+        readFileSync(claudeFile, 'utf8') === claudeAfter &&
+        readFileSync(codexFile, 'utf8') === codexAfter &&
+        readFileSync(geminiFile, 'utf8') === geminiAfter
+
+      // A third-party config can be temporarily unreadable or even replaced by a directory.
+      // Boot-time best-effort refresh must isolate that writer rather than abort app startup.
+      const homesUnreadable: CliHomes = {
+        home: join(fixRoot, 'home-unreadable'),
+        codexDir: join(fixRoot, 'codex-unreadable'),
+        geminiDir: join(fixRoot, 'gemini-unreadable')
+      }
+      mkdirSync(join(homesUnreadable.home, '.claude.json'), { recursive: true })
+      let unreadableConfigSafe = false
+      try {
+        refreshManagedHouseRuntime(homesUnreadable)
+        unreadableConfigSafe = true
+      } catch {
+        unreadableConfigSafe = false
+      }
+
+      // Expected-byte writes are the migration's TOCTOU guard: a user/CLI edit after the
+      // ownership proof is preserved byte-for-byte and the automatic apply refuses.
+      const beforeRace = readFileSync(codexFile, 'utf8')
+      const raced = beforeRace.replace('model = "o3"', 'model = "o4"')
+      writeFileSync(codexFile, raced, 'utf8')
+      const raceApply = mgrApply('mogging', 'codex', homes, { current: beforeRace })
+      const migrationRaceRefused = !raceApply.ok && readFileSync(codexFile, 'utf8') === raced
+      writeFileSync(codexFile, codexAfter, 'utf8')
+
+      // Distinct invalid UTF-8 byte sequences can decode to the same replacement character.
+      // The expected-file guard compares bytes and must refuse rather than normalize/clobber.
+      const invalidBytes = Buffer.concat([Buffer.from(codexAfter, 'utf8'), Buffer.from([0x80])])
+      writeFileSync(codexFile, invalidBytes)
+      const invalidDecoded = readFileSync(codexFile, 'utf8')
+      const invalidApply = mgrApply('mogging', 'codex', homes, { current: invalidDecoded })
+      const invalidByteRaceRefused = !invalidApply.ok && readFileSync(codexFile).equals(invalidBytes)
+      writeFileSync(codexFile, codexAfter, 'utf8')
+      if (process.platform !== 'win32') chmodSync(codexFile, 0o600)
 
       // ── The Gemini http quirk: a remote entry writes `httpUrl`, never `url`
       //    (while Claude Code writes `url`) — a real registry row, round-tripped.
@@ -188,10 +296,13 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
       )
 
       // ── drift: an out-of-band edit reads as drift-edited ────────────────────
-      writeFileSync(codexFile, readFileSync(codexFile, 'utf8').replace('command = "node"', 'command = "deno"'), 'utf8')
+      const driftedHouse = codexHouseCanonical.replace(/^command = .*$/m, 'command = "deno"')
+      const driftedCodex = codexAfter.replace(codexHouseCanonical, driftedHouse)
+      if (driftedCodex === codexAfter) throw new Error('could not plant the Codex house-entry drift fixture')
+      writeFileSync(codexFile, driftedCodex, 'utf8')
       const driftDetected = mgrStatus('mogging', homes).find((s) => s.cli === 'codex')?.state === 'drift-edited'
-      // restore for the byte-identity check
-      writeFileSync(codexFile, readFileSync(codexFile, 'utf8').replace('command = "deno"', 'command = "node"'), 'utf8')
+      // Restore the exact pre-drift bytes; paths and env are part of the canonical hash.
+      writeFileSync(codexFile, codexAfter, 'utf8')
 
       // ── remove extracts OUR entries only; foreign files byte-identical ─────
       const removeResults = (['claude-code', 'codex', 'gemini'] as const).map((cli) => mgrRemoveFrom('mogging', cli, homes))
@@ -199,6 +310,7 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
       const bytesClaude = readFileSync(claudeFile, 'utf8') === FOREIGN_CLAUDE
       const bytesCodex = readFileSync(codexFile, 'utf8') === FOREIGN_CODEX
       const bytesGemini = readFileSync(geminiFile, 'utf8') === FOREIGN_GEMINI
+      const modesPreservedAfterRemove = [claudeFile, codexFile, geminiFile].every(privateMode)
       const statusGone = mgrStatus('mogging', homes).every((s) => s.state === 'not-applied')
 
       // ── vintage B: NO .claude.json — apply creates a minimal one ────────────
@@ -208,7 +320,11 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
       const vintageBParsed = JSON.parse(readFileSync(join(homesB.home, '.claude.json'), 'utf8')) as {
         mcpServers?: Record<string, { _managedBy?: string }>
       }
-      const vintageBOk = vintageB && vintageBParsed.mcpServers?.mogging?._managedBy === 'mogginglabs'
+      const vintageBFile = join(homesB.home, '.claude.json')
+      const vintageBOk =
+        vintageB &&
+        vintageBParsed.mcpServers?.mogging?._managedBy === 'mogginglabs' &&
+        privateMode(vintageBFile)
 
       // ── COLLISION: a foreign entry under OUR id is refused, never clobbered ──
       // The user already hand-wrote a server called `mogging`. Both dialects used to
@@ -241,7 +357,8 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
       const collisionExplained = /not managed|already/i.test(String(codexCollision.reason ?? ''))
 
       const pass =
-        secretRefused && envRefAccepted && applied && dialectClaude && dialectCodex && dialectGemini &&
+        secretRefused && envRefAccepted && runtimeExact && protocolUpgradeSafe && unreadableConfigSafe && migrationRaceRefused && invalidByteRaceRefused &&
+        modesPreservedAfterApply && modesPreservedAfterRemove && applied && dialectClaude && dialectCodex && dialectGemini &&
         httpQuirkOk && statusApplied && backupsExist && driftDetected &&
         removed && bytesClaude && bytesCodex && bytesGemini && statusGone && vintageBOk &&
         collisionRefused && collisionBytesKept && collisionExplained
@@ -249,6 +366,13 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
         pass,
         secretRefused,
         envRefAccepted,
+        runtimeExact,
+        protocolUpgradeSafe,
+        unreadableConfigSafe,
+        migrationRaceRefused,
+        invalidByteRaceRefused,
+        modesPreservedAfterApply,
+        modesPreservedAfterRemove,
         applied,
         dialectClaude,
         dialectCodex,

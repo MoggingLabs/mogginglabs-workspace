@@ -5,15 +5,31 @@
 // in-proc path stays the default and the green baseline is untouched.
 import { ipcMain, type WebContents } from 'electron'
 import * as path from 'node:path'
-import { TerminalChannels, LedgerChannels, GateChannels } from '@contracts'
+import { TerminalChannels, LedgerChannels, GateChannels, PANE_CWD_MAX, normalizeRemoteConnection } from '@contracts'
 import type { AgentState, Approval, SpawnRequest, SpawnResult, SpawnSpec, StateSyncRequest, WriteCommand, ResizeCommand, KillCommand, SetRoleCommand } from '@contracts'
 import { getTelemetry } from '@backend'
 import { ensureDaemon, DaemonClient } from './daemon-client'
-import { migrateOlderDaemonSessions } from './daemon-migrate'
+import { DaemonMigrationDeferredError, migrateOlderDaemonSessions } from './daemon-migrate'
 import { getSettingsStore } from './app-settings'
 import { resolveServiceKeyEnv } from './service-keys'
 import { onPaneStateForBridge } from './event-bridge'
 import { setDaemonHealth, setDaemonHealthRetry } from './runtime-health'
+import { sanitizeRemote } from './remotes'
+
+function normalizeRequestedRemoteCwd(raw: unknown): string | undefined {
+  if (raw === undefined || raw === '') return undefined
+  if (
+    typeof raw !== 'string' ||
+    raw.length > PANE_CWD_MAX ||
+    /[\x00-\x1f\x7f]/.test(raw) ||
+    !path.posix.isAbsolute(raw)
+  ) {
+    throw new Error('Invalid remote working directory')
+  }
+  const normalized = path.posix.normalize(raw)
+  if (!normalized || normalized.length > PANE_CWD_MAX) throw new Error('Invalid remote working directory')
+  return normalized
+}
 
 // The one live daemon connection, for other main modules (review gate 4/03).
 let activeClient: DaemonClient | null = null
@@ -87,6 +103,9 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
    *  every pane event; a mismatch is a dead generation talking, and it is dropped. */
   const gens = new Map<string, number | 'killed'>()
   const current = (id: string, gen: number): boolean => gens.get(id) === gen
+  const cwdRevisions = new Map<string, { connection: number; gen: number; revision: number }>()
+  let nextConnection = 0
+  let activeConnection = 0
   /** Last gate-passing state per pane — the answer to the renderer's stateSync PULL.
    *  Push alone cannot keep the dot honest: the daemon emits state on CHANGE only, and
    *  a welcome replay fired before a pane's listener existed (app boot, renderer
@@ -95,10 +114,16 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
 
   const makeClient = async (): Promise<DaemonClient> => {
     const endpoint = await ensureDaemon(daemonEntry)
+    const connection = ++nextConnection
+    activeConnection = connection
+    cwdRevisions.clear()
+    const generation = (gen: number): string => `${endpoint.pid}:${connection}:${gen}`
     const c: DaemonClient = new DaemonClient(endpoint, {
       // Fired from `spawned`/`attached` BEFORE their scrollback replay, so the replay
       // itself passes the gate it establishes.
       onGen: (id, gen) => {
+        if (connection !== activeConnection) return
+        if (gens.get(id) !== gen) cwdRevisions.delete(id)
         gens.set(id, gen)
         livePaneIds.add(id)
       },
@@ -110,6 +135,7 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
         specs.delete(id) // an exited pane must not be resurrected by a reconnect replay
         lastStates.delete(id) // no session, no state — a late sync must not repaint a dead pane
         livePaneIds.delete(id)
+        cwdRevisions.delete(id)
         getWebContents()?.send(TerminalChannels.exit, { id: Number(id), exitCode })
       },
       onState: (id, state, gen) => {
@@ -124,6 +150,7 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
       // It also carries every pane's CURRENT gen: seed the gate from it, so the replayed
       // states pass and stragglers from before a daemon restart cannot.
       onWelcome: (panes) => {
+        if (connection !== activeConnection) return
         livePaneIds.clear()
         for (const p of panes) {
           // The app closed this pane but its kill died with the old connection (send
@@ -143,8 +170,19 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
           }
         }
       },
-      onCwd: (id, cwd, gen) => {
-        if (current(id, gen)) getWebContents()?.send(TerminalChannels.cwd, { id: Number(id), cwd })
+      onCwd: (id, cwd, gen, revision, source, locality) => {
+        if (connection !== activeConnection || !current(id, gen)) return
+        const previous = cwdRevisions.get(id)
+        if (previous && previous.connection === connection && previous.gen === gen && revision < previous.revision) return
+        cwdRevisions.set(id, { connection, gen, revision })
+        getWebContents()?.send(TerminalChannels.cwd, {
+          id: Number(id),
+          cwd,
+          generation: generation(gen),
+          revision,
+          source,
+          locality
+        })
       },
       onOwners: (claims) => getWebContents()?.send(LedgerChannels.owners, { claims }),
       onLimit: (id, gen) => {
@@ -266,8 +304,13 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
   // store and retires it, so the daemon we are about to start restores the user's panes
   // instead of a blank slate. Guarded + bounded inside; a failure means a plain start.
   try {
-    await migrateOlderDaemonSessions()
+    const confirmedRemotes = (getSettingsStore()?.listRemotes() ?? [])
+      .map((remote) => normalizeRemoteConnection(remote))
+      .filter((remote): remote is NonNullable<typeof remote> => !!remote)
+    const migration = await migrateOlderDaemonSessions(confirmedRemotes)
+    if (migration === 'deferred') throw new DaemonMigrationDeferredError()
   } catch (err) {
+    if (err instanceof DaemonMigrationDeferredError) throw err
     getTelemetry().captureError(err, { feature: 'daemon', op: 'migrate', platform: process.platform })
   }
 
@@ -290,25 +333,26 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
   ipcMain.handle(TerminalChannels.spawn, async (_e, req: SpawnRequest): Promise<SpawnResult> => {
     // Remote pane (4/05): the renderer names a host ID; MAIN resolves the row here
     // (the daemon stays db-free, values never round-trip the renderer).
-    const row = req.remoteHostId
-      ? getSettingsStore()?.listRemotes().find((h) => h.id === req.remoteHostId)
-      : undefined
-    if (req.remoteHostId && !row) {
-      throw new Error(
-        `Remote host "${req.remoteHostId}" no longer exists. This pane was not started locally; choose or restore its SSH host.`
-      )
+    let remote: SpawnSpec['remote']
+    if (req.remoteHostId) {
+      const raw = getSettingsStore()?.listRemotes().find((h) => h.id === req.remoteHostId)
+      const row = sanitizeRemote(raw)
+      if (!raw || raw.platform !== 'posix' || !row || row.id !== req.remoteHostId || row.platform !== 'posix') {
+        throw new Error(
+          `Remote host "${req.remoteHostId}" is unavailable or unsupported. This pane was not started locally; choose or restore its SSH host.`
+        )
+      }
+      remote = {
+        name: row.name,
+        host: row.host,
+        user: row.user,
+        port: row.port,
+        cwd: normalizeRequestedRemoteCwd(req.remoteCwd),
+        platform: 'posix'
+      }
+    } else if (req.remoteCwd !== undefined) {
+      throw new Error('A remote working directory requires a remote host')
     }
-    const remote = row
-      ? {
-          name: row.name,
-          host: row.host,
-          user: row.user,
-          port: row.port,
-          cwd: req.remoteCwd,
-          platform: row.platform ?? 'posix',
-          shell: row.shell ?? (row.platform === 'windows' ? 'powershell' : 'sh')
-        }
-      : undefined
     // Vault service keys (8/08): resolved HERE, in main, into the per-pane env —
     // the renderer never sees a value; the daemon merges it into the PTY env
     // (never typed, so no secret in scrollback/sessions.db). Remote panes get
@@ -316,7 +360,7 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     const workspaceId = typeof req.workspaceId === 'string' ? req.workspaceId : undefined
     const agentId = typeof req.agentId === 'string' ? req.agentId : undefined
     const env = remote ? undefined : resolveServiceKeyEnv(workspaceId, agentId)
-    const spec: SpawnSpec = { cwd: req.cwd, cols: req.cols, rows: req.rows, remote, env }
+    const spec: SpawnSpec = { cwd: remote ? undefined : req.cwd, cols: req.cols, rows: req.rows, remote, env }
     // Recorded BEFORE the reply: a spawn that lands in a dying daemon still replays once the
     // connection is back, so the pane comes alive instead of staying blank until app restart.
     specs.set(String(req.id), spec)
@@ -338,6 +382,7 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     gens.set(String(cmd.id), 'killed')
     lastStates.delete(String(cmd.id))
     livePaneIds.delete(String(cmd.id))
+    cwdRevisions.delete(String(cmd.id))
     // A role dies with the SLOT, not with the process. Pane ids are reused (a split takes
     // the lowest free one), so a reviewer's id outliving its pane would hand reviewer
     // authority to whatever opens there next — which the renderer, having no role to push

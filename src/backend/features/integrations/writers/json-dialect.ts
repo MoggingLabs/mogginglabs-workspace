@@ -122,7 +122,8 @@ export function isManagedScopedJson(text: string): boolean {
   )
 }
 
-/** env passes through as-is: values were validated to be ${VAR} references. */
+/** Env passes through as-is: stored rows were validated as ${VAR} references; the trusted
+ *  built-in house row carries only the non-secret Electron-as-Node launch switch. */
 export function envOf(entry: McpServerEntry): Record<string, string> | undefined {
   return entry.env && Object.keys(entry.env).length ? { ...entry.env } : undefined
 }

@@ -4,6 +4,9 @@ import { installHarnessPorts } from './harness-install'
 import { runSmoke } from './smoke'
 import { runShot } from './shot'
 import { runFsListSmoke } from './fslist-smoke'
+import { runAgentSettingsSmoke } from './agentsettings-smoke'
+import { runSetAgentConfigSmoke } from './setagentcfg-smoke'
+import { runCwdSmoke } from './cwd-smoke'
 import { runMcpSmoke } from './mcp-smoke'
 import { runMcpWriteSmoke } from './mcpwrite-smoke'
 import { runAgentWebSmoke } from './agentweb-smoke'
@@ -150,9 +153,9 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
   'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_KBSHORTCUTS', 'MOGGING_WEBTRAIL',
   'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX', 'MOGGING_WIZARDFAIL', 'MOGGING_MUTATIONRACE', 'MOGGING_AUTHRUNNER',
-  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETINTEG', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX',
+  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX',
   'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_RESPONSIVE', 'MOGGING_KBAPG', 'MOGGING_UXMILESTONE',
-  'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT',
+  'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT', 'MOGGING_CWD',
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS',
   'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
@@ -162,7 +165,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
   // Phase 11 — Files: the explorer's seven.
   'MOGGING_FSLIST', 'MOGGING_FILETREE', 'MOGGING_EXPLORER', 'MOGGING_EXPLORERRACE', 'MOGGING_TREELIVE', 'MOGGING_TREEGIT',
-  'MOGGING_FILEACT', 'MOGGING_FILESMILESTONE'
+  'MOGGING_FILEACT', 'MOGGING_FILESMILESTONE', 'MOGGING_AGENTCFG'
 ]
 const isSmoke = SMOKE_ENV.some((k) => !!process.env[k])
 
@@ -196,6 +199,12 @@ async function beforeAppSettings(): Promise<boolean> {
   // `explorer:list` validation seam, on a fixture tree — no daemon, no window, zero UI.
   if (process.env.MOGGING_FSLIST) {
     await runFsListSmoke()
+    return true
+  }
+
+  // Windowless agent-settings smoke: the catalog + codecs + scope writers, no daemon, no window.
+  if (process.env.MOGGING_AGENTCFG) {
+    await runAgentSettingsSmoke()
     return true
   }
 
@@ -357,6 +366,8 @@ function afterWindow(win: BrowserWindow): void {
     runFilesMilestoneSmoke(win) // env-gated Phase-11 MILESTONE: the whole files promise composed + budgets on the composed surface (Phase-11/07)
   } else if (process.env.MOGGING_SETSHELL) {
     runSetShellSmoke(win) // env-gated settings-shell smoke: grouped nav, cards, measured spacing + AA (Phase-8.5/04)
+  } else if (process.env.MOGGING_SETAGENTCFG) {
+    runSetAgentConfigSmoke(win) // five-provider settings catalog, typed controls, real scope writes, remote honesty
   } else if (process.env.MOGGING_SETINTEG) {
     runSetIntegSmoke(win) // env-gated integrations smoke: disclosure, attention-through-fold, hit targets (Phase-8.5/05)
   } else if (process.env.MOGGING_SETUSAGE) {
@@ -385,6 +396,8 @@ function afterWindow(win: BrowserWindow): void {
     runClipboardSmoke(win) // env-gated clipboard smoke: quoting + history ring + drop overlay
   } else if (process.env.MOGGING_BLOCKS) {
     runBlocksSmoke(win) // env-gated command-blocks smoke (Phase-2/02)
+  } else if (process.env.MOGGING_CWD) {
+    runCwdSmoke(win, process.env.MOGGING_CWD) // universal cwd protocol: daemon auth + in-proc OSC fallback
   } else if (process.env.MOGGING_GIT) {
     runGitSmoke(win) // env-gated per-pane git smoke (Phase-2/03)
   } else if (process.env.MOGGING_NOTIFY) {

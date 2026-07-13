@@ -12,11 +12,25 @@ tmux-grade scriptability from any shell (Phase-3/01). The `mogging` CLI talks to
 | `mogging send <pane> <text…> [--no-enter]` | Type text into a pane; appends Enter unless `--no-enter`. Completion is confirmed via a pipelined ping (ordered stream). | `0` ok · `1` unknown pane |
 | `mogging send-key <pane> <key>` | Press a **named** key from the allowlist | `0` ok · `1` unknown pane · `2` unknown key |
 | `mogging capture <pane> [--lines N]` | Print the pane's retained scrollback tail (≤ 10000 lines, default 1000) to **stdout** | `0` ok · `1` unknown pane |
+| `mogging cwd [path]` | Declare the current pane's primary checkout/worktree (`.` by default). The next shell prompt retires it. | `0` ok · `1` rejected · `2` invalid/outside pane · `3` unavailable · `4` auth refused |
 | `mogging [<dir>]` | Open/focus a workspace for a directory (deep link) | `0` |
 | `mogging notify --event <e>` | Raise the current pane's attention (Phase-2/04; always exits 0 — a hook must never fail its agent) | `0` |
 
 Shared failure codes for the control verbs: `2` usage · `3` no daemon / timeout ·
 `4` auth refused.
+
+## Provider-neutral working directory
+
+Pane context does not depend on a provider adapter. While a foreground command owns a pane,
+MoggingLabs combines four ordered signals: an explicit `mogging cwd`/MCP declaration, Git's
+path-only setup worktree trace, the foreground process's own cwd, and the shell's prompt cwd.
+The prompt retires command-scoped evidence. Unknown executables receive no provider branding,
+usage integration, or resume capability merely because their path was observed.
+
+Command lines are used transiently only for strict known-adapter identity and are dropped. Git
+setup tracing retains paths, not argv. A program whose intended checkout exists only in its own
+memory exposes no OS fact that a terminal can infer; any CLI can cover that case by calling
+`report_working_directory` through the bundled MCP server or `mogging cwd <path>`.
 
 ## Key names (`send-key`)
 

@@ -268,12 +268,22 @@ export function codexBellArgs(notifyScript?: string): string[] {
  *  env var at our file never masks an admin's policy. Hook arrays CONCAT (the schema's own
  *  mergeStrategy), so an admin's hooks survive alongside ours. `notifyInvocation` is null
  *  when the script could not be written — Gemini then keeps the notification-only baseline. */
-export function geminiSystemSettings(existing: unknown, notifyInvocation?: string): string {
+export function geminiSystemSettings(
+  existing: unknown,
+  notifyInvocation?: string,
+  session: Record<string, unknown> = {}
+): string {
   const base = (existing && typeof existing === 'object' ? existing : {}) as Record<string, unknown>
+  const desired = (session && typeof session === 'object' ? session : {}) as Record<string, unknown>
   const general = (base.general && typeof base.general === 'object' ? base.general : {}) as Record<string, unknown>
   const out: Record<string, unknown> = {
+    ...desired,
     ...base,
-    general: { ...general, enableNotifications: true }
+    general: {
+      ...(desired.general && typeof desired.general === 'object' ? desired.general as Record<string, unknown> : {}),
+      ...general,
+      enableNotifications: true
+    }
   }
   if (notifyInvocation) {
     const hooks = (base.hooks && typeof base.hooks === 'object' ? base.hooks : {}) as Record<string, unknown>
@@ -299,10 +309,12 @@ export function geminiSystemSettings(existing: unknown, notifyInvocation?: strin
  *  ["default","question","permission","error","done","subagent_done"], so it chimes for
  *  COMPLETION (and for a mere subagent finishing) exactly as it does for a question. The
  *  plugin below supplies the verdicts that disambiguate it. */
-export function opencodeTuiConfig(existing: unknown): string {
+export function opencodeTuiConfig(existing: unknown, session: Record<string, unknown> = {}): string {
   const base = (existing && typeof existing === 'object' ? existing : {}) as Record<string, unknown>
-  const attention = (base.attention && typeof base.attention === 'object' ? base.attention : {}) as Record<string, unknown>
-  return JSON.stringify({ ...base, attention: { ...attention, enabled: true, notifications: true } })
+  const desired = (session && typeof session === 'object' ? session : {}) as Record<string, unknown>
+  const baseAttention = (base.attention && typeof base.attention === 'object' ? base.attention : {}) as Record<string, unknown>
+  const desiredAttention = (desired.attention && typeof desired.attention === 'object' ? desired.attention : {}) as Record<string, unknown>
+  return JSON.stringify({ ...base, ...desired, attention: { ...baseAttention, ...desiredAttention, enabled: true, notifications: true } })
 }
 
 /** OpenCode has no hook config — its only verdict channel is a PLUGIN, so we generate one.
@@ -364,9 +376,33 @@ export const MoggingNotify = async ({ client }) => ({
  *
  *  The spec MUST be a file:// URL. A bare path is treated as an npm package and OpenCode
  *  HANGS trying to fetch it — that would freeze every launch (found live, 2026-07-11). */
-export function opencodeConfig(pluginPath: string): string {
-  const url = 'file:///' + pluginPath.replace(/\\/g, '/').replace(/^\/+/, '')
-  return JSON.stringify({ $schema: 'https://opencode.ai/config.json', plugin: [url] })
+function configRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function mergeOpenCodeConfig(base: Record<string, unknown>, next: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base }
+  for (const [key, value] of Object.entries(next)) {
+    const prior = out[key]
+    out[key] = configRecord(prior) && configRecord(value) ? mergeOpenCodeConfig(prior, value) : value
+  }
+  if (Array.isArray(base.instructions) && Array.isArray(next.instructions)) {
+    out.instructions = [...new Set([...base.instructions, ...next.instructions])]
+  }
+  return out
+}
+
+export function opencodeConfig(
+  pluginPath: string | undefined,
+  session: Record<string, unknown> = {},
+  inherited: Record<string, unknown> = {}
+): string {
+  const merged = mergeOpenCodeConfig(inherited, session)
+  const inheritedPlugins = Array.isArray(inherited.plugin) ? inherited.plugin : []
+  const sessionPlugins = Array.isArray(session.plugin) ? session.plugin : []
+  const plugin = pluginPath ? 'file:///' + pluginPath.replace(/\\/g, '/').replace(/^\/+/, '') : undefined
+  const plugins = [...new Set([...inheritedPlugins, ...sessionPlugins, ...(plugin ? [plugin] : [])])]
+  return JSON.stringify({ ...merged, $schema: merged.$schema ?? 'https://opencode.ai/config.json', ...(plugins.length ? { plugin: plugins } : {}) })
 }
 
 /** Aider: env-var config (v0.76+), fires when the LLM finished and waits for input.

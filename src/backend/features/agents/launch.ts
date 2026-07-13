@@ -21,10 +21,20 @@ export interface LaunchTarget {
   shell: 'sh' | 'bash' | 'zsh' | 'powershell' | 'cmd'
 }
 
+/** Callers name a target either as a shorthand — `'local'` (this machine's shell) or
+ *  `'posix'` (any confirmed POSIX remote) — or as the concrete shell of a saved remote host. */
+export type LaunchTargetSpec = LaunchTarget | 'local' | 'posix'
+
 function localTarget(): LaunchTarget {
   if (process.platform !== 'win32') return { platform: 'posix', shell: 'sh' }
   const shell = defaultShell().toLowerCase()
   return { platform: 'windows', shell: shell.includes('powershell') || shell.includes('pwsh') ? 'powershell' : 'cmd' }
+}
+
+function resolveTarget(spec: LaunchTargetSpec): LaunchTarget {
+  if (spec === 'local') return localTarget()
+  if (spec === 'posix') return { platform: 'posix', shell: 'sh' }
+  return spec
 }
 
 /** Target-shell-aware `cd` prefix so the agent starts in the workspace cwd. */
@@ -64,6 +74,19 @@ function envPrefix(env: Record<string, string> | undefined, target: LaunchTarget
   return entries.map(([k, v]) => `export ${k}=${shq(v)} && `).join('')
 }
 
+/** Quote one provider argument for the interactive shell that receives the line. */
+function shellArg(value: string, target: LaunchTarget): string {
+  if (/^[A-Za-z0-9_./:\\=@,+\-\[\]]+$/.test(value)) return value
+  if (target.platform === 'posix') return shq(value)
+  if (target.shell === 'powershell') return psq(value)
+  // Standard Windows argv quoting. Percent/bang values emitted by session
+  // codecs use TOML unicode escapes, so cmd expansion cannot change them.
+  const escaped = value
+    .replace(/(\\*)"/g, '$1$1\\"')
+    .replace(/(\\*)$/g, '$1$1')
+  return `"${escaped}"`
+}
+
 /**
  * Build the launch COMMAND for an agent CLI in a cwd. It's a command string only — the CLI
  * self-authenticates; NO credentials are ever built, stored, or injected (ADR 0002). `resume`
@@ -76,13 +99,16 @@ export function buildLaunchCommand(
   resume = false,
   env?: Record<string, string>,
   mcpArgs?: string[],
-  target: LaunchTarget = localTarget()
+  targetSpec: LaunchTargetSpec = 'local'
 ): string | null {
   const adapter = findAdapter(agentId)
   if (!adapter) return null
+  const target = resolveTarget(targetSpec)
   const base = resume && adapter.resumeFlag ? `${adapter.bin} ${adapter.resumeFlag}` : adapter.bin
   // Tool-plan launch args (Phase-8/09): the CLI's mcp-config flag + path. Quote
   // args with spaces (userData paths on Windows); flags are literal.
-  const flags = mcpArgs?.length ? ' ' + mcpArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ') : ''
+  const flags = mcpArgs?.length
+    ? ' ' + mcpArgs.map((arg) => shellArg(arg, target)).join(' ')
+    : ''
   return cdPrefix(cwd, target) + envPrefix(env, target) + base + flags
 }

@@ -191,6 +191,11 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
       // appRoles). Naming the reviewer here is what a person does in the UI.
       await ES(`window.__mogging.workspace.setRole(${paneId}, 'reviewer')`)
       await sleep(400) // the role reaches main (the trusted IPC) and the daemon
+      // The approval is EXECUTED INSIDE the pane. `mogging approve` fails closed without the
+      // pane's daemon-minted MOGGING_PANE_TOKEN, and that secret exists nowhere but that pane's
+      // own env — so the only honest way to run it is the way a person does: type it at the
+      // pane. It also signs the exact object graph (--repo/--base), which is why the verdict we
+      // read is the DAEMON's approvals list, not a child process's exit code.
       const approvalSent = await sendApprovalFromPane(cli, cliPath, paneId, diff.branch, { repo, base: diff.base })
       const approvalSeen = approvalSent && (await approvalListed(cli, diff.branch))
       const approveRes = { code: approvalSeen ? 0 : 1 }

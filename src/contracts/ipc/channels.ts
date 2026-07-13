@@ -65,6 +65,16 @@ export const AgentChannels = {
   installChanged: 'agents:installChanged' // main -> renderer: AgentInstallState (progress + verdict pushes)
 } as const
 
+export const AgentConfigChannels = {
+  providers: 'agentConfig:providers',
+  catalog: 'agentConfig:catalog',
+  snapshot: 'agentConfig:snapshot',
+  set: 'agentConfig:set',
+  release: 'agentConfig:release',
+  refresh: 'agentConfig:refresh',
+  changed: 'agentConfig:changed'
+} as const
+
 export const TemplateChannels = {
   list: 'templates:list', // -> ProviderMixTemplate[] (presets + custom)
   resolve: 'templates:resolve', // (ProviderCount[]) -> ResolvedLayout
@@ -342,6 +352,7 @@ export const AllChannels: readonly string[] = [
   ...Object.values(ControlChannels),
   ...Object.values(ShellChannels),
   ...Object.values(AgentChannels),
+  ...Object.values(AgentConfigChannels),
   ...Object.values(TemplateChannels),
   ...Object.values(WorktreeChannels),
   ...Object.values(ReviewChannels),

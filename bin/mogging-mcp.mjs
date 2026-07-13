@@ -6,6 +6,7 @@
 //   browser family  -> the app's browser-control endpoint (consent enforced
 //                      app-side, per-workspace, default OFF — ADR 0002)
 //   control family  -> the PTY daemon socket the `mogging` CLI already speaks;
+//                      SELF declarations are pane-capability-bound and always served;
 //                      WRITES (8/03) serve only under the per-workspace grant
 //                      (default OFF, resolved via the app's `grant.get`,
 //                      re-checked LIVE per call, list_changed on flips; no
@@ -19,9 +20,9 @@
 //
 // Register (until the phase-8 MCP manager automates it):
 //   claude mcp add mogging -- node <path>/bin/mogging-mcp.mjs
-import { readFileSync } from 'node:fs'
+import { closeSync, openSync, readFileSync, statSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { connectEndpoint } from './lib/endpoint-client.mjs'
 
@@ -69,8 +70,14 @@ const byName = new Map(CATALOG.map((t) => [t.name, t]))
 // Fail-closed everywhere: no app, no pane, no resolution -> reads only.
 let grantedWrites = new Set()
 
-/** Serve the catalog minus ungranted writes — ungranted means INVISIBLE. */
+/** Serve the catalog minus ungranted general writes. Self-scoped declarations are
+ *  always visible because their per-pane capability is the authorization boundary. */
 const servedTools = () => CATALOG.filter((t) => t.access !== 'write' || grantedWrites.has(t.name))
+
+const CWD_INSTRUCTIONS =
+  'Call report_working_directory with the absolute path of your primary working directory at session start. ' +
+  'Call it again immediately whenever you change the primary checkout or worktree. ' +
+  'Do not report transient subprocess directories.'
 
 /** Re-resolve this session's granted writes. Emits tools/list_changed when the
  *  set changed (unless suppressed — the initialize-time resolve has no
@@ -241,6 +248,7 @@ function argsProblem(def, args) {
 /** Session identity: the pane this server was spawned inside (agent CLIs pass
  *  their env down), or the human view outside a pane — same rule as the CLI. */
 const paneIdentity = () => process.env.MOGGING_PANE_ID || undefined
+const paneToken = () => process.env.MOGGING_PANE_TOKEN || undefined
 
 async function handleBrowserCall(id, def, args) {
   try {
@@ -313,6 +321,79 @@ async function handleControlCall(id, def, args) {
         toolError(id, `unroutable control verb: ${def.verb}`)
         return
     }
+  } catch (e) {
+    if (e.rpc) replyErr(id, -32000, String(e.message || e))
+    else toolError(id, String(e.message || e))
+  }
+}
+
+// ── Self-scoped declarations: pane-capability-bound, never grant-gated ─────────
+
+/** Dispatch a declaration that can mutate only this MCP session's own pane. The daemon
+ *  requires both layers: endpoint auth proves same-user, while the per-session pane token
+ *  proves this process may update the pane named by MOGGING_PANE_ID. */
+async function handleSelfCall(id, def, args) {
+  if (def.verb !== 'cwd-report') {
+    toolError(id, `unroutable self-scoped verb: ${def.verb}`)
+    return
+  }
+  if (!process.env.MOGGING_DAEMON_ENDPOINT) {
+    // In-process and SSH panes have no local daemon endpoint. The MCP process still shares
+    // the pane's controlling terminal even though its stdout is reserved for JSON-RPC, so the
+    // same private OSC fallback as `mogging cwd` remains self-scoped without carrying a token.
+    if (!process.env.MOGGING_PANE_ID && process.env.MOGGING_PTY !== '1') {
+      replyErr(id, -32602, `"${def.name}" is unavailable outside a MoggingLabs pane`)
+      return
+    }
+    const path = args.path
+    if (
+      typeof path !== 'string' ||
+      !isAbsolute(path) ||
+      path.length > 32 * 1024 ||
+      /[\x00-\x1f\x7f]/.test(path)
+    ) {
+      replyErr(id, -32602, `"${def.name}" requires an absolute directory path`)
+      return
+    }
+    try {
+      if (!statSync(path).isDirectory()) throw new Error('not a directory')
+      const osc = `\x1b]633;P;MoggingCwd=${encodeURIComponent(path)}\x1b\\`
+      const tty = process.platform === 'win32' ? '\\\\.\\CONOUT$' : '/dev/tty'
+      const fd = openSync(tty, 'w')
+      try {
+        const bytes = Buffer.from(osc, 'utf8')
+        let offset = 0
+        while (offset < bytes.length) {
+          const written = writeSync(fd, bytes, offset, bytes.length - offset)
+          if (written <= 0) throw new Error('terminal write made no progress')
+          offset += written
+        }
+      } finally {
+        closeSync(fd)
+      }
+      toolText(id, `primary working directory reported: ${path}`)
+    } catch {
+      toolError(id, 'working-directory report failed: no daemon-backed pane or controlling terminal accepted it')
+    }
+    return
+  }
+
+  const pane = paneIdentity()
+  const token = paneToken()
+  if (!pane || !token) {
+    replyErr(id, -32602, `"${def.name}" is unavailable: this MCP session has no pane credentials`)
+    return
+  }
+  try {
+    const m = await callDaemon(
+      { t: 'cwd-report', id: pane, token, cwd: args.path, observedAt: Date.now() },
+      ['cwd-reported']
+    )
+    if (m.t === 'error') {
+      toolError(id, `working-directory report rejected (${m.reason || 'error'})`)
+      return
+    }
+    toolText(id, `primary working directory reported: ${m.cwd}`)
   } catch (e) {
     if (e.rpc) replyErr(id, -32000, String(e.message || e))
     else toolError(id, String(e.message || e))
@@ -485,7 +566,8 @@ async function handleToolCall(id, params) {
     replyErr(id, -32602, `${name}: ${problem}`)
     return
   }
-  if (def.access === 'write') await handleWriteCall(id, def, args)
+  if (def.access === 'self') await handleSelfCall(id, def, args)
+  else if (def.access === 'write') await handleWriteCall(id, def, args)
   else if (def.family === 'browser') await handleBrowserCall(id, def, args)
   else await handleControlCall(id, def, args)
 }
@@ -514,7 +596,8 @@ process.stdin.on('data', (chunk) => {
         reply(id, {
           protocolVersion: '2024-11-05',
           capabilities: { tools: { listChanged: true } },
-          serverInfo: { name: 'mogging', version: VERSION }
+          serverInfo: { name: 'mogging', version: VERSION },
+          instructions: CWD_INSTRUCTIONS
         })
       })()
     } else if (method === 'tools/list') {

@@ -197,6 +197,10 @@ export function runBoardSmoke(win: BrowserWindow): void {
       // — a reviewer named that way would produce an approval the app correctly ignores.
       await ES(`window.__mogging.workspace.setRole(${paneId}, 'reviewer')`)
       await sleep(400) // the role reaches main (the trusted IPC) and the daemon
+      // The approval RUNS INSIDE the pane. `mogging approve` fails closed without the pane's
+      // daemon-minted MOGGING_PANE_TOKEN, and that secret lives nowhere but that pane's own env
+      // — so the only honest way to execute it is the way a person would: type it at the pane's
+      // shell (which settleToShell above has just proven is the thing reading the keyboard).
       const approvalSent = await sendApprovalFromPane(cli, cliPath, paneId, branch, { repo: anchor, base: 'main' })
       const approvalSeen = approvalSent && (await approvalListed(cli, branch))
       const approveExit = approvalSeen ? 0 : 1
@@ -210,7 +214,10 @@ export function runBoardSmoke(win: BrowserWindow): void {
       // The launch command cd'd the pane INTO its worktree, and Windows refuses to remove a
       // directory that is a process's cwd — so the pane has to step out. It can only step out
       // now: the ✓-chip above keys on the pane's cwd BEING the worktree (approvedChip reads
-      // getPaneCwd), so the `cd` has to follow the assertion it would otherwise erase.
+      // getPaneCwd), so the `cd` has to follow the assertion it would otherwise erase. The shell
+      // already has the keyboard back (settleToShell, above) — typed at the agent this `cd` would
+      // land in its prompt, the pane would never move, and the removal would fail as a permission
+      // error that looks like anything but what it is.
       await ES(`window.bridge.send('terminal:write', { id: ${paneId}, data: ${JSON.stringify(sh.cd(anchor) + '\r')} })`)
       await sleep(1500)
       const removed = await ES(

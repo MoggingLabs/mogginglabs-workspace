@@ -59,7 +59,7 @@ export class InstallService {
     if (this.live.has(agentId)) return { ok: false, reason: `${adapter.name} is already installing` }
     if (isOnPath(adapter.bin)) return { ok: false, reason: `${adapter.name} is already installed` }
 
-    const state: AgentInstallState = { agentId, phase: 'running', tail: '', startedAt: Date.now() }
+    const state: AgentInstallState = { agentId: adapter.id, phase: 'running', tail: '', startedAt: Date.now() }
     let proc: IPty
     try {
       // spawnPty is the only door to node-pty (the pty seam). Size is nominal —

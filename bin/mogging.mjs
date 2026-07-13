@@ -6,6 +6,7 @@
 //   mogging send <pane> <text...>    type into a pane (appends Enter unless --no-enter)
 //   mogging send-key <pane> <key>    press a named key (enter, c-c, up, tab, ...)
 //   mogging capture <pane>           print a pane's scrollback tail to stdout [--lines N]
+//   mogging cwd [path]               declare this pane's active agent directory
 //
 // Auth is never brokered here (ADR 0002) — `open` launches a deep link; everything else
 // talks to the LOCAL daemon over its authed socket (token from the 0600 endpoint file;
@@ -13,7 +14,7 @@
 // output goes to YOUR stdout and nowhere else.
 import { execFileSync, spawn } from 'node:child_process'
 import { resolve, join } from 'node:path'
-import { readFileSync, realpathSync } from 'node:fs'
+import { closeSync, openSync, readFileSync, realpathSync, statSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import net from 'node:net'
 
@@ -37,6 +38,7 @@ const cmd = argv[0]
 
 if (cmd === 'usage') runUsage(argv.slice(1))
 else if (cmd === 'notify') runNotify(argv.slice(1)).catch(() => process.exit(0)) // a hook must never fail its agent
+else if (cmd === 'cwd') runCwd(argv.slice(1))
 else if (cmd === 'list') runList()
 else if (cmd === 'send') runSend(argv.slice(1))
 else if (cmd === 'send-key') runSendKey(argv.slice(1))
@@ -59,7 +61,7 @@ else runOpen(argv)
 
 function usage(code) {
   process.stderr.write(
-    'usage: mogging [<dir>] | notify --event <e> | list | send <pane> <text...> [--no-enter]\n' +
+    'usage: mogging [<dir>] | notify --event <e> | cwd [path] | list | send <pane> <text...> [--no-enter]\n' +
       '       mogging send-key <pane> <key> | capture <pane> [--lines N]\n' +
       '       mogging open <dir> [--panes N] | layout <N> | focus <pane>\n' +
       '       mogging expand <pane> [full|col|row] | close-pane <pane>   (each: [--no-launch])\n' +
@@ -349,8 +351,9 @@ function runUsageClearKey(args) {
 // MOGGING_PANE_TOKEN is the pane's own secret: the daemon mints one per session and injects
 // it into that pane's env and nowhere else. Sending it PROVES we are the pane named in `from`
 // — a pane id is public (`mogging list` prints it) and every pane can read the endpoint file
-// and authenticate, so `from` alone was a claim rather than a fact. Approval therefore
-// fails closed outside a live pane.
+// and authenticate, so `from` alone was a claim rather than a fact. Approval requires BOTH
+// credentials, fails closed outside a live pane, and carries the immutable snapshot the merge
+// re-validates against — a branch name alone is not what was reviewed (audit findings 1 and 4).
 
 function runApprove(args) {
   const branch = args[0]
@@ -782,6 +785,183 @@ function withDaemon(onWelcome, onMessage, { timeoutMs = 5000 } = {}) {
   sock.on('error', (e) => {
     process.stderr.write('mogging: ' + e.message + '\n')
     finish(3)
+  })
+}
+
+// --- mogging cwd [path] ---------------------------------------------------------------------------
+
+/** The private PTY fallback. It carries no pane token: PTY output is retained in scrollback and
+ * the session store, while the PTY stream itself is already bound to exactly one pane. */
+function cwdOsc(path) {
+  return `\x1b]633;P;MoggingCwd=${encodeURIComponent(path)}\x1b\\`
+}
+
+/** Write a private control sequence to the process's controlling terminal, not stdout. Agent
+ * shell tools commonly capture stdout; `/dev/tty` / `CONOUT$` still names this pane's PTY. */
+function writeCwdOsc(osc) {
+  const tty = process.platform === 'win32' ? '\\\\.\\CONOUT$' : '/dev/tty'
+  let fd
+  try {
+    fd = openSync(tty, 'w')
+    const bytes = Buffer.from(osc + 'mogging: cwd declared via terminal fallback\n', 'utf8')
+    let offset = 0
+    while (offset < bytes.length) {
+      const written = writeSync(fd, bytes, offset, bytes.length - offset)
+      if (written <= 0) throw new Error('terminal write made no progress')
+      offset += written
+    }
+    return true
+  } catch {
+    // A directly-invoked interactive shell may expose only stdout as its terminal.
+    if (process.stdout.isTTY) {
+      process.stdout.write(osc + 'mogging: cwd declared via terminal fallback\n')
+      return true
+    }
+    return false
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd)
+      } catch {
+        /* terminal already closed */
+      }
+    }
+  }
+}
+
+/**
+ * Declare the calling pane's active agent directory. The daemon socket is primary: its endpoint
+ * token authenticates the local client and MOGGING_PANE_TOKEN binds the declaration to this pane.
+ * When no daemon transport exists (the supported in-process PTY fallback), emit one private OSC
+ * on this pane's own output stream. A daemon rejection is authoritative and never bypassed by OSC.
+ */
+function runCwd(args) {
+  const pathArgs = args[0] === '--' ? args.slice(1) : args
+  if (pathArgs.length > 1) usage(2)
+  const cwd = resolve(pathArgs[0] ?? '.')
+  if (cwd.length > 32 * 1024 || /[\x00-\x1f\x7f]/.test(cwd)) {
+    process.stderr.write('mogging cwd: control characters and oversized paths are not supported\n')
+    process.exit(2)
+  }
+  try {
+    if (!statSync(cwd).isDirectory()) throw new Error('not a directory')
+  } catch {
+    process.stderr.write('mogging cwd: directory does not exist or is not accessible\n')
+    process.exit(2)
+  }
+  let osc
+  try {
+    osc = cwdOsc(cwd)
+  } catch {
+    process.stderr.write('mogging cwd: path cannot be encoded\n')
+    process.exit(2)
+  }
+
+  const fallback = () => {
+    if (!process.env.MOGGING_PANE_ID && process.env.MOGGING_PTY !== '1') {
+      process.stderr.write('mogging cwd: not inside a MoggingLabs pane\n')
+      process.exitCode = 2
+      return
+    }
+    if (writeCwdOsc(osc)) process.exitCode = 0
+    else {
+      process.stderr.write('mogging cwd: no daemon or controlling terminal is available\n')
+      process.exitCode = 3
+    }
+  }
+  // Pane-scoped cwd must not discover an arbitrary same-user daemon through the well-known
+  // path: an in-process pane intentionally has no endpoint, while a detached pane always gets
+  // its exact endpoint file injected. Absence here selects OSC on this PTY, not another daemon.
+  let ep
+  try {
+    ep = process.env.MOGGING_DAEMON_ENDPOINT
+      ? JSON.parse(readFileSync(process.env.MOGGING_DAEMON_ENDPOINT, 'utf8'))
+      : null
+  } catch {
+    ep = null
+  }
+  if (!ep || typeof ep.address !== 'string' || typeof ep.token !== 'string') {
+    fallback()
+    return
+  }
+  const paneId = process.env.MOGGING_PANE_ID
+  const paneToken = process.env.MOGGING_PANE_TOKEN
+  if (!paneId || !paneToken) {
+    process.stderr.write('mogging cwd: pane credentials unavailable for daemon reporting\n')
+    process.exit(2)
+  }
+
+  const sock = net.connect(ep.address)
+  sock.setEncoding('utf8')
+  let buf = ''
+  let settled = false
+  const observedAt = Date.now()
+  const finish = (code, message) => {
+    if (settled) return
+    settled = true
+    clearTimeout(timer)
+    try {
+      sock.destroy()
+    } catch {
+      /* peer already gone */
+    }
+    if (message) (code === 0 ? process.stdout : process.stderr).write(message)
+    process.exitCode = code
+  }
+  const transportFallback = () => {
+    if (settled) return
+    settled = true
+    clearTimeout(timer)
+    try {
+      sock.destroy()
+    } catch {
+      /* peer already gone */
+    }
+    fallback()
+  }
+  const timer = setTimeout(transportFallback, 1500)
+
+  sock.on('connect', () => {
+    sock.write(JSON.stringify({ t: 'hello', v: ep.version, token: ep.token }) + '\n')
+  })
+  sock.on('data', (chunk) => {
+    buf += chunk
+    let i
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i)
+      buf = buf.slice(i + 1)
+      if (!line) continue
+      let m
+      try {
+        m = JSON.parse(line)
+      } catch {
+        continue
+      }
+      if (m.t === 'welcome') {
+        sock.write(
+          JSON.stringify({
+            t: 'cwd-report',
+            id: String(paneId),
+            token: paneToken,
+            cwd,
+            observedAt
+          }) + '\n'
+        )
+      } else if (m.t === 'cwd-reported') {
+        finish(0, 'mogging: cwd declared\n')
+      } else if (m.t === 'error') {
+        const auth = m.reason === 'auth'
+        finish(auth ? 4 : 1, `mogging cwd: rejected (${m.reason || 'error'})\n`)
+      }
+    }
+  })
+  sock.on('error', () => {
+    // A connect/write failure is absence of the primary transport, not a declaration verdict.
+    transportFallback()
+  })
+  sock.on('close', () => {
+    // Closing after welcome but before an answer still supplied no authoritative verdict.
+    if (!settled) transportFallback()
   })
 }
 

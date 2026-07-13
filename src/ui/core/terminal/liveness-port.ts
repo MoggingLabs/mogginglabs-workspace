@@ -7,7 +7,7 @@
  */
 
 const live = new Set<number>()
-const waiters = new Map<number, Set<() => void>>()
+const waiters = new Map<number, Set<(ready: boolean) => void>>()
 const reattached = new Set<number>()
 const remoteReady = new Set<number>()
 const remoteWaiters = new Map<number, Set<(ready: boolean) => void>>()
@@ -30,13 +30,15 @@ export function wasPaneReattached(id: number): boolean {
 
 /** Pane closed for good — drop both marks so a recycled pane id starts clean. */
 export function forgetPane(id: number): void {
+  const waiting = waiters.get(id)
+  const waitingRemote = remoteWaiters.get(id)
+  if (waiting) for (const done of waiting) done(false)
+  if (waitingRemote) for (const done of waitingRemote) done(false)
   live.delete(id)
   reattached.delete(id)
   waiters.delete(id)
   remoteReady.delete(id)
-  const pending = remoteWaiters.get(id)
   remoteWaiters.delete(id)
-  for (const done of pending ?? []) done(false)
 }
 
 export function markPaneLive(id: number): void {
@@ -45,7 +47,7 @@ export function markPaneLive(id: number): void {
   const w = waiters.get(id)
   if (w) {
     waiters.delete(id)
-    for (const fn of w) fn()
+    for (const fn of w) fn(true)
   }
 }
 
@@ -53,32 +55,18 @@ export function isPaneLive(id: number): boolean {
   return live.has(id)
 }
 
-/** Resolve true once the pane is live, false after `timeoutMs` (callers proceed
- *  either way — the old fixed-delay behavior is the fallback, never worse). */
-export function whenPaneLive(id: number, timeoutMs: number): Promise<boolean> {
-  if (live.has(id)) return Promise.resolve(true)
-  return new Promise((resolve) => {
-    const set = waiters.get(id) ?? new Set()
-    waiters.set(id, set)
-    const timer = setTimeout(() => {
-      set.delete(done)
-      resolve(false)
-    }, timeoutMs)
-    const done = (): void => {
-      clearTimeout(timer)
-      resolve(true)
-    }
-    set.add(done)
-  })
-}
-
-/** SSH bootstrap reached the target command after host-key/password auth. */
+/**
+ * A remote shell reported cwd after SSH authentication and login initialization —
+ * the bootstrap reached the target command past any host-key/password prompt.
+ */
 export function markPaneRemoteReady(id: number): void {
   if (remoteReady.has(id)) return
   remoteReady.add(id)
-  const pending = remoteWaiters.get(id)
-  remoteWaiters.delete(id)
-  for (const done of pending ?? []) done(true)
+  const w = remoteWaiters.get(id)
+  if (w) {
+    remoteWaiters.delete(id)
+    for (const fn of w) fn(true)
+  }
 }
 
 export function isPaneRemoteReady(id: number): boolean {
@@ -86,11 +74,32 @@ export function isPaneRemoteReady(id: number): boolean {
 }
 
 /** Auth prompts and SSH banners do not satisfy this waiter. */
-export function whenPaneRemoteReady(id: number, timeoutMs: number): Promise<boolean> {
+export function whenPaneRemoteReady(id: number, timeoutMs?: number): Promise<boolean> {
   if (remoteReady.has(id)) return Promise.resolve(true)
   return new Promise((resolve) => {
     const set = remoteWaiters.get(id) ?? new Set<(ready: boolean) => void>()
     remoteWaiters.set(id, set)
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const done = (ready: boolean): void => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      set.delete(done)
+      resolve(ready)
+    }
+    if (timeoutMs !== undefined) timer = setTimeout(() => done(false), timeoutMs)
+    set.add(done)
+  })
+}
+
+/** Resolve true once the pane is live, false after `timeoutMs` (callers proceed
+ *  either way — the old fixed-delay behavior is the fallback, never worse). */
+export function whenPaneLive(id: number, timeoutMs: number): Promise<boolean> {
+  if (live.has(id)) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const set = waiters.get(id) ?? new Set<(ready: boolean) => void>()
+    waiters.set(id, set)
     let settled = false
     const done = (ready: boolean): void => {
       if (settled) return

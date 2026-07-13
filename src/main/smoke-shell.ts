@@ -5,6 +5,10 @@
  * changes per platform, only the probe command that exercises it.
  */
 
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 const WIN = process.platform === 'win32'
 
 /** Change directory (cmd needs /d to cross drives). */
@@ -63,6 +67,40 @@ function clearEnvRun(cwd: string, vars: string[], command: string): string {
 }
 
 export const sh = { cd, chain, echoVar, appendLine, writeLine, mkdirWrite, clearEnvRun, unsetVar }
+
+/**
+ * Read the real, daemon-minted capability from a smoke pane without adding a production
+ * credential API. The supplied writer executes in that pane's shell; the file exists only long
+ * enough for the smoke's out-of-pane CLI process to present the same capability a human command
+ * launched inside the pane would inherit naturally.
+ */
+export async function capturePaneTokenForSmoke(opts: {
+  write: (command: string) => Promise<unknown>
+  sleep: (ms: number) => Promise<void>
+}): Promise<string> {
+  const dir = mkdtempSync(join(tmpdir(), 'mogging-pane-auth-'))
+  const file = join(dir, 'token')
+  const command = WIN
+    ? `> "${file}" echo %MOGGING_PANE_TOKEN%`
+    : `printf '%s' "$MOGGING_PANE_TOKEN" > "${file}"`
+  try {
+    await opts.write(command)
+    for (let i = 0; i < 40; i++) {
+      if (existsSync(file)) {
+        const token = readFileSync(file, 'utf8').trim()
+        if (/^[0-9a-f]{32}$/.test(token)) return token
+      }
+      await opts.sleep(100)
+    }
+    throw new Error('pane did not expose its approval capability to the smoke probe')
+  } finally {
+    try {
+      rmSync(dir, { recursive: true, force: true })
+    } catch {
+      /* best effort: the capability file is already isolated under the process temp root */
+    }
+  }
+}
 
 /**
  * Put a pane back at a SHELL PROMPT, and PROVE it, before a smoke types a shell command

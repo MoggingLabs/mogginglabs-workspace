@@ -1,4 +1,5 @@
 import type { AgentState } from '../domain/agent'
+import type { PaneCwdLocality, PaneCwdSource } from '../domain/cwd'
 import type { PaneId } from '../domain/pane'
 
 // Commands: UI -> backend
@@ -14,7 +15,7 @@ export interface SpawnRequest {
   agentId?: string
   /** Remote pane (4/05): host id — MAIN resolves the row; values stay main-side. */
   remoteHostId?: string
-  /** Working directory on the remote host; never probed as a local path. */
+  /** Initial folder on the remote host; never probed or interpreted as a local path. */
   remoteCwd?: string
 }
 
@@ -94,6 +95,12 @@ export interface StateEvent {
 export interface CwdEvent {
   id: PaneId
   cwd: string
+  /** The PTY session generation. Revisions are comparable only inside this generation. */
+  generation: string
+  /** Monotonic within this pane generation. A late event may not roll back a newer report. */
+  revision: number
+  source: PaneCwdSource
+  locality: PaneCwdLocality
 }
 
 /** TYPED-LAUNCH DETECTION: an agent CLI process appeared in — or vanished from — this pane's
@@ -106,15 +113,11 @@ export interface CwdEvent {
  *  `agentId` is an adapter id ('claude', 'codex', …), or null when the pane's agent exited.
  *
  *  `cwd` is where the agent RUNS — it names the session log, so it is the agent's directory,
- *  not the pane's seed. POSIX reads it from the process itself (exact). Windows cannot read a
- *  process's cwd without native code, so it uses the pane's last reported cwd — which is why
- *  panes carry shell integration (backend/platform/shell.ts): cmd.exe now announces its
- *  directory on every prompt, so a `cd` inside the pane is reflected. The one case that stays
- *  out of reach there is a compound line — `cd sub && claude` — where the shell never prints a
- *  prompt between the two, so the agent's directory is one level below the last one reported.
- *  Its session log is then not found and the gauge stays on its honest "–" (everything else —
- *  the provider mark, the chip, resume — is unaffected). Guessing at descendants instead would
- *  risk locking on to a session belonging to another window, which is worse than no number.
+ *  not the pane's seed. POSIX reads it from the process itself. Windows snapshots the selected
+ *  same-user descendant's process parameters with a read-only native helper and otherwise
+ *  retains the pane's lower-priority shell cwd. Foreground ownership is established from the
+ *  pane's process subtree plus terminal command/prompt boundaries; arbitrary executables do
+ *  not gain a provider identity or resume capability merely because their cwd is observed.
  *
  *  `sinceMs` is when the agent was first seen (minus the detection lag): the floor a context
  *  watch may look back to for a session that predates it — which is every session after an app

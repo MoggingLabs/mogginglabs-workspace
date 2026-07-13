@@ -411,7 +411,7 @@ export function runGallery(win: BrowserWindow): void {
 
       // ── Stage the full world once ─────────────────────────────────────────────
       await part('staging', async () => {
-        await ES(`window.bridge.invoke('remotes:save', ${JSON.stringify({ id: 'h1', name: 'buildbox', host: 'build.example', user: 'dev' })})`)
+        await ES(`window.bridge.invoke('remotes:save', ${JSON.stringify({ id: 'h1', name: 'buildbox', host: 'build.example', platform: 'posix', user: 'dev' })})`)
         await ES(
           `window.__mogging.workspace.create({ name: 'Alpha', cwd: ${JSON.stringify(repo)}, paneCount: 4, ` +
             `roles: ['worker','worker','reviewer',null], remotes: [null, null, null, { hostId: 'h1', name: 'buildbox' }] })`
@@ -419,6 +419,10 @@ export function runGallery(win: BrowserWindow): void {
         await sleep(4500) // spawns + git chips + roles reach the daemon
         const base = ((await ES('window.__mogging.workspace.active()')) as { ordinal: number }).ordinal * 100
         await cli(['claim', 'src/ui/**'], { MOGGING_PANE_ID: String(base + 1) })
+        // Pane 3 is the reviewer, and the sign-off is EXECUTED INSIDE it: `mogging approve` fails
+        // closed without that pane's daemon-minted MOGGING_PANE_TOKEN, which exists nowhere but
+        // its own env, and it signs the exact object graph (--repo/--base). Wait for the daemon
+        // to list it, so the shot below is taken with the ✓-chip actually painted.
         if (wt1.branch) {
           await sendApprovalFromPane(cli, cliPath, base + 3, wt1.branch, { repo, base: 'main' })
           await approvalListed(cli, wt1.branch)

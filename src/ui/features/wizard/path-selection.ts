@@ -1,4 +1,4 @@
-import type { DirListing, DirRefusal, DirResult, GitStatus } from '@contracts'
+import { PANE_CWD_MAX, type DirListing, type DirRefusal, type DirResult, type GitStatus } from '@contracts'
 
 /**
  * THE working-folder selection (Phase-8.5/03). One value, one resolver, one place
@@ -195,7 +195,12 @@ export function createPathSelection(deps: PathSelectionDeps): PathSelectionHandl
     // still 350ms out. Wait for it rather than launching into an unchecked path.
     settle: () =>
       st.probing ? new Promise<void>((done) => settlers.push(done)) : Promise.resolve(),
-    // A remote cwd is the user's word; a local one must be a folder we were not refused.
-    isUsable: () => (st.remote ? true : !!st.cwd.trim() && !st.refusal)
+    // Empty remote cwd intentionally means HOME. A named remote cwd must be an absolute
+    // POSIX path; the trusted main boundary repeats this check before constructing SSH argv.
+    isUsable: () =>
+      st.remote
+        ? !st.cwd.trim() ||
+          (st.cwd.startsWith('/') && st.cwd.length <= PANE_CWD_MAX && !/[\x00-\x1f\x7f]/.test(st.cwd))
+        : !!st.cwd.trim() && !st.refusal
   }
 }

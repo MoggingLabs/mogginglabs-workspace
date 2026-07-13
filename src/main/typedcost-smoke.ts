@@ -32,8 +32,16 @@ interface Timer {
 class World {
   now = 1_000_000
   listings = 0
-  readonly procs = new Map<number, { ppid: number; base: string; cmd: string }>()
+  readonly procs = new Map<number, {
+    ppid: number
+    base: string
+    cmd: string
+    cwd?: string
+    pgid?: number
+    tpgid?: number
+  }>()
   readonly emissions: Array<{ paneId: string; agent: string | null }> = []
+  readonly contexts: Array<{ paneId: string; pid: number | null; cwd?: string }> = []
   private timers: Timer[] = []
   private nextId = 1
 
@@ -43,9 +51,16 @@ class World {
     {
       snapshot: async (): Promise<ProcRow[]> => {
         this.listings++
-        return [...this.procs.entries()].map(([pid, p]) => ({ pid, ppid: p.ppid, base: p.base, cmd: p.cmd }))
+        return [...this.procs.entries()].map(([pid, p]) => ({
+          pid,
+          ppid: p.ppid,
+          base: p.base,
+          cmd: p.cmd,
+          pgid: p.pgid,
+          tpgid: p.tpgid
+        }))
       },
-      procCwd: async () => null,
+      procCwd: async (pid) => this.procs.get(pid)?.cwd ?? null,
       alive: (pid) => this.procs.has(pid),
       setTimer: (fn, ms) => {
         const t: Timer = { fn, at: this.now + Math.max(0, ms), id: this.nextId++ }
@@ -55,7 +70,12 @@ class World {
       clearTimer: (h) => {
         this.timers = this.timers.filter((t) => t.id !== h)
       }
-    }
+    },
+    (paneId, context) => this.contexts.push({
+      paneId,
+      pid: context?.pid ?? null,
+      cwd: context?.cwd
+    })
   )
 
   /** Advance the clock, firing every timer that comes due and letting each async listing
@@ -86,6 +106,8 @@ interface Case {
   mustDetect?: boolean
   /** …and must retire it when it goes. */
   mustRetire?: boolean
+  /** A provider-neutral foreground context must be found without inventing an agent id. */
+  context?: { pid: number; cwd?: string; retire?: boolean; unidentified?: boolean }
   run: (w: World) => Promise<void>
 }
 
@@ -128,6 +150,7 @@ const CASES: Case[] = [
     // what). Probing on output would have cost ~200.
     name: 'npm run dev, 10 min of bursty output',
     maxListings: 1,
+    context: { pid: 200, unidentified: true },
     run: async (w) => {
       w.procs.set(SHELL, { ppid: 1, base: 'cmd', cmd: 'cmd.exe' })
       w.detector.track('p1', SHELL)
@@ -136,6 +159,196 @@ const CASES: Case[] = [
       w.detector.commandSubmitted('p1')
       w.procs.set(200, { ppid: SHELL, base: 'node', cmd: 'node C:\\repo\\server.js' }) // not an agent
       await w.advance(10 * 60_000)
+    }
+  },
+  {
+    // The feature this gate now protects: an executable absent from every adapter still owns a
+    // trustworthy process cwd. Enter presses after detection are its input, not new shell jobs.
+    name: 'arbitrary CLI changes cwd and then exits to prompt',
+    maxListings: 1,
+    context: { pid: 250, cwd: 'C:\\repo\\alternate-worktree', retire: true, unidentified: true },
+    run: async (w) => {
+      w.procs.set(SHELL, { ppid: 1, base: 'cmd', cmd: 'cmd.exe' })
+      w.detector.track('p1', SHELL)
+      w.detector.promptSeen('p1')
+      w.detector.commandSubmitted('p1')
+      w.procs.set(250, {
+        ppid: SHELL,
+        base: 'future-agent',
+        cmd: 'future-agent --workspace alternate-worktree',
+        cwd: 'C:\\repo\\alternate-worktree'
+      })
+      await w.advance(5_000)
+      for (let i = 0; i < 20; i++) {
+        w.detector.commandSubmitted('p1')
+        await w.advance(1_000)
+      }
+      // A prompt retires foreground ownership even if the process deliberately backgrounded
+      // itself and remains alive.
+      w.detector.promptSeen('p1')
+      await w.advance(10_000)
+    }
+  },
+  {
+    // POSIX can prove the actual foreground process group. A lower-pid background watcher in
+    // the same pane must not steal context from the foreground arbitrary CLI.
+    name: 'foreground process group beats background descendant',
+    maxListings: 1,
+    context: { pid: 270, cwd: '/repo/foreground', unidentified: true },
+    run: async (w) => {
+      w.procs.set(SHELL, { ppid: 1, base: 'bash', cmd: 'bash' })
+      w.detector.track('p1', SHELL)
+      w.detector.promptSeen('p1')
+      w.detector.commandSubmitted('p1')
+      w.procs.set(260, {
+        ppid: SHELL,
+        base: 'watcher',
+        cmd: 'watcher',
+        cwd: '/repo/background',
+        pgid: 260,
+        tpgid: 270
+      })
+      w.procs.set(270, {
+        ppid: SHELL,
+        base: 'future-agent',
+        cmd: 'future-agent',
+        cwd: '/repo/foreground',
+        pgid: 270,
+        tpgid: 270
+      })
+      await w.advance(5_000)
+    }
+  },
+  {
+    // POSIX `exec future-agent` replaces the shell process instead of creating a descendant.
+    // The tracked root must become eligible once it is no longer an interactive shell.
+    name: 'arbitrary CLI replaces the shell with exec',
+    maxListings: 1,
+    context: { pid: SHELL, cwd: '/repo/exec-target', unidentified: true },
+    run: async (w) => {
+      w.procs.set(SHELL, { ppid: 1, base: 'bash', cmd: 'bash', pgid: SHELL, tpgid: SHELL })
+      w.detector.track('p1', SHELL)
+      w.detector.promptSeen('p1')
+      w.detector.commandSubmitted('p1')
+      w.procs.set(SHELL, {
+        ppid: 1,
+        base: 'future-agent',
+        cmd: 'future-agent',
+        cwd: '/repo/exec-target',
+        pgid: SHELL,
+        tpgid: SHELL
+      })
+      await w.advance(5_000)
+    }
+  },
+  {
+    // A launcher can exit after handing control to the actual CLI without returning a shell
+    // prompt. The foreground lane must re-anchor to the surviving process, not disappear.
+    name: 'arbitrary launcher hands off to surviving CLI',
+    maxListings: 2,
+    context: { pid: 281, cwd: '/repo/handed-off', unidentified: true },
+    run: async (w) => {
+      w.procs.set(SHELL, { ppid: 1, base: 'bash', cmd: 'bash' })
+      w.detector.track('p1', SHELL)
+      w.detector.promptSeen('p1')
+      w.detector.commandSubmitted('p1')
+      w.procs.set(280, {
+        ppid: SHELL,
+        base: 'launcher',
+        cmd: 'launcher',
+        cwd: '/repo/launcher',
+        pgid: 280,
+        tpgid: 280
+      })
+      w.procs.set(281, {
+        ppid: 280,
+        base: 'future-agent',
+        cmd: 'future-agent',
+        cwd: '/repo/handed-off',
+        pgid: 280,
+        tpgid: 280
+      })
+      await w.advance(5_000)
+      w.procs.delete(280)
+      w.procs.set(281, {
+        ppid: SHELL,
+        base: 'future-agent',
+        cmd: 'future-agent',
+        cwd: '/repo/handed-off',
+        pgid: 281,
+        tpgid: 281
+      })
+      await w.advance(10_000)
+    }
+  },
+  {
+    // A shell function/cmdlet can do work inside the shell before it finally spawns the CLI.
+    // One bounded retry covers that delayed child without creating a polling loop.
+    name: 'shell builtin delays arbitrary CLI spawn',
+    maxListings: 2,
+    context: { pid: 285, cwd: '/repo/delayed-spawn', unidentified: true },
+    run: async (w) => {
+      w.procs.set(SHELL, { ppid: 1, base: 'powershell', cmd: 'powershell.exe' })
+      w.detector.track('p1', SHELL)
+      w.detector.promptSeen('p1')
+      w.detector.commandSubmitted('p1')
+      await w.advance(2_500) // first probe sees only the shell
+      w.procs.set(285, {
+        ppid: SHELL,
+        base: 'future-agent',
+        cmd: 'future-agent',
+        cwd: '/repo/delayed-spawn'
+      })
+      await w.advance(5_000)
+    }
+  },
+  {
+    // One pane's due snapshot is shared with every pane, but it must not consume another
+    // pane's not-yet-due deadline before that pane's delayed child has had time to spawn.
+    name: 'shared snapshot preserves a later pane deadline',
+    maxListings: 2,
+    context: { pid: 291, cwd: '/repo/delayed', unidentified: true },
+    run: async (w) => {
+      w.procs.set(SHELL + 1, { ppid: 1, base: 'bash', cmd: 'bash' })
+      w.procs.set(SHELL + 2, { ppid: 1, base: 'bash', cmd: 'bash' })
+      w.detector.track('p1', SHELL + 1)
+      w.detector.track('p2', SHELL + 2)
+      w.detector.promptSeen('p1')
+      w.detector.promptSeen('p2')
+      w.detector.commandSubmitted('p1')
+      await w.advance(1_500)
+      w.detector.commandSubmitted('p2')
+      await w.advance(1_000) // p1's shared snapshot is early for p2
+      w.procs.set(291, {
+        ppid: SHELL + 2,
+        base: 'future-agent',
+        cmd: 'future-agent',
+        cwd: '/repo/delayed'
+      })
+      await w.advance(5_000)
+    }
+  },
+  {
+    // A known agent can remain backgrounded after the shell prompts. It still owns its strict
+    // identity, but its branch must not block or steal a later arbitrary foreground context.
+    name: 'background known agent does not mask arbitrary foreground CLI',
+    maxListings: 3,
+    context: { pid: 310, cwd: 'C:\\repo\\new-foreground' },
+    run: async (w) => {
+      w.procs.set(SHELL, { ppid: 1, base: 'cmd', cmd: 'cmd.exe' })
+      w.procs.set(300, { ppid: SHELL, base: 'claude', cmd: 'claude', cwd: 'C:\\repo\\known' })
+      w.detector.track('p1', SHELL, true)
+      await w.advance(5_000)
+      w.detector.promptSeen('p1')
+      w.detector.commandSubmitted('p1')
+      await w.advance(2_500) // the recycled-agent confirmation snapshot is early for this child
+      w.procs.set(310, {
+        ppid: SHELL,
+        base: 'future-agent',
+        cmd: 'future-agent',
+        cwd: 'C:\\repo\\new-foreground'
+      })
+      await w.advance(5_000)
     }
   },
   {
@@ -190,7 +403,8 @@ const CASES: Case[] = [
       await w.advance(200)
       w.detector.commandSubmitted('p1') // …and `claude` typed behind it
       await w.advance(30_000)
-      w.detector.promptSeen('p1') // the install finishes and prompts
+      w.detector.promptSeen('p1', 'osc133') // the install finishes and prompts
+      w.detector.promptSeen('p1', 'mogging') // same prompt, second integration protocol
       w.procs.set(300, { ppid: SHELL, base: 'node', cmd: CLAUDE_CMD })
       await w.advance(60_000)
     }
@@ -242,8 +456,14 @@ export async function runTypedCostSmoke(): Promise<void> {
       w.detector.dispose()
       const detected = w.emissions.some((e) => e.agent)
       const retired = w.emissions.some((e) => e.agent === null)
+      const contextDetected = c.context
+        ? w.contexts.some((e) => e.pid === c.context!.pid && (c.context!.cwd === undefined || e.cwd === c.context!.cwd))
+        : true
+      const contextRetired = !c.context?.retire || w.contexts.some((e) => e.pid === null)
+      const stayedUnidentified = !c.context?.unidentified || !detected
       const withinBudget = w.listings <= c.maxListings
-      const ok = withinBudget && (!c.mustDetect || detected) && (!c.mustRetire || retired)
+      const ok = withinBudget && (!c.mustDetect || detected) && (!c.mustRetire || retired) &&
+        contextDetected && contextRetired && stayedUnidentified
       if (!ok) pass = false
       results.push({
         name: c.name,
@@ -252,6 +472,9 @@ export async function runTypedCostSmoke(): Promise<void> {
         withinBudget,
         detected,
         retired,
+        contextDetected,
+        contextRetired,
+        stayedUnidentified,
         mustDetect: !!c.mustDetect,
         mustRetire: !!c.mustRetire,
         ok

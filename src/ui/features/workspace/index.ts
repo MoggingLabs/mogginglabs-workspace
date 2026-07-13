@@ -32,6 +32,7 @@ import { activeView, setActiveView } from '../../core/shell/view-port'
 import { setCommands } from '../../core/commands/command-port'
 import { setPaneState } from '../../core/attention/attention-port'
 import { setPaneRole } from '../../core/layout/pane-meta'
+import { getPaneCwdProjection, onPaneCwdProjection } from '../../core/layout/pane-cwd'
 
 const MAX_RECENTS = 5 // Home shows the five most recent projects worked on
 
@@ -429,6 +430,13 @@ export const workspaceFeature: UiFeature = {
     onProfileFailover((ev) => {
       if (controller.noteProfileFailover(ev.paneId, ev.profileId)) persist()
     })
+    // Every authoritative cwd projection keeps focused-pane commands current. Only an
+    // explicit agent declaration is durable worktree intent; shell/process movement is
+    // live navigation and must not rewrite the restore manifest.
+    onPaneCwdProjection((paneId, projection) => {
+      if (!projection) return
+      if (controller.notePaneCwd(paneId, projection.cwd, projection.source === 'agent')) persist()
+    })
     // EVERY agent launch the app performs (palette, pane ⋯ menu, board card, wizard
     // lineup) becomes that slot's assignment, so restores — app relaunch, daemon cold
     // start, the cross-protocol update migration — bring the agent back with resume,
@@ -444,7 +452,9 @@ export const workspaceFeature: UiFeature = {
     // reaches here: a launch already recorded itself above, through the port.
     onPaneAgentSession((paneId, session) => {
       if (!session?.detected) return
-      if (controller.noteAgentLaunch(paneId, session.provider, session.profileId, session.cwd)) persist()
+      const projection = getPaneCwdProjection(paneId)
+      const relaunchCwd = projection?.source === 'agent' ? projection.cwd : session.cwd
+      if (controller.noteAgentLaunch(paneId, session.provider, session.profileId, relaunchCwd)) persist()
     })
     // 06b: the wizard/templates open workspaces from a provider-mix spec.
     setWorkspaceOpener((spec) => {

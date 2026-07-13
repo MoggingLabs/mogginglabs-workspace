@@ -8,7 +8,19 @@ import {
   type RemoteHost,
   type RemoteRemoveResult
 } from '@contracts'
-import { Button, Card, confirmDialog, EmptyState, FieldGroup, Pill, SectionHeader, el, loadingRow, providerLogo, showToast } from '../../components'
+import {
+  Button,
+  Card,
+  confirmDialog,
+  EmptyState,
+  FieldGroup,
+  Pill,
+  SectionHeader,
+  el,
+  loadingRow,
+  providerLogo,
+  showToast
+} from '../../components'
 import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
 import { announceProfilesChanged } from '../../core/agents/profiles-port'
@@ -299,6 +311,7 @@ export function createProfilesHostsSection(): HTMLElement {
         el('div', { class: 'ph-row' }, [
           el('div', { class: 'ph-row-main' }, [
             el('span', { class: 'ph-row-name', text: h.name }),
+            h.platform ? null : Pill({ text: 'Platform confirmation required', tone: 'warning' }),
             el('span', {
               class: 'ph-row-meta',
               text:
@@ -353,9 +366,17 @@ export function createProfilesHostsSection(): HTMLElement {
     const user = mk('host-user', 'User (optional)', existing?.user ?? '')
     const port = mk('host-port', 'Port (optional)', existing?.port ? String(existing.port) : '')
     const hint = mk('host-hint', 'Identity hint (optional note — never a key)', existing?.identityHint ?? '')
+    // The platform is CONFIRMED, never guessed: a legacy row (no platform) opens with no
+    // selection and cannot be saved until the user says what is on the other end. The
+    // shell list follows the platform, so the command dialect is always a stated fact.
     const platform = el('select', { class: 'input host-platform' }) as HTMLSelectElement
-    platform.append(new Option('POSIX (Linux/macOS/BSD)', 'posix'), new Option('Windows', 'windows'))
-    platform.value = existing?.platform ?? 'posix'
+    platform.append(
+      new Option('Select the remote platform…', ''),
+      new Option('POSIX (Linux/macOS/BSD)', 'posix'),
+      new Option('Windows', 'windows')
+    )
+    platform.value = existing?.platform ?? ''
+    platform.setAttribute('aria-label', 'Confirm which shell platform this SSH host runs')
     const remoteShell = el('select', { class: 'input host-shell' }) as HTMLSelectElement
     const syncShells = (): void => {
       const before = remoteShell.value
@@ -365,13 +386,17 @@ export function createProfilesHostsSection(): HTMLElement {
       remoteShell.value = names.includes(before) ? before : names[0]
     }
     syncShells()
-    remoteShell.value = existing?.shell ?? (platform.value === 'windows' ? 'powershell' : 'sh')
+    if (existing?.shell) remoteShell.value = existing.shell
     platform.onchange = syncShells
     const save = Button({
       label: existing ? 'Save host' : 'Add host',
       variant: 'primary',
       ariaLabel: 'Save host',
       onClick: () => {
+        if (!platform.value) {
+          showError(err, 'Confirm the remote shell platform before saving this host.')
+          return
+        }
         const remote: RemoteHost = {
           id: existing?.id ?? newId('host'),
           name: name.value.trim(),
@@ -384,7 +409,7 @@ export function createProfilesHostsSection(): HTMLElement {
         }
         void (invoke(RemoteChannels.save, remote) as Promise<boolean>).then((ok) => {
           if (!ok) {
-            showError(err, 'Refused: hostname/user/port shape invalid (no spaces or shell characters; port 1–65535).')
+            showError(err, 'Refused: hostname/user/port shape invalid (no leading dash, spaces, or shell characters; port 1–65535).')
             return
           }
           hostFormHost.replaceChildren()
@@ -400,7 +425,7 @@ export function createProfilesHostsSection(): HTMLElement {
           FieldGroup({ label: 'Hostname or ssh alias' }, host),
           FieldGroup({ label: 'User', hint: 'optional' }, user),
           FieldGroup({ label: 'Port', hint: 'optional' }, port),
-          FieldGroup({ label: 'Remote operating system' }, platform),
+          FieldGroup({ label: 'Remote operating system', hint: 'required for terminal integration' }, platform),
           FieldGroup({ label: 'Remote shell' }, remoteShell),
           FieldGroup({ label: 'Identity hint', hint: 'optional note — never a key' }, hint)
         ]),

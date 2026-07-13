@@ -175,6 +175,10 @@ export function runProductSmoke(win: BrowserWindow): void {
 
       // ── A7. The review GATE: ungated -> reviewer approves -> lands; the human
       // override lands the second branch. Both changes in the repo, HEAD clean. ─
+      // review:merge is keyed on the WORKTREE now (main re-reads the managed worktree itself
+      // and ignores renderer branch claims), and `mogging approve` fails closed without the
+      // pane's daemon-minted MOGGING_PANE_TOKEN — so the sign-off runs INSIDE the reviewer pane,
+      // signing the exact object graph, and the verdict we read is the daemon's approvals list.
       const mergeVia = (worktree: string, override?: string): Promise<{ ok: boolean; state: string }> =>
         ES(`window.bridge.invoke('review:merge', ${JSON.stringify({ repo, worktree, override })})`) as Promise<{ ok: boolean; state: string }>
       const ungated = await mergeVia(wt1.path)

@@ -130,6 +130,11 @@ export function runSwarmMilestoneSmoke(win: BrowserWindow): void {
         ES(
           `window.bridge.invoke('review:merge', ${JSON.stringify({ repo, worktree, override })})`
         ) as Promise<{ ok: boolean; state: string }>
+      // review:merge is keyed on the WORKTREE (main re-reads the managed worktree and ignores
+      // renderer branch claims), and `mogging approve` fails closed without the pane's
+      // daemon-minted MOGGING_PANE_TOKEN — a secret that exists nowhere but that pane's env. So
+      // the sign-off is EXECUTED INSIDE the reviewer pane, signing the exact object graph, and
+      // the verdict we read is the daemon's approvals list rather than a child's exit code.
       const ungated = await mergeVia(wt1.path)
       const approvalSent = await sendApprovalFromPane(cli, cliPath, base + 3, wt1.branch, { repo, base: 'main' })
       const approvalSeen = approvalSent && (await approvalListed(cli, wt1.branch))

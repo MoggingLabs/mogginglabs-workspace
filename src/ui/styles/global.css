@@ -2179,9 +2179,8 @@ button {
      need 173px and never more, so half the pane's slack was reserved for empty space: the
      chips needed a ~1085px pane to all fit. Now the left cluster takes its content width
      first, the branch chip centres in whatever is left, and the actions shrink to fit —
-     everything fits at ~780px. The chip is centred in the REMAINING span rather than in
-     the pane; it is also the first thing dropped when space runs short, so the difference
-     only shows on a wide pane where there is room to spare either way. */
+     everything fits at ~780px. The Git summary is centred in the REMAINING span rather
+     than the pane and sheds detail progressively while keeping branch identity visible. */
   grid-template-columns: minmax(0, max-content) minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--sp-3);
@@ -2217,9 +2216,9 @@ button {
    the portaled menu, in a fixed order, least-identifying first:
 
      1. the "% used" text of the context gauge (the disc keeps the color+arc signal)
-     2. the branch / worktree chip      3. the expand trio
-     4. the MCP chip   5. claims   6. role   7. remote
-     8. the title      9. the gauge disc itself
+     2. Git worktree/staged/base detail (branch stays)      3. the expand trio
+     4. the MCP chip   5. claims   6. role   7. remote (+ the provider logo)
+     8. the title      9. branch identity      10. the gauge disc itself
 
    The context gauge's ARC never lies but its FORM yields: the disc (color ramp +
    sweep) survives to ~150px panes; the "% used" text is the first thing retired,
@@ -2260,25 +2259,69 @@ button {
     display: none;
   }
 }
-/* 2. THE BRANCH / WORKTREE CHIP — next, but only once something is actually
+/* 2. GIT DETAIL — next, but only once something is actually
    competing for the row. A fixed 760px threshold was derived from the worst case (all
    four chips lit) and was wrong for the common one: a 2×2 grid on a 1600px monitor gives
    each pane 655px, so the branch vanished on every grid but 1×1 while the row sat half
    empty. `:has()` asks the real question — is any chip lit? — instead of guessing from
    width. `.pane-role`/`.pane-claims`/`.pane-mcp` always exist and toggle the `hidden`
    attribute; `.pane-remote` only exists on a remote pane, so an absent one never matches. */
+@container pane-bar (max-width: 900px) {
+  .pane-header:has(.pane-remote:not([hidden])) .pane-worktree,
+  .pane-header:has(.pane-role:not([hidden])) .pane-worktree,
+  .pane-header:has(.pane-claims:not([hidden])) .pane-worktree,
+  .pane-header:has(.pane-mcp:not([hidden])) .pane-worktree {
+    display: none;
+  }
+}
+@container pane-bar (max-width: 820px) {
+  .pane-header:has(.pane-remote:not([hidden])) .pane-git-staged,
+  .pane-header:has(.pane-role:not([hidden])) .pane-git-staged,
+  .pane-header:has(.pane-claims:not([hidden])) .pane-git-staged,
+  .pane-header:has(.pane-mcp:not([hidden])) .pane-git-staged {
+    display: none;
+  }
+}
 @container pane-bar (max-width: 760px) {
-  .pane-header:has(.pane-remote:not([hidden])) .pane-git.has-git,
-  .pane-header:has(.pane-role:not([hidden])) .pane-git.has-git,
-  .pane-header:has(.pane-claims:not([hidden])) .pane-git.has-git,
-  .pane-header:has(.pane-mcp:not([hidden])) .pane-git.has-git {
+  .pane-header:has(.pane-remote:not([hidden])) .pane-git-comparison,
+  .pane-header:has(.pane-role:not([hidden])) .pane-git-comparison,
+  .pane-header:has(.pane-claims:not([hidden])) .pane-git-comparison,
+  .pane-header:has(.pane-mcp:not([hidden])) .pane-git-comparison {
+    display: none;
+  }
+}
+@container pane-bar (max-width: 700px) {
+  .pane-header:has(.pane-remote:not([hidden])) .pane-git-state,
+  .pane-header:has(.pane-role:not([hidden])) .pane-git-state,
+  .pane-header:has(.pane-claims:not([hidden])) .pane-git-state,
+  .pane-header:has(.pane-mcp:not([hidden])) .pane-git-state {
     display: none;
   }
 }
 /* An uncrowded bar keeps its branch until the pane is genuinely tiny. Until then the chip
    ellipsises rather than disappearing (max-width:100% on .pane-git + .pane-branch's
    text-overflow). */
-@container pane-bar (max-width: 320px) {
+@container pane-bar (max-width: 620px) {
+  .pane-header .pane-worktree {
+    display: none;
+  }
+}
+@container pane-bar (max-width: 520px) {
+  .pane-header .pane-git-staged {
+    display: none;
+  }
+}
+@container pane-bar (max-width: 430px) {
+  .pane-header .pane-git-comparison {
+    display: none;
+  }
+}
+@container pane-bar (max-width: 330px) {
+  .pane-header .pane-git-state {
+    display: none;
+  }
+}
+@container pane-bar (max-width: 225px) {
   .pane-header .pane-git.has-git {
     display: none;
   }
@@ -2955,7 +2998,7 @@ body.pane-dragging * {
      its left and the gauge on its right (measured on a 780px pane with every chip lit:
      the branch text and "62% used" rendered on top of each other). Capped, the chip
      shrinks with its track and .pane-branch ellipsises. */
-  max-width: min(361px, 100%);
+  max-width: min(680px, 100%);
   min-width: 0;
 }
 .pane-git svg {
@@ -2968,9 +3011,43 @@ body.pane-dragging * {
   display: inline-flex;
 }
 .pane-branch {
+  flex: 1 1 12ch;
+  min-width: 4ch;
+  max-width: 28ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.pane-worktree,
+.pane-git-state,
+.pane-git-staged,
+.pane-git-comparison {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: none;
+  white-space: nowrap;
+  padding-left: var(--sp-2);
+  border-left: 1px solid var(--border);
+  font-size: 0.78em;
+  color: var(--text-lo);
+}
+.pane-worktree[hidden],
+.pane-git-staged[hidden],
+.pane-git-comparison[hidden] {
+  display: none;
+}
+.pane-worktree {
+  min-width: 0;
+  max-width: 15ch;
+}
+.pane-worktree > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pane-git .pane-worktree svg {
+  width: 12px;
+  height: 12px;
 }
 .pane-dirty {
   display: none;
@@ -2982,6 +3059,20 @@ body.pane-dragging * {
 }
 .pane-git.dirty .pane-dirty {
   display: inline-block;
+}
+.pane-git.dirty .pane-git-state,
+.pane-git.dirty .pane-git-staged {
+  color: var(--warning);
+}
+.pane-git.conflicted .pane-dirty {
+  display: inline-block;
+  background: var(--danger);
+}
+.pane-git.conflicted .pane-git-state {
+  color: var(--danger);
+}
+.pane-git.unavailable .pane-git-state {
+  color: var(--text-lo);
 }
 .pane-git.dirty {
   color: var(--text-hi); /* + the amber dot — dirty never relies on color alone */
@@ -5824,9 +5915,14 @@ body.pane-dragging * {
   border-radius: var(--r-md);
   background: var(--bg-elevated);
   transition: border-color var(--dur-1) var(--ease);
+  cursor: pointer;
 }
 .prov-row:hover {
   border-color: var(--border-strong);
+}
+.prov-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .prov-avatar {
   display: inline-flex;
@@ -5911,6 +6007,415 @@ body.pane-dragging * {
   border-radius: var(--r-sm);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* Agent CLI configuration: one catalog, rendered one category at a time. */
+.agentcfg-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+.agentcfg-workspace[hidden] {
+  display: none;
+}
+.agentcfg-loading,
+.agentcfg-empty {
+  min-height: 240px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  color: var(--text-mid);
+}
+.agentcfg-empty {
+  flex-direction: column;
+  padding: var(--sp-6);
+  border: 1px dashed var(--border);
+  border-radius: var(--r-lg);
+  text-align: center;
+}
+.agentcfg-empty span {
+  color: var(--text-lo);
+  max-width: var(--measure);
+}
+.agentcfg-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--accent) 10%, transparent), transparent 42%),
+    var(--bg-surface);
+}
+.agentcfg-head-top,
+.agentcfg-head-actions,
+.agentcfg-setting-head,
+.agentcfg-setting-badges,
+.agentcfg-setting-actions,
+.agentcfg-release {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.agentcfg-head-top {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.agentcfg-head-actions,
+.agentcfg-setting-badges {
+  flex-wrap: wrap;
+}
+.agentcfg-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.agentcfg-logo {
+  width: 48px;
+  height: 48px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: var(--r-md);
+  background: var(--accent-weak);
+}
+.agentcfg-identity h3,
+.agentcfg-results-head h3,
+.agentcfg-setting h4 {
+  margin: 0;
+  color: var(--text-hi);
+}
+.agentcfg-identity h3 {
+  font-size: var(--fs-20);
+  letter-spacing: var(--track-tight);
+}
+.agentcfg-identity p {
+  margin: var(--sp-1) 0 0;
+  max-width: var(--measure);
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  line-height: 1.5;
+}
+.agentcfg-toolbar {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(240px, 1fr);
+  gap: var(--sp-3);
+  align-items: end;
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+}
+.agentcfg-scope-field,
+.agentcfg-search {
+  display: flex;
+  min-width: 0;
+}
+.agentcfg-scope-field {
+  flex-direction: column;
+  gap: var(--sp-1);
+  color: var(--text-mid);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-medium);
+}
+.agentcfg-scope-field small {
+  color: var(--text-lo);
+  font-weight: var(--fw-regular);
+  line-height: 1.35;
+}
+.agentcfg-scope-select {
+  width: 100%;
+}
+.agentcfg-search {
+  align-items: center;
+  gap: var(--sp-2);
+  height: 34px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-lo);
+}
+.agentcfg-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-weak);
+}
+.agentcfg-search-input {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  outline: 0;
+}
+.agentcfg-body {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: var(--sp-4);
+  align-items: start;
+}
+.agentcfg-categories {
+  position: sticky;
+  top: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-height: calc(100vh - 220px);
+  overflow: auto;
+  padding-right: var(--sp-1);
+}
+.agentcfg-category {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-mid);
+  font: inherit;
+  font-size: var(--fs-11);
+  text-align: left;
+  cursor: pointer;
+}
+.agentcfg-category:hover {
+  background: var(--bg-elevated);
+  color: var(--text-hi);
+}
+.agentcfg-category.is-active {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: var(--accent-weak);
+  color: var(--accent-ink);
+}
+.agentcfg-category-count {
+  color: var(--text-lo);
+  font-variant-numeric: tabular-nums;
+}
+.agentcfg-settings {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.agentcfg-results-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  min-height: 32px;
+}
+.agentcfg-results-head h3 {
+  font-size: var(--fs-16);
+}
+.agentcfg-results-head span {
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+}
+.agentcfg-setting {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+}
+.agentcfg-setting.is-readonly {
+  background: color-mix(in srgb, var(--bg-surface) 82%, var(--bg-inset));
+}
+.agentcfg-setting-head {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.agentcfg-setting-title {
+  min-width: 0;
+}
+.agentcfg-setting h4 {
+  font-size: var(--fs-13);
+}
+.agentcfg-setting-title code {
+  display: block;
+  margin-top: var(--sp-1);
+  color: var(--text-lo);
+  font-size: var(--fs-10);
+  overflow-wrap: anywhere;
+}
+.agentcfg-setting-desc,
+.agentcfg-setting-message {
+  margin: 0;
+  color: var(--text-mid);
+  font-size: var(--fs-11);
+  line-height: 1.5;
+}
+.agentcfg-setting-message {
+  padding: var(--sp-2);
+  border-left: 2px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+  color: var(--text-hi);
+}
+.agentcfg-snapshot-note {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  color: var(--text-mid);
+  font-size: var(--fs-11);
+  line-height: 1.5;
+}
+.agentcfg-source-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: var(--sp-2);
+}
+.agentcfg-source-line {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sp-1) var(--sp-2);
+  align-items: baseline;
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+}
+.agentcfg-source-label,
+.agentcfg-source-origin {
+  color: var(--text-lo);
+  font-size: var(--fs-10);
+}
+.agentcfg-source-value {
+  min-width: 0;
+  color: var(--text-hi);
+  font-size: var(--fs-11);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agentcfg-source-origin {
+  grid-column: 1 / -1;
+}
+.agentcfg-editor {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: var(--sp-3);
+  align-items: start;
+}
+.agentcfg-input {
+  width: 100%;
+}
+.agentcfg-array-editor {
+  display: grid;
+  gap: var(--sp-1);
+}
+.agentcfg-array-editor small {
+  color: var(--text-lo);
+  font-size: var(--fs-10);
+}
+.agentcfg-textarea,
+.agentcfg-json {
+  min-height: 84px;
+  resize: vertical;
+  padding: var(--sp-2);
+  line-height: 1.45;
+}
+.agentcfg-json {
+  min-height: 128px;
+  font-family: var(--font-mono);
+}
+.agentcfg-bool {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.agentcfg-bool-state {
+  min-width: 24px;
+  color: var(--text-hi);
+  font-size: var(--fs-11);
+}
+.agentcfg-setting-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.agentcfg-ownership {
+  width: auto;
+  min-width: 124px;
+}
+.agentcfg-readonly {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  max-width: 320px;
+  padding: var(--sp-2);
+  color: var(--text-lo);
+  font-size: var(--fs-10);
+  line-height: 1.4;
+}
+.agentcfg-release {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+}
+.agentcfg-release > span {
+  margin-right: auto;
+  color: var(--text-lo);
+  font-size: var(--fs-10);
+}
+.agentcfg-no-results {
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  color: var(--text-lo);
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+  font-size: var(--fs-11);
+}
+@media (max-width: 900px) {
+  .agentcfg-toolbar,
+  .agentcfg-body,
+  .agentcfg-editor {
+    grid-template-columns: 1fr;
+  }
+  .agentcfg-categories {
+    position: static;
+    flex-direction: row;
+    max-height: none;
+    overflow-x: auto;
+    padding: 0 0 var(--sp-1);
+  }
+  .agentcfg-category {
+    width: auto;
+    flex: none;
+  }
+  .agentcfg-setting-actions {
+    justify-content: flex-start;
+  }
+}
+@media (max-width: 640px) {
+  .agentcfg-head-actions,
+  .agentcfg-source-grid {
+    grid-template-columns: 1fr;
+  }
+  .agentcfg-source-grid {
+    display: grid;
+  }
+  .agentcfg-head-actions {
+    width: 100%;
+  }
+  .agentcfg-setting-head {
+    flex-direction: column;
+  }
 }
 /* Board approved chip (deferred 4/03) */
 .board-chip-approved {

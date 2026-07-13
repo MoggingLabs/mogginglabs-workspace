@@ -12,7 +12,8 @@ import {
   type JsonEntryShape
 } from './json-dialect'
 
-// Gemini CLI dialect: `<GEMINI_CONFIG_DIR|~/.gemini>/settings.json`,
+// Gemini CLI dialect: `<GEMINI_CLI_HOME|~>/.gemini/settings.json` (legacy
+// `GEMINI_CONFIG_DIR` profiles remain readable),
 // `mcpServers` key. THE quirk: remote servers use `httpUrl`, not `url` —
 // hardcoding the wrong spelling is exactly the drift the fixtures guard.
 

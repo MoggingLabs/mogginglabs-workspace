@@ -1,9 +1,16 @@
 // Socket/named-pipe server: framing, the version + auth-token handshake (unauthenticated
 // connections are dropped within seconds), and per-connection pane subscriptions. (ADR 0006.)
 import * as net from 'node:net'
-import { createLineFramer, encodeMessage, keyToBytes, DAEMON_PROTOCOL_VERSION } from '@contracts'
+import {
+  createLineFramer,
+  encodeMessage,
+  keyToBytes,
+  DAEMON_PROTOCOL_VERSION,
+  normalizeRemoteConnection
+} from '@contracts'
 import type { ClientMessage, ServerMessage, ReviewSnapshot } from '@contracts'
 import { ptyEmulation } from '@backend/platform/pty-host'
+import { normalizeRemotePaneCwd } from '@backend/features/agent-state'
 import type { SessionManager, PaneSubscriber, PaneSession } from './session'
 import { log } from './lifecycle'
 
@@ -94,7 +101,16 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           send({ t: 'exit', id, gen, code: c })
         },
         state: (st) => send({ t: 'state', id, gen, state: st }),
-        cwd: (p) => send({ t: 'cwd', id, gen, cwd: p }),
+        cwd: (location) =>
+          send({
+            t: 'cwd',
+            id,
+            gen,
+            cwd: location.cwd,
+            rev: location.revision,
+            source: location.source,
+            locality: location.locality
+          }),
         limit: () => send({ t: 'limit', id, gen }),
         agent: (agentId, cwd, sinceMs) => send({ t: 'agent', id, gen, agentId, cwd, sinceMs })
       }
@@ -105,9 +121,28 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
     function handle(m: ClientMessage): void {
       switch (m.t) {
         case 'spawn': {
+          const rawRemote = m.spec?.remote
+          const remote = rawRemote ? normalizeRemoteConnection(rawRemote) : null
+          if (
+            rawRemote &&
+            (!remote || (rawRemote.cwd !== undefined && !normalizeRemotePaneCwd(rawRemote.cwd)))
+          ) {
+            send({ t: 'error', reason: 'badremote', id: m.id })
+            break
+          }
+          const spec = {
+            ...(m.spec ?? {}),
+            remote: remote
+              ? {
+                  ...remote,
+                  shell: rawRemote?.shell,
+                  cwd: rawRemote?.cwd === undefined ? undefined : normalizeRemotePaneCwd(rawRemote.cwd)!
+                }
+              : undefined
+          }
           const spawn = (): void => {
             if (sock.destroyed) return
-            const { pane, existed } = sessions.ensure(m.id, m.spec ?? {})
+            const { pane, existed } = sessions.ensure(m.id, spec)
             // Reply FIRST, then bind: subscribe() synchronously replays state/cwd, and the
             // client gates every pane event on the generation it learns from `spawned` — a
             // replay arriving ahead of the gen would be dropped as stale. Same tick either
@@ -157,6 +192,31 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           const target = m.id ? sessions.get(m.id) : undefined
           target?.applyNotify(m.event)
           send({ t: 'notified', id: m.id ?? '', ok: !!target })
+          break
+        }
+        case 'cwd-report': {
+          const pane = typeof m.id === 'string' && m.id ? sessions.get(m.id) : undefined
+          if (!pane) {
+            send({ t: 'error', reason: 'nopane' })
+            break
+          }
+          if (typeof m.token !== 'string' || !m.token || m.token !== pane.paneToken) {
+            log(`cwd-report REFUSED: sender is not bound to pane ${m.id}`)
+            send({ t: 'error', reason: 'badpaneauth' })
+            break
+          }
+          const result = pane.applyCwdReport(m.cwd, m.observedAt)
+          if (!result.ok) {
+            send({ t: 'error', reason: result.reason ?? 'badcwd' })
+            break
+          }
+          send({
+            t: 'cwd-reported',
+            id: m.id,
+            gen: pane.gen,
+            cwd: result.current.cwd,
+            rev: result.current.revision
+          })
           break
         }
         case 'list':
@@ -249,7 +309,7 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
         // pane named in `from`. It has to: pane ids are public — `mogging list` prints them —
         // and EVERY pane can read the 0600 endpoint file and authenticate, so `from` on its
         // own was a claim, not a fact, and a worker could sign off on its own branch by
-        // naming the reviewer's id. A sender that presents a token must present the right one.
+        // naming the reviewer's id. Every sender must present that pane's exact token.
         //
         // The role check below is a COURTESY, not the gate: `set-role` is open to any
         // authenticated client (i.e. any pane), so a pane can promote itself and this check

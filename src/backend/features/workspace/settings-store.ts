@@ -1,10 +1,16 @@
-// App-level workspace state (tabs + theme + 06b template lineups) for Phase-1/05-06b,
-// persisted with the same better-sqlite3 mechanism as the session store (03). Electron-free.
-// Metadata ONLY — no credentials (ADR 0002). Kept in a SEPARATE db from the daemon's
+// App-level workspace state and non-secret feature-owned desired state, persisted with the
+// same better-sqlite3 mechanism as the session store (03). Electron-free. NO credentials
+// (ADR 0002). Kept in a SEPARATE db from the daemon's
 // sessions.db so the two processes never contend on one file: main owns this; daemon owns sessions.
 import { randomUUID } from 'node:crypto'
 import Database from 'better-sqlite3'
 import type {
+  AgentConfigOverrideRecord,
+  AgentConfigProviderId,
+  AgentConfigScope,
+  AgentConfigSurface,
+  AgentConfigSyncState,
+  AgentConfigValue,
   AgentProfile,
   RemoteHost,
   BoardCard,
@@ -41,6 +47,8 @@ export class SettingsStore {
         user TEXT,
         port INTEGER,
         identity_hint TEXT,
+        -- The confirmed dialect of the far side. Legacy rows are NULL and read back as
+        -- posix/sh; a windows host also names its shell (powershell/cmd).
         platform TEXT,
         shell TEXT
       );
@@ -62,6 +70,30 @@ export class SettingsStore {
         updated_at INTEGER NOT NULL,
         position INTEGER NOT NULL DEFAULT 0
       );
+      CREATE TABLE IF NOT EXISTS app_agent_config_overrides (
+        provider TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        surface TEXT NOT NULL,
+        setting_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        desired_value TEXT,
+        ownership TEXT NOT NULL,
+        baseline_present INTEGER NOT NULL DEFAULT 0,
+        baseline_value TEXT,
+        catalog_version TEXT NOT NULL,
+        last_applied_value TEXT,
+        last_applied_hash TEXT,
+        status TEXT NOT NULL,
+        last_error TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        applied_at INTEGER,
+        PRIMARY KEY (provider, scope, target_id, surface, setting_id)
+      );
+      CREATE INDEX IF NOT EXISTS app_agent_config_target_idx
+        ON app_agent_config_overrides (provider, scope, target_id);
     `)
     // Migrate pre-06b dbs that lack the assignments column (per-workspace template lineup).
     try {
@@ -99,12 +131,21 @@ export class SettingsStore {
     } catch {
       /* column already exists */
     }
+    // Development builds predating ADR 0011's explicit set/unset distinction.
+    try {
+      this.db.exec("ALTER TABLE app_agent_config_overrides ADD COLUMN operation TEXT NOT NULL DEFAULT 'set'")
+    } catch {
+      /* column already exists */
+    }
     // Migrate pre-split-tree dbs: the serialized pane arrangement (shape + sizes).
     try {
       this.db.exec('ALTER TABLE app_workspaces ADD COLUMN layout_tree TEXT')
     } catch {
       /* column already exists */
     }
+    // Remote bootstrapping was POSIX-only: existing rows are NULL/unconfirmed and read back
+    // as posix/sh until the user confirms the dialect (which may now be windows) in Settings.
+    // No CHECK constraint here — an old db must be able to hold a windows host later.
     try {
       this.db.exec('ALTER TABLE app_remotes ADD COLUMN platform TEXT')
     } catch {
@@ -147,7 +188,7 @@ export class SettingsStore {
       assignments: SettingsStore.parseCell<string[]>(r.assignments),
       paneCwds: SettingsStore.parseCell<(string | null)[]>(r.paneCwds),
       roles: SettingsStore.parseCell<(string | null)[]>(r.paneRoles),
-      remotes: SettingsStore.parseCell<({ hostId: string; name: string } | null)[]>(r.paneRemotes),
+      remotes: SettingsStore.parseCell<({ hostId: string; name: string; cwd?: string } | null)[]>(r.paneRemotes),
       profileIds: SettingsStore.parseCell<(string | null)[]>(r.paneProfileIds)
     }))
     const settings = this.db.prepare('SELECT key, value FROM app_settings').all() as Array<{
@@ -220,6 +261,170 @@ export class SettingsStore {
       .run(key, value)
   }
 
+  // ── Agent CLI desired settings (ADR 0011) ──────────────────────────────────
+  // A row owns ONE provider key at ONE honest layer. JSON values keep the table
+  // format-neutral; provider codecs translate only at the filesystem boundary.
+
+  listAgentConfigOverrides(filter?: {
+    provider?: AgentConfigProviderId
+    scope?: AgentConfigScope
+    targetId?: string
+  }): AgentConfigOverrideRecord[] {
+    const clauses: string[] = []
+    const args: unknown[] = []
+    if (filter?.provider) {
+      clauses.push('provider = ?')
+      args.push(filter.provider)
+    }
+    if (filter?.scope) {
+      clauses.push('scope = ?')
+      args.push(filter.scope)
+    }
+    if (filter?.targetId) {
+      clauses.push('target_id = ?')
+      args.push(filter.targetId)
+    }
+    const where = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : ''
+    const rows = this.db
+      .prepare(
+        `SELECT provider, scope, target_id AS targetId, surface, setting_id AS settingId,
+                path, operation, desired_value AS desiredValue, ownership,
+                baseline_present AS baselinePresent, baseline_value AS baselineValue,
+                catalog_version AS catalogVersion, last_applied_value AS lastAppliedValue,
+                last_applied_hash AS lastAppliedHash, status, last_error AS lastError,
+                created_at AS createdAt, updated_at AS updatedAt, applied_at AS appliedAt
+           FROM app_agent_config_overrides${where}
+          ORDER BY provider, scope, target_id, surface, setting_id`
+      )
+      .all(...args) as Array<{
+      provider: AgentConfigProviderId
+      scope: AgentConfigScope
+      targetId: string
+      surface: AgentConfigSurface
+      settingId: string
+      path: string
+      operation: 'set' | 'unset'
+      desiredValue: string | null
+      ownership: 'once' | 'enforce'
+      baselinePresent: number
+      baselineValue: string | null
+      catalogVersion: string
+      lastAppliedValue: string | null
+      lastAppliedHash: string | null
+      status: AgentConfigSyncState
+      lastError: string | null
+      createdAt: number
+      updatedAt: number
+      appliedAt: number | null
+    }>
+
+    const out: AgentConfigOverrideRecord[] = []
+    for (const row of rows) {
+      const path = SettingsStore.parseCell<string[]>(row.path)
+      const desiredValue = row.desiredValue === null
+        ? undefined
+        : SettingsStore.parseCell<AgentConfigValue>(row.desiredValue)
+      // JSON `null` is a valid desired value, while parseCell returns undefined
+      // only for an absent/invalid cell. Preserve the distinction explicitly.
+      const desired = row.desiredValue === 'null' ? null : desiredValue
+      if (!path?.length || (row.operation === 'set' && desired === undefined)) continue
+      const baselineValue = row.baselineValue === 'null'
+        ? null
+        : SettingsStore.parseCell<AgentConfigValue>(row.baselineValue)
+      const lastAppliedValue = row.lastAppliedValue === 'null'
+        ? null
+        : SettingsStore.parseCell<AgentConfigValue>(row.lastAppliedValue)
+      out.push({
+        provider: row.provider,
+        scope: row.scope,
+        targetId: row.targetId,
+        surface: row.surface,
+        settingId: row.settingId,
+        path,
+        operation: row.operation,
+        ...(row.operation === 'set' ? { desiredValue: desired as AgentConfigValue } : {}),
+        ownership: row.ownership,
+        baselinePresent: row.baselinePresent === 1,
+        ...(row.baselineValue !== null && baselineValue !== undefined ? { baselineValue } : {}),
+        catalogVersion: row.catalogVersion,
+        ...(row.lastAppliedValue !== null && lastAppliedValue !== undefined ? { lastAppliedValue } : {}),
+        ...(row.lastAppliedHash ? { lastAppliedHash: row.lastAppliedHash } : {}),
+        status: row.status,
+        ...(row.lastError ? { lastError: row.lastError } : {}),
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        ...(row.appliedAt !== null ? { appliedAt: row.appliedAt } : {})
+      })
+    }
+    return out
+  }
+
+  saveAgentConfigOverride(row: AgentConfigOverrideRecord): void {
+    this.db
+      .prepare(
+        `INSERT INTO app_agent_config_overrides (
+           provider, scope, target_id, surface, setting_id, path, operation, desired_value,
+           ownership, baseline_present, baseline_value, catalog_version,
+           last_applied_value, last_applied_hash, status, last_error,
+           created_at, updated_at, applied_at
+         ) VALUES (
+           @provider, @scope, @targetId, @surface, @settingId, @path, @operation, @desiredValue,
+           @ownership, @baselinePresent, @baselineValue, @catalogVersion,
+           @lastAppliedValue, @lastAppliedHash, @status, @lastError,
+           @createdAt, @updatedAt, @appliedAt
+         )
+         ON CONFLICT(provider, scope, target_id, surface, setting_id) DO UPDATE SET
+           path = excluded.path,
+           operation = excluded.operation,
+           desired_value = excluded.desired_value,
+           ownership = excluded.ownership,
+           baseline_present = excluded.baseline_present,
+           baseline_value = excluded.baseline_value,
+           catalog_version = excluded.catalog_version,
+           last_applied_value = excluded.last_applied_value,
+           last_applied_hash = excluded.last_applied_hash,
+           status = excluded.status,
+           last_error = excluded.last_error,
+           updated_at = excluded.updated_at,
+           applied_at = excluded.applied_at`
+      )
+      .run({
+        ...row,
+        path: JSON.stringify(row.path),
+        // Keep a JSON null sentinel for `unset`; it also tolerates a pre-release
+        // table whose desired_value column was created NOT NULL.
+        desiredValue: row.operation === 'set' ? JSON.stringify(row.desiredValue) : 'null',
+        baselinePresent: row.baselinePresent ? 1 : 0,
+        baselineValue: row.baselinePresent ? JSON.stringify(row.baselineValue ?? null) : null,
+        lastAppliedValue: row.lastAppliedValue === undefined ? null : JSON.stringify(row.lastAppliedValue),
+        lastAppliedHash: row.lastAppliedHash ?? null,
+        lastError: row.lastError ?? null,
+        appliedAt: row.appliedAt ?? null
+      })
+  }
+
+  removeAgentConfigOverride(key: {
+    provider: AgentConfigProviderId
+    scope: AgentConfigScope
+    targetId: string
+    surface: AgentConfigSurface
+    settingId: string
+  }): void {
+    this.db
+      .prepare(
+        `DELETE FROM app_agent_config_overrides
+          WHERE provider = @provider AND scope = @scope AND target_id = @targetId
+            AND surface = @surface AND setting_id = @settingId`
+      )
+      .run(key)
+  }
+
+  removeAgentConfigTarget(scope: AgentConfigScope, targetId: string): void {
+    this.db
+      .prepare('DELETE FROM app_agent_config_overrides WHERE scope = ? AND target_id = ?')
+      .run(scope, targetId)
+  }
+
   // --- Telemetry consent + anonymous install id (observability/00, ADR 0005) -----
   // Stored in the same KV table. The install id is a random UUID minted on first read —
   // never derived from the machine, account, or provider identity. Consent defaults OFF.
@@ -265,15 +470,24 @@ export class SettingsStore {
   listRemotes(): RemoteHost[] {
     const rows = this.db
       .prepare('SELECT id, name, host, user, port, identity_hint AS identityHint, platform, shell FROM app_remotes ORDER BY name')
-      .all() as Array<RemoteHost & { user: string | null; port: number | null; identityHint: string | null }>
+      .all() as Array<
+        Omit<RemoteHost, 'platform' | 'shell'> & {
+          platform: string | null
+          shell: string | null
+          user: string | null
+          port: number | null
+          identityHint: string | null
+        }
+      >
     return rows.map((r) => ({
       id: r.id,
       name: r.name,
       host: r.host,
       user: r.user ?? undefined,
       port: r.port ?? undefined,
-      platform: r.platform ?? 'posix',
-      shell: r.shell ?? 'sh',
+      // A legacy row confirmed nothing: it reads back as the dialect it was written under.
+      platform: r.platform === 'windows' ? 'windows' : 'posix',
+      shell: (r.shell ?? (r.platform === 'windows' ? 'powershell' : 'sh')) as RemoteHost['shell'],
       identityHint: r.identityHint ?? undefined
     }))
   }

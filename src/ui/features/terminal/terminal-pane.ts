@@ -32,7 +32,7 @@ import { registerPaneInstance, retirePaneInstance } from '../../core/terminal/pa
 import { forgetPane, markPaneLive, markPaneReattached, markPaneRemoteReady } from '../../core/terminal/liveness-port'
 import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
 import { setPaneState, adoptPaneState, clearPaneState, paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
-import { setPaneCwd, clearPaneCwd, getPaneCwd } from '../../core/layout/pane-cwd'
+import { applyPaneCwdEvent, clearPaneCwd, getPaneCwd, getPaneCwdProjection } from '../../core/layout/pane-cwd'
 import { getPaneRole, onPaneRole, getPaneRemote, getPaneProfile, setPaneProfile } from '../../core/layout/pane-meta'
 import {
   clearPaneCli,
@@ -49,6 +49,7 @@ import { createPaneAnchor, type PaneAnchorHandle } from './pane-anchor'
 import { createPaneScrollbar, type PaneScrollbarHandle } from './pane-scrollbar'
 import { onFocusedPane } from '../../core/layout/focus'
 import { onPaneGit, getPaneGit, setPaneGit } from '../../core/git/git-port'
+import { displayGitStatus } from '../../core/git/git-display'
 import { allCommands } from '../../core/commands/command-port'
 import { getTelemetry } from '../../core/telemetry'
 import { BlockTracker } from '../blocks'
@@ -305,9 +306,13 @@ export class TerminalPane {
           clearPaneAgentSession(this.id)
         }
       }),
-      // OSC 7 tells us where this pane's shell/agent actually is -> feed per-pane git (2/03).
+      // Source-aware backend truth (shell/process/explicit agent report) becomes the one
+      // renderer projection consumed by Git, workspace persistence, focus and failover.
       terminalClient.onCwd((e) => {
-        if (e.id === this.id && !this.disposed) setPaneCwd(this.id, e.cwd)
+        if (e.id === this.id && !this.disposed) {
+          applyPaneCwdEvent(e)
+          if (e.locality === 'remote') markPaneRemoteReady(this.id)
+        }
       })
     )
     this.term.onData((data) => terminalClient.write({ id: this.id, data }))
@@ -1164,9 +1169,19 @@ export class TerminalPane {
     git.className = 'pane-git'
     const branch = document.createElement('span')
     branch.className = 'pane-branch'
+    const worktree = document.createElement('span')
+    worktree.className = 'pane-worktree'
+    const worktreeName = document.createElement('span')
+    worktree.append(icon('folder', 10), worktreeName)
     const dirty = document.createElement('span')
     dirty.className = 'pane-dirty'
-    git.append(icon('git-branch', 12), branch, dirty)
+    const gitState = document.createElement('span')
+    gitState.className = 'pane-git-state'
+    const gitStaged = document.createElement('span')
+    gitStaged.className = 'pane-git-staged'
+    const gitComparison = document.createElement('span')
+    gitComparison.className = 'pane-git-comparison'
+    git.append(icon('git-branch', 12), branch, worktree, dirty, gitState, gitStaged, gitComparison)
 
     // Right: menu + expand trio + close.
     const actions = document.createElement('div')
@@ -1523,12 +1538,20 @@ export class TerminalPane {
         git.classList.remove('has-git')
         return
       }
-      const ab =
-        (status.ahead ? `↑${status.ahead}` : '') + (status.behind ? `↓${status.behind}` : '')
-      branch.textContent = `${status.branch}${ab ? ' ' + ab : ''}`
-      git.title = `${status.detached ? 'detached @ ' : 'on '}${status.branch}` +
-        `${status.dirty ? ' — uncommitted changes' : ' — clean'}${status.root ? `\n${status.root}` : ''}`
-      git.classList.toggle('dirty', status.dirty)
+      const display = displayGitStatus(status)
+      branch.textContent = display.branchLabel
+      worktreeName.textContent = display.worktreeLabel
+      worktree.hidden = !display.worktreeLabel
+      gitState.textContent = display.stateLabel
+      gitStaged.textContent = display.stagedLabel
+      gitStaged.hidden = !display.stagedLabel
+      gitComparison.textContent = display.comparisonLabel
+      gitComparison.hidden = !display.comparisonLabel
+      git.title = display.title
+      git.setAttribute('aria-label', display.title.replace(/\n/g, '. '))
+      git.classList.toggle('dirty', display.tone === 'dirty')
+      git.classList.toggle('conflicted', display.tone === 'conflict')
+      git.classList.toggle('unavailable', display.tone === 'unknown')
       git.classList.add('has-git')
     }
     applyGit(getPaneGit(this.id))
@@ -1718,13 +1741,7 @@ export class TerminalPane {
 
     const status = getPaneGit(this.id)
     if (status) {
-      const ab = (status.ahead ? `↑${status.ahead}` : '') + (status.behind ? `↓${status.behind}` : '')
-      info.push(
-        note(
-          `${status.detached ? 'Detached at' : 'Branch:'} ${status.branch}${ab ? ' ' + ab : ''}` +
-            `${status.dirty ? ' — uncommitted changes' : ''}`
-        )
-      )
+      info.push(note(displayGitStatus(status).menuLabel))
     }
     menu.append(...info, separator())
 
@@ -1769,9 +1786,10 @@ export class TerminalPane {
     )
     // Worktree-isolated pane (3/03): guarded removal. Dirty worktrees are refused with
     // an explicit force step — an agent's uncommitted work is never silently destroyed.
-    const cwd = getPaneCwd(this.id) ?? ''
+    const cwdState = getPaneCwdProjection(this.id)
+    const cwd = cwdState?.cwd ?? ''
     const wtMatch = /^(.*)[\\/]\.mogging[\\/]worktrees[\\/][^\\/]+$/.exec(cwd)
-    if (wtMatch) {
+    if (cwdState?.locality !== 'remote' && wtMatch) {
       const repo = wtMatch[1]
       const remove = (force: boolean): void => {
         void (async () => {
@@ -1911,6 +1929,25 @@ export class TerminalPane {
         if (git && !git.classList.contains('has-git')) {
           const branch = git.querySelector<HTMLElement>('.pane-branch')
           if (branch) branch.textContent = 'feat/collapse-ladder'
+          const worktree = git.querySelector<HTMLElement>('.pane-worktree')
+          if (worktree) {
+            worktree.hidden = false
+            const name = worktree.querySelector<HTMLElement>('span')
+            if (name) name.textContent = 'collapse-ladder'
+          }
+          const state = git.querySelector<HTMLElement>('.pane-git-state')
+          if (state) state.textContent = '4 uncommitted'
+          const staged = git.querySelector<HTMLElement>('.pane-git-staged')
+          if (staged) {
+            staged.hidden = false
+            staged.textContent = '2 staged'
+          }
+          const comparison = git.querySelector<HTMLElement>('.pane-git-comparison')
+          if (comparison) {
+            comparison.hidden = false
+            comparison.textContent = '↑3 vs main'
+          }
+          git.classList.add('dirty')
           git.classList.add('has-git')
         }
         const ctxEl = host.querySelector<HTMLElement>('.pane-context')
@@ -1941,9 +1978,21 @@ export class TerminalPane {
           root: 'C:\\fixture',
           branch: 'feat/menu-facts',
           detached: false,
+          head: '0123456789abcdef0123456789abcdef01234567',
+          linkedWorktree: true,
+          available: true,
+          upstream: 'origin/feat/menu-facts',
           ahead: 2,
           behind: 1,
-          dirty: true
+          baseBranch: 'main',
+          baseAhead: 3,
+          baseBehind: 0,
+          dirty: true,
+          changed: 4,
+          staged: 1,
+          unstaged: 2,
+          untracked: 1,
+          conflicted: 0
         })
       },
       term: this.term,

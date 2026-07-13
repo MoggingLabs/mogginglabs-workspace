@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import { parse as parseJsonc } from 'jsonc-parser'
 import {
   NOTIFY_HOOK_SOURCE,
   aiderBellEnv,
@@ -72,6 +73,7 @@ function writeGenerated(name: string, content: string): string | null {
 /** Gemini's REAL system-settings path per platform — merged through so our override
  *  file never masks an admin's policy (see geminiSystemSettings). */
 function geminiRealSystemSettingsPath(): string {
+  if (process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH) return process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH
   if (process.platform === 'win32') return 'C:\\ProgramData\\gemini-cli\\settings.json'
   if (process.platform === 'darwin') return '/Library/Application Support/GeminiCli/settings.json'
   return '/etc/gemini-cli/settings.json'
@@ -88,7 +90,10 @@ function geminiRealSystemSettingsPath(): string {
  *  tracker's bell window can tell the two apart. Codex: OSC 9 + its notify program.
  *  Gemini: enableNotifications + the AfterAgent hook. OpenCode: its attention chime + a
  *  generated plugin. Aider has no chime at all — only a done — which is already honest. */
-export function bellLaunchExtras(agentId: string): { args: string[]; env: Record<string, string> } {
+export function bellLaunchExtras(
+  agentId: string,
+  session: { runtime?: Record<string, unknown>; tui?: Record<string, unknown> } = {}
+): { args: string[]; env: Record<string, string>; reason?: string } {
   const none = { args: [], env: {} }
   switch (agentId) {
     case 'codex':
@@ -100,13 +105,18 @@ export function bellLaunchExtras(agentId: string): { args: string[]; env: Record
       // completion" are one switch); the AfterAgent hook is the done that disambiguates it.
       const file = writeGenerated(
         'gemini-system-settings.json',
-        geminiSystemSettings(readJson(geminiRealSystemSettingsPath()), notifyHookInvocation() ?? undefined)
+        geminiSystemSettings(
+          readJson(geminiRealSystemSettingsPath()),
+          notifyHookInvocation() ?? undefined,
+          session.runtime
+        )
       )
       return file ? { args: [], env: { GEMINI_CLI_SYSTEM_SETTINGS_PATH: file } } : none
     }
     case 'opencode': {
       const userTui = readJson(join(homedir(), '.config', 'opencode', 'tui.json'))
-      const tui = writeGenerated('opencode-tui.json', opencodeTuiConfig(userTui))
+      const tui = writeGenerated('opencode-tui.json', opencodeTuiConfig(userTui, session.tui))
+      if (!tui && Object.keys(session.tui ?? {}).length) return { ...none, reason: 'OpenCode next-launch TUI settings could not be materialized.' }
       if (!tui) return none
       const env: Record<string, string> = { OPENCODE_TUI_CONFIG: tui }
       // OpenCode has no hook config: its only verdict channel is a plugin. Both files must
@@ -114,8 +124,16 @@ export function bellLaunchExtras(agentId: string): { args: string[]; env: Record
       // read every completion as attention.
       const script = notifyHookPath()
       const plugin = script ? writeGenerated('opencode-notify-plugin.mjs', opencodePluginSource(script)) : null
-      const cfg = plugin ? writeGenerated('opencode-config.json', opencodeConfig(plugin)) : null
-      if (cfg) env.OPENCODE_CONFIG = cfg
+      let inherited: Record<string, unknown> = {}
+      if (process.env.OPENCODE_CONFIG_CONTENT) {
+        const errors: { error: number; offset: number; length: number }[] = []
+        const parsed = parseJsonc(process.env.OPENCODE_CONFIG_CONTENT, errors, { allowTrailingComma: true, disallowComments: false })
+        if (errors.length || !parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          return { ...none, reason: 'OpenCode inline configuration is invalid and cannot be merged safely.' }
+        }
+        inherited = parsed as Record<string, unknown>
+      }
+      env.OPENCODE_CONFIG_CONTENT = opencodeConfig(plugin ?? undefined, session.runtime, inherited)
       return { args: [], env }
     }
     case 'aider': {

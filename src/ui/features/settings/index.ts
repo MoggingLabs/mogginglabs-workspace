@@ -333,7 +333,7 @@ export const settingsFeature: UiFeature = {
         // Labeled 'Agent CLIs', not 'Providers' — Usage's source catalog owned
         // that word too, and one word must not name two doors. The id stays
         // 'providers' (data-target, smokes, shot sweeps all key off it).
-        el: section('providers', 'Agent CLIs', 'Which agent CLIs this machine can run right now.', [providers])
+        el: section('providers', 'Agent CLIs', 'Install, inspect, and synchronize each provider from one control plane.', [providers])
       },
       {
         id: 'profiles',

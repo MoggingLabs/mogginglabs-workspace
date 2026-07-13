@@ -89,6 +89,8 @@ export const wizardFeature: UiFeature = {
     let isolate = false // Phase-3/03: one git worktree per agent pane
     let swarmRoles: (string | null)[] | null = null // Phase-4/01: per-slot manifest (preset)
     let remoteHost: { hostId: string; name: string } | null = null // Phase-4/05
+    let localCwd = ''
+    let remoteCwd = ''
     let profilesCache: AgentProfile[] = [] // Phase-4/04 picker (refreshed on open)
     const profileByProvider = new Map<string, string>()
     let openGeneration = 0
@@ -165,6 +167,8 @@ export const wizardFeature: UiFeature = {
       selection?.dispose()
       name = prefill?.name ?? ''
       cwd = prefill?.cwd ?? ''
+      localCwd = cwd
+      remoteCwd = ''
       paneCount = prefill?.paneCount ?? defaultPaneCount()
       counts = new Map()
       customCmd = ''
@@ -404,15 +408,20 @@ export const wizardFeature: UiFeature = {
       const manifest = swarmRoles
       const roles =
         !skipAgents && manifest ? resolved.assignments.map((_, i) => manifest[i] ?? null) : undefined
+      // The remote path's cwd rides on the REMOTE entry, never in paneCwds: a paneCwd is a
+      // local path, and the far-side folder must never be handed to a local filesystem API.
+      const selectedRemote = remoteHost ? { ...remoteHost, cwd: cwd.trim() ? cwd : undefined } : null
       try {
         const opened = await openPlannedWorkspaceFromTemplate({
           name: name.trim() || basename(cwd) || 'Workspace',
           cwd: remoteHost ? '' : cwd,
           paneCount: resolved.paneCount,
           assignments: resolved.assignments,
-          paneCwds: remoteHost ? Array<string>(resolved.paneCount).fill(cwd) : paneCwds,
+          paneCwds: remoteHost ? undefined : paneCwds,
           roles,
-          remotes: remoteHost ? Array<{ hostId: string; name: string } | null>(resolved.paneCount).fill(remoteHost) : undefined,
+          remotes: selectedRemote
+            ? Array<{ hostId: string; name: string; cwd?: string } | null>(resolved.paneCount).fill(selectedRemote)
+            : undefined,
           profileIds: resolved.assignments.map((a) => (a && profileByProvider.has(a) ? profileByProvider.get(a)! : null)),
           // Scope only when there ARE connected servers to scope (else leave the
           // CLIs' global config untouched — no silent stripping, 8/09).
@@ -546,6 +555,8 @@ export const wizardFeature: UiFeature = {
         }
         cwd = s.cwd
         isRepo = s.isRepo
+        if (s.remote) remoteCwd = s.cwd
+        else localCwd = s.cwd
 
         if (origin !== 'bar') path.setValue(s.cwd) // writing the bar while typing eats the caret
         path.setStatus(statusFor(s))
@@ -605,6 +616,7 @@ export const wizardFeature: UiFeature = {
       void (getBridge().invoke(RemoteChannels.list) as Promise<RemoteHost[]>).then((hosts) => {
         if (!currentOpen(generation) || selection !== ownedSelection || !remoteSelect.isConnected) return
         for (const h of hosts ?? []) {
+          if (h.platform !== 'posix') continue // legacy hosts need explicit confirmation in Settings
           const opt = new Option(`${h.name} (${h.user ? h.user + '@' : ''}${h.host})`, h.id)
           opt.dataset.name = h.name
           remoteSelect.append(opt)
@@ -613,11 +625,33 @@ export const wizardFeature: UiFeature = {
       }).catch(() => undefined)
       remoteSelect.addEventListener('change', () => {
         const opt = remoteSelect.selectedOptions[0]
-        remoteHost = remoteSelect.value ? { hostId: remoteSelect.value, name: opt?.dataset.name ?? remoteSelect.value } : null
+        const nextRemote = remoteSelect.value
+          ? { hostId: remoteSelect.value, name: opt?.dataset.name ?? remoteSelect.value }
+          : null
+        if (nextRemote && !remoteHost) {
+          const restoreRemote = remoteCwd
+          localCwd = selection.state().cwd
+          remoteHost = nextRemote
+          selection.setRemote(true)
+          remoteCwd = restoreRemote
+          selection.set(restoreRemote, 'remote')
+        } else if (!nextRemote && remoteHost) {
+          const restoreLocal = localCwd
+          const restoreRemote = selection.state().cwd
+          remoteHost = null
+          selection.set('', 'remote')
+          remoteCwd = restoreRemote
+          selection.setRemote(false)
+          localCwd = restoreLocal
+          selection.set(restoreLocal, 'prefill')
+        } else {
+          remoteHost = nextRemote
+        }
         if (remoteHost) isolate = false
         // A remote workspace's cwd lives on the OTHER machine. Browsing this disk
         // would answer a question nobody asked — the controller hides it and stops probing.
-        ownedSelection.setRemote(!!remoteHost)
+        // (the branches above already told the controller which machine it is looking at —
+        // `selection` is the owned one here, guarded at the top of this handler)
       })
 
       // Bar · chosen line · browser: one control, one label, three views of one path.
@@ -647,7 +681,10 @@ export const wizardFeature: UiFeature = {
 
     /** The path bar's chip, derived — never set from a call site. */
     function statusFor(s: Readonly<PathState>): PathStatus {
-      if (s.remote) return { kind: 'ok', text: `remote: ${remoteHost?.name ?? ''} — local repo tools off` }
+      if (s.remote) {
+        if (s.cwd.trim() && !selection.isUsable()) return { kind: 'warn', text: 'use an absolute path like /srv/project' }
+        return { kind: 'ok', text: `remote: ${remoteHost?.name ?? ''} — local repo tools off` }
+      }
       if (!s.cwd.trim()) return { kind: 'idle' }
       if (s.probing) return { kind: 'idle' } // no flicker while a keystroke settles
       if (s.refusal) return { kind: 'warn', text: REFUSAL_TEXT[s.refusal.reason] ?? 'unverified' }
@@ -1162,6 +1199,11 @@ export const wizardFeature: UiFeature = {
           path.focus()
         }
         if (!s.remote && !s.cwd.trim()) return refuse('pick a folder first')
+        // A remote path is never probed here — it lives on the other machine — so the only
+        // thing we can (and must) say is that it has to be absolute over there.
+        if (s.remote && s.cwd.trim() && !ownedSelection.isUsable()) {
+          return refuse('use an absolute remote path like /srv/project')
+        }
         // A path the filesystem refused is not a workspace root. Launching into one
         // used to succeed and then strand every pane in a directory that isn't there.
         if (!ownedSelection.isUsable()) {
@@ -1188,7 +1230,7 @@ export const wizardFeature: UiFeature = {
         open: async (
           m: ProviderCount[],
           roles?: (string | null)[],
-          remotes?: ({ hostId: string; name: string } | null)[],
+          remotes?: ({ hostId: string; name: string; cwd?: string } | null)[],
           profileIds?: (string | null)[]
         ) => {
           const r = await wizardClient.resolve(m)

@@ -1,4 +1,5 @@
 import { app, ipcMain, type WebContents } from 'electron'
+import { createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ContextMonitor, RELAY_SOURCE } from '@backend/features/context'
@@ -34,7 +35,7 @@ import { notifyHookInvocation } from './notify-hook'
 // relay needs `node` on PATH; without it claude just renders no statusline and the
 // monitor's transcript tail keeps the bar honest (its numbers use the same formula).
 
-let statuslineSettingsFile: string | null = null
+let statuslineRelayFile: string | null = null
 
 /** Write (idempotently) the relay script + the settings file that points claude at
  *  it, and return the `--settings` args a claude launch should carry. Since the
@@ -44,26 +45,30 @@ let statuslineSettingsFile: string | null = null
  *  BEL as the fallback when `node` is missing and the hook can't run. The overlay
  *  MERGES with the user's own settings and never touches their files. Empty on any
  *  filesystem failure — the launch must never break over a nicety. */
-export function claudeStatuslineArgs(): string[] {
+export function claudeStatuslineArgs(session: Record<string, unknown> = {}): string[] {
   try {
-    if (!statuslineSettingsFile) {
-      const dir = join(app.getPath('userData'), 'context-relay')
-      mkdirSync(dir, { recursive: true })
-      const relay = join(dir, 'context-relay.mjs')
-      writeFileSync(relay, RELAY_SOURCE)
-      const settings = join(dir, 'claude-launch.settings.json')
-      const overlay: Record<string, unknown> = {
-        statusLine: { type: 'command', command: `node "${relay}"`, padding: 0 }
-      }
-      const notify = notifyHookInvocation()
-      if (notify) {
-        overlay.hooks = claudeNotifyHooks(notify)
-        overlay.preferredNotifChannel = 'terminal_bell'
-      }
-      writeFileSync(settings, JSON.stringify(overlay))
-      statuslineSettingsFile = settings
+    const dir = join(app.getPath('userData'), 'context-relay')
+    mkdirSync(dir, { recursive: true })
+    if (!statuslineRelayFile) {
+      statuslineRelayFile = join(dir, 'context-relay.mjs')
+      writeFileSync(statuslineRelayFile, RELAY_SOURCE)
     }
-    return ['--settings', statuslineSettingsFile]
+    // Catalog ownership makes these app-owned keys read-only. Internal values
+    // still land last here as defense in depth against stale persisted intent.
+    const overlay: Record<string, unknown> = {
+      ...session,
+      statusLine: { type: 'command', command: `node "${statuslineRelayFile}"`, padding: 0 }
+    }
+    const notify = notifyHookInvocation()
+    if (notify) {
+      overlay.hooks = claudeNotifyHooks(notify)
+      overlay.preferredNotifChannel = 'terminal_bell'
+    }
+    const content = JSON.stringify(overlay)
+    const digest = createHash('sha256').update(content).digest('hex').slice(0, 16)
+    const settings = join(dir, `claude-launch-${digest}.settings.json`)
+    writeFileSync(settings, content)
+    return ['--settings', settings]
   } catch {
     return []
   }

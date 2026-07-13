@@ -1,4 +1,4 @@
-import { app, BrowserWindow, type WebContents } from 'electron'
+import { app, BrowserWindow, dialog, type WebContents } from 'electron'
 import { getTelemetry, startBackend } from '@backend'
 import { createMainWindow } from './window'
 import { createElectronContext } from './electron-context'
@@ -9,6 +9,7 @@ import { registerDialogs } from './dialogs'
 import { registerShellChrome, wireWindowState } from './shell-chrome'
 import { registerAppSettings, disposeAppSettings } from './app-settings'
 import { registerAgents, disposeAgentInstalls } from './agents'
+import { registerAgentSettings, disposeAgentSettings } from './agent-settings'
 import { registerBrowserDock } from './browser-dock'
 import { startMcpEndpoint, stopMcpEndpoint } from './mcp-endpoint'
 import { registerTemplates } from './templates'
@@ -30,6 +31,8 @@ import { registerMcpManager } from './mcp-manager'
 import { registerMcpStatus } from './mcp-status'
 import { registerServices } from './services'
 import { startDaemonBackend } from './daemon-relay'
+import { DaemonMigrationDeferredError } from './daemon-migrate'
+import { installCliRuntime } from './cli-runtime'
 import { installDeepLinkListeners, registerDeepLink, initialDeepLinkCwd, initialControlCommand } from './deep-link'
 import { ControlChannels, WorkspaceChannels } from '@contracts'
 import { initAutoUpdate } from './updater'
@@ -205,6 +208,16 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
     .then(async () => {
       if (!primaryInstance) return // a second instance; the primary handles the deep link + quits us
 
+      // A desktop install does not get npm's package-bin links. Copy the CLI/MCP satellites into
+      // the persistent private runtime, generate `mogging`, and seed PATH before either PTY backend
+      // starts so every local pane and agent gets the protocol without provider-specific setup.
+      try {
+        installCliRuntime()
+      } catch (err) {
+        fatal(err, 'cli-runtime')
+        return
+      }
+
       assertNativeModules() // stale/missing .node -> exit 1 with the rebuild command, never a broken window
       // Windows < 18309 would silently get a winpty, whose resize semantics the UI does not model.
       // Refuse at boot rather than smear a live agent frame ten minutes in.
@@ -245,6 +258,17 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
           // the only channel that always exists — this fallback used to happen with nothing printed.
           const why = err instanceof Error ? err.message : String(err)
           console.warn(`[daemon] start failed, falling back to the in-proc backend: ${why}`)
+          if (err instanceof DaemonMigrationDeferredError) {
+            await dialog.showMessageBox({
+              type: 'warning',
+              title: 'Legacy remote sessions are still active',
+              message: 'MoggingLabs left your older remote sessions running to avoid losing work.',
+              detail:
+                'This launch will use non-persistent local terminals. In Settings, confirm each legacy SSH host as POSIX, then restart MoggingLabs to complete the session upgrade.',
+              buttons: ['Continue'],
+              defaultId: 0
+            })
+          }
           startInProc(
             'The detached terminal service could not start. Current terminals work, but cannot survive an app restart.'
           )
@@ -262,6 +286,12 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       registerMcpStatus(() => win) // MCP connection-status poller: pushed per-(server×cli) grid (8/11)
       registerServices(() => win) // service links: board card <-> GitHub PR/issue, live via gh (8/12)
       startMcpEndpoint() // agent-control transport: the MCP server reaches the dock + grant wire here (6/05b, 8/03)
+      // The bundled catalog and IPC surface are installed synchronously before the
+      // first await inside registerAgentSettings. Cache/version discovery and startup
+      // reconciliation can continue behind first paint; each launch still reconciles
+      // its exact target and fails closed.
+      // `harness` is this entry's isSmoke: production always passes false.
+      const agentSettingsStartup = registerAgentSettings(() => win, harness)
       registerAgents(() => win) // agent launcher: detect/install CLIs + build launch commands (Phase-1/06; Agent CLIs tab)
       registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
       registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
@@ -277,6 +307,10 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       registerUsage(() => win) // usage meters: adapters ride CLI-owned sessions (Phase-7/01, ADR 0007)
 
       openWindow()
+      void agentSettingsStartup.catch((err) => {
+        getTelemetry().captureError(err, { feature: 'agent-settings', op: 'startup' })
+        console.warn('[agent-settings] startup initialization failed')
+      })
 
       if (!harness) {
         registerDeepLink(ensureWindow) // mogging:// -> open/focus a workspace for a directory
@@ -329,6 +363,7 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
     void flushTelemetry() // best-effort vendor flush (no-op unless the user opted in)
     stopMcpEndpoint() // tear down the agent-control socket + endpoint file (6/05b)
     disposeAgentInstalls() // ephemeral install terminals must not outlive the app
+    disposeAgentSettings()
     disposeAppSettings()
     disposeGit?.()
     disposeGit = null
