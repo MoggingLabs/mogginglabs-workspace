@@ -16,3 +16,7 @@ electron.vite.config.*.js
 # THIS repo). They are working copies, not source — the same trap as the Vite config
 # above: one `git add -A` and the whole tree lands in a commit.
 .claude/worktrees/
+
+# aider writes its chat transcript into the repo root.
+.aider.chat.history.md
+.aider*
