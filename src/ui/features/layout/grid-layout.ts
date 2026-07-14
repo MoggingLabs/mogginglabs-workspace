@@ -113,6 +113,18 @@ export class GridLayout {
    *  AFTER construction, so the constructor's initial apply stays silent. */
   onLayoutChange?: () => void
 
+  /** Fired when EXPAND changes which panes a human can actually see. The green pulse is
+   *  owed until its pane is truly visible (explicit direction), and a pane hidden under an
+   *  expanded sibling has not been seen — so collapsing back to the grid is a moment that
+   *  can PAY that debt, and the controller drains it here. */
+  onVisibilityChange?: () => void
+
+  /** A real click (or keyboard nav) landing on a pane — the human is HERE, on this pane.
+   *  Distinct from `onFocus`, which also fires for reveal/rebuild/programmatic focus. It
+   *  dismisses a green, and it calms the rail's red (explicit direction: seen is not
+   *  resolved, but seen is worth something). */
+  onPaneClick?: (paneId: PaneId) => void
+
   constructor(
     host: HTMLElement,
     private readonly source: string,
@@ -140,13 +152,19 @@ export class GridLayout {
       const slot = (e.target as HTMLElement).closest('.layout-slot') as HTMLElement | null
       if (slot) {
         this.setFocused(slot)
-        // A CLICK is the acknowledgment that dismisses a sticky finished (green)
-        // dot — deliberately here and in keyboard nav (moveFocus), NOT in
-        // setFocused: reveal/rebuild/programmatic focus paths also run setFocused,
-        // and none of those mean "I looked at this pane" (the flag must survive a
-        // workspace switch that happens to auto-focus the finished pane).
+        // A CLICK is the human ARRIVING on this pane — deliberately here and in keyboard
+        // nav (focusDir), NOT in setFocused: reveal/rebuild/programmatic focus paths also
+        // run setFocused, and none of those mean "I looked at this pane".
+        //   green  dismissed outright (acknowledgeFinished).
+        //   red    NOT dismissed — the agent is still blocked and a click cannot unblock
+        //          it. But it calms the RAIL (onPaneClick -> the controller): the tab stops
+        //          pulsing and the badge stops shouting, because you have seen it. Seen is
+        //          not resolved; seen is still worth something (explicit direction).
         const paneId = Number(slot.dataset.paneId)
-        if (paneId) acknowledgeFinished(paneId as PaneId)
+        if (paneId) {
+          acknowledgeFinished(paneId as PaneId)
+          this.onPaneClick?.(paneId as PaneId)
+        }
       }
     })
     this.grid.addEventListener('focusin', () => {
@@ -396,6 +414,7 @@ export class GridLayout {
       // Same control toggled again -> plain grid restored.
       this.reflow()
       this.setFocused(slot)
+      this.onVisibilityChange?.() // collapsing reveals the siblings — a green may be owed
       getTelemetry().captureEvent({ name: 'pane.expanded', props: { mode, on: false } })
       return
     }
@@ -410,6 +429,7 @@ export class GridLayout {
     this.grid.classList.add('has-expand')
     this.reflow()
     this.setFocused(slot)
+    this.onVisibilityChange?.() // expanding HIDES siblings — an unpaid green stays owed
   }
 
   private clearExpand(): void {
@@ -437,28 +457,56 @@ export class GridLayout {
     if (el) this.setFocused(el)
   }
 
-  /** One-shot status flash on a pane's slot — the "look HERE" cue the workspace
-   *  controller fires on activation (and on a flip while the workspace is already in
-   *  front of you). `kind` picks the color: 'input' = blocked on you (vivid red),
-   *  'finished' = done working (vivid green). Class off -> reflow -> on replays the
-   *  animation from frame 0 even mid-pulse; the timer (not animationend) removes it,
-   *  because reduced-motion swaps the animation and its end event with it. */
-  pulseAttention(paneId: number, kind: 'input' | 'finished' = 'input'): void {
+  /**
+   * The pane's RESTING status outline, and optionally the swell that delivers it.
+   *
+   * `kind` is the state the pane WEARS until it is resolved — 'input' = blocked on you
+   * (red, until the agent is unblocked), 'finished' = done and unclicked (green, until you
+   * click it), null = nothing. This replaces the old one-shot flash that faded to nothing
+   * and left the pane unmarked; the outline is now the message and the pulse is only its
+   * arrival (explicit direction).
+   *
+   * `pulse` plays that arrival. It is deliberately SEPARATE from the outline, because the
+   * two have different lifetimes: a red re-pulses every time you re-enter the workspace,
+   * while a green pulses exactly once and then wears its outline in silence. Class off ->
+   * reflow -> on replays the animation from frame 0 even mid-swell; a timer (not
+   * animationend) removes it, because reduced motion turns the animation off and takes its
+   * end event with it.
+   */
+  setPaneAlert(paneId: number, kind: 'input' | 'finished' | null, pulse = false): void {
     const localId = paneId - this.baseId
     const el = this.slotEls.get(localId)
     if (!el) return
+    if (kind) el.dataset.alert = kind
+    else delete el.dataset.alert
+
     const prev = this.pulseTimers.get(localId)
     if (prev != null) clearTimeout(prev)
-    el.classList.remove('attn-pulse', 'pulse-input', 'pulse-finished')
+    el.classList.remove('attn-pulse')
+    if (!kind || !pulse) {
+      this.pulseTimers.delete(localId)
+      return
+    }
     void el.offsetWidth // commit the removal, so re-adding restarts the one-shot
-    el.classList.add('attn-pulse', kind === 'finished' ? 'pulse-finished' : 'pulse-input')
+    el.classList.add('attn-pulse')
     this.pulseTimers.set(
       localId,
       window.setTimeout(() => {
-        el.classList.remove('attn-pulse', 'pulse-input', 'pulse-finished')
+        // Drop only the ARRIVAL. `data-alert` stays: the outline outlives its swell, and
+        // removing it here is what would put us back to a pane that forgets its own state.
+        el.classList.remove('attn-pulse')
         this.pulseTimers.delete(localId)
-      }, 3200) // > the 3s pulse AND the 1.8s reduced-motion fade — neither is cut short
+      }, 1400) // > the 1.2s swell, so it is never cut short
     )
+  }
+
+  /** Can a human actually SEE this pane right now? Slot exists and is not hidden under an
+   *  expanded sibling (`.covered`, stamped by reflow). The workspace being active and the
+   *  grid being the visible view are the caller's half of the question — see the
+   *  controller's paneIsVisible, which owns the whole predicate. */
+  paneVisible(paneId: number): boolean {
+    const el = this.slotEls.get(paneId - this.baseId)
+    return !!el && !el.classList.contains('covered')
   }
 
   /** Move focus to the neighboring pane in a direction (keyboard pane nav). Spatial:
@@ -487,7 +535,10 @@ export class GridLayout {
       this.setFocused(slot)
       // Deliberate keyboard navigation INTO a pane counts as looking at it — the
       // keyboard twin of the click acknowledgment in the grid mousedown handler.
-      if (best) acknowledgeFinished((this.baseId + best.id) as PaneId)
+      if (best) {
+        acknowledgeFinished((this.baseId + best.id) as PaneId)
+        this.onPaneClick?.((this.baseId + best.id) as PaneId)
+      }
     }
   }
 

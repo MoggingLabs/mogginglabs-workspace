@@ -6,15 +6,20 @@ import { confirmDialog, icon, showToast } from '../../components'
 import { setFocusedPane } from '../../core/layout/focus'
 import { setPaneCwd, getPaneCwd, getPaneCwdProjection } from '../../core/layout/pane-cwd'
 import { setPaneRole, setPaneRemote, clearPaneRemote, setPaneLabel, getPaneRemote } from '../../core/layout/pane-meta'
-import { paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
+import { paneState, paneFinished, acknowledgeFinished, onAttentionChange } from '../../core/attention/attention-port'
 import { announce } from '../../core/a11y/live-region'
 import { clearPaneLaunch } from '../../core/agents/toolplan-panes'
 import { requestAgentLaunch } from '../../core/agents/launch-port'
 import { getPaneAgentSession } from '../../core/agents/agent-session-port'
-import { activeView, setActiveView } from '../../core/shell/view-port'
+import { activeView, setActiveView, onViewChange } from '../../core/shell/view-port'
 import { getTelemetry } from '../../core/telemetry'
 import type { TemplateWorkspaceSpec } from '../../core/workspace/open-service'
 import { type WorkspaceMeta, colorForOrdinal, newWorkspaceId } from './model'
+
+/** How long to let the arrival swell land before a pane that was auto-focused-into is treated
+ *  as clicked. Must outlast the 1.2s swell (and grid-layout's own 1400ms class timer), or the
+ *  acknowledgement would clear `data-alert` out from under the animation that rides on it. */
+const PULSE_SETTLE_MS = 1400
 
 interface WorkspaceView {
   meta: WorkspaceMeta
@@ -24,14 +29,19 @@ interface WorkspaceView {
    *  handler swallowed Enter/Space before the close button could ever see them. */
   activate: HTMLButtonElement
   label: HTMLElement
+  /** Blocked panes — RED. Split from the done count by urgency (explicit direction): one
+   *  number could not say whether a "3" was three agents needing you or one needing you and
+   *  two merely finished, and those are different messages. */
   attnBadge: HTMLElement
+  /** Finished-and-unclicked panes — GREEN. */
+  doneBadge: HTMLElement
   countBadge: HTMLElement
   container: HTMLElement
   layout: GridLayout
   attentionLatched: boolean
-  /** The rail outline's latch: ANY alert (blocked or finished) while backgrounded
-   *  holds the orange outline until this workspace is focused — nothing else may
-   *  clear it (spec: "disappears only once I view and select that workspace"). */
+  /** The rail outline's latch: any UNSEEN alert while backgrounded holds the pulsing orange
+   *  outline until this workspace is focused — nothing else may clear it (spec: "disappears
+   *  only once I view and select that workspace"). */
   alertLatched: boolean
 }
 
@@ -60,16 +70,18 @@ export interface SwitchOpts {
 
 /**
  * What a close would actually destroy. ONE definition of "live", shared by the three
- * destructive paths (close workspace / close pane / shrink layout) so the predicate and
- * the copy can't drift — they had. Every one of them counted `session || state !== idle`
- * and then told the user those panes had "an agent still working", which is false twice
- * over: a session is an ASSIGNMENT (an agent parked at its prompt still has one), and the
- * state machine is a generic output tracker — absent OSC 133 markers plain output marks a
- * pane busy (agent-state/activity.ts), so a bare `npm run build` was reported as an agent.
+ * destructive paths (close workspace / close pane / shrink layout) so the predicate and the
+ * copy can't drift — they had. Every one of them counted `session || state !== idle` and then
+ * told the user those panes had "an agent still working". A session is an ASSIGNMENT, not
+ * activity: an agent parked at its prompt still has one.
  *
- * The two reasons are counted separately because they are separately true, and a pane can
- * be live for both (an agent mid-turn): `sessions` and `running` overlap, `panes` is the
- * union and is the number that decides whether we prompt at all.
+ * `running` is now exact, which it could not be before: the state machine used to mark a pane
+ * busy from plain OUTPUT, so a bare `npm run build` was reported as an agent at work. Under the
+ * verdict law busy means an agent actually said it was working (agent-state/activity.ts).
+ *
+ * The two reasons are counted separately because they are separately true, and a pane can be
+ * live for both (an agent mid-turn): `sessions` and `running` overlap, `panes` is the union and
+ * is the number that decides whether we prompt at all.
  */
 interface LivePanes {
   /** Panes live for either reason — the union. Empty ⇒ no confirmation is warranted. */
@@ -85,7 +97,12 @@ function inspectLive(paneIds: number[]): LivePanes {
   for (const raw of paneIds) {
     const paneId = raw as PaneId
     const hasSession = !!getPaneAgentSession(paneId)
-    const isRunning = paneState(paneId) !== 'idle'
+    // Live work, named exactly: an agent mid-turn (busy) or one blocked waiting on you
+    // (attention) — closing the pane kills both. `done` and `idle` are not running, and
+    // `unknown` means the pane never spoke a verdict, so we must not claim anything about it.
+    // (This was `!== 'idle'`, which read a never-spoken pane as "still producing output".)
+    const s = paneState(paneId)
+    const isRunning = s === 'busy' || s === 'attention'
     if (hasSession) live.sessions.push(paneId)
     if (isRunning) live.running.push(paneId)
     if (hasSession || isRunning) live.panes.push(paneId)
@@ -107,13 +124,17 @@ function describeLive(live: LivePanes): string {
 }
 
 /**
- * Owns the set of workspaces: one rail item + one hidden/visible container + one
- * `GridLayout` each. Switching is pure show/hide (every workspace's panes stay mounted
- * and streaming). The rail item carries the Phase-2 signature: a live NUMERIC alert
- * count — panes needing attention plus panes finished-while-backgrounded — next to a
- * quiet pane-count, plus the latched attention attribute (`data-attention`, the
- * contract the attention/milestone smokes assert). Emits `onChange` after any
- * mutation (used to persist + publish the info port).
+ * Owns the set of workspaces: one rail item + one hidden/visible container + one `GridLayout`
+ * each. Switching is pure show/hide (every workspace's panes stay mounted and streaming).
+ *
+ * The rail item carries TWO live alert counts, split by urgency (explicit direction) — red for
+ * panes that need you, green for panes that finished — beside a quiet pane-count, plus the
+ * latched attention attribute (`data-attention`, the contract the attention/milestone smokes
+ * assert). It also owns every pane's RESTING status outline and the swells that deliver them:
+ * refreshAttention is the single pass that derives all of it from the attention port, so the
+ * pane dot, the pane outline and the rail are incapable of disagreeing.
+ *
+ * Emits `onChange` after any mutation (used to persist + publish the info port).
  */
 export class WorkspaceController {
   private readonly views = new Map<string, WorkspaceView>()
@@ -125,19 +146,30 @@ export class WorkspaceController {
   // lapses. Key -> the dispose timer + the order index to restore to.
   private readonly pendingClose = new Map<string, { timer: ReturnType<typeof setTimeout>; index: number }>()
   private lastAttnTotal = 0 // for the A11Y-01 "needs your input" announcement
-  private readonly attnSeen = new Set<PaneId>() // panes mid-attention-episode (one pulse each)
-  // The sticky finished flag lives on the attention PORT (single source of truth,
-  // set on the busy/attention→idle edge, cleared only by a CLICK on the pane or by
-  // new work). The controller layers two lifetimes on top of it:
-  //   finSeen    flag-episodes already processed — one green pulse each, attnSeen's
-  //              twin (a chatty refresh must not re-flash).
-  //   finWsSeen  the flag was up while its workspace was FOCUSED: viewing the
-  //              workspace consumes the rail alert (badge count + outline), while
-  //              the pane's own green dot lives on until the pane is clicked.
-  // Both are pruned to the panes actually scanned — pane ids are ordinal-derived
-  // and REUSED after a workspace closes, so a stale entry would corrupt a new one.
-  private readonly finSeen = new Set<PaneId>()
-  private readonly finWsSeen = new Set<PaneId>()
+
+  // ── The three pulse/alert lifetimes. Red and green are deliberately NOT symmetric. ──
+  //
+  // attnPulsed   red panes whose swell has already played THIS VISIT. Cleared wholesale on
+  //              every switch, which is what re-arms it: leave a blocked pane unanswered,
+  //              come back, and it pulses at you again (explicit direction). Red has no
+  //              "spent" state, because the agent is still blocked and nothing you did
+  //              changed that.
+  // greenPulsed  finished panes whose swell has played AT ALL. Once, ever — a completion is
+  //              news, and news is only new once. Cleared when the pane stops being finished
+  //              (you clicked it, or new work reclaimed it), so its NEXT done pulses again.
+  // seenBlocked  blocked panes you have CLICKED. They keep their red outline and red dot —
+  //              a click cannot unblock an agent — but they stop arming the rail: the tab
+  //              no longer pulses for a pane you have already looked at. Seen is not
+  //              resolved, but seen is worth something. The COUNT deliberately stays: it is
+  //              information, not an alarm, and hiding "how many agents need you" is exactly
+  //              the forgetting this whole system exists to prevent.
+  //
+  // All three are pruned to the panes actually scanned — pane ids are ordinal-derived and
+  // REUSED after a workspace closes, so a stale entry would silently corrupt its successor
+  // (a reused id reading "already pulsed" would never flash on its first real edge).
+  private readonly attnPulsed = new Set<PaneId>()
+  private readonly greenPulsed = new Set<PaneId>()
+  private readonly seenBlocked = new Set<PaneId>()
   private readonly worktreeRemovalEvents: Array<{
     paneId: number
     stage: 'request' | 'pane-closed' | 'remove-attempt' | 'remove-result'
@@ -156,6 +188,11 @@ export class WorkspaceController {
     private readonly onOpened?: (meta: WorkspaceMeta) => void
   ) {
     onAttentionChange(() => this.refreshAttention())
+    // Coming back to the grid from Board/Home/Settings is a moment a green pulse can finally be
+    // PAID. The old code marked the pulse "seen" the instant the flag rose, wherever you were —
+    // so an agent finishing while you sat on the Board spent its news on an empty room, and you
+    // returned to a green dot that had never flashed.
+    onViewChange(() => this.refreshAttention())
     this.wireReorder()
   }
 
@@ -312,6 +349,13 @@ export class WorkspaceController {
       this.refreshAttention()
       this.onChange()
     }
+    // Expanding a pane HIDES its siblings; collapsing reveals them. Either way the set of panes
+    // a human can actually see just changed, and an unpaid green pulse may now be payable (or
+    // must keep waiting) — refreshAttention re-asks paneIsVisible for every pane.
+    layout.onVisibilityChange = () => this.refreshAttention()
+    // A real click on a pane — never a programmatic focus. Dismisses a green (grid-layout calls
+    // the port directly) and calms the rail's red (here).
+    layout.onPaneClick = (paneId) => this.notePaneClicked(paneId)
 
     // The restored arrangement is already live — it OPENED the grid above. Re-applying it
     // here, with onLayoutChange now wired, is what writes the canonical form (normalized
@@ -388,6 +432,7 @@ export class WorkspaceController {
     activate: HTMLButtonElement
     label: HTMLElement
     attnBadge: HTMLElement
+    doneBadge: HTMLElement
     countBadge: HTMLElement
   } {
     // A plain div — NOT role=button. It contains a real close button, and a button inside a
@@ -418,9 +463,14 @@ export class WorkspaceController {
 
     const badges = document.createElement('span')
     badges.className = 'ws-badges'
+    // TWO alert counts, split by urgency (explicit direction). Red first: if the tab runs out
+    // of room, the one that must survive is the one that means "an agent is waiting on you".
     const attnBadge = document.createElement('span')
     attnBadge.className = 'count-badge count-badge--attention ws-attn'
     attnBadge.hidden = true
+    const doneBadge = document.createElement('span')
+    doneBadge.className = 'count-badge ws-done'
+    doneBadge.hidden = true
     const countBadge = document.createElement('span')
     countBadge.className = 'count-badge ws-count'
     countBadge.textContent = String(meta.paneCount)
@@ -431,7 +481,7 @@ export class WorkspaceController {
     close.setAttribute('aria-label', `Close ${meta.name}`)
     close.title = 'Close workspace'
     close.append(icon('x', 12))
-    badges.append(attnBadge, countBadge, close)
+    badges.append(attnBadge, doneBadge, countBadge, close)
 
     tab.append(activate, badges)
 
@@ -481,7 +531,7 @@ export class WorkspaceController {
       e.stopPropagation()
       void this.requestClose(meta.id)
     })
-    return { tab, activate, label, attnBadge, countBadge }
+    return { tab, activate, label, attnBadge, doneBadge, countBadge }
   }
 
   /** Move a tab one slot along the rail, keeping focus on it — the keyboard's answer to
@@ -599,28 +649,40 @@ export class WorkspaceController {
     // The pane's OWN cwd (worktree isolation, 3/03), workspace root as the fallback —
     // same contract as the grid's focus callback in `create`.
     setFocusedPane({ paneId: focusId, cwd: getPaneCwd(focusId) || getPaneRemote(focusId)?.cwd || view.meta.cwd })
-    // Panes owed a green replay: sticky finished flags on the PORT — cleared only
-    // by a real click on the pane, so re-entering this workspace keeps replaying
-    // the green pulse until each finished pane has actually been acknowledged.
-    const finishedToPulse = view.layout.paneIds().filter((p) => paneFinished(p))
-    this.refreshAttention() // activating a workspace clears its alert (you're looking at it)
+
+    // Entering a workspace RE-ARMS every red swell in it. A blocked pane you walked away from
+    // without answering asks again the moment you come back (explicit direction) — red has no
+    // spent state, because nothing you did unblocked the agent. Green is untouched here: it
+    // pulses once, ever, and greenPulsed remembers that across every visit.
+    this.attnPulsed.clear()
+
     this.onChange()
     // User-initiated selection lands in the grid; restore keeps the launcher up.
     // AFTER onChange: the reveal must see the published workspace snapshot — the
     // view port routes an empty grid Home (UX-16), and on the FIRST create the
     // snapshot is empty until onChange publishes it.
-    if (opts.reveal !== false) {
-      setActiveView('grid')
-      // The outline the switch just cleared hands off INSIDE the grid: every alerting
-      // pane flashes once in its status color — green = finished while you were away,
-      // red = still blocked on you — so opening the workspace answers "which pane
-      // called me?" without scanning dots. Finished pulses first: a pane somehow owed
-      // both replays as red, blocked outranks done. AFTER the reveal — an animation
-      // on a display:none subtree never plays.
-      for (const paneId of finishedToPulse) view.layout.pulseAttention(paneId, 'finished')
-      for (const paneId of view.layout.paneIds()) {
-        if (paneState(paneId) === 'attention') view.layout.pulseAttention(paneId, 'input')
-      }
+    if (opts.reveal !== false) setActiveView('grid')
+
+    // AFTER the reveal, deliberately: refreshAttention is what plays the swells now, and an
+    // animation on a display:none subtree never plays at all. It also asks paneIsVisible,
+    // which cannot answer honestly until the grid is actually the visible view.
+    this.refreshAttention()
+
+    // LANDING ON A FINISHED PANE COUNTS AS CLICKING IT (explicit direction). The switch
+    // auto-focuses a pane; if that pane is the one that finished, you are looking straight at
+    // it, and asking you to click what you are already reading is ceremony. It still gets its
+    // swell — the news is delivered — and then it is acknowledged: dot back to yellow, outline
+    // gone, dropped from the rail's done count.
+    //
+    // This deliberately REVERSES the old rule in grid-layout, whose comment held that the flag
+    // "must survive a workspace switch that happens to auto-focus the finished pane". After
+    // the swell, not before: acknowledging first would clear `data-alert`, and the swell rides
+    // on it — the pane would be dismissed without ever telling you why.
+    if (opts.reveal !== false && paneFinished(focusId) && this.paneIsVisible(view, focusId)) {
+      const owed = focusId
+      window.setTimeout(() => {
+        if (this.views.get(id) === view && paneFinished(owed)) acknowledgeFinished(owed)
+      }, PULSE_SETTLE_MS)
     }
   }
 
@@ -681,77 +743,106 @@ export class WorkspaceController {
   }
 
   /**
-   * Recompute every rail item's indicators + the app-level any-attention flag.
-   *  - `.ws-attn`  — LIVE numeric alert count: panes currently needing attention (the
-   *    Phase-2 signature) PLUS panes holding an unacknowledged finished flag this
-   *    workspace hasn't been focused over yet. Focusing the workspace consumes the
-   *    finished half of the COUNT (finWsSeen); the flag itself — and the pane's
-   *    green dot — lives on until the pane is clicked (port acknowledge).
-   *  - `.is-alerting` — the ANIMATED orange outline around the whole bar, on
-   *    background tabs. LATCHED (alertLatched): once armed it survives everything
-   *    except focusing the workspace — the spec's "disappears only once I view it".
-   *  - pane pulses — a finished flag rising in the ACTIVE workspace pulses that pane
-   *    green right here (finSeen = one pulse per episode; backgrounded flags replay
-   *    on switch instead); a rising attention edge in the active workspace pulses
-   *    red (attnSeen, same contract).
-   *  - `data-attention` — the latched attribute (paint-free): attention latches until
-   *    the workspace is focused; busy marks activity. The active workspace never
-   *    latches. Finished deliberately does NOT latch it — the attribute keeps its
-   *    exact Phase-2/01 semantics, asserted by the attention + milestone smokes.
+   * Can a human actually SEE this pane right now? The whole predicate, in one place, because
+   * the green pulse is OWED until it is true (explicit direction) and a debt paid against a
+   * half-answer is a debt silently forgiven.
+   *
+   * Three conditions, and the last two are the ones the old code missed. It asked only
+   * `active && activeView() === 'grid'` at the MOMENT the flag rose — so an agent finishing
+   * while you sat on the Board marked its pulse "seen" and then never played it; you came
+   * back to the grid and the news had already been spent. And a pane hidden under an expanded
+   * sibling was "visible" by that test while being, literally, not on screen.
+   */
+  private paneIsVisible(view: WorkspaceView, paneId: PaneId): boolean {
+    return view.meta.id === this.activeId && activeView() === 'grid' && view.layout.paneVisible(paneId)
+  }
+
+  /**
+   * Recompute every pane outline, every rail indicator, and the app-level any-attention flag.
+   * ONE pass, off the attention port, so the pane dot, the pane outline and the rail can never
+   * disagree — they are all derived here from the same read.
+   *
+   *  - pane outline (`data-alert`) — the RESTING state: red while blocked, green while
+   *    finished-and-unclicked. The pane wears its own status now; it no longer fades to
+   *    nothing and leaves a 13px dot to carry the story.
+   *  - the swell — how that outline ARRIVES. Red re-pulses on every visit until it is
+   *    answered; green pulses once, ever, and only when the pane is truly visible.
+   *  - `.ws-attn` / `.ws-done` — the two counts, SPLIT BY URGENCY. Red = panes that need
+   *    you, green = panes that finished. A single number could not tell those apart.
+   *  - `.is-alerting` — the pulsing orange outline around the whole tab, background tabs
+   *    only. LATCHED: once armed it survives everything except focusing the workspace. This
+   *    is the ONE indicator that still moves forever, deliberately — the rail is the surface
+   *    you are not looking at.
+   *  - `.is-working` — the quiet "my agents are running" hint. Not an alert, not a count.
+   *  - `data-attention` — the latched attribute (paint-free): the DOM contract the attention
+   *    and milestone smokes assert. Unchanged semantics.
    */
   private refreshAttention(): void {
-    let anyAttention = false
+    // The OS-level signal (dock badge on macOS, taskbar flash on Windows/Linux). It carries
+    // BOTH kinds now (explicit direction): a completion used to be invisible unless the app was
+    // already in front of you, so an agent that finished while you were elsewhere told you
+    // nothing at all. Backgrounded workspaces only — you can see the one you are looking at.
+    let anyAlert = false
     let attnTotal = 0
     const scanned = new Set<PaneId>()
     for (const view of this.views.values()) {
       if (this.pendingClose.has(view.meta.id)) continue // mid-close: hidden, don't ring
       const active = view.meta.id === this.activeId
       let attnCount = 0
-      let finishedCount = 0
+      let doneCount = 0
+      let unseen = 0 // alerts that may still arm the rail (a clicked red no longer does)
       let busy = false
+
       for (const paneId of view.layout.paneIds()) {
-        const s: AgentState = paneState(paneId)
         scanned.add(paneId)
-        if (paneFinished(paneId)) {
-          if (!this.finSeen.has(paneId)) {
-            this.finSeen.add(paneId) // rising flag: one green pulse per episode
-            if (active && activeView() === 'grid') view.layout.pulseAttention(paneId, 'finished')
-          }
-          // Focusing the workspace consumes the RAIL alert; the flag itself (and the
-          // pane's green dot) lives on until the pane is clicked (port acknowledge).
-          if (active) this.finWsSeen.add(paneId)
-          if (!this.finWsSeen.has(paneId)) finishedCount++
-        } else {
-          this.finSeen.delete(paneId) // flag gone (clicked or working again) — rearm
-          this.finWsSeen.delete(paneId)
-        }
+        const s: AgentState = paneState(paneId)
+        const finished = paneFinished(paneId)
+        const visible = this.paneIsVisible(view, paneId)
+
         if (s === 'attention') {
           attnCount++
-          // Rising edge while this workspace is already in front of you: the toast is
-          // deliberately suppressed for the visible world (notify feature), so the pulse
-          // is the call. `attnSeen` makes it ONE pulse per attention episode — a chatty
-          // refresh (any pane, any workspace, re-runs this scan) must not re-flash.
-          if (!this.attnSeen.has(paneId)) {
-            this.attnSeen.add(paneId)
-            if (active && activeView() === 'grid') view.layout.pulseAttention(paneId, 'input')
-          }
-        } else {
-          this.attnSeen.delete(paneId) // episode over; the next flip may pulse again
-          if (s === 'busy') busy = true
+          if (!this.seenBlocked.has(paneId)) unseen++
+          // Red's swell: once per VISIT. attnPulsed is cleared on every switch, so leaving a
+          // blocked pane unanswered and coming back plays it again — the pane keeps asking.
+          const owed = visible && !this.attnPulsed.has(paneId)
+          if (owed) this.attnPulsed.add(paneId)
+          view.layout.setPaneAlert(paneId, 'input', owed)
+          continue
         }
+
+        // Not blocked any more: it was answered, or it moved on. Everything that hung off
+        // the red goes with it, so the NEXT block starts clean.
+        this.attnPulsed.delete(paneId)
+        this.seenBlocked.delete(paneId)
+
+        if (finished) {
+          doneCount++
+          unseen++
+          // Green's swell: once, EVER — and it is owed until the pane is genuinely on screen.
+          // A completion is news, and news is only new once.
+          const owed = visible && !this.greenPulsed.has(paneId)
+          if (owed) this.greenPulsed.add(paneId)
+          view.layout.setPaneAlert(paneId, 'finished', owed)
+          continue
+        }
+
+        // Nothing to say. Clear the outline and re-arm the green for this pane's next done.
+        this.greenPulsed.delete(paneId)
+        view.layout.setPaneAlert(paneId, null)
+        if (s === 'busy') busy = true
       }
       attnTotal += attnCount
 
-      const alertCount = attnCount + finishedCount
-      view.attnBadge.hidden = alertCount === 0
-      if (alertCount > 0) {
-        view.attnBadge.textContent = String(alertCount)
-        const parts: string[] = []
-        if (attnCount > 0)
-          parts.push(`${attnCount} ${attnCount === 1 ? 'pane needs' : 'panes need'} your input`)
-        if (finishedCount > 0)
-          parts.push(`${finishedCount} finished working`)
-        view.attnBadge.title = parts.join(' · ')
+      // The two counts. Red is urgency, green is news; they never share a badge.
+      view.attnBadge.hidden = attnCount === 0
+      if (attnCount > 0) {
+        view.attnBadge.textContent = String(attnCount)
+        view.attnBadge.title = `${attnCount} ${attnCount === 1 ? 'pane needs' : 'panes need'} your input`
+      }
+      view.doneBadge.hidden = doneCount === 0
+      if (doneCount > 0) {
+        view.doneBadge.textContent = String(doneCount)
+        view.doneBadge.title = `${doneCount} finished working`
       }
       view.countBadge.textContent = String(view.meta.paneCount)
 
@@ -760,37 +851,44 @@ export class WorkspaceController {
       const indicator = active ? '' : view.attentionLatched ? 'attention' : busy ? 'busy' : ''
       if (indicator) view.tab.dataset.attention = indicator
       else delete view.tab.dataset.attention
-      if (indicator === 'attention') anyAttention = true
-      // The outline's own LATCH: any alert while backgrounded arms it, and ONLY
-      // focusing this workspace disarms it — the alert may not fade on its own
-      // (spec), even if the flagged pane starts working again meanwhile.
+      if (!active && (view.attentionLatched || doneCount > 0)) anyAlert = true
+
+      // The outline's LATCH: an UNSEEN alert while backgrounded arms it, and only focusing the
+      // workspace disarms it — the alert may not fade on its own, even if the flagged pane
+      // starts working again meanwhile. A blocked pane you have already clicked is not unseen,
+      // so it no longer drags the tab back into pulsing every time you leave the room.
       if (active) view.alertLatched = false
-      else if (alertCount > 0) view.alertLatched = true
-      // The animated orange outline around the whole bar — background tabs only,
-      // so it never fights the active tab's identity selection paint.
-      view.tab.classList.toggle('is-alerting', !active && (view.alertLatched || alertCount > 0))
+      else if (unseen > 0) view.alertLatched = true
+      view.tab.classList.toggle('is-alerting', !active && (view.alertLatched || unseen > 0))
+      // Work in progress, said quietly. Never on the active tab: you can see the grid.
+      view.tab.classList.toggle('is-working', !active && busy && !view.alertLatched && unseen === 0)
     }
-    // Prune the flag-lifetime tracking to panes that still exist (see the field
-    // comment: reused pane ids must never inherit a closed workspace's history).
-    // attnSeen too: a pane disposed MID-attention leaves its entry behind, and the
-    // reused id would then read "already pulsed" — its first real rising edge would
-    // never flash.
-    for (const paneId of this.finSeen) {
-      if (!scanned.has(paneId)) this.finSeen.delete(paneId)
+
+    // Prune every lifetime set to the panes that still exist. Pane ids are ordinal-derived and
+    // REUSED after a workspace closes: a pane disposed mid-alert would otherwise leave its
+    // entry behind, and the successor holding that id would read "already pulsed" — its first
+    // real edge would never flash.
+    for (const set of [this.attnPulsed, this.greenPulsed, this.seenBlocked]) {
+      for (const paneId of set) if (!scanned.has(paneId)) set.delete(paneId)
     }
-    for (const paneId of this.finWsSeen) {
-      if (!scanned.has(paneId)) this.finWsSeen.delete(paneId)
-    }
-    for (const paneId of this.attnSeen) {
-      if (!scanned.has(paneId)) this.attnSeen.delete(paneId)
-    }
-    // A11Y-01: the badge is silent to screen readers — announce when a
-    // new pane starts needing input (a rise in the total).
+
+    // A11Y-01: the badges are silent to screen readers — announce when a new pane starts
+    // needing input (a rise in the total).
     if (attnTotal > this.lastAttnTotal) {
       announce(`${attnTotal} ${attnTotal === 1 ? 'pane needs' : 'panes need'} your input`)
     }
     this.lastAttnTotal = attnTotal
-    this.onAttention?.(anyAttention)
+    this.onAttention?.(anyAlert)
+  }
+
+  /** A real click landed on a pane (GridLayout.onPaneClick — never a programmatic focus).
+   *  The green is already dismissed on the port; this is the RED half: a blocked pane you
+   *  have looked at stops arming the rail. It keeps its red outline and its red dot, because
+   *  a click cannot unblock an agent — but the tab stops pulsing about it. */
+  private notePaneClicked(paneId: PaneId): void {
+    if (paneState(paneId) !== 'attention' || this.seenBlocked.has(paneId)) return
+    this.seenBlocked.add(paneId)
+    this.refreshAttention()
   }
 
   /** Switch by rail position (Ctrl/Cmd+1..9). */
