@@ -734,14 +734,22 @@ export const boardFeature: UiFeature = {
       if (cards.some((c) => c.paneId)) render()
     })
     onPaneCwd((paneId, cwd) => {
-      if (cwd) return
       const card = cards.find((c) => c.paneId === paneId)
-      if (card) {
+      if (!card) return
+      if (!cwd) {
         card.paneId = null
         card.workspaceId = null
         save(card)
         render()
+        return
       }
+      // A pane's cwd is no longer fixed at spawn: it is TRACKED, and the shell reports it as it
+      // moves. The ✓-chip is a function of that cwd (approvedChip: the pane must be standing in
+      // the worktree whose branch was signed off), so a cwd that changes without a render leaves
+      // the chip lying — and it always changes, because the launch command's own `cd <worktree>`
+      // is learned from the shell AFTER the pane exists. Approval landing first and the pane
+      // arriving in the worktree second was exactly the order in which the chip never appeared.
+      render()
     })
 
     // ── entry points: titlebar button (shell), palette, keyboard ─────────────
@@ -794,7 +802,14 @@ export const boardFeature: UiFeature = {
           return c.id
         },
         startOnCard: (id: string, provider: string) => startOnCard(id, provider),
-        refresh: () => load()
+        refresh: () => load(),
+        // The ✓-chip is an AND of two independent facts (approvedChip, above): the pane is
+        // standing in the worktree, and that worktree's branch holds a believed sign-off.
+        // A gate that can only see the chip cannot say which half failed.
+        approvalProbe: (paneId: number, branch: string) => ({
+          cwd: getPaneCwd(paneId as PaneId) ?? null,
+          approved: isBranchApproved(branch)
+        })
       }
     }
   }

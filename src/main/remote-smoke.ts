@@ -67,17 +67,33 @@ function remoteBootstrapSyntaxOk(command: string): boolean {
   }
 }
 
-// A batch (win) / sh (posix) script standing in for `ssh`. It records its argv to a file (the
-// IPv6/target-quoting assertions read that), prints the argv marker into the pane, reports
-// whether ANY pane capability leaked into the remote child's env — and then DELAYS, the way a
-// real ssh does while it authenticates, before handing over to an interactive local shell.
-// The delay is load-bearing: it is the window in which nothing may be typed at the pane. The
-// smoke injects the readiness data event explicitly afterwards, because batch/ConPTY does not
-// preserve private OSCs consistently across Windows builds.
+// A PowerShell (win) / sh (posix) script standing in for `ssh`. It records its argv VERBATIM to
+// a file (the argv/IPv6/target-quoting assertions read that file, not the pane: the one remote
+// command is now the full POSIX bootstrap, ~10 KB, which would flood the pane's buffer and get
+// truncated), prints a short marker into the pane, reports whether ANY pane capability leaked
+// into the remote child's env — and then DELAYS, the way a real ssh does while it authenticates,
+// before handing over to an interactive local shell. The delay is load-bearing: it is the window
+// in which nothing may be typed at the pane. The smoke injects the readiness data event
+// explicitly afterwards, because ConPTY does not preserve private OSCs consistently across
+// Windows builds.
+//
+// PowerShell, not a .cmd batch: cmd's command line caps at 8191 characters and the bootstrap is
+// bigger than that, so the batch shim died with "The command line is too long" before running a
+// single line. Real `ssh.exe` is spawned directly (32 KB CreateProcess limit) and never hit it.
 const SHIM_SRC =
   process.platform === 'win32'
-    ? '@echo %*>"%~f0.argv"\r\n@echo SSH_SHIM argv=%*\r\n@if defined MOGGING_DAEMON_ENDPOINT (echo SSH_ENV_ENDPOINT=LEAK) else (echo SSH_ENV_ENDPOINT=clean)\r\n@if defined MOGGING_BROWSER_ENDPOINT (echo SSH_ENV_BROWSER=LEAK) else (echo SSH_ENV_BROWSER=clean)\r\n@if defined MOGGING_PANE_ID (echo SSH_ENV_ID=LEAK) else (echo SSH_ENV_ID=clean)\r\n@if defined MOGGING_PANE_TOKEN (echo SSH_ENV_TOKEN=LEAK) else (echo SSH_ENV_TOKEN=clean)\r\n@>nul ping -n 3 127.0.0.1\r\n@%COMSPEC%\r\n'
-    : '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$0.argv"\necho "SSH_SHIM argv=$@"\nif [ "${MOGGING_DAEMON_ENDPOINT+x}" = x ]; then echo SSH_ENV_ENDPOINT=LEAK; else echo SSH_ENV_ENDPOINT=clean; fi\nif [ "${MOGGING_BROWSER_ENDPOINT+x}" = x ]; then echo SSH_ENV_BROWSER=LEAK; else echo SSH_ENV_BROWSER=clean; fi\nif [ "${MOGGING_PANE_ID+x}" = x ]; then echo SSH_ENV_ID=LEAK; else echo SSH_ENV_ID=clean; fi\nif [ "${MOGGING_PANE_TOKEN+x}" = x ]; then echo SSH_ENV_TOKEN=LEAK; else echo SSH_ENV_TOKEN=clean; fi\nsleep 2\nexec ${SHELL:-/bin/sh}\n'
+    ? [
+        '[IO.File]::WriteAllText("$PSCommandPath.argv", ($args -join "`n"))',
+        "Write-Host 'SSH_SHIM argv captured'",
+        "foreach ($pair in @(@('MOGGING_DAEMON_ENDPOINT','ENDPOINT'), @('MOGGING_BROWSER_ENDPOINT','BROWSER'), @('MOGGING_PANE_ID','ID'), @('MOGGING_PANE_TOKEN','TOKEN'))) {",
+        '  $state = if (Test-Path ("env:" + $pair[0])) { "LEAK" } else { "clean" }',
+        '  Write-Host ("SSH_ENV_" + $pair[1] + "=" + $state)',
+        '}',
+        'Start-Sleep -Seconds 2',
+        '& $env:ComSpec',
+        ''
+      ].join('\r\n')
+    : '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$0.argv"\necho "SSH_SHIM argv captured"\nif [ "${MOGGING_DAEMON_ENDPOINT+x}" = x ]; then echo SSH_ENV_ENDPOINT=LEAK; else echo SSH_ENV_ENDPOINT=clean; fi\nif [ "${MOGGING_BROWSER_ENDPOINT+x}" = x ]; then echo SSH_ENV_BROWSER=LEAK; else echo SSH_ENV_BROWSER=clean; fi\nif [ "${MOGGING_PANE_ID+x}" = x ]; then echo SSH_ENV_ID=LEAK; else echo SSH_ENV_ID=clean; fi\nif [ "${MOGGING_PANE_TOKEN+x}" = x ]; then echo SSH_ENV_TOKEN=LEAK; else echo SSH_ENV_TOKEN=clean; fi\nsleep 2\nexec ${SHELL:-/bin/sh}\n'
 
 export function runRemoteSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 240000) // safety net (16s readiness hold + daemon restart + reload)
@@ -257,20 +273,31 @@ export function runRemoteSmoke(win: BrowserWindow): void {
           })()`
         )
 
-      // 1) shim argv: -tt, -p 2222, dev@build.example (WRAP-SAFE: the pane is ~55
-      // cols, so long argv lines wrap — match on the de-newlined text)
+      // 1) shim argv: -tt, -p 2222, dev@build.example, and ONE remote command — the product's own
+      // bootstrap, byte for byte. The expectation is BUILT from remoteBootstrapCommand rather than
+      // spelled out here: a smoke that re-types the bootstrap only asserts that someone once typed
+      // it the same way twice. What is spelled out is the contract the dispatcher owes on top of
+      // main's bootstrap — the readiness OSC, without which an agent launch waits forever.
+      // Read from the shim's argv FILE, not the pane: the bootstrap is ~10 KB and would be wrapped
+      // and scrolled out of a 55-column buffer.
+      const argvPath = `${shimPath}.argv`
       let argvOk = false
       let remoteCapabilityEnvClean = false
       let buf2 = ''
+      let capturedArgv = ''
       for (let i = 0; i < 24 && !(argvOk && remoteCapabilityEnvClean); i++) {
         buf2 = await bufferText(base + 2)
-        const flat = buf2.replace(/[\r\n]/g, '')
-        // The target cwd is single-quoted by the bootstrap, and this one carries an apostrophe on
-        // purpose — so match the quoting-stable prefix, not the raw path.
+        capturedArgv = existsSync(argvPath) ? readFileSync(argvPath, 'utf8').replace(/^﻿/, '') : ''
         argvOk =
-          flat.includes('SSH_SHIM') && flat.includes('-tt') && flat.includes('2222') &&
-          flat.includes('dev@build.example') && flat.includes('/srv/work trees/O') &&
-          flat.includes('mogging-remote-ready') && flat.includes('exec bash -l')
+          buf2.includes('SSH_SHIM') &&
+          capturedArgv.includes('-tt') &&
+          capturedArgv.includes('\n-p\n2222\n') &&
+          capturedArgv.includes('dev@build.example') &&
+          capturedArgv.includes(bootstrap) &&
+          bootstrap.includes('mogging-remote-ready') &&
+          // exactly one remote command: everything after the target IS the bootstrap
+          // (the posix shim terminates each argv line, so compare without the trailing newline)
+          capturedArgv.trimEnd().endsWith(bootstrap)
         remoteCapabilityEnvClean =
           ['ENDPOINT', 'BROWSER', 'ID', 'TOKEN'].every((key) => buf2.includes(`SSH_ENV_${key}=clean`)) &&
           !buf2.includes('=LEAK')

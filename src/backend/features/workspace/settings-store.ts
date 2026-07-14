@@ -485,9 +485,16 @@ export class SettingsStore {
       host: r.host,
       user: r.user ?? undefined,
       port: r.port ?? undefined,
-      // A legacy row confirmed nothing: it reads back as the dialect it was written under.
-      platform: r.platform === 'windows' ? 'windows' : 'posix',
-      shell: (r.shell ?? (r.platform === 'windows' ? 'powershell' : 'sh')) as RemoteHost['shell'],
+      // A legacy row (platform NULL, written before the column existed) confirmed NOTHING, and the
+      // read path must not confirm it on the user's behalf: coercing NULL to 'posix' is a guess
+      // about someone else's machine, and the whole point of the union is that guessing an OS and
+      // then typing at it is how a bash-ism lands in a PowerShell. Unconfirmed stays undefined
+      // until the user picks; `shell` follows the platform it belongs to.
+      platform: r.platform === 'windows' ? 'windows' : r.platform === 'posix' ? 'posix' : undefined,
+      shell:
+        r.platform === null
+          ? undefined
+          : ((r.shell ?? (r.platform === 'windows' ? 'powershell' : 'sh')) as RemoteHost['shell']),
       identityHint: r.identityHint ?? undefined
     }))
   }

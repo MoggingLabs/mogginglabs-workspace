@@ -480,11 +480,17 @@ class PaneSession {
       ]
       const shim = process.env.MOGGING_SSH_SHIM
       if (shim) {
-        // Test shim: a batch/shell script — run via the PLATFORM shell (running it
+        // Test shim: a PowerShell/shell script — run via the PLATFORM shell (running it
         // through process.execPath would boot Electron's GUI, not a script).
+        //
+        // NOT `cmd.exe /c`: the one remote command is now the full POSIX bootstrap (~10 KB),
+        // and cmd's command line caps at 8191 characters — the shim died with "The command
+        // line is too long" before it ever reached a shell, which is a limit of the TEST
+        // transport alone. Real ssh.exe is spawned directly (CreateProcess, 32 KB), so it
+        // never had this ceiling; PowerShell -File gives the shim the same headroom.
         if (isWin) {
-          shell = process.env.COMSPEC || 'cmd.exe'
-          args = ['/c', shim, ...sshArgs]
+          shell = 'powershell.exe'
+          args = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', shim, ...sshArgs]
         } else {
           shell = 'sh'
           args = [shim, ...sshArgs]

@@ -129,7 +129,7 @@ function installSshShim(): void {
   if ((process.env.MOGGING_REMOTE || process.env.MOGGING_SHOT === 'all') && !process.env.MOGGING_SSH_SHIM) {
     process.env.MOGGING_SSH_SHIM = require('node:path').join(
       require('node:os').tmpdir(),
-      `mogging-ssh-shim-${process.pid}.` + (process.platform === 'win32' ? 'cmd' : 'sh')
+      `mogging-ssh-shim-${process.pid}.` + (process.platform === 'win32' ? 'ps1' : 'sh')
     )
   }
 }

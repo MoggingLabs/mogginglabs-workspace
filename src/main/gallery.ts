@@ -36,7 +36,7 @@ function makeRepo(): string {
 
 const SHIM_SRC =
   process.platform === 'win32'
-    ? '@echo SSH_SHIM connected\r\n@%COMSPEC%\r\n'
+    ? "Write-Host 'SSH_SHIM connected'\r\n& $env:ComSpec\r\n"
     : '#!/bin/sh\necho "SSH_SHIM connected"\nexec ${SHELL:-/bin/sh}\n'
 
 /**

@@ -211,6 +211,9 @@ export function runBoardSmoke(win: BrowserWindow): void {
           `(() => { const c = document.querySelector('.board-card[data-card-id="${cardId}"] .board-chip-approved'); return !!c })()`
         )) as boolean
       }
+      const approvalProbe = (await ES(
+        `window.__mogging.board.approvalProbe(${paneId}, ${JSON.stringify(branch)})`
+      )) as { cwd: string | null; approved: boolean }
       // The launch command cd'd the pane INTO its worktree, and Windows refuses to remove a
       // directory that is a process's cwd — so the pane has to step out. It can only step out
       // now: the ✓-chip above keys on the pane's cwd BEING the worktree (approvedChip reads
@@ -245,7 +248,7 @@ export function runBoardSmoke(win: BrowserWindow): void {
       }
 
       const pass = persistOk && bindOk && promptOk && attnOk && noRailOk && railBackOk && approvedChipOk && approvedChipGone && unbindOk
-      result = { pass, persistOk, bindOk, promptOk, textOk, afterDetectOk, handMs, detected, wrote: promptWrite, settled, attnOk, attn, noRailOk, railBackOk, approveExit, approvedChipOk, approvedChipGone, removed, branch, gitQ, wtDirs, unbindOk, paneId, cardId }
+      result = { pass, persistOk, bindOk, promptOk, textOk, afterDetectOk, handMs, detected, wrote: promptWrite, settled, attnOk, attn, noRailOk, railBackOk, approveExit, approvedChipOk, approvalProbe, approvedChipGone, removed, branch, gitQ, wtDirs, unbindOk, paneId, cardId }
     } catch (e) {
       result = { pass: false, error: String(e) }
     }
