@@ -387,9 +387,28 @@ export class WorkspaceController {
 
     tab.append(activate, badges)
 
-    // click, not mousedown: a native button already answers to mouse AND to Enter/Space, and
-    // switching on press meant that merely STARTING a drag-to-reorder switched workspaces.
-    activate.addEventListener('click', () => this.switch(meta.id))
+    // The WHOLE tab switches, not just the button. `.workspace-tab` is what paints the hover
+    // tint and carries `cursor: pointer`, but `.ws-tab-activate` only ever covered the tab's
+    // CONTENT box — and the tab is 2px border + 22px padding around a 30px icon (--ws-square =
+    // 54px). Collapsed, that made the click target exactly the icon chip inside a square three
+    // times its area; expanded, the 12px bands above, below and left of the row were dead the
+    // same way. Listening on the wrapper makes the target the lit box itself, with no second
+    // geometry to keep in sync with the first.
+    // Still click, not mousedown: switching on press meant that merely STARTING a drag-to-
+    // reorder switched workspaces. `activate` stays a real button, so Enter/Space still fire a
+    // click — it just bubbles to here now, and the keyboard path remains the platform's.
+    tab.addEventListener('click', (e) => {
+      // The two descendants that own their clicks: the close button (whose handler stops
+      // propagation, but whose padding must not switch either) and the rename input, where a
+      // click places the caret and must not switch the workspace out from under the edit.
+      if (e.target instanceof Element && e.target.closest('.ws-close, .ws-rename')) return
+      // A click on the padding must land focus exactly where a click on the button does: the
+      // F2 / Delete / Alt+Arrow verbs below are keydown listeners on `tab` and only fire while
+      // focus is inside it, and `:focus-within` is what reveals the close button. preventScroll
+      // because native mouse focus does not scroll either — this only mirrors it.
+      activate.focus({ preventScroll: true })
+      this.switch(meta.id)
+    })
     // The wrapper keeps only the verbs no button owns. Enter/Space are gone from here on
     // purpose — the two real buttons handle their own activation now.
     tab.addEventListener('keydown', (e) => {
