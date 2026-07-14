@@ -68,7 +68,7 @@ import type { AgentState } from '@contracts'
  *  The only cost of generosity is that a genuine block — on a CLI whose chime is all we have —
  *  turns red this late. That is a "come here" signal, not a control input; a beat of latency is
  *  imperceptible, and it buys the completion story its correctness. */
-const BELL_CONFIRM_MS = 2000
+export const BELL_CONFIRM_MS = 2000
 
 export class ActivityTracker {
   /** `unknown` until this pane speaks. Never returns to it. */

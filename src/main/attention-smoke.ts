@@ -1,7 +1,7 @@
 import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { OscParser } from '@backend/features/agent-state'
+import { ActivityTracker, BELL_CONFIRM_MS, isSubmittedInput, OscParser } from '@backend/features/agent-state'
 
 // Env-gated tab-attention smoke (MOGGING_ATTENTION): create a 2nd workspace so Workspace 1 is
 // backgrounded, flip a pane in that background workspace to attention, assert its tab rings, then
@@ -24,6 +24,150 @@ function bellsFor(chunks: string[]): number {
   )
   for (const c of chunks) p.push(c)
   return bells
+}
+
+/**
+ * B. THE TRACKER'S RULES, asserted directly. The ActivityTracker is Electron-free and pure, so
+ * this is a unit test wearing a gate's clothes — deterministic, no app timing, no DOM.
+ *
+ * It exists because the two hardest rules in the whole alerts system had NO coverage at all, and
+ * both of them fail silently when they break:
+ *
+ *   THE SUBAGENT GATE. An agent that fans work out ends its own turn while the subagents run — it
+ *   fires Stop with the work still in flight. Green requires main-done AND zero subagents, so that
+ *   Stop is DEFERRED and redeemed only when the last child lands. Break it and a pane pulses green
+ *   in the middle of a job.
+ *
+ *   THE BELL DEDUCTION. A chime is ambiguous — every CLI rings it on COMPLETION as well as when
+ *   blocked. It is held for BELL_CONFIRM_MS and asked whether a `done` lands behind it: chime WITH
+ *   a done is a completion (green), chime ALONE is a block (red). Break the first half and every
+ *   Codex/Gemini/OpenCode completion rings red; break the second and three of five CLIs can never
+ *   say they need you, because a chime is the only signal they have.
+ */
+async function trackerAsserts(): Promise<Record<string, boolean>> {
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+  const mk = (): ActivityTracker => new ActivityTracker(() => {})
+
+  // SILENCE IS NOT A COMPLETION — and is no longer even a state. A tracker that hears no verdict
+  // says nothing at all: there is no `data()` to call, and `unknown` is where it rests.
+  const a = mk()
+  const silentStaysUnknown = a.current() === 'unknown'
+
+  // The ONLY path to green.
+  const b = mk()
+  b.turnStart()
+  b.notify('done')
+  const doneGreens = b.current() === 'done'
+
+  // `idle` may never green a pane — nothing about it claims anything finished. `idle-prompt` in
+  // particular fires on a 60-SECOND TIMER, not on a completion; reading it as one greened panes
+  // that had merely gone quiet.
+  const c = mk()
+  c.turnStart()
+  c.notify('idle')
+  const idleNeverGreens = c.current() === 'idle'
+  const c2 = mk()
+  c2.turnStart()
+  c2.idlePrompt()
+  const idlePromptNeverGreens = c2.current() === 'idle'
+
+  // THE SUBAGENT GATE: defer, then redeem.
+  const d = mk()
+  d.turnStart()
+  d.subagentStart()
+  d.subagentStart()
+  d.notify('done') // the main ends its turn mid-fan-out — DEFERRED, not dropped
+  const deferredStaysBusy = d.current() === 'busy'
+  d.subagentStop()
+  const oneLeftStaysBusy = d.current() === 'busy'
+  d.subagentStop() // the last one lands: main-done AND zero subagents, so the verdict is due
+  const redeemedOnLastStop = d.current() === 'done'
+
+  // A STRAY stop (a background child outliving the turnStart that reset the counter) must not
+  // settle a pane that is working on THIS turn.
+  const e = mk()
+  e.turnStart()
+  e.subagentStop()
+  const strayStopIgnored = e.current() === 'busy'
+
+  // ...and turnStart UNSTICKS a counter left high by a subagent killed before its stop event.
+  // Without it, that count swallows every future done and strands the pane on busy forever.
+  const f = mk()
+  f.subagentStart()
+  f.subagentStart()
+  f.turnStart() // nothing has fanned out yet this turn, so a nonzero count is stale by definition
+  f.notify('done')
+  const turnStartUnsticks = f.current() === 'done'
+
+  // A BLOCK OUTRANKS A DEFERRED DONE. Blocked-on-a-human is not finished, whatever it said before.
+  const g = mk()
+  g.turnStart()
+  g.subagentStart()
+  g.notify('done') // deferred...
+  g.raiseAttention() // ...but it needs you now. That done is stale.
+  g.subagentStop()
+  const blockOutranksDeferred = g.current() === 'attention'
+
+  // ...as does going back to work.
+  const h = mk()
+  h.turnStart()
+  h.subagentStart()
+  h.notify('done')
+  h.notify('busy') // it is working: whatever it said, it did not finish
+  h.subagentStop()
+  const busyOutranksDeferred = h.current() === 'busy'
+
+  // THE BELL DEDUCTION. Both halves, armed together so one wait covers both.
+  const withDone = mk()
+  withDone.turnStart()
+  withDone.bell() // the CLI chimes — on what?
+  withDone.notify('done') // ...its own completion, riding ~130-260ms behind on a hook
+  const alone = mk()
+  alone.turnStart()
+  alone.bell() // nothing behind it
+  await sleep(BELL_CONFIRM_MS + 400) // outlive the confirmation window
+  const chimeWithDoneIsGreen = withDone.current() === 'done' // never red
+  const chimeAloneIsRed = alone.current() === 'attention' // the only red 3 of 5 CLIs have
+
+  // THE SUBMIT RULE. A stray key must never clear a red and claim the agent is working — no CLI
+  // re-raises a needs-input it has already raised, so that lie has no way back.
+  const i = mk()
+  i.raiseAttention()
+  i.input(false) // an arrow key, a ^C, a bare character
+  const strayHoldsRed = i.current() === 'attention'
+  i.input(true) // Enter: the agent said it was blocked on this human, and the human answered
+  const submitClearsToBusy = i.current() === 'busy'
+
+  // ...and the byte rule that decides which is which.
+  const submitBytes =
+    isSubmittedInput('\r') &&
+    isSubmittedInput('\n') &&
+    isSubmittedInput('abc\r') && // a coalesced chunk ending in Enter
+    !isSubmittedInput('x') &&
+    !isSubmittedInput('\x1b\r') && // Shift+Enter (meta-CR) — composing, not answering
+    !isSubmittedInput('\x1b[13;2u') && // Shift+Enter (CSI-u, kitty/modifyOtherKeys)
+    !isSubmittedInput('\x1b[A') && // an arrow key
+    !isSubmittedInput('\x03') && // ^C
+    !isSubmittedInput('\x1b[200~a\rb\x1b[201~') // bracketed paste — composing
+
+  return {
+    silentStaysUnknown,
+    doneGreens,
+    idleNeverGreens,
+    idlePromptNeverGreens,
+    deferredStaysBusy,
+    oneLeftStaysBusy,
+    redeemedOnLastStop,
+    strayStopIgnored,
+    turnStartUnsticks,
+    blockOutranksDeferred,
+    busyOutranksDeferred,
+    chimeWithDoneIsGreen,
+    chimeAloneIsRed,
+    strayHoldsRed,
+    submitClearsToBusy,
+    submitBytes
+  }
 }
 
 /** A. An OSC body over MAX_OSC used to drop the parser to ground state mid-sequence, so the
@@ -147,15 +291,17 @@ const SCRIPT = `(async () => {
 })()`
 
 export function runAttentionSmoke(win: BrowserWindow): void {
-  setTimeout(() => app.exit(1), 30000) // safety net
+  setTimeout(() => app.exit(1), 45000) // safety net (the tracker's bell asserts wait out a real window)
   const run = async (): Promise<void> => {
-    let result: { pass?: boolean; osc?: unknown; error?: string } = { pass: false }
+    let result: { pass?: boolean; osc?: unknown; tracker?: unknown; error?: string } = { pass: false }
     const osc = oscOverflowAsserts()
+    const tracker = await trackerAsserts()
+    const trackerOk = Object.values(tracker).every(Boolean)
     try {
       const ui = (await win.webContents.executeJavaScript(SCRIPT, true)) as { pass?: boolean }
-      result = { ...ui, osc, pass: ui.pass === true && osc.pass }
+      result = { ...ui, osc, tracker, pass: ui.pass === true && osc.pass && trackerOk }
     } catch (e) {
-      result = { pass: false, osc, ...{ error: String(e) } }
+      result = { pass: false, osc, tracker, ...{ error: String(e) } }
     }
     try {
       writeFileSync(join(process.cwd(), 'out', 'attention-result.json'), JSON.stringify(result))

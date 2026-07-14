@@ -19,6 +19,7 @@
 // Precedent: the build already byte-compares bin/mcp-catalog.json against the contract it is copied
 // from, so drift fails a gate instead of shipping. Same idea, one constant.
 import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join, sep } from 'node:path'
 
 function walkTs(dir) {
@@ -102,4 +103,67 @@ for (const { file, checks } of CHANNEL_SOURCES) {
   }
 }
 
-console.log(`  daemon protocol OK — ${found.length} declarations agree on v${[...versions][0]}, none restated in src/, channel literals in sync`)
+
+// ── THE WIRE FINGERPRINT ──────────────────────────────────────────────────────────────────
+//
+// The version gate above only proves the three declarations agree on a NUMBER. It cannot see
+// the thing that actually matters: whether the wire those numbers describe has CHANGED.
+//
+// It changed once, silently, and the release would have been a no-op. The alerts rewrite added
+// `done` and `unknown` to AgentState — a state the daemon emits and the app reads. But the
+// DAEMON OUTLIVES THE APP (ADR 0006): after an update, the new app finds the surviving daemon in
+// run/v<N> and simply reconnects to it. That daemon is a separate long-lived process still
+// running the OLD code, so it would never emit `done` at all — every green in the product would
+// have quietly stopped working for everyone who upgraded without rebooting, and nothing would
+// have failed. Bumping the version is what routes the app to a fresh run/v<N+1> and triggers the
+// migrate-and-retire hand-off (lifecycle.otherVersionEndpoints) that carries their live agents
+// across.
+//
+// So: fingerprint the SHAPE of everything that crosses the socket, and pin it to the version.
+// Change the wire -> the hash moves -> this gate fails and tells you to bump. Comments and
+// formatting are stripped, so prose edits are free; only the declarations count. Precedent: the
+// build already byte-compares bin/mcp-catalog.json against the contract it is copied from.
+const WIRE_FILES = ['src/contracts/domain/agent.ts', 'src/contracts/daemon/protocol.ts']
+
+/** The declarations, and nothing else: comments gone, whitespace collapsed, and the version
+ *  constant itself removed — the fingerprint describes the SHAPE of the wire, not the number
+ *  stamped on it, or bumping the version would "fix" its own gate. */
+function wireFingerprint() {
+  const norm = WIRE_FILES.map((f) =>
+    readFileSync(f, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, ' ') // block comments
+      .replace(/\/\/.*$/gm, ' ') // line comments
+      .replace(/export const DAEMON_PROTOCOL_VERSION\s*=\s*\d+/, '') // the number, not the shape
+      .replace(/\s+/g, ' ')
+      .trim()
+  ).join('|')
+  return createHash('sha256').update(norm).digest('hex').slice(0, 16)
+}
+
+// Bump BOTH together. If this gate fails, ask the one question it exists to ask: does a daemon
+// that is ALREADY RUNNING the old code still speak this wire correctly? If not — and a new state,
+// event or message shape always means "no" — the version must move so the old daemon is retired
+// rather than reconnected to.
+const PINNED = { version: 8, fingerprint: 'eeffca47aa2ff093' }
+
+const actualWire = wireFingerprint()
+if (actualWire !== PINNED.fingerprint) {
+  console.error(`\nWIRE CHANGED: the daemon contract's shape is ${actualWire}, pinned at ${PINNED.fingerprint}.`)
+  console.error('Something that crosses the daemon socket was added, removed or reshaped.')
+  console.error('')
+  console.error('The daemon OUTLIVES the app. An updated app reconnects to the daemon already')
+  console.error('running — which still holds the OLD code — unless DAEMON_PROTOCOL_VERSION moves.')
+  console.error('A wire change without a bump ships a feature that silently does nothing.')
+  console.error('')
+  console.error(`  1. bump DAEMON_PROTOCOL_VERSION (all 3 declarations) — currently v${PINNED.version}`)
+  console.error('  2. re-pin in scripts/check-protocol-version.mjs:')
+  console.error(`       const PINNED = { version: <new>, fingerprint: '${actualWire}' }\n`)
+  process.exit(1)
+}
+if (PINNED.version !== [...versions][0]) {
+  console.error(`\nPIN DRIFT: the wire is pinned to v${PINNED.version} but the sources declare v${[...versions][0]}.`)
+  console.error('Re-pin scripts/check-protocol-version.mjs to match.\n')
+  process.exit(1)
+}
+
+console.log(`  daemon protocol OK — ${found.length} declarations agree on v${[...versions][0]}, none restated in src/, channel literals in sync, wire ${actualWire} pinned`)
