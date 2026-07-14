@@ -259,6 +259,77 @@ counts don't jitter as cards drag), and the one **feedback family** (`Toast` /
 `confirm` / `modal`: one radius, one stacking gap, one motion curve in AND out; the
 destructive `confirm` focuses the safe action and can never be silenced).
 
+## Tooltips (Phase-11.6) — *planned, not built*
+
+Every hover hint in the app is still a native `title` attribute: **the OS draws it**, in its
+own white box, and nothing in this file reaches it — the token system stops at the window's
+edge. ~180 of them (≈130 via `el({ title })` → `components/dom.ts:42`, ~50 direct
+`.title =`, over half in `terminal-pane.ts`). 11.6 takes the surface back, the same move
+11.5 made on scrollbars.
+
+**The rule: `title` stays the *authoring* API.** `el({ title })` and `.title =` keep working
+exactly as they do today; a single delegated controller (`src/ui/core/tooltip/`) owns the
+*display*:
+
+1. on pointer-enter / `focus-visible` of `closest('[title]')` — read the text, **remove the
+   attribute** (the only thing that stops the OS painting), stash it in a `WeakMap`;
+2. render a themed node after ~400ms (0ms while another tooltip is already open — the warm
+   path);
+3. on leave / `Esc` / scroll / pointer-down — hide, and **put the attribute back**.
+
+At rest the DOM is unchanged, so `element.title` stays readable — which is **load-bearing**:
+`explorer/index.ts:773`/`:813` find file rows by it and five gates assert on it. That is why
+we did **not** migrate to `data-tooltip`; the rename would have been a ~180-site diff that
+broke working gates for no user-visible gain. A `MutationObserver` on the hovered element's
+`title` catches the titles that change *during* a hover (`updates/index.ts:86` ticks a
+download percentage; the pane state dot flips idle→busy) — without it the native box returns
+mid-hover and our text goes stale.
+
+**The surface** is the `.menu` recipe, so tooltips and menus read as one material:
+
+```css
+.tooltip {
+  position: fixed;
+  z-index: 250;                 /* above .toast-host (200), below .usage-confetti */
+  max-width: 380px;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  color: var(--text-hi);
+  box-shadow: var(--shadow-2);
+  font-size: var(--fs-12);
+  white-space: pre-line;        /* git-display.ts:100 joins its lines with \n */
+  pointer-events: none;
+}
+```
+
+Token-only, so it follows every theme `themes.ts` stamps — the eight identity themes and
+whatever is added later — with **no per-theme rule**. `pre-line` is not a nicety: the git
+chip's title is a six-line block, and without it the tooltip renders as one run-on line.
+
+**The ladder.** `250` is deliberate. A tooltip must never be occluded by the surface it is
+anchored *inside*, and elements carrying titles live inside menus (40/60), modals (100), the
+palette (150) and toasts (200). `pointer-events: none` means sitting on top of all of them
+costs nothing.
+
+**Position** is a rect clamp, not a library (ADR 0004; zero new deps): prefer below-centered
+on the trigger's `getBoundingClientRect()`, flip above on bottom overflow, clamp horizontally
+into the viewport. One constraint the window imposes — DOM cannot paint over Windows'
+`titleBarOverlay`, so titlebar-button tooltips must open **downward**; the clamp gives that
+for free.
+
+**A11y contract** — an upgrade, not a re-skin, since native `title` did none of it:
+`role="tooltip"` on the node; `aria-describedby` on the trigger while shown (the house
+pattern already — `field-group.ts:51`, `toggle-row.ts:51`); opens on `focus-visible`, so
+keyboard users get the text at all; `Esc` dismisses; no motion under `:root.motion-calm`.
+Screen readers are unaffected — they read `title` at rest, and at rest it is still there.
+
+**Opt-out**: `data-no-tooltip`, for the places `title` carries data rather than microcopy.
+
+**Out of scope, permanently**: the Windows taskbar/shortcut tooltip (the "MLW" box) is drawn
+by the shell, outside the renderer. No app-side fix exists — the honest answer is to say so.
+
 ## Window chrome (Phase-5/04)
 
 - **Titlebar** is a strict 3-column grid (`minmax(0,1fr) auto minmax(0,1fr)`), no
@@ -673,6 +744,11 @@ wins shipped with this step; everything else is LOGGED with its owner step.
     → no color literals outside the token/theme-fallback blocks.
   - `grep -rn "@backend" src/ui --include='*.ts'` (and the inverse for `@ui`,
     `electron`, `node-pty`) → layer boundaries hold.
+- **Tooltips owe CI no gate** (Phase-11.6, once built). The controller intercepts `title`
+  globally, so a `title` added tomorrow is themed the first time it is hovered — there is no
+  drift to police. This is the whole payoff of keeping `title` as the authoring API: the
+  `data-tooltip` design we rejected would have owed this list a `grep -rn 'title[:=]'` gate
+  forever, and a rule every contributor had to remember.
 - The verification loop: `MOGGING_SHOT=all MOGGING_GALLERY=1` regenerates
   `out/gallery/` (113 shots, both themes) in one command; before/after pairs live in
   `docs/assets/gallery/`.

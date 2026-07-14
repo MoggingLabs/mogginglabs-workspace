@@ -257,6 +257,57 @@ ignores the `::-webkit-*` pseudos — a rule written in only one is one Electron
 permanently visible bar), and asserts a pane never grows a second bar. Zero new dependencies;
 both perf budgets unmoved.
 
+### Phase 11.6 — Tooltips: the last surface the OS still draws 🔨
+**Authored, not yet built** (this entry + `docs/11` §Tooltips; no pack yet.) Twelve phases
+of token work — AA-measured inks, per-workspace identity ramps, eight themes — and the app
+still hands its most-read microcopy to **Windows** to draw. Every hover hint in the product
+is a native `title` attribute: the OS paints it, in the OS's white box, in the OS's font, at
+the OS's pace, and **no CSS in this repo can reach it**. It is Phase 11.5's defect class
+exactly — *a surface we designed, rendered by someone else* — and it takes the same shape of
+fix: one delegated controller, app-wide, and the native thing is gone.
+
+- **The mechanism, not the three symptoms.** ~180 native tooltips: ≈130 through
+  `el({ title })` → the single funnel at `components/dom.ts:42`, plus ~50 direct
+  `.title =` assignments (over half in `terminal-pane.ts`). The reported white boxes are
+  `terminal-pane.ts:1550` (the git chip — its six lines are built by
+  `core/git/git-display.ts:100`), `:1116` (agent context) and `:1013` (the idle dot), but
+  fixing three would be missing the point. The mechanism is app-wide, so the fix is too.
+- **`title` STAYS the authoring API** — the finding that shaped the design. The obvious
+  migration (rename every `title` → `data-tooltip`) is *wrong here*, because `title` is
+  also read back as **data**: `explorer/index.ts:773`/`:813` find file rows by
+  `element.title === path`, and five gates assert on it (`git-smoke`, `fileact-smoke`,
+  `treegit-smoke`, `authrunner-smoke`, and `homeux-smoke`'s `[title="Home" i]` selector).
+  So instead: the controller strips `title` on pointer-enter (the only thing that stops the
+  OS drawing), renders ours, and **restores the attribute on leave**. At rest the DOM is
+  unchanged — every gate and every query keeps passing, and **not one of the ~180 call
+  sites is touched.**
+- **Titles change mid-hover.** The update dot ticks its download percentage
+  (`updates/index.ts:86`); the state dot flips idle→busy. A `MutationObserver` on the
+  hovered element's `title` re-captures and re-suppresses — without it the OS box pops back
+  up mid-hover and our text goes stale.
+- **Themed by construction**: `--bg-elevated` / `--border` / `--text-hi` / `--shadow-2` —
+  the `.menu` surface recipe — so it inherits every theme `themes.ts` stamps, present and
+  future, with no per-theme rule. `white-space: pre-line`, because the git chip's title is
+  `lines.join('\n')`.
+- **It needs no grep gate** — the one guardrail this pack doesn't have to buy. A `title`
+  added tomorrow is themed the moment it is hovered; there is no drift to police. (The
+  `data-tooltip` design would have owed CI a gate forbidding `title=` forever.)
+- **A11y gets better, not just prettier**: `role="tooltip"` + `aria-describedby` (already
+  the house pattern — `field-group.ts:51`), opens on `focus-visible` so keyboard users
+  finally get text `title` never gave them, `Esc` dismisses, `:root.motion-calm` honoured.
+  Screen readers are unaffected: they read `title` at rest, and at rest it is there.
+- **Out of scope, permanently**: the Windows taskbar's own tooltip (the "MLW" box in the
+  report) is drawn by the shell, outside the renderer. It stays white; nothing in our
+  process can touch it. Say so rather than chase it.
+
+Cost: one module (`ui/core/tooltip/`), ~40 lines of CSS, one boot line, **zero new
+dependencies** — a positioner here is a rect clamp, and floating-ui would be 10× the code
+(ADR 0004). Verified by hand first (the multi-line git chip · the flip case at the titlebar,
+where DOM cannot paint over `titleBarOverlay` · the update dot *while its percentage ticks*),
+then one gate asserting the tooltip's text, that the trigger carries **no** `title` while
+hovered, and that `title` is **restored** after `pointerout` — that last assertion is what
+keeps the five existing `title`-reading gates safe. Surface: `docs/11` §Tooltips.
+
 ---
 
 ## The next arc — Phases 12–19 (planned)
