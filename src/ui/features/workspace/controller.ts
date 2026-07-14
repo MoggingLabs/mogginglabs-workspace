@@ -59,6 +59,54 @@ export interface SwitchOpts {
 }
 
 /**
+ * What a close would actually destroy. ONE definition of "live", shared by the three
+ * destructive paths (close workspace / close pane / shrink layout) so the predicate and
+ * the copy can't drift — they had. Every one of them counted `session || state !== idle`
+ * and then told the user those panes had "an agent still working", which is false twice
+ * over: a session is an ASSIGNMENT (an agent parked at its prompt still has one), and the
+ * state machine is a generic output tracker — absent OSC 133 markers plain output marks a
+ * pane busy (agent-state/activity.ts), so a bare `npm run build` was reported as an agent.
+ *
+ * The two reasons are counted separately because they are separately true, and a pane can
+ * be live for both (an agent mid-turn): `sessions` and `running` overlap, `panes` is the
+ * union and is the number that decides whether we prompt at all.
+ */
+interface LivePanes {
+  /** Panes live for either reason — the union. Empty ⇒ no confirmation is warranted. */
+  panes: PaneId[]
+  /** Live because an agent session is assigned, working or not. */
+  sessions: PaneId[]
+  /** Live because the pane is still producing output (agent turn, or any command). */
+  running: PaneId[]
+}
+
+function inspectLive(paneIds: number[]): LivePanes {
+  const live: LivePanes = { panes: [], sessions: [], running: [] }
+  for (const raw of paneIds) {
+    const paneId = raw as PaneId
+    const hasSession = !!getPaneAgentSession(paneId)
+    const isRunning = paneState(paneId) !== 'idle'
+    if (hasSession) live.sessions.push(paneId)
+    if (isRunning) live.running.push(paneId)
+    if (hasSession || isRunning) live.panes.push(paneId)
+  }
+  return live
+}
+
+const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`
+
+/** Name the live panes for what they are. Never says "agent" about a pane we only know is
+ *  noisy; never says "working" about an agent we only know is assigned. */
+function describeLive(live: LivePanes): string {
+  const parts: string[] = []
+  if (live.sessions.length > 0) parts.push(`${plural(live.sessions.length, 'pane has', 'panes have')} an agent session`)
+  if (live.running.length > 0) {
+    parts.push(`${plural(live.running.length, 'pane is', 'panes are')} still running`)
+  }
+  return parts.join(', and ')
+}
+
+/**
  * Owns the set of workspaces: one rail item + one hidden/visible container + one
  * `GridLayout` each. Switching is pure show/hide (every workspace's panes stay mounted
  * and streaming). The rail item carries the Phase-2 signature: a live NUMERIC alert
@@ -607,10 +655,18 @@ export class WorkspaceController {
       await this.requestClose(wsId)
       return true
     }
-    if (getPaneAgentSession(paneId as PaneId) || paneState(paneId as PaneId) !== 'idle') {
+    const live = inspectLive([paneId])
+    if (live.panes.length > 0) {
+      // Session and running are separately true, and both can hold: say what this pane
+      // actually is, not "an agent session" over a pane that is only a busy plain shell.
+      const what = live.sessions.length
+        ? live.running.length
+          ? 'An agent session is assigned to this pane and is still running.'
+          : 'An agent session is assigned to this pane.'
+        : 'This pane is still running.'
       const ok = await confirmDialog({
         title: `Close pane ${paneId}?`,
-        message: 'An agent session is still assigned to this pane. Closing it stops that session and cannot be undone.',
+        message: `${what} Closing it stops that work and cannot be undone.`,
         confirmLabel: 'Close pane',
         danger: true
       })
@@ -743,20 +799,18 @@ export class WorkspaceController {
     if (id) this.switch(id)
   }
 
-  /** The × on a rail tab (WS-01). Closing a workspace disposes every pane in
-   *  it — so when there's live work (an agent busy or waiting), confirm first;
-   *  then soft-close with a 5-second undo grace either way. */
+  /** The × on a rail tab (WS-01). Closing a workspace disposes every pane in it — so when
+   *  a pane holds live work (an agent session, or any command still running), confirm and
+   *  say WHICH; idle panes close straight to the 5-second undo grace, no prompt. */
   async requestClose(id: string): Promise<void> {
     const view = this.views.get(id)
     if (!view || this.pendingClose.has(id)) return
-    const liveCount = view.layout
-      .paneIds()
-      .filter((p) => !!getPaneAgentSession(p as PaneId) || paneState(p as PaneId) !== 'idle').length
-    if (liveCount > 0) {
+    const live = inspectLive(view.layout.paneIds())
+    if (live.panes.length > 0) {
       const n = view.meta.paneCount
       const ok = await confirmDialog({
         title: `Close “${view.meta.name}”?`,
-        message: `${n} pane${n === 1 ? '' : 's'} will close, including ${liveCount} with an agent still working. You’ll have a few seconds to undo.`,
+        message: `${plural(n, 'pane', 'panes')} will close. ${describeLive(live)}. You’ll have a few seconds to undo.`,
         confirmLabel: 'Close workspace',
         danger: true
         // Bug #8: NO rememberKey. Killing a workspace with live agents is exactly the
@@ -884,17 +938,11 @@ export class WorkspaceController {
     const view = this.active()
     if (!view) return false
     const keep = new Set(Array.from({ length: n }, (_, index) => view.meta.ordinal * 100 + index + 1))
-    const closingLive = view.layout
-      .paneIds()
-      .filter(
-        (paneId) =>
-          !keep.has(paneId) &&
-          (!!getPaneAgentSession(paneId as PaneId) || paneState(paneId as PaneId) !== 'idle')
-      )
-    if (closingLive.length > 0) {
+    const live = inspectLive(view.layout.paneIds().filter((paneId) => !keep.has(paneId)))
+    if (live.panes.length > 0) {
       const ok = await confirmDialog({
-        title: `Switch to ${n} pane${n === 1 ? '' : 's'}?`,
-        message: `${closingLive.length} pane${closingLive.length === 1 ? '' : 's'} with live agent sessions would close.`,
+        title: `Switch to ${plural(n, 'pane', 'panes')}?`,
+        message: `${plural(live.panes.length, 'pane', 'panes')} would close. ${describeLive(live)}.`,
         confirmLabel: 'Close panes and apply layout',
         danger: true
       })
