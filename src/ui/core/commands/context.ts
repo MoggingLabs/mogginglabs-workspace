@@ -24,11 +24,34 @@ export interface CommandContext {
 /** true → runnable. Otherwise the reason, in words a user can act on. */
 export type CommandAvailability = true | { enabled: false; reason: string }
 
-/** Typing. A shortcut must never steal a keystroke from a text field. */
+/**
+ * xterm reads the keyboard through a hidden `<textarea class="xterm-helper-textarea">` inside
+ * every pane — `term.focus()` focuses that proxy, and it is what a keystroke in a terminal
+ * targets. Keyed off `.xterm` (the root class xterm's own stylesheet is built on, so it cannot
+ * drift) rather than the textarea's class, which is internal.
+ */
+function isTerminalKeyboardProxy(t: HTMLElement): boolean {
+  return !!t.closest('.xterm')
+}
+
+/**
+ * Typing. A shortcut must never steal a keystroke from a text field.
+ *
+ * With one exception, and it is most of the app: the terminal's keyboard proxy is a
+ * `<textarea>`, so a tagName test could not tell a focused TERMINAL — this app's resting
+ * state, auto-focused on every pane and workspace switch — from a focused webhook-URL box.
+ * That made `shortcutsBlocked` true almost always, and every chord below it died in silence:
+ * Ctrl+Shift+D, Ctrl+T, Ctrl+Shift+Enter, Ctrl+Alt+arrows, Ctrl+1..9. No toast, because the
+ * handler returns before it can even refuse.
+ *
+ * The pane verbs exist precisely to be pressed while you are typing in a terminal — that is
+ * why they capture and stopPropagation, "so xterm never sees these". The proxy is not a form
+ * field the user is filling in; it IS the terminal, and the terminal is what they act on.
+ */
 export function isEditableTarget(t: EventTarget | null): boolean {
-  return (
-    t instanceof HTMLElement && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName))
-  )
+  if (!(t instanceof HTMLElement)) return false
+  if (isTerminalKeyboardProxy(t)) return false
+  return t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName)
 }
 
 /**

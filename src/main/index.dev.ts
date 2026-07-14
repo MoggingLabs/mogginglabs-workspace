@@ -15,6 +15,7 @@ import { runPerWsAgentSmoke } from './perwsagent-smoke'
 import { runVaultKeysSmoke } from './vaultkeys-smoke'
 import { runWsCloseSmoke } from './wsclose-smoke'
 import { runKbShortcutsSmoke } from './kbshortcuts-smoke'
+import { runKbGlobalSmoke } from './kbglobal-smoke'
 import { runToolPlanSmoke } from './toolplan-smoke'
 import { runIntegSmoke } from './integ-smoke'
 import { runEvBridgeSmoke } from './evbridge-smoke'
@@ -151,7 +152,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_TEMPLATE', 'MOGGING_PROFPERSIST', 'MOGGING_BROWSER', 'MOGGING_BROWSERCTL', 'MOGGING_BROWSERRACE', 'MOGGING_BROWSERZERO', 'MOGGING_FIRSTRUN',
   'MOGGING_PRODUCT', 'MOGGING_USAGEGLANCE', 'MOGGING_USAGEUI', 'MOGGING_WEBUSAGE', 'MOGGING_USAGECLI',
   'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
-  'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_KBSHORTCUTS', 'MOGGING_WEBTRAIL',
+  'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_KBSHORTCUTS', 'MOGGING_KBGLOBAL', 'MOGGING_WEBTRAIL',
   'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX', 'MOGGING_WIZARDFAIL', 'MOGGING_MUTATIONRACE', 'MOGGING_AUTHRUNNER',
   'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX',
   'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_RESPONSIVE', 'MOGGING_KBAPG', 'MOGGING_UXMILESTONE',
@@ -330,6 +331,8 @@ function afterWindow(win: BrowserWindow): void {
     runWsCloseSmoke(win) // env-gated workspace-close smoke: confirm on live work + 5s undo grace (UX audit WS-01)
   } else if (process.env.MOGGING_KBSHORTCUTS) {
     runKbShortcutsSmoke(win) // env-gated keyboard-shortcuts smoke: ? overlay + Settings page (UX audit KB-01)
+  } else if (process.env.MOGGING_KBGLOBAL) {
+    runKbGlobalSmoke(win) // audit regression: the global chords still reach the app while a TERMINAL holds focus
   } else if (process.env.MOGGING_WEBTRAIL) {
     runWebTrailSmoke(win) // env-gated agent-activity-trail smoke: store + emitters + viewer (Phase-8/05)
   } else if (process.env.MOGGING_MCPMGR) {

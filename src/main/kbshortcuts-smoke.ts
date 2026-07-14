@@ -5,6 +5,15 @@ import { join } from 'node:path'
 // Env-gated keyboard-shortcuts smoke (MOGGING_KBSHORTCUTS, UX audit KB-01).
 // ? opens a grouped overlay of shortcuts; the SAME list renders on the
 // Settings › Shortcuts page; the palette carries a "Keyboard shortcuts" command.
+//
+// THIS GATE PROVES THE LIST, NOT THE KEYS. It asserts the shortcuts are DOCUMENTED and never
+// presses one of them, so it stayed green through a release in which every global chord was dead:
+// finding 29's guard mistook xterm's hidden helper <textarea> for a text field, and nothing fired
+// while a terminal had focus. Note the dispatch below goes to `window`, so `e.target` is the window
+// rather than an element — it could not have caught that even if it had pressed the keys.
+// The chords themselves are gated by KBGLOBAL (kbglobal-smoke.ts), which injects real keys over CDP
+// and lets the app's own focus choose the target. Keep the two apart, and do not "cover shortcuts"
+// by adding rows here.
 
 export function runKbShortcutsSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 60000)
