@@ -919,6 +919,14 @@ export class WorkspaceController {
     }
     const target = paneId ?? view.layout.focusedPaneId()
     if (target == null) return
+    // Refuse BEFORE seeding, because the seeds below cannot be taken back: they write the
+    // pane-cwd port and the PERSISTED manifest slot for a pane that does not exist yet, and
+    // the split underneath still returns null for an id that is not a live leaf — a stale
+    // pane id from the ⋯ menu or a `close-pane`d slot named by a ControlCommand. Seeding
+    // first left that state behind for a terminal nobody ever created, and the next restore
+    // would have read it. The MAX_PANES gate above is the only other refusal, and it has
+    // already spoken.
+    if (!view.layout.paneIds().includes(target as PaneId)) return
     // Seed BEFORE the slot exists (a pane reads its cwd/remote at spawn time): a new
     // terminal is a plain local shell in the split pane's own directory (fallback:
     // the workspace root). Reusing a closed slot's id must never resurrect that
