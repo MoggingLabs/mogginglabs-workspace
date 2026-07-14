@@ -21,6 +21,7 @@ import {
   PaneCwdState,
   countSubmittedLines,
   fileUriToPath,
+  isSubmittedInput,
   isTerminalReply,
   normalizePaneCwd,
   normalizeRemotePaneCwd,
@@ -675,7 +676,6 @@ class PaneSession {
     this.proc.onData((d) => {
       const grown = this.buffer + d
       this.buffer = grown.length > SCROLLBACK_BYTES ? trimTornStart(grown.slice(-SCROLLBACK_BYTES)) : grown
-      this.tracker.data() // BEFORE the parse: a verdict in this chunk must land last
       osc.push(d)
       this.gitContext?.drain()
       for (const s of this.subs) s.send(d)
@@ -856,7 +856,10 @@ class PaneSession {
       return
     }
     this.pristineRestore = false // touched: from here on it's a live shell, not a restore
-    this.tracker.input() // typing answers whatever the pane was blocked on
+    // Only a SUBMIT answers a blocked agent. Clearing the latch on any keystroke claimed the
+    // pane was "working" when an arrow key or a ^C landed in it — while the agent sat there
+    // still blocked, with nothing left to correct the lie (see isSubmittedInput).
+    this.tracker.input(isSubmittedInput(data))
     // A submitted LINE is the only moment a shell can start something — the detector arms one
     // probe on it, and the prompt coming back cancels that probe, so ordinary commands cost
     // nothing. Enter pressed while any foreground program owns the pane is program input; a

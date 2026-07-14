@@ -13,10 +13,15 @@ import { getTelemetry } from '../../core/telemetry'
 const COOLDOWN_MS = 20000
 
 /**
- * Toasts for `mogging notify` / OSC attention events: when a pane in a BACKGROUND
- * workspace (or behind Home) flips to attention, show a toast with a one-click "Go".
- * Event-driven off the existing terminal:state relay — never polled — and throttled
- * per pane so a chatty agent can't flood the stack.
+ * Toasts for `mogging notify` / agent-hook verdicts: when a pane in a BACKGROUND workspace (or
+ * one behind Home/Board/Settings) flips to `attention` or `done`, show a toast with a one-click
+ * "Go". Event-driven off the existing terminal:state relay — never polled — and throttled per
+ * pane so a chatty agent can't flood the stack.
+ *
+ * `done` toasts too, now (explicit direction). A completion used to be invisible unless the app
+ * was already in front of you: it raised the rail's count and nothing else, so an agent that
+ * finished while you were in another workspace told you only if you happened to look. The two
+ * tones stay distinct — red still means "come here", green means "this is ready for you".
  */
 export const notifyFeature: UiFeature = {
   name: 'notify',
@@ -33,11 +38,12 @@ export const notifyFeature: UiFeature = {
 
     getBridge().on(TerminalChannels.state, (payload) => {
       const e = payload as StateEvent
-      if (e.state !== 'attention') return
+      if (e.state !== 'attention' && e.state !== 'done') return
+      const blocked = e.state === 'attention'
 
       const { workspaces, activeId } = getWorkspaces()
       const ws = workspaces.find((w) => Math.floor(e.id / 100) === w.ordinal)
-      // Visible already? The pane's own chip + ring carry it — no toast needed.
+      // Visible already? The pane's own outline + dot carry it — no toast needed.
       if (ws && ws.id === activeId && activeView() === 'grid') return
 
       const now = Date.now()
@@ -48,16 +54,16 @@ export const notifyFeature: UiFeature = {
       }
 
       const label = getPaneLabel(e.id) || `Terminal ${e.id % 100 || e.id}`
-      getTelemetry().captureEvent({ name: 'attention.toast_shown' })
+      getTelemetry().captureEvent({ name: blocked ? 'attention.toast_shown' : 'finished.toast_shown' })
       showToast({
-        tone: 'attention',
-        title: `${label} needs your input`,
+        tone: blocked ? 'attention' : 'success',
+        title: blocked ? `${label} needs your input` : `${label} finished working`,
         body: ws ? `in “${ws.name}”` : undefined,
         action: ws
           ? {
               label: 'Go',
               onClick: () => {
-                getTelemetry().captureEvent({ name: 'attention.toast_go' })
+                getTelemetry().captureEvent({ name: blocked ? 'attention.toast_go' : 'finished.toast_go' })
                 requestWorkspaceSwitch(ws.id)
               }
             }

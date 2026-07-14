@@ -31,7 +31,8 @@ import { windowsPtyFor } from '../../core/terminal/pty-emulation'
 import { registerPaneInstance, retirePaneInstance } from '../../core/terminal/pane-instance-port'
 import { forgetPane, markPaneLive, markPaneReattached, markPaneRemoteReady } from '../../core/terminal/liveness-port'
 import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
-import { setPaneState, adoptPaneState, clearPaneState, paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
+import { setPaneState, clearPaneState, paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
+import { completionsFor } from '../../core/attention/completions'
 import { applyPaneCwdEvent, clearPaneCwd, getPaneCwd, getPaneCwdProjection } from '../../core/layout/pane-cwd'
 import { getPaneRole, onPaneRole, getPaneRemote, getPaneProfile, setPaneProfile } from '../../core/layout/pane-meta'
 import {
@@ -142,7 +143,7 @@ export class TerminalPane {
   private osc133?: { dispose(): void }
   private remoteReadyOsc?: { dispose(): void }
   private stateDot?: HTMLSpanElement
-  private syncState?: (adopted?: boolean) => void
+  private syncState?: () => void
   private dotGateUnsub?: () => void
   private renameFn?: () => void
   private renameModal?: ModalHandle
@@ -154,10 +155,6 @@ export class TerminalPane {
   private expandStateObs?: MutationObserver
   private refitLeading = true
   private disposed = false
-  /** When this pane started WATCHING. An adopted session (a restore against the surviving
-   *  daemon) was already working by then, so the attention port times that first episode
-   *  from here rather than from the adoption — see adoptPaneState. */
-  private readonly mountedAt = Date.now()
   /** Unsubscribers for this pane's terminalClient channel listeners. The channels are
    *  session-lived while panes die on close — an undetached listener kept running against
    *  a disposed xterm for the rest of the session (and xterm's WriteBuffer keeps queueing
@@ -1011,8 +1008,10 @@ export class TerminalPane {
     left.className = 'pane-head-left pane-badge'
     const state = document.createElement('span')
     state.className = 'pane-state'
-    state.dataset.state = 'idle'
-    state.title = 'idle'
+    // HOLLOW at mount, deliberately — not yellow. A pane that has not yet heard a verdict knows
+    // nothing, and `idle` is a claim ("nothing is running") we have no basis for.
+    state.dataset.state = 'unknown'
+    state.title = 'completion tracking not available for this agent'
     // AVAILABILITY gate: hidden until this pane runs a provider the app wired
     // end-to-end (a launcher session; custom:<cmd> and plain shells stay untracked —
     // a dot that cannot know would sit on a yellow lie). The session subscription
@@ -1596,11 +1595,14 @@ export class TerminalPane {
     const paintState = (): void => {
       if (this.disposed || state.dataset.state === 'exited') return
       const st = paneState(this.id)
-      const fin = st === 'idle' && paneFinished(this.id)
-      state.dataset.state = fin ? 'finished' : st
-      // Human words: yellow = idle, green = working (output is flowing / an
-      // OSC-integrated command runs), green + halo = FINISHED and unacknowledged
-      // (sticky until you click the pane), red pulsing = blocked on you. Gray
+      // `done` is the backend's verdict; `finished` is that verdict still unacknowledged. Once
+      // the pane is clicked the green is spent and the dot rests at yellow — the state itself
+      // has not changed, only whether you have looked at it.
+      const fin = paneFinished(this.id)
+      state.dataset.state = fin ? 'finished' : st === 'done' ? 'idle' : st
+      // Human words: HOLLOW = this agent has never spoken a verdict, so we cannot tell you
+      // anything (never a yellow lie); yellow = idle; green = working; green + halo = FINISHED
+      // and unacknowledged (sticky until you click the pane); red = blocked on you. Gray
       // (exited) is set by markDead, never by an event.
       state.title = fin
         ? 'finished working — click the pane to dismiss'
@@ -1608,20 +1610,20 @@ export class TerminalPane {
           ? 'needs your input'
           : st === 'busy'
             ? 'working'
-            : 'idle'
+            : st === 'unknown'
+              ? 'completion tracking not available for this agent'
+              : 'idle'
     }
-    const applyState = (st: AgentState, adopted = false): void => {
+    const applyState = (st: AgentState): void => {
       // Hidden = untracked: the state machine keeps running backend-side, but an
       // unavailable dot paints nothing and feeds no attention aggregation.
       if (this.disposed || state.hidden || state.dataset.state === 'exited') return
-      // The port derives the sticky finished flag from this edge. `adopted` = a state read
-      // off a session the daemon was ALREADY running (a restore — the daemon outlives the
-      // app, ADR 0006), so its work predates this pane and the port times that episode from
-      // our MOUNT. Timed from the adoption instead — ~1s into the app, after the restore
-      // lineup's delay — an agent that landed its task right as we picked it up scored
-      // under the noise floor and silently lost its green dot (see adoptPaneState).
-      if (adopted) adoptPaneState(this.id, st, this.mountedAt)
-      else setPaneState(this.id, st)
+      // Straight through. There is no longer anything to adopt or backdate: the old port timed
+      // an EPISODE (to clear a 2.5s noise floor) and a restored agent's episode had begun long
+      // before this pane mounted, so its start had to be pushed back to our mount or the agent
+      // silently lost its green. With `done` arriving as an explicit verdict, duration is not
+      // part of the story and a reattached pane simply reads whatever the daemon already knows.
+      setPaneState(this.id, st)
       paintState()
     }
     this.clientUnsubs.push(onAttentionChange(paintState))
@@ -1634,21 +1636,25 @@ export class TerminalPane {
     // against a surviving daemon holding a busy/attention agent) are not coming back
     // — the backend only pushes on change. Ask now, and mount() asks again once the
     // spawn settles (a fresh session registers its tracker only then).
-    this.syncState = (adopted = false): void => {
+    this.syncState = (): void => {
       terminalClient
         .stateSync(this.id)
         .then((st) => {
-          if (st) applyState(st, adopted)
+          if (st) applyState(st)
         })
         .catch(() => undefined) // a missing handler mid-boot just means nothing to sync yet
     }
     this.syncState()
-    // The availability gate (goal: the dot only claims what the wired providers can
-    // back). A launcher session with a real adapter id unhides the dot and paints the
-    // CURRENT state; the session ending (agent exited to shell) hides and resets it.
-    // Two exceptions: dead-gray persists — a death observed while tracked is PTY fact,
-    // and the session-clear that FOLLOWS the exit must not erase it — and a custom:
-    // provider never unhides (we can't wire what we don't know).
+    // The AVAILABILITY gate — does this pane get a dot at all? A pane running an agent (launched
+    // by the app, or one you typed at its own prompt: typed-launch detection writes the same
+    // session port) gets one. A plain shell and a `custom:<cmd>` do not, and the absence is
+    // itself information. Dead-gray persists through a session clear: a death observed while
+    // tracked is PTY fact, and the clear that FOLLOWS an exit must not erase it.
+    //
+    // Availability is NOT the same question as whether the dot can say anything. A pane with an
+    // agent but no verdict channel — hooks never installed, a remote host without our config —
+    // gets a dot and it is HOLLOW (`unknown`), because "we cannot tell you" and "nothing has
+    // happened" are different facts and must not look alike.
     this.dotGateUnsub = onPaneAgentSession((paneId, s) => {
       if (paneId !== this.id || this.disposed) return
       if (state.dataset.state === 'exited') return
@@ -1656,15 +1662,11 @@ export class TerminalPane {
       if (state.hidden === !tracked) return // already in the right visibility
       state.hidden = !tracked
       if (tracked) {
-        // An ADOPTED session is one the detached daemon kept running across the app's
-        // death, so this pull is our FIRST look at an episode that may already be minutes
-        // old — the port is told, or the noise floor would judge it by the seconds since
-        // adoption and silently deny a finished agent its green dot.
-        this.syncState?.(!!s?.adopted) // appear with the truth, not the mount default
+        this.syncState?.() // appear with the truth, not the mount default
       } else {
         clearPaneState(this.id) // an untracked pane must not hold the rail's attention
-        state.dataset.state = 'idle'
-        state.title = 'idle'
+        state.dataset.state = 'unknown'
+        state.title = 'completion tracking not available for this agent'
       }
     })
     this.paneLabelUnsub = onPaneLabel((paneId, text) => {
@@ -1743,6 +1745,25 @@ export class TerminalPane {
     if (roleName) info.push(note(`Role: ${roleName}`))
     const ownClaims = claimsFor(this.id).length
     if (ownClaims) info.push(note(`Claims: ${ownClaims} file pattern${ownClaims === 1 ? '' : 's'}`))
+
+    // WHAT THIS AGENT ACTUALLY FINISHED. A green is designed to be spent — you click the pane
+    // and the halo, the outline and the rail's count all go — which is right for an alert and
+    // useless as a record. This is the record: every `done` verdict, newest first, so a
+    // completion you dismissed (or that was auto-acknowledged by landing on it) is not gone.
+    // Per-pane only, deliberately — no global feed.
+    const dones = completionsFor(this.id)
+    if (dones.length > 0) {
+      const ago = (at: number): string => {
+        const secs = Math.max(0, Math.round((Date.now() - at) / 1000))
+        if (secs < 60) return `${secs}s ago`
+        const mins = Math.round(secs / 60)
+        if (mins < 60) return `${mins}m ago`
+        return `${Math.round(mins / 60)}h ago`
+      }
+      const shown = dones.slice(0, 5).map(ago).join(' · ')
+      const more = dones.length > 5 ? ` (+${dones.length - 5} more)` : ''
+      info.push(note(`Finished ${dones.length}×: ${shown}${more}`))
+    }
 
     const mcp = mcpChipForPane(this.id)
     if (mcp && (mcp.connected > 0 || mcp.attention || mcp.restartNew > 0)) {

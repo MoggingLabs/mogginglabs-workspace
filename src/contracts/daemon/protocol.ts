@@ -318,8 +318,7 @@ export type NotifyEvent =
   | 'idle'
   // Subagent lifecycle (Claude Code SubagentStart/SubagentStop hooks). A GATE, never a
   // source: alerts are the MAIN agent's story, and these only hold the pane busy and
-  // swallow the main's premature verdicts (a `done` fired while it's merely parked on
-  // its subagents, a quiet terminal, an idle prompt). They never author a pane state.
+  // DEFER the main's premature verdicts. They never author a pane state.
   // Handled statefully by the tracker (session.applyNotify routes them; see
   // agent-state/activity.ts) — notifyEventToState is only their stateless fallback.
   | 'subagent-start'
@@ -333,12 +332,25 @@ export type NotifyEvent =
   // lost to a hard kill can't swallow every future done and strand the pane on busy.
   | 'turn-start'
 
-/** Map a notify event to the pane state it raises. `done` is a turn ENDING — it lands as
- *  `idle`, which the UI's attention port turns into the sticky green "finished" story
- *  (halo until the pane is clicked). It must NOT ring `attention`: red is reserved for
- *  "blocked on you" (needs-input), and a done that rang red made finished and blocked
- *  indistinguishable — and left the green finished layer unreachable. Unknown events
- *  still default to `attention` (any explicit notify is worth surfacing). */
+/**
+ * Map a notify event to the pane state it raises.
+ *
+ * `done` LANDS AS `done`, and that is the whole point. It used to land as plain `idle`, which
+ * destroyed the one fact that mattered: by the time the UI's attention port derived "finished"
+ * from the busy->idle EDGE, it could no longer tell an explicit `Stop` hook from "the terminal
+ * went quiet for 1.5 seconds". A 2.5s duration floor was the only thing standing between that
+ * inference and nonsense, and its entire safety margin was about one second of repaint. `done`
+ * is now a state of its own, so green has exactly one source and it is a verdict.
+ *
+ * `idle` and `idle-prompt` therefore CANNOT green a pane, which is correct — neither of them
+ * claims anything finished. `idle-prompt` in particular is fired on a 60-second timer, not by
+ * a completion; reading it as one would green a pane that had merely gone quiet.
+ *
+ * `done` must also never ring `attention`: red is reserved for "blocked on you" (needs-input),
+ * and a done that rang red made finished and blocked indistinguishable. Unknown events still
+ * default to `attention` — any explicit notify is worth surfacing, and interrupting you is the
+ * safe direction to be wrong in.
+ */
 export function notifyEventToState(event: string): AgentState {
   switch (event) {
     case 'busy':
@@ -346,9 +358,10 @@ export function notifyEventToState(event: string): AgentState {
     case 'subagent-start':
     case 'subagent-stop': // stateless fallback only — the tracker owns the real counter
       return 'busy'
-    case 'idle':
     case 'done':
-    case 'idle-prompt': // a parked prompt is idle, never blocked (the tracker gates it)
+      return 'done'
+    case 'idle':
+    case 'idle-prompt': // a parked prompt is idle, never blocked AND never finished
       return 'idle'
     default:
       return 'attention'

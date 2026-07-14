@@ -26,6 +26,7 @@ import {
   PaneCwdState,
   countSubmittedLines,
   fileUriToPath,
+  isSubmittedInput,
   isTerminalReply,
   normalizePaneCwd,
   type DetectedAgentProc,
@@ -276,7 +277,6 @@ export class PtyService {
           req.id,
           grown.length > SCROLLBACK_BYTES ? trimTornStart(grown.slice(-SCROLLBACK_BYTES)) : grown
         )
-        tracker.data() // BEFORE the parse: a verdict in this chunk must land last
         osc.push(data)
         this.gitContexts.get(req.id)?.drain()
         this.sink.data({ id: req.id, data })
@@ -320,7 +320,8 @@ export class PtyService {
     // Not for auto-replies: xterm answering a query (CPR/DA/focus) is not the user
     // answering the pane — it must not clear an attention latch (see replies.ts).
     if (!isTerminalReply(data)) {
-      this.trackers.get(id)?.input() // typing answers whatever the pane was blocked on
+      // Only a SUBMIT answers a blocked agent — see the daemon's twin, and isSubmittedInput.
+      this.trackers.get(id)?.input(isSubmittedInput(data))
       // A submitted LINE is the only moment a shell can start something (see the daemon's twin).
       const submissions = countSubmittedLines(data)
       for (let i = 0; i < submissions; i++) {

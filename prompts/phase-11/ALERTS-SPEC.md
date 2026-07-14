@@ -10,6 +10,59 @@ The governing sentence, in his words:
 
 ---
 
+## STATUS — IMPLEMENTED and verified live
+
+Built on `feat/alerts-verdict-law`, in two commits. Both regression gates pass against the
+running app:
+
+- **ATTENTION** — `quietIsNotGreen: true` (a 2.7s busy stretch settling to idle greens
+  nothing — this assert *fails* on the old engine), `doneGreensFast: true` (a 150ms task
+  greens; the 2.5s floor is gone), `blockedOutline`, `blockedNotFinished`, `unknownIsHollow`,
+  `ackClears`, plus the existing OSC-parser asserts.
+- **STATE** — `strayHeld: true`, `shiftEnterHeld: true`, `submitClearsToBusy: true`.
+
+Five decisions were taken **during** implementation and refine what follows. Where they
+conflict with the text below, they win.
+
+1. **The `input()` hole** (found while implementing; not in the original review). The latch
+   cleared on ANY keystroke, so an arrow key or a `^C` in a blocked pane claimed the agent was
+   *working* while it sat there still blocked — and nothing corrected it, because no CLI
+   re-raises a needs-input it has already raised. Only a **submitted line** clears it now. The
+   asymmetry decides it: a red lingering a beat too long self-heals on the next verdict; a
+   false "working" never heals. **Shift+Enter does not count** — it opens a new line inside a
+   prompt you are still composing. Requiring a *bare* CR excludes it for free and is right in
+   both worlds: where a terminal can encode Shift+Enter it arrives ESC-prefixed, and where it
+   cannot, neither can the agent, so the keystroke really does submit.
+2. **The bell survives** (I pushed back; Pedro agreed). "Red needs proof" as written would have
+   left Gemini, OpenCode *and* aider permanently unable to say they are blocked — a chime is
+   their only signal. But *chime AND no `done` within the window* is a deduction from two
+   certainties, not the output-quiescence guess; it is the same logical shape as "answering a
+   red means it is working". Kept.
+3. **Subagents: green requires main-done AND zero subagents.** A `done` arriving with subagents
+   pending is **deferred**, not dropped, and is redeemed when the last one lands.
+4. **Verdict-wired = prove-by-speaking.** A pane is hollow until its FIRST explicit verdict and
+   solid forever after. It cannot be wrong, because the evidence *is* the claim. Implemented as
+   the state machine's initial state (`unknown`), so it needs no new field and no config
+   introspection — which matters, because a remote pane's config lives on the remote host and a
+   config being present is not a hook firing.
+5. **The mud fix is geometric, not chromatic.** The status ring and the selection glow are split
+   by *geometry*: the status owns a hard 3px edge, the selection keeps its soft inner wash and
+   gives up its ring. They no longer share a pixel, so they cannot blend — which is precisely
+   "red edge, orange inner glow".
+
+### Residual risks, accepted (each documented at the code that implements it)
+
+- **Subagent redeem** (`activity.ts:subagentStop`) — if a CLI ends its turn mid-fan-out *and*
+  the results re-invoke it, the pane wears green while it works again, because output inference
+  is gone and we cannot see it resume. The alternative strands the pane on busy forever when
+  that second `Stop` never comes.
+- **A chime from an unwired provider** (`activity.ts:bell`) — the deduction assumes the CLI
+  *can* say `done`. For a known provider whose hooks were never installed, "no done arrived"
+  proves nothing, and its completion chime will ring red. A false red costs a glance and
+  self-heals; it is the safe direction.
+
+---
+
 ## 1. The verdict law (the root fix)
 
 ### The disease

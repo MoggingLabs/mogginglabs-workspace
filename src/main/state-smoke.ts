@@ -116,15 +116,32 @@ export function runStateSmoke(win: BrowserWindow): void {
       await delay(1400)
       const afterReplies = String(await chip())
       const repliesHeld = afterReplies === 'attention'
-      await send('x') // real typing — THIS is what answers a blocked pane
+
+      // ONLY A SUBMIT ANSWERS A BLOCKED AGENT. The latch used to clear on ANY keystroke, and
+      // that was a lie with no way back: an arrow key, a ^C, a stray character each turned a
+      // blocked pane's red dot green and claimed it was WORKING — while the agent sat there
+      // still blocked, and no CLI re-raises a needs-input it has already raised. Red lingering
+      // a beat too long self-heals on the agent's next verdict; a false "working" never heals.
+      await send('x') // a bare character is COMPOSING, not answering
       await delay(1400)
-      const afterTyping = String(await chip())
-      const typingCleared = afterTyping !== 'attention'
+      const strayHeld = String(await chip()) === 'attention'
+      // Shift+Enter is composing too — it opens a new line inside a prompt you are still
+      // writing. Where a terminal can encode it at all it arrives ESC-prefixed, so requiring a
+      // BARE CR excludes it for free (isSubmittedInput).
+      await send('\x1b\r')
+      await delay(1400)
+      const shiftEnterHeld = String(await chip()) === 'attention'
+      // ...and Enter clears it, into BUSY: the agent said by name that it was blocked on this
+      // human, and the human just answered it. Two certainties, so the conclusion is certain.
+      await send('\r')
+      await delay(1400)
+      const afterSubmit = String(await chip())
+      const submitClearsToBusy = afterSubmit === 'busy'
 
       const noErrors = errors.length === 0
       const pass =
         attention.seen === true && busy.seen === true && idle.seen === true && cwd.seen === true &&
-        relatch.seen === true && repliesHeld && typingCleared && noErrors
+        relatch.seen === true && repliesHeld && strayHeld && shiftEnterHeld && submitClearsToBusy && noErrors
 
       write({
         pass,
@@ -135,8 +152,10 @@ export function runStateSmoke(win: BrowserWindow): void {
         relatch,
         repliesHeld,
         afterReplies,
-        typingCleared,
-        afterTyping,
+        strayHeld,
+        shiftEnterHeld,
+        submitClearsToBusy,
+        afterSubmit,
         noErrors,
         errors,
         allStates: await ES('window.__states'),

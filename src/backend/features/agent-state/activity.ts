@@ -1,133 +1,127 @@
 import type { AgentState } from '@contracts'
 
-// The pane-state ENGINE (the dot in every pane header). The OSC parser alone was the
-// original source, and on real setups it is nearly mute: cmd.exe emits no OSC 133,
-// and neither does Claude Code (verified against the 2.1.205 bundle — zero `]133;`
-// emitters), so the dot sat on 'idle' forever. This tracker fuses the signals that
-// DO exist, in strict precedence:
+// The pane-state ENGINE (the dot in every pane header).
 //
-//   attention  LATCHED by an explicit needs-input verdict (`mogging notify`, an agent
-//              hook — HIGH confidence: it says by name that a human is blocking the
-//              agent), and by an unclaimed raw bell (BEL outside an OSC, OSC 9/99/777
-//              — LOW confidence, see THE BELL below). Cleared by the user TYPING into
-//              the pane (they answered), or by an explicit busy/idle notify (the agent
-//              says it moved on).
-//   busy       OSC 133;C latches it until 133;D (integrated shells keep their exact
-//              semantics — a silent long computation stays busy); otherwise plain
-//              OUTPUT ACTIVITY: bytes flowing = working, quiet = not. Also held up by
-//              pending SUBAGENTS — see the gate below.
-//   idle       no latch, no recent output. 133;D forces it immediately and opens a
-//              short grace so the prompt repaint that follows D doesn't flash busy.
+// THE VERDICT LAW. Every state this emits is raised by a signal that KNOWS. Output activity
+// raises nothing. That is the whole of the change, and it exists because the old engine
+// GUESSED: bytes flowing meant `busy`, 1.5s of silence meant `idle`, and the busy->idle edge —
+// over a 2.5s duration floor — was read as a COMPLETION. Four ordinary things therefore stamped
+// panes "finished working" that had finished nothing:
 //
-// THE SUBAGENT GATE. Every alert the user sees — the pane dot, the workspace-rail badge
-// and outline, the grid pulses — is the MAIN agent's story. Subagents are invisible: the
-// SubagentStart/SubagentStop hooks only ever raise and lower a counter, and NO subagent
-// event is ever allowed to author a pane state. Their sole job is to swallow the main's
-// premature verdicts, because an agent that fans work out ENDS ITS OWN TURN while the
-// subagents run: it fires Stop, goes quiet, and after 60s at the prompt fires an idle
-// notification. Read literally, those say "finished" and then "blocked on you", so the
-// pane pulsed green and then rang red with the work still in flight. While the count is
-// up:
-//   - a quiet terminal does not settle to idle (the work is elsewhere, not absent),
-//   - the main's done/idle is DROPPED — that is the main parking, not finishing; the
-//     green belongs to its NEXT done, once the results re-invoke it and it ends for real,
-//   - an idle-prompt is dropped (parked-on-subagents is not blocked-on-you).
-// A real permission prompt still rings red instantly — that one IS blocked on you — and
-// a sibling subagent starting never clears it.
+//   - typing. Keystrokes echo, echo is output, output was `busy`. Type a prompt for a second,
+//     pause to think for the quiet window, and the pane went green.
+//   - the workspace switch itself. Switching refits the pane, the refit resizes the pty, and
+//     ConPTY answers a resize by repainting its entire viewport. That burst read as work.
+//   - any mid-turn pause. An agent waiting on a slow tool call is silent, and silence was idle.
+//   - any long command YOU ran in the pane. `npm install` finishing is not the agent finishing.
 //
-// THE BELL. A raw bell is a GUESS, not a verdict. Every CLI rings it on COMPLETION as
-// well as when blocked (Codex notifies on turn-complete; Claude's terminal_bell channel
-// fires for `agent_completed`), so "bell = blocked" painted finished panes red. It is
-// therefore held for BELL_CONFIRM_MS and rings only if nothing contradicts it: the
-// done/needs-input that rides a hook lands ~130-260ms behind and settles what the bell
-// could only guess at. This is what makes Codex legible — its OSC 9 fires on both events,
-// but its notify program fires ONLY on turn-complete, so a bell WITH a done behind it is
-// a completion (green) and a bell ALONE is an approval (red). Output does not contradict
-// a bell: an agent painting its approval dialog after ringing must still go red.
+// The 2.5s floor was the only thing between that inference and nonsense, and its entire safety
+// margin was about one second of repaint. Explicit direction: never guess that an agent is done.
+// Be sure. So `done` is now a state of its own (contracts/domain/agent.ts) and it is the ONLY
+// thing that can ever paint green.
 //
-// Emits only on CHANGE — a streaming agent costs one 'busy' per burst, not one per
-// chunk. Timer is unref'd; dispose() clears it. Electron-free; both PTY backends
-// (daemon session + in-proc service) wire one tracker per pane.
+//   unknown    the initial state, and the honest one: this pane has never spoken a verdict, so
+//              we have nothing to say about it. It renders HOLLOW. A pane leaves `unknown` on
+//              its first verdict and never returns — the dot going solid IS the proof that this
+//              agent's hooks reach us, which is the only proof there is. (A config file we can
+//              read is not one: a remote pane's config lives on the remote host, and a config
+//              present is not a hook firing.) Silence must never read as "it never finished".
+//   busy       turn-start (the user submitted a prompt), a subagent running, an explicit busy,
+//              OSC 133;C — or THE DEDUCTION below.
+//   attention  an explicit needs-input verdict, or an uncontradicted chime (see bell()).
+//   done       an explicit completion verdict. Nothing infers it. No duration gates it.
+//   idle       an explicit idle. Note it can never green a pane: nothing about `idle` claims
+//              that anything finished, and `idle-prompt` in particular fires on a 60-second
+//              TIMER, not on a completion.
+//
+// THE TWO DEDUCTIONS. Neither is a guess. Each combines two facts we are CERTAIN of into a
+// conclusion that is therefore also certain — which is exactly what "bytes went quiet so it
+// probably finished" never was.
+//
+//   1. ANSWERING A RED MEANS IT IS WORKING (input). The agent said BY NAME that it was blocked
+//      on this human; the human answered it. It follows that it is no longer blocked and is
+//      working. Without this the pane would go red -> [you approve] -> idle-yellow for the whole
+//      three minutes it then works -> green: a working agent that looks asleep, because no hook
+//      fires when you type `y` at a permission prompt.
+//
+//   2. A CHIME WITH NO `done` BEHIND IT MEANS BLOCKED (bell). See BELL_CONFIRM_MS.
+//
+// THE SUBAGENT GATE. Alerts are the MAIN agent's story. Subagents only ever raise and lower a
+// counter; no subagent event may author a pane state. Their job is to hold the main's verdict
+// at the gate, because an agent that fans work out ENDS ITS OWN TURN while the subagents run —
+// it fires Stop with the work still in flight. Explicit direction: green requires main-done AND
+// zero subagents. So a `done` arriving with subagents pending is DEFERRED, not dropped, and is
+// redeemed the moment the last one lands (subagentStop).
+//
+// Emits only on CHANGE. Timers are unref'd; dispose() clears them. Electron-free; both PTY
+// backends (daemon session + in-proc service) wire one tracker per pane.
 
-/** Output must stay quiet this long before busy settles back to idle. */
-const QUIET_MS = 1500
-/** After a forced idle (133;D / notify idle/done), output inside this window does not
- *  re-mark busy. Sized for the SLOWEST legitimate straggler, not the fastest: a shell's
- *  prompt repaint follows D within a few frames, but an agent's done-hook races its own
- *  final repaint — the hook's socket message can beat the trailing frame (statusline
- *  re-run ~100-500ms of process spawn, ConPTY flush) through to the tracker. A trailing
- *  frame that lands past a short grace flips busy and CLEARS the just-stamped finished
- *  flag; the sub-noise-floor busy→idle round that follows never re-stamps it, so the
- *  green "done" halo silently vanished. Real new work always outlives this window. */
-const IDLE_GRACE_MS = 1200
-/** How long a raw bell waits to be CONTRADICTED before it rings (see bell()).
+/** How long a raw chime waits to be CONTRADICTED before it rings (see bell()).
  *
  *  It must outlast an explicit verdict's whole trip: the CLI spawns `node`, which connects to
  *  the daemon and speaks the handshake. Measured at 130-260ms idle — but that is the number to
  *  size AGAINST, not to trust: a cold process spawn on a machine running sixteen busy panes is
  *  the case that matters, and it is unbounded above. Undersize this and a completion's `done`
- *  lands AFTER its own chime has already rung: the pane latches red, and the late done then
- *  arrives as an attention->idle edge — which by design never stamps green (attention-port).
- *  So an undersized window does not merely delay the truth, it DESTROYS it: a red pulse and a
- *  grey dot on a pane that finished perfectly well. Generous is the safe direction.
+ *  lands AFTER its own chime has already rung: the pane latches red on an agent that finished
+ *  perfectly well.
  *
- *  The only cost of generosity is that an unclaimed bell — a genuine block, on a CLI whose
- *  chime is all we have — turns red this late. That is a "come here" signal, not a control
- *  input; a beat of latency is imperceptible, and it buys the completion story its correctness.
- *
- *  It is deliberately ABOVE QUIET_MS. The quiet timer stands down while a bell is pending
- *  (armQuietTimer), precisely so this window is sized by the spawn it is waiting on rather than
- *  by an unrelated constant. */
+ *  The only cost of generosity is that a genuine block — on a CLI whose chime is all we have —
+ *  turns red this late. That is a "come here" signal, not a control input; a beat of latency is
+ *  imperceptible, and it buys the completion story its correctness. */
 const BELL_CONFIRM_MS = 2000
 
 export class ActivityTracker {
-  private state: AgentState = 'idle'
-  private latched = false // attention holds until input or an explicit notify
-  private oscBusy = false // 133;C .. 133;D bracket — outranks the quiet timer
-  private graceUntil = 0
-  private quietTimer: ReturnType<typeof setTimeout> | undefined
-  private bellTimer: ReturnType<typeof setTimeout> | undefined // a raw bell, awaiting contradiction
-  // Subagents in flight (SubagentStart/SubagentStop hooks). A GATE, never a source —
-  // see the header. While > 0 it holds the pane busy and swallows the main's premature
-  // verdicts; it never emits one of its own.
+  /** `unknown` until this pane speaks. Never returns to it. */
+  private state: AgentState = 'unknown'
+  private latched = false // attention holds until an answer or an explicit verdict
+  private bellTimer: ReturnType<typeof setTimeout> | undefined // a chime, awaiting contradiction
+
+  // Subagents in flight (SubagentStart/SubagentStop). A GATE, never a source.
   //
-  // It is also the only latch here a MISSING event could stick (a subagent killed hard,
-  // Ctrl+C mid-fan-out): stuck above zero it would swallow every later done and strand
-  // the pane on busy. turnStart() is the reset — at prompt-submit time no subagent of
-  // THIS turn has started yet, so a nonzero count is by definition stale. The failure
-  // direction is always busy, never a false green.
+  // It is the only latch here that a MISSING event could stick (a subagent killed hard, ^C
+  // mid-fan-out): stuck above zero it would swallow every later done and strand the pane on
+  // busy. turnStart() is the reset — at prompt-submit time no subagent of THIS turn has started
+  // yet, so a nonzero count is by definition stale. The failure direction is always busy, never
+  // a false green.
   private pendingSubagents = 0
 
-  constructor(
-    private readonly emit: (state: AgentState) => void,
-    private readonly now: () => number = Date.now
-  ) {}
+  /** The main said `done` while its subagents were still running. Held, not discarded: green
+   *  requires main-done AND zero subagents, and the first half of that is now true. Redeemed by
+   *  the last subagentStop. Any evidence that the main is NOT finished after all — it went busy,
+   *  a new turn began, it blocked on the user — throws it away. */
+  private deferredDone = false
 
-  /** Output bytes arrived (call once per chunk, BEFORE parsing the chunk's OSC —
-   *  a verdict carried IN the chunk must land after the activity it rides on). */
-  data(): void {
-    if (this.now() < this.graceUntil) return
-    this.armQuietTimer()
-    this.apply(this.latched ? 'attention' : 'busy')
-  }
+  // No injected clock any more: nothing here is TIMED except the chime's confirmation window,
+  // which is a real setTimeout. The old tracker needed one because it measured output silence.
+  constructor(private readonly emit: (state: AgentState) => void) {}
 
-  /** A RAW "look at me" off the PTY stream: BEL outside an OSC, or an OSC 9/99/777
-   *  notification. It is a GUESS, not a verdict — every agent CLI rings it on COMPLETION
-   *  as well as when blocked (Codex notifies on turn-complete, Claude's terminal_bell
-   *  channel fires for `agent_completed`), so on its own it cannot tell "done" from
-   *  "blocked", and taking it for "blocked" painted finished panes red.
+  /** A RAW "look at me" off the PTY stream: BEL outside an OSC, or an OSC 9/99/777 notification.
    *
-   *  So it is held for a beat instead of latching outright. An explicit verdict landing
-   *  inside the window — the done/needs-input riding ~130-260ms behind it on a hook —
-   *  is KNOWLEDGE and cancels the guess. Only an unclaimed bell, from a CLI with no hook
-   *  wired at all, actually rings; there it is the one signal we have, so it still must.
-   *  A bell inside the idle grace is dropped outright: a done just landed, and this is
-   *  that done's own completion chime arriving on the trailing frames.
+   *  On its own it is ambiguous, not wrong — every agent CLI rings it on COMPLETION as well as
+   *  when blocked (Codex notifies on turn-complete; Claude's terminal_bell channel fires for
+   *  `agent_completed`; OpenCode's chime vocabulary is question/permission/error/done/
+   *  subagent_done). Taken for "blocked" it painted finished panes red.
    *
-   *  Note that OUTPUT does not cancel it — an agent printing its approval dialog after
-   *  ringing is exactly the case that must still go red. Only a verdict speaks. */
+   *  So it is HELD for a beat and asked whether an explicit `done` lands behind it:
+   *
+   *      chime + a `done` inside the window  -> a completion  -> green (the done applies)
+   *      chime + NO `done`                   -> a block       -> red
+   *
+   *  Both inputs are certain: the CLI did ring, and no `done` did arrive. That makes the
+   *  conclusion certain too — this is a deduction, not the output-quiescence guess. It is also
+   *  load-bearing: it is the ONLY red Gemini and OpenCode have (Gemini's Notification hook is
+   *  deliberately not wired — it fires for warnings and errors, which are not "blocked on you"),
+   *  so removing it would leave three of five CLIs unable to say they need you.
+   *
+   *  Output does NOT cancel it: an agent painting its approval dialog after ringing is exactly
+   *  the case that must still go red. Only a verdict speaks.
+   *
+   *  RESIDUAL, accepted: the deduction's soundness rests on the CLI being ABLE to say `done`.
+   *  For a known provider whose hooks were never installed, "no done arrived" proves nothing,
+   *  and its completion chime will ring red. That is a false red, which costs a glance and
+   *  self-heals on the next verdict — the safe direction to be wrong in, and the one we choose
+   *  everywhere here. A false green costs a task you believe is finished and is not. */
   bell(): void {
-    if (this.now() < this.graceUntil) return
     if (this.bellTimer) return // already pending — one ring per episode
     this.bellTimer = setTimeout(() => {
       this.bellTimer = undefined
@@ -136,121 +130,147 @@ export class ActivityTracker {
     this.bellTimer.unref?.()
   }
 
-  /** An EXPLICIT needs-input verdict (a hook said so, by name). High confidence: it rings
-   *  at once, and never waits on the bell's confirmation window. */
+  /** An EXPLICIT needs-input verdict (a hook said so, by name). High confidence: it rings at
+   *  once and never waits on the chime's confirmation window. */
   raiseAttention(): void {
     this.clearBellTimer()
     this.latched = true
+    this.deferredDone = false // blocked on a human is not finished, whatever it said earlier
     this.apply('attention')
   }
 
   /** An explicit state verdict: OSC 133 C/D, `mogging notify`, an agent hook. */
   notify(state: AgentState): void {
-    // Knowledge outranks a guess: whatever this says, it settles what a pending bell was
-    // trying to infer — including a `done` that the bell would otherwise have reddened.
+    // Knowledge outranks the guess it was holding: whatever this says settles what a pending
+    // chime was trying to infer — including a `done` that would otherwise have rung red.
     this.clearBellTimer()
+
     if (state === 'attention') {
       this.raiseAttention()
       return
     }
-    // busy/idle are the agent explicitly moving on — they clear an attention latch.
+
+    // busy/done/idle are all the agent explicitly moving on — they release an attention latch.
     this.latched = false
+
     if (state === 'busy') {
-      this.oscBusy = true
+      this.deferredDone = false // it is working: whatever it said before, it did not finish
       this.apply('busy')
-    } else if (this.pendingSubagents > 0) {
-      // The main's turn ended while its subagents are still working. That is the main
-      // PARKING, not the work finishing — so this done is DROPPED, not deferred. The
-      // green belongs to the main's NEXT done: the results re-invoke it, it works, and
-      // it ends for real. Replaying a dropped done from a subagent event would make the
-      // subagent the author of the pulse — the one thing that must never happen.
-      this.oscBusy = false
-      this.apply('busy')
-    } else {
-      this.forceIdle()
+      return
     }
+
+    if (state === 'done') {
+      if (this.pendingSubagents > 0) {
+        // The main's turn ended while its subagents are still working. Explicit direction: it
+        // cannot go green until everything under it is also done. DEFER the verdict — it is the
+        // main's own, and it stays the main's own; the gate only decides WHEN it is due.
+        this.deferredDone = true
+        this.apply('busy')
+        return
+      }
+      this.apply('done')
+      return
+    }
+
+    // Plain idle (OSC 133;D, an explicit `idle`, an idle-prompt). The pane settled, but NOTHING
+    // completed — this may never green it. Still held busy while subagents run: the work is
+    // elsewhere, not absent.
+    this.apply(this.pendingSubagents > 0 ? 'busy' : 'idle')
   }
 
-  /** SubagentStart hook: bookkeeping + hold busy. Never clears an attention latch —
-   *  a sibling subagent starting must not wipe the red the MAIN raised (one subagent
-   *  asking for permission while three others run is exactly this shape). */
+  /** SubagentStart: bookkeeping + hold busy. Never clears an attention latch — a sibling
+   *  subagent starting must not wipe the red the MAIN raised (one subagent asking for
+   *  permission while three others run is exactly this shape). */
   subagentStart(): void {
-    this.clearBellTimer() // a hook spoke: work started, so a pending bell was not a block
+    this.clearBellTimer() // a hook spoke: work started, so a pending chime was not a block
     this.pendingSubagents++
     this.apply(this.latched ? 'attention' : 'busy')
   }
 
-  /** SubagentStop hook: bookkeeping ONLY — it emits no verdict of its own. Green is the
-   *  main's story to tell and it will: the results re-invoke it, and its next done is
-   *  the real one. The re-armed quiet timer is a BACKSTOP, not the path: a main that
-   *  never comes back settles through the same output-quiescence baseline as a hookless
-   *  CLI, instead of stranding the pane on busy forever. */
+  /** SubagentStop: bookkeeping, and the moment a deferred `done` comes due. */
   subagentStop(): void {
-    // Cancel the guess BEFORE the stray guard: a subagent landing is exactly what some
-    // CLIs chime for (OpenCode fires its attention notification on `subagent_done`), and
-    // that bell must not ring red for a subagent that finished. This is a hook speaking,
-    // so it contradicts a pending bell even when the counter says nothing is owed.
+    // Cancel the guess BEFORE the stray guard: a subagent landing is exactly what some CLIs
+    // chime for (OpenCode fires its attention notification on `subagent_done`), and that chime
+    // must not ring red for a subagent that merely finished. A hook is speaking, so it
+    // contradicts a pending chime even when the counter says nothing is owed.
     this.clearBellTimer()
-    // A stop with nothing pending is STRAY — a background subagent outliving the turnStart
-    // that reset the counter, or a CLI that reports child completions without starts.
-    // Ignore it: re-arming the settle timer here would let a stale event from the last turn
-    // quietly idle (and green) a pane that is working on this one.
+    // A stop with nothing pending is STRAY — a background subagent outliving the turnStart that
+    // reset the counter, or a CLI that reports child completions without starts. Ignore it.
     if (this.pendingSubagents === 0) return
     this.pendingSubagents--
-    if (this.pendingSubagents === 0) this.armQuietTimer()
+    if (this.pendingSubagents > 0) return
+
+    // The last one landed. If the main had already said `done`, both halves of the rule are now
+    // true — main is done AND nothing runs beneath it — so its deferred verdict is due. This is
+    // still the MAIN's verdict, released from the gate; the subagent only opened the gate.
+    //
+    // RESIDUAL, accepted (explicit direction): if the main is one of the CLIs that ends its turn
+    // mid-fan-out and is then RE-INVOKED by the results, it will work again — and with output
+    // inference gone we cannot see that happen, so the pane would wear green while it works,
+    // until its real Stop lands and re-greens it. The alternative is worse: leaving the done
+    // unredeemed strands the pane on busy forever whenever that second Stop never comes.
+    if (this.deferredDone && !this.latched) {
+      this.deferredDone = false
+      this.apply('done')
+    }
+    // Otherwise the main has not finished. Stay busy and wait for its verdict.
   }
 
-  /** Claude Code's "Claude is waiting for your input" notice. It fires on an idle TIMER,
-   *  not on a block — so it is an IDLE verdict, not an attention one. Ringing it red was
-   *  a lie in both directions: it turned a finished pane's green halo red a minute after
-   *  it finished (nothing was blocking; it had simply gone quiet), and it said "act now"
-   *  about a pane that only wanted reading. Green already carries "come look".
-   *  Dropped while subagents are in flight (parked on them is not idle) and while a real
-   *  block is latched (it must never clear a genuine red). Otherwise it settles the pane —
-   *  which also rescues one whose Stop we somehow missed. */
+  /** Claude Code's "Claude is waiting for your input" notice. It fires on an idle TIMER, not on
+   *  a block — so it is an IDLE verdict, and it must never ring red (that turned a finished
+   *  pane's green halo red a minute after it finished) nor green one (nothing completed; it had
+   *  simply gone quiet). Dropped while subagents are in flight (parked on them is not idle) and
+   *  while a real block is latched (it must never clear a genuine red). */
   idlePrompt(): void {
     if (this.pendingSubagents > 0 || this.latched) return
     this.notify('idle')
   }
 
-  /** UserPromptSubmit hook: a new turn begins. Nothing this turn has fanned out yet, so
-   *  any surviving pending count is stale (a subagent killed before its stop event) —
-   *  drop it rather than let it swallow every future done and strand the pane on busy.
-   *  The prompt itself is also new WORK, and a MAIN event: it answers whatever was
-   *  blocking, and it reclaims a pane still wearing the last turn's green (the grace
-   *  window from that forced idle must not swallow the flip). */
+  /** UserPromptSubmit: a new turn begins. Nothing this turn has fanned out yet, so any surviving
+   *  pending count is stale (a subagent killed before its stop event) — drop it rather than let
+   *  it swallow every future done and strand the pane on busy. The prompt itself is also new
+   *  WORK and a MAIN event: it answers whatever was blocking, and it reclaims a pane still
+   *  wearing the last turn's green. */
   turnStart(): void {
     this.clearBellTimer() // the user is here and typing; nothing is owed a ring
     this.pendingSubagents = 0
+    this.deferredDone = false
     this.latched = false
-    this.graceUntil = 0
-    this.armQuietTimer()
     this.apply('busy')
   }
 
-  /** The live verdict, for state-sync PULLS (a mounting pane asking "what am I now").
-   *  Events only fire on CHANGE, so this is the one way to read the current truth. */
+  /**
+   * The user wrote to the pane. `submitted` = the chunk carried a SUBMITTED line — a bare CR/LF,
+   * i.e. Enter (see isSubmittedInput, which is where Shift+Enter and bracketed paste are ruled
+   * out). Only a submit may clear the latch.
+   *
+   * It used to clear on ANY keystroke, and that was a lie with no way back: an arrow key, a ^C,
+   * a stray character each turned a blocked pane's red dot green and claimed it was WORKING —
+   * while the agent sat there still blocked, and no CLI re-raises a needs-input it has already
+   * raised. Red lingering a beat too long self-heals on the next verdict. A false "working" does
+   * not heal at all.
+   *
+   * On a submit into a latched pane, DEDUCTION 1 applies: the agent said it was blocked on this
+   * human, and the human just answered. It is working.
+   */
+  input(submitted: boolean): void {
+    if (!submitted) return
+    // You answered: whatever a pending chime was about, it is handled. (A stray keystroke must
+    // NOT cancel it — the chime may be a real block, and a keypress says nothing about which.)
+    this.clearBellTimer()
+    if (!this.latched) return
+    this.latched = false
+    this.apply('busy')
+  }
+
+  /** The live verdict, for state-sync PULLS (a mounting pane asking "what am I now"). Events
+   *  only fire on CHANGE, so this is the one way to read the current truth — including
+   *  `unknown`, which is how a reattaching pane learns it must stay hollow. */
   current(): AgentState {
     return this.state
   }
 
-  /** The user typed into the pane: whatever it was blocked on has been answered. */
-  input(): void {
-    this.clearBellTimer() // the human is already here — a pending ring has nothing to say
-    if (!this.latched) return
-    this.latched = false
-    this.apply(this.oscBusy || this.pendingSubagents > 0 || this.quietTimer ? 'busy' : 'idle')
-  }
-
-  private forceIdle(): void {
-    this.oscBusy = false
-    this.graceUntil = this.now() + IDLE_GRACE_MS
-    this.clearQuietTimer()
-    this.apply('idle')
-  }
-
   dispose(): void {
-    this.clearQuietTimer()
     this.clearBellTimer()
   }
 
@@ -258,31 +278,6 @@ export class ActivityTracker {
     if (this.bellTimer) {
       clearTimeout(this.bellTimer)
       this.bellTimer = undefined
-    }
-  }
-
-  private armQuietTimer(): void {
-    this.clearQuietTimer()
-    this.quietTimer = setTimeout(() => {
-      this.quietTimer = undefined
-      // A bell is pending: a verdict is imminent and it decides this pane. Settling to idle
-      // now would stamp GREEN a moment before a genuine block rings RED — a green flash on
-      // a pane that needs you. Re-arm and let the bell resolve first; whatever it resolves
-      // to, the next tick settles normally. (This is also what frees BELL_CONFIRM_MS from
-      // having to hide under QUIET_MS — see the constant.)
-      if (this.bellTimer) {
-        this.armQuietTimer()
-        return
-      }
-      if (!this.latched && !this.oscBusy && this.pendingSubagents === 0) this.apply('idle')
-    }, QUIET_MS)
-    this.quietTimer.unref?.()
-  }
-
-  private clearQuietTimer(): void {
-    if (this.quietTimer) {
-      clearTimeout(this.quietTimer)
-      this.quietTimer = undefined
     }
   }
 

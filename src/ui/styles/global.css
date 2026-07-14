@@ -326,34 +326,33 @@ button {
   animation-iteration-count: 1 !important;
   transition-duration: 0.01ms !important;
 }
-/* MOTION-01 (audit 36): the attention/possession/update indicators pulse forever at
-   full motion. These twins used to swap that pulse for a slow opacity fade — but
-   declared it `infinite`, and their higher specificity + !important beat the blanket
-   clamp above. So the reduced-motion rule was itself installing an endless animation:
-   precisely the thing the preference asks us not to do.
-   Now they HOLD STILL — `animation: none`, not a bounded finite count. All five rest
-   at opacity 1 and are legible the moment they mount: background color, halo and
-   sheer presence ARE the state, so stillness loses nothing and there is no "arrived"
-   cue a fade could carry. (Contrast .layout-slot.attn-pulse::before, which IS bounded
-   to one pass — it has to be, because its base state is opacity 0 and the fade is its
-   only appearance.) This is the app's stated policy, applied: "under reduced-motion
-   the ring stops and the label carries the meaning" — components/spinner.ts.
+/* MOTION-01 (audit 36): the possession/update indicators pulse forever at full motion.
+   These twins used to swap that pulse for a slow opacity fade — but declared it
+   `infinite`, and their higher specificity + !important beat the blanket clamp above.
+   So the reduced-motion rule was itself installing an endless animation: precisely the
+   thing the preference asks us not to do.
+   Now they HOLD STILL — `animation: none`, not a bounded finite count. Both rest at
+   opacity 1 and are legible the moment they mount: background color, halo and sheer
+   presence ARE the state, so stillness loses nothing and there is no "arrived" cue a
+   fade could carry. This is the app's stated policy, applied: "under reduced-motion the
+   ring stops and the label carries the meaning" — components/spinner.ts.
    The resting opacity is restated for the same reason .workspace-tab.is-alerting
-   restates its glow: the landing pose is written down, not inferred. */
+   restates its glow: the landing pose is written down, not inferred.
+
+   THE LIST IS SHORTER NOW, and that is the verdict-law pass paying out: the pane dot and
+   the rail's alert count no longer pulse AT ALL (explicit direction — the pane wears a
+   red outline, so a pulsing dot on top of it was one alarm told twice), so there is
+   nothing here for reduced motion to turn off. The only indicator still moving forever
+   is .workspace-tab.is-alerting, which keeps its own twin below: the rail is the surface
+   you are NOT looking at, and it is the one place perpetual motion earns its keep. */
 @media (prefers-reduced-motion: reduce) {
-  .ws-attn,
   .workspace-tab.is-agent-driving::after,
-  .pane-state[data-state='busy'],
-  .pane-state[data-state='attention'],
   .update-dot {
     animation: none !important;
     opacity: 1;
   }
 }
-:root.motion-calm .ws-attn,
 :root.motion-calm .workspace-tab.is-agent-driving::after,
-:root.motion-calm .pane-state[data-state='busy'],
-:root.motion-calm .pane-state[data-state='attention'],
 :root.motion-calm .update-dot {
   animation: none !important;
   opacity: 1;
@@ -1662,8 +1661,30 @@ button {
    The controller still stamps `data-attention` (busy/attention) on the tab root —
    that attribute is the DOM contract the attention/milestone smokes assert — but
    it carries no paint of its own; `.is-alerting` is the painted state. */
+/* THE ALERT COUNTS — two of them, SPLIT BY URGENCY (explicit direction). One number
+   could not say what it meant: a "3" was three agents blocked on you, or one blocked and
+   two merely finished, and those are different messages wearing the same orange. Now the
+   colours carry it — red counts panes that need you, green counts panes that finished —
+   and the tab outline still says "this workspace wants you" from across the app.
+   STEADY, not pulsing: the pulse moved to the tab outline, which is the whole tab and a
+   far better target for a glance than a 16px circle. */
 .ws-attn {
-  animation: ws-attention-pulse 1.6s ease-in-out infinite;
+  background: var(--danger);
+  color: var(--accent-contrast);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--danger) 45%, transparent);
+}
+.ws-done {
+  background: var(--success);
+  color: var(--accent-contrast);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--success) 45%, transparent);
+}
+/* A quiet "my agents are running" hint (explicit direction). Deliberately NOT orange and
+   deliberately not a count: work in progress wants nothing from you, and the moment it
+   competes with the alert colours it has cost more than it gave. Before this, a workspace
+   with three agents hard at work was indistinguishable from one that was asleep — the
+   rail showed a pane count and nothing else. */
+.workspace-tab.is-working .ws-icon {
+  color: var(--success);
 }
 @keyframes ws-attention-pulse {
   0%,
@@ -1776,15 +1797,23 @@ button {
   right: -4px;
   z-index: 1; /* above the tab's own border/outline, so the overlap reads as ON TOP */
 }
-#app.rail-collapsed .ws-attn {
+#app.rail-collapsed .ws-attn,
+#app.rail-collapsed .ws-done {
   min-width: 16px;
   height: 16px;
   padding: 0 var(--sp-1);
   font-size: 10px;
-  /* A BORDER keyline in the rail's surface, not a box-shadow ring: the badge's own
-     ws-attention-pulse animates box-shadow, so a shadow keyline would flicker away
-     on every pulse beat. The border cuts the badge out of the square beneath it. */
+  /* A BORDER keyline in the rail's surface, not a box-shadow ring: these badges carry a
+     glow box-shadow, and a shadow keyline would be swallowed by it. The border cuts the
+     badge out of the square beneath it. */
   border: 2px solid var(--bg-surface);
+}
+/* Collapsed, the two counts stack in the tab's top-right corner rather than sitting side by
+   side: a 54px square has no room for a row of them, and the red must never be the one that
+   gets pushed out of view. */
+#app.rail-collapsed .ws-badges {
+  flex-direction: column;
+  gap: 2px;
 }
 /* Bug #10: collapsed, .ws-badges (the attention count) sits top-right — and the
    agent-browsing dot defaults to the SAME corner (top:3px right:3px), stacking two
@@ -2066,106 +2095,98 @@ button {
     inset 0 0 68px -12px var(--accent-glow);
   transition: opacity var(--dur-1) var(--ease);
 }
-/* While a status pulse plays on the focused pane, the selection glow steps ASIDE
-   (and eases back after): glows are ADDITIVE, and orange under the red pulse read
-   as hot orange — the one color story the flash must never tell. The slot's 1px
-   accent border stays, so selection never vanishes outright. */
-.layout-slot.focused.attn-pulse::after {
-  opacity: 0;
-}
+/* ── Pane status: a RESTING outline, and the swell that delivers it ──────────────────
+   The pulse used to fade to NOTHING and hand the whole story back to a 13px header dot,
+   so "which pane is blocked" meant scanning dots across a sixteen-pane grid. The pane
+   now WEARS its state until it is resolved, and the pulse is merely how that outline
+   arrives (explicit direction).
 
-/* One-shot status pulse: opening a workspace flashes each ALERTING pane once — and a
-   pane that flips while its workspace is already in front of you flashes the moment it
-   does — then hands the story back to the header dot. The eye lands on the right PANE,
-   not just the right tab.
-     geometry   the focused pane's ::after, verbatim — the ONE glow intensity that is
-                measured against the terminal background (see the tuning ladder above).
-                It rides ::before so a pane that is focused AND alerting shows both.
-     color      STATUS-colored (explicit direction): vivid red = blocked (an error or
-                waiting on your input — either way it stopped FOR you), vivid green =
-                finished working. The kind class sets --pulse-color; red and green are
-                the same tokens the header dot already speaks (--danger / --success),
-                so pulse and dot never disagree. Orange stays the RAIL's word.
-     rhythm     3s, THREE beats with softly decaying peaks over a LIT floor (0.55 —
-                between beats the glow stays visibly on, never dark: explicit
-                direction), every segment ease-in-out so the swell reads as
-                breathing, not blinking (the old two-beat curve bottomed at 0.3
-                and moved on --ease, which read as on/off).
-     lifetime   the animation plays once; GridLayout.pulseAttention drops the classes
-                after it lands, so the overlay leaves the paint tree entirely. */
-@keyframes pane-attn-pulse {
-  0% {
-    opacity: 0;
-  }
-  10% {
-    opacity: 1;
-  }
-  30% {
-    opacity: 0.55;
-  }
-  48% {
-    opacity: 0.96;
-  }
-  66% {
-    opacity: 0.55;
-  }
-  82% {
-    opacity: 0.9;
-  }
-  100% {
-    opacity: 0;
-  }
+     data-alert="input"     blocked on you   — red, until the agent is unblocked. There
+                            is no dismissing it; clicking only calms the RAIL.
+     data-alert="finished"  done, unclicked  — green, until you click the pane.
+
+   Set by the workspace controller from the attention port — never inferred in CSS, so
+   dot, pane and rail read one truth and cannot disagree. `.attn-pulse` is the one-shot
+   arrival on top; a pane can carry the outline with no pulse owed (a green whose single
+   pulse is already spent), which is exactly the spec.
+
+   ONE ANIMATED PROPERTY, deliberately: opacity. The compositor owns it, so a workspace
+   holding six alerting panes can arrive all at once without a repaint storm — and the
+   old three-beat keyframes animated a box-shadow, which cannot be composited. */
+.layout-slot[data-alert] {
+  --alert-color: var(--danger);
+  /* The calm level the swell lands on. Bright enough to find across a grid, quiet enough
+     to live with for an hour. */
+  --alert-rest: 0.62;
 }
-.layout-slot.pulse-input {
-  --pulse-color: var(--danger); /* blocked: error or needs input */
+.layout-slot[data-alert='finished'] {
+  --alert-color: var(--success);
 }
-.layout-slot.pulse-finished {
-  --pulse-color: var(--success); /* finished working */
+/* The slot's own 1px border takes the status colour too, so the pane reads as marked even
+   where the inner ring is clipped by the grid's overflow. AFTER .focused on purpose —
+   equal specificity, and an alerting pane's edge is the status, not the selection. */
+.layout-slot[data-alert] {
+  border-color: var(--alert-color);
 }
-.layout-slot.attn-pulse::before {
+.layout-slot[data-alert]::before {
   content: '';
   position: absolute;
   inset: 0;
   pointer-events: none;
-  /* ONE above the focused ::after (6), still far under .menu's 40: on the focused
-     pane — and a switch auto-focuses the very pane that alerted — the selection's
-     permanent orange glow otherwise paints over the flash and eats the color
-     (measured: the red pulse read as orange). At peak the status color dominates;
-     as it fades the selection re-emerges. */
+  /* One above the selection's ::after (6), far under .menu's 40. */
   z-index: 7;
-  opacity: 0;
-  /* A step HOTTER than the focused pane's glow (3px ring; 90%/55% stops vs the
-     selection's 80%/40%): the pulse must carry through its 0.55 floor, where the
-     old stops measured as barely-there — "more intense", explicit direction. */
   box-shadow:
-    inset 0 0 0 3px var(--pulse-color, var(--attention)),
-    inset 0 0 26px -2px color-mix(in srgb, var(--pulse-color, var(--attention)) 90%, transparent),
-    inset 0 0 84px -12px color-mix(in srgb, var(--pulse-color, var(--attention)) 55%, transparent);
-  animation: pane-attn-pulse 3s ease-in-out 1;
+    inset 0 0 0 3px var(--alert-color),
+    inset 0 0 26px -2px color-mix(in srgb, var(--alert-color) 90%, transparent),
+    inset 0 0 84px -12px color-mix(in srgb, var(--alert-color) 55%, transparent);
+  opacity: var(--alert-rest);
 }
-/* MOTION-01: under reduced motion (OS pref OR the Calm-motion switch) the pulse
-   survives as ONE slow opacity fade — no motion, but the call-to-action still
-   lands (the global 0.01ms clamp would otherwise erase it entirely; the
-   !important is how the clamp is outranked). Its OWN keyframes: the full-motion
-   pulse beats three times now, and those beats are exactly the motion declined. */
-@keyframes pane-attn-fade {
+/* THE MUD FIX. A focused pane draws a hard 2px accent ring; the status draws a hard 3px
+   one. Two hard rings at the same inset BLEND — measured: the red pulse read as orange,
+   which is the only reason it had to be stacked above the selection to be seen at all.
+   Made permanent, they would simply be permanently muddy.
+   So they are split by GEOMETRY, not colour, and the split is precisely what was asked
+   for — "red edge, orange inner glow". The status owns the hard edge; the selection
+   keeps its soft inner wash and gives up its ring. They no longer share a pixel, so
+   neither can bleed into the other, and both facts stay legible at once. */
+.layout-slot.focused[data-alert]::after {
+  box-shadow:
+    inset 0 0 20px -2px var(--accent-glow-strong),
+    inset 0 0 68px -12px var(--accent-glow);
+}
+/* The arrival: ONE swell that decays INTO the resting outline — not three beats fading to
+   nothing. The pulse has somewhere to land now, so it is a single gesture whose ending is
+   the state it announces. */
+@keyframes alert-arrive {
   0% {
     opacity: 0;
   }
-  30% {
+  22% {
     opacity: 1;
   }
   100% {
-    opacity: 0;
+    opacity: var(--alert-rest);
   }
 }
+.layout-slot[data-alert].attn-pulse::before {
+  animation: alert-arrive 1.2s ease-in-out 1;
+}
+/* MOTION-01: under reduced motion (OS pref OR the Calm-motion switch) the outline simply
+   APPEARS at its resting level. Nothing is lost — the outline is the message, and the
+   swell was only its entrance. This is now a plain `animation: none`, not a bounded
+   substitute animation: the old rule had to install a fade because the pulse's base state
+   was opacity 0 and the fade was its only appearance. A resting outline needs no entrance
+   to exist, which is what makes this the calmest version of the feature and the safest one
+   for scripts/check-reduced-motion.mjs. */
 @media (prefers-reduced-motion: reduce) {
-  .layout-slot.attn-pulse::before {
-    animation: pane-attn-fade 1.8s ease-in-out 1 !important;
+  .layout-slot[data-alert].attn-pulse::before {
+    animation: none !important;
+    opacity: var(--alert-rest);
   }
 }
-:root.motion-calm .layout-slot.attn-pulse::before {
-  animation: pane-attn-fade 1.8s ease-in-out 1 !important;
+:root.motion-calm .layout-slot[data-alert].attn-pulse::before {
+  animation: none !important;
+  opacity: var(--alert-rest);
 }
 
 /* Terminal top bar — the reference layout: [✳ title] · [⑂ branch] · [⋯ ⤢ ↔ ↕ ×].
@@ -2898,6 +2919,17 @@ body.pane-dragging * {
 .pane-state[data-state="busy"] {
   background: var(--success);
 }
+/* HOLLOW — the dot's one honest silence. This agent has never spoken a verdict, so we
+   have nothing to tell you: not a state the AGENT is in, a state WE are in. It is the
+   whole reason the verdict law can afford to be strict. Once output activity stopped
+   authoring state, a pane whose hooks never reach us would otherwise have rested on a
+   permanent yellow "idle" — a claim ("nothing is running") we have no basis for, and
+   indistinguishable from a real one. A ring with no fill claims nothing.
+   The pane leaves this state on its first verdict and never returns to it. */
+.pane-state[data-state="unknown"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--border-strong);
+}
 /* Finished, STICKY (explicit direction): the pane completed work you haven't looked
    at yet — the same green as working, lifted by a steady soft halo, holding until
    the pane is CLICKED (grid mousedown / keyboard nav → acknowledgeFinished on the
@@ -2906,12 +2938,13 @@ body.pane-dragging * {
   background: var(--success);
   box-shadow: 0 0 8px color-mix(in srgb, var(--success) 45%, transparent);
 }
+/* Blocked: STEADY red, no pulse (explicit direction). The pane itself now carries a red
+   outline until the agent is unblocked, so a dot pulsing on top of it was the same alarm
+   told twice — and the one thing that pulses forever is the RAIL tab, which is the surface
+   you are NOT looking at and the only place perpetual motion earns its keep. */
 .pane-state[data-state="attention"] {
-  /* --pulse-glow feeds ws-attention-pulse, whose other riders keep the accent glow. */
-  --pulse-glow: color-mix(in srgb, var(--danger) 45%, transparent);
   background: var(--danger);
-  box-shadow: 0 0 8px var(--pulse-glow);
-  animation: ws-attention-pulse 1.6s ease-in-out infinite;
+  box-shadow: 0 0 8px color-mix(in srgb, var(--danger) 45%, transparent);
 }
 /* Dead pane (process exited / never spawned): gray, glow and pulse off. AFTER the
    attention rule on purpose — equal specificity, so source order kills a lingering

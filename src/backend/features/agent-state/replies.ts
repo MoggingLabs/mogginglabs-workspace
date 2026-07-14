@@ -47,3 +47,37 @@ export function isTerminalReply(data: string): boolean {
   }
   return true
 }
+
+/**
+ * True when a renderer->pty chunk carries a SUBMITTED line — the user pressed Enter.
+ *
+ * This is the ONLY thing that may clear an attention latch. `input()` used to clear it on any
+ * keystroke at all, which claimed "working" about a pane whose agent was still blocked: an
+ * arrow key, a ^C, a stray character each turned the red dot green while nothing had been
+ * answered — and nothing ever corrected it, because a CLI does not re-raise a needs-input it
+ * has already raised. The asymmetry decides it. A red that lingers one beat too long SELF-HEALS
+ * on the agent's next verdict; a false "working" does not heal at all. So the latch waits for
+ * the one keystroke that actually answers something.
+ *
+ * SHIFT+ENTER is deliberately not a submit — it opens a new line inside a prompt the user is
+ * still composing (explicit direction). Requiring a BARE CR/LF excludes it for free, and the
+ * rule is right in BOTH worlds: where a terminal can encode Shift+Enter at all it arrives
+ * ESC-prefixed (ESC-CR, or a CSI-u sequence under the kitty / modifyOtherKeys protocols), so it
+ * fails this test; and where the terminal CANNOT encode it, neither can the agent — the
+ * keystroke really does submit, and counting it is then exactly correct.
+ *
+ * Bracketed paste (ESC [ 200 ~ ...) fails the test for the same reason, and should: pasting
+ * text into a prompt is composing, not answering. An UNbracketed paste carrying a newline does
+ * count — without bracketing, that newline genuinely submits.
+ *
+ * Distinct from `countSubmittedLines` (agent-proc), which counts ANY CR/LF including the one
+ * inside an ESC-CR. That is right for the cwd detector — a pasted script really does start
+ * commands — and wrong here, where the question is whether a human answered a blocked agent.
+ */
+export function isSubmittedInput(data: string): boolean {
+  if (!data) return false
+  // An ESC-introduced chunk is a SEQUENCE, never a bare Enter: Shift+Enter, arrows, function
+  // keys, bracketed paste. Enter alone is a bare CR.
+  if (data.startsWith('\x1b')) return false
+  return data.includes('\r') || data.includes('\n')
+}

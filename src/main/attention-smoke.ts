@@ -7,6 +7,11 @@ import { OscParser } from '@backend/features/agent-state'
 // backgrounded, flip a pane in that background workspace to attention, assert its tab rings, then
 // focus it and assert the ring clears. Exercises the per-workspace attention aggregation + latch.
 // Plus (A) a main-side unit assert on the ONE parser rule that manufactures false attention.
+//
+// It is ALSO the gate on THE VERDICT LAW — that green has exactly one source, an explicit `done`,
+// and that silence is never mistaken for a completion. Those asserts are written to fail on the
+// engine this replaced: it derived "finished" from a busy->idle edge over a 2.5s duration floor,
+// so a pane that merely went quiet for long enough was stamped as having finished work.
 
 /** Count the terminal bells a chunk sequence produces — the signal that latches a pane red. */
 function bellsFor(chunks: string[]): number {
@@ -76,36 +81,66 @@ const SCRIPT = `(async () => {
   await sleep(400)
   const afterFocus = bgTab.getAttribute('data-attention')
 
-  // FINISHED derivation (0.8.1): the green halo stamps ONLY a busy->idle edge that
-  // lasted like work (>= 2.5s); an attention->idle edge answered/replayed its latch
-  // away and completed NOTHING (a permission-blocked pane once pulsed green through
-  // that edge — found live 2026-07-10). Port-driven: the chip attribute renders from
-  // the port on every change, so no adopted session is needed to read it.
+  // THE VERDICT LAW. Green has exactly ONE source — an explicit \`done\` verdict — and this is
+  // the gate that says so. It is written to FAIL on the old engine, which derived "finished"
+  // from a busy->idle EDGE over a 2.5s duration floor and therefore could not tell a Stop hook
+  // from a terminal that had merely gone quiet. Under that rule, typing a prompt slowly, or
+  // switching workspaces (the refit resizes the pty and ConPTY repaints its whole viewport),
+  // or an agent pausing on a slow tool call, each stamped a pane "finished working".
+  const slot = () => document.querySelector('.layout-slot[data-pane-id="1"]')
   const chip = () => { const e = document.querySelector('.layout-slot[data-pane-id="1"] .pane-state'); return e ? e.getAttribute('data-state') : null }
-  m.attention.setPaneState(1, 'busy')
-  await sleep(2700) // outlive the 2.5s work floor
-  m.attention.setPaneState(1, 'idle')
-  await sleep(300)
-  const finishedFromBusy = chip() === 'finished'
-  // A real click on the pane acknowledges the halo: back to plain idle.
-  const slot1 = document.querySelector('.layout-slot[data-pane-id="1"]')
-  if (slot1) slot1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
-  await sleep(300)
-  const ackClears = chip() === 'idle'
-  // Same duration, blocked edge: never the green story.
-  m.attention.setPaneState(1, 'attention')
-  await sleep(2700)
-  m.attention.setPaneState(1, 'idle')
-  await sleep(300)
-  const blockedNotFinished = chip() === 'idle'
+  const alert = () => { const s = slot(); return s ? s.getAttribute('data-alert') : null }
+  const click = () => { const s = slot(); if (s) s.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })) }
 
+  // 1. SILENCE IS NOT A COMPLETION. A long busy stretch that simply settles to idle greens
+  //    NOTHING — this is the phantom green, and it is the whole reason for the rewrite.
+  m.attention.setPaneState(1, 'busy')
+  await sleep(2700) // outlive the OLD 2.5s work floor — under the old rule this WOULD have greened
+  m.attention.setPaneState(1, 'idle')
+  await sleep(300)
+  const quietIsNotGreen = chip() === 'idle' && !alert()
+
+  // 2. A VERDICT IS. \`done\` greens the pane, and the duration floor is gone with the guess that
+  //    needed it: a done is a done whether the task took 300ms or 30 seconds.
+  m.attention.setPaneState(1, 'busy')
+  await sleep(150) // deliberately FAR under the old floor
+  m.attention.setPaneState(1, 'done')
+  await sleep(300)
+  const doneGreensFast = chip() === 'finished' && alert() === 'finished'
+
+  // 3. A click acknowledges it: dot back to yellow, resting outline gone.
+  click()
+  await sleep(300)
+  const ackClears = chip() === 'idle' && !alert()
+
+  // 4. A blocked pane wears a RED resting outline — the pane carries its own state now, rather
+  //    than fading to nothing and leaving a 13px dot to tell the whole story.
+  m.attention.setPaneState(1, 'attention')
+  await sleep(300)
+  const blockedOutline = chip() === 'attention' && alert() === 'input'
+
+  // 5. ...and answering it is not finishing it. An attention->idle edge completed nothing.
+  m.attention.setPaneState(1, 'idle')
+  await sleep(300)
+  const blockedNotFinished = chip() === 'idle' && !alert()
+
+  // 6. A pane that has never spoken a verdict is HOLLOW, not yellow. \`unknown\` is the absence
+  //    of a claim; \`idle\` is a claim ("nothing is running") we would have no basis for.
+  const pane2 = document.querySelector('.layout-slot[data-pane-id="101"] .pane-state')
+  const unknownIsHollow = !pane2 || pane2.getAttribute('data-state') === 'unknown'
+
+  const pass = ringed === 'attention' && !afterFocus &&
+    quietIsNotGreen && doneGreensFast && ackClears && blockedOutline && blockedNotFinished && unknownIsHollow
   return {
-    pass: ringed === 'attention' && !afterFocus && finishedFromBusy && ackClears && blockedNotFinished,
+    pass,
     ringed,
     afterFocus,
-    finishedFromBusy,
+    quietIsNotGreen,
+    doneGreensFast,
     ackClears,
+    blockedOutline,
     blockedNotFinished,
+    unknownIsHollow,
     chipFinal: chip(),
     tabs: document.querySelectorAll('.workspace-tab').length
   }

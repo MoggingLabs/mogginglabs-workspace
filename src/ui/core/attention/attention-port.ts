@@ -1,41 +1,38 @@
 import type { AgentState, PaneId } from '@contracts'
+import { recordCompletion, clearCompletions } from './completions'
 
 /**
  * Per-pane agent state, aggregated for "which agent needs me" indicators. Each `TerminalPane`
- * publishes its OSC state here; the `workspace` feature aggregates per workspace into a tab
- * outline/badge, and the app raises a dock/taskbar badge. A ui-core port so those features stay
- * decoupled from `terminal`. Primitives only — never PTY content (ADR 0002/0005).
+ * publishes its verdict here; the `workspace` feature aggregates per workspace into the rail's
+ * counts and outline, and the app raises a dock/taskbar badge. A ui-core port so those features
+ * stay decoupled from `terminal`. Primitives only — never PTY content (ADR 0002/0005).
  *
- * Also owns the STICKY FINISHED flag (explicit direction: "green can only go to idle
- * after I click that pane"). Derived HERE, at the single gate every state transition
- * passes through, so every consumer — the pane dot, the rail badge/outline, the grid
- * pulses — reads one truth and can never disagree:
- *   set      on the finished edge: the pane WAS WORKING (busy) and went idle — it
- *            stopped, and you haven't looked at it yet. An attention→idle edge is
- *            deliberately NOT finished: a blocked pane going idle means its latch was
- *            torn down (the user answered it, a state replay after a daemon restart,
- *            an explicit notify) — nothing completed, so it must never tell the green
- *            "done" story (a permission-blocked pane once pulsed green through this
- *            edge — found live 2026-07-10).
- *   cleared  by `acknowledgeFinished` (a real click on the pane — grid-layout wires
- *            it), by NEW work (busy/attention reclaims the pane), or with the pane
- *            itself (`clearPaneState` on dispose — pane ids are reused, and a flag
- *            that outlived its pane would mark the successor as finished).
+ * THE FINISHED FLAG used to be DERIVED here, and that was the bug. It watched for a busy->idle
+ * EDGE and, if the episode had lasted longer than a 2.5-second floor, called it a completion —
+ * which meant it could not tell an explicit `Stop` hook from "the terminal went quiet". Typing a
+ * prompt slowly greened a pane. So did switching workspaces (the refit resizes the pty and
+ * ConPTY repaints the whole viewport). So did an agent pausing on a slow tool call.
+ *
+ * There is no derivation left. The backend now emits `done` as a state of its own, raised by an
+ * explicit completion verdict and by nothing else (contracts/domain/agent.ts). "Finished" is
+ * simply that state, minus an acknowledgement:
+ *
+ *     finished  ==  state is `done`  AND  the user has not clicked the pane
+ *
+ * No edge, no episode clock, no duration floor — a done is a done whether the task took thirty
+ * seconds or three hundred milliseconds.
+ *
+ * The ACK is the sticky half (explicit direction: "green can only go to idle after I click that
+ * pane"), and it lives here rather than on the backend because it is a fact about the USER, not
+ * about the agent. It is dropped by any new state — new work reclaims the pane — and with the
+ * pane itself on dispose: pane ids are REUSED, and an ack that outlived its pane would silently
+ * swallow its successor's first green.
  */
-/** A non-idle episode must OUTLIVE repaint noise to count as finished work. Real
- *  shells emit short output bursts with no work behind them — prompt repaints on
- *  reveal/resize, xterm auto-replies (CPR/DA/focus) — and each one is a busy→idle
- *  round of exactly burst + the tracker's 1.5s quiet window ≈ 1.6s. Without this
- *  floor, every workspace switch would stamp every pane "finished". 2.5s clears
- *  the noise band with margin; genuinely quick commands (an instant `ls`) fall
- *  under it by design — there is nothing to come back for. An ADOPTED episode is timed
- *  from the pane's MOUNT rather than from the event we happened to hear (adoptPaneState)
- *  — the floor itself never bends. */
-const MIN_WORK_MS = 2500
 
 const states = new Map<PaneId, AgentState>()
-const finished = new Set<PaneId>()
-const episodeStart = new Map<PaneId, number>()
+/** Panes whose `done` the user has already looked at. Only ever meaningful while the state IS
+ *  `done`; any other state drops the entry (see setPaneState). */
+const acked = new Set<PaneId>()
 const subscribers = new Set<() => void>()
 
 const notify = (): void => {
@@ -43,70 +40,46 @@ const notify = (): void => {
 }
 
 export function setPaneState(paneId: PaneId, state: AgentState): void {
-  const prev = states.get(paneId) ?? 'idle'
+  const prev = states.get(paneId) ?? 'unknown'
   if (prev === state) return
   states.set(paneId, state)
-  if (state === 'idle') {
-    // The episode ends. Finished ONLY from the busy edge (see the header): a blocked
-    // pane going idle answered/replayed its latch away — it completed nothing.
-    const start = episodeStart.get(paneId)
-    episodeStart.delete(paneId)
-    if (prev === 'busy' && start !== undefined && Date.now() - start >= MIN_WORK_MS) finished.add(paneId)
-  } else {
-    // The work clock starts when work STARTS: from idle, or from attention→busy (the
-    // prompt was answered — what follows is a new working stretch, so a 1.6s repaint
-    // blip right after an answer stays under the noise floor instead of inheriting
-    // the whole blocked episode's duration).
-    if (prev === 'idle' || state === 'busy') episodeStart.set(paneId, Date.now())
-    finished.delete(paneId)
-  }
+  // The TRANSITION into `done` is the completion, and this is the one gate every state change
+  // passes through — so the history is written exactly once per finished turn. A green is meant
+  // to be spent (you click it and it is gone); without this, "what did my agents get done while
+  // I was away" had no answer at all once you had dismissed them.
+  if (state === 'done') recordCompletion(paneId)
+  // Anything that is not `done` reclaims the pane: the agent is working, blocked, or has settled
+  // without finishing, and in every one of those cases last turn's acknowledgement is spent. The
+  // NEXT done is a new green and must be able to earn its halo.
+  if (state !== 'done') acked.delete(paneId)
   notify()
 }
 
-/**
- * Adopt the state of a session the daemon was ALREADY running (the daemon outlives the
- * app — ADR 0006 — so a relaunch inherits its agents mid-task). `since` is when the pane
- * began watching: its mount.
- *
- * The work clock is BACKDATED to it, because an adopted episode did not start when we
- * heard about it. The pane only adopts its session ~1s in (the restore lineup's delay +
- * whenPaneLive), and stamping the episode there timed a task that had been running for
- * MINUTES as if it began at adoption: an agent landing its work inside the next 2.5s
- * failed the floor and got no finished flag at all — no green dot, no rail alert, for the
- * whole job. Backdating gives the episode the time it visibly ran on our watch.
- *
- * Not an exemption, deliberately. The pane's own arrival makes noise — the mount fit
- * resizes the pty, and ConPTY answers a resize by repainting its entire viewport (see
- * terminal-pane's refit note), which reads as output, i.e. BUSY, for the tracker's quiet
- * window — and that burst is still in flight at adoption. Exempting adopted episodes from
- * the floor would stamp "finished working" on every reattached pane at every relaunch,
- * agent idle or not. Timed from mount, that repaint dies inside the noise band exactly as
- * it does everywhere else, while genuine work — still running when the band lapses —
- * keeps its green.
- */
-export function adoptPaneState(paneId: PaneId, state: AgentState, since: number): void {
-  setPaneState(paneId, state)
-  const start = episodeStart.get(paneId)
-  if (state === 'busy' && start !== undefined) episodeStart.set(paneId, Math.min(start, since))
-}
-
-/** The pane was clicked: its sticky finished (green) dot is dismissed. */
+/** The pane was clicked (or landed on): its sticky green is dismissed. */
 export function acknowledgeFinished(paneId: PaneId): void {
-  if (finished.delete(paneId)) notify()
+  if (states.get(paneId) !== 'done' || acked.has(paneId)) return
+  acked.add(paneId)
+  notify()
 }
 
+/** Finished AND unacknowledged — the green halo, the green outline, the rail's done count. */
 export function paneFinished(paneId: PaneId): boolean {
-  return finished.has(paneId)
+  return states.get(paneId) === 'done' && !acked.has(paneId)
 }
 
 export function clearPaneState(paneId: PaneId): void {
-  const hadFlag = finished.delete(paneId)
-  episodeStart.delete(paneId)
-  if (states.delete(paneId) || hadFlag) notify()
+  const hadAck = acked.delete(paneId)
+  // The history goes with the pane. Pane ids are REUSED, and a successor inheriting these would
+  // be showing you someone else's work under its own name.
+  clearCompletions(paneId)
+  if (states.delete(paneId) || hadAck) notify()
 }
 
+/** `unknown` for a pane that has never spoken a verdict — NOT `idle`. The difference is the
+ *  whole point: idle is a claim ("nothing is running"), unknown is the absence of one ("this
+ *  agent's hooks have never reached us, so we will not pretend to know"). It renders hollow. */
 export function paneState(paneId: PaneId): AgentState {
-  return states.get(paneId) ?? 'idle'
+  return states.get(paneId) ?? 'unknown'
 }
 
 export function onAttentionChange(cb: () => void): () => void {
