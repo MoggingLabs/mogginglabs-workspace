@@ -1023,10 +1023,22 @@ button {
 /* A strict 3-column grid (1fr auto 1fr): the center cell is TRUE window center —
    the bar itself has no horizontal padding (side insets live on the cells), and the
    native-controls reserve is padding INSIDE the right cell, so it never shifts the
-   center column. */
+   center column.
+
+   The side tracks reserve their own min-content, and that is load-bearing: the right
+   cluster is RIGID (icon buttons never shrink) and `justify-self: end`, so with a `0`
+   track minimum the grid was free to hand it less width than it needs — and it overflowed
+   LEFTWARDS, straight over the command box (measured on a 922px window: track 310px,
+   cluster 347px, the Board icon sitting on the box's right edge). The old defence was a
+   900px media query priced at "four 29px buttons"; features MOUNT their triggers into
+   this cluster at runtime (browser, usage, explorer, layout…), so that number was wrong
+   the moment anyone added one. min-content asks the cluster how wide it actually is.
+   Above the switch below, both sides get an equal 1fr and the center is TRUE window
+   center; when that stops being affordable the sides fall back to what they need and the
+   center takes the rest — off-center, never overlapped. */
 #titlebar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(min-content, 1fr) auto minmax(min-content, 1fr);
   align-items: center;
   gap: var(--sp-3);
   height: var(--titlebar-h);
@@ -2160,8 +2172,9 @@ button {
    A slightly elevated surface over the terminal body; static DOM, event-driven. */
 .pane-header {
   /* A size container, so the bar reacts to the PANE's width, not the window's — a 4-pane
-     grid and a lone maximised pane are different worlds. Nothing here measures anything:
-     @container does it in the style engine (see the progressive-collapse block below). */
+     grid and a lone maximised pane are different worlds. The lower rungs of the collapse
+     ladder resolve here in the style engine; the upper ones are measured
+     (pane-header-fit.ts) because they depend on content, which no query can see. */
   container-type: inline-size;
   container-name: pane-bar;
   height: var(--pane-header-h);
@@ -2170,6 +2183,9 @@ button {
   border-bottom: 1px solid var(--border);
   flex: none;
   min-width: 0;
+  /* THE BELT: nothing in this bar may paint outside it. The ⋯ menu is body-portaled
+     (terminal-pane.ts), so no popover is clipped by this. */
+  overflow: hidden;
   user-select: none;
 }
 .pane-header-grid {
@@ -2210,136 +2226,61 @@ button {
   grid-column: 3;
 }
 
-/* ── Progressive collapse ───────────────────────────────────────────────────────
+/* ── Progressive collapse: MEASURED, NOT DERIVED ────────────────────────────────
    Four anchors are NEVER given up while an agent session exists: the state glyph and
    agent-CLI mark on the left, then ⋯ and × on the right. Everything else retires into
    the portaled menu, in a fixed order, least-identifying first:
 
+     0. the TITLE yields its excess first — down to ~18 characters, free of charge
      1. the "% used" text of the context gauge (the disc keeps the color+arc signal)
-     2. Git worktree/staged/base detail (branch stays)      3. the expand trio
-     4. the MCP chip   5. claims   6. role   7. remote (+ the provider logo)
-     8. the title      9. branch identity      10. the gauge disc itself
+     2. Git worktree / staged / base comparison / uncommitted count (branch stays)
+     3. the expand trio        4. branch identity — the chip's last stand
+     5. the MCP chip   6. claims   7. role   8. remote
+     9. the title      10. the gauge disc itself
 
-   The context gauge's ARC never lies but its FORM yields: the disc (color ramp +
-   sweep) survives to ~150px panes; the "% used" text is the first thing retired,
-   because it is pure detail — the tooltip and the ⋯ menu state the numbers. It
-   used to never retire at all, and measured on a live pane that inverted the
-   whole contract: at 210px the state dot was crushed to 0, at 200px the × began
-   to clip, at 150px ⋯ and × were BOTH gone — while "62% used" kept its 99px.
+   WHO DECIDES. Rungs 0-4 are decided by MEASUREMENT, in pane-header-fit.ts — not here.
+   A width query cannot see what the row actually holds, and this header's deficit is a
+   content question: how long is the agent's OSC title, how long is the branch name, does
+   the MCP chip say "mcp 3" (62px) or "restart +2" (110px). The old ladder guessed, and
+   the guess was structurally incapable of being right: it budgeted the left cluster and
+   the buttons and NEVER BUDGETED THE BRANCH CHIP AT ALL. The chip lives in the grid's
+   `1fr` column, which is expanded LAST — so with a long title the column collapsed to
+   its padding (measured on a live 900px pane with every chip lit: chip box 24px, chip
+   content 370px) while the chip's `flex: none` children kept full width and painted
+   346px of branch text straight across the gauge, the ⋯ and the ×. That was the bug in
+   the screenshots, and no threshold could have fixed it.
 
-   The title is the last descriptive thing standing, never the first to go. That inversion was the
-   bug: the chips are `flex: none` and the actions are fixed, so `.pane-title` was the
-   ONLY shrinkable item in the row and absorbed the entire deficit — measured, it hit
-   0px at a 862px pane while four chips kept their full width and were then clipped
-   away invisibly by .pane-head-left's overflow. The floor below stops that.
+   The rungs BELOW (mcp → claims → role → remote → title → disc, plus the compact
+   regroup) stay width-keyed: they govern the left cluster and the compact floor, which
+   the derived model does budget correctly, and the 132px contract is asserted against
+   them (CHROMEUX (k)). They are a FLOOR under the fit pass, never a substitute for it.
 
-   Everything retired here is listed unconditionally in the ⋯ menu (terminal-pane.ts's
-   buildMenu), so narrowing a pane never destroys information — it relocates it.
+   THE BELT. `.pane-header` and `.pane-git` clip (overflow: hidden). Clipping is not the
+   fix — the fit pass is — but it means a wrong verdict can only ever look like a clipped
+   box. Nothing in this header can paint over its neighbour again, at any width, with any
+   content. That is the invariant CHROMEUX (j) now asserts across the whole sweep.
 
-   TWO THINGS ABOUT THE NUMBERS. They are DERIVED from live-measured widths — state 13,
-   remote 123, agent logo 18, role 109, claims 47, mcp 62 ("restart +N" 110), a 6ch
-   title floor ≈ 65, gauge disc 16 + "62% used" 77, buttons 33 (menu+close 68, trio
-   105), --sp-3 grid gaps 24 — each threshold is the width at which the row would no
-   longer fit WITH AN AGENT SESSION LIT (logo + gauge). The previous ladder was derived
-   without those ~127px and silently clipped the whole mid-range on agent panes, which
-   are this app's normal case. And a `container-type: inline-size` query resolves
-   against the container's CONTENT box, not its border box — the header's 15px of
-   padding means a `max-width: 590px` rule fires at a 605px PANE. Verified by a live
-   CDP width sweep (2026-07-10): nothing is clipped away silently. */
-/* 1. THE GAUGE'S "% used" TEXT — first to go when chips are competing for the row.
-   Pure detail: the disc keeps the ramp (green/amber/red + sweep), the tooltip and
-   the ⋯ menu keep the numbers. Derived: all chips + title floor (521) + gaps (24)
-   + disc-form actions with the trio (195) = 740; with the text back that is 823 —
-   so above 820 everything fits, below it the text yields. */
-@container pane-bar (max-width: 820px) {
-  .pane-header:has(.pane-remote:not([hidden])) .ctx-pct,
-  .pane-header:has(.pane-role:not([hidden])) .ctx-pct,
-  .pane-header:has(.pane-claims:not([hidden])) .ctx-pct,
-  .pane-header:has(.pane-mcp:not([hidden])) .ctx-pct {
-    display: none;
-  }
+   Everything retired is listed unconditionally in the ⋯ menu (terminal-pane.ts's
+   buildMenu), so narrowing a pane never destroys information — it relocates it. */
+/* The fit pass's verdict — the ONE thing that takes a chip off this bar. The chip's own
+   `.pane-git.has-git` rule is (0,2,0), so the retirement of the whole chip has to
+   out-specify it. */
+.pane-header [data-retired],
+.pane-header .pane-git.has-git[data-retired] {
+  display: none;
 }
-/* 2. GIT DETAIL — next, but only once something is actually
-   competing for the row. A fixed 760px threshold was derived from the worst case (all
-   four chips lit) and was wrong for the common one: a 2×2 grid on a 1600px monitor gives
-   each pane 655px, so the branch vanished on every grid but 1×1 while the row sat half
-   empty. `:has()` asks the real question — is any chip lit? — instead of guessing from
-   width. `.pane-role`/`.pane-claims`/`.pane-mcp` always exist and toggle the `hidden`
-   attribute; `.pane-remote` only exists on a remote pane, so an absent one never matches. */
-@container pane-bar (max-width: 900px) {
-  .pane-header:has(.pane-remote:not([hidden])) .pane-worktree,
-  .pane-header:has(.pane-role:not([hidden])) .pane-worktree,
-  .pane-header:has(.pane-claims:not([hidden])) .pane-worktree,
-  .pane-header:has(.pane-mcp:not([hidden])) .pane-worktree {
-    display: none;
-  }
-}
-@container pane-bar (max-width: 820px) {
-  .pane-header:has(.pane-remote:not([hidden])) .pane-git-staged,
-  .pane-header:has(.pane-role:not([hidden])) .pane-git-staged,
-  .pane-header:has(.pane-claims:not([hidden])) .pane-git-staged,
-  .pane-header:has(.pane-mcp:not([hidden])) .pane-git-staged {
-    display: none;
-  }
-}
-@container pane-bar (max-width: 760px) {
-  .pane-header:has(.pane-remote:not([hidden])) .pane-git-comparison,
-  .pane-header:has(.pane-role:not([hidden])) .pane-git-comparison,
-  .pane-header:has(.pane-claims:not([hidden])) .pane-git-comparison,
-  .pane-header:has(.pane-mcp:not([hidden])) .pane-git-comparison {
-    display: none;
-  }
-}
-@container pane-bar (max-width: 700px) {
-  .pane-header:has(.pane-remote:not([hidden])) .pane-git-state,
-  .pane-header:has(.pane-role:not([hidden])) .pane-git-state,
-  .pane-header:has(.pane-claims:not([hidden])) .pane-git-state,
-  .pane-header:has(.pane-mcp:not([hidden])) .pane-git-state {
-    display: none;
-  }
-}
-/* An uncrowded bar keeps its branch until the pane is genuinely tiny. Until then the chip
-   ellipsises rather than disappearing (max-width:100% on .pane-git + .pane-branch's
-   text-overflow). */
-@container pane-bar (max-width: 620px) {
-  .pane-header .pane-worktree {
-    display: none;
-  }
-}
-@container pane-bar (max-width: 520px) {
-  .pane-header .pane-git-staged {
-    display: none;
-  }
-}
-@container pane-bar (max-width: 430px) {
-  .pane-header .pane-git-comparison {
-    display: none;
-  }
-}
-@container pane-bar (max-width: 330px) {
-  .pane-header .pane-git-state {
-    display: none;
-  }
-}
-@container pane-bar (max-width: 225px) {
-  .pane-header .pane-git.has-git {
-    display: none;
-  }
-}
-/* 3. THE EXPAND TRIO — same story: it only has to yield when the left cluster is busy.
-   740 = all chips + title floor (521) + gaps (24) + disc-form actions with trio (195). */
-@container pane-bar (max-width: 740px) {
-  .pane-header:has(.pane-remote:not([hidden])) .pane-act-expand,
-  .pane-header:has(.pane-role:not([hidden])) .pane-act-expand,
-  .pane-header:has(.pane-claims:not([hidden])) .pane-act-expand,
-  .pane-header:has(.pane-mcp:not([hidden])) .pane-act-expand {
-    display: none;
-  }
-}
-/* Uncrowded trio: state + logo + title floor (108) + gaps (24) + full-gauge actions
-   with the trio (278) = 410. */
+/* Uncrowded trio floor: state + logo + title floor (108) + gaps (24) + full-gauge actions
+   with the trio (278) = 410. The fit pass retires the trio sooner when the row demands it;
+   this rung guarantees it is gone before the compact regroup below takes over the grid. */
 @container pane-bar (max-width: 415px) {
   .pane-header .pane-act-expand {
+    display: none;
+  }
+}
+/* The branch chip's floor, for the same reason: below the compact rung the fit pass hands
+   the bar over to these rules, and the chip must already be gone. */
+@container pane-bar (max-width: 225px) {
+  .pane-header .pane-git.has-git {
     display: none;
   }
 }
@@ -2631,10 +2572,12 @@ button {
   margin-right: var(--sp-1);
 }
 .pane-title {
-  /* A FLOOR, not 0. Every chip is `flex: none` and the actions are fixed, so the title is
-     the only shrinkable item in the row — with min-width:0 it absorbed the entire deficit
-     and measured 0px on an 862px pane while four chips kept full width and were clipped
-     away invisibly. The pane's name is the last thing to go, never the first. */
+  /* The HARD floor — 6ch, and `max-width` can never beat it (min wins in CSS, by spec).
+     The fit pass writes an inline max-width when the name has to give the branch chip its
+     column back, and stops at a SOFT floor of ~18 characters (pane-header-fit.ts) before
+     it takes anything else off the bar; only when the ladder is exhausted does the name
+     come down to this. Ellipsis, never a clip: the whole name stays in the tooltip and
+     the ⋯ menu. */
   min-width: 6ch;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2992,14 +2935,16 @@ body.pane-dragging * {
   font-size: 16px; /* 10px × 1.643, with the bar */
   font-family: var(--font-mono);
   color: var(--text-mid);
-  /* Shrink before you vanish — BOTH halves matter. min-width:0 lets the grid TRACK
-     shrink under pressure, but the chip itself is max-content sized: without the 100%
-     cap it keeps its full width inside the squeezed track and PAINTS OVER the title on
-     its left and the gauge on its right (measured on a 780px pane with every chip lit:
-     the branch text and "62% used" rendered on top of each other). Capped, the chip
-     shrinks with its track and .pane-branch ellipsises. */
+  /* Shrink before you vanish — and CLIP before you overlap. The cap keeps the chip inside
+     its (squeezed) track; `overflow: hidden` keeps its `flex: none` children inside the
+     chip. Without the second half the children simply rendered outside the pill and over
+     the gauge/⋯/× — 346px of them, measured on a 900px pane with every chip lit. What
+     decides that the chip should have shed detail before it ever got that tight is the
+     fit pass (pane-header-fit.ts); this is only the guarantee that a wrong verdict can
+     never become an overlap. */
   max-width: min(680px, 100%);
   min-width: 0;
+  overflow: hidden;
 }
 .pane-git svg {
   flex: none;
@@ -3011,7 +2956,10 @@ body.pane-dragging * {
   display: inline-flex;
 }
 .pane-branch {
-  flex: 1 1 12ch;
+  /* Sized by its NAME, not by a 12ch reservation: the pill hugs the branch it shows, and
+     the fit pass can price the chip exactly (scrollWidth = the whole name, always). It
+     still shrinks and ellipsises before the chip does — it is the chip's only give. */
+  flex: 0 1 auto;
   min-width: 4ch;
   max-width: 28ch;
   overflow: hidden;
@@ -3085,6 +3033,13 @@ body.pane-dragging * {
   gap: var(--sp-2);
   height: 31px; /* 28px × 1.3 × 0.85 — scales with --titlebar-h */
   width: clamp(240px, 30vw, 380px); /* the command box owns the bar's center */
+  /* …but it is the bar's ONLY flexible element, so it must actually be able to give. With
+     the rigid clusters now reserving their min-content on both sides, the box is what
+     absorbs a squeeze — it shrinks below the clamp, its label ellipsises, and the two
+     steps in the compression ladder retire the hint and then the label. Without this the
+     grid would be over-constrained and something would have to overflow. */
+  min-width: 0;
+  flex: 0 1 auto;
   padding: 0 var(--sp-2) 0 var(--sp-3);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
@@ -3096,7 +3051,17 @@ body.pane-dragging * {
     border-color var(--dur-1) var(--ease),
     color var(--dur-1) var(--ease);
 }
+.palette-trigger > svg {
+  flex: none; /* the search glyph is an anchor, not a thing to squeeze */
+}
+.palette-trigger-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .palette-trigger .kbd {
+  flex: none;
   margin-left: auto; /* label leads, the shortcut hint hugs the right edge */
   font-size: var(--fs-11); /* 10px × 1.3 × 0.85 — the hint scales with the box */
 }

@@ -46,6 +46,7 @@ import { clearPaneAgentSession, getPaneAgentSession, onPaneAgentSession } from '
 import { assignmentForPane, workspaceIdForPane } from '../../core/workspace/workspace-info-port'
 import { claimsFor, onClaimsChange, setClaimsForDev, workspaceClaims } from './claims-store'
 import { createPaneAnchor, type PaneAnchorHandle } from './pane-anchor'
+import { createPaneHeaderFit, type PaneHeaderFitHandle } from './pane-header-fit'
 import { createPaneScrollbar, type PaneScrollbarHandle } from './pane-scrollbar'
 import { onFocusedPane } from '../../core/layout/focus'
 import { onPaneGit, getPaneGit, setPaneGit } from '../../core/git/git-port'
@@ -137,6 +138,7 @@ export class TerminalPane {
   private agentChipUnsub?: () => void
   private scrollbar?: PaneScrollbarHandle
   private anchor?: PaneAnchorHandle
+  private headerFit?: PaneHeaderFitHandle
   private osc133?: { dispose(): void }
   private remoteReadyOsc?: { dispose(): void }
   private stateDot?: HTMLSpanElement
@@ -1030,6 +1032,7 @@ export class TerminalPane {
       role.title = r // bug #9: the full role on hover, now the chip ellipsises at 88px
       role.dataset.role = r.toLowerCase() // styling hook only — smokes read textContent
       role.hidden = !r
+      this.headerFit?.schedule()
     }
     const existingRole = getPaneRole(this.id)
     if (existingRole) applyRole(existingRole)
@@ -1060,6 +1063,7 @@ export class TerminalPane {
       const n = claimsFor(this.id).length
       claimsChip.replaceChildren(icon('flag', 12), document.createTextNode(String(n)))
       claimsChip.hidden = n === 0
+      this.headerFit?.schedule()
     }
     applyClaims()
     this.claimsUnsub = onClaimsChange(applyClaims)
@@ -1070,6 +1074,7 @@ export class TerminalPane {
     mcpChip.hidden = true
     const applyMcp = (): void => {
       const c = mcpChipForPane(this.id)
+      this.headerFit?.schedule() // "restart +2" is 48px wider than "mcp 3" — a width change
       if (!c || (c.connected === 0 && !c.attention && c.restartNew === 0)) {
         mcpChip.hidden = true
         return
@@ -1101,6 +1106,7 @@ export class TerminalPane {
     ctx.append(ctxDisc, ctxPct)
     const fmtTok = (n: number): string => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
     const applyContext = (u: PaneContext): void => {
+      this.headerFit?.schedule() // the gauge appearing (or "100% used" arriving) moves the row
       if (!u) {
         ctx.hidden = true
         return
@@ -1144,6 +1150,7 @@ export class TerminalPane {
       agentChip.hidden = !provider
       agentChip.removeAttribute('role')
       agentChip.removeAttribute('aria-label')
+      this.headerFit?.schedule()
       if (provider) {
         agentChip.append(providerLogo(provider, 18)) // matches the bar's ~1.65× chip scale
         const label = provider.startsWith('custom:') ? provider.slice('custom:'.length) : provider
@@ -1412,6 +1419,24 @@ export class TerminalPane {
     headerGrid.className = 'pane-header-grid'
     headerGrid.append(left, git, actions)
     header.append(headerGrid)
+    // What the bar can afford is a question about CONTENT (how long is the agent's title,
+    // the branch name, the MCP chip's wording), and a width threshold cannot see content.
+    // So the bar measures itself and retires in the declared order until it fits — the
+    // ONE place that decides what this header gives up (pane-header-fit.ts). Every
+    // apply* below schedules a re-fit, because each of them changes a width.
+    this.headerFit = createPaneHeaderFit(header, {
+      grid: headerGrid,
+      left,
+      title,
+      git,
+      branch,
+      gitDetail: [worktree, gitStaged, gitComparison, gitState],
+      actions,
+      ctx,
+      ctxPct,
+      expandBtns,
+      leftChips: [mcpChip, claimsChip, role, ...(remoteChip ? [remoteChip] : [])]
+    })
     // Menu facts are a snapshot rebuilt on open. If any live header fact changes
     // underneath an open portal (state, title, agent, context, MCP, claims or git),
     // close it so it can never continue presenting stale status. The menu button's
@@ -1463,6 +1488,9 @@ export class TerminalPane {
       title.textContent = text
       title.title = text
       title.classList.toggle('has-label', !!(oscTitle || label))
+      // A longer name must not cost the branch chip its column — re-fit, and let the
+      // name be the thing that ellipsises (its full text stays in the tooltip + ⋯ menu).
+      this.headerFit?.schedule()
     }
     const applyLabel = (_text: string): void => applyTitle()
     applyTitle()
@@ -1534,6 +1562,7 @@ export class TerminalPane {
     // Read-only git chip (2/03): the `git` feature publishes status on the git port; we
     // just render it. Nothing here mutates a repo.
     const applyGit = (status: GitStatus | null): void => {
+      this.headerFit?.schedule() // branch names and counts change width on every push
       if (!status) {
         git.classList.remove('has-git')
         return
@@ -1957,7 +1986,13 @@ export class TerminalPane {
           const pctEl = ctxEl.querySelector<HTMLElement>('.ctx-pct')
           if (pctEl) pctEl.textContent = '62% used'
         }
+        // This fixture writes the header's text behind the ports' back, so it owes the fit
+        // pass the same notice every apply* gives it — otherwise the bar is measured
+        // against widths it no longer has.
+        this.headerFit?.schedule()
       },
+      /** Re-fit now (the fit pass is rAF-coalesced, so await a frame after calling). */
+      refit: (): void => this.headerFit?.schedule(),
       // Unlike lightChips (a pure geometry fixture), this seeds the backing ports
       // buildMenu reads. CHROMEUX uses it to prove every retired fact survives in ⋯.
       seedMenuFacts: (): void => {
@@ -2109,6 +2144,7 @@ export class TerminalPane {
     this.dotGateUnsub?.()
     this.scrollbar?.dispose()
     this.anchor?.dispose()
+    this.headerFit?.dispose()
     this.osc133?.dispose()
     this.remoteReadyOsc?.dispose()
     clearPaneCli(this.id)

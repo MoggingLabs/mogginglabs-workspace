@@ -158,6 +158,66 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
       })()`)
 
       // ── (e): a non-active workspace's pane needs input → its tab latches the ring. ──
+      // ── (a2): THE TOP BAR NEVER OVERLAPS EITHER. The right cluster is rigid (icon
+      //    buttons do not shrink) and `justify-self: end`, so a track narrower than the
+      //    cluster made it overflow LEFTWARDS, over the command box — measured at 922px:
+      //    track 310px, cluster 347px, the Board icon sitting on the box's right edge. The
+      //    old defence was a 900px media query priced at "four 29px buttons", and features
+      //    MOUNT their triggers into this cluster at runtime (there are six now), so the
+      //    number was wrong the moment anyone added one. The columns reserve min-content
+      //    now; this sweeps the band that was broken (900-960) and the rest of the range,
+      //    and asserts what the eye asserts: nothing paints over anything. ──
+      stage = 'a2-titlebar-fit'
+      const TITLEBAR_FIT = `(() => {
+        const bar = document.getElementById('titlebar')
+        const R = el => el.getBoundingClientRect()
+        const rendered = el => !!el && getComputedStyle(el).display !== 'none' && R(el).width > 0
+        // The bar's real controls (popovers excluded structurally — see (a)) plus the brand
+        // and the command box: everything that paints in this strip.
+        const cands = [
+          bar.querySelector('.rail-toggle'), bar.querySelector('.brand-logo'),
+          bar.querySelector('.brand-name'), bar.querySelector('.brand-version'),
+          bar.querySelector('.palette-trigger'),
+          ...bar.querySelectorAll('.titlebar-right .icon-btn')
+        ].filter(el => el && rendered(el) && !el.closest('.menu'))
+        const leaves = cands.filter(el => !cands.some(o => o !== el && el.contains(o)))
+        const clipOf = el => {
+          let l = R(el).left, r = R(el).right
+          for (const c of [el.closest('.titlebar-lead'), el.closest('.titlebar-center'), bar]) {
+            if (c && c !== el) { l = Math.max(l, R(c).left); r = Math.min(r, R(c).right) }
+          }
+          return { name: el.getAttribute('aria-label') || el.className, left: l, right: r, width: Math.max(0, r - l) }
+        }
+        const boxes = leaves.map(clipOf).filter(b => b.width > 0.5)
+        const overlaps = []
+        for (let i = 0; i < boxes.length; i++) {
+          for (let k = i + 1; k < boxes.length; k++) {
+            const ov = Math.min(boxes[i].right, boxes[k].right) - Math.max(boxes[i].left, boxes[k].left)
+            if (ov > 0.5) overlaps.push(boxes[i].name + '/' + boxes[k].name + '=' + Math.round(ov))
+          }
+        }
+        // Every control stays reachable at every width (Win titlebar guidance), and the bar
+        // itself never overflows the window.
+        const controls = [...bar.querySelectorAll('.titlebar-right .icon-btn')].filter(el => !el.closest('.menu'))
+        const controlsVisible = controls.length > 0 && controls.every(rendered)
+        const noOverflow = bar.scrollWidth <= bar.clientWidth + 1
+        return { width: innerWidth, overlaps, controlsVisible, noOverflow,
+                 ok: overlaps.length === 0 && controlsVisible && noOverflow }
+      })()`
+      const titlebarProbes: Array<Record<string, unknown>> = []
+      for (const width of [1600, 1200, 1000, 960, 940, 922, 900, 899, 800, 700, 600]) {
+        win.setSize(width, 760)
+        await sleep(320)
+        titlebarProbes.push(await ES<Record<string, unknown>>(TITLEBAR_FIT))
+      }
+      win.setSize(1200, 460)
+      await sleep(320)
+      const a2 = {
+        ok: titlebarProbes.length > 0 && titlebarProbes.every((p) => p.ok === true),
+        overlaps: titlebarProbes.flatMap((p) => (p.overlaps as string[]).map((o) => `${p.width}:${o}`)),
+        probes: titlebarProbes
+      }
+
       stage = 'e-attention'
       const e = await ES<Record<string, unknown>>(`(async () => {
         const m = window.__mogging
@@ -352,14 +412,28 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         }
       })()`)
 
-      // ── (j): PROGRESSIVE COLLAPSE. Four things are never surrendered — the state
-      //    glyph, agent-CLI mark, ⋯ menu and ×. Between them the bar retires
-      //    into the ⋯ menu in a FIXED order, least-identifying first: detailed Git
-      //    state, expand trio, mcp, claims, role, remote, branch, then the gauge disc.
-      //    The title is the last thing standing, never the first to go: it used to be the
-      //    ONLY shrinkable item and hit 0px on an 862px pane while four chips kept full
-      //    width and were clipped away invisibly. ──
+      // ── (j): THE BAR FITS. Four things are never surrendered — the state glyph, the
+      //    agent-CLI mark, ⋯ and ×. Everything else retires in a FIXED order, least-
+      //    identifying first, and the contract this asserts is not a table of pixel
+      //    thresholds — it is the four things that must be true AT EVERY WIDTH:
+      //
+      //      no overlap   nothing in this bar paints over anything else in it
+      //      no clipping  nothing is cut off invisibly (the title is exempt: it
+      //                   ellipsises by design, and its full text lives in ⋯)
+      //      anchors      the four never-surrendered marks are always on screen
+      //      order        what survives is a SUFFIX of the ladder: a rung can only be
+      //                   lit if every rung after it is lit too
+      //
+      //    The old version of this stage asserted a per-width visibility table and passed
+      //    while the bar was visibly broken: it never looked at geometry, so it never saw
+      //    that on a 900px pane the branch chip's box was 24px wide with 370px of content
+      //    painting across the gauge, the ⋯ and the ×. What retires is now MEASURED
+      //    (pane-header-fit.ts) precisely because a width threshold cannot see how long an
+      //    agent's title is — so the sweep runs TWICE, once with a short name and once
+      //    with the long OSC title that broke it. ──
       stage = 'j-collapse'
+      win.setSize(1600, 800) // wide enough to sweep the pane widths a 1×1 grid really reaches
+      await sleep(600)
       const j = await ES<Record<string, unknown>>(`(async () => {
         const sleep = ms => new Promise(r => setTimeout(r, ms))
         // The state glyph is gated on a tracked provider session (availability
@@ -367,58 +441,170 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         window.__mogging.agents.adopt(${paneId}, 'claude', '')
         const slot = document.querySelector('.layout-slot[data-pane-id="${paneId}"]')
         if (!slot) return { ok: false, reason: 'no slot' }
-        const shown = sel => { const el = slot.querySelector(sel); return !!el && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0 }
-        const expandShown = () => [...slot.querySelectorAll('.pane-act-expand')].filter(e => getComputedStyle(e).display !== 'none').length
-        // The pane's own width drives the container queries; drive it directly. Chips are
-        // re-lit AFTER each resize settles (a real MCP/git push may re-hide the forced
-        // chips during the sleep), and the reads that follow are synchronous with the
-        // relight, so nothing can interleave.
-        const host = slot.parentElement
+        const header = slot.querySelector('.pane-header')
         const p = (window.__mogging.panes || []).find(p => p.id === ${paneId})
-        const at = async px => { slot.style.width = px + 'px'; await sleep(120)
-          if (p && p.lightChips) p.lightChips()
-          return { pct: shown('.pane-context .ctx-pct'), git: shown('.pane-git'),
-                   gitWorktree: shown('.pane-worktree'), gitState: shown('.pane-git-state'),
-                   gitStaged: shown('.pane-git-staged'), gitComparison: shown('.pane-git-comparison'),
-                   expand: expandShown(), mcp: shown('.pane-mcp'),
-                   claims: shown('.pane-claims'), role: shown('.pane-role'), remote: shown('.pane-remote'),
-                   title: shown('.pane-title'), state: shown('.pane-state'), agent: shown('.pane-agent'), close: shown('.pane-act-close'),
-                   menu: shown('.pane-act:not(.pane-act-expand):not(.pane-act-close)'),
-                   ctxDisc: shown('.pane-context .ctx-disc') } }
-        // Checkpoints straddle the 2026-07-10 re-derived ladder (global.css: thresholds
-        // are CONTENT-box widths — each rule fires at a pane ~15px wider than its number).
-        // The bar is CROWDED (every chip lit), so the :has()-gated Git ladder applies:
-        // worktree 900, staged 820, comparison 760, state 700; branch stays. The remaining
-        // thresholds are trio 740, mcp 645, claims 525, role 470, remote 355, disc 135.
-        const steps = { w900: await at(900), w800: await at(800), w765: await at(765),
-                        w700: await at(700), w620: await at(620), w505: await at(505),
-                        w455: await at(455), w340: await at(340), w140: await at(140) }
+        const titleEl = header.querySelector('.pane-title')
+        const R = el => el.getBoundingClientRect()
+        const rendered = el => !!el && getComputedStyle(el).display !== 'none' && R(el).width > 0
+
+        const LEAF = {
+          state: '.pane-state', remote: '.pane-remote', agent: '.pane-agent', role: '.pane-role',
+          claims: '.pane-claims', mcp: '.pane-mcp', title: '.pane-title',
+          gitIcon: '.pane-git > svg', branch: '.pane-branch', worktree: '.pane-worktree',
+          dirty: '.pane-dirty', gitState: '.pane-git-state', gitStaged: '.pane-git-staged',
+          gitComparison: '.pane-git-comparison', ctxDisc: '.ctx-disc', ctxPct: '.ctx-pct',
+          menu: '[aria-label="Pane menu"]', close: '[aria-label="Close terminal"]'
+        }
+        // Retirement order (global.css). Survivors must be a suffix of it.
+        const LADDER = ['ctxPct', 'worktree', 'gitStaged', 'gitComparison', 'gitState', 'expand', 'branch']
+
+        // What the EYE sees: the element's rect, clipped by every box that clips it. Raw
+        // rects would report a CLIPPED chip as an overlap; cluster boxes would have missed
+        // the real one (the pill's box stayed 24px while its content painted 346px past it).
+        const seen = el => {
+          let l = R(el).left, r = R(el).right
+          for (const c of [el.closest('.pane-git'), el.closest('.pane-head-left'), header]) {
+            if (c && c !== el) { l = Math.max(l, R(c).left); r = Math.min(r, R(c).right) }
+          }
+          return { left: l, right: r, width: Math.max(0, r - l) }
+        }
+
+        // 'plain' is the app's ORDINARY pane and the one in the bug report: an agent in a
+        // dirty repo, with no swarm role, no claims, no MCP chip and no remote. The crowded
+        // fixture cannot afford a full branch chip at any width, so it can prove "nothing
+        // overlaps" but it cannot prove "the NAME is what yields" — only this can.
+        const plainify = () => {
+          for (const sel of ['.pane-role', '.pane-claims', '.pane-mcp', '.pane-remote']) {
+            const el = header.querySelector(sel)
+            if (el) el.hidden = true
+          }
+          header.querySelector('.pane-branch').textContent = 'main'
+          const wt = header.querySelector('.pane-worktree')
+          if (wt) wt.hidden = true
+          header.querySelector('.pane-git-state').textContent = '2 uncommitted'
+          header.querySelector('.pane-git-staged').textContent = '0 staged'
+          header.querySelector('.pane-git-comparison').textContent = '= main'
+        }
+        const at = async (px, title, plain) => {
+          slot.style.width = px + 'px'
+          await sleep(130)
+          if (p && p.lightChips) p.lightChips() // a real MCP/git push can re-hide the forced chips
+          if (plain) plainify()
+          if (title != null) titleEl.textContent = title
+          if (p && p.refit) p.refit()           // the fixture writes text behind the ports' back
+          await sleep(140)
+
+          const vis = {}, boxes = {}
+          for (const name of Object.keys(LEAF)) {
+            const el = header.querySelector(LEAF[name])
+            vis[name] = rendered(el)
+            if (vis[name]) boxes[name] = seen(el)
+          }
+          const trio = [...slot.querySelectorAll('.pane-act-expand')]
+          vis.expand = trio.some(rendered)
+          trio.filter(rendered).forEach(e => { boxes['expand:' + e.dataset.expand] = seen(e) })
+
+          const names = Object.keys(boxes).filter(n => boxes[n].width > 0.5)
+          const overlaps = []
+          for (let i = 0; i < names.length; i++) {
+            for (let k = i + 1; k < names.length; k++) {
+              const A = boxes[names[i]], B = boxes[names[k]]
+              const ov = Math.min(A.right, B.right) - Math.max(A.left, B.left)
+              if (ov > 0.5) overlaps.push(names[i] + '/' + names[k] + '=' + Math.round(ov))
+            }
+          }
+          // Cut off invisibly? Anything whose real box runs past the box that clips it is
+          // losing information the ⋯ menu was supposed to be given instead.
+          const clipped = []
+          for (const name of Object.keys(LEAF)) {
+            if (!vis[name] || name === 'title') continue
+            const el = header.querySelector(LEAF[name])
+            const clip = el.closest('.pane-git') || header
+            const c = R(clip), raw = R(el)
+            const hidden = Math.max(0, c.left - raw.left) + Math.max(0, raw.right - c.right)
+            if (hidden > 1) clipped.push(name + '=' + Math.round(hidden))
+          }
+          // A rung is ELIGIBLE when it has data at all (the app hides an empty worktree /
+          // staged chip outright) — a rung dark for want of data says nothing about order.
+          const eligible = rung => {
+            if (rung === 'expand') return trio.length > 0
+            const el = header.querySelector(LEAF[rung])
+            return !!el && !el.hidden
+          }
+          let orderOk = true
+          for (let i = 0; i < LADDER.length; i++) {
+            if (!eligible(LADDER[i]) || !vis[LADDER[i]]) continue
+            for (let k = i + 1; k < LADDER.length; k++) {
+              if (eligible(LADDER[k]) && !vis[LADDER[k]]) orderOk = false
+            }
+          }
+          const git = header.querySelector('.pane-git')
+          const left = header.querySelector('.pane-head-left')
+          // Nothing may be holding more than it can show. (The title is exempt inside its
+          // OWN box — it ellipsises — but its box is a child of the left cluster, so the
+          // cluster's own overflow still has to be zero.)
+          const over = {
+            header: header.scrollWidth - header.clientWidth,
+            left: left.scrollWidth - left.clientWidth,
+            git: rendered(git) ? git.scrollWidth - git.clientWidth : 0
+          }
+          const fits = over.header <= 1 && over.left <= 1 && over.git <= 1
+          // The title is exempt from the anchor rule only at the compact rungs, where it
+          // moves into the ⋯ menu wholesale.
+          const anchors = vis.state && vis.agent && vis.menu && vis.close
+          const ok = overlaps.length === 0 && clipped.length === 0 && orderOk && fits && anchors
+          const titleEllipsised = titleEl.scrollWidth > titleEl.clientWidth + 1
+          return { px, ok, overlaps, clipped, orderOk, fits, over, anchors, titleEllipsised, vis }
+        }
+
+        const LONG = 'Review audit remediation handoff document'
+        const WIDTHS = [1200, 1130, 1000, 900, 800, 765, 700, 620, 505, 455, 340, 218, 140]
+        const shortName = []
+        for (const w of WIDTHS) shortName.push(await at(w, 'Terminal 1', false))
+        const longName = []
+        for (const w of WIDTHS) longName.push(await at(w, LONG, false))
+        const plainName = []
+        for (const w of WIDTHS) plainName.push(await at(w, LONG, true))
         slot.style.width = ''
         await sleep(150)
-        // The title is exempt only at 140px: below the 200px retirement rung it moves
-        // into the menu while the compact four-anchor chrome holds.
-        const anchorsHold = Object.entries(steps).every(([k, s]) =>
-          s.state && s.agent && s.close && s.menu && (k === 'w140' || s.title))
-        const order =
-          steps.w900.pct && steps.w900.git && !steps.w900.gitWorktree &&
-          steps.w900.gitState && steps.w900.gitStaged && steps.w900.gitComparison &&
-          steps.w900.expand === 3 && steps.w900.mcp && steps.w900.claims &&
-          steps.w900.role && steps.w900.remote &&                         // wide: identity + core detail
-          !steps.w800.pct && !steps.w800.gitStaged && steps.w800.gitComparison &&
-          steps.w800.gitState && steps.w800.git && steps.w800.expand === 3 &&
-          !steps.w765.gitComparison && steps.w765.gitState && steps.w765.git &&
-          !steps.w700.gitState && steps.w700.git &&                       // branch identity survives
-          steps.w700.expand === 0 && steps.w700.mcp &&                    // expand trio retires
-          !steps.w620.mcp && steps.w620.claims &&                         // mcp (restart form)
-          !steps.w505.claims && steps.w505.role &&                        // claims
-          !steps.w455.role && steps.w455.remote &&                        // role
-          !steps.w340.remote &&                                           // remote
-          !steps.w140.git && !steps.w140.ctxDisc                          // true minimum chrome
-        // The gauge's DISC (color ramp + sweep) survives every retirement above it and
-        // yields only below 135px of content — where even 16px would push the anchors off.
-        const ctxGauge = steps.w900.ctxDisc && steps.w700.ctxDisc && steps.w340.ctxDisc
-        return { ok: anchorsHold && order && ctxGauge, anchorsHold, order, ctxGauge, steps, hasHost: !!host }
+
+        const probes = [...shortName, ...longName, ...plainName]
+        const overlaps = probes.flatMap(s => s.overlaps.map(o => s.px + ':' + o))
+        const clipped = probes.flatMap(s => s.clipped.map(c => s.px + ':' + c))
+        const anchorsHold = probes.every(s => s.anchors)
+        const orderHolds = probes.every(s => s.orderOk)
+        const allFit = probes.every(s => s.fits)
+        // The gauge's DISC (color ramp + sweep) outlives every rung above it, and the name
+        // outlives the whole ladder — it is only ever ellipsised, never taken, until the
+        // 200px compact rung moves it into the menu.
+        const wide = shortName[0], narrow = longName[longName.length - 1]
+        const ctxGauge = shortName.slice(0, -1).every(s => s.vis.ctxDisc)
+        const titleSurvives = longName.filter(s => s.px > 218).every(s => s.vis.title)
+        // THE BUG IN THE SCREENSHOTS, asserted: an ordinary agent pane in a dirty repo, a
+        // long agent-set title, a wide pane. The NAME is what gives way — it ellipsises —
+        // and the branch chip keeps every field it has. Before the fit pass the opposite
+        // happened: the title took its full max-content, the chip's column collapsed, and
+        // "= main" rendered on top of the gauge.
+        const plainWide = plainName.filter(s => s.px >= 1130)
+        const chipIntact = plainWide.length > 0 && plainWide.every(s =>
+          s.vis.title && s.vis.branch && s.vis.gitState && s.vis.gitStaged && s.vis.gitComparison)
+        // 1130px is the width from the report: the row is ~57px short of holding the whole
+        // name AND the whole chip, and the name is what pays for it. (At 1200 everything
+        // fits and nothing is asked to give — that is the same rule, not an exception.)
+        const at1130 = plainName.find(s => s.px === 1130)
+        const nameYieldsFirst = chipIntact && Boolean(at1130 && at1130.titleEllipsised)
+        return {
+          ok: overlaps.length === 0 && clipped.length === 0 && anchorsHold && orderHolds &&
+              allFit && ctxGauge && titleSurvives && nameYieldsFirst,
+          overlaps, clipped, anchorsHold, orderHolds, allFit, ctxGauge, titleSurvives, nameYieldsFirst,
+          wide: wide && wide.vis, narrow: narrow && narrow.vis,
+          shortName: shortName.map(s => ({ px: s.px, ok: s.ok, over: s.over, vis: s.vis })),
+          longName: longName.map(s => ({ px: s.px, ok: s.ok, over: s.over, vis: s.vis })),
+          plainName: plainName.map(s => ({ px: s.px, ok: s.ok, over: s.over, ell: s.titleEllipsised, vis: s.vis }))
+        }
       })()`)
+      win.setSize(1200, 760)
+      await sleep(400)
 
       // ── (k): THE 132px COMPACT CONTRACT. At the hard floor the exact four
       //    anchors fit without overlap. The overflow menu is body-portaled, remains in
@@ -490,16 +676,23 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         const aboveContext = await probe(153) // 136px content: immediately above max-width:135
         const aboveCompactGaps = await probe(175) // 158px content: immediately above max-width:157
         const aboveTitle = await probe(218) // 201px content: immediately above max-width:200
-        const samples = [exact, aboveContext, aboveCompactGaps, aboveTitle]
+        const titleRoom = await probe(300) // 283px content: the first width six characters really fit
+        const samples = [exact, aboveContext, aboveCompactGaps, aboveTitle, titleRoom]
         const sampleGeometry = samples.every(s => s.anchorsVisible && s.noOverlap && s.ancestorContained && s.clustersSeparated)
         const signalRhythm = [exact, aboveContext, aboveCompactGaps].every(s =>
           Math.abs(s.dotAgentGap - 8) <= 0.5 &&
           (s.agentContextGap == null || Math.abs(s.agentContextGap - 8) <= 0.5) &&
           s.signalGapMatched)
+        // The name is on the bar exactly while it FITS — measured, not at a guessed rung.
+        // 201px of content cannot hold six characters beside a lit gauge and the four
+        // anchors (it is 19px short), and the old 200px rung let it try: the title's box
+        // was clipped by 33px, mid-glyph, and nothing asserted otherwise. It comes back the
+        // moment there is room for it.
         const transitions = Math.abs(exact.paneWidth - 132) <= 0.5 && exact.queryWidth === 115 && !exact.contextShown && !exact.titleShown &&
           aboveContext.queryWidth === 136 && aboveContext.contextShown && !aboveContext.titleShown &&
           aboveCompactGaps.queryWidth === 158 && aboveCompactGaps.contextShown && !aboveCompactGaps.titleShown &&
-          aboveTitle.queryWidth === 201 && aboveTitle.contextShown && aboveTitle.titleShown
+          aboveTitle.queryWidth === 201 && aboveTitle.contextShown && !aboveTitle.titleShown &&
+          titleRoom.contextShown && titleRoom.titleShown
         await probe(132)
         const retiredInline = ['.pane-title', '.pane-remote', '.pane-role', '.pane-claims', '.pane-mcp', '.pane-git', '.pane-act-expand', '.pane-context']
           .every(sel => [...slot.querySelectorAll(sel)].every(el => getComputedStyle(el).display === 'none'))
@@ -747,8 +940,10 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
       l.ok = Boolean(l.ok && lWide.ok)
       l.wide16 = lWide
 
-      const pass = Boolean(a.ok && b.ok && c.ok && d.ok && e.ok && f.ok && g.ok && h.ok && i.ok && j.ok && k.ok && l.ok)
-      result = { pass, a, b, c, d, e, f, g, h, i, j, k, l }
+      const pass = Boolean(
+        a.ok && a2.ok && b.ok && c.ok && d.ok && e.ok && f.ok && g.ok && h.ok && i.ok && j.ok && k.ok && l.ok
+      )
+      result = { pass, a, a2, b, c, d, e, f, g, h, i, j, k, l }
     } catch (err) {
       result = { pass: false, stage, error: String(err) }
     }
