@@ -88,14 +88,27 @@ export function runWsCloseSmoke(win: BrowserWindow): void {
       // 0c ── The other half: an agent whose turn ENDED still holds its session, so the pane
       // is still live and must still confirm — but it is not "working", and saying so was the
       // second lie. Session present, state idle: the copy must name the session, not the work.
-      await ES(`window.__mogging.attention.setPaneState(${pane3}, 'idle')`)
-      await sleep(250)
-      await ES(`document.querySelector('.layout-slot[data-pane-id="${pane3}"] .pane-act-close')?.click()`)
-      await sleep(300)
-      const idleAgentMsg = await modalText()
-      const idleAgentStillAsks = /agent session/i.test(idleAgentMsg) && !/still running/i.test(idleAgentMsg)
-      await ES(`document.querySelector('.modal .btn--ghost')?.click()`)
-      await sleep(250)
+      //
+      // RETRIED, because an adopted session is on a clock we don't own. `adopt` is a shim: no
+      // codex is really running in this pane, and the backend watches the pane's PTY SUBTREE
+      // and emits agentId:null for it — which retires the session (agents/index.ts, the
+      // detectedAt >= sessionSetAt guard). Whether that sweep lands before or after our click
+      // is a coin flip, and a fixed sleep can only pick a side of it. So re-adopt and look
+      // again: ONE clean observation proves the branch, and if the copy were wrong no attempt
+      // could ever produce it — this still fails loudly, it just cannot flake green→red.
+      let idleAgentMsg = ''
+      let idleAgentStillAsks = false
+      for (let attempt = 0; attempt < 8 && !idleAgentStillAsks; attempt++) {
+        await ES(`window.__mogging.agents.adopt(${pane3}, 'codex', '')`)
+        await ES(`window.__mogging.attention.setPaneState(${pane3}, 'idle')`)
+        await ES(`document.querySelector('.layout-slot[data-pane-id="${pane3}"] .pane-act-close')?.click()`)
+        await sleep(200)
+        idleAgentMsg = await modalText()
+        idleAgentStillAsks = /agent session/i.test(idleAgentMsg) && !/still running/i.test(idleAgentMsg)
+        await ES(`document.querySelector('.modal .btn--ghost')?.click()`)
+        await sleep(200)
+      }
+      await ES(`window.__mogging.agents.adopt(${pane3}, 'codex', '')`)
       await ES(`window.__mogging.attention.setPaneState(${pane3}, 'busy')`) // restore the live-work run below
       await sleep(250)
       const copyIsHonest = runningCopyHonest && idleAgentStillAsks
