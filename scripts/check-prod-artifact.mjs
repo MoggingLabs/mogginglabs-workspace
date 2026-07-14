@@ -83,7 +83,12 @@ const fail = (msg) => {
 const env = { ...process.env }
 delete env.ELECTRON_RUN_AS_NODE
 try {
-  execSync('npm run build', { env, stdio: 'pipe' })
+  // maxBuffer, explicitly: execSync's default is 1 MB of combined stdout+stderr, and a build that
+  // out-talks that gets killed with ENOBUFS — which arrives here as a throw and reads exactly like
+  // a failing build. This build is not near 1 MB of chatter today, so this is a guard rather than a
+  // cure; it is here because the failure it prevents is indistinguishable from a real one, and the
+  // next person to hit it would go looking for a bug in the bundle.
+  execSync('npm run build', { env, stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 })
 } catch (err) {
   const out = `${err.stdout ?? ''}${err.stderr ?? ''}`.trim()
   fail(`PROD ARTIFACT: \`npm run build\` failed — cannot inspect what does not build.\n\n${out}`)

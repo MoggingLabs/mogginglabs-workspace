@@ -10,8 +10,18 @@ export interface PersistedPane {
   /** Last explicit agent context, stored separately from the shell's requested launch cwd. */
   reportedCwd?: string
   reportedCwdAt?: number
-  /** SSH connection pointer only; required to restore a remote pane as remote. */
-  remote?: { name: string; host: string; user?: string; port?: number; cwd?: string; platform?: 'posix' }
+  /** SSH connection pointer only; required to restore a remote pane as remote. Carries the
+   *  platform AND the shell dialect: a restored pane must come back speaking the same language
+   *  it went away in, or the first command typed at it is a bash-ism at a PowerShell. */
+  remote?: {
+    name: string
+    host: string
+    user?: string
+    port?: number
+    cwd?: string
+    platform?: 'posix' | 'windows'
+    shell?: 'sh' | 'bash' | 'zsh' | 'powershell' | 'cmd'
+  }
   command?: string // launch label (e.g. "claude") — NEVER a credential
   scrollback: string // raw PTY output for repaint (local terminal content)
   updatedAt: number
