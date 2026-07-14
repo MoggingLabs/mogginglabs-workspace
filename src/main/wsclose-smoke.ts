@@ -12,7 +12,7 @@ import { ControlChannels } from '@contracts'
 //   × -> Close -> let the grace lapse -> disposed for good.
 
 export function runWsCloseSmoke(win: BrowserWindow): void {
-  setTimeout(() => app.exit(1), 90000)
+  setTimeout(() => app.exit(1), 120000) // +2 phases (idle skip, copy) over the original 90s
   const wc = win.webContents
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -27,10 +27,35 @@ export function runWsCloseSmoke(win: BrowserWindow): void {
     ES(`(document.querySelector('.workspace-tab[data-ws-id="${wsId}"] .ws-close')?.click(), 1)`)
   const count = (): Promise<number> => ES<number>('window.__mogging.workspace.count()')
 
+  const modalText = (): Promise<string> =>
+    ES<string>(`(document.querySelector('.modal[role="dialog"]')?.textContent ?? '')`)
+
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
     try {
       await sleep(1500)
+
+      // 0 ── The SKIP. Open terminals that are merely idle — no agent session, nothing
+      // running — are not "live work": closing must not interrogate the user, it soft-closes
+      // straight to the undo grace. Own workspace, fully disposed before the live-work run
+      // below, so the count() assertions there still see exactly one.
+      // Idle is FORCED, not awaited: these are real shells, and a pane's own spawn repaint is
+      // output — which the tracker reads as busy until its quiet window lapses (activity.ts).
+      // Sleeping for that settle would race the gate; setPaneState is the same port the app's
+      // own state events call, so 'idle' here is the real thing, deterministically.
+      await ES('window.__mogging.workspace.create({ name: "Idle", paneCount: 2 })')
+      await sleep(1500)
+      const idleMeta = await ES<{ id: string; ordinal: number }>('window.__mogging.workspace.active()')
+      await ES(`window.__mogging.attention.setPaneState(${idleMeta.ordinal * 100 + 1}, 'idle')`)
+      await ES(`window.__mogging.attention.setPaneState(${idleMeta.ordinal * 100 + 2}, 'idle')`)
+      await sleep(300)
+      await xClick(idleMeta.id)
+      await sleep(400)
+      const idleAskedNothing = !(await ES<boolean>(`!!document.querySelector('.modal[role="dialog"]')`))
+      const idleSoftClosed = (await count()) === 0 && (await ES<boolean>(`!!document.querySelector('.toast-action')`))
+      const idleSkipsConfirm = idleAskedNothing && idleSoftClosed
+      await sleep(6200) // let its grace lapse: disposed for good, rail empty for the run below
+
       await ES('window.__mogging.workspace.create({ name: "Alpha", paneCount: 3 })')
       await sleep(1500)
       const meta = await ES<{ id: string; ordinal: number }>('window.__mogging.workspace.active()')
@@ -42,10 +67,51 @@ export function runWsCloseSmoke(win: BrowserWindow): void {
       await ES(`window.__mogging.attention.setPaneState(${paneId}, 'busy')`)
       await ES(`window.__mogging.attention.setPaneState(${pane2}, 'busy')`)
       await ES(`window.__mogging.attention.setPaneState(${pane3}, 'busy')`)
+      await sleep(300)
+
+      // 0b ── The COPY, while these panes are busy with NO agent session yet. The dialog is
+      // the entire basis on which the user decides; it must describe what was actually
+      // counted. `busy` here is a plain shell (a build, a test run) — the old text called
+      // every live pane "an agent still working", which the user can see is untrue.
+      await ES(`document.querySelector('.layout-slot[data-pane-id="${pane3}"] .pane-act-close')?.click()`)
+      await sleep(300)
+      const runningMsg = await modalText()
+      const runningCopyHonest = /still running/i.test(runningMsg) && !/agent/i.test(runningMsg)
+      await ES(`document.querySelector('.modal .btn--ghost')?.click()`)
+      await sleep(250)
+
       await ES(`window.__mogging.agents.adopt(${paneId}, 'codex', '')`)
       await ES(`window.__mogging.agents.adopt(${pane2}, 'codex', '')`)
       await ES(`window.__mogging.agents.adopt(${pane3}, 'codex', '')`)
       await sleep(300)
+
+      // 0c ── The other half: an agent whose turn ENDED still holds its session, so the pane
+      // is still live and must still confirm — but it is not "working", and saying so was the
+      // second lie. Session present, state idle: the copy must name the session, not the work.
+      //
+      // RETRIED, because an adopted session is on a clock we don't own. `adopt` is a shim: no
+      // codex is really running in this pane, and the backend watches the pane's PTY SUBTREE
+      // and emits agentId:null for it — which retires the session (agents/index.ts, the
+      // detectedAt >= sessionSetAt guard). Whether that sweep lands before or after our click
+      // is a coin flip, and a fixed sleep can only pick a side of it. So re-adopt and look
+      // again: ONE clean observation proves the branch, and if the copy were wrong no attempt
+      // could ever produce it — this still fails loudly, it just cannot flake green→red.
+      let idleAgentMsg = ''
+      let idleAgentStillAsks = false
+      for (let attempt = 0; attempt < 8 && !idleAgentStillAsks; attempt++) {
+        await ES(`window.__mogging.agents.adopt(${pane3}, 'codex', '')`)
+        await ES(`window.__mogging.attention.setPaneState(${pane3}, 'idle')`)
+        await ES(`document.querySelector('.layout-slot[data-pane-id="${pane3}"] .pane-act-close')?.click()`)
+        await sleep(200)
+        idleAgentMsg = await modalText()
+        idleAgentStillAsks = /agent session/i.test(idleAgentMsg) && !/still running/i.test(idleAgentMsg)
+        await ES(`document.querySelector('.modal .btn--ghost')?.click()`)
+        await sleep(200)
+      }
+      await ES(`window.__mogging.agents.adopt(${pane3}, 'codex', '')`)
+      await ES(`window.__mogging.attention.setPaneState(${pane3}, 'busy')`) // restore the live-work run below
+      await sleep(250)
+      const copyIsHonest = runningCopyHonest && idleAgentStillAsks
 
       // Pane chrome, validated control command, and layout shrink all share the
       // same live-work policy. Cancel each and prove no pane disappeared.
@@ -124,9 +190,19 @@ export function runWsCloseSmoke(win: BrowserWindow): void {
       await sleep(6200)
       const disposed = (await count()) === 0 && !(await ES<boolean>(`!!document.querySelector('.workspace-tab[data-ws-id="${wsId}"]')`))
 
-      const pass = allEntryPointsSafe && dialogShown && cancelKept && softClosed && restored && disposed
+      const pass =
+        idleSkipsConfirm && copyIsHonest &&
+        allEntryPointsSafe && dialogShown && cancelKept && softClosed && restored && disposed
       result = {
         pass,
+        idleSkipsConfirm,
+        idleAskedNothing,
+        idleSoftClosed,
+        copyIsHonest,
+        runningCopyHonest,
+        idleAgentStillAsks,
+        runningMsg,
+        idleAgentMsg,
         allEntryPointsSafe,
         paneMouseAsked,
         controlAsked,
