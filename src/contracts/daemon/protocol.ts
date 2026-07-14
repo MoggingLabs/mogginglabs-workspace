@@ -45,7 +45,7 @@ import type { ReviewSnapshot } from '../ipc/review.ipc'
 // (set-role, PaneInfo.role). v2: Phase-3/01 control API — send-key/capture + enriched
 // PaneInfo. The version namespaces the runtime dir + socket, so older daemons keep
 // running untouched (ADR 0006 anti-kill-server); the app + CLI speak their own version.
-export const DAEMON_PROTOCOL_VERSION = 8
+export const DAEMON_PROTOCOL_VERSION = 9
 
 // ── Release channel (dev/prod isolation) ───────────────────────────────────────────────
 // A repo checkout and an installed release must be able to run SIDE BY SIDE with zero shared

@@ -30,7 +30,7 @@ import { connectEndpoint } from './lib/endpoint-client.mjs'
 // plain Node — it cannot import the TS contract). It names the runtime DIRECTORY both the daemon
 // socket and the app's browser-control endpoint live in, so a stale value does not degrade: every
 // tool silently reports "the daemon is not running". Enforced by scripts/check-protocol-version.mjs.
-const PROTOCOL = 8
+const PROTOCOL = 9
 // Release channel (keep in sync with contracts ReleaseChannel; same gate). Inside a pane the
 // MOGGING_*_ENDPOINT envs below pin the exact app, so this only decides the well-known FALLBACK
 // path — run/dev-v4 when MOGGING_CHANNEL=dev is inherited (dev panes) or --dev is passed.

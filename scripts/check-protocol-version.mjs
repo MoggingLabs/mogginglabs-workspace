@@ -123,7 +123,18 @@ for (const { file, checks } of CHANNEL_SOURCES) {
 // Change the wire -> the hash moves -> this gate fails and tells you to bump. Comments and
 // formatting are stripped, so prose edits are free; only the declarations count. Precedent: the
 // build already byte-compares bin/mcp-catalog.json against the contract it is copied from.
-const WIRE_FILES = ['src/contracts/domain/agent.ts', 'src/contracts/daemon/protocol.ts']
+const WIRE_FILES = [
+  'src/contracts/domain/agent.ts',
+  'src/contracts/daemon/protocol.ts',
+  // THE DAEMON CARRIES BEHAVIOUR, NOT JUST A WIRE. The ActivityTracker RUNS INSIDE THE DAEMON
+  // (pty-daemon/session.ts holds one per pane), so a stale daemon runs a stale tracker — and the
+  // wire it speaks is byte-identical while it does. v0.11.0 shipped a tracker that reddened every
+  // finished turn; the v0.11.1 fix would have reached NOBODY, because the app reconnects to the
+  // surviving daemon and the wire hash never moved. The question this gate exists to ask was
+  // never "did the wire change" — it is "does a daemon already running the OLD CODE still behave
+  // correctly?" For anything the daemon executes, a code change means no.
+  'src/backend/features/agent-state/activity.ts'
+]
 
 /** The declarations, and nothing else: comments gone, whitespace collapsed, and the version
  *  constant itself removed — the fingerprint describes the SHAPE of the wire, not the number
@@ -140,11 +151,16 @@ function wireFingerprint() {
   return createHash('sha256').update(norm).digest('hex').slice(0, 16)
 }
 
-// Bump BOTH together. If this gate fails, ask the one question it exists to ask: does a daemon
-// that is ALREADY RUNNING the old code still speak this wire correctly? If not — and a new state,
-// event or message shape always means "no" — the version must move so the old daemon is retired
-// rather than reconnected to.
-const PINNED = { version: 8, fingerprint: 'eeffca47aa2ff093' }
+// Bump BOTH together. If this gate fails, ask the one question it exists to ask:
+//
+//     Does a daemon that is ALREADY RUNNING THE OLD CODE still behave correctly?
+//
+// Not "does it still speak this wire" — that was the narrow version of the question, and it let
+// v0.11.1 through. The tracker's own bug fix changed no wire at all, so the hash never moved, and
+// the surviving daemon would have gone on reddening every finished turn for as long as the machine
+// stayed up. Any change to code the DAEMON EXECUTES means the answer is no, and the version must
+// move so the old daemon is retired and its sessions migrated rather than reconnected to.
+const PINNED = { version: 9, fingerprint: '4ee48e9d38934fd5' }
 
 const actualWire = wireFingerprint()
 if (actualWire !== PINNED.fingerprint) {

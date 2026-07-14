@@ -117,17 +117,31 @@ async function trackerAsserts(): Promise<Record<string, boolean>> {
   h.subagentStop()
   const busyOutranksDeferred = h.current() === 'busy'
 
-  // THE BELL DEDUCTION. Both halves, armed together so one wait covers both.
+  // THE BELL DEDUCTION. All three orders, armed together so one wait covers them.
   const withDone = mk()
   withDone.turnStart()
   withDone.bell() // the CLI chimes — on what?
-  withDone.notify('done') // ...its own completion, riding ~130-260ms behind on a hook
+  withDone.notify('done') // ...its own completion, riding behind it on a hook
   const alone = mk()
   alone.turnStart()
   alone.bell() // nothing behind it
+  // THE ORDER THAT SHIPPED BROKEN (v0.11.0, found live by Pedro). The chime arrives AFTER the
+  // done, which is the NORMAL order for Claude: the Stop hook lands first, and the BEL follows on
+  // the trailing frames of the final render. The old tracker swallowed it with a grace window
+  // hung off the forced-idle path; I deleted that with the output-quiescence machinery it was
+  // sitting in, and every finished turn then went green and, two seconds later, RED.
+  //
+  // Nothing tested this direction, because the assert above only ever fired the chime FIRST —
+  // the one order in which the done cancels it. A gate that tests only the order that works is
+  // a gate that is asleep.
+  const chimeAfter = mk()
+  chimeAfter.turnStart()
+  chimeAfter.notify('done') // the pane goes green...
+  chimeAfter.bell() // ...and THEN the completion's own chime lands. It must be swallowed.
   await sleep(BELL_CONFIRM_MS + 400) // outlive the confirmation window
   const chimeWithDoneIsGreen = withDone.current() === 'done' // never red
   const chimeAloneIsRed = alone.current() === 'attention' // the only red 3 of 5 CLIs have
+  const chimeAfterDoneStaysGreen = chimeAfter.current() === 'done' // NOT 'attention'
 
   // THE SUBMIT RULE. A stray key must never clear a red and claim the agent is working — no CLI
   // re-raises a needs-input it has already raised, so that lie has no way back.
@@ -164,6 +178,7 @@ async function trackerAsserts(): Promise<Record<string, boolean>> {
     busyOutranksDeferred,
     chimeWithDoneIsGreen,
     chimeAloneIsRed,
+    chimeAfterDoneStaysGreen,
     strayHoldsRed,
     submitClearsToBusy,
     submitBytes

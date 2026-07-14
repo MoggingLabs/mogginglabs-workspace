@@ -70,6 +70,15 @@ import type { AgentState } from '@contracts'
  *  imperceptible, and it buys the completion story its correctness. */
 export const BELL_CONFIRM_MS = 2000
 
+/** How long after a `done` a chime is still THAT DONE'S OWN completion chime.
+ *
+ *  Sized for the trailing frames, not for a race: the Stop hook spawns a process and speaks the
+ *  daemon's socket, while the chime is a single byte the CLI writes straight to the pty — so the
+ *  done can, and routinely does, land FIRST, with the BEL arriving behind it on the final render
+ *  flush (statusline re-run, ConPTY flush). Anything inside this window belongs to the turn that
+ *  just ended. */
+export const DONE_CHIME_GRACE_MS = 2500
+
 export class ActivityTracker {
   /** `unknown` until this pane speaks. Never returns to it. */
   private state: AgentState = 'unknown'
@@ -91,9 +100,16 @@ export class ActivityTracker {
    *  a new turn began, it blocked on the user — throws it away. */
   private deferredDone = false
 
-  // No injected clock any more: nothing here is TIMED except the chime's confirmation window,
-  // which is a real setTimeout. The old tracker needed one because it measured output silence.
-  constructor(private readonly emit: (state: AgentState) => void) {}
+  /** When this pane last went `done`. A chime inside DONE_CHIME_GRACE_MS of it is that turn's own
+   *  completion chime, not a block — see bell(). Stamped in apply(), so EVERY road into `done`
+   *  sets it: the plain verdict, and the deferred one redeemed when the last subagent lands. */
+  private doneAt = -Infinity
+
+  constructor(
+    private readonly emit: (state: AgentState) => void,
+    /** Injectable only so the gates can drive the chime windows without sleeping through them. */
+    private readonly now: () => number = Date.now
+  ) {}
 
   /** A RAW "look at me" off the PTY stream: BEL outside an OSC, or an OSC 9/99/777 notification.
    *
@@ -122,6 +138,25 @@ export class ActivityTracker {
    *  self-heals on the next verdict — the safe direction to be wrong in, and the one we choose
    *  everywhere here. A false green costs a task you believe is finished and is not. */
   bell(): void {
+    // A CHIME ON A FINISHED TURN IS THAT TURN'S OWN CHIME. This guard is not an optimisation;
+    // without it the most common event in the product ends in red.
+    //
+    // Every CLI rings on COMPLETION as well as when blocked, and for Claude the app itself turns
+    // that on — the notify-hook overlay wires the `terminal_bell` channel, which fires for
+    // `agent_completed`. So the end of a normal turn is: the Stop hook lands `done` (the pane
+    // goes green), and then a BEL arrives on the trailing frames. The `done` is already spent, so
+    // there is nothing left to contradict the chime, and BELL_CONFIRM_MS later it would latch the
+    // pane RED — "needs your input" — on an agent that had just finished perfectly well.
+    //
+    // The deduction still holds, because it was never symmetric in TIME: a chime is ambiguous
+    // only while the turn might still be running. Once the agent has SAID it finished, a chime
+    // cannot mean "blocked on you" — a turn that has ended is not waiting for anything. A CLI
+    // with no `done` at all never reaches this state, so its chime rings exactly as before.
+    //
+    // (This existed, as a grace window hung off the old forced-idle path, and I deleted it with
+    // the output-quiescence machinery it was sitting in. It was doing separate work. Found by
+    // Pedro, live, on v0.11.0 — every finished turn went green and then red.)
+    if (this.state === 'done' || this.now() - this.doneAt < DONE_CHIME_GRACE_MS) return
     if (this.bellTimer) return // already pending — one ring per episode
     this.bellTimer = setTimeout(() => {
       this.bellTimer = undefined
@@ -283,6 +318,9 @@ export class ActivityTracker {
 
   private apply(state: AgentState): void {
     if (state === this.state) return
+    // Every road into `done` — the plain verdict AND the deferred one redeemed by the last
+    // subagent — arms the chime grace. Stamping it at the call sites would have missed one.
+    if (state === 'done') this.doneAt = this.now()
     this.state = state
     this.emit(state)
   }
