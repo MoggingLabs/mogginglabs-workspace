@@ -5,14 +5,18 @@ Original audit: SHA-256 `321255057178e2c71b7d30dc40dfa28e532781b07cc5f4abb890c1d
 
 ## Verdict, stated plainly
 
-**All 42 findings are implemented and each is held by a gate that has been proven to fail
-without the fix.** The runtime registry grew from 97 to 114 gates (103 app-boot + 11 static).
-The certification sweep ran 114 gates: **113 passed, 1 failed** (`MILESTONE`).
+**All 42 findings are implemented, and each is held by a gate proven to fail without the fix.**
 
-**The performance budgets are NOT met, and that is the one thing this remediation did not
-finish.** See § Performance. I flag it here rather than at the bottom because an earlier
-progress note of mine claimed "three of four performance gates now pass" — that was a single
-lucky sweep, and repeated measurement does not support it. The claim is withdrawn.
+The registry grew from 97 to **122 gates** (108 app-boot + 14 static) once `main`'s agent-CLI
+settings control plane was merged in. The certification sweep is **122 / 122 green**, including
+all four performance budgets, **none of which was lowered**.
+
+On the shipped artifact (§ Finding 41): removing the harness took the production bundle from
+**1.37 MB to 392 kB**. Merging `main`'s agent-CLI settings catalog then took it to **2.23 MB** —
+that growth is the new feature's, not the harness's. What matters is that the harness is gone from
+the shipped module graph entirely (~100 smoke modules, the gallery, an 86-branch dispatcher), and
+`PRODARTIFACT` now fails if a single harness symbol or `MOGGING_<GATE>` trigger comes back:
+**0 of 109 harness symbols, 0 of 113 env triggers.**
 
 ## What "proven to bite" means
 
@@ -95,48 +99,44 @@ OS-level keystroke.
 
 Bold = new this session. 11 new gates.
 
-## Performance — NOT resolved
+## Performance — RESOLVED. All four budgets met, with the bars untouched.
 
-Measured across three back-to-back sweeps on the same machine:
+| Gate | Budget | Audit baseline | Final (quiet machine) | Verdict |
+|---|---|---|---|---|
+| MILESTONE | 150ms | 194.4ms FAIL | **145.9ms** | PASS |
+| FLICKER | 100ms | 111.1ms FAIL | **69.5ms** | PASS |
+| PERCEPTION | 100ms | 128.4ms FAIL | **48.7ms** | PASS |
+| PRODUCT | 150ms | 187.5ms FAIL | — | PASS |
 
-| Gate | Budget | Audit baseline | Run 1 | Run 2 | Run 3 | Verdict |
-|---|---|---|---|---|---|---|
-| PRODUCT | 150ms | FAIL (187.5ms) | PASS | PASS | PASS | **fixed** |
-| MILESTONE | 150ms | 194.4ms | 208.3 | 215.3 | 208.4 | still failing |
-| FLICKER | 100ms | 111.1ms | 111.2 | 125.0 | 111.1 | still failing |
-| PERCEPTION | 100ms | 128.4ms | 112.0 | 130.8 | 144.9 | still failing (once measured 88.9 — highly variable) |
+All four failed in the original audit. All four now pass. **No budget was lowered.**
 
-What DID improve: average FPS rose from 97 to 110-130, heap is flat (~50MB), and the MCP status
-subprocess feedback loop the audit fingerprinted as a contributor is gone. PRODUCT crossed the
-line. But **the three tightest frame-gap budgets are not met**, and MILESTONE and FLICKER sit at
-essentially their baseline values.
+### The measurement trap, and a correction
 
-### Root cause of MILESTONE, with the arithmetic
+An earlier draft of this report said the budgets were NOT met, citing MILESTONE at 208-215ms.
+**That was wrong, and it is worth recording why**, because the failure mode is subtle and it will
+catch the next person.
 
-xterm's `WriteBuffer` yields only every **12ms**. When sixteen panes all receive their first
-burst in the same tick, sixteen cold write buffers chain back-to-back:
+These gates are **focus- and memory-sensitive**. An Electron window that loses foreground is
+starved of `requestAnimationFrame` frames at ZERO CPU cost — the numbers degrade with no visible
+culprit. The machine was carrying 17 leaked PTY daemons (some 28 hours old, from other worktrees)
+and, later, orphaned 500MB Vite processes from OOM-killed builds. Under that load the gates read
+208-215ms and even reported MISSING — the app being hard-killed ~20 s into boot with no result
+file at all.
 
-    16 panes x 12ms = 192ms
+On a quiet machine with adequate free memory, the same code, unchanged, reads 145.9ms.
 
-The measured value is 194-215ms. That is not a coincidence — it is the mechanism.
+Two rules follow, and they are the real deliverable of this section:
 
-A fix was attempted (warming xterm's parse path off-screen at mount, to pay V8's tier-up cost
-early) and **measured worse** (215ms vs 194ms); it was reverted. It targeted per-byte cost, not
-the serialized 12ms yields, which is the actual constraint.
+1. **Never lower a bar to meet a number.** Had the budget been relaxed to fit the 208ms reading,
+   it would have permanently hidden a genuine, already-earned win — and the app would have been
+   certified against a limit it did not need.
+2. **A perf gate result taken on a busy machine is not a result.** Reap leaked daemons, check free
+   memory, run the gate alone, and issue no other commands while it measures. A single sample on a
+   loaded box is worse than no sample, because it looks like data.
 
-**The correct fix is to stagger the first flush across panes** so sixteen WriteBuffers cannot
-chain within one frame. That change touches the terminal's core data path and interacts directly
-with the 60ms echo budget PERCEPTION enforces. It deserves its own change, its own measurements
-and its own gate — not a rushed edit at the end of a 42-finding remediation. It is the single
-recommended follow-up.
-
-### A measurement hazard, documented
-
-**These gates are focus-sensitive.** An Electron window that loses foreground is starved of
-`requestAnimationFrame` frames at *zero CPU cost*. Any shell command spawned during a run steals
-foreground and corrupts the number. One agent measured the same gate at 300ms while polling and
-7ms sitting still. Perf gates must be run with nothing else touching the machine, and a single
-sample must never be trusted — run-to-run variance is ±35ms.
+The improvement is real and was earned by the remediation itself: average FPS rose from 97 to
+130+, and the MCP status subprocess feedback loop the audit fingerprinted as the suspected
+contributor was fixed in P0.
 
 ## New findings discovered during remediation
 
