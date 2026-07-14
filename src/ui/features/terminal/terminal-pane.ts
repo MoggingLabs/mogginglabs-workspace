@@ -32,6 +32,7 @@ import { registerPaneInstance, retirePaneInstance } from '../../core/terminal/pa
 import { forgetPane, markPaneLive, markPaneReattached, markPaneRemoteReady } from '../../core/terminal/liveness-port'
 import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
 import { setPaneState, clearPaneState, paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
+import { completionsFor } from '../../core/attention/completions'
 import { applyPaneCwdEvent, clearPaneCwd, getPaneCwd, getPaneCwdProjection } from '../../core/layout/pane-cwd'
 import { getPaneRole, onPaneRole, getPaneRemote, getPaneProfile, setPaneProfile } from '../../core/layout/pane-meta'
 import {
@@ -1744,6 +1745,25 @@ export class TerminalPane {
     if (roleName) info.push(note(`Role: ${roleName}`))
     const ownClaims = claimsFor(this.id).length
     if (ownClaims) info.push(note(`Claims: ${ownClaims} file pattern${ownClaims === 1 ? '' : 's'}`))
+
+    // WHAT THIS AGENT ACTUALLY FINISHED. A green is designed to be spent — you click the pane
+    // and the halo, the outline and the rail's count all go — which is right for an alert and
+    // useless as a record. This is the record: every `done` verdict, newest first, so a
+    // completion you dismissed (or that was auto-acknowledged by landing on it) is not gone.
+    // Per-pane only, deliberately — no global feed.
+    const dones = completionsFor(this.id)
+    if (dones.length > 0) {
+      const ago = (at: number): string => {
+        const secs = Math.max(0, Math.round((Date.now() - at) / 1000))
+        if (secs < 60) return `${secs}s ago`
+        const mins = Math.round(secs / 60)
+        if (mins < 60) return `${mins}m ago`
+        return `${Math.round(mins / 60)}h ago`
+      }
+      const shown = dones.slice(0, 5).map(ago).join(' · ')
+      const more = dones.length > 5 ? ` (+${dones.length - 5} more)` : ''
+      info.push(note(`Finished ${dones.length}×: ${shown}${more}`))
+    }
 
     const mcp = mcpChipForPane(this.id)
     if (mcp && (mcp.connected > 0 || mcp.attention || mcp.restartNew > 0)) {

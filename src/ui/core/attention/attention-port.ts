@@ -1,4 +1,5 @@
 import type { AgentState, PaneId } from '@contracts'
+import { recordCompletion, clearCompletions } from './completions'
 
 /**
  * Per-pane agent state, aggregated for "which agent needs me" indicators. Each `TerminalPane`
@@ -42,6 +43,11 @@ export function setPaneState(paneId: PaneId, state: AgentState): void {
   const prev = states.get(paneId) ?? 'unknown'
   if (prev === state) return
   states.set(paneId, state)
+  // The TRANSITION into `done` is the completion, and this is the one gate every state change
+  // passes through — so the history is written exactly once per finished turn. A green is meant
+  // to be spent (you click it and it is gone); without this, "what did my agents get done while
+  // I was away" had no answer at all once you had dismissed them.
+  if (state === 'done') recordCompletion(paneId)
   // Anything that is not `done` reclaims the pane: the agent is working, blocked, or has settled
   // without finishing, and in every one of those cases last turn's acknowledgement is spent. The
   // NEXT done is a new green and must be able to earn its halo.
@@ -63,6 +69,9 @@ export function paneFinished(paneId: PaneId): boolean {
 
 export function clearPaneState(paneId: PaneId): void {
   const hadAck = acked.delete(paneId)
+  // The history goes with the pane. Pane ids are REUSED, and a successor inheriting these would
+  // be showing you someone else's work under its own name.
+  clearCompletions(paneId)
   if (states.delete(paneId) || hadAck) notify()
 }
 
