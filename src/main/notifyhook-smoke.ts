@@ -39,7 +39,11 @@ function runHookAgainstFakeDaemon(
   script: string,
   args: string[],
   paneEnv: Record<string, string | undefined>,
-  tag: string
+  tag: string,
+  /** A Claude Notification payload to feed the hook over stdin — the channel the
+   *  notification_type mapping actually reads. Omitted = stdin closed (a TTY-less no-payload
+   *  run, which must keep the argv event). */
+  stdinPayload?: string
 ): Promise<WireResult> {
   return new Promise((resolve) => {
     const token = 'smoke-token-' + tag
@@ -100,7 +104,14 @@ function runHookAgainstFakeDaemon(
         else env[k] = v
       }
       // The hook needs `node` on PATH — its documented requirement.
-      const child = spawn('node', [script, ...args], { env, stdio: 'ignore' })
+      const child = spawn('node', [script, ...args], {
+        env,
+        stdio: [stdinPayload === undefined ? 'ignore' : 'pipe', 'ignore', 'ignore']
+      })
+      if (stdinPayload !== undefined && child.stdin) {
+        child.stdin.write(stdinPayload)
+        child.stdin.end()
+      }
       child.on('exit', (code) => {
         result.exitCode = code
         // Give a just-written notify a beat to flush through the pipe.
@@ -267,6 +278,49 @@ export async function runNotifyHookSmoke(): Promise<void> {
       codexBlob.notify?.event === 'done' &&
       !JSON.stringify(codexBlob.notify ?? {}).includes('SECRET')
 
+    // ── the Notification-type split, over the REAL stdin channel ──
+    // A type the whitelist KNOWS as blocking must ring needs-input immediately.
+    const notifBlocking = script
+      ? await runHookAgainstFakeDaemon(
+          script,
+          ['--event', 'needs-input'],
+          { MOGGING_PANE_ID: '7' },
+          'nblock',
+          '{"hook_event_name":"Notification","notification_type":"permission_prompt","message":"NEVER-CROSSES"}'
+        )
+      : null
+    const notifBlockingOk =
+      !!notifBlocking && notifBlocking.exitCode === 0 && notifBlocking.notify?.event === 'needs-input' &&
+      !JSON.stringify(notifBlocking.notify ?? {}).includes('NEVER-CROSSES')
+
+    // An UNKNOWN type is a GUESS and must ride the bell path as 'notice' — never latch red.
+    // The old default (needs-input) red-locked four freshly-finished /goal panes the day the
+    // goal system shipped notification types this list had never seen (2026-07-15). This
+    // assert fails on that code: it expects 'notice', the old script sends 'needs-input'.
+    const notifUnknown = script
+      ? await runHookAgainstFakeDaemon(
+          script,
+          ['--event', 'needs-input'],
+          { MOGGING_PANE_ID: '7' },
+          'nunknown',
+          '{"hook_event_name":"Notification","notification_type":"goal_achieved_or_whatever_ships_next"}'
+        )
+      : null
+    const notifUnknownOk =
+      !!notifUnknown && notifUnknown.exitCode === 0 && notifUnknown.notify?.event === 'notice'
+
+    // A completion-shaped type stays SILENT — no frame at all.
+    const notifCompleted = script
+      ? await runHookAgainstFakeDaemon(
+          script,
+          ['--event', 'needs-input'],
+          { MOGGING_PANE_ID: '7' },
+          'ncomplete',
+          '{"hook_event_name":"Notification","notification_type":"agent_completed"}'
+        )
+      : null
+    const notifCompletedOk = !!notifCompleted && notifCompleted.exitCode === 0 && notifCompleted.notify === null
+
     // Outside a pane (no MOGGING_PANE_ID): silent no-op, still exit 0.
     const noop = script
       ? await runHookAgainstFakeDaemon(script, ['--event', 'done'], { MOGGING_PANE_ID: undefined }, 'noop')
@@ -275,12 +329,12 @@ export async function runNotifyHookSmoke(): Promise<void> {
 
     const pass =
       scriptOk && invOk && claudeOk && codexOk && geminiOk && opencodeOk && aiderOk && extrasOk &&
-      directOk && codexBlobOk && noopOk
+      directOk && codexBlobOk && noopOk && notifBlockingOk && notifUnknownOk && notifCompletedOk
     write({
       pass,
       scriptOk, invOk, claudeOk, codexOk, geminiOk, opencodeOk, aiderOk, extrasOk,
-      directOk, codexBlobOk, noopOk,
-      direct, codexBlob, noop,
+      directOk, codexBlobOk, noopOk, notifBlockingOk, notifUnknownOk, notifCompletedOk,
+      direct, codexBlob, noop, notifBlocking, notifUnknown, notifCompleted,
       extras: {
         userData,
         codexArgs: exCodex.args,

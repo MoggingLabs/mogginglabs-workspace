@@ -13,6 +13,7 @@ import { paneShellLaunch } from '@backend/platform/shell'
 import { aiderLogPath } from '@backend/features/context'
 import type { Approval, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { PANE_CWD_MAX, normalizeRemoteConnection, notifyEventToState } from '@contracts'
+import { log } from './lifecycle'
 import {
   ActivityTracker,
   AgentProcessDetector,
@@ -837,10 +838,19 @@ class PaneSession {
     // explicit busy/idle releases an attention latch; attention latches). The
     // subagent lifecycle + idle-prompt events are STATEFUL — the tracker's pending
     // counter decides what they mean — so they bypass the stateless event->state map.
+    log('notify ' + event + ' pane ' + this.id) // label only, never content — the one breadcrumb
+    // that makes a false alert diagnosable after the fact (the goal-achieved→red bug was
+    // reported from memory because nothing recorded which event painted the pane).
     if (event === 'subagent-start') this.tracker.subagentStart()
     else if (event === 'subagent-stop') this.tracker.subagentStop()
     else if (event === 'idle-prompt') this.tracker.idlePrompt()
     else if (event === 'turn-start') this.tracker.turnStart()
+    // A NOTICE is a notification whose type the hook script does not recognize — a GUESS, so it
+    // takes the bell's held-for-contradiction path, never a direct latch. On a pane wearing
+    // 'done' it is swallowed as that turn's own news (the /goal achieve notice landed exactly
+    // there and used to latch four finished panes red); mid-turn with nothing behind it, it
+    // still rings — a genuinely NEW blocking type keeps surfacing, one confirmation beat later.
+    else if (event === 'notice') this.tracker.bell()
     else this.tracker.notify(notifyEventToState(event))
     // Usage-limit (4/04): a DISTINCT signal alongside the attention state, so the
     // app can offer profile failover. Event label only — never content.

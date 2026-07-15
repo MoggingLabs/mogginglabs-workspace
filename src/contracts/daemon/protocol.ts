@@ -340,6 +340,15 @@ export type NotifyEvent =
   // UserPromptSubmit: a new turn. Resets the pending-subagent counter, so a stop event
   // lost to a hard kill can't swallow every future done and strand the pane on busy.
   | 'turn-start'
+  // A notification whose TYPE the hook script does not recognize. A guess, deliberately
+  // distinct from `needs-input`: the daemon routes it to the tracker's BELL (held for
+  // contradiction, swallowed on a done pane) instead of latching red. Unrecognized types
+  // used to default to needs-input, and the /goal system's new notification types latched
+  // four freshly-FINISHED panes red (2026-07-15) — Claude fires notifications mostly for
+  // unfocused panes, so it hit exactly the agents nobody was watching. Deliberately NOT in
+  // notifyEventToState below: no stateless AgentState is honest for a guess (idle/busy would
+  // clear a real latch, attention would be the bug reborn), so only the tracker may route it.
+  | 'notice'
 
 /**
  * Map a notify event to the pane state it raises.

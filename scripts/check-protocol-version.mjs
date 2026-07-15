@@ -160,7 +160,7 @@ function wireFingerprint() {
 //   ADDITIVE-TOLERANT (an optional field old readers ignore, e.g. the endpoint's build stamp):
 //   re-pin here WITHOUT bumping, and say why in the commit. The build stamp — not a version
 //   burn — is what delivers daemon CODE changes to already-running daemons.
-const PINNED = { version: 9, fingerprint: '0018a9cfa6efd8c2' }
+const PINNED = { version: 9, fingerprint: 'c61665d482c83a89' }
 
 const actualWire = wireFingerprint()
 if (actualWire !== PINNED.fingerprint) {

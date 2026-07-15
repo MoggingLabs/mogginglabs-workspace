@@ -85,7 +85,17 @@ const notifTypeToEvent = (type) => {
     case 'push_notification':
       return null // not an alert at all -> stay silent
     default:
-      return 'needs-input' // an unrecognized notification is still worth surfacing
+      // An unrecognized type is a GUESS, and guesses take the bell's held-for-contradiction
+      // path - never a direct red latch. The old default (needs-input) red-locked every pane
+      // whose CLI learned a new notification type before this list did: the /goal system
+      // shipped types this list never saw, Claude fires notifications mostly for UNFOCUSED
+      // panes, and so four background agents that had just ACHIEVED their goals latched red
+      // the moment the achieve notice landed (found live, 2026-07-15 - green check, then
+      // red, only on the panes Pedro wasn't watching). As a 'notice' the daemon holds it
+      // for BELL_CONFIRM_MS: on a pane wearing 'done' it is swallowed as that turn's own
+      // news; mid-turn with no done behind it, it still rings - a genuinely new BLOCKING
+      // type keeps surfacing, a beat later.
+      return 'notice'
   }
 }
 

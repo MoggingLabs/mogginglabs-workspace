@@ -138,10 +138,24 @@ async function trackerAsserts(): Promise<Record<string, boolean>> {
   chimeAfter.turnStart()
   chimeAfter.notify('done') // the pane goes green...
   chimeAfter.bell() // ...and THEN the completion's own chime lands. It must be swallowed.
+  // THE GOAL SHAPE (found live 2026-07-15: four agents achieved their /goal, went green, then
+  // latched red). A /goal Stop hook sits BETWEEN the agent's last done and the moment Claude
+  // truly stops, judging the condition — with an LLM, so it takes SECONDS. The completion
+  // chime (and the achieve notice, which the hook script now routes to the same bell) lands
+  // far outside any fixed grace window. STATE is the guard that cannot be outwaited: a pane
+  // wearing 'done' owns every chime that reaches it — a genuinely new block would have to
+  // start a new turn (busy) first. Injected clock: the swallow must not depend on wall time.
+  let clock = 1_000_000
+  const goalShape = new ActivityTracker(() => {}, () => clock)
+  goalShape.turnStart()
+  goalShape.notify('done')
+  clock += 30_000 // the goal hook deliberates for half a minute
+  goalShape.bell() // the achieve notice / completion chime, absurdly late
   await sleep(BELL_CONFIRM_MS + 400) // outlive the confirmation window
   const chimeWithDoneIsGreen = withDone.current() === 'done' // never red
   const chimeAloneIsRed = alone.current() === 'attention' // the only red 3 of 5 CLIs have
   const chimeAfterDoneStaysGreen = chimeAfter.current() === 'done' // NOT 'attention'
+  const lateGoalChimeSwallowed = goalShape.current() === 'done' // 30s late is still that done's chime
 
   // THE SUBMIT RULE. A stray key must never clear a red and claim the agent is working — no CLI
   // re-raises a needs-input it has already raised, so that lie has no way back.
@@ -179,6 +193,7 @@ async function trackerAsserts(): Promise<Record<string, boolean>> {
     chimeWithDoneIsGreen,
     chimeAloneIsRed,
     chimeAfterDoneStaysGreen,
+    lateGoalChimeSwallowed,
     strayHoldsRed,
     submitClearsToBusy,
     submitBytes
