@@ -112,6 +112,7 @@ import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { runMigrateSmoke } from './migrate-smoke'
 import { runNotifyHookSmoke } from './notifyhook-smoke'
 import { runDaemonCustodySmoke } from './daemoncustody-smoke'
+import { runSessionPoolSmoke } from './sessionpool-smoke'
 
 // THE DEV / TEST ENTRY: the production boot (boot.ts — the SAME one src/main/index.ts runs) plus
 // the env-gated smoke + gallery harness hooked into it.
@@ -149,7 +150,7 @@ function installSshShim(): void {
 // — and an isolated userData must not register the OS-global deep-link scheme in any case.
 const SMOKE_ENV: readonly string[] = [
   'MOGGING_USERDATA', 'MOGGING_GATES', 'MOGGING_GALLERY', // isolation + sweep markers, set by every gate
-  'MOGGING_SURVIVE', 'MOGGING_MIGRATE', 'MOGGING_NOTIFYHOOK', 'MOGGING_DAEMONCUSTODY', 'MOGGING_INTEG', 'MOGGING_TOOLPLAN',
+  'MOGGING_SURVIVE', 'MOGGING_MIGRATE', 'MOGGING_NOTIFYHOOK', 'MOGGING_DAEMONCUSTODY', 'MOGGING_SESSIONPOOL', 'MOGGING_INTEG', 'MOGGING_TOOLPLAN',
   'MOGGING_EVBRIDGE', 'MOGGING_MCPSTATUS', 'MOGGING_MCPLOOP', 'MOGGING_AGENT', 'MOGGING_STATE', 'MOGGING_RELOAD',
   'MOGGING_SMOKE', 'MOGGING_SHOT', 'MOGGING_MULTIPANE', 'MOGGING_WORKSPACE', 'MOGGING_AGENTLAUNCH',
   'MOGGING_TEMPLATE', 'MOGGING_PROFPERSIST', 'MOGGING_BROWSER', 'MOGGING_BROWSERCTL', 'MOGGING_BROWSERRACE', 'MOGGING_BROWSERZERO', 'MOGGING_FIRSTRUN',
@@ -204,6 +205,13 @@ async function beforeAppSettings(): Promise<boolean> {
   // before startDaemonBackend — it owns its own daemons (isolated LOCALAPPDATA) start to grave.
   if (process.env.MOGGING_DAEMONCUSTODY) {
     await runDaemonCustodySmoke()
+    return true
+  }
+
+  // Windowless session-pool smoke: sessions follow profiles (ADR 0013) on fixture homes —
+  // newer-wins, memory/secrets stay home, dated codex paths, uuid-only resume ids.
+  if (process.env.MOGGING_SESSIONPOOL) {
+    await runSessionPoolSmoke()
     return true
   }
 
