@@ -15,6 +15,7 @@ import { getBridge } from '../../core/ipc/bridge'
 import { TEMPLATE_COUNTS, TEMPLATES } from '../layout'
 import { Button, IconButton, createLayoutGridPicker, el, icon, showToast } from '../../components'
 import { WorkspaceController, type CreateOpts } from './controller'
+import { resolveColors } from './model'
 import { workspaceClient } from './workspace.client'
 import { DEFAULT_THEME_ID } from '../../core/theme/themes'
 import { setTheme, currentThemeId, onThemeChange } from '../../core/theme/theme-state'
@@ -703,11 +704,20 @@ export const workspaceFeature: UiFeature = {
       recents = state?.recents ?? []
       if (state && state.workspaces.length) {
         const activeId = state.activeId
-        for (const w of state.workspaces) {
+        // The identity color was always SAVED and never read back — `create` re-derived it
+        // from the ordinal, so the column was write-only and the color really belonged to the
+        // SLOT, not the workspace. Reading it back is what lets a workspace keep its color for
+        // life. Settled for the whole set at once, before any workspace is built: a claim that
+        // has to be re-allocated (a retired hex, or the second of a duplicate pair the old
+        // derivation wrote) must not be able to walk up and evict a color a LATER workspace
+        // legitimately owns. See `resolveColors`.
+        const colors = resolveColors(state.workspaces.map((w) => w.color))
+        state.workspaces.forEach((w, i) => {
           controller.create({
             id: w.id,
             name: w.name,
             cwd: w.cwd,
+            color: colors[i],
             ordinal: w.ordinal,
             paneCount: w.paneCount,
             activate: false,
@@ -718,7 +728,7 @@ export const workspaceFeature: UiFeature = {
             profileIds: w.profileIds, // lineups relaunch under the CHOSEN profile (6/04)
             layout: w.layout // the exact split arrangement + sizes come back
           })
-        }
+        })
         // 06b: re-launch each template workspace's lineup (each CLI self-auths on resume).
         for (const w of state.workspaces) {
           if (w.assignments) controller.launchLineup(w.id, true)

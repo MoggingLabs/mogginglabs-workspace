@@ -30,6 +30,24 @@ function terminalFrom(chrome: Record<string, string>, cursor: string): ITheme {
   }
 }
 
+/**
+ * `--ws-ink-mix` — how much of a workspace's identity accent survives into its ink.
+ *
+ * The rail paints identity ink ON an identity tint: same hue above and below, so the only
+ * contrast is lightness, and the tint drags the background TOWARD the ink. How far it drags
+ * depends on the theme's own surface — which is why "dark" is not one answer. Midnight's
+ * rail sits on #15171c and a vivid accent clears AA on it outright; Nord's sits on #353c4a,
+ * where violet measured 2.9:1 (and 4.0:1 even on the BARE surface). A theme with a light
+ * "dark" surface has to pull its ink away from the accent to stay legible.
+ *
+ * So each theme states how much accent its own surfaces can carry, and `--ws-ink` mixes the
+ * rest of the way toward that theme's `--text-hi` — up on dark, down on light. This is the
+ * ramp's existing light-mode trick ("vividness lives in accent/tint/glow, readability in
+ * ink/edge"), generalized from one mode to every theme. Solved, not guessed: these are the
+ * LARGEST values (= most vivid ink) that hold 4.5:1 on every surface the rail paints ink on,
+ * for all 12 identity colors. The accent itself never moves — bars, borders, tints and glows
+ * stay as vivid as they ever were.
+ */
 const MIDNIGHT_CHROME: Record<string, string> = {
   '--bg-app': '#0c0d0f',
   '--bg-surface': '#15171c',
@@ -39,7 +57,8 @@ const MIDNIGHT_CHROME: Record<string, string> = {
   '--border-strong': '#3b3f48',
   '--text-hi': '#f4f5f7',
   '--text-mid': '#a9aeb6',
-  '--text-lo': '#868d97'
+  '--text-lo': '#868d97',
+  '--ws-ink-mix': '100%' // the accent IS the ink — midnight's surfaces carry it whole
 }
 
 const LIGHT_CHROME: Record<string, string> = {
@@ -69,6 +88,14 @@ const LIGHT_CHROME: Record<string, string> = {
   '--danger-ink': '#c02820',
   '--warning': '#8a5c09',
   '--info': '#1d63d8',
+  // The semantic fills above DARKENED for light, so text on them must lighten: white reads
+  // 5.4:1 on both, where the dark theme's #201200 measured 3.4:1. The rail's alert counts are
+  // the only text-on-semantic-fill in the app, and they were unreadable here.
+  '--semantic-contrast': '#ffffff',
+  // Identity ink darkens toward --text-hi on light (was a flat 54% toward pure black, which
+  // missed the icon CHIP: --bg-inset #e7eaef is darker than the white the ramp was measured
+  // on, and lime's ink read 4.25:1 there).
+  '--ws-ink-mix': '46%',
   '--shadow-1': '0 1px 2px rgba(21, 23, 27, 0.08)',
   '--shadow-2': '0 8px 24px rgba(21, 23, 27, 0.12)',
   '--shadow-3': '0 24px 64px rgba(21, 23, 27, 0.18)'
@@ -109,7 +136,11 @@ export const THEMES: AppTheme[] = [
       '--border-strong': '#4c566a',
       '--text-hi': '#eceff4',
       '--text-mid': '#c3cad6',
-      '--text-lo': '#a6aebf' // ≥4.5:1 on nord elevated (#8b93a5 was 3.3:1)
+      '--text-lo': '#a6aebf', // ≥4.5:1 on nord elevated (#8b93a5 was 3.3:1)
+      // Nord's rail sits on #353c4a — the lightest "dark" surface in the app. A vivid accent
+      // is not text-grade on it (violet: 4.0:1 bare, 2.9:1 on the selected chip), so the ink
+      // gives up a third of its accent to --text-hi. 68% is the most it can keep.
+      '--ws-ink-mix': '68%'
     },
     terminal: terminalFrom(
       {
@@ -131,8 +162,13 @@ export const THEMES: AppTheme[] = [
       '--border': '#0e4a59',
       '--border-strong': '#1a5e6e',
       '--text-hi': '#eee8d5',
-      '--text-mid': '#a3b1b1',
-      '--text-lo': '#93abab' // ≥4.5:1 on solarized elevated (#758a8a was 3.1:1)
+      // Was #a3b1b1 — the weakest --text-mid of the four themes (5.87:1 on its own rail).
+      // Neutral text that RIDES an identity tint has less than that: the selected tab's pane
+      // count measured 4.44:1 under a bright cyan wash. Lifted to 6.94:1 bare / 5.26:1 tinted,
+      // the same AA-over-fidelity call --text-lo below already made for this theme.
+      '--text-mid': '#b3c0c0',
+      '--text-lo': '#93abab', // ≥4.5:1 on solarized elevated (#758a8a was 3.1:1)
+      '--ws-ink-mix': '86%' // deeper surface than nord's, so the ink keeps more of its accent
     },
     terminal: terminalFrom(
       {

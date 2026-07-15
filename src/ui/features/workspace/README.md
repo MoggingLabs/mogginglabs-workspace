@@ -5,7 +5,12 @@ layout (from 04). New / close / switch (`Ctrl/Cmd+T`, `Ctrl/Cmd+1..9`), a theme 
 restore-on-relaunch.
 
 - `model.ts` — `WorkspaceMeta` (id, name, color, cwd, ordinal, paneCount). `ordinal * 100` is
-  the base pane id, so a workspace's pane ids are unique + stable across restarts.
+  the base pane id, so a workspace's pane ids are unique + stable across restarts. The
+  identity **color** is allocated (`nextColor` → the first of the 12 no LIVE workspace wears)
+  and then persisted, so it belongs to the workspace, not to its slot. It was derived from
+  `ordinal % 8`, and ordinals only climb — which handed the same color to two open
+  workspaces. `resolveColors` re-settles a restored set, repairing duplicates and retired
+  hexes already on disk.
 - `controller.ts` — `WorkspaceController`: one tab + container + `GridLayout` per workspace.
   Switching is show/hide (panes keep streaming); closing disposes a layout (clears its slots).
 - `themes.ts` — the theme set (chrome CSS vars + xterm theme); `applyTheme` broadcasts the

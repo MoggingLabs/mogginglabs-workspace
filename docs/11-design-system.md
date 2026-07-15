@@ -118,19 +118,69 @@ white — the review diff, "not found on PATH" pills and settings errors were wa
 
 ## Workspace identity — the ramp
 
-`WORKSPACE_COLORS` (`src/ui/features/workspace/model.ts`) assigns one vivid identity
-color per workspace ordinal. The rail controller stamps it inline as `--ws-accent` on
-the `.workspace-tab` (the ONE sanctioned inline style); `global.css` derives the ramp
-per theme via `color-mix` — consumers use ONLY the ramp stops:
+`WORKSPACE_COLORS` (`src/ui/features/workspace/model.ts`) holds one vivid identity color
+per workspace. The rail controller stamps it inline as `--ws-accent` on the
+`.workspace-tab` (the ONE sanctioned inline style); `global.css` derives the ramp per
+theme via `color-mix` — consumers use ONLY the ramp stops:
 
 | Stop | Derivation (dark) | Derivation (light) | Use |
 |---|---|---|---|
 | `--ws-accent` | the raw identity color | (same — washes/fills only) | vivid stop |
-| `--ws-ink` | `= accent` | `color-mix(in srgb, accent 54%, black)` | text/icon-grade |
+| `--ws-ink` | `color-mix(accent var(--ws-ink-mix), var(--text-hi))` — **per theme**, see below | (same formula) | text/icon-grade |
 | `--ws-tint` | `color-mix(accent 12%, transparent)` | (same) | surface wash |
 | `--ws-tint-hover` | `color-mix(accent 6%, transparent)` | (same) | hover whisper |
 | `--ws-edge` | `= accent` | `= ink` | border-weight stop |
 | `--ws-glow` | `color-mix(accent 42%, transparent)` | (same) | soft outer halo |
+
+### The ink is per THEME, not per mode
+
+`--ws-ink` used to ask one question — is this theme light or dark? — and dark themes all got
+the same answer: *the ink is the accent*. That answer was measured on midnight and is only
+true there. **"Dark" is not one surface.** The rail sits on `--bg-surface`, and midnight's is
+`#15171c` while nord's is `#353c4a`; identity ink is painted ON an identity tint, so the
+ground is dragged toward the ink and contrast is lightness alone. On nord, violet measured
+**2.9:1** on the selected chip — and 4.0:1 on the *bare* rail, before any tint. Nord and
+solarized had inherited midnight's answer, and **40 identity/surface pairs sat under AA**.
+
+So each theme now states how much of the accent its own surfaces can carry (`--ws-ink-mix`,
+in `themes.ts`) and the ink mixes the rest of the way toward that theme's `--text-hi` — up on
+dark, down on light. This is the ramp's own stated philosophy ("vividness lives in the
+accent/tint/glow stops; readability lives in ink/edge"), generalized from one mode to every
+theme. **The accent never moves**: bars, borders, tints and glows stay exactly as vivid as
+they were. Only the ink — the small glyph and the selected label — gives ground, and only
+where its theme forces it to.
+
+The percentages are **solved, not chosen**: the largest value (= the most vivid ink) that
+holds 4.5:1 across all 12 identity colors on every ground the rail inks.
+
+| Theme | `--ws-ink-mix` | worst identity contrast (any color, any ground) |
+|---|---|---|
+| midnight | `100%` — the accent IS the ink | 5.5 |
+| solarized | `86%` | 4.5 |
+| nord | `68%` — the lightest "dark" surface in the app | 4.5 |
+| light | `46%` (was a flat 54% toward pure *black*) | 4.5 |
+
+Two surfaces had to give way for those numbers to be reachable at all:
+
+- **The selected chip stopped stacking a second wash.** `.active .ws-icon` painted `--ws-tint`
+  over a tab already painted `--ws-tint` — 22.6% of the accent directly under ink of the same
+  hue. It was the tightest surface in the rail, it bought almost nothing (a 22.6% wash barely
+  steps off a 12% one), and it cost the most exactly where the ink could least afford it. The
+  chip is now `transparent` on the selected row: it stops being a well and joins the row.
+  Dropping it is what lets nord keep 68% of its accent instead of 51%, and solarized 86%
+  instead of 65%.
+- **The selection bar reads `--ws-edge`, not `--ws-accent`.** On light, a vivid accent on a
+  near-white row measured **1.5–2.4:1** — the loudest mark of the selected state was
+  invisible in one of the four themes. The edge stop is precisely the "as vivid as this
+  theme's ground allows" answer, and it is what the outline beside it already used. On dark
+  the two are the same value, so nothing moves.
+
+Gated by **CHROMEUX (m)**: all 12 colors × 4 themes × both grounds (the `--bg-inset` chip at
+rest, and the 12% identity wash when lit), measured through `aa-probe.ts`. Worst measured
+**4.51:1**. It is probed *by ordinal* — (g) already probed `.ws-label`, and that is exactly
+why this hid for so long: `querySelector` takes the first match, the first tab is teal, and
+teal is one of the few identity colors that passed. The bug was never in the selector; it was
+in *which color the selector happened to land on*.
 
 ### Rail selection spec (Phase-5/02)
 
@@ -142,9 +192,20 @@ the rail. States, quiet → loud (all ramp stops — no per-feature color):
 | rest | neutral `--text-mid` label, identity only on the icon glyph (`--ws-ink` on a `--bg-inset` chip) |
 | hover | `--ws-tint-hover` wash (6% identity whisper) |
 | press | full `--ws-tint` |
-| **selected** | `--ws-tint` across the button + 1px `--ws-edge` outline + **4px vivid selection bar** (`::before` overlay in `--ws-accent`, pill ends, spanning only the STRAIGHT run of the left edge — vertical insets = the corner radius — floating 1px off the outline; zero layout shift, geometry-probed) + label/icon in `--ws-ink` (paint-only: no weight flip — switch is on the perception hot path) |
+| **working** | agents running, background tabs only: the CHIP lights in the tab's own ramp (`--ws-tint` fill + 1px inset `--ws-edge`). Quiet, static, and identity-only — see the glyph rule below |
+| **selected** | `--ws-tint` across the button + 1px `--ws-edge` outline + **4px selection bar** (`::before` overlay in `--ws-edge`, pill ends, spanning only the STRAIGHT run of the left edge — vertical insets = the corner radius — floating 1px off the outline; zero layout shift, geometry-probed) + label/icon in `--ws-ink`. The chip goes `transparent` here — it joins the row's wash rather than stacking a second one over it (see the ink section: that stack was the rail's tightest surface) |
 | focus-visible | the global 2px brand focus ring (interaction ≠ selection) |
 | drag | 0.55 ghost opacity |
+
+**The glyph is the identity, and no state may repaint it.** At rest it is the only thing
+carrying the workspace's color — the row itself is neutral until hover or selection — so a
+rule that sets `.ws-icon { color: … }` to anything but `--ws-ink` does not add a state, it
+*deletes the workspace's identity and substitutes its own*. One did: `.is-working` painted
+the glyph `--success`, which (a) desynced a busy background workspace's icon from the color
+its own row lights up in — teal tab, green icon; (b) turned EVERY busy workspace the same
+green, so the rail lost identity exactly when several agents were running; and (c) spent
+green, which the verdict law reserves for *finished*. States decorate the chip. The glyph
+stays `--ws-ink`.
 
 **Attention stays brand orange** — it means "needs you", never "which one is active".
 The latched ring is a soft outer glow (`0 0 0 1px --accent-glow, 0 0 14px --accent-glow`
@@ -152,32 +213,69 @@ The latched ring is a soft outer glow (`0 0 0 1px --accent-glow, 0 0 14px --acce
 active workspace never rings (Phase-2 semantics, smoke-asserted) but its live
 `.ws-attn` badge still shows; a combined rule keeps bar-inside/glow-outside readable
 if both states ever co-occur. Label overflow fades via an alpha `mask-image` instead
-of "…". Contrast: selected label ink on its own tint wash ≥4.8:1 light / ≥5.5:1 dark
-for all 8 identities (measured in the table above). The `no-layout-shift` guarantee
+of "…". Contrast: every identity ink holds **≥4.5:1** on both grounds the rail paints it on,
+in all 12 colors × all 4 themes — worst 4.51:1, gated by CHROMEUX (m). (The old claim here
+read "≥4.8:1 light / ≥5.5:1 dark for all 8 identities", and it was measured on midnight and
+white only; nord's violet was 2.9:1 the whole time.) The `no-layout-shift` guarantee
 is asserted by `out/gallery/probe-rail.json` (tab width + icon x equal, selected vs
 not, within 0.5px).
 
-### The 8 identity colors — measured
+### The 12 identity colors — measured
 
 Recalibrated in 01: **amber `#fbbf24` → green `#4ade80`** (amber sat 12° from brand
 orange — with 7+ workspaces open the two were indistinguishable at rail-icon size)
 and **lime `#a3e635` → `#9bdf2f`** (so its light ink stop clears 4.5 on the tint
-wash). Adjacent ordinals now differ by ≥49° of hue.
+wash).
 
-| # | Name | `--ws-accent` | accent on dark app | accent on dark tint-wash | light `--ws-ink` | ink on white | ink on light tint-wash |
-|---|---|---|---|---|---|---|---|
-| 1 | teal | `#2dd4bf` | 10.4 | 7.7 | `#187267` | 5.8 | 5.2 |
-| 2 | violet | `#a78bfa` | 7.1 | 5.5 | `#5a4b87` | 7.5 | 6.6 |
-| 3 | sky | `#38bdf8` | 9.1 | 6.8 | `#1e6686` | 6.4 | 5.7 |
-| 4 | rose | `#fb7185` | 7.2 | 5.6 | `#883d48` | 7.5 | 6.5 |
-| 5 | lime | `#9bdf2f` | 12.0 | 8.6 | `#547819` | 5.2 | 4.8 |
-| 6 | magenta | `#e879f9` | 7.9 | 6.1 | `#7d4186` | 7.1 | 6.2 |
-| 7 | green | `#4ade80` | 11.2 | 8.1 | `#287845` | 5.4 | 4.9 |
-| 8 | brand | `#fd8d03` | 8.3 | 6.4 | `#894c02` | 6.8 | 6.0 |
+**Assigned by allocation, not by ordinal.** `nextColor(taken)` hands a new workspace the
+first color no LIVE workspace is wearing, and the choice is then persisted and restored, so
+a workspace keeps its color for life. It used to be `WORKSPACE_COLORS[ordinal % 8]` — and
+the ordinal is a pane-id anchor, so it only ever climbs and is never recycled. Open a few
+workspaces, close a few, and the counter walks past 8 and starts re-issuing colors that are
+already on screen; ordinals 0 and 8 are both teal, so **two** open workspaces were enough to
+collide. (A real store had brand orange twice.) Allocating against the live set makes that
+unrepresentable while the palette holds.
 
-Every dark accent ≥7:1 (text-grade with margin); every light ink ≥4.5:1 on white AND
-on its own 12% tint wash. Vividness lives in the accent/tint/glow stops; light theme
-readability lives in ink/edge — neither sacrifices the other.
+Which makes the palette's SIZE the number of workspaces that can be open at once and all
+look different — so it grew to twelve. The four additions sit in the four widest gaps of the
+existing hue wheel and hold the same **22.4° minimum separation the original eight already
+had** (lime/green). Sixteen was measured and rejected: it could only be bought by halving
+that separation, and the extra hues landed on brand orange, which is spoken for. Past twelve
+reuse is forced — `nextColor` then returns the least-worn color, so overflow spreads instead
+of piling onto one hue.
+
+The accent is the identity and never changes. The **ink** is what each theme can carry of it
+(`--ws-ink-mix`, above) — so it is listed per theme, and the last column is the worst contrast
+that color reaches anywhere: any theme, either ground.
+
+| # | Name | `--ws-accent` | accent on dark app | midnight ink | light ink | nord ink | solarized ink | worst AA |
+|---|---|---|---|---|---|---|---|---|
+| 1 | teal | `#2dd4bf` | 10.4 | `#2dd4bf` | `#206e66` | `#6addd0` | `#48d7c2` | 5.0 |
+| 2 | violet | `#a78bfa` | 7.1 | `#a78bfa` | `#584c82` | `#bdabf8` | `#b198f5` | 4.5 |
+| 3 | sky | `#38bdf8` | 9.1 | `#38bdf8` | `#256381` | `#72cdf7` | `#51c3f3` | 5.0 |
+| 4 | rose | `#fb7185` | 7.2 | `#fb7185` | `#7f404c` | `#f699a9` | `#f98290` | 4.5 |
+| 5 | lime | `#9bdf2f` | 12.0 | `#9bdf2f` | `#537324` | `#b5e46e` | `#a7e046` | 4.5 |
+| 6 | magenta | `#e879f9` | 7.9 | `#e879f9` | `#764481` | `#e99ff7` | `#e989f4` | 4.7 |
+| 7 | green | `#4ade80` | 11.2 | `#4ade80` | `#2d7349` | `#7ee3a5` | `#61df8c` | 4.8 |
+| 8 | brand | `#fd8d03` | 8.3 | `#fd8d03` | `#804d10` | `#f8ac50` | `#fb9a20` | 4.9 |
+| 9 | cyan | `#1fdef2` | 11.8 | `#1fdef2` | `#1a737e` | `#61e3f3` | `#3cdfee` | 4.6 |
+| 10 | cornflower | `#71a0fe` | 7.6 | `#71a0fe` | `#3f5683` | `#98b9fb` | `#83aaf8` | 4.6 |
+| 11 | yellow | `#e2c456` | 11.4 | `#e2c456` | `#736736` | `#e5d289` | `#e4c968` | 4.7 |
+| 12 | pink | `#ff99cf` | 9.9 | `#ff99cf` | `#81536e` | `#f9b5db` | `#fda4d0` | 5.1 |
+
+Every accent is ≥7:1 on the dark app (text-grade with margin, and it is what the bars, edges,
+tints and glows are drawn from). Every **ink** is ≥4.5:1 in its own theme on both grounds the
+rail paints it on — the opaque `--bg-inset` chip at rest, and the 12% identity wash when the
+tab is selected or working. Vividness lives in the accent/tint/glow stops; readability lives
+in ink/edge — neither sacrifices the other. Worst measured anywhere: **4.51:1** (solarized
+violet, lit). The four additions were computed against the same law and clear it outright.
+
+**A restore repairs the rail.** Both failures the old derivation could write are already on
+disk — outright duplicates, and hexes from palettes since retired (`#b5d21b`). `resolveColors`
+settles the whole restored set in two passes: every workspace with a good claim (still one of
+ours, nobody ahead of it wearing it) keeps its color first, and only then is anything
+allocated — so a claim that must be re-colored can never evict a color a later workspace
+legitimately owns. Only the broken claims move.
 
 ## Scales (as they actually are)
 

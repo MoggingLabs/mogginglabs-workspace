@@ -14,7 +14,7 @@ import { getPaneAgentSession } from '../../core/agents/agent-session-port'
 import { activeView, setActiveView, onViewChange } from '../../core/shell/view-port'
 import { getTelemetry } from '../../core/telemetry'
 import type { TemplateWorkspaceSpec } from '../../core/workspace/open-service'
-import { type WorkspaceMeta, colorForOrdinal, newWorkspaceId } from './model'
+import { type WorkspaceMeta, isWorkspaceColor, newWorkspaceId, nextColor } from './model'
 
 /** How long to let the arrival swell land before a pane that was auto-focused-into is treated
  *  as clicked. Must outlast the 1.2s swell (and grid-layout's own 1400ms class timer), or the
@@ -49,6 +49,10 @@ export interface CreateOpts {
   id?: string
   name?: string
   cwd?: string
+  /** A RESTORED identity color. Honoured for life, but only while it is still one of ours
+   *  and no live workspace already wears it — see `claimColor`. Absent on a new workspace:
+   *  the controller allocates. */
+  color?: string
   ordinal?: number
   paneCount?: number
   activate?: boolean
@@ -217,7 +221,7 @@ export class WorkspaceController {
     const meta: WorkspaceMeta = {
       id: opts.id ?? newWorkspaceId(),
       name: opts.name ?? `Workspace ${ordinal + 1}`,
-      color: colorForOrdinal(ordinal),
+      color: this.claimColor(opts.color),
       cwd: opts.cwd ?? '',
       ordinal,
       paneCount: opts.paneCount ?? 1,
@@ -423,6 +427,26 @@ export class WorkspaceController {
     meta.remotes.forEach((remote, i) => {
       if (remote) setPaneRemote((base + i + 1) as PaneId, { ...remote, cwd: meta.paneCwds?.[i] ?? undefined })
     })
+  }
+
+  /**
+   * Settle a workspace's identity color. A restored one is kept — a workspace wears its
+   * color for life, across restarts — but it has to earn that: it must still be a color
+   * this app owns, and no LIVE workspace may already be wearing it.
+   *
+   * Both guards are load-bearing on real stores, because both failures are already ON DISK.
+   * The old `ordinal % 8` derivation wrote DUPLICATES (a real store: brand orange twice),
+   * and states older than the 5/01 recalibration carry retired hexes (`#b5d21b`). Re-
+   * allocating in those two cases is what makes the first launch after this change REPAIR
+   * the rail rather than faithfully restore the collision it was built to end.
+   *
+   * The new workspace is not in `views` yet, so `list()` is exactly the set to avoid.
+   */
+  private claimColor(restored?: string): string {
+    const taken = this.list().map((m) => m.color)
+    const want = restored?.toLowerCase()
+    if (want && isWorkspaceColor(want) && !taken.includes(want)) return want
+    return nextColor(taken)
   }
 
   /** Build one rail item. Root keeps the `.workspace-tab` class + `data-attention`

@@ -47,6 +47,17 @@
   --accent: var(--brand-500); /* fills, rings, dots */
   --accent-ink: var(--brand-400); /* orange as text/icon — AA on dark surfaces */
   --accent-contrast: #201200; /* text on an accent fill — 7.8:1 on brand, BOTH themes */
+  /* Text on a SEMANTIC fill (--danger / --success). NOT the same job as --accent-contrast,
+     and that is the whole point: brand orange is the one fill that does NOT change between
+     themes, so #201200 rides it in both. The semantic fills DO change — they darken on light
+     so they can double as ink — and dark text on a dark fill is not text. The rail's two
+     count badges were reading #201200 on them and measured 3.40:1 (.ws-attn) and 3.38:1
+     (.ws-done) in the light theme: the number that says "an agent is waiting on you" was the
+     least legible thing in the rail, in the theme where it mattered most. So this stop flips
+     with the fill it sits on — dark on the bright dark-theme fills, white on the dark light-
+     theme ones. These two badges are the only text-on-semantic-fill in the app (everything
+     else drawn on --danger/--success/--warning is a fill-only dot, gutter or gauge). */
+  --semantic-contrast: #201200; /* 5.3:1 on --danger, 8.5:1 on --success (dark themes) */
   --accent-weak: rgba(253, 141, 3, 0.13); /* hover wash / selected tint */
   --accent-glow: rgba(253, 141, 3, 0.4); /* focus + attention halo */
   /* The focused pane's inner glow. Derived from --accent (not a second literal), so a
@@ -211,6 +222,14 @@
     /* Semantic inks must darken on light to hold AA as text (all ≥4.5:1 on white). */
     --success: #147a3c;
     --danger: #c92e25;
+    /* …and BECAUSE they darkened, text ON them must lighten: 5.4:1 both, where the dark
+       theme's #201200 measured 3.4:1. themes.ts stamps this too; here for the pre-JS paint. */
+    --semantic-contrast: #ffffff;
+    /* Identity ink darkens toward --text-hi on light (themes.ts stamps 46% too). Without it
+       here the pre-JS default is 100% — a vivid accent on a near-white rail, the very AA miss
+       this fixes. The rail is JS-built so it should never paint pre-JS, but this block's whole
+       job is to not depend on that. */
+    --ws-ink-mix: 46%;
     /* themes.ts stamps this too, but the pre-JS window would otherwise paint the
        DARK ink (#fa9b92, ~2.2:1) on a light surface — worse than the bug we fixed.
        Darkened past the fill (#c92e25) so danger-as-words also clears AA on the
@@ -1403,7 +1422,20 @@ button {
    Consumers later than 01 (rail selection = 02) read ONLY the ramp stops. */
 .workspace-tab {
   --ws-accent: var(--text-lo); /* neutral until the controller stamps the identity */
-  --ws-ink: var(--ws-accent);
+  /* The ink is the accent, pulled toward the theme's OWN --text-hi by whatever that theme's
+     surfaces demand — up on dark, down on light. `--ws-ink-mix` is how much accent survives,
+     and each theme states its own (themes.ts): midnight 100% (its surfaces carry a vivid
+     accent whole), nord 68%, solarized 86%, light 46%.
+
+     One stop, every theme, because "dark" was never one surface. Identity ink is painted ON
+     an identity tint — same hue above and below, so contrast is lightness alone, and the
+     tint drags the ground toward the ink. How far it drags is the theme's business: on
+     midnight's #15171c a vivid violet clears AA; on nord's #353c4a the same violet measured
+     2.9:1 on the selected chip, and 4.0:1 on the BARE rail. The old ramp asked only whether
+     a theme was light or dark, so nord and solarized inherited midnight's answer and 40
+     identity/surface pairs sat under AA. The percentages are SOLVED — the largest (i.e. most
+     vivid) that hold 4.5:1 across all 12 colors on every surface the rail inks. */
+  --ws-ink: color-mix(in srgb, var(--ws-accent) var(--ws-ink-mix, 100%), var(--text-hi));
   --ws-tint: color-mix(in srgb, var(--ws-accent) 12%, transparent);
   --ws-tint-hover: color-mix(in srgb, var(--ws-accent) 6%, transparent);
   --ws-edge: var(--ws-accent);
@@ -1413,9 +1445,10 @@ button {
      a 42% stop over a soft blur measures ~nothing (+8 on blue, 6px in — probed). */
   --ws-glow-strong: color-mix(in srgb, var(--ws-accent) 80%, transparent);
 }
+/* On light, the border-weight stop is the ink: a vivid accent on a near-white ground is a
+   line you cannot see (teal measured 1.7:1 against the tab's own wash). */
 [data-theme-mode='light'] .workspace-tab {
-  --ws-ink: color-mix(in srgb, var(--ws-accent) 54%, black);
-  --ws-edge: color-mix(in srgb, var(--ws-accent) 54%, black);
+  --ws-edge: var(--ws-ink);
 }
 
 /* Rail item (Phase-5/02: vivid identity selection). Root keeps `.workspace-tab` +
@@ -1507,9 +1540,18 @@ button {
   height: 30px;
   border-radius: var(--r-sm);
   background: var(--bg-inset); /* quiet chip at rest — identity lives in the glyph */
+  /* THE GLYPH IS THE IDENTITY, and at rest it is the only thing carrying it: the row is
+     neutral until you hover or select it. So this declaration is the whole contract, and
+     no state below may overwrite it — a rule that repaints the glyph does not "add a
+     state", it deletes the workspace's colour and replaces it with its own. One did
+     (`.is-working` → `--success`, live for every background workspace with a busy agent),
+     which is exactly how a teal workspace came to wear a green icon. States decorate the
+     CHIP; the glyph stays --ws-ink. */
   color: var(--ws-ink);
   flex: none;
-  transition: background var(--dur-1) var(--ease);
+  transition:
+    background var(--dur-1) var(--ease),
+    box-shadow var(--dur-1) var(--ease);
 }
 .workspace-tab .ws-icon svg {
   width: 15px;
@@ -1625,13 +1667,26 @@ button {
   --bar-w: 4px; /* one knob: the radius IS the width — the ends stay true quarter-circles */
   width: var(--bar-w);
   border-radius: 0 var(--bar-w) var(--bar-w) 0;
-  background: var(--ws-accent);
+  /* The EDGE stop, not the raw accent. On dark the two are the same value, so nothing moves;
+     on light the accent is a vivid colour on a near-white row — the bar measured 1.5–2.4:1
+     against the wash it sits on, which is to say the loudest mark of the selected state was
+     invisible in one of the four themes. The edge stop is exactly the "as vivid as this
+     theme's ground allows" answer, and it is what the outline beside it already uses. */
+  background: var(--ws-edge);
 }
 .workspace-tab.active:hover {
   background: var(--ws-tint); /* selection wash wins over the hover whisper */
 }
+/* On the selected row the chip stops being a well and JOINS the row — it shows the tab's own
+   wash, rather than stacking a second one over it.
+   It used to stack (`background: var(--ws-tint)` over a tab already painted --ws-tint), and
+   that doubled wash was the single tightest surface in the whole rail: 22.6% of the accent
+   sitting directly under ink of the SAME hue. It cost the most where it could least afford
+   to — nord's violet glyph read 2.9:1 there — and it bought almost nothing, since a 22.6%
+   wash barely steps off a 12% one. Dropping it is what lets the ink stay vivid: nord keeps
+   68% of its accent instead of 51%, solarized 86% instead of 65%. */
 .workspace-tab.active .ws-icon {
-  background: var(--ws-tint); /* tint over tint — the chip steps up naturally */
+  background: transparent;
 }
 /* The selected workspace's name goes BOLD. The old rule here refused a weight flip on the
    grounds that it "reflows the label" — it does not: .ws-label is `flex: 1 1 auto` with
@@ -1670,21 +1725,35 @@ button {
    far better target for a glance than a 16px circle. */
 .ws-attn {
   background: var(--danger);
-  color: var(--accent-contrast);
+  color: var(--semantic-contrast); /* flips with the fill — see the token */
   box-shadow: 0 0 8px color-mix(in srgb, var(--danger) 45%, transparent);
 }
 .ws-done {
   background: var(--success);
-  color: var(--accent-contrast);
+  color: var(--semantic-contrast);
   box-shadow: 0 0 8px color-mix(in srgb, var(--success) 45%, transparent);
 }
 /* A quiet "my agents are running" hint (explicit direction). Deliberately NOT orange and
    deliberately not a count: work in progress wants nothing from you, and the moment it
    competes with the alert colours it has cost more than it gave. Before this, a workspace
    with three agents hard at work was indistinguishable from one that was asleep — the
-   rail showed a pane count and nothing else. */
+   rail showed a pane count and nothing else.
+
+   It said this in `--success`, ON THE GLYPH, and that was three bugs in one declaration:
+     · it repainted the one thing carrying the workspace's identity at rest, so a busy
+       background workspace's icon no longer matched the colour its own row lights up in —
+       teal tab, green icon;
+     · every busy workspace turned the SAME green, so the rail lost identity precisely when
+       several agents were running, which is the state this app exists for;
+     · and it spent green, which the verdict law reserves for FINISHED (`.ws-done`, the
+       pane's finished outline). Green meant "running" here and "done" everywhere else.
+   The hint now rides the CHIP, in the tab's own ramp: the chip lights up in the
+   workspace's colour and takes a 1px identity edge. Lit = alive, and it can only ever say
+   whose. `.is-working` is stamped on background tabs only, so it never meets `.active`
+   (which lights the chip the same way, on a row that is already fully lit). */
 .workspace-tab.is-working .ws-icon {
-  color: var(--success);
+  background: var(--ws-tint);
+  box-shadow: inset 0 0 0 1px var(--ws-edge);
 }
 @keyframes ws-attention-pulse {
   0%,

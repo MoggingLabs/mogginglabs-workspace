@@ -20,13 +20,20 @@ export interface WorkspaceMeta {
 }
 
 /**
- * Per-workspace accent colors, assigned round-robin by ordinal. Recalibrated in
- * Phase-5/01 (measured, not eyeballed — table in docs/11-design-system.md): every
- * color holds ≥7:1 on the dark app background as-is, and ≥4.5:1 on white through the
- * light theme's `--ws-ink` ramp stop (color-mix 54% toward black). Hues are spread so
- * ADJACENT ordinals never collide (min gap ≈49°; the old amber sat 12° from brand).
- * Brand orange is deliberately LAST: brand orange always means "needs you" (the
- * `.ws-attn` attention badge), so early workspaces keep their accent separable from it.
+ * The identity colors, in ALLOCATION order. Measured, not eyeballed (table in
+ * docs/11-design-system.md): every color holds ≥7:1 on the dark app background as-is,
+ * and ≥4.5:1 on white through the light theme's `--ws-ink` ramp stop (color-mix 54%
+ * toward black). Brand orange is deliberately last of the original eight: brand orange
+ * always means "needs you" (the `.ws-attn` badge), so early workspaces keep their accent
+ * separable from it.
+ *
+ * Twelve, not eight (Phase-11). The palette is what `nextColor` draws from, so its SIZE
+ * is the number of workspaces that can be open at once and all look different — eight was
+ * that ceiling, and the rail hit it. The four additions were placed in the four widest
+ * gaps of the existing hue wheel and hold the same 22.4° minimum separation the original
+ * eight already had between lime and green; going further (16) could only be bought by
+ * halving that, and the new hues landed on top of brand orange, which is spoken for.
+ * Twelve is where the wheel stops paying.
  */
 export const WORKSPACE_COLORS = [
   '#2dd4bf', // teal
@@ -36,11 +43,76 @@ export const WORKSPACE_COLORS = [
   '#9bdf2f', // lime
   '#e879f9', // magenta
   '#4ade80', // green (replaced amber — 12° from brand, indistinguishable at a glance)
-  '#fd8d03' // brand orange
+  '#fd8d03', // brand orange
+  '#1fdef2', // cyan
+  '#71a0fe', // cornflower
+  '#e2c456', // yellow
+  '#ff99cf' // pink
 ]
 
-export function colorForOrdinal(ordinal: number): string {
-  return WORKSPACE_COLORS[ordinal % WORKSPACE_COLORS.length]
+/**
+ * The color a NEW workspace takes: the first one no LIVE workspace is wearing.
+ *
+ * This used to be `WORKSPACE_COLORS[ordinal % 8]`, and that is a promise the ordinal
+ * cannot keep. Ordinals are pane-id anchors, so they only ever climb (`nextOrdinal =
+ * max(next, ordinal + 1)`) and are never recycled — close a few workspaces, open a few
+ * more, and the counter walks past 8 and starts handing out colors that are already on
+ * screen. It does not take nine workspaces to see it: ordinals 0 and 8 are both teal, so
+ * TWO open workspaces are enough. A real store had brand orange twice.
+ *
+ * Allocating against the live set instead makes a collision unrepresentable while the
+ * palette holds. Past twelve there is no honest answer left — reuse is forced — so spread
+ * it: hand back the LEAST-worn color rather than piling every overflow onto the same hue.
+ */
+export function nextColor(taken: Iterable<string>): string {
+  const worn = new Map<string, number>()
+  for (const c of taken) {
+    const key = c.toLowerCase()
+    worn.set(key, (worn.get(key) ?? 0) + 1)
+  }
+  const free = WORKSPACE_COLORS.find((c) => !worn.has(c))
+  if (free) return free
+  return WORKSPACE_COLORS.reduce((best, c) => ((worn.get(c) ?? 0) < (worn.get(best) ?? 0) ? c : best))
+}
+
+/** Is this one of ours? Guards the RESTORE path: states written before this palette carry
+ *  retired hexes (the pre-01 lime `#b5d21b`), and a workspace may not keep a color the
+ *  app no longer owns. */
+export function isWorkspaceColor(color: string | undefined): boolean {
+  return !!color && WORKSPACE_COLORS.includes(color.toLowerCase())
+}
+
+/**
+ * Settle the colors for a WHOLE restored set at once, in persisted order.
+ *
+ * Two passes, and the order is the point. Workspaces with a good claim — one of ours, and
+ * nobody ahead of them wearing it — are settled FIRST; only then is anything allocated.
+ * One pass would let a workspace that has to be re-colored anyway (retired hex, or the
+ * second of a duplicate pair) walk up and take a color that a later workspace legitimately
+ * owns, evicting it — repairing one collision by causing another rename. On the real store
+ * that is the difference between two workspaces changing color and one.
+ *
+ * A workspace with a valid, unclaimed color therefore ALWAYS keeps it. It wears it for
+ * life; only the broken claims move.
+ */
+export function resolveColors(restored: (string | undefined)[]): string[] {
+  const settled: (string | null)[] = restored.map(() => null)
+  const taken: string[] = []
+
+  restored.forEach((color, i) => {
+    const want = color?.toLowerCase()
+    if (want && isWorkspaceColor(want) && !taken.includes(want)) {
+      settled[i] = want
+      taken.push(want)
+    }
+  })
+  settled.forEach((color, i) => {
+    if (color) return
+    const fresh = nextColor(taken)
+    settled[i] = fresh
+    taken.push(fresh)
+  })
+  return settled as string[]
 }
 
 /** Unique id for a new workspace (renderer is a secure context, so randomUUID exists). */
