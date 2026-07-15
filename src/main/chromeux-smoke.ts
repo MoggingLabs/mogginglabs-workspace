@@ -42,7 +42,11 @@ function scanChromeRadii(): { ok: boolean; violations: string[]; error?: string 
 }
 
 export function runChromeUxSmoke(win: BrowserWindow): void {
-  setTimeout(() => app.exit(1), 200000) // safety net
+  // Safety net: exit if a stage wedges. Raised 200s -> 300s when the identity-AA sweep (m)
+  // landed — it creates a full 12-workspace roster and probes every colour across four themes
+  // twice, which is real work the old ceiling did not budget for. Still a hang-catcher, not a
+  // deadline the happy path approaches: a clean run emits and exits near 230s.
+  setTimeout(() => app.exit(1), 300000)
   const wc = win.webContents
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -940,13 +944,123 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
       l.ok = Boolean(l.ok && lWide.ok)
       l.wide16 = lWide
 
+      // ── (m): the workspace IDENTITY holds AA — every colour, every state, every theme.
+      //    (g) already probed `.ws-label`, and that is exactly why this was missed for so
+      //    long: querySelector takes the FIRST match, the first tab is teal, and teal is one
+      //    of the few identity colours that passed. The failure was never in the selector —
+      //    it was in WHICH colour the selector happened to land on. Violet, rose and magenta
+      //    were 2.9–3.8:1 on nord and nobody was looking.
+      //    So the roster is probed BY ORDINAL — all 12 colours — on both grounds the rail inks
+      //    ink onto, plus the two alert badges (text on a semantic fill, the only such text in
+      //    the app). Two DOM states, two theme sweeps — theme-switching is the cost, so the
+      //    count is kept to the minimum that still covers both grounds:
+      //      REST — 12 idle tabs, glyph on the opaque --bg-inset chip; + the active tab's label
+      //             on its tint; + tab 2/3 driven to attention/done for the two badges (those
+      //             states are NOT `working`, so their glyphs stay on the rest ground too).
+      //      LIT  — every background tab `busy` -> `.is-working`, so 12 glyphs on the 12%
+      //             identity wash (the same ground the SELECTED tab paints, now the chips no
+      //             longer stack). A latched alert would suppress `.is-working`, so the setup
+      //             visits every workspace first to disarm the latches.
+      //    Teal (tab 1) is the one active tab in REST, so it is measured on tint there, not
+      //    inset — it is the strongest identity (7.7:1 on inset) and never the binding case.
+      stage = 'm-ws-identity-aa'
+      console.log('[chromeux] (m) identity AA — setup')
+      const wsIcons: string[] = []
+      for (let n = 1; n <= 12; n++) wsIcons.push(`#workspace-tabs .workspace-tab:nth-of-type(${n}) .ws-icon`)
+      const activeLabel = '#workspace-tabs .workspace-tab.active .ws-label'
+      const attnSel = '#workspace-tabs .workspace-tab:nth-of-type(2) .ws-attn'
+      const doneSel = '#workspace-tabs .workspace-tab:nth-of-type(3) .ws-done'
+
+      const setup = await ES<{ tabs: number; attn: boolean; done: boolean }>(`(async () => {
+        const m = window.__mogging
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+        for (let n = m.workspace.count(); n < 12; n++) m.workspace.create({ name: 'AA ' + (n + 1), activate: false })
+        await sleep(600)
+        const list = m.workspace.list()
+        // Quiet every pane, then VISIT each workspace: focusing is the only thing that disarms a
+        // latched alert, and a latched tab rings instead of ever showing the working chip.
+        for (const w of list) m.attention.setPaneState(w.ordinal * 100 + 1, 'idle')
+        for (let i = 0; i < list.length; i++) { m.workspace.switchByIndex(i); await sleep(50) }
+        m.workspace.switchByIndex(0)
+        // The two badges, on background tabs (attention/done are NOT working — the glyphs stay
+        // on the rest ground, so this costs the rest sweep no coverage).
+        m.attention.setPaneState(list[1].ordinal * 100 + 1, 'attention') // -> .ws-attn on tab 2
+        m.attention.setPaneState(list[2].ordinal * 100 + 1, 'done') // -> .ws-done on tab 3
+        await sleep(500)
+        const vis = (s) => { const el = document.querySelector(s); return !!el && !el.hidden && el.getBoundingClientRect().width > 0 }
+        return { tabs: m.workspace.count(), attn: vis(${JSON.stringify(attnSel)}), done: vis(${JSON.stringify(doneSel)}) }
+      })()`)
+      await sleep(300)
+
+      console.log('[chromeux] (m) sweep 1/2 — rest glyphs + active label + badges')
+      const mRest = await probeContrastAcrossThemes({ es: ES, sleep, selectors: [...wsIcons, activeLabel, attnSel, doneSel] })
+
+      console.log('[chromeux] (m) sweep 2/2 — working/lit glyphs')
+      const working = await ES<number>(`(async () => {
+        const m = window.__mogging
+        const list = m.workspace.list()
+        // Every background tab to busy -> .is-working -> glyph on the --ws-tint wash. A couple
+        // sit the state out (base-smoke workspaces on special panes — see the >= 8 floor below),
+        // but their glyphs are still measured on the rest ground and still pass.
+        for (let i = 1; i < list.length; i++) m.attention.setPaneState(list[i].ordinal * 100 + 1, 'busy')
+        await new Promise(r => setTimeout(r, 500))
+        return document.querySelectorAll('#workspace-tabs .workspace-tab.is-working').length
+      })()`)
+      const mLit = await probeContrastAcrossThemes({ es: ES, sleep, selectors: [...wsIcons, activeLabel] })
+      console.log(`[chromeux] (m) done — worst rest ${mRest.worst}, worst lit ${mLit.worst}`)
+
+      const mFail = [...mRest.failures, ...mLit.failures]
+      const mMissing = [...new Set([...mRest.missing, ...mLit.missing])]
+      const m = {
+        ok:
+          mFail.length === 0 && // THE verdict: zero identity/badge inks below AA, any theme
+          mMissing.length === 0 && // and every selector was actually found + measured
+          setup.tabs === 12 &&
+          // A liveness floor, not an exact count: the lit chip must have rendered on enough
+          // background tabs that the tint ground is broadly measured. NOT `=== 11` — the base
+          // smoke (stages a–l) leaves a couple of workspaces on special panes (a remote
+          // `chromeux-host` fixture, a failed spawn) that never enter `.is-working` when set
+          // busy. Their glyphs still render in --ws-ink and are still measured + pass (that is
+          // why `failures` stays NONE); they simply sit out the working STATE. Nine of eleven
+          // is the steady figure; the floor leaves margin without pretending to an exactness
+          // the shared roster cannot promise.
+          working >= 8 &&
+          setup.attn &&
+          setup.done, // a badge that never showed is a badge that was never measured
+        failures: mFail,
+        missing: mMissing,
+        tabs: setup.tabs,
+        workingTabs: working,
+        badgesShown: { attn: setup.attn, done: setup.done },
+        worstRest: mRest.worst,
+        worstLit: mLit.worst,
+        rest: mRest.contrast,
+        lit: mLit.contrast
+      }
+      // (m) writes its OWN verdict the instant it settles, not only into the combined result at
+      // the very end. The identity-AA check is self-contained — it does not depend on stages
+      // a–l — but the combined `emit` only fires after ALL of them, so under load a hang in an
+      // unrelated late stage would take this verdict down with it and leave the AA question
+      // unanswered. A dedicated file means the answer survives regardless. Best-effort.
+      try {
+        writeFileSync(join(app.getAppPath(), 'out', 'chromeux-identity-aa.json'), JSON.stringify(m, null, 2))
+      } catch {
+        /* best effort */
+      }
+      await ES(`(() => {
+        const m = window.__mogging
+        for (const w of m.workspace.list()) m.attention.setPaneState(w.ordinal * 100 + 1, 'idle')
+        return true
+      })()`)
+
       const pass = Boolean(
-        a.ok && a2.ok && b.ok && c.ok && d.ok && e.ok && f.ok && g.ok && h.ok && i.ok && j.ok && k.ok && l.ok
+        a.ok && a2.ok && b.ok && c.ok && d.ok && e.ok && f.ok && g.ok && h.ok && i.ok && j.ok && k.ok && l.ok && m.ok
       )
-      result = { pass, a, a2, b, c, d, e, f, g, h, i, j, k, l }
+      result = { pass, a, a2, b, c, d, e, f, g, h, i, j, k, l, m }
     } catch (err) {
       result = { pass: false, stage, error: String(err) }
     }
+    console.log(`[chromeux] emitting verdict: pass=${result.pass}${result.stage ? ` (died at ${result.stage})` : ''}`)
     emit(result)
     app.exit(result.pass ? 0 : 1)
   }
