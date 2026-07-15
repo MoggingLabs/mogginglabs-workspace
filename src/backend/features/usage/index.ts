@@ -6,7 +6,7 @@ import { USAGE_PROVIDERS } from '@contracts'
 import { CLI_STORE_READERS, CLI_STORE_WIRED, readCodex } from './classes/cli-store'
 import { API_KEY_SPECS, API_KEY_PENDING, fetchApiKeyUsage, type ApiKeyDeps } from './classes/api-key'
 import { fetchVertex, fetchBedrock } from './classes/cloud-cli'
-import { fetchWebSessionUsage, type WebSessionDeps } from './classes/web-session'
+import { fetchWebSessionUsage, WEB_SESSION_SPECS, type WebSessionDeps } from './classes/web-session'
 import { claudeAdapter } from './claude-adapter'
 import { appendHistory } from './history'
 
@@ -19,7 +19,7 @@ export { CLI_STORE_READERS, CLI_STORE_WIRED, readCodex } from './classes/cli-sto
 export { API_KEY_SPECS, API_KEY_PENDING, fetchApiKeyUsage } from './classes/api-key'
 export { attemptClaudeRefresh, resetClaudeRefreshStateForTest } from './claude-refresh'
 export { fetchVertex, fetchBedrock } from './classes/cloud-cli'
-export { fetchWebSessionUsage, fixtureCookieBackend, realCookieBackend, type WebSessionDeps, type CookieStoreBackend } from './classes/web-session'
+export { fetchWebSessionUsage, WEB_SESSION_SPECS, fixtureCookieBackend, realCookieBackend, type WebSessionDeps, type CookieStoreBackend } from './classes/web-session'
 export { scanCost, costLogDir, costLogDirs, priceFor, MODEL_PRICES, CACHE_READ_X, CACHE_WRITE_5M_X, CACHE_WRITE_1H_X, COST_LOG_SUBDIR, type CostScanOptions, type ModelPrice } from './cost'
 export { appendHistory, readHistory, HISTORY_MAX, type HistoryKv } from './history'
 export { createStatusService, normalizeStatusBody, STATUS_CADENCE_MS, type StatusService, type StatusServiceDeps, type StatusFetcher, type StatusProviderRow } from './status'
@@ -35,7 +35,8 @@ export function isReaderWired(id: string): boolean {
   if (klass === 'cli-store') return CLI_STORE_WIRED.has(id)
   if (klass === 'api-key') return !!API_KEY_SPECS[id] && !API_KEY_PENDING.has(id)
   if (klass === 'cloud-cli') return id === 'bedrock' // vertex is presence-only, no lane yet
-  return false // web-session parses + the local probe land with dev-verification
+  if (klass === 'web-session') return !!WEB_SESSION_SPECS[id]
+  return false // the local probe lands with dev-verification
 }
 
 /** Build the REAL adapters from the catalog (Phase-7/04): one per cli-store
