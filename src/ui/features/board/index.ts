@@ -7,7 +7,6 @@ import {
   TerminalChannels,
   WorktreeChannels,
   isAgentCliId,
-  type AgentCliId,
   type AgentInfo,
   type BoardCard,
   type BoardLane,
@@ -239,15 +238,22 @@ export const boardFeature: UiFeature = {
     }
 
     // ── start an agent on a card (through the open/worktree/write seams) ─────
-    async function startOnCard(cardId: string, providerId: AgentCliId): Promise<boolean> {
+    // providerId is a plain string, NOT narrowed to AgentCliId: this function's contract is to
+    // safely handle a FAILED OR UNKNOWN agent — the exact property BOARDFAIL exists to hold. An
+    // unknown/unlaunchable id still opens a pane, binds the card for diagnosis, and fail-closes
+    // when no agent ever becomes `running` (identical to a valid agent that won't launch); its
+    // whole downstream (assignments: string[], ProviderCount) is already string. Narrowing it here
+    // silently dropped that case (a regression of the fail-closed guarantee), which is why the dev
+    // handle below must not gate on isAgentCliId either.
+    async function startOnCard(cardId: string, providerId: string): Promise<boolean> {
       const card = cards.find((c) => c.id === cardId)
       if (!card) return false
       const snap = getWorkspaces()
       const active = snap.workspaces.find((w) => w.id === snap.activeId) ?? snap.workspaces[0]
       const cwd = active?.cwd ?? ''
       if (!cwd) {
-        // No folder to anchor the task to — hand off to the wizard instead.
-        openWizard({ name: card.title.slice(0, 28), mix: [{ provider: providerId, count: 1 }] })
+        // No folder to anchor the task to — hand off to the wizard instead (real agents only).
+        if (isAgentCliId(providerId)) openWizard({ name: card.title.slice(0, 28), mix: [{ provider: providerId, count: 1 }] })
         showToast({ tone: 'info', title: 'Pick a folder', body: 'The card binds when launched from a workspace.' })
         return false
       }
@@ -803,10 +809,10 @@ export const boardFeature: UiFeature = {
           render()
           return c.id
         },
-        // Dev/smoke handle: providers arrive as strings — validate against the closed
-        // id union rather than widening startOnCard back to `string`.
-        startOnCard: (id: string, provider: string) =>
-          isAgentCliId(provider) ? startOnCard(id, provider) : Promise.resolve(false),
+        // Dev/smoke handle. startOnCard fail-closes on any unknown/unlaunchable provider by
+        // design (see its note above), so pass the string straight through — gating on
+        // isAgentCliId here would make an unknown agent silently no-op and defeat BOARDFAIL.
+        startOnCard: (id: string, provider: string) => startOnCard(id, provider),
         refresh: () => load(),
         // The ✓-chip is an AND of two independent facts (approvedChip, above): the pane is
         // standing in the worktree, and that worktree's branch holds a believed sign-off.
