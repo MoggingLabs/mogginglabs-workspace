@@ -65,7 +65,7 @@ renderer is tuned once and behaves identically everywhere. See
 > workspace and the explorer shows it, decorated, live, actionable — with both budgets
 > measured **on the composed surface** (16 panes + the explorer open + a write torrent:
 > **142.8 avg fps · worst gap 25.1ms · heap 20MB · 0 frames > 100ms**). The `qa-smokes.sh`
-> sweep now runs **124 gates** (seven new this pack: FSLIST · FILETREE · EXPLORER · TREELIVE ·
+> sweep now runs **129 gates** (seven new this pack: FSLIST · FILETREE · EXPLORER · TREELIVE ·
 > TREEGIT · FILEACT · FILESMILESTONE). Receipts, measured numbers and platform finds:
 > `prompts/phase-11/REPORT.md`.
 >

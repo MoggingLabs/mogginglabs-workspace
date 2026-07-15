@@ -3,19 +3,11 @@
  * shapes only — no token, path, or account identifier crosses this seam, and
  * usage values never enter telemetry (ADR 0005).
  *
- *   usage:list      -> PlanUsageView[] (cached snapshot — instant, never fetches)
- *   usage:refresh   -> void            (poke the poller; results arrive via push)
- *   usage:changed    main -> renderer: PlanUsageView[] (pushed on change)
- *   usage:configGet -> UsageConfig     (per-provider enable + cadence)
- *   usage:configSet (UsageConfigPatch) -> void (persists + reschedules live)
- *   usage:cost      (providerId) -> CostScan  (7/07: on-demand LOCAL log scan)
- *   usage:history   ({ providerId, window }) -> number[] (7/07: OUR KV ring)
- *   usage:status    -> ProviderStatus[]       (7/08: public-endpoint feed)
- *   usage:statusChanged  main -> renderer: ProviderStatus[] (pushed on change)
- *   usage:alert          main -> renderer: UsageAlert (7/09: house toast copy)
- *   usage:alertCfgGet/Set -> UsageAlertConfig (7/09: thresholds + confetti)
- *   usage:displayGet/Set -> UsageDisplayConfig (7/10: gauge mode + content +
- *   reset style + popover order/density); usage:displayChanged pushes it
+ * The channel surface itself lives in ONE place — `UsageChannels` in
+ * channels.ts, where every verb carries its own annotation. It was re-listed
+ * here once, and the copy drifted (it never learned keySet/keyClear/webReadSet
+ * or the alert outbox verbs while reading as complete): a duplicated doc is a
+ * wrong doc on a delay. This file owns the payload SHAPES only.
  */
 
 import type { PlanUsage, PaceVerdict, UsageCadence, UsageWindow } from '../usage'

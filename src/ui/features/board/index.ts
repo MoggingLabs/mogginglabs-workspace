@@ -6,6 +6,8 @@ import {
   SERVICE_LINK_CADENCE_DEFAULT,
   TerminalChannels,
   WorktreeChannels,
+  isAgentCliId,
+  type AgentCliId,
   type AgentInfo,
   type BoardCard,
   type BoardLane,
@@ -237,7 +239,7 @@ export const boardFeature: UiFeature = {
     }
 
     // ── start an agent on a card (through the open/worktree/write seams) ─────
-    async function startOnCard(cardId: string, providerId: string): Promise<boolean> {
+    async function startOnCard(cardId: string, providerId: AgentCliId): Promise<boolean> {
       const card = cards.find((c) => c.id === cardId)
       if (!card) return false
       const snap = getWorkspaces()
@@ -801,7 +803,10 @@ export const boardFeature: UiFeature = {
           render()
           return c.id
         },
-        startOnCard: (id: string, provider: string) => startOnCard(id, provider),
+        // Dev/smoke handle: providers arrive as strings — validate against the closed
+        // id union rather than widening startOnCard back to `string`.
+        startOnCard: (id: string, provider: string) =>
+          isAgentCliId(provider) ? startOnCard(id, provider) : Promise.resolve(false),
         refresh: () => load(),
         // The ✓-chip is an AND of two independent facts (approvedChip, above): the pane is
         // standing in the worktree, and that worktree's branch holds a believed sign-off.

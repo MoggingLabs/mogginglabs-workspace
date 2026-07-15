@@ -127,12 +127,17 @@ export class ServiceEngine {
     }
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
-    const kindAtFetch = rt.link.kind
     try {
       const status = await adapter.fetch(rt.link, ctrl.signal)
       rt.backoff = 0
       rt.status = status
-      if (rt.link.kind !== kindAtFetch) this.deps.onLinkRepaired?.(rt.link) // the adapter knew better
+      // The adapter knew better about the link's kind — it says so ON the status
+      // (repairedKind), never by mutating the link it was handed. The engine owns
+      // applying it and hands main the persist.
+      if (status.repairedKind && status.repairedKind !== rt.link.kind) {
+        rt.link = { ...rt.link, kind: status.repairedKind }
+        this.deps.onLinkRepaired?.(rt.link)
+      }
       const label = transitionLabel(rt.link, prev, status)
       if (label) this.deps.onTransition(rt.link, label)
     } catch (e) {

@@ -38,6 +38,7 @@ first-party layer for the CLIs that support hooks.
 | `subagent-stop` | *(gate only — emits nothing)* | a subagent landed |
 | `turn-start` | busy | a new prompt was submitted |
 | `idle-prompt` | idle *(never red)* | "Claude is waiting for your input" — parked, not blocked |
+| `usage-limit` | attention *(+ failover offer)* | the agent hit a provider usage limit — the app offers a profile switch |
 
 ### Not every `Notification` is a call for help
 

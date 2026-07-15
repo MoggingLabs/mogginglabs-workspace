@@ -2,9 +2,12 @@ import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 
-/** The user's login shell, so their profile + PATH load (agent CLIs need it). */
+/** The user's login shell, so their profile + PATH load (agent CLIs need it).
+ *  Windows resolves COMSPEC first — `cmd.exe` on a stock install, which is the story
+ *  shell-quote.ts documents and quotes for. The fallback (COMSPEC unset is a broken
+ *  environment, not a real one) matches that story rather than telling a second one. */
 export function defaultShell(): string {
-  if (process.platform === 'win32') return process.env.COMSPEC || 'powershell.exe'
+  if (process.platform === 'win32') return process.env.COMSPEC || 'cmd.exe'
   return process.env.SHELL || '/bin/zsh'
 }
 

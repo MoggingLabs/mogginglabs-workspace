@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 124 gates: 15 static (AUDIT · SPACING · PTYSEAM · PROTOVER · AGENTCAT · LAYOUT ·
+# 129 gates: 16 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · GITPURE ·
-# REMOTEBOOT · CONNPURE) + 109 app-boot
+# REMOTEBOOT · CONNPURE) + 113 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -181,6 +181,9 @@ run_static AUDIT   node scripts/check-audit.mjs
 run_static SPACING node scripts/check-spacing.mjs --max 0
 run_static PTYSEAM node scripts/check-pty-seam.mjs
 run_static PROTOVER node scripts/check-protocol-version.mjs
+# The preload allowlist: every channel map spread into AllChannels (a forgotten spread
+# refuses a whole feature IPC surface with nothing but "channel not allowed" to show).
+run_static CHANNELS node scripts/check-channels.mjs
 run_static AGENTCAT node scripts/check-agent-settings-catalog.mjs
 run_static LAYOUT  node scripts/check-layout-invariants.mjs
 # DOCSREFS: the docs cite each other constantly (the roadmap points at ADRs, ADRs at

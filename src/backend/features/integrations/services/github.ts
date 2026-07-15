@@ -65,25 +65,29 @@ export function createGitHubAdapter(): ServiceAdapter {
       if (!parts) throw new Error('unreadable ref')
       const repo = `${parts.owner}/${parts.repo}`
       const now = Date.now()
-      const asIssue = async (): Promise<LinkStatus> => {
+      const asIssue = async (repaired = false): Promise<LinkStatus> => {
         const r = await gh(['issue', 'view', String(parts.number), '--repo', repo, '--json', 'state,title'], signal)
         if (!r.ok) throw new Error(ghReason(r.stderr))
         const j = JSON.parse(r.stdout) as { state: string; title: string }
-        return { linkId: link.id, health: 'fresh', fetchedAt: now, state: j.state === 'CLOSED' ? 'closed' : 'open', title: j.title }
+        return {
+          linkId: link.id,
+          health: 'fresh',
+          fetchedAt: now,
+          state: j.state === 'CLOSED' ? 'closed' : 'open',
+          title: j.title,
+          ...(repaired ? { repairedKind: 'issue' as const } : {})
+        }
       }
       if (link.kind === 'issue') return asIssue()
       const r = await gh(['pr', 'view', String(parts.number), '--repo', repo, '--json', 'state,isDraft,reviewDecision,statusCheckRollup,title'], signal)
       if (!r.ok) {
         // THE correction parse.ts promises: `owner/repo#123` guessed pr, and a
         // number that isn't a PR is very often an ISSUE. Retry once — and if it
-        // IS one, repair the link's kind so every later poll goes straight there
-        // instead of asking `gh pr view` the same wrong question forever.
+        // IS one, say so on the STATUS (repairedKind) so the engine applies and
+        // persists the correction; the link argument itself is never mutated.
         if (/could not resolve|not found|no such/i.test(r.stderr)) {
-          const corrected = await asIssue().catch(() => null)
-          if (corrected) {
-            link.kind = 'issue' // the engine reads this back and hands main the repair
-            return corrected
-          }
+          const corrected = await asIssue(true).catch(() => null)
+          if (corrected) return corrected
         }
         throw new Error(ghReason(r.stderr)) // a genuinely missing ref keeps its honest reason
       }

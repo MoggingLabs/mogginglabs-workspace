@@ -2,8 +2,13 @@
 // CLI self-authenticates (ADR 0002). No credentials cross this boundary — only provider ids
 // (an agent id or "shell") + counts.
 
-/** An agent id (claude/codex/gemini/aider/opencode) or the literal "shell". */
-export type Provider = string
+import type { AgentCliId } from '../domain/agent-cli'
+
+/** A pane slot's provider: an agent id (claude/codex/gemini/aider/opencode), the
+ *  literal "shell", or a wizard custom command (`custom:<command>`). This used to be a
+ *  bare `string` whose comment described only the first two forms — typing it surfaced
+ *  the third (the wizard's custom rows), which is exactly what the alias was hiding. */
+export type Provider = AgentCliId | 'shell' | `custom:${string}`
 
 export interface ProviderCount {
   provider: Provider
