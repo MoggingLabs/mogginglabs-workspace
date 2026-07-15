@@ -5,6 +5,7 @@ import { autoUpdater } from 'electron-updater'
 import { UpdateChannels, UPDATE_PREFS_DEFAULT, type UpdatePrefs, type UpdateState } from '@contracts'
 import { getTelemetry } from '@backend'
 import { getSettingsStore } from './app-settings'
+import { retireOwnDaemon } from './daemon-client'
 import { updateDriver } from './fixture-port'
 
 // App-wiring: auto-update via electron-updater against the signed GitHub Releases feed
@@ -117,19 +118,59 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
     void autoUpdater.checkForUpdates()
   })
 
+  // ── THE PRE-INSTALL RETIRE ────────────────────────────────────────────────────────────
+  // The daemon is spawned from the INSTALLED EXECUTABLE (daemon-client: process.execPath +
+  // ELECTRON_RUN_AS_NODE) and outlives the app by design (ADR 0006). A running process holds
+  // a Windows file lock on its own exe — so the very property that preserves your terminals
+  // across an update is what made the installer fail: it closed the app, still saw a live
+  // process on that exe (the daemon — windowless, unclosable), and stalled on "MoggingLabs
+  // Workspace cannot be closed. Please close it manually and click Retry" (found live,
+  // v0.11.0 → v0.11.1).
+  //
+  // So before ANY install runs, the app retires its own daemon — gracefully: the daemon's
+  // shutdown persists the session store first (persistNow), and the post-update boot
+  // cold-start restores every pane from it. Nothing is lost; it is restored rather than
+  // carried. Quiescence stops the relay's reconnect loop from resurrecting the daemon (and
+  // its exe lock) in the moments between the retire and process exit. Bounded and
+  // best-effort: a daemon that will not die within the window must never trap the user in an
+  // app that refuses to update — we proceed, and the installer's own daemon handling
+  // (build/installer.nsh) is the second line.
+  let retiredForInstall = false
+  const retireForInstall = async (): Promise<void> => {
+    if (retiredForInstall) return
+    retiredForInstall = true
+    try {
+      const ok = await retireOwnDaemon({ quiesce: true })
+      if (!ok) autoUpdater.logger?.warn?.('daemon did not retire before install; installer fallback will handle it')
+    } catch (err) {
+      getTelemetry().captureError(err, { feature: 'updater', op: 'retire-daemon', platform: process.platform })
+    }
+  }
+
   // "Restart now" from the ready toast / the rail's update row. In a fake-update run there
   // is nothing to install — the renderer just stops showing it; guard so the smoke's click
   // can't quit the app.
-  ipcMain.handle(UpdateChannels.restart, () => {
+  ipcMain.handle(UpdateChannels.restart, async () => {
     if (!app.isPackaged || process.env.MOGGING_FAKE_UPDATE) return
+    await retireForInstall() // release the exe lock BEFORE the installer needs the exe
     // (isSilent = true, isForceRunAfter = true): reinstall with no NSIS UI, then relaunch us.
     // The pair matters — with isSilent = false electron-updater IGNORES isForceRunAfter and
     // substitutes autoRunAppAfterInstall, so it is the silent flag that makes "come back
     // afterwards" mean anything at all.
-    //
-    // Nothing is lost across the swap: terminal sessions live in the detached daemon
-    // (ADR 0006), which outlives the app and hands the panes back on relaunch.
     autoUpdater.quitAndInstall(true, true)
+  })
+
+  // The OTHER road to the installer: autoInstallOnAppQuit (applyPrefs above) runs it on a
+  // plain window-close with an update pending — no restart click involved, same exe lock.
+  // Intercept that one quit, retire, then resume quitting. Guarded three ways: only with a
+  // downloaded update waiting, only when install-on-quit is actually on, and only once
+  // (retiredForInstall) so the re-entrant app.quit() passes straight through. Every other
+  // quit is untouched — the daemon SURVIVING a normal quit is the product's core promise.
+  app.on('before-quit', (e) => {
+    if (retiredForInstall || last.phase !== 'ready') return
+    if (!app.isPackaged || !readPrefs().installOnQuit) return
+    e.preventDefault()
+    void retireForInstall().then(() => app.quit())
   })
 
   // The rail row's retry after a failed check. Idempotent — the updater coalesces a check

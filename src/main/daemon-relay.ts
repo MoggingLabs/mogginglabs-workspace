@@ -10,6 +10,7 @@ import type { AgentState, Approval, SpawnRequest, SpawnResult, SpawnSpec, StateS
 import { getTelemetry } from '@backend'
 import { ensureDaemon, DaemonClient } from './daemon-client'
 import { DaemonMigrationDeferredError, migrateOlderDaemonSessions } from './daemon-migrate'
+import { sweepDeadRunDirs } from './daemon-sweep'
 import { getSettingsStore } from './app-settings'
 import { resolveServiceKeyEnv } from './service-keys'
 import { onPaneStateForBridge } from './event-bridge'
@@ -313,6 +314,12 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     if (err instanceof DaemonMigrationDeferredError) throw err
     getTelemetry().captureError(err, { feature: 'daemon', op: 'migrate', platform: process.platform })
   }
+
+  // AFTER migration, deliberately: the dir migration just drained is dead by now and gets
+  // swept in the same boot that retired it. A deferred migration threw above, so a live old
+  // daemon's dir is never even considered — and the sweep's own liveness check is the second
+  // lock on that door. Best-effort by construction (see daemon-sweep.ts); never blocks boot.
+  sweepDeadRunDirs()
 
   setDaemonHealth({
     mode: 'daemon',

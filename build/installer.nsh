@@ -20,6 +20,37 @@
 ; The daemon is unaffected: it is spawned by the app with ELECTRON_RUN_AS_NODE set
 ; explicitly on its OWN spawn env (src/main/daemon-client.ts), never inherited.
 
+; ── THE DAEMON vs THE INSTALLER ──────────────────────────────────────────────────────────
+;
+; The PTY daemon is spawned FROM THE INSTALLED EXE (daemon-client.ts: process.execPath +
+; ELECTRON_RUN_AS_NODE) and deliberately outlives the app (ADR 0006). A running process holds
+; a Windows lock on its own executable — so electron-builder's stock running-app check closed
+; the app, still found a live process on that exe (the daemon: windowless, unclosable, no
+; WM_CLOSE to answer), and stalled the install forever on "MoggingLabs Workspace cannot be
+; closed. Please close it manually and click Retry" — a dialog about a process the user
+; cannot see, with a Retry that can never succeed. Found live, updating v0.11.0 → v0.11.1.
+;
+; The app's own updater retires the daemon GRACEFULLY before quitAndInstall (updater.ts) —
+; that is the lossless, primary path. This macro is the second line, for the installs the
+; app never sees coming: a downloaded installer run by hand, exactly the failing case above.
+;
+;   1. windowed instances get WM_CLOSE (CloseMainWindow) — the same graceful close the stock
+;      check performs — and up to 15s to unwind;
+;   2. whatever remains on this exe name is the daemon (or a hung instance): Stop-Process.
+;      Hard, not graceful — NSIS cannot speak the daemon's authed socket. The cost is
+;      bounded by the session store's write coalescing (~2s of scrollback tail at worst);
+;      the sessions themselves restore on next launch from sessions.db, exactly as after
+;      a crash. An install that cannot proceed at all is strictly worse.
+;
+; No dialogs on any path (silent updates run this too). Every PowerShell `$` is `$$` — NSIS
+; interpolates `$` in strings.
+; (One physical line, deliberately: NSIS line continuation inside a quoted string is dialect-
+; fragile, and an installer is the worst possible place to discover a parser disagreement.)
+!macro customCheckAppRunning
+  nsExec::Exec 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$n = [IO.Path]::GetFileNameWithoutExtension(\"${APP_EXECUTABLE_FILENAME}\"); $$ps = Get-Process -Name $$n -ErrorAction SilentlyContinue; foreach ($$p in $$ps) { if ($$p.MainWindowHandle -ne [IntPtr]::Zero) { $$null = $$p.CloseMainWindow() } }; $$deadline = (Get-Date).AddSeconds(15); while ((Get-Date) -lt $$deadline -and (Get-Process -Name $$n -ErrorAction SilentlyContinue | Where-Object { $$_.MainWindowHandle -ne [IntPtr]::Zero })) { Start-Sleep -Milliseconds 300 }; Get-Process -Name $$n -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500"'
+  Pop $0
+!macroend
+
 !macro customInit
   ; Runs in .onInit, long before the finish page's Exec — so the app we launch,
   ; and anything it spawns, gets an environment without the poison.
