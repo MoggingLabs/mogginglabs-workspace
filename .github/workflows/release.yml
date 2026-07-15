@@ -145,6 +145,8 @@ jobs:
       # from the config's arch list, and with npmRebuild=false the x64 app got the
       # arm64 direct-gyp .node files -> a crash-on-Intel artifact (run 28759409843,
       # x64 assets deleted). This form builds ONLY arm64, so the feed is honest.
+      # (electron-builder.yml no longer lists mac x64 either; this stays as the
+      # explicit guard so a config edit alone can't resurrect the broken artifact.)
       - name: Package (sign/notarize when secrets present)
         shell: bash
         run: npx electron-builder ${{ runner.os == 'macOS' && '--mac dmg:arm64 zip:arm64' || '' }} --publish never -c.npmRebuild=false -c.buildDependenciesFromSource=false

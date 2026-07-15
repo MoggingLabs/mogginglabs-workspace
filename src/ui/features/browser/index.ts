@@ -14,7 +14,7 @@ import {
   type WorkspaceIntegrationsGrant
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { IconButton, confirmDialog, el, icon, showToast } from '../../components'
+import { IconButton, clear, confirmDialog, el, icon, showToast } from '../../components'
 import { getWorkspaces, onWorkspacesChange } from '../../core/workspace/workspace-info-port'
 import { setCommands } from '../../core/commands/command-port'
 import { isModKey } from '../../core/commands/shortcuts'
@@ -143,7 +143,7 @@ export const browserFeature: UiFeature = {
         const entries = (await bridge.invoke(IntegrationsChannels.trailList, wsId)) as TrailEntry[]
         if (!workspaceStillCurrent(capture) || state.profile !== 'agent-web') return
         const last = entries.filter((t) => t.source === 'web').slice(-3).reverse()
-        recentActs.innerHTML = ''
+        clear(recentActs)
         for (const t of last) {
           recentActs.append(
             el('span', { class: `browser-recent-act is-${t.outcome}`, text: `${t.verb} · ${t.target} · ${t.outcome}` })
@@ -573,7 +573,7 @@ export const browserFeature: UiFeature = {
     async function refreshSitesMenu(): Promise<void> {
       const capture = captureWorkspace()
       const wsId = capture.id
-      sitesMenu.innerHTML = ''
+      clear(sitesMenu)
       sitesMenu.append(el('div', { class: 'menu-note browser-sites-head', text: 'Signed-in sites (agent web profile)' }))
       if (!wsId) {
         sitesMenu.append(el('div', { class: 'menu-note', text: 'No active workspace.' }))
@@ -755,7 +755,7 @@ export const browserFeature: UiFeature = {
       confirmBar.hidden = !pendingOrigin
       if (pendingOrigin) confirmBtn.textContent = `Allow acting on ${pendingOrigin} this session`
       refreshRecentActs() // debounced; agent verbs are exactly when the trail moves
-      trailMenu.innerHTML = ''
+      clear(trailMenu)
       for (const t of [...a.trail].reverse()) {
         const row = el('div', { class: 'menu-note browser-trail-row' })
         // Verb + target REF only — never page content, typed text, or eval bodies.

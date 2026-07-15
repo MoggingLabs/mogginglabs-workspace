@@ -13,7 +13,7 @@ import {
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { TEMPLATE_COUNTS, TEMPLATES } from '../layout'
-import { Button, IconButton, createLayoutGridPicker, el, icon, showToast } from '../../components'
+import { Button, IconButton, clear, createLayoutGridPicker, el, icon, showToast } from '../../components'
 import { WorkspaceController, type CreateOpts } from './controller'
 import { resolveColors } from './model'
 import { workspaceClient } from './workspace.client'
@@ -496,7 +496,7 @@ export const workspaceFeature: UiFeature = {
     })
 
     function renderLayoutMenu(): void {
-      layoutMenu.innerHTML = ''
+      clear(layoutMenu)
       // REMOVE #16: the SHARED grid picker (compact variant) — one component, replacing
       // the ad-hoc tile builder whose `.layout-menu-tile .layout-tile-count` reached
       // across to override this very component's class.

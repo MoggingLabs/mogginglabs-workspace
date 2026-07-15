@@ -1,4 +1,5 @@
 import type { Terminal, IMarker, IDecoration } from '@xterm/xterm'
+import { clear } from '../../components'
 
 /**
  * A single command block, bracketed by OSC 133 marks. `startMarker` tracks the command line and
@@ -175,7 +176,7 @@ export class BlockTracker {
     const rowH = this.rowHeight()
     const viewTop = this.term.buffer.active.viewportY
     const viewRows = this.term.rows
-    this.cover.innerHTML = ''
+    clear(this.cover)
     for (const b of this.blocks) {
       if (!b.collapsed || !b.startMarker) continue
       const first = b.startMarker.line + 1 // output starts after the command line

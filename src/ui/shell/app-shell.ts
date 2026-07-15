@@ -1,6 +1,7 @@
 import { ShellChannels, type WindowStateEvent } from '@contracts'
 import type { ShellContext } from '../core/registry/feature-registry'
 import { getBridge } from '../core/ipc/bridge'
+import { clear } from '../components'
 import { onViewChange } from '../core/shell/view-port'
 import { applyCalmMotion } from '../core/a11y/motion-port'
 import { createTitlebar } from './titlebar'
@@ -15,7 +16,7 @@ const RAIL_COLLAPSED_KEY = 'mogging.railCollapsed'
  * view (home/grid) the content shows; it knows nothing about individual features.
  */
 export function createAppShell(root: HTMLElement): ShellContext {
-  root.innerHTML = ''
+  clear(root)
 
   // A file dropped ANYWHERE a listener has not claimed makes Chromium navigate the window
   // to that file — the app is simply replaced by the dropped document, with no way back.

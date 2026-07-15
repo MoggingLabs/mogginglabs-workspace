@@ -1,6 +1,6 @@
 import { IntegrationsChannels, type WorkspaceIntegrationsGrant } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { Card, SectionHeader, el, showToast } from '../../components'
+import { Card, SectionHeader, clear, el, showToast } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onViewChange } from '../../core/shell/view-port'
 import { normalizeBrowserOrigin } from '../../core/browser-origin'
@@ -24,7 +24,7 @@ export function createActOriginsCard(): HTMLElement {
   async function render(): Promise<void> {
     const generation = ++renderGeneration
     const wsId = wsSelect.value
-    body.innerHTML = ''
+    clear(body)
     if (!wsId) return
     const grant = (await bridge.invoke(IntegrationsChannels.grantGet, wsId)) as WorkspaceIntegrationsGrant
     if (generation !== renderGeneration || wsSelect.value !== wsId) return
@@ -89,7 +89,7 @@ export function createActOriginsCard(): HTMLElement {
 
   function refreshWorkspaces(): void {
     const current = wsSelect.value
-    wsSelect.innerHTML = ''
+    clear(wsSelect)
     for (const w of getWorkspaces().workspaces) wsSelect.append(el('option', { value: w.id, text: w.name }))
     wsSelect.value = current || (getWorkspaces().activeId ?? '')
     if (!wsSelect.value && wsSelect.options.length) wsSelect.selectedIndex = 0

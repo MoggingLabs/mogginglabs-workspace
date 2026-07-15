@@ -47,16 +47,18 @@ win:
   # Authenticode signing runs when CSC_LINK (base64 .pfx) + CSC_KEY_PASSWORD are in the
   # environment (CI secrets) — required to avoid SmartScreen warnings. No cert is committed.
 
+# arm64 ONLY, on purpose: the release runner builds natives arm64-only (the direct-gyp
+# bypass, release.yml), so an x64 entry here packages arm64 .node files into an x64 app —
+# a crash-on-Intel artifact (run 28759409843, assets deleted). Intel returns when a real
+# x64 build path exists (docs/10); until then the config must not offer it.
 mac:
   target:
     - target: dmg # installer
       arch:
         - arm64
-        - x64
     - target: zip # required by electron-updater for macOS auto-update
       arch:
         - arm64
-        - x64
   category: public.app-category.developer-tools
   artifactName: MoggingLabs-Workspace-${version}-mac-${arch}.${ext}
   hardenedRuntime: true

@@ -283,7 +283,9 @@ export interface UsageProviderDef {
   windows: WindowSpec[]
   /** True when the provider is credit/balance-based (a `credits` block, no lane). */
   credits?: boolean
-  /** web-session class: the cookie/token name to read for this provider. */
+  /** web-session class: the cookie/token name to read for this provider. Rows carry
+   *  one only when the real name is verified — absent, a pasted bare value pairs with
+   *  the `'session'` default and browser store-read stays off for the row. */
   cookieName?: string
   /** web-session class: the site origin the cookie belongs to (store-read scope
    *  + sensitive-origin check). */
@@ -350,18 +352,18 @@ export const USAGE_PROVIDERS: readonly UsageProviderDef[] = [
   // Cursor's reader (ported from CodexBar 2026-07-15) reads /api/usage-summary:
   // the plan lane percent + the on-demand dollars as `spend`.
   { id: 'cursor', label: 'Cursor', klass: 'web-session', origin: 'cursor.com', cookieName: 'WorkosCursorSessionToken', endpoint: 'https://cursor.com/api/usage-summary', windows: [w('monthly', 'Plan')], statusUrl: 'https://status.cursor.com/api/v2/status.json' },
-  { id: 'devin', label: 'Devin', klass: 'web-session', origin: 'app.devin.ai', cookieName: 'session', windows: [w('rolling', 'ACUs')], credits: true },
+  { id: 'devin', label: 'Devin', klass: 'web-session', origin: 'app.devin.ai', windows: [w('rolling', 'ACUs')], credits: true },
   { id: 'manus', label: 'Manus', klass: 'web-session', origin: 'manus.im', cookieName: 'session_id', windows: [w('rolling', 'Credits')], credits: true },
-  { id: 't3chat', label: 'T3 Chat', klass: 'web-session', origin: 't3.chat', cookieName: 'session', windows: [w('monthly', 'Messages')] },
+  { id: 't3chat', label: 'T3 Chat', klass: 'web-session', origin: 't3.chat', windows: [w('monthly', 'Messages')] },
   { id: 'kimi', label: 'Kimi', klass: 'web-session', origin: 'kimi.com', cookieName: 'kimi-auth', windows: [w('rolling', 'Quota')], credits: true },
   { id: 'perplexity', label: 'Perplexity', klass: 'web-session', origin: 'www.perplexity.ai', cookieName: '__Secure-next-auth.session-token', windows: [w('daily', 'Queries')] },
-  { id: 'mimo', label: 'Xiaomi MiMo', klass: 'web-session', origin: 'mimo.xiaomi.com', cookieName: 'session', windows: [w('rolling', 'Balance')], credits: true },
-  { id: 'sakana', label: 'Sakana AI', klass: 'web-session', origin: 'sakana.ai', cookieName: 'session', windows: [w('rolling', 'Quota')], credits: true },
-  { id: 'abacus', label: 'Abacus AI', klass: 'web-session', origin: 'abacus.ai', cookieName: 'session', windows: [w('monthly', 'Usage')] },
-  { id: 'mistral-web', label: 'Mistral (spend)', klass: 'web-session', origin: 'console.mistral.ai', cookieName: 'session', windows: [w('monthly', 'Spend')] },
-  { id: 'amp', label: 'Amp', klass: 'web-session', origin: 'ampcode.com', cookieName: 'session', windows: [w('rolling', 'Credits')], credits: true },
-  { id: 'commandcode', label: 'Command Code', klass: 'web-session', origin: 'commandcode.ai', cookieName: 'session', windows: [w('rolling', 'Credits')], credits: true },
-  { id: 'opencode-web', label: 'OpenCode (workspace)', klass: 'web-session', origin: 'opencode.ai', cookieName: 'session', windows: [w('monthly', 'Usage')] },
+  { id: 'mimo', label: 'Xiaomi MiMo', klass: 'web-session', origin: 'mimo.xiaomi.com', windows: [w('rolling', 'Balance')], credits: true },
+  { id: 'sakana', label: 'Sakana AI', klass: 'web-session', origin: 'sakana.ai', windows: [w('rolling', 'Quota')], credits: true },
+  { id: 'abacus', label: 'Abacus AI', klass: 'web-session', origin: 'abacus.ai', windows: [w('monthly', 'Usage')] },
+  { id: 'mistral-web', label: 'Mistral (spend)', klass: 'web-session', origin: 'console.mistral.ai', windows: [w('monthly', 'Spend')] },
+  { id: 'amp', label: 'Amp', klass: 'web-session', origin: 'ampcode.com', windows: [w('rolling', 'Credits')], credits: true },
+  { id: 'commandcode', label: 'Command Code', klass: 'web-session', origin: 'commandcode.ai', windows: [w('rolling', 'Credits')], credits: true },
+  { id: 'opencode-web', label: 'OpenCode (workspace)', klass: 'web-session', origin: 'opencode.ai', windows: [w('monthly', 'Usage')] },
   { id: 'alibaba-web', label: 'Alibaba (cookie)', klass: 'web-session', origin: 'bailian.console.aliyun.com', cookieName: 'login_aliyunid_ticket', windows: [w('rolling', 'Quota')], credits: true },
   { id: 'grok-web', label: 'Grok (browser)', klass: 'web-session', origin: 'grok.com', cookieName: 'sso', windows: [w('rolling', 'Quota')], credits: true },
   // ── local class (7/13): no auth at all — loopback probes and the machine's
