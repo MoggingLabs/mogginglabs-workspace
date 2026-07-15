@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { AGENT_ADAPTERS } from '../agents/adapters'
+import { isAlive } from '../../platform/pid'
 
 // TYPED-LAUNCH DETECTION — which agent CLI is REALLY running inside a pane's PTY.
 //
@@ -373,16 +374,6 @@ function snapshotProcesses(rootPids: readonly number[] = []): Promise<ProcRow[] 
       })
     }
   })
-}
-
-/** Is this pid still running? (Signal 0 — a permission error still means ALIVE.) */
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'EPERM'
-  }
 }
 
 interface TrackedPane {

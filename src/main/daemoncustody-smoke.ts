@@ -35,15 +35,7 @@ import * as path from 'node:path'
 import { buildStampOf } from '@backend/platform/build-stamp'
 import { ensureDaemon, retireOwnDaemon } from './daemon-client'
 import { sweepRunRoot } from './daemon-sweep'
-
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
+import { isAlive } from '@backend/platform/pid'
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 

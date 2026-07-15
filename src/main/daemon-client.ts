@@ -9,6 +9,7 @@ import * as path from 'node:path'
 import { spawn } from 'node:child_process'
 import { createLineFramer, encodeMessage, DAEMON_PROTOCOL_VERSION, channelFromEnv, runtimeSegment } from '@contracts'
 import { buildStampOf } from '@backend/platform/build-stamp'
+import { isAlive, pipeAlive } from '@backend/platform/pid'
 import type {
   Approval,
   Claim,
@@ -36,40 +37,6 @@ export function runtimeDir(): string {
 }
 const endpointPath = (): string => path.join(runtimeDir(), 'endpoint.json')
 const daemonSpawnLogPath = (): string => path.join(runtimeDir(), 'daemon.log')
-
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
-/** Does the daemon's named pipe still exist? A pipe is a kernel object that dies WITH its
- *  process, so this is an IDENTITY check that `kill(pid, 0)` cannot give us: Windows recycles
- *  pids aggressively, and a crashed daemon whose pid was handed to some unrelated process
- *  looked alive forever — connect() failed, we never respawned, and every pane sat grey until
- *  endpoint.json was deleted by hand. Unix sockets persist on disk after death and prove
- *  nothing, so off-Windows this stays undecided (true) and connect() remains the judge.
- *  Mirrors pipeAlive in src/pty-daemon/lifecycle.ts (main can't import the daemon bundle). */
-function pipeAlive(address: string): boolean {
-  if (process.platform !== 'win32' || !address.startsWith('\\\\.\\pipe\\')) return true
-  // NOT existsSync: checking a named pipe means CreateFile, and a pipe whose pending listener
-  // instance is momentarily consumed answers PIPE_BUSY — which existsSync swallows into
-  // `false`. That declared a LIVE, LISTENING daemon dead: discovery unlinked its endpoint and
-  // blind-spawned a rival that the still-held lock refused, and the boot ended with no daemon
-  // at all (found by the DAEMONCUSTODY gate, whose back-to-back discoveries hit the re-arm
-  // window every time; any two discovery calls a few ms apart could). A busy pipe is a live
-  // pipe. Only "definitely gone" — ENOENT — may kill it; every other answer keeps the
-  // undecided default (true) and lets connect() be the judge, exactly like non-Windows.
-  try {
-    fs.accessSync(address)
-    return true
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code !== 'ENOENT'
-  }
-}
 
 /** An endpoint we may trust: our protocol version, a live pid, and a pipe still held. */
 function endpointLive(ep: DaemonEndpoint | null): ep is DaemonEndpoint {

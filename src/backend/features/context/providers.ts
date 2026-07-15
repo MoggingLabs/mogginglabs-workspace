@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import { join } from 'node:path'
-import { pathKey, readTail, type TailReading } from './readers'
+import { asNum, pathKey, readTail, type TailReading } from './readers'
 
 // The two providers that keep their usage somewhere other than a session-log tail.
 
@@ -157,9 +157,8 @@ export function readOpencodeUsage(home: string, cwd: string): (TailReading & { p
       row = undefined
     }
     if (!row || typeof row.i !== 'number') return null
-    const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
     return {
-      usedTokens: n(row.i) + n(row.o) + n(row.r) + n(row.cr) + n(row.cw),
+      usedTokens: asNum(row.i) + asNum(row.o) + asNum(row.r) + asNum(row.cr) + asNum(row.cw),
       model: typeof row.m === 'string' ? row.m : undefined,
       provider: typeof row.p === 'string' ? row.p : undefined
     }

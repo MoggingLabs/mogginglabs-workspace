@@ -3,6 +3,8 @@
 // forward keys, passphrases, or known_hosts. Host names are user data: local db +
 // pane chip only — never telemetry.
 
+import type { RemoteShellDialect } from '../domain/remote'
+
 export interface RemoteHost {
   id: string
   /** Display name (the pane chip). */
@@ -24,8 +26,9 @@ export interface RemoteHost {
    * what a host IS in order to describe what the bootstrap can currently DO with it.
    */
   platform?: 'posix' | 'windows'
-  /** Command dialect on the target. Defaults to posix/sh for older saved rows. */
-  shell?: 'sh' | 'bash' | 'zsh' | 'powershell' | 'cmd'
+  /** Command dialect on the target (the shared union — domain/remote.ts). Undefined on
+   *  rows whose platform the user has never confirmed. */
+  shell?: RemoteShellDialect
   user?: string
   port?: number
   /** A NOTE about which identity to use (e.g. "work ed25519") — never a key path

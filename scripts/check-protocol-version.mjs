@@ -167,12 +167,15 @@ function wireFingerprint() {
 //   ADDITIVE-TOLERANT (an optional field old readers ignore, e.g. the endpoint's build stamp):
 //   re-pin here WITHOUT bumping, and say why in the commit. The build stamp — not a version
 //   burn — is what delivers daemon CODE changes to already-running daemons.
-// Re-pinned WITHOUT a bump (the additive-tolerant arm above), twice in one change:
-// claimsOverlap lost a dead no-op branch (identical semantics, byte-different body), and
-// NotifyEvent admitted 'usage-limit' — an event that has ridden the wire since Phase-4/04
-// (`mogging notify --event usage-limit`; the daemon's applyNotify special-cases it) but
-// which the "closed vocabulary" union never listed. Old daemons already speak both.
-const PINNED = { version: 9, fingerprint: 'da91034d5d60b2eb' }
+// Re-pinned WITHOUT a bump (the additive-tolerant arm above), three times in one review
+// pass — none moves a byte on the wire:
+//   · claimsOverlap lost a dead no-op branch (identical semantics, byte-different body);
+//   · NotifyEvent admitted 'usage-limit' — an event that has ridden the wire since
+//     Phase-4/04 (`mogging notify --event usage-limit`) but which the "closed vocabulary"
+//     union never listed;
+//   · SpawnSpec.remote now names the shared RemotePaneTarget shape instead of restating
+//     it inline (structurally identical; PersistedPane.remote is the same shape).
+const PINNED = { version: 9, fingerprint: '7577a1fd552c031f' }
 
 const actualWire = wireFingerprint()
 if (actualWire !== PINNED.fingerprint) {

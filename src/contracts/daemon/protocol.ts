@@ -5,7 +5,7 @@
 
 import type { AgentState } from '../domain/agent'
 import type { PaneCwdLocality, PaneCwdSource } from '../domain/cwd'
-import type { RemoteConnection } from '../domain/remote'
+import type { RemotePaneTarget } from '../domain/remote'
 import type { PersistedWorkspace } from '../ipc/workspace.ipc'
 import type { PtyEmulation } from '../ipc/terminal.ipc'
 import type { ReviewSnapshot } from '../ipc/review.ipc'
@@ -196,13 +196,9 @@ export interface SpawnSpec {
    *  source-agnostic: it merges the map into `pty.spawn` and knows nothing of
    *  the vault (no version bump — an optional field on the existing message). */
   env?: Record<string, string>
-  /** Remote pane (Phase-4/05): the RESOLVED host row (the daemon stays db-free).
-   *  Connection pointers only — the user's ssh stack does all auth (ADR 0002). */
-  remote?: Omit<RemoteConnection, 'platform'> & {
-    cwd?: string
-    platform?: 'posix' | 'windows'
-    shell?: 'sh' | 'bash' | 'zsh' | 'powershell' | 'cmd'
-  }
+  /** Remote pane (Phase-4/05): the RESOLVED host row (the daemon stays db-free) — the
+   *  ONE shared pointer shape (domain/remote.ts; PersistedPane.remote is the same one). */
+  remote?: RemotePaneTarget
 }
 
 export interface PaneInfo {

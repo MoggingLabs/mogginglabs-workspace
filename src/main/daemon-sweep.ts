@@ -29,16 +29,8 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { DAEMON_PROTOCOL_VERSION, channelFromEnv } from '@contracts'
 import type { ReleaseChannel } from '@contracts'
+import { isAlive } from '@backend/platform/pid'
 import { runtimeDir } from './daemon-client'
-
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
 
 export interface SweepReport {
   /** Directory basenames removed (dead, strictly older, same channel). */

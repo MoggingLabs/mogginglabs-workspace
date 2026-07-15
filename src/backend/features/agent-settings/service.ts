@@ -107,6 +107,28 @@ function mergeValues(base: AgentConfigValue | undefined, next: AgentConfigValue,
   return next
 }
 
+/** The drift/shadow verdict for one setting, shared by the codex and generic branches
+ *  of settingState (it was duplicated verbatim in both — eight lines one field-rename
+ *  away from disagreeing). */
+function computeSyncState(
+  setting: AgentConfigSetting,
+  desired: AgentConfigOverrideRecord | undefined,
+  selected: AgentConfigObservedValue,
+  selectedSourceErrored: boolean,
+  parseError: boolean,
+  effective: AgentConfigObservedValue
+): AgentConfigSyncState {
+  let sync: AgentConfigSyncState = desired?.status ?? (parseError ? 'parse-error' : 'observed')
+  if (desired?.ownership === 'enforce' && !setting.sensitive && !selectedSourceErrored) {
+    const matches = desired.operation === 'unset'
+      ? !selected.present
+      : selected.present && sameValue(selected.value, desired.desiredValue)
+    sync = matches ? (setting.activation === 'live' ? 'synced' : 'pending-restart') : 'drifted'
+    if (matches && effective.known && desired.operation === 'set' && !sameValue(effective.value, desired.desiredValue)) sync = 'shadowed'
+  }
+  return sync
+}
+
 function recordKey(row: Pick<AgentConfigOverrideRecord, 'provider' | 'scope' | 'targetId' | 'surface' | 'settingId'>): string {
   return [row.provider, row.scope, row.targetId, row.surface, row.settingId].join('\u0000')
 }
@@ -534,14 +556,7 @@ export class AgentSettingsService {
           ? { present: true, redacted: true, known: true, sourceLabel: 'Next launch', sourceScope: 'session' }
           : { present: true, value: desired.desiredValue, known: true, sourceLabel: 'Next launch', sourceScope: 'session' }
       }
-      let sync: AgentConfigSyncState = desired?.status ?? (parseError ? 'parse-error' : 'observed')
-      if (desired?.ownership === 'enforce' && !setting.sensitive && !selectedSource?.error) {
-        const matches = desired.operation === 'unset'
-          ? !selected.present
-          : selected.present && sameValue(selected.value, desired.desiredValue)
-        sync = matches ? (setting.activation === 'live' ? 'synced' : 'pending-restart') : 'drifted'
-        if (matches && effective.known && desired.operation === 'set' && !sameValue(effective.value, desired.desiredValue)) sync = 'shadowed'
-      }
+      const sync = computeSyncState(setting, desired, selected, !!selectedSource?.error, parseError, effective)
       return {
         setting,
         selected,
@@ -587,14 +602,7 @@ export class AgentSettingsService {
       ? { present: effectiveKnown, redacted: effectiveKnown, known: effectiveKnown, ...(effectiveSource ? { sourceLabel: effectiveSource.label, sourceScope: effectiveSource.scope } : { sourceLabel: 'Provider default' }) }
       : { present: effectiveKnown, ...(effectiveKnown ? { value: effectiveValue } : {}), known: effectiveKnown, ...(effectiveSource ? { sourceLabel: effectiveSource.label, sourceScope: effectiveSource.scope } : effectiveKnown ? { sourceLabel: 'Provider default' } : {}) }
 
-    let sync: AgentConfigSyncState = desired?.status ?? (parseError ? 'parse-error' : 'observed')
-    if (desired?.ownership === 'enforce' && !setting.sensitive && !selectedSource?.error) {
-      const matches = desired.operation === 'unset'
-        ? !selected.present
-        : selected.present && sameValue(selected.value, desired.desiredValue)
-      sync = matches ? (setting.activation === 'live' ? 'synced' : 'pending-restart') : 'drifted'
-      if (matches && effective.known && desired.operation === 'set' && !sameValue(effective.value, desired.desiredValue)) sync = 'shadowed'
-    }
+    const sync = computeSyncState(setting, desired, selected, !!selectedSource?.error, parseError, effective)
     return {
       setting,
       selected,
