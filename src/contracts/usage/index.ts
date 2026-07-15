@@ -121,6 +121,10 @@ export interface UsageAlertConfig {
   warn: number
   /** Optional reset flourish — default OFF (quiet is the house default). */
   confetti: boolean
+  /** Per-provider credits floor ("warn me under N of this balance") for the
+   *  denominator-free rows (DeepSeek's ¥, Devin's ACUs…). A balance has no
+   *  percentage, so "low" is the USER's number — absent/0 = no tap, honestly. */
+  floors?: Record<string, number>
 }
 export const USAGE_ALERT_DEFAULTS: UsageAlertConfig = { quiet: 80, warn: 95, confetti: false }
 

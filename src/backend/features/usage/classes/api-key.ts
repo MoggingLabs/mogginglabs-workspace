@@ -58,7 +58,10 @@ export const API_KEY_SPECS: Record<string, ApiKeySpec> = {
       const raw = first?.total_balance
       const bal = raw === undefined || raw === null ? null : num(Number(raw))
       if (bal === null) throw new Error('DeepSeek balance shape changed — adapter needs a look')
-      return plan('deepseek', profileId, 'DeepSeek', now, [{ label: 'Balance', usedPct: 0, windowMs: 0, raw: `${bal} ${first?.currency ?? ''}`.trim() }], {
+      // A balance with no denominator is NOT a 0% window (the audit's
+      // fabricated-zero finding): the real number rides `credits`, where the
+      // engine's floor branch and the tile both read it honestly.
+      return plan('deepseek', profileId, 'DeepSeek', now, [], {
         label: first?.currency ?? 'balance',
         remaining: bal
       })
@@ -71,7 +74,7 @@ export const API_KEY_SPECS: Record<string, ApiKeySpec> = {
     parse: (body, now, profileId) => {
       const bal = num((body as { data?: { available_balance?: unknown } })?.data?.available_balance)
       if (bal === null) throw new Error('Moonshot balance shape changed — adapter needs a look')
-      return plan('moonshot', profileId, 'Moonshot', now, [{ label: 'Balance', usedPct: 0, windowMs: 0, raw: `¥${bal}` }], { label: 'CNY', remaining: bal })
+      return plan('moonshot', profileId, 'Moonshot', now, [], { label: 'CNY', remaining: bal })
     }
   },
   // ElevenLabs: GET /v1/user/subscription -> { character_count, character_limit, next_character_count_reset_unix }
@@ -103,7 +106,7 @@ export const API_KEY_SPECS: Record<string, ApiKeySpec> = {
     parse: (body, now, profileId) => {
       const projects = (body as { projects?: unknown[] })?.projects
       if (!Array.isArray(projects)) throw new Error('Deepgram projects shape changed — adapter needs a look')
-      return plan('deepgram', profileId, 'Deepgram', now, [{ label: 'Balance', usedPct: 0, windowMs: 0, raw: `${projects.length} project(s) — balance detail in a later pass` }], {
+      return plan('deepgram', profileId, 'Deepgram', now, [], {
         label: 'projects',
         remaining: projects.length
       })
