@@ -88,7 +88,12 @@ export async function runSessionPoolSmoke(): Promise<void> {
     fs.utimesSync(path.join(bProj, `${uuid}.jsonl`), tNew, tNew)
     const res2 = poolProviderSessions('claude', cwd, B, [A], now)
     r.newerTargetKept = res2.skipped >= 1 && fs.readFileSync(path.join(bProj, `${uuid}.jsonl`), 'utf8') === 'target-progress'
-    mk(path.join(aProj, `${uuid}.jsonl`), 'source-advanced', 0) // A moves ahead
+    // A moves ahead — STRICTLY newer than the target. (First cut used ageDays 0, i.e. mtime
+    // exactly equal to the target's, and equal is correctly SKIPPED under newer-wins: the
+    // gate failed its own fixture, which is the right way round to fail.)
+    fs.writeFileSync(path.join(aProj, `${uuid}.jsonl`), 'source-advanced')
+    const tAhead = new Date(now + 5000)
+    fs.utimesSync(path.join(aProj, `${uuid}.jsonl`), tAhead, tAhead)
     poolProviderSessions('claude', cwd, B, [A], now)
     r.newerSourceWins = fs.readFileSync(path.join(bProj, `${uuid}.jsonl`), 'utf8') === 'source-advanced'
 

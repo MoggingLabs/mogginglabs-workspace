@@ -7,7 +7,7 @@
 # bundles). NEVER touches the installed app (different image name).
 set -u
 cd "$(dirname "$0")/.."
-declare -A RESULT_NAME=( [SESSIONPOOL]=sessionpool [MOVEPANE]=movepane [CLIPBOARD]=clipboard [USAGE]=usage-smoke [USAGEUI]=usageui [WEBUSAGE]=webusage [CHROMEUX]=chromeux [VERDICTLIVE]=verdictlive [ATTENTION]=attention [STATE]=state-smoke [DAEMONCUSTODY]=daemoncustody )
+declare -A RESULT_NAME=( [SESSIONPOOL]=sessionpool [MOVEPANE]=movepane [CLIPBOARD]=clipboard [USAGE]=usage [USAGEUI]=usageui [WEBUSAGE]=webusage [CHROMEUX]=chromeux [VERDICTLIVE]=verdictlive [ATTENTION]=attention [STATE]=state-smoke [DAEMONCUSTODY]=daemoncustody )
 summary=()
 for GATE in "$@"; do
   rn="${RESULT_NAME[$GATE]:-$(echo "$GATE" | tr 'A-Z' 'a-z')}"
