@@ -47,6 +47,15 @@ interface WorkspaceView {
   alertLatched: boolean
 }
 
+/** Payload of the pane's `mogging:remove-worktree` event (grid → controller). */
+interface RemoveWorktreeDetail {
+  paneId: number
+  repo: string
+  path: string
+  force: boolean
+  resolve: (result: RemoveWorktreeResult) => void
+}
+
 export interface CreateOpts {
   id?: string
   name?: string
@@ -309,58 +318,8 @@ export class WorkspaceController {
       if (paneId != null) void this.requestClosePane(meta.id, paneId)
     })
     container.addEventListener('mogging:remove-worktree', (e) => {
-      const detail = (e as CustomEvent<{
-        paneId: number
-        repo: string
-        path: string
-        force: boolean
-        resolve: (result: RemoveWorktreeResult) => void
-      }>).detail
-      if (!detail) return
-      void (async () => {
-        this.worktreeRemovalEvents.push({
-          paneId: detail.paneId,
-          stage: 'request',
-          paneStillMounted: view.layout.paneIds().includes(detail.paneId)
-        })
-        const closed = await this.requestClosePane(meta.id, detail.paneId, { replacementCwd: detail.repo })
-        this.worktreeRemovalEvents.push({
-          paneId: detail.paneId,
-          stage: 'pane-closed',
-          paneStillMounted: view.layout.paneIds().includes(detail.paneId)
-        })
-        if (!closed) {
-          detail.resolve({ ok: false, reason: 'error', error: 'Pane close was cancelled.' })
-          return
-        }
-        // node-pty exits asynchronously; on Windows its former cwd cannot be removed until
-        // the process handle is gone. Retry the same guarded backend operation, bounded.
-        let result: RemoveWorktreeResult = { ok: false, reason: 'error' }
-        for (let attempt = 0; attempt < 20; attempt++) {
-          if (attempt) await new Promise((resolve) => setTimeout(resolve, 150))
-          this.worktreeRemovalEvents.push({
-            paneId: detail.paneId,
-            stage: 'remove-attempt',
-            attempt: attempt + 1,
-            paneStillMounted: view.layout.paneIds().includes(detail.paneId)
-          })
-          result = (await getBridge().invoke(WorktreeChannels.remove, {
-            repo: detail.repo,
-            path: detail.path,
-            force: detail.force
-          })) as RemoveWorktreeResult
-          this.worktreeRemovalEvents.push({
-            paneId: detail.paneId,
-            stage: 'remove-result',
-            attempt: attempt + 1,
-            paneStillMounted: view.layout.paneIds().includes(detail.paneId),
-            ok: result.ok,
-            reason: result.reason
-          })
-          if (result.ok || result.reason !== 'error') break
-        }
-        detail.resolve(result)
-      })()
+      const detail = (e as CustomEvent<RemoveWorktreeDetail>).detail
+      if (detail) void this.removePaneWorktree(view, meta.id, detail)
     })
     // Pane ⋯ menu "Split right/down" bubbles here — the controller (not the grid)
     // owns splits, because the new pane's cwd must be seeded before its slot exists.
@@ -419,6 +378,57 @@ export class WorkspaceController {
     this.refreshAttention()
     this.onChange()
     return meta
+  }
+
+  /**
+   * The "Remove worktree" pane verb, whole: close the pane FIRST (its shell lives in
+   * the target directory), then remove the worktree via the guarded backend operation.
+   * Every stage is journaled into worktreeRemovalEvents — the WORKTREE gate replays
+   * this exact sequence and asserts pane-mounted state at each step.
+   */
+  private async removePaneWorktree(view: WorkspaceView, wsId: string, detail: RemoveWorktreeDetail): Promise<void> {
+    this.worktreeRemovalEvents.push({
+      paneId: detail.paneId,
+      stage: 'request',
+      paneStillMounted: view.layout.paneIds().includes(detail.paneId)
+    })
+    const closed = await this.requestClosePane(wsId, detail.paneId, { replacementCwd: detail.repo })
+    this.worktreeRemovalEvents.push({
+      paneId: detail.paneId,
+      stage: 'pane-closed',
+      paneStillMounted: view.layout.paneIds().includes(detail.paneId)
+    })
+    if (!closed) {
+      detail.resolve({ ok: false, reason: 'error', error: 'Pane close was cancelled.' })
+      return
+    }
+    // node-pty exits asynchronously; on Windows its former cwd cannot be removed until
+    // the process handle is gone. Retry the same guarded backend operation, bounded.
+    let result: RemoveWorktreeResult = { ok: false, reason: 'error' }
+    for (let attempt = 0; attempt < 20; attempt++) {
+      if (attempt) await new Promise((resolve) => setTimeout(resolve, 150))
+      this.worktreeRemovalEvents.push({
+        paneId: detail.paneId,
+        stage: 'remove-attempt',
+        attempt: attempt + 1,
+        paneStillMounted: view.layout.paneIds().includes(detail.paneId)
+      })
+      result = (await getBridge().invoke(WorktreeChannels.remove, {
+        repo: detail.repo,
+        path: detail.path,
+        force: detail.force
+      })) as RemoveWorktreeResult
+      this.worktreeRemovalEvents.push({
+        paneId: detail.paneId,
+        stage: 'remove-result',
+        attempt: attempt + 1,
+        paneStillMounted: view.layout.paneIds().includes(detail.paneId),
+        ok: result.ok,
+        reason: result.reason
+      })
+      if (result.ok || result.reason !== 'error') break
+    }
+    detail.resolve(result)
   }
 
   /** Swarm manifest (4/01): role chips render from the pane-meta port immediately;
