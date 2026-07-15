@@ -80,8 +80,13 @@ export async function runMigrateSmoke(): Promise<void> {
 
     const migrated = await migrateOlderDaemonSessions()
 
-    // Fidelity: both rows land with cwd/scrollback intact. Pre-v7 did not persist remote
-    // identity, so commands are deliberately not auto-resumed from a dead ambiguous source.
+    // Fidelity: both rows land with cwd/scrollback intact. The command's fate depends on the
+    // SOURCE version: remote-identity persistence arrived at v7 (REMOTE_IDENTITY_PERSISTENCE_-
+    // PROTOCOL_VERSION), so a source at/above v7 has an unambiguous command and it is RETAINED;
+    // only a pre-v7 source has its command dropped (it could not distinguish local from remote).
+    // The seeded source is v(N-1); now that the wire is >= v8 that is >= v7, so mig-1 keeps
+    // 'claude'. (The pre-v7 DROP rule stays covered directly by v7DeadCommandRetained below.)
+    // mig-2 has no command in the fixture, so it is undefined either way.
     let rows: PersistedPane[] = []
     if (fs.existsSync(targetDb)) {
       const store = new SessionStore(targetDb)
@@ -91,9 +96,10 @@ export async function runMigrateSmoke(): Promise<void> {
     const byId = new Map(rows.map((r) => [r.id, r]))
     const r1 = byId.get('mig-1')
     const r2 = byId.get('mig-2')
+    const expectedMig1Command = DAEMON_PROTOCOL_VERSION - 1 >= 7 ? 'claude' : undefined
     const fidelity =
       rows.length === 2 &&
-      !!r1 && r1.cwd === root && r1.command === undefined && r1.scrollback === 'MIGRATED_SCROLLBACK_1\nline two' &&
+      !!r1 && r1.cwd === root && r1.command === expectedMig1Command && r1.scrollback === 'MIGRATED_SCROLLBACK_1\nline two' &&
       !!r2 && r2.cwd === oldDir && r2.command === undefined && r2.scrollback === ''
 
     const v7DeadRows = persistedRowsForDeadSource(7, new Map(seeded.map((row) => [row.id, row])))
