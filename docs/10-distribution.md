@@ -145,12 +145,11 @@ CI validates both continuously where the tooling exists (`winget validate` on
 windows-latest, `brew style` on macos-latest) so submission day is a
 copy-paste PR.
 
-**v0.13.0 status:** release in flight — the committed manifests still pin the
-previous release's artifacts; they regenerate from the shipped v0.13.0 bytes
-once the Release workflow uploads them (the command above), which is when the
-sha256 pins move. The cask stays arm64-only (Intel deferred — see the matrix
-footnote). Neither is submitted yet — the checklists below are the copy-paste
-path when you choose to.
+**v0.13.0 status:** the committed manifests pin the shipped v0.13.0 artifacts —
+sha256s regenerated from the uploaded release bytes (the command above), win-x64
+`.exe` and mac-arm64 `.dmg` verified against the assets on the release. The cask
+stays arm64-only (Intel deferred — see the matrix footnote). Neither is submitted
+upstream yet — the checklists below are the copy-paste path when you choose to.
 
 ### winget submission playbook
 1. Regenerate manifests for the release being submitted; commit.
