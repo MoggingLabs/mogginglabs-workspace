@@ -169,24 +169,18 @@ export function runUsageSetSmoke(win: BrowserWindow): void {
       }
       envRefRefused = envRefRefused && keySlot('openrouter').kind === 'none'
 
-      // 6 ── web-session store-read opt-in persists (default OFF). The fake provider is
-      // enabled now (step 3), so the poller's per-tick emit re-renders the grid under this
-      // step. Unlike the enable toggle, webread's onChange does NOT loadGrid — the checkbox's
-      // `checked` only refreshes on the next poll, whose snapshot can LAG the KV. So keying a
-      // driver on the box's `checked` (driveToggle) reads a stale value and returns without
-      // clicking. Key on the KV instead — the persisted truth, and the only thing our clicks
-      // write (the poller reads it, never writes it) — so click-until-KV is race-proof.
+      // 6 ── web-session store-read opt-in persists (default OFF). webReadSet now refreshes
+      // the grid after the write (like the enable toggle), so the checkbox tracks the
+      // persisted KV across the poller's re-renders — the same driveToggle contract applies.
       const cursorWebRead = '.usage-prov-row[data-provider="cursor"] .usage-webread input'
-      const driveWebRead = async (target: '0' | '1'): Promise<boolean> => {
-        for (let i = 0; i < 50; i++) {
-          if (kv.getSetting('usage.webread.cursor') === target) return true
-          await ES(`(() => { const el = document.querySelector(${JSON.stringify(cursorWebRead)}); if (el) el.click() })()`)
-          await sleep(250)
-        }
-        return kv.getSetting('usage.webread.cursor') === target
-      }
-      const webReadOn = await driveWebRead('1')
-      const webReadOk = webReadOn && (await driveWebRead('0'))
+      await driveToggle(cursorWebRead, true)
+      tries = 0
+      while (kv.getSetting('usage.webread.cursor') !== '1' && tries++ < 40) await sleep(150)
+      const webReadOn = kv.getSetting('usage.webread.cursor') === '1'
+      await driveToggle(cursorWebRead, false)
+      tries = 0
+      while (kv.getSetting('usage.webread.cursor') !== '0' && tries++ < 40) await sleep(150)
+      const webReadOk = webReadOn && kv.getSetting('usage.webread.cursor') === '0'
 
       // 7 ── plans table === popover tiles (one snapshot, two surfaces)
       await ES(`window.__mogging.usage.open()`)

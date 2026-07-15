@@ -264,7 +264,13 @@ export function createUsageSection(): HTMLElement {
               label: 'read my browser session',
               ariaLabel: `${r.id}: read my browser session`,
               checked: r.webRead ?? false,
-              onChange: (checked) => void invoke(UsageChannels.webReadSet, { providerId: r.id, enabled: checked })
+              // Refresh the grid after the write, exactly as the enable toggle does: the
+              // poller's `changed` re-render repaints the row from cached rowState (only
+              // `health` follows the live snapshot), so without this the checkbox reverts
+              // to its stale `webRead` on the next poll and the opt-in looks like it didn't
+              // stick (it did — the KV is set — but the box lies until the next configGet).
+              onChange: (checked) =>
+                void invoke(UsageChannels.webReadSet, { providerId: r.id, enabled: checked }).then(() => void loadGrid())
             })
             webRead.el.classList.add('usage-webread')
             webRead.el.title =
