@@ -84,14 +84,17 @@ export function runUsageSetSmoke(win: BrowserWindow): void {
         }
       }
       const fakeEnable = '.usage-prov-row[data-provider="fake"] .usage-prov-enable input'
+      // Prove DISABLE reaches the poller here, then leave the fake OFF through the
+      // interactive steps below (key / env-ref / webread). A fast-cadence fixture poll
+      // re-renders the whole grid on every tick (renderGrid on `changed`), and the
+      // key-refusal error those steps assert on is imperative DOM (err.textContent) that a
+      // re-render wipes — so an enabled fake makes them flaky. The fake is flipped back ON
+      // right before the plans table (step 7), the only surface that needs its 11 rows.
+      // (ENABLE-reaches-the-poller is proven there, svc.list 0 -> 11.)
       await driveToggle(fakeEnable, false)
       tries = 0
       while (svc.list().length !== 0 && tries++ < 40) await sleep(150)
       const disabledOk = svc.list().length === 0
-      await driveToggle(fakeEnable, true)
-      tries = 0
-      while (svc.list().length !== 11 && tries++ < 60) await sleep(200)
-      const enabledOk = svc.list().length === 11
 
       // 4 ── paste-once, WRITE-ONLY forever (vault-conditioned probes).
       //      Value-set + click happen in ONE evaluation so an async grid
@@ -181,6 +184,14 @@ export function runUsageSetSmoke(win: BrowserWindow): void {
       tries = 0
       while (kv.getSetting('usage.webread.cursor') !== '0' && tries++ < 40) await sleep(150)
       const webReadOk = webReadOn && kv.getSetting('usage.webread.cursor') === '0'
+
+      // Flip the fake back ON now that the interactive steps are done: the plans table
+      // needs its 11 fixture rows, and this is where ENABLE-reaches-the-poller is proven
+      // (svc.list 0 -> 11), live.
+      await driveToggle(fakeEnable, true)
+      tries = 0
+      while (svc.list().length !== 11 && tries++ < 60) await sleep(200)
+      const enabledOk = svc.list().length === 11
 
       // 7 ── plans table === popover tiles (one snapshot, two surfaces)
       await ES(`window.__mogging.usage.open()`)
