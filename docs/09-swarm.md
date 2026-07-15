@@ -88,6 +88,12 @@ refused at save — the mistake is impossible, not discouraged.
   click, same pane, same cwd/worktree, resume where the CLI supports it. Only the
   CLI is interrupted (^C); the shell/PTY and scrollback survive. One hop per event.
 - Per-workspace auto-failover: palette -> "Toggle auto-failover for this workspace".
+- **Sessions follow profiles (ADR 0013).** Profile homes are private session silos,
+  so before every local launch the cwd's transcripts from the provider's other homes
+  are pooled into the launch home (whole files, the CLI's own documented paths,
+  newer-wins, 30-day bound). The failover relaunch resumes the pane's EXACT session
+  by id — the conversation continues on the next subscription; a fresh launch's
+  in-CLI `/resume` and the bare `--resume` picker see the pooled sessions too.
 
 ## Remote (SSH) panes (4/05)
 

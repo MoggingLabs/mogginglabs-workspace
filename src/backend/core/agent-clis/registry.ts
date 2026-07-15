@@ -47,6 +47,9 @@ export interface AgentCliDefinition {
   bin: string
   versionArgs: readonly string[]
   resumeArgs?: readonly string[]
+  /** The resume flag/subcommand accepts a session id ("claude --resume <id>",
+   *  "codex resume <id>") — exact-session resume across a profile failover. */
+  resumeTakesSessionId?: boolean
   installHint?: string
   config: AgentCliConfigCapabilities
 }
@@ -63,6 +66,7 @@ export const AGENT_CLI_REGISTRY = [
     bin: 'claude',
     versionArgs: ['--version'],
     resumeArgs: ['--resume'],
+    resumeTakesSessionId: true,
     installHint: 'npm install -g @anthropic-ai/claude-code',
     config: {
       pointerEnv: 'CLAUDE_CONFIG_DIR',
@@ -84,6 +88,7 @@ export const AGENT_CLI_REGISTRY = [
     bin: 'codex',
     versionArgs: ['--version'],
     resumeArgs: ['resume'],
+    resumeTakesSessionId: true,
     installHint: 'npm install -g @openai/codex',
     config: {
       pointerEnv: 'CODEX_HOME',

@@ -1,10 +1,17 @@
 import { ipcMain, type BrowserWindow } from 'electron'
-import { detectAgents, buildLaunchCommand, InstallService } from '@backend/features/agents'
+import {
+  detectAgents,
+  buildLaunchCommand,
+  InstallService,
+  poolProviderSessions,
+  resumeSessionIdFromFile
+} from '@backend/features/agents'
+import { resolveHome } from '@backend/features/usage'
 import { AgentChannels, type AgentCommandRequest, type AgentCommandResult, type AgentInfo } from '@contracts'
 import { getSettingsStore } from './app-settings'
 import { maybeFault } from './fault-port'
 import { materializeToolPlanAtLaunch } from './tool-plan'
-import { claudeStatuslineArgs } from './context'
+import { claudeStatuslineArgs, paneSessionLog } from './context'
 import { bellLaunchExtras } from './notify-hook'
 import { markAgentConfigSessionLaunched, prepareAgentConfigLaunch, refreshAgentSettingsForCli } from './agent-settings'
 import { materializeProfileEnv } from './profiles'
@@ -83,12 +90,46 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
     // user who pointed a profile at their own notify setup said so on purpose.
     const bell = bellLaunchExtras(req.agentId, { runtime: prepared.runtime, tui: prepared.tui })
     if (bell.reason) return { ok: false, reason: bell.reason }
+    // Sessions follow profiles (ADR 0012). A profile is a separate config home — the
+    // provider's own multi-account mechanism — but that makes every profile a private
+    // session silo. So every LOCAL launch first unions this cwd's sessions from the
+    // provider's other known homes (default + saved profiles) into the launch home:
+    // `--resume`, the CLI's picker, AND an in-session /resume all simply see them,
+    // whichever subscription they were born under. Every launch, not just resume ones —
+    // the fresh-launch-then-/resume path is exactly how a new workspace picks up the
+    // capped profile's work. Whole files at the CLIs' documented paths; never parsed,
+    // never a credential (those files are not in the copy set — ADR 0002); best-effort
+    // only, a launch never fails over a pooling error.
+    try {
+      const targetHome = resolveHome(req.agentId, profile ?? null)
+      const sources = [
+        resolveHome(req.agentId, null),
+        ...(getSettingsStore()?.listProfiles() ?? [])
+          .filter((p) => p.provider === req.agentId && p.id !== profile?.id)
+          .map((p) => resolveHome(req.agentId, p))
+      ]
+      poolProviderSessions(req.agentId, req.cwd, targetHome, sources)
+    } catch {
+      /* pooling is a courtesy before the launch, never a gate */
+    }
+    // Exact-session resume: when the request names the pane it will be typed into and
+    // the context monitor has that pane's session log locked, resume THAT session by id
+    // — a usage-limit failover continues the conversation under the next profile instead
+    // of dropping the user into the CLI's picker. Falls back to the bare flag whenever
+    // the id isn't knowable (fresh restore, foreign provider, unlocked matcher).
+    let resumeSessionId: string | undefined
+    if (req.resume && typeof req.paneId === 'number') {
+      const live = paneSessionLog(req.paneId)
+      if (live && live.provider === req.agentId) resumeSessionId = resumeSessionIdFromFile(req.agentId, live.file) ?? undefined
+    }
     const command = buildLaunchCommand(
       req.agentId,
       req.cwd,
       req.resume,
       { ...bell.env, ...profileEnv, ...prepared.env },
-      [...plan.args, ...ctxArgs, ...bell.args, ...prepared.args]
+      [...plan.args, ...ctxArgs, ...bell.args, ...prepared.args],
+      'local',
+      resumeSessionId
     )
     if (!command) return { ok: false, reason: `Unknown agent provider: ${req.agentId}` }
     markAgentConfigSessionLaunched(req)
