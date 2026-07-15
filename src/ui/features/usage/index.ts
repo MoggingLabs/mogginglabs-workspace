@@ -3,7 +3,7 @@ import { BrowserChannels, ProfileChannels, UsageChannels, USAGE_DISPLAY_DEFAULTS
 import { createAsyncGuard, type AsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
 import { announce } from '../../core/a11y/live-region'
-import { el, icon, providerAccent, providerLogo, showToast } from '../../components'
+import { clear, el, icon, providerAccent, providerLogo, showToast } from '../../components'
 import { setActiveView } from '../../core/shell/view-port'
 import { requestSettingsTab } from '../../core/shell/settings-tab-port'
 import { switchActiveProfile } from '../../core/agents/profile-switch'
@@ -278,7 +278,7 @@ export const usageFeature: UiFeature = {
     //    add-account) is dropped, not invented. Pace/reset wording stays the ONE
     //    backend formatter's, verbatim (golden-locked) — only its POSITION moved.
     const paintPop = (): void => {
-      pop.innerHTML = ''
+      clear(pop)
       pop.classList.toggle('is-compact', display.density === 'compact')
       const now = Date.now()
 
@@ -737,7 +737,7 @@ export const usageFeature: UiFeature = {
 
     /**
      * A repaint MUST NOT steal the focus. Usage polls in the background and every snapshot that
-     * arrives repaints this popover — and `pop.innerHTML = ''` destroys the very node the user
+     * arrives repaints this popover — and `clear(pop)` destroys the very node the user
      * has focused. Focus falls back to <body>, and the Enter they were lining up (the profile
      * switch, the one thing you can do from here with the keyboard) silently does nothing: they
      * arrowed to a lane, a refresh landed, and the popover stopped answering. The keydown handler

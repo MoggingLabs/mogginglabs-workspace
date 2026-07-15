@@ -25,7 +25,6 @@ const MAX_STACK = 4
  *  of five alerts used to evict the oldest before a frame painted, while the
  *  sender had already spent its single-fire state (phase-11 audit, RC3). */
 const MAX_QUEUE = 20
-const pending: ToastOpts[] = []
 const TONE_ICON: Record<ToastTone, IconName> = {
   neutral: 'bell',
   attention: 'bell',

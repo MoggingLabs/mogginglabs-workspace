@@ -1,4 +1,4 @@
-import { USAGE_PROVIDERS, type CostScan } from '@contracts'
+import type { CostScan } from '@contracts'
 import { fakeAdapter, scanCost } from '@backend/features/usage'
 import { installFaultHooks } from './fault-port'
 import { installFixtures, type UpdateDriver, type UsageWorld } from './fixture-port'
@@ -39,12 +39,17 @@ const driveFailedFeed: UpdateDriver = (push) => {
  * network — are simply unreachable from here, because production asks the port and the port
  * answers null.
  *
- * Note `npm run dev` itself lands in the "any other gate" arm: prepareRuntime() sets
- * MOGGING_CHANNEL='dev', so `isSmoke` is true in a dev run. That is the long-standing behaviour
- * (usage polls nothing in dev) and it is preserved here verbatim.
+ * `isSmoke` means A GATE IS DRIVING THIS BOOT — so the two MOGGING_ vars the app sets on
+ * ITSELF every run (boot.ts sets MOGGING_CHANNEL='dev' on any unpackaged boot; cli-runtime
+ * sets MOGGING_CLI when it manages a shim) must not count, or the check degenerates to
+ * "is dev at all" and the real-session arm below is unreachable in dev. Excluding them,
+ * a plain `npm run dev` gets the REAL adapters (dev is representative of the shipped app)
+ * while every gate — each sets its own MOGGING_<GATE> var — keeps its fixture world.
  */
+const SELF_SET_ENV = new Set(['MOGGING_CHANNEL', 'MOGGING_CLI'])
+
 function usageWorld(): UsageWorld | null {
-  const isSmoke = Object.keys(process.env).some((k) => k.startsWith('MOGGING_'))
+  const isSmoke = Object.keys(process.env).some((k) => k.startsWith('MOGGING_') && !SELF_SET_ENV.has(k))
   if (!isSmoke) return null // a real session: real adapters, real status, real cost, live prices
   const isFixtureWorld =
     Object.keys(process.env).some((k) => k.startsWith('MOGGING_USAGE')) ||

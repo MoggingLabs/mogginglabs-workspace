@@ -1,7 +1,7 @@
 import { IntegrationsChannels, type TrailEntry, type TrailSource } from '@contracts'
 import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
-import { Card, el } from '../../components'
+import { Card, clear, el } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onViewChange } from '../../core/shell/view-port'
 import { fmtAge } from '../usage'
@@ -50,7 +50,7 @@ export function createActivitySection(): HTMLElement {
   const wsName = (id: string): string => getWorkspaces().workspaces.find((w) => w.id === id)?.name ?? id.slice(0, 8)
 
   function renderRows(entries: TrailEntry[]): void {
-    list.innerHTML = ''
+    clear(list)
     const rows = [...entries].reverse().slice(0, 500) // newest first, bounded DOM
     emptyNote.hidden = rows.length > 0
     const now = Date.now()
@@ -97,7 +97,7 @@ export function createActivitySection(): HTMLElement {
 
   function refreshWorkspaceOptions(): void {
     const current = wsSelect.value
-    wsSelect.innerHTML = ''
+    clear(wsSelect)
     wsSelect.append(el('option', { value: '', text: 'All workspaces' }))
     for (const w of getWorkspaces().workspaces) wsSelect.append(el('option', { value: w.id, text: w.name }))
     wsSelect.value = current

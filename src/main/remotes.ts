@@ -31,14 +31,23 @@ export function sanitizeRemote(raw: unknown): RemoteHost | null {
     id: r.id,
     ...connection
   }
-  const platform = r.platform === undefined ? 'posix' : r.platform
-  if (platform !== 'posix' && platform !== 'windows') return null
-  const shell = r.shell === undefined ? (platform === 'windows' ? 'powershell' : 'sh') : r.shell
-  if (typeof shell !== 'string' || !REMOTE_SHELLS.has(shell)) return null
-  if (platform === 'windows' && shell !== 'powershell' && shell !== 'cmd') return null
-  if (platform === 'posix' && shell !== 'sh' && shell !== 'bash' && shell !== 'zsh') return null
-  out.platform = platform
-  out.shell = shell as RemoteHost['shell']
+  // UNDEFINED STAYS UNDEFINED. An absent platform means the user has never confirmed
+  // this host's dialect (listRemotes' whole stance) — and this boundary used to default
+  // it to 'posix', so ANY round-trip save of a legacy row (a rename, a port edit)
+  // silently confirmed the host on the user's behalf. Only an explicit platform earns
+  // a shell; an unconfirmed row saves back exactly as unconfirmed.
+  if (r.platform !== undefined) {
+    const platform = r.platform
+    if (platform !== 'posix' && platform !== 'windows') return null
+    const shell = r.shell === undefined ? (platform === 'windows' ? 'powershell' : 'sh') : r.shell
+    if (typeof shell !== 'string' || !REMOTE_SHELLS.has(shell)) return null
+    if (platform === 'windows' && shell !== 'powershell' && shell !== 'cmd') return null
+    if (platform === 'posix' && shell !== 'sh' && shell !== 'bash' && shell !== 'zsh') return null
+    out.platform = platform
+    out.shell = shell as RemoteHost['shell']
+  } else if (r.shell !== undefined) {
+    return null // a shell without a platform is a malformed row, not a confirmation
+  }
   if (r.identityHint !== undefined) {
     if (typeof r.identityHint !== 'string' || r.identityHint.length > 120) return null
     out.identityHint = r.identityHint

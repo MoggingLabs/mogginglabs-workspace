@@ -4,7 +4,7 @@ Phase-8. The workspace stops being an island: agents reach your tools, your
 tools reach your agents, and the outside world's state lands back on the board.
 Five directions, one rule throughout — **every credential we hold, we hold as
 OS-keychain ciphertext, on your machine, or we refuse to hold it at all.** The
-daemon is untouched (still v3, grant-blind); every boundary below is app-side.
+daemon is untouched by this phase (grant-blind); every boundary below is app-side.
 
 > **Updated by [ADR 0014](adr/0014-app-held-service-connections.md).** The app is now
 > an OAuth client: it can hold a **connection** to a service *account* (Sentry, Notion,

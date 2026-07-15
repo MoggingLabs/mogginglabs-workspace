@@ -20,7 +20,6 @@ export function shellFlavor(shellPath: string, platform: string): ShellFlavor {
 
 /** Characters that cannot occur in a real path, and which would let a dropped
  *  filename forge a newline — i.e. "press Enter" — once written into the PTY. */
-// eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/g
 
 /**

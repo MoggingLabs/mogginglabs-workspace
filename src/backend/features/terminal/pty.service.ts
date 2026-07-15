@@ -1,5 +1,3 @@
-import { homedir } from 'node:os'
-import { statSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import type {
   AgentDetectedEvent,
@@ -17,6 +15,7 @@ import type {
 import { spawnPty, ptyEmulation, type IPty } from '../../platform/pty-host'
 import { defaultShell, paneShellLaunch } from '../../platform/shell'
 import { killPtyTree } from '../../platform/process-tree'
+import { SCROLLBACK_BYTES, pickCwd, trimTornStart } from './pane-shared'
 import { getTelemetry } from '../../core/telemetry'
 import {
   ActivityTracker,
@@ -34,40 +33,6 @@ import {
   type PaneCwdSnapshot
 } from '../agent-state'
 import { aiderLogPath } from '../context'
-
-/** Retained per-pane output for reattach repaint — same cap as the daemon's ring. */
-const SCROLLBACK_BYTES = 200_000
-
-/** How far past a fresh cap cut we'll look for a clean line start. */
-const TEAR_SCAN = 400
-
-/** A blind `.slice(-SCROLLBACK_BYTES)` can land mid escape sequence or between surrogate
- *  halves, and the reattach repaint then feeds xterm a sequence's tail as literal text (or
- *  a lone surrogate). Drop a split surrogate's low half, then cut forward to the next
- *  newline: at most one partial line of scrollback lost, cheap next to a garbled repaint.
- *  No newline nearby (one giant TUI frame) keeps the tear — same cap semantics either way. */
-function trimTornStart(s: string): string {
-  const c0 = s.charCodeAt(0)
-  if (c0 >= 0xdc00 && c0 <= 0xdfff) s = s.slice(1)
-  const nl = s.indexOf('\n')
-  return nl !== -1 && nl < TEAR_SCAN ? s.slice(nl + 1) : s
-}
-
-/** The directory a pane's shell starts in: the requested one when it is a real directory,
- *  the home directory otherwise. Mirrors pty-daemon/session.ts's pickCwd — the two backends
- *  must not disagree about where a pane opens. `''` means "none asked for" (never the
- *  process's own directory, which is the app's install folder in a packaged build), and a
- *  path removed since the workspace was saved falls back rather than failing the spawn. */
-function pickCwd(requested?: string): string {
-  if (requested) {
-    try {
-      if (statSync(requested).isDirectory()) return requested
-    } catch {
-      /* gone, or not readable — fall through to home */
-    }
-  }
-  return homedir()
-}
 
 /** The sink the service pushes pane events into (wired to IPC by the module). */
 export interface TerminalSink {

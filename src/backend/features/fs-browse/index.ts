@@ -1,7 +1,7 @@
-import { existsSync, readdirSync, statSync, type Dirent } from 'node:fs'
 import { isAbsolute, join, parse, sep } from 'node:path'
 import { FS_DRIVE_ROOT, FS_LIST_CAP, type DirCrumb, type DirEntry, type DirResult, type ListDirRequest } from '@contracts'
 import { canonical, driveRoots, parentOf } from '../../platform/fs-paths'
+import { classifyDirent, compareNames, probeIsRepo, readDirents } from '../../platform/fs-listing'
 
 /**
  * Read-only one-level directory listing for the wizard's folder browser (8.5/03).
@@ -50,22 +50,6 @@ function crumbsFor(dir: string): DirCrumb[] {
   return crumbs
 }
 
-/**
- * A directory we should offer? `Dirent.isDirectory()` is FALSE for a junction or
- * symlink that points at one — and developers symlink project folders — so follow
- * links with a guarded stat. A dead link throws; we skip it rather than listing a
- * folder that cannot be entered.
- */
-function isDir(dir: string, d: Dirent): boolean {
-  if (d.isDirectory()) return true
-  if (!d.isSymbolicLink()) return false
-  try {
-    return statSync(join(dir, d.name)).isDirectory()
-  } catch {
-    return false
-  }
-}
-
 /** Async ONLY for the drive-root listing (see listDrives) — the per-directory work below is
  *  local-disk and stays synchronous. Both IPC seams already await: `fs:listDir` is an
  *  ipcMain.handle (src/main/fs-browse.ts) and the wizard's browser awaits the invoke. */
@@ -81,36 +65,26 @@ export async function listDir(req: ListDirRequest): Promise<DirResult> {
   const path = canonical(req.path)
   if (!isAbsolute(path)) return { ok: false, reason: 'invalid', path }
 
-  let dirents: Dirent[]
-  try {
-    dirents = readdirSync(path, { withFileTypes: true })
-  } catch (e) {
-    // Never throws. An unreadable folder is an ordinary thing to click on, so it is
-    // a state the browser renders — not a crash and not an empty listing (which
-    // would be a lie: "this folder has nothing in it").
-    const code = (e as NodeJS.ErrnoException).code
-    const reason = code === 'EACCES' || code === 'EPERM' ? 'denied' : code === 'ENOTDIR' ? 'not-a-directory' : 'missing'
-    return { ok: false, reason, path }
-  }
+  // Never throws (fs-listing.ts): an unreadable folder is an ordinary thing to click
+  // on, so it is a state the browser renders — not a crash and not an empty-listing lie.
+  const read = readDirents(path)
+  if (!read.ok) return { ok: false, reason: read.reason, path }
+  const dirents = read.dirents
 
   const names = dirents
-    .filter((d) => isDir(path, d))
+    // Enterable folders only: a broken link (classify throws on its target) is skipped
+    // rather than offered as a folder that cannot be entered.
+    .filter((d) => classifyDirent(path, d) === 'dir')
     .map((d) => d.name)
     .filter((n) => (req.showHidden ? true : !n.startsWith('.')))
-    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'accent' }))
+    .sort(compareNames)
 
   // Sort, then cap, THEN probe: a 10k-entry folder costs 500 stats, not 10k. (Capping
   // before sorting would make `truncated` return an arbitrary slice.)
   const truncated = names.length > FS_LIST_CAP
   const entries: DirEntry[] = names.slice(0, FS_LIST_CAP).map((name) => {
     const child = join(path, name)
-    let isRepo = false
-    try {
-      isRepo = existsSync(join(child, '.git')) // dir OR file — a worktree's .git is a file
-    } catch {
-      /* raced away between readdir and stat; not a repo as far as we can tell */
-    }
-    return { name, path: child, isRepo }
+    return { name, path: child, isRepo: probeIsRepo(child) }
   })
 
   return { ok: true, path, parent: parentOf(path), crumbs: crumbsFor(path), entries, truncated }

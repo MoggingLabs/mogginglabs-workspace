@@ -7,6 +7,27 @@ export interface RemoteConnection {
   port?: number
 }
 
+/** The shell dialects a remote target can speak — ONE spelling for the union that was
+ *  restated inline in three places (RemoteHost, PersistedPane.remote, SpawnSpec.remote). */
+export type RemoteShellDialect = 'sh' | 'bash' | 'zsh' | 'powershell' | 'cmd'
+
+/** A persisted/wire remote POINTER: the connection fields plus the confirmed dialect and
+ *  an optional remote cwd. `PersistedPane.remote` and the daemon's `SpawnSpec.remote` are
+ *  both exactly this shape — they were two inline near-twins that drifted independently
+ *  (the missing shell column was that drift realized). Carries the platform AND the shell:
+ *  a restored pane must come back speaking the same language it went away in, or the first
+ *  command typed at it is a bash-ism at a PowerShell. Connection pointers only — the
+ *  user's ssh stack does all auth (ADR 0002). */
+export interface RemotePaneTarget {
+  name: string
+  host: string
+  user?: string
+  port?: number
+  cwd?: string
+  platform?: 'posix' | 'windows'
+  shell?: RemoteShellDialect
+}
+
 export const REMOTE_ID_SHAPE = /^[\w.-]{1,64}$/
 export const REMOTE_HOST_SHAPE = /^(?!-)[A-Za-z0-9._-]{1,253}$/
 export const REMOTE_USER_SHAPE = /^[a-z_][a-z0-9._-]{0,31}$/i

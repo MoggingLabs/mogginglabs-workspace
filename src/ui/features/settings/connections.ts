@@ -8,7 +8,7 @@ import {
   type ConnectionState
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { EmptyState, el, icon, loadingRow, providerLogo, showToast } from '../../components'
+import { EmptyState, clear, el, icon, loadingRow, providerLogo, showToast } from '../../components'
 
 /**
  * Settings § Connections (ADR 0014) — the page's new first citizen.
@@ -63,7 +63,7 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
   }
 
   function paint(): void {
-    grid.innerHTML = ''
+    clear(grid)
     if (!connections.length) {
       grid.append(EmptyState({ icon: 'plug', title: 'No services to connect', body: 'The catalog is empty.' }))
       return

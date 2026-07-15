@@ -5,11 +5,23 @@
 
 import type { AgentState } from '../domain/agent'
 import type { PaneCwdLocality, PaneCwdSource } from '../domain/cwd'
-import type { RemoteConnection } from '../domain/remote'
+import type { RemotePaneTarget } from '../domain/remote'
 import type { PersistedWorkspace } from '../ipc/workspace.ipc'
 import type { PtyEmulation } from '../ipc/terminal.ipc'
 import type { ReviewSnapshot } from '../ipc/review.ipc'
 
+// v9: burned by v0.11.1 to DELIVER a daemon-side behaviour fix (the tracker's done-chime
+// grace — a finished turn's own bell no longer latches the pane red). The fix changed no
+// wire at all, and that is the point of recording it: a surviving v8 daemon would have kept
+// running the buggy tracker forever, and only a version burn could retire it. This burn is
+// what motivated ADR 0012's split — DaemonEndpoint.build (the stamp, below) now answers
+// "is the running daemon's CODE current?", so a behaviour fix never burns a version again.
+// v8: AgentState grew `done` and `unknown` — states the DAEMON emits (the verdict law:
+// green has exactly one source). A surviving v7 daemon would never emit `done`, so every
+// green in the product would have quietly died for anyone who upgraded without a reboot —
+// no error, no gate. The bump forces the migrate-and-retire hand-off; the wire-shape
+// fingerprint in check-protocol-version.mjs landed alongside so an unbumped wire change
+// of this class can never ship silently again.
 // v7: pane-originated state is capability-bound. Cwd is a first-class declaration; every cwd
 // event carries source, locality, and a per-generation revision, and `cwd-report` requires the
 // session-only pane token. Reviewer sign-offs require that same pane credential AND bind to
@@ -144,15 +156,11 @@ export function claimsOverlap(a: string, b: string): boolean {
     const y = sb[i]
     if (x === undefined || y === undefined) return true // equal or prefix-contained
     if (x === '**' || y === '**') return true
-    const literalX = !x.includes('*')
-    const literalY = !y.includes('*')
-    if (literalX && literalY && x !== y) return false // proven divergence
-    if (!literalX || !literalY) {
-      // a wildcard segment may or may not match — conservative: keep walking as if
-      // it matched; a later literal divergence can still separate the branches only
-      // when neither side has wildcards there, so effectively this often denies.
-      continue
-    }
+    // Only a pure-literal mismatch proves divergence. A wildcard segment on either
+    // side may or may not match — the walk continues as if it did, so a later
+    // literal-vs-literal mismatch can still separate the branches; anything else
+    // reaches the end and denies (the conservative default).
+    if (!x.includes('*') && !y.includes('*') && x !== y) return false // proven divergence
   }
 }
 
@@ -188,13 +196,9 @@ export interface SpawnSpec {
    *  source-agnostic: it merges the map into `pty.spawn` and knows nothing of
    *  the vault (no version bump — an optional field on the existing message). */
   env?: Record<string, string>
-  /** Remote pane (Phase-4/05): the RESOLVED host row (the daemon stays db-free).
-   *  Connection pointers only — the user's ssh stack does all auth (ADR 0002). */
-  remote?: Omit<RemoteConnection, 'platform'> & {
-    cwd?: string
-    platform?: 'posix' | 'windows'
-    shell?: 'sh' | 'bash' | 'zsh' | 'powershell' | 'cmd'
-  }
+  /** Remote pane (Phase-4/05): the RESOLVED host row (the daemon stays db-free) — the
+   *  ONE shared pointer shape (domain/remote.ts; PersistedPane.remote is the same one). */
+  remote?: RemotePaneTarget
 }
 
 export interface PaneInfo {
@@ -349,6 +353,13 @@ export type NotifyEvent =
   // notifyEventToState below: no stateless AgentState is honest for a guess (idle/busy would
   // clear a real latch, attention would be the bug reborn), so only the tracker may route it.
   | 'notice'
+  // The pane's agent reported a provider usage limit (Phase-4/04 failover). Handled
+  // statefully by the daemon (session.applyNotify fans a DISTINCT `limit` server event
+  // to subscribers so the app can offer profile failover) — it still rings attention
+  // via the stateless map's default arm, which is the honest reading of "your quota is
+  // spent". This member existed on the wire (mogging notify --event usage-limit, the
+  // PROFILES gate drives it) long before the union admitted it.
+  | 'usage-limit'
 
 /**
  * Map a notify event to the pane state it raises.

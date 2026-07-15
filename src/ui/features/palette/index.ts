@@ -2,7 +2,6 @@ import type { UiFeature } from '../../core/registry/feature-registry'
 import { clear, el, icon, type IconName } from '../../components'
 import { activeView } from '../../core/shell/view-port'
 import { allCommands, availability, onCommandsChange, type Command } from '../../core/commands/command-port'
-import { isModKey } from '../../core/commands/shortcuts'
 import { trapOverlay, type OverlayTrap } from '../../core/a11y/overlay-trap'
 import { getTelemetry } from '../../core/telemetry'
 

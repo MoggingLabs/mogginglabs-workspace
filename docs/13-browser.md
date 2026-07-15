@@ -70,7 +70,7 @@ DATA: `bin/mcp-catalog.json`, build-copied from
 `src/contracts/integrations/mcp-catalog.json` (both committed; the MCP smoke
 byte-compares them and holds served `tools/list` to the file). It is a pure
 CLIENT of two token-authed local sockets it does not own (nothing on TCP, the
-daemon protocol stays v3):
+daemon protocol untouched by this phase):
 
 - **browser family → the app's browser-control endpoint**: the MAIN process
   opens a token-authed local socket (unix socket / named pipe — the same class

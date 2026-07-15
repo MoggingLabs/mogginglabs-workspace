@@ -5,11 +5,10 @@
 //
 // It also PERSISTS sessions (cwd + command label + scrollback) to a small store, so the
 // daemon self-recovers on a cold start / crash and repaints prior scrollback (Phase-1/03).
-import * as os from 'node:os'
-import * as fs from 'node:fs'
 import * as crypto from 'node:crypto'
 import { spawnPty, type IPty } from '@backend/platform/pty-host'
 import { paneShellLaunch } from '@backend/platform/shell'
+import { SCROLLBACK_BYTES, pickCwd, trimTornStart } from '@backend/features/terminal/pane-shared'
 import { aiderLogPath } from '@backend/features/context'
 import type { Approval, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { PANE_CWD_MAX, normalizeRemoteConnection, notifyEventToState } from '@contracts'
@@ -35,10 +34,6 @@ import { SessionStore, resumeCommandFor } from '@backend/features/workspace'
 import { Mailbox } from './mailbox'
 import { Ledger } from './ledger'
 import type { PersistedPane, PersistedWorkspace, WorkspaceLayout } from '@contracts'
-
-const SCROLLBACK_BYTES = 200_000
-
-const posixQuote = (value: string): string => `'${value.replace(/'/g, `'"'"'`)}'`
 
 /** Command executed by ssh only after authentication succeeds. It emits a
  *  private OSC readiness marker, enters the requested target cwd, then becomes
@@ -68,36 +63,6 @@ function remoteBootstrap(remote: NonNullable<SpawnSpec['remote']>): string {
     return `powershell.exe -NoLogo -NoProfile -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`
   }
   return remoteBootstrapCommand(remote.cwd)
-}
-
-/** How far past a fresh cap cut we'll look for a clean line start. */
-const TEAR_SCAN = 400
-
-/** A blind `.slice(-SCROLLBACK_BYTES)` can land mid escape sequence or between surrogate
- *  halves, and the reattach repaint then feeds xterm a sequence's tail as literal text (or
- *  a lone surrogate). Drop a split surrogate's low half, then cut forward to the next
- *  newline: at most one partial line of scrollback lost, cheap next to a garbled repaint.
- *  No newline nearby (one giant TUI frame) keeps the tear — same cap semantics either way.
- *  Mirrors trimTornStart in @backend/features/terminal/pty.service.ts. */
-function trimTornStart(s: string): string {
-  const c0 = s.charCodeAt(0)
-  if (c0 >= 0xdc00 && c0 <= 0xdfff) s = s.slice(1)
-  const nl = s.indexOf('\n')
-  return nl !== -1 && nl < TEAR_SCAN ? s.slice(nl + 1) : s
-}
-
-/** The directory a pane's shell starts in: the requested one when it is a real directory,
- *  the home directory otherwise. `''` (no cwd asked for) and a path that has since been
- *  removed both land on home rather than on the daemon's own directory or a spawn error. */
-function pickCwd(requested?: string): string {
-  if (requested) {
-    try {
-      if (fs.statSync(requested).isDirectory()) return requested
-    } catch {
-      /* gone, or not readable — fall through to home */
-    }
-  }
-  return os.homedir()
 }
 
 const REMOTE_CWD_SHIM = `#!/bin/sh
@@ -566,12 +531,11 @@ class PaneSession {
       })
     }
     // Pane state = the ActivityTracker's verdict (the dot in the pane header). The
-    // OSC parser feeds it explicit signals (133 C/D, 9/99/777, the bell) but no
-    // longer drives the wire directly — on real setups those signals barely exist
-    // (cmd.exe and Claude Code both emit no OSC 133), which left the dot frozen on
-    // 'idle' forever. The tracker fuses them with OUTPUT ACTIVITY (streaming =
-    // working, quiet = idle) and latches attention until the user answers
-    // (tracker semantics + precedence: agent-state/activity.ts).
+    // OSC parser feeds it explicit signals (133 C/D, 9/99/777, the bell) but never
+    // drives the wire directly. THE VERDICT LAW applies (agent-state/activity.ts):
+    // only a signal that KNOWS may raise a state — output activity raises nothing
+    // (the old streaming=busy/quiet=idle inference was deleted; it stamped panes
+    // "finished" for going quiet) — and attention latches until the user answers.
     this.tracker = new ActivityTracker((state) => {
       this.lastState = state
       for (const s of this.subs) s.state(state)
@@ -1002,7 +966,10 @@ export class SessionManager {
     }
     const normalizedSpec: SpawnSpec = {
       ...spec,
-      remote: remote ? { ...remote, cwd: remoteCwd ?? undefined } : undefined
+      // `shell` survives normalization (the shared normalizer validates the connection
+      // fields only) — dropping it here made every reconnect replay forget the dialect
+      // the pane was persisted with.
+      remote: remote ? { ...remote, shell: spec.remote?.shell, cwd: remoteCwd ?? undefined } : undefined
     }
     const existing = this.panes.get(id)
     if (existing?.matchesRemote(normalizedSpec.remote)) {

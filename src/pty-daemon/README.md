@@ -28,11 +28,12 @@ Node and reuses the app's `node-pty` (compiled from source).
 - **No live-fd transfer across versions:** recovery across an update uses agent `--resume` +
   scrollback snapshots (ties to Phase-1/03 persistence).
 
-## Status (2026-07-01)
-Steps 1-6 done + verified on Windows: production daemon, app integration (opt-in
-`MOGGING_DAEMON`), app-level survival (quit+relaunch, same daemon pid), OSC agent-state
-parity, and the security audit below. Remaining (ADR 0006 §Staged 7): version-skew migration
-(`--resume` + snapshot, ties to Phase-1/03) and macOS forkpty parity; then flip the default.
+## Status
+Shipped and THE DEFAULT since Phase 1: production daemon, app integration, app-level
+survival (quit+relaunch, same daemon pid), OSC agent-state parity, version-skew migration
+(`src/main/daemon-migrate.ts` — live capture + retire + reseed), the ADR 0012 build-stamp
+retire-in-place, and the security audit below. `MOGGING_INPROC` forces the in-proc backend;
+a daemon start failure degrades to it automatically (src/main/boot.ts).
 
 ### Security audit (step 6, verified)
 - **Auth token enforced** — a wrong/absent token is rejected (`error:auth`) and the socket is

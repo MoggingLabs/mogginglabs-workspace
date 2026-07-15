@@ -11,7 +11,7 @@ const MAX_PANES = 16
  * `shell`. Caps at 16 panes. Pure + Electron-free — no credentials, just provider ids.
  */
 export function resolveLayout(mix: ProviderCount[]): ResolvedLayout {
-  const expanded: string[] = []
+  const expanded: ResolvedLayout['assignments'] = []
   for (const m of mix) {
     // The cap binds INSIDE the loop. `mix` is renderer input (TemplateChannels.resolve passes
     // it straight in), so capping only the RESULT still expanded a count of 1e9 — or Infinity —

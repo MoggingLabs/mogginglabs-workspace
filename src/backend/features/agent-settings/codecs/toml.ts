@@ -44,7 +44,7 @@ function parseToml(text: string): ParsedToml {
     ast = parseTOML(body, { tomlVersion: '1.0' })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    throw new Error(`Invalid TOML configuration: ${message}`)
+    throw new Error(`Invalid TOML configuration: ${message}`, { cause: error })
   }
 
   const root = object()

@@ -3,8 +3,9 @@ import type { BackendContext } from '@backend'
 
 /**
  * The Electron implementation of BackendContext — the ONLY file that binds the
- * backend to Electron's ipcMain / webContents. To run the backend in a dedicated
- * utilityProcess (Phase 1) or a headless test, provide a different context here;
+ * backend to Electron's ipcMain / webContents. To run the backend anywhere else
+ * (a headless test; historically the never-built utilityProcess pty-host, before
+ * ADR 0006's detached daemon superseded it), provide a different context here;
  * no feature code changes.
  */
 export function createElectronContext(getWebContents: () => WebContents | null): BackendContext {

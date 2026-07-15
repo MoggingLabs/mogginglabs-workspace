@@ -21,7 +21,7 @@ src/
     shell/     app chrome (titlebar, layout host)
     features/  one self-contained folder per feature (terminal, agent-state, …)
   main/ preload/ renderer/   Thin APP-WIRING. The ONLY place the two sides meet.
-  pty-host/    (Phase 1) dedicated backend process home
+  pty-daemon/  the detached PTY daemon (ADR 0006 — superseded the utilityProcess pty-host of ADR 0003)
 ```
 
 Path aliases (`@contracts`, `@backend`, `@ui`) make the seams explicit and grep-able.

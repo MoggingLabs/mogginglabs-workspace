@@ -1,0 +1,35 @@
+# The direct-node-gyp Electron-ABI rebuild, ONCE. This block was copy-pasted five times
+# across ci.yml + release.yml (identical body, drifting comments). The story it encodes:
+# @electron/rebuild's SPAWNED node-gyp hangs with zero output across the whole 2026-07
+# runner image family — ubuntu (bisected, run 28639452382), windows (28647921078), and
+# macOS (28756024650) — so CI drives node-gyp directly for the runner-native arch, and
+# packaging trusts these .node files (-c.npmRebuild=false). Dev machines keep the
+# standard postinstall.
+name: electron-native-rebuild
+description: npm ci (scripts skipped), fetch the Electron binary, rebuild node-pty + better-sqlite3 against its ABI via direct node-gyp
+inputs:
+  timeout-note:
+    description: informational only — the CALLING step should carry timeout-minutes (composite steps cannot)
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Install (packages only)
+      shell: bash
+      run: npm ci --ignore-scripts
+
+    - name: Electron binary (its install script was skipped above)
+      shell: bash
+      run: node node_modules/electron/install.js
+
+    - name: Electron-ABI rebuild (direct node-gyp)
+      shell: bash
+      run: |
+        EV=$(node -p "require('electron/package.json').version")
+        for m in node-pty better-sqlite3; do
+          echo "── rebuilding $m for electron $EV"
+          (cd "node_modules/$m" && node ../node-gyp/bin/node-gyp.js rebuild \
+            --runtime=electron --target="$EV" \
+            --dist-url=https://www.electronjs.org/headers --build-from-source < /dev/null)
+        done

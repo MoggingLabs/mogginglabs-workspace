@@ -1,6 +1,6 @@
 import { BRIDGE_EVENTS, IntegrationsChannels, type BridgeEventName } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { Card, confirmDialog, el, showToast, submitWithRetain } from '../../components'
+import { Card, clear, confirmDialog, el, showToast, submitWithRetain } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onViewChange } from '../../core/shell/view-port'
 
@@ -43,7 +43,7 @@ export function createWebhooksSection(): HTMLElement {
   // never be scoped to anything. Repopulated on every entry into Settings.
   const refreshWorkspaces = (): void => {
     const current = wsSelect.value
-    wsSelect.innerHTML = ''
+    clear(wsSelect)
     wsSelect.append(el('option', { value: '', text: 'All workspaces' }))
     for (const w of getWorkspaces().workspaces) wsSelect.append(el('option', { value: w.id, text: w.name }))
     wsSelect.value = current
@@ -72,7 +72,7 @@ export function createWebhooksSection(): HTMLElement {
   // ONE painter. `refresh()` and the pushed health change both land here, so a
   // failing webhook repaints its row whichever path discovered it.
   function paint(hooks: WebhookView[]): void {
-    list.innerHTML = ''
+    clear(list)
     if (!hooks.length) list.append(el('div', { class: 'menu-note', text: 'No webhooks yet. A pane’s notify (needs-you) can ring n8n, Make, or Slack.' }))
     for (const w of hooks) list.append(row(w))
   }

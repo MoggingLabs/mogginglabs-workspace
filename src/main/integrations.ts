@@ -27,7 +27,7 @@ import { waitForBrowserRaceAudit } from './browser-race-audit-faults'
 // adds the renderer IPC, the change fan-out (renderer push + the app-endpoint
 // broadcast that tells live MCP sessions to re-resolve), and the pane ->
 // workspace -> granted-write-tools resolution the endpoint serves to the
-// server. The DAEMON stays v3 and grant-blind — resolution is app-side only.
+// server. The DAEMON is untouched and grant-blind — resolution is app-side only.
 
 const kv = (): GrantKv | null => {
   const store = getSettingsStore()

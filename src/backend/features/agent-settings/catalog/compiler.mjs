@@ -323,10 +323,6 @@ function activationOf(node) {
   return 'unknown'
 }
 
-function pathStarts(path, candidate) {
-  return path.length >= candidate.length && candidate.every((part, index) => path[index] === part)
-}
-
 function classify(provider, path, node, root = node) {
   const key = dotted(path)
   let scopes = [...DEFAULT_SCOPES[provider]]
@@ -525,7 +521,7 @@ export function compileJsonSchemaCatalog({ provider, surface = 'runtime', schema
 }
 
 function parseAiderDefault(description) {
-  const match = /\(default:\s*([^\)]+)\)/i.exec(description)
+  const match = /\(default:\s*([^)]+)\)/i.exec(description)
   if (!match) return undefined
   const value = match[1].trim()
   if (/^true$/i.test(value)) return true
@@ -641,7 +637,7 @@ export function compileAiderSampleCatalog({
     else if (numericKind) schema = { kind: numericKind }
     else if (/^(?:true|false)$/i.test(raw) || typeof defaultValue === 'boolean') schema = { kind: 'boolean' }
     else if (/^-?\d+(?:\.\d+)?$/.test(raw) || typeof defaultValue === 'number') schema = { kind: Number.isInteger(Number(raw || defaultValue)) ? 'integer' : 'number' }
-    const choices = /(?:options?|choices?)\s*:\s*([^.;\)]+)/i.exec(documentedDescription)?.[1]
+    const choices = /(?:options?|choices?)\s*:\s*([^.;)]+)/i.exec(documentedDescription)?.[1]
     if (choices) {
       const values = choices.split(/,|\bor\b/i).map((value) => value.trim().replace(/^['"`]|['"`]$/g, '')).filter(Boolean)
       if (values.length > 1 && values.length < 32) schema = { kind: 'enum', enum: values }

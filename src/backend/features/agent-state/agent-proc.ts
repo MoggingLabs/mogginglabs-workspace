@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { AGENT_ADAPTERS } from '../agents/adapters'
+import { isAlive } from '../../platform/pid'
 
 // TYPED-LAUNCH DETECTION — which agent CLI is REALLY running inside a pane's PTY.
 //
@@ -375,16 +376,6 @@ function snapshotProcesses(rootPids: readonly number[] = []): Promise<ProcRow[] 
   })
 }
 
-/** Is this pid still running? (Signal 0 — a permission error still means ALIVE.) */
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
 interface TrackedPane {
   rootPid: number
   current: DetectedAgentProc | null
@@ -749,7 +740,10 @@ export class AgentProcessDetector {
           const contextEpoch = t.contextEpoch
           contextCwd = byPid.get(foreground.pid)?.cwd ??
             await (this.deps.procCwd ?? readProcessCwd)(foreground.pid)
-          if (this.disposed || this.panes.get(paneId) !== t) return // pane replaced under the await
+          if (this.disposed) return
+          // ONE pane replaced under the await must not abandon the verdicts every OTHER
+          // pane is owed from this (expensive, rate-limited) listing — skip just it.
+          if (this.panes.get(paneId) !== t) continue
           if (!t.contextArmed || t.contextEpoch !== contextEpoch) continue
           // A positive early verdict is conclusive and can consume this pane's later deadline;
           // only a negative shared snapshot must preserve time for a child that has not spawned.
@@ -819,7 +813,8 @@ export class AgentProcessDetector {
         const agentCwd = found.pid === foreground?.pid
           ? contextCwd
           : byPid.get(found.pid)?.cwd ?? await (this.deps.procCwd ?? readProcessCwd)(found.pid)
-        if (this.disposed || this.panes.get(paneId) !== t) return
+        if (this.disposed) return
+        if (this.panes.get(paneId) !== t) continue // replaced under the await — skip this pane only
         const det: DetectedAgentProc = {
           agentId: found.agentId,
           pid: found.pid,

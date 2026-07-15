@@ -214,7 +214,7 @@ history sparklines + the on-demand cost scan, and the privacy story.
 
 The verbs are CLIENTS of the **existing token-authed app endpoint**
 (Phase-6/05b's local socket): one more request type on the same handshake,
-**no new listener, no daemon change** (the PTY daemon protocol stays at v3,
+**no new listener, no daemon change** (the PTY daemon protocol was untouched by this phase,
 untouched). The endpoint file is 0600 and per-user; nothing listens on TCP.
 
 | Verb | What it does |
@@ -267,7 +267,7 @@ involves any credential the app would hold, stop: that is the line ADR
 `mogging usage --json` + `usage cost --json` are stable contracts
 (`PlanUsage[]`, `CostScan[]`) for scripts and CI. The six usage gates
 (USAGE, USAGEUI, USAGEGLANCE, WEBUSAGE, USAGECLI, USAGESET) run in the same
-130-gate sweep as everything else, on Windows, macOS, and Linux — entirely on
+133-gate sweep as everything else, on Windows, macOS, and Linux — entirely on
 the FAKE adapter: under any usage smoke env the registry holds no real adapter,
 the status poller holds no fetcher, and the cost scan reads only a seeded
 fixture dir. Zero network is structural, not disciplined.

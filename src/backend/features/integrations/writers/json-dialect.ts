@@ -30,7 +30,7 @@ export function parseConfig(text: string | null): Record<string, unknown> {
     // "fix" it: parsing and re-serializing would silently delete the user's
     // comments — a worse betrayal than an honest no. Say which no it is.
     if (looksLikeJsonc(text)) {
-      throw new Error('this config has comments or trailing commas — editing it here would delete them; add the server by hand, or remove them and retry')
+      throw new Error('this config has comments or trailing commas — editing it here would delete them; add the server by hand, or remove them and retry', { cause: e })
     }
     throw e
   }

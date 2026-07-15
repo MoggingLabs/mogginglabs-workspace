@@ -14,6 +14,14 @@
    --text --muted --accent --warn) are aliased onto tokens so pre-redo selectors
    keep resolving. themes.ts overrides the *neutral tokens* at runtime — the
    brand-orange accent and semantic colors stay constant across themes.
+
+   ONE FILE, ON PURPOSE (reviewed 2026-07, size finding declined): two static gates
+   read this file as a whole — check-spacing.mjs freezes the raw-px drift count at
+   zero, and check-reduced-motion.mjs proves no selector out-cascades the blanket
+   motion clamp in section 3. Both checks are only sound over ONE cascade in ONE
+   file; split into per-feature sheets, an infinite animation or a specificity twin
+   in a sibling file beats the clamp invisibly (that exact bug shipped — finding 36).
+   Navigate by the numbered section banners instead.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /* ── 1 · TOKENS ────────────────────────────────────────────────────────────── */

@@ -31,6 +31,10 @@ import { channelFromEnv, runtimeSegment } from '@contracts'
  *  between us and it. A line cut at the window's edge fails JSON.parse and is skipped. */
 export const TAIL_BYTES = 256 * 1024
 
+/** Finite number or 0 — the one coercion every parser in this file needs (it was
+ *  re-declared inline four times). Exported for the sibling providers module. */
+export const asNum = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+
 /** Read the last `bytes` of a file as utf8, or null when unreadable (gone, locked). */
 export function readTail(file: string, bytes = TAIL_BYTES): string | null {
   try {
@@ -112,30 +116,37 @@ export function findClaudeProjectDir(home: string, cwd: string): string | null {
   return null
 }
 
+/** One main-chain assistant LINE parsed into a reading, or null when the line is a
+ *  sidechain, cut at a read-window edge, or a foreign shape. The parsing is identical
+ *  whichever end of the log the caller scans from — it was duplicated per direction
+ *  once, and the two copies were one drifted field away from disagreeing. */
+function parseClaudeLine(line: string): TailReading | null {
+  if (!line.includes('"assistant"') || !line.includes('"usage"')) return null // cheap prefilter
+  try {
+    const o = JSON.parse(line) as {
+      type?: string
+      isSidechain?: boolean
+      message?: { model?: unknown; usage?: Record<string, unknown> }
+    }
+    if (o?.type !== 'assistant' || o.isSidechain) return null
+    const u = o.message?.usage
+    if (!u || typeof u.input_tokens !== 'number') return null
+    // The CLI's own h1n sum — output_tokens deliberately absent (see the header note).
+    const usedTokens = asNum(u.input_tokens) + asNum(u.cache_read_input_tokens) + asNum(u.cache_creation_input_tokens)
+    const model = typeof o.message?.model === 'string' ? o.message.model : undefined
+    return { usedTokens, model }
+  } catch {
+    return null
+  }
+}
+
 /** Last main-chain assistant reading in a Claude session-log tail. Scanned from the END
  *  (the newest turn wins); unparseable/foreign lines are skipped, never thrown on. */
 export function parseClaudeTail(tail: string): TailReading | null {
   const lines = tail.split('\n')
   for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]
-    if (!line.includes('"assistant"') || !line.includes('"usage"')) continue // cheap prefilter
-    try {
-      const o = JSON.parse(line) as {
-        type?: string
-        isSidechain?: boolean
-        message?: { model?: unknown; usage?: Record<string, unknown> }
-      }
-      if (o?.type !== 'assistant' || o.isSidechain) continue
-      const u = o.message?.usage
-      if (!u || typeof u.input_tokens !== 'number') continue
-      const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
-      // The CLI's own h1n sum — output_tokens deliberately absent (see the header note).
-      const usedTokens = n(u.input_tokens) + n(u.cache_read_input_tokens) + n(u.cache_creation_input_tokens)
-      const model = typeof o.message?.model === 'string' ? o.message.model : undefined
-      return { usedTokens, model }
-    } catch {
-      continue // partial first line of the tail window, or a foreign shape
-    }
+    const reading = parseClaudeLine(lines[i])
+    if (reading) return reading
   }
   return null
 }
@@ -146,26 +157,9 @@ export function parseClaudeTail(tail: string): TailReading | null {
  *  path reads this off a PREVIOUS session to show a fresh pane the same number
  *  `/context` shows before any chat (see monitor.ts). Scanned FORWARD. */
 export function parseClaudeHead(head: string): TailReading | null {
-  const lines = head.split('\n')
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    if (!line.includes('"assistant"') || !line.includes('"usage"')) continue
-    try {
-      const o = JSON.parse(line) as {
-        type?: string
-        isSidechain?: boolean
-        message?: { model?: unknown; usage?: Record<string, unknown> }
-      }
-      if (o?.type !== 'assistant' || o.isSidechain) continue
-      const u = o.message?.usage
-      if (!u || typeof u.input_tokens !== 'number') continue
-      const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
-      const usedTokens = n(u.input_tokens) + n(u.cache_read_input_tokens) + n(u.cache_creation_input_tokens)
-      const model = typeof o.message?.model === 'string' ? o.message.model : undefined
-      return { usedTokens, model }
-    } catch {
-      continue // a line cut at the window's edge, or a foreign shape
-    }
+  for (const line of head.split('\n')) {
+    const reading = parseClaudeLine(line)
+    if (reading) return reading
   }
   return null
 }
@@ -339,8 +333,7 @@ export function parseCodexTail(tail: string): TailReading | null {
       if (o?.type !== 'event_msg' || o.payload?.type !== 'token_count') continue
       const last = o.payload.info?.last_token_usage
       if (!last) continue // token_count lines with a null info block exist — skip, keep scanning
-      const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
-      const usedTokens = typeof last.total_tokens === 'number' ? last.total_tokens : n(last.input_tokens) + n(last.output_tokens)
+      const usedTokens = typeof last.total_tokens === 'number' ? last.total_tokens : asNum(last.input_tokens) + asNum(last.output_tokens)
       const w = o.payload.info?.model_context_window
       const windowTokens = typeof w === 'number' && w > 0 ? w : undefined
       return { usedTokens, windowTokens }

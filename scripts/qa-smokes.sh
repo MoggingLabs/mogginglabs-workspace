@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 130 gates: 15 static (AUDIT · SPACING · PTYSEAM · PROTOVER · AGENTCAT · LAYOUT ·
-# DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · GITPURE ·
-# REMOTEBOOT · CONNPURE) + 115 app-boot
+# 133 gates: 18 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
+# GITPURE · REMOTEBOOT · CONNPURE) + 115 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -181,6 +181,9 @@ run_static AUDIT   node scripts/check-audit.mjs
 run_static SPACING node scripts/check-spacing.mjs --max 0
 run_static PTYSEAM node scripts/check-pty-seam.mjs
 run_static PROTOVER node scripts/check-protocol-version.mjs
+# The preload allowlist: every channel map spread into AllChannels (a forgotten spread
+# refuses a whole feature IPC surface with nothing but "channel not allowed" to show).
+run_static CHANNELS node scripts/check-channels.mjs
 run_static AGENTCAT node scripts/check-agent-settings-catalog.mjs
 run_static LAYOUT  node scripts/check-layout-invariants.mjs
 # DOCSREFS: the docs cite each other constantly (the roadmap points at ADRs, ADRs at
@@ -216,6 +219,14 @@ run_static PRODARTIFACT node scripts/check-prod-artifact.mjs
 # rows below and fails any doc that disagrees; it also pins docs/10's release commands to
 # package.json's version (they still said v0.4.0 at v0.9.0). Dated changelog lines are scoped out.
 run_static GATECOUNT node scripts/check-gate-count.mjs
+# LINT: eslint over the whole repo (eslint.config.mjs). Syntax-tier only — no type-aware
+# rules — so it stays seconds, and unused eslint-disable directives are themselves errors
+# (three files carried disables for a linter the repo didn't have; that can't re-accrete).
+run_static LINT npm run lint
+# UNIT: the headless tier (vitest, tests/unit). Pure-module goldens — pace math, codec
+# editing, secret redaction, shell quoting — answered in seconds; the booted gates below
+# still hold the same logic in situ.
+run_static UNIT npm run test
 run_static GITPURE npm run smoke:git-pure
 run_static REMOTEBOOT npm run smoke:remote-bootstrap-pure
 # CONNPURE: the connections/OAuth regression suite (ADR 0014) — a hermetic fixture AS +

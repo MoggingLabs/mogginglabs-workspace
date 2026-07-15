@@ -63,16 +63,19 @@ async function main(): Promise<void> {
     git(repo, ['add', 'agent.txt'])
     git(repo, ['commit', '-q', '-m', 'agent work'])
 
-    let watched: GitStatus | null = null
-    const monitor = new GitMonitor({ change: (_id, status) => (watched = status) }, 60_000)
+    // Boxed rather than a bare `let`: TS never sees a closure assignment (#9998), so a
+    // bare binding stays narrowed to its `null` initializer at every read below.
+    const seen: { status: GitStatus | null } = { status: null }
+    const watched = (): GitStatus | null => seen.status
+    const monitor = new GitMonitor({ change: (_id, status) => (seen.status = status) }, 60_000)
     monitors.push(monitor)
     await monitor.setCwd(101, repo)
-    await waitUntil(() => watched != null)
+    await waitUntil(() => watched() != null)
     assert(
-      watched?.baseBranch === 'feature/nested-base',
-      `managed nested base was not selected: ${JSON.stringify(watched)}`
+      watched()?.baseBranch === 'feature/nested-base',
+      `managed nested base was not selected: ${JSON.stringify(watched())}`
     )
-    assert(watched.baseAhead === 1 && watched.baseBehind === 0, 'initial managed-base divergence is wrong')
+    assert(watched()?.baseAhead === 1 && watched()?.baseBehind === 0, 'initial managed-base divergence is wrong')
 
     const baseHead = git(repo, ['rev-parse', 'refs/heads/feature/nested-base'])
     const baseTree = git(repo, ['rev-parse', 'refs/heads/feature/nested-base^{tree}'])
@@ -85,7 +88,7 @@ async function main(): Promise<void> {
       'one-shot probe served stale divergence after a nested base ref moved'
     )
     assert(
-      await waitUntil(() => watched?.baseBranch === 'feature/nested-base' && watched.baseBehind === 1),
+      await waitUntil(() => watched()?.baseBranch === 'feature/nested-base' && watched()?.baseBehind === 1),
       'nested base ref watcher did not invalidate cached divergence'
     )
 
@@ -96,7 +99,7 @@ async function main(): Promise<void> {
       'one-shot probe served the previous mogging-base value'
     )
     assert(
-      await waitUntil(() => watched?.baseBranch === 'main' && watched.baseBehind === 0),
+      await waitUntil(() => watched()?.baseBranch === 'main' && watched()?.baseBehind === 0),
       'mogging-base watcher did not clear both divergence caches'
     )
     monitor.dispose()

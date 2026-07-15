@@ -31,6 +31,7 @@ import { DAEMON_PROTOCOL_VERSION, channelFromEnv, createLineFramer } from '@cont
 import type { DaemonEndpoint, PaneInfo, PersistedPane, RemoteConnection } from '@contracts'
 import { normalizePaneCwd } from '@backend/features/agent-state'
 import { SessionStore } from '@backend/features/workspace'
+import { isAlive } from '@backend/platform/pid'
 import { runtimeDir } from './daemon-client'
 
 /** Hard ceiling on the whole migration, endpoint probe to store write. A once-ever first
@@ -60,15 +61,6 @@ export function persistedRowsForDeadSource(
   const rows = [...persisted.values()]
   if (sourceVersion >= REMOTE_IDENTITY_PERSISTENCE_PROTOCOL_VERSION) return rows
   return rows.map((row) => ({ ...row, command: undefined }))
-}
-
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'EPERM'
-  }
 }
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))

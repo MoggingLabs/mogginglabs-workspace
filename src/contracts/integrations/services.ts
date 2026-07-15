@@ -52,6 +52,11 @@ export interface LinkStatus {
   /** Epoch ms of the fetch that produced this data. */
   fetchedAt: number
   reason?: string
+  /** The adapter KNEW BETTER about the link's kind (the `owner/repo#123` shorthand
+   *  guesses `pr`; a not-found PR that IS an issue answers as one). Carried on the
+   *  status so the engine applies + persists the correction explicitly — an adapter
+   *  never mutates the link it was handed. */
+  repairedKind?: ServiceLinkKind
 }
 
 /** A service adapter, mirroring `UsageAdapter`: detect the user's own tool,

@@ -15,7 +15,7 @@ import {
 } from '@contracts'
 import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
-import { Button, EmptyState, createCollapsibleCard, createModal, el, icon, loadingRow, providerLogo, scrubFields, showToast, submitWithRetain } from '../../components'
+import { Button, EmptyState, clear, createCollapsibleCard, createModal, el, icon, loadingRow, providerLogo, scrubFields, showToast, submitWithRetain } from '../../components'
 import type { CollapsibleCardHandle } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onToolPlanPanesChange, restartNeededPaneIds } from '../../core/agents/toolplan-panes'
@@ -106,7 +106,7 @@ function createCatalogBlock(): SyncedBlock {
 
   async function openConnect(preset: McpPreset, groupRows: McpPreset[]): Promise<void> {
     panel.hidden = false
-    panel.innerHTML = ''
+    clear(panel)
     panel.append(
       el('div', { class: 'mgr-panel-summary' }, [providerLogo(preset.id, 18), el('span', { text: `Connect ${preset.label}` })])
     )
@@ -358,7 +358,7 @@ function createCatalogBlock(): SyncedBlock {
     } catch {
       installed = new Set()
     }
-    grid.innerHTML = ''
+    clear(grid)
     let drafts = 0
     const seenGroups = new Set<string>()
     for (const preset of [...presets, ...custom]) {
@@ -421,14 +421,14 @@ function createCatalogBlock(): SyncedBlock {
   const searchBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Search registry' }) as HTMLButtonElement
   const searchResults = el('div', { class: 'mgr-list' })
   searchBtn.onclick = async (): Promise<void> => {
-    searchResults.innerHTML = ''
+    clear(searchResults)
     searchResults.append(loadingRow('Searching the registry…'))
     const r = (await bridge.invoke(IntegrationsChannels.catRegistry, searchInput.value.trim())) as {
       ok: boolean
       drafts?: { name: string; description: string; entry: McpServerEntry }[]
       reason?: string
     }
-    searchResults.innerHTML = ''
+    clear(searchResults)
     if (!r.ok) {
       searchResults.append(el('div', { class: 'menu-note', text: r.reason ?? 'registry unavailable' }))
       return
@@ -495,7 +495,7 @@ function createServersBlock(): SyncedBlock {
 
   async function openPanel(server: McpServerEntry, status: McpCliStatus): Promise<void> {
     panel.hidden = false
-    panel.innerHTML = ''
+    clear(panel)
     panel.append(loadingRow('Reading the CLI config…'))
     const action = status.state === 'applied' ? 'remove' : 'apply'
     const preview = (await bridge.invoke(IntegrationsChannels.mgrPreview, {
@@ -503,7 +503,7 @@ function createServersBlock(): SyncedBlock {
       cli: status.cli,
       action
     })) as { file: string; block: string; summary: string } | null
-    panel.innerHTML = ''
+    clear(panel)
     if (!preview) {
       panel.hidden = true
       return
@@ -516,7 +516,7 @@ function createServersBlock(): SyncedBlock {
     }
     const actions = el('div', { class: 'trail-controls' })
     const doThen = (fn: () => Promise<unknown>) => async (): Promise<void> => {
-      panel.innerHTML = ''
+      clear(panel)
       panel.append(loadingRow('Writing the CLI config…'))
       await fn()
       panel.hidden = true
@@ -595,7 +595,7 @@ function createServersBlock(): SyncedBlock {
     const snap = ((await bridge.invoke(IntegrationsChannels.statusGet)) as McpStatusSnapshot | null) ?? { statuses: [], at: 0 }
     const conn = new Map(snap.statuses.map((s) => [`${s.serverId}:${s.cli}`, s.state]))
     const caps = ((await bridge.invoke(IntegrationsChannels.catCapabilities)) as { cli: HostedCliId; authorizeCommand: string | null }[]) ?? []
-    list.innerHTML = ''
+    clear(list)
     for (const server of servers) {
       const statuses = (await bridge.invoke(IntegrationsChannels.mgrStatus, server.id)) as McpCliStatus[]
       const chips = statuses.map((s) => {
@@ -835,7 +835,7 @@ function createGrantsBlock(): SyncedBlock {
   async function render(): Promise<void> {
     const generation = ++renderGeneration
     const wsId = wsSelect.value
-    body.innerHTML = ''
+    clear(body)
     if (!wsId) return
     let grant: WorkspaceIntegrationsGrant
     try {
@@ -878,7 +878,7 @@ function createGrantsBlock(): SyncedBlock {
 
   function refreshWorkspaces(): void {
     const current = wsSelect.value
-    wsSelect.innerHTML = ''
+    clear(wsSelect)
     for (const w of getWorkspaces().workspaces) wsSelect.append(el('option', { value: w.id, text: w.name }))
     wsSelect.value = current || (getWorkspaces().activeId ?? '')
     if (!wsSelect.value && wsSelect.options.length) wsSelect.selectedIndex = 0
@@ -933,7 +933,7 @@ function createServiceKeysBlock(): SyncedBlock {
 
   async function refresh(): Promise<void> {
     const names = ((await bridge.invoke(IntegrationsChannels.serviceKeyList)) as string[]) ?? []
-    list.innerHTML = ''
+    clear(list)
     if (!names.length) list.append(el('div', { class: 'menu-note', text: 'No service keys saved. Paste one below; reference it as ${NAME} in a server’s env.' }))
     for (const name of names) {
       const row = el('div', { class: 'mgr-row' }, [
@@ -1001,7 +1001,7 @@ function createToolPlanBlock(): SyncedBlock {
   async function render(): Promise<void> {
     const generation = ++renderGeneration
     const wsId = wsSelect.value
-    body.innerHTML = ''
+    clear(body)
     if (!wsId) return
     const plan = (await bridge.invoke(IntegrationsChannels.planGet, wsId)) as WorkspaceToolPlan
     const servers = ((await bridge.invoke(IntegrationsChannels.serversList)) as McpServerEntry[]) ?? []
@@ -1093,7 +1093,7 @@ function createToolPlanBlock(): SyncedBlock {
 
   function refreshWorkspaces(): void {
     const current = wsSelect.value
-    wsSelect.innerHTML = ''
+    clear(wsSelect)
     for (const w of getWorkspaces().workspaces) wsSelect.append(el('option', { value: w.id, text: w.name }))
     wsSelect.value = current || (getWorkspaces().activeId ?? '')
     if (!wsSelect.value && wsSelect.options.length) wsSelect.selectedIndex = 0
