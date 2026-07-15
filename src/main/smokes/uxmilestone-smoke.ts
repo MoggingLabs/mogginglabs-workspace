@@ -358,7 +358,7 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       // no-wrap layout failing. Solo the measured pane to the whole window first so the bar
       // has the room the `present` check assumes — then nothing retires and the one-line
       // contract is what gets measured.
-      await ES(`window.__mogging.workspace.expand(${paneId}, 'full')`)
+      await ES(`window.__mogging.layout.expand(${paneId}, 'full')`)
       await sleep(400)
       await ES(`(() => { const p = (window.__mogging.panes || []).find((p) => p.id === ${paneId}); if (p && p.lightChips) p.lightChips(); return 1 })()`)
       await sleep(400)

@@ -66,27 +66,29 @@ export function runUsageSetSmoke(win: BrowserWindow): void {
       await ES(`(() => { const s = document.querySelector('.usage-search'); s.value = ''; s.dispatchEvent(new Event('input')) })()`)
       await sleep(100)
 
-      // 3 ── enable reaches the poller LIVE. Each toggle triggers a configSet ->
-      // loadGrid re-render that REPLACES the checkbox; a blind second click can land
-      // on the freshly-rendered input before its `checked` reflects the write and
-      // toggle the WRONG way. Drive to a TARGET state instead: click only when the
-      // live checkbox disagrees, re-reading it each pass, so the test exercises the
-      // steady-state "toggle -> poller" contract rather than a re-render race.
-      const setEnabled = async (want: boolean): Promise<void> => {
+      // 3 ── enable reaches the poller LIVE. A toggle here triggers a configSet ->
+      // loadGrid re-render that REPLACES the checkbox, and an ENABLED provider makes the
+      // poller emit on every tick — each emit re-renders the grid too. So a blind second
+      // click can land on a freshly-rendered input before its `checked` reflects the write
+      // and toggle the WRONG way. Drive to a TARGET state instead: click only when the live
+      // checkbox disagrees, re-reading it each pass, so the test exercises the steady-state
+      // "toggle -> poller" contract rather than a re-render race. Same driver serves step 6.
+      const driveToggle = async (selector: string, want: boolean): Promise<void> => {
         for (let i = 0; i < 40; i++) {
           const checked = await ES<boolean | null>(
-            `(() => { const el = document.querySelector('.usage-prov-row[data-provider="fake"] .usage-prov-enable input'); return el ? el.checked : null })()`
+            `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return el ? el.checked : null })()`
           )
           if (checked === want) return
-          if (checked !== null) await ES(`document.querySelector('.usage-prov-row[data-provider="fake"] .usage-prov-enable input').click()`)
+          if (checked !== null) await ES(`document.querySelector(${JSON.stringify(selector)}).click()`)
           await sleep(200)
         }
       }
-      await setEnabled(false)
+      const fakeEnable = '.usage-prov-row[data-provider="fake"] .usage-prov-enable input'
+      await driveToggle(fakeEnable, false)
       tries = 0
       while (svc.list().length !== 0 && tries++ < 40) await sleep(150)
       const disabledOk = svc.list().length === 0
-      await setEnabled(true)
+      await driveToggle(fakeEnable, true)
       tries = 0
       while (svc.list().length !== 11 && tries++ < 60) await sleep(200)
       const enabledOk = svc.list().length === 11
@@ -167,12 +169,17 @@ export function runUsageSetSmoke(win: BrowserWindow): void {
       }
       envRefRefused = envRefRefused && keySlot('openrouter').kind === 'none'
 
-      // 6 ── web-session store-read opt-in persists (default OFF)
-      await ES(`document.querySelector('.usage-prov-row[data-provider="cursor"] .usage-webread input').click()`)
+      // 6 ── web-session store-read opt-in persists (default OFF). The fake provider is
+      // enabled now (step 3), so the poller's per-tick emit re-renders the grid under this
+      // step — the same re-render that a blind double-click races. Drive to target through
+      // the shared helper and read the KV each time, so the opt-in's PERSISTENCE is what is
+      // asserted, not a click that happened to survive a re-render.
+      const cursorWebRead = '.usage-prov-row[data-provider="cursor"] .usage-webread input'
+      await driveToggle(cursorWebRead, true)
       tries = 0
       while (kv.getSetting('usage.webread.cursor') !== '1' && tries++ < 40) await sleep(150)
       const webReadOn = kv.getSetting('usage.webread.cursor') === '1'
-      await ES(`document.querySelector('.usage-prov-row[data-provider="cursor"] .usage-webread input').click()`)
+      await driveToggle(cursorWebRead, false)
       tries = 0
       while (kv.getSetting('usage.webread.cursor') !== '0' && tries++ < 40) await sleep(150)
       const webReadOk = webReadOn && kv.getSetting('usage.webread.cursor') === '0'
