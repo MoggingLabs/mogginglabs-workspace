@@ -593,8 +593,9 @@ export function runUsageSmoke(win: BrowserWindow): void {
           .join(',') === 'lane-a,lane-b,lane-c'
       fanSvc.stop()
 
-      // (b) the threshold engine: single-fire per (provider, profile, epoch),
-      //     verdict copy VERBATIM, re-arm at reset, failover-feed condition.
+      // (b) the threshold engine (phase-11 rebuild): EVERY window evaluates,
+      //     prune-on-descent re-arms, boundaries compare with tolerance,
+      //     credits floors + spend caps alert, failover judges worst-window.
       const tMem = new Map<string, string>()
       const tkv = { get: (k: string): string | null => tMem.get(k) ?? null, set: (k: string, v: string): void => void tMem.set(k, v) }
       const tProfiles = [
@@ -604,27 +605,46 @@ export function runUsageSmoke(win: BrowserWindow): void {
       const tcfg = { quiet: 80, warn: 95, confetti: false }
       const E1 = new Date(Date.now() + 3_600_000).toISOString()
       const E2 = new Date(Date.now() + 7_200_000).toISOString()
-      const mk = (profileId: string, pct: number, resetsAt: string): PlanUsageView => ({
+      const EW = new Date(Date.now() + 3 * 86_400_000).toISOString()
+      // The fixture is MULTI-WINDOW by construction — the audit found the old
+      // single-window mk() made the windows[0]-only defect undetectable by
+      // every threshold assert in this file.
+      const mk = (profileId: string, pct: number, resetsAt: string, weeklyPct = 10): PlanUsageView => ({
         providerId: 'prov',
         profileId,
         planLabel: `Prov (${profileId})`,
-        windows: [{ label: 'Session (5h)', usedPct: pct, resetsAt, windowMs: 5 * 3_600_000 }],
+        windows: [
+          { label: 'Session (5h)', usedPct: pct, resetsAt, windowMs: 5 * 3_600_000 },
+          { label: 'Weekly', usedPct: weeklyPct, resetsAt: EW, windowMs: 7 * 86_400_000 }
+        ],
         fetchedAt: Date.now(),
         health: 'fresh'
       })
-      // first sight arms silently — no alert for an already-warm lane
+      // first sight below every threshold arms silently
       const armedSilently = evaluateThresholds([mk('p0', 50, E1)], tcfg, tProfiles, tkv).length === 0
-      // quiet fires ONCE and carries the 7/02 formatter line VERBATIM
+      // quiet fires ONCE; the body is the 7/02 formatter line VERBATIM and the
+      // title names the READING (a user at 85% is not told "80% used")
       const paceReport = computePace({ label: 'Session (5h)', usedPct: 85, resetsAt: E1, windowMs: 5 * 3_600_000 }, Date.now(), { windowMs: 5 * 3_600_000 })
       const verdictLine = paceReport ? formatVerdict(paceReport, 'Session (5h)') : ''
+      const mkQuiet = mk('p0', 85, E1)
       const quietView: PlanUsageView = paceReport
-        ? { ...mk('p0', 85, E1), pace: { verdict: paceReport.verdict, text: verdictLine, deltaText: '+5%', severity: 'warning' } }
-        : mk('p0', 85, E1)
+        ? { ...mkQuiet, windows: [{ ...mkQuiet.windows[0], pace: { verdict: paceReport.verdict, text: verdictLine, deltaText: '+5%', severity: 'warning' } }, mkQuiet.windows[1]] }
+        : mkQuiet
       const expectQuietBody = paceReport ? verdictLine : '85% of Session (5h) used'
       const q1 = evaluateThresholds([quietView], tcfg, tProfiles, tkv)
       const quietFiredOk =
-        q1.length === 1 && q1[0].kind === 'threshold' && q1[0].level === 'quiet' && q1[0].body === expectQuietBody && q1[0].title === 'Prov (p0) — 80% of Session (5h) used'
+        q1.length === 1 && q1[0].kind === 'threshold' && q1[0].level === 'quiet' && q1[0].body === expectQuietBody && q1[0].title === 'Prov (p0) — 85% of Session (5h) used'
       const singleFireOk = evaluateThresholds([quietView], tcfg, tProfiles, tkv).length === 0
+      // THE WEEKLY LANE ALERTS (the audit's headline defect): a cool session
+      // with a hot weekly fires on the weekly, labeled as the weekly.
+      const kvW = new Map<string, string>()
+      const wv = evaluateThresholds([mk('p0', 20, E1, 93)], tcfg, tProfiles, { get: (k) => kvW.get(k) ?? null, set: (k, v) => void kvW.set(k, v) })
+      const weeklyFiredOk = wv.length === 1 && wv[0].windowLabel === 'Weekly' && wv[0].title === 'Prov (p0) — 93% of Weekly used'
+      // an EXPIRED session lane mutes only itself — the weekly still speaks
+      const kvX = new Map<string, string>()
+      const EPAST = new Date(Date.now() - 60_000).toISOString()
+      const xv = evaluateThresholds([mk('p0', 99, EPAST, 93)], tcfg, tProfiles, { get: (k) => kvX.get(k) ?? null, set: (k, v) => void kvX.set(k, v) })
+      const expiredLaneScopedOk = xv.length === 1 && xv[0].windowLabel === 'Weekly'
       // warn on the ACTIVE lane + an idle sibling -> the failover suggestion
       const w1 = evaluateThresholds([mk('p0', 96, E1), mk('p1', 10, E1)], tcfg, tProfiles, tkv)
       const warnFailoverOk = w1.length === 1 && w1[0].level === 'warn' && w1[0].failover?.profileId === 'p1' && w1[0].failover?.profileName === 'Backup'
@@ -633,9 +653,10 @@ export function runUsageSmoke(win: BrowserWindow): void {
       const kvB = new Map<string, string>()
       const n1 = evaluateThresholds([mk('p1', 96, E1), mk('p0', 10, E1)], tcfg, tProfiles, { get: (k) => kvB.get(k) ?? null, set: (k, v) => void kvB.set(k, v) })
       const nonActiveNoSuggest = n1.length === 1 && n1[0].level === 'warn' && !n1[0].failover
-      // a hot sibling (>=50%) blocks the suggestion
+      // a sibling is judged on its WORST window: session 10% but weekly 60%
+      // blocks the suggestion (the old rule offered exhausted accounts)
       const kvC = new Map<string, string>()
-      const hot1 = evaluateThresholds([mk('p0', 96, E1), mk('p1', 60, E1)], tcfg, tProfiles, { get: (k) => kvC.get(k) ?? null, set: (k, v) => void kvC.set(k, v) })
+      const hot1 = evaluateThresholds([mk('p0', 96, E1), mk('p1', 10, E1, 60)], tcfg, tProfiles, { get: (k) => kvC.get(k) ?? null, set: (k, v) => void kvC.set(k, v) })
       const siblingHotNoSuggest = hot1.length === 1 && hot1[0].level === 'warn' && !hot1[0].failover
       // a 0->97 jump costs ONE toast (both levels spent)
       const kvD = new Map<string, string>()
@@ -643,33 +664,109 @@ export function runUsageSmoke(win: BrowserWindow): void {
       const j1 = evaluateThresholds([mk('p0', 97, E1)], tcfg, tProfiles, dkv)
       const j2 = evaluateThresholds([mk('p0', 85, E1)], tcfg, tProfiles, dkv)
       const oneToastPerJump = j1.length === 1 && j1[0].level === 'warn' && j2.length === 0
-      // reset: a NEW epoch re-arms and fires ONE quiet "fresh window"
+      // RESETS_AT CHURN (the audit's live Claude bug): the same window served
+      // with a drifting boundary (<2min) must not re-arm, reset-toast, or
+      // re-fire — ever. A drift is the SAME window.
+      const churn1 = evaluateThresholds([mk('p0', 85, new Date(Date.parse(E1) + 30_000).toISOString())], tcfg, tProfiles, tkv)
+      const churn2 = evaluateThresholds([mk('p0', 85, new Date(Date.parse(E1) + 90_000).toISOString())], tcfg, tProfiles, tkv)
+      const churnQuietOk = churn1.length === 0 && churn2.length === 0
+      // reset: the boundary ADVANCES past tolerance on a lane the user was
+      // warned about -> ONE "fresh window", then quiet, then re-armable
       const r1 = evaluateThresholds([mk('p0', 5, E2)], tcfg, tProfiles, tkv)
       const r2 = evaluateThresholds([mk('p0', 5, E2)], tcfg, tProfiles, tkv)
       const q2 = evaluateThresholds([mk('p0', 85, E2)], tcfg, tProfiles, tkv)
-      const resetRearmOk = r1.length === 1 && r1[0].kind === 'reset' && r2.length === 0 && q2.length === 1 && q2[0].level === 'quiet'
+      const resetRearmOk = r1.length === 1 && r1[0].kind === 'reset' && r1[0].windowLabel === 'Session (5h)' && r2.length === 0 && q2.length === 1 && q2[0].level === 'quiet'
+      // a REGRESSED boundary is a stale sample: the lane says nothing and
+      // keeps its state (Codex serves old rollouts after a quit)
+      const stale1 = evaluateThresholds([mk('p0', 99, E1)], tcfg, tProfiles, tkv)
+      const staleRegressOk = stale1.length === 0
       // restart safety is the KV itself: the spent state survives as app state
       const thrPersistOk = (tMem.get('usage.thr.prov.p0') ?? '').includes(E2)
+      // PRUNE-ON-DESCENT re-arms a STATIC lane (no resetsAt — rolling credit
+      // windows): 96 fires, 40 prunes, 96 fires AGAIN. The old epoch:'static'
+      // fired once per install, permanently.
+      const sMem = new Map<string, string>()
+      const skv = { get: (k: string): string | null => sMem.get(k) ?? null, set: (k: string, v: string): void => void sMem.set(k, v) }
+      const mkStatic = (pct: number): PlanUsageView => ({
+        providerId: 'prov',
+        profileId: 'p0',
+        planLabel: 'Prov (p0)',
+        windows: [{ label: 'Credits', usedPct: pct, windowMs: 0 }],
+        fetchedAt: Date.now(),
+        health: 'fresh'
+      })
+      const s1 = evaluateThresholds([mkStatic(96)], tcfg, tProfiles, skv)
+      const s2 = evaluateThresholds([mkStatic(40)], tcfg, tProfiles, skv)
+      const s3 = evaluateThresholds([mkStatic(96)], tcfg, tProfiles, skv)
+      const staticRearmOk = s1.length === 1 && s1[0].level === 'warn' && s2.length === 0 && s3.length === 1 && s3[0].level === 'warn'
+      // the CREDITS FLOOR: a denominator-free balance alerts at the user's
+      // number, once, and re-arms only after a real top-up
+      const cMem = new Map<string, string>()
+      const ckv = { get: (k: string): string | null => cMem.get(k) ?? null, set: (k: string, v: string): void => void cMem.set(k, v) }
+      const mkCredits = (remaining: number): PlanUsageView => ({
+        providerId: 'prov',
+        profileId: 'p0',
+        planLabel: 'Prov (p0)',
+        windows: [],
+        credits: { label: 'USD', remaining },
+        fetchedAt: Date.now(),
+        health: 'fresh'
+      })
+      const fcfg = { ...tcfg, floors: { prov: 5 } }
+      const c1 = evaluateThresholds([mkCredits(3)], fcfg, tProfiles, ckv)
+      const c2 = evaluateThresholds([mkCredits(3)], fcfg, tProfiles, ckv)
+      const c3 = evaluateThresholds([mkCredits(10)], fcfg, tProfiles, ckv) // top-up re-arms silently
+      const c4 = evaluateThresholds([mkCredits(4)], fcfg, tProfiles, ckv)
+      const creditsFloorOk = c1.length === 1 && /3 USD left/.test(c1[0].title) && c2.length === 0 && c3.length === 0 && c4.length === 1
+      // the SPEND CAP: dollars against a limit alert like a window, named in money
+      const spMem = new Map<string, string>()
+      const spkv = { get: (k: string): string | null => spMem.get(k) ?? null, set: (k: string, v: string): void => void spMem.set(k, v) }
+      const mkSpend = (amount: number): PlanUsageView => ({
+        providerId: 'prov',
+        profileId: 'p0',
+        planLabel: 'Prov (p0)',
+        windows: [],
+        spend: { amount, currency: 'USD', limit: 200 },
+        fetchedAt: Date.now(),
+        health: 'fresh'
+      })
+      const sp1 = evaluateThresholds([mkSpend(190)], tcfg, tProfiles, spkv)
+      const sp2 = evaluateThresholds([mkSpend(190)], tcfg, tProfiles, spkv)
+      const spendCapOk = sp1.length === 1 && sp1[0].level === 'warn' && /\$190\.00 of \$200\.00/.test(sp1[0].title) && sp2.length === 0
+      // PROFILE FLIP: login auto-discovery renames 'default' -> 'login-<id>';
+      // the new lane ADOPTS the old state instead of re-firing everything
+      const aMem = new Map<string, string>()
+      const akv = { get: (k: string): string | null => aMem.get(k) ?? null, set: (k: string, v: string): void => void aMem.set(k, v) }
+      const mkLane = (profileId: string): PlanUsageView => ({ ...mk(profileId, 85, E1), profileId })
+      const a1 = evaluateThresholds([mkLane('default')], tcfg, tProfiles, akv)
+      const a2 = evaluateThresholds([mkLane('login-prov')], tcfg, tProfiles, akv)
+      const profileFlipAdoptsOk = a1.length === 1 && a2.length === 0
       // the PREDICTIVE tap: a runs-out projection UNDER the warn pct fires once
-      // per epoch (the verdict line verbatim as the body), then stays quiet.
+      // per window (the verdict line verbatim as the body), then stays quiet.
       const pMem = new Map<string, string>()
       const pkv = { get: (k: string): string | null => pMem.get(k) ?? null, set: (k: string, v: string): void => void pMem.set(k, v) }
+      const mkPace = mk('p0', 60, E1)
       const paceView: PlanUsageView = {
-        ...mk('p0', 60, E1),
-        pace: { verdict: 'runs-out', text: 'Ahead of pace — runs out ~Tue 12:00 at this rate', deltaText: '+20%', severity: 'warning' }
+        ...mkPace,
+        windows: [{ ...mkPace.windows[0], pace: { verdict: 'runs-out', text: 'Ahead of pace — runs out ~Tue 12:00 at this rate', deltaText: '+20%', severity: 'warning' } }, mkPace.windows[1]]
       }
       // A forecast is not a missed crossing: it fires on FIRST sight (unlike
-      // the pct arms-silently rule), then never again for this window epoch.
+      // the pct arms-silently rule), then never again for this window.
       const pa1 = evaluateThresholds([paceView], tcfg, tProfiles, pkv)
       const pa2 = evaluateThresholds([paceView], tcfg, tProfiles, pkv)
       const paceAlertOk = pa1.length === 1 && pa1[0].kind === 'pace' && /runs out/.test(pa1[0].body) && pa2.length === 0
       const thrOk =
-        armedSilently && quietFiredOk && singleFireOk && warnFailoverOk && warnOnceOk && nonActiveNoSuggest && siblingHotNoSuggest && oneToastPerJump && resetRearmOk && thrPersistOk && paceAlertOk
-      const alertChannelsOk = AllChannels.includes('usage:alert') && AllChannels.includes('usage:alertCfgGet') && AllChannels.includes('usage:alertCfgSet')
+        armedSilently && quietFiredOk && singleFireOk && weeklyFiredOk && expiredLaneScopedOk && warnFailoverOk && warnOnceOk && nonActiveNoSuggest && siblingHotNoSuggest && oneToastPerJump && churnQuietOk && resetRearmOk && staleRegressOk && thrPersistOk && staticRearmOk && creditsFloorOk && spendCapOk && profileFlipAdoptsOk && paceAlertOk
+      const alertChannelsOk =
+        AllChannels.includes('usage:alert') &&
+        AllChannels.includes('usage:alertDrain') &&
+        AllChannels.includes('usage:alertAck') &&
+        AllChannels.includes('usage:alertCfgGet') &&
+        AllChannels.includes('usage:alertCfgSet')
 
       const pass =
         shapeOk && cadenceOk && staleOk && backoffOk && hiddenOk && resumeOk && grepClean && goldenOk && catalogOk && codexOk && codexDegrades && keysOk && noGetterOk && specsOk && cloudOk && costOk && histOk && costChannelsOk && statusNormOk && statusSvcOk && statusAppOk && statusChannelsOk && fanoutOk && thrOk && alertChannelsOk
-      result = { pass, shapeOk, cadenceOk, staleOk, backoffOk, hiddenOk, resumeOk, grepClean, goldenOk, goldenFails, catalogOk, catalogFails, codexOk, codexDegrades, vaultAvailable, keysOk, cipherOk, dbBytesOk, roundtripOk, replaceOk, clearOk, refusalOk, envRefOk, envLiteralRefusedOk, noGetterOk, specsOk, cloudOk, costOk, codexScanOk, claudeScanOk, costDegrades, cacheStableOk, livePriceOk, forkOk, archivedOk, worktreeFoldOk, byteResumeOk, riskOk, paceAlertOk, histOk, ringTruncOk, ringClampOk, ringPolledOk, costChannelsOk, statusNormOk, statusSvcOk, enabledOnlyOk, unknownAfterFail, backoffSkipOk, statusHiddenOk, statusResumeOk, statusAppOk, appOutageOk, outageRelabeled, overlayOk, chipOk, overlayCleared, statusChannelsOk, fanoutOk, thrOk, armedSilently, quietFiredOk, singleFireOk, warnFailoverOk, warnOnceOk, nonActiveNoSuggest, siblingHotNoSuggest, oneToastPerJump, resetRearmOk, thrPersistOk, alertChannelsOk, providers: USAGE_PROVIDERS.length, goldens: PACE_GOLDENS.length, tiles: snap.length, debug: svc.debug() }
+      result = { pass, shapeOk, cadenceOk, staleOk, backoffOk, hiddenOk, resumeOk, grepClean, goldenOk, goldenFails, catalogOk, catalogFails, codexOk, codexDegrades, vaultAvailable, keysOk, cipherOk, dbBytesOk, roundtripOk, replaceOk, clearOk, refusalOk, envRefOk, envLiteralRefusedOk, noGetterOk, specsOk, cloudOk, costOk, codexScanOk, claudeScanOk, costDegrades, cacheStableOk, livePriceOk, forkOk, archivedOk, worktreeFoldOk, byteResumeOk, riskOk, paceAlertOk, histOk, ringTruncOk, ringClampOk, ringPolledOk, costChannelsOk, statusNormOk, statusSvcOk, enabledOnlyOk, unknownAfterFail, backoffSkipOk, statusHiddenOk, statusResumeOk, statusAppOk, appOutageOk, outageRelabeled, overlayOk, chipOk, overlayCleared, statusChannelsOk, fanoutOk, thrOk, armedSilently, quietFiredOk, singleFireOk, weeklyFiredOk, expiredLaneScopedOk, warnFailoverOk, warnOnceOk, nonActiveNoSuggest, siblingHotNoSuggest, oneToastPerJump, churnQuietOk, resetRearmOk, staleRegressOk, thrPersistOk, staticRearmOk, creditsFloorOk, spendCapOk, profileFlipAdoptsOk, alertChannelsOk, providers: USAGE_PROVIDERS.length, goldens: PACE_GOLDENS.length, tiles: snap.length, debug: svc.debug() }
     } catch (e) {
       result = { pass: false, error: e instanceof Error ? e.message : String(e) }
     }
