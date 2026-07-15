@@ -8,6 +8,9 @@ const SATELLITES = [
   'mogging.mjs',
   'mcp-catalog.json',
   join('lib', 'endpoint-client.mjs'),
+  // The connection bridge (ADR 0014): a CLI spawns this to reach a service the APP
+  // is connected to. Same helper, same socket, no catalog of its own.
+  'mogging-connection.mjs',
   // Install the MCP entry after its data and imported helper. The stable launcher is switched
   // only after this final replacement and the package metadata have all landed.
   'mogging-mcp.mjs'
@@ -22,6 +25,24 @@ export interface CliRuntime {
   readonly mcpEntry: string
   /** Protocol-versioned implementation selected atomically by `mcpEntry`. */
   readonly mcpTarget: string
+  /** The connection bridge a CLI spawns to reach an APP-held connection (ADR 0014).
+   *  Written into CLI configs the same way `mcpEntry` is — and, like it, carrying no
+   *  secret whatsoever: the token stays in the app, on the far side of the socket. */
+  readonly connectionEntry: string
+  /**
+   * The SHIM a connection's CLI-config entry actually names.
+   *
+   * Not a cosmetic wrapper. A stored server entry is validated (registry.ts), and that
+   * validator refuses any env value that is not a `${VAR}` reference — deliberately, so
+   * no credential literal can ever be written into a CLI config. `ELECTRON_RUN_AS_NODE=1`
+   * is not a credential, but it IS a literal, so an entry carrying it is refused. The
+   * house server never hit this because it is `builtIn` and never stored.
+   *
+   * Rather than punch a hole in that validator, the shim absorbs the variable: it sets
+   * ELECTRON_RUN_AS_NODE itself, so the config entry is a bare command with NO env at all.
+   * The safer rule stays intact, and the config line gets shorter.
+   */
+  readonly connectionShim: string
   /** Minimal package metadata consumed by the copied MCP implementation. */
   readonly packageMeta: string
 }
@@ -190,9 +211,21 @@ export function installCliRuntime(): CliRuntime {
   const stableMcpDir = join(dirname(root), channelFromEnv() === 'dev' ? 'dev-mcp' : 'mcp')
   const mcpEntry = join(stableMcpDir, 'mogging-mcp.mjs')
   writePrivateFileAtomic(mcpEntry, stableMcpLauncherSource(mcpTarget))
+  // The bridge gets the SAME protocol-neutral launcher treatment as the house server:
+  // a connection's CLI config entry may outlive the release that wrote it.
+  const connectionEntry = join(stableMcpDir, 'mogging-connection.mjs')
+  writePrivateFileAtomic(connectionEntry, stableMcpLauncherSource(join(dir, 'mogging-connection.mjs')))
   if (process.platform !== 'win32') chmodSync(stableMcpDir, 0o700)
   const executable = stableRuntimeExecutable()
   writePrivateFileAtomic(shim, cliShimSource(process.platform, executable, cliEntry), process.platform === 'win32' ? 0o600 : 0o700)
+  // The bridge's own shim — same generator, same ELECTRON_RUN_AS_NODE trick, so a
+  // connection's CLI-config entry is a bare command with no env map to validate.
+  const connectionShim = join(dir, process.platform === 'win32' ? 'mogging-connection.cmd' : 'mogging-connection')
+  writePrivateFileAtomic(
+    connectionShim,
+    cliShimSource(process.platform, executable, connectionEntry),
+    process.platform === 'win32' ? 0o600 : 0o700
+  )
 
   const prior = (process.env.PATH ?? '').split(delimiter).filter(Boolean)
   process.env.PATH = [dir, ...prior.filter((entry) => !samePathEntry(entry, dir))].join(delimiter)
@@ -203,7 +236,17 @@ export function installCliRuntime(): CliRuntime {
     process.env.PATHEXT = ext.join(';')
   }
 
-  installedRuntime = Object.freeze({ binDir: dir, shim, executable, cliEntry, mcpEntry, mcpTarget, packageMeta })
+  installedRuntime = Object.freeze({
+    binDir: dir,
+    shim,
+    executable,
+    cliEntry,
+    mcpEntry,
+    mcpTarget,
+    connectionEntry,
+    connectionShim,
+    packageMeta
+  })
   return installedRuntime
 }
 

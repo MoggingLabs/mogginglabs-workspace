@@ -5,10 +5,16 @@
     "transport": "http",
     "urlOrCommand": "https://YOUR-N8N-INSTANCE/mcp/YOUR-TRIGGER-PATH",
     "group": null,
-    "authKinds": ["token"],
-    "envRefSlots": ["N8N_MCP_TOKEN"],
+    "authKinds": [
+      "token"
+    ],
+    "envRefSlots": [
+      "N8N_MCP_TOKEN"
+    ],
     "baseUrlOverride": true,
-    "cliQuirks": { "codex": "bearer auth via bearer_token_env_var only" },
+    "cliQuirks": {
+      "codex": "bearer auth via bearer_token_env_var only"
+    },
     "grantCopy": "Your n8n workflows become agent tools. An agent that can run a workflow can do whatever that workflow does — expose deliberately, per workspace.",
     "verifiedAt": "2026-07-06"
   },
@@ -18,11 +24,13 @@
     "transport": "http",
     "urlOrCommand": "https://drivemcp.googleapis.com/mcp/v1",
     "group": "google-workspace",
-    "authKinds": ["oauth"],
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
     "grantCopy": "Agents read and write the Drive files your account can. Client data in, deliverables out — grant per workspace.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "gw-gmail",
@@ -30,11 +38,13 @@
     "transport": "http",
     "urlOrCommand": "https://gmailmcp.googleapis.com/mcp/v1",
     "group": "google-workspace",
-    "authKinds": ["oauth"],
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
     "grantCopy": "Mail is a sensitive surface: an agent here reads and sends AS YOU. Grant narrowly and watch the trail.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "gw-calendar",
@@ -42,11 +52,13 @@
     "transport": "http",
     "urlOrCommand": "https://calendarmcp.googleapis.com/mcp/v1",
     "group": "google-workspace",
-    "authKinds": ["oauth"],
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
     "grantCopy": "Agents see and manage the calendars your account can.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "gw-chat",
@@ -54,11 +66,13 @@
     "transport": "http",
     "urlOrCommand": "https://chatmcp.googleapis.com/mcp/v1",
     "group": "google-workspace",
-    "authKinds": ["oauth"],
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
     "grantCopy": "An agent here speaks in your chats as you. Grant deliberately.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "slack",
@@ -66,11 +80,13 @@
     "transport": "http",
     "urlOrCommand": "https://mcp.slack.com/mcp",
     "group": null,
-    "authKinds": ["oauth"],
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
     "grantCopy": "LOUD one: an agent connected to Slack SPEAKS AS YOU to your team. A prompt-injected agent could message anyone you can. Grant per workspace, keep the reviewer gate on, read the trail.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "github-mcp",
@@ -78,11 +94,18 @@
     "transport": "http",
     "urlOrCommand": "https://api.githubcopilot.com/mcp/",
     "group": null,
-    "authKinds": ["oauth", "token"],
-    "envRefSlots": ["GITHUB_PAT"],
-    "cliQuirks": { "codex": "token on-ramp uses bearer_token_env_var" },
+    "authKinds": [
+      "oauth",
+      "token"
+    ],
+    "envRefSlots": [
+      "GITHUB_PAT"
+    ],
+    "cliQuirks": {
+      "codex": "token on-ramp uses bearer_token_env_var"
+    },
     "grantCopy": "Repos, issues, and PRs your account can touch. OAuth per CLI (vendor-preferred, per-CLI revocation) — or one PAT for all agents via the vault: one paste, shared blast radius.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "vercel",
@@ -90,11 +113,13 @@
     "transport": "http",
     "urlOrCommand": "https://mcp.vercel.com",
     "group": null,
-    "authKinds": ["oauth"],
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
     "grantCopy": "Deployments, projects, and logs your Vercel account can reach.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "supabase",
@@ -102,11 +127,18 @@
     "transport": "http",
     "urlOrCommand": "https://mcp.supabase.com/mcp",
     "group": null,
-    "authKinds": ["oauth", "token"],
-    "envRefSlots": ["SUPABASE_ACCESS_TOKEN"],
-    "cliQuirks": { "codex": "PAT on-ramp uses bearer_token_env_var" },
+    "authKinds": [
+      "oauth",
+      "token"
+    ],
+    "envRefSlots": [
+      "SUPABASE_ACCESS_TOKEN"
+    ],
+    "cliQuirks": {
+      "codex": "PAT on-ramp uses bearer_token_env_var"
+    },
     "grantCopy": "Schema, auth, and edge functions — OAuth is currently all-or-nothing on permissions. OAuth per CLI, or one PAT for all agents via the vault (one paste, shared blast radius).",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "gohighlevel",
@@ -114,11 +146,18 @@
     "transport": "http",
     "urlOrCommand": "https://services.leadconnectorhq.com/mcp/",
     "group": null,
-    "authKinds": ["token"],
-    "envRefSlots": ["GHL_API_KEY"],
-    "cliQuirks": { "codex": "bearer auth via bearer_token_env_var only" },
+    "authKinds": [
+      "oauth",
+      "token"
+    ],
+    "envRefSlots": [
+      "GHL_API_KEY"
+    ],
+    "cliQuirks": {
+      "codex": "bearer auth via bearer_token_env_var only"
+    },
     "grantCopy": "Client pipelines and automations your agency runs — an agent here acts on real client accounts. Grant narrowly.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "clickup",
@@ -126,11 +165,13 @@
     "transport": "http",
     "urlOrCommand": "https://mcp.clickup.com/mcp",
     "group": null,
-    "authKinds": ["oauth"],
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
     "grantCopy": "Tasks become agent prompts; finished work reports back to the ticket. OAuth only (no API-key auth).",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "make",
@@ -138,7 +179,9 @@
     "transport": "http",
     "urlOrCommand": "https://YOUR-MAKE-MCP-TOKEN-URL",
     "group": null,
-    "authKinds": ["token"],
+    "authKinds": [
+      "token"
+    ],
     "envRefSlots": [],
     "baseUrlOverride": true,
     "cliQuirks": {},
@@ -151,12 +194,19 @@
     "transport": "http",
     "urlOrCommand": "https://mcp.sentry.dev/mcp",
     "group": null,
-    "authKinds": ["oauth", "token"],
-    "envRefSlots": ["SENTRY_AUTH_TOKEN"],
+    "authKinds": [
+      "oauth",
+      "token"
+    ],
+    "envRefSlots": [
+      "SENTRY_AUTH_TOKEN"
+    ],
     "baseUrlOverride": true,
-    "cliQuirks": { "codex": "Sentry-Bearer alt rides bearer_token_env_var" },
+    "cliQuirks": {
+      "codex": "Sentry-Bearer alt rides bearer_token_env_var"
+    },
     "grantCopy": "Issues, traces, and releases. OAuth per CLI, or one auth token for all agents via the vault. Self-hosted Sentry: override the base URL.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "posthog",
@@ -164,11 +214,18 @@
     "transport": "http",
     "urlOrCommand": "https://mcp.posthog.com/mcp",
     "group": null,
-    "authKinds": ["token"],
-    "envRefSlots": ["POSTHOG_API_KEY"],
-    "cliQuirks": { "codex": "bearer auth via bearer_token_env_var only" },
+    "authKinds": [
+      "oauth",
+      "token"
+    ],
+    "envRefSlots": [
+      "POSTHOG_API_KEY"
+    ],
+    "cliQuirks": {
+      "codex": "bearer auth via bearer_token_env_var only"
+    },
     "grantCopy": "Product analytics via your personal API key — reference it as an env pointer; the key itself never enters a config file.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "stripe",
@@ -176,11 +233,13 @@
     "transport": "http",
     "urlOrCommand": "https://mcp.stripe.com",
     "group": null,
-    "authKinds": ["oauth"],
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
     "grantCopy": "LOUDEST one: this is MONEY. An agent here can touch customers, charges, and payouts your account can. A prompt-injected agent is a real financial risk — grant to one trusted workspace at most, keep write tools off, watch the trail.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "cloudflare-docs",
@@ -188,11 +247,13 @@
     "transport": "http",
     "urlOrCommand": "https://docs.mcp.cloudflare.com/mcp",
     "group": null,
-    "authKinds": ["none"],
+    "authKinds": [
+      "none"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
     "grantCopy": "Cloudflare's documentation server — read-only, no account. Their account-scoped servers (API, observability, bindings) arrive via the registry.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "aws-api",
@@ -200,9 +261,13 @@
     "transport": "stdio",
     "urlOrCommand": "uvx awslabs.aws-api-mcp-server@latest",
     "group": null,
-    "authKinds": ["none"],
+    "authKinds": [
+      "none"
+    ],
     "envRefSlots": [],
-    "cliQuirks": { "claude-code": "rides your default AWS credential chain (aws configure / SSO)" },
+    "cliQuirks": {
+      "claude-code": "rides your default AWS credential chain (aws configure / SSO)"
+    },
     "grantCopy": "AWS API operations under YOUR local credential chain — the agent can do what your aws CLI can. Scope the IAM role narrowly; this is infrastructure.",
     "verifiedAt": "2026-07-06"
   },
@@ -212,9 +277,13 @@
     "transport": "stdio",
     "urlOrCommand": "npx -y @azure/mcp@latest server start",
     "group": null,
-    "authKinds": ["none"],
+    "authKinds": [
+      "none"
+    ],
     "envRefSlots": [],
-    "cliQuirks": { "claude-code": "picks up your az login (Entra chain)" },
+    "cliQuirks": {
+      "claude-code": "picks up your az login (Entra chain)"
+    },
     "grantCopy": "Azure operations under your az login. Infrastructure blast radius — grant narrowly.",
     "verifiedAt": "2026-07-06"
   },
@@ -224,12 +293,14 @@
     "transport": "http",
     "urlOrCommand": "https://gitlab.com/api/v4/mcp",
     "group": null,
-    "authKinds": ["oauth"],
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "baseUrlOverride": true,
     "cliQuirks": {},
     "grantCopy": "Projects, issues, and MRs (GitLab 18.6+ instances). Self-managed: override the base URL — same path on your host.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "notion",
@@ -237,11 +308,13 @@
     "transport": "http",
     "urlOrCommand": "https://mcp.notion.com/mcp",
     "group": null,
-    "authKinds": ["oauth"],
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
     "grantCopy": "Pages and databases your account can touch — agents write where you can.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "tally",
@@ -249,11 +322,13 @@
     "transport": "http",
     "urlOrCommand": "https://mcp.tally.so/mcp",
     "group": null,
-    "authKinds": ["oauth"],
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
     "grantCopy": "Forms and submissions, read and write — free on all plans.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "zapier",
@@ -261,23 +336,27 @@
     "transport": "http",
     "urlOrCommand": "https://mcp.zapier.com/api/mcp/mcp",
     "group": null,
-    "authKinds": ["oauth"],
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
     "grantCopy": "Your Zaps and 7,000+ connected apps — huge transitive reach; an agent here can trigger anything you wired. Grant deliberately.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "atlassian",
     "label": "Jira / Atlassian",
     "transport": "http",
-    "urlOrCommand": "https://mcp.atlassian.com/v1/sse",
+    "urlOrCommand": "https://mcp.atlassian.com/v1/mcp",
     "group": null,
-    "authKinds": ["oauth"],
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
     "grantCopy": "Jira issues and Confluence pages your account can reach.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "figma",
@@ -285,11 +364,13 @@
     "transport": "http",
     "urlOrCommand": "https://mcp.figma.com/mcp",
     "group": null,
-    "authKinds": ["oauth"],
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
     "grantCopy": "Design files and components your account can read — designs in, code out.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "postman",
@@ -297,11 +378,13 @@
     "transport": "http",
     "urlOrCommand": "https://mcp.postman.com/mcp",
     "group": null,
-    "authKinds": ["oauth"],
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
     "grantCopy": "Collections and APIs from your Postman workspaces.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "airtable",
@@ -309,11 +392,13 @@
     "transport": "http",
     "urlOrCommand": "https://mcp.airtable.com/mcp",
     "group": null,
-    "authKinds": ["oauth"],
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
     "grantCopy": "Bases and records your account can touch — client data lives here; grant per workspace.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "jotform",
@@ -321,11 +406,13 @@
     "transport": "http",
     "urlOrCommand": "https://mcp.jotform.com/mcp",
     "group": null,
-    "authKinds": ["oauth"],
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
     "grantCopy": "Forms and submissions your account holds.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "replicate",
@@ -333,11 +420,13 @@
     "transport": "http",
     "urlOrCommand": "https://mcp.replicate.com/mcp",
     "group": null,
-    "authKinds": ["oauth"],
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
     "grantCopy": "Run models on your Replicate account — generation bills to you; grant to workspaces that should spend.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "fal",
@@ -345,11 +434,18 @@
     "transport": "http",
     "urlOrCommand": "https://mcp.fal.ai/mcp",
     "group": null,
-    "authKinds": ["token"],
-    "envRefSlots": ["FAL_KEY"],
-    "cliQuirks": { "codex": "Key-scheme header unsupported (bearer only) — use claude/gemini or the env-ref" },
+    "authKinds": [
+      "oauth",
+      "token"
+    ],
+    "envRefSlots": [
+      "FAL_KEY"
+    ],
+    "cliQuirks": {
+      "codex": "Key-scheme header unsupported (bearer only) — use claude/gemini or the env-ref"
+    },
     "grantCopy": "1,000+ gen-media models on your fal key — generation bills to you. The key rides as an env pointer, never a literal.",
-    "verifiedAt": "2026-07-06"
+    "verifiedAt": "2026-07-15"
   },
   {
     "id": "elevenlabs",
@@ -357,22 +453,436 @@
     "transport": "stdio",
     "urlOrCommand": "uvx elevenlabs-mcp",
     "group": null,
-    "authKinds": ["token"],
-    "envRefSlots": ["ELEVENLABS_API_KEY"],
+    "authKinds": [
+      "token"
+    ],
+    "envRefSlots": [
+      "ELEVENLABS_API_KEY"
+    ],
     "cliQuirks": {},
     "grantCopy": "Voice generation on your ElevenLabs key (env pointer) — characters bill to you.",
     "verifiedAt": "2026-07-06"
   },
   {
-    "id": "higgsfield",
-    "label": "Higgsfield",
+    "id": "cf-bindings",
+    "label": "Cloudflare Workers",
     "transport": "http",
-    "urlOrCommand": "https://higgsfield.ai/mcp",
-    "group": null,
-    "authKinds": ["oauth"],
+    "urlOrCommand": "https://bindings.mcp.cloudflare.com/mcp",
+    "group": "cloudflare",
+    "authKinds": [
+      "oauth"
+    ],
     "envRefSlots": [],
     "cliQuirks": {},
-    "grantCopy": "30+ gen-media models on your Higgsfield account (sign in, no API keys). Generation is async and credit-billed — agents poll for results.",
-    "verifiedAt": "2026-07-06"
+    "grantCopy": "Workers, KV, R2, D1 - an agent here deploys and mutates real infrastructure on your account. Grant narrowly.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "cf-observability",
+    "label": "Cloudflare Observability",
+    "transport": "http",
+    "urlOrCommand": "https://observability.mcp.cloudflare.com/mcp",
+    "group": "cloudflare",
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Logs and analytics for your zones and Workers - read-heavy, your account’s telemetry.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "cf-radar",
+    "label": "Cloudflare Radar",
+    "transport": "http",
+    "urlOrCommand": "https://radar.mcp.cloudflare.com/mcp",
+    "group": "cloudflare",
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Internet traffic insights and URL scans via your account.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "cf-browser",
+    "label": "Cloudflare Browser Rendering",
+    "transport": "http",
+    "urlOrCommand": "https://browser.mcp.cloudflare.com/mcp",
+    "group": "cloudflare",
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Fetch and render pages, take screenshots - billed to your account.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "cf-logs",
+    "label": "Cloudflare Logpush",
+    "transport": "http",
+    "urlOrCommand": "https://logs.mcp.cloudflare.com/mcp",
+    "group": "cloudflare",
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Logpush job health and configuration on your zones.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "cf-ai-gateway",
+    "label": "Cloudflare AI Gateway",
+    "transport": "http",
+    "urlOrCommand": "https://ai-gateway.mcp.cloudflare.com/mcp",
+    "group": "cloudflare",
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Your AI Gateway logs - prompts and responses your apps sent. Sensitive by nature.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "cf-autorag",
+    "label": "Cloudflare AutoRAG",
+    "transport": "http",
+    "urlOrCommand": "https://autorag.mcp.cloudflare.com/mcp",
+    "group": "cloudflare",
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "List and search your AutoRAG document stores.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "cf-auditlogs",
+    "label": "Cloudflare Audit Logs",
+    "transport": "http",
+    "urlOrCommand": "https://auditlogs.mcp.cloudflare.com/mcp",
+    "group": "cloudflare",
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Who changed what on your Cloudflare account - read-only audit trail.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "cf-dns-analytics",
+    "label": "Cloudflare DNS Analytics",
+    "transport": "http",
+    "urlOrCommand": "https://dns-analytics.mcp.cloudflare.com/mcp",
+    "group": "cloudflare",
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "DNS performance and debugging for your zones.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "cf-dex",
+    "label": "Cloudflare DEX",
+    "transport": "http",
+    "urlOrCommand": "https://dex.mcp.cloudflare.com/mcp",
+    "group": "cloudflare",
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Digital-experience monitoring for your Zero Trust org.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "cf-casb",
+    "label": "Cloudflare CASB",
+    "transport": "http",
+    "urlOrCommand": "https://casb.mcp.cloudflare.com/mcp",
+    "group": "cloudflare",
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "SaaS security findings for your Zero Trust org - security posture data; grant deliberately.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "cf-graphql",
+    "label": "Cloudflare GraphQL",
+    "transport": "http",
+    "urlOrCommand": "https://graphql.mcp.cloudflare.com/mcp",
+    "group": "cloudflare",
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Your account’s analytics via the GraphQL API.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "cf-containers",
+    "label": "Cloudflare Containers",
+    "transport": "http",
+    "urlOrCommand": "https://containers.mcp.cloudflare.com/mcp",
+    "group": "cloudflare",
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Spin up sandboxed containers on your account - compute bills to you.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "linear",
+    "label": "Linear",
+    "transport": "http",
+    "urlOrCommand": "https://mcp.linear.app/mcp",
+    "group": null,
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Issues, projects, and cycles your account can touch - finished work reports back to the ticket.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "asana",
+    "label": "Asana",
+    "transport": "http",
+    "urlOrCommand": "https://mcp.asana.com/sse",
+    "group": null,
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Tasks and projects your account can reach - agents update real work items.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "monday",
+    "label": "monday.com",
+    "transport": "http",
+    "urlOrCommand": "https://mcp.monday.com/sse",
+    "group": null,
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Boards and items your account can touch.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "intercom",
+    "label": "Intercom",
+    "transport": "http",
+    "urlOrCommand": "https://mcp.intercom.com/mcp",
+    "group": null,
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Customer conversations and tickets - an agent here reads real customer data. Grant narrowly.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "close",
+    "label": "Close CRM",
+    "transport": "http",
+    "urlOrCommand": "https://mcp.close.com/mcp",
+    "group": null,
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Leads and opportunities - its write scopes include destructive ones; watch the trail.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "jam",
+    "label": "Jam",
+    "transport": "http",
+    "urlOrCommand": "https://mcp.jam.dev/mcp",
+    "group": null,
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Your Jam bug reports - repro steps, console logs, and network data in, fixes out.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "neon",
+    "label": "Neon",
+    "transport": "http",
+    "urlOrCommand": "https://mcp.neon.tech/mcp",
+    "group": null,
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Your Neon Postgres - schema and SQL against real databases. Grant narrowly.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "prisma",
+    "label": "Prisma Postgres",
+    "transport": "http",
+    "urlOrCommand": "https://mcp.prisma.io/mcp",
+    "group": null,
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Manage your Prisma Postgres databases - real data, real deletes.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "box",
+    "label": "Box",
+    "transport": "http",
+    "urlOrCommand": "https://mcp.box.com",
+    "group": null,
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Files and folders your Box account can reach - client documents live here.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "globalping",
+    "label": "Globalping",
+    "transport": "http",
+    "urlOrCommand": "https://mcp.globalping.dev/mcp",
+    "group": null,
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Network measurements (ping, traceroute, DNS) from probes worldwide, on your account’s quota.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "paypal",
+    "label": "PayPal",
+    "transport": "http",
+    "urlOrCommand": "https://mcp.paypal.com/mcp",
+    "group": null,
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "MONEY: invoices, payments, and payouts your PayPal account can move. A prompt-injected agent is a real financial risk - one trusted workspace at most, watch the trail.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "square",
+    "label": "Square",
+    "transport": "http",
+    "urlOrCommand": "https://mcp.squareup.com/sse",
+    "group": null,
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "MONEY: payments, customers, and catalog on your Square account. Grant to one trusted workspace at most.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "plaid",
+    "label": "Plaid",
+    "transport": "http",
+    "urlOrCommand": "https://api.dashboard.plaid.com/mcp/sse",
+    "group": null,
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Your Plaid dashboard - items, institutions, and API usage. Banking-adjacent; grant deliberately.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "canva",
+    "label": "Canva",
+    "transport": "http",
+    "urlOrCommand": "https://mcp.canva.com/mcp",
+    "group": null,
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Read and generate designs on your Canva account.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "webflow",
+    "label": "Webflow",
+    "transport": "http",
+    "urlOrCommand": "https://mcp.webflow.com/sse",
+    "group": null,
+    "authKinds": [
+      "oauth"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Sites, collections, and content your account can publish - an agent here can change a live site.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "huggingface",
+    "label": "Hugging Face",
+    "transport": "http",
+    "urlOrCommand": "https://huggingface.co/mcp",
+    "group": null,
+    "authKinds": [
+      "token"
+    ],
+    "envRefSlots": [
+      "HF_TOKEN"
+    ],
+    "cliQuirks": {},
+    "grantCopy": "Models, datasets, and Spaces - paste a read token and agents browse the Hub as you.",
+    "verifiedAt": "2026-07-15"
+  },
+  {
+    "id": "deepwiki",
+    "label": "DeepWiki",
+    "transport": "http",
+    "urlOrCommand": "https://mcp.deepwiki.com/mcp",
+    "group": null,
+    "authKinds": [
+      "none"
+    ],
+    "envRefSlots": [],
+    "cliQuirks": {},
+    "grantCopy": "Ask questions about any public GitHub repo - read-only, no account.",
+    "verifiedAt": "2026-07-15"
   }
 ]

@@ -65,7 +65,7 @@ renderer is tuned once and behaves identically everywhere. See
 > workspace and the explorer shows it, decorated, live, actionable — with both budgets
 > measured **on the composed surface** (16 panes + the explorer open + a write torrent:
 > **142.8 avg fps · worst gap 25.1ms · heap 20MB · 0 frames > 100ms**). The `qa-smokes.sh`
-> sweep now runs **122 gates** (seven new this pack: FSLIST · FILETREE · EXPLORER · TREELIVE ·
+> sweep now runs **124 gates** (seven new this pack: FSLIST · FILETREE · EXPLORER · TREELIVE ·
 > TREEGIT · FILEACT · FILESMILESTONE). Receipts, measured numbers and platform finds:
 > `prompts/phase-11/REPORT.md`.
 >
@@ -194,7 +194,8 @@ other; `main`/`preload`/`renderer` are the only composition root. See
 - **Phase 5** ✅ — UI/UX excellence: AA-measured token system + vivid workspace identity, icon family, window-chrome fixes, full-app views, 14px terminal comfort (receipts: `prompts/phase-5/REPORT.md`).
 - **Phase 6** ✅ — Product-ready: full Linux/macOS parity sweeps, browser dock, first-run + updates, v0.4.0.
 - **Phase 7** ✅ — Usage & metering: CLI-owned session adapters, the usage gauge + Settings § Usage, the pointer-grammar key vault (receipts: `prompts/phase-7/README.md`).
-- **Phase 8** ✅ — Integrations, five directions: the house MCP server (reads free, writes behind a per-workspace grant), the agent-web profile + activity trail, MCP registration across three CLI dialects + per-workspace tool plans, the outbound event bridge, live GitHub PR/issue chips — nothing runs, proxies, or holds a credential it doesn't have to, daemon still v3. Closed by `MOGGING_INTEGMILESTONE`; surface in [`docs/14`](docs/14-integrations.md).
+- **Phase 8** ✅ — Integrations, five directions: the house MCP server (reads free, writes behind a per-workspace grant), the agent-web profile + activity trail, MCP registration across three CLI dialects + per-workspace tool plans, the outbound event bridge, live GitHub PR/issue chips — every credential we hold rests as OS-keychain ciphertext or we refuse it, daemon still v3. Closed by `MOGGING_INTEGMILESTONE`; surface in [`docs/14`](docs/14-integrations.md).
+- **Connections** ✅ — connect a service *account* (Sentry, Notion, Vercel…) to the app once, in your own browser, and every agent you launch can use it. The app is the OAuth client: it self-registers with the vendor, holds **one** grant per service in your OS keychain, and your CLIs reach the service *through* it — so **no token is ever written into a CLI's config file**. Your CLI *logins* are still never brokered ([ADR 0002](docs/adr/0002-never-broker-provider-auth.md) stands). See [ADR 0014](docs/adr/0014-app-held-service-connections.md).
 - **Phase 8.5** ✅ — The UI/UX revamp: an audit of every surface ([`AUDIT.md`](prompts/phase-8.5/AUDIT.md)), then rebuilt on one layout vocabulary (`Card`/`SectionHeader`/`FieldGroup`/`TwoColumn`, ramp extended to `--sp-7/8`) — one-page wizard, click-to-pick folder browser, overview-first Settings, Home/first-run, board + palette, one feedback language, chrome + possession banner, the Usage-glance recut; 13 removals, 16 bugs fixed; spacing frozen at zero, both budgets unmoved. Closed by `MOGGING_UXMILESTONE` + the `check-audit.mjs` coverage gate (receipts: `prompts/phase-8.5/README.md`).
 
 Full plan: [`docs/02-mvp-and-roadmap.md`](docs/02-mvp-and-roadmap.md).

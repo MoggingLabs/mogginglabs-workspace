@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 122 gates: 14 static (AUDIT · SPACING · PTYSEAM · PROTOVER · AGENTCAT · LAYOUT ·
+# 124 gates: 15 static (AUDIT · SPACING · PTYSEAM · PROTOVER · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · GITPURE ·
-# REMOTEBOOT) + 108 app-boot
+# REMOTEBOOT · CONNPURE) + 109 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -218,6 +218,11 @@ run_static PRODARTIFACT node scripts/check-prod-artifact.mjs
 run_static GATECOUNT node scripts/check-gate-count.mjs
 run_static GITPURE npm run smoke:git-pure
 run_static REMOTEBOOT npm run smoke:remote-bootstrap-pure
+# CONNPURE: the connections/OAuth regression suite (ADR 0014) — a hermetic fixture AS +
+# MCP server driving the REAL oauth client and the REAL bridge binary. Mutation-proven:
+# reintroducing the scope over-ask, the rotation-merge drop, or the whoami unfence each
+# turns it red. Everything it asserts failed silently once; this is what stops the reprise.
+run_static CONNPURE npm run smoke:connections-pure
 
 run_smoke SMOKE       MOGGING_SMOKE     1 180 smoke
 run_smoke MULTIPANE   MOGGING_MULTIPANE 1 180 multipane

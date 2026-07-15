@@ -2,9 +2,18 @@
 
 Phase-8. The workspace stops being an island: agents reach your tools, your
 tools reach your agents, and the outside world's state lands back on the board.
-Five directions, one rule throughout — **nothing runs, proxies, or holds a
-credential it doesn't have to.** The daemon is untouched (still v3, grant-blind);
-every boundary below is app-side.
+Five directions, one rule throughout — **every credential we hold, we hold as
+OS-keychain ciphertext, on your machine, or we refuse to hold it at all.** The
+daemon is untouched (still v3, grant-blind); every boundary below is app-side.
+
+> **Updated by [ADR 0014](adr/0014-app-held-service-connections.md).** The app is now
+> an OAuth client: it can hold a **connection** to a service *account* (Sentry, Notion,
+> Vercel) and let every agent reach it, so the credential lives in one place instead of
+> being re-granted into each CLI's own store. That inverts what Directions 1 & 2 said,
+> and those sections are rewritten below. What is **unchanged**: we still never broker a
+> **provider login** — Claude, Codex and Gemini authenticate themselves (ADR 0002) — and
+> the per-CLI route documented here still exists, still works, and is still the right
+> answer when you want a CLI to own its own auth.
 
 > New here? The end-to-end proof that all five compose in one fixture world is
 > `MOGGING_INTEGMILESTONE` (`src/main/integmilestone-smoke.ts`). This page is the
@@ -66,20 +75,49 @@ app-less session does the reverse. Neither upstream's outage crashes the other.
 
 ## Directions 1 & 2 — connect & authorize
 
-**Connect** (direction 1) writes config through the per-CLI writers (8/06); it
-never runs or authenticates the server. Three on-ramps, one pipeline:
+There are **two routes**, and the difference between them is *who holds the grant*.
+
+### Route A — a Connection (the app holds it) · ADR 0014
+
+The default, and the one the Connections card grid drives. You connect a service
+**account** to the app, once:
+
+1. The app discovers the server's authorization server from its own `401`
+   (RFC 9728 → RFC 8414), then **registers itself** as a public OAuth client
+   (RFC 7591) where the vendor allows it — no vendor paperwork, no shipped secret.
+2. Consent runs in **your own browser**, on the vendor's real page, over an
+   ephemeral `127.0.0.1` loopback redirect (RFC 8252) with PKCE/S256. The app never
+   renders a login form and never sees your password.
+3. The grant rests as **OS-keychain ciphertext**. It is decrypted at exactly one
+   point: the moment a token is attached to an outbound request.
+4. The connection is registered as an MCP server whose command is **our bridge**
+   (`bin/mogging-connection.mjs --connection <id>`). Agents call the service *through
+   the app*, so **what lands in `~/.claude.json` is a command and a service id — no
+   token, no key, not even a `${VAR}`.**
+5. **Connected means proven:** the card shows what the server *answered* at
+   `initialize` + `tools/list` — its name, its tool count, the scopes, the renewal
+   clock. Nothing is inferred from a config file's contents.
+
+One grant, one refresher (rotation-safe), one **Disconnect**.
+
+### Route B — a per-CLI server (the CLI holds it)
+
+Unchanged, still supported, still right when you *want* a CLI to own its credential —
+or when the server must run locally (`aws`, `azure` ride your machine's own credential
+chain and have nothing to connect). **Connect** here writes config through the per-CLI
+writers (8/06); on this route the app runs and authenticates nothing. Three on-ramps,
+one pipeline:
 
 - **A preset** — an official, dev-verified row from the Catalog (see the map).
 - **A registry search** — the official MCP registry, rendered as a *community
   DRAFT* (never house-vetted, badged as such).
 - **A pasted preset** — your own JSON, converted through the same refusals.
 
-**Authorize** is the CLI's job, not ours. OAuth consent runs in the CLI's own
-managed pane (`claude /mcp`, `codex mcp login <id>`, `gemini mcp auth <id>`);
-the token lands in **the CLI's** store, never this process. Token servers take
-an **env-ref pointer** (`${POSTHOG_API_KEY}`) — the literal never enters a
-config file. One paste of a shared key into the vault is the one exception, and
-it rests as ciphertext (see *Custody*).
+**Authorize**, on route B, is the CLI's job. OAuth consent runs in the CLI's own
+managed pane (`claude /mcp`, `codex mcp login <id>`, `gemini mcp auth <id>`) and the
+token lands in **that CLI's** store. Token servers take an **env-ref pointer**
+(`${POSTHOG_API_KEY}`) — the literal never enters a config file. One paste of a shared
+key into the vault is the exception, and it rests as ciphertext (see *Custody*).
 
 ---
 
@@ -146,9 +184,14 @@ The rule, in your words:
 - A webhook URL is a **secret** (Slack/Make embed a token in the path). It rests
   as vault ciphertext or an env-ref; the KV, logs, telemetry, and trail see only
   the **label** and a `host/…` mask.
-- An MCP OAuth token is **the CLI's** — it lives in the CLI's store and this
-  process never sees it. The GitHub adapter goes further: it shells out to your
-  own `gh`, which authenticates itself.
+- An MCP OAuth token's custody depends on the route (ADR 0014). On **route B** it is
+  **the CLI's** — it lives in that CLI's store and this process never sees it. On
+  **route A** it is **ours to guard**: it rests as OS-keychain ciphertext, is decrypted
+  only to be attached to one outbound request, and no IPC channel can return it (there
+  is no getter, by construction). No keychain → we **refuse to connect** rather than
+  keep a refresh token in plaintext. The GitHub *adapter* (direction 5) is different
+  again, and goes further than both: it shells out to your own `gh`, which authenticates
+  itself.
 
 The milestone's custody sweep greps every fixture secret — vault key, webhook
 token, the site cookie value — across the *entire* fixture userData, the CLI

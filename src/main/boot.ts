@@ -28,6 +28,7 @@ import { registerIntegrations } from './integrations'
 import { registerEventBridge } from './event-bridge'
 import { registerTrail } from './trail'
 import { registerMcpManager } from './mcp-manager'
+import { registerConnections } from './connections'
 import { registerMcpStatus } from './mcp-status'
 import { registerServices } from './services'
 import { startDaemonBackend } from './daemon-relay'
@@ -283,6 +284,7 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       registerEventBridge(() => win) // outbound event bridge: house events -> user webhooks (8/10)
       registerTrail() // the agent activity trail: local store + viewer IPC (8/05)
       registerMcpManager() // MCP manager: registry + per-CLI config writers (8/06)
+      registerConnections(() => win) // the connection broker: the app IS the OAuth client (ADR 0014)
       registerMcpStatus(() => win) // MCP connection-status poller: pushed per-(server×cli) grid (8/11)
       registerServices(() => win) // service links: board card <-> GitHub PR/issue, live via gh (8/12)
       startMcpEndpoint() // agent-control transport: the MCP server reaches the dock + grant wire here (6/05b, 8/03)

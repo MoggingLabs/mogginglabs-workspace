@@ -343,8 +343,28 @@ export const IntegrationsChannels = {
   linkStatusChanged: 'integrations:link:statusChanged' // main -> renderer: { statuses, at }
 } as const
 
+// ── Connections (ADR 0014) — the app IS the OAuth client ────────────────────
+// The app holds ONE grant per service as vault ciphertext and proxies the CLIs
+// to the server, so no token reaches a CLI config or store. Read the whole
+// stance in contracts/integrations/connections.ts.
+//
+// There is deliberately NO `connection:token:get`, and there never will be: the
+// access token materializes only inside main, at the moment it is attached to an
+// outbound request. No channel here can carry it to a renderer — the same
+// structural write-only discipline as the 8/08 service keys.
+export const ConnectionsChannels = {
+  list: 'connections:list', // -> Connection[] (secret-free; the card grid's whole source)
+  connect: 'connections:connect', // ({ serviceId, baseUrl? }) -> { ok, reason? } — opens CONSENT IN THE USER'S BROWSER; resolves when the flow STARTS, not when it lands
+  submitKey: 'connections:submitKey', // ({ serviceId, value, baseUrl? }) -> { ok, reason? } — key-auth on-ramp: VERIFIED against the live server, then vaulted
+  cancel: 'connections:cancel', // (serviceId) -> void — abandon a pending browser consent (closes the loopback port; the card returns to disconnected)
+  disconnect: 'connections:disconnect', // (serviceId) -> void (drops the vault slot + the metadata; the vendor-side revoke is theirs)
+  verify: 'connections:verify', // (serviceId) -> Connection (initialize + tools/list, right now — proof, not a poll)
+  changed: 'connections:changed' // main -> renderer: Connection[] (pushed on every state change; the browser lands here)
+} as const
+
 export const AllChannels: readonly string[] = [
   ...Object.values(IntegrationsChannels),
+  ...Object.values(ConnectionsChannels),
   ...Object.values(UsageChannels),
   ...Object.values(UpdateChannels),
   ...Object.values(BrowserChannels),

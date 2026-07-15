@@ -3,13 +3,14 @@
 //
 //   node scripts/check-protocol-version.mjs
 //
-// THE RULE: DAEMON_PROTOCOL_VERSION has exactly one value, and all three declarations agree.
+// THE RULE: DAEMON_PROTOCOL_VERSION has exactly one value, and all four declarations agree.
 //
-// It is declared three times because the two `bin/` entry points are plain Node and cannot import
+// It is declared four times because the three `bin/` entry points are plain Node and cannot import
 // a TS contract:
 //   src/contracts/daemon/protocol.ts   DAEMON_PROTOCOL_VERSION   (the app + daemon)
 //   bin/mogging.mjs                    PROTOCOL_VERSION          (the CLI)
 //   bin/mogging-mcp.mjs                PROTOCOL                  (the MCP server)
+//   bin/mogging-connection.mjs         PROTOCOL                  (the connection bridge, ADR 0014)
 //
 // A "keep in sync" comment guarded them, which is to say nothing guarded them. The version names
 // the runtime DIRECTORY (…/MoggingLabs/run/v<N>) holding the daemon socket, the endpoint file, the
@@ -35,7 +36,12 @@ function walkTs(dir) {
 const SOURCES = [
   { file: 'src/contracts/daemon/protocol.ts', re: /export const DAEMON_PROTOCOL_VERSION\s*=\s*(\d+)/ },
   { file: 'bin/mogging.mjs', re: /^const PROTOCOL_VERSION\s*=\s*(\d+)/m },
-  { file: 'bin/mogging-mcp.mjs', re: /^const PROTOCOL\s*=\s*(\d+)/m }
+  { file: 'bin/mogging-mcp.mjs', re: /^const PROTOCOL\s*=\s*(\d+)/m },
+  // The bridge resolves the SAME runtime directory to find browser-control.json. Left off this
+  // list it would keep its stale constant through the next bump, and every connected service
+  // would answer "MoggingLabs Workspace is not running" on a machine where it plainly is —
+  // the exact failure this gate was written to prevent, in a file the gate could not see.
+  { file: 'bin/mogging-connection.mjs', re: /^const PROTOCOL\s*=\s*(\d+)/m }
 ]
 
 const found = SOURCES.map(({ file, re }) => {
@@ -90,6 +96,7 @@ const CHANNEL_SOURCES = [
   },
   { file: 'bin/mogging.mjs', checks: [/'dev-v' : 'v'/, /'mogging-dev' : 'mogging'/] },
   { file: 'bin/mogging-mcp.mjs', checks: [/'dev-v' : 'v'/] },
+  { file: 'bin/mogging-connection.mjs', checks: [/'dev-v' : 'v'/] },
   { file: 'src/backend/features/context/relay.ts', checks: [/'dev-v' : 'v'/] }
 ]
 for (const { file, checks } of CHANNEL_SOURCES) {

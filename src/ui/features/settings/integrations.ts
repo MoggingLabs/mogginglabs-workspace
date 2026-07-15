@@ -21,6 +21,7 @@ import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onToolPlanPanesChange, restartNeededPaneIds } from '../../core/agents/toolplan-panes'
 import { requestIntegrationsFocus, takeIntegrationsFocus, type IntegrationsFocus } from '../../core/shell/integrations-focus-port'
 import { integrationAuthState, onIntegrationAuthState, runIntegrationAuthorization } from './auth-runner'
+import { connectedCount, createConnectionsBlock } from './connections'
 
 // ── Attention, reported upward (8.5/05) ──────────────────────────────────────
 // Five folded Cards (webhooks and the trail earned their own tabs), and NOT ONE
@@ -28,7 +29,7 @@ import { integrationAuthState, onIntegrationAuthState, runIntegrationAuthorizati
 // from an async refresh or a pushed channel. So a section that discovers it needs
 // you says so, and the shell puts that on the fold's header, where a collapse
 // cannot bury it.
-type SectionId = 'catalog' | 'servers' | 'keys' | 'matrix' | 'grants'
+type SectionId = 'connections' | 'catalog' | 'servers' | 'keys' | 'matrix' | 'grants'
 interface SectionSignal {
   /** Rendered in the collapsed header. Null clears. */
   chip: Node | null
@@ -109,6 +110,11 @@ function createCatalogBlock(): SyncedBlock {
     panel.append(
       el('div', { class: 'mgr-panel-summary' }, [providerLogo(preset.id, 18), el('span', { text: `Connect ${preset.label}` })])
     )
+    // The panel lives AFTER the 28-card grid, so opening it from a card near the top
+    // rendered it ~1,500px below an 800px fold with nothing scrolling — the click
+    // "did absolutely nothing", which is exactly how it was reported. Un-hiding a
+    // control the user cannot see is not showing it to them.
+    setTimeout(() => panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 0)
     panel.append(el('div', { class: 'settings-row-caption', text: preset.grantCopy }))
     // CLI checkboxes, capability/installed dimming.
     const checks = new Map<HostedCliId, HTMLInputElement>()
@@ -459,7 +465,11 @@ function createCatalogBlock(): SyncedBlock {
   }
 
   const block = el('div', { class: 'trail-block cat-block' }, [
-    el('div', { class: 'settings-row-caption', text: 'Official servers, verified with dates — Connect writes each CLI’s own config through the manager below. The app never runs, proxies, or authenticates a server; OAuth belongs to each CLI, keys are env references.' }),
+    el('div', {
+      class: 'settings-row-caption',
+      text:
+        'The other route, unchanged: Connect here writes the server into each CLI’s own config, and THAT CLI holds its own auth — the app brokers nothing on this path, and keys stay ${VAR} references. Use it when you want a CLI to own its credential, or for a server that must run on your machine. For an account this app holds for every agent at once, use Connections above.'
+    }),
     grid,
     panel,
     el('div', { class: 'trail-controls' }, [searchInput, searchBtn]),
@@ -787,7 +797,7 @@ function createServersBlock(): SyncedBlock {
   }
 
   const block = el('div', { class: 'trail-block mgr-block' }, [
-    el('div', { class: 'settings-row-caption', text: 'Register a server once and apply it to each CLI in its own config dialect. Writes are surgical (only our marked entries), backed up first, and only ever on your click — the app never runs, proxies, or authenticates a server. Env values are ${VAR} references; paste a key value and it’s vaulted (encrypted, materialized into pane env), never written as a literal.' }),
+    el('div', { class: 'settings-row-caption', text: 'Register a server once and apply it to each CLI in its own config dialect. Writes are surgical (only our marked entries), backed up first, and only ever on your click. Env values are ${VAR} references; paste a key value and it’s vaulted (encrypted, materialized into pane env), never written as a literal. A server that came from a Connection above appears here too — its entry is a command, and carries no credential at all.' }),
     list,
     panel,
     el('div', { class: 'trail-controls' }, [statusRefreshBtn, addToggle]),
@@ -1221,9 +1231,11 @@ function createIntegrationsIntro(): HTMLElement {
       set: (v) => (value.textContent = v)
     }
   }
+  const connections = stat('Connections')
   const servers = stat('Servers')
   const keys = stat('Service keys')
   const setters: Partial<Record<SectionId, (v: string) => void>> = {
+    connections: connections.set,
     servers: servers.set,
     keys: keys.set
   }
@@ -1233,8 +1245,12 @@ function createIntegrationsIntro(): HTMLElement {
 
   return el('div', { class: 'trail-block integux-intro' }, [
     el('div', { class: 'settings-row-label', text: 'Connect your stack' }),
-    el('div', { class: 'settings-row-caption', text: 'Wire your tools (Sentry, GitHub, Slack…) to the coding agents you already run — the CLIs own their auth. Keys you paste here are vaulted, not brokered.' }),
-    el('div', { class: 'integux-stats' }, [servers.el, keys.el]),
+    el('div', {
+      class: 'settings-row-caption',
+      text:
+        'Connect your accounts (Sentry, GitHub, Slack…) to this app once, and every agent you launch can use them. Sign-in happens in your own browser; the credential is encrypted by your OS keychain and never written into a CLI’s config. Prefer the CLIs to hold their own auth instead? That route is still here, below.'
+    }),
+    el('div', { class: 'integux-stats' }, [connections.el, servers.el, keys.el]),
     el('div', { class: 'trail-controls' }, [setup])
   ])
 }
@@ -1246,7 +1262,14 @@ function createIntegrationsPrivacy(): HTMLElement {
     el('div', { class: 'settings-row-label', text: 'What the app can and can’t see' }),
     el('div', { class: 'settings-note' }, [
       icon('check-circle', 14),
-      el('span', { text: 'Your keys, your CLIs. The agents authenticate with your own accounts; the app never stores an OAuth token. API keys you paste are encrypted by your OS keychain and only ever materialize into a pane’s environment — never a config file, log, or telemetry. Webhook URLs are secrets too. Repo names, tool lists, and titles stay in the app: telemetry is counts and booleans only (docs/14).' })
+      // Say the true thing, including the uncomfortable half. The app now HOLDS
+      // OAuth grants — pretending otherwise would be the one unforgivable line on
+      // this page, and the wording gate (scripts/check-credential-wording.mjs)
+      // exists precisely to stop a comforting lie from creeping back in.
+      el('span', {
+        text:
+          'When you connect a service here, this app holds that connection: the OAuth token is encrypted by your OS keychain and never leaves your machine — not to us, not into a CLI’s config file, not into a log or telemetry. Your agents reach the service through the app, so a connected account is reachable by any agent whose workspace tool plan includes it — scope them deliberately, and disconnect here to delete the credential. Provider LOGINS (Claude, Codex, Gemini) are still never brokered: those CLIs sign in as themselves, as they always have (ADR 0002). Repo names, tool lists, and titles stay in the app: telemetry is counts and booleans only (docs/14).'
+      })
     ])
   ])
 }
@@ -1300,6 +1323,16 @@ export function createIntegrationsSection(): HTMLElement {
   signalListeners.clear()
   lastSignal.clear()
 
+  const connectionsBlock = createConnectionsBlock((cs) => {
+    const live = connectedCount(cs)
+    const broken = cs.filter((c) => c.state === 'expired' || c.state === 'error').length
+    signal('connections', {
+      // An expired grant is the one thing here that silently stops an agent's tools
+      // working, so it must reach the fold's header even when the card is collapsed.
+      chip: broken ? attnChip('needs-auth', `${broken} need${broken === 1 ? 's' : ''} you`) : null,
+      stat: live ? `${live} connected` : 'none'
+    })
+  })
   const catalogBlock = createCatalogBlock()
   const serversBlock = createServersBlock()
   const toolplan = createToolPlanBlock()
@@ -1319,17 +1352,30 @@ export function createIntegrationsSection(): HTMLElement {
   // One line each. A fold you must read four lines to skip is not a fold — the full
   // paragraph lives at the top of each body, where it applies. Every purpose line keeps
   // its load-bearing clause: what the app will never do with your credentials.
-  const catalog = card('catalog', 'Connect', 'Verified servers, wired to the CLIs you already run — the app never authenticates one.', catalogBlock.block, { defaultOpen: true, attentionOpens: false })
+  // Connections FIRST, and open by default: it is the only thing on this page that
+  // is about YOUR ACCOUNTS rather than about a CLI's config file. Everything below
+  // it — the per-CLI catalog, the registry, the plans — is machinery for handing a
+  // connection to an agent, and it stays exactly where it was for the people who
+  // want the CLI to own its own auth.
+  const connections = card(
+    'connections',
+    'Connections',
+    'Your accounts, connected to this app. Sign in once — every agent you launch can use it.',
+    connectionsBlock.block,
+    { defaultOpen: true, attentionOpens: true }
+  )
+  const catalog = card('catalog', 'Per-CLI servers', 'The other route: write a server straight into a CLI’s own config, and let that CLI hold its own auth.', catalogBlock.block, { defaultOpen: false, attentionOpens: false })
   const servers = card('servers', 'Servers & registry', 'Register once, apply per CLI. Writes are surgical, backed up, and only on your click.', serversBlock.block)
   const matrix = card('matrix', 'Workspace tool plans', 'Which servers reach this workspace’s panes. Context hygiene, not a permission.', toolplan.block)
   const grants = card('grants', 'Grants', 'Which MCP write tools agents get here. Default closed — approve is never a tool.', grantsBlock.block)
   const keys = card('keys', 'Service keys', 'One paste, encrypted by your OS keychain. Never a config file, a log, or plaintext on disk.', keysBlock.block)
 
-  const cards: Record<SectionId, CollapsibleCardHandle> = { catalog, servers, matrix, grants, keys }
+  const cards: Record<SectionId, CollapsibleCardHandle> = { connections, catalog, servers, matrix, grants, keys }
   onSignal((id, sig) => cards[id]?.setAttention(sig.chip))
 
   const section = el('div', { class: 'integrations-section' }, [
     createIntegrationsIntro(),
+    connections.el,
     catalog.el,
     servers.el,
     matrix.el,
@@ -1341,7 +1387,7 @@ export function createIntegrationsSection(): HTMLElement {
   focusTargets = { matrix, servers }
   // Every entry into Settings re-reads what can go stale. Reading it once at boot is
   // what left the matrix and the grants blank on a fresh install (see SyncedBlock).
-  const syncs = [catalogBlock.sync, serversBlock.sync, toolplan.sync, grantsBlock.sync, keysBlock.sync]
+  const syncs = [connectionsBlock.sync, catalogBlock.sync, serversBlock.sync, toolplan.sync, grantsBlock.sync, keysBlock.sync]
   syncAll = (): void => {
     for (const sync of syncs) sync()
   }
