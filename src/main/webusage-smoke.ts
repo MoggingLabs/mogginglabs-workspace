@@ -47,23 +47,61 @@ export function runWebUsageSmoke(_win: BrowserWindow): void {
 
       // enable/disable the per-provider store-read opt-in (default OFF)
       const setWebRead = (id: string, on: boolean): void => getSettingsStore()?.setSetting(`usage.webread.${id}`, on ? '1' : '0')
+      // Fixture HTTP: the REAL cursor parse runs against a canned usage-summary
+      // body — the spec path is exercised end-to-end with ZERO network.
+      let httpCalls = 0
+      const CANNED = {
+        billingCycleEnd: new Date(Date.now() + 9 * 86_400_000).toISOString(),
+        membershipType: 'pro',
+        individualUsage: {
+          plan: { used: 1520, limit: 2000, totalPercentUsed: 76 },
+          onDemand: { enabled: true, used: 1250, limit: 5000 }
+        }
+      }
+      let httpStatus = 200
       const deps = (id: string): WebSessionDeps => ({
         pasteValue: (pid) => resolveKey(pid),
         storeReadEnabled: () => getSettingsStore()?.getSetting(`usage.webread.${id}`) === '1',
-        readCookie: (o, n) => spyBackend.read(o, n)
+        readCookie: (o, n) => spyBackend.read(o, n),
+        http: async () => {
+          httpCalls++
+          return { status: httpStatus, body: httpStatus === 200 ? CANNED : null }
+        }
       })
 
       keyClear('cursor')
       setWebRead('cursor', false)
 
-      // 1 ── store-read OFF: the store is NEVER touched, provider unconfigured
+      // 1 ── store-read OFF: neither the store NOR the endpoint is touched
       const off = await fetchWebSessionUsage(cursor, 'default', new AbortController().signal, deps('cursor'))
-      const offOk = reads === 0 && off.health === 'unconfigured'
+      const offOk = reads === 0 && httpCalls === 0 && off.health === 'unconfigured'
 
-      // 2 ── store-read ON: the backend fires (once), session found
+      // 2 ── store-read ON: the backend fires (once) and the REAL cursor spec
+      //      parses the fixture body into a FRESH plan — percent lane + the
+      //      on-demand dollars riding `spend` (phase-11: the class used to
+      //      return 'unconfigured' on its own success path).
       setWebRead('cursor', true)
       const on = await fetchWebSessionUsage(cursor, 'default', new AbortController().signal, deps('cursor'))
-      const onOk = reads === 1 && /session found/.test(on.reason ?? '')
+      const onOk =
+        reads === 1 &&
+        httpCalls === 1 &&
+        on.health === 'fresh' &&
+        on.planLabel === 'Cursor (pro)' &&
+        on.windows[0]?.label === 'Plan' &&
+        on.windows[0]?.usedPct === 76 &&
+        !!on.windows[0]?.resetsAt &&
+        on.spend?.amount === 12.5 &&
+        on.spend?.limit === 50
+
+      // 2b ── a rejected cookie THROWS the human reason (the seam dims stale)
+      httpStatus = 401
+      let rejectedOk = false
+      try {
+        await fetchWebSessionUsage(cursor, 'default', new AbortController().signal, deps('cursor'))
+      } catch (e) {
+        rejectedOk = /cookie rejected/.test(e instanceof Error ? e.message : '')
+      }
+      httpStatus = 200
 
       // 3 ── paste path: a pasted cookie resolves WITHOUT touching the store
       setWebRead('cursor', false)
@@ -75,7 +113,7 @@ export function runWebUsageSmoke(_win: BrowserWindow): void {
       if (vaultAvailable) {
         keySetPlaintext('cursor', COOKIE)
         const pasted = await fetchWebSessionUsage(cursor, 'default', new AbortController().signal, deps('cursor'))
-        pasteOk = /session found \(via paste\)/.test(pasted.reason ?? '') && reads === readsBeforePaste // store untouched
+        pasteOk = pasted.health === 'fresh' && reads === readsBeforePaste // store untouched; the paste alone fed the spec
         // ciphertext at rest: the settings DB never contains the cookie
         const udata = app.getPath('userData')
         let dbBytes = ''
@@ -117,8 +155,8 @@ export function runWebUsageSmoke(_win: BrowserWindow): void {
       setWebRead('cursor', false)
       keyClear('cursor')
 
-      const pass = offOk && onOk && pasteOk && cipherAtRestOk && replaceOk && grepClean && sensitiveOk && noGetterOk
-      result = { pass, offOk, onOk, pasteOk, cipherAtRestOk, replaceOk, grepClean, sensitiveOk, noGetterOk, vaultAvailable, reads }
+      const pass = offOk && onOk && rejectedOk && pasteOk && cipherAtRestOk && replaceOk && grepClean && sensitiveOk && noGetterOk
+      result = { pass, offOk, onOk, rejectedOk, pasteOk, cipherAtRestOk, replaceOk, grepClean, sensitiveOk, noGetterOk, vaultAvailable, reads, httpCalls }
     } catch (e) {
       result = { pass: false, error: e instanceof Error ? e.message : String(e) }
     }

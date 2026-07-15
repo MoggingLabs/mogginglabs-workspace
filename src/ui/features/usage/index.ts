@@ -379,13 +379,16 @@ export const usageFeature: UiFeature = {
       const provStatus = statuses.find((s) => s.providerId === shownProvider)
       const outaged = !!provStatus && (provStatus.state === 'degraded' || provStatus.state === 'outage')
 
-      // ── Header (step 2): name (bold) · freshness · plan tier · health ──
+      // ── Header (step 2), the CodexBar grammar: name (bold) left, the plan
+      //    tier as a quiet badge right. Freshness lives in the footer; the
+      //    health pill only appears when it is NEWS (stale/error) — a pill
+      //    that always says "fresh" is text with no information in it.
+      const tierText = activePlan.planLabel.replace(new RegExp(`^${findProvider(shownProvider)?.label ?? shownProvider}\\s*`, 'i'), '').replace(/^\((.*)\)$/, '$1')
       const head = el('div', { class: 'usage-glance-head' }, [
         providerLogo(shownProvider, 16),
         el('span', { class: 'usage-glance-name', text: findProvider(shownProvider)?.label ?? shownProvider }),
-        el('span', { class: 'usage-glance-age', text: fmtAge(activePlan.fetchedAt, now) }),
-        el('span', { class: 'usage-glance-tier', text: activePlan.planLabel }),
-        el('span', { class: `pill usage-health is-${activePlan.health}`, text: activePlan.health })
+        activePlan.health !== 'fresh' ? el('span', { class: `pill usage-health is-${activePlan.health}`, text: activePlan.health }) : null,
+        tierText ? el('span', { class: 'usage-glance-tier', text: tierText }) : null
       ])
       panel.append(head)
 
@@ -404,11 +407,16 @@ export const usageFeature: UiFeature = {
           w.pace?.elapsedPct !== undefined ? el('span', { class: 'usage-tick', title: `expected by now: ${w.pace.elapsedPct}%` }) : null
         ])
         paintBar(track, fill, w.usedPct, w.label) // the bar SAYS its number, not just draws it
+        // The CodexBar row anatomy: label on its own line, the full-width bar
+        // under it, then ONE stats line — percent left, reset right. Three
+        // quiet lines instead of four things fighting for one.
         const row = el('div', { class: 'usage-row' }, [
           el('span', { class: 'usage-row-label', text: w.label }),
           track,
-          el('span', { class: 'usage-pct', text: `${Math.round(w.usedPct)}% used` }),
-          w.resetText ? el('span', { class: 'usage-reset', text: w.resetText }) : null
+          el('span', { class: 'usage-row-stats' }, [
+            el('span', { class: 'usage-pct', text: `${Math.round(w.usedPct)}% used` }),
+            w.resetText ? el('span', { class: 'usage-reset', text: w.resetText }) : null
+          ])
         ])
         const tick = row.querySelector('.usage-tick') as HTMLElement | null
         if (tick && w.pace?.elapsedPct !== undefined) tick.style.left = `${w.pace.elapsedPct}%`
@@ -720,8 +728,16 @@ export const usageFeature: UiFeature = {
     // 7/09 threshold alerts -> the HOUSE toast, copy rendered VERBATIM (title
     // + body composed main-side; the warn body IS the 7/02 verdict line). The
     // failover action is a SUGGESTION — the human clicks, the pointers flip.
-    const onAlert = (a: UsageAlert): void => {
+    // Delivery contract (phase-11): every alert carries an outbox id — ack it
+    // AFTER the toast reaches the DOM, and dedupe against the mount drain (a
+    // pushed alert can also arrive in the drain when both race the boot).
+    const seenAlerts = new Set<string>()
+    const onAlert = (a: UsageAlert & { alertId?: string }): void => {
       if (!a || typeof a.title !== 'string') return
+      if (a.alertId) {
+        if (seenAlerts.has(a.alertId)) return
+        seenAlerts.add(a.alertId)
+      }
       showToast({
         tone: a.kind === 'reset' ? 'neutral' : a.level === 'warn' || a.kind === 'pace' ? 'attention' : 'info',
         title: a.title,
@@ -731,6 +747,7 @@ export const usageFeature: UiFeature = {
           ? { label: `Fail over to ${a.failover.profileName}`, onClick: () => void switchActive(a.providerId, a.failover!.profileId, true) }
           : undefined
       })
+      if (a.alertId) void bridge.invoke(UsageChannels.alertAck, a.alertId)
       if (a.confetti) spawnConfetti()
       // Class + booleans ONLY (ADR 0005) — never plan names or numbers.
       getTelemetry().captureEvent({
@@ -747,12 +764,17 @@ export const usageFeature: UiFeature = {
 
     bridge.on(UsageChannels.changed, (payload) => apply((payload as PlanUsageView[]) ?? []))
     bridge.on(UsageChannels.statusChanged, (payload) => applyStatuses((payload as ProviderStatus[]) ?? []))
-    bridge.on(UsageChannels.alert, (payload) => onAlert(payload as UsageAlert))
+    bridge.on(UsageChannels.alert, (payload) => onAlert(payload as UsageAlert & { alertId?: string }))
     bridge.on(UsageChannels.displayChanged, (payload) => applyDisplay(payload as UsageDisplayConfig))
     void refreshProfiles().then(() => paintGauge())
     void bridge.invoke(UsageChannels.displayGet).then((payload) => applyDisplay(payload as UsageDisplayConfig))
     void bridge.invoke(UsageChannels.list).then((payload) => apply((payload as PlanUsageView[]) ?? []))
     void bridge.invoke(UsageChannels.status).then((payload) => applyStatuses((payload as ProviderStatus[]) ?? []))
+    // Drain the alert outbox: anything the first polls fired before this
+    // listener existed (the boot race) replays now instead of being lost.
+    void bridge.invoke(UsageChannels.alertDrain).then((payload) => {
+      for (const a of (payload as (UsageAlert & { alertId: string })[]) ?? []) onAlert(a)
+    })
 
     // Dev/smoke handle (the firstrun pattern).
     const g = window as unknown as { __mogging?: Record<string, unknown> }

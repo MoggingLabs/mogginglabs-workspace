@@ -1,6 +1,6 @@
 import { app, ipcMain, type BrowserWindow } from 'electron'
 import { UsageChannels, USAGE_CADENCES, USAGE_PROVIDERS, USAGE_ALERT_DEFAULTS, USAGE_DISPLAY_DEFAULTS, findProvider, type PlanUsage, type UsageCadence } from '@contracts'
-import type { AgentProfile, PlanUsageView, PaceView, UsageConfig, UsageConfigPatch, CostScan, UsageAlertConfig, UsageDisplayConfig } from '@contracts'
+import type { AgentProfile, PlanUsageView, PaceView, UsageConfig, UsageConfigPatch, CostScan, UsageAlert, UsageAlertConfig, UsageDisplayConfig } from '@contracts'
 import {
   createUsageService,
   buildRealAdapters,
@@ -17,6 +17,7 @@ import {
   readHistory,
   createStatusService,
   evaluateThresholds,
+  isReaderWired,
   COST_LOG_SUBDIR,
   type StatusService,
   type UsageService
@@ -276,23 +277,58 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
       const v = Number(kv?.getSetting(key))
       return Number.isFinite(v) && v >= 1 && v <= 100 ? Math.round(v) : dflt
     }
+    // Credits floors are per provider (usage.alert.floor.<id>), positive only.
+    const floors: Record<string, number> = {}
+    for (const def of USAGE_PROVIDERS) {
+      if (!def.credits) continue
+      const v = Number(kv?.getSetting(`usage.alert.floor.${def.id}`))
+      if (Number.isFinite(v) && v > 0) floors[def.id] = v
+    }
     return {
       quiet: num('usage.alert.quiet', USAGE_ALERT_DEFAULTS.quiet),
       warn: num('usage.alert.warn', USAGE_ALERT_DEFAULTS.warn),
-      confetti: kv?.getSetting('usage.alert.confetti') === '1'
+      confetti: kv?.getSetting('usage.alert.confetti') === '1',
+      ...(Object.keys(floors).length ? { floors } : {})
     }
   }
+  // ── Guaranteed delivery (phase-11 rebuild). The engine spends single-fire
+  // state the moment it decides to alert — so the decision and the delivery
+  // must not share a fate. Every alert lands in a KV OUTBOX first; the send is
+  // just a hint. The renderer acks each toast it actually rendered, and drains
+  // the outbox on mount — the boot race (first poll beats the subscriber),
+  // getWin() null, and a recreated window all become replays, never losses.
+  const OUTBOX_KEY = 'usage.alert.outbox'
+  const OUTBOX_CAP = 20
+  const OUTBOX_TTL_MS = 24 * 3_600_000
+  type QueuedAlert = UsageAlert & { alertId: string; queuedAt: number }
+  let alertSeq = 0
+  const readOutbox = (): QueuedAlert[] => {
+    try {
+      const arr = JSON.parse(getSettingsStore()?.getSetting(OUTBOX_KEY) ?? '[]') as QueuedAlert[]
+      return Array.isArray(arr) ? arr.filter((a) => a && typeof a.alertId === 'string') : []
+    } catch {
+      return []
+    }
+  }
+  const writeOutbox = (q: QueuedAlert[]): void =>
+    getSettingsStore()?.setSetting(OUTBOX_KEY, JSON.stringify(q.slice(-OUTBOX_CAP)))
   const pushAlerts = (views: PlanUsageView[]): void => {
     const kv = getSettingsStore()
-    const win = getWin()
-    if (!kv || !win) return
+    if (!kv) return
     const cfg = alertCfg()
     const alerts = evaluateThresholds(views, cfg, kv.listProfiles(), {
       get: (k) => kv.getSetting(k) ?? null,
       set: (k, v) => kv.setSetting(k, v)
     })
-    for (const a of alerts)
-      win.webContents.send(UsageChannels.alert, a.kind === 'reset' && cfg.confetti ? { ...a, confetti: true } : a)
+    if (!alerts.length) return
+    const queued: QueuedAlert[] = alerts.map((a) => ({
+      ...(a.kind === 'reset' && cfg.confetti ? { ...a, confetti: true } : a),
+      alertId: `${Date.now().toString(36)}-${++alertSeq}`,
+      queuedAt: Date.now()
+    }))
+    writeOutbox([...readOutbox(), ...queued])
+    const win = getWin()
+    if (win && !win.isDestroyed()) for (const a of queued) win.webContents.send(UsageChannels.alert, a)
   }
 
   service = createUsageService({
@@ -338,15 +374,35 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
     win?.webContents.send(UsageChannels.changed, enrich(service?.list() ?? []))
   })
 
+  // The outbox's two verbs. Drain does NOT clear — only an ack does, because
+  // "the invoke resolved" and "a toast reached the DOM" are different facts.
+  // TTL'd so week-old news cannot replay after a vacation.
+  ipcMain.handle(UsageChannels.alertDrain, (): (UsageAlert & { alertId: string })[] => {
+    const fresh = readOutbox().filter((a) => Date.now() - a.queuedAt < OUTBOX_TTL_MS)
+    writeOutbox(fresh)
+    return fresh
+  })
+  ipcMain.handle(UsageChannels.alertAck, (_e, alertId: unknown) => {
+    if (typeof alertId !== 'string' || !alertId) return
+    writeOutbox(readOutbox().filter((a) => a.alertId !== alertId))
+  })
+
   // 7/09 alert config: two shoulder-tap pcts + the confetti opt-in.
   ipcMain.handle(UsageChannels.alertCfgGet, (): UsageAlertConfig => alertCfg())
   ipcMain.handle(UsageChannels.alertCfgSet, (_e, raw: unknown) => {
-    const p = raw as { quiet?: number; warn?: number; confetti?: boolean } | null
+    const p = raw as { quiet?: number; warn?: number; confetti?: boolean; floors?: Record<string, unknown> } | null
     const kv = getSettingsStore()
     if (!p || !kv) return
     if (typeof p.quiet === 'number' && p.quiet >= 1 && p.quiet <= 100) kv.setSetting('usage.alert.quiet', String(Math.round(p.quiet)))
     if (typeof p.warn === 'number' && p.warn >= 1 && p.warn <= 100) kv.setSetting('usage.alert.warn', String(Math.round(p.warn)))
     if (typeof p.confetti === 'boolean') kv.setSetting('usage.alert.confetti', p.confetti ? '1' : '0')
+    if (p.floors && typeof p.floors === 'object') {
+      for (const [id, v] of Object.entries(p.floors)) {
+        if (!findProvider(id)?.credits) continue // floors exist only for balance rows
+        const n = Number(v)
+        if (Number.isFinite(n) && n >= 0) kv.setSetting(`usage.alert.floor.${id}`, n > 0 ? String(n) : '')
+      }
+    }
   })
 
   // The Usage tab's surface (7/12): rows are the UNION of the catalog and
@@ -365,7 +421,10 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
         // PRESENCE only (ADR 0007.a) — the kind, never a value.
         key: keySlot(id).kind,
         // web-session store-read opt-in (ADR 0007.b), default OFF.
-        webRead: findProvider(id)?.klass === 'web-session' ? kv?.getSetting(`usage.webread.${id}`) === '1' : undefined
+        webRead: findProvider(id)?.klass === 'web-session' ? kv?.getSetting(`usage.webread.${id}`) === '1' : undefined,
+        // Truthfulness: a pending row must never present as watched. The FAKE
+        // world's fixture adapters count as wired (they do produce readings).
+        wired: world ? adapters.some((a) => a.id === id) : isReaderWired(id)
       }))
     }
   })

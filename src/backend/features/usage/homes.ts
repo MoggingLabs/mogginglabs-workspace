@@ -33,16 +33,22 @@ function expandTilde(p: string): string {
 }
 
 /** Resolve the config home an adapter should READ for (provider, profile).
- *  Profile pointer wins; otherwise the provider's documented default. */
+ *  Profile pointer wins; then the AMBIENT env pointer (a user who relocated
+ *  their CLI home the documented way — `CLAUDE_CONFIG_DIR=…` — used to get a
+ *  permanently 'unconfigured' provider with a factually false reason, the
+ *  phase-11 audit's RC5); otherwise the provider's documented default. */
 export function resolveHome(providerId: string, profile: AgentProfile | null): string {
   const pointer = HOME_POINTER[providerId]
   const fromProfile = pointer && profile ? profile.env[pointer] : undefined
+  const fromEnv = pointer ? process.env[pointer] : undefined
   if (providerId === 'gemini') {
-    const legacy = profile?.env.GEMINI_CONFIG_DIR
+    const legacy = profile?.env.GEMINI_CONFIG_DIR ?? process.env.GEMINI_CONFIG_DIR
     if (legacy) return expandTilde(legacy)
-    if (fromProfile) return join(expandTilde(fromProfile), '.gemini')
-  } else if (fromProfile) {
-    return expandTilde(fromProfile)
+    const base = fromProfile ?? fromEnv
+    if (base) return join(expandTilde(base), '.gemini')
+  } else {
+    const base = fromProfile ?? fromEnv
+    if (base) return expandTilde(base)
   }
   const dflt = DEFAULT_HOME[providerId]
   return dflt ? dflt() : join(homedir(), `.${providerId}`)

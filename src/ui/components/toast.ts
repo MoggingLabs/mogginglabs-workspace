@@ -16,6 +16,11 @@ export interface ToastOpts {
 }
 
 const MAX_STACK = 4
+/** Toasts past the visible cap WAIT here instead of being destroyed — a batch
+ *  of five alerts used to evict the oldest before a frame painted, while the
+ *  sender had already spent its single-fire state (phase-11 audit, RC3). */
+const MAX_QUEUE = 20
+const pending: ToastOpts[] = []
 const TONE_ICON: Record<ToastTone, IconName> = {
   neutral: 'bell',
   attention: 'bell',
@@ -39,19 +44,56 @@ function ensureHost(): HTMLElement {
   return host
 }
 
-/** Show a toast (e.g. a `mogging notify` event). Returns a dismisser. */
+interface QueueEntry {
+  opts: ToastOpts
+  dismiss: (() => void) | null
+  cancelled: boolean
+}
+const queue: QueueEntry[] = []
+
+/** A slot opened — seat the oldest waiting toast (skipping cancelled ones). */
+function pump(): void {
+  const stack = ensureHost()
+  while (queue.length && stack.childElementCount < MAX_STACK) {
+    const entry = queue.shift()!
+    if (entry.cancelled) continue
+    entry.dismiss = mount(entry.opts)
+  }
+}
+
+/** Show a toast (e.g. a `mogging notify` event). Returns a dismisser. A full
+ *  stack QUEUES — a toast is never destroyed before it has been seen. */
 export function showToast(opts: ToastOpts): () => void {
+  const stack = ensureHost()
+  if (stack.childElementCount >= MAX_STACK) {
+    const entry: QueueEntry = { opts, dismiss: null, cancelled: false }
+    if (queue.length >= MAX_QUEUE) queue.shift() // a hard cap, oldest news yields
+    queue.push(entry)
+    return () => {
+      entry.cancelled = true
+      entry.dismiss?.()
+    }
+  }
+  return mount(opts)
+}
+
+function mount(opts: ToastOpts): () => void {
   const stack = ensureHost()
   const tone = opts.tone ?? 'neutral'
 
   let timer: ReturnType<typeof setTimeout> | undefined
 
+  const removeNow = (): void => {
+    if (!toast.isConnected) return
+    toast.remove()
+    pump()
+  }
   const dismiss = (): void => {
     if (timer) clearTimeout(timer)
     if (!toast.isConnected) return
     toast.classList.add('is-leaving')
-    toast.addEventListener('animationend', () => toast.remove(), { once: true })
-    setTimeout(() => toast.remove(), 260) // reduced-motion fallback
+    toast.addEventListener('animationend', removeNow, { once: true })
+    setTimeout(removeNow, 260) // reduced-motion fallback
   }
 
   const toast = el('div', { class: `toast toast--${tone}`, role: 'status' }, [
@@ -95,7 +137,6 @@ export function showToast(opts: ToastOpts): () => void {
   ])
 
   stack.append(toast)
-  while (stack.childElementCount > MAX_STACK) stack.firstElementChild?.remove()
 
   const timeout = opts.timeout ?? 6000
   if (timeout > 0) timer = setTimeout(dismiss, timeout)

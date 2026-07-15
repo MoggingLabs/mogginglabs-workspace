@@ -255,8 +255,13 @@ export const UsageChannels = {
   statusChanged: 'usage:statusChanged', // main -> renderer: ProviderStatus[] (pushed on state change)
   // 7/09 threshold alerts: copy composed main-side (ONE wording source, the
   // verdict line rides verbatim); single-fire state persisted app-side.
-  alert: 'usage:alert', // main -> renderer: UsageAlert (house toast; never OS spam)
-  alertCfgGet: 'usage:alertCfgGet', // -> UsageAlertConfig (quiet/warn pcts + confetti opt-in)
+  // Delivery is GUARANTEED (phase-11 rebuild): every alert rides a KV outbox
+  // until the renderer acks it — the boot race and a hidden window turn a
+  // toast into a replay, never a loss.
+  alert: 'usage:alert', // main -> renderer: UsageAlert & { alertId } (house toast; never OS spam)
+  alertDrain: 'usage:alertDrain', // renderer -> main on mount: -> (UsageAlert & { alertId })[] still un-acked
+  alertAck: 'usage:alertAck', // (alertId) -> void (the toast RENDERED; drop it from the outbox)
+  alertCfgGet: 'usage:alertCfgGet', // -> UsageAlertConfig (quiet/warn pcts + confetti + credits floors)
   alertCfgSet: 'usage:alertCfgSet', // (partial UsageAlertConfig) -> void
   // 7/10 display options: which plan the gauge mirrors, what the icon shows,
   // how resets render. Paint-only on the renderer; persisted in the KV.

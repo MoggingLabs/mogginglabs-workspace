@@ -43,6 +43,48 @@ Reset moments ride ONE formatter too (7/10): countdown (`resets in 2d 4h`),
 absolute (`resets Tue 14:00`), or relative (`resets tomorrow 14:00`) — one
 setting, applied everywhere a reset renders.
 
+## Alerts (phase-11 rebuild — the audit and its answer)
+
+The threshold engine was rebuilt after the 2026-07-15 root-cause audit
+(`prompts/phase-11/USAGE-ALERTS-ROOT-CAUSE.md`; the plan and the reference
+study live in `USAGE-ALERTS-REBUILD-PLAN.md`). The rules, stated once:
+
+- **Every window alerts.** Session, Weekly, and each model-scoped weekly carry
+  their own single-fire state, keyed by window label. An expired lane mutes
+  only itself. The failover suggestion judges a sibling by its WORST window.
+- **A fired level re-arms itself** the moment usage falls back below it
+  (minus a 5-point hysteresis) — resets, top-ups and account swaps re-arm with
+  no window-identity string to get wrong (CodexBar's `thresholdsToClear`).
+- **Reset boundaries compare with a 2-minute tolerance** and only ADVANCE.
+  Anthropic recomputes `resets_at` per request; drift is the same window, a
+  regression is a stale sample (skip), and a "fresh window" toast fires only
+  on a lane the user had actually been warned about.
+- **Balances and spend caps are first-class.** A credits row alerts at the
+  user's own floor (`usage.alert.floor.<id>`, off by default — we never guess
+  what "low" means in ¥/ACUs) and re-arms after a real top-up (floor ×1.25).
+  A spend block with a limit evaluates amount/limit against quiet/warn, titled
+  in money, re-armed by the billing month.
+- **Delivery is guaranteed.** Every alert rides a KV outbox
+  (`usage.alert.outbox`, cap 20, 24h TTL) until the renderer acks the rendered
+  toast; the renderer drains the outbox on mount. The boot race (first poll
+  beats the subscriber) replays instead of losing the toast. A full toast
+  stack queues — nothing is evicted unseen.
+- **Titles name the reading, not the threshold** ("87% of Weekly used").
+- **No fabricated zeros.** A provider with no measured percentage returns
+  `windows: []` and carries its truth in `credits`/`spend`; `health: 'fresh'`
+  with a 0% lane nobody measured is the lie the audit called RC4.
+- **Claude token expiry self-heals** by delegation: a throwaway login-shell
+  PTY runs `claude /status`, the CLI refreshes its own credentials, we re-read
+  (never the refresh token — rotation is the CLI's; 5-min cooldown,
+  single-flight). `resolveHome` honors ambient `CLAUDE_CONFIG_DIR`/`CODEX_HOME`
+  pointers a profile does not override.
+
+Gate coverage: `MOGGING_USAGE` locks the engine semantics (multi-window,
+churn, re-arm, floors, spend, profile-flip adoption); `MOGGING_USAGEUI` locks
+delivery (a pushed alert renders a house toast; an outbox alert seeded behind
+a dead renderer replays on mount and acks away); `MOGGING_WEBUSAGE` drives the
+real cursor parse on a fixture body.
+
 ## The privacy story (ADR 0007 / 0007.a / 0007.b, in user words)
 
 - **Your sessions are read in place.** The meters ride the sessions your own

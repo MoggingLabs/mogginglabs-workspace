@@ -51,14 +51,11 @@ export async function fetchVertex(profileId: string, bin = 'gcloud'): Promise<Pl
   if (r.code === 'absent') return labeled('vertex', profileId, 'unconfigured', 'gcloud is not installed — install the Google Cloud CLI and run `gcloud auth login`')
   if (!r.ok || !r.stdout.trim()) return labeled('vertex', profileId, 'error', 'gcloud is installed but not logged in — run `gcloud auth login`')
   // Token verified present and DROPPED — never parsed further, never stored.
-  return {
-    providerId: 'vertex',
-    profileId,
-    planLabel: 'Vertex AI',
-    windows: [{ label: 'Session', usedPct: 0, windowMs: 0, raw: 'gcloud session active — spend detail lands with the cost scan (7/07)' }],
-    fetchedAt: Date.now(),
-    health: 'fresh'
-  }
+  // A live session with NO readable quota lane is not a 0% window (the audit's
+  // fabricated-zero finding): a number we did not measure never enters a
+  // window, the history ring, or the alert engine. The meter is honestly
+  // unconfigured; the reason carries what IS known.
+  return labeled('vertex', profileId, 'unconfigured', 'gcloud session active — Vertex exposes no quota lane; spend arrives with the cost scan')
 }
 
 /** AWS Bedrock: month-to-date Bedrock spend via Cost Explorer through the
@@ -88,11 +85,14 @@ export async function fetchBedrock(profileId: string, bin = 'aws'): Promise<Plan
     const total = parsed.ResultsByTime?.[0]?.Total?.UnblendedCost
     const amount = total?.Amount ? Number(total.Amount) : NaN
     if (!Number.isFinite(amount)) throw new Error('shape')
+    // Real dollars ride the SPEND block, not a fabricated 0% window — the
+    // engine's spend branch can alert on them the day the user sets a cap.
     return {
       providerId: 'bedrock',
       profileId,
       planLabel: 'AWS Bedrock',
-      windows: [{ label: 'Spend', usedPct: 0, windowMs: 30 * 86_400_000, raw: `${amount.toFixed(2)} ${total?.Unit ?? 'USD'} month-to-date` }],
+      windows: [],
+      spend: { amount: Math.round(amount * 100) / 100, currency: total?.Unit ?? 'USD' },
       fetchedAt: Date.now(),
       health: 'fresh'
     }

@@ -7742,16 +7742,17 @@ body.pane-dragging * {
 .usage-tab-fill.is-hot {
   background: var(--warning);
 }
-/* Header: name (bold) · freshness · plan tier. */
+/* Header (CodexBar grammar): name bold left, the plan tier a quiet badge
+   right. Freshness lives in the footer; a health pill only when it is news. */
 .usage-glance-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--sp-2);
-  flex-wrap: wrap;
-  padding: var(--sp-2) 0 var(--sp-1);
+  padding: var(--sp-3) 0 var(--sp-1);
 }
 .usage-glance-name {
   font-weight: var(--fw-semibold);
+  font-size: var(--fs-13);
   color: var(--text-hi);
 }
 .usage-glance-age {
@@ -7759,16 +7760,23 @@ body.pane-dragging * {
   font-size: var(--fs-10);
 }
 .usage-glance-tier {
+  margin-left: auto;
+  padding: 1px var(--sp-2);
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
   color: var(--text-mid);
-  font-size: var(--fs-11);
+  font-size: var(--fs-10);
 }
-/* The pace line under Weekly: verdict (rendered VERBATIM) + delta, inked by severity. */
+/* The pace line under a window: verdict (rendered VERBATIM) + delta, inked by
+   severity — ONE quiet line in the CodexBar "Pace: …" register, never louder
+   than the bar it qualifies. */
 .usage-pace {
   display: flex;
   align-items: baseline;
   gap: var(--sp-2);
-  margin-top: var(--sp-1);
-  font-size: var(--fs-11);
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-10);
+  opacity: 0.9;
 }
 .usage-pace-delta {
   font-variant-numeric: tabular-nums;
@@ -8416,24 +8424,44 @@ body.pane-dragging * {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
 }
+/* The CodexBar row anatomy (phase-11 recut): label line, full-width bar,
+   ONE stats line under it — percent left, reset right. The old grid packed
+   label · bar · pct · reset into one row and read as a spreadsheet. */
 .usage-row {
-  display: grid;
-  grid-template-columns: minmax(72px, auto) 1fr 34px auto;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: 2px 0;
+  display: block;
+  padding: var(--sp-2) 0 var(--sp-1);
   font-size: 11px;
 }
-.usage-row-label,
-.usage-reset {
-  color: var(--text-mid);
+.usage-row-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-hi);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-semibold);
   white-space: nowrap;
+}
+.usage-row-stats {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin-top: 4px;
+}
+.usage-row-stats .usage-pct {
+  text-align: left;
+  color: var(--text-mid);
+}
+.usage-reset {
+  margin-left: auto;
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .usage-track-row {
   position: relative; /* the expected-pace tick positions against the track */
+  width: 100%;
   height: 4px;
   border-radius: var(--r-full);
-  background: var(--border);
+  background: color-mix(in srgb, var(--border) 70%, transparent);
   overflow: hidden;
   display: block;
 }
@@ -8459,11 +8487,9 @@ body.pane-dragging * {
   background: var(--warning);
 }
 .usage-pct {
-  text-align: right;
   font-variant-numeric: tabular-nums;
 }
 .usage-verdict {
-  margin-top: var(--sp-1);
   font-size: 11px;
 }
 .usage-verdict.sev-warning {

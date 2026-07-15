@@ -57,6 +57,9 @@ export interface UsageConfig {
     key?: 'keychain' | 'env-ref' | 'none'
     /** web-session browser store-read opt-in (ADR 0007.b), default false. */
     webRead?: boolean
+    /** Can this provider's reader produce a real reading today? false = an
+     *  honest-pending catalog row — the UI must not present it as watched. */
+    wired: boolean
   }[]
 }
 

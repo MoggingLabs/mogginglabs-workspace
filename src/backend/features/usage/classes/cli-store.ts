@@ -120,6 +120,109 @@ export const readCodex: CliStoreReader = async (home, profileId) => {
   }
 }
 
+// ── Gemini: the CLI's own OAuth token + Google's private quota API (shape
+// ported from steipete/CodexBar docs/gemini.md, 2026-07-15). We read
+// `oauth_creds.json` the CLI already wrote and make the CLI's own two
+// documented POSTs — loadCodeAssist (project + tier) then retrieveUserQuota
+// (per-model buckets). We do NOT refresh the Google token ourselves (that
+// would need the CLI's embedded client secret): an expired token degrades
+// honestly to "run gemini once".
+//
+// June-2026 caveat (CodexBar's `consumerTierDeprecated`): Google retired this
+// OAuth path for individual/AI Pro/Ultra accounts on 2026-06-18 — those
+// answers carry UNSUPPORTED_CLIENT / IneligibleTierError, which must land as
+// a labeled state naming the retirement, never a generic error.
+const GEMINI_QUOTA_URL = 'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota'
+const GEMINI_ASSIST_URL = 'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist'
+
+interface GeminiBucket {
+  remainingFraction?: number
+  resetTime?: string
+  modelId?: string
+}
+
+export const readGemini: CliStoreReader = async (home, profileId, signal) => {
+  const credsFile = join(home, 'oauth_creds.json')
+  if (!existsSync(credsFile)) {
+    return labeled('gemini', profileId, 'unconfigured', 'Gemini CLI is not signed in (run `gemini` and log in)')
+  }
+  let accessToken = ''
+  let expiry = 0
+  try {
+    const creds = JSON.parse(readFileSync(credsFile, 'utf8')) as { access_token?: string; expiry_date?: number }
+    accessToken = creds.access_token ?? ''
+    expiry = typeof creds.expiry_date === 'number' ? creds.expiry_date : 0
+  } catch {
+    return labeled('gemini', profileId, 'error', 'Gemini credential store unreadable — sign in again with the CLI')
+  }
+  if (!accessToken) return labeled('gemini', profileId, 'unconfigured', 'no Gemini OAuth session — run `gemini` and sign in')
+  // The CLI refreshes its own token on every run; we never mint one (the
+  // client secret is the CLI's, not ours — the claude-refresh rationale).
+  if (expiry && expiry <= Date.now()) {
+    return labeled('gemini', profileId, 'error', 'Gemini token expired — run `gemini` once to refresh it')
+  }
+  const post = async (url: string, body: unknown): Promise<{ status: number; json: unknown; text: string }> => {
+    const res = await fetch(url, {
+      method: 'POST',
+      signal,
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    const text = await res.text()
+    let json: unknown = null
+    try {
+      json = JSON.parse(text)
+    } catch {
+      /* some errors are plain text */
+    }
+    return { status: res.status, json, text }
+  }
+  const retired = (text: string): boolean => /UNSUPPORTED_CLIENT|IneligibleTierError/i.test(text)
+  const assist = await post(GEMINI_ASSIST_URL, { metadata: { ideType: 'GEMINI_CLI', pluginType: 'GEMINI' } })
+  if (retired(assist.text))
+    return labeled('gemini', profileId, 'unconfigured', 'Google retired Gemini CLI OAuth for individual accounts (June 2026) — quota is no longer served for this account tier')
+  if (assist.status === 401 || assist.status === 403)
+    return labeled('gemini', profileId, 'error', 'Gemini session rejected — run `gemini` once to refresh it')
+  const assistBody = assist.json as { cloudaicompanionProject?: string; currentTier?: { name?: string; id?: string }; paidTier?: { name?: string } } | null
+  const project = typeof assistBody?.cloudaicompanionProject === 'string' ? assistBody.cloudaicompanionProject : undefined
+  const tier = assistBody?.paidTier?.name ?? assistBody?.currentTier?.name
+  const quota = await post(GEMINI_QUOTA_URL, project ? { project } : {})
+  if (retired(quota.text))
+    return labeled('gemini', profileId, 'unconfigured', 'Google retired Gemini CLI OAuth for individual accounts (June 2026) — quota is no longer served for this account tier')
+  if (quota.status === 401 || quota.status === 403)
+    return labeled('gemini', profileId, 'error', 'Gemini session rejected — run `gemini` once to refresh it')
+  if (quota.status !== 200) return labeled('gemini', profileId, 'error', `Gemini quota endpoint answered ${quota.status}`)
+  const buckets = ((quota.json as { buckets?: GeminiBucket[] } | null)?.buckets ?? []).filter(
+    (b) => typeof b.remainingFraction === 'number' && typeof b.modelId === 'string'
+  )
+  if (!buckets.length) return labeled('gemini', profileId, 'error', 'Gemini quota shape changed — adapter needs a look')
+  // Per CodexBar's mapping: for each family, the LOWEST remaining fraction
+  // wins (the binding limit); Pro is the primary lane, Flash the secondary.
+  const lane = (match: (id: string) => boolean, label: string): UsageWindow | null => {
+    const mine = buckets.filter((b) => match((b.modelId ?? '').toLowerCase()))
+    if (!mine.length) return null
+    const worst = mine.reduce((a, b) => ((a.remainingFraction ?? 1) <= (b.remainingFraction ?? 1) ? a : b))
+    return {
+      label,
+      usedPct: clampPct((1 - (worst.remainingFraction ?? 1)) * 100),
+      windowMs: WINDOW_MS.daily,
+      ...(worst.resetTime ? { resetsAt: worst.resetTime } : {})
+    }
+  }
+  const windows = [lane((id) => id.includes('pro'), 'Daily (Pro)'), lane((id) => id.includes('flash'), 'Daily (Flash)')].filter(
+    (w): w is UsageWindow => w !== null
+  )
+  if (!windows.length) return labeled('gemini', profileId, 'error', 'Gemini quota buckets named no known model family')
+  return {
+    providerId: 'gemini',
+    profileId,
+    planLabel: tier ? `Gemini (${tier})` : 'Gemini',
+    windows,
+    fetchedAt: Date.now(),
+    health: 'fresh'
+  }
+}
+
 // ── Copilot: CLI-stored token + usage API (NOT the app-held device flow). ─────
 // Reader shape pending real-login dev-verification; ships honestly unconfigured.
 const notWired =
@@ -127,11 +230,16 @@ const notWired =
   async (_home, profileId) =>
     labeled(id, profileId, 'unconfigured', `${id} usage reader is not wired yet — coming in a later 7/04 pass`)
 
+/** The cli-store rows whose reader actually READS something (vs the honest
+ *  notWired stubs below). The UI's truthfulness rides on this set: a row
+ *  outside it must never present as watched. */
+export const CLI_STORE_WIRED: ReadonlySet<string> = new Set(['codex', 'gemini'])
+
 /** Reader registry. Claude is delegated by the seam to the shipped 7/01 adapter
  *  (already verified) so this map holds the NEW cli-store readers. */
 export const CLI_STORE_READERS: Record<string, CliStoreReader> = {
   codex: readCodex,
-  gemini: notWired('gemini'),
+  gemini: readGemini,
   copilot: notWired('copilot'),
   zed: notWired('zed'),
   kiro: notWired('kiro'),

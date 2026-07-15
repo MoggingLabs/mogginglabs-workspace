@@ -121,6 +121,10 @@ export interface UsageAlertConfig {
   warn: number
   /** Optional reset flourish — default OFF (quiet is the house default). */
   confetti: boolean
+  /** Per-provider credits floor ("warn me under N of this balance") for the
+   *  denominator-free rows (DeepSeek's ¥, Devin's ACUs…). A balance has no
+   *  percentage, so "low" is the USER's number — absent/0 = no tap, honestly. */
+  floors?: Record<string, number>
 }
 export const USAGE_ALERT_DEFAULTS: UsageAlertConfig = { quiet: 80, warn: 95, confetti: false }
 
@@ -305,7 +309,10 @@ export const USAGE_PROVIDERS: readonly UsageProviderDef[] = [
   // providers without a PLAIN public JSON endpoint honestly carry none.
   { id: 'claude', label: 'Claude', klass: 'cli-store', homePointerEnv: 'CLAUDE_CONFIG_DIR', windows: [w('session', 'Session (5h)'), w('weekly', 'Weekly')], statusUrl: 'https://status.claude.com/api/v2/status.json', verifiedAt: '2026-07-06' },
   { id: 'codex', label: 'Codex', klass: 'cli-store', homePointerEnv: 'CODEX_HOME', windows: [w('session', 'Session (5h)'), w('weekly', 'Weekly')], statusUrl: 'https://status.openai.com/api/v2/status.json', verifiedAt: '2026-07-06' },
-  { id: 'gemini', label: 'Gemini', klass: 'cli-store', homePointerEnv: 'GEMINI_CLI_HOME', windows: [w('daily', 'Daily')] },
+  // Gemini lanes mirror the quota API's model families (Pro binds first). The
+  // reader was ported from CodexBar's dev-verified shape 2026-07-15; verifiedAt
+  // lands on the first real-login check on this machine.
+  { id: 'gemini', label: 'Gemini', klass: 'cli-store', homePointerEnv: 'GEMINI_CLI_HOME', windows: [w('daily', 'Daily (Pro)'), w('daily', 'Daily (Flash)')] },
   { id: 'copilot', label: 'GitHub Copilot', klass: 'cli-store', windows: [w('monthly', 'Monthly')] },
   { id: 'zed', label: 'Zed', klass: 'cli-store', windows: [w('monthly', 'Monthly')] },
   { id: 'kiro', label: 'Kiro', klass: 'cli-store', windows: [w('monthly', 'Monthly')] },
@@ -340,7 +347,9 @@ export const USAGE_PROVIDERS: readonly UsageProviderDef[] = [
   { id: 'vertex', label: 'Vertex AI', klass: 'cloud-cli', windows: [w('rolling', 'Session')] },
   { id: 'bedrock', label: 'AWS Bedrock', klass: 'cloud-cli', windows: [w('monthly', 'Spend')] },
   // ── web-session class (7/06, ADR 0007.b): paste-first; store-read opt-in ──
-  { id: 'cursor', label: 'Cursor', klass: 'web-session', origin: 'cursor.com', cookieName: 'WorkosCursorSessionToken', endpoint: 'https://cursor.com/api/usage', windows: [w('monthly', 'Requests')], statusUrl: 'https://status.cursor.com/api/v2/status.json' },
+  // Cursor's reader (ported from CodexBar 2026-07-15) reads /api/usage-summary:
+  // the plan lane percent + the on-demand dollars as `spend`.
+  { id: 'cursor', label: 'Cursor', klass: 'web-session', origin: 'cursor.com', cookieName: 'WorkosCursorSessionToken', endpoint: 'https://cursor.com/api/usage-summary', windows: [w('monthly', 'Plan')], statusUrl: 'https://status.cursor.com/api/v2/status.json' },
   { id: 'devin', label: 'Devin', klass: 'web-session', origin: 'app.devin.ai', cookieName: 'session', windows: [w('rolling', 'ACUs')], credits: true },
   { id: 'manus', label: 'Manus', klass: 'web-session', origin: 'manus.im', cookieName: 'session_id', windows: [w('rolling', 'Credits')], credits: true },
   { id: 't3chat', label: 'T3 Chat', klass: 'web-session', origin: 't3.chat', cookieName: 'session', windows: [w('monthly', 'Messages')] },
