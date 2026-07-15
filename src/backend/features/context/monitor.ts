@@ -120,6 +120,14 @@ export class ContextMonitor {
     this.refresh(paneId)
   }
 
+  /** The session log this pane is locked on, with the provider it was watched for —
+   *  how a resume-by-id launch (ADR 0012) learns WHICH session a pane was living in.
+   *  Undefined until the matcher locks (a fresh pane, or a log not yet written). */
+  sessionFor(paneId: number): { provider: ContextProvider; file: string } | undefined {
+    const t = this.panes.get(paneId)
+    return t?.file ? { provider: t.provider, file: t.file } : undefined
+  }
+
   /** Stop tracking a pane. Stops the poll when nothing is tracked (renderer clears
    *  its own port state — no farewell emit, matching the git monitor). The pane's
    *  statusline sink file is swept so a future pane with the same id never reads

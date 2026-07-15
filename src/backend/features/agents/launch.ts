@@ -87,11 +87,17 @@ function shellArg(value: string, target: LaunchTarget): string {
   return `"${escaped}"`
 }
 
+/** The only session-id shape a typed command line ever carries (UUID — what claude and
+ *  codex both use). Anything else falls back to the bare resume flag. */
+const RESUME_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 /**
  * Build the launch COMMAND for an agent CLI in a cwd. It's a command string only — the CLI
  * self-authenticates; NO credentials are ever built, stored, or injected (ADR 0002). `resume`
  * appends the adapter's resume flag; `env` (Phase-4/04) selects a PROFILE via pointer
- * variables. Returns null for an unknown agent id.
+ * variables; `resumeSessionId` (ADR 0013, failover continuity) names the EXACT session for
+ * adapters whose flag takes one — instead of the CLI's picker. Returns null for an unknown
+ * agent id.
  */
 export function buildLaunchCommand(
   agentId: string,
@@ -99,12 +105,17 @@ export function buildLaunchCommand(
   resume = false,
   env?: Record<string, string>,
   mcpArgs?: string[],
-  targetSpec: LaunchTargetSpec = 'local'
+  targetSpec: LaunchTargetSpec = 'local',
+  resumeSessionId?: string
 ): string | null {
   const adapter = findAdapter(agentId)
   if (!adapter) return null
   const target = resolveTarget(targetSpec)
-  const base = resume && adapter.resumeFlag ? `${adapter.bin} ${adapter.resumeFlag}` : adapter.bin
+  const exact =
+    resume && resumeSessionId && adapter.resumeTakesSessionId && RESUME_SESSION_ID.test(resumeSessionId)
+      ? ` ${resumeSessionId.toLowerCase()}`
+      : ''
+  const base = resume && adapter.resumeFlag ? `${adapter.bin} ${adapter.resumeFlag}${exact}` : adapter.bin
   // Tool-plan launch args (Phase-8/09): the CLI's mcp-config flag + path. Quote
   // args with spaces (userData paths on Windows); flags are literal.
   const flags = mcpArgs?.length

@@ -8,7 +8,11 @@ Aider, OpenCode). Pure + Electron-free; shared with the settings-driven auth fea
 - `detect.ts` — `detectAgents()` / `isOnPath()`: which CLIs are installed (PATH scan; sees the
   process PATH, so a login-shell-only rc entry may be missed — the PTY's login shell still runs it).
 - `launch.ts` — `buildLaunchCommand(agentId, cwd, resume)`: the `cd <cwd> && <cli>` command
-  string (platform/shell-aware).
+  string (platform/shell-aware); an optional session id makes the resume exact (ADR 0013).
+- `session-pool.ts` — sessions follow profiles (ADR 0013): before a launch, union the cwd's
+  session transcripts from the provider's other config homes into the launch home (whole
+  files at the CLIs' documented paths, newer-wins, 30-day bound), so a profile failover
+  resumes the same conversation on the next subscription.
 
 **Never** put provider credentials here — adapters build the *command* only; each CLI
 authenticates the user's own account itself (ADR 0002). Main exposes `detect` + `command` over

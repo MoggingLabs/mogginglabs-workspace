@@ -74,10 +74,21 @@ export function claudeStatuslineArgs(session: Record<string, unknown> = {}): str
   }
 }
 
+let activeMonitor: ContextMonitor | null = null
+
+/** The session log a pane is locked on (provider + file), or undefined before the
+ *  matcher locks. Read by the launch path (src/main/agents.ts) so a cross-profile
+ *  resume can name the pane's EXACT session (ADR 0012). Read-only peek — ids and a
+ *  path that never leave main. */
+export function paneSessionLog(paneId: number): { provider: string; file: string } | undefined {
+  return activeMonitor?.sessionFor(paneId)
+}
+
 export function registerContext(getWebContents: () => WebContents | null): () => void {
   const monitor = new ContextMonitor({
     change: (paneId, usage) => getWebContents()?.send(ContextChannels.change, { paneId, usage })
   })
+  activeMonitor = monitor
   ipcMain.on(ContextChannels.watch, (_e, req: ContextWatchRequest) => {
     if (!req || typeof req.cwd !== 'string' || !req.cwd || !isContextProvider(req.provider)) return
     const profile = req.profileId
@@ -96,5 +107,8 @@ export function registerContext(getWebContents: () => WebContents | null): () =>
   ipcMain.on(ContextChannels.unwatch, (_e, req: ContextUnwatchRequest) => {
     if (req && Number.isFinite(req.paneId as number)) monitor.remove(req.paneId as number)
   })
-  return () => monitor.dispose()
+  return () => {
+    monitor.dispose()
+    if (activeMonitor === monitor) activeMonitor = null
+  }
 }
