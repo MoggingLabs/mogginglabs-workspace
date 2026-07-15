@@ -1,4 +1,4 @@
-import { USAGE_PROVIDERS, type CostScan } from '@contracts'
+import type { CostScan } from '@contracts'
 import { fakeAdapter, scanCost } from '@backend/features/usage'
 import { installFaultHooks } from './fault-port'
 import { installFixtures, type UpdateDriver, type UsageWorld } from './fixture-port'

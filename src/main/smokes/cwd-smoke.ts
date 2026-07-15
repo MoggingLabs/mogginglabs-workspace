@@ -11,7 +11,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, normalize } from 'node:path'
-import type { DaemonEndpoint, PaneCwdLocality, PaneCwdSource, PaneInfo } from '@contracts'
+import type { DaemonEndpoint, PaneCwdLocality, PaneCwdSource } from '@contracts'
 import { OscParser, PaneCwdState, countSubmittedLines } from '@backend/features/agent-state'
 import { buildLaunchCommand } from '@backend/features/agents'
 import { SessionStore } from '@backend/features/workspace'

@@ -287,7 +287,7 @@ export function runRemoteSmoke(win: BrowserWindow): void {
       let capturedArgv = ''
       for (let i = 0; i < 24 && !(argvOk && remoteCapabilityEnvClean); i++) {
         buf2 = await bufferText(base + 2)
-        capturedArgv = existsSync(argvPath) ? readFileSync(argvPath, 'utf8').replace(/^﻿/, '') : ''
+        capturedArgv = existsSync(argvPath) ? readFileSync(argvPath, 'utf8').replace(/^\uFEFF/, '') : ''
         argvOk =
           buf2.includes('SSH_SHIM') &&
           capturedArgv.includes('-tt') &&

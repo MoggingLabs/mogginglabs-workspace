@@ -25,7 +25,6 @@ import {
 // facts to out/mcpwrite-dev.json, and HOLDS (no asserts) so a real CLI can be
 // dev-verified against it — the books' frames come from that mode.
 
-type Rpc = { result?: Record<string, unknown>; error?: { code?: number; message?: string } }
 type ToolResult = { content?: { type?: string; text?: string }[]; isError?: boolean }
 type ToolRow = { name: string }
 

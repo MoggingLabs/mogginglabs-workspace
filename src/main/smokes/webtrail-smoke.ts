@@ -14,7 +14,7 @@ import {
 import { clearTrail, flushTrailForSmoke, readTrail, recordTrail } from '../trail'
 import { setIntegrationsGrant } from '../integrations'
 import { spawnPaneMcpSmokeClient, type PaneMcpSmokeClient } from './pane-mcp-smoke-client'
-import type { BrowserAgentVerb, TrailEntry } from '@contracts'
+import type { BrowserAgentVerb } from '@contracts'
 
 // Env-gated trail smoke (MOGGING_WEBTRAIL, Phase-8/05 — FINDINGS §4.5). One
 // fixture world drives BOTH emitters (04's agent-web acts + 03's MCP-write

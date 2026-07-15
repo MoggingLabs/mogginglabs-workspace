@@ -27,7 +27,6 @@ const INSTALL_TIMEOUT_MS = 15 * 60_000
 const PUSH_EVERY_MS = 150
 
 // CSI / OSC / single-char escapes -> out, so the tail reads as plain text.
-// eslint-disable-next-line no-control-regex
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[@-_]/g
 
 interface LiveInstall {

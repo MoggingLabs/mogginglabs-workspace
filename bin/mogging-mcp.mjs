@@ -125,7 +125,8 @@ async function connectApp() {
     throw new Error(
       e.code === 'auth'
         ? 'the MoggingLabs app refused the connection (auth)'
-        : 'the MoggingLabs app is not running (no browser-control endpoint)'
+        : 'the MoggingLabs app is not running (no browser-control endpoint)',
+      { cause: e }
     )
   }
   sess.onMessage((m) => {

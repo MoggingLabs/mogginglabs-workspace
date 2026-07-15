@@ -3,7 +3,7 @@ import { USAGE_CADENCE_MS, findProvider } from '@contracts'
 import { resolveHome } from './homes'
 
 import { USAGE_PROVIDERS } from '@contracts'
-import { CLI_STORE_READERS, CLI_STORE_WIRED, readCodex } from './classes/cli-store'
+import { CLI_STORE_READERS, CLI_STORE_WIRED } from './classes/cli-store'
 import { API_KEY_SPECS, API_KEY_PENDING, fetchApiKeyUsage, type ApiKeyDeps } from './classes/api-key'
 import { fetchVertex, fetchBedrock } from './classes/cloud-cli'
 import { fetchWebSessionUsage, WEB_SESSION_SPECS, type WebSessionDeps } from './classes/web-session'

@@ -24,7 +24,6 @@ import { spawnPaneMcpSmokeClient, type PaneMcpSmokeClient } from './pane-mcp-smo
 //   carries either endpoint token (grepped, both directions).
 // Zero network: the only page served is this smoke's own 127.0.0.1 fixture.
 
-type Rpc = { result?: Record<string, unknown>; error?: { code?: number; message?: string } }
 type ToolResult = { content?: { type?: string; text?: string }[]; isError?: boolean }
 
 export function runMcpSmoke(win: BrowserWindow): void {

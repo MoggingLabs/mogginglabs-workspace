@@ -51,13 +51,6 @@ import { notifyHookInvocation } from '../notify-hook'
 // daemon (terminal:stateSync), so each assert reads the daemon's own truth rather than a UI echo
 // of the event we just sent — which makes this a stronger test, not a weaker one.
 
-interface Step {
-  want: string
-  got: string
-  alert: string | null
-  ok: boolean
-}
-
 const SCRIPT = (hook: string): string => `(async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
   const m = window.__mogging

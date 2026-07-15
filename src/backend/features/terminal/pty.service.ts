@@ -1,5 +1,3 @@
-import { homedir } from 'node:os'
-import { statSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import type {
   AgentDetectedEvent,

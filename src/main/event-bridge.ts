@@ -2,7 +2,7 @@ import { ipcMain, type BrowserWindow } from 'electron'
 import { BRIDGE_EVENTS, IntegrationsChannels, type BridgeEventName } from '@contracts'
 import { buildBridgeEvent, deliverWebhook, urlAllowed, webhookReceives } from '@backend/features/integrations'
 import { getSettingsStore } from './app-settings'
-import { vaultAvailable, vaultClearKey, vaultHas, vaultLoad, vaultStore } from './vault'
+import { vaultAvailable, vaultClearKey, vaultLoad, vaultStore } from './vault'
 import { workspaceIdForPane } from './integrations'
 import { recordTrail } from './trail'
 

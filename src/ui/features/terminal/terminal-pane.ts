@@ -4,7 +4,6 @@ import { SerializeAddon } from '@xterm/addon-serialize'
 import {
   EXPLORER_DRAG_TYPE,
   WorktreeChannels,
-  type ContextUsage,
   type GitStatus,
   type AgentState,
   type PaneId,

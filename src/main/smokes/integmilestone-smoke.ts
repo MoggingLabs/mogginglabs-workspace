@@ -376,7 +376,7 @@ export function runIntegMilestoneSmoke(win: BrowserWindow): void {
       await ES(`window.__mogging.workspace.create({ name: 'Service', cwd: ${JSON.stringify(mkdtempSync(join(tmpdir(), 'mog-svc-')))} })`)
       await sleep(1500)
       const svcCardId = String(await ES(`window.__mogging.board.createCard('INTEGMILE_PR', 'linked to a fake PR')`))
-      const started = (await ES(`window.__mogging.board.startOnCard(${JSON.stringify(svcCardId)}, 'shell')`)) as boolean
+      await ES(`window.__mogging.board.startOnCard(${JSON.stringify(svcCardId)}, 'shell')`)
       await sleep(3000)
       const svcCard = ((await ES(`window.__mogging.board.list()`)) as { id: string; paneId?: number | null; workspaceId?: string }[]).find(
         (c) => c.id === svcCardId

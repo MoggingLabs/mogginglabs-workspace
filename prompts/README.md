@@ -1,5 +1,12 @@
 # Prompts — master index
 
+> **Why this tree is committed** (reviewed 2026-07, declined for deletion): it is not
+> process residue — `scripts/check-audit.mjs` (the AUDIT gate, run in every sweep) asserts
+> over `phase-8.5/AUDIT.md` that every audit finding stays routed and no Grades row sits
+> below A, and `check-gate-count.mjs` holds the phase-11 pack's sweep-size claims to the
+> derived count. Deleting the tree fails the sweep. Transient session artifacts (the root
+> `AUDIT_REMEDIATION_*` files) were the actual slop, and those are gone.
+
 Sequenced master prompts that build **MoggingLabs Workspace** phase by phase. Each phase folder
 has a `README.md` (the plan) + numbered step files; every STEP is self-contained and pasteable as
 a `/goal` (kept **≤ 3950 chars** — `/goal` caps the whole condition at 4000 and you prepend your

@@ -76,7 +76,7 @@ function envPrefix(env: Record<string, string> | undefined, target: LaunchTarget
 
 /** Quote one provider argument for the interactive shell that receives the line. */
 function shellArg(value: string, target: LaunchTarget): string {
-  if (/^[A-Za-z0-9_./:\\=@,+\-\[\]]+$/.test(value)) return value
+  if (/^[A-Za-z0-9_./:\\=@,+\-[\]]+$/.test(value)) return value
   if (target.platform === 'posix') return shq(value)
   if (target.shell === 'powershell') return psq(value)
   // Standard Windows argv quoting. Percent/bang values emitted by session

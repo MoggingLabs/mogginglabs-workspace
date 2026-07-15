@@ -5,8 +5,6 @@
 //
 // It also PERSISTS sessions (cwd + command label + scrollback) to a small store, so the
 // daemon self-recovers on a cold start / crash and repaints prior scrollback (Phase-1/03).
-import * as os from 'node:os'
-import * as fs from 'node:fs'
 import * as crypto from 'node:crypto'
 import { spawnPty, type IPty } from '@backend/platform/pty-host'
 import { paneShellLaunch } from '@backend/platform/shell'
@@ -36,8 +34,6 @@ import { SessionStore, resumeCommandFor } from '@backend/features/workspace'
 import { Mailbox } from './mailbox'
 import { Ledger } from './ledger'
 import type { PersistedPane, PersistedWorkspace, WorkspaceLayout } from '@contracts'
-
-const posixQuote = (value: string): string => `'${value.replace(/'/g, `'"'"'`)}'`
 
 /** Command executed by ssh only after authentication succeeds. It emits a
  *  private OSC readiness marker, enters the requested target cwd, then becomes
