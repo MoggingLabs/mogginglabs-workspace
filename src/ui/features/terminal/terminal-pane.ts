@@ -44,7 +44,7 @@ import {
 } from '../../core/agents/mcp-status-port'
 import { getPaneContext, onPaneContext, type PaneContext } from '../../core/terminal/context-port'
 import { clearPaneAgentSession, getPaneAgentSession, onPaneAgentSession } from '../../core/agents/agent-session-port'
-import { assignmentForPane, workspaceIdForPane } from '../../core/workspace/workspace-info-port'
+import { assignmentForPane, getWorkspaces, workspaceIdForPane } from '../../core/workspace/workspace-info-port'
 import { claimsFor, onClaimsChange, setClaimsForDev, workspaceClaims } from './claims-store'
 import { createPaneAnchor, type PaneAnchorHandle } from './pane-anchor'
 import { createPaneHeaderFit, type PaneHeaderFitHandle } from './pane-header-fit'
@@ -1326,6 +1326,11 @@ export class TerminalPane {
     let menuFactsObserver: MutationObserver | undefined
     let menuVisibilityObserver: MutationObserver | undefined
     let startMenuWatch = (): void => undefined
+    /** The scroll host this pane's OPEN menu is currently watching. Held rather than
+     *  re-derived, so the listener comes off the same element it went on — the pane may
+     *  have moved to another workspace in between, and `closest()` would then answer with
+     *  the new one and leave a listener behind on the old. */
+    let watchedScrollHost: HTMLElement | null = null
     const menuEntries = (): HTMLElement[] =>
       Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]'))
     const focusEntry = (entry: HTMLElement | undefined): void => {
@@ -1339,6 +1344,8 @@ export class TerminalPane {
       menuBtn.setAttribute('aria-expanded', 'false')
       menuFactsObserver?.disconnect()
       menuVisibilityObserver?.disconnect()
+      watchedScrollHost?.removeEventListener('scroll', closeFromViewportChange)
+      watchedScrollHost = null
       if (returnFocus && menuBtn.isConnected) menuBtn.focus()
     }
     const positionMenu = (): void => {
@@ -1413,28 +1420,31 @@ export class TerminalPane {
     document.addEventListener('pointerdown', closeFromOutside, true)
     window.addEventListener('blur', closeFromWindowBlur)
     window.addEventListener('resize', closeFromViewportChange)
-    const scrollHost = host.closest<HTMLElement>('.layout-scroll-host')
-    scrollHost?.addEventListener('scroll', closeFromViewportChange, { passive: true })
-    const workspaceView = host.closest<HTMLElement>('.workspace-view')
-    if (workspaceView) {
-      const closeWhenWorkspaceHides = (): void => {
-        if (workspaceView.classList.contains('active') && !workspaceView.hidden) return
-        const focused = menu.contains(document.activeElement)
-        const active = document.activeElement
-        closeMenu(false)
-        // The opener belongs to the workspace that just disappeared, so returning
-        // focus there would be worse than dropping it. Explicitly release a focused
-        // portaled entry; the newly active workspace owns the next focus decision.
-        if (focused && active instanceof HTMLElement) active.blur()
-      }
-      menuVisibilityObserver = new MutationObserver(closeWhenWorkspaceHides)
+    // The pane's ANCESTORS are resolved per menu-open, never captured here. A pane can be
+    // MOVED to another workspace, and it takes this element with it — a scroll host and a
+    // workspace-view remembered at construction would go on describing the workspace it has
+    // LEFT. The menu (portaled to <body>) would then keep hanging over a grid that had
+    // scrolled away beneath it, and would fail to close when the workspace it now belongs to
+    // is hidden. `closest()` at open time always answers with the workspace it is in NOW.
+    const closeWhenWorkspaceHides = (): void => {
+      const view = host.closest<HTMLElement>('.workspace-view')
+      if (!view || (view.classList.contains('active') && !view.hidden)) return
+      const focused = menu.contains(document.activeElement)
+      const active = document.activeElement
+      closeMenu(false)
+      // The opener belongs to the workspace that just disappeared, so returning
+      // focus there would be worse than dropping it. Explicitly release a focused
+      // portaled entry; the newly active workspace owns the next focus decision.
+      if (focused && active instanceof HTMLElement) active.blur()
     }
+    menuVisibilityObserver = new MutationObserver(closeWhenWorkspaceHides)
     document.body.append(menu)
     this.menuCleanup = (): void => {
       document.removeEventListener('pointerdown', closeFromOutside, true)
       window.removeEventListener('blur', closeFromWindowBlur)
       window.removeEventListener('resize', closeFromViewportChange)
-      scrollHost?.removeEventListener('scroll', closeFromViewportChange)
+      watchedScrollHost?.removeEventListener('scroll', closeFromViewportChange)
+      watchedScrollHost = null
       menuFactsObserver?.disconnect()
       menuVisibilityObserver?.disconnect()
       menu.remove()
@@ -1529,8 +1539,12 @@ export class TerminalPane {
         characterData: true,
         subtree: true
       })
-      if (workspaceView) {
-        menuVisibilityObserver?.observe(workspaceView, {
+      // Both are the pane's CURRENT workspace, asked for now — see closeWhenWorkspaceHides.
+      watchedScrollHost = host.closest<HTMLElement>('.layout-scroll-host')
+      watchedScrollHost?.addEventListener('scroll', closeFromViewportChange, { passive: true })
+      const view = host.closest<HTMLElement>('.workspace-view')
+      if (view) {
+        menuVisibilityObserver?.observe(view, {
           attributes: true,
           attributeFilter: ['class', 'hidden']
         })
@@ -1794,7 +1808,11 @@ export class TerminalPane {
     // The header is a summary; this first section is the complete textual truth. It is
     // unconditional rather than width-dependent, so the menu stays learnable and the
     // compact four-anchor bar never makes identity or status undiscoverable.
-    const info: HTMLElement[] = [note(`Pane: ${displayTitle || `Terminal ${this.id % 100 || this.id}`}`)]
+    // What this pane calls itself — the agent's task title, else its label, else its number.
+    // The number is derived from the id and therefore STABLE: a pane that moves to another
+    // workspace keeps its name, rather than being renumbered by wherever it happens to land.
+    const paneName = displayTitle || `Terminal ${this.id % 100 || this.id}`
+    const info: HTMLElement[] = [note(`Pane: ${paneName}`)]
     const session = getPaneAgentSession(this.id)
     if (session) {
       const provider = session.provider.startsWith('custom:')
@@ -1880,6 +1898,17 @@ export class TerminalPane {
         new CustomEvent('mogging:split-pane', { bubbles: true, detail: { paneId: this.id, dir } })
       )
     }
+    // Move this terminal to another workspace. Also the controller's: only it knows the other
+    // workspaces, and only it can carry a live pane between two grids without the pane being
+    // torn down and rebuilt (which would kill the PTY, and the agent inside it).
+    const moveFromMenu = (): void => {
+      eventHost.dispatchEvent(
+        new CustomEvent('mogging:move-pane', {
+          bubbles: true,
+          detail: { paneId: this.id, title: paneName }
+        })
+      )
+    }
     // The menu mirrors the trio's truth-telling. It is REBUILT on every open, so the
     // slot's stamp read here is always current: the active mode's entry shows the
     // contract glyph + restore wording, the other two keep offering their switch.
@@ -1897,7 +1926,14 @@ export class TerminalPane {
       expandItem('row', 'expand-h', 'contract-h', 'Expand across full width'),
       expandItem('col', 'expand-v', 'contract-v', 'Expand to full height'),
       item('plus', 'Split right — new terminal', () => splitFromMenu('h')),
-      item('plus', 'Split down — new terminal', () => splitFromMenu('v')),
+      item('plus', 'Split down — new terminal', () => splitFromMenu('v'))
+    )
+    // Offered only when there is somewhere to move TO. A lone workspace would get a menu
+    // entry whose only possible outcome is a toast explaining why it cannot work.
+    if (getWorkspaces().workspaces.length > 1) {
+      menu.append(item('arrow-right', 'Move to another workspace…', moveFromMenu))
+    }
+    menu.append(
       separator(),
       item('pencil', 'Rename', () => this.renameFn?.()),
       item('trash', 'Clear terminal', () => this.term.clear()),

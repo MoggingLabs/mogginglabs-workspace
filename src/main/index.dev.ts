@@ -79,6 +79,7 @@ import { runPaneScrollSmoke } from './panescroll-smoke'
 import { runAppScrollSmoke } from './appscroll-smoke'
 import { runConptySmoke } from './conpty-smoke'
 import { runPaneOpsSmoke } from './paneops-smoke'
+import { runMovePaneSmoke } from './movepane-smoke'
 import { runControlSmoke } from './control-smoke'
 import { runControl2Smoke } from './control2-smoke'
 import { runPerceptionSmoke } from './perception-smoke'
@@ -159,7 +160,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX',
   'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_RESPONSIVE', 'MOGGING_KBAPG', 'MOGGING_UXMILESTONE',
   'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT', 'MOGGING_CWD',
-  'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS',
+  'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
   'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
   'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
@@ -429,6 +430,8 @@ function afterWindow(win: BrowserWindow): void {
     runConptySmoke(win) // env-gated ConPTY-coherence smoke: resize must never smear the buffer
   } else if (process.env.MOGGING_PANEOPS) {
     runPaneOpsSmoke(win) // env-gated pane-operations smoke: expand modes + close
+  } else if (process.env.MOGGING_MOVEPANE) {
+    runMovePaneSmoke(win) // env-gated cross-workspace pane MOVE: the PTY must survive it
   } else if (process.env.MOGGING_CONTROL) {
     runControlSmoke(win) // env-gated control-API smoke: list/send/send-key/capture (Phase-3/01)
   } else if (process.env.MOGGING_CONTROL2) {

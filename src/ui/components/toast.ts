@@ -15,6 +15,11 @@ export interface ToastOpts {
   secondaryAction?: { label: string; onClick: () => void }
 }
 
+/** How long a toast stays up when it doesn't say otherwise. Exported because an UNDO toast
+ *  is a promise: whatever it offers to reverse has to stay reversible for exactly as long
+ *  as the button is on screen, so the grace period and the toast read the same number. */
+export const TOAST_DEFAULT_MS = 6000
+
 const MAX_STACK = 4
 /** Toasts past the visible cap WAIT here instead of being destroyed — a batch
  *  of five alerts used to evict the oldest before a frame painted, while the
@@ -138,7 +143,7 @@ function mount(opts: ToastOpts): () => void {
 
   stack.append(toast)
 
-  const timeout = opts.timeout ?? 6000
+  const timeout = opts.timeout ?? TOAST_DEFAULT_MS
   if (timeout > 0) timer = setTimeout(dismiss, timeout)
   return dismiss
 }

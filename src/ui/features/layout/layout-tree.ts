@@ -83,6 +83,13 @@ export function isSplit(n: LayoutTreeNode): n is SplitNode {
   return (n as SplitNode).children !== undefined
 }
 
+/** A deep copy. Every mutator here rewrites nodes in place, so a caller that wants to
+ *  UNDO one (a pane leaving for another workspace) has to hold a real copy of the shape
+ *  it started from — a reference would be edited out from under it. */
+export function cloneTree(n: LayoutTreeNode): LayoutTreeNode {
+  return isSplit(n) ? { dir: n.dir, sizes: [...n.sizes], children: n.children.map(cloneTree) } : { id: n.id }
+}
+
 /** Leaf ids in DFS order — reading order (row-major for template grids). */
 export function leafIds(n: LayoutTreeNode): number[] {
   if (!isSplit(n)) return [n.id]
@@ -468,7 +475,10 @@ export function serializeTree(root: LayoutTreeNode): string {
   return JSON.stringify(payload)
 }
 
-const MAX_LEAVES = 32
+/** Hard ceiling on a workspace's LOCAL slot ids. Splits reuse the lowest free slot, so a
+ *  workspace's ids stay inside 1..MAX_LEAVES for its whole life — which is what keeps a
+ *  persisted tree's ids meaningful and bounds the search for a free one. */
+export const MAX_LEAVES = 32
 const MAX_DEPTH = 10
 
 /** Parse + validate a persisted layout. Returns null on ANY doubt — the caller falls

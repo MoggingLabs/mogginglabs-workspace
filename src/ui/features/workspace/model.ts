@@ -3,6 +3,11 @@
  * (no secrets, no credentials — ADR 0002). The `ordinal` is a stable index that maps to the
  * base pane id (`ordinal * 100`), so a workspace's pane ids survive a restart and re-attach
  * to the daemon's restored panes.
+ *
+ * That formula is the DEFAULT, not the law: a pane MOVED here from another workspace keeps
+ * its own id, and `paneIds` records it. It has to keep it — a pane's id is its daemon
+ * session key, and re-keying it would mean killing the PTY and spawning a new one, which is
+ * not a move but a re-creation with the running agent destroyed.
  */
 export interface WorkspaceMeta {
   id: string
@@ -16,7 +21,20 @@ export interface WorkspaceMeta {
   roles?: (string | null)[] // per-slot swarm role (Phase-4/01)
   remotes?: ({ hostId: string; name: string; cwd?: string } | null)[] // per-slot remote host + remote cwd (Phase-4/05)
   profileIds?: (string | null)[] // per-slot launch profile (4/04 picker; persisted 6/04 — restore + failover keep it true)
+  /** Per-slot pane id, for slots that do NOT follow `ordinal * 100 + slot` — i.e. panes
+   *  that moved here from another workspace. Sparse; absent on any workspace that has
+   *  never received one, so untouched workspaces persist exactly as they always did. */
+  paneIds?: (number | null)[]
   layout?: string | null // serialized split-tree (shape + sizes); absent/invalid → template grid
+}
+
+/** The pane id a workspace's local slot hosts (slots are 1-based). The formula, unless the
+ *  slot holds a pane that moved here — those keep their own id, which is the whole point.
+ *  Used on the paths that must resolve an id BEFORE the grid exists (a pane reads its cwd,
+ *  remote and role seeds at spawn time). */
+export function paneIdForSlot(meta: WorkspaceMeta, slot: number): number {
+  const moved = meta.paneIds?.[slot - 1]
+  return typeof moved === 'number' && moved >= 1 ? moved : meta.ordinal * 100 + slot
 }
 
 /**

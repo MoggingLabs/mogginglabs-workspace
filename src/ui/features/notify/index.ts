@@ -6,7 +6,8 @@ import { getPaneLabel } from '../../core/layout/pane-meta'
 import { activeView } from '../../core/shell/view-port'
 import {
   getWorkspaces,
-  requestWorkspaceSwitch
+  requestWorkspaceSwitch,
+  workspaceIdForPane
 } from '../../core/workspace/workspace-info-port'
 import { getTelemetry } from '../../core/telemetry'
 
@@ -42,7 +43,11 @@ export const notifyFeature: UiFeature = {
       const blocked = e.state === 'attention'
 
       const { workspaces, activeId } = getWorkspaces()
-      const ws = workspaces.find((w) => Math.floor(e.id / 100) === w.ordinal)
+      // By the workspace that HOLDS the pane, not by its id: a pane that moved keeps its
+      // id, so the formula would name the workspace it left — and this pane, sitting right
+      // in front of you in the active grid, would toast at you as if it were off-screen.
+      const wsId = workspaceIdForPane(e.id)
+      const ws = workspaces.find((w) => w.id === wsId)
       // Visible already? The pane's own outline + dot carry it — no toast needed.
       if (ws && ws.id === activeId && activeView() === 'grid') return
 
