@@ -17,6 +17,7 @@ import {
   readHistory,
   createStatusService,
   evaluateThresholds,
+  isReaderWired,
   COST_LOG_SUBDIR,
   type StatusService,
   type UsageService
@@ -420,7 +421,10 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
         // PRESENCE only (ADR 0007.a) — the kind, never a value.
         key: keySlot(id).kind,
         // web-session store-read opt-in (ADR 0007.b), default OFF.
-        webRead: findProvider(id)?.klass === 'web-session' ? kv?.getSetting(`usage.webread.${id}`) === '1' : undefined
+        webRead: findProvider(id)?.klass === 'web-session' ? kv?.getSetting(`usage.webread.${id}`) === '1' : undefined,
+        // Truthfulness: a pending row must never present as watched. The FAKE
+        // world's fixture adapters count as wired (they do produce readings).
+        wired: world ? adapters.some((a) => a.id === id) : isReaderWired(id)
       }))
     }
   })

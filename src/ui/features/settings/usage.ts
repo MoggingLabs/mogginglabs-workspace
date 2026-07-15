@@ -49,6 +49,9 @@ interface GridRow extends Pick<UsageProviderDef, 'id' | 'label' | 'klass'> {
   key?: string
   webRead?: boolean
   health?: string
+  /** False = an honest-pending catalog row: no reader can produce a reading
+   *  yet, so the row must say so instead of presenting as watched. */
+  wired: boolean
 }
 
 export function createUsageSection(): HTMLElement {
@@ -81,7 +84,8 @@ export function createUsageSection(): HTMLElement {
         cadence: c?.cadence ?? '5m',
         key: c?.key,
         webRead: c?.webRead,
-        health: plans.find((p) => p.providerId === def.id)?.health
+        health: plans.find((p) => p.providerId === def.id)?.health,
+        wired: c?.wired ?? false
       })
     }
     for (const c of cfg) {
@@ -94,7 +98,8 @@ export function createUsageSection(): HTMLElement {
         cadence: c.cadence,
         key: c.key,
         webRead: c.webRead,
-        health: plans.find((p) => p.providerId === c.id)?.health
+        health: plans.find((p) => p.providerId === c.id)?.health,
+        wired: c.wired ?? true // an adapter row outside the catalog IS its own reader
       })
     }
     renderGrid()
@@ -184,6 +189,20 @@ export function createUsageSection(): HTMLElement {
     grid.replaceChildren()
     const q = search.value.trim().toLowerCase()
     const rows = [...rowState.values()].filter((r) => !q || r.id.includes(q) || r.label.toLowerCase().includes(q))
+    // The headline the audit demanded: WHICH providers are actually watched,
+    // stated plainly — the user believed "all", the truth was two.
+    const watched = [...rowState.values()].filter((r) => r.enabled && r.wired)
+    const reporting = watched.filter((r) => r.health === 'fresh' || r.health === 'stale')
+    grid.append(
+      el('p', { class: 'settings-row-caption usage-watched-line' }, [
+        el('span', {
+          text:
+            `${watched.length} of ${rowState.size} providers can be watched today` +
+            (reporting.length ? ` · ${reporting.length} reporting now` : '') +
+            ' — the rest are catalog rows whose reader is not wired yet.'
+        })
+      ])
+    )
     for (const klass of CLASS_ORDER) {
       const mine = rows.filter((r) => r.klass === klass)
       if (!mine.length) continue
@@ -209,20 +228,31 @@ export function createUsageSection(): HTMLElement {
         for (const c of USAGE_CADENCES) cadence.append(el('option', { value: c, text: c }))
         cadence.value = r.cadence
         cadence.addEventListener('change', () => void invoke(UsageChannels.configSet, { providerId: r.id, cadence: cadence.value }))
+        // An unwired row must never look watched (the audit's RC4): the green
+        // "detected" chip is CLI presence, which is true but reads as "usage
+        // live" — so it only paints on rows whose reader can actually read.
+        const wiredChip = r.wired
+          ? null
+          : el('span', {
+              class: 'pill usage-detected is-missing usage-pending-chip',
+              text: 'reader pending',
+              attrs: { title: 'This catalog row has no usage reader yet — enabling it polls nothing and no alert can fire. It lands when the endpoint is dev-verified.' }
+            })
         const head = el('div', { class: 'usage-prov-head' }, [
           enable.el,
           providerLogo(r.id, 15),
           el('span', { class: 'usage-prov-label', text: r.label }),
           el('span', { class: `pill usage-class-chip is-${r.klass}`, text: r.klass }),
-          r.klass === 'cli-store' || r.klass === 'cloud-cli'
+          wiredChip,
+          r.wired && (r.klass === 'cli-store' || r.klass === 'cloud-cli')
             ? el('span', {
                 class: `pill usage-detected ${detected.has(r.id) || r.health === 'fresh' || r.health === 'stale' ? 'is-found' : 'is-missing'}`,
                 text: detected.has(r.id) || r.health === 'fresh' || r.health === 'stale' ? 'detected' : 'not found'
               })
             : null,
-          r.enabled && r.health ? el('span', { class: `pill usage-health is-${r.health}`, text: r.health }) : null,
-          r.enabled ? cadence : null,
-          r.enabled
+          r.enabled && r.wired && r.health ? el('span', { class: `pill usage-health is-${r.health}`, text: r.health }) : null,
+          r.enabled && r.wired ? cadence : null,
+          r.enabled && r.wired
             ? Button({ label: 'Refresh', size: 'sm', onClick: () => void invoke(UsageChannels.refresh, r.id) })
             : null
         ])
@@ -539,6 +569,9 @@ export function createUsageSection(): HTMLElement {
   void (async () => {
     const cfg = (await invoke(UsageChannels.alertCfgGet)) as UsageAlertConfig | null
     if (!cfg) return
+    const thrErr = el('span', { class: 'settings-error usage-thr-err', role: 'alert' })
+    thrErr.hidden = true
+    const live = { quiet: cfg.quiet, warn: cfg.warn }
     const pctInput = (cls: string, label: string, value: number, key: 'quiet' | 'warn'): HTMLInputElement => {
       const input = el('input', { class: `usage-thr ${cls}`, ariaLabel: label }) as HTMLInputElement
       input.type = 'number'
@@ -547,7 +580,19 @@ export function createUsageSection(): HTMLElement {
       input.value = String(value)
       input.addEventListener('change', () => {
         const v = Number(input.value)
-        if (Number.isFinite(v) && v >= 1 && v <= 100) void invoke(UsageChannels.alertCfgSet, { [key]: v })
+        // Out-of-range or inverted input REVERTS OUT LOUD — the old handler
+        // silently swallowed it, so the field showed a value that was never
+        // saved (audit RC4's quiet-warn validation gap).
+        const inverted = key === 'quiet' ? v >= live.warn : v <= live.quiet
+        if (!Number.isFinite(v) || v < 1 || v > 100 || inverted) {
+          thrErr.textContent = inverted ? 'quiet must stay below warning — reverted' : '1–100 only — reverted'
+          thrErr.hidden = false
+          input.value = String(live[key])
+          return
+        }
+        thrErr.hidden = true
+        live[key] = Math.round(v)
+        void invoke(UsageChannels.alertCfgSet, { [key]: v })
       })
       return input
     }
@@ -565,10 +610,41 @@ export function createUsageSection(): HTMLElement {
         quiet,
         el('span', { class: 'settings-row-caption', text: '% · warning at' }),
         warn,
-        el('span', { class: 'settings-row-caption', text: '%' })
+        el('span', { class: 'settings-row-caption', text: '%' }),
+        thrErr
       ]),
       confetti.el
     )
+    // Credits floors: a balance has no percentage, so "low" is the USER's
+    // number. One row per ENABLED balance provider; 0/empty = no tap.
+    const creditRows = ((await invoke(UsageChannels.configGet)) as UsageConfig | null)?.providers ?? []
+    const floorRows = USAGE_PROVIDERS.filter((d) => d.credits && creditRows.find((c) => c.id === d.id)?.enabled)
+    if (floorRows.length) {
+      const floorsHost = el('div', { class: 'usage-floors' })
+      floorsHost.append(el('div', { class: 'section-label', text: 'Balance floors — warn when a balance drops under' }))
+      for (const d of floorRows) {
+        const input = el('input', { class: 'usage-thr usage-floor', ariaLabel: `${d.id} balance floor` }) as HTMLInputElement
+        input.type = 'number'
+        input.min = '0'
+        input.value = String(cfg.floors?.[d.id] ?? '')
+        input.placeholder = 'off'
+        input.addEventListener('change', () => {
+          const v = Number(input.value)
+          if (input.value === '' || (Number.isFinite(v) && v >= 0)) {
+            void invoke(UsageChannels.alertCfgSet, { floors: { [d.id]: input.value === '' ? 0 : v } })
+          } else input.value = ''
+        })
+        floorsHost.append(
+          el('div', { class: 'usage-alert-row usage-floor-row', dataset: { provider: d.id } }, [
+            providerLogo(d.id, 13),
+            el('span', { class: 'settings-row-caption', text: d.label }),
+            input,
+            el('span', { class: 'settings-row-caption', text: d.windows[0]?.label.toLowerCase() ?? 'credits' })
+          ])
+        )
+      }
+      alertsHost.append(floorsHost)
+    }
     // A FIXTURE toast, clearly labeled — proves the house toast path works but is
     // NOT a reading (its own comment said so). 05b puts it behind DEV so it never
     // ships; the real alert copy is composed main-side (09).
@@ -727,6 +803,11 @@ export function createUsageSection(): HTMLElement {
     plans = (payload as PlanUsageView[]) ?? []
     renderPlans()
     renderOverview()
+    // The grid's health pills follow the LIVE snapshot — they used to be
+    // computed once from the empty first load and never repainted, so the one
+    // label that says "unconfigured" was dead on arrival (audit RC4).
+    for (const r of rowState.values()) r.health = plans.find((p) => p.providerId === r.id)?.health
+    renderGrid()
     // Profiles may have changed too (a switch, a Settings edit) — cheap re-read
     // so the active marker and Switch affordances stay truthful.
     void invoke(ProfileChannels.list).then((raw) => {

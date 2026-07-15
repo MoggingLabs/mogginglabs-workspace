@@ -3,8 +3,8 @@ import { USAGE_CADENCE_MS, findProvider } from '@contracts'
 import { resolveHome } from './homes'
 
 import { USAGE_PROVIDERS } from '@contracts'
-import { CLI_STORE_READERS, readCodex } from './classes/cli-store'
-import { fetchApiKeyUsage, type ApiKeyDeps } from './classes/api-key'
+import { CLI_STORE_READERS, CLI_STORE_WIRED, readCodex } from './classes/cli-store'
+import { API_KEY_SPECS, API_KEY_PENDING, fetchApiKeyUsage, type ApiKeyDeps } from './classes/api-key'
 import { fetchVertex, fetchBedrock } from './classes/cloud-cli'
 import { fetchWebSessionUsage, type WebSessionDeps } from './classes/web-session'
 import { claudeAdapter } from './claude-adapter'
@@ -15,14 +15,28 @@ export { claudeAdapter } from './claude-adapter'
 export { resolveHome } from './homes'
 export { computePace, formatVerdict, formatPaceDelta, formatPaceTime, formatReset, formatRisk, runOutRisk, PACE_SEVERITY, type PaceOptions } from './pace'
 export { PACE_GOLDENS } from './pace-fixtures'
-export { CLI_STORE_READERS, readCodex } from './classes/cli-store'
+export { CLI_STORE_READERS, CLI_STORE_WIRED, readCodex } from './classes/cli-store'
 export { API_KEY_SPECS, API_KEY_PENDING, fetchApiKeyUsage } from './classes/api-key'
+export { attemptClaudeRefresh, resetClaudeRefreshStateForTest } from './claude-refresh'
 export { fetchVertex, fetchBedrock } from './classes/cloud-cli'
 export { fetchWebSessionUsage, fixtureCookieBackend, realCookieBackend, type WebSessionDeps, type CookieStoreBackend } from './classes/web-session'
 export { scanCost, costLogDir, costLogDirs, priceFor, MODEL_PRICES, CACHE_READ_X, CACHE_WRITE_5M_X, CACHE_WRITE_1H_X, COST_LOG_SUBDIR, type CostScanOptions, type ModelPrice } from './cost'
 export { appendHistory, readHistory, HISTORY_MAX, type HistoryKv } from './history'
 export { createStatusService, normalizeStatusBody, STATUS_CADENCE_MS, type StatusService, type StatusServiceDeps, type StatusFetcher, type StatusProviderRow } from './status'
 export { evaluateThresholds, suggestFailover, type ThresholdKv } from './thresholds'
+
+/** Can this provider's reader produce a REAL reading today, or is it an
+ *  honest-pending stub? The Settings grid paints watched/pending from this —
+ *  the audit found notWired rows presenting as live, which is exactly how
+ *  "alerts across all my providers" was believed while two providers worked. */
+export function isReaderWired(id: string): boolean {
+  if (id === 'claude') return true
+  const klass = findProvider(id)?.klass
+  if (klass === 'cli-store') return CLI_STORE_WIRED.has(id)
+  if (klass === 'api-key') return !!API_KEY_SPECS[id] && !API_KEY_PENDING.has(id)
+  if (klass === 'cloud-cli') return id === 'bedrock' // vertex is presence-only, no lane yet
+  return false // web-session parses + the local probe land with dev-verification
+}
 
 /** Build the REAL adapters from the catalog (Phase-7/04): one per cli-store
  *  row that has a reader. Claude delegates to the shipped 7/01 adapter (already

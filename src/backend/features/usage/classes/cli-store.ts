@@ -127,6 +127,11 @@ const notWired =
   async (_home, profileId) =>
     labeled(id, profileId, 'unconfigured', `${id} usage reader is not wired yet — coming in a later 7/04 pass`)
 
+/** The cli-store rows whose reader actually READS something (vs the honest
+ *  notWired stubs below). The UI's truthfulness rides on this set: a row
+ *  outside it must never present as watched. */
+export const CLI_STORE_WIRED: ReadonlySet<string> = new Set(['codex'])
+
 /** Reader registry. Claude is delegated by the seam to the shipped 7/01 adapter
  *  (already verified) so this map holds the NEW cli-store readers. */
 export const CLI_STORE_READERS: Record<string, CliStoreReader> = {
