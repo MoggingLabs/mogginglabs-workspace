@@ -432,7 +432,9 @@ export const agentsFeature: UiFeature = {
         // restart resurrects the capped profile. Port only, one hop per event.
         announceProfileFailover({ paneId: paneId as PaneId, profileId: next.id })
       }
-      const wsId = getWorkspaces().workspaces.find((w) => w.ordinal === Math.floor(paneId / 100))?.id
+      // The workspace that HOLDS this pane — a moved pane keeps its id, so the old
+      // `id / 100` would read the auto-failover setting of the workspace it left.
+      const wsId = workspaceIdForPane(paneId)
       if (wsId && autoFailover.get(wsId)) {
         doFailover()
         showToast({ tone: 'info', title: `Usage limit — relaunching on ${next.name}`, body: `Pane ${paneId} (auto-failover).` })

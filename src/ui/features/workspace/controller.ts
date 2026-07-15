@@ -1,8 +1,10 @@
 import { TerminalChannels, WorktreeChannels } from '@contracts'
 import type { AgentState, PaneId, RemoveWorktreeResult } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { GridLayout, MAX_PANES, parseTree, leafIds } from '../layout'
-import { confirmDialog, icon, showToast } from '../../components'
+import { GridLayout, MAX_PANES, parseTree, leafIds, type LayoutTreeNode } from '../layout'
+import { confirmDialog, icon, showToast, TOAST_DEFAULT_MS } from '../../components'
+import { batchSlots } from '../../core/layout/slots'
+import { openMovePaneModal, type MoveTarget } from './move-pane-modal'
 import { setFocusedPane } from '../../core/layout/focus'
 import { setPaneCwd, getPaneCwd, getPaneCwdProjection } from '../../core/layout/pane-cwd'
 import { setPaneRole, setPaneRemote, clearPaneRemote, setPaneLabel, getPaneRemote } from '../../core/layout/pane-meta'
@@ -14,7 +16,7 @@ import { getPaneAgentSession } from '../../core/agents/agent-session-port'
 import { activeView, setActiveView, onViewChange } from '../../core/shell/view-port'
 import { getTelemetry } from '../../core/telemetry'
 import type { TemplateWorkspaceSpec } from '../../core/workspace/open-service'
-import { type WorkspaceMeta, colorForOrdinal, newWorkspaceId } from './model'
+import { type WorkspaceMeta, colorForOrdinal, newWorkspaceId, paneIdForSlot } from './model'
 
 /** How long to let the arrival swell land before a pane that was auto-focused-into is treated
  *  as clicked. Must outlast the 1.2s swell (and grid-layout's own 1400ms class timer), or the
@@ -58,6 +60,9 @@ export interface CreateOpts {
   /** Per-slot remote hosts (Phase-4/05). null = local. Name is display data. */
   remotes?: ({ hostId: string; name: string; cwd?: string } | null)[]
   profileIds?: (string | null)[]
+  /** Per-slot pane id for slots holding a pane that MOVED here — restoring one under this
+   *  workspace's formula id would spawn a new shell and orphan its live session. */
+  paneIds?: (number | null)[]
   /** Serialized split-tree layout (shape + sizes). Absent/invalid → the template
    *  grid for `paneCount` — a bad persisted row can never wedge a restore. */
   layout?: string | null
@@ -90,6 +95,21 @@ interface LivePanes {
   sessions: PaneId[]
   /** Live because the pane is still producing output (agent turn, or any command). */
   running: PaneId[]
+}
+
+/**
+ * One pane's row in the slot-indexed manifest: the provider assigned to it, the worktree it
+ * runs in, its swarm role, its remote host and its launch profile. These are indexed by SLOT,
+ * not by pane, so a pane that changes workspace has to carry them across by hand — otherwise
+ * the next restore rebuilds it as a plain shell in the wrong directory, and its worktree
+ * isolation, role and profile are silently gone.
+ */
+interface PaneManifest {
+  assignment?: string
+  paneCwd?: string | null
+  role?: string | null
+  remote?: { hostId: string; name: string; cwd?: string } | null
+  profileId?: string | null
 }
 
 function inspectLive(paneIds: number[]): LivePanes {
@@ -226,6 +246,7 @@ export class WorkspaceController {
       roles: opts.roles,
       remotes: opts.remotes,
       profileIds: opts.profileIds,
+      paneIds: opts.paneIds,
       layout: opts.layout ?? undefined
     }
 
@@ -260,7 +281,10 @@ export class WorkspaceController {
       // that default publishes slot 1 synchronously, so a tree with a GAP there (pane 1
       // closed, 2+3 kept) spawned a phantom pane and killed it mid-spawn — orphaning its
       // shell inside the daemon forever. See GridLayout's constructor.
-      restoredTree ?? undefined
+      restoredTree ?? undefined,
+      // Panes that were MOVED into this workspace keep their own ids — restoring them under
+      // this workspace's formula would spawn fresh shells and orphan their live sessions.
+      meta.paneIds
     )
 
     const view: WorkspaceView = {
@@ -340,12 +364,20 @@ export class WorkspaceController {
       const d = (e as CustomEvent<{ paneId: number; dir: 'h' | 'v' }>).detail
       if (d) this.splitPane(meta.id, d.paneId, d.dir)
     })
+    // Pane ⋯ menu "Move to another workspace…". Only the controller knows the other
+    // workspaces, and only it can carry a LIVE pane between two grids without the
+    // terminal feature noticing (and killing it) — see movePaneToWorkspace.
+    container.addEventListener('mogging:move-pane', (e) => {
+      const d = (e as CustomEvent<{ paneId: number; title?: string }>).detail
+      if (d) this.offerMovePane(d.paneId, d.title ?? `Terminal ${d.paneId}`)
+    })
 
     // Any layout mutation (template, split, close, seam resize, drag-rearrange) keeps
     // the persisted manifest true: pane count + the serialized split tree.
     layout.onLayoutChange = () => {
       meta.paneCount = layout.paneCount
       meta.layout = layout.serialize()
+      meta.paneIds = layout.paneIdMap() // undefined unless a pane moved in — see WorkspaceMeta
       this.refreshAttention()
       this.onChange()
     }
@@ -390,12 +422,11 @@ export class WorkspaceController {
    *  so `mogging list`/mailbox `from`-roles agree with the UI. */
   private publishRoles(meta: WorkspaceMeta): void {
     if (!meta.roles?.some((r) => r)) return
-    const base = meta.ordinal * 100
     meta.roles.forEach((role, i) => {
-      if (role) setPaneRole((base + i + 1) as PaneId, role)
+      if (role) setPaneRole(paneIdForSlot(meta, i + 1) as PaneId, role)
     })
     meta.roles.forEach((role, i) => {
-      if (role) void getBridge().invoke(TerminalChannels.setRole, { id: (base + i + 1) as PaneId, role })
+      if (role) void getBridge().invoke(TerminalChannels.setRole, { id: paneIdForSlot(meta, i + 1) as PaneId, role })
     })
   }
 
@@ -405,13 +436,12 @@ export class WorkspaceController {
    *  `slots` are the ACTUAL local slot ids to seed (a restored tree may have gaps —
    *  1,3,5 after a middle pane closed); omitted = the dense template ids 1..paneCount. */
   private publishPaneCwds(meta: WorkspaceMeta, slots?: number[]): void {
-    const base = meta.ordinal * 100
     for (const i of slots ?? Array.from({ length: meta.paneCount }, (_, k) => k + 1)) {
       // REMOTE slots (4/05) are skipped: a local cwd seed would make the git probe
       // lie about a remote pane. OSC 7 may refine later, honestly.
       if (meta.remotes?.[i - 1]) continue
       const cwd = meta.paneCwds?.[i - 1] || meta.cwd
-      if (cwd) setPaneCwd((base + i) as PaneId, cwd)
+      if (cwd) setPaneCwd(paneIdForSlot(meta, i) as PaneId, cwd)
     }
   }
 
@@ -419,9 +449,10 @@ export class WorkspaceController {
    *  spawn over ssh and chip its host. Sync by design; no lookups here. */
   private publishRemotes(meta: WorkspaceMeta): void {
     if (!meta.remotes?.some((r) => r)) return
-    const base = meta.ordinal * 100
     meta.remotes.forEach((remote, i) => {
-      if (remote) setPaneRemote((base + i + 1) as PaneId, { ...remote, cwd: meta.paneCwds?.[i] ?? undefined })
+      if (remote) {
+        setPaneRemote(paneIdForSlot(meta, i + 1) as PaneId, { ...remote, cwd: meta.paneCwds?.[i] ?? undefined })
+      }
     })
   }
 
@@ -630,6 +661,11 @@ export class WorkspaceController {
   switch(id: string, opts: SwitchOpts = {}): void {
     const view = this.views.get(id)
     if (!view) return
+    // A workspace whose LAST pane moved to another workspace holds nothing: it exists only
+    // until its undo window lapses. Reviving it here would strand the user in an empty grid
+    // — and it is reachable (Ctrl+1..9, `mogging` verbs, the palette's stale entry). The
+    // toast's Undo brings the pane home FIRST and switches after; that is the only way in.
+    if (view.layout.paneCount === 0) return
     // Switching INTO a workspace that is mid-close IS an undo: its panes never stopped
     // running — only its rail tab left. Several paths can still name one: the control API
     // (`mogging focus`/`expand` resolve panes by LIVE id, and a soft-closed workspace's
@@ -645,7 +681,7 @@ export class WorkspaceController {
       if (on) v.tab.setAttribute('aria-current', 'true')
       else v.tab.removeAttribute('aria-current')
     }
-    const focusId = view.layout.focusedPaneId() ?? ((view.meta.ordinal * 100 + 1) as PaneId)
+    const focusId = view.layout.focusedPaneId() ?? view.layout.paneIds()[0]!
     // The pane's OWN cwd (worktree isolation, 3/03), workspace root as the fallback —
     // same contract as the grid's focus callback in `create`.
     setFocusedPane({ paneId: focusId, cwd: getPaneCwd(focusId) || getPaneRemote(focusId)?.cwd || view.meta.cwd })
@@ -920,10 +956,15 @@ export class WorkspaceController {
   }
 
   /** Detach a workspace from the rail + view but keep its panes alive; dispose
-   *  for real only after the undo window lapses. */
-  private softClose(id: string): void {
+   *  for real only after the undo window lapses.
+   *
+   *  `quiet` suppresses the toast — a workspace emptied by its last pane MOVING out is one
+   *  action, not two, and the move's own toast undoes the whole of it. `graceMs` lets that
+   *  caller hold the window open for exactly as long as its toast does. */
+  private softClose(id: string, opts: { quiet?: boolean; graceMs?: number } = {}): void {
     const view = this.views.get(id)
     if (!view) return
+    const graceMs = opts.graceMs ?? 5000
     const index = this.order.indexOf(id)
     this.order = this.order.filter((o) => o !== id)
     view.tab.hidden = true
@@ -937,15 +978,16 @@ export class WorkspaceController {
     const timer = setTimeout(() => {
       this.pendingClose.delete(id)
       this.close(id)
-    }, 5000)
+    }, graceMs)
     this.pendingClose.set(id, { timer, index })
     this.refreshAttention()
     this.onChange()
+    if (opts.quiet) return
     const n = view.meta.paneCount
     showToast({
       title: `Closed “${view.meta.name}”`,
       body: `${n} pane${n === 1 ? '' : 's'} — undo to keep it`,
-      timeout: 5000,
+      timeout: graceMs,
       action: { label: 'Undo', onClick: () => this.undoClose(id) }
     })
   }
@@ -1011,14 +1053,12 @@ export class WorkspaceController {
     // or manifest assignment. Same contract as splitPane — a re-opened slot is a fresh
     // plain terminal at the workspace root.
     const live = new Set(a.layout.paneIds())
-    const base = a.meta.ordinal * 100
-    for (let i = 1; i <= n; i++) {
-      const paneId = (base + i) as PaneId
+    for (const { local, paneId } of a.layout.peekTemplate(n)) {
       if (live.has(paneId)) continue
       clearPaneRemote(paneId)
       setPaneRole(paneId, '')
       setPaneLabel(paneId, '')
-      this.scrubManifestSlot(a.meta, i - 1, '')
+      this.scrubManifestSlot(a.meta, local - 1, '')
     }
     // Count first, then publish, THEN apply: `apply` constructs any new TerminalPanes, and
     // a pane reads its cwd at spawn time. Published afterwards, a pane added by growing the
@@ -1035,7 +1075,7 @@ export class WorkspaceController {
   async requestApplyTemplate(n: number): Promise<boolean> {
     const view = this.active()
     if (!view) return false
-    const keep = new Set(Array.from({ length: n }, (_, index) => view.meta.ordinal * 100 + index + 1))
+    const keep = new Set<number>(view.layout.peekTemplate(n).map((s) => s.paneId))
     const live = inspectLive(view.layout.paneIds().filter((paneId) => !keep.has(paneId)))
     if (live.panes.length > 0) {
       const ok = await confirmDialog({
@@ -1087,7 +1127,7 @@ export class WorkspaceController {
     const targetCwd = getPaneCwdProjection(target as PaneId)
     const cwd = newCwd ?? (targetCwd?.locality === 'local' ? targetCwd.cwd : view.meta.cwd)
     if (cwd) setPaneCwd(newId, cwd)
-    this.scrubManifestSlot(view.meta, newId - view.meta.ordinal * 100 - 1, cwd)
+    this.scrubManifestSlot(view.meta, view.layout.peekNextSlot() - 1, cwd)
     if (view.layout.splitPane(target, dir) == null) return
     getTelemetry().captureEvent({
       name: 'pane.split',
@@ -1112,6 +1152,202 @@ export class WorkspaceController {
     if (meta.paneCwds && i < meta.paneCwds.length) meta.paneCwds[i] = cwd || null
   }
 
+  // ── Move a pane to another workspace ─────────────────────────────────────────────────
+  //
+  // The pane KEEPS ITS ID, and everything else follows from that. A pane id is its daemon
+  // session key: it is what the PTY is filed under, what the agent's own MOGGING_PANE_ID env
+  // says (so a `mogging notify` from inside it still raises THIS pane), and what every port
+  // in the renderer — cwd, agent session, attention, claims, context gauge — is keyed by.
+  // Re-keying it would mean killing that shell and spawning another, which is not a move: it
+  // is a re-creation with the running agent destroyed. So the id stays; the workspace records
+  // which of its slots now holds it (WorkspaceMeta.paneIds); and the pane's own DOM element —
+  // xterm, WebGL canvas, scrollback and all — is RE-PARENTED from one grid into the other.
+  // The pane is never rebuilt, so there is nothing for it to notice.
+  //
+  // The one hazard is the slots port: the terminal feature disposes — and kills the PTY of —
+  // every pane id missing from the AGGREGATE slot set. The source's republish and the
+  // destination's therefore have to land as a single edit, which is what `batchSlots` is for.
+  // Between them the pane belongs to neither workspace, and that instant must not be observable.
+
+  /** Every workspace this pane could move to: all of them but its own (moving it where it
+   *  already is isn't a choice). Full ones are included and marked — see MoveTarget. */
+  moveTargets(paneId: number): MoveTarget[] {
+    const home = this.viewForPane(paneId)
+    if (!home) return []
+    return this.order
+      .filter((id) => id !== home.meta.id && !this.pendingClose.has(id))
+      .map((id) => this.views.get(id))
+      .filter((v): v is WorkspaceView => !!v)
+      .map((v) => ({
+        id: v.meta.id,
+        name: v.meta.name,
+        color: v.meta.color,
+        cwd: v.meta.cwd,
+        paneCount: v.layout.paneCount,
+        full: v.layout.paneCount >= MAX_PANES
+      }))
+  }
+
+  /** Pane ⋯ menu → the destination picker → the move. */
+  offerMovePane(paneId: number, paneTitle: string): void {
+    const targets = this.moveTargets(paneId)
+    if (!targets.length) {
+      showToast({
+        tone: 'attention',
+        title: 'Nowhere to move it',
+        body: 'This is your only workspace — make another one first (Ctrl+T).'
+      })
+      return
+    }
+    openMovePaneModal({
+      paneTitle,
+      targets,
+      onConfirm: (dstId) => void this.movePaneToWorkspace(paneId, dstId)
+    })
+  }
+
+  /** Carry a LIVE pane into another workspace: same terminal, same process, same agent. */
+  movePaneToWorkspace(paneId: number, dstId: string): boolean {
+    const src = this.viewForPane(paneId)
+    const dst = this.views.get(dstId)
+    if (!src || !dst || src === dst || this.pendingClose.has(dstId)) return false
+    if (dst.layout.paneCount >= MAX_PANES) {
+      showToast({
+        tone: 'attention',
+        title: 'That workspace is full',
+        body: `“${dst.meta.name}” already holds ${MAX_PANES} terminals.`
+      })
+      return false
+    }
+    const srcSlot = src.layout.slotOf(paneId)
+    if (srcSlot == null) return false
+
+    // Everything an undo needs, read BEFORE anything moves: the source's exact arrangement
+    // (the seams the user dragged, not merely an equivalent grid) and the pane's manifest row.
+    const srcTree = src.layout.snapshotTree()
+    const manifest = this.takeManifestSlot(src.meta, srcSlot)
+    const srcName = src.meta.name
+    // Its LAST pane: a split tree has no empty shape, so the workspace leaves with it. That is
+    // the policy CLOSING this pane would already have followed (requestClosePane hands the
+    // last one to requestClose), and the undo below puts the workspace back with the pane.
+    const emptiesSource = src.layout.paneCount <= 1
+
+    const moved = batchSlots(() => {
+      const el = src.layout.detachPane(paneId)
+      if (!el) return null
+      const dstSlot = dst.layout.adoptPane(el, paneId, { near: dst.layout.focusedPaneId() })
+      if (dstSlot == null) {
+        // Refused (it could only have filled up in a race). Put the pane straight back, still
+        // inside the batch — the aggregate slot set never lost it, so nothing was disposed.
+        src.layout.readoptPane(el, paneId, srcSlot, srcTree)
+        return null
+      }
+      return { dstSlot }
+    })
+    if (!moved) {
+      this.putManifestSlot(src.meta, srcSlot, manifest)
+      return false
+    }
+    this.putManifestSlot(dst.meta, moved.dstSlot, manifest)
+    if (emptiesSource) this.softClose(src.meta.id, { quiet: true, graceMs: TOAST_DEFAULT_MS })
+
+    // Land on the moved pane, in its new home — you asked for it to be there, so go there.
+    this.switch(dstId)
+    dst.layout.focusPane(paneId)
+    getTelemetry().captureEvent({
+      name: 'pane.moved.workspace',
+      props: { emptied_source: emptiesSource, panes: dst.layout.paneCount }
+    })
+    this.refreshAttention()
+    this.onChange()
+
+    showToast({
+      title: `Moved to “${dst.meta.name}”`,
+      body: emptiesSource
+        ? `“${srcName}” had no other terminals and closed with it.`
+        : `It never stopped running — the agent came with it.`,
+      // The toast IS the undo window: the source workspace's dispose grace above is set to
+      // the same duration, so the button cannot outlive what it promises to reverse.
+      action: {
+        label: 'Undo',
+        onClick: () => this.undoMovePane({ paneId, srcId: src.meta.id, srcSlot, srcTree, dstId, manifest })
+      }
+    })
+    return true
+  }
+
+  /** Put the pane back where it came from — the exact inverse, arrangement included. */
+  private undoMovePane(m: {
+    paneId: number
+    srcId: string
+    srcSlot: number
+    srcTree: LayoutTreeNode
+    dstId: string
+    manifest: PaneManifest
+  }): void {
+    const src = this.views.get(m.srcId)
+    const dst = this.views.get(m.dstId)
+    // The source can be GONE: when the move emptied it, its dispose grace and this toast run
+    // out together, and a click can land on the wrong side of that. Say so — never half-undo.
+    if (!src || !dst) {
+      showToast({
+        tone: 'attention',
+        title: 'Too late to undo',
+        body: 'That workspace has already closed.'
+      })
+      return
+    }
+    const dstSlot = dst.layout.slotOf(m.paneId)
+    this.revivePending(m.srcId) // if the move emptied it, the workspace comes back first
+    const ok = batchSlots(() => {
+      const el = dst.layout.detachPane(m.paneId)
+      if (!el) return false
+      src.layout.readoptPane(el, m.paneId, m.srcSlot, m.srcTree)
+      return true
+    })
+    if (!ok) return
+    if (dstSlot != null) this.takeManifestSlot(dst.meta, dstSlot)
+    this.putManifestSlot(src.meta, m.srcSlot, m.manifest)
+    this.switch(m.srcId)
+    src.layout.focusPane(m.paneId)
+    this.refreshAttention()
+    this.onChange()
+  }
+
+  /** Lift a pane's manifest row out of a workspace, blanking the slot behind it. */
+  private takeManifestSlot(meta: WorkspaceMeta, slot: number): PaneManifest {
+    const i = slot - 1
+    const taken: PaneManifest = {
+      assignment: meta.assignments?.[i],
+      paneCwd: meta.paneCwds?.[i],
+      role: meta.roles?.[i],
+      remote: meta.remotes?.[i],
+      profileId: meta.profileIds?.[i]
+    }
+    this.scrubManifestSlot(meta, i, '')
+    return taken
+  }
+
+  /** ...and write it into the destination's slot, growing each array to reach it. An array
+   *  that does not exist yet is only created when there is something to put in it: a plain
+   *  shell moving into a plain workspace must not invent a manifest for either of them. */
+  private putManifestSlot(meta: WorkspaceMeta, slot: number, m: PaneManifest): void {
+    const i = slot - 1
+    if (i < 0) return
+    const put = <T>(arr: T[] | undefined, value: T, blank: T): T[] | undefined => {
+      if (!arr && value === blank) return arr
+      const next = arr ?? []
+      while (next.length <= i) next.push(blank)
+      next[i] = value
+      return next
+    }
+    meta.assignments = put(meta.assignments, m.assignment ?? 'shell', 'shell')
+    meta.paneCwds = put(meta.paneCwds, m.paneCwd ?? null, null)
+    meta.roles = put(meta.roles, m.role ?? null, null)
+    meta.remotes = put(meta.remotes, m.remote ?? null, null)
+    meta.profileIds = put(meta.profileIds, m.profileId ?? null, null)
+  }
+
   activePaneCount(): number {
     return this.active()?.layout.paneCount ?? 1
   }
@@ -1131,8 +1367,8 @@ export class WorkspaceController {
     // dropped the failover note for exactly those slots.
     const view = this.viewForPane(paneId)
     if (!view) return false
-    const slot = paneId - view.meta.ordinal * 100
-    if (slot < 1) return false
+    const slot = view.layout.slotOf(paneId)
+    if (slot == null) return false
     const ids = view.meta.profileIds ?? []
     while (ids.length < slot) ids.push(null)
     ids[slot - 1] = profileId
@@ -1154,8 +1390,8 @@ export class WorkspaceController {
     if (!provider || provider === 'shell') return false
     const view = this.viewForPane(paneId)
     if (!view) return false
-    const slot = paneId - view.meta.ordinal * 100
-    if (slot < 1) return false
+    const slot = view.layout.slotOf(paneId)
+    if (slot == null) return false
     const assignments = view.meta.assignments ?? []
     let changed = false
     while (assignments.length < slot) assignments.push('shell')
@@ -1204,8 +1440,8 @@ export class WorkspaceController {
     }
     if (!persistSlot) return false
 
-    const slot = paneId - view.meta.ordinal * 100
-    if (slot < 1) return false
+    const slot = view.layout.slotOf(paneId)
+    if (slot == null) return false
     const remote = view.meta.remotes?.[slot - 1]
     if (remote) {
       if (remote.cwd === cwd) return false
@@ -1308,7 +1544,6 @@ export class WorkspaceController {
     const view = this.views.get(id)
     const assignments = view?.meta.assignments
     if (!view || !assignments) return
-    const base = view.meta.ordinal * 100
     const meta = view.meta
     setTimeout(() => {
       // Only into panes that EXIST: slot ids are sparse after closes (live 1,3,5), and
@@ -1316,11 +1551,12 @@ export class WorkspaceController {
       // nonexistent pane id is at best lost, at worst delivered to a future pane.
       const live = new Set<number>(view.layout.paneIds())
       assignments.forEach((provider, i) => {
-        if (provider && provider !== 'shell' && live.has(base + i + 1)) {
+        const paneId = paneIdForSlot(meta, i + 1)
+        if (provider && provider !== 'shell' && live.has(paneId)) {
           const remote = meta.remotes?.[i]
           const cwd = remote ? (remote.cwd ?? '') : (meta.paneCwds?.[i] || meta.cwd)
           requestAgentLaunch({
-            paneId: (base + i + 1) as PaneId,
+            paneId: paneId as PaneId,
             provider,
             cwd,
             resume,

@@ -68,6 +68,12 @@ export interface WorkspaceStateMeta {
    *  (those stay main-side; ADR 0002). Restored lineups relaunch under the
    *  chosen profile; failover rewrites the slot it switched. */
   profileIds?: (string | null)[]
+  /** Per-slot pane id, for the slots that do NOT follow `ordinal * 100 + slot`: a pane
+   *  MOVED here from another workspace keeps its own id, because that id is its daemon
+   *  session key. Restoring it under this workspace's formula would spawn a fresh shell
+   *  and orphan the live one. Sparse, and absent entirely on any workspace that has never
+   *  received a pane — their persisted shape is unchanged. Ids only (ADR 0002). */
+  paneIds?: (number | null)[]
 }
 
 /** A recently-worked-on project (directory) for Home's one-click reopen tiles —

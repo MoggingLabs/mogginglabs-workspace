@@ -1,5 +1,6 @@
 import { LedgerChannels, type Claim, type PaneId } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
+import { workspaceIdForPane } from '../../core/workspace/workspace-info-port'
 
 /**
  * Renderer mirror of the daemon's ownership ledger (Phase-4/02). Fed ENTIRELY by
@@ -24,10 +25,14 @@ export function claimsFor(paneId: PaneId): Claim[] {
   return claims.filter((c) => c.paneId === String(paneId))
 }
 
-/** Everything claimed in this pane's workspace (the referee's full map). */
+/** Everything claimed in this pane's workspace (the referee's full map). Grouped by the
+ *  workspace that HOLDS each pane, not by its id: a pane that moved workspaces keeps its
+ *  id, so `id / 100` would file its claims under the workspace it left — and the referee
+ *  would show two agents, working side by side, two different maps. */
 export function workspaceClaims(paneId: PaneId): Claim[] {
-  const group = Math.floor(Number(paneId) / 100)
-  return claims.filter((c) => Math.floor(Number(c.paneId) / 100) === group)
+  const wsId = workspaceIdForPane(Number(paneId))
+  if (!wsId) return []
+  return claims.filter((c) => workspaceIdForPane(Number(c.paneId)) === wsId)
 }
 
 export function onClaimsChange(cb: () => void): () => void {

@@ -39,7 +39,7 @@ export {
 } from './context-menu'
 export { confirmDialog, type ConfirmOpts } from './confirm'
 export { Spinner, loadingRow } from './spinner'
-export { showToast, type ToastOpts, type ToastTone } from './toast'
+export { showToast, TOAST_DEFAULT_MS, type ToastOpts, type ToastTone } from './toast'
 export { EmptyState, type EmptyStateOpts } from './empty-state'
 export { createFolderBrowser, type FolderBrowserHandle, type FolderBrowserOpts } from './folder-browser'
 export {

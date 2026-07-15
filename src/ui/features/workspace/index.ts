@@ -130,6 +130,7 @@ export const workspaceFeature: UiFeature = {
         roles: m.roles,
         remotes: m.remotes,
         profileIds: m.profileIds, // ids only — env values never leave main (ADR 0002)
+        paneIds: m.paneIds, // panes that MOVED here keep their id = their daemon session
         layout: m.layout // split-tree geometry (shape + sizes) — never content
       })),
       activeId: controller.activeMeta()?.id ?? null,
@@ -381,7 +382,10 @@ export const workspaceFeature: UiFeature = {
           cwd: m.cwd,
           ordinal: m.ordinal,
           paneCount: m.paneCount,
-          assignments: m.assignments ? [...m.assignments] : undefined
+          assignments: m.assignments ? [...m.assignments] : undefined,
+          // Which slots hold a pane that moved in — without it, everything that answers
+          // "whose pane is this?" would still answer with the workspace it came FROM.
+          paneIds: m.paneIds ? [...m.paneIds] : undefined
         })),
         activeId: controller.activeMeta()?.id ?? null
       })
@@ -400,7 +404,11 @@ export const workspaceFeature: UiFeature = {
         {
           name: meta.name,
           cwd: meta.cwd,
-          paneCount: meta.paneCount,
+          // A recent is a re-OPEN, and a workspace always opens with at least one terminal.
+          // The floor matters for exactly one workspace: the one whose last pane was MOVED
+          // out (which is what closed it) — its count is genuinely 0, and a tile offering to
+          // reopen a project with no terminals in it would be offering nothing.
+          paneCount: Math.max(1, meta.paneCount),
           assignments: meta.assignments,
           lastUsedAt: Date.now()
         },
@@ -716,6 +724,7 @@ export const workspaceFeature: UiFeature = {
             roles: w.roles, // the swarm manifest survives restore (4/01)
             remotes: w.remotes, // remote panes stay remote across restore (4/05)
             profileIds: w.profileIds, // lineups relaunch under the CHOSEN profile (6/04)
+            paneIds: w.paneIds, // a pane moved here re-attaches to ITS session, not a new one
             layout: w.layout // the exact split arrangement + sizes come back
           })
         }
@@ -768,6 +777,10 @@ function exposeForDev(controller: WorkspaceController): void {
     active: () => controller.activeMeta(),
     count: () => controller.list().length,
     worktreeRemovalAudit: () => controller.worktreeRemovalAudit(),
+    // Move a pane to another workspace — the same call the pane ⋯ menu's picker makes,
+    // so the gate drives the shipped path and not a rehearsal of it.
+    moveTargets: (paneId: number) => controller.moveTargets(paneId),
+    movePane: (paneId: number, dstWsId: string) => controller.movePaneToWorkspace(paneId, dstWsId),
     // Naming a reviewer, exactly as the manifest does it (controller.publishRoles): the chip
     // port paints it, and the terminal:setRole IPC is what actually CONFERS it — main records
     // that as the app's own answer to "who may sign off" (daemon-relay: appRoles) and forwards

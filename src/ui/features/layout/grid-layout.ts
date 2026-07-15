@@ -1,13 +1,15 @@
 import type { PaneId } from '@contracts'
-import { publishSlots, clearSlots, type LayoutSlot } from '../../core/layout/slots'
+import { publishSlots, clearSlots, paneIdInUse, type LayoutSlot } from '../../core/layout/slots'
 import { acknowledgeFinished } from '../../core/attention/attention-port'
 import { getTelemetry } from '../../core/telemetry'
 import { TEMPLATES, type GridSpec } from './templates'
 import {
+  cloneTree,
   computeLayout,
   isSplit,
   leafCount,
   leafIds,
+  MAX_LEAVES,
   MIN_PANE_WIDTH_PX,
   minimumLayoutWidth,
   moveLeaf,
@@ -95,6 +97,27 @@ export class GridLayout {
   private root: LayoutTreeNode = { id: 1 }
   private expandedId: number | null = null
   private expandMode: ExpandMode | null = null
+  /**
+   * Local slot -> the pane id it actually hosts, for the slots whose id is NOT the
+   * formula's (`baseId + local`). SPARSE on purpose: a workspace that has never received
+   * a pane from elsewhere has an empty map and persists nothing, so its stored shape is
+   * byte-identical to what it was before this existed.
+   *
+   * The formula used to be the whole truth, and it was load-bearing: a pane's id told you
+   * its workspace. It cannot survive a pane MOVING between workspaces, because a pane that
+   * changes its id changes its daemon session key — and the app would have to kill the PTY
+   * and spawn a new one, which is not a move, it is a re-creation with the agent destroyed.
+   * The pane keeps its id and this map records where it now lives.
+   */
+  private readonly slotIds = new Map<number, number>()
+  /**
+   * Leaves whose pane has been detached (moved out) but whose leaf cannot leave the tree:
+   * the pane was its workspace's LAST, and a split tree has no empty shape. The leaf stays,
+   * the pane is gone, and the workspace closes behind it. `paneIds()` / `rebuild()` skip
+   * these, so nothing scans, paints or (crucially) DISPOSES a pane that now lives elsewhere.
+   * Undo re-adopts into exactly this leaf, which is why the tree keeps it.
+   */
+  private readonly detached = new Set<number>()
   private readonly slotEls = new Map<number, HTMLElement>()
   private readonly gutterEls = new Map<string, HTMLElement>()
   private readonly pulseTimers = new Map<number, number>()
@@ -140,7 +163,11 @@ export class GridLayout {
      *  the kill found no session yet, the spawn then completed, and the daemon — which
      *  outlives the app by design (ADR 0006) — was left holding an ORPHAN shell no
      *  renderer object owns. Omitted = the 1-pane default (a fresh workspace). */
-    initial?: LayoutTreeNode
+    initial?: LayoutTreeNode,
+    /** Per-slot pane ids for the slots that do NOT follow `baseId + local` — a restored
+     *  workspace holding a pane that was moved into it keeps that pane's real id, which
+     *  is what re-attaches it to its surviving daemon session. Index = local slot - 1. */
+    initialIds?: (number | null)[] | null
   ) {
     this.scrollHost = host
     this.scrollHost.classList.add('layout-scroll-host')
@@ -190,17 +217,70 @@ export class GridLayout {
     // not resize when the rail, a dock or the window changes. The viewport still does,
     // and full/row expansion is sized to that viewport, so observe both boxes.
     this.resizeObs.observe(this.scrollHost)
+    // Seeded BEFORE the opening apply, which publishes its slots synchronously: a slot
+    // has to be born carrying the pane id it really hosts, or the terminal feature spawns
+    // a brand-new shell at the formula's id and the moved-in pane's session is orphaned.
+    initialIds?.forEach((id, i) => {
+      if (typeof id === 'number' && Number.isInteger(id) && id >= 1) this.setSlotId(i + 1, id)
+    })
     if (initial) this.applyTree(initial)
     else this.apply(1)
   }
 
   get paneCount(): number {
-    return leafCount(this.root)
+    return leafCount(this.root) - this.detached.size
   }
 
   /** Live pane ids (closed slots excluded) — the source of truth for attention scans. */
   paneIds(): PaneId[] {
-    return leafIds(this.root).map((id) => (this.baseId + id) as PaneId)
+    return this.liveLocals().map((id) => this.globalOf(id))
+  }
+
+  /** Leaves that still HOST a pane (a detached one's leaf outlives it — see `detached`). */
+  private liveLocals(): number[] {
+    return this.detached.size ? leafIds(this.root).filter((id) => !this.detached.has(id)) : leafIds(this.root)
+  }
+
+  /** The pane id a local slot hosts: its override, else the formula. */
+  private globalOf(local: number): PaneId {
+    return (this.slotIds.get(local) ?? this.baseId + local) as PaneId
+  }
+
+  /** The local slot hosting a pane id, or null. The inverse of `globalOf` — and NOT
+   *  `paneId - baseId`: a slot with an override does not answer to its formula id, which
+   *  by then may be a live pane in a different workspace entirely. */
+  private localOf(paneId: number): number | null {
+    for (const [local, id] of this.slotIds) if (id === paneId) return local
+    const local = paneId - this.baseId
+    return local >= 1 && !this.slotIds.has(local) ? local : null
+  }
+
+  /** Record (or clear) a slot's pane id. Kept sparse: an id equal to the formula's is not
+   *  an override, and storing it would persist noise into every untouched workspace. */
+  private setSlotId(local: number, paneId: number): void {
+    if (paneId === this.baseId + local) this.slotIds.delete(local)
+    else this.slotIds.set(local, paneId)
+  }
+
+  /** The per-slot pane ids worth persisting (index = local - 1), or undefined when every
+   *  slot follows the formula — which is every workspace that has never traded a pane. */
+  paneIdMap(): (number | null)[] | undefined {
+    if (!this.slotIds.size) return undefined
+    const out: (number | null)[] = Array.from({ length: Math.max(...this.slotIds.keys()) }, () => null)
+    for (const [local, id] of this.slotIds) out[local - 1] = id
+    return out
+  }
+
+  /** A copy of the current arrangement — what an undo has to put back, exactly. */
+  snapshotTree(): LayoutTreeNode {
+    return cloneTree(this.root)
+  }
+
+  /** The local slot a pane sits in — the index its workspace's slot-indexed manifest
+   *  arrays (assignments/cwds/roles/remotes/profiles) are keyed by. */
+  slotOf(paneId: number): number | null {
+    const local = this.localOf(paneId)
+    return local != null && this.liveLocals().includes(local) ? local : null
   }
 
   /** Column count for a pane count: the curated template shape, else near-square. */
@@ -214,12 +294,34 @@ export class GridLayout {
   /** Apply an N-pane template grid (any 1..16; template counts keep their curated
    *  shapes). Resets the tree — custom arrangement/sizes yield to the template. */
   apply(n: number): void {
-    const count = Math.max(1, Math.min(MAX_PANES, Math.floor(n)))
-    const ids = Array.from({ length: count }, (_, i) => i + 1)
+    const locals = this.templateLocals(n)
     this.clearExpand()
-    this.root = treeForGrid(ids, this.shapeFor(count).cols)
+    this.root = treeForGrid(locals, this.shapeFor(locals.length).cols)
     this.rebuild()
     this.onLayoutChange?.()
+  }
+
+  /**
+   * The slots an `apply(n)` would land on. Not simply `1..n` any more: a slot this
+   * workspace no longer holds may still have its FORMULA id in use — that is a pane that
+   * moved to another workspace and took its id with it. Growing back into that slot would
+   * hand its id out twice. Live slots are kept (they already own their id, override or
+   * not); the rest are filled from the lowest slot whose id is free everywhere.
+   */
+  private templateLocals(n: number): number[] {
+    const count = Math.max(1, Math.min(MAX_PANES, Math.floor(n)))
+    const live = new Set(this.liveLocals())
+    const locals: number[] = []
+    for (let local = 1; locals.length < count && local <= MAX_LEAVES; local++) {
+      if (live.has(local) || !paneIdInUse((this.baseId + local) as PaneId)) locals.push(local)
+    }
+    return locals
+  }
+
+  /** What `apply(n)` will produce, per slot — the controller seeds/scrubs the panes it is
+   *  about to CREATE before their slots exist (a pane reads its cwd + remote at spawn). */
+  peekTemplate(n: number): Array<{ local: number; paneId: PaneId }> {
+    return this.templateLocals(n).map((local) => ({ local, paneId: this.globalOf(local) }))
   }
 
   /** Apply a restored split tree (validated by `parseTree` — leaf ids are 1..n). */
@@ -238,21 +340,31 @@ export class GridLayout {
   /** The global id the NEXT split will create — the controller seeds the new pane's
    *  cwd on the pane-cwd port BEFORE the slot exists (panes read seeds at spawn). */
   peekNextPaneId(): PaneId {
-    return (this.baseId + this.nextFreeLocalId()) as PaneId
+    return this.globalOf(this.nextFreeLocalId())
   }
 
+  /** ...and the local slot it will occupy — the index of the manifest entries the
+   *  controller has to scrub before that slot is reused by a fresh terminal. */
+  peekNextSlot(): number {
+    return this.nextFreeLocalId()
+  }
+
+  /** The lowest slot that is free HERE and whose id is free EVERYWHERE. The second half is
+   *  new: a pane that moved out took its id with it, so this workspace's formula id for
+   *  that slot is now another workspace's live pane. Handing it out again would aim two
+   *  panes at one daemon session — the empty-terminal bug, minted deliberately. */
   private nextFreeLocalId(): number {
     const used = new Set(leafIds(this.root))
     let i = 1
-    while (used.has(i)) i++
+    while (used.has(i) || paneIdInUse((this.baseId + i) as PaneId)) i++
     return i
   }
 
   /** Split a pane: a new terminal joins `paneId`'s line along `dir` (auto: the pane's
    *  longer axis) and the LINE RE-EQUALIZES. Returns the new pane's global id. */
   splitPane(paneId: number, dir?: SplitDir): PaneId | null {
-    const localTarget = paneId - this.baseId
-    if (!leafIds(this.root).includes(localTarget)) return null
+    const localTarget = this.localOf(paneId)
+    if (localTarget == null || !this.liveLocals().includes(localTarget)) return null
     if (this.paneCount >= MAX_PANES) return null
     const newLocal = this.nextFreeLocalId()
     const rect = this.leafRects.get(localTarget)
@@ -263,14 +375,14 @@ export class GridLayout {
     const el = this.slotEls.get(newLocal)
     if (el) this.setFocused(el)
     this.onLayoutChange?.()
-    return (this.baseId + newLocal) as PaneId
+    return this.globalOf(newLocal)
   }
 
   /** Close one pane: its slot leaves the grid (the slots port disposes its terminal +
    *  PTY) and its line absorbs the space. The caller guards the last-pane case. */
   closePane(paneId: number): void {
-    const localId = paneId - this.baseId
-    if (!leafIds(this.root).includes(localId) || this.paneCount <= 1) return
+    const localId = this.localOf(paneId)
+    if (localId == null || !this.liveLocals().includes(localId) || this.paneCount <= 1) return
     this.clearExpand()
     const next = removeLeaf(this.root, localId)
     if (!next) return
@@ -279,14 +391,87 @@ export class GridLayout {
     this.onLayoutChange?.()
   }
 
+  /**
+   * Hand this pane's slot ELEMENT to another workspace's grid — the source half of a move.
+   *
+   * The element is what makes this a move rather than a re-creation: the pane's xterm, its
+   * WebGL canvas and its subscriptions all hang off it, and it is re-parented (not rebuilt)
+   * into the destination grid. The pane KEEPS its id, so its daemon session, its agent, its
+   * env-bound `MOGGING_PANE_ID`, its cwd, claims and alerts are all still true afterwards.
+   *
+   * The caller MUST run this and the destination's `adoptPane` inside one `batchSlots`: on
+   * its own this republishes a slot set without the pane in it, and the terminal feature
+   * reads that as "gone" and kills the PTY. Returns the element, or null if it isn't ours.
+   */
+  detachPane(paneId: number): HTMLElement | null {
+    const local = this.localOf(paneId)
+    if (local == null) return null
+    const el = this.slotEls.get(local)
+    if (!el || !this.liveLocals().includes(local)) return null
+    this.clearExpand()
+    this.slotEls.delete(local) // rebuild() must not re-home or remove an element we gave away
+    const next = removeLeaf(this.root, local)
+    if (next) {
+      this.root = next
+      this.slotIds.delete(local) // the id leaves with the pane
+    } else {
+      this.detached.add(local) // the workspace's last pane — see `detached`
+    }
+    this.rebuild()
+    this.onLayoutChange?.()
+    return el
+  }
+
+  /**
+   * Take a live pane's slot element into this grid — the destination half of a move. The
+   * pane arrives with its OWN id (which is why `slotIds` exists), lands beside `near` (the
+   * focused pane by default) and takes the focus. Returns its local slot, or null when the
+   * grid is full. Must run inside the same `batchSlots` as the matching `detachPane`.
+   */
+  adoptPane(el: HTMLElement, paneId: number, opts: { near?: number | null; dir?: SplitDir } = {}): number | null {
+    if (this.paneCount >= MAX_PANES) return null
+    const target = (opts.near != null ? this.localOf(opts.near) : null) ?? this.focusedLocal() ?? this.liveLocals()[0]
+    if (target == null) return null
+    const local = this.nextFreeLocalId()
+    // The mapping is recorded BEFORE the leaf exists: rebuild() publishes slots
+    // synchronously, and a slot published under the formula's id would tell the terminal
+    // feature to mount a second, brand-new pane over the one that just arrived.
+    this.setSlotId(local, paneId)
+    this.slotEls.set(local, el)
+    const rect = this.leafRects.get(target)
+    const chosen: SplitDir = opts.dir ?? (rect && rect.h > rect.w ? 'v' : 'h')
+    this.clearExpand()
+    this.root = splitLine(this.root, target, local, chosen)
+    this.rebuild()
+    const slot = this.slotEls.get(local)
+    if (slot) this.setFocused(slot)
+    this.onLayoutChange?.()
+    return local
+  }
+
+  /** Put a detached pane back exactly where it was — the undo of `detachPane`. The tree is
+   *  restored wholesale (from `snapshotTree`) rather than re-split, so the arrangement and
+   *  every seam the user had dragged come back as they were, not merely equivalent. */
+  readoptPane(el: HTMLElement, paneId: number, local: number, tree: LayoutTreeNode): void {
+    this.detached.delete(local)
+    this.setSlotId(local, paneId)
+    this.slotEls.set(local, el)
+    this.clearExpand()
+    this.root = normalize(cloneTree(tree))
+    this.rebuild()
+    const slot = this.slotEls.get(local)
+    if (slot) this.setFocused(slot)
+    this.onLayoutChange?.()
+  }
+
   private ensureSlot(id: number): HTMLElement {
     let el = this.slotEls.get(id)
     if (!el) {
       el = document.createElement('div')
       el.className = 'layout-slot'
-      el.dataset.paneId = String(this.baseId + id) // global pane id — smoke-asserted selector
       this.slotEls.set(id, el)
     }
+    el.dataset.paneId = String(this.globalOf(id)) // global pane id — smoke-asserted selector
     return el
   }
 
@@ -294,7 +479,7 @@ export class GridLayout {
    *  publish the slot set. Elements are REUSED by key (pane id / seam path), so panes
    *  stay mounted and a hovered gutter keeps its hover through a reflow. */
   private rebuild(): void {
-    const ids = leafIds(this.root)
+    const ids = this.liveLocals()
     for (const [id, el] of this.slotEls) {
       if (!ids.includes(id)) {
         el.remove()
@@ -306,12 +491,18 @@ export class GridLayout {
         }
       }
     }
+    // A slot that is gone takes its id override with it — otherwise the next pane to reuse
+    // that local slot would silently inherit the departed pane's id (and its daemon
+    // session). Detached leaves keep theirs: undo puts that exact pane back.
+    for (const local of [...this.slotIds.keys()]) {
+      if (!ids.includes(local) && !this.detached.has(local)) this.slotIds.delete(local)
+    }
     const slots: LayoutSlot[] = []
     for (const id of ids) {
       const el = this.ensureSlot(id)
       el.classList.remove('expanded', 'covered')
       if (el.parentElement !== this.grid) this.grid.append(el)
-      slots.push({ id: (this.baseId + id) as PaneId, el })
+      slots.push({ id: this.globalOf(id), el })
     }
 
     this.reflow() // computes leaf/gutter/split rects + positions the slots
@@ -404,9 +595,9 @@ export class GridLayout {
   toggleExpand(paneId?: number, mode: ExpandMode = 'full'): void {
     const target = paneId ?? this.focusedPaneId() ?? undefined
     if (target == null) return
-    const localId = target - this.baseId
-    const slot = this.slotEls.get(localId)
-    if (!slot) return
+    const localId = this.localOf(target)
+    const slot = localId != null ? this.slotEls.get(localId) : undefined
+    if (localId == null || !slot) return
 
     const wasMode = this.expandedId === localId ? this.expandMode : null
     this.clearExpand()
@@ -453,8 +644,15 @@ export class GridLayout {
 
   /** Focus a specific pane by global id (control API / cross-feature callers). */
   focusPane(paneId: number): void {
-    const el = this.slotEls.get(paneId - this.baseId)
+    const local = this.localOf(paneId)
+    const el = local != null ? this.slotEls.get(local) : undefined
     if (el) this.setFocused(el)
+  }
+
+  /** The focused slot's LOCAL id (the tree's key), or null. */
+  private focusedLocal(): number | null {
+    const id = this.focusedPaneId()
+    return id == null ? null : this.localOf(id)
   }
 
   /**
@@ -474,9 +672,9 @@ export class GridLayout {
    * end event with it.
    */
   setPaneAlert(paneId: number, kind: 'input' | 'finished' | null, pulse = false): void {
-    const localId = paneId - this.baseId
-    const el = this.slotEls.get(localId)
-    if (!el) return
+    const localId = this.localOf(paneId)
+    const el = localId != null ? this.slotEls.get(localId) : undefined
+    if (localId == null || !el) return
     if (kind) el.dataset.alert = kind
     else delete el.dataset.alert
 
@@ -505,15 +703,16 @@ export class GridLayout {
    *  grid being the visible view are the caller's half of the question — see the
    *  controller's paneIsVisible, which owns the whole predicate. */
   paneVisible(paneId: number): boolean {
-    const el = this.slotEls.get(paneId - this.baseId)
+    const local = this.localOf(paneId)
+    const el = local != null ? this.slotEls.get(local) : undefined
     return !!el && !el.classList.contains('covered')
   }
 
   /** Move focus to the neighboring pane in a direction (keyboard pane nav). Spatial:
    *  nearest visible pane whose center lies that way — exact for any tree shape. */
   focusDir(dir: 'left' | 'right' | 'up' | 'down'): void {
-    const focused = this.focusedPaneId()
-    const local = focused != null ? focused - this.baseId : leafIds(this.root)[0]!
+    const local = this.focusedLocal() ?? this.liveLocals()[0]
+    if (local == null) return
     const from = this.leafRects.get(local)
     if (!from) return
     const cx = from.x + from.w / 2
@@ -536,8 +735,8 @@ export class GridLayout {
       // Deliberate keyboard navigation INTO a pane counts as looking at it — the
       // keyboard twin of the click acknowledgment in the grid mousedown handler.
       if (best) {
-        acknowledgeFinished((this.baseId + best.id) as PaneId)
-        this.onPaneClick?.((this.baseId + best.id) as PaneId)
+        acknowledgeFinished(this.globalOf(best.id))
+        this.onPaneClick?.(this.globalOf(best.id))
       }
     }
   }
@@ -739,7 +938,8 @@ export class GridLayout {
       const slot = t.closest('.layout-slot') as HTMLElement | null
       if (!slot || slot.parentElement !== this.grid) return
       if (this.expandedId != null || this.paneCount < 2) return
-      const srcId = Number(slot.dataset.paneId) - this.baseId
+      const srcId = this.localOf(Number(slot.dataset.paneId))
+      if (srcId == null) return
       const startX = e.clientX
       const startY = e.clientY
       let active = false

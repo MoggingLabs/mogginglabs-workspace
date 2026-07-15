@@ -2477,6 +2477,82 @@ button {
   margin: 0;
 }
 
+/* "Move to another workspace…" (pane ⋯ menu): pick the destination. A radiogroup — the
+   choice is exclusive, and it stays reversible until Confirm, because the thing it moves
+   is a live agent. Each row wears its workspace's own rail accent, so the destination you
+   pick here is recognisable as the tab you land on. */
+.ws-move-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.ws-move-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.ws-move-row:hover:not([disabled]) {
+  background: var(--bg-elevated);
+}
+.ws-move-row:focus-visible {
+  outline: 2px solid var(--accent-glow);
+  outline-offset: -2px;
+}
+.ws-move-row.is-selected {
+  background: var(--accent-weak);
+  border-color: var(--accent);
+}
+.ws-move-row[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ws-move-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.ws-move-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.ws-move-name {
+  color: var(--text-hi);
+  font-size: var(--fs-13);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-move-meta {
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The tick is the selection's confirmation, not its cause — it appears only once the row
+   is chosen, so an unpicked list has nothing pretending to be already decided. */
+.ws-move-check {
+  flex: none;
+  display: inline-flex;
+  color: var(--accent-ink);
+  opacity: 0;
+}
+.ws-move-row.is-selected .ws-move-check {
+  opacity: 1;
+}
+
 /* Swarm role chip (Phase-4/01): tiny uppercase tag between the state dot and title.
    5/07 (UX-13): NEUTRAL by default — brand orange means attention, never a role;
    the reviewer (the gatekeeping role) is the one that earns a distinct tone. */
