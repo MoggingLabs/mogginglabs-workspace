@@ -38,6 +38,14 @@ import {
 // silently, since "no endpoint file" is indistinguishable from "the app is not running".
 const PROTOCOL = DAEMON_PROTOCOL_VERSION
 
+/** A rejected dispatch must still answer the bridge, or the agent's tools/call hangs forever
+ *  (bin/mogging-mcp.mjs + mogging-connection.mjs both wait unbounded for a `result` frame).
+ *  A `.catch` that turns the rejection into a truthful failure result is what closes that hang. */
+function rpcFailure(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e)
+  return msg.trim() ? msg.slice(0, 200) : 'the request failed'
+}
+
 // ONE resolver (daemon-client's) instead of a third restatement of the base+channel
 // derivation. The channel segment matters here for the same reason it does there: the
 // browser-control endpoint belongs to ONE app — an MCP client wired to dev must never
@@ -277,9 +285,9 @@ export function startMcpEndpoint(): void {
           // Deliberately NOT in the welcome tools list: usage verbs are for
           // the CLI, never advertised to agents through the MCP server.
           if (msg.name.startsWith('usage.')) {
-            void handleUsageCall(msg.name, msg.args ?? {}).then((r) => {
-              sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n')
-            })
+            void handleUsageCall(msg.name, msg.args ?? {})
+              .then((r) => sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n'))
+              .catch((e) => sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: rpcFailure(e) }) + '\n'))
             continue
           }
           // 8/02: the board lives app-side — `board.list` serves the control
@@ -322,9 +330,9 @@ export function startMcpEndpoint(): void {
           // the APP is connected to; we attach the token it never gets to see.
           if (msg.name === 'connection.rpc') {
             const args = msg.args ?? {}
-            void handleConnectionRpc(String(args.connection ?? ''), args.payload, mcpSessions).then((r) => {
-              sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n')
-            })
+            void handleConnectionRpc(String(args.connection ?? ''), args.payload, mcpSessions)
+              .then((r) => sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n'))
+              .catch((e) => sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: rpcFailure(e) }) + '\n'))
             continue
           }
           // 8/03: the grant wire. `grant.get` resolves pane -> workspace ->
@@ -346,9 +354,9 @@ export function startMcpEndpoint(): void {
           }
           // 8/07c: carry the calling pane so the browser verb drives the
           // AGENT'S OWN workspace's browser, not whatever's in the foreground.
-          void agentAct(verb, { pane: boundPane }).then((r) => {
-            sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n')
-          })
+          void agentAct(verb, { pane: boundPane })
+            .then((r) => sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n'))
+            .catch((e) => sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: rpcFailure(e) }) + '\n'))
         }
       }
     })

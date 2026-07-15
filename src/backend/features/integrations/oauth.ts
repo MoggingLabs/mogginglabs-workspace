@@ -323,7 +323,15 @@ async function tokenRequest(
   } catch (e) {
     return { ok: false, reason: `Could not reach ${hostOf(metadata.token_endpoint)}: ${short(e)}` }
   }
-  const text = await res.text()
+  let text: string
+  try {
+    text = await res.text()
+  } catch (e) {
+    // A connection reset mid-body must not reject out of here — every caller (refreshTokens
+    // -> doRefresh -> accessTokenFor) expects a typed result, and a rejection there hangs the
+    // connection bridge / rejects the ipcMain handle. Treat an unreadable body as a failure.
+    return { ok: false, reason: `Could not read the response from ${hostOf(metadata.token_endpoint)}: ${short(e)}` }
+  }
   if (!res.ok) {
     // The AS's own `error_description` is almost always the most useful sentence
     // available — surface it rather than our paraphrase of a status code.
@@ -447,7 +455,12 @@ export async function mcpFetch(
   }
   // A notification (no id) is answered with 202 and an empty body — not an error.
   if (res.status === 202) return { ok: true, result: null, sessionId }
-  const text = await res.text()
+  let text: string
+  try {
+    text = await res.text()
+  } catch (e) {
+    return { ok: false, reason: `Could not read the response from ${hostOf(url)}: ${short(e)}` }
+  }
   if (!text.trim()) return { ok: true, result: null, sessionId }
   const body = res.headers.get('content-type')?.includes('text/event-stream') ? lastSseData(text) : text
   if (!body) return { ok: false, reason: `${hostOf(url)} sent an empty event stream.` }

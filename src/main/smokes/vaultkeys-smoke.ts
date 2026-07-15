@@ -24,6 +24,13 @@ import { saveServer, type GrantKv } from '@backend/features/integrations'
 
 const SECRET = 'mlw-vault-secret-9f3a2b7c1d4e5061' // secret-shaped, fixed for the run
 const NAME = 'MOG_VAULT_TEST'
+// A SECOND key referenced by a server that is NOT in the workspace's plan. Its whole job is to
+// exercise the per-server plan-membership branch of referencedServiceKeyNames: a key referenced
+// only by an UNPLANNED server must never be resolved into a PLANNED workspace's pane env. Without
+// this, the fixture had exactly one server (the planned one), so `planHasServerForCli(...) continue`
+// was never taken and a regression dropping that check would go uncaught (audit coverage gap).
+const UNPLANNED_SECRET = 'mlw-vault-unplanned-1a2b3c4d5e6f7081'
+const UNPLANNED_NAME = 'MOG_VAULT_UNPLANNED'
 const CIPHER_KV = `integrations.vaultkey.${NAME}`
 
 export function runVaultKeysSmoke(win: BrowserWindow): void {
@@ -114,11 +121,27 @@ export function runVaultKeysSmoke(win: BrowserWindow): void {
           command: 'vault-fixture',
           env: { [NAME]: `\${${NAME}}` }
         }).ok
+      // An UNPLANNED server referencing a SECOND key: stored, and its key vaulted, but NOT added
+      // to the workspace's tool plan. Its key must be withheld from the planned workspace's panes
+      // — that is the per-server plan-membership check (referencedServiceKeyNames' `continue`).
+      serviceKeySet(UNPLANNED_NAME, UNPLANNED_SECRET)
+      const unplannedServerSaved =
+        !!kv &&
+        saveServer(kv, {
+          id: 'unplanned-fixture',
+          label: 'Unplanned fixture',
+          transport: 'stdio',
+          command: 'unplanned-fixture',
+          env: { [UNPLANNED_NAME]: `\${${UNPLANNED_NAME}}` }
+        }).ok
       setToolPlan({ workspaceId, entries: { 'vault-fixture': 'all-clis' }, inheritGlobal: false })
       const resolved = resolveServiceKeyEnv(workspaceId, 'codex')
       const resolveOk =
         serverSaved &&
+        unplannedServerSaved &&
         resolved[NAME] === SECRET &&
+        // The unplanned server's key is NOT resolved into this planned workspace (per-server scoping).
+        resolved[UNPLANNED_NAME] === undefined &&
         resolveServiceKeyEnv(workspaceId, 'shell')[NAME] === undefined &&
         resolveServiceKeyEnv('another-workspace', 'codex')[NAME] === undefined
 
@@ -175,6 +198,7 @@ export function runVaultKeysSmoke(win: BrowserWindow): void {
       const noPlaintextAtRest = offenders.length === 0
 
       // (d) delete -> absent from store + next launch's env.
+      serviceKeyClear(UNPLANNED_NAME)
       serviceKeyClear(NAME)
       const deletedOk =
         !serviceKeyNames().includes(NAME) &&

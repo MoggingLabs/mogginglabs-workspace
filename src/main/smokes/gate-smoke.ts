@@ -49,6 +49,11 @@ function checkPaneEnvIsolation(): { pass: boolean; detail: Record<string, unknow
     process.platform === 'win32' ? 'mogging.cmd' : 'mogging'
   )
   const arbitraryCli = join(tmpdir(), 'host-runtime', 'bin', process.platform === 'win32' ? 'mogging.cmd' : 'mogging')
+  // A managed per-pane git trace the daemon's shell integration wrote for the HOST pane — the
+  // app must not inherit it (nested panes would append to it and never get their own cwd lane).
+  const managedTrace = join(tmpdir(), 'MoggingLabs', 'run', 'v123', 'bin', '.shell-integration', '4321', 'git-4321-3-0.trace')
+  // ...but a GIT_TRACE_SETUP the USER set for their own git debugging is not ours to touch.
+  const userTrace = join(tmpdir(), 'my-own-git-debug.trace')
   // Pure: the rule drops exactly the pane identity, and nothing else. MOGGING_GATE and
   // MOGGING_USERDATA are OURS — the app's own launch flags — and must survive.
   const fake: Record<string, string | undefined> = {
@@ -58,6 +63,7 @@ function checkPaneEnvIsolation(): { pass: boolean; detail: Record<string, unknow
     MOGGING_BROWSER_ENDPOINT: 'C:/host/browser.json',
     MOGGING_PTY: '1',
     MOGGING_CLI: inheritedCli,
+    GIT_TRACE_SETUP: managedTrace,
     MOGGING_GATE: '1',
     MOGGING_USERDATA: 'C:/iso/userdata',
     PATH: [dirname(inheritedCli), dirname(arbitraryCli), 'keep me'].join(delimiter)
@@ -65,12 +71,31 @@ function checkPaneEnvIsolation(): { pass: boolean; detail: Record<string, unknow
   const dropped = scrubInheritedPaneEnv(fake)
   const hostile: Record<string, string | undefined> = {
     MOGGING_CLI: arbitraryCli,
+    GIT_TRACE_SETUP: userTrace,
     PATH: [dirname(arbitraryCli), 'keep me'].join(delimiter)
   }
   scrubInheritedPaneEnv(hostile)
+  // Assert each pane var is gone by LITERAL name — independent of INHERITED_PANE_ENV. The
+  // `.every(INHERITED_PANE_ENV)` check below derives its expectation from the very const under
+  // test, so dropping an entry from the const (e.g. MOGGING_PANE_TOKEN -> the parent pane's secret
+  // leaks into every nested launch, audit finding 7 reborn) would shift both the length and the
+  // every() with it and the gate would stay green. These literals red the gate on exactly that.
+  const scrubbedByName =
+    fake.MOGGING_PANE_ID === undefined &&
+    fake.MOGGING_PANE_TOKEN === undefined &&
+    fake.MOGGING_DAEMON_ENDPOINT === undefined &&
+    fake.MOGGING_BROWSER_ENDPOINT === undefined &&
+    fake.MOGGING_PTY === undefined &&
+    fake.MOGGING_CLI === undefined
   const pureOk =
-    dropped.length === INHERITED_PANE_ENV.length &&
+    scrubbedByName &&
+    // The 6 pane vars + the managed git trace all leave; INHERITED_PANE_ENV.length + 1.
+    dropped.length === INHERITED_PANE_ENV.length + 1 &&
     INHERITED_PANE_ENV.every((n) => fake[n] === undefined) &&
+    // The managed git trace is scrubbed; a user's own trace is left alone.
+    fake.GIT_TRACE_SETUP === undefined &&
+    dropped.includes('GIT_TRACE_SETUP') &&
+    hostile.GIT_TRACE_SETUP === userTrace &&
     fake.MOGGING_GATE === '1' &&
     fake.MOGGING_USERDATA === 'C:/iso/userdata' &&
     fake.PATH === [dirname(arbitraryCli), 'keep me'].join(delimiter) &&
