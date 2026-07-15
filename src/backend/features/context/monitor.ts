@@ -121,7 +121,7 @@ export class ContextMonitor {
   }
 
   /** The session log this pane is locked on, with the provider it was watched for —
-   *  how a resume-by-id launch (ADR 0012) learns WHICH session a pane was living in.
+   *  how a resume-by-id launch (ADR 0013) learns WHICH session a pane was living in.
    *  Undefined until the matcher locks (a fresh pane, or a log not yet written). */
   sessionFor(paneId: number): { provider: ContextProvider; file: string } | undefined {
     const t = this.panes.get(paneId)

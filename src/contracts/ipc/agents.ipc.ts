@@ -53,7 +53,7 @@ export interface AgentCommandRequest {
   /** The pane this command will be typed into. Lets main resume the pane's EXACT
    *  session (the context monitor's locked log names it) when a resume launch crosses
    *  profiles — a failover relaunch continues the conversation instead of opening the
-   *  CLI's picker (ADR 0012). Ids only; never required. */
+   *  CLI's picker (ADR 0013). Ids only; never required. */
   paneId?: number
   /** Materialize this workspace's tool plan into the launch (Phase-8/09) —
    *  the pane's CLI gets only the planned servers. */

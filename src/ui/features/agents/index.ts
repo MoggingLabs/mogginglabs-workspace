@@ -367,7 +367,7 @@ export const agentsFeature: UiFeature = {
         profileId: effectiveProfile,
         workspaceId,
         // Names the pane so a cross-profile resume can continue its EXACT session
-        // (main reads the context monitor's lock — ADR 0012). Id only.
+        // (main reads the context monitor's lock — ADR 0013). Id only.
         paneId,
         // Both facts main-side needs: WHICH saved host to build for, and that the command
         // is typed into the POSIX shell on the far side of SSH.

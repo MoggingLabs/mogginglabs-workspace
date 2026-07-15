@@ -90,7 +90,7 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
     // user who pointed a profile at their own notify setup said so on purpose.
     const bell = bellLaunchExtras(req.agentId, { runtime: prepared.runtime, tui: prepared.tui })
     if (bell.reason) return { ok: false, reason: bell.reason }
-    // Sessions follow profiles (ADR 0012). A profile is a separate config home — the
+    // Sessions follow profiles (ADR 0013). A profile is a separate config home — the
     // provider's own multi-account mechanism — but that makes every profile a private
     // session silo. So every LOCAL launch first unions this cwd's sessions from the
     // provider's other known homes (default + saved profiles) into the launch home:

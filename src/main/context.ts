@@ -78,7 +78,7 @@ let activeMonitor: ContextMonitor | null = null
 
 /** The session log a pane is locked on (provider + file), or undefined before the
  *  matcher locks. Read by the launch path (src/main/agents.ts) so a cross-profile
- *  resume can name the pane's EXACT session (ADR 0012). Read-only peek — ids and a
+ *  resume can name the pane's EXACT session (ADR 0013). Read-only peek — ids and a
  *  path that never leave main. */
 export function paneSessionLog(paneId: number): { provider: string; file: string } | undefined {
   return activeMonitor?.sessionFor(paneId)
