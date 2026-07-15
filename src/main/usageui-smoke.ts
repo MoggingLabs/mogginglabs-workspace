@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { setFakeMode } from '@backend/features/usage'
 import { softGapMs } from './smoke-shell'
 import { getUsageService } from './usage'
+import { getSettingsStore } from './app-settings'
 
 // Env-gated usage-UI smoke (MOGGING_USAGEUI, Phase-7/03). FAKE-adapter world.
 // RE-BASELINED to GAUGE-ONLY in 8.5/08c: the popover was recut to the CodexBar
@@ -231,6 +232,58 @@ export function runUsageUiSmoke(win: BrowserWindow): void {
       delete process.env.MOGGING_USAGE_FIXTURE
       svc.refresh()
 
+      // 4c ── DELIVERY (phase-11 rebuild). The audit's RC3: an alert used to be
+      // fire-and-forget into a renderer that might not be listening, with the
+      // single-fire state already spent. Two asserts close the class:
+      // a pushed alert renders a REAL house toast (title verbatim)…
+      const pushed = {
+        kind: 'threshold',
+        level: 'warn',
+        providerId: 'fake',
+        profileId: 'default',
+        planLabel: 'Fake Pro',
+        windowLabel: 'Weekly',
+        usedPct: 93,
+        title: 'SMOKEPUSH — 93% of Weekly used',
+        body: 'smoke body',
+        alertId: 'smoke-push-1',
+        queuedAt: Date.now()
+      }
+      wc.send('usage:alert', pushed)
+      // The fixture flips above fired REAL alerts whose toasts are still on
+      // screen — a full stack QUEUES this one (that is the fix under test),
+      // so the wait must outlive a 15s warn toast ahead of it in line.
+      const toastPushOk = await waitTrue(
+        `[...document.querySelectorAll('.toast .toast-title')].some(t => t.textContent.includes('SMOKEPUSH'))`,
+        90,
+        250
+      )
+      // …and an alert queued while the renderer was ABSENT (the boot race,
+      // reproduced with a reload) replays from the outbox on mount, renders,
+      // and is ACKED back out of the KV.
+      getSettingsStore()?.setSetting(
+        'usage.alert.outbox',
+        JSON.stringify([{ ...pushed, alertId: 'smoke-drain-1', title: 'SMOKEDRAIN — 91% of Weekly used' }])
+      )
+      wc.reload()
+      await new Promise<void>((res) => wc.once('did-finish-load', () => res()))
+      const toastDrainOk = await waitTrue(
+        `[...document.querySelectorAll('.toast .toast-title')].some(t => t.textContent.includes('SMOKEDRAIN'))`,
+        50,
+        200
+      )
+      let outboxAckedOk = false
+      for (let i = 0; i < 25 && !outboxAckedOk; i++) {
+        try {
+          outboxAckedOk = (JSON.parse(getSettingsStore()?.getSetting('usage.alert.outbox') ?? '[]') as unknown[]).length === 0
+        } catch {
+          /* keep polling */
+        }
+        if (!outboxAckedOk) await sleep(200)
+      }
+      // the reload rebuilt the renderer — wait for the drive handle back
+      const remounted = await waitTrue(`!!(window.__mogging && window.__mogging.usage)`, 50, 200)
+
       // 5 ── the gear (the popover's Settings… action) deep-links to Settings § Usage
       await ES(`window.__mogging.usage.open()`)
       await sleep(200)
@@ -253,6 +306,10 @@ export function runUsageUiSmoke(win: BrowserWindow): void {
         warnOk &&
         staleOk &&
         clearedOk &&
+        toastPushOk &&
+        toastDrainOk &&
+        outboxAckedOk &&
+        remounted &&
         gearOk
       result = {
         pass,
@@ -275,6 +332,10 @@ export function runUsageUiSmoke(win: BrowserWindow): void {
         clearedOk,
         offOk,
         off,
+        toastPushOk,
+        toastDrainOk,
+        outboxAckedOk,
+        remounted,
         gearOk
       }
     } catch (e) {

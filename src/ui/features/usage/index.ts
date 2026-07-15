@@ -379,13 +379,16 @@ export const usageFeature: UiFeature = {
       const provStatus = statuses.find((s) => s.providerId === shownProvider)
       const outaged = !!provStatus && (provStatus.state === 'degraded' || provStatus.state === 'outage')
 
-      // ── Header (step 2): name (bold) · freshness · plan tier · health ──
+      // ── Header (step 2), the CodexBar grammar: name (bold) left, the plan
+      //    tier as a quiet badge right. Freshness lives in the footer; the
+      //    health pill only appears when it is NEWS (stale/error) — a pill
+      //    that always says "fresh" is text with no information in it.
+      const tierText = activePlan.planLabel.replace(new RegExp(`^${findProvider(shownProvider)?.label ?? shownProvider}\\s*`, 'i'), '').replace(/^\((.*)\)$/, '$1')
       const head = el('div', { class: 'usage-glance-head' }, [
         providerLogo(shownProvider, 16),
         el('span', { class: 'usage-glance-name', text: findProvider(shownProvider)?.label ?? shownProvider }),
-        el('span', { class: 'usage-glance-age', text: fmtAge(activePlan.fetchedAt, now) }),
-        el('span', { class: 'usage-glance-tier', text: activePlan.planLabel }),
-        el('span', { class: `pill usage-health is-${activePlan.health}`, text: activePlan.health })
+        activePlan.health !== 'fresh' ? el('span', { class: `pill usage-health is-${activePlan.health}`, text: activePlan.health }) : null,
+        tierText ? el('span', { class: 'usage-glance-tier', text: tierText }) : null
       ])
       panel.append(head)
 
@@ -404,11 +407,16 @@ export const usageFeature: UiFeature = {
           w.pace?.elapsedPct !== undefined ? el('span', { class: 'usage-tick', title: `expected by now: ${w.pace.elapsedPct}%` }) : null
         ])
         paintBar(track, fill, w.usedPct, w.label) // the bar SAYS its number, not just draws it
+        // The CodexBar row anatomy: label on its own line, the full-width bar
+        // under it, then ONE stats line — percent left, reset right. Three
+        // quiet lines instead of four things fighting for one.
         const row = el('div', { class: 'usage-row' }, [
           el('span', { class: 'usage-row-label', text: w.label }),
           track,
-          el('span', { class: 'usage-pct', text: `${Math.round(w.usedPct)}% used` }),
-          w.resetText ? el('span', { class: 'usage-reset', text: w.resetText }) : null
+          el('span', { class: 'usage-row-stats' }, [
+            el('span', { class: 'usage-pct', text: `${Math.round(w.usedPct)}% used` }),
+            w.resetText ? el('span', { class: 'usage-reset', text: w.resetText }) : null
+          ])
         ])
         const tick = row.querySelector('.usage-tick') as HTMLElement | null
         if (tick && w.pace?.elapsedPct !== undefined) tick.style.left = `${w.pace.elapsedPct}%`
