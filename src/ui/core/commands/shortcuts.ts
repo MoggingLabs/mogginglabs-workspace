@@ -55,9 +55,12 @@ export const SHORTCUTS: ShortcutGroup[] = [
     title: 'Clipboard',
     rows: [
       { keys: 'Ctrl+C', label: 'Copy the selection · with no selection, interrupt (SIGINT)' },
-      { keys: 'Ctrl+V', label: 'Paste into the terminal' },
+      { keys: 'Ctrl+V', label: 'Paste into the terminal (an image is handed to the agent)' },
       { keys: 'Ctrl+Shift+C', label: 'Copy the selection' },
       { keys: 'Ctrl+Shift+V', label: 'Paste into the terminal' },
+      // Over a full-screen agent UI (Claude Code and co. take the mouse), a plain drag is
+      // the AGENT's selection — its own copy lands on your clipboard. Shift forces ours.
+      { keys: 'Shift+drag', label: 'Select with the app when an agent owns the mouse (⌥ on macOS)' },
       { keys: 'Drag a file in', label: 'Insert its full path, quoted for your shell' }
     ]
   },

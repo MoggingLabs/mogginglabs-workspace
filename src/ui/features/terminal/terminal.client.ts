@@ -22,7 +22,19 @@ export const terminalClient = {
    *  already held (a surviving daemon), so nothing must be typed into the pane. */
   spawn: (req: SpawnRequest): Promise<SpawnResult> =>
     getBridge().invoke(TerminalChannels.spawn, req) as Promise<SpawnResult>,
-  write: (cmd: WriteCommand): void => getBridge().send(TerminalChannels.write, cmd),
+  write: (cmd: WriteCommand): void => {
+    // DEV-only observation seam (tree-shaken in prod): every byte the UI sends to a PTY
+    // funnels through here, so a smoke that plants `__mogging.ptyWrites = []` sees exactly
+    // what a pane typed. This is what lets the clipboard gate PROVE the negative cases —
+    // that a refused OSC 52 read request answered with NOTHING (the clipboard-exfil guard),
+    // and the positive one — that an image-only paste forwarded the bare Ctrl+V byte.
+    // Neither is observable from the terminal buffer: the shell decides what echoes.
+    if (import.meta.env.DEV) {
+      const spy = (window as unknown as { __mogging?: { ptyWrites?: unknown[] } }).__mogging?.ptyWrites
+      if (Array.isArray(spy)) spy.push({ id: cmd.id, data: cmd.data })
+    }
+    getBridge().send(TerminalChannels.write, cmd)
+  },
   resize: (cmd: ResizeCommand): void => getBridge().send(TerminalChannels.resize, cmd),
   kill: (cmd: KillCommand): void => getBridge().send(TerminalChannels.kill, cmd),
   /** PULL the pane's current agent state (null = backend holds no session). The dot's

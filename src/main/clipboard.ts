@@ -280,6 +280,20 @@ export function registerClipboard(): void {
   ipcMain.handle(ClipboardChannels.write, (_e, payload: WriteClipboard) => {
     const text = payload?.text ?? ''
     writeClipboardText(text)
+    // Read back before returning success. On Windows the clipboard is a machine-wide locked
+    // resource: while another process holds it open, clipboard.writeText is a silent no-op —
+    // Electron neither copies the text nor throws, and the renderer would otherwise report a
+    // copy that never happened (the class of bug behind "it says copied but nothing pastes").
+    // Throwing here rejects the invoke, which is exactly what copyText turns into `false`.
+    //
+    // Compare LINE-ENDING-TOLERANT. Windows stores clipboard text as CRLF, so a multi-line
+    // copy can read back with \n rewritten to \r\n — real fidelity, not a failure. Normalising
+    // both sides keeps this check honest (a locked clipboard reads back wholly different old
+    // content, which still differs) without falsely warning on every pasted code block. An
+    // empty write has nothing to verify. `clipboard.readText` directly, NOT the audited
+    // reader: this is a write-path check, not the history watcher opening the clipboard.
+    const sameText = (a: string, b: string): boolean => a.replace(/\r\n/g, '\n') === b.replace(/\r\n/g, '\n')
+    if (text && !sameText(clipboard.readText(), text)) throw new Error('clipboard write did not take')
     recordOurText(text, payload?.source ?? 'app')
   })
 

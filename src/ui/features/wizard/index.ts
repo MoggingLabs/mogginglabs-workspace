@@ -1,7 +1,8 @@
 import type { ShellContext, UiFeature } from '../../core/registry/feature-registry'
-import { ClipboardChannels, IntegrationsChannels, ProfileChannels, RemoteChannels } from '@contracts'
+import { IntegrationsChannels, ProfileChannels, RemoteChannels } from '@contracts'
 import type { AgentInfo, AgentProfile, McpServerEntry, ProviderCount, ProviderMixTemplate, RecentWorkspace, RemoteHost } from '@contracts'
 import type { PathStatus } from '../../components/input'
+import { copyText } from '../../core/clipboard/clipboard-port'
 import {
   Button,
   Card,
@@ -1008,9 +1009,13 @@ export const wizardFeature: UiFeature = {
                 const copy = el('button', { class: 'wizard-agent-copy', type: 'button', text: 'Copy' })
                 copy.title = a.installHint
                 copy.onclick = (): void => {
-                  void getBridge().invoke(ClipboardChannels.write, { text: a.installHint! })
-                  copy.textContent = 'Copied'
-                  setTimeout(() => (copy.textContent = 'Copy'), 1400)
+                  // copyText never rejects and answers truthfully — main verifies the write
+                  // took (a clipboard held open by another process is a silent no-op), so
+                  // the label only ever claims what actually happened.
+                  void copyText(a.installHint!).then((ok) => {
+                    copy.textContent = ok ? 'Copied' : 'Copy failed'
+                    setTimeout(() => (copy.textContent = 'Copy'), 1400)
+                  })
                 }
                 return el('span', { class: 'wizard-agent-install' }, [
                   el('code', { class: 'wizard-agent-cmd', text: a.installHint }),
