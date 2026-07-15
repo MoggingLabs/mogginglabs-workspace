@@ -84,6 +84,21 @@ export interface Connection {
   /** A self-hosted service (n8n, Make): the card needs the instance URL before
    *  any credential means anything. */
   needsBaseUrl?: boolean
+  /** OAuth only: the provider's sign-in server offers no dynamic registration
+   *  (RFC 7591) and no client is stored for it yet — Google, GitHub, Slack. Connect
+   *  cannot proceed, so the card offers the client-id form instead of a Reconnect
+   *  button that can only fail the same way again. */
+  needsClientId?: boolean
+  /** The issuer this connection signs in at (e.g. https://accounts.google.com), set
+   *  once discovery has run. It names WHOSE console a client id must come from — and
+   *  because client records are keyed by issuer, one pasted client covers every
+   *  service that signs in at the same place. Never a secret. */
+  authServer?: string
+  /** True when the stored OAuth client was pasted by the user from the provider's
+   *  own console, rather than dynamically registered. The card offers "Forget
+   *  client ID", and a redirect mismatch must NOT purge it (the user typed it; we
+   *  cannot re-register to get it back). */
+  userClient?: boolean
 }
 
 /** The one place a connection's OAuth client registration is remembered. Per
@@ -94,6 +109,13 @@ export interface OAuthClientRecord {
   /** Public clients (PKCE, no secret) are the norm and the preference. */
   clientSecret?: string
   registeredAt: number
+  /** How the record came to exist: `dcr` — the app registered itself (RFC 7591);
+   *  `user` — pasted from the provider's own console, for the servers that offer no
+   *  DCR (Google, GitHub, Slack). Absent means `dcr` (records that predate the
+   *  field). The distinction is load-bearing: a `dcr` record can be purged and
+   *  re-registered on a redirect mismatch, a `user` record cannot — purging it
+   *  would eat credentials only the user can restore. */
+  source?: 'dcr' | 'user'
 }
 
 /** Is this connection usable right now, or does it need the user? */
@@ -126,6 +148,34 @@ export const connectionAccount = (c: Connection): string | null =>
 /** Why no account name is showing on a connected card. Shown in place of the name, so
  *  the silence is explained rather than merely blank. */
 export const NO_ACCOUNT_NOTE = 'Signed in — this provider doesn’t share an account name.'
+
+/**
+ * The client-ID paste form's guidance — written by the contract, like every other card
+ * sentence, so the form and the backend's redirect-mismatch advice can never tell two
+ * different stories about whose console the client comes from or which type to create.
+ * Provider-specific wording is keyed on the ISSUER the card already carries.
+ */
+export function clientFormHelp(authServer?: string): string {
+  let host: string | null = null
+  try {
+    host = authServer ? new URL(authServer).host : null
+  } catch {
+    host = null
+  }
+  if (host && /(^|\.)google\.com$/.test(host)) {
+    return (
+      'Create an OAuth client in Google Cloud Console (APIs & Services → Credentials → ' +
+      'Create credentials → OAuth client ID → “Desktop app”) and paste it here. ' +
+      'One client covers every Google service on this page.'
+    )
+  }
+  const name = host ?? 'the provider'
+  return (
+    `Create an OAuth client in ${name}'s developer console — it must allow loopback ` +
+    `redirect URLs (http://127.0.0.1) — and paste it here. One client covers every ` +
+    `service that signs in at ${name}.`
+  )
+}
 
 /** The card's supporting line: what the server answered, and when the grant renews. */
 export function connectionSummary(c: Connection, now: number = Date.now()): string {

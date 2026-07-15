@@ -356,8 +356,10 @@ export const ConnectionsChannels = {
   list: 'connections:list', // -> Connection[] (secret-free; the card grid's whole source)
   connect: 'connections:connect', // ({ serviceId, baseUrl? }) -> { ok, reason? } — opens CONSENT IN THE USER'S BROWSER; resolves when the flow STARTS, not when it lands
   submitKey: 'connections:submitKey', // ({ serviceId, value, baseUrl? }) -> { ok, reason? } — key-auth on-ramp: VERIFIED against the live server, then vaulted
+  setClient: 'connections:setClient', // ({ serviceId, clientId, clientSecret?, baseUrl? }) -> { ok, reason? } — pre-registered OAuth client for no-DCR providers (Google/GitHub/Slack); WRITE-ONLY (no getter, the 8/08 discipline), then straight into consent
+  clearClient: 'connections:clearClient', // (serviceId) -> { ok, reason? } — forget a pasted client id (and its vaulted secret) for this service's sign-in server
   cancel: 'connections:cancel', // (serviceId) -> void — abandon a pending browser consent (closes the loopback port; the card returns to disconnected)
-  disconnect: 'connections:disconnect', // (serviceId) -> void (drops the vault slot + the metadata; the vendor-side revoke is theirs)
+  disconnect: 'connections:disconnect', // (serviceId) -> void (drops the token vault slot + the metadata; a user-pasted client id/secret stays for one-click reconnects until clearClient — and the vendor-side revoke is theirs)
   verify: 'connections:verify', // (serviceId) -> Connection (initialize + tools/list, right now — proof, not a poll)
   changed: 'connections:changed' // main -> renderer: Connection[] (pushed on every state change; the browser lands here)
 } as const

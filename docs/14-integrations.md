@@ -85,6 +85,18 @@ The default, and the one the Connections card grid drives. You connect a service
 1. The app discovers the server's authorization server from its own `401`
    (RFC 9728 → RFC 8414), then **registers itself** as a public OAuth client
    (RFC 7591) where the vendor allows it — no vendor paperwork, no shipped secret.
+   Where the vendor allows no self-registration (Google, GitHub, Slack), the card
+   offers a **client-ID form** instead of a dead Reconnect: create an OAuth client
+   once in the vendor's own console (for Google: a **“Desktop app”** client, so it
+   accepts loopback redirects) and paste its ID — and secret, if it has one — on
+   the card. The record is keyed by **issuer**, so one pasted Google client covers
+   Drive, Gmail, Calendar and Chat alike; the secret rests as OS-keychain
+   ciphertext with no IPC getter, and **Forget client ID** deletes it again. A
+   pasted client is never purged by the app's own error recovery — only the
+   self-registered kind is disposable. The one hard limit is the vendor's own
+   redirect policy: a console that cannot allow loopback redirect URLs at all
+   (Slack's) cannot connect on this route, and the card's advice says so — the
+   per-CLI route below remains that service's path.
 2. Consent runs in **your own browser**, on the vendor's real page, over an
    ephemeral `127.0.0.1` loopback redirect (RFC 8252) with PKCE/S256. The app never
    renders a login form and never sees your password.

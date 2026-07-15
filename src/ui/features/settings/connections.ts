@@ -1,5 +1,6 @@
 import {
   ConnectionsChannels,
+  clientFormHelp,
   connectionAccount,
   connectionScopes,
   connectionSummary,
@@ -8,7 +9,7 @@ import {
   type ConnectionState
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { EmptyState, el, icon, loadingRow, providerLogo, showToast } from '../../components'
+import { EmptyState, el, icon, loadingRow, providerLogo, showToast, submitWithRetain } from '../../components'
 
 /**
  * Settings § Connections (ADR 0014) — the page's new first citizen.
@@ -56,6 +57,17 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
   }
   /** Which cards have their tool list expanded — same repaint-survival rule. */
   const toolsOpen = new Set<string>()
+  /** The client-id form (no-DCR providers: Google, GitHub, Slack) — same
+   *  repaint-survival rules as the key form: open-state and typed drafts are keyed
+   *  by service, because the grid repaints wholesale and a rebuilt input is a
+   *  pasted secret eaten mid-thought. */
+  const clientFormOpen = new Set<string>()
+  const clientDrafts = new Map<string, { id: string; secret: string; url: string }>()
+  const clientDraftFor = (id: string): { id: string; secret: string; url: string } => {
+    const d = clientDrafts.get(id) ?? { id: '', secret: '', url: '' }
+    clientDrafts.set(id, d)
+    return d
+  }
 
   async function refresh(): Promise<void> {
     connections = ((await bridge.invoke(ConnectionsChannels.list)) as Connection[]) ?? []
@@ -238,6 +250,119 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
       return el('div', { class: 'conn-key-form' }, [...(urlInput ? [urlInput] : []), input, save, close, note])
     }
 
+    // ── The client-id on-ramp (no-DCR providers). The provider will not let apps
+    // register themselves, so the user creates an OAuth client ONCE in the
+    // provider's own console and pastes it here; consent then runs exactly like
+    // every other connection. One pasted client covers every service that signs
+    // in at the same place — all of Google Workspace is one client.
+    const clientForm = (): HTMLElement => {
+      const draft = clientDraftFor(c.id)
+      // ONE sentence, written by the contract — so the form and the backend's
+      // redirect-mismatch advice can never name two different consoles.
+      const help = el('div', { class: 'conn-summary', text: clientFormHelp(c.authServer) })
+      let urlInput: HTMLInputElement | null = null
+      if (c.needsBaseUrl) {
+        urlInput = el('input', {
+          class: 'browser-sites-input conn-key-input',
+          placeholder: 'https://your-instance… (its MCP URL)'
+        }) as HTMLInputElement
+        urlInput.value = draft.url
+        urlInput.setAttribute('aria-label', `${c.label} instance URL`)
+        urlInput.spellcheck = false
+        urlInput.addEventListener('keydown', (e) => e.stopPropagation())
+        urlInput.addEventListener('input', () => (draft.url = urlInput!.value))
+      }
+      const idInput = el('input', { class: 'browser-sites-input conn-key-input', placeholder: 'client ID…' }) as HTMLInputElement
+      idInput.value = draft.id
+      idInput.spellcheck = false
+      idInput.setAttribute('aria-label', `${c.label} OAuth client ID`)
+      idInput.addEventListener('keydown', (e) => e.stopPropagation())
+      idInput.addEventListener('input', () => (draft.id = idInput.value))
+      const secretInput = el('input', {
+        class: 'browser-sites-input conn-key-input',
+        placeholder: 'client secret (if the provider issued one)…'
+      }) as HTMLInputElement
+      secretInput.type = 'password'
+      secretInput.value = draft.secret
+      secretInput.setAttribute('aria-label', `${c.label} OAuth client secret`)
+      secretInput.addEventListener('keydown', (e) => e.stopPropagation())
+      secretInput.addEventListener('input', () => (draft.secret = secretInput.value))
+      const save = el('button', { class: 'trail-btn is-armed', type: 'button', text: 'Save & connect' }) as HTMLButtonElement
+      const close = el('button', { class: 'trail-btn conn-mini', type: 'button', text: 'Close' }) as HTMLButtonElement
+      close.onclick = (): void => {
+        // Closing is a CANCEL: the draft dies with it, half-typed secret and all.
+        clientDrafts.delete(c.id)
+        clientFormOpen.delete(c.id)
+        paint()
+      }
+      const note = el('div', { class: 'conn-summary is-error', hidden: true, role: 'alert' })
+      // submitWithRetain is the ONE submit path for a form that carries a secret
+      // (audit finding 35): retain-on-failure, scrub-on-success, a throw treated as
+      // a refusal, and the button always coming back alive. The failure TOAST exists
+      // because once connect() starts pushing states the grid repaints and this
+      // form's own `note` may already be a detached node — the toast survives that.
+      save.onclick = (): void => {
+        if (!idInput.value.trim()) return
+        void submitWithRetain({
+          trigger: save,
+          retainFields: [idInput, secretInput],
+          errorEl: note,
+          submit: () =>
+            bridge.invoke(ConnectionsChannels.setClient, {
+              serviceId: c.id,
+              clientId: idInput.value,
+              clientSecret: secretInput.value.trim() || undefined,
+              baseUrl: urlInput?.value.trim() || undefined
+            }) as Promise<{ ok: boolean; reason?: string }>,
+          onSuccess: () => {
+            clientDrafts.delete(c.id) // vaulted — the plaintext leaves the DOM and the draft
+            clientFormOpen.delete(c.id)
+            paint() // close the form NOW; the pushes will repaint again with the real state
+            showToast({
+              tone: 'info',
+              title: `Finish signing in to ${c.label}`,
+              body: 'The client is saved (encrypted by your OS keychain) and we opened your browser. The card updates the moment you approve.',
+              timeout: 8000
+            })
+          },
+          onFailure: (r) => {
+            // The draft survives a fixable refusal (a typo, an offline moment) —
+            // pasted once means pasted once.
+            showToast({
+              tone: 'danger',
+              title: `${c.label} was not connected`,
+              body: ('reason' in r ? r.reason : undefined) ?? 'The client was refused.'
+            })
+          }
+        })
+      }
+      return el('div', { class: 'conn-key-form' }, [help, ...(urlInput ? [urlInput] : []), idInput, secretInput, save, close, note])
+    }
+
+    // "Forget client ID": the delete pixel for a pasted client. It exists wherever
+    // the user could otherwise be stuck holding a vaulted secret with no way out —
+    // including a disconnected card that keeps the client for one-click reconnects.
+    const forgetClientButton = (): HTMLButtonElement => {
+      const forget = el('button', { class: 'trail-btn trail-clear conn-mini', type: 'button', text: 'Forget client ID' }) as HTMLButtonElement
+      forget.onclick = (): void => {
+        void (async () => {
+          busy(forget, true, 'Forgetting…')
+          const r = (await bridge.invoke(ConnectionsChannels.clearClient, c.id)) as { ok: boolean; reason?: string }
+          if (!r.ok) {
+            showToast({ tone: 'danger', title: 'Nothing was forgotten', body: r.reason ?? 'The attempt was refused.' })
+            busy(forget, false, 'Forget client ID')
+            return
+          }
+          showToast({
+            tone: 'info',
+            title: `${c.label}: client ID forgotten`,
+            body: 'The client ID and its secret were deleted from this machine. It covered every service signing in at the same place, so those cards no longer have it either — already-connected ones keep working until their token expires.'
+          })
+        })()
+      }
+      return forget
+    }
+
     switch (c.state) {
       case 'connected': {
         const check = el('button', { class: 'trail-btn conn-mini', type: 'button', text: 'Check' }) as HTMLButtonElement
@@ -257,12 +382,16 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
               tone: 'info',
               title: `${c.label} disconnected`,
               // Say exactly what we did and did NOT do. We drop OUR credential; we
-              // cannot promise the vendor forgot the grant, so we don't imply it.
-              body: 'The credential was deleted from this machine. To revoke it at the provider too, sign out there.'
+              // cannot promise the vendor forgot the grant, so we don't imply it —
+              // and a pasted client that stays behind is named, not glossed over.
+              body: c.userClient
+                ? 'The connection’s token was deleted from this machine. Your pasted client ID and secret stay (encrypted) for one-click reconnects — use “Forget client ID” to delete them too. To revoke the grant at the provider, sign out there.'
+                : 'The credential was deleted from this machine. To revoke it at the provider too, sign out there.'
             })
           })()
         }
         actions.append(check, drop)
+        if (c.userClient) actions.append(forgetClientButton())
         break
       }
       case 'connecting': {
@@ -282,6 +411,37 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
         const takesKey = c.authKind === 'key' || c.hasKeyOption
         if (takesKey && keyFormOpen.has(c.id)) {
           body.append(keyForm())
+          break
+        }
+        if (clientFormOpen.has(c.id)) {
+          body.append(clientForm())
+          break
+        }
+        // A card that NEEDS a client id must not offer a Reconnect that can only
+        // fail the same way — the primary verb becomes the form.
+        if (c.needsClientId) {
+          const open = el('button', { class: 'trail-btn is-armed', type: 'button', text: 'Add client ID…' }) as HTMLButtonElement
+          open.onclick = (): void => {
+            clientFormOpen.add(c.id)
+            paint()
+          }
+          actions.append(open)
+          // The flag is only ever re-derived by a real attempt (connect clears it and
+          // sets it again from THIS attempt's discovery). A card whose flag is stale —
+          // a sibling-sweep leftover, a provider that gained registration — must keep
+          // a verb that runs that attempt, or the paste form becomes a locked door.
+          const retry = el('button', { class: 'trail-btn conn-mini', type: 'button', text: 'Try connect' }) as HTMLButtonElement
+          retry.onclick = (): void => beginConnect(retry)
+          actions.append(retry)
+          if (c.hasKeyOption) {
+            const useKey = el('button', { class: 'trail-btn conn-mini', type: 'button', text: 'Use API key…' }) as HTMLButtonElement
+            useKey.onclick = (): void => {
+              keyFormOpen.add(c.id)
+              paint()
+            }
+            actions.append(useKey)
+          }
+          if (c.userClient) actions.append(forgetClientButton())
           break
         }
         const label = c.state === 'expired' || c.state === 'error' ? 'Reconnect' : 'Connect'
@@ -308,6 +468,8 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
             }
             actions.append(useKey)
           }
+          // A disconnected card that still holds a pasted client keeps its way out.
+          if (c.authKind === 'oauth' && c.userClient) actions.append(forgetClientButton())
         }
       }
     }

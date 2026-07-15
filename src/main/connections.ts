@@ -12,6 +12,7 @@ import {
 import {
   buildAuthorizeUrl,
   canonicalResource,
+  canRepairClientByReRegistering,
   createPkce,
   createState,
   discoverAccount,
@@ -21,12 +22,16 @@ import {
   pickScopes,
   probeConnection,
   probeWithSchemes,
+  redirectDriftAdvice,
   refreshTokens,
-  registerClient,
   removeStoredServer,
+  resolveClient,
+  sanitizeUserClient,
   saveServer,
+  userClientRecord,
   MCP_PRESETS,
   type AuthServerMetadata,
+  type ClientStore,
   type GrantKv,
   type OAuthTokens
 } from '@backend/features/integrations'
@@ -260,20 +265,12 @@ function startLoopback(onCode: (q: URLSearchParams, res: import('node:http').Ser
   })
 }
 
-/** Reuse a registered client only when it can still be honoured, i.e. the AS
- *  offers DCR (so we may re-register) or we already hold an id for it. */
-async function clientFor(
-  metadata: AuthServerMetadata,
-  redirectUri: string
-): Promise<{ ok: true; client: OAuthClientRecord } | { ok: false; reason: string }> {
-  const cached = loadClient(metadata.issuer)
-  if (cached) return { ok: true, client: cached }
-  const reg = await registerClient(metadata, redirectUri)
-  if (!reg.ok) return reg
-  if (!vaultStore(VAULT_CLIENT(metadata.issuer), JSON.stringify(reg.client))) {
-    return { ok: false, reason: 'The OS keychain would not hold the client registration.' }
-  }
-  return { ok: true, client: reg.client }
+/** The vault, worn as the ClientStore interface — so resolveClient (and its gate)
+ *  stay Electron-free while the real records rest as OS-keychain ciphertext. */
+const clientStore: ClientStore = {
+  load: (issuer) => loadClient(issuer),
+  save: (issuer, record) => vaultStore(VAULT_CLIENT(issuer), JSON.stringify(record)),
+  clear: (issuer) => vaultClearKey(VAULT_CLIENT(issuer))
 }
 
 /** A connection URL: https anywhere, or plain http strictly on loopback — a
@@ -316,7 +313,10 @@ export async function connect(serviceId: string, baseUrl?: string): Promise<{ ok
   // One flow at a time — and the superseded service's card must not stay
   // "connecting…" forever, which is exactly what plain endFlow() left behind.
   abandonFlow()
-  setState(serviceId, { state: 'connecting', url, lastError: undefined })
+  // `needsClientId` is re-derived by THIS attempt, not carried over: a stale flag
+  // from a previous failure must not leave the paste form on a card whose current
+  // failure (an outage, a bad URL) pasting a client id cannot fix.
+  setState(serviceId, { state: 'connecting', url, lastError: undefined, needsClientId: undefined })
 
   // `requireAuth` for oauth presets: Google's servers answer initialize (and even
   // tools/list) with NO credential and only gate at tool-call time. Taking the
@@ -359,14 +359,17 @@ export async function connect(serviceId: string, baseUrl?: string): Promise<{ ok
     return { ok: false, reason: 'Could not open a local port to receive the sign-in.' }
   }
 
-  const client = await clientFor(metadata, loop.redirectUri)
+  const client = await resolveClient(metadata, loop.redirectUri, clientStore)
   if (!client.ok) {
     try {
       loop.server.close()
     } catch {
       /* never listened */
     }
-    setState(serviceId, { state: 'error', lastError: client.reason })
+    // `needsClientId` turns this dead end into a form: the card offers the paste
+    // fields instead of a Reconnect that could only fail identically. `authServer`
+    // rides along so the form can name WHOSE console the client must come from.
+    setState(serviceId, { state: 'error', lastError: client.reason, needsClientId: client.needsClientId, authServer: metadata.issuer })
     return { ok: false, reason: client.reason }
   }
 
@@ -449,13 +452,16 @@ async function onCallback(params: URLSearchParams, res: import('node:http').Serv
     // loopback port. RFC 8252 §7.3 obliges the AS to accept any loopback port, but an
     // AS that doesn't refuses right here — and reusing the same cached client would
     // fail identically forever. Purging it makes the next attempt re-register with
-    // the current URI, so "try again" is real advice rather than a loop.
+    // the current URI, so "try again" is real advice rather than a loop. A USER-pasted
+    // client is never purged — we cannot re-register to replace it, and eating the
+    // user's own credentials is worse than the failure; the advice changes instead
+    // (fix the client's redirect settings at the vendor).
     const redirectDrift = /redirect[_ ]?uri|redirect mismatch/i.test(exchanged.reason)
-    if (redirectDrift) vaultClearKey(VAULT_CLIENT(flow.metadata.issuer))
+    if (redirectDrift && canRepairClientByReRegistering(flow.client)) vaultClearKey(VAULT_CLIENT(flow.metadata.issuer))
     html('Sign-in failed', 'We could not complete the exchange. Check the app for the reason.')
     setState(flow.serviceId, {
       state: 'error',
-      lastError: redirectDrift ? `${exchanged.reason} — try Connect again (we re-register with the provider).` : exchanged.reason
+      lastError: redirectDrift ? redirectDriftAdvice(flow.client, exchanged.reason) : exchanged.reason
     })
     endFlow()
     return
@@ -485,7 +491,13 @@ async function onCallback(params: URLSearchParams, res: import('node:http').Serv
     connectedAt: Date.now(),
     serverName: probe.ok ? probe.probe.serverName : undefined,
     toolCount: probe.ok ? probe.probe.toolCount : undefined,
-        tools: probe.ok ? probe.probe.tools : undefined,
+    tools: probe.ok ? probe.probe.tools : undefined,
+    // The grant landed, so whatever client made it is proven: remember WHERE this
+    // service signs in and whether the client was the user's own — that pair is
+    // what lets "Forget client ID" find the record later, even after a disconnect.
+    authServer: flow.metadata.issuer,
+    userClient: flow.client.source === 'user' || undefined,
+    needsClientId: undefined,
     lastError: probe.ok ? undefined : probe.reason
   })
   // The connection is live -> it becomes a server the tool plan can reach. This is
@@ -535,12 +547,119 @@ export async function submitKey(serviceId: string, value: string, baseUrl?: stri
     tools: probe.probe.tools,
     expiresAt: undefined,
     authScheme: probe.authScheme,
+    // A dual-auth card (GitHub) may carry needsClientId from a FAILED OAuth attempt.
+    // The key connected it: the stale flag must not resurface as "Add client ID…"
+    // being the primary verb when this key later expires.
+    needsClientId: undefined,
     // A key names an account too — the server will say whose, if it offers a whoami tool.
     // "Connected as pedro@…" matters just as much when the credential was pasted.
     account: probe.probe.account,
     lastError: undefined
   })
   registerConnectionServer(serviceId)
+  return { ok: true }
+}
+
+// ── Pre-registered OAuth clients: the no-DCR on-ramp (Google, GitHub, Slack) ─
+
+/**
+ * Store a client the USER registered in the provider's own console, then go
+ * straight into consent. Pasting the id is step one of connecting, not its own
+ * ceremony — a saved-but-unused client would leave the card exactly as broken
+ * as before, one click later.
+ *
+ * The record is keyed by ISSUER, so one pasted Google client covers Drive,
+ * Gmail, Calendar and Chat alike: they all sign in at accounts.google.com —
+ * and the flag flip fans out to every sibling card at the same issuer, so a
+ * card that failed BEFORE the paste gets its Connect verb back without a
+ * second paste. Nothing is pushed before the record is safely stored (every
+ * earlier refusal returns without a repaint, so the form keeps its fields);
+ * once connect() takes over, its pushes repaint the grid and the form's own
+ * failure surface is the toast, not a node the repaint may have detached.
+ */
+export async function submitClient(
+  serviceId: string,
+  clientId: string,
+  clientSecret?: string,
+  baseUrl?: string
+): Promise<{ ok: boolean; reason?: string }> {
+  const preset = presetFor(serviceId)
+  if (!preset) return { ok: false, reason: 'unknown service' }
+  if (authKindOf(preset) !== 'oauth') {
+    return { ok: false, reason: 'This service does not sign in with OAuth — there is no client to register.' }
+  }
+  const cleaned = sanitizeUserClient(clientId, clientSecret)
+  if (!cleaned.ok) return cleaned
+  if (!vaultAvailable()) {
+    return { ok: false, reason: 'This machine has no OS keychain, so the client credentials cannot be stored safely here.' }
+  }
+  const url = needsBaseUrl(preset) ? String(baseUrl ?? '').trim() : preset.urlOrCommand
+  if (!url) return { ok: false, reason: `${preset.label} is self-hosted — paste your instance's MCP URL first.` }
+  if (!validConnectionUrl(url)) return { ok: false, reason: 'A connection must be an https:// URL (plain http only for localhost).' }
+  // The record must key on the REAL issuer, so the client the user pasted on the
+  // Drive card is found again from the Gmail card — and from this card next year.
+  const metadata = await fetchAuthServerMetadataFor(url)
+  if (!metadata) {
+    return { ok: false, reason: 'Could not reach the provider to find its sign-in server, so nothing was saved. Try again.' }
+  }
+  const record = userClientRecord(metadata.issuer, cleaned.clientId, cleaned.clientSecret)
+  if (!clientStore.save(metadata.issuer, record)) {
+    return { ok: false, reason: 'The OS keychain would not hold the client credentials — nothing was saved.' }
+  }
+  setState(serviceId, { needsClientId: undefined, userClient: true, authServer: metadata.issuer, lastError: undefined })
+  // The record serves EVERY card at this issuer. A sibling that already failed with
+  // "needs a client id" must get its Connect verb back now — without this sweep the
+  // user re-pastes the same client on every previously-failed Google card.
+  for (const c of listConnections()) {
+    if (c.id === serviceId || c.authServer !== metadata.issuer) continue
+    const wasClientFailure = c.needsClientId === true
+    setState(c.id, {
+      needsClientId: undefined,
+      userClient: true,
+      ...(wasClientFailure && c.state === 'error' ? { state: 'disconnected' as const, lastError: undefined } : {})
+    })
+  }
+  const opened = await connect(serviceId, baseUrl)
+  if (opened.ok) return opened
+  // The paste itself SUCCEEDED — a connect failure after it must not read as "the
+  // client was refused", or the user re-pastes forever at a network blip.
+  return { ok: false, reason: `The client ID was saved. Connecting then failed: ${opened.reason}` }
+}
+
+/**
+ * Forget a pasted client — the id and its vaulted secret. Scoped to the ISSUER,
+ * so it is announced on every card that signs in there: forgetting Google's
+ * client on the Drive card also stops Gmail's next refresh from using it, and
+ * each affected card says so instead of silently going stale.
+ */
+export function clearClient(serviceId: string): { ok: boolean; reason?: string } {
+  const meta = readMeta(serviceId)
+  const issuer = meta?.authServer
+  if (!issuer || !meta?.userClient) return { ok: false, reason: 'No pasted client is stored for this service.' }
+  // A consent mid-flight at this issuer still holds the client IN MEMORY: left alone,
+  // the browser callback would land after the record is gone and stamp a connected
+  // card claiming a pasted client the vault no longer holds. Abandon it first.
+  if (pending && pending.metadata.issuer === issuer) {
+    abandonFlow('The client ID was forgotten while this sign-in was open. Start again once a client ID is saved.')
+  }
+  clientStore.clear(issuer)
+  for (const c of listConnections()) {
+    if (c.authServer !== issuer || !c.userClient) continue
+    if (c.state === 'connected') {
+      // The GRANT is untouched; only the handle changes. When the token eventually
+      // expires, doRefresh names the real fix (paste a client ID) — an invisible
+      // warning written here would land on a field no connected card renders.
+      setState(c.id, { userClient: undefined })
+    } else if (c.state === 'disconnected') {
+      // A disconnected meta existed ONLY as the handle on this record (no token —
+      // disconnect and denied-consent both leave none). Releasing it returns the
+      // card to pristine catalog defaults instead of an immortal husk whose only
+      // verb is a paste form.
+      dropMeta(c.id)
+    } else {
+      setState(c.id, { userClient: undefined, needsClientId: true })
+    }
+  }
   return { ok: true }
 }
 
@@ -595,7 +714,19 @@ async function doRefresh(serviceId: string, tokens: OAuthTokens): Promise<string
   }
   const client = loadClient(disco.issuer)
   if (!client) {
-    setState(serviceId, { state: 'expired', lastError: 'The client registration is gone — reconnect to renew it.' })
+    // Match the advice to what clicking it will DO. At a DCR issuer, Reconnect
+    // re-registers and works; at a no-DCR issuer (exactly where a forgotten pasted
+    // client lands us), Reconnect can only fail into the same wall — say "paste a
+    // client ID" and set the flag so the card offers the form directly.
+    const noDcr = !disco.registration_endpoint
+    setState(serviceId, {
+      state: 'expired',
+      needsClientId: noDcr ? true : undefined,
+      authServer: disco.issuer,
+      lastError: noDcr
+        ? 'The client registration is gone — paste a client ID to reconnect.'
+        : 'The client registration is gone — reconnect to renew it.'
+    })
     return null
   }
   const next = await refreshTokens(disco, client, {
@@ -683,10 +814,27 @@ export function registerConnectionServer(serviceId: string): { ok: boolean; reas
 }
 
 export function disconnect(serviceId: string): void {
+  const meta = readMeta(serviceId)
   // The vault slot first: if anything below throws, the credential is already gone.
   vaultClearKey(VAULT_TOKENS(serviceId))
-  metaCache.delete(readMeta(serviceId)?.url ?? '')
-  dropMeta(serviceId)
+  metaCache.delete(meta?.url ?? '')
+  if (meta?.userClient && meta.authServer) {
+    // The GRANT is gone; the pasted client stays (reconnecting is one click, not a
+    // trip back to the vendor's console). But a vaulted secret with no pixel that
+    // can delete it is a custody failure — so the card keeps its handle on the
+    // record (`userClient` + `authServer`) instead of dropping the whole meta,
+    // and "Forget client ID" keeps working after a disconnect.
+    writeMeta({
+      id: meta.id,
+      label: meta.label,
+      authKind: meta.authKind,
+      state: 'disconnected',
+      userClient: true,
+      authServer: meta.authServer
+    })
+  } else {
+    dropMeta(serviceId)
+  }
   // The bridge server row this connection registered: remove it when no CLI has it
   // applied, so a disconnect doesn't leave a ghost in "Servers & registry" and the
   // tool-plan matrix forever. If it IS applied somewhere, it stays — the CLI's config
@@ -758,6 +906,19 @@ export function registerConnections(getWin: () => BrowserWindow | null): void {
   ipcMain.handle(ConnectionsChannels.submitKey, (_e, p: { serviceId: string; value: string; baseUrl?: string }) =>
     submitKey(String(p?.serviceId ?? ''), String(p?.value ?? ''), p?.baseUrl ? String(p.baseUrl) : undefined)
   )
+  // Write-only, like submitKey: the secret goes IN over this channel and no channel
+  // brings a client secret back out (the 8/08 discipline).
+  ipcMain.handle(
+    ConnectionsChannels.setClient,
+    (_e, p: { serviceId: string; clientId: string; clientSecret?: string; baseUrl?: string }) =>
+      submitClient(
+        String(p?.serviceId ?? ''),
+        String(p?.clientId ?? ''),
+        p?.clientSecret ? String(p.clientSecret) : undefined,
+        p?.baseUrl ? String(p.baseUrl) : undefined
+      )
+  )
+  ipcMain.handle(ConnectionsChannels.clearClient, (_e, id: string) => clearClient(String(id)))
   ipcMain.handle(ConnectionsChannels.cancel, (_e, id: string) => cancelConnect(String(id)))
   ipcMain.handle(ConnectionsChannels.disconnect, (_e, id: string) => disconnect(String(id)))
   ipcMain.handle(ConnectionsChannels.verify, (_e, id: string) => verify(String(id)))
