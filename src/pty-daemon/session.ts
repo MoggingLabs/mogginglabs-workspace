@@ -1002,7 +1002,10 @@ export class SessionManager {
     }
     const normalizedSpec: SpawnSpec = {
       ...spec,
-      remote: remote ? { ...remote, cwd: remoteCwd ?? undefined } : undefined
+      // `shell` survives normalization (the shared normalizer validates the connection
+      // fields only) — dropping it here made every reconnect replay forget the dialect
+      // the pane was persisted with.
+      remote: remote ? { ...remote, shell: spec.remote?.shell, cwd: remoteCwd ?? undefined } : undefined
     }
     const existing = this.panes.get(id)
     if (existing?.matchesRemote(normalizedSpec.remote)) {

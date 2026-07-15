@@ -749,7 +749,10 @@ export class AgentProcessDetector {
           const contextEpoch = t.contextEpoch
           contextCwd = byPid.get(foreground.pid)?.cwd ??
             await (this.deps.procCwd ?? readProcessCwd)(foreground.pid)
-          if (this.disposed || this.panes.get(paneId) !== t) return // pane replaced under the await
+          if (this.disposed) return
+          // ONE pane replaced under the await must not abandon the verdicts every OTHER
+          // pane is owed from this (expensive, rate-limited) listing — skip just it.
+          if (this.panes.get(paneId) !== t) continue
           if (!t.contextArmed || t.contextEpoch !== contextEpoch) continue
           // A positive early verdict is conclusive and can consume this pane's later deadline;
           // only a negative shared snapshot must preserve time for a child that has not spawned.
@@ -819,7 +822,8 @@ export class AgentProcessDetector {
         const agentCwd = found.pid === foreground?.pid
           ? contextCwd
           : byPid.get(found.pid)?.cwd ?? await (this.deps.procCwd ?? readProcessCwd)(found.pid)
-        if (this.disposed || this.panes.get(paneId) !== t) return
+        if (this.disposed) return
+        if (this.panes.get(paneId) !== t) continue // replaced under the await — skip this pane only
         const det: DetectedAgentProc = {
           agentId: found.agentId,
           pid: found.pid,

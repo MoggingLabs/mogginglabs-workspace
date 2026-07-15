@@ -72,7 +72,9 @@ export const SENSITIVE_ORIGIN_PATTERNS: readonly string[] = [
   'bank', 'chase.com', 'wellsfargo', 'paypal', 'venmo', 'coinbase', 'stripe.com',
   'mail.google', 'gmail', 'outlook', 'mail.', 'proton.me',
   '.gov', 'irs.gov', 'ssa.gov',
-  'icloud.com', 'apple.com/account'
+  // Matched against ORIGINS, which never carry a path — a pattern with a '/'
+  // in it can never fire. Apple's account surface is its own host.
+  'icloud.com', 'appleid.apple.com'
 ]
 export function isSensitiveOrigin(origin: string): boolean {
   const h = origin.toLowerCase()

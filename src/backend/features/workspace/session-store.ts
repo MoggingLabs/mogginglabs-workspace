@@ -8,6 +8,13 @@
 // (agent CLIs self-authenticate). `command` is a launch label like "claude", not a token.
 import Database from 'better-sqlite3'
 import { normalizeRemoteConnection, type PersistedPane, type PersistedWorkspace } from '@contracts'
+import { addColumnIfMissing } from './db-migrate'
+
+/** The persisted shell dialects a remote row may carry (PersistedPane.remote.shell). */
+const REMOTE_SHELLS = new Set(['sh', 'bash', 'zsh', 'powershell', 'cmd'])
+type PersistedRemoteShell = NonNullable<NonNullable<PersistedPane['remote']>['shell']>
+const asRemoteShell = (value: string | null): PersistedRemoteShell | undefined =>
+  value !== null && REMOTE_SHELLS.has(value) ? (value as PersistedRemoteShell) : undefined
 
 const MAX_SCROLLBACK = 100_000
 
@@ -30,6 +37,7 @@ export class SessionStore {
         remote_port INTEGER,
         remote_cwd TEXT,
         remote_platform TEXT,
+        remote_shell TEXT,
         command TEXT,
         scrollback TEXT NOT NULL,
         updated_at INTEGER NOT NULL
@@ -48,41 +56,29 @@ export class SessionStore {
     // DAEMON never starts, and the cross-version hand-off (readPersistedPanes in
     // src/main/daemon-migrate.ts) swallows it to [], silently dropping every old session it
     // was there to rescue. Same guarded pattern as settings-store's migrations next door.
-    try {
-      this.db.exec("ALTER TABLE panes ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'")
-    } catch {
-      /* column already exists */
-    }
-    try {
-      this.db.exec('ALTER TABLE panes ADD COLUMN reported_cwd TEXT')
-    } catch {
-      /* column already exists */
-    }
-    try {
-      this.db.exec('ALTER TABLE panes ADD COLUMN reported_cwd_at INTEGER')
-    } catch {
-      /* column already exists */
-    }
     for (const [column, type] of [
+      ['workspace_id', "TEXT NOT NULL DEFAULT 'default'"],
+      ['reported_cwd', 'TEXT'],
+      ['reported_cwd_at', 'INTEGER'],
       ['remote_name', 'TEXT'],
       ['remote_host', 'TEXT'],
       ['remote_user', 'TEXT'],
       ['remote_port', 'INTEGER'],
       ['remote_cwd', 'TEXT'],
-      ['remote_platform', 'TEXT']
+      ['remote_platform', 'TEXT'],
+      // The persisted shell dialect (PersistedPane.remote.shell) — the contract has
+      // always promised "a restored pane comes back speaking the same language", but
+      // no column existed, so the field silently dropped on every persist.
+      ['remote_shell', 'TEXT']
     ] as const) {
-      try {
-        this.db.exec(`ALTER TABLE panes ADD COLUMN ${column} ${type}`)
-      } catch {
-        /* column already exists */
-      }
+      addColumnIfMissing(this.db, 'panes', column, type)
     }
   }
 
   loadPanes(): PersistedPane[] {
     const rows = this.db
       .prepare(
-        'SELECT id, workspace_id AS workspaceId, cwd, reported_cwd AS reportedCwd, reported_cwd_at AS reportedCwdAt, remote_name AS remoteName, remote_host AS remoteHost, remote_user AS remoteUser, remote_port AS remotePort, remote_cwd AS remoteCwd, remote_platform AS remotePlatform, command, scrollback, updated_at AS updatedAt FROM panes'
+        'SELECT id, workspace_id AS workspaceId, cwd, reported_cwd AS reportedCwd, reported_cwd_at AS reportedCwdAt, remote_name AS remoteName, remote_host AS remoteHost, remote_user AS remoteUser, remote_port AS remotePort, remote_cwd AS remoteCwd, remote_platform AS remotePlatform, remote_shell AS remoteShell, command, scrollback, updated_at AS updatedAt FROM panes'
       )
       .all() as Array<{
       id: string
@@ -96,6 +92,7 @@ export class SessionStore {
       remotePort: number | null
       remoteCwd: string | null
       remotePlatform: string | null
+      remoteShell: string | null
       command: string | null
       scrollback: string
       updatedAt: number
@@ -125,7 +122,9 @@ export class SessionStore {
         cwd: r.cwd,
         reportedCwd: r.reportedCwd ?? undefined,
         reportedCwdAt: r.reportedCwdAt ?? undefined,
-        remote: remote ? { ...remote, cwd: r.remoteCwd ?? undefined } : undefined,
+        // `shell` restores alongside the connection pointer: the contract's promise is
+        // that a restored pane comes back speaking the dialect it went away in.
+        remote: remote ? { ...remote, cwd: r.remoteCwd ?? undefined, shell: asRemoteShell(r.remoteShell) } : undefined,
         command: r.command ?? undefined,
         scrollback: r.scrollback,
         updatedAt: r.updatedAt
@@ -138,7 +137,7 @@ export class SessionStore {
     const tx = this.db.transaction((rows: PersistedPane[]) => {
       this.db.prepare('DELETE FROM panes').run()
       const ins = this.db.prepare(
-        'INSERT INTO panes (id, workspace_id, cwd, reported_cwd, reported_cwd_at, remote_name, remote_host, remote_user, remote_port, remote_cwd, remote_platform, command, scrollback, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO panes (id, workspace_id, cwd, reported_cwd, reported_cwd_at, remote_name, remote_host, remote_user, remote_port, remote_cwd, remote_platform, remote_shell, command, scrollback, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       for (const p of rows)
         ins.run(
@@ -153,6 +152,7 @@ export class SessionStore {
           p.remote?.port ?? null,
           p.remote?.cwd ?? null,
           p.remote?.platform ?? null,
+          p.remote?.shell ?? null,
           p.command ?? null,
           p.scrollback.slice(-MAX_SCROLLBACK),
           p.updatedAt

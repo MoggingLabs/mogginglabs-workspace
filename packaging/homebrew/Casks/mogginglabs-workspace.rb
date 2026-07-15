@@ -3,7 +3,7 @@ cask "mogginglabs-workspace" do
   version "0.12.0"
   sha256 "32132189f5918baba636dde82884367b3d3267f626b059d86f977639bdcdd795"
 
-  url "https://github.com/MoggingLabs/mogginglabs-workspace/releases/download/v#{version}/MoggingLabs.Workspace-#{version}-mac-arm64.dmg"
+  url "https://github.com/MoggingLabs/mogginglabs-workspace/releases/download/v#{version}/MoggingLabs-Workspace-#{version}-mac-arm64.dmg"
   name "MoggingLabs Workspace"
   desc "Multi-pane terminal workspace for AI coding agents"
   homepage "https://github.com/MoggingLabs/mogginglabs-workspace"

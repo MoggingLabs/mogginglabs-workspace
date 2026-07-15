@@ -4,6 +4,7 @@
 // sessions.db so the two processes never contend on one file: main owns this; daemon owns sessions.
 import { randomUUID } from 'node:crypto'
 import Database from 'better-sqlite3'
+import { addColumnIfMissing } from './db-migrate'
 import type {
   AgentConfigOverrideRecord,
   AgentConfigProviderId,
@@ -95,67 +96,32 @@ export class SettingsStore {
       CREATE INDEX IF NOT EXISTS app_agent_config_target_idx
         ON app_agent_config_overrides (provider, scope, target_id);
     `)
-    // Migrate pre-06b dbs that lack the assignments column (per-workspace template lineup).
-    try {
-      this.db.exec('ALTER TABLE app_workspaces ADD COLUMN assignments TEXT')
-    } catch {
-      /* column already exists */
+    // Additive column migrations (idempotent — see db-migrate.ts). In arrival order:
+    //   assignments        pre-06b: per-workspace template lineup
+    //   pane_cwds          pre-3/03: per-slot cwd overrides (worktree isolation)
+    //   pane_roles         pre-4/01: per-slot swarm roles
+    //   pane_remotes       pre-4/05: per-slot remote hosts
+    //   pane_profile_ids   pre-6/04: per-slot launch profiles (ids only — ADR 0002)
+    //   layout_tree        pre-split-tree: serialized pane arrangement (shape + sizes)
+    for (const [column, type] of [
+      ['assignments', 'TEXT'],
+      ['pane_cwds', 'TEXT'],
+      ['pane_roles', 'TEXT'],
+      ['pane_remotes', 'TEXT'],
+      ['pane_profile_ids', 'TEXT'],
+      ['layout_tree', 'TEXT']
+    ] as const) {
+      addColumnIfMissing(this.db, 'app_workspaces', column, type)
     }
-    // Migrate pre-3/03 dbs: per-slot cwd overrides (worktree isolation).
-    try {
-      this.db.exec('ALTER TABLE app_workspaces ADD COLUMN pane_cwds TEXT')
-    } catch {
-      /* column already exists */
-    }
-    // Migrate pre-4/01 dbs: per-slot swarm roles.
-    try {
-      this.db.exec('ALTER TABLE app_workspaces ADD COLUMN pane_roles TEXT')
-    } catch {
-      /* column already exists */
-    }
-    // Migrate pre-4/05 dbs: per-slot remote hosts.
-    try {
-      this.db.exec('ALTER TABLE app_workspaces ADD COLUMN pane_remotes TEXT')
-    } catch {
-      /* column already exists */
-    }
-    // Migrate pre-6/04 dbs: per-slot launch profiles (ids only — ADR 0002).
-    try {
-      this.db.exec('ALTER TABLE app_workspaces ADD COLUMN pane_profile_ids TEXT')
-    } catch {
-      /* column already exists */
-    }
-    // Migrate to simplified profiles: the subscription email (a label — ADR 0002).
-    try {
-      this.db.exec('ALTER TABLE app_profiles ADD COLUMN email TEXT')
-    } catch {
-      /* column already exists */
-    }
+    // Simplified profiles: the subscription email (a label — ADR 0002).
+    addColumnIfMissing(this.db, 'app_profiles', 'email', 'TEXT')
     // Development builds predating ADR 0011's explicit set/unset distinction.
-    try {
-      this.db.exec("ALTER TABLE app_agent_config_overrides ADD COLUMN operation TEXT NOT NULL DEFAULT 'set'")
-    } catch {
-      /* column already exists */
-    }
-    // Migrate pre-split-tree dbs: the serialized pane arrangement (shape + sizes).
-    try {
-      this.db.exec('ALTER TABLE app_workspaces ADD COLUMN layout_tree TEXT')
-    } catch {
-      /* column already exists */
-    }
-    // Remote bootstrapping was POSIX-only: existing rows are NULL/unconfirmed and read back
-    // as posix/sh until the user confirms the dialect (which may now be windows) in Settings.
+    addColumnIfMissing(this.db, 'app_agent_config_overrides', 'operation', "TEXT NOT NULL DEFAULT 'set'")
+    // Remote bootstrapping was POSIX-only: existing rows are NULL/unconfirmed and stay that
+    // way until the user confirms the dialect (which may now be windows) in Settings.
     // No CHECK constraint here — an old db must be able to hold a windows host later.
-    try {
-      this.db.exec('ALTER TABLE app_remotes ADD COLUMN platform TEXT')
-    } catch {
-      /* column already exists */
-    }
-    try {
-      this.db.exec('ALTER TABLE app_remotes ADD COLUMN shell TEXT')
-    } catch {
-      /* column already exists */
-    }
+    addColumnIfMissing(this.db, 'app_remotes', 'platform', 'TEXT')
+    addColumnIfMissing(this.db, 'app_remotes', 'shell', 'TEXT')
   }
 
   /** Guarded per-field JSON parse: one corrupt cell drops that FIELD, never the row —
@@ -514,8 +480,13 @@ export class SettingsStore {
         host: remote.host,
         user: remote.user ?? null,
         port: remote.port ?? null,
-        platform: remote.platform ?? 'posix',
-        shell: remote.shell ?? (remote.platform === 'windows' ? 'powershell' : 'sh'),
+        // NULL stays NULL — the write path must honor the same rule as the read path
+        // above: an unconfirmed platform is a fact about the user's knowledge, and
+        // coercing it to 'posix' here CONFIRMED it on their behalf (any round-trip
+        // save — a rename, a port edit — silently stamped a legacy host POSIX, which
+        // is exactly the guess listRemotes refuses to make).
+        platform: remote.platform ?? null,
+        shell: remote.platform === undefined ? null : (remote.shell ?? (remote.platform === 'windows' ? 'powershell' : 'sh')),
         identityHint: remote.identityHint ?? null
       })
   }
