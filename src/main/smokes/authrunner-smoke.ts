@@ -98,6 +98,24 @@ export function runAuthRunnerSmoke(win: BrowserWindow): void {
         return oauth instanceof HTMLInputElement && oauth.checked
       })()`)
       const oauthConnected = await connectPanel()
+      // Toasts auto-dismiss, and three auth runs settle at different moments — a
+      // one-shot DOM snapshot after `settled` misses whichever finish toasts have
+      // already expired (observed: codex's success and gemini's failure gone while
+      // their settled BUTTON states prove both fired). Accumulate titles from the
+      // moment the runs start instead, so the assertion reads what actually fired.
+      await ES(`(() => {
+        window.__mogToasts = window.__mogToasts || []
+        if (!window.__mogToastObs) {
+          const collect = () => document.querySelectorAll('.toast-title').forEach((t) => {
+            const s = t.textContent || ''
+            if (s && !window.__mogToasts.includes(s)) window.__mogToasts.push(s)
+          })
+          window.__mogToastObs = new MutationObserver(collect)
+          window.__mogToastObs.observe(document.body, { childList: true, subtree: true })
+          collect()
+        }
+        return 1
+      })()`)
       const oauthStarted = await ES<{ count: number; pending: boolean }>(`(() => {
         const buttons = [...document.querySelectorAll('.cat-panel button')].filter((button) => /^Authorize in /.test(button.textContent ?? ''))
         buttons.forEach((button) => button.click())
@@ -133,7 +151,7 @@ export function runAuthRunnerSmoke(win: BrowserWindow): void {
         codex: oauthUi.codex === 'Authorized in Codex' && /successful/.test(String(oauthUi.codexTitle)),
         gemini: oauthUi.gemini === 'Retry authorization in Gemini' && /code 7/.test(String(oauthUi.geminiTitle))
       }
-      const finishToasts = await ES<string[]>(`[...document.querySelectorAll('.toast-title')].map((item) => item.textContent ?? '')`)
+      const finishToasts = await ES<string[]>(`window.__mogToasts.slice()`)
 
       // A no-auth preset has neither OAuth actions nor token instructions. It
       // still carries the explicit `none` selection through connect.

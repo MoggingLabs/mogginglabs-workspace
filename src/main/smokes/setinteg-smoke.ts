@@ -104,10 +104,11 @@ export function runSetIntegSmoke(win: BrowserWindow): void {
       for (const sel of INTEG_HOOKS) hooks[sel] = await waitTrue(`!!document.querySelector(${JSON.stringify(sel)})`)
 
       // ── (a) the overview band reads from fixtures, not placeholders ─────────
-      // Two stats since the split (Servers · Service keys) — webhooks and the
-      // trail report on their own tabs now.
+      // Three stats since app-held connections landed (Connections · Servers ·
+      // Service keys) — webhooks and the trail report on their own tabs now.
+      // Connections shows 'none' at zero (the fixture world), never '—'.
       const statsOk = await waitTrue(
-        `[...document.querySelectorAll('.integux-stats .integux-stat-value')].length === 2 &&
+        `[...document.querySelectorAll('.integux-stats .integux-stat-value')].length === 3 &&
          [...document.querySelectorAll('.integux-stats .integux-stat-value')].every(e => (e.textContent||'').trim() && e.textContent.trim() !== '—')`
       )
 
@@ -122,17 +123,23 @@ export function runSetIntegSmoke(win: BrowserWindow): void {
       const wiredSections = await ES<string[]>(
         `[...document.querySelectorAll('.collapsible-card')].map(c => c.dataset.collapsible)`
       )
-      const sectionsOk = ['catalog', 'servers', 'matrix', 'grants', 'keys'].every((id) => wiredSections.includes(id))
+      const sectionsOk = ['connections', 'catalog', 'servers', 'matrix', 'grants', 'keys'].every((id) => wiredSections.includes(id))
 
       // ── (b) disclosure persists across a leave/return ───────────────────────
-      const catalogOpenByDefault = await cardOpen('catalog')
-      await toggle('catalog')
+      // Connections is the default-open card now (it is about YOUR accounts; the
+      // per-CLI config machinery below starts folded). Toggle two cards off their
+      // defaults, leave, return: the choices stick and an untouched card keeps its
+      // default.
+      const connectionsOpenByDefault = await cardOpen('connections')
+      const catalogClosedByDefault = !(await cardOpen('catalog'))
+      await toggle('connections')
       await sleep(150)
       await toggle('grants')
       await sleep(150)
       await leaveAndReturn()
       const persistOk =
-        catalogOpenByDefault && !(await cardOpen('catalog')) && (await cardOpen('grants')) && !(await cardOpen('keys'))
+        connectionsOpenByDefault && catalogClosedByDefault &&
+        !(await cardOpen('connections')) && (await cardOpen('grants')) && !(await cardOpen('keys'))
 
       // ── (e/1) Integrations hit targets, measured on the real box ────────────
       // Cards must be open for a box to exist: a `display:none` body measures 0.

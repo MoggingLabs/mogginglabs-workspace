@@ -189,10 +189,11 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       )
 
       stage = 'b-overview'
-      // Two stats since the tab split (Servers · Service keys) — webhooks and the
-      // trail report on their own tabs now.
+      // Three stats since app-held connections landed (Connections · Servers ·
+      // Service keys) — webhooks and the trail report on their own tabs now.
+      // Connections shows 'none' at zero, never '—'.
       const overviewOk = await waitTrue(
-        `[...document.querySelectorAll('.integux-stats .integux-stat-value')].length === 2 &&
+        `[...document.querySelectorAll('.integux-stats .integux-stat-value')].length === 3 &&
          [...document.querySelectorAll('.integux-stats .integux-stat-value')].every(e => (e.textContent||'').trim() && e.textContent.trim() !== '—')`
       )
 
@@ -219,15 +220,17 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       await sleep(300)
 
       stage = 'b-persist'
-      // Disclosure persists across a leave/return: open Grants, fold Catalog, come back.
-      const catalogDefault = await cardOpen('catalog')
-      await toggleCard('catalog')
+      // Disclosure persists across a leave/return. Connections is the default-open
+      // card now (catalog starts folded): fold Connections, open Grants, come back —
+      // both choices stick.
+      const connectionsDefault = await cardOpen('connections')
+      await toggleCard('connections')
       await sleep(150)
       await toggleCard('grants')
       await sleep(150)
       await leaveSettings()
       await openSettings('integrations')
-      const persistOk = catalogDefault && !(await cardOpen('catalog')) && (await cardOpen('grants'))
+      const persistOk = connectionsDefault && !(await cardOpen('connections')) && (await cardOpen('grants'))
 
       stage = 'b-usage'
       // Usage opens overview-first; a HOT fixture posts .usage-fill.is-hot on the collapsed

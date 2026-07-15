@@ -104,7 +104,10 @@ export function runMcpCatSmoke(win: BrowserWindow, mode?: string): void {
       const geminiFile = join(homes.geminiDir, 'settings.json')
 
       // ── (a) a preset lands dialect-correct in all three (PostHog: token) ───
-      const posthog = catConnect('posthog', ['claude-code', 'codex', 'gemini'], {}, homes)
+      // authKind pinned: posthog's authKinds are oauth-FIRST since app-held
+      // connections landed, so a default catConnect picks oauth and lands no
+      // Authorization header — this step tests the TOKEN dialect on purpose.
+      const posthog = catConnect('posthog', ['claude-code', 'codex', 'gemini'], { authKind: 'token' }, homes)
       const claudeJson = JSON.parse(readFileSync(claudeFile, 'utf8')) as {
         mcpServers?: Record<string, { type?: string; url?: string; headers?: Record<string, string> }>
       }
