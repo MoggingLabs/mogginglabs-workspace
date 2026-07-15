@@ -54,7 +54,20 @@ const DENIED = [
   ['holds-no-credential', /\bholds?\s+no\s+credentials?\b/gi],
   ['ever-holding-storing-credential', /\bever\s+(?:holding|storing)\s+a\s+credential\b/gi],
   ['zero-credentials-keys-stored', /\bzero\s+(?:credentials?|keys?)\s+stored\b/gi],
-  ['doesnt-store-credential', /\bdoes(?:n['’]?t|\s+not)\s+store\s+(?:a|any)\s+credentials?\b/gi]
+  ['doesnt-store-credential', /\bdoes(?:n['’]?t|\s+not)\s+store\s+(?:a|any)\s+credentials?\b/gi],
+  // ── ADR 0014 made these false. They were TRUE when they were written, which is
+  // exactly what makes them dangerous: they are remembered, and a sentence you
+  // remember is one you re-type without re-checking. The app is now an OAuth
+  // client — it holds a grant per connected service, as OS-keychain ciphertext.
+  //
+  // Say the true thing instead: OAuth belongs to the APP now, and the CLIs reach the
+  // service through it, so no token is ever written into a CLI's config. What we still
+  // never broker is the CLI's own provider LOGIN (ADR 0002) — that claim is untouched,
+  // and the patterns below are careful not to forbid it.
+  ['never-stores-oauth-token', /\bnever\s+(?:stores?|holds?|keeps?)\s+(?:an?|any|your)\s+oauth\s+tokens?\b/gi],
+  ['app-never-authenticates-server', /\bnever\s+runs?,?\s+proxies,?\s+or\s+authenticates?\s+a\s+server\b/gi],
+  ['oauth-belongs-to-each-cli', /\boauth\s+belongs\s+to\s+each\s+cli\b/gi],
+  ['no-oauth-token-stored', /\bno\s+oauth\s+tokens?\s+(?:are\s+)?(?:stored|held)\b/gi]
 ]
 
 /**
@@ -66,11 +79,13 @@ const DENIED = [
 const ALLOWED = [
   {
     file: 'docs/14-integrations.md',
-    line: 251,
+    line: 294, // was 251 — ADR 0014 rewrote Directions 1 & 2 above it. The SENTENCE is unchanged.
     contains: 'The app holds',
     reason:
       'scoped to Direction 5 — the GitHub adapter rides your `gh` CLI and never captures a token. ' +
-      'A true, narrow claim about ONE adapter, unlike the product-wide claim the README used to make.'
+      'A true, narrow claim about ONE adapter, unlike the product-wide claim the README used to make. ' +
+      'Still true after ADR 0014: the app now holds OAuth grants for CONNECTIONS (direction 1), but ' +
+      'the direction-5 service adapter this sentence describes holds nothing and never has.'
   }
 ]
 

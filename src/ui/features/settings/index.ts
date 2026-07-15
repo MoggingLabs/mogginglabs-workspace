@@ -363,12 +363,14 @@ export const settingsFeature: UiFeature = {
       {
         id: 'integrations',
         label: 'Integrations',
-        // THE integrations home (8/06+): catalog, registry, plans, grants, keys —
-        // one module, one home. Webhooks and the activity trail have their own tabs.
+        // THE integrations home (8/06+, ADR 0014): connections, catalog, registry,
+        // plans, grants, keys — one module, one home. Webhooks and the activity trail
+        // have their own tabs. The subtitle leads with CONNECTIONS because that is now
+        // the page's subject; the per-CLI machinery is how a connection reaches an agent.
         el: section(
           'integrations',
           'Integrations',
-          'MCP servers: connect them, apply them per CLI, scope them per workspace, key them.',
+          'Connect your accounts once — then scope which agents can use them.',
           [createIntegrationsSection()]
         )
       },

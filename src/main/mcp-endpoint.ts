@@ -8,6 +8,8 @@ import { agentAct, agentControlDebug } from './browser-dock'
 import { handleUsageCall } from './usage'
 import { getSettingsStore } from './app-settings'
 import { onIntegrationsGrantChanged, resolveGrantedWriteTools } from './integrations'
+import { connectionUpstream } from './connections'
+import { mcpFetch } from '@backend/features/integrations'
 import { getDaemonClient } from './daemon-relay'
 import { recordTrail } from './trail'
 import {
@@ -118,6 +120,49 @@ function receiptCopy(tool: string, by: string): string {
   }
 }
 
+/**
+ * The connection proxy (ADR 0014) — the app IS the MCP client.
+ *
+ * `bin/mogging-connection.mjs` forwards an agent's JSON-RPC frame here verbatim;
+ * we attach the OAuth token and call the real server. The token is decrypted
+ * inside `connectionUpstream` and dies with this stack frame — it is never
+ * written to a config, a log, or the socket that asked for it.
+ *
+ * `sessions` is PER-SOCKET, and must be: a streamable-HTTP server hands out an
+ * `mcp-session-id` at initialize and rejects later calls that omit it. One bridge
+ * process is one agent's session, so one socket is the right lifetime for it —
+ * a map shared across bridges would cross two agents' sessions into one.
+ */
+async function handleConnectionRpc(
+  connection: string,
+  payload: unknown,
+  sessions: Map<string, string>
+): Promise<{ ok: boolean; payload?: unknown; reason?: string }> {
+  if (!/^[a-z0-9_-]{1,64}$/i.test(connection)) return { ok: false, reason: 'unknown connection' }
+  const upstream = await connectionUpstream(connection)
+  if (!upstream) {
+    return {
+      ok: false,
+      reason: `The ${connection} connection is not connected in MoggingLabs Workspace — open Settings › Integrations and connect it.`
+    }
+  }
+  const res = await mcpFetch(upstream.url, payload, {
+    token: upstream.token,
+    authScheme: upstream.authScheme,
+    sessionId: sessions.get(connection)
+  })
+  if (!res.ok) {
+    // Streamable HTTP: 404 with a session id means the SERVER expired the session
+    // (spec: the client must start over with a new initialize). Holding the stale id
+    // made every later call 404 forever; dropping it lets the agent's own re-initialize
+    // mint a fresh session on the next round trip.
+    if (res.status === 404 && sessions.has(connection)) sessions.delete(connection)
+    return { ok: false, reason: res.reason }
+  }
+  if (res.sessionId) sessions.set(connection, res.sessionId)
+  return { ok: true, payload: res.result }
+}
+
 /** A granted write's receipt: attention on the target pane + the trail stub.
  *  Every write is attributable — `by` is the acting pane, always present. */
 function handleReceipt(msg: Record<string, unknown>, boundPane: string | undefined): void {
@@ -163,6 +208,9 @@ export function startMcpEndpoint(): void {
     let authed = false
     let authPending = false
     let boundPane: string | undefined
+    // One bridge process = one agent's MCP session. Scoped to the socket so it
+    // dies with the agent, and so two agents never share a server session id.
+    const mcpSessions = new Map<string, string>()
     sock.on('data', (chunk) => {
       buf += chunk
       let i
@@ -270,6 +318,15 @@ export function startMcpEndpoint(): void {
             card.updatedAt = Date.now()
             store.saveBoardCard(card)
             sock.write(JSON.stringify({ t: 'result', id, ok: true, pane: card.paneId ?? undefined }) + '\n')
+            continue
+          }
+          // ADR 0014: the connection proxy. A bridge asks us to speak to a service
+          // the APP is connected to; we attach the token it never gets to see.
+          if (msg.name === 'connection.rpc') {
+            const args = msg.args ?? {}
+            void handleConnectionRpc(String(args.connection ?? ''), args.payload, mcpSessions).then((r) => {
+              sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n')
+            })
             continue
           }
           // 8/03: the grant wire. `grant.get` resolves pane -> workspace ->

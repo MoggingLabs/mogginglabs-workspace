@@ -7281,6 +7281,182 @@ body.pane-dragging * {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The per-CLI Connect panel opens BELOW a 28-card grid. It used to land ~1,500px
+   under an 800px fold with nothing to mark it, so the click read as a no-op. It
+   scrolls into view now (integrations.ts); the ring is what you land ON. */
+.cat-panel:not([hidden]) {
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2);
+  background: var(--bg-inset);
+}
+
+/* ── Connections (ADR 0014): the app's OWN account connections ──────────────
+   A card here is an account, not a config row. State is PROVEN — every value on
+   it was answered by the server (initialize + tools/list), never inferred from
+   the presence of a config block. */
+.conn-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--sp-2);
+}
+.conn-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2);
+  background: var(--bg-inset);
+}
+/* A live connection earns the accent edge — the page's one "this is working" tell. */
+.conn-card.is-connected {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+}
+.conn-card.is-expired,
+.conn-card.is-error {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+.conn-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.conn-label {
+  font-weight: 600;
+  color: var(--text-hi);
+}
+.conn-chip {
+  flex: none;
+  margin-left: auto;
+  border-radius: var(--r-full);
+  font-size: var(--fs-11);
+  padding: 0 var(--sp-2);
+  background: color-mix(in srgb, var(--text-mid) 14%, transparent);
+  color: var(--text-mid);
+}
+.conn-chip.is-connected {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
+}
+.conn-chip.is-connecting {
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+}
+.conn-chip.is-expired,
+.conn-chip.is-error {
+  background: var(--danger-weak);
+  color: var(--danger-ink);
+}
+/* WHOSE account. The loudest thing on a connected card, because it is the question the
+   card exists to answer — and because acting as the wrong account is how an agent does
+   real damage. When the provider never told us, the row stays but goes quiet: the blank
+   is explained, never filled with a guess. */
+.conn-account {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: var(--text-hi);
+  min-width: 0;
+}
+.conn-account > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conn-account.is-unknown {
+  align-items: flex-start;
+  font-weight: 400;
+  font-style: italic;
+  color: var(--text-mid);
+}
+/* An ACCOUNT NAME is clipped — it is a name, and a card is a glance. The note that
+   stands in for a missing one is a SENTENCE, and clipping it to "doesn't share …"
+   destroys the only thing it was there to do: explain the blank. It wraps. */
+.conn-account.is-unknown > span {
+  white-space: normal;
+  overflow: visible;
+  line-height: 1.35;
+}
+.conn-summary {
+  font-size: var(--fs-11);
+  color: var(--text-mid);
+  min-height: 2.6em;
+}
+.conn-card.is-connected .conn-summary {
+  min-height: 0;
+}
+.conn-summary.is-error {
+  color: var(--danger-ink);
+  min-height: 0;
+}
+/* What the grant may DO. Clipped to one line — the full list is the title attribute,
+   because a card is a glance, not an audit log. */
+.conn-scopes {
+  font-size: var(--fs-11);
+  color: var(--text-dim, var(--text-mid));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+.conn-card-body:empty {
+  display: none;
+}
+.conn-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-wrap: wrap;
+}
+.conn-mini {
+  font-size: var(--fs-11);
+}
+.conn-key-form {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-wrap: wrap;
+}
+.conn-key-input {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+/* Full observability: the tool NAMES a connection actually serves. The toggle reads
+   as text (the count), the expanded list wraps as small chips — an inventory at a
+   glance, not a table to administer. */
+.conn-tools-toggle {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: var(--fs-11);
+  color: var(--text-mid);
+  cursor: pointer;
+  text-align: left;
+}
+.conn-tools-toggle:hover {
+  color: var(--text-hi);
+}
+.conn-tools-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: var(--sp-1);
+  max-height: 9rem;
+  overflow-y: auto;
+}
+.conn-tool {
+  font-size: var(--fs-11);
+  font-family: var(--font-mono, monospace);
+  padding: 0 var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-mid);
+  background: color-mix(in srgb, var(--text-mid) 6%, transparent);
+}
 
 /* ── First-run checklist (Phase-6/06): live, dismissible "Get set up" card ──── */
 .firstrun-card {

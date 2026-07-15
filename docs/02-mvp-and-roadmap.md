@@ -102,8 +102,10 @@ gates. Receipts + per-OS numbers in `prompts/phase-7/README.md`; surface in
 
 ### Phase 8 — Integrations, five directions ✅ (`prompts/phase-8/`)
 The workspace reaches out and is reached, five directions on one philosophy —
-*nothing runs, proxies, or holds a credential it doesn't have to* (ADR 0008;
-daemon still v3, grant-blind):
+*every credential we hold rests as OS-keychain ciphertext, on your machine, or we
+refuse to hold it* (ADR 0008, as amended by [ADR 0014](adr/0014-app-held-service-connections.md),
+which makes the app an OAuth client for service **connections**; daemon still v3,
+grant-blind):
 1. **Tools → agents** — register any MCP server across the Claude Code / Codex /
    Gemini config dialects (surgical, backed-up, drift-detected) from a curated
    Catalog, the registry, or a pasted preset; per-workspace **tool plans** scope
