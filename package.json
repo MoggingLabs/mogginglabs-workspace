@@ -26,7 +26,8 @@
     "dist:mac": "electron-vite build && electron-builder --mac --publish never",
     "smoke:git-pure": "tsx scripts/git-feature-pure-smoke.ts",
     "smoke:remote-bootstrap-pure": "tsx scripts/remote-bootstrap-pure-smoke.ts",
-    "smoke:connections-pure": "tsx scripts/connections-pure-smoke.ts"
+    "smoke:connections-pure": "tsx scripts/connections-pure-smoke.ts",
+    "smoke:preregistered-client-pure": "tsx scripts/preregistered-client-pure-smoke.ts"
   },
   "dependencies": {
     "@fontsource-variable/jetbrains-mono": "^5.2.8",

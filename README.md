@@ -43,6 +43,7 @@ renderer is tuned once and behaves identically everywhere. See
 
 ## Quickstart
 
+
 ```bash
 npm install        # compiles native modules (node-pty, better-sqlite3). Needs a C++ toolchain — see below.
 npm run dev        # launch the app in dev mode
@@ -50,7 +51,7 @@ npm run dev        # launch the app in dev mode
 
 > **Status.** All roadmap phases through 11 (Files — the explorer sidebar) have shipped;
 > the current release is the version in `package.json`. The `qa-smokes.sh`
-> sweep now runs **133 gates** across three OSes. Per-phase receipts and measured numbers
+> sweep now runs **134 gates** across three OSes. Per-phase receipts and measured numbers
 > live where they were written: the docs each roadmap bullet below links, and the
 > `prompts/phase-*/REPORT.md` process records.
 

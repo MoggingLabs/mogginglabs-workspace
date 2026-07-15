@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 133 gates: 18 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 134 gates: 19 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
-# GITPURE · REMOTEBOOT · CONNPURE) + 115 app-boot
+# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT) + 115 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -234,6 +234,12 @@ run_static REMOTEBOOT npm run smoke:remote-bootstrap-pure
 # reintroducing the scope over-ask, the rotation-merge drop, or the whoami unfence each
 # turns it red. Everything it asserts failed silently once; this is what stops the reprise.
 run_static CONNPURE npm run smoke:connections-pure
+# PREREGCLIENT: pre-registered OAuth clients for no-DCR providers (Google/GitHub/Slack).
+# Three fixture AS shapes prove: no-DCR fails ACTIONABLY (needsClientId → the paste form),
+# a refusing-but-live registration endpoint does NOT, a pasted secret rides the exchange,
+# one issuer-keyed client covers the whole Workspace group, and a user record is never
+# purged on redirect drift (a dcr record still is — each gets the advice that is true).
+run_static PREREGCLIENT npm run smoke:preregistered-client-pure
 
 run_smoke SMOKE       MOGGING_SMOKE     1 180 smoke
 run_smoke MULTIPANE   MOGGING_MULTIPANE 1 180 multipane

@@ -79,7 +79,7 @@ const DENIED = [
 const ALLOWED = [
   {
     file: 'docs/14-integrations.md',
-    line: 294, // was 251 — ADR 0014 rewrote Directions 1 & 2 above it. The SENTENCE is unchanged.
+    line: 306, // was 294 — the pre-registered client-ID paragraph landed above it. The SENTENCE is unchanged.
     contains: 'The app holds',
     reason:
       'scoped to Direction 5 — the GitHub adapter rides your `gh` CLI and never captures a token. ' +
