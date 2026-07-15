@@ -151,7 +151,16 @@ export function runAuthRunnerSmoke(win: BrowserWindow): void {
         codex: oauthUi.codex === 'Authorized in Codex' && /successful/.test(String(oauthUi.codexTitle)),
         gemini: oauthUi.gemini === 'Retry authorization in Gemini' && /code 7/.test(String(oauthUi.geminiTitle))
       }
-      const finishToasts = await ES<string[]>(`window.__mogToasts.slice()`)
+      // The finish toasts can trail the settled buttons by several seconds: with three
+      // 9s start toasts holding the stack at MAX_STACK, the later finishes QUEUE (by
+      // design — a toast is never destroyed before it has been seen, RC3) and mount only
+      // as the starts expire. Wait for both signatures rather than sampling one instant.
+      let finishToasts: string[] = []
+      for (let i = 0; i < 40; i++) {
+        finishToasts = await ES<string[]>(`window.__mogToasts.slice()`)
+        if (finishToasts.some((t) => t.includes('authorized in')) && finishToasts.some((t) => t.includes('authorization failed'))) break
+        await sleep(500)
+      }
 
       // A no-auth preset has neither OAuth actions nor token instructions. It
       // still carries the explicit `none` selection through connect.

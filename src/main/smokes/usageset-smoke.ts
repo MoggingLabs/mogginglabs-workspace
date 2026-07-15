@@ -66,12 +66,27 @@ export function runUsageSetSmoke(win: BrowserWindow): void {
       await ES(`(() => { const s = document.querySelector('.usage-search'); s.value = ''; s.dispatchEvent(new Event('input')) })()`)
       await sleep(100)
 
-      // 3 ── enable reaches the poller LIVE
-      await ES(`document.querySelector('.usage-prov-row[data-provider="fake"] .usage-prov-enable input').click()`)
+      // 3 ── enable reaches the poller LIVE. Each toggle triggers a configSet ->
+      // loadGrid re-render that REPLACES the checkbox; a blind second click can land
+      // on the freshly-rendered input before its `checked` reflects the write and
+      // toggle the WRONG way. Drive to a TARGET state instead: click only when the
+      // live checkbox disagrees, re-reading it each pass, so the test exercises the
+      // steady-state "toggle -> poller" contract rather than a re-render race.
+      const setEnabled = async (want: boolean): Promise<void> => {
+        for (let i = 0; i < 40; i++) {
+          const checked = await ES<boolean | null>(
+            `(() => { const el = document.querySelector('.usage-prov-row[data-provider="fake"] .usage-prov-enable input'); return el ? el.checked : null })()`
+          )
+          if (checked === want) return
+          if (checked !== null) await ES(`document.querySelector('.usage-prov-row[data-provider="fake"] .usage-prov-enable input').click()`)
+          await sleep(200)
+        }
+      }
+      await setEnabled(false)
       tries = 0
       while (svc.list().length !== 0 && tries++ < 40) await sleep(150)
       const disabledOk = svc.list().length === 0
-      await ES(`document.querySelector('.usage-prov-row[data-provider="fake"] .usage-prov-enable input').click()`)
+      await setEnabled(true)
       tries = 0
       while (svc.list().length !== 11 && tries++ < 60) await sleep(200)
       const enabledOk = svc.list().length === 11

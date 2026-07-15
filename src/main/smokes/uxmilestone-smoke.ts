@@ -351,6 +351,15 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       // the chips present — at 600px they are correctly gone, and `present` would fail.
       win.setSize(1450, 680)
       await sleep(800)
+      // A 4-pane workspace tiles 2×2 (grid-layout: ceil(sqrt(4))=2 cols), so each pane is
+      // only ~715px — and the FULLY lit bar (mcp "restart +2" · claims · role · remote ·
+      // a full git chip · title) overflows that, so pane-header-fit CORRECTLY retires the
+      // trailing left chips (role, remote) into ⋯. That is the overflow working, not the
+      // no-wrap layout failing. Solo the measured pane to the whole window first so the bar
+      // has the room the `present` check assumes — then nothing retires and the one-line
+      // contract is what gets measured.
+      await ES(`window.__mogging.workspace.expand(${paneId}, 'full')`)
+      await sleep(400)
       await ES(`(() => { const p = (window.__mogging.panes || []).find((p) => p.id === ${paneId}); if (p && p.lightChips) p.lightChips(); return 1 })()`)
       await sleep(400)
       const pane = await ES<{ ok: boolean; headerH: number; stateLeading: boolean; clipped: boolean; noWrapStyle: boolean; centersAligned: boolean; present: boolean }>(`(() => {
