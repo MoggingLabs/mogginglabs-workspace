@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 124 gates: 15 static (AUDIT · SPACING · PTYSEAM · PROTOVER · AGENTCAT · LAYOUT ·
+# 128 gates: 15 static (AUDIT · SPACING · PTYSEAM · PROTOVER · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · GITPURE ·
-# REMOTEBOOT · CONNPURE) + 109 app-boot
+# REMOTEBOOT · CONNPURE) + 113 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a

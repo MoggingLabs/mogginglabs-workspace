@@ -8755,7 +8755,7 @@ body.pane-dragging * {
 }
 .usage-row-label {
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: var(--sp-1);
   color: var(--text-hi);
   font-size: var(--fs-12);
   font-weight: var(--fw-semibold);
@@ -8765,7 +8765,7 @@ body.pane-dragging * {
   display: flex;
   align-items: baseline;
   gap: var(--sp-2);
-  margin-top: 4px;
+  margin-top: var(--sp-1);
 }
 .usage-row-stats .usage-pct {
   text-align: left;
