@@ -6,6 +6,7 @@ import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { DAEMON_PROTOCOL_VERSION } from '@contracts'
+import { buildStampOf } from '@backend/platform/build-stamp'
 import { SessionStore } from '@backend/features/workspace'
 import { SessionManager } from './session'
 import { createServer } from './transport'
@@ -104,7 +105,17 @@ function main(): void {
         /* best effort */
       }
     }
-    writeEndpoint({ version: DAEMON_PROTOCOL_VERSION, address, token, pid: process.pid })
+    // The build stamp is taken from OUR OWN entry file, at startup — not passed in by the app
+    // that spawned us. After an update replaces app.asar the path holds NEW bytes, but this
+    // process keeps running the old code; hashing once at boot records what we actually ARE,
+    // which is precisely what lets the updated app see that we are stale (build-stamp.ts).
+    writeEndpoint({
+      version: DAEMON_PROTOCOL_VERSION,
+      address,
+      token,
+      pid: process.pid,
+      build: buildStampOf(process.argv[1] ?? '') ?? undefined
+    })
     log('listening ' + address + ' pid ' + process.pid)
     const others = otherVersionEndpoints()
     if (others.length) log('other-version daemons live (session migration pending Phase-1/03): ' + JSON.stringify(others))

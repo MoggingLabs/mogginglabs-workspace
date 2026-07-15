@@ -8,6 +8,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { spawn } from 'node:child_process'
 import { createLineFramer, encodeMessage, DAEMON_PROTOCOL_VERSION, channelFromEnv, runtimeSegment } from '@contracts'
+import { buildStampOf } from '@backend/platform/build-stamp'
 import type {
   Approval,
   Claim,
@@ -54,10 +55,19 @@ function isAlive(pid: number): boolean {
  *  Mirrors pipeAlive in src/pty-daemon/lifecycle.ts (main can't import the daemon bundle). */
 function pipeAlive(address: string): boolean {
   if (process.platform !== 'win32' || !address.startsWith('\\\\.\\pipe\\')) return true
+  // NOT existsSync: checking a named pipe means CreateFile, and a pipe whose pending listener
+  // instance is momentarily consumed answers PIPE_BUSY — which existsSync swallows into
+  // `false`. That declared a LIVE, LISTENING daemon dead: discovery unlinked its endpoint and
+  // blind-spawned a rival that the still-held lock refused, and the boot ended with no daemon
+  // at all (found by the DAEMONCUSTODY gate, whose back-to-back discoveries hit the re-arm
+  // window every time; any two discovery calls a few ms apart could). A busy pipe is a live
+  // pipe. Only "definitely gone" — ENOENT — may kill it; every other answer keeps the
+  // undecided default (true) and lets connect() be the judge, exactly like non-Windows.
   try {
-    return fs.existsSync(address)
-  } catch {
-    return false
+    fs.accessSync(address)
+    return true
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code !== 'ENOENT'
   }
 }
 
@@ -86,10 +96,124 @@ async function waitForLiveEndpoint(timeoutMs: number): Promise<DaemonEndpoint | 
   return null
 }
 
+/** How long a retire waits for the daemon's pid to actually die after `shutdown` is flushed.
+ *  Mirrors daemon-migrate's SHUTDOWN_WAIT_MS: the daemon persists its store and unwinds its
+ *  PTYs inside this window. */
+const RETIRE_WAIT_MS = 4_000
+const RETIRE_CONNECT_TIMEOUT_MS = 3_000
+const RETIRE_FLUSH_MS = 500
+
+/** True once the app has deliberately taken its own daemon down (an update is about to run
+ *  the installer). From that moment `ensureDaemon` REFUSES to spawn: the relay's reconnect
+ *  loop reacts to the daemon's death within milliseconds, and a resurrected daemon — running
+ *  from the installed exe — would re-take the very file lock the retire just released. */
+let quiescing = false
+export function beginDaemonQuiescence(): void {
+  quiescing = true
+}
+
+/**
+ * Gracefully retire the daemon behind an endpoint: handshake as a client (its OWN version +
+ * token — we are its guest), send `shutdown`, and wait for the pid to actually die. The
+ * daemon's shutdown path calls persistNow() before exiting, so this is LOSSLESS: the fresh
+ * spawn that follows cold-start restores every pane from the store this flush just wrote.
+ * The `shutdown` frame is settled on the WRITE CALLBACK, not fire-and-forget —
+ * socket.destroy() discards queued writes, and a dropped shutdown is a daemon that quietly
+ * survives its own retirement (daemon-migrate learned this the hard way).
+ *
+ * Returns true when the pid is verifiably gone. False means the daemon is still running —
+ * callers must degrade (keep using it / proceed and let the installer complain), never hang.
+ */
+export async function retireDaemonEndpoint(ep: DaemonEndpoint): Promise<boolean> {
+  await new Promise<void>((resolve) => {
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(connectTimer)
+      try {
+        sock.destroy()
+      } catch {
+        /* already gone */
+      }
+      resolve()
+    }
+    const sock = net.connect(ep.address)
+    sock.setEncoding('utf8')
+    const connectTimer = setTimeout(finish, RETIRE_CONNECT_TIMEOUT_MS)
+    const framer = createLineFramer((obj) => {
+      const m = obj as { t?: string }
+      if (m.t === 'welcome') {
+        try {
+          sock.write(JSON.stringify({ t: 'shutdown' }) + '\n', () => setTimeout(finish, 50))
+        } catch {
+          finish()
+        }
+        setTimeout(finish, RETIRE_FLUSH_MS)
+      } else if (m.t === 'error') {
+        finish() // auth refused — not ours to touch
+      }
+    })
+    sock.on('data', (chunk: string) => framer(chunk))
+    sock.on('error', finish)
+    sock.on('close', finish)
+    sock.on('connect', () => {
+      try {
+        sock.write(JSON.stringify({ t: 'hello', v: ep.version, token: ep.token }) + '\n')
+      } catch {
+        finish()
+      }
+    })
+  })
+  const waitUntil = Date.now() + RETIRE_WAIT_MS
+  while (isAlive(ep.pid) && Date.now() < waitUntil) await delay(100)
+  return !isAlive(ep.pid)
+}
+
+/**
+ * Retire OUR OWN live daemon — the pre-install step. The daemon runs from the installed
+ * executable and, being a process, holds a Windows file lock on it: an installer that runs
+ * while it lives ends in "MoggingLabs Workspace cannot be closed. Please close it manually
+ * and click Retry" — against a windowless process no user can see. Shutdown persists the
+ * store, so the post-update boot restores every pane; `quiesce` stops the reconnect loop
+ * from resurrecting it in the moments between this call and process exit.
+ */
+export async function retireOwnDaemon(opts: { quiesce: boolean }): Promise<boolean> {
+  if (opts.quiesce) quiescing = true
+  const ep = readEndpoint()
+  if (!endpointLive(ep)) return true // nothing running — nothing locks the exe
+  return retireDaemonEndpoint(ep)
+}
+
 /** Discover a running daemon or spawn one (detached, via Electron-as-Node). */
 export async function ensureDaemon(daemonEntry: string): Promise<DaemonEndpoint> {
+  if (quiescing) throw new Error('daemon is quiescing for an update — refusing to spawn')
   const existing = readEndpoint()
-  if (endpointLive(existing)) return existing
+  if (endpointLive(existing)) {
+    // THE BUILD-STAMP CHECK. The endpoint is live and speaks our protocol — but is it running
+    // our CODE? The daemon outlives the app (ADR 0006), so after an update this reconnect
+    // would otherwise hand every pane to a process still executing last release's daemon:
+    // same wire, stale behaviour, and nothing anywhere would fail. (v0.11.1's tracker fix
+    // shipped exactly that way — it changed no wire, so only a burned protocol version
+    // delivered it. The stamp is that lesson, made structural.)
+    //
+    // A missing recorded stamp reads as stale — daemons predating the stamp are by
+    // definition old code. A missing EXPECTED stamp (we cannot read our own bundle) reads
+    // as "no opinion": never retire on a question we cannot answer.
+    const expected = buildStampOf(daemonEntry)
+    if (!expected || existing.build === expected) return existing
+    console.warn(
+      `[daemon] live daemon is a different build (have ${existing.build ?? 'none'}, want ${expected}) — retiring in place`
+    )
+    const retired = await retireDaemonEndpoint(existing)
+    if (!retired) {
+      // It would not die. A stale-but-working daemon beats a boot with no terminals at all;
+      // the next launch (or the update's own retire) gets another chance.
+      console.warn('[daemon] stale-build daemon did not retire; continuing against it')
+      return existing
+    }
+    // Fall through: the endpoint below is now stale by construction and gets unlinked.
+  }
   // A stale endpoint must not survive this call. Left in place it poisons every retry:
   // waitForLiveEndpoint below re-reads it and "succeeds" against a daemon that isn't there,
   // and the relay's reconnect loop (which re-runs discovery each attempt) dials the same

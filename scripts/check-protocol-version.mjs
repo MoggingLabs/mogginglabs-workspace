@@ -123,18 +123,17 @@ for (const { file, checks } of CHANNEL_SOURCES) {
 // Change the wire -> the hash moves -> this gate fails and tells you to bump. Comments and
 // formatting are stripped, so prose edits are free; only the declarations count. Precedent: the
 // build already byte-compares bin/mcp-catalog.json against the contract it is copied from.
-const WIRE_FILES = [
-  'src/contracts/domain/agent.ts',
-  'src/contracts/daemon/protocol.ts',
-  // THE DAEMON CARRIES BEHAVIOUR, NOT JUST A WIRE. The ActivityTracker RUNS INSIDE THE DAEMON
-  // (pty-daemon/session.ts holds one per pane), so a stale daemon runs a stale tracker — and the
-  // wire it speaks is byte-identical while it does. v0.11.0 shipped a tracker that reddened every
-  // finished turn; the v0.11.1 fix would have reached NOBODY, because the app reconnects to the
-  // surviving daemon and the wire hash never moved. The question this gate exists to ask was
-  // never "did the wire change" — it is "does a daemon already running the OLD CODE still behave
-  // correctly?" For anything the daemon executes, a code change means no.
-  'src/backend/features/agent-state/activity.ts'
-]
+// The fingerprint covers the WIRE SHAPE and nothing else — deliberately, again. For one day it
+// also covered activity.ts (the tracker runs inside the daemon, and its v0.11.1 bug fix changed
+// no wire, so nothing forced the protocol bump that alone could deliver it). That widening was
+// the wrong instrument: it turned the protocol version into a build counter — a fresh immortal
+// run/v<N> dir per tracker edit — when the real question ("is the RUNNING daemon's code the
+// code I ship?") is not a compatibility question at all. The BUILD STAMP answers it now
+// (backend/platform/build-stamp.ts): the daemon self-hashes its bundle into endpoint.json, and
+// the app retires a stale-stamped daemon in place — same dir, no version burned, no human
+// remembering anything. This gate goes back to guarding the one thing only a version can fix:
+// an old daemon that cannot SPEAK to the new app.
+const WIRE_FILES = ['src/contracts/domain/agent.ts', 'src/contracts/daemon/protocol.ts']
 
 /** The declarations, and nothing else: comments gone, whitespace collapsed, and the version
  *  constant itself removed — the fingerprint describes the SHAPE of the wire, not the number
@@ -151,16 +150,17 @@ function wireFingerprint() {
   return createHash('sha256').update(norm).digest('hex').slice(0, 16)
 }
 
-// Bump BOTH together. If this gate fails, ask the one question it exists to ask:
+// If this gate fails, the wire's SHAPE moved. Two legitimate resolutions — pick by asking
+// whether a daemon already running the old code can still SPEAK this wire:
 //
-//     Does a daemon that is ALREADY RUNNING THE OLD CODE still behave correctly?
+//   INCOMPATIBLE (a state an old daemon cannot emit, a message it cannot answer): bump
+//   DAEMON_PROTOCOL_VERSION (all 3 declarations) AND re-pin here. The bump routes the app to a
+//   fresh run/v<N+1> and the migrate-and-retire hand-off carries live agents across.
 //
-// Not "does it still speak this wire" — that was the narrow version of the question, and it let
-// v0.11.1 through. The tracker's own bug fix changed no wire at all, so the hash never moved, and
-// the surviving daemon would have gone on reddening every finished turn for as long as the machine
-// stayed up. Any change to code the DAEMON EXECUTES means the answer is no, and the version must
-// move so the old daemon is retired and its sessions migrated rather than reconnected to.
-const PINNED = { version: 9, fingerprint: '4ee48e9d38934fd5' }
+//   ADDITIVE-TOLERANT (an optional field old readers ignore, e.g. the endpoint's build stamp):
+//   re-pin here WITHOUT bumping, and say why in the commit. The build stamp — not a version
+//   burn — is what delivers daemon CODE changes to already-running daemons.
+const PINNED = { version: 9, fingerprint: '0018a9cfa6efd8c2' }
 
 const actualWire = wireFingerprint()
 if (actualWire !== PINNED.fingerprint) {

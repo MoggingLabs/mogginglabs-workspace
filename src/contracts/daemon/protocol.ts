@@ -162,6 +162,15 @@ export interface DaemonEndpoint {
   address: string // named pipe path (Windows) or unix socket path (macOS/Linux)
   token: string // random per-daemon auth token; the client must present it in `hello`
   pid: number
+  /** The BUILD STAMP: a hash of the daemon bundle this process was started from, self-taken at
+   *  startup. The version above answers "can we speak?"; this answers the question the version
+   *  was never fit to carry: "is the daemon that is ALREADY RUNNING built from the code I would
+   *  spawn?" The daemon outlives the app (ADR 0006), so after an update the app reconnects to a
+   *  process still running last release's code — same wire, stale behaviour. On a mismatch the
+   *  app retires it gracefully IN PLACE (shutdown persists the store; the fresh spawn cold-start
+   *  restores) — same dir, no version burned. Optional because daemons predating the stamp never
+   *  wrote one; the app treats its absence as a mismatch, which is definitionally correct. */
+  build?: string
 }
 
 export interface SpawnSpec {

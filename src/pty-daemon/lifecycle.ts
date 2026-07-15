@@ -57,10 +57,19 @@ export function isAlive(pid: number): boolean {
  *  (unix sockets persist on disk after death) prove nothing — report true (undecided). */
 export function pipeAlive(address: string): boolean {
   if (process.platform !== 'win32' || !address.startsWith('\\\\.\\pipe\\')) return true
+  // NOT existsSync: checking a named pipe means CreateFile, and a pipe whose pending listener
+  // instance is momentarily consumed answers PIPE_BUSY — which existsSync swallows into
+  // `false`. That declared a LIVE, LISTENING daemon dead: discovery unlinked its endpoint and
+  // blind-spawned a rival that the still-held lock refused, and the boot ended with no daemon
+  // at all (found by the DAEMONCUSTODY gate, whose back-to-back discoveries hit the re-arm
+  // window every time; any two discovery calls a few ms apart could). A busy pipe is a live
+  // pipe. Only "definitely gone" — ENOENT — may kill it; every other answer keeps the
+  // undecided default (true) and lets connect() be the judge, exactly like non-Windows.
   try {
-    return fs.existsSync(address)
-  } catch {
-    return false
+    fs.accessSync(address)
+    return true
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code !== 'ENOENT'
   }
 }
 
@@ -128,7 +137,15 @@ export function releaseLock(): void {
   }
 }
 
-export function writeEndpoint(ep: { version: number; address: string; token: string; pid: number }): void {
+export function writeEndpoint(ep: {
+  version: number
+  address: string
+  token: string
+  pid: number
+  /** Self-taken hash of the bundle this daemon booted from (build-stamp.ts). The app compares
+   *  it against the bundle it would spawn and retires us in place when we are stale code. */
+  build?: string
+}): void {
   fs.writeFileSync(endpointPath(), JSON.stringify(ep), { mode: 0o600 })
 }
 

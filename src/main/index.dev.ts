@@ -110,6 +110,7 @@ import { runSwarmMilestoneSmoke } from './swarmmilestone-smoke'
 import { runDaemonSurviveSmoke } from './daemon-survive-smoke'
 import { runMigrateSmoke } from './migrate-smoke'
 import { runNotifyHookSmoke } from './notifyhook-smoke'
+import { runDaemonCustodySmoke } from './daemoncustody-smoke'
 
 // THE DEV / TEST ENTRY: the production boot (boot.ts — the SAME one src/main/index.ts runs) plus
 // the env-gated smoke + gallery harness hooked into it.
@@ -147,7 +148,7 @@ function installSshShim(): void {
 // — and an isolated userData must not register the OS-global deep-link scheme in any case.
 const SMOKE_ENV: readonly string[] = [
   'MOGGING_USERDATA', 'MOGGING_GATES', 'MOGGING_GALLERY', // isolation + sweep markers, set by every gate
-  'MOGGING_SURVIVE', 'MOGGING_MIGRATE', 'MOGGING_NOTIFYHOOK', 'MOGGING_INTEG', 'MOGGING_TOOLPLAN',
+  'MOGGING_SURVIVE', 'MOGGING_MIGRATE', 'MOGGING_NOTIFYHOOK', 'MOGGING_DAEMONCUSTODY', 'MOGGING_INTEG', 'MOGGING_TOOLPLAN',
   'MOGGING_EVBRIDGE', 'MOGGING_MCPSTATUS', 'MOGGING_MCPLOOP', 'MOGGING_AGENT', 'MOGGING_STATE', 'MOGGING_RELOAD',
   'MOGGING_SMOKE', 'MOGGING_SHOT', 'MOGGING_MULTIPANE', 'MOGGING_WORKSPACE', 'MOGGING_AGENTLAUNCH',
   'MOGGING_TEMPLATE', 'MOGGING_PROFPERSIST', 'MOGGING_BROWSER', 'MOGGING_BROWSERCTL', 'MOGGING_BROWSERRACE', 'MOGGING_BROWSERZERO', 'MOGGING_FIRSTRUN',
@@ -194,6 +195,14 @@ async function beforeAppSettings(): Promise<boolean> {
   // proven against a fake daemon socket — no daemon, no window.
   if (process.env.MOGGING_NOTIFYHOOK) {
     await runNotifyHookSmoke()
+    return true
+  }
+
+  // Windowless daemon-custody smoke: the build stamp, the run-root sweep, and the real
+  // spawn -> stale-stamp retire-in-place -> pre-install quiescence lifecycle. MUST run here,
+  // before startDaemonBackend — it owns its own daemons (isolated LOCALAPPDATA) start to grave.
+  if (process.env.MOGGING_DAEMONCUSTODY) {
+    await runDaemonCustodySmoke()
     return true
   }
 
