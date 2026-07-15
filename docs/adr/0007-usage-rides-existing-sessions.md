@@ -52,5 +52,5 @@ pure POINTERS — no credential ever moves.
 - macOS reads the CLI's Keychain entry via `security(1)` on explicit
   refresh only (a read of the CLI's own store, the same boundary) — never
   speculatively at boot, so the user's first Keychain prompt has context.
-- The daemon protocol stays at v3: usage lives in the app backend; panes
+- The daemon protocol is untouched by this phase (v3 at the time of writing): usage lives in the app backend; panes
   carry zero new wire surface.

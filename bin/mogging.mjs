@@ -81,7 +81,7 @@ function usage(code) {
 // --- mogging usage (Phase-7/11) --------------------------------------------------------------------
 // Usage verbs ride the APP endpoint (the 6/05b token-authed local socket that
 // already carries browser control) — one more request type, NOT a new listener;
-// the daemon protocol stays at v3, untouched. Verdict + reset strings arrive
+// no daemon-protocol change rode this feature. Verdict + reset strings arrive
 // pre-formatted from the app's ONE formatter (7/02, 7/10) and print VERBATIM.
 // Keys travel stdin -> one authed frame -> the 0007.a write-only vault; there
 // is no get-key verb, by design. Exit codes: 0 ok · 1 rejected · 2 usage ·

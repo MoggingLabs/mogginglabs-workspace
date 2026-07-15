@@ -125,11 +125,11 @@ async function trackerAsserts(): Promise<Record<string, boolean>> {
   const alone = mk()
   alone.turnStart()
   alone.bell() // nothing behind it
-  // THE ORDER THAT SHIPPED BROKEN (v0.11.0, found live by Pedro). The chime arrives AFTER the
+  // THE ORDER THAT SHIPPED BROKEN (v0.11.0, found live). The chime arrives AFTER the
   // done, which is the NORMAL order for Claude: the Stop hook lands first, and the BEL follows on
   // the trailing frames of the final render. The old tracker swallowed it with a grace window
-  // hung off the forced-idle path; I deleted that with the output-quiescence machinery it was
-  // sitting in, and every finished turn then went green and, two seconds later, RED.
+  // hung off the forced-idle path; that window was removed along with the output-quiescence
+  // machinery it sat in, and every finished turn then went green and, two seconds later, RED.
   //
   // Nothing tested this direction, because the assert above only ever fired the chime FIRST —
   // the one order in which the done cancels it. A gate that tests only the order that works is

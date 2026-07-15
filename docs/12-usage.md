@@ -210,7 +210,7 @@ history sparklines + the on-demand cost scan, and the privacy story.
 
 The verbs are CLIENTS of the **existing token-authed app endpoint**
 (Phase-6/05b's local socket): one more request type on the same handshake,
-**no new listener, no daemon change** (the PTY daemon protocol stays at v3,
+**no new listener, no daemon change** (the PTY daemon protocol was untouched by this phase,
 untouched). The endpoint file is 0600 and per-user; nothing listens on TCP.
 
 | Verb | What it does |

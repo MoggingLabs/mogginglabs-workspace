@@ -1,8 +1,8 @@
-// Opt-in (MOGGING_DAEMON) backend path: instead of running the PtyService in-process,
-// relay the terminal IPC channels to the detached daemon (ADR 0006). The renderer/preload/UI
-// are unchanged — they still speak the same TerminalChannels; only where the PTY lives moves.
-// Kept opt-in until the daemon path reaches full parity (agent-state OSC), so the proven
-// in-proc path stays the default and the green baseline is untouched.
+// THE DEFAULT backend path: relay the terminal IPC channels to the detached daemon
+// (ADR 0006) instead of running the PtyService in-process. The renderer/preload/UI are
+// unchanged — they still speak the same TerminalChannels; only where the PTY lives moves.
+// The daemon has been the default since it reached full parity (Phase 1); MOGGING_INPROC
+// forces the in-proc backend, and any daemon start failure falls back to it (boot.ts).
 import { ipcMain, type WebContents } from 'electron'
 import * as path from 'node:path'
 import { TerminalChannels, LedgerChannels, GateChannels, PANE_CWD_MAX, normalizeRemoteConnection } from '@contracts'

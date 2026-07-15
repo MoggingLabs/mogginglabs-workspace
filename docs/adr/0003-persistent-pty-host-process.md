@@ -1,6 +1,9 @@
 # ADR 0003 — Persistent PTY-host process (separate from the window)
 
-- **Status:** Accepted (2026-07-01); implemented incrementally.
+- **Status:** Superseded by [ADR 0006](0006-detached-pty-daemon.md) — the "Later
+  (optional)" daemon below shipped as the default and the interim `utilityProcess`
+  pty-host was never built (its placeholder `src/pty-host/` has been removed).
+  The PRINCIPLE (PTYs never owned by the window) stands and is what 0006 delivers.
 - **Context:** Live PTYs die with the process that owns them. BridgeSpace's clearest
   weakness is terminal freezes/crashes; a UI crash that also kills running agents would
   be our worst failure mode. Reliability under many agents is our wedge.

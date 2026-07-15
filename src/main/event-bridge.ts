@@ -10,7 +10,7 @@ import { recordTrail } from './trail'
 // webhooks, POST only. URLs are SECRETS: the literal rests as vault ciphertext
 // (consumer three) or an env-ref pointer; the KV, the trail, logs, and
 // telemetry only ever see the LABEL. Delivery is a per-webhook queue with
-// bounded retries; a hung receiver never stalls a notify. Daemon stays v3 —
+// bounded retries; a hung receiver never stalls a notify. No daemon change rode this —
 // we subscribe to the attention stream main already sees.
 
 const KV_LIST = 'integrations.webhooks' // JSON array of stored config (NO url)

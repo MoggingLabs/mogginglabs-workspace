@@ -43,43 +43,16 @@ renderer is tuned once and behaves identically everywhere. See
 
 ## Quickstart
 
-> **Status: Phase 11 (Files — the explorer sidebar) shipped.** Sixteen agents can be
-> writing into a workspace at once, and the app showed their **output** — terminals,
-> blocks, attention — but never their **footprint**. Now it does: a right-side dock with
-> the workspace's folder open in a **virtualized, git-decorated, live** tree, toggled from
-> the **far right** of the app bar (mirroring the rail toggle at the far left) or
-> `Ctrl+Shift+E`.
->
-> The stance is the design — [**ADR 0010**](docs/adr/0010-explorer-window-not-manager.md):
-> the explorer is a **window, not a manager**. Read-only v1 (browse · open · reveal · copy ·
-> send-to-pane); opening delegates to the OS and *your* tools; **we type, you execute** —
-> it never presses Enter in a pane. **Watch what's visible, nothing else**: per-expanded-dir
-> `fs.watch`, LRU-capped, coalesced — a collapsed folder, a hidden window, and a closed
-> explorer each cost **exactly zero** (measured, not asserted). The M/A/U/D/C badges add
-> **zero new pollers**: `git status --porcelain=v2` already ran every 2.5s and threw its
-> file lines away, so we parse what we were already paying for — plus colour-only folder
-> propagation, ignore-dimming, and the **Changes lens**. **Zero new runtime dependencies**
-> (no tree, watcher, or icon library). The book: [`docs/16`](docs/16-files.md).
->
-> Closed by the `MOGGING_FILESMILESTONE` milestone — a **real shell pane** writes into the
-> workspace and the explorer shows it, decorated, live, actionable — with both budgets
-> measured **on the composed surface** (16 panes + the explorer open + a write torrent:
-> **142.8 avg fps · worst gap 25.1ms · heap 20MB · 0 frames > 100ms**). The `qa-smokes.sh`
-> sweep now runs **129 gates** (seven new this pack: FSLIST · FILETREE · EXPLORER · TREELIVE ·
-> TREEGIT · FILEACT · FILESMILESTONE). Receipts, measured numbers and platform finds:
-> `prompts/phase-11/REPORT.md`.
->
-> *Full-sweep + three-OS CI certification is the operator's run — see
-> `prompts/phase-11/README.md` § Freeze.*
->
-> (Phase 8.5 shipped the UI/UX revamp — `docs/11`, certified 66/66 across four
-> environments, run **29006301457**. Phase 8 shipped integrations, five directions —
-> `docs/14`. Phase 6 shipped v0.4.0: the browser dock + first-run/update UX.)
-
 ```bash
 npm install        # compiles native modules (node-pty, better-sqlite3). Needs a C++ toolchain — see below.
 npm run dev        # launch the app in dev mode
 ```
+
+> **Status.** All roadmap phases through 11 (Files — the explorer sidebar) have shipped;
+> the current release is the version in `package.json`. The `qa-smokes.sh`
+> sweep now runs **129 gates** across three OSes. Per-phase receipts and measured numbers
+> live where they were written: the docs each roadmap bullet below links, and the
+> `prompts/phase-*/REPORT.md` process records.
 
 ### Five minutes to your first agent workspace
 
@@ -169,7 +142,7 @@ src/
   main/        App-wiring: window + compose backend over an Electron context
   preload/     App-wiring: the generic, contracts-allowlisted window.bridge
   renderer/    App-wiring: renderer bootstrap that mounts @ui
-  pty-host/    (Phase 1) dedicated persistent backend process
+  pty-daemon/  the detached PTY daemon that owns the PTYs and outlives the app (ADR 0006)
 docs/
   00-vision-and-positioning.md
   01-architecture.md            tech tiers (Electron + xterm.js + node-pty)
@@ -194,7 +167,7 @@ other; `main`/`preload`/`renderer` are the only composition root. See
 - **Phase 5** ✅ — UI/UX excellence: AA-measured token system + vivid workspace identity, icon family, window-chrome fixes, full-app views, 14px terminal comfort (receipts: `prompts/phase-5/REPORT.md`).
 - **Phase 6** ✅ — Product-ready: full Linux/macOS parity sweeps, browser dock, first-run + updates, v0.4.0.
 - **Phase 7** ✅ — Usage & metering: CLI-owned session adapters, the usage gauge + Settings § Usage, the pointer-grammar key vault (receipts: `prompts/phase-7/README.md`).
-- **Phase 8** ✅ — Integrations, five directions: the house MCP server (reads free, writes behind a per-workspace grant), the agent-web profile + activity trail, MCP registration across three CLI dialects + per-workspace tool plans, the outbound event bridge, live GitHub PR/issue chips — every credential we hold rests as OS-keychain ciphertext or we refuse it, daemon still v3. Closed by `MOGGING_INTEGMILESTONE`; surface in [`docs/14`](docs/14-integrations.md).
+- **Phase 8** ✅ — Integrations, five directions: the house MCP server (reads free, writes behind a per-workspace grant), the agent-web profile + activity trail, MCP registration across three CLI dialects + per-workspace tool plans, the outbound event bridge, live GitHub PR/issue chips — every credential we hold rests as OS-keychain ciphertext or we refuse it, with no daemon-protocol change. Closed by `MOGGING_INTEGMILESTONE`; surface in [`docs/14`](docs/14-integrations.md).
 - **Connections** ✅ — connect a service *account* (Sentry, Notion, Vercel…) to the app once, in your own browser, and every agent you launch can use it. The app is the OAuth client: it self-registers with the vendor, holds **one** grant per service in your OS keychain, and your CLIs reach the service *through* it — so **no token is ever written into a CLI's config file**. Your CLI *logins* are still never brokered ([ADR 0002](docs/adr/0002-never-broker-provider-auth.md) stands). See [ADR 0014](docs/adr/0014-app-held-service-connections.md).
 - **Phase 8.5** ✅ — The UI/UX revamp: an audit of every surface ([`AUDIT.md`](prompts/phase-8.5/AUDIT.md)), then rebuilt on one layout vocabulary (`Card`/`SectionHeader`/`FieldGroup`/`TwoColumn`, ramp extended to `--sp-7/8`) — one-page wizard, click-to-pick folder browser, overview-first Settings, Home/first-run, board + palette, one feedback language, chrome + possession banner, the Usage-glance recut; 13 removals, 16 bugs fixed; spacing frozen at zero, both budgets unmoved. Closed by `MOGGING_UXMILESTONE` + the `check-audit.mjs` coverage gate (receipts: `prompts/phase-8.5/README.md`).
 

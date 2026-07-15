@@ -566,12 +566,11 @@ class PaneSession {
       })
     }
     // Pane state = the ActivityTracker's verdict (the dot in the pane header). The
-    // OSC parser feeds it explicit signals (133 C/D, 9/99/777, the bell) but no
-    // longer drives the wire directly — on real setups those signals barely exist
-    // (cmd.exe and Claude Code both emit no OSC 133), which left the dot frozen on
-    // 'idle' forever. The tracker fuses them with OUTPUT ACTIVITY (streaming =
-    // working, quiet = idle) and latches attention until the user answers
-    // (tracker semantics + precedence: agent-state/activity.ts).
+    // OSC parser feeds it explicit signals (133 C/D, 9/99/777, the bell) but never
+    // drives the wire directly. THE VERDICT LAW applies (agent-state/activity.ts):
+    // only a signal that KNOWS may raise a state — output activity raises nothing
+    // (the old streaming=busy/quiet=idle inference was deleted; it stamped panes
+    // "finished" for going quiet) — and attention latches until the user answers.
     this.tracker = new ActivityTracker((state) => {
       this.lastState = state
       for (const s of this.subs) s.state(state)

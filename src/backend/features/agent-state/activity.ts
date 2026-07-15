@@ -153,9 +153,9 @@ export class ActivityTracker {
     // cannot mean "blocked on you" — a turn that has ended is not waiting for anything. A CLI
     // with no `done` at all never reaches this state, so its chime rings exactly as before.
     //
-    // (This existed, as a grace window hung off the old forced-idle path, and I deleted it with
-    // the output-quiescence machinery it was sitting in. It was doing separate work. Found by
-    // Pedro, live, on v0.11.0 — every finished turn went green and then red.)
+    // (A grace window like this existed, hung off the old forced-idle path, and was removed
+    // along with the output-quiescence machinery it sat in — it was doing separate,
+    // load-bearing work. Found live on v0.11.0: every finished turn went green and then red.)
     if (this.state === 'done' || this.now() - this.doneAt < DONE_CHIME_GRACE_MS) return
     if (this.bellTimer) return // already pending — one ring per episode
     this.bellTimer = setTimeout(() => {

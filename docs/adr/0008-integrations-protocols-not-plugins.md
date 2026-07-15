@@ -96,7 +96,7 @@ we neither read, copy, nor "fix" it. Docs state both halves plainly.
   presets, trail, bridge, and service shapes live in
   `src/contracts/integrations/` — one catalog every consumer (dispatch,
   docs, smokes) derives from; growing it never touches dispatch code.
-- The daemon protocol stays at v3 across the whole phase: the MCP server,
+- The daemon protocol is untouched across the whole phase (v3 at the time of writing): the MCP server,
   grants, the bridge, and adapters are all app/server-side composition.
 - We forgo a plugin marketplace and its ecosystem energy. The bet: an
   agency automates around n8n/Make/Zapier already — meeting them at the

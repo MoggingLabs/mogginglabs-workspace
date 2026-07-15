@@ -54,7 +54,7 @@ One adapter CLASS per mechanism; every provider is a DATA row
 | Merged icons, display config, highest-usage auto-select, reset-time style | titlebar display options | 10 |
 | Settings → Providers grid, per-provider toggles, set-api-key | full Usage tab, searchable grid, paste-once keychain slots (write-only) + env-ref | 12 |
 | Advanced keychain-access toggles | web-session consent per provider | 06/10 |
-| Bundled CLI (`codexbar config/cost/serve`) | `mogging usage` verbs over the APP endpoint (daemon stays v3) | 11 |
+| Bundled CLI (`codexbar config/cost/serve`) | `mogging usage` verbs over the APP endpoint (no daemon change) | 11 |
 | Sparkle updates | electron-updater — ALREADY SHIPPED (6/06) | — |
 | WidgetKit widgets | N/A by design: our titlebar gauge is always on screen; a desktop-widget story is an OS-feature phase, not usage |
 | 21 languages | app-wide concern; the app isn't localized yet — deferred to a localization phase, NOT done piecemeal here |

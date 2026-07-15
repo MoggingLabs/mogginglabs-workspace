@@ -26,7 +26,7 @@ import {
  * 0006; nothing new on TCP) and writes a 0600 endpoint file. The first-party
  * MCP server (`bin/mogging-mcp.mjs`) connects here and forwards `tools/call`
  * to `agentAct` — so an agent CLI in a pane reaches the browser tools without
- * any daemon-protocol change (the daemon stays at v3, untouched).
+ * any daemon-protocol change (no daemon change rode this feature).
  *
  * Wire: newline-delimited JSON. `{ t:'hello', token }` -> `{ t:'welcome' }` or
  * an auth error; then `{ t:'call', id, name, args }` -> `{ t:'result', id, ... }`.
@@ -275,7 +275,7 @@ export function startMcpEndpoint(): void {
         if (msg.t === 'call' && typeof msg.id === 'number' && typeof msg.name === 'string') {
           const id = msg.id
           // 7/11: `usage.*` request types for the mogging CLI — SAME frame,
-          // SAME handshake, no new listener (daemon stays v3, untouched).
+          // SAME handshake, no new listener (no daemon change rode this).
           // Deliberately NOT in the welcome tools list: usage verbs are for
           // the CLI, never advertised to agents through the MCP server.
           if (msg.name.startsWith('usage.')) {

@@ -118,7 +118,10 @@ function main(): void {
     })
     log('listening ' + address + ' pid ' + process.pid)
     const others = otherVersionEndpoints()
-    if (others.length) log('other-version daemons live (session migration pending Phase-1/03): ' + JSON.stringify(others))
+    // Informational only: the APP owns the cross-version hand-off (src/main/daemon-migrate.ts
+    // captures + retires an older daemon before this one is ever spawned), so a live entry
+    // here usually means a deferred migration or a side-by-side older release.
+    if (others.length) log('other-version daemons live: ' + JSON.stringify(others))
     armIdle()
   })
 }
