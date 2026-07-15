@@ -7959,15 +7959,19 @@ body.pane-dragging * {
   display: none;
 }
 
-/* The popover rides the shared .menu panel (palette-grade elevation). */
+/* The popover rides the shared .menu panel (palette-grade elevation).
+   Recut to the CodexBar bar's own frame: 320 wide, blocks full-bleed — each
+   block owns its side inset via --glance-pad (20px, the measured CodexBar
+   content inset, spelled in stops) so hairlines can run edge to edge. */
 .usage-popover {
   right: 0;
   top: calc(100% + 6px);
   left: auto;
-  width: 300px;
-  max-height: 70vh;
+  --glance-pad: calc(var(--sp-4) + var(--sp-1)); /* 20px */
+  width: 320px;
+  max-height: 78vh;
   overflow-y: auto;
-  padding: 0 var(--sp-2) var(--sp-2); /* header owns the top edge (7/10 sticky) */
+  padding: 0 0 var(--sp-1); /* the tab strip owns the top edge (7/10 sticky) */
 }
 /* 7/10 gauge content options — the elements always EXIST; classes decide
    what paints (toggles change classes, never structure). */
@@ -7995,17 +7999,19 @@ body.pane-dragging * {
 .usage-gauge.hide-bars .usage-track {
   display: none;
 }
-/* ── The usage popover, recut to the CodexBar dropdown (8.5/08c) ──
-   Provider tabs (All · Auto · one per enabled provider), then the selected
-   provider's active lane. The gauge above is UNTOUCHED; every value is IPC-backed. */
+/* ── The usage popover, recut to the CodexBar BAR itself (the identical-twin
+   pass over 8.5/08c) ── A segmented strip (Overview · one tab per provider),
+   then STACKED provider sections. Geometry measured off the reference: 5px
+   remaining-fill bars, 11px two-column stats lines, a 2×2 stat grid, the
+   30-day spark. Every value is IPC-backed; the gauge above is UNTOUCHED. */
 .usage-tabs {
   position: sticky;
   top: 0;
   z-index: 1;
   display: flex;
-  gap: 2px;
-  margin: 0 calc(-1 * var(--sp-2));
-  padding: var(--sp-2);
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 6px;
   overflow-x: auto;
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border);
@@ -8015,12 +8021,15 @@ body.pane-dragging * {
    `align-items: center` onto it — every settings card shrink-wrapped and the column
    overflowed sideways. Chips live only inside the popover's .usage-tabs strip. */
 .usage-tabs .usage-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: none;
-  min-height: 28px;
-  padding: 0 var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 3px;
+  flex: 1 1 0;
+  min-width: 72px;
+  min-height: 30px;
+  padding: var(--sp-1) var(--sp-2);
   border: 1px solid transparent;
   border-radius: var(--r-sm);
   background: transparent;
@@ -8032,27 +8041,37 @@ body.pane-dragging * {
 .usage-tabs .usage-tab:hover {
   background: var(--bg-inset);
 }
+/* The selected tab is the CodexBar pill: a quiet filled rounded rect, not an
+   accent wash — a provider keeps its color in the meter under its label. */
 .usage-tabs .usage-tab.is-selected {
-  background: var(--accent-weak);
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: var(--bg-inset);
+  border-color: var(--border);
   color: var(--text-hi);
+}
+.usage-tab-head {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  min-width: 0;
 }
 .usage-tab-glyph {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: var(--r-xs);
-  background: var(--bg-inset);
-  font-size: var(--fs-10);
-  font-weight: var(--fw-semibold);
+  flex: none;
 }
+.usage-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The under-label meter — the CodexBar tab underline that is also a gauge
+   (inked with the provider accent inline). */
 .usage-tab-track {
-  width: 28px;
-  height: 3px;
+  width: 100%;
+  height: 2px;
   border-radius: var(--r-full);
-  background: var(--border);
+  background: color-mix(in srgb, var(--border) 60%, transparent);
   overflow: hidden;
 }
 .usage-tab-fill {
@@ -8063,50 +8082,102 @@ body.pane-dragging * {
 .usage-tab-fill.is-hot {
   background: var(--warning);
 }
-/* Header (CodexBar grammar): name bold left, the plan tier a quiet badge
-   right. Freshness lives in the footer; a health pill only when it is news. */
+/* ── One provider SECTION; a hairline seams providers apart (the twin). ── */
+.usage-sec + .usage-sec {
+  border-top: 1px solid var(--border);
+}
+/* Header (CodexBar grammar): line one — name bold left, the account + its
+   drill-in chevron right; line two — snapshot age left, plan tier right, both
+   quiet text (never a badge). A hairline closes the header block. The health
+   pill only appears when it is news. */
 .usage-glance-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4) var(--glance-pad) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+.usage-glance-title {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: var(--sp-3) 0 var(--sp-1);
 }
 .usage-glance-name {
   font-weight: var(--fw-semibold);
   font-size: var(--fs-13);
   color: var(--text-hi);
 }
-.usage-glance-age {
-  color: var(--muted);
-  font-size: var(--fs-10);
-}
-.usage-glance-tier {
+.usage-glance-acct {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
   margin-left: auto;
-  padding: 1px var(--sp-2);
-  border-radius: var(--r-full);
-  background: var(--bg-inset);
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
   color: var(--text-mid);
-  font-size: var(--fs-10);
+  font-size: var(--fs-11);
+  cursor: pointer;
 }
-/* The pace line under a window: verdict (rendered VERBATIM) + delta, inked by
-   severity — ONE quiet line in the CodexBar "Pace: …" register, never louder
-   than the bar it qualifies. */
-.usage-pace {
+.usage-glance-acct:hover {
+  color: var(--text-hi);
+}
+.usage-acct-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+.usage-glance-sub {
   display: flex;
   align-items: baseline;
+  justify-content: space-between;
   gap: var(--sp-2);
-  margin: 0 0 var(--sp-1);
-  font-size: var(--fs-10);
+  font-size: var(--fs-11);
+  color: var(--text-mid);
+}
+.usage-glance-age {
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+.usage-glance-tier {
+  color: var(--text-mid);
+  font-size: var(--fs-11);
+}
+/* The window rows live inside the section's inset. */
+.usage-rows {
+  padding: 0 var(--glance-pad) var(--sp-2);
+}
+/* The pace line under a window's stats: verdict (rendered VERBATIM) left,
+   signed delta right — the twin's second stats row, our wording; inked by
+   severity, never louder than the bar it qualifies. */
+.usage-pace {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px var(--sp-2);
+  margin-top: 2px;
+  font-size: var(--fs-11);
   opacity: 0.9;
+}
+.usage-pace .usage-verdict {
+  /* basis 0, not auto: with wrap enabled, an auto-basis verdict longer than
+     the row claims the whole flex line and shoves the delta onto its own —
+     basis 0 keeps verdict + delta on one line and wraps the TEXT instead. */
+  flex: 1 1 0;
+  min-width: 0;
 }
 .usage-pace-delta {
   font-variant-numeric: tabular-nums;
   font-weight: var(--fw-semibold);
 }
-/* The run-out risk estimate: quiet ink, trailing the verdict it qualifies. */
+/* The run-out risk estimate: quiet ink, its own line under the verdict. */
 .usage-risk {
+  flex: 1 1 100%;
   color: var(--text-lo);
-  font-size: var(--fs-11);
+  font-size: var(--fs-10);
   font-variant-numeric: tabular-nums;
 }
 .usage-pace-delta.sev-warning {
@@ -8120,13 +8191,121 @@ body.pane-dragging * {
 }
 /* Credits / spend line — never a $X/$Y cap. */
 .usage-credits {
-  padding: var(--sp-1) 0;
+  padding: 0 var(--glance-pad) var(--sp-2);
   font-size: var(--fs-11);
   color: var(--text-mid);
   font-variant-numeric: tabular-nums;
 }
-/* Cost row (› opens § Usage history) + the icon-row actions. */
-.usage-cost,
+/* ── The cost cluster — the twin's stat block: hairline above, the Cost row
+   as its clickable title (› opens § Usage), the 2×2 grid, the 30-day spark,
+   then the quiet notes. ── */
+.usage-cost-sec {
+  border-top: 1px solid var(--border);
+  padding: var(--sp-3) var(--glance-pad);
+}
+.usage-cost {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.usage-cost:hover {
+  background: transparent;
+}
+.usage-cost:hover .usage-cost-text {
+  color: var(--accent-ink);
+}
+.usage-cost-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-hi);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+}
+.usage-cost-more {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+}
+.usage-cost-lines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0 0;
+}
+.usage-cost-lines:empty {
+  display: none;
+}
+/* The 2×2 stat grid: a small quiet label over a big tabular figure — the
+   twin's Today · 30d cost · 30d tokens · Latest tokens block. */
+.usage-cost-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-3) var(--sp-2);
+}
+.usage-cost-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.usage-cost-label {
+  color: var(--text-mid);
+  font-size: var(--fs-11);
+}
+.usage-cost-value {
+  color: var(--text-hi);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The 30-day spark: peak label right-aligned above, one sliver per local day
+   rising from an accent baseline (both inked per provider inline). */
+.usage-spark-cap {
+  margin-bottom: 2px;
+  text-align: right;
+  color: var(--text-lo);
+  font-size: var(--fs-10);
+  font-variant-numeric: tabular-nums;
+}
+.usage-spark-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 44px;
+  border-bottom: 2px solid var(--border);
+}
+.usage-spark-bar {
+  flex: 1 1 0;
+  min-width: 0;
+  border-radius: 1px 1px 0 0;
+  opacity: 0.8;
+}
+.usage-cost-note {
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Action rows (Usage Dashboard · Status Page · Settings… · About). */
+.usage-actions {
+  border-top: 1px solid var(--border);
+  padding: var(--sp-2) var(--sp-3);
+}
 .usage-action {
   display: flex;
   align-items: center;
@@ -8142,63 +8321,23 @@ body.pane-dragging * {
   text-align: left;
   cursor: pointer;
 }
-.usage-cost:hover,
 .usage-action:hover {
   background: var(--bg-inset);
 }
-.usage-cost-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-mid);
-  font-size: var(--fs-11);
-}
-.usage-cost-more {
-  flex: none;
-  color: var(--muted);
-}
-/* The popover's cost glance: label/value lines under the Cost row — today's
-   share, the 30-day window, the daily average, the monthly projection. */
-.usage-cost-lines {
+/* Lane switch — the provider's accounts as full-width rows (the twin's
+   account register), the active lane marked (the switch contract). */
+.usage-switch {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  /* Left inset = the cost row's icon column (sp-2 pad + 14px glyph + sp-2 gap),
-     so the lines align under the row's TEXT, not its icon. sp-6 (32px) is that
-     sum expressed as a stop — the gate's grammar, the same optical result. */
-  padding: 0 var(--sp-2) var(--sp-1) var(--sp-6);
+  padding: 0 calc(var(--glance-pad) - var(--sp-2)) var(--sp-2);
 }
-.usage-cost-lines:empty {
-  display: none;
-}
-.usage-cost-line {
-  display: flex;
-  align-items: baseline;
-  gap: var(--sp-2);
-  font-size: var(--fs-11);
-}
-.usage-cost-label {
+.usage-popover .usage-track-mini {
+  width: 56px;
+  height: 3px; /* a lane's hairline, quieter than the 5px window bars */
   flex: none;
-  min-width: 96px;
-  color: var(--text-lo);
 }
-.usage-cost-value {
-  color: var(--text-mid);
-  font-variant-numeric: tabular-nums;
-}
-/* Profile switch row: compact tiles, the active lane marked (the switch contract). */
-.usage-switch {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-1);
-  padding: var(--sp-1) 0;
-}
-.usage-track-mini {
-  width: 40px;
-}
-/* Compact density: tighter tiles, the pace line folds away. */
+/* Compact density: tighter lanes, the pace line folds away. */
 .usage-popover.is-compact .usage-tile {
   padding: 2px var(--sp-2);
 }
@@ -8610,14 +8749,25 @@ body.pane-dragging * {
   text-transform: capitalize;
 }
 .usage-tile {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: var(--sp-1);
+  gap: var(--sp-2);
+  width: 100%;
   padding: var(--sp-1) var(--sp-2);
-  border-radius: var(--r-md);
+  border-radius: var(--r-sm);
   outline: none;
   position: relative;
   cursor: pointer;
+}
+/* Popover-scoped: the lane's name fills the row (settings' plans table shares
+   the bare .usage-profile class and keeps its own inline register). */
+.usage-tile .usage-profile {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-hi);
 }
 .usage-tile:focus {
   background: var(--accent-weak);
@@ -8639,7 +8789,7 @@ body.pane-dragging * {
 }
 /* The one-line post-switch hint: pointers flipped for NEW launches only. */
 .usage-switch-hint {
-  padding: var(--sp-1) var(--sp-2);
+  padding: var(--sp-1) var(--glance-pad, var(--sp-2));
   font-size: 11px;
   color: var(--text-mid);
 }
@@ -8745,27 +8895,31 @@ body.pane-dragging * {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
 }
-/* The CodexBar row anatomy (phase-11 recut): label line, full-width bar,
-   ONE stats line under it — percent left, reset right. The old grid packed
-   label · bar · pct · reset into one row and read as a spreadsheet. */
+/* The CodexBar row anatomy (phase-11 recut; geometry re-measured for the
+   identical-twin pass): 13px label line, the full-width 5px bar, then the
+   two-column stats lines — percent LEFT left, reset right. The old grid
+   packed label · bar · pct · reset into one row and read as a spreadsheet. */
 .usage-row {
   display: block;
-  padding: var(--sp-2) 0 var(--sp-1);
+  padding: var(--sp-3) 0 0;
   font-size: 11px;
 }
 .usage-row-label {
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: var(--sp-2);
   color: var(--text-hi);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   font-weight: var(--fw-semibold);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .usage-row-stats {
   display: flex;
   align-items: baseline;
+  justify-content: space-between;
   gap: var(--sp-2);
-  margin-top: 4px;
+  margin-top: 6px;
 }
 .usage-row-stats .usage-pct {
   text-align: left;
@@ -8773,14 +8927,20 @@ body.pane-dragging * {
 }
 .usage-reset {
   margin-left: auto;
-  color: var(--muted);
+  display: inline-block; /* ::first-letter needs a block container */
+  color: var(--text-mid);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+/* The DOM keeps the backend reset formatter's verbatim lowercase "resets in…"
+   (the smoke reads it); the twin's "Resets in…" capital is paint only. */
+.usage-reset::first-letter {
+  text-transform: uppercase;
 }
 .usage-track-row {
   position: relative; /* the expected-pace tick positions against the track */
   width: 100%;
-  height: 4px;
+  height: 5px; /* the measured CodexBar bar */
   border-radius: var(--r-full);
   background: color-mix(in srgb, var(--border) 70%, transparent);
   overflow: hidden;
@@ -8826,7 +8986,7 @@ body.pane-dragging * {
   display: flex;
   align-items: center;
   gap: var(--sp-1);
-  padding-top: var(--sp-1);
+  padding: var(--sp-1) var(--glance-pad, var(--sp-2)) 0;
   margin-top: var(--sp-1);
   border-top: 1px solid var(--border);
 }

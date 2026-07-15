@@ -374,7 +374,10 @@ export function runUsageGlanceSmoke(win: BrowserWindow): void {
         left.selected === from // ...and comes back
       const iOk =
         a11y.tablist &&
-        a11y.tabs >= 4 && // All · Auto · claude · codex
+        // Overview · claude · codex — the Auto CHIP left with the CodexBar
+        // identical-twin recut (the reference strip has no such tab); auto
+        // remains a Settings § Usage mode, mirrored by the Overview tab.
+        a11y.tabs >= 3 &&
         a11y.selected === 1 &&
         a11y.zeros === 1 && // exactly ONE tab stop
         a11y.selectedIsZero &&

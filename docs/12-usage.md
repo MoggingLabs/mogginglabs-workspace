@@ -16,12 +16,16 @@ at Phase 7/13; the parity map lives in
   `%` / glyph / label content (7/10). Which plan it mirrors is a display
   mode: **merged** (highest severity — the default), **auto** (highest
   usage), or **pinned** (one provider).
-- **The popover** (click the gauge): plan tiles grouped by provider, ordered
-  by severity, each with per-window bars, reset lines, the pace verdict, and
+- **The popover** (click the gauge): the CodexBar bar's own layout — a
+  segmented strip (Overview · one tab per provider), then stacked provider
+  sections: header (name · account · age · tier), per-window bars that fill
+  with the % LEFT (a tick marks where the budget line sits), reset lines,
+  the pace verdict, the cost cluster (2×2 stat grid + 30-day spark), and
   health (`fresh · stale · error · unconfigured`). `stale` means the last
   good reading re-served after an error — old data, honestly aged, never
-  dropped. The active profile's plan carries the selection bar; Enter or
-  click switches which profile NEW launches use.
+  dropped. The active profile's lane carries the selection bar; Enter or
+  click switches which profile NEW launches use. (The strip has no Auto
+  chip — auto stays a Settings § Usage display mode.)
 - **The Usage tab** (Settings § Usage): where everything is configured —
   the provider grid, plans × profiles, pace baseline, alerts, display,
   history + cost. The popover is the glance; the tab is the home.
@@ -263,7 +267,7 @@ involves any credential the app would hold, stop: that is the line ADR
 `mogging usage --json` + `usage cost --json` are stable contracts
 (`PlanUsage[]`, `CostScan[]`) for scripts and CI. The six usage gates
 (USAGE, USAGEUI, USAGEGLANCE, WEBUSAGE, USAGECLI, USAGESET) run in the same
-124-gate sweep as everything else, on Windows, macOS, and Linux — entirely on
+130-gate sweep as everything else, on Windows, macOS, and Linux — entirely on
 the FAKE adapter: under any usage smoke env the registry holds no real adapter,
 the status poller holds no fetcher, and the cost scan reads only a seeded
 fixture dir. Zero network is structural, not disciplined.

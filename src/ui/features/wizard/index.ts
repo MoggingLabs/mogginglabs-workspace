@@ -1129,7 +1129,9 @@ export const wizardFeature: UiFeature = {
       isolateBox.setChecked(isolate && isRepo)
       isolateHint.textContent = isRepo
         ? 'Each agent works on its own branch in its own folder — no trampling. Review & merge later.'
-        : 'Pick a git repository above to enable worktree isolation.'
+        : cwd.trim()
+          ? 'This folder isn’t a usable git repository — run `git init` there (or pick a repo) to enable worktree isolation.'
+          : 'Pick a git repository above to enable worktree isolation.'
     }
 
     /** Everything that moves when the mix or the grid changes. */

@@ -1,5 +1,5 @@
-import { TerminalChannels, WorktreeChannels } from '@contracts'
-import type { AgentState, PaneId, RemoveWorktreeResult } from '@contracts'
+import { GitChannels, TerminalChannels, WorktreeChannels } from '@contracts'
+import type { AgentState, CreateWorktreeResult, PaneId, RemoveWorktreeResult } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { GridLayout, MAX_PANES, parseTree, leafIds, type LayoutTreeNode } from '../layout'
 import { confirmDialog, icon, showToast, TOAST_DEFAULT_MS } from '../../components'
@@ -1165,6 +1165,48 @@ export class WorkspaceController {
     if (a) this.splitPane(a.meta.id, a.layout.focusedPaneId(), dir)
   }
 
+  /** Split the ACTIVE workspace's focused pane into a fresh ISOLATED git worktree
+   *  (layout-menu row only — Ctrl+Shift+D stays a plain split by design). Same 3/03
+   *  contract as the wizard: the worktree is created FIRST; a refusal opens nothing.
+   *  The repo is the workspace root, not the focused pane's cwd — a worktree of a
+   *  worktree would nest managed dirs inside each other. */
+  async splitActiveIsolated(dir?: 'h' | 'v'): Promise<boolean> {
+    const a = this.active()
+    if (!a) return false
+    const repo = a.meta.cwd
+    if (!repo) {
+      showToast({ tone: 'attention', title: 'No workspace folder', body: 'Isolation needs a git repository to branch from.' })
+      return false
+    }
+    try {
+      // Same honesty as the wizard's checkbox: refuse a non-repo (or a folder whose
+      // `.git` git itself cannot read) BEFORE touching the filesystem.
+      const isRepo = (await getBridge().invoke(GitChannels.query, repo)) != null
+      if (!isRepo) {
+        showToast({
+          tone: 'attention',
+          title: 'Not a git repository',
+          body: 'Run `git init` in the workspace folder (or open a repo) to isolate terminals in worktrees.'
+        })
+        return false
+      }
+      const wt = (await getBridge().invoke(WorktreeChannels.create, { repo })) as CreateWorktreeResult
+      if (!wt.ok || !wt.path) {
+        showToast({ tone: 'attention', title: 'Could not create a worktree', body: wt.error || 'git refused.' })
+        return false
+      }
+      this.splitPane(a.meta.id, a.layout.focusedPaneId(), dir, wt.path)
+      return true
+    } catch (error) {
+      showToast({
+        tone: 'attention',
+        title: 'Could not create a worktree',
+        body: error instanceof Error ? error.message : String(error)
+      })
+      return false
+    }
+  }
+
   /** Reusing slot `i` for a fresh plain terminal: the persisted manifest must agree,
    *  or the next restore would resurrect the OLD slot's agent/role/remote there. */
   private scrubManifestSlot(meta: WorkspaceMeta, i: number, cwd: string): void {
@@ -1173,7 +1215,16 @@ export class WorkspaceController {
     if (meta.roles && i < meta.roles.length) meta.roles[i] = null
     if (meta.remotes && i < meta.remotes.length) meta.remotes[i] = null
     if (meta.profileIds && i < meta.profileIds.length) meta.profileIds[i] = null
-    if (meta.paneCwds && i < meta.paneCwds.length) meta.paneCwds[i] = cwd || null
+    // A per-pane cwd that differs from the workspace root (an isolated-worktree split)
+    // must SURVIVE restore, even on a workspace that never had a paneCwds manifest —
+    // grow the array instead of silently dropping the override.
+    if (cwd && cwd !== meta.cwd) {
+      meta.paneCwds = meta.paneCwds ?? []
+      while (meta.paneCwds.length <= i) meta.paneCwds.push(null)
+      meta.paneCwds[i] = cwd
+    } else if (meta.paneCwds && i < meta.paneCwds.length) {
+      meta.paneCwds[i] = cwd || null
+    }
   }
 
   // ── Move a pane to another workspace ─────────────────────────────────────────────────

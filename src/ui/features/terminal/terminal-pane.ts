@@ -149,6 +149,10 @@ export class TerminalPane {
    *  copy-on-select fires on every one of them — the warning must inform, not pile up. */
   private lastCopyWarnAt = 0
   private stateDot?: HTMLSpanElement
+  /** The pane's process is gone (exit or failed spawn — the markDead paths). The state
+   *  dot only records this when it is VISIBLE, so untracked plain panes need this flag:
+   *  buildMenu gates the agent-launch entries on it (a write into a dead PTY goes nowhere). */
+  private dead = false
   private syncState?: () => void
   private dotGateUnsub?: () => void
   private renameFn?: () => void
@@ -1055,6 +1059,7 @@ export class TerminalPane {
    *  the pane from the attention aggregation (a dead pane must not ring its tab).
    *  Only for a VISIBLE (tracked) dot: an untracked pane has no dot to gray. */
   private markDead(title: string): void {
+    this.dead = true // menu fact, dot or no dot: launch entries are gated on it
     if (this.stateDot && !this.stateDot.hidden) {
       this.stateDot.dataset.state = 'exited'
       this.stateDot.title = title
@@ -1766,7 +1771,9 @@ export class TerminalPane {
   }
 
   /** The ⋯ pane menu: rename, clear, copy cwd, plus a launch entry per installed
-   *  agent (published on the command port by the agents feature — no cross-import). */
+   *  agent (published on the command port by the agents feature — no cross-import).
+   *  The launch entries appear ONLY on a plain terminal — a live shell with no agent
+   *  session in it (PLAINMENU gate); see the gate comment above their append. */
   private buildMenu(
     menu: HTMLElement,
     closeMenu: (returnFocus?: boolean) => void,
@@ -2034,7 +2041,14 @@ export class TerminalPane {
         modal.open()
       })
     )
-    const agents = allCommands().filter((c) => c.hint === 'Agent')
+    // Launch entries are PLAIN-TERMINAL-ONLY. A launch is a WRITE into this pane's PTY
+    // (agents feature → launchInto): on a live shell that runs the CLI, but typed into a
+    // pane whose agent is already up it lands in that agent's PROMPT (the exact failure
+    // the resume path documents in agents/index.ts), and into a dead pane it goes nowhere.
+    // The menu is rebuilt on every open and closes when header facts change under it, so
+    // this gate is always current: the entries return the moment the agent's exit clears
+    // the session (OSC-133 guess or process-table verdict) — and never on a dead pane.
+    const agents = session || this.dead ? [] : allCommands().filter((c) => c.hint === 'Agent')
     if (agents.length) {
       menu.append(separator())
       for (const cmd of agents) {

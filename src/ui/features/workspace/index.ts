@@ -528,7 +528,23 @@ export const workspaceFeature: UiFeature = {
           el('span', { class: 'kbd', text: 'Ctrl+Shift+D' })
         ]
       )
-      layoutMenu.append(picker.el, el('div', { class: 'menu-sep' }), add)
+      // ADD one ISOLATED terminal — same split, but the new pane lives in its own git
+      // worktree (fresh mogging/<slug> branch), the manual twin of the wizard's
+      // "Isolate each agent" checkbox. Menu-only by design: Ctrl+Shift+D stays plain.
+      const addIsolated = el(
+        'button',
+        {
+          class: 'menu-item layout-menu-add layout-menu-add-isolated',
+          type: 'button',
+          title: 'Splits the focused pane into a fresh git worktree on its own branch',
+          onClick: () => {
+            layoutMenu.hidden = true
+            void controller.splitActiveIsolated()
+          }
+        },
+        [icon('git-branch', 14), el('span', { text: 'New isolated terminal (worktree)' })]
+      )
+      layoutMenu.append(picker.el, el('div', { class: 'menu-sep' }), add, addIsolated)
     }
 
     // ── Keyboard: capture phase + stopPropagation so xterm never sees these ──
@@ -774,6 +790,7 @@ function exposeForDev(controller: WorkspaceController): void {
     zoom: () => controller.toggleZoom(),
     expand: (paneId: number, mode: 'full' | 'col' | 'row') => controller.expandPane(paneId, mode),
     split: (dir?: 'h' | 'v') => controller.splitActive(dir),
+    splitIsolated: (dir?: 'h' | 'v') => controller.splitActiveIsolated(dir),
     close: (paneId: number) => {
       const id = controller.activeMeta()?.id
       if (id) void controller.requestClosePane(id, paneId)

@@ -98,7 +98,9 @@ import { runBoardRenderSmoke } from './boardrender-smoke'
 import { runKbApgSmoke } from './kbapg-smoke'
 import { runAsyncStateSmoke } from './asyncstate-smoke'
 import { runAgentRegistrySmoke } from './agentregistry-smoke'
+import { runPlainMenuSmoke } from './plainmenu-smoke'
 import { runWizardFailSmoke } from './wizardfail-smoke'
+import { runWizardIsoSmoke } from './wizardiso-smoke'
 import { runMutationRaceSmoke } from './mutationrace-smoke'
 import { runAuthRunnerSmoke } from './authrunner-smoke'
 import { runOrchestrationSmoke } from './orchestration-smoke'
@@ -157,14 +159,14 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_PRODUCT', 'MOGGING_USAGEGLANCE', 'MOGGING_USAGEUI', 'MOGGING_WEBUSAGE', 'MOGGING_USAGECLI',
   'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
   'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_KBSHORTCUTS', 'MOGGING_KBGLOBAL', 'MOGGING_VERDICTLIVE', 'MOGGING_WEBTRAIL',
-  'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX', 'MOGGING_WIZARDFAIL', 'MOGGING_MUTATIONRACE', 'MOGGING_AUTHRUNNER',
+  'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX', 'MOGGING_WIZARDFAIL', 'MOGGING_WIZARDISO', 'MOGGING_MUTATIONRACE', 'MOGGING_AUTHRUNNER',
   'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX',
   'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_RESPONSIVE', 'MOGGING_KBAPG', 'MOGGING_UXMILESTONE',
   'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT', 'MOGGING_CWD',
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
   'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
-  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
+  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
   'MOGGING_PROFILES', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
   // Typed-launch detection + the context gauge (the v6 pack).
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
@@ -368,6 +370,8 @@ function afterWindow(win: BrowserWindow): void {
     runWizardUxSmoke(win) // env-gated one-page-wizard smoke: three cards, one page, rail beside it (Phase-8.5/02)
   } else if (process.env.MOGGING_WIZARDFAIL) {
     runWizardFailSmoke(win) // audit regression: wizard races/failures roll back and never open a degraded workspace
+  } else if (process.env.MOGGING_WIZARDISO) {
+    runWizardIsoSmoke(win) // wizard isolation SUCCESS path: real checkbox -> Launch -> shells live in their worktrees
   } else if (process.env.MOGGING_MUTATIONRACE) {
     runMutationRaceSmoke(win) // audit regression: permissions/plans/profile swaps are atomic and visibly pending
   } else if (process.env.MOGGING_AUTHRUNNER) {
@@ -460,6 +464,8 @@ function afterWindow(win: BrowserWindow): void {
     runRoleRaceSmoke(win) // audit regression: roles bind after slow spawn and replay after daemon reconnect
   } else if (process.env.MOGGING_AGENTREGISTRY) {
     runAgentRegistrySmoke(win) // audit regression: live CLI availability reaches every launch surface
+  } else if (process.env.MOGGING_PLAINMENU) {
+    runPlainMenuSmoke(win) // pane ⋯ launch entries are plain-terminal-only, through the whole lifecycle
   } else if (process.env.MOGGING_UPDATEFAIL) {
     runUpdateFailSmoke(win) // audit regression: a failed update check stays visible and its retry re-checks
   } else if (process.env.MOGGING_A11YMODAL) {
