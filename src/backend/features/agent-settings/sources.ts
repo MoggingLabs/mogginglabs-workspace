@@ -177,19 +177,25 @@ function claudeManagedDropIns(ctx: AgentConfigPathContext): string[] {
   }
 }
 
-const fileSource = (
-  provider: AgentConfigProviderId,
-  scope: AgentConfigScope,
-  surface: AgentConfigSurface,
-  format: AgentConfigFormat,
-  label: string,
-  precedence: number,
-  merge: AgentConfigMerge,
-  file: string | undefined,
-  writable: boolean,
-  reason?: string,
+interface FileSourceSpec {
+  provider: AgentConfigProviderId
+  scope: AgentConfigScope
+  surface: AgentConfigSurface
+  format: AgentConfigFormat
+  label: string
+  precedence: number
+  merge: AgentConfigMerge
+  file: string | undefined
+  writable: boolean
+  reason?: string
   candidates?: string[]
-): AgentConfigSource => ({ provider, scope, surface, format, label, precedence, merge, file, writable: writable && !!file, reason: file ? reason : 'No project or profile target is selected.', candidates })
+}
+
+// Named fields, not eleven positional slots: the call sites below are a table of
+// provider layers, and a table whose every row was `…, 10, 'deep-concat-arrays',
+// join(…), local, remoteReason` could transpose two arguments without a type error.
+const fileSource = ({ provider, scope, surface, format, label, precedence, merge, file, writable, reason, candidates }: FileSourceSpec): AgentConfigSource =>
+  ({ provider, scope, surface, format, label, precedence, merge, file, writable: writable && !!file, reason: file ? reason : 'No project or profile target is selected.', candidates })
 
 /** Provider layers from low to high precedence. Environment/remote sources remain unknown. */
 export function resolveAgentConfigSources(
@@ -204,53 +210,53 @@ export function resolveAgentConfigSources(
 
   if (provider === 'claude') {
     const profiled = context.profile === true
-    sources.push(fileSource(provider, profiled ? 'profile' : 'user', 'runtime', 'json', profiled ? 'Profile' : 'All projects', 10, 'deep-concat-arrays', join(pointer(context, 'CLAUDE_CONFIG_DIR', '.claude'), 'settings.json'), local, remoteReason))
-    sources.push(fileSource(provider, 'project', 'runtime', 'json', 'Project (shared)', 20, 'deep-concat-arrays', projectFile(context, '.claude', 'settings.json'), local, remoteReason))
-    sources.push(fileSource(provider, 'local', 'runtime', 'json', 'Project (private)', 30, 'deep-concat-arrays', projectFile(context, '.claude', 'settings.local.json'), local, remoteReason))
-    sources.push(fileSource(provider, 'system-policy', 'runtime', 'json', 'Managed policy', 50, 'deep-concat-arrays', systemPath(context, provider, 'policy'), false, 'Managed policy is read-only in Workspace.'))
+    sources.push(fileSource({ provider, scope: profiled ? 'profile' : 'user', surface: 'runtime', format: 'json', label: profiled ? 'Profile' : 'All projects', precedence: 10, merge: 'deep-concat-arrays', file: join(pointer(context, 'CLAUDE_CONFIG_DIR', '.claude'), 'settings.json'), writable: local, reason: remoteReason }))
+    sources.push(fileSource({ provider, scope: 'project', surface: 'runtime', format: 'json', label: 'Project (shared)', precedence: 20, merge: 'deep-concat-arrays', file: projectFile(context, '.claude', 'settings.json'), writable: local, reason: remoteReason }))
+    sources.push(fileSource({ provider, scope: 'local', surface: 'runtime', format: 'json', label: 'Project (private)', precedence: 30, merge: 'deep-concat-arrays', file: projectFile(context, '.claude', 'settings.local.json'), writable: local, reason: remoteReason }))
+    sources.push(fileSource({ provider, scope: 'system-policy', surface: 'runtime', format: 'json', label: 'Managed policy', precedence: 50, merge: 'deep-concat-arrays', file: systemPath(context, provider, 'policy'), writable: false, reason: 'Managed policy is read-only in Workspace.' }))
     for (const [index, file] of claudeManagedDropIns(context).entries()) {
-      sources.push(fileSource(provider, 'system-policy', 'runtime', 'json', 'Managed policy drop-in', 51 + index, 'deep-concat-arrays', file, false, 'Managed policy is read-only in Workspace.'))
+      sources.push(fileSource({ provider, scope: 'system-policy', surface: 'runtime', format: 'json', label: 'Managed policy drop-in', precedence: 51 + index, merge: 'deep-concat-arrays', file: file, writable: false, reason: 'Managed policy is read-only in Workspace.' }))
     }
   } else if (provider === 'codex') {
-    sources.push(fileSource(provider, 'system-default', 'runtime', 'toml', 'System defaults', 5, 'deep', systemPath(context, provider, 'default'), false, 'System configuration is read-only in Workspace.'))
+    sources.push(fileSource({ provider, scope: 'system-default', surface: 'runtime', format: 'toml', label: 'System defaults', precedence: 5, merge: 'deep', file: systemPath(context, provider, 'default'), writable: false, reason: 'System configuration is read-only in Workspace.' }))
     const codexHome = pointer(context, 'CODEX_HOME', '.codex')
-    sources.push(fileSource(provider, context.profile ? 'profile' : 'user', 'runtime', 'toml', context.profile ? 'Profile' : 'All projects', 10, 'deep', join(codexHome, 'config.toml'), local, remoteReason))
-    sources.push(fileSource(provider, 'project', 'runtime', 'toml', 'Project', 30, 'deep', projectFile(context, '.codex', 'config.toml'), local, remoteReason))
+    sources.push(fileSource({ provider, scope: context.profile ? 'profile' : 'user', surface: 'runtime', format: 'toml', label: context.profile ? 'Profile' : 'All projects', precedence: 10, merge: 'deep', file: join(codexHome, 'config.toml'), writable: local, reason: remoteReason }))
+    sources.push(fileSource({ provider, scope: 'project', surface: 'runtime', format: 'toml', label: 'Project', precedence: 30, merge: 'deep', file: projectFile(context, '.codex', 'config.toml'), writable: local, reason: remoteReason }))
     sources.push({
-      ...fileSource(provider, 'system-policy', 'runtime', 'toml', 'Managed requirements', 50, 'deep', systemPath(context, provider, 'policy'), false, 'Managed requirements constrain values and are read-only.'),
+      ...fileSource({ provider, scope: 'system-policy', surface: 'runtime', format: 'toml', label: 'Managed requirements', precedence: 50, merge: 'deep', file: systemPath(context, provider, 'policy'), writable: false, reason: 'Managed requirements constrain values and are read-only.' }),
       constraintOnly: true
     })
   } else if (provider === 'gemini') {
-    sources.push(fileSource(provider, 'system-default', 'runtime', 'jsonc', 'System defaults', 5, 'deep-concat-arrays', systemPath(context, provider, 'default'), false, 'System defaults require administrator ownership.'))
+    sources.push(fileSource({ provider, scope: 'system-default', surface: 'runtime', format: 'jsonc', label: 'System defaults', precedence: 5, merge: 'deep-concat-arrays', file: systemPath(context, provider, 'default'), writable: false, reason: 'System defaults require administrator ownership.' }))
     const geminiHome = geminiConfigHome(context)
-    sources.push(fileSource(provider, context.profile ? 'profile' : 'user', 'runtime', 'jsonc', context.profile ? 'Profile' : 'All projects', 10, 'deep-concat-arrays', join(geminiHome, 'settings.json'), local, remoteReason))
-    sources.push(fileSource(provider, 'project', 'runtime', 'jsonc', 'Project', 20, 'deep-concat-arrays', projectFile(context, '.gemini', 'settings.json'), local, remoteReason))
-    sources.push(fileSource(provider, 'system-policy', 'runtime', 'jsonc', 'System overrides', 40, 'deep-concat-arrays', systemPath(context, provider, 'policy'), false, 'System overrides require administrator ownership.'))
+    sources.push(fileSource({ provider, scope: context.profile ? 'profile' : 'user', surface: 'runtime', format: 'jsonc', label: context.profile ? 'Profile' : 'All projects', precedence: 10, merge: 'deep-concat-arrays', file: join(geminiHome, 'settings.json'), writable: local, reason: remoteReason }))
+    sources.push(fileSource({ provider, scope: 'project', surface: 'runtime', format: 'jsonc', label: 'Project', precedence: 20, merge: 'deep-concat-arrays', file: projectFile(context, '.gemini', 'settings.json'), writable: local, reason: remoteReason }))
+    sources.push(fileSource({ provider, scope: 'system-policy', surface: 'runtime', format: 'jsonc', label: 'System overrides', precedence: 40, merge: 'deep-concat-arrays', file: systemPath(context, provider, 'policy'), writable: false, reason: 'System overrides require administrator ownership.' }))
   } else if (provider === 'aider') {
-    sources.push(fileSource(provider, 'user', 'runtime', 'yaml', 'All projects', 10, 'replace', join(home, '.aider.conf.yml'), local, remoteReason))
+    sources.push(fileSource({ provider, scope: 'user', surface: 'runtime', format: 'yaml', label: 'All projects', precedence: 10, merge: 'replace', file: join(home, '.aider.conf.yml'), writable: local, reason: remoteReason }))
     const workingDirectory = cwd ? resolve(cwd) : undefined
     const repository = nearestGitRoot(workingDirectory)
-    if (repository) sources.push(fileSource(provider, 'project', 'runtime', 'yaml', 'Repository', 20, 'replace', join(repository, '.aider.conf.yml'), local, remoteReason))
+    if (repository) sources.push(fileSource({ provider, scope: 'project', surface: 'runtime', format: 'yaml', label: 'Repository', precedence: 20, merge: 'replace', file: join(repository, '.aider.conf.yml'), writable: local, reason: remoteReason }))
     if (workingDirectory && workingDirectory !== repository) {
-      sources.push(fileSource(provider, 'project', 'runtime', 'yaml', 'Working directory', 30, 'replace', join(workingDirectory, '.aider.conf.yml'), local, remoteReason))
+      sources.push(fileSource({ provider, scope: 'project', surface: 'runtime', format: 'yaml', label: 'Working directory', precedence: 30, merge: 'replace', file: join(workingDirectory, '.aider.conf.yml'), writable: local, reason: remoteReason }))
     }
   } else {
     const dir = join(configBase(context), 'opencode')
     for (const [index, name] of ['config.json', 'opencode.json', 'opencode.jsonc'].entries()) {
-      sources.push(fileSource(provider, 'user', 'runtime', 'jsonc', 'All projects', 10 + index, 'deep', join(dir, name), local, remoteReason))
+      sources.push(fileSource({ provider, scope: 'user', surface: 'runtime', format: 'jsonc', label: 'All projects', precedence: 10 + index, merge: 'deep', file: join(dir, name), writable: local, reason: remoteReason }))
     }
     for (const [index, name] of ['tui.json', 'tui.jsonc'].entries()) {
-      sources.push(fileSource(provider, 'user', 'tui', 'jsonc', 'TUI — all projects', 10 + index, 'deep', join(dir, name), local, remoteReason))
+      sources.push(fileSource({ provider, scope: 'user', surface: 'tui', format: 'jsonc', label: 'TUI — all projects', precedence: 10 + index, merge: 'deep', file: join(dir, name), writable: local, reason: remoteReason }))
     }
     const customRuntime = context.env?.OPENCODE_CONFIG
-    if (customRuntime) sources.push(fileSource(provider, 'user', 'runtime', 'jsonc', 'Custom config override', 20, 'deep', expandCustom(customRuntime, context), local, remoteReason))
+    if (customRuntime) sources.push(fileSource({ provider, scope: 'user', surface: 'runtime', format: 'jsonc', label: 'Custom config override', precedence: 20, merge: 'deep', file: expandCustom(customRuntime, context), writable: local, reason: remoteReason }))
     const customTui = context.env?.OPENCODE_TUI_CONFIG
-    if (customTui) sources.push(fileSource(provider, 'user', 'tui', 'jsonc', 'Custom TUI override', 20, 'deep', expandCustom(customTui, context), local, remoteReason))
+    if (customTui) sources.push(fileSource({ provider, scope: 'user', surface: 'tui', format: 'jsonc', label: 'Custom TUI override', precedence: 20, merge: 'deep', file: expandCustom(customTui, context), writable: local, reason: remoteReason }))
     let precedence = 30
     const projectDirs = traversalDirectories(cwd)
     for (const directory of projectDirs) {
       for (const name of ['opencode.json', 'opencode.jsonc']) {
-        sources.push(fileSource(provider, 'project', 'runtime', 'jsonc', 'Project', precedence++, 'deep', join(directory, name), local, remoteReason))
+        sources.push(fileSource({ provider, scope: 'project', surface: 'runtime', format: 'jsonc', label: 'Project', precedence: precedence++, merge: 'deep', file: join(directory, name), writable: local, reason: remoteReason }))
       }
     }
     // The dedicated TUI loader currently calls ConfigPaths.files without a
@@ -258,7 +264,7 @@ export function resolveAgentConfigSources(
     const tuiProjectDirs = ancestorDirectories(cwd)
     for (const directory of tuiProjectDirs) {
       for (const name of ['tui.json', 'tui.jsonc']) {
-        sources.push(fileSource(provider, 'project', 'tui', 'jsonc', 'TUI — project', precedence++, 'deep', join(directory, name), local, remoteReason))
+        sources.push(fileSource({ provider, scope: 'project', surface: 'tui', format: 'jsonc', label: 'TUI — project', precedence: precedence++, merge: 'deep', file: join(directory, name), writable: local, reason: remoteReason }))
       }
     }
     // ConfigPaths.files applies project files root-to-CWD. ConfigPaths.directories
@@ -282,7 +288,7 @@ export function resolveAgentConfigSources(
       seenRuntimeConfigDirs.add(directory)
       const scope: AgentConfigScope = directory === homeConfigDir || directory === customConfigDir ? 'user' : 'project'
       for (const name of ['opencode.json', 'opencode.jsonc']) {
-        sources.push(fileSource(provider, scope, 'runtime', 'jsonc', scope === 'user' ? 'User config directory' : 'Project config directory', precedence++, 'deep', join(directory, name), local, remoteReason))
+        sources.push(fileSource({ provider, scope: scope, surface: 'runtime', format: 'jsonc', label: scope === 'user' ? 'User config directory' : 'Project config directory', precedence: precedence++, merge: 'deep', file: join(directory, name), writable: local, reason: remoteReason }))
       }
     }
     const tuiConfigDirs = [
@@ -298,7 +304,7 @@ export function resolveAgentConfigSources(
       seenTuiConfigDirs.add(directory)
       const scope: AgentConfigScope = directory === homeConfigDir || directory === customConfigDir ? 'user' : 'project'
       for (const name of ['tui.json', 'tui.jsonc']) {
-        sources.push(fileSource(provider, scope, 'tui', 'jsonc', scope === 'user' ? 'TUI — user config directory' : 'TUI — project config directory', precedence++, 'deep', join(directory, name), local, remoteReason))
+        sources.push(fileSource({ provider, scope: scope, surface: 'tui', format: 'jsonc', label: scope === 'user' ? 'TUI — user config directory' : 'TUI — project config directory', precedence: precedence++, merge: 'deep', file: join(directory, name), writable: local, reason: remoteReason }))
       }
     }
     if (context.env?.OPENCODE_CONFIG_CONTENT) {
@@ -317,8 +323,8 @@ export function resolveAgentConfigSources(
     }
     const managed = systemPath(context, provider, 'policy')
     if (managed) {
-      sources.push(fileSource(provider, 'system-policy', 'runtime', 'jsonc', 'Managed policy', 60, 'deep', managed, false, 'Managed configuration is read-only in Workspace.'))
-      sources.push(fileSource(provider, 'system-policy', 'runtime', 'jsonc', 'Managed policy', 61, 'deep', managed.replace(/\.json$/i, '.jsonc'), false, 'Managed configuration is read-only in Workspace.'))
+      sources.push(fileSource({ provider, scope: 'system-policy', surface: 'runtime', format: 'jsonc', label: 'Managed policy', precedence: 60, merge: 'deep', file: managed, writable: false, reason: 'Managed configuration is read-only in Workspace.' }))
+      sources.push(fileSource({ provider, scope: 'system-policy', surface: 'runtime', format: 'jsonc', label: 'Managed policy', precedence: 61, merge: 'deep', file: managed.replace(/\.json$/i, '.jsonc'), writable: false, reason: 'Managed configuration is read-only in Workspace.' }))
     }
   }
 

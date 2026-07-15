@@ -1,6 +1,5 @@
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { WebglAddon } from '@xterm/addon-webgl'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import {
   EXPLORER_DRAG_TYPE,
@@ -49,6 +48,7 @@ import { claimsFor, onClaimsChange, setClaimsForDev, workspaceClaims } from './c
 import { createPaneAnchor, type PaneAnchorHandle } from './pane-anchor'
 import { createPaneHeaderFit, type PaneHeaderFitHandle } from './pane-header-fit'
 import { createPaneScrollbar, type PaneScrollbarHandle } from './pane-scrollbar'
+import { PaneWebglManager } from './pane-webgl'
 import { onFocusedPane } from '../../core/layout/focus'
 import { onPaneGit, getPaneGit, setPaneGit } from '../../core/git/git-port'
 import { displayGitStatus } from '../../core/git/git-display'
@@ -69,28 +69,6 @@ import {
 
 // Same platform probe the app shell uses for its `platform-darwin` class.
 const IS_MAC = navigator.platform.toUpperCase().includes('MAC')
-
-// WebGL job serializer: at most ONE attach/detach per animation frame, app-wide.
-// Revealing or hiding a workspace otherwise (re)builds/tears down up to 16 WebGL
-// addons in a single tick (shader compile, glyph-atlas alloc, context teardown +
-// DOM-renderer fallback repaint each), stalling the main thread for hundreds of ms —
-// a visible hitch. Serialized — and with hide-releases debounced — a rapid workspace
-// flip is a pure show/hide (GL stays warm), while a sustained hide still frees its
-// contexts within a second. Panes always render (DOM renderer) while work streams in.
-const glJobQueue: Array<() => void> = []
-let glPumping = false
-function enqueueGlJob(job: () => void): void {
-  glJobQueue.push(job)
-  if (glPumping) return
-  glPumping = true
-  const step = (): void => {
-    const next = glJobQueue.shift()
-    if (next) next()
-    if (glJobQueue.length) requestAnimationFrame(step)
-    else glPumping = false
-  }
-  requestAnimationFrame(step)
-}
 
 /**
  * How long a resize burst must be quiet before the pane refits. A resize is not free:
@@ -114,31 +92,17 @@ export class TerminalPane {
   private readonly serializer = new SerializeAddon()
   private readonly resizeObs: ResizeObserver
   private visObs?: IntersectionObserver
-  private webgl?: WebglAddon
   private visible = false
-  private glRetry?: ReturnType<typeof setTimeout>
-  private glDebounce?: ReturnType<typeof setTimeout>
-  private glReleaseDebounce?: ReturnType<typeof setTimeout>
+  /** The WebGL context lifecycle, whole (pane-webgl.ts): acquisition, debounced release,
+   *  loss retries, and the app-wide one-per-frame job queue. */
+  private readonly gl: PaneWebglManager
   private selectionCopyTimer?: ReturnType<typeof setTimeout>
   /** Tears down the window-scoped drag listeners this pane installs (see mountFileDrop). */
   private readonly dropAbort = new AbortController()
-  private glQueued = false
-  private glLosses = 0
   private devHandle: unknown
-  private themeUnsub?: () => void
-  private fontUnsub?: () => void
   private liveMarked = false
   private remoteReadyProbe = ''
   private remoteReadyMarked = false
-  private paneLabelUnsub?: () => void
-  private paneGitUnsub?: () => void
-  private focusUnsub?: () => void
-  private roleUnsub?: () => void
-  private claimsUnsub?: () => void
-  private mcpUnsub?: () => void
-  private ctxUnsub?: () => void
-  private agentSessionUnsub?: () => void
-  private agentChipUnsub?: () => void
   private scrollbar?: PaneScrollbarHandle
   private anchor?: PaneAnchorHandle
   private headerFit?: PaneHeaderFitHandle
@@ -150,7 +114,6 @@ export class TerminalPane {
   private lastCopyWarnAt = 0
   private stateDot?: HTMLSpanElement
   private syncState?: () => void
-  private dotGateUnsub?: () => void
   private renameFn?: () => void
   private renameModal?: ModalHandle
   /** The portaled pane menu owns document/window listeners plus DOM outside the pane.
@@ -161,11 +124,11 @@ export class TerminalPane {
   private expandStateObs?: MutationObserver
   private refitLeading = true
   private disposed = false
-  /** Unsubscribers for this pane's terminalClient channel listeners. The channels are
-   *  session-lived while panes die on close — an undetached listener kept running against
-   *  a disposed xterm for the rest of the session (and xterm's WriteBuffer keeps queueing
-   *  into a disposed core, so the leak grew with every byte a reused id streamed). */
-  private readonly clientUnsubs: Array<() => void> = []
+  /** EVERY unsubscriber this pane holds — the terminalClient channel listeners and the
+   *  twelve port subscriptions that used to be twelve separate `*Unsub?` fields, each
+   *  hand-called in dispose (one forgotten field = one listener running against a
+   *  disposed xterm for the rest of the session). One list, one loop, nothing to forget. */
+  private readonly disposers: Array<() => void> = []
 
   constructor(
     private readonly id: PaneId,
@@ -194,6 +157,7 @@ export class TerminalPane {
     })
     this.term.loadAddon(this.fit)
     this.term.loadAddon(this.serializer)
+    this.gl = new PaneWebglManager({ term: this.term, isVisible: () => this.visible, isDisposed: () => this.disposed })
 
     // Pane frame: a slim header (title · git chip · state · zoom) over the terminal
     // body. Static DOM — every update below is event-driven, nothing per-frame.
@@ -219,19 +183,9 @@ export class TerminalPane {
         // conversation. A pane you deliberately scrolled up keeps its place (`pin` is a
         // no-op unless the anchor is still following).
         this.anchor?.pin()
-        // Cancel any pending release (a rapid flip keeps GL warm).
-        if (this.glReleaseDebounce) {
-          clearTimeout(this.glReleaseDebounce)
-          this.glReleaseDebounce = undefined
-        }
-        this.glLosses = 0
-        this.acquireWebgl()
+        this.gl.onShow()
       } else {
-        if (this.glDebounce) {
-          clearTimeout(this.glDebounce)
-          this.glDebounce = undefined
-        }
-        this.scheduleRelease()
+        this.gl.onHide()
       }
     })
     this.visObs.observe(host)
@@ -309,7 +263,7 @@ export class TerminalPane {
     // Detached on dispose (clientUnsubs) and guarded on `disposed`: pane ids are reused,
     // and a listener that outlived its pane wrote every byte of the SUCCESSOR pane's
     // stream into a disposed xterm — for the rest of the session.
-    this.clientUnsubs.push(
+    this.disposers.push(
       terminalClient.onData((e) => {
         if (e.id === this.id && !this.disposed) {
           if (!this.remoteReadyMarked) {
@@ -430,15 +384,15 @@ export class TerminalPane {
     this.term.textarea?.addEventListener('blur', () => (this.term.options.cursorBlink = false))
 
     // Apply the active theme now (replayed) + on every change (decoupled via the theme port).
-    this.themeUnsub = onTerminalTheme((theme) => (this.term.options.theme = theme))
+    this.disposers.push(onTerminalTheme((theme) => (this.term.options.theme = theme)))
 
     // Live font-size changes ride the HOUSE metrics path: option change (xterm
     // re-measures) → force refit → PTY resize. No second metrics pipeline (5/06).
-    this.fontUnsub = onTerminalFontSize((size) => {
+    this.disposers.push(onTerminalFontSize((size) => {
       if (this.term.options.fontSize === size) return
       this.term.options.fontSize = size
       this.refit(true)
-    })
+    }))
 
     this.blocks = new BlockTracker(this.term, body) // Warp-style command blocks from OSC 133 (02)
 
@@ -454,11 +408,11 @@ export class TerminalPane {
     // in reverse registration order); returning false passes the mark on to blocks.
     let agentSetAt = 0
     let agentArmed = false
-    this.agentSessionUnsub = onPaneAgentSession((paneId, s) => {
+    this.disposers.push(onPaneAgentSession((paneId, s) => {
       if (paneId !== this.id) return
       agentSetAt = s ? Date.now() : 0
       agentArmed = false
-    })
+    }))
     this.osc133 = this.term.parser.registerOscHandler(133, (data) => {
       const mark = data[0]
       if (agentSetAt) {
@@ -476,9 +430,9 @@ export class TerminalPane {
 
     // Focus-follows-selection: when the focus port names this pane (click, keyboard
     // pane-nav, workspace switch), give the terminal real keyboard focus.
-    this.focusUnsub = onFocusedPane((f) => {
+    this.disposers.push(onFocusedPane((f) => {
       if (f?.paneId === this.id && !host.contains(document.activeElement)) this.term.focus()
-    })
+    }))
 
     this.exposeForDev(host)
   }
@@ -534,43 +488,6 @@ export class TerminalPane {
     } catch {
       /* xterm moved its internals: keep its bar and its cost — never a broken pane */
     }
-  }
-
-  /** Schedule a WebGL attach: a short visibility debounce (rapid workspace churn skips
-   *  the work entirely) + the app-wide one-per-frame queue (a reveal never stalls the
-   *  main thread). The pane renders via the DOM renderer until its turn. */
-  private acquireWebgl(): void {
-    if (this.webgl || !this.visible || this.glDebounce || this.glQueued) return
-    this.glDebounce = setTimeout(() => {
-      this.glDebounce = undefined
-      if (!this.visible || this.webgl) return
-      this.glQueued = true
-      enqueueGlJob(() => {
-        this.glQueued = false
-        // `disposed` too: an enqueued job cannot be cancelled, so a pane closed inside the
-        // ≤1-frame window between enqueue and pump would attach a WebGL addon to a disposed
-        // xterm — a context spent against the ~16 the page gets, with no owner left to
-        // release it. `visible` is not enough: dispose() never unsets it.
-        if (!this.disposed && this.visible && !this.webgl) this.attachWebglNow()
-      })
-    }, 60)
-  }
-
-  /** Schedule a GL release for a hidden pane: debounced (a rapid flip back cancels it,
-   *  keeping the context warm) + queue-serialized (a hidden 16-pane workspace tears
-   *  down one context per frame, never all at once). The 1.5 s quiet period is a
-   *  PERCEPTION-budget choice (docs/07): workspace switching within it is pure
-   *  show/hide — zero shader/atlas cost while the user is interacting — while a
-   *  workspace left in the background still frees its contexts promptly. */
-  private scheduleRelease(): void {
-    if (!this.webgl || this.glReleaseDebounce) return
-    this.glReleaseDebounce = setTimeout(() => {
-      this.glReleaseDebounce = undefined
-      if (this.visible || !this.webgl) return
-      enqueueGlJob(() => {
-        if (!this.visible) this.releaseWebgl()
-      })
-    }, 1500)
   }
 
   /** Leading-edge + trailing-edge coalescer for the ResizeObserver. The first tick of a
@@ -632,55 +549,6 @@ export class TerminalPane {
       this.refit()
     } catch {
       /* disposed mid-flight */
-    }
-  }
-
-  /** Attach the WebGL renderer (idempotent; only while visible). On failure the pane simply
-   *  stays on the DOM renderer — a pane must always render; fast when it can. */
-  private attachWebglNow(): void {
-    if (this.webgl || !this.visible) return
-    try {
-      const addon = new WebglAddon()
-      addon.onContextLoss(() => {
-        // Evicted (context cap) or GPU reset: drop to the DOM renderer, then retry a few times
-        // while visible — self-healing, never a frozen/blank pane (the incumbent's failure mode).
-        this.releaseWebgl()
-        this.glLosses++
-        // Renderer-health signal (counts only) — the wedge metric we must watch in the field.
-        getTelemetry().captureEvent({ name: 'gl.context_lost', props: { losses: this.glLosses } })
-        if (this.visible && this.glLosses <= 3) {
-          this.glRetry = setTimeout(() => this.acquireWebgl(), 1500)
-        }
-      })
-      this.term.loadAddon(addon)
-      this.webgl = addon
-    } catch (err) {
-      console.warn('WebGL renderer unavailable; using default renderer.', err)
-    }
-  }
-
-  /** Detach the WebGL renderer and release its GPU context (idempotent). xterm falls back to
-   *  its DOM renderer, which is fine for a hidden pane (no frames are being painted anyway). */
-  private releaseWebgl(): void {
-    if (this.glRetry) {
-      clearTimeout(this.glRetry)
-      this.glRetry = undefined
-    }
-    if (this.glDebounce) {
-      clearTimeout(this.glDebounce)
-      this.glDebounce = undefined
-    }
-    if (this.glReleaseDebounce) {
-      clearTimeout(this.glReleaseDebounce)
-      this.glReleaseDebounce = undefined
-    }
-    if (!this.webgl) return
-    const addon = this.webgl
-    this.webgl = undefined
-    try {
-      addon.dispose()
-    } catch {
-      /* already disposed with the terminal */
     }
   }
 
@@ -1107,9 +975,9 @@ export class TerminalPane {
     }
     const existingRole = getPaneRole(this.id)
     if (existingRole) applyRole(existingRole)
-    this.roleUnsub = onPaneRole((paneId, r) => {
+    this.disposers.push(onPaneRole((paneId, r) => {
       if (paneId === this.id) applyRole(r)
-    })
+    }))
     // Remote chip (4/05): WHERE this pane lives — visible at a glance, distinct tint.
     // Built here but appended IN ORDER below (bug #12): the state dot must stay the
     // leading glyph. This used to left.append() ahead of everything, so on a remote pane
@@ -1137,7 +1005,7 @@ export class TerminalPane {
       this.headerFit?.schedule()
     }
     applyClaims()
-    this.claimsUnsub = onClaimsChange(applyClaims)
+    this.disposers.push(onClaimsChange(applyClaims))
     // MCP status chip (8/11): connected count for this pane's CLI; attention on
     // needs-auth/error; a restart nudge when tools connected after launch.
     const mcpChip = document.createElement('span')
@@ -1157,7 +1025,7 @@ export class TerminalPane {
       mcpChip.title = c.restartNew > 0 ? `Restart to pick up ${c.restartNew} new tool${c.restartNew === 1 ? '' : 's'}` : c.attention ? 'A tool needs re-authorization (Settings › MCP servers)' : `${c.connected} MCP tools connected`
     }
     applyMcp()
-    this.mcpUnsub = onMcpStatusChange(applyMcp)
+    this.disposers.push(onMcpStatusChange(applyMcp))
     // Agent context gauge: how full the pane's agent conversation window is, live
     // off the context port (session-log tail + statusline relay — counts only,
     // never content). Claude Code's OWN indicator, verbatim (assets/Inspiration/
@@ -1207,9 +1075,9 @@ export class TerminalPane {
         (u.approx ? '\nBaseline from the previous session — refines on the first response' : '')
     }
     applyContext(getPaneContext(this.id))
-    this.ctxUnsub = onPaneContext((paneId, usage) => {
+    this.disposers.push(onPaneContext((paneId, usage) => {
       if (paneId === this.id) applyContext(usage)
-    })
+    }))
     // Provider mark (WHO runs in this pane): the launched agent's logo, alive only
     // while its session is — same lifetime as the context bar. Decorative (the
     // title carries the words); hidden for plain shells.
@@ -1233,9 +1101,9 @@ export class TerminalPane {
       }
     }
     applyAgentChip(getPaneAgentSession(this.id)?.provider ?? null)
-    this.agentChipUnsub = onPaneAgentSession((paneId, s) => {
+    this.disposers.push(onPaneAgentSession((paneId, s) => {
       if (paneId === this.id) applyAgentChip(s?.provider ?? null)
-    })
+    }))
     // Ordered, state dot FIRST (the leading glyph). Remote sits right after it — WHERE
     // before the agent mark (WHO), then the role/claims/mcp attributes — then the title.
     // The context gauge is NOT here: it reads as pane STATUS, not identity, so it
@@ -1712,8 +1580,8 @@ export class TerminalPane {
       setPaneState(this.id, st)
       paintState()
     }
-    this.clientUnsubs.push(onAttentionChange(paintState))
-    this.clientUnsubs.push(
+    this.disposers.push(onAttentionChange(paintState))
+    this.disposers.push(
       terminalClient.onState((e) => {
         if (e.id === this.id) applyState(e.state)
       })
@@ -1741,7 +1609,7 @@ export class TerminalPane {
     // agent but no verdict channel — hooks never installed, a remote host without our config —
     // gets a dot and it is HOLLOW (`unknown`), because "we cannot tell you" and "nothing has
     // happened" are different facts and must not look alike.
-    this.dotGateUnsub = onPaneAgentSession((paneId, s) => {
+    this.disposers.push(onPaneAgentSession((paneId, s) => {
       if (paneId !== this.id || this.disposed) return
       if (state.dataset.state === 'exited') return
       const tracked = !!s && !s.provider.startsWith('custom:')
@@ -1754,13 +1622,13 @@ export class TerminalPane {
         state.dataset.state = 'unknown'
         state.title = 'completion tracking not available for this agent'
       }
-    })
-    this.paneLabelUnsub = onPaneLabel((paneId, text) => {
+    }))
+    this.disposers.push(onPaneLabel((paneId, text) => {
       if (paneId === this.id) applyLabel(text)
-    })
-    this.paneGitUnsub = onPaneGit((paneId, status) => {
+    }))
+    this.disposers.push(onPaneGit((paneId, status) => {
       if (paneId === this.id) applyGit(status)
-    })
+    }))
 
     return body
   }
@@ -2171,7 +2039,7 @@ export class TerminalPane {
       /** The pane's root element — PANESCROLL dispatches real wheel/pointer/key events
        *  at the real targets inside it, so the gate exercises the shipped listeners. */
       el: (): HTMLElement => host,
-      renderer: (): string => (this.webgl ? 'webgl' : 'dom'),
+      renderer: (): string => (this.gl.isActive() ? 'webgl' : 'dom'),
       bufferLines: () => this.term.buffer.active.length,
       rows: () => this.term.rows,
       cols: () => this.term.cols,
@@ -2242,10 +2110,11 @@ export class TerminalPane {
   dispose(): void {
     this.disposed = true
     retirePaneInstance(this.id, this.instance)
-    // Detach from the terminal channels FIRST: from here on, events for this id belong
-    // to whichever pane next takes it — never to this dead xterm.
-    for (const unsub of this.clientUnsubs) unsub()
-    this.clientUnsubs.length = 0
+    // Detach from the terminal channels and every port subscription FIRST: from here
+    // on, events for this id belong to whichever pane next takes it — never to this
+    // dead xterm.
+    for (const unsub of this.disposers) unsub()
+    this.disposers.length = 0
     if (this.refitTimer) {
       clearTimeout(this.refitTimer)
       this.refitTimer = undefined
@@ -2259,18 +2128,6 @@ export class TerminalPane {
     this.renameModal?.close()
     this.renameModal = undefined
     this.blocks?.dispose()
-    this.themeUnsub?.()
-    this.fontUnsub?.()
-    this.paneLabelUnsub?.()
-    this.paneGitUnsub?.()
-    this.focusUnsub?.()
-    this.roleUnsub?.()
-    this.claimsUnsub?.()
-    this.mcpUnsub?.()
-    this.ctxUnsub?.()
-    this.agentSessionUnsub?.()
-    this.agentChipUnsub?.()
-    this.dotGateUnsub?.()
     this.scrollbar?.dispose()
     this.anchor?.dispose()
     this.headerFit?.dispose()
@@ -2287,7 +2144,7 @@ export class TerminalPane {
     setPaneLabel(this.id, '')
     this.visObs?.disconnect()
     this.expandStateObs?.disconnect()
-    this.releaseWebgl()
+    this.gl.release()
     this.resizeObs.disconnect()
     terminalClient.kill({ id: this.id })
     this.term.dispose()

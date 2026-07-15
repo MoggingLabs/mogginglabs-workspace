@@ -94,20 +94,11 @@ jobs:
       # the overwhelming majority of Macs; Intel x64 is DEFERRED until the image
       # hang is fixed upstream or a dedicated x64 runner lands (docs/10). The
       # Package step passes --arm64 to match.
-      - name: Install dependencies (direct node-gyp bypass)
-        shell: bash
+      # ONE definition of the direct-gyp dance — .github/actions/electron-native-rebuild
+      # (the long comment above explains why @electron/rebuild's spawn cannot be used).
+      - name: Native install + Electron-ABI rebuild
         timeout-minutes: 25
-        run: |
-          npm ci --ignore-scripts
-          node node_modules/electron/install.js
-          EV=$(node -p "require('electron/package.json').version")
-          for m in node-pty better-sqlite3; do
-            echo "── rebuilding $m for electron $EV"
-            (cd "node_modules/$m" && node ../node-gyp/bin/node-gyp.js rebuild \
-              --runtime=electron --target="$EV" \
-              --dist-url=https://www.electronjs.org/headers --build-from-source < /dev/null)
-          done
-
+        uses: ./.github/actions/electron-native-rebuild
       - name: Build (emits sourcemaps)
         run: npm run build
 

@@ -137,26 +137,12 @@ jobs:
           path: node_modules
           key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json') }}-e34
 
-      - name: Install (packages only)
+      # The whole install/fetch/rebuild dance lives ONCE in the composite action
+      # (.github/actions/electron-native-rebuild) — it was copy-pasted five times.
+      - name: Native install + Electron-ABI rebuild
         if: steps.nmcache.outputs.cache-hit != 'true'
-        run: npm ci --ignore-scripts
-
-      - name: Electron binary (its install script was skipped above)
-        if: steps.nmcache.outputs.cache-hit != 'true'
-        run: node node_modules/electron/install.js
-
-      - name: Electron-ABI rebuild (direct node-gyp)
-        if: steps.nmcache.outputs.cache-hit != 'true'
-        # Same bypass as linux-sweep — see that job's comment (bisected 2026-07-03).
-        run: |
-          EV=$(node -p "require('electron/package.json').version")
-          for m in node-pty better-sqlite3; do
-            echo "── rebuilding $m for electron $EV"
-            (cd "node_modules/$m" && timeout 10m node ../node-gyp/bin/node-gyp.js rebuild \
-              --runtime=electron --target="$EV" \
-              --dist-url=https://www.electronjs.org/headers --build-from-source < /dev/null)
-          done
-
+        timeout-minutes: 25
+        uses: ./.github/actions/electron-native-rebuild
       - name: Build
         run: npm run build
 
@@ -217,29 +203,12 @@ jobs:
           path: node_modules
           key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json') }}-e34
 
-      - name: Install (packages only)
+      # The whole install/fetch/rebuild dance lives ONCE in the composite action
+      # (.github/actions/electron-native-rebuild) — it was copy-pasted five times.
+      - name: Native install + Electron-ABI rebuild
         if: steps.nmcache.outputs.cache-hit != 'true'
-        run: npm ci --ignore-scripts
-
-      - name: Electron binary (its install script was skipped above)
-        if: steps.nmcache.outputs.cache-hit != 'true'
-        run: node node_modules/electron/install.js
-
-      - name: Electron-ABI rebuild (direct node-gyp)
-        if: steps.nmcache.outputs.cache-hit != 'true'
-        # @electron/rebuild's spawned gyp hangs indefinitely on the 2026-07 images
-        # (ubuntu bisected 2026-07-03, run 28639452382; win + mac reproduced, run
-        # 28647921078 — direct invocation builds fine everywhere). CI drives
-        # node-gyp directly; dev machines keep the standard postinstall.
-        run: |
-          EV=$(node -p "require('electron/package.json').version")
-          for m in node-pty better-sqlite3; do
-            echo "── rebuilding $m for electron $EV"
-            (cd "node_modules/$m" && timeout 10m node ../node-gyp/bin/node-gyp.js rebuild \
-              --runtime=electron --target="$EV" \
-              --dist-url=https://www.electronjs.org/headers --build-from-source < /dev/null)
-          done
-
+        timeout-minutes: 25
+        uses: ./.github/actions/electron-native-rebuild
       - name: Build
         run: npm run build
 
@@ -259,16 +228,7 @@ jobs:
             ' | tee sweep.log
 
       - name: Gate on results
-        run: |
-          if ! grep -q 'SWEEP RESULTS' sweep.log; then
-            echo '::error::sweep never printed results'; exit 1
-          fi
-          BAD=$(sed -n '/SWEEP RESULTS/,$p' sweep.log | grep -cE ' (FAIL|MISSING)$' || true)
-          if [ "$BAD" != "0" ]; then
-            echo "::error::$BAD gate(s) failed"; sed -n '/SWEEP RESULTS/,$p' sweep.log; exit 1
-          fi
-          echo 'ALL GATES PASS'; sed -n '/SWEEP RESULTS/,$p' sweep.log
-
+        run: bash scripts/check-sweep-log.sh sweep.log
       - name: Upload result JSONs (pass or fail — the green run's numbers get recorded)
         if: always()
         uses: actions/upload-artifact@v7
@@ -323,26 +283,12 @@ jobs:
       # output (run 28647921078), same fingerprint as the ubuntu bisect. The whole
       # 2026-07 image family gets the direct node-gyp bypass. No inner timeout —
       # the step timeout is the watchdog (mac has no GNU `timeout`).
-      - name: Install (packages only)
-        if: steps.nmcache.outputs.cache-hit != 'true'
-        run: npm ci --ignore-scripts
-
-      - name: Electron binary (its install script was skipped above)
-        if: steps.nmcache.outputs.cache-hit != 'true'
-        run: node node_modules/electron/install.js
-
-      - name: Electron-ABI rebuild (direct node-gyp)
+      # The whole install/fetch/rebuild dance lives ONCE in the composite action
+      # (.github/actions/electron-native-rebuild) — it was copy-pasted five times.
+      - name: Native install + Electron-ABI rebuild
         if: steps.nmcache.outputs.cache-hit != 'true'
         timeout-minutes: 20
-        run: |
-          EV=$(node -p "require('electron/package.json').version")
-          for m in node-pty better-sqlite3; do
-            echo "── rebuilding $m for electron $EV"
-            (cd "node_modules/$m" && node ../node-gyp/bin/node-gyp.js rebuild \
-              --runtime=electron --target="$EV" \
-              --dist-url=https://www.electronjs.org/headers --build-from-source < /dev/null)
-          done
-
+        uses: ./.github/actions/electron-native-rebuild
       - name: Build
         run: npm run build
 
@@ -351,16 +297,7 @@ jobs:
           MOGGING_CI_GPU=soft MOGGING_GATES="${{ inputs.gates }}" bash scripts/qa-smokes.sh | tee sweep.log
 
       - name: Gate on results
-        run: |
-          if ! grep -q 'SWEEP RESULTS' sweep.log; then
-            echo '::error::sweep never printed results'; exit 1
-          fi
-          BAD=$(sed -n '/SWEEP RESULTS/,$p' sweep.log | grep -cE ' (FAIL|MISSING)$' || true)
-          if [ "$BAD" != "0" ]; then
-            echo "::error::$BAD gate(s) failed"; sed -n '/SWEEP RESULTS/,$p' sweep.log; exit 1
-          fi
-          echo 'ALL GATES PASS'; sed -n '/SWEEP RESULTS/,$p' sweep.log
-
+        run: bash scripts/check-sweep-log.sh sweep.log
       - name: Upload result JSONs (pass or fail — the green run's numbers get recorded)
         if: always()
         uses: actions/upload-artifact@v7
@@ -402,29 +339,12 @@ jobs:
           path: node_modules
           key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json') }}-e34
 
-      - name: Install (packages only)
+      # The whole install/fetch/rebuild dance lives ONCE in the composite action
+      # (.github/actions/electron-native-rebuild) — it was copy-pasted five times.
+      - name: Native install + Electron-ABI rebuild
         if: steps.nmcache.outputs.cache-hit != 'true'
-        shell: bash
-        run: npm ci --ignore-scripts
-
-      - name: Electron binary (its install script was skipped above)
-        if: steps.nmcache.outputs.cache-hit != 'true'
-        shell: bash
-        run: node node_modules/electron/install.js
-
-      - name: Electron-ABI rebuild (direct node-gyp)
-        if: steps.nmcache.outputs.cache-hit != 'true'
-        shell: bash
         timeout-minutes: 25
-        run: |
-          EV=$(node -p "require('electron/package.json').version")
-          for m in node-pty better-sqlite3; do
-            echo "── rebuilding $m for electron $EV"
-            (cd "node_modules/$m" && node ../node-gyp/bin/node-gyp.js rebuild \
-              --runtime=electron --target="$EV" \
-              --dist-url=https://www.electronjs.org/headers --build-from-source < /dev/null)
-          done
-
+        uses: ./.github/actions/electron-native-rebuild
       - name: Build
         shell: bash
         run: npm run build
@@ -436,16 +356,7 @@ jobs:
 
       - name: Gate on results
         shell: bash
-        run: |
-          if ! grep -q 'SWEEP RESULTS' sweep.log; then
-            echo '::error::sweep never printed results'; exit 1
-          fi
-          BAD=$(sed -n '/SWEEP RESULTS/,$p' sweep.log | grep -cE ' (FAIL|MISSING)$' || true)
-          if [ "$BAD" != "0" ]; then
-            echo "::error::$BAD gate(s) failed"; sed -n '/SWEEP RESULTS/,$p' sweep.log; exit 1
-          fi
-          echo 'ALL GATES PASS'; sed -n '/SWEEP RESULTS/,$p' sweep.log
-
+        run: bash scripts/check-sweep-log.sh sweep.log
       - name: Upload result JSONs (pass or fail — the green run's numbers get recorded)
         if: always()
         uses: actions/upload-artifact@v7
@@ -484,20 +395,9 @@ jobs:
       # Direct node-gyp on BOTH OSes: the 2026-07 win/mac images hang the
       # @electron/rebuild spawn exactly like ubuntu (runs 28647921078: win + mac
       # dry runs both timed out inside `npm ci`).
-      - name: Install dependencies (direct node-gyp bypass)
-        shell: bash
+      - name: Native install + Electron-ABI rebuild
         timeout-minutes: 25
-        run: |
-          npm ci --ignore-scripts
-          node node_modules/electron/install.js
-          EV=$(node -p "require('electron/package.json').version")
-          for m in node-pty better-sqlite3; do
-            echo "── rebuilding $m for electron $EV"
-            (cd "node_modules/$m" && node ../node-gyp/bin/node-gyp.js rebuild \
-              --runtime=electron --target="$EV" \
-              --dist-url=https://www.electronjs.org/headers --build-from-source < /dev/null)
-          done
-
+        uses: ./.github/actions/electron-native-rebuild
       - name: Build
         run: npm run build
 
