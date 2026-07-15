@@ -22,6 +22,18 @@ import {
   type FileTreeHandle
 } from '../../components'
 import { clipboardEnv, copyText } from '../../core/clipboard/clipboard-port'
+
+/** Copy a path and tell the user if the OS refused it (a clipboard held open by another
+ *  process makes the write a silent no-op — copyText verifies and answers truthfully).
+ *  Silence on success: the copy is the feedback, exactly as before. */
+async function copyPath(path: string): Promise<void> {
+  if (await copyText(path)) return
+  showToast({
+    tone: 'danger',
+    title: 'Copy failed',
+    body: 'Another app is holding the system clipboard open — nothing was copied.'
+  })
+}
 import { getPaneRemote } from '../../core/layout/pane-meta'
 import { typeIntoPane } from '../../core/terminal/pane-input-port'
 import { gitCheckIgnore, gitFilesUnwatch, gitFilesWatch, onGitFiles } from './git.client'
@@ -239,7 +251,7 @@ export const explorerFeature: UiFeature = {
       if (!selection) return
       e.preventDefault()
       actions.push({ verb: 'copy', path: selection })
-      void copyText(selection)
+      void copyPath(selection)
     })
     // LAST in #main — outermost right. With the browser dock open the row reads
     // `#rail | #content | .browser-dock | .explorer-dock` (the browser feature mounts
@@ -531,8 +543,8 @@ export const explorerFeature: UiFeature = {
         { label: 'Open', icon: 'arrow-right', onSelect: () => void doOpen(entry) },
         { label: revealLabel, icon: 'folder-open', onSelect: () => void doReveal(entry) },
         { separator: true },
-        { label: 'Copy path', icon: 'copy', hint: 'Ctrl+C', onSelect: () => void copyText(entry.path) },
-        { label: 'Copy relative path', icon: 'copy', onSelect: () => void copyText(relToRoot(entry.path)) },
+        { label: 'Copy path', icon: 'copy', hint: 'Ctrl+C', onSelect: () => void copyPath(entry.path) },
+        { label: 'Copy relative path', icon: 'copy', onSelect: () => void copyPath(relToRoot(entry.path)) },
         { separator: true },
         {
           label: 'Send to pane',

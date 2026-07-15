@@ -58,9 +58,11 @@ import { BlockTracker } from '../blocks'
 import {
   copyOnSelect,
   copyText,
+  parseOsc52,
+  PASTE_KEY,
   quoteDroppedPaths,
   quoteWithFlavor,
-  readText,
+  readRich,
   recordDrop,
   sanitizePaste
 } from '../../core/clipboard/clipboard-port'
@@ -141,7 +143,11 @@ export class TerminalPane {
   private anchor?: PaneAnchorHandle
   private headerFit?: PaneHeaderFitHandle
   private osc133?: { dispose(): void }
+  private osc52?: { dispose(): void }
   private remoteReadyOsc?: { dispose(): void }
+  /** When we last told the user a copy failed. A locked clipboard fails EVERY drag, and
+   *  copy-on-select fires on every one of them — the warning must inform, not pile up. */
+  private lastCopyWarnAt = 0
   private stateDot?: HTMLSpanElement
   private syncState?: () => void
   private dotGateUnsub?: () => void
@@ -174,6 +180,13 @@ export class TerminalPane {
       cursorBlink: false, // enabled only while focused (perf: fewer idle repaints across panes)
       allowProposedApi: true,
       scrollback: 10000,
+      // The MAC half of "you can always select, whoever owns the mouse". A CLI with mouse
+      // reporting on (Claude Code, any full-screen TUI) takes the mouse from xterm, and the
+      // only way back to a local selection is xterm's force-selection modifier: Shift on
+      // Windows/Linux, which works out of the box — but on macOS it is Option, and ONLY if
+      // this option is set. It defaults to false, so a Mac user could not select text in a
+      // Claude Code pane AT ALL: not with Shift (mac ignores it), not with Option (off).
+      macOptionClickForcesSelection: true,
       // windowsPty is NOT set here: nobody in the renderer knows how this pane's pty grows until
       // the pty exists. It is applied from the spawn answer below, which arrives before the first
       // byte of output — the buffer is empty until then, so no resize can have gone wrong yet.
@@ -241,6 +254,12 @@ export class TerminalPane {
     // Copy-on-select (opt-in): mouse-drag a range and it is on the clipboard, X11-style.
     // Guarded on hasSelection so CLEARING a selection never blanks the clipboard.
     //
+    // This is the APP's copy path, and it depends on xterm owning the mouse. A CLI with
+    // mouse reporting on (Claude Code, any full-screen TUI) takes the mouse, so no
+    // onSelectionChange fires here at all — that program does its own selection and copies
+    // it via OSC 52, handled just below. To select text over such a CLI by hand, hold the
+    // force-selection modifier (Shift on Win/Linux, Option on macOS) and this path runs again.
+    //
     // Debounced because onSelectionChange fires on every mousemove of the drag, not once
     // at the end of it: undebounced, dragging over twenty lines would write the clipboard
     // (and push a history entry) twenty times, for twenty prefixes of the text you wanted.
@@ -251,8 +270,25 @@ export class TerminalPane {
         this.selectionCopyTimer = undefined
         if (!this.term.hasSelection()) return
         const text = this.term.getSelection()
-        if (text) void copyText(text, 'terminal')
+        if (text) void this.copyOrWarn(text)
       }, 120)
+    })
+
+    // OSC 52 — the agent CLI's OWN copy, and the fix for the reported bug. A program that
+    // owns the mouse draws its own selection and copies it by emitting ESC]52;c;<base64>;
+    // xterm has no OSC 52 handler, so without THIS the sequence was parsed and dropped —
+    // Claude Code printed "Copied N characters to clipboard" while the system clipboard
+    // never changed, and the next Ctrl+V pasted nothing. The decoded payload now routes to
+    // the same door every other copy uses (copyOrWarn → copyText). Registered on the parser
+    // so it is seen no matter how the PTY chunked the bytes. We ALWAYS consume it (return
+    // true): a copy we perform, a read we REFUSE (parseOsc52 → 'read', a clipboard-exfil
+    // primitive we never answer), a malformed one we drop — none is display content, and we
+    // are this terminal's OSC 52 authority. Works for every provider, and across ssh, by
+    // construction — it is the universal protocol, not a Claude Code special case.
+    this.osc52 = this.term.parser.registerOscHandler(52, (data) => {
+      const req = parseOsc52(data)
+      if (req?.kind === 'copy') void this.copyOrWarn(req.text)
+      return true
     })
 
     this.mountFileDrop(body)
@@ -705,7 +741,7 @@ export class TerminalPane {
     const selectionText = this.term.getSelection()
     if ((copyChord || bareCtrlC) && selectionText) {
       e.preventDefault()
-      void copyText(selectionText, 'terminal')
+      void this.copyOrWarn(selectionText)
       // Copying consumes the selection, so a second Ctrl+C sends SIGINT as usual —
       // otherwise a stale selection would swallow every interrupt for the rest of the session.
       this.term.clearSelection()
@@ -784,22 +820,58 @@ export class TerminalPane {
   /** The paste choke point (capture phase — see the listener registration). Consumes the
    *  event so xterm's own unsanitised paste listener never runs, then types the payload
    *  into the PTY wrapped in bracketed paste when the foreground program asked for it
-   *  (xterm tracks the DECSET 2004 mode the shell or agent CLI set). */
+   *  (xterm tracks the DECSET 2004 mode the shell or agent CLI set).
+   *
+   *  IMAGE PASTE. When the clipboard holds an image and no text, there is nothing to type:
+   *  a PTY has no protocol for image bytes. But every agent CLI (Claude Code, Codex, Gemini)
+   *  reads the system clipboard itself and attaches the image — it just needs the Ctrl+V
+   *  keystroke to know to look. We consumed that keystroke to own the paste, so we forward
+   *  the raw Ctrl+V byte in its place. That is the whole of image paste: hand the chord to
+   *  the program that can honour it. */
   private handleNativePaste(e: ClipboardEvent): void {
     e.preventDefault()
     e.stopImmediatePropagation()
-    const text = e.clipboardData?.getData('text/plain') ?? ''
-    if (!text) return
-    terminalClient.write({ id: this.id, data: sanitizePaste(text, this.term.modes.bracketedPasteMode) })
+    const data = e.clipboardData
+    const text = data?.getData('text/plain') ?? ''
+    if (text) {
+      terminalClient.write({ id: this.id, data: sanitizePaste(text, this.term.modes.bracketedPasteMode) })
+      return
+    }
+    const types = Array.from(data?.types ?? [])
+    const files = Array.from(data?.files ?? [])
+    const hasImage = types.some((t) => t.startsWith('image/')) || files.some((f) => f.type.startsWith('image/'))
+    if (hasImage) terminalClient.write({ id: this.id, data: PASTE_KEY })
   }
 
   /** IPC fallback for paste chords with no native trigger (macOS Ctrl-combos only —
-   *  everywhere else the platform emits a `paste` event and handleNativePaste owns it). */
+   *  everywhere else the platform emits a `paste` event and handleNativePaste owns it).
+   *  Mirrors handleNativePaste: text is typed (sanitised, bracketed when asked); an image
+   *  with no text forwards the Ctrl+V byte so the agent CLI can read it off the clipboard. */
   private async pasteFromClipboard(): Promise<void> {
-    const text = await readText()
-    if (!text) return
-    const bracketed = this.term.modes.bracketedPasteMode
-    terminalClient.write({ id: this.id, data: sanitizePaste(text, bracketed) })
+    const rich = await readRich()
+    if (rich.text) {
+      terminalClient.write({ id: this.id, data: sanitizePaste(rich.text, this.term.modes.bracketedPasteMode) })
+      return
+    }
+    if (rich.kind === 'image') terminalClient.write({ id: this.id, data: PASTE_KEY })
+  }
+
+  /** Copy text and, if the system clipboard refused it, say so — ONCE per few seconds. The
+   *  Windows clipboard is a machine-wide lock: while another process holds it open, the
+   *  write is a silent no-op and copyText comes back false. Every copy the pane makes —
+   *  a drag (copy-on-select), Ctrl+C, an agent's OSC 52 — routes through here, so a copy
+   *  that did not happen never passes for one that did. Throttled because a locked
+   *  clipboard fails every mousemove of a drag, and one truth beats twenty toasts. */
+  private async copyOrWarn(text: string): Promise<void> {
+    if (await copyText(text, 'terminal')) return
+    const now = Date.now()
+    if (now - this.lastCopyWarnAt < 3000) return
+    this.lastCopyWarnAt = now
+    showToast({
+      tone: 'danger',
+      title: 'Copy failed',
+      body: 'Another app is holding the system clipboard open. Nothing was copied — try again in a moment.'
+    })
   }
 
   /**
@@ -1831,7 +1903,7 @@ export class TerminalPane {
       item('trash', 'Clear terminal', () => this.term.clear()),
       item('folder', 'Copy working directory', () => {
         const cwd = getPaneCwd(this.id)
-        if (cwd) void copyText(cwd, 'terminal')
+        if (cwd) void this.copyOrWarn(cwd)
       })
     )
     // Worktree-isolated pane (3/03): guarded removal. Dirty worktrees are refused with
@@ -2167,6 +2239,7 @@ export class TerminalPane {
     this.anchor?.dispose()
     this.headerFit?.dispose()
     this.osc133?.dispose()
+    this.osc52?.dispose()
     this.remoteReadyOsc?.dispose()
     clearPaneCli(this.id)
     // Launch-scoped identity dies with the pane, not with the id: a killed pane's exit

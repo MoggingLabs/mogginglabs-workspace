@@ -5,10 +5,11 @@ import { join } from 'node:path'
 import { quotePathForShell, shellFlavor } from '@contracts'
 import {
   clipboardAuditState,
+  failNextClipboardWrites,
   resetClipboardReadAudit
 } from './clipboard-audit-faults'
 
-// Env-gated clipboard smoke (MOGGING_CLIPBOARD). Four things are checked, because four
+// Env-gated clipboard smoke (MOGGING_CLIPBOARD). Five things are checked, because five
 // things can independently break and each is invisible from the others:
 //
 //   1. The pure quoting rule — asserted HERE, in main, with no window involved. A dropped
@@ -19,6 +20,13 @@ import {
 //      raised with the right message while a file hovers, lowered after the drop.
 //   4. The paste choke point, against a REAL pty: one paste event echoes exactly once —
 //      twice means xterm's own unsanitised paste listener ran alongside ours.
+//   5. The AGENT's clipboard (probeAgentClipboard): OSC 52 — the sequence Claude Code,
+//      Codex, vim and tmux copy with — must land on the system clipboard; its READ form
+//      must be answered with NOTHING (the exfil guard); an image-only paste must forward
+//      the bare Ctrl+V byte so the CLI reads the image itself; and a copy the OS refused
+//      must come back as a failure the user can see, never a silent success. This is the
+//      regression fence around the 2026-07 bug where Claude Code printed "Copied N
+//      characters to clipboard" while the clipboard never changed.
 //
 // What no smoke can drive: a real OS drag, so the webUtils.getPathForFile link (dropped
 // File -> absolute path) still needs one human drag. Everything downstream of it is
@@ -502,8 +510,190 @@ async function probeUserSequence(win: BrowserWindow): Promise<Record<string, unk
   }
 }
 
+/**
+ * The agent's clipboard, end to end — the fence around the OSC 52 fix (2026-07).
+ *
+ * Every sequence is written with `pane.term.write(...)`, which feeds xterm's parser the
+ * same way PTY output does — so these assertions cover the shipped handler registration,
+ * not a reimplementation of it. The PTY-write spy (`__mogging.ptyWrites`, a DEV seam in
+ * terminalClient.write) observes what a pane TYPED, which the buffer cannot show: the
+ * shell decides what echoes, and the two negative cases here are precisely about bytes
+ * that must never be sent.
+ */
+async function probeAgentClipboard(win: BrowserWindow): Promise<Record<string, unknown>> {
+  const exec = (code: string): Promise<unknown> => win.webContents.executeJavaScript(code, true)
+  try {
+    const inPage = (await exec(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+      const b = window.bridge
+      const p = window.__mogging.panes[0]
+      if (!p || !p.term) return { agentPass: false, agentError: 'no pane' }
+      await b.invoke('clipboard:historySet', { enabled: true })
+
+      // Base64 an arbitrary UTF-8 string the way an agent CLI does (bytes, not code units).
+      const b64utf8 = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
+      const OSC = String.fromCharCode(27) + ']52;c;'
+      const BEL = String.fromCharCode(7)
+      const readClip = () => b.invoke('clipboard:read')
+      const waitClip = async (want) => {
+        for (let i = 0; i < 20; i++) { if ((await readClip()) === want) return true; await sleep(100) }
+        return false
+      }
+
+      // The spy sees every byte a pane sends to its PTY from here on.
+      window.__mogging.ptyWrites = []
+      const spy = window.__mogging.ptyWrites
+
+      // 1. OSC 52 copy — THE reported bug. An agent emits ESC]52;c;<base64>BEL and the
+      //    payload must land on the system clipboard.
+      p.term.write(OSC + b64utf8('OSC52_ASCII_5591') + BEL)
+      const osc52Ascii = await waitClip('OSC52_ASCII_5591')
+
+      // 2. UTF-8 payload — a naive atob-only decode mangles every non-ASCII character.
+      const utf8Payload = 'caf\\u00e9 \\u65e5\\u672c 5591'
+      p.term.write(OSC + b64utf8(utf8Payload) + BEL)
+      const osc52Utf8 = await waitClip(utf8Payload)
+
+      // 3. Split across chunk boundaries — PTYs chunk anywhere, including inside the
+      //    sequence. xterm's parser must reassemble it; this locks the wiring, not xterm.
+      const whole = OSC + b64utf8('OSC52_SPLIT_5591') + BEL
+      p.term.write(whole.slice(0, 9))
+      await sleep(30)
+      p.term.write(whole.slice(9))
+      const osc52Split = await waitClip('OSC52_SPLIT_5591')
+
+      // 4. History attribution: the newest ring entry is the OSC 52 copy, sourced
+      //    'terminal' — an agent's copy is traceable like every other.
+      const hist = await b.invoke('clipboard:history')
+      const osc52InHistory = hist.length > 0 && hist[0].preview === 'OSC52_SPLIT_5591' && hist[0].source === 'terminal'
+
+      // 5. The READ request must be answered with NOTHING. If anyone ever implements the
+      //    read half, the reply rides terminalClient.write and the spy catches it — this
+      //    is the guard against a pane (or an ssh host) reading the user's clipboard.
+      await b.invoke('clipboard:write', { text: 'OSC52_SECRET_5591', source: 'app' })
+      const spyMark = spy.length
+      p.term.write(String.fromCharCode(27) + ']52;c;?' + BEL)
+      await sleep(600)
+      const readAnswered = spy.slice(spyMark).some((w) => String(w.data).includes('OSC52_SECRET_5591'))
+      const osc52ReadRefused = !readAnswered
+
+      // 6. An EMPTY payload (spec: "clear the selection") must not wipe the clipboard.
+      p.term.write(OSC + BEL)
+      await sleep(400)
+      const osc52EmptyKept = (await readClip()) === 'OSC52_SECRET_5591'
+
+      // 7. Garbage base64 copies nothing and breaks nothing.
+      p.term.write(OSC + '@@@not-base64@@@' + BEL)
+      await sleep(400)
+      const osc52GarbageKept = (await readClip()) === 'OSC52_SECRET_5591'
+
+      // 8. Image-only paste forwards the bare Ctrl+V byte (0x16) — the CLI reads the
+      //    image off the system clipboard itself, but only if it SEES the chord. A real
+      //    Chromium image paste carries type 'Files' with an image File; synthesized the
+      //    same way here.
+      const dtImg = new DataTransfer()
+      dtImg.items.add(new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' }))
+      const spyImg = spy.length
+      p.term.textarea.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dtImg }))
+      await sleep(300)
+      // Tolerate xterm's own device-query auto-replies (CPR/DA — ESC-prefixed, they ride
+      // the same write path and can land at any time); the CHORD byte must be there, and
+      // no OTHER printable byte may have been typed by the paste.
+      const isAutoReply = (w) => w.startsWith(String.fromCharCode(27))
+      const imgWrites = spy.slice(spyImg).map((w) => String(w.data))
+      const imagePasteChord =
+        imgWrites.some((w) => w === String.fromCharCode(22)) &&
+        imgWrites.every((w) => w === String.fromCharCode(22) || isAutoReply(w))
+
+      // 9. A text+image paste types the TEXT (never both, never the chord).
+      const dtBoth = new DataTransfer()
+      dtBoth.setData('text/plain', 'BOTH_5591')
+      dtBoth.items.add(new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' }))
+      const spyBoth = spy.length
+      p.term.textarea.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dtBoth }))
+      await sleep(300)
+      const bothWrites = spy.slice(spyBoth).map((w) => String(w.data))
+      const textWinsPaste =
+        bothWrites.some((w) => w.includes('BOTH_5591')) &&
+        bothWrites.every((w) => w !== String.fromCharCode(22))
+
+      // 10. A MULTI-LINE write must verify clean. Windows stores clipboard text as CRLF,
+      //     so the write-then-read-back check must tolerate \\n -> \\r\\n — a rejection
+      //     here would flash "Copy failed" on every copied code block.
+      let multilineOk = false
+      try {
+        await b.invoke('clipboard:write', { text: 'LINE1_5591' + String.fromCharCode(10) + 'LINE2_5591', source: 'app' })
+        multilineOk = true
+      } catch { multilineOk = false }
+
+      delete window.__mogging.ptyWrites
+      return {
+        osc52Ascii, osc52Utf8, osc52Split, osc52InHistory, osc52ReadRefused,
+        osc52EmptyKept, osc52GarbageKept, imagePasteChord, imgWrites,
+        textWinsPaste, bothWrites, multilineOk,
+        agentPass: osc52Ascii && osc52Utf8 && osc52Split && osc52InHistory &&
+          osc52ReadRefused && osc52EmptyKept && osc52GarbageKept &&
+          imagePasteChord && textWinsPaste && multilineOk
+      }
+    })()`)) as Record<string, unknown> & { agentPass?: boolean }
+
+    // 11. A copy the OS refused must reject the invoke — this is what the renderer turns
+    //     into `copyText === false`. Armed via the existing fault seam; the arm counter
+    //     is exhausted by the attempt, so nothing leaks into later assertions.
+    failNextClipboardWrites(1)
+    const failedWriteRejected = (await exec(`(async () => {
+      try { await window.bridge.invoke('clipboard:write', { text: 'MUSTFAIL_5591', source: 'app' }); return false }
+      catch { return true }
+    })()`)) as boolean
+    failNextClipboardWrites(0)
+    const failedWriteNotOnClipboard = clipboard.readText() !== 'MUSTFAIL_5591'
+
+    // 12. …and the USER must see it. Drive the real chord (select + Ctrl+C) against an
+    //     armed failure and require the danger toast. Two arms: copy-on-select's debounced
+    //     copy fires first and consumes one; the chord consumes the other. The 3 s toast
+    //     throttle collapses them to one visible truth.
+    failNextClipboardWrites(2)
+    const copyFailToast = (await exec(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+      const p = window.__mogging.panes[0]
+      const buf = p.term.buffer.active
+      let textRow = -1
+      for (let r = 0; r < buf.length; r++) {
+        const line = buf.getLine(r)
+        if (line && line.translateToString(true).trim().length >= 5) { textRow = r; break }
+      }
+      if (textRow === -1) return 'no-text-row'
+      p.term.select(0, textRow, 5)
+      p.term.textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, bubbles: true, cancelable: true }))
+      for (let i = 0; i < 20; i++) {
+        const t = [...document.querySelectorAll('.toast--danger .toast-title')]
+        if (t.some((el) => el.textContent === 'Copy failed')) return 'toast-shown'
+        await sleep(150)
+      }
+      return 'no-toast'
+    })()`)) as string
+    failNextClipboardWrites(0)
+
+    return {
+      ...inPage,
+      failedWriteRejected,
+      failedWriteNotOnClipboard,
+      copyFailToast,
+      agentPass: !!(
+        inPage.agentPass &&
+        failedWriteRejected &&
+        failedWriteNotOnClipboard &&
+        copyFailToast === 'toast-shown'
+      )
+    }
+  } catch (e) {
+    failNextClipboardWrites(0) // never leave an armed failure behind
+    return { agentPass: false, agentError: String(e).slice(0, 200) }
+  }
+}
+
 export function runClipboardSmoke(win: BrowserWindow): void {
-  setTimeout(() => app.exit(1), 90000) // safety net (the user-sequence probe added ~10 s)
+  setTimeout(() => app.exit(1), 120000) // safety net (user-sequence + agent-clipboard probes add ~20 s)
   const run = async (): Promise<void> => {
     // Foreground the window: the overlay-animation check rides requestAnimationFrame,
     // which Chromium suspends for occluded windows — and a smoke window launched from a
@@ -548,6 +738,7 @@ export function runClipboardSmoke(win: BrowserWindow): void {
     }
     const realDrop = await probeRealFileDrop(win)
     const seq = await probeUserSequence(win)
+    const agent = await probeAgentClipboard(win)
     const finalClipboardAudit = clipboardAuditState()
     const sensitiveFilterObserved = finalClipboardAudit.blockedSensitiveEntries >= 1
     // `pass` LAST: the in-page script returns its own `pass`, and an earlier revision
@@ -567,6 +758,7 @@ export function runClipboardSmoke(win: BrowserWindow): void {
       sensitiveFilterObserved,
       ...realDrop,
       ...seq,
+      ...agent,
       ...ipc,
       pass: !!(
         quoting.pass &&
@@ -577,7 +769,8 @@ export function runClipboardSmoke(win: BrowserWindow): void {
         sensitiveFilterObserved &&
         ipc.pass &&
         realDrop.realDropOk &&
-        seq.seqPass
+        seq.seqPass &&
+        agent.agentPass
       )
     }
     try {

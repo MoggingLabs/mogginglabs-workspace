@@ -182,7 +182,7 @@ export function createClipboardSection(): HTMLElement {
 
   const copyOnSelectRow = createToggleRow({
     label: 'Copy on select',
-    hint: 'Selecting text in a terminal with the mouse copies it immediately, without Ctrl+C.',
+    hint: 'Selecting text in a terminal with the mouse copies it immediately, without Ctrl+C. When an agent draws its own UI (Claude Code and co. take the mouse), the agent’s selection copies via the terminal protocol instead — hold Shift (⌥ on macOS) to select with the app.',
     checked: copyOnSelect(),
     onChange: setCopyOnSelect
   })

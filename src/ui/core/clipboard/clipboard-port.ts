@@ -16,12 +16,32 @@ import { getBridge } from '../ipc/bridge'
  * that knows the channel names, one place that caches the shell flavor, and one place
  * that decides what a "copy" means.
  *
- * WHY THIS OVERRIDES THE AGENT CLIs. Claude Code, Codex and Gemini all install their own
- * key handling inside the PTY, and each disagrees with the others about Ctrl+C/Ctrl+V.
- * We never negotiate with them: the pane intercepts the keystroke in xterm's
- * `attachCustomKeyEventHandler`, which runs BEFORE any byte is written to the PTY, and
- * returns false. The CLI never sees the key, so our binding wins on every provider and
- * on every platform — identically. That is the whole mechanism.
+ * TWO ACTORS CAN COPY, AND WE MUST SERVE BOTH. This file used to claim that intercepting
+ * the keystroke ahead of the PTY was "the whole mechanism" — that because the CLI never
+ * sees Ctrl+C, our binding always wins. That was false, and the falsehood is precisely
+ * what hid the bug it caused:
+ *
+ *   1. THE APP COPIES. xterm owns the mouse, so it owns the selection; the pane reads
+ *      `getSelection()` and writes it here. This is the path that already worked.
+ *
+ *   2. THE CLI COPIES. A CLI that turns on mouse reporting (DECSET ?1000h/?1006h — Claude
+ *      Code does, and so does any full-screen TUI) TAKES THE MOUSE AWAY from xterm. xterm
+ *      then never builds a selection at all: `getSelection()` is '', our Ctrl+C handler
+ *      correctly declines, and the chord falls through to the CLI — which is drawing its
+ *      OWN selection and copies it the only way a terminal program can: by emitting
+ *      OSC 52. We had no OSC 52 handler, so xterm parsed the sequence and dropped it on
+ *      the floor. Claude Code printed "Copied 1234 characters to clipboard" and the
+ *      system clipboard never changed. The user pressed Ctrl+V and got nothing.
+ *
+ * So interception is necessary but NOT sufficient: it only decides who copies, never
+ * whether the copy lands. Both paths now converge on `copyText` below — one door, one
+ * history attribution, one audit — and `copyText` reports whether the bytes actually
+ * reached the system clipboard (main reads them back) instead of assuming they did.
+ *
+ * This is also why OSC 52 is the answer for EVERY agent rather than a Claude Code patch:
+ * it is the universal protocol by which any terminal program copies — Codex, Gemini, vim,
+ * tmux, fzf, lazygit — and it is the ONLY way copy can work at all in a remote (ssh) pane,
+ * where the program doing the copying is on another machine.
  */
 
 // ── Preferences ────────────────────────────────────────────────────────────────
@@ -104,14 +124,24 @@ export function quoteWithFlavor(paths: readonly string[], flavor: ShellFlavor): 
 
 // ── Reads and writes ───────────────────────────────────────────────────────────
 
-/** Callers fire this and forget (`void copyText(...)`), so it must never reject: without
- *  a bridge `getBridge()` throws SYNCHRONOUSLY inside an async function, which surfaces
- *  as an unhandled rejection rather than anything a caller could catch. */
-export async function copyText(text: string, source: ClipboardSource = 'app'): Promise<void> {
+/**
+ * Callers may still fire this and forget (`void copyText(...)`), so it must never reject:
+ * without a bridge `getBridge()` throws SYNCHRONOUSLY inside an async function, which
+ * surfaces as an unhandled rejection rather than anything a caller could catch.
+ *
+ * But it now ANSWERS. `true` means the text is on the system clipboard — main wrote it and
+ * read it back to be sure (a Windows clipboard held open by another process makes
+ * `writeText` a silent no-op, and Electron reports nothing). `false` means the copy did not
+ * happen, and the caller owes the user that truth. Silence here is what let "Copied 1234
+ * characters" sit on screen while the clipboard was untouched; a copy must never pass for
+ * one that worked.
+ */
+export async function copyText(text: string, source: ClipboardSource = 'app'): Promise<boolean> {
   try {
     await getBridge().invoke(ClipboardChannels.write, { text, source })
+    return true
   } catch {
-    /* no bridge (gallery / unit hosts) */
+    return false // no bridge (gallery / unit hosts), or the clipboard refused the write
   }
 }
 
@@ -206,4 +236,63 @@ const END_SENTINEL_RE = new RegExp(ESC + '\\[201~', 'g')
 export function sanitizePaste(text: string, bracketed: boolean): string {
   const body = text.replace(END_SENTINEL_RE, '').replace(/\r?\n/g, CR)
   return bracketed ? PASTE_START + body + PASTE_END : body
+}
+
+/**
+ * The Ctrl+V byte (0x16). Sent to the PTY only when the clipboard holds an IMAGE and no
+ * text — see TerminalPane.handleNativePaste. There is no protocol for putting image bytes
+ * on a terminal, so the app cannot serve that paste; the agent CLI can, because it reads
+ * the system clipboard itself (Claude Code shells out to the Win32 clipboard for exactly
+ * this, and Codex/Gemini do the same). It only ever gets the chance if we hand it the
+ * keystroke instead of eating it.
+ */
+export const PASTE_KEY = String.fromCharCode(22)
+
+// ── OSC 52: the CLI's own clipboard ────────────────────────────────────────────
+
+/**
+ * OSC 52 is how a terminal PROGRAM copies: it emits `ESC ] 52 ; Pc ; <base64> BEL` and the
+ * terminal emulator is expected to put the decoded payload on the system clipboard. It is
+ * the universal mechanism — the one vim, tmux, fzf and every agent CLI reach for — and the
+ * only one that can work across ssh, where the program doing the copying is on a different
+ * machine than the clipboard.
+ *
+ * WE IMPLEMENT THE WRITE HALF ONLY, AND THAT IS A SECURITY DECISION, NOT AN OMISSION.
+ * The protocol also defines a READ: `ESC ] 52 ; c ; ? BEL` asks the terminal to send the
+ * clipboard's CONTENTS BACK to the program. Honouring that would hand every process in a
+ * pane — and every host you ssh into — a read of everything you have ever copied, which in
+ * this app means the passwords and API keys that agents are routinely pasted. No payload
+ * inspection makes that safe, so it is refused unconditionally: `{ kind: 'read' }` exists
+ * to be recognised and DROPPED, never answered.
+ *
+ * `Pc` (clipboard / primary / select / cut-buffer) is deliberately ignored. Windows and
+ * macOS have exactly one clipboard, and every emulator on them routes all targets to it.
+ */
+export type Osc52Request = { kind: 'copy'; text: string } | { kind: 'read' } | null
+
+/** Ceiling on ONE OSC 52 payload, in base64 characters (~768 KB of text). Generous for any
+ *  real copy — a whole file yanked in vim clears it — and a bound on a runaway or hostile
+ *  program shoving megabytes onto the clipboard through a pane. */
+export const OSC52_MAX_BASE64 = 1024 * 1024
+
+export function parseOsc52(data: string): Osc52Request {
+  const semi = data.indexOf(';') // data is everything after "52;" — i.e. `Pc;Pd`
+  if (semi === -1) return null
+  const payload = data.slice(semi + 1)
+  if (payload === '?') return { kind: 'read' }
+
+  const b64 = payload.replace(/\s+/g, '')
+  // An EMPTY payload is spec'd as "clear the selection". We decline: a CLI silently wiping
+  // what the user had on their clipboard is a theft, not a copy, and no agent needs it.
+  if (!b64 || b64.length > OSC52_MAX_BASE64) return null
+  try {
+    // atob yields a BINARY string — one char per byte. The payload is UTF-8, so it has to
+    // be decoded as such: reading it straight out of atob would mangle every accent, CJK
+    // character and emoji that has ever been copied out of an agent's output.
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+    const text = new TextDecoder().decode(bytes)
+    return text ? { kind: 'copy', text } : null
+  } catch {
+    return null // not valid base64 — a malformed sequence copies nothing
+  }
 }

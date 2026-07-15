@@ -1,5 +1,6 @@
-import { AgentChannels, ClipboardChannels, IntegrationsChannels, type AgentInfo } from '@contracts'
+import { AgentChannels, IntegrationsChannels, type AgentInfo } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
+import { copyText } from '../../core/clipboard/clipboard-port'
 import { el, icon, providerLogo, showToast } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { openWizard } from '../../core/workspace/wizard-port'
@@ -84,12 +85,16 @@ export function createFirstRun(): {
     const b = el('button', { class: 'firstrun-copy', type: 'button' }, [icon('copy', 12), el('span', { text: 'Copy' })])
     b.title = text
     b.onclick = (): void => {
-      void bridge.invoke(ClipboardChannels.write, { text })
-      const label = b.querySelector('span')
-      if (label) {
-        label.textContent = 'Copied'
-        setTimeout(() => (label.textContent = 'Copy'), 1400)
-      }
+      // copyText never rejects and answers truthfully — main verifies the write took (a
+      // clipboard held open by another process is a silent no-op), so the label only ever
+      // claims what actually happened.
+      void copyText(text).then((ok) => {
+        const label = b.querySelector('span')
+        if (label) {
+          label.textContent = ok ? 'Copied' : 'Copy failed'
+          setTimeout(() => (label.textContent = 'Copy'), 1400)
+        }
+      })
     }
     return b
   }
