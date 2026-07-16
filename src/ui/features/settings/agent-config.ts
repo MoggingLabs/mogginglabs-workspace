@@ -68,6 +68,34 @@ function syncLabel(sync: AgentConfigSettingState['sync']): string {
   return sync.replace(/-/g, ' ').replace(/^./, (letter) => letter.toUpperCase())
 }
 
+/** F-14: a status pill owes its reader a sentence — these are the hover titles. */
+function syncTitle(sync: AgentConfigSettingState['sync']): string {
+  switch (sync) {
+    case 'observed':
+      return 'Read from the CLI’s own files — nothing managed by this app yet.'
+    case 'synced':
+      return 'Every value the app manages matches the file.'
+    case 'drifted':
+      return 'A managed value changed on disk — open the setting to keep or restore it.'
+    case 'shadowed':
+      return 'A higher-priority layer overrides the managed value.'
+    case 'pending':
+      return 'Saved — applies to the next launch.'
+    case 'pending-restart':
+      return 'Saved — restart the affected panes to apply.'
+    case 'blocked':
+      return 'The file refused the write — see the setting’s message.'
+    case 'parse-error':
+      return 'The config file could not be parsed — fix it, then refresh.'
+    case 'unsupported':
+      return 'This CLI version does not support the setting.'
+    case 'error':
+      return 'The last read or write failed — refresh to retry.'
+    default:
+      return ''
+  }
+}
+
 function initialValue(state: AgentConfigSettingState): AgentConfigValue {
   if (state.desired?.operation === 'set' && state.desired.value !== undefined) return state.desired.value
   if (state.selected.present && state.selected.value !== undefined) return state.selected.value
@@ -286,8 +314,8 @@ export function createAgentConfigWorkspace(onBack: () => void): AgentConfigWorks
         Button({ label: 'All agent CLIs', icon: 'chevron-left', variant: 'ghost', size: 'sm', onClick: onBack }),
         el('div', { class: 'agentcfg-head-actions' }, [
           Pill({ text: installed ? snapshot?.installedVersion ? `v${snapshot.installedVersion}` : 'Available' : 'Not installed', tone: installed ? 'success' : 'neutral' }),
-          Pill({ text: syncLabel(snapshot?.sync ?? 'observed'), tone: snapshot ? syncTone(snapshot.sync) : 'neutral' }),
-          catalogStale ? Pill({ text: 'Catalog stale', tone: 'warning' }) : null,
+          Pill({ text: syncLabel(snapshot?.sync ?? 'observed'), tone: snapshot ? syncTone(snapshot.sync) : 'neutral', title: syncTitle(snapshot?.sync ?? 'observed') }),
+          catalogStale ? Pill({ text: 'Catalog stale', tone: 'warning', title: 'The settings catalog was checked more than 7 days ago — Refresh catalog re-fetches it.' }) : null,
           Button({
             label: 'Refresh catalog',
             icon: 'rotate-cw',
@@ -387,10 +415,21 @@ export function createAgentConfigWorkspace(onBack: () => void): AgentConfigWorks
       : !scope?.writable
         ? scope?.reason ?? 'This target is read-only.'
         : setting.writeReason
+    // S4/F-13: 521 primary Saves were an accent flood — Save renders quiet and ARMS
+    // to primary on the row's first edit, so the accent marks intent, not furniture.
+    // The ownership select gains its visible label: what it decides is what happens
+    // on DRIFT, which nothing on screen said before you saved.
+    const saveBtn = Button({ label: 'Save', variant: 'outline', size: 'sm', onClick: () => void save('set') })
+    const armSave = (): void => {
+      saveBtn.classList.remove('btn--outline')
+      saveBtn.classList.add('btn--primary')
+    }
+    control.el.addEventListener('input', armSave)
+    control.el.addEventListener('change', armSave)
     const actionRow = writable
       ? el('div', { class: 'agentcfg-setting-actions' }, [
-          ownership,
-          Button({ label: 'Save', variant: 'primary', size: 'sm', onClick: () => void save('set') }),
+          el('label', { class: 'agentcfg-ownership-label' }, [el('span', { text: 'On drift:' }), ownership]),
+          saveBtn,
           currentSnapshot.target.scope !== 'session' && (state.selected.present || state.desired)
             ? Button({ label: 'Remove from layer', variant: 'ghost', size: 'sm', onClick: () => void save('unset') })
             : null

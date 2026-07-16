@@ -450,9 +450,12 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
           if (c.userClient) actions.append(forgetClientButton())
           break
         }
+        // S4: only a card that needs REPAIR arms its verb — forty idle Connects in
+        // accent were noise, and the accent stopped meaning "look here".
         const label = c.state === 'expired' || c.state === 'error' ? 'Reconnect' : 'Connect'
+        const armed = label === 'Reconnect' ? ' is-armed' : ''
         if (c.authKind === 'key') {
-          const open = el('button', { class: 'trail-btn is-armed', type: 'button', text: label }) as HTMLButtonElement
+          const open = el('button', { class: `trail-btn${armed}`, type: 'button', text: label }) as HTMLButtonElement
           open.onclick = (): void => {
             keyFormOpen.add(c.id)
             paint()
@@ -461,7 +464,7 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
         } else {
           // `oauth` and `local` both connect through the same verb; the handler
           // words the wait honestly for each.
-          const btn = el('button', { class: 'trail-btn is-armed', type: 'button', text: label }) as HTMLButtonElement
+          const btn = el('button', { class: `trail-btn${armed}`, type: 'button', text: label }) as HTMLButtonElement
           btn.onclick = (): void => beginConnect(btn)
           actions.append(btn)
           // A dual-auth service (GitHub's PAT, Sentry's auth token): the key path

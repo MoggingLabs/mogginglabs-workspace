@@ -6588,6 +6588,20 @@ body.pane-dragging * {
   width: auto;
   min-width: 124px;
 }
+/* F-13: the ownership select's visible label — what it decides is drift behavior. */
+.agentcfg-ownership-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+}
+/* F-33: buttons that live at a card body's tail (Rescan, the dev-only test toast)
+   size to their label instead of stretching into input-shaped bars. */
+.usage-cost-cfg > .btn,
+.usage-alert-cfg > .btn {
+  align-self: flex-start;
+}
 .agentcfg-readonly {
   display: flex;
   align-items: flex-start;

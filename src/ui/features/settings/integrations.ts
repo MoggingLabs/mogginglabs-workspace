@@ -15,7 +15,7 @@ import {
 } from '@contracts'
 import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
-import { Button, EmptyState, clear, createCollapsibleCard, createModal, createToggleRow, el, icon, loadingRow, providerLogo, scrubFields, showToast, submitWithRetain } from '../../components'
+import { Button, EmptyState, IconButton, clear, createCollapsibleCard, createModal, createToggleRow, el, icon, loadingRow, openContextMenu, providerLogo, scrubFields, showToast, submitWithRetain } from '../../components'
 import type { CollapsibleCardHandle } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onToolPlanPanesChange, restartNeededPaneIds } from '../../core/agents/toolplan-panes'
@@ -378,17 +378,35 @@ function createCatalogBlock(): SyncedBlock {
         planned > 0 && coverage.total > 0
           ? el('span', { class: 'cat-badge is-planned', text: `in ${planned} of ${coverage.total} workspace${coverage.total === 1 ? '' : 's'}` })
           : null
-      const connect = el('button', { class: 'trail-btn', type: 'button', text: 'Connect…' }) as HTMLButtonElement
+      // F-22: 'Connect' is reserved for ACCOUNT connections above — this route writes a
+      // server into a CLI's config, so its verb says that. Check feed / Export are
+      // maintainer verbs: they move behind a ⋯ menu instead of sharing the primary row.
+      const connect = el('button', { class: 'trail-btn', type: 'button', text: 'Add to CLI…' }) as HTMLButtonElement
       connect.onclick = (): void => void openConnect(preset, rows)
-      const exportBtn = el('button', { class: 'trail-btn cat-mini', type: 'button', text: 'Export' }) as HTMLButtonElement
-      exportBtn.onclick = (): void => void bridge.invoke(IntegrationsChannels.catExport, preset.id)
-      const feedBtn = el('button', { class: 'trail-btn cat-mini', type: 'button', text: 'Check feed' }) as HTMLButtonElement
       const feedNote = el('div', { class: 'menu-note trail-empty', hidden: true })
-      feedBtn.onclick = async (): Promise<void> => {
+      const checkFeed = async (): Promise<void> => {
         const r = (await bridge.invoke(IntegrationsChannels.catRefresh, preset.id)) as { ok: boolean; diff?: string; reason?: string }
         feedNote.hidden = false
         feedNote.textContent = r.ok ? r.diff ?? '' : r.reason ?? 'registry unavailable'
       }
+      const more = IconButton({
+        icon: 'more',
+        label: `More actions for ${label}`,
+        class: 'cat-more',
+        onClick: (e) => {
+          const at = (e.currentTarget as HTMLElement).getBoundingClientRect()
+          openContextMenu({
+            items: [
+              { label: 'Check feed', icon: 'rotate-cw', onSelect: () => void checkFeed() },
+              { label: 'Export preset', icon: 'copy', onSelect: () => void bridge.invoke(IntegrationsChannels.catExport, preset.id) }
+            ],
+            x: at.right,
+            y: at.bottom + 4,
+            returnFocus: e.currentTarget as HTMLElement,
+            ariaLabel: `${label} actions`
+          })
+        }
+      })
       const card = el('div', { class: 'cat-card' }, [
         el('div', { class: 'cat-card-head' }, [
           providerLogo(preset.group ? 'google' : preset.id, 16),
@@ -397,7 +415,7 @@ function createCatalogBlock(): SyncedBlock {
           coverageBadge
         ]),
         el('div', { class: 'cat-card-copy', text: preset.group ? `${rows.map((r) => r.label).join(' · ')} — one card, ${rows.length} endpoints.` : preset.grantCopy }),
-        el('div', { class: 'trail-controls' }, [connect, feedBtn, exportBtn]),
+        el('div', { class: 'trail-controls' }, [connect, more]),
         feedNote
       ])
       grid.append(card)
@@ -963,7 +981,8 @@ function createServiceKeysBlock(): SyncedBlock {
     }
     signal('keys', {
       chip: null,
-      stat: names.length ? `${names.length} saved` : 'none'
+      // F-24: one value grammar across the band — numerals always, unit always.
+      stat: `${names.length} saved`
     })
   }
 
@@ -1368,7 +1387,8 @@ export function createIntegrationsSection(): HTMLElement {
       // An expired grant is the one thing here that silently stops an agent's tools
       // working, so it must reach the fold's header even when the card is collapsed.
       chip: broken ? attnChip('needs-auth', `${broken} need${broken === 1 ? 's' : ''} you`) : null,
-      stat: live ? `${live} connected` : 'none'
+      // F-24: one value grammar across the band — numerals always, unit always.
+      stat: `${live} connected`
     })
   })
   const catalogBlock = createCatalogBlock()

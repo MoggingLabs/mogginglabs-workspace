@@ -671,11 +671,11 @@ export function runAsyncStateSmoke(win: BrowserWindow): void {
       // `btn.disabled = false`, with no finally. A rejection skipped the re-enable and the button
       // stayed disabled FOREVER — the user could not even retry the call that had just failed.
       const integNav = await showTab('integrations')
-      // The catalog card's own Connect… button — the only door to this panel. (startsWith, not an
-      // exact match: the label carries a typographic ellipsis, and its two siblings in that row
-      // are 'Check feed' and 'Export', so the prefix is unambiguous.)
+      // The catalog card's own primary — the only door to this panel. (F-22 renamed it
+      // 'Add to CLI…': Connect is reserved for account connections; startsWith, not an
+      // exact match, because the label carries a typographic ellipsis.)
       const panelOpened = await ES<boolean>(`(() => {
-        const b = [...document.querySelectorAll('.cat-card .trail-btn')].find((x) => (x.textContent || '').trim().startsWith('Connect'))
+        const b = [...document.querySelectorAll('.cat-card .trail-btn')].find((x) => (x.textContent || '').trim().startsWith('Add to CLI'))
         if (!b) return false
         b.click()
         return true
