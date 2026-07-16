@@ -1,5 +1,5 @@
 import type { PaneId } from '@contracts'
-import { publishSlots, clearSlots, paneIdInUse, type LayoutSlot } from '../../core/layout/slots'
+import { publishSlots, clearSlots, livePaneCount, paneIdInUse, type LayoutSlot } from '../../core/layout/slots'
 import { acknowledgeFinished } from '../../core/attention/attention-port'
 import { getTelemetry } from '../../core/telemetry'
 import { TEMPLATES, type GridSpec } from './templates'
@@ -31,7 +31,8 @@ import {
   type SplitDir,
   type SplitNode
 } from './layout-tree'
-import { screenPaneCapacity } from './pane-capacity'
+import { effectivePaneCapacity } from './pane-capacity'
+import { machineSpec } from '../../core/system/machine-port'
 
 export { parseTree, leafIds, MIN_PANE_WIDTH_PX, minimumLayoutWidth } from './layout-tree'
 export type { LayoutTreeNode, SplitDir } from './layout-tree'
@@ -70,18 +71,6 @@ interface SeamGeometry {
   bMin: number
 }
 
-/** The live per-workspace pane budget: what THIS screen honestly holds at the pane
- *  minima (pane-capacity.ts) — bigger monitors fit more terminals, smaller ones fewer,
- *  hard-bounded by the contract's ABS_MAX_PANES. Computed fresh at every gate (never
- *  cached: monitors get plugged and unplugged). `host` is the grid's own viewport when
- *  the caller has one — the app's chrome is then subtracted, so the budget is what the
- *  grid REGION of a maximized window holds, not what the bare monitor could. Note the
- *  GPU budget is unchanged: Chromium caps ~16 live WebGL contexts, so panes past that
- *  edge ride the DOM renderer via PaneWebglManager's managed fallback — correct, just
- *  not GPU-smooth. */
-export function paneLimit(host?: HTMLElement | null): number {
-  return screenPaneCapacity(host).maxPanes
-}
 
 export type ExpandMode = 'full' | 'col' | 'row'
 
@@ -247,11 +236,17 @@ export class GridLayout {
     return leafCount(this.root) - this.detached.size
   }
 
-  /** THIS grid's pane budget: the screen minus the app chrome around this viewport —
-   *  the number every split/adopt gate here checks, and the one the controller's
-   *  refusals must quote (two different numbers would gate one door twice). */
+  /** THIS grid's pane budget: the screen minus the app chrome around this viewport,
+   *  AND the machine minus every pane already running in OTHER workspaces (its own
+   *  are what the limit governs, so they are not charged twice). Computed fresh at
+   *  every gate — never cached: monitors get plugged, panes open and close elsewhere.
+   *  The number every split/adopt gate here checks, and the one the controller's
+   *  refusals must quote (two different numbers would gate one door twice). Note the
+   *  GPU budget is not a count limit: Chromium caps ~16 live WebGL contexts and panes
+   *  past that edge ride the DOM renderer via PaneWebglManager's managed fallback. */
   limit(): number {
-    return paneLimit(this.scrollHost)
+    const elsewhere = Math.max(0, livePaneCount() - this.paneIds().length)
+    return effectivePaneCapacity(this.scrollHost, machineSpec(), elsewhere).maxPanes
   }
 
   /** Live pane ids (closed slots excluded) — the source of truth for attention scans. */

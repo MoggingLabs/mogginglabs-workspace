@@ -21,7 +21,10 @@ import { join } from 'node:path'
 //   (e) the pure table: resolver + completion edge cases on BOTH path dialects
 //       (drive-only `cd C:`, `/abs` against a Windows base, UNC `..`, `/d` flag,
 //       `-` with and without a previous folder, quote stripping) — the exact
-//       functions the UI calls, driven with fixture strings.
+//       functions the UI calls, driven with fixture strings;
+//   (f) THE AUTOMATIC NAME follows the folder: it holds the basename through
+//       every hop, a TYPED name survives folder changes untouched, and clearing
+//       the box hands the name back to the folder.
 // Zero network.
 
 export function runWizCdSmoke(win: BrowserWindow): void {
@@ -190,6 +193,36 @@ export function runWizCdSmoke(win: BrowserWindow): void {
       const dotMenu = await suggestions()
       const hiddenOk = dotMenu.length === 1 && dotMenu[0] === '.hid'
 
+      // ── (f) the automatic name follows the folder ────────────────────────────
+      const nameOf = (): Promise<string> => ES<string>(`document.querySelector('#view-wizard .wizard-name-input')?.value ?? ''`)
+      const nameAtRoot = await (async () => {
+        await cdTo(`cd "${root}"`, root)
+        return nameOf()
+      })()
+      const nameAtAlpha = await (async () => {
+        await cdTo('cd alpha', A)
+        return nameOf()
+      })()
+      // A typed name is MANUAL: folder moves must not touch it.
+      await ES(`(() => {
+        const n = document.querySelector('#view-wizard .wizard-name-input')
+        n.value = 'Hand Picked'
+        n.dispatchEvent(new Event('input', { bubbles: true }))
+      })()`)
+      await cdTo('cd subone', join(A, 'subone'))
+      const nameManual = await nameOf()
+      // Clearing hands the name back to the folder: the next move refills it.
+      await ES(`(() => {
+        const n = document.querySelector('#view-wizard .wizard-name-input')
+        n.value = ''
+        n.dispatchEvent(new Event('input', { bubbles: true }))
+      })()`)
+      await cdTo('cd ..', A)
+      const nameRearmed = await nameOf()
+      const base = (p: string): string => p.split(/[\\/]/).filter(Boolean).pop() ?? ''
+      const nameFollowOk =
+        nameAtRoot === base(root) && nameAtAlpha === 'alpha' && nameManual === 'Hand Picked' && nameRearmed === 'alpha'
+
       // ── (e) the pure table, both dialects ────────────────────────────────────
       const table = await ES<{ name: string; pass: boolean; got: unknown }[]>(`(() => {
         const p = ${CD}.pure
@@ -229,9 +262,15 @@ export function runWizCdSmoke(win: BrowserWindow): void {
       })()`)
       const tableOk = table.every((row) => row.pass)
 
-      const pass = homeDefaultOk && refusalsOk && hopsOk && uniqueTabOk && cycleOk && enterAfterCycle && arrowsOk && quotedOk && hiddenOk && tableOk
+      const pass =
+        homeDefaultOk && refusalsOk && hopsOk && uniqueTabOk && cycleOk && enterAfterCycle && arrowsOk && quotedOk && hiddenOk && nameFollowOk && tableOk
       result = {
         pass,
+        nameFollowOk,
+        nameAtRoot,
+        nameAtAlpha,
+        nameManual,
+        nameRearmed,
         homeDefaultOk,
         home,
         barShowsHome,

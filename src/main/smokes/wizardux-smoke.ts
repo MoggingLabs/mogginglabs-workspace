@@ -8,6 +8,9 @@ import { join } from 'node:path'
 //   (a) FLAT — zero Cards, zero <details> disclosures, no modal overlay; the rail
 //       is up beside it; the controls that used to hide behind "Advanced"
 //       (custom command, isolation, runs-on, presets) are VISIBLE immediately;
+//       and the Presets section OFFERS NOTHING (2026-07-16): no built-in mixes,
+//       no curated Swarm card — only "Save as preset" and the user's own saves
+//       (a fresh profile shows the empty-state hint);
 //   (b) the density claim, measured — flat sections with the division hairline,
 //       inter-section gap >= --sp-5, all from getComputedStyle;
 //   (c) prefill lands across the page at once (folder · painter · mix · meter);
@@ -85,6 +88,10 @@ export function runWizardUxSmoke(win: BrowserWindow): void {
         isolateVisible: boolean
         remoteVisible: boolean
         painterVisible: boolean
+        swarmCards: number
+        presetCards: number
+        presetHint: boolean
+        saveBtn: boolean
       }>(`(() => {
         const visible = (sel) => {
           const n = document.querySelector(sel)
@@ -101,7 +108,14 @@ export function runWizardUxSmoke(win: BrowserWindow): void {
           customVisible: visible('#view-wizard .wizard-custom-input'),
           isolateVisible: visible('#view-wizard .wizard-option-row'),
           remoteVisible: visible('#view-wizard .wizard-remote-select'),
-          painterVisible: visible('#view-wizard .grid-painter')
+          painterVisible: visible('#view-wizard .grid-painter'),
+          // Presets offer NOTHING: no curated Swarm card, no built-in mixes — a
+          // fresh profile holds zero apply-cards, the empty-state hint, and Save.
+          swarmCards: document.querySelectorAll('#view-wizard .wizard-preset-swarm').length,
+          presetCards: document.querySelectorAll('#view-wizard .wizard-preset-apply').length,
+          presetHint: /nothing saved yet/i.test(document.querySelector('#view-wizard .wizard-presets')?.textContent ?? ''),
+          saveBtn: [...document.querySelectorAll('#view-wizard .wizard-sec-right button')]
+            .some((b) => /save as preset/i.test(b.textContent ?? ''))
         }
       })()`)
       const flatOk =
@@ -116,6 +130,7 @@ export function runWizardUxSmoke(win: BrowserWindow): void {
         shape.remoteVisible &&
         shape.painterVisible
       const railBesideOk = shape.railWidth > 0
+      const presetsOfferNothingOk = shape.swarmCards === 0 && shape.presetCards === 0 && shape.presetHint && shape.saveBtn
 
       // ── (b) the density claim, MEASURED from computed styles ────────────────
       const spacing = await ES<{ gap: number; hairline: number; headPad: number }>(`(() => {
@@ -235,12 +250,22 @@ export function runWizardUxSmoke(win: BrowserWindow): void {
         geometry.bottoms.every((w) => w < geometry.grid * 0.6)
 
       const pass =
-        invalidRefusedOk && flatOk && railBesideOk && spacingOk && prefillOk && latticeSizesOk && dragMergesOk && clickSplitsOk && launchOk
+        invalidRefusedOk &&
+        flatOk &&
+        railBesideOk &&
+        presetsOfferNothingOk &&
+        spacingOk &&
+        prefillOk &&
+        latticeSizesOk &&
+        dragMergesOk &&
+        clickSplitsOk &&
+        launchOk
       result = {
         pass,
         invalidRefusedOk,
         flatOk,
         railBesideOk,
+        presetsOfferNothingOk,
         spacingOk,
         spacing,
         prefillOk,

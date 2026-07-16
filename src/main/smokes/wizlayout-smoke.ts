@@ -8,11 +8,15 @@ import { join } from 'node:path'
 // the screen honestly holds, what you paint is what OPENS, and what opens keeps
 // every pane at its physical minimums. Asserts:
 //   (a) CAPACITY WIRING: the painter's budget equals the pane-capacity model run
-//       against THIS screen minus THIS app's chrome (recomputed live from
-//       window.screen + the content region, with the minima pinned: 132×110,
-//       4px seam, ABS cap 32) — and every lattice cell is blocked exactly when
-//       its grid would exceed that budget. The section's hint quotes the same
-//       numbers;
+//       against THIS screen minus THIS app's chrome AND this machine's own
+//       budget (recomputed live from window.screen + the content region + the
+//       system:machine measurements, with every constant pinned: 132×110 minima,
+//       4px seam, 512 MiB/pane, 4 GiB reserve, 2 panes/core, ABS cap 32) — and
+//       every lattice cell is blocked exactly when its grid would exceed it.
+//       The section's hint quotes the same number and, when the machine is the
+//       binding term, says so. Panes ALREADY RUNNING are charged: after the
+//       first launch the reopened wizard's budget is smaller by exactly that
+//       many panes;
 //   (b) the lattice commits on DRAG-RELEASE, not only on click: press (0,0),
 //       sweep to (0,N-1), release — the readout and the spec say 1×N. (The old
 //       per-cell click listener committed NOTHING for this gesture — "I selected
@@ -62,24 +66,29 @@ export function runWizLayoutSmoke(win: BrowserWindow): void {
       await ES(`window.__mogging.templates.openWizard({ cwd: ${cwdJs} })`)
       await sleep(800)
 
-      // ── (a) capacity: the painter's budget IS the screen minus the app ───────
+      // ── (a) capacity: geometry minus chrome, ∧ the machine, minus running ────
       const capacity = await ES<{
-        cap: { maxCols: number; maxRows: number; maxPanes: number }
-        expected: { maxCols: number; maxRows: number; maxPanes: number }
+        cap: { maxCols: number; maxRows: number; maxPanes: number; screenMaxPanes: number; machineMaxPanes: number | null; panesElsewhere: number }
+        expected: { maxCols: number; maxRows: number; maxPanes: number; screenMaxPanes: number; machineMaxPanes: number }
         latticeHonest: boolean
         latticeCols: number
         hint: string
-      }>(`(() => {
+        hintOk: boolean
+      }>(`(async () => {
         const cap = window.__mogging.wizardLayout.capacity()
-        // The capacity model, recomputed here with its constants PINNED (132/110/4/32):
-        // if the product's minima move, this gate must be edited deliberately.
+        // The whole budget, recomputed here with its constants PINNED (132/110 minima,
+        // 4px seam, 512 MiB/pane, 4096 MiB reserve, 2 panes/core, ABS cap 32): if any
+        // policy number moves, this gate must be edited deliberately.
         const fit = (span, min) => Math.max(1, Math.floor((Math.max(0, span) + 4) / (min + 4)))
         const content = document.getElementById('content').getBoundingClientRect()
         const availW = Math.max(1, screen.availWidth - Math.max(0, innerWidth - content.width))
         const availH = Math.max(1, screen.availHeight - Math.max(0, innerHeight - content.height))
         const cols = fit(availW, 132)
         const rows = fit(availH, 110)
-        const expected = { maxCols: cols, maxRows: rows, maxPanes: Math.min(cols * rows, 32) }
+        const screenMax = Math.min(cols * rows, 32)
+        const m = await window.bridge.invoke('system:machine')
+        const machineMax = Math.max(1, Math.min(Math.floor((m.totalMemMb - 4096) / 512), m.cpuCount * 2, 32))
+        const expected = { maxCols: cols, maxRows: rows, maxPanes: Math.min(screenMax, machineMax), screenMaxPanes: screenMax, machineMaxPanes: machineMax }
         const cells = [...document.querySelectorAll('#view-wizard .gp-cell')]
         const latticeHonest = cells.length > 0 && cells.every((c) => {
           const panes = (Number(c.dataset.r) + 1) * (Number(c.dataset.c) + 1)
@@ -88,19 +97,24 @@ export function runWizLayoutSmoke(win: BrowserWindow): void {
         })
         const latticeCols = 1 + Math.max(...cells.map((c) => Number(c.dataset.c)))
         const hint = [...document.querySelectorAll('#view-wizard .wizard-hint')]
-          .map((n) => n.textContent).find((t) => /fits up to/.test(t)) ?? ''
-        return { cap, expected, latticeHonest, latticeCols, hint }
+          .map((n) => n.textContent).find((t) => /up to \\d+ terminals/i.test(t)) ?? ''
+        // The hint quotes THE number, and names the machine when the machine binds.
+        const hintOk = new RegExp('up to ' + cap.maxPanes + ' terminals', 'i').test(hint) &&
+          (cap.maxPanes >= cap.screenMaxPanes || /sized to this machine/.test(hint))
+        return { cap, expected, latticeHonest, latticeCols, hint, hintOk }
       })()`)
       const capacityOk =
         capacity.cap.maxPanes === capacity.expected.maxPanes &&
         capacity.cap.maxCols === capacity.expected.maxCols &&
         capacity.cap.maxRows === capacity.expected.maxRows &&
+        capacity.cap.screenMaxPanes === capacity.expected.screenMaxPanes &&
+        capacity.cap.machineMaxPanes === capacity.expected.machineMaxPanes &&
+        capacity.cap.panesElsewhere === 0 &&
         capacity.latticeHonest &&
-        capacity.hint.includes(`up to ${capacity.cap.maxPanes} terminals`) &&
-        capacity.hint.includes(`${capacity.cap.maxCols} across`)
+        capacity.hintOk
 
       // ── (b) drag-release commits — the eight-across gesture ──────────────────
-      const N = Math.min(8, capacity.cap.maxCols, capacity.latticeCols)
+      const N = Math.min(8, capacity.cap.maxCols, capacity.latticeCols, capacity.cap.maxPanes)
       const drag = await ES<{ readout: string; rows: number; cols: number; regions: number }>(`(() => {
         const lattice = document.querySelector('#view-wizard .gp-lattice')
         const r = lattice.getBoundingClientRect()
@@ -186,6 +200,14 @@ export function runWizLayoutSmoke(win: BrowserWindow): void {
       // ── (e) + (f) more than 16, honored — at physical minimums ───────────────
       await ES(`window.__mogging.templates.openWizard({ cwd: ${cwdJs} })`)
       await sleep(800)
+      // Running panes are CHARGED: the reopened wizard has N fewer to offer.
+      const capacity2 = await ES<{ maxPanes: number; screenMaxPanes: number; machineMaxPanes: number | null; panesElsewhere: number }>(
+        `(() => { const c = window.__mogging.wizardLayout.capacity(); return { maxPanes: c.maxPanes, screenMaxPanes: c.screenMaxPanes, machineMaxPanes: c.machineMaxPanes, panesElsewhere: c.panesElsewhere } })()`
+      )
+      const chargedOk =
+        capacity2.panesElsewhere === N &&
+        capacity2.machineMaxPanes === capacity.cap.machineMaxPanes &&
+        capacity2.maxPanes === Math.min(capacity2.screenMaxPanes, Math.max(1, (capacity2.machineMaxPanes ?? Infinity) - N))
       const painted24 = await ES<{ panes: number; readout: string }>(`(() => ({
         panes: window.__mogging.wizardLayout.setGrid(8, 3),
         readout: document.querySelector('#view-wizard .wizard-layout-readout')?.textContent ?? ''
@@ -244,11 +266,13 @@ export function runWizLayoutSmoke(win: BrowserWindow): void {
         bigWorkspace.overflowY === 'auto' &&
         bigWorkspace.scrollHeight >= 890
 
-      const pass = capacityOk && dragCommitsOk && clickCommitsOk && oneRowOk && over16Ok && minimaOk
+      const pass = capacityOk && chargedOk && dragCommitsOk && clickCommitsOk && oneRowOk && over16Ok && minimaOk
       result = {
         pass,
         capacityOk,
         capacity,
+        chargedOk,
+        capacity2,
         dragCommitsOk,
         N,
         drag,

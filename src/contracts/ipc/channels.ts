@@ -172,6 +172,10 @@ export const FsChannels = {
   home: 'fs:home' // -> string  (where the folder browser opens before a cwd exists)
 } as const
 
+export const SystemChannels = {
+  machine: 'system:machine' // -> MachineSpec (cpu count + total RAM; the pane budget's raw inputs)
+} as const
+
 export const ExplorerChannels = {
   // The file explorer's read surface (ADR 0010: a window, not a manager). READ-ONLY
   // BY CONSTRUCTION: no write verb exists here to typecheck against.
@@ -426,5 +430,6 @@ export const AllChannels: readonly string[] = [
   ...Object.values(BoardChannels),
   ...Object.values(GitChannels),
   ...Object.values(FsChannels),
+  ...Object.values(SystemChannels),
   ...Object.values(ExplorerChannels)
 ]

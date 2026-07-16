@@ -24,14 +24,16 @@ import {
 } from '../../components'
 import {
   TEMPLATES,
-  screenPaneCapacity,
+  effectivePaneCapacity,
   serializeTree,
   specForCount,
   treeForRegions,
   uniformSpec,
   type GridSpecModel,
-  type PaneCapacity
+  type PaneBudget
 } from '../layout'
+import { livePaneCount } from '../../core/layout/slots'
+import { machineSpec, primeMachineSpec } from '../../core/system/machine-port'
 import { parseCdLine, resolveCdTarget, resolvePathAgainst } from './cd-path'
 import { applyCompletion, commonPrefix, completionContext, filterCompletions } from './cd-complete'
 import { createCdLine, type CdLineHandle } from './cd-line'
@@ -85,7 +87,11 @@ const specForPanes = (n: number): GridSpecModel => specForCount(n, TEMPLATES[n])
  * a real default in the bar (never placeholder fiction), the browser listing it,
  * Launch viable immediately. Prefills (Ctrl+T from a workspace, a board card)
  * outrank it; so does anything the user picks or types before the answer lands.
- * The cd line beneath the bar accepts ONLY cd commands, and Tab-completes.
+ * The cd line beneath the bar accepts ONLY cd commands, and Tab-completes. The
+ * workspace NAME is automatic until typed: it follows the folder through every
+ * move (one keystroke claims it, clearing hands it back). The pane budget is the
+ * screen ∧ THE MACHINE (RAM/CPU, minus panes already running — pane-capacity.ts),
+ * and the Presets section offers nothing built-in: only the user's own saves.
  *
  * The layout is DYNAMIC, not preset tiles: a Word-style size lattice (hover r×c,
  * click commits — any 1..16, no curated counts) beside a shape canvas where
@@ -100,13 +106,21 @@ const specForPanes = (n: number): GridSpecModel => specForCount(n, TEMPLATES[n])
 export const wizardFeature: UiFeature = {
   name: 'wizard',
   mount(ctx: ShellContext) {
+    void primeMachineSpec() // the pane budget's raw inputs — fetched once, read sync ever after
     // ── Wizard state (persists while the page is open) ───────────────────────
     let name = ''
+    // The workspace name is AUTOMATIC until the user types one: it follows the
+    // chosen folder (its basename — or a recent's saved name) through every pick,
+    // cd, and typed path. One keystroke in the name box makes it manual; clearing
+    // the box re-arms the follow. `lastAutoCwd` keeps re-emits of the SAME folder
+    // (probe pulses, listing arrivals) from rewriting a recent's nicer name.
+    let nameAuto = true
+    let lastAutoCwd = ''
     let cwd = ''
-    // What THIS screen holds at the pane minima, minus the app's own chrome around
-    // the content region (pane-capacity.ts) — refreshed on every open, because
-    // monitors get plugged and unplugged between workspaces.
-    let capacity: PaneCapacity = screenPaneCapacity(ctx.content)
+    // What this machine can honestly RUN and this screen can honestly SHOW, minus
+    // the app's own chrome and every pane already running (pane-capacity.ts) —
+    // refreshed on every open: monitors get plugged, workspaces open and close.
+    let capacity: PaneBudget = effectivePaneCapacity(ctx.content)
     let homeCache = '' // the cd line's fallback base + ~ target — and the fresh page's default folder
     let barTouched = false // typing in the bar outranks the late-arriving home default
     let gridSpec: GridSpecModel = specForPanes(defaultPaneCount())
@@ -116,7 +130,6 @@ export const wizardFeature: UiFeature = {
     let customCount = 0
     let isRepo = false // set by the folder field's git probe
     let isolate = false // Phase-3/03: one git worktree per agent pane
-    let swarmRoles: (string | null)[] | null = null // Phase-4/01: per-slot manifest (preset)
     let remoteHost: { hostId: string; name: string } | null = null // Phase-4/05
     let localCwd = ''
     let remoteCwd = ''
@@ -200,18 +213,21 @@ export const wizardFeature: UiFeature = {
       localCwd = cwd
       remoteCwd = ''
       barTouched = false
+      nameAuto = !prefill?.name // a prefilled name is a chosen one; otherwise follow the folder
+      lastAutoCwd = ''
       // The view flips FIRST, then the chrome is measured: capacity subtracts what
       // this app keeps around the content region (rail, titlebar), and measuring
       // while the OUTGOING view still owned the layout read that view's chrome.
-      // Same task as render() below — nothing stale can paint in between.
+      // Same task as render() below — nothing stale can paint in between. The
+      // machine term charges every pane already running anywhere (a terminal in
+      // another workspace spends the same RAM/CPU this one would).
       setActiveView('wizard')
-      capacity = screenPaneCapacity(ctx.content)
+      capacity = effectivePaneCapacity(ctx.content, machineSpec(), livePaneCount())
       setGridSpec(specForPanes(Math.min(prefill?.paneCount ?? defaultPaneCount(), capacity.maxPanes)))
       counts = new Map()
       customCmd = ''
       customCount = 0
       isolate = false
-      swarmRoles = null
       remoteHost = null
       roster = [...getAgentRegistry()]
       presets = []
@@ -260,7 +276,10 @@ export const wizardFeature: UiFeature = {
         .listPresets()
         .then((p) => {
           if (!currentOpen(generation)) return
-          presets = p ?? []
+          // The user's own saves ONLY. The channel still ships the built-in mixes
+          // (Home's launcher + asyncstate lean on a never-empty list); the wizard
+          // deliberately offers none of them — see buildPresets.
+          presets = (p ?? []).filter((preset) => !preset.id.startsWith('preset-'))
           renderPresets()
         })
         .catch(() => {
@@ -350,7 +369,6 @@ export const wizardFeature: UiFeature = {
       customCount = customCmd.trim()
         ? Math.min(remaining, Math.max(0, Math.floor(Number(customCount) || 0)))
         : 0
-      if (swarmRoles) swarmRoles = swarmRoles.slice(0, paneCount)
     }
 
     const assignedTotal = (): number =>
@@ -400,7 +418,6 @@ export const wizardFeature: UiFeature = {
         customCount,
         counts: new Map(counts),
         remoteHost: remoteHost ? { ...remoteHost } : null,
-        swarmRoles: swarmRoles ? [...swarmRoles] : null,
         profileByProvider: new Map(profileByProvider),
         scopeTools: pickableServers.length > 0,
         selectedTools: [...selectedTools]
@@ -515,9 +532,6 @@ export const wizardFeature: UiFeature = {
         }
       }
 
-      const manifest = snap.swarmRoles
-      const roles =
-        !skipAgents && manifest ? resolved.assignments.map((_, i) => manifest[i] ?? null) : undefined
       // The remote path's cwd rides on the REMOTE entry, never in paneCwds: a paneCwd is a
       // local path, and the far-side folder must never be handed to a local filesystem API.
       const selectedRemote = snap.remoteHost ? { ...snap.remoteHost, cwd: snap.cwd.trim() ? snap.cwd : undefined } : null
@@ -528,7 +542,6 @@ export const wizardFeature: UiFeature = {
           paneCount: resolved.paneCount,
           assignments: resolved.assignments,
           paneCwds: snap.remoteHost ? undefined : paneCwds,
-          roles,
           remotes: selectedRemote
             ? Array<{ hostId: string; name: string; cwd?: string } | null>(resolved.paneCount).fill(selectedRemote)
             : undefined,
@@ -590,7 +603,6 @@ export const wizardFeature: UiFeature = {
     let launchBtn!: HTMLButtonElement
     let skipBtn!: HTMLButtonElement
     let saveBtn!: HTMLButtonElement
-    let swarmHint!: HTMLElement
     let isolateBox!: ReturnType<typeof createCheckbox>
     let isolateHint!: HTMLElement
     let customInput!: HTMLInputElement
@@ -697,20 +709,19 @@ export const wizardFeature: UiFeature = {
           else if (s.refusal && origin !== 'bar') browser.showRefusal(s.refusal)
         }
 
-        // Seed the workspace name only from a deliberate PICK. Seeding it from
-        // `prefill` would name a fresh workspace after the user's home directory.
-        if ((origin === 'browser' || origin === 'native') && nameInputEl && !nameInputEl.value) {
-          const base = basename(s.cwd)
-          if (base) {
-            nameInputEl.value = base
-            name = base
-          }
-        }
-        // The name GHOST follows the folder either way: it is what Launch will call
-        // the workspace when the name is left blank, and a ghost that still reads
-        // "Workspace name" over a chosen folder hides that default.
-        if (nameInputEl && !nameInputEl.value) {
-          nameInputEl.placeholder = basename(s.cwd) || 'Workspace name'
+        // THE AUTOMATIC NAME. Until the user types one, the workspace's name IS
+        // the chosen folder's basename — and it FOLLOWS the folder through every
+        // pick, cd, recent and typed path, because a name seeded once and left
+        // behind is worse than none: it quietly labels folder B with folder A's
+        // name. Only a real folder CHANGE rewrites it (`lastAutoCwd`), so the
+        // same folder's later emits (probe pulses, listing arrivals) can never
+        // clobber a nicer auto name a recent just supplied.
+        if (nameInputEl && nameAuto && s.cwd !== lastAutoCwd) {
+          lastAutoCwd = s.cwd
+          const auto = basename(s.cwd)
+          nameInputEl.value = auto
+          name = auto
+          nameInputEl.placeholder = auto || 'Workspace name'
         }
         updateChosen()
         syncIsolate()
@@ -725,9 +736,17 @@ export const wizardFeature: UiFeature = {
         type: 'text',
         value: name,
         placeholder: cwd ? basename(cwd) : 'Workspace name',
-        ariaLabel: 'Workspace name — optional, defaults to the folder name',
+        ariaLabel: 'Workspace name — follows the folder until you type one',
         onInput: (e) => {
           name = (e.target as HTMLInputElement).value
+          // Typing claims the name; CLEARING hands it back to the folder (the
+          // ghost shows what it will be, and the next folder change refills it —
+          // lastAutoCwd resets so even a return to a seen folder counts as one).
+          nameAuto = name.trim() === ''
+          if (nameAuto) {
+            lastAutoCwd = ''
+            nameInputEl.placeholder = basename(cwd) || 'Workspace name'
+          }
         },
         onKeydown: (e) => {
           if (e.key === 'Enter') void tryLaunch(false)
@@ -822,13 +841,16 @@ export const wizardFeature: UiFeature = {
               type: 'button',
               title: r.cwd,
               // A recent is a one-click jump. One call: bar, browser, chip, chosen line
-              // and the isolate toggle all follow from the selection changing.
+              // and the isolate toggle all follow from the selection changing. The
+              // SAVED name lands after the synchronous emit, so it wins over the
+              // basename for THIS folder — and the next folder change replaces it,
+              // like any automatic name.
               onClick: () => {
-                if (!name) {
+                selection.set(r.cwd, 'recent')
+                if (nameAuto && r.name) {
                   name = r.name
                   nameInputEl.value = r.name
                 }
-                selection.set(r.cwd, 'recent')
               }
             },
             [
@@ -860,7 +882,6 @@ export const wizardFeature: UiFeature = {
         maxPanes: capacity.maxPanes,
         onChange: (spec) => {
           setGridSpec(spec)
-          if (swarmRoles) swarmRoles = swarmRoles.slice(0, paneCount)
           refreshAgents()
         },
         slotChip: (slot) => {
@@ -889,10 +910,7 @@ export const wizardFeature: UiFeature = {
         summaryCount,
         summaryShape,
         layoutReadout,
-        el('span', {
-          class: 'wizard-hint',
-          text: `This screen fits up to ${capacity.maxPanes} terminals (${capacity.maxCols} across, ${capacity.maxRows} down at the minimum pane size).`
-        }),
+        el('span', { class: 'wizard-hint', text: capacityHintText() }),
         resetBtn
       ])
       return section(
@@ -906,6 +924,25 @@ export const wizardFeature: UiFeature = {
     function layoutReadoutText(): string {
       const merged = gridSpec.regions.filter((region) => region.rs > 1 || region.cs > 1).length
       return `${paneCount} ${plural(paneCount)} · ${gridSpec.rows}×${gridSpec.cols}${merged ? ' · merged' : ''}`
+    }
+
+    /** The budget, in words: what stopped the count where it did. A machine-bound
+     *  budget says so — a user staring at blocked dots deserves the reason, and
+     *  "your screen" would be a lie when the screen had room for more. */
+    function capacityHintText(): string {
+      const machineBound = capacity.maxPanes < capacity.screenMaxPanes
+      const running = capacity.panesElsewhere
+        ? ` — with ${capacity.panesElsewhere} already running elsewhere`
+        : ''
+      if (machineBound) {
+        const m = capacity.machine
+        const spec = m ? ` (${m.cpuCount} cores · ${Math.round(m.totalMemMb / 1024)} GB)` : ''
+        return `Up to ${capacity.maxPanes} terminals here — sized to this machine${spec}${running}, not just your screen (which fits ${capacity.screenMaxPanes}).`
+      }
+      if (capacity.limitedBy === 'ceiling') {
+        return `Up to ${capacity.maxPanes} terminals — the app's ceiling; your screen and machine both take it.`
+      }
+      return `This screen fits up to ${capacity.maxPanes} terminals (${capacity.maxCols} across, ${capacity.maxRows} down at the minimum pane size).`
     }
 
     // ── Agents ───────────────────────────────────────────────────────────────
@@ -934,7 +971,6 @@ export const wizardFeature: UiFeature = {
         ariaLabel: 'Custom command count',
         onChange: (n) => {
           customCount = n
-          swarmRoles = null
           refreshAgents()
         }
       })
@@ -978,7 +1014,6 @@ export const wizardFeature: UiFeature = {
       const installed = roster.filter((a) => a.installed)
       counts = new Map()
       customCount = 0
-      swarmRoles = null
       if (kind !== 'clear' && installed.length) {
         if (kind === 'all') {
           for (let i = 0; i < paneCount; i++) {
@@ -1043,7 +1078,6 @@ export const wizardFeature: UiFeature = {
           ariaLabel: `${a.name} count`,
           onChange: (n) => {
             counts.set(a.id, n)
-            swarmRoles = null // a manual mix is no longer the swarm preset
             refreshAgents()
           }
         })
@@ -1212,10 +1246,15 @@ export const wizardFeature: UiFeature = {
       ])
     }
 
-    // ── Presets ──────────────────────────────────────────────────────────────
+    // ── Presets — the USER'S OWN, nothing offered (2026-07-16) ───────────────
+    // The section exists for one loop: set a mix up, SAVE it, get it back with
+    // one click next time. Nothing arrives pre-made any more — the built-in
+    // mixes and the curated Swarm card offered arrangements nobody had asked
+    // for, ahead of folders and agents that are actually theirs. (The built-ins
+    // still exist behind the channel for Home's launcher; the wizard filters
+    // them out where the list lands.)
     function buildPresets(): HTMLElement {
       presetsHost = el('div', { class: 'wizard-presets' })
-      swarmHint = el('span', { class: 'wizard-hint' })
       saveBtn = Button({
         label: 'Save as preset',
         size: 'sm',
@@ -1224,32 +1263,8 @@ export const wizardFeature: UiFeature = {
         disabled: assignedTotal() === 0,
         onClick: savePreset
       })
-      const swarmBtn = el(
-        'button',
-        {
-          class: 'wizard-preset-apply wizard-preset-swarm',
-          type: 'button',
-          title: 'architect · 2 workers · reviewer, on your first installed CLI',
-          onClick: () => {
-            const provider = roster.find((a) => a.installed) ?? roster[0]
-            if (!provider) return
-            setGridSpec(uniformSpec(2, 2))
-            painter.set(gridSpec)
-            counts = new Map([[provider.id, 4]])
-            customCount = 0
-            swarmRoles = ['architect', 'worker', 'worker', 'reviewer']
-            renderRoster()
-          }
-        },
-        [
-          el('span', { class: 'wizard-preset-logos' }, [el('span', { class: 'wizard-preset-mark' }, [icon('sparkles', 13)])]),
-          el('span', { class: 'wizard-preset-name', text: 'Swarm' }),
-          el('span', { class: 'wizard-preset-count', text: 'architect · 2 workers · reviewer' })
-        ]
-      )
-      return section('Presets', 'A saved mix, one click from launching.', saveBtn, [
-        el('div', { class: 'wizard-presets-row' }, [presetsHost, el('div', { class: 'wizard-preset-card wizard-preset-card--swarm' }, [swarmBtn])]),
-        swarmHint
+      return section('Presets', 'Save the current mix — it comes back as one click.', saveBtn, [
+        el('div', { class: 'wizard-presets-row' }, [presetsHost])
       ])
     }
 
@@ -1272,6 +1287,15 @@ export const wizardFeature: UiFeature = {
     function renderPresets(): void {
       if (!presetsHost) return
       clear(presetsHost)
+      if (!presets.length) {
+        presetsHost.append(
+          el('span', {
+            class: 'wizard-hint',
+            text: 'Nothing saved yet — set up a mix you like, then keep it here for next time.'
+          })
+        )
+        return
+      }
       for (const p of presets) {
         // A preset card SHOWS its mix — the provider marks and the pane total —
         // instead of asking the name to carry everything.
@@ -1307,23 +1331,23 @@ export const wizardFeature: UiFeature = {
                 el('span', { class: 'wizard-preset-count', text: `${total} ${plural(total)}` })
               ]
             ),
-            p.id.startsWith('preset-')
-              ? null
-              : el(
-                  'button',
-                  {
-                    class: 'wizard-preset-remove',
-                    type: 'button',
-                    ariaLabel: `Delete preset ${p.name}`,
-                    onClick: () => {
-                      void wizardClient.removePreset(p.id).then(() => {
-                        presets = presets.filter((x) => x.id !== p.id)
-                        renderPresets()
-                      })
-                    }
-                  },
-                  [icon('x', 12)]
-                )
+            // Every card here is the user's own now (built-ins are filtered at the
+            // list), so every card is deletable.
+            el(
+              'button',
+              {
+                class: 'wizard-preset-remove',
+                type: 'button',
+                ariaLabel: `Delete preset ${p.name}`,
+                onClick: () => {
+                  void wizardClient.removePreset(p.id).then(() => {
+                    presets = presets.filter((x) => x.id !== p.id)
+                    renderPresets()
+                  })
+                }
+              },
+              [icon('x', 12)]
+            )
           ])
         )
       }
@@ -1363,7 +1387,6 @@ export const wizardFeature: UiFeature = {
         mergedCount ? ` · ${mergedCount} merged` : ''
       }`
 
-      swarmHint.textContent = swarmRoles ? 'Swarm manifest armed — roles land on the panes.' : ''
       saveBtn.disabled = total === 0
       syncIsolate()
 

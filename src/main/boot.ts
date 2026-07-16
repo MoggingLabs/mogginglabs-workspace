@@ -20,6 +20,7 @@ import { registerGit } from './git'
 import { registerContext } from './context'
 import { registerWorktrees } from './worktrees'
 import { registerFsBrowse } from './fs-browse'
+import { registerSystem } from './system'
 import { registerExplorer } from './explorer'
 import { registerReview } from './review'
 import { registerBoard } from './board'
@@ -321,6 +322,7 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       disposeContext = registerContext(liveWebContents) // per-pane agent context bar: tails the CLIs' own session logs (counts only)
       registerWorktrees() // worktree-per-agent isolation: add/list/remove only (Phase-3/03)
       registerFsBrowse() // read-only one-level directory listing for the folder browser (Phase-8.5/03)
+      registerSystem() // cpu count + total RAM for the pane budget (policy lives renderer-side)
       registerExplorer(() => win) // the explorer: read-only listing + the liveness law's watcher pool (Phase-11/01, /04)
       registerReview() // pre-ship diff review: redacted diff + guarded merge (Phase-3/04)
       registerBoard(() => win) // Board v2: per-project boards, CAS patches, live push (Phase-3/05, rebuilt)

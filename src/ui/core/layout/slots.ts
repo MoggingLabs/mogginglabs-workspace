@@ -87,6 +87,15 @@ export function paneIdInUse(id: PaneId): boolean {
   return false
 }
 
+/** Every live pane on this machine right now, across all workspaces — the number
+ *  the RESOURCE budget subtracts (pane-capacity.ts): terminals already running
+ *  spend the same RAM/CPU a new workspace would ask for. */
+export function livePaneCount(): number {
+  let count = 0
+  for (const slots of bySource.values()) count += slots.length
+  return count
+}
+
 /** Subscribe to the aggregate slot set. Replayed immediately (order-independent). */
 export function onSlots(cb: (slots: LayoutSlot[]) => void): () => void {
   subscribers.add(cb)
