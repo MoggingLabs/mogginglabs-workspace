@@ -251,7 +251,7 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       const cardId = await ES<string>(`window.__mogging.board.createCard('Ship the parser rewrite', 'Notes the agent should get.')`)
       await ES(`(async () => {
         const c = window.__mogging.board.list().find((x) => x.id === ${JSON.stringify(cardId)})
-        if (c) { await window.bridge.invoke('board:save', { ...c, paneId: 101, workspaceId: 'fx-ws' }); await window.__mogging.board.refresh() }
+        if (c) { await window.bridge.invoke('board:patch', { id: c.id, patch: { paneId: 101, workspaceId: 'fx-ws' } }); await window.__mogging.board.refresh() }
         return 1
       })()`)
       await ES(`window.__mogging.attention.setPaneState(101, 'attention')`)
@@ -269,7 +269,7 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       })()`)
       const countsOk = await ES<boolean>(`(() => {
         const lanes = [...document.querySelectorAll('.board-lane')]
-        return lanes.length === 4 && lanes.every((l) => { const b = l.querySelector('.board-lane-head .count-badge'); return b && Number(b.textContent) === l.querySelectorAll('.board-card').length })
+        return lanes.length === 5 && lanes.every((l) => { const b = l.querySelector('.board-lane-head .count-badge'); return b && Number(b.textContent) === l.querySelectorAll('.board-card').length })
       })()`)
       const boardOk = chipRow.ok && countsOk
 

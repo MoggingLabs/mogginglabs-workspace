@@ -763,7 +763,7 @@ export function runAsyncStateSmoke(win: BrowserWindow): void {
       const cardInTodo = await exists('.board-lane[data-lane="todo"] .board-card')
 
       await clearToasts()
-      setAsyncAuditFaults({ reject: [BoardChannels.save] })
+      setAsyncAuditFaults({ reject: [BoardChannels.patch] })
       // The ⋯ menu's "Move to Doing" — the same mutation the drop handler runs.
       const moveClicked = await ES<boolean>(`(() => {
         const more = document.querySelector('.board-lane[data-lane="todo"] .board-card .board-card-more')

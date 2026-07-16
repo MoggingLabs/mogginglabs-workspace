@@ -3,6 +3,8 @@ import {
   IntegrationsChannels,
   SERVICE_LINK_CADENCE_DEFAULT,
   SERVICE_LINK_CADENCES,
+  type BoardCard,
+  type LinkStatus,
   type ServiceLink,
   type ServiceLinkCadence
 } from '@contracts'
@@ -42,13 +44,56 @@ function pushSnapshot(): void {
   }
 }
 
+/** Board rules (ADR 0015 §inbound) subscribe here — set by registerGithubBoard.
+ *  Injected, not imported: github-board already imports this module. */
+let transitionRules: ((card: BoardCard, link: ServiceLink, status: LinkStatus) => void) | null = null
+export function setLinkTransitionRules(cb: (card: BoardCard, link: ServiceLink, status: LinkStatus) => void): void {
+  transitionRules = cb
+}
+
 /** The site's promise: review lands back in the pane that wrote it. */
 function onTransition(link: ServiceLink, label: string): void {
-  const card = getSettingsStore()?.listBoard().find((c) => c.id === link.cardId)
+  const card = getSettingsStore()?.getCard(link.cardId) ?? null
   if (card?.paneId != null) getDaemonClient()?.notify(String(card.paneId), 'attention', label)
   // The bridge's review-changed (10) — a no-op if no webhook subscribes.
   emitBridgeEvent('review-changed', { workspace: card?.workspaceId ?? '', card: link.cardId, note: label })
+  // Per-board rules (PR merged → Done, …) act on the SAME transition, after
+  // the human-facing signals — a rule failing must never eat the notify.
+  const status = engine?.statusFor(link.id)
+  if (card && status) transitionRules?.(card, link, status)
 }
+
+/** Direct link creation for the board's GitHub verbs (import / auto-link /
+ *  push): the ref is already normalized "owner/repo#N" — same store, same
+ *  engine, one door as the user's own Link modal. */
+export function linkCardDirect(
+  cardId: string,
+  ref: string,
+  kind: ServiceLink['kind'],
+  service = 'github'
+): { ok: boolean; reason?: string } {
+  if (!/^[\w.-]{1,100}\/[\w.-]{1,100}#\d{1,10}$/.test(ref)) return { ok: false, reason: 'bad ref' }
+  const links = loadLinks().filter((l) => l.cardId !== cardId) // one link per card (v1)
+  const link: ServiceLink = {
+    id: `lnk_${Math.abs(hash(cardId + ref)).toString(36)}`,
+    service,
+    cardId,
+    kind,
+    ref,
+    cadence: SERVICE_LINK_CADENCE_DEFAULT
+  }
+  links.push(link)
+  saveLinks(links)
+  engine?.setLinks(links)
+  engine?.refresh(link.id)
+  return { ok: true }
+}
+
+export const linkForCard = (cardId: string): ServiceLink | null =>
+  loadLinks().find((l) => l.cardId === cardId) ?? null
+
+/** Refs already linked anywhere on the board — the import's dedupe set. */
+export const linkedRefs = (): Set<string> => new Set(loadLinks().map((l) => l.ref))
 
 function setLink(p: { cardId?: string; input?: string; cadence?: ServiceLinkCadence; service?: string }): { ok: boolean; reason?: string; link?: ServiceLink } {
   const cardId = String(p?.cardId ?? '')

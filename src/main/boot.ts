@@ -22,6 +22,7 @@ import { registerFsBrowse } from './fs-browse'
 import { registerExplorer } from './explorer'
 import { registerReview } from './review'
 import { registerBoard } from './board'
+import { registerGithubBoard } from './github-board'
 import { registerProfiles } from './profiles'
 import { registerUsage } from './usage'
 import { registerRemotes } from './remotes'
@@ -307,7 +308,8 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       registerFsBrowse() // read-only one-level directory listing for the folder browser (Phase-8.5/03)
       registerExplorer(() => win) // the explorer: read-only listing + the liveness law's watcher pool (Phase-11/01, /04)
       registerReview() // pre-ship diff review: redacted diff + guarded merge (Phase-3/04)
-      registerBoard() // local Kanban board: cards that launch agents (Phase-3/05)
+      registerBoard(() => win) // Board v2: per-project boards, CAS patches, live push (Phase-3/05, rebuilt)
+      registerGithubBoard() // Board ↔ GitHub two-way: gated write-back + rules (ADR 0015)
       registerProfiles() // provider profiles: pointer sets, deny-listed at save (Phase-4/04)
       registerRemotes() // remote (SSH) hosts: connection pointers only (Phase-4/05)
       registerUsage(() => win) // usage meters: adapters ride CLI-owned sessions (Phase-7/01, ADR 0007)

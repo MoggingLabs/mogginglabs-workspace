@@ -119,9 +119,25 @@ export const WorktreeChannels = {
 } as const
 
 export const BoardChannels = {
-  list: 'board:list', // -> BoardCard[] (local db only — card text is user content)
-  save: 'board:save', // (BoardCard) -> upsert
-  remove: 'board:remove' // (id) -> void
+  // Board v2: main is the ONE writer (revision CAS, field patches); card text is
+  // user content — local db only (ADR 0005).
+  forWorkspace: 'board:forWorkspace', // (workspaceId) -> Board (find-or-create by the workspace's project key)
+  boards: 'board:boards', // -> BoardListing[] (every board + live card count — the switcher's source)
+  boardPatch: 'board:boardPatch', // (id, BoardMetaPatch) -> Board | null (name / repoRef / config knobs)
+  list: 'board:list', // (boardId) -> BoardCard[] (non-archived, position order)
+  archived: 'board:archived', // (boardId) -> BoardCard[] (archived, newest first)
+  create: 'board:create', // (BoardCreateRequest) -> BoardCard | null (server assigns id/position/revision)
+  patch: 'board:patch', // (BoardPatchRequest) -> BoardPatchResult (CAS: stale revision refused with the fresh card)
+  remove: 'board:remove', // (id) -> void (human-only delete; agents archive instead)
+  activity: 'board:activity', // (cardId) -> BoardActivity[] (the card's local audit trail)
+  changed: 'board:changed', // main -> renderer: { boardId } — any accepted write, any writer (UI, agent, rule, queue)
+  // GitHub two-way (ADR 0015): reads ride the user's own gh; WRITES additionally
+  // demand the per-board writeBack grant (default OFF, risk-confirmed in the UI).
+  ghDetect: 'board:gh:detect', // (boardId) -> BoardGhResult ("owner/repo" from the project's origin remote; persisted)
+  ghImport: 'board:gh:import', // ({ boardId, limit? }) -> BoardGhResult (open issues -> linked backlog cards; read-only)
+  ghFindPr: 'board:gh:findPr', // (cardId) -> BoardGhResult (PR whose head is the card's branch -> linked; read-only)
+  ghPush: 'board:gh:push', // (cardId) -> BoardGhResult (create a GitHub issue from the card — writeBack-gated)
+  ghClose: 'board:gh:close' // (cardId) -> BoardGhResult (close the linked issue — writeBack-gated)
 } as const
 
 export const RemoteChannels = {

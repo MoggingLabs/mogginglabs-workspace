@@ -6,21 +6,25 @@ import { randomUUID } from 'node:crypto'
 import Database from 'better-sqlite3'
 import { addColumnIfMissing } from './db-migrate'
 import { parseJsonCell, workspaceMetaToRow, workspaceRowToMeta, type WorkspaceRowCells } from './workspace-rows'
-import type {
-  AgentConfigOverrideRecord,
-  AgentConfigProviderId,
-  AgentConfigScope,
-  AgentConfigSurface,
-  AgentConfigSyncState,
-  AgentConfigValue,
-  AgentProfile,
-  RemoteHost,
-  BoardCard,
-  ProviderCount,
-  ProviderMixTemplate,
-  RecentWorkspace,
-  WorkspaceState,
-  WorkspaceStateMeta
+import { boardRowToBoard, cardRowToCard, type BoardCardRowCells, type BoardRowCells } from './board-rows'
+import {
+  BOARD_LIMITS,
+  type AgentConfigOverrideRecord,
+  type AgentConfigProviderId,
+  type AgentConfigScope,
+  type AgentConfigSurface,
+  type AgentConfigSyncState,
+  type AgentConfigValue,
+  type AgentProfile,
+  type Board,
+  type BoardActivity,
+  type BoardCard,
+  type ProviderCount,
+  type ProviderMixTemplate,
+  type RecentWorkspace,
+  type RemoteHost,
+  type WorkspaceState,
+  type WorkspaceStateMeta
 } from '@contracts'
 
 export class SettingsStore {
@@ -72,6 +76,29 @@ export class SettingsStore {
         updated_at INTEGER NOT NULL,
         position INTEGER NOT NULL DEFAULT 0
       );
+      -- Board v2: boards keyed by PROJECT (repo root / folder). One row per
+      -- project; cards join via app_board.board_id (additive column below).
+      CREATE TABLE IF NOT EXISTS app_boards (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        project_key TEXT NOT NULL UNIQUE,
+        repo_ref TEXT,
+        config TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      -- Per-card activity log (who did what, when) — LOCAL user content, the
+      -- card's own custody class (ADR 0005); capped per card on insert.
+      CREATE TABLE IF NOT EXISTS app_board_activity (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        card_id TEXT NOT NULL,
+        ts INTEGER NOT NULL,
+        actor TEXT NOT NULL,
+        verb TEXT NOT NULL,
+        detail TEXT NOT NULL DEFAULT ''
+      );
+      CREATE INDEX IF NOT EXISTS app_board_activity_card_idx
+        ON app_board_activity (card_id, id);
       CREATE TABLE IF NOT EXISTS app_agent_config_overrides (
         provider TEXT NOT NULL,
         scope TEXT NOT NULL,
@@ -118,6 +145,26 @@ export class SettingsStore {
       ['pane_ids', 'TEXT']
     ] as const) {
       addColumnIfMissing(this.db, 'app_workspaces', column, type)
+    }
+    // Board v2 (additive; pre-v2 rows read back with board_id NULL until the
+    // lazy migration in main assigns them — see main/board.ts):
+    //   board_id      which board owns the card (app_boards.id)
+    //   revision      optimistic-concurrency stamp, bumped per accepted write
+    //   priority / labels / blocked / blocked_reason / due_at  flow metadata
+    //   archived_at   archived cards leave the lanes but stay queryable
+    //   branch        the launch's worktree branch (mogging/<slug>)
+    for (const [column, type] of [
+      ['board_id', 'TEXT'],
+      ['revision', 'INTEGER NOT NULL DEFAULT 0'],
+      ['priority', 'TEXT'],
+      ['labels', 'TEXT'],
+      ['blocked', 'INTEGER NOT NULL DEFAULT 0'],
+      ['blocked_reason', 'TEXT'],
+      ['due_at', 'INTEGER'],
+      ['archived_at', 'INTEGER'],
+      ['branch', 'TEXT']
+    ] as const) {
+      addColumnIfMissing(this.db, 'app_board', column, type)
     }
     // Simplified profiles: the subscription email (a label — ADR 0002).
     addColumnIfMissing(this.db, 'app_profiles', 'email', 'TEXT')
@@ -362,34 +409,142 @@ export class SettingsStore {
   // Stored in the same KV table. The install id is a random UUID minted on first read —
   // never derived from the machine, account, or provider identity. Consent defaults OFF.
 
-  // ── Kanban board (Phase-3/05). Card text is USER CONTENT: this local table is
-  // its ONLY home — board rows never feed telemetry, notify, or logs (ADR 0005). ──
-  listBoard(): BoardCard[] {
+  // ── Board v2 (Phase-3/05, rebuilt). Card text is USER CONTENT: these local
+  // tables are its ONLY home — board rows never feed telemetry, notify, or logs
+  // (ADR 0005). This layer is DUMB ROWS: sanitization, CAS, and position policy
+  // live in main/board.ts, the one writer. ──────────────────────────────────────
+
+  private static readonly CARD_COLUMNS =
+    'id, board_id AS boardId, title, notes, lane, position, revision, priority, labels, ' +
+    'blocked, blocked_reason AS blockedReason, due_at AS dueAt, archived_at AS archivedAt, ' +
+    'pane_id AS paneId, workspace_id AS workspaceId, branch, created_at AS createdAt, updated_at AS updatedAt'
+
+  private static readonly BOARD_COLUMNS =
+    'id, name, project_key AS projectKey, repo_ref AS repoRef, config, created_at AS createdAt, updated_at AS updatedAt'
+
+  listBoards(): Board[] {
     const rows = this.db
-      .prepare(
-        'SELECT id, title, notes, lane, pane_id AS paneId, workspace_id AS workspaceId, created_at AS createdAt, updated_at AS updatedAt FROM app_board ORDER BY position, created_at'
-      )
-      .all() as BoardCard[]
-    return rows
+      .prepare(`SELECT ${SettingsStore.BOARD_COLUMNS} FROM app_boards ORDER BY created_at`)
+      .all() as BoardRowCells[]
+    return rows.map(boardRowToBoard)
   }
 
-  saveBoardCard(card: BoardCard): void {
+  getBoard(id: string): Board | null {
+    const row = this.db
+      .prepare(`SELECT ${SettingsStore.BOARD_COLUMNS} FROM app_boards WHERE id = ?`)
+      .get(id) as BoardRowCells | undefined
+    return row ? boardRowToBoard(row) : null
+  }
+
+  findBoardByProjectKey(projectKey: string): Board | null {
+    const row = this.db
+      .prepare(`SELECT ${SettingsStore.BOARD_COLUMNS} FROM app_boards WHERE project_key = ?`)
+      .get(projectKey) as BoardRowCells | undefined
+    return row ? boardRowToBoard(row) : null
+  }
+
+  insertBoard(board: Board): void {
     this.db
       .prepare(
-        `INSERT INTO app_board (id, title, notes, lane, pane_id, workspace_id, created_at, updated_at)
-         VALUES (@id, @title, @notes, @lane, @paneId, @workspaceId, @createdAt, @updatedAt)
+        `INSERT INTO app_boards (id, name, project_key, repo_ref, config, created_at, updated_at)
+         VALUES (@id, @name, @projectKey, @repoRef, @config, @createdAt, @updatedAt)`
+      )
+      .run({
+        id: board.id,
+        name: board.name,
+        projectKey: board.projectKey,
+        repoRef: board.repoRef ?? null,
+        config: JSON.stringify(board.config),
+        createdAt: board.createdAt,
+        updatedAt: board.updatedAt
+      })
+  }
+
+  updateBoardRow(board: Board): void {
+    this.db
+      .prepare(
+        'UPDATE app_boards SET name = @name, repo_ref = @repoRef, config = @config, updated_at = @updatedAt WHERE id = @id'
+      )
+      .run({
+        id: board.id,
+        name: board.name,
+        repoRef: board.repoRef ?? null,
+        config: JSON.stringify(board.config),
+        updatedAt: board.updatedAt
+      })
+  }
+
+  /** Live (non-archived) cards of one board, lane-order ready (position, then age). */
+  listCards(boardId: string): BoardCard[] {
+    const rows = this.db
+      .prepare(
+        `SELECT ${SettingsStore.CARD_COLUMNS} FROM app_board WHERE board_id = ? AND archived_at IS NULL ORDER BY position, created_at`
+      )
+      .all(boardId) as BoardCardRowCells[]
+    return rows.map(cardRowToCard)
+  }
+
+  listArchivedCards(boardId: string): BoardCard[] {
+    const rows = this.db
+      .prepare(
+        `SELECT ${SettingsStore.CARD_COLUMNS} FROM app_board WHERE board_id = ? AND archived_at IS NOT NULL ORDER BY archived_at DESC`
+      )
+      .all(boardId) as BoardCardRowCells[]
+    return rows.map(cardRowToCard)
+  }
+
+  /** Every live card across every board — the paneless MCP overview read. */
+  listAllCards(): BoardCard[] {
+    const rows = this.db
+      .prepare(
+        `SELECT ${SettingsStore.CARD_COLUMNS} FROM app_board WHERE archived_at IS NULL ORDER BY board_id, position, created_at`
+      )
+      .all() as BoardCardRowCells[]
+    return rows.map(cardRowToCard)
+  }
+
+  getCard(id: string): BoardCard | null {
+    const row = this.db
+      .prepare(`SELECT ${SettingsStore.CARD_COLUMNS} FROM app_board WHERE id = ?`)
+      .get(id) as BoardCardRowCells | undefined
+    return row ? cardRowToCard(row) : null
+  }
+
+  /** Full-row write (insert or replace by id). The caller (main) owns revision
+   *  bumps and sanitization; the row is stored verbatim. */
+  putCard(card: BoardCard): void {
+    this.db
+      .prepare(
+        `INSERT INTO app_board (id, board_id, title, notes, lane, position, revision, priority, labels,
+           blocked, blocked_reason, due_at, archived_at, pane_id, workspace_id, branch, created_at, updated_at)
+         VALUES (@id, @boardId, @title, @notes, @lane, @position, @revision, @priority, @labels,
+           @blocked, @blockedReason, @dueAt, @archivedAt, @paneId, @workspaceId, @branch, @createdAt, @updatedAt)
          ON CONFLICT(id) DO UPDATE SET
-           title = excluded.title, notes = excluded.notes, lane = excluded.lane,
-           pane_id = excluded.pane_id, workspace_id = excluded.workspace_id,
+           board_id = excluded.board_id, title = excluded.title, notes = excluded.notes,
+           lane = excluded.lane, position = excluded.position, revision = excluded.revision,
+           priority = excluded.priority, labels = excluded.labels, blocked = excluded.blocked,
+           blocked_reason = excluded.blocked_reason, due_at = excluded.due_at,
+           archived_at = excluded.archived_at, pane_id = excluded.pane_id,
+           workspace_id = excluded.workspace_id, branch = excluded.branch,
            updated_at = excluded.updated_at`
       )
       .run({
         id: card.id,
+        boardId: card.boardId,
         title: card.title,
         notes: card.notes,
         lane: card.lane,
+        position: card.position,
+        revision: card.revision,
+        priority: card.priority,
+        labels: JSON.stringify(card.labels),
+        blocked: card.blocked ? 1 : 0,
+        blockedReason: card.blockedReason ?? null,
+        dueAt: card.dueAt ?? null,
+        archivedAt: card.archivedAt ?? null,
         paneId: card.paneId ?? null,
         workspaceId: card.workspaceId ?? null,
+        branch: card.branch ?? null,
         createdAt: card.createdAt,
         updatedAt: card.updatedAt
       })
@@ -397,6 +552,72 @@ export class SettingsStore {
 
   removeBoardCard(id: string): void {
     this.db.prepare('DELETE FROM app_board WHERE id = ?').run(id)
+    this.db.prepare('DELETE FROM app_board_activity WHERE card_id = ?').run(id)
+  }
+
+  /** Cards predating Board v2 (board_id NULL) — the lazy migration's worklist. */
+  listUnfiledCards(): BoardCard[] {
+    const rows = this.db
+      .prepare(`SELECT ${SettingsStore.CARD_COLUMNS} FROM app_board WHERE board_id IS NULL ORDER BY created_at`)
+      .all() as BoardCardRowCells[]
+    return rows.map(cardRowToCard)
+  }
+
+  /** Live card counts per board, one query — the switcher's badge source. */
+  cardCountsByBoard(): Map<string, number> {
+    const rows = this.db
+      .prepare('SELECT board_id AS boardId, COUNT(*) AS n FROM app_board WHERE archived_at IS NULL GROUP BY board_id')
+      .all() as { boardId: string | null; n: number }[]
+    const out = new Map<string, number>()
+    for (const r of rows) if (r.boardId) out.set(r.boardId, r.n)
+    return out
+  }
+
+  addBoardActivity(entry: { cardId: string; ts: number; actor: string; verb: string; detail: string }): void {
+    this.db
+      .prepare('INSERT INTO app_board_activity (card_id, ts, actor, verb, detail) VALUES (@cardId, @ts, @actor, @verb, @detail)')
+      .run(entry)
+    // Cap per card ON INSERT — the log can never grow unbounded (ADR 0005 posture:
+    // local, bounded, clearable with its card).
+    this.db
+      .prepare(
+        `DELETE FROM app_board_activity WHERE card_id = @cardId AND id NOT IN (
+           SELECT id FROM app_board_activity WHERE card_id = @cardId ORDER BY id DESC LIMIT @keep)`
+      )
+      .run({ cardId: entry.cardId, keep: BOARD_LIMITS.activityPerCard })
+  }
+
+  listBoardActivity(cardId: string, limit = 50): BoardActivity[] {
+    return this.db
+      .prepare(
+        'SELECT id, card_id AS cardId, ts, actor, verb, detail FROM app_board_activity WHERE card_id = ? ORDER BY id DESC LIMIT ?'
+      )
+      .all(cardId, Math.max(1, Math.min(200, limit))) as BoardActivity[]
+  }
+
+  /** One transaction wrapper for main's compound writes (CAS read + write + activity). */
+  boardTransaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)()
+  }
+
+  /** Smoke-only (BOARDV2's migration bite): a pre-v2 row EXACTLY as the old
+   *  writer left it — board_id NULL, none of the v2 columns touched. */
+  plantLegacyBoardCardForSmoke(card: {
+    id: string
+    title: string
+    notes: string
+    lane: string
+    paneId: number | null
+    workspaceId: string | null
+    createdAt: number
+    updatedAt: number
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO app_board (id, title, notes, lane, pane_id, workspace_id, created_at, updated_at)
+         VALUES (@id, @title, @notes, @lane, @paneId, @workspaceId, @createdAt, @updatedAt)`
+      )
+      .run(card)
   }
 
   // ── Remote hosts (Phase-4/05): connection POINTERS; auth is the user's ssh stack. ──

@@ -271,14 +271,17 @@ async function handleBrowserCall(id, def, args) {
 async function handleControlCall(id, def, args) {
   try {
     if (def.upstream === 'app') {
-      // board.list — the board lives app-side; card text goes to the CALLING
-      // MODEL only (same class as capture: never telemetry, logs, app state).
+      // Board reads live app-side; card text goes to the CALLING MODEL only
+      // (same class as capture: never telemetry, logs, app state). The reply
+      // is the endpoint's payload verbatim: list_board -> { board, cards },
+      // get_card -> { card, activity }.
       const r = await callApp(def.verb, args)
       if (!r.ok) {
-        toolError(id, `board read failed: ${r.reason || 'the app could not list the board'}`)
+        toolError(id, `board read failed: ${r.reason || 'the app could not read the board'}`)
         return
       }
-      toolText(id, JSON.stringify(r.cards ?? []))
+      const { ok: _ok, t: _t, id: _id, ...payload } = r
+      toolText(id, JSON.stringify(payload))
       return
     }
     switch (def.verb) {
@@ -402,8 +405,11 @@ function writeArgsProblem(def, args) {
   if (def.name === 'release_files' && !args.pattern && args.all !== true) {
     return 'one of "pattern" or all=true is required'
   }
-  if (def.name === 'update_card' && args.column === undefined && args.note === undefined) {
-    return 'one of "column" or "note" is required'
+  if (def.name === 'update_card') {
+    const mutating = ['column', 'note', 'title', 'priority', 'labels', 'blocked', 'blockedReason', 'before']
+    if (!mutating.some((k) => args[k] !== undefined)) {
+      return `at least one of ${mutating.map((k) => `"${k}"`).join(', ')} is required`
+    }
   }
   return null
 }
@@ -487,18 +493,51 @@ async function dispatchWrite(def, args, by) {
       if (m.t === 'error') return { error: `release rejected (${m.reason || 'error'})` }
       return { text: `released ${m.count}`, receipt: {} }
     }
-    case 'board.save': {
-      const r = await callApp('board.save', { card: args.card, column: args.column, note: args.note })
+    default: {
+      // Board v2 writes all ride the app endpoint; main is the one writer
+      // (CAS + claim rule + activity). Refusals come back verbatim and are
+      // translated here into text a MODEL can act on — the fresh card rides
+      // along on a conflict so the agent can retry without another read.
+      if (!def.verb.startsWith('board.')) return { error: `unroutable write verb: ${def.verb}` }
+      const r = await callApp(def.verb, args)
       if (!r.ok) {
-        return { error: r.reason === 'unknown-card' ? `unknown card ${args.card}` : `card update failed: ${r.reason || 'error'}` }
+        const cardState = r.card ? ` Current state: ${JSON.stringify(r.card)}` : ''
+        switch (r.reason) {
+          case 'unknown-card':
+            return { error: `unknown card ${args.card ?? ''} (not on your project's board)` }
+          case 'conflict':
+            return { error: `refused — the card changed since your expectedRevision.${cardState}` }
+          case 'claimed':
+            return { error: `refused — pane ${r.owner ?? '?'} is working this card. Coordinate via mail_send, or pick another card.${cardState}` }
+          case 'not-holder':
+            return { error: `refused — your pane does not hold this card${r.owner != null ? ` (pane ${r.owner} does)` : ''}` }
+          case 'invalid':
+            return { error: 'refused — the write was invalid (empty title, unknown field value, or a bad "before" target)' }
+          case 'forbidden':
+            return { error: 'refused — this workspace has not granted board writes' }
+          default:
+            return { error: `card write failed: ${r.reason || 'error'}` }
+        }
       }
+      const createdId = def.verb === 'board.create' && r.card ? String(r.card.id) : undefined
+      const DONE_TEXT = {
+        'board.create': () => `card ${createdId} created`,
+        'board.update': () => `card ${args.card} updated`,
+        'board.claim': () => `card ${args.card} claimed by your pane`,
+        'board.release': () => `card ${args.card} released`,
+        'board.comment': () => `comment added to card ${args.card}`,
+        'board.archive': () => `card ${args.card} archived`
+      }
+      const text = (DONE_TEXT[def.verb] || (() => `card write ok`))()
+      const body = r.card ? `${text}\n${JSON.stringify(r.card)}` : text
       return {
-        text: `card ${args.card} updated`,
-        receipt: { card: String(args.card), ...(r.pane != null ? { pane: String(r.pane) } : {}) }
+        text: body,
+        receipt: {
+          card: String(createdId ?? args.card ?? ''),
+          ...(r.pane != null ? { pane: String(r.pane) } : {})
+        }
       }
     }
-    default:
-      return { error: `unroutable write verb: ${def.verb}` }
   }
 }
 

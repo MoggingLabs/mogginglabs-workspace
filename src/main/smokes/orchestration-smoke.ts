@@ -71,9 +71,11 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
       await sleep(1500)
 
       // ── A1. Card -> isolated start (shell provider) ─────────────────────────
-      const cardId = String(await ES(`window.__mogging.board.createCard(${JSON.stringify(TASK)}, 'Append the change line, then commit.')`))
+      // Workspace FIRST (Board v2: the loaded board follows the active
+      // workspace, so the card must land on the REPO's project board).
       await ES(`window.__mogging.workspace.create({ name: 'Repo', cwd: ${JSON.stringify(repo)} })`)
       await sleep(2000)
+      const cardId = String(await ES(`window.__mogging.board.createCard(${JSON.stringify(TASK)}, 'Append the change line, then commit.')`))
       const started = (await ES(`window.__mogging.board.startOnCard(${JSON.stringify(cardId)}, 'shell')`)) as boolean
       await sleep(1500)
       const cards = (await ES(`window.__mogging.board.list()`)) as Card[]
@@ -150,7 +152,19 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
       await sleep(400)
       await ES(`window.__mogging.workspace.switchByIndex(0)`) // background the card's workspace
       await sleep(600)
-      await cli(['send', String(paneId), `node "${cliPath}" notify --event needs-input`])
+      // THE VERDICT LAW shapes this send (agent-state/activity.ts, deduction 4):
+      // a latched red DIES with the foreground program that raised it — the
+      // shell prompting after a bare `mogging notify` exits is an honest
+      // "whatever was blocked is gone". A real agent raises needs-input and
+      // KEEPS RUNNING, so the emulation rides ONE submitted line whose tail
+      // stays foreground past the assertion window. (This machine's stray-agent
+      // graft used to mask the clear — the recycled-ppid guard made the
+      // detector honest, and this send honest with it.)
+      await cli([
+        'send',
+        String(paneId),
+        sh.chain(`node "${cliPath}" notify --event needs-input`, 'node -e "setTimeout(function(){},25000)"')
+      ])
       let attnOk = false
       let attnDom: unknown = null
       for (let i = 0; i < 40 && !attnOk; i++) {
@@ -212,7 +226,7 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
 
       // ── A7. The human closes the loop: card -> done ───────────────────────────
       if (card) {
-        await ES(`window.bridge.invoke('board:save', ${JSON.stringify({ ...card, lane: 'done' })})`)
+        await ES(`window.bridge.invoke('board:patch', ${JSON.stringify({ id: card.id, patch: { lane: 'done' } })})`)
         await ES(`window.__mogging.board.refresh()`)
         await sleep(400)
       }
