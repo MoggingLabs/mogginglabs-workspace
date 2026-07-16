@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { parse as parseJsonc } from 'jsonc-parser'
@@ -23,13 +23,16 @@ import {
 let scriptPath: string | null = null
 
 /** Write (idempotently) the generated notify script and return its absolute path —
- *  null on any filesystem failure (a launch must never break over the bell). */
+ *  null on any filesystem failure (a launch must never break over the bell).
+ *  Existence-checked every call, not once per run: userData cleared mid-run
+ *  otherwise handed every later launch a hook invocation pointing at a script
+ *  that is gone — every pane silently bell-less until restart. */
 export function notifyHookPath(): string | null {
   try {
-    if (!scriptPath) {
-      const dir = join(app.getPath('userData'), 'notify-hook')
+    const dir = join(app.getPath('userData'), 'notify-hook')
+    const file = scriptPath ?? join(dir, 'notify.mjs')
+    if (!scriptPath || !existsSync(file)) {
       mkdirSync(dir, { recursive: true })
-      const file = join(dir, 'notify.mjs')
       writeFileSync(file, NOTIFY_HOOK_SOURCE)
       scriptPath = file
     }
@@ -45,6 +48,16 @@ export function notifyHookPath(): string | null {
 export function notifyHookInvocation(): string | null {
   const p = notifyHookPath()
   return p ? `node "${p}"` : null
+}
+
+/** Materialize (idempotently) the generated OpenCode notify plugin and return its path —
+ *  null on any filesystem failure. Launches write it per-launch via bellLaunchExtras; the
+ *  GLOBAL wiring needs it to exist regardless of launches, because the user's own
+ *  opencode.json points at it by file:// spec (agent-global-hooks.ts). */
+export function opencodeNotifyPluginPath(): string | null {
+  const script = notifyHookPath()
+  if (!script) return null
+  return writeGenerated('opencode-notify-plugin.mjs', opencodePluginSource(script))
 }
 
 /** Read a JSON file that may not exist (or may be junk) — the merge bases below. */

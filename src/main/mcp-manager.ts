@@ -92,7 +92,36 @@ const findServer = (id: string): McpServerEntry | undefined => listServers().fin
 // live CLI rewrites ~/.claude.json constantly, so a second apply in one session
 // was landing on state no backup had ever seen.
 const backedUp = new Map<string, string>()
-function ensureBackup(file: string, current: string | null): string | undefined {
+
+/** How many `.bak-*` siblings a config keeps. Ten covers every "undo the last few
+ *  applies" story; before this bound existed the backups accumulated forever. */
+const BACKUP_KEEP = 10
+
+/** Drop the oldest backups past the cap — AFTER a new one landed, so a prune can
+ *  never leave the file with fewer safety copies than it had. Best-effort: an
+ *  unreadable dir or a locked file just leaves litter for the next apply. */
+function pruneBackups(file: string): void {
+  try {
+    const dir = dirname(file)
+    const prefix = `${basename(file)}.bak-`
+    const old = readdirSync(dir)
+      .filter((f) => f.startsWith(prefix))
+      .sort()
+      .reverse()
+      .slice(BACKUP_KEEP)
+    for (const f of old) {
+      try {
+        unlinkSync(join(dir, f))
+      } catch {
+        /* locked — next apply retries */
+      }
+    }
+  } catch {
+    /* dir unreadable — nothing to prune */
+  }
+}
+
+export function ensureBackup(file: string, current: string | null): string | undefined {
   if (current === null) return undefined // nothing on disk to lose
   const hash = sha256(current)
   if (backedUp.get(file) === hash) return undefined // these exact bytes are already saved
@@ -102,15 +131,16 @@ function ensureBackup(file: string, current: string | null): string | undefined 
   for (let suffix = 1; existsSync(backup); suffix++) backup = `${base}-${suffix}`
   copyFileSync(file, backup)
   backedUp.set(file, hash)
+  pruneBackups(file)
   return backup
 }
 
 /** Temp file in the SAME directory, then rename: a reader (the running CLI) sees
  *  either the old file or the new one, never a half-written config — and a crash
  *  mid-write leaves the original intact. */
-class ConcurrentConfigWriteError extends Error {}
+export class ConcurrentConfigWriteError extends Error {}
 
-function writeAtomic(file: string, text: string, expected: string | null): void {
+export function writeAtomic(file: string, text: string, expected: string | null): void {
   mkdirSync(dirname(file), { recursive: true })
   const tmp = `${file}.tmp-${process.pid}-${Date.now().toString(36)}`
   try {
@@ -139,7 +169,7 @@ function writeAtomic(file: string, text: string, expected: string | null): void 
   }
 }
 
-const readIfExists = (file: string): string | null => {
+export const readIfExists = (file: string): string | null => {
   try {
     return readFileSync(file, 'utf8')
   } catch (err) {
@@ -163,7 +193,7 @@ function fileMatchesExpected(file: string, expected: string | null): boolean {
  *  be the file we READ. `~/.claude.json` also holds the CLI's own unrelated state
  *  and the CLI rewrites it whenever it likes — a write that lands in our
  *  read→write window would be silently eaten by our stale copy. */
-const changedUnderUs = (file: string, seen: string | null): boolean => !fileMatchesExpected(file, seen)
+export const changedUnderUs = (file: string, seen: string | null): boolean => !fileMatchesExpected(file, seen)
 
 const CLI_DETECT_ID: Record<HostedCliId, string> = { 'claude-code': 'claude', codex: 'codex', gemini: 'gemini' }
 

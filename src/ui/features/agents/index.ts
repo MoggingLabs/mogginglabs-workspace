@@ -1,5 +1,5 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { IntegrationsChannels, ProfileChannels, TerminalChannels, isAgentCliId, planSignature, type AgentDetectedEvent, type AgentInfo, type AgentProfile, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
+import { AgentHookChannels, IntegrationsChannels, ProfileChannels, TerminalChannels, isAgentCliId, planSignature, type AgentDetectedEvent, type AgentInfo, type AgentProfile, type GlobalHooksMutationResult, type GlobalHooksStatus, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
 import { recordPaneLaunch } from '../../core/agents/toolplan-panes'
 import { recordPaneCli, setMcpSnapshot } from '../../core/agents/mcp-status-port'
 
@@ -190,6 +190,10 @@ export const agentsFeature: UiFeature = {
       if (cli) recordPaneCli(paneId, cli) // the pane's MCP chip, same as a launched agent
       // Provider id only — never the command the user typed (ADR 0005/0002).
       getTelemetry().captureEvent({ name: 'agent.detected', props: { provider: ev.agentId } })
+      // A DETECTED agent was not launched by the app, so it may carry no bell config at all
+      // — a verdict-mute pane that works whole turns wearing a resting dot (found live
+      // 2026-07-16). If that CLI's global alerts aren't wired, say so once and offer to.
+      void nudgeGlobalHooks(ev.agentId)
 
       if (!profileId) {
         setPaneProfile(paneId as PaneId, undefined) // a previous launch's note is not this agent's
@@ -199,6 +203,41 @@ export const agentsFeature: UiFeature = {
       // The pane may have moved on while we asked (the agent quit, another CLI started):
       // only note the profile if this session is still the one running.
       if (getPaneAgentSession(paneId as PaneId)?.profileId === profileId) setPaneProfile(paneId as PaneId, name)
+    }
+
+    /** One nudge per provider per app run, and only when that CLI's global alerts are
+     *  genuinely absent. A detected session cannot tell a truly bell-less hand-typed agent
+     *  from a daemon-restored one that kept its launch config, so the copy stays general —
+     *  wiring globally covers both, and every future one, and is a silent no-op outside
+     *  panes (global-hooks.ts). A CONFLICT (the user's own codex notify, say) is their
+     *  deliberate config — no nudge for that either. */
+    const hooksNudged = new Set<string>()
+    const HOOK_NUDGE_LABEL: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', opencode: 'OpenCode' }
+    async function nudgeGlobalHooks(providerId: string): Promise<void> {
+      const label = HOOK_NUDGE_LABEL[providerId]
+      if (!label || hooksNudged.has(providerId)) return
+      hooksNudged.add(providerId)
+      try {
+        const status = (await getBridge().invoke(AgentHookChannels.status)) as GlobalHooksStatus
+        const row = status?.find?.((r) => r.provider === providerId)
+        if (!row || (row.state !== 'not-applied' && row.state !== 'partial')) return
+        showToast({
+          tone: 'attention',
+          title: `Hand-typed ${label} sessions have no alerts`,
+          body: `Wire the alerts into ${label}’s own global config so a session typed at a pane’s prompt rings too (Settings › Agent CLIs to review or remove).`,
+          action: {
+            label: 'Wire alerts',
+            onClick: () => {
+              void (getBridge().invoke(AgentHookChannels.apply, { provider: providerId }) as Promise<GlobalHooksMutationResult>).then((result) => {
+                if (result?.ok) showToast({ tone: 'success', title: `${label} alerts wired globally`, body: 'New sessions ring their pane; a running one applies from its next launch.' })
+                else showToast({ tone: 'attention', title: 'Nothing was written', body: result?.reason })
+              })
+            }
+          }
+        })
+      } catch {
+        /* the nudge is a courtesy — never a failure surface */
+      }
     }
 
     const listProfiles = async (): Promise<AgentProfile[]> => {
@@ -384,6 +423,25 @@ export const agentsFeature: UiFeature = {
       }
       projectLaunchCwd(paneId, cwd)
       agentsClient.launchInto(paneId, result.command)
+      // The profile's email is a label the app cannot enforce — the CLI's OAuth
+      // lands on whatever account the browser offers. Main checked the launch
+      // home; say what it found while the sign-in (or the mixup) is on screen.
+      if (result.signIn) {
+        const profileName = mine.find((p) => p.id === effectiveProfile)?.name
+        showToast(
+          result.signIn.actual
+            ? {
+                tone: 'attention',
+                title: `Pane ${paneId} is signed in as ${result.signIn.actual}`,
+                body: `The “${profileName ?? 'selected'}” profile expects ${result.signIn.expected}. Run /login in that pane to switch accounts, or edit the profile's email in Settings.`
+              }
+            : {
+                tone: 'info',
+                title: `Sign in to set up “${profileName ?? provider}”`,
+                body: `When the browser opens, pick ${result.signIn.expected} — this profile should run under that account.`
+              }
+        )
+      }
       // Remember the tool-plan signature this pane launched with (8/09) — a
       // later plan edit flips it to restart-needed.
       if (workspaceId) {

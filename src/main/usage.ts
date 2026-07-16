@@ -26,6 +26,7 @@ import { getSettingsStore } from './app-settings'
 import { maybeFault } from './fault-port'
 import { usageWorld } from './fixture-port'
 import { keySlot, keySetPlaintext, keySetEnvRef, keyClear, resolveKey } from './usage-keys'
+import { LivePriceCache } from './usage-prices'
 
 // App-wiring: usage meters (Phase-7/01+03, ADR 0007). Adapter pick is the
 // zero-network guarantee: under a usage smoke (or the gallery) the registry
@@ -485,58 +486,16 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
   // (no auth, no cookies) to models.dev, at most daily, persisted in the KV —
   // scanned spend then prices at today's published rates instead of the last
   // release's built-ins. The scan itself stays network-free: rates arrive as
-  // DATA. Real sessions only (never under smoke); every failure path falls
-  // back to the built-in table silently.
-  const PRICES_TTL_MS = 24 * 3_600_000
-  interface LivePrices {
-    at: number
-    rows: [string, { inPerMTok: number; outPerMTok: number }][]
-  }
-  let livePrices: LivePrices | null = null
-  let pricesFetching = false
-  const loadLivePrices = (): void => {
-    if (livePrices) return
-    try {
-      const raw = getSettingsStore()?.getSetting('usage.prices.modelsdev')
-      if (raw) {
-        const p = JSON.parse(raw) as LivePrices | null
-        if (p && Array.isArray(p.rows) && typeof p.at === 'number') livePrices = p
-      }
-    } catch {
-      /* corrupt cache — refetch below */
-    }
-  }
-  const refreshLivePrices = (): void => {
-    if (world || pricesFetching) return // real sessions only — a harness world never reaches out
-    loadLivePrices()
-    if (livePrices && Date.now() - livePrices.at < PRICES_TTL_MS) return
-    pricesFetching = true
-    void fetch('https://models.dev/api.json', { signal: AbortSignal.timeout(8000) })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((body: unknown) => {
-        if (!body || typeof body !== 'object') return
-        const rows: [string, { inPerMTok: number; outPerMTok: number }][] = []
-        for (const providerKey of ['anthropic', 'openai']) {
-          const models = (body as Record<string, { models?: Record<string, { cost?: { input?: unknown; output?: unknown } }> }>)[providerKey]?.models
-          if (!models || typeof models !== 'object') continue
-          for (const [id, m] of Object.entries(models)) {
-            const inP = m?.cost?.input
-            const outP = m?.cost?.output
-            if (typeof inP === 'number' && typeof outP === 'number' && inP >= 0 && outP >= 0)
-              rows.push([id.toLowerCase(), { inPerMTok: inP, outPerMTok: outP }])
-          }
-        }
-        if (!rows.length) return
-        // Longest id first, so "gpt-5.4-mini" wins its prefix race with "gpt-5".
-        rows.sort((a, b) => b[0].length - a[0].length)
-        livePrices = { at: Date.now(), rows: rows.slice(0, 500) }
-        getSettingsStore()?.setSetting('usage.prices.modelsdev', JSON.stringify(livePrices))
-      })
-      .catch(() => undefined) // offline / blocked — built-ins carry on
-      .finally(() => {
-        pricesFetching = false
-      })
-  }
+  // DATA. Real sessions only (never under smoke — `!world`); every failure path
+  // falls back to the built-in table silently. The fetch/cache/TTL machinery is
+  // usage-prices.ts (unit-testable); this owns only the wiring.
+  const livePrices = new LivePriceCache(
+    () => {
+      const kv = getSettingsStore()
+      return kv ? { get: (k) => kv.getSetting(k), set: (k, v) => kv.setSetting(k, v) } : null
+    },
+    !world // a harness world never reaches out
+  )
 
   // The ACTIVE lane of a provider: order 0 wins, the poller's own rule. Null
   // when no profile targets it (the seam calls that lane 'default').
@@ -551,8 +510,9 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
   const costScanFor = (providerId: string, windowDays?: number): CostScan => {
     if (world) return world.costScan(providerId, windowDays)
     const windowOpts = windowDays !== undefined ? { windowDays } : {}
-    refreshLivePrices() // async; THIS scan uses whatever is cached, the next one the fresh rates
-    const priceOpts = livePrices ? { prices: livePrices.rows, pricesRev: String(livePrices.at) } : {}
+    // async; THIS scan uses whatever is cached, the NEXT one the fresh rates.
+    const prices = livePrices.current()
+    const priceOpts = prices ? { prices: prices.rows, pricesRev: prices.rev } : {}
     const profile = activeProfile(providerId) // the ACTIVE profile's home
     // EVERY root the provider writes (archived sessions, moved config homes) —
     // the single-root scan silently under-counted both (CodexBar parity).

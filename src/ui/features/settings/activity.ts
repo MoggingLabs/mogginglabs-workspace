@@ -1,7 +1,7 @@
 import { IntegrationsChannels, type TrailEntry, type TrailSource } from '@contracts'
 import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
-import { Card, clear, el } from '../../components'
+import { Button, Card, EmptyState, clear, confirmDialog, el } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onViewChange } from '../../core/shell/view-port'
 import { fmtAge } from '../usage'
@@ -13,6 +13,10 @@ import { fmtAge } from '../usage'
  * reads alongside Privacy and Browser, which decide what agents may do. One
  * module, one home; the trail renders nowhere else.
  *
+ * Toolbar on the house kit (F-40): one control grammar instead of three, and
+ * Clear confirms through the same dialog every destructive verb uses — the
+ * two-click arming pattern was this tab's private invention.
+ *
  * `.trail-activity` stays on the card root and the honesty copy stays ABOVE the
  * list: WEBTRAIL reads 'never sent anywhere' out of that subtree's first 4000
  * characters, and 500 rows would push it past the window.
@@ -20,9 +24,9 @@ import { fmtAge } from '../usage'
 export function createActivitySection(): HTMLElement {
   const bridge = getBridge()
 
-  const wsSelect = el('select', { class: 'trail-select trail-ws' }) as HTMLSelectElement
+  const wsSelect = el('select', { class: 'input input-sm trail-ws' }) as HTMLSelectElement
   wsSelect.setAttribute('aria-label', 'Filter by workspace')
-  const srcSelect = el('select', { class: 'trail-select trail-src' }) as HTMLSelectElement
+  const srcSelect = el('select', { class: 'input input-sm trail-src' }) as HTMLSelectElement
   srcSelect.setAttribute('aria-label', 'Filter by source')
   for (const [v, label] of [
     ['', 'All sources'],
@@ -33,19 +37,19 @@ export function createActivitySection(): HTMLElement {
     srcSelect.append(el('option', { value: v, text: label }))
   }
 
-  const refreshBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Refresh' }) as HTMLButtonElement
-  const exportBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Export JSON…' }) as HTMLButtonElement
-  // Clear is a two-click confirm (house pattern — no native dialogs).
-  const clearBtn = el('button', { class: 'trail-btn trail-clear', type: 'button', text: 'Clear this workspace’s trail' }) as HTMLButtonElement
-  let clearArmed = false
-  const disarmClear = (): void => {
-    clearArmed = false
-    clearBtn.textContent = 'Clear this workspace’s trail'
-    clearBtn.classList.remove('is-armed')
-  }
+  // Default (30px) size, not sm: SETINTEG measures a 28px hit floor on this toolbar.
+  const refreshBtn = Button({ label: 'Refresh', variant: 'outline', icon: 'rotate-cw' })
+  const exportBtn = Button({ label: 'Export JSON…', variant: 'ghost' })
+  const clearBtn = Button({ label: 'Clear this workspace’s trail', variant: 'danger' })
 
   const list = el('div', { class: 'trail-list' })
-  const emptyNote = el('div', { class: 'settings-row-caption trail-empty', text: 'No agent activity recorded yet.' })
+  const emptyNote = el('div', { class: 'trail-empty' }, [
+    EmptyState({
+      icon: 'activity',
+      title: 'No agent activity yet',
+      body: 'Web acts, MCP writes, and webhook deliveries will appear here as agents work.'
+    })
+  ])
 
   const wsName = (id: string): string => getWorkspaces().workspaces.find((w) => w.id === id)?.name ?? id.slice(0, 8)
 
@@ -76,12 +80,11 @@ export function createActivitySection(): HTMLElement {
   const trailGuard = createAsyncGuard<TrailEntry[]>()
 
   async function refresh(): Promise<void> {
-    disarmClear()
     const wsId = wsSelect.value
     clearBtn.disabled = !wsId
     await trailGuard.run(() => bridge.invoke(IntegrationsChannels.trailList, wsId) as Promise<TrailEntry[]>, {
       action: 'load the activity trail',
-      // "No agent activity recorded yet" is a claim about a read that SUCCEEDED and came back
+      // "No agent activity yet" is a claim about a read that SUCCEEDED and came back
       // empty. Never leave it standing over one that is still in flight — or that failed.
       onLoading: () => {
         emptyNote.hidden = true
@@ -114,14 +117,15 @@ export function createActivitySection(): HTMLElement {
   }
   clearBtn.onclick = async (): Promise<void> => {
     if (!wsSelect.value) return
-    if (!clearArmed) {
-      clearArmed = true
-      clearBtn.textContent = 'Really clear? This cannot be undone'
-      clearBtn.classList.add('is-armed')
-      return
-    }
+    // F-40: the same destructive grammar as everywhere else — one dialog, side stated.
+    const ok = await confirmDialog({
+      title: `Clear ${wsName(wsSelect.value)}’s trail?`,
+      message: 'Every recorded web act, MCP write, and webhook delivery for this workspace is erased. This cannot be undone.',
+      confirmLabel: 'Clear trail',
+      danger: true
+    })
+    if (!ok) return
     await bridge.invoke(IntegrationsChannels.trailClear, wsSelect.value)
-    disarmClear()
     void refresh()
   }
 

@@ -13,6 +13,9 @@ export interface BrowserDockInit {
    *  closes (the chrome renders the honest copy). Machine-global (ADR 0008.h),
    *  so both sides derive per-workspace partition names from it. */
   agentWebPersists: boolean
+  /** The omnibox search-engine template (`%s` = query). Machine-global setting,
+   *  defaults to DEFAULT_SEARCH_TEMPLATE. */
+  searchTemplate: string
 }
 
 /** Per-workspace browser partitions (8/07b): every workspace has its OWN
@@ -61,6 +64,50 @@ export interface BrowserSignedInSite {
 
 export type BrowserNavAction = 'back' | 'forward' | 'reload'
 
+/** One tab within a (workspace, profile) — its stable id + what to show on the strip.
+ *  url/title only (favicon is fetched renderer-side), never page content. */
+export interface BrowserTab {
+  id: string
+  url: string
+  title: string
+}
+
+/** The renderer's tab list for a (workspace, profile), cached main-side so the agent's
+ *  `browser_tab_list` can answer and `browser_tab_select` can resolve an index → id. */
+export interface BrowserTabsState {
+  workspaceId: string
+  profile: BrowserProfile
+  tabs: BrowserTab[]
+  activeId: string
+}
+
+/** A right-click inside a guest page, forwarded from MAIN (the guest's context-menu
+ *  is a main-side webContents event) so the renderer draws the HOUSE menu. Coordinates
+ *  are guest-viewport px; the renderer offsets them by the view host. Carries only what
+ *  the menu needs — link/media targets + any selected text — never the page's DOM. */
+export interface BrowserContextMenuParams {
+  workspaceId: string
+  x: number
+  y: number
+  linkURL: string
+  srcURL: string
+  selectionText: string
+  isEditable: boolean
+}
+
+/** An app keyboard shortcut pressed while the GUEST page holds focus (F12). The guest
+ *  is a separate process, so main intercepts it (before-input-event) and relays the
+ *  normalized chord for the renderer's own handlers to run — no shortcut logic in main. */
+export interface BrowserGuestChord {
+  workspaceId: string
+  code: string
+  key: string
+  ctrl: boolean
+  meta: boolean
+  shift: boolean
+  alt: boolean
+}
+
 // ── Agent control (Phase-6/05b): agents drive the ONE visible dock ───────────
 // These verbs are the driver seam the phase-8 MCP server exposes as tools; the
 // smoke drives them directly. ADR 0002 holds at full throttle: no cookie /
@@ -81,6 +128,10 @@ export type BrowserAgentVerbName =
   | 'console'
   | 'network_failures'
   | 'wait_for'
+  // Tabs (F4): an agent can hold a doc and the dev server open at once.
+  | 'tab_list'
+  | 'tab_new'
+  | 'tab_select'
 
 export interface BrowserAgentVerb {
   verb: BrowserAgentVerbName
@@ -92,6 +143,8 @@ export interface BrowserAgentVerb {
   n?: number
   /** scroll delta in px (scroll), or absolute y when `to === 'y'`. */
   dy?: number
+  /** scroll only: 'y' makes `dy` an absolute document offset instead of a delta. */
+  to?: 'y'
 }
 
 /** A snapshot node — the agent's eyes. `ref` is a stable data-attribute the
@@ -111,12 +164,17 @@ export interface BrowserAgentResult {
   /** snapshot: interactive/labelled nodes + a visible-text digest. */
   nodes?: BrowserSnapshotNode[]
   text?: string
+  /** snapshot: true when the node list hit its cap — the page has more. */
+  truncated?: boolean
   /** screenshot: PNG as a data URL (never logged — returned to the caller only). */
   png?: string
   /** console / network_failures: recent lines (tail). */
   lines?: string[]
   /** eval: JSON-stringified return value (best effort). */
   value?: string
+  /** tab_list / tab_new / tab_select: the tabs after the call + which is active. */
+  tabs?: BrowserTab[]
+  activeTabId?: string
 }
 
 /** Possession state + verb trail pushed to the dock chrome. Carries verb NAMES
@@ -130,4 +188,20 @@ export interface BrowserAgentActivity {
   /** 8/04: an ORIGIN awaiting the human's session-scoped "allow acting" click
    *  (the banner confirm). Origins only — never page content. */
   pendingConfirm?: string
+  /** WHICH agent holds the wheel — its pane id (the renderer resolves it to a
+   *  provider name + pane number for "Claude is browsing"). Absent for a
+   *  human/IPC-driven act. Pane id only, never anything the pane contains. */
+  pane?: string
+  /** The verb currently in flight — the dock's live "Clicking…/Reading…" line. */
+  lastVerb?: BrowserAgentVerbName
+}
+
+/** Cross-workspace possession: which workspaces have an agent attached to /
+ *  driving their browser, and the pane driving each — so every workspace's tab can
+ *  name its driver, not just the one in the foreground. */
+export interface BrowserPossession {
+  attached: string[]
+  driving: string[]
+  /** workspaceId -> the pane driving it (identity for the tab indicator). */
+  drivers: Record<string, string>
 }

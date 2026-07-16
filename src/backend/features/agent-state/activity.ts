@@ -34,17 +34,26 @@ import type { AgentState } from '@contracts'
 //              that anything finished, and `idle-prompt` in particular fires on a 60-second
 //              TIMER, not on a completion.
 //
-// THE TWO DEDUCTIONS. Neither is a guess. Each combines two facts we are CERTAIN of into a
-// conclusion that is therefore also certain — which is exactly what "bytes went quiet so it
-// probably finished" never was.
+// THE DEDUCTIONS. None is a guess. Each combines facts we are CERTAIN of into a conclusion
+// that is therefore also certain — which is exactly what "bytes went quiet so it probably
+// finished" never was.
 //
 //   1. ANSWERING A RED MEANS IT IS WORKING (input). The agent said BY NAME that it was blocked
-//      on this human; the human answered it. It follows that it is no longer blocked and is
-//      working. Without this the pane would go red -> [you approve] -> idle-yellow for the whole
-//      three minutes it then works -> green: a working agent that looks asleep, because no hook
-//      fires when you type `y` at a permission prompt.
+//      on this human; the human fed it a submitted line OR a printable key (every permission
+//      dialog takes single-key answers — Claude's digit menu, Codex/Gemini's `y` — and no hook
+//      fires at approval time). It follows that it is no longer blocked and is working.
+//      Navigation and signals (arrows, ^C, mouse reports) answer nothing and clear nothing.
 //
 //   2. A CHIME WITH NO `done` BEHIND IT MEANS BLOCKED (bell). See BELL_CONFIRM_MS.
+//
+//   3. AN UNKNOWN-TYPE NOTIFICATION MID-TURN IS NOT A BLOCK (notice). Its arrival proves the
+//      hook channel works, and on a working channel every blocking type arrives as an explicit
+//      needs-input — so mid-turn (busy) it is swallowed, and it retracts the raw-BEL twin that
+//      rode ahead of it. Out of turn it is held for contradiction like any chime.
+//
+//   4. A SHELL PROMPT MEANS THE FOREGROUND PROGRAM IS GONE (shellPrompt). Real integration —
+//      133;D or our own injected dialects — so `busy` and a latched red die with the program
+//      that raised them. It never authors a first verdict and never spends a green.
 //
 // THE SUBAGENT GATE. Alerts are the MAIN agent's story. Subagents only ever raise and lower a
 // counter; no subagent event may author a pane state. Their job is to hold the main's verdict
@@ -80,9 +89,16 @@ export const BELL_CONFIRM_MS = 2000
 export const DONE_CHIME_GRACE_MS = 2500
 
 export class ActivityTracker {
-  /** `unknown` until this pane speaks. Never returns to it. */
+  /** `unknown` until this pane speaks. Never returns to it — with ONE exception: a red the
+   *  bell GUESSED into existence, retracted by its own notification's late verdict (see
+   *  notice()), restores whatever it displaced, and a retracted guess about a pane that had
+   *  never spoken honestly restores `unknown`. Verdicts are never forgotten; guesses may be. */
   private state: AgentState = 'unknown'
   private latched = false // attention holds until an answer or an explicit verdict
+  /** Provenance for a standing latch: the state the BELL TIMER displaced when it latched red
+   *  (a confirmed guess), or null when the latch is explicit (needs-input said so, by name).
+   *  Only a guess-latch may ever be retracted — see notice(). */
+  private bellLatchedFrom: AgentState | null = null
   private bellTimer: ReturnType<typeof setTimeout> | undefined // a chime, awaiting contradiction
 
   // Subagents in flight (SubagentStart/SubagentStop). A GATE, never a source.
@@ -160,7 +176,15 @@ export class ActivityTracker {
     if (this.bellTimer) return // already pending — one ring per episode
     this.bellTimer = setTimeout(() => {
       this.bellTimer = undefined
+      const displaced = this.state
       this.raiseAttention()
+      // Provenance, stamped AFTER the raise (raiseAttention nulls it, because an EXPLICIT red
+      // must never be retractable): this red is a confirmed GUESS, and `displaced` is what it
+      // pushed aside. notice() may retract it — the hook that was racing this window can lose
+      // the race (a cold node spawn under a sixteen-pane load is unbounded) and still win the
+      // argument when it lands. A pane already wearing attention records nothing: the standing
+      // red was explicit, or an earlier guess whose own record stands.
+      if (displaced !== 'attention') this.bellLatchedFrom = displaced
     }, BELL_CONFIRM_MS)
     this.bellTimer.unref?.()
   }
@@ -170,8 +194,46 @@ export class ActivityTracker {
   raiseAttention(): void {
     this.clearBellTimer()
     this.latched = true
+    this.bellLatchedFrom = null // explicit: this red is a verdict, and no notice may retract it
     this.deferredDone = false // blocked on a human is not finished, whatever it said earlier
     this.apply('attention')
+  }
+
+  /** A notification whose TYPE the hook script did not recognize — a guess, but a guess that
+   *  arrived THROUGH the rich hook channel, and that arrival is itself a fact: the hooks work.
+   *
+   *  While the pane is BUSY, that fact decides it. A turn is in flight, and on a working hook
+   *  channel every notification type that genuinely blocks arrives as an explicit needs-input —
+   *  the script's whitelist enumerates all of them (permission, elicitation, input asks). So an
+   *  unknown type mid-turn is certainly NOT a block: swallow it, and cancel the chime it rode
+   *  in on (`preferredNotifChannel: terminal_bell` rings the raw BEL the instant the
+   *  notification shows; this hook spawns a process to say the same thing and lands a beat
+   *  later — without the cancel, the BEL's timer outlives its own retraction and latches red
+   *  anyway). Before this rule, every new notification type a CLI shipped painted WORKING panes
+   *  red for whole turns, on exactly the panes nobody was watching.
+   *
+   *  If the BEL's timer already RANG (the spawn lost the race outright), the standing red is a
+   *  confirmed guess — bellLatchedFrom records what it displaced — and this notice is that same
+   *  notification's verdict arriving late. Retract it: restore the displaced state. An explicit
+   *  needs-input latch records no provenance and is never retracted.
+   *
+   *  Anywhere else (idle, unknown, done) the busy certainty is gone — out-of-turn notifications
+   *  (auth expiry, a dropped connection) are exactly the class the whitelist cannot enumerate
+   *  and CAN be a genuine come-here — so it takes the bell's held-for-contradiction path, as
+   *  before: swallowed on a done pane, rung one confirmation beat later everywhere else. */
+  notice(): void {
+    if (this.state === 'busy') {
+      this.clearBellTimer()
+      return
+    }
+    if (this.state === 'attention' && this.bellLatchedFrom !== null) {
+      const displaced = this.bellLatchedFrom
+      this.bellLatchedFrom = null
+      this.latched = false
+      this.apply(displaced)
+      return
+    }
+    this.bell()
   }
 
   /** An explicit state verdict: OSC 133 C/D, `mogging notify`, an agent hook. */
@@ -187,6 +249,7 @@ export class ActivityTracker {
 
     // busy/done/idle are all the agent explicitly moving on — they release an attention latch.
     this.latched = false
+    this.bellLatchedFrom = null
 
     if (state === 'busy') {
       this.deferredDone = false // it is working: whatever it said before, it did not finish
@@ -265,37 +328,111 @@ export class ActivityTracker {
    *  pending count is stale (a subagent killed before its stop event) — drop it rather than let
    *  it swallow every future done and strand the pane on busy. The prompt itself is also new
    *  WORK and a MAIN event: it answers whatever was blocking, and it reclaims a pane still
-   *  wearing the last turn's green. */
+   *  wearing the last turn's green.
+   *
+   *  It also ENDS the previous done's chime grace. The grace exists for a finished turn's
+   *  trailing frames; once a new turn has begun, a chime belongs to the NEW turn — without the
+   *  reset, a block in the first beats of turn N+1 (Gemini asking approval for its very first
+   *  tool) was swallowed as turn N's completion chime, and the pane wore busy while blocked. */
   turnStart(): void {
     this.clearBellTimer() // the user is here and typing; nothing is owed a ring
     this.pendingSubagents = 0
     this.deferredDone = false
     this.latched = false
+    this.bellLatchedFrom = null
+    this.doneAt = -Infinity
     this.apply('busy')
   }
 
   /**
    * The user wrote to the pane. `submitted` = the chunk carried a SUBMITTED line — a bare CR/LF,
-   * i.e. Enter (see isSubmittedInput, which is where Shift+Enter and bracketed paste are ruled
-   * out). Only a submit may clear the latch.
+   * i.e. Enter (see isSubmittedInput). `engaged` = the chunk carried at least one PRINTABLE key —
+   * content fed to the pane's foreground program (see isEngagedInput; ESC-introduced sequences
+   * and bare control bytes fail it, so arrows, ^C, mouse reports, focus events and bracketed
+   * paste all stay excluded).
    *
-   * It used to clear on ANY keystroke, and that was a lie with no way back: an arrow key, a ^C,
-   * a stray character each turned a blocked pane's red dot green and claimed it was WORKING —
-   * while the agent sat there still blocked, and no CLI re-raises a needs-input it has already
-   * raised. Red lingering a beat too long self-heals on the next verdict. A false "working" does
-   * not heal at all.
+   * EITHER clears the latch. It was submit-only for a while, and that rule left the most common
+   * answer in the product stuck red: every CLI's permission dialog takes single-key answers
+   * (Claude Code's digit menu applies `1`/`2`/`3` instantly; Codex and Gemini take `y`) which
+   * submit no line and fire no hook — nothing runs at approval time — and no CLI re-raises a
+   * needs-input it has already raised. So the human answered, the agent worked on, and the pane
+   * wore "blocked on you" for the remainder of the turn. A digit IS the whole answer.
    *
-   * On a submit into a latched pane, DEDUCTION 1 applies: the agent said it was blocked on this
-   * human, and the human just answered. It is working.
+   * The original any-keystroke bug stays fixed by the printable/sequence split: navigation and
+   * signals (arrows, ^C, a mouse click) still never clear it — none of them answer anything.
+   * RESIDUAL, accepted: a printable typed at a latched pane and then abandoned mid-answer reads
+   * as answered. The human was AT the dialog — seconds from resolution in any real case, against
+   * the hours of false red this replaces.
+   *
+   * On a clear, DEDUCTION 1 applies: the agent said it was blocked on this human, and the human
+   * just answered. It is working.
+   *
+   * A SUBMIT into a pane wearing `done` additionally ENDS that done. The line is new work handed
+   * to a finished agent (or to its shell), and the green was already spent by the focus that
+   * preceded the keystroke (the renderer acknowledges on click/keyboard-landing). Left standing,
+   * the done DEAFENED the bell: bell() swallows every chime on a done pane, and the CLIs with no
+   * turn-start hook (Codex, OpenCode) never leave `done` between turns — so from their second
+   * turn on, an approval could never ring red again. The pane rests at idle (the honest claim
+   * after an acknowledged done); the next real done re-greens it, and the grace resets so the
+   * new turn's chimes are its own.
    */
-  input(submitted: boolean): void {
-    if (!submitted) return
-    // You answered: whatever a pending chime was about, it is handled. (A stray keystroke must
-    // NOT cancel it — the chime may be a real block, and a keypress says nothing about which.)
+  input(submitted: boolean, engaged: boolean = submitted): void {
+    if (!submitted && !engaged) return
+    // You answered (or are answering): whatever a pending chime was about, it is handled. (A
+    // navigation key or a ^C must NOT cancel it — the chime may be a real block, and those say
+    // nothing about which.)
     this.clearBellTimer()
+    if (submitted && this.state === 'done') {
+      this.doneAt = -Infinity // the grace belonged to the turn that ended; new work starts here
+      this.apply('idle')
+      return
+    }
     if (!this.latched) return
     this.latched = false
+    this.bellLatchedFrom = null
     this.apply('busy')
+  }
+
+  /** OSC 133;C — real shell integration marking a command LAUNCH. A verdict about the SHELL, so
+   *  it may move a pane that has already spoken, but it must never author a pane's FIRST state:
+   *  the claim is the shell's, and a hand-typed agent adopted minutes later would inherit it as
+   *  its own solid dot (the hollow-dot contract — agent.ts `unknown`). */
+  shellCmdStart(): void {
+    if (this.state === 'unknown') return
+    this.notify('busy')
+  }
+
+  /** The pane's shell is back at its PROMPT — OSC 133;D, or any of the dialects we inject
+   *  ourselves (OSC 9;9 on cmd.exe, OSC 633 MoggingPrompt on PowerShell/POSIX/remote). The
+   *  foreground program is GONE, and two claims die with it:
+   *
+   *    attention  a latch must not outlive the program that raised it. Kill a blocked agent
+   *               (^C, a crash, /exit) and the pane sat RED at an empty prompt with nothing
+   *               left that could ever clear it: none of OUR injected integrations emit 133;D,
+   *               so the idle verdict never fired — and a remote pane has no process detector
+   *               to retire the session either. The prompt IS the shell saying "nothing is
+   *               running here", which is exactly what 133;D was already trusted to mean.
+   *    busy       the same fact — and a dead program's turn leftovers (a pending-subagent
+   *               count, a deferred done) are that program's story, reset with it.
+   *
+   *  Two claims deliberately survive:
+   *
+   *    done       a green is the USER's to spend. An agent that finished and then exited to
+   *               the shell has still finished — 133;D used to silently eat that halo on the
+   *               shells that emit it, an unwatched pane's completion vanishing unseen.
+   *    unknown    a prompt is the SHELL speaking; the dot's first solid state is reserved for
+   *               the agent's own channels (the hollow contract), and every fresh pane prints
+   *               a prompt before anything else ever runs in it.
+   *
+   *  A pending CHIME deliberately survives too: `long_build; printf '\x1b]9;done\x07'` rings AT
+   *  the prompt — the chime outlives its command; the block-claim does not. */
+  shellPrompt(): void {
+    if (this.state !== 'busy' && this.state !== 'attention') return
+    this.pendingSubagents = 0
+    this.deferredDone = false
+    this.latched = false
+    this.bellLatchedFrom = null
+    this.apply('idle')
   }
 
   /** The live verdict, for state-sync PULLS (a mounting pane asking "what am I now"). Events

@@ -100,18 +100,20 @@ export function runMutationRaceSmoke(win: BrowserWindow): void {
       // delayed. Disabled + aria-busy is the visible single-fire contract.
       await ES(`window.__mogging.view('settings'); window.__mogging.settingsTab('integrations')`)
       await sleep(1200)
+      // The write-tools control is a ToggleRow now (F-25) — same single-fire contract,
+      // asserted on the switch input: disabled + aria-busy across the round-trip.
       const grantPending = await ES<{ found: boolean; disabled: boolean; busy: boolean }>(`(() => {
         const block = [...document.querySelectorAll('.mgr-grants-block')].find((item) => item.textContent?.includes('which MCP write tools agents get'))
-        const button = block?.querySelector('.trail-btn')
-        if (!(button instanceof HTMLButtonElement)) return { found: false, disabled: false, busy: false }
-        button.click()
-        return { found: true, disabled: button.disabled, busy: button.getAttribute('aria-busy') === 'true' }
+        const input = block?.querySelector('.switch-input')
+        if (!(input instanceof HTMLInputElement)) return { found: false, disabled: false, busy: false }
+        input.click()
+        return { found: true, disabled: input.disabled, busy: input.getAttribute('aria-busy') === 'true' }
       })()`)
       await sleep(100)
       const grantStillPending = await ES<boolean>(`(() => {
         const block = [...document.querySelectorAll('.mgr-grants-block')].find((item) => item.textContent?.includes('which MCP write tools agents get'))
-        const button = block?.querySelector('.trail-btn')
-        return button instanceof HTMLButtonElement && button.disabled && button.getAttribute('aria-busy') === 'true'
+        const input = block?.querySelector('.switch-input')
+        return input instanceof HTMLInputElement && input.disabled && input.getAttribute('aria-busy') === 'true'
       })()`)
       await sleep(700)
       const grantAfterUi = await invoke<WorkspaceIntegrationsGrant>(IntegrationsChannels.grantGet, workspaceId)

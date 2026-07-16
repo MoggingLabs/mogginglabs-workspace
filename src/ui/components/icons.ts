@@ -37,6 +37,7 @@ export type IconName =
   | 'expand'
   | 'expand-h'
   | 'expand-v'
+  | 'external-link'
   | 'file'
   | 'flag'
   | 'folder'
@@ -49,6 +50,7 @@ export type IconName =
   | 'kanban'
   | 'keyboard'
   | 'layout-grid'
+  | 'lock'
   | 'more'
   | 'panel-left'
   | 'panel-right'
@@ -60,6 +62,7 @@ export type IconName =
   | 'shield'
   | 'sliders'
   | 'sparkles'
+  | 'square'
   | 'terminal'
   | 'trash'
   | 'user'
@@ -91,6 +94,8 @@ const PATHS: Record<IconName, string> = {
   'contract-v':
     '<polyline points="8 5 12 9 16 5"/><polyline points="8 19 12 15 16 19"/><line x1="12" x2="12" y1="2" y2="9"/><line x1="12" x2="12" y1="15" y2="22"/>',
   copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  'external-link':
+    '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   download:
     '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="3" y2="15"/>',
   /* Expand trio — arrows that STRETCH (the old chevron pairs read as collapse). */
@@ -138,6 +143,8 @@ const PATHS: Record<IconName, string> = {
   plug: '<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>',
   shield:
     '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>',
+  lock: '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  square: '<rect width="14" height="14" x="5" y="5" rx="2"/>',
   user: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   terminal: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
   trash:

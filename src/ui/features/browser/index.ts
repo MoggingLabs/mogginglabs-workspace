@@ -1,21 +1,28 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
 import {
   BrowserChannels,
+  ClipboardChannels,
+  DEFAULT_SEARCH_TEMPLATE,
   IntegrationsChannels,
   browserAgentWebPartition,
   browserPreviewPartition,
+  resolveAddressInput,
+  searchUrlFor,
   type BrowserAgentActivity,
+  type BrowserContextMenuParams,
   type BrowserDockInit,
   type BrowserDockState,
+  type BrowserGuestChord,
   type BrowserNavAction,
+  type BrowserPossession,
   type BrowserProfile,
   type BrowserSignedInSite,
   type TrailEntry,
   type WorkspaceIntegrationsGrant
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { IconButton, clear, confirmDialog, el, icon, showToast } from '../../components'
-import { getWorkspaces, onWorkspacesChange } from '../../core/workspace/workspace-info-port'
+import { IconButton, clear, confirmDialog, el, icon, openContextMenu, showToast } from '../../components'
+import { assignmentForPane, getWorkspaces, onWorkspacesChange } from '../../core/workspace/workspace-info-port'
 import { setCommands } from '../../core/commands/command-port'
 import { isModKey } from '../../core/commands/shortcuts'
 import { createAsyncGuard } from '../../core/async/async-state'
@@ -32,12 +39,28 @@ import { dockLayoutBudget, onDockLayoutChange, requestDockLayout } from '../../c
  * in their own partitions; main drives them by webContents id. ADR 0002: this
  * renderer touches no sessions, cookies, or credentials — the guest is isolated.
  */
+
+/** The `<webview>` element methods/events the chrome drives directly — find,
+ *  zoom, stop, and the page-status events are viewport concerns that never need
+ *  a main round-trip (the element IS in this renderer). */
+interface WebviewEl extends HTMLElement {
+  stop(): void
+  reload(): void
+  findInPage(text: string, options?: { forward?: boolean; findNext?: boolean }): number
+  stopFindInPage(action: 'clearSelection' | 'keepSelection' | 'activateSelection'): void
+  setZoomLevel(level: number): void
+  setAudioMuted(muted: boolean): void
+  isAudioMuted(): boolean
+  loadURL(url: string): Promise<void>
+  getURL(): string
+}
 export const browserFeature: UiFeature = {
   name: 'browser',
   mount(ctx) {
     const bridge = getBridge()
     let open = false
     let width = 420
+    let searchTemplate = DEFAULT_SEARCH_TEMPLATE // the omnibox engine (F3); set from the store at boot
     let state: BrowserDockState = {
       workspaceId: '',
       url: '',
@@ -60,19 +83,42 @@ export const browserFeature: UiFeature = {
 
     const back = IconButton({ icon: 'chevron-left', label: 'Back', title: 'Back', onClick: () => nav('back') })
     const forward = IconButton({ icon: 'chevron-right', label: 'Forward', title: 'Forward', onClick: () => nav('forward') })
-    const reload = IconButton({ icon: 'rotate-cw', label: 'Reload', title: 'Reload', onClick: () => nav('reload') })
+    // Reload doubles as Stop while a page loads (F13) — one button, Comet/Chrome-style.
+    const reload = IconButton({
+      icon: 'rotate-cw',
+      label: 'Reload',
+      title: 'Reload',
+      onClick: () => {
+        if (state.loading) activeGuest()?.stop()
+        else nav('reload')
+      }
+    })
+    // The address bar's leading indicator (F13): a favicon / lock (https) / not-secure
+    // (http) / search glyph, exactly where a browser puts it.
+    const urlLead = el('span', { class: 'browser-url-lead' })
     const urlInput = el('input', { class: 'browser-url' }) as HTMLInputElement
-    urlInput.placeholder = 'localhost:3000'
-    urlInput.setAttribute('aria-label', 'Address')
+    urlInput.placeholder = 'Search or enter address'
+    urlInput.setAttribute('aria-label', 'Address and search bar')
     urlInput.spellcheck = false
+    const urlWrap = el('div', { class: 'browser-url-wrap' }, [urlLead, urlInput])
     const external = IconButton({
-      icon: 'globe',
+      icon: 'external-link',
       label: 'Open in system browser',
       title: 'Open in system browser',
       onClick: () => {
         if (state.url) void bridge.invoke(BrowserChannels.openExternal, { url: state.url })
       }
     })
+    // Audio indicator + mute (F15): appears only while the active guest is making
+    // sound (a background workspace's video keeps playing invisibly — this is the way
+    // to notice and silence it), Chrome/Comet-style.
+    const audioBtn = IconButton({
+      icon: 'bell',
+      label: 'Mute tab audio',
+      title: 'Mute this page',
+      onClick: () => toggleMute()
+    })
+    audioBtn.hidden = true
     const close = IconButton({ icon: 'x', label: 'Close browser', title: 'Close (Ctrl+Shift+U)', onClick: () => toggle(false) })
     const loading = el('div', { class: 'browser-loading' })
     // Profile switch (8/04): Preview ⇄ Agent web, persisted per workspace.
@@ -83,7 +129,10 @@ export const browserFeature: UiFeature = {
     const profileSwitch = el('div', { class: 'browser-profile-switch' }, [profilePreviewBtn, profileAgentBtn])
     profilePreviewBtn.onclick = (): void => void setProfile('preview')
     profileAgentBtn.onclick = (): void => void setProfile('agent-web')
-    const header = el('div', { class: 'browser-dock-header' }, [back, forward, reload, urlInput, profileSwitch, external, close])
+    const header = el('div', { class: 'browser-dock-header' }, [back, forward, reload, urlWrap, profileSwitch, audioBtn, external, close])
+    // The tab strip (F4): Chrome/Comet-style, above the address bar. Shown whenever
+    // the dock has a workspace, so "new tab" is always one click away.
+    const tabStrip = el('div', { class: 'browser-tab-strip', hidden: true })
 
     // ── Agent possession (6/05b): visible whenever an agent holds the wheel ──
     const stopBtn = el('button', { class: 'browser-agent-stop', type: 'button', text: 'Stop' }) as HTMLButtonElement
@@ -92,18 +141,41 @@ export const browserFeature: UiFeature = {
     stopBtn.onclick = (): void => {
       if (activityWorkspaceId) bridge.send(BrowserChannels.agentStop, { workspaceId: activityWorkspaceId })
     }
-    const agentLabel = el('span', { class: 'browser-agent-label', text: 'Agent driving' })
+    // The Comet possession pill: WHO is driving + the LIVE action, an animated
+    // indicator, and Stop — so at a glance you see which agent is at the wheel and
+    // what it is doing right now (goals 5 + 6).
+    const agentDot = el('span', { class: 'browser-agent-dot' }) // the animated "working" indicator
+    const agentName = el('span', { class: 'browser-agent-name', text: 'Agent' })
+    const agentAction = el('span', { class: 'browser-agent-action' }) // "Reading page…" — the live verb
     const trailBtn = IconButton({ icon: 'more', label: 'Agent activity', title: 'Recent agent actions', onClick: () => {
       trailMenu.hidden = !trailMenu.hidden
     } })
+    const agentLabelGroup = el('span', { class: 'browser-agent-label-group' }, [
+      agentName,
+      el('span', { class: 'browser-agent-sep', text: 'is browsing' }),
+      agentAction
+    ])
     const banner = el('div', { class: 'browser-agent-banner', hidden: true }, [
-      icon('sparkles', 14),
-      agentLabel,
+      agentDot,
+      agentLabelGroup,
       el('div', { class: 'browser-agent-spacer' }),
       trailBtn,
       stopBtn
     ])
+    banner.setAttribute('role', 'status')
+    banner.setAttribute('aria-live', 'polite')
     const trailMenu = el('div', { class: 'menu browser-agent-trail', hidden: true })
+
+    // pane id (its provider assignment) → the agent's display name (goal 6).
+    const AGENT_LABEL: Record<string, string> = {
+      claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini', aider: 'Aider', opencode: 'OpenCode'
+    }
+    function agentNameFor(pane: string | undefined): string {
+      if (!pane) return 'An agent'
+      const provider = assignmentForPane(Number(pane))
+      const label = provider ? (AGENT_LABEL[provider] ?? provider) : null
+      return label ? `${label} · pane ${pane}` : `Agent · pane ${pane}`
+    }
 
     // ── Agent web profile chrome (8/04) ─────────────────────────────────────
     // The quiet notice: sessions persist here (or the vault-less honesty),
@@ -154,6 +226,7 @@ export const browserFeature: UiFeature = {
     }
     // Origin-change alert: the signed-in profile crossed origins (transient).
     const originAlert = el('div', { class: 'browser-origin-alert', hidden: true })
+    const permChip = el('div', { class: 'browser-perm-chip', hidden: true }) // blocked-permission chip (F16)
     let originAlertTimer: number | undefined
     bridge.on(BrowserChannels.originAlert, (payload) => {
       const p = payload as { workspaceId?: string; from: string; to: string }
@@ -183,14 +256,45 @@ export const browserFeature: UiFeature = {
     // that cannot be typed into (finding 33).
     const emptyTitle = el('div', { class: 'browser-empty-title' })
     const emptyHint = el('div', { class: 'browser-empty-hint' })
-    const empty = el('div', { class: 'browser-empty' }, [icon('globe', 28), emptyTitle, emptyHint])
+    const quickChips = el('div', { class: 'browser-quick-chips' }) // pinned + recent URLs (F14)
+    const empty = el('div', { class: 'browser-empty' }, [icon('globe', 28), emptyTitle, emptyHint, quickChips])
+
+    // ── Load-error / crash overlay (F10): a real browser explains a dead page ──
+    const errorTitle = el('div', { class: 'browser-error-title' })
+    const errorDesc = el('div', { class: 'browser-error-desc' })
+    const errorRetry = el('button', { class: 'browser-error-retry', type: 'button', text: 'Retry' }) as HTMLButtonElement
+    const loadError = el('div', { class: 'browser-load-error', hidden: true }, [
+      icon('alert', 26),
+      errorTitle,
+      errorDesc,
+      errorRetry
+    ])
+    errorRetry.onclick = (): void => {
+      loadError.hidden = true
+      activeGuest()?.reload()
+    }
+
+    // ── Find-in-page bar (F5) ────────────────────────────────────────────────
+    const findInput = el('input', { class: 'browser-find-input' }) as HTMLInputElement
+    findInput.placeholder = 'Find in page'
+    findInput.setAttribute('aria-label', 'Find in page')
+    findInput.spellcheck = false
+    const findCount = el('span', { class: 'browser-find-count', text: '' })
+    const findPrev = IconButton({ icon: 'chevron-up', label: 'Previous match', title: 'Previous (Shift+Enter)', onClick: () => runFind(false) })
+    const findNext = IconButton({ icon: 'chevron-down', label: 'Next match', title: 'Next (Enter)', onClick: () => runFind(true) })
+    const findClose = IconButton({ icon: 'x', label: 'Close find', title: 'Close (Esc)', onClick: () => closeFind() })
+    const findBar = el('div', { class: 'browser-find-bar', hidden: true }, [findInput, findCount, findPrev, findNext, findClose])
+
+    // A transient zoom badge (F6), Chrome-style.
+    const zoomBadge = el('div', { class: 'browser-zoom-badge', hidden: true })
+
     // The viewHost holds the guest <webview>s (8/07). They ARE the page — in
     // the DOM, so the dock resizes them in LOCKSTEP with the chrome (one
     // compositor, no main-owned view to position). Two guests (preview /
     // agent-web) stay live and stacked; the active one is on top, the empty
-    // state overlays both when nothing is loaded.
-    const viewHost = el('div', { class: 'browser-dock-view' }, [empty])
-    dock.append(handle, header, agentWebNote, banner, recentActs, confirmBar, originAlert, trailMenu, sitesMenu, loading, wsChip, viewHost)
+    // state (and the load-error overlay) sit above both.
+    const viewHost = el('div', { class: 'browser-dock-view' }, [empty, loadError, zoomBadge])
+    dock.append(handle, tabStrip, header, findBar, agentWebNote, banner, recentActs, confirmBar, originAlert, permChip, trailMenu, sitesMenu, loading, wsChip, viewHost)
     // The dock is #content's flex sibling inside #main — inserted, not slotted,
     // so the shell stays feature-agnostic.
     ctx.content.insertAdjacentElement('afterend', dock)
@@ -206,7 +310,26 @@ export const browserFeature: UiFeature = {
     const lru: string[] = [] // workspace ids, most-recent last
     const pinnedWs = new Set<string>() // agent-attached — never evicted (8/07c)
     let agentWebPersists = true
-    const gkey = (wsId: string, p: BrowserProfile): string => `${wsId}:${p}`
+    // Tabs (F4): each (workspace, profile) holds an ordered set of tabs, one <webview>
+    // each. The base tab (t0) is the pre-tabs single guest — restore + lastUrl ride it.
+    const BASE_TAB = 't0'
+    let tabSeq = 0
+    const newTabId = (): string => `t${++tabSeq}` // t1, t2, … (base is always t0)
+    interface Tab { id: string; url: string; title: string; favicon: string; pending?: string }
+    const wpk = (wsId: string, p: BrowserProfile): string => `${wsId}:${p}`
+    const tabsMap = new Map<string, Tab[]>() // wpk -> ordered tabs
+    const activeTabMap = new Map<string, string>() // wpk -> active tab id
+    const tabsFor = (wsId: string, p: BrowserProfile): Tab[] => {
+      const k = wpk(wsId, p)
+      let list = tabsMap.get(k)
+      if (!list) {
+        list = [{ id: BASE_TAB, url: '', title: '', favicon: '' }]
+        tabsMap.set(k, list)
+      }
+      return list
+    }
+    const activeTabId = (wsId: string, p: BrowserProfile): string => activeTabMap.get(wpk(wsId, p)) ?? BASE_TAB
+    const gkey = (wsId: string, p: BrowserProfile, tabId: string): string => `${wsId}:${p}#${tabId}`
     const activeWsId = (): string => getWorkspaces().activeId ?? ''
     let workspaceGeneration = 0
     const captureWorkspace = (): { id: string; generation: number } => ({
@@ -215,49 +338,154 @@ export const browserFeature: UiFeature = {
     })
     const workspaceStillCurrent = (capture: { id: string; generation: number }): boolean =>
       capture.id === activeWsId() && capture.generation === workspaceGeneration
-    const activeKey = (): string => gkey(activeWsId(), state.profile)
+    // Last-known profile PER WORKSPACE (state pushes + profileGet fill it). activeKey
+    // must not read `state.profile` at a switch boundary: that is still the PREVIOUS
+    // workspace's profile until main's push lands, and for one beat the wrong guest sat
+    // on top — possibly the signed-in one over a preview workspace (finding B9). A miss
+    // falls to 'preview', the safe direction (new workspaces are preview by default).
+    const wsProfile = new Map<string, BrowserProfile>()
+    const activeProfile = (): BrowserProfile => wsProfile.get(activeWsId()) ?? 'preview'
+    const activeKey = (): string => {
+      const wsId = activeWsId()
+      const p = activeProfile()
+      return gkey(wsId, p, activeTabId(wsId, p))
+    }
 
-    function makeGuest(wsId: string, p: BrowserProfile): HTMLElement {
+    function makeGuest(wsId: string, p: BrowserProfile, tabId: string): HTMLElement {
       const partition = p === 'preview' ? browserPreviewPartition(wsId) : browserAgentWebPartition(wsId, agentWebPersists)
       const wv = document.createElement('webview')
       wv.className = 'browser-guest'
       wv.setAttribute('partition', partition)
       wv.setAttribute('src', 'about:blank')
       wv.setAttribute('webpreferences', 'contextIsolation=yes,sandbox=yes,nodeIntegration=no')
+      // OAuth needs popups (F1). Without `allowpopups` a webview blocks window.open
+      // outright and main's window-open handler never sees it; WITH it, every popup
+      // is still funneled through that handler (http(s) only, hardened child) — the
+      // guest can request a window, main decides what it becomes.
+      wv.setAttribute('allowpopups', '')
+      const tab = (): Tab | undefined => tabsFor(wsId, p).find((t) => t.id === tabId)
       wv.addEventListener('dom-ready', () => {
+        readyGuests.add(wv) // its <webview> methods are safe to call now
         try {
-          bridge.send(BrowserChannels.guest, { workspaceId: wsId, profile: p, id: (wv as unknown as { getWebContentsId(): number }).getWebContentsId() })
+          bridge.send(BrowserChannels.guest, { workspaceId: wsId, profile: p, tabId, id: (wv as unknown as { getWebContentsId(): number }).getWebContentsId() })
         } catch {
           /* not attached yet */
         }
+        applyZoom() // a re-created guest inherits its workspace's zoom
+        const t = tab()
+        if (t?.pending) {
+          const u = t.pending
+          t.pending = undefined
+          void (wv as WebviewEl).loadURL(u) // a new tab's initial url, raced-free
+        }
       })
+      // Per-tab metadata for the strip (title/url/favicon), tracked on EVERY tab so an
+      // inactive tab still shows the right label.
+      const onNav = (e: Event): void => {
+        const url = (e as unknown as { url?: string }).url
+        const t = tab()
+        if (t && typeof url === 'string') {
+          t.url = url === 'about:blank' ? '' : url
+          publishTabs(wsId, p)
+        }
+      }
+      wv.addEventListener('did-navigate', onNav)
+      wv.addEventListener('did-navigate-in-page', onNav)
+      wv.addEventListener('page-title-updated', (e) => {
+        const t = tab()
+        if (t) {
+          t.title = String((e as unknown as { title?: string }).title ?? '')
+          publishTabs(wsId, p)
+        }
+      })
+      // Page-status events fire on the element (renderer-side); they touch the chrome
+      // ONLY for the guest currently on top, so a background workspace's page can't
+      // repaint the header you're looking at.
+      wv.addEventListener('page-favicon-updated', (e) => {
+        const urls = (e as unknown as { favicons?: string[] }).favicons ?? []
+        const t = tab()
+        if (t) t.favicon = urls[0] ?? ''
+        if (urls[0]) wsFavicon.set(wsId, urls[0])
+        else wsFavicon.delete(wsId)
+        if (isActiveGuest(wv)) renderUrlLead()
+        publishTabs(wsId, p)
+      })
+      wv.addEventListener('did-start-loading', () => {
+        if (isActiveGuest(wv)) loadError.hidden = true // a new attempt clears the last failure
+      })
+      wv.addEventListener('did-fail-load', (e) => {
+        const ev = e as unknown as { errorCode: number; errorDescription: string; isMainFrame: boolean }
+        if (ev.errorCode === -3 || !ev.isMainFrame) return // -3 = aborted (a normal redirect)
+        if (isActiveGuest(wv)) showLoadError(ev.errorCode, ev.errorDescription)
+      })
+      wv.addEventListener('crashed', () => {
+        if (isActiveGuest(wv)) showCrash()
+      })
+      wv.addEventListener('found-in-page', (e) => {
+        if (!isActiveGuest(wv)) return
+        const r = (e as unknown as { result?: { matches: number; activeMatchOrdinal: number } }).result
+        if (!r) return
+        findCount.textContent = r.matches ? `${r.activeMatchOrdinal}/${r.matches}` : 'No results'
+      })
+      // Audio state (F15): show the mute control while THIS guest makes sound, and
+      // re-apply the workspace's mute choice when a fresh media element starts.
+      wv.addEventListener('media-started-playing', () => {
+        playingGuests.add(wv)
+        if (mutedWs.has(wsId)) (wv as WebviewEl).setAudioMuted(true)
+        if (isActiveGuest(wv)) refreshAudioChrome()
+      })
+      wv.addEventListener('media-paused', () => {
+        playingGuests.delete(wv)
+        if (isActiveGuest(wv)) refreshAudioChrome()
+      })
+      return wv
+    }
+
+    /** Create a tab's guest webview (idempotent) and slot it into the host. */
+    function ensureTabGuest(wsId: string, p: BrowserProfile, tabId: string): HTMLElement {
+      const k = gkey(wsId, p, tabId)
+      let wv = guests.get(k)
+      if (!wv) {
+        wv = makeGuest(wsId, p, tabId)
+        guests.set(k, wv)
+        viewHost.append(wv)
+      }
       return wv
     }
 
     function evictWorkspace(wsId: string): void {
       for (const p of ['preview', 'agent-web'] as const) {
-        const k = gkey(wsId, p)
-        const wv = guests.get(k)
-        if (wv) {
-          bridge.send(BrowserChannels.guestGone, { workspaceId: wsId, profile: p })
-          wv.remove()
-          guests.delete(k)
+        for (const t of tabsFor(wsId, p)) {
+          const k = gkey(wsId, p, t.id)
+          const wv = guests.get(k)
+          if (wv) {
+            bridge.send(BrowserChannels.guestGone, { workspaceId: wsId, profile: p, tabId: t.id })
+            wv.remove()
+            guests.delete(k)
+          }
         }
+        tabsMap.delete(wpk(wsId, p)) // its tabs are ephemeral; a return restores the base tab
+        activeTabMap.delete(wpk(wsId, p))
       }
     }
 
-    /** Ensure the given workspace's guests exist (lazy per workspace), touch its
-     *  LRU position, and evict the oldest beyond the cap (never the active). */
+    /** Ensure the given workspace's BASE-tab guests exist (lazy per workspace), touch
+     *  its LRU position, and evict the oldest beyond the cap (never the active). Extra
+     *  tabs are created on demand and not restored after eviction. */
     function ensureGuests(wsId: string): void {
       if (!wsId) return
       const at = lru.indexOf(wsId)
       if (at >= 0) lru.splice(at, 1)
       lru.push(wsId)
-      if (!guests.has(gkey(wsId, 'preview'))) {
+      if (!guests.has(gkey(wsId, 'preview', BASE_TAB))) {
         for (const p of ['preview', 'agent-web'] as const) {
-          const wv = makeGuest(wsId, p)
-          guests.set(gkey(wsId, p), wv)
-          viewHost.append(wv)
+          tabsFor(wsId, p) // init the base tab record
+          ensureTabGuest(wsId, p, BASE_TAB)
+          // Fresh, or returning after LRU eviction: main may still hold an activeTab/tabsCache
+          // pointing at a dropped extra tab (e.g. t2) whose guest is gone — the driver would
+          // resolve `noview`. Re-sync main to the base tab we just (re)created.
+          activeTabMap.set(wpk(wsId, p), BASE_TAB)
+          publishTabs(wsId, p)
         }
       }
       while (lru.length > GUEST_CAP) {
@@ -273,6 +501,344 @@ export const browserFeature: UiFeature = {
     function applyGuestVisibility(): void {
       const active = open ? activeKey() : ''
       for (const [k, wv] of guests) wv.classList.toggle('is-active', k === active)
+      applyZoom() // the active guest may have changed — carry its workspace's zoom
+      refreshAudioChrome() // and its audio/mute state
+      renderTabStrip()
+    }
+
+    // ── Tab lifecycle (F4) ──────────────────────────────────────────────────────
+    /** Tell main the tab list + active id for a (workspace, profile) so the driver and
+     *  browser_tab_* verbs stay in sync; also refreshes the strip. */
+    function publishTabs(wsId: string, p: BrowserProfile): void {
+      const tabs = tabsFor(wsId, p).map((t) => ({ id: t.id, url: t.url, title: t.title }))
+      bridge.send(BrowserChannels.tabsState, { workspaceId: wsId, profile: p, tabs, activeId: activeTabId(wsId, p) })
+      if (wsId === activeWsId() && p === activeProfile()) renderTabStrip()
+    }
+    function selectTab(wsId: string, p: BrowserProfile, tabId: string): void {
+      if (!tabsFor(wsId, p).some((t) => t.id === tabId)) return
+      activeTabMap.set(wpk(wsId, p), tabId)
+      bridge.send(BrowserChannels.tabActivate, { workspaceId: wsId, profile: p, tabId })
+      // Also publish the tab list: selecting an ALREADY-loaded tab fires no navigation, so
+      // without this main's tabsCache.activeId never updates and the tab_select verb's
+      // waitForTabs never sees the switch (burns its whole timeout, returns the old active tab).
+      publishTabs(wsId, p)
+      applyGuestVisibility()
+      // The header follows the newly-active tab's url immediately.
+      const t = tabsFor(wsId, p).find((x) => x.id === tabId)
+      if (t && wsId === activeWsId() && p === activeProfile() && document.activeElement !== urlInput) {
+        urlInput.value = t.url
+        renderUrlLead()
+      }
+    }
+    function newTab(wsId: string, p: BrowserProfile, url?: string): string {
+      const id = newTabId()
+      // The initial url rides `pending` and loads on the new guest's dom-ready — no race
+      // with main's active-tab (which a navigate IPC would depend on).
+      tabsFor(wsId, p).push({ id, url: '', title: '', favicon: '', pending: url })
+      ensureTabGuest(wsId, p, id)
+      selectTab(wsId, p, id)
+      publishTabs(wsId, p)
+      return id
+    }
+    function closeTab(wsId: string, p: BrowserProfile, tabId: string): void {
+      const list = tabsFor(wsId, p)
+      if (list.length <= 1 || tabId === BASE_TAB) return // never close the last / base tab
+      const idx = list.findIndex((t) => t.id === tabId)
+      if (idx < 0) return
+      const k = gkey(wsId, p, tabId)
+      const wv = guests.get(k)
+      if (wv) {
+        bridge.send(BrowserChannels.guestGone, { workspaceId: wsId, profile: p, tabId })
+        wv.remove()
+        guests.delete(k)
+      }
+      list.splice(idx, 1)
+      if (activeTabId(wsId, p) === tabId) selectTab(wsId, p, list[Math.max(0, idx - 1)].id)
+      publishTabs(wsId, p)
+    }
+    const hostOfUrl = (url: string): string => {
+      try {
+        return new URL(url).host
+      } catch {
+        return ''
+      }
+    }
+    function renderTabStrip(): void {
+      const wsId = activeWsId()
+      const p = activeProfile()
+      const tabs = wsId ? tabsFor(wsId, p) : []
+      tabStrip.hidden = !(open && !!wsId)
+      if (tabStrip.hidden) return
+      clear(tabStrip)
+      const activeId = activeTabId(wsId, p)
+      for (const t of tabs) {
+        const tabEl = el('button', { class: `browser-tab${t.id === activeId ? ' is-active' : ''}`, type: 'button' }) as HTMLButtonElement
+        if (t.favicon) {
+          const img = el('img', { class: 'browser-tab-favicon' }) as HTMLImageElement
+          img.src = t.favicon
+          img.alt = ''
+          img.onerror = (): void => img.replaceWith(icon('globe', 12))
+          tabEl.append(img)
+        } else {
+          tabEl.append(icon('globe', 12))
+        }
+        tabEl.append(el('span', { class: 'browser-tab-label', text: t.title || hostOfUrl(t.url) || 'New tab' }))
+        tabEl.title = t.url || 'New tab'
+        tabEl.onclick = (): void => selectTab(wsId, p, t.id)
+        if (t.id !== BASE_TAB) {
+          const x = el('span', { class: 'browser-tab-close', text: '×' })
+          x.setAttribute('role', 'button')
+          x.setAttribute('aria-label', 'Close tab')
+          x.onclick = (e): void => {
+            e.stopPropagation()
+            closeTab(wsId, p, t.id)
+          }
+          tabEl.append(x)
+        }
+        tabStrip.append(tabEl)
+      }
+      const plus = IconButton({ icon: 'plus', label: 'New tab', title: 'New tab', onClick: () => newTab(wsId, p) })
+      plus.classList.add('browser-tab-new')
+      tabStrip.append(plus)
+    }
+
+    // Tab requests from MAIN (window.open / agent verbs).
+    bridge.on(BrowserChannels.tabOpen, (payload) => {
+      const q = payload as { workspaceId?: string; profile?: BrowserProfile; url?: string }
+      if (!q.workspaceId || (q.profile !== 'preview' && q.profile !== 'agent-web')) return
+      newTab(q.workspaceId, q.profile, q.url)
+    })
+    bridge.on(BrowserChannels.tabSelect, (payload) => {
+      const q = payload as { workspaceId?: string; profile?: BrowserProfile; tabId?: string }
+      if (!q.workspaceId || (q.profile !== 'preview' && q.profile !== 'agent-web') || !q.tabId) return
+      selectTab(q.workspaceId, q.profile, q.tabId)
+    })
+
+    // A guest's <webview> methods (setZoomLevel, findInPage, stop, …) THROW if called
+    // before its dom-ready — so the driveable handle is gated on readiness. Every
+    // element-method caller goes through activeGuest(), so one gate makes them all safe.
+    const readyGuests = new WeakSet<HTMLElement>()
+    /** The active workspace's active-profile guest as a driveable <webview> — null until
+     *  it is attached AND dom-ready. */
+    const activeGuest = (): WebviewEl | null => {
+      const g = guests.get(activeKey())
+      return g && readyGuests.has(g) ? (g as WebviewEl) : null
+    }
+
+    // ── Per-workspace zoom (F6), persisted like the app's other view prefs ──────
+    const zoomKey = (wsId: string): string => `browser.zoom.${wsId}`
+    const readZoom = (wsId: string): number => {
+      const v = Number(localStorage.getItem(zoomKey(wsId)))
+      return Number.isFinite(v) ? Math.max(-3, Math.min(4, v)) : 0
+    }
+    function applyZoom(): void {
+      const wsId = activeWsId()
+      if (!wsId) return
+      activeGuest()?.setZoomLevel(readZoom(wsId))
+    }
+    let zoomBadgeTimer: number | undefined
+    function bumpZoom(delta: number | 'reset'): void {
+      const wsId = activeWsId()
+      if (!wsId || !activeGuest()) return
+      const next = delta === 'reset' ? 0 : Math.max(-3, Math.min(4, readZoom(wsId) + delta))
+      localStorage.setItem(zoomKey(wsId), String(next))
+      applyZoom()
+      // A transient badge, Chrome-style — the zoom % while you adjust, then it fades.
+      zoomBadge.textContent = `${Math.round(100 * 1.2 ** next)}%`
+      zoomBadge.hidden = false
+      window.clearTimeout(zoomBadgeTimer)
+      zoomBadgeTimer = window.setTimeout(() => (zoomBadge.hidden = true), 1400)
+    }
+
+    const isActiveGuest = (wv: HTMLElement): boolean => guests.get(activeKey()) === wv
+
+    // ── Audio indicator + mute (F15) ───────────────────────────────────────────
+    const playingGuests = new WeakSet<HTMLElement>()
+    const mutedWs = new Set<string>() // workspaces the user muted this session
+    function refreshAudioChrome(): void {
+      const g = guests.get(activeKey())
+      const playing = !!g && playingGuests.has(g)
+      audioBtn.hidden = !(open && playing)
+      const muted = mutedWs.has(activeWsId())
+      audioBtn.replaceChildren(icon(muted ? 'x' : 'bell'))
+      audioBtn.title = muted ? 'Unmute this page' : 'Mute this page'
+      audioBtn.setAttribute('aria-label', muted ? 'Unmute tab audio' : 'Mute tab audio')
+    }
+    function toggleMute(): void {
+      const wsId = activeWsId()
+      const g = activeGuest()
+      if (!wsId || !g) return
+      const next = !mutedWs.has(wsId)
+      if (next) mutedWs.add(wsId)
+      else mutedWs.delete(wsId)
+      g.setAudioMuted(next)
+      refreshAudioChrome()
+    }
+
+    // ── Pins + recents (F14): the empty preview becomes a dev-loop new-tab page ──
+    const readList = (key: string): string[] => {
+      try {
+        const v = JSON.parse(localStorage.getItem(key) ?? '[]')
+        return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+      } catch {
+        return []
+      }
+    }
+    const pinsKey = (wsId: string): string => `browser.pins.${wsId}`
+    const recentsKey = (wsId: string): string => `browser.recents.${wsId}`
+    const isPinned = (wsId: string, url: string): boolean => readList(pinsKey(wsId)).includes(url)
+    function togglePin(wsId: string, url: string): void {
+      if (!wsId || !url) return
+      const pins = readList(pinsKey(wsId))
+      const next = pins.includes(url) ? pins.filter((u) => u !== url) : [url, ...pins].slice(0, 12)
+      localStorage.setItem(pinsKey(wsId), JSON.stringify(next))
+      renderQuickChips()
+    }
+    function noteVisit(wsId: string, url: string): void {
+      if (!wsId || !/^https?:/i.test(url)) return
+      const recents = [url, ...readList(recentsKey(wsId)).filter((u) => u !== url)].slice(0, 8)
+      localStorage.setItem(recentsKey(wsId), JSON.stringify(recents))
+    }
+    function renderQuickChips(): void {
+      clear(quickChips)
+      const wsId = activeWsId()
+      if (!wsId || state.profile === 'agent-web') return // preview's new-tab page only
+      const pins = readList(pinsKey(wsId))
+      const recents = readList(recentsKey(wsId)).filter((u) => !pins.includes(u))
+      const entries: { url: string; pinned: boolean }[] = [
+        ...pins.map((url) => ({ url, pinned: true })),
+        ...recents.map((url) => ({ url, pinned: false }))
+      ].slice(0, 8)
+      for (const { url, pinned } of entries) {
+        let host = url
+        try {
+          host = new URL(url).host
+        } catch {
+          continue
+        }
+        const chip = el('button', { class: 'browser-quick-chip', type: 'button' }) as HTMLButtonElement
+        if (pinned) chip.append(icon('bookmark', 12))
+        chip.append(el('span', { text: host }))
+        chip.title = url
+        chip.onclick = (): void => {
+          const capture = captureWorkspace()
+          void bridge.invoke(BrowserChannels.navigate, { url, workspaceId: capture.id })
+        }
+        quickChips.append(chip)
+      }
+    }
+
+    // ── Blocked-permission chip (F16): honest, transient ────────────────────────
+    const PERM_LABEL: Record<string, string> = {
+      media: 'camera & microphone', geolocation: 'location', notifications: 'notifications',
+      midi: 'MIDI', midiSysex: 'MIDI', pointerLock: 'pointer lock', fullscreen: 'fullscreen',
+      'clipboard-read': 'clipboard', 'display-capture': 'screen share'
+    }
+    let permChipTimer: number | undefined
+    bridge.on(BrowserChannels.permissionBlocked, (payload) => {
+      const permission = String((payload as { permission?: string }).permission ?? '')
+      if (!open) return
+      permChip.textContent = `Blocked: ${PERM_LABEL[permission] ?? permission}`
+      permChip.hidden = false
+      window.clearTimeout(permChipTimer)
+      permChipTimer = window.setTimeout(() => (permChip.hidden = true), 4000)
+    })
+
+    // ── Find in page (F5) ──────────────────────────────────────────────────────
+    let findActiveQuery = ''
+    function runFind(forward: boolean): void {
+      const g = activeGuest()
+      if (!g) return
+      const q = findInput.value
+      if (!q) {
+        g.stopFindInPage('clearSelection')
+        findCount.textContent = ''
+        findActiveQuery = ''
+        return
+      }
+      const findNext = q === findActiveQuery // same query → step; new query → fresh search
+      findActiveQuery = q
+      g.findInPage(q, { forward, findNext })
+    }
+    function openFind(): void {
+      if (!activeGuest()) return
+      findBar.hidden = false
+      findInput.focus()
+      findInput.select()
+    }
+    function closeFind(): void {
+      findBar.hidden = true
+      findActiveQuery = ''
+      findCount.textContent = ''
+      activeGuest()?.stopFindInPage('clearSelection')
+    }
+    findInput.addEventListener('keydown', (e) => {
+      e.stopPropagation()
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        runFind(!e.shiftKey)
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        closeFind()
+      }
+    })
+    findInput.addEventListener('input', () => runFind(true))
+
+    // ── Reload ⇄ Stop (F13) ────────────────────────────────────────────────────
+    function setLoadingChrome(loading: boolean): void {
+      reload.replaceChildren(icon(loading ? 'square' : 'rotate-cw'))
+      reload.title = loading ? 'Stop loading' : 'Reload'
+      reload.setAttribute('aria-label', loading ? 'Stop loading' : 'Reload')
+    }
+
+    // ── The address bar's leading indicator (F13): favicon / lock / not-secure ──
+    const wsFavicon = new Map<string, string>() // active-guest favicon per workspace
+    function renderUrlLead(): void {
+      clear(urlLead)
+      urlLead.className = 'browser-url-lead'
+      urlLead.removeAttribute('title')
+      const u = state.url
+      if (!u) {
+        urlLead.append(icon('search', 14))
+        return
+      }
+      if (/^https:/i.test(u)) {
+        urlLead.classList.add('is-secure')
+        // The ACTIVE tab's favicon (per tab, F4) — falling back to the workspace's last-seen
+        // one — so switching to an already-loaded tab shows ITS icon, not the previous tab's.
+        const wsId = activeWsId()
+        const activeT = tabsFor(wsId, activeProfile()).find((t) => t.id === activeTabId(wsId, activeProfile()))
+        const fav = activeT?.favicon || wsFavicon.get(wsId)
+        if (fav) {
+          const img = el('img', { class: 'browser-favicon' }) as HTMLImageElement
+          img.src = fav
+          img.alt = ''
+          img.onerror = (): void => img.replaceWith(icon('lock', 14)) // a dead favicon falls back to the lock
+          urlLead.append(img)
+        } else {
+          urlLead.append(icon('lock', 14))
+        }
+      } else if (/^http:/i.test(u)) {
+        urlLead.classList.add('is-insecure')
+        urlLead.title = 'Not secure — this connection is not encrypted'
+        urlLead.append(icon('alert', 14))
+      } else {
+        urlLead.append(icon('search', 14))
+      }
+    }
+
+    // ── Load-error / crash overlay (F10) ───────────────────────────────────────
+    function showLoadError(code: number, desc: string): void {
+      errorTitle.textContent = 'This site can’t be reached'
+      errorDesc.textContent = `${desc || 'The page could not be loaded'}${code ? ` (${code})` : ''}`
+      empty.hidden = true
+      loadError.hidden = false
+    }
+    function showCrash(): void {
+      errorTitle.textContent = 'This page crashed'
+      errorDesc.textContent = 'The page stopped responding. Reload to try again.'
+      empty.hidden = true
+      loadError.hidden = false
     }
 
     // Recreate one guest on request (smoke persistence arm) — the partition
@@ -280,14 +846,63 @@ export const browserFeature: UiFeature = {
     bridge.on(BrowserChannels.recreateGuest, (payload) => {
       const { workspaceId, profile: p } = payload as { workspaceId?: string; profile?: BrowserProfile }
       if (!workspaceId || !p) return
-      const k = gkey(workspaceId, p)
+      const k = gkey(workspaceId, p, BASE_TAB) // the persistence arm recreates the base tab
       if (!guests.has(k)) return
-      bridge.send(BrowserChannels.guestGone, { workspaceId, profile: p })
+      bridge.send(BrowserChannels.guestGone, { workspaceId, profile: p, tabId: BASE_TAB })
       guests.get(k)?.remove()
-      const wv = makeGuest(workspaceId, p)
+      const wv = makeGuest(workspaceId, p, BASE_TAB)
       guests.set(k, wv)
       viewHost.append(wv)
       applyGuestVisibility()
+    })
+
+    // ── Guest context menu (F7): main forwards the right-click; we draw the house menu ──
+    bridge.on(BrowserChannels.contextMenu, (payload) => {
+      const p = payload as BrowserContextMenuParams
+      if (p.workspaceId !== activeWsId()) return
+      const rect = viewHost.getBoundingClientRect()
+      const x = rect.left + p.x
+      const y = rect.top + p.y
+      const items = []
+      if (p.linkURL) {
+        items.push(
+          { label: 'Open link in system browser', icon: 'globe' as const, onSelect: () => void bridge.invoke(BrowserChannels.openExternal, { url: p.linkURL }) },
+          { label: 'Copy link address', icon: 'copy' as const, onSelect: () => void bridge.invoke(ClipboardChannels.write, { text: p.linkURL }) },
+          { separator: true as const }
+        )
+      }
+      if (p.selectionText) {
+        items.push(
+          { label: 'Copy', icon: 'copy' as const, onSelect: () => void bridge.invoke(ClipboardChannels.write, { text: p.selectionText }) },
+          { separator: true as const }
+        )
+      }
+      const pageUrl = state.url
+      const pinned = !!pageUrl && isPinned(activeWsId(), pageUrl)
+      items.push(
+        { label: 'Back', icon: 'chevron-left' as const, disabled: !state.canGoBack, onSelect: () => nav('back') },
+        { label: 'Forward', icon: 'chevron-right' as const, disabled: !state.canGoForward, onSelect: () => nav('forward') },
+        { label: 'Reload', icon: 'rotate-cw' as const, onSelect: () => nav('reload') },
+        { separator: true as const },
+        { label: 'Find in page…', icon: 'search' as const, hint: 'Ctrl+F', onSelect: () => openFind() },
+        { label: pinned ? 'Unpin this page' : 'Pin this page', icon: 'bookmark' as const, disabled: !pageUrl || state.profile === 'agent-web', onSelect: () => togglePin(activeWsId(), pageUrl) },
+        { label: 'Open in system browser', icon: 'external-link' as const, disabled: !state.url, onSelect: () => { if (state.url) void bridge.invoke(BrowserChannels.openExternal, { url: state.url }) } },
+        { label: 'Inspect element', icon: 'terminal' as const, onSelect: () => void bridge.invoke(BrowserChannels.devtools, { x: p.x, y: p.y }) }
+      )
+      openContextMenu({ items, x, y, ariaLabel: 'Page actions' })
+    })
+
+    // ── App-shortcut relay (F12): a chord pressed while the guest held focus ──
+    bridge.on(BrowserChannels.guestChord, (payload) => {
+      const c = payload as BrowserGuestChord
+      if (c.workspaceId !== activeWsId()) return
+      const synthetic = { key: c.key, code: c.code, ctrlKey: c.ctrl, metaKey: c.meta, shiftKey: c.shift, altKey: c.alt }
+      // The dock's own shortcuts first (find/zoom/address); then the global toggle.
+      if (handleDockShortcut(synthetic)) return
+      if ((c.ctrl || c.meta) && c.shift && c.code === 'KeyU') toggle(!open)
+      // Rail (Ctrl+Shift+B) / explorer (Ctrl+Shift+E) / palette (Ctrl+K) live in other
+      // features; re-dispatch a trusted-shaped event so their document listeners run.
+      else document.dispatchEvent(new KeyboardEvent('keydown', synthetic))
     })
 
     // Auto-switch: when the active workspace changes with the dock open, show
@@ -304,6 +919,9 @@ export const browserFeature: UiFeature = {
       wsChip.onclick = null
       recentActs.hidden = true
       recentActs.replaceChildren()
+      // A load error / find bar belong to the page you were on — reset them on a switch.
+      loadError.hidden = true
+      closeFind()
       // The LAST workspace closing is a workspace change too (finding 33): the dock stays
       // open over the home screen, so its controls must go back to disabled-and-explained
       // here, not wait for main's reply.
@@ -328,6 +946,7 @@ export const browserFeature: UiFeature = {
     // workspaces from eviction and mark their tabs.
     let attachedWs: string[] = []
     let drivingWs: string[] = []
+    let possessionDrivers: Record<string, string> = {} // wsId -> driving pane (goal 6)
     const globalPossession = el('div', {
       class: 'browser-global-possession',
       role: 'status',
@@ -345,17 +964,26 @@ export const browserFeature: UiFeature = {
     function applyTabPossession(): void {
       document.querySelectorAll<HTMLElement>('.workspace-tab').forEach((tab) => {
         const id = tab.dataset.wsId ?? ''
-        tab.classList.toggle('is-agent-browsing', attachedWs.includes(id))
-        tab.classList.toggle('is-agent-driving', drivingWs.includes(id))
+        const browsing = attachedWs.includes(id)
+        const driving = drivingWs.includes(id)
+        tab.classList.toggle('is-agent-browsing', browsing)
+        tab.classList.toggle('is-agent-driving', driving)
+        // Name the driver on the tab (goal 6): hovering the possession dot says who.
+        if (browsing || driving) tab.title = `${agentNameFor(possessionDrivers[id])} is ${driving ? 'browsing' : 'using the browser'}`
+        else if (tab.title.includes('the browser') || tab.title.includes('is browsing')) tab.removeAttribute('title')
       })
     }
     bridge.on(BrowserChannels.possession, (payload) => {
-      const p = payload as { attached?: string[]; driving?: string[] }
+      const p = payload as BrowserPossession
       attachedWs = p.attached ?? []
       drivingWs = p.driving ?? []
+      possessionDrivers = p.drivers ?? {}
       globalPossession.hidden = drivingWs.length === 0
+      // Name the driver in the titlebar pill (goal 6), or a count when several drive.
       globalPossessionLabel.textContent =
-        drivingWs.length > 1 ? `${drivingWs.length} agents driving browsers` : 'Agent driving browser'
+        drivingWs.length > 1
+          ? `${drivingWs.length} agents driving browsers`
+          : `${agentNameFor(possessionDrivers[drivingWs[0] ?? ''])} is browsing`
       pinnedWs.clear()
       for (const w of attachedWs) pinnedWs.add(w)
       applyTabPossession()
@@ -441,6 +1069,26 @@ export const browserFeature: UiFeature = {
       e.preventDefault()
       toggle(!open)
     })
+    // Find + zoom, active when the dock is open and its OWN chrome holds focus (the
+    // in-page-focus case is relayed from main — see the guest-chord handler). Ctrl+F,
+    // Ctrl+= / Ctrl+- / Ctrl+0. Ctrl+L focuses the address bar (F13 / U-item).
+    function handleDockShortcut(e: { key: string; code: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean; preventDefault?: () => void }): boolean {
+      const mod = e.ctrlKey || e.metaKey
+      if (!mod || e.altKey || !open) return false
+      if (e.code === 'KeyF' && !e.shiftKey) { openFind(); return true }
+      if (e.code === 'KeyL' && !e.shiftKey) { urlInput.focus(); return true }
+      if (e.shiftKey) return false
+      if (e.code === 'Equal' || e.key === '+' || e.key === '=') { bumpZoom(1); return true }
+      if (e.code === 'Minus' || e.key === '-') { bumpZoom(-1); return true }
+      if (e.code === 'Digit0' || e.key === '0') { bumpZoom('reset'); return true }
+      return false
+    }
+    document.addEventListener('keydown', (e) => {
+      // Only when focus is already inside the dock chrome — otherwise a page-focused
+      // shortcut arrives via main's relay, and an app-wide Ctrl+F elsewhere is not ours.
+      if (!dock.contains(e.target as Node)) return
+      if (handleDockShortcut(e)) e.preventDefault()
+    })
     setCommands('browser', [
       { id: 'browser.toggle', title: 'Toggle browser dock', hint: 'Browser', kbd: 'Ctrl+Shift+U', run: () => toggle(!open) }
     ])
@@ -468,25 +1116,39 @@ export const browserFeature: UiFeature = {
     }
     urlInput.addEventListener('keydown', (e) => {
       e.stopPropagation()
+      if (e.key === 'Escape') {
+        // Abandon the edit — restore the live url and hand focus back to the page.
+        urlInput.value = state.url
+        urlInput.blur()
+        return
+      }
       if (e.key !== 'Enter') return
       const raw = urlInput.value.trim()
       if (!raw) return
       const capture = captureWorkspace()
       if (!capture.id) return
+      // The omnibox rule (F3): a URL opens; anything else is a search. Comet/Chrome
+      // behavior — the address bar never "refuses" a query, it runs it.
+      const resolved = resolveAddressInput(raw)
+      if (!resolved) return
+      const target = resolved.kind === 'url' ? resolved.url : searchUrlFor(searchTemplate, resolved.query)
+      urlInput.blur() // committing hands focus to the page, like a real browser
       void urlGuard.run(
-        () => bridge.invoke(BrowserChannels.navigate, { url: raw, workspaceId: capture.id }) as Promise<boolean>,
+        () => bridge.invoke(BrowserChannels.navigate, { url: target, workspaceId: capture.id }) as Promise<boolean>,
         {
-          action: `open ${raw}`,
+          action: resolved.kind === 'url' ? `open ${raw}` : `search ${raw}`,
           onSuccess: (ok) => {
             if (!workspaceStillCurrent(capture)) return
             if (ok) empty.hidden = true
-            // Not a failure — a REFUSAL (blocked host, unsupported scheme). It deserves a
-            // different sentence than a crash, and it used to get no sentence at all.
-            else showToast({ tone: 'danger', title: 'That address was refused', body: raw })
+            // A resolved URL that main still refuses is a blocked/sensitive host — the
+            // one case left that deserves a sentence (a query can't land here).
+            else showToast({ tone: 'danger', title: 'That address was refused', body: target })
           }
         }
       )
     })
+    // Focus selects all (a real address bar) so the next keystroke replaces the url.
+    urlInput.addEventListener('focus', () => urlInput.select())
 
     // ── Profile switch + agent-web chrome (8/04) ─────────────────────────────
     async function setProfile(p: BrowserProfile): Promise<void> {
@@ -494,6 +1156,8 @@ export const browserFeature: UiFeature = {
       if (!capture.id) return
       await bridge.invoke(BrowserChannels.profileSet, { workspaceId: capture.id, profile: p })
       if (!workspaceStillCurrent(capture)) return
+      wsProfile.set(capture.id, p)
+      applyGuestVisibility() // don't wait for the state push to lift the chosen guest
       getTelemetry().captureEvent({ name: 'browser.profile', props: { agentWeb: p === 'agent-web' } }) // boolean only (ADR 0005)
     }
     function renderProfileChrome(): void {
@@ -556,6 +1220,7 @@ export const browserFeature: UiFeature = {
       // Nothing can be loaded without a workspace, so the explanation is always on screen.
       empty.hidden = hasWorkspace && state.url !== ''
       renderEmptyCopy(hasWorkspace)
+      if (!empty.hidden) renderQuickChips() // the empty preview is a dev-loop new-tab page (F14)
       // Close (and the resize handle) stay live: you must always be able to shut a dock.
     }
     // Follow the ACTIVE workspace's stored profile (per-workspace persisted).
@@ -564,6 +1229,8 @@ export const browserFeature: UiFeature = {
       if (!capture.id) return
       const stored = (await bridge.invoke(BrowserChannels.profileGet, capture.id)) as BrowserProfile
       if (!workspaceStillCurrent(capture)) return
+      wsProfile.set(capture.id, stored)
+      applyGuestVisibility() // the cache just learned this workspace's real profile
       if (stored !== state.profile) {
         await bridge.invoke(BrowserChannels.profileSet, { workspaceId: capture.id, profile: stored })
       }
@@ -692,9 +1359,13 @@ export const browserFeature: UiFeature = {
       const next = payload as BrowserDockState
       if (next.workspaceId !== activeWsId()) return
       state = next
+      if (state.workspaceId) wsProfile.set(state.workspaceId, state.profile) // keeps activeKey honest across switches
       agentWebPersists = state.agentWebPersists // machine-global; keeps new-guest partitions truthful
       if (document.activeElement !== urlInput) urlInput.value = state.url
       loading.classList.toggle('is-loading', state.loading)
+      setLoadingChrome(state.loading) // Reload ⇄ Stop
+      renderUrlLead() // favicon / lock / not-secure for the new url
+      if (!state.loading && state.url) noteVisit(state.workspaceId, state.url) // F14 recents
       renderProfileChrome()
       // Owns the nav/url/profile enablement and the empty overlay (which covers a guest
       // sitting at about:blank) — one writer, so a workspace-less dock can't be re-enabled
@@ -708,16 +1379,26 @@ export const browserFeature: UiFeature = {
     async function refreshChip(): Promise<void> {
       const capture = captureWorkspace()
       const wsId = capture.id
-      if (!wsId || !open) {
+      // A PREVIEW affordance only: in agent-web, main routes navigation to the STORED
+      // profile's guest, so this chip would load the preview url into the SIGNED-IN
+      // browser while claiming to "open the preview" (finding B4).
+      if (!wsId || !open || state.profile === 'agent-web') {
         wsChip.hidden = true
         return
       }
       const last = (await bridge.invoke(BrowserChannels.lastUrl, wsId)) as string | null
       if (!workspaceStillCurrent(capture)) return
-      const differs = !!last && last !== state.url
-      wsChip.hidden = !differs
-      if (differs && last) {
-        wsChip.textContent = `Open this workspace's preview — ${new URL(last).host}`
+      let host: string | null = null
+      if (last && last !== state.url) {
+        try {
+          host = new URL(last).host
+        } catch {
+          host = null // a corrupt stored url must not kill the chip pipeline (finding B7)
+        }
+      }
+      wsChip.hidden = !host
+      if (host && last) {
+        wsChip.textContent = `Open this workspace's preview — ${host}`
         wsChip.onclick = (): void => {
           if (!workspaceStillCurrent(capture)) return
           void bridge.invoke(BrowserChannels.navigate, { url: last, workspaceId: wsId })
@@ -742,7 +1423,17 @@ export const browserFeature: UiFeature = {
       navigate: 'Navigated', back: 'Back', forward: 'Forward', reload: 'Reloaded',
       snapshot: 'Read page', screenshot: 'Screenshot', click: 'Clicked', type: 'Typed',
       scroll: 'Scrolled', select: 'Selected', eval: 'Ran script', console: 'Read console',
-      network_failures: 'Read failures', wait_for: 'Waited for'
+      network_failures: 'Read failures', wait_for: 'Waited for',
+      tab_list: 'Listed tabs', tab_new: 'Opened a tab', tab_select: 'Switched tab'
+    }
+    // Present-continuous for the LIVE action line (Comet reads "…is working"): the pill
+    // says what the agent is doing right now, the trail keeps the past-tense history.
+    const VERB_ACTIVE: Record<string, string> = {
+      navigate: 'Navigating…', back: 'Going back…', forward: 'Going forward…', reload: 'Reloading…',
+      snapshot: 'Reading the page…', screenshot: 'Capturing…', click: 'Clicking…', type: 'Typing…',
+      scroll: 'Scrolling…', select: 'Selecting…', eval: 'Running a script…', console: 'Reading the console…',
+      network_failures: 'Checking errors…', wait_for: 'Waiting…',
+      tab_list: 'Listing tabs…', tab_new: 'Opening a tab…', tab_select: 'Switching tabs…'
     }
     bridge.on(BrowserChannels.activity, (payload) => {
       const a = payload as BrowserAgentActivity
@@ -750,6 +1441,11 @@ export const browserFeature: UiFeature = {
       activityWorkspaceId = a.workspaceId
       banner.hidden = !a.driving
       dock.classList.toggle('agent-driving', a.driving)
+      // WHO + WHAT (goals 5/6): the driving agent's name and its live action.
+      if (a.driving) {
+        agentName.textContent = agentNameFor(a.pane)
+        agentAction.textContent = a.lastVerb ? (VERB_ACTIVE[a.lastVerb] ?? '') : ''
+      }
       // 8/04: the session-scoped confirm rides the activity push.
       pendingOrigin = a.pendingConfirm ?? ''
       confirmBar.hidden = !pendingOrigin
@@ -770,6 +1466,7 @@ export const browserFeature: UiFeature = {
       width = init.width
       applyWidth()
       agentWebPersists = init.agentWebPersists // per-workspace partitions derive from this
+      if (init.searchTemplate) searchTemplate = init.searchTemplate
       if (init.open) toggle(true)
       void pushConsent() // make the active workspace's stored grant live at boot
       void applyWorkspaceProfile() // and its stored profile (8/04)
@@ -778,6 +1475,14 @@ export const browserFeature: UiFeature = {
     document.addEventListener('click', (e) => {
       if (!(e.target instanceof Node) || (!trailMenu.contains(e.target) && !banner.contains(e.target))) trailMenu.hidden = true
       if (e.target instanceof Node && !sitesMenu.contains(e.target) && !agentWebNote.contains(e.target)) sitesMenu.hidden = true
+    })
+    // Escape closes the dock's own menus (U-item: they closed only on outside-click).
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return
+      if (!trailMenu.hidden || !sitesMenu.hidden) {
+        trailMenu.hidden = true
+        sitesMenu.hidden = true
+      }
     })
 
     // Paint the gate once at mount, hidden dock and all: the chrome should never EXIST in
@@ -820,6 +1525,11 @@ export const browserFeature: UiFeature = {
         },
         driving: () => !banner.hidden,
         trailCount: () => trailMenu.querySelectorAll('.browser-trail-row').length,
+        // Comet possession surface (goals 5/6): who is driving + the live action.
+        agentBannerName: () => (banner.hidden ? '' : (agentName.textContent ?? '')),
+        agentBannerAction: () => (banner.hidden ? '' : (agentAction.textContent ?? '')),
+        globalPossessionText: () => (globalPossession.hidden ? '' : (globalPossessionLabel.textContent ?? '')),
+        dockDrivingGlow: () => dock.classList.contains('agent-driving'),
         // 8/07: the guest is an in-DOM <webview> now — its rect IS the viewHost
         // rect, so a resize is atomic with the chrome (proven by guestRect ==
         // viewRect and the guest being present).
@@ -842,7 +1552,85 @@ export const browserFeature: UiFeature = {
           await refreshSitesMenu()
         },
         sitesText: () => sitesMenu.textContent ?? '',
-        recentActsText: () => (recentActs.hidden ? '' : (recentActs.textContent ?? ''))
+        recentActsText: () => (recentActs.hidden ? '' : (recentActs.textContent ?? '')),
+        // ── Wave 3 chrome surface for the BROWSERUX gate ──────────────────────
+        // Omnibox (F3): submit through the REAL input path; resolve without navigating.
+        omniboxSubmit: (text: string) => {
+          urlInput.value = text
+          urlInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+        },
+        omniboxResolve: (text: string): string | null => {
+          const r = resolveAddressInput(text)
+          return r ? (r.kind === 'url' ? r.url : searchUrlFor(searchTemplate, r.query)) : null
+        },
+        urlLeadClass: () => urlLead.className,
+        faviconSrc: () => urlLead.querySelector('img')?.getAttribute('src') ?? null,
+        faviconCaptured: () => wsFavicon.get(activeWsId()) ?? null,
+        reloadIsStop: () => !!reload.querySelector('svg') && reload.title === 'Stop loading',
+        // Find (F5)
+        openFind: () => openFind(),
+        findVisible: () => !findBar.hidden,
+        hasActiveGuest: () => !!activeGuest(),
+        findRaw: (text: string) => {
+          const g = activeGuest()
+          return g ? g.findInPage(text) : -1 // request id (>0) proves the guest method ran
+        },
+        findType: (text: string) => {
+          findInput.value = text
+          findInput.dispatchEvent(new Event('input', { bubbles: true }))
+        },
+        findCountText: () => findCount.textContent ?? '',
+        closeFind: () => closeFind(),
+        // Zoom (F6)
+        bumpZoom: (delta: number | 'reset') => bumpZoom(delta),
+        zoomFactor: () => {
+          const g = activeGuest() as unknown as { getZoomFactor?: () => number } | null
+          return g?.getZoomFactor?.() ?? 1
+        },
+        // Error overlay (F10)
+        errorVisible: () => !loadError.hidden,
+        errorText: () => (loadError.hidden ? '' : (errorTitle.textContent ?? '')),
+        // Context menu (F7) / shortcut relay (F12) are driven by MAIN sending the real
+        // IPC in the gate; this only reads whether the house menu opened.
+        contextMenuOpen: () => !!document.querySelector('.ctx-menu'),
+        // Permission chip (F16): read the last blocked-permission chip text.
+        permChipText: () => (permChip.hidden ? '' : (permChip.textContent ?? '')),
+        // Pins/recents (F14): drive + read the quick-chip surface.
+        pinCurrent: () => togglePin(activeWsId(), state.url),
+        isPinnedCurrent: () => isPinned(activeWsId(), state.url),
+        forceRenderChips: () => renderQuickChips(),
+        quickChipHosts: () => Array.from(quickChips.querySelectorAll('span')).map((s) => s.textContent ?? ''),
+        recentsCount: () => readList(recentsKey(activeWsId())).length,
+        // Tabs (F4)
+        tabCount: () => tabsFor(activeWsId(), activeProfile()).length,
+        activeTabIndex: () => tabsFor(activeWsId(), activeProfile()).findIndex((t) => t.id === activeTabId(activeWsId(), activeProfile())),
+        tabLabels: () => Array.from(tabStrip.querySelectorAll('.browser-tab-label')).map((s) => s.textContent ?? ''),
+        tabStripShown: () => !tabStrip.hidden,
+        newTab: (url?: string) => newTab(activeWsId(), activeProfile(), url),
+        selectTabIndex: (i: number) => {
+          const t = tabsFor(activeWsId(), activeProfile())[i]
+          if (t) selectTab(activeWsId(), activeProfile(), t.id)
+        },
+        closeTabIndex: (i: number) => {
+          const t = tabsFor(activeWsId(), activeProfile())[i]
+          if (t) closeTab(activeWsId(), activeProfile(), t.id)
+        },
+        // Hardening (S1): try to attach a webview on a FOREIGN partition — the
+        // will-attach-webview guard must refuse it (no dom-ready → returns false).
+        probeRogueWebview: async (): Promise<boolean> => {
+          const rogue = document.createElement('webview')
+          rogue.setAttribute('partition', 'persist:evil-not-ours')
+          rogue.setAttribute('src', 'about:blank')
+          viewHost.append(rogue)
+          const attached = await new Promise<boolean>((resolve) => {
+            let done = false
+            const settle = (v: boolean): void => { if (!done) { done = true; resolve(v) } }
+            rogue.addEventListener('dom-ready', () => settle(true))
+            window.setTimeout(() => settle(false), 2500)
+          })
+          rogue.remove()
+          return attached
+        }
       }
     }
   }

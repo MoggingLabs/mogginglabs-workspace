@@ -91,15 +91,28 @@ export function runStateSmoke(win: BrowserWindow): void {
       await delay(600)
 
       const attention = await step('9;hi', 'attention', BELL_WAIT_MS)
-      const busy = await step('133;C', 'busy')
-      const idle = await step('133;D;0', 'idle')
+      // 133;C marks a command LAUNCH (busy). The 133;D that ends it — and equally our OWN
+      // injected prompt marks (OSC 9;9 on cmd.exe, OSC 633 MoggingPrompt elsewhere), which land
+      // the moment the emitter exits — settle the pane to idle: the foreground program is gone,
+      // so its busy claim dies with it (activity.ts shellPrompt). Emit C and D from ONE process
+      // so the busy state is actually held long enough to observe before anything settles it.
+      const emitOscPair = (a: string, b: string): string =>
+        `node -e "process.stdout.write(String.fromCharCode(27)+']${a}'+String.fromCharCode(7));setTimeout(function(){process.stdout.write(String.fromCharCode(27)+']${b}'+String.fromCharCode(7))},700)"\r`
+      const beforeCd = Number(await ES('window.__states.length'))
+      await send(emitOscPair('133;C', '133;D;0'))
+      await delay(2600)
+      const cdStates = (await ES('window.__states.slice(' + beforeCd + ')')) as string[]
+      const cd = {
+        states: cdStates,
+        seen: Array.isArray(cdStates) && cdStates.includes('busy') && cdStates.includes('idle')
+      }
       const cwd = await step('7;file://host/tmp', null) // OSC 7: no state change, must not error
 
       // (0.8.1) xterm AUTO-REPLIES are not typing: DA2 + DECRPM answers ride the same
       // renderer->pty write channel as keystrokes, and each once cleared the attention
       // latch (a permission-blocked pane's red dot went green — found live 2026-07-10).
       // Re-latch red, write a chunk of pure replies (DA2, DECRPM, focus in/out) into the
-      // INPUT path, assert the latch held; then one real keystroke must clear it.
+      // INPUT path, assert the latch held; then answers must clear it.
       // RE-ADOPT first: the 133;C→D cycle above read as "the agent exited to shell"
       // and cleared the adopted session (terminal-pane's end-detector) — the dot went
       // hidden and the chip froze at idle. The relatch models a FRESH agent session
@@ -117,45 +130,54 @@ export function runStateSmoke(win: BrowserWindow): void {
       const afterReplies = String(await chip())
       const repliesHeld = afterReplies === 'attention'
 
-      // ONLY A SUBMIT ANSWERS A BLOCKED AGENT. The latch used to clear on ANY keystroke, and
-      // that was a lie with no way back: an arrow key, a ^C, a stray character each turned a
-      // blocked pane's red dot green and claimed it was WORKING — while the agent sat there
-      // still blocked, and no CLI re-raises a needs-input it has already raised. Red lingering
-      // a beat too long self-heals on the agent's next verdict; a false "working" never heals.
-      await send('x') // a bare character is COMPOSING, not answering
+      // NAVIGATION IS NOT AN ANSWER: an arrow key positions a cursor and claims nothing — it
+      // once turned a blocked pane's red dot green (the any-keystroke bug), and it must hold.
+      await send('\x1b[A')
+      await delay(1200)
+      const arrowHeld = String(await chip()) === 'attention'
+      // ...CONTENT IS AN ANSWER. Every permission dialog takes single-key answers (Claude's
+      // digit menu, Codex/Gemini's `y`) which submit no line and fire no hook — submit-only
+      // left the pane wearing "blocked on you" for the rest of a turn the agent spent working.
+      await send('y')
       await delay(1400)
-      const strayHeld = String(await chip()) === 'attention'
-      // Shift+Enter is composing too — it opens a new line inside a prompt you are still
-      // writing. Where a terminal can encode it at all it arrives ESC-prefixed, so requiring a
-      // BARE CR excludes it for free (isSubmittedInput).
-      await send('\x1b\r')
-      await delay(1400)
-      const shiftEnterHeld = String(await chip()) === 'attention'
-      // ...and Enter clears it, into BUSY: the agent said by name that it was blocked on this
-      // human, and the human just answered it. Two certainties, so the conclusion is certain.
+      const printableAnswered = String(await chip()) === 'busy'
+      // THE PROMPT HEAL, end to end: run the stray 'y' (an unknown command; it errors and the
+      // prompt returns). The prompt mark — ours, not 133;D — says the foreground program is
+      // gone, so the busy claim settles to idle instead of outliving it.
       await send('\r')
-      await delay(1400)
-      const afterSubmit = String(await chip())
-      const submitClearsToBusy = afterSubmit === 'busy'
+      await delay(1800)
+      const promptSettled = String(await chip()) === 'idle'
+      // ...and Enter alone still answers a fresh red: the agent said it was blocked on this
+      // human, and the human answered (busy — deduction 1) before the prompt settles it.
+      const relatch2 = await step('9;more', 'attention', BELL_WAIT_MS)
+      const beforeSubmit = Number(await ES('window.__states.length'))
+      await send('\r')
+      await delay(1800)
+      const submitStates = (await ES('window.__states.slice(' + beforeSubmit + ')')) as string[]
+      const submitAnswered = Array.isArray(submitStates) && submitStates.includes('busy')
+      const settledAfterSubmit = String(await chip()) === 'idle'
 
       const noErrors = errors.length === 0
       const pass =
-        attention.seen === true && busy.seen === true && idle.seen === true && cwd.seen === true &&
-        relatch.seen === true && repliesHeld && strayHeld && shiftEnterHeld && submitClearsToBusy && noErrors
+        attention.seen === true && cd.seen === true && cwd.seen === true &&
+        relatch.seen === true && repliesHeld && arrowHeld && printableAnswered &&
+        promptSettled && relatch2.seen === true && submitAnswered && settledAfterSubmit && noErrors
 
       write({
         pass,
         attention,
-        busy,
-        idle,
+        cd,
         cwd,
         relatch,
         repliesHeld,
         afterReplies,
-        strayHeld,
-        shiftEnterHeld,
-        submitClearsToBusy,
-        afterSubmit,
+        arrowHeld,
+        printableAnswered,
+        promptSettled,
+        relatch2,
+        submitAnswered,
+        submitStates,
+        settledAfterSubmit,
         noErrors,
         errors,
         allStates: await ES('window.__states'),

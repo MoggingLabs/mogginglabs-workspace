@@ -1,5 +1,6 @@
 import {
   AgentConfigChannels,
+  BrowserChannels,
   type AgentConfigMutationResult,
   type AgentConfigProviderId,
   type AgentConfigProviderSummary,
@@ -66,6 +67,74 @@ function syncTone(sync: AgentConfigSettingState['sync']): PillTone {
 
 function syncLabel(sync: AgentConfigSettingState['sync']): string {
   return sync.replace(/-/g, ' ').replace(/^./, (letter) => letter.toUpperCase())
+}
+
+/**
+ * F-12: catalog titles are machine-derived — shouty env keys ("CLAUDE AGENT SDK
+ * DISABLE BUILTIN AGENTS"), clipped words ("Notif"). Sentence-case the words,
+ * keep the initialisms, expand the clips. Conservative on purpose: it must never
+ * make a correct title wrong.
+ */
+const TITLE_KEEP = new Set(['SDK', 'API', 'URL', 'URLS', 'MCP', 'CLI', 'TUI', 'IDE', 'SSH', 'JSON', 'HTTP', 'HTTPS', 'AWS', 'ID', 'IDS', 'OTEL', 'AI', 'OAUTH'])
+const TITLE_KEEP_RENDER: Record<string, string> = { OAUTH: 'OAuth' }
+const TITLE_EXPAND: Record<string, string> = { notif: 'notification', notifs: 'notifications', cmd: 'command', cmds: 'commands', dir: 'directory', dirs: 'directories', msg: 'message' }
+function humanTitle(raw: string): string {
+  const words = raw.replace(/_/g, ' ').split(/\s+/).filter(Boolean).map((w) => {
+    const lower = w.toLowerCase()
+    if (TITLE_EXPAND[lower]) return TITLE_EXPAND[lower]
+    const upper = w.toUpperCase()
+    if (TITLE_KEEP.has(upper)) return TITLE_KEEP_RENDER[upper] ?? upper
+    return lower
+  })
+  const s = words.join(' ')
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+/** F-12: descriptions carry bare doc URLs — render them as links through the app's
+ *  vetted external-open channel, not as strings to hand-copy. */
+function descriptionEl(text: string): HTMLElement {
+  const p = el('p', { class: 'agentcfg-setting-desc' })
+  for (const part of text.split(/(https?:\/\/[^\s)]+)/g)) {
+    if (/^https?:\/\//.test(part)) {
+      const a = el('a', { class: 'agentcfg-desc-link', text: part, attrs: { href: part } })
+      a.addEventListener('click', (event) => {
+        event.preventDefault()
+        void getBridge().invoke(BrowserChannels.openExternal, { url: part })
+      })
+      p.append(a)
+    } else if (part) {
+      p.append(document.createTextNode(part))
+    }
+  }
+  return p
+}
+
+/** F-14: a status pill owes its reader a sentence — these are the hover titles. */
+function syncTitle(sync: AgentConfigSettingState['sync']): string {
+  switch (sync) {
+    case 'observed':
+      return 'Read from the CLI’s own files — nothing managed by this app yet.'
+    case 'synced':
+      return 'Every value the app manages matches the file.'
+    case 'drifted':
+      return 'A managed value changed on disk — open the setting to keep or restore it.'
+    case 'shadowed':
+      return 'A higher-priority layer overrides the managed value.'
+    case 'pending':
+      return 'Saved — applies to the next launch.'
+    case 'pending-restart':
+      return 'Saved — restart the affected panes to apply.'
+    case 'blocked':
+      return 'The file refused the write — see the setting’s message.'
+    case 'parse-error':
+      return 'The config file could not be parsed — fix it, then refresh.'
+    case 'unsupported':
+      return 'This CLI version does not support the setting.'
+    case 'error':
+      return 'The last read or write failed — refresh to retry.'
+    default:
+      return ''
+  }
 }
 
 function initialValue(state: AgentConfigSettingState): AgentConfigValue {
@@ -286,8 +355,8 @@ export function createAgentConfigWorkspace(onBack: () => void): AgentConfigWorks
         Button({ label: 'All agent CLIs', icon: 'chevron-left', variant: 'ghost', size: 'sm', onClick: onBack }),
         el('div', { class: 'agentcfg-head-actions' }, [
           Pill({ text: installed ? snapshot?.installedVersion ? `v${snapshot.installedVersion}` : 'Available' : 'Not installed', tone: installed ? 'success' : 'neutral' }),
-          Pill({ text: syncLabel(snapshot?.sync ?? 'observed'), tone: snapshot ? syncTone(snapshot.sync) : 'neutral' }),
-          catalogStale ? Pill({ text: 'Catalog stale', tone: 'warning' }) : null,
+          Pill({ text: syncLabel(snapshot?.sync ?? 'observed'), tone: snapshot ? syncTone(snapshot.sync) : 'neutral', title: syncTitle(snapshot?.sync ?? 'observed') }),
+          catalogStale ? Pill({ text: 'Catalog stale', tone: 'warning', title: 'The settings catalog was checked more than 7 days ago — Refresh catalog re-fetches it.' }) : null,
           Button({
             label: 'Refresh catalog',
             icon: 'rotate-cw',
@@ -387,10 +456,21 @@ export function createAgentConfigWorkspace(onBack: () => void): AgentConfigWorks
       : !scope?.writable
         ? scope?.reason ?? 'This target is read-only.'
         : setting.writeReason
+    // S4/F-13: 521 primary Saves were an accent flood — Save renders quiet and ARMS
+    // to primary on the row's first edit, so the accent marks intent, not furniture.
+    // The ownership select gains its visible label: what it decides is what happens
+    // on DRIFT, which nothing on screen said before you saved.
+    const saveBtn = Button({ label: 'Save', variant: 'outline', size: 'sm', onClick: () => void save('set') })
+    const armSave = (): void => {
+      saveBtn.classList.remove('btn--outline')
+      saveBtn.classList.add('btn--primary')
+    }
+    control.el.addEventListener('input', armSave)
+    control.el.addEventListener('change', armSave)
     const actionRow = writable
       ? el('div', { class: 'agentcfg-setting-actions' }, [
-          ownership,
-          Button({ label: 'Save', variant: 'primary', size: 'sm', onClick: () => void save('set') }),
+          el('label', { class: 'agentcfg-ownership-label' }, [el('span', { text: 'On drift:' }), ownership]),
+          saveBtn,
           currentSnapshot.target.scope !== 'session' && (state.selected.present || state.desired)
             ? Button({ label: 'Remove from layer', variant: 'ghost', size: 'sm', onClick: () => void save('unset') })
             : null
@@ -410,12 +490,12 @@ export function createAgentConfigWorkspace(onBack: () => void): AgentConfigWorks
     return el('article', { class: `agentcfg-setting${writable ? '' : ' is-readonly'}`, dataset: { setting: setting.id } }, [
       el('div', { class: 'agentcfg-setting-head' }, [
         el('div', { class: 'agentcfg-setting-title' }, [
-          el('h4', { text: setting.title }),
+          el('h4', { text: humanTitle(setting.title) }),
           el('code', { text: shortPath(state) })
         ]),
         el('div', { class: 'agentcfg-setting-badges' }, statusBadges)
       ]),
-      el('p', { class: 'agentcfg-setting-desc', text: setting.description }),
+      descriptionEl(setting.description),
       state.message ? el('p', { class: 'agentcfg-setting-message', text: state.message }) : null,
       el('div', { class: 'agentcfg-source-grid' }, [
         sourceLine('This layer', observedText(state, 'selected'), state.selected.sourceLabel),

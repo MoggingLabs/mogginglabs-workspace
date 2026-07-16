@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { setAgentConsent } from '../browser-dock'
 import { mcpEndpointDebug } from '../mcp-endpoint'
 import { spawnPaneMcpSmokeClient, type PaneMcpSmokeClient } from './pane-mcp-smoke-client'
+import { capturePaneTokenForSmoke } from './smoke-shell'
 
 // Env-gated house-MCP-server smoke (MOGGING_MCP, Phase-8/02): the ONE server,
 // both upstreams, catalog-as-data. Fixture world (daemon + app endpoint up,
@@ -99,8 +100,19 @@ export function runMcpSmoke(win: BrowserWindow): void {
       const pane3 = String(base + 3) // the daemon-less session (c2)
       const pane4 = String(base + 4) // the app-less session (c3)
       await cli(['send', pane1, 'echo MCP_CAPTURE_4242'])
-      await cli(['mail', 'send', '--to', pane1, 'MCP_MAIL_4242'], { MOGGING_PANE_ID: pane2 })
-      await cli(['claim', 'src/mcp/**'], { MOGGING_PANE_ID: pane1 })
+      // claim + mail-send are pane-bound (protocol v10): the out-of-pane CLI presents the
+      // sending pane's own daemon-minted token, as a command typed inside the pane would.
+      const probe = (pane: string) => ({
+        write: async (command: string): Promise<void> => {
+          const sent = await cli(['send', pane, command])
+          if (sent.code !== 0) throw new Error(`could not probe pane ${pane}`)
+        },
+        sleep
+      })
+      const token1 = await capturePaneTokenForSmoke(probe(pane1))
+      const token2 = await capturePaneTokenForSmoke(probe(pane2))
+      await cli(['mail', 'send', '--to', pane1, 'MCP_MAIL_4242'], { MOGGING_PANE_ID: pane2, MOGGING_PANE_TOKEN: token2 })
+      await cli(['claim', 'src/mcp/**'], { MOGGING_PANE_ID: pane1, MOGGING_PANE_TOKEN: token1 })
       await ES(`window.__mogging.board.createCard('MCP_CARD_4242', 'planted by the mcp smoke')`)
       const port = await servePage()
       await ES('window.__mogging.browser.toggle(true)')

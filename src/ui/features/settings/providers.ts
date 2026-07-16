@@ -11,6 +11,7 @@ import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
 import { getTelemetry } from '../../core/telemetry'
 import { onAgentRegistryChange, refreshAgentRegistry } from '../../core/agents/registry'
+import { gotoSettingsTab } from '../../core/shell/settings-tab-port'
 import { createAgentConfigWorkspace } from './agent-config'
 
 /** CLI availability plus the entry point to the provider configuration control plane. */
@@ -21,27 +22,49 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
   const installs = new Map<string, AgentInstallState>()
   const logs = new Map<string, HTMLElement>()
   const list = el('div', { class: 'prov-list' })
+
+  // (The global session-alerts card moved to Settings › Notifications — F-08: its
+  // user goal is "why doesn't my pane ring?", not install/configure. session-alerts.ts.)
   const landing = el('div', { class: 'prov-landing' }, [
     Card(
       {
         header: SectionHeader({
-          title: 'CLI control plane',
+          // F-09: was "CLI control plane" — k8s idiom on a consumer surface.
+          title: 'Your agent CLIs',
           caption:
-            'Open a CLI to inspect every cataloged setting, choose its real provider scope, and keep desired values synchronized. Install still runs the exact provider command shown under your login.'
+            'Open a CLI to browse every setting it supports and keep the values you choose in sync. Install runs the exact provider command shown, under your login.',
+          // F-10: this list and Usage › sources show the same logos with different
+          // meanings — the cross-reference is a CLICK, not a prose aside.
+          action: Button({
+            label: 'Track limits',
+            icon: 'gauge',
+            variant: 'ghost',
+            size: 'sm',
+            title: 'Usage — limits, plans, and alerts for these providers',
+            onClick: () => gotoSettingsTab('usage')
+          })
         })
       },
       [list]
     )
   ])
+  // F-11: the drill-in REPLACES context instead of stacking under it — the tab hero
+  // hides while a CLI's config workspace is open (the workspace carries its own
+  // breadcrumb + identity header), and returns on Back.
+  const setDrilled = (on: boolean): void => {
+    root.closest('.settings-section')?.classList.toggle('is-drilled', on)
+  }
   const config = createAgentConfigWorkspace(() => {
     config.el.hidden = true
     landing.hidden = false
+    setDrilled(false)
   })
   const root = el('div', { class: 'prov-section' }, [landing, config.el])
 
   function openConfig(agent: AgentInfo): void {
     landing.hidden = true
     config.el.hidden = false
+    setDrilled(true)
     void config.open(agent.id, agent)
   }
 
