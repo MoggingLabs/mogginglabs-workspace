@@ -22,7 +22,17 @@ import {
   type PathInputHandle,
   type StepperHandle
 } from '../../components'
-import { TEMPLATES, serializeTree, specForCount, treeForRegions, uniformSpec, type GridSpecModel } from '../layout'
+import {
+  TEMPLATES,
+  screenPaneCapacity,
+  serializeTree,
+  specForCount,
+  treeForRegions,
+  uniformSpec,
+  type GridSpecModel,
+  type PaneCapacity
+} from '../layout'
+import { resolveCdTarget } from './cd-path'
 import { getFocusedPane } from '../../core/layout/focus'
 import { openPlannedWorkspaceFromTemplate, openWorkspaceFromTemplate } from '../../core/workspace/open-service'
 import { setWizardOpener, type WizardPrefill } from '../../core/workspace/wizard-port'
@@ -41,11 +51,12 @@ const basename = (p: string): string =>
 
 const plural = (n: number): string => (n === 1 ? 'terminal' : 'terminals')
 
-/** Settings preference for the suggested grid size (falls back to 4). */
+/** Settings preference for the suggested grid size (falls back to 4). The stored
+ *  number is trusted up to the contract ceiling; the SCREEN cap clamps at use. */
 function defaultPaneCount(): number {
   try {
     const n = Number(localStorage.getItem('mogging.defaultPaneCount'))
-    if (Number.isInteger(n) && n >= 1 && n <= 16) return n
+    if (Number.isInteger(n) && n >= 1 && n <= 32) return n
   } catch {
     /* storage unavailable */
   }
@@ -84,6 +95,10 @@ export const wizardFeature: UiFeature = {
     // ── Wizard state (persists while the page is open) ───────────────────────
     let name = ''
     let cwd = ''
+    // What THIS screen holds (pane-capacity.ts) — refreshed on every open, because
+    // monitors get plugged and unplugged between workspaces.
+    let capacity: PaneCapacity = screenPaneCapacity()
+    let homeCache = '' // the cd line's fallback base + ~ target
     let gridSpec: GridSpecModel = specForPanes(defaultPaneCount())
     let paneCount = gridSpec.regions.length
     let counts = new Map<string, number>() // provider id -> count
@@ -173,7 +188,8 @@ export const wizardFeature: UiFeature = {
       cwd = prefill?.cwd ?? ''
       localCwd = cwd
       remoteCwd = ''
-      setGridSpec(specForPanes(prefill?.paneCount ?? defaultPaneCount()))
+      capacity = screenPaneCapacity()
+      setGridSpec(specForPanes(Math.min(prefill?.paneCount ?? defaultPaneCount(), capacity.maxPanes)))
       counts = new Map()
       customCmd = ''
       customCount = 0
@@ -194,6 +210,15 @@ export const wizardFeature: UiFeature = {
       setActiveView('wizard')
       requestAnimationFrame(() => path.focus()) // focus only once the view is painted
       getTelemetry().captureEvent({ name: 'wizard.opened', props: { prefilled: !!prefill } })
+
+      // The cd line's base: always know where home is (also the browser's opening
+      // reveal when no folder is chosen yet — that path reuses this fetch's answer).
+      void wizardClient
+        .homeDir()
+        .then((h) => {
+          if (currentOpen(generation)) homeCache = h || homeCache
+        })
+        .catch(() => undefined)
 
       // Fresh data every open. Each arrival patches only its own subtree — a full
       // re-render would blow away the folder field's focus and caret mid-type.
@@ -285,7 +310,7 @@ export const wizardFeature: UiFeature = {
           total += m.count
         }
       }
-      if (total > paneCount) setGridSpec(specForPanes(Math.min(16, total)))
+      if (total > paneCount) setGridSpec(specForPanes(Math.min(capacity.maxPanes, total)))
       normalizeAssignmentsToCapacity()
     }
 
@@ -528,6 +553,8 @@ export const wizardFeature: UiFeature = {
     let recentsHost!: HTMLElement
     let recentsSection!: HTMLElement
     let layoutReadout!: HTMLElement
+    let summaryCount!: HTMLElement
+    let summaryShape!: HTMLElement
     let painter!: GridPainterHandle
     let agentsCaption!: HTMLElement
     let rosterHost!: HTMLElement
@@ -687,11 +714,33 @@ export const wizardFeature: UiFeature = {
       })
       nameInputEl = nameInput
 
+      // The cd line: shell muscle memory as a folder picker. Resolves against the
+      // chosen folder (home when none) and hands the result to the SAME selection
+      // controller every other view feeds — the probe/refusal story stays one story.
+      const cdInput = el('input', {
+        class: 'input input--mono wizard-cd-input',
+        type: 'text',
+        placeholder: 'cd ../other-project',
+        ariaLabel: 'Change folder with a cd command',
+        onKeydown: (e) => {
+          if (e.key !== 'Enter') return
+          e.preventDefault()
+          const target = resolveCdTarget(cdInput.value, selection.state().cwd, homeCache)
+          if (!target) return
+          ownedSelection.set(target, 'native')
+          cdInput.value = ''
+        }
+      }) as HTMLInputElement
+      const cdRow = el('div', { class: 'wizard-cd-row' }, [
+        el('span', { class: 'wizard-cd-prompt', text: '❯' }),
+        cdInput
+      ])
+
       whereSection = section(
         'Working folder',
-        'Your terminals start here — type a path or click through.',
+        'Your terminals start here — type a path, cd to it, or click through.',
         null,
-        [el('div', { class: 'wizard-where-row' }, [path.el, nameInput]), chosenLine, browser.el],
+        [el('div', { class: 'wizard-where-row' }, [path.el, nameInput]), cdRow, chosenLine, browser.el],
         'wizard-sec--where'
       )
       updateChosen()
@@ -785,11 +834,18 @@ export const wizardFeature: UiFeature = {
       }
     }
 
-    // ── Layout: the dynamic painter ──────────────────────────────────────────
+    // ── Layout: the dynamic painter + its live summary ───────────────────────
     function buildLayout(): HTMLElement {
       layoutReadout = el('span', { class: 'wizard-layout-readout', text: layoutReadoutText() })
+      summaryCount = el('span', { class: 'wizard-summary-count' })
+      summaryShape = el('span', { class: 'wizard-summary-line' })
       painter = createGridPainter({
         value: gridSpec,
+        // The lattice offers what this screen holds (display-clamped so a 6K panel
+        // doesn't paint a wall of dots); the pane budget itself blocks the rest.
+        maxRows: Math.min(capacity.maxRows, 8),
+        maxCols: Math.min(capacity.maxCols, 12),
+        maxPanes: capacity.maxPanes,
         onChange: (spec) => {
           setGridSpec(spec)
           if (swarmRoles) swarmRoles = swarmRoles.slice(0, paneCount)
@@ -805,16 +861,38 @@ export const wizardFeature: UiFeature = {
           }
         }
       })
+      // The summary column earns the section's right side: the numbers at a glance,
+      // the screen's honest budget, and the way back to a plain grid.
+      const resetBtn = Button({
+        label: 'Reset grid',
+        size: 'sm',
+        variant: 'ghost',
+        onClick: () => {
+          setGridSpec(uniformSpec(gridSpec.rows, gridSpec.cols))
+          painter.set(gridSpec)
+          refreshAgents()
+        }
+      })
+      const summary = el('div', { class: 'wizard-layout-summary' }, [
+        summaryCount,
+        summaryShape,
+        layoutReadout,
+        el('span', {
+          class: 'wizard-hint',
+          text: `This screen fits up to ${capacity.maxPanes} terminals (${capacity.maxCols} across, ${capacity.maxRows} down at the minimum pane size).`
+        }),
+        resetBtn
+      ])
       return section(
         'Layout',
         'Pick a size on the dots. Drag across terminals to merge; click a merged one to split.',
-        layoutReadout,
-        [painter.el]
+        null,
+        [el('div', { class: 'wizard-layout-row' }, [painter.el, summary])]
       )
     }
 
     function layoutReadoutText(): string {
-      const merged = gridSpec.regions.some((region) => region.rs > 1 || region.cs > 1)
+      const merged = gridSpec.regions.filter((region) => region.rs > 1 || region.cs > 1).length
       return `${paneCount} ${plural(paneCount)} · ${gridSpec.rows}×${gridSpec.cols}${merged ? ' · merged' : ''}`
     }
 
@@ -992,14 +1070,14 @@ export const wizardFeature: UiFeature = {
               })()
             : null
 
-        // head | tail, tail right-aligned by `margin-left: auto` — no zero-width
-        // spacer element and no phantom flex gaps.
+        // A CARD per provider, packed into a responsive grid — the line-per-CLI
+        // rows left a prairie of empty middle on any wide window.
         rosterHost.append(
-          el('div', { class: 'wizard-agent-row' + (a.installed ? '' : ' is-missing') }, [
+          el('div', { class: 'wizard-agent-card' + (a.installed ? '' : ' is-missing') }, [
             el('span', { class: 'wizard-agent-head' }, [
               providerLogo(a.id, 18),
               el('span', { class: 'wizard-agent-name', text: a.name }),
-              a.installed ? null : Pill({ text: 'not found on PATH', tone: 'warning' })
+              a.installed ? null : Pill({ text: 'not on PATH', tone: 'warning' })
             ]),
             el('span', { class: 'wizard-agent-tail' }, [installHint, profSel, a.installed ? s.el : null])
           ])
@@ -1151,10 +1229,14 @@ export const wizardFeature: UiFeature = {
             renderRoster()
           }
         },
-        [icon('sparkles', 12), el('span', { text: 'Swarm — architect · 2 workers · reviewer' })]
+        [
+          el('span', { class: 'wizard-preset-logos' }, [el('span', { class: 'wizard-preset-mark' }, [icon('sparkles', 13)])]),
+          el('span', { class: 'wizard-preset-name', text: 'Swarm' }),
+          el('span', { class: 'wizard-preset-count', text: 'architect · 2 workers · reviewer' })
+        ]
       )
       return section('Presets', 'A saved mix, one click from launching.', saveBtn, [
-        el('div', { class: 'wizard-presets-row' }, [presetsHost, swarmBtn]),
+        el('div', { class: 'wizard-presets-row' }, [presetsHost, el('div', { class: 'wizard-preset-card wizard-preset-card--swarm' }, [swarmBtn])]),
         swarmHint
       ])
     }
@@ -1179,19 +1261,40 @@ export const wizardFeature: UiFeature = {
       if (!presetsHost) return
       clear(presetsHost)
       for (const p of presets) {
+        // A preset card SHOWS its mix — the provider marks and the pane total —
+        // instead of asking the name to carry everything.
+        const marks: ElChild[] = []
+        const entries = p.mix.filter((m) => m.count > 0)
+        for (const m of entries.slice(0, 4)) {
+          marks.push(
+            el('span', { class: 'wizard-preset-mark' }, [
+              providerLogo(m.provider.startsWith('custom:') ? 'custom:' : m.provider, 13)
+            ])
+          )
+        }
+        if (entries.length > 4) marks.push(el('span', { class: 'wizard-preset-more', text: `+${entries.length - 4}` }))
+        const total = entries.reduce((s, m) => s + m.count, 0)
         presetsHost.append(
-          el('span', { class: 'wizard-preset' }, [
-            el('button', {
-              class: 'wizard-preset-apply',
-              type: 'button',
-              text: p.name,
-              onClick: () => {
-                applyMix(p.mix)
-                painter.set(gridSpec)
-                renderRoster()
-                getTelemetry().captureEvent({ name: 'preset.applied' })
-              }
-            }),
+          el('div', { class: 'wizard-preset-card' }, [
+            el(
+              'button',
+              {
+                class: 'wizard-preset-apply',
+                type: 'button',
+                title: `Apply “${p.name}”`,
+                onClick: () => {
+                  applyMix(p.mix)
+                  painter.set(gridSpec)
+                  renderRoster()
+                  getTelemetry().captureEvent({ name: 'preset.applied' })
+                }
+              },
+              [
+                el('span', { class: 'wizard-preset-logos' }, marks),
+                el('span', { class: 'wizard-preset-name', text: p.name }),
+                el('span', { class: 'wizard-preset-count', text: `${total} ${plural(total)}` })
+              ]
+            ),
             p.id.startsWith('preset-')
               ? null
               : el(
@@ -1242,6 +1345,11 @@ export const wizardFeature: UiFeature = {
       customStepper?.setMax(customCount + remaining)
 
       painter.refreshChips()
+      summaryCount.textContent = String(paneCount)
+      const mergedCount = gridSpec.regions.filter((region) => region.rs > 1 || region.cs > 1).length
+      summaryShape.textContent = `${plural(paneCount)} on a ${gridSpec.rows}×${gridSpec.cols} grid${
+        mergedCount ? ` · ${mergedCount} merged` : ''
+      }`
 
       swarmHint.textContent = swarmRoles ? 'Swarm manifest armed — roles land on the panes.' : ''
       saveBtn.disabled = total === 0
@@ -1383,6 +1491,7 @@ export const wizardFeature: UiFeature = {
       // The painter, drivable: gates set sizes and merges deterministically here,
       // and separately prove the pointer gestures against the real canvas.
       w.__mogging.wizardLayout = {
+        capacity: () => ({ ...capacity }),
         spec: () => ({ rows: gridSpec.rows, cols: gridSpec.cols, regions: gridSpec.regions.map((r) => ({ ...r })) }),
         setGrid: (rows: number, cols: number) => {
           setGridSpec(uniformSpec(Math.max(1, Math.floor(rows)), Math.max(1, Math.floor(cols))))

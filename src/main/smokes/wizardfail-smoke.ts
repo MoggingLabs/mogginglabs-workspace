@@ -321,9 +321,8 @@ export function runWizardFailSmoke(win: BrowserWindow): void {
       })})`)
       await open({ cwd: repo, paneCount: 4 })
       await ES(`(() => {
-        document.querySelectorAll('#view-wizard .wizard-adv').forEach((details) => (details.open = true))
         const chip = [...document.querySelectorAll('#view-wizard .wizard-preset-apply')]
-          .find((item) => item.textContent === 'Stale preset audit')
+          .find((item) => item.querySelector('.wizard-preset-name')?.textContent === 'Stale preset audit')
         chip?.click()
       })()`)
       await sleep(250)

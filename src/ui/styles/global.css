@@ -4073,9 +4073,42 @@ body.pane-dragging * {
 }
 .wizard-name-input {
   flex: none;
-  width: 220px;
-  height: var(--wz-ctl);
+  width: 240px;
+  height: 40px; /* the path input's height — one row, one rhythm */
+  border-radius: var(--r-md);
+  font-size: var(--fs-13);
+}
+
+/* The cd line: shell muscle memory as a folder picker. */
+.wizard-cd-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--sp-6);
+  padding: 0 var(--sp-3);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+}
+.wizard-cd-prompt {
+  flex: none;
+  color: var(--accent);
+  font-family: var(--font-mono);
   font-size: var(--fs-12);
+}
+.wizard-cd-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+.wizard-cd-input:focus-visible {
+  outline: none;
+}
+.wizard-cd-row:focus-within {
+  border-color: var(--accent);
 }
 
 /* Recent folders: a two-column grid of one-click jumps, count badge riding right. */
@@ -4147,11 +4180,46 @@ body.pane-dragging * {
 }
 
 /* ── The layout painter: a Word-style size lattice beside the shape canvas. ── */
+/* The readout is the gates' single truth line ('N terminals · R×C · merged') —
+   kept in the DOM for them and for screen readers, visually folded into the
+   summary's own lines to avoid saying everything twice. */
 .wizard-layout-readout {
-  color: var(--text-mid);
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
   white-space: nowrap;
+}
+.wizard-layout-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--sp-5);
+  min-width: 0;
+}
+.wizard-layout-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface);
+}
+.wizard-summary-count {
+  color: var(--text-hi);
+  font-size: var(--fs-28);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-tight);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.wizard-summary-line {
+  color: var(--text-mid);
+  font-size: var(--fs-12);
 }
 .grid-painter {
   display: flex;
@@ -4330,14 +4398,37 @@ body.pane-dragging * {
   gap: var(--sp-2);
 }
 .wizard-agents {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: var(--sp-2);
+}
+.wizard-agent-card {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-1);
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface);
+  transition: border-color var(--dur-1) var(--ease);
 }
+.wizard-agent-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.wizard-agent-card.is-missing {
+  opacity: 0.75;
+}
+.wizard-agent-card .wizard-agent-tail {
+  justify-content: space-between;
+  width: 100%;
+}
+/* The custom row and the empty state span the whole grid. */
 .wizard-agent-row {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  grid-column: 1 / -1;
   min-height: 36px;
   padding: var(--sp-1) var(--sp-2);
   border: 1px solid transparent;
@@ -4345,9 +4436,6 @@ body.pane-dragging * {
 }
 .wizard-agent-row:hover {
   background: var(--bg-surface);
-}
-.wizard-agent-row.is-missing {
-  opacity: 0.75;
 }
 .wizard-agent-head,
 .wizard-agent-tail {
@@ -4360,8 +4448,19 @@ body.pane-dragging * {
   flex: none;
   margin-left: auto; /* no zero-width spacer element — the audit's REMOVE */
 }
-.wizard-agent-row :is(.stepper, .wizard-profile-select, .wizard-agent-copy, .wizard-recheck) {
+.wizard-agent-row :is(.stepper, .wizard-profile-select, .wizard-agent-copy, .wizard-recheck),
+.wizard-agent-card :is(.stepper, .wizard-profile-select, .wizard-agent-copy, .wizard-recheck) {
   height: var(--wz-ctl);
+}
+.wizard-agent-card .wizard-profile-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.wizard-agent-card .wizard-agent-install {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
 }
 .wizard-agent-name {
   flex: 0 1 auto;
@@ -4381,6 +4480,7 @@ body.pane-dragging * {
   font-size: var(--fs-12);
 }
 .wizard-agents-empty {
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -4415,48 +4515,99 @@ body.pane-dragging * {
   gap: var(--sp-2);
 }
 .wizard-presets {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: var(--sp-2);
+  flex: 1 1 auto;
+  min-width: 0;
 }
-.wizard-preset {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-1); /* a dead zone: apply and delete used to abut exactly */
-  padding-right: var(--sp-1);
+.wizard-presets-row {
+  align-items: flex-start;
+}
+.wizard-presets-row .wizard-preset-card--swarm {
+  flex: none;
+  width: 220px;
+}
+.wizard-preset-card {
+  position: relative;
+  min-width: 0;
   border: 1px solid var(--border);
-  border-radius: var(--r-full);
+  border-radius: var(--r-md);
   background: var(--bg-surface);
-  overflow: hidden;
+  transition:
+    border-color var(--dur-1) var(--ease),
+    transform var(--dur-1) var(--ease);
+}
+.wizard-preset-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.wizard-preset-card--swarm {
+  border-style: dashed;
 }
 .wizard-preset-apply {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  width: 100%;
   border: none;
   background: transparent;
   color: var(--text-hi);
   font: inherit;
-  font-size: var(--fs-11);
-  padding: var(--sp-1) var(--sp-3);
+  text-align: left;
+  padding: var(--sp-3);
   cursor: pointer;
 }
-.wizard-preset:hover {
-  border-color: var(--accent);
-}
-.wizard-preset:hover .wizard-preset-apply {
-  color: var(--accent-ink);
-}
-.wizard-preset-swarm {
+.wizard-preset-logos {
   display: inline-flex;
   align-items: center;
-  gap: var(--sp-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-full);
-  background: var(--bg-surface);
 }
-.wizard-preset-swarm:hover {
-  border-color: var(--accent);
-  color: var(--accent-ink);
+.wizard-preset-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--sp-5);
+  height: var(--sp-5);
+  border-radius: var(--r-full);
+  border: 1px solid var(--bg-surface);
+  background: var(--bg-inset);
+  color: var(--text-mid);
+}
+.wizard-preset-mark + .wizard-preset-mark,
+.wizard-preset-more {
+  margin-left: calc(-1 * var(--sp-1)); /* the marks shingle into one identity cluster */
+}
+.wizard-preset-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--sp-5);
+  height: var(--sp-5);
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  color: var(--text-lo);
+  font-size: var(--fs-10);
+}
+.wizard-preset-name {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+}
+.wizard-preset-count {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
 }
 .wizard-preset-remove {
+  position: absolute;
+  top: var(--sp-1);
+  right: var(--sp-1);
   display: inline-flex;
   align-items: center;
   border: none;
@@ -4465,6 +4616,12 @@ body.pane-dragging * {
   padding: var(--sp-1);
   border-radius: var(--r-full);
   cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease);
+}
+.wizard-preset-card:hover .wizard-preset-remove,
+.wizard-preset-remove:focus-visible {
+  opacity: 1;
 }
 .wizard-preset-remove:hover {
   color: var(--danger-ink);
