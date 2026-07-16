@@ -43,10 +43,12 @@ export function isUnder(child: string, dir: string): boolean {
 }
 
 /**
- * Report a PHYSICALLY discovered directory (git root, traced worktree, watcher event) in the
- * namespace the caller is standing in. `anchor` is a caller-namespace path; walk its lexical
- * ancestors for one whose realpath IS `physical` — that ancestor names the same directory in
- * the caller's spelling. Falls back to `physical` when the caller's chain never crosses it.
+ * Report a PHYSICALLY discovered directory (git root, traced worktree, detected process cwd)
+ * in the namespace the caller is standing in. `anchor` is a caller-namespace path; walk its
+ * lexical ancestors for one whose realpath IS `physical` — that ancestor names the same
+ * directory in the caller's spelling — or whose realpath PREFIXES it, in which case the
+ * physical suffix is spliced onto the caller's spelling (a sibling or child directory under
+ * the same aliased prefix). Falls back to `physical` when the caller's chain never meets it.
  *
  * This is the counterpart to `canonical()`'s "the path the user typed is the path they meant"
  * rule: a repo under an aliased prefix (8.3 short path or junction on Windows, the
@@ -57,13 +59,23 @@ export function isUnder(child: string, dir: string): boolean {
  */
 export function toCallerNamespace(physical: string, anchor: string): string {
   if (!physical || !anchor) return physical
+  const fold = (p: string): string => (process.platform === 'win32' ? p.toLowerCase() : p)
   let candidate = canonical(anchor)
   for (let i = 0; i < 256; i++) {
+    let resolved: string
     try {
-      if (realpathSync.native(candidate) === physical) return candidate
+      resolved = realpathSync.native(candidate)
     } catch {
       break // an unreadable ancestor cannot be verified; the physical spelling is the answer
     }
+    // Exact: this ancestor IS the discovered directory, in the caller's spelling.
+    if (resolved === physical) return candidate
+    // Prefix: the discovered directory lives BELOW this ancestor (a sibling dir under the
+    // same aliased TEMP, a child the process cd'd into). Splice the physical suffix onto the
+    // caller's spelling — the suffix comes from a realpath, so it contains no further links
+    // and names the same directory through either prefix. Deepest ancestor wins: the walk
+    // starts at the anchor, so the aliased level is found before `C:\` trivially matches.
+    if (fold(physical).startsWith(fold(resolved + sep))) return candidate + physical.slice(resolved.length)
     const parent = dirname(candidate)
     if (parent === candidate) break // filesystem root
     candidate = parent

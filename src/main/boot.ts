@@ -103,6 +103,7 @@ export interface BootOptions {
 }
 
 let win: BrowserWindow | null = null
+let harnessActive = false // gates get a window Cocoa won't clamp (see createMainWindow)
 let disposeBackend: (() => void) | null = null
 let disposeGit: (() => void) | null = null
 let disposeContext: (() => void) | null = null
@@ -159,7 +160,7 @@ export function prepareRuntime(): void {
 }
 
 function openWindow(): void {
-  const w = createMainWindow()
+  const w = createMainWindow({ largerThanScreen: harnessActive })
   win = w
   wireWindowState(w) // fullscreen/maximize -> renderer chrome classes (5/04)
   // Only the CURRENT window may clear the pointer: a window re-created for a deep link
@@ -190,6 +191,7 @@ function liveWebContents(): WebContents | null {
  * `app.whenReady()` resolves).
  */
 export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
+  harnessActive = harness
   // Single-instance + mogging:// deep link so `mogging .` focuses a running app. Skipped under
   // the harness (some gates launch a second instance); normal dev/production runs hold the lock.
   // Dev needs no bypass: it holds its OWN lock via the -dev userData (Electron keys the lock on
