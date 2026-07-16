@@ -25,6 +25,7 @@ import {
   PaneCwdState,
   countSubmittedLines,
   fileUriToPath,
+  isEngagedInput,
   isSubmittedInput,
   isTerminalReply,
   normalizePaneCwd,
@@ -177,16 +178,25 @@ export class PtyService {
       const osc = new OscParser(
         // Parity with the daemon path: an OSC 9/99/777 notification is a GUESS (CLIs ring
         // it on completion too), so it goes through the bell's confirmation window rather
-        // than latching red outright. Only 133;C/D is an explicit verdict.
-        (state: AgentState) => (state === 'attention' ? tracker.bell() : tracker.notify(state)),
+        // than latching red outright. 133;C/D is a verdict about the SHELL — it moves a
+        // pane that has spoken, never authors the first state, and the prompt half ends
+        // latches (activity.ts shellPrompt).
+        (state: AgentState) =>
+          state === 'attention'
+            ? tracker.bell()
+            : state === 'busy'
+              ? tracker.shellCmdStart()
+              : tracker.shellPrompt(),
         (ev) => {
           if (ev.kind === 'bell') tracker.bell()
           if (ev.kind === 'prompt') {
+            tracker.shellPrompt()
             this.gitContexts.get(req.id)?.resetAtPrompt()
             this.agentProcs.promptSeen(String(req.id), 'osc133')
             this.publishCwd(req.id, cwdState.acceptPrompt(Date.now(), 'osc133'))
           }
           if (ev.kind === 'shell-prompt') {
+            tracker.shellPrompt()
             this.gitContexts.get(req.id)?.resetAtPrompt()
             this.agentProcs.promptSeen(String(req.id), 'mogging')
             const cwd = ev.payload ? normalizePaneCwd(ev.payload, { mustExist: false }) : null
@@ -204,6 +214,7 @@ export class PtyService {
           if (ev.kind === 'cwd' && ev.payload) {
             const prompt = ev.code === 9
             if (prompt) {
+              tracker.shellPrompt() // 9;9 is OUR injected cmd.exe prompt mark — same verdict as 133;D
               this.gitContexts.get(req.id)?.resetAtPrompt()
               this.agentProcs.promptSeen(String(req.id), 'osc9')
             }
@@ -285,8 +296,9 @@ export class PtyService {
     // Not for auto-replies: xterm answering a query (CPR/DA/focus) is not the user
     // answering the pane — it must not clear an attention latch (see replies.ts).
     if (!isTerminalReply(data)) {
-      // Only a SUBMIT answers a blocked agent — see the daemon's twin, and isSubmittedInput.
-      this.trackers.get(id)?.input(isSubmittedInput(data))
+      // A SUBMIT or a PRINTABLE key answers a blocked agent — see the daemon's twin,
+      // isSubmittedInput and isEngagedInput.
+      this.trackers.get(id)?.input(isSubmittedInput(data), isEngagedInput(data))
       // A submitted LINE is the only moment a shell can start something (see the daemon's twin).
       const submissions = countSubmittedLines(data)
       for (let i = 0; i < submissions; i++) {

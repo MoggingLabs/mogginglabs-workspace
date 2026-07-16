@@ -77,3 +77,19 @@ export interface AgentCommandResult {
    *  facts surface at the moment they bite. Never blocks the launch. */
   signIn?: { expected: string; actual?: string }
 }
+
+/** Global Claude alert hooks (AgentHookChannels) — the hand-typed-launch gap. */
+export interface GlobalHooksStatus {
+  /** 'applied' = every event carries the CURRENT entry; 'partial' = ours present but stale or
+   *  incomplete (Re-apply); 'unreadable' = the file is not JSON we will rewrite (writes refuse). */
+  state: 'applied' | 'partial' | 'not-applied' | 'unreadable'
+  /** The settings file the state was read from (the user's global Claude home). */
+  file: string
+}
+
+export interface GlobalHooksMutationResult {
+  ok: boolean
+  reason?: string
+  /** Timestamped copy of the bytes replaced, when a write happened over existing content. */
+  backup?: string
+}

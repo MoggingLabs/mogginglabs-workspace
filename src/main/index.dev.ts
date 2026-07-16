@@ -4,6 +4,7 @@ import { installHarnessPorts } from './harness-install'
 import { runSmoke } from './smokes/smoke'
 import { runShot } from './smokes/shot'
 import { runFsListSmoke } from './smokes/fslist-smoke'
+import { runGlobalHooksSmoke } from './smokes/globalhooks-smoke'
 import { runAgentSettingsSmoke } from './smokes/agentsettings-smoke'
 import { runSetAgentConfigSmoke } from './smokes/setagentcfg-smoke'
 import { runCwdSmoke } from './smokes/cwd-smoke'
@@ -173,7 +174,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
   // Phase 11 — Files: the explorer's seven.
   'MOGGING_FSLIST', 'MOGGING_FILETREE', 'MOGGING_EXPLORER', 'MOGGING_EXPLORERRACE', 'MOGGING_TREELIVE', 'MOGGING_TREEGIT',
-  'MOGGING_FILEACT', 'MOGGING_FILESMILESTONE', 'MOGGING_AGENTCFG'
+  'MOGGING_FILEACT', 'MOGGING_FILESMILESTONE', 'MOGGING_AGENTCFG', 'MOGGING_GLOBALHOOKS'
 ]
 const isSmoke = SMOKE_ENV.some((k) => !!process.env[k])
 
@@ -295,6 +296,8 @@ async function afterAppSettings(): Promise<boolean> {
 function afterWindow(win: BrowserWindow): void {
   if (process.env.MOGGING_AGENT) {
     runAgentSmoke(win, process.env.MOGGING_AGENT) // env-gated agent-CLI TUI smoke
+  } else if (process.env.MOGGING_GLOBALHOOKS) {
+    runGlobalHooksSmoke(win) // env-gated global Claude alert hooks smoke (the hand-typed-launch gap)
   } else if (process.env.MOGGING_STATE) {
     runStateSmoke(win) // env-gated OSC agent-state smoke
   } else if (process.env.MOGGING_RELOAD) {

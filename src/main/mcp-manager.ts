@@ -92,7 +92,7 @@ const findServer = (id: string): McpServerEntry | undefined => listServers().fin
 // live CLI rewrites ~/.claude.json constantly, so a second apply in one session
 // was landing on state no backup had ever seen.
 const backedUp = new Map<string, string>()
-function ensureBackup(file: string, current: string | null): string | undefined {
+export function ensureBackup(file: string, current: string | null): string | undefined {
   if (current === null) return undefined // nothing on disk to lose
   const hash = sha256(current)
   if (backedUp.get(file) === hash) return undefined // these exact bytes are already saved
@@ -108,9 +108,9 @@ function ensureBackup(file: string, current: string | null): string | undefined 
 /** Temp file in the SAME directory, then rename: a reader (the running CLI) sees
  *  either the old file or the new one, never a half-written config — and a crash
  *  mid-write leaves the original intact. */
-class ConcurrentConfigWriteError extends Error {}
+export class ConcurrentConfigWriteError extends Error {}
 
-function writeAtomic(file: string, text: string, expected: string | null): void {
+export function writeAtomic(file: string, text: string, expected: string | null): void {
   mkdirSync(dirname(file), { recursive: true })
   const tmp = `${file}.tmp-${process.pid}-${Date.now().toString(36)}`
   try {
@@ -139,7 +139,7 @@ function writeAtomic(file: string, text: string, expected: string | null): void 
   }
 }
 
-const readIfExists = (file: string): string | null => {
+export const readIfExists = (file: string): string | null => {
   try {
     return readFileSync(file, 'utf8')
   } catch (err) {
@@ -163,7 +163,7 @@ function fileMatchesExpected(file: string, expected: string | null): boolean {
  *  be the file we READ. `~/.claude.json` also holds the CLI's own unrelated state
  *  and the CLI rewrites it whenever it likes — a write that lands in our
  *  read→write window would be silently eaten by our stale copy. */
-const changedUnderUs = (file: string, seen: string | null): boolean => !fileMatchesExpected(file, seen)
+export const changedUnderUs = (file: string, seen: string | null): boolean => !fileMatchesExpected(file, seen)
 
 const CLI_DETECT_ID: Record<HostedCliId, string> = { 'claude-code': 'claude', codex: 'codex', gemini: 'gemini' }
 

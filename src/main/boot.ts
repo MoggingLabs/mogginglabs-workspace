@@ -9,6 +9,7 @@ import { registerDialogs } from './dialogs'
 import { registerShellChrome, wireWindowState } from './shell-chrome'
 import { registerAppSettings, disposeAppSettings } from './app-settings'
 import { registerAgents, disposeAgentInstalls } from './agents'
+import { registerClaudeGlobalHooks } from './claude-global-hooks'
 import { registerAgentSettings, disposeAgentSettings } from './agent-settings'
 import { registerBrowserDock } from './browser-dock'
 import { startMcpEndpoint, stopMcpEndpoint } from './mcp-endpoint'
@@ -297,6 +298,7 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       // `harness` is this entry's isSmoke: production always passes false.
       const agentSettingsStartup = registerAgentSettings(() => win, harness)
       registerAgents(() => win) // agent launcher: detect/install CLIs + build launch commands (Phase-1/06; Agent CLIs tab)
+      registerClaudeGlobalHooks() // global Claude alert hooks: the hand-typed-launch gap (explicit apply/remove only)
       registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
       registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
       disposeGit = registerGit(liveWebContents) // read-only per-pane git branch + dirty (Phase-2/03)

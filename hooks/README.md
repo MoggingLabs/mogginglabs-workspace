@@ -12,6 +12,12 @@ MoggingLabs Workspace — a richer signal than OSC escape sequences alone. When 
 > `GEMINI_CLI_SYSTEM_SETTINGS_PATH` / `OPENCODE_TUI_CONFIG` (OSC 9), and aider gets
 > `AIDER_NOTIFICATIONS*` env (the generated notify script). The snippets below remain for
 > agents you start yourself — a plain command typed into a pane, or a terminal outside the app.
+>
+> **Typing `claude` at a pane's own prompt?** The launch overlay can't reach it, so the app can
+> wire the Claude snippets below into your **global** Claude settings for you — one click in
+> Settings › Agent CLIs › *Hand-typed session alerts* (explicit apply, timestamped backup,
+> removable the same way). The hook no-ops outside a MoggingLabs pane, so globally wired means
+> wired everywhere it matters and inert everywhere else.
 
 OSC-based agent-state stays the baseline for *any* CLI (Phase-2/01); these hooks are the sharper,
 first-party layer for the CLIs that support hooks.

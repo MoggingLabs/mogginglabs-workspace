@@ -2,7 +2,7 @@ import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { sleep } from './kit'
 import { join } from 'node:path'
-import { ActivityTracker, BELL_CONFIRM_MS, isSubmittedInput, OscParser } from '@backend/features/agent-state'
+import { ActivityTracker, BELL_CONFIRM_MS, isEngagedInput, isSubmittedInput, OscParser } from '@backend/features/agent-state'
 
 // Env-gated tab-attention smoke (MOGGING_ATTENTION): create a 2nd workspace so Workspace 1 is
 // backgrounded, flip a pane in that background workspace to attention, assert its tab rings, then
@@ -151,22 +151,113 @@ async function trackerAsserts(): Promise<Record<string, boolean>> {
   goalShape.notify('done')
   clock += 30_000 // the goal hook deliberates for half a minute
   goalShape.bell() // the achieve notice / completion chime, absurdly late
+
+  // THE NOTICE RULE (deduction 3). An unknown-type notification arrived THROUGH the hook
+  // channel, so the channel works — and on a working channel every blocking type arrives as an
+  // explicit needs-input. Mid-turn it is therefore certainly not a block: swallowed, and it
+  // retracts the raw-BEL twin that terminal_bell rings ahead of the hook's process spawn.
+  const nTwin = mk()
+  nTwin.turnStart()
+  nTwin.bell() // the notification's BEL, instantly
+  nTwin.notice() // the hook's label, a beat later — cancels the twin, or red latches anyway
+  const nAlone = mk()
+  nAlone.turnStart()
+  nAlone.notice() // no twin — still swallowed mid-turn
+  // The slow-spawn race: the BEL's window expires BEFORE the hook lands (a cold node spawn
+  // under a sixteen-pane load is unbounded above). The standing red is a confirmed guess, and
+  // the late notice is that same notification's verdict — it must retract it. Armed here, rung
+  // by the shared wait, retracted after.
+  const nLate = mk()
+  nLate.turnStart()
+  nLate.bell()
+  // An EXPLICIT needs-input is a verdict, and no notice may ever retract it.
+  const nExplicit = mk()
+  nExplicit.turnStart()
+  nExplicit.raiseAttention()
+  nExplicit.notice()
+  // Out of turn (idle), the busy certainty is gone — auth expiry and its kin are real
+  // come-heres the whitelist cannot enumerate — so a notice still rings, one beat later.
+  const nIdle = mk()
+  nIdle.turnStart()
+  nIdle.notify('idle')
+  nIdle.notice()
+
+  // THE SECOND-TURN DEAFNESS FIXES. bell() swallows chimes on a `done` pane — correct for the
+  // trailing completion chime, fatal if the pane can never LEAVE done: Codex and OpenCode have
+  // no turn-start hook, so before the fix their second turn's approval could never ring again.
+  const t2 = mk()
+  t2.turnStart()
+  t2.notify('done')
+  t2.input(true) // the user submits turn 2 into the finished pane -> the done is spent (idle)
+  const submitEndsDone = t2.current() === 'idle'
+  t2.bell() // turn 2's approval chime — deaf before the fix, must ring now
+  // ...and a NEW TURN ends the previous done's chime grace: a block in the first beats of the
+  // next turn (Gemini approving its very first tool) must not be swallowed as the old turn's
+  // completion chime. Injected clock puts the chime deep inside the old grace window.
+  let clock2 = 2_000_000
+  const tGrace = new ActivityTracker(() => {}, () => clock2)
+  tGrace.turnStart()
+  tGrace.notify('done')
+  clock2 += 500 // well inside DONE_CHIME_GRACE_MS...
+  tGrace.turnStart() // ...but a new turn has begun
+  tGrace.bell()
+
   await sleep(BELL_CONFIRM_MS + 400) // outlive the confirmation window
   const chimeWithDoneIsGreen = withDone.current() === 'done' // never red
   const chimeAloneIsRed = alone.current() === 'attention' // the only red 3 of 5 CLIs have
   const chimeAfterDoneStaysGreen = chimeAfter.current() === 'done' // NOT 'attention'
   const lateGoalChimeSwallowed = goalShape.current() === 'done' // 30s late is still that done's chime
+  const noticeCancelsTwinBel = nTwin.current() === 'busy'
+  const noticeSwallowedMidTurn = nAlone.current() === 'busy'
+  const lateBellRangFirst = nLate.current() === 'attention' // the guess latched...
+  nLate.notice()
+  const lateNoticeRetracts = nLate.current() === 'busy' // ...and its own verdict retracts it
+  const explicitRedNotRetracted = nExplicit.current() === 'attention'
+  const noticeRingsWhenIdle = nIdle.current() === 'attention'
+  const secondTurnChimeRings = t2.current() === 'attention'
+  const newTurnEndsGrace = tGrace.current() === 'attention'
 
-  // THE SUBMIT RULE. A stray key must never clear a red and claim the agent is working — no CLI
-  // re-raises a needs-input it has already raised, so that lie has no way back.
+  // THE SHELL MARKS (deduction 4). A prompt means the foreground program is gone: it ends a
+  // latch and a turn's leftovers, but never authors a first verdict and never spends a green.
+  const s1 = mk()
+  s1.shellPrompt()
+  const promptNeverAuthors = s1.current() === 'unknown'
+  s1.shellCmdStart()
+  const cmdStartNeverAuthors = s1.current() === 'unknown'
+  const s2 = mk()
+  s2.raiseAttention()
+  s2.shellPrompt() // the blocked agent was killed; the shell is back
+  const promptEndsLatch = s2.current() === 'idle'
+  const s3 = mk()
+  s3.turnStart()
+  s3.subagentStart()
+  s3.shellPrompt() // died mid-fan-out: the counter is the dead program's story
+  const promptEndsTurnLeftovers = s3.current() === 'idle'
+  s3.notify('done')
+  const promptResetSubagents = s3.current() === 'done' // the stale count must not defer this
+  const s4 = mk()
+  s4.turnStart()
+  s4.notify('done')
+  s4.shellPrompt() // the agent finished, then exited to the shell
+  const promptSparesGreen = s4.current() === 'done'
+
+  // THE ANSWER RULE (deduction 1). Navigation and signals must never clear a red and claim the
+  // agent is working — no CLI re-raises a needs-input it has already raised, so that lie has no
+  // way back. But CONTENT answers: every permission dialog takes single-key answers (Claude's
+  // digit menu, Codex and Gemini's `y`), which submit no line and fire no hook — submit-only
+  // left those panes wearing "blocked on you" for the rest of a turn the agent spent working.
   const i = mk()
   i.raiseAttention()
-  i.input(false) // an arrow key, a ^C, a bare character
+  i.input(false, false) // an arrow key, a ^C, a mouse report — navigation and signals
   const strayHoldsRed = i.current() === 'attention'
-  i.input(true) // Enter: the agent said it was blocked on this human, and the human answered
-  const submitClearsToBusy = i.current() === 'busy'
+  i.input(false, true) // a printable — the digit that IS the whole answer
+  const printableClearsToBusy = i.current() === 'busy'
+  const i2 = mk()
+  i2.raiseAttention()
+  i2.input(true) // Enter: the agent said it was blocked on this human, and the human answered
+  const submitClearsToBusy = i2.current() === 'busy'
 
-  // ...and the byte rule that decides which is which.
+  // ...and the byte rules that decide which input is which.
   const submitBytes =
     isSubmittedInput('\r') &&
     isSubmittedInput('\n') &&
@@ -177,6 +268,18 @@ async function trackerAsserts(): Promise<Record<string, boolean>> {
     !isSubmittedInput('\x1b[A') && // an arrow key
     !isSubmittedInput('\x03') && // ^C
     !isSubmittedInput('\x1b[200~a\rb\x1b[201~') // bracketed paste — composing
+  const engagedBytes =
+    isEngagedInput('1') && // Claude's digit menu
+    isEngagedInput('y') && // Codex/Gemini's approval key
+    isEngagedInput(' ') && // a TUI toggle
+    isEngagedInput('é') && // any printable, not just ASCII
+    !isEngagedInput('\r') && // Enter is the submit rule's, not content
+    !isEngagedInput('\x1b[A') && // arrows navigate
+    !isEngagedInput('\x03') && // ^C signals
+    !isEngagedInput('\t') && // Tab moves focus
+    !isEngagedInput('\x7f') && // Backspace composes
+    !isEngagedInput('\x1b[<0;5;5M') && // a mouse report
+    !isEngagedInput('\x1b[200~a\x1b[201~') // bracketed paste — composing
 
   return {
     silentStaysUnknown,
@@ -194,9 +297,26 @@ async function trackerAsserts(): Promise<Record<string, boolean>> {
     chimeAloneIsRed,
     chimeAfterDoneStaysGreen,
     lateGoalChimeSwallowed,
+    noticeCancelsTwinBel,
+    noticeSwallowedMidTurn,
+    lateBellRangFirst,
+    lateNoticeRetracts,
+    explicitRedNotRetracted,
+    noticeRingsWhenIdle,
+    submitEndsDone,
+    secondTurnChimeRings,
+    newTurnEndsGrace,
     strayHoldsRed,
+    printableClearsToBusy,
     submitClearsToBusy,
-    submitBytes
+    promptNeverAuthors,
+    cmdStartNeverAuthors,
+    promptEndsLatch,
+    promptEndsTurnLeftovers,
+    promptResetSubagents,
+    promptSparesGreen,
+    submitBytes,
+    engagedBytes
   }
 }
 
