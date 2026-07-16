@@ -89,6 +89,27 @@ export async function createWorktree(repo: string): Promise<CreateWorktreeResult
   }
 }
 
+/** Git prints each worktree's PHYSICAL path. Re-spell it under the caller's own
+ *  `.mogging/worktrees` root when it lives there: every consumer compares these entries
+ *  against caller-namespace paths (the pane cwd feeding the dirty pre-check, the rail
+ *  chips), and under an aliased repo prefix (8.3 short TEMP on CI Windows, macOS's
+ *  symlinked /var) the physical spelling matches none of them — the dirty refusal then
+ *  arrives only AFTER the pane was closed. */
+function inRepoNamespace(repo: string, p: string): string {
+  const root = worktreesRoot(repo)
+  let physRoot: string
+  try {
+    physRoot = realpathSync.native(root)
+  } catch {
+    return p
+  }
+  const fold = (s: string): string => (process.platform === 'win32' ? s.toLowerCase() : s)
+  const abs = resolve(p)
+  if (fold(abs) === fold(physRoot)) return root
+  if (fold(abs).startsWith(fold(physRoot + sep))) return join(root, abs.slice(physRoot.length + 1))
+  return p
+}
+
 /** Managed worktrees of a repo (porcelain-parsed), each with a live dirty flag. */
 export async function listWorktrees(repo: string): Promise<WorktreeInfo[]> {
   const res = await git(repo, ['worktree', 'list', '--porcelain'])
@@ -96,7 +117,7 @@ export async function listWorktrees(repo: string): Promise<WorktreeInfo[]> {
   const out: WorktreeInfo[] = []
   let current: { path?: string; branch?: string } = {}
   for (const line of res.stdout.split('\n')) {
-    if (line.startsWith('worktree ')) current = { path: line.slice('worktree '.length).trim() }
+    if (line.startsWith('worktree ')) current = { path: inRepoNamespace(repo, line.slice('worktree '.length).trim()) }
     else if (line.startsWith('branch ')) current.branch = line.slice('branch '.length).trim().replace('refs/heads/', '')
     else if (!line.trim() && current.path) {
       if (isManaged(repo, current.path)) out.push({ path: current.path, branch: current.branch ?? '', dirty: false })
