@@ -972,13 +972,12 @@ export function registerBrowserDock(winGetter: () => BrowserWindow | null): void
   ipcMain.handle(BrowserChannels.toggle, (_e, payload: { open: boolean; workspaceId?: string }) => {
     open = !!payload?.open
     store()?.setSetting(KV_OPEN, open ? '1' : '')
-    if (typeof payload?.workspaceId === 'string') {
-      activeWorkspaceId = payload.workspaceId
-      profile = payload.workspaceId ? profileForWs(payload.workspaceId) : 'preview'
-    }
-    // Restore is per-workspace, handled when each workspace's preview guest
-    // registers — nothing to do here beyond publishing state.
-    pushState()
+    // ONE activation path. This used to restate activateWorkspace's assignments inline —
+    // minus refreshVault/pushActivity — which is exactly the kind of sibling copy that
+    // drifts. Restore is per-workspace, handled when each workspace's preview guest
+    // registers — nothing to do here beyond activating/publishing.
+    if (typeof payload?.workspaceId === 'string') activateWorkspace(payload.workspaceId)
+    else pushState()
   })
 
   ipcMain.handle(BrowserChannels.activate, (_e, payload: { workspaceId?: string }) => {
@@ -1078,16 +1077,20 @@ export function registerBrowserDock(winGetter: () => BrowserWindow | null): void
       if (p.workspaceId === activeWorkspaceId) setProfile(next)
     }
   })
+  // Missing/empty workspaceId falls back to the ACTIVE workspace — the same convention
+  // every other verb here uses. Forcing '' instead minted phantom `wsa('')` sessions and
+  // aimed cookie clears at a partition no workspace owns.
+  const wsOrActive = (raw: unknown): string => (typeof raw === 'string' && raw ? raw : activeWorkspaceId)
   ipcMain.on(BrowserChannels.confirmOrigin, (_e, p: { workspaceId?: string; origin: string }) => {
-    confirmPendingActOrigin(String(p?.origin ?? ''), typeof p?.workspaceId === 'string' ? p.workspaceId : '')
+    confirmPendingActOrigin(String(p?.origin ?? ''), wsOrActive(p?.workspaceId))
   })
   ipcMain.handle(BrowserChannels.signedInSites, async (_e, workspaceId: string) => {
-    const wsId = String(workspaceId ?? '')
+    const wsId = wsOrActive(workspaceId)
     await waitForBrowserRaceAudit('signedInSites', wsId)
     return signedInSites(wsId)
   })
   ipcMain.handle(BrowserChannels.forgetSite, (_e, p: { workspaceId?: string; host?: string }) =>
-    forgetSite(String(p?.host ?? ''), String(p?.workspaceId ?? ''))
+    forgetSite(String(p?.host ?? ''), wsOrActive(p?.workspaceId))
   )
-  ipcMain.handle(BrowserChannels.clearAgentLogins, (_e, workspaceId: string) => clearAgentLogins(String(workspaceId ?? '')))
+  ipcMain.handle(BrowserChannels.clearAgentLogins, (_e, workspaceId: string) => clearAgentLogins(wsOrActive(workspaceId)))
 }

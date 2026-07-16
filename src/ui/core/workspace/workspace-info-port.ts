@@ -2,7 +2,7 @@
 // workspace feature after every mutation. Lets Home / the palette / notify toasts
 // reason about workspaces (and ask for a switch) without importing the feature.
 
-import { locatePaneWorkspace } from '@contracts'
+import { locatePane } from '@contracts'
 
 export interface WorkspaceInfo {
   id: string
@@ -40,14 +40,13 @@ export function getWorkspaces(): WorkspacesSnapshot {
 }
 
 /**
- * Which workspace holds this pane, and in which SLOT (1-based). The moved-pane rule
- * (an explicit `paneIds` claim outranks the `ordinal * 100 + slot` formula) lives in
- * `locatePaneWorkspace` (@contracts), shared with main so consent/grant resolution
- * and this port can never disagree about where a pane lives.
+ * Which workspace holds this pane, and in which SLOT (1-based). The resolution — the
+ * formula id, and the `paneIds` claims that outrank it for panes moved between
+ * workspaces — is @contracts' locatePane, the SAME resolver main uses for grants and
+ * browser routing, so the two sides can never again disagree about whose pane one is.
  */
 function locate(paneId: number): { ws: WorkspaceInfo; slot: number } | undefined {
-  const found = locatePaneWorkspace(snapshot.workspaces, paneId)
-  return found ? { ws: found.workspace, slot: found.slot } : undefined
+  return locatePane(snapshot.workspaces, paneId)
 }
 
 /** The workspace a pane belongs to. Used to materialize the right tool plan at launch

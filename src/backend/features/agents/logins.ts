@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { resolveHome } from '../usage/homes'
-import type { AgentProfile } from '@contracts'
+import type { AgentProfile, ProfileLoginState } from '@contracts'
 
 // Login discovery (profiles simplified, part 2): every account a CLI is ALREADY
 // signed into must surface as a profile — otherwise there is nothing to launch
@@ -92,6 +92,22 @@ const PROBES: Record<string, (home: string, isDefaultHome: boolean) => { email?:
   claude: claudeLogin,
   codex: codexLogin,
   gemini: geminiLogin
+}
+
+/** Login state at ONE (provider, profile) config home — the `profiles:list`
+ *  decorator's and the launch hint's probe. `undefined` = this provider has no
+ *  probe (unknowable) or the home was unreadable; a `signedIn` boolean is a
+ *  CHECKED fact about that home, never a guess. */
+export function probeLogin(provider: string, profile: AgentProfile | null): ProfileLoginState | undefined {
+  const probe = PROBES[provider]
+  if (!probe) return undefined
+  try {
+    const home = resolveHome(provider, profile)
+    const login = probe(home, normPath(home) === normPath(resolveHome(provider, null)))
+    return login ? { signedIn: true, email: login.email } : { signedIn: false }
+  } catch {
+    return undefined // an unreadable home is UNKNOWN — it must not render as "signed out"
+  }
 }
 
 /** Every signed-in account across the KNOWN homes: each provider's default home

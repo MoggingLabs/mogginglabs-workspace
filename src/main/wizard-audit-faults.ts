@@ -5,6 +5,8 @@ export interface WizardAuditFaultConfig {
   resolveDelayMs?: number
   resolveReject?: boolean
   worktreeFailAt?: number
+  /** Stretch every worktree create — the window the mid-launch retarget gate types into. */
+  worktreeDelayMs?: number
   planSetReject?: boolean
   fsRejectPaths?: string[]
   fsDelayMsByPath?: Record<string, number>

@@ -51,13 +51,14 @@ export function isTerminalReply(data: string): boolean {
 /**
  * True when a renderer->pty chunk carries a SUBMITTED line — the user pressed Enter.
  *
- * This is the ONLY thing that may clear an attention latch. `input()` used to clear it on any
- * keystroke at all, which claimed "working" about a pane whose agent was still blocked: an
- * arrow key, a ^C, a stray character each turned the red dot green while nothing had been
- * answered — and nothing ever corrected it, because a CLI does not re-raise a needs-input it
- * has already raised. The asymmetry decides it. A red that lingers one beat too long SELF-HEALS
- * on the agent's next verdict; a false "working" does not heal at all. So the latch waits for
- * the one keystroke that actually answers something.
+ * One of the two things that may clear an attention latch (the other is isEngagedInput below —
+ * a printable key fed to the blocked program). `input()` used to clear it on any keystroke at
+ * all, which claimed "working" about a pane whose agent was still blocked: an arrow key, a ^C,
+ * a stray navigation byte each turned the red dot green while nothing had been answered — and
+ * nothing ever corrected it, because a CLI does not re-raise a needs-input it has already
+ * raised. A red that lingers one beat too long SELF-HEALS on the agent's next verdict; a false
+ * "working" does not heal at all. So the latch ignores navigation and signals, and believes
+ * content.
  *
  * SHIFT+ENTER is deliberately not a submit — it opens a new line inside a prompt the user is
  * still composing (explicit direction). Requiring a BARE CR/LF excludes it for free, and the
@@ -80,4 +81,32 @@ export function isSubmittedInput(data: string): boolean {
   // keys, bracketed paste. Enter alone is a bare CR.
   if (data.startsWith('\x1b')) return false
   return data.includes('\r') || data.includes('\n')
+}
+
+/**
+ * True when a renderer->pty chunk carries at least one PRINTABLE key — a byte the pane's
+ * foreground program consumes as CONTENT, as opposed to navigation or a signal.
+ *
+ * This is the other half of what may clear an attention latch (activity.ts input()). Submit-only
+ * left the most common answer in the product stuck red: every CLI's permission dialog takes
+ * single-key answers — Claude Code's digit menu applies `1`/`2`/`3` instantly, Codex and Gemini
+ * take `y`/`n` — which submit no line, fire no hook (nothing runs at approval time), and are
+ * never followed by a re-raise. The human answered, the agent went back to work, and the pane
+ * wore "blocked on you" for the rest of the turn. A digit IS the whole answer; refusing to
+ * believe anything but Enter was the lie.
+ *
+ * What still never counts: an ESC-introduced chunk (arrows, F-keys, mouse reports, focus
+ * events, bracketed paste, kitty/CSI-u encodings — sequences all) and bare control bytes (^C,
+ * Tab, Backspace, and Enter itself, which isSubmittedInput owns). Those are the exact bytes
+ * that made any-keystroke clearing a lie factory, and they stay excluded.
+ *
+ * Terminal auto-replies never reach this test — both PTY backends filter isTerminalReply first.
+ */
+export function isEngagedInput(data: string): boolean {
+  if (!data || data.charCodeAt(0) === 0x1b) return false
+  for (let i = 0; i < data.length; i++) {
+    const c = data.charCodeAt(i)
+    if (c >= 0x20 && c !== 0x7f) return true
+  }
+  return false
 }

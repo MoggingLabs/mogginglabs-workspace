@@ -4,6 +4,7 @@ import {
   buildLaunchCommand,
   InstallService,
   poolProviderSessions,
+  probeLogin,
   resumeSessionIdFromFile
 } from '@backend/features/agents'
 import { resolveHome } from '@backend/features/usage'
@@ -132,8 +133,24 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
       resumeSessionId
     )
     if (!command) return { ok: false, reason: `Unknown agent provider: ${req.agentId}` }
+    // Accepted residual: 'once' session overrides are consumed HERE, when the command
+    // is handed back — the renderer still has to type it, and a pane disposed in that
+    // microsecond gap spends the one-shot for nothing. Moving consumption behind a
+    // typed-ack would add an IPC round trip and a state machine for a window this
+    // narrow; the failure is a re-arm in Settings, not a wrong launch.
     markAgentConfigSessionLaunched(req)
-    return { ok: true, command }
+    // Sign-in truth at launch: the profile's email is a LABEL — nothing can route
+    // the CLI's own OAuth to it. So state the facts at the moment they bite: no
+    // login at the launch home -> "pick <email>" hint; a DIFFERENT login -> a
+    // mismatch warning. The renderer phrases it; never a launch gate.
+    let signIn: AgentCommandResult['signIn']
+    if (profile?.email) {
+      const state = probeLogin(req.agentId, profile)
+      if (state && !state.signedIn) signIn = { expected: profile.email }
+      else if (state?.email && state.email.toLowerCase() !== profile.email.toLowerCase())
+        signIn = { expected: profile.email, actual: state.email }
+    }
+    return { ok: true, command, signIn }
   })
   ipcMain.handle(AgentChannels.install, (_e, agentId: string) => installs!.start(String(agentId)))
   ipcMain.handle(AgentChannels.installStates, async () => {

@@ -5,6 +5,7 @@
 import { randomUUID } from 'node:crypto'
 import Database from 'better-sqlite3'
 import { addColumnIfMissing } from './db-migrate'
+import { parseJsonCell, workspaceMetaToRow, workspaceRowToMeta, type WorkspaceRowCells } from './workspace-rows'
 import type {
   AgentConfigOverrideRecord,
   AgentConfigProviderId,
@@ -103,12 +104,10 @@ export class SettingsStore {
     //   pane_remotes       pre-4/05: per-slot remote hosts
     //   pane_profile_ids   pre-6/04: per-slot launch profiles (ids only — ADR 0002)
     //   layout_tree        pre-split-tree: serialized pane arrangement (shape + sizes)
-    //   pane_ids           pre-move-pane persistence: per-slot ids for panes that MOVED in.
-    //                      The renderer always SENT paneIds; without this column the store
-    //                      silently dropped it, so a moved pane's claim never reached disk —
-    //                      main kept resolving it to its BIRTH workspace (consent/grants,
-    //                      finding B1), and a restore would have respawned it under the
-    //                      formula id and orphaned its live daemon session.
+    //   pane_ids           pre-move-persistence: per-slot pane-id overrides for panes
+    //                      MOVED between workspaces. The contract carried the field and
+    //                      restore consumed it, but no column existed — so a moved pane's
+    //                      daemon session was silently orphaned on every app restart.
     for (const [column, type] of [
       ['assignments', 'TEXT'],
       ['pane_cwds', 'TEXT'],
@@ -131,40 +130,16 @@ export class SettingsStore {
     addColumnIfMissing(this.db, 'app_remotes', 'shell', 'TEXT')
   }
 
-  /** Guarded per-field JSON parse: one corrupt cell drops that FIELD, never the row —
-   *  and never throws out of load(). A throwing load() looks like a brand-new install
-   *  to the renderer, whose next save (DELETE FROM app_workspaces) would wipe every
-   *  intact row. Corruption must degrade, not cascade. */
-  private static parseCell<T>(raw: string | null): T | undefined {
-    if (!raw) return undefined
-    try {
-      return JSON.parse(raw) as T
-    } catch {
-      return undefined
-    }
-  }
-
   load(): WorkspaceState {
+    // Row <-> meta mapping lives in workspace-rows.ts (pure, unit-tested) so a contract
+    // field the mapping forgets fails a test instead of silently round-tripping as
+    // undefined — which is exactly how paneIds got dropped.
     const rows = this.db
       .prepare(
-        'SELECT id, name, color, cwd, ordinal, pane_count AS paneCount, layout_tree AS layoutTree, assignments, pane_cwds AS paneCwds, pane_roles AS paneRoles, pane_remotes AS paneRemotes, pane_profile_ids AS paneProfileIds, pane_ids AS panePersistedIds FROM app_workspaces ORDER BY position'
+        'SELECT id, name, color, cwd, ordinal, pane_count AS paneCount, layout_tree AS layoutTree, assignments, pane_cwds AS paneCwds, pane_roles AS paneRoles, pane_remotes AS paneRemotes, pane_profile_ids AS paneProfileIds, pane_ids AS paneIds FROM app_workspaces ORDER BY position'
       )
-      .all() as Array<WorkspaceStateMeta & { layoutTree: string | null; assignments: string | null; paneCwds: string | null; paneRoles: string | null; paneRemotes: string | null; paneProfileIds: string | null; panePersistedIds: string | null }>
-    const workspaces: WorkspaceStateMeta[] = rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      color: r.color,
-      cwd: r.cwd,
-      ordinal: r.ordinal,
-      paneCount: r.paneCount,
-      layout: r.layoutTree ?? undefined,
-      assignments: SettingsStore.parseCell<string[]>(r.assignments),
-      paneCwds: SettingsStore.parseCell<(string | null)[]>(r.paneCwds),
-      roles: SettingsStore.parseCell<(string | null)[]>(r.paneRoles),
-      remotes: SettingsStore.parseCell<({ hostId: string; name: string; cwd?: string } | null)[]>(r.paneRemotes),
-      profileIds: SettingsStore.parseCell<(string | null)[]>(r.paneProfileIds),
-      paneIds: SettingsStore.parseCell<(number | null)[]>(r.panePersistedIds)
-    }))
+      .all() as WorkspaceRowCells[]
+    const workspaces: WorkspaceStateMeta[] = rows.map(workspaceRowToMeta)
     const settings = this.db.prepare('SELECT key, value FROM app_settings').all() as Array<{
       key: string
       value: string
@@ -190,26 +165,9 @@ export class SettingsStore {
     const tx = this.db.transaction((s: WorkspaceState) => {
       this.db.prepare('DELETE FROM app_workspaces').run()
       const ins = this.db.prepare(
-        'INSERT INTO app_workspaces (id, name, color, cwd, ordinal, pane_count, layout_tree, position, assignments, pane_cwds, pane_roles, pane_remotes, pane_profile_ids, pane_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO app_workspaces (id, name, color, cwd, ordinal, pane_count, layout_tree, position, assignments, pane_cwds, pane_roles, pane_remotes, pane_profile_ids, pane_ids) VALUES (@id, @name, @color, @cwd, @ordinal, @paneCount, @layoutTree, @position, @assignments, @paneCwds, @paneRoles, @paneRemotes, @paneProfileIds, @paneIds)'
       )
-      s.workspaces.forEach((w, i) =>
-        ins.run(
-          w.id,
-          w.name,
-          w.color,
-          w.cwd,
-          w.ordinal,
-          w.paneCount,
-          w.layout ?? null,
-          i,
-          w.assignments ? JSON.stringify(w.assignments) : null,
-          w.paneCwds ? JSON.stringify(w.paneCwds) : null,
-          w.roles ? JSON.stringify(w.roles) : null,
-          w.remotes ? JSON.stringify(w.remotes) : null,
-          w.profileIds ? JSON.stringify(w.profileIds) : null,
-          w.paneIds ? JSON.stringify(w.paneIds) : null
-        )
-      )
+      s.workspaces.forEach((w, i) => ins.run({ ...workspaceMetaToRow(w), position: i }))
       const set = this.db.prepare(
         'INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
       )
@@ -295,20 +253,20 @@ export class SettingsStore {
 
     const out: AgentConfigOverrideRecord[] = []
     for (const row of rows) {
-      const path = SettingsStore.parseCell<string[]>(row.path)
+      const path = parseJsonCell<string[]>(row.path)
       const desiredValue = row.desiredValue === null
         ? undefined
-        : SettingsStore.parseCell<AgentConfigValue>(row.desiredValue)
+        : parseJsonCell<AgentConfigValue>(row.desiredValue)
       // JSON `null` is a valid desired value, while parseCell returns undefined
       // only for an absent/invalid cell. Preserve the distinction explicitly.
       const desired = row.desiredValue === 'null' ? null : desiredValue
       if (!path?.length || (row.operation === 'set' && desired === undefined)) continue
       const baselineValue = row.baselineValue === 'null'
         ? null
-        : SettingsStore.parseCell<AgentConfigValue>(row.baselineValue)
+        : parseJsonCell<AgentConfigValue>(row.baselineValue)
       const lastAppliedValue = row.lastAppliedValue === 'null'
         ? null
-        : SettingsStore.parseCell<AgentConfigValue>(row.lastAppliedValue)
+        : parseJsonCell<AgentConfigValue>(row.lastAppliedValue)
       out.push({
         provider: row.provider,
         scope: row.scope,
@@ -513,7 +471,7 @@ export class SettingsStore {
     return rows.map((r) => ({
       ...r,
       email: r.email ?? undefined,
-      env: SettingsStore.parseCell<Record<string, string>>(r.env) ?? {}
+      env: parseJsonCell<Record<string, string>>(r.env) ?? {}
     }))
   }
 
@@ -586,7 +544,7 @@ export class SettingsStore {
       mix: string
     }>
     return rows
-      .map((r) => ({ id: r.id, name: r.name, mix: SettingsStore.parseCell<ProviderCount[]>(r.mix) }))
+      .map((r) => ({ id: r.id, name: r.name, mix: parseJsonCell<ProviderCount[]>(r.mix) }))
       .filter((t): t is ProviderMixTemplate => t.mix !== undefined)
   }
 

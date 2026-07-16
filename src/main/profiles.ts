@@ -6,7 +6,7 @@ import { getSettingsStore } from './app-settings'
 import { maybeFault, maybeMutationFault } from './fault-port'
 import { auditDelay, wizardAuditFaults } from './wizard-audit-faults'
 import type { SettingsStore } from '@backend/features/workspace'
-import { discoverLogins } from '@backend/features/agents'
+import { discoverLogins, probeLogin } from '@backend/features/agents'
 import { redactSecrets } from '@backend/features/review'
 import { HOME_POINTER } from '@backend/features/usage/homes'
 import {
@@ -131,7 +131,16 @@ function syncDiscoveredLogins(store: SettingsStore): void {
   for (const login of discoverLogins(profiles)) {
     if (login.profileId) {
       const match = profiles.find((p) => p.id === login.profileId)
-      if (match && !match.email && login.email) {
+      // Backfill a missing label — and on a DETECTED row (login-*) also follow a
+      // CHANGED login: that row means "whoever is signed in here", not a declared
+      // intent. A user-ADDED profile's label IS the intent; when reality drifts
+      // from it, the list surfaces the mismatch (login state below) — the label
+      // is never silently rewritten. Names are the user's in both cases.
+      const stale =
+        match?.id.startsWith('login-') && match.email
+          ? match.email.toLowerCase() !== login.email?.toLowerCase()
+          : !match?.email
+      if (match && login.email && stale) {
         const updated = sanitizeProfile({ ...match, email: login.email })
         if (updated) store.saveProfile(updated)
       }
@@ -170,7 +179,13 @@ export function registerProfiles(): void {
     } catch {
       /* discovery must never break listing */
     }
-    return store.listProfiles()
+    // Read-time decoration: who is ACTUALLY signed in at each profile's home.
+    // The email column stays the user's declared label; `login` is the checked
+    // reality beside it (mismatch pill, "not signed in yet"). Never persisted.
+    return store.listProfiles().map((profile) => {
+      const login = probeLogin(profile.provider, profile)
+      return login ? { ...profile, login } : profile
+    })
   })
   ipcMain.handle(ProfileChannels.save, (_e, raw: unknown) => {
     const store = getSettingsStore()

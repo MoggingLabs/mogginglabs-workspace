@@ -21,16 +21,16 @@
 // Register (until the phase-8 MCP manager automates it):
 //   claude mcp add mogging -- node <path>/bin/mogging-mcp.mjs
 import { closeSync, openSync, readFileSync, statSync, writeSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { connectEndpoint } from './lib/endpoint-client.mjs'
+import { runFile } from './lib/runtime-paths.mjs'
 
 // Keep in sync with DAEMON_PROTOCOL_VERSION in src/contracts/daemon/protocol.ts (this file is
 // plain Node — it cannot import the TS contract). It names the runtime DIRECTORY both the daemon
 // socket and the app's browser-control endpoint live in, so a stale value does not degrade: every
 // tool silently reports "the daemon is not running". Enforced by scripts/check-protocol-version.mjs.
-const PROTOCOL = 9
+const PROTOCOL = 10
 // Release channel (keep in sync with contracts ReleaseChannel; same gate). Inside a pane the
 // MOGGING_*_ENDPOINT envs below pin the exact app, so this only decides the well-known FALLBACK
 // path — run/dev-v4 when MOGGING_CHANNEL=dev is inherited (dev panes) or --dev is passed.
@@ -38,23 +38,17 @@ const CHANNEL = process.argv.includes('--dev') || process.env.MOGGING_CHANNEL ==
 const RUN_SEGMENT = (CHANNEL === 'dev' ? 'dev-v' : 'v') + PROTOCOL
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
-function runtimeBase() {
-  return process.platform === 'win32'
-    ? process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
-    : process.env.XDG_RUNTIME_DIR || join(homedir(), 'Library', 'Application Support')
-}
-
 /** App (browser-control) endpoint file — same discovery as 6/05b. */
 function appEndpointFile() {
   if (process.env.MOGGING_BROWSER_ENDPOINT) return process.env.MOGGING_BROWSER_ENDPOINT
-  return join(runtimeBase(), 'MoggingLabs', 'run', RUN_SEGMENT, 'browser-control.json')
+  return runFile(RUN_SEGMENT, 'browser-control.json')
 }
 
 /** Daemon endpoint file — the `mogging` CLI's discovery, exactly: injected
  *  inside panes, well-known per-user runtime path outside. */
 function daemonEndpointFile() {
   if (process.env.MOGGING_DAEMON_ENDPOINT) return process.env.MOGGING_DAEMON_ENDPOINT
-  return join(runtimeBase(), 'MoggingLabs', 'run', RUN_SEGMENT, 'endpoint.json')
+  return runFile(RUN_SEGMENT, 'endpoint.json')
 }
 
 // ── The catalog (ONE piece of data; the hand-written array died in 8/02) ─────
@@ -474,8 +468,9 @@ async function dispatchWrite(def, args, by) {
     }
     case 'mail-send': {
       // Sender = pane identity, always (attributable); body capped daemon-side
-      // at 16 KB exactly like `mogging mail send`.
-      const m = await callDaemon({ t: 'mail-send', from: by, to: String(args.to), body: args.body }, ['mailed'])
+      // at 16 KB exactly like `mogging mail send`. The pane token binds the sender
+      // to `by` — the daemon refuses an unbound pane sender (badpaneauth).
+      const m = await callDaemon({ t: 'mail-send', from: by, to: String(args.to), body: args.body, token: paneToken() }, ['mailed'])
       if (m.t === 'error') return { error: `mail rejected (${m.reason || 'error'})` }
       return {
         text: `mail #${m.id} sent`,
@@ -483,13 +478,13 @@ async function dispatchWrite(def, args, by) {
       }
     }
     case 'claim': {
-      const m = await callDaemon({ t: 'claim', pattern: args.pattern, from: by }, ['claimed', 'claim-denied'])
+      const m = await callDaemon({ t: 'claim', pattern: args.pattern, from: by, token: paneToken() }, ['claimed', 'claim-denied'])
       if (m.t === 'claim-denied') return { error: `DENIED — overlaps "${m.pattern}" owned by pane ${m.ownerPaneId}` }
       if (m.t === 'error') return { error: `claim rejected (${m.reason || 'error'})` }
       return { text: `claim #${m.id} granted`, receipt: {} }
     }
     case 'release': {
-      const m = await callDaemon({ t: 'release', pattern: args.pattern, all: args.all === true, from: by }, ['released'])
+      const m = await callDaemon({ t: 'release', pattern: args.pattern, all: args.all === true, from: by, token: paneToken() }, ['released'])
       if (m.t === 'error') return { error: `release rejected (${m.reason || 'error'})` }
       return { text: `released ${m.count}`, receipt: {} }
     }

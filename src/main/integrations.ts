@@ -2,7 +2,7 @@ import { ipcMain, type BrowserWindow } from 'electron'
 import {
   IntegrationsChannels,
   defaultToolPlan,
-  locatePaneWorkspace,
+  locatePane,
   sanitizeToolPlan,
   type HostedCliId,
   type IntegrationsGrantMutation,
@@ -168,7 +168,8 @@ export function mutateIntegrationsGrant(raw: IntegrationsGrantMutation): Workspa
 }
 
 /** Resolve a pane's workspace + granted write-tool names — what the app
- *  endpoint serves to `grant.get`. Moved-pane-aware (workspaceIdForPane); an
+ *  endpoint serves to `grant.get`. Pane ids encode their workspace ordinal
+ *  (locatePane — the house convention, stated once in @contracts); an
  *  unresolvable pane fails CLOSED: no workspace, no write tools. */
 export function resolveGrantedWriteTools(pane: string): { workspaceId?: string; writeTools: string[] } {
   const wsId = workspaceIdForPane(pane)
@@ -177,17 +178,19 @@ export function resolveGrantedWriteTools(pane: string): { workspaceId?: string; 
 }
 
 /** The workspace a pane belongs to. Undefined when unresolvable — callers fail
- *  CLOSED. Used to route an agent's browser control to its OWN workspace's browser
- *  (8/07c) and to resolve its write-tool grants — so it MUST honor moved panes: a
- *  pane keeps its id when it moves (the id is its daemon session key), and resolving
- *  by the birth formula alone handed a moved pane its OLD workspace's browser,
- *  consent, and grants (finding B1). `locatePaneWorkspace` applies the same
- *  claim-outranks-formula rule the renderer's port uses, against the same persisted
- *  `paneIds` the move wrote. */
+ *  CLOSED. Used to gate grants and to route an agent's browser control to its
+ *  OWN workspace's browser (8/07c).
+ *
+ *  locatePane, NOT the bare formula: a pane MOVED between workspaces keeps its id
+ *  (its daemon session key), and the formula would keep answering with the workspace
+ *  it LEFT — which is exactly the wrong workspace to read grants from. The renderer
+ *  resolved moves correctly all along; main is now the same one resolver. */
 export function workspaceIdForPane(pane: string): string | undefined {
+  const paneNum = Number(pane)
+  if (!Number.isInteger(paneNum) || paneNum <= 0) return undefined // slots start at 1
   const workspaces = getSettingsStore()?.load()?.workspaces
   if (!workspaces) return undefined
-  return locatePaneWorkspace(workspaces, Number(pane))?.workspace.id
+  return locatePane(workspaces, paneNum)?.ws.id
 }
 
 export function registerIntegrations(getWin: () => BrowserWindow | null): void {

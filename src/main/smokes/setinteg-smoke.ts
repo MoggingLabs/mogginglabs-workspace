@@ -52,7 +52,7 @@ export function runSetIntegSmoke(win: BrowserWindow): void {
     '.toolplan-empty'
   ]
   /** …and out of the Activity tab (WEBTRAIL's whole stage h lives here now). */
-  const ACTIVITY_HOOKS = ['.trail-activity', '.trail-activity .trail-btn', '.trail-ws', '.trail-list']
+  const ACTIVITY_HOOKS = ['.trail-activity', '.trail-activity .btn', '.trail-ws', '.trail-list']
 
   const openSettings = async (tab = 'integrations'): Promise<void> => {
     await ES(`(document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click(), 1)`)
@@ -156,9 +156,14 @@ export function runSetIntegSmoke(win: BrowserWindow): void {
         return { mgrChip: h('.mgr-chip'), gap }
       })()`)
 
-      // ── (c) the failing webhook reads 'failing' on the Webhooks tab ─────────
+      // ── (c) the failing webhook reads 'Failing' on the Notifications tab ─────
+      // (house Pill since F-36 — a danger pill wearing the word, not a bare class)
       await showTab('webhooks')
-      const failingShown = await waitTrue(`!!document.querySelector('.evbridge-health.is-failing')`, 40, 250)
+      const failingShown = await waitTrue(
+        `[...document.querySelectorAll('.mgr-row .pill')].some((p) => /failing/i.test(p.textContent || ''))`,
+        40,
+        250
+      )
       const hookRowShown = await ES<boolean>(
         `[...document.querySelectorAll('.mgr-row .mgr-label')].some(e => (e.textContent||'').includes('dead-hook'))`
       )
@@ -173,14 +178,14 @@ export function runSetIntegSmoke(win: BrowserWindow): void {
       const honestyOk = await ES<boolean>(
         `(document.querySelector('.trail-activity')?.textContent || '').slice(0, 4000).includes('never sent anywhere')`
       )
-      // The first `.trail-btn` inside the trail card must still be Refresh: WEBTRAIL
-      // and the gallery both click it blind, and its neighbours are Export (opens a
-      // file dialog, hangs the gate) and Clear (destroys the workspace's trail).
+      // The first `.btn` inside the trail card must still be Refresh (house kit since
+      // F-40): WEBTRAIL and the gallery both click it by name, and its neighbours are
+      // Export (opens a file dialog, hangs the gate) and Clear (destroys the trail).
       const refreshFirstOk = await ES<boolean>(
-        `/^Refresh$/.test(document.querySelector('.trail-activity .trail-btn')?.textContent?.trim() || '')`
+        `/^Refresh$/.test(document.querySelector('.trail-activity .btn')?.textContent?.trim() || '')`
       )
       const trailBtn = await ES<number | null>(
-        `(() => { const e = document.querySelector('.trail-activity .trail-btn'); if (!e) return null; const r = e.getBoundingClientRect(); return r.height ? Math.round(r.height * 100) / 100 : null })()`
+        `(() => { const e = document.querySelector('.trail-activity .btn'); if (!e) return null; const r = e.getBoundingClientRect(); return r.height ? Math.round(r.height * 100) / 100 : null })()`
       )
 
       const sp4 = await ES<number>(`parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sp-4')) || 16`)

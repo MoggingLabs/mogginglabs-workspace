@@ -182,7 +182,8 @@ export function runWebTrailSmoke(win: BrowserWindow): void {
       await ES(`(document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click(), 1)`)
       await sleep(600)
       await ES(`document.querySelector('.settings-nav-item[data-target="activity"]')?.click()`) // each tab is its own page (8) — the trail lives on Trust › Activity now
-      await ES(`(document.querySelector('.trail-activity .trail-btn')?.click(), 1)`) // Refresh (repopulates the ws filter)
+      // Refresh is a house Button now (F-40) — find it by its accessible name.
+      await ES(`(([...document.querySelectorAll('.trail-activity .btn')].find((b) => (b.textContent || '').trim() === 'Refresh'))?.click(), 1)`)
       await sleep(600)
       // Filter to THIS workspace (the ring-seed workspace would flood the top).
       await ES(

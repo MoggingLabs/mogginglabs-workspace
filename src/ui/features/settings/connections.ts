@@ -41,6 +41,14 @@ export interface ConnectionsBlock {
 export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): ConnectionsBlock {
   const bridge = getBridge()
   const grid = el('div', { class: 'conn-grid' })
+  // F-20: forty equal cards in catalog order made finding Slack a scan job. A filter
+  // field (the Usage tab's exact pattern) + state groups: what's live reads first,
+  // what needs you second, the directory third — alphabetical inside each.
+  const searchInput = el('input', { class: 'input input-sm conn-search', ariaLabel: 'Filter services' }) as HTMLInputElement
+  searchInput.type = 'search'
+  searchInput.placeholder = 'Filter services…'
+  searchInput.addEventListener('keydown', (e) => e.stopPropagation())
+  searchInput.addEventListener('input', () => paint())
   let connections: Connection[] = []
   /** Which cards have their key form open — a repaint must not close a form the
    *  user is mid-paste in. Keyed by service, not by node: the node is rebuilt. */
@@ -80,7 +88,24 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
       grid.append(EmptyState({ icon: 'plug', title: 'No services to connect', body: 'The catalog is empty.' }))
       return
     }
-    for (const c of connections) grid.append(card(c))
+    const q = searchInput.value.trim().toLowerCase()
+    const visible = connections.filter((c) => !q || c.label.toLowerCase().includes(q) || c.id.includes(q))
+    const groups: { label: string; test: (c: Connection) => boolean }[] = [
+      { label: 'Connected', test: (c) => c.state === 'connected' || c.state === 'connecting' },
+      { label: 'Needs attention', test: (c) => c.state === 'expired' || c.state === 'error' },
+      { label: 'Available', test: (c) => c.state === 'disconnected' }
+    ]
+    let any = false
+    for (const g of groups) {
+      const mine = visible.filter(g.test).sort((a, b) => a.label.localeCompare(b.label))
+      if (!mine.length) continue
+      any = true
+      grid.append(el('div', { class: 'section-label conn-group-label', text: `${g.label} · ${mine.length}` }))
+      const groupGrid = el('div', { class: 'conn-group-grid' })
+      for (const c of mine) groupGrid.append(card(c))
+      grid.append(groupGrid)
+    }
+    if (!any) grid.append(el('div', { class: 'menu-note', text: 'No service matches that filter.' }))
     onChange?.(connections)
   }
 
@@ -107,8 +132,14 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
         : null
 
     // ONE sentence, written by the contract — so "connected" can never be worded
-    // two different ways by two different pens.
-    const summary = el('div', { class: `conn-summary${c.state === 'error' ? ' is-error' : ''}`, text: connectionSummary(c) })
+    // two different ways by two different pens. F-21: an idle card's summary is the
+    // literal chip text again ("Not connected." under a not-connected pill) ×40 cards —
+    // the line earns its row only when it adds facts (who, what failed, when it renews).
+    const summaryText = connectionSummary(c)
+    const summary =
+      c.state === 'disconnected' && c.authKind !== 'local'
+        ? null
+        : el('div', { class: `conn-summary${c.state === 'error' ? ' is-error' : ''}`, text: summaryText })
 
     // What the grant can DO. Being signed in as the right person with the wrong powers
     // is still the wrong connection, and this is the only place a user can see which.
@@ -444,9 +475,12 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
           if (c.userClient) actions.append(forgetClientButton())
           break
         }
+        // S4: only a card that needs REPAIR arms its verb — forty idle Connects in
+        // accent were noise, and the accent stopped meaning "look here".
         const label = c.state === 'expired' || c.state === 'error' ? 'Reconnect' : 'Connect'
+        const armed = label === 'Reconnect' ? ' is-armed' : ''
         if (c.authKind === 'key') {
-          const open = el('button', { class: 'trail-btn is-armed', type: 'button', text: label }) as HTMLButtonElement
+          const open = el('button', { class: `trail-btn${armed}`, type: 'button', text: label }) as HTMLButtonElement
           open.onclick = (): void => {
             keyFormOpen.add(c.id)
             paint()
@@ -455,7 +489,7 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
         } else {
           // `oauth` and `local` both connect through the same verb; the handler
           // words the wait honestly for each.
-          const btn = el('button', { class: 'trail-btn is-armed', type: 'button', text: label }) as HTMLButtonElement
+          const btn = el('button', { class: `trail-btn${armed}`, type: 'button', text: label }) as HTMLButtonElement
           btn.onclick = (): void => beginConnect(btn)
           actions.append(btn)
           // A dual-auth service (GitHub's PAT, Sentry's auth token): the key path
@@ -477,7 +511,7 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
     return el('div', { class: `conn-card is-${c.state}`, dataset: { connection: c.id } }, [
       head,
       ...(identity ? [identity] : []),
-      summary,
+      ...(summary ? [summary] : []),
       ...(scopeLine ? [scopeLine] : []),
       ...(toolsBlock ? [toolsBlock] : []),
       body,
@@ -491,6 +525,7 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
       text:
         'Connect a service to MoggingLabs Workspace once, and every agent you launch can use it — no CLI to configure, no key to copy around. Sign-in happens in your own browser, on the provider’s real page. The credential is encrypted by your OS keychain and stays in this app: your CLIs reach the service through us, so no token is ever written into a CLI’s config file.'
     }),
+    searchInput,
     grid
   ])
 

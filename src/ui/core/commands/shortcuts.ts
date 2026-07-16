@@ -18,6 +18,8 @@ export function isModKey(e: KeyboardEvent): boolean {
 export interface ShortcutRow {
   keys: string
   label: string
+  /** F-42: a gesture is not pressable — it must not wear key-cap chips. */
+  gesture?: true
 }
 export interface ShortcutGroup {
   title: string
@@ -60,8 +62,8 @@ export const SHORTCUTS: ShortcutGroup[] = [
       { keys: 'Ctrl+Shift+V', label: 'Paste into the terminal' },
       // Over a full-screen agent UI (Claude Code and co. take the mouse), a plain drag is
       // the AGENT's selection — its own copy lands on your clipboard. Shift forces ours.
-      { keys: 'Shift+drag', label: 'Select with the app when an agent owns the mouse (⌥ on macOS)' },
-      { keys: 'Drag a file in', label: 'Insert its full path, quoted for your shell' }
+      { keys: 'Shift + drag', label: 'Select with the app when an agent owns the mouse (⌥ on macOS)', gesture: true },
+      { keys: 'Drag a file in', label: 'Insert its full path, quoted for your shell', gesture: true }
     ]
   },
   {
@@ -75,9 +77,12 @@ export const SHORTCUTS: ShortcutGroup[] = [
   }
 ]
 
-/** Render a key-combo as individual .kbd chips joined by +. */
-function keyChips(keys: string): (Node | string)[] {
-  const parts = keys.split('+')
+/** Render a key-combo as individual .kbd chips joined by +. A gesture row (F-42)
+ *  renders as quiet italic text instead — a key-cap promises "press this", and a
+ *  drag is not pressable. */
+function keyChips(r: ShortcutRow): (Node | string)[] {
+  if (r.gesture) return [el('span', { class: 'kbd-gesture', text: r.keys })]
+  const parts = r.keys.split('+')
   const out: (Node | string)[] = []
   parts.forEach((p, i) => {
     if (i > 0) out.push(' + ')
@@ -97,7 +102,7 @@ export function renderShortcutList(): HTMLElement {
         ...g.rows.map((r) =>
           el('div', { class: 'shortcuts-row' }, [
             el('span', { class: 'shortcuts-row-label', text: r.label }),
-            el('span', { class: 'shortcuts-row-keys' }, keyChips(r.keys))
+            el('span', { class: 'shortcuts-row-keys' }, keyChips(r))
           ])
         )
       ])
