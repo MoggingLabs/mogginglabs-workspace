@@ -177,6 +177,14 @@ burning a core since 07-12; the STASHED-BASELINE run reproduced the same
 exonerated by the A/B protocol; the identical remediation code measured 104.1 ms
 green earlier the same day).
 
+A same-day **standards pass** followed (docs/18 §standards profile is the living
+matrix): RFC 7009 best-effort revocation on logout (the ACCOUNT gate asserts the AS
+saw it) and OIDC Core §3.1.3.7 id_token verification against the published JWKS
+(ES256/RS256 allowlist, iss/aud/exp; a tampered id_token now REFUSES the login and
+the gate proves it) — closing the last two SHOULD-level gaps both review passes had
+recorded. Deliberately still the operator's: RFC 8414 live discovery, entitlement
+iss/aud pinning, RS-side jti replay windows, RFC 9207.
+
 **Deliberately the operator's, not this freeze's**: the full uncut 144-gate sweep, the
 three-OS CI dispatch, wiring the real IdP/MoR/issuer origins, and **the code-signing
 certificates — the deferred final step** (docs/18 §honest limits names exactly what it

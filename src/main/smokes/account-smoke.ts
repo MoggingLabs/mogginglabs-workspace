@@ -28,8 +28,13 @@ import { getSettingsStore } from '../app-settings'
 //   (d) a DPoP proof is attached and VERIFIES, the AS bound the SAME key the client
 //       holds, and a foreign-key refresh is REJECTED (sender-constraint — a lifted
 //       refresh token is inert without the key);
-//   (e) logout clears the vault (refresh + DPoP key) and memory -> anon;
-//   (f) a server-side revoked refresh drops a re-logged-in session to anon CLEANLY.
+//   (e) logout clears the vault (refresh + DPoP key) and memory -> anon, AND
+//       best-effort-revokes the grant AT the AS (RFC 7009) so a forgotten refresh
+//       token is not left valid server-side;
+//   (f) a server-side revoked refresh drops a re-logged-in session to anon CLEANLY;
+//   (g) OIDC verification is the door for identity claims: a tampered id_token
+//       (valid grant, edited claims) refuses the whole login — decode-only display
+//       of unverified claims is not a thing this module does.
 
 const TOKEN_KEYS = ['accessToken', 'refreshToken', 'access_token', 'refresh_token']
 
@@ -108,10 +113,17 @@ export async function runAccountSmoke(): Promise<void> {
     const foreign = await idp.probeForeignKeyRefresh() // a stolen refresh token, wrong key
     const dpopOk = nonceDanced && proofVerified && boundToOurKey && foreign.rejected
 
-    // ── (e) logout clears vault + memory -> anon ─────────────────────────────────
+    // ── (e) logout clears vault + memory -> anon, and revokes AT the AS ──────────
     await logout()
     const afterLogout = accountStatus()
     const logoutOk = afterLogout.state === 'anon' && refreshCipher() === '' && (store?.getSetting('account.dpopKey') ?? '') === ''
+    // RFC 7009: the forgotten grant was also revoked server-side. Fire-and-forget by
+    // design, so poll with a retry loop (never a fixed sleep).
+    let revokedAtAs = false
+    for (let i = 0; i < 40 && !revokedAtAs; i++) {
+      revokedAtAs = idp.revocations >= 1
+      if (!revokedAtAs) await new Promise((r) => setTimeout(r, 50))
+    }
 
     // ── (f) revoked refresh -> anon cleanly (re-login first) ──────────────────────
     await login()
@@ -126,7 +138,14 @@ export async function runAccountSmoke(): Promise<void> {
       revokeState.state === 'anon' &&
       refreshCipher() === ''
 
-    const pass = loginOk && custodyOk && rotateOk && dpopOk && logoutOk && revokeOk
+    // ── (g) OIDC verification bites: a tampered id_token refuses the login ────────
+    idp.setScenario('tampered-idtoken')
+    const startedTampered = await login()
+    const afterTamperedIdToken = (await whenSettledForSmoke()) ?? accountStatus()
+    idp.setScenario('success')
+    const idTokenVerifyBites = startedTampered.ok && afterTamperedIdToken.state === 'anon' && refreshCipher() === ''
+
+    const pass = loginOk && custodyOk && rotateOk && dpopOk && logoutOk && revokedAtAs && revokeOk && idTokenVerifyBites
     result = {
       pass,
       loginOk,
@@ -141,7 +160,9 @@ export async function runAccountSmoke(): Promise<void> {
       boundToOurKey,
       foreignRejected: foreign.rejected,
       logoutOk,
+      revokedAtAs,
       revokeOk,
+      idTokenVerifyBites,
       tokenRequests: idp.tokenRequests,
       // Counts + claims only — deliberately NO token material in the verdict.
       issuedRefreshCount: idp.issuedRefresh.length

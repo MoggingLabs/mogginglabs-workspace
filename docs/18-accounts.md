@@ -79,12 +79,23 @@ every renewal. Two laws the composed milestone forced into writing:
   memory under an anon status — is worse than a clean retry), and a post-consent
   failure pushes ONE transient human sentence over `account:changed`
   (`AccountStatus.reason`, push-only, never stored) that Settings toasts.
-- **Logout returns the machine to anon-Free in one gesture.** An explicit logout
-  also drops the cached entitlement (the one door that does — a session that dies
-  UNDER us leaves the cache in place, because the device-mismatch story and its
-  telemetry read it). A fresh LOGIN is the mirror image: it bumps the same epochs, so
-  an in-flight refresh or claim-fetch from the PREVIOUS session can never re-vault
-  over the new one.
+- **Identity claims are verified, never just decoded.** The id_token is checked
+  against the AS's published JWKS (OIDC Core §3.1.3.7): signature with the alg
+  allowlisted to ES256/RS256 and the key TYPE required to match (RFC 8725 — no
+  `none`, no key confusion), then `iss`/`aud`/`exp`. The claims are display identity
+  only (authorization never derives from them), so reachability follows the
+  resilience law: an unreachable JWKS costs the claims, not the login; a
+  PRESENT-but-INVALID token is a tamper signal — login refuses outright, refresh
+  simply declines to update the stored claims (ending a paying session over an
+  ancillary token is the overreaction the 5xx law exists to prevent).
+- **Logout returns the machine to anon-Free in one gesture — here AND at the AS.**
+  An explicit logout also drops the cached entitlement (the one door that does — a
+  session that dies UNDER us leaves the cache in place, because the device-mismatch
+  story and its telemetry read it), and best-effort-revokes the forgotten grant at
+  the AS (RFC 7009, fire-and-forget by design: logout stays instant and offline-safe;
+  rotation + reuse detection remain the backstop when it misses). A fresh LOGIN is
+  the mirror image: it bumps the same epochs, so an in-flight refresh or claim-fetch
+  from the PREVIOUS session can never re-vault over the new one.
 
 In production neither the IdP nor the issuer is wired yet (`config === null` — the
 reserved origins land in `origins.ts` when the operator stands the services up);
@@ -351,6 +362,31 @@ declared) — release.yml runs exactly these three on every OS row and blocks on
 any red. Residual, stated plainly: the helper is still a Node interpreter — but
 a GUI-less, no-Keychain-entitlement, no-app-identity one; running script under
 it grants nothing a stock Node download doesn't.
+
+## The standards profile (what this lane conforms to, and where)
+
+| Standard | Where it lives | Notes |
+|---|---|---|
+| OAuth 2.1 (draft) / RFC 6749 | `src/main/account.ts` | Authorization Code only — no implicit, no ROPC; public client (no secret in the bundle); §5.2 error semantics drive the transient/definitive session law (5xx/429 keep the session, only a 4xx OAuth answer ends it). |
+| RFC 7636 PKCE | `createPkce` (integrations/oauth.ts) | S256 only; 32-byte verifier (256-bit entropy, the spec's 43-char shape); the FAKE AS refuses non-S256, so a downgrade cannot pass a gate. |
+| RFC 8252 native apps | `login()` | Consent in the SYSTEM browser (`shell.openExternal`, never an embedded view); ephemeral `127.0.0.1` loopback redirect; `state` = 128-bit CSRF nonce. |
+| RFC 8707 resource indicators | authorize + token + refresh requests | The token is bound to the entitlement API audience — minted for us, replayable nowhere else. |
+| RFC 9449 DPoP | dpop-key.ts + account.ts + entitlements.ts | Proofs on every token request (§8 AS nonce dance) AND on the entitlement fetch (`ath` binding, §8.2 RS nonce dance); both dances ENFORCED by the FAKEs so the retry paths stay live under every gate. |
+| RFC 7638 JWK thumbprint | `jktOfPublicJwk` | The `deviceId` the issuer binds and the engine enforces — the hardware-binding pivot. |
+| RFC 7009 revocation | `logout()` | Best-effort, fire-and-forget (logout stays instant + offline-safe); the ACCOUNT gate asserts the AS actually saw it. |
+| OIDC Core §3.1.3.7 | `verifyIdToken` (account.ts) | id_token claims believed only after JWKS signature + `iss`/`aud`/`exp`; verified-or-absent for reachability, invalid refuses the login (the gate proves it bites). |
+| RFC 7519/7515/8037 (JWT/JWS/EdDSA) | entitlements.ts verifier | Ed25519 against the PINNED key (never fetched, never env); closed, typed claim shape; expiry judged by the grace law. |
+| RFC 8725 JWT BCP | both verifiers | Explicit alg allowlists, `typ` pinning (`entitle+jwt`), key-type/alg match on JWKS keys, no `none`, no unverified decode anywhere in the lane. |
+| Webhook signing (the Stripe contract) | fake-entitle `/mor/webhook` | `t=,v1=` HMAC-SHA256 over `<t>.<rawBody>`, ±5-min tolerance, event-id idempotency, timing-safe compare — verified before any state change. |
+| RFC 8032 / FIPS 186-4 crypto | device-key addon + signers | Ed25519 (entitlement signatures), ECDSA P-256 (DPoP — TPM / Secure-Enclave resident where the machine has one). |
+
+Deliberately the operator's wiring, recorded so nothing is silently skipped: **RFC
+8414** discovery of the real IdP (config is injected today; discover-then-pin when it
+exists), **`iss`/`aud` inside the entitlement JWT** (pinnable only once the real
+issuer's identifiers exist — the verifier tolerates the extra claims already),
+**RS-side DPoP `jti` replay tracking** (a server-side concern the real issuer owns),
+and **RFC 9207** (`iss` on the authorization response — a mix-up defense that matters
+only if a second AS ever exists; the client is single-AS by construction today).
 
 ## Honest limits (read before claiming anything)
 

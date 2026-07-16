@@ -30,7 +30,7 @@ import type { AuthServerMetadata } from '../integrations/oauth'
 // `DPoP-Nonce` header on the first token request), so account.ts's retry path is live
 // every run rather than dead code.
 
-export type FakeIdpScenario = 'success' | 'cancel' | 'expired-code'
+export type FakeIdpScenario = 'success' | 'cancel' | 'expired-code' | 'tampered-idtoken'
 
 export interface FakeIdpOptions {
   email?: string
@@ -90,6 +90,8 @@ export class FakeIdp {
   tokenRequests = 0
   nonceChallenges = 0
   proofsVerified = 0
+  /** RFC 7009 deliveries — how many times a client best-effort-revoked on logout. */
+  revocations = 0
   lastBoundJkt: string | null = null
   readonly issuedRefresh: string[] = []
 
@@ -119,7 +121,9 @@ export class FakeIdp {
       authorization_endpoint: `${base}/authorize`,
       token_endpoint: `${base}/token`,
       scopes_supported: ['openid', 'email', 'entitlements'],
-      userinfo_endpoint: `${base}/userinfo`
+      userinfo_endpoint: `${base}/userinfo`,
+      revocation_endpoint: `${base}/revoke`,
+      jwks_uri: `${base}/.well-known/jwks.json`
     }
   }
 
@@ -180,6 +184,7 @@ export class FakeIdp {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${this.port}`)
     if (req.method === 'GET' && url.pathname === '/authorize') return this.authorize(url, res)
     if (req.method === 'POST' && url.pathname === '/token') return this.token(req, res)
+    if (req.method === 'POST' && url.pathname === '/revoke') return this.revoke(req, res)
     if (req.method === 'GET' && url.pathname === '/.well-known/jwks.json') {
       return this.json(res, 200, { keys: [this.signingPubJwk] })
     }
@@ -187,6 +192,17 @@ export class FakeIdp {
       return this.json(res, 200, this.metadata as unknown as Record<string, unknown>)
     }
     res.writeHead(404).end()
+  }
+
+  /** RFC 7009 token revocation. Always 200 — §2.2: an unknown/already-revoked token
+   *  is a success (the desired state holds), so a client can fire-and-forget it. */
+  private async revoke(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const form = new URLSearchParams(await readBody(req))
+    const token = form.get('token') ?? ''
+    const grant = this.grants.get(token)
+    if (grant) grant.revoked = true
+    this.revocations += 1
+    res.writeHead(200).end()
   }
 
   private authorize(url: URL, res: ServerResponse): void {
@@ -276,7 +292,16 @@ export class FakeIdp {
     const now = Math.floor(Date.now() / 1000)
     const claims = { iss: this.metadata.issuer, sub: 'user-1', aud: this.clientId, email, plan, cnf: { jkt }, iat: now, exp: now + this.accessTtlSec }
     const accessToken = this.signJwt({ alg: 'ES256', typ: 'at+jwt', kid: 'fake-idp-1' }, { ...claims, scope: 'openid email entitlements' })
-    const idToken = this.signJwt({ alg: 'ES256', typ: 'JWT', kid: 'fake-idp-1' }, claims)
+    let idToken = this.signJwt({ alg: 'ES256', typ: 'JWT', kid: 'fake-idp-1' }, claims)
+    if (this.scenario === 'tampered-idtoken') {
+      // Properly signed, then the payload edited (a fixture email swap) — the signature
+      // no longer covers the claims, and the client's OIDC verification must refuse the
+      // whole login rather than display what it cannot authenticate.
+      const [h, p, s] = idToken.split('.')
+      const edited = JSON.parse(b64urlDecode(p)) as Record<string, unknown>
+      edited.email = 'attacker@mogginglabs.example'
+      idToken = `${h}.${b64urlJson(edited)}.${s}`
+    }
     res.writeHead(200, { 'content-type': 'application/json', 'DPoP-Nonce': this.nonce })
     res.end(
       JSON.stringify({

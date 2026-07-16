@@ -1,5 +1,6 @@
 import { ipcMain, shell, type BrowserWindow } from 'electron'
 import { createServer, type Server, type ServerResponse } from 'node:http'
+import { createPublicKey, verify as verifySignature, type JsonWebKey as CryptoJwk } from 'node:crypto'
 import { AddressInfo } from 'node:net'
 import { AccountChannels, type AccountLoginResult, type AccountStatus } from '@contracts'
 import { buildAuthorizeUrl, createPkce, createState, mergeRefreshedTokens, type AuthServerMetadata, type OAuthTokens } from '@backend/features/integrations'
@@ -112,9 +113,10 @@ interface PendingFlow {
   state: string
   verifier: string
   redirectUri: string
-  /** RFC 8707 audience, captured at flow start — the callback never re-reads the
+  /** The whole config SNAPSHOT at flow start (resource for the exchange, issuer +
+   *  jwks_uri + clientId for the id_token verify) — the callback never re-reads the
    *  (mutable) module config, so a config change mid-flow cannot throw or misbind. */
-  resource: string
+  cfg: AccountConfig
   /** The key this flow binds. Lives ON the flow (not module state) so a superseding
    *  login cannot hand a stale key to an older callback. Persisted only on success. */
   key: DpopKey
@@ -236,29 +238,86 @@ async function dpopTokenRequest(form: Record<string, string>, key: DpopKey): Pro
   }
 }
 
-/** Decode (not verify) the id_token payload for its identity + plan claims. The token
- *  arrived over a channel we initiated from a code only we hold; JWKS signature
- *  verification is a later hardening. Never logs the token. */
-function claimsFromIdToken(idToken: string | undefined): { email?: string; plan?: string } {
-  if (!idToken) return {}
+// ── OIDC id_token verification (OIDC Core §3.1.3.7, profiled for this client) ────────
+const b64urlToBuf = (s: string): Buffer => Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64')
+
+interface JwksKey {
+  kty?: string
+  kid?: string
+  crv?: string
+  x?: string
+  y?: string
+  n?: string
+  e?: string
+}
+
+/** The id_token is VERIFIED against the AS's published JWKS before its claims are
+ *  believed — signature (alg allowlisted to ES256/RS256 with the key TYPE required to
+ *  match, RFC 8725 §3.1 — no `none`, no key confusion), `iss` (the metadata issuer),
+ *  `aud` (this client), `exp` (2-minute skew). The claims are DISPLAY identity only
+ *  (email + the marketing plan string; authorization never derives from them — the
+ *  entitlement engine is the authority), so reachability follows the resilience law:
+ *  a JWKS we cannot FETCH yields no claims and no failure ('unreachable'), while a
+ *  token that is PRESENT and provably wrong ('invalid') is a tamper signal the login
+ *  path refuses on. Never logs the token. */
+type IdTokenVerdict = { ok: true; claims: { email?: string; plan?: string } } | { ok: false; why: 'unreachable' | 'invalid' }
+
+async function verifyIdToken(idToken: string, cfg: AccountConfig): Promise<IdTokenVerdict> {
   const parts = idToken.split('.')
-  if (parts.length < 2) return {}
+  if (parts.length !== 3) return { ok: false, why: 'invalid' }
+  let header: { alg?: string; kid?: string }
+  let payload: Record<string, unknown>
   try {
-    const p = JSON.parse(Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')) as {
-      email?: unknown
-      plan?: unknown
-    }
-    return {
-      email: typeof p.email === 'string' ? p.email : undefined,
-      plan: typeof p.plan === 'string' ? p.plan : undefined
-    }
+    header = JSON.parse(b64urlToBuf(parts[0]).toString('utf8'))
+    payload = JSON.parse(b64urlToBuf(parts[1]).toString('utf8'))
   } catch {
-    return {}
+    return { ok: false, why: 'invalid' }
+  }
+  if (header.alg !== 'ES256' && header.alg !== 'RS256') return { ok: false, why: 'invalid' }
+  // No published keys = nothing verifiable — the claims stay absent rather than trusted.
+  if (!cfg.metadata.jwks_uri) return { ok: false, why: 'unreachable' }
+  let keys: JwksKey[]
+  try {
+    const res = await fetch(cfg.metadata.jwks_uri, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(10_000) })
+    if (res.status < 200 || res.status >= 300) return { ok: false, why: 'unreachable' }
+    const doc = (await res.json()) as { keys?: JwksKey[] }
+    keys = Array.isArray(doc.keys) ? doc.keys : []
+  } catch {
+    return { ok: false, why: 'unreachable' }
+  }
+  const jwk = header.kid ? keys.find((k) => k.kid === header.kid) : keys.length === 1 ? keys[0] : undefined
+  if (!jwk) return { ok: false, why: 'invalid' } // keys published, none matches — not our issuer's token
+  if ((header.alg === 'ES256' && jwk.kty !== 'EC') || (header.alg === 'RS256' && jwk.kty !== 'RSA')) {
+    return { ok: false, why: 'invalid' }
+  }
+  let ok = false
+  try {
+    const key = createPublicKey({ key: jwk as CryptoJwk, format: 'jwk' })
+    const data = Buffer.from(`${parts[0]}.${parts[1]}`)
+    const sig = b64urlToBuf(parts[2])
+    // ES256 signs raw r‖s (ieee-p1363); RS256 is PKCS#1 v1.5, node's RSA default.
+    ok = header.alg === 'ES256' ? verifySignature('sha256', data, { key, dsaEncoding: 'ieee-p1363' }, sig) : verifySignature('sha256', data, key, sig)
+  } catch {
+    return { ok: false, why: 'invalid' }
+  }
+  if (!ok) return { ok: false, why: 'invalid' }
+  const aud = payload.aud
+  const audOk = aud === cfg.clientId || (Array.isArray(aud) && aud.includes(cfg.clientId))
+  const exp = typeof payload.exp === 'number' && Number.isFinite(payload.exp) ? payload.exp : 0
+  if (payload.iss !== cfg.metadata.issuer || !audOk || exp * 1000 <= Date.now() - 120_000) return { ok: false, why: 'invalid' }
+  return {
+    ok: true,
+    claims: {
+      email: typeof payload.email === 'string' ? payload.email : undefined,
+      plan: typeof payload.plan === 'string' ? payload.plan : undefined
+    }
   }
 }
 
 // ── Persistence helpers ─────────────────────────────────────────────────────────────
-function persistGrant(tokens: OAuthTokens, key: DpopKey): boolean {
+/** `claims` are the VERIFIED id_token claims (verifyIdToken) — callers pass undefined
+ *  when there was no id_token or its JWKS was unreachable, and the stored claims stand. */
+function persistGrant(tokens: OAuthTokens, key: DpopKey, claims?: { email?: string; plan?: string }): boolean {
   // The refresh token must land as ciphertext or we hold nothing (never plaintext at
   // rest — ADR 0008.h). The DPoP key persists only in the SOFTWARE fallback custody:
   // a hardware key has no exportable private half — the chip IS its persistence. The
@@ -267,10 +326,9 @@ function persistGrant(tokens: OAuthTokens, key: DpopKey): boolean {
   // the next restart (the key in use and the key at rest must be the same key).
   if (tokens.refreshToken && !vaultStore(VAULT_REFRESH, tokens.refreshToken)) return false
   if (key.exportPrivateKeyPem && !vaultStore(VAULT_DPOP, key.exportPrivateKeyPem())) return false
-  const claims = claimsFromIdToken(tokens.idToken)
   const store = getSettingsStore()
-  if (claims.email !== undefined) store?.setSetting(KV_EMAIL, claims.email)
-  if (claims.plan !== undefined) store?.setSetting(KV_PLAN, claims.plan)
+  if (claims?.email !== undefined) store?.setSetting(KV_EMAIL, claims.email)
+  if (claims?.plan !== undefined) store?.setSetting(KV_PLAN, claims.plan)
   return true
 }
 
@@ -369,7 +427,7 @@ export async function login(): Promise<AccountLoginResult> {
 
   const settled = new Promise<AccountStatus>((resolve) => {
     const timer = setTimeout(() => endFlow(), 5 * 60_000) // endFlow settles via the flow record
-    pending = { state, verifier: pkce.verifier, redirectUri: loop.redirectUri, resource: cfg.resource, key, server: loop.server, timer, settle: resolve }
+    pending = { state, verifier: pkce.verifier, redirectUri: loop.redirectUri, cfg, key, server: loop.server, timer, settle: resolve }
   })
 
   const authorizeUrl = buildAuthorizeUrl({
@@ -441,7 +499,7 @@ async function handleCallback(q: URLSearchParams, res: ServerResponse): Promise<
   }
 
   const exchanged = await dpopTokenRequest(
-    { grant_type: 'authorization_code', code, code_verifier: flow.verifier, redirect_uri: flow.redirectUri, resource: flow.resource },
+    { grant_type: 'authorization_code', code, code_verifier: flow.verifier, redirect_uri: flow.redirectUri, resource: flow.cfg.resource },
     flow.key
   )
   if (!exchanged.ok) {
@@ -456,6 +514,18 @@ async function handleCallback(q: URLSearchParams, res: ServerResponse): Promise<
     fail('The account service returned no refresh token, so the session could not be kept.')
     return
   }
+  // OIDC: identity claims are believed only after verifyIdToken (signature against the
+  // published JWKS + iss/aud/exp). A JWKS blip costs the display claims, not the login;
+  // a PRESENT-but-INVALID token is a tamper signal and refuses the login outright.
+  let claims: { email?: string; plan?: string } | undefined
+  if (exchanged.tokens.idToken) {
+    const v = await verifyIdToken(exchanged.tokens.idToken, flow.cfg)
+    if (!v.ok && v.why === 'invalid') {
+      fail('The account service returned an identity token that failed verification, so sign-in was abandoned.')
+      return
+    }
+    if (v.ok) claims = v.claims
+  }
   // The user's LAST word wins: a Sign out clicked while this exchange was on the wire
   // means the machine stays anon-Free — persisting now would override the one-gesture
   // logout law seconds after the gesture.
@@ -463,7 +533,7 @@ async function handleCallback(q: URLSearchParams, res: ServerResponse): Promise<
     fail('You signed out while the sign-in was completing, so it was abandoned.')
     return
   }
-  if (!persistGrant(exchanged.tokens, flow.key)) {
+  if (!persistGrant(exchanged.tokens, flow.key, claims)) {
     clearSession()
     fail('Could not store your session securely, so sign-in was abandoned.')
     return
@@ -537,15 +607,25 @@ async function doRefresh(): Promise<string | null> {
     pushStatus()
     return null
   }
+  // OIDC on refresh, softer than login BY DESIGN: an id_token that fails to verify (or
+  // whose JWKS is unreachable) simply does not UPDATE the stored claims — the grant
+  // itself is fine, and ending a paying user's session over an ancillary display token
+  // is the overreaction the 5xx law exists to prevent. Login is the strict gate.
+  let claims: { email?: string; plan?: string } | undefined
+  if (next.tokens.idToken) {
+    const v = await verifyIdToken(next.tokens.idToken, cfg)
+    if (v.ok) claims = v.claims
+  }
   // A logout (or another session-clear) that landed while we were awaiting the AS wins:
   // do NOT re-vault a grant the user just ended. The AS already rotated the presented
   // refresh token, so the newly-issued one is simply dropped — the session stays ended.
+  // (Checked AFTER the verify await — the guard must be the LAST thing before persist.)
   if (epoch !== sessionEpoch) return null
   // ROTATION: persist the NEW refresh token (many AS rotate on every use; dropping it
   // strands the grant at the next expiry). mergeRefreshedTokens keeps the old one only
   // when the AS returned none.
   const merged = mergeRefreshedTokens({ accessToken: access?.token ?? '', refreshToken: rt }, next.tokens)
-  if (!persistGrant(merged, key)) {
+  if (!persistGrant(merged, key, claims)) {
     clearSession()
     pushStatus()
     return null
@@ -609,6 +689,22 @@ export function setAccountLoginHook(cb: (() => void) | null): void {
 export async function logout(): Promise<void> {
   userLogoutEpoch += 1 // the explicit gesture — a mid-flight exchange must not override it
   if (pending) endFlow()
+  // RFC 7009, best-effort and NON-BLOCKING: the grant this machine is about to forget
+  // is also revoked AT the AS, so a vaulted-then-forgotten refresh token is not left
+  // valid server-side. Fire-and-forget by design — logout is instant and works offline
+  // (§2.2: even the AS answers 200 for unknown tokens, so there is nothing to wait on);
+  // the AS's rotation + reuse detection remains the backstop when this misses. The
+  // plaintext read is a point-of-use decrypt, custody unchanged (ADR 0015 §3).
+  const cfg = config
+  const rt = vaultLoad(VAULT_REFRESH)
+  if (cfg?.metadata.revocation_endpoint && rt) {
+    void fetch(cfg.metadata.revocation_endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token: rt, token_type_hint: 'refresh_token', client_id: cfg.clientId }),
+      signal: AbortSignal.timeout(10_000)
+    }).catch(() => undefined)
+  }
   clearSession()
   dpopNonce = undefined
   try {

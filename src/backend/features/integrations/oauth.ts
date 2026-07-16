@@ -32,6 +32,11 @@ export interface AuthServerMetadata {
   code_challenge_methods_supported?: string[]
   scopes_supported?: string[]
   userinfo_endpoint?: string
+  /** RFC 7009 — where a logout best-effort-revokes the grant it is forgetting. */
+  revocation_endpoint?: string
+  /** RFC 8414 / OIDC discovery — where the AS publishes its signing keys, so an
+   *  id_token's signature is VERIFIED (OIDC Core §3.1.3.7), never just decoded. */
+  jwks_uri?: string
 }
 
 export interface OAuthTokens {
