@@ -341,12 +341,13 @@ export const settingsFeature: UiFeature = {
       {
         id: 'profiles',
         // F-16: the rail label and the page title must match verbatim — it is how a
-        // user confirms they landed where they aimed.
-        label: 'Profiles & SSH hosts',
+        // user confirms they landed where they aimed. 'SSH' lives in the card titles
+        // (and the search index); the full form ellipsized in the rail.
+        label: 'Profiles & hosts',
         // F-17: the two real cards stand alone — the old wrapper card led the page
         // with a policy heading ("Pointer sets only") and made the app's only
         // card-in-card nesting. Content first; the ADR covenant closes the page.
-        el: section('profiles', 'Profiles & SSH hosts', 'Pointers to accounts and machines — never credentials.', [
+        el: section('profiles', 'Profiles & hosts', 'Pointers to accounts and SSH machines — never credentials.', [
           profilesHosts,
           el('p', {
             class: 'settings-scope',
