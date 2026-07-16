@@ -14,10 +14,11 @@ import {
   type UsageDisplayConfig,
   type UsageProviderDef
 } from '@contracts'
-import { Button, EmptyState, createCheckbox, createCollapsibleCard, el, loadingRow, providerLogo, showToast, submitWithRetain } from '../../components'
+import { Button, EmptyState, FieldGroup, IconButton, createCheckbox, createCollapsibleCard, el, loadingRow, providerLogo, showToast, submitWithRetain } from '../../components'
 import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
 import { getTelemetry } from '../../core/telemetry'
+import { gotoSettingsTab } from '../../core/shell/settings-tab-port'
 import { switchActiveProfile } from '../../core/agents/profile-switch'
 
 /**
@@ -619,15 +620,15 @@ export function createUsageSection(): HTMLElement {
       onChange: (checked) => void invoke(UsageChannels.alertCfgSet, { confetti: checked })
     })
     confetti.el.classList.add('usage-confetti-toggle')
+    // F-31: the thresholds were a sentence with inputs embedded in it — label-control
+    // association broke, and the error surfaced at the row's end. Two labeled fields;
+    // validation right below them.
     alertsHost.append(
-      el('div', { class: 'usage-alert-row' }, [
-        el('span', { class: 'settings-row-caption', text: 'Quiet toast at' }),
-        quiet,
-        el('span', { class: 'settings-row-caption', text: '% · warning at' }),
-        warn,
-        el('span', { class: 'settings-row-caption', text: '%' }),
-        thrErr
+      el('div', { class: 'usage-thr-grid' }, [
+        FieldGroup({ label: 'Quiet warning', hint: '% of a window — a gentle toast, once per window.' }, quiet),
+        FieldGroup({ label: 'Loud warning', hint: '% of a window — the verdict toast, re-armed at reset.' }, warn)
       ]),
+      thrErr,
       confetti.el
     )
     // Credits floors: a balance has no percentage, so "low" is the USER's
@@ -749,7 +750,25 @@ export function createUsageSection(): HTMLElement {
   // in the user's words; the mechanics live inside the open card. F-29: "History &
   // cost" gave two doors the word cost — History keeps its id (SETUSAGE keys off it)
   // and loses the claim; Cost overview is the one home for money.
-  const providersCard = card('providers', 'Usage sources', 'Choose which providers to watch. Keys pasted here feed usage reads only — keys for MCP servers live in Integrations › Service keys.', el('div', {}, [search, grid]))
+  const providersCard = createCollapsibleCard(
+    {
+      id: 'providers',
+      title: 'Usage sources',
+      caption: 'Choose which providers to watch. Keys pasted here feed usage reads only — keys for MCP servers live in Integrations › Service keys.',
+      storagePrefix: 'usage',
+      class: 'usage-card usage-card-providers',
+      // F-10: the cross-reference to the CLI list is a CLICK, not a prose aside.
+      actions: Button({
+        label: 'Install CLIs',
+        icon: 'terminal',
+        variant: 'ghost',
+        size: 'sm',
+        title: 'Agent CLIs — install and configure the providers themselves',
+        onClick: () => gotoSettingsTab('providers')
+      })
+    },
+    [el('div', {}, [search, grid])]
+  )
   const plansCard = card('plans', 'Plans & profiles', 'Every plan being tracked, and which account new agents launch as.', plansTable)
   const costCard = card('cost', 'Cost overview', 'What today cost, where the month is heading, and which model burns the money — read locally from your CLIs’ own logs.', costHost)
   const alertsCard = card('alerts', 'Thresholds & alerts', 'Get warned before a plan runs out. In-app only — to ring n8n, Make, or Slack, add a webhook (Settings › Webhooks).', alertsHost)
@@ -942,18 +961,76 @@ function createDisplayControls(): HTMLElement {
         cfg.order,
         (v) => set({ order: v as UsageDisplayConfig['order'] })
       )
-      const pinOrder = el('input', { class: 'input input-sm usage-display-pinorder', ariaLabel: 'Manual provider order (comma-separated ids)' }) as HTMLInputElement
-      pinOrder.type = 'text'
-      pinOrder.placeholder = 'provider ids, comma-separated'
-      pinOrder.value = cfg.pinOrder.join(', ')
-      pinOrder.addEventListener('change', () =>
-        set({ pinOrder: pinOrder.value.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 64) })
-      )
+      // F-32: the manual order was a comma-separated-ids text input — hand-typed
+      // provider ids into a blind field. Chips with move/remove verbs instead, plus
+      // a picker for providers not yet pinned. Shown only while order is Manual.
+      const pinHost = el('div', { class: 'usage-pinorder' })
+      const renderPinOrder = (): void => {
+        pinHost.replaceChildren()
+        cfg.pinOrder.forEach((id, i) => {
+          pinHost.append(
+            el('span', { class: 'usage-pin-chip' }, [
+              providerLogo(id, 12),
+              el('span', { class: 'usage-pin-id', text: id }),
+              IconButton({
+                icon: 'chevron-up',
+                label: `Move ${id} up`,
+                disabled: i === 0,
+                onClick: () => {
+                  const o = [...cfg.pinOrder]
+                  ;[o[i - 1], o[i]] = [o[i], o[i - 1]]
+                  set({ pinOrder: o })
+                  renderPinOrder()
+                }
+              }),
+              IconButton({
+                icon: 'chevron-down',
+                label: `Move ${id} down`,
+                disabled: i === cfg.pinOrder.length - 1,
+                onClick: () => {
+                  const o = [...cfg.pinOrder]
+                  ;[o[i], o[i + 1]] = [o[i + 1], o[i]]
+                  set({ pinOrder: o })
+                  renderPinOrder()
+                }
+              }),
+              IconButton({
+                icon: 'x',
+                label: `Remove ${id} from the order`,
+                onClick: () => {
+                  set({ pinOrder: cfg.pinOrder.filter((x) => x !== id) })
+                  renderPinOrder()
+                }
+              })
+            ])
+          )
+        })
+        const addable = providers.filter((id) => !cfg.pinOrder.includes(id))
+        if (addable.length) {
+          const add = el('select', { class: 'input input-sm usage-pin-add', ariaLabel: 'Pin a provider to the order' }) as HTMLSelectElement
+          add.append(el('option', { value: '', text: '+ Pin provider…' }))
+          for (const id of addable) add.append(el('option', { value: id, text: id }))
+          add.addEventListener('change', () => {
+            if (!add.value) return
+            set({ pinOrder: [...cfg.pinOrder, add.value].slice(0, 64) })
+            renderPinOrder()
+          })
+          pinHost.append(add)
+        }
+        if (!cfg.pinOrder.length && !addable.length) {
+          pinHost.append(el('span', { class: 'settings-row-caption', text: 'Enable a provider to pin an order.' }))
+        }
+      }
+      renderPinOrder()
       const check = (label: string, cls: string, checked: boolean, key: 'showBars' | 'showPct' | 'showGlyph' | 'showLabel'): HTMLElement => {
         const c = createCheckbox({ label, checked, onChange: (on) => set({ [key]: on }) })
         c.el.classList.add(cls)
         return c.el
       }
+      pinHost.hidden = cfg.order !== 'manual'
+      orderSel.addEventListener('change', () => {
+        pinHost.hidden = orderSel.value !== 'manual'
+      })
       root.append(
         el('div', { class: 'usage-display-row' }, [el('span', { class: 'settings-row-caption', text: 'Gauge shows' }), modeSel, pinSel]),
         el('div', { class: 'usage-display-row' }, [
@@ -966,9 +1043,9 @@ function createDisplayControls(): HTMLElement {
         el('div', { class: 'usage-display-row' }, [
           el('span', { class: 'settings-row-caption', text: 'Popover' }),
           densitySel,
-          orderSel,
-          pinOrder
-        ])
+          orderSel
+        ]),
+        pinHost
       )
     } catch {
       root.append(el('span', { class: 'settings-row-caption', text: 'Display config unavailable.' }))

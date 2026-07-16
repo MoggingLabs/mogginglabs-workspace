@@ -15,6 +15,7 @@ import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
 import { getTelemetry } from '../../core/telemetry'
 import { onAgentRegistryChange, refreshAgentRegistry } from '../../core/agents/registry'
+import { gotoSettingsTab } from '../../core/shell/settings-tab-port'
 import { createAgentConfigWorkspace } from './agent-config'
 
 /** CLI availability plus the entry point to the provider configuration control plane. */
@@ -149,7 +150,17 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
           // F-09: was "CLI control plane" — k8s idiom on a consumer surface.
           title: 'Your agent CLIs',
           caption:
-            'Open a CLI to browse every setting it supports and keep the values you choose in sync. Install runs the exact provider command shown, under your login.'
+            'Open a CLI to browse every setting it supports and keep the values you choose in sync. Install runs the exact provider command shown, under your login.',
+          // F-10: this list and Usage › sources show the same logos with different
+          // meanings — the cross-reference is a CLICK, not a prose aside.
+          action: Button({
+            label: 'Track limits',
+            icon: 'gauge',
+            variant: 'ghost',
+            size: 'sm',
+            title: 'Usage — limits, plans, and alerts for these providers',
+            onClick: () => gotoSettingsTab('usage')
+          })
         })
       },
       [list]

@@ -8,7 +8,7 @@ import { setCommands } from '../../core/commands/command-port'
 import { getBridge } from '../../core/ipc/bridge'
 import { getTelemetry } from '../../core/telemetry'
 import { activeView, goBack, onViewChange, setActiveView } from '../../core/shell/view-port'
-import { takeRequestedSettingsTab } from '../../core/shell/settings-tab-port'
+import { registerSettingsTabNav, takeRequestedSettingsTab } from '../../core/shell/settings-tab-port'
 import { requestIntegrationsFocus, type IntegrationsFocus } from '../../core/shell/integrations-focus-port'
 import { renderShortcutList } from '../../core/commands/shortcuts'
 import { setTerminalFontSize, terminalFontSize, TERMINAL_FONT_SIZES } from '../../core/terminal/font-port'
@@ -342,17 +342,15 @@ export const settingsFeature: UiFeature = {
         // F-16: the rail label and the page title must match verbatim — it is how a
         // user confirms they landed where they aimed.
         label: 'Profiles & SSH hosts',
+        // F-17: the two real cards stand alone — the old wrapper card led the page
+        // with a policy heading ("Pointer sets only") and made the app's only
+        // card-in-card nesting. Content first; the ADR covenant closes the page.
         el: section('profiles', 'Profiles & SSH hosts', 'Pointers to accounts and machines — never credentials.', [
-          Card(
-            {
-              header: SectionHeader({
-                title: 'Pointer sets only',
-                caption:
-                  'Profiles select WHICH of your accounts a CLI uses; hosts are ssh targets. Never keys, tokens, or passwords — secret-shaped values are refused at save (ADR 0002).'
-              })
-            },
-            [profilesHosts]
-          )
+          profilesHosts,
+          el('p', {
+            class: 'settings-scope',
+            text: 'Profiles select WHICH of your accounts a CLI uses; hosts are ssh targets. Never keys, tokens, or passwords — secret-shaped values are refused at save (ADR 0002).'
+          })
         ])
       },
       {
@@ -540,6 +538,12 @@ export const settingsFeature: UiFeature = {
       if (target === 'integrations' && activeView() === 'settings') enterIntegrations()
     }
     showSection(pref(SETTINGS_TAB_KEY) ?? sections[0].id)
+    // Cross-links between tabs (F-10) and the rail search (S5) jump through this —
+    // live when the page is up, a pending request otherwise.
+    registerSettingsTabNav((id) => {
+      showSection(id)
+      setActiveView('settings')
+    })
 
     const backBtn = Button({
       label: 'Back',

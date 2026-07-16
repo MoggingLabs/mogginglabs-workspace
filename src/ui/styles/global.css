@@ -5300,6 +5300,31 @@ body.pane-dragging * {
   flex-direction: column;
   gap: var(--sp-2);
 }
+/* F-26: the catalog's expert corner — registry search + preset import, one labeled
+   sub-section instead of two orphan strips after the grid. */
+.cat-registry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+/* F-23: the picker that fronts the walk — a scrollable checklist of the catalog. */
+.integux-flow-pick {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-1) var(--sp-3);
+  max-height: 300px;
+  overflow-y: auto;
+  padding: var(--sp-1);
+}
+.integux-flow-progress {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: var(--fs-10);
+}
 .integux-privacy .settings-note {
   align-items: flex-start;
 }
@@ -7551,10 +7576,23 @@ body.pane-dragging * {
    A card here is an account, not a config row. State is PROVEN — every value on
    it was answered by the server (initialize + tools/list), never inferred from
    the presence of a config block. */
+/* F-20: the grid became [group label · card grid]+ — the outer box stacks, the
+   inner grids keep the two-up card flow. */
 .conn-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.conn-group-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: var(--sp-2);
+}
+.conn-group-label {
+  margin-top: var(--sp-2);
+}
+.conn-search {
+  max-width: 320px;
 }
 .conn-card {
   display: flex;
@@ -8912,6 +8950,43 @@ body.pane-dragging * {
 }
 .usage-thr {
   width: 60px;
+}
+/* F-31: two labeled threshold fields side-by-side, validation directly below. */
+.usage-thr-grid {
+  display: flex;
+  gap: var(--sp-5);
+  flex-wrap: wrap;
+}
+/* Balance floors align as a table: logo · name · input · unit. */
+.usage-floor-row {
+  display: grid;
+  grid-template-columns: 16px minmax(90px, max-content) 84px auto;
+  align-items: center;
+  gap: var(--sp-2);
+}
+/* F-32: the manual popover order — chips with move/remove verbs. */
+.usage-pinorder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.usage-pin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 2px var(--sp-1) 2px var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  font-size: var(--fs-11);
+}
+.usage-pin-chip .icon-btn {
+  width: 18px;
+  height: 18px;
+}
+.usage-pin-add {
+  width: auto;
 }
 /* 7/09 reset confetti — OPT-IN, one notch above silence: a ~1s fleck fall
    anchored to the toast corner, no layout, no takeover. */

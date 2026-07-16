@@ -15,7 +15,7 @@ import {
 } from '@contracts'
 import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
-import { Button, EmptyState, IconButton, clear, createCollapsibleCard, createModal, createToggleRow, el, icon, loadingRow, openContextMenu, providerLogo, scrubFields, showToast, submitWithRetain } from '../../components'
+import { Button, EmptyState, FieldGroup, IconButton, clear, createCheckbox, createCollapsibleCard, createModal, createToggleRow, el, icon, loadingRow, openContextMenu, providerLogo, scrubFields, showToast, submitWithRetain } from '../../components'
 import type { CollapsibleCardHandle } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onToolPlanPanesChange, restartNeededPaneIds } from '../../core/agents/toolplan-panes'
@@ -486,14 +486,20 @@ function createCatalogBlock(): SyncedBlock {
     el('div', {
       class: 'settings-row-caption',
       text:
-        'The other route, unchanged: Connect here writes the server into each CLI’s own config, and THAT CLI holds its own auth — the app brokers nothing on this path, and keys stay ${VAR} references. Use it when you want a CLI to own its credential, or for a server that must run on your machine. For an account this app holds for every agent at once, use Connections above.'
+        'The other route, unchanged: adding here writes the server into each CLI’s own config, and THAT CLI holds its own auth — the app brokers nothing on this path, and keys stay ${VAR} references. Use it when you want a CLI to own its credential, or for a server that must run on your machine. For an account this app holds for every agent at once, use Your accounts above.'
     }),
     grid,
     panel,
-    el('div', { class: 'trail-controls' }, [searchInput, searchBtn]),
-    searchResults,
-    el('div', { class: 'trail-controls' }, [importInput, importBtn]),
-    importNote
+    // F-26: the registry search and the JSON import used to float after the grid as
+    // two unlabeled strips — one clear expert corner now, labeled for what it is.
+    el('div', { class: 'cat-registry' }, [
+      el('div', { class: 'section-label', text: 'Registry & custom' }),
+      el('div', { class: 'settings-row-caption', text: 'Search the official MCP registry, or import a preset JSON — either lands in this catalog as a community preset.' }),
+      el('div', { class: 'trail-controls' }, [searchInput, searchBtn]),
+      searchResults,
+      el('div', { class: 'trail-controls' }, [importInput, importBtn]),
+      importNote
+    ])
   ])
   // Also workspace-dependent, by the same test as the matrix: every card renders
   // "in N of M workspaces" from `planCoverage`, and `custom` presets live in main's
@@ -805,7 +811,20 @@ function createServersBlock(): SyncedBlock {
       }
     })
   }
-  form.append(idInput, labelInput, transportSel, commandInput, argsInput, urlInput, envInput, saveBtn)
+  // F-34's sibling: the add-server fields were placeholder-labeled too. Visible
+  // labels via FieldGroup — the data-mgr-* hooks and classes stay (SECRETFORMS).
+  form.append(
+    el('div', { class: 'wh-form-grid' }, [
+      FieldGroup({ label: 'Server id', hint: 'e.g. sentry — the registry key.' }, idInput),
+      FieldGroup({ label: 'Label' }, labelInput),
+      FieldGroup({ label: 'Transport' }, transportSel),
+      FieldGroup({ label: 'Command', hint: 'stdio transport.' }, commandInput),
+      FieldGroup({ label: 'Arguments', hint: 'Space-separated; quote nothing.' }, argsInput),
+      FieldGroup({ label: 'URL', hint: 'http transport.' }, urlInput),
+      FieldGroup({ label: 'Env', hint: 'KEY=${VAR} references, comma-separated — paste a literal value and it’s vaulted.' }, envInput)
+    ]),
+    el('div', { class: 'wh-form-actions' }, [el('span', { class: 'ph-spacer' }), saveBtn])
+  )
   addToggle.onclick = (): void => {
     form.hidden = !form.hidden
     // Collapsing is a CANCEL, and this form is only display-toggled — the node survives. A
@@ -1212,37 +1231,48 @@ export function openGuidedFlow(): void {
     const { presets } = (await bridge.invoke(IntegrationsChannels.catList)) as { presets: McpPreset[] }
     const agents = ((await bridge.invoke(AgentChannels.detect)) as { id: string; installed: boolean }[]) ?? []
     const detected = HOSTED.filter((c) => agents.some((a) => a.installed && a.id === CLI_PROVIDER[c]))
+
+    if (!detected.length) {
+      body.append(el('div', { class: 'settings-row-caption', text: 'Install a coding-agent CLI (Claude Code, Codex, or Gemini) first — then come back and we’ll wire your tools to it.' }))
+      modal.setFooter(el('div', { class: 'confirm-actions' }, [Button({ label: 'Close', variant: 'ghost', onClick: () => modal.close() })]))
+      return
+    }
+
+    // F-23: pick first, then walk ONLY the picked. The old flow marched every preset
+    // one modal at a time — a three-tool stack meant Skip ×25 — with no sense of how
+    // much was left. Same write path (catConnect), same done-marks, same end screen.
+    let queue: McpPreset[] = []
+    let total = 0
+
+    const showDone = (): void => {
+      body.replaceChildren(
+        el('div', { class: 'integux-flow-done' }, [
+          el('h3', { class: 'board-card-title', text: 'You’re set up.' }),
+          el('div', { class: 'settings-row-caption', text: 'Last thing: scope tools per workspace — minimal is the default, so agents carry only what the work needs. Open the matrix any time.' })
+        ])
+      )
+      modal.setFooter(
+        el('div', { class: 'confirm-actions' }, [
+          // Drain the token NOW: the flow opens from this very page, so no view
+          // change follows to consume it — undrained, it would sit pending and
+          // scroll some FUTURE settings entry somewhere the user never asked for.
+          Button({ label: 'Open workspace tools', variant: 'ghost', onClick: () => { requestIntegrationsFocus('matrix'); modal.close(); enterIntegrations() } }),
+          Button({ label: 'Done', variant: 'primary', onClick: () => modal.close() })
+        ])
+      )
+    }
+
     const step = (): void => {
-      body.replaceChildren()
-      if (!detected.length) {
-        body.append(el('div', { class: 'settings-row-caption', text: 'Install a coding-agent CLI (Claude Code, Codex, or Gemini) first — then come back and we’ll wire your tools to it.' }))
-        modal.setFooter(el('div', { class: 'confirm-actions' }, [Button({ label: 'Close', variant: 'ghost', onClick: () => modal.close() })]))
-        return
-      }
-      const done = flowDone()
-      const next = presets.find((p) => !done.includes(p.id))
+      const next = queue.shift()
       if (!next) {
-        // Ends on the workspace-plan reminder (09).
-        body.append(
-          el('div', { class: 'integux-flow-done' }, [
-            el('h3', { class: 'board-card-title', text: 'You’re set up.' }),
-            el('div', { class: 'settings-row-caption', text: 'Last thing: scope tools per workspace — minimal is the default, so agents carry only what the work needs. Open the matrix any time.' })
-          ])
-        )
-        modal.setFooter(
-          el('div', { class: 'confirm-actions' }, [
-            // Drain the token NOW: the flow opens from this very page, so no view
-            // change follows to consume it — undrained, it would sit pending and
-            // scroll some FUTURE settings entry somewhere the user never asked for.
-            Button({ label: 'Open workspace tools', variant: 'ghost', onClick: () => { requestIntegrationsFocus('matrix'); modal.close(); enterIntegrations() } }),
-            Button({ label: 'Done', variant: 'primary', onClick: () => modal.close() })
-          ])
-        )
+        showDone()
         return
       }
+      const at = total - queue.length
       const note = el('div', { class: 'settings-error', role: 'alert', hidden: true })
-      body.append(
+      body.replaceChildren(
         el('div', { class: 'integux-flow-tool', attrs: { 'data-preset': next.id } }, [
+          el('div', { class: 'settings-row-caption integux-flow-progress', text: `${at} of ${total}` }),
           el('div', { class: 'settings-row-label', text: `Connect ${next.label}` }),
           el('div', { class: 'settings-row-caption', text: `${next.grantCopy}` }),
           el('div', { class: 'settings-row-caption', text: `Will connect to: ${detected.map((c) => CLI_LABEL[c]).join(', ')}` }),
@@ -1270,7 +1300,48 @@ export function openGuidedFlow(): void {
         ])
       )
     }
-    step()
+
+    const showPick = (): void => {
+      const done = flowDone()
+      const remaining = presets.filter((p) => !done.includes(p.id))
+      if (!remaining.length) {
+        showDone()
+        return
+      }
+      const boxes = new Map<string, ReturnType<typeof createCheckbox>>()
+      body.replaceChildren(
+        el('div', { class: 'settings-row-label', text: 'Which tools do you use?' }),
+        el('div', {
+          class: 'settings-row-caption',
+          text: `Pick what to connect — each one wires into ${detected.map((c) => CLI_LABEL[c]).join(', ')}. Come back for the rest any time.`
+        }),
+        el('div', { class: 'integux-flow-pick' }, remaining.map((p) => {
+          const cb = createCheckbox({ label: p.label })
+          cb.el.classList.add('integux-pick-item')
+          boxes.set(p.id, cb)
+          return cb.el
+        }))
+      )
+      const start = Button({
+        label: 'Connect selected',
+        variant: 'primary',
+        onClick: () => {
+          queue = remaining.filter((p) => boxes.get(p.id)?.checked())
+          if (!queue.length) return
+          total = queue.length
+          step()
+        }
+      })
+      start.dataset.flowAction = 'start'
+      modal.setFooter(
+        el('div', { class: 'confirm-actions' }, [
+          Button({ label: 'Close', variant: 'ghost', onClick: () => modal.close() }),
+          start
+        ])
+      )
+    }
+
+    showPick()
   })()
 }
 
@@ -1415,14 +1486,16 @@ export function createIntegrationsSection(): HTMLElement {
   // it — the per-CLI catalog, the registry, the plans — is machinery for handing a
   // connection to an agent, and it stays exactly where it was for the people who
   // want the CLI to own its own auth.
+  // F-19 (interim): folds titled by user benefit, one line each — the custody story
+  // lives inside the open cards, not three times before the first one.
   const connections = card(
     'connections',
-    'Connections',
-    'Your accounts, connected to this app. Sign in once — every agent you launch can use it.',
+    'Your accounts',
+    'Sign in once — every agent you launch can use it.',
     connectionsBlock.block,
     { defaultOpen: true, attentionOpens: true }
   )
-  const catalog = card('catalog', 'Per-CLI servers', 'The other route: write a server straight into a CLI’s own config, and let that CLI hold its own auth.', catalogBlock.block, { defaultOpen: false, attentionOpens: false })
+  const catalog = card('catalog', 'CLI-owned servers', 'Advanced: write a server into a CLI’s own config — that CLI holds its own auth.', catalogBlock.block, { defaultOpen: false, attentionOpens: false })
   const servers = card('servers', 'Servers & registry', 'Register once, apply per CLI. Writes are surgical, backed up, and only on your click.', serversBlock.block)
   const matrix = card('matrix', 'Workspace tool plans', 'Which servers reach this workspace’s panes. Context hygiene, not a permission.', toolplan.block)
   const grants = card('grants', 'Grants', 'Which MCP write tools agents get here. Default closed — approve is never a tool.', grantsBlock.block)
