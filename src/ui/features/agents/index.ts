@@ -1,5 +1,5 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { IntegrationsChannels, ProfileChannels, TerminalChannels, isAgentCliId, planSignature, type AgentDetectedEvent, type AgentInfo, type AgentProfile, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
+import { AgentHookChannels, IntegrationsChannels, ProfileChannels, TerminalChannels, isAgentCliId, planSignature, type AgentDetectedEvent, type AgentInfo, type AgentProfile, type GlobalHooksMutationResult, type GlobalHooksStatus, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
 import { recordPaneLaunch } from '../../core/agents/toolplan-panes'
 import { recordPaneCli, setMcpSnapshot } from '../../core/agents/mcp-status-port'
 
@@ -190,6 +190,10 @@ export const agentsFeature: UiFeature = {
       if (cli) recordPaneCli(paneId, cli) // the pane's MCP chip, same as a launched agent
       // Provider id only — never the command the user typed (ADR 0005/0002).
       getTelemetry().captureEvent({ name: 'agent.detected', props: { provider: ev.agentId } })
+      // A DETECTED claude was not launched by the app, so it may carry no alert hooks at all
+      // — a verdict-mute pane that works whole turns wearing a resting dot (found live
+      // 2026-07-16). If the global hooks aren't wired, say so once and offer to wire them.
+      if (ev.agentId === 'claude') void nudgeGlobalHooks()
 
       if (!profileId) {
         setPaneProfile(paneId as PaneId, undefined) // a previous launch's note is not this agent's
@@ -199,6 +203,36 @@ export const agentsFeature: UiFeature = {
       // The pane may have moved on while we asked (the agent quit, another CLI started):
       // only note the profile if this session is still the one running.
       if (getPaneAgentSession(paneId as PaneId)?.profileId === profileId) setPaneProfile(paneId as PaneId, name)
+    }
+
+    /** One nudge per app run, and only when the global hooks are genuinely absent. A detected
+     *  session cannot tell a truly hookless hand-typed claude from a daemon-restored one that
+     *  kept its launch overlay, so the copy stays general — wiring globally covers both, and
+     *  every future one, and is a silent no-op outside panes (global-hooks.ts). */
+    let hooksNudged = false
+    async function nudgeGlobalHooks(): Promise<void> {
+      if (hooksNudged) return
+      hooksNudged = true
+      try {
+        const status = (await getBridge().invoke(AgentHookChannels.status)) as GlobalHooksStatus
+        if (!status || status.state === 'applied' || status.state === 'unreadable') return
+        showToast({
+          tone: 'attention',
+          title: 'Hand-typed Claude sessions have no alerts',
+          body: 'Wire the alert hooks into your global Claude settings so a claude typed at a pane’s prompt rings too (Settings › Agent CLIs to review or remove).',
+          action: {
+            label: 'Wire alerts',
+            onClick: () => {
+              void (getBridge().invoke(AgentHookChannels.apply) as Promise<GlobalHooksMutationResult>).then((result) => {
+                if (result?.ok) showToast({ tone: 'success', title: 'Claude alert hooks wired globally', body: 'New claude sessions ring their pane; this one applies from its next launch.' })
+                else showToast({ tone: 'attention', title: 'Nothing was written', body: result?.reason })
+              })
+            }
+          }
+        })
+      } catch {
+        /* the nudge is a courtesy — never a failure surface */
+      }
     }
 
     const listProfiles = async (): Promise<AgentProfile[]> => {

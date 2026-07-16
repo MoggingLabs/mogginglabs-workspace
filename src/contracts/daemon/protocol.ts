@@ -363,13 +363,16 @@ export type NotifyEvent =
   // lost to a hard kill can't swallow every future done and strand the pane on busy.
   | 'turn-start'
   // A notification whose TYPE the hook script does not recognize. A guess, deliberately
-  // distinct from `needs-input`: the daemon routes it to the tracker's BELL (held for
-  // contradiction, swallowed on a done pane) instead of latching red. Unrecognized types
-  // used to default to needs-input, and the /goal system's new notification types latched
-  // four freshly-FINISHED panes red (2026-07-15) — Claude fires notifications mostly for
-  // unfocused panes, so it hit exactly the agents nobody was watching. Deliberately NOT in
-  // notifyEventToState below: no stateless AgentState is honest for a guess (idle/busy would
-  // clear a real latch, attention would be the bug reborn), so only the tracker may route it.
+  // distinct from `needs-input`: the daemon routes it to the tracker's notice() — swallowed
+  // mid-turn (a busy pane's real blocks arrive as explicit needs-input on the same channel,
+  // so an unknown type there is certainly not one; it also retracts its own raw-BEL twin),
+  // swallowed on a done pane, and held for contradiction like any chime everywhere else.
+  // Unrecognized types used to default to needs-input, and the /goal system's new
+  // notification types latched four freshly-FINISHED panes red (2026-07-15) — Claude fires
+  // notifications mostly for unfocused panes, so it hit exactly the agents nobody was
+  // watching. Deliberately NOT in notifyEventToState below: no stateless AgentState is
+  // honest for a guess (idle/busy would clear a real latch, attention would be the bug
+  // reborn), so only the tracker may route it.
   | 'notice'
   // The pane's agent reported a provider usage limit (Phase-4/04 failover). Handled
   // statefully by the daemon (session.applyNotify fans a DISTINCT `limit` server event

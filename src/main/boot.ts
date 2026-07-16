@@ -9,6 +9,7 @@ import { registerDialogs } from './dialogs'
 import { registerShellChrome, wireWindowState } from './shell-chrome'
 import { registerAppSettings, disposeAppSettings } from './app-settings'
 import { registerAgents, disposeAgentInstalls } from './agents'
+import { registerClaudeGlobalHooks } from './claude-global-hooks'
 import { registerAgentSettings, disposeAgentSettings } from './agent-settings'
 import { registerBrowserDock } from './browser-dock'
 import { startMcpEndpoint, stopMcpEndpoint } from './mcp-endpoint'
@@ -103,6 +104,7 @@ export interface BootOptions {
 }
 
 let win: BrowserWindow | null = null
+let harnessActive = false // gates get a window Cocoa won't clamp (see createMainWindow)
 let disposeBackend: (() => void) | null = null
 let disposeGit: (() => void) | null = null
 let disposeContext: (() => void) | null = null
@@ -159,7 +161,7 @@ export function prepareRuntime(): void {
 }
 
 function openWindow(): void {
-  const w = createMainWindow()
+  const w = createMainWindow({ largerThanScreen: harnessActive })
   win = w
   wireWindowState(w) // fullscreen/maximize -> renderer chrome classes (5/04)
   // Only the CURRENT window may clear the pointer: a window re-created for a deep link
@@ -190,6 +192,7 @@ function liveWebContents(): WebContents | null {
  * `app.whenReady()` resolves).
  */
 export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
+  harnessActive = harness
   // Single-instance + mogging:// deep link so `mogging .` focuses a running app. Skipped under
   // the harness (some gates launch a second instance); normal dev/production runs hold the lock.
   // Dev needs no bypass: it holds its OWN lock via the -dev userData (Electron keys the lock on
@@ -295,6 +298,7 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       // `harness` is this entry's isSmoke: production always passes false.
       const agentSettingsStartup = registerAgentSettings(() => win, harness)
       registerAgents(() => win) // agent launcher: detect/install CLIs + build launch commands (Phase-1/06; Agent CLIs tab)
+      registerClaudeGlobalHooks() // global Claude alert hooks: the hand-typed-launch gap (explicit apply/remove only)
       registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
       registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
       disposeGit = registerGit(liveWebContents) // read-only per-pane git branch + dirty (Phase-2/03)

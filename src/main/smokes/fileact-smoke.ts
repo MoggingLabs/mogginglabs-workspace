@@ -81,8 +81,24 @@ function makeFixture(): Fixture {
  * many paths we type into it, the count must stay at ONE. We type; the user executes.
  */
 function promptLines(buffer: string): number {
-  const marker = process.platform === 'win32' ? /project>/ : /[$%#]\s*$|project.*[$%#]/
-  return buffer.split('\n').filter((l) => marker.test(l.trim())).length
+  if (process.platform === 'win32') {
+    // xterm WRAPS buffer rows, and cmd's prompt is the full fixture path — long enough on a
+    // CI runner (deep temp dirs, narrow pane) that `project>` itself splits across two rows.
+    // A per-line test then counts ZERO prompts and the gate fails arithmetic it never meant
+    // to test. Count occurrences in the rejoined stream: the marker only ever comes from the
+    // prompt (no fixture name contains it), so occurrences == prompts.
+    return (buffer.replace(/\n/g, '').match(/project>/g) ?? []).length
+  }
+  const marker = /[$%#]\s*$|project.*[$%#]/
+  const perLine = buffer.split('\n').filter((l) => marker.test(l.trim())).length
+  if (perLine > 0) return perLine
+  // The POSIX prompt wraps too, on hosts with very long hostnames (the CI mac runner's spans
+  // a full row): 'project' and the '$' land on different rows and the per-line test counts
+  // ZERO prompts that are plainly on screen. Fall back to counting prompt occurrences in the
+  // de-wrapped stream — fallback only, because de-wrapped matching is looser about what sits
+  // between the marker and the sigil. (Typed fixture content never contains 'project': the
+  // sends are all src/-relative.)
+  return (buffer.replace(/\n/g, '').match(/project[^$%#]*[$%#]/g) ?? []).length
 }
 
 export function runFileActSmoke(win: BrowserWindow): void {

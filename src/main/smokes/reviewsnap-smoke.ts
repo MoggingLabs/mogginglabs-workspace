@@ -1,6 +1,6 @@
 import { app } from 'electron'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorktree } from '@backend/features/worktrees'
@@ -101,6 +101,12 @@ export async function runReviewSnapSmoke(): Promise<void> {
     const wtMode = await createWorktree(repoMode)
     if (!wtMode.ok || !wtMode.path) throw new Error('mode worktree failed')
     git(wtMode.path, ['update-index', '--chmod=+x', 'README.md'])
+    // update-index flips the INDEX bit only. On core.filemode=true platforms (linux/mac) the
+    // on-disk file must agree, or the commit records 755 while the worktree stays 644 — the
+    // mergeBase->worktree diff is then EMPTY (644 -> 644) and the fixture never contains the
+    // mode-only change this gate asserts on. Windows takes worktree modes from the index
+    // (core.filemode=false), which is why the fixture looked complete when authored there.
+    if (process.platform !== 'win32') chmodSync(join(wtMode.path, 'README.md'), 0o755)
     git(wtMode.path, ['commit', '-m', 'mode only'])
     const modeDiff = await diffWorktree(repoMode, wtMode.path)
     const modeOnlyRefused = modeDiff.unreviewable && modeDiff.files.some((file) => file.path === 'README.md' && file.hunks.length === 0)

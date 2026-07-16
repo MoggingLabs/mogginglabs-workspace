@@ -21,6 +21,7 @@ import {
   PaneCwdState,
   countSubmittedLines,
   fileUriToPath,
+  isEngagedInput,
   isSubmittedInput,
   isTerminalReply,
   normalizePaneCwd,
@@ -119,9 +120,18 @@ function remoteHereDoc(target: string, delimiter: string, contents: string): str
   return `cat > ${target} <<'${delimiter}'\n${contents}${contents.endsWith('\n') ? '' : '\n'}${delimiter}`
 }
 
-function remoteCaptureHereDoc(name: string, delimiter: string, contents: string): string {
-  if (contents.split('\n').includes(delimiter)) throw new Error(`Remote here-doc collision: ${delimiter}`)
-  return `${name}=$(cat <<'${delimiter}'\n${contents}${contents.endsWith('\n') ? '' : '\n'}${delimiter}\n)`
+/** Capture a literal value into a shell variable WITHOUT a here-doc inside `$()`: macOS's
+ * /bin/sh is bash 3.2, whose command-substitution scanner is not a recursive parser — it
+ * re-tokenizes the body, so a here-doc inside `$( )` is read as code and any case-pattern
+ * paren or stray quote in the payload ends (or unbalances) the substitution. Stage the value
+ * as a file via the same quoted here-doc the rc files use, then `$(cat file)` — which every
+ * POSIX sh parses. Trailing-newline semantics match the old capture: `$(cat)` strips them. */
+function remoteCaptureViaFile(name: string, target: string, delimiter: string, contents: string): string {
+  return [
+    remoteHereDoc(target, delimiter, contents),
+    `[ "$?" -eq 0 ] || exit 72`,
+    `${name}=$(cat ${target}); rm -f ${target}`
+  ].join('\n')
 }
 
 const LOCAL_PANE_CAPABILITIES = new Set([
@@ -291,17 +301,24 @@ export function remoteBootstrapCommand(cwd?: string): string {
     '[ "$?" -eq 0 ] && chmod 600 "$zd/.zshrc" || exit 72',
     remoteHereDoc('"$d/envrc"', 'MOGGING_SH_RC_EOF', shRc),
     '[ "$?" -eq 0 ] && chmod 600 "$d/envrc" || exit 72',
-    remoteCaptureHereDoc('requested', 'MOGGING_REQUESTED_CWD_EOF', cwd ?? ''),
+    remoteCaptureViaFile('requested', '"$d/.requested-cwd"', 'MOGGING_REQUESTED_CWD_EOF', cwd ?? ''),
     'export MOGGING_REQUESTED_CWD="$requested" MOGGING_HELPER_DIR="$d" MOGGING_PTY=1',
     'if [ "${shell##*/}" = fish ]; then',
     '  case "$requested" in "~") requested="$HOME" ;; "~/"*) requested="$HOME/${requested#~/}" ;; esac',
     '  if [ -n "$requested" ]; then CDPATH= cd "$requested" || { echo "mogging: remote working directory is unavailable" >&2; exit 72; }; fi',
-    remoteCaptureHereDoc('fish_init', 'MOGGING_FISH_INIT_EOF', fishInit),
+    remoteCaptureViaFile('fish_init', '"$d/.fish-init"', 'MOGGING_FISH_INIT_EOF', fishInit),
     REMOTE_CONTEXT_MONITOR_START.trimEnd(),
     `  ${READY_OSC_PRINTF}`, // fish takes its own exec path — it owes the same signal
     '  exec "$shell" --login --init-command "$fish_init"',
     'fi',
-    remoteCaptureHereDoc('interactive', 'MOGGING_INTERACTIVE_EOF', interactive),
+    // A FILE, not a `$(cat <<'EOF' …)` capture, and the difference is load-bearing: macOS's
+    // /bin/sh is bash 3.2, whose `$()` scanner is not a recursive parser — it quote-scans for
+    // the closing paren, so the UNPAIRED `)` of every `case` pattern in this script ends the
+    // substitution mid-body and the leftover tail dies with "unexpected EOF while looking for
+    // matching `''" (the REMOTEBOOT gate, macos-only). A quoted here-doc to a file has no
+    // such rescanning; the rc files above already ride the same mechanism.
+    remoteHereDoc('"$d/interactive"', 'MOGGING_INTERACTIVE_EOF', interactive),
+    '[ "$?" -eq 0 ] && chmod 600 "$d/interactive" || exit 72',
     'export MOGGING_REQUESTED_CWD',
     // The readiness signal, emitted once every check above has passed and immediately before the
     // user's shell takes over: "you are past the password/MFA/host-key prompt, this is a shell."
@@ -309,7 +326,9 @@ export function remoteBootstrapCommand(cwd?: string): string {
     // before it is exactly how a prompt eats your credentials (audit finding 9). Emitted here
     // rather than at the top so a bootstrap that exits 72 never claims to be ready.
     READY_OSC_PRINTF,
-    'exec "$shell" -lc "$interactive"'
+    // The bootstrap expands $MOGGING_HELPER_DIR here (it is set and exported above), so the
+    // login shell receives a plain `. "/abs/path/interactive"` — quote-safe for any HOME.
+    'exec "$shell" -lc ". \\"$MOGGING_HELPER_DIR/interactive\\""'
   ].join('\n')
   // sshd may initially hand the command to fish/csh. Keep the outer command simple
   // enough for those shells, then parse the actual bootstrap with a known POSIX shell.
@@ -370,7 +389,11 @@ class PaneSession {
   rows: number
   private proc: IPty
   private buffer = ''
-  private lastState: AgentState = 'idle'
+  /** `unknown`, matching the tracker's own initial state: a pane that has never spoken a
+   *  verdict must replay/report `unknown` (hollow), not `idle` (a claim). This is what
+   *  subscribe() replays and info() lists — an `idle` here made every never-spoken pane
+   *  look settled after an app restart against a surviving daemon. */
+  private lastState: AgentState = 'unknown'
   private readonly tracker: ActivityTracker
   private readonly cwdState: PaneCwdState
   private gitContext?: GitContextObserver
@@ -543,11 +566,20 @@ class PaneSession {
     const osc = new OscParser(
       // An OSC 9/99/777 notification is the same GUESS a raw BEL is — CLIs fire it on
       // completion as much as on a block — so it takes the bell's confirmation path, not
-      // the explicit-verdict one. Only 133;C/D (real shell integration) is a verdict here.
-      (state) => (state === 'attention' ? this.tracker.bell() : this.tracker.notify(state)),
+      // the explicit-verdict one. 133;C/D (real shell integration) is a verdict here, but
+      // a verdict about the SHELL: it moves a pane that has spoken and never authors the
+      // first state, and the prompt half also ends latches (activity.ts shellPrompt —
+      // `busy`/red must not outlive the foreground program that raised them).
+      (state) =>
+        state === 'attention'
+          ? this.tracker.bell()
+          : state === 'busy'
+            ? this.tracker.shellCmdStart()
+            : this.tracker.shellPrompt(),
       (ev) => {
         if (ev.kind === 'bell') this.tracker.bell()
         if (ev.kind === 'prompt') {
+          this.tracker.shellPrompt()
           this.gitContext?.resetAtPrompt()
           hooks.onPrompt('osc133')
           const changed = this.cwdState.acceptPrompt(Date.now(), 'osc133')
@@ -555,6 +587,7 @@ class PaneSession {
           this.publishCwd(changed)
         }
         if (ev.kind === 'shell-prompt') {
+          this.tracker.shellPrompt()
           this.gitContext?.resetAtPrompt()
           hooks.onPrompt('mogging')
           const cwd = ev.payload ? this.normalizeObservedCwd(ev.payload, false) : null
@@ -578,6 +611,7 @@ class PaneSession {
           // would cancel the very probe that was about to find the agent.
           const prompt = ev.code === 9
           if (prompt) {
+            this.tracker.shellPrompt() // 9;9 is OUR injected cmd.exe prompt mark — same verdict as 133;D
             this.gitContext?.resetAtPrompt()
             hooks.onPrompt('osc9')
           }
@@ -809,12 +843,13 @@ class PaneSession {
     else if (event === 'subagent-stop') this.tracker.subagentStop()
     else if (event === 'idle-prompt') this.tracker.idlePrompt()
     else if (event === 'turn-start') this.tracker.turnStart()
-    // A NOTICE is a notification whose type the hook script does not recognize — a GUESS, so it
-    // takes the bell's held-for-contradiction path, never a direct latch. On a pane wearing
-    // 'done' it is swallowed as that turn's own news (the /goal achieve notice landed exactly
-    // there and used to latch four finished panes red); mid-turn with nothing behind it, it
-    // still rings — a genuinely NEW blocking type keeps surfacing, one confirmation beat later.
-    else if (event === 'notice') this.tracker.bell()
+    // A NOTICE is a notification whose type the hook script does not recognize — a GUESS, but
+    // one whose arrival proves the hook channel works. The tracker decides what it means by
+    // WHERE it lands (activity.ts notice()): mid-turn it is certainly not a block (real blocks
+    // arrive as explicit needs-input on a working channel) and is swallowed — retracting the
+    // raw-BEL twin that rides ahead of it; on a 'done' pane it is that turn's own news; out of
+    // turn it takes the bell's held-for-contradiction path, never a direct latch.
+    else if (event === 'notice') this.tracker.notice()
     else this.tracker.notify(notifyEventToState(event))
     // Usage-limit (4/04): a DISTINCT signal alongside the attention state, so the
     // app can offer profile failover. Event label only — never content.
@@ -830,10 +865,10 @@ class PaneSession {
       return
     }
     this.pristineRestore = false // touched: from here on it's a live shell, not a restore
-    // Only a SUBMIT answers a blocked agent. Clearing the latch on any keystroke claimed the
-    // pane was "working" when an arrow key or a ^C landed in it — while the agent sat there
-    // still blocked, with nothing left to correct the lie (see isSubmittedInput).
-    this.tracker.input(isSubmittedInput(data))
+    // A SUBMIT or a PRINTABLE key answers a blocked agent (every permission dialog takes
+    // single-key answers; see isEngagedInput). Navigation and signals — arrows, ^C, mouse
+    // reports — still clear nothing: they claimed "working" about panes that sat blocked.
+    this.tracker.input(isSubmittedInput(data), isEngagedInput(data))
     // A submitted LINE is the only moment a shell can start something — the detector arms one
     // probe on it, and the prompt coming back cancels that probe, so ordinary commands cost
     // nothing. Enter pressed while any foreground program owns the pane is program input; a

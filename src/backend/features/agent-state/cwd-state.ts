@@ -1,6 +1,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { PANE_CWD_MAX, type PaneCwdLocality, type PaneCwdSource } from '@contracts'
+import { toCallerNamespace } from '../../platform/fs-paths'
 
 const REPORT_CLOCK_SKEW_MS = 5 * 60_000
 const PROMPT_COALESCE_MS = 100
@@ -130,11 +131,25 @@ export class PaneCwdState {
   }
 
   /** Exact worktree opened by a descendant Git process (`GIT_TRACE_SETUP`). It is ignored when
-   * the shell is prompting, so a late/background Git command cannot relabel the pane. */
+   * the shell is prompting, so a late/background Git command cannot relabel the pane. Git
+   * reports the PHYSICAL directory, so the value is translated back into the pane's own
+   * namespace (the shell/spawn cwd is the anchor) — a pane standing in an aliased spelling
+   * (8.3 short path, junction, macOS's symlinked /var temp) must not have its cwd teleported
+   * to a spelling the user never typed. Remote panes name paths on another machine; no local
+   * filesystem question can be asked about them. */
   acceptWorktree(cwd: string): PaneCwdSnapshot | null {
     if (!this.commandActive) return null
-    this.worktreeCwd = cwd
+    this.worktreeCwd = this.inPaneNamespace(cwd)
     return this.commit()
+  }
+
+  /** Physically observed paths (GIT_TRACE_SETUP worktrees, detected process cwds) come back in
+   * the pane's own namespace: the shell/spawn cwd anchors which spelling of an aliased prefix
+   * (8.3 short path, junction, macOS's symlinked /var temp) this pane lives under. Remote panes
+   * name paths on another machine; no local filesystem question can be asked about them. */
+  private inPaneNamespace(cwd: string): string {
+    const anchor = this.locality === 'local' ? (this.shellCwd ?? this.spawnCwd) : null
+    return anchor ? toCallerNamespace(cwd, anchor) : cwd
   }
 
   /** Shell OSC 9;9 is a prompt boundary; OSC 7 without a prompt refines only the lower lane. */
@@ -172,7 +187,10 @@ export class PaneCwdState {
     }
     this.commandActive = true
     this.pendingStarts = 0
-    this.detected = { pid: det.pid, cwd: det.cwd }
+    // Process-table cwds are read physically (/proc, lsof, the conpty console list) — the
+    // same translation the Git worktree lane gets, or a pane under an aliased prefix flips
+    // spelling every time detection refines it.
+    this.detected = { pid: det.pid, cwd: det.cwd ? this.inPaneNamespace(det.cwd) : det.cwd }
     return this.commit()
   }
 
