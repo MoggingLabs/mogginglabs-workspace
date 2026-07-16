@@ -9,7 +9,7 @@ ecosystems. Companion to `docs/RELEASING.md` (the mechanics of cutting a release
 | | Windows | macOS | Linux |
 |---|---|---|---|
 | **Built in CI** | NSIS x64 + blockmap | dmg + zip, arm64 (x64 deferred†) | AppImage + deb, x64 |
-| **Swept (134 gates)** | local (windows-sweep CI = Phase-6/03) | `macos-sweep` nightly + dispatch | `linux-sweep` nightly + dispatch |
+| **Swept (144 gates)** | local (windows-sweep CI = Phase-6/03) | `macos-sweep` nightly + dispatch | `linux-sweep` nightly + dispatch |
 | **Signed today** | no — config READY, cert pending | no — config READY (hardened runtime + entitlements + notarize wired), cert pending | n/a (GPG sums optional, later) |
 | **Auto-update** | GitHub releases feed (electron-updater) | feed wired, **inert until signed** — Squirrel.Mac refuses unsigned updates | AppImage via feed; deb manual |
 | **Install channels** | GitHub release · winget (manifest in `packaging/winget/`, not yet submitted) | GitHub release · homebrew cask (`packaging/homebrew/`, not yet submitted) | GitHub release |
@@ -46,8 +46,9 @@ One purchase: **Apple Developer Program, $99/yr.** From it:
 
 Already committed and dry-run-verified: hardened runtime, the entitlements set
 Electron + our from-source native modules need (`allow-jit`,
-`disable-library-validation`, `allow-dyld-environment-variables` for the
-Electron-as-Node daemon), `notarize: true`, and the workflow plumbing for all
+`disable-library-validation`; `allow-dyld-environment-variables` existed for the
+retired Electron-as-Node daemon and can likely be dropped now — verify on a real
+signed build, ADR 0016), `notarize: true`, and the workflow plumbing for all
 five secrets. Signing also unlocks macOS **auto-update**, which Squirrel.Mac
 gates on a valid signature.
 

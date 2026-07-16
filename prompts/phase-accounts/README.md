@@ -95,3 +95,48 @@ Grounded in the sourced plan: `docs/research/2026-07-productization-accounts-sub
 spine (order-strict). 07 · 08 are deterrence (after 05). 09 is the runtime-split epic (after
 the account spine; it re-runs SURVIVE/CONTROL). 10 needs all. House rule: no parallel agents
 — solo execution runs 01 → 10 in order.
+
+## Freeze — phase-accounts/10 (2026-07-16)
+
+Every step shipped with its gate green, and `MOGGING_PRODMILESTONE` — the pack's **only
+authority on "phase-accounts done"** — composes the whole promise in one run on FAKE
+services with zero network: subscribe → device-bound Pro; offline → grace → Free, never
+bricks; copied to new hardware → inert, no re-license; tampered → free-only; logout →
+anon-free; the `mogging` wedge ungated throughout; both budgets measured ON the composed
+surface. Receipts, measured numbers, and platform finds: [`REPORT.md`](REPORT.md). The
+book: [`docs/18-accounts.md`](../../docs/18-accounts.md).
+
+| Step | Gate | Done |
+|---|---|---|
+| 01 — ADR 0015 + origin pinning | ORIGINPIN | ✅ |
+| 02 — the Electron fuse wall | FUSES | ✅ (incl. `RunAsNode: DISABLE` + the tamper bite) |
+| 03 — renderer lockdown | LOCKDOWN | ✅ |
+| 04 — the account core (PKCE + DPoP, vault custody) | ACCOUNT | ✅ |
+| 05 — signed entitlements + offline grace + the port | ENTITLE | ✅ |
+| 06 — the hardware device key (copies are inert) | DEVICEKEY | ✅ (`tpm` leg here; per-OS = operator dispatch) |
+| 07 — V8 bytecode, main only | BYTECODE | ✅ |
+| 08 — watermark + tamper self-check | WATERMARK | ✅ |
+| 09 — the runtime split (ADR 0016), `runAsNode` off | RUNTIMESPLIT | ✅ |
+| 10 — the book, the gallery, the composed milestone | **PRODMILESTONE** | ✅ |
+
+**The freeze ledger** (this worktree's commit series on `mogging/0d5688ec`; the sweep
+grew 134 → **144**):
+
+- `9376748` — **feat: phase-accounts 01-10 — the paid tier, hardened (implementation)**:
+  the whole pack's code (origins/fuses/lockdown/account/entitlements/device-key/bytecode/
+  watermark/runtime-split) + step 10's composed smoke, account panel, gallery states, and
+  the sweep/CI wiring. Frozen as one self-consistent commit — the pack landed in this
+  worktree uncommitted, so a fabricated per-step history would risk broken intermediates;
+  the step→gate mapping above is the real ledger, each gate independently reproducible.
+- `<this commit>` — **docs: the book (docs/18-accounts.md), ADRs 0015/0016, the roadmap,
+  and the freeze ledger.**
+
+Gate run context (this machine, 2026-07-16): every gate above reproduces via
+`MOGGING_GATES=<GATE> bash scripts/qa-smokes.sh`; PRODMILESTONE green at 31/31 on the
+final code (`out/prodmilestone-result.json`), FUSES green with `RunAsNode: DISABLE` + the
+tamper bite (`out/fuses-result.json`).
+
+**Deliberately the operator's, not this freeze's**: the full uncut 144-gate sweep, the
+three-OS CI dispatch, wiring the real IdP/MoR/issuer origins, and **the code-signing
+certificates — the deferred final step** (docs/18 §honest limits names exactly what it
+covers). FAKE-first stands: every gate above runs with zero network, protocol v9.

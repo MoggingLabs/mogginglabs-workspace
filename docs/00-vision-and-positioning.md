@@ -41,8 +41,11 @@ The real, defensible wedge is the intersection:
 - **(e) Non-copyleft license.** cmux is GPL-3.0; coder/mux and claude-squad are AGPL-3.0.
   A permissive/source-available posture is itself a selling point.
 
-**One-line positioning:** *Your keys, your CLIs — no subscription to us. Rock-solid on
-Windows and Mac.*
+**One-line positioning:** *Your keys, your CLIs. Rock-solid on Windows and Mac.*
+(The tagline's old absolute half is retired by
+[ADR 0015](adr/0015-accounts-and-entitlements.md): a paid tier is doctrine, gating
+PAID features only — the free local core still needs no account and works fully
+offline.)
 
 ## Core principle (non-negotiable)
 
@@ -53,7 +56,9 @@ and the legal/ToS de-risker. See [ADR 0002](adr/0002-never-broker-provider-auth.
 
 ## Non-goals (for now)
 
-- No hosted/cloud backend, no credits, no account system.
+- No account or server requirement on the **free local core** — ever
+  ([ADR 0015](adr/0015-accounts-and-entitlements.md)). A MoggingLabs account exists
+  only to gate PAID features; no credits, no AI metering.
 - No brokering or reselling of AI subscriptions.
 - Not chasing BridgeSpace's entire surface at once (editor, browser, voice, swarm,
   memory). Nail the organizer core first; layer the rest.
