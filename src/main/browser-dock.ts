@@ -1004,9 +1004,12 @@ export function registerBrowserDock(winGetter: () => BrowserWindow | null): void
     }
   })
 
-  ipcMain.handle(BrowserChannels.toggle, (_e, payload: { open: boolean; workspaceId?: string }) => {
+  ipcMain.handle(BrowserChannels.toggle, (_e, payload: { open: boolean; workspaceId?: string; persist?: boolean }) => {
     open = !!payload?.open
-    store()?.setSetting(KV_OPEN, open ? '1' : '')
+    // `persist:false` is the renderer's forced close/reopen around the zero-workspace
+    // valley: the RUNTIME state changes, the saved preference does not — so a dock
+    // that was open when the last workspace closed comes back with the next one.
+    if (payload?.persist !== false) store()?.setSetting(KV_OPEN, open ? '1' : '')
     // ONE activation path. This used to restate activateWorkspace's assignments inline —
     // minus refreshVault/pushActivity — which is exactly the kind of sibling copy that
     // drifts. Restore is per-workspace, handled when each workspace's preview guest

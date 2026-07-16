@@ -1041,16 +1041,40 @@ export const browserFeature: UiFeature = {
     })
     ctx.titlebarRight.append(toggleBtn)
 
-    function toggle(next: boolean): void {
+    // The dock is workspace-scoped (every guest, url, grant and profile is keyed by
+    // one), so with ZERO workspaces there is nothing it could ever show. It used to
+    // OPEN anyway, into an is-no-workspace husk with its whole chrome disabled — the
+    // open-but-inert philosophy the zero-workspace lockdown replaced (2026-07-17):
+    // now every open path (globe, Ctrl+Shift+U, the palette verb, the boot restore)
+    // funnels through toggle() and is refused, the globe reads disabled with the
+    // reason, and when the LAST workspace goes the dock force-closes WITHOUT
+    // persisting — the saved preference survives the valley and the dock returns
+    // with the next workspace. The husk gating (applyWorkspaceGating) stays as
+    // defense in depth for any frame the two states cross.
+    let persistedOpen = false
+    onWorkspacesChange((snapshot) => {
+      const none = snapshot.workspaces.length === 0
+      toggleBtn.disabled = none
+      toggleBtn.title = none ? 'Browser — create a workspace first' : 'Browser (Ctrl+Shift+U)'
+      if (none && open) toggle(false, { persist: false })
+      else if (!none && !open && persistedOpen) toggle(true, { persist: false })
+    })
+
+    function toggle(next: boolean, opts: { persist?: boolean } = {}): void {
+      if (next && getWorkspaces().workspaces.length === 0) return // no workspace, no dock
       open = next
       dock.hidden = !open
       requestDockLayout()
       toggleBtn.classList.toggle('is-active', open)
-      // Honest the instant it opens: main's state push is an IPC round-trip away, and the
-      // globe is reachable from the zero-workspace home screen.
+      // Honest the instant it opens: main's state push is an IPC round-trip away.
       applyWorkspaceGating()
       if (open) ensureGuests(activeWsId()) // spawn the active workspace's guests on first use
-      void bridge.invoke(BrowserChannels.toggle, { open, workspaceId: getWorkspaces().activeId ?? undefined })
+      if (opts.persist !== false) persistedOpen = open
+      void bridge.invoke(BrowserChannels.toggle, {
+        open,
+        workspaceId: getWorkspaces().activeId ?? undefined,
+        persist: opts.persist !== false
+      })
       applyGuestVisibility()
       if (open && !urlInput.disabled) urlInput.focus() // never park the caret in a dead field
       getTelemetry().captureEvent({ name: 'browser.dock', props: { open } }) // boolean only — never URLs (ADR 0005)
@@ -1467,7 +1491,12 @@ export const browserFeature: UiFeature = {
       applyWidth()
       agentWebPersists = init.agentWebPersists // per-workspace partitions derive from this
       if (init.searchTemplate) searchTemplate = init.searchTemplate
-      if (init.open) toggle(true)
+      // Restore the INTENT; the open itself may be refused right now (this init often
+      // lands before the restored workspace list publishes) — the workspaces subscriber
+      // above reopens the moment one exists. persist:false: a restore is not a change,
+      // and a refusal must not erase the preference it was refusing.
+      persistedOpen = init.open
+      if (init.open) toggle(true, { persist: false })
       void pushConsent() // make the active workspace's stored grant live at boot
       void applyWorkspaceProfile() // and its stored profile (8/04)
     })

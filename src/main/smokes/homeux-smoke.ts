@@ -22,12 +22,14 @@ import { probeContrastAcrossThemes } from './aa-probe'
 //       Home — view-port.ts enforces the invariant both ways), and there is NO titlebar
 //       Home affordance, by design. Home is the boot launcher and the zero-workspace
 //       empty state; its recents and presets are fully covered by the wizard;
-//   (h) the zero-workspace LOCKDOWN (2026-07-16), both edges: at boot (no workspaces)
-//       the rail does not render and BOTH chrome toggles — the rail's and the file
-//       explorer's — read disabled, with the explorer un-OPENABLE at the capability
-//       (toggle() refuses; the button is just the visible half). With a workspace the
-//       toggles wake and the explorer truly opens. Closing the LAST workspace returns
-//       Home, force-closes the explorer, and re-arms the lockdown.
+//   (h) the zero-workspace LOCKDOWN (2026-07-16/17), both edges: at boot (no
+//       workspaces) the rail does not render and all THREE chrome toggles — rail,
+//       file explorer, browser — read disabled with the REASON in their tooltips
+//       ("create a workspace first"), the explorer un-OPENABLE at the capability
+//       (toggle() refuses; the button is just the visible half). With a workspace
+//       the toggles wake (tooltips back to their shortcut forms) and the explorer
+//       truly opens. Closing the LAST workspace returns Home, force-closes the
+//       docks, and re-arms the lockdown.
 export function runHomeUxSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 150000) // safety net
   const wc = win.webContents
@@ -56,25 +58,39 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
         `!!document.querySelector('.home-recents-grid .empty-state') && !!document.querySelector('.home-recents-grid .empty-state button')`
       )
 
-      // (h) BOOT half of the zero-workspace lockdown: no rail rendered, both chrome
-      // toggles disabled, and the explorer un-openable at the CAPABILITY — the dev
-      // handle drives the same toggle() every door (button/shortcut/palette) uses.
+      // (h) BOOT half of the zero-workspace lockdown: no rail rendered, all THREE
+      // chrome toggles (rail · explorer · browser) disabled WITH the reason in their
+      // tooltips, and the explorer un-openable at the CAPABILITY — the dev handle
+      // drives the same toggle() every door (button/shortcut/palette) uses.
       const bootLock = await ES<{
         railHidden: boolean
         railToggleDisabled: boolean
         explorerDisabled: boolean
+        browserDisabled: boolean
         explorerRefused: boolean
+        tooltipsExplain: boolean
       }>(`(() => {
         const railEl = document.getElementById('rail')
+        const railBtn = document.querySelector('#titlebar .rail-toggle')
+        const expBtn = document.querySelector('#titlebar .explorer-toggle')
+        const webBtn = document.querySelector('.titlebar-right button[aria-label="Browser"]')
         window.__mogging.explorer.toggle(true)
         return {
           railHidden: !railEl || railEl.offsetParent === null,
-          railToggleDisabled: document.querySelector('#titlebar .rail-toggle')?.disabled === true,
-          explorerDisabled: document.querySelector('#titlebar .explorer-toggle')?.disabled === true,
-          explorerRefused: window.__mogging.explorer.isOpen() === false
+          railToggleDisabled: railBtn?.disabled === true,
+          explorerDisabled: expBtn?.disabled === true,
+          browserDisabled: webBtn?.disabled === true,
+          explorerRefused: window.__mogging.explorer.isOpen() === false,
+          tooltipsExplain: [railBtn, expBtn, webBtn].every((b) => /create a workspace first/i.test(b?.title ?? ''))
         }
       })()`)
-      const bootLockOk = bootLock.railHidden && bootLock.railToggleDisabled && bootLock.explorerDisabled && bootLock.explorerRefused
+      const bootLockOk =
+        bootLock.railHidden &&
+        bootLock.railToggleDisabled &&
+        bootLock.explorerDisabled &&
+        bootLock.browserDisabled &&
+        bootLock.explorerRefused &&
+        bootLock.tooltipsExplain
 
       // (b) the checklist is detection-honest, in BOTH directions.
       type Agent = { id: string; name: string; installed: boolean; installHint?: string }
@@ -215,14 +231,25 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
         200
       )
 
-      // (h) LIVE half: with a workspace (from (c)) the toggles are awake and the
-      // explorer truly opens…
-      const awake = await ES<{ railToggleEnabled: boolean; explorerEnabled: boolean; explorerOpens: boolean }>(`(() => {
+      // (h) LIVE half: with a workspace (from (c)) the toggles are awake — their
+      // tooltips back to the shortcut forms — and the explorer truly opens…
+      const awake = await ES<{
+        railToggleEnabled: boolean
+        explorerEnabled: boolean
+        browserEnabled: boolean
+        explorerOpens: boolean
+        tooltipsRestored: boolean
+      }>(`(() => {
+        const railBtn = document.querySelector('#titlebar .rail-toggle')
+        const expBtn = document.querySelector('#titlebar .explorer-toggle')
+        const webBtn = document.querySelector('.titlebar-right button[aria-label="Browser"]')
         window.__mogging.explorer.toggle(true)
         return {
-          railToggleEnabled: document.querySelector('#titlebar .rail-toggle')?.disabled === false,
-          explorerEnabled: document.querySelector('#titlebar .explorer-toggle')?.disabled === false,
-          explorerOpens: window.__mogging.explorer.isOpen() === true
+          railToggleEnabled: railBtn?.disabled === false,
+          explorerEnabled: expBtn?.disabled === false,
+          browserEnabled: webBtn?.disabled === false,
+          explorerOpens: window.__mogging.explorer.isOpen() === true,
+          tooltipsRestored: [railBtn, expBtn, webBtn].every((b) => /Ctrl\\+Shift\\+[BEU]/.test(b?.title ?? ''))
         }
       })()`)
       // …and closing the LAST workspace returns Home, force-closes the explorer
@@ -239,24 +266,27 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
       const relock = await ES<{
         railToggleDisabled: boolean
         explorerDisabled: boolean
+        browserDisabled: boolean
         explorerClosed: boolean
-        explorerStillRefused: boolean
       }>(`(() => {
         window.__mogging.explorer.toggle(true)
         return {
           railToggleDisabled: document.querySelector('#titlebar .rail-toggle')?.disabled === true,
           explorerDisabled: document.querySelector('#titlebar .explorer-toggle')?.disabled === true,
-          explorerClosed: window.__mogging.explorer.isOpen() === false,
-          explorerStillRefused: window.__mogging.explorer.isOpen() === false
+          browserDisabled: document.querySelector('.titlebar-right button[aria-label="Browser"]')?.disabled === true,
+          explorerClosed: window.__mogging.explorer.isOpen() === false
         }
       })()`)
       const lockdownOk =
         awake.railToggleEnabled &&
         awake.explorerEnabled &&
+        awake.browserEnabled &&
         awake.explorerOpens &&
+        awake.tooltipsRestored &&
         homeReturned &&
         relock.railToggleDisabled &&
         relock.explorerDisabled &&
+        relock.browserDisabled &&
         relock.explorerClosed
 
       const pass =

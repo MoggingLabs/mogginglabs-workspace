@@ -9,17 +9,21 @@ import { failNextConsentSet } from '../browserzero-audit-faults'
 
 /**
  * Env-gated zero-workspace browser gate (MOGGING_BROWSERZERO — audit findings 28, 29, 33,
- * 33b). Everything here is driven through the REAL chrome: the titlebar globe, the URL bar,
- * the rail's × , the Settings switch. A control the smoke reaches around is a control the
- * user is still alone with.
+ * 33b; recut 2026-07-17 to the zero-workspace LOCKDOWN). Everything here is driven through
+ * the REAL chrome: the titlebar globe, the URL bar, the rail's ×, the Settings switch. A
+ * control the smoke reaches around is a control the user is still alone with.
  *
- *   1. Boot with ZERO workspaces (the natural gate state) and open the dock from the
- *      titlebar: it must be DISABLED and it must SAY WHY. The globe renders in every view,
- *      including the home screen, and the dock's every concept is keyed by workspace — so
- *      the shipped chrome offered a live URL bar whose Enter key did literally nothing.
- *   2. Create a workspace: the same controls come back to life and a real navigate lands.
- *   3. Close the sole workspace through the rail's own ×: the dock RETURNS to the
- *      disabled/explained state. (The transition, not just the boot state.)
+ *   1. Boot with ZERO workspaces: the dock cannot OPEN at all. The globe reads DISABLED
+ *      and says why; the click and ⌘+Shift+U both funnel into the same toggle() refusal.
+ *      (The previous contract opened an is-no-workspace husk with its chrome disabled —
+ *      the lockdown replaced open-but-inert with refused-with-a-reason, matching the
+ *      file-explorer and rail toggles.)
+ *   2. Create a workspace: the globe wakes, the dock opens, its chrome is live, and a
+ *      real navigate lands.
+ *   3. Close the sole workspace through the rail's own ×: the dock FORCE-CLOSES (not a
+ *      husk — gone), the globe reads disabled-with-reason again. (The transition, not
+ *      just the boot state.) The open PREFERENCE survives: when the next workspace is
+ *      created (arm 5), the dock returns by itself.
  *   4. Consent with no workspace: the switch cannot be clicked at all, and says why.
  *   5. Consent when the write FAILS (fault-injected): the switch REVERTS, an error is
  *      shown, and a real consentGet readback — not the DOM — is still false.
@@ -211,30 +215,43 @@ export function runBrowserZeroSmoke(win: BrowserWindow): void {
       await sleep(1500)
       const port = await serve()
 
-      // ── 1. Zero workspaces: the dock opens, and it is honest ─────────────────
+      // ── 1. Zero workspaces: the dock cannot OPEN, and the globe says why ─────
       const bootWorkspaces = await wsCount()
-      const toggleClicked = await clickBrowserToggle()
+      const zeroToggle = await ES<{ disabled: boolean; title: string }>(`(() => {
+        const b = document.querySelector('.titlebar-right button[aria-label="Browser"]')
+        return { disabled: b instanceof HTMLButtonElement && b.disabled, title: b ? b.title : '' }
+      })()`)
+      const toggleClicked = await clickBrowserToggle() // a disabled control ignores this, by spec
+      await pressMetaShiftU() // ...and the shortcut funnels into the same toggle() refusal
       await sleep(700)
       const zeroBoot = await dockProbe()
+      const zeroOpen = await isOpen()
       const zeroBootOk =
         bootWorkspaces === 0 &&
+        zeroToggle.disabled &&
+        /create a workspace first/i.test(zeroToggle.title) && // the tooltip carries the reason
         toggleClicked &&
-        zeroBoot.visible && // the dock IS reachable from the home screen — that was never the bug
-        zeroBoot.noWorkspaceClass &&
-        zeroBoot.urlDisabled &&
-        zeroBoot.reloadDisabled &&
-        zeroBoot.profileDisabled &&
-        zeroBoot.emptyShown &&
-        /workspace/i.test(zeroBoot.emptyText) && // it says WHY, not "Enter a URL above"
-        !/Enter a URL/i.test(zeroBoot.emptyText)
+        !zeroOpen &&
+        !zeroBoot.visible // refused at the capability — never an inert husk on screen
 
-      // ── 2. A workspace exists: the same controls come back, and one works ─────
+      // ── 2. A workspace exists: the globe wakes, the dock opens, and one works ─
       await ES(`window.__mogging.workspace.create({ name: 'Zero' })`)
       await sleep(2000)
       const wsA = (await activeWs()).id
+      const wokenToggle = await ES<{ disabled: boolean; title: string }>(`(() => {
+        const b = document.querySelector('.titlebar-right button[aria-label="Browser"]')
+        return { disabled: b instanceof HTMLButtonElement && b.disabled, title: b ? b.title : '' }
+      })()`)
+      await clickBrowserToggle() // the human's open — arm 1's click was refused
+      await sleep(700)
       const liveProbe = await dockProbe()
       const reEnabledOk =
-        !liveProbe.noWorkspaceClass && !liveProbe.urlDisabled && !liveProbe.reloadDisabled && !liveProbe.profileDisabled
+        !wokenToggle.disabled &&
+        liveProbe.visible &&
+        !liveProbe.noWorkspaceClass &&
+        !liveProbe.urlDisabled &&
+        !liveProbe.reloadDisabled &&
+        !liveProbe.profileDisabled
       const typed = await typeUrlAndEnter(`127.0.0.1:${port}`)
       let titleOk = false
       for (let i = 0; i < 30 && !titleOk; i++) {
@@ -252,14 +269,17 @@ export function runBrowserZeroSmoke(win: BrowserWindow): void {
       await sleep(800)
       const closedToZero = (await wsCount()) === 0
       const afterClose = await dockProbe()
+      const afterCloseOpen = await isOpen()
+      const afterCloseToggle = await ES<{ disabled: boolean; title: string }>(`(() => {
+        const b = document.querySelector('.titlebar-right button[aria-label="Browser"]')
+        return { disabled: b instanceof HTMLButtonElement && b.disabled, title: b ? b.title : '' }
+      })()`)
       const returnsToZeroOk =
         closedToZero &&
-        afterClose.visible && // the dock did not vanish — it went back to explaining itself
-        afterClose.noWorkspaceClass &&
-        afterClose.urlDisabled &&
-        afterClose.reloadDisabled &&
-        afterClose.profileDisabled &&
-        /workspace/i.test(afterClose.emptyText)
+        !afterCloseOpen && // FORCE-closed with its workspace — never an inert husk
+        !afterClose.visible &&
+        afterCloseToggle.disabled &&
+        /create a workspace first/i.test(afterCloseToggle.title)
 
       // ── 4. Consent at zero workspaces: unclickable, explained, unwritten ──────
       await openSettingsBrowserTab()
@@ -280,6 +300,9 @@ export function runBrowserZeroSmoke(win: BrowserWindow): void {
       // ── 5. The write FAILS: the switch reverts, says so, and the grant is false ─
       await ES(`window.__mogging.workspace.create({ name: 'Zero B' })`)
       await sleep(2000)
+      // The arm-3 force-close never touched the saved preference (the dock was OPEN
+      // when its workspace died) — so the next workspace brings it back by itself.
+      const reopened = await isOpen()
       const wsB = (await activeWs()).id
       await openSettingsBrowserTab()
       const consentEnabled = await consentProbe()
@@ -337,13 +360,27 @@ export function runBrowserZeroSmoke(win: BrowserWindow): void {
       const shortcutOk = metaTogglesOk && modalBlocksOk && modalGone && openAfterModalGone === !openAfterMeta
 
       const pass =
-        zeroBootOk && reEnabledOk && navOk && returnsToZeroOk && zeroConsentOk && faultRevertOk && positiveConsentOk && shortcutOk
+        zeroBootOk &&
+        reEnabledOk &&
+        navOk &&
+        returnsToZeroOk &&
+        reopened &&
+        zeroConsentOk &&
+        faultRevertOk &&
+        positiveConsentOk &&
+        shortcutOk
       result = {
         pass,
         zeroBootOk,
+        zeroToggle,
+        zeroOpen,
         reEnabledOk,
+        wokenToggle,
         navOk,
         returnsToZeroOk,
+        afterCloseOpen,
+        afterCloseToggle,
+        reopened,
         zeroConsentOk,
         faultRevertOk,
         positiveConsentOk,
