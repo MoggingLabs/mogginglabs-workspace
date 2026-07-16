@@ -301,7 +301,14 @@ export function remoteBootstrapCommand(cwd?: string): string {
     `  ${READY_OSC_PRINTF}`, // fish takes its own exec path — it owes the same signal
     '  exec "$shell" --login --init-command "$fish_init"',
     'fi',
-    remoteCaptureHereDoc('interactive', 'MOGGING_INTERACTIVE_EOF', interactive),
+    // A FILE, not a `$(cat <<'EOF' …)` capture, and the difference is load-bearing: macOS's
+    // /bin/sh is bash 3.2, whose `$()` scanner is not a recursive parser — it quote-scans for
+    // the closing paren, so the UNPAIRED `)` of every `case` pattern in this script ends the
+    // substitution mid-body and the leftover tail dies with "unexpected EOF while looking for
+    // matching `''" (the REMOTEBOOT gate, macos-only). A quoted here-doc to a file has no
+    // such rescanning; the rc files above already ride the same mechanism.
+    remoteHereDoc('"$d/interactive"', 'MOGGING_INTERACTIVE_EOF', interactive),
+    '[ "$?" -eq 0 ] && chmod 600 "$d/interactive" || exit 72',
     'export MOGGING_REQUESTED_CWD',
     // The readiness signal, emitted once every check above has passed and immediately before the
     // user's shell takes over: "you are past the password/MFA/host-key prompt, this is a shell."
@@ -309,7 +316,9 @@ export function remoteBootstrapCommand(cwd?: string): string {
     // before it is exactly how a prompt eats your credentials (audit finding 9). Emitted here
     // rather than at the top so a bootstrap that exits 72 never claims to be ready.
     READY_OSC_PRINTF,
-    'exec "$shell" -lc "$interactive"'
+    // The bootstrap expands $MOGGING_HELPER_DIR here (it is set and exported above), so the
+    // login shell receives a plain `. "/abs/path/interactive"` — quote-safe for any HOME.
+    'exec "$shell" -lc ". \\"$MOGGING_HELPER_DIR/interactive\\""'
   ].join('\n')
   // sshd may initially hand the command to fish/csh. Keep the outer command simple
   // enough for those shells, then parse the actual bootstrap with a known POSIX shell.

@@ -201,9 +201,17 @@ export function runTreeLiveSmoke(win: BrowserWindow): void {
       // ~580 rows now exist; only the scrolled window is in the DOM. Scroll to the file
       // to prove the tree really HOLDS it — `reveal` walks the model, so a row it can
       // reach is a row the batch actually spliced in.
-      await ES(`window.__mogging.explorer.reveal(${JSON.stringify(join(fx.torrent[0], 'burst-099.txt'))})`)
-      await sleep(400)
-      const torrentLanded = await ES<boolean>(`window.__mogging.explorer.rowNames().includes('burst-099.txt')`)
+      // Bounded POLL, not one fixed beat: the assertion is that the tree HOLDS the row, and on
+      // a loaded CI runner the burst's final coalesced batch can land after any single 400ms
+      // wait. Re-reveal each attempt — the row only scrolls into the DOM window when the walk
+      // runs AFTER its batch spliced it in. The frame budget and the <=10 batch cap above keep
+      // their own bite; this loop relaxes only the deadline.
+      let torrentLanded = false
+      for (let i = 0; i < 12 && !torrentLanded; i++) {
+        await ES(`window.__mogging.explorer.reveal(${JSON.stringify(join(fx.torrent[0], 'burst-099.txt'))})`)
+        await sleep(400)
+        torrentLanded = await ES<boolean>(`window.__mogging.explorer.rowNames().includes('burst-099.txt')`)
+      }
       const gpuSoft = process.env.MOGGING_CI_GPU === 'soft'
       const torrentOk =
         torrentBatches.length > 0 && torrentBatches.length <= 10 &&

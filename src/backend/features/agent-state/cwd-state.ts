@@ -1,6 +1,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { PANE_CWD_MAX, type PaneCwdLocality, type PaneCwdSource } from '@contracts'
+import { toCallerNamespace } from '../../platform/fs-paths'
 
 const REPORT_CLOCK_SKEW_MS = 5 * 60_000
 const PROMPT_COALESCE_MS = 100
@@ -130,10 +131,16 @@ export class PaneCwdState {
   }
 
   /** Exact worktree opened by a descendant Git process (`GIT_TRACE_SETUP`). It is ignored when
-   * the shell is prompting, so a late/background Git command cannot relabel the pane. */
+   * the shell is prompting, so a late/background Git command cannot relabel the pane. Git
+   * reports the PHYSICAL directory, so the value is translated back into the pane's own
+   * namespace (the shell/spawn cwd is the anchor) — a pane standing in an aliased spelling
+   * (8.3 short path, junction, macOS's symlinked /var temp) must not have its cwd teleported
+   * to a spelling the user never typed. Remote panes name paths on another machine; no local
+   * filesystem question can be asked about them. */
   acceptWorktree(cwd: string): PaneCwdSnapshot | null {
     if (!this.commandActive) return null
-    this.worktreeCwd = cwd
+    const anchor = this.locality === 'local' ? (this.shellCwd ?? this.spawnCwd) : null
+    this.worktreeCwd = anchor ? toCallerNamespace(cwd, anchor) : cwd
     return this.commit()
   }
 

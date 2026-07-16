@@ -1,5 +1,6 @@
+import { realpathSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
-import { join, normalize, parse, sep } from 'node:path'
+import { dirname, join, normalize, parse, sep } from 'node:path'
 import { FS_DRIVE_ROOT } from '@contracts'
 
 // ONE meaning per path, shared by every read-only listing (fs-browse's wizard
@@ -39,6 +40,35 @@ export function isUnder(child: string, dir: string): boolean {
   if (d.endsWith('\\') || d.endsWith('/')) return true // a root like `C:\` already ends at a boundary
   const next = c[d.length]
   return next === '\\' || next === '/'
+}
+
+/**
+ * Report a PHYSICALLY discovered directory (git root, traced worktree, watcher event) in the
+ * namespace the caller is standing in. `anchor` is a caller-namespace path; walk its lexical
+ * ancestors for one whose realpath IS `physical` — that ancestor names the same directory in
+ * the caller's spelling. Falls back to `physical` when the caller's chain never crosses it.
+ *
+ * This is the counterpart to `canonical()`'s "the path the user typed is the path they meant"
+ * rule: a repo under an aliased prefix (8.3 short path or junction on Windows, the
+ * `/var -> /private/var` symlink macOS puts under every temp dir) has two spellings, and a
+ * physically discovered root that keeps the OTHER spelling makes every caller-namespace
+ * comparison against it false — containment guards refuse paths that are visibly inside the
+ * tree, and the pane's cwd teleports to a spelling the user never typed.
+ */
+export function toCallerNamespace(physical: string, anchor: string): string {
+  if (!physical || !anchor) return physical
+  let candidate = canonical(anchor)
+  for (let i = 0; i < 256; i++) {
+    try {
+      if (realpathSync.native(candidate) === physical) return candidate
+    } catch {
+      break // an unreadable ancestor cannot be verified; the physical spelling is the answer
+    }
+    const parent = dirname(candidate)
+    if (parent === candidate) break // filesystem root
+    candidate = parent
+  }
+  return physical
 }
 
 /** The parent of `dir`, or null when there is nowhere further up. */

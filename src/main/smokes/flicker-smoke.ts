@@ -353,6 +353,11 @@ const SCRIPT = `(async () => {
 
 export function runFlickerSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 120000) // safety net
+  // Eight panes at the authored dev-window size. On the 1024-wide CI display the clamped
+  // window leaves each pane a handful of rows, and the buffers-kept character check fails
+  // on geometry rather than on the reflow behavior it exists to hold. (chromeux precedent:
+  // programmatic resize beyond the physical display works on every runner.)
+  win.setSize(1200, 800)
   const wc = win.webContents
   wc.setBackgroundThrottling(false) // measure OUR frames, not the compositor's scheduling
 

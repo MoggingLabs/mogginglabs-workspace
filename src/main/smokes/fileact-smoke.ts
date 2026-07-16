@@ -81,7 +81,15 @@ function makeFixture(): Fixture {
  * many paths we type into it, the count must stay at ONE. We type; the user executes.
  */
 function promptLines(buffer: string): number {
-  const marker = process.platform === 'win32' ? /project>/ : /[$%#]\s*$|project.*[$%#]/
+  if (process.platform === 'win32') {
+    // xterm WRAPS buffer rows, and cmd's prompt is the full fixture path — long enough on a
+    // CI runner (deep temp dirs, narrow pane) that `project>` itself splits across two rows.
+    // A per-line test then counts ZERO prompts and the gate fails arithmetic it never meant
+    // to test. Count occurrences in the rejoined stream: the marker only ever comes from the
+    // prompt (no fixture name contains it), so occurrences == prompts.
+    return (buffer.replace(/\n/g, '').match(/project>/g) ?? []).length
+  }
+  const marker = /[$%#]\s*$|project.*[$%#]/
   return buffer.split('\n').filter((l) => marker.test(l.trim())).length
 }
 
