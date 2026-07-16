@@ -4,6 +4,7 @@ import { SerializeAddon } from '@xterm/addon-serialize'
 import {
   EXPLORER_DRAG_TYPE,
   WorktreeChannels,
+  displayPaneNumber,
   type GitStatus,
   type AgentState,
   type PaneId,
@@ -1437,7 +1438,7 @@ export class TerminalPane {
 
     // Title precedence: what the agent says it's doing (OSC 0/2 window title) → the
     // launched agent's label → "Terminal N".
-    const fallback = `Terminal ${this.id % 100 || this.id}`
+    const fallback = `Terminal ${displayPaneNumber(this.id)}`
     let oscTitle = ''
     const applyTitle = (): void => {
       const label = getPaneLabel(this.id) ?? ''
@@ -1685,7 +1686,7 @@ export class TerminalPane {
     // What this pane calls itself — the agent's task title, else its label, else its number.
     // The number is derived from the id and therefore STABLE: a pane that moves to another
     // workspace keeps its name, rather than being renumbered by wherever it happens to land.
-    const paneName = displayTitle || `Terminal ${this.id % 100 || this.id}`
+    const paneName = displayTitle || `Terminal ${displayPaneNumber(this.id)}`
     const info: HTMLElement[] = [note(`Pane: ${paneName}`)]
     const session = getPaneAgentSession(this.id)
     if (session) {
