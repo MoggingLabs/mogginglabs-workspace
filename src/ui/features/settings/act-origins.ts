@@ -25,7 +25,18 @@ export function createActOriginsCard(): HTMLElement {
     const generation = ++renderGeneration
     const wsId = wsSelect.value
     clear(body)
-    if (!wsId) return
+    if (!wsId) {
+      // F-38: with zero workspaces this used to leave a dead, empty <select> as the
+      // card's only content — a broken-looking stub. Say why instead (the sibling
+      // consent card's exact pattern).
+      body.append(
+        el('div', {
+          class: 'menu-note',
+          text: 'No workspace open — origin grants are per-workspace. Create or open one, then decide here.'
+        })
+      )
+      return
+    }
     const grant = (await bridge.invoke(IntegrationsChannels.grantGet, wsId)) as WorkspaceIntegrationsGrant
     if (generation !== renderGeneration || wsSelect.value !== wsId) return
     body.append(el('div', { class: 'settings-row-caption', text: `Origins agents may ACT on (web tier: ${grant.web})` }))
@@ -93,6 +104,7 @@ export function createActOriginsCard(): HTMLElement {
     for (const w of getWorkspaces().workspaces) wsSelect.append(el('option', { value: w.id, text: w.name }))
     wsSelect.value = current || (getWorkspaces().activeId ?? '')
     if (!wsSelect.value && wsSelect.options.length) wsSelect.selectedIndex = 0
+    wsSelect.hidden = !wsSelect.options.length // an empty picker is a stub, not a control (F-38)
   }
   wsSelect.onchange = (): void => void render()
 

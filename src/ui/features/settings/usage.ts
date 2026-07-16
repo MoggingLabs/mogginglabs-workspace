@@ -62,7 +62,9 @@ export function createUsageSection(): HTMLElement {
   let detected = new Set<string>()
 
   // ── 1 · The provider catalog grid (searchable, class-grouped) ─────────────
-  const search = el('input', { class: 'usage-search', ariaLabel: 'Search providers' }) as HTMLInputElement
+  // `.input` on every control in this tab (S2/F-27): these used to be bare natives —
+  // white OS widgets on the dark theme, OS font on every theme.
+  const search = el('input', { class: 'input usage-search', ariaLabel: 'Search providers' }) as HTMLInputElement
   search.type = 'search'
   search.placeholder = `Search ${USAGE_PROVIDERS.length}+ providers…`
   const grid = el('div', { class: 'usage-grid' })
@@ -137,7 +139,7 @@ export function createUsageSection(): HTMLElement {
       return host
     }
     // Paste-once: a password field (never readable back after save) + save.
-    const paste = el('input', { class: 'usage-key-input', ariaLabel: `${r.id} API key` }) as HTMLInputElement
+    const paste = el('input', { class: 'input input-sm usage-key-input', ariaLabel: `${r.id} API key` }) as HTMLInputElement
     paste.type = 'password'
     paste.placeholder = r.klass === 'web-session' ? 'paste cookie value…' : 'paste API key…'
     const save: HTMLButtonElement = Button({
@@ -163,7 +165,7 @@ export function createUsageSection(): HTMLElement {
     })
     // Advanced: an env-ref POINTER slot (a name, never a secret — a
     // secret-shaped literal is refused main-side and surfaced here).
-    const envRef = el('input', { class: 'usage-envref-input', ariaLabel: `${r.id} env-ref` }) as HTMLInputElement
+    const envRef = el('input', { class: 'input input-sm usage-envref-input', ariaLabel: `${r.id} env-ref` }) as HTMLInputElement
     envRef.type = 'text'
     envRef.placeholder = '${ENV_VAR} ref…'
     const saveRef = Button({
@@ -224,7 +226,7 @@ export function createUsageSection(): HTMLElement {
           }
         })
         enable.el.classList.add('usage-prov-enable')
-        const cadence = el('select', { class: 'usage-cadence', ariaLabel: `${r.id} refresh cadence` }) as HTMLSelectElement
+        const cadence = el('select', { class: 'input input-sm usage-cadence', ariaLabel: `${r.id} refresh cadence` }) as HTMLSelectElement
         for (const c of USAGE_CADENCES) cadence.append(el('option', { value: c, text: c }))
         cadence.value = r.cadence
         cadence.addEventListener('change', () => void invoke(UsageChannels.configSet, { providerId: r.id, cadence: cadence.value }))
@@ -389,7 +391,7 @@ export function createUsageSection(): HTMLElement {
   async function renderCost(): Promise<void> {
     costHost.replaceChildren()
     const windowDays = costWindow()
-    const winSel = el('select', { class: 'usage-cost-window', ariaLabel: 'Cost window' }) as HTMLSelectElement
+    const winSel = el('select', { class: 'input input-sm usage-cost-window', ariaLabel: 'Cost window' }) as HTMLSelectElement
     for (const [v, label] of [
       ['7', 'Last 7 days'],
       ['30', 'Last 30 days'],
@@ -579,7 +581,7 @@ export function createUsageSection(): HTMLElement {
     thrErr.hidden = true
     const live = { quiet: cfg.quiet, warn: cfg.warn }
     const pctInput = (cls: string, label: string, value: number, key: 'quiet' | 'warn'): HTMLInputElement => {
-      const input = el('input', { class: `usage-thr ${cls}`, ariaLabel: label }) as HTMLInputElement
+      const input = el('input', { class: `input input-sm usage-thr ${cls}`, ariaLabel: label }) as HTMLInputElement
       input.type = 'number'
       input.min = '1'
       input.max = '100'
@@ -629,7 +631,7 @@ export function createUsageSection(): HTMLElement {
       const floorsHost = el('div', { class: 'usage-floors' })
       floorsHost.append(el('div', { class: 'section-label', text: 'Balance floors — warn when a balance drops under' }))
       for (const d of floorRows) {
-        const input = el('input', { class: 'usage-thr usage-floor', ariaLabel: `${d.id} balance floor` }) as HTMLInputElement
+        const input = el('input', { class: 'input input-sm usage-thr usage-floor', ariaLabel: `${d.id} balance floor` }) as HTMLInputElement
         input.type = 'number'
         input.min = '0'
         input.value = String(cfg.floors?.[d.id] ?? '')
@@ -875,7 +877,7 @@ function createDisplayControls(): HTMLElement {
         Object.assign(cfg, patch)
       }
       const select = (cls: string, label: string, options: [string, string][], value: string, onChange: (v: string) => void): HTMLSelectElement => {
-        const s = el('select', { class: `usage-display-select ${cls}`, ariaLabel: label }) as HTMLSelectElement
+        const s = el('select', { class: `input input-sm usage-display-select ${cls}`, ariaLabel: label }) as HTMLSelectElement
         for (const [v, text] of options) s.append(el('option', { value: v, text }))
         s.value = value
         s.addEventListener('change', () => onChange(s.value))
@@ -929,7 +931,7 @@ function createDisplayControls(): HTMLElement {
         cfg.order,
         (v) => set({ order: v as UsageDisplayConfig['order'] })
       )
-      const pinOrder = el('input', { class: 'usage-display-pinorder', ariaLabel: 'Manual provider order (comma-separated ids)' }) as HTMLInputElement
+      const pinOrder = el('input', { class: 'input input-sm usage-display-pinorder', ariaLabel: 'Manual provider order (comma-separated ids)' }) as HTMLInputElement
       pinOrder.type = 'text'
       pinOrder.placeholder = 'provider ids, comma-separated'
       pinOrder.value = cfg.pinOrder.join(', ')

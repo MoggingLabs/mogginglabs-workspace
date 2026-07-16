@@ -6,6 +6,7 @@ import {
   IconButton,
   SectionHeader,
   clear,
+  confirmDialog,
   createToggleRow,
   el,
   showToast
@@ -124,11 +125,20 @@ export function createClipboardSection(): HTMLElement {
     variant: 'danger',
     size: 'sm',
     icon: 'trash',
-    // It clears the SYSTEM clipboard too. That is the point of a privacy control, but a
-    // user who loses what they just copied without warning would be right to be annoyed.
+    // It clears the SYSTEM clipboard too. That is the point of a privacy control — but
+    // a partly-invisible destructive side effect must be CONFIRMED, not hover-hinted
+    // (F-05): destructive + irreversible ⇒ confirmDialog, app-wide, side effect named.
     title: 'Erase every entry — and clear the system clipboard',
     onClick: () => {
-      void clearHistory().then(() => showToast({ tone: 'success', title: 'Clipboard history cleared' }))
+      void confirmDialog({
+        title: 'Clear clipboard history?',
+        message: 'Erases every entry — and clears the system clipboard too, including whatever you last copied in another app. This cannot be undone.',
+        confirmLabel: 'Clear history',
+        danger: true
+      }).then((ok) => {
+        if (!ok) return
+        void clearHistory().then(() => showToast({ tone: 'success', title: 'Clipboard history cleared' }))
+      })
     }
   })
 

@@ -249,6 +249,23 @@
   }
 }
 
+/* Native widgetry follows the theme (S2/F-27): color-scheme flips the UA's own
+   chrome — select dropdown POPUPS, spin buttons, checkbox glyphs — which no CSS
+   class can reach. Keyed off data-theme-mode exactly like the token stamp above;
+   the media query covers the pre-JS paint. Custom scrollbars are unaffected (both
+   scrollbar systems are explicitly styled). */
+:root {
+  color-scheme: dark;
+}
+:root[data-theme-mode='light'] {
+  color-scheme: light;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme-mode]) {
+    color-scheme: light;
+  }
+}
+
 /* ── 3 · RESET & BASE ──────────────────────────────────────────────────────── */
 * {
   box-sizing: border-box;
@@ -271,8 +288,15 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-button {
-  font-family: inherit;
+/* Form controls do not inherit type: every native <select>/<input> left bare fell
+   back to the OS UI face — proportional Segoe islands inside a monospace app (S2).
+   Element-level, so any class rule still wins; this only fills the gaps. */
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
 }
 
 :focus-visible {
@@ -807,6 +831,13 @@ button {
   transition:
     border-color var(--dur-1) var(--ease),
     box-shadow var(--dur-1) var(--ease);
+}
+/* Compact grade for controls living INSIDE dense rows (usage cadence, thresholds,
+   balance floors) — same anatomy, row-height sized, so a grid row keeps one height. */
+.input.input-sm {
+  height: 28px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-12);
 }
 .input::placeholder {
   color: var(--text-lo);
@@ -3536,6 +3567,13 @@ body.pane-dragging * {
   font-size: var(--fs-11);
   line-height: 1.55;
 }
+/* F-44: chrome that exists to carry text vanishes with its text — an emptied status
+   paragraph used to keep its inset background and read as a stuck progress bar. */
+.settings-scope:empty,
+.card-caption:empty,
+.settings-row-caption:empty {
+  display: none;
+}
 .settings-row {
   display: flex;
   flex-direction: column;
@@ -3554,6 +3592,10 @@ body.pane-dragging * {
   color: var(--text-lo);
   font-size: var(--fs-11);
   max-width: var(--measure);
+  /* F-07 guard: a caption can carry a path or config value — it may wrap
+     anywhere, but it may never widen the page. */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .settings-consents {
   display: flex;

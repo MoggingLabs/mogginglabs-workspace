@@ -76,10 +76,31 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
         onClick: () => hooksAct(AgentHookChannels.remove, row.provider, `${label} alert wiring removed`)
       }))
     }
-    const note =
-      row.state === 'conflict' || row.state === 'unreadable'
-        ? `${row.reason ?? 'not writable'} — ${row.files.join(' · ')}`
-        : row.files.join(' · ')
+    // F-07: a conflict's `reason` can embed the user's entire config value — an escaped
+    // Windows path, unbroken — which used to print inline and drag a horizontal scrollbar
+    // onto the whole page. The row now says WHAT in one sentence; the raw value sits
+    // behind a disclosure in a wrapping <pre> (the install-log surface, same class).
+    const blocked = row.state === 'conflict' || row.state === 'unreadable'
+    const note = blocked
+      ? row.state === 'conflict'
+        ? 'This CLI’s own config already sets these values — yours, not the app’s, so nothing is overwritten.'
+        : 'The config file could not be read — fix or remove it, then Wire alerts again.'
+      : row.files.join(' · ')
+    let detail: HTMLElement | null = null
+    if (blocked) {
+      detail = el('pre', { class: 'prov-log prov-conflict-detail', text: `${row.reason ?? 'not writable'}\n${row.files.join('\n')}` })
+      detail.hidden = true
+      const toggle: HTMLButtonElement = Button({
+        label: 'Show details',
+        variant: 'ghost',
+        size: 'sm',
+        onClick: () => {
+          detail!.hidden = !detail!.hidden
+          toggle.textContent = detail!.hidden ? 'Show details' : 'Hide details'
+        }
+      })
+      actions.append(toggle)
+    }
     return el('div', { class: 'prov-item', dataset: { hooksProvider: row.provider } }, [
       el('div', { class: 'prov-row prov-row--static' }, [
         el('div', { class: 'prov-row-main' }, [
@@ -90,7 +111,8 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
           el('div', { class: 'settings-row-caption', text: note })
         ]),
         actions
-      ])
+      ]),
+      detail
     ])
   }
   const renderHooks = (): void => {

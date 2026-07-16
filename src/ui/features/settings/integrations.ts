@@ -15,7 +15,7 @@ import {
 } from '@contracts'
 import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
-import { Button, EmptyState, clear, createCollapsibleCard, createModal, el, icon, loadingRow, providerLogo, scrubFields, showToast, submitWithRetain } from '../../components'
+import { Button, EmptyState, clear, createCollapsibleCard, createModal, createToggleRow, el, icon, loadingRow, providerLogo, scrubFields, showToast, submitWithRetain } from '../../components'
 import type { CollapsibleCardHandle } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onToolPlanPanesChange, restartNeededPaneIds } from '../../core/agents/toolplan-panes'
@@ -836,7 +836,11 @@ function createGrantsBlock(): SyncedBlock {
     const generation = ++renderGeneration
     const wsId = wsSelect.value
     clear(body)
-    if (!wsId) return
+    if (!wsId) {
+      // F-38: never a dead empty picker — say why there is nothing to grant.
+      body.append(el('div', { class: 'menu-note', text: 'No workspace open — write-tool grants are per-workspace. Create or open one, then decide here.' }))
+      return
+    }
     let grant: WorkspaceIntegrationsGrant
     try {
       grant = (await bridge.invoke(IntegrationsChannels.grantGet, wsId)) as WorkspaceIntegrationsGrant
@@ -848,32 +852,40 @@ function createGrantsBlock(): SyncedBlock {
     }
     if (generation !== renderGeneration || wsSelect.value !== wsId) return
     // Write tools: none (default) / all — the catalog boundary (8/03).
-    const writesOn = grant.writeTools === 'all'
-    const writeBtn = el('button', {
-      class: `trail-btn${writesOn ? ' is-armed' : ''}`,
-      type: 'button',
-      text: writesOn ? 'Write tools: ALL (agents can send/mail/claim/update here)' : 'Write tools: none (default)'
-    }) as HTMLButtonElement
-    writeBtn.onclick = async (): Promise<void> => {
-      writeBtn.disabled = true
-      writeBtn.setAttribute('aria-busy', 'true')
-      try {
-        await bridge.invoke(IntegrationsChannels.grantMutate, {
-          workspaceId: wsId,
-          field: 'writeTools',
-          value: writesOn ? 'none' : 'all'
-        })
-        if (wsSelect.value === wsId) await render()
-      } catch (error) {
-        showToast({ tone: 'danger', title: 'Write-tool permission was not changed', body: String(error) })
-      } finally {
-        if (writeBtn.isConnected) {
-          writeBtn.disabled = false
-          writeBtn.removeAttribute('aria-busy')
-        }
+    // F-25: state and action used to share one BUTTON label ("Write tools: none
+    // (default)" — clicking it flipped to ALL, with no hint that it would). A switch
+    // states the setting and never moves its label. Same single-fire contract the
+    // button carried (MUTATIONRACE asserts it): disabled + aria-busy across the
+    // round-trip, reverted on failure, truth re-rendered on success.
+    const writeToggle = createToggleRow({
+      label: 'Allow MCP write tools in this workspace',
+      hint: 'Off by default. On: agents here can send, mail, claim, and update through connected tools.',
+      checked: grant.writeTools === 'all',
+      onChange: () => {
+        const next = writeToggle.checked()
+        writeToggle.setDisabled(true)
+        writeToggle.input.setAttribute('aria-busy', 'true')
+        void (async () => {
+          try {
+            await bridge.invoke(IntegrationsChannels.grantMutate, {
+              workspaceId: wsId,
+              field: 'writeTools',
+              value: next ? 'all' : 'none'
+            })
+            if (wsSelect.value === wsId) await render()
+          } catch (error) {
+            writeToggle.setChecked(!next) // put the switch back where the truth is
+            showToast({ tone: 'danger', title: 'Write-tool permission was not changed', body: String(error) })
+          } finally {
+            if (writeToggle.input.isConnected) {
+              writeToggle.setDisabled(false)
+              writeToggle.input.removeAttribute('aria-busy')
+            }
+          }
+        })()
       }
-    }
-    body.append(el('div', { class: 'trail-controls' }, [writeBtn]))
+    })
+    body.append(writeToggle.el)
   }
 
   function refreshWorkspaces(): void {
@@ -882,6 +894,7 @@ function createGrantsBlock(): SyncedBlock {
     for (const w of getWorkspaces().workspaces) wsSelect.append(el('option', { value: w.id, text: w.name }))
     wsSelect.value = current || (getWorkspaces().activeId ?? '')
     if (!wsSelect.value && wsSelect.options.length) wsSelect.selectedIndex = 0
+    wsSelect.hidden = !wsSelect.options.length // an empty picker is a stub, not a control (F-38)
   }
   wsSelect.onchange = (): void => void render()
 
@@ -1002,7 +1015,11 @@ function createToolPlanBlock(): SyncedBlock {
     const generation = ++renderGeneration
     const wsId = wsSelect.value
     clear(body)
-    if (!wsId) return
+    if (!wsId) {
+      // F-38: never a dead empty picker — say why there is no matrix to show.
+      body.append(el('div', { class: 'menu-note', text: 'No workspace open — tool plans are per-workspace. Create or open one, then scope its tools here.' }))
+      return
+    }
     const plan = (await bridge.invoke(IntegrationsChannels.planGet, wsId)) as WorkspaceToolPlan
     const servers = ((await bridge.invoke(IntegrationsChannels.serversList)) as McpServerEntry[]) ?? []
     const globalFor = new Map<string, Set<HostedCliId>>()
@@ -1027,13 +1044,33 @@ function createToolPlanBlock(): SyncedBlock {
       }
     }
 
-    const inheritBtn = el('button', {
-      class: `trail-btn${plan.inheritGlobal ? ' is-armed' : ''}`,
-      type: 'button',
-      text: plan.inheritGlobal ? 'Inherit global (“everywhere”) tools: ON' : 'Inherit global tools: OFF — plan only'
-    }) as HTMLButtonElement
-    inheritBtn.onclick = (): void => void mutatePlan({ kind: 'inherit', value: !plan.inheritGlobal }, inheritBtn)
-    body.append(el('div', { class: 'trail-controls' }, [inheritBtn]))
+    // F-25 sibling: "Inherit global tools: OFF — plan only" was state wearing a
+    // button's clothes. The switch states the setting; the matrix below shows the effect.
+    const inheritToggle = createToggleRow({
+      label: 'Inherit global (“everywhere”) tools',
+      hint: 'On: servers applied at the global tier reach this workspace too. Off: panes carry only this plan.',
+      checked: plan.inheritGlobal,
+      onChange: () => {
+        const next = inheritToggle.checked()
+        inheritToggle.setDisabled(true)
+        inheritToggle.input.setAttribute('aria-busy', 'true')
+        void (async () => {
+          try {
+            await bridge.invoke(IntegrationsChannels.planMutate, { workspaceId: wsId, kind: 'inherit', value: next })
+            if (wsSelect.value === wsId) await render()
+          } catch (error) {
+            inheritToggle.setChecked(!next)
+            showToast({ tone: 'danger', title: 'Tool plan was not changed', body: String(error) })
+          } finally {
+            if (inheritToggle.input.isConnected) {
+              inheritToggle.setDisabled(false)
+              inheritToggle.input.removeAttribute('aria-busy')
+            }
+          }
+        })()
+      }
+    })
+    body.append(inheritToggle.el)
 
     const table = el('div', { class: 'toolplan-matrix' })
     table.append(
@@ -1097,6 +1134,7 @@ function createToolPlanBlock(): SyncedBlock {
     for (const w of getWorkspaces().workspaces) wsSelect.append(el('option', { value: w.id, text: w.name }))
     wsSelect.value = current || (getWorkspaces().activeId ?? '')
     if (!wsSelect.value && wsSelect.options.length) wsSelect.selectedIndex = 0
+    wsSelect.hidden = !wsSelect.options.length // an empty picker is a stub, not a control (F-38)
   }
   wsSelect.onchange = (): void => void render()
   // A plan edit -> re-render + nudge any live panes that now need a restart.

@@ -107,8 +107,14 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
         : null
 
     // ONE sentence, written by the contract — so "connected" can never be worded
-    // two different ways by two different pens.
-    const summary = el('div', { class: `conn-summary${c.state === 'error' ? ' is-error' : ''}`, text: connectionSummary(c) })
+    // two different ways by two different pens. F-21: an idle card's summary is the
+    // literal chip text again ("Not connected." under a not-connected pill) ×40 cards —
+    // the line earns its row only when it adds facts (who, what failed, when it renews).
+    const summaryText = connectionSummary(c)
+    const summary =
+      c.state === 'disconnected' && c.authKind !== 'local'
+        ? null
+        : el('div', { class: `conn-summary${c.state === 'error' ? ' is-error' : ''}`, text: summaryText })
 
     // What the grant can DO. Being signed in as the right person with the wrong powers
     // is still the wrong connection, and this is the only place a user can see which.
@@ -477,7 +483,7 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
     return el('div', { class: `conn-card is-${c.state}`, dataset: { connection: c.id } }, [
       head,
       ...(identity ? [identity] : []),
-      summary,
+      ...(summary ? [summary] : []),
       ...(scopeLine ? [scopeLine] : []),
       ...(toolsBlock ? [toolsBlock] : []),
       body,
