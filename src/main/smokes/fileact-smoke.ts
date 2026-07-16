@@ -90,7 +90,15 @@ function promptLines(buffer: string): number {
     return (buffer.replace(/\n/g, '').match(/project>/g) ?? []).length
   }
   const marker = /[$%#]\s*$|project.*[$%#]/
-  return buffer.split('\n').filter((l) => marker.test(l.trim())).length
+  const perLine = buffer.split('\n').filter((l) => marker.test(l.trim())).length
+  if (perLine > 0) return perLine
+  // The POSIX prompt wraps too, on hosts with very long hostnames (the CI mac runner's spans
+  // a full row): 'project' and the '$' land on different rows and the per-line test counts
+  // ZERO prompts that are plainly on screen. Fall back to counting prompt occurrences in the
+  // de-wrapped stream — fallback only, because de-wrapped matching is looser about what sits
+  // between the marker and the sigil. (Typed fixture content never contains 'project': the
+  // sends are all src/-relative.)
+  return (buffer.replace(/\n/g, '').match(/project[^$%#]*[$%#]/g) ?? []).length
 }
 
 export function runFileActSmoke(win: BrowserWindow): void {
