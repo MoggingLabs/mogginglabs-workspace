@@ -9,8 +9,12 @@ const MAX_PANES = 16
  * Map a provider mix -> a concrete grid: the smallest 05 grid >= the total pane count, with
  * each slot assigned a provider (expanded from the mix) and any remaining slots padded with
  * `shell`. Caps at 16 panes. Pure + Electron-free — no credentials, just provider ids.
+ *
+ * `exact` keeps the total AS IS instead of padding up to a template grid — the wizard's
+ * dynamic painter produces any 1..16 pane count (three panes is a real layout there, not
+ * "a 4-grid minus one"), and its mix already carries the exact shell fill.
  */
-export function resolveLayout(mix: ProviderCount[]): ResolvedLayout {
+export function resolveLayout(mix: ProviderCount[], exact = false): ResolvedLayout {
   const expanded: ResolvedLayout['assignments'] = []
   for (const m of mix) {
     // The cap binds INSIDE the loop. `mix` is renderer input (TemplateChannels.resolve passes
@@ -21,7 +25,7 @@ export function resolveLayout(mix: ProviderCount[]): ResolvedLayout {
     if (expanded.length >= MAX_PANES) break
   }
   const total = expanded.length
-  const paneCount = GRIDS.find((g) => g >= total) ?? MAX_PANES
+  const paneCount = exact ? total : (GRIDS.find((g) => g >= total) ?? MAX_PANES)
   const assignments = expanded.slice(0, total)
   while (assignments.length < paneCount) assignments.push('shell')
   return { paneCount: Math.max(1, paneCount), assignments: assignments.length ? assignments : ['shell'] }

@@ -1616,7 +1616,10 @@ export class WorkspaceController {
       paneCwds: spec.paneCwds,
       roles: spec.roles,
       remotes: spec.remotes,
-      profileIds: spec.profileIds
+      profileIds: spec.profileIds,
+      // The painter's arrangement (merged cells included) — create() parses it with
+      // the same parseTree gate the restore path uses; invalid falls back to the grid.
+      layout: spec.layout
     })
     this.launchLineup(meta.id, false)
     return meta

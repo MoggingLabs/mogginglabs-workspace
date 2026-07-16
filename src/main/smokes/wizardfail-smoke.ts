@@ -72,12 +72,9 @@ export function runWizardFailSmoke(win: BrowserWindow): void {
 
       // Counts normalize when the layout shrinks; clearing a custom command
       // immediately zeroes and disables its count instead of dropping it later.
+      // (The painter's real gestures are WIZARDUX's job — this drives the model.)
       await open({ cwd: repo, paneCount: 6, mix: [{ provider: 'custom:echo audit', count: 6 }] })
-      await ES(`(() => {
-        const tile = [...document.querySelectorAll('#view-wizard .layout-tile')]
-          .find((item) => item.querySelector('.layout-tile-count')?.textContent === '2')
-        tile?.click()
-      })()`)
+      await ES(`window.__mogging.wizardLayout.setGrid(1, 2)`)
       await sleep(150)
       const shrink = await ES<{ count: string; meter: string }>(`(() => ({
         count: document.querySelector('#view-wizard .wizard-custom-row .stepper-value')?.textContent ?? '',

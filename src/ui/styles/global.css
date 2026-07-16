@@ -3946,8 +3946,8 @@ body.pane-dragging * {
   flex-direction: column;
   width: min(var(--page-max), 100%);
   min-height: 0;
-  padding: var(--sp-6);
-  gap: var(--sp-5);
+  padding: var(--sp-5) var(--sp-6);
+  gap: var(--sp-4);
 }
 .wizard-head {
   display: flex;
@@ -3964,7 +3964,7 @@ body.pane-dragging * {
 }
 .wizard-title {
   margin: 0;
-  font-size: var(--fs-24);
+  font-size: var(--fs-20);
   font-weight: var(--fw-semibold);
   letter-spacing: var(--track-tight);
   color: var(--text-hi);
@@ -3973,9 +3973,9 @@ body.pane-dragging * {
   margin: 0;
   max-width: var(--measure);
   color: var(--text-lo);
-  font-size: var(--fs-13);
+  font-size: var(--fs-12);
 }
-/* The scrolling card column. --wz-ctl unifies the row control heights that used
+/* The scrolling column. --wz-ctl unifies the row control heights that used
    to be four different values (stepper 24 / select 28 / copy 22 / pill). */
 .wizard {
   --wz-ctl: 28px;
@@ -4015,61 +4015,44 @@ body.pane-dragging * {
   flex: none;
 }
 
-/* REMOVE #5 (8.5/07b): the `.review-footer::before` hairline was the surviving half of
-   the old double divider — `.modal-footer { border-top }` already marks the fold. */
-
-/* A quiet per-card disclosure — native <details>, so Chromium gives us the
-   button semantics, aria-expanded, and Enter/Space for free. */
-.wizard-adv {
-  border-top: 1px solid var(--border);
-  padding-top: var(--sp-3);
-}
-.wizard-adv-summary {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  list-style: none;
-  cursor: pointer;
-  color: var(--text-mid);
-  font-size: var(--fs-12);
-  font-weight: var(--fw-medium);
-}
-.wizard-adv-summary::-webkit-details-marker {
-  display: none;
-}
-.wizard-adv-summary:hover {
-  color: var(--text-hi);
-}
-.wizard-adv-summary:focus-visible {
-  outline: 2px solid var(--accent-glow);
-  outline-offset: 2px;
-  border-radius: var(--r-sm);
-}
-.wizard-adv-summary svg {
-  color: var(--text-lo);
-  transition: transform var(--dur-1) var(--ease);
-}
-.wizard-adv[open] > .wizard-adv-summary svg {
-  transform: rotate(90deg);
-}
-.wizard-adv-body {
+/* ── Flat sections (the redesign): uppercase label + inline hint + a live
+   right-aligned readout, over the house division hairline. Nothing folds —
+   every control that used to hide behind an Advanced disclosure is a section. */
+.wizard-sec {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-4);
-  padding-top: var(--sp-4);
-}
-.wizard-adv-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
   gap: var(--sp-3);
 }
-.wizard-cluster-label {
+.wizard-sec-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  min-width: 0;
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+.wizard-sec-label {
+  flex: none;
   color: var(--text-lo);
-  font-size: var(--fs-10);
+  font-size: var(--fs-11);
   font-weight: var(--fw-semibold);
   letter-spacing: var(--track-wide);
   text-transform: uppercase;
+}
+.wizard-sec-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+}
+.wizard-sec-right {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
 }
 .wizard-hint {
   min-width: 0;
@@ -4078,12 +4061,28 @@ body.pane-dragging * {
   font-size: var(--fs-11);
 }
 
-/* Where: recent folders. Bordered at rest — the old 2px seam between two
-   transparent-bordered rows read as a rendering artifact. */
-.wizard-recents {
+/* Where: folder and name share one row — the two facts of the section. */
+.wizard-where-row {
   display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
+  align-items: center;
+  gap: var(--sp-2);
+}
+.wizard-where-row .path-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.wizard-name-input {
+  flex: none;
+  width: 220px;
+  height: var(--wz-ctl);
+  font-size: var(--fs-12);
+}
+
+/* Recent folders: a two-column grid of one-click jumps, count badge riding right. */
+.wizard-recents {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-2);
 }
 .wizard-recent {
   display: flex;
@@ -4098,6 +4097,7 @@ body.pane-dragging * {
   font-size: var(--fs-12);
   text-align: left;
   cursor: pointer;
+  min-width: 0;
   transition:
     border-color var(--dur-1) var(--ease),
     background var(--dur-1) var(--ease);
@@ -4110,8 +4110,13 @@ body.pane-dragging * {
   color: var(--text-lo);
   flex: none;
 }
+.wizard-recent-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
 .wizard-recent-name {
-  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4120,7 +4125,6 @@ body.pane-dragging * {
   font-weight: var(--fw-medium);
 }
 .wizard-recent-path {
-  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4129,20 +4133,182 @@ body.pane-dragging * {
   font-family: var(--font-mono);
   font-size: var(--fs-11);
 }
+.wizard-recent-count {
+  flex: none;
+  min-width: var(--sp-4);
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
 
-/* Agents: the meter groups DOWN with the controls that move it. */
-.wizard-fill {
+/* ── The layout painter: a Word-style size lattice beside the shape canvas. ── */
+.wizard-layout-readout {
+  color: var(--text-mid);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+.grid-painter {
+  display: flex;
+  align-items: stretch;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+.gp-lattice {
+  flex: none;
+  align-self: flex-start;
+  display: grid;
+  gap: 3px; /* dense-chrome half-step: the lattice is a tool, not a layout */
+  padding: var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+}
+.gp-cell {
+  width: var(--sp-5);
+  height: var(--sp-5);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  background: var(--bg-surface);
+  cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease);
+}
+.gp-cell.is-active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: var(--accent-weak);
+}
+.gp-cell.is-hot {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 30%, var(--bg-surface));
+}
+.gp-cell.is-blocked {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.gp-cell:focus-visible {
+  outline: 2px solid var(--accent-glow);
+  outline-offset: 1px;
+}
+.gp-canvas {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 380px;
+  aspect-ratio: 16 / 9;
+  display: grid;
+  gap: 3px; /* matches the live grid's seam scale, read at preview size */
+  padding: var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  touch-action: none; /* the merge drag owns the pointer */
+}
+.gp-region {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
-}
-.wizard-fill-bar {
-  display: flex;
   align-items: center;
-  gap: var(--sp-3);
+  justify-content: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  background: var(--bg-surface);
+  color: var(--text-lo);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-1) var(--ease),
+    background var(--dur-1) var(--ease);
 }
-.wizard-fill-bar .meter {
-  flex: 1 1 auto;
+.gp-region:hover {
+  border-color: color-mix(in srgb, var(--gp-accent, var(--accent)) 60%, var(--border));
+}
+.gp-region:focus-visible {
+  outline: 2px solid var(--accent-glow);
+  outline-offset: 1px;
+}
+.gp-region.is-merged {
+  border-style: dashed;
+}
+.gp-region.is-merge-preview {
+  border-color: var(--accent);
+  background: var(--accent-weak);
+}
+.gp-region.is-merge-invalid {
+  border-color: var(--danger-ink);
+  background: var(--danger-weak);
+}
+.gp-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--sp-5);
+  height: var(--sp-5);
+  border-radius: var(--r-full);
+  background: color-mix(in srgb, var(--gp-accent, var(--border)) 18%, var(--bg-elevated));
+  color: var(--gp-accent, var(--text-lo));
+  pointer-events: none;
+}
+.gp-chip--shell {
+  width: var(--sp-2);
+  height: var(--sp-2);
+  background: var(--border);
+}
+.gp-slot {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
+  pointer-events: none;
+}
+@keyframes gp-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-2px); }
+  75% { transform: translateX(2px); }
+}
+.gp-shake {
+  animation: gp-shake var(--dur-2) var(--ease) 2;
+}
+@media (prefers-reduced-motion: reduce) {
+  .gp-shake {
+    animation: none;
+  }
+}
+
+/* Agents: assignment meter (in the section head) + quick fills. */
+.wizard-agents-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.wizard-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.wizard-meter-track {
+  display: inline-block;
+  width: var(--sp-8);
+  height: var(--sp-1);
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+.wizard-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  transition: width var(--dur-2) var(--ease);
 }
 .wizard-fill-label {
   flex: none;
@@ -4150,6 +4316,12 @@ body.pane-dragging * {
   font-family: var(--font-mono);
   font-size: var(--fs-11);
   white-space: nowrap;
+}
+.wizard-fill {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
 }
 .wizard-fills {
   display: flex;
@@ -4167,7 +4339,7 @@ body.pane-dragging * {
   align-items: center;
   gap: var(--sp-2);
   min-height: 36px;
-  padding: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
   border: 1px solid transparent;
   border-radius: var(--r-sm);
 }
@@ -4216,19 +4388,30 @@ body.pane-dragging * {
   padding: var(--sp-2);
 }
 
-/* Agents: the assignment preview — THE at-a-glance truth. */
-.wizard-preview-wrap {
+/* Options: isolation + runs-on, visible rows (never behind a fold). */
+.wizard-option-row {
   display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
 }
-.wizard-preview .grid-preview {
-  width: 132px;
-  height: 88px;
+.wizard-option-label {
+  flex: none;
+  color: var(--text-mid);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+}
+.wizard-remote-select {
+  height: var(--wz-ctl);
+  max-width: 320px;
+  font-size: var(--fs-12);
 }
 
-/* Agents › Advanced: presets. */
+/* Presets. */
 .wizard-presets-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: var(--sp-2);
 }
 .wizard-presets {
@@ -4261,6 +4444,18 @@ body.pane-dragging * {
 .wizard-preset:hover .wizard-preset-apply {
   color: var(--accent-ink);
 }
+.wizard-preset-swarm {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-surface);
+}
+.wizard-preset-swarm:hover {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
 .wizard-preset-remove {
   display: inline-flex;
   align-items: center;
@@ -4276,8 +4471,8 @@ body.pane-dragging * {
   background: var(--danger-weak);
 }
 
-/* Agents › Advanced: worktree isolation. A REAL disabled input — never
-   `pointer-events: none`, which left the box focusable and blocked the hint. */
+/* Worktree isolation: a REAL disabled input — never `pointer-events: none`,
+   which left the box focusable and blocked the hint. */
 .checkbox.is-disabled {
   opacity: 0.55;
   cursor: not-allowed;
@@ -5023,11 +5218,9 @@ body.pane-dragging * {
   padding: var(--sp-4);
 }
 
-/* The wizard's Where card: bar · chosen line · browser, one stack. */
-.wizard-where {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
+/* The Where section's folder browser stays a compact tool, not a page. */
+.wizard-sec--where .folder-browser {
+  max-height: 220px;
 }
 .wizard-chosen {
   margin: 0;

@@ -12,3 +12,16 @@ export {
   type SplitDir
 } from './grid-layout'
 export { TEMPLATES, TEMPLATE_COUNTS, type GridSpec } from './templates'
+export { serializeTree } from './layout-tree'
+export {
+  expandToWholeRegions,
+  mergeRegions,
+  sortRegions,
+  specForCount,
+  treeForRegions,
+  uniformSpec,
+  unmergeRegion,
+  validateSpec,
+  type GridRegion,
+  type GridSpecModel
+} from './grid-regions'
