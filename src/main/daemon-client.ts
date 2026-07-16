@@ -1,7 +1,9 @@
 // The app's client to the detached PTY daemon (ADR 0006). Lives in the app-wiring layer
-// (src/main). It discovers a running daemon or spawns one via Electron-as-Node, does the
-// version + auth-token handshake, and relays pane I/O. On each app launch it reconnects to
-// the SAME running daemon (survival). Electron-free itself — no electron imports here.
+// (src/main). It discovers a running daemon or spawns one on the standalone Node helper
+// (ADR 0017 — the caller resolves it via node-helper.ts; the Electron binary itself is no
+// longer a Node interpreter), does the version + auth-token handshake, and relays pane
+// I/O. On each app launch it reconnects to the SAME running daemon (survival).
+// Electron-free itself — no electron imports here.
 import * as net from 'node:net'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -234,8 +236,17 @@ export async function retireOwnDaemon(opts: { quiesce: boolean }): Promise<boole
   return retireDaemonEndpoint(ep)
 }
 
-/** Discover a running daemon or spawn one (detached, via Electron-as-Node). */
-export async function ensureDaemon(daemonEntry: string): Promise<DaemonEndpoint> {
+/** What spawning a daemon requires since the runtime split (ADR 0017): the standalone
+ *  helper binary that hosts it, and the helper's own node_modules — natives built for
+ *  the HELPER's ABI, which @backend/platform/native-require resolves via the env var
+ *  this spawn sets. Resolved by src/main/node-helper.ts (this module stays electron-free). */
+export interface DaemonHost {
+  readonly executable: string
+  readonly nativesDir: string
+}
+
+/** Discover a running daemon or spawn one (detached, on the standalone Node helper). */
+export async function ensureDaemon(daemonEntry: string, host: DaemonHost): Promise<DaemonEndpoint> {
   if (quiescing) throw new Error('daemon is quiescing for an update — refusing to spawn')
   const existing = readEndpoint()
   if (endpointLive(existing)) {
@@ -300,9 +311,18 @@ export async function ensureDaemon(daemonEntry: string): Promise<DaemonEndpoint>
 
   fs.mkdirSync(runtimeDir(), { recursive: true })
   const logFd = fs.openSync(daemonSpawnLogPath(), 'a')
-  // process.execPath is the Electron binary; ELECTRON_RUN_AS_NODE makes it a plain Node.
-  const child = spawn(process.execPath, [daemonEntry], {
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+  // The standalone helper hosts the daemon (ADR 0017) — NOT process.execPath: the
+  // packaged Electron binary carries runAsNode:false and would boot a second full app.
+  // MOGGING_HELPER_NATIVES points the daemon's requireNative seam at the helper's own
+  // ABI-matched node-pty/better-sqlite3 (resolved by explicit path); NODE_PATH lets their
+  // transitive bare deps (better-sqlite3's `bindings`) resolve from that same flattened
+  // dir. ELECTRON_RUN_AS_NODE is dropped so a leaked =1 (Electron-based host terminals)
+  // never rides the daemon's env into every pane.
+  const env: NodeJS.ProcessEnv = { ...process.env, MOGGING_HELPER_NATIVES: host.nativesDir }
+  env.NODE_PATH = host.nativesDir + (env.NODE_PATH ? path.delimiter + env.NODE_PATH : '')
+  delete env.ELECTRON_RUN_AS_NODE
+  const child = spawn(host.executable, [daemonEntry], {
+    env,
     detached: true,
     stdio: ['ignore', logFd, logFd],
     windowsHide: true

@@ -10,7 +10,10 @@
     <!-- Load our from-source native modules (node-pty, better-sqlite3) not signed by Apple. -->
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
-    <!-- Electron-as-Node daemon reads ELECTRON_RUN_AS_NODE + friends from the environment. -->
+    <!-- Existed for the Electron-as-Node daemon, which the runtime split retired
+         (ADR 0016: the daemon runs on resources/node-helper now and runAsNode is off).
+         Kept until the operator's signing step verifies a notarized build WITHOUT it on
+         real hardware — dropping it is a hardening win to take there, not blind here. -->
     <key>com.apple.security.cs.allow-dyld-environment-variables</key>
     <true/>
   </dict>

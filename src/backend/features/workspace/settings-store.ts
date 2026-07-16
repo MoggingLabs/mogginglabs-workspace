@@ -2,11 +2,16 @@
 // same better-sqlite3 mechanism as the session store (03). Electron-free. NO credentials
 // (ADR 0002). Kept in a SEPARATE db from the daemon's
 // sessions.db so the two processes never contend on one file: main owns this; daemon owns sessions.
+// better-sqlite3 arrives through the host-aware seam (ADR 0017): this store runs in
+// Electron main today, but the seam keeps every consumer of the ABI-bound native honest.
 import { randomUUID } from 'node:crypto'
-import Database from 'better-sqlite3'
+import type BetterSqlite3 from 'better-sqlite3'
+import { requireNative } from '@backend/platform/native-require'
 import { addColumnIfMissing } from './db-migrate'
 import { parseJsonCell, workspaceMetaToRow, workspaceRowToMeta, type WorkspaceRowCells } from './workspace-rows'
 import { boardRowToBoard, cardRowToCard, type BoardCardRowCells, type BoardRowCells } from './board-rows'
+
+const Database = requireNative<typeof import('better-sqlite3')>('better-sqlite3')
 import {
   BOARD_LIMITS,
   type AgentConfigOverrideRecord,
@@ -28,7 +33,7 @@ import {
 } from '@contracts'
 
 export class SettingsStore {
-  private readonly db: Database.Database
+  private readonly db: BetterSqlite3.Database
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath)

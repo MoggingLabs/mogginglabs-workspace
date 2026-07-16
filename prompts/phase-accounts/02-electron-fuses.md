@@ -16,7 +16,7 @@ and prove the exact fuse wall on the packaged artifact with a gate.
 2. **Verify no production path needs the disabled vars**: grep build/main/daemon
    for `NODE_OPTIONS` / `NODE_EXTRA_CA_CERTS` / `--inspect` reliance (none
    expected). Dev is unaffected — fuses apply to the PACKAGED app only.
-3. **Document the asarUnpack caveat** (in ADR 0015 + docs/18 stub): the unpacked
+3. **Document the asarUnpack caveat** (in ADR 0016 + docs/18 stub): the unpacked
    set (node-pty, better-sqlite3, `bin/**` — electron-builder.yml:28-32) lives
    OUTSIDE app.asar and is NOT covered by the integrity fuse. Those files —
    the CLI shims especially — are covered only by the bundle code SIGNATURE
@@ -34,7 +34,7 @@ and prove the exact fuse wall on the packaged artifact with a gate.
 ## Files
 - `package.json` (devDep) · `electron-builder.yml` (`electronFuses`) ·
   `scripts/check-fuses.mjs` · `scripts/qa-smokes.sh` + CI workflow rows ·
-  `docs/adr/0015-accounts-and-entitlements.md` (caveat) · docs/18 stub
+  `docs/adr/0016-accounts-and-entitlements.md` (caveat) · docs/18 stub
 
 ## Definition of Done
 - FUSES green; the sweep count grows by one in the books.

@@ -16,6 +16,7 @@ import { OscParser, PaneCwdState, countSubmittedLines } from '@backend/features/
 import { buildLaunchCommand } from '@backend/features/agents'
 import { SessionStore } from '@backend/features/workspace'
 import { DaemonClient, ensureDaemon, runtimeDir } from '../daemon-client'
+import { helperRuntime } from '../node-helper'
 
 const STEP_MS = 100
 const WAIT_MS = 15_000
@@ -325,7 +326,7 @@ async function runDaemonMode(): Promise<Record<string, unknown>> {
   let clientA: DaemonClient | null = null
   let clientB: DaemonClient | null = null
   try {
-    const endpoint = await ensureDaemon(join(__dirname, 'daemon.js'))
+    const endpoint = await ensureDaemon(join(__dirname, 'daemon.js'), helperRuntime())
     clientA = new DaemonClient(endpoint, {
       onGen: (id, gen) => generationsA.set(id, gen),
       onCwd: (id, cwd, gen, revision, source, locality) =>

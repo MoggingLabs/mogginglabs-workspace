@@ -33,7 +33,6 @@ import { join } from 'node:path'
 
 const DEV_ENTRY = 'src/main/index.dev.ts'
 const SWEEP = 'scripts/qa-smokes.sh'
-const MAIN_BUNDLE = 'out/main/index.js'
 
 // Runtime knobs, NOT harness: state isolation, the dev/prod channel split, the sweep's own subset
 // selector, the documented daemon-failure workaround, the Linux CI keyring, the soft-GL CI relax,
@@ -69,7 +68,18 @@ const HARNESS_TRIGGERS = [
   'MOGGING_USAGE_CADENCE_MS', // usage.ts — fixture poll cadence
   'MOGGING_USAGE_COSTDIR', // usage.ts — fixture cost-scan root
   'MOGGING_USAGE_STATUS', // usage.ts — fixture provider-status body
-  'MOGGING_USAGE_FIXTURE' // @backend fake-adapter — the fabricated numbers themselves
+  'MOGGING_USAGE_FIXTURE', // @backend fake-adapter — the fabricated numbers themselves
+  // ── Pinned-origin overrides (ADR 0016). MOGGING_REGISTRY_BASE let an env var repoint
+  // where a shipped build fetched the integrations registry (catalog.ts) — closed by
+  // src/backend/core/origins.ts and banned here so it cannot come back. The other three
+  // are RESERVED: they exist nowhere in the codebase today, and this row is what
+  // guarantees the entitlement/IdP/update endpoints can never ARRIVE with the same
+  // bypass attached (`MOGGING_ENTITLE_BASE=https://attacker/always-pro` is a licensing
+  // bypass, not a dev knob). scripts/check-originpin.mjs asserts these rows stay here.
+  'MOGGING_REGISTRY_BASE', // integrations catalog origin — pinned in origins.ts
+  'MOGGING_ENTITLE_BASE', // reserved: the future entitlement origin
+  'MOGGING_IDP_BASE', // reserved: the future identity-provider origin
+  'MOGGING_UPDATE_BASE' // reserved: the future update-feed origin
 ]
 
 const fail = (msg) => {
@@ -113,25 +123,34 @@ if (!gates.length) fail(`PROD ARTIFACT: found no \`run_smoke\` rows in ${SWEEP} 
 const triggers = [...new Set([...gates, ...HARNESS_TRIGGERS])].filter((g) => !PRODUCTION_KNOBS.has(g))
 
 // ── 3. Scan every bundle electron-builder packages. NOT the .map files: they carry the original
-// TypeScript (comments and all) and electron-builder excludes them (`!**/*.map`).
+// TypeScript (comments and all) and electron-builder excludes them (`!**/*.map`). The main
+// process ships as V8 BYTECODE (electron.vite.config.ts `build.bytecode`) — and bytecode keeps
+// string literals readable in its constant pool, so the .jsc files are scanned too (as latin1;
+// the tokens are ASCII). Without this the main-bundle half of the check would go quietly blind:
+// a leaked trigger would sit inside index.jsc while the three-line loader stub scanned clean.
 const walk = (dir) => {
   let out = []
   for (const entry of readdirSync(dir)) {
     const path = join(dir, entry)
     if (statSync(path).isDirectory()) out = out.concat(walk(path))
-    else if (path.endsWith('.js')) out.push(path.replace(/\\/g, '/'))
+    else if (/\.(js|jsc|cjs|cjsc)$/.test(path)) out.push(path.replace(/\\/g, '/'))
   }
   return out
 }
 const bundles = ['out/main', 'out/preload', 'out/renderer'].flatMap(walk)
-if (!bundles.length) fail('PROD ARTIFACT: the build produced no .js under out/ — the pattern is blind.')
+if (!bundles.length) fail('PROD ARTIFACT: the build produced no bundles under out/ — the pattern is blind.')
+if (!bundles.some((f) => f.endsWith('.jsc'))) {
+  fail('PROD ARTIFACT: no .jsc under out/main — the bytecode build is off, and this scan no longer matches what ships (see check-bytecode.mjs).')
+}
 
 // ZERO tolerance, both halves. There is no allowance list any more: a harness symbol and an env
 // trigger are the same bug wearing different clothes, and the day one of them is "just this one,
 // just for now" is the day the exception becomes cover for the next regression.
 const leaked = []
 for (const file of bundles) {
-  const body = readFileSync(file, 'utf8')
+  // latin1, not utf8: the .jsc files are binary and must not be decoded lossily — V8 stores
+  // one-byte strings raw, so ASCII tokens grep in bytecode exactly as they do in source.
+  const body = readFileSync(file, 'latin1')
   // Minification renames identifiers but never touches string-literal contents, so the env strings
   // are the durable half of this check; the symbols are the precise half.
   for (const token of [...symbols, ...triggers]) {
@@ -155,8 +174,10 @@ if (leaked.length) {
   process.exit(1)
 }
 
-const kb = (readFileSync(MAIN_BUNDLE).length / 1024).toFixed(1)
+// The stub at out/main/index.js is ~72 bytes; the real main artifact is its bytecode twin.
+const MAIN_JSC = 'out/main/index.jsc'
+const kb = (readFileSync(MAIN_JSC).length / 1024).toFixed(1)
 console.log(
-  `  prod artifact OK — ${MAIN_BUNDLE} ${kb} kB, 0 of ${symbols.length} harness symbols and ` +
-    `0 of ${triggers.length} env triggers across ${bundles.length} bundles`
+  `  prod artifact OK — ${MAIN_JSC} ${kb} kB, 0 of ${symbols.length} harness symbols and ` +
+    `0 of ${triggers.length} env triggers across ${bundles.length} bundles (jsc included)`
 )

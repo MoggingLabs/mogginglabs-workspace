@@ -2,9 +2,21 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <!-- The trusted renderer's CSP (ADR 0016 §hardening): the account flow ships
+         through this document, so its blast radius is zero — no network of its own
+         (connect-src 'none'; ALL network lives in main), nothing embeddable, no
+         base-uri games, no form posts. MUST byte-match RENDERER_CSP in
+         src/main/window.ts, which re-issues it as a response header (the LOCKDOWN
+         smoke fails the sweep if they drift). The webview browser dock's guests are
+         separate out-of-process webContents on their own partitions with their own
+         guards (browser-dock.ts) — not governed by this document's policy.
+         style-src keeps 'unsafe-inline' ON PURPOSE: the design-token system writes
+         inline style attributes/custom properties — do not "tighten" it away.
+         In interactive dev ONLY, electron.vite.config.ts relaxes connect-src so
+         vite's HMR socket survives; gates and builds get exactly this policy. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
     />
     <title>MoggingLabs Workspace</title>
     <link rel="icon" type="image/png" href="./logo.png" />

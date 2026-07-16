@@ -11,6 +11,7 @@ import {
 } from '@contracts'
 import { maybeFault, persistFault } from './fault-port'
 import { exportPathOverride } from './fixture-port'
+import { noteWorkspaceSave } from './session-restore'
 
 // App-wiring: persist app-level workspace state and non-secret feature desired state via the
 // 03 store mechanism (better-sqlite3), in a main-owned db separate from daemon sessions.
@@ -55,8 +56,13 @@ export function registerAppSettings(): void {
     // integrations.ts resolves them), silently resurrecting a writeTools/actOrigins set the
     // user granted to something they deleted. A grant must not outlive its workspace.
     try {
-      const gone = (s.load().workspaces ?? []).filter((old) => !state.workspaces.some((w) => w.id === old.id))
+      const previous = s.load()
+      const gone = (previous.workspaces ?? []).filter((old) => !state.workspaces.some((w) => w.id === old.id))
       s.save(state)
+      // The last-working-session snapshot rides every save (shrink-hold semantics live
+      // in session-restore.ts). AFTER s.save so a failed save never mirrors, BEFORE the
+      // grant sweep so a sweep error can't starve it; best-effort by its own contract.
+      noteWorkspaceSave(previous, state)
       for (const w of gone) {
         try {
           clearGrant({ get: (k) => s.getSetting(k), set: (k, v) => s.setSetting(k, v) }, w.id)

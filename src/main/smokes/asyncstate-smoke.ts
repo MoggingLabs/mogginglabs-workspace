@@ -11,7 +11,6 @@ import {
   ProfileChannels,
   RemoteChannels,
   ReviewChannels,
-  TemplateChannels,
   UsageChannels,
   WorkspaceChannels,
   type PlanUsageView
@@ -263,68 +262,51 @@ export function runAsyncStateSmoke(win: BrowserWindow): void {
       await sleep(2000)
 
       // ══ 1 · HOME — the audit's calmest lie ═════════════════════════════════════
-      // Home caught its failures and rendered an EMPTY state: "no recent projects yet" shown when
-      // the truth was "we could not ask". Nothing looked wrong, which is what made it the worst
-      // one. Both reads are armed and the app is RELOADED, because Home's refresh is driven by
-      // view entry (onViewChange replays on subscribe) — a boot into Home IS the user gesture, and
-      // it is the exact moment the lie used to be told. Home must be first: the launcher is
-      // unreachable once a workspace exists (view-port.ts).
-      setAsyncAuditFaults({ reject: [WorkspaceChannels.loadState, TemplateChannels.list] })
+      // Home caught its failures and rendered an EMPTY state: "no previous session yet" shown when
+      // the truth would be "we could not ask". Nothing looks wrong, which is what made this shape
+      // the audit's worst one. The read is armed and the app is RELOADED, because Home's refresh
+      // is driven by view entry (onViewChange replays on subscribe) — a boot into Home IS the user
+      // gesture, and it is the exact moment the lie used to be told. Home must be first: the
+      // launcher is unreachable once a workspace exists (view-port.ts). Only the LAST-SESSION read
+      // is faulted — workspace:loadState stays healthy on purpose, so the boot restore never
+      // trips the read-only persistence latch (finding 18) that would starve every later phase.
+      setAsyncAuditFaults({ reject: [WorkspaceChannels.lastSession] })
       await reload()
       const homeView = await viewClass()
-      const recentsErr = await emptyState('.home-recents-grid')
-      const presetsErr = await emptyState('.home-list')
-      // (a) visible + (b) actionable + (d) NOT the calm empty state. The calm titles are
-      // "No recent projects yet" / "No presets yet"; the error titles lead with the subject.
-      const homeErrorVisible =
-        recentsErr.has &&
-        recentsErr.title.startsWith('Recent projects') &&
-        presetsErr.has &&
-        presetsErr.title.startsWith('Presets')
-      const homeNotFalseEmpty =
-        !recentsErr.title.startsWith('No recent projects') && !presetsErr.title.startsWith('No presets')
-      const homeHumane =
-        humane(recentsErr.body) && fromFault(recentsErr.body) && humane(presetsErr.body) && fromFault(presetsErr.body)
-      const homeRetryOffered = recentsErr.retry && presetsErr.retry
+      const resumeErr = await emptyState('.home-resume')
+      // (a) visible + (b) actionable + (d) NOT the calm empty state. The calm title is
+      // "No previous session yet"; the error title leads with the subject.
+      const homeErrorVisible = resumeErr.has && resumeErr.title.startsWith('Last session')
+      const homeNotFalseEmpty = !resumeErr.title.startsWith('No previous session')
+      const homeHumane = humane(resumeErr.body) && fromFault(resumeErr.body)
+      const homeRetryOffered = resumeErr.retry
       // "Visible" is a claim about a page the user is LOOKING at, so prove Home is the live view
       // and not a hidden div we happened to query.
       const homeIsShowing = homeView.includes('view-home')
 
-      // POSITIVE CONTROL — the REAL Retry button in the error state. One click refreshes BOTH lists
-      // (they share refresh()), and each must land on its OWN honest resting state. Those two
-      // states are not the same shape, and asserting that they were is how this phase went red:
-      // recents on a fresh userData is a genuine empty ("No recent projects yet"), but the presets
-      // list can never be empty at all. `templates:list` returns `[...PRESETS, ...custom]`
-      // (main/templates.ts) and PRESETS ships four built-in mixes (backend/features/templates/
-      // presets.ts) — so renderPresets is never called with [], its "No presets yet" EmptyState is
-      // unreachable through the real channel, and a gate waiting for that title was waiting for a
-      // sentence the product cannot say. Recovery here means: the FAILURE is gone from both lists,
-      // and each shows what it actually has — an empty state for recents, the built-in rows for
-      // presets.
+      // POSITIVE CONTROL — the REAL Retry button in the error state. One click re-reads the
+      // last session and must land on the honest resting state: a fresh userData has no
+      // snapshot, so recovery here means the FAILURE is gone and the calm empty is shown —
+      // the very sentence that was a lie a moment ago is now the truth.
       //
-      // Bounded poll, not one read after a fixed sleep: the two guards settle INDEPENDENTLY, and
-      // until each answers its list holds a loading row, not its answer.
+      // Bounded poll, not one read after a fixed sleep: until the guard answers, the host
+      // holds a loading row, not its answer.
       setAsyncAuditFaults(null)
-      const homeRetryClicked = await click('.home-recents-grid .empty-state button[aria-label="Retry"]')
+      const homeRetryClicked = await click('.home-resume .empty-state button[aria-label="Retry"]')
       const homeSettled = await waitTrue(
         `(() => {
-          const busy = document.querySelector('.home-recents-grid .loading-row, .home-list .loading-row')
-          const recents = document.querySelector('.home-recents-grid .empty-state, .home-recents-grid .home-recent')
-          const presets = document.querySelector('.home-list .empty-state, .home-list .home-item')
-          return !busy && !!recents && !!presets
+          const busy = document.querySelector('.home-resume .loading-row')
+          const resume = document.querySelector('.home-resume .empty-state, .home-resume-card')
+          return !busy && !!resume
         })()`,
         40,
         200
       )
-      const recentsOk = await emptyState('.home-recents-grid')
-      const presetsOk = await emptyState('.home-list')
-      const presetRows = await ES<number>(`document.querySelectorAll('.home-list .home-item').length`)
+      const resumeOk = await emptyState('.home-resume')
       const homeRecovered =
         homeRetryClicked &&
         homeSettled &&
-        recentsOk.title.startsWith('No recent projects') && // no history on a fresh profile: the honest empty
-        !presetsOk.has && // the failure is GONE from the presets list…
-        presetRows > 0 // …which is back to the built-in mixes it always has
+        resumeOk.title.startsWith('No previous session') // no snapshot on a fresh profile: the honest empty
 
       phases.home = {
         homeView,
@@ -335,17 +317,11 @@ export function runAsyncStateSmoke(win: BrowserWindow): void {
         homeRetryOffered,
         homeSettled,
         homeRecovered,
-        errorState: { recents: recentsErr, presets: presetsErr },
-        afterRetry: { recents: recentsOk.title, presets: presetsOk.title || `(${presetRows} preset rows)` }
+        errorState: { resume: resumeErr },
+        afterRetry: { resume: resumeOk.title }
       }
       const homePass =
         homeIsShowing && homeErrorVisible && homeNotFalseEmpty && homeHumane && homeRetryOffered && homeRecovered
-
-      // A rejected workspace:loadState LATCHES the renderer read-only for the session (finding 18:
-      // an incomplete in-memory state must never overwrite the store). Only a clean restore clears
-      // it — and every phase below persists something, so clear it here rather than debug a
-      // silently unsaved board in six months.
-      await reload()
 
       // ══ 2 · Fixtures the later phases need ════════════════════════════════════
       const wsCreated = await ES<boolean>(`(() => {

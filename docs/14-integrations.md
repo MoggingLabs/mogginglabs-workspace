@@ -307,8 +307,9 @@ missing one gets a minimal file created.
 A board card links to a GitHub PR/issue; the engine polls (per-link cadence,
 jitter, backoff, paused while hidden, **last-good cached — stale is a state, not
 an error**), and on a review/merge/close **transition** it lands a house notify
-on the card's owning pane and fires `review-changed`. The app holds **no**
-credential.
+on the card's owning pane and fires `review-changed`. No GitHub credential ever
+enters this process — the poll rides your own `gh`, which authenticates itself
+(ADR 0002).
 
 `src/backend/features/integrations/services/github.ts` is the exemplar rung:
 

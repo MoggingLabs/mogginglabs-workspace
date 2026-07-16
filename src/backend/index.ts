@@ -4,3 +4,4 @@
 export { startBackend, createFeatureModules } from './bootstrap'
 export type { BackendContext, FeatureModule } from './core/ipc/registry'
 export { setTelemetry, getTelemetry, NoopTelemetry } from './core/telemetry'
+export { setEntitlements, getEntitlements } from './core/entitlements'

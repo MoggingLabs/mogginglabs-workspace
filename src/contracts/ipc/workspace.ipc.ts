@@ -90,6 +90,19 @@ export interface WorkspaceState {
   recents?: RecentWorkspace[]
 }
 
+/** The last-working-session payload Home's restore card consumes: the same
+ *  boot-restore manifest shape for every workspace of the PREVIOUS session, plus when
+ *  it was captured. Metadata only — the per-slot agent session-log paths the snapshot
+ *  also records stay MAIN-SIDE (src/main/session-restore.ts) and never ride this
+ *  channel; `workspace:restoreSession` arms them as launch intents over there instead,
+ *  so a relaunched lineup resumes its EXACT sessions (ADR 0002 / ADR 0013). */
+export interface LastSessionInfo {
+  /** When the snapshot was captured (epoch ms) — the card's "2h ago". */
+  savedAt: number
+  activeId: string | null
+  workspaces: WorkspaceStateMeta[]
+}
+
 export interface WorkspaceSaveResult {
   ok: boolean
   reason?: string

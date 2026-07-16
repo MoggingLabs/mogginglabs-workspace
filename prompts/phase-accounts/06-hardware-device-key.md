@@ -39,7 +39,7 @@ machine. A copy on another laptop cannot refresh and cannot re-license.
 - `src/backend/platform/device-key/` (addon + binding) ·
   `src/backend/platform/dpop-key.ts` (hardware swap) ·
   `src/main/entitlements.ts` (attestation) · `src/main/native-preflight.ts`
-  (addon in the dlopen set) · `docs/18-accounts.md` (per-OS) ·
+  (addon in the dlopen set) · `docs/19-accounts.md` (per-OS) ·
   `src/main/devicekey-smoke.ts` · qa-smokes.sh
 
 ## Definition of Done

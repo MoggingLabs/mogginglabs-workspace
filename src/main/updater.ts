@@ -20,16 +20,21 @@ import { updateDriver } from './fixture-port'
 
 let getWin: (() => BrowserWindow | null) | null = null
 
-/**
- * Every check goes through here, and the `.catch` is load-bearing: `checkForUpdates()`
- * REJECTS as well as emitting 'error' — a packaged build with no app-update.yml (any
- * dir-target build) rejects at boot, and an unabsorbed rejection lands in fatal.ts's
- * unhandledRejection handler, which is `app.exit(1)`: the app died on launch for a
- * missing FEED. The 'error' listener below already reports the failure (state push +
- * telemetry + updater.log), so the rejection itself carries no new information.
- */
+// electron-updater rejects the checkForUpdates() promise ON TOP OF emitting `error`, so a
+// failed check arrives TWICE: once to the `error` listener (which reports the telemetry
+// boolean, logs the url, and degrades the rail to "update check failed"), and once as a
+// promise rejection. A missing or unreadable `resources/app-update.yml` — a dir-only build,
+// an AV-quarantined file, a corrupted install — throws ENOENT synchronously inside that
+// promise, before any network. Left on a bare `void`, the rejection reaches fatal.ts's
+// unhandledRejection hook, which treats it as a boot failure and kills the whole app: the
+// "MoggingLabs Workspace failed to start" dialog, over nothing worse than a feed it could
+// not read. The `error` event already carries every consequence worth having; the rejection
+// is a pure duplicate. Absorb it at every call site — a failed update CHECK must never
+// become a failed BOOT. (Main grew the identical fix in parallel; one copy survives.)
 function checkForUpdatesSafely(): void {
-  autoUpdater.checkForUpdates().catch(() => undefined)
+  void autoUpdater.checkForUpdates().catch(() => {
+    /* already surfaced by the `error` listener above; a rejection here adds nothing */
+  })
 }
 
 // The last state pushed, so a late subscriber (the settings pane, mounted long after boot)
@@ -131,8 +136,9 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
   })
 
   // ── THE PRE-INSTALL RETIRE ────────────────────────────────────────────────────────────
-  // The daemon is spawned from the INSTALLED EXECUTABLE (daemon-client: process.execPath +
-  // ELECTRON_RUN_AS_NODE) and outlives the app by design (ADR 0006). A running process holds
+  // The daemon is spawned from a binary INSIDE THE INSTALL DIR (daemon-client: the bundled
+  // standalone helper, resources/node-helper — ADR 0017) and outlives the app by design
+  // (ADR 0006). A running process holds
   // a Windows file lock on its own exe — so the very property that preserves your terminals
   // across an update is what made the installer fail: it closed the app, still saw a live
   // process on that exe (the daemon — windowless, unclosable), and stalled on "MoggingLabs

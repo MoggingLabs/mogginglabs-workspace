@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 147 gates: 19 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 158 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
-# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT) + 128 app-boot
+# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 136 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -57,9 +57,10 @@ fi
 
 # Scoped, never by image name: `taskkill //F //IM electron.exe` (and `pkill -f electron`)
 # swept the whole MACHINE — including the user's live dev app and, worse, their REAL detached
-# PTY daemons (a daemon IS electron.exe run as Node), killing live agent sessions every gate.
-# kill-devservers.mjs reaps only THIS repo's dev tree, parent-first, and spares daemons; a
-# gate's own isolated daemon is reaped by kill_daemon below via its endpoint.json pid.
+# PTY daemons (a daemon was electron.exe run as Node then; it is mogging-node.exe now —
+# ADR 0016 — and sweeping THAT image would be the same crime), killing live agent sessions
+# every gate. kill-devservers.mjs reaps only THIS repo's dev tree, parent-first, and spares
+# daemons; a gate's own isolated daemon is reaped by kill_daemon below via its endpoint.json pid.
 kill_electron() {
   node scripts/kill-devservers.mjs --quiet >/dev/null 2>&1 || true
 }
@@ -246,6 +247,29 @@ run_static CONNPURE npm run smoke:connections-pure
 # one issuer-keyed client covers the whole Workspace group, and a user record is never
 # purged on redirect drift (a dcr record still is — each gets the advice that is true).
 run_static PREREGCLIENT npm run smoke:preregistered-client-pure
+# ORIGINPIN: ADR 0015 — a shipped build talks to exactly the origins compiled into it.
+# An env var (the old registry override, catalog.ts) could repoint where a signed
+# install fetched the integrations registry; the same pattern is a licensing bypass the
+# day an entitlement endpoint exists. origins.ts is the single frozen source. Proves no
+# MOGGING_*_BASE read survives in src/ or bin/, the pinned URLs exist nowhere else, the
+# prod-artifact banlist carries all four names, and the wording gate still BITES
+# (sabotage-and-revert against a scratch cwd, never the repo).
+run_static ORIGINPIN node scripts/check-originpin.mjs
+# FUSES: ADR 0015 §hardening — the packaged artifact carries the EXACT declared fuse
+# wall (cookie-enc ON, nodeOptions OFF, cliInspect OFF, both asar fuses ON, runAsNode
+# ON until step 09), read off the binary with @electron/fuses, then a tampered
+# app.asar is proven to refuse to load (sabotage-and-revert; win/mac — Linux sets the
+# fuse but does not enforce it). Packages itself (~3 min: build + electron-builder
+# --dir), same never-trust-what's-there law as PRODARTIFACT.
+run_static FUSES node scripts/check-fuses.mjs
+# BYTECODE: ADR 0015 §hardening — the shipped main process is V8 bytecode (friction
+# against casual reading, NEVER security — docs/18), the sandboxed preload is NOT
+# (preload bytecode forces sandbox:false, a trade we refuse), and the pinned
+# entitlement constants do not grep in plain text (protectedStrings; V8 keeps string
+# literals readable in bytecode). Builds itself (same law as PRODARTIFACT), validates
+# every .jsc through the shipped loader's own accept path, and EXECUTES a
+# risky-constructs fixture through the same compiler — per-arch by construction.
+run_static BYTECODE node scripts/check-bytecode.mjs
 
 run_smoke SMOKE       MOGGING_SMOKE     1 180 smoke
 run_smoke MULTIPANE   MOGGING_MULTIPANE 1 180 multipane
@@ -272,6 +296,10 @@ run_smoke PERCEPTION  MOGGING_PERCEPTION 1 240 perception
 run_smoke PANEOPS     MOGGING_PANEOPS   1 180 paneops
 run_smoke CONTROL     MOGGING_CONTROL   1 240 control
 run_smoke CONTROL2    MOGGING_CONTROL2  1 180 control2
+# RUNTIMESPLIT (ADR 0016): daemon/house-MCP/`mogging` all hosted by the standalone Node
+# helper, shims env-free, runAsNode:false declared. Release blocks on SURVIVE + CONTROL +
+# this (release.yml); the FUSES gate proves the same flip on the packaged artifact.
+run_smoke RUNTIMESPLIT MOGGING_RUNTIMESPLIT 1 240 runtimesplit
 run_smoke WORKTREE    MOGGING_WORKTREE  1 240 worktree
 run_smoke REVIEW      MOGGING_REVIEW    1 240 review
 run_smoke REVIEWSNAP  MOGGING_REVIEWSNAP 1 180 reviewsnap
@@ -309,6 +337,12 @@ run_smoke BROWSERCTL   MOGGING_BROWSERCTL 1 180 browserctl
 run_smoke BROWSERUX    MOGGING_BROWSERUX 1 180 browserux
 run_smoke BROWSERTABS  MOGGING_BROWSERTABS 1 180 browsertabs
 run_smoke BROWSERRACE  MOGGING_BROWSERRACE 1 180 browserrace
+# LOCKDOWN: ADR 0015 §hardening — the trusted renderer's CSP ships as meta AND header
+# (connect-src 'none'; byte-equal, drift fails), scripted location=/window.open on the
+# main renderer are DENIED at the source (fixture counts zero hits), the webview dock
+# still browses (its own partition/guards), and browser:openExternal still reaches
+# shell.openExternal (captured at the seam — no real browser opens under a gate).
+run_smoke LOCKDOWN     MOGGING_LOCKDOWN  1 180 lockdown
 run_smoke FIRSTRUN     MOGGING_FIRSTRUN  1 150 firstrun
 run_smoke PRODUCT      MOGGING_PRODUCT   1 300 product
 run_smoke USAGE        MOGGING_USAGE     1 150 usage
@@ -340,6 +374,43 @@ run_smoke SESSIONPOOL  MOGGING_SESSIONPOOL 1 240 sessionpool
 run_smoke VERDICTLIVE  MOGGING_VERDICTLIVE 1 240 verdictlive
 run_smoke TOOLPLAN     MOGGING_TOOLPLAN  1 240 toolplan
 run_smoke EVBRIDGE     MOGGING_EVBRIDGE  1 240 evbridge
+# ACCOUNT: ADR 0015 — the token holder on a FAKE in-process IdP (zero network). Login
+# lands authed claims; the refresh token rests as vault ciphertext and NO channel
+# returns it; refresh rotates + persists; DPoP binds the tokens to a key pair (a
+# foreign-key refresh is rejected); logout + a server-side revoke both drop to anon.
+run_smoke ACCOUNT      MOGGING_ACCOUNT   1 180 account
+# ENTITLE: phase-accounts/05 — the entitlement engine on a FAKE IdP + FAKE issuer
+# (zero network). A signed claim verifies LOCALLY against an Ed25519 key; tampered /
+# wrong-key / expired tokens are treated as absent (→ Free); the cache rests as vault
+# ciphertext; the offline-grace law holds Pro past exp then degrades to Free without
+# bricking; the ONE port gates a capped feature with a visible upgrade reason.
+run_smoke ENTITLE      MOGGING_ENTITLE   1 180 entitle
+# DEVICEKEY: phase-accounts/06 — the account's DPoP key on the REAL platform key store
+# (TPM / CNG / Secure Enclave; smoke-named keys, deleted at teardown). The private key
+# is non-exportable (the OS refuses its own export API); a copied vault on different
+# hardware cannot refresh (foreign-key proof rejected, no re-license, degrades to
+# Free); entitlement issuance is device-attested; the Linux/hardware-less software
+# fallback reports custody 'software', never a hardware claim.
+run_smoke DEVICEKEY    MOGGING_DEVICEKEY 1 240 devicekey
+# WATERMARK: phase-accounts/07 — forensic leak attribution + a runtime tamper self-check
+# on a FAKE IdP + FAKE issuer + FIXTURE integrity manifest (zero network). A watermarked
+# activation traces back to its EXACT account via scripts/trace-watermark.mjs (primary
+# carrier, and the redundant ordering carrier when the primary is stripped); a modified
+# bin/ shim flips `tampered` so PAID is withheld while the FREE app still boots and
+# `mogging list` still works; the piracy telemetry (build.modified, device_mismatch) is
+# BOOLEANS ONLY; and a `revoked` entitlement degrades to Free on refresh.
+run_smoke WATERMARK    MOGGING_WATERMARK 1 300 watermark
+# PRODMILESTONE: phase-accounts/10 — THE authority on "phase-accounts done". One composed
+# run on FAKE services (FAKE IdP + FAKE MoR/issuer + fixture manifest; loopback only, zero
+# network, zero vendor CLIs): the anon FREE app opens offline and `mogging list/send/capture`
+# work → PKCE login (authed ≠ paid) → an HMAC-signed MoR webhook (forged one refused)
+# activates the subscription server-side → a device-bound, watermarked Pro claim lands and a
+# previously-capped feature unlocks → network pulled: Pro holds through grace (session
+# survives the outage), then degrades to Free — never bricks → the same vault as a DIFFERENT
+# device reads Free and cannot re-license → a tampered build withholds Pro while the free
+# app runs → logout returns to anon-free with the wedge untouched; both budgets measured ON
+# this composed surface (16 panes + the machinery live).
+run_smoke PRODMILESTONE MOGGING_PRODMILESTONE 1 420 prodmilestone
 run_smoke MCPSTATUS    MOGGING_MCPSTATUS 1 240 mcpstatus
 run_smoke MCPLOOP      MOGGING_MCPLOOP   1 120 mcploop
 run_smoke INTEG        MOGGING_INTEG     1 240 integ
@@ -364,6 +435,7 @@ run_smoke SETSHELL     MOGGING_SETSHELL  1 240 setshell
 run_smoke SETAGENTCFG  MOGGING_SETAGENTCFG 1 240 setagentcfg
 run_smoke SETUSAGE     MOGGING_SETUSAGE  1 240 setusage
 run_smoke HOMEUX       MOGGING_HOMEUX    1 240 homeux
+run_smoke RESUME       MOGGING_RESUME    1 240 resume
 run_smoke BOARDUX      MOGGING_BOARDUX   1 240 boardux
 run_smoke FEEDBACKUX   MOGGING_FEEDBACKUX 1 240 feedbackux
 run_smoke CHROMEUX     MOGGING_CHROMEUX  1 300 chromeux

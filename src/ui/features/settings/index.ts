@@ -14,6 +14,7 @@ import { renderShortcutList } from '../../core/commands/shortcuts'
 import { setTerminalFontSize, terminalFontSize, TERMINAL_FONT_SIZES } from '../../core/terminal/font-port'
 import { calmMotion, setCalmMotion } from '../../core/a11y/motion-port'
 import { TEMPLATE_COUNTS } from '../layout'
+import { createAccountSection } from './account'
 import { createActOriginsCard } from './act-origins'
 import { createActivitySection } from './activity'
 import { createClipboardSection } from './clipboard'
@@ -37,10 +38,11 @@ const NAV_GROUPS: { label: string; ids: string[] }[] = [
   { label: 'Workspace', ids: ['appearance', 'terminal', 'clipboard'] },
   { label: 'Agents & tools', ids: ['providers', 'profiles', 'integrations', 'usage', 'webhooks'] },
   { label: 'Trust', ids: ['privacy', 'browser', 'activity'] },
-  { label: 'System', ids: ['shortcuts', 'about'] }
+  { label: 'System', ids: ['account', 'shortcuts', 'about'] }
 ]
 
 const TAB_ICON: Record<string, IconName> = {
+  account: 'circle-user',
   appearance: 'sliders',
   terminal: 'terminal',
   providers: 'sparkles',
@@ -254,6 +256,7 @@ export const settingsFeature: UiFeature = {
 
     const profilesHosts = createProfilesHostsSection() as HTMLElement & { refresh: () => Promise<void> }
     const providers = createProvidersSection()
+    const account = createAccountSection()
 
     // ── The page: [section nav | scrollable content column] ──────────────────
     // The version used to be read out of the telemetry config's `release` field — which meant
@@ -477,6 +480,14 @@ export const settingsFeature: UiFeature = {
         )
       },
       {
+        id: 'account',
+        label: 'Account',
+        // The MoggingLabs account (phase-accounts/10): claims only — who is signed in,
+        // what plan this install effectively runs, and the ONE quiet line when a plan is
+        // degraded (ADR 0016 §4). Sign-in is optional forever: the free core never asks.
+        el: section('account', 'Account', 'Optional — only the Pro tier uses it. The free core never asks.', [account])
+      },
+      {
         id: 'shortcuts',
         label: 'Shortcuts',
         el: section(
@@ -508,7 +519,7 @@ export const settingsFeature: UiFeature = {
               header: SectionHeader({
                 title: 'MoggingLabs Workspace',
                 caption:
-                  'A neutral, reliable, cross-platform organizer for AI coding-agent CLIs. Your keys, your CLIs — no subscription to us.'
+                  'A neutral, reliable, cross-platform organizer for AI coding-agent CLIs. Your keys, your CLIs.'
               })
             },
             [
@@ -709,6 +720,7 @@ export const settingsFeature: UiFeature = {
       else if (currentSection === 'integrations') enterIntegrations()
       void pullConsent()
       void providers.refresh() // re-detect: a CLI installed since last visit flips to Available
+      void account.refresh() // status is push-kept; entering still re-pulls (missed pushes cost nothing)
       if (!page.querySelector('.ph-form')) void profilesHosts.refresh()
       getTelemetry().captureEvent({ name: 'settings.opened' })
     })

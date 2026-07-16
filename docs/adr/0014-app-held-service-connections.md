@@ -139,8 +139,13 @@ that would tempt us to sit in the middle of them. This ADR is about **third-part
 accounts** (Sentry, Notion, Linear) that the user asks us to connect on their behalf.
 Those are different things, and conflating them would be the easiest mistake to make here.
 
-"Your keys, your CLIs — no subscription to us" remains true: there is no MoggingLabs
-server, no account, and no credential of yours ever leaves your machine.
+"Your keys, your CLIs" remains true: the CLIs authenticate themselves, and no provider
+credential of yours ever enters this process. The unconditional second half this
+paragraph originally made — that MoggingLabs runs no server and sells nothing — is
+bounded by [ADR 0016](0016-accounts-and-entitlements.md): a paid tier with our OWN
+account is doctrine now, gating PAID features only, while the free local core keeps
+needing no account and keeps working fully offline. *(Sentence amended by ADR 0016;
+the original absolute was true when this ADR was accepted.)*
 
 The per-CLI route also **remains**, unchanged and fully supported (Settings › Integrations
 › *Per-CLI servers*). A user who wants a CLI to own its own auth, or who needs a server

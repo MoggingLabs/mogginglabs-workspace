@@ -14,6 +14,7 @@ import { clearPaneLaunch } from '../../core/agents/toolplan-panes'
 import { requestAgentLaunch } from '../../core/agents/launch-port'
 import { getPaneAgentSession } from '../../core/agents/agent-session-port'
 import { activeView, setActiveView, onViewChange } from '../../core/shell/view-port'
+import { entitlementLimit, entitlementPlan } from '../../core/entitlements/entitlements-store'
 import { getTelemetry } from '../../core/telemetry'
 import type { TemplateWorkspaceSpec } from '../../core/workspace/open-service'
 import { type WorkspaceMeta, isWorkspaceColor, newWorkspaceId, nextColor, paneIdForSlot } from './model'
@@ -433,14 +434,37 @@ export class WorkspaceController {
 
   /** Swarm manifest (4/01): role chips render from the pane-meta port immediately;
    *  the daemon learns roles after its panes exist (spawn is async over the socket),
-   *  so `mogging list`/mailbox `from`-roles agree with the UI. */
+   *  so `mogging list`/mailbox `from`-roles agree with the UI. Role SCALE is gated by
+   *  the entitlement snapshot (phase-accounts/05): the first `maxSwarmRoles` roles in
+   *  slot order bind, the rest are refused ONCE, visibly — never silently dropped.
+   *  (main's setRole handler backstops the same limit through the port.) Free covers
+   *  every slot a workspace can hold, so today nothing changes. */
   private publishRoles(meta: WorkspaceMeta): void {
     if (!meta.roles?.some((r) => r)) return
+    const cap = Math.max(0, Math.floor(entitlementLimit('maxSwarmRoles')))
+    const granted = new Set<number>() // slot indexes whose role fits the plan
+    let blocked = 0
     meta.roles.forEach((role, i) => {
-      if (role) setPaneRole(paneIdForSlot(meta, i + 1) as PaneId, role)
+      if (!role) return
+      if (granted.size < cap) granted.add(i)
+      else blocked += 1
+    })
+    if (blocked > 0) {
+      showToast({
+        tone: 'attention',
+        title: 'Swarm role limit reached',
+        body: `Your ${entitlementPlan()} plan coordinates up to ${cap} swarm roles at once — ${blocked} ${blocked === 1 ? 'role was' : 'roles were'} not assigned. Upgrade your MoggingLabs plan for more.`
+      })
+    }
+    meta.roles.forEach((role, i) => {
+      if (role && granted.has(i)) setPaneRole(paneIdForSlot(meta, i + 1) as PaneId, role)
     })
     meta.roles.forEach((role, i) => {
-      if (role) void getBridge().invoke(TerminalChannels.setRole, { id: paneIdForSlot(meta, i + 1) as PaneId, role })
+      if (role && granted.has(i)) {
+        // workspaceId scopes the gate: main's backstop counts THIS workspace's roles
+        // (the same denominator as `cap` above), never a global tally.
+        void getBridge().invoke(TerminalChannels.setRole, { id: paneIdForSlot(meta, i + 1) as PaneId, role, workspaceId: meta.id })
+      }
     })
   }
 
@@ -1136,16 +1160,34 @@ export class WorkspaceController {
     return true
   }
 
+  /** The panes-per-workspace cap: the GRID's own budget (screen minus chrome ∧ the
+   *  machine minus panes already running elsewhere — GridLayout.limit(), the wizard
+   *  redesign's honest capacity), lowered — never raised — by the plan's `maxPanes`
+   *  entitlement (phase-accounts/05). Free covers the whole grid budget, so an
+   *  account-less install behaves exactly as the redesign shipped it. */
+  private effectiveMaxPanes(view: WorkspaceView): number {
+    return Math.min(view.layout.limit(), Math.max(1, Math.floor(entitlementLimit('maxPanes'))))
+  }
+
   /** Add a terminal by splitting a pane (⋯ menu / titlebar + / palette / shortcut).
    *  `paneId` null → the workspace's focused pane; `dir` omitted → the pane's longer
    *  axis. The receiving LINE re-equalizes (every terminal in it gets an equal share). */
   splitPane(wsId: string, paneId?: number | null, dir?: 'h' | 'v', newCwd?: string): void {
     const view = this.views.get(wsId)
     if (!view) return
-    if (view.layout.paneCount >= view.layout.limit()) {
+    const cap = this.effectiveMaxPanes(view)
+    if (view.layout.paneCount >= cap) {
+      // The pane-cap gate (phase-accounts/05) over the GRID budget (wizard redesign:
+      // screen minus chrome ∧ the machine minus panes already running): the
+      // entitlement can only LOWER what this machine honestly holds, never raise it,
+      // and the refusal names which line was hit. Free covers the whole grid budget,
+      // so an account-less install reads exactly as the redesign shipped it.
       showToast({
         title: 'Pane limit reached',
-        body: `A workspace holds at most ${view.layout.limit()} terminals on this screen.`
+        body:
+          cap < view.layout.limit()
+            ? `Your ${entitlementPlan()} plan runs up to ${cap} terminals per workspace. Upgrade your MoggingLabs plan for more.`
+            : `A workspace holds at most ${cap} terminals on this screen.`
       })
       return
     }
@@ -1275,17 +1317,21 @@ export class WorkspaceController {
       .filter((id) => id !== home.meta.id && !this.pendingClose.has(id))
       .map((id) => this.views.get(id))
       .filter((v): v is WorkspaceView => !!v)
-      .map((v) => ({
-        id: v.meta.id,
-        name: v.meta.name,
-        color: v.meta.color,
-        cwd: v.meta.cwd,
-        paneCount: v.layout.paneCount,
-        // The DESTINATION grid's own budget — the number movePaneToWorkspace will
-        // actually gate on, so the picker's "Full" chip never contradicts the move.
-        limit: v.layout.limit(),
-        full: v.layout.paneCount >= v.layout.limit()
-      }))
+      .map((v) => {
+        // The DESTINATION's own effective cap (its grid budget ∧ the plan) — the
+        // number movePaneToWorkspace will actually gate on, so the picker's "Full"
+        // chip can never contradict the move it offers.
+        const cap = this.effectiveMaxPanes(v)
+        return {
+          id: v.meta.id,
+          name: v.meta.name,
+          color: v.meta.color,
+          cwd: v.meta.cwd,
+          paneCount: v.layout.paneCount,
+          cap,
+          full: v.layout.paneCount >= cap
+        }
+      })
   }
 
   /** Pane ⋯ menu → the destination picker → the move. */
@@ -1311,11 +1357,15 @@ export class WorkspaceController {
     const src = this.viewForPane(paneId)
     const dst = this.views.get(dstId)
     if (!src || !dst || src === dst || this.pendingClose.has(dstId)) return false
-    if (dst.layout.paneCount >= dst.layout.limit()) {
+    const cap = this.effectiveMaxPanes(dst)
+    if (dst.layout.paneCount >= cap) {
       showToast({
         tone: 'attention',
         title: 'That workspace is full',
-        body: `“${dst.meta.name}” already holds ${dst.layout.limit()} terminals.`
+        body:
+          cap < dst.layout.limit()
+            ? `“${dst.meta.name}” already holds ${cap} terminals — your ${entitlementPlan()} plan's limit. Upgrade your MoggingLabs plan for more.`
+            : `“${dst.meta.name}” already holds ${cap} terminals.`
       })
       return false
     }

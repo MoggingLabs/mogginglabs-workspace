@@ -5,7 +5,7 @@
 # MoggingLabs Workspace
 
 > A neutral, reliable, cross-platform organizer for AI coding-agent CLIs.
-> **Your keys, your CLIs — no subscription to us. Rock-solid on Windows and Mac.**
+> **Your keys, your CLIs. Rock-solid on Windows and Mac.**
 
 MoggingLabs Workspace is a desktop app that runs and coordinates many parallel
 AI coding-agent CLIs (Claude Code, OpenAI Codex, Gemini CLI, Aider, OpenCode, …)
@@ -30,8 +30,9 @@ The strongest tools in this space each leave a hole:
 - **BridgeSpace** — covers the most surface, but is **closed, $16–80/mo + account required**, and its changelog shows a **multi-month history of terminal-rendering/freeze bugs** (it's built on Tauri's *two* divergent WebView engines).
 
 **Our lane:** the most reliable, identical-on-Windows-and-macOS, **neutral**,
-**scriptable** organizer of first-party agent CLIs — free, local-first, and
-non-AGPL. See [`docs/00-vision-and-positioning.md`](docs/00-vision-and-positioning.md).
+**scriptable** organizer of first-party agent CLIs — a **free local core**
+(account-less, fully offline, forever) **+ an optional Pro tier**, local-first,
+and non-AGPL. See [`docs/00-vision-and-positioning.md`](docs/00-vision-and-positioning.md).
 
 ## Tech stack
 
@@ -49,9 +50,10 @@ npm install        # compiles native modules (node-pty, better-sqlite3). Needs a
 npm run dev        # launch the app in dev mode
 ```
 
-> **Status.** All roadmap phases through 11 (Files — the explorer sidebar) have shipped;
+> **Status.** All roadmap phases through 11 (Files — the explorer sidebar) have shipped,
+> plus the accounts pack (the optional Pro tier, hardened — `docs/19-accounts.md`);
 > the current release is the version in `package.json`. The `qa-smokes.sh`
-> sweep now runs **147 gates** across three OSes. Per-phase receipts and measured numbers
+> sweep now runs **158 gates** across three OSes. Per-phase receipts and measured numbers
 > live where they were written: the docs each roadmap bullet below links, and the
 > `prompts/phase-*/REPORT.md` process records.
 
@@ -120,7 +122,9 @@ It's gone; `scripts/check-npm-config.mjs` keeps it gone. Compiling from source d
 **After an Electron major bump — rebuild, or the app will refuse to start.** The compiled `.node`
 files carry an ABI (`NODE_MODULE_VERSION`); Electron 39 wants 140, Electron 37 wanted 132. A stale
 `build/` loads as a mismatch, so `npm run rebuild:native` clears both build trees and recompiles
-them against the installed Electron. (Plain `install-app-deps` cannot do this on a dirty tree:
+them against the installed Electron. (The third native module — the in-repo device-key addon,
+`src/backend/platform/device-key/` — is pure Node-API and ABI-stable across bumps, but
+`rebuild:native` rebuilds it too so one command always fixes every native module.) (Plain `install-app-deps` cannot do this on a dirty tree:
 node-gyp finishes with `os.rename(tmp, 'binding.sln')`, and Windows rename refuses an existing
 destination — you get `FileExistsError: [WinError 183]`, which looks like a bug and is really a
 stale build dir.) The app **fails loudly** on a stale or missing addon rather than opening a broken
@@ -171,6 +175,7 @@ other; `main`/`preload`/`renderer` are the only composition root. See
 - **Phase 8** ✅ — Integrations, five directions: the house MCP server (reads free, writes behind a per-workspace grant), the agent-web profile + activity trail, MCP registration across three CLI dialects + per-workspace tool plans, the outbound event bridge, live GitHub PR/issue chips — every credential we hold rests as OS-keychain ciphertext or we refuse it, with no daemon-protocol change. Closed by `MOGGING_INTEGMILESTONE`; surface in [`docs/14`](docs/14-integrations.md).
 - **Connections** ✅ — connect a service *account* (Sentry, Notion, Vercel…) to the app once, in your own browser, and every agent you launch can use it. The app is the OAuth client: it self-registers with the vendor, holds **one** grant per service in your OS keychain, and your CLIs reach the service *through* it — so **no token is ever written into a CLI's config file**. Your CLI *logins* are still never brokered ([ADR 0002](docs/adr/0002-never-broker-provider-auth.md) stands). See [ADR 0014](docs/adr/0014-app-held-service-connections.md).
 - **Phase 8.5** ✅ — The UI/UX revamp: an audit of every surface ([`AUDIT.md`](prompts/phase-8.5/AUDIT.md)), then rebuilt on one layout vocabulary (`Card`/`SectionHeader`/`FieldGroup`/`TwoColumn`, ramp extended to `--sp-7/8`) — one-page wizard, click-to-pick folder browser, overview-first Settings, Home/first-run, board + palette, one feedback language, chrome + possession banner, the Usage-glance recut; 13 removals, 16 bugs fixed; spacing frozen at zero, both budgets unmoved. Closed by `MOGGING_UXMILESTONE` + the `check-audit.mjs` coverage gate (receipts: `prompts/phase-8.5/README.md`).
+- **Accounts** ✅ — the optional Pro tier, hardened (ADR [0016](docs/adr/0016-accounts-and-entitlements.md)/[0017](docs/adr/0017-split-node-runtime.md)): PKCE + DPoP sign-in, signed short-TTL entitlements with a 14-day offline grace that degrades to Free and **never bricks**, a hardware device key (TPM/Secure Enclave) so a copied install is inert, origin pinning, the Electron fuse wall + ASAR integrity, main-process V8 bytecode, a forensic activation watermark + tamper self-check, and the runtime split that turned `runAsNode` off. The free local core stays account-free and fully offline; `mogging list/send/capture` stay ungated. Enforcement honesty: local checks are UX — the teeth are hardware binding + server-side value. Closed by `MOGGING_PRODMILESTONE` (one composed run on FAKE services, zero network); the book: [`docs/19-accounts.md`](docs/19-accounts.md). Code signing is the operator's deferred final step.
 - **Board v2** ✅ — the board becomes per-PROJECT (a repo's worktrees share one board; a switcher reaches the rest), main becomes the ONE writer (revision CAS + a claim rule — agents get full, guarded CRUD over MCP), the lanes learn flow practice (Backlog, WIP limits, priority/labels/aging/blocked/due, filter, activity log, archive), GitHub goes two-way behind a per-board risk-confirmed grant ([ADR 0015](docs/adr/0015-board-github-write-back.md)), and an opt-in, budget-fenced **queue** pulls the top To-do card into a fresh agent when a slot frees. Five new gates (`BOARDV2` · `BOARDMCP` · `BOARDUX` recut · `BOARDGH` · `BOARDQUEUE`); the map is [`docs/18-board.md`](docs/18-board.md).
 
 Full plan: [`docs/02-mvp-and-roadmap.md`](docs/02-mvp-and-roadmap.md).

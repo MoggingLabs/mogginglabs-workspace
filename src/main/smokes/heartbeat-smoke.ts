@@ -24,6 +24,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { isAlive } from '@backend/platform/pid'
 import { ensureDaemon, retireOwnDaemon, DaemonClient } from '../daemon-client'
+import { helperRuntime } from '../node-helper'
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -71,7 +72,9 @@ export async function runHeartbeatSmoke(): Promise<void> {
     // The daemon inherits this at spawn (ensureDaemon passes process.env through).
     process.env.MOGGING_DAEMON_PING_MUTE_MS = String(MUTE_MS)
     const muteStartedBy = Date.now() // the daemon boots AFTER this, so mute outlives this + MUTE_MS is a floor
-    const ep = await ensureDaemon(path.join(__dirname, 'daemon.js'))
+    // The standalone helper hosts the daemon since the runtime split (ADR 0017) — the
+    // same host production passes, so the heartbeat is proven on the shipped runtime.
+    const ep = await ensureDaemon(path.join(__dirname, 'daemon.js'), helperRuntime())
     r.seated = isAlive(ep.pid)
 
     // ── A. quiet + muted: the heartbeat must declare the line dead — daemon left alive ────

@@ -8,10 +8,13 @@ export interface MoveTarget {
   color: string
   cwd: string
   paneCount: number
-  /** THAT workspace's own pane budget — the same number the move itself gates on,
-   *  so the copy here can never contradict the refusal there. */
-  limit: number
-  /** At the pane limit: offered but not selectable, and it says why. Hiding it would leave the
+  /** The effective panes-per-workspace cap that judged `full`: THAT workspace's own
+   *  grid budget (screen minus chrome ∧ the machine minus running panes — the same
+   *  number its splits/adopts gate on), lowered — never raised — by the plan's
+   *  `maxPanes` entitlement (phase-accounts/05). One number, so the copy here can
+   *  never contradict the refusal there. */
+  cap: number
+  /** At the cap: offered but not selectable, and it says why. Hiding it would leave the
    *  user hunting for a workspace that is right there in the rail. */
   full: boolean
 }
@@ -71,7 +74,7 @@ export function openMovePaneModal(opts: MovePaneModalOpts): void {
         attrs: {
           'aria-checked': 'false',
           'data-ws-id': target.id,
-          title: target.full ? `“${target.name}” already holds ${target.limit} terminals` : target.cwd
+          title: target.full ? `“${target.name}” already holds ${target.cap} terminals` : target.cwd
         }
       },
       [
@@ -81,7 +84,7 @@ export function openMovePaneModal(opts: MovePaneModalOpts): void {
           el('span', {
             class: 'ws-move-meta',
             text: target.full
-              ? `Full — ${target.limit} terminals`
+              ? `Full — ${target.cap} terminals`
               : [
                   `${target.paneCount} terminal${target.paneCount === 1 ? '' : 's'}`,
                   shortPath(target.cwd)

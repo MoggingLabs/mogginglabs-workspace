@@ -6,7 +6,8 @@ import { dirname, join } from 'node:path'
 import type { McpServerEntry, WorkspaceToolPlan } from '@contracts'
 import { planFromTemplateTools, planSignature, restartNeededPanes, toolCellState } from '@contracts'
 import { composePlanEntries, findWriter, materializePlanFor } from '@backend/features/integrations'
-import { getCliRuntime, stableMcpLauncherSource, stableRuntimeExecutable } from '../cli-runtime'
+import { getCliRuntime, stableMcpLauncherSource } from '../cli-runtime'
+import { helperNeedsRuntimeCopy } from '../node-helper'
 import { setToolPlan } from '../integrations'
 import { houseServerEntry } from '../mcp-manager'
 import {
@@ -42,18 +43,23 @@ export async function runToolPlanSmoke(): Promise<void> {
     const repo = join(dir, 'repo')
     mkdirSync(repo, { recursive: true })
     const servers = [A, B, GLOBAL_ONLY]
+    // The AppImage-survival contract, post-split (ADR 0017): the HELPER is what must
+    // outlive the mount now, so the copy decision carries the exact validations the old
+    // stableRuntimeExecutable had — packaged linux + both vars absolute + the bundled
+    // resources actually INSIDE the advertised mount. An inherited APPIMAGE/APPDIR pair
+    // from an unrelated parent must never make a deb/dev install copy (or worse, trust) it.
     const fakeAppDir = join(dir, 'appimage-mount')
     const fakeAppImage = join(dir, 'MoggingLabs.AppImage')
-    const fakeMountedExecutable = join(fakeAppDir, 'electron')
-    mkdirSync(fakeAppDir, { recursive: true })
+    const fakeMountedResources = join(fakeAppDir, 'resources')
+    mkdirSync(fakeMountedResources, { recursive: true })
     writeFileSync(fakeAppImage, 'appimage fixture')
-    writeFileSync(fakeMountedExecutable, 'mounted executable fixture')
     const fakeAppImageEnv = { APPIMAGE: fakeAppImage, APPDIR: fakeAppDir }
     const appImageExecutableOk =
-      stableRuntimeExecutable('linux', fakeMountedExecutable, fakeAppImageEnv, true) === fakeAppImage &&
-      stableRuntimeExecutable('linux', process.execPath, fakeAppImageEnv, true) === process.execPath &&
-      stableRuntimeExecutable('linux', fakeMountedExecutable, fakeAppImageEnv, false) === fakeMountedExecutable &&
-      stableRuntimeExecutable('win32', fakeMountedExecutable, fakeAppImageEnv, true) === fakeMountedExecutable
+      helperNeedsRuntimeCopy('linux', fakeMountedResources, fakeAppImageEnv, true) === true &&
+      helperNeedsRuntimeCopy('linux', join(dir, 'elsewhere', 'resources'), fakeAppImageEnv, true) === false &&
+      helperNeedsRuntimeCopy('linux', fakeMountedResources, fakeAppImageEnv, false) === false &&
+      helperNeedsRuntimeCopy('linux', fakeMountedResources, { APPIMAGE: 'relative.AppImage', APPDIR: fakeAppDir }, true) === false &&
+      helperNeedsRuntimeCopy('win32', fakeMountedResources, fakeAppImageEnv, true) === false
 
     // The protocol-neutral launcher follows an authenticated pane's exact runtime segment, but
     // a path outside the private run root cannot redirect its dynamic import.
@@ -68,10 +74,12 @@ export async function runToolPlanSmoke(): Promise<void> {
     writeFileSync(fakePaneTarget, "process.stdout.write('pane')\n")
     writeFileSync(fakeLauncher, stableMcpLauncherSource(fakeCurrentTarget))
     const launchFixture = (endpoint?: string): string => {
-      const env: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+      // The standalone helper hosts every launcher now (ADR 0017) — same host the CLI
+      // configs name, no ELECTRON_RUN_AS_NODE anywhere.
+      const env: NodeJS.ProcessEnv = { ...process.env }
       if (endpoint) env.MOGGING_DAEMON_ENDPOINT = endpoint
       else delete env.MOGGING_DAEMON_ENDPOINT
-      return execFileSync(process.execPath, [fakeLauncher], { encoding: 'utf8', env, windowsHide: true })
+      return execFileSync(getCliRuntime().executable, [fakeLauncher], { encoding: 'utf8', env, windowsHide: true })
     }
     const paneLauncherSelectOk =
       launchFixture() === 'current' &&
@@ -82,7 +90,7 @@ export async function runToolPlanSmoke(): Promise<void> {
     const mcpProbe = execFileSync(runtime.executable, [runtime.mcpEntry], {
       encoding: 'utf8',
       input: `${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })}\n`,
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      env: { ...process.env },
       timeout: 10000,
       windowsHide: true
     })
@@ -102,8 +110,8 @@ export async function runToolPlanSmoke(): Promise<void> {
       dirname(dirname(runtime.mcpEntry)) === dirname(dirname(runtime.binDir)) &&
       !/(?:^|[\\/])(?:dev-)?v\d+(?:[\\/]|$)/i.test(runtime.mcpEntry.slice(dirname(dirname(runtime.mcpEntry)).length)) &&
       readFileSync(runtime.mcpEntry, 'utf8') === stableMcpLauncherSource(runtime.mcpTarget) &&
-      Object.keys(house.env ?? {}).length === 1 &&
-      house.env?.ELECTRON_RUN_AS_NODE === '1' &&
+      house.env === undefined && // post-split: a bare command on the helper, no env at all
+      /mogging-node(\.exe)?$/.test(runtime.executable) &&
       [
         runtime.executable,
         runtime.cliEntry,
@@ -139,8 +147,7 @@ export async function runToolPlanSmoke(): Promise<void> {
       claudeHouse.command === runtime.executable &&
       claudeHouse.args?.length === 1 &&
       claudeHouse.args[0] === runtime.mcpEntry &&
-      Object.keys(claudeHouse.env ?? {}).length === 1 &&
-      claudeHouse.env?.ELECTRON_RUN_AS_NODE === '1'
+      claudeHouse.env === undefined // post-split (ADR 0017): a bare command on the helper
 
     // ── (a) codex materialization: project-scope file, no flag, git-excluded ────
     const codexEntries = composePlanEntries(plan, 'codex', servers, house)

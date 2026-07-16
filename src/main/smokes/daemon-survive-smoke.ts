@@ -3,11 +3,18 @@
 // the daemon; phase B relaunches, reconnects to the SAME running daemon, and asserts the
 // pane is still alive (counter advanced) and re-attached (no duplicate). This proves the
 // ADR 0006 goal: agents survive an app quit/relaunch. (Uses the DaemonClient directly.)
+//
+// Since the runtime split (ADR 0017) BOTH phases also prove WHO hosts the surviving
+// daemon: the pid behind the endpoint must be executing the standalone helper binary,
+// not the Electron app. That is the gate the fuse flip is conditioned on — survival must
+// hold on the runtime we actually ship, not the Electron-as-Node path that no longer exists.
 import { app } from 'electron'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { ensureDaemon, DaemonClient } from '../daemon-client'
+import { helperRuntime } from '../node-helper'
+import { processImagePath, samePath } from './kit'
 
 // A cwd-independent path both Electron launches (and the test harness) can agree on.
 const RESULT = path.join(os.tmpdir(), 'mogging-daemon-survive-result.json')
@@ -49,7 +56,11 @@ export async function runDaemonSurviveSmoke(phase: string): Promise<void> {
     app.exit(1)
   }, 22000)
   try {
-    const ep = await ensureDaemon(path.join(__dirname, 'daemon.js'))
+    const helper = helperRuntime()
+    const ep = await ensureDaemon(path.join(__dirname, 'daemon.js'), helper)
+    // The host proof (ADR 0017): the daemon pid must be executing the standalone helper.
+    const daemonImage = processImagePath(ep.pid)
+    const helperHosted = samePath(daemonImage, helper.executable)
     let cap = ''
     const client = new DaemonClient(ep, {
       onData: (id, d) => {
@@ -70,9 +81,10 @@ export async function runDaemonSurviveSmoke(phase: string): Promise<void> {
       }
       await delay(3200)
       const maxA = Math.max(-1, ...marks(cap))
-      writeResult({ phase: 'A', maxA, daemonPidA: ep.pid, existedA })
-      // Phase A "passes" when the counter pane is demonstrably alive in the daemon.
-      writeOutResult({ phase: 'A', pass: maxA >= 0, maxA, daemonPidA: ep.pid })
+      writeResult({ phase: 'A', maxA, daemonPidA: ep.pid, existedA, helperHostedA: helperHosted })
+      // Phase A "passes" when the counter pane is demonstrably alive in the daemon —
+      // AND the daemon is on the helper (a pane surviving on the wrong host proves nothing).
+      writeOutResult({ phase: 'A', pass: maxA >= 0 && helperHosted, maxA, daemonPidA: ep.pid, helperHosted, daemonImage })
       client.dispose()
       app.exit(0) // quit the app but leave the detached daemon running
       return
@@ -113,7 +125,10 @@ export async function runDaemonSurviveSmoke(phase: string): Promise<void> {
     const survived = mB.length > 0 && Math.max(...mB) > maxA
     const existedA = prev.existedA === true
     const flagOk = existedB === true && !existedA // cold=false, reattach=true
-    const pass = had && survived && sameDaemon && flagOk && ptyOk
+    // Host proof, both ends (ADR 0017): phase A spawned on the helper, and the SAME pid
+    // this phase reattached to is still executing it.
+    const helperOk = prev.helperHostedA === true && helperHosted
+    const pass = had && survived && sameDaemon && flagOk && ptyOk && helperOk
     const verdict = {
       phase: 'B',
       pass,
@@ -122,6 +137,8 @@ export async function runDaemonSurviveSmoke(phase: string): Promise<void> {
       sameDaemon,
       flagOk,
       ptyOk,
+      helperOk,
+      daemonImage,
       pty: spawnedB.pty,
       existedA,
       existedB,

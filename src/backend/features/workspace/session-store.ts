@@ -1,6 +1,7 @@
 // SQLite-backed persistence for terminal sessions + workspaces (Phase-1/03). Electron-free
-// (better-sqlite3 is a Node native module, rebuilt for Electron's ABI by the postinstall
-// `electron-builder install-app-deps`), so it runs inside the daemon (ADR 0006) — which owns
+// (better-sqlite3 is a Node native module and ABI-bound, so it arrives through the
+// host-aware seam below: the helper's own build inside the daemon, Electron's build under
+// the in-proc path — ADR 0017), so it runs inside the daemon (ADR 0006) — which owns
 // the sessions — and could equally back the in-proc path.
 //
 // SECURITY (ADR 0002): stores ONLY id / cwd / command-label / scrollback — the user's own
@@ -9,10 +10,13 @@
 //
 // Row <-> pane mapping lives in session-rows.ts (pure, unit-tested) — one mapping for the
 // full save AND the dirty-pane upsert, so the two write paths cannot drift.
-import Database from 'better-sqlite3'
+import type BetterSqlite3 from 'better-sqlite3'
+import { requireNative } from '@backend/platform/native-require'
 import type { PersistedPane, PersistedWorkspace } from '@contracts'
 import { addColumnIfMissing } from './db-migrate'
 import { paneToRow, rowToPane, type PaneRowCells } from './session-rows'
+
+const Database = requireNative<typeof import('better-sqlite3')>('better-sqlite3')
 
 const PANE_COLUMNS =
   'id, workspace_id AS workspaceId, cwd, reported_cwd AS reportedCwd, reported_cwd_at AS reportedCwdAt, remote_name AS remoteName, remote_host AS remoteHost, remote_user AS remoteUser, remote_port AS remotePort, remote_cwd AS remoteCwd, remote_platform AS remotePlatform, remote_shell AS remoteShell, command, scrollback, updated_at AS updatedAt'
@@ -30,7 +34,7 @@ const PANE_UPSERT =
      scrollback = excluded.scrollback, updated_at = excluded.updated_at`
 
 export class SessionStore {
-  private readonly db: Database.Database
+  private readonly db: BetterSqlite3.Database
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath)

@@ -10,7 +10,7 @@ every gated feature reads. FAKE issuer only.
    fetched). Claims: `{ plan, features[], limits{}, deviceId, exp }`, TTL
    24–72h. Cache the ciphertext via `vaultStore`; refresh opportunistically
    in the background (post-paint, never boot — I7).
-2. **The offline-grace law** (ADR 0015): honor a cached entitlement up to
+2. **The offline-grace law** (ADR 0016): honor a cached entitlement up to
    7–30 days past `fetchedAt`, THEN degrade to Free. Track `graceState:
    'fresh'|'grace'|'expired'`. Pulling the network must never brick — Pro
    holds through grace, then the app keeps running as Free. A tampered or

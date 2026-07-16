@@ -30,6 +30,7 @@ import * as path from 'node:path'
 import { buildStampOf } from '@backend/platform/build-stamp'
 import { isAlive } from '@backend/platform/pid'
 import { ensureDaemon, retireOwnDaemon, DaemonClient } from '../daemon-client'
+import { helperRuntime } from '../node-helper'
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -96,7 +97,7 @@ export async function runStampWarSmoke(): Promise<void> {
     r.stampsDiffer = !!homeStamp && !!foreignStamp && homeStamp !== foreignStamp
 
     // ── A. mismatch + a live client: the retire must be REFUSED ─────────────────────────
-    const ep1 = await ensureDaemon(daemonEntry)
+    const ep1 = await ensureDaemon(daemonEntry, helperRuntime())
     r.seated = isAlive(ep1.pid) && ep1.build === homeStamp
 
     client = new DaemonClient(ep1, {}, { kind: 'app' })
@@ -106,7 +107,7 @@ export async function runStampWarSmoke(): Promise<void> {
     const first = await client.spawn('9901', { cwd: '' })
     r.paneSpawned = first.existing === false
 
-    const epWar = await ensureDaemon(foreignEntry)
+    const epWar = await ensureDaemon(foreignEntry, helperRuntime())
     r.warRefusedSamePid = epWar.pid === ep1.pid && isAlive(ep1.pid)
     r.warRefusedKeptStamp = epWar.build === homeStamp
     // The attached client survived — `existing: true` is a fresh reply, not a cached value.
@@ -119,7 +120,7 @@ export async function runStampWarSmoke(): Promise<void> {
     client = null
     await delay(400) // let the daemon process the socket close before the probe counts clients
 
-    const ep2 = await ensureDaemon(foreignEntry)
+    const ep2 = await ensureDaemon(foreignEntry, helperRuntime())
     r.staleRetired = await waitUntilDead(ep1.pid, 5000)
     r.freshSeated = ep2.pid !== ep1.pid && isAlive(ep2.pid) && ep2.build === foreignStamp
     // 'stamp-retire {' (event + JSON detail): NOT a substring of 'stamp-retire-refused {'.

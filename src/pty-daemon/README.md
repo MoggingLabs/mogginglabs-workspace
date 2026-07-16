@@ -6,9 +6,11 @@ reconnects to it on each launch. See `docs/adr/0006-detached-pty-daemon.md`.
 
 ## Why a separate process (not a utilityProcess)
 A `utilityProcess` is a *child* of main and dies with it — it can't survive a main crash.
-Only a truly detached process can. This daemon is spawned `detached` + `unref`ed via
-**Electron-as-Node** (`ELECTRON_RUN_AS_NODE=1`, `process.execPath`), so it needs no system
-Node and reuses the app's `node-pty` (compiled from source).
+Only a truly detached process can. This daemon is spawned `detached` + `unref`ed on the
+**standalone Node helper** (`resources/node-helper/mogging-node`, ADR 0017 — it used to be
+Electron-as-Node until the RunAsNode fuse was dropped), so it needs no system Node; the
+helper carries its own `node-pty`/`better-sqlite3` built for its ABI
+(`@backend/platform/native-require` picks them per host).
 
 ## Files
 - `index.ts` — entry: single-instance lock, endpoint, idle auto-shutdown, wiring.

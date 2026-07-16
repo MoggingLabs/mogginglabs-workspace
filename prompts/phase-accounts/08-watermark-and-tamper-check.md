@@ -41,7 +41,7 @@ operations on a modified build — while the free app keeps running.
 ## Files
 - `src/backend/features/account/watermark.ts` · `src/main/entitlements.ts`
   · `src/main/native-preflight.ts` (tamper check) · `scripts/trace-
-  watermark.mjs` · `docs/18-accounts.md` (honest-limit note) ·
+  watermark.mjs` · `docs/19-accounts.md` (honest-limit note) ·
   `src/main/watermark-smoke.ts` · qa-smokes.sh
 
 ## Definition of Done

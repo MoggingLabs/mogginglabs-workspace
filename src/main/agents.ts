@@ -17,6 +17,7 @@ import { claudeStatuslineArgs, paneSessionLog } from './context'
 import { bellLaunchExtras } from './notify-hook'
 import { markAgentConfigSessionLaunched, prepareAgentConfigLaunch, refreshAgentSettingsForCli } from './agent-settings'
 import { materializeProfileEnv } from './profiles'
+import { consumeRestoreResumeSessionId } from './session-restore'
 
 // App-wiring: expose the agent adapters (detect installed CLIs + build a launch command) to
 // the renderer. The launch itself is just writing the returned command into a pane
@@ -122,12 +123,15 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
     // Exact-session resume: when the request names the pane it will be typed into and
     // the context monitor has that pane's session log locked, resume THAT session by id
     // — a usage-limit failover continues the conversation under the next profile instead
-    // of dropping the user into the CLI's picker. Falls back to the bare flag whenever
-    // the id isn't knowable (fresh restore, foreign provider, unlocked matcher).
+    // of dropping the user into the CLI's picker. A fresh pane has no live lock, so a
+    // "Restore last working session" relaunch falls through to the intent the snapshot
+    // armed for this pane (session-restore.ts; consumed once). Bare flag whenever the id
+    // isn't knowable either way (foreign provider, unlocked matcher, no snapshot).
     let resumeSessionId: string | undefined
     if (req.resume && typeof req.paneId === 'number') {
       const live = paneSessionLog(req.paneId)
       if (live && live.provider === req.agentId) resumeSessionId = resumeSessionIdFromFile(req.agentId, live.file) ?? undefined
+      if (!resumeSessionId) resumeSessionId = consumeRestoreResumeSessionId(req.paneId, req.agentId)
     }
     const command = buildLaunchCommand(
       req.agentId,

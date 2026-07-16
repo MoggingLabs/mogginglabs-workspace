@@ -45,7 +45,9 @@ export const WorkspaceChannels = {
   exportState: 'workspace:exportState', // explicit save dialog for current metadata when persistence is paused
   openCwd: 'workspace:openCwd', // main -> renderer: open/focus a workspace for a directory
   attention: 'workspace:attention', // renderer -> main: any workspace needs attention (dock/taskbar badge)
-  browseDir: 'workspace:browseDir' // -> native directory picker; resolves to a path or null
+  browseDir: 'workspace:browseDir', // -> native directory picker; resolves to a path or null
+  lastSession: 'workspace:lastSession', // -> LastSessionInfo | null (Home's restore card; session-log paths never leave main)
+  restoreSession: 'workspace:restoreSession' // -> LastSessionInfo | null — same payload, and ARMS main-side exact-session resume intents
 } as const
 
 export const RuntimeHealthChannels = {
@@ -403,10 +405,29 @@ export const ConnectionsChannels = {
   changed: 'connections:changed' // main -> renderer: Connection[] (pushed on every state change; the browser lands here)
 } as const
 
+export const AccountChannels = {
+  // CLAIMS-ONLY status — { state, email?, plan? }. By construction NEVER a token
+  // (ADR 0016): the write-only custody discipline means no channel here has a getter.
+  status: 'account:status', // -> AccountStatus (identity + plan claims; no token, ever)
+  login: 'account:login', // -> { ok, reason? } — opens consent IN THE USER'S BROWSER; resolves when the flow STARTS, not when it lands
+  logout: 'account:logout', // -> void — clears the vaulted refresh token + DPoP key + in-memory access token
+  changed: 'account:changed' // main -> renderer: AccountStatus (pushed on every state change; still claims only)
+} as const
+
+export const EntitlementsChannels = {
+  // CLAIMS cross IPC; secrets do not (ADR 0016). The snapshot is plan + features +
+  // effective limits + graceState — the entitlement JWT itself never rides a channel,
+  // and there is no verb here that could fetch, replace, or export it.
+  snapshot: 'entitlements:snapshot', // -> EntitlementsSnapshot (instant, from the local engine — never a network wait)
+  changed: 'entitlements:changed' // main -> renderer: EntitlementsSnapshot (pushed when a refresh/degrade changes the answer)
+} as const
+
 export const AllChannels: readonly string[] = [
   ...Object.values(AgentHookChannels),
   ...Object.values(IntegrationsChannels),
   ...Object.values(ConnectionsChannels),
+  ...Object.values(AccountChannels),
+  ...Object.values(EntitlementsChannels),
   ...Object.values(UsageChannels),
   ...Object.values(UpdateChannels),
   ...Object.values(BrowserChannels),

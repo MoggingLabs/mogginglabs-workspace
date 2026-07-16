@@ -70,11 +70,12 @@ jobs:
           cache: npm
 
       # Linux native-module toolchain (Phase-4/06: AppImage + deb ride the same feed).
+      # xvfb: the invariant smokes below boot the real app headless.
       - name: Linux toolchain
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential python3 python3-setuptools
+          sudo apt-get install -y build-essential python3 python3-setuptools xvfb
 
       # Python >= 3.12 dropped distutils; node-gyp needs setuptools (README-documented).
       - name: macOS toolchain
@@ -99,8 +100,34 @@ jobs:
       - name: Native install + Electron-ABI rebuild
         timeout-minutes: 25
         uses: ./.github/actions/electron-native-rebuild
+
+      # THE RUNTIME-SPLIT CONDITION (ADR 0016): a release ships runAsNode:false, so a
+      # release where the daemon does not survive on the helper, or the `mogging` control
+      # API does not answer through it, is a broken product with no fallback. These three
+      # gates run the REAL app (dev harness entry, same helper binary the package ships)
+      # and this job dies on any red — release BLOCKS unless SURVIVE + CONTROL +
+      # RUNTIMESPLIT are all green, on every OS row. They run BEFORE `npm run build`:
+      # each gate boots `npm run dev`, which overwrites out/ with the dev bundle.
+      - name: Invariant smokes — SURVIVE + CONTROL + RUNTIMESPLIT (release blocks on red)
+        timeout-minutes: 25
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            MOGGING_CI_GPU=soft MOGGING_GATES="SURVIVE_A,SURVIVE_B,CONTROL,RUNTIMESPLIT" xvfb-run -a bash scripts/qa-smokes.sh
+          else
+            MOGGING_CI_GPU=soft MOGGING_GATES="SURVIVE_A,SURVIVE_B,CONTROL,RUNTIMESPLIT" bash scripts/qa-smokes.sh
+          fi
+
       - name: Build (emits sourcemaps)
         run: npm run build
+
+      # The bytecode gate REBUILDS (same law as the fuse gate: never trust what's there) and
+      # verifies, so out/ enters electron-builder below bytecode-verified — main is .jsc for
+      # THIS runner's V8 + arch, preload is readable source, pinned constants not plaintext.
+      # Per-arch is load-bearing here: each matrix row compiles its own .jsc; one arch's out/
+      # must never be packaged into another arch's artifact.
+      - name: Bytecode gate
+        run: node scripts/check-bytecode.mjs
 
       # Code signing — base64-encoded cert + password: Authenticode (.pfx) on Windows,
       # Developer ID (.p12) on macOS; APPLE_* drive notarytool. Certs live ONLY in
@@ -157,6 +184,17 @@ jobs:
           # signing activates from the imported cert alone — this flag only
           # suppresses picking up stray keychain identities.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      # The fuse wall, read off the unpacked byproduct of the packaging step above,
+      # BEFORE anything uploads: a release whose artifact drifts from the declared wall
+      # (electron-builder.yml `electronFuses`) must die here, not ship (ADR 0016
+      # §hardening). Includes the tampered-asar refusal proof; the tamper byte is
+      # flipped back before this step ends, and the installers were already built.
+      - name: Fuse wall gate (fail the release on drift)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then APP=$(ls -d dist/mac* | head -1); else APP=dist/win-unpacked; fi
+          MOGGING_FUSES_APP="$APP" node scripts/check-fuses.mjs
 
       # *.blockmap (unqualified) so the mac zip's blockmap rides along too — the old glob
       # only matched *.exe.blockmap, so macOS could never download differentially.

@@ -34,6 +34,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { buildStampOf } from '@backend/platform/build-stamp'
 import { ensureDaemon, retireOwnDaemon } from '../daemon-client'
+import { helperRuntime } from '../node-helper'
 import { sweepRunRoot } from '../daemon-sweep'
 import { isAlive } from '@backend/platform/pid'
 
@@ -110,7 +111,7 @@ export async function runDaemonCustodySmoke(): Promise<void> {
     const expected = buildStampOf(daemonEntry)
     r.expectedStamp = !!expected
 
-    const ep1 = await ensureDaemon(daemonEntry)
+    const ep1 = await ensureDaemon(daemonEntry, helperRuntime())
     r.endpointCarriesStamp = ep1.build === expected && !!ep1.build
 
     // Doctor the live endpoint to claim a stale build — byte-for-byte what an endpoint
@@ -155,7 +156,7 @@ export async function runDaemonCustodySmoke(): Promise<void> {
 
     let ep2
     try {
-      ep2 = await ensureDaemon(daemonEntry)
+      ep2 = await ensureDaemon(daemonEntry, helperRuntime())
     } finally {
       console.warn = origWarn
       r.warns = warns
@@ -168,7 +169,7 @@ export async function runDaemonCustodySmoke(): Promise<void> {
     r.retireOwnDaemon = retired && (await waitUntilDead(ep2.pid, 5000))
     let refused = false
     try {
-      await ensureDaemon(daemonEntry)
+      await ensureDaemon(daemonEntry, helperRuntime())
     } catch {
       refused = true
     }

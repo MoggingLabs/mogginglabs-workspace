@@ -602,13 +602,17 @@ re-warm must not hitch).
   in existence, any road to Home lands on the **grid** (`view-port.ts`). Home and the
   grid are two halves of one invariant, and the workspace count decides which is right.
   So Home is the launcher and the zero-workspace empty state, **never a destination** —
-  there is no Home button, no shortcut, no command, by design. Its two contents (recents,
-  presets) are fully carried by the wizard, which is reachable at any time (Ctrl+T); a
-  permanent Home entry would only re-open the dead end UX-16 closed. The titlebar
-  Board/gear **pair** shows the active view (`.icon-btn.is-active`); HOMEUX (g) asserts
-  both halves — the grid lands, and no Home affordance exists in the titlebar.
-- Full-bleed rebalance: board lanes/head cap at `min(1440px, 100%)` centered; home
-  sections widen to `min(1180px, 92%)`.
+  there is no Home button, no shortcut, no command, by design. Recents and presets live
+  in the wizard, which is reachable at any time (Ctrl+T); Home's own content is the one
+  card the wizard can't carry: **Restore last working session** (the snapshot in
+  `src/main/session-restore.ts` — every workspace, terminal, and agent of the previous
+  session back in one click, agents relaunched with exact-session resume). A permanent
+  Home entry would only re-open the dead end UX-16 closed — the card exists exactly
+  where it can act, the zero-workspace launcher. The titlebar Board/gear **pair** shows
+  the active view (`.icon-btn.is-active`); HOMEUX (g) asserts both halves — the grid
+  lands, and no Home affordance exists in the titlebar.
+- Full-bleed rebalance: board lanes/head cap at `min(1440px, 100%)` centered; home's
+  single section (the last-session card) holds a focused `min(760px, 92%)`.
 
 ## The Settings shell (Phase-8.5/04)
 

@@ -41,6 +41,7 @@ import { runSetIntegSmoke } from './smokes/setinteg-smoke'
 import { runSetShellSmoke } from './smokes/setshell-smoke'
 import { runSetUsageSmoke } from './smokes/setusage-smoke'
 import { runHomeUxSmoke } from './smokes/homeux-smoke'
+import { runResumeSmoke } from './smokes/resume-smoke'
 import { runBoardUxSmoke } from './smokes/boardux-smoke'
 import { runFeedbackUxSmoke } from './smokes/feedbackux-smoke'
 import { runChromeUxSmoke } from './smokes/chromeux-smoke'
@@ -59,12 +60,18 @@ import { runCtxAccuracySmoke } from './smokes/ctxaccuracy-smoke'
 import { runTemplateSmoke } from './smokes/template-smoke'
 import { runProfpersistSmoke } from './smokes/profpersist-smoke'
 import { runBrowserSmoke } from './smokes/browser-smoke'
+import { runLockdownSmoke } from './smokes/lockdown-smoke'
+import { runAccountSmoke } from './smokes/account-smoke'
+import { runEntitleSmoke } from './smokes/entitle-smoke'
+import { runDeviceKeySmoke } from './smokes/devicekey-smoke'
+import { runWatermarkSmoke } from './smokes/watermark-smoke'
 import { runBrowserUxSmoke } from './smokes/browserux-smoke'
 import { runBrowserTabsSmoke } from './smokes/browsertabs-smoke'
 import { runBrowserCtlSmoke } from './smokes/browserctl-smoke'
 import { runBrowserRaceSmoke } from './smokes/browserrace-smoke'
 import { runFirstRunSmoke } from './smokes/firstrun-smoke'
 import { runProductSmoke } from './smokes/product-smoke'
+import { runProdMilestoneSmoke } from './smokes/prodmilestone-smoke'
 import { runUsageSmoke } from './smokes/usage-smoke'
 import { runUsageUiSmoke } from './smokes/usageui-smoke'
 import { runUsageGlanceSmoke } from './smokes/usageglance-smoke'
@@ -85,6 +92,7 @@ import { runPaneOpsSmoke } from './smokes/paneops-smoke'
 import { runMovePaneSmoke } from './smokes/movepane-smoke'
 import { runControlSmoke } from './smokes/control-smoke'
 import { runControl2Smoke } from './smokes/control2-smoke'
+import { runRuntimeSplitSmoke } from './smokes/runtimesplit-smoke'
 import { runPerceptionSmoke } from './smokes/perception-smoke'
 import { runWorktreeSmoke } from './smokes/worktree-smoke'
 import { runReviewSmoke } from './smokes/review-smoke'
@@ -166,19 +174,19 @@ function installSshShim(): void {
 const SMOKE_ENV: readonly string[] = [
   'MOGGING_USERDATA', 'MOGGING_GATES', 'MOGGING_GALLERY', // isolation + sweep markers, set by every gate
   'MOGGING_SURVIVE', 'MOGGING_MIGRATE', 'MOGGING_NOTIFYHOOK', 'MOGGING_DAEMONCUSTODY', 'MOGGING_STAMPWAR', 'MOGGING_HEARTBEAT', 'MOGGING_DAEMONHEAL', 'MOGGING_SESSIONPOOL', 'MOGGING_INTEG', 'MOGGING_TOOLPLAN',
-  'MOGGING_EVBRIDGE', 'MOGGING_MCPSTATUS', 'MOGGING_MCPLOOP', 'MOGGING_AGENT', 'MOGGING_STATE', 'MOGGING_RELOAD',
+  'MOGGING_EVBRIDGE', 'MOGGING_MCPSTATUS', 'MOGGING_MCPLOOP', 'MOGGING_ACCOUNT', 'MOGGING_ENTITLE', 'MOGGING_DEVICEKEY', 'MOGGING_WATERMARK', 'MOGGING_AGENT', 'MOGGING_STATE', 'MOGGING_RELOAD',
   'MOGGING_SMOKE', 'MOGGING_SHOT', 'MOGGING_MULTIPANE', 'MOGGING_WORKSPACE', 'MOGGING_AGENTLAUNCH',
-  'MOGGING_TEMPLATE', 'MOGGING_PROFPERSIST', 'MOGGING_BROWSER', 'MOGGING_BROWSERCTL', 'MOGGING_BROWSERUX', 'MOGGING_BROWSERTABS', 'MOGGING_BROWSERRACE', 'MOGGING_BROWSERZERO', 'MOGGING_FIRSTRUN',
-  'MOGGING_PRODUCT', 'MOGGING_USAGEGLANCE', 'MOGGING_USAGEUI', 'MOGGING_WEBUSAGE', 'MOGGING_USAGECLI',
+  'MOGGING_TEMPLATE', 'MOGGING_PROFPERSIST', 'MOGGING_BROWSER', 'MOGGING_BROWSERCTL', 'MOGGING_BROWSERUX', 'MOGGING_BROWSERTABS', 'MOGGING_BROWSERRACE', 'MOGGING_BROWSERZERO', 'MOGGING_LOCKDOWN', 'MOGGING_FIRSTRUN',
+  'MOGGING_PRODUCT', 'MOGGING_PRODMILESTONE', 'MOGGING_USAGEGLANCE', 'MOGGING_USAGEUI', 'MOGGING_WEBUSAGE', 'MOGGING_USAGECLI',
   'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
   'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_KBSHORTCUTS', 'MOGGING_KBGLOBAL', 'MOGGING_VERDICTLIVE', 'MOGGING_WEBTRAIL',
   'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX', 'MOGGING_WIZARDFAIL', 'MOGGING_WIZARDISO', 'MOGGING_WIZCD', 'MOGGING_WIZLAYOUT', 'MOGGING_MUTATIONRACE', 'MOGGING_AUTHRUNNER',
-  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX',
+  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX', 'MOGGING_RESUME',
   'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_RESPONSIVE', 'MOGGING_KBAPG', 'MOGGING_UXMILESTONE',
   'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT', 'MOGGING_CWD',
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
   'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
-  'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
+  'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_RUNTIMESPLIT', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
   'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
   'MOGGING_PROFILES', 'MOGGING_LOGINTRUTH', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
   // Typed-launch detection + the context gauge (the v6 pack).
@@ -317,6 +325,32 @@ async function afterAppSettings(): Promise<boolean> {
     return true
   }
 
+  // Windowless account smoke (ADR 0016): the token holder on a FAKE in-process IdP —
+  // login/refresh/logout, vault custody, DPoP binding. Needs the settings store + the
+  // OS vault; no daemon, no window.
+  if (process.env.MOGGING_ACCOUNT) {
+    await runAccountSmoke()
+    return true
+  }
+
+  // Windowless entitlement smoke (phase-accounts/05): local Ed25519 verification,
+  // vault-ciphertext cache, the offline-grace law, and the port gating a capped
+  // feature — on a FAKE IdP + FAKE issuer. Settings store + OS vault; no daemon,
+  // no window, zero external network.
+  if (process.env.MOGGING_ENTITLE) {
+    await runEntitleSmoke()
+    return true
+  }
+
+  // Windowless device-key smoke (phase-accounts/06): the REAL platform key store
+  // (TPM / CNG / Secure Enclave, smoke-named keys) — non-exportability, the
+  // copied-install rejection, device-attested entitlements, the honest software
+  // fallback. FAKE IdP + issuer; settings store + OS vault; no daemon, no window.
+  if (process.env.MOGGING_DEVICEKEY) {
+    await runDeviceKeySmoke()
+    return true
+  }
+
   return false
 }
 
@@ -364,10 +398,16 @@ function afterWindow(win: BrowserWindow): void {
     runBrowserTabsSmoke(win) // env-gated tabs smoke (Wave 7 / F4: strip, new/close/switch, _blank, agent verbs)
   } else if (process.env.MOGGING_BROWSERRACE) {
     runBrowserRaceSmoke(win) // audit regression: delayed A completions never repaint/mutate B
+  } else if (process.env.MOGGING_LOCKDOWN) {
+    runLockdownSmoke(win) // env-gated renderer-lockdown smoke: CSP header + nav guard, dock unaffected (ADR 0016)
+  } else if (process.env.MOGGING_WATERMARK) {
+    runWatermarkSmoke(win) // env-gated forensic-watermark smoke: activation traces to its account, tamper withholds PAID while Free runs, boolean piracy telemetry, revoke→Free (phase-accounts/07)
   } else if (process.env.MOGGING_FIRSTRUN) {
     runFirstRunSmoke(win) // env-gated first-run + update-UX smoke (6/06)
   } else if (process.env.MOGGING_PRODUCT) {
     runProductSmoke(win) // env-gated product milestone: installer -> swarm + browser (6/07)
+  } else if (process.env.MOGGING_PRODMILESTONE) {
+    runProdMilestoneSmoke(win) // env-gated PAID-TIER milestone: anon-free offline wedge -> PKCE login -> MoR webhook -> device-bound Pro -> grace -> foreign-device inert -> tamper -> logout anon-free, budgets on the composed surface (phase-accounts/10)
   } else if (process.env.MOGGING_USAGEGLANCE) {
     runUsageGlanceSmoke(win) // env-gated Usage-GLANCE smoke: the CodexBar-recut popover on fixtures (Phase-8.5/08c)
   } else if (process.env.MOGGING_USAGEUI) {
@@ -449,7 +489,9 @@ function afterWindow(win: BrowserWindow): void {
   } else if (process.env.MOGGING_SETUSAGE) {
     runSetUsageSmoke(win) // env-gated usage tab + popover smoke: overview/disclosure, bug #4/#5, profiles FieldGroups (Phase-8.5/05b)
   } else if (process.env.MOGGING_HOMEUX) {
-    runHomeUxSmoke(win) // env-gated Home + first-run smoke: recents cards, checklist bug #1, AA via aa-probe (Phase-8.5/06)
+    runHomeUxSmoke(win) // env-gated Home + first-run smoke: last-session restore card, checklist bug #1, AA via aa-probe (Phase-8.5/06)
+  } else if (process.env.MOGGING_RESUME) {
+    runResumeSmoke(win) // env-gated last-session RESUME smoke: mirror/shrink-hold snapshot, Home's card, exact-session `--resume <id>` relaunch
   } else if (process.env.MOGGING_BOARDUX) {
     runBoardUxSmoke(win) // env-gated board + palette smoke: aligned chip row, sticky counts, ⋯ un-clip, delete-confirm, palette rank/highlight (Phase-8.5/07)
   } else if (process.env.MOGGING_FEEDBACKUX) {
@@ -496,6 +538,8 @@ function afterWindow(win: BrowserWindow): void {
     runControlSmoke(win) // env-gated control-API smoke: list/send/send-key/capture (Phase-3/01)
   } else if (process.env.MOGGING_CONTROL2) {
     runControl2Smoke(win) // env-gated layout-control smoke: open/layout/focus/expand/close (Phase-3/02)
+  } else if (process.env.MOGGING_RUNTIMESPLIT) {
+    runRuntimeSplitSmoke(win) // env-gated runtime-split smoke: daemon/MCP/CLI on the standalone helper, fuse flip declared (ADR 0017)
   } else if (process.env.MOGGING_PERCEPTION) {
     runPerceptionSmoke(win) // env-gated perception-budget smoke (docs/07): humans must not notice
   } else if (process.env.MOGGING_WORKTREE) {

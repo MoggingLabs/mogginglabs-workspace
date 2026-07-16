@@ -310,6 +310,37 @@ then one gate asserting the tooltip's text, that the trigger carries **no** `tit
 hovered, and that `title` is **restored** after `pointerout` — that last assertion is what
 keeps the five existing `title`-reading gates safe. Surface: `docs/11` §Tooltips.
 
+### The Accounts pack — the paid tier, made hard to crack ✅ (`prompts/phase-accounts/`, shipped 2026-07-16)
+The productization arc: a MoggingLabs account, signed entitlements, and the anti-crack
+pass — built stance-first (ADR [0015](adr/0016-accounts-and-entitlements.md) wrote the
+law before the login button existed). **The free local core stays account-free and fully
+offline, forever**; the pack adds a lane and removes nothing.
+
+- **The account** (`account.ts`): OAuth 2.1 PKCE in the user's own browser, DPoP-bound
+  tokens, vault-ciphertext custody, **no IPC channel returns a token** — and two laws the
+  composed milestone forced: unreachable ≠ rejected (an outage never signs you out), and
+  logout returns to anon-Free in one gesture.
+- **Entitlements** (`entitlements.ts`): short-TTL Ed25519 claims verified locally against
+  a pinned key, cached as ciphertext, **sender-constrained to the hardware device key**
+  (TPM / Secure Enclave — a copied install is inert), honored through a **14-day offline
+  grace** and then degraded to Free — quietly, **never a brick**. One `Entitlements` port
+  gates every paid feature; tiers are data in the claim, not code at the gate.
+- **The hardening wall**: origin pinning (no env-repointable origin), the Electron fuse
+  wall + ASAR integrity, renderer CSP + navigation deny, main-only V8 bytecode, a forensic
+  activation watermark + runtime tamper self-check, and the **runtime split** (ADR
+  [0016](adr/0017-split-node-runtime.md)) that moved the daemon/MCP/CLI onto a bundled
+  Node helper and finally burned `runAsNode: false`. Enforcement honesty throughout:
+  local checks are UX; the teeth are hardware binding + server-side value.
+- **FAKE-first, forever**: a FAKE IdP and a FAKE MoR/entitlement issuer are first-class
+  citizens; every gate runs on them with zero network. The real IdP/MoR/issuer **and the
+  code-signing certificates are the operator's deferred final wiring**, out of the pack.
+
+Ten steps, ten gates (sweep → **144**), closed by **`MOGGING_PRODMILESTONE`** — one
+composed run proving subscribe → device-bound Pro; offline → grace → Free; copied → inert;
+tampered → free-only; logout → anon-free; the `mogging` wedge ungated throughout; both
+budgets measured on the composed surface. The book: [`docs/19-accounts.md`](19-accounts.md);
+receipts: `prompts/phase-accounts/REPORT.md`.
+
 ---
 
 ## The next arc — Phases 12–19 (planned)

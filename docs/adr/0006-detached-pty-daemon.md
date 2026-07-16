@@ -23,10 +23,12 @@ client reconnected over a **named pipe** with a **version + random auth-token ha
 detached process. (PoC in the session scratchpad; to be productionized as `src/pty-daemon/`.)
 
 ## Architecture
-- **Daemon runtime:** launch via **Electron's own binary as Node** (`ELECTRON_RUN_AS_NODE=1`,
-  `process.execPath`) so there is no system-Node dependency; `@lydell/node-pty` (N-API) loads
-  under both. Spawned truly detached (`detached:true`, `stdio`->logfile, `.unref()`; `setsid`
-  on Unix; `windowsHide` on Win).
+- **Daemon runtime:** launched on the **bundled standalone Node helper**
+  (`resources/node-helper/mogging-node`, ADR 0017) so there is still no system-Node
+  dependency. *(Originally: Electron's own binary as Node via `ELECTRON_RUN_AS_NODE=1` —
+  retired when the runtime split disabled the `runAsNode` fuse; the survival design below
+  is unchanged, only the host moved.)* Spawned truly detached (`detached:true`,
+  `stdio`->logfile, `.unref()`; `setsid` on Unix; `windowsHide` on Win).
 - **Transport, secured:** Unix domain socket on macOS (per-user runtime dir, `0700`/`0600`);
   **Windows named pipe restricted to the current user's SID**; PLUS a random **auth-token**
   handshake (token in a `0600` endpoint file) and a **protocol-version** handshake; drop

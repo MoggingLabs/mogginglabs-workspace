@@ -1,8 +1,9 @@
 import { app } from 'electron'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { basename, delimiter, dirname, join } from 'node:path'
 import { channelFromEnv } from '@contracts'
 import { runtimeDir } from './daemon-client'
+import { helperRuntime } from './node-helper'
 
 const SATELLITES = [
   // Shared ESM helpers FIRST — every satellite below imports from lib/, so the helpers
@@ -41,13 +42,11 @@ export interface CliRuntime {
    *
    * Not a cosmetic wrapper. A stored server entry is validated (registry.ts), and that
    * validator refuses any env value that is not a `${VAR}` reference — deliberately, so
-   * no credential literal can ever be written into a CLI config. `ELECTRON_RUN_AS_NODE=1`
-   * is not a credential, but it IS a literal, so an entry carrying it is refused. The
-   * house server never hit this because it is `builtIn` and never stored.
-   *
-   * Rather than punch a hole in that validator, the shim absorbs the variable: it sets
-   * ELECTRON_RUN_AS_NODE itself, so the config entry is a bare command with NO env at all.
-   * The safer rule stays intact, and the config line gets shorter.
+   * no credential literal can ever be written into a CLI config. The shim was born to
+   * absorb the `ELECTRON_RUN_AS_NODE=1` literal that rule refuses; since the runtime
+   * split (ADR 0017) there is no env to absorb — the shim simply binds the standalone
+   * helper to the bridge entry — but it stays: the config line remains a bare, stable
+   * command that survives helper-path changes without rewriting every CLI config.
    */
   readonly connectionShim: string
   /** Minimal package metadata consumed by the copied MCP implementation. */
@@ -63,49 +62,22 @@ const shQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`
 const cmdLiteral = (value: string): string => value.replace(/%/g, '%%')
 
 export function cliShimSource(platform: NodeJS.Platform, executable: string, cli: string): string {
+  // `executable` is the standalone Node helper (ADR 0017) — a plain node, so the shim
+  // sets NOTHING: the ELECTRON_RUN_AS_NODE line died with the RunAsNode fuse.
   if (platform === 'win32') {
-    return (
-      '@echo off\r\n' +
-      'setlocal DisableDelayedExpansion\r\n' +
-      'set "ELECTRON_RUN_AS_NODE=1"\r\n' +
-      `"${cmdLiteral(executable)}" "${cmdLiteral(cli)}" %*\r\n`
-    )
+    return '@echo off\r\n' + `"${cmdLiteral(executable)}" "${cmdLiteral(cli)}" %*\r\n`
   }
-  return `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec ${shQuote(executable)} ${shQuote(cli)} "$@"\n`
+  return `#!/bin/sh\nexec ${shQuote(executable)} ${shQuote(cli)} "$@"\n`
 }
 
 const samePathEntry = (left: string, right: string): boolean =>
   process.platform === 'win32' ? left.toLocaleLowerCase('en-US') === right.toLocaleLowerCase('en-US') : left === right
 
-const pathContains = (root: string, candidate: string): boolean => {
-  const rel = relative(resolve(root), resolve(candidate))
-  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
-}
-
-/**
- * Pick an executable that remains launchable after this process exits.
- *
- * An AppImage's `process.execPath` lives below its temporary APPDIR mount. APPIMAGE names the
- * original file, but those variables can also be inherited by an unrelated child process, so
- * use it only when this Electron executable is actually inside the advertised mount.
- */
-export function stableRuntimeExecutable(
-  platform: NodeJS.Platform = process.platform,
-  executable: string = process.execPath,
-  env: NodeJS.ProcessEnv = process.env,
-  packaged: boolean = app.isPackaged
-): string {
-  if (!packaged || platform !== 'linux' || !env.APPIMAGE || !env.APPDIR) return executable
-  if (!isAbsolute(env.APPIMAGE) || !isAbsolute(env.APPDIR) || !pathContains(env.APPDIR, executable)) return executable
-  // APPIMAGE/APPDIR are ordinary inherited variables. Requiring a packaged app plus actual
-  // executable containment prevents a dev/deb child from accepting an inherited parent
-  // AppImage, while still supporting non-default mountpoints and extract-and-run mode.
-  try {
-    return statSync(env.APPIMAGE).isFile() && statSync(env.APPDIR).isDirectory() ? env.APPIMAGE : executable
-  } catch {
-    return executable
-  }
-}
+// "Pick an executable that remains launchable after this process exits" used to live here
+// (stableRuntimeExecutable: shims at $APPIMAGE instead of the mounted execPath). Since the
+// runtime split the executable is the standalone helper, and the same AppImage concern is
+// answered by node-helper.ts: helperNeedsRuntimeCopy() copies the helper into this same
+// persistent runtime dir, so the path helperRuntime() returns already outlives the mount.
 
 const renamePause = new Int32Array(new SharedArrayBuffer(4))
 
@@ -193,7 +165,8 @@ export function stableMcpLauncherSource(target: string): string {
  * self-contained CLI/MCP files to the private, protocol-versioned runtime before the daemon
  * starts, then prepends a generated shim to the environment inherited by both PTY backends.
  * Keeping both the script and executable outside an AppImage mount lets pane commands and CLI
- * MCP configs outlive the app process. Electron-as-Node means no agent needs a system Node.
+ * MCP configs outlive the app process. The bundled standalone helper (ADR 0017) means no
+ * agent needs a system Node — and the signed Electron binary no longer doubles as one.
  */
 export function installCliRuntime(): CliRuntime {
   const root = runtimeDir()
@@ -223,10 +196,10 @@ export function installCliRuntime(): CliRuntime {
   const connectionEntry = join(stableMcpDir, 'mogging-connection.mjs')
   writePrivateFileAtomic(connectionEntry, stableMcpLauncherSource(join(dir, 'mogging-connection.mjs')))
   if (process.platform !== 'win32') chmodSync(stableMcpDir, 0o700)
-  const executable = stableRuntimeExecutable()
+  const executable = helperRuntime().executable
   writePrivateFileAtomic(shim, cliShimSource(process.platform, executable, cliEntry), process.platform === 'win32' ? 0o600 : 0o700)
-  // The bridge's own shim — same generator, same ELECTRON_RUN_AS_NODE trick, so a
-  // connection's CLI-config entry is a bare command with no env map to validate.
+  // The bridge's own shim — same generator, so a connection's CLI-config entry stays a
+  // bare command with no env map to validate.
   const connectionShim = join(dir, process.platform === 'win32' ? 'mogging-connection.cmd' : 'mogging-connection')
   writePrivateFileAtomic(
     connectionShim,

@@ -1,10 +1,10 @@
 The paid tier starts at the STANCE and the one open bypass, not the login
-button. Codify ADR 0015, then slam the door the audit flagged: an env var
+button. Codify ADR 0016, then slam the door the audit flagged: an env var
 must never be able to repoint where a shipped build talks to our servers.
 Zero UI, zero account code yet — this is the doctrine + the prerequisite.
 
 ## Steps
-1. **ADR 0015 — accounts & entitlements** (`docs/adr/`): our account is OUR
+1. **ADR 0016 — accounts & entitlements** (`docs/adr/`): our account is OUR
    credential, NOT a brokered provider login — ADR 0002 stands verbatim
    (Claude/Codex/Gemini still self-authenticate; no provider token ever
    enters this process). The freemium boundary: the free local core needs
@@ -40,14 +40,14 @@ Zero UI, zero account code yet — this is the doctrine + the prerequisite.
    Verdict `out/originpin-result.json`.
 
 ## Files
-- `docs/adr/0015-accounts-and-entitlements.md` · `src/backend/core/origins.ts`
+- `docs/adr/0016-accounts-and-entitlements.md` · `src/backend/core/origins.ts`
   · `backend/features/integrations/catalog.ts` · `scripts/check-prod-artifact.mjs`
   · `scripts/check-credential-wording.mjs` · `scripts/check-originpin.mjs` ·
   `scripts/qa-smokes.sh` (new row)
 
 ## Definition of Done
 - ORIGINPIN green; the sweep count grows by one in the books.
-- ADR 0015 states every stance above; the freemium boundary is explicit.
+- ADR 0016 states every stance above; the freemium boundary is explicit.
 - `MOGGING_REGISTRY_BASE` is gone from the codebase; no env can repoint a
   shipped build's origins.
 

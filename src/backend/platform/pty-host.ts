@@ -1,6 +1,12 @@
 import { release } from 'node:os'
-import * as pty from 'node-pty'
+import type * as PtyTypes from 'node-pty'
 import type { PtyEmulation } from '@contracts'
+import { requireNative } from './native-require'
+
+// Value-required through the host-aware seam (ADR 0017): under the standalone helper the
+// binary comes from the helper's own node_modules; under Electron, from the app's. The
+// type namespace above is import-type only — types spawn nothing (check-pty-seam.mjs).
+const pty = requireNative<typeof import('node-pty')>('node-pty')
 
 // THE ONLY MODULE THAT MAY SPAWN A PTY. Enforced by scripts/check-pty-seam.mjs.
 //
@@ -54,7 +60,7 @@ export function ptyEmulation(): PtyEmulation {
   return process.platform === 'win32' ? { backend: 'conpty', buildNumber: windowsBuild() } : { backend: 'posix' }
 }
 
-export type PtySpawnOptions = Omit<pty.IPtyForkOptions, 'useConpty'> & { cols: number; rows: number }
+export type PtySpawnOptions = Omit<PtyTypes.IPtyForkOptions, 'useConpty'> & { cols: number; rows: number }
 
 /**
  * Spawn a pty and report, in the same breath, how it behaves. `useConpty` is passed explicitly:
@@ -65,7 +71,7 @@ export function spawnPty(
   file: string,
   args: string[] | string,
   opts: PtySpawnOptions
-): { proc: pty.IPty; emulation: PtyEmulation } {
+): { proc: PtyTypes.IPty; emulation: PtyEmulation } {
   assertPtyHostSupported()
   const proc = pty.spawn(file, args, {
     ...opts,

@@ -38,7 +38,7 @@ deterrent. Honest framing: friction, not a wall.
 
 ## Files
 - `electron.vite.config.ts` (main-only bytecode + string transform) ·
-  build matrix rows · `scripts/check-bytecode.mjs` · `docs/18-accounts.md`
+  build matrix rows · `scripts/check-bytecode.mjs` · `docs/19-accounts.md`
   (honest-limit note) · qa-smokes.sh + CI
 
 ## Definition of Done

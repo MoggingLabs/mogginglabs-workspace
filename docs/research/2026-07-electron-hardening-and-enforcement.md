@@ -81,7 +81,7 @@ fidelity, the stack, or the performance budgets.
 levers above (which are already the center of the plan) and the cheap client speed-bumps (fuses,
 bytecode, signing). Revisit *only* if a future paid feature is a hard-real-time or
 kernel-level capability Electron genuinely can't host — which none of the roadmap is. Capture
-this in **ADR 0015/0016** so the question isn't relitigated every quarter.
+this in **ADR 0016/0016** so the question isn't relitigated every quarter.
 
 ---
 
@@ -129,7 +129,7 @@ effort and payoff (this is the central architectural decision of the whole harde
   entitlements. Overkill pre-revenue; note it and move on.
 
 **Recommendation:** ship **Route A** for launch (contain the blast radius), schedule **Route
-B** as the first post-launch hardening epic. Track it as **ADR 0016 — splitting the Node
+B** as the first post-launch hardening epic. Track it as **ADR 0017 — splitting the Node
 runtime to disable `runAsNode`**, because it touches ADR 0006 (detached daemon) and needs to
 be reasoned about in one place.
 
@@ -339,7 +339,7 @@ prerequisite, not a nice-to-have.
 | 5 | Account flow with **PKCE + DPoP** sender-constrained tokens | 1.3 | 3–5 d (on top of PKCE reuse) | for paid | no |
 | 6 | V8 bytecode for **main only** (preload stays sandboxed source) + string-obfuscate secrets/entitlement module | 2.1 | 2–3 d | no | no |
 | 7 | **Hardware-backed device key** (TPM/Secure Enclave native addon) binding the entitlement to the machine | 1.4 | 2–3 wk | for strong enforcement | new native addon |
-| 8 | **Route B: split the Node runtime**, then disable `runAsNode` fuse + re-run FUSES gate | 0/1.1 | 3–5 wk | no | **yes (ADR 0016)** |
+| 8 | **Route B: split the Node runtime**, then disable `runAsNode` fuse + re-run FUSES gate | 0/1.1 | 3–5 wk | no | **yes (ADR 0017)** |
 | 9 | Ensure the flagship paid features are **server-backed** (Team tier) | 3 | roadmap | — | server |
 
 **Sequencing:** 1–4 are the pre-revenue hardening floor (do first, ~1 week total). 5 lands with

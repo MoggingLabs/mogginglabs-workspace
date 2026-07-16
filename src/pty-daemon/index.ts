@@ -1,6 +1,7 @@
-// Detached PTY daemon entry point (ADR 0006). Launched by the app via Electron-as-Node
-// (`ELECTRON_RUN_AS_NODE=1`, `process.execPath`) so it needs no system Node and shares the
-// app's node-pty (compiled from source). It outlives the app (spawned detached) and holds the
+// Detached PTY daemon entry point (ADR 0006). Launched by the app on the standalone Node
+// helper (ADR 0017 — the Electron binary's RunAsNode fuse is off) so it needs no system
+// Node; its natives come from the helper's own node_modules via the host-aware seam
+// (@backend/platform/native-require). It outlives the app (spawned detached) and holds the
 // PTYs; the app is a thin client that reconnects on each launch.
 import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'

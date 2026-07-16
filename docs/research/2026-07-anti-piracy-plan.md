@@ -189,7 +189,7 @@ requires **Route B: split off a minimal Node/SEA helper** to run those, then dis
 the Electron app.
 
 - **Invariant check:** this is the one measure that *could* break I1/I3 if done wrong — which is
-  exactly why it's a scheduled epic (ADR 0016) with the daemon/CLI moved to the helper *first*,
+  exactly why it's a scheduled epic (ADR 0017) with the daemon/CLI moved to the helper *first*,
   fuse flipped *second*, verified by re-running the control-API and daemon-survival smokes.
 - **Cost:** ~3–5 weeks. High value (security + anti-piracy), but sequenced after launch.
 
@@ -237,7 +237,7 @@ epics are scheduled deliberately.
 | **P2 — the inert-copy layer** | **Hardware-bound device key** (TPM/Enclave native addon) → copied install can't re-license | 7 | I5, I8 — honest Linux fallback, justified addon | ~2–3 wk |
 | **P3 — deterrence + attribution** | V8 bytecode (main only) + secret obfuscation; **forensic activation watermark**; runtime tamper self-check + piracy telemetry | 2, 6 | none | ~1–2 wk |
 | **P4 — server-authoritative moat** | Ship the first genuinely **server-backed Pro/Team feature** (shared state / sync / policy) — the gate that can't be patched | 3, 7 | none (adds infra) | roadmap |
-| **P5 — the `runAsNode` epic** | **Route B:** split daemon/MCP/CLI to a minimal Node/SEA helper → disable `runAsNode` fuse; ADR 0016; re-run control-API + daemon-survival smokes | 4 | **I1, I3** — mitigated by sequencing + smoke gates | ~3–5 wk |
+| **P5 — the `runAsNode` epic** | **Route B:** split daemon/MCP/CLI to a minimal Node/SEA helper → disable `runAsNode` fuse; ADR 0017; re-run control-API + daemon-survival smokes | 4 | **I1, I3** — mitigated by sequencing + smoke gates | ~3–5 wk |
 
 **Reading of the sequence:** after **P0–P2** (~5–6 weeks incl. the account system), a pirate who
 copies an installed app gets an inert, device-locked shell that degrades to Free; a casual

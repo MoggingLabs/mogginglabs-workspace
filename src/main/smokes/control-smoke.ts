@@ -4,10 +4,13 @@ import { writeFileSync, readFileSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DAEMON_PROTOCOL_VERSION } from '@contracts'
+import { helperRuntime } from '../node-helper'
 
 // Env-gated control-API smoke (MOGGING_CONTROL, Phase-3/01): prove tmux-grade
 // scriptability end to end by running the REAL `bin/mogging.mjs` as a child process
-// (under Electron-as-Node — no system Node required) against the live daemon:
+// against the live daemon — on the STANDALONE HELPER (ADR 0017), the exact host every
+// shipped shim and CLI config names, with no ELECTRON_RUN_AS_NODE anywhere (the shipped
+// Electron binary would ignore it: the RunAsNode fuse is off):
 //   list         -> pane 1 enumerated
 //   send         -> typed text echoes in the pane
 //   send-key c-c -> interrupts a long-running command; the shell answers again after
@@ -20,6 +23,7 @@ export function runControlSmoke(win: BrowserWindow): void {
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
   const cliPath = join(app.getAppPath(), 'bin', 'mogging.mjs')
+  const helper = helperRuntime()
 
   interface CliResult {
     code: number
@@ -29,10 +33,10 @@ export function runControlSmoke(win: BrowserWindow): void {
   const cli = (args: string[], extraEnv: Record<string, string> = {}): Promise<CliResult> =>
     new Promise((resolveCli) => {
       execFile(
-        process.execPath,
+        helper.executable,
         [cliPath, ...args],
         {
-          env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ...extraEnv },
+          env: { ...process.env, ...extraEnv },
           timeout: 15000,
           windowsHide: true
         },
@@ -115,6 +119,7 @@ export function runControlSmoke(win: BrowserWindow): void {
         interruptOk,
         captureOk,
         refusalsOk,
+        cliHost: helper.executable, // the standalone helper (ADR 0017) — never electron
         codes: { badKey: badKey.code, badPane: badPane.code, badAuth: badAuth.code },
         listHead: list.stdout.split('\n').slice(0, 3),
         captureLen: cap.stdout.length
