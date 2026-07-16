@@ -21,7 +21,13 @@ import { probeContrastAcrossThemes } from './aa-probe'
 //   (g) audit 34 — the IA contract: opening a recent lands on the GRID (never back on
 //       Home — view-port.ts enforces the invariant both ways), and there is NO titlebar
 //       Home affordance, by design. Home is the boot launcher and the zero-workspace
-//       empty state; its recents and presets are fully covered by the wizard.
+//       empty state; its recents and presets are fully covered by the wizard;
+//   (h) the zero-workspace LOCKDOWN (2026-07-16), both edges: at boot (no workspaces)
+//       the rail does not render and BOTH chrome toggles — the rail's and the file
+//       explorer's — read disabled, with the explorer un-OPENABLE at the capability
+//       (toggle() refuses; the button is just the visible half). With a workspace the
+//       toggles wake and the explorer truly opens. Closing the LAST workspace returns
+//       Home, force-closes the explorer, and re-arms the lockdown.
 export function runHomeUxSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 150000) // safety net
   const wc = win.webContents
@@ -49,6 +55,26 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
       const emptyOk = await waitTrue(
         `!!document.querySelector('.home-recents-grid .empty-state') && !!document.querySelector('.home-recents-grid .empty-state button')`
       )
+
+      // (h) BOOT half of the zero-workspace lockdown: no rail rendered, both chrome
+      // toggles disabled, and the explorer un-openable at the CAPABILITY — the dev
+      // handle drives the same toggle() every door (button/shortcut/palette) uses.
+      const bootLock = await ES<{
+        railHidden: boolean
+        railToggleDisabled: boolean
+        explorerDisabled: boolean
+        explorerRefused: boolean
+      }>(`(() => {
+        const railEl = document.getElementById('rail')
+        window.__mogging.explorer.toggle(true)
+        return {
+          railHidden: !railEl || railEl.offsetParent === null,
+          railToggleDisabled: document.querySelector('#titlebar .rail-toggle')?.disabled === true,
+          explorerDisabled: document.querySelector('#titlebar .explorer-toggle')?.disabled === true,
+          explorerRefused: window.__mogging.explorer.isOpen() === false
+        }
+      })()`)
+      const bootLockOk = bootLock.railHidden && bootLock.railToggleDisabled && bootLock.explorerDisabled && bootLock.explorerRefused
 
       // (b) the checklist is detection-honest, in BOTH directions.
       type Agent = { id: string; name: string; installed: boolean; installHint?: string }
@@ -189,6 +215,50 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
         200
       )
 
+      // (h) LIVE half: with a workspace (from (c)) the toggles are awake and the
+      // explorer truly opens…
+      const awake = await ES<{ railToggleEnabled: boolean; explorerEnabled: boolean; explorerOpens: boolean }>(`(() => {
+        window.__mogging.explorer.toggle(true)
+        return {
+          railToggleEnabled: document.querySelector('#titlebar .rail-toggle')?.disabled === false,
+          explorerEnabled: document.querySelector('#titlebar .explorer-toggle')?.disabled === false,
+          explorerOpens: window.__mogging.explorer.isOpen() === true
+        }
+      })()`)
+      // …and closing the LAST workspace returns Home, force-closes the explorer
+      // (without erasing its open preference), and re-arms the whole lockdown.
+      // Real close verb — the same door the rail ✕ uses; idle shells skip the
+      // live-work confirm, but click it defensively if this host says otherwise.
+      await ES(`window.__mogging.workspace.list().forEach((w) => window.__mogging.workspace.close(w.id))`)
+      await ES(`document.querySelector('.modal-overlay .btn--danger')?.click()`)
+      const homeReturned = await waitTrue(
+        `document.querySelector('#app').classList.contains('view-home') && (window.__mogging.workspace.count() === 0)`,
+        30,
+        200
+      )
+      const relock = await ES<{
+        railToggleDisabled: boolean
+        explorerDisabled: boolean
+        explorerClosed: boolean
+        explorerStillRefused: boolean
+      }>(`(() => {
+        window.__mogging.explorer.toggle(true)
+        return {
+          railToggleDisabled: document.querySelector('#titlebar .rail-toggle')?.disabled === true,
+          explorerDisabled: document.querySelector('#titlebar .explorer-toggle')?.disabled === true,
+          explorerClosed: window.__mogging.explorer.isOpen() === false,
+          explorerStillRefused: window.__mogging.explorer.isOpen() === false
+        }
+      })()`)
+      const lockdownOk =
+        awake.railToggleEnabled &&
+        awake.explorerEnabled &&
+        awake.explorerOpens &&
+        homeReturned &&
+        relock.railToggleDisabled &&
+        relock.explorerDisabled &&
+        relock.explorerClosed
+
       const pass =
         heroOk &&
         emptyOk &&
@@ -202,9 +272,17 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
         gridOk &&
         noHomeBtn &&
         dismissOk &&
-        wizardOk
+        wizardOk &&
+        bootLockOk &&
+        lockdownOk
       result = {
         pass,
+        bootLockOk,
+        bootLock,
+        lockdownOk,
+        awake,
+        homeReturned,
+        relock,
         heroOk,
         emptyOk,
         anyCli,

@@ -691,13 +691,33 @@ export const explorerFeature: UiFeature = {
     })
     ctx.titlebarEnd.append(toggleBtn)
 
-    function toggle(next: boolean): void {
+    // The dock is workspace-scoped: with ZERO workspaces there is no folder to show
+    // and no pane to act into — opening it would be a room with no house. Every open
+    // path (button, Ctrl+Shift+E, the palette verb, the boot restore) funnels through
+    // toggle(), so the refusal below is the whole story; the button additionally
+    // reads disabled so the state is visible, not just inert. When the LAST workspace
+    // goes, the dock force-closes WITHOUT persisting — the saved preference survives
+    // the valley and the dock returns with the next workspace.
+    let persistedOpen = false
+    onWorkspacesChange((snapshot) => {
+      const none = snapshot.workspaces.length === 0
+      toggleBtn.disabled = none
+      toggleBtn.title = none ? 'File explorer — create a workspace first' : 'File explorer (Ctrl+Shift+E)'
+      if (none && open) toggle(false, { persist: false })
+      else if (!none && !open && persistedOpen) toggle(true, { persist: false })
+    })
+
+    function toggle(next: boolean, opts: { persist?: boolean } = {}): void {
+      if (next && getWorkspaces().workspaces.length === 0) return // no workspace, no dock
       if (open === next) return
       open = next
       dock.hidden = !open
       requestDockLayout()
       toggleBtn.classList.toggle('is-active', open)
-      persistOpen(open)
+      if (opts.persist !== false) {
+        persistedOpen = open
+        persistOpen(open)
+      }
       if (open) {
         void root() // …which pushes the watch set once it knows what is visible
       } else {
@@ -735,7 +755,12 @@ export const explorerFeature: UiFeature = {
       showHidden = init.showHidden
       hiddenBtn.classList.toggle('is-active', showHidden)
       hiddenBtn.title = showHidden ? 'Hide hidden files' : 'Show hidden files'
-      if (init.open) toggle(true)
+      // Restore the INTENT; the open itself may be refused right now (the workspace
+      // list often lands after this init) — the workspaces subscriber above reopens
+      // the moment a workspace exists. persist:false either way: a restore is not a
+      // change, and a refusal must not erase the preference it was refusing.
+      persistedOpen = init.open
+      if (init.open) toggle(true, { persist: false })
     })
 
     exposeForDev()

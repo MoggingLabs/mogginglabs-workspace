@@ -537,6 +537,14 @@ textarea {
     background var(--dur-1) var(--ease),
     color var(--dur-1) var(--ease);
 }
+/* A gated chrome control (the rail toggle and the explorer toggle read disabled at
+   the zero-workspace Home): grayed and inert, but still readable as a control. */
+.icon-btn:disabled {
+  color: var(--text-low);
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
 .icon-btn:hover {
   background: var(--accent-weak);
   color: var(--accent-ink);

@@ -817,6 +817,12 @@ function exposeForDev(controller: WorkspaceController): void {
     list: () => controller.list(),
     active: () => controller.activeMeta(),
     count: () => controller.list().length,
+    // The REAL close verb (live-work confirm included) — the zero-workspace gates
+    // (HOMEUX) walk the last workspace out through the same door the ✕ uses.
+    close: (id?: string) => {
+      const target = id ?? controller.activeMeta()?.id
+      if (target) void controller.requestClose(target)
+    },
     worktreeRemovalAudit: () => controller.worktreeRemovalAudit(),
     // Move a pane to another workspace — the same call the pane ⋯ menu's picker makes,
     // so the gate drives the shipped path and not a rehearsal of it.

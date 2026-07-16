@@ -55,8 +55,10 @@ const basename = (p: string): string =>
 
 const plural = (n: number): string => (n === 1 ? 'terminal' : 'terminals')
 
-/** Settings preference for the suggested grid size (falls back to 4). The stored
- *  number is trusted up to the contract ceiling; the SCREEN cap clamps at use. */
+/** Settings preference for the suggested grid size (falls back to ONE — a fresh
+ *  wizard proposes a single terminal and the user grows from there; four presumed
+ *  a fleet nobody had asked for yet). The stored number is trusted up to the
+ *  contract ceiling; the capacity budget clamps at use. */
 function defaultPaneCount(): number {
   try {
     const n = Number(localStorage.getItem('mogging.defaultPaneCount'))
@@ -64,7 +66,7 @@ function defaultPaneCount(): number {
   } catch {
     /* storage unavailable */
   }
-  return 4
+  return 1
 }
 
 /** The painter spec for a bare pane count — curated shapes for the counts that have

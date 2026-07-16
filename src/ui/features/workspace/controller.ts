@@ -1007,7 +1007,16 @@ export class WorkspaceController {
       this.activeId = null
       const nextId = this.order[0]
       if (nextId) this.switch(nextId, { reveal: activeView() === 'grid' })
-      else setActiveView('home')
+      else {
+        // Publish the EMPTY list before asking for Home: view-port's guard reads
+        // the workspace-info port, and with the stale snapshot (this workspace
+        // still counted) it rewrote 'home' back to 'grid' — closing the LAST
+        // workspace stranded the app on an empty grid, the exact dead end the
+        // guard exists to prevent. The trailing onChange below still runs; a
+        // second publish of the same truth is idempotent.
+        this.onChange()
+        setActiveView('home')
+      }
     }
     const timer = setTimeout(() => {
       this.pendingClose.delete(id)
@@ -1071,7 +1080,10 @@ export class WorkspaceController {
       // last workspace returns to the launcher (the app is launcher-first — no phantom
       // workspace is auto-created).
       if (nextId) this.switch(nextId, { reveal: activeView() === 'grid' })
-      else setActiveView('home')
+      else {
+        this.onChange() // same stale-snapshot trap as softClose: the guard must hear zero first
+        setActiveView('home')
+      }
     }
     this.refreshAttention()
     this.onChange()

@@ -128,7 +128,13 @@ run_smoke() {
   [ "$name" = "FIRSTRUN" ] && extra="MOGGING_FAKE_UPDATE=9.9.9"
   [ "$name" = "ROLERACE" ] && extra="MOGGING_DAEMON_SPAWN_DELAY_MS=2500"
   [ "$name" = "CWD_INPROC" ] && extra="MOGGING_INPROC=1"
+  # The canonical HARNESS machine (64 GiB / 16 cores): the pane budget otherwise
+  # clamps dense fixtures to whatever box CI rents (a 7 GiB macOS runner budgets
+  # six panes — a 16-pane gate would go red for the hardware, not the product).
+  # The budget's policy math is pinned in the unit suite; WIZLAYOUT proves the
+  # end-to-end wiring against these pinned inputs.
   MOGGING_USERDATA="$iso/userdata" LOCALAPPDATA="$iso/local" XDG_RUNTIME_DIR="$iso/local" \
+    MOGGING_MACHINE_MB=65536 MOGGING_MACHINE_CORES=16 \
     env $extra "$var=$val" "$TIMEOUT_BIN" "$timeout_s" npm run dev >"$iso/$name.log" 2>&1
   local v
   v=$(verdict "$result")

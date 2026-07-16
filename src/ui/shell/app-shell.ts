@@ -3,6 +3,7 @@ import type { ShellContext } from '../core/registry/feature-registry'
 import { getBridge } from '../core/ipc/bridge'
 import { clear } from '../components'
 import { onViewChange } from '../core/shell/view-port'
+import { getWorkspaces, onWorkspacesChange } from '../core/workspace/workspace-info-port'
 import { applyCalmMotion } from '../core/a11y/motion-port'
 import { createTitlebar } from './titlebar'
 
@@ -33,6 +34,10 @@ export function createAppShell(root: HTMLElement): ShellContext {
   if (navigator.platform.toUpperCase().includes('MAC')) app.classList.add('platform-darwin')
 
   const toggleRail = (): void => {
+    // With no workspaces the rail does not render (Home owns the app), so a toggle
+    // has nothing to toggle: refuse — the button below also reads disabled, and this
+    // guard covers the shortcut path too. Nothing to gray IN the rail: it is gone.
+    if (getWorkspaces().workspaces.length === 0) return
     const collapsed = app.classList.toggle('rail-collapsed')
     try {
       localStorage.setItem(RAIL_COLLAPSED_KEY, collapsed ? '1' : '')
@@ -41,7 +46,16 @@ export function createAppShell(root: HTMLElement): ShellContext {
     }
   }
 
-  const { el: titlebar, left, center, right, end } = createTitlebar(toggleRail)
+  const { el: titlebar, left, center, right, end, railToggle } = createTitlebar(toggleRail)
+
+  // The toggle wears the truth: disabled (grayed) until a workspace exists — at the
+  // zero-workspace Home there is no rail to collapse, and a button that silently
+  // did nothing taught people it was broken. Re-enabled the moment one appears.
+  onWorkspacesChange((snapshot) => {
+    const none = snapshot.workspaces.length === 0
+    railToggle.disabled = none
+    railToggle.title = none ? 'Workspace rail — create a workspace first' : 'Toggle rail (Ctrl+Shift+B)'
+  })
 
   const main = document.createElement('div')
   main.id = 'main'

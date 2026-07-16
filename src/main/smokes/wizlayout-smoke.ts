@@ -66,6 +66,13 @@ export function runWizLayoutSmoke(win: BrowserWindow): void {
       await ES(`window.__mogging.templates.openWizard({ cwd: ${cwdJs} })`)
       await sleep(800)
 
+      // THE DEFAULT: a fresh wizard proposes ONE terminal — you grow from there.
+      // (It proposed four, a fleet nobody had asked for yet — 2026-07-16.)
+      const freshReadout = await ES<string>(
+        `document.querySelector('#view-wizard .wizard-layout-readout')?.textContent ?? ''`
+      )
+      const defaultOneOk = /^1 terminal · 1×1/.test(freshReadout)
+
       // ── (a) capacity: geometry minus chrome, ∧ the machine, minus running ────
       const capacity = await ES<{
         cap: { maxCols: number; maxRows: number; maxPanes: number; screenMaxPanes: number; machineMaxPanes: number | null; panesElsewhere: number }
@@ -266,9 +273,11 @@ export function runWizLayoutSmoke(win: BrowserWindow): void {
         bigWorkspace.overflowY === 'auto' &&
         bigWorkspace.scrollHeight >= 890
 
-      const pass = capacityOk && chargedOk && dragCommitsOk && clickCommitsOk && oneRowOk && over16Ok && minimaOk
+      const pass = defaultOneOk && capacityOk && chargedOk && dragCommitsOk && clickCommitsOk && oneRowOk && over16Ok && minimaOk
       result = {
         pass,
+        defaultOneOk,
+        freshReadout,
         capacityOk,
         capacity,
         chargedOk,

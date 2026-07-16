@@ -101,7 +101,9 @@ export const settingsFeature: UiFeature = {
 
     const layoutSeg = createSegmented({
       options: TEMPLATE_COUNTS.map((n) => ({ id: String(n), label: String(n) })),
-      value: pref(DEFAULT_LAYOUT_KEY) ?? '4',
+      // MUST match the wizard's defaultPaneCount() fallback (one terminal): this
+      // control DISPLAYS the effective default even before a preference exists.
+      value: pref(DEFAULT_LAYOUT_KEY) ?? '1',
       ariaLabel: 'Default terminals in a new workspace',
       onChange: (id) => setPref(DEFAULT_LAYOUT_KEY, id)
     })

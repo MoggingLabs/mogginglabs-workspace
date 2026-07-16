@@ -20,6 +20,8 @@ export function createTitlebar(onToggleRail: () => void): {
   center: HTMLElement
   right: HTMLElement
   end: HTMLElement
+  /** The rail-collapse button — the shell gates it on the workspace count. */
+  railToggle: HTMLButtonElement
 } {
   const el = document.createElement('header')
   el.id = 'titlebar'
@@ -112,5 +114,8 @@ export function createTitlebar(onToggleRail: () => void): {
   })
 
   el.append(lead, center, cluster)
-  return { el, left, center, right, end }
+  // `railToggle` rides out so the shell can gate it on the workspace count — the
+  // shell owns rail collapse state, and a toggle over a rail that does not render
+  // (zero workspaces: Home) must read as unavailable, not as a silent no-op.
+  return { el, left, center, right, end, railToggle: toggle }
 }

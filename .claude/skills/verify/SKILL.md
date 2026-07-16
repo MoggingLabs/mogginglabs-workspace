@@ -25,6 +25,7 @@ build if it ever lands in the production entry.
 iso="$LOCALAPPDATA/Temp/claude/<name>" && mkdir -p "$iso/userdata" "$iso/local"
 env -u ELECTRON_RUN_AS_NODE -u ELECTRON_CLI_ARGS -u ELECTRON_EXEC_PATH -u NODE_ENV_ELECTRON_VITE \
   MOGGING_USERDATA="$iso/userdata" LOCALAPPDATA="$iso/local" XDG_RUNTIME_DIR="$iso/local" \
+  MOGGING_MACHINE_MB=65536 MOGGING_MACHINE_CORES=16 \
   MOGGING_STATE=1 timeout 150 npm run dev > "$iso/gate.log" 2>&1
 ```
 
@@ -34,6 +35,10 @@ env -u ELECTRON_RUN_AS_NODE -u ELECTRON_CLI_ARGS -u ELECTRON_EXEC_PATH -u NODE_E
   zero state events — and the production CSP blocks a data: font, which lands a
   `console.error` that fails any smoke counting errors.
 - `MOGGING_USERDATA` (any value) also bypasses the single-instance lock.
+- `MOGGING_MACHINE_MB/CORES` pin the pane budget's machine (the canonical
+  64 GiB / 16-core harness world, matching qa-smokes.sh): without them, dense
+  fixtures clamp to the REAL box — a 16-pane gate goes red on small machines
+  for the hardware, not the product.
 - electron-vite dev RESPAWNS electron after the smoke's `app.exit()`, so the
   command only ends when `timeout` kills it; the result JSON lands much earlier
   (~60s) — poll for it instead of waiting.
