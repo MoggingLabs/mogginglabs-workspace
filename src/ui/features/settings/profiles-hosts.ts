@@ -208,7 +208,14 @@ export function createProfilesHostsSection(): HTMLElement {
               providerLogo(p.provider, 13),
               el('span', { text: `${p.provider}${p.email ? ' · ' + p.email : ''}` })
             ]),
-            el('span', { class: 'ph-row-env', text: home ? `own config home · ${home}` : 'your CLI’s usual sign-in' })
+            // F-18: line 1 is identity, line 2 is mechanism — the config-home PATH
+            // moves behind hover (title), where experts still get it without every
+            // row carrying a filesystem string at full contrast.
+            el('span', {
+              class: 'ph-row-env',
+              text: home ? 'own config home' : 'your CLI’s usual sign-in',
+              title: home ?? undefined
+            })
           ]),
           el('div', { class: 'ph-row-actions' }, [
             !isDefault && siblings > 1

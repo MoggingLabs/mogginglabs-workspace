@@ -33,8 +33,8 @@ export interface McpInputSchema {
   required?: readonly string[]
 }
 
-/** The 14 browser tools SHIPPED in 6/05b — names verbatim from the server;
- *  the validator holds the catalog to this exact sequence. */
+/** The browser tools — the 14 SHIPPED in 6/05b, plus the 3 TAB tools (F4). Names
+ *  verbatim from the server; the validator holds the catalog to this exact sequence. */
 export const MCP_BROWSER_TOOL_NAMES = [
   'browser_navigate',
   'browser_back',
@@ -49,7 +49,10 @@ export const MCP_BROWSER_TOOL_NAMES = [
   'browser_eval',
   'browser_console',
   'browser_network_failures',
-  'browser_wait_for'
+  'browser_wait_for',
+  'browser_tab_list',
+  'browser_tab_new',
+  'browser_tab_select'
 ] as const
 
 /** Browser tools that ACT on a page (IMPLEMENTATION §04's gate list) — 04's

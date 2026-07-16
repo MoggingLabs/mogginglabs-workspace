@@ -39,7 +39,7 @@ export function runDockUxSmoke(win: BrowserWindow): void {
     const dock = document.querySelector('.browser-dock')
     const banner = document.querySelector('.browser-agent-banner')
     const stop = document.querySelector('.browser-agent-stop')
-    const label = document.querySelector('.browser-agent-label')
+    const label = document.querySelector('.browser-agent-name')
     const hitTestable = (el) => {
       if (!el) return false
       const r = el.getBoundingClientRect()
@@ -66,18 +66,40 @@ export function runDockUxSmoke(win: BrowserWindow): void {
     try {
       await sleep(1800)
 
-      // ── Setup: a workspace, dock open, agent-web profile, consent, and DRIVING ──
+      // ── Setup: a workspace whose pane is a CLAUDE agent, dock open, agent-web
+      //    profile, consent, and DRIVING (with the driving pane, so the possession
+      //    UI can name it — goals 5/6) ──
       stage = 'setup'
-      await ES(`window.__mogging.workspace.create({ name: 'Dock' })`)
+      await ES(`window.__mogging.workspace.create({ name: 'Dock', assignments: ['claude'] })`)
       await sleep(1200)
-      const wsId = await ES<string>(`window.__mogging.workspace.active().id`)
+      const ws = await ES<{ id: string; ordinal: number }>(`window.__mogging.workspace.active()`)
+      const wsId = ws.id
+      const drivingPane = String(ws.ordinal * 100 + 1)
       await ES(`window.__mogging.browser.toggle(true)`)
       await sleep(400)
       await ES(`window.__mogging.browser.setProfile('agent-web')`)
       await sleep(500)
       setAgentConsent(true, wsId)
-      setDrivingForSmoke(wsId, true, 'example.com') // banner + confirm bar, held stable
+      setDrivingForSmoke(wsId, true, 'example.com', drivingPane) // banner + confirm bar + IDENTITY, held stable
       await sleep(450)
+
+      // ── (g) The Comet possession UI names WHICH agent + shows the live action + glow
+      //    (goals 5/6): the banner reads "Claude Code · pane N", the action line is
+      //    present, the dock wears the animated glow, and the titlebar pill names it too. ──
+      stage = 'g-identity'
+      const g = await ES<Record<string, unknown>>(`(() => {
+        const B = window.__mogging.browser
+        const name = B.agentBannerName()
+        const action = B.agentBannerAction()
+        const glow = B.dockDrivingGlow()
+        const globalText = B.globalPossessionText()
+        const nameOk = /Claude Code/.test(name) && new RegExp('pane ${drivingPane}').test(name)
+        const globalOk = /Claude Code/.test(globalText)
+        const glowLayer = !!document.querySelector('.browser-dock.agent-driving')
+        const dot = document.querySelector('.browser-agent-dot')
+        const dotShown = !!dot && dot.getBoundingClientRect().width > 0
+        return { ok: nameOk && !!action && glow && globalOk && glowLayer && dotShown, name, action, glow, globalText, dotShown }
+      })()`)
 
       // ── (a) the guard, verbatim, now after the restyle ──
       stage = 'a-guard'
@@ -88,9 +110,9 @@ export function runDockUxSmoke(win: BrowserWindow): void {
       const aa = await probeContrastAcrossThemes({
         es: ES,
         sleep,
-        selectors: ['.browser-agent-label', '.browser-confirm-text', '.browser-agentweb-note-text']
+        selectors: ['.browser-agent-name', '.browser-confirm-text', '.browser-agentweb-note-text']
       })
-      const guardAaOk = !aa.failures.some((s) => s.includes('.browser-agent-label')) && !aa.missing.includes('.browser-agent-label')
+      const guardAaOk = !aa.failures.some((s) => s.includes('.browser-agent-name')) && !aa.missing.includes('.browser-agent-name')
       const f = { ok: aa.failures.length === 0 && aa.missing.length === 0, ...aa }
 
       // ── (c) the consent + honesty spans have rules of their OWN (differ from a bare
@@ -167,8 +189,8 @@ export function runDockUxSmoke(win: BrowserWindow): void {
       const d = { ok: overlayRows === settingsRows && overlayRows >= 10, overlayRows, settingsRows }
       const e = { ok: Boolean(eControls.ok && eShortcuts.ok), controls: eControls, shortcuts: eShortcuts }
 
-      const pass = Boolean(a.ok && guardAaOk && b.ok && c.ok && d.ok && e.ok && f.ok)
-      result = { pass, a: { ...a, aaOk: guardAaOk }, b, c, d, e, f }
+      const pass = Boolean(a.ok && guardAaOk && b.ok && c.ok && d.ok && e.ok && f.ok && g.ok)
+      result = { pass, a: { ...a, aaOk: guardAaOk }, b, c, d, e, f, g }
     } catch (err) {
       result = { pass: false, stage, error: String(err) }
     }

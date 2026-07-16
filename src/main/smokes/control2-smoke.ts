@@ -51,10 +51,15 @@ export function runControl2Smoke(win: BrowserWindow): void {
       const openOk = base >= 0 && Number(await ES('window.__mogging.layout.paneCount()')) === 4
       await sleep(2000) // panes spawn
 
+      // "Hidden" has two shapes now: a closed pane's slot leaves the DOM entirely, and a
+      // COVERED sibling hides via visibility (not display) so it keeps its WebGL lease —
+      // the restore-flicker fix. This predicate answers the human question ("can I see
+      // it?") for both.
       const visible = (id: number): Promise<boolean> =>
         ES<boolean>(
           `(()=>{const el=document.querySelector('.layout-slot[data-pane-id="${id}"]');` +
-            `return !!el && getComputedStyle(el).display !== 'none';})()`
+            `if(!el) return false; const cs=getComputedStyle(el);` +
+            `return cs.display !== 'none' && cs.visibility !== 'hidden';})()`
         )
 
       // 2) expand col on pane base+1 -> base+3 (below it) hides; toggle restores.

@@ -45,7 +45,9 @@ export function runSetUsageSmoke(win: BrowserWindow): void {
     await sleep(300)
   }
 
-  const CARDS = ['providers', 'plans', 'cost', 'alerts', 'display', 'history', 'privacy']
+  // 'alerts' moved to Settings › Notifications (F-08) — its block still exists as a
+  // global singleton (hooksOk asserts it); the usage tab folds are these six.
+  const CARDS = ['providers', 'plans', 'cost', 'display', 'history', 'privacy']
   const fixture = (plans: unknown[]): void => {
     const dir = mkdtempSync(join(tmpdir(), 'mog-setusage-'))
     const f = join(dir, 'fx.json')

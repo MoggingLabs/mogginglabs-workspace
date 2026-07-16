@@ -8,17 +8,18 @@ import {
 import { basename } from 'node:path'
 import { getDaemonClient } from './daemon-relay'
 import { repoIdentity } from '@backend/features/review'
-import { wizardAuditFaults } from './wizard-audit-faults'
+import { auditDelay, wizardAuditFaults } from './wizard-audit-faults'
 import { worktreeAuditFault } from './worktree-audit-faults'
 
 // App-wiring: bind the Electron-free worktree module (Phase-3/03) to IPC — the same
 // shape as registerGit. Paths + branch names only; dirty-safe removal is enforced in
 // the backend module, not here.
 export function registerWorktrees(): void {
-  ipcMain.handle(WorktreeChannels.create, (_e, req: CreateWorktreeRequest) => {
+  ipcMain.handle(WorktreeChannels.create, async (_e, req: CreateWorktreeRequest) => {
     const fault = wizardAuditFaults()
     if (fault) {
       fault.worktreeCreateCalls++
+      await auditDelay(fault.worktreeDelayMs)
       if (fault.worktreeFailAt === fault.worktreeCreateCalls) {
         return { ok: false, error: 'injected worktree creation failure' }
       }

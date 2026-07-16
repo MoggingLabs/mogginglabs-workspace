@@ -13,6 +13,17 @@ import { softGapMs } from './smoke-shell'
 //     rAF gaps sampled the whole time.
 //  3. ZOOM CHURN: 6 rapid zoom/restore toggles of the focused pane (grid-area swap +
 //     sibling hide/show), sampled the same way.
+//  3b. DWELL EXPAND/RESTORE: expand one pane over the workspace, DWELL past the 1.5s
+//     WebGL release debounce, restore — the reported all-terminals-flicker case, which
+//     the 280ms churn above is structurally blind to (it never lets a release land).
+//     Assert covered siblings hide via VISIBILITY (box kept), keep their WebGL leases
+//     through the dwell, report webgl again within two frames of the restore (restore
+//     is pure paint — no cold reattach ripple), take ZERO PTY resizes across the whole
+//     cycle, and one sibling's pixels after restore hash byte-identical to before the
+//     expand (main-process captures). Frame budget sampled across the restore.
+//  3c. …and the budget path SURVIVES the fix: a hidden WORKSPACE still releases all 8
+//     contexts (poll), and re-acquires them on switch-back — pinned here so nobody
+//     "fixes" flicker by disabling the leasing outright (MILESTONE phase B's claim).
 //  4. Assert afterwards: every pane kept ONLY its own content (no cross-talk, no
 //     buffer loss), all 8 visible panes re-acquired WebGL, the frame budget held
 //     (worst gap ≤ 100ms — a dropped-frame stutter fails), and the renderer logged
@@ -57,6 +68,8 @@ const SCRIPT = `(async () => {
       }
     }
   }
+  const oneFrame = () => new Promise((resolve) => requestAnimationFrame(resolve))
+  const twoFrames = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
 
   // --- Setup: 8 stamped panes in ws1, plus a second workspace to churn against ----
   if (m.workspace.count() === 0) m.workspace.create({ name: 'Grid' })
@@ -102,6 +115,108 @@ const SCRIPT = `(async () => {
   await sleep(1200) // even toggle count -> grid restored; GL re-acquires
   const zoom = s2.stop()
 
+  // --- Phase 2b: DWELL expand/restore — the reported flicker, as a contract --------
+  // The 280ms churn above never lets the 1.5s WebGL release debounce land, so it is
+  // structurally blind to the real gesture: expand a pane, WORK in it, restore. Before
+  // the fix, covered siblings were display:none — their IntersectionObservers read
+  // "gone", their contexts released mid-dwell, and the restore re-acquired seven of
+  // them one per frame: a per-pane DOM→WebGL rasterizer swap the user saw as every
+  // terminal in the workspace flickering. The fix hides covered siblings via
+  // VISIBILITY (box kept, IO quiet, lease kept), so restore is pure paint. Each
+  // assertion below is one clause of that contract, and each one bites alone:
+  //   siblingsCoveredRight  — hidden by visibility, NOT display (the mechanism itself)
+  //   leasesKeptThroughDwell— all 8 still webgl AFTER a 2.4s covered dwell
+  //   restoreInstantWebgl   — all 8 webgl within TWO FRAMES of restore (nothing to redo)
+  //   noSiblingResizes      — zero PTY resizes on siblings (no ConPTY repaint storm)
+  //   dwellPixels (main)    — a sibling's pixels after restore hash identical to before
+  const dwellFocusedEl = document.querySelector('.layout-slot.focused')
+  const dwellFocusedId = Number(dwellFocusedEl ? dwellFocusedEl.dataset.paneId : panes[0].id)
+  const dwellSibling = panes.find((p) => p.id !== dwellFocusedId) ?? panes[1]
+  const dwellResizes = {}
+  const dwellSubs = panes.map((p) =>
+    p.term.onResize(() => { dwellResizes[p.id] = (dwellResizes[p.id] || 0) + 1 })
+  )
+  const sibScreen = document.querySelector(
+    '.layout-slot[data-pane-id="' + dwellSibling.id + '"] .xterm-screen'
+  )
+  const sibRect = sibScreen ? sibScreen.getBoundingClientRect() : null
+  const dwellBridge = window.__moggingFlickerSync = {
+    stage: 'dwell-before',
+    stageAt: performance.now(),
+    advance: 0,
+    clip: sibRect ? {
+      x: Math.floor(sibRect.left),
+      y: Math.floor(sibRect.top),
+      width: Math.max(1, Math.ceil(sibRect.right) - Math.floor(sibRect.left)),
+      height: Math.max(1, Math.ceil(sibRect.bottom) - Math.floor(sibRect.top))
+    } : null
+  }
+  const waitDwell = async (advance) => {
+    for (let i = 0; i < 1000 && dwellBridge.advance < advance; i++) await sleep(10)
+    if (dwellBridge.advance < advance) throw new Error('pixel capture timed out at ' + dwellBridge.stage)
+  }
+  await waitDwell(1) // main hashed the sibling's screen BEFORE the expand
+  m.layout.zoom() // expand the focused pane over the whole workspace
+  await sleep(300)
+  const coveredDuring = panes.filter((p) => p.id !== dwellFocusedId).map((p) => {
+    const el = document.querySelector('.layout-slot[data-pane-id="' + p.id + '"]')
+    const cs = el ? getComputedStyle(el) : null
+    return { id: p.id, hidden: !!cs && cs.visibility === 'hidden', displayNone: !!cs && cs.display === 'none' }
+  })
+  await sleep(2100) // total dwell ≈2.4s — past the 1.5s release debounce + the job queue
+  const duringRenderers = panes.map((p) => ({ id: p.id, renderer: p.renderer() }))
+  const s3 = startSampler()
+  m.layout.zoom() // restore the grid
+  await twoFrames()
+  const afterRenderers = panes.map((p) => ({ id: p.id, renderer: p.renderer() }))
+  await sleep(600) // sampler covers the restore's settle, and no capture runs inside it
+  const dwellRestore = s3.stop()
+  dwellBridge.stage = 'dwell-after'
+  dwellBridge.stageAt = performance.now()
+  await waitDwell(2) // main hashed the SAME sibling rect after the restore
+  dwellSubs.forEach((s) => s.dispose())
+  const siblingIds = panes.filter((p) => p.id !== dwellFocusedId).map((p) => p.id)
+  const dwellSiblingResizes = siblingIds.map((id) => dwellResizes[id] || 0)
+  const dwellExpandedResizes = dwellResizes[dwellFocusedId] || 0
+  const dwell = {
+    siblingsCoveredRight: coveredDuring.every((c) => c.hidden && !c.displayNone),
+    leasesKeptThroughDwell: duringRenderers.every((r) => r.renderer === 'webgl'),
+    restoreInstantWebgl: afterRenderers.every((r) => r.renderer === 'webgl'),
+    noSiblingResizes: dwellSiblingResizes.every((n) => n === 0),
+    // It DID resize both ways (grow + shrink; the trailing settle fit may add no-ops).
+    expandedResized: dwellExpandedResizes >= 2 && dwellExpandedResizes <= 4,
+    smooth: dwellRestore.maxGapMs <= B.maxFrameGapMs,
+    expandedResizes: dwellExpandedResizes,
+    siblingResizes: dwellSiblingResizes,
+    siblingId: dwellSibling.id,
+    coveredDuring, duringRenderers, afterRenderers,
+    restore: dwellRestore
+  }
+  dwell.pass =
+    dwell.siblingsCoveredRight && dwell.leasesKeptThroughDwell && dwell.restoreInstantWebgl &&
+    dwell.noSiblingResizes && dwell.expandedResized && dwell.smooth
+
+  // --- Phase 2c: the context budget must SURVIVE the fix ---------------------------
+  // Covered siblings keep their contexts now; hidden WORKSPACES must still release
+  // theirs (the ~16-context budget, MILESTONE phase B's claim) — pinned here so nobody
+  // "fixes" flicker by disabling the managed leasing outright. Poll both directions:
+  // the timings (1.5s debounce, one job per frame) are design facts, not assertions.
+  m.workspace.switchByIndex(1)
+  let wsReleased = 0
+  for (let i = 0; i < 25; i++) {
+    wsReleased = panes.filter((p) => p.renderer() === 'dom').length
+    if (wsReleased === 8) break
+    await sleep(400)
+  }
+  m.workspace.switchByIndex(0)
+  let wsBack = 0
+  for (let i = 0; i < 25; i++) {
+    wsBack = panes.filter((p) => p.renderer() === 'webgl').length
+    if (wsBack === 8) break
+    await sleep(500)
+  }
+  const wsLeasing = { pass: wsReleased === 8 && wsBack === 8, released: wsReleased, reacquired: wsBack }
+
   // --- Assertions ------------------------------------------------------------------
   const ids = panes.map((p) => p.id)
   const results = panes.map((p, i) => {
@@ -131,8 +246,6 @@ const SCRIPT = `(async () => {
   const syncPane = panes.find((p) => p.term.textarea === document.activeElement) ?? panes[0]
   const syncTerm = syncPane.term
   const writeTerm = (data) => new Promise((resolve) => syncTerm.write(data, resolve))
-  const oneFrame = () => new Promise((resolve) => requestAnimationFrame(resolve))
-  const twoFrames = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
   const syncSlot = document.querySelector('.layout-slot[data-pane-id="' + syncPane.id + '"]')
   syncSlot?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
   syncTerm.focus()
@@ -347,12 +460,13 @@ const SCRIPT = `(async () => {
     jumpHidden
   }
 
-  const pass = contentIntact && buffersKept && webglBack === 8 && smooth && synchronizedOutput.pass && scrollbar.pass
-  return { pass, churn, zoom, synchronizedOutput, scrollbar, webglBack, contentIntact, buffersKept, results }
+  const pass = contentIntact && buffersKept && webglBack === 8 && smooth &&
+    dwell.pass && wsLeasing.pass && synchronizedOutput.pass && scrollbar.pass
+  return { pass, churn, zoom, dwell, wsLeasing, synchronizedOutput, scrollbar, webglBack, contentIntact, buffersKept, results }
 })()`
 
 export function runFlickerSmoke(win: BrowserWindow): void {
-  setTimeout(() => app.exit(1), 120000) // safety net
+  setTimeout(() => app.exit(1), 180000) // safety net (the dwell + leasing phases added ~15s typical, more under software GL)
   // Eight panes at the authored dev-window size. On the 1024-wide CI display the clamped
   // window leaves each pane a handful of rows, and the buffers-kept character check fails
   // on geometry rather than on the reflow behavior it exists to hold. (chromeux precedent:
@@ -396,7 +510,9 @@ export function runFlickerSmoke(win: BrowserWindow): void {
         } : null
       })()`, true)) as BridgeState | null
     const waitForStage = async (stage: string): Promise<BridgeState> => {
-      const deadline = Date.now() + 60_000
+      // 90s: the FIRST capture (dwell-before) is reached only after setup + both churn
+      // phases, which a software-GL CI runner can stretch well past a minute.
+      const deadline = Date.now() + 90_000
       while (Date.now() < deadline) {
         const state = await readBridge()
         if (state?.stage === stage) return state
@@ -452,6 +568,32 @@ export function runFlickerSmoke(win: BrowserWindow): void {
       return { hash, stageAgeMs: capturedState?.stageAgeMs ?? state.stageAgeMs }
     }
 
+    // Phase 2b's pixel clause: hash one covered sibling's screen before the expand and
+    // after the restore — equal means the restore left the pane EXACTLY as it was (no
+    // buffer loss, no blank canvas, no renderer-swap residue). The content is static by
+    // construction (the tick writer stopped in phase 1; the sibling is unfocused, so no
+    // blinking cursor), and both captures run OUTSIDE the frame sampler's window.
+    let dwellPixels: Record<string, unknown>
+    try {
+      const before = await capture('dwell-before', 1)
+      const after = await capture('dwell-after', 2)
+      dwellPixels = {
+        pass: before.hash === after.hash,
+        hashes: { before: before.hash, after: after.hash },
+        stageAgeMs: {
+          before: Math.round(before.stageAgeMs * 10) / 10,
+          after: Math.round(after.stageAgeMs * 10) / 10
+        }
+      }
+    } catch (e) {
+      dwellPixels = { pass: false, error: String(e) }
+      try {
+        await advance(999) // unblock the renderer script, whatever stage it is parked at
+      } catch {
+        /* the renderer may already be gone */
+      }
+    }
+
     let pixelAtomicity: Record<string, unknown>
     try {
       const baseline = await capture('baseline', 1)
@@ -485,6 +627,8 @@ export function runFlickerSmoke(win: BrowserWindow): void {
     }
     result.pixelAtomicity = pixelAtomicity
     if (pixelAtomicity.pass !== true) result.pass = false
+    result.dwellPixels = dwellPixels
+    if (dwellPixels.pass !== true) result.pass = false
     result.rendererErrors = errors
     if (errors.length) result.pass = false
     try {

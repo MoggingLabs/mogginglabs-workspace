@@ -139,6 +139,11 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
       resumeSessionId
     )
     if (!command) return { ok: false, reason: `Unknown agent provider: ${req.agentId}` }
+    // Accepted residual: 'once' session overrides are consumed HERE, when the command
+    // is handed back — the renderer still has to type it, and a pane disposed in that
+    // microsecond gap spends the one-shot for nothing. Moving consumption behind a
+    // typed-ack would add an IPC round trip and a state machine for a window this
+    // narrow; the failure is a re-arm in Settings, not a wrong launch.
     markAgentConfigSessionLaunched(req)
     // Sign-in truth at launch: the profile's email is a LABEL — nothing can route
     // the CLI's own OAuth to it. So state the facts at the moment they bite: no

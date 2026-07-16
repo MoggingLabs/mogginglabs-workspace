@@ -297,7 +297,7 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       registerClipboard() // system clipboard IPC (app-layer, Electron-only)
       registerDialogs(() => win) // native directory picker for the new-workspace wizard
       registerShellChrome(() => win) // theme-tinted window-control overlay (organic chrome)
-      registerBrowserDock(() => win, harness) // right browser dock: MAIN owns the WebContentsView (6/05)
+      registerBrowserDock(() => win) // right browser dock: in-DOM <webview> guests, MAIN drives them (6/05, 8/07)
       registerIntegrations(() => win) // per-workspace integrations grant: store + IPC + fan-out (8/03)
       registerEventBridge(() => win) // outbound event bridge: house events -> user webhooks (8/10)
       registerTrail() // the agent activity trail: local store + viewer IPC (8/05)

@@ -25,6 +25,7 @@ import {
   opencodePluginSource,
   opencodeTuiConfig
 } from '@backend/features/agents'
+import { claudeStatuslineArgs } from '../context'
 import { bellLaunchExtras, notifyHookInvocation, notifyHookPath } from '../notify-hook'
 
 interface WireResult {
@@ -345,13 +346,44 @@ export async function runNotifyHookSmoke(): Promise<void> {
       : null
     const noopOk = !!noop && noop.exitCode === 0 && noop.notify === null
 
+    // ── self-heal: generated scripts are existence-checked per call, not once per run ──
+    // A userData cleared mid-run must regrow BOTH generated scripts on the next launch;
+    // the old once-per-process cache handed every later launch a settings file and hook
+    // invocation pointing at scripts that were gone (statusline dead, panes bell-less).
+    const settingsBefore = claudeStatuslineArgs()
+    const relayOf = (args: string[]): string | null => {
+      if (args[0] !== '--settings' || !args[1]) return null
+      try {
+        const overlay = JSON.parse(fs.readFileSync(args[1], 'utf8')) as { statusLine?: { command?: string } }
+        const m = /"(.+context-relay\.mjs)"/.exec(overlay.statusLine?.command ?? '')
+        return m ? m[1] : null
+      } catch {
+        return null
+      }
+    }
+    const relayBefore = relayOf(settingsBefore)
+    if (relayBefore) fs.rmSync(relayBefore, { force: true })
+    if (script) fs.rmSync(script, { force: true })
+    const scriptHealed = notifyHookPath()
+    const settingsAfter = claudeStatuslineArgs()
+    const relayAfter = relayOf(settingsAfter)
+    const selfHealOk =
+      !!relayBefore &&
+      !!relayAfter &&
+      fs.existsSync(relayAfter) &&
+      !!scriptHealed &&
+      fs.existsSync(scriptHealed) &&
+      fs.readFileSync(scriptHealed, 'utf8') === NOTIFY_HOOK_SOURCE
+
     const pass =
       scriptOk && invOk && claudeOk && codexOk && geminiOk && opencodeOk && aiderOk && extrasOk &&
-      directOk && codexBlobOk && codexUnknownOk && noopOk && notifBlockingOk && notifUnknownOk && notifCompletedOk
+      directOk && codexBlobOk && codexUnknownOk && noopOk && notifBlockingOk && notifUnknownOk && notifCompletedOk &&
+      selfHealOk
     write({
       pass,
       scriptOk, invOk, claudeOk, codexOk, geminiOk, opencodeOk, aiderOk, extrasOk,
       directOk, codexBlobOk, codexUnknownOk, noopOk, notifBlockingOk, notifUnknownOk, notifCompletedOk,
+      selfHealOk, selfHeal: { relayBefore, relayAfter, scriptHealed },
       direct, codexBlob, codexUnknown, noop, notifBlocking, notifUnknown, notifCompleted,
       extras: {
         userData,

@@ -14,10 +14,11 @@ import {
   type UsageDisplayConfig,
   type UsageProviderDef
 } from '@contracts'
-import { Button, EmptyState, createCheckbox, createCollapsibleCard, el, loadingRow, providerLogo, showToast, submitWithRetain } from '../../components'
+import { Button, EmptyState, FieldGroup, IconButton, createCheckbox, createCollapsibleCard, el, loadingRow, providerLogo, showToast, submitWithRetain } from '../../components'
 import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
 import { getTelemetry } from '../../core/telemetry'
+import { gotoSettingsTab } from '../../core/shell/settings-tab-port'
 import { switchActiveProfile } from '../../core/agents/profile-switch'
 
 /**
@@ -62,7 +63,9 @@ export function createUsageSection(): HTMLElement {
   let detected = new Set<string>()
 
   // ── 1 · The provider catalog grid (searchable, class-grouped) ─────────────
-  const search = el('input', { class: 'usage-search', ariaLabel: 'Search providers' }) as HTMLInputElement
+  // `.input` on every control in this tab (S2/F-27): these used to be bare natives —
+  // white OS widgets on the dark theme, OS font on every theme.
+  const search = el('input', { class: 'input usage-search', ariaLabel: 'Search providers' }) as HTMLInputElement
   search.type = 'search'
   search.placeholder = `Search ${USAGE_PROVIDERS.length}+ providers…`
   const grid = el('div', { class: 'usage-grid' })
@@ -137,7 +140,7 @@ export function createUsageSection(): HTMLElement {
       return host
     }
     // Paste-once: a password field (never readable back after save) + save.
-    const paste = el('input', { class: 'usage-key-input', ariaLabel: `${r.id} API key` }) as HTMLInputElement
+    const paste = el('input', { class: 'input input-sm usage-key-input', ariaLabel: `${r.id} API key` }) as HTMLInputElement
     paste.type = 'password'
     paste.placeholder = r.klass === 'web-session' ? 'paste cookie value…' : 'paste API key…'
     const save: HTMLButtonElement = Button({
@@ -163,7 +166,7 @@ export function createUsageSection(): HTMLElement {
     })
     // Advanced: an env-ref POINTER slot (a name, never a secret — a
     // secret-shaped literal is refused main-side and surfaced here).
-    const envRef = el('input', { class: 'usage-envref-input', ariaLabel: `${r.id} env-ref` }) as HTMLInputElement
+    const envRef = el('input', { class: 'input input-sm usage-envref-input', ariaLabel: `${r.id} env-ref` }) as HTMLInputElement
     envRef.type = 'text'
     envRef.placeholder = '${ENV_VAR} ref…'
     const saveRef = Button({
@@ -199,7 +202,7 @@ export function createUsageSection(): HTMLElement {
           text:
             `${watched.length} of ${rowState.size} providers can be watched today` +
             (reporting.length ? ` · ${reporting.length} reporting now` : '') +
-            ' — the rest are catalog rows whose reader is not wired yet.'
+            ' — the rest aren’t supported yet.'
         })
       ])
     )
@@ -215,34 +218,41 @@ export function createUsageSection(): HTMLElement {
       group.append(el('div', { class: 'section-label usage-class-label', text: CLASS_LABEL[klass] ?? klass }))
       for (const r of mine) {
         const row = el('div', { class: 'usage-prov-row', dataset: { provider: r.id, klass: r.klass } })
+        // F-30: an unsupported row must not render CHECKED — an enabled switch on a
+        // dead feature is the switch lying. Disabled + unchecked until a reader lands
+        // (the stored `enabled` bit is preserved main-side; it simply has no meaning yet).
         const enable = createCheckbox({
           label: '',
           ariaLabel: `${r.id} enabled`,
-          checked: r.enabled,
+          checked: r.enabled && r.wired,
+          disabled: !r.wired,
           onChange: (checked) => {
             void invoke(UsageChannels.configSet, { providerId: r.id, enabled: checked }).then(() => void loadGrid())
           }
         })
         enable.el.classList.add('usage-prov-enable')
-        const cadence = el('select', { class: 'usage-cadence', ariaLabel: `${r.id} refresh cadence` }) as HTMLSelectElement
+        const cadence = el('select', { class: 'input input-sm usage-cadence', ariaLabel: `${r.id} refresh cadence` }) as HTMLSelectElement
         for (const c of USAGE_CADENCES) cadence.append(el('option', { value: c, text: c }))
         cadence.value = r.cadence
         cadence.addEventListener('change', () => void invoke(UsageChannels.configSet, { providerId: r.id, cadence: cadence.value }))
         // An unwired row must never look watched (the audit's RC4): the green
         // "detected" chip is CLI presence, which is true but reads as "usage
         // live" — so it only paints on rows whose reader can actually read.
+        // F-30: "reader pending" was roadmap-speak; and the class chip repeated its own
+        // group header on all 50 rows. The chip now paints only under a search, where
+        // the class groups are what tell rows apart.
         const wiredChip = r.wired
           ? null
           : el('span', {
               class: 'pill usage-detected is-missing usage-pending-chip',
-              text: 'reader pending',
-              attrs: { title: 'This catalog row has no usage reader yet — enabling it polls nothing and no alert can fire. It lands when the endpoint is dev-verified.' }
+              text: 'not supported yet',
+              attrs: { title: 'This provider can’t be watched yet — enabling it would poll nothing and no alert could fire. Support lands in an update.' }
             })
         const head = el('div', { class: 'usage-prov-head' }, [
           enable.el,
           providerLogo(r.id, 15),
           el('span', { class: 'usage-prov-label', text: r.label }),
-          el('span', { class: `pill usage-class-chip is-${r.klass}`, text: r.klass }),
+          q ? el('span', { class: `pill usage-class-chip is-${r.klass}`, text: r.klass }) : null,
           wiredChip,
           r.wired && (r.klass === 'cli-store' || r.klass === 'cloud-cli')
             ? el('span', {
@@ -389,7 +399,7 @@ export function createUsageSection(): HTMLElement {
   async function renderCost(): Promise<void> {
     costHost.replaceChildren()
     const windowDays = costWindow()
-    const winSel = el('select', { class: 'usage-cost-window', ariaLabel: 'Cost window' }) as HTMLSelectElement
+    const winSel = el('select', { class: 'input input-sm usage-cost-window', ariaLabel: 'Cost window' }) as HTMLSelectElement
     for (const [v, label] of [
       ['7', 'Last 7 days'],
       ['30', 'Last 30 days'],
@@ -570,101 +580,8 @@ export function createUsageSection(): HTMLElement {
       )
   }
 
-  // ── 4 · Alerts (the 09 rules) + a fixture test toast ──────────────────────
-  const alertsHost = el('div', { class: 'usage-alert-cfg settings-consents' })
-  void (async () => {
-    const cfg = (await invoke(UsageChannels.alertCfgGet)) as UsageAlertConfig | null
-    if (!cfg) return
-    const thrErr = el('span', { class: 'settings-error usage-thr-err', role: 'alert' })
-    thrErr.hidden = true
-    const live = { quiet: cfg.quiet, warn: cfg.warn }
-    const pctInput = (cls: string, label: string, value: number, key: 'quiet' | 'warn'): HTMLInputElement => {
-      const input = el('input', { class: `usage-thr ${cls}`, ariaLabel: label }) as HTMLInputElement
-      input.type = 'number'
-      input.min = '1'
-      input.max = '100'
-      input.value = String(value)
-      input.addEventListener('change', () => {
-        const v = Number(input.value)
-        // Out-of-range or inverted input REVERTS OUT LOUD — the old handler
-        // silently swallowed it, so the field showed a value that was never
-        // saved (audit RC4's quiet-warn validation gap).
-        const inverted = key === 'quiet' ? v >= live.warn : v <= live.quiet
-        if (!Number.isFinite(v) || v < 1 || v > 100 || inverted) {
-          thrErr.textContent = inverted ? 'quiet must stay below warning — reverted' : '1–100 only — reverted'
-          thrErr.hidden = false
-          input.value = String(live[key])
-          return
-        }
-        thrErr.hidden = true
-        live[key] = Math.round(v)
-        void invoke(UsageChannels.alertCfgSet, { [key]: v })
-      })
-      return input
-    }
-    const quiet = pctInput('usage-thr-quiet', 'Quiet threshold percent', cfg.quiet, 'quiet')
-    const warn = pctInput('usage-thr-warn', 'Warning threshold percent', cfg.warn, 'warn')
-    const confetti = createCheckbox({
-      label: 'Confetti on window reset',
-      checked: cfg.confetti,
-      onChange: (checked) => void invoke(UsageChannels.alertCfgSet, { confetti: checked })
-    })
-    confetti.el.classList.add('usage-confetti-toggle')
-    alertsHost.append(
-      el('div', { class: 'usage-alert-row' }, [
-        el('span', { class: 'settings-row-caption', text: 'Quiet toast at' }),
-        quiet,
-        el('span', { class: 'settings-row-caption', text: '% · warning at' }),
-        warn,
-        el('span', { class: 'settings-row-caption', text: '%' }),
-        thrErr
-      ]),
-      confetti.el
-    )
-    // Credits floors: a balance has no percentage, so "low" is the USER's
-    // number. One row per ENABLED balance provider; 0/empty = no tap.
-    const creditRows = ((await invoke(UsageChannels.configGet)) as UsageConfig | null)?.providers ?? []
-    const floorRows = USAGE_PROVIDERS.filter((d) => d.credits && creditRows.find((c) => c.id === d.id)?.enabled)
-    if (floorRows.length) {
-      const floorsHost = el('div', { class: 'usage-floors' })
-      floorsHost.append(el('div', { class: 'section-label', text: 'Balance floors — warn when a balance drops under' }))
-      for (const d of floorRows) {
-        const input = el('input', { class: 'usage-thr usage-floor', ariaLabel: `${d.id} balance floor` }) as HTMLInputElement
-        input.type = 'number'
-        input.min = '0'
-        input.value = String(cfg.floors?.[d.id] ?? '')
-        input.placeholder = 'off'
-        input.addEventListener('change', () => {
-          const v = Number(input.value)
-          if (input.value === '' || (Number.isFinite(v) && v >= 0)) {
-            void invoke(UsageChannels.alertCfgSet, { floors: { [d.id]: input.value === '' ? 0 : v } })
-          } else input.value = ''
-        })
-        floorsHost.append(
-          el('div', { class: 'usage-alert-row usage-floor-row', dataset: { provider: d.id } }, [
-            providerLogo(d.id, 13),
-            el('span', { class: 'settings-row-caption', text: d.label }),
-            input,
-            el('span', { class: 'settings-row-caption', text: d.windows[0]?.label.toLowerCase() ?? 'credits' })
-          ])
-        )
-      }
-      alertsHost.append(floorsHost)
-    }
-    // A FIXTURE toast, clearly labeled — proves the house toast path works but is
-    // NOT a reading (its own comment said so). 05b puts it behind DEV so it never
-    // ships; the real alert copy is composed main-side (09).
-    if (import.meta.env.DEV) {
-      alertsHost.append(
-        Button({
-          label: 'Test notification',
-          size: 'sm',
-          onClick: () =>
-            showToast({ tone: 'attention', title: 'Test — Fake Pro at 95% of Session (5h)', body: 'Ahead of pace — a fixture, not a reading.' })
-        })
-      )
-    }
-  })()
+  // (Alerts & thresholds moved to Settings › Notifications — F-08: one home for
+  // "how do I get pinged". createUsageAlertsBlock below; the poller IPC is unchanged.)
 
   // ── 5 · Display (the 10 options — absorbed intact) ────────────────────────
   const displayHost = createDisplayControls()
@@ -736,12 +653,35 @@ export function createUsageSection(): HTMLElement {
   // 'Usage sources', NOT 'Providers': the nav already has an Agent CLIs tab that
   // was called Providers too — one word, two doors. The id stays 'providers'
   // (disclosure keys + the UXMILESTONE hot-chip assert key off it).
-  const providersCard = card('providers', 'Usage sources', 'The full catalog, five classes — enable what you use; keys are set per row (they feed usage reads only — keys for MCP servers live in Integrations › Service keys).', el('div', {}, [search, grid]))
-  const plansCard = card('plans', 'Plans & profiles', 'Every lane the poller reads. The active lane launches new agents; switching flips pointers, never credentials.', plansTable)
-  const costCard = card('cost', 'Cost overview', "Today vs the window, the daily average, where the month is heading at this pace, and which model burns the money — scanned locally from your CLIs' own logs.", costHost)
-  const alertsCard = card('alerts', 'Thresholds & alerts', 'A quiet toast at the first threshold, a warning with the verdict at the second; once per window, re-armed at reset. In-app only — to ring n8n, Make, or Slack, add a webhook (Settings › Webhooks).', alertsHost)
-  const displayCard = card('display', 'Display', 'What the titlebar gauge mirrors, what the icon shows, how resets render, popover order and density.', displayHost)
-  const historyCard = card('history', 'History & cost', 'Sampled history per provider and the on-demand local cost scan. Compact by design — the popover stays the glance.', historyHost)
+  // F-28: a FOLDED card shows only its title + this caption — one task sentence each,
+  // in the user's words; the mechanics live inside the open card. F-29: "History &
+  // cost" gave two doors the word cost — History keeps its id (SETUSAGE keys off it)
+  // and loses the claim; Cost overview is the one home for money.
+  const providersCard = createCollapsibleCard(
+    {
+      id: 'providers',
+      title: 'Usage sources',
+      caption: 'Choose which providers to watch. Keys pasted here feed usage reads only — keys for MCP servers live in Integrations › Service keys.',
+      storagePrefix: 'usage',
+      class: 'usage-card usage-card-providers',
+      // F-10: the cross-reference to the CLI list is a CLICK, not a prose aside.
+      actions: Button({
+        label: 'Install CLIs',
+        icon: 'terminal',
+        variant: 'ghost',
+        size: 'sm',
+        title: 'Agent CLIs — install and configure the providers themselves',
+        onClick: () => gotoSettingsTab('providers')
+      })
+    },
+    [el('div', {}, [search, grid])]
+  )
+  const plansCard = card('plans', 'Plans & profiles', 'Every plan being tracked, and which account new agents launch as.', plansTable)
+  const costCard = card('cost', 'Cost overview', 'What today cost, where the month is heading, and which model burns the money — read locally from your CLIs’ own logs.', costHost)
+  // (The 'alerts' card moved to Settings › Notifications — F-08. SETUSAGE's card
+  // roster dropped it there too.)
+  const displayCard = card('display', 'Display', 'What the title-bar gauge and its popover show.', displayHost)
+  const historyCard = card('history', 'History', 'Sampled usage history per provider — compact by design; the popover stays the glance.', historyHost)
   const privacyCard = card('privacy', 'Privacy', 'Where credentials live and what never leaves the machine.', privacy)
 
   function computeAttention(): Node | null {
@@ -838,7 +778,6 @@ export function createUsageSection(): HTMLElement {
     providersCard.el,
     plansCard.el,
     costCard.el,
-    alertsCard.el,
     displayCard.el,
     historyCard.el,
     privacyCard.el
@@ -875,7 +814,7 @@ function createDisplayControls(): HTMLElement {
         Object.assign(cfg, patch)
       }
       const select = (cls: string, label: string, options: [string, string][], value: string, onChange: (v: string) => void): HTMLSelectElement => {
-        const s = el('select', { class: `usage-display-select ${cls}`, ariaLabel: label }) as HTMLSelectElement
+        const s = el('select', { class: `input input-sm usage-display-select ${cls}`, ariaLabel: label }) as HTMLSelectElement
         for (const [v, text] of options) s.append(el('option', { value: v, text }))
         s.value = value
         s.addEventListener('change', () => onChange(s.value))
@@ -929,18 +868,76 @@ function createDisplayControls(): HTMLElement {
         cfg.order,
         (v) => set({ order: v as UsageDisplayConfig['order'] })
       )
-      const pinOrder = el('input', { class: 'usage-display-pinorder', ariaLabel: 'Manual provider order (comma-separated ids)' }) as HTMLInputElement
-      pinOrder.type = 'text'
-      pinOrder.placeholder = 'provider ids, comma-separated'
-      pinOrder.value = cfg.pinOrder.join(', ')
-      pinOrder.addEventListener('change', () =>
-        set({ pinOrder: pinOrder.value.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 64) })
-      )
+      // F-32: the manual order was a comma-separated-ids text input — hand-typed
+      // provider ids into a blind field. Chips with move/remove verbs instead, plus
+      // a picker for providers not yet pinned. Shown only while order is Manual.
+      const pinHost = el('div', { class: 'usage-pinorder' })
+      const renderPinOrder = (): void => {
+        pinHost.replaceChildren()
+        cfg.pinOrder.forEach((id, i) => {
+          pinHost.append(
+            el('span', { class: 'usage-pin-chip' }, [
+              providerLogo(id, 12),
+              el('span', { class: 'usage-pin-id', text: id }),
+              IconButton({
+                icon: 'chevron-up',
+                label: `Move ${id} up`,
+                disabled: i === 0,
+                onClick: () => {
+                  const o = [...cfg.pinOrder]
+                  ;[o[i - 1], o[i]] = [o[i], o[i - 1]]
+                  set({ pinOrder: o })
+                  renderPinOrder()
+                }
+              }),
+              IconButton({
+                icon: 'chevron-down',
+                label: `Move ${id} down`,
+                disabled: i === cfg.pinOrder.length - 1,
+                onClick: () => {
+                  const o = [...cfg.pinOrder]
+                  ;[o[i], o[i + 1]] = [o[i + 1], o[i]]
+                  set({ pinOrder: o })
+                  renderPinOrder()
+                }
+              }),
+              IconButton({
+                icon: 'x',
+                label: `Remove ${id} from the order`,
+                onClick: () => {
+                  set({ pinOrder: cfg.pinOrder.filter((x) => x !== id) })
+                  renderPinOrder()
+                }
+              })
+            ])
+          )
+        })
+        const addable = providers.filter((id) => !cfg.pinOrder.includes(id))
+        if (addable.length) {
+          const add = el('select', { class: 'input input-sm usage-pin-add', ariaLabel: 'Pin a provider to the order' }) as HTMLSelectElement
+          add.append(el('option', { value: '', text: '+ Pin provider…' }))
+          for (const id of addable) add.append(el('option', { value: id, text: id }))
+          add.addEventListener('change', () => {
+            if (!add.value) return
+            set({ pinOrder: [...cfg.pinOrder, add.value].slice(0, 64) })
+            renderPinOrder()
+          })
+          pinHost.append(add)
+        }
+        if (!cfg.pinOrder.length && !addable.length) {
+          pinHost.append(el('span', { class: 'settings-row-caption', text: 'Enable a provider to pin an order.' }))
+        }
+      }
+      renderPinOrder()
       const check = (label: string, cls: string, checked: boolean, key: 'showBars' | 'showPct' | 'showGlyph' | 'showLabel'): HTMLElement => {
         const c = createCheckbox({ label, checked, onChange: (on) => set({ [key]: on }) })
         c.el.classList.add(cls)
         return c.el
       }
+      pinHost.hidden = cfg.order !== 'manual'
+      orderSel.addEventListener('change', () => {
+        pinHost.hidden = orderSel.value !== 'manual'
+      })
       root.append(
         el('div', { class: 'usage-display-row' }, [el('span', { class: 'settings-row-caption', text: 'Gauge shows' }), modeSel, pinSel]),
         el('div', { class: 'usage-display-row' }, [
@@ -953,13 +950,117 @@ function createDisplayControls(): HTMLElement {
         el('div', { class: 'usage-display-row' }, [
           el('span', { class: 'settings-row-caption', text: 'Popover' }),
           densitySel,
-          orderSel,
-          pinOrder
-        ])
+          orderSel
+        ]),
+        pinHost
       )
     } catch {
       root.append(el('span', { class: 'settings-row-caption', text: 'Display config unavailable.' }))
     }
   })()
   return root
+}
+
+/**
+ * The alert thresholds + balance floors + confetti block — hosted by Settings ›
+ * Notifications (F-08: one home for "how do I get pinged"), riding the usage
+ * poller's own IPC exactly as before. Class names are a compatibility surface:
+ * SETUSAGE/USAGEUI assert `.usage-alert-cfg .usage-thr-warn` as global singletons.
+ */
+export function createUsageAlertsBlock(): HTMLElement {
+  const alertsHost = el('div', { class: 'usage-alert-cfg settings-consents' })
+  void (async () => {
+    const cfg = (await invoke(UsageChannels.alertCfgGet)) as UsageAlertConfig | null
+    if (!cfg) return
+    const thrErr = el('span', { class: 'settings-error usage-thr-err', role: 'alert' })
+    thrErr.hidden = true
+    const live = { quiet: cfg.quiet, warn: cfg.warn }
+    const pctInput = (cls: string, label: string, value: number, key: 'quiet' | 'warn'): HTMLInputElement => {
+      const input = el('input', { class: `input input-sm usage-thr ${cls}`, ariaLabel: label }) as HTMLInputElement
+      input.type = 'number'
+      input.min = '1'
+      input.max = '100'
+      input.value = String(value)
+      input.addEventListener('change', () => {
+        const v = Number(input.value)
+        // Out-of-range or inverted input REVERTS OUT LOUD — the old handler
+        // silently swallowed it, so the field showed a value that was never
+        // saved (audit RC4's quiet-warn validation gap).
+        const inverted = key === 'quiet' ? v >= live.warn : v <= live.quiet
+        if (!Number.isFinite(v) || v < 1 || v > 100 || inverted) {
+          thrErr.textContent = inverted ? 'quiet must stay below warning — reverted' : '1–100 only — reverted'
+          thrErr.hidden = false
+          input.value = String(live[key])
+          return
+        }
+        thrErr.hidden = true
+        live[key] = Math.round(v)
+        void invoke(UsageChannels.alertCfgSet, { [key]: v })
+      })
+      return input
+    }
+    const quiet = pctInput('usage-thr-quiet', 'Quiet threshold percent', cfg.quiet, 'quiet')
+    const warn = pctInput('usage-thr-warn', 'Warning threshold percent', cfg.warn, 'warn')
+    const confetti = createCheckbox({
+      label: 'Confetti on window reset',
+      checked: cfg.confetti,
+      onChange: (checked) => void invoke(UsageChannels.alertCfgSet, { confetti: checked })
+    })
+    confetti.el.classList.add('usage-confetti-toggle')
+    // F-31: the thresholds were a sentence with inputs embedded in it — label-control
+    // association broke, and the error surfaced at the row's end. Two labeled fields;
+    // validation right below them.
+    alertsHost.append(
+      el('div', { class: 'usage-thr-grid' }, [
+        FieldGroup({ label: 'Quiet warning', hint: '% of a window — a gentle toast, once per window.' }, quiet),
+        FieldGroup({ label: 'Loud warning', hint: '% of a window — the verdict toast, re-armed at reset.' }, warn)
+      ]),
+      thrErr,
+      confetti.el
+    )
+    // Credits floors: a balance has no percentage, so "low" is the USER's
+    // number. One row per ENABLED balance provider; 0/empty = no tap.
+    const creditRows = ((await invoke(UsageChannels.configGet)) as UsageConfig | null)?.providers ?? []
+    const floorRows = USAGE_PROVIDERS.filter((d) => d.credits && creditRows.find((c) => c.id === d.id)?.enabled)
+    if (floorRows.length) {
+      const floorsHost = el('div', { class: 'usage-floors' })
+      floorsHost.append(el('div', { class: 'section-label', text: 'Balance floors — warn when a balance drops under' }))
+      for (const d of floorRows) {
+        const input = el('input', { class: 'input input-sm usage-thr usage-floor', ariaLabel: `${d.id} balance floor` }) as HTMLInputElement
+        input.type = 'number'
+        input.min = '0'
+        input.value = String(cfg.floors?.[d.id] ?? '')
+        input.placeholder = 'off'
+        input.addEventListener('change', () => {
+          const v = Number(input.value)
+          if (input.value === '' || (Number.isFinite(v) && v >= 0)) {
+            void invoke(UsageChannels.alertCfgSet, { floors: { [d.id]: input.value === '' ? 0 : v } })
+          } else input.value = ''
+        })
+        floorsHost.append(
+          el('div', { class: 'usage-alert-row usage-floor-row', dataset: { provider: d.id } }, [
+            providerLogo(d.id, 13),
+            el('span', { class: 'settings-row-caption', text: d.label }),
+            input,
+            el('span', { class: 'settings-row-caption', text: d.windows[0]?.label.toLowerCase() ?? 'credits' })
+          ])
+        )
+      }
+      alertsHost.append(floorsHost)
+    }
+    // A FIXTURE toast, clearly labeled — proves the house toast path works but is
+    // NOT a reading (its own comment said so). 05b puts it behind DEV so it never
+    // ships; the real alert copy is composed main-side (09).
+    if (import.meta.env.DEV) {
+      alertsHost.append(
+        Button({
+          label: 'Test notification',
+          size: 'sm',
+          onClick: () =>
+            showToast({ tone: 'attention', title: 'Test — Fake Pro at 95% of Session (5h)', body: 'Ahead of pace — a fixture, not a reading.' })
+        })
+      )
+    }
+  })()
+  return alertsHost
 }

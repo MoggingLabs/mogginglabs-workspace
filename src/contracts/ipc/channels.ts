@@ -213,6 +213,15 @@ export const BrowserChannels = {
   state: 'browser:state', // main -> renderer: BrowserDockState (header truth)
   lastUrl: 'browser:lastUrl', // (workspaceId) -> string | null ("open this workspace's preview" chip)
   openExternal: 'browser:openExternal', // ({ url }) -> void (http(s) only, system browser)
+  contextMenu: 'browser:contextMenu', // main -> renderer: BrowserContextMenuParams (right-click in the guest → the house menu)
+  guestChord: 'browser:guestChord', // main -> renderer: BrowserGuestChord (an app shortcut pressed while the guest holds focus, F12)
+  devtools: 'browser:devtools', // renderer -> main: { x?, y? } — open DevTools on the active guest (F8)
+  permissionBlocked: 'browser:permissionBlocked', // main -> renderer: { permission } — a guest permission was denied (honest chip, F16)
+  // ── Tabs (F4) ──────────────────────────────────────────────────────────
+  tabActivate: 'browser:tabActivate', // renderer -> main: { workspaceId, profile, tabId } — the active tab per (workspace, profile), so the driver resolves it
+  tabsState: 'browser:tabsState', // renderer -> main: BrowserTabsState — the tab list + active id (main caches it for browser_tab_list)
+  tabOpen: 'browser:tabOpen', // main -> renderer: { workspaceId, profile, url? } — open a new tab (window.open / browser_tab_new)
+  tabSelect: 'browser:tabSelect', // main -> renderer: { workspaceId, profile, tabId } — activate a tab (browser_tab_select)
   // ── Agent control (6/05b) ──────────────────────────────────────────────
   consentGet: 'browser:consentGet', // (workspaceId) -> boolean (stored per-workspace grant; default OFF)
   consentSet: 'browser:consentSet', // ({ workspaceId, allowed }) -> void (Settings/wizard toggle writes it)

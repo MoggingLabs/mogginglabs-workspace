@@ -28,9 +28,14 @@ const SCRIPT = `(async () => {
   await sleep(1500)
 
   const slot = (id) => document.querySelector('.layout-slot[data-pane-id="' + id + '"]')
+  // A covered sibling hides via VISIBILITY (it keeps its box and its WebGL lease — the
+  // restore-flicker fix); a closed pane's slot leaves the DOM. Both count as "hidden"
+  // to the human this predicate stands for.
   const visible = (id) => {
     const el = slot(id)
-    return !!el && getComputedStyle(el).display !== 'none'
+    if (!el) return false
+    const cs = getComputedStyle(el)
+    return cs.display !== 'none' && cs.visibility !== 'hidden'
   }
 
   // Expansion is rect-based now (grid-layout.ts expandedRect), not a CSS grid span:

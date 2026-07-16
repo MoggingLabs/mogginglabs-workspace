@@ -339,7 +339,7 @@ export function runGallery(win: BrowserWindow): void {
           // fold to check before shooting. Refresh is still the first `.trail-btn`.
           await ES(`document.querySelector('.settings-nav-item[data-target="activity"]')?.click()`)
           await sleep(400)
-          await ES(`(document.querySelector('.trail-activity .trail-btn')?.click(), 1)`) // Refresh — still first
+          await ES(`(([...document.querySelectorAll('.trail-activity .btn')].find((b) => (b.textContent || '').trim() === 'Refresh'))?.click(), 1)`) // Refresh — house Button since F-40
           await sleep(500)
           await snap(`${tag}-settings-activity`)
           // The event bridge on its own tab (Agents & tools › Webhooks).
