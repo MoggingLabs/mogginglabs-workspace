@@ -441,7 +441,13 @@ export function runAsyncStateSmoke(win: BrowserWindow): void {
       const actNav = await showTab('activity')
       // Settle every trailList call the page makes on its own BEFORE arming: the delay config is a
       // per-channel FIFO, and a stray read would eat the 1500 meant for call #1.
-      const refreshClicked = await click('.trail-activity .trail-btn')
+      // Refresh is a house Button now (F-40) — find it by its accessible name.
+      const refreshClicked = await ES<boolean>(`(() => {
+        const b = [...document.querySelectorAll('.trail-activity .btn')].find((x) => (x.textContent || '').trim() === 'Refresh')
+        if (!b) return false
+        b.click()
+        return true
+      })()`)
       await sleep(1200)
 
       setAsyncAuditFaults({ delaySequenceMs: { [IntegrationsChannels.trailList]: [1500, 0] } })

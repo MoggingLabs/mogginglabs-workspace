@@ -92,10 +92,11 @@ export function createWebhooksSection(): HTMLElement {
     off: { text: 'Idle', tone: 'neutral' }
   }
   function row(w: WebhookView): HTMLElement {
+    // Default (30px) size, not sm — the 28px hit floor SETINTEG measures on these
+    // dense rows holds here too.
     const del = Button({
       label: 'Delete',
       variant: 'ghost',
-      size: 'sm',
       onClick: () => {
         void confirmDialog({ title: `Delete webhook “${w.label}”?`, message: 'It stops receiving events. This can’t be undone.', confirmLabel: 'Delete', danger: true }).then(async (ok) => {
           if (ok) {
@@ -108,7 +109,6 @@ export function createWebhooksSection(): HTMLElement {
     const test = Button({
       label: 'Send test',
       variant: 'outline',
-      size: 'sm',
       onClick: () => {
         void bridge.invoke(IntegrationsChannels.webhookTest, w.id)
         showToast({ title: 'Test event queued', body: w.label, tone: 'info' })

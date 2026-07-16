@@ -51,8 +51,11 @@ export function runSetAgentConfigSmoke(win: BrowserWindow): void {
       await execute(`document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click()`)
       await sleep(350)
       await execute(`document.querySelector('.settings-nav-item[data-target="providers"]')?.click()`)
-      const landingReady = await waitTrue(`document.querySelectorAll('.prov-item').length === 5`)
-      const rowsAccessible = await execute<boolean>(`[...document.querySelectorAll('.prov-row')].every((row) => row.getAttribute('role') === 'button' && row.tabIndex === 0)`)
+      // Scoped to the providers SECTION: the global count also caught the session-alerts
+      // rows (static .prov-item/.prov-row reuse) — first in this tab, now on Notifications
+      // (F-08) — and pinned a number that broke the moment they rendered.
+      const landingReady = await waitTrue(`document.querySelectorAll('.settings-section[data-section="providers"] .prov-item').length === 5`)
+      const rowsAccessible = await execute<boolean>(`[...document.querySelectorAll('.settings-section[data-section="providers"] .prov-row')].every((row) => row.getAttribute('role') === 'button' && row.tabIndex === 0)`)
       await execute(`document.querySelector('.prov-item[data-provider="claude"] .prov-row')?.click()`)
       const detailReady = await waitTrue(`!!document.querySelector('.agentcfg-workspace:not([hidden]) .agentcfg-scope-select')`, 90)
       const categoryCount = await execute<number>(`document.querySelectorAll('.agentcfg-category').length`)

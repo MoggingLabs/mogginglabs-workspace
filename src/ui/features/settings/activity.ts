@@ -37,9 +37,10 @@ export function createActivitySection(): HTMLElement {
     srcSelect.append(el('option', { value: v, text: label }))
   }
 
-  const refreshBtn = Button({ label: 'Refresh', variant: 'outline', size: 'sm', icon: 'rotate-cw' })
-  const exportBtn = Button({ label: 'Export JSON…', variant: 'ghost', size: 'sm' })
-  const clearBtn = Button({ label: 'Clear this workspace’s trail', variant: 'danger', size: 'sm' })
+  // Default (30px) size, not sm: SETINTEG measures a 28px hit floor on this toolbar.
+  const refreshBtn = Button({ label: 'Refresh', variant: 'outline', icon: 'rotate-cw' })
+  const exportBtn = Button({ label: 'Export JSON…', variant: 'ghost' })
+  const clearBtn = Button({ label: 'Clear this workspace’s trail', variant: 'danger' })
 
   const list = el('div', { class: 'trail-list' })
   const emptyNote = el('div', { class: 'trail-empty' }, [

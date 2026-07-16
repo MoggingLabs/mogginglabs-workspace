@@ -612,9 +612,21 @@ textarea {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
   background: var(--accent-weak);
 }
-/* REMOVE #9 (8.5/07b): `.pill--success` / `.pill--danger` were unused. `.pill--accent`
-   is KEPT — folder-browser's "repo" pill (tone 'accent') is a live caller, so the audit's
-   "one call site" was stale. */
+/* `.pill--success` / `.pill--danger` return (they were removed as unused in 8.5/07b;
+   the F-36 status lexicon made them live again — webhook health, provider availability).
+   Danger wears --danger-ink on a 6% wash: the retired .evbridge-health.is-failing
+   carried that AA lesson (the fill red measures 3.59–4.11:1 on light/nord/solarized
+   as words; the pale wash clears 4.5 on every theme in both directions). */
+.pill--success {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+.pill--danger {
+  color: var(--danger-ink);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
+}
 .pill--warning {
   color: var(--warning);
   border-color: color-mix(in srgb, var(--warning) 40%, var(--border));
@@ -5465,33 +5477,7 @@ body.pane-dragging * {
 .wh-payload {
   max-width: var(--measure);
 }
-.evbridge-health {
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  padding: 1px var(--sp-2);
-  border-radius: var(--r-full);
-  flex: none;
-}
-.evbridge-health.is-ok {
-  color: var(--success);
-  background: color-mix(in srgb, var(--success) 12%, transparent);
-}
-.evbridge-health.is-failing {
-  /* --danger-ink, not --danger: danger-as-words on a tinted chip — the fill red
-     measures 3.59-4.11:1 on light/nord/solarized (UXMILESTONE (e) caught it).
-     Tint at 6%, not the 12% is-ok wears: light's ink on a 12% red wash still
-     measured 4.37:1; at 6% the wash pales and every theme clears 4.5 with room
-     (a lighter wash raises contrast in BOTH directions — dark inks on light,
-     light inks on dark). */
-  color: var(--danger-ink);
-  background: color-mix(in srgb, var(--danger) 6%, transparent);
-}
-.evbridge-health.is-off {
-  color: var(--text-lo);
-  background: var(--bg-inset);
-}
+/* (.evbridge-health retired with F-36 — webhook health is a house Pill now.) */
 
 /* Wizard Tools row (8/09): scope a new workspace's agents to picked servers. */
 .wizard-tools {
