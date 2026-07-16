@@ -259,7 +259,13 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
               const role = appRoles.get(id)
               if (role) await bindRole(id, role)
             })
-            .catch(() => {})
+            // Best-effort by design (the pane comes back on the next reconnect or app
+            // restart) — but never SILENT: a replay that quietly fails is a blank pane
+            // with nothing in any log to point at.
+            .catch((err) => {
+              const why = err instanceof Error ? err.message : String(err)
+              console.warn(`[daemon] reconnect replay failed for pane ${id}: ${why}`)
+            })
         }
         seed(next)
         setDaemonHealth({

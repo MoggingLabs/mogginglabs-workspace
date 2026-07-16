@@ -447,6 +447,17 @@ async function onCallback(params: URLSearchParams, res: import('node:http').Serv
     redirectUri: flow.redirectUri,
     resource: flow.resource
   })
+  // The exchange is the ONE await a cancel can interleave: the user's Cancel (or a
+  // superseding connect, or clearClient) ran abandonFlow while the token trip was in
+  // flight. From here the flow is not ours to finish — storing the tokens would re-mint
+  // a "connected" card over an explicit cancel, and endFlow() would tear down whatever
+  // NEWER flow now owns `pending`. Discard, answer the tab honestly, and touch nothing.
+  // (A cancel that lands AFTER storeTokens is the other order: the grant completed
+  // first, and a landed grant stands — the same stance clearClient documents.)
+  if (pending !== flow) {
+    html('Sign-in cancelled', 'This sign-in was cancelled in the app before it finished. Nothing was connected.')
+    return
+  }
   if (!exchanged.ok) {
     // redirect_uri drift: the cached client was registered against a PREVIOUS flow's
     // loopback port. RFC 8252 §7.3 obliges the AS to accept any loopback port, but an
@@ -734,6 +745,10 @@ async function doRefresh(serviceId: string, tokens: OAuthTokens): Promise<string
     resource: canonicalResource(url)
   })
   if (!next.ok) {
+    // The cached AS metadata may be the reason (a provider that moved its token
+    // endpoint would fail here forever — the cache has no TTL). Drop it so the next
+    // attempt re-discovers instead of retrying into the same stale endpoint.
+    metaCache.delete(url)
     setState(serviceId, { state: 'expired', lastError: `The connection could not renew: ${next.reason}` })
     return null
   }

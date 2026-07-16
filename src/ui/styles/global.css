@@ -1486,7 +1486,10 @@ button {
   border: 1px solid transparent;
   border-radius: var(--r-md);
   color: var(--text-mid);
-  font-size: var(--fs-13);
+  /* One grade above the body's 13: the rail is primary navigation and its names are
+     read at a glance from across the window — at 13 they measured a step too small.
+     Row height is untouched: the box is the 30px icon chip + padding, not the text. */
+  font-size: var(--fs-14);
   cursor: pointer;
   transition:
     background var(--dur-1) var(--ease),

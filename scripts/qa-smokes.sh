@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 137 gates: 19 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 139 gates: 19 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
-# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT) + 118 app-boot
+# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT) + 120 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -251,6 +251,7 @@ run_smoke CWD_INPROC  MOGGING_CWD       INPROC 180 cwd-inproc
 run_smoke GIT         MOGGING_GIT       1 240 git
 run_smoke NOTIFY      MOGGING_NOTIFY    1 180 notify
 run_smoke NOTIFYHOOK  MOGGING_NOTIFYHOOK 1 120 notifyhook
+run_smoke GLOBALHOOKS MOGGING_GLOBALHOOKS 1 150 globalhooks
 run_smoke STATE       MOGGING_STATE     1 150 state-smoke
 run_smoke RELOAD      MOGGING_RELOAD    1 150 reload-smoke
 run_smoke MIGRATE     MOGGING_MIGRATE   1 120 migrate
@@ -286,6 +287,7 @@ run_smoke SWARM       MOGGING_SWARM     1 240 swarm
 run_smoke LEDGER      MOGGING_LEDGER    1 240 ledger
 run_smoke GATE        MOGGING_GATE      1 240 gate
 run_smoke PROFILES    MOGGING_PROFILES  1 240 profiles
+run_smoke LOGINTRUTH  MOGGING_LOGINTRUTH 1 240 logintruth
 run_smoke REMOTE      MOGGING_REMOTE    1 240 remote
 run_smoke SWARMMILESTONE MOGGING_SWARMMILESTONE 1 300 swarmmilestone
 run_smoke TEMPLATE_A  MOGGING_TEMPLATE  A 180 template TEMPLATE

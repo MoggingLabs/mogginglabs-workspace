@@ -10,6 +10,7 @@ import { registerDialogs } from './dialogs'
 import { registerShellChrome, wireWindowState } from './shell-chrome'
 import { registerAppSettings, disposeAppSettings } from './app-settings'
 import { registerAgents, disposeAgentInstalls } from './agents'
+import { registerAgentGlobalHooks } from './agent-global-hooks'
 import { registerAgentSettings, disposeAgentSettings } from './agent-settings'
 import { registerBrowserDock } from './browser-dock'
 import { startMcpEndpoint, stopMcpEndpoint } from './mcp-endpoint'
@@ -36,7 +37,7 @@ import { startDaemonBackend } from './daemon-relay'
 import { DaemonMigrationDeferredError } from './daemon-migrate'
 import { installCliRuntime } from './cli-runtime'
 import { installDeepLinkListeners, registerDeepLink, initialDeepLinkCwd, initialControlCommand } from './deep-link'
-import { ControlChannels, WorkspaceChannels } from '@contracts'
+import { CONTROL_COLD_START_DELAY_MS, ControlChannels, WorkspaceChannels } from '@contracts'
 import { initAutoUpdate } from './updater'
 import { fatal, installFatalHandlers } from './fatal'
 import { scrubInheritedPaneEnv } from './pane-env'
@@ -312,6 +313,7 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       // `harness` is this entry's isSmoke: production always passes false.
       const agentSettingsStartup = registerAgentSettings(() => win, harness)
       registerAgents(() => win) // agent launcher: detect/install CLIs + build launch commands (Phase-1/06; Agent CLIs tab)
+      registerAgentGlobalHooks() // global agent alert wiring: the hand-typed-launch gap, all four CLIs (explicit apply/remove only)
       registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
       registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
       disposeGit = registerGit(liveWebContents) // read-only per-pane git branch + dirty (Phase-2/03)
@@ -346,7 +348,7 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
           const w = win
           const send = (): void => {
             // Give restore a beat so `open` lands after existing workspaces re-attach.
-            setTimeout(() => w.webContents.send(ControlChannels.command, initialControl), 800)
+            setTimeout(() => w.webContents.send(ControlChannels.command, initialControl), CONTROL_COLD_START_DELAY_MS)
           }
           if (w.webContents.isLoading()) w.webContents.once('did-finish-load', send)
           else send()

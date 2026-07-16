@@ -75,6 +75,16 @@ export const AgentConfigChannels = {
   changed: 'agentConfig:changed'
 } as const
 
+// Global agent alert wiring (the hand-typed-launch gap): the same bell config the launch
+// carries session-scoped, written into each CLI's own global config on an EXPLICIT action —
+// the generated notify script (and the OpenCode plugin wrapping it) no-op outside a pane,
+// which is what makes global wiring safe everywhere else.
+export const AgentHookChannels = {
+  status: 'agentHooks:status', // -> GlobalHooksStatus (one row per provider: state + files + reason)
+  apply: 'agentHooks:apply', // ({ provider }) -> GlobalHooksMutationResult (backup + atomic write, refuses concurrent edits and conflicts)
+  remove: 'agentHooks:remove' // ({ provider }) -> GlobalHooksMutationResult (strips OUR entries only; memo-restored booleans)
+} as const
+
 export const TemplateChannels = {
   list: 'templates:list', // -> ProviderMixTemplate[] (presets + custom)
   resolve: 'templates:resolve', // (ProviderCount[]) -> ResolvedLayout
@@ -365,6 +375,7 @@ export const ConnectionsChannels = {
 } as const
 
 export const AllChannels: readonly string[] = [
+  ...Object.values(AgentHookChannels),
   ...Object.values(IntegrationsChannels),
   ...Object.values(ConnectionsChannels),
   ...Object.values(UsageChannels),

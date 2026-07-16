@@ -136,6 +136,18 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
       session.subscribe(sub)
     }
 
+    /** Does the sender hold pane `from`'s own MOGGING_PANE_TOKEN? The same binding
+     *  `approve` and `cwd-report` already demand, applied to every verb that ACTS AS a
+     *  pane: ids are public and the endpoint file is readable by every pane, so a bare
+     *  `from` is a claim, not a fact. Emits the refusal itself; callers just break. */
+    function boundToPane(verb: string, from: string, token: unknown): boolean {
+      const pane = sessions.get(from)
+      if (pane && typeof token === 'string' && token && token === pane.paneToken) return true
+      log(`${verb} REFUSED: sender is not bound to pane ${from}`)
+      send({ t: 'error', reason: 'badpaneauth' })
+      return false
+    }
+
     function handle(m: ClientMessage): void {
       switch (m.t) {
         case 'spawn': {
@@ -273,8 +285,14 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
         // ── Swarm mailbox + roles (Phase-4/01). Mail bodies are user/agent content:
         // they live in the in-memory ring only and go back to REQUESTING clients only
         // — never into a PTY, a log, telemetry, or disk. ──────────────────────────
+        //
+        // PANE senders prove themselves (see boundToPane): `from` alone let any agent
+        // mail the swarm AS the reviewer. The '0' (human, outside any pane) sender has
+        // no token and stays open — the boundary here is inter-AGENT trust, and any
+        // client on this authed socket already speaks for the machine's user.
         case 'mail-send': {
           const from = typeof m.from === 'string' && m.from ? m.from : '0'
+          if (from !== '0' && !boundToPane('mail-send', from, m.token)) break
           const to = typeof m.to === 'string' && m.to ? m.to : 'all'
           const id = typeof m.body === 'string' ? sessions.mailbox.send(from, to, m.body) : null
           if (id != null) send({ t: 'mailed', id })
@@ -296,11 +314,15 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           break
         }
         // ── Ownership ledger (Phase-4/02): claim / release / owners ──────────────
+        // Both mutating verbs are pane-bound (boundToPane): territory is exactly the
+        // thing one agent must not be able to shed or seize wearing another's id —
+        // a forged `release --all` silently dissolved a sibling's claims.
         case 'claim': {
           if (typeof m.from !== 'string' || !m.from || !sessions.has(m.from)) {
             send({ t: 'error', reason: 'nopane' })
             break
           }
+          if (!boundToPane('claim', m.from, m.token)) break
           const res = sessions.ledger.claim(m.from, m.pattern, sessions.mailbox.roleOf(m.from))
           if (res.ok) send({ t: 'claimed', id: res.id })
           else if (res.reason === 'denied') {
@@ -311,10 +333,11 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           break
         }
         case 'release': {
-          if (typeof m.from !== 'string' || !m.from) {
+          if (typeof m.from !== 'string' || !m.from || !sessions.has(m.from)) {
             send({ t: 'error', reason: 'nopane' })
             break
           }
+          if (!boundToPane('release', m.from, m.token)) break
           send({ t: 'released', count: sessions.ledger.release(m.from, m.pattern, m.all === true) })
           break
         }

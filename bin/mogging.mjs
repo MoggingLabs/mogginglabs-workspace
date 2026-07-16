@@ -13,10 +13,10 @@
 // nothing listens on TCP). Control verbs carry labels/names/bytes-to-type only; `capture`
 // output goes to YOUR stdout and nowhere else.
 import { execFileSync, spawn } from 'node:child_process'
-import { resolve, join } from 'node:path'
+import { resolve } from 'node:path'
 import { closeSync, openSync, readFileSync, realpathSync, statSync, writeSync } from 'node:fs'
-import { homedir } from 'node:os'
 import net from 'node:net'
+import { runFile } from './lib/runtime-paths.mjs'
 
 // Keep in sync with DAEMON_PROTOCOL_VERSION in src/contracts/daemon/protocol.ts
 // (this file is plain Node — it cannot import the TS contract). It is BOTH the handshake
@@ -99,11 +99,7 @@ function runUsage(args) {
 }
 
 function appEndpointFilePath() {
-  const base =
-    process.platform === 'win32'
-      ? process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
-      : process.env.XDG_RUNTIME_DIR || join(homedir(), 'Library', 'Application Support')
-  return join(base, 'MoggingLabs', 'run', RUN_SEGMENT, 'browser-control.json')
+  return runFile(RUN_SEGMENT, 'browser-control.json')
 }
 
 /** An authed session against the APP endpoint (promise-based calls, so a
@@ -450,13 +446,26 @@ function paneIdentityOrUsage() {
   return id
 }
 
+/** The pane's own session secret — what proves a pane-bound verb (mail/claim/release,
+ *  like approve before them) really runs inside the pane it names. The daemon injects
+ *  it beside MOGGING_PANE_ID; an id without its token is a stale environment. */
+function paneTokenOrUsage() {
+  const token = process.env.MOGGING_PANE_TOKEN
+  if (!token) {
+    process.stderr.write('mogging: pane credential missing — run this inside a live MoggingLabs pane\n')
+    process.exit(2)
+  }
+  return token
+}
+
 function runClaim(args) {
   const pattern = args[0]
   if (!pattern) usage(2)
   const from = paneIdentityOrUsage()
+  const token = paneTokenOrUsage()
   withDaemon(
     (welcome, api) => {
-      api.send({ t: 'claim', pattern, from })
+      api.send({ t: 'claim', pattern, from, token })
     },
     (m, api) => {
       if (m.t === 'claimed') {
@@ -480,9 +489,10 @@ function runRelease(args) {
   const pattern = args.find((a) => a !== '--all')
   if (!all && !pattern) usage(2)
   const from = paneIdentityOrUsage()
+  const token = paneTokenOrUsage()
   withDaemon(
     (welcome, api) => {
-      api.send({ t: 'release', pattern, all, from })
+      api.send({ t: 'release', pattern, all, from, token })
     },
     (m, api) => {
       if (m.t === 'released') {
@@ -540,10 +550,13 @@ function runMailSend(args) {
   }
   const body = args.join(' ')
   if (!body) usage(2)
+  // Inside a pane, mail is sent AS that pane and must carry its token (the daemon
+  // refuses an unbound pane sender). Outside one, '0' is the human — no token exists.
   const from = process.env.MOGGING_PANE_ID || '0'
+  const token = from === '0' ? undefined : paneTokenOrUsage()
   withDaemon(
     (welcome, api) => {
-      api.send({ t: 'mail-send', from, to: String(to), body })
+      api.send({ t: 'mail-send', from, to: String(to), body, token })
     },
     (m, api) => {
       if (m.t === 'mailed') {
@@ -713,11 +726,7 @@ function runOpen(args) {
  *  well-known per-user runtime path (mirrors src/pty-daemon/lifecycle.ts). */
 function endpointFilePath() {
   if (process.env.MOGGING_DAEMON_ENDPOINT) return process.env.MOGGING_DAEMON_ENDPOINT
-  const base =
-    process.platform === 'win32'
-      ? process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
-      : process.env.XDG_RUNTIME_DIR || join(homedir(), 'Library', 'Application Support')
-  return join(base, 'MoggingLabs', 'run', RUN_SEGMENT, 'endpoint.json')
+  return runFile(RUN_SEGMENT, 'endpoint.json')
 }
 
 function readEndpoint() {

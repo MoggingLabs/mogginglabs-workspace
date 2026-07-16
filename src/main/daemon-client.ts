@@ -4,12 +4,12 @@
 // the SAME running daemon (survival). Electron-free itself — no electron imports here.
 import * as net from 'node:net'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import { spawn } from 'node:child_process'
-import { createLineFramer, encodeMessage, DAEMON_PROTOCOL_VERSION, channelFromEnv, runtimeSegment } from '@contracts'
+import { createLineFramer, encodeMessage, DAEMON_PROTOCOL_VERSION } from '@contracts'
 import { buildStampOf } from '@backend/platform/build-stamp'
 import { isAlive, pipeAlive } from '@backend/platform/pid'
+import { runtimeDir as sharedRuntimeDir } from '@backend/platform/runtime-paths'
 import type {
   Approval,
   Claim,
@@ -24,17 +24,13 @@ import type {
   PaneCwdSource
 } from '@contracts'
 
-// --- endpoint discovery paths (MUST match src/pty-daemon/lifecycle.ts) ---
-// runtimeSegment(channelFromEnv()): dev and installed releases never share a daemon, even at the
-// same protocol version. The spawned daemon inherits MOGGING_CHANNEL, so it derives the SAME dir.
-// Exported for daemon-migrate.ts, which scans SIBLING version dirs under the same root.
-export function runtimeDir(): string {
-  const base =
-    process.platform === 'win32'
-      ? process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
-      : process.env.XDG_RUNTIME_DIR || path.join(os.homedir(), 'Library', 'Application Support')
-  return path.join(base, 'MoggingLabs', 'run', runtimeSegment(channelFromEnv()))
-}
+// --- endpoint discovery paths ---
+// THE derivation is shared with the daemon (@backend/platform/runtime-paths): dev and
+// installed releases never share a daemon even at the same protocol version, because the
+// spawned daemon inherits MOGGING_CHANNEL and derives the SAME dir from the SAME helper.
+// Re-exported (read-only — no mkdir) for daemon-migrate/daemon-sweep/cli-runtime/mcp-endpoint,
+// which scan or create SIBLING dirs under this root.
+export const runtimeDir = sharedRuntimeDir
 const endpointPath = (): string => path.join(runtimeDir(), 'endpoint.json')
 const daemonSpawnLogPath = (): string => path.join(runtimeDir(), 'daemon.log')
 const clientLogPath = (): string => path.join(runtimeDir(), 'client.log')
@@ -692,8 +688,20 @@ export class DaemonClient {
   }
   dispose(): void {
     this.stopHeartbeat()
+    // Settle EVERY pending waiter now, not just the role ones. Each class of waiter has
+    // its own timeout so nothing leaked, but a disposed client whose spawn callers sat
+    // out a 5s timer while the role callers answered instantly was two teardown stories
+    // where one suffices — and a caller told "false/[]/rejected" immediately can react
+    // (the relay's reconnect replay) instead of stalling on a socket that is gone.
     for (const waiters of this.roleWaiters.values()) for (const done of waiters) done(false)
     this.roleWaiters.clear()
+    for (const waiters of this.spawnWaiters.values()) {
+      for (const waiter of waiters) waiter.reject(new Error('daemon client disposed'))
+    }
+    this.spawnWaiters.clear()
+    for (const finish of this.approvalWaiters.splice(0)) finish([])
+    for (const done of this.paneVerifyWaiters.values()) done(false)
+    this.paneVerifyWaiters.clear()
     this.sock?.destroy()
     this.sock = null
   }

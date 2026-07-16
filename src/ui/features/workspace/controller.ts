@@ -1,4 +1,4 @@
-import { GitChannels, TerminalChannels, WorktreeChannels } from '@contracts'
+import { formulaPaneId, GitChannels, TerminalChannels, WorktreeChannels } from '@contracts'
 import type { AgentState, CreateWorktreeResult, PaneId, RemoveWorktreeResult } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { GridLayout, MAX_PANES, parseTree, leafIds, type LayoutTreeNode } from '../layout'
@@ -284,7 +284,7 @@ export class WorkspaceController {
     const layout = new GridLayout(
       container,
       meta.id,
-      ordinal * 100,
+      formulaPaneId(ordinal, 0), // the workspace's pane-id base (slot ids are 1-based on top)
       (paneId) =>
         // The pane's OWN cwd (worktree isolation, 3/03; OSC-7 refined), not the workspace
         // root: "launch in focused pane" and "review focused pane" act on this value, and

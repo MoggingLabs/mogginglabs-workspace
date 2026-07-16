@@ -1,10 +1,14 @@
 import {
   AgentChannels,
   AgentConfigChannels,
+  AgentHookChannels,
   type AgentConfigProviderSummary,
   type AgentInfo,
   type AgentInstallStart,
-  type AgentInstallState
+  type AgentInstallState,
+  type GlobalHooksMutationResult,
+  type GlobalHooksProviderStatus,
+  type GlobalHooksStatus
 } from '@contracts'
 import { Button, Card, EmptyState, Pill, SectionHeader, Spinner, el, loadingRow, providerLogo, showToast } from '../../components'
 import { createAsyncGuard } from '../../core/async/async-state'
@@ -21,6 +25,100 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
   const installs = new Map<string, AgentInstallState>()
   const logs = new Map<string, HTMLElement>()
   const list = el('div', { class: 'prov-list' })
+
+  // ── Global session alerts: the hand-typed-launch gap, all four CLIs ──────────────────
+  // An app-launched agent rings its pane through session-scoped bell config (claude's
+  // --settings overlay, codex -c flags, the gemini/opencode env-pointed files); an agent
+  // TYPED at a pane's own prompt carries none of it, so its pane never rings (found live
+  // 2026-07-16: a hand-typed claude worked a 15-minute turn wearing a resting dot). Wiring
+  // the same config into each CLI's own global files closes that: the notify script (and
+  // OpenCode's plugin around it) no-op outside a MoggingLabs pane. Explicit action + backup
+  // + atomic write, same as every user-owned config we touch; a CONFLICT (the user's own
+  // codex `notify`, a differing tui value) shows its reason instead of an Apply button.
+  const hooksList = el('div', { class: 'prov-list' })
+  let hooksStatus: GlobalHooksStatus | null = null
+  const HOOKS_LABEL: Record<GlobalHooksProviderStatus['provider'], string> = {
+    claude: 'Claude Code',
+    codex: 'Codex',
+    gemini: 'Gemini',
+    opencode: 'OpenCode'
+  }
+  const HOOKS_PILL: Record<GlobalHooksProviderStatus['state'], { text: string; tone: 'success' | 'neutral' | 'warning' | 'danger' }> = {
+    applied: { text: '✓ wired', tone: 'success' },
+    partial: { text: 'stale', tone: 'warning' },
+    'not-applied': { text: 'not wired', tone: 'neutral' },
+    conflict: { text: 'their config', tone: 'warning' },
+    unreadable: { text: 'unreadable', tone: 'danger' }
+  }
+  const hooksAct = (channel: string, provider: GlobalHooksProviderStatus['provider'], done: string): void => {
+    void (invoke(channel, { provider }) as Promise<GlobalHooksMutationResult>).then(async (result) => {
+      if (result?.ok) showToast({ title: done, body: result.backups?.length ? `Backup: ${result.backups.join(' · ')}` : undefined, tone: 'success' })
+      else showToast({ title: 'Nothing was written', body: result?.reason, tone: 'danger' })
+      await refreshHooks()
+    })
+  }
+  const hooksRow = (row: GlobalHooksProviderStatus): HTMLElement => {
+    const label = HOOKS_LABEL[row.provider]
+    const actions = el('div', { class: 'prov-actions' })
+    if (row.state === 'not-applied' || row.state === 'partial') {
+      actions.append(Button({
+        label: row.state === 'partial' ? 'Re-apply' : 'Wire alerts',
+        icon: 'bell',
+        size: 'sm',
+        onClick: () => hooksAct(AgentHookChannels.apply, row.provider, `${label} alerts wired globally`)
+      }))
+    }
+    if (row.state === 'applied' || row.state === 'partial') {
+      actions.append(Button({
+        label: 'Remove',
+        variant: 'ghost',
+        size: 'sm',
+        onClick: () => hooksAct(AgentHookChannels.remove, row.provider, `${label} alert wiring removed`)
+      }))
+    }
+    const note =
+      row.state === 'conflict' || row.state === 'unreadable'
+        ? `${row.reason ?? 'not writable'} — ${row.files.join(' · ')}`
+        : row.files.join(' · ')
+    return el('div', { class: 'prov-item', dataset: { hooksProvider: row.provider } }, [
+      el('div', { class: 'prov-row prov-row--static' }, [
+        el('div', { class: 'prov-row-main' }, [
+          el('div', { class: 'prov-row-head' }, [
+            el('span', { class: 'prov-name', text: `${label} · global alerts` }),
+            Pill(HOOKS_PILL[row.state])
+          ]),
+          el('div', { class: 'settings-row-caption', text: note })
+        ]),
+        actions
+      ])
+    ])
+  }
+  const renderHooks = (): void => {
+    if (!hooksStatus) {
+      hooksList.replaceChildren(el('div', { class: 'settings-row-caption' }, [Spinner()]))
+      return
+    }
+    hooksList.replaceChildren(...hooksStatus.map(hooksRow))
+  }
+  const refreshHooks = async (): Promise<void> => {
+    try {
+      hooksStatus = (await invoke(AgentHookChannels.status)) as GlobalHooksStatus
+    } catch {
+      hooksStatus = null
+    }
+    renderHooks()
+  }
+  const hooksCard = Card(
+    {
+      header: SectionHeader({
+        title: 'Hand-typed session alerts',
+        caption:
+          'An agent launched from the app rings its pane through session-scoped config. Wire the same alerts into each CLI’s own global config so an agent you type at a pane’s own prompt rings too. Outside a pane the wiring is a silent no-op.'
+      })
+    },
+    [hooksList]
+  )
+
   const landing = el('div', { class: 'prov-landing' }, [
     Card(
       {
@@ -31,7 +129,8 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
         })
       },
       [list]
-    )
+    ),
+    hooksCard
   ])
   const config = createAgentConfigWorkspace(() => {
     config.el.hidden = true
@@ -154,6 +253,7 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
   >()
 
   async function refresh(): Promise<void> {
+    void refreshHooks() // independent read; never gates the CLI roster
     await detectGuard.run(
       () =>
         Promise.all([

@@ -70,4 +70,35 @@ export interface AgentCommandResult {
   command?: string
   /** Honest launch refusal (unknown agent, missing remote, or scoped-plan conflict). */
   reason?: string
+  /** Local launches only: the profile declares an email but its config home
+   *  disagrees — nobody signed in yet (no `actual`), or a different account
+   *  (`actual` names it). The profile email is a label the app cannot enforce
+   *  (the CLI's own OAuth picks whatever the browser session offers), so the
+   *  facts surface at the moment they bite. Never blocks the launch. */
+  signIn?: { expected: string; actual?: string }
+}
+
+/** Global agent alert wiring (AgentHookChannels) — the hand-typed-launch gap, per CLI. */
+export type GlobalHookProvider = 'claude' | 'codex' | 'gemini' | 'opencode'
+
+export interface GlobalHooksProviderStatus {
+  provider: GlobalHookProvider
+  /** 'applied' = every entry current; 'partial' = ours present but stale or incomplete
+   *  (Re-apply); 'conflict' = the user's OWN config occupies a slot we would need (codex's one
+   *  `notify`, a differing tui value) — writes refuse and `reason` names the line;
+   *  'unreadable' = a file we will not faithfully rewrite (JSONC comments, junk). */
+  state: 'applied' | 'partial' | 'not-applied' | 'conflict' | 'unreadable'
+  /** The user-owned config file(s) the state was read from. */
+  files: string[]
+  reason?: string
+}
+
+/** `agentHooks:status` answers one row per provider, in catalog order. */
+export type GlobalHooksStatus = GlobalHooksProviderStatus[]
+
+export interface GlobalHooksMutationResult {
+  ok: boolean
+  reason?: string
+  /** Timestamped copies of the bytes replaced, when writes happened over existing content. */
+  backups?: string[]
 }

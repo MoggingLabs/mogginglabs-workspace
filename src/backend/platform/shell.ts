@@ -1,6 +1,7 @@
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join } from 'node:path'
+import { isAlive } from './pid'
 
 /** The user's login shell, so their profile + PATH load (agent CLIs need it).
  *  Windows resolves COMSPEC first — `cmd.exe` on a stock install, which is the story
@@ -42,13 +43,43 @@ function writePrivate(file: string, contents: string): void {
   if (process.platform !== 'win32') chmodSync(file, 0o600)
 }
 
+/** Parents whose stale sibling dirs this process has already swept (once is enough). */
+const sweptIntegrationParents = new Set<string>()
+
+/** Remove `.shell-integration/<pid>` dirs whose owning process is gone. Each PTY host
+ *  (main's in-proc backend, every daemon generation) creates one dir per pid and nothing
+ *  ever deleted them — rc files and zdot trees accumulated for every daemon that ever
+ *  ran. A LIVE pid's dir is never touched (isAlive errs toward keeping, same stance as
+ *  the run-root janitor); a locked file just leaves the rest for a later process. */
+function sweepStaleIntegrationDirs(parent: string): void {
+  if (sweptIntegrationParents.has(parent)) return
+  sweptIntegrationParents.add(parent)
+  let names: string[]
+  try {
+    names = readdirSync(parent)
+  } catch {
+    return // first pid dir ever — nothing to sweep
+  }
+  for (const name of names) {
+    const pid = Number(name)
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid || isAlive(pid)) continue
+    try {
+      rmSync(join(parent, name), { recursive: true, force: true, maxRetries: 2, retryDelay: 50 })
+    } catch {
+      /* locked — a later host finishes the job */
+    }
+  }
+}
+
 function integrationDir(env: NodeJS.ProcessEnv): { root: string; bin: string } | null {
   const cli = env.MOGGING_CLI
   if (!cli || !isAbsolute(cli)) return null
   const bin = dirname(cli)
-  const root = join(bin, '.shell-integration', String(process.pid))
+  const parent = join(bin, '.shell-integration')
+  const root = join(parent, String(process.pid))
   mkdirSync(root, { recursive: true, mode: 0o700 })
   if (process.platform !== 'win32') chmodSync(root, 0o700)
+  sweepStaleIntegrationDirs(parent)
   return { root, bin }
 }
 

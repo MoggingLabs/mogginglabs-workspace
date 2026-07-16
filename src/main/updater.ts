@@ -20,6 +20,18 @@ import { updateDriver } from './fixture-port'
 
 let getWin: (() => BrowserWindow | null) | null = null
 
+/**
+ * Every check goes through here, and the `.catch` is load-bearing: `checkForUpdates()`
+ * REJECTS as well as emitting 'error' — a packaged build with no app-update.yml (any
+ * dir-target build) rejects at boot, and an unabsorbed rejection lands in fatal.ts's
+ * unhandledRejection handler, which is `app.exit(1)`: the app died on launch for a
+ * missing FEED. The 'error' listener below already reports the failure (state push +
+ * telemetry + updater.log), so the rejection itself carries no new information.
+ */
+function checkForUpdatesSafely(): void {
+  autoUpdater.checkForUpdates().catch(() => undefined)
+}
+
 // The last state pushed, so a late subscriber (the settings pane, mounted long after boot)
 // can be told where things stand instead of showing a blank row until the next 6-hour tick.
 let last: UpdateState = { phase: 'idle' }
@@ -115,7 +127,7 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
     applyPrefs(next)
     // Switching channel changes what "latest" means, so re-ask immediately rather than
     // leaving the user staring at a stale answer until the next six-hour tick.
-    void autoUpdater.checkForUpdates()
+    checkForUpdatesSafely()
   })
 
   // ── THE PRE-INSTALL RETIRE ────────────────────────────────────────────────────────────
@@ -201,7 +213,7 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
       return
     }
     if (!app.isPackaged || fake) return
-    void autoUpdater.checkForUpdates()
+    checkForUpdatesSafely()
   })
 
   // Dev/smoke driver: replay the whole lifecycle to the renderer, no network.
@@ -263,7 +275,7 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
   // checkForUpdates, NOT checkForUpdatesAndNotify: the latter fires a native OS notification
   // we cannot time, word, or hang "Restart now / Later" off — and it would now say the same
   // thing as the rail row, twice, in someone else's voice.
-  void autoUpdater.checkForUpdates()
+  checkForUpdatesSafely()
   // Re-check periodically for long-running sessions.
-  setInterval(() => void autoUpdater.checkForUpdates(), 6 * 60 * 60 * 1000)
+  setInterval(checkForUpdatesSafely, 6 * 60 * 60 * 1000)
 }
