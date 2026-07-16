@@ -104,6 +104,27 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
         bootLock.tooltipsReachable &&
         bootLock.noBlockedCursor
 
+      // Hover on locked chrome must be VISUALLY DEAD (operator direction: even an
+      // opacity lift read as highlighting). Synthetic events cannot flip CSS :hover,
+      // so park the REAL input cursor on the locked rail toggle and prove that
+      // nothing about it changes — then park it away again.
+      const styleProbe = `(() => {
+        const s = getComputedStyle(document.querySelector('#titlebar .rail-toggle'))
+        return { o: s.opacity, b: s.backgroundColor, c: s.color }
+      })()`
+      const restStyle = await ES<{ o: string; b: string; c: string }>(styleProbe)
+      const hoverAt = await ES<{ x: number; y: number }>(`(() => {
+        const r = document.querySelector('#titlebar .rail-toggle').getBoundingClientRect()
+        return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
+      })()`)
+      wc.sendInputEvent({ type: 'mouseMove', x: hoverAt.x, y: hoverAt.y })
+      await sleep(300)
+      const hoverStyle = await ES<{ o: string; b: string; c: string }>(styleProbe)
+      wc.sendInputEvent({ type: 'mouseMove', x: 4, y: 400 }) // leave no hover behind
+      await sleep(150)
+      const hoverDeadOk =
+        restStyle.o === hoverStyle.o && restStyle.b === hoverStyle.b && restStyle.c === hoverStyle.c
+
       // (b) the checklist is detection-honest, in BOTH directions.
       type Agent = { id: string; name: string; installed: boolean; installHint?: string }
       const agents = await ES<Agent[]>(`window.bridge.invoke('agents:detect')`)
@@ -316,11 +337,15 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
         dismissOk &&
         wizardOk &&
         bootLockOk &&
+        hoverDeadOk &&
         lockdownOk
       result = {
         pass,
         bootLockOk,
         bootLock,
+        hoverDeadOk,
+        restStyle,
+        hoverStyle,
         lockdownOk,
         awake,
         homeReturned,

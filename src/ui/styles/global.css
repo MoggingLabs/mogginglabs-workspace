@@ -544,24 +544,21 @@ textarea {
    it is off became unreachable. A disabled button already ignores clicks; the
    tooltip is load-bearing and must survive (HOMEUX pins pointer-events ≠ none).
 
-   On hover: the PLAIN cursor (the ⃠ blocked cursor read as ugly and scolding —
-   operator direction 2026-07-17; native Windows uses the arrow over disabled
-   controls too) and a small opacity lift — the button acknowledges the pointer
-   and offers its tooltip, without lighting up like something that can act.
-   HOMEUX pins the cursor as well: not-allowed must not creep back. */
+   On hover: NOTHING, visually (operator direction 2026-07-17). The plain arrow
+   cursor (the ⃠ blocked cursor read as scolding), and the hover state is
+   pixel-identical to rest — no lift, no light, no fade (an earlier opacity nudge
+   still read as highlighting). The native tooltip is the whole response. The
+   rule below exists only to CANCEL the shared .icon-btn:hover styling; HOMEUX
+   parks the real cursor on a locked toggle and proves rest === hover. */
 .icon-btn:disabled {
   color: var(--text-low);
   opacity: 0.45;
   cursor: default;
-  transition:
-    opacity var(--dur-1) var(--ease),
-    background var(--dur-1) var(--ease),
-    color var(--dur-1) var(--ease);
 }
 .icon-btn:disabled:hover {
-  background: transparent; /* hover must not light a control that cannot act… */
+  background: transparent;
   color: var(--text-low);
-  opacity: 0.65; /* …but it may say "I heard you" while the tooltip explains */
+  opacity: 0.45;
 }
 .icon-btn:hover {
   background: var(--accent-weak);
