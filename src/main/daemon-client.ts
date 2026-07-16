@@ -511,8 +511,20 @@ export class DaemonClient {
     }
   }
   dispose(): void {
+    // Settle EVERY pending waiter now, not just the role ones. Each class of waiter has
+    // its own timeout so nothing leaked, but a disposed client whose spawn callers sat
+    // out a 5s timer while the role callers answered instantly was two teardown stories
+    // where one suffices — and a caller told "false/[]/rejected" immediately can react
+    // (the relay's reconnect replay) instead of stalling on a socket that is gone.
     for (const waiters of this.roleWaiters.values()) for (const done of waiters) done(false)
     this.roleWaiters.clear()
+    for (const waiters of this.spawnWaiters.values()) {
+      for (const waiter of waiters) waiter.reject(new Error('daemon client disposed'))
+    }
+    this.spawnWaiters.clear()
+    for (const finish of this.approvalWaiters.splice(0)) finish([])
+    for (const done of this.paneVerifyWaiters.values()) done(false)
+    this.paneVerifyWaiters.clear()
     this.sock?.destroy()
     this.sock = null
   }

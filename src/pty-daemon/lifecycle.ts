@@ -12,6 +12,13 @@ export { isAlive, pipeAlive } from '@backend/platform/pid'
 
 const APP = 'MoggingLabs'
 
+/** Dirs this process has already created + tightened. runtimeDir() sits under every
+ *  logPath()/endpointPath() call, so an unmemoized ensure paid two syscalls per LOG LINE;
+ *  the dir's existence and mode are settled once. (Keyed by path, not a boolean: the
+ *  channel env is constant for a process's life, but a fixture that swaps LOCALAPPDATA
+ *  between calls must still get each dir ensured.) */
+const ensuredDirs = new Set<string>()
+
 /** Per-user, per-protocol-version, per-CHANNEL runtime dir. Version namespacing means app
  *  updates never collide on socket/lock/endpoint (ADR 0006 anti-kill-server); the channel
  *  segment (run/v4 vs run/dev-v4) means a repo checkout never collides with an installed
@@ -23,13 +30,16 @@ export function runtimeDir(): string {
       ? process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
       : process.env.XDG_RUNTIME_DIR || path.join(os.homedir(), 'Library', 'Application Support')
   const dir = path.join(base, APP, 'run', runtimeSegment(channelFromEnv()))
-  fs.mkdirSync(dir, { recursive: true })
-  if (process.platform !== 'win32') {
-    try {
-      fs.chmodSync(dir, 0o700)
-    } catch {
-      /* best effort */
+  if (!ensuredDirs.has(dir)) {
+    fs.mkdirSync(dir, { recursive: true })
+    if (process.platform !== 'win32') {
+      try {
+        fs.chmodSync(dir, 0o700)
+      } catch {
+        /* best effort */
+      }
     }
+    ensuredDirs.add(dir)
   }
   return dir
 }

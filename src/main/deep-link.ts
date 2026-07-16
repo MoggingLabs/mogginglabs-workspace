@@ -1,5 +1,6 @@
 import { app, type BrowserWindow } from 'electron'
 import {
+  CONTROL_COLD_START_DELAY_MS,
   CONTROL_EXPAND_MODES,
   CONTROL_VERBS,
   ControlChannels,
@@ -109,9 +110,9 @@ function deliver(ensureWindow: () => BrowserWindow, url: string): void {
   }
   if (!win.webContents.isLoading()) send()
   // A window we had to CREATE is a cold start: wait for the renderer, and give restore the same
-  // beat index.ts gives a cold-start control verb — `open` must land after the restored
+  // beat boot.ts gives a cold-start control verb — `open` must land after the restored
   // workspaces re-attach, not before them.
-  else win.webContents.once('did-finish-load', () => (control ? setTimeout(send, 800) : send()))
+  else win.webContents.once('did-finish-load', () => (control ? setTimeout(send, CONTROL_COLD_START_DELAY_MS) : send()))
 }
 
 // Deliveries that arrived before the window existed. The lock is taken at module scope but the
