@@ -1,0 +1,187 @@
+import { app, BrowserWindow } from 'electron'
+import { createServer, type Server } from 'node:http'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { BrowserChannels, DEFAULT_SEARCH_TEMPLATE } from '@contracts'
+
+// Env-gated browser-CHROME smoke (MOGGING_BROWSERUX, Wave 3): the renderer-side
+// "feels like Comet" surface, driven through the dock's own controls.
+//   1. Omnibox (F3): a scheme-less host navigates (http for a dev server); a query
+//      resolves to the search engine; github.com resolves https.
+//   2. Header truth (F13): an http page shows the "not secure" indicator; a favicon
+//      is captured; Reload becomes Stop while loading.
+//   3. Find in page (F5): the bar opens, a query reports match counts.
+//   4. Zoom (F6): Ctrl+= grows the page, Ctrl+0 resets — persisted per workspace.
+//   5. Load error (F10): a dead address shows the error overlay, not a blank frame.
+//   6. Context menu (F7): main's forwarded right-click draws the house menu.
+//   7. Shortcut relay (F12): a chord pressed "in the guest" toggles the dock.
+// Served locally on 127.0.0.1 — no external network, ever.
+
+const FAVICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMCAX9ttrJ7AAAAAElFTkSuQmCC'
+
+export function runBrowserUxSmoke(win: BrowserWindow): void {
+  setTimeout(() => app.exit(1), 120000)
+  win.setSize(1200, 800)
+  const wc = win.webContents
+  const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+  let server: Server | null = null
+
+  const emit = (o: object): void => {
+    try {
+      writeFileSync(join(app.getAppPath(), 'out', 'browserux-result.json'), JSON.stringify(o, null, 2))
+    } catch {
+      /* best effort */
+    }
+  }
+
+  const serve = (): Promise<number> =>
+    new Promise((resolve) => {
+      server = createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/html' })
+        // A page with a favicon and lots of a findable word.
+        res.end(
+          `<!doctype html><title>UX</title><link rel="icon" href="${FAVICON}">` +
+            `<body>${'<p>MATCHWORD here</p>'.repeat(6)}</body>`
+        )
+      })
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server?.address()
+        resolve(typeof addr === 'object' && addr ? addr.port : 0)
+      })
+    })
+
+  const B = 'window.__mogging.browser'
+
+  const run = async (): Promise<void> => {
+    let result: Record<string, unknown> = { pass: false }
+    try {
+      await sleep(1500)
+      const port = await serve()
+      await ES(`window.__mogging.workspace.create({ name: 'UX' })`)
+      await sleep(1500)
+      await ES(`${B}.toggle(true)`)
+      await sleep(500)
+
+      // ── 1. Omnibox resolution (pure, no network) ─────────────────────────
+      const searchResolved = await ES<string | null>(`${B}.omniboxResolve('hello world')`)
+      const httpsResolved = await ES<string | null>(`${B}.omniboxResolve('github.com')`)
+      const localResolved = await ES<string | null>(`${B}.omniboxResolve('127.0.0.1:${port}')`)
+      const omniboxOk =
+        searchResolved === DEFAULT_SEARCH_TEMPLATE.replace('%s', encodeURIComponent('hello world')) &&
+        httpsResolved === 'https://github.com/' &&
+        localResolved === `http://127.0.0.1:${port}/`
+
+      // Omnibox WIRING: submit a bare host → it navigates the guest.
+      await ES(`${B}.omniboxSubmit('127.0.0.1:${port}')`)
+      let navigated = false
+      for (let i = 0; i < 30 && !navigated; i++) {
+        await sleep(400)
+        navigated = (await ES<{ url: string }>(`${B}.state()`)).url.includes(`127.0.0.1:${port}`)
+      }
+
+      // ── 2. Header truth ──────────────────────────────────────────────────
+      const leadClass = await ES<string>(`${B}.urlLeadClass()`)
+      const insecureShown = leadClass.includes('is-insecure') // http page
+      let faviconCaptured = false
+      for (let i = 0; i < 15 && !faviconCaptured; i++) {
+        await sleep(300)
+        faviconCaptured = !!(await ES<string | null>(`${B}.faviconCaptured()`))
+      }
+
+      // ── 3. Find in page ──────────────────────────────────────────────────
+      await sleep(600) // let the page settle so the first find has content to match
+      const hasGuest = await ES<boolean>(`${B}.hasActiveGuest()`)
+      await ES(`${B}.openFind()`)
+      const findVisible = await ES<boolean>(`${B}.findVisible()`)
+      const findReqId = await ES<number>(`${B}.findRaw('MATCHWORD')`) // proves the guest method runs
+      await ES(`${B}.findType('MATCHWORD')`)
+      let findCount = ''
+      for (let i = 0; i < 24 && !/\d/.test(findCount); i++) {
+        await sleep(250)
+        findCount = await ES<string>(`${B}.findCountText()`)
+      }
+      const findOk = findVisible && findReqId > 0 && /\/\s*[1-9]/.test(findCount.replace(/\s/g, '')) // "n/m", m>=1
+      await ES(`${B}.closeFind()`)
+
+      // ── 4. Zoom ──────────────────────────────────────────────────────────
+      const zoom0 = await ES<number>(`${B}.zoomFactor()`)
+      await ES(`${B}.bumpZoom(1)`)
+      await sleep(200)
+      const zoom1 = await ES<number>(`${B}.zoomFactor()`)
+      await ES(`${B}.bumpZoom('reset')`)
+      await sleep(200)
+      const zoom2 = await ES<number>(`${B}.zoomFactor()`)
+      const zoomOk = zoom1 > zoom0 + 0.05 && Math.abs(zoom2 - 1) < 0.02
+
+      // ── 5. Load error overlay ────────────────────────────────────────────
+      // Port 9 (discard) refuses fast → a main-frame load failure.
+      await ES(`${B}.navigate('http://127.0.0.1:9/')`)
+      let errorVisible = false
+      for (let i = 0; i < 25 && !errorVisible; i++) {
+        await sleep(300)
+        errorVisible = await ES<boolean>(`${B}.errorVisible()`)
+      }
+
+      // ── 6. Context menu (F7): main forwards a right-click ─────────────────
+      const wsId = (await ES<{ id: string }>('window.__mogging.workspace.active()')).id
+      win.webContents.send(BrowserChannels.contextMenu, {
+        workspaceId: wsId,
+        x: 40,
+        y: 40,
+        linkURL: 'https://example.com/',
+        srcURL: '',
+        selectionText: 'picked',
+        isEditable: false
+      })
+      await sleep(300)
+      const contextMenuOk = await ES<boolean>(`${B}.contextMenuOpen()`)
+      // Dismiss the menu so it can't eat the next events.
+      await ES(`document.body.click()`)
+
+      // ── 7. Shortcut relay (F12): a chord "in the guest" toggles the dock ──
+      const openBefore = await ES<boolean>(`${B}.isOpen()`)
+      win.webContents.send(BrowserChannels.guestChord, {
+        workspaceId: wsId,
+        code: 'KeyU',
+        key: 'u',
+        ctrl: true,
+        meta: false,
+        shift: true,
+        alt: false
+      })
+      await sleep(400)
+      const openAfter = await ES<boolean>(`${B}.isOpen()`)
+      const relayOk = openBefore === true && openAfter === false
+
+      const pass = omniboxOk && navigated && insecureShown && faviconCaptured && findOk && zoomOk && errorVisible && contextMenuOk && relayOk
+      result = {
+        pass,
+        omniboxOk,
+        resolved: { searchResolved, httpsResolved, localResolved },
+        navigated,
+        insecureShown,
+        leadClass,
+        faviconCaptured,
+        findOk,
+        findCount,
+        findDiag: { hasGuest, findVisible, findReqId },
+        zoomOk,
+        zoom: { zoom0, zoom1, zoom2 },
+        errorVisible,
+        contextMenuOk,
+        relayOk
+      }
+    } catch (e) {
+      result = { pass: false, error: String(e) }
+    }
+    server?.close()
+    emit(result)
+    app.exit(result.pass ? 0 : 1)
+  }
+
+  if (wc.isLoading()) wc.once('did-finish-load', () => setTimeout(() => void run(), 3000))
+  else setTimeout(() => void run(), 3000)
+}
+
+void BrowserWindow

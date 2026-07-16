@@ -203,6 +203,9 @@ export const BrowserChannels = {
   state: 'browser:state', // main -> renderer: BrowserDockState (header truth)
   lastUrl: 'browser:lastUrl', // (workspaceId) -> string | null ("open this workspace's preview" chip)
   openExternal: 'browser:openExternal', // ({ url }) -> void (http(s) only, system browser)
+  contextMenu: 'browser:contextMenu', // main -> renderer: BrowserContextMenuParams (right-click in the guest → the house menu)
+  guestChord: 'browser:guestChord', // main -> renderer: BrowserGuestChord (an app shortcut pressed while the guest holds focus, F12)
+  devtools: 'browser:devtools', // renderer -> main: { x?, y? } — open DevTools on the active guest (F8)
   // ── Agent control (6/05b) ──────────────────────────────────────────────
   consentGet: 'browser:consentGet', // (workspaceId) -> boolean (stored per-workspace grant; default OFF)
   consentSet: 'browser:consentSet', // ({ workspaceId, allowed }) -> void (Settings/wizard toggle writes it)

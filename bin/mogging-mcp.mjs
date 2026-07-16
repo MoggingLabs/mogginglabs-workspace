@@ -265,7 +265,7 @@ async function handleBrowserCall(id, def, args) {
     }
     // Shape the result as MCP text content (screenshots return the data URL).
     const payload = {}
-    for (const k of ['url', 'title', 'text', 'value', 'png']) if (r[k] !== undefined) payload[k] = r[k]
+    for (const k of ['url', 'title', 'text', 'value', 'png', 'truncated']) if (r[k] !== undefined) payload[k] = r[k]
     if (r.nodes) payload.nodes = r.nodes
     if (r.lines) payload.lines = r.lines
     toolText(id, Object.keys(payload).length ? JSON.stringify(payload) : 'ok')

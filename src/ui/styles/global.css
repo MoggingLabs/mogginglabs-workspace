@@ -6647,20 +6647,54 @@ body.pane-dragging * {
   height: 1px;
   background: color-mix(in srgb, var(--border) 55%, transparent);
 }
-.browser-url {
+/* The address bar: a box wrapping a leading indicator (favicon / lock / not-secure)
+   and the input, so the whole thing reads as one Comet-style omnibox. */
+.browser-url-wrap {
   flex: 1 1 auto;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
   height: 28px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--bg-inset);
+  padding: 0 var(--sp-2);
+}
+.browser-url-wrap:focus-within {
+  border-color: var(--accent);
+}
+.browser-url-lead {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--text-lo);
+}
+.browser-url-lead.is-secure {
+  color: var(--text-mid);
+}
+.browser-url-lead.is-insecure {
+  color: var(--warning);
+}
+.browser-favicon {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  object-fit: contain;
+}
+.browser-url {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
   color: var(--text-hi);
   font-size: var(--fs-12);
-  padding: 0 var(--sp-2);
+  padding: 0;
   outline: none;
-}
-.browser-url:focus {
-  border-color: var(--accent);
 }
 .browser-url::placeholder {
   color: var(--text-lo);
@@ -6754,17 +6788,116 @@ body.pane-dragging * {
   font-size: var(--fs-11);
   max-width: 32ch;
 }
+/* ── Load-error / crash overlay (F10): a dead page explains itself ─────────── */
+.browser-load-error {
+  position: absolute;
+  inset: 0;
+  z-index: 4; /* over the guest, like the empty state */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  background: var(--bg-app);
+  color: var(--text-lo);
+  text-align: center;
+}
+.browser-load-error[hidden] {
+  display: none;
+}
+.browser-load-error svg {
+  color: var(--warning);
+}
+.browser-error-title {
+  color: var(--text-hi);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+}
+.browser-error-desc {
+  font-size: var(--fs-11);
+  max-width: 36ch;
+}
+.browser-error-retry {
+  margin-top: var(--sp-1);
+  min-height: 28px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-elevated);
+  color: var(--text-hi);
+  font-size: var(--fs-11);
+  cursor: pointer;
+}
+.browser-error-retry:hover {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+/* ── Find in page (F5) ─────────────────────────────────────────────────────── */
+.browser-find-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+.browser-find-bar[hidden] {
+  display: none;
+}
+.browser-find-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-hi);
+  font-size: var(--fs-12);
+  padding: 0 var(--sp-2);
+  outline: none;
+}
+.browser-find-input:focus {
+  border-color: var(--accent);
+}
+.browser-find-count {
+  flex: none;
+  min-width: 5ch;
+  text-align: right;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+}
+/* ── Zoom badge (F6): the transient % while you adjust ──────────────────────── */
+.browser-zoom-badge {
+  position: absolute;
+  top: var(--sp-2);
+  right: var(--sp-2);
+  z-index: 5;
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-hi);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 24%);
+}
+.browser-zoom-badge[hidden] {
+  display: none;
+}
 /* Zero workspaces (finding 33): the globe is in the titlebar of EVERY view, so the dock
    opens over the home screen — where a browser has nowhere to live (guest, cookie jar,
    last url and consent are all keyed by workspace). Its controls are `disabled` for real
    now; this is what that has to LOOK like, because .browser-url paints its own background
    and colour and would otherwise render a dead field as a live one. Close is never
    disabled and never dims — you must always be able to shut a dock. */
-.browser-dock.is-no-workspace .browser-url,
+.browser-dock.is-no-workspace .browser-url-wrap,
 .browser-dock.is-no-workspace .browser-profile-switch,
 .browser-dock.is-no-workspace .browser-dock-header .icon-btn:disabled {
   opacity: 0.5;
 }
+.browser-dock.is-no-workspace .browser-url-wrap,
 .browser-dock.is-no-workspace .browser-url {
   cursor: not-allowed;
 }

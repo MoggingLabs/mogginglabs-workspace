@@ -2,6 +2,8 @@
 // workspace feature after every mutation. Lets Home / the palette / notify toasts
 // reason about workspaces (and ask for a switch) without importing the feature.
 
+import { locatePaneWorkspace } from '@contracts'
+
 export interface WorkspaceInfo {
   id: string
   name: string
@@ -38,28 +40,14 @@ export function getWorkspaces(): WorkspacesSnapshot {
 }
 
 /**
- * Which workspace holds this pane, and in which SLOT (1-based).
- *
- * `ordinal * 100 + slot` is where a pane is BORN, and for almost every pane it is still
- * true. It stops being true the moment a pane moves to another workspace: the pane keeps
- * its id (that id is its daemon session — see WorkspaceMeta.paneIds), so the formula would
- * keep naming the workspace it LEFT. A workspace that has taken one in says so explicitly
- * in `paneIds`, and an explicit claim always outranks the formula's guess.
+ * Which workspace holds this pane, and in which SLOT (1-based). The moved-pane rule
+ * (an explicit `paneIds` claim outranks the `ordinal * 100 + slot` formula) lives in
+ * `locatePaneWorkspace` (@contracts), shared with main so consent/grant resolution
+ * and this port can never disagree about where a pane lives.
  */
 function locate(paneId: number): { ws: WorkspaceInfo; slot: number } | undefined {
-  for (const ws of snapshot.workspaces) {
-    const slot = ws.paneIds?.findIndex((id) => id === paneId) ?? -1
-    if (slot >= 0) return { ws, slot: slot + 1 }
-  }
-  const ordinal = Math.floor(paneId / 100)
-  const slot = paneId - ordinal * 100
-  if (slot < 1) return undefined
-  const ws = snapshot.workspaces.find((w) => w.ordinal === ordinal)
-  // ...but a slot that has been RE-let to a pane from elsewhere cannot also still be
-  // answering for the one that moved out. That pane lives in whichever workspace claimed
-  // it above; if none did, it is simply gone.
-  if (!ws || (ws.paneIds?.[slot - 1] != null && ws.paneIds[slot - 1] !== paneId)) return undefined
-  return { ws, slot }
+  const found = locatePaneWorkspace(snapshot.workspaces, paneId)
+  return found ? { ws: found.workspace, slot: found.slot } : undefined
 }
 
 /** The workspace a pane belongs to. Used to materialize the right tool plan at launch

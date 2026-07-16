@@ -103,13 +103,20 @@ export class SettingsStore {
     //   pane_remotes       pre-4/05: per-slot remote hosts
     //   pane_profile_ids   pre-6/04: per-slot launch profiles (ids only — ADR 0002)
     //   layout_tree        pre-split-tree: serialized pane arrangement (shape + sizes)
+    //   pane_ids           pre-move-pane persistence: per-slot ids for panes that MOVED in.
+    //                      The renderer always SENT paneIds; without this column the store
+    //                      silently dropped it, so a moved pane's claim never reached disk —
+    //                      main kept resolving it to its BIRTH workspace (consent/grants,
+    //                      finding B1), and a restore would have respawned it under the
+    //                      formula id and orphaned its live daemon session.
     for (const [column, type] of [
       ['assignments', 'TEXT'],
       ['pane_cwds', 'TEXT'],
       ['pane_roles', 'TEXT'],
       ['pane_remotes', 'TEXT'],
       ['pane_profile_ids', 'TEXT'],
-      ['layout_tree', 'TEXT']
+      ['layout_tree', 'TEXT'],
+      ['pane_ids', 'TEXT']
     ] as const) {
       addColumnIfMissing(this.db, 'app_workspaces', column, type)
     }
@@ -140,9 +147,9 @@ export class SettingsStore {
   load(): WorkspaceState {
     const rows = this.db
       .prepare(
-        'SELECT id, name, color, cwd, ordinal, pane_count AS paneCount, layout_tree AS layoutTree, assignments, pane_cwds AS paneCwds, pane_roles AS paneRoles, pane_remotes AS paneRemotes, pane_profile_ids AS paneProfileIds FROM app_workspaces ORDER BY position'
+        'SELECT id, name, color, cwd, ordinal, pane_count AS paneCount, layout_tree AS layoutTree, assignments, pane_cwds AS paneCwds, pane_roles AS paneRoles, pane_remotes AS paneRemotes, pane_profile_ids AS paneProfileIds, pane_ids AS panePersistedIds FROM app_workspaces ORDER BY position'
       )
-      .all() as Array<WorkspaceStateMeta & { layoutTree: string | null; assignments: string | null; paneCwds: string | null; paneRoles: string | null; paneRemotes: string | null; paneProfileIds: string | null }>
+      .all() as Array<WorkspaceStateMeta & { layoutTree: string | null; assignments: string | null; paneCwds: string | null; paneRoles: string | null; paneRemotes: string | null; paneProfileIds: string | null; panePersistedIds: string | null }>
     const workspaces: WorkspaceStateMeta[] = rows.map((r) => ({
       id: r.id,
       name: r.name,
@@ -155,7 +162,8 @@ export class SettingsStore {
       paneCwds: SettingsStore.parseCell<(string | null)[]>(r.paneCwds),
       roles: SettingsStore.parseCell<(string | null)[]>(r.paneRoles),
       remotes: SettingsStore.parseCell<({ hostId: string; name: string; cwd?: string } | null)[]>(r.paneRemotes),
-      profileIds: SettingsStore.parseCell<(string | null)[]>(r.paneProfileIds)
+      profileIds: SettingsStore.parseCell<(string | null)[]>(r.paneProfileIds),
+      paneIds: SettingsStore.parseCell<(number | null)[]>(r.panePersistedIds)
     }))
     const settings = this.db.prepare('SELECT key, value FROM app_settings').all() as Array<{
       key: string
@@ -182,7 +190,7 @@ export class SettingsStore {
     const tx = this.db.transaction((s: WorkspaceState) => {
       this.db.prepare('DELETE FROM app_workspaces').run()
       const ins = this.db.prepare(
-        'INSERT INTO app_workspaces (id, name, color, cwd, ordinal, pane_count, layout_tree, position, assignments, pane_cwds, pane_roles, pane_remotes, pane_profile_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO app_workspaces (id, name, color, cwd, ordinal, pane_count, layout_tree, position, assignments, pane_cwds, pane_roles, pane_remotes, pane_profile_ids, pane_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       s.workspaces.forEach((w, i) =>
         ins.run(
@@ -198,7 +206,8 @@ export class SettingsStore {
           w.paneCwds ? JSON.stringify(w.paneCwds) : null,
           w.roles ? JSON.stringify(w.roles) : null,
           w.remotes ? JSON.stringify(w.remotes) : null,
-          w.profileIds ? JSON.stringify(w.profileIds) : null
+          w.profileIds ? JSON.stringify(w.profileIds) : null,
+          w.paneIds ? JSON.stringify(w.paneIds) : null
         )
       )
       const set = this.db.prepare(

@@ -85,7 +85,7 @@ function toVerb(name: string, args: Record<string, unknown>): BrowserAgentVerb |
     case 'browser_type':
       return { verb: 'type', target: s('ref'), value: s('text') }
     case 'browser_scroll':
-      return { verb: 'scroll', dy: n('dy') }
+      return { verb: 'scroll', dy: n('dy'), to: args.to === 'y' ? 'y' : undefined }
     case 'browser_select':
       return { verb: 'select', target: s('ref'), value: s('value') }
     case 'browser_eval':

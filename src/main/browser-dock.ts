@@ -1,13 +1,16 @@
 import { BrowserWindow, ipcMain, shell, session, webContents, type Session, type WebContents } from 'electron'
 import {
   BrowserChannels,
+  DEFAULT_SEARCH_TEMPLATE,
   browserAgentWebPartition,
   type BrowserAgentActivity,
   type BrowserAgentResult,
   type BrowserAgentVerb,
   type BrowserAgentVerbName,
+  type BrowserContextMenuParams,
   type BrowserDockInit,
   type BrowserDockState,
+  type BrowserGuestChord,
   type BrowserNavAction,
   type BrowserProfile,
   type BrowserSignedInSite,
@@ -22,6 +25,8 @@ import { vaultDisabled } from './fixture-port'
 import { isLivePane } from './daemon-relay'
 import { setVaultProbeForSmoke, vaultAvailable } from './vault'
 import { recordTrail } from './trail'
+import { SNAPSHOT_JS, clickScript, existsScript, scrollScript, selectScript, typeScript } from './browser-page-scripts'
+import { applyGuestSessionPolicy, chromeUserAgent } from './browser-guest-policy'
 
 /**
  * The browser dock's MAIN side (Phase-6/05; 8/07 moved the page to in-DOM
@@ -40,6 +45,7 @@ import { recordTrail } from './trail'
 
 const KV_OPEN = 'browser.open'
 const KV_WIDTH = 'browser.width'
+const KV_SEARCH = 'browser.searchEngine'
 const kvLastUrl = (workspaceId: string): string => `browser.lastUrl.${workspaceId}`
 const kvProfile = (workspaceId: string): string => `browser.profile.${workspaceId}`
 const kvConsent = (workspaceId: string): string => `browser.agentControl.${workspaceId}`
@@ -49,7 +55,6 @@ const DEFAULT_WIDTH = 420
 const AGENT_ATTACH_MS = 5 * 60_000
 
 let getWin: (() => BrowserWindow | null) | null = null
-let smokeRun = false // set by registerBrowserDock from main's ONE smoke predicate (index.ts)
 let open = false
 let profile: BrowserProfile = 'preview' // the ACTIVE workspace's profile
 let activeWorkspaceId = ''
@@ -65,6 +70,9 @@ const pendingNav = new Map<string, string>()
 // profiles never interleave.
 const bufs = new Map<number, { console: string[]; net: string[] }>()
 const RING = 200
+// One console.log of a giant object must not become the whole tail's budget.
+const RING_LINE_CAP = 500
+const capLine = (s: string): string => (s.length > RING_LINE_CAP ? `${s.slice(0, RING_LINE_CAP)}…` : s)
 
 // Vault-conditioned agent-web persistence (ADR 0008.h) — machine-global,
 // governed by the ONE shared vault probe (8/08).
@@ -159,12 +167,69 @@ function pushState(): void {
   win.webContents.send(BrowserChannels.state, state)
 }
 
-/** Deny-all permissions on a guest's ACTUAL session (correct regardless of the
- *  partition name), the app's own session untouched. Idempotent per session. */
+/** Deny-all permissions + a Chrome-honest UA on a guest's ACTUAL session (correct
+ *  regardless of the partition name), the app's own session untouched. Idempotent
+ *  per session. See browser-guest-policy.ts for why the UA is stripped. */
 function hardenSession(ses: Session): void {
   if (hardenedSessions.has(ses)) return
   hardenedSessions.add(ses)
-  ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
+  applyGuestSessionPolicy(ses)
+  // The HTTP error loop (F11): a 4xx/5xx from the dev server is invisible to
+  // did-fail-load (that page "loaded"). Feed status >= 400 into the same per-guest
+  // net ring the agent reads via `network_failures`, routed by webContents id so
+  // profiles/workspaces on this shared session never interleave.
+  ses.webRequest.onCompleted((details) => {
+    if (details.statusCode < 400) return
+    const id = details.webContentsId
+    if (id == null) return
+    const ring = bufs.get(id)
+    if (!ring) return
+    ring.net.push(capLine(`${details.statusCode} ${details.method} ${details.url}`))
+    if (ring.net.length > RING) ring.net.shift()
+  })
+}
+
+/** The window-open policy for a guest AND any child window it spawns (recursive).
+ *  A real popup (window features, or an explicit new-window disposition) is how
+ *  OAuth sign-in works — it opens as a child window on the SAME session (same
+ *  cookies), so the provider's `postMessage`/`window.opener` handshake completes;
+ *  ADR 0002 holds (still our own partition, never the system browser's). Anything
+ *  else (a plain target=_blank link) navigates the opening guest itself, Comet-
+ *  style — never silently kicking the user out to the system browser (the globe
+ *  button is the one explicit door for that). http(s) only. */
+function guestWindowOpenHandler(wc: WebContents): Parameters<WebContents['setWindowOpenHandler']>[0] {
+  return (details) => {
+    const url = normalizeUrl(details.url)
+    if (!url) return { action: 'deny' }
+    const isPopup = !!details.features || details.disposition === 'new-window'
+    if (!isPopup) {
+      if (!wc.isDestroyed()) void wc.loadURL(url)
+      return { action: 'deny' }
+    }
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        width: 520,
+        height: 640,
+        autoHideMenuBar: true,
+        // The child inherits the opener's session (same partition, same cookies);
+        // these mirror the guest's own isolation so a popup is no weaker than the
+        // page that opened it.
+        webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false }
+      }
+    }
+  }
+}
+
+/** Harden a popup child window the instant it exists: same session policy (idempotent),
+ *  the same window-open + navigation guards, http(s) only. */
+function wireChildWindow(child: WebContents): void {
+  applyGuestSessionPolicy(child.session) // shared session — idempotent, but explicit
+  child.setUserAgent(chromeUserAgent())
+  child.setWindowOpenHandler(guestWindowOpenHandler(child))
+  child.on('will-navigate', (e, url) => {
+    if (!normalizeUrl(url) && url !== 'about:blank') e.preventDefault()
+  })
 }
 
 /** Attach the driver's listeners to a freshly-registered guest — idempotent
@@ -173,19 +238,63 @@ function wireGuest(p: BrowserProfile, wc: WebContents, wsId: string): void {
   if (wiredGuests.has(wc.id)) return
   wiredGuests.add(wc.id)
   hardenSession(wc.session)
+  // navigator.userAgent is per-webContents (the session UA only sets the request
+  // header); set both so scripts AND requests read Chrome-honest (F2).
+  wc.setUserAgent(chromeUserAgent())
   bufs.set(wc.id, { console: [], net: [] })
   const ring = bufs.get(wc.id)!
-  wc.setWindowOpenHandler(({ url }) => {
-    const ok = normalizeUrl(url)
-    // A smoke must never launch the user's real browser. The old test — ANY MOGGING_* var —
-    // was true for every dev run (main sets MOGGING_CHANNEL) and for a PACKAGED app launched
-    // from inside a pane (MOGGING_PANE_ID/MOGGING_DAEMON_ENDPOINT are inherited), so
-    // window.open / target=_blank links were silently dead in real use.
-    if (ok && !smokeRun) void shell.openExternal(ok)
-    return { action: 'deny' }
+  wc.setWindowOpenHandler(guestWindowOpenHandler(wc))
+  // A spawned popup (OAuth) is hardened + guarded the instant it exists.
+  wc.on('did-create-window', (childWin) => {
+    if (!childWin.isDestroyed()) wireChildWindow(childWin.webContents)
   })
   wc.on('will-navigate', (e, url) => {
     if (!normalizeUrl(url) && url !== 'about:blank') e.preventDefault()
+  })
+  // Right-click in the page (F7): the context-menu is a main-side event, so forward
+  // the (link/media/selection) targets to the renderer, which draws the HOUSE menu.
+  // Never the DOM — just what a browser menu acts on.
+  wc.on('context-menu', (_e, params) => {
+    const win = getWin?.()
+    if (!win || win.isDestroyed() || activeWc() !== wc) return
+    win.webContents.send(BrowserChannels.contextMenu, {
+      workspaceId: wsId,
+      x: params.x,
+      y: params.y,
+      linkURL: params.linkURL ?? '',
+      srcURL: params.srcURL ?? '',
+      selectionText: params.selectionText ?? '',
+      isEditable: !!params.isEditable
+    } satisfies BrowserContextMenuParams)
+  })
+  // App shortcut relay (F12): the guest is a separate process, so an app chord pressed
+  // while the page holds focus never reaches the renderer's listeners. Intercept the
+  // small set the app owns and relay them — the DECISION stays in the renderer (no
+  // shortcut logic here); a keystroke a shell might want (letters, editing) is left alone.
+  wc.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || activeWc() !== wc) return
+    const mod = input.control || input.meta
+    if (!mod) return
+    const code = input.code
+    const isAppChord =
+      (input.shift && (code === 'KeyU' || code === 'KeyE' || code === 'KeyB')) || // dock/explorer/rail toggles
+      code === 'KeyK' || // palette
+      (!input.shift && (code === 'KeyF' || code === 'KeyL')) || // find / focus address
+      (!input.shift && (code === 'Equal' || code === 'Minus' || code === 'Digit0')) // zoom
+    if (!isAppChord) return
+    event.preventDefault()
+    const win = getWin?.()
+    if (win && !win.isDestroyed()) {
+      win.webContents.send(BrowserChannels.guestChord, {
+        workspaceId: wsId,
+        code,
+        key: input.key,
+        ctrl: input.control,
+        meta: input.meta,
+        shift: input.shift,
+        alt: input.alt
+      } satisfies BrowserGuestChord)
+    }
   })
   for (const ev of ['did-navigate', 'did-navigate-in-page', 'page-title-updated', 'did-start-loading', 'did-stop-loading'] as const) {
     wc.on(ev as never, () => {
@@ -196,12 +305,12 @@ function wireGuest(p: BrowserProfile, wc: WebContents, wsId: string): void {
     const a1 = args[1] as { level?: unknown; message?: unknown } | number | string | undefined
     const level = a1 && typeof a1 === 'object' ? String(a1.level ?? '') : String(a1 ?? '')
     const message = a1 && typeof a1 === 'object' ? String(a1.message ?? '') : String(args[2] ?? '')
-    ring.console.push(`[${level}] ${message}`)
+    ring.console.push(capLine(`[${level}] ${message}`))
     if (ring.console.length > RING) ring.console.shift()
   })
   wc.on('did-fail-load', (_e, code, desc, url) => {
     if (code === -3) return
-    ring.net.push(`${code} ${desc} ${url}`)
+    ring.net.push(capLine(`${code} ${desc} ${url}`))
     if (ring.net.length > RING) ring.net.shift()
   })
   wc.on('did-start-navigation', (_e, _url, _inPage, isMainFrame) => {
@@ -421,11 +530,31 @@ export function agentStop(workspaceId = activeWorkspaceId): void {
 
 export function setAgentConsent(allowed: boolean, workspaceId?: string): void {
   const wsId = typeof workspaceId === 'string' && workspaceId ? workspaceId : activeWorkspaceId
-  if (wsId) {
-    getSettingsStore()?.setSetting(kvConsent(wsId), allowed ? '1' : '')
+  if (!wsId) {
+    pushActivity()
+    pushPossession()
+    return
   }
-  if (!allowed) agentStop(wsId)
-  else {
+  const prev = consentFor(wsId)
+  getSettingsStore()?.setSetting(kvConsent(wsId), allowed ? '1' : '')
+  if (!allowed) {
+    // Only a TRANSITION (or live possession) is a revoke. The renderer re-sends the
+    // stored consent on every workspace switch, and treating a still-off push as
+    // "turn off" fired agentStop's load-halt at whatever the guest was loading —
+    // including the human's own restore, cancelled by a switch A→B→A (finding B3).
+    const s = wsAgent.get(wsId)
+    const possessed = !!s && (s.driving || s.activeOperations.size > 0)
+    if (prev || possessed) agentStop(wsId)
+    else {
+      if (s) {
+        // Consent is off; no session confirm may dangle behind it.
+        s.pendingConfirm = null
+        s.confirmed.clear()
+      }
+      pushActivity()
+      pushPossession()
+    }
+  } else {
     pushActivity()
     pushPossession()
   }
@@ -464,26 +593,11 @@ async function materializeGuest(wsId: string, p: BrowserProfile): Promise<WebCon
   return wc
 }
 
-const SNAPSHOT_JS = `(() => {
-  const sel = 'a,button,input,textarea,select,[role=button],[role=link],[role=textbox],[onclick],summary'
-  const vis = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none' }
-  const nodes = []
-  let i = 0
-  document.querySelectorAll(sel).forEach((el) => {
-    if (!vis(el)) return
-    const ref = 'e' + (++i)
-    el.setAttribute('data-mog-ref', ref)
-    const name = (el.getAttribute('aria-label') || el.textContent || el.getAttribute('placeholder') || el.getAttribute('value') || '').trim().slice(0, 80)
-    nodes.push({ ref, role: (el.getAttribute('role') || el.tagName.toLowerCase()), name })
-  })
-  const text = (document.body ? document.body.innerText : '').replace(/\\s+/g, ' ').trim().slice(0, 4000)
-  return { nodes, text, url: location.href, title: document.title }
-})()`
-
-const byRef = (ref: string): string =>
-  `document.querySelector('[data-mog-ref=${JSON.stringify(ref)}]') || document.querySelector(${JSON.stringify(ref)})`
-
 const ACT_VERBS: readonly BrowserAgentVerbName[] = ['navigate', 'click', 'type', 'select', 'eval']
+
+/** `eval` answers with a JSON string of whatever the page returned — capped, because
+ *  one `document.body.innerHTML` must not ship megabytes through the transport. */
+const EVAL_VALUE_CAP = 8000
 
 function gateAct(v: BrowserAgentVerb, wc: WebContents, wsId: string, prof: BrowserProfile): BrowserAgentResult | null {
   if (prof !== 'agent-web' || !ACT_VERBS.includes(v.verb)) return null
@@ -549,8 +663,14 @@ export async function agentAct(v: BrowserAgentVerb, ctx?: { pane?: string }): Pr
         wc.reload()
         return { ok: true }
       case 'snapshot': {
-        const snap = (await run(SNAPSHOT_JS)) as { nodes: BrowserSnapshotNode[]; text: string; url: string; title: string }
-        return { ok: true, nodes: snap.nodes, text: snap.text, url: snap.url, title: snap.title }
+        const snap = (await run(SNAPSHOT_JS)) as {
+          nodes: BrowserSnapshotNode[]
+          text: string
+          truncated: boolean
+          url: string
+          title: string
+        }
+        return { ok: true, nodes: snap.nodes, text: snap.text, truncated: snap.truncated || undefined, url: snap.url, title: snap.title }
       }
       case 'screenshot': {
         const img = await wc.capturePage()
@@ -558,30 +678,27 @@ export async function agentAct(v: BrowserAgentVerb, ctx?: { pane?: string }): Pr
       }
       case 'click': {
         if (!v.target) return { ok: false, reason: 'badtarget' }
-        const hit = await run(`(() => { const el = ${byRef(v.target)}; if (!el) return false; el.click(); return true })()`)
+        const hit = await run(clickScript(v.target))
         return hit ? { ok: true } : { ok: false, reason: 'badtarget' }
       }
       case 'type': {
         if (!v.target) return { ok: false, reason: 'badtarget' }
-        const hit = await run(
-          `(() => { const el = ${byRef(v.target)}; if (!el) return false; el.focus(); el.value = ${JSON.stringify(v.value ?? '')}; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return true })()`
-        )
+        const hit = await run(typeScript(v.target, v.value ?? ''))
         return hit ? { ok: true } : { ok: false, reason: 'badtarget' }
       }
       case 'select': {
         if (!v.target) return { ok: false, reason: 'badtarget' }
-        const hit = await run(
-          `(() => { const el = ${byRef(v.target)}; if (!el) return false; el.value = ${JSON.stringify(v.value ?? '')}; el.dispatchEvent(new Event('change',{bubbles:true})); return true })()`
-        )
+        const hit = await run(selectScript(v.target, v.value ?? ''))
         return hit ? { ok: true } : { ok: false, reason: 'badtarget' }
       }
       case 'scroll': {
-        await run(`window.scrollBy(0, ${Number(v.dy ?? 400)})`)
+        await run(scrollScript(Number(v.dy ?? 400), v.to))
         return { ok: true }
       }
       case 'eval': {
         const out = await run(`(() => { try { return JSON.stringify((function(){ return (${String(v.target ?? 'undefined')}) })()) } catch (e) { return 'ERR: ' + e } })()`)
-        return { ok: true, value: String(out ?? '') }
+        const text = String(out ?? '')
+        return { ok: true, value: text.length > EVAL_VALUE_CAP ? `${text.slice(0, EVAL_VALUE_CAP)} …[truncated]` : text }
       }
       case 'console':
         return { ok: true, lines: ring.console.slice(-Math.max(1, v.n ?? 30)) }
@@ -592,7 +709,7 @@ export async function agentAct(v: BrowserAgentVerb, ctx?: { pane?: string }): Pr
         const deadline = Date.now() + timeout
         while (Date.now() < deadline) {
           if (operation.cancelled()) return { ok: false, reason: 'stopped' }
-          const found = await run(`!!(${byRef(String(v.target ?? ''))})`)
+          const found = await run(existsScript(String(v.target ?? '')))
           if (operation.cancelled()) return { ok: false, reason: 'stopped' }
           if (found) return { ok: true }
           await new Promise((r) => setTimeout(r, 150))
@@ -712,9 +829,8 @@ export function destroyAgentWebViewForSmoke(): Promise<void> {
 export const forgetSiteForSmoke = forgetSite
 export const signedInSitesForSmoke = signedInSites
 
-export function registerBrowserDock(winGetter: () => BrowserWindow | null, isSmoke = false): void {
+export function registerBrowserDock(winGetter: () => BrowserWindow | null): void {
   getWin = winGetter
-  smokeRun = isSmoke
   const store = (): ReturnType<typeof getSettingsStore> => getSettingsStore()
   refreshVault()
 
@@ -722,8 +838,9 @@ export function registerBrowserDock(winGetter: () => BrowserWindow | null, isSmo
     const s = store()
     open = s?.getSetting(KV_OPEN) === '1'
     const width = Number(s?.getSetting(KV_WIDTH)) || DEFAULT_WIDTH
+    const searchTemplate = s?.getSetting(KV_SEARCH) || DEFAULT_SEARCH_TEMPLATE
     refreshVault()
-    return { open, width, agentWebPersists }
+    return { open, width, agentWebPersists, searchTemplate }
   })
 
   ipcMain.on(BrowserChannels.guest, (_e, p: { workspaceId?: string; profile?: BrowserProfile; id?: number }) => {
@@ -778,6 +895,22 @@ export function registerBrowserDock(winGetter: () => BrowserWindow | null, isSmo
   ipcMain.handle(BrowserChannels.openExternal, (_e, payload: { url: string }) => {
     const url = normalizeUrl(String(payload?.url ?? ''))
     if (url) void shell.openExternal(url)
+  })
+
+  ipcMain.handle(BrowserChannels.devtools, (_e, payload: { x?: number; y?: number }) => {
+    // Humans get the agent's console/network view (F8): DevTools on the guest the user
+    // is looking at. Detached so it never steals the dock's layout.
+    const wc = activeWc()
+    if (!wc || wc.isDestroyed()) return
+    if (typeof payload?.x === 'number' && typeof payload?.y === 'number') {
+      try {
+        wc.inspectElement(Math.round(payload.x), Math.round(payload.y))
+      } catch {
+        wc.openDevTools({ mode: 'detach' })
+      }
+    } else {
+      wc.openDevTools({ mode: 'detach' })
+    }
   })
 
   ipcMain.on(BrowserChannels.persistWidth, (_e, p: { dockWidth?: number }) => {

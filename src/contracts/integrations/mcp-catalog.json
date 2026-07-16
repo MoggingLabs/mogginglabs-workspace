@@ -86,8 +86,8 @@
   {
     "name": "browser_scroll",
     "title": "Scroll",
-    "description": "Scroll the page vertically by dy pixels.",
-    "inputSchema": { "type": "object", "properties": { "dy": { "type": "number" } } },
+    "description": "Scroll the page vertically by dy pixels (relative), or to the absolute offset dy when to='y'.",
+    "inputSchema": { "type": "object", "properties": { "dy": { "type": "number" }, "to": { "type": "string", "enum": ["y"] } } },
     "family": "browser",
     "access": "read",
     "upstream": "app",

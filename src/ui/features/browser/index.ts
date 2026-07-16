@@ -1,12 +1,18 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
 import {
   BrowserChannels,
+  ClipboardChannels,
+  DEFAULT_SEARCH_TEMPLATE,
   IntegrationsChannels,
   browserAgentWebPartition,
   browserPreviewPartition,
+  resolveAddressInput,
+  searchUrlFor,
   type BrowserAgentActivity,
+  type BrowserContextMenuParams,
   type BrowserDockInit,
   type BrowserDockState,
+  type BrowserGuestChord,
   type BrowserNavAction,
   type BrowserProfile,
   type BrowserSignedInSite,
@@ -14,7 +20,7 @@ import {
   type WorkspaceIntegrationsGrant
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { IconButton, clear, confirmDialog, el, icon, showToast } from '../../components'
+import { IconButton, clear, confirmDialog, el, icon, openContextMenu, showToast } from '../../components'
 import { getWorkspaces, onWorkspacesChange } from '../../core/workspace/workspace-info-port'
 import { setCommands } from '../../core/commands/command-port'
 import { isModKey } from '../../core/commands/shortcuts'
@@ -32,12 +38,25 @@ import { dockLayoutBudget, onDockLayoutChange, requestDockLayout } from '../../c
  * in their own partitions; main drives them by webContents id. ADR 0002: this
  * renderer touches no sessions, cookies, or credentials — the guest is isolated.
  */
+
+/** The `<webview>` element methods/events the chrome drives directly — find,
+ *  zoom, stop, and the page-status events are viewport concerns that never need
+ *  a main round-trip (the element IS in this renderer). */
+interface WebviewEl extends HTMLElement {
+  stop(): void
+  reload(): void
+  findInPage(text: string, options?: { forward?: boolean; findNext?: boolean }): number
+  stopFindInPage(action: 'clearSelection' | 'keepSelection' | 'activateSelection'): void
+  setZoomLevel(level: number): void
+  getURL(): string
+}
 export const browserFeature: UiFeature = {
   name: 'browser',
   mount(ctx) {
     const bridge = getBridge()
     let open = false
     let width = 420
+    let searchTemplate = DEFAULT_SEARCH_TEMPLATE // the omnibox engine (F3); set from the store at boot
     let state: BrowserDockState = {
       workspaceId: '',
       url: '',
@@ -60,11 +79,24 @@ export const browserFeature: UiFeature = {
 
     const back = IconButton({ icon: 'chevron-left', label: 'Back', title: 'Back', onClick: () => nav('back') })
     const forward = IconButton({ icon: 'chevron-right', label: 'Forward', title: 'Forward', onClick: () => nav('forward') })
-    const reload = IconButton({ icon: 'rotate-cw', label: 'Reload', title: 'Reload', onClick: () => nav('reload') })
+    // Reload doubles as Stop while a page loads (F13) — one button, Comet/Chrome-style.
+    const reload = IconButton({
+      icon: 'rotate-cw',
+      label: 'Reload',
+      title: 'Reload',
+      onClick: () => {
+        if (state.loading) activeGuest()?.stop()
+        else nav('reload')
+      }
+    })
+    // The address bar's leading indicator (F13): a favicon / lock (https) / not-secure
+    // (http) / search glyph, exactly where a browser puts it.
+    const urlLead = el('span', { class: 'browser-url-lead' })
     const urlInput = el('input', { class: 'browser-url' }) as HTMLInputElement
-    urlInput.placeholder = 'localhost:3000'
-    urlInput.setAttribute('aria-label', 'Address')
+    urlInput.placeholder = 'Search or enter address'
+    urlInput.setAttribute('aria-label', 'Address and search bar')
     urlInput.spellcheck = false
+    const urlWrap = el('div', { class: 'browser-url-wrap' }, [urlLead, urlInput])
     const external = IconButton({
       icon: 'globe',
       label: 'Open in system browser',
@@ -83,7 +115,7 @@ export const browserFeature: UiFeature = {
     const profileSwitch = el('div', { class: 'browser-profile-switch' }, [profilePreviewBtn, profileAgentBtn])
     profilePreviewBtn.onclick = (): void => void setProfile('preview')
     profileAgentBtn.onclick = (): void => void setProfile('agent-web')
-    const header = el('div', { class: 'browser-dock-header' }, [back, forward, reload, urlInput, profileSwitch, external, close])
+    const header = el('div', { class: 'browser-dock-header' }, [back, forward, reload, urlWrap, profileSwitch, external, close])
 
     // ── Agent possession (6/05b): visible whenever an agent holds the wheel ──
     const stopBtn = el('button', { class: 'browser-agent-stop', type: 'button', text: 'Stop' }) as HTMLButtonElement
@@ -184,13 +216,43 @@ export const browserFeature: UiFeature = {
     const emptyTitle = el('div', { class: 'browser-empty-title' })
     const emptyHint = el('div', { class: 'browser-empty-hint' })
     const empty = el('div', { class: 'browser-empty' }, [icon('globe', 28), emptyTitle, emptyHint])
+
+    // ── Load-error / crash overlay (F10): a real browser explains a dead page ──
+    const errorTitle = el('div', { class: 'browser-error-title' })
+    const errorDesc = el('div', { class: 'browser-error-desc' })
+    const errorRetry = el('button', { class: 'browser-error-retry', type: 'button', text: 'Retry' }) as HTMLButtonElement
+    const loadError = el('div', { class: 'browser-load-error', hidden: true }, [
+      icon('alert', 26),
+      errorTitle,
+      errorDesc,
+      errorRetry
+    ])
+    errorRetry.onclick = (): void => {
+      loadError.hidden = true
+      activeGuest()?.reload()
+    }
+
+    // ── Find-in-page bar (F5) ────────────────────────────────────────────────
+    const findInput = el('input', { class: 'browser-find-input' }) as HTMLInputElement
+    findInput.placeholder = 'Find in page'
+    findInput.setAttribute('aria-label', 'Find in page')
+    findInput.spellcheck = false
+    const findCount = el('span', { class: 'browser-find-count', text: '' })
+    const findPrev = IconButton({ icon: 'chevron-up', label: 'Previous match', title: 'Previous (Shift+Enter)', onClick: () => runFind(false) })
+    const findNext = IconButton({ icon: 'chevron-down', label: 'Next match', title: 'Next (Enter)', onClick: () => runFind(true) })
+    const findClose = IconButton({ icon: 'x', label: 'Close find', title: 'Close (Esc)', onClick: () => closeFind() })
+    const findBar = el('div', { class: 'browser-find-bar', hidden: true }, [findInput, findCount, findPrev, findNext, findClose])
+
+    // A transient zoom badge (F6), Chrome-style.
+    const zoomBadge = el('div', { class: 'browser-zoom-badge', hidden: true })
+
     // The viewHost holds the guest <webview>s (8/07). They ARE the page — in
     // the DOM, so the dock resizes them in LOCKSTEP with the chrome (one
     // compositor, no main-owned view to position). Two guests (preview /
     // agent-web) stay live and stacked; the active one is on top, the empty
-    // state overlays both when nothing is loaded.
-    const viewHost = el('div', { class: 'browser-dock-view' }, [empty])
-    dock.append(handle, header, agentWebNote, banner, recentActs, confirmBar, originAlert, trailMenu, sitesMenu, loading, wsChip, viewHost)
+    // state (and the load-error overlay) sit above both.
+    const viewHost = el('div', { class: 'browser-dock-view' }, [empty, loadError, zoomBadge])
+    dock.append(handle, header, findBar, agentWebNote, banner, recentActs, confirmBar, originAlert, trailMenu, sitesMenu, loading, wsChip, viewHost)
     // The dock is #content's flex sibling inside #main — inserted, not slotted,
     // so the shell stays feature-agnostic.
     ctx.content.insertAdjacentElement('afterend', dock)
@@ -215,7 +277,13 @@ export const browserFeature: UiFeature = {
     })
     const workspaceStillCurrent = (capture: { id: string; generation: number }): boolean =>
       capture.id === activeWsId() && capture.generation === workspaceGeneration
-    const activeKey = (): string => gkey(activeWsId(), state.profile)
+    // Last-known profile PER WORKSPACE (state pushes + profileGet fill it). activeKey
+    // must not read `state.profile` at a switch boundary: that is still the PREVIOUS
+    // workspace's profile until main's push lands, and for one beat the wrong guest sat
+    // on top — possibly the signed-in one over a preview workspace (finding B9). A miss
+    // falls to 'preview', the safe direction (new workspaces are preview by default).
+    const wsProfile = new Map<string, BrowserProfile>()
+    const activeKey = (): string => gkey(activeWsId(), wsProfile.get(activeWsId()) ?? 'preview')
 
     function makeGuest(wsId: string, p: BrowserProfile): HTMLElement {
       const partition = p === 'preview' ? browserPreviewPartition(wsId) : browserAgentWebPartition(wsId, agentWebPersists)
@@ -224,12 +292,45 @@ export const browserFeature: UiFeature = {
       wv.setAttribute('partition', partition)
       wv.setAttribute('src', 'about:blank')
       wv.setAttribute('webpreferences', 'contextIsolation=yes,sandbox=yes,nodeIntegration=no')
+      // OAuth needs popups (F1). Without `allowpopups` a webview blocks window.open
+      // outright and main's window-open handler never sees it; WITH it, every popup
+      // is still funneled through that handler (http(s) only, hardened child) — the
+      // guest can request a window, main decides what it becomes.
+      wv.setAttribute('allowpopups', '')
       wv.addEventListener('dom-ready', () => {
+        readyGuests.add(wv) // its <webview> methods are safe to call now
         try {
           bridge.send(BrowserChannels.guest, { workspaceId: wsId, profile: p, id: (wv as unknown as { getWebContentsId(): number }).getWebContentsId() })
         } catch {
           /* not attached yet */
         }
+        applyZoom() // a re-created guest inherits its workspace's zoom
+      })
+      // Page-status events fire on the element (renderer-side); they touch the chrome
+      // ONLY for the guest currently on top, so a background workspace's page can't
+      // repaint the header you're looking at.
+      wv.addEventListener('page-favicon-updated', (e) => {
+        const urls = (e as unknown as { favicons?: string[] }).favicons ?? []
+        if (urls[0]) wsFavicon.set(wsId, urls[0])
+        else wsFavicon.delete(wsId)
+        if (isActiveGuest(wv)) renderUrlLead()
+      })
+      wv.addEventListener('did-start-loading', () => {
+        if (isActiveGuest(wv)) loadError.hidden = true // a new attempt clears the last failure
+      })
+      wv.addEventListener('did-fail-load', (e) => {
+        const ev = e as unknown as { errorCode: number; errorDescription: string; isMainFrame: boolean }
+        if (ev.errorCode === -3 || !ev.isMainFrame) return // -3 = aborted (a normal redirect)
+        if (isActiveGuest(wv)) showLoadError(ev.errorCode, ev.errorDescription)
+      })
+      wv.addEventListener('crashed', () => {
+        if (isActiveGuest(wv)) showCrash()
+      })
+      wv.addEventListener('found-in-page', (e) => {
+        if (!isActiveGuest(wv)) return
+        const r = (e as unknown as { result?: { matches: number; activeMatchOrdinal: number } }).result
+        if (!r) return
+        findCount.textContent = r.matches ? `${r.activeMatchOrdinal}/${r.matches}` : 'No results'
       })
       return wv
     }
@@ -273,6 +374,138 @@ export const browserFeature: UiFeature = {
     function applyGuestVisibility(): void {
       const active = open ? activeKey() : ''
       for (const [k, wv] of guests) wv.classList.toggle('is-active', k === active)
+      applyZoom() // the active guest may have changed — carry its workspace's zoom
+    }
+
+    // A guest's <webview> methods (setZoomLevel, findInPage, stop, …) THROW if called
+    // before its dom-ready — so the driveable handle is gated on readiness. Every
+    // element-method caller goes through activeGuest(), so one gate makes them all safe.
+    const readyGuests = new WeakSet<HTMLElement>()
+    /** The active workspace's active-profile guest as a driveable <webview> — null until
+     *  it is attached AND dom-ready. */
+    const activeGuest = (): WebviewEl | null => {
+      const g = guests.get(activeKey())
+      return g && readyGuests.has(g) ? (g as WebviewEl) : null
+    }
+
+    // ── Per-workspace zoom (F6), persisted like the app's other view prefs ──────
+    const zoomKey = (wsId: string): string => `browser.zoom.${wsId}`
+    const readZoom = (wsId: string): number => {
+      const v = Number(localStorage.getItem(zoomKey(wsId)))
+      return Number.isFinite(v) ? Math.max(-3, Math.min(4, v)) : 0
+    }
+    function applyZoom(): void {
+      const wsId = activeWsId()
+      if (!wsId) return
+      activeGuest()?.setZoomLevel(readZoom(wsId))
+    }
+    let zoomBadgeTimer: number | undefined
+    function bumpZoom(delta: number | 'reset'): void {
+      const wsId = activeWsId()
+      if (!wsId || !activeGuest()) return
+      const next = delta === 'reset' ? 0 : Math.max(-3, Math.min(4, readZoom(wsId) + delta))
+      localStorage.setItem(zoomKey(wsId), String(next))
+      applyZoom()
+      // A transient badge, Chrome-style — the zoom % while you adjust, then it fades.
+      zoomBadge.textContent = `${Math.round(100 * 1.2 ** next)}%`
+      zoomBadge.hidden = false
+      window.clearTimeout(zoomBadgeTimer)
+      zoomBadgeTimer = window.setTimeout(() => (zoomBadge.hidden = true), 1400)
+    }
+
+    const isActiveGuest = (wv: HTMLElement): boolean => guests.get(activeKey()) === wv
+
+    // ── Find in page (F5) ──────────────────────────────────────────────────────
+    let findActiveQuery = ''
+    function runFind(forward: boolean): void {
+      const g = activeGuest()
+      if (!g) return
+      const q = findInput.value
+      if (!q) {
+        g.stopFindInPage('clearSelection')
+        findCount.textContent = ''
+        findActiveQuery = ''
+        return
+      }
+      const findNext = q === findActiveQuery // same query → step; new query → fresh search
+      findActiveQuery = q
+      g.findInPage(q, { forward, findNext })
+    }
+    function openFind(): void {
+      if (!activeGuest()) return
+      findBar.hidden = false
+      findInput.focus()
+      findInput.select()
+    }
+    function closeFind(): void {
+      findBar.hidden = true
+      findActiveQuery = ''
+      findCount.textContent = ''
+      activeGuest()?.stopFindInPage('clearSelection')
+    }
+    findInput.addEventListener('keydown', (e) => {
+      e.stopPropagation()
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        runFind(!e.shiftKey)
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        closeFind()
+      }
+    })
+    findInput.addEventListener('input', () => runFind(true))
+
+    // ── Reload ⇄ Stop (F13) ────────────────────────────────────────────────────
+    function setLoadingChrome(loading: boolean): void {
+      reload.replaceChildren(icon(loading ? 'square' : 'rotate-cw'))
+      reload.title = loading ? 'Stop loading' : 'Reload'
+      reload.setAttribute('aria-label', loading ? 'Stop loading' : 'Reload')
+    }
+
+    // ── The address bar's leading indicator (F13): favicon / lock / not-secure ──
+    const wsFavicon = new Map<string, string>() // active-guest favicon per workspace
+    function renderUrlLead(): void {
+      clear(urlLead)
+      urlLead.className = 'browser-url-lead'
+      urlLead.removeAttribute('title')
+      const u = state.url
+      if (!u) {
+        urlLead.append(icon('search', 14))
+        return
+      }
+      if (/^https:/i.test(u)) {
+        urlLead.classList.add('is-secure')
+        const fav = wsFavicon.get(activeWsId())
+        if (fav) {
+          const img = el('img', { class: 'browser-favicon' }) as HTMLImageElement
+          img.src = fav
+          img.alt = ''
+          img.onerror = (): void => img.replaceWith(icon('lock', 14)) // a dead favicon falls back to the lock
+          urlLead.append(img)
+        } else {
+          urlLead.append(icon('lock', 14))
+        }
+      } else if (/^http:/i.test(u)) {
+        urlLead.classList.add('is-insecure')
+        urlLead.title = 'Not secure — this connection is not encrypted'
+        urlLead.append(icon('alert', 14))
+      } else {
+        urlLead.append(icon('search', 14))
+      }
+    }
+
+    // ── Load-error / crash overlay (F10) ───────────────────────────────────────
+    function showLoadError(code: number, desc: string): void {
+      errorTitle.textContent = 'This site can’t be reached'
+      errorDesc.textContent = `${desc || 'The page could not be loaded'}${code ? ` (${code})` : ''}`
+      empty.hidden = true
+      loadError.hidden = false
+    }
+    function showCrash(): void {
+      errorTitle.textContent = 'This page crashed'
+      errorDesc.textContent = 'The page stopped responding. Reload to try again.'
+      empty.hidden = true
+      loadError.hidden = false
     }
 
     // Recreate one guest on request (smoke persistence arm) — the partition
@@ -290,6 +523,52 @@ export const browserFeature: UiFeature = {
       applyGuestVisibility()
     })
 
+    // ── Guest context menu (F7): main forwards the right-click; we draw the house menu ──
+    bridge.on(BrowserChannels.contextMenu, (payload) => {
+      const p = payload as BrowserContextMenuParams
+      if (p.workspaceId !== activeWsId()) return
+      const rect = viewHost.getBoundingClientRect()
+      const x = rect.left + p.x
+      const y = rect.top + p.y
+      const items = []
+      if (p.linkURL) {
+        items.push(
+          { label: 'Open link in system browser', icon: 'globe' as const, onSelect: () => void bridge.invoke(BrowserChannels.openExternal, { url: p.linkURL }) },
+          { label: 'Copy link address', icon: 'copy' as const, onSelect: () => void bridge.invoke(ClipboardChannels.write, { text: p.linkURL }) },
+          { separator: true as const }
+        )
+      }
+      if (p.selectionText) {
+        items.push(
+          { label: 'Copy', icon: 'copy' as const, onSelect: () => void bridge.invoke(ClipboardChannels.write, { text: p.selectionText }) },
+          { separator: true as const }
+        )
+      }
+      items.push(
+        { label: 'Back', icon: 'chevron-left' as const, disabled: !state.canGoBack, onSelect: () => nav('back') },
+        { label: 'Forward', icon: 'chevron-right' as const, disabled: !state.canGoForward, onSelect: () => nav('forward') },
+        { label: 'Reload', icon: 'rotate-cw' as const, onSelect: () => nav('reload') },
+        { separator: true as const },
+        { label: 'Find in page…', icon: 'search' as const, hint: 'Ctrl+F', onSelect: () => openFind() },
+        { label: 'Open in system browser', icon: 'globe' as const, disabled: !state.url, onSelect: () => { if (state.url) void bridge.invoke(BrowserChannels.openExternal, { url: state.url }) } },
+        { label: 'Inspect element', icon: 'terminal' as const, onSelect: () => void bridge.invoke(BrowserChannels.devtools, { x: p.x, y: p.y }) }
+      )
+      openContextMenu({ items, x, y, ariaLabel: 'Page actions' })
+    })
+
+    // ── App-shortcut relay (F12): a chord pressed while the guest held focus ──
+    bridge.on(BrowserChannels.guestChord, (payload) => {
+      const c = payload as BrowserGuestChord
+      if (c.workspaceId !== activeWsId()) return
+      const synthetic = { key: c.key, code: c.code, ctrlKey: c.ctrl, metaKey: c.meta, shiftKey: c.shift, altKey: c.alt }
+      // The dock's own shortcuts first (find/zoom/address); then the global toggle.
+      if (handleDockShortcut(synthetic)) return
+      if ((c.ctrl || c.meta) && c.shift && c.code === 'KeyU') toggle(!open)
+      // Rail (Ctrl+Shift+B) / explorer (Ctrl+Shift+E) / palette (Ctrl+K) live in other
+      // features; re-dispatch a trusted-shaped event so their document listeners run.
+      else document.dispatchEvent(new KeyboardEvent('keydown', synthetic))
+    })
+
     // Auto-switch: when the active workspace changes with the dock open, show
     // that workspace's own browser (creating it on first visit).
     onWorkspacesChange(() => {
@@ -304,6 +583,9 @@ export const browserFeature: UiFeature = {
       wsChip.onclick = null
       recentActs.hidden = true
       recentActs.replaceChildren()
+      // A load error / find bar belong to the page you were on — reset them on a switch.
+      loadError.hidden = true
+      closeFind()
       // The LAST workspace closing is a workspace change too (finding 33): the dock stays
       // open over the home screen, so its controls must go back to disabled-and-explained
       // here, not wait for main's reply.
@@ -441,6 +723,26 @@ export const browserFeature: UiFeature = {
       e.preventDefault()
       toggle(!open)
     })
+    // Find + zoom, active when the dock is open and its OWN chrome holds focus (the
+    // in-page-focus case is relayed from main — see the guest-chord handler). Ctrl+F,
+    // Ctrl+= / Ctrl+- / Ctrl+0. Ctrl+L focuses the address bar (F13 / U-item).
+    function handleDockShortcut(e: { key: string; code: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean; preventDefault?: () => void }): boolean {
+      const mod = e.ctrlKey || e.metaKey
+      if (!mod || e.altKey || !open) return false
+      if (e.code === 'KeyF' && !e.shiftKey) { openFind(); return true }
+      if (e.code === 'KeyL' && !e.shiftKey) { urlInput.focus(); return true }
+      if (e.shiftKey) return false
+      if (e.code === 'Equal' || e.key === '+' || e.key === '=') { bumpZoom(1); return true }
+      if (e.code === 'Minus' || e.key === '-') { bumpZoom(-1); return true }
+      if (e.code === 'Digit0' || e.key === '0') { bumpZoom('reset'); return true }
+      return false
+    }
+    document.addEventListener('keydown', (e) => {
+      // Only when focus is already inside the dock chrome — otherwise a page-focused
+      // shortcut arrives via main's relay, and an app-wide Ctrl+F elsewhere is not ours.
+      if (!dock.contains(e.target as Node)) return
+      if (handleDockShortcut(e)) e.preventDefault()
+    })
     setCommands('browser', [
       { id: 'browser.toggle', title: 'Toggle browser dock', hint: 'Browser', kbd: 'Ctrl+Shift+U', run: () => toggle(!open) }
     ])
@@ -468,25 +770,39 @@ export const browserFeature: UiFeature = {
     }
     urlInput.addEventListener('keydown', (e) => {
       e.stopPropagation()
+      if (e.key === 'Escape') {
+        // Abandon the edit — restore the live url and hand focus back to the page.
+        urlInput.value = state.url
+        urlInput.blur()
+        return
+      }
       if (e.key !== 'Enter') return
       const raw = urlInput.value.trim()
       if (!raw) return
       const capture = captureWorkspace()
       if (!capture.id) return
+      // The omnibox rule (F3): a URL opens; anything else is a search. Comet/Chrome
+      // behavior — the address bar never "refuses" a query, it runs it.
+      const resolved = resolveAddressInput(raw)
+      if (!resolved) return
+      const target = resolved.kind === 'url' ? resolved.url : searchUrlFor(searchTemplate, resolved.query)
+      urlInput.blur() // committing hands focus to the page, like a real browser
       void urlGuard.run(
-        () => bridge.invoke(BrowserChannels.navigate, { url: raw, workspaceId: capture.id }) as Promise<boolean>,
+        () => bridge.invoke(BrowserChannels.navigate, { url: target, workspaceId: capture.id }) as Promise<boolean>,
         {
-          action: `open ${raw}`,
+          action: resolved.kind === 'url' ? `open ${raw}` : `search ${raw}`,
           onSuccess: (ok) => {
             if (!workspaceStillCurrent(capture)) return
             if (ok) empty.hidden = true
-            // Not a failure — a REFUSAL (blocked host, unsupported scheme). It deserves a
-            // different sentence than a crash, and it used to get no sentence at all.
-            else showToast({ tone: 'danger', title: 'That address was refused', body: raw })
+            // A resolved URL that main still refuses is a blocked/sensitive host — the
+            // one case left that deserves a sentence (a query can't land here).
+            else showToast({ tone: 'danger', title: 'That address was refused', body: target })
           }
         }
       )
     })
+    // Focus selects all (a real address bar) so the next keystroke replaces the url.
+    urlInput.addEventListener('focus', () => urlInput.select())
 
     // ── Profile switch + agent-web chrome (8/04) ─────────────────────────────
     async function setProfile(p: BrowserProfile): Promise<void> {
@@ -494,6 +810,8 @@ export const browserFeature: UiFeature = {
       if (!capture.id) return
       await bridge.invoke(BrowserChannels.profileSet, { workspaceId: capture.id, profile: p })
       if (!workspaceStillCurrent(capture)) return
+      wsProfile.set(capture.id, p)
+      applyGuestVisibility() // don't wait for the state push to lift the chosen guest
       getTelemetry().captureEvent({ name: 'browser.profile', props: { agentWeb: p === 'agent-web' } }) // boolean only (ADR 0005)
     }
     function renderProfileChrome(): void {
@@ -564,6 +882,8 @@ export const browserFeature: UiFeature = {
       if (!capture.id) return
       const stored = (await bridge.invoke(BrowserChannels.profileGet, capture.id)) as BrowserProfile
       if (!workspaceStillCurrent(capture)) return
+      wsProfile.set(capture.id, stored)
+      applyGuestVisibility() // the cache just learned this workspace's real profile
       if (stored !== state.profile) {
         await bridge.invoke(BrowserChannels.profileSet, { workspaceId: capture.id, profile: stored })
       }
@@ -692,9 +1012,12 @@ export const browserFeature: UiFeature = {
       const next = payload as BrowserDockState
       if (next.workspaceId !== activeWsId()) return
       state = next
+      if (state.workspaceId) wsProfile.set(state.workspaceId, state.profile) // keeps activeKey honest across switches
       agentWebPersists = state.agentWebPersists // machine-global; keeps new-guest partitions truthful
       if (document.activeElement !== urlInput) urlInput.value = state.url
       loading.classList.toggle('is-loading', state.loading)
+      setLoadingChrome(state.loading) // Reload ⇄ Stop
+      renderUrlLead() // favicon / lock / not-secure for the new url
       renderProfileChrome()
       // Owns the nav/url/profile enablement and the empty overlay (which covers a guest
       // sitting at about:blank) — one writer, so a workspace-less dock can't be re-enabled
@@ -708,16 +1031,26 @@ export const browserFeature: UiFeature = {
     async function refreshChip(): Promise<void> {
       const capture = captureWorkspace()
       const wsId = capture.id
-      if (!wsId || !open) {
+      // A PREVIEW affordance only: in agent-web, main routes navigation to the STORED
+      // profile's guest, so this chip would load the preview url into the SIGNED-IN
+      // browser while claiming to "open the preview" (finding B4).
+      if (!wsId || !open || state.profile === 'agent-web') {
         wsChip.hidden = true
         return
       }
       const last = (await bridge.invoke(BrowserChannels.lastUrl, wsId)) as string | null
       if (!workspaceStillCurrent(capture)) return
-      const differs = !!last && last !== state.url
-      wsChip.hidden = !differs
-      if (differs && last) {
-        wsChip.textContent = `Open this workspace's preview — ${new URL(last).host}`
+      let host: string | null = null
+      if (last && last !== state.url) {
+        try {
+          host = new URL(last).host
+        } catch {
+          host = null // a corrupt stored url must not kill the chip pipeline (finding B7)
+        }
+      }
+      wsChip.hidden = !host
+      if (host && last) {
+        wsChip.textContent = `Open this workspace's preview — ${host}`
         wsChip.onclick = (): void => {
           if (!workspaceStillCurrent(capture)) return
           void bridge.invoke(BrowserChannels.navigate, { url: last, workspaceId: wsId })
@@ -770,6 +1103,7 @@ export const browserFeature: UiFeature = {
       width = init.width
       applyWidth()
       agentWebPersists = init.agentWebPersists // per-workspace partitions derive from this
+      if (init.searchTemplate) searchTemplate = init.searchTemplate
       if (init.open) toggle(true)
       void pushConsent() // make the active workspace's stored grant live at boot
       void applyWorkspaceProfile() // and its stored profile (8/04)
@@ -842,7 +1176,47 @@ export const browserFeature: UiFeature = {
           await refreshSitesMenu()
         },
         sitesText: () => sitesMenu.textContent ?? '',
-        recentActsText: () => (recentActs.hidden ? '' : (recentActs.textContent ?? ''))
+        recentActsText: () => (recentActs.hidden ? '' : (recentActs.textContent ?? '')),
+        // ── Wave 3 chrome surface for the BROWSERUX gate ──────────────────────
+        // Omnibox (F3): submit through the REAL input path; resolve without navigating.
+        omniboxSubmit: (text: string) => {
+          urlInput.value = text
+          urlInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+        },
+        omniboxResolve: (text: string): string | null => {
+          const r = resolveAddressInput(text)
+          return r ? (r.kind === 'url' ? r.url : searchUrlFor(searchTemplate, r.query)) : null
+        },
+        urlLeadClass: () => urlLead.className,
+        faviconSrc: () => urlLead.querySelector('img')?.getAttribute('src') ?? null,
+        faviconCaptured: () => wsFavicon.get(activeWsId()) ?? null,
+        reloadIsStop: () => !!reload.querySelector('svg') && reload.title === 'Stop loading',
+        // Find (F5)
+        openFind: () => openFind(),
+        findVisible: () => !findBar.hidden,
+        hasActiveGuest: () => !!activeGuest(),
+        findRaw: (text: string) => {
+          const g = activeGuest()
+          return g ? g.findInPage(text) : -1 // request id (>0) proves the guest method ran
+        },
+        findType: (text: string) => {
+          findInput.value = text
+          findInput.dispatchEvent(new Event('input', { bubbles: true }))
+        },
+        findCountText: () => findCount.textContent ?? '',
+        closeFind: () => closeFind(),
+        // Zoom (F6)
+        bumpZoom: (delta: number | 'reset') => bumpZoom(delta),
+        zoomFactor: () => {
+          const g = activeGuest() as unknown as { getZoomFactor?: () => number } | null
+          return g?.getZoomFactor?.() ?? 1
+        },
+        // Error overlay (F10)
+        errorVisible: () => !loadError.hidden,
+        errorText: () => (loadError.hidden ? '' : (errorTitle.textContent ?? '')),
+        // Context menu (F7) / shortcut relay (F12) are driven by MAIN sending the real
+        // IPC in the gate; this only reads whether the house menu opened.
+        contextMenuOpen: () => !!document.querySelector('.ctx-menu')
       }
     }
   }

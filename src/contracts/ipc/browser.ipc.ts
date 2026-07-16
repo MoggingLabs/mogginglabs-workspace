@@ -13,6 +13,9 @@ export interface BrowserDockInit {
    *  closes (the chrome renders the honest copy). Machine-global (ADR 0008.h),
    *  so both sides derive per-workspace partition names from it. */
   agentWebPersists: boolean
+  /** The omnibox search-engine template (`%s` = query). Machine-global setting,
+   *  defaults to DEFAULT_SEARCH_TEMPLATE. */
+  searchTemplate: string
 }
 
 /** Per-workspace browser partitions (8/07b): every workspace has its OWN
@@ -61,6 +64,33 @@ export interface BrowserSignedInSite {
 
 export type BrowserNavAction = 'back' | 'forward' | 'reload'
 
+/** A right-click inside a guest page, forwarded from MAIN (the guest's context-menu
+ *  is a main-side webContents event) so the renderer draws the HOUSE menu. Coordinates
+ *  are guest-viewport px; the renderer offsets them by the view host. Carries only what
+ *  the menu needs — link/media targets + any selected text — never the page's DOM. */
+export interface BrowserContextMenuParams {
+  workspaceId: string
+  x: number
+  y: number
+  linkURL: string
+  srcURL: string
+  selectionText: string
+  isEditable: boolean
+}
+
+/** An app keyboard shortcut pressed while the GUEST page holds focus (F12). The guest
+ *  is a separate process, so main intercepts it (before-input-event) and relays the
+ *  normalized chord for the renderer's own handlers to run — no shortcut logic in main. */
+export interface BrowserGuestChord {
+  workspaceId: string
+  code: string
+  key: string
+  ctrl: boolean
+  meta: boolean
+  shift: boolean
+  alt: boolean
+}
+
 // ── Agent control (Phase-6/05b): agents drive the ONE visible dock ───────────
 // These verbs are the driver seam the phase-8 MCP server exposes as tools; the
 // smoke drives them directly. ADR 0002 holds at full throttle: no cookie /
@@ -92,6 +122,8 @@ export interface BrowserAgentVerb {
   n?: number
   /** scroll delta in px (scroll), or absolute y when `to === 'y'`. */
   dy?: number
+  /** scroll only: 'y' makes `dy` an absolute document offset instead of a delta. */
+  to?: 'y'
 }
 
 /** A snapshot node — the agent's eyes. `ref` is a stable data-attribute the
@@ -111,6 +143,8 @@ export interface BrowserAgentResult {
   /** snapshot: interactive/labelled nodes + a visible-text digest. */
   nodes?: BrowserSnapshotNode[]
   text?: string
+  /** snapshot: true when the node list hit its cap — the page has more. */
+  truncated?: boolean
   /** screenshot: PNG as a data URL (never logged — returned to the caller only). */
   png?: string
   /** console / network_failures: recent lines (tail). */
