@@ -230,8 +230,14 @@ export function runProdMilestoneSmoke(win: BrowserWindow): void {
       const refusal = remoteQuotaRefusal('h-prodm-11')
       const cappedBeforePro = typeof refusal === 'string' && /free plan/i.test(refusal) && /upgrade/i.test(refusal)
 
+      // The MoR contract's signature: the Stripe shape — t inside the signed bytes.
+      const signHook = (raw: string): string => {
+        const t = Math.floor(nowFn() / 1000)
+        return `t=${t},v1=${createHmac('sha256', MOR_SECRET).update(`${t}.${raw}`).digest('hex')}`
+      }
+
       // A FORGED webhook (wrong signature) is refused and flips nothing.
-      const forgedBody = JSON.stringify({ type: 'subscription.activated', accountId: ACCOUNT_ID })
+      const forgedBody = JSON.stringify({ id: 'evt_forged_1', type: 'subscription.activated', accountId: ACCOUNT_ID })
       const forged = await fetch(`${issuer.baseUrl}/mor/webhook`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'mor-signature': 'deadbeef' },
@@ -240,20 +246,29 @@ export function runProdMilestoneSmoke(win: BrowserWindow): void {
       await refreshEntitlements()
       const forgedWebhookRefused = forged.status === 401 && issuer.webhookRefusals === 1 && getEntitlements().snapshot().plan === 'free'
 
-      // The REAL webhook: HMAC-signed over the raw body, exactly the MoR contract.
-      const body = JSON.stringify({ type: 'subscription.activated', accountId: ACCOUNT_ID, plan: 'pro' })
+      // The REAL webhook: timestamped HMAC over the raw body, exactly the MoR contract.
+      const body = JSON.stringify({ id: 'evt_fixture_1', type: 'subscription.activated', accountId: ACCOUNT_ID, plan: 'pro' })
+      const hookSig = signHook(body)
       const okHook = await fetch(`${issuer.baseUrl}/mor/webhook`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'mor-signature': createHmac('sha256', MOR_SECRET).update(body).digest('hex') },
+        headers: { 'content-type': 'application/json', 'mor-signature': hookSig },
         body
       })
+      // The SAME delivery again (a captured request replayed, or a MoR redelivery):
+      // acked 200 — never an error, or retries pile up — and it flips NOTHING twice.
+      const replayed = await fetch(`${issuer.baseUrl}/mor/webhook`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'mor-signature': hookSig },
+        body
+      })
+      const replayIgnored = replayed.status === 200 && issuer.webhookReplays === 1 && issuer.webhookDeliveries === 1
       const fetchedPro = await refreshEntitlements()
       const snapPro = getEntitlements().snapshot()
       const subscribedPro =
         okHook.status === 200 && issuer.webhookDeliveries === 1 && fetchedPro && snapPro.plan === 'pro' && snapPro.graceState === 'fresh'
       // Device-bound (attested to OUR key) + watermarked (the activation names its account).
       const deviceBound = cachedDeviceIdForSmoke() === jktA && issuer.lastProofJkt === jktA
-      const authnRode = issuer.lastAuthOk === true && issuer.lastAthOk === true
+      const authnRode = issuer.lastAuthOk === true && issuer.lastAthOk === true && issuer.nonceChallenges >= 1
       // Pro unlocks the previously-capped feature: the same 11th host now passes.
       const proUnlocksCapped = remoteQuotaRefusal('h-prodm-11') === null
       const panelPro = await panelState()
@@ -429,6 +444,7 @@ export function runProdMilestoneSmoke(win: BrowserWindow): void {
         cappedBeforePro &&
         forgedWebhookRefused &&
         subscribedPro &&
+        replayIgnored &&
         deviceBound &&
         authnRode &&
         proUnlocksCapped &&
@@ -464,6 +480,7 @@ export function runProdMilestoneSmoke(win: BrowserWindow): void {
         cappedBeforePro,
         forgedWebhookRefused,
         subscribedPro,
+        replayIgnored,
         deviceBound,
         authnRode,
         proUnlocksCapped,

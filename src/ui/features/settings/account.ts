@@ -111,7 +111,11 @@ export function createAccountSection(): HTMLElement & { refresh: () => Promise<v
     const bridge = getBridge()
     bridge.on(AccountChannels.changed, (payload) => {
       const s = payload as AccountStatus | null
-      if (s && (s.state === 'anon' || s.state === 'authed')) status = s
+      if (s && (s.state === 'anon' || s.state === 'authed')) status = { state: s.state, email: s.email, plan: s.plan }
+      // A FAILED sign-in rides the push as one transient sentence (AccountStatus.reason,
+      // push-only): without it, the browser tab was the only witness — the app said
+      // "continue in your browser" and then nothing, forever.
+      if (s?.reason) showToast({ tone: 'attention', title: 'Sign-in failed', body: s.reason })
       render()
     })
     // This subscription only schedules a re-render off the (already-updated) store.

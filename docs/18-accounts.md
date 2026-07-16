@@ -36,8 +36,11 @@ applies to PAID features only, through ONE port (`Entitlements` —
 `src/contracts/entitlements/`): gate points ask `limit('maxPanes')` /
 `allows(feature)`; tiers are DATA inside the signed claim, never hard-coded at the
 gate. The Free baseline is deliberately generous (`FREE_ENTITLEMENTS`): 16 panes per
-workspace (the full WebGL budget), 25 connections, 16 swarm roles, 10 saved SSH
-hosts — today's numbers change nothing an account-less install could already do. The
+workspace (the full WebGL budget), 25 connections, 16 swarm roles per workspace
+(the renderer cap and main's backstop share that per-workspace denominator — a
+second workspace's roles are counted against its OWN manifest, never a global
+tally), 10 saved SSH hosts — today's numbers change nothing an account-less install
+could already do. The
 scriptable wedge (`mogging list/send/capture`, docs/06) is **ungated in every tier**,
 and refusals are one honest sentence naming the plan and the line that was hit.
 
@@ -61,15 +64,27 @@ key, with the AS nonce dance; entitlement fetches bind the proof to the presente
 token (`ath`). Refresh is serialized, and rotation persists the new refresh token on
 every renewal. Two laws the composed milestone forced into writing:
 
-- **Unreachable is not rejected.** A refresh that cannot REACH the AS (offline,
-  outage, DNS) yields no token but KEEPS the session — the vaulted grant simply
-  retries later. Only a definitive AS rejection (revoked, expired, foreign key) ends
-  the session. A paying user on a plane keeps their signed-in state exactly like they
-  keep their grace-window plan.
+- **Unreachable is not rejected — and neither is a struggling AS.** A refresh that
+  cannot reach the AS (offline, outage, DNS), or that reaches an AS answering **5xx /
+  429** (or a twice-rotated DPoP nonce), yields no token but KEEPS the session — only
+  a definitive 4xx OAuth answer (`invalid_grant`-class, RFC 6749 §5.2) ends it. A
+  load-balancer 503 during an AS deploy must never sign users out. The same
+  distinction holds for the device key: a key store that ERRORS (a TPM after
+  sleep/resume) reads as *unavailable — retry later*, never as *no key* — refresh
+  keeps the session, and login refuses with a reason instead of silently minting a
+  software key on a chip machine.
+- **The browser page tells the truth, and a failure reaches the app.** The loopback
+  page renders AFTER the token exchange (success or failure, whichever happened), a
+  grant with no refresh token is refused (a phantom session — access working in
+  memory under an anon status — is worse than a clean retry), and a post-consent
+  failure pushes ONE transient human sentence over `account:changed`
+  (`AccountStatus.reason`, push-only, never stored) that Settings toasts.
 - **Logout returns the machine to anon-Free in one gesture.** An explicit logout
   also drops the cached entitlement (the one door that does — a session that dies
   UNDER us leaves the cache in place, because the device-mismatch story and its
-  telemetry read it).
+  telemetry read it). A fresh LOGIN is the mirror image: it bumps the same epochs, so
+  an in-flight refresh or claim-fetch from the PREVIOUS session can never re-vault
+  over the new one.
 
 In production neither the IdP nor the issuer is wired yet (`config === null` — the
 reserved origins land in `origins.ts` when the operator stands the services up);
@@ -82,18 +97,32 @@ An entitlement is a **signed claim this process verifies locally** — never a b
 the UI trusts, never a server answer taken at face value:
 
 - Ed25519 signature against the **public key pinned in
-  `src/backend/core/origins.ts`** (an in-code literal; never env, never fetched);
-  tampered / wrong-key / expired-at-fetch tokens are treated as ABSENT (→ Free);
+  `src/backend/core/origins.ts`** (an in-code literal; never env, never fetched),
+  with **`alg` AND `typ` (`entitle+jwt`) pinned** (RFC 8725 — no other JWT that ever
+  shares the key can be replayed as an entitlement); tampered / wrong-key /
+  expired-at-fetch tokens are treated as ABSENT (→ Free);
 - the verified claim caches as vault ciphertext and is **re-verified on every
   load** — ciphertext at rest does not exempt it;
 - the claim is **sender-constrained to this machine**: the issuer binds `deviceId`
   (the device key's RFC 7638 thumbprint, attested by the DPoP proof at issuance)
-  and the engine honors a claim only when it matches THIS device;
-- paid grants are **additive over the Free baseline** — a plan can only widen;
+  and the engine honors a claim only when it matches THIS device; the fetch itself
+  runs the **RS-side DPoP nonce dance** (RFC 9449 §8.2 — one 401 + `DPoP-Nonce`
+  challenge, one retry), so an issuer that requires nonces cannot strand clients;
+- paid FEATURES are **additive over the Free baseline** (set union); paid LIMITS
+  replace per name, and "a plan can only widen" (ADR 0015 §2) is the **issuer's
+  contract** — deliberately not clamped client-side, so fixture claims can carry
+  numbers small enough for the gates to visibly bite;
 - every degradation **names its cause**: the snapshot's `reason`
   (`grace_expired · device_mismatch · revoked · tampered`, a closed claims-only
   enum) is what the account panel's one quiet line renders — no second source of
   truth, nothing that could carry a path or an id.
+
+Refresh has **three triggers**: the renderer's first snapshot pull (mount), a
+successful **login** (the plan a user just signed in for lands now, not at the next
+launch — an epoch bump also drops any in-flight fetch from the previous session), and
+a **6-hour cadence** (the updater's own pattern) that re-derives the snapshot — so a
+grace boundary crossed by pure time still pushes — and refetches when the claim is
+stale-ish. An app that stays open for weeks on an online machine keeps its plan.
 
 ## The offline-grace law (ADR 0015 §4, shipped)
 
@@ -101,6 +130,10 @@ A cached entitlement is honored for a grace window past its **last successful
 fetch** — the shipped figure is **14 days** (the ADR fixes the final number inside
 7–30 when the service ships) — then the app **degrades to Free; it never bricks**.
 Grace is CACHE aging, not an issuer state: pull the network and the math carries on.
+The anchor is believed only within a day of skew: a fetch stamp from the **future**
+(a wound-back clock — the engine only ever writes `fetchedAt = now`) reads as
+expired rather than extending grace without bound, and heals by itself when the
+clock (or the next successful fetch) does.
 Degradation is quiet (one honest line in Settings › Account, no nag ladder, no
 countdown), and past the window the entire free core keeps working. There is no kill
 switch and no launch blocked on a server; server-side revocation is honored on the
@@ -111,12 +144,18 @@ next refresh (`revoked` claim → Free) — **no remote detonation of a running 
 Subscription state is **server value** (§doctrine): nobody is Pro until the MoR's
 webhook tells the issuer so. The FAKE MoR
 (`src/backend/features/account/fake-entitle.ts` § `/mor/webhook`) pins the contract
-the operator's real pair must keep: the webhook is **HMAC-signed over the raw
-body** (`mor-signature`, the Paddle/Stripe shape), signature verified BEFORE any
-state change, and a forged delivery is refused and flips nothing — faking the
-webhook is exactly the crack the signature exists to stop. The real IdP, MoR and
-entitlement issuer are the **operator's later wiring**; nothing in this repo names
-them, and ORIGINPIN keeps their future origins out of the environment's reach.
+the operator's real pair must keep, in the full Stripe shape and in this order:
+**timestamped HMAC over the raw body** (`mor-signature: t=<unixSec>,v1=<hex
+hmac-sha256 over "<t>.<rawBody>">`) verified BEFORE any state change, then a
+**±5-minute timestamp tolerance** (a captured delivery replayed later dies here),
+then **event-id idempotency** (redeliveries — the MoR retries for days — ack 200
+and flip NOTHING, so an old `activated` can never resurrect a canceled
+subscription), and only then the state change. A forged delivery is refused and
+flips nothing — faking the webhook is exactly the crack the signature exists to
+stop; PRODMILESTONE proves the forged, replayed, and genuine cases each behave. The
+real IdP, MoR and entitlement issuer are the **operator's later wiring**; nothing in
+this repo names them, and ORIGINPIN keeps their future origins out of the
+environment's reach.
 
 ## Settings › Account (`src/ui/features/settings/account.ts`, shipped)
 

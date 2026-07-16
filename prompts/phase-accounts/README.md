@@ -136,6 +136,47 @@ Gate run context (this machine, 2026-07-16): every gate above reproduces via
 final code (`out/prodmilestone-result.json`), FUSES green with `RunAsNode: DISABLE` + the
 tamper bite (`out/fuses-result.json`).
 
+## Post-freeze remediation (2026-07-16, same day)
+
+A full account-lane code review ran after the freeze; every finding was fixed in place
+(docs/18 tracks each behavior change). The substance:
+
+1. **Session resilience**: an AS answering 5xx/429 (or a twice-rotated DPoP nonce) is
+   transient — only a 4xx OAuth answer ends a session (one LB 503 used to sign users
+   out and clear their vault). Device-key ERRORS are typed distinct from key ABSENCE
+   (a TPM asleep no longer logs anyone out or silently downgrades custody at login).
+2. **Live plan refresh**: entitlements now refresh on login (a decoupled kick that
+   yields to any fetch that started since) and on a 6-hour unref'd cadence that also
+   re-pushes pure-time grace-boundary crossings — a paid activation lands without an
+   app restart, and an app open for weeks online keeps its plan.
+3. **Verifier hardening**: entitlement JWT `typ` pinned (`entitle+jwt`); clock-rollback
+   clamp on the grace anchor (a future fetch stamp reads expired, self-healing);
+   RS-side DPoP nonce dance (RFC 9449 §8.2) implemented and ENFORCED by the fake
+   issuer so the retry path is live under every gate.
+4. **MoR contract, full Stripe shape**: `mor-signature: t=,v1=` with the timestamp
+   inside the signed bytes, ±5-min tolerance, event-id idempotency — a replayed
+   delivery acks 200 and flips nothing (an old `activated` cannot resurrect a
+   canceled subscription). PRODMILESTONE proves forged/replayed/genuine — 32 booleans.
+5. **Login flow truthfulness**: the loopback page renders AFTER the exchange; a
+   post-consent failure pushes one transient sentence (`AccountStatus.reason`,
+   push-only) that Settings toasts; a refresh-token-less grant is refused (no phantom
+   session); login bumps the session/cache epochs (the logout law's mirror); an
+   explicit logout mid-exchange wins (`userLogoutEpoch`).
+6. **The swarm-role gate counts per workspace on BOTH sides** (`SetRoleCommand.
+   workspaceId`) — main's global tally silently refused a second workspace's roles.
+7. **Dead surface dropped**: `graceStateForSmoke`, `cachedFetchedAtForSmoke`, and the
+   dead exports (`FreeEntitlements`, `devicePointToJwk`, `verifyBuildIntegrity`); the
+   flow key moved onto `PendingFlow`; `endFlow` settles its awaiter; `persistGrant`
+   re-vaults the software PEM every persist (corrupt-slot self-heal).
+
+Post-remediation gates (same machine, same day): ACCOUNT · ENTITLE · DEVICEKEY ·
+WATERMARK green; PRODMILESTONE green on all 32 FUNCTIONAL booleans — its frame-gap
+budget flaked machine-wide that afternoon (a runaway third-party `wrangler dev`
+burning a core since 07-12; the STASHED-BASELINE run reproduced the same
+`budgetsHold`-only failure at 152.8 ms on the untouched freeze commit, so the diff is
+exonerated by the A/B protocol; the identical remediation code measured 104.1 ms
+green earlier the same day).
+
 **Deliberately the operator's, not this freeze's**: the full uncut 144-gate sweep, the
 three-OS CI dispatch, wiring the real IdP/MoR/issuer origins, and **the code-signing
 certificates — the deferred final step** (docs/18 §honest limits names exactly what it

@@ -53,12 +53,19 @@ let winGetter: (() => BrowserWindow | null) | null = null
 // The access token: MEMORY ONLY, never persisted, never returned over IPC.
 let access: { token: string; expiresAt?: number } | null = null
 // The session generation. Bumped by every clearSession() (logout, a definitive AS
-// rejection, an unusable grant). An in-flight refresh captures it before its network
+// rejection, an unusable grant) AND by every successful login persist — both doors
+// supersede whatever was in flight. An in-flight refresh captures it before its network
 // await and refuses to persist if it changed underneath — otherwise a logout that lands
 // DURING a refresh's round-trip would be silently overwritten when the refresh resumes
 // and re-vaults, resurrecting a session the user just ended. Single-threaded, so the
 // only yield points are the awaits; the guard closes exactly that window.
 let sessionEpoch = 0
+// The explicit-logout generation — bumped ONLY by logout(), the user's own "done here"
+// gesture (clearSession is also mechanical: a dying old session must not abandon the
+// re-login that replaces it). A code exchange captures it at detach and refuses to
+// persist if the user signed out underneath — otherwise "Sign out" clicked while a
+// slow exchange was mid-flight got silently overridden seconds later.
+let userLogoutEpoch = 0
 // The DPoP key of record — the hardware device key when the machine has one, the
 // vaulted software key otherwise. Resolved once, lazily, post-boot (I7); the resolving
 // promise serializes concurrent first callers.
@@ -89,9 +96,15 @@ export function accountStatus(): AccountStatus {
   return { state: 'authed', email, plan }
 }
 
-function pushStatus(): void {
+/** Push the claims to the renderer. `reason` is the one transient human sentence a
+ *  FAILED sign-in rides out on (AccountStatus.reason — push-only, never stored): a
+ *  post-consent failure changes no state, so without it no push would fire and the
+ *  browser tab would be the only witness. */
+function pushStatus(reason?: string): void {
   const win = winGetter?.()
-  if (win && !win.isDestroyed()) win.webContents.send(AccountChannels.changed, accountStatus())
+  if (win && !win.isDestroyed()) {
+    win.webContents.send(AccountChannels.changed, { ...accountStatus(), ...(reason ? { reason } : {}) })
+  }
 }
 
 // ── The loopback redirect (RFC 8252), lifted from connections.ts ────────────────────
@@ -99,6 +112,12 @@ interface PendingFlow {
   state: string
   verifier: string
   redirectUri: string
+  /** RFC 8707 audience, captured at flow start — the callback never re-reads the
+   *  (mutable) module config, so a config change mid-flow cannot throw or misbind. */
+  resource: string
+  /** The key this flow binds. Lives ON the flow (not module state) so a superseding
+   *  login cannot hand a stale key to an older callback. Persisted only on success. */
+  key: DpopKey
   server: Server
   timer: NodeJS.Timeout
   settle: (s: AccountStatus) => void
@@ -118,6 +137,9 @@ function endFlow(): void {
   } catch {
     /* already closing */
   }
+  // Settle (idempotent) so a superseded or timed-out flow never strands an awaiter on
+  // a promise nothing will ever resolve.
+  pending.settle(accountStatus())
   pending = null
 }
 
@@ -186,7 +208,14 @@ async function dpopTokenRequest(form: Record<string, string>, key: DpopKey): Pro
     } catch {
       /* status stands */
     }
-    return { ok: false, reason: String(detail).slice(0, 200) }
+    // Definitive vs transient (RFC 6749 §5.2): only a 4xx OAuth answer (invalid_grant,
+    // invalid_client…) means the GRANT is dead. A 5xx, a 429, or a nonce the AS rotated
+    // twice mid-dance is the SERVICE having trouble — the same law as unreachable: no
+    // token now, but the session survives and the vaulted grant retries later. Without
+    // this line, one load-balancer 503 during an AS deploy signed out (and cleared the
+    // vault of) every user whose refresh landed in that window.
+    const transient = r.status >= 500 || r.status === 429 || /use_dpop_nonce/.test(r.text)
+    return { ok: false, reason: String(detail).slice(0, 200), transient }
   }
   let j: { access_token?: string; refresh_token?: string; expires_in?: number; scope?: string; id_token?: string }
   try {
@@ -232,9 +261,12 @@ function claimsFromIdToken(idToken: string | undefined): { email?: string; plan?
 function persistGrant(tokens: OAuthTokens, key: DpopKey): boolean {
   // The refresh token must land as ciphertext or we hold nothing (never plaintext at
   // rest — ADR 0008.h). The DPoP key persists only in the SOFTWARE fallback custody:
-  // a hardware key has no exportable private half — the chip IS its persistence.
+  // a hardware key has no exportable private half — the chip IS its persistence. The
+  // PEM is (re)written on every grant persist — not only when the slot is empty — so a
+  // corrupt or stale slot heals at the next login instead of stranding the session at
+  // the next restart (the key in use and the key at rest must be the same key).
   if (tokens.refreshToken && !vaultStore(VAULT_REFRESH, tokens.refreshToken)) return false
-  if (key.exportPrivateKeyPem && !vaultHas(VAULT_DPOP) && !vaultStore(VAULT_DPOP, key.exportPrivateKeyPem())) return false
+  if (key.exportPrivateKeyPem && !vaultStore(VAULT_DPOP, key.exportPrivateKeyPem())) return false
   const claims = claimsFromIdToken(tokens.idToken)
   const store = getSettingsStore()
   if (claims.email !== undefined) store?.setSetting(KV_EMAIL, claims.email)
@@ -242,28 +274,46 @@ function persistGrant(tokens: OAuthTokens, key: DpopKey): boolean {
   return true
 }
 
+/** The platform key store exists but ERRORED (a TPM after sleep/resume, a busy
+ *  enclave). Distinct BY TYPE from "this machine has no key store" (null): unavailable
+ *  means try again later — a refresh keeps the session, a login refuses with a reason —
+ *  never a silent fall-through to the software key. Treating chip trouble as chip
+ *  absence minted software keys on chip machines at login (a custody downgrade whose
+ *  proofs the AS later refuses as a foreign key) and ended sessions at refresh. */
+class DeviceKeyUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super(`device key store unavailable: ${cause instanceof Error ? cause.message : String(cause)}`)
+    this.name = 'DeviceKeyUnavailableError'
+  }
+}
+
 /** The key of record. HARDWARE FIRST: the device key binds the session to this
  *  physical machine (a stale software PEM in the vault is deliberately ignored when a
  *  chip exists — it is the exportable thing step 06 retires). Software fallback only
- *  when the machine has no key store, and only if a vaulted PEM exists; null means
- *  "no key yet" and login mints one. */
+ *  when the machine HAS no key store (openDeviceDpopKey's null), and only if a vaulted
+ *  PEM exists; null means "no key yet" and login mints one. A key store that ERRORED
+ *  throws DeviceKeyUnavailableError instead — absence and unavailability must never
+ *  read the same. */
 async function currentDpopKey(): Promise<DpopKey | null> {
   if (dpopKey) return dpopKey
   if (!dpopKeyResolving) {
     dpopKeyResolving = (async (): Promise<DpopKey | null> => {
+      let hw: DpopKey | null
       try {
-        const hw = await openDeviceDpopKey()
-        if (hw) return (dpopKey = hw)
-      } catch {
-        // Addon trouble must degrade to the software path, never brick sign-in;
-        // native-preflight already failed the boot loudly if the addon cannot load.
+        hw = await openDeviceDpopKey()
+      } catch (e) {
+        // The chip is present but unhappy (native-preflight already failed the boot if
+        // the ADDON cannot load, so this is runtime store trouble). Not cached: the
+        // resolving slot clears in finally and the next caller asks the chip afresh.
+        throw new DeviceKeyUnavailableError(e)
       }
+      if (hw) return (dpopKey = hw)
       const pem = vaultLoad(VAULT_DPOP)
       if (!pem) return null
       try {
         return (dpopKey = loadDpopKey(pem))
       } catch {
-        return null
+        return null // an unreadable vaulted PEM is no key; login mints (and re-vaults) a fresh one
       }
     })().finally(() => {
       dpopKeyResolving = null
@@ -291,16 +341,24 @@ function clearSession(): void {
  *  finishes (a human at a consent screen is not something an IPC call may block on;
  *  the real answer arrives over `account:changed`). Never on the boot path (I7). */
 export async function login(): Promise<AccountLoginResult> {
-  if (!config) return { ok: false, reason: 'Account sign-in is not available in this build yet.' }
+  const cfg = config
+  if (!cfg) return { ok: false, reason: 'Account sign-in is not available in this build yet.' }
   if (!vaultAvailable()) return { ok: false, reason: 'No OS keychain — cannot hold your session securely. Sign-in is disabled.' }
-  if (pending) endFlow() // supersede any half-finished flow
+  if (pending) endFlow() // supersede any half-finished flow (endFlow settles its awaiter)
 
   const pkce = createPkce()
   const state = createState()
   // The device key (or, fallback custody, the persisted software key) is reused across
   // logins so the binding survives a re-auth; a software key is minted only when the
-  // machine has neither.
-  const key = (await currentDpopKey()) ?? generateDpopKey()
+  // machine has NEITHER. A key store that ERRORED refuses the login honestly — minting
+  // a software key on a chip machine would silently downgrade custody for the whole
+  // session, and the chip's own next answer would then read the grant as foreign.
+  let key: DpopKey
+  try {
+    key = (await currentDpopKey()) ?? generateDpopKey()
+  } catch {
+    return { ok: false, reason: 'Your device key store is not answering right now. Try signing in again in a moment.' }
+  }
 
   let loop: { server: Server; redirectUri: string }
   try {
@@ -310,24 +368,18 @@ export async function login(): Promise<AccountLoginResult> {
   }
 
   const settled = new Promise<AccountStatus>((resolve) => {
-    const timer = setTimeout(() => {
-      endFlow()
-      resolve(accountStatus())
-    }, 5 * 60_000)
-    pending = { state, verifier: pkce.verifier, redirectUri: loop.redirectUri, server: loop.server, timer, settle: resolve }
+    const timer = setTimeout(() => endFlow(), 5 * 60_000) // endFlow settles via the flow record
+    pending = { state, verifier: pkce.verifier, redirectUri: loop.redirectUri, resource: cfg.resource, key, server: loop.server, timer, settle: resolve }
   })
-  // Stash the freshly-minted (not-yet-persisted) key on the flow so the callback can
-  // persist it only on success.
-  flowKey = key
 
   const authorizeUrl = buildAuthorizeUrl({
-    metadata: config.metadata,
-    clientId: config.clientId,
+    metadata: cfg.metadata,
+    clientId: cfg.clientId,
     redirectUri: loop.redirectUri,
-    resource: config.resource,
+    resource: cfg.resource,
     challenge: pkce.challenge,
     state,
-    scopes: config.scopes
+    scopes: cfg.scopes
   })
   try {
     await browserOpener(authorizeUrl)
@@ -340,7 +392,6 @@ export async function login(): Promise<AccountLoginResult> {
   return { ok: true }
 }
 
-let flowKey: DpopKey | null = null
 let lastSettled: Promise<AccountStatus> | null = null
 
 async function handleCallback(q: URLSearchParams, res: ServerResponse): Promise<void> {
@@ -350,46 +401,86 @@ async function handleCallback(q: URLSearchParams, res: ServerResponse): Promise<
   }
   const flow = pending
   if (q.get('state') !== flow.state) {
+    // Not OUR redirect (CSRF garbage on the loopback port): refuse this request but
+    // keep the flow alive for the real callback.
     res.writeHead(400, { 'content-type': 'text/html' }).end(CLOSE_PAGE('Sign-in failed', 'The response did not match our request.'))
     return
   }
   const error = q.get('error')
   if (error) {
     res.writeHead(200, { 'content-type': 'text/html' }).end(CLOSE_PAGE('Sign-in cancelled', 'You can close this tab.'))
-    endFlow()
+    endFlow() // settles the flow
     pushStatus()
-    flow.settle(accountStatus())
     return
   }
   const code = q.get('code')
   if (!code) {
     res.writeHead(400, { 'content-type': 'text/html' }).end(CLOSE_PAGE('Sign-in failed', 'No authorization code was returned.'))
     endFlow()
-    flow.settle(accountStatus())
     return
   }
-  res.writeHead(200, { 'content-type': 'text/html' }).end(CLOSE_PAGE('Signed in', 'You can close this tab and return to the app.'))
-  const redirectUri = flow.redirectUri
-  const verifier = flow.verifier
-  endFlow()
+  // DETACH the flow before the exchange: no second callback may race this one (the
+  // code is single-use), but the response socket stays open — the page below reports
+  // what actually HAPPENED. The old order answered "Signed in" before the exchange,
+  // so a refused exchange left a lying browser tab and a silent app.
+  clearTimeout(flow.timer)
+  pending = null
+  const logoutEpochAtDetach = userLogoutEpoch
+  const finish = (title: string, body: string): void => {
+    res.writeHead(200, { 'content-type': 'text/html' }).end(CLOSE_PAGE(title, body))
+    try {
+      flow.server.close()
+    } catch {
+      /* already closing */
+    }
+  }
+  const fail = (why: string): void => {
+    finish('Sign-in failed', 'Return to the app and try again.')
+    pushStatus(why) // the one transient sentence the account panel toasts
+    flow.settle(accountStatus())
+  }
 
-  const key = flowKey ?? generateDpopKey()
   const exchanged = await dpopTokenRequest(
-    { grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: redirectUri, resource: config!.resource },
-    key
+    { grant_type: 'authorization_code', code, code_verifier: flow.verifier, redirect_uri: flow.redirectUri, resource: flow.resource },
+    flow.key
   )
   if (!exchanged.ok) {
-    flow.settle(accountStatus())
+    fail(`The account service refused the sign-in: ${exchanged.reason}`)
     return
   }
-  if (!persistGrant(exchanged.tokens, key)) {
+  // A grant without a refresh token cannot be HELD (the vaulted refresh token is the
+  // session anchor status reads): accepting one would leave a phantom session — an
+  // access token working in memory under an 'anon' status. The operator's IdP contract
+  // requires offline_access-shaped grants; refusing here pins that in code.
+  if (!exchanged.tokens.refreshToken) {
+    fail('The account service returned no refresh token, so the session could not be kept.')
+    return
+  }
+  // The user's LAST word wins: a Sign out clicked while this exchange was on the wire
+  // means the machine stays anon-Free — persisting now would override the one-gesture
+  // logout law seconds after the gesture.
+  if (logoutEpochAtDetach !== userLogoutEpoch) {
+    fail('You signed out while the sign-in was completing, so it was abandoned.')
+    return
+  }
+  if (!persistGrant(exchanged.tokens, flow.key)) {
     clearSession()
-    flow.settle(accountStatus())
+    fail('Could not store your session securely, so sign-in was abandoned.')
     return
   }
-  dpopKey = key
+  // The NEW session supersedes everything in flight: an old-session refresh resuming
+  // after this persist must not re-vault over it (the logout epoch law, from the other
+  // direction — clearSession bumps on the way out, a fresh grant bumps on the way in).
+  sessionEpoch += 1
+  dpopKey = flow.key
   access = { token: exchanged.tokens.accessToken, expiresAt: exchanged.tokens.expiresAt }
+  finish('Signed in', 'You can close this tab and return to the app.')
   pushStatus()
+  try {
+    onLogin?.()
+  } catch {
+    /* a hook must never break login */
+  }
   flow.settle(accountStatus())
 }
 
@@ -411,9 +502,23 @@ export async function accessTokenForEntitlement(): Promise<string | null> {
 }
 
 async function doRefresh(): Promise<string | null> {
+  const cfg = config
+  // No config with a vaulted grant is the ROLLBACK shape (an update shipped config-less
+  // over a signed-in install): nothing to talk to, but nothing was REJECTED either —
+  // the session stands and simply cannot refresh until config returns. (The old
+  // `config!.resource` threw here instead of answering.)
+  if (!cfg) return null
   const epoch = sessionEpoch // the session this refresh belongs to
   const rt = vaultLoad(VAULT_REFRESH)
-  const key = await currentDpopKey()
+  let key: DpopKey | null
+  try {
+    key = await currentDpopKey()
+  } catch {
+    // The key STORE errored (a TPM asleep, a busy enclave) — the key still exists, we
+    // just cannot reach it right now: no token, session kept, the next call retries.
+    // Only "no key EXISTS" below is the unusable grant that ends a session.
+    return null
+  }
   if (!rt || !key) {
     // No key means an unusable grant (another machine, or a cleared vault) — drop to
     // anon cleanly rather than pretend.
@@ -421,7 +526,7 @@ async function doRefresh(): Promise<string | null> {
     pushStatus()
     return null
   }
-  const next = await dpopTokenRequest({ grant_type: 'refresh_token', refresh_token: rt, resource: config!.resource }, key)
+  const next = await dpopTokenRequest({ grant_type: 'refresh_token', refresh_token: rt, resource: cfg.resource }, key)
   if (!next.ok) {
     // UNREACHABLE is not REJECTED: an outage (ours or the plane's) yields no token but
     // KEEPS the session — the vaulted grant retries next time, and the cached
@@ -451,20 +556,33 @@ async function doRefresh(): Promise<string | null> {
 }
 
 /** A DPoP proof for a RESOURCE-SERVER call (the entitlement fetch): binds the proof to
- *  the presented access token via its hash (RFC 9449 `ath`). The proof is a PUBLIC JWT —
+ *  the presented access token via its hash (RFC 9449 `ath`), and carries the RS-issued
+ *  nonce when the caller is answering a §8.2 challenge. The proof is a PUBLIC JWT —
  *  the private key never enters this process (hardware) or leaves this module
- *  (software fallback), so custody is unchanged. Null when no session key exists. */
-export async function dpopProofForResource(htm: string, htu: string, accessToken: string): Promise<string | null> {
-  const key = await currentDpopKey()
+ *  (software fallback), so custody is unchanged. Null when no session key exists OR
+ *  the key store is temporarily unreachable — either way the caller refuses the call
+ *  and the cache/grace math stands. */
+export async function dpopProofForResource(htm: string, htu: string, accessToken: string, nonce?: string): Promise<string | null> {
+  let key: DpopKey | null
+  try {
+    key = await currentDpopKey()
+  } catch {
+    return null
+  }
   if (!key) return null
-  return key.createProof({ htm, htu, accessToken })
+  return key.createProof({ htm, htu, accessToken, nonce })
 }
 
 /** The RFC 7638 thumbprint of the key of record — the device identity entitlements
  *  attest to and verify against (step 06). A PUBLIC value, never a secret. Opens
- *  (creating on first use) the device key, so callers invoke it lazily, post-boot. */
+ *  (creating on first use) the device key, so callers invoke it lazily, post-boot.
+ *  Null when no key exists or the store is temporarily unreachable. */
 export async function deviceBindingJkt(): Promise<string | null> {
-  return (await currentDpopKey())?.jkt ?? null
+  try {
+    return (await currentDpopKey())?.jkt ?? null
+  } catch {
+    return null
+  }
 }
 
 // ── Logout ──────────────────────────────────────────────────────────────────────────
@@ -479,7 +597,17 @@ export function setAccountLogoutHook(cb: (() => void) | null): void {
   onLogout = cb
 }
 
+// The mirror door, for LOGIN: a fresh session should ask the issuer for its plan NOW —
+// without this, the entitlement engine's only fetch trigger was the renderer-mount
+// snapshot pull, so the plan a user just signed in for (or just paid for) waited for
+// the next app restart to land. Wired by registerEntitlements, same as the logout hook.
+let onLogin: (() => void) | null = null
+export function setAccountLoginHook(cb: (() => void) | null): void {
+  onLogin = cb
+}
+
 export async function logout(): Promise<void> {
+  userLogoutEpoch += 1 // the explicit gesture — a mid-flight exchange must not override it
   if (pending) endFlow()
   clearSession()
   dpopNonce = undefined
@@ -508,9 +636,14 @@ export function dpopJktForSmoke(): Promise<string | null> {
   return deviceBindingJkt()
 }
 /** Where the key of record lives ('tpm' | 'cng' | 'secure-enclave' | 'software') —
- *  the DEVICEKEY smoke's honesty probe. Null when no key exists yet. */
+ *  the DEVICEKEY smoke's honesty probe. Null when no key exists yet (or the store is
+ *  unreachable, the same refusal production callers get). */
 export async function dpopCustodyForSmoke(): Promise<DpopKeyCustody | null> {
-  return (await currentDpopKey())?.custody ?? null
+  try {
+    return (await currentDpopKey())?.custody ?? null
+  } catch {
+    return null
+  }
 }
 /** Simulate a process on ANOTHER machine: everything in-memory is gone (the key
  *  handle, the access token) while the vault contents — what a pirated copy carries —

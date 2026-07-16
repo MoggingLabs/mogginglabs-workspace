@@ -11,7 +11,7 @@ import {
   type Entitlements,
   type EntitlementsSnapshot
 } from '@contracts'
-import { accessTokenForEntitlement, deviceBindingJkt, dpopProofForResource, setAccountLogoutHook } from './account'
+import { accessTokenForEntitlement, deviceBindingJkt, dpopProofForResource, setAccountLoginHook, setAccountLogoutHook } from './account'
 import { vaultClearKey, vaultLoad, vaultStore } from './vault'
 
 // The entitlement engine (ADR 0015, phase-accounts/05). An entitlement is a SIGNED
@@ -142,7 +142,7 @@ function verifyKeyObject(): KeyObject | null {
 export function verifyEntitlementJwt(jwt: string): EntitlementClaims | null {
   const parts = jwt.split('.')
   if (parts.length !== 3) return null
-  let header: { alg?: string }
+  let header: { alg?: string; typ?: string }
   let payload: Record<string, unknown>
   try {
     header = JSON.parse(b64urlToBuf(parts[0]).toString('utf8'))
@@ -150,7 +150,10 @@ export function verifyEntitlementJwt(jwt: string): EntitlementClaims | null {
   } catch {
     return null
   }
-  if (header.alg !== 'EdDSA') return null
+  // alg AND typ pinned (RFC 8725 token-type discipline): this verifier accepts exactly
+  // our own token type, so no OTHER Ed25519-signed JWT that ever shares the pinned key
+  // can be replayed as an entitlement. Pinned now, while no real claim exists to migrate.
+  if (header.alg !== 'EdDSA' || header.typ !== 'entitle+jwt') return null
   const key = verifyKeyObject()
   if (!key) return null
   let ok = false
@@ -209,6 +212,12 @@ function loadCache(): CachedEntitlement | null {
 
 function graceStateOf(entry: CachedEntitlement): EntitlementGraceState {
   const t = now()
+  // A fetch anchor from the FUTURE is a rolled-back clock (this engine only ever
+  // writes fetchedAt = now()). Small skew — an NTP correction — is tolerated up to a
+  // day; past that the anchor is not believed and the claim reads expired, otherwise
+  // winding the clock back extends grace without bound. Recomputed on every read, so
+  // a repaired clock (or the next successful fetch) restores the plan by itself.
+  if (entry.fetchedAt - t > 86_400_000) return 'expired'
   // The law: honored up to GRACE past the last successful fetch, THEN Free — even a
   // long-lived exp does not outrun the window.
   if (t > entry.fetchedAt + GRACE_MS) return 'expired'
@@ -273,7 +282,10 @@ export function entitlementsSnapshot(): EntitlementsSnapshot {
   if (graceState === 'expired') return freeSnapshot('expired', 'grace_expired')
   return {
     plan: entry.claims.plan,
-    // Paid grants are ADDITIVE over the Free baseline — a plan can only widen.
+    // FEATURES are additive (set union over Free). LIMITS replace per name — the
+    // "a plan can only widen" law (ADR 0015 §2) is the ISSUER's contract, deliberately
+    // NOT clamped here: fixture claims must be able to carry numbers small enough for
+    // the gates to visibly bite, and tiers are data, not client arithmetic.
     features: [...new Set([...FREE_ENTITLEMENTS.features, ...entry.claims.features])],
     limits: { ...FREE_ENTITLEMENTS.limits, ...entry.claims.limits },
     graceState
@@ -298,6 +310,8 @@ function pushIfChanged(): void {
 
 // ── Refresh: serialized, opportunistic, and incapable of bricking ────────────────────
 let refreshing: Promise<boolean> | null = null
+// Counts fetch RUN STARTS (deduped joins don't move it) — the login kick's yield signal.
+let fetchSerial = 0
 
 /** Fetch + verify + cache a fresh entitlement. Authn: the step-04 access token plus a
  *  DPoP proof bound to it (`ath`). EVERY failure — no config, anon, network pulled,
@@ -306,6 +320,7 @@ let refreshing: Promise<boolean> | null = null
 export async function refreshEntitlements(): Promise<boolean> {
   if (!config) return false // production until the service ships: nothing to talk to
   if (refreshing) return refreshing
+  fetchSerial += 1 // a real run starts (joins above don't count)
   const run = doFetch().finally(() => {
     refreshing = null
     pushIfChanged()
@@ -326,12 +341,28 @@ async function doFetch(): Promise<boolean> {
     const thisDevice = await ensureDeviceJkt()
     if (!thisDevice) return false // no device key = nothing to bind to; refuse to cache
     const htu = `${cfg.baseUrl.replace(/\/$/, '')}/entitlement`
-    const proof = await dpopProofForResource('GET', htu, token)
-    if (!proof) return false
-    const res = await fetch(htu, {
-      headers: { authorization: `DPoP ${token}`, dpop: proof, accept: 'application/json' },
-      signal: AbortSignal.timeout(15_000)
-    })
+    const fetchOnce = async (nonce?: string): Promise<Response | null> => {
+      const proof = await dpopProofForResource('GET', htu, token, nonce)
+      if (!proof) return null
+      return fetch(htu, {
+        headers: { authorization: `DPoP ${token}`, dpop: proof, accept: 'application/json' },
+        signal: AbortSignal.timeout(15_000)
+      })
+    }
+    let res = await fetchOnce()
+    if (!res) return false
+    // RFC 9449 §8.2: a resource server may demand its OWN nonce; it answers 401 with a
+    // DPoP-Nonce header. Retry once, with it — without this, an issuer that turns the
+    // nonce on strands every client at 401 until grace runs out. The FAKE issuer
+    // enforces the dance so this path is live under every gate, never dead code.
+    if (res.status === 401) {
+      const nonce = res.headers.get('DPoP-Nonce')
+      if (nonce) {
+        const retry = await fetchOnce(nonce)
+        if (!retry) return false
+        res = retry
+      }
+    }
     if (res.status < 200 || res.status >= 300) return false
     const body = (await res.json()) as { entitlement?: unknown }
     const jwt = typeof body?.entitlement === 'string' ? body.entitlement : ''
@@ -377,11 +408,43 @@ function clearOnLogout(): void {
   pushIfChanged()
 }
 
+/** A fresh LOGIN asks the issuer for its plan soon. Two halves. The epoch bump is
+ *  SYNCHRONOUS: an in-flight fetch for the PREVIOUS session must not cache over the
+ *  new one. The fetch itself is a decoupled FALLBACK kick, one second later, that
+ *  YIELDS to any fetch that started since login (the serial check) — deliberately not
+ *  part of the login callstack: the entitlement service may be a beat behind the login
+ *  (an outage ending, a checkout still propagating), and a kick racing the very next
+ *  caller would hand it a doomed just-started run through the dedup (refreshEntitlements
+ *  returns the in-flight promise). Without any kick at all, the plan a user just paid
+ *  for waited for the next app restart — the renderer-mount pull was the only trigger. */
+function refreshOnLogin(): void {
+  cacheEpoch += 1
+  const serialAtLogin = fetchSerial
+  const kick = setTimeout(() => {
+    if (fetchSerial !== serialAtLogin) return // something already fetched for this session — yield
+    const stale = refreshing
+    if (stale) void stale.finally(() => void refreshEntitlements())
+    else void refreshEntitlements()
+  }, 1_000)
+  kick.unref?.()
+}
+
+/** The steady-state cadence (the updater's own 6-hour pattern). A desktop app lives
+ *  open for weeks: with "refresh on renderer mount" as the only trigger, a Pro claim
+ *  aged straight through grace into Free on a machine that was ONLINE the whole time,
+ *  and a grace boundary crossed by pure time never pushed (renderer and gates briefly
+ *  told different stories). Each tick re-derives the snapshot (pushIfChanged covers
+ *  boundary crossings without a fetch) and refreshes opportunistically when the claim
+ *  is stale-ish. Anon or unwired builds: the guards make it a no-op, zero network. */
+const CADENCE_MS = 6 * 3_600_000
+let cadence: NodeJS.Timeout | null = null
+
 // ── Registration: IPC + the port. No fetch, no cache read — boot stays clean (I7). ──
 export function registerEntitlements(getWin: () => BrowserWindow | null): void {
   winGetter = getWin
   setEntitlements(port)
   setAccountLogoutHook(clearOnLogout)
+  setAccountLoginHook(refreshOnLogin)
   ipcMain.handle(EntitlementsChannels.snapshot, () => {
     const snap = entitlementsSnapshot()
     lastPushedJson = JSON.stringify(snap) // the pull IS the sync point; push only future diffs
@@ -392,16 +455,16 @@ export function registerEntitlements(getWin: () => BrowserWindow | null): void {
     maybeBackgroundRefresh()
     return snap
   })
+  if (!cadence) {
+    cadence = setInterval(() => {
+      pushIfChanged()
+      maybeBackgroundRefresh()
+    }, CADENCE_MS)
+    cadence.unref?.() // a cadence must never hold a teardown (or a windowless gate) open
+  }
 }
 
 // ── Smoke-only helpers (claims only — no JWT, no token, ever) ────────────────────────
-export function graceStateForSmoke(): EntitlementGraceState {
-  const entry = loadCache()
-  return entry ? graceStateOf(entry) : 'expired'
-}
-export function cachedFetchedAtForSmoke(): number | null {
-  return loadCache()?.fetchedAt ?? null
-}
 export function cachedDeviceIdForSmoke(): string | null {
   return loadCache()?.claims.deviceId ?? null
 }

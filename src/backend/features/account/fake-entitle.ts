@@ -55,11 +55,14 @@ export interface FakeEntitleOptions {
   accountId?: string
   /** FAKE merchant-of-record wiring (phase-accounts/10). When set, the issuer models the
    *  real server pair: SUBSCRIPTION STATE lives here (server value, ADR 0015 §5), starts
-   *  'free', and flips to 'pro' only when a signed MoR webhook (POST /mor/webhook,
-   *  HMAC-SHA256 over the raw body in the `mor-signature` header — the Paddle/Stripe
-   *  shape) delivers `subscription.activated`. A wrong signature is refused and flips
-   *  nothing — faking the webhook is exactly the crack the signature exists to stop.
-   *  The real MoR + issuer are the operator's later wiring; this pins their contract. */
+   *  'free', and flips to 'pro' only when a signed MoR webhook (POST /mor/webhook) delivers
+   *  `subscription.activated`. The signature is the FULL Stripe shape — `mor-signature:
+   *  t=<unixSec>,v1=<hex hmac-sha256 over "<t>.<rawBody>">` — verified before any state
+   *  change, then a ±5-min timestamp tolerance (replay of a captured delivery), then
+   *  event-id idempotency (redeliveries ack 200 and flip nothing). A wrong signature is
+   *  refused and flips nothing — faking the webhook is exactly the crack the signature
+   *  exists to stop. The real MoR + issuer are the operator's later wiring; this pins
+   *  their contract. */
   morWebhookSecret?: string
 }
 
@@ -93,11 +96,18 @@ export class FakeEntitleIssuer {
   // Introspection — for the smoke only, never touched by production.
   entitlementRequests = 0
   proofsVerified = 0
+  nonceChallenges = 0
   lastAuthOk: boolean | null = null
   lastAthOk: boolean | null = null
-  /** MoR webhook introspection: verified deliveries, and refused (bad-signature) ones. */
+  /** MoR webhook introspection: verified deliveries, refused (bad signature / stale
+   *  timestamp) ones, and replayed (already-seen event id) ones. */
   webhookDeliveries = 0
   webhookRefusals = 0
+  webhookReplays = 0
+  /** The RS-issued DPoP nonce (RFC 9449 §8.2) — fixed per instance, like fake-idp's. */
+  private readonly nonce = b64url(randomBytes(16))
+  /** Event ids already processed — the idempotency ledger (the MoR redelivers for days). */
+  private readonly webhookSeen = new Set<string>()
 
   constructor(opts: FakeEntitleOptions = {}) {
     this.explicitDeviceId = opts.deviceId ?? null
@@ -208,25 +218,37 @@ export class FakeEntitleIssuer {
 
   /** The FAKE MoR → issuer webhook: `subscription.activated` flips the account's plan
    *  server-side — the client never asserts Pro, it only fetches what the server now
-   *  says. Signature first (HMAC over the RAW body), state change second, exactly the
-   *  order the operator's real handler must keep. */
+   *  says. The pinned contract is the FULL Stripe shape, in the order the operator's
+   *  real handler must keep: signature first (`mor-signature: t=<unixSec>,v1=<hex
+   *  hmac-sha256 over "<t>.<rawBody>">` — the timestamp is INSIDE the signed bytes),
+   *  then the timestamp tolerance (±5 min against this issuer's clock: a captured
+   *  delivery replayed later dies here), then event-id idempotency (the MoR redelivers
+   *  for days; a seen id acks 200 and flips NOTHING — never an error, or the retries
+   *  pile up), and only then the state change. A forged or stale delivery is refused
+   *  and flips nothing — faking the webhook is exactly the crack this exists to stop. */
   private morWebhook(req: IncomingMessage, res: ServerResponse): void {
     const chunks: Buffer[] = []
     req.on('data', (c: Buffer) => chunks.push(c))
     req.on('end', () => {
       const raw = Buffer.concat(chunks)
-      const presented = Buffer.from(String(req.headers['mor-signature'] ?? ''), 'utf8')
-      const expected = Buffer.from(createHmac('sha256', this.morWebhookSecret!).update(raw).digest('hex'), 'utf8')
-      const sigOk = presented.length === expected.length && timingSafeEqual(presented, expected)
+      const sig = /^t=(\d+),v1=([0-9a-f]{64})$/.exec(String(req.headers['mor-signature'] ?? ''))
+      const expected = sig ? createHmac('sha256', this.morWebhookSecret!).update(`${sig[1]}.`).update(raw).digest('hex') : ''
+      const sigOk = !!sig && timingSafeEqual(Buffer.from(sig[2], 'utf8'), Buffer.from(expected, 'utf8'))
       if (!sigOk) {
         this.webhookRefusals += 1
         res.writeHead(401, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: 'invalid_signature' }))
         return
       }
-      let event: { type?: unknown } = {}
+      if (Math.abs(Math.floor(this.clock() / 1000) - Number(sig![1])) > 300) {
+        this.webhookRefusals += 1
+        res.writeHead(400, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'timestamp_out_of_tolerance' }))
+        return
+      }
+      let event: { id?: unknown; type?: unknown } = {}
       try {
-        event = JSON.parse(raw.toString('utf8')) as { type?: unknown }
+        event = JSON.parse(raw.toString('utf8')) as { id?: unknown; type?: unknown }
       } catch {
         /* shape check below refuses it */
       }
@@ -235,6 +257,16 @@ export class FakeEntitleIssuer {
         res.end(JSON.stringify({ error: 'unknown_event' }))
         return
       }
+      // Idempotency: dedupe by event id (or, id-less, by the exact bytes) — a replayed
+      // 'activated' after a 'canceled' must not resurrect the subscription.
+      const eventId = typeof event.id === 'string' && event.id ? event.id : createHash('sha256').update(raw).digest('hex')
+      if (this.webhookSeen.has(eventId)) {
+        this.webhookReplays += 1
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ received: true, replay: true }))
+        return
+      }
+      this.webhookSeen.add(eventId)
       this.webhookDeliveries += 1
       this.fixture = event.type === 'subscription.activated' ? 'pro' : 'free'
       res.writeHead(200, { 'content-type': 'application/json' })
@@ -246,8 +278,17 @@ export class FakeEntitleIssuer {
     this.entitlementRequests += 1
     const auth = String(req.headers['authorization'] ?? '')
     const token = auth.startsWith('DPoP ') ? auth.slice(5) : ''
-    const proofOk = token ? this.verifyDpop(String(req.headers['dpop'] ?? ''), token) : false
-    this.lastAuthOk = !!token && proofOk
+    const v = token ? this.verifyDpop(String(req.headers['dpop'] ?? ''), token) : { ok: false as const }
+    // RFC 9449 §8.2, enforced so the client's retry is LIVE under every gate (the
+    // fake-idp precedent — a dance the smokes never run is dead code): a proof that
+    // passes everything but freshness is challenged once with the nonce to use.
+    if (!v.ok && v.needNonce) {
+      this.nonceChallenges += 1
+      res.writeHead(401, { 'content-type': 'application/json', 'DPoP-Nonce': this.nonce })
+      res.end(JSON.stringify({ error: 'use_dpop_nonce', error_description: 'Resource server requires nonce in DPoP proof' }))
+      return
+    }
+    this.lastAuthOk = !!token && v.ok
     if (!this.lastAuthOk) {
       res.writeHead(401, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ error: 'invalid_token', error_description: 'DPoP-bound access token required' }))
@@ -259,38 +300,40 @@ export class FakeEntitleIssuer {
   }
 
   /** RFC 9449 resource-server check: proof signature by the embedded jwk, htm/htu of
-   *  THIS request, and `ath` = hash of the exact access token presented. */
-  private verifyDpop(proof: string, accessToken: string): boolean {
+   *  THIS request, `ath` = hash of the exact access token presented — then the §8.2
+   *  freshness nonce, LAST, so `needNonce` is only ever answered to an otherwise-valid
+   *  proof (a forged one gets a plain refusal, never a nonce to try again with). */
+  private verifyDpop(proof: string, accessToken: string): { ok: boolean; needNonce?: boolean } {
     const parts = proof.split('.')
-    if (parts.length !== 3) return false
+    if (parts.length !== 3) return { ok: false }
     let header: { typ?: string; alg?: string; jwk?: Record<string, unknown> }
-    let payload: { htm?: string; htu?: string; ath?: string }
+    let payload: { htm?: string; htu?: string; ath?: string; nonce?: string }
     try {
       header = JSON.parse(b64urlDecode(parts[0]))
       payload = JSON.parse(b64urlDecode(parts[1]))
     } catch {
-      return false
+      return { ok: false }
     }
-    if (header.typ !== 'dpop+jwt' || header.alg !== 'ES256' || !header.jwk) return false
-    if (payload.htm !== 'GET' || payload.htu !== `${this.baseUrl}/entitlement`) return false
+    if (header.typ !== 'dpop+jwt' || header.alg !== 'ES256' || !header.jwk) return { ok: false }
+    if (payload.htm !== 'GET' || payload.htu !== `${this.baseUrl}/entitlement`) return { ok: false }
     let pub: KeyObject
     try {
       pub = createPublicKey({ key: header.jwk as unknown as CryptoJwk, format: 'jwk' })
     } catch {
-      return false
+      return { ok: false }
     }
     const sigOk = verify('sha256', Buffer.from(`${parts[0]}.${parts[1]}`), { key: pub, dsaEncoding: 'ieee-p1363' }, b64urlToBuf(parts[2]))
-    if (!sigOk) return false
+    if (!sigOk) return { ok: false }
     this.lastAthOk = payload.ath === b64url(createHash('sha256').update(accessToken).digest())
-    if (this.lastAthOk) {
-      // Attestation: the VERIFIED proof's own key is the device this issuer binds to
-      // (RFC 7638 thumbprint of the header jwk — the client's device public key).
-      const j = header.jwk as { kty?: string; crv?: string; x?: string; y?: string }
-      this.lastProofJkt = b64url(
-        createHash('sha256').update(`{"crv":"${j.crv}","kty":"${j.kty}","x":"${j.x}","y":"${j.y}"}`).digest()
-      )
-    }
-    return this.lastAthOk
+    if (!this.lastAthOk) return { ok: false }
+    // Attestation: the VERIFIED proof's own key is the device this issuer binds to
+    // (RFC 7638 thumbprint of the header jwk — the client's device public key).
+    const j = header.jwk as { kty?: string; crv?: string; x?: string; y?: string }
+    this.lastProofJkt = b64url(
+      createHash('sha256').update(`{"crv":"${j.crv}","kty":"${j.kty}","x":"${j.x}","y":"${j.y}"}`).digest()
+    )
+    if (payload.nonce !== this.nonce) return { ok: false, needNonce: true }
+    return { ok: true }
   }
 
   private signJwt(payload: Record<string, unknown>, key: KeyObject = this.signingKey): string {

@@ -816,7 +816,8 @@ function exposeForDev(controller: WorkspaceController): void {
     // DEV-only and tree-shaken out of production.
     setRole: (paneId: number, role: string) => {
       setPaneRole(paneId as PaneId, role)
-      return getBridge().invoke(TerminalChannels.setRole, { id: paneId as PaneId, role })
+      // The active workspace confers the role — the same scope publishRoles sends.
+      return getBridge().invoke(TerminalChannels.setRole, { id: paneId as PaneId, role, workspaceId: controller.activeMeta()?.id ?? '' })
     }
   }
   w.__mogging.attention = {

@@ -145,7 +145,7 @@ const b64urlToBuf = (s: string): Buffer => Buffer.from(s.replace(/-/g, '+').repl
 /** Verify the app's integrity signal + the unpacked bin/ shims against the signed
  *  manifest. Total and non-throwing: any read/parse failure resolves to a verdict, never
  *  an exception (a self-check must not itself brick the app). */
-export function verifyBuildIntegrity(): TamperResult {
+function verifyBuildIntegrity(): TamperResult {
   const cfg = tamperConfig
   if (!cfg) return { ran: false, tampered: false, signatureOk: true, mismatches: [] }
   try {

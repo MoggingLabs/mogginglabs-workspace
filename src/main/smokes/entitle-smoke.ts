@@ -110,7 +110,9 @@ export async function runEntitleSmoke(): Promise<void> {
       snapPro.limits.maxRemotes === 1 &&
       getEntitlements().limit('maxPanes') === 8 &&
       getEntitlements().allows('pro')
-    const authnRode = issuer.entitlementRequests >= 1 && issuer.lastAuthOk === true && issuer.lastAthOk === true
+    // nonceChallenges: the RS-side RFC 9449 §8.2 dance ran for real (challenge + retry).
+    const authnRode =
+      issuer.entitlementRequests >= 1 && issuer.lastAuthOk === true && issuer.lastAthOk === true && issuer.nonceChallenges >= 1
 
     // Cached as CIPHERTEXT: the constant JWT header never appears in the KV slot or
     // anywhere in the settings DB file — only inside safeStorage ciphertext.

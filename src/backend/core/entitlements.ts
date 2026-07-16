@@ -33,5 +33,4 @@ export function getEntitlements(): Entitlements {
   return current
 }
 
-export { FreeEntitlements }
 export type { Entitlements } from '@contracts'

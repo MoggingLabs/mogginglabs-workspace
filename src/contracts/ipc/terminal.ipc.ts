@@ -77,6 +77,11 @@ export interface StateSyncRequest {
 export interface SetRoleCommand {
   id: PaneId
   role: string
+  /** The workspace whose manifest confers the role — the swarm-role gate's counting
+   *  scope (phase-accounts/05). The renderer cap and main's enforcement backstop share
+   *  this denominator; counting globally in main while the renderer counted per
+   *  workspace silently refused the second workspace's roles. */
+  workspaceId: string
 }
 
 // Events: backend -> UI

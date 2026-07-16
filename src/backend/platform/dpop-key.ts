@@ -121,7 +121,7 @@ export function setDeviceKeyForceSoftwareForSmoke(on: boolean): void {
 }
 
 /** 65-byte uncompressed P-256 point -> the JWK that rides in proof headers. */
-export function devicePointToJwk(point: Buffer): DpopPublicJwk {
+function devicePointToJwk(point: Buffer): DpopPublicJwk {
   return {
     kty: 'EC',
     crv: 'P-256',

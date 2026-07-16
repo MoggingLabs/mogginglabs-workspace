@@ -460,7 +460,11 @@ export class WorkspaceController {
       if (role && granted.has(i)) setPaneRole(paneIdForSlot(meta, i + 1) as PaneId, role)
     })
     meta.roles.forEach((role, i) => {
-      if (role && granted.has(i)) void getBridge().invoke(TerminalChannels.setRole, { id: paneIdForSlot(meta, i + 1) as PaneId, role })
+      if (role && granted.has(i)) {
+        // workspaceId scopes the gate: main's backstop counts THIS workspace's roles
+        // (the same denominator as `cap` above), never a global tally.
+        void getBridge().invoke(TerminalChannels.setRole, { id: paneIdForSlot(meta, i + 1) as PaneId, role, workspaceId: meta.id })
+      }
     })
   }
 

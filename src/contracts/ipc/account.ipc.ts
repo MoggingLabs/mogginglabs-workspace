@@ -25,6 +25,12 @@ export interface AccountStatus {
   /** The entitlement plan claim (e.g. 'free' | 'pro'). LOCAL UX ONLY — real teeth
    *  are hardware binding + server-side value (ADR 0015 §5), never this string. */
   plan?: string
+  /** One transient human sentence when a sign-in attempt just FAILED — rides the
+   *  `changed` push only, never stored, never returned by `status`. Exists because a
+   *  post-consent failure (a refused exchange, a vault refusal) otherwise surfaced
+   *  nowhere: status never changed, so no push fired and the browser tab was the only
+   *  witness. Still a claim about the flow — never a token, never an id. */
+  reason?: string
 }
 
 export interface AccountLoginResult {
