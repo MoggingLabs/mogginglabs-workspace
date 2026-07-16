@@ -15,7 +15,9 @@ import {
   type BrowserPossession,
   type BrowserProfile,
   type BrowserSignedInSite,
-  type BrowserSnapshotNode
+  type BrowserSnapshotNode,
+  type BrowserTab,
+  type BrowserTabsState
 } from '@contracts'
 import { isBlockedActOrigin } from '@backend/features/integrations'
 import { getSettingsStore } from './app-settings'
@@ -60,13 +62,42 @@ let open = false
 let profile: BrowserProfile = 'preview' // the ACTIVE workspace's profile
 let activeWorkspaceId = ''
 
-// Guest webContents ids, keyed `${workspaceId}:${profile}` (registered by the
-// renderer's per-workspace <webview>s on dom-ready).
-const guestKey = (workspaceId: string, p: BrowserProfile): string => `${workspaceId}:${p}`
+// Guest webContents ids, keyed `${workspaceId}:${profile}#${tabId}` (registered by
+// the renderer's <webview>s on dom-ready). Tabs (F4): each (workspace, profile) holds
+// an ordered set of tabs, one guest each; the renderer owns their lifecycle and tells
+// main which is ACTIVE, so the driver (activeWc) always resolves the tab you see.
+// `BASE_TAB` is the implicit first tab — every pre-tabs path defaults to it, so nothing
+// that never opened a second tab changed.
+const BASE_TAB = 't0'
+const guestKey = (workspaceId: string, p: BrowserProfile, tabId: string = BASE_TAB): string => `${workspaceId}:${p}#${tabId}`
 const guestIds = new Map<string, number>()
 const wiredGuests = new Set<number>()
 const hardenedSessions = new WeakSet<Session>()
 const pendingNav = new Map<string, string>()
+// The active tab per `${workspaceId}:${profile}` (renderer-published). Absent → BASE_TAB.
+const activeTab = new Map<string, string>()
+const wpKey = (workspaceId: string, p: BrowserProfile): string => `${workspaceId}:${p}`
+const activeTabFor = (workspaceId: string, p: BrowserProfile): string => activeTab.get(wpKey(workspaceId, p)) ?? BASE_TAB
+// The renderer's tab list per (workspace, profile), cached so an agent's `browser_tab_list`
+// can answer and `browser_tab_select` can resolve an index → tab id.
+const tabsCache = new Map<string, BrowserTabsState>()
+const tabsSnapshot = (workspaceId: string, p: BrowserProfile): { tabs: BrowserTab[]; activeTabId: string } => {
+  const s = tabsCache.get(wpKey(workspaceId, p))
+  return { tabs: s?.tabs ?? [{ id: BASE_TAB, url: '', title: '' }], activeTabId: s?.activeId ?? activeTabFor(workspaceId, p) }
+}
+/** Poll the tab cache (updated by the renderer's tabsState pushes) until `pred` holds
+ *  or a short deadline lapses — the tab verbs return the settled tab list. */
+async function waitForTabs(
+  workspaceId: string,
+  p: BrowserProfile,
+  pred: (tabs: BrowserTab[], activeId: string) => boolean
+): Promise<void> {
+  for (let i = 0; i < 30; i++) {
+    const snap = tabsSnapshot(workspaceId, p)
+    if (pred(snap.tabs, snap.activeTabId)) return
+    await new Promise((r) => setTimeout(r, 100))
+  }
+}
 // Per-GUEST console/network rings (keyed by webContents id) so workspaces and
 // profiles never interleave.
 const bufs = new Map<number, { console: string[]; net: string[] }>()
@@ -126,8 +157,8 @@ const profileForWs = (wsId: string): BrowserProfile =>
   getSettingsStore()?.getSetting(kvProfile(wsId)) === 'agent-web' ? 'agent-web' : 'preview'
 const agentAttached = (wsId: string): boolean => Date.now() - (lastAgentAct.get(wsId) ?? 0) < AGENT_ATTACH_MS
 
-function guestWc(workspaceId: string, p: BrowserProfile): WebContents | null {
-  const id = guestIds.get(guestKey(workspaceId, p))
+function guestWc(workspaceId: string, p: BrowserProfile, tabId?: string): WebContents | null {
+  const id = guestIds.get(guestKey(workspaceId, p, tabId ?? activeTabFor(workspaceId, p)))
   if (id == null) return null
   const wc = webContents.fromId(id)
   return wc && !wc.isDestroyed() ? wc : null
@@ -206,13 +237,16 @@ function hardenSession(ses: Session): void {
  *  else (a plain target=_blank link) navigates the opening guest itself, Comet-
  *  style — never silently kicking the user out to the system browser (the globe
  *  button is the one explicit door for that). http(s) only. */
-function guestWindowOpenHandler(wc: WebContents): Parameters<WebContents['setWindowOpenHandler']>[0] {
+function guestWindowOpenHandler(wc: WebContents, onNewTab?: (url: string) => void): Parameters<WebContents['setWindowOpenHandler']>[0] {
   return (details) => {
     const url = normalizeUrl(details.url)
     if (!url) return { action: 'deny' }
     const isPopup = !!details.features || details.disposition === 'new-window'
     if (!isPopup) {
-      if (!wc.isDestroyed()) void wc.loadURL(url)
+      // A plain target=_blank: open it in a NEW TAB (F4) when this is a tabbed guest,
+      // else (a popup child window) navigate the window itself. Never the system browser.
+      if (onNewTab) onNewTab(url)
+      else if (!wc.isDestroyed()) void wc.loadURL(url)
       return { action: 'deny' }
     }
     return {
@@ -252,7 +286,12 @@ function wireGuest(p: BrowserProfile, wc: WebContents, wsId: string): void {
   wc.setUserAgent(chromeUserAgent())
   bufs.set(wc.id, { console: [], net: [] })
   const ring = bufs.get(wc.id)!
-  wc.setWindowOpenHandler(guestWindowOpenHandler(wc))
+  wc.setWindowOpenHandler(
+    guestWindowOpenHandler(wc, (url) => {
+      const win = getWin?.()
+      if (win && !win.isDestroyed()) win.webContents.send(BrowserChannels.tabOpen, { workspaceId: wsId, profile: p, url })
+    })
+  )
   // A spawned popup (OAuth) is hardened + guarded the instant it exists.
   wc.on('did-create-window', (childWin) => {
     if (!childWin.isDestroyed()) wireChildWindow(childWin.webContents)
@@ -346,19 +385,20 @@ function wireGuest(p: BrowserProfile, wc: WebContents, wsId: string): void {
   })
 }
 
-function registerGuest(wsId: string, p: BrowserProfile, id: number): void {
+function registerGuest(wsId: string, p: BrowserProfile, tabId: string, id: number): void {
   const wc = webContents.fromId(id)
   if (!wc || wc.isDestroyed()) return
-  const key = guestKey(wsId, p)
+  const key = guestKey(wsId, p, tabId)
   guestIds.set(key, id)
   wireGuest(p, wc, wsId)
   const queued = pendingNav.get(key)
   if (queued) {
     pendingNav.delete(key)
     void wc.loadURL(queued)
-  } else if (p === 'preview') {
-    // Restore this workspace's last preview url the first time its guest exists
-    // (agent-web restores nothing — signed-in pages reopen on the user's nav).
+  } else if (p === 'preview' && tabId === BASE_TAB) {
+    // Restore this workspace's last preview url the first time its BASE tab exists (a
+    // NEW tab starts blank or at its opener url; agent-web restores nothing — signed-in
+    // pages reopen on the user's nav).
     const cur = wc.getURL()
     if (!cur || cur === 'about:blank') {
       const last = getSettingsStore()?.getSetting(kvLastUrl(wsId))
@@ -399,7 +439,7 @@ export const browserDriver = {
     if (!activeWorkspaceId) return false
     const wc = activeWc()
     if (wc) void wc.loadURL(url)
-    else pendingNav.set(guestKey(activeWorkspaceId, profile), url)
+    else pendingNav.set(guestKey(activeWorkspaceId, profile, activeTabFor(activeWorkspaceId, profile)), url)
     return true
   },
   nav(action: BrowserNavAction): void {
@@ -417,7 +457,7 @@ function navigateWorkspace(workspaceId: string, rawUrl: string): boolean {
   const p = profileForWs(workspaceId)
   const wc = guestWc(workspaceId, p)
   if (wc) void wc.loadURL(url)
-  else pendingNav.set(guestKey(workspaceId, p), url)
+  else pendingNav.set(guestKey(workspaceId, p, activeTabFor(workspaceId, p)), url)
   return true
 }
 
@@ -737,6 +777,32 @@ export async function agentAct(v: BrowserAgentVerb, ctx?: { pane?: string }): Pr
         }
         return { ok: false, reason: 'timeout' }
       }
+      // ── Tabs (F4): management verbs — an agent holds a doc + the dev server at
+      //    once. READ-tier (allowed under consent, no origin grant): a new tab can
+      //    be READ freely, and ACTING on it is still gated by gateAct per-origin. ──
+      case 'tab_list':
+        return { ok: true, ...tabsSnapshot(sess.wsId, sess.profile) }
+      case 'tab_new': {
+        const before = (tabsCache.get(wpKey(sess.wsId, sess.profile))?.tabs ?? []).length
+        const openUrl = v.target ? (normalizeUrl(v.target) ?? undefined) : undefined
+        const win = getWin?.()
+        if (!win || win.isDestroyed()) return { ok: false, reason: 'noview' }
+        win.webContents.send(BrowserChannels.tabOpen, { workspaceId: sess.wsId, profile: sess.profile, url: openUrl })
+        await waitForTabs(sess.wsId, sess.profile, (tabs) => tabs.length > before)
+        return { ok: true, ...tabsSnapshot(sess.wsId, sess.profile) }
+      }
+      case 'tab_select': {
+        const tabs = tabsCache.get(wpKey(sess.wsId, sess.profile))?.tabs ?? []
+        const idx = Number(v.target)
+        const tab = Number.isInteger(idx) && idx >= 0 ? tabs[idx] : tabs.find((t) => t.id === v.target)
+        if (!tab) return { ok: false, reason: 'badtarget' }
+        const win = getWin?.()
+        if (!win || win.isDestroyed()) return { ok: false, reason: 'noview' }
+        win.webContents.send(BrowserChannels.tabSelect, { workspaceId: sess.wsId, profile: sess.profile, tabId: tab.id })
+        activeTab.set(wpKey(sess.wsId, sess.profile), tab.id)
+        await waitForTabs(sess.wsId, sess.profile, (_t, active) => active === tab.id)
+        return { ok: true, ...tabsSnapshot(sess.wsId, sess.profile) }
+      }
       default:
         return { ok: false, reason: 'badtarget' }
     }
@@ -874,14 +940,32 @@ export function registerBrowserDock(winGetter: () => BrowserWindow | null): void
     return { open, width, agentWebPersists, searchTemplate }
   })
 
-  ipcMain.on(BrowserChannels.guest, (_e, p: { workspaceId?: string; profile?: BrowserProfile; id?: number }) => {
+  ipcMain.on(BrowserChannels.guest, (_e, p: { workspaceId?: string; profile?: BrowserProfile; tabId?: string; id?: number }) => {
     if (typeof p?.workspaceId === 'string' && p.workspaceId && (p.profile === 'preview' || p.profile === 'agent-web') && typeof p.id === 'number') {
-      registerGuest(p.workspaceId, p.profile, p.id)
+      registerGuest(p.workspaceId, p.profile, typeof p.tabId === 'string' && p.tabId ? p.tabId : BASE_TAB, p.id)
     }
   })
-  ipcMain.on(BrowserChannels.guestGone, (_e, p: { workspaceId?: string; profile?: BrowserProfile }) => {
+  ipcMain.on(BrowserChannels.guestGone, (_e, p: { workspaceId?: string; profile?: BrowserProfile; tabId?: string }) => {
     if (typeof p?.workspaceId === 'string' && (p.profile === 'preview' || p.profile === 'agent-web')) {
-      guestIds.delete(guestKey(p.workspaceId, p.profile))
+      guestIds.delete(guestKey(p.workspaceId, p.profile, typeof p.tabId === 'string' && p.tabId ? p.tabId : BASE_TAB))
+    }
+  })
+  // Tabs (F4): the renderer owns tab lifecycle and tells main which is ACTIVE per
+  // (workspace, profile), so the driver (activeWc) always resolves the tab you see.
+  ipcMain.on(BrowserChannels.tabActivate, (_e, p: { workspaceId?: string; profile?: BrowserProfile; tabId?: string }) => {
+    if (typeof p?.workspaceId === 'string' && p.workspaceId && (p.profile === 'preview' || p.profile === 'agent-web') && typeof p.tabId === 'string' && p.tabId) {
+      activeTab.set(wpKey(p.workspaceId, p.profile), p.tabId)
+      if (p.workspaceId === activeWorkspaceId && p.profile === profile) pushState()
+    }
+  })
+  ipcMain.on(BrowserChannels.tabsState, (_e, s: BrowserTabsState) => {
+    if (typeof s?.workspaceId === 'string' && s.workspaceId && (s.profile === 'preview' || s.profile === 'agent-web') && Array.isArray(s.tabs)) {
+      const tabs = s.tabs
+        .filter((t): t is BrowserTab => !!t && typeof t.id === 'string')
+        .map((t) => ({ id: t.id, url: String(t.url ?? ''), title: String(t.title ?? '') }))
+        .slice(0, 50)
+      tabsCache.set(wpKey(s.workspaceId, s.profile), { workspaceId: s.workspaceId, profile: s.profile, tabs, activeId: String(s.activeId ?? BASE_TAB) })
+      if (typeof s.activeId === 'string' && s.activeId) activeTab.set(wpKey(s.workspaceId, s.profile), s.activeId)
     }
   })
 

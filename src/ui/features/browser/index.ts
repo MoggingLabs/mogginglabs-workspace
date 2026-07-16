@@ -51,6 +51,7 @@ interface WebviewEl extends HTMLElement {
   setZoomLevel(level: number): void
   setAudioMuted(muted: boolean): void
   isAudioMuted(): boolean
+  loadURL(url: string): Promise<void>
   getURL(): string
 }
 export const browserFeature: UiFeature = {
@@ -129,6 +130,9 @@ export const browserFeature: UiFeature = {
     profilePreviewBtn.onclick = (): void => void setProfile('preview')
     profileAgentBtn.onclick = (): void => void setProfile('agent-web')
     const header = el('div', { class: 'browser-dock-header' }, [back, forward, reload, urlWrap, profileSwitch, audioBtn, external, close])
+    // The tab strip (F4): Chrome/Comet-style, above the address bar. Shown whenever
+    // the dock has a workspace, so "new tab" is always one click away.
+    const tabStrip = el('div', { class: 'browser-tab-strip', hidden: true })
 
     // ── Agent possession (6/05b): visible whenever an agent holds the wheel ──
     const stopBtn = el('button', { class: 'browser-agent-stop', type: 'button', text: 'Stop' }) as HTMLButtonElement
@@ -290,7 +294,7 @@ export const browserFeature: UiFeature = {
     // agent-web) stay live and stacked; the active one is on top, the empty
     // state (and the load-error overlay) sit above both.
     const viewHost = el('div', { class: 'browser-dock-view' }, [empty, loadError, zoomBadge])
-    dock.append(handle, header, findBar, agentWebNote, banner, recentActs, confirmBar, originAlert, permChip, trailMenu, sitesMenu, loading, wsChip, viewHost)
+    dock.append(handle, tabStrip, header, findBar, agentWebNote, banner, recentActs, confirmBar, originAlert, permChip, trailMenu, sitesMenu, loading, wsChip, viewHost)
     // The dock is #content's flex sibling inside #main — inserted, not slotted,
     // so the shell stays feature-agnostic.
     ctx.content.insertAdjacentElement('afterend', dock)
@@ -306,7 +310,26 @@ export const browserFeature: UiFeature = {
     const lru: string[] = [] // workspace ids, most-recent last
     const pinnedWs = new Set<string>() // agent-attached — never evicted (8/07c)
     let agentWebPersists = true
-    const gkey = (wsId: string, p: BrowserProfile): string => `${wsId}:${p}`
+    // Tabs (F4): each (workspace, profile) holds an ordered set of tabs, one <webview>
+    // each. The base tab (t0) is the pre-tabs single guest — restore + lastUrl ride it.
+    const BASE_TAB = 't0'
+    let tabSeq = 0
+    const newTabId = (): string => `t${++tabSeq}` // t1, t2, … (base is always t0)
+    interface Tab { id: string; url: string; title: string; favicon: string; pending?: string }
+    const wpk = (wsId: string, p: BrowserProfile): string => `${wsId}:${p}`
+    const tabsMap = new Map<string, Tab[]>() // wpk -> ordered tabs
+    const activeTabMap = new Map<string, string>() // wpk -> active tab id
+    const tabsFor = (wsId: string, p: BrowserProfile): Tab[] => {
+      const k = wpk(wsId, p)
+      let list = tabsMap.get(k)
+      if (!list) {
+        list = [{ id: BASE_TAB, url: '', title: '', favicon: '' }]
+        tabsMap.set(k, list)
+      }
+      return list
+    }
+    const activeTabId = (wsId: string, p: BrowserProfile): string => activeTabMap.get(wpk(wsId, p)) ?? BASE_TAB
+    const gkey = (wsId: string, p: BrowserProfile, tabId: string): string => `${wsId}:${p}#${tabId}`
     const activeWsId = (): string => getWorkspaces().activeId ?? ''
     let workspaceGeneration = 0
     const captureWorkspace = (): { id: string; generation: number } => ({
@@ -321,9 +344,14 @@ export const browserFeature: UiFeature = {
     // on top — possibly the signed-in one over a preview workspace (finding B9). A miss
     // falls to 'preview', the safe direction (new workspaces are preview by default).
     const wsProfile = new Map<string, BrowserProfile>()
-    const activeKey = (): string => gkey(activeWsId(), wsProfile.get(activeWsId()) ?? 'preview')
+    const activeProfile = (): BrowserProfile => wsProfile.get(activeWsId()) ?? 'preview'
+    const activeKey = (): string => {
+      const wsId = activeWsId()
+      const p = activeProfile()
+      return gkey(wsId, p, activeTabId(wsId, p))
+    }
 
-    function makeGuest(wsId: string, p: BrowserProfile): HTMLElement {
+    function makeGuest(wsId: string, p: BrowserProfile, tabId: string): HTMLElement {
       const partition = p === 'preview' ? browserPreviewPartition(wsId) : browserAgentWebPartition(wsId, agentWebPersists)
       const wv = document.createElement('webview')
       wv.className = 'browser-guest'
@@ -335,23 +363,52 @@ export const browserFeature: UiFeature = {
       // is still funneled through that handler (http(s) only, hardened child) — the
       // guest can request a window, main decides what it becomes.
       wv.setAttribute('allowpopups', '')
+      const tab = (): Tab | undefined => tabsFor(wsId, p).find((t) => t.id === tabId)
       wv.addEventListener('dom-ready', () => {
         readyGuests.add(wv) // its <webview> methods are safe to call now
         try {
-          bridge.send(BrowserChannels.guest, { workspaceId: wsId, profile: p, id: (wv as unknown as { getWebContentsId(): number }).getWebContentsId() })
+          bridge.send(BrowserChannels.guest, { workspaceId: wsId, profile: p, tabId, id: (wv as unknown as { getWebContentsId(): number }).getWebContentsId() })
         } catch {
           /* not attached yet */
         }
         applyZoom() // a re-created guest inherits its workspace's zoom
+        const t = tab()
+        if (t?.pending) {
+          const u = t.pending
+          t.pending = undefined
+          void (wv as WebviewEl).loadURL(u) // a new tab's initial url, raced-free
+        }
+      })
+      // Per-tab metadata for the strip (title/url/favicon), tracked on EVERY tab so an
+      // inactive tab still shows the right label.
+      const onNav = (e: Event): void => {
+        const url = (e as unknown as { url?: string }).url
+        const t = tab()
+        if (t && typeof url === 'string') {
+          t.url = url === 'about:blank' ? '' : url
+          publishTabs(wsId, p)
+        }
+      }
+      wv.addEventListener('did-navigate', onNav)
+      wv.addEventListener('did-navigate-in-page', onNav)
+      wv.addEventListener('page-title-updated', (e) => {
+        const t = tab()
+        if (t) {
+          t.title = String((e as unknown as { title?: string }).title ?? '')
+          publishTabs(wsId, p)
+        }
       })
       // Page-status events fire on the element (renderer-side); they touch the chrome
       // ONLY for the guest currently on top, so a background workspace's page can't
       // repaint the header you're looking at.
       wv.addEventListener('page-favicon-updated', (e) => {
         const urls = (e as unknown as { favicons?: string[] }).favicons ?? []
+        const t = tab()
+        if (t) t.favicon = urls[0] ?? ''
         if (urls[0]) wsFavicon.set(wsId, urls[0])
         else wsFavicon.delete(wsId)
         if (isActiveGuest(wv)) renderUrlLead()
+        publishTabs(wsId, p)
       })
       wv.addEventListener('did-start-loading', () => {
         if (isActiveGuest(wv)) loadError.hidden = true // a new attempt clears the last failure
@@ -384,30 +441,46 @@ export const browserFeature: UiFeature = {
       return wv
     }
 
+    /** Create a tab's guest webview (idempotent) and slot it into the host. */
+    function ensureTabGuest(wsId: string, p: BrowserProfile, tabId: string): HTMLElement {
+      const k = gkey(wsId, p, tabId)
+      let wv = guests.get(k)
+      if (!wv) {
+        wv = makeGuest(wsId, p, tabId)
+        guests.set(k, wv)
+        viewHost.append(wv)
+      }
+      return wv
+    }
+
     function evictWorkspace(wsId: string): void {
       for (const p of ['preview', 'agent-web'] as const) {
-        const k = gkey(wsId, p)
-        const wv = guests.get(k)
-        if (wv) {
-          bridge.send(BrowserChannels.guestGone, { workspaceId: wsId, profile: p })
-          wv.remove()
-          guests.delete(k)
+        for (const t of tabsFor(wsId, p)) {
+          const k = gkey(wsId, p, t.id)
+          const wv = guests.get(k)
+          if (wv) {
+            bridge.send(BrowserChannels.guestGone, { workspaceId: wsId, profile: p, tabId: t.id })
+            wv.remove()
+            guests.delete(k)
+          }
         }
+        tabsMap.delete(wpk(wsId, p)) // its tabs are ephemeral; a return restores the base tab
+        activeTabMap.delete(wpk(wsId, p))
       }
     }
 
-    /** Ensure the given workspace's guests exist (lazy per workspace), touch its
-     *  LRU position, and evict the oldest beyond the cap (never the active). */
+    /** Ensure the given workspace's BASE-tab guests exist (lazy per workspace), touch
+     *  its LRU position, and evict the oldest beyond the cap (never the active). Extra
+     *  tabs are created on demand and not restored after eviction. */
     function ensureGuests(wsId: string): void {
       if (!wsId) return
       const at = lru.indexOf(wsId)
       if (at >= 0) lru.splice(at, 1)
       lru.push(wsId)
-      if (!guests.has(gkey(wsId, 'preview'))) {
+      if (!guests.has(gkey(wsId, 'preview', BASE_TAB))) {
         for (const p of ['preview', 'agent-web'] as const) {
-          const wv = makeGuest(wsId, p)
-          guests.set(gkey(wsId, p), wv)
-          viewHost.append(wv)
+          tabsFor(wsId, p) // init the base tab record
+          ensureTabGuest(wsId, p, BASE_TAB)
         }
       }
       while (lru.length > GUEST_CAP) {
@@ -425,7 +498,112 @@ export const browserFeature: UiFeature = {
       for (const [k, wv] of guests) wv.classList.toggle('is-active', k === active)
       applyZoom() // the active guest may have changed — carry its workspace's zoom
       refreshAudioChrome() // and its audio/mute state
+      renderTabStrip()
     }
+
+    // ── Tab lifecycle (F4) ──────────────────────────────────────────────────────
+    /** Tell main the tab list + active id for a (workspace, profile) so the driver and
+     *  browser_tab_* verbs stay in sync; also refreshes the strip. */
+    function publishTabs(wsId: string, p: BrowserProfile): void {
+      const tabs = tabsFor(wsId, p).map((t) => ({ id: t.id, url: t.url, title: t.title }))
+      bridge.send(BrowserChannels.tabsState, { workspaceId: wsId, profile: p, tabs, activeId: activeTabId(wsId, p) })
+      if (wsId === activeWsId() && p === activeProfile()) renderTabStrip()
+    }
+    function selectTab(wsId: string, p: BrowserProfile, tabId: string): void {
+      if (!tabsFor(wsId, p).some((t) => t.id === tabId)) return
+      activeTabMap.set(wpk(wsId, p), tabId)
+      bridge.send(BrowserChannels.tabActivate, { workspaceId: wsId, profile: p, tabId })
+      applyGuestVisibility()
+      // The header follows the newly-active tab's url immediately.
+      const t = tabsFor(wsId, p).find((x) => x.id === tabId)
+      if (t && wsId === activeWsId() && p === activeProfile() && document.activeElement !== urlInput) {
+        urlInput.value = t.url
+        renderUrlLead()
+      }
+    }
+    function newTab(wsId: string, p: BrowserProfile, url?: string): string {
+      const id = newTabId()
+      // The initial url rides `pending` and loads on the new guest's dom-ready — no race
+      // with main's active-tab (which a navigate IPC would depend on).
+      tabsFor(wsId, p).push({ id, url: '', title: '', favicon: '', pending: url })
+      ensureTabGuest(wsId, p, id)
+      selectTab(wsId, p, id)
+      publishTabs(wsId, p)
+      return id
+    }
+    function closeTab(wsId: string, p: BrowserProfile, tabId: string): void {
+      const list = tabsFor(wsId, p)
+      if (list.length <= 1 || tabId === BASE_TAB) return // never close the last / base tab
+      const idx = list.findIndex((t) => t.id === tabId)
+      if (idx < 0) return
+      const k = gkey(wsId, p, tabId)
+      const wv = guests.get(k)
+      if (wv) {
+        bridge.send(BrowserChannels.guestGone, { workspaceId: wsId, profile: p, tabId })
+        wv.remove()
+        guests.delete(k)
+      }
+      list.splice(idx, 1)
+      if (activeTabId(wsId, p) === tabId) selectTab(wsId, p, list[Math.max(0, idx - 1)].id)
+      publishTabs(wsId, p)
+    }
+    const hostOfUrl = (url: string): string => {
+      try {
+        return new URL(url).host
+      } catch {
+        return ''
+      }
+    }
+    function renderTabStrip(): void {
+      const wsId = activeWsId()
+      const p = activeProfile()
+      const tabs = wsId ? tabsFor(wsId, p) : []
+      tabStrip.hidden = !(open && !!wsId)
+      if (tabStrip.hidden) return
+      clear(tabStrip)
+      const activeId = activeTabId(wsId, p)
+      for (const t of tabs) {
+        const tabEl = el('button', { class: `browser-tab${t.id === activeId ? ' is-active' : ''}`, type: 'button' }) as HTMLButtonElement
+        if (t.favicon) {
+          const img = el('img', { class: 'browser-tab-favicon' }) as HTMLImageElement
+          img.src = t.favicon
+          img.alt = ''
+          img.onerror = (): void => img.replaceWith(icon('globe', 12))
+          tabEl.append(img)
+        } else {
+          tabEl.append(icon('globe', 12))
+        }
+        tabEl.append(el('span', { class: 'browser-tab-label', text: t.title || hostOfUrl(t.url) || 'New tab' }))
+        tabEl.title = t.url || 'New tab'
+        tabEl.onclick = (): void => selectTab(wsId, p, t.id)
+        if (t.id !== BASE_TAB) {
+          const x = el('span', { class: 'browser-tab-close', text: '×' })
+          x.setAttribute('role', 'button')
+          x.setAttribute('aria-label', 'Close tab')
+          x.onclick = (e): void => {
+            e.stopPropagation()
+            closeTab(wsId, p, t.id)
+          }
+          tabEl.append(x)
+        }
+        tabStrip.append(tabEl)
+      }
+      const plus = IconButton({ icon: 'plus', label: 'New tab', title: 'New tab', onClick: () => newTab(wsId, p) })
+      plus.classList.add('browser-tab-new')
+      tabStrip.append(plus)
+    }
+
+    // Tab requests from MAIN (window.open / agent verbs).
+    bridge.on(BrowserChannels.tabOpen, (payload) => {
+      const q = payload as { workspaceId?: string; profile?: BrowserProfile; url?: string }
+      if (!q.workspaceId || (q.profile !== 'preview' && q.profile !== 'agent-web')) return
+      newTab(q.workspaceId, q.profile, q.url)
+    })
+    bridge.on(BrowserChannels.tabSelect, (payload) => {
+      const q = payload as { workspaceId?: string; profile?: BrowserProfile; tabId?: string }
+      if (!q.workspaceId || (q.profile !== 'preview' && q.profile !== 'agent-web') || !q.tabId) return
+      selectTab(q.workspaceId, q.profile, q.tabId)
+    })
 
     // A guest's <webview> methods (setZoomLevel, findInPage, stop, …) THROW if called
     // before its dom-ready — so the driveable handle is gated on readiness. Every
@@ -655,11 +833,11 @@ export const browserFeature: UiFeature = {
     bridge.on(BrowserChannels.recreateGuest, (payload) => {
       const { workspaceId, profile: p } = payload as { workspaceId?: string; profile?: BrowserProfile }
       if (!workspaceId || !p) return
-      const k = gkey(workspaceId, p)
+      const k = gkey(workspaceId, p, BASE_TAB) // the persistence arm recreates the base tab
       if (!guests.has(k)) return
-      bridge.send(BrowserChannels.guestGone, { workspaceId, profile: p })
+      bridge.send(BrowserChannels.guestGone, { workspaceId, profile: p, tabId: BASE_TAB })
       guests.get(k)?.remove()
-      const wv = makeGuest(workspaceId, p)
+      const wv = makeGuest(workspaceId, p, BASE_TAB)
       guests.set(k, wv)
       viewHost.append(wv)
       applyGuestVisibility()
@@ -1232,7 +1410,8 @@ export const browserFeature: UiFeature = {
       navigate: 'Navigated', back: 'Back', forward: 'Forward', reload: 'Reloaded',
       snapshot: 'Read page', screenshot: 'Screenshot', click: 'Clicked', type: 'Typed',
       scroll: 'Scrolled', select: 'Selected', eval: 'Ran script', console: 'Read console',
-      network_failures: 'Read failures', wait_for: 'Waited for'
+      network_failures: 'Read failures', wait_for: 'Waited for',
+      tab_list: 'Listed tabs', tab_new: 'Opened a tab', tab_select: 'Switched tab'
     }
     // Present-continuous for the LIVE action line (Comet reads "…is working"): the pill
     // says what the agent is doing right now, the trail keeps the past-tense history.
@@ -1240,7 +1419,8 @@ export const browserFeature: UiFeature = {
       navigate: 'Navigating…', back: 'Going back…', forward: 'Going forward…', reload: 'Reloading…',
       snapshot: 'Reading the page…', screenshot: 'Capturing…', click: 'Clicking…', type: 'Typing…',
       scroll: 'Scrolling…', select: 'Selecting…', eval: 'Running a script…', console: 'Reading the console…',
-      network_failures: 'Checking errors…', wait_for: 'Waiting…'
+      network_failures: 'Checking errors…', wait_for: 'Waiting…',
+      tab_list: 'Listing tabs…', tab_new: 'Opening a tab…', tab_select: 'Switching tabs…'
     }
     bridge.on(BrowserChannels.activity, (payload) => {
       const a = payload as BrowserAgentActivity
@@ -1408,6 +1588,20 @@ export const browserFeature: UiFeature = {
         forceRenderChips: () => renderQuickChips(),
         quickChipHosts: () => Array.from(quickChips.querySelectorAll('span')).map((s) => s.textContent ?? ''),
         recentsCount: () => readList(recentsKey(activeWsId())).length,
+        // Tabs (F4)
+        tabCount: () => tabsFor(activeWsId(), activeProfile()).length,
+        activeTabIndex: () => tabsFor(activeWsId(), activeProfile()).findIndex((t) => t.id === activeTabId(activeWsId(), activeProfile())),
+        tabLabels: () => Array.from(tabStrip.querySelectorAll('.browser-tab-label')).map((s) => s.textContent ?? ''),
+        tabStripShown: () => !tabStrip.hidden,
+        newTab: (url?: string) => newTab(activeWsId(), activeProfile(), url),
+        selectTabIndex: (i: number) => {
+          const t = tabsFor(activeWsId(), activeProfile())[i]
+          if (t) selectTab(activeWsId(), activeProfile(), t.id)
+        },
+        closeTabIndex: (i: number) => {
+          const t = tabsFor(activeWsId(), activeProfile())[i]
+          if (t) closeTab(activeWsId(), activeProfile(), t.id)
+        },
         // Hardening (S1): try to attach a webview on a FOREIGN partition — the
         // will-attach-webview guard must refuse it (no dom-ready → returns false).
         probeRogueWebview: async (): Promise<boolean> => {

@@ -96,6 +96,12 @@ function toVerb(name: string, args: Record<string, unknown>): BrowserAgentVerb |
       return { verb: 'network_failures', n: n('tail') }
     case 'browser_wait_for':
       return { verb: 'wait_for', target: s('selector'), n: n('timeoutMs') }
+    case 'browser_tab_list':
+      return { verb: 'tab_list' }
+    case 'browser_tab_new':
+      return { verb: 'tab_new', target: s('url') }
+    case 'browser_tab_select':
+      return { verb: 'tab_select', target: s('tab') }
     default:
       return null
   }

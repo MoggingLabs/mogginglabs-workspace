@@ -64,6 +64,23 @@ export interface BrowserSignedInSite {
 
 export type BrowserNavAction = 'back' | 'forward' | 'reload'
 
+/** One tab within a (workspace, profile) — its stable id + what to show on the strip.
+ *  url/title only (favicon is fetched renderer-side), never page content. */
+export interface BrowserTab {
+  id: string
+  url: string
+  title: string
+}
+
+/** The renderer's tab list for a (workspace, profile), cached main-side so the agent's
+ *  `browser_tab_list` can answer and `browser_tab_select` can resolve an index → id. */
+export interface BrowserTabsState {
+  workspaceId: string
+  profile: BrowserProfile
+  tabs: BrowserTab[]
+  activeId: string
+}
+
 /** A right-click inside a guest page, forwarded from MAIN (the guest's context-menu
  *  is a main-side webContents event) so the renderer draws the HOUSE menu. Coordinates
  *  are guest-viewport px; the renderer offsets them by the view host. Carries only what
@@ -111,6 +128,10 @@ export type BrowserAgentVerbName =
   | 'console'
   | 'network_failures'
   | 'wait_for'
+  // Tabs (F4): an agent can hold a doc and the dev server open at once.
+  | 'tab_list'
+  | 'tab_new'
+  | 'tab_select'
 
 export interface BrowserAgentVerb {
   verb: BrowserAgentVerbName
@@ -151,6 +172,9 @@ export interface BrowserAgentResult {
   lines?: string[]
   /** eval: JSON-stringified return value (best effort). */
   value?: string
+  /** tab_list / tab_new / tab_select: the tabs after the call + which is active. */
+  tabs?: BrowserTab[]
+  activeTabId?: string
 }
 
 /** Possession state + verb trail pushed to the dock chrome. Carries verb NAMES

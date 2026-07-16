@@ -152,6 +152,36 @@
     "verb": "browser_wait_for"
   },
   {
+    "name": "browser_tab_list",
+    "title": "List tabs",
+    "description": "List the open tabs in this workspace's browser (index, url, title) and which is active.",
+    "inputSchema": { "type": "object", "properties": {} },
+    "family": "browser",
+    "access": "read",
+    "upstream": "app",
+    "verb": "browser_tab_list"
+  },
+  {
+    "name": "browser_tab_new",
+    "title": "Open a tab",
+    "description": "Open a new tab, optionally navigating it to a url. Returns the tab list.",
+    "inputSchema": { "type": "object", "properties": { "url": { "type": "string" } } },
+    "family": "browser",
+    "access": "read",
+    "upstream": "app",
+    "verb": "browser_tab_new"
+  },
+  {
+    "name": "browser_tab_select",
+    "title": "Switch tab",
+    "description": "Switch the active tab by index (from browser_tab_list) or tab id. Returns the tab list.",
+    "inputSchema": { "type": "object", "properties": { "tab": { "type": "string" } }, "required": ["tab"] },
+    "family": "browser",
+    "access": "read",
+    "upstream": "app",
+    "verb": "browser_tab_select"
+  },
+  {
     "name": "list_panes",
     "title": "List panes",
     "description": "List the live panes in this workspace's fleet: id, size, state (idle/busy/attention), swarm role, remote host, and title.",

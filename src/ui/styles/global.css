@@ -6630,6 +6630,78 @@ body.pane-dragging * {
 .browser-dock-handle:hover {
   background: color-mix(in srgb, var(--accent) 25%, transparent);
 }
+/* ── Tab strip (F4): above the address bar, Chrome/Comet-style ──────────────── */
+.browser-tab-strip {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: var(--sp-1) var(--sp-2) 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.browser-tab-strip[hidden] {
+  display: none;
+}
+.browser-tab-strip::-webkit-scrollbar {
+  display: none;
+}
+.browser-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 22ch;
+  height: 28px;
+  padding: 0 var(--sp-2);
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  background: transparent;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  cursor: pointer;
+}
+.browser-tab:hover {
+  background: var(--bg-elevated);
+  color: var(--text-mid);
+}
+.browser-tab.is-active {
+  background: var(--bg-surface);
+  border-color: var(--border);
+  color: var(--text-hi);
+}
+.browser-tab svg,
+.browser-tab-favicon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+.browser-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-tab-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--r-sm);
+  color: var(--text-lo);
+  font-size: var(--fs-13);
+  line-height: 1;
+}
+.browser-tab-close:hover {
+  background: var(--danger);
+  color: var(--accent-contrast);
+}
+.browser-tab-new {
+  flex: none;
+}
+
 .browser-dock-header {
   position: relative; /* anchors the division hairline */
   display: flex;
