@@ -43,6 +43,12 @@ function makeFixture(): Fixture {
 
 export function runExplorerSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 200000) // safety net (a full app boot + two workspaces)
+  // The drag assertions below were authored against the dev window (1200 wide): the dock's
+  // width cap is the window minus the grid's 480 floor and the rail, and on a CI display
+  // (1024 on the win/mac runners) that cap lands UNDER the 360 the drag must settle at —
+  // the gate then fails geometry it never meant to test. Pin the authored size; programmatic
+  // resize beyond the physical display works on every runner (chromeux does 1450).
+  win.setSize(1200, 800)
   const wc = win.webContents
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))

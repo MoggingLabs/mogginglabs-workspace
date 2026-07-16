@@ -222,6 +222,14 @@ jobs:
       - name: Build
         run: npm run build
 
+      # The real-CLI gates (AGENTLAUNCH detect+launch, BOARD's card hand-off, TEMPLATE_B's
+      # claude slot, TYPED's real-typed lane) drive the actual `claude` binary — unauthenticated
+      # on purpose: the smokes answer/accept its first-run onboarding UI, which is a real TUI.
+      # Without the binary the launcher types a command the shell cannot find, the fleet's
+      # fail-close unbinds the card, and all four gates fail on environment, not product.
+      - name: Agent CLIs on PATH (claude + gemini, unauthenticated)
+        run: npm install -g @anthropic-ai/claude-code @google/gemini-cli
+
       - name: Sandbox helper perms
         run: |
           sudo chown root node_modules/electron/dist/chrome-sandbox
@@ -302,6 +310,10 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Same rationale as the linux sweep: the real-CLI gates need the actual binary.
+      - name: Agent CLIs on PATH (claude + gemini, unauthenticated)
+        run: npm install -g @anthropic-ai/claude-code @google/gemini-cli
+
       - name: Full sweep (all gates, isolated state)
         run: |
           MOGGING_CI_GPU=soft MOGGING_GATES="${{ inputs.gates }}" bash scripts/qa-smokes.sh | tee sweep.log
@@ -358,6 +370,11 @@ jobs:
       - name: Build
         shell: bash
         run: npm run build
+
+      # Same rationale as the linux sweep: the real-CLI gates need the actual binary.
+      - name: Agent CLIs on PATH (claude + gemini, unauthenticated)
+        shell: bash
+        run: npm install -g @anthropic-ai/claude-code @google/gemini-cli
 
       - name: Full sweep (all gates, isolated state)
         shell: bash

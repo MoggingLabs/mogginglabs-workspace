@@ -229,10 +229,17 @@ const SCRIPT = `(async () => {
   lane.dispatchEvent(new PointerEvent('pointerleave', { bubbles: false }))
   await sleep(300)
   check('H leaves again', opacity(p0) === 0)
-  // Scrolling flashes it, and the flash fades on its own.
+  // Scrolling flashes it, and the flash fades on its own. POLLED to the transition's end,
+  // not sampled at a fixed beat: under CI's software compositor the opacity ramp is still
+  // mid-flight at 150ms (the class is already 'is-active'), and the claim under test is that
+  // the flash HAPPENS — not that it completes inside one frame budget.
   wheel(p0, -300)
-  await sleep(150)
-  check('H flashes while scrolling', opacity(p0) === 1, 'classes=' + q(p0, '.pane-slider').className)
+  let hFlash = opacity(p0)
+  for (let i = 0; i < 16 && hFlash !== 1; i++) {
+    await sleep(50)
+    hFlash = opacity(p0)
+  }
+  check('H flashes while scrolling', hFlash === 1, 'classes=' + q(p0, '.pane-slider').className)
   await sleep(REST_MS)
   check('H flash fades', opacity(p0) === 0)
 

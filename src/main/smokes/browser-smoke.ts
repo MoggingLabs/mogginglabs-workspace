@@ -19,6 +19,10 @@ const PAGE_TITLE = 'MOG_BROWSER_TEST_4242'
 
 export function runBrowserSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 120000) // safety net
+  // The dock-width assertions (settle at 380) assume the dev window's 1200 width; on the
+  // 1024-wide CI displays the layout's own cap clamps the dock below that and the gate
+  // fails arithmetic it never meant to test. Pin the authored size (see explorer-smoke).
+  win.setSize(1200, 800)
   const wc = win.webContents
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))

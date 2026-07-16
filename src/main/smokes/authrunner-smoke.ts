@@ -22,7 +22,10 @@ export function runAuthRunnerSmoke(win: BrowserWindow): void {
     { id: 'gemini', name: 'Gemini', installed: true, installHint: '' }
   ]
   const success = (label: string): string => process.platform === 'win32' ? `echo ${label}` : `printf ${label}`
-  const failure = process.platform === 'win32' ? 'cmd.exe /d /c exit 7' : 'false'
+  // Both spellings exit SEVEN: the gemini row's title assertion below pins /code 7/ on every
+  // platform, and `false` (the old POSIX stub) exits 1 — authored-on-Windows drift that made
+  // this gate red on linux/mac only.
+  const failure = process.platform === 'win32' ? 'cmd.exe /d /c exit 7' : 'sh -c "exit 7"'
 
   const openCard = async (label: string): Promise<boolean> => {
     const opened = await ES<boolean>(`(() => {

@@ -42,10 +42,16 @@ export function runKbShortcutsSmoke(win: BrowserWindow): void {
       const overlayHasKbd = await ES<boolean>(`!!document.querySelector('.modal-overlay .shortcuts-row-keys .kbd')`)
       const overlayOk = overlayRows >= 10 && overlayHasKbd
 
-      // 2 ── Esc closes it.
+      // 2 ── Esc closes it. POLLED past the close animation: the overlay stays mounted
+      // wearing .is-closing while its transition runs, and one fixed 300ms beat samples
+      // mid-animation on a loaded CI runner. An overlay that is merely closing is closed
+      // for this gate's claim — and the poll still demands the unmount completes.
       await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`)
-      await sleep(300)
-      const closedOk = !(await ES<boolean>(`!!document.querySelector('.modal-overlay')`))
+      let closedOk = false
+      for (let i = 0; i < 10 && !closedOk; i++) {
+        await sleep(300)
+        closedOk = !(await ES<boolean>(`!!document.querySelector('.modal-overlay')`))
+      }
 
       // 3 ── Settings › Shortcuts renders the same list on its own page.
       await ES(`(document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click(), 1)`)

@@ -120,9 +120,18 @@ function remoteHereDoc(target: string, delimiter: string, contents: string): str
   return `cat > ${target} <<'${delimiter}'\n${contents}${contents.endsWith('\n') ? '' : '\n'}${delimiter}`
 }
 
-function remoteCaptureHereDoc(name: string, delimiter: string, contents: string): string {
-  if (contents.split('\n').includes(delimiter)) throw new Error(`Remote here-doc collision: ${delimiter}`)
-  return `${name}=$(cat <<'${delimiter}'\n${contents}${contents.endsWith('\n') ? '' : '\n'}${delimiter}\n)`
+/** Capture a literal value into a shell variable WITHOUT a here-doc inside `$()`: macOS's
+ * /bin/sh is bash 3.2, whose command-substitution scanner is not a recursive parser — it
+ * re-tokenizes the body, so a here-doc inside `$( )` is read as code and any case-pattern
+ * paren or stray quote in the payload ends (or unbalances) the substitution. Stage the value
+ * as a file via the same quoted here-doc the rc files use, then `$(cat file)` — which every
+ * POSIX sh parses. Trailing-newline semantics match the old capture: `$(cat)` strips them. */
+function remoteCaptureViaFile(name: string, target: string, delimiter: string, contents: string): string {
+  return [
+    remoteHereDoc(target, delimiter, contents),
+    `[ "$?" -eq 0 ] || exit 72`,
+    `${name}=$(cat ${target}); rm -f ${target}`
+  ].join('\n')
 }
 
 const LOCAL_PANE_CAPABILITIES = new Set([
@@ -292,17 +301,24 @@ export function remoteBootstrapCommand(cwd?: string): string {
     '[ "$?" -eq 0 ] && chmod 600 "$zd/.zshrc" || exit 72',
     remoteHereDoc('"$d/envrc"', 'MOGGING_SH_RC_EOF', shRc),
     '[ "$?" -eq 0 ] && chmod 600 "$d/envrc" || exit 72',
-    remoteCaptureHereDoc('requested', 'MOGGING_REQUESTED_CWD_EOF', cwd ?? ''),
+    remoteCaptureViaFile('requested', '"$d/.requested-cwd"', 'MOGGING_REQUESTED_CWD_EOF', cwd ?? ''),
     'export MOGGING_REQUESTED_CWD="$requested" MOGGING_HELPER_DIR="$d" MOGGING_PTY=1',
     'if [ "${shell##*/}" = fish ]; then',
     '  case "$requested" in "~") requested="$HOME" ;; "~/"*) requested="$HOME/${requested#~/}" ;; esac',
     '  if [ -n "$requested" ]; then CDPATH= cd "$requested" || { echo "mogging: remote working directory is unavailable" >&2; exit 72; }; fi',
-    remoteCaptureHereDoc('fish_init', 'MOGGING_FISH_INIT_EOF', fishInit),
+    remoteCaptureViaFile('fish_init', '"$d/.fish-init"', 'MOGGING_FISH_INIT_EOF', fishInit),
     REMOTE_CONTEXT_MONITOR_START.trimEnd(),
     `  ${READY_OSC_PRINTF}`, // fish takes its own exec path — it owes the same signal
     '  exec "$shell" --login --init-command "$fish_init"',
     'fi',
-    remoteCaptureHereDoc('interactive', 'MOGGING_INTERACTIVE_EOF', interactive),
+    // A FILE, not a `$(cat <<'EOF' …)` capture, and the difference is load-bearing: macOS's
+    // /bin/sh is bash 3.2, whose `$()` scanner is not a recursive parser — it quote-scans for
+    // the closing paren, so the UNPAIRED `)` of every `case` pattern in this script ends the
+    // substitution mid-body and the leftover tail dies with "unexpected EOF while looking for
+    // matching `''" (the REMOTEBOOT gate, macos-only). A quoted here-doc to a file has no
+    // such rescanning; the rc files above already ride the same mechanism.
+    remoteHereDoc('"$d/interactive"', 'MOGGING_INTERACTIVE_EOF', interactive),
+    '[ "$?" -eq 0 ] && chmod 600 "$d/interactive" || exit 72',
     'export MOGGING_REQUESTED_CWD',
     // The readiness signal, emitted once every check above has passed and immediately before the
     // user's shell takes over: "you are past the password/MFA/host-key prompt, this is a shell."
@@ -310,7 +326,9 @@ export function remoteBootstrapCommand(cwd?: string): string {
     // before it is exactly how a prompt eats your credentials (audit finding 9). Emitted here
     // rather than at the top so a bootstrap that exits 72 never claims to be ready.
     READY_OSC_PRINTF,
-    'exec "$shell" -lc "$interactive"'
+    // The bootstrap expands $MOGGING_HELPER_DIR here (it is set and exported above), so the
+    // login shell receives a plain `. "/abs/path/interactive"` — quote-safe for any HOME.
+    'exec "$shell" -lc ". \\"$MOGGING_HELPER_DIR/interactive\\""'
   ].join('\n')
   // sshd may initially hand the command to fish/csh. Keep the outer command simple
   // enough for those shells, then parse the actual bootstrap with a known POSIX shell.

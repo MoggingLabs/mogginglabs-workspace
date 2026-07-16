@@ -20,8 +20,11 @@ function git(cwd: string, args: string[]): string {
 //      worktree clears it (4/03 polish)
 //   5. closing the pane unbinds the card (paneId cleared, persisted)
 //
-// Provider 'gemini' is a REAL launch. (2) used to scrape the pane's xterm buffer for the task
-// text — an assertion about GEMINI's rendering, which the board neither owns nor can promise:
+// Provider 'claude' is a REAL launch — claude rather than gemini because the gate must hold on
+// a runner with UNAUTHENTICATED CLIs: claude sits in its onboarding TUI (a live process the
+// detector can see — AGENTLAUNCH proves it on every OS), while gemini without credentials exits
+// before detection and the hand-off never fires. (2) used to scrape the pane's xterm buffer for
+// the task text — an assertion about the AGENT's rendering, which the board neither owns nor can promise:
 // a real agent takes the ALTERNATE screen, so the text it was handed is never echoed there and
 // the gate failed as "the board is broken". The board's contract is the task IS the agent's
 // first prompt: it must WRITE that text to that pane, once something is listening. So we
@@ -95,7 +98,7 @@ export function runBoardSmoke(win: BrowserWindow): void {
       git(anchor, ['commit', '-m', 'init'])
       await ES(`window.__mogging.workspace.create({ name: 'Anchor', cwd: ${JSON.stringify(anchor)} })`)
       await sleep(1800)
-      const started = (await ES(`window.__mogging.board.startOnCard(${JSON.stringify(cardId)}, 'gemini')`)) as boolean
+      const started = (await ES(`window.__mogging.board.startOnCard(${JSON.stringify(cardId)}, 'claude')`)) as boolean
       await sleep(1200)
       const afterStart = (await ES(`window.__mogging.board.list()`)) as Card[]
       const bound = afterStart.find((c) => c.id === cardId)
@@ -182,12 +185,12 @@ export function runBoardSmoke(win: BrowserWindow): void {
       const wtRoot = join(anchor, '.mogging', 'worktrees')
       const wtDirs = existsSync(wtRoot) ? readdirSync(wtRoot) : []
       const branch = wtDirs.length === 1 ? `mogging/${wtDirs[0]}` : ''
-      // GET THE SHELL BACK FIRST — the approval is a COMMAND, and gemini owns the keyboard.
+      // GET THE SHELL BACK FIRST — the approval is a COMMAND, and the agent owns the keyboard.
       //
       // `mogging approve` now fails closed outside a live pane: it must carry the pane's
       // daemon-minted MOGGING_PANE_TOKEN, which exists nowhere but that pane's own env. So the
       // approval can only be executed INSIDE the pane — and this pane is running a real agent,
-      // which has the keyboard and the alternate screen. Typed at gemini, `mogging approve …`
+      // which has the keyboard and the alternate screen. Typed at the agent, `mogging approve …`
       // is prose in a chat box: it never runs, no approval is ever recorded, and the ✓-chip that
       // depends on it never appears. Exactly the trap settleToShell exists for (smoke-shell.ts),
       // and exactly the sequence the product asks of a person: leave the agent, then type.
@@ -238,6 +241,15 @@ export function runBoardSmoke(win: BrowserWindow): void {
       await ES(`window.__mogging.layout.close(${paneId})`)
       let unbindOk = false
       for (let i = 0; i < 20; i++) {
+        // On a CI runner the daemon's process snapshot can still count a child under the
+        // pane's shell at this point, and close() then asks for confirmation. The gate's
+        // claim is unbind-on-close, not the confirm dialog — answer it when it appears
+        // (same mechanism the worktree gate's confirmPaneClose rides).
+        await ES(`(() => {
+          const button = Array.from(document.querySelectorAll('.modal-overlay:not(.is-closing) .confirm-actions button'))
+            .find((el) => (el.textContent ?? '').trim() === 'Close pane')
+          if (button instanceof HTMLButtonElement) button.click()
+        })()`)
         const list = (await ES(`window.__mogging.board.list()`)) as Card[]
         const c = list.find((x) => x.id === cardId)
         if (c && (c.paneId == null || c.paneId === 0)) {

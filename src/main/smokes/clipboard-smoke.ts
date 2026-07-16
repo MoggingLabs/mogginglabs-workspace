@@ -199,7 +199,10 @@ const SCRIPT = `(async () => {
       let all = ''
       for (let r = 0; r < buf.length; r++) {
         const line = buf.getLine(r)
-        if (line) all += line.translateToString(true) + String.fromCharCode(10)
+        // Joined WITHOUT a separator: xterm wraps the echo across rows on a narrow pane
+        // (the CI window), and a newline spliced mid-marker makes one paste count as zero.
+        // A wrapped row is full-width, so plain concatenation reconstructs the stream.
+        if (line) all += line.translateToString(true)
       }
       return all.split('PASTE_E2E_5591').length - 1
     }
