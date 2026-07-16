@@ -108,6 +108,7 @@ import { runSwarmSmoke } from './smokes/swarm-smoke'
 import { runLedgerSmoke } from './smokes/ledger-smoke'
 import { runGateSmoke } from './smokes/gate-smoke'
 import { runProfilesSmoke } from './smokes/profiles-smoke'
+import { runLoginTruthSmoke } from './smokes/logintruth-smoke'
 import { runRemoteSmoke } from './smokes/remote-smoke'
 import { runSwarmMilestoneSmoke } from './smokes/swarmmilestone-smoke'
 import { runDaemonSurviveSmoke } from './smokes/daemon-survive-smoke'
@@ -167,7 +168,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
   'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
-  'MOGGING_PROFILES', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
+  'MOGGING_PROFILES', 'MOGGING_LOGINTRUTH', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
   // Typed-launch detection + the context gauge (the v6 pack).
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
   // Phase 11 — Files: the explorer's seven.
@@ -488,6 +489,8 @@ function afterWindow(win: BrowserWindow): void {
     runGateSmoke(win) // env-gated reviewer-gate smoke (Phase-4/03)
   } else if (process.env.MOGGING_PROFILES) {
     runProfilesSmoke(win) // env-gated profiles + usage-limit failover smoke (Phase-4/04)
+  } else if (process.env.MOGGING_LOGINTRUTH) {
+    runLoginTruthSmoke(win) // env-gated login-truth smoke: label vs the home's REAL login (profiles pt 3)
   } else if (process.env.MOGGING_REMOTE) {
     runRemoteSmoke(win) // env-gated remote (SSH) pane smoke (Phase-4/05)
   } else if (process.env.MOGGING_SWARMMILESTONE) {
