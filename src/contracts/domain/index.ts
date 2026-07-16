@@ -1,3 +1,4 @@
+export * from './address-input'
 export * from './agent'
 export * from './agent-cli'
 export * from './agent-settings'

@@ -75,13 +75,14 @@ export const AgentConfigChannels = {
   changed: 'agentConfig:changed'
 } as const
 
-// Global Claude alert hooks (the hand-typed-launch gap): the same hook entries the launch
-// overlay carries, written into the user's global Claude settings on an EXPLICIT action —
-// the generated notify script no-ops outside a pane, which is what makes global wiring safe.
+// Global agent alert wiring (the hand-typed-launch gap): the same bell config the launch
+// carries session-scoped, written into each CLI's own global config on an EXPLICIT action —
+// the generated notify script (and the OpenCode plugin wrapping it) no-op outside a pane,
+// which is what makes global wiring safe everywhere else.
 export const AgentHookChannels = {
-  status: 'agentHooks:status', // -> GlobalHooksStatus (state + the file it read)
-  apply: 'agentHooks:apply', // -> GlobalHooksMutationResult (backup + atomic write, refuses concurrent edits)
-  remove: 'agentHooks:remove' // -> GlobalHooksMutationResult (strips OUR entries only)
+  status: 'agentHooks:status', // -> GlobalHooksStatus (one row per provider: state + files + reason)
+  apply: 'agentHooks:apply', // ({ provider }) -> GlobalHooksMutationResult (backup + atomic write, refuses concurrent edits and conflicts)
+  remove: 'agentHooks:remove' // ({ provider }) -> GlobalHooksMutationResult (strips OUR entries only; memo-restored booleans)
 } as const
 
 export const TemplateChannels = {
@@ -228,6 +229,15 @@ export const BrowserChannels = {
   state: 'browser:state', // main -> renderer: BrowserDockState (header truth)
   lastUrl: 'browser:lastUrl', // (workspaceId) -> string | null ("open this workspace's preview" chip)
   openExternal: 'browser:openExternal', // ({ url }) -> void (http(s) only, system browser)
+  contextMenu: 'browser:contextMenu', // main -> renderer: BrowserContextMenuParams (right-click in the guest → the house menu)
+  guestChord: 'browser:guestChord', // main -> renderer: BrowserGuestChord (an app shortcut pressed while the guest holds focus, F12)
+  devtools: 'browser:devtools', // renderer -> main: { x?, y? } — open DevTools on the active guest (F8)
+  permissionBlocked: 'browser:permissionBlocked', // main -> renderer: { permission } — a guest permission was denied (honest chip, F16)
+  // ── Tabs (F4) ──────────────────────────────────────────────────────────
+  tabActivate: 'browser:tabActivate', // renderer -> main: { workspaceId, profile, tabId } — the active tab per (workspace, profile), so the driver resolves it
+  tabsState: 'browser:tabsState', // renderer -> main: BrowserTabsState — the tab list + active id (main caches it for browser_tab_list)
+  tabOpen: 'browser:tabOpen', // main -> renderer: { workspaceId, profile, url? } — open a new tab (window.open / browser_tab_new)
+  tabSelect: 'browser:tabSelect', // main -> renderer: { workspaceId, profile, tabId } — activate a tab (browser_tab_select)
   // ── Agent control (6/05b) ──────────────────────────────────────────────
   consentGet: 'browser:consentGet', // (workspaceId) -> boolean (stored per-workspace grant; default OFF)
   consentSet: 'browser:consentSet', // ({ workspaceId, allowed }) -> void (Settings/wizard toggle writes it)

@@ -34,6 +34,14 @@ export type LayoutTreeNode = LeafNode | SplitNode
  *  padding and borders). Horizontal layout may scroll, but a leaf never gets narrower. */
 export const MIN_PANE_WIDTH_PX = 132
 
+/** Hard height floor for one terminal pane: the pane header (--pane-header-h, 46px)
+ *  plus three lines of terminal text (13px mono × 1.4 ≈ 18px/row) and borders,
+ *  rounded up to the seam-drag floor grid-layout has always enforced. ONE number
+ *  for both worlds: what a vertical seam drag clamps to, and what the CAPACITY
+ *  model (pane-capacity.ts) counts against when asking how many panes a screen
+ *  can honestly hold. */
+export const MIN_PANE_HEIGHT_PX = 110
+
 export interface Rect {
   x: number
   y: number
@@ -477,7 +485,12 @@ export function serializeTree(root: LayoutTreeNode): string {
 
 /** Hard ceiling on a workspace's LOCAL slot ids. Splits reuse the lowest free slot, so a
  *  workspace's ids stay inside 1..MAX_LEAVES for its whole life — which is what keeps a
- *  persisted tree's ids meaningful and bounds the search for a free one. */
+ *  persisted tree's ids meaningful and bounds the search for a free one.
+ *
+ *  MUST equal the contract's ABS_MAX_PANES (the capacity model's hard bound) — stated
+ *  as a literal because this module is deliberately DEPENDENCY-FREE (the
+ *  layout-invariants gate executes it standalone); the pane-capacity unit test pins
+ *  the two numbers together so they cannot drift. */
 export const MAX_LEAVES = 32
 const MAX_DEPTH = 10
 

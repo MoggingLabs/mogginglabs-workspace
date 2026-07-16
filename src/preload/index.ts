@@ -8,7 +8,7 @@ import { AllChannels } from '@contracts'
 const allow = new Set<string>(AllChannels)
 
 // Every TerminalPane holds one listener per terminal event channel, and a workspace
-// legitimately runs 16 panes (MAX_PANES) — past Node's default of 10 that printed a
+// legitimately runs dozens of panes (screen-derived paneLimit, ABS-capped at 32) — past Node's default of 10 that printed a
 // MaxListenersExceededWarning for perfectly healthy fan-out. Leak protection is real,
 // not a threshold: `on` returns an unsubscriber and panes detach on dispose.
 ipcRenderer.setMaxListeners(0)

@@ -83,8 +83,8 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
     'archive_card'
   ]
   const countWrites = (names: string[]): number => names.filter((n) => WRITES.includes(n)).length
-  /** Catalog geometry: 14 browser + 6 reads + 1 self (non-writes) + 11 writes. */
-  const NON_WRITE_COUNT = 21
+  /** Catalog geometry: 17 browser + 6 reads + 1 self (non-writes) + 11 writes. */
+  const NON_WRITE_COUNT = 24
   const WRITE_COUNT = WRITES.length
 
   const waitFor = async (probe: () => Promise<boolean>, tries = 12, gapMs = 400): Promise<boolean> => {

@@ -59,6 +59,8 @@ import { runCtxAccuracySmoke } from './smokes/ctxaccuracy-smoke'
 import { runTemplateSmoke } from './smokes/template-smoke'
 import { runProfpersistSmoke } from './smokes/profpersist-smoke'
 import { runBrowserSmoke } from './smokes/browser-smoke'
+import { runBrowserUxSmoke } from './smokes/browserux-smoke'
+import { runBrowserTabsSmoke } from './smokes/browsertabs-smoke'
 import { runBrowserCtlSmoke } from './smokes/browserctl-smoke'
 import { runBrowserRaceSmoke } from './smokes/browserrace-smoke'
 import { runFirstRunSmoke } from './smokes/firstrun-smoke'
@@ -120,6 +122,9 @@ import { runDaemonSurviveSmoke } from './smokes/daemon-survive-smoke'
 import { runMigrateSmoke } from './smokes/migrate-smoke'
 import { runNotifyHookSmoke } from './smokes/notifyhook-smoke'
 import { runDaemonCustodySmoke } from './smokes/daemoncustody-smoke'
+import { runStampWarSmoke } from './smokes/stampwar-smoke'
+import { runHeartbeatSmoke } from './smokes/heartbeat-smoke'
+import { runDaemonHealSmoke } from './smokes/daemonheal-smoke'
 import { runSessionPoolSmoke } from './smokes/sessionpool-smoke'
 
 // THE DEV / TEST ENTRY: the production boot (boot.ts — the SAME one src/main/index.ts runs) plus
@@ -158,10 +163,10 @@ function installSshShim(): void {
 // — and an isolated userData must not register the OS-global deep-link scheme in any case.
 const SMOKE_ENV: readonly string[] = [
   'MOGGING_USERDATA', 'MOGGING_GATES', 'MOGGING_GALLERY', // isolation + sweep markers, set by every gate
-  'MOGGING_SURVIVE', 'MOGGING_MIGRATE', 'MOGGING_NOTIFYHOOK', 'MOGGING_DAEMONCUSTODY', 'MOGGING_SESSIONPOOL', 'MOGGING_INTEG', 'MOGGING_TOOLPLAN',
+  'MOGGING_SURVIVE', 'MOGGING_MIGRATE', 'MOGGING_NOTIFYHOOK', 'MOGGING_DAEMONCUSTODY', 'MOGGING_STAMPWAR', 'MOGGING_HEARTBEAT', 'MOGGING_DAEMONHEAL', 'MOGGING_SESSIONPOOL', 'MOGGING_INTEG', 'MOGGING_TOOLPLAN',
   'MOGGING_EVBRIDGE', 'MOGGING_MCPSTATUS', 'MOGGING_MCPLOOP', 'MOGGING_AGENT', 'MOGGING_STATE', 'MOGGING_RELOAD',
   'MOGGING_SMOKE', 'MOGGING_SHOT', 'MOGGING_MULTIPANE', 'MOGGING_WORKSPACE', 'MOGGING_AGENTLAUNCH',
-  'MOGGING_TEMPLATE', 'MOGGING_PROFPERSIST', 'MOGGING_BROWSER', 'MOGGING_BROWSERCTL', 'MOGGING_BROWSERRACE', 'MOGGING_BROWSERZERO', 'MOGGING_FIRSTRUN',
+  'MOGGING_TEMPLATE', 'MOGGING_PROFPERSIST', 'MOGGING_BROWSER', 'MOGGING_BROWSERCTL', 'MOGGING_BROWSERUX', 'MOGGING_BROWSERTABS', 'MOGGING_BROWSERRACE', 'MOGGING_BROWSERZERO', 'MOGGING_FIRSTRUN',
   'MOGGING_PRODUCT', 'MOGGING_USAGEGLANCE', 'MOGGING_USAGEUI', 'MOGGING_WEBUSAGE', 'MOGGING_USAGECLI',
   'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
   'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_KBSHORTCUTS', 'MOGGING_KBGLOBAL', 'MOGGING_VERDICTLIVE', 'MOGGING_WEBTRAIL',
@@ -172,7 +177,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
   'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
-  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
+  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
   'MOGGING_PROFILES', 'MOGGING_LOGINTRUTH', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
   // Typed-launch detection + the context gauge (the v6 pack).
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
@@ -213,6 +218,31 @@ async function beforeAppSettings(): Promise<boolean> {
   // before startDaemonBackend — it owns its own daemons (isolated LOCALAPPDATA) start to grave.
   if (process.env.MOGGING_DAEMONCUSTODY) {
     await runDaemonCustodySmoke()
+    return true
+  }
+
+  // Windowless stamp-war smoke: a build-stamp mismatch retires a daemon ONLY when no other
+  // client is attached — the guard against two same-channel builds killing each other's
+  // daemons (and every pane's live process) in a loop. Owns its daemons start to grave.
+  if (process.env.MOGGING_STAMPWAR) {
+    await runStampWarSmoke()
+    return true
+  }
+
+  // Windowless heartbeat smoke: a daemon wedged with its socket open (ping-muted via the
+  // MOGGING_DAEMON_PING_MUTE_MS seam) must be detected and cut loose — while a daemon that
+  // is merely BUSY (streaming pane output) must never be shot. Runs before the relay so the
+  // smoke owns every connection it judges.
+  if (process.env.MOGGING_HEARTBEAT) {
+    await runHeartbeatSmoke()
+    return true
+  }
+
+  // Windowless daemon-heal smoke: the REAL relay's crash → reconnect → self-heal lifecycle,
+  // quiescence holding the line (no resurrection inside the update handoff), and
+  // endDaemonQuiescence releasing it — the permanent-freeze latch, gated.
+  if (process.env.MOGGING_DAEMONHEAL) {
+    await runDaemonHealSmoke()
     return true
   }
 
@@ -326,6 +356,10 @@ function afterWindow(win: BrowserWindow): void {
     runBrowserSmoke(win) // env-gated browser-dock smoke (6/05)
   } else if (process.env.MOGGING_BROWSERCTL) {
     runBrowserCtlSmoke(win) // env-gated agent-browser-control smoke (6/05b)
+  } else if (process.env.MOGGING_BROWSERUX) {
+    runBrowserUxSmoke(win) // env-gated browser-chrome smoke (Wave 3: omnibox/find/zoom/error/context/relay)
+  } else if (process.env.MOGGING_BROWSERTABS) {
+    runBrowserTabsSmoke(win) // env-gated tabs smoke (Wave 7 / F4: strip, new/close/switch, _blank, agent verbs)
   } else if (process.env.MOGGING_BROWSERRACE) {
     runBrowserRaceSmoke(win) // audit regression: delayed A completions never repaint/mutate B
   } else if (process.env.MOGGING_FIRSTRUN) {

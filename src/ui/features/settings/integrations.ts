@@ -15,7 +15,7 @@ import {
 } from '@contracts'
 import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
-import { Button, EmptyState, clear, createCollapsibleCard, createModal, el, icon, loadingRow, providerLogo, scrubFields, showToast, submitWithRetain } from '../../components'
+import { Button, EmptyState, FieldGroup, IconButton, clear, createCheckbox, createCollapsibleCard, createModal, createToggleRow, el, icon, loadingRow, openContextMenu, providerLogo, scrubFields, showToast, submitWithRetain } from '../../components'
 import type { CollapsibleCardHandle } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onToolPlanPanesChange, restartNeededPaneIds } from '../../core/agents/toolplan-panes'
@@ -378,17 +378,35 @@ function createCatalogBlock(): SyncedBlock {
         planned > 0 && coverage.total > 0
           ? el('span', { class: 'cat-badge is-planned', text: `in ${planned} of ${coverage.total} workspace${coverage.total === 1 ? '' : 's'}` })
           : null
-      const connect = el('button', { class: 'trail-btn', type: 'button', text: 'Connect…' }) as HTMLButtonElement
+      // F-22: 'Connect' is reserved for ACCOUNT connections above — this route writes a
+      // server into a CLI's config, so its verb says that. Check feed / Export are
+      // maintainer verbs: they move behind a ⋯ menu instead of sharing the primary row.
+      const connect = el('button', { class: 'trail-btn', type: 'button', text: 'Add to CLI…' }) as HTMLButtonElement
       connect.onclick = (): void => void openConnect(preset, rows)
-      const exportBtn = el('button', { class: 'trail-btn cat-mini', type: 'button', text: 'Export' }) as HTMLButtonElement
-      exportBtn.onclick = (): void => void bridge.invoke(IntegrationsChannels.catExport, preset.id)
-      const feedBtn = el('button', { class: 'trail-btn cat-mini', type: 'button', text: 'Check feed' }) as HTMLButtonElement
       const feedNote = el('div', { class: 'menu-note trail-empty', hidden: true })
-      feedBtn.onclick = async (): Promise<void> => {
+      const checkFeed = async (): Promise<void> => {
         const r = (await bridge.invoke(IntegrationsChannels.catRefresh, preset.id)) as { ok: boolean; diff?: string; reason?: string }
         feedNote.hidden = false
         feedNote.textContent = r.ok ? r.diff ?? '' : r.reason ?? 'registry unavailable'
       }
+      const more = IconButton({
+        icon: 'more',
+        label: `More actions for ${label}`,
+        class: 'cat-more',
+        onClick: (e) => {
+          const at = (e.currentTarget as HTMLElement).getBoundingClientRect()
+          openContextMenu({
+            items: [
+              { label: 'Check feed', icon: 'rotate-cw', onSelect: () => void checkFeed() },
+              { label: 'Export preset', icon: 'copy', onSelect: () => void bridge.invoke(IntegrationsChannels.catExport, preset.id) }
+            ],
+            x: at.right,
+            y: at.bottom + 4,
+            returnFocus: e.currentTarget as HTMLElement,
+            ariaLabel: `${label} actions`
+          })
+        }
+      })
       const card = el('div', { class: 'cat-card' }, [
         el('div', { class: 'cat-card-head' }, [
           providerLogo(preset.group ? 'google' : preset.id, 16),
@@ -397,7 +415,7 @@ function createCatalogBlock(): SyncedBlock {
           coverageBadge
         ]),
         el('div', { class: 'cat-card-copy', text: preset.group ? `${rows.map((r) => r.label).join(' · ')} — one card, ${rows.length} endpoints.` : preset.grantCopy }),
-        el('div', { class: 'trail-controls' }, [connect, feedBtn, exportBtn]),
+        el('div', { class: 'trail-controls' }, [connect, more]),
         feedNote
       ])
       grid.append(card)
@@ -468,14 +486,20 @@ function createCatalogBlock(): SyncedBlock {
     el('div', {
       class: 'settings-row-caption',
       text:
-        'The other route, unchanged: Connect here writes the server into each CLI’s own config, and THAT CLI holds its own auth — the app brokers nothing on this path, and keys stay ${VAR} references. Use it when you want a CLI to own its credential, or for a server that must run on your machine. For an account this app holds for every agent at once, use Connections above.'
+        'The other route, unchanged: adding here writes the server into each CLI’s own config, and THAT CLI holds its own auth — the app brokers nothing on this path, and keys stay ${VAR} references. Use it when you want a CLI to own its credential, or for a server that must run on your machine. For an account this app holds for every agent at once, use Your accounts above.'
     }),
     grid,
     panel,
-    el('div', { class: 'trail-controls' }, [searchInput, searchBtn]),
-    searchResults,
-    el('div', { class: 'trail-controls' }, [importInput, importBtn]),
-    importNote
+    // F-26: the registry search and the JSON import used to float after the grid as
+    // two unlabeled strips — one clear expert corner now, labeled for what it is.
+    el('div', { class: 'cat-registry' }, [
+      el('div', { class: 'section-label', text: 'Registry & custom' }),
+      el('div', { class: 'settings-row-caption', text: 'Search the official MCP registry, or import a preset JSON — either lands in this catalog as a community preset.' }),
+      el('div', { class: 'trail-controls' }, [searchInput, searchBtn]),
+      searchResults,
+      el('div', { class: 'trail-controls' }, [importInput, importBtn]),
+      importNote
+    ])
   ])
   // Also workspace-dependent, by the same test as the matrix: every card renders
   // "in N of M workspaces" from `planCoverage`, and `custom` presets live in main's
@@ -787,7 +811,20 @@ function createServersBlock(): SyncedBlock {
       }
     })
   }
-  form.append(idInput, labelInput, transportSel, commandInput, argsInput, urlInput, envInput, saveBtn)
+  // F-34's sibling: the add-server fields were placeholder-labeled too. Visible
+  // labels via FieldGroup — the data-mgr-* hooks and classes stay (SECRETFORMS).
+  form.append(
+    el('div', { class: 'wh-form-grid' }, [
+      FieldGroup({ label: 'Server id', hint: 'e.g. sentry — the registry key.' }, idInput),
+      FieldGroup({ label: 'Label' }, labelInput),
+      FieldGroup({ label: 'Transport' }, transportSel),
+      FieldGroup({ label: 'Command', hint: 'stdio transport.' }, commandInput),
+      FieldGroup({ label: 'Arguments', hint: 'Space-separated; quote nothing.' }, argsInput),
+      FieldGroup({ label: 'URL', hint: 'http transport.' }, urlInput),
+      FieldGroup({ label: 'Env', hint: 'KEY=${VAR} references, comma-separated — paste a literal value and it’s vaulted.' }, envInput)
+    ]),
+    el('div', { class: 'wh-form-actions' }, [el('span', { class: 'ph-spacer' }), saveBtn])
+  )
   addToggle.onclick = (): void => {
     form.hidden = !form.hidden
     // Collapsing is a CANCEL, and this form is only display-toggled — the node survives. A
@@ -836,7 +873,11 @@ function createGrantsBlock(): SyncedBlock {
     const generation = ++renderGeneration
     const wsId = wsSelect.value
     clear(body)
-    if (!wsId) return
+    if (!wsId) {
+      // F-38: never a dead empty picker — say why there is nothing to grant.
+      body.append(el('div', { class: 'menu-note', text: 'No workspace open — write-tool grants are per-workspace. Create or open one, then decide here.' }))
+      return
+    }
     let grant: WorkspaceIntegrationsGrant
     try {
       grant = (await bridge.invoke(IntegrationsChannels.grantGet, wsId)) as WorkspaceIntegrationsGrant
@@ -848,32 +889,40 @@ function createGrantsBlock(): SyncedBlock {
     }
     if (generation !== renderGeneration || wsSelect.value !== wsId) return
     // Write tools: none (default) / all — the catalog boundary (8/03).
-    const writesOn = grant.writeTools === 'all'
-    const writeBtn = el('button', {
-      class: `trail-btn${writesOn ? ' is-armed' : ''}`,
-      type: 'button',
-      text: writesOn ? 'Write tools: ALL (agents can send/mail/claim/update here)' : 'Write tools: none (default)'
-    }) as HTMLButtonElement
-    writeBtn.onclick = async (): Promise<void> => {
-      writeBtn.disabled = true
-      writeBtn.setAttribute('aria-busy', 'true')
-      try {
-        await bridge.invoke(IntegrationsChannels.grantMutate, {
-          workspaceId: wsId,
-          field: 'writeTools',
-          value: writesOn ? 'none' : 'all'
-        })
-        if (wsSelect.value === wsId) await render()
-      } catch (error) {
-        showToast({ tone: 'danger', title: 'Write-tool permission was not changed', body: String(error) })
-      } finally {
-        if (writeBtn.isConnected) {
-          writeBtn.disabled = false
-          writeBtn.removeAttribute('aria-busy')
-        }
+    // F-25: state and action used to share one BUTTON label ("Write tools: none
+    // (default)" — clicking it flipped to ALL, with no hint that it would). A switch
+    // states the setting and never moves its label. Same single-fire contract the
+    // button carried (MUTATIONRACE asserts it): disabled + aria-busy across the
+    // round-trip, reverted on failure, truth re-rendered on success.
+    const writeToggle = createToggleRow({
+      label: 'Allow MCP write tools in this workspace',
+      hint: 'Off by default. On: agents here can send, mail, claim, and update through connected tools.',
+      checked: grant.writeTools === 'all',
+      onChange: () => {
+        const next = writeToggle.checked()
+        writeToggle.setDisabled(true)
+        writeToggle.input.setAttribute('aria-busy', 'true')
+        void (async () => {
+          try {
+            await bridge.invoke(IntegrationsChannels.grantMutate, {
+              workspaceId: wsId,
+              field: 'writeTools',
+              value: next ? 'all' : 'none'
+            })
+            if (wsSelect.value === wsId) await render()
+          } catch (error) {
+            writeToggle.setChecked(!next) // put the switch back where the truth is
+            showToast({ tone: 'danger', title: 'Write-tool permission was not changed', body: String(error) })
+          } finally {
+            if (writeToggle.input.isConnected) {
+              writeToggle.setDisabled(false)
+              writeToggle.input.removeAttribute('aria-busy')
+            }
+          }
+        })()
       }
-    }
-    body.append(el('div', { class: 'trail-controls' }, [writeBtn]))
+    })
+    body.append(writeToggle.el)
   }
 
   function refreshWorkspaces(): void {
@@ -882,6 +931,7 @@ function createGrantsBlock(): SyncedBlock {
     for (const w of getWorkspaces().workspaces) wsSelect.append(el('option', { value: w.id, text: w.name }))
     wsSelect.value = current || (getWorkspaces().activeId ?? '')
     if (!wsSelect.value && wsSelect.options.length) wsSelect.selectedIndex = 0
+    wsSelect.hidden = !wsSelect.options.length // an empty picker is a stub, not a control (F-38)
   }
   wsSelect.onchange = (): void => void render()
 
@@ -950,7 +1000,8 @@ function createServiceKeysBlock(): SyncedBlock {
     }
     signal('keys', {
       chip: null,
-      stat: names.length ? `${names.length} saved` : 'none'
+      // F-24: one value grammar across the band — numerals always, unit always.
+      stat: `${names.length} saved`
     })
   }
 
@@ -1002,7 +1053,11 @@ function createToolPlanBlock(): SyncedBlock {
     const generation = ++renderGeneration
     const wsId = wsSelect.value
     clear(body)
-    if (!wsId) return
+    if (!wsId) {
+      // F-38: never a dead empty picker — say why there is no matrix to show.
+      body.append(el('div', { class: 'menu-note', text: 'No workspace open — tool plans are per-workspace. Create or open one, then scope its tools here.' }))
+      return
+    }
     const plan = (await bridge.invoke(IntegrationsChannels.planGet, wsId)) as WorkspaceToolPlan
     const servers = ((await bridge.invoke(IntegrationsChannels.serversList)) as McpServerEntry[]) ?? []
     const globalFor = new Map<string, Set<HostedCliId>>()
@@ -1027,13 +1082,33 @@ function createToolPlanBlock(): SyncedBlock {
       }
     }
 
-    const inheritBtn = el('button', {
-      class: `trail-btn${plan.inheritGlobal ? ' is-armed' : ''}`,
-      type: 'button',
-      text: plan.inheritGlobal ? 'Inherit global (“everywhere”) tools: ON' : 'Inherit global tools: OFF — plan only'
-    }) as HTMLButtonElement
-    inheritBtn.onclick = (): void => void mutatePlan({ kind: 'inherit', value: !plan.inheritGlobal }, inheritBtn)
-    body.append(el('div', { class: 'trail-controls' }, [inheritBtn]))
+    // F-25 sibling: "Inherit global tools: OFF — plan only" was state wearing a
+    // button's clothes. The switch states the setting; the matrix below shows the effect.
+    const inheritToggle = createToggleRow({
+      label: 'Inherit global (“everywhere”) tools',
+      hint: 'On: servers applied at the global tier reach this workspace too. Off: panes carry only this plan.',
+      checked: plan.inheritGlobal,
+      onChange: () => {
+        const next = inheritToggle.checked()
+        inheritToggle.setDisabled(true)
+        inheritToggle.input.setAttribute('aria-busy', 'true')
+        void (async () => {
+          try {
+            await bridge.invoke(IntegrationsChannels.planMutate, { workspaceId: wsId, kind: 'inherit', value: next })
+            if (wsSelect.value === wsId) await render()
+          } catch (error) {
+            inheritToggle.setChecked(!next)
+            showToast({ tone: 'danger', title: 'Tool plan was not changed', body: String(error) })
+          } finally {
+            if (inheritToggle.input.isConnected) {
+              inheritToggle.setDisabled(false)
+              inheritToggle.input.removeAttribute('aria-busy')
+            }
+          }
+        })()
+      }
+    })
+    body.append(inheritToggle.el)
 
     const table = el('div', { class: 'toolplan-matrix' })
     table.append(
@@ -1097,6 +1172,7 @@ function createToolPlanBlock(): SyncedBlock {
     for (const w of getWorkspaces().workspaces) wsSelect.append(el('option', { value: w.id, text: w.name }))
     wsSelect.value = current || (getWorkspaces().activeId ?? '')
     if (!wsSelect.value && wsSelect.options.length) wsSelect.selectedIndex = 0
+    wsSelect.hidden = !wsSelect.options.length // an empty picker is a stub, not a control (F-38)
   }
   wsSelect.onchange = (): void => void render()
   // A plan edit -> re-render + nudge any live panes that now need a restart.
@@ -1155,37 +1231,48 @@ export function openGuidedFlow(): void {
     const { presets } = (await bridge.invoke(IntegrationsChannels.catList)) as { presets: McpPreset[] }
     const agents = ((await bridge.invoke(AgentChannels.detect)) as { id: string; installed: boolean }[]) ?? []
     const detected = HOSTED.filter((c) => agents.some((a) => a.installed && a.id === CLI_PROVIDER[c]))
+
+    if (!detected.length) {
+      body.append(el('div', { class: 'settings-row-caption', text: 'Install a coding-agent CLI (Claude Code, Codex, or Gemini) first — then come back and we’ll wire your tools to it.' }))
+      modal.setFooter(el('div', { class: 'confirm-actions' }, [Button({ label: 'Close', variant: 'ghost', onClick: () => modal.close() })]))
+      return
+    }
+
+    // F-23: pick first, then walk ONLY the picked. The old flow marched every preset
+    // one modal at a time — a three-tool stack meant Skip ×25 — with no sense of how
+    // much was left. Same write path (catConnect), same done-marks, same end screen.
+    let queue: McpPreset[] = []
+    let total = 0
+
+    const showDone = (): void => {
+      body.replaceChildren(
+        el('div', { class: 'integux-flow-done' }, [
+          el('h3', { class: 'board-card-title', text: 'You’re set up.' }),
+          el('div', { class: 'settings-row-caption', text: 'Last thing: scope tools per workspace — minimal is the default, so agents carry only what the work needs. Open the matrix any time.' })
+        ])
+      )
+      modal.setFooter(
+        el('div', { class: 'confirm-actions' }, [
+          // Drain the token NOW: the flow opens from this very page, so no view
+          // change follows to consume it — undrained, it would sit pending and
+          // scroll some FUTURE settings entry somewhere the user never asked for.
+          Button({ label: 'Open workspace tools', variant: 'ghost', onClick: () => { requestIntegrationsFocus('matrix'); modal.close(); enterIntegrations() } }),
+          Button({ label: 'Done', variant: 'primary', onClick: () => modal.close() })
+        ])
+      )
+    }
+
     const step = (): void => {
-      body.replaceChildren()
-      if (!detected.length) {
-        body.append(el('div', { class: 'settings-row-caption', text: 'Install a coding-agent CLI (Claude Code, Codex, or Gemini) first — then come back and we’ll wire your tools to it.' }))
-        modal.setFooter(el('div', { class: 'confirm-actions' }, [Button({ label: 'Close', variant: 'ghost', onClick: () => modal.close() })]))
-        return
-      }
-      const done = flowDone()
-      const next = presets.find((p) => !done.includes(p.id))
+      const next = queue.shift()
       if (!next) {
-        // Ends on the workspace-plan reminder (09).
-        body.append(
-          el('div', { class: 'integux-flow-done' }, [
-            el('h3', { class: 'board-card-title', text: 'You’re set up.' }),
-            el('div', { class: 'settings-row-caption', text: 'Last thing: scope tools per workspace — minimal is the default, so agents carry only what the work needs. Open the matrix any time.' })
-          ])
-        )
-        modal.setFooter(
-          el('div', { class: 'confirm-actions' }, [
-            // Drain the token NOW: the flow opens from this very page, so no view
-            // change follows to consume it — undrained, it would sit pending and
-            // scroll some FUTURE settings entry somewhere the user never asked for.
-            Button({ label: 'Open workspace tools', variant: 'ghost', onClick: () => { requestIntegrationsFocus('matrix'); modal.close(); enterIntegrations() } }),
-            Button({ label: 'Done', variant: 'primary', onClick: () => modal.close() })
-          ])
-        )
+        showDone()
         return
       }
+      const at = total - queue.length
       const note = el('div', { class: 'settings-error', role: 'alert', hidden: true })
-      body.append(
+      body.replaceChildren(
         el('div', { class: 'integux-flow-tool', attrs: { 'data-preset': next.id } }, [
+          el('div', { class: 'settings-row-caption integux-flow-progress', text: `${at} of ${total}` }),
           el('div', { class: 'settings-row-label', text: `Connect ${next.label}` }),
           el('div', { class: 'settings-row-caption', text: `${next.grantCopy}` }),
           el('div', { class: 'settings-row-caption', text: `Will connect to: ${detected.map((c) => CLI_LABEL[c]).join(', ')}` }),
@@ -1213,7 +1300,48 @@ export function openGuidedFlow(): void {
         ])
       )
     }
-    step()
+
+    const showPick = (): void => {
+      const done = flowDone()
+      const remaining = presets.filter((p) => !done.includes(p.id))
+      if (!remaining.length) {
+        showDone()
+        return
+      }
+      const boxes = new Map<string, ReturnType<typeof createCheckbox>>()
+      body.replaceChildren(
+        el('div', { class: 'settings-row-label', text: 'Which tools do you use?' }),
+        el('div', {
+          class: 'settings-row-caption',
+          text: `Pick what to connect — each one wires into ${detected.map((c) => CLI_LABEL[c]).join(', ')}. Come back for the rest any time.`
+        }),
+        el('div', { class: 'integux-flow-pick' }, remaining.map((p) => {
+          const cb = createCheckbox({ label: p.label })
+          cb.el.classList.add('integux-pick-item')
+          boxes.set(p.id, cb)
+          return cb.el
+        }))
+      )
+      const start = Button({
+        label: 'Connect selected',
+        variant: 'primary',
+        onClick: () => {
+          queue = remaining.filter((p) => boxes.get(p.id)?.checked())
+          if (!queue.length) return
+          total = queue.length
+          step()
+        }
+      })
+      start.dataset.flowAction = 'start'
+      modal.setFooter(
+        el('div', { class: 'confirm-actions' }, [
+          Button({ label: 'Close', variant: 'ghost', onClick: () => modal.close() }),
+          start
+        ])
+      )
+    }
+
+    showPick()
   })()
 }
 
@@ -1330,7 +1458,8 @@ export function createIntegrationsSection(): HTMLElement {
       // An expired grant is the one thing here that silently stops an agent's tools
       // working, so it must reach the fold's header even when the card is collapsed.
       chip: broken ? attnChip('needs-auth', `${broken} need${broken === 1 ? 's' : ''} you`) : null,
-      stat: live ? `${live} connected` : 'none'
+      // F-24: one value grammar across the band — numerals always, unit always.
+      stat: `${live} connected`
     })
   })
   const catalogBlock = createCatalogBlock()
@@ -1357,14 +1486,16 @@ export function createIntegrationsSection(): HTMLElement {
   // it — the per-CLI catalog, the registry, the plans — is machinery for handing a
   // connection to an agent, and it stays exactly where it was for the people who
   // want the CLI to own its own auth.
+  // F-19 (interim): folds titled by user benefit, one line each — the custody story
+  // lives inside the open cards, not three times before the first one.
   const connections = card(
     'connections',
-    'Connections',
-    'Your accounts, connected to this app. Sign in once — every agent you launch can use it.',
+    'Your accounts',
+    'Sign in once — every agent you launch can use it.',
     connectionsBlock.block,
     { defaultOpen: true, attentionOpens: true }
   )
-  const catalog = card('catalog', 'Per-CLI servers', 'The other route: write a server straight into a CLI’s own config, and let that CLI hold its own auth.', catalogBlock.block, { defaultOpen: false, attentionOpens: false })
+  const catalog = card('catalog', 'CLI-owned servers', 'Advanced: write a server into a CLI’s own config — that CLI holds its own auth.', catalogBlock.block, { defaultOpen: false, attentionOpens: false })
   const servers = card('servers', 'Servers & registry', 'Register once, apply per CLI. Writes are surgical, backed up, and only on your click.', serversBlock.block)
   const matrix = card('matrix', 'Workspace tool plans', 'Which servers reach this workspace’s panes. Context hygiene, not a permission.', toolplan.block)
   const grants = card('grants', 'Grants', 'Which MCP write tools agents get here. Default closed — approve is never a tool.', grantsBlock.block)

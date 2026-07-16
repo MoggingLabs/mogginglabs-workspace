@@ -27,8 +27,9 @@ export const wizardClient = {
 
   removePreset: (id: string): Promise<unknown> => getBridge().invoke(TemplateChannels.remove, id),
 
-  resolve: (mix: ProviderCount[]): Promise<ResolvedLayout> =>
-    getBridge().invoke(TemplateChannels.resolve, mix) as Promise<ResolvedLayout>,
+  /** `exact` skips template padding — the painter's pane count IS the layout. */
+  resolve: (mix: ProviderCount[], exact = false): Promise<ResolvedLayout> =>
+    getBridge().invoke(TemplateChannels.resolve, exact ? { mix, exact: true } : mix) as Promise<ResolvedLayout>,
 
   browseDir: (): Promise<string | null> =>
     getBridge().invoke(WorkspaceChannels.browseDir) as Promise<string | null>,

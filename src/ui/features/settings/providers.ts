@@ -1,19 +1,17 @@
 import {
   AgentChannels,
   AgentConfigChannels,
-  AgentHookChannels,
   type AgentConfigProviderSummary,
   type AgentInfo,
   type AgentInstallStart,
-  type AgentInstallState,
-  type GlobalHooksMutationResult,
-  type GlobalHooksStatus
+  type AgentInstallState
 } from '@contracts'
 import { Button, Card, EmptyState, Pill, SectionHeader, Spinner, el, loadingRow, providerLogo, showToast } from '../../components'
 import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
 import { getTelemetry } from '../../core/telemetry'
 import { onAgentRegistryChange, refreshAgentRegistry } from '../../core/agents/registry'
+import { gotoSettingsTab } from '../../core/shell/settings-tab-port'
 import { createAgentConfigWorkspace } from './agent-config'
 
 /** CLI availability plus the entry point to the provider configuration control plane. */
@@ -25,104 +23,48 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
   const logs = new Map<string, HTMLElement>()
   const list = el('div', { class: 'prov-list' })
 
-  // ── Global Claude alert hooks: the hand-typed-launch gap ─────────────────────────────
-  // An app-launched claude carries its alert hooks on the generated --settings overlay; a
-  // claude TYPED at a pane's own prompt carries none, so its pane never rings (found live
-  // 2026-07-16: a hand-typed claude worked a 15-minute turn wearing a resting dot). Wiring
-  // the same hooks into the user's global Claude settings closes that: the notify script
-  // no-ops outside a MoggingLabs pane, so the global entries are inert everywhere else.
-  // Explicit action + backup + atomic write, same as every user-owned config we touch.
-  const hooksPill = el('span')
-  const hooksActions = el('div', { class: 'prov-actions' })
-  const hooksNote = el('div', { class: 'settings-row-caption', text: '' })
-  let hooksStatus: GlobalHooksStatus | null = null
-  const HOOKS_PILL: Record<GlobalHooksStatus['state'], { text: string; tone: 'success' | 'neutral' | 'warning' | 'danger' }> = {
-    applied: { text: '✓ wired', tone: 'success' },
-    partial: { text: 'stale', tone: 'warning' },
-    'not-applied': { text: 'not wired', tone: 'neutral' },
-    unreadable: { text: 'unreadable', tone: 'danger' }
-  }
-  const renderHooks = (): void => {
-    hooksActions.replaceChildren()
-    const state = hooksStatus?.state
-    hooksPill.replaceChildren(state ? Pill(HOOKS_PILL[state]) : Spinner())
-    hooksNote.textContent = hooksStatus
-      ? state === 'unreadable'
-        ? `${hooksStatus.file} is not JSON this app will rewrite — fix it by hand first.`
-        : hooksStatus.file
-      : ''
-    if (!state || state === 'unreadable') return
-    const act = (channel: string, done: string): void => {
-      void (invoke(channel) as Promise<GlobalHooksMutationResult>).then(async (result) => {
-        if (result?.ok) showToast({ title: done, body: result.backup ? `Backup: ${result.backup}` : undefined, tone: 'success' })
-        else showToast({ title: 'Nothing was written', body: result?.reason, tone: 'danger' })
-        await refreshHooks()
-      })
-    }
-    if (state !== 'applied') {
-      hooksActions.append(Button({
-        label: state === 'partial' ? 'Re-apply' : 'Wire alerts',
-        icon: 'bell',
-        size: 'sm',
-        onClick: () => act(AgentHookChannels.apply, 'Claude alert hooks wired globally')
-      }))
-    }
-    if (state !== 'not-applied') {
-      hooksActions.append(Button({
-        label: 'Remove',
-        variant: 'ghost',
-        size: 'sm',
-        onClick: () => act(AgentHookChannels.remove, 'Claude alert hooks removed')
-      }))
-    }
-  }
-  const refreshHooks = async (): Promise<void> => {
-    try {
-      hooksStatus = (await invoke(AgentHookChannels.status)) as GlobalHooksStatus
-    } catch {
-      hooksStatus = null
-    }
-    renderHooks()
-  }
-  const hooksCard = Card(
-    {
-      header: SectionHeader({
-        title: 'Hand-typed session alerts',
-        caption:
-          'A Claude launched from the app rings its pane through session hooks. Wire the same hooks into your global Claude settings so a claude you type at a pane’s own prompt rings too. Outside a pane the hook is a silent no-op.'
-      })
-    },
-    [el('div', { class: 'prov-row prov-row--static' }, [
-      el('div', { class: 'prov-row-main' }, [
-        el('div', { class: 'prov-row-head' }, [el('span', { class: 'prov-name', text: 'Claude Code · global alert hooks' }), hooksPill]),
-        hooksNote
-      ]),
-      hooksActions
-    ])]
-  )
-
+  // (The global session-alerts card moved to Settings › Notifications — F-08: its
+  // user goal is "why doesn't my pane ring?", not install/configure. session-alerts.ts.)
   const landing = el('div', { class: 'prov-landing' }, [
     Card(
       {
         header: SectionHeader({
-          title: 'CLI control plane',
+          // F-09: was "CLI control plane" — k8s idiom on a consumer surface.
+          title: 'Your agent CLIs',
           caption:
-            'Open a CLI to inspect every cataloged setting, choose its real provider scope, and keep desired values synchronized. Install still runs the exact provider command shown under your login.'
+            'Open a CLI to browse every setting it supports and keep the values you choose in sync. Install runs the exact provider command shown, under your login.',
+          // F-10: this list and Usage › sources show the same logos with different
+          // meanings — the cross-reference is a CLICK, not a prose aside.
+          action: Button({
+            label: 'Track limits',
+            icon: 'gauge',
+            variant: 'ghost',
+            size: 'sm',
+            title: 'Usage — limits, plans, and alerts for these providers',
+            onClick: () => gotoSettingsTab('usage')
+          })
         })
       },
       [list]
-    ),
-    hooksCard
+    )
   ])
+  // F-11: the drill-in REPLACES context instead of stacking under it — the tab hero
+  // hides while a CLI's config workspace is open (the workspace carries its own
+  // breadcrumb + identity header), and returns on Back.
+  const setDrilled = (on: boolean): void => {
+    root.closest('.settings-section')?.classList.toggle('is-drilled', on)
+  }
   const config = createAgentConfigWorkspace(() => {
     config.el.hidden = true
     landing.hidden = false
+    setDrilled(false)
   })
   const root = el('div', { class: 'prov-section' }, [landing, config.el])
 
   function openConfig(agent: AgentInfo): void {
     landing.hidden = true
     config.el.hidden = false
+    setDrilled(true)
     void config.open(agent.id, agent)
   }
 
@@ -235,7 +177,6 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
   >()
 
   async function refresh(): Promise<void> {
-    void refreshHooks() // independent read; never gates the CLI roster
     await detectGuard.run(
       () =>
         Promise.all([

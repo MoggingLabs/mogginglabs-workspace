@@ -3,35 +3,25 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join } from 'node:path'
 import { TerminalChannels } from '@contracts'
 
-// Env-gated GLOBAL-HOOKS smoke (MOGGING_GLOBALHOOKS=1) — the hand-typed-launch gap, end to end.
+// Env-gated GLOBAL-HOOKS smoke (MOGGING_GLOBALHOOKS=1) — the hand-typed-launch gap, end to
+// end, all four CLIs.
 //
-// The unit tests (tests/unit/global-hooks.test.ts) own the pure merge/strip/state rules. What
-// they cannot see is the wiring a regression would actually kill silently: the IPC surface
-// (agentHooks:* through the REAL preload allowlist — a dropped AllChannels spread refuses every
-// call and reads as a feature bug), the write discipline against a real file (backup + atomic
-// rewrite that preserves the user's own keys and hook entries), the once-per-run nudge toast on
-// a DETECTED claude, and the Settings › Agent CLIs card's wire/remove round trip.
+// The unit tests (tests/unit/global-hooks.test.ts + global-bells.test.ts) own the pure
+// merge/strip/state rules per dialect. What they cannot see is the wiring a regression would
+// kill silently: the IPC surface (agentHooks:* through the REAL preload allowlist — a dropped
+// AllChannels spread refuses every call and reads as a feature bug), the write discipline
+// against real files (backup + atomic rewrite preserving the user's own content), the
+// per-provider once-per-run nudge toast on a DETECTED agent, the Settings › Agent CLIs card's
+// wire/remove round trip, codex's CONFLICT refusal, and the OpenCode plugin's materialization
+// into userData.
 //
-// ISOLATION: CLAUDE_CONFIG_DIR is pointed INSIDE this gate's already-isolated userData before a
-// single handler runs, so the smoke reads and rewrites its own fixture settings.json — never
-// the machine's real Claude home. The detector event is injected main→renderer over the same
-// channel the daemon relay uses; no real claude, no real daemon traffic.
-//
-//   seed      a user settings.json: model + permissions + their OWN Stop hook
-//   status    -> not-applied, and the file is OUR fixture (the isolation assert)
-//   nudge     a detected claude arrives -> ONE attention toast with a Wire-alerts action
-//   wire      click the action -> success toast; file now carries our five entries, the
-//             user's keys and their Stop hook byte-for-value intact, ours APPENDED after
-//             theirs; a timestamped .bak of the seeded bytes sits beside it
-//   once      a second detected claude -> no second nudge (one per app run)
-//   card      Settings › Agent CLIs shows '✓ wired'; Remove strips exactly ours and flips
-//             the pill; the user's Stop hook survives
-//   stale     an old-install vintage of our entry reads 'partial'; apply REPLACES it —
-//             exactly one copy per event, pointing at the current script
-//   junk      an unreadable settings.json reads 'unreadable' and apply refuses byte-for-byte
+// ISOLATION: every CLI home pointer (CLAUDE_CONFIG_DIR, CODEX_HOME, GEMINI_CONFIG_DIR,
+// XDG_CONFIG_HOME for opencode) is pointed INSIDE this gate's already-isolated userData before
+// a single handler runs — the machine's real config homes are never read or written. The
+// detector event is injected main→renderer over the same channel the daemon relay uses.
 
 export function runGlobalHooksSmoke(win: BrowserWindow): void {
-  setTimeout(() => app.exit(1), 110000) // safety net
+  setTimeout(() => app.exit(1), 130000) // safety net
   const wc = win.webContents
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -43,26 +33,36 @@ export function runGlobalHooksSmoke(win: BrowserWindow): void {
     return false
   }
 
-  // The isolated Claude home, inside this gate's own userData (resolveHome honors the pointer).
-  const home = join(app.getPath('userData'), 'globalhooks-home')
-  process.env.CLAUDE_CONFIG_DIR = home
-  const settings = join(home, 'settings.json')
-  const SEED = {
-    model: 'smoke-model',
-    permissions: { defaultMode: 'plan' },
-    hooks: { Stop: [{ hooks: [{ type: 'command', command: 'user-own-stop-logger' }] }] }
-  }
+  // The isolated homes, inside this gate's own userData (resolveHome / XDG honor the pointers).
+  const homes = join(app.getPath('userData'), 'globalhooks-homes')
+  const claudeHome = join(homes, 'claude')
+  const codexHome = join(homes, 'codex')
+  const geminiHome = join(homes, 'gemini')
+  const xdgHome = join(homes, 'xdg')
+  const opencodeDir = join(xdgHome, 'opencode')
+  process.env.CLAUDE_CONFIG_DIR = claudeHome
+  process.env.CODEX_HOME = codexHome
+  process.env.GEMINI_CONFIG_DIR = geminiHome
+  process.env.XDG_CONFIG_HOME = xdgHome
 
-  const readSettings = (): { text: string; obj: Record<string, unknown> | null } => {
+  const claudeFile = join(claudeHome, 'settings.json')
+  const codexFile = join(codexHome, 'config.toml')
+  const geminiFile = join(geminiHome, 'settings.json')
+  const opencodeTui = join(opencodeDir, 'tui.json')
+  const opencodeCfg = join(opencodeDir, 'opencode.json')
+
+  const read = (file: string): string => {
     try {
-      const text = readFileSync(settings, 'utf8')
-      try {
-        return { text, obj: JSON.parse(text) as Record<string, unknown> }
-      } catch {
-        return { text, obj: null }
-      }
+      return readFileSync(file, 'utf8')
     } catch {
-      return { text: '', obj: null }
+      return ''
+    }
+  }
+  const json = (file: string): Record<string, unknown> | null => {
+    try {
+      return JSON.parse(read(file)) as Record<string, unknown>
+    } catch {
+      return null
     }
   }
   type HookEntry = { hooks?: Array<{ command?: string }> }
@@ -75,19 +75,40 @@ export function runGlobalHooksSmoke(win: BrowserWindow): void {
     list.filter((e) => e.hooks?.some((h) => typeof h.command === 'string' && /notify-hook[\\/]notify\.mjs/.test(h.command) && h.command.includes('--event')))
   const EVENTS = ['Notification', 'Stop', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit']
 
-  const invoke = (channel: string): Promise<{ state?: string; file?: string; ok?: boolean; reason?: string }> =>
-    ES(`window.bridge.invoke(${JSON.stringify(channel)})`)
+  type Row = { provider: string; state: string; files: string[]; reason?: string }
+  const status = async (): Promise<Record<string, Row>> => {
+    const rows = await ES<Row[]>(`window.bridge.invoke('agentHooks:status')`)
+    return Object.fromEntries((Array.isArray(rows) ? rows : []).map((r) => [r.provider, r]))
+  }
+  const mutate = (channel: 'apply' | 'remove', provider: string): Promise<{ ok?: boolean; reason?: string; backups?: string[] }> =>
+    ES(`window.bridge.invoke('agentHooks:${channel}', { provider: ${JSON.stringify(provider)} })`)
 
   const run = async (): Promise<void> => {
     const result: Record<string, unknown> = { pass: false }
     try {
-      mkdirSync(home, { recursive: true })
-      writeFileSync(settings, JSON.stringify(SEED, null, 2) + '\n')
+      for (const dir of [claudeHome, codexHome, geminiHome, opencodeDir]) mkdirSync(dir, { recursive: true })
+      // User content in every fixture: the writes must preserve all of it.
+      writeFileSync(claudeFile, JSON.stringify({
+        model: 'smoke-model',
+        permissions: { defaultMode: 'plan' },
+        hooks: { Stop: [{ hooks: [{ type: 'command', command: 'user-own-stop-logger' }] }] }
+      }, null, 2) + '\n')
+      writeFileSync(codexFile, '# my codex config\nmodel = "o4"\n\n[mcp_servers.mine]\ncommand = "my-server"\n')
+      writeFileSync(geminiFile, JSON.stringify({
+        general: { vimMode: true },
+        hooks: { AfterAgent: [{ hooks: [{ type: 'command', command: 'their-after' }] }] }
+      }, null, 2) + '\n')
+      writeFileSync(opencodeTui, JSON.stringify({ theme: 'mono' }, null, 2) + '\n')
+      writeFileSync(opencodeCfg, JSON.stringify({ plugin: ['their-plugin'] }, null, 2) + '\n')
       await sleep(1500) // let the renderer mount its features
 
-      // ── status through the real preload bridge, against the fixture home ──
-      const before = await invoke('agentHooks:status')
-      const statusIsolated = before?.state === 'not-applied' && before?.file === settings
+      // ── status through the real preload bridge: four rows, each against its fixture ──
+      const before = await status()
+      const statusIsolated =
+        before.claude?.state === 'not-applied' && before.claude?.files?.[0] === claudeFile &&
+        before.codex?.state === 'not-applied' && before.codex?.files?.[0] === codexFile &&
+        before.gemini?.state === 'not-applied' && before.gemini?.files?.[0] === geminiFile &&
+        before.opencode?.state === 'not-applied' && before.opencode?.files?.join('|') === `${opencodeTui}|${opencodeCfg}`
       result.before = before
       result.statusIsolated = statusIsolated
 
@@ -98,80 +119,156 @@ export function runGlobalHooksSmoke(win: BrowserWindow): void {
       )
       result.nudgeShown = nudgeShown
 
-      // ── wire it from the toast's own action ──
+      // ── wire claude from the toast's own action ──
       await ES(`(document.querySelector('.toast--attention .toast-action')?.click(), 1)`)
       const wiredToast = await waitTrue(
         `(() => !!document.querySelector('.toast--success') && /wired globally/i.test(document.querySelector('.toast--success .toast-title')?.textContent || ''))()`
       )
-      const afterWire = readSettings()
-      const backups = existsSync(home) ? readdirSync(home).filter((f) => f.startsWith('settings.json.bak-')) : []
+      const afterWire = json(claudeFile)
+      const backups = readdirSync(claudeHome).filter((f) => f.startsWith('settings.json.bak-'))
       const wiredFile =
-        !!afterWire.obj &&
-        (afterWire.obj.model as string) === 'smoke-model' &&
-        (afterWire.obj.permissions as { defaultMode?: string })?.defaultMode === 'plan' &&
-        EVENTS.every((event) => oursIn(entriesFor(afterWire.obj, event)).length === 1) &&
-        entriesFor(afterWire.obj, 'Stop').length === 2 &&
-        entriesFor(afterWire.obj, 'Stop')[0]?.hooks?.[0]?.command === 'user-own-stop-logger'
+        !!afterWire &&
+        (afterWire.model as string) === 'smoke-model' &&
+        (afterWire.permissions as { defaultMode?: string })?.defaultMode === 'plan' &&
+        EVENTS.every((event) => oursIn(entriesFor(afterWire, event)).length === 1) &&
+        entriesFor(afterWire, 'Stop').length === 2 &&
+        entriesFor(afterWire, 'Stop')[0]?.hooks?.[0]?.command === 'user-own-stop-logger'
       result.wiredToast = wiredToast
       result.wiredFile = wiredFile
       result.backupMade = backups.length >= 1
-      const statusWired = (await invoke('agentHooks:status'))?.state === 'applied'
-      result.statusWired = statusWired
+      result.statusWired = (await status()).claude?.state === 'applied'
 
-      // ── once per run: a second detected claude must not nudge again ──
-      await waitTrue(`(() => !document.querySelector('.toast--attention'))()`) // the first toast is gone
+      // ── once per provider per run: a second detected claude must not nudge again ──
+      await waitTrue(`(() => !document.querySelector('.toast--attention'))()`)
       wc.send(TerminalChannels.agent, { id: 101, agentId: 'claude', cwd: '' })
       await sleep(1200)
-      const nudgedOnce = await ES<boolean>(`!document.querySelector('.toast--attention')`)
-      result.nudgedOnce = nudgedOnce
+      result.nudgedOnce = await ES<boolean>(`!document.querySelector('.toast--attention')`)
 
-      // ── the Settings card: state on display, Remove strips exactly ours ──
+      // ── ...but a detected CODEX gets its own nudge (per-provider guards) ──
+      wc.send(TerminalChannels.agent, { id: 102, agentId: 'codex', cwd: '' })
+      const codexNudge = await waitTrue(
+        `(() => { const t = document.querySelector('.toast--attention'); return !!t && /Codex/.test(t.querySelector('.toast-title')?.textContent || '') })()`
+      )
+      result.codexNudge = codexNudge
+      await ES(`(document.querySelector('.toast--attention .toast-dismiss')?.click(), 1)`)
+
+      // ── wire the other three over the same IPC the card uses ──
+      const codexApply = await mutate('apply', 'codex')
+      const codexText = read(codexFile)
+      const codexWired =
+        codexApply?.ok === true &&
+        codexText.includes('# my codex config') &&
+        codexText.includes('model = "o4"') &&
+        codexText.includes('command = "my-server"') &&
+        /notify = \[ "node", .*notify\.mjs" \] # managed-by: mogginglabs/.test(codexText) &&
+        codexText.includes('notifications = true # managed-by: mogginglabs') &&
+        (await status()).codex?.state === 'applied'
+      result.codexWired = codexWired
+
+      const geminiApply = await mutate('apply', 'gemini')
+      const geminiObj = json(geminiFile)
+      const geminiWired =
+        geminiApply?.ok === true &&
+        (geminiObj?.general as { vimMode?: boolean; enableNotifications?: boolean })?.vimMode === true &&
+        (geminiObj?.general as { enableNotifications?: boolean })?.enableNotifications === true &&
+        entriesFor(geminiObj, 'AfterAgent').length === 2 &&
+        entriesFor(geminiObj, 'AfterAgent')[0]?.hooks?.[0]?.command === 'their-after' &&
+        oursIn(entriesFor(geminiObj, 'BeforeAgent')).length === 1 &&
+        (await status()).gemini?.state === 'applied'
+      result.geminiWired = geminiWired
+
+      const ocApply = await mutate('apply', 'opencode')
+      const ocTui = json(opencodeTui)
+      const ocCfg = json(opencodeCfg)
+      const ocPlugins = (ocCfg?.plugin as string[] | undefined) ?? []
+      const pluginFile = join(app.getPath('userData'), 'notify-hook', 'opencode-notify-plugin.mjs')
+      const opencodeWired =
+        ocApply?.ok === true &&
+        (ocTui?.theme as string) === 'mono' &&
+        (ocTui?.attention as { enabled?: boolean; notifications?: boolean })?.enabled === true &&
+        (ocTui?.attention as { notifications?: boolean })?.notifications === true &&
+        ocPlugins.length === 2 &&
+        ocPlugins[0] === 'their-plugin' &&
+        /^file:\/\/\/.*notify-hook\/opencode-notify-plugin\.mjs$/.test(ocPlugins[1] ?? '') &&
+        existsSync(pluginFile) &&
+        (await status()).opencode?.state === 'applied'
+      result.opencodeWired = opencodeWired
+
+      // ── the Settings card: four rows, claude's Remove strips exactly ours ──
       await ES(`(document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click(), 1)`)
       await sleep(400)
-      await ES(`(document.querySelector('.settings-nav-item[data-target="providers"]')?.click(), 1)`)
-      const cardRow = `[...document.querySelectorAll('.prov-row')].find(r => (r.textContent || '').includes('global alert hooks'))`
-      const cardWired = await waitTrue(`(() => { const r = ${cardRow}; return !!r && (r.textContent || '').includes('✓ wired') })()`)
+      // The session-alerts card lives on Settings › Notifications now (F-08; tab id
+      // stays 'webhooks' — ids are plumbing, not labels).
+      await ES(`(document.querySelector('.settings-nav-item[data-target="webhooks"]')?.click(), 1)`)
+      const fourRows = await waitTrue(`document.querySelectorAll('[data-hooks-provider]').length === 4`)
+      result.fourRows = fourRows
+      const claudeRow = `document.querySelector('[data-hooks-provider="claude"]')`
+      const cardWired = await waitTrue(`(() => { const r = ${claudeRow}; return !!r && (r.textContent || '').includes('✓ wired') })()`)
       result.cardWired = cardWired
-      await ES(`(() => { const r = ${cardRow}; const b = r && [...r.querySelectorAll('button')].find(x => (x.textContent || '').trim() === 'Remove'); if (b) b.click(); return 1 })()`)
-      const cardRemoved = await waitTrue(`(() => { const r = ${cardRow}; return !!r && (r.textContent || '').includes('not wired') })()`)
-      const afterRemove = readSettings()
+      await ES(`(() => { const r = ${claudeRow}; const b = r && [...r.querySelectorAll('button')].find(x => (x.textContent || '').trim() === 'Remove'); if (b) b.click(); return 1 })()`)
+      const cardRemoved = await waitTrue(`(() => { const r = ${claudeRow}; return !!r && (r.textContent || '').includes('not wired') })()`)
+      const afterRemove = json(claudeFile)
       const removedFile =
-        !!afterRemove.obj &&
-        (afterRemove.obj.model as string) === 'smoke-model' &&
-        EVENTS.every((event) => oursIn(entriesFor(afterRemove.obj, event)).length === 0) &&
-        entriesFor(afterRemove.obj, 'Stop').length === 1 &&
-        entriesFor(afterRemove.obj, 'Stop')[0]?.hooks?.[0]?.command === 'user-own-stop-logger'
+        !!afterRemove &&
+        (afterRemove.model as string) === 'smoke-model' &&
+        EVENTS.every((event) => oursIn(entriesFor(afterRemove, event)).length === 0) &&
+        entriesFor(afterRemove, 'Stop').length === 1 &&
+        entriesFor(afterRemove, 'Stop')[0]?.hooks?.[0]?.command === 'user-own-stop-logger'
       result.cardRemoved = cardRemoved
       result.removedFile = removedFile
 
-      // ── a stale install's vintage reads partial, and apply REPLACES instead of stacking ──
-      const staleEntry = { hooks: [{ type: 'command', command: 'node "C:\\old-install\\notify-hook\\notify.mjs" --event done' }] }
-      const staleObj = readSettings().obj ?? {}
-      staleObj.hooks = { ...(staleObj.hooks as Record<string, unknown> ?? {}), Stop: [...entriesFor(staleObj as Record<string, unknown>, 'Stop'), staleEntry] }
-      writeFileSync(settings, JSON.stringify(staleObj, null, 2) + '\n')
-      const statusStale = (await invoke('agentHooks:status'))?.state === 'partial'
-      const reapply = await invoke('agentHooks:apply')
-      const afterReapply = readSettings()
-      const replacedNotStacked =
-        reapply?.ok === true &&
-        EVENTS.every((event) => oursIn(entriesFor(afterReapply.obj, event)).length === 1) &&
-        !afterReapply.text.includes('old-install')
-      result.statusStale = statusStale
-      result.replacedNotStacked = replacedNotStacked
+      // ── remove the other three: user content intact, memo-restored booleans ──
+      const codexRemove = await mutate('remove', 'codex')
+      const codexAfter = read(codexFile)
+      result.codexRemoved =
+        codexRemove?.ok === true &&
+        codexAfter.includes('model = "o4"') &&
+        codexAfter.includes('command = "my-server"') &&
+        !codexAfter.includes('managed-by') &&
+        !codexAfter.includes('notify = ')
+      const geminiRemove = await mutate('remove', 'gemini')
+      const geminiAfter = json(geminiFile)
+      result.geminiRemoved =
+        geminiRemove?.ok === true &&
+        (geminiAfter?.general as { vimMode?: boolean; enableNotifications?: unknown })?.vimMode === true &&
+        (geminiAfter?.general as { enableNotifications?: unknown })?.enableNotifications === undefined &&
+        entriesFor(geminiAfter, 'AfterAgent').length === 1 &&
+        entriesFor(geminiAfter, 'BeforeAgent').length === 0
+      const ocRemove = await mutate('remove', 'opencode')
+      const ocTuiAfter = json(opencodeTui)
+      const ocCfgAfter = json(opencodeCfg)
+      result.opencodeRemoved =
+        ocRemove?.ok === true &&
+        (ocTuiAfter?.theme as string) === 'mono' &&
+        ocTuiAfter?.attention === undefined &&
+        ((ocCfgAfter?.plugin as string[] | undefined) ?? []).join('|') === 'their-plugin'
 
-      // ── junk refuses byte-for-byte ──
-      writeFileSync(settings, '{ this is not json\n')
-      const junkBytes = readFileSync(settings, 'utf8')
-      const statusJunk = (await invoke('agentHooks:status'))?.state === 'unreadable'
-      const junkApply = await invoke('agentHooks:apply')
-      const junkRefused = junkApply?.ok === false && readFileSync(settings, 'utf8') === junkBytes
+      // ── codex CONFLICT: the user's own notify slot refuses byte-for-byte ──
+      const conflictToml = 'notify = [ "say", "done" ]\nmodel = "o4"\n'
+      writeFileSync(codexFile, conflictToml)
+      const conflictRow = (await status()).codex
+      const conflictApply = await mutate('apply', 'codex')
+      result.codexConflict =
+        conflictRow?.state === 'conflict' &&
+        /notify/.test(conflictRow?.reason ?? '') &&
+        conflictApply?.ok === false &&
+        read(codexFile) === conflictToml
+
+      // ── junk claude settings refuses byte-for-byte ──
+      writeFileSync(claudeFile, '{ this is not json\n')
+      const junkBytes = read(claudeFile)
+      const statusJunk = (await status()).claude?.state === 'unreadable'
+      const junkApply = await mutate('apply', 'claude')
       result.statusJunk = statusJunk
-      result.junkRefused = junkRefused
+      result.junkRefused = junkApply?.ok === false && read(claudeFile) === junkBytes
 
-      result.pass =
-        statusIsolated && nudgeShown && wiredToast && wiredFile && (result.backupMade as boolean) &&
-        statusWired && nudgedOnce && cardWired && cardRemoved && removedFile &&
-        statusStale && replacedNotStacked && statusJunk && junkRefused
+      const KEYS = [
+        'statusIsolated', 'nudgeShown', 'wiredToast', 'wiredFile', 'backupMade', 'statusWired',
+        'nudgedOnce', 'codexNudge', 'codexWired', 'geminiWired', 'opencodeWired', 'fourRows',
+        'cardWired', 'cardRemoved', 'removedFile', 'codexRemoved', 'geminiRemoved',
+        'opencodeRemoved', 'codexConflict', 'statusJunk', 'junkRefused'
+      ]
+      result.pass = KEYS.every((k) => result[k] === true)
     } catch (e) {
       result.error = String(e)
     }

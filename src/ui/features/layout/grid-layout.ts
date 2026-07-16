@@ -10,6 +10,7 @@ import {
   leafCount,
   leafIds,
   MAX_LEAVES,
+  MIN_PANE_HEIGHT_PX,
   MIN_PANE_WIDTH_PX,
   minimumLayoutWidth,
   moveLeaf,
@@ -29,12 +30,12 @@ import {
   type SplitDir,
   type SplitNode
 } from './layout-tree'
+import { screenPaneCapacity } from './pane-capacity'
 
 export { parseTree, leafIds, MIN_PANE_WIDTH_PX, minimumLayoutWidth } from './layout-tree'
 export type { LayoutTreeNode, SplitDir } from './layout-tree'
 
 const GUTTER = 2 // px between panes — with each pane's 1px border: a 4px seam, matching the app edge
-const MIN_PANE_HEIGHT_PX = 110 // retain the existing direct vertical-gutter drag floor
 const DRAG_THRESHOLD = 6 // px of header movement before a click becomes a pane drag
 const ROOT_EDGE_PX = 14 // workspace-edge drop band ("make this a full column/row here")
 /** Keyboard seam travel per arrow press — the cadence the dock separators already ship
@@ -68,8 +69,15 @@ interface SeamGeometry {
   bMin: number
 }
 
-/** WebGL context budget (Chromium caps ~16 live contexts — see the feature README). */
-export const MAX_PANES = 16
+/** The live per-workspace pane budget: what THIS screen honestly holds at the pane
+ *  minima (pane-capacity.ts) — bigger monitors fit more terminals, smaller ones fewer,
+ *  hard-bounded by the contract's ABS_MAX_PANES. Computed fresh at every gate (never
+ *  cached: monitors get plugged and unplugged). Note the GPU budget is unchanged:
+ *  Chromium caps ~16 live WebGL contexts, so panes past that edge ride the DOM
+ *  renderer via PaneWebglManager's managed fallback — correct, just not GPU-smooth. */
+export function paneLimit(): number {
+  return screenPaneCapacity().maxPanes
+}
 
 export type ExpandMode = 'full' | 'col' | 'row'
 
@@ -86,7 +94,9 @@ type DropZone =
  * subtrees touching that seam, never a whole row/column of the workspace.
  *
  * Also owns: per-pane EXPAND modes (full workspace / full height / full width —
- * covered siblings hide and release WebGL via the managed leasing), per-pane CLOSE
+ * covered siblings hide via `visibility`, KEEPING their WebGL leases: expand does not
+ * change pane count, so the context budget is unchanged, and releasing them was the
+ * restore-flicker root cause), per-pane CLOSE
  * (the line absorbs the space), SPLIT (add a terminal — the receiving line
  * re-equalizes), and drag-to-rearrange (drop on a pane's edge to restructure, on its
  * center to swap, on a workspace edge for a full column/row).
@@ -309,7 +319,7 @@ export class GridLayout {
    * not); the rest are filled from the lowest slot whose id is free everywhere.
    */
   private templateLocals(n: number): number[] {
-    const count = Math.max(1, Math.min(MAX_PANES, Math.floor(n)))
+    const count = Math.max(1, Math.min(paneLimit(), Math.floor(n)))
     const live = new Set(this.liveLocals())
     const locals: number[] = []
     for (let local = 1; locals.length < count && local <= MAX_LEAVES; local++) {
@@ -365,7 +375,7 @@ export class GridLayout {
   splitPane(paneId: number, dir?: SplitDir): PaneId | null {
     const localTarget = this.localOf(paneId)
     if (localTarget == null || !this.liveLocals().includes(localTarget)) return null
-    if (this.paneCount >= MAX_PANES) return null
+    if (this.paneCount >= paneLimit()) return null
     const newLocal = this.nextFreeLocalId()
     const rect = this.leafRects.get(localTarget)
     const chosen: SplitDir = dir ?? (rect && rect.h > rect.w ? 'v' : 'h')
@@ -429,7 +439,7 @@ export class GridLayout {
    * grid is full. Must run inside the same `batchSlots` as the matching `detachPane`.
    */
   adoptPane(el: HTMLElement, paneId: number, opts: { near?: number | null; dir?: SplitDir } = {}): number | null {
-    if (this.paneCount >= MAX_PANES) return null
+    if (this.paneCount >= paneLimit()) return null
     const target = (opts.near != null ? this.localOf(opts.near) : null) ?? this.focusedLocal() ?? this.liveLocals()[0]
     if (target == null) return null
     const local = this.nextFreeLocalId()
@@ -590,8 +600,11 @@ export class GridLayout {
   }
 
   /** Zoom/expand a pane — 'full' = the whole workspace, 'col' = full height (own
-   *  width), 'row' = full width (own height). Covered siblings hide (and release
-   *  WebGL via the managed leasing); toggling the same mode restores the grid. */
+   *  width), 'row' = full width (own height). Covered siblings hide via `visibility:
+   *  hidden` (global.css) and KEEP their WebGL contexts — their boxes never change, so
+   *  no IntersectionObserver fires, no refit runs, and restoring the grid is pure
+   *  paint. Only hidden WORKSPACES release contexts (the budget path). Toggling the
+   *  same mode restores the grid. */
   toggleExpand(paneId?: number, mode: ExpandMode = 'full'): void {
     const target = paneId ?? this.focusedPaneId() ?? undefined
     if (target == null) return

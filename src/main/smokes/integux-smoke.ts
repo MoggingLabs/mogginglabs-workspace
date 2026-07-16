@@ -91,7 +91,12 @@ export function runIntegUxSmoke(win: BrowserWindow): void {
       let secondPreset = ''
       let progressLen = 0
       if (hasCli) {
-        const flowShown = await waitTrue(`!!document.querySelector('.modal-overlay .integux-flow .integux-flow-tool')`)
+        // F-23: a PICKER now fronts the walk — choose the first two presets, start,
+        // then the per-tool walk (Skip / progress / done marks) behaves as it always has.
+        const pickShown = await waitTrue(`!!document.querySelector('.modal-overlay .integux-flow-pick')`)
+        await ES(`([...document.querySelectorAll('.modal-overlay .integux-pick-item input')].slice(0, 2).forEach((i) => i.click()), 1)`)
+        await ES(`document.querySelector('.modal-overlay [data-flow-action="start"]')?.click()`)
+        const flowShown = pickShown && (await waitTrue(`!!document.querySelector('.modal-overlay .integux-flow .integux-flow-tool')`))
         const curPreset = (): Promise<string> => ES<string>(`document.querySelector('.integux-flow-tool')?.getAttribute('data-preset') || ''`)
         const clickSkip = (): Promise<unknown> =>
           ES(`[...document.querySelectorAll('.modal-overlay .btn')].find(b=>/^Skip$/.test(b.textContent?.trim()||''))?.click()`)

@@ -27,6 +27,7 @@ export {
   type LayoutSpec,
   type LayoutGridPickerHandle
 } from './grid-preview'
+export { createGridPainter, type GridPainterHandle, type GridPainterOpts } from './grid-painter'
 export { createModal, type ModalHandle, type ModalOpts } from './modal'
 export {
   openContextMenu,

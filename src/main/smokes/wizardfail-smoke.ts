@@ -72,12 +72,9 @@ export function runWizardFailSmoke(win: BrowserWindow): void {
 
       // Counts normalize when the layout shrinks; clearing a custom command
       // immediately zeroes and disables its count instead of dropping it later.
+      // (The painter's real gestures are WIZARDUX's job — this drives the model.)
       await open({ cwd: repo, paneCount: 6, mix: [{ provider: 'custom:echo audit', count: 6 }] })
-      await ES(`(() => {
-        const tile = [...document.querySelectorAll('#view-wizard .layout-tile')]
-          .find((item) => item.querySelector('.layout-tile-count')?.textContent === '2')
-        tile?.click()
-      })()`)
+      await ES(`window.__mogging.wizardLayout.setGrid(1, 2)`)
       await sleep(150)
       const shrink = await ES<{ count: string; meter: string }>(`(() => ({
         count: document.querySelector('#view-wizard .wizard-custom-row .stepper-value')?.textContent ?? '',
@@ -251,6 +248,119 @@ export function runWizardFailSmoke(win: BrowserWindow): void {
         (await workspaceCount()) === beforePlan
       await ES(`window.bridge.invoke('integrations:servers:remove', 'audit-wizard-tool')`)
 
+      // The launch transaction acts on ONE moment. The page stays interactive while
+      // the launch awaits (only the footer disables), so a keystroke or recent-click
+      // mid-flight used to retarget the transaction: worktrees under repo A, the
+      // workspace opened at half-typed B, the rollback asking B to remove A's trees.
+      const retargetDir = mkdtempSync(join(tmpdir(), 'mog-wizard-retarget-'))
+      const swapPathTo = (dir: string): Promise<void> =>
+        ES(`(() => {
+          const input = document.querySelector('#view-wizard .path-input-field')
+          if (input instanceof HTMLInputElement) {
+            input.value = ${JSON.stringify(dir)}
+            input.dispatchEvent(new Event('input', { bubbles: true }))
+          }
+        })()`)
+
+      // (a) A retarget while resolve() is in flight: the workspace still opens at the
+      // folder Launch was CLICKED on, never at the mid-flight edit.
+      setWizardAuditFaults({ resolveDelayMs: 700 })
+      await open({ cwd: repo, paneCount: 1 })
+      const beforeRetarget = await workspaceCount()
+      await clickLaunch()
+      await sleep(150)
+      await swapPathTo(retargetDir)
+      await sleep(1500)
+      const retargetCwd = await ES<string>(`window.__mogging.workspace.active()?.cwd ?? ''`)
+      const launchIgnoresMidflightRetarget =
+        (await workspaceCount()) === beforeRetarget + 1 && retargetCwd === repo
+
+      // (b) A retarget between worktree creates: the failed transaction's rollback
+      // still targets the repo the worktrees were created in — nothing orphaned, no
+      // "manual cleanup" shrug, and the retarget dir untouched.
+      setWizardAuditFaults({ worktreeFailAt: 2, worktreeDelayMs: 600 })
+      await open({ cwd: repo, paneCount: 2, mix: [{ provider: 'codex', count: 2 }] })
+      await ES(`(() => {
+        document.querySelectorAll('#view-wizard .wizard-adv').forEach((details) => (details.open = true))
+        const label = [...document.querySelectorAll('#view-wizard label')]
+          .find((item) => item.textContent?.includes('Isolate each agent'))
+        const box = label?.querySelector('input')
+        if (box instanceof HTMLInputElement && !box.checked) box.click()
+      })()`)
+      const beforeRollbackSwap = await workspaceCount()
+      await clickLaunch()
+      await sleep(250) // create #1 is inside its injected delay — the swap lands mid-transaction
+      await swapPathTo(retargetDir)
+      await sleep(2400)
+      const swapFault = snapshotFault()
+      const swapStatus = await status()
+      const liveIsolatedAfterSwap = (await listWorktrees(repo)).filter((item) => /[\\/]\.mogging[\\/]worktrees[\\/]/.test(item.path))
+      const rollbackTargetsSnapshotRepo =
+        swapFault.worktreeCreateCalls === 2 &&
+        swapFault.worktreeRemoveCalls === 1 &&
+        liveIsolatedAfterSwap.length === 0 &&
+        /could not isolate every agent/i.test(swapStatus) &&
+        !/manual cleanup/i.test(swapStatus) &&
+        (await workspaceCount()) === beforeRollbackSwap
+
+      // A preset outlives its CLIs: applying one that names a since-uninstalled
+      // provider must not produce a stepper-less phantom assignment — the meter
+      // counts only what can launch, and the launch types no dead command.
+      setWizardAuditFaults(null)
+      setAgentDetectOverrideForSmoke([
+        { id: 'codex', name: 'Audit Codex', installed: true, installHint: 'npm install -g @openai/codex' },
+        { id: 'gemini', name: 'Audit Gemini', installed: false, installHint: 'npm install -g @google/gemini-cli' }
+      ])
+      await ES(`window.bridge.invoke('templates:save', ${JSON.stringify({
+        id: 'stale-preset-audit',
+        name: 'Stale preset audit',
+        mix: [
+          { provider: 'codex', count: 1 },
+          { provider: 'gemini', count: 2 }
+        ]
+      })})`)
+      await open({ cwd: repo, paneCount: 4 })
+      await ES(`(() => {
+        const chip = [...document.querySelectorAll('#view-wizard .wizard-preset-apply')]
+          .find((item) => item.querySelector('.wizard-preset-name')?.textContent === 'Stale preset audit')
+        chip?.click()
+      })()`)
+      await sleep(250)
+      const staleMeter = await ES<string>(
+        `document.querySelector('#view-wizard .wizard-fill-label')?.textContent ?? ''`
+      )
+      const beforeStalePreset = await workspaceCount()
+      await clickLaunch()
+      await sleep(900)
+      const stalePresetAssignments = await ES<string[]>(
+        `window.__mogging.workspace.active()?.assignments ?? []`
+      )
+      const stalePresetPruned =
+        /^1 \//.test(staleMeter) &&
+        (await workspaceCount()) === beforeStalePreset + 1 &&
+        stalePresetAssignments.includes('codex') &&
+        !stalePresetAssignments.includes('gemini')
+      await ES(`window.bridge.invoke('templates:remove', 'stale-preset-audit')`)
+
+      // A profile picked for a provider whose count is ZERO is not part of the
+      // launch: deleting it in Settings must not refuse a workspace that never
+      // referenced it (the mirror of deletedProfileRefused above).
+      store?.saveProfile({ id: 'unused-a', name: 'Unused A', provider: 'codex', env: {}, order: 0 })
+      store?.saveProfile({ id: 'unused-doomed', name: 'Unused Doomed', provider: 'codex', env: {}, order: 1 })
+      await open({ cwd: repo, paneCount: 1 })
+      await ES(`(() => {
+        const select = document.querySelector('#view-wizard .wizard-profile-select')
+        if (select instanceof HTMLSelectElement) {
+          select.value = 'unused-doomed'
+          select.dispatchEvent(new Event('change', { bubbles: true }))
+        }
+      })()`)
+      store?.removeProfile('unused-doomed')
+      const beforeUnusedProfile = await workspaceCount()
+      await clickLaunch()
+      await sleep(900)
+      const unusedProfileNeverBlocks = (await workspaceCount()) === beforeUnusedProfile + 1
+
       const pass =
         normalizedCounts &&
         blankCustomNormalized &&
@@ -261,7 +371,11 @@ export function runWizardFailSmoke(win: BrowserWindow): void {
         submitSingleFire &&
         resolveFailureRefused &&
         partialIsolationRolledBack &&
-        planRejectedAtomically
+        planRejectedAtomically &&
+        launchIgnoresMidflightRetarget &&
+        rollbackTargetsSnapshotRepo &&
+        stalePresetPruned &&
+        unusedProfileNeverBlocks
       result = {
         pass,
         normalizedCounts,
@@ -282,7 +396,16 @@ export function runWizardFailSmoke(win: BrowserWindow): void {
         partialIsolationRolledBack,
         partialFault,
         planRejectedAtomically,
-        planFault
+        planFault,
+        launchIgnoresMidflightRetarget,
+        retargetCwd,
+        rollbackTargetsSnapshotRepo,
+        swapFault,
+        swapStatus,
+        stalePresetPruned,
+        staleMeter,
+        stalePresetAssignments,
+        unusedProfileNeverBlocks
       }
     } catch (error) {
       result = { pass: false, error: String(error), fault: snapshotFault() }
@@ -291,6 +414,8 @@ export function runWizardFailSmoke(win: BrowserWindow): void {
       setAgentDetectOverrideForSmoke(null)
       getSettingsStore()?.removeProfile('safe-profile')
       getSettingsStore()?.removeProfile('doomed-profile')
+      getSettingsStore()?.removeProfile('unused-a')
+      getSettingsStore()?.removeProfile('unused-doomed')
     }
     try {
       writeFileSync(join(process.cwd(), 'out', 'wizardfail-result.json'), JSON.stringify(result, null, 2))

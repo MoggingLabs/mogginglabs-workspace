@@ -53,6 +53,14 @@ export function runResponsiveSmoke(win: BrowserWindow): void {
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
     try {
+      // Force the reveal BEFORE any resize. The window shows on `ready-to-show` (else a
+      // 4000ms fallback); the heavier the app boots, the later that fires — and a
+      // `win.setSize` issued while the window is still hidden is silently dropped, leaving
+      // it at its created 1200 width (the probe then measures innerWidth 1200 for every
+      // breakpoint and the geometry fails). Showing it here removes that startup race so
+      // the gate measures the LAYOUT, never the reveal timing. Real users never hit it —
+      // nobody programmatically resizes a window in the frames after it appears.
+      if (!win.isDestroyed() && !win.isVisible()) win.show()
       fixture = mkdtempSync(join(tmpdir(), 'mogging-responsive-'))
       writeFileSync(join(fixture, 'README.md'), 'responsive fixture\n')
       await sleep(1500)
@@ -116,7 +124,16 @@ export function runResponsiveSmoke(win: BrowserWindow): void {
       }> = []
       for (const requested of [600, 800, 1200]) {
         win.setSize(requested, 720)
-        await sleep(550)
+        // WAIT for the renderer to actually observe the new width, don't assume a fixed
+        // settle: the OS resize + relayout takes variably longer under a heavy app, and a
+        // 550ms guess measured a stale innerWidth (a resize still in flight), failing the
+        // geometry on timing rather than layout. Poll to the real state, floor 400ms.
+        await sleep(400)
+        for (let i = 0; i < 24; i++) {
+          const w = await ES<number>('innerWidth')
+          if (Math.abs(w - requested) <= 2) break
+          await sleep(80)
+        }
         const initial = await measure()
 
         await key('.explorer-dock-handle', 'Home')

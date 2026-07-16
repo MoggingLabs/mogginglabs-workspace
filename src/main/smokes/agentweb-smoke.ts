@@ -174,6 +174,11 @@ export function runAgentWebSmoke(win: BrowserWindow, mode?: string): void {
       const bRef = await refFor('Log in') // page B renders logged-out (its own origin's cookie jar)
       const blockedClick = await act({ verb: 'click', target: bRef || 'button' })
       const dispatchRefused = !blockedClick.ok && /blocked origin/.test(blockedClick.reason ?? '')
+      // tab_new must obey the SAME both-ends block: opening a tab to a sensitive origin on
+      // the signed-in profile is a navigation of it, and would otherwise let an agent point
+      // the browser at a blocked origin (and read it) without the gate navigate enforces.
+      const blockedTabNew = await act({ verb: 'tab_new', target: originB })
+      const tabNewRefused = !blockedTabNew.ok && /blocked origin/.test(blockedTabNew.reason ?? '')
       delete process.env.MOGGING_TEST_BLOCK_ORIGIN
 
       // ── (g) The login survives view destruction (vault-backed persistence) ─
@@ -211,7 +216,7 @@ export function runAgentWebSmoke(win: BrowserWindow, mode?: string): void {
         previewOk && switched && separated && signedIn &&
         ungrantedRead && ungrantedRefused &&
         confirmPending && actedLanded &&
-        originAlertOk && editorRefused && dispatchRefused &&
+        originAlertOk && editorRefused && dispatchRefused && tabNewRefused &&
         sitesListed && cookieSurvived && forgotten && vaultlessOk
       result = {
         pass,
@@ -226,6 +231,7 @@ export function runAgentWebSmoke(win: BrowserWindow, mode?: string): void {
         actedLanded,
         originAlertOk,
         editorRefused,
+        tabNewRefused,
         dispatchRefused,
         blockedReason: blockedClick.reason,
         sitesListed,

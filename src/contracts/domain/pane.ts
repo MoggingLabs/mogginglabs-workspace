@@ -22,6 +22,13 @@ export interface PaneSpec {
 /** Max panes a workspace's id-space holds — also the id gap between ordinals. */
 export const PANE_SLOT_STRIDE = 100
 
+/** The ABSOLUTE pane ceiling per workspace — the slot-id space persistence
+ *  guarantees (layout-tree's MAX_LEAVES aliases this; ids stay well under
+ *  PANE_SLOT_STRIDE). How many panes a user can actually OPEN is the smaller,
+ *  screen-derived number (features/layout/pane-capacity.ts): this constant is
+ *  the shared hard bound main and renderer agree on, never the UX limit. */
+export const ABS_MAX_PANES = 32
+
 /** Where a pane is born: the formula id for (workspace ordinal, 1-based slot). */
 export const formulaPaneId = (ordinal: number, slot: number): number => ordinal * PANE_SLOT_STRIDE + slot
 
