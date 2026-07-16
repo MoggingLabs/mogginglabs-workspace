@@ -13,8 +13,9 @@ const TAG = `# managed-by: ${MCP_MANAGED_BY}`
 const header = (id: string): string => `[mcp_servers.${id}]`
 
 /** TOML basic-string: escape backslashes (Windows paths), quotes, and control chars —
- *  a raw newline inside a basic string is invalid TOML (and breaks the line splice). */
-const tstr = (s: string): string =>
+ *  a raw newline inside a basic string is invalid TOML (and breaks the line splice).
+ *  Exported: the global alert wiring (agents/global-hooks.ts) writes the same dialect. */
+export const tstr = (s: string): string =>
   `"${s
     .replace(/\\/g, '\\\\')
     .replace(/"/g, '\\"')
