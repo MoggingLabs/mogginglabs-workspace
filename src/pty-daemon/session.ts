@@ -398,6 +398,8 @@ class PaneSession {
   private lastAgent: { agentId: string; cwd: string; sinceMs: number } | null = null
   private subs = new Set<PaneSubscriber>()
   private readonly hooks: PaneHooks
+  /** One breadcrumb per pane when the pty refuses writes — never one per keystroke. */
+  private writeFailLogged = false
   /** True while this session is an UNTOUCHED cold-start restore: a fresh shell repainting
    *  persisted scrollback, with no live agent in it and nothing typed since. The app reads
    *  it (via `spawned.restored`) to decide that resume must TYPE — the opposite of a true
@@ -676,14 +678,30 @@ class PaneSession {
     // frozen process; a pane with no resumable agent just restores its shell.
     if (spec.run && !restore) {
       this.cwdState.acceptCommandStart()
-      this.proc.write(spec.run + '\r')
+      this.writePty(spec.run + '\r')
     }
     // A restore whose cwd fell back to home must NOT resume: `claude --resume` typed in
     // the home directory resumes the wrong project's sessions. The shell restores with
     // its scrollback; the real cwd stays persisted (requestedCwd) for the next start.
     else if (restore?.resumeCommand && !this.cwdFellBack) {
       this.cwdState.acceptCommandStart()
-      this.proc.write(restore.resumeCommand + '\r')
+      this.writePty(restore.resumeCommand + '\r')
+    }
+  }
+
+  /** Every byte headed for the pty goes through here. node-pty's write THROWS once the pty is
+   *  tearing down (a race `resize`/`kill` already guard against, but `write` did not) — and in
+   *  the daemon an unguarded throw unwinds through the socket's data pump as an uncaughtException:
+   *  survivable, but it drops the rest of that chunk's messages and leaves only an UNCAUGHT line
+   *  to explain a pane that ate someone's keystrokes. Logged once per pane, not per keystroke. */
+  private writePty(data: string): void {
+    try {
+      this.proc.write(data)
+    } catch {
+      if (!this.writeFailLogged) {
+        this.writeFailLogged = true
+        log(`pane ${this.id} gen ${this.gen}: pty write failed (pty exiting?) — further input dropped silently`)
+      }
     }
   }
 
@@ -844,7 +862,7 @@ class PaneSession {
     // touching the pane: they must not clear the attention latch (a red pane went
     // yellow across every renderer reload) nor mark a pristine restore as touched.
     if (isTerminalReply(data)) {
-      this.proc.write(data)
+      this.writePty(data)
       return
     }
     this.pristineRestore = false // touched: from here on it's a live shell, not a restore
@@ -862,7 +880,7 @@ class PaneSession {
       if (this.isRemote && this.remoteCwdLive) this.remoteContextArmed = true
       this.hooks.onCommandSubmitted()
     }
-    this.proc.write(data)
+    this.writePty(data)
   }
   resize(cols: number, rows: number): void {
     this.cols = cols

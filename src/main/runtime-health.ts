@@ -27,6 +27,12 @@ export function registerRuntimeHealth(getWebContents: () => WebContents | null):
   )
 }
 
+/** The current daemon-health snapshot, for main-process consumers (the DAEMONHEAL gate
+ *  asserts the reconnecting→connected lifecycle windowless, where the IPC pull can't run). */
+export function getDaemonHealth(): DaemonHealthState {
+  return state
+}
+
 export function setDaemonHealth(next: DaemonHealthState): void {
   state = next
   try {

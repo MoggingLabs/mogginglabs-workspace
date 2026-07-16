@@ -5,7 +5,7 @@ import { autoUpdater } from 'electron-updater'
 import { UpdateChannels, UPDATE_PREFS_DEFAULT, type UpdatePrefs, type UpdateState } from '@contracts'
 import { getTelemetry } from '@backend'
 import { getSettingsStore } from './app-settings'
-import { retireOwnDaemon } from './daemon-client'
+import { retireOwnDaemon, endDaemonQuiescence } from './daemon-client'
 import { updateDriver } from './fixture-port'
 
 // App-wiring: auto-update via electron-updater against the signed GitHub Releases feed
@@ -152,12 +152,32 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
   // can't quit the app.
   ipcMain.handle(UpdateChannels.restart, async () => {
     if (!app.isPackaged || process.env.MOGGING_FAKE_UPDATE) return
+    // Phase-gated in MAIN, not just in the renderer's button logic: this handler used to run
+    // the retire + quiesce unconditionally, so any invocation with NO update actually pending
+    // (a stale 'ready' row, a replayed IPC) retired the daemon, latched `quiescing` forever,
+    // and quitAndInstall — with nothing to install — left the app running with every pane
+    // dead behind a Retry button that could never succeed. The renderer is a hint; the state
+    // machine is the authority.
+    if (last.phase !== 'ready') return
     await retireForInstall() // release the exe lock BEFORE the installer needs the exe
     // (isSilent = true, isForceRunAfter = true): reinstall with no NSIS UI, then relaunch us.
     // The pair matters — with isSilent = false electron-updater IGNORES isForceRunAfter and
     // substitutes autoRunAppAfterInstall, so it is the silent flag that makes "come back
     // afterwards" mean anything at all.
-    autoUpdater.quitAndInstall(true, true)
+    try {
+      autoUpdater.quitAndInstall(true, true)
+    } catch (err) {
+      // The installer never took over (no pending file, updater refusal). The app LIVES ON —
+      // so quiescence must lift, or the reconnect loop spins on "quiescing" forever and every
+      // terminal stays dead until an app restart. The relay is already retrying with backoff;
+      // lifting the flag lets its next attempt respawn the daemon.
+      autoUpdater.logger?.warn?.(
+        `quitAndInstall did not hand off (${err instanceof Error ? err.message : String(err)}); lifting daemon quiescence`
+      )
+      getTelemetry().captureError(err, { feature: 'updater', op: 'quit-and-install', platform: process.platform })
+      retiredForInstall = false
+      endDaemonQuiescence()
+    }
   })
 
   // The OTHER road to the installer: autoInstallOnAppQuit (applyPrefs above) runs it on a

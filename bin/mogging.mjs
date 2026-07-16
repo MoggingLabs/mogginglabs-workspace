@@ -22,7 +22,7 @@ import net from 'node:net'
 // (this file is plain Node — it cannot import the TS contract). It is BOTH the handshake
 // version and the runtime directory this CLI looks in, so a stale value here does not
 // degrade — it makes every `mogging` verb miss the daemon entirely.
-const PROTOCOL_VERSION = 9
+const PROTOCOL_VERSION = 10
 
 // Release channel (keep in sync with contracts/daemon/protocol.ts, ReleaseChannel — gated by
 // scripts/check-protocol-version.mjs). A repo checkout runs on its own channel: run/dev-v4 and

@@ -175,7 +175,12 @@ function wireFingerprint() {
 //     union never listed;
 //   · SpawnSpec.remote now names the shared RemotePaneTarget shape instead of restating
 //     it inline (structurally identical; PersistedPane.remote is the same shape).
-const PINNED = { version: 9, fingerprint: '7577a1fd552c031f' }
+// v10 (2026-07-16): hello gained an optional client identity and welcome gained
+// `otherClients` — the wire facts behind daemon.log shutdown attribution and the
+// stamp-war retire guard (daemon-client.ts ensureDaemon). Additive and degrading by
+// design, but additive is still a SHAPE change: the guard only works against daemons
+// that can report the count, and v10 is what routes every same-version peer onto them.
+const PINNED = { version: 10, fingerprint: '4f8bc96e951891cf' }
 
 const actualWire = wireFingerprint()
 if (actualWire !== PINNED.fingerprint) {

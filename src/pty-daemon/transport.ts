@@ -8,7 +8,7 @@ import {
   DAEMON_PROTOCOL_VERSION,
   normalizeRemoteConnection
 } from '@contracts'
-import type { ClientMessage, ServerMessage, ReviewSnapshot } from '@contracts'
+import type { ClientIdentity, ClientMessage, ServerMessage, ReviewSnapshot } from '@contracts'
 import { ptyEmulation } from '@backend/platform/pty-host'
 import { normalizeRemotePaneCwd } from '@backend/features/agent-state'
 import type { SessionManager, PaneSubscriber, PaneSession } from './session'
@@ -38,6 +38,16 @@ const validReviewSnapshot = (value: unknown): value is ReviewSnapshot => {
 }
 const approvalKey = (repoId: string, branch: string): string => `${repoId}\0${branch}`
 
+/** The self-reported identity from `hello`, sanitized into one short log label. Diagnosis
+ *  only (never authorization): "shutdown requested by client" with no way to say WHICH
+ *  client is what made a night of six daemon retires an archaeology project. */
+function describeClient(raw: ClientIdentity | undefined): string {
+  const pid = typeof raw?.pid === 'number' && Number.isInteger(raw.pid) && raw.pid > 0 ? raw.pid : 0
+  const kind = typeof raw?.kind === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(raw.kind) ? raw.kind : ''
+  if (!pid && !kind) return 'unidentified client'
+  return `${kind || 'client'}${pid ? ` pid ${pid}` : ''}`
+}
+
 export function createServer(sessions: SessionManager, token: string, hooks: TransportHooks): net.Server {
   // Ownership-ledger pushes (4/02): every authed client gets a fresh `owners` on any
   // change (claim, release, pane exit) — the UI chips stay live with zero polling.
@@ -53,9 +63,17 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
     for (const push of authedClients) push(msg)
   }
 
+  // Failure-injection seam for the HEARTBEAT gate (same shape as MOGGING_DAEMON_SPAWN_DELAY_MS
+  // below): ignore `ping` for the first N ms of this daemon's life, so a gate can stand up a
+  // daemon that is provably ALIVE (welcome, spawn, data all work) yet silent to the client's
+  // liveness probe — the exact wedge the heartbeat exists to detect. Production has no delay.
+  const pingMuteUntil =
+    Date.now() + Math.min(30_000, Math.max(0, Number(process.env.MOGGING_DAEMON_PING_MUTE_MS) || 0))
+
   const server = net.createServer((sock) => {
     sock.setEncoding('utf8')
     let authed = false
+    let who = 'unidentified client' // from hello's optional identity — log label only, never authz
     // One entry per pane id THIS connection follows — holding the exact SESSION the sub is
     // bound to, not just the sub. Pane ids are reused (a split takes the lowest free slot),
     // so the session reference is what distinguishes generations: an id-keyed guard alone
@@ -365,10 +383,11 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           ) pushApprovals()
           break
         case 'ping':
+          if (Date.now() < pingMuteUntil) break // gate seam only — see pingMuteUntil
           send({ t: 'pong' })
           break
         case 'shutdown':
-          log('shutdown requested by client')
+          log('shutdown requested by ' + who)
           hooks.onShutdown(0)
           break
       }
@@ -379,11 +398,22 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
       if (!authed) {
         if (m.t === 'hello' && m.v === DAEMON_PROTOCOL_VERSION && m.token === token) {
           authed = true
+          who = describeClient(m.client)
           clearTimeout(authTimer)
+          // Counted BEFORE this connection joins the set: `otherClients` is "how many authed
+          // connections exist besides YOU" — what a stamp-retire probe needs to know whether a
+          // different build's live session would be killed by a retire (see the welcome type).
+          const otherClients = authedClients.size
           authedClients.add(send)
           hooks.onClientCountChange(1)
           hooks.onActivity()
-          send({ t: 'welcome', v: DAEMON_PROTOCOL_VERSION, panes: sessions.list(), workspaces: sessions.workspaces() })
+          send({
+            t: 'welcome',
+            v: DAEMON_PROTOCOL_VERSION,
+            panes: sessions.list(),
+            workspaces: sessions.workspaces(),
+            otherClients
+          })
         } else {
           send({ t: 'error', reason: 'auth' })
           sock.destroy()
