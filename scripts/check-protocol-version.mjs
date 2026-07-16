@@ -175,7 +175,12 @@ function wireFingerprint() {
 //     union never listed;
 //   · SpawnSpec.remote now names the shared RemotePaneTarget shape instead of restating
 //     it inline (structurally identical; PersistedPane.remote is the same shape).
-const PINNED = { version: 10, fingerprint: 'e899baa1300b798c' }
+// v10 (2026-07-16) rides TWO wire changes in one release: the pane-token binding on the
+// swarm coordination verbs (see protocol.ts's v10 note), and the daemon-lifecycle pair —
+// hello's optional client identity + welcome's `otherClients`, the facts behind daemon.log
+// shutdown attribution and the stamp-war retire guard (daemon-client.ts ensureDaemon).
+// The fingerprint below pins the MERGED shape of both.
+const PINNED = { version: 10, fingerprint: '56dacb959ecf7e4e' }
 
 const actualWire = wireFingerprint()
 if (actualWire !== PINNED.fingerprint) {

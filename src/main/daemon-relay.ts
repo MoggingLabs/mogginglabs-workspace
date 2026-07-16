@@ -8,7 +8,7 @@ import * as path from 'node:path'
 import { TerminalChannels, LedgerChannels, GateChannels, PANE_CWD_MAX, normalizeRemoteConnection } from '@contracts'
 import type { AgentState, Approval, SpawnRequest, SpawnResult, SpawnSpec, StateSyncRequest, WriteCommand, ResizeCommand, KillCommand, SetRoleCommand } from '@contracts'
 import { getTelemetry } from '@backend'
-import { ensureDaemon, DaemonClient } from './daemon-client'
+import { ensureDaemon, DaemonClient, clientLog } from './daemon-client'
 import { DaemonMigrationDeferredError, migrateOlderDaemonSessions } from './daemon-migrate'
 import { sweepDeadRunDirs } from './daemon-sweep'
 import { getSettingsStore } from './app-settings'
@@ -205,10 +205,14 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
       // reconnect: a failed candidate's close, or a late close from an already-replaced
       // client, must not start a second loop.
       onClose: () => {
-        if (!disposed && client === c) void reconnect()
+        if (!disposed && client === c) {
+          clientLog('daemon-connection-lost', { pid: endpoint.pid })
+          void reconnect()
+        }
       }
     })
     await c.connect()
+    clientLog('daemon-connected', { pid: endpoint.pid, build: endpoint.build ?? null })
     return c
   }
 
@@ -271,10 +275,12 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
           sessionSurvival: true
         })
         console.warn(`[daemon] reconnected (${specs.size} pane(s) reattached)`)
+        clientLog('daemon-reconnected', { panes: specs.size })
         break
       } catch (err) {
         const why = err instanceof Error ? err.message : String(err)
         console.warn(`[daemon] reconnect failed (${why}); retrying in ${delayMs}ms`)
+        clientLog('daemon-reconnect-failed', { why, retryInMs: delayMs })
         setDaemonHealth({
           mode: 'daemon',
           state: 'reconnecting',

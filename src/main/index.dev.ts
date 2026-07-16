@@ -116,6 +116,9 @@ import { runDaemonSurviveSmoke } from './smokes/daemon-survive-smoke'
 import { runMigrateSmoke } from './smokes/migrate-smoke'
 import { runNotifyHookSmoke } from './smokes/notifyhook-smoke'
 import { runDaemonCustodySmoke } from './smokes/daemoncustody-smoke'
+import { runStampWarSmoke } from './smokes/stampwar-smoke'
+import { runHeartbeatSmoke } from './smokes/heartbeat-smoke'
+import { runDaemonHealSmoke } from './smokes/daemonheal-smoke'
 import { runSessionPoolSmoke } from './smokes/sessionpool-smoke'
 
 // THE DEV / TEST ENTRY: the production boot (boot.ts — the SAME one src/main/index.ts runs) plus
@@ -154,7 +157,7 @@ function installSshShim(): void {
 // — and an isolated userData must not register the OS-global deep-link scheme in any case.
 const SMOKE_ENV: readonly string[] = [
   'MOGGING_USERDATA', 'MOGGING_GATES', 'MOGGING_GALLERY', // isolation + sweep markers, set by every gate
-  'MOGGING_SURVIVE', 'MOGGING_MIGRATE', 'MOGGING_NOTIFYHOOK', 'MOGGING_DAEMONCUSTODY', 'MOGGING_SESSIONPOOL', 'MOGGING_INTEG', 'MOGGING_TOOLPLAN',
+  'MOGGING_SURVIVE', 'MOGGING_MIGRATE', 'MOGGING_NOTIFYHOOK', 'MOGGING_DAEMONCUSTODY', 'MOGGING_STAMPWAR', 'MOGGING_HEARTBEAT', 'MOGGING_DAEMONHEAL', 'MOGGING_SESSIONPOOL', 'MOGGING_INTEG', 'MOGGING_TOOLPLAN',
   'MOGGING_EVBRIDGE', 'MOGGING_MCPSTATUS', 'MOGGING_MCPLOOP', 'MOGGING_AGENT', 'MOGGING_STATE', 'MOGGING_RELOAD',
   'MOGGING_SMOKE', 'MOGGING_SHOT', 'MOGGING_MULTIPANE', 'MOGGING_WORKSPACE', 'MOGGING_AGENTLAUNCH',
   'MOGGING_TEMPLATE', 'MOGGING_PROFPERSIST', 'MOGGING_BROWSER', 'MOGGING_BROWSERCTL', 'MOGGING_BROWSERRACE', 'MOGGING_BROWSERZERO', 'MOGGING_FIRSTRUN',
@@ -209,6 +212,31 @@ async function beforeAppSettings(): Promise<boolean> {
   // before startDaemonBackend — it owns its own daemons (isolated LOCALAPPDATA) start to grave.
   if (process.env.MOGGING_DAEMONCUSTODY) {
     await runDaemonCustodySmoke()
+    return true
+  }
+
+  // Windowless stamp-war smoke: a build-stamp mismatch retires a daemon ONLY when no other
+  // client is attached — the guard against two same-channel builds killing each other's
+  // daemons (and every pane's live process) in a loop. Owns its daemons start to grave.
+  if (process.env.MOGGING_STAMPWAR) {
+    await runStampWarSmoke()
+    return true
+  }
+
+  // Windowless heartbeat smoke: a daemon wedged with its socket open (ping-muted via the
+  // MOGGING_DAEMON_PING_MUTE_MS seam) must be detected and cut loose — while a daemon that
+  // is merely BUSY (streaming pane output) must never be shot. Runs before the relay so the
+  // smoke owns every connection it judges.
+  if (process.env.MOGGING_HEARTBEAT) {
+    await runHeartbeatSmoke()
+    return true
+  }
+
+  // Windowless daemon-heal smoke: the REAL relay's crash → reconnect → self-heal lifecycle,
+  // quiescence holding the line (no resurrection inside the update handoff), and
+  // endDaemonQuiescence releasing it — the permanent-freeze latch, gated.
+  if (process.env.MOGGING_DAEMONHEAL) {
+    await runDaemonHealSmoke()
     return true
   }
 
