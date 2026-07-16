@@ -178,7 +178,11 @@ function pushState(): void {
 function hardenSession(ses: Session): void {
   if (hardenedSessions.has(ses)) return
   hardenedSessions.add(ses)
-  applyGuestSessionPolicy(ses)
+  applyGuestSessionPolicy(ses, (permission) => {
+    // Honest denial (F16): the deny stands; the chrome just says so, briefly.
+    const win = getWin?.()
+    if (win && !win.isDestroyed()) win.webContents.send(BrowserChannels.permissionBlocked, { permission })
+  })
   // The HTTP error loop (F11): a 4xx/5xx from the dev server is invisible to
   // did-fail-load (that page "loaded"). Feed status >= 400 into the same per-guest
   // net ring the agent reads via `network_failures`, routed by webContents id so
@@ -850,6 +854,16 @@ export function registerBrowserDock(winGetter: () => BrowserWindow | null): void
   getWin = winGetter
   const store = (): ReturnType<typeof getSettingsStore> => getSettingsStore()
   refreshVault()
+
+  // Harden a guest's session the INSTANT it attaches — before dom-ready, before its
+  // first load — so a permission request racing the renderer's guest-ready IPC can never
+  // hit Electron's permissive default (defense in depth; the deny-all + UA are idempotent
+  // per session). The renderer still registers each guest by workspace × profile for
+  // driving; this only front-runs the session policy.
+  const host = winGetter()
+  host?.webContents.on('did-attach-webview', (_e, guestWc) => {
+    if (!guestWc.isDestroyed()) hardenSession(guestWc.session)
+  })
 
   ipcMain.handle(BrowserChannels.init, (): BrowserDockInit => {
     const s = store()

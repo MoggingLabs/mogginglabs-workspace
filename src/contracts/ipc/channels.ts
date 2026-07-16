@@ -206,6 +206,7 @@ export const BrowserChannels = {
   contextMenu: 'browser:contextMenu', // main -> renderer: BrowserContextMenuParams (right-click in the guest → the house menu)
   guestChord: 'browser:guestChord', // main -> renderer: BrowserGuestChord (an app shortcut pressed while the guest holds focus, F12)
   devtools: 'browser:devtools', // renderer -> main: { x?, y? } — open DevTools on the active guest (F8)
+  permissionBlocked: 'browser:permissionBlocked', // main -> renderer: { permission } — a guest permission was denied (honest chip, F16)
   // ── Agent control (6/05b) ──────────────────────────────────────────────
   consentGet: 'browser:consentGet', // (workspaceId) -> boolean (stored per-workspace grant; default OFF)
   consentSet: 'browser:consentSet', // ({ workspaceId, allowed }) -> void (Settings/wizard toggle writes it)

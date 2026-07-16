@@ -37,9 +37,15 @@ export function chromeUserAgent(): string {
 
 /** Idempotent per session (the caller tracks a WeakSet). Deny-all permissions +
  *  the Chrome-honest UA — both operate on the guest's ACTUAL session, so they are
- *  correct no matter which partition name resolved to it. */
-export function applyGuestSessionPolicy(ses: Session): void {
-  ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
+ *  correct no matter which partition name resolved to it. `onDenied` (optional) fires
+ *  with the permission name each time one is refused, so the chrome can surface an
+ *  HONEST "blocked: camera" chip instead of a silent nothing (the request still fails
+ *  — deny-all stays absolute, we just stop hiding it). */
+export function applyGuestSessionPolicy(ses: Session, onDenied?: (permission: string) => void): void {
+  ses.setPermissionRequestHandler((_wc, permission, callback) => {
+    onDenied?.(String(permission))
+    callback(false)
+  })
   // A second, synchronous gate: permission CHECKS (the non-prompting kind, e.g. a
   // page probing navigator.permissions) also refuse, so nothing slips the async
   // handler above.

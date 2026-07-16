@@ -64,6 +64,23 @@ export function createMainWindow(opts: { largerThanScreen?: boolean } = {}): Bro
     }
   })
 
+  // Defense in depth (ADR 0002 / docs/13): the dock's guests are the ONLY webviews the
+  // app ever attaches. Force isolation regardless of what the element asked for, strip any
+  // preload, and REFUSE any partition that isn't one of ours (persist:bdock.* / aweb.* /
+  // aweb-mem.*) — so even a compromised renderer cannot attach a node-enabled webview or
+  // point one at a foreign session. This is the belt to the renderer's suspenders.
+  win.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    delete webPreferences.preload
+    webPreferences.nodeIntegration = false
+    webPreferences.nodeIntegrationInSubFrames = false
+    webPreferences.contextIsolation = true
+    webPreferences.sandbox = true
+    const partition = typeof params.partition === 'string' ? params.partition : ''
+    if (!/^(persist:bdock\.|persist:aweb\.|aweb-mem\.)[a-zA-Z0-9_-]+$/.test(partition)) {
+      event.preventDefault()
+    }
+  })
+
   if (process.env.MOGGING_DEVLOG) {
     win.webContents.on('console-message', (_e, _level, message, line, source) => {
       console.log(`[renderer] ${message} (${source}:${line})`)

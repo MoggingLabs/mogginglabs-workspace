@@ -39,10 +39,12 @@ export function runBrowserUxSmoke(win: BrowserWindow): void {
     new Promise((resolve) => {
       server = createServer((_req, res) => {
         res.writeHead(200, { 'content-type': 'text/html' })
-        // A page with a favicon and lots of a findable word.
+        // A page with a favicon, lots of a findable word, and a geolocation request
+        // (which the deny-all handler refuses → the honest permission chip, F16).
         res.end(
           `<!doctype html><title>UX</title><link rel="icon" href="${FAVICON}">` +
-            `<body>${'<p>MATCHWORD here</p>'.repeat(6)}</body>`
+            `<body>${'<p>MATCHWORD here</p>'.repeat(6)}` +
+            `<script>try{navigator.geolocation.getCurrentPosition(function(){},function(){})}catch(e){}</script></body>`
         )
       })
       server.listen(0, '127.0.0.1', () => {
@@ -154,7 +156,33 @@ export function runBrowserUxSmoke(win: BrowserWindow): void {
       const openAfter = await ES<boolean>(`${B}.isOpen()`)
       const relayOk = openBefore === true && openAfter === false
 
-      const pass = omniboxOk && navigated && insecureShown && faviconCaptured && findOk && zoomOk && errorVisible && contextMenuOk && relayOk
+      // ── 8. Permission chip (F16): the page's geolocation request was denied,
+      //       and the chip says so honestly ────────────────────────────────────
+      // Re-navigate to the main page (arm 5 left the guest on the error page) so the
+      // geolocation request fires again.
+      await ES(`${B}.navigate('127.0.0.1:${port}')`)
+      let permChipText = ''
+      for (let i = 0; i < 20 && !/Blocked/.test(permChipText); i++) {
+        await sleep(300)
+        permChipText = await ES<string>(`${B}.permChipText()`)
+      }
+      const permChipOk = /Blocked: location/.test(permChipText)
+
+      // ── 9. Pins + recents (F14): navigation records a recent; pinning persists ──
+      const recentsCount = await ES<number>(`${B}.recentsCount()`)
+      await ES(`${B}.pinCurrent()`)
+      const isPinned = await ES<boolean>(`${B}.isPinnedCurrent()`)
+      await ES(`${B}.forceRenderChips()`)
+      const chipHosts = await ES<string[]>(`${B}.quickChipHosts()`)
+      const pinsRecentsOk = recentsCount >= 1 && isPinned && chipHosts.some((h) => h.includes('127.0.0.1'))
+
+      // ── 10. Hardening (S1): a webview on a foreign partition is refused attach ──
+      const rogueAttached = await ES<boolean>(`${B}.probeRogueWebview()`)
+      const attachGuardOk = rogueAttached === false
+
+      const pass =
+        omniboxOk && navigated && insecureShown && faviconCaptured && findOk && zoomOk && errorVisible &&
+        contextMenuOk && relayOk && permChipOk && pinsRecentsOk && attachGuardOk
       result = {
         pass,
         omniboxOk,
@@ -170,7 +198,12 @@ export function runBrowserUxSmoke(win: BrowserWindow): void {
         zoom: { zoom0, zoom1, zoom2 },
         errorVisible,
         contextMenuOk,
-        relayOk
+        relayOk,
+        permChipOk,
+        permChipText,
+        pinsRecentsOk,
+        pinsDiag: { recentsCount, isPinned, chipHosts },
+        attachGuardOk
       }
     } catch (e) {
       result = { pass: false, error: String(e) }

@@ -37,6 +37,7 @@ export type IconName =
   | 'expand'
   | 'expand-h'
   | 'expand-v'
+  | 'external-link'
   | 'file'
   | 'flag'
   | 'folder'
@@ -93,6 +94,8 @@ const PATHS: Record<IconName, string> = {
   'contract-v':
     '<polyline points="8 5 12 9 16 5"/><polyline points="8 19 12 15 16 19"/><line x1="12" x2="12" y1="2" y2="9"/><line x1="12" x2="12" y1="15" y2="22"/>',
   copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  'external-link':
+    '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   download:
     '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="3" y2="15"/>',
   /* Expand trio — arrows that STRETCH (the old chevron pairs read as collapse). */

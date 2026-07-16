@@ -6788,6 +6788,42 @@ body.pane-dragging * {
   font-size: var(--fs-11);
   max-width: 32ch;
 }
+/* Pinned + recent chips (F14): the empty preview as a dev-loop new-tab page. */
+.browser-quick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  justify-content: center;
+  max-width: 42ch;
+  margin-top: var(--sp-2);
+}
+.browser-quick-chips:empty {
+  display: none;
+}
+.browser-quick-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  max-width: 20ch;
+  min-height: 24px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-elevated);
+  color: var(--text-mid);
+  font-size: var(--fs-11);
+  cursor: pointer;
+  overflow: hidden;
+}
+.browser-quick-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-quick-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
 /* ── Load-error / crash overlay (F10): a dead page explains itself ─────────── */
 .browser-load-error {
   position: absolute;
@@ -7182,6 +7218,16 @@ body.pane-dragging * {
   font-size: var(--fs-11);
 }
 .browser-origin-alert[hidden] {
+  display: none;
+}
+/* Blocked-permission chip (F16): honest, transient — the deny stands, we just say so. */
+.browser-perm-chip {
+  padding: var(--sp-1) var(--sp-2);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  color: var(--text-hi);
+  font-size: var(--fs-11);
+}
+.browser-perm-chip[hidden] {
   display: none;
 }
 .browser-sites-menu {
