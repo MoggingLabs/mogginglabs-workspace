@@ -75,6 +75,15 @@ export const AgentConfigChannels = {
   changed: 'agentConfig:changed'
 } as const
 
+// Global Claude alert hooks (the hand-typed-launch gap): the same hook entries the launch
+// overlay carries, written into the user's global Claude settings on an EXPLICIT action —
+// the generated notify script no-ops outside a pane, which is what makes global wiring safe.
+export const AgentHookChannels = {
+  status: 'agentHooks:status', // -> GlobalHooksStatus (state + the file it read)
+  apply: 'agentHooks:apply', // -> GlobalHooksMutationResult (backup + atomic write, refuses concurrent edits)
+  remove: 'agentHooks:remove' // -> GlobalHooksMutationResult (strips OUR entries only)
+} as const
+
 export const TemplateChannels = {
   list: 'templates:list', // -> ProviderMixTemplate[] (presets + custom)
   resolve: 'templates:resolve', // (ProviderCount[]) -> ResolvedLayout
@@ -365,6 +374,7 @@ export const ConnectionsChannels = {
 } as const
 
 export const AllChannels: readonly string[] = [
+  ...Object.values(AgentHookChannels),
   ...Object.values(IntegrationsChannels),
   ...Object.values(ConnectionsChannels),
   ...Object.values(UsageChannels),
