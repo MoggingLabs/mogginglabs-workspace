@@ -24,7 +24,7 @@ import { connectEndpoint } from './lib/endpoint-client.mjs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-const PROTOCOL = 9 // keep in sync with DAEMON_PROTOCOL_VERSION (scripts/check-protocol-version.mjs)
+const PROTOCOL = 10 // keep in sync with DAEMON_PROTOCOL_VERSION (scripts/check-protocol-version.mjs)
 const CHANNEL = process.argv.includes('--dev') || process.env.MOGGING_CHANNEL === 'dev' ? 'dev' : 'prod'
 const RUN_SEGMENT = (CHANNEL === 'dev' ? 'dev-v' : 'v') + PROTOCOL
 

@@ -22,7 +22,7 @@ import net from 'node:net'
 // (this file is plain Node — it cannot import the TS contract). It is BOTH the handshake
 // version and the runtime directory this CLI looks in, so a stale value here does not
 // degrade — it makes every `mogging` verb miss the daemon entirely.
-const PROTOCOL_VERSION = 9
+const PROTOCOL_VERSION = 10
 
 // Release channel (keep in sync with contracts/daemon/protocol.ts, ReleaseChannel — gated by
 // scripts/check-protocol-version.mjs). A repo checkout runs on its own channel: run/dev-v4 and
@@ -450,13 +450,26 @@ function paneIdentityOrUsage() {
   return id
 }
 
+/** The pane's own session secret — what proves a pane-bound verb (mail/claim/release,
+ *  like approve before them) really runs inside the pane it names. The daemon injects
+ *  it beside MOGGING_PANE_ID; an id without its token is a stale environment. */
+function paneTokenOrUsage() {
+  const token = process.env.MOGGING_PANE_TOKEN
+  if (!token) {
+    process.stderr.write('mogging: pane credential missing — run this inside a live MoggingLabs pane\n')
+    process.exit(2)
+  }
+  return token
+}
+
 function runClaim(args) {
   const pattern = args[0]
   if (!pattern) usage(2)
   const from = paneIdentityOrUsage()
+  const token = paneTokenOrUsage()
   withDaemon(
     (welcome, api) => {
-      api.send({ t: 'claim', pattern, from })
+      api.send({ t: 'claim', pattern, from, token })
     },
     (m, api) => {
       if (m.t === 'claimed') {
@@ -480,9 +493,10 @@ function runRelease(args) {
   const pattern = args.find((a) => a !== '--all')
   if (!all && !pattern) usage(2)
   const from = paneIdentityOrUsage()
+  const token = paneTokenOrUsage()
   withDaemon(
     (welcome, api) => {
-      api.send({ t: 'release', pattern, all, from })
+      api.send({ t: 'release', pattern, all, from, token })
     },
     (m, api) => {
       if (m.t === 'released') {
@@ -540,10 +554,13 @@ function runMailSend(args) {
   }
   const body = args.join(' ')
   if (!body) usage(2)
+  // Inside a pane, mail is sent AS that pane and must carry its token (the daemon
+  // refuses an unbound pane sender). Outside one, '0' is the human — no token exists.
   const from = process.env.MOGGING_PANE_ID || '0'
+  const token = from === '0' ? undefined : paneTokenOrUsage()
   withDaemon(
     (welcome, api) => {
-      api.send({ t: 'mail-send', from, to: String(to), body })
+      api.send({ t: 'mail-send', from, to: String(to), body, token })
     },
     (m, api) => {
       if (m.t === 'mailed') {

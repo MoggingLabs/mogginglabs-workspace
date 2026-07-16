@@ -175,7 +175,7 @@ function wireFingerprint() {
 //     union never listed;
 //   · SpawnSpec.remote now names the shared RemotePaneTarget shape instead of restating
 //     it inline (structurally identical; PersistedPane.remote is the same shape).
-const PINNED = { version: 9, fingerprint: '7577a1fd552c031f' }
+const PINNED = { version: 10, fingerprint: 'e899baa1300b798c' }
 
 const actualWire = wireFingerprint()
 if (actualWire !== PINNED.fingerprint) {
