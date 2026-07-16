@@ -2877,10 +2877,18 @@ button {
   padding: var(--sp-1) calc(var(--sp-4) + var(--sp-1)) var(--sp-1) 6px; /* right lane: the slide bar + its float gap */
 }
 
-/* Expanded pane (full / full-height / full-width): covered siblings hide entirely
-   (and release WebGL via the managed leasing); gutters pause while expanded. */
+/* Expanded pane (full / full-height / full-width): covered siblings hide — but with
+   `visibility`, NOT `display:none`. The distinction is load-bearing (the restore-flicker
+   root cause): each pane's IntersectionObserver watches its slot, and `display:none`
+   zeroes the box, which reads exactly like a hidden workspace — so siblings covered for
+   >1.5s released their WebGL contexts, and restoring the grid re-acquired them one per
+   frame: a per-pane DOM→WebGL rasterizer swap the user saw as every terminal flickering.
+   `visibility:hidden` keeps the box (IO is geometry-only, so the leases stay warm — the
+   FLICKER gate's dwell phase pins this) while still not painting, not hit-testing and
+   not focusing. The context budget is untouched: expand doesn't change pane count, and
+   hidden WORKSPACES still release via `.workspace-view { display:none }` above. */
 .layout-slot.covered {
-  display: none;
+  visibility: hidden;
 }
 .layout-grid.has-expand > .layout-gutter {
   display: none;
