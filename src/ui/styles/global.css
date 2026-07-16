@@ -6910,40 +6910,103 @@ body.pane-dragging * {
   color: var(--text-hi);
 }
 
-/* ── Agent possession (Phase-6/05b): the wheel is visibly held ─────────────
-   When an agent drives the dock, the whole dock wears a brand outline and a
-   banner with an instant Stop — possession is never invisible. */
+/* ── Agent possession (Phase-6/05b; Comet look, Wave 5): the wheel is visibly held ──
+   When an agent drives the dock, the whole dock wears an animated brand GLOW and a
+   pill naming WHO is driving + WHAT it is doing right now, with an instant Stop —
+   possession is never invisible, and now it is never anonymous either. */
 .browser-dock.agent-driving {
-  /* One step thicker, in step with the focused pane's ring. The negative offset keeps the
-     outline INSIDE the dock's box — a positive one would paint over the grid beside it. */
-  outline: 3px solid var(--accent);
-  outline-offset: -3px;
+  /* A steady base ring so reduced-motion still reads the state (the glow below is the
+     animated layer the blanket clamp becalms to a single pass). */
+  outline: 2px solid color-mix(in srgb, var(--accent) 75%, transparent);
+  outline-offset: -2px;
+}
+/* The pulsing inner glow — Comet's "assistant is working" shimmer, clean-room. */
+.browser-dock.agent-driving::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+  box-shadow:
+    inset 0 0 0 2px var(--accent),
+    inset 0 0 18px color-mix(in srgb, var(--accent) 38%, transparent);
+  animation: browser-agent-glow 2.4s ease-in-out infinite;
+}
+@keyframes browser-agent-glow {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 .browser-agent-banner {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: var(--sp-1) var(--sp-2);
-  background: var(--accent-weak);
-  color: var(--accent-ink);
-  font-size: var(--fs-11);
+  padding: var(--sp-2);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 18%, transparent),
+    color-mix(in srgb, var(--accent) 7%, transparent)
+  );
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  color: var(--text-hi);
+  font-size: var(--fs-12);
 }
 .browser-agent-banner[hidden] {
   display: none;
 }
-.browser-agent-banner svg {
+/* The animated "working" dot — an expanding accent halo (Comet's live indicator). */
+.browser-agent-dot {
   flex: none;
-  color: var(--accent-ink);
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: browser-agent-pulse 1.6s ease-out infinite;
 }
-/* The possession message — an agent holds the wheel. A rule of its OWN (AUDIT
-   § Blockers #1: it had none, inheriting the banner's --fs-11): semibold, a step up from
-   the banner chrome, and --text-hi so it clears AA on every theme. accent-ink fell to
-   4.35:1 on nord over the accent wash — the guard caught it. */
-.browser-agent-label {
+@keyframes browser-agent-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+/* WHO + WHAT: the driving agent's name (semibold, --text-hi for AA on every theme),
+   a muted connective, and the live present-tense action in accent ink. */
+.browser-agent-label-group {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  min-width: 0;
+  overflow: hidden;
+}
+.browser-agent-name {
   flex: none;
   font-size: var(--fs-12);
   font-weight: var(--fw-semibold);
   color: var(--text-hi);
+  white-space: nowrap;
+}
+.browser-agent-sep {
+  flex: none;
+  font-size: var(--fs-11);
+  color: var(--text-mid);
+  white-space: nowrap;
+}
+.browser-agent-action {
+  min-width: 0;
+  font-size: var(--fs-11);
+  color: var(--accent-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .browser-agent-spacer {
   flex: 1 1 auto;

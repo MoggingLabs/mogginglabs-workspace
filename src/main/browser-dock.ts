@@ -12,6 +12,7 @@ import {
   type BrowserDockState,
   type BrowserGuestChord,
   type BrowserNavAction,
+  type BrowserPossession,
   type BrowserProfile,
   type BrowserSignedInSite,
   type BrowserSnapshotNode
@@ -97,6 +98,8 @@ interface WsAgent {
   confirmed: Set<string> // origins the human allowed this possession
   pendingConfirm: string | null
   recent: BrowserAgentActivity['trail'] // recent verbs for the dock's ⋯ menu
+  pane: string | null // WHICH agent holds the wheel (its pane) — visible identity (goal 6)
+  lastVerb: BrowserAgentVerbName | null // the live "Clicking…/Reading…" action
 }
 const wsAgent = new Map<string, WsAgent>()
 const lastAgentAct = new Map<string, number>() // ws -> last agent verb (pin window)
@@ -110,7 +113,9 @@ function wsa(wsId: string): WsAgent {
       activeOperations: new Set(),
       confirmed: new Set(),
       pendingConfirm: null,
-      recent: []
+      recent: [],
+      pane: null,
+      lastVerb: null
     }
     wsAgent.set(wsId, s)
   }
@@ -440,7 +445,9 @@ function pushActivity(): void {
     driving: s?.driving ?? false,
     allowed: consentFor(activeWorkspaceId),
     trail: (s?.recent ?? []).slice(-12),
-    pendingConfirm: s?.pendingConfirm ?? undefined
+    pendingConfirm: s?.pendingConfirm ?? undefined,
+    pane: s?.pane ?? undefined,
+    lastVerb: s?.lastVerb ?? undefined
   }
   win.webContents.send(BrowserChannels.activity, activity)
 }
@@ -453,22 +460,27 @@ function pushPossession(): void {
   if (!win || win.isDestroyed()) return
   const attached: string[] = []
   const driving: string[] = []
+  const drivers: Record<string, string> = {}
   for (const [wsId, s] of wsAgent) {
     if (s.driving) driving.push(wsId)
+    if (s.pane) drivers[wsId] = s.pane
   }
   for (const wsId of lastAgentAct.keys()) if (agentAttached(wsId)) attached.push(wsId)
-  win.webContents.send(BrowserChannels.possession, { attached, driving })
+  win.webContents.send(BrowserChannels.possession, { attached, driving, drivers } satisfies BrowserPossession)
 }
 
 function beginDriving(
   wsId: string,
   verb: BrowserAgentVerbName,
-  target?: string
+  target?: string,
+  pane?: string
 ): { cancelled(): boolean; finish(): void } {
   const s = wsa(wsId)
   s.recent.push({ verb, target, at: Date.now() })
   if (s.recent.length > 50) s.recent.shift()
   s.driving = true
+  if (pane) s.pane = pane // who holds the wheel (goal 6)
+  s.lastVerb = verb // the live action line
   const epoch = s.epoch
   const operation = ++s.nextOperation
   s.activeOperations.add(operation)
@@ -483,6 +495,7 @@ function beginDriving(
       finished = true
       s.activeOperations.delete(operation)
       s.driving = s.activeOperations.size > 0
+      if (!s.driving) s.lastVerb = null // no live action once the wheel is released
       pushActivity()
       pushPossession()
     }
@@ -493,12 +506,14 @@ function beginDriving(
  *  driving WITHOUT the 1.5 s auto-reset so the possession banner can be measured, and
  *  pushes the REAL activity + possession events — the same path a live agent act drives.
  *  Smoke-only; never called in the shipped flow. */
-export function setDrivingForSmoke(wsId: string, on: boolean, pendingConfirm?: string): void {
+export function setDrivingForSmoke(wsId: string, on: boolean, pendingConfirm?: string, pane?: string): void {
   const s = wsa(wsId)
   s.driving = on
   s.activeOperations.clear()
   if (on) s.activeOperations.add(-1)
   s.pendingConfirm = on ? (pendingConfirm ?? s.pendingConfirm) : null
+  s.pane = on ? (pane ?? s.pane) : null
+  s.lastVerb = on ? (s.lastVerb ?? 'navigate') : null
   if (on) lastAgentAct.set(wsId, Date.now())
   else lastAgentAct.delete(wsId)
   pushActivity()
@@ -515,6 +530,8 @@ export function agentStop(workspaceId = activeWorkspaceId): void {
     s.driving = false
     s.confirmed.clear()
     s.pendingConfirm = null
+    s.pane = null
+    s.lastVerb = null
   }
   if (workspaceId) getSettingsStore()?.setSetting(kvConsent(workspaceId), '')
   lastAgentAct.delete(workspaceId)
@@ -640,7 +657,7 @@ export async function agentAct(v: BrowserAgentVerb, ctx?: { pane?: string }): Pr
       /* unparseable — record nothing */
     }
   }
-  const operation = beginDriving(sess.wsId, v.verb, trailTarget)
+  const operation = beginDriving(sess.wsId, v.verb, trailTarget, ctx?.pane)
   try {
     const refusal = gateAct(v, wc, sess.wsId, sess.profile)
     if (refusal) return refusal

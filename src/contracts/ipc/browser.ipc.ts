@@ -164,4 +164,20 @@ export interface BrowserAgentActivity {
   /** 8/04: an ORIGIN awaiting the human's session-scoped "allow acting" click
    *  (the banner confirm). Origins only — never page content. */
   pendingConfirm?: string
+  /** WHICH agent holds the wheel — its pane id (the renderer resolves it to a
+   *  provider name + pane number for "Claude is browsing"). Absent for a
+   *  human/IPC-driven act. Pane id only, never anything the pane contains. */
+  pane?: string
+  /** The verb currently in flight — the dock's live "Clicking…/Reading…" line. */
+  lastVerb?: BrowserAgentVerbName
+}
+
+/** Cross-workspace possession: which workspaces have an agent attached to /
+ *  driving their browser, and the pane driving each — so every workspace's tab can
+ *  name its driver, not just the one in the foreground. */
+export interface BrowserPossession {
+  attached: string[]
+  driving: string[]
+  /** workspaceId -> the pane driving it (identity for the tab indicator). */
+  drivers: Record<string, string>
 }

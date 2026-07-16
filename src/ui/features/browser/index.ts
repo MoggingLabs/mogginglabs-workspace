@@ -14,6 +14,7 @@ import {
   type BrowserDockState,
   type BrowserGuestChord,
   type BrowserNavAction,
+  type BrowserPossession,
   type BrowserProfile,
   type BrowserSignedInSite,
   type TrailEntry,
@@ -21,7 +22,7 @@ import {
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { IconButton, clear, confirmDialog, el, icon, openContextMenu, showToast } from '../../components'
-import { getWorkspaces, onWorkspacesChange } from '../../core/workspace/workspace-info-port'
+import { assignmentForPane, getWorkspaces, onWorkspacesChange } from '../../core/workspace/workspace-info-port'
 import { setCommands } from '../../core/commands/command-port'
 import { isModKey } from '../../core/commands/shortcuts'
 import { createAsyncGuard } from '../../core/async/async-state'
@@ -124,18 +125,41 @@ export const browserFeature: UiFeature = {
     stopBtn.onclick = (): void => {
       if (activityWorkspaceId) bridge.send(BrowserChannels.agentStop, { workspaceId: activityWorkspaceId })
     }
-    const agentLabel = el('span', { class: 'browser-agent-label', text: 'Agent driving' })
+    // The Comet possession pill: WHO is driving + the LIVE action, an animated
+    // indicator, and Stop — so at a glance you see which agent is at the wheel and
+    // what it is doing right now (goals 5 + 6).
+    const agentDot = el('span', { class: 'browser-agent-dot' }) // the animated "working" indicator
+    const agentName = el('span', { class: 'browser-agent-name', text: 'Agent' })
+    const agentAction = el('span', { class: 'browser-agent-action' }) // "Reading page…" — the live verb
     const trailBtn = IconButton({ icon: 'more', label: 'Agent activity', title: 'Recent agent actions', onClick: () => {
       trailMenu.hidden = !trailMenu.hidden
     } })
+    const agentLabelGroup = el('span', { class: 'browser-agent-label-group' }, [
+      agentName,
+      el('span', { class: 'browser-agent-sep', text: 'is browsing' }),
+      agentAction
+    ])
     const banner = el('div', { class: 'browser-agent-banner', hidden: true }, [
-      icon('sparkles', 14),
-      agentLabel,
+      agentDot,
+      agentLabelGroup,
       el('div', { class: 'browser-agent-spacer' }),
       trailBtn,
       stopBtn
     ])
+    banner.setAttribute('role', 'status')
+    banner.setAttribute('aria-live', 'polite')
     const trailMenu = el('div', { class: 'menu browser-agent-trail', hidden: true })
+
+    // pane id (its provider assignment) → the agent's display name (goal 6).
+    const AGENT_LABEL: Record<string, string> = {
+      claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini', aider: 'Aider', opencode: 'OpenCode'
+    }
+    function agentNameFor(pane: string | undefined): string {
+      if (!pane) return 'An agent'
+      const provider = assignmentForPane(Number(pane))
+      const label = provider ? (AGENT_LABEL[provider] ?? provider) : null
+      return label ? `${label} · pane ${pane}` : `Agent · pane ${pane}`
+    }
 
     // ── Agent web profile chrome (8/04) ─────────────────────────────────────
     // The quiet notice: sessions persist here (or the vault-less honesty),
@@ -610,6 +634,7 @@ export const browserFeature: UiFeature = {
     // workspaces from eviction and mark their tabs.
     let attachedWs: string[] = []
     let drivingWs: string[] = []
+    let possessionDrivers: Record<string, string> = {} // wsId -> driving pane (goal 6)
     const globalPossession = el('div', {
       class: 'browser-global-possession',
       role: 'status',
@@ -627,17 +652,26 @@ export const browserFeature: UiFeature = {
     function applyTabPossession(): void {
       document.querySelectorAll<HTMLElement>('.workspace-tab').forEach((tab) => {
         const id = tab.dataset.wsId ?? ''
-        tab.classList.toggle('is-agent-browsing', attachedWs.includes(id))
-        tab.classList.toggle('is-agent-driving', drivingWs.includes(id))
+        const browsing = attachedWs.includes(id)
+        const driving = drivingWs.includes(id)
+        tab.classList.toggle('is-agent-browsing', browsing)
+        tab.classList.toggle('is-agent-driving', driving)
+        // Name the driver on the tab (goal 6): hovering the possession dot says who.
+        if (browsing || driving) tab.title = `${agentNameFor(possessionDrivers[id])} is ${driving ? 'browsing' : 'using the browser'}`
+        else if (tab.title.includes('the browser') || tab.title.includes('is browsing')) tab.removeAttribute('title')
       })
     }
     bridge.on(BrowserChannels.possession, (payload) => {
-      const p = payload as { attached?: string[]; driving?: string[] }
+      const p = payload as BrowserPossession
       attachedWs = p.attached ?? []
       drivingWs = p.driving ?? []
+      possessionDrivers = p.drivers ?? {}
       globalPossession.hidden = drivingWs.length === 0
+      // Name the driver in the titlebar pill (goal 6), or a count when several drive.
       globalPossessionLabel.textContent =
-        drivingWs.length > 1 ? `${drivingWs.length} agents driving browsers` : 'Agent driving browser'
+        drivingWs.length > 1
+          ? `${drivingWs.length} agents driving browsers`
+          : `${agentNameFor(possessionDrivers[drivingWs[0] ?? ''])} is browsing`
       pinnedWs.clear()
       for (const w of attachedWs) pinnedWs.add(w)
       applyTabPossession()
@@ -1077,12 +1111,25 @@ export const browserFeature: UiFeature = {
       scroll: 'Scrolled', select: 'Selected', eval: 'Ran script', console: 'Read console',
       network_failures: 'Read failures', wait_for: 'Waited for'
     }
+    // Present-continuous for the LIVE action line (Comet reads "…is working"): the pill
+    // says what the agent is doing right now, the trail keeps the past-tense history.
+    const VERB_ACTIVE: Record<string, string> = {
+      navigate: 'Navigating…', back: 'Going back…', forward: 'Going forward…', reload: 'Reloading…',
+      snapshot: 'Reading the page…', screenshot: 'Capturing…', click: 'Clicking…', type: 'Typing…',
+      scroll: 'Scrolling…', select: 'Selecting…', eval: 'Running a script…', console: 'Reading the console…',
+      network_failures: 'Checking errors…', wait_for: 'Waiting…'
+    }
     bridge.on(BrowserChannels.activity, (payload) => {
       const a = payload as BrowserAgentActivity
       if (a.workspaceId !== activeWsId()) return
       activityWorkspaceId = a.workspaceId
       banner.hidden = !a.driving
       dock.classList.toggle('agent-driving', a.driving)
+      // WHO + WHAT (goals 5/6): the driving agent's name and its live action.
+      if (a.driving) {
+        agentName.textContent = agentNameFor(a.pane)
+        agentAction.textContent = a.lastVerb ? (VERB_ACTIVE[a.lastVerb] ?? '') : ''
+      }
       // 8/04: the session-scoped confirm rides the activity push.
       pendingOrigin = a.pendingConfirm ?? ''
       confirmBar.hidden = !pendingOrigin
@@ -1154,6 +1201,11 @@ export const browserFeature: UiFeature = {
         },
         driving: () => !banner.hidden,
         trailCount: () => trailMenu.querySelectorAll('.browser-trail-row').length,
+        // Comet possession surface (goals 5/6): who is driving + the live action.
+        agentBannerName: () => (banner.hidden ? '' : (agentName.textContent ?? '')),
+        agentBannerAction: () => (banner.hidden ? '' : (agentAction.textContent ?? '')),
+        globalPossessionText: () => (globalPossession.hidden ? '' : (globalPossessionLabel.textContent ?? '')),
+        dockDrivingGlow: () => dock.classList.contains('agent-driving'),
         // 8/07: the guest is an in-DOM <webview> now — its rect IS the viewHost
         // rect, so a resize is atomic with the chrome (proven by guestRect ==
         // viewRect and the guest being present).
