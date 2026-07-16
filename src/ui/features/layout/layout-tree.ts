@@ -87,6 +87,28 @@ export function minimumLayoutWidth(
   return visit(root)
 }
 
+/** Recursive height required by a subtree for every leaf to keep `minLeafHeightPx` —
+ *  minimumLayoutWidth's vertical twin: STACKED children consume height in series
+ *  (seams included); side-by-side children share it, so only the tallest child
+ *  requirement matters. What makes the capacity model's row count physically true. */
+export function minimumLayoutHeight(
+  root: LayoutTreeNode,
+  gutterPx: number,
+  minLeafHeightPx = MIN_PANE_HEIGHT_PX
+): number {
+  const gutter = Math.max(0, Math.round(gutterPx))
+  const leafHeight = Math.max(0, Math.round(minLeafHeightPx))
+  const visit = (node: LayoutTreeNode): number => {
+    if (!isSplit(node)) return leafHeight
+    const childHeights = node.children.map(visit)
+    if (node.dir === 'v') {
+      return childHeights.reduce((sum, height) => sum + height, 0) + gutter * Math.max(0, childHeights.length - 1)
+    }
+    return childHeights.reduce((tallest, height) => Math.max(tallest, height), 0)
+  }
+  return visit(root)
+}
+
 export function isSplit(n: LayoutTreeNode): n is SplitNode {
   return (n as SplitNode).children !== undefined
 }
@@ -407,17 +429,20 @@ export function resizeSplitWeights(
 }
 
 /** Compute every leaf/gutter/split rect for a container rect. The root canvas expands
- *  past `rect.w` when needed so recursive leaf-width minima remain hard even when the
- *  host is narrower. Horizontal splits reserve subtree minima first; fractions govern
- *  the remaining width. Vertical split heights continue to follow their fractions. */
+ *  past `rect.w` AND `rect.h` when needed so recursive leaf minima remain hard even
+ *  when the host is smaller — the host scrolls instead of crushing a pane below its
+ *  floors. Splits reserve their children's subtree minima first (widths on 'h',
+ *  heights on 'v'); fractions govern only the remaining span. */
 export function computeLayout(
   root: LayoutTreeNode,
   rect: Rect,
   gutterPx: number,
-  minLeafWidthPx = MIN_PANE_WIDTH_PX
+  minLeafWidthPx = MIN_PANE_WIDTH_PX,
+  minLeafHeightPx = MIN_PANE_HEIGHT_PX
 ): ComputedLayout {
   const out: ComputedLayout = { leaves: new Map(), gutters: [], splits: new Map() }
   const requiredWidth = minimumLayoutWidth(root, gutterPx, minLeafWidthPx)
+  const requiredHeight = minimumLayoutHeight(root, gutterPx, minLeafHeightPx)
   const walk = (n: LayoutTreeNode, r: Rect, path: string): void => {
     if (!isSplit(n)) {
       out.leaves.set(n.id, r)
@@ -427,7 +452,10 @@ export function computeLayout(
     const k = n.children.length
     const total = n.dir === 'h' ? r.w : r.h
     const inner = Math.max(0, total - gutterPx * (k - 1))
-    const minimums = n.dir === 'h' ? n.children.map((child) => minimumLayoutWidth(child, gutterPx, minLeafWidthPx)) : n.children.map(() => 0)
+    const minimums =
+      n.dir === 'h'
+        ? n.children.map((child) => minimumLayoutWidth(child, gutterPx, minLeafWidthPx))
+        : n.children.map((child) => minimumLayoutHeight(child, gutterPx, minLeafHeightPx))
     const spans = allocateSpans(inner, n.sizes, minimums)
     let offset = 0
     for (let i = 0; i < k; i++) {
@@ -452,7 +480,7 @@ export function computeLayout(
       }
     }
   }
-  walk(root, { ...rect, w: Math.max(rect.w, requiredWidth) }, '')
+  walk(root, { ...rect, w: Math.max(rect.w, requiredWidth), h: Math.max(rect.h, requiredHeight) }, '')
   return out
 }
 

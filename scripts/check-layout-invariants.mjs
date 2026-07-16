@@ -5,7 +5,9 @@
  * Executes the authoritative TypeScript module in memory, then proves the contracts
  * that are easy to regress while changing compact chrome or gutter math:
  *   - persisted fractions describe the whole split until a 132px minimum clamps them;
- *   - every allocated/nested leaf keeps the hard width floor;
+ *   - every allocated/nested leaf keeps the hard width floor — AND the 110px height
+ *     floor (the capacity model's row count is a physical promise: computeLayout
+ *     grows the canvas and the host scrolls rather than crush a terminal);
  *   - dragging a seam changes only its two adjacent subtrees;
  *   - persisted post-drag geometry remains valid and within the existing 4-decimal
  *     serialization tolerance.
@@ -41,9 +43,12 @@ new Function('module', 'exports', 'require', transpiled.outputText)(
   }
 )
 const {
+  MAX_LEAVES,
+  MIN_PANE_HEIGHT_PX,
   MIN_PANE_WIDTH_PX,
   allocateSpans,
   computeLayout,
+  minimumLayoutHeight,
   minimumLayoutWidth,
   parseTree,
   resizeSplitWeights,
@@ -58,7 +63,19 @@ const assert = (condition, message) => {
 }
 const same = (a, b) => a.length === b.length && a.every((value, i) => value === b[i])
 
-assert(MIN_PANE_WIDTH_PX === 132, `pane floor drifted to ${MIN_PANE_WIDTH_PX}`)
+assert(MIN_PANE_WIDTH_PX === 132, `pane width floor drifted to ${MIN_PANE_WIDTH_PX}`)
+assert(MIN_PANE_HEIGHT_PX === 110, `pane height floor drifted to ${MIN_PANE_HEIGHT_PX}`)
+// The dependency-free twin of the contract's ABS_MAX_PANES (see layout-tree.ts's
+// MAX_LEAVES note) — pinned here so the two numbers cannot drift apart silently.
+assert(MAX_LEAVES === 32, `MAX_LEAVES drifted to ${MAX_LEAVES}`)
+
+// The height requirement mirrors the width one: stacked children sum (+ seams),
+// side-by-side children share. A 3-stack needs 3×110 + 2 seams; a 3-line needs 110.
+const stack3 = { dir: 'v', sizes: [1 / 3, 1 / 3, 1 / 3], children: [{ id: 1 }, { id: 2 }, { id: 3 }] }
+const line3 = { dir: 'h', sizes: [1 / 3, 1 / 3, 1 / 3], children: [{ id: 1 }, { id: 2 }, { id: 3 }] }
+assert(minimumLayoutHeight(stack3, 2, 110) === 334, 'a 3-stack no longer sums its height minima')
+assert(minimumLayoutHeight(line3, 2, 110) === 110, 'a 3-line no longer shares its height minimum')
+assert(minimumLayoutWidth(stack3, 2, 132) === 132, 'a 3-stack no longer shares its width minimum')
 assert(
   same(allocateSpans(1198, [0.6, 0.4], [132, 132]), [719, 479]),
   'an unconstrained persisted 60/40 split no longer restores as 60/40'
@@ -168,12 +185,15 @@ const randomTree = (depth = 0) => {
 for (let run = 0; run < 5000; run++) {
   nextId = 1
   const tree = randomTree()
-  const requested = int(1801)
-  const required = minimumLayoutWidth(tree, 2, 132)
-  const layout = computeLayout(tree, { x: 0, y: 0, w: requested, h: 700 }, 2, 132)
+  const requestedW = int(1801)
+  const requestedH = int(1201)
+  const requiredW = minimumLayoutWidth(tree, 2, 132)
+  const requiredH = minimumLayoutHeight(tree, 2, 110)
+  const layout = computeLayout(tree, { x: 0, y: 0, w: requestedW, h: requestedH }, 2, 132, 110)
   for (const [id, rect] of layout.leaves) {
-    assert(rect.w >= 132, `nested layout ${run}, leaf ${id} rendered at ${rect.w}px (required ${required}px)`)
+    assert(rect.w >= 132, `nested layout ${run}, leaf ${id} rendered at ${rect.w}px wide (required ${requiredW}px)`)
+    assert(rect.h >= 110, `nested layout ${run}, leaf ${id} rendered at ${rect.h}px tall (required ${requiredH}px)`)
   }
 }
 
-console.log('layout-invariants: PASS (20,000 allocations/gutters, 2,000 persistence round-trips, 5,000 nested trees)')
+console.log('layout-invariants: PASS (20,000 allocations/gutters, 2,000 persistence round-trips, 5,000 nested trees, both axes floored)')

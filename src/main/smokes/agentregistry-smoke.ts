@@ -73,7 +73,10 @@ export function runAgentRegistrySmoke(win: BrowserWindow): void {
     await ES(`window.__mogging.templates.openWizard()`)
     await sleep(350)
     const wizard = await ES<boolean>(`(() => {
-      const row = [...document.querySelectorAll('.wizard-agent-row')].find((item) => item.textContent?.includes('Audit Codex'))
+      // The roster renders provider CARDS since the wizard redesign (the old
+      // .wizard-agent-row survives only as the custom-command row) — this
+      // selector went stale with it and the check silently matched nothing.
+      const row = [...document.querySelectorAll('.wizard-agent-card, .wizard-agent-row')].find((item) => item.textContent?.includes('Audit Codex'))
       return !!row && row.classList.contains('is-missing') === ${!installed} && !!row.querySelector('.stepper') === ${installed}
     })()`)
 

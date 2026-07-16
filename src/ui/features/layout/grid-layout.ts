@@ -12,6 +12,7 @@ import {
   MAX_LEAVES,
   MIN_PANE_HEIGHT_PX,
   MIN_PANE_WIDTH_PX,
+  minimumLayoutHeight,
   minimumLayoutWidth,
   moveLeaf,
   moveLeafToRootEdge,
@@ -72,11 +73,14 @@ interface SeamGeometry {
 /** The live per-workspace pane budget: what THIS screen honestly holds at the pane
  *  minima (pane-capacity.ts) — bigger monitors fit more terminals, smaller ones fewer,
  *  hard-bounded by the contract's ABS_MAX_PANES. Computed fresh at every gate (never
- *  cached: monitors get plugged and unplugged). Note the GPU budget is unchanged:
- *  Chromium caps ~16 live WebGL contexts, so panes past that edge ride the DOM
- *  renderer via PaneWebglManager's managed fallback — correct, just not GPU-smooth. */
-export function paneLimit(): number {
-  return screenPaneCapacity().maxPanes
+ *  cached: monitors get plugged and unplugged). `host` is the grid's own viewport when
+ *  the caller has one — the app's chrome is then subtracted, so the budget is what the
+ *  grid REGION of a maximized window holds, not what the bare monitor could. Note the
+ *  GPU budget is unchanged: Chromium caps ~16 live WebGL contexts, so panes past that
+ *  edge ride the DOM renderer via PaneWebglManager's managed fallback — correct, just
+ *  not GPU-smooth. */
+export function paneLimit(host?: HTMLElement | null): number {
+  return screenPaneCapacity(host).maxPanes
 }
 
 export type ExpandMode = 'full' | 'col' | 'row'
@@ -137,8 +141,10 @@ export class GridLayout {
   private readonly resizeObs: ResizeObserver
   private dropHint: HTMLElement | null = null
   private seamPersistTimer?: ReturnType<typeof setTimeout>
+  // Every expand mode now tracks a viewport axis (col follows vertical scroll,
+  // row horizontal, full both) — any scroll while expanded re-derives the rect.
   private readonly followExpandedViewport = (): void => {
-    if (this.expandedId != null && this.expandMode !== 'col') this.reflow()
+    if (this.expandedId != null) this.reflow()
   }
 
   /** Fired after any user-visible layout mutation (apply/split/close/resize/move) —
@@ -241,6 +247,13 @@ export class GridLayout {
     return leafCount(this.root) - this.detached.size
   }
 
+  /** THIS grid's pane budget: the screen minus the app chrome around this viewport —
+   *  the number every split/adopt gate here checks, and the one the controller's
+   *  refusals must quote (two different numbers would gate one door twice). */
+  limit(): number {
+    return paneLimit(this.scrollHost)
+  }
+
   /** Live pane ids (closed slots excluded) — the source of truth for attention scans. */
   paneIds(): PaneId[] {
     return this.liveLocals().map((id) => this.globalOf(id))
@@ -319,7 +332,7 @@ export class GridLayout {
    * not); the rest are filled from the lowest slot whose id is free everywhere.
    */
   private templateLocals(n: number): number[] {
-    const count = Math.max(1, Math.min(paneLimit(), Math.floor(n)))
+    const count = Math.max(1, Math.min(this.limit(), Math.floor(n)))
     const live = new Set(this.liveLocals())
     const locals: number[] = []
     for (let local = 1; locals.length < count && local <= MAX_LEAVES; local++) {
@@ -375,7 +388,7 @@ export class GridLayout {
   splitPane(paneId: number, dir?: SplitDir): PaneId | null {
     const localTarget = this.localOf(paneId)
     if (localTarget == null || !this.liveLocals().includes(localTarget)) return null
-    if (this.paneCount >= paneLimit()) return null
+    if (this.paneCount >= this.limit()) return null
     const newLocal = this.nextFreeLocalId()
     const rect = this.leafRects.get(localTarget)
     const chosen: SplitDir = dir ?? (rect && rect.h > rect.w ? 'v' : 'h')
@@ -439,7 +452,7 @@ export class GridLayout {
    * grid is full. Must run inside the same `batchSlots` as the matching `detachPane`.
    */
   adoptPane(el: HTMLElement, paneId: number, opts: { near?: number | null; dir?: SplitDir } = {}): number | null {
-    if (this.paneCount >= paneLimit()) return null
+    if (this.paneCount >= this.limit()) return null
     const target = (opts.near != null ? this.localOf(opts.near) : null) ?? this.focusedLocal() ?? this.liveLocals()[0]
     if (target == null) return null
     const local = this.nextFreeLocalId()
@@ -547,14 +560,17 @@ export class GridLayout {
   /** Geometry-only pass: recompute rects from the tree and restyle in place (drag
    *  moves, container resizes). No DOM churn, no republish. */
   private reflow(): void {
-    // The grid is the inner canvas. Its flex host may become narrower (window resize,
-    // rail expansion or either right dock), but the canvas keeps the recursive tree
-    // requirement and the host scrolls horizontally instead of crushing leaf headers.
+    // The grid is the inner canvas. Its flex host may become smaller on EITHER axis
+    // (window resize, rail expansion, either right dock), but the canvas keeps the
+    // recursive tree requirement and the host scrolls instead of crushing any leaf
+    // below its floors — which is what makes the capacity model's promise physical.
     const requiredWidth = minimumLayoutWidth(this.root, GUTTER, MIN_PANE_WIDTH_PX)
+    const requiredHeight = minimumLayoutHeight(this.root, GUTTER, MIN_PANE_HEIGHT_PX)
     this.grid.style.minWidth = `${requiredWidth}px`
+    this.grid.style.minHeight = `${requiredHeight}px`
     const W = Math.max(this.grid.clientWidth, requiredWidth)
-    const H = this.grid.clientHeight
-    const layout = computeLayout(this.root, { x: 0, y: 0, w: W, h: H }, GUTTER, MIN_PANE_WIDTH_PX)
+    const H = Math.max(this.grid.clientHeight, requiredHeight)
+    const layout = computeLayout(this.root, { x: 0, y: 0, w: W, h: H }, GUTTER, MIN_PANE_WIDTH_PX, MIN_PANE_HEIGHT_PX)
     this.leafRects = layout.leaves
     this.splitRects = layout.splits
     this.gutterSpecs = layout.gutters
@@ -562,13 +578,15 @@ export class GridLayout {
     const target = this.expandedId != null ? layout.leaves.get(this.expandedId) : undefined
     const viewportWidth = Math.min(W, Math.max(MIN_PANE_WIDTH_PX, this.scrollHost.clientWidth))
     const viewportX = Math.min(Math.max(0, this.scrollHost.scrollLeft), Math.max(0, W - viewportWidth))
+    const viewportHeight = Math.min(H, Math.max(MIN_PANE_HEIGHT_PX, this.scrollHost.clientHeight))
+    const viewportY = Math.min(Math.max(0, this.scrollHost.scrollTop), Math.max(0, H - viewportHeight))
     for (const [id, rect] of layout.leaves) {
       const el = this.slotEls.get(id)
       if (!el) continue
       let r = rect
       let covered = false
       if (this.expandedId != null && target) {
-        if (id === this.expandedId) r = this.expandedRect(target, viewportX, viewportWidth, H)
+        if (id === this.expandedId) r = this.expandedRect(target, viewportX, viewportWidth, viewportY, viewportHeight)
         else covered = this.coveredByExpand(target, rect)
       }
       el.classList.toggle('covered', covered)
@@ -585,10 +603,13 @@ export class GridLayout {
     }
   }
 
-  private expandedRect(target: Rect, viewportX: number, viewportWidth: number, H: number): Rect {
-    if (this.expandMode === 'col') return { x: target.x, y: 0, w: target.w, h: H }
+  /** An expanded pane fills the VIEWPORT (what a human can see), not the canvas —
+   *  under overflow the canvas is taller/wider than the window, and an "expanded"
+   *  pane sized to the canvas would itself mostly live off-screen. */
+  private expandedRect(target: Rect, viewportX: number, viewportWidth: number, viewportY: number, viewportHeight: number): Rect {
+    if (this.expandMode === 'col') return { x: target.x, y: viewportY, w: target.w, h: viewportHeight }
     if (this.expandMode === 'row') return { x: viewportX, y: target.y, w: viewportWidth, h: target.h }
-    return { x: viewportX, y: 0, w: viewportWidth, h: H }
+    return { x: viewportX, y: viewportY, w: viewportWidth, h: viewportHeight }
   }
 
   /** Does the expanded pane's new footprint hide this sibling? Overlap by RECT, not
@@ -798,14 +819,12 @@ export class GridLayout {
     const innerPx = Math.max(1, (horizontal ? rect.w : rect.h) - GUTTER * (split.children.length - 1))
     const aPx = horizontal ? a.w : a.h
     const pairPx = aPx + (horizontal ? b.w : b.h)
-    // The floors are the ones the resize ALREADY enforces, restated in px — not new ones. A
-    // horizontal seam owes each subtree its recursive width requirement (what resizeSplitWeights
-    // clamps to); a vertical seam owes MIN_PANE_HEIGHT_PX, halving the pair when even that will
-    // not fit — the same `Math.min(…, pair / 2)` the drag's minFr does, read in px not fractions.
+    // The floors are the ones the allocator ALREADY enforces, restated in px — not new
+    // ones: each subtree's recursive requirement along the split's axis (widths on 'h',
+    // heights on 'v' — computeLayout water-fills against exactly these).
     const childMinimums = horizontal
       ? split.children.map((child) => minimumLayoutWidth(child, GUTTER, MIN_PANE_WIDTH_PX))
-      : []
-    const floor = Math.min(MIN_PANE_HEIGHT_PX, pairPx / 2)
+      : split.children.map((child) => minimumLayoutHeight(child, GUTTER, MIN_PANE_HEIGHT_PX))
     return {
       split,
       horizontal,
@@ -813,8 +832,8 @@ export class GridLayout {
       childMinimums,
       aPx,
       pairPx,
-      aMin: horizontal ? childMinimums[index - 1]! : floor,
-      bMin: horizontal ? childMinimums[index]! : floor
+      aMin: childMinimums[index - 1]!,
+      bMin: childMinimums[index]!
     }
   }
 
@@ -824,23 +843,13 @@ export class GridLayout {
    *  `base` is the sizes array the GESTURE started from and `deltaPx` its total travel since,
    *  so a drag applies one absolute delta from mousedown (accumulating per-frame deltas would
    *  drift by a pixel a frame), and a key press is simply a one-shot gesture of ±step from now.
-   *  Horizontal seams go through resizeSplitWeights, which moves the pair inside the water-fill
-   *  geometry and leaves every non-adjacent child's LATENT preference intact; vertical seams
-   *  have no width minimum in the allocator, so they clamp their two fractions directly. */
+   *  Both axes go through resizeSplitWeights against the same recursive floors the allocator
+   *  renders with, which moves the pair inside the water-fill geometry and leaves every
+   *  non-adjacent child's LATENT preference intact. (Vertical seams used to clamp their two
+   *  fractions directly because the allocator had no height minima — it does now, and a
+   *  seam that clamps to a different floor than its renderer is a seam that jumps.) */
   private moveSeam(geom: SeamGeometry, index: number, base: number[], deltaPx: number): void {
-    const { split, horizontal, innerPx } = geom
-    if (horizontal) {
-      split.sizes = resizeSplitWeights(innerPx, base, geom.childMinimums, index, deltaPx)
-    } else {
-      const a0 = base[index - 1]!
-      const pair = a0 + base[index]!
-      if (!(pair > 0)) return
-      const minFr = Math.min(MIN_PANE_HEIGHT_PX / innerPx, pair / 2)
-      const na = Math.min(Math.max(a0 + deltaPx / innerPx, minFr), pair - minFr)
-      split.sizes = base.slice()
-      split.sizes[index - 1] = na
-      split.sizes[index] = pair - na
-    }
+    geom.split.sizes = resizeSplitWeights(geom.innerPx, base, geom.childMinimums, index, deltaPx)
     this.reflow()
   }
 

@@ -42,8 +42,25 @@ export function paneCapacity(availWidth: number, availHeight: number): PaneCapac
 /** Capacity of the screen the app lives on. Reads the OS work area (not the
  *  current window: the user can maximize any time, and "how many terminals may
  *  I have" should not flap with a half-snapped window). Falls back to a laptop
- *  panel when no screen is measurable (tests, headless). */
-export function screenPaneCapacity(): PaneCapacity {
+ *  panel when no screen is measurable (tests, headless).
+ *
+ *  `host` is the element the panes would actually live in (the shell's content
+ *  region / a workspace's grid viewport). When given, the app's own CHROME —
+ *  titlebar, rail, docks, paddings: everything between the window edge and that
+ *  element — is subtracted from the work area, because the promise is what a
+ *  MAXIMIZED window's grid region can hold, not what the bare monitor could.
+ *  Chrome is measured against the live window (its size is snap-independent);
+ *  a hidden or unmounted host (zero box) falls back to the bare screen. */
+export function screenPaneCapacity(host?: HTMLElement | null): PaneCapacity {
   const s = typeof window !== 'undefined' ? window.screen : undefined
-  return paneCapacity(s?.availWidth || 1536, s?.availHeight || 864)
+  let availWidth = s?.availWidth || 1536
+  let availHeight = s?.availHeight || 864
+  if (host && typeof window !== 'undefined') {
+    const box = host.getBoundingClientRect()
+    if (box.width > 0 && box.height > 0) {
+      availWidth = Math.max(1, availWidth - Math.max(0, window.innerWidth - box.width))
+      availHeight = Math.max(1, availHeight - Math.max(0, window.innerHeight - box.height))
+    }
+  }
+  return paneCapacity(availWidth, availHeight)
 }

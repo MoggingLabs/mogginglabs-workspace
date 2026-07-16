@@ -108,6 +108,8 @@ import { runAgentRegistrySmoke } from './smokes/agentregistry-smoke'
 import { runPlainMenuSmoke } from './smokes/plainmenu-smoke'
 import { runWizardFailSmoke } from './smokes/wizardfail-smoke'
 import { runWizardIsoSmoke } from './smokes/wizardiso-smoke'
+import { runWizCdSmoke } from './smokes/wizcd-smoke'
+import { runWizLayoutSmoke } from './smokes/wizlayout-smoke'
 import { runMutationRaceSmoke } from './smokes/mutationrace-smoke'
 import { runAuthRunnerSmoke } from './smokes/authrunner-smoke'
 import { runOrchestrationSmoke } from './smokes/orchestration-smoke'
@@ -170,7 +172,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_PRODUCT', 'MOGGING_USAGEGLANCE', 'MOGGING_USAGEUI', 'MOGGING_WEBUSAGE', 'MOGGING_USAGECLI',
   'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
   'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_KBSHORTCUTS', 'MOGGING_KBGLOBAL', 'MOGGING_VERDICTLIVE', 'MOGGING_WEBTRAIL',
-  'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX', 'MOGGING_WIZARDFAIL', 'MOGGING_WIZARDISO', 'MOGGING_MUTATIONRACE', 'MOGGING_AUTHRUNNER',
+  'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX', 'MOGGING_WIZARDFAIL', 'MOGGING_WIZARDISO', 'MOGGING_WIZCD', 'MOGGING_WIZLAYOUT', 'MOGGING_MUTATIONRACE', 'MOGGING_AUTHRUNNER',
   'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX',
   'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_RESPONSIVE', 'MOGGING_KBAPG', 'MOGGING_UXMILESTONE',
   'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT', 'MOGGING_CWD',
@@ -414,6 +416,10 @@ function afterWindow(win: BrowserWindow): void {
     runWizardFailSmoke(win) // audit regression: wizard races/failures roll back and never open a degraded workspace
   } else if (process.env.MOGGING_WIZARDISO) {
     runWizardIsoSmoke(win) // wizard isolation SUCCESS path: real checkbox -> Launch -> shells live in their worktrees
+  } else if (process.env.MOGGING_WIZCD) {
+    runWizCdSmoke(win) // wizard cd line: home default, cd-only refusals, navigation, Tab completion (2026-07-16)
+  } else if (process.env.MOGGING_WIZLAYOUT) {
+    runWizLayoutSmoke(win) // wizard layout: honest capacity, lattice drag-commit, painted rows/24-pane launches at the minima
   } else if (process.env.MOGGING_MUTATIONRACE) {
     runMutationRaceSmoke(win) // audit regression: permissions/plans/profile swaps are atomic and visibly pending
   } else if (process.env.MOGGING_AUTHRUNNER) {

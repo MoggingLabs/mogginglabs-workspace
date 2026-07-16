@@ -2135,12 +2135,13 @@ textarea {
 }
 
 /* A workspace view is the viewport for GridLayout's non-shrinking inner canvas.
-   Window, rail and dock compression therefore reveal a horizontal scrollbar instead
-   of forcing any terminal below the split tree's hard per-leaf width requirement. */
+   Window, rail and dock compression therefore reveal a scrollbar on the crushed
+   axis instead of forcing any terminal below the split tree's hard per-leaf
+   minima — widths always did this; heights joined when the capacity model's row
+   count became a physical promise (layout-tree's minimumLayoutHeight). */
 .workspace-view.layout-scroll-host {
-  overflow-x: auto;
-  overflow-y: hidden;
-  overscroll-behavior-x: contain;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 /* The grid: slots are live terminals, absolutely positioned from the split-tree's
@@ -4226,6 +4227,77 @@ body.pane-dragging * {
 }
 .wizard-cd-row:focus-within {
   border-color: var(--accent);
+}
+/* The wrapper anchors the completion menu under the row. */
+.wizard-cd {
+  position: relative;
+}
+.wizard-cd-hint {
+  flex: none;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--warning);
+  font-size: var(--fs-11);
+}
+.wizard-cd-row.cd-shake {
+  animation: wizard-cd-shake 240ms var(--ease);
+}
+@keyframes wizard-cd-shake {
+  25% {
+    transform: translateX(-3px);
+  }
+  75% {
+    transform: translateX(3px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wizard-cd-row.cd-shake {
+    animation: none;
+  }
+}
+/* Tab completion: a compact listbox pinned under the cd row. */
+.wizard-cd-suggest {
+  position: absolute;
+  inset-inline: 0;
+  top: calc(100% + 2px);
+  z-index: 30;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-2);
+}
+.wizard-cd-option {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-sm);
+  color: var(--text-mid);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  cursor: pointer;
+}
+.wizard-cd-option:hover {
+  background: var(--bg-inset);
+}
+.wizard-cd-option.is-active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text-high);
+}
+.wizard-cd-option-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wizard-cd-more {
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--text-low);
+  font-size: var(--fs-11);
 }
 
 /* Recent folders: a two-column grid of one-click jumps, count badge riding right. */

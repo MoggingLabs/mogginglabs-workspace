@@ -32,7 +32,11 @@ export function createPathInput(opts: PathInputOpts = {}): PathInputHandle {
     class: 'input input--mono path-input-field',
     type: 'text',
     value: opts.value ?? '',
-    placeholder: opts.placeholder ?? 'C:\\path\\to\\your\\project',
+    // Neutral, not a fictitious path: the wizard fills the field with the REAL
+    // default (the user's home folder), so this ghost shows only when no folder
+    // could be resolved at all — and a fake `C:\path\to\your\project` there read
+    // as a value someone should retype.
+    placeholder: opts.placeholder ?? 'Choose a working folder…',
     ariaLabel: 'Working folder',
     onInput: (e) => opts.onInput?.((e.target as HTMLInputElement).value),
     onKeydown: (e) => {

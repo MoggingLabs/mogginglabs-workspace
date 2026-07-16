@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 145 gates: 19 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 147 gates: 19 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
-# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT) + 126 app-boot
+# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT) + 128 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -346,6 +346,11 @@ run_smoke INTEGMILESTONE MOGGING_INTEGMILESTONE 1 300 integmilestone
 run_smoke WIZARDUX     MOGGING_WIZARDUX  1 180 wizardux
 run_smoke WIZARDFAIL   MOGGING_WIZARDFAIL 1 180 wizardfail
 run_smoke WIZARDISO    MOGGING_WIZARDISO 1 240 wizardiso
+# The wizard revamp pair (2026-07-16): the cd line (home default, cd-only, Tab
+# completion) and the layout section (honest capacity, lattice drag-commit, >16
+# panes opening as painted, minima physically enforced).
+run_smoke WIZCD        MOGGING_WIZCD     1 240 wizcd
+run_smoke WIZLAYOUT    MOGGING_WIZLAYOUT 1 300 wizlayout
 run_smoke MUTATIONRACE MOGGING_MUTATIONRACE 1 180 mutationrace
 run_smoke AUTHRUNNER   MOGGING_AUTHRUNNER 1 180 authrunner
 run_smoke FOLDERPICK   MOGGING_FOLDERPICK 1 240 folderpick

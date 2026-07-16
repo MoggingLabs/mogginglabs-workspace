@@ -76,6 +76,19 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
       cell.classList.toggle('is-active', r < spec.rows && c < spec.cols)
     })
   }
+  const commitSize = (r: number, c: number): void => {
+    if ((r + 1) * (c + 1) > maxPanes) return
+    spec = uniformSpec(r + 1, c + 1)
+    render()
+    opts.onChange(spec)
+  }
+  interface SizeDrag {
+    r: number
+    c: number
+    valid: boolean
+  }
+  let sizeDrag: SizeDrag | null = null
+  let suppressClick = false
   for (let r = 0; r < maxRows; r++) {
     for (let c = 0; c < maxCols; c++) {
       const panes = (r + 1) * (c + 1)
@@ -92,16 +105,70 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
       cell.addEventListener('pointerenter', () => {
         if (!blocked) paintHover(r + 1, c + 1)
       })
+      // Keyboard commits land here (Enter/Space on the focused cell). Pointer commits
+      // land on the lattice's pointerup below — which then swallows the click this
+      // very gesture synthesizes, or a plain click would commit twice.
       cell.addEventListener('click', () => {
         if (blocked) return
-        spec = uniformSpec(r + 1, c + 1)
-        render()
-        opts.onChange(spec)
+        if (suppressClick) {
+          suppressClick = false
+          return
+        }
+        commitSize(r, c)
       })
       cells.push(cell)
       lattice.append(cell)
     }
   }
+
+  // The insert-table gesture is PRESS, sweep, RELEASE — not only a click. The old
+  // lattice listened per-cell for `click`, and a press on (0,0) released over (0,7)
+  // fires no click on either cell: the user "selected eight across" and nothing
+  // happened. Pointer coordinates (the canvas's cellAt approach) rather than event
+  // targets, because blocked cells are disabled buttons and swallow their events.
+  const latticeCellAt = (event: PointerEvent): { r: number; c: number } | null => {
+    const box = lattice.getBoundingClientRect()
+    if (!box.width || !box.height) return null
+    if (
+      event.clientX < box.x - 1 ||
+      event.clientX > box.x + box.width + 1 ||
+      event.clientY < box.y - 1 ||
+      event.clientY > box.y + box.height + 1
+    ) {
+      return null // released off the lattice: the gesture is a cancel, not a commit
+    }
+    const x = Math.min(Math.max(event.clientX - box.x, 0), box.width - 1)
+    const y = Math.min(Math.max(event.clientY - box.y, 0), box.height - 1)
+    return {
+      r: Math.min(maxRows - 1, Math.floor((y / box.height) * maxRows)),
+      c: Math.min(maxCols - 1, Math.floor((x / box.width) * maxCols))
+    }
+  }
+  const trackSizeDrag = (event: PointerEvent): void => {
+    const cell = latticeCellAt(event)
+    if (!cell || !sizeDrag) return
+    sizeDrag = { ...cell, valid: (cell.r + 1) * (cell.c + 1) <= maxPanes }
+    if (sizeDrag.valid) paintHover(cell.r + 1, cell.c + 1)
+  }
+  lattice.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return
+    sizeDrag = { r: 0, c: 0, valid: false }
+    trackSizeDrag(event)
+    const up = (ev: PointerEvent): void => {
+      window.removeEventListener('pointerup', up)
+      const drag = sizeDrag
+      sizeDrag = null
+      const cell = latticeCellAt(ev)
+      if (!cell || !drag) return // released elsewhere: nothing committed
+      suppressClick = true // the same-cell click this gesture synthesizes is not a second commit
+      setTimeout(() => (suppressClick = false), 0) // …but a LATER keyboard click is
+      commitSize(cell.r, cell.c)
+    }
+    window.addEventListener('pointerup', up)
+  })
+  lattice.addEventListener('pointermove', (event) => {
+    if (sizeDrag) trackSizeDrag(event)
+  })
   lattice.addEventListener('pointerleave', () => paintHover(0, 0))
 
   // ── SHAPE canvas (merge / unmerge / live chips) ───────────────────────────

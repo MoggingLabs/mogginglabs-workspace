@@ -32,7 +32,9 @@ import {
   type GridSpecModel,
   type PaneCapacity
 } from '../layout'
-import { resolveCdTarget } from './cd-path'
+import { parseCdLine, resolveCdTarget, resolvePathAgainst } from './cd-path'
+import { applyCompletion, commonPrefix, completionContext, filterCompletions } from './cd-complete'
+import { createCdLine, type CdLineHandle } from './cd-line'
 import { getFocusedPane } from '../../core/layout/focus'
 import { openPlannedWorkspaceFromTemplate, openWorkspaceFromTemplate } from '../../core/workspace/open-service'
 import { setWizardOpener, type WizardPrefill } from '../../core/workspace/wizard-port'
@@ -79,6 +81,12 @@ const specForPanes = (n: number): GridSpecModel => specForCount(n, TEMPLATES[n])
  * sections under small uppercase labels (the house division rhythm), not three
  * padded Cards.
  *
+ * A fresh page opens with the user's HOME already chosen as the working folder —
+ * a real default in the bar (never placeholder fiction), the browser listing it,
+ * Launch viable immediately. Prefills (Ctrl+T from a workspace, a board card)
+ * outrank it; so does anything the user picks or types before the answer lands.
+ * The cd line beneath the bar accepts ONLY cd commands, and Tab-completes.
+ *
  * The layout is DYNAMIC, not preset tiles: a Word-style size lattice (hover r×c,
  * click commits — any 1..16, no curated counts) beside a shape canvas where
  * dragging across terminals MERGES them into spanning panes (one full-width
@@ -95,10 +103,12 @@ export const wizardFeature: UiFeature = {
     // ── Wizard state (persists while the page is open) ───────────────────────
     let name = ''
     let cwd = ''
-    // What THIS screen holds (pane-capacity.ts) — refreshed on every open, because
+    // What THIS screen holds at the pane minima, minus the app's own chrome around
+    // the content region (pane-capacity.ts) — refreshed on every open, because
     // monitors get plugged and unplugged between workspaces.
-    let capacity: PaneCapacity = screenPaneCapacity()
-    let homeCache = '' // the cd line's fallback base + ~ target
+    let capacity: PaneCapacity = screenPaneCapacity(ctx.content)
+    let homeCache = '' // the cd line's fallback base + ~ target — and the fresh page's default folder
+    let barTouched = false // typing in the bar outranks the late-arriving home default
     let gridSpec: GridSpecModel = specForPanes(defaultPaneCount())
     let paneCount = gridSpec.regions.length
     let counts = new Map<string, number>() // provider id -> count
@@ -177,6 +187,7 @@ export const wizardFeature: UiFeature = {
     function leave(): void {
       openGeneration++
       selection?.dispose()
+      cdLine?.dispose()
       launching = false
       goBack()
     }
@@ -188,7 +199,13 @@ export const wizardFeature: UiFeature = {
       cwd = prefill?.cwd ?? ''
       localCwd = cwd
       remoteCwd = ''
-      capacity = screenPaneCapacity()
+      barTouched = false
+      // The view flips FIRST, then the chrome is measured: capacity subtracts what
+      // this app keeps around the content region (rail, titlebar), and measuring
+      // while the OUTGOING view still owned the layout read that view's chrome.
+      // Same task as render() below — nothing stale can paint in between.
+      setActiveView('wizard')
+      capacity = screenPaneCapacity(ctx.content)
       setGridSpec(specForPanes(Math.min(prefill?.paneCount ?? defaultPaneCount(), capacity.maxPanes)))
       counts = new Map()
       customCmd = ''
@@ -207,16 +224,21 @@ export const wizardFeature: UiFeature = {
       if (prefill?.mix) applyMix(prefill.mix)
 
       render()
-      setActiveView('wizard')
       requestAnimationFrame(() => path.focus()) // focus only once the view is painted
       getTelemetry().captureEvent({ name: 'wizard.opened', props: { prefilled: !!prefill } })
 
-      // The cd line's base: always know where home is (also the browser's opening
-      // reveal when no folder is chosen yet — that path reuses this fetch's answer).
+      // The cd line's `~` target — and, when nothing was prefilled, THE default:
+      // a fresh page chooses your HOME folder. A real folder in the bar, not
+      // placeholder fiction; everything else (browse, cd, recents) moves on from
+      // there. Guarded so a folder the user picked or typed in the meantime is
+      // never stomped by the late-arriving answer.
       void wizardClient
         .homeDir()
         .then((h) => {
-          if (currentOpen(generation)) homeCache = h || homeCache
+          if (!h || !currentOpen(generation)) return
+          homeCache = h
+          const s = selection.state()
+          if (!barTouched && !s.cwd.trim() && !s.remote) selection.set(h, 'prefill')
         })
         .catch(() => undefined)
 
@@ -547,6 +569,7 @@ export const wizardFeature: UiFeature = {
     let path!: PathInputHandle
     let browser!: FolderBrowserHandle
     let selection!: PathSelectionHandle
+    let cdLine: CdLineHandle | null = null
     let chosenLine!: HTMLParagraphElement
     let whereSection!: HTMLElement
     let nameInputEl!: HTMLInputElement
@@ -604,6 +627,7 @@ export const wizardFeature: UiFeature = {
 
     function render(): void {
       selection?.dispose()
+      cdLine?.dispose()
       clear(body)
       clear(footer)
       steppers.clear()
@@ -640,7 +664,10 @@ export const wizardFeature: UiFeature = {
             if (dir && currentOpen(generation) && selection === ownedSelection) ownedSelection.set(dir, 'native')
           })
         },
-        onInput: (v) => ownedSelection.set(v, 'bar'), // the controller owns the debounce
+        onInput: (v) => {
+          barTouched = true // the human is typing here — the home default may not interrupt
+          ownedSelection.set(v, 'bar') // the controller owns the debounce
+        },
         // Enter fires ~0ms after the last keystroke — wait for the resolve, then launch.
         onEnter: () => void tryLaunch(false)
       })
@@ -654,11 +681,6 @@ export const wizardFeature: UiFeature = {
       // ── The ONE subscriber that keeps every view honest ──────────────────────
       // Ping-pong cannot form: the view that originated a change is never written to.
       selection.subscribe((s, origin, listing) => {
-        // `reveal` only moves what the browser LOOKS at. Nothing else may react to it.
-        if (origin === 'reveal') {
-          if (listing && !s.remote) browser.applyListing(listing, s.cwd)
-          return
-        }
         cwd = s.cwd
         isRepo = s.isRepo
         if (s.remote) remoteCwd = s.cwd
@@ -684,20 +706,19 @@ export const wizardFeature: UiFeature = {
             name = base
           }
         }
+        // The name GHOST follows the folder either way: it is what Launch will call
+        // the workspace when the name is left blank, and a ghost that still reads
+        // "Workspace name" over a chosen folder hides that default.
+        if (nameInputEl && !nameInputEl.value) {
+          nameInputEl.placeholder = basename(s.cwd) || 'Workspace name'
+        }
         updateChosen()
         syncIsolate()
       })
 
-      // Somewhere to start looking. `reveal`, not `set`: opening the browser at $HOME
-      // must not make $HOME the workspace root.
+      // A prefilled folder (Ctrl+T from a workspace, a board card) is the selection;
+      // otherwise open()'s homeDir answer chooses HOME the moment it lands.
       if (cwd) ownedSelection.set(cwd, 'prefill')
-      else {
-        void wizardClient.homeDir()
-          .then((h) => {
-            if (currentOpen(generation) && selection === ownedSelection) ownedSelection.reveal(h)
-          })
-          .catch(() => undefined)
-      }
 
       const nameInput = el('input', {
         class: 'input wizard-name-input',
@@ -714,33 +735,24 @@ export const wizardFeature: UiFeature = {
       })
       nameInputEl = nameInput
 
-      // The cd line: shell muscle memory as a folder picker. Resolves against the
-      // chosen folder (home when none) and hands the result to the SAME selection
-      // controller every other view feeds — the probe/refusal story stays one story.
-      const cdInput = el('input', {
-        class: 'input input--mono wizard-cd-input',
-        type: 'text',
-        placeholder: 'cd ../other-project',
-        ariaLabel: 'Change folder with a cd command',
-        onKeydown: (e) => {
-          if (e.key !== 'Enter') return
-          e.preventDefault()
-          const target = resolveCdTarget(cdInput.value, selection.state().cwd, homeCache)
-          if (!target) return
-          ownedSelection.set(target, 'native')
-          cdInput.value = ''
+      // The cd line: shell muscle memory as a folder picker — cd-only, with Tab
+      // completion (cd-line.ts). It resolves against the chosen folder (home when
+      // none) and hands the result to the SAME selection controller every other
+      // view feeds — the probe/refusal story stays one story.
+      cdLine = createCdLine({
+        listDir: wizardClient.listDir,
+        base: () => selection.state().cwd,
+        home: () => homeCache,
+        onCd: (target) => {
+          if (currentOpen(generation) && selection === ownedSelection) ownedSelection.set(target, 'native')
         }
-      }) as HTMLInputElement
-      const cdRow = el('div', { class: 'wizard-cd-row' }, [
-        el('span', { class: 'wizard-cd-prompt', text: '❯' }),
-        cdInput
-      ])
+      })
 
       whereSection = section(
         'Working folder',
         'Your terminals start here — type a path, cd to it, or click through.',
         null,
-        [el('div', { class: 'wizard-where-row' }, [path.el, nameInput]), cdRow, chosenLine, browser.el],
+        [el('div', { class: 'wizard-where-row' }, [path.el, nameInput]), cdLine.el, chosenLine, browser.el],
         'wizard-sec--where'
       )
       updateChosen()
@@ -1487,6 +1499,24 @@ export const wizardFeature: UiFeature = {
           remote: s?.remote ?? false,
           agree: !!s && !s.refusal && !s.remote ? s.cwd === path.value() && s.cwd === browser.selected() : true
         }
+      }
+      // The cd line, drivable end-to-end (WIZCD): the gate types into the REAL input
+      // and reads the REAL menu — plus the pure math, callable with a fixture table.
+      w.__mogging.wizardCd = {
+        value: () => cdLine?.input.value ?? '',
+        type: (v: string) => {
+          if (!cdLine) return
+          cdLine.input.focus()
+          cdLine.input.value = v
+          cdLine.input.dispatchEvent(new Event('input', { bubbles: true }))
+        },
+        key: (k: string, init?: KeyboardEventInit) =>
+          cdLine?.input.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...init })),
+        suggestions: () => cdLine?.suggestions() ?? [],
+        selectedIndex: () => cdLine?.selectedIndex() ?? -1,
+        hint: () => cdLine?.hint() ?? '',
+        settle: () => cdLine?.settle() ?? Promise.resolve(),
+        pure: { parseCdLine, resolveCdTarget, resolvePathAgainst, completionContext, filterCompletions, commonPrefix, applyCompletion }
       }
       // The painter, drivable: gates set sizes and merges deterministically here,
       // and separately prove the pointer gestures against the real canvas.

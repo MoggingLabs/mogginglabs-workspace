@@ -14,7 +14,9 @@ import { join } from 'node:path'
 //   (d) THE PAINTER, by real gestures — a lattice CLICK sizes the grid; a real
 //       pointer DRAG across the canvas merges cells (readout says merged); a
 //       click on the merged tile splits it back;
-//   (e) an unset folder refuses to launch and says why, in place;
+//   (e) an EMPTIED folder refuses to launch and says why, in place. (A fresh
+//       wizard now defaults to $HOME — the guard is reached by clearing the bar,
+//       which is still a real state: select-all + delete;)
 //   (f) a merged layout LAUNCHES into real geometry: the workspace opens with
 //       exactly that many panes and the merged pane truly spans the grid.
 // Zero network.
@@ -48,9 +50,18 @@ export function runWizardUxSmoke(win: BrowserWindow): void {
       const repo = mkdtempSync(join(tmpdir(), 'mog-wizux-'))
       const cwdJs = JSON.stringify(repo)
 
-      // ── (e) first: an unset folder refuses to launch, in place ──────────────
+      // ── (e) first: an EMPTIED folder refuses to launch, in place ─────────────
+      // A fresh wizard defaults to $HOME now, so the unset state is reached the way
+      // a human reaches it: select-all + delete in the bar. Wait for the default to
+      // land first — clearing a bar the default then overwrites would race it.
       await ES(`window.__mogging.templates.openWizard()`)
-      await sleep(700)
+      await waitFor(async () => ES<boolean>(`(document.querySelector('#view-wizard .path-input-field')?.value ?? '') !== ''`))
+      await ES(`(() => {
+        const i = document.querySelector('#view-wizard .path-input-field')
+        i.value = ''
+        i.dispatchEvent(new Event('input', { bubbles: true }))
+      })()`)
+      await sleep(500)
       await ES(`document.querySelector('#view-wizard .wizard-footer .btn--primary').click()`)
       await sleep(500)
       const refused = await ES<{ stillWizard: boolean; status: string; workspaces: number }>(`(() => ({

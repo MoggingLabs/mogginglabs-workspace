@@ -1,7 +1,7 @@
 import { formulaPaneId, GitChannels, TerminalChannels, WorktreeChannels } from '@contracts'
 import type { AgentState, CreateWorktreeResult, PaneId, RemoveWorktreeResult } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { GridLayout, paneLimit, parseTree, leafIds, type LayoutTreeNode } from '../layout'
+import { GridLayout, parseTree, leafIds, type LayoutTreeNode } from '../layout'
 import { confirmDialog, icon, showToast, TOAST_DEFAULT_MS } from '../../components'
 import { batchSlots } from '../../core/layout/slots'
 import { openMovePaneModal, type MoveTarget } from './move-pane-modal'
@@ -1130,10 +1130,10 @@ export class WorkspaceController {
   splitPane(wsId: string, paneId?: number | null, dir?: 'h' | 'v', newCwd?: string): void {
     const view = this.views.get(wsId)
     if (!view) return
-    if (view.layout.paneCount >= paneLimit()) {
+    if (view.layout.paneCount >= view.layout.limit()) {
       showToast({
         title: 'Pane limit reached',
-        body: `A workspace holds at most ${paneLimit()} terminals on this screen.`
+        body: `A workspace holds at most ${view.layout.limit()} terminals on this screen.`
       })
       return
     }
@@ -1144,7 +1144,7 @@ export class WorkspaceController {
     // the split underneath still returns null for an id that is not a live leaf — a stale
     // pane id from the ⋯ menu or a `close-pane`d slot named by a ControlCommand. Seeding
     // first left that state behind for a terminal nobody ever created, and the next restore
-    // would have read it. The paneLimit() gate above is the only other refusal, and it has
+    // would have read it. The pane-limit gate above is the only other refusal, and it has
     // already spoken.
     if (!view.layout.paneIds().includes(target as PaneId)) return
     // Seed BEFORE the slot exists (a pane reads its cwd/remote at spawn time): a new
@@ -1269,7 +1269,10 @@ export class WorkspaceController {
         color: v.meta.color,
         cwd: v.meta.cwd,
         paneCount: v.layout.paneCount,
-        full: v.layout.paneCount >= paneLimit()
+        // The DESTINATION grid's own budget — the number movePaneToWorkspace will
+        // actually gate on, so the picker's "Full" chip never contradicts the move.
+        limit: v.layout.limit(),
+        full: v.layout.paneCount >= v.layout.limit()
       }))
   }
 
@@ -1296,11 +1299,11 @@ export class WorkspaceController {
     const src = this.viewForPane(paneId)
     const dst = this.views.get(dstId)
     if (!src || !dst || src === dst || this.pendingClose.has(dstId)) return false
-    if (dst.layout.paneCount >= paneLimit()) {
+    if (dst.layout.paneCount >= dst.layout.limit()) {
       showToast({
         tone: 'attention',
         title: 'That workspace is full',
-        body: `“${dst.meta.name}” already holds ${paneLimit()} terminals.`
+        body: `“${dst.meta.name}” already holds ${dst.layout.limit()} terminals.`
       })
       return false
     }

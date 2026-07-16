@@ -24,11 +24,12 @@ import { PANE_CWD_MAX, type DirListing, type DirRefusal, type DirResult, type Gi
  */
 
 /**
- * `reveal` is the odd one out: it moves what the BROWSER is looking at without
- * choosing anything. Opening a fresh wizard at the user's home directory must not
- * silently make `$HOME` the workspace root — looking is not choosing.
+ * Origins name WHO moved the selection, so the view that caused a change is never
+ * written back to by it. A fresh wizard arrives with the user's HOME already
+ * chosen (`prefill`) — the honest default a shell would give you — and every
+ * origin after that is a deliberate move away from it.
  */
-export type PathOrigin = 'prefill' | 'bar' | 'browser' | 'recent' | 'native' | 'remote' | 'reveal'
+export type PathOrigin = 'prefill' | 'bar' | 'browser' | 'recent' | 'native' | 'remote'
 
 export interface PathState {
   /** The chosen working folder. Canonical once the filesystem has confirmed it. */
@@ -50,8 +51,6 @@ export interface PathSelectionHandle {
   state(): Readonly<PathState>
   /** Move the selection. Views update synchronously; the filesystem answers later. */
   set(next: string, origin: PathOrigin): void
-  /** Point the browser at a folder WITHOUT choosing it. Leaves `cwd` untouched. */
-  reveal(dir: string): void
   /** Choosing an SSH host: stop asking this disk about a path on another machine. */
   setRemote(remote: boolean): void
   /** Fresh wizard. Cancels anything in flight. */
@@ -137,23 +136,6 @@ export function createPathSelection(deps: PathSelectionDeps): PathSelectionHandl
   return {
     state: () => st,
     set,
-    // Fetch a listing and hand it out; `cwd` never moves, so nothing gets chosen.
-    // A failure here is silent: we were only offering somewhere to start looking.
-    //
-    // It CAPTURES the token rather than bumping it. Bumping would cancel a resolve
-    // already in flight, leaving `probing` stuck true and `settle()` never keeping
-    // its promise. And it bails once a real selection exists, so a slow home-listing
-    // can never land on top of a folder the user already chose.
-    reveal: (dir) => {
-      const token = seq
-      void deps
-        .listDir(dir)
-        .then((res) => {
-          if (token !== seq || !res.ok || st.cwd.trim()) return
-          emit('reveal', res)
-        })
-        .catch(() => undefined)
-    },
     setRemote: (remote) => {
       cancel()
       st.remote = remote

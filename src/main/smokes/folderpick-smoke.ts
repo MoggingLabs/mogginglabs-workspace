@@ -19,8 +19,9 @@ import { join } from 'node:path'
 //   (i) THE INVARIANT (8.5/03, after review): with no refusal and no remote host, the
 //       controller's cwd, the path bar, and the browser's selection are ONE value.
 //       Re-checked after every interaction — a ping-pong shows up here first;
-//   (j) looking is not choosing: a fresh wizard opens the browser at $HOME with
-//       NOTHING selected, so `$HOME` never silently becomes the workspace root;
+//   (j) THE DEFAULT (wizard revamp 2026-07-16): a fresh wizard CHOOSES the user's
+//       home folder — the bar shows the real path, the browser lists it, the three
+//       views agree, and Launch is viable without touching the folder section;
 //   (k) typing a path that does not exist leaves the browser exactly where it was
 //       (a half-typed path used to replace the listing with a refusal), and Launch
 //       declines a path the filesystem refused instead of stranding every pane in it;
@@ -163,15 +164,26 @@ export function runFolderPickSmoke(win: BrowserWindow): void {
           ? rootProbe.ok === true && (rootProbe.entries ?? []).some((e) => e.name === 'C:') && rootProbe.parent === null
           : rootProbe.ok === true && rootProbe.parent === null
 
-      // ── looking is not choosing: a fresh wizard must not adopt $HOME ──────────
+      // ── the fresh-wizard DEFAULT: home is truly chosen (2026-07-16) ───────────
+      // The old contract ("looking is not choosing") left a fresh page with nothing
+      // selected and a fake placeholder path in the bar. The shipped default is now
+      // REAL: the user's home folder arrives as the selection — bar, browser and
+      // controller one value — and stays only until anything deliberate outranks it.
+      const homeDir = await ES<string>(`window.bridge.invoke('fs:home')`)
       await ES(`window.__mogging.templates.openWizard()`)
-      await sleep(1200) // home listing lands
-      const fresh = await ES<{ cwd: string; bar: string; browserSelected: string; browserPath: string; rows: number }>(`(() => {${H}
-        const s = sot()
-        return { cwd: s.cwd, bar: s.bar, browserSelected: s.browserSelected, browserPath: s.browserPath, rows: rows().length }
-      })()`)
-      // The browser is showing somewhere real, and nothing is chosen.
-      const lookingNotChoosingOk = fresh.cwd === '' && fresh.bar === '' && fresh.browserSelected === '' && fresh.rows > 0
+      let fresh = { cwd: '', bar: '', browserSelected: '', agree: false, rows: 0, usable: false }
+      for (let i = 0; i < 24 && !(fresh.cwd === homeDir && fresh.agree && fresh.rows > 0); i++) {
+        await sleep(250) // the home answer and its listing land asynchronously
+        fresh = await ES<typeof fresh>(`(() => {${H}
+          const s = sot()
+          return {
+            cwd: s.cwd, bar: s.bar, browserSelected: s.browserSelected, agree: s.agree, rows: rows().length,
+            usable: !s.refusal && !s.probing && !!s.cwd
+          }
+        })()`)
+      }
+      const homeDefaultOk =
+        !!homeDir && fresh.cwd === homeDir && fresh.bar === homeDir && fresh.browserSelected === homeDir && fresh.agree && fresh.rows > 0
 
       // ── the UI. Open the wizard rooted at the fixture. ────────────────────────
       await ES(`window.__mogging.templates.openWizard({ cwd: ${R} })`)
@@ -387,7 +399,7 @@ export function runFolderPickSmoke(win: BrowserWindow): void {
         refusalUiOk &&
         hiddenToggleOk &&
         noteOk &&
-        lookingNotChoosingOk &&
+        homeDefaultOk &&
         partialTypeKeepsBrowserOk &&
         refuseLaunchOk &&
         filterFocusOk &&
@@ -399,7 +411,8 @@ export function runFolderPickSmoke(win: BrowserWindow): void {
         filterKeys,
         refusalNavOk,
         refusalNav,
-        lookingNotChoosingOk,
+        homeDefaultOk,
+        homeDir,
         fresh,
         partialTypeKeepsBrowserOk,
         afterGarbage,
