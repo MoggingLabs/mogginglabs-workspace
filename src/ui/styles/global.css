@@ -5359,6 +5359,40 @@ body.pane-dragging * {
   color: var(--text-mid);
   font-family: var(--font-mono);
 }
+/* The webhook form, on the house kit (F-34): labeled FieldGroups in a two-up grid,
+   events as sentences with the wire id chipped beside them, actions right-aligned. */
+.wh-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding-top: var(--sp-2);
+}
+.wh-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3) var(--sp-4);
+}
+@media (max-width: 860px) {
+  .wh-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.wh-form-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.wh-ev-id {
+  font-size: var(--fs-10);
+  color: var(--text-lo);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  padding: 0 var(--sp-1);
+}
+.wh-payload {
+  max-width: var(--measure);
+}
 .evbridge-health {
   font-family: var(--font-mono);
   font-size: var(--fs-11);
