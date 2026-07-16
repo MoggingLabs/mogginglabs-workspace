@@ -69,6 +69,7 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
         browserDisabled: boolean
         explorerRefused: boolean
         tooltipsExplain: boolean
+        tooltipsReachable: boolean
       }>(`(() => {
         const railEl = document.getElementById('rail')
         const railBtn = document.querySelector('#titlebar .rail-toggle')
@@ -81,7 +82,11 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
           explorerDisabled: expBtn?.disabled === true,
           browserDisabled: webBtn?.disabled === true,
           explorerRefused: window.__mogging.explorer.isOpen() === false,
-          tooltipsExplain: [railBtn, expBtn, webBtn].every((b) => /create a workspace first/i.test(b?.title ?? ''))
+          tooltipsExplain: [railBtn, expBtn, webBtn].every((b) => /create a workspace first/i.test(b?.title ?? '')),
+          // A title is only an explanation if a hover can REACH it: pointer-events:none
+          // on the disabled style killed hit-testing and the native tooltip with it —
+          // the button said why in an attribute nobody could ever see.
+          tooltipsReachable: [railBtn, expBtn, webBtn].every((b) => !!b && getComputedStyle(b).pointerEvents !== 'none')
         }
       })()`)
       const bootLockOk =
@@ -90,7 +95,8 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
         bootLock.explorerDisabled &&
         bootLock.browserDisabled &&
         bootLock.explorerRefused &&
-        bootLock.tooltipsExplain
+        bootLock.tooltipsExplain &&
+        bootLock.tooltipsReachable
 
       // (b) the checklist is detection-honest, in BOTH directions.
       type Agent = { id: string; name: string; installed: boolean; installHint?: string }

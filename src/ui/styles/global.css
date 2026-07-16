@@ -537,13 +537,20 @@ textarea {
     background var(--dur-1) var(--ease),
     color var(--dur-1) var(--ease);
 }
-/* A gated chrome control (the rail toggle and the explorer toggle read disabled at
-   the zero-workspace Home): grayed and inert, but still readable as a control. */
+/* A gated chrome control (the rail/explorer/browser toggles read disabled at the
+   zero-workspace Home): grayed and inert, but still readable as a control — and
+   still HOVERABLE. pointer-events:none here killed hit-testing entirely, which
+   took the native title tooltip with it: the one place the button explains WHY
+   it is off became unreachable. A disabled button already ignores clicks; the
+   tooltip is load-bearing and must survive (HOMEUX pins pointer-events ≠ none). */
 .icon-btn:disabled {
   color: var(--text-low);
   opacity: 0.45;
-  cursor: default;
-  pointer-events: none;
+  cursor: not-allowed;
+}
+.icon-btn:disabled:hover {
+  background: transparent; /* hover must not light a control that cannot act */
+  color: var(--text-low);
 }
 .icon-btn:hover {
   background: var(--accent-weak);
