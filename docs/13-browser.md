@@ -48,19 +48,90 @@ browser you're looking at; to approve a signed-in origin you view that
 workspace and click allow (the confirm is scoped to the browser you see).
 
 Security posture (ADR 0002): each guest is `sandbox: true`, no preload, no
-nodeIntegration, its own partition; `window.open` denied (http(s) links open
-in the system browser), http(s) only; a deny-all permission handler on every
-guest session — nothing is injected or read by us, and the system browser's
-sessions are never touched (Branch B parked).
+nodeIntegration, its own partition, http(s) only; `window.open` is funneled
+through main's handler — a real popup (OAuth) opens as a hardened child window on
+the SAME partition, a plain `target=_blank` opens a new tab, and the system browser
+is only ever reached by the explicit globe button; a deny-all permission handler +
+check on every guest session (each refusal surfaced honestly, never granted), the
+`will-attach-webview` guard, and the Chrome-honest UA — nothing is injected or read
+by us, and the system browser's sessions are never touched (Branch B parked).
 
 ## Agent control (6/05b)
 
 With consent, agents get the wheel via a verb toolset on the MAIN-side driver:
 `navigate` · `back/forward/reload` · `snapshot` (accessibility outline +
-visible text + stable refs — the agent's eyes) · `screenshot` · `click` ·
-`type` · `scroll` · `select` · `eval` (arbitrary page script) · `console` ·
-`network_failures` (the error feedback loop) · `wait_for`. Together they close
-the build→preview→see-the-error→fix loop without a human alt-tabbing.
+visible text + stable refs — the agent's eyes; descends into open shadow roots
+and same-origin iframes, capped + `truncated`-flagged) · `screenshot` · `click`
+(a full pointer gesture, so pointer-first widgets respond) · `type` (writes
+through the prototype value-setter, so React-controlled inputs fire onChange) ·
+`scroll` (relative, or absolute with `to: 'y'`) · `select` · `eval` (arbitrary
+page script, capped) · `console` · `network_failures` (the error feedback loop —
+now also HTTP 4xx/5xx, which `did-fail-load` never sees) · `wait_for` · and the
+TAB verbs `tab_list` / `tab_new` / `tab_select` (F4 — an agent can hold the docs
+and the dev server open at once). Together they close the
+build→preview→see-the-error→fix loop without a human alt-tabbing.
+
+## Tabs (F4)
+
+Each (workspace, profile) holds an ordered set of tabs — one out-of-process
+`<webview>` guest each — with a Chrome/Comet-style strip above the address bar
+(favicon + title, close ×, + new-tab). The base tab (`t0`) is the pre-tabs single
+guest, so a workspace that never opens a second tab is byte-for-byte the old
+behavior. A page's `window.open` / `target=_blank` opens a NEW TAB (never the
+system browser — the globe button stays the one explicit door out); an OAuth popup
+(window features) still opens as a hardened child window on the same partition. The
+header, zoom, find, and possession all follow the ACTIVE tab, which the renderer
+publishes to main so the driver and the `tab_*` agent verbs act on the tab you see.
+Tabs are per-(workspace, profile) and ephemeral (a new tab is lost on LRU eviction;
+the base tab restores its last url).
+
+## The browser chrome (Comet parity)
+
+The dock behaves like a browser, not a preview pane:
+- **Omnibox** — the address bar resolves what you type: a URL opens (https-first,
+  except a dev server — localhost / an IP / an explicit port — which takes http), and
+  anything else is a SEARCH (DuckDuckGo by default, `browser.searchEngine`). It never
+  "refuses" a query.
+- **Sign-in works** — every guest session presents a Chrome-honest user agent (the
+  Electron + product tokens stripped, the platform + Chromium version honest), so
+  walls that refuse Electron (Google) accept it; OAuth popups complete on the same
+  partition. Still our own partition only — the system browser's sessions are never
+  read (Branch B parked).
+- **Find in page** (`Ctrl+F`), **zoom** (`Ctrl+=` / `-` / `0`, persisted per
+  workspace), a **page context menu** (back/reload/copy/copy-link/pin/inspect), and
+  **DevTools** (context-menu Inspect) — humans get the agent's console/network view.
+- **Header truth** — a favicon / lock (https) / "not secure" (http) indicator in the
+  address bar, and Reload becomes Stop while a page loads.
+- **Error + crash overlays** — a dead address or a crashed renderer explains itself
+  (with Retry), never a white rectangle.
+- **App shortcuts still work with the page focused** — the guest is a separate
+  process, so main relays the app's own chords (`Ctrl+Shift+U/E/B`, `Ctrl+K`, find,
+  zoom) back to the renderer's handlers.
+- **Pins + recents** — the empty preview is a dev-loop new-tab page: recent hosts as
+  chips, pin/unpin via the page context menu (per-workspace).
+- **Honest permissions** — the deny-all handler stays absolute (nothing is granted),
+  but each refusal surfaces a transient "Blocked: location" chip instead of silence.
+- **Audio** — a mute control appears while the active tab makes sound (a background
+  workspace's video no longer plays invisibly).
+
+## Which agent is at the wheel (visible possession)
+
+The driving agent's PANE rides the possession state, so the dock names WHO is
+driving and WHAT it is doing right now: the banner reads "Claude Code · pane N is
+browsing" with the live action ("Reading the page…/Clicking…"), an animated brand
+GLOW wraps the dock, a pulsing indicator shows work in progress, and the titlebar
+pill + each workspace tab's tooltip name the driver too. Reduced-motion becalms the
+animations (the app's blanket clamp) while the outline + label keep the meaning.
+
+## Hardening (defense in depth)
+
+The dock's guests are the ONLY webviews the app attaches, and the boundary is
+enforced twice: a `will-attach-webview` guard forces isolation, strips any preload,
+and REFUSES any partition that isn't ours (`persist:bdock.*` / `aweb.*` /
+`aweb-mem.*`); and each guest session is hardened (deny-all permissions +
+permission-check, the honest UA) the instant it attaches — before dom-ready, before
+its first load — so a permission request can't race the default. None of this reads
+or imports the system browser's sessions (ADR 0002; Branch B stays parked).
 
 **Transport — the house MCP server (`mogging`).** Agents reach the tools
 through the first-party MCP server, `bin/mogging-mcp.mjs` (stdio JSON-RPC 2.0,
@@ -95,9 +166,14 @@ daemon protocol untouched by this phase):
   `mogging` CLI, and `approve` is never a tool (docs/09 — humans own the
   review gate).
 
-The whole path is exercised by two gates: `MOGGING_BROWSERCTL` (dock driving)
-and `MOGGING_MCP` (both upstreams, catalog equality, degradation, token
-hygiene).
+The whole path is exercised by these gates: `MOGGING_BROWSER` (the dock + sign-in:
+Chrome UA, OAuth popups on the shared partition), `MOGGING_BROWSERCTL` (dock driving,
+including the driver's real hands — React-tracked inputs, pointer-first widgets,
+shadow-DOM reach, the HTTP-error ring, moved-pane resolution), `MOGGING_BROWSERUX`
+(the chrome: omnibox, find, zoom, error overlay, context menu, shortcut relay, the
+permission chip + pins + the attach guard), `MOGGING_BROWSERTABS` (the tab strip +
+`tab_*` agent verbs), `MOGGING_DOCKUX` (visible possession + which-agent identity),
+and `MOGGING_MCP` (both upstreams, catalog equality, degradation, token hygiene).
 
 Register it with a CLI until the phase-8 MCP manager (8/06) automates the
 fan-out (dev machines registered under the old `mogging-browser` name should
