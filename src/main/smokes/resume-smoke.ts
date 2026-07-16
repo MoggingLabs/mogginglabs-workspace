@@ -56,9 +56,12 @@ export function runResumeSmoke(win: BrowserWindow): void {
     try {
       await sleep(2000)
 
-      // Fresh userData: nothing to restore, and Home says so calmly.
+      // Fresh userData: nothing to restore, and Home says so calmly — a sentence with
+      // NO button in it (the hero above is the one new-workspace road).
       const noSnapshot = (await ES(`window.bridge.invoke('workspace:lastSession')`)) === null
-      const emptyOffered = await waitTrue(`!!document.querySelector('.home-resume .empty-state')`)
+      const emptyOffered = await waitTrue(
+        `(() => { const e = document.querySelector('.home-resume .empty-state'); return !!e && !e.querySelector('button') })()`
+      )
 
       // The boot restore() always fires ONE debounced save (empty, on a fresh profile).
       // Wait it out so it can never interleave the sequence below: a background empty

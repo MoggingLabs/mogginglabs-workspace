@@ -6,7 +6,10 @@ import { probeContrastAcrossThemes } from './aa-probe'
 
 // Env-gated Home + first-run smoke (MOGGING_HOMEUX, Phase-8.5/06; recut for the
 // last-session restore card). Fresh userData.
-//   (a) the hero + a house EmptyState render; the hero CTA opens the wizard;
+//   (a) the hero + a house EmptyState render — and the empty card carries NO button
+//       (the hero's "New workspace" directly above is the ONE road; a second copy in
+//       the card was removed on review, and this asserts the absence so it cannot
+//       quietly come back); the hero CTA opens the wizard;
 //   (b) checklist rows are detection-HONEST, in both directions: row ①'s done-state equals
 //       real PATH detection, the install rows are EXACTLY the CLIs that are really missing
 //       (here: none — asserted as absence), and an agent forced to read as missing renders
@@ -50,10 +53,13 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
       await ES(`window.__mogging.home && window.__mogging.home.refresh()`)
       await waitTrue(`document.querySelectorAll('.firstrun-row').length >= 3`)
 
-      // (a) hero + a house EmptyState with a CTA (fresh boot: no snapshot yet).
+      // (a) hero + a house EmptyState (fresh boot: no snapshot yet) — with NO button
+      // inside it. The error state's Retry is a different EmptyState (ASYNCSTATE owns
+      // it); the CALM one is a sentence, and the hero above is the one new-workspace
+      // road. Asserting absence is what makes the removal permanent.
       const heroOk = await ES<boolean>(`!!document.querySelector('#view-home .home-hero')`)
       const emptyOk = await waitTrue(
-        `!!document.querySelector('.home-resume .empty-state') && !!document.querySelector('.home-resume .empty-state button')`
+        `(() => { const e = document.querySelector('.home-resume .empty-state'); return !!e && !e.querySelector('button') })()`
       )
 
       // (b) the checklist is detection-honest, in BOTH directions.

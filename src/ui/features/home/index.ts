@@ -159,20 +159,15 @@ export const homeFeature: UiFeature = {
     function renderResume(info: LastSessionInfo | null): void {
       clear(resumeHost)
       if (!info || !info.workspaces.length) {
+        // Deliberately NO action button here: the hero's "New workspace" sits directly
+        // above, and a second copy in the card made the launcher say the same thing
+        // twice (removed on review, 2026-07-16). The calm state is a sentence, not a
+        // door. HOMEUX (a) asserts the ABSENCE, so it cannot quietly come back.
         resumeHost.append(
           EmptyState({
             icon: 'history',
             title: 'No previous session yet',
-            body: 'Your workspaces are saved as you work. Close them and the whole session — layouts, terminals, agents — waits here to come back in one click.',
-            action: Button({
-              label: 'New workspace',
-              icon: 'plus',
-              variant: 'primary',
-              size: 'sm',
-              onClick: () => {
-                if (!openWizard()) runCommand('workspace:quick')
-              }
-            })
+            body: 'Your workspaces are saved as you work. Close them and the whole session — layouts, terminals, agents — waits here to come back in one click.'
           })
         )
         return
