@@ -7,6 +7,7 @@ import {
   type AgentInstallStart,
   type AgentInstallState,
   type GlobalHooksMutationResult,
+  type GlobalHooksProviderStatus,
   type GlobalHooksStatus
 } from '@contracts'
 import { Button, Card, EmptyState, Pill, SectionHeader, Spinner, el, loadingRow, providerLogo, showToast } from '../../components'
@@ -25,56 +26,79 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
   const logs = new Map<string, HTMLElement>()
   const list = el('div', { class: 'prov-list' })
 
-  // ── Global Claude alert hooks: the hand-typed-launch gap ─────────────────────────────
-  // An app-launched claude carries its alert hooks on the generated --settings overlay; a
-  // claude TYPED at a pane's own prompt carries none, so its pane never rings (found live
+  // ── Global session alerts: the hand-typed-launch gap, all four CLIs ──────────────────
+  // An app-launched agent rings its pane through session-scoped bell config (claude's
+  // --settings overlay, codex -c flags, the gemini/opencode env-pointed files); an agent
+  // TYPED at a pane's own prompt carries none of it, so its pane never rings (found live
   // 2026-07-16: a hand-typed claude worked a 15-minute turn wearing a resting dot). Wiring
-  // the same hooks into the user's global Claude settings closes that: the notify script
-  // no-ops outside a MoggingLabs pane, so the global entries are inert everywhere else.
-  // Explicit action + backup + atomic write, same as every user-owned config we touch.
-  const hooksPill = el('span')
-  const hooksActions = el('div', { class: 'prov-actions' })
-  const hooksNote = el('div', { class: 'settings-row-caption', text: '' })
+  // the same config into each CLI's own global files closes that: the notify script (and
+  // OpenCode's plugin around it) no-op outside a MoggingLabs pane. Explicit action + backup
+  // + atomic write, same as every user-owned config we touch; a CONFLICT (the user's own
+  // codex `notify`, a differing tui value) shows its reason instead of an Apply button.
+  const hooksList = el('div', { class: 'prov-list' })
   let hooksStatus: GlobalHooksStatus | null = null
-  const HOOKS_PILL: Record<GlobalHooksStatus['state'], { text: string; tone: 'success' | 'neutral' | 'warning' | 'danger' }> = {
+  const HOOKS_LABEL: Record<GlobalHooksProviderStatus['provider'], string> = {
+    claude: 'Claude Code',
+    codex: 'Codex',
+    gemini: 'Gemini',
+    opencode: 'OpenCode'
+  }
+  const HOOKS_PILL: Record<GlobalHooksProviderStatus['state'], { text: string; tone: 'success' | 'neutral' | 'warning' | 'danger' }> = {
     applied: { text: '✓ wired', tone: 'success' },
     partial: { text: 'stale', tone: 'warning' },
     'not-applied': { text: 'not wired', tone: 'neutral' },
+    conflict: { text: 'their config', tone: 'warning' },
     unreadable: { text: 'unreadable', tone: 'danger' }
   }
-  const renderHooks = (): void => {
-    hooksActions.replaceChildren()
-    const state = hooksStatus?.state
-    hooksPill.replaceChildren(state ? Pill(HOOKS_PILL[state]) : Spinner())
-    hooksNote.textContent = hooksStatus
-      ? state === 'unreadable'
-        ? `${hooksStatus.file} is not JSON this app will rewrite — fix it by hand first.`
-        : hooksStatus.file
-      : ''
-    if (!state || state === 'unreadable') return
-    const act = (channel: string, done: string): void => {
-      void (invoke(channel) as Promise<GlobalHooksMutationResult>).then(async (result) => {
-        if (result?.ok) showToast({ title: done, body: result.backup ? `Backup: ${result.backup}` : undefined, tone: 'success' })
-        else showToast({ title: 'Nothing was written', body: result?.reason, tone: 'danger' })
-        await refreshHooks()
-      })
-    }
-    if (state !== 'applied') {
-      hooksActions.append(Button({
-        label: state === 'partial' ? 'Re-apply' : 'Wire alerts',
+  const hooksAct = (channel: string, provider: GlobalHooksProviderStatus['provider'], done: string): void => {
+    void (invoke(channel, { provider }) as Promise<GlobalHooksMutationResult>).then(async (result) => {
+      if (result?.ok) showToast({ title: done, body: result.backups?.length ? `Backup: ${result.backups.join(' · ')}` : undefined, tone: 'success' })
+      else showToast({ title: 'Nothing was written', body: result?.reason, tone: 'danger' })
+      await refreshHooks()
+    })
+  }
+  const hooksRow = (row: GlobalHooksProviderStatus): HTMLElement => {
+    const label = HOOKS_LABEL[row.provider]
+    const actions = el('div', { class: 'prov-actions' })
+    if (row.state === 'not-applied' || row.state === 'partial') {
+      actions.append(Button({
+        label: row.state === 'partial' ? 'Re-apply' : 'Wire alerts',
         icon: 'bell',
         size: 'sm',
-        onClick: () => act(AgentHookChannels.apply, 'Claude alert hooks wired globally')
+        onClick: () => hooksAct(AgentHookChannels.apply, row.provider, `${label} alerts wired globally`)
       }))
     }
-    if (state !== 'not-applied') {
-      hooksActions.append(Button({
+    if (row.state === 'applied' || row.state === 'partial') {
+      actions.append(Button({
         label: 'Remove',
         variant: 'ghost',
         size: 'sm',
-        onClick: () => act(AgentHookChannels.remove, 'Claude alert hooks removed')
+        onClick: () => hooksAct(AgentHookChannels.remove, row.provider, `${label} alert wiring removed`)
       }))
     }
+    const note =
+      row.state === 'conflict' || row.state === 'unreadable'
+        ? `${row.reason ?? 'not writable'} — ${row.files.join(' · ')}`
+        : row.files.join(' · ')
+    return el('div', { class: 'prov-item', dataset: { hooksProvider: row.provider } }, [
+      el('div', { class: 'prov-row prov-row--static' }, [
+        el('div', { class: 'prov-row-main' }, [
+          el('div', { class: 'prov-row-head' }, [
+            el('span', { class: 'prov-name', text: `${label} · global alerts` }),
+            Pill(HOOKS_PILL[row.state])
+          ]),
+          el('div', { class: 'settings-row-caption', text: note })
+        ]),
+        actions
+      ])
+    ])
+  }
+  const renderHooks = (): void => {
+    if (!hooksStatus) {
+      hooksList.replaceChildren(el('div', { class: 'settings-row-caption' }, [Spinner()]))
+      return
+    }
+    hooksList.replaceChildren(...hooksStatus.map(hooksRow))
   }
   const refreshHooks = async (): Promise<void> => {
     try {
@@ -89,16 +113,10 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
       header: SectionHeader({
         title: 'Hand-typed session alerts',
         caption:
-          'A Claude launched from the app rings its pane through session hooks. Wire the same hooks into your global Claude settings so a claude you type at a pane’s own prompt rings too. Outside a pane the hook is a silent no-op.'
+          'An agent launched from the app rings its pane through session-scoped config. Wire the same alerts into each CLI’s own global config so an agent you type at a pane’s own prompt rings too. Outside a pane the wiring is a silent no-op.'
       })
     },
-    [el('div', { class: 'prov-row prov-row--static' }, [
-      el('div', { class: 'prov-row-main' }, [
-        el('div', { class: 'prov-row-head' }, [el('span', { class: 'prov-name', text: 'Claude Code · global alert hooks' }), hooksPill]),
-        hooksNote
-      ]),
-      hooksActions
-    ])]
+    [hooksList]
   )
 
   const landing = el('div', { class: 'prov-landing' }, [

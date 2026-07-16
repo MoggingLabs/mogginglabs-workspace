@@ -78,18 +78,27 @@ export interface AgentCommandResult {
   signIn?: { expected: string; actual?: string }
 }
 
-/** Global Claude alert hooks (AgentHookChannels) — the hand-typed-launch gap. */
-export interface GlobalHooksStatus {
-  /** 'applied' = every event carries the CURRENT entry; 'partial' = ours present but stale or
-   *  incomplete (Re-apply); 'unreadable' = the file is not JSON we will rewrite (writes refuse). */
-  state: 'applied' | 'partial' | 'not-applied' | 'unreadable'
-  /** The settings file the state was read from (the user's global Claude home). */
-  file: string
+/** Global agent alert wiring (AgentHookChannels) — the hand-typed-launch gap, per CLI. */
+export type GlobalHookProvider = 'claude' | 'codex' | 'gemini' | 'opencode'
+
+export interface GlobalHooksProviderStatus {
+  provider: GlobalHookProvider
+  /** 'applied' = every entry current; 'partial' = ours present but stale or incomplete
+   *  (Re-apply); 'conflict' = the user's OWN config occupies a slot we would need (codex's one
+   *  `notify`, a differing tui value) — writes refuse and `reason` names the line;
+   *  'unreadable' = a file we will not faithfully rewrite (JSONC comments, junk). */
+  state: 'applied' | 'partial' | 'not-applied' | 'conflict' | 'unreadable'
+  /** The user-owned config file(s) the state was read from. */
+  files: string[]
+  reason?: string
 }
+
+/** `agentHooks:status` answers one row per provider, in catalog order. */
+export type GlobalHooksStatus = GlobalHooksProviderStatus[]
 
 export interface GlobalHooksMutationResult {
   ok: boolean
   reason?: string
-  /** Timestamped copy of the bytes replaced, when a write happened over existing content. */
-  backup?: string
+  /** Timestamped copies of the bytes replaced, when writes happened over existing content. */
+  backups?: string[]
 }

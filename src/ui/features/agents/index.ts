@@ -190,10 +190,10 @@ export const agentsFeature: UiFeature = {
       if (cli) recordPaneCli(paneId, cli) // the pane's MCP chip, same as a launched agent
       // Provider id only — never the command the user typed (ADR 0005/0002).
       getTelemetry().captureEvent({ name: 'agent.detected', props: { provider: ev.agentId } })
-      // A DETECTED claude was not launched by the app, so it may carry no alert hooks at all
+      // A DETECTED agent was not launched by the app, so it may carry no bell config at all
       // — a verdict-mute pane that works whole turns wearing a resting dot (found live
-      // 2026-07-16). If the global hooks aren't wired, say so once and offer to wire them.
-      if (ev.agentId === 'claude') void nudgeGlobalHooks()
+      // 2026-07-16). If that CLI's global alerts aren't wired, say so once and offer to.
+      void nudgeGlobalHooks(ev.agentId)
 
       if (!profileId) {
         setPaneProfile(paneId as PaneId, undefined) // a previous launch's note is not this agent's
@@ -205,26 +205,31 @@ export const agentsFeature: UiFeature = {
       if (getPaneAgentSession(paneId as PaneId)?.profileId === profileId) setPaneProfile(paneId as PaneId, name)
     }
 
-    /** One nudge per app run, and only when the global hooks are genuinely absent. A detected
-     *  session cannot tell a truly hookless hand-typed claude from a daemon-restored one that
-     *  kept its launch overlay, so the copy stays general — wiring globally covers both, and
-     *  every future one, and is a silent no-op outside panes (global-hooks.ts). */
-    let hooksNudged = false
-    async function nudgeGlobalHooks(): Promise<void> {
-      if (hooksNudged) return
-      hooksNudged = true
+    /** One nudge per provider per app run, and only when that CLI's global alerts are
+     *  genuinely absent. A detected session cannot tell a truly bell-less hand-typed agent
+     *  from a daemon-restored one that kept its launch config, so the copy stays general —
+     *  wiring globally covers both, and every future one, and is a silent no-op outside
+     *  panes (global-hooks.ts). A CONFLICT (the user's own codex notify, say) is their
+     *  deliberate config — no nudge for that either. */
+    const hooksNudged = new Set<string>()
+    const HOOK_NUDGE_LABEL: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', opencode: 'OpenCode' }
+    async function nudgeGlobalHooks(providerId: string): Promise<void> {
+      const label = HOOK_NUDGE_LABEL[providerId]
+      if (!label || hooksNudged.has(providerId)) return
+      hooksNudged.add(providerId)
       try {
         const status = (await getBridge().invoke(AgentHookChannels.status)) as GlobalHooksStatus
-        if (!status || status.state === 'applied' || status.state === 'unreadable') return
+        const row = status?.find?.((r) => r.provider === providerId)
+        if (!row || (row.state !== 'not-applied' && row.state !== 'partial')) return
         showToast({
           tone: 'attention',
-          title: 'Hand-typed Claude sessions have no alerts',
-          body: 'Wire the alert hooks into your global Claude settings so a claude typed at a pane’s prompt rings too (Settings › Agent CLIs to review or remove).',
+          title: `Hand-typed ${label} sessions have no alerts`,
+          body: `Wire the alerts into ${label}’s own global config so a session typed at a pane’s prompt rings too (Settings › Agent CLIs to review or remove).`,
           action: {
             label: 'Wire alerts',
             onClick: () => {
-              void (getBridge().invoke(AgentHookChannels.apply) as Promise<GlobalHooksMutationResult>).then((result) => {
-                if (result?.ok) showToast({ tone: 'success', title: 'Claude alert hooks wired globally', body: 'New claude sessions ring their pane; this one applies from its next launch.' })
+              void (getBridge().invoke(AgentHookChannels.apply, { provider: providerId }) as Promise<GlobalHooksMutationResult>).then((result) => {
+                if (result?.ok) showToast({ tone: 'success', title: `${label} alerts wired globally`, body: 'New sessions ring their pane; a running one applies from its next launch.' })
                 else showToast({ tone: 'attention', title: 'Nothing was written', body: result?.reason })
               })
             }

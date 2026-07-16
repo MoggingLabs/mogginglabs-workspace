@@ -47,6 +47,16 @@ export function notifyHookInvocation(): string | null {
   return p ? `node "${p}"` : null
 }
 
+/** Materialize (idempotently) the generated OpenCode notify plugin and return its path —
+ *  null on any filesystem failure. Launches write it per-launch via bellLaunchExtras; the
+ *  GLOBAL wiring needs it to exist regardless of launches, because the user's own
+ *  opencode.json points at it by file:// spec (agent-global-hooks.ts). */
+export function opencodeNotifyPluginPath(): string | null {
+  const script = notifyHookPath()
+  if (!script) return null
+  return writeGenerated('opencode-notify-plugin.mjs', opencodePluginSource(script))
+}
+
 /** Read a JSON file that may not exist (or may be junk) — the merge bases below. */
 function readJson(path: string): unknown {
   try {
