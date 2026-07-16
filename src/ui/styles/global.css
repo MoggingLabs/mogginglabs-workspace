@@ -7187,16 +7187,21 @@ body.pane-dragging * {
   color: var(--text-lo);
   font-size: var(--fs-11);
 }
+/* S1 aliases of the compact house button — see .trail-btn's note. */
 .browser-sites-forget,
 .browser-sites-add,
 .browser-sites-clear {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  background: transparent;
-  color: var(--text-mid);
-  font-size: var(--fs-11);
-  padding: 1px var(--sp-2);
+  background: var(--bg-elevated);
+  color: var(--text-hi);
+  font-size: var(--fs-12);
+  cursor: pointer;
+  padding: 0 var(--sp-2);
   cursor: pointer;
 }
 .browser-sites-forget:hover,
@@ -7217,15 +7222,16 @@ body.pane-dragging * {
   gap: var(--sp-2);
   padding: var(--sp-1) var(--sp-2);
 }
+/* S1 alias of .input.input-sm — same anatomy, kept as a selector surface. */
 .browser-sites-input {
   flex: 1 1 auto;
   min-width: 0;
-  height: 24px;
+  height: 28px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--bg-inset);
   color: var(--text-hi);
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   padding: 0 var(--sp-2);
   outline: none;
 }
@@ -7287,17 +7293,28 @@ body.pane-dragging * {
 }
 /* Preview · Connect · Import · Apply · Remove · Adopt · Forget · Save · Clear trail ·
    Authorize all render as this. It was 20.5px tall. */
+/* S1: `.trail-btn` is a visual ALIAS of the house `.btn` now — same anatomy, same
+   metrics — kept as a class only because the integrations dense rows carry it as a
+   selector surface. New code takes Button(); this alias retires with those rows. */
 .trail-btn {
   display: inline-flex;
   align-items: center;
-  min-height: 28px;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: 30px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  background: transparent;
-  color: var(--text-mid);
-  font-size: var(--fs-11);
-  padding: var(--sp-1) var(--sp-3);
+  background: var(--bg-elevated);
+  color: var(--text-hi);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  padding: 0 var(--sp-3);
+  white-space: nowrap;
   cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
 }
 .trail-btn:hover {
   border-color: var(--accent);
@@ -7312,18 +7329,15 @@ body.pane-dragging * {
   border-color: var(--danger);
   color: var(--danger);
 }
-/* `.is-armed` was styled ONLY under `.trail-clear`. The two buttons that carry it
-   without that class — "Write tools: ALL (agents can send/mail/claim/update here)"
-   and "Inherit global tools" — therefore had NO visual on-state: the sole signal that
-   agents may write in this workspace was the word ALL inside the label. A permission
-   whose enabled state looks exactly like its disabled state is not a control.
+/* `.is-armed` marks a form's one primary (the key/client Connect, Add client ID…) —
+   the write-tools and inherit buttons that once wore it became real switches (F-25).
    `:not(.trail-clear)` because armed-Clear is DANGER and armed-grant is WARNING — and
    without it this rule, being later and equally specific, would repaint armed-Clear. */
 .trail-btn.is-armed:not(.trail-clear) {
-  border-color: color-mix(in srgb, var(--warning) 60%, transparent);
-  background: color-mix(in srgb, var(--warning) 12%, transparent);
-  color: var(--text-hi);
-  font-weight: var(--fw-medium);
+  /* Mirrors .btn--primary — a form's single primary verb. */
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast);
 }
 .trail-list {
   display: flex;
@@ -7579,8 +7593,12 @@ body.pane-dragging * {
   background: color-mix(in srgb, var(--info) 14%, transparent);
   color: var(--info);
 }
-.cat-mini {
-  font-size: var(--fs-11);
+/* Compact grade — mirrors .btn--sm (24px), the size profile rows already use. */
+.cat-mini,
+.conn-mini {
+  min-height: 24px;
+  font-size: var(--fs-12);
+  padding: 0 var(--sp-2);
 }
 .cat-cli-label {
   display: inline-flex;
