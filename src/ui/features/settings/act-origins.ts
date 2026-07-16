@@ -109,7 +109,8 @@ export function createActOriginsCard(): HTMLElement {
   wsSelect.onchange = (): void => void render()
 
   const block = el('div', { class: 'trail-block browser-origins-block' }, [
-    el('div', { class: 'settings-row-caption', text: 'Per workspace, default none: agents can always READ pages in the dock; ACTING on a signed-in origin needs that origin granted here, plus the one-click banner confirm per possession. Sensitive origins (banking, mail, gov) refuse at both ends. Every act lands in the trail (Trust › Activity).' }),
+    // F-39: "per possession" / "refuse at both ends" were threat-model idiom.
+    el('div', { class: 'settings-row-caption', text: 'Per workspace, default none: agents can always READ pages in the dock. ACTING on a signed-in origin needs that origin granted here, plus a one-click confirmation each time an agent takes the wheel. Banking, mail, and government sites always refuse. Every act lands in the trail (Trust › Activity).' }),
     el('div', { class: 'trail-controls' }, [wsSelect]),
     body
   ])

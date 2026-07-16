@@ -108,7 +108,8 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
             el('span', { class: 'prov-name', text: `${label} · global alerts` }),
             Pill(HOOKS_PILL[row.state])
           ]),
-          el('div', { class: 'settings-row-caption', text: note })
+          // F-15: file paths are for the expert's eye — faint, one line, full on hover.
+          el('div', { class: `settings-row-caption${blocked ? '' : ' prov-paths'}`, text: note, title: blocked ? undefined : note })
         ]),
         actions
       ]),
@@ -145,9 +146,10 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
     Card(
       {
         header: SectionHeader({
-          title: 'CLI control plane',
+          // F-09: was "CLI control plane" — k8s idiom on a consumer surface.
+          title: 'Your agent CLIs',
           caption:
-            'Open a CLI to inspect every cataloged setting, choose its real provider scope, and keep desired values synchronized. Install still runs the exact provider command shown under your login.'
+            'Open a CLI to browse every setting it supports and keep the values you choose in sync. Install runs the exact provider command shown, under your login.'
         })
       },
       [list]

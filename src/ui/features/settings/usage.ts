@@ -201,7 +201,7 @@ export function createUsageSection(): HTMLElement {
           text:
             `${watched.length} of ${rowState.size} providers can be watched today` +
             (reporting.length ? ` · ${reporting.length} reporting now` : '') +
-            ' — the rest are catalog rows whose reader is not wired yet.'
+            ' — the rest aren’t supported yet.'
         })
       ])
     )
@@ -217,10 +217,14 @@ export function createUsageSection(): HTMLElement {
       group.append(el('div', { class: 'section-label usage-class-label', text: CLASS_LABEL[klass] ?? klass }))
       for (const r of mine) {
         const row = el('div', { class: 'usage-prov-row', dataset: { provider: r.id, klass: r.klass } })
+        // F-30: an unsupported row must not render CHECKED — an enabled switch on a
+        // dead feature is the switch lying. Disabled + unchecked until a reader lands
+        // (the stored `enabled` bit is preserved main-side; it simply has no meaning yet).
         const enable = createCheckbox({
           label: '',
           ariaLabel: `${r.id} enabled`,
-          checked: r.enabled,
+          checked: r.enabled && r.wired,
+          disabled: !r.wired,
           onChange: (checked) => {
             void invoke(UsageChannels.configSet, { providerId: r.id, enabled: checked }).then(() => void loadGrid())
           }
@@ -233,18 +237,21 @@ export function createUsageSection(): HTMLElement {
         // An unwired row must never look watched (the audit's RC4): the green
         // "detected" chip is CLI presence, which is true but reads as "usage
         // live" — so it only paints on rows whose reader can actually read.
+        // F-30: "reader pending" was roadmap-speak; and the class chip repeated its own
+        // group header on all 50 rows. The chip now paints only under a search, where
+        // the class groups are what tell rows apart.
         const wiredChip = r.wired
           ? null
           : el('span', {
               class: 'pill usage-detected is-missing usage-pending-chip',
-              text: 'reader pending',
-              attrs: { title: 'This catalog row has no usage reader yet — enabling it polls nothing and no alert can fire. It lands when the endpoint is dev-verified.' }
+              text: 'not supported yet',
+              attrs: { title: 'This provider can’t be watched yet — enabling it would poll nothing and no alert could fire. Support lands in an update.' }
             })
         const head = el('div', { class: 'usage-prov-head' }, [
           enable.el,
           providerLogo(r.id, 15),
           el('span', { class: 'usage-prov-label', text: r.label }),
-          el('span', { class: `pill usage-class-chip is-${r.klass}`, text: r.klass }),
+          q ? el('span', { class: `pill usage-class-chip is-${r.klass}`, text: r.klass }) : null,
           wiredChip,
           r.wired && (r.klass === 'cli-store' || r.klass === 'cloud-cli')
             ? el('span', {
@@ -738,12 +745,16 @@ export function createUsageSection(): HTMLElement {
   // 'Usage sources', NOT 'Providers': the nav already has an Agent CLIs tab that
   // was called Providers too — one word, two doors. The id stays 'providers'
   // (disclosure keys + the UXMILESTONE hot-chip assert key off it).
-  const providersCard = card('providers', 'Usage sources', 'The full catalog, five classes — enable what you use; keys are set per row (they feed usage reads only — keys for MCP servers live in Integrations › Service keys).', el('div', {}, [search, grid]))
-  const plansCard = card('plans', 'Plans & profiles', 'Every lane the poller reads. The active lane launches new agents; switching flips pointers, never credentials.', plansTable)
-  const costCard = card('cost', 'Cost overview', "Today vs the window, the daily average, where the month is heading at this pace, and which model burns the money — scanned locally from your CLIs' own logs.", costHost)
-  const alertsCard = card('alerts', 'Thresholds & alerts', 'A quiet toast at the first threshold, a warning with the verdict at the second; once per window, re-armed at reset. In-app only — to ring n8n, Make, or Slack, add a webhook (Settings › Webhooks).', alertsHost)
-  const displayCard = card('display', 'Display', 'What the titlebar gauge mirrors, what the icon shows, how resets render, popover order and density.', displayHost)
-  const historyCard = card('history', 'History & cost', 'Sampled history per provider and the on-demand local cost scan. Compact by design — the popover stays the glance.', historyHost)
+  // F-28: a FOLDED card shows only its title + this caption — one task sentence each,
+  // in the user's words; the mechanics live inside the open card. F-29: "History &
+  // cost" gave two doors the word cost — History keeps its id (SETUSAGE keys off it)
+  // and loses the claim; Cost overview is the one home for money.
+  const providersCard = card('providers', 'Usage sources', 'Choose which providers to watch. Keys pasted here feed usage reads only — keys for MCP servers live in Integrations › Service keys.', el('div', {}, [search, grid]))
+  const plansCard = card('plans', 'Plans & profiles', 'Every plan being tracked, and which account new agents launch as.', plansTable)
+  const costCard = card('cost', 'Cost overview', 'What today cost, where the month is heading, and which model burns the money — read locally from your CLIs’ own logs.', costHost)
+  const alertsCard = card('alerts', 'Thresholds & alerts', 'Get warned before a plan runs out. In-app only — to ring n8n, Make, or Slack, add a webhook (Settings › Webhooks).', alertsHost)
+  const displayCard = card('display', 'Display', 'What the title-bar gauge and its popover show.', displayHost)
+  const historyCard = card('history', 'History', 'Sampled usage history per provider — compact by design; the popover stays the glance.', historyHost)
   const privacyCard = card('privacy', 'Privacy', 'Where credentials live and what never leaves the machine.', privacy)
 
   function computeAttention(): Node | null {

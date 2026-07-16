@@ -3628,7 +3628,9 @@ body.pane-dragging * {
    internal 1–6px values are geometry, not spacing — the ramp does not apply. */
 .theme-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  /* F-01: sized so all five tiles share one row at the settings column's width —
+     148px minimums broke 4+1, orphaning the fifth theme under the grid. */
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   gap: var(--sp-3);
 }
 .theme-tile {
@@ -6189,6 +6191,14 @@ body.pane-dragging * {
   gap: var(--sp-1);
 }
 /* The ephemeral terminal's bounded tail — read-only evidence, not a terminal. */
+/* F-15: config-file paths in row captions — legible to the expert who greps by eye,
+   quiet to everyone else. One line; the title carries the whole thing. */
+.prov-paths {
+  font-size: var(--fs-10);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .prov-log {
   margin: 0;
   padding: var(--sp-1) var(--sp-2);

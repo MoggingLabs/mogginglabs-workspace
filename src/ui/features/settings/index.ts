@@ -124,7 +124,7 @@ export const settingsFeature: UiFeature = {
     // motion down without reconfiguring the whole desktop.
     const calmMotionToggle = createToggleRow({
       label: 'Calm motion',
-      hint: 'Trade pulses and flourishes for gentle fades — attention still shows, it just stops waving. Your OS reduce-motion setting always does this automatically.',
+      hint: 'Replaces pulses with gentle fades — attention still shows. Your OS reduce-motion setting always does this automatically.',
       onChange: () => {
         setCalmMotion(calmMotionToggle.checked())
         getTelemetry().captureEvent({ name: 'appearance.calmMotion', props: { on: calmMotionToggle.checked() } })
@@ -300,7 +300,8 @@ export const settingsFeature: UiFeature = {
       {
         id: 'terminal',
         label: 'Terminal',
-        el: section('terminal', 'Terminal', 'Type, and what a new workspace starts with.', [
+        // F-03: "Type," read as "kind of terminal" — say what the two knobs actually are.
+        el: section('terminal', 'Terminal', 'Text size, and how many terminals a new workspace starts with.', [
           Card(
             {
               header: SectionHeader({
@@ -333,11 +334,14 @@ export const settingsFeature: UiFeature = {
         // Labeled 'Agent CLIs', not 'Providers' — Usage's source catalog owned
         // that word too, and one word must not name two doors. The id stays
         // 'providers' (data-target, smokes, shot sweeps all key off it).
-        el: section('providers', 'Agent CLIs', 'Install, inspect, and synchronize each provider from one control plane.', [providers])
+        // F-09: "control plane" was k8s idiom on a consumer surface.
+        el: section('providers', 'Agent CLIs', 'Install each CLI, open its settings, and keep the values you choose in sync.', [providers])
       },
       {
         id: 'profiles',
-        label: 'Profiles & Hosts',
+        // F-16: the rail label and the page title must match verbatim — it is how a
+        // user confirms they landed where they aimed.
+        label: 'Profiles & SSH hosts',
         el: section('profiles', 'Profiles & SSH hosts', 'Pointers to accounts and machines — never credentials.', [
           Card(
             {
@@ -401,10 +405,15 @@ export const settingsFeature: UiFeature = {
             [
               errorConsent.el,
               analyticsConsent.el,
-              // ADR 0005 wording is load-bearing: the layout changed, the clauses did not.
+              // ADR 0005 wording is load-bearing: the clauses are verbatim — F-37 only
+              // splits them into two breaths (the NEVER list, then the mechanics).
               el('p', {
                 class: 'settings-scope',
-                text: 'Telemetry NEVER includes terminal output, prompts, code, file paths, environment variables, or credentials. Changes apply immediately; DO_NOT_TRACK is always honored.'
+                text: 'Telemetry NEVER includes terminal output, prompts, code, file paths, environment variables, or credentials.'
+              }),
+              el('p', {
+                class: 'settings-scope',
+                text: 'Changes apply immediately; DO_NOT_TRACK is always honored.'
               })
             ]
           ),
@@ -457,7 +466,9 @@ export const settingsFeature: UiFeature = {
         el: section(
           'shortcuts',
           'Keyboard shortcuts',
-          'Press ? anywhere (outside a terminal or text field) to pull this up as an overlay.',
+          // F-43: say bindings are fixed — users arriving from VS Code hunt for a
+          // rebind affordance that does not exist.
+          'Press ? anywhere (outside a terminal or text field) to pull this up as an overlay. Shortcuts are fixed in this release.',
           [Card({}, [renderShortcutList()])]
         )
       },
