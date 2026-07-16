@@ -183,6 +183,11 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
         attnOk = a.cardFlag && a.chip && a.rail
         if (!attnOk) await sleep(500)
       }
+      // The sleeper served A4 — free the keyboard NOW (A6 types the approval at
+      // this pane's shell). ^C is a signal: it kills the foreground program and
+      // never clears a latched red (deduction 1), and A4's assert is already in.
+      await cli(['send-key', String(paneId), 'c-c'])
+      await sleep(800)
 
       // ── A5. Review: the change arrives, the secret does NOT ──────────────────
       const diff = (await ES(
