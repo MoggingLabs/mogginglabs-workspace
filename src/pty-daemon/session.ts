@@ -8,7 +8,7 @@
 import * as crypto from 'node:crypto'
 import { spawnPty, type IPty } from '@backend/platform/pty-host'
 import { paneShellLaunch } from '@backend/platform/shell'
-import { SCROLLBACK_BYTES, pickCwd, trimTornStart } from '@backend/features/terminal/pane-shared'
+import { SCROLLBACK_CHARS, pickCwd, trimTornStart } from '@backend/features/terminal/pane-shared'
 import { aiderLogPath } from '@backend/features/context'
 import type { Approval, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { PANE_CWD_MAX, normalizeRemoteConnection, notifyEventToState } from '@contracts'
@@ -674,7 +674,7 @@ class PaneSession {
     )
     this.proc.onData((d) => {
       const grown = this.buffer + d
-      this.buffer = grown.length > SCROLLBACK_BYTES ? trimTornStart(grown.slice(-SCROLLBACK_BYTES)) : grown
+      this.buffer = grown.length > SCROLLBACK_CHARS ? trimTornStart(grown.slice(-SCROLLBACK_CHARS)) : grown
       osc.push(d)
       this.gitContext?.drain()
       for (const s of this.subs) s.send(d)
@@ -909,6 +909,14 @@ export class SessionManager {
   private nextGen = 1
   private persistTimer?: NodeJS.Timeout
   private persistDueAt = 0
+  /** Panes whose persisted row is stale / gone — what the next persist writes/deletes.
+   *  Mutually exclusive by construction (markDirty/markRemoved maintain both). */
+  private readonly dirtyPanes = new Set<string>()
+  private readonly removedPanes = new Set<string>()
+  /** False until the first persist: the store's prior contents (a previous daemon's rows,
+   *  restore rows we skipped as corrupt) are not to be trusted, so that one save is FULL.
+   *  Every persist after it is the dirty-pane delta — see SessionStore.applyPaneChanges. */
+  private storeSynced = false
   /** Swarm substrate (Phase-4/01): the daemon-owned mailbox + role manifest. */
   readonly mailbox = new Mailbox()
   /** Ownership ledger (Phase-4/02): claims die with their pane. */
@@ -953,8 +961,30 @@ export class SessionManager {
     return [{ id: 'default', name: 'Workspace', layout: JSON.stringify(layout), updatedAt: Date.now() }]
   }
 
+  private markDirty(id: string): void {
+    this.dirtyPanes.add(id)
+    this.removedPanes.delete(id)
+  }
+
+  private markRemoved(id: string): void {
+    this.removedPanes.add(id)
+    this.dirtyPanes.delete(id)
+  }
+
   private persist(): void {
-    this.store.savePanes(this.snapshotAll())
+    if (!this.storeSynced) {
+      this.store.savePanes(this.snapshotAll())
+      this.storeSynced = true
+    } else if (this.dirtyPanes.size || this.removedPanes.size) {
+      const changed: PersistedPane[] = []
+      for (const id of this.dirtyPanes) {
+        const pane = this.panes.get(id)
+        if (pane) changed.push(pane.snapshot())
+      }
+      this.store.applyPaneChanges(changed, [...this.removedPanes])
+    }
+    this.dirtyPanes.clear()
+    this.removedPanes.clear()
     this.store.saveWorkspaces(this.workspaces())
   }
 
@@ -964,17 +994,25 @@ export class SessionManager {
         // Identity-guarded: a killed pane's exit event lands ASYNC (the pty dies after
         // remove() already deleted it), and by then a reused id may hold a brand-new
         // session. An unguarded delete orphaned that live session from the map — and
-        // wrongly cleared the NEW pane's role and claims.
+        // wrongly cleared the NEW pane's role and claims. The removed-mark is guarded
+        // for the same reason: an unguarded one would delete the REUSED id's fresh row.
         if (this.panes.get(id) === self()) {
           this.panes.delete(id)
+          this.markRemoved(id)
           this.mailbox.clearRole(id)
           this.ledger.clearPane(id) // exits release territory immediately (4/02)
           this.agentProcs.untrack(id) // no pty, no subtree to watch
         }
         this.schedulePersist(500)
       },
-      onChange: () => this.schedulePersist(2000),
-      onCwdChange: () => this.schedulePersist(100),
+      onChange: () => {
+        this.markDirty(id)
+        this.schedulePersist(2000)
+      },
+      onCwdChange: () => {
+        this.markDirty(id)
+        this.schedulePersist(100)
+      },
       onCommandSubmitted: () => this.agentProcs.commandSubmitted(id),
       onPrompt: (marker) => this.agentProcs.promptSeen(id, marker)
     }
@@ -1008,7 +1046,10 @@ export class SessionManager {
     }
     const existing = this.panes.get(id)
     if (existing?.matchesRemote(normalizedSpec.remote)) {
-      if (existing.updateRemoteDisplayName(normalizedSpec.remote)) this.schedulePersist(100)
+      if (existing.updateRemoteDisplayName(normalizedSpec.remote)) {
+        this.markDirty(id)
+        this.schedulePersist(100)
+      }
       return { pane: existing, existed: true }
     }
     // A legacy/corrupt restore may have lost SSH identity. The app's resolved remote spec is
@@ -1024,6 +1065,7 @@ export class SessionManager {
       this.extraEnv
     )
     this.panes.set(id, pane)
+    this.markDirty(id)
     // `spec.run` is typed by the SESSION itself, not through write(), so nothing would announce
     // it. Every launch the app performs is a normal write and announces itself; a fresh pane
     // without a run command starts empty, and is therefore never looked at.
@@ -1033,11 +1075,18 @@ export class SessionManager {
   }
 
   /** Cold-start restore: re-create persisted panes (fresh shell at cwd + seeded scrollback).
-   *  Only runs into an empty manager. Returns how many panes were restored. */
+   *  Only runs into an empty manager. Returns how many panes were restored.
+   *
+   *  PER-PANE fault isolation: constructing a PaneSession spawns a real process, and a
+   *  spawn can throw (the persisted shell/ssh binary is gone, a corrupt remote row).
+   *  Unguarded, ONE bad row aborted the whole loop and took the daemon down with it —
+   *  at boot, before anything served — and every later boot repeated it until
+   *  sessions.db was deleted by hand. One pane's loss must cost exactly one pane. */
   restore(): number {
     if (this.panes.size > 0) return 0
     this.store.loadWorkspaces() // load persisted workspaces (layout consumed by the app in 04/05)
     const persisted = this.store.loadPanes()
+    let restored = 0
     for (const p of persisted) {
       const hasReportedContext = p.reportedCwd !== undefined || p.reportedCwdAt !== undefined
       const reportedCwd =
@@ -1057,27 +1106,35 @@ export class SessionManager {
       // Relaunch a known agent via its own resume (step 4) — never a frozen process.
       // If a declared worktree vanished, do not resume the agent in the seed project.
       const resumeCommand = p.remote || (hasReportedContext && !reportedCwd) ? null : resumeCommandFor(p.command)
-      const pane: PaneSession = new PaneSession(
-        p.id,
-        this.nextGen++,
-        spec,
-        this.hooks(p.id, () => pane),
-        {
-          scrollback: p.scrollback,
-          resumeCommand,
-          requestedCwd: p.cwd,
-          reported:
-            !p.remote && reportedCwd && p.reportedCwdAt !== undefined
-              ? { cwd: reportedCwd, observedAt: p.reportedCwdAt }
-              : undefined
-        },
-        this.extraEnv
-      )
-      this.panes.set(p.id, pane)
-      // A resumed agent is the one that appears with nobody to announce it (see trackAgentProcs).
-      this.trackAgentProcs(pane, !!resumeCommand)
+      try {
+        const pane: PaneSession = new PaneSession(
+          p.id,
+          this.nextGen++,
+          spec,
+          this.hooks(p.id, () => pane),
+          {
+            scrollback: p.scrollback,
+            resumeCommand,
+            requestedCwd: p.cwd,
+            reported:
+              !p.remote && reportedCwd && p.reportedCwdAt !== undefined
+                ? { cwd: reportedCwd, observedAt: p.reportedCwdAt }
+                : undefined
+          },
+          this.extraEnv
+        )
+        this.panes.set(p.id, pane)
+        // A resumed agent is the one that appears with nobody to announce it (see trackAgentProcs).
+        this.trackAgentProcs(pane, !!resumeCommand)
+        restored++
+      } catch (e) {
+        // The row stays persisted (savePanes rewrites from LIVE panes, so a skipped one is
+        // dropped on the next persist — its scrollback was unreachable either way), and the
+        // log names which pane and why, instead of the old outcome: no daemon at all.
+        log(`restore skipped pane ${p.id}: ` + (e instanceof Error ? e.message : String(e)))
+      }
     }
-    return persisted.length
+    return restored
   }
 
   /** Coalesced background write (scrollback churns constantly). */
@@ -1108,6 +1165,7 @@ export class SessionManager {
     if (p) {
       p.kill()
       this.panes.delete(id)
+      this.markRemoved(id)
       this.mailbox.clearRole(id) // pane ids get reused — a role never outlives its pane
       this.ledger.clearPane(id)
       this.agentProcs.untrack(id) // ...nor does an agent verdict

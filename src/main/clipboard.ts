@@ -413,9 +413,10 @@ export function registerClipboard(): void {
     })
   )
 
-  // Prime from whatever is already on the clipboard WITHOUT recording it: the ring
-  // should start empty rather than open with a copy made before the app launched.
-  // BOTH channels — an image sitting on the clipboard at launch is also "before us".
+  // The watcher runs from boot but records nothing until the user enables history —
+  // `recording` starts false and poll() bails first thing. PRIMING (so the ring starts
+  // empty rather than opening with a copy made before consent) happens in historySet's
+  // enable branch above, which snapshots both channels' watermarks at that moment.
   timer = setInterval(poll, POLL_MS)
   timer.unref?.()
 

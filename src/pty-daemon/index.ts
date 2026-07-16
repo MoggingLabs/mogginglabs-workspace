@@ -25,15 +25,48 @@ import {
 // Shut down when there are no clients AND no panes for this long (no zombie daemons).
 const IDLE_SHUTDOWN_MS = Number(process.env.MOGGING_DAEMON_IDLE_MS ?? 30 * 60 * 1000)
 
+/**
+ * Open the session store, surviving a corrupt file. A sqlite open/migration throw used
+ * to abort main() — the daemon never came up, the app fell back to in-proc, and every
+ * later boot repeated it (the file does not heal). Losing restorable sessions is bad;
+ * losing the DAEMON — forever — over one bad file is strictly worse. The corrupt file
+ * is set aside (evidence, and a manual recovery path), and a fresh store carries on.
+ */
+function openSessionStore(dbPath: string): SessionStore {
+  try {
+    return new SessionStore(dbPath)
+  } catch (e) {
+    log('SESSION STORE OPEN FAILED ' + (e instanceof Error && e.stack ? e.stack : String(e)))
+    const aside = `${dbPath}.corrupt-${Date.now().toString(36)}`
+    try {
+      fs.renameSync(dbPath, aside)
+      log('set the corrupt store aside at ' + aside)
+    } catch {
+      /* locked or already gone — the fresh open below decides */
+    }
+    return new SessionStore(dbPath)
+  }
+}
+
 function main(): void {
   if (!acquireLock()) {
     log('another live daemon holds the lock; exiting')
     process.exit(0)
   }
 
+  // BEFORE the store opens and restore() spawns anything: the daemon outlives a main crash
+  // by design (ADR 0006), so it logs and keeps serving rather than exiting. Installed this
+  // early, a throw during store open / cold-start restore is a logged breadcrumb too —
+  // installed after them (as it used to be), that same throw crashed the daemon with
+  // nothing in daemon.log, and the app silently fell back to in-proc every boot.
+  // Both channels must reach daemon.log — an unlogged rejection is a pane that stops
+  // responding with nothing to point at.
+  process.on('uncaughtException', (e) => log('UNCAUGHT ' + (e && e.stack ? e.stack : e)))
+  process.on('unhandledRejection', (e) => log('UNHANDLED ' + (e instanceof Error && e.stack ? e.stack : String(e))))
+
   // Inject the endpoint FILE path (not the token) into every pane so `mogging notify` inside a
   // pane can find + auth to this daemon (Phase-2/04). The token stays in the 0600 endpoint file.
-  const sessions = new SessionManager(new SessionStore(path.join(runtimeDir(), 'sessions.db')), {
+  const sessions = new SessionManager(openSessionStore(path.join(runtimeDir(), 'sessions.db')), {
     MOGGING_DAEMON_ENDPOINT: endpointPath()
   })
   const restored = sessions.restore() // cold-start recovery: re-create persisted panes
@@ -87,11 +120,6 @@ function main(): void {
 
   process.on('SIGTERM', () => shutdown(0))
   process.on('SIGINT', () => shutdown(0))
-  // The daemon outlives a main crash by design (ADR 0006), so it logs and keeps serving its
-  // live panes rather than exiting. Both channels must reach daemon.log — an unlogged
-  // rejection is a pane that stops responding with nothing to point at.
-  process.on('uncaughtException', (e) => log('UNCAUGHT ' + (e && e.stack ? e.stack : e)))
-  process.on('unhandledRejection', (e) => log('UNHANDLED ' + (e instanceof Error && e.stack ? e.stack : String(e))))
 
   server.listen(address, () => {
     // Defense in depth. Unix: restrict the socket to the owner (the dir is already 0700).

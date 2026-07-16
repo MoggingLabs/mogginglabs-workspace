@@ -10,6 +10,17 @@ import type { PersistedWorkspace } from '../ipc/workspace.ipc'
 import type { PtyEmulation } from '../ipc/terminal.ipc'
 import type { ReviewSnapshot } from '../ipc/review.ipc'
 
+// v10: the swarm coordination verbs are pane-bound. `mail-send`, `claim` and `release`
+// gained an optional `token` — the sender's own MOGGING_PANE_TOKEN — and the daemon now
+// REFUSES a pane sender (from ≠ '0') that does not present it, exactly as `approve` and
+// `cwd-report` already did. Pane ids are public (`mogging list` prints them) and every
+// pane can read the 0600 endpoint file and authenticate, so `from` alone was a claim, not
+// a fact: one agent could mail the swarm AS the reviewer, or `release --all` a sibling's
+// territory. A v9 daemon would keep accepting those forged, unbound verbs until it retires,
+// so the bump forces the hand-off (daemon-migrate.ts) rather than pretending the check is
+// an additive add — a security boundary must not depend on which daemon happens to answer.
+export const DAEMON_PROTOCOL_VERSION = 10
+
 // v9: burned by v0.11.1 to DELIVER a daemon-side behaviour fix (the tracker's done-chime
 // grace — a finished turn's own bell no longer latches the pane red). The fix changed no
 // wire at all, and that is the point of recording it: a surviving v8 daemon would have kept
@@ -57,7 +68,6 @@ import type { ReviewSnapshot } from '../ipc/review.ipc'
 // (set-role, PaneInfo.role). v2: Phase-3/01 control API — send-key/capture + enriched
 // PaneInfo. The version namespaces the runtime dir + socket, so older daemons keep
 // running untouched (ADR 0006 anti-kill-server); the app + CLI speak their own version.
-export const DAEMON_PROTOCOL_VERSION = 9
 
 // ── Release channel (dev/prod isolation) ───────────────────────────────────────────────
 // A repo checkout and an installed release must be able to run SIDE BY SIDE with zero shared
@@ -250,16 +260,24 @@ export type ClientMessage =
   // Swarm mailbox (Phase-4/01). `from` is the sender's own pane binding (env
   // MOGGING_PANE_ID inside a pane; omitted = external/human -> '0'). The mailbox
   // never pushes into a PTY — readers PULL with mail-read.
-  | { t: 'mail-send'; body: string; to?: string; from?: string }
+  //
+  // `token` binds a PANE sender to the pane it names, the same proof `approve` demands:
+  // pane ids are public (`mogging list` prints them) and every pane can read the 0600
+  // endpoint file and authenticate, so `from` alone was a claim, not a fact — one agent
+  // could mail the swarm AS the reviewer, or release another agent's territory. A pane
+  // sender without its exact MOGGING_PANE_TOKEN is refused; the human sender ('0',
+  // outside any pane) has no token and stays open — the boundary is inter-AGENT trust.
+  | { t: 'mail-send'; body: string; to?: string; from?: string; token?: string }
   // Messages for `for` (its own id, or omitted = the human view: everything),
   // with id > since.
   | { t: 'mail-read'; since?: number; for?: string }
   // Swarm manifest: name a pane's role (validated against SWARM_ROLES).
   | { t: 'set-role'; id: string; role: string }
   // Ownership ledger (Phase-4/02). `from` = the claimant pane's own binding
-  // (MOGGING_PANE_ID). The ledger ADVISES — it never blocks PTY writes or file I/O.
-  | { t: 'claim'; pattern: string; from: string }
-  | { t: 'release'; pattern?: string; all?: boolean; from: string }
+  // (MOGGING_PANE_ID), proven by `token` (see mail-send). The ledger ADVISES — it
+  // never blocks PTY writes or file I/O.
+  | { t: 'claim'; pattern: string; from: string; token?: string }
+  | { t: 'release'; pattern?: string; all?: boolean; from: string; token?: string }
   | { t: 'owners' }
   // Reviewer gate (Phase-4/03). `from` names the approver's pane and the daemon checks
   // THAT pane's role — a payload can never claim a role. `token` is the pane's own

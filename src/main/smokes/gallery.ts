@@ -11,6 +11,7 @@ import { getSettingsStore } from '../app-settings'
 import { clearTrail, flushTrailForSmoke, recordTrail } from '../trail'
 import { setAgentConsent, setDrivingForSmoke } from '../browser-dock'
 import { approvalListed, sendApprovalFromPane } from './reviewer-smoke-helper'
+import { capturePaneTokenForSmoke } from './smoke-shell'
 
 // MOGGING_SHOT=all (Phase-5/01): the GALLERY — drive the app through every surface
 // and write numbered PNGs to out/gallery/, in BOTH themes. The audit + before/after
@@ -418,7 +419,16 @@ export function runGallery(win: BrowserWindow): void {
         )
         await sleep(4500) // spawns + git chips + roles reach the daemon
         const base = ((await ES('window.__mogging.workspace.active()')) as { ordinal: number }).ordinal * 100
-        await cli(['claim', 'src/ui/**'], { MOGGING_PANE_ID: String(base + 1) })
+        // claim is pane-bound (protocol v10): present pane 1's own daemon-minted token so the
+        // .pane-claims chip actually paints for the shot, as a command typed in the pane would.
+        const claimToken = await capturePaneTokenForSmoke({
+          write: async (command) => {
+            const sent = await cli(['send', String(base + 1), command])
+            if (sent.code !== 0) throw new Error(`could not probe pane ${base + 1}`)
+          },
+          sleep
+        })
+        await cli(['claim', 'src/ui/**'], { MOGGING_PANE_ID: String(base + 1), MOGGING_PANE_TOKEN: claimToken })
         // Pane 3 is the reviewer, and the sign-off is EXECUTED INSIDE it: `mogging approve` fails
         // closed without that pane's daemon-minted MOGGING_PANE_TOKEN, which exists nowhere but
         // its own env, and it signs the exact object graph (--repo/--base). Wait for the daemon

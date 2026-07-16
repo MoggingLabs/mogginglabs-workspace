@@ -15,7 +15,7 @@ import type {
 import { spawnPty, ptyEmulation, type IPty } from '../../platform/pty-host'
 import { defaultShell, paneShellLaunch } from '../../platform/shell'
 import { killPtyTree } from '../../platform/process-tree'
-import { SCROLLBACK_BYTES, pickCwd, trimTornStart } from './pane-shared'
+import { SCROLLBACK_CHARS, pickCwd, trimTornStart } from './pane-shared'
 import { getTelemetry } from '../../core/telemetry'
 import {
   ActivityTracker,
@@ -251,7 +251,7 @@ export class PtyService {
         const grown = (this.buffers.get(req.id) ?? '') + data
         this.buffers.set(
           req.id,
-          grown.length > SCROLLBACK_BYTES ? trimTornStart(grown.slice(-SCROLLBACK_BYTES)) : grown
+          grown.length > SCROLLBACK_CHARS ? trimTornStart(grown.slice(-SCROLLBACK_CHARS)) : grown
         )
         osc.push(data)
         this.gitContexts.get(req.id)?.drain()

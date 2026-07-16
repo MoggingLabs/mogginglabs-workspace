@@ -21,10 +21,9 @@
 // one sentence, rather than hanging or pretending the service is down. That is the
 // honest cost of the app owning the grant.
 import { connectEndpoint } from './lib/endpoint-client.mjs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { runFile } from './lib/runtime-paths.mjs'
 
-const PROTOCOL = 9 // keep in sync with DAEMON_PROTOCOL_VERSION (scripts/check-protocol-version.mjs)
+const PROTOCOL = 10 // keep in sync with DAEMON_PROTOCOL_VERSION (scripts/check-protocol-version.mjs)
 const CHANNEL = process.argv.includes('--dev') || process.env.MOGGING_CHANNEL === 'dev' ? 'dev' : 'prod'
 const RUN_SEGMENT = (CHANNEL === 'dev' ? 'dev-v' : 'v') + PROTOCOL
 
@@ -35,13 +34,8 @@ if (!CONNECTION || !/^[a-z0-9_-]{1,64}$/i.test(CONNECTION)) {
   process.exit(2)
 }
 
-function runtimeBase() {
-  return process.platform === 'win32'
-    ? process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
-    : process.env.XDG_RUNTIME_DIR || join(homedir(), 'Library', 'Application Support')
-}
 const endpointFile = () =>
-  process.env.MOGGING_BROWSER_ENDPOINT || join(runtimeBase(), 'MoggingLabs', 'run', RUN_SEGMENT, 'browser-control.json')
+  process.env.MOGGING_BROWSER_ENDPOINT || runFile(RUN_SEGMENT, 'browser-control.json')
 
 const write = (obj) => process.stdout.write(JSON.stringify(obj) + '\n')
 
