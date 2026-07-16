@@ -2,6 +2,7 @@ import { ipcMain, type BrowserWindow } from 'electron'
 import {
   detectAgents,
   buildLaunchCommand,
+  codexTitleArgs,
   InstallService,
   poolProviderSessions,
   probeLogin,
@@ -91,6 +92,11 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
     // user who pointed a profile at their own notify setup said so on purpose.
     const bell = bellLaunchExtras(req.agentId, { runtime: prepared.runtime, tui: prepared.tui })
     if (bell.reason) return { ok: false, reason: bell.reason }
+    // The title layer (backend/features/agents/title.ts): codex is the one CLI whose
+    // goal-carrying title needs launch args (gemini's share rides the bell's generated
+    // system settings; claude/opencode title themselves by default; aider offers nothing).
+    // BEFORE prepared.args, so a user's own provider-settings choice still wins.
+    const titleArgs = req.agentId === 'codex' ? codexTitleArgs() : []
     // Sessions follow profiles (ADR 0013). A profile is a separate config home — the
     // provider's own multi-account mechanism — but that makes every profile a private
     // session silo. So every LOCAL launch first unions this cwd's sessions from the
@@ -128,7 +134,7 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
       req.cwd,
       req.resume,
       { ...bell.env, ...profileEnv, ...prepared.env },
-      [...plan.args, ...ctxArgs, ...bell.args, ...prepared.args],
+      [...plan.args, ...ctxArgs, ...bell.args, ...titleArgs, ...prepared.args],
       'local',
       resumeSessionId
     )
