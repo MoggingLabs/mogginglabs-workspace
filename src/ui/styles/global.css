@@ -3907,14 +3907,9 @@ body.pane-dragging * {
 }
 .home-sections {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: var(--sp-6);
-  width: min(1180px, 92%); /* full-bleed view (5/05): the launcher owns the width */
-}
-@media (max-width: 900px) {
-  .home-sections {
-    grid-template-columns: 1fr;
-  }
+  width: min(760px, 92%); /* one focused section: the last-session card */
 }
 .home-section {
   display: flex;
@@ -3922,22 +3917,17 @@ body.pane-dragging * {
   gap: var(--sp-3); /* the division's content-side share (title side = label padding) */
   min-width: 0;
 }
-.home-list {
+/* The last-session restore card — ONE calm Card (8.5/06's grammar): head, a row per
+   workspace of the previous session, and a totals line. The whole card is the button. */
+.home-resume {
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
 }
-/* 8.5/06 — Recents as a Card grid (was a bare list whose --sp-1 seam read as a
-   rendering artifact between bordered rows — the audit's rhythm-inversion exhibit). */
-.home-recents-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+.home-resume-card {
+  display: flex;
+  flex-direction: column;
   gap: var(--sp-3);
-}
-.home-recent {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
   padding: var(--sp-4);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
@@ -3950,105 +3940,75 @@ body.pane-dragging * {
     border-color var(--dur-1) var(--ease),
     background var(--dur-1) var(--ease);
 }
-.home-recent:hover {
+.home-resume-card:hover {
   border-color: var(--accent);
   background: var(--bg-elevated);
 }
-.home-recent-head {
+.home-resume-card.is-busy {
+  opacity: 0.72;
+  cursor: progress;
+}
+.home-resume-head {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   min-width: 0;
 }
-.home-recent-icon {
-  display: inline-flex;
-  color: var(--text-mid);
-  flex: none;
-}
-.home-recent-name {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: var(--fs-13);
-  font-weight: var(--fw-medium);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.home-recent-when {
-  flex: none;
-  color: var(--text-lo);
-  font-size: var(--fs-11);
-}
-.home-recent-path {
-  color: var(--text-lo);
-  font-size: var(--fs-11);
-  font-family: var(--font-mono);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.home-recent-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-1);
-}
-.home-recent-chip {
-  padding: 2px var(--sp-2);
-  border-radius: var(--r-sm);
-  background: var(--bg-inset);
-  color: var(--text-mid);
-  font-size: var(--fs-11);
-}
-.home-item {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  padding: var(--sp-2) var(--sp-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--bg-surface);
-  color: var(--text-hi);
-  cursor: pointer;
-  text-align: left;
-  min-width: 0;
-  transition:
-    border-color var(--dur-1) var(--ease),
-    background var(--dur-1) var(--ease);
-}
-.home-item:hover {
-  border-color: var(--accent);
-  background: var(--bg-elevated);
-}
-.home-item-icon {
+.home-resume-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 28px;
   height: 28px;
   border-radius: var(--r-sm);
-  background: var(--bg-inset);
-  color: var(--text-mid);
-  flex: none;
-}
-.home-item-icon--accent {
   color: var(--accent-ink);
   background: var(--accent-weak);
+  flex: none;
 }
-.home-item-body {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
+.home-resume-title {
   flex: 1 1 auto;
-}
-.home-item-name {
+  min-width: 0;
   font-size: var(--fs-13);
   font-weight: var(--fw-medium);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.home-item-sub {
+.home-resume-when {
+  flex: none;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+}
+.home-resume-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.home-resume-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.home-resume-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dot, var(--text-lo));
+  flex: none;
+}
+.home-resume-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-resume-path {
+  flex: 1 1 auto;
+  min-width: 0;
   color: var(--text-lo);
   font-size: var(--fs-11);
   font-family: var(--font-mono);
@@ -4056,20 +4016,51 @@ body.pane-dragging * {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.home-item-meta {
-  color: var(--text-lo);
-  font-size: var(--fs-11);
-  white-space: nowrap;
+.home-resume-chips {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
   flex: none;
 }
-.home-item-go {
+.home-resume-chip {
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-mid);
+  font-size: var(--fs-11);
+}
+.home-resume-chip--agents {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.home-resume-more {
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  /* Aligns under the row names: past the 8px dot (its width, not a rhythm token)
+     plus the row gap. */
+  padding-left: calc(var(--sp-2) + var(--sp-2));
+}
+.home-resume-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+}
+.home-resume-totals {
+  color: var(--text-mid);
+  font-size: var(--fs-13);
+}
+.home-resume-go {
   display: inline-flex;
   color: var(--text-lo);
   opacity: 0;
   transition: opacity var(--dur-1) var(--ease);
   flex: none;
 }
-.home-item:hover .home-item-go {
+.home-resume-card:hover .home-resume-go {
   opacity: 1;
   color: var(--accent-ink);
 }
@@ -5581,21 +5572,6 @@ body.pane-dragging * {
   align-items: center;
   justify-content: center;
 }
-/* Home preset mix line: "2× ✳ · 1× ❋" — count beside each provider's mark. */
-.home-item-mix {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-1);
-}
-.home-item-mix-part {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-.home-item-mix-sep {
-  color: var(--text-lo);
-}
-
 /* Layout picker tiles. */
 .layout-picker {
   display: flex;

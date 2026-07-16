@@ -22,6 +22,7 @@ import { setTheme, currentThemeId, onThemeChange } from '../../core/theme/theme-
 import { isModKey } from '../../core/commands/shortcuts'
 import { requiresGrid, shortcutsBlocked } from '../../core/commands/context'
 import { setWorkspaceOpener } from '../../core/workspace/open-service'
+import { setSessionRestorer } from '../../core/workspace/restore-port'
 import {
   publishWorkspaces,
   setWorkspaceSwitcher
@@ -35,7 +36,7 @@ import { setPaneState } from '../../core/attention/attention-port'
 import { setPaneRole } from '../../core/layout/pane-meta'
 import { getPaneCwdProjection, onPaneCwdProjection } from '../../core/layout/pane-cwd'
 
-const MAX_RECENTS = 5 // Home shows the five most recent projects worked on
+const MAX_RECENTS = 5 // the wizard's Recent section shows the five most recent projects
 
 function debounce(fn: () => void | Promise<void>, ms: number): () => void {
   let t: ReturnType<typeof setTimeout> | undefined
@@ -49,7 +50,8 @@ function debounce(fn: () => void | Promise<void>, ms: number): () => void {
  * The workspace feature: the left vertical RAIL — one item per workspace with a live
  * numeric attention count ("who needs me, and how badly") — plus per-workspace grids,
  * a layout picker in the titlebar, keyboard switching, and restore-on-relaunch
- * (including recently-closed workspaces for Home). Decoupled from `terminal`/`home`/
+ * (plus the whole-session restorer behind Home's card, and recently-closed projects
+ * for the wizard). Decoupled from `terminal`/`home`/
  * `wizard`: panes arrive via the slots port, views via the view port, opens via the
  * wizard/open-service ports.
  */
@@ -406,8 +408,10 @@ export const workspaceFeature: UiFeature = {
       })
     }
 
-    /** Touch a project in Home's recents: newest first, deduped by folder, capped at 5.
-     *  Metadata only (folder + layout + provider lineup) — never credentials (ADR 0002). */
+    /** Touch a project in the wizard's recents: newest first, deduped by folder, capped
+     *  at 5. Metadata only (folder + layout + provider lineup) — never credentials
+     *  (ADR 0002). Home stopped reading these (its card is the last-SESSION restore,
+     *  session-restore.ts); the wizard's one-click folder prefill still does. */
     const touchRecent = (meta: {
       name: string
       cwd: string
@@ -483,6 +487,45 @@ export const workspaceFeature: UiFeature = {
     setWorkspaceOpener((spec) => {
       const meta = controller.openFromTemplate(spec)
       return { id: meta.id, ordinal: meta.ordinal }
+    })
+    // Home's "Restore last working session" card: rebuild every workspace of the
+    // previous session — the same create args and lineup relaunch the boot restore()
+    // below performs, minus the theme/persistence bookkeeping that belongs to boot.
+    // Ids are REUSED on purpose (board cards and pane-id formulas keep pointing at the
+    // right thing); a workspace id already open is skipped, never duplicated.
+    setSessionRestorer((info) => {
+      const open = new Set(controller.list().map((m) => m.id))
+      const fresh = info.workspaces.filter((w) => !open.has(w.id))
+      const colors = resolveColors(fresh.map((w) => w.color))
+      fresh.forEach((w, i) => {
+        controller.create({
+          id: w.id,
+          name: w.name,
+          cwd: w.cwd,
+          color: colors[i],
+          ordinal: w.ordinal,
+          paneCount: w.paneCount,
+          activate: false,
+          assignments: w.assignments,
+          paneCwds: w.paneCwds,
+          roles: w.roles,
+          remotes: w.remotes,
+          profileIds: w.profileIds,
+          paneIds: w.paneIds,
+          layout: w.layout
+        })
+      })
+      // Relaunch each lineup with resume — the launch path resolves each pane's exact
+      // session id from the intents workspace:restoreSession armed main-side.
+      for (const w of fresh) {
+        if (w.assignments) controller.launchLineup(w.id, true)
+      }
+      const target =
+        info.activeId && controller.list().some((m) => m.id === info.activeId)
+          ? info.activeId
+          : controller.list()[0]?.id
+      if (target) controller.switch(target) // reveal: the grid owns the app
+      return { restored: fresh.length }
     })
 
     function newWorkspace(): void {

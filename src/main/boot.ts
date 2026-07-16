@@ -15,6 +15,7 @@ import { registerAgentSettings, disposeAgentSettings } from './agent-settings'
 import { registerBrowserDock } from './browser-dock'
 import { startMcpEndpoint, stopMcpEndpoint } from './mcp-endpoint'
 import { registerTemplates } from './templates'
+import { registerSessionRestore } from './session-restore'
 import { registerAttention } from './attention'
 import { registerGit } from './git'
 import { registerContext } from './context'
@@ -320,6 +321,7 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       registerAgents(() => win) // agent launcher: detect/install CLIs + build launch commands (Phase-1/06; Agent CLIs tab)
       registerAgentGlobalHooks() // global agent alert wiring: the hand-typed-launch gap, all four CLIs (explicit apply/remove only)
       registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
+      registerSessionRestore() // last-working-session snapshot: Home's restore card + exact-session resume intents
       registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
       disposeGit = registerGit(liveWebContents) // read-only per-pane git branch + dirty (Phase-2/03)
       disposeContext = registerContext(liveWebContents) // per-pane agent context bar: tails the CLIs' own session logs (counts only)

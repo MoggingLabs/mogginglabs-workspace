@@ -46,7 +46,7 @@ export function start(): void {
 
   const shell = createAppShell(root)
   registerFeature(workspaceFeature) // owns the rail + per-workspace grids; provides slots
-  registerFeature(homeFeature) // launcher view: hero + recents + presets (net-new)
+  registerFeature(homeFeature) // launcher view: hero + the last-session restore card
   registerFeature(terminalFeature)
   registerFeature(agentsFeature) // agent detection + launch commands (wizard/palette/pane menu)
   registerFeature(wizardFeature) // new-workspace wizard: Start · Layout · Agents (06b contracts)

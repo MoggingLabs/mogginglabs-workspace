@@ -45,7 +45,9 @@ export const WorkspaceChannels = {
   exportState: 'workspace:exportState', // explicit save dialog for current metadata when persistence is paused
   openCwd: 'workspace:openCwd', // main -> renderer: open/focus a workspace for a directory
   attention: 'workspace:attention', // renderer -> main: any workspace needs attention (dock/taskbar badge)
-  browseDir: 'workspace:browseDir' // -> native directory picker; resolves to a path or null
+  browseDir: 'workspace:browseDir', // -> native directory picker; resolves to a path or null
+  lastSession: 'workspace:lastSession', // -> LastSessionInfo | null (Home's restore card; session-log paths never leave main)
+  restoreSession: 'workspace:restoreSession' // -> LastSessionInfo | null — same payload, and ARMS main-side exact-session resume intents
 } as const
 
 export const RuntimeHealthChannels = {

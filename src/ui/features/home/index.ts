@@ -1,20 +1,10 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import {
-  TemplateChannels,
-  WorkspaceChannels,
-  type ProviderMixTemplate,
-  type RecentWorkspace,
-  type WorkspaceState
-} from '@contracts'
+import { WorkspaceChannels, type LastSessionInfo } from '@contracts'
 import { Button, EmptyState, clear, el, icon, loadingRow, providerLogo } from '../../components'
 import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
 import { onViewChange } from '../../core/shell/view-port'
-import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
-import {
-  getWorkspaces,
-  requestWorkspaceSwitch
-} from '../../core/workspace/workspace-info-port'
+import { restoreSession } from '../../core/workspace/restore-port'
 import { openWizard } from '../../core/workspace/wizard-port'
 import { runCommand } from '../../core/commands/command-port'
 import { getTelemetry } from '../../core/telemetry'
@@ -23,14 +13,14 @@ import { createFirstRun } from './firstrun'
 const basename = (p: string): string => p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? ''
 
 /** A short, privacy-safe path: the last two segments only. The full cwd rides the
- *  button's `title` for hover — never telemetry (home.recent_reopened sends a count). */
+ *  row's `title` for hover — never telemetry (home.session_restored sends counts). */
 const shortPath = (cwd: string): string => {
   if (!cwd) return 'no folder'
   const parts = cwd.split(/[/\\]/).filter(Boolean)
   return parts.length <= 2 ? cwd : '…/' + parts.slice(-2).join('/')
 }
 
-/** Relative last-open, compact — from RecentWorkspace.lastUsedAt (epoch ms). */
+/** Relative last-worked, compact — from LastSessionInfo.savedAt (epoch ms). */
 const relTime = (ms: number): string => {
   const d = Date.now() - ms
   if (!ms || d < 60_000) return 'just now'
@@ -69,11 +59,18 @@ function greeting(name = ''): string {
   return name ? `${base}, ${name}.` : `${base}.`
 }
 
+/** How many workspaces the card lists before folding the rest into "+N more". */
+const MAX_RESUME_ROWS = 4
+
 /**
- * Home / launcher: brand hero + primary actions + one-click recents + presets + a
- * keyboard-hint bar. First-run shows a designed empty state; returning users get
- * their recent workspaces back in one click. We are ONE focused organizer — no fake
- * product tiles here (deliberate divergence from the competitor's launcher).
+ * Home / launcher: brand hero + primary actions + the LAST-SESSION restore card + a
+ * keyboard-hint bar. First-run shows a designed empty state; a returning user gets
+ * their whole previous session back in one click — every workspace, every terminal,
+ * every agent relaunched with resume (exact session ids where the CLI takes one; see
+ * src/main/session-restore.ts). Recents and presets both live in the wizard (Ctrl+T),
+ * where they prefill a NEW workspace — Home answers the other question: "put me back
+ * where I was". We are ONE focused organizer — no fake product tiles here (deliberate
+ * divergence from the competitor's launcher).
  */
 export const homeFeature: UiFeature = {
   name: 'home',
@@ -106,16 +103,11 @@ export const homeFeature: UiFeature = {
       ])
     ])
 
-    const recentsList = el('div', { class: 'home-recents-grid' })
-    const presetsList = el('div', { class: 'home-list' })
+    const resumeHost = el('div', { class: 'home-resume' })
     const sections = el('div', { class: 'home-sections' }, [
       el('section', { class: 'home-section' }, [
-        el('h2', { class: 'section-label', text: 'Recent projects' }),
-        recentsList
-      ]),
-      el('section', { class: 'home-section' }, [
-        el('h2', { class: 'section-label', text: 'Presets' }),
-        presetsList
+        el('h2', { class: 'section-label', text: 'Last session' }),
+        resumeHost
       ])
     ])
 
@@ -136,14 +128,42 @@ export const homeFeature: UiFeature = {
     const firstrun = createFirstRun()
     view.append(hero, firstrun.el, sections, hints)
 
-    function renderRecents(recents: RecentWorkspace[]): void {
-      clear(recentsList)
-      if (!recents.length) {
-        recentsList.append(
+    let restoring = false
+
+    /** One workspace of the previous session, as one calm row of the card. */
+    function resumeRow(w: LastSessionInfo['workspaces'][number]): HTMLElement {
+      const agents = (w.assignments ?? []).filter((a) => a && a !== 'shell')
+      return el('div', { class: 'home-resume-row', attrs: { title: w.cwd } }, [
+        el('span', { class: 'home-resume-dot', attrs: { style: `--dot:${w.color}` } }),
+        el('span', { class: 'home-resume-name', text: w.name || basename(w.cwd) || 'Workspace' }),
+        el('span', { class: 'home-resume-path', text: shortPath(w.cwd) }),
+        el('span', { class: 'home-resume-chips' }, [
+          el('span', { class: 'home-resume-chip', text: `${w.paneCount} ${w.paneCount === 1 ? 'pane' : 'panes'}` }),
+          // The agent chip wears each provider's mark — "2× ✳" beats prose.
+          agents.length
+            ? el(
+                'span',
+                { class: 'home-resume-chip home-resume-chip--agents' },
+                [
+                  el('span', { text: `${agents.length}×` }),
+                  ...[...new Set(agents)]
+                    .slice(0, 3)
+                    .map((a) => (a.startsWith('custom:') ? icon('terminal', 12) : providerLogo(a, 12)))
+                ]
+              )
+            : null
+        ])
+      ])
+    }
+
+    function renderResume(info: LastSessionInfo | null): void {
+      clear(resumeHost)
+      if (!info || !info.workspaces.length) {
+        resumeHost.append(
           EmptyState({
-            icon: 'clock',
-            title: 'No recent projects yet',
-            body: 'The five most recent projects you work on show up here — folder, layout and agent lineup included, one click to reopen.',
+            icon: 'history',
+            title: 'No previous session yet',
+            body: 'Your workspaces are saved as you work. Close them and the whole session — layouts, terminals, agents — waits here to come back in one click.',
             action: Button({
               label: 'New workspace',
               icon: 'plus',
@@ -157,107 +177,52 @@ export const homeFeature: UiFeature = {
         )
         return
       }
-      for (const r of recents) {
-        const agentCount = (r.assignments ?? []).filter((a) => a && a !== 'shell').length
-        recentsList.append(
-          el(
-            'button',
-            {
-              class: 'home-recent',
-              type: 'button',
-              title: r.cwd, // full path for hover only — never telemetry
-              onClick: () => {
-                getTelemetry().captureEvent({ name: 'home.recent_reopened', props: { panes: r.paneCount } })
-                // Already open for this folder? Switch instead of duplicating.
-                const openWs = getWorkspaces().workspaces.find((w) => w.cwd && w.cwd === r.cwd)
-                if (openWs) {
-                  requestWorkspaceSwitch(openWs.id)
-                  return
-                }
-                openWorkspaceFromTemplate({
-                  name: r.name || basename(r.cwd) || 'Workspace',
-                  cwd: r.cwd,
-                  paneCount: r.paneCount,
-                  assignments: r.assignments ?? Array.from({ length: r.paneCount }, () => 'shell')
-                })
-              }
-            },
-            [
-              el('div', { class: 'home-recent-head' }, [
-                el('span', { class: 'home-recent-icon' }, [icon('folder', 14)]),
-                el('span', { class: 'home-recent-name', text: r.name || basename(r.cwd) }),
-                el('span', { class: 'home-recent-when', text: relTime(r.lastUsedAt) })
-              ]),
-              el('span', { class: 'home-recent-path', text: shortPath(r.cwd) }),
-              el('div', { class: 'home-recent-chips' }, [
-                el('span', { class: 'home-recent-chip', text: `${r.paneCount} ${r.paneCount === 1 ? 'pane' : 'panes'}` }),
-                agentCount ? el('span', { class: 'home-recent-chip', text: `${agentCount} ${agentCount === 1 ? 'agent' : 'agents'}` }) : null
-              ])
-            ]
-          )
-        )
+      const paneTotal = info.workspaces.reduce((s, w) => s + w.paneCount, 0)
+      const agentTotal = info.workspaces.reduce(
+        (s, w) => s + (w.assignments ?? []).filter((a) => a && a !== 'shell').length,
+        0
+      )
+      const wsCount = info.workspaces.length
+      const rows = info.workspaces.slice(0, MAX_RESUME_ROWS).map(resumeRow)
+      if (wsCount > MAX_RESUME_ROWS) {
+        rows.push(el('div', { class: 'home-resume-more', text: `+${wsCount - MAX_RESUME_ROWS} more` }))
       }
-    }
-
-    function renderPresets(presets: ProviderMixTemplate[]): void {
-      clear(presetsList)
-      if (!presets.length) {
-        presetsList.append(
-          EmptyState({
-            icon: 'layout-grid',
-            title: 'No presets yet',
-            body: 'Save an agent mix in the workspace wizard and open it from here in one click.'
-          })
-        )
-        return
-      }
-      for (const p of presets) {
-        const total = p.mix.reduce((s, m) => s + m.count, 0)
-        presetsList.append(
-          el(
-            'button',
-            {
-              class: 'home-item',
-              type: 'button',
-              onClick: () => {
-                getTelemetry().captureEvent({ name: 'home.preset_opened' })
-                openWizard({ mix: p.mix })
-              }
-            },
-            [
-              el('span', { class: 'home-item-icon home-item-icon--accent' }, [
-                icon('sparkles', 14)
-              ]),
-              el('div', { class: 'home-item-body' }, [
-                el('span', { class: 'home-item-name', text: p.name }),
-                // The mix line wears each provider's mark: "2× ✳ · 1× ❋" beats prose.
-                el(
-                  'span',
-                  { class: 'home-item-sub home-item-mix' },
-                  p.mix.flatMap((m, i) => [
-                    i > 0 ? el('span', { class: 'home-item-mix-sep', text: '·' }) : null,
-                    el('span', { class: 'home-item-mix-part' }, [
-                      el('span', { text: `${m.count}×` }),
-                      m.provider === 'shell' ? icon('terminal', 12) : providerLogo(m.provider, 12)
-                    ])
-                  ])
-                )
-              ]),
-              el('span', { class: 'home-item-meta', text: `${total} agents` }),
-              el('span', { class: 'home-item-go' }, [icon('arrow-right', 14)])
-            ]
-          )
-        )
-      }
+      const card = el(
+        'button',
+        {
+          class: 'home-resume-card',
+          type: 'button',
+          onClick: () => void restore()
+        },
+        [
+          el('div', { class: 'home-resume-head' }, [
+            el('span', { class: 'home-resume-icon' }, [icon('history', 14)]),
+            el('span', { class: 'home-resume-title', text: 'Restore last working session' }),
+            el('span', { class: 'home-resume-when', text: relTime(info.savedAt) })
+          ]),
+          el('div', { class: 'home-resume-list' }, rows),
+          el('div', { class: 'home-resume-meta' }, [
+            el('span', {
+              class: 'home-resume-totals',
+              text:
+                `${wsCount} ${wsCount === 1 ? 'workspace' : 'workspaces'} · ` +
+                `${paneTotal} ${paneTotal === 1 ? 'terminal' : 'terminals'}` +
+                (agentTotal ? ` · ${agentTotal} ${agentTotal === 1 ? 'agent' : 'agents'}` : ''),
+            }),
+            el('span', { class: 'home-resume-go' }, [icon('arrow-right', 14)])
+          ])
+        ]
+      )
+      resumeHost.append(card)
     }
 
     /** An error state IS an EmptyState — alert icon, the guard's human sentence, a retry. It is
-     *  emphatically NOT the calm copy above: "no recent projects yet" and "we could not ask" are
+     *  emphatically NOT the calm copy above: "no previous session yet" and "we could not ask" are
      *  different facts, and rendering the first when the second is true is the audit's worst lie
      *  (finding 39) precisely because nothing looks wrong. */
-    function renderLoadError(host: HTMLElement, title: string, message: string): void {
-      clear(host)
-      host.append(
+    function renderLoadError(title: string, message: string): void {
+      clear(resumeHost)
+      resumeHost.append(
         EmptyState({
           icon: 'alert',
           title,
@@ -267,30 +232,59 @@ export const homeFeature: UiFeature = {
       )
     }
 
-    // One guard per call, both held here for the feature's lifetime: a fresh guard per call would
-    // have no memory of the previous one, and the memory IS the generation guard.
-    const recentsGuard = createAsyncGuard<WorkspaceState | null>()
-    const presetsGuard = createAsyncGuard<ProviderMixTemplate[]>()
+    /** Rebuild the previous session: arm main-side resume intents, then hand the
+     *  manifest to the workspace feature (restore-port). The grid reveals itself —
+     *  view-port's invariant — so Home needs no navigation of its own. */
+    async function restore(): Promise<void> {
+      if (restoring) return
+      restoring = true
+      const card = resumeHost.querySelector('.home-resume-card')
+      card?.classList.add('is-busy')
+      card?.setAttribute('disabled', '')
+      try {
+        const info = (await getBridge().invoke(WorkspaceChannels.restoreSession)) as LastSessionInfo | null
+        if (!info || !info.workspaces.length) {
+          // The snapshot vanished between render and click — show the honest empty.
+          renderResume(null)
+          return
+        }
+        const outcome = restoreSession(info)
+        if (!outcome) throw new Error('The workspace feature is not ready to restore yet.')
+        getTelemetry().captureEvent({
+          name: 'home.session_restored',
+          props: {
+            workspaces: info.workspaces.length,
+            panes: info.workspaces.reduce((s, w) => s + w.paneCount, 0)
+          }
+        })
+      } catch (error) {
+        const message =
+          error instanceof Error && error.message.trim()
+            ? error.message
+            : 'The session could not be restored.'
+        renderLoadError('The session couldn’t be restored', message)
+      } finally {
+        restoring = false
+      }
+    }
+
+    // One guard held for the feature's lifetime: a fresh guard per call would have no
+    // memory of the previous one, and the memory IS the generation guard.
+    const resumeGuard = createAsyncGuard<LastSessionInfo | null>()
 
     async function refresh(): Promise<void> {
-      // Both settled before this resolves — HOMEUX awaits __mogging.home.refresh() then reads DOM.
-      await Promise.all([
-        recentsGuard.run(() => getBridge().invoke(WorkspaceChannels.loadState) as Promise<WorkspaceState | null>, {
-          action: 'load your recent projects',
-          onLoading: () => recentsList.replaceChildren(loadingRow('Loading recent projects…')),
-          onSuccess: (state) => renderRecents(state?.recents ?? []),
-          onError: (message) => renderLoadError(recentsList, 'Recent projects didn’t load', message),
+      // Settled before this resolves — HOMEUX awaits __mogging.home.refresh() then reads DOM.
+      await resumeGuard.run(
+        () => getBridge().invoke(WorkspaceChannels.lastSession) as Promise<LastSessionInfo | null>,
+        {
+          action: 'load your last session',
+          onLoading: () => resumeHost.replaceChildren(loadingRow('Loading your last session…')),
+          onSuccess: (info) => renderResume(info),
+          onError: (message) => renderLoadError('Last session didn’t load', message),
           // A store that never answers must not leave a spinner on the launcher forever.
           timeoutMs: 15_000
-        }),
-        presetsGuard.run(() => getBridge().invoke(TemplateChannels.list) as Promise<ProviderMixTemplate[]>, {
-          action: 'load your presets',
-          onLoading: () => presetsList.replaceChildren(loadingRow('Loading presets…')),
-          onSuccess: (presets) => renderPresets(presets ?? []),
-          onError: (message) => renderLoadError(presetsList, 'Presets didn’t load', message),
-          timeoutMs: 15_000
-        })
-      ])
+        }
+      )
     }
 
     // Refresh whenever Home becomes the active view (event-driven, no polling).
@@ -313,7 +307,7 @@ export const homeFeature: UiFeature = {
         // machine that is missing a CLI, and this one is missing none.
         forceMissing: (agentIds: string[]) => firstrun.forceMissing(agentIds)
       }
-      w.__mogging.home = { refresh: () => refresh() } // recents/presets re-read (HOMEUX seeds a recent)
+      w.__mogging.home = { refresh: () => refresh() } // last-session re-read (HOMEUX seeds a snapshot)
     }
   }
 }

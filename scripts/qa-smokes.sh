@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 155 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 156 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
-# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 133 app-boot
+# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 134 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -424,6 +424,7 @@ run_smoke SETSHELL     MOGGING_SETSHELL  1 240 setshell
 run_smoke SETAGENTCFG  MOGGING_SETAGENTCFG 1 240 setagentcfg
 run_smoke SETUSAGE     MOGGING_SETUSAGE  1 240 setusage
 run_smoke HOMEUX       MOGGING_HOMEUX    1 240 homeux
+run_smoke RESUME       MOGGING_RESUME    1 240 resume
 run_smoke BOARDUX      MOGGING_BOARDUX   1 240 boardux
 run_smoke FEEDBACKUX   MOGGING_FEEDBACKUX 1 240 feedbackux
 run_smoke CHROMEUX     MOGGING_CHROMEUX  1 300 chromeux
