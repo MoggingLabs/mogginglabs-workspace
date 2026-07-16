@@ -59,6 +59,8 @@ import { runCtxAccuracySmoke } from './smokes/ctxaccuracy-smoke'
 import { runTemplateSmoke } from './smokes/template-smoke'
 import { runProfpersistSmoke } from './smokes/profpersist-smoke'
 import { runBrowserSmoke } from './smokes/browser-smoke'
+import { runBrowserUxSmoke } from './smokes/browserux-smoke'
+import { runBrowserTabsSmoke } from './smokes/browsertabs-smoke'
 import { runBrowserCtlSmoke } from './smokes/browserctl-smoke'
 import { runBrowserRaceSmoke } from './smokes/browserrace-smoke'
 import { runFirstRunSmoke } from './smokes/firstrun-smoke'
@@ -160,7 +162,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_SURVIVE', 'MOGGING_MIGRATE', 'MOGGING_NOTIFYHOOK', 'MOGGING_DAEMONCUSTODY', 'MOGGING_STAMPWAR', 'MOGGING_HEARTBEAT', 'MOGGING_DAEMONHEAL', 'MOGGING_SESSIONPOOL', 'MOGGING_INTEG', 'MOGGING_TOOLPLAN',
   'MOGGING_EVBRIDGE', 'MOGGING_MCPSTATUS', 'MOGGING_MCPLOOP', 'MOGGING_AGENT', 'MOGGING_STATE', 'MOGGING_RELOAD',
   'MOGGING_SMOKE', 'MOGGING_SHOT', 'MOGGING_MULTIPANE', 'MOGGING_WORKSPACE', 'MOGGING_AGENTLAUNCH',
-  'MOGGING_TEMPLATE', 'MOGGING_PROFPERSIST', 'MOGGING_BROWSER', 'MOGGING_BROWSERCTL', 'MOGGING_BROWSERRACE', 'MOGGING_BROWSERZERO', 'MOGGING_FIRSTRUN',
+  'MOGGING_TEMPLATE', 'MOGGING_PROFPERSIST', 'MOGGING_BROWSER', 'MOGGING_BROWSERCTL', 'MOGGING_BROWSERUX', 'MOGGING_BROWSERTABS', 'MOGGING_BROWSERRACE', 'MOGGING_BROWSERZERO', 'MOGGING_FIRSTRUN',
   'MOGGING_PRODUCT', 'MOGGING_USAGEGLANCE', 'MOGGING_USAGEUI', 'MOGGING_WEBUSAGE', 'MOGGING_USAGECLI',
   'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
   'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_KBSHORTCUTS', 'MOGGING_KBGLOBAL', 'MOGGING_VERDICTLIVE', 'MOGGING_WEBTRAIL',
@@ -350,6 +352,10 @@ function afterWindow(win: BrowserWindow): void {
     runBrowserSmoke(win) // env-gated browser-dock smoke (6/05)
   } else if (process.env.MOGGING_BROWSERCTL) {
     runBrowserCtlSmoke(win) // env-gated agent-browser-control smoke (6/05b)
+  } else if (process.env.MOGGING_BROWSERUX) {
+    runBrowserUxSmoke(win) // env-gated browser-chrome smoke (Wave 3: omnibox/find/zoom/error/context/relay)
+  } else if (process.env.MOGGING_BROWSERTABS) {
+    runBrowserTabsSmoke(win) // env-gated tabs smoke (Wave 7 / F4: strip, new/close/switch, _blank, agent verbs)
   } else if (process.env.MOGGING_BROWSERRACE) {
     runBrowserRaceSmoke(win) // audit regression: delayed A completions never repaint/mutate B
   } else if (process.env.MOGGING_FIRSTRUN) {

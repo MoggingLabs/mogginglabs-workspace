@@ -249,6 +249,23 @@
   }
 }
 
+/* Native widgetry follows the theme (S2/F-27): color-scheme flips the UA's own
+   chrome — select dropdown POPUPS, spin buttons, checkbox glyphs — which no CSS
+   class can reach. Keyed off data-theme-mode exactly like the token stamp above;
+   the media query covers the pre-JS paint. Custom scrollbars are unaffected (both
+   scrollbar systems are explicitly styled). */
+:root {
+  color-scheme: dark;
+}
+:root[data-theme-mode='light'] {
+  color-scheme: light;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme-mode]) {
+    color-scheme: light;
+  }
+}
+
 /* ── 3 · RESET & BASE ──────────────────────────────────────────────────────── */
 * {
   box-sizing: border-box;
@@ -271,8 +288,15 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-button {
-  font-family: inherit;
+/* Form controls do not inherit type: every native <select>/<input> left bare fell
+   back to the OS UI face — proportional Segoe islands inside a monospace app (S2).
+   Element-level, so any class rule still wins; this only fills the gaps. */
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
 }
 
 :focus-visible {
@@ -540,6 +564,12 @@ button {
   font-size: 10px;
   line-height: 1.6;
 }
+/* F-42: a gesture in the shortcuts sheet — quiet italic words, never a key-cap. */
+.kbd-gesture {
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  font-style: italic;
+}
 
 /* Provider marks (components/provider-logo). The SVG is a 1em box — the
    wrapper's font-size IS the size, set inline by providerLogo(id, px). */
@@ -588,9 +618,21 @@ button {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
   background: var(--accent-weak);
 }
-/* REMOVE #9 (8.5/07b): `.pill--success` / `.pill--danger` were unused. `.pill--accent`
-   is KEPT — folder-browser's "repo" pill (tone 'accent') is a live caller, so the audit's
-   "one call site" was stale. */
+/* `.pill--success` / `.pill--danger` return (they were removed as unused in 8.5/07b;
+   the F-36 status lexicon made them live again — webhook health, provider availability).
+   Danger wears --danger-ink on a 6% wash: the retired .evbridge-health.is-failing
+   carried that AA lesson (the fill red measures 3.59–4.11:1 on light/nord/solarized
+   as words; the pale wash clears 4.5 on every theme in both directions). */
+.pill--success {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+.pill--danger {
+  color: var(--danger-ink);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
+}
 .pill--warning {
   color: var(--warning);
   border-color: color-mix(in srgb, var(--warning) 40%, var(--border));
@@ -807,6 +849,13 @@ button {
   transition:
     border-color var(--dur-1) var(--ease),
     box-shadow var(--dur-1) var(--ease);
+}
+/* Compact grade for controls living INSIDE dense rows (usage cadence, thresholds,
+   balance floors) — same anatomy, row-height sized, so a grid row keeps one height. */
+.input.input-sm {
+  height: 28px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-12);
 }
 .input::placeholder {
   color: var(--text-lo);
@@ -2880,10 +2929,18 @@ button {
   padding: var(--sp-1) calc(var(--sp-4) + var(--sp-1)) var(--sp-1) 6px; /* right lane: the slide bar + its float gap */
 }
 
-/* Expanded pane (full / full-height / full-width): covered siblings hide entirely
-   (and release WebGL via the managed leasing); gutters pause while expanded. */
+/* Expanded pane (full / full-height / full-width): covered siblings hide — but with
+   `visibility`, NOT `display:none`. The distinction is load-bearing (the restore-flicker
+   root cause): each pane's IntersectionObserver watches its slot, and `display:none`
+   zeroes the box, which reads exactly like a hidden workspace — so siblings covered for
+   >1.5s released their WebGL contexts, and restoring the grid re-acquired them one per
+   frame: a per-pane DOM→WebGL rasterizer swap the user saw as every terminal flickering.
+   `visibility:hidden` keeps the box (IO is geometry-only, so the leases stay warm — the
+   FLICKER gate's dwell phase pins this) while still not painting, not hit-testing and
+   not focusing. The context budget is untouched: expand doesn't change pane count, and
+   hidden WORKSPACES still release via `.workspace-view { display:none }` above. */
 .layout-slot.covered {
-  display: none;
+  visibility: hidden;
 }
 .layout-grid.has-expand > .layout-gutter {
   display: none;
@@ -3385,6 +3442,53 @@ body.pane-dragging * {
   gap: var(--sp-1);
   align-items: stretch;
 }
+/* ── S5 · settings search: the rail's first control ── */
+.settings-search {
+  margin-bottom: var(--sp-2);
+  width: 100%;
+}
+.settings-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--sp-2);
+}
+.settings-search-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  text-align: left;
+  padding: var(--sp-1) var(--sp-2);
+  border: none;
+  background: transparent;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.settings-search-hit:hover {
+  background: var(--bg-elevated);
+}
+.settings-search-hit-title {
+  font-size: var(--fs-12);
+  color: var(--text-hi);
+}
+.settings-search-hit-tab {
+  font-size: var(--fs-10);
+  color: var(--text-lo);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.settings-search-none {
+  font-size: var(--fs-11);
+  color: var(--text-lo);
+  padding: var(--sp-1) var(--sp-2);
+}
+/* The landing flash after a search jump — an outline, not motion, so it needs no
+   reduced-motion carve-out. */
+.search-hit-flash {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--r-sm);
+}
 .settings-back {
   align-self: flex-start;
   margin-bottom: var(--sp-3);
@@ -3536,6 +3640,13 @@ body.pane-dragging * {
   font-size: var(--fs-11);
   line-height: 1.55;
 }
+/* F-44: chrome that exists to carry text vanishes with its text — an emptied status
+   paragraph used to keep its inset background and read as a stuck progress bar. */
+.settings-scope:empty,
+.card-caption:empty,
+.settings-row-caption:empty {
+  display: none;
+}
 .settings-row {
   display: flex;
   flex-direction: column;
@@ -3554,6 +3665,10 @@ body.pane-dragging * {
   color: var(--text-lo);
   font-size: var(--fs-11);
   max-width: var(--measure);
+  /* F-07 guard: a caption can carry a path or config value — it may wrap
+     anywhere, but it may never widen the page. */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .settings-consents {
   display: flex;
@@ -3586,7 +3701,9 @@ body.pane-dragging * {
    internal 1–6px values are geometry, not spacing — the ramp does not apply. */
 .theme-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  /* F-01: sized so all five tiles share one row at the settings column's width
+     (INSIDE the card's padding — 132px still broke 4+1 at the default window). */
+  grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
   gap: var(--sp-3);
 }
 .theme-tile {
@@ -5606,6 +5723,31 @@ body.pane-dragging * {
   flex-direction: column;
   gap: var(--sp-2);
 }
+/* F-26: the catalog's expert corner — registry search + preset import, one labeled
+   sub-section instead of two orphan strips after the grid. */
+.cat-registry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+/* F-23: the picker that fronts the walk — a scrollable checklist of the catalog. */
+.integux-flow-pick {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-1) var(--sp-3);
+  max-height: 300px;
+  overflow-y: auto;
+  padding: var(--sp-1);
+}
+.integux-flow-progress {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: var(--fs-10);
+}
 .integux-privacy .settings-note {
   align-items: flex-start;
 }
@@ -5665,33 +5807,41 @@ body.pane-dragging * {
   color: var(--text-mid);
   font-family: var(--font-mono);
 }
-.evbridge-health {
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  padding: 1px var(--sp-2);
-  border-radius: var(--r-full);
-  flex: none;
+/* The webhook form, on the house kit (F-34): labeled FieldGroups in a two-up grid,
+   events as sentences with the wire id chipped beside them, actions right-aligned. */
+.wh-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding-top: var(--sp-2);
 }
-.evbridge-health.is-ok {
-  color: var(--success);
-  background: color-mix(in srgb, var(--success) 12%, transparent);
+.wh-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3) var(--sp-4);
 }
-.evbridge-health.is-failing {
-  /* --danger-ink, not --danger: danger-as-words on a tinted chip — the fill red
-     measures 3.59-4.11:1 on light/nord/solarized (UXMILESTONE (e) caught it).
-     Tint at 6%, not the 12% is-ok wears: light's ink on a 12% red wash still
-     measured 4.37:1; at 6% the wash pales and every theme clears 4.5 with room
-     (a lighter wash raises contrast in BOTH directions — dark inks on light,
-     light inks on dark). */
-  color: var(--danger-ink);
-  background: color-mix(in srgb, var(--danger) 6%, transparent);
+@media (max-width: 860px) {
+  .wh-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
-.evbridge-health.is-off {
+.wh-form-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.wh-ev-id {
+  font-size: var(--fs-10);
   color: var(--text-lo);
   background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  padding: 0 var(--sp-1);
 }
+.wh-payload {
+  max-width: var(--measure);
+}
+/* (.evbridge-health retired with F-36 — webhook health is a house Pill now.) */
 
 /* Wizard Tools row (8/09): scope a new workspace's agents to picked servers. */
 .wizard-tools {
@@ -6497,6 +6647,19 @@ body.pane-dragging * {
   gap: var(--sp-1);
 }
 /* The ephemeral terminal's bounded tail — read-only evidence, not a terminal. */
+/* F-11: a drill-in replaces context — while a CLI's config workspace is open, the
+   tab hero yields to the workspace's own breadcrumb + identity header. */
+.settings-section.is-drilled > .settings-hero {
+  display: none;
+}
+/* F-15: config-file paths in row captions — legible to the expert who greps by eye,
+   quiet to everyone else. One line; the title carries the whole thing. */
+.prov-paths {
+  font-size: var(--fs-10);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .prov-log {
   margin: 0;
   padding: var(--sp-1) var(--sp-2);
@@ -6852,6 +7015,20 @@ body.pane-dragging * {
   width: auto;
   min-width: 124px;
 }
+/* F-13: the ownership select's visible label — what it decides is drift behavior. */
+.agentcfg-ownership-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+}
+/* F-33: buttons that live at a card body's tail (Rescan, the dev-only test toast)
+   size to their label instead of stretching into input-shaped bars. */
+.usage-cost-cfg > .btn,
+.usage-alert-cfg > .btn {
+  align-self: flex-start;
+}
 .agentcfg-readonly {
   display: flex;
   align-items: flex-start;
@@ -6983,6 +7160,78 @@ body.pane-dragging * {
 .browser-dock-handle:hover {
   background: color-mix(in srgb, var(--accent) 25%, transparent);
 }
+/* ── Tab strip (F4): above the address bar, Chrome/Comet-style ──────────────── */
+.browser-tab-strip {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: var(--sp-1) var(--sp-2) 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.browser-tab-strip[hidden] {
+  display: none;
+}
+.browser-tab-strip::-webkit-scrollbar {
+  display: none;
+}
+.browser-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 22ch;
+  height: 28px;
+  padding: 0 var(--sp-2);
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  background: transparent;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  cursor: pointer;
+}
+.browser-tab:hover {
+  background: var(--bg-elevated);
+  color: var(--text-mid);
+}
+.browser-tab.is-active {
+  background: var(--bg-surface);
+  border-color: var(--border);
+  color: var(--text-hi);
+}
+.browser-tab svg,
+.browser-tab-favicon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+.browser-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-tab-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--r-sm);
+  color: var(--text-lo);
+  font-size: var(--fs-13);
+  line-height: 1;
+}
+.browser-tab-close:hover {
+  background: var(--danger);
+  color: var(--accent-contrast);
+}
+.browser-tab-new {
+  flex: none;
+}
+
 .browser-dock-header {
   position: relative; /* anchors the division hairline */
   display: flex;
@@ -7000,20 +7249,54 @@ body.pane-dragging * {
   height: 1px;
   background: color-mix(in srgb, var(--border) 55%, transparent);
 }
-.browser-url {
+/* The address bar: a box wrapping a leading indicator (favicon / lock / not-secure)
+   and the input, so the whole thing reads as one Comet-style omnibox. */
+.browser-url-wrap {
   flex: 1 1 auto;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
   height: 28px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--bg-inset);
+  padding: 0 var(--sp-2);
+}
+.browser-url-wrap:focus-within {
+  border-color: var(--accent);
+}
+.browser-url-lead {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--text-lo);
+}
+.browser-url-lead.is-secure {
+  color: var(--text-mid);
+}
+.browser-url-lead.is-insecure {
+  color: var(--warning);
+}
+.browser-favicon {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  object-fit: contain;
+}
+.browser-url {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
   color: var(--text-hi);
   font-size: var(--fs-12);
-  padding: 0 var(--sp-2);
+  padding: 0;
   outline: none;
-}
-.browser-url:focus {
-  border-color: var(--accent);
 }
 .browser-url::placeholder {
   color: var(--text-lo);
@@ -7107,17 +7390,152 @@ body.pane-dragging * {
   font-size: var(--fs-11);
   max-width: 32ch;
 }
+/* Pinned + recent chips (F14): the empty preview as a dev-loop new-tab page. */
+.browser-quick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  justify-content: center;
+  max-width: 42ch;
+  margin-top: var(--sp-2);
+}
+.browser-quick-chips:empty {
+  display: none;
+}
+.browser-quick-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  max-width: 20ch;
+  min-height: 24px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-elevated);
+  color: var(--text-mid);
+  font-size: var(--fs-11);
+  cursor: pointer;
+  overflow: hidden;
+}
+.browser-quick-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-quick-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+/* ── Load-error / crash overlay (F10): a dead page explains itself ─────────── */
+.browser-load-error {
+  position: absolute;
+  inset: 0;
+  z-index: 4; /* over the guest, like the empty state */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  background: var(--bg-app);
+  color: var(--text-lo);
+  text-align: center;
+}
+.browser-load-error[hidden] {
+  display: none;
+}
+.browser-load-error svg {
+  color: var(--warning);
+}
+.browser-error-title {
+  color: var(--text-hi);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+}
+.browser-error-desc {
+  font-size: var(--fs-11);
+  max-width: 36ch;
+}
+.browser-error-retry {
+  margin-top: var(--sp-1);
+  min-height: 28px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-elevated);
+  color: var(--text-hi);
+  font-size: var(--fs-11);
+  cursor: pointer;
+}
+.browser-error-retry:hover {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+/* ── Find in page (F5) ─────────────────────────────────────────────────────── */
+.browser-find-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+.browser-find-bar[hidden] {
+  display: none;
+}
+.browser-find-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-hi);
+  font-size: var(--fs-12);
+  padding: 0 var(--sp-2);
+  outline: none;
+}
+.browser-find-input:focus {
+  border-color: var(--accent);
+}
+.browser-find-count {
+  flex: none;
+  min-width: 5ch;
+  text-align: right;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+}
+/* ── Zoom badge (F6): the transient % while you adjust ──────────────────────── */
+.browser-zoom-badge {
+  position: absolute;
+  top: var(--sp-2);
+  right: var(--sp-2);
+  z-index: 5;
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-hi);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 24%);
+}
+.browser-zoom-badge[hidden] {
+  display: none;
+}
 /* Zero workspaces (finding 33): the globe is in the titlebar of EVERY view, so the dock
    opens over the home screen — where a browser has nowhere to live (guest, cookie jar,
    last url and consent are all keyed by workspace). Its controls are `disabled` for real
    now; this is what that has to LOOK like, because .browser-url paints its own background
    and colour and would otherwise render a dead field as a live one. Close is never
    disabled and never dims — you must always be able to shut a dock. */
-.browser-dock.is-no-workspace .browser-url,
+.browser-dock.is-no-workspace .browser-url-wrap,
 .browser-dock.is-no-workspace .browser-profile-switch,
 .browser-dock.is-no-workspace .browser-dock-header .icon-btn:disabled {
   opacity: 0.5;
 }
+.browser-dock.is-no-workspace .browser-url-wrap,
 .browser-dock.is-no-workspace .browser-url {
   cursor: not-allowed;
 }
@@ -7130,40 +7548,103 @@ body.pane-dragging * {
   color: var(--text-hi);
 }
 
-/* ── Agent possession (Phase-6/05b): the wheel is visibly held ─────────────
-   When an agent drives the dock, the whole dock wears a brand outline and a
-   banner with an instant Stop — possession is never invisible. */
+/* ── Agent possession (Phase-6/05b; Comet look, Wave 5): the wheel is visibly held ──
+   When an agent drives the dock, the whole dock wears an animated brand GLOW and a
+   pill naming WHO is driving + WHAT it is doing right now, with an instant Stop —
+   possession is never invisible, and now it is never anonymous either. */
 .browser-dock.agent-driving {
-  /* One step thicker, in step with the focused pane's ring. The negative offset keeps the
-     outline INSIDE the dock's box — a positive one would paint over the grid beside it. */
-  outline: 3px solid var(--accent);
-  outline-offset: -3px;
+  /* A steady base ring so reduced-motion still reads the state (the glow below is the
+     animated layer the blanket clamp becalms to a single pass). */
+  outline: 2px solid color-mix(in srgb, var(--accent) 75%, transparent);
+  outline-offset: -2px;
+}
+/* The pulsing inner glow — Comet's "assistant is working" shimmer, clean-room. */
+.browser-dock.agent-driving::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+  box-shadow:
+    inset 0 0 0 2px var(--accent),
+    inset 0 0 18px color-mix(in srgb, var(--accent) 38%, transparent);
+  animation: browser-agent-glow 2.4s ease-in-out infinite;
+}
+@keyframes browser-agent-glow {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 .browser-agent-banner {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: var(--sp-1) var(--sp-2);
-  background: var(--accent-weak);
-  color: var(--accent-ink);
-  font-size: var(--fs-11);
+  padding: var(--sp-2);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 18%, transparent),
+    color-mix(in srgb, var(--accent) 7%, transparent)
+  );
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  color: var(--text-hi);
+  font-size: var(--fs-12);
 }
 .browser-agent-banner[hidden] {
   display: none;
 }
-.browser-agent-banner svg {
+/* The animated "working" dot — an expanding accent halo (Comet's live indicator). */
+.browser-agent-dot {
   flex: none;
-  color: var(--accent-ink);
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: browser-agent-pulse 1.6s ease-out infinite;
 }
-/* The possession message — an agent holds the wheel. A rule of its OWN (AUDIT
-   § Blockers #1: it had none, inheriting the banner's --fs-11): semibold, a step up from
-   the banner chrome, and --text-hi so it clears AA on every theme. accent-ink fell to
-   4.35:1 on nord over the accent wash — the guard caught it. */
-.browser-agent-label {
+@keyframes browser-agent-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+/* WHO + WHAT: the driving agent's name (semibold, --text-hi for AA on every theme),
+   a muted connective, and the live present-tense action in accent ink. */
+.browser-agent-label-group {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  min-width: 0;
+  overflow: hidden;
+}
+.browser-agent-name {
   flex: none;
   font-size: var(--fs-12);
   font-weight: var(--fw-semibold);
   color: var(--text-hi);
+  white-space: nowrap;
+}
+.browser-agent-sep {
+  flex: none;
+  font-size: var(--fs-11);
+  color: var(--text-mid);
+  white-space: nowrap;
+}
+.browser-agent-action {
+  min-width: 0;
+  font-size: var(--fs-11);
+  color: var(--accent-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .browser-agent-spacer {
   flex: 1 1 auto;
@@ -7341,6 +7822,16 @@ body.pane-dragging * {
 .browser-origin-alert[hidden] {
   display: none;
 }
+/* Blocked-permission chip (F16): honest, transient — the deny stands, we just say so. */
+.browser-perm-chip {
+  padding: var(--sp-1) var(--sp-2);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  color: var(--text-hi);
+  font-size: var(--fs-11);
+}
+.browser-perm-chip[hidden] {
+  display: none;
+}
 .browser-sites-menu {
   position: absolute;
   top: 64px;
@@ -7374,16 +7865,21 @@ body.pane-dragging * {
   color: var(--text-lo);
   font-size: var(--fs-11);
 }
+/* S1 aliases of the compact house button — see .trail-btn's note. */
 .browser-sites-forget,
 .browser-sites-add,
 .browser-sites-clear {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  background: transparent;
-  color: var(--text-mid);
-  font-size: var(--fs-11);
-  padding: 1px var(--sp-2);
+  background: var(--bg-elevated);
+  color: var(--text-hi);
+  font-size: var(--fs-12);
+  cursor: pointer;
+  padding: 0 var(--sp-2);
   cursor: pointer;
 }
 .browser-sites-forget:hover,
@@ -7404,15 +7900,16 @@ body.pane-dragging * {
   gap: var(--sp-2);
   padding: var(--sp-1) var(--sp-2);
 }
+/* S1 alias of .input.input-sm — same anatomy, kept as a selector surface. */
 .browser-sites-input {
   flex: 1 1 auto;
   min-width: 0;
-  height: 24px;
+  height: 28px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--bg-inset);
   color: var(--text-hi);
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   padding: 0 var(--sp-2);
   outline: none;
 }
@@ -7474,17 +7971,28 @@ body.pane-dragging * {
 }
 /* Preview · Connect · Import · Apply · Remove · Adopt · Forget · Save · Clear trail ·
    Authorize all render as this. It was 20.5px tall. */
+/* S1: `.trail-btn` is a visual ALIAS of the house `.btn` now — same anatomy, same
+   metrics — kept as a class only because the integrations dense rows carry it as a
+   selector surface. New code takes Button(); this alias retires with those rows. */
 .trail-btn {
   display: inline-flex;
   align-items: center;
-  min-height: 28px;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: 30px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  background: transparent;
-  color: var(--text-mid);
-  font-size: var(--fs-11);
-  padding: var(--sp-1) var(--sp-3);
+  background: var(--bg-elevated);
+  color: var(--text-hi);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  padding: 0 var(--sp-3);
+  white-space: nowrap;
   cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
 }
 .trail-btn:hover {
   border-color: var(--accent);
@@ -7499,18 +8007,15 @@ body.pane-dragging * {
   border-color: var(--danger);
   color: var(--danger);
 }
-/* `.is-armed` was styled ONLY under `.trail-clear`. The two buttons that carry it
-   without that class — "Write tools: ALL (agents can send/mail/claim/update here)"
-   and "Inherit global tools" — therefore had NO visual on-state: the sole signal that
-   agents may write in this workspace was the word ALL inside the label. A permission
-   whose enabled state looks exactly like its disabled state is not a control.
+/* `.is-armed` marks a form's one primary (the key/client Connect, Add client ID…) —
+   the write-tools and inherit buttons that once wore it became real switches (F-25).
    `:not(.trail-clear)` because armed-Clear is DANGER and armed-grant is WARNING — and
    without it this rule, being later and equally specific, would repaint armed-Clear. */
 .trail-btn.is-armed:not(.trail-clear) {
-  border-color: color-mix(in srgb, var(--warning) 60%, transparent);
-  background: color-mix(in srgb, var(--warning) 12%, transparent);
-  color: var(--text-hi);
-  font-weight: var(--fw-medium);
+  /* Mirrors .btn--primary — a form's single primary verb. */
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast);
 }
 .trail-list {
   display: flex;
@@ -7766,8 +8271,12 @@ body.pane-dragging * {
   background: color-mix(in srgb, var(--info) 14%, transparent);
   color: var(--info);
 }
-.cat-mini {
-  font-size: var(--fs-11);
+/* Compact grade — mirrors .btn--sm (24px), the size profile rows already use. */
+.cat-mini,
+.conn-mini {
+  min-height: 24px;
+  font-size: var(--fs-12);
+  padding: 0 var(--sp-2);
 }
 .cat-cli-label {
   display: inline-flex;
@@ -7801,10 +8310,23 @@ body.pane-dragging * {
    A card here is an account, not a config row. State is PROVEN — every value on
    it was answered by the server (initialize + tools/list), never inferred from
    the presence of a config block. */
+/* F-20: the grid became [group label · card grid]+ — the outer box stacks, the
+   inner grids keep the two-up card flow. */
 .conn-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.conn-group-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: var(--sp-2);
+}
+.conn-group-label {
+  margin-top: var(--sp-2);
+}
+.conn-search {
+  max-width: 320px;
 }
 .conn-card {
   display: flex;
@@ -9162,6 +9684,43 @@ body.pane-dragging * {
 }
 .usage-thr {
   width: 60px;
+}
+/* F-31: two labeled threshold fields side-by-side, validation directly below. */
+.usage-thr-grid {
+  display: flex;
+  gap: var(--sp-5);
+  flex-wrap: wrap;
+}
+/* Balance floors align as a table: logo · name · input · unit. */
+.usage-floor-row {
+  display: grid;
+  grid-template-columns: 16px minmax(90px, max-content) 84px auto;
+  align-items: center;
+  gap: var(--sp-2);
+}
+/* F-32: the manual popover order — chips with move/remove verbs. */
+.usage-pinorder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.usage-pin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 2px var(--sp-1) 2px var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  font-size: var(--fs-11);
+}
+.usage-pin-chip .icon-btn {
+  width: 18px;
+  height: 18px;
+}
+.usage-pin-add {
+  width: auto;
 }
 /* 7/09 reset confetti — OPT-IN, one notch above silence: a ~1s fleck fall
    anchored to the toast corner, no layout, no takeover. */

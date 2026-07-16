@@ -1258,7 +1258,13 @@ export class TerminalPane {
     this.scrollbar = createPaneScrollbar(this.term, body, this.anchor)
 
     // Title precedence: what the agent says it's doing (OSC 0/2 window title) → the
-    // launched agent's label → "Terminal N".
+    // launched agent's label → "Terminal N". Every supported CLI feeds this channel
+    // with its OWN self-description (backend/features/agents/title.ts is the map:
+    // claude topic titles + opencode session titles by default, codex thread-title +
+    // gemini thought subject via launch-injected config; aider offers nothing and
+    // keeps the label). The title is the CLI's words, minus its DECORATION — the
+    // header already carries the provider logo, the state dot, and the cwd/branch
+    // chips, so marks that repeat those are stripped and the goal words keep the row.
     const fallback = `Terminal ${displayPaneNumber(this.id)}`
     let oscTitle = ''
     const applyTitle = (): void => {
@@ -1274,13 +1280,54 @@ export class TerminalPane {
     const applyLabel = (_text: string): void => applyTitle()
     applyTitle()
     this.term.onTitleChange((t) => {
-      // Strip a LEADING decorative spark: Claude Code titles itself "✳ Claude Code"
-      // (and "✶/✻ <task>" while working), but the header already shows the provider
-      // logo chip right before the title — glyph + logo read as two marks (the
-      // "too many logos" report). The words stay; only the duplicate mark goes.
-      oscTitle = (t ?? '').trim().replace(/^[✳✶✻✽✢·∗*]+\s*/u, '')
+      // Leading decorative marks go: Claude Code's spark ("✳ Claude Code", "✶/✻ <task>"
+      // while working — the original "too many logos" report), gemini's status icons
+      // (◇ Ready / ✦ Working / ✋ Action Required / ⏲, dynamicWindowTitle's vocabulary)
+      // and any braille spinner frames — all state the dot next door already shows.
+      // The words stay; only the duplicate marks go. (Escapes, not literals, for the
+      // invisible members: braille U+2800–28FF and the emoji variation selector.)
+      let text = (t ?? '').trim().replace(/^(?:[✳✶✻✽✢·∗*✋◇✦⏲\u2800-\u28FF\s]|\uFE0F)+/u, '')
+      // OpenCode brands its title "OC | <its session title>" — the provider chip
+      // already says WHO, so the brand yields the row to the session's goal words.
+      text = text.replace(/^OC \| /, '')
+      // A UUID is never a human goal: codex renders an unnamed thread's `thread-title`
+      // item as the thread's raw id (live-verified on 0.144.1, which never auto-names).
+      // Excise the token wherever it sits and tidy the separators codex joins items
+      // with, so "✦ · <uuid> · Tasks 1/2" reads "Tasks 1/2" — and a title that was
+      // ONLY a UUID falls back to the label.
+      text = text
+        .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '')
+        .replace(/\s*[·|–—-]\s*(?=[·|–—-])/g, '')
+        .replace(/^\s*[·|–—-]\s*|\s*[·|–—-]\s*$/g, '')
+      // Gemini suffixes " (<folder>)" — the launch cwd's basename, which the header's
+      // own cwd/branch chips already carry. Stripped ONLY when the parenthetical IS
+      // this pane's cwd basename (whole, or gemini-truncated with a trailing "…"), so
+      // an agent whose goal genuinely ends in a parenthetical keeps its words.
+      const base = (getPaneCwd(this.id) ?? '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? ''
+      const paren = /^(.*) \(([^()]*)\)$/.exec(text)
+      if (base && paren && (paren[2] === base || (paren[2].endsWith('…') && base.startsWith(paren[2].slice(0, -1))))) {
+        text = paren[1]
+      }
+      oscTitle = text.trim()
       applyTitle()
     })
+    // An agent's goal must not outlive the agent: when this pane's session ends
+    // (process truth from typed-launch detection, or the OSC-133 exit guess above),
+    // the title falls back to the pane's identity label instead of wearing the last
+    // task of a process that is gone. A shell that then titles itself (ConPTY reports
+    // shell titles) is a fresh fact and takes the row again.
+    let titledSession = !!getPaneAgentSession(this.id)
+    this.disposers.push(onPaneAgentSession((paneId, s) => {
+      if (paneId !== this.id) return
+      if (s) {
+        titledSession = true
+        return
+      }
+      if (!titledSession) return
+      titledSession = false
+      oscTitle = ''
+      applyTitle()
+    }))
 
     // Rename (double-click or menu): a body-portaled dialog, so a compact pane never
     // has to fit an editor inside the title track it deliberately retired.

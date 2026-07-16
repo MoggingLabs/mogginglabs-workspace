@@ -94,7 +94,9 @@ type DropZone =
  * subtrees touching that seam, never a whole row/column of the workspace.
  *
  * Also owns: per-pane EXPAND modes (full workspace / full height / full width —
- * covered siblings hide and release WebGL via the managed leasing), per-pane CLOSE
+ * covered siblings hide via `visibility`, KEEPING their WebGL leases: expand does not
+ * change pane count, so the context budget is unchanged, and releasing them was the
+ * restore-flicker root cause), per-pane CLOSE
  * (the line absorbs the space), SPLIT (add a terminal — the receiving line
  * re-equalizes), and drag-to-rearrange (drop on a pane's edge to restructure, on its
  * center to swap, on a workspace edge for a full column/row).
@@ -598,8 +600,11 @@ export class GridLayout {
   }
 
   /** Zoom/expand a pane — 'full' = the whole workspace, 'col' = full height (own
-   *  width), 'row' = full width (own height). Covered siblings hide (and release
-   *  WebGL via the managed leasing); toggling the same mode restores the grid. */
+   *  width), 'row' = full width (own height). Covered siblings hide via `visibility:
+   *  hidden` (global.css) and KEEP their WebGL contexts — their boxes never change, so
+   *  no IntersectionObserver fires, no refit runs, and restoring the grid is pure
+   *  paint. Only hidden WORKSPACES release contexts (the budget path). Toggling the
+   *  same mode restores the grid. */
   toggleExpand(paneId?: number, mode: ExpandMode = 'full'): void {
     const target = paneId ?? this.focusedPaneId() ?? undefined
     if (target == null) return

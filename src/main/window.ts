@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 
@@ -61,6 +61,45 @@ export function createMainWindow(opts: { largerThanScreen?: boolean } = {}): Bro
       // renderer (its own partition/sandbox) — the page never enters the
       // trusted renderer's context (ADR 0002 / docs/13 posture preserved).
       webviewTag: true
+    }
+  })
+
+  // Trusted-renderer lockdown (defense in depth): the app shell never opens windows or
+  // navigates away from its own bundle — it carries the privileged preload, so a foothold
+  // (an accidental `location=` or an injected `window.open`) must not be able to spawn a
+  // preload-bearing window or point the shell at a remote origin. Deny window.open (http(s)
+  // links go to the system browser, like the dock's "open external"); block any main-frame
+  // navigation off the app's own document. The dock's guests are separate webContents with
+  // their own handlers — this does not touch them.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  win.webContents.on('will-navigate', (event, url) => {
+    // Block CROSS-ORIGIN navigation of the shell (the remote-origin vector); same-origin
+    // stays free so dev HMR / a same-origin reload / an in-app redirect are untouched.
+    try {
+      const current = win.webContents.getURL()
+      if (current && new URL(url).origin !== new URL(current).origin) event.preventDefault()
+    } catch {
+      event.preventDefault() // an unparseable navigation target is never legitimate here
+    }
+  })
+
+  // Defense in depth (ADR 0002 / docs/13): the dock's guests are the ONLY webviews the
+  // app ever attaches. Force isolation regardless of what the element asked for, strip any
+  // preload, and REFUSE any partition that isn't one of ours (persist:bdock.* / aweb.* /
+  // aweb-mem.*) — so even a compromised renderer cannot attach a node-enabled webview or
+  // point one at a foreign session. This is the belt to the renderer's suspenders.
+  win.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    delete webPreferences.preload
+    webPreferences.nodeIntegration = false
+    webPreferences.nodeIntegrationInSubFrames = false
+    webPreferences.contextIsolation = true
+    webPreferences.sandbox = true
+    const partition = typeof params.partition === 'string' ? params.partition : ''
+    if (!/^(persist:bdock\.|persist:aweb\.|aweb-mem\.)[a-zA-Z0-9_-]+$/.test(partition)) {
+      event.preventDefault()
     }
   })
 

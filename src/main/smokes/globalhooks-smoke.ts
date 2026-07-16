@@ -197,7 +197,9 @@ export function runGlobalHooksSmoke(win: BrowserWindow): void {
       // ── the Settings card: four rows, claude's Remove strips exactly ours ──
       await ES(`(document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click(), 1)`)
       await sleep(400)
-      await ES(`(document.querySelector('.settings-nav-item[data-target="providers"]')?.click(), 1)`)
+      // The session-alerts card lives on Settings › Notifications now (F-08; tab id
+      // stays 'webhooks' — ids are plumbing, not labels).
+      await ES(`(document.querySelector('.settings-nav-item[data-target="webhooks"]')?.click(), 1)`)
       const fourRows = await waitTrue(`document.querySelectorAll('[data-hooks-provider]').length === 4`)
       result.fourRows = fourRows
       const claudeRow = `document.querySelector('[data-hooks-provider="claude"]')`

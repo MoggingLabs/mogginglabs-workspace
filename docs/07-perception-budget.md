@@ -41,6 +41,10 @@ Notes:
   queue; hidden panes release only after a **1.5 s** quiet period, so rapid workspace
   flips are pure show/hide (zero shader/atlas cost mid-interaction). Chromium's
   ~16-context cap is respected by the release path + context-loss self-heal.
+- **Expand/restore is pure paint**: siblings covered by an expanded pane hide via
+  `visibility` (box kept), so their leases never release and no refit runs — restoring
+  the grid re-shows already-current canvases with zero renderer swaps, however long the
+  expand dwelled. Only hidden *workspaces* release contexts (the budget path).
 - **Event-driven everything** (attention, git, blocks) — no polling on any hot path.
 - **Fits are self-converging and cheap** (ResizeObserver-driven; no layout thrash
   cascades), and font metrics are re-measured exactly once, at face activation.
@@ -53,7 +57,10 @@ Notes:
   switch, Home⇄grid, zoom, keystroke→echo) with double-rAF paint timing + samples
   frames during a 12-flip churn and a 2 s torrent: **fails on any budget line above**.
 - **`MOGGING_FLICKER`** — churn/zoom integrity; its frame gate is the perception
-  number (**100 ms**), not the machine number.
+  number (**100 ms**), not the machine number. Its dwell phase pins expand/restore as
+  pure paint: covered siblings keep WebGL through a >1.5 s dwell, report WebGL within
+  two frames of restore, take zero PTY resizes, and hash pixel-identical across the
+  cycle — while a hidden workspace must still release all its contexts.
 - **`MOGGING_MILESTONE`** — the machine floor (unchanged), plus content integrity.
 - All run isolated via `scripts/qa-smokes.sh`.
 

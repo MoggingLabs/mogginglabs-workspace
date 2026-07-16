@@ -1,6 +1,19 @@
 import { BRIDGE_EVENTS, IntegrationsChannels, type BridgeEventName } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { Card, clear, confirmDialog, el, showToast, submitWithRetain } from '../../components'
+import {
+  Button,
+  Card,
+  EmptyState,
+  FieldGroup,
+  Pill,
+  SectionHeader,
+  clear,
+  confirmDialog,
+  createCheckbox,
+  el,
+  showToast,
+  submitWithRetain
+} from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onViewChange } from '../../core/shell/view-port'
 
@@ -10,6 +23,15 @@ import { onViewChange } from '../../core/shell/view-port'
  * to do with MCP servers, plans, or grants. Same rule as before the move — one
  * module, one home; no webhook knob renders anywhere else. On a page of its
  * own there is no fold to bury a failing hook under: health reads per row.
+ *
+ * Rebuilt on the house kit (F-34): the form used to be three placeholder-only
+ * inputs, raw event ids as checkbox labels, and a submit shaped exactly like
+ * the fields above it. Labels are visible now (placeholder-as-label vanishes
+ * the moment you type — WCAG 3.3.2), events read as sentences with the wire id
+ * as a code chip, and the payload spec waits behind a disclosure instead of
+ * opening the page (F-35). The `data-wh-*` hooks and the `.mgr-note` error are
+ * SECRETFORMS' compatibility surface — the retain-on-refusal contract is
+ * asserted through them.
  */
 interface WebhookView {
   id: string
@@ -20,25 +42,36 @@ interface WebhookView {
   health: 'ok' | 'failing' | 'off'
 }
 
+/** The wire ids are the API; people pick events by what happened (F-34). */
+const EVENT_LABEL: Record<BridgeEventName, string> = {
+  'needs-you': 'A pane needs you',
+  notify: 'Any notification an agent sends',
+  'card-moved': 'A board card moved',
+  'review-changed': 'A review changed'
+}
+
 export function createWebhooksSection(): HTMLElement {
   const bridge = getBridge()
   const list = el('div', { class: 'mgr-list' })
   const note = el('div', { class: 'settings-error mgr-note', role: 'alert', hidden: true })
 
-  const labelInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'Name (e.g. n8n build alerts)', dataset: { whField: 'label' } }) as HTMLInputElement
-  const urlInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'Webhook URL (https, or loopback/LAN http)', dataset: { whField: 'url' } }) as HTMLInputElement
+  const labelInput = el('input', { class: 'input', placeholder: 'n8n build alerts', dataset: { whField: 'label' } }) as HTMLInputElement
+  const urlInput = el('input', { class: 'input', placeholder: 'https://…', dataset: { whField: 'url' } }) as HTMLInputElement
   urlInput.type = 'password'
-  const envInput = el('input', { class: 'browser-sites-input mgr-input', placeholder: 'or env-ref (e.g. N8N_WEBHOOK_URL)', dataset: { whField: 'envref' } }) as HTMLInputElement
+  const envInput = el('input', { class: 'input', placeholder: 'N8N_WEBHOOK_URL', dataset: { whField: 'envref' } }) as HTMLInputElement
   for (const i of [labelInput, urlInput, envInput]) i.addEventListener('keydown', (e) => e.stopPropagation())
-  const evBoxes = new Map<BridgeEventName, HTMLInputElement>()
+
+  const evBoxes = new Map<BridgeEventName, ReturnType<typeof createCheckbox>>()
   const evRow = el('div', { class: 'evbridge-events' }, BRIDGE_EVENTS.map((ev) => {
-    const cb = el('input', { attrs: { type: 'checkbox' } }) as HTMLInputElement
-    if (ev === 'notify' || ev === 'needs-you') cb.checked = true
+    const cb = createCheckbox({ label: EVENT_LABEL[ev], checked: ev === 'notify' || ev === 'needs-you' })
+    cb.el.classList.add('evbridge-ev')
+    cb.el.append(el('code', { class: 'wh-ev-id', text: ev })) // the wire id, as a chip beside its sentence
     evBoxes.set(ev, cb)
-    return el('label', { class: 'evbridge-ev' }, [cb, el('span', { text: ev })])
+    return cb.el
   }))
-  const insecureBox = el('input', { attrs: { type: 'checkbox' } }) as HTMLInputElement
-  const wsSelect = el('select', { class: 'trail-select' }) as HTMLSelectElement
+  const insecureBox = createCheckbox({ label: 'Allow insecure LAN http' })
+
+  const wsSelect = el('select', { class: 'input input-sm', ariaLabel: 'Workspace scope' }) as HTMLSelectElement
   // Populated at BUILD only, before boot's first workspace existed — so a webhook could
   // never be scoped to anything. Repopulated on every entry into Settings.
   const refreshWorkspaces = (): void => {
@@ -49,20 +82,41 @@ export function createWebhooksSection(): HTMLElement {
     wsSelect.value = current
   }
   refreshWorkspaces()
-  const saveBtn = el('button', { class: 'trail-btn', type: 'button', text: 'Add webhook', dataset: { whAction: 'save' } }) as HTMLButtonElement
 
-  const HEALTH_TEXT: Record<string, string> = { ok: 'ok', failing: 'failing', off: 'idle' }
+  const saveBtn = Button({ label: 'Add webhook', variant: 'primary', size: 'sm' })
+  saveBtn.dataset.whAction = 'save'
+
+  const HEALTH_PILL: Record<WebhookView['health'], { text: string; tone: 'success' | 'danger' | 'neutral' }> = {
+    ok: { text: 'Healthy', tone: 'success' },
+    failing: { text: 'Failing', tone: 'danger' },
+    off: { text: 'Idle', tone: 'neutral' }
+  }
   function row(w: WebhookView): HTMLElement {
-    const del = el('button', { class: 'browser-sites-forget', type: 'button', text: 'Delete' }) as HTMLButtonElement
-    del.onclick = async (): Promise<void> => {
-      const ok = await confirmDialog({ title: `Delete webhook “${w.label}”?`, message: 'It stops receiving events. This can’t be undone.', confirmLabel: 'Delete', danger: true })
-      if (ok) { await bridge.invoke(IntegrationsChannels.webhookRemove, w.id); await refresh() }
-    }
-    const test = el('button', { class: 'trail-btn cat-mini', type: 'button', text: 'Send test' }) as HTMLButtonElement
-    test.onclick = (): void => { void bridge.invoke(IntegrationsChannels.webhookTest, w.id); showToast({ title: 'Test event queued', body: w.label, tone: 'info' }) }
+    // Default (30px) size, not sm — the 28px hit floor SETINTEG measures on these
+    // dense rows holds here too.
+    const del = Button({
+      label: 'Delete',
+      variant: 'ghost',
+      onClick: () => {
+        void confirmDialog({ title: `Delete webhook “${w.label}”?`, message: 'It stops receiving events. This can’t be undone.', confirmLabel: 'Delete', danger: true }).then(async (ok) => {
+          if (ok) {
+            await bridge.invoke(IntegrationsChannels.webhookRemove, w.id)
+            await refresh()
+          }
+        })
+      }
+    })
+    const test = Button({
+      label: 'Send test',
+      variant: 'outline',
+      onClick: () => {
+        void bridge.invoke(IntegrationsChannels.webhookTest, w.id)
+        showToast({ title: 'Test event queued', body: w.label, tone: 'info' })
+      }
+    })
     return el('div', { class: 'mgr-row' }, [
       el('span', { class: 'mgr-label', text: w.label }),
-      el('span', { class: `evbridge-health is-${w.health}`, text: HEALTH_TEXT[w.health] }),
+      Pill(HEALTH_PILL[w.health]),
       el('span', { class: 'mgr-id mono', text: `${w.urlMask} · ${w.events.join(', ')}${w.workspaceId ? ' · scoped' : ''}` }),
       test,
       del
@@ -73,7 +127,15 @@ export function createWebhooksSection(): HTMLElement {
   // failing webhook repaints its row whichever path discovered it.
   function paint(hooks: WebhookView[]): void {
     clear(list)
-    if (!hooks.length) list.append(el('div', { class: 'menu-note', text: 'No webhooks yet. A pane’s notify (needs-you) can ring n8n, Make, or Slack.' }))
+    if (!hooks.length) {
+      list.append(
+        EmptyState({
+          icon: 'bell',
+          title: 'No webhooks yet',
+          body: 'When a pane needs you, ring your own automation — n8n, Make, or Slack. Add one below.'
+        })
+      )
+    }
     for (const w of hooks) list.append(row(w))
   }
 
@@ -97,19 +159,52 @@ export function createWebhooksSection(): HTMLElement {
           label: labelInput.value,
           url: urlInput.value || undefined,
           envRef: envInput.value || undefined,
-          events: [...evBoxes.entries()].filter(([, cb]) => cb.checked).map(([ev]) => ev),
+          events: [...evBoxes.entries()].filter(([, cb]) => cb.checked()).map(([ev]) => ev),
           workspaceId: wsSelect.value || undefined,
-          insecureAck: insecureBox.checked
+          insecureAck: insecureBox.checked()
         }) as Promise<{ ok: boolean; reason?: string }>,
       onSuccess: () => refresh()
     })
   }
   bridge.on(IntegrationsChannels.webhookHealthChanged, (payload) => paint((payload as WebhookView[]) ?? []))
 
+  // The payload spec matters at integration time, not arrival time (F-35) — one
+  // sentence leads; the exact wire shape waits behind its disclosure.
+  const payloadPre = el('pre', {
+    class: 'prov-log wh-payload',
+    text: '{ v, event, ts, workspace, pane?, card?, note? }\n— ids and your notify’s note, never scrollback or diffs.'
+  })
+  payloadPre.hidden = true
+  const payloadBtn: HTMLButtonElement = Button({
+    label: 'Payload details',
+    variant: 'ghost',
+    size: 'sm',
+    onClick: () => {
+      payloadPre.hidden = !payloadPre.hidden
+      payloadBtn.textContent = payloadPre.hidden ? 'Payload details' : 'Hide payload'
+    }
+  })
+
+  const form = el('div', { class: 'wh-form' }, [
+    el('div', { class: 'wh-form-grid' }, [
+      FieldGroup({ label: 'Name', hint: 'What this webhook is for.' }, labelInput),
+      FieldGroup({ label: 'Webhook URL', hint: 'A secret — pasted once, encrypted, shown masked. https, or loopback/LAN http.' }, urlInput),
+      FieldGroup({ label: 'Or an env reference', hint: 'Resolved from your environment at delivery — nothing stored.' }, envInput),
+      FieldGroup({ label: 'Workspace', hint: 'Deliveries can be scoped to one workspace.' }, wsSelect)
+    ]),
+    FieldGroup({ label: 'Events' }, evRow),
+    el('div', { class: 'wh-form-actions' }, [insecureBox.el, el('span', { class: 'ph-spacer' }), saveBtn])
+  ])
+
   const block = el('div', { class: 'trail-block mgr-block' }, [
-    el('div', { class: 'settings-row-caption', text: 'When a pane needs you — or a card moves, or a review changes — POST a small JSON payload to your own webhook (n8n, Make, Slack). Outbound only, nothing listens. The URL is a secret: pasted once, encrypted, shown masked. Payload: { v, event, ts, workspace, pane?, card?, note? } — ids and your notify’s note, never scrollback or diffs.' }),
+    el('div', {
+      class: 'settings-row-caption',
+      text: 'POSTs a small JSON event to n8n, Make, or Slack. Outbound only — nothing listens. The URL is a secret: pasted once, encrypted, shown masked.'
+    }),
+    el('div', { class: 'trail-controls' }, [payloadBtn]),
+    payloadPre,
     list,
-    el('div', { class: 'mgr-form' }, [labelInput, urlInput, envInput, evRow, el('label', { class: 'evbridge-ev' }, [insecureBox, el('span', { text: 'allow insecure LAN http' })]), wsSelect, saveBtn]),
+    form,
     note
   ])
 
@@ -131,5 +226,14 @@ export function createWebhooksSection(): HTMLElement {
   })
   sync()
 
-  return Card({}, [block])
+  // Headed now that the card shares a page with the other notification homes (F-08).
+  return Card(
+    {
+      header: SectionHeader({
+        title: 'Webhooks',
+        caption: 'When a pane needs you — or a card moves, or a review changes — ring your own automations.'
+      })
+    },
+    [block]
+  )
 }
