@@ -21,10 +21,10 @@
 // Register (until the phase-8 MCP manager automates it):
 //   claude mcp add mogging -- node <path>/bin/mogging-mcp.mjs
 import { closeSync, openSync, readFileSync, statSync, writeSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { connectEndpoint } from './lib/endpoint-client.mjs'
+import { runFile } from './lib/runtime-paths.mjs'
 
 // Keep in sync with DAEMON_PROTOCOL_VERSION in src/contracts/daemon/protocol.ts (this file is
 // plain Node — it cannot import the TS contract). It names the runtime DIRECTORY both the daemon
@@ -38,23 +38,17 @@ const CHANNEL = process.argv.includes('--dev') || process.env.MOGGING_CHANNEL ==
 const RUN_SEGMENT = (CHANNEL === 'dev' ? 'dev-v' : 'v') + PROTOCOL
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
-function runtimeBase() {
-  return process.platform === 'win32'
-    ? process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
-    : process.env.XDG_RUNTIME_DIR || join(homedir(), 'Library', 'Application Support')
-}
-
 /** App (browser-control) endpoint file — same discovery as 6/05b. */
 function appEndpointFile() {
   if (process.env.MOGGING_BROWSER_ENDPOINT) return process.env.MOGGING_BROWSER_ENDPOINT
-  return join(runtimeBase(), 'MoggingLabs', 'run', RUN_SEGMENT, 'browser-control.json')
+  return runFile(RUN_SEGMENT, 'browser-control.json')
 }
 
 /** Daemon endpoint file — the `mogging` CLI's discovery, exactly: injected
  *  inside panes, well-known per-user runtime path outside. */
 function daemonEndpointFile() {
   if (process.env.MOGGING_DAEMON_ENDPOINT) return process.env.MOGGING_DAEMON_ENDPOINT
-  return join(runtimeBase(), 'MoggingLabs', 'run', RUN_SEGMENT, 'endpoint.json')
+  return runFile(RUN_SEGMENT, 'endpoint.json')
 }
 
 // ── The catalog (ONE piece of data; the hand-written array died in 8/02) ─────

@@ -2,46 +2,19 @@
 // lock (with stale takeover), endpoint discovery file, and logging. No Electron here —
 // the daemon runs under plain Node / Electron-as-Node. (ADR 0006.)
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import { DAEMON_PROTOCOL_VERSION, channelFromEnv, runtimeSegment } from '@contracts'
 import { isAlive, pipeAlive } from '@backend/platform/pid'
+import { ensureRuntimeDir } from '@backend/platform/runtime-paths'
 
 // Re-exported: index.ts and the migration surface historically imported these from here.
 export { isAlive, pipeAlive } from '@backend/platform/pid'
 
-const APP = 'MoggingLabs'
-
-/** Dirs this process has already created + tightened. runtimeDir() sits under every
- *  logPath()/endpointPath() call, so an unmemoized ensure paid two syscalls per LOG LINE;
- *  the dir's existence and mode are settled once. (Keyed by path, not a boolean: the
- *  channel env is constant for a process's life, but a fixture that swaps LOCALAPPDATA
- *  between calls must still get each dir ensured.) */
-const ensuredDirs = new Set<string>()
-
-/** Per-user, per-protocol-version, per-CHANNEL runtime dir. Version namespacing means app
- *  updates never collide on socket/lock/endpoint (ADR 0006 anti-kill-server); the channel
- *  segment (run/v4 vs run/dev-v4) means a repo checkout never collides with an installed
- *  release even at the SAME protocol version. MOGGING_CHANNEL is inherited from the app that
- *  spawned this daemon (set in src/main/boot.ts, prepareRuntime) — the two must derive the same dir. */
+/** The daemon's runtime dir, created + tightened. THE shared derivation lives in
+ *  @backend/platform/runtime-paths (ensureRuntimeDir) — the app's client derives the
+ *  same path from the same helper, so the two cannot drift onto different sockets. */
 export function runtimeDir(): string {
-  const base =
-    process.platform === 'win32'
-      ? process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
-      : process.env.XDG_RUNTIME_DIR || path.join(os.homedir(), 'Library', 'Application Support')
-  const dir = path.join(base, APP, 'run', runtimeSegment(channelFromEnv()))
-  if (!ensuredDirs.has(dir)) {
-    fs.mkdirSync(dir, { recursive: true })
-    if (process.platform !== 'win32') {
-      try {
-        fs.chmodSync(dir, 0o700)
-      } catch {
-        /* best effort */
-      }
-    }
-    ensuredDirs.add(dir)
-  }
-  return dir
+  return ensureRuntimeDir()
 }
 
 export const endpointPath = (): string => path.join(runtimeDir(), 'endpoint.json')

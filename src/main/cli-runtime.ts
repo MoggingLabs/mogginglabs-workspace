@@ -5,9 +5,16 @@ import { channelFromEnv } from '@contracts'
 import { runtimeDir } from './daemon-client'
 
 const SATELLITES = [
+  // Shared ESM helpers FIRST — every satellite below imports from lib/, so the helpers
+  // must land before the files that resolve them (a `mogging` run during the copy window
+  // must never find an entry whose import target is not there yet). All three satellites
+  // derive their runtime paths from lib/runtime-paths.mjs (the bin twin of
+  // src/backend/platform/runtime-paths.ts), and mogging-mcp/-connection speak the daemon
+  // via lib/endpoint-client.mjs.
+  join('lib', 'runtime-paths.mjs'),
+  join('lib', 'endpoint-client.mjs'),
   'mogging.mjs',
   'mcp-catalog.json',
-  join('lib', 'endpoint-client.mjs'),
   // The connection bridge (ADR 0014): a CLI spawns this to reach a service the APP
   // is connected to. Same helper, same socket, no catalog of its own.
   'mogging-connection.mjs',
