@@ -70,6 +70,7 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
         explorerRefused: boolean
         tooltipsExplain: boolean
         tooltipsReachable: boolean
+        noBlockedCursor: boolean
       }>(`(() => {
         const railEl = document.getElementById('rail')
         const railBtn = document.querySelector('#titlebar .rail-toggle')
@@ -86,7 +87,11 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
           // A title is only an explanation if a hover can REACH it: pointer-events:none
           // on the disabled style killed hit-testing and the native tooltip with it —
           // the button said why in an attribute nobody could ever see.
-          tooltipsReachable: [railBtn, expBtn, webBtn].every((b) => !!b && getComputedStyle(b).pointerEvents !== 'none')
+          tooltipsReachable: [railBtn, expBtn, webBtn].every((b) => !!b && getComputedStyle(b).pointerEvents !== 'none'),
+          // …and the hover must not SCOLD: the ⃠ not-allowed cursor read as ugly
+          // (operator direction 2026-07-17) — locked chrome wears the plain arrow
+          // and lets the tooltip do the explaining.
+          noBlockedCursor: [railBtn, expBtn, webBtn].every((b) => !!b && getComputedStyle(b).cursor !== 'not-allowed')
         }
       })()`)
       const bootLockOk =
@@ -96,7 +101,8 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
         bootLock.browserDisabled &&
         bootLock.explorerRefused &&
         bootLock.tooltipsExplain &&
-        bootLock.tooltipsReachable
+        bootLock.tooltipsReachable &&
+        bootLock.noBlockedCursor
 
       // (b) the checklist is detection-honest, in BOTH directions.
       type Agent = { id: string; name: string; installed: boolean; installHint?: string }

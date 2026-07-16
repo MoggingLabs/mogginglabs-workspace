@@ -542,15 +542,26 @@ textarea {
    still HOVERABLE. pointer-events:none here killed hit-testing entirely, which
    took the native title tooltip with it: the one place the button explains WHY
    it is off became unreachable. A disabled button already ignores clicks; the
-   tooltip is load-bearing and must survive (HOMEUX pins pointer-events ≠ none). */
+   tooltip is load-bearing and must survive (HOMEUX pins pointer-events ≠ none).
+
+   On hover: the PLAIN cursor (the ⃠ blocked cursor read as ugly and scolding —
+   operator direction 2026-07-17; native Windows uses the arrow over disabled
+   controls too) and a small opacity lift — the button acknowledges the pointer
+   and offers its tooltip, without lighting up like something that can act.
+   HOMEUX pins the cursor as well: not-allowed must not creep back. */
 .icon-btn:disabled {
   color: var(--text-low);
   opacity: 0.45;
-  cursor: not-allowed;
+  cursor: default;
+  transition:
+    opacity var(--dur-1) var(--ease),
+    background var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
 }
 .icon-btn:disabled:hover {
-  background: transparent; /* hover must not light a control that cannot act */
+  background: transparent; /* hover must not light a control that cannot act… */
   color: var(--text-low);
+  opacity: 0.65; /* …but it may say "I heard you" while the tooltip explains */
 }
 .icon-btn:hover {
   background: var(--accent-weak);
