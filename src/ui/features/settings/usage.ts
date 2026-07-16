@@ -580,101 +580,8 @@ export function createUsageSection(): HTMLElement {
       )
   }
 
-  // ── 4 · Alerts (the 09 rules) + a fixture test toast ──────────────────────
-  const alertsHost = el('div', { class: 'usage-alert-cfg settings-consents' })
-  void (async () => {
-    const cfg = (await invoke(UsageChannels.alertCfgGet)) as UsageAlertConfig | null
-    if (!cfg) return
-    const thrErr = el('span', { class: 'settings-error usage-thr-err', role: 'alert' })
-    thrErr.hidden = true
-    const live = { quiet: cfg.quiet, warn: cfg.warn }
-    const pctInput = (cls: string, label: string, value: number, key: 'quiet' | 'warn'): HTMLInputElement => {
-      const input = el('input', { class: `input input-sm usage-thr ${cls}`, ariaLabel: label }) as HTMLInputElement
-      input.type = 'number'
-      input.min = '1'
-      input.max = '100'
-      input.value = String(value)
-      input.addEventListener('change', () => {
-        const v = Number(input.value)
-        // Out-of-range or inverted input REVERTS OUT LOUD — the old handler
-        // silently swallowed it, so the field showed a value that was never
-        // saved (audit RC4's quiet-warn validation gap).
-        const inverted = key === 'quiet' ? v >= live.warn : v <= live.quiet
-        if (!Number.isFinite(v) || v < 1 || v > 100 || inverted) {
-          thrErr.textContent = inverted ? 'quiet must stay below warning — reverted' : '1–100 only — reverted'
-          thrErr.hidden = false
-          input.value = String(live[key])
-          return
-        }
-        thrErr.hidden = true
-        live[key] = Math.round(v)
-        void invoke(UsageChannels.alertCfgSet, { [key]: v })
-      })
-      return input
-    }
-    const quiet = pctInput('usage-thr-quiet', 'Quiet threshold percent', cfg.quiet, 'quiet')
-    const warn = pctInput('usage-thr-warn', 'Warning threshold percent', cfg.warn, 'warn')
-    const confetti = createCheckbox({
-      label: 'Confetti on window reset',
-      checked: cfg.confetti,
-      onChange: (checked) => void invoke(UsageChannels.alertCfgSet, { confetti: checked })
-    })
-    confetti.el.classList.add('usage-confetti-toggle')
-    // F-31: the thresholds were a sentence with inputs embedded in it — label-control
-    // association broke, and the error surfaced at the row's end. Two labeled fields;
-    // validation right below them.
-    alertsHost.append(
-      el('div', { class: 'usage-thr-grid' }, [
-        FieldGroup({ label: 'Quiet warning', hint: '% of a window — a gentle toast, once per window.' }, quiet),
-        FieldGroup({ label: 'Loud warning', hint: '% of a window — the verdict toast, re-armed at reset.' }, warn)
-      ]),
-      thrErr,
-      confetti.el
-    )
-    // Credits floors: a balance has no percentage, so "low" is the USER's
-    // number. One row per ENABLED balance provider; 0/empty = no tap.
-    const creditRows = ((await invoke(UsageChannels.configGet)) as UsageConfig | null)?.providers ?? []
-    const floorRows = USAGE_PROVIDERS.filter((d) => d.credits && creditRows.find((c) => c.id === d.id)?.enabled)
-    if (floorRows.length) {
-      const floorsHost = el('div', { class: 'usage-floors' })
-      floorsHost.append(el('div', { class: 'section-label', text: 'Balance floors — warn when a balance drops under' }))
-      for (const d of floorRows) {
-        const input = el('input', { class: 'input input-sm usage-thr usage-floor', ariaLabel: `${d.id} balance floor` }) as HTMLInputElement
-        input.type = 'number'
-        input.min = '0'
-        input.value = String(cfg.floors?.[d.id] ?? '')
-        input.placeholder = 'off'
-        input.addEventListener('change', () => {
-          const v = Number(input.value)
-          if (input.value === '' || (Number.isFinite(v) && v >= 0)) {
-            void invoke(UsageChannels.alertCfgSet, { floors: { [d.id]: input.value === '' ? 0 : v } })
-          } else input.value = ''
-        })
-        floorsHost.append(
-          el('div', { class: 'usage-alert-row usage-floor-row', dataset: { provider: d.id } }, [
-            providerLogo(d.id, 13),
-            el('span', { class: 'settings-row-caption', text: d.label }),
-            input,
-            el('span', { class: 'settings-row-caption', text: d.windows[0]?.label.toLowerCase() ?? 'credits' })
-          ])
-        )
-      }
-      alertsHost.append(floorsHost)
-    }
-    // A FIXTURE toast, clearly labeled — proves the house toast path works but is
-    // NOT a reading (its own comment said so). 05b puts it behind DEV so it never
-    // ships; the real alert copy is composed main-side (09).
-    if (import.meta.env.DEV) {
-      alertsHost.append(
-        Button({
-          label: 'Test notification',
-          size: 'sm',
-          onClick: () =>
-            showToast({ tone: 'attention', title: 'Test — Fake Pro at 95% of Session (5h)', body: 'Ahead of pace — a fixture, not a reading.' })
-        })
-      )
-    }
-  })()
+  // (Alerts & thresholds moved to Settings › Notifications — F-08: one home for
+  // "how do I get pinged". createUsageAlertsBlock below; the poller IPC is unchanged.)
 
   // ── 5 · Display (the 10 options — absorbed intact) ────────────────────────
   const displayHost = createDisplayControls()
@@ -771,7 +678,8 @@ export function createUsageSection(): HTMLElement {
   )
   const plansCard = card('plans', 'Plans & profiles', 'Every plan being tracked, and which account new agents launch as.', plansTable)
   const costCard = card('cost', 'Cost overview', 'What today cost, where the month is heading, and which model burns the money — read locally from your CLIs’ own logs.', costHost)
-  const alertsCard = card('alerts', 'Thresholds & alerts', 'Get warned before a plan runs out. In-app only — to ring n8n, Make, or Slack, add a webhook (Settings › Webhooks).', alertsHost)
+  // (The 'alerts' card moved to Settings › Notifications — F-08. SETUSAGE's card
+  // roster dropped it there too.)
   const displayCard = card('display', 'Display', 'What the title-bar gauge and its popover show.', displayHost)
   const historyCard = card('history', 'History', 'Sampled usage history per provider — compact by design; the popover stays the glance.', historyHost)
   const privacyCard = card('privacy', 'Privacy', 'Where credentials live and what never leaves the machine.', privacy)
@@ -870,7 +778,6 @@ export function createUsageSection(): HTMLElement {
     providersCard.el,
     plansCard.el,
     costCard.el,
-    alertsCard.el,
     displayCard.el,
     historyCard.el,
     privacyCard.el
@@ -1052,4 +959,108 @@ function createDisplayControls(): HTMLElement {
     }
   })()
   return root
+}
+
+/**
+ * The alert thresholds + balance floors + confetti block — hosted by Settings ›
+ * Notifications (F-08: one home for "how do I get pinged"), riding the usage
+ * poller's own IPC exactly as before. Class names are a compatibility surface:
+ * SETUSAGE/USAGEUI assert `.usage-alert-cfg .usage-thr-warn` as global singletons.
+ */
+export function createUsageAlertsBlock(): HTMLElement {
+  const alertsHost = el('div', { class: 'usage-alert-cfg settings-consents' })
+  void (async () => {
+    const cfg = (await invoke(UsageChannels.alertCfgGet)) as UsageAlertConfig | null
+    if (!cfg) return
+    const thrErr = el('span', { class: 'settings-error usage-thr-err', role: 'alert' })
+    thrErr.hidden = true
+    const live = { quiet: cfg.quiet, warn: cfg.warn }
+    const pctInput = (cls: string, label: string, value: number, key: 'quiet' | 'warn'): HTMLInputElement => {
+      const input = el('input', { class: `input input-sm usage-thr ${cls}`, ariaLabel: label }) as HTMLInputElement
+      input.type = 'number'
+      input.min = '1'
+      input.max = '100'
+      input.value = String(value)
+      input.addEventListener('change', () => {
+        const v = Number(input.value)
+        // Out-of-range or inverted input REVERTS OUT LOUD — the old handler
+        // silently swallowed it, so the field showed a value that was never
+        // saved (audit RC4's quiet-warn validation gap).
+        const inverted = key === 'quiet' ? v >= live.warn : v <= live.quiet
+        if (!Number.isFinite(v) || v < 1 || v > 100 || inverted) {
+          thrErr.textContent = inverted ? 'quiet must stay below warning — reverted' : '1–100 only — reverted'
+          thrErr.hidden = false
+          input.value = String(live[key])
+          return
+        }
+        thrErr.hidden = true
+        live[key] = Math.round(v)
+        void invoke(UsageChannels.alertCfgSet, { [key]: v })
+      })
+      return input
+    }
+    const quiet = pctInput('usage-thr-quiet', 'Quiet threshold percent', cfg.quiet, 'quiet')
+    const warn = pctInput('usage-thr-warn', 'Warning threshold percent', cfg.warn, 'warn')
+    const confetti = createCheckbox({
+      label: 'Confetti on window reset',
+      checked: cfg.confetti,
+      onChange: (checked) => void invoke(UsageChannels.alertCfgSet, { confetti: checked })
+    })
+    confetti.el.classList.add('usage-confetti-toggle')
+    // F-31: the thresholds were a sentence with inputs embedded in it — label-control
+    // association broke, and the error surfaced at the row's end. Two labeled fields;
+    // validation right below them.
+    alertsHost.append(
+      el('div', { class: 'usage-thr-grid' }, [
+        FieldGroup({ label: 'Quiet warning', hint: '% of a window — a gentle toast, once per window.' }, quiet),
+        FieldGroup({ label: 'Loud warning', hint: '% of a window — the verdict toast, re-armed at reset.' }, warn)
+      ]),
+      thrErr,
+      confetti.el
+    )
+    // Credits floors: a balance has no percentage, so "low" is the USER's
+    // number. One row per ENABLED balance provider; 0/empty = no tap.
+    const creditRows = ((await invoke(UsageChannels.configGet)) as UsageConfig | null)?.providers ?? []
+    const floorRows = USAGE_PROVIDERS.filter((d) => d.credits && creditRows.find((c) => c.id === d.id)?.enabled)
+    if (floorRows.length) {
+      const floorsHost = el('div', { class: 'usage-floors' })
+      floorsHost.append(el('div', { class: 'section-label', text: 'Balance floors — warn when a balance drops under' }))
+      for (const d of floorRows) {
+        const input = el('input', { class: 'input input-sm usage-thr usage-floor', ariaLabel: `${d.id} balance floor` }) as HTMLInputElement
+        input.type = 'number'
+        input.min = '0'
+        input.value = String(cfg.floors?.[d.id] ?? '')
+        input.placeholder = 'off'
+        input.addEventListener('change', () => {
+          const v = Number(input.value)
+          if (input.value === '' || (Number.isFinite(v) && v >= 0)) {
+            void invoke(UsageChannels.alertCfgSet, { floors: { [d.id]: input.value === '' ? 0 : v } })
+          } else input.value = ''
+        })
+        floorsHost.append(
+          el('div', { class: 'usage-alert-row usage-floor-row', dataset: { provider: d.id } }, [
+            providerLogo(d.id, 13),
+            el('span', { class: 'settings-row-caption', text: d.label }),
+            input,
+            el('span', { class: 'settings-row-caption', text: d.windows[0]?.label.toLowerCase() ?? 'credits' })
+          ])
+        )
+      }
+      alertsHost.append(floorsHost)
+    }
+    // A FIXTURE toast, clearly labeled — proves the house toast path works but is
+    // NOT a reading (its own comment said so). 05b puts it behind DEV so it never
+    // ships; the real alert copy is composed main-side (09).
+    if (import.meta.env.DEV) {
+      alertsHost.append(
+        Button({
+          label: 'Test notification',
+          size: 'sm',
+          onClick: () =>
+            showToast({ tone: 'attention', title: 'Test — Fake Pro at 95% of Session (5h)', body: 'Ahead of pace — a fixture, not a reading.' })
+        })
+      )
+    }
+  })()
+  return alertsHost
 }

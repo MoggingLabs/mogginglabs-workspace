@@ -19,9 +19,10 @@ import { createActivitySection } from './activity'
 import { createClipboardSection } from './clipboard'
 import { createProfilesHostsSection } from './profiles-hosts'
 import { createProvidersSection } from './providers'
+import { createSessionAlertsCard } from './session-alerts'
 import { createThemePicker } from './theme-picker'
 import { createUpdatesSection } from './updates'
-import { createUsageSection } from './usage'
+import { createUsageAlertsBlock, createUsageSection } from './usage'
 import { createWebhooksSection } from './webhooks'
 import { createIntegrationsSection, enterIntegrations } from './integrations'
 
@@ -360,7 +361,7 @@ export const settingsFeature: UiFeature = {
         // knob: the provider grid, plans × profiles, pace/alerts/display,
         // history + cost, and the privacy story. 8.5/04 gives it the page
         // frame; 8.5/05 rebuilds its internals.
-        el: section('usage', 'Usage', 'Limits, plans, pace and alerts — read from the CLIs you already use.', [createUsageSection()])
+        el: section('usage', 'Usage', 'Limits, plans, pace and cost — read from the CLIs you already use.', [createUsageSection()])
       },
       {
         id: 'integrations',
@@ -378,14 +379,28 @@ export const settingsFeature: UiFeature = {
       },
       {
         id: 'webhooks',
-        label: 'Webhooks',
-        // The event bridge (8/10) — house events out to YOUR automations. Its own
-        // tab: nothing here is an MCP knob, and a page of its own needs no fold.
+        label: 'Notifications',
+        // F-08 + reorg: ONE home for "how do I get pinged" — the question used to be
+        // answered across three tabs (usage thresholds, the session-alerts card in
+        // Agent CLIs, and this event bridge). The tab id stays `webhooks`: it is the
+        // deep-link + smoke surface, and ids are plumbing, not labels.
         el: section(
           'webhooks',
-          'Webhooks',
-          'When agents need you, POST to your own automations — n8n, Make, Slack.',
-          [createWebhooksSection()]
+          'Notifications',
+          'How you get pinged when agents need you — alerts, thresholds, and your own automations.',
+          [
+            Card(
+              {
+                header: SectionHeader({
+                  title: 'Alerts & thresholds',
+                  caption: 'Get warned before a plan runs out — a quiet heads-up first, the verdict near the line. Once per window, re-armed at reset.'
+                })
+              },
+              [createUsageAlertsBlock()]
+            ),
+            createSessionAlertsCard(),
+            createWebhooksSection()
+          ]
         )
       },
       {
@@ -545,6 +560,109 @@ export const settingsFeature: UiFeature = {
       setActiveView('settings')
     })
 
+    // ── S5 · Settings search — the baseline VS Code/Chrome/macOS all lead with ──
+    // Past ~30 knobs nobody navigates by taxonomy reliably; this app has ~80 across
+    // 13 tabs. The index is a DOM walk over titles, captions, toggle labels and
+    // field labels — rebuilt on the first keystroke of each search, so late-loading
+    // blocks (usage grid, connections) are indexed by the time anyone can type.
+    interface SearchHit {
+      tab: string
+      tabLabel: string
+      title: string
+      haystack: string
+      target: HTMLElement
+    }
+    const searchIndex: SearchHit[] = []
+    const buildSearchIndex = (): void => {
+      searchIndex.length = 0
+      for (const s of sections) {
+        const claim = (target: HTMLElement, title: string, extra = ''): void => {
+          const t = title.trim()
+          if (t) searchIndex.push({ tab: s.id, tabLabel: s.label, title: t, haystack: `${t} ${extra}`.toLowerCase(), target })
+        }
+        claim(s.el, s.label, s.el.querySelector('.settings-section-head .section-header-caption')?.textContent ?? '')
+        for (const head of s.el.querySelectorAll<HTMLElement>('.section-header-title')) {
+          const card = head.closest<HTMLElement>('.card') ?? head
+          claim(card, head.textContent ?? '', card.querySelector('.section-header-caption')?.textContent ?? '')
+        }
+        for (const cc of s.el.querySelectorAll<HTMLElement>('.collapsible-card')) {
+          claim(cc, cc.querySelector('.cc-title')?.textContent ?? '', cc.querySelector('.cc-caption')?.textContent ?? '')
+        }
+        for (const row of s.el.querySelectorAll<HTMLElement>('.toggle-row')) {
+          claim(row, row.querySelector('.toggle-row-label')?.textContent ?? '', row.querySelector('.toggle-row-hint')?.textContent ?? '')
+        }
+        for (const fg of s.el.querySelectorAll<HTMLElement>('.field-group')) {
+          claim(fg, fg.querySelector('.field-group-label')?.textContent ?? '', fg.querySelector('.field-group-hint')?.textContent ?? '')
+        }
+      }
+    }
+    const searchInput = el('input', { class: 'input input-sm settings-search', ariaLabel: 'Search settings' }) as HTMLInputElement
+    searchInput.type = 'search'
+    searchInput.placeholder = 'Search settings…'
+    const searchResults = el('div', { class: 'settings-search-results' })
+    searchResults.hidden = true
+    const jumpTo = (hit: SearchHit): void => {
+      showSection(hit.tab)
+      searchInput.value = ''
+      runSearch()
+      // A hit inside a folded card opens it first — landing on a 40px header
+      // and revealing nothing is a no-op shaped like a success.
+      const fold = hit.target.closest<HTMLElement>('.collapsible-card')
+      if (fold && !fold.classList.contains('is-open')) {
+        fold.querySelector<HTMLButtonElement>('.cc-toggle')?.click()
+      }
+      setTimeout(() => {
+        hit.target.scrollIntoView({ block: 'center' })
+        hit.target.classList.add('search-hit-flash')
+        setTimeout(() => hit.target.classList.remove('search-hit-flash'), 2000)
+      }, 60)
+    }
+    let lastQuery = ''
+    function runSearch(): void {
+      const q = searchInput.value.trim().toLowerCase()
+      searchResults.replaceChildren()
+      searchResults.hidden = !q
+      if (!q) {
+        lastQuery = ''
+        return
+      }
+      if (!lastQuery) buildSearchIndex() // fresh walk per search session
+      lastQuery = q
+      const seen = new Set<HTMLElement>()
+      const hits = searchIndex
+        .filter((h) => h.haystack.includes(q) && !seen.has(h.target) && (seen.add(h.target), true))
+        .slice(0, 12)
+      if (!hits.length) {
+        searchResults.append(el('div', { class: 'settings-search-none', text: 'No setting matches.' }))
+        return
+      }
+      for (const h of hits) {
+        searchResults.append(
+          el('button', { class: 'settings-search-hit', type: 'button', onClick: () => jumpTo(h) }, [
+            el('span', { class: 'settings-search-hit-title', text: h.title }),
+            el('span', { class: 'settings-search-hit-tab', text: h.tabLabel })
+          ])
+        )
+      }
+    }
+    searchInput.addEventListener('input', runSearch)
+    searchInput.addEventListener('keydown', (e) => {
+      e.stopPropagation() // typing must not trip page-level bindings
+      if (e.key === 'Escape') {
+        if (searchInput.value) {
+          searchInput.value = ''
+          runSearch()
+        } else {
+          searchInput.blur()
+        }
+        e.preventDefault()
+      }
+      if (e.key === 'Enter') {
+        searchResults.querySelector<HTMLButtonElement>('.settings-search-hit')?.click()
+        e.preventDefault()
+      }
+    })
+
     const backBtn = Button({
       label: 'Back',
       icon: 'chevron-left',
@@ -561,6 +679,8 @@ export const settingsFeature: UiFeature = {
     if (orphans.length && import.meta.env.DEV) console.warn(`settings: tabs missing from NAV_GROUPS: ${orphans.join(', ')}`)
     const navBox = el('div', { class: 'settings-nav' }, [
       backBtn,
+      searchInput,
+      searchResults,
       ...NAV_GROUPS.flatMap((g) => [
         el('span', { class: 'settings-nav-group', text: g.label }),
         ...g.ids.map((id) => navById.get(id) ?? null)
@@ -595,6 +715,15 @@ export const settingsFeature: UiFeature = {
       if (document.querySelector('.palette-overlay:not([hidden]), .modal-overlay')) return
       e.preventDefault()
       goBack()
+    })
+    // S5: Ctrl/Cmd+F inside Settings focuses the search — the browser find has no
+    // meaning on a page whose content is mostly hidden tabs.
+    window.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === 'f' && activeView() === 'settings') {
+        e.preventDefault()
+        searchInput.focus()
+        searchInput.select()
+      }
     })
     // NAV-01: Ctrl/Cmd+, opens Settings from anywhere (the platform convention),
     // toggling back out if it's already up — matching the gear button.
@@ -672,7 +801,7 @@ export const settingsFeature: UiFeature = {
       // than a missing one; the matrix now reports pending panes on its fold instead.
       // Webhooks and Activity are TABS now, not integrations sub-blocks — their verbs
       // are plain tab switches, no focus token to drain.
-      { id: 'webhooks:add', title: 'Add a webhook (event bridge)', hint: 'Webhooks', run: () => { showSection('webhooks'); setActiveView('settings') } },
+      { id: 'webhooks:add', title: 'Add a webhook (event bridge)', hint: 'Notifications', run: () => { showSection('webhooks'); setActiveView('settings') } },
       { id: 'activity:open', title: 'Open the activity trail', hint: 'Trust', run: () => { showSection('activity'); setActiveView('settings') } },
       ...THEMES.map((t) => ({
         id: `theme:${t.id}`,

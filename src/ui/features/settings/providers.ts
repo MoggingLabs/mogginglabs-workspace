@@ -1,14 +1,10 @@
 import {
   AgentChannels,
   AgentConfigChannels,
-  AgentHookChannels,
   type AgentConfigProviderSummary,
   type AgentInfo,
   type AgentInstallStart,
-  type AgentInstallState,
-  type GlobalHooksMutationResult,
-  type GlobalHooksProviderStatus,
-  type GlobalHooksStatus
+  type AgentInstallState
 } from '@contracts'
 import { Button, Card, EmptyState, Pill, SectionHeader, Spinner, el, loadingRow, providerLogo, showToast } from '../../components'
 import { createAsyncGuard } from '../../core/async/async-state'
@@ -27,122 +23,8 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
   const logs = new Map<string, HTMLElement>()
   const list = el('div', { class: 'prov-list' })
 
-  // ── Global session alerts: the hand-typed-launch gap, all four CLIs ──────────────────
-  // An app-launched agent rings its pane through session-scoped bell config (claude's
-  // --settings overlay, codex -c flags, the gemini/opencode env-pointed files); an agent
-  // TYPED at a pane's own prompt carries none of it, so its pane never rings (found live
-  // 2026-07-16: a hand-typed claude worked a 15-minute turn wearing a resting dot). Wiring
-  // the same config into each CLI's own global files closes that: the notify script (and
-  // OpenCode's plugin around it) no-op outside a MoggingLabs pane. Explicit action + backup
-  // + atomic write, same as every user-owned config we touch; a CONFLICT (the user's own
-  // codex `notify`, a differing tui value) shows its reason instead of an Apply button.
-  const hooksList = el('div', { class: 'prov-list' })
-  let hooksStatus: GlobalHooksStatus | null = null
-  const HOOKS_LABEL: Record<GlobalHooksProviderStatus['provider'], string> = {
-    claude: 'Claude Code',
-    codex: 'Codex',
-    gemini: 'Gemini',
-    opencode: 'OpenCode'
-  }
-  const HOOKS_PILL: Record<GlobalHooksProviderStatus['state'], { text: string; tone: 'success' | 'neutral' | 'warning' | 'danger' }> = {
-    applied: { text: '✓ wired', tone: 'success' },
-    partial: { text: 'stale', tone: 'warning' },
-    'not-applied': { text: 'not wired', tone: 'neutral' },
-    conflict: { text: 'their config', tone: 'warning' },
-    unreadable: { text: 'unreadable', tone: 'danger' }
-  }
-  const hooksAct = (channel: string, provider: GlobalHooksProviderStatus['provider'], done: string): void => {
-    void (invoke(channel, { provider }) as Promise<GlobalHooksMutationResult>).then(async (result) => {
-      if (result?.ok) showToast({ title: done, body: result.backups?.length ? `Backup: ${result.backups.join(' · ')}` : undefined, tone: 'success' })
-      else showToast({ title: 'Nothing was written', body: result?.reason, tone: 'danger' })
-      await refreshHooks()
-    })
-  }
-  const hooksRow = (row: GlobalHooksProviderStatus): HTMLElement => {
-    const label = HOOKS_LABEL[row.provider]
-    const actions = el('div', { class: 'prov-actions' })
-    if (row.state === 'not-applied' || row.state === 'partial') {
-      actions.append(Button({
-        label: row.state === 'partial' ? 'Re-apply' : 'Wire alerts',
-        icon: 'bell',
-        size: 'sm',
-        onClick: () => hooksAct(AgentHookChannels.apply, row.provider, `${label} alerts wired globally`)
-      }))
-    }
-    if (row.state === 'applied' || row.state === 'partial') {
-      actions.append(Button({
-        label: 'Remove',
-        variant: 'ghost',
-        size: 'sm',
-        onClick: () => hooksAct(AgentHookChannels.remove, row.provider, `${label} alert wiring removed`)
-      }))
-    }
-    // F-07: a conflict's `reason` can embed the user's entire config value — an escaped
-    // Windows path, unbroken — which used to print inline and drag a horizontal scrollbar
-    // onto the whole page. The row now says WHAT in one sentence; the raw value sits
-    // behind a disclosure in a wrapping <pre> (the install-log surface, same class).
-    const blocked = row.state === 'conflict' || row.state === 'unreadable'
-    const note = blocked
-      ? row.state === 'conflict'
-        ? 'This CLI’s own config already sets these values — yours, not the app’s, so nothing is overwritten.'
-        : 'The config file could not be read — fix or remove it, then Wire alerts again.'
-      : row.files.join(' · ')
-    let detail: HTMLElement | null = null
-    if (blocked) {
-      detail = el('pre', { class: 'prov-log prov-conflict-detail', text: `${row.reason ?? 'not writable'}\n${row.files.join('\n')}` })
-      detail.hidden = true
-      const toggle: HTMLButtonElement = Button({
-        label: 'Show details',
-        variant: 'ghost',
-        size: 'sm',
-        onClick: () => {
-          detail!.hidden = !detail!.hidden
-          toggle.textContent = detail!.hidden ? 'Show details' : 'Hide details'
-        }
-      })
-      actions.append(toggle)
-    }
-    return el('div', { class: 'prov-item', dataset: { hooksProvider: row.provider } }, [
-      el('div', { class: 'prov-row prov-row--static' }, [
-        el('div', { class: 'prov-row-main' }, [
-          el('div', { class: 'prov-row-head' }, [
-            el('span', { class: 'prov-name', text: `${label} · global alerts` }),
-            Pill(HOOKS_PILL[row.state])
-          ]),
-          // F-15: file paths are for the expert's eye — faint, one line, full on hover.
-          el('div', { class: `settings-row-caption${blocked ? '' : ' prov-paths'}`, text: note, title: blocked ? undefined : note })
-        ]),
-        actions
-      ]),
-      detail
-    ])
-  }
-  const renderHooks = (): void => {
-    if (!hooksStatus) {
-      hooksList.replaceChildren(el('div', { class: 'settings-row-caption' }, [Spinner()]))
-      return
-    }
-    hooksList.replaceChildren(...hooksStatus.map(hooksRow))
-  }
-  const refreshHooks = async (): Promise<void> => {
-    try {
-      hooksStatus = (await invoke(AgentHookChannels.status)) as GlobalHooksStatus
-    } catch {
-      hooksStatus = null
-    }
-    renderHooks()
-  }
-  const hooksCard = Card(
-    {
-      header: SectionHeader({
-        title: 'Hand-typed session alerts',
-        caption:
-          'An agent launched from the app rings its pane through session-scoped config. Wire the same alerts into each CLI’s own global config so an agent you type at a pane’s own prompt rings too. Outside a pane the wiring is a silent no-op.'
-      })
-    },
-    [hooksList]
-  )
-
+  // (The global session-alerts card moved to Settings › Notifications — F-08: its
+  // user goal is "why doesn't my pane ring?", not install/configure. session-alerts.ts.)
   const landing = el('div', { class: 'prov-landing' }, [
     Card(
       {
@@ -164,18 +46,25 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
         })
       },
       [list]
-    ),
-    hooksCard
+    )
   ])
+  // F-11: the drill-in REPLACES context instead of stacking under it — the tab hero
+  // hides while a CLI's config workspace is open (the workspace carries its own
+  // breadcrumb + identity header), and returns on Back.
+  const setDrilled = (on: boolean): void => {
+    root.closest('.settings-section')?.classList.toggle('is-drilled', on)
+  }
   const config = createAgentConfigWorkspace(() => {
     config.el.hidden = true
     landing.hidden = false
+    setDrilled(false)
   })
   const root = el('div', { class: 'prov-section' }, [landing, config.el])
 
   function openConfig(agent: AgentInfo): void {
     landing.hidden = true
     config.el.hidden = false
+    setDrilled(true)
     void config.open(agent.id, agent)
   }
 
@@ -288,7 +177,6 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
   >()
 
   async function refresh(): Promise<void> {
-    void refreshHooks() // independent read; never gates the CLI roster
     await detectGuard.run(
       () =>
         Promise.all([

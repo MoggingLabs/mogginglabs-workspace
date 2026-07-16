@@ -6,6 +6,7 @@ import {
   EmptyState,
   FieldGroup,
   Pill,
+  SectionHeader,
   clear,
   confirmDialog,
   createCheckbox,
@@ -198,7 +199,7 @@ export function createWebhooksSection(): HTMLElement {
   const block = el('div', { class: 'trail-block mgr-block' }, [
     el('div', {
       class: 'settings-row-caption',
-      text: 'When a pane needs you — or a card moves, or a review changes — POST a small JSON event to your own automation (n8n, Make, Slack). Outbound only, nothing listens.'
+      text: 'POSTs a small JSON event to n8n, Make, or Slack. Outbound only — nothing listens. The URL is a secret: pasted once, encrypted, shown masked.'
     }),
     el('div', { class: 'trail-controls' }, [payloadBtn]),
     payloadPre,
@@ -225,5 +226,14 @@ export function createWebhooksSection(): HTMLElement {
   })
   sync()
 
-  return Card({}, [block])
+  // Headed now that the card shares a page with the other notification homes (F-08).
+  return Card(
+    {
+      header: SectionHeader({
+        title: 'Webhooks',
+        caption: 'When a pane needs you — or a card moves, or a review changes — ring your own automations.'
+      })
+    },
+    [block]
+  )
 }

@@ -3416,6 +3416,53 @@ body.pane-dragging * {
   gap: var(--sp-1);
   align-items: stretch;
 }
+/* ── S5 · settings search: the rail's first control ── */
+.settings-search {
+  margin-bottom: var(--sp-2);
+  width: 100%;
+}
+.settings-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--sp-2);
+}
+.settings-search-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  text-align: left;
+  padding: var(--sp-1) var(--sp-2);
+  border: none;
+  background: transparent;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.settings-search-hit:hover {
+  background: var(--bg-elevated);
+}
+.settings-search-hit-title {
+  font-size: var(--fs-12);
+  color: var(--text-hi);
+}
+.settings-search-hit-tab {
+  font-size: var(--fs-10);
+  color: var(--text-lo);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.settings-search-none {
+  font-size: var(--fs-11);
+  color: var(--text-lo);
+  padding: var(--sp-1) var(--sp-2);
+}
+/* The landing flash after a search jump — an outline, not motion, so it needs no
+   reduced-motion carve-out. */
+.search-hit-flash {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--r-sm);
+}
 .settings-back {
   align-self: flex-start;
   margin-bottom: var(--sp-3);
@@ -6250,6 +6297,11 @@ body.pane-dragging * {
   gap: var(--sp-1);
 }
 /* The ephemeral terminal's bounded tail — read-only evidence, not a terminal. */
+/* F-11: a drill-in replaces context — while a CLI's config workspace is open, the
+   tab hero yields to the workspace's own breadcrumb + identity header. */
+.settings-section.is-drilled > .settings-hero {
+  display: none;
+}
 /* F-15: config-file paths in row captions — legible to the expert who greps by eye,
    quiet to everyone else. One line; the title carries the whole thing. */
 .prov-paths {
