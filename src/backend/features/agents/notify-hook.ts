@@ -293,6 +293,7 @@ export function geminiSystemSettings(
   const base = (existing && typeof existing === 'object' ? existing : {}) as Record<string, unknown>
   const desired = (session && typeof session === 'object' ? session : {}) as Record<string, unknown>
   const general = (base.general && typeof base.general === 'object' ? base.general : {}) as Record<string, unknown>
+  const ui = (base.ui && typeof base.ui === 'object' ? base.ui : {}) as Record<string, unknown>
   const out: Record<string, unknown> = {
     ...desired,
     ...base,
@@ -300,6 +301,20 @@ export function geminiSystemSettings(
       ...(desired.general && typeof desired.general === 'object' ? desired.general as Record<string, unknown> : {}),
       ...general,
       enableNotifications: true
+    },
+    // The title layer's gemini share (see backend/features/agents/title.ts for the
+    // whole per-CLI story). `showStatusInTitle` puts the model's live thought subject
+    // in the OSC title while it works — gemini's own words for what it is doing, which
+    // is what the pane header renders. It only takes effect under `dynamicWindowTitle`
+    // (its OFF branch writes a static "Gemini CLI (folder)" regardless), so both are
+    // pinned — same posture as enableNotifications above: inside an app pane the title
+    // IS the header, so the pane's need outranks a global preference. Verified against
+    // the 0.50.0 bundle (computeTerminalTitle, packages/cli windowTitle.ts).
+    ui: {
+      ...(desired.ui && typeof desired.ui === 'object' ? desired.ui as Record<string, unknown> : {}),
+      ...ui,
+      showStatusInTitle: true,
+      dynamicWindowTitle: true
     }
   }
   if (notifyInvocation) {
