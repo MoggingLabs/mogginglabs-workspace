@@ -3693,9 +3693,9 @@ body.pane-dragging * {
    internal 1–6px values are geometry, not spacing — the ramp does not apply. */
 .theme-grid {
   display: grid;
-  /* F-01: sized so all five tiles share one row at the settings column's width —
-     148px minimums broke 4+1, orphaning the fifth theme under the grid. */
-  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  /* F-01: sized so all five tiles share one row at the settings column's width
+     (INSIDE the card's padding — 132px still broke 4+1 at the default window). */
+  grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
   gap: var(--sp-3);
 }
 .theme-tile {
