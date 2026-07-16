@@ -7,16 +7,18 @@
 //
 // Scope: claims contest ownership PER WORKSPACE ORDINAL (floor(paneId/100)) — panes
 // of one repo wall referee each other; unrelated workspaces never collide.
-import { claimsOverlap, normalizeClaimPattern, type Claim, type SwarmRole } from '@contracts'
+import { claimsOverlap, formulaOrdinalOf, normalizeClaimPattern, type Claim, type SwarmRole } from '@contracts'
 
 export type ClaimResult =
   | { ok: true; id: number }
   | { ok: false; reason: 'badpattern' }
   | { ok: false; reason: 'denied'; ownerPaneId: string; pattern: string }
 
+// Claims scope by BIRTH ordinal (the daemon is app-state-blind, so a moved pane's
+// claims stay grouped where it was born — coordination display only, never a gate).
 const groupOf = (paneId: string): string => {
   const n = Number(paneId)
-  return Number.isFinite(n) ? String(Math.floor(n / 100)) : '0'
+  return Number.isFinite(n) ? String(formulaOrdinalOf(n)) : '0'
 }
 
 export class Ledger {

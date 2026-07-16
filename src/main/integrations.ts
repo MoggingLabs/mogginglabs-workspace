@@ -2,6 +2,7 @@ import { ipcMain, type BrowserWindow } from 'electron'
 import {
   IntegrationsChannels,
   defaultToolPlan,
+  locatePane,
   sanitizeToolPlan,
   type HostedCliId,
   type IntegrationsGrantMutation,
@@ -168,24 +169,28 @@ export function mutateIntegrationsGrant(raw: IntegrationsGrantMutation): Workspa
 
 /** Resolve a pane's workspace + granted write-tool names — what the app
  *  endpoint serves to `grant.get`. Pane ids encode their workspace ordinal
- *  (ordinal*100+slot, the house convention); an unresolvable pane fails
- *  CLOSED: no workspace, no write tools. */
+ *  (locatePane — the house convention, stated once in @contracts); an
+ *  unresolvable pane fails CLOSED: no workspace, no write tools. */
 export function resolveGrantedWriteTools(pane: string): { workspaceId?: string; writeTools: string[] } {
   const wsId = workspaceIdForPane(pane)
   if (!wsId) return { writeTools: [] }
   return { workspaceId: wsId, writeTools: grantedWriteToolNames(getIntegrationsGrant(wsId)) }
 }
 
-/** The workspace a pane belongs to (ordinal*100+slot, the house convention).
- *  Undefined when unresolvable — callers fail CLOSED. Used to route an agent's
- *  browser control to its OWN workspace's browser (8/07c). */
+/** The workspace a pane belongs to. Undefined when unresolvable — callers fail
+ *  CLOSED. Used to gate grants and to route an agent's browser control to its
+ *  OWN workspace's browser (8/07c).
+ *
+ *  locatePane, NOT the bare formula: a pane MOVED between workspaces keeps its id
+ *  (its daemon session key), and the formula would keep answering with the workspace
+ *  it LEFT — which is exactly the wrong workspace to read grants from. The renderer
+ *  resolved moves correctly all along; main is now the same one resolver. */
 export function workspaceIdForPane(pane: string): string | undefined {
   const paneNum = Number(pane)
   if (!Number.isInteger(paneNum) || paneNum <= 0) return undefined // slots start at 1
-  const ordinal = Math.floor(paneNum / 100) // the FIRST workspace's ordinal is 0
-  return getSettingsStore()
-    ?.load()
-    ?.workspaces.find((w) => w.ordinal === ordinal)?.id
+  const workspaces = getSettingsStore()?.load()?.workspaces
+  if (!workspaces) return undefined
+  return locatePane(workspaces, paneNum)?.ws.id
 }
 
 export function registerIntegrations(getWin: () => BrowserWindow | null): void {

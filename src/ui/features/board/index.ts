@@ -6,6 +6,7 @@ import {
   SERVICE_LINK_CADENCE_DEFAULT,
   TerminalChannels,
   WorktreeChannels,
+  formulaPaneId,
   isAgentCliId,
   type AgentInfo,
   type BoardCard,
@@ -276,7 +277,7 @@ export const boardFeature: UiFeature = {
         paneCwds
       })
       if (!opened) return false
-      const paneId = opened.ordinal * 100 + 1
+      const paneId = formulaPaneId(opened.ordinal, 1) // a fresh workspace's first slot
       const targetInstance = paneInstance(paneId as PaneId)
       card.paneId = paneId
       card.workspaceId = opened.id

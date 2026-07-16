@@ -36,7 +36,7 @@ import { startDaemonBackend } from './daemon-relay'
 import { DaemonMigrationDeferredError } from './daemon-migrate'
 import { installCliRuntime } from './cli-runtime'
 import { installDeepLinkListeners, registerDeepLink, initialDeepLinkCwd, initialControlCommand } from './deep-link'
-import { ControlChannels, WorkspaceChannels } from '@contracts'
+import { CONTROL_COLD_START_DELAY_MS, ControlChannels, WorkspaceChannels } from '@contracts'
 import { initAutoUpdate } from './updater'
 import { fatal, installFatalHandlers } from './fatal'
 import { scrubInheritedPaneEnv } from './pane-env'
@@ -333,7 +333,7 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
           const w = win
           const send = (): void => {
             // Give restore a beat so `open` lands after existing workspaces re-attach.
-            setTimeout(() => w.webContents.send(ControlChannels.command, initialControl), 800)
+            setTimeout(() => w.webContents.send(ControlChannels.command, initialControl), CONTROL_COLD_START_DELAY_MS)
           }
           if (w.webContents.isLoading()) w.webContents.once('did-finish-load', send)
           else send()

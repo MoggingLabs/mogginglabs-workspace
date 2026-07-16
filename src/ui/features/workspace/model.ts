@@ -1,8 +1,10 @@
+import { formulaPaneId } from '@contracts'
+
 /**
  * A workspace tab = a project directory + its pane layout. Persisted as pure METADATA
  * (no secrets, no credentials — ADR 0002). The `ordinal` is a stable index that maps to the
- * base pane id (`ordinal * 100`), so a workspace's pane ids survive a restart and re-attach
- * to the daemon's restored panes.
+ * base pane id (`formulaPaneId` — ordinal × the slot stride), so a workspace's pane ids
+ * survive a restart and re-attach to the daemon's restored panes.
  *
  * That formula is the DEFAULT, not the law: a pane MOVED here from another workspace keeps
  * its own id, and `paneIds` records it. It has to keep it — a pane's id is its daemon
@@ -34,7 +36,7 @@ export interface WorkspaceMeta {
  *  remote and role seeds at spawn time). */
 export function paneIdForSlot(meta: WorkspaceMeta, slot: number): number {
   const moved = meta.paneIds?.[slot - 1]
-  return typeof moved === 'number' && moved >= 1 ? moved : meta.ordinal * 100 + slot
+  return typeof moved === 'number' && moved >= 1 ? moved : formulaPaneId(meta.ordinal, slot)
 }
 
 /**

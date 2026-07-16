@@ -423,6 +423,25 @@ export const agentsFeature: UiFeature = {
       }
       projectLaunchCwd(paneId, cwd)
       agentsClient.launchInto(paneId, result.command)
+      // The profile's email is a label the app cannot enforce — the CLI's OAuth
+      // lands on whatever account the browser offers. Main checked the launch
+      // home; say what it found while the sign-in (or the mixup) is on screen.
+      if (result.signIn) {
+        const profileName = mine.find((p) => p.id === effectiveProfile)?.name
+        showToast(
+          result.signIn.actual
+            ? {
+                tone: 'attention',
+                title: `Pane ${paneId} is signed in as ${result.signIn.actual}`,
+                body: `The “${profileName ?? 'selected'}” profile expects ${result.signIn.expected}. Run /login in that pane to switch accounts, or edit the profile's email in Settings.`
+              }
+            : {
+                tone: 'info',
+                title: `Sign in to set up “${profileName ?? provider}”`,
+                body: `When the browser opens, pick ${result.signIn.expected} — this profile should run under that account.`
+              }
+        )
+      }
       // Remember the tool-plan signature this pane launched with (8/09) — a
       // later plan edit flips it to restart-needed.
       if (workspaceId) {
