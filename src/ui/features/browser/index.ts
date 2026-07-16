@@ -481,6 +481,11 @@ export const browserFeature: UiFeature = {
         for (const p of ['preview', 'agent-web'] as const) {
           tabsFor(wsId, p) // init the base tab record
           ensureTabGuest(wsId, p, BASE_TAB)
+          // Fresh, or returning after LRU eviction: main may still hold an activeTab/tabsCache
+          // pointing at a dropped extra tab (e.g. t2) whose guest is gone — the driver would
+          // resolve `noview`. Re-sync main to the base tab we just (re)created.
+          activeTabMap.set(wpk(wsId, p), BASE_TAB)
+          publishTabs(wsId, p)
         }
       }
       while (lru.length > GUEST_CAP) {
@@ -513,6 +518,10 @@ export const browserFeature: UiFeature = {
       if (!tabsFor(wsId, p).some((t) => t.id === tabId)) return
       activeTabMap.set(wpk(wsId, p), tabId)
       bridge.send(BrowserChannels.tabActivate, { workspaceId: wsId, profile: p, tabId })
+      // Also publish the tab list: selecting an ALREADY-loaded tab fires no navigation, so
+      // without this main's tabsCache.activeId never updates and the tab_select verb's
+      // waitForTabs never sees the switch (burns its whole timeout, returns the old active tab).
+      publishTabs(wsId, p)
       applyGuestVisibility()
       // The header follows the newly-active tab's url immediately.
       const t = tabsFor(wsId, p).find((x) => x.id === tabId)
@@ -795,7 +804,11 @@ export const browserFeature: UiFeature = {
       }
       if (/^https:/i.test(u)) {
         urlLead.classList.add('is-secure')
-        const fav = wsFavicon.get(activeWsId())
+        // The ACTIVE tab's favicon (per tab, F4) — falling back to the workspace's last-seen
+        // one — so switching to an already-loaded tab shows ITS icon, not the previous tab's.
+        const wsId = activeWsId()
+        const activeT = tabsFor(wsId, activeProfile()).find((t) => t.id === activeTabId(wsId, activeProfile()))
+        const fav = activeT?.favicon || wsFavicon.get(wsId)
         if (fav) {
           const img = el('img', { class: 'browser-favicon' }) as HTMLImageElement
           img.src = fav

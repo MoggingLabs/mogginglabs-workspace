@@ -62,11 +62,21 @@ export function resolveAddressInput(raw: string): AddressResolution | null {
   // Explicit web scheme → open verbatim.
   if (/^https?:\/\//i.test(t)) return maybeUrl(t) ?? search
 
-  // A leading `scheme:` that is NOT a host:port is a scheme we don't open → search.
+  // A leading `scheme:` that is NOT a host:port is a scheme we don't open → search. It's
+  // only host:port when the part after the colon is a port (digits) AND the part before it
+  // is a plausible host — so `localhost:3000`/`example.com:8080` fall through, but `tel:911`,
+  // `sms:12345`, `about:blank` are schemes and search.
   const m = SCHEMEISH.exec(t)
-  if (m && !/^\d+(\/|$)/.test(m[2])) return search
+  if (m) {
+    const isHostPort = /^\d+(\/|$)/.test(m[2]) && (IS_LOCAL_HOST.test(t) || IS_IPV4.test(t) || m[1].includes('.'))
+    if (!isHostPort) return search
+  }
 
   if (IS_LOCAL_HOST.test(t)) return maybeUrl(`http://${t}`) ?? search
   if (!LOOKS_LIKE_HOST.test(t) && !HAS_PORT.test(t)) return search
+  // A scheme-less authority with userinfo (`user@host`, and the phishing shape
+  // `trusted.com@evil.com`) is ambiguous — searching it is safer than silently
+  // navigating to `host`, which is where the browser would actually go.
+  if (t.split('/')[0].includes('@')) return search
   return maybeUrl(`${prefersHttp(t) ? 'http' : 'https'}://${t}`) ?? search
 }

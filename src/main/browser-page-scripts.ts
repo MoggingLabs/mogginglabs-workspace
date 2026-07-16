@@ -22,20 +22,21 @@ export const SNAPSHOT_NODE_CAP = 300
  *  the same tree the snapshot stamped — falling back to treating `target` as a CSS
  *  selector (document scope) so agents can address elements they never snapshotted. */
 const FIND_PRELUDE = `
-  const __mogFindIn = (root, sel) => {
+  const __mogFindIn = (root, sel, depth) => {
+    if (depth > 20) return null
     let el = null
     try { el = root.querySelector(sel) } catch (e) { return null }
     if (el) return el
     for (const host of root.querySelectorAll('*')) {
-      if (host.shadowRoot) { const f = __mogFindIn(host.shadowRoot, sel); if (f) return f }
+      if (host.shadowRoot) { const f = __mogFindIn(host.shadowRoot, sel, depth + 1); if (f) return f }
     }
     for (const frame of root.querySelectorAll('iframe')) {
-      try { if (frame.contentDocument) { const f = __mogFindIn(frame.contentDocument, sel); if (f) return f } } catch (e) { /* cross-origin */ }
+      try { if (frame.contentDocument) { const f = __mogFindIn(frame.contentDocument, sel, depth + 1); if (f) return f } } catch (e) { /* cross-origin */ }
     }
     return null
   }
   const __mogFind = (target) => {
-    const byRef = __mogFindIn(document, '[data-mog-ref=' + JSON.stringify(target) + ']')
+    const byRef = __mogFindIn(document, '[data-mog-ref=' + JSON.stringify(target) + ']', 0)
     if (byRef) return byRef
     try { return document.querySelector(target) } catch (e) { return null }
   }`
@@ -46,8 +47,8 @@ export const SNAPSHOT_JS = `(() => {
   const nodes = []
   let truncated = false
   let i = 0
-  const collect = (root) => {
-    if (truncated) return
+  const collect = (root, depth) => {
+    if (truncated || depth > 20) return
     for (const el of root.querySelectorAll(sel)) {
       if (nodes.length >= ${SNAPSHOT_NODE_CAP}) { truncated = true; return }
       if (!vis(el)) continue
@@ -58,14 +59,14 @@ export const SNAPSHOT_JS = `(() => {
     }
     for (const host of root.querySelectorAll('*')) {
       if (truncated) return
-      if (host.shadowRoot) collect(host.shadowRoot)
+      if (host.shadowRoot) collect(host.shadowRoot, depth + 1)
     }
     for (const frame of root.querySelectorAll('iframe')) {
       if (truncated) return
-      try { if (frame.contentDocument) collect(frame.contentDocument) } catch (e) { /* cross-origin */ }
+      try { if (frame.contentDocument) collect(frame.contentDocument, depth + 1) } catch (e) { /* cross-origin */ }
     }
   }
-  collect(document)
+  collect(document, 0)
   const text = (document.body ? document.body.innerText : '').replace(/\\s+/g, ' ').trim().slice(0, 4000)
   return { nodes, text, truncated, url: location.href, title: document.title }
 })()`
@@ -113,7 +114,11 @@ export function typeScript(target: string, value: string): string {
   else return false
   el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: v, inputType: 'insertText' }))
   el.dispatchEvent(new Event('change', { bubbles: true }))
-  return true
+  // Verify it LANDED — a constrained field (<input type=number> given letters, a
+  // maxlength/pattern/readonly input) silently drops the value; reporting ok then would
+  // let an agent submit an empty required field thinking it typed. Empty target = cleared.
+  const now = el.isContentEditable ? (el.textContent || '') : ('value' in el ? el.value : '')
+  return v === '' ? now === '' : now !== ''
 })()`
 }
 
@@ -127,10 +132,13 @@ export function selectScript(target: string, value: string): string {
   const v = ${JSON.stringify(value)}
   const desc = el instanceof HTMLSelectElement ? Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value') : null
   if (desc && desc.set) desc.set.call(el, v)
-  else el.value = v
+  else if ('value' in el) el.value = v
+  else return false
   el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true }))
   el.dispatchEvent(new Event('change', { bubbles: true }))
-  return true
+  // A <select> accepts the value only if an <option> matches; otherwise value stays put.
+  // Report the truth so an agent doesn't proceed on a selection that never took.
+  return 'value' in el ? el.value === v : false
 })()`
 }
 

@@ -35,6 +35,26 @@ describe('resolveAddressInput', () => {
     expect(resolveAddressInput('about:blank')).toEqual({ kind: 'search', query: 'about:blank' })
   })
 
+  it('NEVER resolves a dangerous scheme to a navigable url', () => {
+    for (const d of ['javascript:alert(1)', 'JAVASCRIPT:alert(1)', 'data:text/html,<script>', 'file:///etc/passwd', 'vbscript:x']) {
+      expect(resolveAddressInput(d)?.kind).not.toBe('url')
+    }
+  })
+
+  it('searches a scheme whose opaque part is digits (tel:/sms:), not host:port', () => {
+    // The digits-after-colon guard exists for localhost:3000 — it must not fire for a real
+    // scheme whose authority is not a host (tel:911 → search, never http://tel:911/).
+    expect(resolveAddressInput('tel:911')).toEqual({ kind: 'search', query: 'tel:911' })
+    expect(resolveAddressInput('sms:12345')).toEqual({ kind: 'search', query: 'sms:12345' })
+  })
+
+  it('searches scheme-less userinfo input rather than navigating to the host', () => {
+    // The classic `trusted.com@evil.com` omnibox surprise — searching is safer than
+    // silently sending the user to evil.com.
+    expect(resolveAddressInput('user@host.com')).toEqual({ kind: 'search', query: 'user@host.com' })
+    expect(resolveAddressInput('google.com@evil.com')).toEqual({ kind: 'search', query: 'google.com@evil.com' })
+  })
+
   it('returns null for empty/whitespace', () => {
     expect(resolveAddressInput('')).toBeNull()
     expect(resolveAddressInput('   ')).toBeNull()

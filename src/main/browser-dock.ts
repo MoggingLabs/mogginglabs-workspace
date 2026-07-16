@@ -115,7 +115,6 @@ export function setAgentWebVaultProbeForSmoke(probe: (() => boolean) | null): vo
 function refreshVault(): void {
   agentWebPersists = !vaultDisabled() && vaultAvailable()
 }
-const agentWebPartitionFor = (workspaceId: string): string => browserAgentWebPartition(workspaceId, agentWebPersists)
 
 // ── Agent control state (6/05b), now PER-WORKSPACE (8/07c) ──────────────────
 // Each agent drives ITS OWN workspace's browser (resolved from its pane), gated
@@ -270,6 +269,13 @@ function wireChildWindow(child: WebContents): void {
   applyGuestSessionPolicy(child.session) // shared session — idempotent, but explicit
   child.setUserAgent(chromeUserAgent())
   child.setWindowOpenHandler(guestWindowOpenHandler(child))
+  // RECURSE: a popup can spawn a popup. Without this, a grandchild window inherits no
+  // will-navigate guard and could be pointed at file:// (a sandboxed file:// document IS
+  // the file's bytes and can exfiltrate them). Match wireGuest's child wiring, all the
+  // way down.
+  child.on('did-create-window', (win) => {
+    if (!win.isDestroyed()) wireChildWindow(win.webContents)
+  })
   child.on('will-navigate', (e, url) => {
     if (!normalizeUrl(url) && url !== 'about:blank') e.preventDefault()
   })
@@ -288,6 +294,10 @@ function wireGuest(p: BrowserProfile, wc: WebContents, wsId: string): void {
   const ring = bufs.get(wc.id)!
   wc.setWindowOpenHandler(
     guestWindowOpenHandler(wc, (url) => {
+      // Defense in depth on the signed-in profile: a page's window.open / target=_blank
+      // must never point the agent-web browser at a SENSITIVE origin (bank/mail/gov) —
+      // those refuse at BOTH ends, whoever triggered the open. Preview is unrestricted.
+      if (p === 'agent-web' && isBlockedActOrigin(originOf(url))) return
       const win = getWin?.()
       if (win && !win.isDestroyed()) win.webContents.send(BrowserChannels.tabOpen, { workspaceId: wsId, profile: p, url })
     })
@@ -785,6 +795,15 @@ export async function agentAct(v: BrowserAgentVerb, ctx?: { pane?: string }): Pr
       case 'tab_new': {
         const before = (tabsCache.get(wpKey(sess.wsId, sess.profile))?.tabs ?? []).length
         const openUrl = v.target ? (normalizeUrl(v.target) ?? undefined) : undefined
+        // Opening a tab TO a url IS a navigation of this profile — the renderer loads it,
+        // NOT the gated `navigate` verb. On agent-web that would let tab_new point the
+        // signed-in browser at a SENSITIVE or UNGRANTED origin (which navigate refuses at
+        // both ends) and then read it. Gate the url exactly like navigate. Preview is free;
+        // a blank tab_new (no url) is always allowed.
+        if (openUrl && sess.profile === 'agent-web') {
+          const refusal = gateAct({ verb: 'navigate', target: openUrl }, wc, sess.wsId, sess.profile)
+          if (refusal) return refusal
+        }
         const win = getWin?.()
         if (!win || win.isDestroyed()) return { ok: false, reason: 'noview' }
         win.webContents.send(BrowserChannels.tabOpen, { workspaceId: sess.wsId, profile: sess.profile, url: openUrl })
@@ -792,9 +811,11 @@ export async function agentAct(v: BrowserAgentVerb, ctx?: { pane?: string }): Pr
         return { ok: true, ...tabsSnapshot(sess.wsId, sess.profile) }
       }
       case 'tab_select': {
+        const target = String(v.target ?? '').trim()
+        if (!target) return { ok: false, reason: 'badtarget' } // empty must not silently mean index 0
         const tabs = tabsCache.get(wpKey(sess.wsId, sess.profile))?.tabs ?? []
-        const idx = Number(v.target)
-        const tab = Number.isInteger(idx) && idx >= 0 ? tabs[idx] : tabs.find((t) => t.id === v.target)
+        const idx = /^\d+$/.test(target) ? Number(target) : -1
+        const tab = idx >= 0 ? tabs[idx] : tabs.find((t) => t.id === target)
         if (!tab) return { ok: false, reason: 'badtarget' }
         const win = getWin?.()
         if (!win || win.isDestroyed()) return { ok: false, reason: 'noview' }
@@ -817,43 +838,52 @@ export async function agentAct(v: BrowserAgentVerb, ctx?: { pane?: string }): Pr
 
 // ── Agent-web session controls (8/04): the ACTIVE workspace's OWN partition ──
 
-const agentWebSession = (workspaceId = activeWorkspaceId): Session => session.fromPartition(agentWebPartitionFor(workspaceId))
+// BOTH partition variants for a workspace. The machine-global vault probe can flip
+// persist ↔ mem mid-session, and an open guest keeps the partition it was CREATED with —
+// so a "forget"/"clear" that targets only the CURRENT variant can clear the wrong jar and
+// report false success. Inspect/clear both; the guest's real jar is always one of them.
+const agentWebSessionsAll = (workspaceId = activeWorkspaceId): Session[] => {
+  const names = new Set([browserAgentWebPartition(workspaceId, true), browserAgentWebPartition(workspaceId, false)])
+  return [...names].map((n) => session.fromPartition(n))
+}
 
 async function signedInSites(workspaceId = activeWorkspaceId): Promise<BrowserSignedInSite[]> {
-  const cookies = await agentWebSession(workspaceId).cookies.get({})
   const byHost = new Map<string, number>()
-  for (const c of cookies) {
-    const host = (c.domain ?? '').replace(/^\./, '')
-    if (host) byHost.set(host, (byHost.get(host) ?? 0) + 1)
+  for (const ses of agentWebSessionsAll(workspaceId)) {
+    for (const c of await ses.cookies.get({})) {
+      const host = (c.domain ?? '').replace(/^\./, '')
+      if (host) byHost.set(host, (byHost.get(host) ?? 0) + 1)
+    }
   }
   return [...byHost.entries()].map(([host, n]) => ({ host, cookies: n })).sort((a, b) => a.host.localeCompare(b.host))
 }
 
 async function forgetSite(host: string, workspaceId = activeWorkspaceId): Promise<void> {
-  const ses = agentWebSession(workspaceId)
   if (!host) return
-  const cookies = await ses.cookies.get({})
-  for (const c of cookies) {
-    const d = (c.domain ?? '').replace(/^\./, '')
-    if (d !== host && !d.endsWith(`.${host}`)) continue
-    const url = `${c.secure ? 'https' : 'http'}://${d}${c.path ?? '/'}`
-    try {
-      await ses.cookies.remove(url, c.name)
-    } catch {
-      /* already gone */
+  for (const ses of agentWebSessionsAll(workspaceId)) {
+    const cookies = await ses.cookies.get({})
+    for (const c of cookies) {
+      const d = (c.domain ?? '').replace(/^\./, '')
+      if (d !== host && !d.endsWith(`.${host}`)) continue
+      const url = `${c.secure ? 'https' : 'http'}://${d}${c.path ?? '/'}`
+      try {
+        await ses.cookies.remove(url, c.name)
+      } catch {
+        /* already gone */
+      }
     }
-  }
-  for (const scheme of ['https', 'http']) {
-    try {
-      await ses.clearStorageData({ origin: `${scheme}://${host}` })
-    } catch {
-      /* nothing stored */
+    for (const scheme of ['https', 'http']) {
+      try {
+        await ses.clearStorageData({ origin: `${scheme}://${host}` })
+      } catch {
+        /* nothing stored */
+      }
     }
   }
 }
 
 async function clearAgentLogins(workspaceId = activeWorkspaceId): Promise<void> {
-  await agentWebSession(workspaceId).clearStorageData()
+  for (const ses of agentWebSessionsAll(workspaceId)) await ses.clearStorageData()
 }
 
 export function agentControlDebug(): {
@@ -960,12 +990,17 @@ export function registerBrowserDock(winGetter: () => BrowserWindow | null): void
   })
   ipcMain.on(BrowserChannels.tabsState, (_e, s: BrowserTabsState) => {
     if (typeof s?.workspaceId === 'string' && s.workspaceId && (s.profile === 'preview' || s.profile === 'agent-web') && Array.isArray(s.tabs)) {
+      const cap = (v: unknown): string => String(v ?? '').slice(0, 2048)
       const tabs = s.tabs
-        .filter((t): t is BrowserTab => !!t && typeof t.id === 'string')
-        .map((t) => ({ id: t.id, url: String(t.url ?? ''), title: String(t.title ?? '') }))
+        // A non-empty id is required: an id:'' would set activeTab to '' (guestKey `${ws}:${p}#`
+        // resolves nothing), wedging the workspace's tab resolution. Fields length-capped so a
+        // compromised renderer can't cache megabytes that ride back to the agent via tab_list.
+        .filter((t): t is BrowserTab => !!t && typeof t.id === 'string' && t.id.length > 0)
+        .map((t) => ({ id: t.id.slice(0, 64), url: cap(t.url), title: cap(t.title) }))
         .slice(0, 50)
-      tabsCache.set(wpKey(s.workspaceId, s.profile), { workspaceId: s.workspaceId, profile: s.profile, tabs, activeId: String(s.activeId ?? BASE_TAB) })
-      if (typeof s.activeId === 'string' && s.activeId) activeTab.set(wpKey(s.workspaceId, s.profile), s.activeId)
+      const activeId = typeof s.activeId === 'string' && s.activeId ? s.activeId.slice(0, 64) : BASE_TAB
+      tabsCache.set(wpKey(s.workspaceId, s.profile), { workspaceId: s.workspaceId, profile: s.profile, tabs, activeId })
+      if (typeof s.activeId === 'string' && s.activeId) activeTab.set(wpKey(s.workspaceId, s.profile), activeId)
     }
   })
 
