@@ -264,6 +264,14 @@ export const wizardFeature: UiFeature = {
           customCount = m.count
           total += m.count
         } else {
+          // A preset outlives its CLIs. A mix naming a provider that is no longer
+          // installed must not become an assignment: its roster row has no stepper
+          // ("not found on PATH"), so the count would be invisible and unfixable —
+          // and Launch would type a command the shell cannot find. applyRoster
+          // enforces exactly this invariant when the registry CHANGES; the preset/
+          // prefill path lands here. An EMPTY roster means detection has not
+          // answered yet — keep the mix; the open() refresh prunes with real data.
+          if (roster.length && !roster.some((a) => a.id === m.provider && a.installed)) continue
           counts.set(m.provider, m.count)
           total += m.count
         }
@@ -314,6 +322,29 @@ export const wizardFeature: UiFeature = {
 
     async function launch(skipAgents: boolean, generation: number): Promise<boolean> {
       normalizeAssignmentsToCapacity()
+      // THE LAUNCH SNAPSHOT. Everything below runs across awaits — the profile
+      // re-check, resolve(), one `git worktree add` PER AGENT (seconds on a real
+      // repo) — while the page stays interactive: only the footer buttons disable.
+      // Reading the live wizard state after those awaits let a keystroke or a
+      // recent-folder click mid-transaction retarget the launch: worktrees created
+      // under repo A, the workspace opened at half-typed B, and the rollback asking
+      // B to remove A's worktrees (refused as not-managed). The transaction acts on
+      // ONE moment — this one — and later input changes only the NEXT launch.
+      const snap = {
+        cwd,
+        name,
+        isRepo,
+        isolate,
+        paneCount,
+        customCmd: customCmd.trim(),
+        customCount,
+        counts: new Map(counts),
+        remoteHost: remoteHost ? { ...remoteHost } : null,
+        swarmRoles: swarmRoles ? [...swarmRoles] : null,
+        profileByProvider: new Map(profileByProvider),
+        scopeTools: pickableServers.length > 0,
+        selectedTools: [...selectedTools]
+      }
       const refuse = (message: string): false => {
         path.setStatus({ kind: 'warn', text: message })
         whereCard.scrollIntoView({ block: 'nearest' })
@@ -321,11 +352,32 @@ export const wizardFeature: UiFeature = {
         return false
       }
       if (!currentOpen(generation)) return false
-      if (!skipAgents && customCount > 0 && !customCmd.trim()) {
+      if (!skipAgents && snap.customCount > 0 && !snap.customCmd) {
         return refuse('Enter a custom command or set its count to zero.')
       }
 
-      const selectedProfileIds = [...new Set(profileByProvider.values())]
+      const mix: ProviderCount[] = []
+      if (!skipAgents) {
+        for (const a of roster) {
+          const n = snap.counts.get(a.id) ?? 0
+          if (n > 0) mix.push({ provider: a.id, count: n })
+        }
+        if (snap.customCount > 0 && snap.customCmd) mix.push({ provider: `custom:${snap.customCmd}`, count: snap.customCount })
+      }
+      const assigned = mix.reduce((s, m) => s + m.count, 0)
+      if (snap.paneCount - assigned > 0) mix.push({ provider: 'shell', count: snap.paneCount - assigned })
+
+      // Re-verify only the profiles this launch actually uses. A picker choice for a
+      // provider whose count is zero is not part of the launch — a profile deleted in
+      // Settings must not refuse a workspace that never referenced it.
+      const mixProviders = new Set<string>(mix.map((m) => m.provider))
+      const selectedProfileIds = [
+        ...new Set(
+          [...snap.profileByProvider.entries()]
+            .filter(([provider]) => mixProviders.has(provider))
+            .map(([, id]) => id)
+        )
+      ]
       if (!skipAgents && selectedProfileIds.length) {
         let latestProfiles: AgentProfile[]
         try {
@@ -337,18 +389,6 @@ export const wizardFeature: UiFeature = {
         const missing = selectedProfileIds.find((id) => !latestProfiles.some((profile) => profile.id === id))
         if (missing) return refuse('A selected agent profile no longer exists. Choose a profile again before launching.')
       }
-
-      const mix: ProviderCount[] = []
-      if (!skipAgents) {
-        for (const a of roster) {
-          const n = counts.get(a.id) ?? 0
-          if (n > 0) mix.push({ provider: a.id, count: n })
-        }
-        const cmd = customCmd.trim()
-        if (customCount > 0 && cmd) mix.push({ provider: `custom:${cmd}`, count: customCount })
-      }
-      const assigned = mix.reduce((s, m) => s + m.count, 0)
-      if (paneCount - assigned > 0) mix.push({ provider: 'shell', count: paneCount - assigned })
 
       let resolved: { paneCount: number; assignments: string[] }
       try {
@@ -366,7 +406,7 @@ export const wizardFeature: UiFeature = {
         let clean = true
         for (const worktreePath of [...createdWorktrees].reverse()) {
           try {
-            const removed = await wizardClient.removeWorktree(cwd, worktreePath)
+            const removed = await wizardClient.removeWorktree(snap.cwd, worktreePath)
             if (!removed.ok) clean = false
           } catch {
             clean = false
@@ -374,7 +414,7 @@ export const wizardFeature: UiFeature = {
         }
         return clean
       }
-      if (!skipAgents && isolate && isRepo && cwd) {
+      if (!skipAgents && snap.isolate && snap.isRepo && snap.cwd) {
         paneCwds = []
         for (const assignment of resolved.assignments) {
           if (assignment && assignment !== 'shell') {
@@ -383,7 +423,7 @@ export const wizardFeature: UiFeature = {
               return false
             }
             try {
-              const wt = await wizardClient.createWorktree(cwd)
+              const wt = await wizardClient.createWorktree(snap.cwd)
               if (!wt.ok || !wt.path) {
                 const cleaned = await rollbackWorktrees()
                 return refuse(
@@ -406,27 +446,27 @@ export const wizardFeature: UiFeature = {
         }
       }
 
-      const manifest = swarmRoles
+      const manifest = snap.swarmRoles
       const roles =
         !skipAgents && manifest ? resolved.assignments.map((_, i) => manifest[i] ?? null) : undefined
       // The remote path's cwd rides on the REMOTE entry, never in paneCwds: a paneCwd is a
       // local path, and the far-side folder must never be handed to a local filesystem API.
-      const selectedRemote = remoteHost ? { ...remoteHost, cwd: cwd.trim() ? cwd : undefined } : null
+      const selectedRemote = snap.remoteHost ? { ...snap.remoteHost, cwd: snap.cwd.trim() ? snap.cwd : undefined } : null
       try {
         const opened = await openPlannedWorkspaceFromTemplate({
-          name: name.trim() || basename(cwd) || 'Workspace',
-          cwd: remoteHost ? '' : cwd,
+          name: snap.name.trim() || basename(snap.cwd) || 'Workspace',
+          cwd: snap.remoteHost ? '' : snap.cwd,
           paneCount: resolved.paneCount,
           assignments: resolved.assignments,
-          paneCwds: remoteHost ? undefined : paneCwds,
+          paneCwds: snap.remoteHost ? undefined : paneCwds,
           roles,
           remotes: selectedRemote
             ? Array<{ hostId: string; name: string; cwd?: string } | null>(resolved.paneCount).fill(selectedRemote)
             : undefined,
-          profileIds: resolved.assignments.map((a) => (a && profileByProvider.has(a) ? profileByProvider.get(a)! : null)),
+          profileIds: resolved.assignments.map((a) => (a && snap.profileByProvider.has(a) ? snap.profileByProvider.get(a)! : null)),
           // Scope only when there ARE connected servers to scope (else leave the
           // CLIs' global config untouched — no silent stripping, 8/09).
-          tools: pickableServers.length ? [...selectedTools] : undefined
+          tools: snap.scopeTools ? snap.selectedTools : undefined
         })
         if (!opened) throw new Error('The workspace service is unavailable. No workspace or agent was started.')
       } catch (error) {
@@ -441,7 +481,7 @@ export const wizardFeature: UiFeature = {
         props: {
           panes: resolved.paneCount,
           agents: resolved.assignments.filter((a) => a && a !== 'shell').length,
-          custom: customCount > 0,
+          custom: snap.customCount > 0,
           skipped_agents: skipAgents,
           isolated: paneCwds !== undefined // a boolean — never the paths (ADR 0005)
         }
