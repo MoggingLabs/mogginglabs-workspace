@@ -156,9 +156,12 @@ export function runMcpSmoke(win: BrowserWindow): void {
             served[i].description === e.description &&
             JSON.stringify(served[i].inputSchema) === JSON.stringify(e.inputSchema)
         )
-      const noWritesServed = !served.some((t) =>
-        ['send_to_pane', 'send_key', 'mail_send', 'claim_files', 'release_files', 'update_card'].includes(t.name)
-      )
+      // Writes derive from the CATALOG (access === 'write') — the assertion
+      // cannot go stale when the write set grows.
+      const writeNames = (JSON.parse(contractsCatalog) as (ToolRow & { access: string })[])
+        .filter((t) => t.access === 'write')
+        .map((t) => t.name)
+      const noWritesServed = writeNames.length >= 11 && !served.some((t) => writeNames.includes(t.name))
       const noApproveAnywhere = !JSON.stringify(served).toLowerCase().includes('approve')
 
       // ── Each control read against its planted fixture ─────────────────────

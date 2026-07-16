@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 141 gates: 19 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 145 gates: 19 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
-# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT) + 122 app-boot
+# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT) + 126 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -270,6 +270,10 @@ run_smoke WORKTREE    MOGGING_WORKTREE  1 240 worktree
 run_smoke REVIEW      MOGGING_REVIEW    1 240 review
 run_smoke REVIEWSNAP  MOGGING_REVIEWSNAP 1 180 reviewsnap
 run_smoke BOARD       MOGGING_BOARD     1 240 board
+run_smoke BOARDV2     MOGGING_BOARDV2   1 240 boardv2
+run_smoke BOARDMCP    MOGGING_BOARDMCP  1 300 boardmcp
+run_smoke BOARDGH     MOGGING_BOARDGH   1 240 boardgh
+run_smoke BOARDQUEUE  MOGGING_BOARDQUEUE 1 300 boardqueue
 run_smoke BOARDFAIL   MOGGING_BOARDFAIL 1 120 boardfail
 run_smoke PERSISTHEALTH MOGGING_PERSISTHEALTH 1 120 persisthealth
 run_smoke ROLERACE    MOGGING_ROLERACE 1 120 rolerace

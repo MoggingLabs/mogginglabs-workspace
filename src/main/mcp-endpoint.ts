@@ -6,19 +6,14 @@ import { DAEMON_PROTOCOL_VERSION } from '@contracts'
 import { agentAct, agentControlDebug } from './browser-dock'
 import { handleUsageCall } from './usage'
 import { getSettingsStore } from './app-settings'
-import { onIntegrationsGrantChanged, resolveGrantedWriteTools } from './integrations'
+import { onIntegrationsGrantChanged, resolveGrantedWriteTools, workspaceIdForPane } from './integrations'
 import { connectionUpstream } from './connections'
 import { mcpFetch } from '@backend/features/integrations'
 import { getDaemonClient } from './daemon-relay'
 import { runtimeDir as clientRuntimeDir } from './daemon-client'
 import { recordTrail } from './trail'
-import {
-  BOARD_LANES,
-  MCP_BROWSER_TOOL_NAMES,
-  type BoardCard,
-  type BrowserAgentVerb,
-  type BrowserAgentVerbName
-} from '@contracts'
+import { MCP_BROWSER_TOOL_NAMES, type BrowserAgentVerb, type BrowserAgentVerbName } from '@contracts'
+import { applyCardPatch, boardForPane, commentCard, createCard } from './board'
 
 /**
  * The agent-control transport (Phase-6/05b). Main opens a token-authed LOCAL
@@ -127,6 +122,16 @@ function receiptCopy(tool: string, by: string): string {
       return `MCP: mail from pane ${by}`
     case 'update_card':
       return `MCP: card updated by pane ${by}`
+    case 'create_card':
+      return `MCP: card created by pane ${by}`
+    case 'claim_card':
+      return `MCP: card claimed by pane ${by}`
+    case 'release_card':
+      return `MCP: card released by pane ${by}`
+    case 'comment_card':
+      return `MCP: card comment by pane ${by}`
+    case 'archive_card':
+      return `MCP: card archived by pane ${by}`
     default:
       return `MCP: ${tool} by pane ${by}`
   }
@@ -184,7 +189,7 @@ function handleReceipt(msg: Record<string, unknown>, boundPane: string | undefin
   const card = typeof msg.card === 'string' ? msg.card : undefined
   let targetPane = typeof msg.pane === 'string' && msg.pane ? msg.pane : ''
   if (!targetPane && card) {
-    const bound = getSettingsStore()?.listBoard().find((c) => c.id === card)?.paneId
+    const bound = getSettingsStore()?.getCard(card)?.paneId
     if (bound != null) targetPane = String(bound)
   }
   if (targetPane) getDaemonClient()?.notify(targetPane, 'attention', receiptCopy(tool, by))
@@ -197,6 +202,129 @@ function handleReceipt(msg: Record<string, unknown>, boundPane: string | undefin
     target: targetPane ? `pane ${targetPane}` : card ? `card ${card}` : 'fleet',
     outcome: 'ok'
   })
+}
+
+// ── Board v2 over the agent wire (M2): scoped reads + granted CRUD ────────────
+
+type BoardRpcReply = { ok: boolean } & Record<string, unknown>
+
+/** board.<verb> -> the write-tool name whose grant covers it. ONE map — the
+ *  catalog's rows point back at these verbs, so the two cannot drift far. */
+const BOARD_WRITE_TOOL: Record<string, string> = {
+  'board.update': 'update_card',
+  'board.create': 'create_card',
+  'board.claim': 'claim_card',
+  'board.release': 'release_card',
+  'board.comment': 'comment_card',
+  'board.archive': 'archive_card'
+}
+
+function handleBoardRead(name: string, args: Record<string, unknown>, boundPane: string | undefined): BoardRpcReply {
+  const store = getSettingsStore()
+  if (!store) return { ok: false, reason: 'the board store is unavailable' }
+  if (name === 'board.get') {
+    const card = store.getCard(String(args.card ?? ''))
+    if (!card) return { ok: false, reason: 'unknown-card' }
+    if (boundPane) {
+      const board = boardForPane(boundPane)
+      // A pane reads its OWN project's board, nothing else — same scope as list.
+      if (!board || card.boardId !== board.id) return { ok: false, reason: 'unknown-card' }
+    }
+    return { ok: true, card, activity: store.listBoardActivity(card.id, 20) }
+  }
+  if (boundPane) {
+    const board = boardForPane(boundPane)
+    if (!board) return { ok: true, board: null, cards: [] }
+    return {
+      ok: true,
+      board: { id: board.id, name: board.name, repoRef: board.repoRef },
+      cards: store.listCards(board.id)
+    }
+  }
+  // Paneless (human/app) session: the all-boards overview.
+  return { ok: true, board: null, cards: store.listAllCards() }
+}
+
+/** Labels ride the wire as one comma-separated string (catalog schemas are
+ *  primitive-only); the writer's sanitizer owns caps/dedupe. */
+const splitLabels = (v: unknown): string[] | undefined =>
+  typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined
+
+function handleBoardWrite(name: string, args: Record<string, unknown>, boundPane: string | undefined): BoardRpcReply {
+  const tool = BOARD_WRITE_TOOL[name]
+  if (!tool) return { ok: false, reason: 'unknown-tool' }
+  // Defense in depth: the server already filters by grant; the endpoint
+  // re-derives it and fails closed (same as the old board.save).
+  if (!boundPane || !resolveGrantedWriteTools(boundPane).writeTools.includes(tool)) {
+    return { ok: false, reason: 'forbidden' }
+  }
+  const store = getSettingsStore()
+  if (!store) return { ok: false, reason: 'the board store is unavailable' }
+  const board = boardForPane(boundPane)
+  if (!board) return { ok: false, reason: 'forbidden' }
+  const actor = `pane ${boundPane}`
+
+  if (name === 'board.create') {
+    const card = createCard(
+      {
+        boardId: board.id,
+        title: args.title,
+        notes: args.note,
+        lane: args.column,
+        priority: args.priority,
+        labels: splitLabels(args.labels),
+        actor
+      },
+      actor
+    )
+    return card ? { ok: true, card } : { ok: false, reason: 'invalid' }
+  }
+
+  const card = store.getCard(String(args.card ?? ''))
+  if (!card || card.boardId !== board.id) return { ok: false, reason: 'unknown-card' }
+
+  if (name === 'board.comment') {
+    const done = commentCard(card.id, args.body, actor)
+    return done.ok ? { ok: true, pane: card.paneId ?? undefined } : done
+  }
+  if (name === 'board.claim') {
+    const result = applyCardPatch(
+      card.id,
+      { paneId: Number(boundPane), workspaceId: workspaceIdForPane(boundPane) ?? null },
+      { actor, enforceClaimFor: boundPane }
+    )
+    if (!result.ok) return { ok: false, reason: result.reason, card: result.card, owner: result.card?.paneId ?? undefined }
+    return { ok: true, card: result.card }
+  }
+  if (name === 'board.release') {
+    if (String(card.paneId ?? '') !== boundPane) return { ok: false, reason: 'not-holder', owner: card.paneId ?? undefined }
+    const result = applyCardPatch(card.id, { paneId: null, workspaceId: null }, { actor })
+    return result.ok ? { ok: true, card: result.card } : { ok: false, reason: result.reason }
+  }
+  if (name === 'board.archive') {
+    const result = applyCardPatch(card.id, { archivedAt: Date.now() }, { actor, enforceClaimFor: boundPane })
+    if (!result.ok) return { ok: false, reason: result.reason, owner: result.card?.paneId ?? undefined }
+    return { ok: true, card: result.card, pane: card.paneId ?? undefined }
+  }
+  // board.update — the widened update_card: field patch + optional CAS.
+  const patch: Record<string, unknown> = {}
+  if (args.column !== undefined) patch.lane = args.column
+  if (args.note !== undefined) patch.notes = args.note
+  if (args.title !== undefined) patch.title = args.title
+  if (args.priority !== undefined) patch.priority = args.priority
+  if (args.labels !== undefined) patch.labels = splitLabels(args.labels)
+  if (args.blocked !== undefined) patch.blocked = args.blocked
+  if (args.blockedReason !== undefined) patch.blockedReason = args.blockedReason
+  if (args.before !== undefined) patch.beforeId = args.before
+  const result = applyCardPatch(card.id, patch, {
+    actor,
+    enforceClaimFor: boundPane,
+    expectedRevision: typeof args.expectedRevision === 'number' ? args.expectedRevision : undefined
+  })
+  if (!result.ok) {
+    return { ok: false, reason: result.reason, card: result.card, owner: result.card?.paneId ?? undefined }
+  }
+  return { ok: true, card: result.card, pane: result.card.paneId ?? undefined }
 }
 
 export function startMcpEndpoint(): void {
@@ -296,40 +424,20 @@ export function startMcpEndpoint(): void {
               .catch((e) => sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: rpcFailure(e) }) + '\n'))
             continue
           }
-          // 8/02: the board lives app-side — `board.list` serves the control
-          // read `list_board`. Card text is USER CONTENT: it rides this authed
-          // socket to the CALLING MODEL only (same class as capture — never
-          // telemetry, notify, or logs, ADR 0005).
-          if (msg.name === 'board.list') {
-            sock.write(JSON.stringify({ t: 'result', id, ok: true, cards: getSettingsStore()?.listBoard() ?? [] }) + '\n')
+          // 8/02 → Board v2: the board lives app-side. Reads are pane-SCOPED —
+          // a pane sees its own workspace's project board; a paneless (human)
+          // session gets the all-boards overview. Card text is USER CONTENT:
+          // it rides this authed socket to the CALLING MODEL only (same class
+          // as capture — never telemetry, notify, or logs, ADR 0005).
+          if (msg.name === 'board.list' || msg.name === 'board.get') {
+            sock.write(JSON.stringify({ t: 'result', id, ...handleBoardRead(msg.name, msg.args ?? {}, boundPane) }) + '\n')
             continue
           }
-          // 8/03: `update_card`'s upstream — patch lane/notes on an EXISTING
-          // card (the board:save capability, no new verbs). Reply carries the
-          // card's bound pane so the server's receipt can land on it.
-          if (msg.name === 'board.save') {
-            if (!boundPane || !resolveGrantedWriteTools(boundPane).writeTools.includes('update_card')) {
-              sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: 'forbidden' }) + '\n')
-              continue
-            }
-            const args = msg.args ?? {}
-            const store = getSettingsStore()
-            const card = store?.listBoard().find((c) => c.id === String(args.card ?? ''))
-            if (!store || !card) {
-              sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: 'unknown-card' }) + '\n')
-              continue
-            }
-            if (typeof args.column === 'string') {
-              if (!(BOARD_LANES as readonly string[]).includes(args.column)) {
-                sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: 'badlane' }) + '\n')
-                continue
-              }
-              card.lane = args.column as BoardCard['lane']
-            }
-            if (typeof args.note === 'string') card.notes = args.note.slice(0, 10000)
-            card.updatedAt = Date.now()
-            store.saveBoardCard(card)
-            sock.write(JSON.stringify({ t: 'result', id, ok: true, pane: card.paneId ?? undefined }) + '\n')
+          // Board v2 writes: full CRUD behind the SAME per-workspace grant, all
+          // funneled through main's one writer (CAS + claim rule + activity).
+          // Replies carry the card's bound pane so receipts can land on it.
+          if (msg.name.startsWith('board.')) {
+            sock.write(JSON.stringify({ t: 'result', id, ...handleBoardWrite(msg.name, msg.args ?? {}, boundPane) }) + '\n')
             continue
           }
           // ADR 0014: the connection proxy. A bridge asks us to speak to a service

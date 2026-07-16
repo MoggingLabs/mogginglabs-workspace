@@ -5,6 +5,7 @@ import { installFixtures, type UpdateDriver, type UsageWorld } from './fixture-p
 import { maybeAsyncFault } from './async-audit-faults'
 import { waitForMutationAudit } from './mutation-audit-faults'
 import { consumeConsentSetFailure } from './browserzero-audit-faults'
+import { currentBoardGhWorld } from './boardgh-audit-fixture'
 
 // THE DEV SIDE OF THE PORTS (audit finding 41). Imported ONLY by src/main/index.dev.ts, which
 // electron-vite uses for `serve` — so every module reachable from here (the *-audit-faults
@@ -122,6 +123,7 @@ export function installHarnessPorts(): void {
     // Armed by the gate's own var. Its PRESENCE is also what tells updater.ts the real feed is off.
     updateDriver: process.env.MOGGING_UPDATEFAIL ? driveFailedFeed : undefined,
     vaultDisabled: () => !!process.env.MOGGING_TEST_NO_VAULT,
-    exportPath: () => process.env.MOGGING_PERSIST_EXPORT_PATH ?? null
+    exportPath: () => process.env.MOGGING_PERSIST_EXPORT_PATH ?? null,
+    boardGhWorld: currentBoardGhWorld // armed only by the BOARDGH smoke's setBoardGhWorld
   })
 }

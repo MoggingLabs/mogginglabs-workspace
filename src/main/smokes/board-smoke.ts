@@ -58,6 +58,21 @@ export function runBoardSmoke(win: BrowserWindow): void {
     try {
       await sleep(1500) // launcher-first boot settles
 
+      // 0) anchor workspace FIRST — a REPO, so start-on-card isolates in a
+      // worktree, and so the card lands on the PROJECT's board (Board v2: the
+      // loaded board follows the active workspace).
+      const anchor = mkdtempSync(join(tmpdir(), 'mogging-board-'))
+      git(anchor, ['init'])
+      git(anchor, ['symbolic-ref', 'HEAD', 'refs/heads/main'])
+      git(anchor, ['config', 'user.email', 'smoke@mogging.test'])
+      git(anchor, ['config', 'user.name', 'Mogging Smoke'])
+      git(anchor, ['config', 'commit.gpgsign', 'false'])
+      writeFileSync(join(anchor, 'readme.txt'), 'anchor\n')
+      git(anchor, ['add', '-A'])
+      git(anchor, ['commit', '-m', 'init'])
+      await ES(`window.__mogging.workspace.create({ name: 'Anchor', cwd: ${JSON.stringify(anchor)} })`)
+      await sleep(1800)
+
       // 1) create -> reload -> still there (proves the db, not the cache).
       const title = `${MARKER} fix the flux capacitor`
       const cardId = String(
@@ -67,7 +82,7 @@ export function runBoardSmoke(win: BrowserWindow): void {
       const reloaded = new Promise<void>((res) => wc.once('did-finish-load', () => res()))
       wc.reload()
       await reloaded
-      await sleep(3000) // features remount, board loads from db
+      await sleep(3000) // features remount, board loads from db (workspace restores, board follows)
 
       // The second witness, registered AFTER the reload (which wipes the window): the daemon's
       // typed-launch detection — an agent CLI really appeared in the pane's PTY subtree. This is
@@ -85,19 +100,7 @@ export function runBoardSmoke(win: BrowserWindow): void {
       const persisted = afterReload.find((c) => c.id === cardId)
       const persistOk = !!persisted && persisted.title.includes(MARKER) && persisted.lane === 'todo'
 
-      // 2) anchor workspace — a REPO, so start-on-card isolates in a worktree (the
-      // ✓-chip keys on the worktree branch).
-      const anchor = mkdtempSync(join(tmpdir(), 'mogging-board-'))
-      git(anchor, ['init'])
-      git(anchor, ['symbolic-ref', 'HEAD', 'refs/heads/main'])
-      git(anchor, ['config', 'user.email', 'smoke@mogging.test'])
-      git(anchor, ['config', 'user.name', 'Mogging Smoke'])
-      git(anchor, ['config', 'commit.gpgsign', 'false'])
-      writeFileSync(join(anchor, 'readme.txt'), 'anchor\n')
-      git(anchor, ['add', '-A'])
-      git(anchor, ['commit', '-m', 'init'])
-      await ES(`window.__mogging.workspace.create({ name: 'Anchor', cwd: ${JSON.stringify(anchor)} })`)
-      await sleep(1800)
+      // 2) start on the card — the anchor repo workspace is already active (0).
       const started = (await ES(`window.__mogging.board.startOnCard(${JSON.stringify(cardId)}, 'claude')`)) as boolean
       await sleep(1200)
       const afterStart = (await ES(`window.__mogging.board.list()`)) as Card[]

@@ -6271,23 +6271,110 @@ body.pane-dragging * {
 }
 .board-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--sp-3);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.board-head-spacer {
+  flex: 1 1 0;
 }
 .board-title {
   margin: 0;
   font-size: var(--fs-20);
   font-weight: var(--fw-bold);
   letter-spacing: var(--track-tight);
+  min-width: 0;
+}
+/* The board's name IS the switcher (v2: one board per project). */
+.board-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-hi);
+  font: inherit;
+  padding: 2px var(--sp-2);
+  margin-left: calc(-1 * var(--sp-2)); /* the name sits where the old h1 did */
+  cursor: pointer;
+}
+.board-switcher:hover {
+  border-color: var(--border);
+  background: var(--bg-elevated);
+}
+.board-switcher .icon {
+  color: var(--text-lo);
 }
 .board-sub {
   color: var(--text-lo);
   font-size: var(--fs-12);
 }
+/* Bound-repo + queue chips live in the head, quiet until they matter. */
+.board-repo-chip,
+.board-queue-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-11);
+  color: var(--text-lo);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px var(--sp-2);
+  background: transparent;
+}
+.board-queue-chip {
+  color: var(--accent-ink);
+  border-color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-11);
+}
+.board-queue-chip.is-paused,
+.board-queue-chip.is-exhausted {
+  color: var(--danger-ink);
+  border-color: var(--danger);
+}
+/* The filter bar: text + priority pills. Filtering hides cards; counts follow. */
+.board-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  color: var(--text-lo);
+}
+.board-filter-input {
+  width: 180px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-hi);
+  font: inherit;
+  font-size: var(--fs-12);
+  padding: 2px var(--sp-2);
+}
+.board-filter-pill {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-lo);
+  font: inherit;
+  font-size: var(--fs-10);
+  padding: 1px var(--sp-2);
+  cursor: pointer;
+}
+.board-filter-pill.is-active {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: var(--fw-semibold);
+}
 /* .board-empty-hint removed (8.5/07b) — empty lanes now speak via EmptyState. */
 .board-lanes {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* v2: Backlog joined the four originals (backlog → todo = the queue's ready line). */
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: var(--sp-4);
   flex: 1 1 auto;
   min-height: 0;
@@ -6302,6 +6389,20 @@ body.pane-dragging * {
   border-radius: var(--r-md);
   padding: var(--sp-4);
   gap: var(--sp-3);
+  /* Lane identity rail — decorative color (the title carries the meaning). */
+  border-top: 2px solid var(--border);
+}
+.board-lane[data-lane='todo'] {
+  border-top-color: color-mix(in srgb, var(--text-lo) 60%, transparent);
+}
+.board-lane[data-lane='doing'] {
+  border-top-color: var(--accent);
+}
+.board-lane[data-lane='review'] {
+  border-top-color: #9f7aea;
+}
+.board-lane[data-lane='done'] {
+  border-top-color: #3fae63;
 }
 .board-lane.drop {
   border-color: var(--accent);
@@ -6446,6 +6547,285 @@ body.pane-dragging * {
   gap: var(--sp-2);
   justify-content: flex-end;
   width: 100%;
+}
+
+/* ── Board v2 card cues: every one a RENDER of stored state ──────────────────── */
+/* Priority edge (left rail). Decorative color; the tooltip carries the words. */
+.board-card[data-priority='urgent'] {
+  border-left: 3px solid var(--danger);
+  padding-left: calc(var(--sp-4) - 2px);
+}
+.board-card[data-priority='high'] {
+  border-left: 3px solid var(--warning);
+  padding-left: calc(var(--sp-4) - 2px);
+}
+.board-card[data-priority='low'] {
+  border-left: 3px solid var(--border);
+  padding-left: calc(var(--sp-4) - 2px);
+}
+/* Aging (idle-in-WIP): the whole card cools down; the chip says how long. */
+.board-card[data-aged='true'] {
+  border-style: dashed;
+}
+.board-chip-blocked {
+  color: var(--danger-ink);
+  border-color: var(--danger);
+}
+.board-chip-due.is-overdue {
+  color: var(--danger-ink);
+  border-color: var(--danger);
+}
+.board-chip-aging {
+  border-style: dashed;
+}
+/* Labels: neutral chip text + an 8-hue deterministic dot (color is decorative). */
+.board-card-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+.board-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px; /* chip-internal optical half-step (the sanctioned dense-chrome set) */
+  font-size: var(--fs-10);
+  color: var(--text-lo);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 var(--sp-2);
+}
+.board-label-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex: none;
+}
+.board-label-dot.hue-0 { background: #e05d5d; }
+.board-label-dot.hue-1 { background: #e08a3c; }
+.board-label-dot.hue-2 { background: #c9a227; }
+.board-label-dot.hue-3 { background: #4caf6e; }
+.board-label-dot.hue-4 { background: #3aa6a6; }
+.board-label-dot.hue-5 { background: #5b8def; }
+.board-label-dot.hue-6 { background: #8f6fe8; }
+.board-label-dot.hue-7 { background: #d066b6; }
+/* WIP limits (kanban practice #2): count/limit, amber→danger ink when over. */
+.board-wip {
+  font-size: var(--fs-11);
+  color: var(--text-mid);
+  font-variant-numeric: tabular-nums;
+}
+.board-wip.is-over {
+  color: var(--danger-ink);
+  font-weight: var(--fw-semibold);
+}
+/* The drop insertion point — a real "it will land HERE" line, not a guess. */
+.board-card.drop-before {
+  box-shadow: 0 -2px 0 0 var(--accent);
+}
+.board-card.drop-after {
+  box-shadow: 0 2px 0 0 var(--accent);
+}
+
+/* ── Board v2: detail modal metadata + activity ──────────────────────────────── */
+.board-edit-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.board-edit-priorities {
+  display: inline-flex;
+  gap: var(--sp-1);
+}
+.board-edit-priority {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-lo);
+  font: inherit;
+  font-size: var(--fs-11);
+  padding: 1px var(--sp-2);
+  cursor: pointer;
+}
+.board-edit-priority[aria-checked='true'] {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: var(--fw-semibold);
+}
+.board-edit-labels,
+.board-edit-due,
+.board-edit-blocked-reason {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-hi);
+  font: inherit;
+  font-size: var(--fs-12);
+  padding: var(--sp-1) var(--sp-2);
+}
+.board-edit-meta-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.board-edit-blocked {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--text-mid);
+  font-size: var(--fs-12);
+}
+.board-activity-title {
+  margin: var(--sp-3) 0 var(--sp-1);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-wide);
+  color: var(--text-mid);
+}
+.board-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.board-activity-row {
+  display: flex;
+  gap: var(--sp-2);
+  font-size: var(--fs-11);
+  color: var(--text-lo);
+  min-width: 0;
+}
+.board-activity-when {
+  flex: none;
+  width: 56px;
+}
+.board-activity-actor {
+  flex: none;
+  color: var(--text-mid);
+}
+.board-activity-verb {
+  flex: none;
+}
+.board-activity-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-activity-empty {
+  color: var(--text-lo);
+  font-size: var(--fs-12);
+}
+
+/* ── Board v2: archived viewer + settings sheet ──────────────────────────────── */
+.board-archived-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-height: 320px;
+  overflow-y: auto;
+}
+.board-archived-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2) var(--sp-3);
+}
+.board-archived-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.board-archived-title {
+  color: var(--text-hi);
+  font-size: var(--fs-12);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-archived-when {
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+}
+.board-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.board-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.board-settings-title {
+  margin: 0;
+  font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-wide);
+  color: var(--text-mid);
+}
+.board-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+.board-settings-label {
+  color: var(--text-mid);
+  font-size: var(--fs-12);
+}
+.board-settings-num {
+  width: 64px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-hi);
+  font: inherit;
+  font-size: var(--fs-12);
+  padding: 2px var(--sp-2);
+}
+.board-settings-select {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-hi);
+  font: inherit;
+  font-size: var(--fs-12);
+  padding: 2px var(--sp-2);
+}
+.board-settings-wip {
+  display: flex;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.board-settings-wip-lane {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--text-mid);
+  font-size: var(--fs-12);
+}
+.board-settings-toggle {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: var(--sp-2);
+  align-items: center;
+  color: var(--text-hi);
+  font-size: var(--fs-13);
+}
+.board-settings-toggle .settings-row-caption {
+  grid-column: 2;
+}
+.board-settings-actions {
+  display: flex;
+  gap: var(--sp-2);
 }
 
 /* ── Settings § Profiles & SSH hosts (Phase-4 polish) ─────────────────────────── */

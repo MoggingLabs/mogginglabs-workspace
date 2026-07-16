@@ -69,8 +69,23 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
   const listNames = async (c: PaneMcpSmokeClient): Promise<string[]> =>
     (((await c.rpc('tools/list')).result as { tools?: ToolRow[] })?.tools ?? []).map((t) => t.name)
 
-  const WRITES = ['send_to_pane', 'send_key', 'mail_send', 'claim_files', 'release_files', 'update_card']
+  const WRITES = [
+    'send_to_pane',
+    'send_key',
+    'mail_send',
+    'claim_files',
+    'release_files',
+    'update_card',
+    'create_card',
+    'claim_card',
+    'release_card',
+    'comment_card',
+    'archive_card'
+  ]
   const countWrites = (names: string[]): number => names.filter((n) => WRITES.includes(n)).length
+  /** Catalog geometry: 17 browser + 6 reads + 1 self (non-writes) + 11 writes. */
+  const NON_WRITE_COUNT = 24
+  const WRITE_COUNT = WRITES.length
 
   const waitFor = async (probe: () => Promise<boolean>, tries = 12, gapMs = 400): Promise<boolean> => {
     for (let i = 0; i < tries; i++) {
@@ -113,7 +128,7 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
       const namesNone = await listNames(c1)
       const invisibleWhenNone =
         countWrites(namesNone) === 0 &&
-        namesNone.length === 20 &&
+        namesNone.length === NON_WRITE_COUNT &&
         namesNone.includes('report_working_directory')
       const refusedNone = await callTool(c1, 'send_to_pane', { pane: a2, text: 'nope' })
       const refusedWhenNone = !!refusedNone.rpcError && /grant/.test(refusedNone.rpcError)
@@ -129,8 +144,8 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
       )
       const namesAll = await listNames(c1)
       const visibleWhenAll =
-        countWrites(namesAll) === 6 &&
-        namesAll.length === 26 &&
+        countWrites(namesAll) === WRITE_COUNT &&
+        namesAll.length === NON_WRITE_COUNT + WRITE_COUNT &&
         namesAll.includes('report_working_directory')
 
       // send_to_pane: text arrives (capture proves it; the pong already
@@ -186,15 +201,16 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
       const keyOk = !keyed.isError && !keyed.rpcError && !!badKey.rpcError && /must be one of/.test(badKey.rpcError)
 
       // update_card: the card moves lanes + note survives (board.list read-back).
+      // list_board (v2) answers { board, cards } — the board meta rides along.
       const boardBefore = await callTool(c1, 'list_board')
-      const cardId = (JSON.parse(boardBefore.text) as { id: string; title: string }[]).find((c) =>
-        c.title.includes('MCPWRITE_CARD_4242')
+      const cardId = ((JSON.parse(boardBefore.text) as { cards?: { id: string; title: string }[] }).cards ?? []).find(
+        (c) => c.title.includes('MCPWRITE_CARD_4242')
       )?.id
       const moved = await callTool(c1, 'update_card', { card: cardId ?? '', column: 'doing', note: 'moved by mcp' })
       const boardAfter = await callTool(c1, 'list_board')
-      const cardAfter = (JSON.parse(boardAfter.text) as { id: string; lane: string; notes: string }[]).find(
-        (c) => c.id === cardId
-      )
+      const cardAfter = (
+        (JSON.parse(boardAfter.text) as { cards?: { id: string; lane: string; notes: string }[] }).cards ?? []
+      ).find((c) => c.id === cardId)
       const cardOk = !moved.isError && !moved.rpcError && cardAfter?.lane === 'doing' && cardAfter?.notes === 'moved by mcp'
       const badCard = await callTool(c1, 'update_card', { card: 'no-such-card', column: 'done' })
       const badCardOk = badCard.isError && /unknown card/.test(badCard.text)

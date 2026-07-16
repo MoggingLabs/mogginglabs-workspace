@@ -89,6 +89,9 @@ export interface ProcRow {
   /** Executable basename, lowercased, `.exe`/`.cmd`/`.bat`/`.com` stripped. */
   base: string
   cmd: string
+  /** Creation time (epoch ms) when the platform reports one — the recycled-ppid
+   *  edge guard's evidence (Windows: Win32_Process.CreationDate). */
+  startedAt?: number
 }
 
 /** Count logical submitted lines in one PTY input chunk. Bracketed paste can carry several
@@ -274,6 +277,24 @@ export function matchAgentProcess(base: string, cmd: string): string | null {
   return BIN_TO_AGENT.get(leaf) ?? null
 }
 
+/**
+ * A ppid edge that TIME says is impossible: the "parent" was created AFTER the
+ * child, so the child's real parent died and the OS recycled its pid onto a
+ * brand-new process. Following such an edge grafts a FOREIGN subtree onto a
+ * fresh pane — a stray agent running anywhere on the machine then reads as
+ * "this pane's agent", and everything that trusts detection (the board's task
+ * handoff above all) types user prose at a stranger. Drop the EDGE, keep the
+ * rows. Fail-open: rows without timestamps keep today's behavior.
+ */
+const RECYCLED_PPID_SLACK_MS = 500
+export function isRecycledPpidEdge(child: ProcRow, parent: ProcRow): boolean {
+  return (
+    child.startedAt !== undefined &&
+    parent.startedAt !== undefined &&
+    child.startedAt + RECYCLED_PPID_SLACK_MS < parent.startedAt
+  )
+}
+
 /** A cheap process-cwd refresh. Exact on POSIX; Windows uses the batched native fallback in
  * `snapshotProcesses` and returns null here to avoid launching another PowerShell poll. */
 export function readProcessCwd(pid: number): Promise<string | null> {
@@ -322,7 +343,8 @@ function snapshotProcesses(rootPids: readonly number[] = []): Promise<ProcRow[] 
         '  $cwd=if($moggingCwdReader -and $moggingPaneTree.Contains([int]$_.ProcessId)){[MoggingProcessCwd]::Get([int]$_.ProcessId)}else{$null}',
         '  $cwd64=if($cwd){[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$cwd))}else{""}',
         '  $cmd64=if($_.CommandLine){[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$_.CommandLine))}else{""}',
-        '  "{0}`t{1}`t{2}`t{3}`t{4}" -f $_.ProcessId,$_.ParentProcessId,$_.Name,$cwd64,$cmd64',
+        '  $st=if($_.CreationDate){[string][long]([DateTimeOffset]([DateTime]$_.CreationDate)).ToUnixTimeMilliseconds()}else{""}',
+        '  "{0}`t{1}`t{2}`t{3}`t{4}`t{5}" -f $_.ProcessId,$_.ParentProcessId,$_.Name,$cwd64,$cmd64,$st',
         '}'
       ].join('\n')
       execFile(ps, ['-NoProfile', '-NonInteractive', '-Command', script], opts, (err, stdout) => {
@@ -342,12 +364,14 @@ function snapshotProcesses(rootPids: readonly number[] = []): Promise<ProcRow[] 
           } catch {
             continue
           }
+          const startedAt = Number((f[5] ?? '').trim())
           rows.push({
             pid,
             ppid,
             base: stripExeExt((f[2] ?? '').trim().toLowerCase()),
             cmd,
-            cwd: cwd || undefined
+            cwd: cwd || undefined,
+            ...(Number.isFinite(startedAt) && startedAt > 0 ? { startedAt } : {})
           })
         }
         resolve(rows.length ? rows : null)
@@ -703,8 +727,12 @@ export class AgentProcessDetector {
       this.failures = 0
       const byParent = new Map<number, ProcRow[]>()
       const byPid = new Map<number, ProcRow>()
+      for (const r of rows) byPid.set(r.pid, r)
       for (const r of rows) {
-        byPid.set(r.pid, r)
+        // A recycled-ppid edge grafts a foreign subtree onto a fresh pane —
+        // drop the edge (the row stays; it is simply nobody's child here).
+        const parent = byPid.get(r.ppid)
+        if (parent && isRecycledPpidEdge(r, parent)) continue
         const kids = byParent.get(r.ppid)
         if (kids) kids.push(r)
         else byParent.set(r.ppid, [r])

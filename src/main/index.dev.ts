@@ -91,6 +91,10 @@ import { runReviewSmoke } from './smokes/review-smoke'
 import { runReviewSnapSmoke } from './smokes/reviewsnap-smoke'
 import { runBoardSmoke } from './smokes/board-smoke'
 import { runBoardFailSmoke } from './smokes/boardfail-smoke'
+import { runBoardV2Smoke } from './smokes/boardv2-smoke'
+import { runBoardMcpSmoke } from './smokes/boardmcp-smoke'
+import { runBoardGhSmoke } from './smokes/boardgh-smoke'
+import { runBoardQueueSmoke } from './smokes/boardqueue-smoke'
 import { runPersistHealthSmoke } from './smokes/persisthealth-smoke'
 import { runRoleRaceSmoke } from './smokes/rolerace-smoke'
 import { runUpdateFailSmoke } from './smokes/updatefail-smoke'
@@ -173,7 +177,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
   'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
-  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
+  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
   'MOGGING_PROFILES', 'MOGGING_LOGINTRUTH', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
   // Typed-launch detection + the context gauge (the v6 pack).
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
@@ -494,6 +498,14 @@ function afterWindow(win: BrowserWindow): void {
     runReviewSmoke(win) // env-gated pre-ship review smoke (Phase-3/04)
   } else if (process.env.MOGGING_BOARD) {
     runBoardSmoke(win) // env-gated Kanban-board smoke (Phase-3/05)
+  } else if (process.env.MOGGING_BOARDV2) {
+    runBoardV2Smoke(win) // Board v2 model: per-project identity, migration, CAS, ordering, live push, archive
+  } else if (process.env.MOGGING_BOARDMCP) {
+    runBoardMcpSmoke(win) // Board v2 agent surface: scoped CRUD, claim rule, CAS over the wire, archive-not-delete, trail
+  } else if (process.env.MOGGING_BOARDGH) {
+    runBoardGhSmoke(win) // Board ↔ GitHub (ADR 0015): detect/import/rules + the write-back wall and its risk confirm — fixture gh, zero network
+  } else if (process.env.MOGGING_BOARDQUEUE) {
+    runBoardQueueSmoke(win) // Queue mode: default off, risk-confirmed enable, top-of-To-do pull, hard budget, fail-pause
   } else if (process.env.MOGGING_BOARDFAIL) {
     runBoardFailSmoke(win) // audit regression: failed agent startup never types card prose into a shell
   } else if (process.env.MOGGING_PERSISTHEALTH) {

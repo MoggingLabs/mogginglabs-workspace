@@ -7,6 +7,12 @@ asks for you, you review the diff, you merge — and nothing freezes.** This doc
 describes the loop, the control surface, the safety model, and the scripted demo. The
 whole loop is ASSERTED by `MOGGING_ORCHESTRATION` (see Enforcement).
 
+> **Board v2** (docs/18) rebuilt the board this loop starts from: boards are
+> per-PROJECT (worktrees share their repo's board), main is the one writer
+> (revision CAS — agents get full, guarded CRUD), and an opt-in **queue** can
+> pull the top To-do card into a fresh agent when a slot frees. The loop below
+> is unchanged — v2 widens who can drive it and what the cards can say.
+
 ## The loop
 
 1. **Card** — the Board (`Ctrl+Shift+G`) holds local task cards (To do / Doing /

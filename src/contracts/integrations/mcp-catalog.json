@@ -234,12 +234,26 @@
   {
     "name": "list_board",
     "title": "List board cards",
-    "description": "List the workspace board's cards: id, title, lane (todo/doing/review/done), notes, and the bound pane when an agent was started from the card.",
+    "description": "List YOUR project's board: the board meta (id, name, bound repo) and its live cards — id, title, lane (backlog/todo/doing/review/done), notes, position order, priority, labels, blocked, revision, and the working pane when one is bound. Your pane sees exactly the board of the project it works in.",
     "inputSchema": { "type": "object", "properties": {} },
     "family": "control",
     "access": "read",
     "upstream": "app",
     "verb": "board.list"
+  },
+  {
+    "name": "get_card",
+    "title": "Get one card",
+    "description": "Read one card in full, plus its recent activity log (who did what: human, panes, queue, sync). Use the card's `revision` for a safe conditional update.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "card": { "type": "string", "description": "Card id (from list_board)." } },
+      "required": ["card"]
+    },
+    "family": "control",
+    "access": "read",
+    "upstream": "app",
+    "verb": "board.get"
   },
   {
     "name": "report_working_directory",
@@ -369,19 +383,105 @@
   {
     "name": "update_card",
     "title": "Update board card",
-    "description": "Update a board card: move it to a column (todo/doing/review/done) and/or replace its note text.",
+    "description": "Patch a card on your project's board: move it (column and/or before another card), and/or set title, notes, priority, labels, blocked. Pass expectedRevision (from list_board/get_card) to refuse-instead-of-clobber when the card changed under you. A card being worked by ANOTHER live pane refuses with its owner named.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "card": { "type": "string", "description": "Card id (from list_board)." },
-        "column": { "type": "string", "description": "Destination column.", "enum": ["todo", "doing", "review", "done"] },
-        "note": { "type": "string", "description": "New note text for the card." }
+        "column": { "type": "string", "description": "Destination column.", "enum": ["backlog", "todo", "doing", "review", "done"] },
+        "note": { "type": "string", "description": "New note text for the card." },
+        "title": { "type": "string", "description": "New title." },
+        "priority": { "type": "string", "description": "Priority.", "enum": ["urgent", "high", "normal", "low"] },
+        "labels": { "type": "string", "description": "Labels, comma-separated (replaces the set; max 8)." },
+        "blocked": { "type": "boolean", "description": "Mark/unmark the card blocked." },
+        "blockedReason": { "type": "string", "description": "Why it is blocked (shown on the card)." },
+        "before": { "type": "string", "description": "Reorder: place before this card id (same column)." },
+        "expectedRevision": { "type": "number", "description": "Refuse the write unless the card's revision still equals this." }
       },
       "required": ["card"]
     },
     "family": "control",
     "access": "write",
     "upstream": "app",
-    "verb": "board.save"
+    "verb": "board.update"
+  },
+  {
+    "name": "create_card",
+    "title": "Create board card",
+    "description": "Create a card on your project's board (default column: todo). Returns the card, including its id and revision.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Card title (required, max 500 chars)." },
+        "note": { "type": "string", "description": "Notes / context (max 10k chars)." },
+        "column": { "type": "string", "description": "Column (default todo).", "enum": ["backlog", "todo", "doing", "review", "done"] },
+        "priority": { "type": "string", "description": "Priority (default normal).", "enum": ["urgent", "high", "normal", "low"] },
+        "labels": { "type": "string", "description": "Labels, comma-separated (max 8)." }
+      },
+      "required": ["title"]
+    },
+    "family": "control",
+    "access": "write",
+    "upstream": "app",
+    "verb": "board.create"
+  },
+  {
+    "name": "claim_card",
+    "title": "Claim board card",
+    "description": "Claim a card as YOUR working item: binds it to your pane so other agents' writes refuse with you named. Refused if another LIVE pane already works it. Release with release_card when done.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "card": { "type": "string", "description": "Card id (from list_board)." } },
+      "required": ["card"]
+    },
+    "family": "control",
+    "access": "write",
+    "upstream": "app",
+    "verb": "board.claim"
+  },
+  {
+    "name": "release_card",
+    "title": "Release board card",
+    "description": "Release a card you claimed (your pane stops being its working pane). Refused unless your pane holds it.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "card": { "type": "string", "description": "Card id (from list_board)." } },
+      "required": ["card"]
+    },
+    "family": "control",
+    "access": "write",
+    "upstream": "app",
+    "verb": "board.release"
+  },
+  {
+    "name": "comment_card",
+    "title": "Comment on card",
+    "description": "Append a progress comment to a card's activity log (max 2 KB). Comments are LOCAL — they live with the card on this machine and nowhere else.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "card": { "type": "string", "description": "Card id (from list_board)." },
+        "body": { "type": "string", "description": "The comment text." }
+      },
+      "required": ["card", "body"]
+    },
+    "family": "control",
+    "access": "write",
+    "upstream": "app",
+    "verb": "board.comment"
+  },
+  {
+    "name": "archive_card",
+    "title": "Archive board card",
+    "description": "Archive a card: it leaves the lanes but stays stored and restorable. Agents archive — deleting is a human verb. Refused while another live pane works the card.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "card": { "type": "string", "description": "Card id (from list_board)." } },
+      "required": ["card"]
+    },
+    "family": "control",
+    "access": "write",
+    "upstream": "app",
+    "verb": "board.archive"
   }
 ]
