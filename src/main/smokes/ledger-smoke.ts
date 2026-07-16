@@ -2,6 +2,7 @@ import { app, type BrowserWindow } from 'electron'
 import { execFile } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { capturePaneTokenForSmoke } from './smoke-shell'
 
 // Env-gated ownership-ledger smoke (MOGGING_LEDGER, Phase-4/02):
 //   granted -> overlapping DENIED (owner named, exit 5) -> disjoint granted ->
@@ -40,8 +41,22 @@ export function runLedgerSmoke(win: BrowserWindow): void {
       await ES(`window.__mogging.templates.open([{provider:'shell',count:2}])`)
       await sleep(3000)
       const base = ((await ES('window.__mogging.workspace.active()')) as { ordinal: number }).ordinal * 100
-      const p1 = { MOGGING_PANE_ID: String(base + 1) }
-      const p2 = { MOGGING_PANE_ID: String(base + 2) }
+      // claim/release are pane-bound (protocol v10): the CLI must present the pane's own
+      // daemon-minted MOGGING_PANE_TOKEN, exactly as a command launched inside the pane
+      // inherits it. Capture the real token for each pane — a fabricated PANE_ID alone is
+      // the forgeable claim the binding now refuses.
+      const paneTokens: Record<number, string> = {}
+      for (const n of [1, 2]) {
+        paneTokens[n] = await capturePaneTokenForSmoke({
+          write: async (command) => {
+            const sent = await cli(['send', String(base + n), command])
+            if (sent.code !== 0) throw new Error(`could not probe pane ${base + n}`)
+          },
+          sleep
+        })
+      }
+      const p1 = { MOGGING_PANE_ID: String(base + 1), MOGGING_PANE_TOKEN: paneTokens[1] }
+      const p2 = { MOGGING_PANE_ID: String(base + 2), MOGGING_PANE_TOKEN: paneTokens[2] }
 
       // grant -> deny (owner named) -> disjoint grant
       const g1 = await cli(['claim', 'src/a/**'], p1)

@@ -108,7 +108,14 @@ export function runTypedSmoke(win: BrowserWindow): void {
       // the prompt report arrive.
       await ES("window.__cwds=[];window.bridge.on('terminal:cwd',function(e){window.__cwds.push(e);});1")
       await delay(300)
-      await type(added, 'cd /d C:\\Windows')
+      // Platform-split, because this types INTO the pane's real shell: `cd /d` is cmd.exe
+      // grammar, and a POSIX shell answers it with an error and no cwd report — which is how
+      // this gate was Windows-only in fact while claiming three platforms. `/tmp` is expected
+      // as either spelling: bash reports its LOGICAL pwd, zsh (macOS default) resolves the
+      // /tmp -> /private/tmp symlink physically.
+      const cdTarget = process.platform === 'win32' ? 'cd /d C:\\Windows' : 'cd /tmp'
+      const cdLanded = process.platform === 'win32' ? /^c:[\\/]windows$/i : /^(\/private)?\/tmp$/
+      await type(added, cdTarget)
       await until(
         () => ES(`window.__cwds.filter(function(e){return e.id===${added};}).length`) as Promise<number>,
         (n) => n > 0,
@@ -117,7 +124,7 @@ export function runTypedSmoke(win: BrowserWindow): void {
       const cwdEvents = (await ES(
         `window.__cwds.filter(function(e){return e.id===${added};}).map(function(e){return e.cwd;})`
       )) as string[]
-      const cwdReported = cwdEvents.some((c) => /^c:[\\/]windows$/i.test(String(c).replace(/[\\/]+$/, '')))
+      const cwdReported = cwdEvents.some((c) => cdLanded.test(String(c).replace(/[\\/]+$/, '')))
 
       // ── TYPE the agent (raw bytes into the shell — the path that had no identity) ────────
       await type(added, `node "${fakeCli}"`)
@@ -128,7 +135,7 @@ export function runTypedSmoke(win: BrowserWindow): void {
       // The agent's cwd is what NAMES its session log, so it must be where the agent actually
       // runs — the directory the shell was cd'd into, never the directory the pane was seeded
       // with. Getting this wrong is a gauge that never finds a session and sits blank forever.
-      const cwdIsLive = /^c:[\\/]windows$/i.test(String(s1?.cwd ?? '').replace(/[\\/]+$/, ''))
+      const cwdIsLive = cdLanded.test(String(s1?.cwd ?? '').replace(/[\\/]+$/, ''))
       const cwdKnown = !!s1?.cwd && s1.cwd.length > 0
       const sinceKnown = typeof s1?.since === 'number' && s1.since > 0
       const gaugeShown = g1.present && g1.shown
@@ -180,7 +187,7 @@ export function runTypedSmoke(win: BrowserWindow): void {
       // gauge appears (pending "–" until that CLI's log states a number — never a made-up 0).
       const gaugeForProvider: Record<string, boolean> = {}
       for (const provider of ['codex', 'gemini', 'opencode', 'aider']) {
-        await ES(`window.__mogging.agents.adopt(1, ${JSON.stringify(provider)}, ${JSON.stringify(added ? 'C:\\\\Windows' : '')});`)
+        await ES(`window.__mogging.agents.adopt(1, ${JSON.stringify(provider)}, ${JSON.stringify(added ? (process.platform === 'win32' ? 'C:\\Windows' : '/tmp') : '')});`)
         const g = await until(() => gauge(1), (x) => x.shown, 12000)
         gaugeForProvider[provider] = g.present && g.shown
       }

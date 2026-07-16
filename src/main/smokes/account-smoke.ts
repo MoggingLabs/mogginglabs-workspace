@@ -17,7 +17,7 @@ import {
 } from '../account'
 import { getSettingsStore } from '../app-settings'
 
-// Env-gated account smoke (MOGGING_ACCOUNT, ADR 0015). Windowless — the token holder
+// Env-gated account smoke (MOGGING_ACCOUNT, ADR 0016). Windowless — the token holder
 // needs the settings store + the OS vault, no window. Runs ENTIRELY against the FAKE
 // in-process IdP (zero external network). It proves, in order:
 //   (a) login lands an AUTHED status carrying the right email + plan claims;

@@ -6,13 +6,16 @@ import { homedir } from 'node:os'
 // comment — but the two backends already share @backend modules, so one definition
 // keeps the parity structural instead of hoped-for.
 
-/** Retained per-pane output for reattach repaint — one cap, both backends. */
-export const SCROLLBACK_BYTES = 200_000
+/** Retained per-pane output for reattach repaint — one cap, both backends. CHARACTERS,
+ *  not bytes (`.slice` on a JS string counts UTF-16 code units); the old `_BYTES` name
+ *  silently overstated the cap for any multi-byte output. The PERSISTED tail is smaller
+ *  on purpose — see PERSISTED_SCROLLBACK_CHARS in workspace/session-store.ts. */
+export const SCROLLBACK_CHARS = 200_000
 
 /** How far past a fresh cap cut we'll look for a clean line start. */
 const TEAR_SCAN = 400
 
-/** A blind `.slice(-SCROLLBACK_BYTES)` can land mid escape sequence or between surrogate
+/** A blind `.slice(-SCROLLBACK_CHARS)` can land mid escape sequence or between surrogate
  *  halves, and the reattach repaint then feeds xterm a sequence's tail as literal text (or
  *  a lone surrogate). Drop a split surrogate's low half, then cut forward to the next
  *  newline: at most one partial line of scrollback lost, cheap next to a garbled repaint.

@@ -55,17 +55,21 @@ catalog's non-`write` rows, in order; drift fails the smoke.
 | `capture_pane` | control | read | daemon |
 | `mail_read` | control | read | daemon |
 | `list_owners` | control | read | daemon |
-| `list_board` | control | read | app |
+| `list_board` / `get_card` | control | read | app |
 | `send_to_pane` | control | **write** | daemon |
 | `send_key` | control | **write** | daemon |
 | `mail_send` | control | **write** | daemon |
 | `claim_files` / `release_files` | control | **write** | daemon |
-| `update_card` | control | **write** | app |
+| `update_card` / `create_card` / `claim_card` / `release_card` / `comment_card` / `archive_card` | control | **write** | app |
 
-Reads are always available to a pane-identity session. The six **write** tools
-are the boundary — see *Scoping*. There is deliberately **no `approve` tool**:
-merging is a human gate, and the smoke greps every frame to prove the word
-never appears.
+Reads are always available to a pane-identity session; the board reads are
+SCOPED — a pane sees exactly its own project's board (docs/18). The eleven
+**write** tools are the boundary — see *Scoping*. The Board-v2 writes give a
+granted agent full control of its board (create/patch/claim/comment/archive,
+CAS-guarded, claim-refereed — docs/18); there is deliberately **no delete
+tool** (agents archive; deleting is a human verb) and deliberately **no
+`approve` tool**: merging is a human gate, and the smoke greps every frame to
+prove the word never appears.
 
 **Degradation is independent.** A daemon-less session still answers browser
 tools and returns a clean JSON-RPC error (naming the fix) for control ones; an
@@ -303,8 +307,9 @@ missing one gets a minimal file created.
 A board card links to a GitHub PR/issue; the engine polls (per-link cadence,
 jitter, backoff, paused while hidden, **last-good cached — stale is a state, not
 an error**), and on a review/merge/close **transition** it lands a house notify
-on the card's owning pane and fires `review-changed`. The app holds **no**
-credential.
+on the card's owning pane and fires `review-changed`. No GitHub credential ever
+enters this process — the poll rides your own `gh`, which authenticates itself
+(ADR 0002).
 
 `src/backend/features/integrations/services/github.ts` is the exemplar rung:
 

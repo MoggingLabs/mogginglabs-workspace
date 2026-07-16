@@ -9,7 +9,7 @@ ecosystems. Companion to `docs/RELEASING.md` (the mechanics of cutting a release
 | | Windows | macOS | Linux |
 |---|---|---|---|
 | **Built in CI** | NSIS x64 + blockmap | dmg + zip, arm64 (x64 deferred†) | AppImage + deb, x64 |
-| **Swept (144 gates)** | local (windows-sweep CI = Phase-6/03) | `macos-sweep` nightly + dispatch | `linux-sweep` nightly + dispatch |
+| **Swept (155 gates)** | local (windows-sweep CI = Phase-6/03) | `macos-sweep` nightly + dispatch | `linux-sweep` nightly + dispatch |
 | **Signed today** | no — config READY, cert pending | no — config READY (hardened runtime + entitlements + notarize wired), cert pending | n/a (GPG sums optional, later) |
 | **Auto-update** | GitHub releases feed (electron-updater) | feed wired, **inert until signed** — Squirrel.Mac refuses unsigned updates | AppImage via feed; deb manual |
 | **Install channels** | GitHub release · winget (manifest in `packaging/winget/`, not yet submitted) | GitHub release · homebrew cask (`packaging/homebrew/`, not yet submitted) | GitHub release |
@@ -48,7 +48,7 @@ Already committed and dry-run-verified: hardened runtime, the entitlements set
 Electron + our from-source native modules need (`allow-jit`,
 `disable-library-validation`; `allow-dyld-environment-variables` existed for the
 retired Electron-as-Node daemon and can likely be dropped now — verify on a real
-signed build, ADR 0016), `notarize: true`, and the workflow plumbing for all
+signed build, ADR 0017), `notarize: true`, and the workflow plumbing for all
 five secrets. Signing also unlocks macOS **auto-update**, which Squirrel.Mac
 gates on a valid signature.
 
@@ -59,7 +59,7 @@ Add the secrets in repo settings → rerun `Release`. The
 `CSC_LINK` breaks electron-builder), signing and notarization activate on their
 own. Verify beforehand any time with the `signing-dryrun` dispatch.
 
-† **Intel (x64) macOS is still deferred as of v0.12.0.** The 2026-07 macos runner image
+† **Intel (x64) macOS is still deferred as of v0.13.0.** The 2026-07 macos runner image
 regressed into the same `@electron/rebuild` spawn hang the ubuntu/windows
 images have (59 min of silence on `preparing better-sqlite3` — run
 28756024650), so the mac release uses the direct node-gyp bypass, which builds
@@ -139,19 +139,18 @@ one command — never hand-edit hashes:
 # from a local release build:
 node scripts/update-manifests.mjs            # reads dist/
 # from a published release:
-gh release download v0.12.0 -D /tmp/rel && node scripts/update-manifests.mjs /tmp/rel
+gh release download v0.13.0 -D /tmp/rel && node scripts/update-manifests.mjs /tmp/rel
 ```
 
 CI validates both continuously where the tooling exists (`winget validate` on
 windows-latest, `brew style` on macos-latest) so submission day is a
 copy-paste PR.
 
-**v0.12.0 status:** both manifests regenerated from the shipped v0.12.0 artifacts
-and validation-green in CI; the exe sha256 and the arm64 dmg sha256 are pinned
-to the release (win exe cross-verified against `latest.yml`'s sha512). The cask
-is arm64-only for this release (Intel deferred — see the matrix footnote).
-Neither is submitted yet — the checklists below are the copy-paste path when
-you choose to.
+**v0.13.0 status:** the committed manifests pin the shipped v0.13.0 artifacts —
+sha256s regenerated from the uploaded release bytes (the command above), win-x64
+`.exe` and mac-arm64 `.dmg` verified against the assets on the release. The cask
+stays arm64-only (Intel deferred — see the matrix footnote). Neither is submitted
+upstream yet — the checklists below are the copy-paste path when you choose to.
 
 ### winget submission playbook
 1. Regenerate manifests for the release being submitted; commit.

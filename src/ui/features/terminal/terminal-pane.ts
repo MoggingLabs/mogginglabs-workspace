@@ -2,8 +2,8 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import {
-  EXPLORER_DRAG_TYPE,
   WorktreeChannels,
+  displayPaneNumber,
   type GitStatus,
   type AgentState,
   type PaneId,
@@ -47,6 +47,7 @@ import { claimsFor, onClaimsChange, setClaimsForDev, workspaceClaims } from './c
 import { createPaneAnchor, type PaneAnchorHandle } from './pane-anchor'
 import { createPaneHeaderFit, type PaneHeaderFitHandle } from './pane-header-fit'
 import { createPaneScrollbar, type PaneScrollbarHandle } from './pane-scrollbar'
+import { mountPaneDrop } from './pane-drop'
 import { PaneWebglManager } from './pane-webgl'
 import { onFocusedPane } from '../../core/layout/focus'
 import { onPaneGit, getPaneGit, setPaneGit } from '../../core/git/git-port'
@@ -59,10 +60,7 @@ import {
   copyText,
   parseOsc52,
   PASTE_KEY,
-  quoteDroppedPaths,
-  quoteWithFlavor,
   readRich,
-  recordDrop,
   sanitizePaste
 } from '../../core/clipboard/clipboard-port'
 
@@ -248,7 +246,7 @@ export class TerminalPane {
       return true
     })
 
-    this.mountFileDrop(body)
+    mountPaneDrop({ paneId: this.id, body, signal: this.dropAbort.signal, focus: () => this.term.focus() })
 
     // Let xterm's incremental parser recognize the private readiness OSC too.
     // The raw-stream probe below covers the pre-paint fast path; this handler
@@ -743,182 +741,6 @@ export class TerminalPane {
       title: 'Copy failed',
       body: 'Another app is holding the system clipboard open. Nothing was copied — try again in a moment.'
     })
-  }
-
-  /**
-   * Drop a file — from Finder, Explorer, VS Code's tree, anywhere — and its absolute
-   * path is typed into this pane, quoted for the shell we actually spawned. Nothing is
-   * executed: the path lands as text at the cursor, exactly as if it had been typed, so
-   * it works the same whether the pane holds a bare shell or an agent CLI's prompt.
-   *
-   * `dragleave` fires every time the cursor crosses into a CHILD element (xterm nests
-   * several layers of canvas and helper divs), so a naive enter/leave pair strobes the
-   * overlay. We count enters and leaves instead, and only hide at zero — the standard
-   * fix, and the reason this is more than three lines.
-   */
-  private mountFileDrop(body: HTMLElement): void {
-    const overlay = document.createElement('div')
-    overlay.className = 'pane-drop'
-    overlay.hidden = true
-    const card = document.createElement('div')
-    card.className = 'pane-drop-card'
-    // The glyph sits in a pulsing accent ring — the card's one moving element, so the
-    // eye lands on WHERE to drop, not on chrome.
-    const ring = document.createElement('div')
-    ring.className = 'pane-drop-ring'
-    ring.append(icon('download', 22))
-    const title = document.createElement('div')
-    title.className = 'pane-drop-title'
-    const hint = document.createElement('div')
-    hint.className = 'pane-drop-hint'
-    hint.textContent = 'Full path, quoted for this shell — nothing runs.'
-    card.append(ring, title, hint)
-    overlay.append(card)
-    body.append(overlay)
-
-    // ONE source of truth. Earlier revisions tracked visibility across `depth`, the
-    // `hidden` attribute and the `is-active` class, and every bug lived in the gaps
-    // between them: a show and a hide batched into one frame left the card stranded on
-    // screen, because the deferred rAF re-added `is-active` after the hide had run.
-    // `visible` decides; `gen` invalidates any async work a newer transition supersedes.
-    let depth = 0
-    let visible = false
-    let gen = 0
-
-    const show = (n: number): void => {
-      title.textContent = n === 1 ? 'Drop to insert path' : `Drop to insert ${n} paths`
-      if (visible) return
-      visible = true
-      const mine = ++gen
-      overlay.hidden = false
-      // Next frame, so the transition has a start state to animate FROM — unless a hide
-      // has already overtaken us, in which case this frame belongs to no one.
-      requestAnimationFrame(() => {
-        if (gen === mine && visible) overlay.classList.add('is-active')
-      })
-    }
-
-    const hide = (): void => {
-      depth = 0
-      if (!visible) return
-      visible = false
-      const mine = ++gen
-      overlay.classList.remove('is-active')
-      // Keep it in the tree until the fade finishes, then take it out of hit-testing.
-      // `transitionend` never fires if the pane was hidden mid-drag, hence the timeout;
-      // `gen` stops a stale timeout from hiding an overlay a newer drag just raised.
-      const done = (): void => {
-        if (gen === mine && !visible) overlay.hidden = true
-      }
-      overlay.addEventListener('transitionend', done, { once: true })
-      setTimeout(done, 220)
-    }
-
-    // Only react to a drag that actually carries files. Dragging selected TEXT from
-    // another app also fires these events, and must not put up a "drop a file" card.
-    const hasFiles = (e: DragEvent): boolean => !!e.dataTransfer?.types.includes('Files')
-    // …or a row dragged out of OUR explorer (11/06). It is recognised by a private
-    // dataTransfer type, NEVER by text/plain: a drag of arbitrary text from another app
-    // must never type itself into a terminal, and only our own marker can say otherwise.
-    const hasOurPath = (e: DragEvent): boolean => !!e.dataTransfer?.types.includes(EXPLORER_DRAG_TYPE)
-    const accepts = (e: DragEvent): boolean => hasFiles(e) || hasOurPath(e)
-
-    body.addEventListener('dragenter', (e) => {
-      if (!accepts(e)) return
-      e.preventDefault()
-      depth++
-      show(hasOurPath(e) ? 1 : (e.dataTransfer?.items.length ?? 1))
-    })
-    body.addEventListener('dragover', (e) => {
-      if (!accepts(e)) return
-      e.preventDefault() // without this the drop event never fires
-      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
-      // Self-heal: dragover fires continuously while the cursor is inside, so however the
-      // counter got out of step, the overlay comes back rather than staying silently off.
-      if (!visible) {
-        depth = Math.max(depth, 1)
-        show(hasOurPath(e) ? 1 : (e.dataTransfer?.items.length ?? 1))
-      }
-    })
-    body.addEventListener('dragleave', (e) => {
-      if (!accepts(e)) return
-      // The COUNTER is authoritative, not `relatedTarget`. dragleave fires each time the
-      // cursor crosses into one of xterm's nested canvas/helper layers, and Chromium does
-      // not reliably name where the cursor went — trusting relatedTarget here made the
-      // card strobe once per child boundary. Counting enters against leaves does not care.
-      depth = Math.max(0, depth - 1)
-      if (depth === 0) hide()
-    })
-    body.addEventListener('drop', (e) => {
-      if (!accepts(e)) return
-      e.preventDefault()
-      hide()
-      if (hasOurPath(e)) {
-        // The explorer already quoted it for this machine's shell, and the quoter strips
-        // control characters — so this cannot carry a newline, and therefore cannot press
-        // Enter. Typed at the cursor, padded like a dropped file. Nothing runs.
-        const text = e.dataTransfer?.getData('text/plain') ?? ''
-        if (text) {
-          terminalClient.write({ id: this.id, data: ' ' + text + ' ' })
-          this.term.focus()
-        }
-        return
-      }
-      void this.insertDroppedPaths(Array.from(e.dataTransfer?.files ?? []))
-    })
-    // A drag abandoned with Esc, or ended outside the window, fires neither dragleave nor
-    // drop on this element. Without these the card would hang there until the next drag.
-    // Bound to WINDOW, so they must die with the pane — a closed pane's listener would
-    // otherwise live as long as the app, once per pane ever opened.
-    for (const type of ['dragend', 'drop', 'blur'] as const) {
-      window.addEventListener(type, () => hide(), { signal: this.dropAbort.signal })
-    }
-  }
-
-  /** Resolve dropped Files to absolute paths, quote them for the pane's shell, and type
-   *  them at the cursor. Electron removed `File.path` in v32, so the preload's
-   *  `getPathForFile` is the only route — and a browser-hosted gallery has neither. */
-  private async insertDroppedPaths(files: File[]): Promise<void> {
-    if (!files.length) return
-    const resolve = getBridge().getPathForFile
-    if (!resolve) {
-      showToast({ tone: 'danger', title: 'Drag-and-drop needs the desktop app' })
-      return
-    }
-    // Per-file try/catch: getPathForFile THROWS for a File with no disk backing (a
-    // synthetic DataTransfer, some browser-internal drags). One virtual file must not
-    // void a drop that also carried real ones.
-    const paths = files
-      .map((f) => {
-        try {
-          return resolve(f)
-        } catch {
-          return ''
-        }
-      })
-      .filter(Boolean)
-    if (!paths.length) return
-
-    // A REMOTE pane's shell lives on the ssh host, not this machine: quote for POSIX
-    // (this app's remote panes ride ssh), and say plainly that the path itself is local —
-    // inserting C:\Users\... into a Linux shell is only useful if a share mounts it.
-    const remote = getPaneRemote(this.id)
-    const quoted = remote ? quoteWithFlavor(paths, 'posix') : await quoteDroppedPaths(paths)
-    if (remote) {
-      showToast({
-        tone: 'info',
-        title: 'This pane is remote',
-        body: 'The inserted path points at a file on THIS machine — the remote host cannot see it unless a mount shares it.'
-      })
-    }
-    // Padded on BOTH sides (user-specified): the leading space detaches the path from
-    // whatever is already at the cursor, the trailing one starts the next argument.
-    terminalClient.write({ id: this.id, data: ' ' + quoted + ' ' })
-    this.term.focus()
-
-    // Remembered in the Clipboard tab, but NOT put on the system clipboard — a drag is
-    // not a copy, and clobbering what the user had copied would be a surprise.
-    void recordDrop(paths, quoted)
   }
 
   /** Dead pane, dead dot: gray — deliberately NOT one of the three live colors, so
@@ -1436,8 +1258,14 @@ export class TerminalPane {
     this.scrollbar = createPaneScrollbar(this.term, body, this.anchor)
 
     // Title precedence: what the agent says it's doing (OSC 0/2 window title) → the
-    // launched agent's label → "Terminal N".
-    const fallback = `Terminal ${this.id % 100 || this.id}`
+    // launched agent's label → "Terminal N". Every supported CLI feeds this channel
+    // with its OWN self-description (backend/features/agents/title.ts is the map:
+    // claude topic titles + opencode session titles by default, codex thread-title +
+    // gemini thought subject via launch-injected config; aider offers nothing and
+    // keeps the label). The title is the CLI's words, minus its DECORATION — the
+    // header already carries the provider logo, the state dot, and the cwd/branch
+    // chips, so marks that repeat those are stripped and the goal words keep the row.
+    const fallback = `Terminal ${displayPaneNumber(this.id)}`
     let oscTitle = ''
     const applyTitle = (): void => {
       const label = getPaneLabel(this.id) ?? ''
@@ -1452,13 +1280,54 @@ export class TerminalPane {
     const applyLabel = (_text: string): void => applyTitle()
     applyTitle()
     this.term.onTitleChange((t) => {
-      // Strip a LEADING decorative spark: Claude Code titles itself "✳ Claude Code"
-      // (and "✶/✻ <task>" while working), but the header already shows the provider
-      // logo chip right before the title — glyph + logo read as two marks (the
-      // "too many logos" report). The words stay; only the duplicate mark goes.
-      oscTitle = (t ?? '').trim().replace(/^[✳✶✻✽✢·∗*]+\s*/u, '')
+      // Leading decorative marks go: Claude Code's spark ("✳ Claude Code", "✶/✻ <task>"
+      // while working — the original "too many logos" report), gemini's status icons
+      // (◇ Ready / ✦ Working / ✋ Action Required / ⏲, dynamicWindowTitle's vocabulary)
+      // and any braille spinner frames — all state the dot next door already shows.
+      // The words stay; only the duplicate marks go. (Escapes, not literals, for the
+      // invisible members: braille U+2800–28FF and the emoji variation selector.)
+      let text = (t ?? '').trim().replace(/^(?:[✳✶✻✽✢·∗*✋◇✦⏲\u2800-\u28FF\s]|\uFE0F)+/u, '')
+      // OpenCode brands its title "OC | <its session title>" — the provider chip
+      // already says WHO, so the brand yields the row to the session's goal words.
+      text = text.replace(/^OC \| /, '')
+      // A UUID is never a human goal: codex renders an unnamed thread's `thread-title`
+      // item as the thread's raw id (live-verified on 0.144.1, which never auto-names).
+      // Excise the token wherever it sits and tidy the separators codex joins items
+      // with, so "✦ · <uuid> · Tasks 1/2" reads "Tasks 1/2" — and a title that was
+      // ONLY a UUID falls back to the label.
+      text = text
+        .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '')
+        .replace(/\s*[·|–—-]\s*(?=[·|–—-])/g, '')
+        .replace(/^\s*[·|–—-]\s*|\s*[·|–—-]\s*$/g, '')
+      // Gemini suffixes " (<folder>)" — the launch cwd's basename, which the header's
+      // own cwd/branch chips already carry. Stripped ONLY when the parenthetical IS
+      // this pane's cwd basename (whole, or gemini-truncated with a trailing "…"), so
+      // an agent whose goal genuinely ends in a parenthetical keeps its words.
+      const base = (getPaneCwd(this.id) ?? '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? ''
+      const paren = /^(.*) \(([^()]*)\)$/.exec(text)
+      if (base && paren && (paren[2] === base || (paren[2].endsWith('…') && base.startsWith(paren[2].slice(0, -1))))) {
+        text = paren[1]
+      }
+      oscTitle = text.trim()
       applyTitle()
     })
+    // An agent's goal must not outlive the agent: when this pane's session ends
+    // (process truth from typed-launch detection, or the OSC-133 exit guess above),
+    // the title falls back to the pane's identity label instead of wearing the last
+    // task of a process that is gone. A shell that then titles itself (ConPTY reports
+    // shell titles) is a fresh fact and takes the row again.
+    let titledSession = !!getPaneAgentSession(this.id)
+    this.disposers.push(onPaneAgentSession((paneId, s) => {
+      if (paneId !== this.id) return
+      if (s) {
+        titledSession = true
+        return
+      }
+      if (!titledSession) return
+      titledSession = false
+      oscTitle = ''
+      applyTitle()
+    }))
 
     // Rename (double-click or menu): a body-portaled dialog, so a compact pane never
     // has to fit an editor inside the title track it deliberately retired.
@@ -1685,7 +1554,7 @@ export class TerminalPane {
     // What this pane calls itself — the agent's task title, else its label, else its number.
     // The number is derived from the id and therefore STABLE: a pane that moves to another
     // workspace keeps its name, rather than being renumbered by wherever it happens to land.
-    const paneName = displayTitle || `Terminal ${this.id % 100 || this.id}`
+    const paneName = displayTitle || `Terminal ${displayPaneNumber(this.id)}`
     const info: HTMLElement[] = [note(`Pane: ${paneName}`)]
     const session = getPaneAgentSession(this.id)
     if (session) {

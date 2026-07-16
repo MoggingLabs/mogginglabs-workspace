@@ -11,7 +11,7 @@ import { ENTITLEMENT_LIMIT_NAMES } from './src/contracts/entitlements'
 // normalize.js) throws `Cannot read properties of undefined (reading 'getAppPath')`.
 // This config module runs in the electron-vite process before Electron spawns,
 // so clearing it here fixes `npm run dev` from every terminal. The daemon is
-// unaffected — it runs on the standalone Node helper (ADR 0016), which ignores
+// unaffected — it runs on the standalone Node helper (ADR 0017), which ignores
 // the variable like any plain node does.
 delete process.env.ELECTRON_RUN_AS_NODE
 
@@ -27,7 +27,7 @@ const alias = {
   '@ui': resolve(__dirname, 'src/ui')
 }
 
-// Interactive-dev-only CSP relax (ADR 0015 §hardening): src/renderer/index.html ships
+// Interactive-dev-only CSP relax (ADR 0016 §hardening): src/renderer/index.html ships
 // connect-src 'none' — the trusted renderer owns no network — which also blocks vite's
 // OWN HMR websocket under `serve`. Relax JUST connect-src, JUST for a human dev run:
 // never for a gate (every gate sets MOGGING_USERDATA) and never for `build`
@@ -75,16 +75,16 @@ const copyMcpCatalog = {
   }
 }
 
-// The read-cost raiser (ADR 0015 §hardening, phase-accounts/07): the SHIPPED main process
+// The read-cost raiser (ADR 0016 §hardening, phase-accounts/07): the SHIPPED main process
 // is V8 BYTECODE, not readable JS — `build.bytecode` below compiles the `index` chunk to
 // out/main/index.jsc, leaving index.js as a three-line loader stub (same path, so
 // package.json `main` and electron-builder's globs never change). Honest framing, stated
 // where the knob lives: this raises the cost of READING the code from "open an editor" to
 // "reverse V8 bytecode" — friction, never a wall, and never to be described as security
-// (docs/18-accounts.md §honest limits). The plugin is inert under `serve`, so dev and
+// (docs/19-accounts.md §honest limits). The plugin is inert under `serve`, so dev and
 // every gate in scripts/qa-smokes.sh run the exact same plain-JS graph they always did.
 //
-//   INDEX ONLY, BY chunkAlias (ADR 0016). The daemon chunk — and the chunks it shares
+//   INDEX ONLY, BY chunkAlias (ADR 0017). The daemon chunk — and the chunks it shares
 //   with index — must ship as PLAIN JS: .jsc is bound to the exact V8 that compiled it
 //   (Electron's), and since the runtime split the daemon is hosted by the standalone
 //   Node helper, whose V8 is the pinned Node's. A bytecode daemon under the helper is a
@@ -150,7 +150,7 @@ export default defineConfig(({ command }) => ({
       // Not taken on faith: check-bytecode.mjs compiles and EXECUTES a fixture carrying
       // exactly these constructs through the same compiler on every run.
       // chunkAlias 'index': ONLY the Electron-hosted entry compiles — the daemon graph
-      // runs under the standalone Node helper (ADR 0016), a different V8.
+      // runs under the standalone Node helper (ADR 0017), a different V8.
       bytecode: { chunkAlias: ['index'], protectedStrings, transformArrowFunctions: false },
       rollupOptions: {
         input: {

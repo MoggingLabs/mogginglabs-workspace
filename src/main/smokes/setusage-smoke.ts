@@ -45,7 +45,9 @@ export function runSetUsageSmoke(win: BrowserWindow): void {
     await sleep(300)
   }
 
-  const CARDS = ['providers', 'plans', 'cost', 'alerts', 'display', 'history', 'privacy']
+  // 'alerts' moved to Settings › Notifications (F-08) — its block still exists as a
+  // global singleton (hooksOk asserts it); the usage tab folds are these six.
+  const CARDS = ['providers', 'plans', 'cost', 'display', 'history', 'privacy']
   const fixture = (plans: unknown[]): void => {
     const dir = mkdtempSync(join(tmpdir(), 'mog-setusage-'))
     const f = join(dir, 'fx.json')
@@ -145,8 +147,14 @@ export function runSetUsageSmoke(win: BrowserWindow): void {
         })()`)
       const dark = await readColors()
       await ES(`window.__mogging.setTheme('light')`)
-      await sleep(300)
-      const light = await readColors()
+      // Poll past the color TRANSITION, don't sample one beat of it: on the CI runner the
+      // foot's border recolors before the track's background finishes ramping, and a single
+      // 300ms read catches the track still wearing the dark value.
+      let light = await readColors()
+      for (let i = 0; i < 10 && (light.track === dark.track || light.foot === dark.foot); i++) {
+        await sleep(200)
+        light = await readColors()
+      }
       await ES(`window.__mogging.setTheme('midnight')`)
       await ES(`window.__mogging.usage.close()`)
       const themeOk = !!dark.track && !!dark.foot && dark.track !== light.track && dark.foot !== light.foot

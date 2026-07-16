@@ -21,7 +21,7 @@ export interface McpServerEntry {
   /** Env REFERENCES the CLI resolves at ITS runtime — stored rows must be exactly
    *  `${VAR}` and literals are refused. (The built-in house row used to be the one
    *  literal exception, for `ELECTRON_RUN_AS_NODE=1`; since the runtime split it is a
-   *  bare command on the standalone helper and carries no env at all — ADR 0016.) */
+   *  bare command on the standalone helper and carries no env at all — ADR 0017.) */
   env?: Readonly<Record<string, string>>
   /** http auth headers (8/07): values are `${VAR}` or `Scheme ${VAR}` — the
    *  reference rule again; a literal token is refused at save. */

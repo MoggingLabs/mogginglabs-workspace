@@ -2,8 +2,8 @@
 
 > **Status: the book of the phase-accounts pack** (2026-07-16). Everything written
 > here is SHIPPED and gated; what is not written here does not exist yet. Grounding:
-> [ADR 0015](adr/0015-accounts-and-entitlements.md) (the stance) ·
-> [ADR 0016](adr/0016-split-node-runtime.md) (the runtime split) · the 2026-07
+> [ADR 0016](adr/0016-accounts-and-entitlements.md) (the stance) ·
+> [ADR 0017](adr/0017-split-node-runtime.md) (the runtime split) · the 2026-07
 > research set ([productization](research/2026-07-productization-accounts-subscriptions.md)
 > · [hardening](research/2026-07-electron-hardening-and-enforcement.md) ·
 > [anti-piracy](research/2026-07-anti-piracy-plan.md)). The composed proof is the
@@ -12,7 +12,7 @@
 > signing pipeline are the operator's deferred FINAL step, outside this pack; every
 > claim below that leans on a signature says so explicitly.
 
-## The custody stance (ADR 0015 §3, shipped)
+## The custody stance (ADR 0016 §3, shipped)
 
 Our account credential follows the vault's own law (8/08, ADR 0014), extended:
 
@@ -29,7 +29,7 @@ Our account credential follows the vault's own law (8/08, ADR 0014), extended:
   gate asserts the surface is closed (exactly status/login/logout/changed) and greps
   the plaintext out of every rest and result.
 
-## The freemium boundary (ADR 0015 §2, shipped)
+## The freemium boundary (ADR 0016 §2, shipped)
 
 **The free local core needs no account and works fully offline — forever.** Gating
 applies to PAID features only, through ONE port (`Entitlements` —
@@ -44,7 +44,7 @@ could already do. The
 scriptable wedge (`mogging list/send/capture`, docs/06) is **ungated in every tier**,
 and refusals are one honest sentence naming the plan and the line that was hit.
 
-## The enforcement doctrine (ADR 0015 §5, restated wherever a check lives)
+## The enforcement doctrine (ADR 0016 §5, restated wherever a check lives)
 
 A local check is **UX, not security** — anything on the client is patchable, and no
 section of this doc is allowed to imply otherwise. Real enforcement is exactly two
@@ -120,7 +120,7 @@ the UI trusts, never a server answer taken at face value:
   runs the **RS-side DPoP nonce dance** (RFC 9449 §8.2 — one 401 + `DPoP-Nonce`
   challenge, one retry), so an issuer that requires nonces cannot strand clients;
 - paid FEATURES are **additive over the Free baseline** (set union); paid LIMITS
-  replace per name, and "a plan can only widen" (ADR 0015 §2) is the **issuer's
+  replace per name, and "a plan can only widen" (ADR 0016 §2) is the **issuer's
   contract** — deliberately not clamped client-side, so fixture claims can carry
   numbers small enough for the gates to visibly bite;
 - every degradation **names its cause**: the snapshot's `reason`
@@ -135,7 +135,7 @@ a **6-hour cadence** (the updater's own pattern) that re-derives the snapshot �
 grace boundary crossed by pure time still pushes — and refetches when the claim is
 stale-ish. An app that stays open for weeks on an online machine keeps its plan.
 
-## The offline-grace law (ADR 0015 §4, shipped)
+## The offline-grace law (ADR 0016 §4, shipped)
 
 A cached entitlement is honored for a grace window past its **last successful
 fetch** — the shipped figure is **14 days** (the ADR fixes the final number inside
@@ -256,7 +256,7 @@ before anything uploads. Verdict: `out/fuses-result.json`.
 
 | Fuse | State | Why |
 |---|---|---|
-| `runAsNode` | **OFF (the runtime split's prize)** | The signed binary can no longer be run as a generic Node interpreter — the macOS keychain-theft vector and the cracker's bundled-Node lever are gone. The three consumers that made this load-bearing (the detached PTY daemon, the house MCP server, every `mogging` shim) now run on the standalone helper (ADR 0016, §below); SURVIVE + CONTROL + RUNTIMESPLIT prove them on that host, and re-enabling the fuse is the drift `check-fuses.mjs` refuses. |
+| `runAsNode` | **OFF (the runtime split's prize)** | The signed binary can no longer be run as a generic Node interpreter — the macOS keychain-theft vector and the cracker's bundled-Node lever are gone. The three consumers that made this load-bearing (the detached PTY daemon, the house MCP server, every `mogging` shim) now run on the standalone helper (ADR 0017, §below); SURVIVE + CONTROL + RUNTIMESPLIT prove them on that host, and re-enabling the fuse is the drift `check-fuses.mjs` refuses. |
 | `enableCookieEncryption` | ON | Cookie store encrypted with OS crypto instead of plaintext sqlite. One-way. |
 | `enableNodeOptionsEnvironmentVariable` | OFF | The packaged binary ignores `NODE_OPTIONS` / `NODE_EXTRA_CA_CERTS` — the classic code-injection lever into a signed process. No production path reads either (the agent-settings catalog's `NODE_EXTRA_CA_CERTS` entry configures the *CLIs'* own child processes, which are separate node binaries these fuses do not govern). |
 | `enableNodeCliInspectArguments` | OFF | `--inspect` / `--inspect-brk` / `SIGUSR1` refused — no debugger attaches to a shipped process. |
@@ -270,7 +270,7 @@ in `electron.vite.config.ts` (main block only) compiles the `index` chunk to
 `out/main/index.jsc` at `npm run build`, leaving `index.js` as a three-line loader
 stub so no downstream path (`package.json` `main`, the electron-builder globs)
 moves. **The daemon is the deliberate exception since the runtime split**
-(`chunkAlias: ['index']`, ADR 0016): `.jsc` is bound to the exact V8 that compiled
+(`chunkAlias: ['index']`, ADR 0017): `.jsc` is bound to the exact V8 that compiled
 it — Electron's — and the daemon now runs on the standalone helper's Node, so
 `daemon.js` and the chunks it requires ship as plain JS, asserted in both
 directions by the BYTECODE gate. Dev is untouched — the plugin is inert under
@@ -352,7 +352,7 @@ Everything that used to re-run the Electron binary as Node
 server, every `mogging`/`mogging-connection` shim — now runs on a **bundled
 standalone Node helper**: a pinned official Node binary + its own
 helper-ABI `node-pty`/`better-sqlite3` at `resources/node-helper/`
-(`scripts/build-node-helper.mjs`; ADR 0016 has the full design). That is what
+(`scripts/build-node-helper.mjs`; ADR 0017 has the full design). That is what
 earned flipping `runAsNode` OFF above. Proven live, not assumed: **SURVIVE**
 (pane survives an app quit/relaunch *and* the daemon pid's OS process image is
 the helper), **CONTROL** (the whole `mogging` control API through the helper),
@@ -406,7 +406,7 @@ only if a second AS ever exists; the client is single-AS by construction today).
 - **Fuses are tamper *evidence*, not tamper *proofing*.** A cracked copy can
   re-flip fuses with the same public tooling. The wall raises the floor
   (no env/flag injection into legitimate installs, integrity + signature
-  mismatches become loud); real teeth are the ADR 0015 §5 kind — hardware
+  mismatches become loud); real teeth are the ADR 0016 §5 kind — hardware
   binding and server-side value.
 - **Bytecode is a speed bump, and string obfuscation is a game of
   hide-and-seek.** Public tooling decompiles V8 bytecode back to rough
@@ -426,7 +426,7 @@ only if a second AS ever exists; the client is single-AS by construction today).
   strip the very self-check that sets `tampered`. Neither stops a determined
   cracker — they make a leak ATTRIBUTABLE and a modified build
   SELF-INCRIMINATING (a boolean telemetry signal + a server-side revocation
-  trigger), which is a different and honest goal. Real teeth remain the ADR 0015
+  trigger), which is a different and honest goal. Real teeth remain the ADR 0016
   §5 kind: hardware binding and server-side value. Do not oversell either as a
   wall.
 - **The tamper check's redundant watermark carrier attributes, it does not

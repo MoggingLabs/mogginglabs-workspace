@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The origin-pin gate (ADR 0015).
+// The origin-pin gate (ADR 0016).
 //
 //   node scripts/check-originpin.mjs
 //
@@ -153,7 +153,7 @@ writeFileSync(join(ROOT, 'out', 'originpin-result.json'), JSON.stringify({ pass,
 if (!pass) {
   console.error('\nORIGINPIN: an env var must never repoint where a shipped build talks.\n')
   for (const f of failures) console.error(`  ${f}`)
-  console.error(`\nThe law is ADR 0015 §6: every remote origin is an in-code constant in ${ORIGINS_FILE},`)
+  console.error(`\nThe law is ADR 0016 §6: every remote origin is an in-code constant in ${ORIGINS_FILE},`)
   console.error('one frozen table, decided at build time. A test that needs a fixture server passes a')
   console.error('baseUrl PARAMETER at the call site (see the mcpcat smoke) — nothing reads the environment.\n')
   process.exit(1)

@@ -25,7 +25,7 @@ files:
 # Native modules (node-pty, better-sqlite3) are unpacked so they load from disk at runtime.
 # bin/ joins them: those scripts are spawned as a SEPARATE plain-`node` process, and node has
 # no asar support — it cannot read a path inside app.asar. Unpacked, the path is a real file.
-# out/main/daemon.js + its chunks join them too (ADR 0016): the daemon is hosted by the
+# out/main/daemon.js + its chunks join them too (ADR 0017): the daemon is hosted by the
 # standalone Node helper now, so its whole require graph must be real files. The daemon
 # graph also ships as plain JS on purpose — V8 bytecode is bound to the exact V8 that
 # compiled it, which is Electron's, not the helper's (electron.vite.config.ts pins
@@ -43,7 +43,7 @@ asarUnpack:
 # dlopens it from process.resourcesPath. Same honest caveat as the asarUnpack set: it
 # sits outside app.asar, covered by the bundle signature only, not the integrity fuse.
 #
-# node-helper/ (ADR 0016): the standalone pinned Node runtime that hosts the detached
+# node-helper/ (ADR 0017): the standalone pinned Node runtime that hosts the detached
 # PTY daemon, the house MCP server and the `mogging` shims — what earned flipping
 # RunAsNode off below. Built per platform-arch by scripts/build-node-helper.mjs
 # (postinstall; CI: electron-native-rebuild). Carries its OWN node_modules: node-pty +
@@ -54,7 +54,7 @@ extraResources:
   - from: src/backend/platform/device-key/build/Release/device_key.node
     to: device-key/device_key.node
 
-# Electron fuses (ADR 0015 §hardening): flipped at PACK time, so dev is untouched — a
+# Electron fuses (ADR 0016 §hardening): flipped at PACK time, so dev is untouched — a
 # packaged build is tamper-evident and loses its living-off-the-land levers. Flipping
 # `enableEmbeddedAsarIntegrityValidation` also makes electron-builder embed the asar
 # header hash into the executable. CAVEAT, stated where the flip lives: the asarUnpack
@@ -64,7 +64,7 @@ extraResources:
 # enforced on macOS and Windows (Electron >= 30); on Linux the fuse is set but inert.
 # scripts/check-fuses.mjs asserts this EXACT wall on the packaged artifact.
 electronFuses:
-  # OFF — the prize of the runtime split (ADR 0016, step 09). The signed Electron
+  # OFF — the prize of the runtime split (ADR 0017, step 09). The signed Electron
   # binary can no longer be run as a generic Node interpreter (the macOS
   # keychain-theft vector, and a cracker's favorite lever): the detached PTY daemon
   # (daemon-client.ts), the house MCP server (mcp-manager.ts houseServerEntry) and
@@ -103,7 +103,7 @@ win:
       arch:
         - x64
   artifactName: MoggingLabs-Workspace-${version}-win-${arch}.${ext}
-  # The standalone Node helper (ADR 0016) — per-OS `from` because the build dir is keyed
+  # The standalone Node helper (ADR 0017) — per-OS `from` because the build dir is keyed
   # by process.platform (win32/darwin/linux), which electron-builder's ${os} is not.
   extraResources:
     - from: build/node-helper/win32-${arch}

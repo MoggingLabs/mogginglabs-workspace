@@ -1,3 +1,4 @@
+import * as os from 'node:os'
 import { app, BrowserWindow, dialog, type WebContents } from 'electron'
 import { getTelemetry, startBackend } from '@backend'
 import { createMainWindow } from './window'
@@ -9,6 +10,7 @@ import { registerDialogs } from './dialogs'
 import { registerShellChrome, wireWindowState } from './shell-chrome'
 import { registerAppSettings, disposeAppSettings } from './app-settings'
 import { registerAgents, disposeAgentInstalls } from './agents'
+import { registerAgentGlobalHooks } from './agent-global-hooks'
 import { registerAgentSettings, disposeAgentSettings } from './agent-settings'
 import { registerBrowserDock } from './browser-dock'
 import { startMcpEndpoint, stopMcpEndpoint } from './mcp-endpoint'
@@ -21,6 +23,7 @@ import { registerFsBrowse } from './fs-browse'
 import { registerExplorer } from './explorer'
 import { registerReview } from './review'
 import { registerBoard } from './board'
+import { registerGithubBoard } from './github-board'
 import { registerProfiles } from './profiles'
 import { registerUsage } from './usage'
 import { registerRemotes } from './remotes'
@@ -37,10 +40,11 @@ import { startDaemonBackend } from './daemon-relay'
 import { DaemonMigrationDeferredError } from './daemon-migrate'
 import { installCliRuntime } from './cli-runtime'
 import { installDeepLinkListeners, registerDeepLink, initialDeepLinkCwd, initialControlCommand } from './deep-link'
-import { ControlChannels, WorkspaceChannels } from '@contracts'
+import { CONTROL_COLD_START_DELAY_MS, ControlChannels, WorkspaceChannels } from '@contracts'
 import { initAutoUpdate } from './updater'
 import { fatal, installFatalHandlers } from './fatal'
 import { scrubInheritedPaneEnv } from './pane-env'
+import { runtimeIsolationError } from './runtime-isolation'
 import { assertNativeModules, scheduleTamperSelfCheck } from './native-preflight'
 import { assertPtyHostSupported } from '@backend/platform/pty-host'
 import { registerRuntimeHealth, setDaemonHealth, setDaemonHealthRetry } from './runtime-health'
@@ -105,6 +109,7 @@ export interface BootOptions {
 }
 
 let win: BrowserWindow | null = null
+let harnessActive = false // gates get a window Cocoa won't clamp (see createMainWindow)
 let disposeBackend: (() => void) | null = null
 let disposeGit: (() => void) | null = null
 let disposeContext: (() => void) | null = null
@@ -134,6 +139,19 @@ export function prepareRuntime(): void {
   // daemon, CLIs from the pane env. Packaged apps CLEAR it (an installed app launched from inside a
   // dev pane would otherwise inherit 'dev' and squat the dev channel): derived, never trusted up.
   // Smokes stay prod-shaped — they already isolate the whole runtime tree via LOCALAPPDATA.
+  //
+  // "Already isolate" is enforced, not hoped: an UNPACKAGED launch that sets MOGGING_USERDATA
+  // without redirecting the runtime base is a prod-shaped app of a foreign build aimed at the
+  // REAL run/v<N> dir — its build-stamp check then retires the installed app's live daemon
+  // (every pane's process dies) and starts a retire war on reconnect. Refuse to boot instead
+  // (runtime-isolation.ts); the properly-launched harness (scripts/qa-smokes.sh) is unaffected.
+  if (!app.isPackaged) {
+    const isolation = runtimeIsolationError(process.env, process.platform, os.homedir())
+    if (isolation) {
+      console.error(`[boot] ${isolation}`)
+      process.exit(1)
+    }
+  }
   if (app.isPackaged || process.env.MOGGING_USERDATA) delete process.env.MOGGING_CHANNEL
   else process.env.MOGGING_CHANNEL = 'dev'
 
@@ -161,7 +179,7 @@ export function prepareRuntime(): void {
 }
 
 function openWindow(): void {
-  const w = createMainWindow()
+  const w = createMainWindow({ largerThanScreen: harnessActive })
   win = w
   wireWindowState(w) // fullscreen/maximize -> renderer chrome classes (5/04)
   // Only the CURRENT window may clear the pointer: a window re-created for a deep link
@@ -192,6 +210,7 @@ function liveWebContents(): WebContents | null {
  * `app.whenReady()` resolves).
  */
 export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
+  harnessActive = harness
   // Single-instance + mogging:// deep link so `mogging .` focuses a running app. Skipped under
   // the harness (some gates launch a second instance); normal dev/production runs hold the lock.
   // Dev needs no bypass: it holds its OWN lock via the -dev userData (Electron keys the lock on
@@ -281,13 +300,13 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       registerClipboard() // system clipboard IPC (app-layer, Electron-only)
       registerDialogs(() => win) // native directory picker for the new-workspace wizard
       registerShellChrome(() => win) // theme-tinted window-control overlay (organic chrome)
-      registerBrowserDock(() => win, harness) // right browser dock: MAIN owns the WebContentsView (6/05)
+      registerBrowserDock(() => win) // right browser dock: in-DOM <webview> guests, MAIN drives them (6/05, 8/07)
       registerIntegrations(() => win) // per-workspace integrations grant: store + IPC + fan-out (8/03)
       registerEventBridge(() => win) // outbound event bridge: house events -> user webhooks (8/10)
       registerTrail() // the agent activity trail: local store + viewer IPC (8/05)
       registerMcpManager() // MCP manager: registry + per-CLI config writers (8/06)
       registerConnections(() => win) // the connection broker: the app IS the OAuth client (ADR 0014)
-      registerAccount(() => win) // the account: the SOLE holder of our MoggingLabs credential (ADR 0015) — claims cross IPC, tokens never do
+      registerAccount(() => win) // the account: the SOLE holder of our MoggingLabs credential (ADR 0016) — claims cross IPC, tokens never do
       registerEntitlements(() => win) // the entitlement engine + port (phase-accounts/05): IPC + holder only — cache loads lazily, refresh runs post-paint, never here (I7)
       registerMcpStatus(() => win) // MCP connection-status poller: pushed per-(server×cli) grid (8/11)
       registerServices(() => win) // service links: board card <-> GitHub PR/issue, live via gh (8/12)
@@ -299,6 +318,7 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       // `harness` is this entry's isSmoke: production always passes false.
       const agentSettingsStartup = registerAgentSettings(() => win, harness)
       registerAgents(() => win) // agent launcher: detect/install CLIs + build launch commands (Phase-1/06; Agent CLIs tab)
+      registerAgentGlobalHooks() // global agent alert wiring: the hand-typed-launch gap, all four CLIs (explicit apply/remove only)
       registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
       registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
       disposeGit = registerGit(liveWebContents) // read-only per-pane git branch + dirty (Phase-2/03)
@@ -307,7 +327,8 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       registerFsBrowse() // read-only one-level directory listing for the folder browser (Phase-8.5/03)
       registerExplorer(() => win) // the explorer: read-only listing + the liveness law's watcher pool (Phase-11/01, /04)
       registerReview() // pre-ship diff review: redacted diff + guarded merge (Phase-3/04)
-      registerBoard() // local Kanban board: cards that launch agents (Phase-3/05)
+      registerBoard(() => win) // Board v2: per-project boards, CAS patches, live push (Phase-3/05, rebuilt)
+      registerGithubBoard() // Board ↔ GitHub two-way: gated write-back + rules (ADR 0015)
       registerProfiles() // provider profiles: pointer sets, deny-listed at save (Phase-4/04)
       registerRemotes() // remote (SSH) hosts: connection pointers only (Phase-4/05)
       registerUsage(() => win) // usage meters: adapters ride CLI-owned sessions (Phase-7/01, ADR 0007)
@@ -333,7 +354,7 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
           const w = win
           const send = (): void => {
             // Give restore a beat so `open` lands after existing workspaces re-attach.
-            setTimeout(() => w.webContents.send(ControlChannels.command, initialControl), 800)
+            setTimeout(() => w.webContents.send(ControlChannels.command, initialControl), CONTROL_COLD_START_DELAY_MS)
           }
           if (w.webContents.isLoading()) w.webContents.once('did-finish-load', send)
           else send()

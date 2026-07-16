@@ -2,8 +2,10 @@ import { ipcMain, type BrowserWindow } from 'electron'
 import {
   detectAgents,
   buildLaunchCommand,
+  codexTitleArgs,
   InstallService,
   poolProviderSessions,
+  probeLogin,
   resumeSessionIdFromFile
 } from '@backend/features/agents'
 import { resolveHome } from '@backend/features/usage'
@@ -90,6 +92,11 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
     // user who pointed a profile at their own notify setup said so on purpose.
     const bell = bellLaunchExtras(req.agentId, { runtime: prepared.runtime, tui: prepared.tui })
     if (bell.reason) return { ok: false, reason: bell.reason }
+    // The title layer (backend/features/agents/title.ts): codex is the one CLI whose
+    // goal-carrying title needs launch args (gemini's share rides the bell's generated
+    // system settings; claude/opencode title themselves by default; aider offers nothing).
+    // BEFORE prepared.args, so a user's own provider-settings choice still wins.
+    const titleArgs = req.agentId === 'codex' ? codexTitleArgs() : []
     // Sessions follow profiles (ADR 0013). A profile is a separate config home — the
     // provider's own multi-account mechanism — but that makes every profile a private
     // session silo. So every LOCAL launch first unions this cwd's sessions from the
@@ -127,13 +134,29 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
       req.cwd,
       req.resume,
       { ...bell.env, ...profileEnv, ...prepared.env },
-      [...plan.args, ...ctxArgs, ...bell.args, ...prepared.args],
+      [...plan.args, ...ctxArgs, ...bell.args, ...titleArgs, ...prepared.args],
       'local',
       resumeSessionId
     )
     if (!command) return { ok: false, reason: `Unknown agent provider: ${req.agentId}` }
+    // Accepted residual: 'once' session overrides are consumed HERE, when the command
+    // is handed back — the renderer still has to type it, and a pane disposed in that
+    // microsecond gap spends the one-shot for nothing. Moving consumption behind a
+    // typed-ack would add an IPC round trip and a state machine for a window this
+    // narrow; the failure is a re-arm in Settings, not a wrong launch.
     markAgentConfigSessionLaunched(req)
-    return { ok: true, command }
+    // Sign-in truth at launch: the profile's email is a LABEL — nothing can route
+    // the CLI's own OAuth to it. So state the facts at the moment they bite: no
+    // login at the launch home -> "pick <email>" hint; a DIFFERENT login -> a
+    // mismatch warning. The renderer phrases it; never a launch gate.
+    let signIn: AgentCommandResult['signIn']
+    if (profile?.email) {
+      const state = probeLogin(req.agentId, profile)
+      if (state && !state.signedIn) signIn = { expected: profile.email }
+      else if (state?.email && state.email.toLowerCase() !== profile.email.toLowerCase())
+        signIn = { expected: profile.email, actual: state.email }
+    }
+    return { ok: true, command, signIn }
   })
   ipcMain.handle(AgentChannels.install, (_e, agentId: string) => installs!.start(String(agentId)))
   ipcMain.handle(AgentChannels.installStates, async () => {

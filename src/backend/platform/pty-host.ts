@@ -3,7 +3,7 @@ import type * as PtyTypes from 'node-pty'
 import type { PtyEmulation } from '@contracts'
 import { requireNative } from './native-require'
 
-// Value-required through the host-aware seam (ADR 0016): under the standalone helper the
+// Value-required through the host-aware seam (ADR 0017): under the standalone helper the
 // binary comes from the helper's own node_modules; under Electron, from the app's. The
 // type namespace above is import-type only — types spawn nothing (check-pty-seam.mjs).
 const pty = requireNative<typeof import('node-pty')>('node-pty')

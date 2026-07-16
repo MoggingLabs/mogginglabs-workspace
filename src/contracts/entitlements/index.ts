@@ -1,13 +1,13 @@
 import type { EntitlementDegradedReason, EntitlementGraceState, EntitlementsSnapshot } from '../ipc/entitlements.ipc'
 
-// The Entitlements port (ADR 0015, phase-accounts/05). Gated features depend on THIS
+// The Entitlements port (ADR 0016, phase-accounts/05). Gated features depend on THIS
 // interface — never on the entitlement JWT, the vault cache, the issuer, or any
 // vendor. The concrete engine is constructed only at the composition root
 // (src/main/entitlements.ts) and injected through the backend holder
 // (src/backend/core/entitlements.ts), exactly like the Telemetry port.
 //
 // The honesty stance, restated where the checks live: local gates are UX, not
-// security (ADR 0015 §5). A cracked build can flip any local boolean; the port
+// security (ADR 0016 §5). A cracked build can flip any local boolean; the port
 // exists so refusals are consistent, visible, and phrased once — not to pretend a
 // process can police itself. Real teeth are hardware binding + server-side value.
 
@@ -68,7 +68,7 @@ export interface Entitlements {
 // WHICH tier gets what is data here, not hard-coded at gate points. Gate points ask
 // `limit('maxPanes')`; paid tiers arrive as limits{} inside the SIGNED claim; this
 // table is the Free baseline every answer merges over. The Free row is deliberately
-// GENEROUS: the free local core stays fully usable (ADR 0015 §2) and today's numbers
+// GENEROUS: the free local core stays fully usable (ADR 0016 §2) and today's numbers
 // change nothing — maxPanes matches the WebGL budget cap the layout already enforces.
 
 /** Limit names the first gate points read. A name, not an enum — new gates add rows,

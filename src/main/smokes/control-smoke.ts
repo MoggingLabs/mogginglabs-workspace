@@ -8,7 +8,7 @@ import { helperRuntime } from '../node-helper'
 
 // Env-gated control-API smoke (MOGGING_CONTROL, Phase-3/01): prove tmux-grade
 // scriptability end to end by running the REAL `bin/mogging.mjs` as a child process
-// against the live daemon — on the STANDALONE HELPER (ADR 0016), the exact host every
+// against the live daemon — on the STANDALONE HELPER (ADR 0017), the exact host every
 // shipped shim and CLI config names, with no ELECTRON_RUN_AS_NODE anywhere (the shipped
 // Electron binary would ignore it: the RunAsNode fuse is off):
 //   list         -> pane 1 enumerated
@@ -119,7 +119,7 @@ export function runControlSmoke(win: BrowserWindow): void {
         interruptOk,
         captureOk,
         refusalsOk,
-        cliHost: helper.executable, // the standalone helper (ADR 0016) — never electron
+        cliHost: helper.executable, // the standalone helper (ADR 0017) — never electron
         codes: { badKey: badKey.code, badPane: badPane.code, badAuth: badAuth.code },
         listHead: list.stdout.split('\n').slice(0, 3),
         captureLen: cap.stdout.length

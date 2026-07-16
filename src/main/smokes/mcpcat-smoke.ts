@@ -104,7 +104,10 @@ export function runMcpCatSmoke(win: BrowserWindow, mode?: string): void {
       const geminiFile = join(homes.geminiDir, 'settings.json')
 
       // ── (a) a preset lands dialect-correct in all three (PostHog: token) ───
-      const posthog = catConnect('posthog', ['claude-code', 'codex', 'gemini'], {}, homes)
+      // authKind pinned: posthog's authKinds are oauth-FIRST since app-held
+      // connections landed, so a default catConnect picks oauth and lands no
+      // Authorization header — this step tests the TOKEN dialect on purpose.
+      const posthog = catConnect('posthog', ['claude-code', 'codex', 'gemini'], { authKind: 'token' }, homes)
       const claudeJson = JSON.parse(readFileSync(claudeFile, 'utf8')) as {
         mcpServers?: Record<string, { type?: string; url?: string; headers?: Record<string, string> }>
       }
@@ -210,7 +213,7 @@ export function runMcpCatSmoke(win: BrowserWindow, mode?: string): void {
 
       // ── (i) the update feed is PREVIEW only ─────────────────────────────────
       // The fixture registry rides catRefresh's baseUrl PARAMETER — the env override
-      // this smoke used to set is closed (ADR 0015: origins are pinned in code).
+      // this smoke used to set is closed (ADR 0016: origins are pinned in code).
       const before = readFileSync(claudeFile, 'utf8')
       const refresh = await catRefresh('posthog', `http://127.0.0.1:${port}`)
       const previewOnly = refresh.ok === true && /preview only|matches/.test(refresh.diff ?? '') && readFileSync(claudeFile, 'utf8') === before

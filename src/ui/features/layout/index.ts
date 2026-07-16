@@ -4,7 +4,7 @@
 // registers a UiFeature of its own; it just exports the components.
 export {
   GridLayout,
-  MAX_PANES,
+  paneLimit,
   parseTree,
   leafIds,
   type ExpandMode,
@@ -12,3 +12,17 @@ export {
   type SplitDir
 } from './grid-layout'
 export { TEMPLATES, TEMPLATE_COUNTS, type GridSpec } from './templates'
+export { serializeTree, MIN_PANE_HEIGHT_PX, MIN_PANE_WIDTH_PX } from './layout-tree'
+export { paneCapacity, screenPaneCapacity, PANE_SEAM_PX, type PaneCapacity } from './pane-capacity'
+export {
+  expandToWholeRegions,
+  mergeRegions,
+  sortRegions,
+  specForCount,
+  treeForRegions,
+  uniformSpec,
+  unmergeRegion,
+  validateSpec,
+  type GridRegion,
+  type GridSpecModel
+} from './grid-regions'

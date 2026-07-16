@@ -51,6 +51,16 @@ export function runReviewSmoke(win: BrowserWindow): void {
         ['AKIAIOSFODNN7EXAMPLE', true],
         ['password: hunter2secret', true],
         ['eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9P', true],
+        // BARE token shapes — NO `key =` prefix, so ONLY the token-specific pattern can catch
+        // them. Without these, the generic KV scrub masked every regression to these rules: a
+        // removed ghp_ pattern kept REVIEW green because `token = ghp_…` was caught by `token`.
+        // A bare token in a comment / URL / array literal has no KV key to save it, and that is
+        // exactly the shape that would leak if a pattern were dropped. (Found: audit finding 14.)
+        // Each ends with the token so the `slice(-8)` survival check reads the SECRET's tail.
+        [`deploy hook uses ${FAKE_GHP}`, true],
+        ['rotate github_pat_11ABCDEFG0abcdefghij_klmnopqrstuvwxyz0123456789ABCDEF', true],
+        ['run under gcloud key AIzaSyD-EXAMPLE_fake_key_000000000000000', true],
+        ['post to slack via xoxb-1111111111-2222222222-FAKEfakeFAKEfake', true],
         // The 0.8.2 KV-scrub regression set: `\b(token)` never matched after `_`,
         // so every SCREAMING_SNAKE secret name sailed through; quoted multi-word
         // values and Authorization headers had no rule at all.

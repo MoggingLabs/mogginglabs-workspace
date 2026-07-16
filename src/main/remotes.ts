@@ -61,7 +61,7 @@ export function sanitizeRemote(raw: unknown): RemoteHost | null {
  *  in the config table + the signed claim, not here). The Settings form pre-checks the
  *  same snapshot and SHOWS this wording — the handler below is the enforcement
  *  backstop behind it, so the two can never tell different stories. Local UX only
- *  (ADR 0015 §5); the Free row is generous. */
+ *  (ADR 0016 §5); the Free row is generous. */
 export function remoteQuotaRefusal(id: string): string | null {
   const existing = getSettingsStore()?.listRemotes() ?? []
   if (existing.some((r) => r.id === id)) return null

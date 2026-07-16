@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 
-// Forensic activation watermark (ADR 0015 §leak-attribution, phase-accounts/07). The
+// Forensic activation watermark (ADR 0016 §leak-attribution, phase-accounts/07). The
 // software analog of per-recipient forensic watermarking: at activation the operator's
 // issuer binds a per-ACCOUNT fingerprint into the signed entitlement, so a leaked
 // activation record points back to the account it was issued to. This module is the
@@ -22,7 +22,7 @@ import { createHash } from 'node:crypto'
 //             the account id. It cannot reconstruct an arbitrary id alone, but against a
 //             known-account set it ATTRIBUTES — and it corroborates `wm` when both ride.
 //
-// Honest limit (docs/18-accounts.md): a fork that KNOWS the scheme can strip both
+// Honest limit (docs/19-accounts.md): a fork that KNOWS the scheme can strip both
 // carriers, so this is leak EVIDENCE + a revocation trigger, not leak prevention.
 
 /** The redundant carrier's vocabulary. Eight benign tokens → 8! = 40320 orderings, so

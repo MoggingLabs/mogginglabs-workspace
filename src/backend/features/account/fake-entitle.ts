@@ -54,7 +54,7 @@ export interface FakeEntitleOptions {
    *  watermark carriers. Omit for the pre-07 smokes (no watermark on the claim). */
   accountId?: string
   /** FAKE merchant-of-record wiring (phase-accounts/10). When set, the issuer models the
-   *  real server pair: SUBSCRIPTION STATE lives here (server value, ADR 0015 §5), starts
+   *  real server pair: SUBSCRIPTION STATE lives here (server value, ADR 0016 §5), starts
    *  'free', and flips to 'pro' only when a signed MoR webhook (POST /mor/webhook) delivers
    *  `subscription.activated`. The signature is the FULL Stripe shape — `mor-signature:
    *  t=<unixSec>,v1=<hex hmac-sha256 over "<t>.<rawBody>">` — verified before any state

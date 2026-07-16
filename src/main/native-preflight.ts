@@ -81,7 +81,7 @@ export function assertNativeModules(): void {
   }
 }
 
-// ── The runtime tamper self-check (ADR 0015 §hardening, phase-accounts/07) ────────────
+// ── The runtime tamper self-check (ADR 0016 §hardening, phase-accounts/07) ────────────
 //
 // A modified build should not silently keep its PAID grants. Post-paint (NEVER the boot
 // critical path — invariant I7), the app verifies its own integrity signal and the

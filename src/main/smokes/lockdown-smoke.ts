@@ -4,7 +4,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { lockdownDebug } from '../window'
 
-// Env-gated renderer-lockdown smoke (MOGGING_LOCKDOWN, ADR 0015 §hardening):
+// Env-gated renderer-lockdown smoke (MOGGING_LOCKDOWN, ADR 0016 §hardening):
 //   (a) the CSP ships as a response HEADER on the app document (main-side ground
 //       truth: the onHeadersReceived hook fired for the main frame), includes
 //       connect-src 'none', and byte-matches the index.html meta tag — one policy,

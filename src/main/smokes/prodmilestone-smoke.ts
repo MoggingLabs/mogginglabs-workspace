@@ -48,7 +48,7 @@ import { sleep, waitUntil, writeResult } from './kit'
 //
 //   A0  the anon FREE app opens OFFLINE — no account, no config, nothing to talk to —
 //       and the scriptable wedge works: `mogging list`, `send`, `capture` against the
-//       live daemon through the standalone helper (ADR 0016), account-less;
+//       live daemon through the standalone helper (ADR 0017), account-less;
 //   A1  login: OAuth 2.1 Authorization Code + PKCE against the FAKE IdP, DPoP-bound to
 //       the device key (REAL platform key store under SMOKE-NAMED keys when the machine
 //       has one — deleted at teardown; the honest software fallback otherwise, and the
@@ -94,7 +94,7 @@ export function runProdMilestoneSmoke(win: BrowserWindow): void {
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
 
   // Every `mogging` verb runs the shipped way: the standalone helper hosting the CLI
-  // entry (ADR 0016) — no ELECTRON_RUN_AS_NODE anywhere in this smoke.
+  // entry (ADR 0017) — no ELECTRON_RUN_AS_NODE anywhere in this smoke.
   const cli = (args: string[], extraEnv: Record<string, string> = {}): Promise<CliResult> =>
     new Promise((resolveCli) => {
       execFile(

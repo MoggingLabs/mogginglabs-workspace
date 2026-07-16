@@ -19,6 +19,10 @@ const PAGE_TITLE = 'MOG_BROWSER_TEST_4242'
 
 export function runBrowserSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 120000) // safety net
+  // The dock-width assertions (settle at 380) assume the dev window's 1200 width; on the
+  // 1024-wide CI displays the layout's own cap clamps the dock below that and the gate
+  // fails arithmetic it never meant to test. Pin the authored size (see explorer-smoke).
+  win.setSize(1200, 800)
   const wc = win.webContents
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -34,7 +38,16 @@ export function runBrowserSmoke(win: BrowserWindow): void {
 
   const serve = (): Promise<number> =>
     new Promise((resolve) => {
-      server = createServer((_req, res) => {
+      server = createServer((req, res) => {
+        if (req.url?.startsWith('/setcookie')) {
+          // An OAuth popup's shape: it writes into the shared cookie jar and closes
+          // itself. If the popup rode the guest's session, the guest sees this cookie.
+          res.writeHead(200, { 'content-type': 'text/html', 'set-cookie': 'oshare=yes; Path=/' })
+          // Live briefly so the 2-window state is observable, then self-close like a
+          // real OAuth popup does once the provider hands the session back.
+          res.end(`<!doctype html><title>OAUTH</title><script>setTimeout(function(){window.close()}, 700)</script>`)
+          return
+        }
         res.writeHead(200, { 'content-type': 'text/html' })
         res.end(`<!doctype html><title>${PAGE_TITLE}</title><h1>dock smoke</h1>`)
       })
@@ -95,10 +108,42 @@ export function runBrowserSmoke(win: BrowserWindow): void {
       const headerUrl = (await ES<{ url: string }>('window.__mogging.browser.state()')).url
       const urlOk = headerUrl.includes(`127.0.0.1:${port}`)
 
-      // ── 3. window.open from page context is DENIED ────────────────────────
-      await dockPageEval(`window.open('http://127.0.0.1:${port}/pop')`)
-      await sleep(800)
-      const windowsOk = BrowserWindow.getAllWindows().length === 1
+      // ── 3. window.open policy (F1): a plain _blank navigates the guest itself
+      //       (no new OS window, never a kick to the system browser); a real
+      //       popup (window features → OAuth) opens a hardened child window on
+      //       the SAME session, which shares the guest's cookie jar ────────────
+      // 3a. Bare window.open → same-guest nav, no second window. (The eval MUST end on
+      //     a primitive — window.open returns a WindowProxy that executeJavaScript
+      //     cannot clone.)
+      await dockPageEval(`(window.open('http://127.0.0.1:${port}/pop'), 0)`)
+      await sleep(900)
+      const noPopupWindow = BrowserWindow.getAllWindows().length === 1
+      const blankNavigatedGuest = dockDebug().url.includes(`127.0.0.1:${port}`)
+
+      // 3b. A featured popup → a child window appears, then closes itself.
+      await dockPageEval(`(window.open('http://127.0.0.1:${port}/setcookie', 'oauth', 'width=420,height=520'), 0)`)
+      let popupAppeared = false
+      for (let i = 0; i < 20 && !popupAppeared; i++) {
+        await sleep(150)
+        popupAppeared = BrowserWindow.getAllWindows().length === 2
+      }
+      let popupClosed = false
+      for (let i = 0; i < 30 && !popupClosed; i++) {
+        await sleep(150)
+        popupClosed = BrowserWindow.getAllWindows().length === 1
+      }
+      // 3c. The popup shared the guest's cookie jar (same session): the guest,
+      //     reloaded, now carries the cookie the popup was handed.
+      await ES(`window.__mogging.browser.navigate('127.0.0.1:${port}')`)
+      await sleep(1000)
+      const cookieShared = (await dockPageEval(`document.cookie`) as string | null)?.includes('oshare=yes') === true
+
+      // 3d. The guest speaks Chrome, not Electron (F2): sign-in walls that refuse
+      //     Electron accept this.
+      const guestUA = (await dockPageEval(`navigator.userAgent`)) as string | null
+      const uaChromeHonest = !!guestUA && guestUA.includes('Chrome/') && !/electron/i.test(guestUA) && !/mogging/i.test(guestUA)
+
+      const windowsOk = noPopupWindow && blankNavigatedGuest && popupAppeared && popupClosed && cookieShared && uaChromeHonest
 
       // ── 4. Resize is LOCKSTEP (8/07): the dock and the guest are one DOM
       //       layout — after a width change the guest rect EQUALS the view host
@@ -174,7 +219,8 @@ export function runBrowserSmoke(win: BrowserWindow): void {
         persist,
         settledWidth,
         persistOk,
-        rect
+        rect,
+        windowOpen: { noPopupWindow, blankNavigatedGuest, popupAppeared, popupClosed, cookieShared, uaChromeHonest, guestUA }
       }
     } catch (e) {
       result = { pass: false, error: String(e) }

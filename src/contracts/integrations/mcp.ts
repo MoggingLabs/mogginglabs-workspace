@@ -33,8 +33,8 @@ export interface McpInputSchema {
   required?: readonly string[]
 }
 
-/** The 14 browser tools SHIPPED in 6/05b — names verbatim from the server;
- *  the validator holds the catalog to this exact sequence. */
+/** The browser tools — the 14 SHIPPED in 6/05b, plus the 3 TAB tools (F4). Names
+ *  verbatim from the server; the validator holds the catalog to this exact sequence. */
 export const MCP_BROWSER_TOOL_NAMES = [
   'browser_navigate',
   'browser_back',
@@ -49,7 +49,10 @@ export const MCP_BROWSER_TOOL_NAMES = [
   'browser_eval',
   'browser_console',
   'browser_network_failures',
-  'browser_wait_for'
+  'browser_wait_for',
+  'browser_tab_list',
+  'browser_tab_new',
+  'browser_tab_select'
 ] as const
 
 /** Browser tools that ACT on a page (IMPLEMENTATION §04's gate list) — 04's
@@ -64,13 +67,15 @@ export const MCP_BROWSER_ACT_TOOL_NAMES = [
   'browser_eval'
 ] as const
 
-/** Control-plane reads (02) — snapshots of what the daemon/app already knows. */
+/** Control-plane reads (02) — snapshots of what the daemon/app already knows.
+ *  Board v2 adds `get_card` (one card + its activity, same scope as list). */
 export const MCP_CONTROL_READ_TOOL_NAMES = [
   'list_panes',
   'capture_pane',
   'mail_read',
   'list_owners',
-  'list_board'
+  'list_board',
+  'get_card'
 ] as const
 
 /** Self-scoped control declarations. They are always served because the daemon
@@ -78,15 +83,24 @@ export const MCP_CONTROL_READ_TOOL_NAMES = [
  *  target another pane and therefore do not belong behind the general write grant. */
 export const MCP_CONTROL_SELF_TOOL_NAMES = ['report_working_directory'] as const
 
-/** Control-plane writes (03) — behind the workspace grant, default OFF. Each
- *  maps 1:1 onto a verb `mogging` already speaks; none adds capability. */
+/** Control-plane writes (03) — behind the workspace grant, default OFF. The
+ *  fleet writes map 1:1 onto verbs `mogging` already speaks; the Board-v2
+ *  writes (create/claim/release/comment/archive + the widened update) all
+ *  funnel through main's ONE board writer (CAS + claim rule + activity), so an
+ *  agent can drive the board fully and never silently clobber anyone. There is
+ *  deliberately no delete: agents archive; humans delete. */
 export const MCP_CONTROL_WRITE_TOOL_NAMES = [
   'send_to_pane',
   'send_key',
   'mail_send',
   'claim_files',
   'release_files',
-  'update_card'
+  'update_card',
+  'create_card',
+  'claim_card',
+  'release_card',
+  'comment_card',
+  'archive_card'
 ] as const
 
 export const MCP_TOOL_NAMES = [
@@ -223,8 +237,8 @@ function validateMcpCatalog(raw: unknown): readonly McpToolDef[] {
   return out
 }
 
-/** THE catalog: the 14 shipped browser tools (names/schemas verbatim) + 5
- *  control reads + 1 self-scoped declaration + 6 control writes. Validated at load. */
+/** THE catalog: the 14 shipped browser tools (names/schemas verbatim) + 6
+ *  control reads + 1 self-scoped declaration + 11 control writes. Validated at load. */
 export const MCP_TOOLS: readonly McpToolDef[] = validateMcpCatalog(catalogJson)
 
 export const findMcpTool = (name: string): McpToolDef | undefined => MCP_TOOLS.find((t) => t.name === name)

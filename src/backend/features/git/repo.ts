@@ -1,5 +1,6 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { toCallerNamespace } from '../../platform/fs-paths'
 
 // Pure filesystem helpers for the read-only git probe. No subprocess here — walking up for a
 // `.git` entry is cheaper than spawning `git`, gives us the repo root for dedup/caching, and is
@@ -12,17 +13,20 @@ import * as path from 'node:path'
  */
 export function findRepoRoot(cwd: string): string | null {
   if (!cwd) return null
+  const logical = path.resolve(cwd)
   let dir: string
   try {
     // Git discovers repositories from the physical directory. Resolve the starting path before
     // walking parents so `link/child` (where `link` targets a directory inside a checkout) does
     // not escape to the link's lexical parent before reaching the target checkout's `.git`.
     // This helper returns probe identity only; pane/user-facing cwd state remains unchanged.
-    dir = fs.realpathSync.native(path.resolve(cwd))
+    dir = fs.realpathSync.native(logical)
     if (!fs.statSync(dir).isDirectory()) return null
   } catch {
     return null
   }
+  // Already canonical -> every lexical ancestor is too; the walk's answer needs no translation.
+  const aliased = dir !== logical
   // Guard against symlink loops / pathological depth.
   for (let i = 0; i < 256; i++) {
     try {
@@ -31,7 +35,7 @@ export function findRepoRoot(cwd: string): string | null {
       // an invalid pointer cannot turn into a misleading "git unavailable" chip.
       fs.lstatSync(path.join(dir, '.git'))
       const layout = readGitLayout(dir)
-      if (layout) return dir
+      if (layout) return aliased ? toCallerNamespace(dir, logical) : dir
     } catch {
       /* no usable entry at this level; Git discovery continues toward the parent */
     }

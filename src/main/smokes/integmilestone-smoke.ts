@@ -402,7 +402,7 @@ export function runIntegMilestoneSmoke(win: BrowserWindow): void {
         onPush: () => {},
         onTransition: (link, label) => {
           transitions.push(label)
-          const card = getSettingsStore()?.listBoard().find((c) => c.id === link.cardId)
+          const card = getSettingsStore()?.getCard(link.cardId) ?? null
           if (card?.paneId != null) getDaemonClient()?.notify(String(card.paneId), 'attention', label)
           emitBridgeEvent('review-changed', { workspace: card?.workspaceId ?? '', card: link.cardId, note: label })
         },

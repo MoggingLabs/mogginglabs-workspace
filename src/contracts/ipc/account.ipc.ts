@@ -1,5 +1,5 @@
 /**
- * The account (ADR 0015). The app's OWN credential to MoggingLabs — for
+ * The account (ADR 0016). The app's OWN credential to MoggingLabs — for
  * ENTITLEMENTS, never a provider login. ADR 0002 is untouched: Claude/Codex/Gemini
  * still authenticate themselves, and no provider token ever enters this process.
  *
@@ -12,7 +12,7 @@
  * bug cannot leak what the surface never hands out.
  */
 
-/** `anon` = no account (the free local core needs none — ADR 0015 §2). `authed` =
+/** `anon` = no account (the free local core needs none — ADR 0016 §2). `authed` =
  *  a MoggingLabs session is held (refresh token vaulted, DPoP-key bound). */
 export type AccountState = 'anon' | 'authed'
 
@@ -23,7 +23,7 @@ export interface AccountStatus {
   /** The signed-in account's email, when the id_token carried one. */
   email?: string
   /** The entitlement plan claim (e.g. 'free' | 'pro'). LOCAL UX ONLY — real teeth
-   *  are hardware binding + server-side value (ADR 0015 §5), never this string. */
+   *  are hardware binding + server-side value (ADR 0016 §5), never this string. */
   plan?: string
   /** One transient human sentence when a sign-in attempt just FAILED — rides the
    *  `changed` push only, never stored, never returned by `status`. Exists because a

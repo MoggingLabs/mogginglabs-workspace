@@ -5,7 +5,7 @@ helper, THEN disable `runAsNode`. Gated on the daemon-survival and control-
 API smokes so ADR 0006 and the scriptable CLI provably hold.
 
 ## Steps
-1. **ADR 0016 — split the Node runtime to disable `runAsNode`** (`docs/adr/`,
+1. **ADR 0017 — split the Node runtime to disable `runAsNode`** (`docs/adr/`,
    touches ADR 0006): the detached daemon must outlive the app, so it cannot
    be a `UtilityProcess`; instead it (plus the house MCP server and the
    `mogging` shims) runs on a minimal standalone Node runtime, freeing the
@@ -38,7 +38,7 @@ API smokes so ADR 0006 and the scriptable CLI provably hold.
    green. Verdict `out/runtimesplit-result.json`.
 
 ## Files
-- `docs/adr/0016-split-node-runtime.md` · `build/node-helper/` (SEA/pkg +
+- `docs/adr/0017-split-node-runtime.md` · `build/node-helper/` (SEA/pkg +
   node-pty) · `daemon-client.ts` · `mcp-manager.ts` · `cli-runtime.ts` ·
   `electron-builder.yml` (runAsNode:false) · `scripts/check-fuses.mjs`
   (assert OFF) · `daemon-survive-smoke.ts` · `control-smoke.ts` ·

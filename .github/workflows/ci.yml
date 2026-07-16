@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Full 144-gate sweeps are heavy (~4h each): nightly, staggered per OS, + on demand.
+  # Full 155-gate sweeps are heavy (~4h each): nightly, staggered per OS, + on demand.
   schedule:
     - cron: '30 3 * * *' # linux-sweep
     - cron: '30 4 * * *' # macos-sweep
@@ -89,7 +89,7 @@ jobs:
       - name: Gate registry gate
         run: node scripts/check-gates.mjs
 
-      # ORIGINPIN (ADR 0015): a shipped build talks to exactly the origins compiled into
+      # ORIGINPIN (ADR 0016): a shipped build talks to exactly the origins compiled into
       # it — no env var may repoint one (the old registry override was a licensing bypass
       # the day an entitlement endpoint exists). Pure Node, no build, same free-and-invisible
       # family as the gates above, so it runs per-push; the full sweep carries it too.
@@ -136,7 +136,7 @@ jobs:
 
   # Phase-4/06: the third platform must BUILD AND BOOT — full native install, the
   # SMOKE gate headless under xvfb, then the AppImage + deb package. The full
-  # 144-gate sweep on Linux is a follow-up; this asserts build + boot.
+  # 155-gate sweep on Linux is a follow-up; this asserts build + boot.
   linux-boot:
     name: linux boot + package
     runs-on: ubuntu-latest
@@ -189,13 +189,13 @@ jobs:
         # step above already produced the electron-ABI .node files it would build.
         run: npx electron-builder --linux --publish never -c.npmRebuild=false -c.buildDependenciesFromSource=false
 
-      # The fuse wall (ADR 0015 §hardening), read off the artifact the step above just
+      # The fuse wall (ADR 0016 §hardening), read off the artifact the step above just
       # produced. Linux SETS the asar-integrity fuse but does not enforce it, so the
       # tamper proof self-skips here; the exact-wall assertion still bites on drift.
       - name: Fuse wall gate
         run: MOGGING_FUSES_APP=dist/linux-unpacked node scripts/check-fuses.mjs
 
-  # Phase-6/02: the ENTIRE 144-gate sweep on Linux — same script, same gate list as
+  # Phase-6/02: the ENTIRE 155-gate sweep on Linux — same script, same gate list as
   # Windows. Nightly + manual (heavy); the fast boot gate above still runs per push.
   # MOGGING_CI_GPU=soft relaxes ONLY frame-gap budgets (software GL under xvfb) and
   # prints loudly in every affected smoke's log; all other claims are untouched.
@@ -241,6 +241,14 @@ jobs:
         uses: ./.github/actions/electron-native-rebuild
       - name: Build
         run: npm run build
+
+      # The real-CLI gates (AGENTLAUNCH detect+launch, BOARD's card hand-off, TEMPLATE_B's
+      # claude slot, TYPED's real-typed lane) drive the actual `claude` binary — unauthenticated
+      # on purpose: the smokes answer/accept its first-run onboarding UI, which is a real TUI.
+      # Without the binary the launcher types a command the shell cannot find, the fleet's
+      # fail-close unbinds the card, and all four gates fail on environment, not product.
+      - name: Agent CLIs on PATH (claude + gemini, unauthenticated)
+        run: npm install -g @anthropic-ai/claude-code @google/gemini-cli
 
       - name: Sandbox helper perms
         run: |
@@ -322,6 +330,10 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Same rationale as the linux sweep: the real-CLI gates need the actual binary.
+      - name: Agent CLIs on PATH (claude + gemini, unauthenticated)
+        run: npm install -g @anthropic-ai/claude-code @google/gemini-cli
+
       - name: Full sweep (all gates, isolated state)
         run: |
           MOGGING_CI_GPU=soft MOGGING_GATES="${{ inputs.gates }}" bash scripts/qa-smokes.sh | tee sweep.log
@@ -339,7 +351,7 @@ jobs:
           if-no-files-found: warn
 
   # Phase-6/03: Windows regression coverage stops depending on the dev machine —
-  # the ENTIRE 144-gate sweep on windows-latest. Same script, same gate list:
+  # the ENTIRE 155-gate sweep on windows-latest. Same script, same gate list:
   # Git Bash drives qa-smokes.sh through its native MINGW branches (the local-dev
   # path). No GPU on the runner -> MOGGING_CI_GPU=soft, the same frame-timing-only
   # honesty as linux/macos. The @electron/rebuild spawn hang is confirmed on this
@@ -378,6 +390,11 @@ jobs:
       - name: Build
         shell: bash
         run: npm run build
+
+      # Same rationale as the linux sweep: the real-CLI gates need the actual binary.
+      - name: Agent CLIs on PATH (claude + gemini, unauthenticated)
+        shell: bash
+        run: npm install -g @anthropic-ai/claude-code @google/gemini-cli
 
       - name: Full sweep (all gates, isolated state)
         shell: bash
@@ -447,7 +464,7 @@ jobs:
       - name: Verify signing readiness
         run: node scripts/verify-signing-readiness.mjs
 
-      # The fuse wall on the signed-SHAPE artifact (ADR 0015 §hardening): exact wall +
+      # The fuse wall on the signed-SHAPE artifact (ADR 0016 §hardening): exact wall +
       # the tampered-asar refusal, on both signing platforms, before any release day.
       - name: Fuse wall gate
         shell: bash

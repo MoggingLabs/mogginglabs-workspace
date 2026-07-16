@@ -10,6 +10,23 @@ import type { PersistedWorkspace } from '../ipc/workspace.ipc'
 import type { PtyEmulation } from '../ipc/terminal.ipc'
 import type { ReviewSnapshot } from '../ipc/review.ipc'
 
+// v10: the swarm coordination verbs are pane-bound. `mail-send`, `claim` and `release`
+// gained an optional `token` — the sender's own MOGGING_PANE_TOKEN — and the daemon now
+// REFUSES a pane sender (from ≠ '0') that does not present it, exactly as `approve` and
+// `cwd-report` already did. Pane ids are public (`mogging list` prints them) and every
+// pane can read the 0600 endpoint file and authenticate, so `from` alone was a claim, not
+// a fact: one agent could mail the swarm AS the reviewer, or `release --all` a sibling's
+// territory. A v9 daemon would keep accepting those forged, unbound verbs until it retires,
+// so the bump forces the hand-off (daemon-migrate.ts) rather than pretending the check is
+// an additive add — a security boundary must not depend on which daemon happens to answer.
+//
+// v10 ALSO carries the daemon-lifecycle wire (one release, one bump): `hello` gained an
+// optional client identity (daemon.log's "shutdown requested by …" names its requester)
+// and `welcome` gained `otherClients` — the count the stamp-war retire guard needs before
+// it may fire (daemon-client.ts ensureDaemon: a mismatched daemon with a live client is
+// left running; retiring it starts a war that kills every pane's process each round).
+export const DAEMON_PROTOCOL_VERSION = 10
+
 // v9: burned by v0.11.1 to DELIVER a daemon-side behaviour fix (the tracker's done-chime
 // grace — a finished turn's own bell no longer latches the pane red). The fix changed no
 // wire at all, and that is the point of recording it: a surviving v8 daemon would have kept
@@ -57,7 +74,6 @@ import type { ReviewSnapshot } from '../ipc/review.ipc'
 // (set-role, PaneInfo.role). v2: Phase-3/01 control API — send-key/capture + enriched
 // PaneInfo. The version namespaces the runtime dir + socket, so older daemons keep
 // running untouched (ADR 0006 anti-kill-server); the app + CLI speak their own version.
-export const DAEMON_PROTOCOL_VERSION = 9
 
 // ── Release channel (dev/prod isolation) ───────────────────────────────────────────────
 // A repo checkout and an installed release must be able to run SIDE BY SIDE with zero shared
@@ -224,9 +240,20 @@ export interface PaneInfo {
   remoteName?: string
 }
 
+/** Who a daemon connection belongs to — OPTIONAL and additive (old clients send none, old
+ *  daemons ignore it). Diagnosis-only: it names the requester in daemon.log when a client
+ *  asks for `shutdown`, which is the difference between "the daemon restarted six times last
+ *  night" being an archaeology project and being one grep. Never used for authorization —
+ *  the token is the only credential, and a self-reported pid proves nothing. */
+export interface ClientIdentity {
+  pid?: number
+  /** Short role label: 'app' (the relay), 'retire', 'probe', 'migrate', 'cli', … */
+  kind?: string
+}
+
 /** client -> daemon */
 export type ClientMessage =
-  | { t: 'hello'; v: number; token: string }
+  | { t: 'hello'; v: number; token: string; client?: ClientIdentity }
   | { t: 'spawn'; id: string; spec?: SpawnSpec }
   | { t: 'attach'; id: string }
   | { t: 'input'; id: string; data: string }
@@ -250,16 +277,24 @@ export type ClientMessage =
   // Swarm mailbox (Phase-4/01). `from` is the sender's own pane binding (env
   // MOGGING_PANE_ID inside a pane; omitted = external/human -> '0'). The mailbox
   // never pushes into a PTY — readers PULL with mail-read.
-  | { t: 'mail-send'; body: string; to?: string; from?: string }
+  //
+  // `token` binds a PANE sender to the pane it names, the same proof `approve` demands:
+  // pane ids are public (`mogging list` prints them) and every pane can read the 0600
+  // endpoint file and authenticate, so `from` alone was a claim, not a fact — one agent
+  // could mail the swarm AS the reviewer, or release another agent's territory. A pane
+  // sender without its exact MOGGING_PANE_TOKEN is refused; the human sender ('0',
+  // outside any pane) has no token and stays open — the boundary is inter-AGENT trust.
+  | { t: 'mail-send'; body: string; to?: string; from?: string; token?: string }
   // Messages for `for` (its own id, or omitted = the human view: everything),
   // with id > since.
   | { t: 'mail-read'; since?: number; for?: string }
   // Swarm manifest: name a pane's role (validated against SWARM_ROLES).
   | { t: 'set-role'; id: string; role: string }
   // Ownership ledger (Phase-4/02). `from` = the claimant pane's own binding
-  // (MOGGING_PANE_ID). The ledger ADVISES — it never blocks PTY writes or file I/O.
-  | { t: 'claim'; pattern: string; from: string }
-  | { t: 'release'; pattern?: string; all?: boolean; from: string }
+  // (MOGGING_PANE_ID), proven by `token` (see mail-send). The ledger ADVISES — it
+  // never blocks PTY writes or file I/O.
+  | { t: 'claim'; pattern: string; from: string; token?: string }
+  | { t: 'release'; pattern?: string; all?: boolean; from: string; token?: string }
   | { t: 'owners' }
   // Reviewer gate (Phase-4/03). `from` names the approver's pane and the daemon checks
   // THAT pane's role — a payload can never claim a role. `token` is the pane's own
@@ -277,7 +312,12 @@ export type ClientMessage =
  *  is reused the moment a slot is re-opened, so consumers gate on (id, gen) — an event
  *  stamped with a dead generation must never touch the living session's pane. */
 export type ServerMessage =
-  | { t: 'welcome'; v: number; panes: PaneInfo[]; workspaces: PersistedWorkspace[] }
+  // `otherClients` (additive, v9-era): how many OTHER authed connections this daemon holds at
+  // the moment of THIS welcome. It is what lets a build-stamp retire distinguish "stale daemon
+  // nobody is using — replace it" from "a DIFFERENT build's live session is attached — backing
+  // off beats a retire war that kills every pane's process each round" (daemon-client.ts,
+  // ensureDaemon). Old daemons omit it; the client then keeps today's retire behaviour.
+  | { t: 'welcome'; v: number; panes: PaneInfo[]; workspaces: PersistedWorkspace[]; otherClients?: number }
   | { t: 'error'; reason: string; id?: string }
   // `restored` narrows `existing`: a cold-start restore (fresh shell + repainted
   // scrollback, untouched since) rather than a continuously-live session — the app
@@ -345,13 +385,16 @@ export type NotifyEvent =
   // lost to a hard kill can't swallow every future done and strand the pane on busy.
   | 'turn-start'
   // A notification whose TYPE the hook script does not recognize. A guess, deliberately
-  // distinct from `needs-input`: the daemon routes it to the tracker's BELL (held for
-  // contradiction, swallowed on a done pane) instead of latching red. Unrecognized types
-  // used to default to needs-input, and the /goal system's new notification types latched
-  // four freshly-FINISHED panes red (2026-07-15) — Claude fires notifications mostly for
-  // unfocused panes, so it hit exactly the agents nobody was watching. Deliberately NOT in
-  // notifyEventToState below: no stateless AgentState is honest for a guess (idle/busy would
-  // clear a real latch, attention would be the bug reborn), so only the tracker may route it.
+  // distinct from `needs-input`: the daemon routes it to the tracker's notice() — swallowed
+  // mid-turn (a busy pane's real blocks arrive as explicit needs-input on the same channel,
+  // so an unknown type there is certainly not one; it also retracts its own raw-BEL twin),
+  // swallowed on a done pane, and held for contradiction like any chime everywhere else.
+  // Unrecognized types used to default to needs-input, and the /goal system's new
+  // notification types latched four freshly-FINISHED panes red (2026-07-15) — Claude fires
+  // notifications mostly for unfocused panes, so it hit exactly the agents nobody was
+  // watching. Deliberately NOT in notifyEventToState below: no stateless AgentState is
+  // honest for a guess (idle/busy would clear a real latch, attention would be the bug
+  // reborn), so only the tracker may route it.
   | 'notice'
   // The pane's agent reported a provider usage limit (Phase-4/04 failover). Handled
   // statefully by the daemon (session.applyNotify fans a DISTINCT `limit` server event

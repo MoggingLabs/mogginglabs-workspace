@@ -6,6 +6,7 @@ import {
   IconButton,
   SectionHeader,
   clear,
+  confirmDialog,
   createToggleRow,
   el,
   showToast
@@ -124,11 +125,20 @@ export function createClipboardSection(): HTMLElement {
     variant: 'danger',
     size: 'sm',
     icon: 'trash',
-    // It clears the SYSTEM clipboard too. That is the point of a privacy control, but a
-    // user who loses what they just copied without warning would be right to be annoyed.
+    // It clears the SYSTEM clipboard too. That is the point of a privacy control — but
+    // a partly-invisible destructive side effect must be CONFIRMED, not hover-hinted
+    // (F-05): destructive + irreversible ⇒ confirmDialog, app-wide, side effect named.
     title: 'Erase every entry — and clear the system clipboard',
     onClick: () => {
-      void clearHistory().then(() => showToast({ tone: 'success', title: 'Clipboard history cleared' }))
+      void confirmDialog({
+        title: 'Clear clipboard history?',
+        message: 'Erases every entry — and clears the system clipboard too, including whatever you last copied in another app. This cannot be undone.',
+        confirmLabel: 'Clear history',
+        danger: true
+      }).then((ok) => {
+        if (!ok) return
+        void clearHistory().then(() => showToast({ tone: 'success', title: 'Clipboard history cleared' }))
+      })
     }
   })
 
@@ -180,16 +190,18 @@ export function createClipboardSection(): HTMLElement {
     if (list.isConnected && section && !section.hidden) refresh()
   }, 60_000)
 
+  // F-06: first sentence = the behavior; second = the exception. The mechanics moved
+  // to the History card's caption, where the list they govern lives.
   const copyOnSelectRow = createToggleRow({
     label: 'Copy on select',
-    hint: 'Selecting text in a terminal with the mouse copies it immediately, without Ctrl+C. When an agent draws its own UI (Claude Code and co. take the mouse), the agent’s selection copies via the terminal protocol instead — hold Shift (⌥ on macOS) to select with the app.',
+    hint: 'Selecting text in a terminal copies it immediately — no Ctrl+C. When an agent owns the mouse (Claude Code and co.), hold Shift (⌥ on macOS) to select with the app.',
     checked: copyOnSelect(),
     onChange: setCopyOnSelect
   })
 
   const historyRow = createToggleRow({
     label: 'Keep a history',
-    hint: 'Off by default. When on, the app checks the machine-wide clipboard about every 800 ms — including copies made in other apps — and keeps up to 100 non-secret entries in memory until you turn it off or quit. Secret-shaped text is never retained.',
+    hint: 'Off by default. When on, everything you copy — here or in another app — is kept in memory for this session. Secret-shaped text is never retained.',
     checked: enabled,
     // setHistoryEnabled stops main from RECORDING and drops what it already holds —
     // no separate clearHistory() call, which would only race it.
@@ -216,7 +228,7 @@ export function createClipboardSection(): HTMLElement {
       {
         header: SectionHeader({
           title: 'History',
-          caption: 'Newest first. Kept in memory only — quitting the app erases it.',
+          caption: 'Newest first, up to 100 entries, checked about every 800 ms. Kept in memory only — quitting the app erases it.',
           action: clearBtn
         })
       },

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The fuse-wall gate (ADR 0015 §hardening).
+// The fuse-wall gate (ADR 0016 §hardening).
 //
 //   node scripts/check-fuses.mjs                      # package, then verify
 //   MOGGING_FUSES_APP=<binary|.app> node scripts/check-fuses.mjs   # verify a prebuilt
@@ -17,7 +17,7 @@
 // The wall (this table and electron-builder.yml must always agree; that is the drift
 // this catches):
 //
-//   RunAsNode                              DISABLE  the runtime split's prize (ADR 0016):
+//   RunAsNode                              DISABLE  the runtime split's prize (ADR 0017):
 //                                                   daemon/MCP/CLI ride the standalone
 //                                                   helper; the signed binary is not a
 //                                                   Node interpreter anymore
@@ -33,7 +33,7 @@
 // enforces asar integrity there (>= 30 / >= 16); on Linux the fuse is SET but inert,
 // which docs/18 states plainly. Two more stated caveats: the outside-the-asar set
 // (node-pty, better-sqlite3, bin/**, out/main/daemon.js + chunks, and the node-helper
-// resources — ADR 0016) is covered only by the code signature (the operator's deferred
+// resources — ADR 0017) is covered only by the code signature (the operator's deferred
 // step), and ELECTRON_RUN_AS_NODE is still scrubbed from the env — the packaged exe now
 // IGNORES it (RunAsNode is off; a leaked =1 once made a tampered exe boot as plain Node
 // and exit 0 without loading the asar, measured 2026-07-15), but the build/packaging
@@ -54,7 +54,7 @@ import { getCurrentFuseWire, FuseV1Options, FuseState } from '@electron/fuses'
 const ROOT = process.cwd()
 const failures = []
 
-// The EXACT wall. Step 09 (the runtime split, ADR 0016) flipped RunAsNode here and in
+// The EXACT wall. Step 09 (the runtime split, ADR 0017) flipped RunAsNode here and in
 // electron-builder.yml together — re-enabling it is the drift this gate now refuses.
 const EXPECTED = {
   [FuseV1Options.RunAsNode]: FuseState.DISABLE,
@@ -143,7 +143,7 @@ for (const [option, want] of Object.entries(EXPECTED)) {
 }
 
 // ── 2b. RunAsNode OFF is only safe if the helper it moved the daemon onto ACTUALLY
-// SHIPPED, complete (ADR 0016). This gate holds the packaged artifact, so it is the one
+// SHIPPED, complete (ADR 0017). This gate holds the packaged artifact, so it is the one
 // place that can catch the omission — and it already did once: electron-builder strips
 // any `node_modules` segment from an extraResources copy, so the helper's natives shipped
 // EMPTY (daemon can't load node-pty → no terminals) while every other gate stayed green.
@@ -155,7 +155,7 @@ const helperExe = process.platform === 'win32' ? 'mogging-node.exe' : 'mogging-n
 const helperDir = join(resourcesDir, 'node-helper')
 const helper = { present: false, natives: {} }
 if (!existsSync(join(helperDir, helperExe))) {
-  fail(`no standalone helper at resources/node-helper/${helperExe} — runAsNode is OFF but the daemon has no host (ADR 0016)`)
+  fail(`no standalone helper at resources/node-helper/${helperExe} — runAsNode is OFF but the daemon has no host (ADR 0017)`)
 } else {
   helper.present = true
   // The daemon's two ABI-bound requires must be real files under the SHIPPED deps dir
@@ -253,9 +253,9 @@ if (!pass) {
   console.error('\nFUSES: the packaged artifact does not carry the declared fuse wall.\n')
   for (const f of failures) console.error(`  ${f}`)
   console.error('\nThe wall lives in electron-builder.yml (`electronFuses`) and is asserted here — the two')
-  console.error('must agree. RunAsNode is DISABLE since the runtime split (ADR 0016) — re-enabling it')
+  console.error('must agree. RunAsNode is DISABLE since the runtime split (ADR 0017) — re-enabling it')
   console.error('re-opens the Node-interpreter hole; every change to the wall is a deliberate')
-  console.error('ADR-0015/0016 decision, not a config tweak.\n')
+  console.error('ADR-0016/0016 decision, not a config tweak.\n')
   process.exit(1)
 }
 

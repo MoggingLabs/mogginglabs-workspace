@@ -8,9 +8,9 @@ export interface MoveTarget {
   color: string
   cwd: string
   paneCount: number
-  /** The effective panes-per-workspace cap that judged `full`: MAX_PANES, or the
-   *  plan's lower `maxPanes` entitlement — so the copy names the number that
-   *  actually refused (phase-accounts/05). */
+  /** The effective panes-per-workspace cap that judged `full`: the screen's live
+   *  paneLimit, or the plan's lower `maxPanes` entitlement — so the copy names the
+   *  number that actually refused (phase-accounts/05 over the wizard-redesign budget). */
   cap: number
   /** At the cap: offered but not selectable, and it says why. Hiding it would leave the
    *  user hunting for a workspace that is right there in the rail. */

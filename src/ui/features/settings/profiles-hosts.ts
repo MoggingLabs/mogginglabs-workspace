@@ -132,6 +132,11 @@ export function createProfilesHostsSection(): HTMLElement {
       const home = Object.values(p.env)[0]
       const detected = p.id.startsWith('login-')
       const isDefault = defaultIds.has(p.id)
+      // Label vs reality (`p.login` = the home's CHECKED login state, list-time only).
+      // The email field cannot steer the CLI's OAuth, so drift must be visible here.
+      const actual = p.login?.email
+      const mismatch = !!(p.login?.signedIn && actual && p.email && actual.toLowerCase() !== p.email.toLowerCase())
+      const signedOut = p.login ? !p.login.signedIn : false
       const siblings = profiles.filter((x) => x.provider === p.provider).length
       const deleteButton = detected
         ? null
@@ -181,13 +186,37 @@ export function createProfilesHostsSection(): HTMLElement {
             el('span', { class: 'ph-row-name' }, [
               el('span', { text: p.name }),
               isDefault ? Pill({ text: 'Default', tone: 'success', title: 'New launches use this account' }) : null,
-              detected ? Pill({ text: 'detected', title: 'Signed in on this machine — found automatically' }) : null
+              detected ? Pill({ text: 'detected', title: 'Signed in on this machine — found automatically' }) : null,
+              mismatch
+                ? Pill({
+                    text: `signed in as ${actual}`,
+                    tone: 'warning',
+                    title:
+                      `This profile's config home holds ${actual}, not the ${p.email} on its label. ` +
+                      'Launch a pane under this profile and run /login to switch accounts, or edit the email here.'
+                  })
+                : null,
+              signedOut
+                ? Pill({
+                    text: 'not signed in yet',
+                    title:
+                      'No account at this profile’s config home — the CLI asks to sign in on first launch.' +
+                      (p.email ? ` Pick ${p.email} in the browser.` : '')
+                  })
+                : null
             ]),
             el('span', { class: 'ph-row-meta' }, [
               providerLogo(p.provider, 13),
               el('span', { text: `${p.provider}${p.email ? ' · ' + p.email : ''}` })
             ]),
-            el('span', { class: 'ph-row-env', text: home ? `own config home · ${home}` : 'your CLI’s usual sign-in' })
+            // F-18: line 1 is identity, line 2 is mechanism — the config-home PATH
+            // moves behind hover (title), where experts still get it without every
+            // row carrying a filesystem string at full contrast.
+            el('span', {
+              class: 'ph-row-env',
+              text: home ? 'own config home' : 'your CLI’s usual sign-in',
+              title: home ?? undefined
+            })
           ]),
           el('div', { class: 'ph-row-actions' }, [
             !isDefault && siblings > 1

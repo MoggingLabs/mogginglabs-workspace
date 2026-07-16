@@ -55,7 +55,7 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
     const dock = document.querySelector('.browser-dock')
     const banner = document.querySelector('.browser-agent-banner')
     const stop = document.querySelector('.browser-agent-stop')
-    const label = document.querySelector('.browser-agent-label')
+    const label = document.querySelector('.browser-agent-name')
     const hitTestable = (el) => {
       if (!el) return false
       const r = el.getBoundingClientRect()
@@ -146,14 +146,18 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       // command so launch needs no installed CLI (matches wizardux).
       await ES(`window.__mogging.templates.openWizard({ cwd: ${JSON.stringify(root)}, paneCount: 2, mix: [{ provider: 'custom:echo hi', count: 2 }] })`)
       await sleep(900)
-      const shape = await ES<{ cards: number; steppers: number; overlays: number; app: boolean; rail: number }>(`(() => ({
-        cards: document.querySelectorAll('#view-wizard .wizard > .card').length,
+      // The wizard was REDESIGNED (2026-07, painted layout): ONE flat
+      // `.wizard-page`, ZERO cards/disclosures — the same contract its own
+      // recut gate (wizardux) holds; this composed re-assert follows it.
+      const shape = await ES<{ cards: number; pages: number; steppers: number; overlays: number; app: boolean; rail: number }>(`(() => ({
+        cards: document.querySelectorAll('#view-wizard .card').length,
+        pages: document.querySelectorAll('#view-wizard .wizard-page').length,
         steppers: document.querySelectorAll('.wizard-stepper').length,
         overlays: document.querySelectorAll('.modal-overlay').length,
         app: document.getElementById('app').classList.contains('view-wizard'),
         rail: document.querySelector('#rail')?.getBoundingClientRect().width ?? 0
       }))()`)
-      const onePageOk = shape.cards === 3 && shape.steppers === 0 && shape.overlays === 0 && shape.app && shape.rail > 0
+      const onePageOk = shape.cards === 0 && shape.pages === 1 && shape.steppers === 0 && shape.overlays === 0 && shape.app && shape.rail > 0
 
       stage = 'a-folderpick'
       // Pick a child folder BY CLICK — cwd, path bar and browser selection move as one.
@@ -189,10 +193,11 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       )
 
       stage = 'b-overview'
-      // Two stats since the tab split (Servers · Service keys) — webhooks and the
-      // trail report on their own tabs now.
+      // Three stats since app-held connections landed (Connections · Servers ·
+      // Service keys) — webhooks and the trail report on their own tabs now.
+      // Connections shows 'none' at zero, never '—'.
       const overviewOk = await waitTrue(
-        `[...document.querySelectorAll('.integux-stats .integux-stat-value')].length === 2 &&
+        `[...document.querySelectorAll('.integux-stats .integux-stat-value')].length === 3 &&
          [...document.querySelectorAll('.integux-stats .integux-stat-value')].every(e => (e.textContent||'').trim() && e.textContent.trim() !== '—')`
       )
 
@@ -210,7 +215,13 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       // health on an always-open page; there is no fold left to bury it under.
       await ES(`(document.querySelector('.settings-nav-item[data-target="webhooks"]')?.click(), 1)`)
       await sleep(400)
-      const failingShown = await waitTrue(`!!document.querySelector('.evbridge-health.is-failing')`, 40, 250)
+      // Webhooks moved onto the house kit (settings wave 3): per-row health is
+      // a Pill — the failing one wears the danger tone.
+      const failingShown = await waitTrue(
+        `[...document.querySelectorAll('.mgr-row .pill--danger')].some((p) => /failing/i.test(p.textContent || ''))`,
+        40,
+        250
+      )
       const hookRowShown = await ES<boolean>(
         `[...document.querySelectorAll('.mgr-row .mgr-label')].some(e => (e.textContent||'').includes('uxm-dead-hook'))`
       )
@@ -219,15 +230,17 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       await sleep(300)
 
       stage = 'b-persist'
-      // Disclosure persists across a leave/return: open Grants, fold Catalog, come back.
-      const catalogDefault = await cardOpen('catalog')
-      await toggleCard('catalog')
+      // Disclosure persists across a leave/return. Connections is the default-open
+      // card now (catalog starts folded): fold Connections, open Grants, come back —
+      // both choices stick.
+      const connectionsDefault = await cardOpen('connections')
+      await toggleCard('connections')
       await sleep(150)
       await toggleCard('grants')
       await sleep(150)
       await leaveSettings()
       await openSettings('integrations')
-      const persistOk = catalogDefault && !(await cardOpen('catalog')) && (await cardOpen('grants'))
+      const persistOk = connectionsDefault && !(await cardOpen('connections')) && (await cardOpen('grants'))
 
       stage = 'b-usage'
       // Usage opens overview-first; a HOT fixture posts .usage-fill.is-hot on the collapsed
@@ -248,7 +261,7 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       const cardId = await ES<string>(`window.__mogging.board.createCard('Ship the parser rewrite', 'Notes the agent should get.')`)
       await ES(`(async () => {
         const c = window.__mogging.board.list().find((x) => x.id === ${JSON.stringify(cardId)})
-        if (c) { await window.bridge.invoke('board:save', { ...c, paneId: 101, workspaceId: 'fx-ws' }); await window.__mogging.board.refresh() }
+        if (c) { await window.bridge.invoke('board:patch', { id: c.id, patch: { paneId: 101, workspaceId: 'fx-ws' } }); await window.__mogging.board.refresh() }
         return 1
       })()`)
       await ES(`window.__mogging.attention.setPaneState(101, 'attention')`)
@@ -266,7 +279,7 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       })()`)
       const countsOk = await ES<boolean>(`(() => {
         const lanes = [...document.querySelectorAll('.board-lane')]
-        return lanes.length === 4 && lanes.every((l) => { const b = l.querySelector('.board-lane-head .count-badge'); return b && Number(b.textContent) === l.querySelectorAll('.board-card').length })
+        return lanes.length === 5 && lanes.every((l) => { const b = l.querySelector('.board-lane-head .count-badge'); return b && Number(b.textContent) === l.querySelectorAll('.board-card').length })
       })()`)
       const boardOk = chipRow.ok && countsOk
 
@@ -348,6 +361,15 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       // the chips present — at 600px they are correctly gone, and `present` would fail.
       win.setSize(1450, 680)
       await sleep(800)
+      // A 4-pane workspace tiles 2×2 (grid-layout: ceil(sqrt(4))=2 cols), so each pane is
+      // only ~715px — and the FULLY lit bar (mcp "restart +2" · claims · role · remote ·
+      // a full git chip · title) overflows that, so pane-header-fit CORRECTLY retires the
+      // trailing left chips (role, remote) into ⋯. That is the overflow working, not the
+      // no-wrap layout failing. Solo the measured pane to the whole window first so the bar
+      // has the room the `present` check assumes — then nothing retires and the one-line
+      // contract is what gets measured.
+      await ES(`window.__mogging.layout.expand(${paneId}, 'full')`)
+      await sleep(400)
       await ES(`(() => { const p = (window.__mogging.panes || []).find((p) => p.id === ${paneId}); if (p && p.lightChips) p.lightChips(); return 1 })()`)
       await sleep(400)
       const pane = await ES<{ ok: boolean; headerH: number; stateLeading: boolean; clipped: boolean; noWrapStyle: boolean; centersAligned: boolean; present: boolean }>(`(() => {
@@ -403,7 +425,7 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       // ══ (e-possession/consent) AA on the possession + consent copy, while driving ══
       stage = 'e-possession-aa'
       foldIn(
-        await probeContrastAcrossThemes({ es: ES, sleep, selectors: ['.browser-agent-label', '.browser-confirm-text', '.browser-agentweb-note-text'] })
+        await probeContrastAcrossThemes({ es: ES, sleep, selectors: ['.browser-agent-name', '.browser-confirm-text', '.browser-agentweb-note-text'] })
       )
 
       // ══ (e-review) the review-gate indicator, its own scene ══
@@ -430,7 +452,7 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       foldIn(await probeContrastAcrossThemes({ es: ES, sleep, selectors: ['.trail-honesty'] }))
       await ES(`(document.querySelector('.settings-nav-item[data-target="webhooks"]')?.click(), 1)`)
       await sleep(400)
-      foldIn(await probeContrastAcrossThemes({ es: ES, sleep, selectors: ['.evbridge-health.is-failing'] }))
+      foldIn(await probeContrastAcrossThemes({ es: ES, sleep, selectors: ['.mgr-row .pill--danger'] }))
       await leaveSettings()
       const e = {
         ok: safety.failures.length === 0 && safety.missing.length === 0 && gate.ok && gate.hasIcon && trailHonestyOk,

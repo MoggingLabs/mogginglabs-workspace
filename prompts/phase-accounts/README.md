@@ -11,7 +11,7 @@ Grounded in the sourced plan: `docs/research/2026-07-productization-accounts-sub
 `…-electron-hardening-and-enforcement.md`, `…-anti-piracy-plan.md`,
 `…-anti-crack-implementation-report.md`.
 
-> **The custody stance (ADR 0015, binding on every step)**: account tokens rest ONLY as
+> **The custody stance (ADR 0016, binding on every step)**: account tokens rest ONLY as
 > `safeStorage` ciphertext (or in memory), decrypt at the single point of use; **no IPC
 > channel ever returns a token** (extends the 8/08 write-only discipline). Claims cross IPC,
 > secrets never do. The free tier needs no account and works fully offline; **offline grace
@@ -39,8 +39,8 @@ Grounded in the sourced plan: `docs/research/2026-07-productization-accounts-sub
 > in any smoke, ever**. The real IdP/merchant-of-record/backend and code-signing certs are
 > the **operator's later wiring**, deliberately OUT of this pack.
 
-> **Numbering deconfliction**: this pack takes **ADR 0015** (accounts & entitlements) +
-> **ADR 0016** (splitting the Node runtime), `docs/18-accounts.md`, and ten new gates (steps
+> **Numbering deconfliction**: this pack takes **ADR 0016** (accounts & entitlements) +
+> **ADR 0017** (splitting the Node runtime), `docs/19-accounts.md`, and ten new gates (steps
 > say "grows by one" so the pack survives other work landing first). The daemon **wire
 > protocol stays v9** throughout — step 09 changes the HOST that speaks it, not the protocol;
 > `PROTOVER` keeps proving v9.
@@ -48,7 +48,7 @@ Grounded in the sourced plan: `docs/research/2026-07-productization-accounts-sub
 ## Sequence
 | # | File | Gate |
 |---|------|------|
-| 01 | `01-adr-and-origin-pinning.md` | ADR 0015 + close `MOGGING_REGISTRY_BASE`, pin origins as in-code constants; **ORIGINPIN** static gate |
+| 01 | `01-adr-and-origin-pinning.md` | ADR 0016 + close `MOGGING_REGISTRY_BASE`, pin origins as in-code constants; **ORIGINPIN** static gate |
 | 02 | `02-electron-fuses.md` | `@electron/fuses`: cookie-enc on, nodeOptions/cliInspect off, both ASAR fuses on; **FUSES** artifact gate |
 | 03 | `03-renderer-lockdown.md` | Tighten CSP + add the missing main-window navigation deny; **LOCKDOWN** |
 | 04 | `04-account-core.md` | `account.ts`: PKCE + DPoP, `account.ipc.ts`, vault custody, FAKE IdP; **ACCOUNT** |
@@ -56,7 +56,7 @@ Grounded in the sourced plan: `docs/research/2026-07-productization-accounts-sub
 | 06 | `06-hardware-device-key.md` | TPM/Secure-Enclave device key binds the grant; copies can't re-license; **DEVICEKEY** |
 | 07 | `07-bytecode.md` | V8 bytecode for MAIN only (preload stays sandboxed) + secret obfuscation; **BYTECODE** |
 | 08 | `08-watermark-and-tamper-check.md` | Per-account activation watermark + runtime tamper self-check; **WATERMARK** |
-| 09 | `09-runtime-split.md` | ADR 0016: split daemon/MCP/CLI to a helper, disable `runAsNode`; **RUNTIMESPLIT** + extend SURVIVE/CONTROL |
+| 09 | `09-runtime-split.md` | ADR 0017: split daemon/MCP/CLI to a helper, disable `runAsNode`; **RUNTIMESPLIT** + extend SURVIVE/CONTROL |
 | 10 | `10-product-milestone.md` | docs/18 + the composed paid-tier milestone, hardened, end-to-end; **PRODMILESTONE** |
 
 ## Overall Definition of Done
@@ -70,7 +70,7 @@ Grounded in the sourced plan: `docs/research/2026-07-productization-accounts-sub
   still ungated; both perf budgets numerically unchanged.
 - `npx @electron/fuses read` on the shipped artifact shows the exact fuse wall (FUSES); no
   IPC channel returns a token (asserted); tokens live only as ciphertext / in memory.
-- ADR 0015 + 0016 written; `docs/18-accounts.md` is the book; positioning copy updated to
+- ADR 0016 + 0016 written; `docs/19-accounts.md` is the book; positioning copy updated to
   "free local core + optional Pro"; the credential-wording gate extended.
 
 ## Global checks (every step)
@@ -104,11 +104,11 @@ services with zero network: subscribe → device-bound Pro; offline → grace �
 bricks; copied to new hardware → inert, no re-license; tampered → free-only; logout →
 anon-free; the `mogging` wedge ungated throughout; both budgets measured ON the composed
 surface. Receipts, measured numbers, and platform finds: [`REPORT.md`](REPORT.md). The
-book: [`docs/18-accounts.md`](../../docs/18-accounts.md).
+book: [`docs/19-accounts.md`](../../docs/19-accounts.md).
 
 | Step | Gate | Done |
 |---|---|---|
-| 01 — ADR 0015 + origin pinning | ORIGINPIN | ✅ |
+| 01 — ADR 0016 + origin pinning | ORIGINPIN | ✅ |
 | 02 — the Electron fuse wall | FUSES | ✅ (incl. `RunAsNode: DISABLE` + the tamper bite) |
 | 03 — renderer lockdown | LOCKDOWN | ✅ |
 | 04 — the account core (PKCE + DPoP, vault custody) | ACCOUNT | ✅ |
@@ -116,7 +116,7 @@ book: [`docs/18-accounts.md`](../../docs/18-accounts.md).
 | 06 — the hardware device key (copies are inert) | DEVICEKEY | ✅ (`tpm` leg here; per-OS = operator dispatch) |
 | 07 — V8 bytecode, main only | BYTECODE | ✅ |
 | 08 — watermark + tamper self-check | WATERMARK | ✅ |
-| 09 — the runtime split (ADR 0016), `runAsNode` off | RUNTIMESPLIT | ✅ |
+| 09 — the runtime split (ADR 0017), `runAsNode` off | RUNTIMESPLIT | ✅ |
 | 10 — the book, the gallery, the composed milestone | **PRODMILESTONE** | ✅ |
 
 **The freeze ledger** (this worktree's commit series on `mogging/0d5688ec`; the sweep
@@ -128,7 +128,7 @@ grew 134 → **144**):
   the sweep/CI wiring. Frozen as one self-consistent commit — the pack landed in this
   worktree uncommitted, so a fabricated per-step history would risk broken intermediates;
   the step→gate mapping above is the real ledger, each gate independently reproducible.
-- `<this commit>` — **docs: the book (docs/18-accounts.md), ADRs 0015/0016, the roadmap,
+- `<this commit>` — **docs: the book (docs/19-accounts.md), ADRs 0015/0016, the roadmap,
   and the freeze ledger.**
 
 Gate run context (this machine, 2026-07-16): every gate above reproduces via

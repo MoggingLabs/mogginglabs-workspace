@@ -52,7 +52,7 @@ export function runSetIntegSmoke(win: BrowserWindow): void {
     '.toolplan-empty'
   ]
   /** …and out of the Activity tab (WEBTRAIL's whole stage h lives here now). */
-  const ACTIVITY_HOOKS = ['.trail-activity', '.trail-activity .trail-btn', '.trail-ws', '.trail-list']
+  const ACTIVITY_HOOKS = ['.trail-activity', '.trail-activity .btn', '.trail-ws', '.trail-list']
 
   const openSettings = async (tab = 'integrations'): Promise<void> => {
     await ES(`(document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click(), 1)`)
@@ -104,10 +104,11 @@ export function runSetIntegSmoke(win: BrowserWindow): void {
       for (const sel of INTEG_HOOKS) hooks[sel] = await waitTrue(`!!document.querySelector(${JSON.stringify(sel)})`)
 
       // ── (a) the overview band reads from fixtures, not placeholders ─────────
-      // Two stats since the split (Servers · Service keys) — webhooks and the
-      // trail report on their own tabs now.
+      // Three stats since app-held connections landed (Connections · Servers ·
+      // Service keys) — webhooks and the trail report on their own tabs now.
+      // Connections shows 'none' at zero (the fixture world), never '—'.
       const statsOk = await waitTrue(
-        `[...document.querySelectorAll('.integux-stats .integux-stat-value')].length === 2 &&
+        `[...document.querySelectorAll('.integux-stats .integux-stat-value')].length === 3 &&
          [...document.querySelectorAll('.integux-stats .integux-stat-value')].every(e => (e.textContent||'').trim() && e.textContent.trim() !== '—')`
       )
 
@@ -122,17 +123,23 @@ export function runSetIntegSmoke(win: BrowserWindow): void {
       const wiredSections = await ES<string[]>(
         `[...document.querySelectorAll('.collapsible-card')].map(c => c.dataset.collapsible)`
       )
-      const sectionsOk = ['catalog', 'servers', 'matrix', 'grants', 'keys'].every((id) => wiredSections.includes(id))
+      const sectionsOk = ['connections', 'catalog', 'servers', 'matrix', 'grants', 'keys'].every((id) => wiredSections.includes(id))
 
       // ── (b) disclosure persists across a leave/return ───────────────────────
-      const catalogOpenByDefault = await cardOpen('catalog')
-      await toggle('catalog')
+      // Connections is the default-open card now (it is about YOUR accounts; the
+      // per-CLI config machinery below starts folded). Toggle two cards off their
+      // defaults, leave, return: the choices stick and an untouched card keeps its
+      // default.
+      const connectionsOpenByDefault = await cardOpen('connections')
+      const catalogClosedByDefault = !(await cardOpen('catalog'))
+      await toggle('connections')
       await sleep(150)
       await toggle('grants')
       await sleep(150)
       await leaveAndReturn()
       const persistOk =
-        catalogOpenByDefault && !(await cardOpen('catalog')) && (await cardOpen('grants')) && !(await cardOpen('keys'))
+        connectionsOpenByDefault && catalogClosedByDefault &&
+        !(await cardOpen('connections')) && (await cardOpen('grants')) && !(await cardOpen('keys'))
 
       // ── (e/1) Integrations hit targets, measured on the real box ────────────
       // Cards must be open for a box to exist: a `display:none` body measures 0.
@@ -149,9 +156,14 @@ export function runSetIntegSmoke(win: BrowserWindow): void {
         return { mgrChip: h('.mgr-chip'), gap }
       })()`)
 
-      // ── (c) the failing webhook reads 'failing' on the Webhooks tab ─────────
+      // ── (c) the failing webhook reads 'Failing' on the Notifications tab ─────
+      // (house Pill since F-36 — a danger pill wearing the word, not a bare class)
       await showTab('webhooks')
-      const failingShown = await waitTrue(`!!document.querySelector('.evbridge-health.is-failing')`, 40, 250)
+      const failingShown = await waitTrue(
+        `[...document.querySelectorAll('.mgr-row .pill')].some((p) => /failing/i.test(p.textContent || ''))`,
+        40,
+        250
+      )
       const hookRowShown = await ES<boolean>(
         `[...document.querySelectorAll('.mgr-row .mgr-label')].some(e => (e.textContent||'').includes('dead-hook'))`
       )
@@ -166,14 +178,14 @@ export function runSetIntegSmoke(win: BrowserWindow): void {
       const honestyOk = await ES<boolean>(
         `(document.querySelector('.trail-activity')?.textContent || '').slice(0, 4000).includes('never sent anywhere')`
       )
-      // The first `.trail-btn` inside the trail card must still be Refresh: WEBTRAIL
-      // and the gallery both click it blind, and its neighbours are Export (opens a
-      // file dialog, hangs the gate) and Clear (destroys the workspace's trail).
+      // The first `.btn` inside the trail card must still be Refresh (house kit since
+      // F-40): WEBTRAIL and the gallery both click it by name, and its neighbours are
+      // Export (opens a file dialog, hangs the gate) and Clear (destroys the trail).
       const refreshFirstOk = await ES<boolean>(
-        `/^Refresh$/.test(document.querySelector('.trail-activity .trail-btn')?.textContent?.trim() || '')`
+        `/^Refresh$/.test(document.querySelector('.trail-activity .btn')?.textContent?.trim() || '')`
       )
       const trailBtn = await ES<number | null>(
-        `(() => { const e = document.querySelector('.trail-activity .trail-btn'); if (!e) return null; const r = e.getBoundingClientRect(); return r.height ? Math.round(r.height * 100) / 100 : null })()`
+        `(() => { const e = document.querySelector('.trail-activity .btn'); if (!e) return null; const r = e.getBoundingClientRect(); return r.height ? Math.round(r.height * 100) / 100 : null })()`
       )
 
       const sp4 = await ES<number>(`parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sp-4')) || 16`)

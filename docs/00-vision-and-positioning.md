@@ -43,7 +43,7 @@ The real, defensible wedge is the intersection:
 
 **One-line positioning:** *Your keys, your CLIs. Rock-solid on Windows and Mac.*
 (The tagline's old absolute half is retired by
-[ADR 0015](adr/0015-accounts-and-entitlements.md): a paid tier is doctrine, gating
+[ADR 0016](adr/0016-accounts-and-entitlements.md): a paid tier is doctrine, gating
 PAID features only — the free local core still needs no account and works fully
 offline.)
 
@@ -57,7 +57,7 @@ and the legal/ToS de-risker. See [ADR 0002](adr/0002-never-broker-provider-auth.
 ## Non-goals (for now)
 
 - No account or server requirement on the **free local core** — ever
-  ([ADR 0015](adr/0015-accounts-and-entitlements.md)). A MoggingLabs account exists
+  ([ADR 0016](adr/0016-accounts-and-entitlements.md)). A MoggingLabs account exists
   only to gate PAID features; no credits, no AI metering.
 - No brokering or reselling of AI subscriptions.
 - Not chasing BridgeSpace's entire surface at once (editor, browser, voice, swarm,

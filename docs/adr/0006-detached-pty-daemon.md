@@ -24,7 +24,7 @@ detached process. (PoC in the session scratchpad; to be productionized as `src/p
 
 ## Architecture
 - **Daemon runtime:** launched on the **bundled standalone Node helper**
-  (`resources/node-helper/mogging-node`, ADR 0016) so there is still no system-Node
+  (`resources/node-helper/mogging-node`, ADR 0017) so there is still no system-Node
   dependency. *(Originally: Electron's own binary as Node via `ELECTRON_RUN_AS_NODE=1` —
   retired when the runtime split disabled the `runAsNode` fuse; the survival design below
   is unchanged, only the host moved.)* Spawned truly detached (`detached:true`,

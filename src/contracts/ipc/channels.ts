@@ -75,6 +75,16 @@ export const AgentConfigChannels = {
   changed: 'agentConfig:changed'
 } as const
 
+// Global agent alert wiring (the hand-typed-launch gap): the same bell config the launch
+// carries session-scoped, written into each CLI's own global config on an EXPLICIT action —
+// the generated notify script (and the OpenCode plugin wrapping it) no-op outside a pane,
+// which is what makes global wiring safe everywhere else.
+export const AgentHookChannels = {
+  status: 'agentHooks:status', // -> GlobalHooksStatus (one row per provider: state + files + reason)
+  apply: 'agentHooks:apply', // ({ provider }) -> GlobalHooksMutationResult (backup + atomic write, refuses concurrent edits and conflicts)
+  remove: 'agentHooks:remove' // ({ provider }) -> GlobalHooksMutationResult (strips OUR entries only; memo-restored booleans)
+} as const
+
 export const TemplateChannels = {
   list: 'templates:list', // -> ProviderMixTemplate[] (presets + custom)
   resolve: 'templates:resolve', // (ProviderCount[]) -> ResolvedLayout
@@ -110,9 +120,25 @@ export const WorktreeChannels = {
 } as const
 
 export const BoardChannels = {
-  list: 'board:list', // -> BoardCard[] (local db only — card text is user content)
-  save: 'board:save', // (BoardCard) -> upsert
-  remove: 'board:remove' // (id) -> void
+  // Board v2: main is the ONE writer (revision CAS, field patches); card text is
+  // user content — local db only (ADR 0005).
+  forWorkspace: 'board:forWorkspace', // (workspaceId) -> Board (find-or-create by the workspace's project key)
+  boards: 'board:boards', // -> BoardListing[] (every board + live card count — the switcher's source)
+  boardPatch: 'board:boardPatch', // (id, BoardMetaPatch) -> Board | null (name / repoRef / config knobs)
+  list: 'board:list', // (boardId) -> BoardCard[] (non-archived, position order)
+  archived: 'board:archived', // (boardId) -> BoardCard[] (archived, newest first)
+  create: 'board:create', // (BoardCreateRequest) -> BoardCard | null (server assigns id/position/revision)
+  patch: 'board:patch', // (BoardPatchRequest) -> BoardPatchResult (CAS: stale revision refused with the fresh card)
+  remove: 'board:remove', // (id) -> void (human-only delete; agents archive instead)
+  activity: 'board:activity', // (cardId) -> BoardActivity[] (the card's local audit trail)
+  changed: 'board:changed', // main -> renderer: { boardId } — any accepted write, any writer (UI, agent, rule, queue)
+  // GitHub two-way (ADR 0015): reads ride the user's own gh; WRITES additionally
+  // demand the per-board writeBack grant (default OFF, risk-confirmed in the UI).
+  ghDetect: 'board:gh:detect', // (boardId) -> BoardGhResult ("owner/repo" from the project's origin remote; persisted)
+  ghImport: 'board:gh:import', // ({ boardId, limit? }) -> BoardGhResult (open issues -> linked backlog cards; read-only)
+  ghFindPr: 'board:gh:findPr', // (cardId) -> BoardGhResult (PR whose head is the card's branch -> linked; read-only)
+  ghPush: 'board:gh:push', // (cardId) -> BoardGhResult (create a GitHub issue from the card — writeBack-gated)
+  ghClose: 'board:gh:close' // (cardId) -> BoardGhResult (close the linked issue — writeBack-gated)
 } as const
 
 export const RemoteChannels = {
@@ -203,6 +229,15 @@ export const BrowserChannels = {
   state: 'browser:state', // main -> renderer: BrowserDockState (header truth)
   lastUrl: 'browser:lastUrl', // (workspaceId) -> string | null ("open this workspace's preview" chip)
   openExternal: 'browser:openExternal', // ({ url }) -> void (http(s) only, system browser)
+  contextMenu: 'browser:contextMenu', // main -> renderer: BrowserContextMenuParams (right-click in the guest → the house menu)
+  guestChord: 'browser:guestChord', // main -> renderer: BrowserGuestChord (an app shortcut pressed while the guest holds focus, F12)
+  devtools: 'browser:devtools', // renderer -> main: { x?, y? } — open DevTools on the active guest (F8)
+  permissionBlocked: 'browser:permissionBlocked', // main -> renderer: { permission } — a guest permission was denied (honest chip, F16)
+  // ── Tabs (F4) ──────────────────────────────────────────────────────────
+  tabActivate: 'browser:tabActivate', // renderer -> main: { workspaceId, profile, tabId } — the active tab per (workspace, profile), so the driver resolves it
+  tabsState: 'browser:tabsState', // renderer -> main: BrowserTabsState — the tab list + active id (main caches it for browser_tab_list)
+  tabOpen: 'browser:tabOpen', // main -> renderer: { workspaceId, profile, url? } — open a new tab (window.open / browser_tab_new)
+  tabSelect: 'browser:tabSelect', // main -> renderer: { workspaceId, profile, tabId } — activate a tab (browser_tab_select)
   // ── Agent control (6/05b) ──────────────────────────────────────────────
   consentGet: 'browser:consentGet', // (workspaceId) -> boolean (stored per-workspace grant; default OFF)
   consentSet: 'browser:consentSet', // ({ workspaceId, allowed }) -> void (Settings/wizard toggle writes it)
@@ -366,7 +401,7 @@ export const ConnectionsChannels = {
 
 export const AccountChannels = {
   // CLAIMS-ONLY status — { state, email?, plan? }. By construction NEVER a token
-  // (ADR 0015): the write-only custody discipline means no channel here has a getter.
+  // (ADR 0016): the write-only custody discipline means no channel here has a getter.
   status: 'account:status', // -> AccountStatus (identity + plan claims; no token, ever)
   login: 'account:login', // -> { ok, reason? } — opens consent IN THE USER'S BROWSER; resolves when the flow STARTS, not when it lands
   logout: 'account:logout', // -> void — clears the vaulted refresh token + DPoP key + in-memory access token
@@ -374,7 +409,7 @@ export const AccountChannels = {
 } as const
 
 export const EntitlementsChannels = {
-  // CLAIMS cross IPC; secrets do not (ADR 0015). The snapshot is plan + features +
+  // CLAIMS cross IPC; secrets do not (ADR 0016). The snapshot is plan + features +
   // effective limits + graceState — the entitlement JWT itself never rides a channel,
   // and there is no verb here that could fetch, replace, or export it.
   snapshot: 'entitlements:snapshot', // -> EntitlementsSnapshot (instant, from the local engine — never a network wait)
@@ -382,6 +417,7 @@ export const EntitlementsChannels = {
 } as const
 
 export const AllChannels: readonly string[] = [
+  ...Object.values(AgentHookChannels),
   ...Object.values(IntegrationsChannels),
   ...Object.values(ConnectionsChannels),
   ...Object.values(AccountChannels),

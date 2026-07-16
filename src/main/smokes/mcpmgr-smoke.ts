@@ -152,7 +152,7 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
         runtime.executable === house.command &&
         house.args?.length === 1 &&
         house.args[0] === runtime.mcpEntry &&
-        // Post-split (ADR 0016): the house row is a bare command on the standalone
+        // Post-split (ADR 0017): the house row is a bare command on the standalone
         // helper — no env at all, ELECTRON_RUN_AS_NODE least of all.
         house.env === undefined &&
         /mogging-node(\.exe)?$/.test(runtime.executable) &&
@@ -187,7 +187,7 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
         claudeHouse.command === runtime.executable &&
         claudeHouse.args?.length === 1 &&
         claudeHouse.args[0] === runtime.mcpEntry &&
-        claudeHouse.env === undefined && // the writer omits an absent env (ADR 0016)
+        claudeHouse.env === undefined && // the writer omits an absent env (ADR 0017)
 
         claudeHouse._managedBy === 'mogginglabs' &&
         claudeParsed.numStartups === 42 &&
@@ -205,7 +205,7 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
         Array.isArray(geminiHouse.args) &&
         geminiHouse.args.length === 1 &&
         geminiHouse.args[0] === runtime.mcpEntry &&
-        geminiHouse.env === undefined && // the writer omits an absent env (ADR 0016)
+        geminiHouse.env === undefined && // the writer omits an absent env (ADR 0017)
         geminiParsed.theme === 'Default' &&
         !!geminiParsed.mcpServers?.['foreign-tool']
 
@@ -220,7 +220,7 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
         const file = writer.targetFile(homes)
         // Cover all three upgrade shapes: the original protocol-versioned MCP target
         // (claude/codex also carrying the pre-split Electron-as-Node env — the exact
-        // block every install written before ADR 0016 has on disk), and an
+        // block every install written before ADR 0017 has on disk), and an
         // already-stable entry whose app executable moved after reinstall/relocation.
         const legacyHouse = cli === 'gemini'
           ? { ...house, command: oldExecutable }

@@ -58,14 +58,34 @@ const main = async () => {
   } catch {
     /* never break the statusline over a payload surprise */
   }
-  // Passthrough: the user's own configured statusline still renders. Their command
-  // comes from the SAME settings file claude reads; ours arrived via --settings and
-  // never lands there, but the self-check guards a copy-paste anyway.
+  // Passthrough: the user's own configured statusline still renders. Ours arrived via
+  // --settings (CLI-arg precedence — it beats every file for the session), so their
+  // command is read back from the settings files in the CLI's own file order:
+  // local > project > user. Claude runs the statusline at the session's cwd, so the
+  // project files resolve against process.cwd(). A file whose statusline IS this
+  // relay (a copy-paste) is skipped, never exec'd — no recursion — and the next
+  // scope down still gets its turn.
   try {
     const home = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
-    const s = JSON.parse(readFileSync(join(home, 'settings.json'), 'utf8'))
-    const cmd = s?.statusLine?.command
-    if (typeof cmd === 'string' && cmd && !cmd.includes('context-relay')) {
+    const scopes = [
+      join(process.cwd(), '.claude', 'settings.local.json'),
+      join(process.cwd(), '.claude', 'settings.json'),
+      join(home, 'settings.json')
+    ]
+    let cmd = null
+    for (const file of scopes) {
+      let c
+      try {
+        c = JSON.parse(readFileSync(file, 'utf8'))?.statusLine?.command
+      } catch {
+        continue // absent or unreadable scope — the next one still applies
+      }
+      if (typeof c === 'string' && c && !c.includes('context-relay')) {
+        cmd = c
+        break
+      }
+    }
+    if (cmd) {
       const child = spawn(cmd, { shell: true, stdio: ['pipe', 'inherit', 'ignore'] })
       const t = setTimeout(() => {
         try {

@@ -1,4 +1,4 @@
-// HOW A NATIVE MODULE FINDS ITS ABI-MATCHED BINARY (ADR 0016 — the runtime split).
+// HOW A NATIVE MODULE FINDS ITS ABI-MATCHED BINARY (ADR 0017 — the runtime split).
 //
 // The app's node_modules natives (node-pty, better-sqlite3) are compiled against
 // ELECTRON's ABI (postinstall / rebuild:native). Since the runtime split, the detached

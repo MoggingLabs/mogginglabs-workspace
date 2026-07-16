@@ -14,6 +14,7 @@ import { getSettingsStore } from '../app-settings'
 import { clearTrail, flushTrailForSmoke, recordTrail } from '../trail'
 import { setAgentConsent, setDrivingForSmoke } from '../browser-dock'
 import { approvalListed, sendApprovalFromPane } from './reviewer-smoke-helper'
+import { capturePaneTokenForSmoke } from './smoke-shell'
 
 // MOGGING_SHOT=all (Phase-5/01): the GALLERY — drive the app through every surface
 // and write numbered PNGs to out/gallery/, in BOTH themes. The audit + before/after
@@ -341,7 +342,7 @@ export function runGallery(win: BrowserWindow): void {
           // fold to check before shooting. Refresh is still the first `.trail-btn`.
           await ES(`document.querySelector('.settings-nav-item[data-target="activity"]')?.click()`)
           await sleep(400)
-          await ES(`(document.querySelector('.trail-activity .trail-btn')?.click(), 1)`) // Refresh — still first
+          await ES(`(([...document.querySelectorAll('.trail-activity .btn')].find((b) => (b.textContent || '').trim() === 'Refresh'))?.click(), 1)`) // Refresh — house Button since F-40
           await sleep(500)
           await snap(`${tag}-settings-activity`)
           // The event bridge on its own tab (Agents & tools › Webhooks).
@@ -455,8 +456,8 @@ export function runGallery(win: BrowserWindow): void {
           await sleep(300)
         })
         await part(`${tag}-wizard`, async () => {
-          // 8.5/02: the wizard is a full PAGE beside the rail, not a modal — one
-          // scroll, three cards. Never click the footer primary here: it launches.
+          // The redesigned wizard: ONE compact page, flat sections, nothing folded.
+          // Never click the footer primary here: it launches.
           //
           // 8.5/03: open it ON A FIXTURE. With no cwd the folder browser opens at
           // $HOME and photographs the operator's real directory names straight into a
@@ -470,13 +471,13 @@ export function runGallery(win: BrowserWindow): void {
           await ES(`document.querySelector('#view-wizard .wizard')?.scrollTo({ top: 99999 })`)
           await sleep(400)
           await snap(`${tag}-wizard-agents`)
-          // Expand, THEN re-scroll: expanding grows the column, so the disclosure
-          // we came to photograph lands below the fold if we shoot immediately.
-          await ES(`(document.querySelectorAll('#view-wizard .wizard-adv').forEach((d) => (d.open = true)), 1)`)
+          // The painter's headline act: a merged layout — one full-width terminal
+          // above two — exactly what the drag gesture produces.
+          await ES(`(window.__mogging.wizardLayout.setGrid(2, 2), window.__mogging.wizardLayout.merge(0, 0, 0, 1), 1)`)
           await sleep(300)
-          await ES(`document.querySelector('#view-wizard .wizard')?.scrollTo({ top: 99999 })`)
+          await ES(`document.querySelector('#view-wizard .wizard')?.scrollTo({ top: 0 })`)
           await sleep(400)
-          await snap(`${tag}-wizard-advanced`)
+          await snap(`${tag}-wizard-merged`)
           await escape()
           await sleep(300)
           try {
@@ -498,7 +499,16 @@ export function runGallery(win: BrowserWindow): void {
         )
         await sleep(4500) // spawns + git chips + roles reach the daemon
         const base = ((await ES('window.__mogging.workspace.active()')) as { ordinal: number }).ordinal * 100
-        await cli(['claim', 'src/ui/**'], { MOGGING_PANE_ID: String(base + 1) })
+        // claim is pane-bound (protocol v10): present pane 1's own daemon-minted token so the
+        // .pane-claims chip actually paints for the shot, as a command typed in the pane would.
+        const claimToken = await capturePaneTokenForSmoke({
+          write: async (command) => {
+            const sent = await cli(['send', String(base + 1), command])
+            if (sent.code !== 0) throw new Error(`could not probe pane ${base + 1}`)
+          },
+          sleep
+        })
+        await cli(['claim', 'src/ui/**'], { MOGGING_PANE_ID: String(base + 1), MOGGING_PANE_TOKEN: claimToken })
         // Pane 3 is the reviewer, and the sign-off is EXECUTED INSIDE it: `mogging approve` fails
         // closed without that pane's daemon-minted MOGGING_PANE_TOKEN, which exists nowhere but
         // its own env, and it signs the exact object graph (--repo/--base). Wait for the daemon

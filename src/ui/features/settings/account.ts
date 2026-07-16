@@ -6,9 +6,9 @@ import { entitlementsSnapshot } from '../../core/entitlements/entitlements-store
 // Settings › Account (phase-accounts/10) — the ONE surface that says who is signed in
 // and what plan this install actually runs. CLAIMS ONLY, by construction: everything
 // here comes from `account:status` and the entitlements snapshot — there is no token
-// to display because no channel can return one (ADR 0015 §3).
+// to display because no channel can return one (ADR 0016 §3).
 //
-// The degradation law is a UI law here too (ADR 0015 §4): at most ONE quiet line ever
+// The degradation law is a UI law here too (ADR 0016 §4): at most ONE quiet line ever
 // explains why a plan is not being honored — grace, device mismatch, revocation, or a
 // failed integrity check — and the free core is never described as at risk, because it
 // never is. Sign-in runs in the user's own browser (PKCE); the app never sees a

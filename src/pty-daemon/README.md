@@ -7,7 +7,7 @@ reconnects to it on each launch. See `docs/adr/0006-detached-pty-daemon.md`.
 ## Why a separate process (not a utilityProcess)
 A `utilityProcess` is a *child* of main and dies with it — it can't survive a main crash.
 Only a truly detached process can. This daemon is spawned `detached` + `unref`ed on the
-**standalone Node helper** (`resources/node-helper/mogging-node`, ADR 0016 — it used to be
+**standalone Node helper** (`resources/node-helper/mogging-node`, ADR 0017 — it used to be
 Electron-as-Node until the RunAsNode fuse was dropped), so it needs no system Node; the
 helper carries its own `node-pty`/`better-sqlite3` built for its ABI
 (`@backend/platform/native-require` picks them per host).
@@ -20,6 +20,21 @@ helper carries its own `node-pty`/`better-sqlite3` built for its ABI
 - `lifecycle.ts` — per-user/per-version runtime dir, atomic lock (stale takeover),
   endpoint discovery file, logging.
 - Protocol contract lives in `@contracts/daemon` (shared with the app client).
+
+## Liveness + retire discipline (2026-07 pane-freeze diagnosis)
+- **Heartbeat**: the app's `DaemonClient` pings on an interval and treats ANY inbound message
+  as liveness; a line silent past tolerance is destroyed client-side, landing in the same
+  onClose → reconnect path a real daemon death takes. A wedged-but-open socket is no longer
+  an invisible forever-freeze. (HEARTBEAT gate; `MOGGING_DAEMON_PING_MUTE_MS` is its seam.)
+- **Stamp-war guard**: a build-stamp mismatch retires a daemon ONLY when its `welcome`
+  reports zero OTHER clients — two same-channel builds can no longer retire each other's
+  daemons in a loop, killing every pane's live process each round. (STAMPWAR gate.)
+- **Journal**: every app-side daemon event (connect, loss, reconnect, retire + refusal,
+  spawn, quiesce, heartbeat loss) appends to `client.log` NEXT TO daemon.log in the runtime
+  dir — the app side of the story, greppable after the fact. `hello` carries an optional
+  client identity so daemon.log's "shutdown requested by …" names its requester.
+- **Quiescence lifts**: `endDaemonQuiescence` un-latches the pre-install freeze when the
+  installer never took over; the relay's retry loop then heals on its own. (DAEMONHEAL gate.)
 
 ## Hardening (ADR 0006)
 - **Versioned** socket/pipe + protocol → an app update starts its own daemon; never speaks

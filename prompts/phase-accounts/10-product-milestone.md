@@ -1,13 +1,13 @@
-Freeze the pack the house way: write the book (docs/18-accounts.md), finish
+Freeze the pack the house way: write the book (docs/19-accounts.md), finish
 the gallery, and prove the WHOLE promise in ONE composed milestone — a user
 subscribes, unlocks Pro, and a copied install goes inert — all on FAKE
 services with zero network, both budgets unmoved.
 
 ## Steps
-1. **docs/18-accounts.md**: the custody stance (ADR 0015); the enforcement
+1. **docs/19-accounts.md**: the custody stance (ADR 0016); the enforcement
    doctrine (hardware binding + server value are the teeth; local checks are
    UX); the offline-grace law; the fuse wall + asarUnpack caveat; the
-   runtime split (ADR 0016); per-OS device-key notes; the honest limits of
+   runtime split (ADR 0017); per-OS device-key notes; the honest limits of
    bytecode/watermark/tamper-check; the freemium boundary. Update
    `docs/02-mvp-and-roadmap.md`, `prompts/README.md` (phases row → done),
    the README roadmap + tagline nuance ("free local core + optional Pro").
@@ -40,7 +40,7 @@ services with zero network, both budgets unmoved.
    REPORT.md receipts (measured numbers, platform finds).
 
 ## Files
-- `docs/18-accounts.md` · `docs/02-mvp-and-roadmap.md` · `prompts/README.md`
+- `docs/19-accounts.md` · `docs/02-mvp-and-roadmap.md` · `prompts/README.md`
   · `README.md` · `src/main/prodmilestone-smoke.ts` · `src/main/gallery.ts`
   (parts) · main dispatch · qa-smokes.sh + CI rows ·
   `prompts/phase-accounts/README.md` (§ Freeze) · REPORT.md

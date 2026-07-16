@@ -1,6 +1,6 @@
 import { app, ipcMain, type WebContents } from 'electron'
 import { createHash } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ContextMonitor, RELAY_SOURCE } from '@backend/features/context'
 import { claudeNotifyHooks } from '@backend/features/agents'
@@ -49,10 +49,11 @@ export function claudeStatuslineArgs(session: Record<string, unknown> = {}): str
   try {
     const dir = join(app.getPath('userData'), 'context-relay')
     mkdirSync(dir, { recursive: true })
-    if (!statuslineRelayFile) {
-      statuslineRelayFile = join(dir, 'context-relay.mjs')
-      writeFileSync(statuslineRelayFile, RELAY_SOURCE)
-    }
+    // Existence-checked every launch, not once per run: userData cleared mid-run
+    // otherwise left every later launch's settings pointing at a relay that is gone
+    // (statusline dead until restart, gauge on the transcript-tail fallback only).
+    statuslineRelayFile ??= join(dir, 'context-relay.mjs')
+    if (!existsSync(statuslineRelayFile)) writeFileSync(statuslineRelayFile, RELAY_SOURCE)
     // Catalog ownership makes these app-owned keys read-only. Internal values
     // still land last here as defense in depth against stale persisted intent.
     const overlay: Record<string, unknown> = {
@@ -66,6 +67,11 @@ export function claudeStatuslineArgs(session: Record<string, unknown> = {}): str
     }
     const content = JSON.stringify(overlay)
     const digest = createHash('sha256').update(content).digest('hex').slice(0, 16)
+    // One file per distinct overlay CONTENT. Old digests are deliberately never
+    // GC'd here: the daemon's PTYs outlive app runs by days, a long-lived claude
+    // may re-read a watched settings file, and deleting one out from under it
+    // would silently drop its hooks — a few orphaned ~1KB files are the cheaper
+    // residual (content varies only with the per-workspace session overlay).
     const settings = join(dir, `claude-launch-${digest}.settings.json`)
     writeFileSync(settings, content)
     return ['--settings', settings]

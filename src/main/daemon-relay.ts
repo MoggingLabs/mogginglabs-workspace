@@ -8,7 +8,7 @@ import * as path from 'node:path'
 import { TerminalChannels, LedgerChannels, GateChannels, PANE_CWD_MAX, normalizeRemoteConnection } from '@contracts'
 import type { AgentState, Approval, SpawnRequest, SpawnResult, SpawnSpec, StateSyncRequest, WriteCommand, ResizeCommand, KillCommand, SetRoleCommand } from '@contracts'
 import { getEntitlements, getTelemetry } from '@backend'
-import { ensureDaemon, DaemonClient } from './daemon-client'
+import { ensureDaemon, DaemonClient, clientLog } from './daemon-client'
 import { daemonEntryPath, helperRuntime } from './node-helper'
 import { DaemonMigrationDeferredError, migrateOlderDaemonSessions } from './daemon-migrate'
 import { sweepDeadRunDirs } from './daemon-sweep'
@@ -90,7 +90,7 @@ export async function getAuthoritativeApprovals(): Promise<Approval[]> {
  *  Returns a disposer that detaches the client WITHOUT killing the daemon (survival). */
 export async function startDaemonBackend(getWebContents: () => WebContents | null): Promise<() => void> {
   // out/main/daemon.js (asar-unpacked when packaged), hosted by the standalone Node
-  // helper — the Electron binary is no longer a Node interpreter (ADR 0016).
+  // helper — the Electron binary is no longer a Node interpreter (ADR 0017).
   const daemonEntry = daemonEntryPath()
 
   let disposed = false
@@ -211,10 +211,14 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
       // reconnect: a failed candidate's close, or a late close from an already-replaced
       // client, must not start a second loop.
       onClose: () => {
-        if (!disposed && client === c) void reconnect()
+        if (!disposed && client === c) {
+          clientLog('daemon-connection-lost', { pid: endpoint.pid })
+          void reconnect()
+        }
       }
     })
     await c.connect()
+    clientLog('daemon-connected', { pid: endpoint.pid, build: endpoint.build ?? null })
     return c
   }
 
@@ -261,7 +265,13 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
               const role = appRoles.get(id)?.role
               if (role) await bindRole(id, role)
             })
-            .catch(() => {})
+            // Best-effort by design (the pane comes back on the next reconnect or app
+            // restart) — but never SILENT: a replay that quietly fails is a blank pane
+            // with nothing in any log to point at.
+            .catch((err) => {
+              const why = err instanceof Error ? err.message : String(err)
+              console.warn(`[daemon] reconnect replay failed for pane ${id}: ${why}`)
+            })
         }
         seed(next)
         setDaemonHealth({
@@ -271,10 +281,12 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
           sessionSurvival: true
         })
         console.warn(`[daemon] reconnected (${specs.size} pane(s) reattached)`)
+        clientLog('daemon-reconnected', { panes: specs.size })
         break
       } catch (err) {
         const why = err instanceof Error ? err.message : String(err)
         console.warn(`[daemon] reconnect failed (${why}); retrying in ${delayMs}ms`)
+        clientLog('daemon-reconnect-failed', { why, retryInMs: delayMs })
         setDaemonHealth({
           mode: 'daemon',
           state: 'reconnecting',

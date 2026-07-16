@@ -6,7 +6,7 @@
 // text or user input never becomes a path or branch name (ADR 0002 posture).
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdirSync, writeFileSync, existsSync, realpathSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import type {
   CreateWorktreeResult,
@@ -37,11 +37,25 @@ const worktreesRoot = (repo: string): string => join(repo, '.mogging', 'worktree
  *  `c:\github\repo` instead of `C:\GitHub\repo`). A raw startsWith then answers false for the
  *  app's OWN worktrees — listWorktrees filters every one of them out (the UI shows none) and
  *  removeWorktree refuses with 'not-managed': invisible AND undeletable. The trailing `sep`
- *  keeps this a path-BOUNDARY test, so `…\worktrees-2\x` is never read as inside `…\worktrees`. */
+ *  keeps this a path-BOUNDARY test, so `…\worktrees-2\x` is never read as inside `…\worktrees`.
+ *
+ *  Checked in BOTH namespaces for the same reason the fold exists: git prints the PHYSICAL
+ *  path, while `repo` keeps the caller's spelling — under an aliased prefix (8.3 short path
+ *  or junction on Windows, macOS's symlinked /var temp) the two never prefix-match lexically,
+ *  and the app's own worktrees go invisible again. A path that is inside in EITHER spelling
+ *  is ours. */
 export function isManaged(repo: string, p: string): boolean {
   const fold = (s: string): string => (process.platform === 'win32' ? s.toLowerCase() : s)
-  const root = fold(resolve(worktreesRoot(repo)) + sep)
-  return fold(resolve(p)).startsWith(root)
+  const phys = (s: string): string => {
+    try {
+      return realpathSync.native(s)
+    } catch {
+      return resolve(s) // target gone or unreadable -> the lexical spelling is all there is
+    }
+  }
+  const inside = (child: string, root: string): boolean => fold(child).startsWith(fold(root + sep))
+  const root = resolve(worktreesRoot(repo))
+  return inside(resolve(p), root) || inside(phys(p), phys(root))
 }
 
 /** Create one isolated worktree on a fresh random branch. Never touches HEAD/index. */
@@ -75,6 +89,27 @@ export async function createWorktree(repo: string): Promise<CreateWorktreeResult
   }
 }
 
+/** Git prints each worktree's PHYSICAL path. Re-spell it under the caller's own
+ *  `.mogging/worktrees` root when it lives there: every consumer compares these entries
+ *  against caller-namespace paths (the pane cwd feeding the dirty pre-check, the rail
+ *  chips), and under an aliased repo prefix (8.3 short TEMP on CI Windows, macOS's
+ *  symlinked /var) the physical spelling matches none of them — the dirty refusal then
+ *  arrives only AFTER the pane was closed. */
+function inRepoNamespace(repo: string, p: string): string {
+  const root = worktreesRoot(repo)
+  let physRoot: string
+  try {
+    physRoot = realpathSync.native(root)
+  } catch {
+    return p
+  }
+  const fold = (s: string): string => (process.platform === 'win32' ? s.toLowerCase() : s)
+  const abs = resolve(p)
+  if (fold(abs) === fold(physRoot)) return root
+  if (fold(abs).startsWith(fold(physRoot + sep))) return join(root, abs.slice(physRoot.length + 1))
+  return p
+}
+
 /** Managed worktrees of a repo (porcelain-parsed), each with a live dirty flag. */
 export async function listWorktrees(repo: string): Promise<WorktreeInfo[]> {
   const res = await git(repo, ['worktree', 'list', '--porcelain'])
@@ -82,7 +117,7 @@ export async function listWorktrees(repo: string): Promise<WorktreeInfo[]> {
   const out: WorktreeInfo[] = []
   let current: { path?: string; branch?: string } = {}
   for (const line of res.stdout.split('\n')) {
-    if (line.startsWith('worktree ')) current = { path: line.slice('worktree '.length).trim() }
+    if (line.startsWith('worktree ')) current = { path: inRepoNamespace(repo, line.slice('worktree '.length).trim()) }
     else if (line.startsWith('branch ')) current.branch = line.slice('branch '.length).trim().replace('refs/heads/', '')
     else if (!line.trim() && current.path) {
       if (isManaged(repo, current.path)) out.push({ path: current.path, branch: current.branch ?? '', dirty: false })

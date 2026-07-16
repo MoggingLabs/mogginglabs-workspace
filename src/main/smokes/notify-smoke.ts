@@ -47,19 +47,21 @@ export function runNotifySmoke(win: BrowserWindow): void {
       }
       const states = await exec<string[]>(`window.__nstates.slice()`)
 
-      // (0.8.1) `done` is a turn ENDING: it lands as idle — the UI's green finished
-      // story — never attention. Red is reserved for needs-input (blocked on you); a
-      // done that rang red made finished and blocked indistinguishable. Typing the
-      // command clears the needs-input latch above (real input, rightly), so anything
-      // red AFTER this reset can only be the done event mismapped.
+      // (v0.11.1) `done` is a turn ENDING and lands as its OWN first-class state `done` — the
+      // UI's green "finished" verdict, with exactly one source (protocol.ts notifyEventToState).
+      // It used to land as plain `idle`, which could not be told from "the terminal went quiet";
+      // `done` must NEVER ring `attention` (red is reserved for needs-input / blocked-on-you, and
+      // a done that rang red made finished and blocked indistinguishable). Typing the command
+      // clears the needs-input latch above (real input, rightly), so anything red AFTER this reset
+      // could only be the done event mismapped.
       await exec(`window.__nstates=[]`)
       const doneCmd = `node "${binPath}" notify --event done\r`
       await exec(`window.bridge.send("terminal:write",{id:1,data:${JSON.stringify(doneCmd)}})`)
-      let sawIdle = false
+      let sawDone = false
       for (let i = 0; i < 30; i++) {
         const st = await exec<string[]>(`window.__nstates.slice()`)
-        if (Array.isArray(st) && st.includes('idle')) {
-          sawIdle = true
+        if (Array.isArray(st) && st.includes('done')) {
+          sawDone = true
           break
         }
         await sleep(500)
@@ -72,8 +74,8 @@ export function runNotifySmoke(win: BrowserWindow): void {
           `return p?p.text().replace(/\\s+$/,'').slice(-300):null;})()`
       )
       result = {
-        pass: sawAttention && sawIdle && doneNeverRang,
-        sawAttention, sawIdle, doneNeverRang, states, doneStates, binPath, paneTail
+        pass: sawAttention && sawDone && doneNeverRang,
+        sawAttention, sawDone, doneNeverRang, states, doneStates, binPath, paneTail
       }
     } catch (e) {
       result = { pass: false, error: String(e) }

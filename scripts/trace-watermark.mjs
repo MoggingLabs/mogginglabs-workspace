@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The operator's forensic-trace tool (ADR 0015 §leak-attribution, phase-accounts/07).
+// The operator's forensic-trace tool (ADR 0016 §leak-attribution, phase-accounts/07).
 //
 //   node scripts/trace-watermark.mjs <record.json> [--accounts a,b,c] [--json]
 //

@@ -332,7 +332,10 @@ export class ContextMonitor {
         provider: t.provider,
         usedTokens: r.usedTokens,
         windowTokens: window,
-        usedPct: Math.max(0, Math.round((r.usedTokens / window) * 100)),
+        // Clamp to 100 like the claude path: a session whose counted tokens exceed the documented
+        // window must not print ">100% used" in the header/tooltip text (the gauge disc is clamped
+        // in the renderer, but the % LABEL is not). OpenCode below stays unclamped on purpose.
+        usedPct: Math.max(0, Math.min(100, Math.round((r.usedTokens / window) * 100))),
         model: r.model,
         at: this.now()
       })

@@ -20,8 +20,11 @@ function git(cwd: string, args: string[]): string {
 //      worktree clears it (4/03 polish)
 //   5. closing the pane unbinds the card (paneId cleared, persisted)
 //
-// Provider 'gemini' is a REAL launch. (2) used to scrape the pane's xterm buffer for the task
-// text — an assertion about GEMINI's rendering, which the board neither owns nor can promise:
+// Provider 'claude' is a REAL launch — claude rather than gemini because the gate must hold on
+// a runner with UNAUTHENTICATED CLIs: claude sits in its onboarding TUI (a live process the
+// detector can see — AGENTLAUNCH proves it on every OS), while gemini without credentials exits
+// before detection and the hand-off never fires. (2) used to scrape the pane's xterm buffer for
+// the task text — an assertion about the AGENT's rendering, which the board neither owns nor can promise:
 // a real agent takes the ALTERNATE screen, so the text it was handed is never echoed there and
 // the gate failed as "the board is broken". The board's contract is the task IS the agent's
 // first prompt: it must WRITE that text to that pane, once something is listening. So we
@@ -55,6 +58,21 @@ export function runBoardSmoke(win: BrowserWindow): void {
     try {
       await sleep(1500) // launcher-first boot settles
 
+      // 0) anchor workspace FIRST — a REPO, so start-on-card isolates in a
+      // worktree, and so the card lands on the PROJECT's board (Board v2: the
+      // loaded board follows the active workspace).
+      const anchor = mkdtempSync(join(tmpdir(), 'mogging-board-'))
+      git(anchor, ['init'])
+      git(anchor, ['symbolic-ref', 'HEAD', 'refs/heads/main'])
+      git(anchor, ['config', 'user.email', 'smoke@mogging.test'])
+      git(anchor, ['config', 'user.name', 'Mogging Smoke'])
+      git(anchor, ['config', 'commit.gpgsign', 'false'])
+      writeFileSync(join(anchor, 'readme.txt'), 'anchor\n')
+      git(anchor, ['add', '-A'])
+      git(anchor, ['commit', '-m', 'init'])
+      await ES(`window.__mogging.workspace.create({ name: 'Anchor', cwd: ${JSON.stringify(anchor)} })`)
+      await sleep(1800)
+
       // 1) create -> reload -> still there (proves the db, not the cache).
       const title = `${MARKER} fix the flux capacitor`
       const cardId = String(
@@ -64,7 +82,7 @@ export function runBoardSmoke(win: BrowserWindow): void {
       const reloaded = new Promise<void>((res) => wc.once('did-finish-load', () => res()))
       wc.reload()
       await reloaded
-      await sleep(3000) // features remount, board loads from db
+      await sleep(3000) // features remount, board loads from db (workspace restores, board follows)
 
       // The second witness, registered AFTER the reload (which wipes the window): the daemon's
       // typed-launch detection — an agent CLI really appeared in the pane's PTY subtree. This is
@@ -82,20 +100,8 @@ export function runBoardSmoke(win: BrowserWindow): void {
       const persisted = afterReload.find((c) => c.id === cardId)
       const persistOk = !!persisted && persisted.title.includes(MARKER) && persisted.lane === 'todo'
 
-      // 2) anchor workspace — a REPO, so start-on-card isolates in a worktree (the
-      // ✓-chip keys on the worktree branch).
-      const anchor = mkdtempSync(join(tmpdir(), 'mogging-board-'))
-      git(anchor, ['init'])
-      git(anchor, ['symbolic-ref', 'HEAD', 'refs/heads/main'])
-      git(anchor, ['config', 'user.email', 'smoke@mogging.test'])
-      git(anchor, ['config', 'user.name', 'Mogging Smoke'])
-      git(anchor, ['config', 'commit.gpgsign', 'false'])
-      writeFileSync(join(anchor, 'readme.txt'), 'anchor\n')
-      git(anchor, ['add', '-A'])
-      git(anchor, ['commit', '-m', 'init'])
-      await ES(`window.__mogging.workspace.create({ name: 'Anchor', cwd: ${JSON.stringify(anchor)} })`)
-      await sleep(1800)
-      const started = (await ES(`window.__mogging.board.startOnCard(${JSON.stringify(cardId)}, 'gemini')`)) as boolean
+      // 2) start on the card — the anchor repo workspace is already active (0).
+      const started = (await ES(`window.__mogging.board.startOnCard(${JSON.stringify(cardId)}, 'claude')`)) as boolean
       await sleep(1200)
       const afterStart = (await ES(`window.__mogging.board.list()`)) as Card[]
       const bound = afterStart.find((c) => c.id === cardId)
@@ -182,12 +188,12 @@ export function runBoardSmoke(win: BrowserWindow): void {
       const wtRoot = join(anchor, '.mogging', 'worktrees')
       const wtDirs = existsSync(wtRoot) ? readdirSync(wtRoot) : []
       const branch = wtDirs.length === 1 ? `mogging/${wtDirs[0]}` : ''
-      // GET THE SHELL BACK FIRST — the approval is a COMMAND, and gemini owns the keyboard.
+      // GET THE SHELL BACK FIRST — the approval is a COMMAND, and the agent owns the keyboard.
       //
       // `mogging approve` now fails closed outside a live pane: it must carry the pane's
       // daemon-minted MOGGING_PANE_TOKEN, which exists nowhere but that pane's own env. So the
       // approval can only be executed INSIDE the pane — and this pane is running a real agent,
-      // which has the keyboard and the alternate screen. Typed at gemini, `mogging approve …`
+      // which has the keyboard and the alternate screen. Typed at the agent, `mogging approve …`
       // is prose in a chat box: it never runs, no approval is ever recorded, and the ✓-chip that
       // depends on it never appears. Exactly the trap settleToShell exists for (smoke-shell.ts),
       // and exactly the sequence the product asks of a person: leave the agent, then type.
@@ -238,6 +244,15 @@ export function runBoardSmoke(win: BrowserWindow): void {
       await ES(`window.__mogging.layout.close(${paneId})`)
       let unbindOk = false
       for (let i = 0; i < 20; i++) {
+        // On a CI runner the daemon's process snapshot can still count a child under the
+        // pane's shell at this point, and close() then asks for confirmation. The gate's
+        // claim is unbind-on-close, not the confirm dialog — answer it when it appears
+        // (same mechanism the worktree gate's confirmPaneClose rides).
+        await ES(`(() => {
+          const button = Array.from(document.querySelectorAll('.modal-overlay:not(.is-closing) .confirm-actions button'))
+            .find((el) => (el.textContent ?? '').trim() === 'Close pane')
+          if (button instanceof HTMLButtonElement) button.click()
+        })()`)
         const list = (await ES(`window.__mogging.board.list()`)) as Card[]
         const c = list.find((x) => x.id === cardId)
         if (c && (c.paneId == null || c.paneId === 0)) {

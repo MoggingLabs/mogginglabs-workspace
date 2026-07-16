@@ -187,7 +187,7 @@ jobs:
 
       # The fuse wall, read off the unpacked byproduct of the packaging step above,
       # BEFORE anything uploads: a release whose artifact drifts from the declared wall
-      # (electron-builder.yml `electronFuses`) must die here, not ship (ADR 0015
+      # (electron-builder.yml `electronFuses`) must die here, not ship (ADR 0016
       # §hardening). Includes the tampered-asar refusal proof; the tamper byte is
       # flipped back before this step ends, and the installers were already built.
       - name: Fuse wall gate (fail the release on drift)

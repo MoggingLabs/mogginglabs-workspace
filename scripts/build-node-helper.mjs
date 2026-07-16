@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The standalone Node helper build (ADR 0016 — the runtime split).
+// The standalone Node helper build (ADR 0017 — the runtime split).
 //
 //   node scripts/build-node-helper.mjs            # build for THIS platform+arch
 //   MOGGING_HELPER_FORCE=1 node scripts/…         # rebuild even when the stamp matches
@@ -20,7 +20,7 @@
 // argv[1] is byte-for-byte as capable as the naked binary, so the naked binary is the
 // smaller, more debuggable choice. The security claim never rested on restricting the
 // helper — it rests on the SIGNED, Keychain-entitled Electron binary no longer being a
-// Node interpreter (ADR 0016 states the residual: the helper is a smaller, GUI-less,
+// Node interpreter (ADR 0017 states the residual: the helper is a smaller, GUI-less,
 // no-Keychain-entitlement target, covered by the bundle signature like the rest of the
 // asarUnpack set).
 //
@@ -155,7 +155,7 @@ writeFileSync(
     {
       name: 'mogging-node-helper-natives',
       private: true,
-      description: 'Natives for the standalone helper runtime (ADR 0016) — built for ITS ABI, not Electron`s',
+      description: 'Natives for the standalone helper runtime (ADR 0017) — built for ITS ABI, not Electron`s',
       dependencies: Object.fromEntries(NATIVE_DEPS.map((name) => [name, depVersions[name]]))
     },
     null,

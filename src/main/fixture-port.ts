@@ -32,6 +32,14 @@ export interface UsageWorld {
 /** Drives the whole update lifecycle to the renderer instead of the signed feed. */
 export type UpdateDriver = (push: (patch: UpdateState) => void) => void
 
+/** Replaces the board's gh/git subprocess runs (BOARDGH: deterministic, zero
+ *  network) and names the link-engine adapter its links should ride ('fake'). */
+export type BoardGhRun = (cmd: 'gh' | 'git', args: string[]) => Promise<{ ok: boolean; stdout: string; reason?: string }>
+export interface BoardGhWorld {
+  run: BoardGhRun
+  linkService: string
+}
+
 export interface FixtureHooks {
   /** Called once, per registerUsage(), AFTER the env is settled (prepareRuntime has run). */
   usageWorld?: () => UsageWorld | null
@@ -41,6 +49,8 @@ export interface FixtureHooks {
   vaultDisabled?: () => boolean
   /** Skip the native save dialog and export straight to this path. */
   exportPath?: () => string | null
+  /** Armed only by the BOARDGH gate: fixture gh/git for the board's GitHub verbs. */
+  boardGhWorld?: () => BoardGhWorld | null
 }
 
 let hooks: FixtureHooks = {}
@@ -66,4 +76,9 @@ export function vaultDisabled(): boolean {
 
 export function exportPathOverride(): string | null {
   return hooks.exportPath?.() ?? null
+}
+
+/** The harness's gh world, or null — a real session always runs the real gh. */
+export function boardGhWorld(): BoardGhWorld | null {
+  return hooks.boardGhWorld?.() ?? null
 }

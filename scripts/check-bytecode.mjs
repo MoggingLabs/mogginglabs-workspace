@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The bytecode gate (ADR 0015 §hardening, phase-accounts/07).
+// The bytecode gate (ADR 0016 §hardening, phase-accounts/07).
 //
 //   node scripts/check-bytecode.mjs
 //
@@ -8,13 +8,13 @@
 //
 // Honest framing, fossilized where the check lives: bytecode raises the cost of READING
 // the main process from "open an editor" to "reverse V8 bytecode" — FRICTION, never a
-// wall, never to be described as security (docs/18-accounts.md §honest limits). This
+// wall, never to be described as security (docs/19-accounts.md §honest limits). This
 // gate exists because the friction is trivially silent in both directions: a config
 // regression ships readable JS again and nothing visibly changes, or someone "fixes" a
 // preload bug by bytecoding it too — which requires `sandbox: false` and would trade a
 // real hardening win for a deterrent. Three assertions, one per failure mode:
 //
-//   (a) out/main ships the SPLIT wall (ADR 0016). index.js is the three-line loader
+//   (a) out/main ships the SPLIT wall (ADR 0017). index.js is the three-line loader
 //       stub (same path — package.json `main` and electron-builder's globs never
 //       moved) and out/main/index.jsc is REAL V8 bytecode for THIS Electron's V8:
 //       magic header compared against a freshly compiled dummy, then the loader's own
@@ -117,11 +117,11 @@ section('mainShipsBytecode', () => {
     fail('out/main/index.jsc is missing — the index entry did not compile to bytecode')
   }
   // ONE .jsc, exactly. The daemon and every chunk it shares with index run under the
-  // standalone helper (ADR 0016) — a compiled chunk there is a boot crash on a V8 that
+  // standalone helper (ADR 0017) — a compiled chunk there is a boot crash on a V8 that
   // never produced it. chunkAlias:['index'] (electron.vite.config.ts) is what this pins.
   const strayJsc = jscFiles.map(rel).filter((f) => f !== 'out/main/index.jsc')
   if (strayJsc.length) {
-    fail(`.jsc beyond the index entry — the daemon graph must stay plain for the helper (ADR 0016):\n    ${strayJsc.join('\n    ')}`)
+    fail(`.jsc beyond the index entry — the daemon graph must stay plain for the helper (ADR 0017):\n    ${strayJsc.join('\n    ')}`)
   }
   let daemonBody = null
   try {
@@ -130,7 +130,7 @@ section('mainShipsBytecode', () => {
     fail('out/main/daemon.js is missing — the daemon entry path must never move (daemon-client spawns it)')
   }
   if (daemonBody && (daemonBody.includes(0) || /require\("\.\/daemon\.jsc"\)/.test(daemonBody.toString('utf8').slice(0, STUB_MAX_BYTES)))) {
-    fail('out/main/daemon.js is not plain readable JS — a bytecode daemon cannot boot under the standalone helper (ADR 0016)')
+    fail('out/main/daemon.js is not plain readable JS — a bytecode daemon cannot boot under the standalone helper (ADR 0017)')
   }
   let loaderOk = false
   try {
@@ -303,7 +303,7 @@ if (!pass) {
   for (const f of failures) console.error(`  ${f}`)
   console.error('\nThe knob is `build.bytecode` in electron.vite.config.ts — MAIN block only, with the')
   console.error('pinned constants in `protectedStrings`. This is friction against casual reading, never')
-  console.error('security (docs/18-accounts.md §honest limits) — and it is per-arch: each build-matrix')
+  console.error('security (docs/19-accounts.md §honest limits) — and it is per-arch: each build-matrix')
   console.error('row compiles its own .jsc with its own local Electron.\n')
   process.exit(1)
 }

@@ -1,5 +1,6 @@
 import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 // Layout probe run alongside the grid shot: real geometry of pane 1's slot / header /
@@ -187,6 +188,64 @@ function runTypeMatrix(win: BrowserWindow): void {
   else setTimeout(() => void run(), 1800)
 }
 
+/** Wizard sweep (MOGGING_SHOT=wizard): the redesigned page in both themes, plus the
+ *  painter's merged state and the LAUNCHED merged geometry → out/gallery/wizard/.
+ *  The fast iteration loop for the wizard redesign — ~20s, no staged world. */
+function runWizardShot(win: BrowserWindow): void {
+  setTimeout(() => app.exit(1), 120000) // safety net
+  const wc = win.webContents
+  wc.setBackgroundThrottling(false)
+  const ES = (js: string): Promise<unknown> => wc.executeJavaScript(js, true)
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+  const dir = join(process.cwd(), 'out', 'gallery', 'wizard')
+  const run = async (): Promise<void> => {
+    try {
+      mkdirSync(dir, { recursive: true })
+      win.setSize(1600, 950)
+      const fixture = join(tmpdir(), 'mog-wizard-shot')
+      mkdirSync(join(fixture, 'apps', 'web'), { recursive: true })
+      mkdirSync(join(fixture, 'packages', 'core'), { recursive: true })
+      await sleep(800)
+      const snap = async (label: string): Promise<void> => {
+        const img = await wc.capturePage()
+        writeFileSync(join(dir, `${label}.png`), img.toPNG())
+      }
+      for (const theme of ['midnight', 'light']) {
+        await ES(`window.__mogging.setTheme(${JSON.stringify(theme)})`)
+        await sleep(300)
+        await ES(`window.__mogging.templates.openWizard({ cwd: ${JSON.stringify(fixture)} })`)
+        await sleep(900)
+        await snap(`${theme}-wizard-page`)
+        await ES(`(window.__mogging.wizardLayout.setGrid(2, 2), window.__mogging.wizardLayout.merge(0, 0, 0, 1), 1)`)
+        await sleep(350)
+        await snap(`${theme}-wizard-merged`)
+        await ES(`document.querySelector('#view-wizard .wizard')?.scrollTo({ top: 99999 })`)
+        await sleep(350)
+        await snap(`${theme}-wizard-foot`)
+      }
+      // One real launch of the merged layout — the geometry photo.
+      await ES(`window.__mogging.setTheme('midnight')`)
+      await ES(`window.__mogging.templates.openWizard({ cwd: ${JSON.stringify(fixture)} })`)
+      await sleep(900)
+      await ES(`(window.__mogging.wizardLayout.setGrid(2, 2), window.__mogging.wizardLayout.merge(0, 0, 0, 1), 1)`)
+      await sleep(250)
+      await ES(`document.querySelector('#view-wizard .wizard-footer .btn--primary')?.click()`)
+      await sleep(2500)
+      await snap('midnight-merged-workspace')
+      app.exit(0)
+    } catch (e) {
+      try {
+        writeFileSync(join(dir, 'error.txt'), String(e))
+      } catch {
+        /* ignore */
+      }
+      app.exit(1)
+    }
+  }
+  if (wc.isLoading()) wc.once('did-finish-load', () => setTimeout(() => void run(), 1500))
+  else setTimeout(() => void run(), 1500)
+}
+
 export function runShot(win: BrowserWindow): void {
   if (process.env.MOGGING_SHOT === 'all') {
     runGallery(win) // Phase-5/01: every surface, both themes -> out/gallery/
@@ -198,6 +257,10 @@ export function runShot(win: BrowserWindow): void {
   }
   if (process.env.MOGGING_SHOT === 'settings') {
     runSettingsShot(win) // every settings tab × both themes -> out/gallery/settings/
+    return
+  }
+  if (process.env.MOGGING_SHOT === 'wizard') {
+    runWizardShot(win) // the redesigned wizard + merged layout -> out/gallery/wizard/
     return
   }
   const grid = process.env.MOGGING_SHOT === 'grid'

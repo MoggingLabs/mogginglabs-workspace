@@ -321,7 +321,21 @@ export const workspaceFeature: UiFeature = {
     let daemonRevision = 0
     getBridge().on(RuntimeHealthChannels.changed, (payload) => {
       daemonRevision++
-      daemonState = payload as DaemonHealthState
+      const next = payload as DaemonHealthState
+      const prev = daemonState
+      daemonState = next
+      // A retire-and-respawn cycle completes in seconds: the health row above flashes and
+      // self-clears, and before this toast NOTHING durable told the user their terminal
+      // service was just replaced — agents killed mid-turn simply looked frozen. The row
+      // covers "it is broken right now"; this covers "something happened while you looked
+      // away". (client.log in the runtime dir carries the forensic trail.)
+      if (prev?.state === 'reconnecting' && next.state === 'connected') {
+        showToast({
+          tone: 'success',
+          title: 'Terminal service reconnected',
+          body: 'Sessions were restored. An agent that was mid-turn may need a new prompt.'
+        })
+      }
       renderDaemon()
     })
     const daemonPullRevision = daemonRevision

@@ -1,7 +1,7 @@
-import { GitChannels, TerminalChannels, WorktreeChannels } from '@contracts'
+import { formulaPaneId, GitChannels, TerminalChannels, WorktreeChannels } from '@contracts'
 import type { AgentState, CreateWorktreeResult, PaneId, RemoveWorktreeResult } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { GridLayout, MAX_PANES, parseTree, leafIds, type LayoutTreeNode } from '../layout'
+import { GridLayout, paneLimit, parseTree, leafIds, type LayoutTreeNode } from '../layout'
 import { confirmDialog, icon, showToast, TOAST_DEFAULT_MS } from '../../components'
 import { batchSlots } from '../../core/layout/slots'
 import { openMovePaneModal, type MoveTarget } from './move-pane-modal'
@@ -285,7 +285,7 @@ export class WorkspaceController {
     const layout = new GridLayout(
       container,
       meta.id,
-      ordinal * 100,
+      formulaPaneId(ordinal, 0), // the workspace's pane-id base (slot ids are 1-based on top)
       (paneId) =>
         // The pane's OWN cwd (worktree isolation, 3/03; OSC-7 refined), not the workspace
         // root: "launch in focused pane" and "review focused pane" act on this value, and
@@ -1148,11 +1148,12 @@ export class WorkspaceController {
     return true
   }
 
-  /** The panes-per-workspace cap: the layout's own 16-pane WebGL budget, lowered —
-   *  never raised — by the plan's `maxPanes` entitlement (phase-accounts/05). Free
-   *  keeps the whole budget, so an account-less install behaves exactly as before. */
+  /** The panes-per-workspace cap: the SCREEN's live budget (paneLimit — the wizard
+   *  redesign's honest per-monitor capacity), lowered — never raised — by the plan's
+   *  `maxPanes` entitlement (phase-accounts/05). Free keeps the whole screen budget,
+   *  so an account-less install behaves exactly as main shipped it. */
   private effectiveMaxPanes(): number {
-    return Math.min(MAX_PANES, Math.max(1, Math.floor(entitlementLimit('maxPanes'))))
+    return Math.min(paneLimit(), Math.max(1, Math.floor(entitlementLimit('maxPanes'))))
   }
 
   /** Add a terminal by splitting a pane (⋯ menu / titlebar + / palette / shortcut).
@@ -1163,15 +1164,16 @@ export class WorkspaceController {
     if (!view) return
     const cap = this.effectiveMaxPanes()
     if (view.layout.paneCount >= cap) {
-      // The pane-cap gate (phase-accounts/05): the entitlement can only LOWER the
-      // existing 16-pane budget, never raise it, and the refusal says which line was
-      // hit. Free keeps the full budget, so this toast reads exactly as it always has.
+      // The pane-cap gate (phase-accounts/05) over the SCREEN budget (wizard redesign):
+      // the entitlement can only LOWER what this screen honestly holds, never raise it,
+      // and the refusal names which line was hit. Free covers the whole screen budget,
+      // so an account-less install reads exactly as main shipped it.
       showToast({
         title: 'Pane limit reached',
         body:
-          cap < MAX_PANES
+          cap < paneLimit()
             ? `Your ${entitlementPlan()} plan runs up to ${cap} terminals per workspace. Upgrade your MoggingLabs plan for more.`
-            : `A workspace holds at most ${MAX_PANES} terminals.`
+            : `A workspace holds at most ${paneLimit()} terminals on this screen.`
       })
       return
     }
@@ -1182,7 +1184,7 @@ export class WorkspaceController {
     // the split underneath still returns null for an id that is not a live leaf — a stale
     // pane id from the ⋯ menu or a `close-pane`d slot named by a ControlCommand. Seeding
     // first left that state behind for a terminal nobody ever created, and the next restore
-    // would have read it. The MAX_PANES gate above is the only other refusal, and it has
+    // would have read it. The paneLimit() gate above is the only other refusal, and it has
     // already spoken.
     if (!view.layout.paneIds().includes(target as PaneId)) return
     // Seed BEFORE the slot exists (a pane reads its cwd/remote at spawn time): a new
@@ -1342,9 +1344,9 @@ export class WorkspaceController {
         tone: 'attention',
         title: 'That workspace is full',
         body:
-          cap < MAX_PANES
+          cap < paneLimit()
             ? `“${dst.meta.name}” already holds ${cap} terminals — your ${entitlementPlan()} plan's limit. Upgrade your MoggingLabs plan for more.`
-            : `“${dst.meta.name}” already holds ${MAX_PANES} terminals.`
+            : `“${dst.meta.name}” already holds ${paneLimit()} terminals.`
       })
       return false
     }
@@ -1660,7 +1662,10 @@ export class WorkspaceController {
       paneCwds: spec.paneCwds,
       roles: spec.roles,
       remotes: spec.remotes,
-      profileIds: spec.profileIds
+      profileIds: spec.profileIds,
+      // The painter's arrangement (merged cells included) — create() parses it with
+      // the same parseTree gate the restore path uses; invalid falls back to the grid.
+      layout: spec.layout
     })
     this.launchLineup(meta.id, false)
     return meta

@@ -8,7 +8,7 @@ import { generateDpopKey, loadDpopKey, openDeviceDpopKey, type DpopKey, type Dpo
 import { vaultAvailable, vaultClearKey, vaultHas, vaultLoad, vaultStore } from './vault'
 import { getSettingsStore } from './app-settings'
 
-// The account (ADR 0015) — the SOLE holder of our MoggingLabs credential. The app is
+// The account (ADR 0016) — the SOLE holder of our MoggingLabs credential. The app is
 // a PUBLIC OAuth client (no secret in the bundle): login runs Authorization Code +
 // PKCE(S256) in the user's OWN browser (shell.openExternal + an ephemeral 127.0.0.1
 // loopback, RFC 8252 — the machinery connections.ts proved for ADR 0014), and every
@@ -23,7 +23,7 @@ import { getSettingsStore } from './app-settings'
 //     token lifted from the vault, even decrypted, is INERT on any other machine (the
 //     AS rejects a proof from a different key). Machines with no key store fall back
 //     to the step-05 software key as vault ciphertext, surfaced as custody 'software'
-//     (the honest downgrade — docs/18-accounts.md);
+//     (the honest downgrade — docs/19-accounts.md);
 //   · NO IPC channel returns any of the three. `account:status` carries identity + plan
 //     CLAIMS only. The write-only discipline (ADR 0014) is why a renderer bug cannot
 //     leak a token: the surface has no getter to leak through.
@@ -37,7 +37,7 @@ const KV_EMAIL = 'account.email' // a claim — non-secret, plain KV (survives r
 const KV_PLAN = 'account.plan' // a claim — non-secret, plain KV
 
 /** What login talks to. In production this is the pinned MoggingLabs IdP (the reserved
- *  `idp` origin, ADR 0015 §6) — wired by the operator later; until then production has
+ *  `idp` origin, ADR 0016 §6) — wired by the operator later; until then production has
  *  no config and login says so. The smoke injects a FAKE IdP config. Never read from
  *  the environment (ORIGINPIN). */
 export interface AccountConfig {
@@ -166,7 +166,7 @@ function startLoopback(onCode: (q: URLSearchParams, res: ServerResponse) => void
 // ── DPoP-bound token requests (RFC 9449), with the nonce dance ──────────────────────
 // `transient` marks COULD-NOT-REACH (offline, outage, DNS) as opposed to a definitive
 // AS rejection: a rejection ends the session; unreachable must never — a paying user on
-// a plane keeps their session exactly like they keep their grace-window plan (ADR 0015 §4).
+// a plane keeps their session exactly like they keep their grace-window plan (ADR 0016 §4).
 type TokenResult = { ok: true; tokens: OAuthTokens } | { ok: false; reason: string; transient?: boolean }
 
 async function dpopTokenRequest(form: Record<string, string>, key: DpopKey): Promise<TokenResult> {
@@ -694,7 +694,7 @@ export async function logout(): Promise<void> {
   // valid server-side. Fire-and-forget by design — logout is instant and works offline
   // (§2.2: even the AS answers 200 for unknown tokens, so there is nothing to wait on);
   // the AS's rotation + reuse detection remains the backstop when this misses. The
-  // plaintext read is a point-of-use decrypt, custody unchanged (ADR 0015 §3).
+  // plaintext read is a point-of-use decrypt, custody unchanged (ADR 0016 §3).
   const cfg = config
   const rt = vaultLoad(VAULT_REFRESH)
   if (cfg?.metadata.revocation_endpoint && rt) {

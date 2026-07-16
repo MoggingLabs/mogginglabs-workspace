@@ -8,7 +8,7 @@ import { setCommands } from '../../core/commands/command-port'
 import { getBridge } from '../../core/ipc/bridge'
 import { getTelemetry } from '../../core/telemetry'
 import { activeView, goBack, onViewChange, setActiveView } from '../../core/shell/view-port'
-import { takeRequestedSettingsTab } from '../../core/shell/settings-tab-port'
+import { registerSettingsTabNav, takeRequestedSettingsTab } from '../../core/shell/settings-tab-port'
 import { requestIntegrationsFocus, type IntegrationsFocus } from '../../core/shell/integrations-focus-port'
 import { renderShortcutList } from '../../core/commands/shortcuts'
 import { setTerminalFontSize, terminalFontSize, TERMINAL_FONT_SIZES } from '../../core/terminal/font-port'
@@ -20,9 +20,10 @@ import { createActivitySection } from './activity'
 import { createClipboardSection } from './clipboard'
 import { createProfilesHostsSection } from './profiles-hosts'
 import { createProvidersSection } from './providers'
+import { createSessionAlertsCard } from './session-alerts'
 import { createThemePicker } from './theme-picker'
 import { createUpdatesSection } from './updates'
-import { createUsageSection } from './usage'
+import { createUsageAlertsBlock, createUsageSection } from './usage'
 import { createWebhooksSection } from './webhooks'
 import { createIntegrationsSection, enterIntegrations } from './integrations'
 
@@ -126,7 +127,7 @@ export const settingsFeature: UiFeature = {
     // motion down without reconfiguring the whole desktop.
     const calmMotionToggle = createToggleRow({
       label: 'Calm motion',
-      hint: 'Trade pulses and flourishes for gentle fades — attention still shows, it just stops waving. Your OS reduce-motion setting always does this automatically.',
+      hint: 'Replaces pulses with gentle fades — attention still shows. Your OS reduce-motion setting always does this automatically.',
       onChange: () => {
         setCalmMotion(calmMotionToggle.checked())
         getTelemetry().captureEvent({ name: 'appearance.calmMotion', props: { on: calmMotionToggle.checked() } })
@@ -303,7 +304,8 @@ export const settingsFeature: UiFeature = {
       {
         id: 'terminal',
         label: 'Terminal',
-        el: section('terminal', 'Terminal', 'Type, and what a new workspace starts with.', [
+        // F-03: "Type," read as "kind of terminal" — say what the two knobs actually are.
+        el: section('terminal', 'Terminal', 'Text size, and how many terminals a new workspace starts with.', [
           Card(
             {
               header: SectionHeader({
@@ -336,22 +338,24 @@ export const settingsFeature: UiFeature = {
         // Labeled 'Agent CLIs', not 'Providers' — Usage's source catalog owned
         // that word too, and one word must not name two doors. The id stays
         // 'providers' (data-target, smokes, shot sweeps all key off it).
-        el: section('providers', 'Agent CLIs', 'Install, inspect, and synchronize each provider from one control plane.', [providers])
+        // F-09: "control plane" was k8s idiom on a consumer surface.
+        el: section('providers', 'Agent CLIs', 'Install each CLI, open its settings, and keep the values you choose in sync.', [providers])
       },
       {
         id: 'profiles',
-        label: 'Profiles & Hosts',
-        el: section('profiles', 'Profiles & SSH hosts', 'Pointers to accounts and machines — never credentials.', [
-          Card(
-            {
-              header: SectionHeader({
-                title: 'Pointer sets only',
-                caption:
-                  'Profiles select WHICH of your accounts a CLI uses; hosts are ssh targets. Never keys, tokens, or passwords — secret-shaped values are refused at save (ADR 0002).'
-              })
-            },
-            [profilesHosts]
-          )
+        // F-16: the rail label and the page title must match verbatim — it is how a
+        // user confirms they landed where they aimed. 'SSH' lives in the card titles
+        // (and the search index); the full form ellipsized in the rail.
+        label: 'Profiles & hosts',
+        // F-17: the two real cards stand alone — the old wrapper card led the page
+        // with a policy heading ("Pointer sets only") and made the app's only
+        // card-in-card nesting. Content first; the ADR covenant closes the page.
+        el: section('profiles', 'Profiles & hosts', 'Pointers to accounts and SSH machines — never credentials.', [
+          profilesHosts,
+          el('p', {
+            class: 'settings-scope',
+            text: 'Profiles select WHICH of your accounts a CLI uses; hosts are ssh targets. Never keys, tokens, or passwords — secret-shaped values are refused at save (ADR 0002).'
+          })
         ])
       },
       {
@@ -361,7 +365,7 @@ export const settingsFeature: UiFeature = {
         // knob: the provider grid, plans × profiles, pace/alerts/display,
         // history + cost, and the privacy story. 8.5/04 gives it the page
         // frame; 8.5/05 rebuilds its internals.
-        el: section('usage', 'Usage', 'Limits, plans, pace and alerts — read from the CLIs you already use.', [createUsageSection()])
+        el: section('usage', 'Usage', 'Limits, plans, pace and cost — read from the CLIs you already use.', [createUsageSection()])
       },
       {
         id: 'integrations',
@@ -379,14 +383,28 @@ export const settingsFeature: UiFeature = {
       },
       {
         id: 'webhooks',
-        label: 'Webhooks',
-        // The event bridge (8/10) — house events out to YOUR automations. Its own
-        // tab: nothing here is an MCP knob, and a page of its own needs no fold.
+        label: 'Notifications',
+        // F-08 + reorg: ONE home for "how do I get pinged" — the question used to be
+        // answered across three tabs (usage thresholds, the session-alerts card in
+        // Agent CLIs, and this event bridge). The tab id stays `webhooks`: it is the
+        // deep-link + smoke surface, and ids are plumbing, not labels.
         el: section(
           'webhooks',
-          'Webhooks',
-          'When agents need you, POST to your own automations — n8n, Make, Slack.',
-          [createWebhooksSection()]
+          'Notifications',
+          'How you get pinged when agents need you — alerts, thresholds, and your own automations.',
+          [
+            Card(
+              {
+                header: SectionHeader({
+                  title: 'Alerts & thresholds',
+                  caption: 'Get warned before a plan runs out — a quiet heads-up first, the verdict near the line. Once per window, re-armed at reset.'
+                })
+              },
+              [createUsageAlertsBlock()]
+            ),
+            createSessionAlertsCard(),
+            createWebhooksSection()
+          ]
         )
       },
       {
@@ -404,10 +422,15 @@ export const settingsFeature: UiFeature = {
             [
               errorConsent.el,
               analyticsConsent.el,
-              // ADR 0005 wording is load-bearing: the layout changed, the clauses did not.
+              // ADR 0005 wording is load-bearing: the clauses are verbatim — F-37 only
+              // splits them into two breaths (the NEVER list, then the mechanics).
               el('p', {
                 class: 'settings-scope',
-                text: 'Telemetry NEVER includes terminal output, prompts, code, file paths, environment variables, or credentials. Changes apply immediately; DO_NOT_TRACK is always honored.'
+                text: 'Telemetry NEVER includes terminal output, prompts, code, file paths, environment variables, or credentials.'
+              }),
+              el('p', {
+                class: 'settings-scope',
+                text: 'Changes apply immediately; DO_NOT_TRACK is always honored.'
               })
             ]
           ),
@@ -459,7 +482,7 @@ export const settingsFeature: UiFeature = {
         label: 'Account',
         // The MoggingLabs account (phase-accounts/10): claims only — who is signed in,
         // what plan this install effectively runs, and the ONE quiet line when a plan is
-        // degraded (ADR 0015 §4). Sign-in is optional forever: the free core never asks.
+        // degraded (ADR 0016 §4). Sign-in is optional forever: the free core never asks.
         el: section('account', 'Account', 'Optional — only the Pro tier uses it. The free core never asks.', [account])
       },
       {
@@ -468,7 +491,9 @@ export const settingsFeature: UiFeature = {
         el: section(
           'shortcuts',
           'Keyboard shortcuts',
-          'Press ? anywhere (outside a terminal or text field) to pull this up as an overlay.',
+          // F-43: say bindings are fixed — users arriving from VS Code hunt for a
+          // rebind affordance that does not exist.
+          'Press ? anywhere (outside a terminal or text field) to pull this up as an overlay. Shortcuts are fixed in this release.',
           [Card({}, [renderShortcutList()])]
         )
       },
@@ -540,6 +565,115 @@ export const settingsFeature: UiFeature = {
       if (target === 'integrations' && activeView() === 'settings') enterIntegrations()
     }
     showSection(pref(SETTINGS_TAB_KEY) ?? sections[0].id)
+    // Cross-links between tabs (F-10) and the rail search (S5) jump through this —
+    // live when the page is up, a pending request otherwise.
+    registerSettingsTabNav((id) => {
+      showSection(id)
+      setActiveView('settings')
+    })
+
+    // ── S5 · Settings search — the baseline VS Code/Chrome/macOS all lead with ──
+    // Past ~30 knobs nobody navigates by taxonomy reliably; this app has ~80 across
+    // 13 tabs. The index is a DOM walk over titles, captions, toggle labels and
+    // field labels — rebuilt on the first keystroke of each search, so late-loading
+    // blocks (usage grid, connections) are indexed by the time anyone can type.
+    interface SearchHit {
+      tab: string
+      tabLabel: string
+      title: string
+      haystack: string
+      target: HTMLElement
+    }
+    const searchIndex: SearchHit[] = []
+    const buildSearchIndex = (): void => {
+      searchIndex.length = 0
+      for (const s of sections) {
+        const claim = (target: HTMLElement, title: string, extra = ''): void => {
+          const t = title.trim()
+          if (t) searchIndex.push({ tab: s.id, tabLabel: s.label, title: t, haystack: `${t} ${extra}`.toLowerCase(), target })
+        }
+        claim(s.el, s.label, s.el.querySelector('.settings-section-head .section-header-caption')?.textContent ?? '')
+        for (const head of s.el.querySelectorAll<HTMLElement>('.section-header-title')) {
+          const card = head.closest<HTMLElement>('.card') ?? head
+          claim(card, head.textContent ?? '', card.querySelector('.section-header-caption')?.textContent ?? '')
+        }
+        for (const cc of s.el.querySelectorAll<HTMLElement>('.collapsible-card')) {
+          claim(cc, cc.querySelector('.cc-title')?.textContent ?? '', cc.querySelector('.cc-caption')?.textContent ?? '')
+        }
+        for (const row of s.el.querySelectorAll<HTMLElement>('.toggle-row')) {
+          claim(row, row.querySelector('.toggle-row-label')?.textContent ?? '', row.querySelector('.toggle-row-hint')?.textContent ?? '')
+        }
+        for (const fg of s.el.querySelectorAll<HTMLElement>('.field-group')) {
+          claim(fg, fg.querySelector('.field-group-label')?.textContent ?? '', fg.querySelector('.field-group-hint')?.textContent ?? '')
+        }
+      }
+    }
+    const searchInput = el('input', { class: 'input input-sm settings-search', ariaLabel: 'Search settings' }) as HTMLInputElement
+    searchInput.type = 'search'
+    searchInput.placeholder = 'Search settings…'
+    const searchResults = el('div', { class: 'settings-search-results' })
+    searchResults.hidden = true
+    const jumpTo = (hit: SearchHit): void => {
+      showSection(hit.tab)
+      searchInput.value = ''
+      runSearch()
+      // A hit inside a folded card opens it first — landing on a 40px header
+      // and revealing nothing is a no-op shaped like a success.
+      const fold = hit.target.closest<HTMLElement>('.collapsible-card')
+      if (fold && !fold.classList.contains('is-open')) {
+        fold.querySelector<HTMLButtonElement>('.cc-toggle')?.click()
+      }
+      setTimeout(() => {
+        hit.target.scrollIntoView({ block: 'center' })
+        hit.target.classList.add('search-hit-flash')
+        setTimeout(() => hit.target.classList.remove('search-hit-flash'), 2000)
+      }, 60)
+    }
+    let lastQuery = ''
+    function runSearch(): void {
+      const q = searchInput.value.trim().toLowerCase()
+      searchResults.replaceChildren()
+      searchResults.hidden = !q
+      if (!q) {
+        lastQuery = ''
+        return
+      }
+      if (!lastQuery) buildSearchIndex() // fresh walk per search session
+      lastQuery = q
+      const seen = new Set<HTMLElement>()
+      const hits = searchIndex
+        .filter((h) => h.haystack.includes(q) && !seen.has(h.target) && (seen.add(h.target), true))
+        .slice(0, 12)
+      if (!hits.length) {
+        searchResults.append(el('div', { class: 'settings-search-none', text: 'No setting matches.' }))
+        return
+      }
+      for (const h of hits) {
+        searchResults.append(
+          el('button', { class: 'settings-search-hit', type: 'button', onClick: () => jumpTo(h) }, [
+            el('span', { class: 'settings-search-hit-title', text: h.title }),
+            el('span', { class: 'settings-search-hit-tab', text: h.tabLabel })
+          ])
+        )
+      }
+    }
+    searchInput.addEventListener('input', runSearch)
+    searchInput.addEventListener('keydown', (e) => {
+      e.stopPropagation() // typing must not trip page-level bindings
+      if (e.key === 'Escape') {
+        if (searchInput.value) {
+          searchInput.value = ''
+          runSearch()
+        } else {
+          searchInput.blur()
+        }
+        e.preventDefault()
+      }
+      if (e.key === 'Enter') {
+        searchResults.querySelector<HTMLButtonElement>('.settings-search-hit')?.click()
+        e.preventDefault()
+      }
+    })
 
     const backBtn = Button({
       label: 'Back',
@@ -557,6 +691,8 @@ export const settingsFeature: UiFeature = {
     if (orphans.length && import.meta.env.DEV) console.warn(`settings: tabs missing from NAV_GROUPS: ${orphans.join(', ')}`)
     const navBox = el('div', { class: 'settings-nav' }, [
       backBtn,
+      searchInput,
+      searchResults,
       ...NAV_GROUPS.flatMap((g) => [
         el('span', { class: 'settings-nav-group', text: g.label }),
         ...g.ids.map((id) => navById.get(id) ?? null)
@@ -592,6 +728,15 @@ export const settingsFeature: UiFeature = {
       if (document.querySelector('.palette-overlay:not([hidden]), .modal-overlay')) return
       e.preventDefault()
       goBack()
+    })
+    // S5: Ctrl/Cmd+F inside Settings focuses the search — the browser find has no
+    // meaning on a page whose content is mostly hidden tabs.
+    window.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === 'f' && activeView() === 'settings') {
+        e.preventDefault()
+        searchInput.focus()
+        searchInput.select()
+      }
     })
     // NAV-01: Ctrl/Cmd+, opens Settings from anywhere (the platform convention),
     // toggling back out if it's already up — matching the gear button.
@@ -669,7 +814,7 @@ export const settingsFeature: UiFeature = {
       // than a missing one; the matrix now reports pending panes on its fold instead.
       // Webhooks and Activity are TABS now, not integrations sub-blocks — their verbs
       // are plain tab switches, no focus token to drain.
-      { id: 'webhooks:add', title: 'Add a webhook (event bridge)', hint: 'Webhooks', run: () => { showSection('webhooks'); setActiveView('settings') } },
+      { id: 'webhooks:add', title: 'Add a webhook (event bridge)', hint: 'Notifications', run: () => { showSection('webhooks'); setActiveView('settings') } },
       { id: 'activity:open', title: 'Open the activity trail', hint: 'Trust', run: () => { showSection('activity'); setActiveView('settings') } },
       ...THEMES.map((t) => ({
         id: `theme:${t.id}`,

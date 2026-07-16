@@ -1,9 +1,9 @@
-# ADR 0016 — Split the Node runtime to disable `runAsNode`
+# ADR 0017 — Split the Node runtime to disable `runAsNode`
 
 - **Status:** Accepted (2026-07-16). Shipped with the phase-accounts/09 runtime split.
 - **Relates to:** ADR 0006 (the detached PTY daemon — its host changes, its wire protocol
-  and survival guarantee do not), ADR 0015 §hardening (the fuse wall this completes),
-  docs/18-accounts.md (the shipped-state doc; its fuse table now reads `runAsNode: OFF`).
+  and survival guarantee do not), ADR 0016 §hardening (the fuse wall this completes),
+  docs/19-accounts.md (the shipped-state doc; its fuse table now reads `runAsNode: OFF`).
 
 ## Context
 

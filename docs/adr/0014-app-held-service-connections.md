@@ -142,9 +142,9 @@ Those are different things, and conflating them would be the easiest mistake to 
 "Your keys, your CLIs" remains true: the CLIs authenticate themselves, and no provider
 credential of yours ever enters this process. The unconditional second half this
 paragraph originally made — that MoggingLabs runs no server and sells nothing — is
-bounded by [ADR 0015](0015-accounts-and-entitlements.md): a paid tier with our OWN
+bounded by [ADR 0016](0016-accounts-and-entitlements.md): a paid tier with our OWN
 account is doctrine now, gating PAID features only, while the free local core keeps
-needing no account and keeps working fully offline. *(Sentence amended by ADR 0015;
+needing no account and keeps working fully offline. *(Sentence amended by ADR 0016;
 the original absolute was true when this ADR was accepted.)*
 
 The per-CLI route also **remains**, unchanged and fully supported (Settings › Integrations

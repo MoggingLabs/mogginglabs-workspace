@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { runtimeDir } from './daemon-client'
 
-// THE STANDALONE NODE HELPER (ADR 0016). One resolver for the pinned Node runtime that
+// THE STANDALONE NODE HELPER (ADR 0017). One resolver for the pinned Node runtime that
 // hosts everything that used to ride Electron-as-Node: the detached PTY daemon, the
 // house MCP server, and every `mogging` / `mogging-connection` shim. It is what earned
 // flipping the RunAsNode fuse off — the signed Electron binary is no longer a Node
@@ -110,7 +110,7 @@ export function helperRuntime(): HelperRuntime {
   if (!existsSync(join(dir, HELPER_EXE))) {
     throw new Error(
       `standalone Node helper missing at ${join(dir, HELPER_EXE)} — run \`npm run build:node-helper\` ` +
-        '(postinstall builds it; ADR 0016). There is no Electron-as-Node fallback: the RunAsNode fuse is off.'
+        '(postinstall builds it; ADR 0017). There is no Electron-as-Node fallback: the RunAsNode fuse is off.'
     )
   }
   if (helperNeedsRuntimeCopy()) dir = runtimeHelperCopy(dir)

@@ -3,17 +3,20 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-// Env-gated one-page-wizard smoke (MOGGING_WIZARDUX, Phase-8.5/02). The wizard is
-// a full PAGE beside the workspace rail, not a modal. Asserts:
-//   (a) ONE page — three Cards, zero steppers, no modal overlay; the rail is up
-//       beside it (the whole point: configure the next workspace with the ones
-//       you have still in view);
-//   (b) the spacing CLAIM, measured — card padding >= --sp-4, inter-card gap
-//       >= --sp-5, both read from getComputedStyle, not from the stylesheet;
-//   (c) prefill lands in all three cards AT ONCE (folder · grid · mix);
-//   (d) the Advanced disclosures start COLLAPSED and expand;
+// Env-gated wizard-page smoke (MOGGING_WIZARDUX — Phase-8.5/02, redesigned 2026-07).
+// The wizard is ONE compact flat page beside the rail. Asserts:
+//   (a) FLAT — zero Cards, zero <details> disclosures, no modal overlay; the rail
+//       is up beside it; the controls that used to hide behind "Advanced"
+//       (custom command, isolation, runs-on, presets) are VISIBLE immediately;
+//   (b) the density claim, measured — flat sections with the division hairline,
+//       inter-section gap >= --sp-5, all from getComputedStyle;
+//   (c) prefill lands across the page at once (folder · painter · mix · meter);
+//   (d) THE PAINTER, by real gestures — a lattice CLICK sizes the grid; a real
+//       pointer DRAG across the canvas merges cells (readout says merged); a
+//       click on the merged tile splits it back;
 //   (e) an unset folder refuses to launch and says why, in place;
-//   (f) launch from the single page opens the workspace with the chosen mix.
+//   (f) a merged layout LAUNCHES into real geometry: the workspace opens with
+//       exactly that many panes and the merged pane truly spans the grid.
 // Zero network.
 
 export function runWizardUxSmoke(win: BrowserWindow): void {
@@ -58,100 +61,187 @@ export function runWizardUxSmoke(win: BrowserWindow): void {
       const invalidRefusedOk =
         refused.stillWizard && /pick a folder/i.test(refused.status) && refused.workspaces === 0
 
-      // ── (a) ONE page: three cards, no stepper, no modal, rail beside it ─────
+      // ── (a) FLAT: no cards, no disclosures, everything visible ──────────────
       const shape = await ES<{
         cards: number
-        steppers: number
+        details: number
+        sections: number
         overlays: number
         pageVisible: boolean
         railWidth: number
         appClass: boolean
-      }>(`(() => ({
-        cards: document.querySelectorAll('#view-wizard .wizard > .card').length,
-        steppers: document.querySelectorAll('.wizard-stepper').length,
-        overlays: document.querySelectorAll('.modal-overlay').length,
-        pageVisible: !!document.querySelector('#view-wizard')?.offsetParent,
-        railWidth: document.querySelector('#rail')?.getBoundingClientRect().width ?? 0,
-        appClass: document.getElementById('app').classList.contains('view-wizard')
-      }))()`)
-      const onePageOk =
-        shape.cards === 3 && shape.steppers === 0 && shape.overlays === 0 && shape.pageVisible && shape.appClass
-      const railBesideOk = shape.railWidth > 0
-
-      // ── (b) the spacing claim, MEASURED from computed styles ────────────────
-      const spacing = await ES<{ pad: number; gap: number }>(`(() => {
-        const card = document.querySelector('#view-wizard .wizard > .card')
-        const col = document.querySelector('#view-wizard .wizard')
+        customVisible: boolean
+        isolateVisible: boolean
+        remoteVisible: boolean
+        painterVisible: boolean
+      }>(`(() => {
+        const visible = (sel) => {
+          const n = document.querySelector(sel)
+          return !!n && n.getBoundingClientRect().height > 0
+        }
         return {
-          pad: parseFloat(getComputedStyle(card).paddingTop),
-          gap: parseFloat(getComputedStyle(col).rowGap)
+          cards: document.querySelectorAll('#view-wizard .card').length,
+          details: document.querySelectorAll('#view-wizard details').length,
+          sections: document.querySelectorAll('#view-wizard .wizard-sec').length,
+          overlays: document.querySelectorAll('.modal-overlay').length,
+          pageVisible: !!document.querySelector('#view-wizard')?.offsetParent,
+          railWidth: document.querySelector('#rail')?.getBoundingClientRect().width ?? 0,
+          appClass: document.getElementById('app').classList.contains('view-wizard'),
+          customVisible: visible('#view-wizard .wizard-custom-input'),
+          isolateVisible: visible('#view-wizard .wizard-option-row'),
+          remoteVisible: visible('#view-wizard .wizard-remote-select'),
+          painterVisible: visible('#view-wizard .grid-painter')
         }
       })()`)
-      const spacingOk = spacing.pad >= 16 && spacing.gap >= 24 // --sp-4 / --sp-5
+      const flatOk =
+        shape.cards === 0 &&
+        shape.details === 0 &&
+        shape.sections >= 5 &&
+        shape.overlays === 0 &&
+        shape.pageVisible &&
+        shape.appClass &&
+        shape.customVisible &&
+        shape.isolateVisible &&
+        shape.remoteVisible &&
+        shape.painterVisible
+      const railBesideOk = shape.railWidth > 0
 
-      // ── (d) Advanced disclosures start COLLAPSED, then expand ───────────────
-      const advBefore = await ES<{ total: number; open: number }>(`(() => {
-        const d = [...document.querySelectorAll('#view-wizard .wizard-adv')]
-        return { total: d.length, open: d.filter((x) => x.open).length }
+      // ── (b) the density claim, MEASURED from computed styles ────────────────
+      const spacing = await ES<{ gap: number; hairline: number; headPad: number }>(`(() => {
+        const col = document.querySelector('#view-wizard .wizard')
+        const head = document.querySelector('#view-wizard .wizard-sec-head')
+        const cs = getComputedStyle(head)
+        return {
+          gap: parseFloat(getComputedStyle(col).rowGap),
+          hairline: parseFloat(cs.borderBottomWidth),
+          headPad: parseFloat(cs.paddingBottom)
+        }
       })()`)
-      await ES(`(document.querySelectorAll('#view-wizard .wizard-adv').forEach((d) => (d.open = true)), 1)`)
-      await sleep(300)
-      const advBodyShown = await ES<boolean>(
-        `[...document.querySelectorAll('#view-wizard .wizard-adv-body')].every((b) => b.getBoundingClientRect().height > 0)`
-      )
-      const disclosureOk = advBefore.total >= 2 && advBefore.open === 0 && advBodyShown
+      const spacingOk = spacing.gap >= 24 && spacing.hairline === 1 && spacing.headPad >= 12 // --sp-5 / hairline / --sp-3
 
-      // ── (c) prefill lands in ALL THREE cards at once ────────────────────────
+      // ── (c) prefill lands across the page at once ───────────────────────────
       // A `custom:` mix needs no installed CLI, so this asserts on any machine.
-      // It also exercises the auto-open rule: the custom command's only controls
-      // live inside Agents › Advanced, so a prefilled mix must reveal them.
       await ES(`window.__mogging.templates.openWizard({ cwd: ${cwdJs}, paneCount: 6, mix: [{ provider: 'custom:echo hi', count: 2 }] })`)
       await sleep(800)
       const prefill = await ES<{
         folder: string
-        grid: string
+        readout: string
         custom: string
         meter: string
-        advOpen: number
-        customInAdvanced: boolean
       }>(`(() => ({
         folder: document.querySelector('#view-wizard .path-input-field')?.value ?? '',
-        grid: document.querySelector('#view-wizard .layout-tile[aria-checked="true"] .layout-tile-count')?.textContent ?? '',
+        readout: document.querySelector('#view-wizard .wizard-layout-readout')?.textContent ?? '',
         custom: document.querySelector('#view-wizard .wizard-custom-input')?.value ?? '',
-        meter: document.querySelector('#view-wizard .wizard-fill-label')?.textContent ?? '',
-        advOpen: [...document.querySelectorAll('#view-wizard .wizard-adv')].filter((d) => d.open).length,
-        customInAdvanced: !!document.querySelector('#view-wizard .wizard-adv .wizard-custom-input')
+        meter: document.querySelector('#view-wizard .wizard-fill-label')?.textContent ?? ''
       }))()`)
       const prefillOk =
         prefill.folder === repo && // Where
-        prefill.grid === '6' && // Layout
+        /^6 terminals · 2×3/.test(prefill.readout) && // Layout (painter readout)
         prefill.custom === 'echo hi' && // Agents
-        /2 \/ 6/.test(prefill.meter) &&
-        prefill.customInAdvanced && // the rarely-used control is disclosed, not on the roster
-        prefill.advOpen === 1 // ...and auto-opened, because the mix already set it
+        /2 \/ 6/.test(prefill.meter)
 
-      // ── (f) launch from the single page opens the workspace with the mix ────
+      // ── (d) the painter, by REAL gestures ───────────────────────────────────
+      // Size: click the 2×2 lattice cell (row 2, col 2).
+      await ES(`(() => {
+        const cell = [...document.querySelectorAll('#view-wizard .gp-cell')]
+          .find((c) => c.dataset.r === '1' && c.dataset.c === '1')
+        cell?.click()
+      })()`)
+      await sleep(200)
+      const sized = await ES<{ readout: string; regions: number }>(`(() => ({
+        readout: document.querySelector('#view-wizard .wizard-layout-readout')?.textContent ?? '',
+        regions: window.__mogging.wizardLayout.spec().regions.length
+      }))()`)
+      const latticeSizesOk = /^4 terminals · 2×2/.test(sized.readout) && sized.regions === 4
+
+      // Merge: a REAL pointer drag across the top row of the canvas.
+      await ES(`(() => {
+        const canvas = document.querySelector('#view-wizard .gp-canvas')
+        const r = canvas.getBoundingClientRect()
+        const at = (fx, fy) => ({ x: r.x + r.width * fx, y: r.y + r.height * fy })
+        const fire = (type, p) => canvas.dispatchEvent(new PointerEvent(type, {
+          bubbles: true, cancelable: true, clientX: p.x, clientY: p.y, button: 0, buttons: 1, pointerId: 7
+        }))
+        const a = at(0.2, 0.25) // top-left cell
+        const b = at(0.8, 0.25) // top-right cell
+        fire('pointerdown', a)
+        fire('pointermove', { x: (a.x + b.x) / 2, y: a.y })
+        fire('pointermove', b)
+        fire('pointerup', b)
+      })()`)
+      await sleep(250)
+      const merged = await ES<{ readout: string; regions: number; spans: number }>(`(() => {
+        const spec = window.__mogging.wizardLayout.spec()
+        return {
+          readout: document.querySelector('#view-wizard .wizard-layout-readout')?.textContent ?? '',
+          regions: spec.regions.length,
+          spans: spec.regions.filter((g) => g.rs > 1 || g.cs > 1).length
+        }
+      })()`)
+      const dragMergesOk = /merged/.test(merged.readout) && merged.regions === 3 && merged.spans === 1
+
+      // Split back: click the merged tile, then re-merge for the launch below.
+      await ES(`(() => {
+        const canvas = document.querySelector('#view-wizard .gp-canvas')
+        const r = canvas.getBoundingClientRect()
+        const p = { x: r.x + r.width * 0.5, y: r.y + r.height * 0.25 }
+        const fire = (type) => canvas.dispatchEvent(new PointerEvent(type, {
+          bubbles: true, cancelable: true, clientX: p.x, clientY: p.y, button: 0, buttons: 1, pointerId: 8
+        }))
+        fire('pointerdown')
+        fire('pointerup')
+      })()`)
+      await sleep(250)
+      const unmerged = await ES<number>(`window.__mogging.wizardLayout.spec().regions.length`)
+      const clickSplitsOk = unmerged === 4
+      await ES(`window.__mogging.wizardLayout.merge(0, 0, 0, 1)`)
+      await sleep(150)
+
+      // ── (f) the merged layout launches into REAL geometry ───────────────────
       await ES(`document.querySelector('#view-wizard .wizard-footer .btn--primary').click()`)
       const launched = await waitFor(async () =>
-        ES<boolean>(`!!document.querySelector('#content.view-grid') && (window.__mogging.layout.paneCount?.() ?? 0) === 6`)
+        ES<boolean>(`!!document.querySelector('#content.view-grid') && (window.__mogging.layout.paneCount?.() ?? 0) === 3`)
       )
-      const panes = await ES<number>(`window.__mogging.layout.paneCount?.() ?? 0`)
-      const launchOk = launched && panes === 6
+      await sleep(400)
+      const geometry = await ES<{ slots: number; grid: number; top: number; bottoms: number[] }>(`(() => {
+        const grid = document.querySelector('.workspace-view:not([hidden]) .layout-grid') ?? document.querySelector('.layout-grid')
+        const slots = [...grid.querySelectorAll('.layout-slot')]
+          .map((s) => s.getBoundingClientRect())
+          .sort((a, b) => a.y - b.y || a.x - b.x)
+        return {
+          slots: slots.length,
+          grid: grid.getBoundingClientRect().width,
+          top: slots[0]?.width ?? 0,
+          bottoms: slots.slice(1).map((s) => Math.round(s.width))
+        }
+      })()`)
+      // The merged pane spans (allow the seam): full width vs ~half for the two below.
+      const launchOk =
+        launched &&
+        geometry.slots === 3 &&
+        geometry.top > geometry.grid * 0.9 &&
+        geometry.bottoms.length === 2 &&
+        geometry.bottoms.every((w) => w < geometry.grid * 0.6)
 
-      const pass = invalidRefusedOk && onePageOk && railBesideOk && spacingOk && disclosureOk && prefillOk && launchOk
+      const pass =
+        invalidRefusedOk && flatOk && railBesideOk && spacingOk && prefillOk && latticeSizesOk && dragMergesOk && clickSplitsOk && launchOk
       result = {
         pass,
         invalidRefusedOk,
-        onePageOk,
+        flatOk,
         railBesideOk,
         spacingOk,
         spacing,
-        disclosureOk,
-        advBefore,
         prefillOk,
         prefill,
+        latticeSizesOk,
+        sized,
+        dragMergesOk,
+        merged,
+        clickSplitsOk,
+        unmerged,
         launchOk,
-        panes,
+        geometry,
         shape
       }
     } catch (e) {

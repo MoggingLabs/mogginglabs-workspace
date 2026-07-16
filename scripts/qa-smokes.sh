@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 144 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 155 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
-# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 122 app-boot
+# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 133 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -275,6 +275,7 @@ run_smoke CWD_INPROC  MOGGING_CWD       INPROC 180 cwd-inproc
 run_smoke GIT         MOGGING_GIT       1 240 git
 run_smoke NOTIFY      MOGGING_NOTIFY    1 180 notify
 run_smoke NOTIFYHOOK  MOGGING_NOTIFYHOOK 1 120 notifyhook
+run_smoke GLOBALHOOKS MOGGING_GLOBALHOOKS 1 150 globalhooks
 run_smoke STATE       MOGGING_STATE     1 150 state-smoke
 run_smoke RELOAD      MOGGING_RELOAD    1 150 reload-smoke
 run_smoke MIGRATE     MOGGING_MIGRATE   1 120 migrate
@@ -297,6 +298,10 @@ run_smoke WORKTREE    MOGGING_WORKTREE  1 240 worktree
 run_smoke REVIEW      MOGGING_REVIEW    1 240 review
 run_smoke REVIEWSNAP  MOGGING_REVIEWSNAP 1 180 reviewsnap
 run_smoke BOARD       MOGGING_BOARD     1 240 board
+run_smoke BOARDV2     MOGGING_BOARDV2   1 240 boardv2
+run_smoke BOARDMCP    MOGGING_BOARDMCP  1 300 boardmcp
+run_smoke BOARDGH     MOGGING_BOARDGH   1 240 boardgh
+run_smoke BOARDQUEUE  MOGGING_BOARDQUEUE 1 300 boardqueue
 run_smoke BOARDFAIL   MOGGING_BOARDFAIL 1 120 boardfail
 run_smoke PERSISTHEALTH MOGGING_PERSISTHEALTH 1 120 persisthealth
 run_smoke ROLERACE    MOGGING_ROLERACE 1 120 rolerace
@@ -314,6 +319,7 @@ run_smoke SWARM       MOGGING_SWARM     1 240 swarm
 run_smoke LEDGER      MOGGING_LEDGER    1 240 ledger
 run_smoke GATE        MOGGING_GATE      1 240 gate
 run_smoke PROFILES    MOGGING_PROFILES  1 240 profiles
+run_smoke LOGINTRUTH  MOGGING_LOGINTRUTH 1 240 logintruth
 run_smoke REMOTE      MOGGING_REMOTE    1 240 remote
 run_smoke SWARMMILESTONE MOGGING_SWARMMILESTONE 1 300 swarmmilestone
 run_smoke TEMPLATE_A  MOGGING_TEMPLATE  A 180 template TEMPLATE
@@ -322,6 +328,8 @@ run_smoke PROFPERSIST_A MOGGING_PROFPERSIST A 180 profpersist PROFPERSIST
 run_smoke PROFPERSIST_B MOGGING_PROFPERSIST B 180 profpersist PROFPERSIST
 run_smoke BROWSER      MOGGING_BROWSER   1 180 browser
 run_smoke BROWSERCTL   MOGGING_BROWSERCTL 1 180 browserctl
+run_smoke BROWSERUX    MOGGING_BROWSERUX 1 180 browserux
+run_smoke BROWSERTABS  MOGGING_BROWSERTABS 1 180 browsertabs
 run_smoke BROWSERRACE  MOGGING_BROWSERRACE 1 180 browserrace
 # LOCKDOWN: ADR 0015 §hardening — the trusted renderer's CSP ships as meta AND header
 # (connect-src 'none'; byte-equal, drift fails), scripted location=/window.open on the
@@ -348,6 +356,13 @@ run_smoke WSCLOSE      MOGGING_WSCLOSE   1 240 wsclose
 run_smoke KBSHORTCUTS  MOGGING_KBSHORTCUTS 1 240 kbshortcuts
 run_smoke KBGLOBAL     MOGGING_KBGLOBAL  1 240 kbglobal
 run_smoke DAEMONCUSTODY MOGGING_DAEMONCUSTODY 1 240 daemoncustody
+# The daemon-lifecycle trio (2026-07 pane-freeze diagnosis): STAMPWAR is the retire-war
+# guard (a mismatched daemon with a live client is NOT retired), HEARTBEAT the wedge
+# detector (silent-but-open sockets get cut; busy daemons never do), DAEMONHEAL the relay's
+# crash → reconnect → quiesce → un-quiesce lifecycle on the real startDaemonBackend.
+run_smoke STAMPWAR     MOGGING_STAMPWAR  1 240 stampwar
+run_smoke HEARTBEAT    MOGGING_HEARTBEAT 1 240 heartbeat
+run_smoke DAEMONHEAL   MOGGING_DAEMONHEAL 1 240 daemonheal
 run_smoke MOVEPANE     MOGGING_MOVEPANE  1 240 movepane
 run_smoke SESSIONPOOL  MOGGING_SESSIONPOOL 1 240 sessionpool
 run_smoke VERDICTLIVE  MOGGING_VERDICTLIVE 1 240 verdictlive

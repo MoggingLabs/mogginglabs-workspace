@@ -22,7 +22,10 @@ export function runAuthRunnerSmoke(win: BrowserWindow): void {
     { id: 'gemini', name: 'Gemini', installed: true, installHint: '' }
   ]
   const success = (label: string): string => process.platform === 'win32' ? `echo ${label}` : `printf ${label}`
-  const failure = process.platform === 'win32' ? 'cmd.exe /d /c exit 7' : 'false'
+  // Both spellings exit SEVEN: the gemini row's title assertion below pins /code 7/ on every
+  // platform, and `false` (the old POSIX stub) exits 1 — authored-on-Windows drift that made
+  // this gate red on linux/mac only.
+  const failure = process.platform === 'win32' ? 'cmd.exe /d /c exit 7' : 'sh -c "exit 7"'
 
   const openCard = async (label: string): Promise<boolean> => {
     const opened = await ES<boolean>(`(() => {
@@ -98,6 +101,24 @@ export function runAuthRunnerSmoke(win: BrowserWindow): void {
         return oauth instanceof HTMLInputElement && oauth.checked
       })()`)
       const oauthConnected = await connectPanel()
+      // Toasts auto-dismiss, and three auth runs settle at different moments — a
+      // one-shot DOM snapshot after `settled` misses whichever finish toasts have
+      // already expired (observed: codex's success and gemini's failure gone while
+      // their settled BUTTON states prove both fired). Accumulate titles from the
+      // moment the runs start instead, so the assertion reads what actually fired.
+      await ES(`(() => {
+        window.__mogToasts = window.__mogToasts || []
+        if (!window.__mogToastObs) {
+          const collect = () => document.querySelectorAll('.toast-title').forEach((t) => {
+            const s = t.textContent || ''
+            if (s && !window.__mogToasts.includes(s)) window.__mogToasts.push(s)
+          })
+          window.__mogToastObs = new MutationObserver(collect)
+          window.__mogToastObs.observe(document.body, { childList: true, subtree: true })
+          collect()
+        }
+        return 1
+      })()`)
       const oauthStarted = await ES<{ count: number; pending: boolean }>(`(() => {
         const buttons = [...document.querySelectorAll('.cat-panel button')].filter((button) => /^Authorize in /.test(button.textContent ?? ''))
         buttons.forEach((button) => button.click())
@@ -133,7 +154,16 @@ export function runAuthRunnerSmoke(win: BrowserWindow): void {
         codex: oauthUi.codex === 'Authorized in Codex' && /successful/.test(String(oauthUi.codexTitle)),
         gemini: oauthUi.gemini === 'Retry authorization in Gemini' && /code 7/.test(String(oauthUi.geminiTitle))
       }
-      const finishToasts = await ES<string[]>(`[...document.querySelectorAll('.toast-title')].map((item) => item.textContent ?? '')`)
+      // The finish toasts can trail the settled buttons by several seconds: with three
+      // 9s start toasts holding the stack at MAX_STACK, the later finishes QUEUE (by
+      // design — a toast is never destroyed before it has been seen, RC3) and mount only
+      // as the starts expire. Wait for both signatures rather than sampling one instant.
+      let finishToasts: string[] = []
+      for (let i = 0; i < 40; i++) {
+        finishToasts = await ES<string[]>(`window.__mogToasts.slice()`)
+        if (finishToasts.some((t) => t.includes('authorized in')) && finishToasts.some((t) => t.includes('authorization failed'))) break
+        await sleep(500)
+      }
 
       // A no-auth preset has neither OAuth actions nor token instructions. It
       // still carries the explicit `none` selection through connect.

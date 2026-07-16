@@ -19,6 +19,18 @@ export interface AgentProfile {
   env: Record<string, string>
   /** Failover order: 0 = the default profile. Derived at save (append); swapped by the active switch. */
   order: number
+  /** Who is ACTUALLY signed in at this profile's config home. Attached by
+   *  `profiles:list` at read time — NEVER persisted (the email above stays the
+   *  user's declared intent). Absent = unknowable (provider has no login probe). */
+  login?: ProfileLoginState
+}
+
+/** Discovery snapshot for one config home (email-label vs reality — the label
+ *  cannot steer the CLI's own OAuth, so drift must at least be VISIBLE). */
+export interface ProfileLoginState {
+  signedIn: boolean
+  /** The signed-in account's email, when the CLI recorded one. */
+  email?: string
 }
 
 /** What the settings form submits: name + subscription email (+ provider pick).

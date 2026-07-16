@@ -8,7 +8,7 @@ import { helperRuntime } from '../node-helper'
 import { houseServerEntry } from '../mcp-manager'
 import { processImagePath, samePath, sleep, waitUntil, writeResult } from './kit'
 
-// Env-gated RUNTIME-SPLIT smoke (MOGGING_RUNTIMESPLIT, ADR 0016): the release-blocking
+// Env-gated RUNTIME-SPLIT smoke (MOGGING_RUNTIMESPLIT, ADR 0017): the release-blocking
 // proof that the Node runtime split actually happened — everything that used to ride
 // Electron-as-Node now rides the standalone helper, and the fuse flip is DECLARED. Five
 // claims, each read off the running system, never off intent:

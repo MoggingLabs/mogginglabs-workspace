@@ -37,7 +37,7 @@ export async function waitUntil(check: () => boolean | Promise<boolean>, timeout
 
 /**
  * The executable image behind a live pid ('' when unreadable). The runtime-split gates
- * (SURVIVE, RUNTIMESPLIT — ADR 0016) use it to prove the daemon's HOST really is the
+ * (SURVIVE, RUNTIMESPLIT — ADR 0017) use it to prove the daemon's HOST really is the
  * standalone helper: the endpoint file says who is listening, only the OS says what
  * binary that pid is executing.
  */

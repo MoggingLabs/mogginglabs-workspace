@@ -1,12 +1,12 @@
 /**
- * Entitlements over IPC (ADR 0015). CLAIMS ONLY, like account.ipc.ts: the snapshot
+ * Entitlements over IPC (ADR 0016). CLAIMS ONLY, like account.ipc.ts: the snapshot
  * carries the plan name, feature flags, effective limits and the grace state — never
  * the entitlement JWT, never a token, never the fetch machinery. The renderer reads
  * this to phrase refusals and paint plan UI; enforcement decisions main-side read the
  * SAME engine through the Entitlements port, so the two can never disagree.
  */
 
-/** Where the honored claims sit relative to the offline-grace law (ADR 0015 §4):
+/** Where the honored claims sit relative to the offline-grace law (ADR 0016 §4):
  *  `fresh`  = the signed entitlement is unexpired;
  *  `grace`  = it expired, but we are within the grace window past its last successful
  *             fetch, so the plan is still honored;
@@ -15,7 +15,7 @@
 export type EntitlementGraceState = 'fresh' | 'grace' | 'expired'
 
 /** WHY a held claim is not being honored — the one honest line the account panel
- *  shows (ADR 0015 §4: degradation is quiet, one sentence, never a nag ladder).
+ *  shows (ADR 0016 §4: degradation is quiet, one sentence, never a nag ladder).
  *  Absent whenever the snapshot simply IS the plan (no claim at all, or honored).
  *  An enum of causes, never free text — nothing here can carry a path or an id. */
 export type EntitlementDegradedReason = 'grace_expired' | 'device_mismatch' | 'revoked' | 'tampered'
@@ -24,7 +24,7 @@ export type EntitlementDegradedReason = 'grace_expired' | 'device_mismatch' | 'r
  *  are already merged over the Free defaults, so a consumer never re-derives tiers. */
 export interface EntitlementsSnapshot {
   /** Plan name claim (e.g. 'free' | 'pro'). LOCAL UX ONLY — real teeth are hardware
-   *  binding + server-side value (ADR 0015 §5), never this string. */
+   *  binding + server-side value (ADR 0016 §5), never this string. */
   plan: string
   /** Feature flags the plan grants (additive to the Free set). */
   features: string[]

@@ -66,15 +66,35 @@ export function runUsageSetSmoke(win: BrowserWindow): void {
       await ES(`(() => { const s = document.querySelector('.usage-search'); s.value = ''; s.dispatchEvent(new Event('input')) })()`)
       await sleep(100)
 
-      // 3 ── enable reaches the poller LIVE
-      await ES(`document.querySelector('.usage-prov-row[data-provider="fake"] .usage-prov-enable input').click()`)
+      // 3 ── enable reaches the poller LIVE. A toggle here triggers a configSet ->
+      // loadGrid re-render that REPLACES the checkbox, and an ENABLED provider makes the
+      // poller emit on every tick — each emit re-renders the grid too. So a blind second
+      // click can land on a freshly-rendered input before its `checked` reflects the write
+      // and toggle the WRONG way. Drive to a TARGET state instead: click only when the live
+      // checkbox disagrees, re-reading it each pass, so the test exercises the steady-state
+      // "toggle -> poller" contract rather than a re-render race. Same driver serves step 6.
+      const driveToggle = async (selector: string, want: boolean): Promise<void> => {
+        for (let i = 0; i < 40; i++) {
+          const checked = await ES<boolean | null>(
+            `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return el ? el.checked : null })()`
+          )
+          if (checked === want) return
+          if (checked !== null) await ES(`document.querySelector(${JSON.stringify(selector)}).click()`)
+          await sleep(200)
+        }
+      }
+      const fakeEnable = '.usage-prov-row[data-provider="fake"] .usage-prov-enable input'
+      // Prove DISABLE reaches the poller here, then leave the fake OFF through the
+      // interactive steps below (key / env-ref / webread). A fast-cadence fixture poll
+      // re-renders the whole grid on every tick (renderGrid on `changed`), and the
+      // key-refusal error those steps assert on is imperative DOM (err.textContent) that a
+      // re-render wipes — so an enabled fake makes them flaky. The fake is flipped back ON
+      // right before the plans table (step 7), the only surface that needs its 11 rows.
+      // (ENABLE-reaches-the-poller is proven there, svc.list 0 -> 11.)
+      await driveToggle(fakeEnable, false)
       tries = 0
       while (svc.list().length !== 0 && tries++ < 40) await sleep(150)
       const disabledOk = svc.list().length === 0
-      await ES(`document.querySelector('.usage-prov-row[data-provider="fake"] .usage-prov-enable input').click()`)
-      tries = 0
-      while (svc.list().length !== 11 && tries++ < 60) await sleep(200)
-      const enabledOk = svc.list().length === 11
 
       // 4 ── paste-once, WRITE-ONLY forever (vault-conditioned probes).
       //      Value-set + click happen in ONE evaluation so an async grid
@@ -152,15 +172,26 @@ export function runUsageSetSmoke(win: BrowserWindow): void {
       }
       envRefRefused = envRefRefused && keySlot('openrouter').kind === 'none'
 
-      // 6 ── web-session store-read opt-in persists (default OFF)
-      await ES(`document.querySelector('.usage-prov-row[data-provider="cursor"] .usage-webread input').click()`)
+      // 6 ── web-session store-read opt-in persists (default OFF). webReadSet now refreshes
+      // the grid after the write (like the enable toggle), so the checkbox tracks the
+      // persisted KV across the poller's re-renders — the same driveToggle contract applies.
+      const cursorWebRead = '.usage-prov-row[data-provider="cursor"] .usage-webread input'
+      await driveToggle(cursorWebRead, true)
       tries = 0
       while (kv.getSetting('usage.webread.cursor') !== '1' && tries++ < 40) await sleep(150)
       const webReadOn = kv.getSetting('usage.webread.cursor') === '1'
-      await ES(`document.querySelector('.usage-prov-row[data-provider="cursor"] .usage-webread input').click()`)
+      await driveToggle(cursorWebRead, false)
       tries = 0
       while (kv.getSetting('usage.webread.cursor') !== '0' && tries++ < 40) await sleep(150)
       const webReadOk = webReadOn && kv.getSetting('usage.webread.cursor') === '0'
+
+      // Flip the fake back ON now that the interactive steps are done: the plans table
+      // needs its 11 fixture rows, and this is where ENABLE-reaches-the-poller is proven
+      // (svc.list 0 -> 11), live.
+      await driveToggle(fakeEnable, true)
+      tries = 0
+      while (svc.list().length !== 11 && tries++ < 60) await sleep(200)
+      const enabledOk = svc.list().length === 11
 
       // 7 ── plans table === popover tiles (one snapshot, two surfaces)
       await ES(`window.__mogging.usage.open()`)

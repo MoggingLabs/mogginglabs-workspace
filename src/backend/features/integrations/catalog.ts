@@ -139,7 +139,7 @@ export interface RegistryDraft {
   entry: { id: string; label: string; transport: McpTransport; url?: string; command?: string; args?: string[] }
 }
 
-// The origin is PINNED (ADR 0015): an env override here let a variable repoint a
+// The origin is PINNED (ADR 0016): an env override here let a variable repoint a
 // shipped build's registry fetch. baseUrl stays a parameter — a fixture server is
 // injected at the CALL SITE (the mcpcat smoke) and the IPC handler never forwards one.
 export function fetchRegistry(

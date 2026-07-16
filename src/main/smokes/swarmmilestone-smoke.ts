@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorktree } from '@backend/features/worktrees'
-import { sh, softFps, softGapMs } from './smoke-shell'
+import { capturePaneTokenForSmoke, sh, softFps, softGapMs } from './smoke-shell'
 import { approvalListed, sendApprovalFromPane } from './reviewer-smoke-helper'
 
 // Env-gated Phase-4 SWARM MILESTONE (MOGGING_SWARMMILESTONE), two-phase like 2/05+3/06:
@@ -82,7 +82,24 @@ export function runSwarmMilestoneSmoke(win: BrowserWindow): void {
       )
       await sleep(4000) // panes spawn + roles reach the daemon
       const base = ((await ES('window.__mogging.workspace.active()')) as { ordinal: number }).ordinal * 100
-      const asPane = (n: number): Record<string, string> => ({ MOGGING_PANE_ID: String(base + n) })
+      // claim + mail-send are pane-bound (protocol v10): the out-of-pane CLI must present the
+      // pane's own daemon-minted MOGGING_PANE_TOKEN, just as a command typed inside the pane
+      // inherits it. Workers 1 and 2 drive those verbs; the reviewer (pane 3) signs off from
+      // INSIDE its pane (sendApprovalFromPane), so it needs no fabricated token here.
+      const paneTokens: Record<number, string> = {}
+      for (const n of [1, 2]) {
+        paneTokens[n] = await capturePaneTokenForSmoke({
+          write: async (command) => {
+            const sent = await cli(['send', String(base + n), command])
+            if (sent.code !== 0) throw new Error(`could not probe pane ${base + n}`)
+          },
+          sleep
+        })
+      }
+      const asPane = (n: number): Record<string, string> => ({
+        MOGGING_PANE_ID: String(base + n),
+        ...(paneTokens[n] ? { MOGGING_PANE_TOKEN: paneTokens[n] } : {})
+      })
 
       // ── A2. The ledger referees ──────────────────────────────────────────────
       const claim1 = await cli(['claim', 'src/a/**'], asPane(1))

@@ -43,7 +43,7 @@ export async function runToolPlanSmoke(): Promise<void> {
     const repo = join(dir, 'repo')
     mkdirSync(repo, { recursive: true })
     const servers = [A, B, GLOBAL_ONLY]
-    // The AppImage-survival contract, post-split (ADR 0016): the HELPER is what must
+    // The AppImage-survival contract, post-split (ADR 0017): the HELPER is what must
     // outlive the mount now, so the copy decision carries the exact validations the old
     // stableRuntimeExecutable had — packaged linux + both vars absolute + the bundled
     // resources actually INSIDE the advertised mount. An inherited APPIMAGE/APPDIR pair
@@ -74,7 +74,7 @@ export async function runToolPlanSmoke(): Promise<void> {
     writeFileSync(fakePaneTarget, "process.stdout.write('pane')\n")
     writeFileSync(fakeLauncher, stableMcpLauncherSource(fakeCurrentTarget))
     const launchFixture = (endpoint?: string): string => {
-      // The standalone helper hosts every launcher now (ADR 0016) — same host the CLI
+      // The standalone helper hosts every launcher now (ADR 0017) — same host the CLI
       // configs name, no ELECTRON_RUN_AS_NODE anywhere.
       const env: NodeJS.ProcessEnv = { ...process.env }
       if (endpoint) env.MOGGING_DAEMON_ENDPOINT = endpoint
@@ -147,7 +147,7 @@ export async function runToolPlanSmoke(): Promise<void> {
       claudeHouse.command === runtime.executable &&
       claudeHouse.args?.length === 1 &&
       claudeHouse.args[0] === runtime.mcpEntry &&
-      claudeHouse.env === undefined // post-split (ADR 0016): a bare command on the helper
+      claudeHouse.env === undefined // post-split (ADR 0017): a bare command on the helper
 
     // ── (a) codex materialization: project-scope file, no flag, git-excluded ────
     const codexEntries = composePlanEntries(plan, 'codex', servers, house)

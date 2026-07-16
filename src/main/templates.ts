@@ -14,14 +14,18 @@ export function registerTemplates(): void {
     const custom = getSettingsStore()?.loadTemplates() ?? []
     return [...PRESETS, ...custom]
   })
-  ipcMain.handle(TemplateChannels.resolve, async (_e, mix: ProviderCount[]) => {
+  // The request is either a bare mix (Home/Board/dev handles — template-padded) or
+  // `{ mix, exact: true }` (the wizard's dynamic painter — the total IS the layout).
+  ipcMain.handle(TemplateChannels.resolve, async (_e, req: ProviderCount[] | { mix?: ProviderCount[]; exact?: boolean }) => {
     const fault = wizardAuditFaults()
     if (fault) {
       fault.resolveCalls++
       await auditDelay(fault.resolveDelayMs)
       if (fault.resolveReject) throw new Error('injected layout resolution failure')
     }
-    return resolveLayout(mix)
+    const mix = Array.isArray(req) ? req : Array.isArray(req?.mix) ? req.mix : []
+    const exact = !Array.isArray(req) && req?.exact === true
+    return resolveLayout(mix, exact)
   })
   ipcMain.handle(TemplateChannels.save, (_e, t: ProviderMixTemplate) => getSettingsStore()?.saveTemplate(t))
   ipcMain.handle(TemplateChannels.remove, (_e, id: string) => getSettingsStore()?.removeTemplate(id))

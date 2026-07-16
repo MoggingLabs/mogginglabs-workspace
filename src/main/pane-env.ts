@@ -39,6 +39,22 @@ export const INHERITED_PANE_ENV = [
   'MOGGING_CLI'
 ] as const
 
+/**
+ * A per-pane GIT_TRACE_SETUP the daemon's shell integration wrote for the HOST pane
+ * (`<runtime>/bin/.shell-integration/<pid>/git-<instance>.trace`, platform/shell.ts). Inheriting
+ * it is the same class of bug as the identity vars above: the app, launched from inside a pane,
+ * hands the host pane's trace path to every child, so `paneShellLaunch` (which only writes a fresh
+ * trace when GIT_TRACE_SETUP is UNSET) never creates one — the nested panes' git-worktree cwd lane
+ * goes dead AND their git invocations append to the host pane's trace, which can then adopt a wrong
+ * worktree cwd from another app's panes. Scrubbed ONLY when it is one of OUR managed traces; a user
+ * who set GIT_TRACE_SETUP themselves for their own git debugging keeps it (mirrors managedCliBinDir).
+ */
+export function managedGitTrace(value: string | undefined): boolean {
+  if (!value || !isAbsolute(value)) return false
+  const portable = value.replace(/\\/g, '/')
+  return /(?:^|\/)MoggingLabs\/run\/(?:dev-)?v[1-9]\d*\/bin\/\.shell-integration\/\d+\/git-[^/]*\.trace$/i.test(portable)
+}
+
 const comparablePath = (value: string): string => {
   const absolute = resolve(value)
   return process.platform === 'win32' ? absolute.toLocaleLowerCase('en-US') : absolute
@@ -73,6 +89,12 @@ export function scrubInheritedPaneEnv(env: Record<string, string | undefined>): 
       found.push(name)
       delete env[name]
     }
+  }
+  // A managed per-pane git trace is pane runtime state too — drop it so the app's own
+  // panes each write a fresh one instead of appending to the host pane's (see managedGitTrace).
+  if (managedGitTrace(env.GIT_TRACE_SETUP)) {
+    found.push('GIT_TRACE_SETUP')
+    delete env.GIT_TRACE_SETUP
   }
   return found
 }

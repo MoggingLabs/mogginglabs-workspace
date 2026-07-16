@@ -199,7 +199,7 @@ account flow. **Guardrail:** verify the in-DOM `<webview>` browser dock (window.
 unaffected — it's a separate guest with its own handlers; the deny applies to the *trusted*
 renderer only.
 
-### 4.7 Split the Node runtime, then disable `runAsNode` — *Step 4, ~3–5 weeks · ADR 0016*
+### 4.7 Split the Node runtime, then disable `runAsNode` — *Step 4, ~3–5 weeks · ADR 0017*
 
 The prize, and the one item that can break invariants if rushed — so it's sequenced last and
 verified by existing smokes.
@@ -221,7 +221,7 @@ vector and a repackaging shortcut. The helper is a smaller, GUI-less, no-Keychai
 target. **Guardrails (the whole point of sequencing it last):** land the helper *first*, flip the
 fuse *second*, and gate the change on the **existing daemon-survival and control-API smokes**
 (daemon-survive-smoke, control-smoke, cwd-smoke) so I1 (daemon outlives app) and I3 (CLI
-scriptability) are proven intact before release. Write **ADR 0016** — it touches ADR 0006.
+scriptability) are proven intact before release. Write **ADR 0017** — it touches ADR 0006.
 
 ### 4.8 Runtime tamper self-check + piracy telemetry — *Step 6, optional, ~2–3 days*
 
@@ -269,8 +269,8 @@ This is a product-roadmap commitment, not a code change, but it's what makes gat
 - extend `PRODARTIFACT` banlist with the pinned entitlement/IdP/update origins (§3)
 
 **New ADRs/docs:**
-- **ADR 0015 — accounts & entitlements** (scope, custody, freemium boundary)
-- **ADR 0016 — splitting the Node runtime to disable `runAsNode`** (touches ADR 0006)
+- **ADR 0016 — accounts & entitlements** (scope, custody, freemium boundary)
+- **ADR 0017 — splitting the Node runtime to disable `runAsNode`** (touches ADR 0006)
 - update `scripts/check-credential-wording.mjs` so retired "no account/no server" absolutes can't creep back (docs/adr/0014:166-173 precedent)
 - rewrite the positioning copy (docs/00 non-goals, README tagline) to "free local core + optional Pro"
 
@@ -289,7 +289,7 @@ toolchain (Node SEA or `@yao-pkg/pkg`).
 | **P2 — inert copies** | §4.4 hardware device key · `entitlements.ts` · `ENTITLE` gate | 2–3 wk | for strong enforcement | new native addon |
 | **P3 — deterrence** | §4.5 bytecode (main-only) · §4.9 watermark · §4.8 tamper self-check | 1–2 wk | no | no |
 | **P4 — server moat** | §4.10 first server-backed Pro/Team feature | roadmap | — | server |
-| **P5 — runAsNode epic** | §4.7 runtime split → `runAsNode:false` · ADR 0016 · re-gate | 3–5 wk | no | **yes** |
+| **P5 — runAsNode epic** | §4.7 runtime split → `runAsNode:false` · ADR 0017 · re-gate | 3–5 wk | no | **yes** |
 
 **After P0–P2** (~5–6 weeks incl. the account system): a copied install is a device-locked shell
 that degrades to Free, a casual patcher hits bytecode + signed integrity, a leaked license is
@@ -310,7 +310,7 @@ closes the last ambient-code vector.
 - [ ] Offline grace works: pull the network, app keeps Pro for the grace window, then degrades to Free — never bricks (I1).
 - [ ] Boot budget still green: **≤150ms**, no anti-crack work on the critical path (re-run the MILESTONE gate).
 - [ ] Free tier still opens with **no account, fully offline**; `mogging list/send/capture` still ungated (I2/I3).
-- [ ] ADR 0015 + ADR 0016 written; positioning copy updated; credential-wording gate extended.
+- [ ] ADR 0016 + ADR 0017 written; positioning copy updated; credential-wording gate extended.
 
 ---
 

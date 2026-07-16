@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { GitStatus } from '@contracts'
@@ -147,8 +147,14 @@ async function main(): Promise<void> {
       else throw error
     }
     if (directoryLinkSupported) {
+      // Entering the repo THROUGH the link: no lexical ancestor of the probe path names the
+      // root, so the probe reports the PHYSICAL spelling. Compare realpaths — under an aliased
+      // tmpdir (8.3 short TEMP on CI Windows, /var -> /private/var on macOS) the fixture's own
+      // `whitespaceRepo` spelling is not canonical, and an exact compare would fail on the
+      // alias rather than on the property under test.
+      const linkedRoot = (await probeGitFull(join(linkedChild, 'deep'))).status?.root
       assert(
-        (await probeGitFull(join(linkedChild, 'deep'))).status?.root === whitespaceRepo,
+        !!linkedRoot && realpathSync.native(linkedRoot) === realpathSync.native(whitespaceRepo),
         'repo discovery followed a directory link lexically instead of physically'
       )
     }
@@ -198,7 +204,19 @@ async function main(): Promise<void> {
     })
     contextObserver.drain()
     assert(await waitUntil(() => tracedWorktrees.length >= 1), 'GIT_TRACE_SETUP worktree was not observed')
-    assert(contextState.current().cwd === normalizePaneCwd(repo, { mustExist: true }), 'Git worktree did not become active context')
+    // Realpath-compare: the trace reports the PHYSICAL worktree, and this state's anchor
+    // (baseRepo) is unrelated to `repo`, so no namespace translation can apply. Under an
+    // aliased tmpdir (8.3 TEMP on CI Windows, /var -> /private/var on macOS) the raw and
+    // physical spellings differ; the property under test is which DIRECTORY became context.
+    const sameDir = (a: string | null | undefined, b: string): boolean => {
+      if (!a) return false
+      try {
+        return realpathSync.native(a) === realpathSync.native(b)
+      } catch {
+        return false
+      }
+    }
+    assert(sameDir(contextState.current().cwd, repo), 'Git worktree did not become active context')
     assert(contextState.current().source === 'process', 'Git worktree did not use the passive process lane')
     assert(!readFileSync(traceFile, 'utf8').includes('status --short'), 'Git setup trace retained argv')
     contextObserver.resetAtPrompt()
@@ -213,7 +231,7 @@ async function main(): Promise<void> {
     })
     contextObserver.drain()
     assert(await waitUntil(() => tracedWorktrees.length >= 2), 'same worktree was suppressed in a later command')
-    assert(contextState.current().cwd === normalizePaneCwd(repo, { mustExist: true }), 'repeated Git worktree did not reactivate context')
+    assert(sameDir(contextState.current().cwd, repo), 'repeated Git worktree did not reactivate context')
     contextObserver.resetAtPrompt()
     contextState.acceptPrompt()
     assert(contextState.acceptWorktree(repo) === null, 'background Git worktree context was accepted without a command')

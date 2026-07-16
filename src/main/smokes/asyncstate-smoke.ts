@@ -441,7 +441,13 @@ export function runAsyncStateSmoke(win: BrowserWindow): void {
       const actNav = await showTab('activity')
       // Settle every trailList call the page makes on its own BEFORE arming: the delay config is a
       // per-channel FIFO, and a stray read would eat the 1500 meant for call #1.
-      const refreshClicked = await click('.trail-activity .trail-btn')
+      // Refresh is a house Button now (F-40) — find it by its accessible name.
+      const refreshClicked = await ES<boolean>(`(() => {
+        const b = [...document.querySelectorAll('.trail-activity .btn')].find((x) => (x.textContent || '').trim() === 'Refresh')
+        if (!b) return false
+        b.click()
+        return true
+      })()`)
       await sleep(1200)
 
       setAsyncAuditFaults({ delaySequenceMs: { [IntegrationsChannels.trailList]: [1500, 0] } })
@@ -671,11 +677,11 @@ export function runAsyncStateSmoke(win: BrowserWindow): void {
       // `btn.disabled = false`, with no finally. A rejection skipped the re-enable and the button
       // stayed disabled FOREVER — the user could not even retry the call that had just failed.
       const integNav = await showTab('integrations')
-      // The catalog card's own Connect… button — the only door to this panel. (startsWith, not an
-      // exact match: the label carries a typographic ellipsis, and its two siblings in that row
-      // are 'Check feed' and 'Export', so the prefix is unambiguous.)
+      // The catalog card's own primary — the only door to this panel. (F-22 renamed it
+      // 'Add to CLI…': Connect is reserved for account connections; startsWith, not an
+      // exact match, because the label carries a typographic ellipsis.)
       const panelOpened = await ES<boolean>(`(() => {
-        const b = [...document.querySelectorAll('.cat-card .trail-btn')].find((x) => (x.textContent || '').trim().startsWith('Connect'))
+        const b = [...document.querySelectorAll('.cat-card .trail-btn')].find((x) => (x.textContent || '').trim().startsWith('Add to CLI'))
         if (!b) return false
         b.click()
         return true
@@ -763,7 +769,7 @@ export function runAsyncStateSmoke(win: BrowserWindow): void {
       const cardInTodo = await exists('.board-lane[data-lane="todo"] .board-card')
 
       await clearToasts()
-      setAsyncAuditFaults({ reject: [BoardChannels.save] })
+      setAsyncAuditFaults({ reject: [BoardChannels.patch] })
       // The ⋯ menu's "Move to Doing" — the same mutation the drop handler runs.
       const moveClicked = await ES<boolean>(`(() => {
         const more = document.querySelector('.board-lane[data-lane="todo"] .board-card .board-card-more')

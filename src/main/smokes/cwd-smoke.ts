@@ -44,7 +44,13 @@ async function poll<T>(probe: () => T | Promise<T>, accept: (value: T) => boolea
     await sleep(STEP_MS)
     last = await probe()
   }
-  if (!accept(last)) throw new Error(`cwd smoke timed out after ${timeoutMs}ms`)
+  if (!accept(last)) {
+    // Name the CALL SITE in the failure: this gate is ~25 sequential polls, and a bare
+    // "timed out" forces whoever reads a red result to bisect them by hand (it cost a
+    // full CI round trip to learn nothing from run 29454207773's artifact).
+    const site = new Error('site').stack?.split('\n').slice(2, 4).join(' | ')?.trim() ?? 'unknown'
+    throw new Error(`cwd smoke timed out after ${timeoutMs}ms at ${site}`)
+  }
   return last
 }
 

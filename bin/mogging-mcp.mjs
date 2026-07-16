@@ -21,16 +21,16 @@
 // Register (until the phase-8 MCP manager automates it):
 //   claude mcp add mogging -- node <path>/bin/mogging-mcp.mjs
 import { closeSync, openSync, readFileSync, statSync, writeSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { connectEndpoint } from './lib/endpoint-client.mjs'
+import { runFile } from './lib/runtime-paths.mjs'
 
 // Keep in sync with DAEMON_PROTOCOL_VERSION in src/contracts/daemon/protocol.ts (this file is
 // plain Node — it cannot import the TS contract). It names the runtime DIRECTORY both the daemon
 // socket and the app's browser-control endpoint live in, so a stale value does not degrade: every
 // tool silently reports "the daemon is not running". Enforced by scripts/check-protocol-version.mjs.
-const PROTOCOL = 9
+const PROTOCOL = 10
 // Release channel (keep in sync with contracts ReleaseChannel; same gate). Inside a pane the
 // MOGGING_*_ENDPOINT envs below pin the exact app, so this only decides the well-known FALLBACK
 // path — run/dev-v4 when MOGGING_CHANNEL=dev is inherited (dev panes) or --dev is passed.
@@ -38,23 +38,17 @@ const CHANNEL = process.argv.includes('--dev') || process.env.MOGGING_CHANNEL ==
 const RUN_SEGMENT = (CHANNEL === 'dev' ? 'dev-v' : 'v') + PROTOCOL
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
-function runtimeBase() {
-  return process.platform === 'win32'
-    ? process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
-    : process.env.XDG_RUNTIME_DIR || join(homedir(), 'Library', 'Application Support')
-}
-
 /** App (browser-control) endpoint file — same discovery as 6/05b. */
 function appEndpointFile() {
   if (process.env.MOGGING_BROWSER_ENDPOINT) return process.env.MOGGING_BROWSER_ENDPOINT
-  return join(runtimeBase(), 'MoggingLabs', 'run', RUN_SEGMENT, 'browser-control.json')
+  return runFile(RUN_SEGMENT, 'browser-control.json')
 }
 
 /** Daemon endpoint file — the `mogging` CLI's discovery, exactly: injected
  *  inside panes, well-known per-user runtime path outside. */
 function daemonEndpointFile() {
   if (process.env.MOGGING_DAEMON_ENDPOINT) return process.env.MOGGING_DAEMON_ENDPOINT
-  return join(runtimeBase(), 'MoggingLabs', 'run', RUN_SEGMENT, 'endpoint.json')
+  return runFile(RUN_SEGMENT, 'endpoint.json')
 }
 
 // ── The catalog (ONE piece of data; the hand-written array died in 8/02) ─────
@@ -265,9 +259,10 @@ async function handleBrowserCall(id, def, args) {
     }
     // Shape the result as MCP text content (screenshots return the data URL).
     const payload = {}
-    for (const k of ['url', 'title', 'text', 'value', 'png']) if (r[k] !== undefined) payload[k] = r[k]
+    for (const k of ['url', 'title', 'text', 'value', 'png', 'truncated', 'activeTabId']) if (r[k] !== undefined) payload[k] = r[k]
     if (r.nodes) payload.nodes = r.nodes
     if (r.lines) payload.lines = r.lines
+    if (r.tabs) payload.tabs = r.tabs
     toolText(id, Object.keys(payload).length ? JSON.stringify(payload) : 'ok')
   } catch (e) {
     toolError(id, String(e.message || e))
@@ -277,14 +272,17 @@ async function handleBrowserCall(id, def, args) {
 async function handleControlCall(id, def, args) {
   try {
     if (def.upstream === 'app') {
-      // board.list — the board lives app-side; card text goes to the CALLING
-      // MODEL only (same class as capture: never telemetry, logs, app state).
+      // Board reads live app-side; card text goes to the CALLING MODEL only
+      // (same class as capture: never telemetry, logs, app state). The reply
+      // is the endpoint's payload verbatim: list_board -> { board, cards },
+      // get_card -> { card, activity }.
       const r = await callApp(def.verb, args)
       if (!r.ok) {
-        toolError(id, `board read failed: ${r.reason || 'the app could not list the board'}`)
+        toolError(id, `board read failed: ${r.reason || 'the app could not read the board'}`)
         return
       }
-      toolText(id, JSON.stringify(r.cards ?? []))
+      const { ok: _ok, t: _t, id: _id, ...payload } = r
+      toolText(id, JSON.stringify(payload))
       return
     }
     switch (def.verb) {
@@ -408,8 +406,11 @@ function writeArgsProblem(def, args) {
   if (def.name === 'release_files' && !args.pattern && args.all !== true) {
     return 'one of "pattern" or all=true is required'
   }
-  if (def.name === 'update_card' && args.column === undefined && args.note === undefined) {
-    return 'one of "column" or "note" is required'
+  if (def.name === 'update_card') {
+    const mutating = ['column', 'note', 'title', 'priority', 'labels', 'blocked', 'blockedReason', 'before']
+    if (!mutating.some((k) => args[k] !== undefined)) {
+      return `at least one of ${mutating.map((k) => `"${k}"`).join(', ')} is required`
+    }
   }
   return null
 }
@@ -473,8 +474,9 @@ async function dispatchWrite(def, args, by) {
     }
     case 'mail-send': {
       // Sender = pane identity, always (attributable); body capped daemon-side
-      // at 16 KB exactly like `mogging mail send`.
-      const m = await callDaemon({ t: 'mail-send', from: by, to: String(args.to), body: args.body }, ['mailed'])
+      // at 16 KB exactly like `mogging mail send`. The pane token binds the sender
+      // to `by` — the daemon refuses an unbound pane sender (badpaneauth).
+      const m = await callDaemon({ t: 'mail-send', from: by, to: String(args.to), body: args.body, token: paneToken() }, ['mailed'])
       if (m.t === 'error') return { error: `mail rejected (${m.reason || 'error'})` }
       return {
         text: `mail #${m.id} sent`,
@@ -482,28 +484,61 @@ async function dispatchWrite(def, args, by) {
       }
     }
     case 'claim': {
-      const m = await callDaemon({ t: 'claim', pattern: args.pattern, from: by }, ['claimed', 'claim-denied'])
+      const m = await callDaemon({ t: 'claim', pattern: args.pattern, from: by, token: paneToken() }, ['claimed', 'claim-denied'])
       if (m.t === 'claim-denied') return { error: `DENIED — overlaps "${m.pattern}" owned by pane ${m.ownerPaneId}` }
       if (m.t === 'error') return { error: `claim rejected (${m.reason || 'error'})` }
       return { text: `claim #${m.id} granted`, receipt: {} }
     }
     case 'release': {
-      const m = await callDaemon({ t: 'release', pattern: args.pattern, all: args.all === true, from: by }, ['released'])
+      const m = await callDaemon({ t: 'release', pattern: args.pattern, all: args.all === true, from: by, token: paneToken() }, ['released'])
       if (m.t === 'error') return { error: `release rejected (${m.reason || 'error'})` }
       return { text: `released ${m.count}`, receipt: {} }
     }
-    case 'board.save': {
-      const r = await callApp('board.save', { card: args.card, column: args.column, note: args.note })
+    default: {
+      // Board v2 writes all ride the app endpoint; main is the one writer
+      // (CAS + claim rule + activity). Refusals come back verbatim and are
+      // translated here into text a MODEL can act on — the fresh card rides
+      // along on a conflict so the agent can retry without another read.
+      if (!def.verb.startsWith('board.')) return { error: `unroutable write verb: ${def.verb}` }
+      const r = await callApp(def.verb, args)
       if (!r.ok) {
-        return { error: r.reason === 'unknown-card' ? `unknown card ${args.card}` : `card update failed: ${r.reason || 'error'}` }
+        const cardState = r.card ? ` Current state: ${JSON.stringify(r.card)}` : ''
+        switch (r.reason) {
+          case 'unknown-card':
+            return { error: `unknown card ${args.card ?? ''} (not on your project's board)` }
+          case 'conflict':
+            return { error: `refused — the card changed since your expectedRevision.${cardState}` }
+          case 'claimed':
+            return { error: `refused — pane ${r.owner ?? '?'} is working this card. Coordinate via mail_send, or pick another card.${cardState}` }
+          case 'not-holder':
+            return { error: `refused — your pane does not hold this card${r.owner != null ? ` (pane ${r.owner} does)` : ''}` }
+          case 'invalid':
+            return { error: 'refused — the write was invalid (empty title, unknown field value, or a bad "before" target)' }
+          case 'forbidden':
+            return { error: 'refused — this workspace has not granted board writes' }
+          default:
+            return { error: `card write failed: ${r.reason || 'error'}` }
+        }
       }
+      const createdId = def.verb === 'board.create' && r.card ? String(r.card.id) : undefined
+      const DONE_TEXT = {
+        'board.create': () => `card ${createdId} created`,
+        'board.update': () => `card ${args.card} updated`,
+        'board.claim': () => `card ${args.card} claimed by your pane`,
+        'board.release': () => `card ${args.card} released`,
+        'board.comment': () => `comment added to card ${args.card}`,
+        'board.archive': () => `card ${args.card} archived`
+      }
+      const text = (DONE_TEXT[def.verb] || (() => `card write ok`))()
+      const body = r.card ? `${text}\n${JSON.stringify(r.card)}` : text
       return {
-        text: `card ${args.card} updated`,
-        receipt: { card: String(args.card), ...(r.pane != null ? { pane: String(r.pane) } : {}) }
+        text: body,
+        receipt: {
+          card: String(createdId ?? args.card ?? ''),
+          ...(r.pane != null ? { pane: String(r.pane) } : {})
+        }
       }
     }
-    default:
-      return { error: `unroutable write verb: ${def.verb}` }
   }
 }
 

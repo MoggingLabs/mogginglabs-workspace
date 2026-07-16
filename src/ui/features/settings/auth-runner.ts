@@ -1,4 +1,4 @@
-import type { HostedCliId } from '@contracts'
+import { formulaPaneId, type HostedCliId } from '@contracts'
 import { showToast } from '../../components'
 import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
@@ -60,7 +60,7 @@ export async function runIntegrationAuthorization(opts: {
   })
   if (!opened) return { ok: false, reason: 'The plain terminal could not be opened.' }
 
-  const paneId = opened.ordinal * 100 + 1
+  const paneId = formulaPaneId(opened.ordinal, 1) // a fresh workspace's first slot
   publish(key, { phase: 'running', message: `Authorization is running in plain terminal ${paneId}.` })
   const live = await whenPaneLive(paneId, 15_000)
   if (!live) {

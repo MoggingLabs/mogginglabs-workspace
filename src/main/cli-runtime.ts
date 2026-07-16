@@ -6,9 +6,16 @@ import { runtimeDir } from './daemon-client'
 import { helperRuntime } from './node-helper'
 
 const SATELLITES = [
+  // Shared ESM helpers FIRST — every satellite below imports from lib/, so the helpers
+  // must land before the files that resolve them (a `mogging` run during the copy window
+  // must never find an entry whose import target is not there yet). All three satellites
+  // derive their runtime paths from lib/runtime-paths.mjs (the bin twin of
+  // src/backend/platform/runtime-paths.ts), and mogging-mcp/-connection speak the daemon
+  // via lib/endpoint-client.mjs.
+  join('lib', 'runtime-paths.mjs'),
+  join('lib', 'endpoint-client.mjs'),
   'mogging.mjs',
   'mcp-catalog.json',
-  join('lib', 'endpoint-client.mjs'),
   // The connection bridge (ADR 0014): a CLI spawns this to reach a service the APP
   // is connected to. Same helper, same socket, no catalog of its own.
   'mogging-connection.mjs',
@@ -37,7 +44,7 @@ export interface CliRuntime {
    * validator refuses any env value that is not a `${VAR}` reference — deliberately, so
    * no credential literal can ever be written into a CLI config. The shim was born to
    * absorb the `ELECTRON_RUN_AS_NODE=1` literal that rule refuses; since the runtime
-   * split (ADR 0016) there is no env to absorb — the shim simply binds the standalone
+   * split (ADR 0017) there is no env to absorb — the shim simply binds the standalone
    * helper to the bridge entry — but it stays: the config line remains a bare, stable
    * command that survives helper-path changes without rewriting every CLI config.
    */
@@ -55,7 +62,7 @@ const shQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`
 const cmdLiteral = (value: string): string => value.replace(/%/g, '%%')
 
 export function cliShimSource(platform: NodeJS.Platform, executable: string, cli: string): string {
-  // `executable` is the standalone Node helper (ADR 0016) — a plain node, so the shim
+  // `executable` is the standalone Node helper (ADR 0017) — a plain node, so the shim
   // sets NOTHING: the ELECTRON_RUN_AS_NODE line died with the RunAsNode fuse.
   if (platform === 'win32') {
     return '@echo off\r\n' + `"${cmdLiteral(executable)}" "${cmdLiteral(cli)}" %*\r\n`
@@ -158,7 +165,7 @@ export function stableMcpLauncherSource(target: string): string {
  * self-contained CLI/MCP files to the private, protocol-versioned runtime before the daemon
  * starts, then prepends a generated shim to the environment inherited by both PTY backends.
  * Keeping both the script and executable outside an AppImage mount lets pane commands and CLI
- * MCP configs outlive the app process. The bundled standalone helper (ADR 0016) means no
+ * MCP configs outlive the app process. The bundled standalone helper (ADR 0017) means no
  * agent needs a system Node — and the signed Electron binary no longer doubles as one.
  */
 export function installCliRuntime(): CliRuntime {

@@ -68,8 +68,12 @@ export function runBoardFailSmoke(win: BrowserWindow): void {
       // A third handoff becomes ready just before its startup deadline. The
       // readiness verdict owns the subsequent 800 ms settle beat; the failure
       // timer must not win merely because that beat crosses nine seconds.
+      // The launch is 'claude' and the late verdict is 'claude': a handoff
+      // hands only to THE provider it launched (an unknown id hands to
+      // nothing, ever — that is the fail-closed cases above; a stray agent
+      // misattributed to the pane must never collect another card's prose).
       const slowCardId = String(await ES(`window.__mogging.board.createCard(${JSON.stringify(`${SLOW_MARKER} hand off`)}, '')`))
-      const slowStarted = Boolean(await ES(`window.__mogging.board.startOnCard(${JSON.stringify(slowCardId)}, 'missing-audit-agent')`))
+      const slowStarted = Boolean(await ES(`window.__mogging.board.startOnCard(${JSON.stringify(slowCardId)}, 'claude')`))
       await sleep(8500)
       const slowBefore = ((await ES(`window.__mogging.board.list()`)) as { id: string; paneId?: number }[])
         .find((c) => c.id === slowCardId)

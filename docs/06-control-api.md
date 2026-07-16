@@ -82,12 +82,15 @@ auth/key/pane refusals.
 
 ## The MCP server speaks these verbs too
 
-Phase-8/02–03. The house MCP server (`bin/mogging-mcp.mjs`) exposes the same
-control plane to an *agent* as tools: `list_panes`/`capture_pane`/`mail_read`/
-`list_owners`/`list_board` are the reads, and `send_to_pane`/`send_key`/
-`mail_send`/`claim_files`/`release_files`/`update_card` are the writes —
-byte-identical semantics to the CLI verbs above (`send_to_pane` *is* `mogging
-send`). The difference is the boundary: an agent's writes are gated by a
-per-workspace grant (`'none'` by default — invisible and refused), where the CLI
-speaks over the daemon's already-authed socket. Same daemon, same daemon stays
-v3. See **docs/14 — Integrations** for the catalog, grants, and scoping.
+Phase-8/02–03, widened by Board v2. The house MCP server (`bin/mogging-mcp.mjs`)
+exposes the same control plane to an *agent* as tools: `list_panes`/
+`capture_pane`/`mail_read`/`list_owners`/`list_board`/`get_card` are the reads,
+and `send_to_pane`/`send_key`/`mail_send`/`claim_files`/`release_files` plus the
+board's full CRUD (`update_card`/`create_card`/`claim_card`/`release_card`/
+`comment_card`/`archive_card`) are the writes — the fleet writes byte-identical
+to the CLI verbs above (`send_to_pane` *is* `mogging send`), the board writes
+funneled through main's one writer (revision CAS + the claim rule, docs/18). The
+difference is the boundary: an agent's writes are gated by a per-workspace grant
+(`'none'` by default — invisible and refused), where the CLI speaks over the
+daemon's already-authed socket. Same daemon, no wire change. See **docs/14 —
+Integrations** for the catalog, grants, and scoping.

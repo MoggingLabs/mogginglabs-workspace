@@ -68,7 +68,7 @@ const DENIED = [
   ['app-never-authenticates-server', /\bnever\s+runs?,?\s+proxies,?\s+or\s+authenticates?\s+a\s+server\b/gi],
   ['oauth-belongs-to-each-cli', /\boauth\s+belongs\s+to\s+each\s+cli\b/gi],
   ['no-oauth-token-stored', /\bno\s+oauth\s+tokens?\s+(?:are\s+)?(?:stored|held)\b/gi],
-  // ── ADR 0015 made these conditional. The product is going paid: a MoggingLabs
+  // ── ADR 0016 made these conditional. The product is going paid: a MoggingLabs
   // account and a MoggingLabs server WILL exist, gating PAID features only. The claim
   // to make now is the bounded one — the free local core needs no account and works
   // fully offline — never the product-wide absolute. Each retired phrase below was
@@ -89,22 +89,22 @@ const DENIED = [
  * would quietly bless whatever that file said next.
  */
 const ALLOWED = [
-  // ── ADR 0015 retirements: the two dated records that legitimately keep the words.
-  // ADR 0002 stands VERBATIM (an explicit ADR-0015 guardrail) — its 2026-07-01 text is
-  // the decision record, and ADR 0015 §1 is what bounds it. The productization research
+  // ── ADR 0016 retirements: the two dated records that legitimately keep the words.
+  // ADR 0002 stands VERBATIM (an explicit ADR-0016 guardrail) — its 2026-07-01 text is
+  // the decision record, and ADR 0016 §1 is what bounds it. The productization research
   // doc is the inventory that lists every claim BY QUOTING IT, in order to retire it —
   // scrubbing the quotes would falsify the record the retirement is based on.
   {
     file: 'docs/adr/0002-never-broker-provider-auth.md',
     line: 23,
     contains: 'No account, no backend',
-    reason: 'ADR 0002 stands verbatim (ADR 0015 guardrail); a dated decision record, bounded by ADR 0015 §1-2.'
+    reason: 'ADR 0002 stands verbatim (ADR 0016 guardrail); a dated decision record, bounded by ADR 0016 §1-2.'
   },
   {
     file: 'docs/adr/0002-never-broker-provider-auth.md',
     line: 25,
     contains: 'no subscription to us',
-    reason: 'ADR 0002 stands verbatim (ADR 0015 guardrail); the 2026-07-01 positioning line, retired from live copy by ADR 0015.'
+    reason: 'ADR 0002 stands verbatim (ADR 0016 guardrail); the 2026-07-01 positioning line, retired from live copy by ADR 0016.'
   },
   {
     file: 'docs/research/2026-07-productization-accounts-subscriptions.md',
@@ -116,19 +116,19 @@ const ALLOWED = [
     file: 'docs/research/2026-07-productization-accounts-subscriptions.md',
     line: 54,
     contains: 'no subscription to us',
-    reason: 'the claims-inventory table: cites the tagline in order to retire it (ADR 0015).'
+    reason: 'the claims-inventory table: cites the tagline in order to retire it (ADR 0016).'
   },
   {
     file: 'docs/research/2026-07-productization-accounts-subscriptions.md',
     line: 55,
     contains: 'no credits, no account system',
-    reason: 'the claims-inventory table: cites docs/00\'s old non-goals row in order to retire it (ADR 0015).'
+    reason: 'the claims-inventory table: cites docs/00\'s old non-goals row in order to retire it (ADR 0016).'
   },
   {
     file: 'docs/research/2026-07-productization-accounts-subscriptions.md',
     line: 56,
     contains: 'no MoggingLabs server',
-    reason: 'the claims-inventory table: cites ADR 0014\'s old closing sentence, since amended by ADR 0015.'
+    reason: 'the claims-inventory table: cites ADR 0014\'s old closing sentence, since amended by ADR 0016.'
   },
   {
     file: 'docs/14-integrations.md',

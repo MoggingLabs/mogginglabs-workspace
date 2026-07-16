@@ -82,7 +82,7 @@ Two important clarifications:
    a founder decision, but the evidence is one-sided.
 
 **Docs that must change when this lands:** docs/00 non-goals, README tagline nuance ("the
-core is free, local, account-free; Pro is optional"), a new **ADR 0015 — accounts &
+core is free, local, account-free; Pro is optional"), a new **ADR 0016 — accounts &
 entitlements** stating scope and custody rules, and `scripts/check-credential-wording.mjs`
 grows patterns so old "no account, no server" absolutes don't creep back into copy that is no
 longer unconditionally true (the gate already exists for exactly this failure mode,
@@ -385,7 +385,7 @@ shrink it.
 
 | Phase | Work | Est. |
 |---|---|---|
-| **A — Legal & signing** | buy certs, flip CI secrets (signing-dryrun → Release), EULA/ToS/privacy, close `MOGGING_REGISTRY_BASE`, flip ASAR-integrity fuses, ADR 0015 + wording-gate update, rewrite positioning copy | 1–2 wks |
+| **A — Legal & signing** | buy certs, flip CI secrets (signing-dryrun → Release), EULA/ToS/privacy, close `MOGGING_REGISTRY_BASE`, flip ASAR-integrity fuses, ADR 0016 + wording-gate update, rewrite positioning copy | 1–2 wks |
 | **B — Accounts** | pick IdP + MoR (the two decisions), backend skeleton (§3.4), `account.ts` login via lifted connections PKCE machinery, vault custody, `account.ipc.ts`, Settings UI, telemetry identify | 2–4 wks |
 | **C — Billing & entitlements** | MoR product/checkout, webhook consumer, entitlement JWT issue/verify/cache/grace, `Entitlements` port, first 2–3 gates + locked-state UX, device registry, **gates for the gates** (ENTITLE smoke: expired/offline/tampered/downgrade paths) | 2–4 wks |
 | **D — Launch** | landing + checkout page, winget/homebrew submission, funnel events, beta cohort, pricing page, Show HN | 2–3 wks |

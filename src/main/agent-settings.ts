@@ -131,6 +131,26 @@ function defaultTarget(): AgentConfigTarget {
   return { scope: 'user', targetId: 'default', execution: { kind: 'local' } }
 }
 
+/**
+ * The env a gate's isolated settings home resolves paths against.
+ *
+ * Overriding home/APPDATA/XDG_CONFIG_HOME is not enough: `sources.ts` `pointer()` reads the
+ * provider's OWN config-dir env vars FIRST (CLAUDE_CONFIG_DIR, CODEX_HOME, GEMINI_CONFIG_DIR), so
+ * an inherited one — set whenever a gate runs from inside a Claude/Codex/Gemini session, i.e. the
+ * fleet/dogfood/CI-from-a-pane case — steers the "isolated" gate straight into the user's REAL CLI
+ * config and mutates it (measured 2026-07-15: SETAGENTCFG wrote a fixture, incl. a fake API key,
+ * into a live CLAUDE_CONFIG_DIR). Delete the pointers so `pointer()` falls back to the isolated home.
+ */
+function isolatedEnv(home: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    APPDATA: join(home, 'AppData', 'Roaming'),
+    XDG_CONFIG_HOME: join(home, '.config')
+  }
+  for (const pointerVar of ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'GEMINI_CONFIG_DIR']) delete env[pointerVar]
+  return env
+}
+
 async function resolveContext(provider: AgentConfigProviderId, target: AgentConfigTarget): Promise<AgentConfigResolvedContext> {
   const store = getSettingsStore()
   const definition = findAgentCliDefinition(provider)
@@ -164,13 +184,7 @@ async function resolveContext(provider: AgentConfigProviderId, target: AgentConf
       home: isolatedSettingsHome ?? app.getPath('home'),
       cwd,
       platform: process.platform,
-      env: isolatedSettingsHome
-        ? {
-            ...process.env,
-            APPDATA: join(isolatedSettingsHome, 'AppData', 'Roaming'),
-            XDG_CONFIG_HOME: join(isolatedSettingsHome, '.config')
-          }
-        : process.env,
+      env: isolatedSettingsHome ? isolatedEnv(isolatedSettingsHome) : process.env,
       profileEnv,
       profile: target.scope === 'profile',
       execution: target.execution

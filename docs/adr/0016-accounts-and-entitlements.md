@@ -1,4 +1,4 @@
-# ADR 0015 — Accounts & entitlements: the stance before the feature
+# ADR 0016 — Accounts & entitlements: the stance before the feature
 
 - **Status:** Accepted (2026-07-15)
 - **Amends:** one sentence of [ADR 0014](0014-app-held-service-connections.md) ("What
@@ -171,6 +171,6 @@ gate).
 - **FUSES joins the sweep** (§7): the exact fuse wall read off a packaged artifact,
   plus the tampered-asar refusal proof; the same gate runs against the packaged
   byproducts in CI (`linux-boot`, `signing-dryrun`) and blocks a drifted release
-  before upload (`release.yml`). See [docs/18](../18-accounts.md).
+  before upload (`release.yml`). See [docs/18](../19-accounts.md).
 - **When the account ships**, its ADR must cite this one and satisfy every stance
   above — this document is the checklist its review runs against.

@@ -172,11 +172,17 @@ export async function runAgentSettingsSmoke(): Promise<void> {
     assert.equal(refreshedRows.get('config')?.writable, false)
     assert.deepEqual(refreshedRows.get('config')?.scopes, ['session'])
 
+    // Scrub the provider config-dir pointers: sources.ts pointer() reads CLAUDE_CONFIG_DIR /
+    // CODEX_HOME / GEMINI_CONFIG_DIR FIRST, so an inherited one (this smoke run from inside a
+    // real CLI session) steers selectAgentConfigSource — and the writeFileSync below — into the
+    // user's REAL config. Delete them so resolution falls back to the isolated `home`.
+    const fixtureEnv: NodeJS.ProcessEnv = { ...process.env, APPDATA: appData, XDG_CONFIG_HOME: join(home, '.config') }
+    for (const pointerVar of ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'GEMINI_CONFIG_DIR']) delete fixtureEnv[pointerVar]
     const pathContext: AgentConfigPathContext = {
       home,
       cwd,
       platform: process.platform,
-      env: { ...process.env, APPDATA: appData, XDG_CONFIG_HOME: join(home, '.config') },
+      env: fixtureEnv,
       execution: { kind: 'local' }
     }
 

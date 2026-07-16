@@ -13,6 +13,9 @@ Aider, OpenCode). Pure + Electron-free; shared with the settings-driven auth fea
   session transcripts from the provider's other config homes into the launch home (whole
   files at the CLIs' documented paths, newer-wins, 30-day bound), so a profile failover
   resumes the same conversation on the next subscription.
+- `title.ts` — the pane-title layer: per-CLI map of each provider's OWN "what am I doing"
+  title signal (the pane header renders OSC 0/2 titles), plus the codex launch args that
+  pin its live-tested item mix; gemini's share rides `geminiSystemSettings` (notify-hook.ts).
 
 **Never** put provider credentials here — adapters build the *command* only; each CLI
 authenticates the user's own account itself (ADR 0002). Main exposes `detect` + `command` over

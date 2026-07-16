@@ -98,7 +98,7 @@ export function runBoardRenderSmoke(win: BrowserWindow): void {
       const IN_DOING = JSON.stringify(`.board-lane[data-lane="doing"] ${cardSel}`)
       await ES(`(async () => {
         const c = window.__mogging.board.list().find((x) => x.id === ${CARD})
-        if (c) { await window.bridge.invoke('board:save', { ...c, paneId: 101, workspaceId: 'fx-ws' }); await window.__mogging.board.refresh() }
+        if (c) { await window.bridge.invoke('board:patch', { id: c.id, patch: { paneId: 101, workspaceId: 'fx-ws' } }); await window.__mogging.board.refresh() }
         return 1
       })()`)
       await ES(`window.__mogging.attention.setPaneState(101, 'busy')`)

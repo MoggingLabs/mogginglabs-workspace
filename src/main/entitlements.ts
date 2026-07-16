@@ -14,7 +14,7 @@ import {
 import { accessTokenForEntitlement, deviceBindingJkt, dpopProofForResource, setAccountLoginHook, setAccountLogoutHook } from './account'
 import { vaultClearKey, vaultLoad, vaultStore } from './vault'
 
-// The entitlement engine (ADR 0015, phase-accounts/05). An entitlement is a SIGNED
+// The entitlement engine (ADR 0016, phase-accounts/05). An entitlement is a SIGNED
 // CLAIM this process verifies LOCALLY — never a boolean the UI trusts, never a server
 // answer taken at face value:
 //
@@ -23,7 +23,7 @@ import { vaultClearKey, vaultLoad, vaultStore } from './vault'
 //     a shipped build cannot be pointed at an attacker's signer;
 //   · a tampered or wrong-signature token is treated as ABSENT (→ Free), never trusted;
 //   · the verified claim is cached as vault ciphertext and honored through the
-//     offline-grace window (ADR 0015 §4) past its last successful fetch, THEN the app
+//     offline-grace window (ADR 0016 §4) past its last successful fetch, THEN the app
 //     degrades to Free — quietly, fully working, never bricked;
 //   · the claim is SENDER-CONSTRAINED to this machine (step 06): issuance rides a DPoP
 //     proof signed by the hardware device key, the issuer binds `deviceId` to that
@@ -33,7 +33,7 @@ import { vaultClearKey, vaultLoad, vaultStore } from './vault'
 //   · every gated feature reads ONE port (the @backend holder, telemetry pattern);
 //     claims cross IPC as a snapshot, the JWT and the tokens never do.
 //
-// Honesty (ADR 0015 §5): the LOCAL gates are UX — real teeth are the hardware binding
+// Honesty (ADR 0016 §5): the LOCAL gates are UX — real teeth are the hardware binding
 // above plus server-side value. On hardware-less machines (Linux today) the device key
 // is the software fallback and the binding is only as strong as the vault (docs/18).
 //
@@ -46,7 +46,7 @@ import { vaultClearKey, vaultLoad, vaultStore } from './vault'
 
 const VAULT_CACHE = 'entitlements.cache' // { jwt, fetchedAt } as safeStorage ciphertext
 
-/** The offline-grace window past the last successful fetch (ADR 0015 §4 allows 7–30
+/** The offline-grace window past the last successful fetch (ADR 0016 §4 allows 7–30
  *  days; the shipped figure is fixed when the service ships). */
 const GRACE_MS = 14 * 86_400_000
 
@@ -81,7 +81,7 @@ let deviceJktResolving: Promise<string | null> | null = null
 // A modified build sets this true POST-PAINT (never on the boot path, I7); while it holds,
 // PAID grants are withheld and the app runs as FREE — fully, never bricked (invariant I2).
 // A patched fork can strip the check that sets it, so this is EVIDENCE + a revocation
-// trigger, not prevention (docs/18-accounts.md).
+// trigger, not prevention (docs/19-accounts.md).
 let buildTampered = false
 // Emit `entitlement.device_mismatch` exactly once per process — a boolean piracy signal,
 // consent-gated by the Telemetry port (ADR 0005), never a path/id (the account is already
@@ -91,7 +91,7 @@ let deviceMismatchReported = false
 // smoke reset). An in-flight fetch captures it before its network await and refuses to
 // cache if it changed — otherwise a logout landing DURING the fetch's round-trip would
 // be overwritten when the fetch resumes and re-vaults, resurrecting a Pro claim the user
-// just signed out of (the "logout → anon-free" law, ADR 0015 / the product milestone).
+// just signed out of (the "logout → anon-free" law, ADR 0016 / the product milestone).
 let cacheEpoch = 0
 
 // ── Test seams (production leaves all of them untouched) ────────────────────────────
@@ -268,7 +268,7 @@ function reportDeviceMismatch(): void {
 /** The one truth every consumer projects from. Degrading past grace yields the FREE
  *  snapshot — the answer is always total, never a throw, never a brick. Each degrade
  *  branch NAMES its cause (`reason`, a closed claims-only enum) so the account panel
- *  can say its one honest line (ADR 0015 §4) without a second source of truth. */
+ *  can say its one honest line (ADR 0016 §4) without a second source of truth. */
 export function entitlementsSnapshot(): EntitlementsSnapshot {
   // A modified build withholds PAID grants: the answer is the generous FREE tier, so the
   // free app is untouched (invariant I2) while nothing paid is honored on a tampered fork.
@@ -283,7 +283,7 @@ export function entitlementsSnapshot(): EntitlementsSnapshot {
   return {
     plan: entry.claims.plan,
     // FEATURES are additive (set union over Free). LIMITS replace per name — the
-    // "a plan can only widen" law (ADR 0015 §2) is the ISSUER's contract, deliberately
+    // "a plan can only widen" law (ADR 0016 §2) is the ISSUER's contract, deliberately
     // NOT clamped here: fixture claims must be able to carry numbers small enough for
     // the gates to visibly bite, and tiers are data, not client arithmetic.
     features: [...new Set([...FREE_ENTITLEMENTS.features, ...entry.claims.features])],

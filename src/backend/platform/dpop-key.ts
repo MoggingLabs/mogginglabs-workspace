@@ -12,7 +12,7 @@ import { openDeviceKey, type DeviceKeyBackend } from './device-key'
 // refuses them. That is what makes a copied install worthless.
 //
 // The SOFTWARE key below is the honest fallback for machines with no usable key store
-// (Linux today — see docs/18-accounts.md): an in-process EC P-256 key persisted as
+// (Linux today — see docs/19-accounts.md): an in-process EC P-256 key persisted as
 // vault ciphertext by account.ts. It is exportable by nature — `custody` says
 // 'software' so nothing upstream can mistake it for hardware (the vault's own
 // `basic_text` precedent: degrade out loud, refuse to overclaim).

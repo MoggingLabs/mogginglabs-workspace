@@ -1,4 +1,4 @@
-// The origin pin (ADR 0015). Every remote origin a SHIPPED build talks to lives in
+// The origin pin (ADR 0016). Every remote origin a SHIPPED build talks to lives in
 // this one frozen table, as an in-code literal decided at build time.
 //
 // It exists because of the bypass it closes: the REGISTRY `_BASE` env override let an
@@ -18,7 +18,7 @@
 export const ORIGINS = Object.freeze({
   /** The official MCP registry — search + update FEED, never a trust source (8/07). */
   registry: 'https://registry.modelcontextprotocol.io'
-  // Reserved rows (ADR 0015): `entitlements`, `idp`, `updates` land HERE when those
+  // Reserved rows (ADR 0016): `entitlements`, `idp`, `updates` land HERE when those
   // services exist — as literals in this table, never behind an env read. Their
   // would-be override names (the ENTITLE / IDP / UPDATE `_BASE` variants) are already
   // banned from the shipped artifact by scripts/check-prod-artifact.mjs.
