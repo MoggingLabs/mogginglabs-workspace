@@ -564,6 +564,12 @@ textarea {
   font-size: 10px;
   line-height: 1.6;
 }
+/* F-42: a gesture in the shortcuts sheet — quiet italic words, never a key-cap. */
+.kbd-gesture {
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  font-style: italic;
+}
 
 /* Provider marks (components/provider-logo). The SVG is a 1em box — the
    wrapper's font-size IS the size, set inline by providerLogo(id, px). */
