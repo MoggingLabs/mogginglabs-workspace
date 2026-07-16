@@ -67,7 +67,19 @@ const DENIED = [
   ['never-stores-oauth-token', /\bnever\s+(?:stores?|holds?|keeps?)\s+(?:an?|any|your)\s+oauth\s+tokens?\b/gi],
   ['app-never-authenticates-server', /\bnever\s+runs?,?\s+proxies,?\s+or\s+authenticates?\s+a\s+server\b/gi],
   ['oauth-belongs-to-each-cli', /\boauth\s+belongs\s+to\s+each\s+cli\b/gi],
-  ['no-oauth-token-stored', /\bno\s+oauth\s+tokens?\s+(?:are\s+)?(?:stored|held)\b/gi]
+  ['no-oauth-token-stored', /\bno\s+oauth\s+tokens?\s+(?:are\s+)?(?:stored|held)\b/gi],
+  // ── ADR 0015 made these conditional. The product is going paid: a MoggingLabs
+  // account and a MoggingLabs server WILL exist, gating PAID features only. The claim
+  // to make now is the bounded one — the free local core needs no account and works
+  // fully offline — never the product-wide absolute. Each retired phrase below was
+  // true for every release that shipped it, which is the ADR-0014 lesson over again:
+  // a remembered sentence gets re-typed without re-checking. "Your keys, your CLIs"
+  // survives on purpose — it names provider custody (ADR 0002), which no paid tier
+  // touches — but the absolute halves retire.
+  ['no-subscription-to-us', /\bno\s+subscription\s+to\s+us\b/gi],
+  ['no-account-no-backend', /\bno\s+account,\s+no\s+backend\b/gi],
+  ['no-mogginglabs-server', /\bno\s+mogginglabs\s+server\b/gi],
+  ['no-credits-no-account-system', /\bno\s+credits,?\s+no\s+account\s+system\b/gi]
 ]
 
 /**
@@ -77,6 +89,47 @@ const DENIED = [
  * would quietly bless whatever that file said next.
  */
 const ALLOWED = [
+  // ── ADR 0015 retirements: the two dated records that legitimately keep the words.
+  // ADR 0002 stands VERBATIM (an explicit ADR-0015 guardrail) — its 2026-07-01 text is
+  // the decision record, and ADR 0015 §1 is what bounds it. The productization research
+  // doc is the inventory that lists every claim BY QUOTING IT, in order to retire it —
+  // scrubbing the quotes would falsify the record the retirement is based on.
+  {
+    file: 'docs/adr/0002-never-broker-provider-auth.md',
+    line: 23,
+    contains: 'No account, no backend',
+    reason: 'ADR 0002 stands verbatim (ADR 0015 guardrail); a dated decision record, bounded by ADR 0015 §1-2.'
+  },
+  {
+    file: 'docs/adr/0002-never-broker-provider-auth.md',
+    line: 25,
+    contains: 'no subscription to us',
+    reason: 'ADR 0002 stands verbatim (ADR 0015 guardrail); the 2026-07-01 positioning line, retired from live copy by ADR 0015.'
+  },
+  {
+    file: 'docs/research/2026-07-productization-accounts-subscriptions.md',
+    line: 25,
+    contains: 'no credits, no account system',
+    reason: 'quotes docs/00\'s old non-goals row in the research that argued for retiring it.'
+  },
+  {
+    file: 'docs/research/2026-07-productization-accounts-subscriptions.md',
+    line: 54,
+    contains: 'no subscription to us',
+    reason: 'the claims-inventory table: cites the tagline in order to retire it (ADR 0015).'
+  },
+  {
+    file: 'docs/research/2026-07-productization-accounts-subscriptions.md',
+    line: 55,
+    contains: 'no credits, no account system',
+    reason: 'the claims-inventory table: cites docs/00\'s old non-goals row in order to retire it (ADR 0015).'
+  },
+  {
+    file: 'docs/research/2026-07-productization-accounts-subscriptions.md',
+    line: 56,
+    contains: 'no MoggingLabs server',
+    reason: 'the claims-inventory table: cites ADR 0014\'s old closing sentence, since amended by ADR 0015.'
+  },
   {
     file: 'docs/14-integrations.md',
     line: 306, // was 294 — the pre-registered client-ID paragraph landed above it. The SENTENCE is unchanged.

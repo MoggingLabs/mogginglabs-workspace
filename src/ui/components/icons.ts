@@ -28,6 +28,7 @@ export type IconName =
   | 'chevron-left'
   | 'chevron-right'
   | 'chevron-up'
+  | 'circle-user'
   | 'clock'
   | 'contract'
   | 'contract-h'
@@ -80,6 +81,8 @@ const PATHS: Record<IconName, string> = {
   'chevron-left': '<path d="m15 18-6-6 6-6"/>',
   'chevron-right': '<path d="m9 18 6-6-6-6"/>',
   'chevron-up': '<path d="m18 15-6-6-6 6"/>',
+  'circle-user':
+    '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="10" r="3"/><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662"/>',
   clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
   /* Contract trio (ours) — the expand trio's EXACT inverses, shown on the active
    * expand control while its click means "restore the grid". `contract` is Lucide's

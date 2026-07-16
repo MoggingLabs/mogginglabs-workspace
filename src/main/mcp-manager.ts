@@ -66,7 +66,11 @@ export function resolveCliHomes(): CliHomes {
   }
 }
 
-/** The built-in house row — one entry, whole app; never stored, never edited. */
+/** The built-in house row — one entry, whole app; never stored, never edited.
+ *  `command` is the standalone Node helper (ADR 0016): a bare command, no env at all —
+ *  the ELECTRON_RUN_AS_NODE the old Electron-as-Node entry carried is gone with the
+ *  RunAsNode fuse. refreshManagedHouseRuntime below migrates managed configs that still
+ *  carry the old canonical on the first boot after the split. */
 export function houseServerEntry(): McpServerEntry {
   const runtime = getCliRuntime()
   return {
@@ -75,7 +79,6 @@ export function houseServerEntry(): McpServerEntry {
     transport: 'stdio',
     command: runtime.executable,
     args: [runtime.mcpEntry],
-    env: { ELECTRON_RUN_AS_NODE: '1' },
     builtIn: true
   }
 }
@@ -401,11 +404,13 @@ export function catConnect(
 }
 
 /** The update FEED: registry lookup for a preset — PREVIEW text only, never
- *  applied, never trusted (an explicit user action applies via Connect). */
-export async function catRefresh(presetId: string): Promise<{ ok: boolean; diff?: string; reason?: string }> {
+ *  applied, never trusted (an explicit user action applies via Connect).
+ *  `baseUrl` is a test seam for the mcpcat fixture registry; the IPC handler never
+ *  forwards one, so the shipped origin stays pinned (ADR 0015). */
+export async function catRefresh(presetId: string, baseUrl?: string): Promise<{ ok: boolean; diff?: string; reason?: string }> {
   const preset = findAnyPreset(String(presetId))
   if (!preset) return { ok: false, reason: 'unknown preset' }
-  const feed = await fetchRegistry(preset.label)
+  const feed = await fetchRegistry(preset.label, baseUrl)
   if (!feed.ok || !feed.drafts?.length) return { ok: false, reason: feed.reason ?? 'no registry match' }
   const match = feed.drafts[0]
   const current = preset.transport === 'http' ? preset.urlOrCommand : preset.urlOrCommand

@@ -1,14 +1,18 @@
 // SQLite-backed persistence for terminal sessions + workspaces (Phase-1/03). Electron-free
-// (better-sqlite3 is a Node native module, rebuilt for Electron's ABI by the postinstall
-// `electron-builder install-app-deps`), so it runs inside the daemon (ADR 0006) — which owns
+// (better-sqlite3 is a Node native module and ABI-bound, so it arrives through the
+// host-aware seam below: the helper's own build inside the daemon, Electron's build under
+// the in-proc path — ADR 0016), so it runs inside the daemon (ADR 0006) — which owns
 // the sessions — and could equally back the in-proc path.
 //
 // SECURITY (ADR 0002): stores ONLY id / cwd / command-label / scrollback — the user's own
 // local terminal state. It NEVER stores provider credentials; the app doesn't handle those
 // (agent CLIs self-authenticate). `command` is a launch label like "claude", not a token.
-import Database from 'better-sqlite3'
+import type BetterSqlite3 from 'better-sqlite3'
+import { requireNative } from '@backend/platform/native-require'
 import { normalizeRemoteConnection, type PersistedPane, type PersistedWorkspace } from '@contracts'
 import { addColumnIfMissing } from './db-migrate'
+
+const Database = requireNative<typeof import('better-sqlite3')>('better-sqlite3')
 
 /** The persisted shell dialects a remote row may carry (PersistedPane.remote.shell). */
 const REMOTE_SHELLS = new Set(['sh', 'bash', 'zsh', 'powershell', 'cmd'])
@@ -19,7 +23,7 @@ const asRemoteShell = (value: string | null): PersistedRemoteShell | undefined =
 const MAX_SCROLLBACK = 100_000
 
 export class SessionStore {
-  private readonly db: Database.Database
+  private readonly db: BetterSqlite3.Database
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath)

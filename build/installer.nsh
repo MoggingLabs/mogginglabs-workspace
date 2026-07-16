@@ -17,13 +17,17 @@
 ; does the Exec — this one. SetEnvironmentVariable with a NULL value deletes the
 ; variable from the installer's block, so every child it spawns is clean.
 ;
-; The daemon is unaffected: it is spawned by the app with ELECTRON_RUN_AS_NODE set
-; explicitly on its OWN spawn env (src/main/daemon-client.ts), never inherited.
+; The daemon is unaffected: it runs on the standalone Node helper (ADR 0016,
+; src/main/daemon-client.ts), which ignores the variable like any plain node. The
+; PACKAGED app ignores it too now (runAsNode fuse off) — this scrub stays as the
+; belt for the braces: dev builds still honor it, and a clean child env is simply
+; correct regardless of who reads it.
 
 ; ── THE DAEMON vs THE INSTALLER ──────────────────────────────────────────────────────────
 ;
-; The PTY daemon is spawned FROM THE INSTALLED EXE (daemon-client.ts: process.execPath +
-; ELECTRON_RUN_AS_NODE) and deliberately outlives the app (ADR 0006). A running process holds
+; The PTY daemon is spawned FROM A BINARY IN THE INSTALL DIR (daemon-client.ts: the
+; bundled standalone helper, resources/node-helper — ADR 0016) and deliberately
+; outlives the app (ADR 0006). A running process holds
 ; a Windows lock on its own executable — so electron-builder's stock running-app check closed
 ; the app, still found a live process on that exe (the daemon: windowless, unclosable, no
 ; WM_CLOSE to answer), and stalled the install forever on "MoggingLabs Workspace cannot be

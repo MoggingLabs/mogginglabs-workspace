@@ -40,8 +40,8 @@ env -u ELECTRON_RUN_AS_NODE -u ELECTRON_CLI_ARGS -u ELECTRON_EXEC_PATH -u NODE_E
 
 ## Teardown — surgical, never by image name
 
-The isolated run leaves a detached PTY daemon (electron.exe running daemon.js).
-Kill ONLY yours, via its endpoint:
+The isolated run leaves a detached PTY daemon (mogging-node.exe — the standalone
+helper, ADR 0016 — running daemon.js). Kill ONLY yours, via its endpoint:
 
 ```bash
 ep=$(ls "$iso"/local/MoggingLabs/run/v*/endpoint.json | head -1)

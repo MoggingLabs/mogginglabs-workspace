@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron'
+import { getEntitlements } from '@backend'
 import { getSettingsStore } from './app-settings'
 import { maybeFault } from './fault-port'
 import {
@@ -55,6 +56,21 @@ export function sanitizeRemote(raw: unknown): RemoteHost | null {
   return out
 }
 
+/** The SSH-hosts gate (phase-accounts/05): a NEW host past the plan's cap refuses;
+ *  editing a saved one never does. Reads the Entitlements PORT (the tier numbers live
+ *  in the config table + the signed claim, not here). The Settings form pre-checks the
+ *  same snapshot and SHOWS this wording — the handler below is the enforcement
+ *  backstop behind it, so the two can never tell different stories. Local UX only
+ *  (ADR 0015 §5); the Free row is generous. */
+export function remoteQuotaRefusal(id: string): string | null {
+  const existing = getSettingsStore()?.listRemotes() ?? []
+  if (existing.some((r) => r.id === id)) return null
+  const cap = getEntitlements().limit('maxRemotes')
+  if (existing.length < cap) return null
+  const plan = getEntitlements().snapshot().plan
+  return `Your ${plan} plan keeps up to ${cap} saved SSH ${cap === 1 ? 'host' : 'hosts'}. Remove one, or upgrade your MoggingLabs plan for more.`
+}
+
 export function registerRemotes(): void {
   ipcMain.handle(RemoteChannels.list, async () => {
     await maybeFault(RemoteChannels.list) // finding 39's seam: the other half of that tab
@@ -63,6 +79,7 @@ export function registerRemotes(): void {
   ipcMain.handle(RemoteChannels.save, (_e, raw: unknown) => {
     const remote = sanitizeRemote(raw)
     if (!remote) return false
+    if (remoteQuotaRefusal(remote.id)) return false // backstop; the form already said why
     getSettingsStore()?.saveRemote(remote)
     return true
   })

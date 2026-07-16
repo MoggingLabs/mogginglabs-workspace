@@ -35,6 +35,7 @@ import {
   type GrantKv,
   type OAuthTokens
 } from '@backend/features/integrations'
+import { getEntitlements } from '@backend'
 import { getSettingsStore } from './app-settings'
 import { getCliRuntime } from './cli-runtime'
 import { mgrStatus } from './mcp-manager'
@@ -286,6 +287,20 @@ const validConnectionUrl = (url: string): boolean => {
   }
 }
 
+/** The connections-count gate (phase-accounts/05): a NEW connection past the plan's
+ *  cap refuses with a visible upgrade reason; reconnecting or repairing a service the
+ *  user already holds is never blocked. Reads the Entitlements PORT — which tier gets
+ *  what is the config table + the signed claim, never a number here. Local UX only
+ *  (ADR 0015 §5), and the Free row is generous. */
+export function connectionQuotaRefusal(serviceId: string): string | null {
+  const held = index()
+  if (held.includes(serviceId)) return null
+  const cap = getEntitlements().limit('maxConnections')
+  if (held.length < cap) return null
+  const plan = getEntitlements().snapshot().plan
+  return `Your ${plan} plan connects up to ${cap} ${cap === 1 ? 'service' : 'services'}, all in use. Disconnect one, or upgrade your MoggingLabs plan for more.`
+}
+
 /**
  * Start an OAuth flow. Resolves when the browser has been OPENED — not when the
  * user finishes. The card goes to `connecting` and the real answer arrives later
@@ -295,6 +310,8 @@ const validConnectionUrl = (url: string): boolean => {
 export async function connect(serviceId: string, baseUrl?: string): Promise<{ ok: boolean; reason?: string }> {
   const preset = presetFor(serviceId)
   if (!preset) return { ok: false, reason: 'unknown service' }
+  const quota = connectionQuotaRefusal(serviceId)
+  if (quota) return { ok: false, reason: quota }
   const kind = authKindOf(preset)
   if (kind === 'key') return { ok: false, reason: 'This one takes an API key — paste it on the card.' }
   // The keychain gate applies to OAUTH only: it exists to refuse holding a refresh
@@ -519,6 +536,8 @@ async function onCallback(params: URLSearchParams, res: import('node:http').Serv
 export async function submitKey(serviceId: string, value: string, baseUrl?: string): Promise<{ ok: boolean; reason?: string }> {
   const preset = presetFor(serviceId)
   if (!preset) return { ok: false, reason: 'unknown service' }
+  const quota = connectionQuotaRefusal(serviceId)
+  if (quota) return { ok: false, reason: quota } // before the key is even read — a refused paste stays in the field
   if (!value.trim()) return { ok: false, reason: 'Paste the key first.' }
   if (!vaultAvailable()) {
     return { ok: false, reason: 'This machine has no OS keychain, so the key cannot be stored safely here.' }

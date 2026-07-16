@@ -1,5 +1,6 @@
 import { app } from 'electron'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, readlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 // The gate kit — the three primitives every one of the ~110 smokes hand-rolled for
@@ -33,3 +34,30 @@ export async function waitUntil(check: () => boolean | Promise<boolean>, timeout
     await sleep(stepMs)
   }
 }
+
+/**
+ * The executable image behind a live pid ('' when unreadable). The runtime-split gates
+ * (SURVIVE, RUNTIMESPLIT — ADR 0016) use it to prove the daemon's HOST really is the
+ * standalone helper: the endpoint file says who is listening, only the OS says what
+ * binary that pid is executing.
+ */
+export function processImagePath(pid: number): string {
+  try {
+    if (process.platform === 'linux') return readlinkSync(`/proc/${pid}/exe`)
+    if (process.platform === 'win32') {
+      return execFileSync(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid}).Path`],
+        { encoding: 'utf8', timeout: 15000, windowsHide: true }
+      ).trim()
+    }
+    // macOS: comm is the full executable path for a plain spawn (no argv0 games here).
+    return execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], { encoding: 'utf8', timeout: 15000 }).trim()
+  } catch {
+    return ''
+  }
+}
+
+/** Path equality under the platform's case rules (Windows paths compare case-blind). */
+export const samePath = (a: string, b: string): boolean =>
+  process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b

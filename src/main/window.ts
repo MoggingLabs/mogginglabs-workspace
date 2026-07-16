@@ -1,6 +1,79 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, session } from 'electron'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
+
+// ── Renderer lockdown (ADR 0015 §hardening) ─────────────────────────────────────────
+// The trusted renderer's blast radius is pinned to zero before the account flow ships
+// through it: no network of its own, no way to be navigated or window.open'd off the
+// app document. The webview browser dock is untouched — its guests run out of process
+// on partition sessions with their own guards (browser-dock.ts), never through here.
+
+// MUST byte-match the meta tag in src/renderer/index.html — the LOCKDOWN smoke
+// asserts the two agree, so a drift fails the sweep rather than shipping half a policy.
+// style-src keeps 'unsafe-inline' ON PURPOSE: the design-token system writes inline
+// style attributes/custom properties; "tightening" it away breaks every themed surface.
+const RENDERER_CSP =
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
+  "connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
+
+// Interactive dev is the ONE exception, and only for connect-src: vite's HMR socket is
+// a renderer-side WebSocket to the dev origin, which 'none' kills. A gate is not a dev
+// run (every gate sets MOGGING_USERDATA) and a packaged app has no dev server — both
+// get the shipped policy. electron.vite.config.ts applies the same relax to the meta
+// tag under `serve`, same condition, so header and meta never disagree.
+const interactiveDev = (): boolean =>
+  !app.isPackaged && !!process.env.ELECTRON_RENDERER_URL && !process.env.MOGGING_USERDATA
+
+const effectiveCsp = (): string =>
+  interactiveDev() ? RENDERER_CSP.replace("connect-src 'none'", 'connect-src http: ws:') : RENDERER_CSP
+
+// Observability for the LOCKDOWN smoke — main-side ground truth that the header
+// actually attached and the guards actually fired (never exposed over IPC).
+const lockdown = { policy: '', headerHits: 0, deniedNavs: [] as string[], deniedOpens: [] as string[] }
+export const lockdownDebug = (): typeof lockdown => lockdown
+
+/** The same CSP the meta tag declares, re-issued as a RESPONSE HEADER on the app's own
+ *  documents — defense in depth: a compromised document can ignore a meta tag, not a
+ *  header. defaultSession only (dock guests live on partition sessions and never pass
+ *  through it), main-frame documents only, app origin only (devtools:// stays alone). */
+function installCspHeader(): void {
+  if (lockdown.policy) return // idempotent — one listener per session is Electron law
+  lockdown.policy = effectiveCsp()
+  const devOrigin = process.env.ELECTRON_RENDERER_URL ? new URL(process.env.ELECTRON_RENDERER_URL).origin : ''
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const isAppDoc =
+      details.resourceType === 'mainFrame' &&
+      (details.url.startsWith('file:') || (!!devOrigin && details.url.startsWith(devOrigin)))
+    if (!isAppDoc) {
+      callback({})
+      return
+    }
+    lockdown.headerHits += 1
+    callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [lockdown.policy] } })
+  })
+}
+
+/** The trusted renderer can never leave its page or spawn one: window.open is denied
+ *  flat (external links route through the browser:openExternal IPC handler ->
+ *  shell.openExternal, explicitly — the account flow's only sanctioned outbound hop),
+ *  and any navigation off the app origin is refused. The dock's guests keep their own
+ *  handlers (browser-dock.ts wireGuest) — a guest's webContents is not this one. */
+function installNavigationGuard(win: BrowserWindow): void {
+  const devOrigin = process.env.ELECTRON_RENDERER_URL ? new URL(process.env.ELECTRON_RENDERER_URL).origin : ''
+  const isAppUrl = (url: string): boolean =>
+    url.startsWith('file:') || url === 'about:blank' || (!!devOrigin && url.startsWith(devOrigin))
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    lockdown.deniedOpens.push(url)
+    return { action: 'deny' }
+  })
+  const deny = (e: { preventDefault: () => void }, url: string): void => {
+    if (isAppUrl(url)) return
+    e.preventDefault()
+    lockdown.deniedNavs.push(url)
+  }
+  win.webContents.on('will-navigate', deny)
+  win.webContents.on('will-redirect', deny)
+}
 
 /** Creates the main window with hardened webPreferences. */
 export function createMainWindow(): BrowserWindow {
@@ -56,6 +129,9 @@ export function createMainWindow(): BrowserWindow {
       webviewTag: true
     }
   })
+
+  installCspHeader()
+  installNavigationGuard(win)
 
   if (process.env.MOGGING_DEVLOG) {
     win.webContents.on('console-message', (_e, _level, message, line, source) => {

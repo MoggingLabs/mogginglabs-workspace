@@ -9,10 +9,11 @@
 //
 // That is the whole point: what lands in `~/.claude.json` for a connected service
 // is a COMMAND and a service id. No token, no key, no `${VAR}` to leak — not even an
-// `env` map: the entry names a SHIM that sets ELECTRON_RUN_AS_NODE itself, so the
-// stored entry passes the registry validator (which refuses any env literal) without
-// a hole being punched in it. There is nothing in that config file worth stealing,
-// because the credential never comes here.
+// `env` map: the entry names a SHIM binding the standalone helper (ADR 0016; it once
+// existed to absorb the ELECTRON_RUN_AS_NODE literal), so the stored entry passes the
+// registry validator (which refuses any env literal) without a hole being punched in
+// it. There is nothing in that config file worth stealing, because the credential
+// never comes here.
 //
 //   claude.json -> { "command": "<...>/bin/mogging-connection.cmd",
 //                    "args": ["--connection", "sentry"] }

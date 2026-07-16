@@ -33,3 +33,23 @@ runs:
             --runtime=electron --target="$EV" \
             --dist-url=https://www.electronjs.org/headers --build-from-source < /dev/null)
         done
+
+    # The in-repo device-key addon (phase-accounts/06). Pure Node-API — ABI-stable, so
+    # plain node headers suffice (no Electron dist-url dance) — but it MUST be built
+    # explicitly here: --ignore-scripts above skipped the postinstall that builds it on
+    # dev machines, and native-preflight refuses to boot without it. Direct node-gyp,
+    # same bypass as above (the script's npx spawn hits the same broken spawn family).
+    - name: Device-key addon (postinstall was skipped above)
+      shell: bash
+      run: |
+        (cd src/backend/platform/device-key && node "$GITHUB_WORKSPACE/node_modules/node-gyp/bin/node-gyp.js" rebuild < /dev/null)
+        test -f src/backend/platform/device-key/build/Release/device_key.node
+
+    # The standalone Node helper (ADR 0016) — postinstall builds it on dev machines and
+    # was skipped above. Downloads the PINNED Node dist (runners are on 22, the pin is
+    # 24.x; sha256-verified) and installs node-pty + better-sqlite3 for the HELPER's ABI
+    # (prebuilds — no @electron/rebuild spawn anywhere near this). The script's own load
+    # probe runs the helper binary against both addons, so a broken helper fails HERE.
+    - name: Node helper (postinstall was skipped above)
+      shell: bash
+      run: node scripts/build-node-helper.mjs

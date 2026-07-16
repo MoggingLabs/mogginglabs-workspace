@@ -152,8 +152,10 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
         runtime.executable === house.command &&
         house.args?.length === 1 &&
         house.args[0] === runtime.mcpEntry &&
-        Object.keys(house.env ?? {}).length === 1 &&
-        house.env?.ELECTRON_RUN_AS_NODE === '1' &&
+        // Post-split (ADR 0016): the house row is a bare command on the standalone
+        // helper — no env at all, ELECTRON_RUN_AS_NODE least of all.
+        house.env === undefined &&
+        /mogging-node(\.exe)?$/.test(runtime.executable) &&
         [
           runtime.executable,
           runtime.cliEntry,
@@ -185,8 +187,8 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
         claudeHouse.command === runtime.executable &&
         claudeHouse.args?.length === 1 &&
         claudeHouse.args[0] === runtime.mcpEntry &&
-        Object.keys(claudeHouse.env ?? {}).length === 1 &&
-        claudeHouse.env?.ELECTRON_RUN_AS_NODE === '1' &&
+        claudeHouse.env === undefined && // the writer omits an absent env (ADR 0016)
+
         claudeHouse._managedBy === 'mogginglabs' &&
         claudeParsed.numStartups === 42 &&
         claudeParsed.mcpServers?.['foreign-tool']?.command === 'npx'
@@ -203,10 +205,7 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
         Array.isArray(geminiHouse.args) &&
         geminiHouse.args.length === 1 &&
         geminiHouse.args[0] === runtime.mcpEntry &&
-        typeof geminiHouse.env === 'object' &&
-        geminiHouse.env !== null &&
-        Object.keys(geminiHouse.env).length === 1 &&
-        (geminiHouse.env as Record<string, string>).ELECTRON_RUN_AS_NODE === '1' &&
+        geminiHouse.env === undefined && // the writer omits an absent env (ADR 0016)
         geminiParsed.theme === 'Default' &&
         !!geminiParsed.mcpServers?.['foreign-tool']
 
@@ -219,11 +218,13 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
         const writer = findWriter(cli)
         if (!writer) throw new Error(`missing ${cli} writer`)
         const file = writer.targetFile(homes)
-        // Cover both upgrade shapes: the original protocol-versioned MCP target and an
+        // Cover all three upgrade shapes: the original protocol-versioned MCP target
+        // (claude/codex also carrying the pre-split Electron-as-Node env — the exact
+        // block every install written before ADR 0016 has on disk), and an
         // already-stable entry whose app executable moved after reinstall/relocation.
         const legacyHouse = cli === 'gemini'
           ? { ...house, command: oldExecutable }
-          : { ...house, args: [runtime.mcpTarget] }
+          : { ...house, args: [runtime.mcpTarget], env: { ELECTRON_RUN_AS_NODE: '1' } }
         writeFileSync(file, writer.upsert(readFileSync(file, 'utf8'), legacyHouse), 'utf8')
         settings?.setSetting(`integrations.mgr.hash.${cli}.mogging`, sha256(writer.canonical(legacyHouse)))
       }

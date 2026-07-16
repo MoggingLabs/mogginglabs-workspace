@@ -76,7 +76,7 @@ function runSettingsShot(win: BrowserWindow): void {
   const ES = (js: string): Promise<unknown> => wc.executeJavaScript(js, true)
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
   const dir = join(process.cwd(), 'out', 'gallery', 'settings')
-  const TABS = ['appearance', 'terminal', 'clipboard', 'providers', 'profiles', 'integrations', 'usage', 'webhooks', 'privacy', 'browser', 'activity', 'shortcuts', 'about']
+  const TABS = ['appearance', 'terminal', 'clipboard', 'providers', 'profiles', 'integrations', 'usage', 'webhooks', 'privacy', 'browser', 'activity', 'account', 'shortcuts', 'about']
   const run = async (): Promise<void> => {
     try {
       mkdirSync(dir, { recursive: true })

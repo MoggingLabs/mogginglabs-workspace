@@ -19,8 +19,9 @@ export interface McpServerEntry {
   /** http: the remote server url (https; plain http only for loopback). */
   url?: string
   /** Env REFERENCES the CLI resolves at ITS runtime — stored rows must be exactly
-   *  `${VAR}` and literals are refused. The trusted built-in row is the sole exception:
-   *  it carries `ELECTRON_RUN_AS_NODE=1`, never user input or a secret. */
+   *  `${VAR}` and literals are refused. (The built-in house row used to be the one
+   *  literal exception, for `ELECTRON_RUN_AS_NODE=1`; since the runtime split it is a
+   *  bare command on the standalone helper and carries no env at all — ADR 0016.) */
   env?: Readonly<Record<string, string>>
   /** http auth headers (8/07): values are `${VAR}` or `Scheme ${VAR}` — the
    *  reference rule again; a literal token is refused at save. */

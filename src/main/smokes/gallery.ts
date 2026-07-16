@@ -5,7 +5,10 @@ import { tmpdir } from 'node:os'
 import { join, parse } from 'node:path'
 import { createWorktree } from '@backend/features/worktrees'
 import { setFakeMode } from '@backend/features/usage'
-import { UsageChannels } from '@contracts'
+import { EntitlementsChannels, FREE_ENTITLEMENTS, UsageChannels, type EntitlementsSnapshot } from '@contracts'
+import { FakeIdp } from '@backend/features/account/fake-idp'
+import { setDeviceKeyForceSoftwareForSmoke } from '@backend/platform/dpop-key'
+import { login, logout, resetAccountForSmoke, setAccountConfigForSmoke, setBrowserOpenerForSmoke, whenSettledForSmoke } from '../account'
 import { getUsageService, getUsageStatusService } from '../usage'
 import { getSettingsStore } from '../app-settings'
 import { clearTrail, flushTrailForSmoke, recordTrail } from '../trail'
@@ -367,6 +370,83 @@ export function runGallery(win: BrowserWindow): void {
           await ES(`(document.querySelector('.settings-back')?.click(), 1)`)
           await sleep(300)
         })
+        // Settings › Account (phase-accounts/10): every state the panel can say, on
+        // FIXTURE data only — the FAKE IdP's founder@mogginglabs.example (never a real
+        // email in a committed crumb), and snapshot payloads pushed through the REAL
+        // entitlements channel (the UsageChannels.alert precedent). Software-custody
+        // pinned: the gallery must never mint a key in the machine's real key store.
+        await part(`${tag}-account`, async () => {
+          const proSnap: EntitlementsSnapshot = {
+            plan: 'pro',
+            features: ['pro'],
+            limits: { ...FREE_ENTITLEMENTS.limits, maxRemotes: 25 },
+            graceState: 'fresh'
+          }
+          const freeSnap: EntitlementsSnapshot = {
+            plan: 'free',
+            features: [],
+            limits: { ...FREE_ENTITLEMENTS.limits },
+            graceState: 'expired'
+          }
+          // Each shot POLLS for the state it claims to photograph — a push that does not
+          // land (or lands one render late, the store-ordering bug this part caught) is a
+          // loud part error in errors.json, never a silently mislabeled PNG.
+          const panelIs = async (name: string, expectJs: string): Promise<void> => {
+            for (let i = 0; i < 20; i++) {
+              if (await ES<boolean>(expectJs)) return
+              await sleep(200)
+            }
+            throw new Error(`account panel never reached the ${name} state`)
+          }
+          await ES(`(document.querySelector('.titlebar-right .icon-btn[aria-label="Settings"]')?.click(), 1)`)
+          await sleep(400)
+          await ES(`window.__mogging.settingsTab('account')`)
+          await panelIs('anon', `document.querySelector('.account-status')?.textContent === 'Not signed in'`)
+          await sleep(250)
+          await snap(`${tag}-account-anon`)
+          // Sign in against the FAKE IdP (main-side seams; zero network — loopback only).
+          setDeviceKeyForceSoftwareForSmoke(true)
+          const idp = new FakeIdp({ email: 'founder@mogginglabs.example', plan: 'pro', accessTtlSec: 600 })
+          try {
+            await idp.start()
+            setAccountConfigForSmoke({
+              metadata: idp.metadata,
+              clientId: idp.clientId,
+              resource: 'https://entitlements.mogginglabs.example',
+              scopes: ['openid', 'email', 'entitlements']
+            })
+            setBrowserOpenerForSmoke(async (url) => {
+              const { redirectTo } = await idp.consent(url)
+              await fetch(redirectTo)
+            })
+            await login()
+            await whenSettledForSmoke()
+            wc.send(EntitlementsChannels.changed, proSnap) // the plan badge reads the engine's push
+            await panelIs(
+              'authed-pro',
+              `document.querySelector('.account-status')?.textContent === 'founder@mogginglabs.example' && document.querySelector('.plan-badge')?.textContent === 'Pro'`
+            )
+            await sleep(250)
+            await snap(`${tag}-account-authed`)
+            wc.send(EntitlementsChannels.changed, { ...proSnap, graceState: 'grace' })
+            await panelIs('grace', `document.querySelector('.account-note')?.dataset.reason === 'grace'`)
+            await sleep(250)
+            await snap(`${tag}-account-grace`)
+            wc.send(EntitlementsChannels.changed, { ...freeSnap, reason: 'device_mismatch' })
+            await panelIs('device-mismatch', `document.querySelector('.account-note')?.dataset.reason === 'device_mismatch'`)
+            await sleep(250)
+            await snap(`${tag}-account-device-mismatch`)
+          } finally {
+            wc.send(EntitlementsChannels.changed, freeSnap)
+            await logout() // pushes the anon status; the panel returns to its resting state
+            resetAccountForSmoke()
+            setDeviceKeyForceSoftwareForSmoke(false)
+            await idp.stop()
+          }
+          await sleep(400)
+          await ES(`(document.querySelector('.settings-back')?.click(), 1)`)
+          await sleep(300)
+        })
         await part(`${tag}-board-empty`, async () => {
           await key(`ctrlKey: true, shiftKey: true, code: 'KeyG'`)
           await sleep(500)
@@ -658,6 +738,42 @@ export function runGallery(win: BrowserWindow): void {
           await snap(`${tag}-pane-menu`)
           await click('#content') // dismiss
           await sleep(200)
+        })
+
+        // The locked-feature upgrade state (phase-accounts/10): a fixture snapshot with a
+        // LOW pane cap pushed through the real entitlements channel, then a real split
+        // attempt — the shot is the refusal toast the gate point actually shows, with the
+        // plan name and the upgrade line. Alpha already holds exactly 4 panes.
+        await part(`${tag}-locked-feature`, async () => {
+          // Clear any overlay the previous part left up (a lingering pane menu once
+          // photobombed this toast) — the shot's subject is the refusal, nothing else.
+          await escape()
+          await ES(`(document.querySelectorAll('.ctx-menu').forEach((m) => m.remove()), 1)`)
+          await sleep(200)
+          wc.send(EntitlementsChannels.changed, {
+            plan: 'free',
+            features: [],
+            limits: { ...FREE_ENTITLEMENTS.limits, maxPanes: 4 },
+            graceState: 'expired'
+          })
+          await sleep(400)
+          await ES(`window.__mogging.layout.split()`)
+          let toastUp = false
+          for (let i = 0; i < 15 && !toastUp; i++) {
+            toastUp = await ES<boolean>(`!!document.querySelector('.toast') && /plan/i.test(document.querySelector('.toast')?.textContent ?? '')`)
+            if (!toastUp) await sleep(200)
+          }
+          if (!toastUp) throw new Error('the pane-cap refusal toast never appeared')
+          await sleep(250)
+          await snap(`${tag}-locked-feature-toast`)
+          await ES(`(document.querySelectorAll('.toast-dismiss').forEach((b) => b.click()), 1)`)
+          wc.send(EntitlementsChannels.changed, {
+            plan: 'free',
+            features: [],
+            limits: { ...FREE_ENTITLEMENTS.limits },
+            graceState: 'expired'
+          })
+          await sleep(400)
         })
 
         await part(`${tag}-chrome-states`, async () => {

@@ -16,6 +16,10 @@ export default tseslint.config(
   {
     ignores: [
       'node_modules/**',
+      // The standalone helper's own deps (ADR 0016) — third-party source, shipped under
+      // `node_deps` so electron-builder's node_modules-stripping doesn't drop it; the
+      // rename also took it out from under the `node_modules/**` ignore, so name it here.
+      'build/node-helper/**',
       'out/**',
       'dist/**',
       'release/**',

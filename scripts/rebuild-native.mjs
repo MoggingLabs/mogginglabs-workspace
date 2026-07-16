@@ -100,4 +100,11 @@ if (missing.length) {
   console.error(`\nRebuild reported success but produced no .node for: ${missing.join(', ')}\n`)
   process.exit(1)
 }
+
+// The in-repo device-key addon (src/backend/platform/device-key) joins the set: pure
+// Node-API, so an Electron bump cannot stale it, but "rebuild the natives" must mean
+// ALL of them — build-device-key.mjs verifies its own artifact the same way.
+const dk = spawnSync('node scripts/build-device-key.mjs --force', { stdio: 'inherit', shell: true })
+if (dk.error || dk.status !== 0) process.exit(dk.status ?? 1)
+
 console.log('  native modules OK')

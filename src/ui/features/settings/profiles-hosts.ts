@@ -22,6 +22,7 @@ import {
   showToast
 } from '../../components'
 import { createAsyncGuard } from '../../core/async/async-state'
+import { entitlementLimit, entitlementPlan } from '../../core/entitlements/entitlements-store'
 import { getBridge } from '../../core/ipc/bridge'
 import { announceProfilesChanged } from '../../core/agents/profiles-port'
 import { switchActiveProfile } from '../../core/agents/profile-switch'
@@ -392,10 +393,21 @@ export function createProfilesHostsSection(): HTMLElement {
       label: existing ? 'Save host' : 'Add host',
       variant: 'primary',
       ariaLabel: 'Save host',
-      onClick: () => {
+      onClick: async () => {
         if (!platform.value) {
           showError(err, 'Confirm the remote shell platform before saving this host.')
           return
+        }
+        // The SSH-hosts entitlement gate (phase-accounts/05), phrased HERE where the
+        // user can read it — main's `remotes:save` enforces the same limit through the
+        // port as a backstop. New hosts only; editing a saved one is never gated.
+        if (!existing) {
+          const cap = entitlementLimit('maxRemotes')
+          const count = ((await invoke(RemoteChannels.list)) as RemoteHost[]).length
+          if (count >= cap) {
+            showError(err, `Your ${entitlementPlan()} plan keeps up to ${cap} saved SSH hosts. Remove one, or upgrade your MoggingLabs plan for more.`)
+            return
+          }
         }
         const remote: RemoteHost = {
           id: existing?.id ?? newId('host'),

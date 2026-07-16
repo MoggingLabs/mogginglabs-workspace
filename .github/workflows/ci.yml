@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Full 134-gate sweeps are heavy (~4h each): nightly, staggered per OS, + on demand.
+  # Full 144-gate sweeps are heavy (~4h each): nightly, staggered per OS, + on demand.
   schedule:
     - cron: '30 3 * * *' # linux-sweep
     - cron: '30 4 * * *' # macos-sweep
@@ -89,6 +89,13 @@ jobs:
       - name: Gate registry gate
         run: node scripts/check-gates.mjs
 
+      # ORIGINPIN (ADR 0015): a shipped build talks to exactly the origins compiled into
+      # it — no env var may repoint one (the old registry override was a licensing bypass
+      # the day an entitlement endpoint exists). Pure Node, no build, same free-and-invisible
+      # family as the gates above, so it runs per-push; the full sweep carries it too.
+      - name: Origin-pin gate
+        run: node scripts/check-originpin.mjs
+
       # The preload allowlist is a hand-maintained spread of every channel map; a
       # forgotten spread refuses a whole feature's IPC with nothing but "channel not
       # allowed" to show for it. Same lists-that-must-agree family as the two above.
@@ -120,9 +127,16 @@ jobs:
       - name: Build
         run: npm run build
 
+      # The shipped main is V8 bytecode (friction against casual reading, never security —
+      # docs/18); the sandboxed preload is NOT; the pinned entitlement constants do not grep
+      # in plain text. Bytecode is bound to the exact V8 version + CPU arch, so this runs on
+      # every matrix row — each OS/arch proves its own compile (the gate builds itself).
+      - name: Bytecode gate
+        run: node scripts/check-bytecode.mjs
+
   # Phase-4/06: the third platform must BUILD AND BOOT — full native install, the
   # SMOKE gate headless under xvfb, then the AppImage + deb package. The full
-  # 134-gate sweep on Linux is a follow-up; this asserts build + boot.
+  # 144-gate sweep on Linux is a follow-up; this asserts build + boot.
   linux-boot:
     name: linux boot + package
     runs-on: ubuntu-latest
@@ -175,7 +189,13 @@ jobs:
         # step above already produced the electron-ABI .node files it would build.
         run: npx electron-builder --linux --publish never -c.npmRebuild=false -c.buildDependenciesFromSource=false
 
-  # Phase-6/02: the ENTIRE 134-gate sweep on Linux — same script, same gate list as
+      # The fuse wall (ADR 0015 §hardening), read off the artifact the step above just
+      # produced. Linux SETS the asar-integrity fuse but does not enforce it, so the
+      # tamper proof self-skips here; the exact-wall assertion still bites on drift.
+      - name: Fuse wall gate
+        run: MOGGING_FUSES_APP=dist/linux-unpacked node scripts/check-fuses.mjs
+
+  # Phase-6/02: the ENTIRE 144-gate sweep on Linux — same script, same gate list as
   # Windows. Nightly + manual (heavy); the fast boot gate above still runs per push.
   # MOGGING_CI_GPU=soft relaxes ONLY frame-gap budgets (software GL under xvfb) and
   # prints loudly in every affected smoke's log; all other claims are untouched.
@@ -319,7 +339,7 @@ jobs:
           if-no-files-found: warn
 
   # Phase-6/03: Windows regression coverage stops depending on the dev machine —
-  # the ENTIRE 134-gate sweep on windows-latest. Same script, same gate list:
+  # the ENTIRE 144-gate sweep on windows-latest. Same script, same gate list:
   # Git Bash drives qa-smokes.sh through its native MINGW branches (the local-dev
   # path). No GPU on the runner -> MOGGING_CI_GPU=soft, the same frame-timing-only
   # honesty as linux/macos. The @electron/rebuild spawn hang is confirmed on this
@@ -426,6 +446,14 @@ jobs:
 
       - name: Verify signing readiness
         run: node scripts/verify-signing-readiness.mjs
+
+      # The fuse wall on the signed-SHAPE artifact (ADR 0015 §hardening): exact wall +
+      # the tampered-asar refusal, on both signing platforms, before any release day.
+      - name: Fuse wall gate
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then APP=$(ls -d dist/mac* | head -1); else APP=dist/win-unpacked; fi
+          MOGGING_FUSES_APP="$APP" node scripts/check-fuses.mjs
 
   # Phase-6/02: install manifests must VALIDATE continuously where the tooling
   # exists, so submission day is a copy-paste PR. Dispatch + once nightly (tied

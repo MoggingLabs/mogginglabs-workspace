@@ -29,6 +29,8 @@ import { registerEventBridge } from './event-bridge'
 import { registerTrail } from './trail'
 import { registerMcpManager } from './mcp-manager'
 import { registerConnections } from './connections'
+import { registerAccount } from './account'
+import { registerEntitlements } from './entitlements'
 import { registerMcpStatus } from './mcp-status'
 import { registerServices } from './services'
 import { startDaemonBackend } from './daemon-relay'
@@ -39,7 +41,7 @@ import { ControlChannels, WorkspaceChannels } from '@contracts'
 import { initAutoUpdate } from './updater'
 import { fatal, installFatalHandlers } from './fatal'
 import { scrubInheritedPaneEnv } from './pane-env'
-import { assertNativeModules } from './native-preflight'
+import { assertNativeModules, scheduleTamperSelfCheck } from './native-preflight'
 import { assertPtyHostSupported } from '@backend/platform/pty-host'
 import { registerRuntimeHealth, setDaemonHealth, setDaemonHealthRetry } from './runtime-health'
 
@@ -285,6 +287,8 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       registerTrail() // the agent activity trail: local store + viewer IPC (8/05)
       registerMcpManager() // MCP manager: registry + per-CLI config writers (8/06)
       registerConnections(() => win) // the connection broker: the app IS the OAuth client (ADR 0014)
+      registerAccount(() => win) // the account: the SOLE holder of our MoggingLabs credential (ADR 0015) — claims cross IPC, tokens never do
+      registerEntitlements(() => win) // the entitlement engine + port (phase-accounts/05): IPC + holder only — cache loads lazily, refresh runs post-paint, never here (I7)
       registerMcpStatus(() => win) // MCP connection-status poller: pushed per-(server×cli) grid (8/11)
       registerServices(() => win) // service links: board card <-> GitHub PR/issue, live via gh (8/12)
       startMcpEndpoint() // agent-control transport: the MCP server reaches the dock + grant wire here (6/05b, 8/03)
@@ -346,6 +350,11 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
         // just not the one they were looking for.
         initAutoUpdate(() => win)
       }
+
+      // The runtime tamper self-check (phase-accounts/07): POST-PAINT, never on the boot
+      // path (I7). Inert until the operator wires a signed manifest — a no-op in every
+      // build shipped today, so it cannot touch boot cost or the MILESTONE frame budget.
+      scheduleTamperSelfCheck(() => win)
 
       // ── HOOK: every windowed gate. See BootHooks.afterWindow.
       if (win) hooks?.afterWindow?.(win)

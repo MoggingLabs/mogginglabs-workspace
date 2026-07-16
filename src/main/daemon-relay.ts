@@ -7,8 +7,9 @@ import { ipcMain, type WebContents } from 'electron'
 import * as path from 'node:path'
 import { TerminalChannels, LedgerChannels, GateChannels, PANE_CWD_MAX, normalizeRemoteConnection } from '@contracts'
 import type { AgentState, Approval, SpawnRequest, SpawnResult, SpawnSpec, StateSyncRequest, WriteCommand, ResizeCommand, KillCommand, SetRoleCommand } from '@contracts'
-import { getTelemetry } from '@backend'
+import { getEntitlements, getTelemetry } from '@backend'
 import { ensureDaemon, DaemonClient } from './daemon-client'
+import { daemonEntryPath, helperRuntime } from './node-helper'
 import { DaemonMigrationDeferredError, migrateOlderDaemonSessions } from './daemon-migrate'
 import { sweepDeadRunDirs } from './daemon-sweep'
 import { getSettingsStore } from './app-settings'
@@ -85,7 +86,9 @@ export async function getAuthoritativeApprovals(): Promise<Approval[]> {
 /** Connect to (or spawn) the daemon and bridge the terminal channels to it.
  *  Returns a disposer that detaches the client WITHOUT killing the daemon (survival). */
 export async function startDaemonBackend(getWebContents: () => WebContents | null): Promise<() => void> {
-  const daemonEntry = path.join(__dirname, 'daemon.js') // out/main/daemon.js, run via Electron-as-Node
+  // out/main/daemon.js (asar-unpacked when packaged), hosted by the standalone Node
+  // helper — the Electron binary is no longer a Node interpreter (ADR 0016).
+  const daemonEntry = daemonEntryPath()
 
   let disposed = false
   let reconnecting = false
@@ -114,7 +117,7 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
   const lastStates = new Map<string, AgentState>()
 
   const makeClient = async (): Promise<DaemonClient> => {
-    const endpoint = await ensureDaemon(daemonEntry)
+    const endpoint = await ensureDaemon(daemonEntry, helperRuntime())
     const connection = ++nextConnection
     activeConnection = connection
     cwdRevisions.clear()
@@ -409,6 +412,15 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     // manifest — and a pane has no way to send it. Recorded here as the app's answer to
     // "who is a reviewer", then forwarded so the daemon's coordination map agrees with the UI.
     const id = String(cmd.id)
+    // The swarm-role-scale gate (phase-accounts/05), enforcement backstop: a role for a
+    // pane that holds none, past the plan's cap, refuses. The renderer's publishRoles
+    // reads the same snapshot FIRST and phrases the visible upgrade reason — this branch
+    // only catches what slipped past it, so a refusal is never silent to the user.
+    // Re-assigning a pane that already holds a role (reconnect replay) is never blocked.
+    if (cmd.role && !appRoles.get(id)) {
+      const roled = [...appRoles.values()].filter(Boolean).length
+      if (roled >= getEntitlements().limit('maxSwarmRoles')) return false
+    }
     if (await bindRole(id, cmd.role)) {
       appRoles.set(id, cmd.role)
       return true

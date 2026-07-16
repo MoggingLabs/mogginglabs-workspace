@@ -209,11 +209,11 @@ export function runMcpCatSmoke(win: BrowserWindow, mode?: string): void {
         parseCliMcpList('codex', 'posthog  enabled\n', 'posthog') === 'listed'
 
       // ── (i) the update feed is PREVIEW only ─────────────────────────────────
-      process.env.MOGGING_REGISTRY_BASE = `http://127.0.0.1:${port}`
+      // The fixture registry rides catRefresh's baseUrl PARAMETER — the env override
+      // this smoke used to set is closed (ADR 0015: origins are pinned in code).
       const before = readFileSync(claudeFile, 'utf8')
-      const refresh = await catRefresh('posthog')
+      const refresh = await catRefresh('posthog', `http://127.0.0.1:${port}`)
       const previewOnly = refresh.ok === true && /preview only|matches/.test(refresh.diff ?? '') && readFileSync(claudeFile, 'utf8') === before
-      delete process.env.MOGGING_REGISTRY_BASE
 
       // roster order sanity: n8n first, the GW group second (founder priority).
       const rosterOk = MCP_PRESETS[0].id === 'n8n' && MCP_PRESETS[1].group === 'google-workspace'

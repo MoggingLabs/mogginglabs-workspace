@@ -3577,6 +3577,48 @@ body.pane-dragging * {
   font-size: var(--fs-13);
 }
 
+/* ── Settings § Account (phase-accounts/10) ──────────────────────────────────
+   Claims only: who is signed in, the EFFECTIVE plan as a pill, and at most one
+   quiet degradation line (ADR 0015 §4 — a sentence, never a nag ladder). The
+   note reuses .settings-note; only its glyph tone changes, because this note
+   is information about a plan, not a success mark. */
+.account-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+}
+.account-who {
+  min-width: 0;
+}
+.account-status {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  color: var(--text-hi);
+  overflow-wrap: anywhere;
+}
+.account-hint {
+  margin: var(--sp-1) 0 0;
+  max-width: var(--measure);
+}
+.account-plan-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.account-plan-label {
+  font-size: var(--fs-12);
+  color: var(--text-mid);
+}
+.account-note svg {
+  color: var(--text-mid);
+}
+
 /* ── Settings § Appearance: theme SWATCH tiles (see theme-picker.ts) ─────────
    Each tile paints a miniature of its theme from that theme's own chrome tokens
    (inline styles); everything here is the frame around those swatches. The mock's

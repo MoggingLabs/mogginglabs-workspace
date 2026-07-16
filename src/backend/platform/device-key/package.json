@@ -1,0 +1,9 @@
+{
+  "name": "@mogginglabs/device-key",
+  "version": "0.1.0",
+  "private": true,
+  "description": "In-repo N-API addon: a non-exportable hardware device key (TPM / Secure Enclave). Built by scripts/build-device-key.mjs, loaded via src/backend/platform/device-key/index.ts.",
+  "main": "index.ts",
+  "types": "index.ts",
+  "gypfile": true
+}

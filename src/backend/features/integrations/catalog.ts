@@ -1,6 +1,7 @@
 import { get as httpGet } from 'node:http'
 import { get as httpsGet } from 'node:https'
 import presetsJson from './presets.json'
+import { ORIGINS } from '../../core/origins'
 import { validateServerEntry } from './registry'
 import type { HostedCliId, McpAuthKind, McpPreset, McpServerEntry, McpTransport } from '@contracts'
 
@@ -138,11 +139,12 @@ export interface RegistryDraft {
   entry: { id: string; label: string; transport: McpTransport; url?: string; command?: string; args?: string[] }
 }
 
-const REGISTRY_DEFAULT = 'https://registry.modelcontextprotocol.io'
-
+// The origin is PINNED (ADR 0015): an env override here let a variable repoint a
+// shipped build's registry fetch. baseUrl stays a parameter — a fixture server is
+// injected at the CALL SITE (the mcpcat smoke) and the IPC handler never forwards one.
 export function fetchRegistry(
   search: string,
-  baseUrl: string = process.env.MOGGING_REGISTRY_BASE || REGISTRY_DEFAULT
+  baseUrl: string = ORIGINS.registry
 ): Promise<{ ok: boolean; drafts?: RegistryDraft[]; reason?: string }> {
   return new Promise((resolve) => {
     const unavailable = (): void => resolve({ ok: false, reason: 'registry unavailable' })

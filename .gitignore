@@ -1,6 +1,12 @@
 node_modules/
 out/
 dist/
+
+# The standalone Node helper (ADR 0016) is BUILT, never committed: a ~90MB pinned
+# runtime + helper-ABI natives (under node_deps/) per platform-arch, plus a
+# <platform>-<arch>.stamp.json (scripts/build-node-helper.mjs, run by postinstall and
+# by CI's electron-native-rebuild action).
+build/node-helper/
 *.log
 .DS_Store
 .env
@@ -20,3 +26,7 @@ electron.vite.config.*.js
 # aider writes its chat transcript into the repo root.
 .aider.chat.history.md
 .aider*
+
+# The in-repo device-key N-API addon compiles per-machine (scripts/build-device-key.mjs,
+# postinstall, rebuild:native) — like node-pty/better-sqlite3, its build output is not committed.
+src/backend/platform/device-key/build/

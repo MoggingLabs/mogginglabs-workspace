@@ -1,5 +1,4 @@
 import { Button, createModal, el, icon } from '../../components'
-import { MAX_PANES } from '../layout'
 
 /** One offer in the picker: a workspace this pane could move to. The workspace it is
  *  already in is never among them — "move it where it is" is not a choice. */
@@ -9,7 +8,11 @@ export interface MoveTarget {
   color: string
   cwd: string
   paneCount: number
-  /** At MAX_PANES: offered but not selectable, and it says why. Hiding it would leave the
+  /** The effective panes-per-workspace cap that judged `full`: MAX_PANES, or the
+   *  plan's lower `maxPanes` entitlement — so the copy names the number that
+   *  actually refused (phase-accounts/05). */
+  cap: number
+  /** At the cap: offered but not selectable, and it says why. Hiding it would leave the
    *  user hunting for a workspace that is right there in the rail. */
   full: boolean
 }
@@ -69,7 +72,7 @@ export function openMovePaneModal(opts: MovePaneModalOpts): void {
         attrs: {
           'aria-checked': 'false',
           'data-ws-id': target.id,
-          title: target.full ? `“${target.name}” already holds ${MAX_PANES} terminals` : target.cwd
+          title: target.full ? `“${target.name}” already holds ${target.cap} terminals` : target.cwd
         }
       },
       [
@@ -79,7 +82,7 @@ export function openMovePaneModal(opts: MovePaneModalOpts): void {
           el('span', {
             class: 'ws-move-meta',
             text: target.full
-              ? `Full — ${MAX_PANES} terminals`
+              ? `Full — ${target.cap} terminals`
               : [
                   `${target.paneCount} terminal${target.paneCount === 1 ? '' : 's'}`,
                   shortPath(target.cwd)

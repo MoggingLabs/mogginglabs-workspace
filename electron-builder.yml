@@ -25,11 +25,70 @@ files:
 # Native modules (node-pty, better-sqlite3) are unpacked so they load from disk at runtime.
 # bin/ joins them: those scripts are spawned as a SEPARATE plain-`node` process, and node has
 # no asar support — it cannot read a path inside app.asar. Unpacked, the path is a real file.
+# out/main/daemon.js + its chunks join them too (ADR 0016): the daemon is hosted by the
+# standalone Node helper now, so its whole require graph must be real files. The daemon
+# graph also ships as plain JS on purpose — V8 bytecode is bound to the exact V8 that
+# compiled it, which is Electron's, not the helper's (electron.vite.config.ts pins
+# `chunkAlias: ['index']` for exactly this).
 asarUnpack:
   - "**/node_modules/node-pty/**"
   - "**/node_modules/better-sqlite3/**"
   - "**/node_modules/bindings/**"
   - "bin/**"
+  - "out/main/daemon.js"
+  - "out/main/chunks/**"
+
+# The in-repo device-key addon (phase-accounts/06) is not an npm dependency, so
+# install-app-deps never sees it; it ships as a plain resource and native-preflight.ts
+# dlopens it from process.resourcesPath. Same honest caveat as the asarUnpack set: it
+# sits outside app.asar, covered by the bundle signature only, not the integrity fuse.
+#
+# node-helper/ (ADR 0016): the standalone pinned Node runtime that hosts the detached
+# PTY daemon, the house MCP server and the `mogging` shims — what earned flipping
+# RunAsNode off below. Built per platform-arch by scripts/build-node-helper.mjs
+# (postinstall; CI: electron-native-rebuild). Carries its OWN node_modules: node-pty +
+# better-sqlite3 for the HELPER's ABI — the copies unpacked above are Electron's and
+# must never load under it. The per-platform `from` lands under each OS key below.
+# Same integrity caveat as everything outside app.asar: bundle signature only.
+extraResources:
+  - from: src/backend/platform/device-key/build/Release/device_key.node
+    to: device-key/device_key.node
+
+# Electron fuses (ADR 0015 §hardening): flipped at PACK time, so dev is untouched — a
+# packaged build is tamper-evident and loses its living-off-the-land levers. Flipping
+# `enableEmbeddedAsarIntegrityValidation` also makes electron-builder embed the asar
+# header hash into the executable. CAVEAT, stated where the flip lives: the asarUnpack
+# set above (node-pty, better-sqlite3, bin/**) sits OUTSIDE app.asar and is NOT covered
+# by the integrity fuse — those files, the CLI shims especially, are covered only by
+# the bundle code SIGNATURE (the operator's deferred signing step). Integrity is
+# enforced on macOS and Windows (Electron >= 30); on Linux the fuse is set but inert.
+# scripts/check-fuses.mjs asserts this EXACT wall on the packaged artifact.
+electronFuses:
+  # OFF — the prize of the runtime split (ADR 0016, step 09). The signed Electron
+  # binary can no longer be run as a generic Node interpreter (the macOS
+  # keychain-theft vector, and a cracker's favorite lever): the detached PTY daemon
+  # (daemon-client.ts), the house MCP server (mcp-manager.ts houseServerEntry) and
+  # every `mogging` shim (cli-runtime.ts) now run on the standalone Node helper in
+  # resources/node-helper (extraResources above). Gated: SURVIVE + CONTROL +
+  # RUNTIMESPLIT prove daemon survival and CLI scriptability ON the helper, and
+  # scripts/check-fuses.mjs asserts this exact flip off the packaged artifact.
+  runAsNode: false
+  # Cookie store encrypted with OS crypto instead of plaintext sqlite. One-way.
+  enableCookieEncryption: true
+  # NODE_OPTIONS / NODE_EXTRA_CA_CERTS ignored by the PACKAGED binary — the classic
+  # injection lever (--require a payload into a signed process). Nothing in
+  # main/daemon/bin reads either (verified 2026-07-15); the agent-settings catalog's
+  # NODE_EXTRA_CA_CERTS entry configures the CLIs' OWN child processes, which are
+  # separate node binaries these fuses do not govern.
+  enableNodeOptionsEnvironmentVariable: false
+  # --inspect/--inspect-brk (and SIGUSR1) refused — no debugger attaches to a
+  # shipped process. Dev (`npm run dev`) is unaffected; fuses exist in the package.
+  enableNodeCliInspectArguments: false
+  # A hand-edited app.asar fails to load (macOS/Windows; inert on Linux)…
+  enableEmbeddedAsarIntegrityValidation: true
+  # …and app.asar is the ONLY place code may load from, so the validated archive
+  # cannot be bypassed by dropping an `app/` directory next to it.
+  onlyLoadAppFromAsar: true
 
 # Signed release feed for electron-updater. owner/repo are public; the release token (GH_TOKEN)
 # is a CI secret, never committed.
@@ -44,6 +103,11 @@ win:
       arch:
         - x64
   artifactName: MoggingLabs-Workspace-${version}-win-${arch}.${ext}
+  # The standalone Node helper (ADR 0016) — per-OS `from` because the build dir is keyed
+  # by process.platform (win32/darwin/linux), which electron-builder's ${os} is not.
+  extraResources:
+    - from: build/node-helper/win32-${arch}
+      to: node-helper
   # Authenticode signing runs when CSC_LINK (base64 .pfx) + CSC_KEY_PASSWORD are in the
   # environment (CI secrets) — required to avoid SmartScreen warnings. No cert is committed.
 
@@ -61,6 +125,9 @@ mac:
         - arm64
   category: public.app-category.developer-tools
   artifactName: MoggingLabs-Workspace-${version}-mac-${arch}.${ext}
+  extraResources:
+    - from: build/node-helper/darwin-${arch}
+      to: node-helper
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
@@ -98,6 +165,9 @@ linux:
       arch:
         - x64
   artifactName: MoggingLabs-Workspace-${version}-linux-${arch}.${ext}
+  extraResources:
+    - from: build/node-helper/linux-${arch}
+      to: node-helper
   category: Development
   synopsis: Multi-pane terminal workspace for AI coding agents
   maintainer: MoggingLabs <hello@mogginglabs.ai>

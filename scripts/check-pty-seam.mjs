@@ -22,8 +22,11 @@ const ROOT = process.cwd()
 const SRC = join(ROOT, 'src')
 const OWNER = join('src', 'backend', 'platform', 'pty-host.ts')
 
-/** `import ... from 'node-pty'` / `require('node-pty')`, minus the type-only forms. */
-const VALUE_IMPORT = /(^|\n)\s*import\s+(?!type\s)[^\n]*from\s+['"]node-pty['"]|require\(\s*['"]node-pty['"]\s*\)/
+/** `import ... from 'node-pty'` / `require('node-pty')` / `requireNative('node-pty')`
+ *  (the host-aware seam, ADR 0016 — a second door unless it is gated like the first),
+ *  minus the type-only forms. */
+const VALUE_IMPORT =
+  /(^|\n)\s*import\s+(?!type\s)[^\n]*from\s+['"]node-pty['"]|require(?:Native)?(?:<[^>\n]*>)?\(\s*['"]node-pty['"]\s*\)/
 
 function walk(dir) {
   const out = []
