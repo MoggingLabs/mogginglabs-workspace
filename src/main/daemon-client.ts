@@ -33,6 +33,30 @@ import type {
 export const runtimeDir = sharedRuntimeDir
 const endpointPath = (): string => path.join(runtimeDir(), 'endpoint.json')
 const daemonSpawnLogPath = (): string => path.join(runtimeDir(), 'daemon.log')
+const clientLogPath = (): string => path.join(runtimeDir(), 'client.log')
+
+/**
+ * THE APP-SIDE DAEMON JOURNAL. daemon.log records what the daemon saw; nothing recorded what
+ * the APP did to it — a packaged main process has no persistent log at all, so a night of six
+ * silent daemon retires (observed 2026-07-15: two same-channel builds stamp-retiring each
+ * other's daemons, every pane's live process dying each round) was reconstructable only from
+ * side effects. Every connect / disconnect / retire / spawn / quiesce / heartbeat event lands
+ * here, next to daemon.log, in the SAME per-channel runtime dir — one place to grep.
+ *
+ * Truncated past ~256KB (updater.log's pattern) so it cannot grow unbounded. Best-effort by
+ * construction: diagnostics must never be the reason the terminal service fails.
+ */
+export function clientLog(event: string, detail?: Record<string, unknown>): void {
+  try {
+    const file = clientLogPath()
+    fs.mkdirSync(runtimeDir(), { recursive: true })
+    if ((fs.statSync(file, { throwIfNoEntry: false })?.size ?? 0) > 256 * 1024) fs.truncateSync(file, 0)
+    const suffix = detail ? ' ' + JSON.stringify(detail) : ''
+    fs.appendFileSync(file, `${new Date().toISOString()} pid ${process.pid} ${event}${suffix}\n`)
+  } catch {
+    /* best effort */
+  }
+}
 
 /** An endpoint we may trust: our protocol version, a live pid, and a pipe still held. */
 function endpointLive(ep: DaemonEndpoint | null): ep is DaemonEndpoint {
@@ -72,7 +96,19 @@ const RETIRE_FLUSH_MS = 500
  *  from the installed exe — would re-take the very file lock the retire just released. */
 let quiescing = false
 export function beginDaemonQuiescence(): void {
+  if (!quiescing) clientLog('quiesce-begin')
   quiescing = true
+}
+
+/** Lift quiescence — the update did NOT hand off to an installer after all (quitAndInstall
+ *  threw / nothing was pending). Without this, `quiescing` was a one-way latch: the app kept
+ *  running, `ensureDaemon` refused to spawn forever, and every pane sat dead behind a
+ *  "reconnecting" banner whose Retry could never succeed — a permanent, silent freeze. The
+ *  relay's reconnect loop is already retrying with backoff; flipping the flag is all it
+ *  needs to succeed on its next attempt. */
+export function endDaemonQuiescence(): void {
+  if (quiescing) clientLog('quiesce-end')
+  quiescing = false
 }
 
 /**
@@ -122,7 +158,10 @@ export async function retireDaemonEndpoint(ep: DaemonEndpoint): Promise<boolean>
     sock.on('close', finish)
     sock.on('connect', () => {
       try {
-        sock.write(JSON.stringify({ t: 'hello', v: ep.version, token: ep.token }) + '\n')
+        sock.write(
+          JSON.stringify({ t: 'hello', v: ep.version, token: ep.token, client: { pid: process.pid, kind: 'retire' } }) +
+            '\n'
+        )
       } catch {
         finish()
       }
@@ -130,7 +169,54 @@ export async function retireDaemonEndpoint(ep: DaemonEndpoint): Promise<boolean>
   })
   const waitUntil = Date.now() + RETIRE_WAIT_MS
   while (isAlive(ep.pid) && Date.now() < waitUntil) await delay(100)
-  return !isAlive(ep.pid)
+  const dead = !isAlive(ep.pid)
+  clientLog(dead ? 'daemon-retired' : 'daemon-retire-failed', { pid: ep.pid, build: ep.build ?? null })
+  return dead
+}
+
+/**
+ * Ask a live daemon how many OTHER authed clients it holds right now — the fact a stamp
+ * retire needs before it may fire (see ensureDaemon). `null` means "could not learn":
+ * an old daemon that predates the field, a timeout, a refused handshake. Callers treat
+ * null as "retire as before" — a daemon that cannot answer is by definition old code
+ * (or wedged), and both deserve the retire.
+ */
+function probeOtherClients(ep: DaemonEndpoint, timeoutMs = 3000): Promise<number | null> {
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (v: number | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      try {
+        sock.destroy()
+      } catch {
+        /* already gone */
+      }
+      resolve(v)
+    }
+    const sock = net.connect(ep.address)
+    sock.setEncoding('utf8')
+    const timer = setTimeout(() => finish(null), timeoutMs)
+    const framer = createLineFramer((obj) => {
+      const m = obj as { t?: string; otherClients?: unknown }
+      if (m.t === 'welcome') {
+        finish(typeof m.otherClients === 'number' && Number.isFinite(m.otherClients) ? m.otherClients : null)
+      } else if (m.t === 'error') {
+        finish(null)
+      }
+    })
+    sock.on('data', (chunk: string) => framer(chunk))
+    sock.on('error', () => finish(null))
+    sock.on('close', () => finish(null))
+    sock.on('connect', () => {
+      try {
+        sock.write(encodeMessage({ t: 'hello', v: ep.version, token: ep.token, client: { pid: process.pid, kind: 'probe' } }))
+      } catch {
+        finish(null)
+      }
+    })
+  })
 }
 
 /**
@@ -165,9 +251,31 @@ export async function ensureDaemon(daemonEntry: string): Promise<DaemonEndpoint>
     // as "no opinion": never retire on a question we cannot answer.
     const expected = buildStampOf(daemonEntry)
     if (!expected || existing.build === expected) return existing
+    // THE STAMP-WAR GUARD. A retire kills every pane's live process (agents mid-turn, dev
+    // servers) with nothing painted in the pane — and when the daemon's OTHER client is an app
+    // of a different build, that app's reconnect loop retires OUR replacement right back:
+    // observed live 2026-07-15, six retires in two hours, panes dying every ~90s. So a
+    // mismatched daemon is retired ONLY when nobody else is attached — a stale-but-working
+    // daemon beats a war. Old daemons can't report the count (probe → null) and are retired
+    // as before: they are stale code by definition, and their clients predate this guard.
+    const otherClients = await probeOtherClients(existing)
+    if (otherClients !== null && otherClients > 0) {
+      console.warn(
+        `[daemon] live daemon is a different build (have ${existing.build ?? 'none'}, want ${expected}) ` +
+          `but ${otherClients} other client(s) are attached — refusing to retire (stamp-war guard)`
+      )
+      clientLog('stamp-retire-refused', {
+        pid: existing.pid,
+        have: existing.build ?? null,
+        want: expected,
+        otherClients
+      })
+      return existing
+    }
     console.warn(
       `[daemon] live daemon is a different build (have ${existing.build ?? 'none'}, want ${expected}) — retiring in place`
     )
+    clientLog('stamp-retire', { pid: existing.pid, have: existing.build ?? null, want: expected })
     const retired = await retireDaemonEndpoint(existing)
     if (!retired) {
       // It would not die. A stale-but-working daemon beats a boot with no terminals at all;
@@ -200,9 +308,14 @@ export async function ensureDaemon(daemonEntry: string): Promise<DaemonEndpoint>
     windowsHide: true
   })
   child.unref()
+  clientLog('daemon-spawning', { childPid: child.pid ?? null })
 
   const ep = await waitForLiveEndpoint(15000)
-  if (!ep) throw new Error('pty daemon did not become ready')
+  if (!ep) {
+    clientLog('daemon-spawn-timeout', { childPid: child.pid ?? null })
+    throw new Error('pty daemon did not become ready')
+  }
+  clientLog('daemon-ready', { pid: ep.pid, build: ep.build ?? null })
   return ep
 }
 
@@ -239,6 +352,20 @@ export interface DaemonEvents {
   onClose?: () => void
 }
 
+/** DaemonClient tuning — only smokes override these (constructor arg, never env). */
+export interface DaemonClientOptions {
+  /** Identity label sent in `hello` (daemon.log's shutdown attribution). Default 'app'. */
+  kind?: string
+  /** Heartbeat interval; 0 disables. Clamped to [250, 60000]. Default 10s. */
+  heartbeatMs?: number
+}
+
+/** Silence tolerated before the connection is declared dead, in heartbeat intervals. 2.5
+ *  means: two consecutive pings unanswered AND nothing else arrived either. Any inbound
+ *  message counts as liveness — a daemon too busy streaming output to answer pings is
+ *  emphatically not dead, and must never be shot for being busy. */
+const HEARTBEAT_STALE_FACTOR = 2.5
+
 export class DaemonClient {
   private sock: net.Socket | null = null
   private approvalWaiters: Array<(list: Approval[]) => void> = []
@@ -250,9 +377,19 @@ export class DaemonClient {
     string,
     Array<{ resolve: (res: SpawnResult) => void; reject: (err: Error) => void }>
   >()
+  // THE HEARTBEAT (the missing half of ADR 0006's reconnect story). The relay reacts to a
+  // socket CLOSE within milliseconds — but a daemon that wedges with the socket still open
+  // (blocked event loop, half-dead pipe) closed nothing: every pane froze, input silently
+  // dropped, and no machinery anywhere could ever notice. The protocol always had ping/pong;
+  // nothing sent one. Now: ping on an interval, count ANY inbound message as liveness, and
+  // when the line has been silent past the tolerance, destroy the socket ourselves — which
+  // lands in the exact same onClose → reconnect path a real daemon death takes.
+  private heartbeatTimer: NodeJS.Timeout | null = null
+  private lastSeenAt = 0
   constructor(
     private readonly endpoint: DaemonEndpoint,
-    private readonly events: DaemonEvents = {}
+    private readonly events: DaemonEvents = {},
+    private readonly opts: DaemonClientOptions = {}
   ) {}
 
   /** Connect + handshake. Resolves with the daemon's existing panes (from `welcome`). */
@@ -277,21 +414,64 @@ export class DaemonClient {
       sock.on('error', (e) => settle(() => reject(e)))
       sock.on('close', () => {
         this.sock = null
+        this.stopHeartbeat()
         settle(() => reject(new Error('daemon closed before welcome')))
         this.events.onClose?.()
       })
       sock.on('connect', () => {
-        sock.write(encodeMessage({ t: 'hello', v: DAEMON_PROTOCOL_VERSION, token: this.endpoint.token }))
+        sock.write(
+          encodeMessage({
+            t: 'hello',
+            v: DAEMON_PROTOCOL_VERSION,
+            token: this.endpoint.token,
+            client: { pid: process.pid, kind: this.opts.kind ?? 'app' }
+          })
+        )
       })
     })
   }
 
+  /** Armed by `welcome` (an unauthenticated socket already has the 8s connect timeout). */
+  private startHeartbeat(): void {
+    if (this.heartbeatTimer) return
+    const requested = this.opts.heartbeatMs ?? 10_000
+    if (requested === 0) return // explicitly disabled (a smoke asserting the no-heartbeat shape)
+    const interval = Math.min(60_000, Math.max(250, requested))
+    const staleAfterMs = interval * HEARTBEAT_STALE_FACTOR
+    this.lastSeenAt = Date.now()
+    this.heartbeatTimer = setInterval(() => {
+      const sock = this.sock
+      if (!sock) {
+        this.stopHeartbeat()
+        return
+      }
+      const silentMs = Date.now() - this.lastSeenAt
+      if (silentMs > staleAfterMs) {
+        clientLog('heartbeat-lost', { silentMs: Math.round(silentMs), intervalMs: interval })
+        this.stopHeartbeat()
+        sock.destroy() // same road a real daemon death takes: onClose → the relay reconnects
+        return
+      }
+      this.send({ t: 'ping' })
+    }, interval)
+    this.heartbeatTimer.unref?.()
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
+    this.heartbeatTimer = null
+  }
+
   private dispatch(m: ServerMessage, onWelcome: (panes: PaneInfo[]) => void): void {
+    this.lastSeenAt = Date.now() // ANY inbound message is liveness — never shoot a busy daemon
     switch (m.t) {
       case 'welcome':
+        this.startHeartbeat()
         this.events.onWelcome?.(m.panes)
         onWelcome(m.panes)
         break
+      case 'pong':
+        break // liveness already recorded above; pong carries nothing else
       case 'data':
         this.events.onData?.(m.id, m.data, m.gen)
         break
@@ -507,6 +687,7 @@ export class DaemonClient {
     }
   }
   dispose(): void {
+    this.stopHeartbeat()
     // Settle EVERY pending waiter now, not just the role ones. Each class of waiter has
     // its own timeout so nothing leaked, but a disposed client whose spawn callers sat
     // out a 5s timer while the role callers answered instantly was two teardown stories

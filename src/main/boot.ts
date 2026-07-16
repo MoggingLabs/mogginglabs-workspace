@@ -1,3 +1,4 @@
+import * as os from 'node:os'
 import { app, BrowserWindow, dialog, type WebContents } from 'electron'
 import { getTelemetry, startBackend } from '@backend'
 import { createMainWindow } from './window'
@@ -40,6 +41,7 @@ import { CONTROL_COLD_START_DELAY_MS, ControlChannels, WorkspaceChannels } from 
 import { initAutoUpdate } from './updater'
 import { fatal, installFatalHandlers } from './fatal'
 import { scrubInheritedPaneEnv } from './pane-env'
+import { runtimeIsolationError } from './runtime-isolation'
 import { assertNativeModules } from './native-preflight'
 import { assertPtyHostSupported } from '@backend/platform/pty-host'
 import { registerRuntimeHealth, setDaemonHealth, setDaemonHealthRetry } from './runtime-health'
@@ -134,6 +136,19 @@ export function prepareRuntime(): void {
   // daemon, CLIs from the pane env. Packaged apps CLEAR it (an installed app launched from inside a
   // dev pane would otherwise inherit 'dev' and squat the dev channel): derived, never trusted up.
   // Smokes stay prod-shaped — they already isolate the whole runtime tree via LOCALAPPDATA.
+  //
+  // "Already isolate" is enforced, not hoped: an UNPACKAGED launch that sets MOGGING_USERDATA
+  // without redirecting the runtime base is a prod-shaped app of a foreign build aimed at the
+  // REAL run/v<N> dir — its build-stamp check then retires the installed app's live daemon
+  // (every pane's process dies) and starts a retire war on reconnect. Refuse to boot instead
+  // (runtime-isolation.ts); the properly-launched harness (scripts/qa-smokes.sh) is unaffected.
+  if (!app.isPackaged) {
+    const isolation = runtimeIsolationError(process.env, process.platform, os.homedir())
+    if (isolation) {
+      console.error(`[boot] ${isolation}`)
+      process.exit(1)
+    }
+  }
   if (app.isPackaged || process.env.MOGGING_USERDATA) delete process.env.MOGGING_CHANNEL
   else process.env.MOGGING_CHANNEL = 'dev'
 

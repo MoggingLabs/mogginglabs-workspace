@@ -19,6 +19,12 @@ import type { ReviewSnapshot } from '../ipc/review.ipc'
 // territory. A v9 daemon would keep accepting those forged, unbound verbs until it retires,
 // so the bump forces the hand-off (daemon-migrate.ts) rather than pretending the check is
 // an additive add — a security boundary must not depend on which daemon happens to answer.
+//
+// v10 ALSO carries the daemon-lifecycle wire (one release, one bump): `hello` gained an
+// optional client identity (daemon.log's "shutdown requested by …" names its requester)
+// and `welcome` gained `otherClients` — the count the stamp-war retire guard needs before
+// it may fire (daemon-client.ts ensureDaemon: a mismatched daemon with a live client is
+// left running; retiring it starts a war that kills every pane's process each round).
 export const DAEMON_PROTOCOL_VERSION = 10
 
 // v9: burned by v0.11.1 to DELIVER a daemon-side behaviour fix (the tracker's done-chime
@@ -234,9 +240,20 @@ export interface PaneInfo {
   remoteName?: string
 }
 
+/** Who a daemon connection belongs to — OPTIONAL and additive (old clients send none, old
+ *  daemons ignore it). Diagnosis-only: it names the requester in daemon.log when a client
+ *  asks for `shutdown`, which is the difference between "the daemon restarted six times last
+ *  night" being an archaeology project and being one grep. Never used for authorization —
+ *  the token is the only credential, and a self-reported pid proves nothing. */
+export interface ClientIdentity {
+  pid?: number
+  /** Short role label: 'app' (the relay), 'retire', 'probe', 'migrate', 'cli', … */
+  kind?: string
+}
+
 /** client -> daemon */
 export type ClientMessage =
-  | { t: 'hello'; v: number; token: string }
+  | { t: 'hello'; v: number; token: string; client?: ClientIdentity }
   | { t: 'spawn'; id: string; spec?: SpawnSpec }
   | { t: 'attach'; id: string }
   | { t: 'input'; id: string; data: string }
@@ -295,7 +312,12 @@ export type ClientMessage =
  *  is reused the moment a slot is re-opened, so consumers gate on (id, gen) — an event
  *  stamped with a dead generation must never touch the living session's pane. */
 export type ServerMessage =
-  | { t: 'welcome'; v: number; panes: PaneInfo[]; workspaces: PersistedWorkspace[] }
+  // `otherClients` (additive, v9-era): how many OTHER authed connections this daemon holds at
+  // the moment of THIS welcome. It is what lets a build-stamp retire distinguish "stale daemon
+  // nobody is using — replace it" from "a DIFFERENT build's live session is attached — backing
+  // off beats a retire war that kills every pane's process each round" (daemon-client.ts,
+  // ensureDaemon). Old daemons omit it; the client then keeps today's retire behaviour.
+  | { t: 'welcome'; v: number; panes: PaneInfo[]; workspaces: PersistedWorkspace[]; otherClients?: number }
   | { t: 'error'; reason: string; id?: string }
   // `restored` narrows `existing`: a cold-start restore (fresh shell + repainted
   // scrollback, untouched since) rather than a continuously-live session — the app
