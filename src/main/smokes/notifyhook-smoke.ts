@@ -278,6 +278,24 @@ export async function runNotifyHookSmoke(): Promise<void> {
       codexBlob.notify?.event === 'done' &&
       !JSON.stringify(codexBlob.notify ?? {}).includes('SECRET')
 
+    // A codex type this map has never seen is a GUESS and must ride the bell path as
+    // 'notice' — never needs-input. The old default red-locked a working pane the day Codex
+    // shipped any new notify type (the exact bug the Claude whitelist fixed on 2026-07-15,
+    // reborn one CLI over). This assert fails on that code.
+    const codexUnknown = script
+      ? await runHookAgainstFakeDaemon(
+          script,
+          ['{"type":"reasoning-summary-or-whatever-ships-next","last-assistant-message":"SECRET"}'],
+          { MOGGING_PANE_ID: '7' },
+          'codexunk'
+        )
+      : null
+    const codexUnknownOk =
+      !!codexUnknown &&
+      codexUnknown.exitCode === 0 &&
+      codexUnknown.notify?.event === 'notice' &&
+      !JSON.stringify(codexUnknown.notify ?? {}).includes('SECRET')
+
     // ── the Notification-type split, over the REAL stdin channel ──
     // A type the whitelist KNOWS as blocking must ring needs-input immediately.
     const notifBlocking = script
@@ -329,12 +347,12 @@ export async function runNotifyHookSmoke(): Promise<void> {
 
     const pass =
       scriptOk && invOk && claudeOk && codexOk && geminiOk && opencodeOk && aiderOk && extrasOk &&
-      directOk && codexBlobOk && noopOk && notifBlockingOk && notifUnknownOk && notifCompletedOk
+      directOk && codexBlobOk && codexUnknownOk && noopOk && notifBlockingOk && notifUnknownOk && notifCompletedOk
     write({
       pass,
       scriptOk, invOk, claudeOk, codexOk, geminiOk, opencodeOk, aiderOk, extrasOk,
-      directOk, codexBlobOk, noopOk, notifBlockingOk, notifUnknownOk, notifCompletedOk,
-      direct, codexBlob, noop, notifBlocking, notifUnknown, notifCompleted,
+      directOk, codexBlobOk, codexUnknownOk, noopOk, notifBlockingOk, notifUnknownOk, notifCompletedOk,
+      direct, codexBlob, codexUnknown, noop, notifBlocking, notifUnknown, notifCompleted,
       extras: {
         userData,
         codexArgs: exCodex.args,

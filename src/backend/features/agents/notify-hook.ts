@@ -30,7 +30,13 @@ for (let i = 0; i < args.length; i++) {
   else opts._.push(a)
 }
 
-// Codex appends its event as a JSON blob; map its type to the house vocabulary.
+// Codex appends its event as a JSON blob; map its type to the house vocabulary. An
+// UNRECOGNIZED type is a GUESS and rides the bell's held-for-contradiction path as
+// 'notice' - never a direct red latch. The old default (needs-input) is the same bug the
+// Claude whitelist below already fixed once: the day Codex ships a notify type this list
+// has never seen (its 0.144 binary emits only agent-turn-complete, but that is a fact
+// about today), every such event would paint a WORKING pane red, instantly, with nothing
+// to clear it until the turn ends.
 const codexTypeToEvent = (type) => {
   switch (type) {
     case 'agent-turn-complete':
@@ -39,7 +45,7 @@ const codexTypeToEvent = (type) => {
     case 'approval_requested':
       return 'needs-input'
     default:
-      return 'needs-input'
+      return 'notice'
   }
 }
 
@@ -52,7 +58,7 @@ if (typeof raw === 'string' && raw.trim().startsWith('{')) {
   try {
     event = codexTypeToEvent(JSON.parse(raw).type)
   } catch {
-    event = 'needs-input'
+    event = 'notice' // an unreadable blob is a guess, and a guess never latches red directly
   }
 }
 if (!event) event = 'needs-input'
@@ -188,10 +194,11 @@ sock.on('error', finish)
 
 /** Claude Code `hooks` settings fragment (rides the generated --settings file — a
  *  session overlay that MERGES with the user's own hooks, never a file of theirs).
- *  Notification = the agent is waiting on you (permission prompt / idle prompt) —
- *  rings attention (red) until you type. Stop = the turn ended — lands as idle, which
- *  the attention port turns into the sticky green finished halo (until the pane is
- *  clicked). Two events, two distinct color stories: red = blocked, green = done.
+ *  Notification = the argv default; the script splits the REAL story off the payload's
+ *  notification_type (blocking types -> needs-input = red until answered; idle_prompt ->
+ *  idle-prompt; completion-shaped types -> silence; unknown types -> notice). Stop = the
+ *  turn ended — lands as `done`, the one source of the sticky green finished halo (until
+ *  the pane is clicked). Two events, two distinct color stories: red = blocked, green = done.
  *  SubagentStart/SubagentStop feed the tracker's pending counter — a GATE, never a
  *  source: alerts stay the MAIN agent's story. A parent parked on its subagents goes
  *  neither green (that Stop is DROPPED — the green belongs to its next, real done) nor
