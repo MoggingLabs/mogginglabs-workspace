@@ -70,6 +70,12 @@ export interface AgentCommandResult {
   command?: string
   /** Honest launch refusal (unknown agent, missing remote, or scoped-plan conflict). */
   reason?: string
+  /** Local launches only: the profile declares an email but its config home
+   *  disagrees — nobody signed in yet (no `actual`), or a different account
+   *  (`actual` names it). The profile email is a label the app cannot enforce
+   *  (the CLI's own OAuth picks whatever the browser session offers), so the
+   *  facts surface at the moment they bite. Never blocks the launch. */
+  signIn?: { expected: string; actual?: string }
 }
 
 /** Global Claude alert hooks (AgentHookChannels) — the hand-typed-launch gap. */
