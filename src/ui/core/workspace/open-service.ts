@@ -27,6 +27,10 @@ export interface TemplateWorkspaceSpec {
    *  these (plus the always-on house server). undefined = don't scope (leave the
    *  CLIs' own global config untouched); [] = scoped to house only. */
   tools?: string[]
+  /** Serialized split tree for the opening arrangement (the wizard's dynamic
+   *  painter — merged cells and all). Same format the restore path already
+   *  validates via parseTree; undefined = the pane-count template grid. */
+  layout?: string
 }
 
 /** Identity of the workspace an open created — enough for callers (e.g. the board,

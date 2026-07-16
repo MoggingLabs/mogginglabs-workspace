@@ -72,12 +72,9 @@ export function runWizardFailSmoke(win: BrowserWindow): void {
 
       // Counts normalize when the layout shrinks; clearing a custom command
       // immediately zeroes and disables its count instead of dropping it later.
+      // (The painter's real gestures are WIZARDUX's job — this drives the model.)
       await open({ cwd: repo, paneCount: 6, mix: [{ provider: 'custom:echo audit', count: 6 }] })
-      await ES(`(() => {
-        const tile = [...document.querySelectorAll('#view-wizard .layout-tile')]
-          .find((item) => item.querySelector('.layout-tile-count')?.textContent === '2')
-        tile?.click()
-      })()`)
+      await ES(`window.__mogging.wizardLayout.setGrid(1, 2)`)
       await sleep(150)
       const shrink = await ES<{ count: string; meter: string }>(`(() => ({
         count: document.querySelector('#view-wizard .wizard-custom-row .stepper-value')?.textContent ?? '',
@@ -324,9 +321,8 @@ export function runWizardFailSmoke(win: BrowserWindow): void {
       })})`)
       await open({ cwd: repo, paneCount: 4 })
       await ES(`(() => {
-        document.querySelectorAll('#view-wizard .wizard-adv').forEach((details) => (details.open = true))
         const chip = [...document.querySelectorAll('#view-wizard .wizard-preset-apply')]
-          .find((item) => item.textContent === 'Stale preset audit')
+          .find((item) => item.querySelector('.wizard-preset-name')?.textContent === 'Stale preset audit')
         chip?.click()
       })()`)
       await sleep(250)
