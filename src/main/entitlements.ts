@@ -87,6 +87,12 @@ let buildTampered = false
 // consent-gated by the Telemetry port (ADR 0005), never a path/id (the account is already
 // known to the authed session).
 let deviceMismatchReported = false
+// The cache generation. Bumped whenever the cache is intentionally cleared (logout, a
+// smoke reset). An in-flight fetch captures it before its network await and refuses to
+// cache if it changed — otherwise a logout landing DURING the fetch's round-trip would
+// be overwritten when the fetch resumes and re-vaults, resurrecting a Pro claim the user
+// just signed out of (the "logout → anon-free" law, ADR 0015 / the product milestone).
+let cacheEpoch = 0
 
 // ── Test seams (production leaves all of them untouched) ────────────────────────────
 let now: () => number = Date.now
@@ -106,6 +112,7 @@ export function resetEntitlementsForSmoke(): void {
   deviceJktResolving = null
   buildTampered = false
   deviceMismatchReported = false
+  cacheEpoch += 1 // any in-flight fetch predating the reset must not re-cache
 }
 
 /** The tamper self-check's write door (native-preflight.ts). Flipping it pushes a fresh
@@ -310,6 +317,7 @@ export async function refreshEntitlements(): Promise<boolean> {
 async function doFetch(): Promise<boolean> {
   const cfg = config
   if (!cfg) return false
+  const epoch = cacheEpoch // the session this fetch belongs to
   try {
     const token = await accessTokenForEntitlement()
     if (!token) return false // no session — the free core asks for nothing
@@ -334,6 +342,10 @@ async function doFetch(): Promise<boolean> {
     // Sender-constrained, verified at the door: a claim issued to any OTHER device —
     // however validly signed — is not an entitlement here and never enters the cache.
     if (claims.deviceId !== thisDevice) return false
+    // A logout that landed while we were awaiting the issuer wins: do NOT cache a claim
+    // the user just signed out of. (The account-side epoch guards the token; this guards
+    // the entitlement cache — logout bumps both.)
+    if (epoch !== cacheEpoch) return false
     const fetchedAt = now()
     // Vault-unavailable machines still get a working session (memory-only claim);
     // nothing is ever written as plaintext (ADR 0008.h).
@@ -359,6 +371,7 @@ function maybeBackgroundRefresh(): void {
  *  gesture (the product-milestone law). Only logout — a session that dies under us
  *  (revoked refresh, foreign hardware) leaves the cache for the device-mismatch story. */
 function clearOnLogout(): void {
+  cacheEpoch += 1 // an in-flight fetch that predates this logout must not re-cache
   vaultClearKey(VAULT_CACHE)
   cached = null
   pushIfChanged()

@@ -52,6 +52,13 @@ let winGetter: (() => BrowserWindow | null) | null = null
 
 // The access token: MEMORY ONLY, never persisted, never returned over IPC.
 let access: { token: string; expiresAt?: number } | null = null
+// The session generation. Bumped by every clearSession() (logout, a definitive AS
+// rejection, an unusable grant). An in-flight refresh captures it before its network
+// await and refuses to persist if it changed underneath — otherwise a logout that lands
+// DURING a refresh's round-trip would be silently overwritten when the refresh resumes
+// and re-vaults, resurrecting a session the user just ended. Single-threaded, so the
+// only yield points are the awaits; the guard closes exactly that window.
+let sessionEpoch = 0
 // The DPoP key of record — the hardware device key when the machine has one, the
 // vaulted software key otherwise. Resolved once, lazily, post-boot (I7); the resolving
 // promise serializes concurrent first callers.
@@ -266,6 +273,7 @@ async function currentDpopKey(): Promise<DpopKey | null> {
 }
 
 function clearSession(): void {
+  sessionEpoch += 1 // any in-flight refresh that predates this must not re-persist
   vaultClearKey(VAULT_REFRESH)
   vaultClearKey(VAULT_DPOP)
   const store = getSettingsStore()
@@ -403,6 +411,7 @@ export async function accessTokenForEntitlement(): Promise<string | null> {
 }
 
 async function doRefresh(): Promise<string | null> {
+  const epoch = sessionEpoch // the session this refresh belongs to
   const rt = vaultLoad(VAULT_REFRESH)
   const key = await currentDpopKey()
   if (!rt || !key) {
@@ -423,6 +432,10 @@ async function doRefresh(): Promise<string | null> {
     pushStatus()
     return null
   }
+  // A logout (or another session-clear) that landed while we were awaiting the AS wins:
+  // do NOT re-vault a grant the user just ended. The AS already rotated the presented
+  // refresh token, so the newly-issued one is simply dropped — the session stays ended.
+  if (epoch !== sessionEpoch) return null
   // ROTATION: persist the NEW refresh token (many AS rotate on every use; dropping it
   // strands the grant at the next expiry). mergeRefreshedTokens keeps the old one only
   // when the AS returned none.
