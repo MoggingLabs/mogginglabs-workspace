@@ -24,6 +24,13 @@ export default tseslint.config(
       'dist/**',
       'release/**',
       '.claude/**',
+      // The app's own runtime directory inside a repo checkout: agent-isolation
+      // worktrees land under `.mogging/worktrees/<id>` as FULL nested checkouts
+      // (their own tsconfigs included), and a linter that crawls into one dies on
+      // "multiple candidate TSConfigRootDirs" for every file it finds — 1,747
+      // phantom errors on a tree whose tracked files were clean. CI never has the
+      // directory; any dev machine that ever ran isolation does.
+      '.mogging/**',
       'packaging/**'
     ]
   },

@@ -4,11 +4,19 @@
 // Electron implementation of BackendContext lives in the app layer
 // (src/main/electron-context.ts), which is the only place that imports 'electron'.
 
+// `any`, deliberately, in both defaults: these are VARIANCE ERASERS, not laziness.
+// BackendContext.handle takes a bare `InvokeHandler`, and a feature's concretely
+// typed handler ((payload: SavePayload) => …) is only assignable to it when the
+// payload parameter erases — `unknown` there would reject every typed handler at
+// its registration site (parameter contravariance), which is the same reason the
+// TS stdlib types callback parameters as `any` in erased positions.
+/* eslint-disable @typescript-eslint/no-explicit-any */
 export type InvokeHandler<TPayload = any, TResult = any> = (
   payload: TPayload
 ) => TResult | Promise<TResult>
 
 export type CommandHandler<TPayload = any> = (payload: TPayload) => void
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 /** The capabilities a feature is handed at registration time. */
 export interface BackendContext {
