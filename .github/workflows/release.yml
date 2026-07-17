@@ -207,10 +207,17 @@ jobs:
       # (electron-builder.yml `electronFuses`) must die here, not ship (ADR 0016
       # §hardening). Includes the tampered-asar refusal proof; the tamper byte is
       # flipped back before this step ends, and the installers were already built.
+      # The APP resolution's else-branch predates the Linux release row (Phase-4/06
+      # joined it later): on ubuntu it pointed at dist/win-unpacked, which does not
+      # exist there, and the gate refused as blind (run 29592206667 — the row's first
+      # run that got as far as packaging). Linux unpacks at dist/linux-unpacked, the
+      # same path ci.yml's boot job gates.
       - name: Fuse wall gate (fail the release on drift)
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "macOS" ]; then APP=$(ls -d dist/mac* | head -1); else APP=dist/win-unpacked; fi
+          if [ "$RUNNER_OS" = "macOS" ]; then APP=$(ls -d dist/mac* | head -1)
+          elif [ "$RUNNER_OS" = "Linux" ]; then APP=dist/linux-unpacked
+          else APP=dist/win-unpacked; fi
           MOGGING_FUSES_APP="$APP" node scripts/check-fuses.mjs
 
       # *.blockmap (unqualified) so the mac zip's blockmap rides along too — the old glob
