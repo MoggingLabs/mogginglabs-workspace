@@ -39,17 +39,21 @@ export function runBrowserUxSmoke(win: BrowserWindow): void {
     new Promise((resolve) => {
       server = createServer((_req, res) => {
         res.writeHead(200, { 'content-type': 'text/html' })
-        // A page with a favicon, lots of a findable word, and a NOTIFICATIONS request
-        // (which the deny-all handler refuses → the honest permission chip, F16).
-        // Notifications, not geolocation, deliberately: geolocation on macOS consults
-        // Core Location BEFORE Electron's permission handler, and on a runner with no
-        // location service the request dies OS-side — the handler never fires and the
-        // chip never paints (run 29577387596). Notifications route through pure
-        // Chromium on every platform, so the deny-all → chip path is what's measured.
+        // A page with a favicon, lots of a findable word, and a MIDI request (which
+        // the deny-all handler refuses → the honest permission chip, F16). The
+        // fixture permission has been through three shapes, each for a reason:
+        // geolocation dies OS-side on macOS (Core Location is consulted BEFORE
+        // Electron's request handler — run 29577387596); notifications short-circuit
+        // on the SECOND request (Notification.requestPermission reads the permission
+        // STATUS first, our deny-all CHECK handler answers 'denied', and Blink
+        // resolves without consulting the request handler — green once then blank,
+        // run 29581633948). requestMIDIAccess has neither: no OS service in front,
+        // no status short-circuit — every call reaches the request handler, on
+        // every platform, every navigation.
         res.end(
           `<!doctype html><title>UX</title><link rel="icon" href="${FAVICON}">` +
             `<body>${'<p>MATCHWORD here</p>'.repeat(6)}` +
-            `<script>try{Notification.requestPermission(function(){})}catch(e){}</script></body>`
+            `<script>try{navigator.requestMIDIAccess({sysex:true}).catch(function(){})}catch(e){}</script></body>`
         )
       })
       server.listen(0, '127.0.0.1', () => {
@@ -161,10 +165,10 @@ export function runBrowserUxSmoke(win: BrowserWindow): void {
       const openAfter = await ES<boolean>(`${B}.isOpen()`)
       const relayOk = openBefore === true && openAfter === false
 
-      // ── 8. Permission chip (F16): the page's notifications request was denied,
+      // ── 8. Permission chip (F16): the page's MIDI request was denied,
       //       and the chip says so honestly ────────────────────────────────────
       // Re-navigate to the main page (arm 5 left the guest on the error page) so the
-      // notifications request fires again.
+      // MIDI request fires again.
       await ES(`${B}.navigate('127.0.0.1:${port}')`)
       let permChipText = ''
       // 15s, not 6: the guest reload + its permission re-request + the chip paint is
@@ -175,7 +179,7 @@ export function runBrowserUxSmoke(win: BrowserWindow): void {
         await sleep(300)
         permChipText = await ES<string>(`${B}.permChipText()`)
       }
-      const permChipOk = /Blocked: notifications/.test(permChipText)
+      const permChipOk = /Blocked: MIDI/.test(permChipText)
 
       // ── 9. Pins + recents (F14): navigation records a recent; pinning persists ──
       const recentsCount = await ES<number>(`${B}.recentsCount()`)
