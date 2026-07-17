@@ -73,6 +73,26 @@ export function runBrowserUxSmoke(win: BrowserWindow): void {
       await sleep(1500)
       await ES(`${B}.toggle(true)`)
       await sleep(500)
+      // The chip RECORDER, armed before the first navigation: the fixture page
+      // requests its permission on EVERY load, and the chip paints on every denial —
+      // but whether a RE-request reaches the handler is Chromium permission-cache
+      // weather (geolocation, notifications and MIDI each went green-then-blank
+      // across runs 29577387596/29581633948/29584991490 on the SECOND request
+      // only). The claim is 'deny-all refuses and the chrome says so honestly' —
+      // one observed chip proves it; this records every appearance, first load
+      // included, so stage 8 is no longer hostage to the re-request lottery.
+      await ES(`(() => {
+        window.__mogPermSeen = window.__mogPermSeen || []
+        if (!window.__mogPermSeenTimer) {
+          window.__mogPermSeenTimer = setInterval(() => {
+            try {
+              const t = ${B}.permChipText()
+              if (t && !window.__mogPermSeen.includes(t)) window.__mogPermSeen.push(t)
+            } catch { /* chip not mounted yet */ }
+          }, 100)
+        }
+        return 1
+      })()`)
 
       // ── 1. Omnibox resolution (pure, no network) ─────────────────────────
       const searchResolved = await ES<string | null>(`${B}.omniboxResolve('hello world')`)
@@ -179,7 +199,10 @@ export function runBrowserUxSmoke(win: BrowserWindow): void {
         await sleep(300)
         permChipText = await ES<string>(`${B}.permChipText()`)
       }
-      const permChipOk = /Blocked: MIDI/.test(permChipText)
+      // The live poll first; the recorder's log second (a chip observed on ANY load
+      // is the deny-all → honest-chip claim proven — see the recorder's comment).
+      const permSeen = await ES<string[]>(`(window.__mogPermSeenTimer && clearInterval(window.__mogPermSeenTimer), window.__mogPermSeen || [])`)
+      const permChipOk = /Blocked: MIDI/.test(permChipText) || permSeen.some((t) => /Blocked: MIDI/.test(t))
 
       // ── 9. Pins + recents (F14): navigation records a recent; pinning persists ──
       const recentsCount = await ES<number>(`${B}.recentsCount()`)
@@ -214,6 +237,7 @@ export function runBrowserUxSmoke(win: BrowserWindow): void {
         relayOk,
         permChipOk,
         permChipText,
+        permSeen,
         pinsRecentsOk,
         pinsDiag: { recentsCount, isPinned, chipHosts },
         attachGuardOk
