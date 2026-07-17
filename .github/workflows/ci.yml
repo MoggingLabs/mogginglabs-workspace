@@ -168,8 +168,16 @@ jobs:
         id: nmcache
         uses: actions/cache@v6
         with:
-          path: node_modules
-          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json') }}-e34
+          # build/node-helper rides in the same entry: the composite action (which is
+          # what builds it) is SKIPPED on cache-hit, so a cache that carried only
+          # node_modules restored a world with no helper — and every daemon-hosting
+          # gate failed on environment. The helper script joins the key so a pinned-
+          # Node bump can never serve a stale helper. (-e35: the -e34 entries were
+          # saved by failed jobs, node_modules-only.)
+          path: |
+            node_modules
+            build/node-helper
+          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json', 'scripts/build-node-helper.mjs') }}-e35
 
       # The whole install/fetch/rebuild dance lives ONCE in the composite action
       # (.github/actions/electron-native-rebuild) — it was copy-pasted five times.
@@ -240,8 +248,16 @@ jobs:
         id: nmcache
         uses: actions/cache@v6
         with:
-          path: node_modules
-          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json') }}-e34
+          # build/node-helper rides in the same entry: the composite action (which is
+          # what builds it) is SKIPPED on cache-hit, so a cache that carried only
+          # node_modules restored a world with no helper — and every daemon-hosting
+          # gate failed on environment. The helper script joins the key so a pinned-
+          # Node bump can never serve a stale helper. (-e35: the -e34 entries were
+          # saved by failed jobs, node_modules-only.)
+          path: |
+            node_modules
+            build/node-helper
+          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json', 'scripts/build-node-helper.mjs') }}-e35
 
       # The whole install/fetch/rebuild dance lives ONCE in the composite action
       # (.github/actions/electron-native-rebuild) — it was copy-pasted five times.
@@ -323,8 +339,16 @@ jobs:
         id: nmcache
         uses: actions/cache@v6
         with:
-          path: node_modules
-          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json') }}-e34
+          # build/node-helper rides in the same entry: the composite action (which is
+          # what builds it) is SKIPPED on cache-hit, so a cache that carried only
+          # node_modules restored a world with no helper — and every daemon-hosting
+          # gate failed on environment. The helper script joins the key so a pinned-
+          # Node bump can never serve a stale helper. (-e35: the -e34 entries were
+          # saved by failed jobs, node_modules-only.)
+          path: |
+            node_modules
+            build/node-helper
+          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json', 'scripts/build-node-helper.mjs') }}-e35
 
       # The @electron/rebuild spawn hang is NOT ubuntu-only: this job's original
       # full `npm ci` sat at "executing @electron/rebuild" for 25 minutes of zero
@@ -388,8 +412,16 @@ jobs:
         id: nmcache
         uses: actions/cache@v6
         with:
-          path: node_modules
-          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json') }}-e34
+          # build/node-helper rides in the same entry: the composite action (which is
+          # what builds it) is SKIPPED on cache-hit, so a cache that carried only
+          # node_modules restored a world with no helper — and every daemon-hosting
+          # gate failed on environment. The helper script joins the key so a pinned-
+          # Node bump can never serve a stale helper. (-e35: the -e34 entries were
+          # saved by failed jobs, node_modules-only.)
+          path: |
+            node_modules
+            build/node-helper
+          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json', 'scripts/build-node-helper.mjs') }}-e35
 
       # The whole install/fetch/rebuild dance lives ONCE in the composite action
       # (.github/actions/electron-native-rebuild) — it was copy-pasted five times.

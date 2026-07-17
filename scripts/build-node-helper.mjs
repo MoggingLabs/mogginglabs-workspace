@@ -39,7 +39,7 @@
 // a helper that cannot host the daemon must never reach a gate, let alone a package.
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { delimiter, dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -123,7 +123,14 @@ async function fetchPinnedNode() {
     writeFileSync(archivePath, archive)
     const inner = `node-v${HELPER_NODE_VERSION}-${PLATFORM === 'win32' ? `win-${ARCH}` : `${PLATFORM}-${ARCH}`}`
     if (PLATFORM === 'win32') {
-      const r = spawnSync('tar', ['-xf', archivePath, `${inner}/node.exe`], { cwd: scratch, stdio: 'inherit' })
+      // The SYSTEM tar (bsdtar, shipped with Windows since 10 1803), named by full
+      // path: a bare `tar` resolves to GNU tar when this runs under Git Bash (the CI
+      // sweep's shell), and GNU tar parses `C:\…` as a REMOTE HOST ("Cannot connect
+      // to C: resolve failed") and cannot read zip either way. Local runs never saw
+      // it because PowerShell/cmd resolve System32's bsdtar first.
+      const systemTar = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
+      const tarBin = existsSync(systemTar) ? systemTar : 'tar'
+      const r = spawnSync(tarBin, ['-xf', archivePath, `${inner}/node.exe`], { cwd: scratch, stdio: 'inherit' })
       if (r.status !== 0) throw new Error('archive extraction failed')
       copyFileSync(join(scratch, inner, 'node.exe'), helperBin)
     } else {
@@ -193,6 +200,27 @@ if (npm.status !== 0) {
 const depsDir = join(OUT, HELPER_DEPS_DIR)
 rmSync(depsDir, { recursive: true, force: true })
 renameSync(join(OUT, 'node_modules'), depsDir)
+
+// node-pty on macOS forks every PTY through its bundled `spawn-helper` BINARY, and a
+// prebuild is only executable if the npm tarball's mode bits say so — they have shipped
+// as 644 (the exact symptom: the very first pty.fork dies with "posix_spawnp failed",
+// which is how the macos-26 sweep found this). A source compile links the helper
+// executable, which is why the Electron-ABI copy and every local dev build never hit
+// it. Re-assert the bit on every copy present instead of trusting the archive —
+// harmless when already set, no-op on win32/linux (no such file), and the probe below
+// proves the result either way.
+if (PLATFORM !== 'win32') {
+  const stack = [join(depsDir, 'node-pty')]
+  while (stack.length) {
+    const dir = stack.pop()
+    if (!existsSync(dir)) continue
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name)
+      if (entry.isDirectory()) stack.push(p)
+      else if (entry.name === 'spawn-helper') chmodSync(p, 0o755)
+    }
+  }
+}
 
 // ── 3. Prove it: the helper itself must load both addons and do real work ─────────────
 // A pty spawn (node-pty) and an insert/select round-trip (better-sqlite3), executed BY
