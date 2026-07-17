@@ -30,7 +30,9 @@ export function runAuthRunnerSmoke(win: BrowserWindow): void {
   const openCard = async (label: string): Promise<boolean> => {
     const opened = await ES<boolean>(`(() => {
       const card = [...document.querySelectorAll('.cat-card')].find((item) => item.querySelector('.mgr-label')?.textContent?.trim() === ${JSON.stringify(label)})
-      const button = [...(card?.querySelectorAll('button') ?? [])].find((item) => item.textContent?.includes('Connect'))
+      // F-22 renamed the CARD's opener to 'Add to CLI…' ('Connect' is reserved for
+      // account connections); the panel's confirm below is still 'Connect'.
+      const button = [...(card?.querySelectorAll('button') ?? [])].find((item) => item.textContent?.includes('Add to CLI'))
       if (!(button instanceof HTMLButtonElement)) return false
       button.click()
       return true

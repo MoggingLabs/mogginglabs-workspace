@@ -165,6 +165,10 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
       const mailArrived = (await cli(['mail', 'read', '--json'], { MOGGING_PANE_ID: a2 })).stdout.includes(
         'MCPWRITE_MAIL_4242'
       )
+      // 20s, not the 4.8s default: the receipt's attention crosses MCP → daemon →
+      // notify → the attention scan's own cadence, and the macos runner's slow mode
+      // outlived the old budget with the latch correct (run 29547052949). A green
+      // run still exits on the first true probe.
       const receiptAttention = await waitFor(async () => {
         const panes = await callTool(c1, 'list_panes')
         try {
@@ -173,7 +177,7 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
         } catch {
           return false
         }
-      })
+      }, 40, 500)
       const mailOk = !mailed.isError && !mailed.rpcError && mailArrived
 
       // claim_files: granted here; a SECOND session (pane a2) claiming an

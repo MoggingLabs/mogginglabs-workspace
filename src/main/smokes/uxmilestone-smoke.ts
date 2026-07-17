@@ -157,7 +157,12 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
         app: document.getElementById('app').classList.contains('view-wizard'),
         rail: document.querySelector('#rail')?.getBoundingClientRect().width ?? 0
       }))()`)
-      const onePageOk = shape.cards === 0 && shape.pages === 1 && shape.steppers === 0 && shape.overlays === 0 && shape.app && shape.rail > 0
+      // rail === 0: this wizard opens with ZERO workspaces, and the zero-workspace
+      // lockdown runs it FULL-BLEED — the rail joins only when there are workspaces
+      // to show (d4fcbde; wizardux/homeux hold the same truth). The launch below
+      // creates the first workspace, and stage (a)'s launch assert entering the grid
+      // is where the rail's return is implied.
+      const onePageOk = shape.cards === 0 && shape.pages === 1 && shape.steppers === 0 && shape.overlays === 0 && shape.app && shape.rail === 0
 
       stage = 'a-folderpick'
       // Pick a child folder BY CLICK — cwd, path bar and browser selection move as one.

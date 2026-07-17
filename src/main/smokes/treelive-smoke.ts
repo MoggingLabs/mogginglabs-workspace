@@ -1,5 +1,5 @@
 import { app, type BrowserWindow } from 'electron'
-import { mkdirSync, mkdtempSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WATCH_POOL_CAP } from '@backend/features/explorer'
@@ -35,7 +35,11 @@ interface Fixture {
 }
 
 function makeFixture(): Fixture {
-  const root = mkdtempSync(join(tmpdir(), 'mog-treelive-'))
+  // Canonical root (realpathSync.native): runner temp dirs are aliases — Windows 8.3
+  // short names, macOS /var → /private/var — and the watcher stack canonicalizes, so
+  // an alias-rooted fixture's paths stop matching their own root (filesmilestone has
+  // the full story; same fix, same run 29547052949).
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'mog-treelive-')))
 
   // `live`: the dir we watch. Enough files that the tree scrolls, so (a) can prove the
   // scroll position is not thrown away by an update.

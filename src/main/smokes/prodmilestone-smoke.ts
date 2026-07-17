@@ -314,9 +314,16 @@ export function runProdMilestoneSmoke(win: BrowserWindow): void {
         foreignDeviceFree =
           deviceB !== null && deviceB !== jktA && snapB.plan === 'free' && snapB.reason === 'device_mismatch' && cachedDeviceIdForSmoke() === jktA
       } else {
-        // Software custody: the vaulted key does not decrypt off-machine — the copy has
-        // NO key, which is that custody's honest shape (DEVICEKEY owns the per-OS law).
+        // Software custody: NOTHING in the vault decrypts off-machine — the copy has no
+        // key and no cached claim either (safeStorage is machine-bound; DEVICEKEY owns
+        // that per-OS law). Model the WHOLE loss: clearing only the key left the cached
+        // claim readable with no device identity to judge it against, and the engine's
+        // honest provisional honor read as a gate failure — a state no real foreign
+        // machine can reach (first linux/mac contact, run 29547052949). The refresh
+        // token deliberately stays, so the no-key path proves the unusable-grant law:
+        // a clean drop to anon, never a re-license.
         vaultClearKey('account.dpopKey')
+        vaultClearKey('entitlements.cache')
         dropDpopKeyMemoryForSmoke()
         dropMemoryCacheForSmoke()
       }
@@ -329,7 +336,10 @@ export function runProdMilestoneSmoke(win: BrowserWindow): void {
         idp.issuedRefresh.length === issuedBefore &&
         getEntitlements().snapshot().plan === 'free' &&
         accountStatus().state === 'anon' &&
-        cachedDeviceIdForSmoke() === jktA
+        // Hardware custody: the cache RIDES ALONG inert (the device-mismatch story
+        // reads it). Software custody: the cache was vault ciphertext, so the foreign
+        // machine holds nothing — absent is that custody's honest shape.
+        (deviceLeg ? cachedDeviceIdForSmoke() === jktA : cachedDeviceIdForSmoke() === null)
 
       // ── A5. Back on device A, re-licensed — then a TAMPERED build ────────────────
       setDeviceKeyNameForSmoke(NAME_A)

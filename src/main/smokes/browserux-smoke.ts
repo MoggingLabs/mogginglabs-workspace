@@ -162,7 +162,11 @@ export function runBrowserUxSmoke(win: BrowserWindow): void {
       // geolocation request fires again.
       await ES(`${B}.navigate('127.0.0.1:${port}')`)
       let permChipText = ''
-      for (let i = 0; i < 20 && !/Blocked/.test(permChipText); i++) {
+      // 15s, not 6: the guest reload + its geolocation re-request + the chip paint is
+      // three async legs, and the shared-vCPU macos runner is BIMODAL (ci.yml) — the
+      // slow mode blew the old budget with the product correct (run 29547052949).
+      // Green runs exit this poll in a beat either way.
+      for (let i = 0; i < 50 && !/Blocked/.test(permChipText); i++) {
         await sleep(300)
         permChipText = await ES<string>(`${B}.permChipText()`)
       }

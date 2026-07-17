@@ -53,10 +53,13 @@ export function runSetShellSmoke(win: BrowserWindow): void {
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
   // Section order (the DOM order of `.settings-section`).
-  const TABS = ['appearance', 'terminal', 'clipboard', 'providers', 'profiles', 'usage', 'integrations', 'webhooks', 'privacy', 'browser', 'activity', 'shortcuts', 'about']
+  const TABS = ['appearance', 'terminal', 'clipboard', 'providers', 'profiles', 'usage', 'integrations', 'webhooks', 'privacy', 'browser', 'activity', 'account', 'shortcuts', 'about']
   // Nav order — GROUPED, so it is deliberately not the section order. Asserting both
   // catches a tab that vanishes from the rail while its section still exists.
-  const NAV_ORDER = ['appearance', 'terminal', 'clipboard', 'providers', 'profiles', 'integrations', 'usage', 'webhooks', 'privacy', 'browser', 'activity', 'shortcuts', 'about']
+  // 'account' joined the Trust group with phase-accounts (Settings › Account — the
+  // claims-only plan panel, docs/19); this list rotted for one sweep because no
+  // post-accounts battery carried SETSHELL.
+  const NAV_ORDER = ['appearance', 'terminal', 'clipboard', 'providers', 'profiles', 'integrations', 'usage', 'webhooks', 'privacy', 'browser', 'activity', 'account', 'shortcuts', 'about']
 
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }

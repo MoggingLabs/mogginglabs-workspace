@@ -715,9 +715,13 @@ export function runClipboardSmoke(win: BrowserWindow): void {
       const hint = row?.querySelector('.toggle-row-hint')?.textContent || ''
       const empty = section?.querySelector('.clip-empty')?.textContent || ''
       const pref = localStorage.getItem('mogging.clipboard.historyEnabled')
+      // The pins follow the settings copy pass (clipboard.ts): the hint stopped
+      // quoting the 800 ms poll figure and says 'another app' now — pin the three
+      // load-bearing promises (opt-in default, cross-app scope, secret refusal)
+      // rather than the exact prose.
       const pass = input instanceof HTMLInputElement && !input.checked && pref === '0' &&
-        hint.includes('Off by default') && hint.includes('800 ms') &&
-        hint.includes('other apps') && empty.includes('Clipboard history is off') &&
+        hint.includes('Off by default') && hint.includes('another app') &&
+        hint.includes('never retained') && empty.includes('Clipboard history is off') &&
         empty.includes('not reading')
       return { pass, checked: input instanceof HTMLInputElement ? input.checked : null, pref, hint, empty }
     })()`, true)) as Record<string, unknown> & { pass?: boolean }

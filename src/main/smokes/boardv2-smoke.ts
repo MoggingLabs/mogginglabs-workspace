@@ -1,6 +1,6 @@
 import { app, type BrowserWindow } from 'electron'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { boardDebug, boardForWorkspaceId } from '../board'
@@ -50,7 +50,12 @@ export function runBoardV2Smoke(win: BrowserWindow): void {
       const unfiledFirst = preBoard?.projectKey === '::unfiled'
 
       // The world: repoA (+ a real linked worktree), and a plain folderB.
-      const repoA = mkdtempSync(join(tmpdir(), 'mogging-bv2-a-'))
+      // Canonical roots (realpathSync.native): the board resolver keys a project off
+      // git's own answer, which is always the LONG canonical path — a workspace
+      // created on a runner's 8.3-alias temp cwd (C:\Users\RUNNER~1\…) resolved to a
+      // key the smoke's raw string never matched (identityOk null, win+mac sweeps,
+      // run 29547052949). Same alias family as filesmilestone's fix.
+      const repoA = realpathSync.native(mkdtempSync(join(tmpdir(), 'mogging-bv2-a-')))
       git(repoA, ['init'])
       git(repoA, ['symbolic-ref', 'HEAD', 'refs/heads/main'])
       git(repoA, ['config', 'user.email', 'smoke@mogging.test'])
@@ -63,7 +68,7 @@ export function runBoardV2Smoke(win: BrowserWindow): void {
       writeFileSync(join(repoA, '.mogging', '.gitignore'), '*\n')
       const wtPath = join(repoA, '.mogging', 'worktrees', 'wt1')
       git(repoA, ['worktree', 'add', wtPath, '-b', 'mogging/wt1'])
-      const folderB = mkdtempSync(join(tmpdir(), 'mogging-bv2-b-'))
+      const folderB = realpathSync.native(mkdtempSync(join(tmpdir(), 'mogging-bv2-b-')))
 
       type WsMeta = { id: string }
       const wsA = (await ES(`window.__mogging.workspace.create({ name: 'RepoA', cwd: ${JSON.stringify(repoA)} })`)) as WsMeta

@@ -284,6 +284,10 @@ export function runIntegMilestoneSmoke(win: BrowserWindow): void {
         return cap.text.includes('INTEGMILE_SENT_4242')
       })
       const mailed = await callTool(c1, 'mail_send', { to: a2, body: 'INTEGMILE_MAIL_4242' })
+      // 20s, not the 6s default: the receipt's attention latch crosses MCP → daemon →
+      // notify → the attention scan's cadence, and the bimodal macos runner outlived
+      // the old budget with the latch correct (run 29547052949) — mcpwrite widened the
+      // same probe. Green runs exit on the first true.
       const receiptAttention = await waitFor(async () => {
         const p = await callTool(c1, 'list_panes')
         try {
@@ -291,7 +295,7 @@ export function runIntegMilestoneSmoke(win: BrowserWindow): void {
         } catch {
           return false
         }
-      })
+      }, 40, 500)
       await callTool(c1, 'release_files', { all: true })
       const cWriteOk = !claimed.isError && !claimed.rpcError && !sent.isError && !sent.rpcError && !mailed.isError && !mailed.rpcError
       // A second, UNGRANTED workspace sees zero writes.

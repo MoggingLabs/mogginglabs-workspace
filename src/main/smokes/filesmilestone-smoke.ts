@@ -1,6 +1,6 @@
 import { app, clipboard, type BrowserWindow } from 'electron'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { probeGitFull } from '@backend/features/git'
@@ -42,7 +42,14 @@ function git(cwd: string, args: string[]): string {
 }
 
 function makeFixture(): Fixture {
-  const base = mkdtempSync(join(tmpdir(), 'mog-filesms-'))
+  // realpathSync.native: the CANONICAL spelling of the fresh dir. CI temp dirs are
+  // aliases — 8.3 short names on Windows runners (C:\Users\RUNNER~1\…), the /var →
+  // /private/var symlink on macOS — and the watcher stack canonicalizes real paths,
+  // so an alias-rooted fixture reads as OUTSIDE its own root (win+mac sweep reds,
+  // run 29547052949; local and linux temp paths are already canonical, which is why
+  // only runners bit). `.native` matters: the JS realpath resolves symlinks but not
+  // Windows short names.
+  const base = realpathSync.native(mkdtempSync(join(tmpdir(), 'mog-filesms-')))
   const repo = join(base, 'workspace')
   mkdirSync(join(repo, 'src'), { recursive: true })
   mkdirSync(join(repo, 'docs'))
