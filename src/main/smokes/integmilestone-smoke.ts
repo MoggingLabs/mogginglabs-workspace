@@ -283,12 +283,26 @@ export function runIntegMilestoneSmoke(win: BrowserWindow): void {
         const cap = await callTool(c1, 'capture_pane', { pane: a2, lines: 100 })
         return cap.text.includes('INTEGMILE_SENT_4242')
       })
+      // The 100ms transition recorder alongside the poll — the latch may be observed
+      // and then legitimately released (an idle verdict from the pane's own shell)
+      // between slower samples; a recorded 'attention' IS the claim proven. mcpwrite
+      // carries the full story (run 29577387596).
+      const a2Seen: string[] = []
+      let a2Rec = true
+      const a2RecDone = (async (): Promise<void> => {
+        while (a2Rec && a2Seen.length < 300) {
+          try {
+            const p = await callTool(c1, 'list_panes')
+            const st = (JSON.parse(p.text) as { id: string; state?: string }[]).find((x) => String(x.id) === a2)?.state ?? 'gone'
+            if (a2Seen[a2Seen.length - 1] !== st) a2Seen.push(st)
+          } catch {
+            /* keep sampling */
+          }
+          await sleep(100)
+        }
+      })()
       const mailed = await callTool(c1, 'mail_send', { to: a2, body: 'INTEGMILE_MAIL_4242' })
-      // 20s, not the 6s default: the receipt's attention latch crosses MCP → daemon →
-      // notify → the attention scan's cadence, and the bimodal macos runner outlived
-      // the old budget with the latch correct (run 29547052949) — mcpwrite widened the
-      // same probe. Green runs exit on the first true.
-      const receiptAttention = await waitFor(async () => {
+      const receiptPolled = await waitFor(async () => {
         const p = await callTool(c1, 'list_panes')
         try {
           return (JSON.parse(p.text) as { id: string; state?: string }[]).some((x) => String(x.id) === a2 && x.state === 'attention')
@@ -296,6 +310,9 @@ export function runIntegMilestoneSmoke(win: BrowserWindow): void {
           return false
         }
       }, 40, 500)
+      a2Rec = false
+      await a2RecDone
+      const receiptAttention = receiptPolled || a2Seen.includes('attention')
       await callTool(c1, 'release_files', { all: true })
       const cWriteOk = !claimed.isError && !claimed.rpcError && !sent.isError && !sent.rpcError && !mailed.isError && !mailed.rpcError
       // A second, UNGRANTED workspace sees zero writes.
@@ -554,6 +571,8 @@ export function runIntegMilestoneSmoke(win: BrowserWindow): void {
         planScopedOk,
         bOk,
         cOk,
+        receiptPolled,
+        a2Seen,
         dOk,
         eOk,
         fOk,

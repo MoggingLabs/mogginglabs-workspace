@@ -83,9 +83,12 @@ export function runBoardUxSmoke(win: BrowserWindow): void {
         return Math.abs(before - after) <= 1
       })()`)
 
-      // (c) ⋯ menu opens fully inside the viewport.
+      // (c) ⋯ menu opens fully inside the viewport. Bounded WAIT, not a fixed sleep —
+      // the same mount race (d) below already learned: at 200ms on a slow runner the
+      // portal had not mounted, `!m` read as "clipped", and menuOk failed with the
+      // product correct (windows sweep, run 29577387596).
       await ES(`document.querySelector('.board-card[data-card-id=${JSON.stringify(cardId)}] .board-card-more').click()`)
-      await sleep(200)
+      await waitTrue(`!!document.querySelector('.ctx-menu .ctx-item')`)
       // The card ⋯ is a REAL menu now (role=menu/menuitem, roving focus, Escape, focus return),
       // portaled to <body> by the shared context-menu primitive — it is no longer a hand-rolled
       // `div.menu[hidden]` inside the card. Same contract, new selectors (finding 31).

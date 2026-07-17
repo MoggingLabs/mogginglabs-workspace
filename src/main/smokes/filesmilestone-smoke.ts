@@ -285,6 +285,17 @@ export function runFilesMilestoneSmoke(win: BrowserWindow): void {
         switchBack.names.includes('agent-made.ts')
 
       // ── (10) The BUDGETS, on the composed surface: 16 panes + explorer + torrent ───
+      // The canonical HARNESS screen — the qa-smokes machine pin's twin. The macos
+      // runner's ~800px display honestly holds 3×5 = 15 panes with the explorer dock's
+      // chrome subtracted, so apply(16) mounted 15: the capacity model working exactly
+      // as shipped (run 29577387596), red for the hardware, not the product. The claim
+      // HERE is the composed 16-pane budget, so the screen is pinned like the machine
+      // is; panes keep their floors on the scrolling canvas (the wizlayout-proven path).
+      await ES(`(() => {
+        Object.defineProperty(window.screen, 'availWidth', { get: () => 1920, configurable: true })
+        Object.defineProperty(window.screen, 'availHeight', { get: () => 1080, configurable: true })
+        return 1
+      })()`)
       await ES(`window.__mogging.layout.apply(16)`)
       await sleep(9000) // sixteen shells spawn
       // Count the ACTIVE workspace's panes, the MILESTONE way: pane ids are

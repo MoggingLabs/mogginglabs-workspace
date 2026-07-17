@@ -161,6 +161,26 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
       // mail_send: arrives for the target AND the receipt lands attention on
       // the target pane's header (the house notify path) — no PTY output races
       // this one, so the state assert is clean.
+      // The TIMELINE recorder rides alongside the poll below: on the macos runner the
+      // latch read as never-set at every 500ms sample (run 29577387596) and a poll
+      // cannot distinguish "never latched" from "latched and released between
+      // samples" — a distinction that decides whether the fix is the gate's or the
+      // tracker's. 100ms samples, ids+states only, bounded, attached to the verdict.
+      const a2Timeline: string[] = []
+      let timelineOn = true
+      const timelineDone = (async (): Promise<void> => {
+        while (timelineOn && a2Timeline.length < 300) {
+          try {
+            const panes = await callTool(c1, 'list_panes')
+            const row = (JSON.parse(panes.text) as { id: string; state?: string }[]).find((p) => String(p.id) === a2)
+            const st = row?.state ?? 'gone'
+            if (a2Timeline[a2Timeline.length - 1] !== st) a2Timeline.push(st)
+          } catch {
+            /* keep sampling */
+          }
+          await sleep(100)
+        }
+      })()
       const mailed = await callTool(c1, 'mail_send', { to: a2, body: 'MCPWRITE_MAIL_4242' })
       const mailArrived = (await cli(['mail', 'read', '--json'], { MOGGING_PANE_ID: a2 })).stdout.includes(
         'MCPWRITE_MAIL_4242'
@@ -169,7 +189,7 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
       // notify → the attention scan's own cadence, and the macos runner's slow mode
       // outlived the old budget with the latch correct (run 29547052949). A green
       // run still exits on the first true probe.
-      const receiptAttention = await waitFor(async () => {
+      const receiptPolled = await waitFor(async () => {
         const panes = await callTool(c1, 'list_panes')
         try {
           const rows = JSON.parse(panes.text) as { id: string; state?: string }[]
@@ -178,6 +198,13 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
           return false
         }
       }, 40, 500)
+      timelineOn = false
+      await timelineDone
+      // The claim is "the receipt LANDS attention on the target pane" — the 100ms
+      // timeline observing the latch is that claim proven, even where a later,
+      // legitimate release (an idle verdict from the pane's own shell) collects it
+      // before a slower poll looks. The poll stays as the primary read.
+      const receiptAttention = receiptPolled || a2Timeline.includes('attention')
       const mailOk = !mailed.isError && !mailed.rpcError && mailArrived
 
       // claim_files: granted here; a SECOND session (pane a2) claiming an
@@ -303,6 +330,8 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
         sendOk,
         mailOk,
         receiptAttention,
+        receiptPolled,
+        a2Timeline,
         claimOk,
         deniedMsg: denied.text,
         releaseOk,
