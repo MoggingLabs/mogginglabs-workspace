@@ -78,9 +78,16 @@ jobs:
           sudo apt-get install -y build-essential python3 python3-setuptools xvfb
 
       # Python >= 3.12 dropped distutils; node-gyp needs setuptools (README-documented).
+      # coreutils: the macOS 26 image ships NO GNU timeout/gtimeout and qa-smokes
+      # refuses to run without a watchdog — the invariant-smokes step below is a
+      # qa-smokes run. ci.yml's macos-sweep learned this first (run 28657315132); the
+      # release row hit it the FIRST time it ran since the runtime split added the
+      # smokes here (run 29591774903).
       - name: macOS toolchain
         if: runner.os == 'macOS'
-        run: python3 -m pip install --break-system-packages setuptools
+        run: |
+          python3 -m pip install --break-system-packages setuptools
+          brew install coreutils
 
       # ALL platforms use the direct node-gyp bypass now. @electron/rebuild's
       # SPAWNED node-gyp is broken across the whole 2026-07 image family — zero
@@ -108,6 +115,16 @@ jobs:
       # and this job dies on any red — release BLOCKS unless SURVIVE + CONTROL +
       # RUNTIMESPLIT are all green, on every OS row. They run BEFORE `npm run build`:
       # each gate boots `npm run dev`, which overwrites out/ with the dev bundle.
+      # Electron's SUID sandbox helper must be root:4755 (never true on a CI checkout) —
+      # without it the app dies at launch and every gate below reads MISSING (the exact
+      # signature of run 29591774903's ubuntu row). Same fix as every ci.yml linux job;
+      # fix it rather than disable the sandbox.
+      - name: Sandbox helper perms
+        if: runner.os == 'Linux'
+        run: |
+          sudo chown root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+
       - name: Invariant smokes — SURVIVE + CONTROL + RUNTIMESPLIT (release blocks on red)
         timeout-minutes: 25
         shell: bash
