@@ -56,6 +56,16 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
+      # `--ignore-scripts` above also skips ELECTRON's own postinstall — the one that
+      # downloads the Electron binary. Since the runtime split (ADR 0016/0017) the main
+      # bundle compiles to V8 BYTECODE at `npm run build`, and electron-vite spawns that
+      # binary to do it — so the Build step, and the prod-artifact/bytecode gates that
+      # build for themselves, all die with "[vite:bytecode] Electron uninstall" without
+      # it. Fetch exactly the binary; the native modules stay uncompiled (the comment
+      # above still holds — they are externalized and never bundled).
+      - name: Fetch the Electron binary (the bytecode compile spawns it)
+        run: node node_modules/electron/install.js
+
       - name: Typecheck
         run: npm run typecheck
 
