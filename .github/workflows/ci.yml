@@ -168,16 +168,19 @@ jobs:
         id: nmcache
         uses: actions/cache@v6
         with:
-          # build/node-helper rides in the same entry: the composite action (which is
-          # what builds it) is SKIPPED on cache-hit, so a cache that carried only
-          # node_modules restored a world with no helper — and every daemon-hosting
-          # gate failed on environment. The helper script joins the key so a pinned-
-          # Node bump can never serve a stale helper. (-e35: the -e34 entries were
-          # saved by failed jobs, node_modules-only.)
+          # EVERYTHING the composite action produces rides in this entry, because the
+          # action is SKIPPED on cache-hit: node_modules (electron dist + ABI .node
+          # files included), build/node-helper, AND the device-key addon — which
+          # builds under src/, was missing from the first helper-carrying entries,
+          # and failed every cache-hit boot at native-preflight (run 29556056031).
+          # The two build scripts + the addon's own sources join the key so a bump
+          # or source edit can never serve a stale artifact. (-e36: -e34 entries
+          # were node_modules-only; -e35 lacked the device-key addon.)
           path: |
             node_modules
             build/node-helper
-          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json', 'scripts/build-node-helper.mjs') }}-e35
+            src/backend/platform/device-key/build
+          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json', 'scripts/build-node-helper.mjs', 'scripts/build-device-key.mjs', 'src/backend/platform/device-key/binding.gyp', 'src/backend/platform/device-key/src/**') }}-e36
 
       # The whole install/fetch/rebuild dance lives ONCE in the composite action
       # (.github/actions/electron-native-rebuild) — it was copy-pasted five times.
@@ -248,16 +251,19 @@ jobs:
         id: nmcache
         uses: actions/cache@v6
         with:
-          # build/node-helper rides in the same entry: the composite action (which is
-          # what builds it) is SKIPPED on cache-hit, so a cache that carried only
-          # node_modules restored a world with no helper — and every daemon-hosting
-          # gate failed on environment. The helper script joins the key so a pinned-
-          # Node bump can never serve a stale helper. (-e35: the -e34 entries were
-          # saved by failed jobs, node_modules-only.)
+          # EVERYTHING the composite action produces rides in this entry, because the
+          # action is SKIPPED on cache-hit: node_modules (electron dist + ABI .node
+          # files included), build/node-helper, AND the device-key addon — which
+          # builds under src/, was missing from the first helper-carrying entries,
+          # and failed every cache-hit boot at native-preflight (run 29556056031).
+          # The two build scripts + the addon's own sources join the key so a bump
+          # or source edit can never serve a stale artifact. (-e36: -e34 entries
+          # were node_modules-only; -e35 lacked the device-key addon.)
           path: |
             node_modules
             build/node-helper
-          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json', 'scripts/build-node-helper.mjs') }}-e35
+            src/backend/platform/device-key/build
+          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json', 'scripts/build-node-helper.mjs', 'scripts/build-device-key.mjs', 'src/backend/platform/device-key/binding.gyp', 'src/backend/platform/device-key/src/**') }}-e36
 
       # The whole install/fetch/rebuild dance lives ONCE in the composite action
       # (.github/actions/electron-native-rebuild) — it was copy-pasted five times.
@@ -339,16 +345,19 @@ jobs:
         id: nmcache
         uses: actions/cache@v6
         with:
-          # build/node-helper rides in the same entry: the composite action (which is
-          # what builds it) is SKIPPED on cache-hit, so a cache that carried only
-          # node_modules restored a world with no helper — and every daemon-hosting
-          # gate failed on environment. The helper script joins the key so a pinned-
-          # Node bump can never serve a stale helper. (-e35: the -e34 entries were
-          # saved by failed jobs, node_modules-only.)
+          # EVERYTHING the composite action produces rides in this entry, because the
+          # action is SKIPPED on cache-hit: node_modules (electron dist + ABI .node
+          # files included), build/node-helper, AND the device-key addon — which
+          # builds under src/, was missing from the first helper-carrying entries,
+          # and failed every cache-hit boot at native-preflight (run 29556056031).
+          # The two build scripts + the addon's own sources join the key so a bump
+          # or source edit can never serve a stale artifact. (-e36: -e34 entries
+          # were node_modules-only; -e35 lacked the device-key addon.)
           path: |
             node_modules
             build/node-helper
-          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json', 'scripts/build-node-helper.mjs') }}-e35
+            src/backend/platform/device-key/build
+          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json', 'scripts/build-node-helper.mjs', 'scripts/build-device-key.mjs', 'src/backend/platform/device-key/binding.gyp', 'src/backend/platform/device-key/src/**') }}-e36
 
       # The @electron/rebuild spawn hang is NOT ubuntu-only: this job's original
       # full `npm ci` sat at "executing @electron/rebuild" for 25 minutes of zero
@@ -412,16 +421,19 @@ jobs:
         id: nmcache
         uses: actions/cache@v6
         with:
-          # build/node-helper rides in the same entry: the composite action (which is
-          # what builds it) is SKIPPED on cache-hit, so a cache that carried only
-          # node_modules restored a world with no helper — and every daemon-hosting
-          # gate failed on environment. The helper script joins the key so a pinned-
-          # Node bump can never serve a stale helper. (-e35: the -e34 entries were
-          # saved by failed jobs, node_modules-only.)
+          # EVERYTHING the composite action produces rides in this entry, because the
+          # action is SKIPPED on cache-hit: node_modules (electron dist + ABI .node
+          # files included), build/node-helper, AND the device-key addon — which
+          # builds under src/, was missing from the first helper-carrying entries,
+          # and failed every cache-hit boot at native-preflight (run 29556056031).
+          # The two build scripts + the addon's own sources join the key so a bump
+          # or source edit can never serve a stale artifact. (-e36: -e34 entries
+          # were node_modules-only; -e35 lacked the device-key addon.)
           path: |
             node_modules
             build/node-helper
-          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json', 'scripts/build-node-helper.mjs') }}-e35
+            src/backend/platform/device-key/build
+          key: ${{ runner.os }}-nm-${{ hashFiles('package-lock.json', 'scripts/build-node-helper.mjs', 'scripts/build-device-key.mjs', 'src/backend/platform/device-key/binding.gyp', 'src/backend/platform/device-key/src/**') }}-e36
 
       # The whole install/fetch/rebuild dance lives ONCE in the composite action
       # (.github/actions/electron-native-rebuild) — it was copy-pasted five times.
