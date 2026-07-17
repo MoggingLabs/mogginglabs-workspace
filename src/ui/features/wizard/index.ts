@@ -222,9 +222,17 @@ export const wizardFeature: UiFeature = {
       // while the OUTGOING view still owned the layout read that view's chrome.
       // Same task as render() below — nothing stale can paint in between. The
       // machine term charges every pane already running anywhere (a terminal in
-      // another workspace spends the same RAM/CPU this one would).
+      // another workspace spends the same RAM/CPU this one would). With ZERO
+      // workspaces the wizard runs full-bleed (no rail) — but the grid it is
+      // sizing for always carries one, so the hidden rail's width is reserved
+      // explicitly or the budget overpromises until the first workspace exists.
       setActiveView('wizard')
-      capacity = effectivePaneCapacity(ctx.content, machineSpec(), livePaneCount())
+      const railEl = document.getElementById('rail')
+      const railAllowance =
+        railEl && railEl.offsetParent === null
+          ? parseFloat(getComputedStyle(railEl).getPropertyValue('--rail-w')) || 0
+          : 0
+      capacity = effectivePaneCapacity(ctx.content, machineSpec(), livePaneCount(), railAllowance)
       setGridSpec(specForPanes(Math.min(prefill?.paneCount ?? defaultPaneCount(), capacity.maxPanes)))
       counts = new Map()
       customCmd = ''

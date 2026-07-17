@@ -5,12 +5,15 @@ import { join } from 'node:path'
 
 // Env-gated wizard-page smoke (MOGGING_WIZARDUX — Phase-8.5/02, redesigned 2026-07).
 // The wizard is ONE compact flat page beside the rail. Asserts:
-//   (a) FLAT — zero Cards, zero <details> disclosures, no modal overlay; the rail
-//       is up beside it; the controls that used to hide behind "Advanced"
-//       (custom command, isolation, runs-on, presets) are VISIBLE immediately;
-//       and the Presets section OFFERS NOTHING (2026-07-16): no built-in mixes,
-//       no curated Swarm card — only "Save as preset" and the user's own saves
-//       (a fresh profile shows the empty-state hint);
+//   (a) FLAT — zero Cards, zero <details> disclosures, no modal overlay; the
+//       controls that used to hide behind "Advanced" (custom command, isolation,
+//       runs-on, presets) are VISIBLE immediately; the Presets section OFFERS
+//       NOTHING (2026-07-16): no built-in mixes, no curated Swarm card — only
+//       "Save as preset" and the user's own saves (a fresh profile shows the
+//       empty-state hint). The RAIL is workspace-truthful (2026-07-17): with
+//       ZERO workspaces the wizard runs FULL-BLEED (an empty rail column beside
+//       it meant nothing); once workspaces exist, the rail is up beside it so
+//       you configure the next workspace with the ones you have in view;
 //   (b) the density claim, measured — flat sections with the division hairline,
 //       inter-section gap >= --sp-5, all from getComputedStyle;
 //   (c) prefill lands across the page at once (folder · painter · mix · meter);
@@ -129,7 +132,8 @@ export function runWizardUxSmoke(win: BrowserWindow): void {
         shape.isolateVisible &&
         shape.remoteVisible &&
         shape.painterVisible
-      const railBesideOk = shape.railWidth > 0
+      // ZERO workspaces here: the wizard is full-bleed — no empty rail column.
+      const railHiddenAtZeroOk = shape.railWidth === 0
       const presetsOfferNothingOk = shape.swarmCards === 0 && shape.presetCards === 0 && shape.presetHint && shape.saveBtn
 
       // ── (b) the density claim, MEASURED from computed styles ────────────────
@@ -249,9 +253,17 @@ export function runWizardUxSmoke(win: BrowserWindow): void {
         geometry.bottoms.length === 2 &&
         geometry.bottoms.every((w) => w < geometry.grid * 0.6)
 
+      // …and now that a workspace EXISTS, the reopened wizard has the rail up
+      // beside it — the other half of the workspace-truthful rail (2026-07-17).
+      await ES(`window.__mogging.templates.openWizard({ cwd: ${cwdJs} })`)
+      await sleep(600)
+      const railWithWorkspaces = await ES<number>(`document.querySelector('#rail')?.getBoundingClientRect().width ?? 0`)
+      const railBesideOk = railWithWorkspaces > 0
+
       const pass =
         invalidRefusedOk &&
         flatOk &&
+        railHiddenAtZeroOk &&
         railBesideOk &&
         presetsOfferNothingOk &&
         spacingOk &&
@@ -264,7 +276,9 @@ export function runWizardUxSmoke(win: BrowserWindow): void {
         pass,
         invalidRefusedOk,
         flatOk,
+        railHiddenAtZeroOk,
         railBesideOk,
+        railWithWorkspaces,
         presetsOfferNothingOk,
         spacingOk,
         spacing,

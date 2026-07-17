@@ -1347,9 +1347,14 @@ textarea {
   display: none;
 }
 /* The rail lives where it means something: the grid — and the WIZARD (8.5/02),
-   which is the grid's own setup page. You configure the next workspace with the
-   ones you already have still in view. */
-#app:not(.view-grid):not(.view-wizard) #rail {
+   which is the grid's own setup page, so you configure the next workspace with
+   the ones you already have still in view. With NO workspaces there is nothing
+   to have in view: the wizard runs FULL-BLEED and the rail joins it only once
+   the first workspace exists (the shell stamps #app.no-workspaces — the same
+   truth that grays the rail toggle). The grid never renders at zero workspaces
+   (view-port sends every road Home), so the wizard is the only view this bites. */
+#app:not(.view-grid):not(.view-wizard) #rail,
+#app.no-workspaces #rail {
   display: none;
 }
 

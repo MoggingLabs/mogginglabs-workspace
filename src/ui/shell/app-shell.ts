@@ -51,8 +51,13 @@ export function createAppShell(root: HTMLElement): ShellContext {
   // The toggle wears the truth: disabled (grayed) until a workspace exists — at the
   // zero-workspace Home there is no rail to collapse, and a button that silently
   // did nothing taught people it was broken. Re-enabled the moment one appears.
+  // The ROOT carries the same truth as a class: the rail renders only where it
+  // means something, and an empty rail beside the zero-workspace wizard meant
+  // nothing — the wizard runs full-bleed until there are workspaces to show
+  // (global.css keys the rail's display off this).
   onWorkspacesChange((snapshot) => {
     const none = snapshot.workspaces.length === 0
+    app.classList.toggle('no-workspaces', none)
     railToggle.disabled = none
     railToggle.title = none ? 'Workspace rail — create a workspace first' : 'Toggle rail (Ctrl+Shift+B)'
   })

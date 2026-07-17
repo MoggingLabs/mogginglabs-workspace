@@ -51,7 +51,7 @@ export function paneCapacity(availWidth: number, availHeight: number): PaneCapac
  *  MAXIMIZED window's grid region can hold, not what the bare monitor could.
  *  Chrome is measured against the live window (its size is snap-independent);
  *  a hidden or unmounted host (zero box) falls back to the bare screen. */
-export function screenPaneCapacity(host?: HTMLElement | null): PaneCapacity {
+export function screenPaneCapacity(host?: HTMLElement | null, extraChromeWidthPx = 0): PaneCapacity {
   const s = typeof window !== 'undefined' ? window.screen : undefined
   let availWidth = s?.availWidth || 1536
   let availHeight = s?.availHeight || 864
@@ -62,6 +62,11 @@ export function screenPaneCapacity(host?: HTMLElement | null): PaneCapacity {
       availHeight = Math.max(1, availHeight - Math.max(0, window.innerHeight - box.height))
     }
   }
+  // Chrome the CALLER knows is coming but is not on screen to measure — the
+  // zero-workspace wizard runs full-bleed (no rail), yet the grid it is sizing
+  // for always carries one: without this reserve the budget overpromises by
+  // exactly a rail width until the first workspace exists.
+  availWidth = Math.max(1, availWidth - Math.max(0, Math.floor(extraChromeWidthPx)))
   return paneCapacity(availWidth, availHeight)
 }
 
@@ -127,9 +132,10 @@ export interface PaneBudget extends PaneCapacity {
 export function effectivePaneCapacity(
   host?: HTMLElement | null,
   spec?: MachineSpec | null,
-  panesElsewhere = 0
+  panesElsewhere = 0,
+  extraChromeWidthPx = 0
 ): PaneBudget {
-  const geometry = screenPaneCapacity(host)
+  const geometry = screenPaneCapacity(host, extraChromeWidthPx)
   const machineMax = spec ? machinePaneBudget(spec) : null
   const headroom = machineMax === null ? null : Math.max(1, machineMax - Math.max(0, Math.floor(panesElsewhere)))
   const maxPanes = headroom === null ? geometry.maxPanes : Math.min(geometry.maxPanes, headroom)

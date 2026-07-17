@@ -88,7 +88,13 @@ export function runWizLayoutSmoke(win: BrowserWindow): void {
         // policy number moves, this gate must be edited deliberately.
         const fit = (span, min) => Math.max(1, Math.floor((Math.max(0, span) + 4) / (min + 4)))
         const content = document.getElementById('content').getBoundingClientRect()
-        const availW = Math.max(1, screen.availWidth - Math.max(0, innerWidth - content.width))
+        // The hidden-rail reserve, mirrored (2026-07-17): with zero workspaces the
+        // wizard is full-bleed, but the grid it sizes for always carries the rail.
+        const railEl = document.getElementById('rail')
+        const railAllowance = railEl && railEl.offsetParent === null
+          ? (parseFloat(getComputedStyle(railEl).getPropertyValue('--rail-w')) || 0)
+          : 0
+        const availW = Math.max(1, screen.availWidth - Math.max(0, innerWidth - content.width) - railAllowance)
         const availH = Math.max(1, screen.availHeight - Math.max(0, innerHeight - content.height))
         const cols = fit(availW, 132)
         const rows = fit(availH, 110)
