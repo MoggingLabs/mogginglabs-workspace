@@ -1,15 +1,20 @@
 import {
   ConnectionsChannels,
+  IntegrationsChannels,
   clientFormHelp,
   connectionAccount,
   connectionScopes,
   connectionSummary,
+  planHasServerForCli,
   NO_ACCOUNT_NOTE,
   type Connection,
-  type ConnectionState
+  type ConnectionState,
+  type WorkspaceToolPlan
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { EmptyState, clear, el, icon, loadingRow, providerLogo, showToast, submitWithRetain } from '../../components'
+import { getWorkspaces } from '../../core/workspace/workspace-info-port'
+import { EmptyState, Button, clear, el, icon, loadingRow, providerLogo, showToast, submitWithRetain } from '../../components'
+import { HOSTED } from './cli-meta'
 
 /**
  * Settings § Connections (ADR 0014) — the page's new first citizen.
@@ -38,7 +43,22 @@ export interface ConnectionsBlock {
   sync: () => void
 }
 
-export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): ConnectionsBlock {
+export interface ConnectionsBlockOpts {
+  /** true (the Library): every service renders, including the never-touched
+   *  "Available" group — this is the browse surface. false (Settings): the
+   *  INVENTORY — only what is connected or needs attention; browsing lives in
+   *  the Library, and the empty state points there. */
+  browse?: boolean
+  /** Inventory mode's empty-state CTA — opens the Library. */
+  onBrowse?: () => void
+  /** Offer "Use in workspaces…" on connected cards: scoping in the same flow as
+   *  connecting, so the store→settings hand-off never loses the user. */
+  workspaceScoping?: boolean
+  onChange?: (cs: Connection[]) => void
+}
+
+export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): ConnectionsBlock {
+  const browse = opts.browse !== false
   const bridge = getBridge()
   const grid = el('div', { class: 'conn-grid' })
   // F-20: forty equal cards in catalog order made finding Slack a scan job. A filter
@@ -65,6 +85,8 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
   }
   /** Which cards have their tool list expanded — same repaint-survival rule. */
   const toolsOpen = new Set<string>()
+  /** Which cards have their workspace-scoping panel expanded — same rule. */
+  const scopeOpen = new Set<string>()
   /** The client-id form (no-DCR providers: Google, GitHub, Slack) — same
    *  repaint-survival rules as the key form: open-state and typed drafts are keyed
    *  by service, because the grid repaints wholesale and a rebuilt input is a
@@ -93,7 +115,9 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
     const groups: { label: string; test: (c: Connection) => boolean }[] = [
       { label: 'Connected', test: (c) => c.state === 'connected' || c.state === 'connecting' },
       { label: 'Needs attention', test: (c) => c.state === 'expired' || c.state === 'error' },
-      { label: 'Available', test: (c) => c.state === 'disconnected' }
+      // The Available group is the BROWSE surface — Library only. The settings
+      // inventory shows what you have; what you could get lives in the Library.
+      ...(browse ? [{ label: 'Available', test: (c: Connection) => c.state === 'disconnected' }] : [])
     ]
     let any = false
     for (const g of groups) {
@@ -105,8 +129,84 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
       for (const c of mine) groupGrid.append(card(c))
       grid.append(groupGrid)
     }
-    if (!any) grid.append(el('div', { class: 'menu-note', text: 'No service matches that filter.' }))
-    onChange?.(connections)
+    if (!any && q) grid.append(el('div', { class: 'menu-note', text: 'No service matches that filter.' }))
+    if (!any && !q && !browse) {
+      // Inventory-mode empty state: nothing connected yet is a NORMAL state, and
+      // its one useful exit is the Library.
+      grid.append(
+        el('div', { class: 'conn-inventory-empty' }, [
+          EmptyState({
+            icon: 'plug',
+            title: 'Nothing connected yet',
+            body: 'Browse the Library to connect your first service — sign in once, and every agent you launch can use it.'
+          }),
+          ...(opts.onBrowse
+            ? [el('div', { class: 'trail-controls' }, [Button({ label: 'Browse the Library', icon: 'plug', variant: 'primary', onClick: opts.onBrowse })])]
+            : [])
+        ])
+      )
+    }
+    // The filter field is browse furniture: hide it when the inventory is empty.
+    searchInput.hidden = !browse && connections.every((c) => c.state === 'disconnected')
+    opts.onChange?.(connections)
+  }
+
+  // ── "Use in workspaces…" (scoping in the same flow as connecting) ──────────
+  // A connected service is only USABLE where a workspace's tool plan carries it.
+  // This panel is that decision, made on the card — one checkbox per workspace,
+  // each toggle writing the plan for every CLI at once. The per-CLI matrix in
+  // Settings › Integrations › Workspace tools stays the precision instrument.
+  function scopePanel(c: Connection): HTMLElement {
+    const host = el('div', { class: 'conn-scope-panel' })
+    const workspaces = getWorkspaces().workspaces
+    if (!workspaces.length) {
+      host.append(el('div', { class: 'menu-note', text: 'No workspace open — create one, and its wizard offers this tool as a chip.' }))
+      return host
+    }
+    host.append(loadingRow('Reading workspace plans…'))
+    void (async () => {
+      const rows: HTMLElement[] = []
+      for (const w of workspaces) {
+        let plan: WorkspaceToolPlan | null = null
+        try {
+          plan = (await bridge.invoke(IntegrationsChannels.planGet, w.id)) as WorkspaceToolPlan
+        } catch {
+          /* plan unavailable — the row below says so */
+        }
+        if (!plan) {
+          rows.push(el('div', { class: 'menu-note', text: `${w.name}: plan unavailable` }))
+          continue
+        }
+        const on = HOSTED.some((cli) => planHasServerForCli(plan!, c.id, cli))
+        const box = el('input', { class: 'conn-scope-check' }) as HTMLInputElement
+        box.type = 'checkbox'
+        box.checked = on
+        box.onchange = (): void => {
+          const enabled = box.checked
+          box.disabled = true
+          box.setAttribute('aria-busy', 'true')
+          void (async () => {
+            try {
+              for (const cli of HOSTED) {
+                await bridge.invoke(IntegrationsChannels.planMutate, { workspaceId: w.id, kind: 'cell', serverId: c.id, cli, enabled })
+              }
+            } catch (error) {
+              box.checked = !enabled // put the box back where the truth is
+              showToast({ tone: 'danger', title: `${c.label} was not ${enabled ? 'added to' : 'removed from'} ${w.name}`, body: String(error) })
+            } finally {
+              if (box.isConnected) {
+                box.disabled = false
+                box.removeAttribute('aria-busy')
+              }
+            }
+          })()
+        }
+        rows.push(el('label', { class: 'conn-scope-row' }, [box, el('span', { text: w.name })]))
+      }
+      clear(host)
+      host.append(...rows)
+    })()
+    return host
   }
 
   function card(c: Connection): HTMLElement {
@@ -396,6 +496,22 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
 
     switch (c.state) {
       case 'connected': {
+        if (opts.workspaceScoping) {
+          const open = scopeOpen.has(c.id)
+          const scope = el('button', {
+            class: 'trail-btn conn-mini conn-scope-toggle',
+            type: 'button',
+            text: open ? 'Hide workspaces' : 'Use in workspaces…',
+            attrs: { 'aria-expanded': String(open) }
+          }) as HTMLButtonElement
+          scope.onclick = (): void => {
+            if (scopeOpen.has(c.id)) scopeOpen.delete(c.id)
+            else scopeOpen.add(c.id)
+            paint()
+          }
+          actions.append(scope)
+          if (open) body.append(scopePanel(c))
+        }
         const check = el('button', { class: 'trail-btn conn-mini', type: 'button', text: 'Check' }) as HTMLButtonElement
         check.onclick = (): void => {
           void (async () => {
@@ -522,8 +638,9 @@ export function createConnectionsBlock(onChange?: (cs: Connection[]) => void): C
   const block = el('div', { class: 'trail-block conn-block' }, [
     el('div', {
       class: 'settings-row-caption',
-      text:
-        'Connect a service to MoggingLabs Workspace once, and every agent you launch can use it — no CLI to configure, no key to copy around. Sign-in happens in your own browser, on the provider’s real page. The credential is encrypted by your OS keychain and stays in this app: your CLIs reach the service through us, so no token is ever written into a CLI’s config file.'
+      text: browse
+        ? 'Connect a service to MoggingLabs Workspace once, and every agent you launch can use it — no CLI to configure, no key to copy around. Sign-in happens in your own browser, on the provider’s real page. The credential is encrypted by your OS keychain and stays in this app: your CLIs reach the service through us, so no token is ever written into a CLI’s config file.'
+        : 'The accounts this app holds a connection to — who you are on each, what the server actually serves, and which workspaces use it. Each credential is encrypted by your OS keychain; Disconnect deletes it from this machine. To connect more, browse the Library.'
     }),
     searchInput,
     grid

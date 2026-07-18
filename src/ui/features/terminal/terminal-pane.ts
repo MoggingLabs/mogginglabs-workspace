@@ -33,7 +33,7 @@ import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-
 import { setPaneState, clearPaneState, paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
 import { completionsFor } from '../../core/attention/completions'
 import { applyPaneCwdEvent, clearPaneCwd, getPaneCwd, getPaneCwdProjection } from '../../core/layout/pane-cwd'
-import { getPaneRole, onPaneRole, getPaneRemote, getPaneProfile, setPaneProfile } from '../../core/layout/pane-meta'
+import { getPaneRole, onPaneRole, getPaneRemote, getPaneProfile, onPaneProfile, setPaneProfile } from '../../core/layout/pane-meta'
 import {
   clearPaneCli,
   mcpChipForPane,
@@ -1093,7 +1093,7 @@ export class TerminalPane {
       'Pane menu',
       () => {
         if (!menu.hidden) return closeMenu(true)
-        this.buildMenu(menu, closeMenu, title.textContent?.trim() ?? '', slotEl?.dataset.expandMode, host)
+        this.buildMenu(menu, closeMenu, title.textContent?.trim() ?? '', slotEl?.dataset.expandMode, slotEl?.dataset.eqAxes, host)
         menu.scrollTop = 0
         menu.hidden = false
         menuBtn.setAttribute('aria-expanded', 'true')
@@ -1246,17 +1246,40 @@ export class TerminalPane {
       expandBtns,
       leftChips: [mcpChip, claimsChip, role, ...(remoteChip ? [remoteChip] : [])]
     })
-    // Menu facts are a snapshot rebuilt on open. If any live header fact changes
-    // underneath an open portal (state, title, agent, context, MCP, claims or git),
-    // close it so it can never continue presenting stale status. The menu button's
-    // own aria-expanded mutation is merely open/close bookkeeping and is ignored.
+    // Menu facts are LIVE. When any header fact changes underneath the open portal
+    // (state, title, agent, context, MCP, claims or git), rebuild the menu in place —
+    // the status a user opened the menu to watch keeps telling the truth, instead of
+    // the menu snapping shut under them (the old behavior) or, worse, going stale.
+    // Focus is restored to the same-named entry so keyboard use survives the rebuild.
+    // The menu button's own aria-expanded mutation is open/close bookkeeping — ignored.
+    const refreshMenu = (): void => {
+      if (menu.hidden) return
+      const hadFocus = menu.contains(document.activeElement)
+      const focusedText = hadFocus ? (document.activeElement?.textContent ?? '').trim() : ''
+      this.buildMenu(menu, closeMenu, title.textContent?.trim() ?? '', slotEl?.dataset.expandMode, slotEl?.dataset.eqAxes, host)
+      positionMenu()
+      if (hadFocus) {
+        const entries = menuEntries()
+        focusEntry(
+          entries.find((entry) => (entry.textContent ?? '').trim() === focusedText) ??
+            menu.querySelector<HTMLElement>('.menu-item') ??
+            entries[0]
+        )
+      }
+    }
     menuFactsObserver = new MutationObserver((records) => {
       const bookkeepingOnly = records.every(
         (record) =>
           record.type === 'attributes' && record.target === menuBtn && record.attributeName === 'aria-expanded'
       )
-      if (!bookkeepingOnly) closeMenu(false)
+      if (!bookkeepingOnly) refreshMenu()
     })
+    // The profile note renders nowhere in the header, so the observer above cannot see
+    // it change — and on the detection path its name resolves ASYNC, after the menu may
+    // already be open. The port tells us directly.
+    this.disposers.push(onPaneProfile((paneId) => {
+      if (paneId === this.id) refreshMenu()
+    }))
     // These observers are useful only while the snapshot is visible. Keeping one
     // subtree observer hot per pane made normal 16-pane status traffic pay menu costs
     // even though every menu was closed (and showed up as a long frame in MILESTONE).
@@ -1549,6 +1572,7 @@ export class TerminalPane {
     closeMenu: (returnFocus?: boolean) => void,
     displayTitle: string,
     activeMode: string | undefined,
+    eqAxes: string | undefined,
     eventHost: HTMLElement
   ): void {
     menu.replaceChildren()
@@ -1590,6 +1614,12 @@ export class TerminalPane {
     // workspace keeps its name, rather than being renumbered by wherever it happens to land.
     const paneName = displayTitle || `Terminal ${displayPaneNumber(this.id)}`
     const info: HTMLElement[] = [note(`Pane: ${paneName}`)]
+    // AN AGENT PANE ALWAYS SHOWS THE FULL FACT SET. Every launch path — wizard lineup,
+    // palette, ⋯ launch entry, restore-adopt, and a CLI hand-typed at the prompt
+    // (detection) — writes the same session port, so the menu keys every row on the
+    // session, never on how it was created. A fact the pane genuinely lacks says so
+    // ("none") instead of vanishing: an absent row is indistinguishable from a broken
+    // one, and which rows exist must not depend on where the agent came from.
     const session = getPaneAgentSession(this.id)
     if (session) {
       const provider = session.provider.startsWith('custom:')
@@ -1602,12 +1632,14 @@ export class TerminalPane {
     // Read the visible dot itself so menu and bar cannot disagree on that last case.
     const renderedStatus = this.stateDot && !this.stateDot.hidden ? this.stateDot.title.trim() : ''
     if (renderedStatus) info.push(note(`Status: ${renderedStatus}`))
+    else if (session) info.push(note('Status: not tracked for this CLI'))
     const remote = getPaneRemote(this.id)
     if (remote) {
       info.push(note(`Remote: ${remote.name} — local repo tools (git, worktrees, review) are off`))
     }
     const profileName = getPaneProfile(this.id)
     if (profileName) info.push(note(`Profile: ${profileName}`))
+    else if (session) info.push(note('Profile: none (CLI default configuration)'))
     const roleName = getPaneRole(this.id)
     if (roleName) info.push(note(`Role: ${roleName}`))
     const ownClaims = claimsFor(this.id).length
@@ -1654,11 +1686,15 @@ export class TerminalPane {
             `(~${k(ctxUsage.usedTokens)} of ${k(ctxUsage.windowTokens)} tokens)`
         )
       )
+    } else if (session) {
+      info.push(note('Agent context: not reported by this CLI'))
     }
 
     const status = getPaneGit(this.id)
     if (status) {
       info.push(note(displayGitStatus(status).menuLabel))
+    } else if (session && !remote) {
+      info.push(note('Branch: none — not inside a git repository'))
     }
     menu.append(...info, separator())
 
@@ -1673,6 +1709,15 @@ export class TerminalPane {
     const splitFromMenu = (dir: 'h' | 'v'): void => {
       eventHost.dispatchEvent(
         new CustomEvent('mogging:split-pane', { bubbles: true, detail: { paneId: this.id, dir } })
+      )
+    }
+    // Equalize this pane's row/column: the grid's own event (like expand — sizes are
+    // its state; nothing is created or seeded). Entries appear only for the axes the
+    // slot's data-eq-axes stamp vouches for: a pane that SPANS rows is offered no
+    // "equal heights", because no column line contains it.
+    const equalizeFromMenu = (dir: 'h' | 'v'): void => {
+      eventHost.dispatchEvent(
+        new CustomEvent('mogging:equalize-pane', { bubbles: true, detail: { paneId: this.id, dir } })
       )
     }
     // Move this terminal to another workspace. Also the controller's: only it knows the other
@@ -1705,6 +1750,8 @@ export class TerminalPane {
       item('plus', 'Split right — new terminal', () => splitFromMenu('h')),
       item('plus', 'Split down — new terminal', () => splitFromMenu('v'))
     )
+    if (eqAxes?.includes('h')) menu.append(item('columns', 'Equal widths in this row', () => equalizeFromMenu('h')))
+    if (eqAxes?.includes('v')) menu.append(item('rows', 'Equal heights in this column', () => equalizeFromMenu('v')))
     // Offered only when there is somewhere to move TO. A lone workspace would get a menu
     // entry whose only possible outcome is a toast explaining why it cannot work.
     if (getWorkspaces().workspaces.length > 1) {

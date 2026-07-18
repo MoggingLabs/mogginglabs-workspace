@@ -2,11 +2,17 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { app, ipcMain, type BrowserWindow } from 'electron'
 import { autoUpdater } from 'electron-updater'
-import { UpdateChannels, UPDATE_PREFS_DEFAULT, type UpdatePrefs, type UpdateState } from '@contracts'
+import {
+  UpdateChannels,
+  UPDATE_PREFS_DEFAULT,
+  type UpdateCheckRequest,
+  type UpdatePrefs,
+  type UpdateState
+} from '@contracts'
 import { getTelemetry } from '@backend'
 import { getSettingsStore } from './app-settings'
 import { retireOwnDaemon, endDaemonQuiescence } from './daemon-client'
-import { updateDriver } from './fixture-port'
+import { updateFeedFixture } from './fixture-port'
 
 // App-wiring: auto-update via electron-updater against the signed GitHub Releases feed
 // (electron-builder.yml `publish`). Runs ONLY in a packaged build — never in dev/smokes. It
@@ -104,23 +110,154 @@ function createUpdaterLog(): UpdaterLog {
   }
 }
 
+// ── OFFLINE ≠ BROKEN ──────────────────────────────────────────────────────────────────────
+// The error listener used to treat every failure alike, so one wake-from-sleep DNS blip
+// (net::ERR_NAME_NOT_RESOLVED while the Wi-Fi re-associated — found live on v0.14.0,
+// updater.log) latched the rail's red "Update failed — retry" and left it there for the full
+// six-hour tick: an alarm over nothing the user can fix, with a retry that "did nothing"
+// because the network was still down when they clicked it. These tokens are the net layer's
+// vocabulary for "this MACHINE cannot reach anything right now" — Chromium's net::ERR_* from
+// Electron's request stack, Node's errno codes from the differential downloader. A message
+// wearing one is a fact about connectivity, not about the feed, so a BACKGROUND check that
+// fails this way stays quiet (idle + the `offline` flag; the retry ladder below and the
+// renderer's online-event poke self-heal it). Only a HUMAN-initiated check answers with the
+// error row. Anything else — a 404 on latest.yml, a signature refusal, a yml parse error —
+// means the feed was REACHED and is broken, and that stays loud on every check: a feed whose
+// downloads 404'd went unnoticed for nine releases precisely because nothing surfaced it.
+const OFFLINE_TOKENS = [
+  'ERR_NAME_NOT_RESOLVED',
+  'ERR_NAME_RESOLUTION_FAILED',
+  'ERR_INTERNET_DISCONNECTED',
+  'ERR_NETWORK_CHANGED',
+  'ERR_NETWORK_IO_SUSPENDED',
+  'ERR_CONNECTION_', // …REFUSED / RESET / TIMED_OUT / CLOSED / ABORTED
+  'ERR_TIMED_OUT',
+  'ERR_ADDRESS_UNREACHABLE',
+  'ERR_PROXY_CONNECTION_FAILED',
+  'ERR_NETWORK_ACCESS_DENIED',
+  'ENOTFOUND',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+  'ENETUNREACH',
+  'EHOSTUNREACH'
+]
+const isOfflineError = (message: string): boolean => OFFLINE_TOKENS.some((t) => message.includes(t))
+
+// Human reasons for the two failure kinds (the rail tooltip and the settings card; never a
+// stack). Lowercase and unterminated so settings can compose "The last check failed — …".
+const OFFLINE_REASON = 'could not reach the update server — check your connection and try again'
+const FEED_REASON = 'the update feed could not be read'
+
+// Self-heal cadence after an offline failure: a minute, five, then every fifteen until the
+// network comes back — so a latched answer never outlives the outage by more than a tick.
+const OFFLINE_RETRY_LADDER = [60_000, 300_000, 900_000]
+
 export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
   getWin = winGetter
 
   const fake = process.env.MOGGING_FAKE_UPDATE
-  // The FAILING feed (the UPDATEFAIL gate) is INSTALLED by the dev entry, not read from the
-  // environment. It used to be `process.env.MOGGING_UPDATEFAIL`, right here, in a module that
-  // ships — so a signed install carried an environment variable that could make its own updater
-  // report a dead feed (audit finding 41). Null in production, always: src/main/fixture-port.ts.
+  // The FIXTURE feed (the UPDATEFAIL/UPDATEOFFLINE gates) is INSTALLED by the dev entry, not
+  // read from the environment. It used to be `process.env.MOGGING_UPDATEFAIL`, right here, in
+  // a module that ships — so a signed install carried an environment variable that could make
+  // its own updater report a dead feed (audit finding 41). Null in production, always:
+  // src/main/fixture-port.ts. Unlike the old driver it does NOT fabricate renderer states; it
+  // only answers "how did this one check attempt end", and the classification and retry
+  // machinery below runs over its answers — so the gates bite on production logic.
   //
   // MOGGING_FAKE_UPDATE above STAYS. It is not harness — it is the documented safety valve that
   // drives the real renderer flow with no network, and the artifact gate allows it by name.
-  const driveFailure = updateDriver()
-  const feedLive = app.isPackaged && !fake && !driveFailure
+  const fixture = updateFeedFixture()
+  const feedLive = app.isPackaged && !fake && !fixture
   last = {
     phase: 'idle',
     currentVersion: app.getVersion(),
-    supported: feedLive || !!fake || !!driveFailure
+    supported: feedLive || !!fake || !!fixture
+  }
+
+  // ── ONE CHECK, TWO WORLDS ─────────────────────────────────────────────────────────────
+  // `manualCheck` is whether a HUMAN asked for the in-flight check — the rail row's retry,
+  // the settings button, a prefs flip. The boot check, the six-hour tick, the offline-retry
+  // ladder and the renderer's online-recovery poke are all machine-initiated. One flag, not
+  // an argument threaded through electron-updater's events: the updater coalesces
+  // overlapping checks into one completion, and if ANY of the coalesced askers was the
+  // user, the answer is owed to them.
+  let manualCheck = false
+  let offlineRetryIx = 0
+  let offlineRetryTimer: NodeJS.Timeout | null = null
+
+  const clearOfflineRetry = (): void => {
+    offlineRetryIx = 0
+    if (offlineRetryTimer) clearTimeout(offlineRetryTimer)
+    offlineRetryTimer = null
+  }
+
+  const scheduleOfflineRetry = (): void => {
+    const ladder = fixture?.retryDelaysMs ?? OFFLINE_RETRY_LADDER
+    const delay = ladder[Math.min(offlineRetryIx, ladder.length - 1)]
+    offlineRetryIx += 1
+    if (offlineRetryTimer) clearTimeout(offlineRetryTimer)
+    offlineRetryTimer = setTimeout(() => {
+      offlineRetryTimer = null
+      startCheck(false)
+    }, delay)
+  }
+
+  // Every road out of a completed check funnels through these two — real feed and fixture
+  // alike, so the classification the gates bite on is the code production runs.
+  const settleNothingNewer = (): void => {
+    manualCheck = false
+    clearOfflineRetry()
+    push({ phase: 'idle', offline: false, error: undefined, lastCheckedAt: Date.now() })
+  }
+
+  const settleFailure = (message: string): void => {
+    const manual = manualCheck
+    manualCheck = false
+    const offline = isOfflineError(message)
+    // A broken feed gains nothing from a minutes-scale ladder — the six-hour tick is enough.
+    if (offline) scheduleOfflineRetry()
+    else clearOfflineRetry()
+    if (offline && !manual && last.phase !== 'error') {
+      // Nobody asked, and nothing is wrong with the updater — the machine is just offline.
+      // Quiet idle, flagged so the settings card can say so honestly; the ladder and the
+      // renderer's online poke re-check without anyone clicking anything. A failed check
+      // still COUNTS as a check — the timestamp is what makes a dead feed visible.
+      push({ phase: 'idle', offline: true, error: undefined, lastCheckedAt: Date.now() })
+    } else {
+      // Loud: a human asked, or the feed itself is broken. And once a human was TOLD
+      // "failed", a later background failure refreshes the row rather than retracting it —
+      // an answer that quietly vanishes while the condition persists is worse than none.
+      // Only an attempt that actually succeeds clears it.
+      push({
+        phase: 'error',
+        offline,
+        error: offline ? OFFLINE_REASON : FEED_REASON,
+        lastCheckedAt: Date.now()
+      })
+    }
+  }
+
+  // Fixture pacing mirrors the real updater's coalescing: one attempt in flight, and a
+  // human joining mid-attempt makes that attempt theirs.
+  let fixtureCheckInFlight = false
+  const startCheck = (manual: boolean): void => {
+    manualCheck = manualCheck || manual
+    if (!fixture) {
+      checkForUpdatesSafely()
+      return
+    }
+    if (fixtureCheckInFlight) return
+    fixtureCheckInFlight = true
+    push({ phase: 'checking', error: undefined })
+    // Unhurried enough that a gate can observe the 'checking' hop.
+    setTimeout(() => {
+      fixtureCheckInFlight = false
+      const outcome = fixture.next()
+      if (outcome.kind === 'ok') settleNothingNewer()
+      else settleFailure(outcome.message)
+    }, 250)
   }
 
   ipcMain.handle(UpdateChannels.stateGet, (): UpdateState => last)
@@ -131,8 +268,9 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
     if (!feedLive) return
     applyPrefs(next)
     // Switching channel changes what "latest" means, so re-ask immediately rather than
-    // leaving the user staring at a stale answer until the next six-hour tick.
-    checkForUpdatesSafely()
+    // leaving the user staring at a stale answer until the next six-hour tick. Manual: the
+    // user is standing in settings looking at the row, so a failure reports back.
+    startCheck(true)
   })
 
   // ── THE PRE-INSTALL RETIRE ────────────────────────────────────────────────────────────
@@ -211,15 +349,13 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
     void retireForInstall().then(() => app.quit())
   })
 
-  // The rail row's retry after a failed check. Idempotent — the updater coalesces a check
-  // that is already in flight.
-  ipcMain.handle(UpdateChannels.check, () => {
-    if (driveFailure) {
-      driveFailure(push)
-      return
-    }
-    if (!app.isPackaged || fake) return
-    checkForUpdatesSafely()
+  // The rail row's retry after a failed check, the settings button, the palette verb — and,
+  // with `auto: true`, the renderer's online-recovery poke, which must classify like the
+  // clock's checks: a network that flaps back down mid-check must not pop the error row
+  // with nobody at the wheel. Idempotent — overlapping checks coalesce.
+  ipcMain.handle(UpdateChannels.check, (_e, req?: UpdateCheckRequest) => {
+    if (!fixture && (!app.isPackaged || fake)) return
+    startCheck(!req?.auto)
   })
 
   // Dev/smoke driver: replay the whole lifecycle to the renderer, no network.
@@ -248,9 +384,11 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
     return
   }
 
-  if (driveFailure) {
+  if (fixture) {
+    // The BOOT check, driven — background, exactly like production's. The gates choreograph
+    // everything else through the real check/retry machinery above.
     const win = winGetter()
-    const run = (): void => driveFailure(push)
+    const run = (): void => startCheck(false)
     if (win && !win.webContents.isLoading()) setTimeout(run, 1500)
     else win?.webContents.once('did-finish-load', () => setTimeout(run, 1500))
     return
@@ -262,26 +400,34 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
   autoUpdater.autoDownload = true // fetch in the background; the user is never asked to wait
   applyPrefs(readPrefs()) // sets autoInstallOnAppQuit + the pre-release channel
 
-  autoUpdater.on('checking-for-update', () => push({ phase: 'checking' }))
-  autoUpdater.on('update-available', (info) =>
-    push({ phase: 'available', version: info.version, lastCheckedAt: Date.now() })
-  )
-  autoUpdater.on('update-not-available', () => push({ phase: 'idle', lastCheckedAt: Date.now() }))
+  autoUpdater.on('checking-for-update', () => push({ phase: 'checking', error: undefined }))
+  autoUpdater.on('update-available', (info) => {
+    manualCheck = false
+    clearOfflineRetry()
+    push({ phase: 'available', version: info.version, offline: false, lastCheckedAt: Date.now() })
+  })
+  autoUpdater.on('update-not-available', () => settleNothingNewer())
   autoUpdater.on('download-progress', (p) =>
     push({ phase: 'downloading', percent: Math.round(p.percent) })
   )
   autoUpdater.on('update-downloaded', (info) => push({ phase: 'ready', version: info.version }))
   autoUpdater.on('error', (err) => {
-    // Human reason to the UI (never a stack); telemetry gets the boolean; the log gets the url.
-    // A failed check still COUNTS as a check — the timestamp is what makes a dead feed visible.
-    push({ phase: 'error', error: 'update check failed', lastCheckedAt: Date.now() })
-    getTelemetry().captureError(err, { feature: 'updater', op: 'check', platform: process.platform })
+    // settleFailure decides what the UI hears (offline vs broken feed, quiet vs loud);
+    // telemetry gets booleans; the log already has the url.
+    const message = err instanceof Error ? err.message : String(err)
+    getTelemetry().captureError(err, {
+      feature: 'updater',
+      op: 'check',
+      platform: process.platform,
+      offline: isOfflineError(message)
+    })
+    settleFailure(message)
   })
 
   // checkForUpdates, NOT checkForUpdatesAndNotify: the latter fires a native OS notification
   // we cannot time, word, or hang "Restart now / Later" off — and it would now say the same
   // thing as the rail row, twice, in someone else's voice.
-  checkForUpdatesSafely()
+  startCheck(false)
   // Re-check periodically for long-running sessions.
-  setInterval(checkForUpdatesSafely, 6 * 60 * 60 * 1000)
+  setInterval(() => startCheck(false), 6 * 60 * 60 * 1000)
 }

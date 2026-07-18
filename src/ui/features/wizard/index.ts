@@ -38,6 +38,7 @@ import { parseCdLine, resolveCdTarget, resolvePathAgainst } from './cd-path'
 import { applyCompletion, commonPrefix, completionContext, filterCompletions } from './cd-complete'
 import { createCdLine, type CdLineHandle } from './cd-line'
 import { getFocusedPane } from '../../core/layout/focus'
+import { openLibrary } from '../settings/library'
 import { openPlannedWorkspaceFromTemplate, openWorkspaceFromTemplate } from '../../core/workspace/open-service'
 import { setWizardOpener, type WizardPrefill } from '../../core/workspace/wizard-port'
 import { activeView, goBack, setActiveView } from '../../core/shell/view-port'
@@ -144,10 +145,14 @@ export const wizardFeature: UiFeature = {
     let presets: ProviderMixTemplate[] = []
     let recents: RecentWorkspace[] = []
     // Tool plan (8/09): connected (non-house) servers the user can scope this
-    // workspace to. Empty selection = house only (minimal by default). The row
-    // shows only when there ARE connected servers, so no silent scoping.
+    // workspace to. Empty selection = house only (minimal by default). The
+    // section always shows now (store/inventory split): with no connected
+    // servers it offers the Library — the moment of need IS workspace creation.
     let pickableServers: { id: string; label: string }[] = []
     const selectedTools = new Set<string>()
+    // Set per open (it closes over the open generation); the Library's onClose
+    // calls it so a tool connected mid-wizard appears as a chip immediately.
+    let refreshToolsList: (() => void) | null = null
 
     const body = el('div', { class: 'wizard' })
     const footer = el('div', { class: 'wizard-footer' })
@@ -295,15 +300,18 @@ export const wizardFeature: UiFeature = {
         .catch(() => {
           if (currentOpen(generation)) presets = []
         })
-      void (getBridge().invoke(IntegrationsChannels.serversList) as Promise<McpServerEntry[]>)
-        .then((servers) => {
-          if (!currentOpen(generation)) return
-          pickableServers = (servers ?? []).filter((s) => !s.builtIn).map((s) => ({ id: s.id, label: s.label }))
-          renderTools()
-        })
-        .catch(() => {
-          if (currentOpen(generation)) pickableServers = []
-        })
+      refreshToolsList = (): void => {
+        void (getBridge().invoke(IntegrationsChannels.serversList) as Promise<McpServerEntry[]>)
+          .then((servers) => {
+            if (!currentOpen(generation)) return
+            pickableServers = (servers ?? []).filter((s) => !s.builtIn).map((s) => ({ id: s.id, label: s.label }))
+            renderTools()
+          })
+          .catch(() => {
+            if (currentOpen(generation)) pickableServers = []
+          })
+      }
+      refreshToolsList()
       void wizardClient
         .loadState()
         .then((s) => {
@@ -1147,12 +1155,15 @@ export const wizardFeature: UiFeature = {
       refreshAgents()
     }
 
-    // ── Agent tools (8/09) — visible whenever there ARE connected servers ────
+    // ── Agent tools (8/09 + the store/inventory split) — ALWAYS visible ──────
+    // With connected servers: the pick chips. Without: the Library on-ramp —
+    // workspace creation is the moment a user discovers they want a tool, and a
+    // hidden section made that discovery impossible.
     function buildTools(): HTMLElement {
       toolsHost = el('div', { class: 'wizard-tools' })
       toolsSection = section(
         'Agent tools',
-        'House server always on. Unpicked tools stay out of this workspace’s agents (edit later in Settings › Workspace tools).',
+        'House server always on. Unpicked tools stay out of this workspace’s agents (edit later in Settings › Integrations › Workspace tools).',
         null,
         [toolsHost]
       )
@@ -1162,8 +1173,22 @@ export const wizardFeature: UiFeature = {
     function renderTools(): void {
       if (!toolsHost) return
       clear(toolsHost)
-      toolsSection.hidden = pickableServers.length === 0
-      if (!pickableServers.length) return
+      toolsSection.hidden = false
+      if (!pickableServers.length) {
+        // The Library reopens ON TOP of the wizard (it is an overlay, not a view
+        // change), so the half-configured folder/layout/agents survive the trip.
+        toolsHost.append(
+          el('div', { class: 'wizard-hint wizard-tools-empty', text: 'No tools connected yet — agents launch with the house server only.' }),
+          Button({
+            label: 'Browse the Library',
+            icon: 'plug',
+            variant: 'ghost',
+            size: 'sm',
+            onClick: () => openLibrary({ onClose: () => refreshToolsList?.() })
+          })
+        )
+        return
+      }
       const chips = el('div', { class: 'wizard-tools-chips' })
       for (const s of pickableServers) {
         const chip = el(
@@ -1185,6 +1210,15 @@ export const wizardFeature: UiFeature = {
         chips.append(chip)
       }
       toolsHost.append(chips)
+      toolsHost.append(
+        Button({
+          label: 'More tools…',
+          icon: 'plug',
+          variant: 'ghost',
+          size: 'sm',
+          onClick: () => openLibrary({ onClose: () => refreshToolsList?.() })
+        })
+      )
     }
 
     // ── Options: isolation + where it runs — visible, never behind a fold ────

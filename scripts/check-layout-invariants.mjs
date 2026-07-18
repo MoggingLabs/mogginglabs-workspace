@@ -48,6 +48,9 @@ const {
   MIN_PANE_WIDTH_PX,
   allocateSpans,
   computeLayout,
+  equalizeAllLines,
+  equalizeLineAt,
+  lineOfLeaf,
   minimumLayoutHeight,
   minimumLayoutWidth,
   parseTree,
@@ -182,6 +185,80 @@ const randomTree = (depth = 0) => {
     children: Array.from({ length: count }, () => randomTree(depth + 1))
   }
 }
+
+// ── Equalize: per-line, per-member, and provably scoped ─────────────────────────
+// The user contract behind the seam double-click / ⋯ menu / Balance layout: an
+// equalize touches ONE line's sizes and nothing else — a pane that spans the line's
+// cross-axis (a sibling in an outer line) is structurally unreachable.
+{
+  // h[ A, v[B, C, D] ]: A spans the three "rows" formed by the stack.
+  const spanner = {
+    dir: 'h',
+    sizes: [0.7, 0.3],
+    children: [{ id: 1 }, { dir: 'v', sizes: [0.5, 0.3, 0.2], children: [{ id: 2 }, { id: 3 }, { id: 4 }] }]
+  }
+  assert(equalizeLineAt(spanner, '1'), 'equalizeLineAt refused a valid line path')
+  assert(
+    same(spanner.children[1].sizes, [1 / 3, 1 / 3, 1 / 3]),
+    'equalizing a column did not hand every member an equal share'
+  )
+  assert(same(spanner.sizes, [0.7, 0.3]), 'equalizing an inner line leaked into its outer line (the spanning pane moved)')
+  assert(!equalizeLineAt(spanner, '0'), 'equalizeLineAt accepted a leaf path')
+  assert(!equalizeLineAt(spanner, '9.9'), 'equalizeLineAt accepted a path into nothing')
+
+  // lineOfLeaf is the ⋯ menu's honesty: B/C/D live in a column ('v') inside the root
+  // row ('h'); the SPANNING pane A has a row but no column — so it must get no
+  // "equal heights" entry rather than a dead one.
+  assert(lineOfLeaf(spanner, 2, 'v') === '1', 'a stacked pane lost its column line')
+  assert(lineOfLeaf(spanner, 2, 'h') === '', 'a stacked pane lost its enclosing row line')
+  assert(lineOfLeaf(spanner, 1, 'h') === '', 'the spanning pane lost its row line')
+  assert(lineOfLeaf(spanner, 1, 'v') === null, 'the spanning pane claims a column no line gives it')
+  assert(lineOfLeaf(spanner, 99, 'h') === null, 'a leaf id not in the tree resolved to a line')
+
+  // Deepest-line preference: in v[ h[A, B], C ] pane A's row is the INNER h-line.
+  const nested = {
+    dir: 'v',
+    sizes: [0.5, 0.5],
+    children: [{ dir: 'h', sizes: [0.4, 0.6], children: [{ id: 1 }, { id: 2 }] }, { id: 3 }]
+  }
+  assert(lineOfLeaf(nested, 1, 'h') === '0', 'a nested pane resolved its row to the wrong line')
+  assert(lineOfLeaf(nested, 1, 'v') === '', 'a nested pane lost its enclosing column line')
+
+  // Balance: every line equal, the SHAPE byte-identical (sizes aside), the result
+  // parseable — and a lone leaf survives untouched.
+  const shapeOf = (node) =>
+    node.children
+      ? { dir: node.dir, children: node.children.map(shapeOf) }
+      : { id: node.id }
+  for (let run = 0; run < 2000; run++) {
+    nextId = 1
+    const tree = randomTree()
+    const before = JSON.stringify(shapeOf(tree))
+    const leafTotal = nextId - 1
+    equalizeAllLines(tree)
+    assert(JSON.stringify(shapeOf(tree)) === before, `balance ${run} changed the tree's shape`)
+    const verify = (node) => {
+      if (!node.children) return
+      node.children.forEach((child) => verify(child))
+      assert(
+        node.sizes.every((size) => Math.abs(size - 1 / node.children.length) < 1e-12),
+        `balance ${run} left a line unequal`
+      )
+    }
+    verify(tree)
+    // parseTree's own MAX_LEAVES bound applies — random trees can exceed 32 leaves,
+    // and refusing those is ITS contract, not a balance regression.
+    if (tree.children && leafTotal <= MAX_LEAVES) {
+      assert(parseTree(serializeTree(tree), leafTotal), `balance ${run} produced an unparseable layout`)
+    }
+  }
+  const lone = { id: 7 }
+  equalizeAllLines(lone)
+  assert(lone.id === 7 && !lone.children, 'balancing a lone pane mutated it')
+}
+
+console.log('layout-invariants: equalize contracts hold (scoped lines, spanning panes untouched, 2,000 balanced trees)')
+
 for (let run = 0; run < 5000; run++) {
   nextId = 1
   const tree = randomTree()
