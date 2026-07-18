@@ -43,17 +43,25 @@ export function onPaneRole(cb: (paneId: PaneId, role: string) => void): () => vo
 
 // ── Launch profile NAME (Phase-6/04): set by `agents` at launch for the pane
 // ⋯ menu's read-only note. Display name ONLY — profile env values never cross
-// this port (they stay main-side; ADR 0002). No subscriber: the menu reads
-// lazily when it opens. ──
+// this port (they stay main-side; ADR 0002). Subscribed like the label: the
+// name resolves ASYNC on the detection path, so an already-open menu must be
+// told, not left showing the previous launch's note. ──
 const profiles = new Map<PaneId, string>()
+const profileSubscribers = new Set<(paneId: PaneId, name: string | undefined) => void>()
 
 export function setPaneProfile(paneId: PaneId, name: string | undefined): void {
   if (name) profiles.set(paneId, name)
   else profiles.delete(paneId)
+  for (const cb of profileSubscribers) cb(paneId, name || undefined)
 }
 
 export function getPaneProfile(paneId: PaneId): string | undefined {
   return profiles.get(paneId)
+}
+
+export function onPaneProfile(cb: (paneId: PaneId, name: string | undefined) => void): () => void {
+  profileSubscribers.add(cb)
+  return () => profileSubscribers.delete(cb)
 }
 
 // ── Remote pane (Phase-4/05): set by the workspace manifest BEFORE panes spawn, so
