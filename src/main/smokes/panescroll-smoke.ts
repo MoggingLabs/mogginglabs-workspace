@@ -22,6 +22,12 @@ import { join } from 'node:path'
 //                 the trap the naive fix falls into: agents poll it constantly.
 //   F RETURN      the jump pill puts you back on the stream (and re-arms the anchor).
 //   G TYPING      typing at the prompt re-arms it too.
+//   L INCIDENT    a machine scroll landing INSIDE a human's gesture window (the blank-pane
+//                 bug): an incidental down-tick over the pane — Windows wheels hover-scroll
+//                 unfocused windows — opens the anchor's window, and the CLI's repaint/replay
+//                 strands the viewport before it closes. The displacement is the machine's,
+//                 not the human's: the pane must come back to the bottom. A REAL wheel-up
+//                 inside the same kind of burst must still detach.
 //   H OVERLAY     invisible at rest; visible ONLY in its own right-edge lane (hovering
 //                 the pane anywhere else shows nothing — and no stylesheet rule may
 //                 reintroduce that), plus a flash while scrolling that fades.
@@ -199,6 +205,35 @@ const SCRIPT = `(async () => {
   await sleep(400)
   const g = p0.scroll()
   check('G typing re-anchors', g.atBottom && g.following, JSON.stringify(g))
+
+  // --- L · THE INCIDENT: a machine scroll inside a human's gesture window --------------
+  // The blank-pane bug, end to end. The pointer rests over the pane and an incidental
+  // DOWN-tick arrives (already at the bottom, so it moves nothing) — but it opens the
+  // anchor's gesture window. Inside that window the CLI's repaint/replay bursts and a
+  // stray scroll strands the viewport. The old anchor read the resting position as the
+  // human's choice and left the pane stranded in the blank scrollback the repaint had
+  // just created; the gesture pointed DOWN (or nowhere), so the anchor must overrule it.
+  const lp = panes[1]
+  const l0 = lp.scroll()
+  check('L starts following at the bottom', l0.atBottom && l0.following, JSON.stringify(l0))
+  wheel(lp, 120) // the incidental flick: downward, at the bottom — no movement at all
+  await sleep(50) // still inside the anchor's gesture window
+  await feed(lp, 200, 'REPAINT') // the machine's burst...
+  lp.term.scrollToTop() // ...and the stray scroll it carries, INSIDE the window
+  await sleep(SETTLE_MS + 400) // the window closes and the anchor reads the rest
+  const l = lp.scroll()
+  check('L machine scroll in-window is not the human', l.atBottom && l.following && !l.jumpShown, JSON.stringify(l))
+  // The mirror guards the other side: a REAL wheel-up while the same burst lands must
+  // still detach — the human did scroll, and the burst must not re-anchor them.
+  wheel(lp, -600)
+  await sleep(50)
+  await feed(lp, 100, 'BURST')
+  await sleep(SETTLE_MS + 400)
+  const lUp = lp.scroll()
+  check('L real wheel-up still detaches', !lUp.following && lUp.jumpShown && !lUp.atBottom, JSON.stringify(lUp))
+  q(lp, '.pane-jump').click() // leave the pane following for the steps below
+  await sleep(300)
+  check('L pill restores after the mirror', lp.scroll().atBottom && lp.scroll().following)
 
   // --- H · OVERLAY: invisible at rest, visible only in its own lane ------------------
   await sleep(REST_MS) // let the scroll flash fade
