@@ -2,7 +2,9 @@ import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-/** Audit regression: a failed updater check must be visible and its retry must re-check. */
+/** Audit regression: a BROKEN feed — reached but unreadable, the nine-404s shape — stays
+ *  LOUD even for a background check (never classified as offline-quiet), and its retry
+ *  re-checks. The offline half of the classification is UPDATEOFFLINE's gate. */
 export function runUpdateFailSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 60000)
   const wc = win.webContents
@@ -27,7 +29,7 @@ export function runUpdateFailSmoke(win: BrowserWindow): void {
       await sleep(400)
 
       const initial = await ES<{
-        state: { phase: string; error?: string; lastCheckedAt?: number }
+        state: { phase: string; error?: string; lastCheckedAt?: number; offline?: boolean }
         railVisible: boolean
         railLabel: string
         railTitle: string
@@ -52,16 +54,19 @@ export function runUpdateFailSmoke(win: BrowserWindow): void {
         }
       })()`)
 
+      // The BOOT check is a background check — a broken feed must be loud even then, and it
+      // must NOT wear the offline flag (that would have kept it quiet, the nine-404s bug).
       const initialVisible =
         initial.state.phase === 'error' &&
+        initial.state.offline !== true &&
         !!initial.state.lastCheckedAt &&
-        initial.state.error?.includes('Check your connection') === true &&
+        initial.state.error?.includes('update feed could not be read') === true &&
         initial.railVisible &&
         initial.railLabel === 'Update failed — retry' &&
         initial.railErrorClass &&
-        initial.railTitle.includes('Check your connection') &&
+        initial.railTitle.includes('update feed could not be read') &&
         initial.settingsStatus.includes('failed') &&
-        initial.settingsStatus.includes('Check your connection') &&
+        initial.settingsStatus.includes('update feed could not be read') &&
         initial.settingsRetryEnabled
 
       const retryStarted = await ES<boolean>(`(() => {

@@ -107,6 +107,7 @@ import { runBoardQueueSmoke } from './smokes/boardqueue-smoke'
 import { runPersistHealthSmoke } from './smokes/persisthealth-smoke'
 import { runRoleRaceSmoke } from './smokes/rolerace-smoke'
 import { runUpdateFailSmoke } from './smokes/updatefail-smoke'
+import { runUpdateOfflineSmoke } from './smokes/updateoffline-smoke'
 import { runA11yModalSmoke } from './smokes/a11ymodal-smoke'
 import { runBrowserZeroSmoke } from './smokes/browserzero-smoke'
 import { runSecretFormsSmoke } from './smokes/secretforms-smoke'
@@ -188,7 +189,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
   'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_RUNTIMESPLIT', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
-  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
+  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_UPDATEOFFLINE', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
   'MOGGING_PROFILES', 'MOGGING_LOGINTRUTH', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
   // Typed-launch detection + the context gauge (the v6 pack).
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
@@ -570,7 +571,9 @@ function afterWindow(win: BrowserWindow): void {
   } else if (process.env.MOGGING_PLAINMENU) {
     runPlainMenuSmoke(win) // pane ⋯ launch entries are plain-terminal-only, through the whole lifecycle
   } else if (process.env.MOGGING_UPDATEFAIL) {
-    runUpdateFailSmoke(win) // audit regression: a failed update check stays visible and its retry re-checks
+    runUpdateFailSmoke(win) // audit regression: a BROKEN feed stays loud even on a background check; retry re-checks
+  } else if (process.env.MOGGING_UPDATEOFFLINE) {
+    runUpdateOfflineSmoke(win) // regression (v0.14.0 live): an offline blip never latches the error row; manual retry honest; self-heals
   } else if (process.env.MOGGING_A11YMODAL) {
     runA11yModalSmoke(win) // audit regression: modal trap/inert/name, palette combobox, workspace-tab close by keyboard
   } else if (process.env.MOGGING_BROWSERZERO) {

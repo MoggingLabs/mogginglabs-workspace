@@ -173,7 +173,7 @@ decorated, live, and actionable. Receipts, measured numbers, and platform finds:
 
 **Certification — PENDING the operator.** Two things are deliberately not done here:
 
-1. The **full uncut local sweep** (159 gates). House rule: Claude runs targeted gate
+1. The **full uncut local sweep** (160 gates). House rule: Claude runs targeted gate
    subsets, never the full sweep — that run is the operator's. All seven new gates
    are green, as is every gate they could plausibly disturb (REPORT.md §5).
 2. The **three-OS CI dispatch**, which needs a push. `ci.yml` requires **no edit**:
@@ -185,5 +185,5 @@ Until both land, the certification row below stays honest rather than decorative
 | Environment | Sweep | Result |
 |---|---|---|
 | local Windows (targeted) | the 7 new gates + every gate they touch | ✅ green |
-| local Windows (full, 159 gates) | — | **PENDING** (operator) |
+| local Windows (full, 160 gates) | — | **PENDING** (operator) |
 | CI linux · macOS · windows | — | **PENDING** (operator dispatch) |

@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 159 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 160 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
-# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 137 app-boot
+# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 138 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -314,6 +314,7 @@ run_smoke ROLERACE    MOGGING_ROLERACE 1 120 rolerace
 run_smoke AGENTREGISTRY MOGGING_AGENTREGISTRY 1 120 agentregistry
 run_smoke PLAINMENU   MOGGING_PLAINMENU 1 150 plainmenu
 run_smoke UPDATEFAIL  MOGGING_UPDATEFAIL 1 120 updatefail
+run_smoke UPDATEOFFLINE MOGGING_UPDATEOFFLINE 1 150 updateoffline
 run_smoke A11YMODAL   MOGGING_A11YMODAL 1 180 a11ymodal
 run_smoke BROWSERZERO MOGGING_BROWSERZERO 1 180 browserzero
 run_smoke SECRETFORMS MOGGING_SECRETFORMS 1 240 secretforms
