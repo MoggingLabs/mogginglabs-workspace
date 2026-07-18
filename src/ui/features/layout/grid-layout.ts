@@ -40,6 +40,17 @@ import { machineSpec } from '../../core/system/machine-port'
 export { parseTree, leafIds, MIN_PANE_WIDTH_PX, minimumLayoutWidth } from './layout-tree'
 export type { LayoutTreeNode, SplitDir } from './layout-tree'
 
+/** The canonical grid shape for a pane count: the curated template shape, else
+ *  near-square — exactly what `apply(n)` builds. Exported so the layout popover's
+ *  "Reorganize" row can NAME the shape it will snap to ("Reorganize into 2×3")
+ *  without a second formula that could drift from the one the grid actually uses. */
+export function gridShapeFor(n: number): GridSpec {
+  const spec = TEMPLATES[n]
+  if (spec) return spec
+  const cols = Math.min(4, Math.max(1, Math.ceil(Math.sqrt(n))))
+  return { cols, rows: Math.ceil(n / cols) }
+}
+
 const GUTTER = 2 // px between panes — with each pane's 1px border: a 4px seam, matching the app edge
 const DRAG_THRESHOLD = 6 // px of header movement before a click becomes a pane drag
 const ROOT_EDGE_PX = 14 // workspace-edge drop band ("make this a full column/row here")
@@ -317,10 +328,7 @@ export class GridLayout {
 
   /** Column count for a pane count: the curated template shape, else near-square. */
   private shapeFor(n: number): GridSpec {
-    const spec = TEMPLATES[n]
-    if (spec) return spec
-    const cols = Math.min(4, Math.max(1, Math.ceil(Math.sqrt(n))))
-    return { cols, rows: Math.ceil(n / cols) }
+    return gridShapeFor(n)
   }
 
   /** Apply an N-pane template grid (any 1..16; template counts keep their curated

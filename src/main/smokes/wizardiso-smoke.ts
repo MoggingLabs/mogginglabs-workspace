@@ -13,11 +13,12 @@ import { join } from 'node:path'
 // Launch — then demands testimony: two managed worktrees exist, the workspace's
 // paneCwds point INTO them, and each pane's SHELL really ran there (a `custom:`
 // provider writes `git branch --show-current` into branch.txt at its own cwd).
-// Also owns the layout menu's ISOLATION verbs: the single row, the BATCH stepper
-// (N worktrees in one gesture — worktrees must equal panes added, and the return
-// is true only when every requested terminal opened), and the picker's live-work
-// gate (a template tile that would close a busy pane is aria-disabled with a
-// reason, un-clickable, and re-lights when the pane calms).
+// Also owns the layout menu's verbs since the reorganize redesign: the isolated
+// BATCH stepper (N worktrees in one gesture — worktrees must equal panes added,
+// and the return is true only when every requested terminal opened), the PLAIN
+// batch stepper (N terminals, zero worktrees), and REORGANIZE (the current panes
+// snap into the canonical grid for their count — curated template shapes, near-
+// square rest — closing nothing).
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim()
 }
@@ -176,6 +177,84 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
           ? batchWorktrees === batchAdded && batchReturned === (batchAdded === 2)
           : batchReturned === false && batchWorktrees === 0 // a full grid refuses with no litter
 
+      // ── PLAIN batch: the New-terminal stepper — N panes in one gesture, ZERO
+      // worktrees. splitActive returns nothing, so the honest-count contract is
+      // pinned against the workspace's OWN quoted headroom (layout.status) instead:
+      // the batch must add exactly min(2, headroom) — a clamped screen stays green
+      // for the clamp, a count-ignoring regression reds for the shortfall.
+      const panesBeforePlainBatch = panesAfterBatch
+      const worktreesBeforePlainBatch = readdirSync(wtRoot).length
+      const statusBeforePlainBatch = await ES<{ panes: number; cap: number } | null>(`window.__mogging.layout.status()`)
+      const plainBatchExpected = statusBeforePlainBatch
+        ? Math.min(2, Math.max(0, statusBeforePlainBatch.cap - statusBeforePlainBatch.panes))
+        : 2
+      await ES(`window.__mogging.layout.split(undefined, 2)`)
+      let panesAfterPlainBatch = panesBeforePlainBatch
+      for (let i = 0; i < 20; i++) {
+        await sleep(300)
+        panesAfterPlainBatch = await ES<number>(`window.__mogging.layout.paneCount()`)
+        if (panesAfterPlainBatch >= panesBeforePlainBatch + plainBatchExpected) break
+      }
+      const plainBatchAdded = panesAfterPlainBatch - panesBeforePlainBatch
+      const plainBatchOk =
+        plainBatchAdded === plainBatchExpected && readdirSync(wtRoot).length === worktreesBeforePlainBatch
+
+      // ── REORGANIZE: the chained mosaic the batches built snaps into the canonical
+      // grid for the CURRENT count — same shape formula the grid applies (curated
+      // template shapes, near-square rest), closing nothing. Asserted from rendered
+      // slot GEOMETRY: row bands and per-row pane counts must match the shape.
+      const reorg = await ES<{
+        before: number
+        after: number
+        rows: number[]
+        beforeCanonical: boolean
+      }>(`(async () => {
+        const m = window.__mogging
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+        const rowsOf = () => {
+          const boxes = m.layout.paneIds().map((id) => {
+            const r = document.querySelector('.layout-slot[data-pane-id="' + id + '"]').getBoundingClientRect()
+            return { x: r.x, y: Math.round(r.y) }
+          })
+          const tops = [...new Set(boxes.map((b) => b.y))].sort((a, b) => a - b)
+          const bands = []
+          for (const t of tops) {
+            if (!bands.length || t - bands[bands.length - 1] > 8) bands.push(t)
+          }
+          return bands.map((band) => boxes.filter((b) => Math.abs(b.y - band) <= 8).length)
+        }
+        const shapeFor = (n) => {
+          const curated = { 1: [1, 1], 2: [1, 2], 4: [2, 2], 6: [2, 3], 8: [2, 4], 9: [3, 3], 12: [3, 4], 16: [4, 4] }
+          if (curated[n]) return curated[n]
+          const cols = Math.min(4, Math.max(1, Math.ceil(Math.sqrt(n))))
+          return [Math.ceil(n / cols), cols]
+        }
+        const canonical = (rows, n) => {
+          const [expRows, expCols] = shapeFor(n)
+          if (rows.length !== expRows) return false
+          const full = expCols
+          const last = n - full * (expRows - 1)
+          return rows.every((c, i) => c === (i === expRows - 1 ? last : full))
+        }
+        const before = m.layout.paneCount()
+        const beforeCanonical = canonical(rowsOf(), before)
+        m.layout.reorganize()
+        await sleep(600)
+        return { before, after: m.layout.paneCount(), rows: rowsOf(), beforeCanonical }
+      })()`)
+      const reorganizeOk = (() => {
+        const n = reorg.after
+        if (n !== reorg.before) return false // reorganize must never open or close a pane
+        const curated: Record<number, [number, number]> = { 1: [1, 1], 2: [1, 2], 4: [2, 2], 6: [2, 3], 8: [2, 4], 9: [3, 3], 12: [3, 4], 16: [4, 4] }
+        const [expRows, expCols] = curated[n] ?? (() => {
+          const cols = Math.min(4, Math.max(1, Math.ceil(Math.sqrt(n))))
+          return [Math.ceil(n / cols), cols] as [number, number]
+        })()
+        if (reorg.rows.length !== expRows) return false
+        const last = n - expCols * (expRows - 1)
+        return reorg.rows.every((c, i) => c === (i === expRows - 1 ? last : expCols))
+      })()
+
       // ── The Pedro case: a folder wearing an EMPTY `.git` is NOT a repo. The manual
       // isolated row must refuse honestly — no pane, no worktree litter.
       const fakeRepo = mkdtempSync(join(tmpdir(), 'mog-wiziso-fake-'))
@@ -190,57 +269,6 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         (await ES<number>(`window.__mogging.layout.paneCount()`)) === beforeFake &&
         !existsSync(join(fakeRepo, '.mogging', 'worktrees'))
 
-      // ── The picker refuses a shrink over LIVE work: in FakeRepo (no agent sessions,
-      // so the gate is deterministic), split plain, mark the new pane busy, and the
-      // 1-pane tile must be aria-disabled with a reason; its click must do nothing —
-      // no shrink, no confirm dialog. Calm the pane and the SAME tile lights again:
-      // the refusal derives from live state, not pane count.
-      await ES(`window.__mogging.layout.split()`)
-      for (let i = 0; i < 20; i++) {
-        await sleep(300)
-        if ((await ES<number>(`window.__mogging.layout.paneCount()`)) === beforeFake + 1) break
-      }
-      const tileGate = await ES<{
-        split: boolean
-        disabledWhileBusy: boolean
-        reason: string
-        ignored: boolean
-        enabledWhenIdle: boolean
-      }>(`(async () => {
-        const m = window.__mogging
-        const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-        const ids = m.layout.paneIds()
-        const split = ids.length === ${beforeFake + 1}
-        const newest = ids[ids.length - 1] // highest slot: closed by every smaller template
-        m.attention.setPaneState(newest, 'busy')
-        await sleep(150)
-        const openMenu = async () => {
-          document.querySelector('.layout-launcher > button')?.click()
-          await sleep(80)
-          return document.querySelector('.layout-menu .layout-tile') // first tile = the 1-pane template
-        }
-        const tile = await openMenu()
-        const disabledWhileBusy = !!tile && tile.getAttribute('aria-disabled') === 'true'
-        const reason = (tile && tile.title) || ''
-        const before = m.layout.paneCount()
-        if (tile) tile.click()
-        await sleep(300)
-        const ignored = m.layout.paneCount() === before && !document.querySelector('.modal-overlay')
-        document.querySelector('.layout-launcher > button')?.click() // close (a close never re-renders)
-        m.attention.setPaneState(newest, 'idle')
-        await sleep(150)
-        const tile2 = await openMenu()
-        const enabledWhenIdle = !!tile2 && tile2.getAttribute('aria-disabled') !== 'true'
-        document.querySelector('.layout-launcher > button')?.click()
-        return { split, disabledWhileBusy, reason, ignored, enabledWhenIdle }
-      })()`)
-      const pickerGateOk =
-        tileGate.split &&
-        tileGate.disabledWhileBusy &&
-        tileGate.reason.length > 0 &&
-        tileGate.ignored &&
-        tileGate.enabledWhenIdle
-
       const pass =
         checkboxLive &&
         checked &&
@@ -252,8 +280,9 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         manualIsolated &&
         plainStaysPlain &&
         batchOk &&
-        fakeRefusedHonestly &&
-        pickerGateOk
+        plainBatchOk &&
+        reorganizeOk &&
+        fakeRefusedHonestly
       result = {
         pass,
         checkboxLive,
@@ -273,9 +302,11 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         batchOk,
         batchAdded,
         batchReturned,
-        fakeRefusedHonestly,
-        tileGate,
-        pickerGateOk
+        plainBatchOk,
+        plainBatchAdded,
+        reorganizeOk,
+        reorg,
+        fakeRefusedHonestly
       }
     } catch (error) {
       result = { pass: false, error: String(error) }

@@ -2052,10 +2052,10 @@ textarea {
   color: var(--text-hi);
 }
 
-/* Grid-layout picker (titlebar popover): the shared createLayoutGridPicker(), compact
-   variant. REMOVE #16 retired the ad-hoc .layout-menu-tile builder — whose
-   `.layout-menu-tile .layout-tile-count` reached across to override the shared
-   component's own class. One picker, one source of truth now. */
+/* Grid-layout popover (titlebar). Counter-driven since the reorganize redesign:
+   two add rows with [− n +] steppers, Reorganize (snap to the canonical grid) and
+   Balance — the template tile strip retired (its shape value lives on in Reorganize;
+   its count-pinning was the part nobody with live agents wanted). */
 .layout-launcher {
   position: relative;
 }
@@ -2076,13 +2076,11 @@ textarea {
   right: 0;
   left: auto;
   padding: var(--sp-2);
-  /* A fixed column, not the old 520px tile strip: the 8 templates stack 4×2 (below),
-     so the status line, the tile grid and the action rows share one width instead of
-     three action rows rattling inside a strip sized for eight tiles. 396px is the
-     narrowest that shows "New isolated terminal (worktree)" whole beside its stepper
-     (340 and 364 both ellipsized it mid-word — screenshot-verified twice). The vw
-     term keeps the right-anchored popover from poking past the window's LEFT edge
-     on a very narrow window. */
+  /* A fixed column. 396px is the narrowest that shows "New isolated terminal
+     (worktree)" whole beside its stepper (340 and 364 both ellipsized it mid-word —
+     screenshot-verified); every other row fits inside it. The vw term keeps the
+     right-anchored popover from poking past the window's LEFT edge on a very
+     narrow window. */
   width: 396px;
   max-width: calc(100vw - 240px);
 }
@@ -2090,55 +2088,44 @@ textarea {
   display: none;
 }
 /* The popover's status line: panes now / live work / the cap — the same numbers the
-   dimmed tiles and the stepper ceiling are derived from. */
+   stepper ceilings and batch clamps are derived from. */
 .layout-menu-status {
   padding: 0 var(--sp-1) var(--sp-1);
   font-size: var(--fs-11);
   color: var(--text-mid);
 }
-/* "New terminal" — the ADD action lives with the layout templates (same decision:
-   how many panes). Full-width row under the tiles; the shortcut hugs the right. */
 .layout-menu-add .kbd {
   margin-left: auto;
 }
 .layout-menu-add:hover .kbd {
   color: var(--accent-ink);
 }
-/* The isolated-terminals row: the verb button grows, the [− n +] stepper rides its
-   right edge. min-width 0 + ellipsis so the nowrap label yields to the stepper
-   instead of pushing the popover wide. */
-.layout-menu-iso-row {
+/* An add row: the verb button grows, the [− n +] stepper rides its right edge.
+   min-width 0 + ellipsis so the nowrap label yields to the stepper instead of
+   pushing the popover wide. */
+.layout-menu-stepper-row {
   display: flex;
   align-items: center;
   gap: var(--sp-1);
 }
-.layout-menu-iso-row .menu-item {
+.layout-menu-stepper-row .menu-item {
   flex: 1 1 auto;
   min-width: 0;
 }
-.layout-menu-iso-row .menu-item span {
+.layout-menu-stepper-row .menu-item span {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Compact tiles for the dense titlebar dropdown (the wizard runs the same picker at
-   full size). A 4-across GRID, not the old single row: the popover column stays as
-   wide as its action rows and the tiles fill it edge to edge. Hover + selected
-   states come from .layout-tile. Both classes on purpose: the shared `.layout-picker`
-   rule (display:flex) sits LATER in this file, and at equal specificity it silently
-   won `display` — the grid never engaged and the eight tiles rode one squeezed row. */
-.layout-picker.layout-picker--compact {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--sp-1);
+/* Reorganize's leading mark is a LIVE miniature of the exact grid the click builds
+   (MiniGridPreview), sized to sit where a 14px icon would. */
+.layout-menu-reorg-mark {
+  display: inline-flex;
+  flex: none;
+  width: 18px;
+  height: 13px;
 }
-.layout-picker--compact .layout-tile {
-  width: auto;
-  height: 56px;
-  padding: 6px;
-  border-radius: var(--r-sm);
-}
-.layout-picker--compact .layout-tile-count {
-  font-size: var(--fs-10);
+.layout-menu-reorg-mark .grid-preview {
+  gap: 1px;
 }
 
 #workspace-host {
@@ -5728,63 +5715,8 @@ body.pane-dragging * {
   align-items: center;
   justify-content: center;
 }
-/* Layout picker tiles. */
-.layout-picker {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-2);
-}
-.layout-tile {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--sp-1);
-  width: 72px;
-  height: 72px;
-  padding: var(--sp-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--bg-surface);
-  cursor: pointer;
-  transition:
-    border-color var(--dur-1) var(--ease),
-    background var(--dur-1) var(--ease),
-    box-shadow var(--dur-1) var(--ease);
-}
-.layout-tile:hover {
-  border-color: var(--border-strong);
-}
-.layout-tile .grid-preview {
-  flex: 1 1 auto;
-  width: 100%;
-}
-.layout-tile-count {
-  font-family: var(--font-mono);
-  font-size: var(--fs-12);
-  font-weight: var(--fw-semibold);
-  color: var(--text-mid);
-  font-variant-numeric: tabular-nums;
-}
-.layout-tile.is-selected {
-  border-color: var(--accent);
-  background: var(--accent-weak);
-  box-shadow: 0 0 0 1px var(--accent);
-}
-.layout-tile.is-selected .layout-tile-count {
-  color: var(--accent-ink);
-}
-/* Refused tiles (above the cap, or a shrink that would close live agent work): still
-   hoverable/focusable so the title can say WHY, but visually out of the running.
-   cursor: default, NOT not-allowed — the app's greyed-out idiom (the titlebar's
-   panel/Explorer toggles, .icon-btn:disabled) never shows the blocked cursor;
-   the dimming and the tooltip carry the refusal (user-confirmed in live verify). */
-.layout-tile.is-disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.layout-tile.is-disabled:hover {
-  border-color: var(--border);
-}
+/* (The .layout-picker/.layout-tile rules retired with the titlebar tile picker — the
+   layout popover is counter-driven now. MiniGridPreview keeps .grid-preview above.) */
 
 /* Wizard stepper. */
 /* Modal / wizard shell. */

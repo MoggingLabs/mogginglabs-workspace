@@ -12,8 +12,8 @@ import {
   type WorkspaceState
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { TEMPLATE_COUNTS, TEMPLATES } from '../layout'
-import { Button, IconButton, clear, createLayoutGridPicker, createStepper, el, icon, showToast } from '../../components'
+import { TEMPLATE_COUNTS } from '../layout'
+import { Button, IconButton, MiniGridPreview, clear, createStepper, el, icon, showToast } from '../../components'
 import { WorkspaceController, type CreateOpts } from './controller'
 import { resolveColors } from './model'
 import { workspaceClient } from './workspace.client'
@@ -555,35 +555,33 @@ export const workspaceFeature: UiFeature = {
     function renderLayoutMenu(): void {
       clear(layoutMenu)
       // The popover opens on the workspace's TRUTH: what it holds, how much of it is
-      // live work, and where the cap sits — the same numbers the gates below enforce,
-      // so a dimmed tile and this line can never tell two stories.
+      // live work, and where the cap sits — the same numbers the stepper ceilings and
+      // the batch clamps enforce, so this line can never tell a second story.
       const status = controller.layoutStatus()
       if (status) {
         const bits = [`${status.panes} of ${status.cap} panes`]
         if (status.live > 0) bits.push(`${status.live} with live work`)
         layoutMenu.append(el('div', { class: 'layout-menu-status', text: bits.join(' · ') }))
       }
-      // REMOVE #16: the SHARED grid picker (compact variant) — one component, replacing
-      // the ad-hoc tile builder whose `.layout-menu-tile .layout-tile-count` reached
-      // across to override this very component's class. Tiles the controller refuses —
-      // above the cap, or a shrink that would close live agent work — render dimmed
-      // with the reason, instead of lighting up a click the apply would have to fight.
-      const picker = createLayoutGridPicker({
-        specs: TEMPLATE_COUNTS.map((n) => ({
-          count: n,
-          rows: TEMPLATES[n].rows,
-          cols: TEMPLATES[n].cols,
-          disabledReason: controller.templateBlockReason(n) ?? undefined
-        })),
-        selected: controller.activePaneCount(),
-        compact: true,
-        onSelect: (n) => {
-          void controller.requestApplyTemplate(n)
-          layoutMenu.hidden = true
+      const headroom = status ? Math.max(1, status.cap - status.panes) : 1
+      // ADD terminals — the popover's whole additive vocabulary is counter-driven now
+      // (user direction: the template tiles pinned a COUNT, which is the one thing the
+      // owner of four live agents never wants pinned — Reorganize below keeps the
+      // tiles' real value, the SHAPE, without their kill switch). Each row's [− n +]
+      // clamps to the headroom the status line quotes; at 1 the row is exactly the
+      // single-split verb it always was, and Ctrl+Shift+D stays a plain single split.
+      let termCount = 1
+      const termLabel = el('span', { text: 'New terminal' })
+      const termStepper = createStepper({
+        value: 1,
+        min: 1,
+        max: headroom,
+        ariaLabel: 'How many terminals',
+        onChange: (n) => {
+          termCount = n
+          termLabel.textContent = n === 1 ? 'New terminal' : `${n} new terminals`
         }
       })
-      // ADD one terminal — lives IN this popover (templates and "one more" are the
-      // same decision: how many panes). Splits the focused pane; its line re-equalizes.
       const add = el(
         'button',
         {
@@ -592,27 +590,25 @@ export const workspaceFeature: UiFeature = {
           title: 'Splits the focused pane — the row/column re-equalizes',
           onClick: () => {
             layoutMenu.hidden = true
-            controller.splitActive()
+            controller.splitActive(undefined, termCount)
           }
         },
         [
           icon('plus', 14),
-          el('span', { text: 'New terminal' }),
+          termLabel,
           el('span', { class: 'kbd', text: 'Ctrl+Shift+D' })
         ]
       )
+      const addRow = el('div', { class: 'layout-menu-stepper-row' }, [add, termStepper.el])
       // ADD isolated terminals — same split, but each new pane lives in its own git
       // worktree (fresh mogging/<slug> branch), the manual twin of the wizard's
       // "Isolate each agent" checkbox. Menu-only by design: Ctrl+Shift+D stays plain.
-      // The stepper is what lets a SWARM start in one gesture (count clamped to the
-      // headroom the status line quotes); it defaults to 1, so the row alone is still
-      // the single-terminal verb it always was.
       let isoCount = 1
       const isoLabel = el('span', { text: 'New isolated terminal (worktree)' })
       const isoStepper = createStepper({
         value: 1,
         min: 1,
-        max: status ? Math.max(1, status.cap - status.panes) : 1,
+        max: headroom,
         ariaLabel: 'How many isolated terminals',
         onChange: (n) => {
           isoCount = n
@@ -634,7 +630,32 @@ export const workspaceFeature: UiFeature = {
         },
         [icon('git-branch', 14), isoLabel]
       )
-      const isoRow = el('div', { class: 'layout-menu-iso-row' }, [addIsolated, isoStepper.el])
+      const isoRow = el('div', { class: 'layout-menu-stepper-row' }, [addIsolated, isoStepper.el])
+      // REORGANIZE — snap the CURRENT panes back into their canonical grid (the
+      // wizard's own shape resolution; curated template shapes, near-square rest).
+      // The structural sibling of Balance: Balance equalizes the sizes of the
+      // arrangement you have, Reorganize rebuilds the arrangement. Never closes a
+      // pane, so it needs no gate and no confirm. The live miniature IS the promise:
+      // it draws the exact grid this click produces.
+      const target = controller.reorganizeTarget()
+      const reorganize = el(
+        'button',
+        {
+          class: 'menu-item layout-menu-add layout-menu-reorganize',
+          type: 'button',
+          title: 'Rebuilds the current panes as a clean grid — nothing opens or closes',
+          onClick: () => {
+            layoutMenu.hidden = true
+            controller.reorganizeActive()
+          }
+        },
+        [
+          target
+            ? el('span', { class: 'layout-menu-reorg-mark' }, [MiniGridPreview({ rows: target.rows, cols: target.cols })])
+            : icon('layout-grid', 14),
+          el('span', { text: target ? `Reorganize into ${target.rows}×${target.cols}` : 'Reorganize' })
+        ]
+      )
       // BALANCE — equal shares on every row and column. The whole-workspace tidy that
       // per-seam equalize (gutter double-click, pane ⋯ menu) does line by line.
       const balance = el(
@@ -654,7 +675,7 @@ export const workspaceFeature: UiFeature = {
           el('span', { class: 'kbd', text: 'Ctrl+Shift+=' })
         ]
       )
-      layoutMenu.append(picker.el, el('div', { class: 'menu-sep' }), add, isoRow, balance)
+      layoutMenu.append(addRow, isoRow, el('div', { class: 'menu-sep' }), reorganize, balance)
     }
 
     // ── Keyboard: capture phase + stopPropagation so xterm never sees these ──
@@ -824,6 +845,13 @@ export const workspaceFeature: UiFeature = {
           enabled: requiresGrid,
           run: () => controller.balanceActive()
         },
+        {
+          id: 'layout:reorganize',
+          title: 'Reorganize layout (snap panes to a clean grid)',
+          hint: 'Layout',
+          enabled: requiresGrid,
+          run: () => controller.reorganizeActive()
+        },
         ...TEMPLATE_COUNTS.map((n) => ({
           id: `layout:${n}`,
           title: `Layout: ${n} pane${n === 1 ? '' : 's'}`,
@@ -913,8 +941,10 @@ function exposeForDev(controller: WorkspaceController): void {
     paneIds: () => controller.activePaneIds(),
     zoom: () => controller.toggleZoom(),
     expand: (paneId: number, mode: 'full' | 'col' | 'row') => controller.expandPane(paneId, mode),
-    split: (dir?: 'h' | 'v') => controller.splitActive(dir),
+    split: (dir?: 'h' | 'v', count?: number) => controller.splitActive(dir, count),
     splitIsolated: (dir?: 'h' | 'v', count?: number) => controller.splitActiveIsolated(dir, count),
+    reorganize: () => controller.reorganizeActive(),
+    status: () => controller.layoutStatus(),
     close: (paneId: number) => {
       const id = controller.activeMeta()?.id
       if (id) void controller.requestClosePane(id, paneId)

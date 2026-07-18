@@ -1,7 +1,7 @@
 import { formulaPaneId, GitChannels, TerminalChannels, WorktreeChannels } from '@contracts'
 import type { AgentState, CreateWorktreeResult, PaneId, RemoveWorktreeResult } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { GridLayout, parseTree, leafIds, type LayoutTreeNode } from '../layout'
+import { GridLayout, gridShapeFor, parseTree, leafIds, type LayoutTreeNode } from '../layout'
 import { confirmDialog, icon, showToast, TOAST_DEFAULT_MS } from '../../components'
 import { batchSlots } from '../../core/layout/slots'
 import { openMovePaneModal, type MoveTarget } from './move-pane-modal'
@@ -1181,35 +1181,7 @@ export class WorkspaceController {
     })
   }
 
-  /**
-   * Why the layout picker must not OFFER template `n` right now — null when it may.
-   * Two refusals, decided before the click instead of after it:
-   *  - a count above the workspace's effective cap (grid budget ∧ plan). `apply`
-   *    would silently clamp there, so the tile's promise would be a lie;
-   *  - a shrink that would close panes holding live work (an agent session, or
-   *    anything still running) — with four agents at work, a 1/2/3-pane tile is
-   *    not a layout choice, it is a kill switch, and it does not belong lit.
-   * The palette and control API still route through requestApplyTemplate, whose
-   * confirm dialog stays as the backstop for paths that have no tiles to dim.
-   */
-  templateBlockReason(n: number): string | null {
-    const view = this.active()
-    if (!view) return null
-    const cap = this.effectiveMaxPanes(view)
-    if (n > cap) {
-      return cap < view.layout.limit()
-        ? `Your ${entitlementPlan()} plan runs up to ${cap} terminals per workspace.`
-        : `This screen holds up to ${cap} terminals.`
-    }
-    const keep = new Set<number>(view.layout.peekTemplate(n).map((s) => s.paneId))
-    const live = inspectLive(view.layout.paneIds().filter((paneId) => !keep.has(paneId)))
-    if (live.panes.length > 0) {
-      return `Would close live work — ${describeLive(live)}. Close or move those panes first.`
-    }
-    return null
-  }
-
-  /** The layout popover's status line + its stepper ceiling: panes now, panes holding
+  /** The layout popover's status line + its stepper ceilings: panes now, panes holding
    *  live work (same union the destructive gates count), and the effective cap. */
   layoutStatus(): { panes: number; live: number; cap: number } | null {
     const view = this.active()
@@ -1219,6 +1191,26 @@ export class WorkspaceController {
       live: inspectLive(view.layout.paneIds()).panes.length,
       cap: this.effectiveMaxPanes(view)
     }
+  }
+
+  /** The canonical grid the ACTIVE workspace's current pane count snaps to — what the
+   *  popover's "Reorganize" row promises ("Reorganize into 2×3"). Same formula the grid
+   *  itself applies (gridShapeFor), so the label cannot promise a shape apply won't build. */
+  reorganizeTarget(): { panes: number; rows: number; cols: number } | null {
+    const view = this.active()
+    if (!view) return null
+    const shape = gridShapeFor(view.layout.paneCount)
+    return { panes: view.layout.paneCount, rows: shape.rows, cols: shape.cols }
+  }
+
+  /** Snap the ACTIVE workspace back into the canonical grid for its CURRENT pane count
+   *  (the wizard's own shape resolution) — structure and shares reset, nothing closes,
+   *  every pane keeps its id/PTY (slots are reused by pane id). The structural sibling
+   *  of Balance: Balance equalizes the sizes of the arrangement you have; Reorganize
+   *  rebuilds the arrangement itself. Non-destructive by construction, so no confirm. */
+  reorganizeActive(): void {
+    const a = this.active()
+    if (a) this.applyTemplate(a.layout.paneCount)
   }
 
   /** Add a terminal by splitting a pane (⋯ menu / titlebar + / palette / shortcut).
@@ -1269,10 +1261,30 @@ export class WorkspaceController {
     })
   }
 
-  /** Split the ACTIVE workspace's focused pane (layout menu +, palette, Ctrl+Shift+D). */
-  splitActive(dir?: 'h' | 'v'): void {
+  /** Split the ACTIVE workspace's focused pane (layout menu +, palette, Ctrl+Shift+D).
+   *  `count` (default 1) is the layout menu's stepper: N plain terminals in one gesture,
+   *  clamped to the headroom up front so the refusal speaks once — never once per split. */
+  splitActive(dir?: 'h' | 'v', count = 1): void {
     const a = this.active()
-    if (a) this.splitPane(a.meta.id, a.layout.focusedPaneId(), dir)
+    if (!a) return
+    const want = Math.max(1, Math.floor(count))
+    const cap = this.effectiveMaxPanes(a)
+    const headroom = cap - a.layout.paneCount
+    if (headroom <= 0) {
+      this.refusePaneCap(a, cap)
+      return
+    }
+    const goal = Math.min(want, headroom)
+    for (let i = 0; i < goal; i++) this.splitPane(a.meta.id, a.layout.focusedPaneId(), dir)
+    if (goal < want) {
+      showToast({
+        title: `Opened ${goal} of ${want} terminals`,
+        body:
+          cap < a.layout.limit()
+            ? `Your ${entitlementPlan()} plan runs up to ${cap} terminals per workspace.`
+            : `A workspace holds at most ${cap} terminals on this screen.`
+      })
+    }
   }
 
   /** Balance the ACTIVE workspace's layout — equal shares on every row and column
