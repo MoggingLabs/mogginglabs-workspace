@@ -1,17 +1,36 @@
 import * as path from 'node:path'
 import { Worker } from 'node:worker_threads'
-import type { BrainAnswer, BrainRefusal, BrainStatus } from '@contracts'
+import type { BrainAnswer, BrainChangedEvent, BrainRefusal, BrainStatus } from '@contracts'
 import { foldProjectKey } from '../workspace/project-identity'
+import {
+  BrainFreshness,
+  type BrainDeltaRequest,
+  type BrainFreshnessStats,
+  type BrainTickSource
+} from './freshness'
 import { resolveBrainProject, type BrainProject } from './project'
 import { BrainStore, brainDbPath } from './store'
-import type { BrainBuildOutcome, BrainWorkerReply } from './indexer-worker'
+import type { BrainBuildOutcome, BrainDeltaOutcome, BrainWorkerReply } from './indexer-worker'
 
 export { resolveBrainProject, type BrainProject } from './project'
 export { BrainStore, brainDbPath, BRAIN_SCHEMA_VERSION } from './store'
-export type { BrainBuildOutcome } from './indexer-worker'
+export type { BrainBuildOutcome, BrainDeltaOutcome } from './indexer-worker'
+export {
+  BRAIN_DRAIN_QUIET_MS,
+  BRAIN_DRAIN_SLICE,
+  BRAIN_SWEEP_SLICE,
+  BrainFreshness,
+  type BrainFreshnessStats,
+  type BrainTickPayload,
+  type BrainTickSource
+} from './freshness'
+export { diffHeadMove, headDiffSpawnsForSmoke } from './head'
 
 // The brain SERVICE (ADR 0018): the one object every later step consumes — identity,
-// lifecycle, status, typed refusals, and (step 03) the FULL deterministic build.
+// lifecycle, status, typed refusals, (step 03) the FULL deterministic build, and
+// (step 04) the freshness law: bound to the shared git tick, the service keeps every
+// built partition FOLLOWING its root — incremental drains, head-move deltas, a
+// cold-start reconcile on first open — with staleness stamped on every answer.
 // Electron-free; main hands it the paths Electron owns (userData db dir, the built
 // worker file, the grammars dir) and binds the verbs. The build runs ENTIRELY in the
 // worker_threads indexer: this thread posts one message and receives progress — the
@@ -46,8 +65,37 @@ export class BrainService {
   private readonly open = new Map<string, OpenBrain>()
   /** Folded projectKeys with a build in flight — the `busy` refusal's whole truth. */
   private readonly building = new Set<string>()
+  /** Per-project serialization: drains and rebuilds queue, never interleave (04). */
+  private readonly locks = new Map<string, Promise<unknown>>()
+  /** Bumped per landed rebuild — a drain that queued behind one drops its stale slice. */
+  private readonly rebuildSeq = new Map<string, number>()
+  /** Folded partition root -> projectKey / folded projectKey -> attached roots (04). */
+  private readonly rootProject = new Map<string, string>()
+  private readonly rootsByProject = new Map<string, string[]>()
+  private freshness: BrainFreshness | null = null
+  private changedCb: ((e: BrainChangedEvent) => void) | null = null
+  private drainEmitCount = 0
 
   constructor(private readonly opts: BrainServiceOptions) {}
+
+  /**
+   * 04: bind the freshness law to the SHARED git tick (the app hands in the one
+   * GitMonitor — zero new pollers by construction). Idempotent; without it the
+   * service is exactly the 03 service: explicit rebuilds, never-stale `dirty:false`.
+   */
+  bindTickSource(source: BrainTickSource): void {
+    if (this.freshness) return
+    this.freshness = new BrainFreshness(source, {
+      apply: (root, req) => this.applyFreshness(root, req),
+      applied: (root, outcome) => this.emitDrain(root, outcome)
+    })
+  }
+
+  /** ONE `brain:changed` per landed drain arrives here (plus nothing else — rebuild
+   *  emission stays the IPC layer's, exactly as 02 wired it). */
+  onChanged(cb: ((e: BrainChangedEvent) => void) | null): void {
+    this.changedCb = cb
+  }
 
   status(root: string): BrainAnswer {
     const r = this.ensure(root)
@@ -58,7 +106,8 @@ export class BrainService {
    * The FULL build of the partition `root` stands in, in the worker. Resolves when
    * the ONE transactional commit lands (or the refusal arrives). A second rebuild
    * for the same project while one is in flight is a typed `busy` refusal — no
-   * queueing, no silent coalescing (04 owns anything smarter).
+   * queueing, no silent coalescing. A DRAIN in flight is different: rebuild quietly
+   * queues behind it (drains are short; the big hammer stays available).
    */
   async rebuild(root: string, caps?: BrainBuildCaps): Promise<BrainAnswer> {
     const r = this.ensure(root)
@@ -69,10 +118,16 @@ export class BrainService {
     }
     this.building.add(key)
     try {
-      const partitionRoot = this.partitionRootFor(r.brain.project, root)
-      const outcome = await this.runBuild(partitionRoot, r.brain.project, caps)
-      if ('reason' in outcome) return outcome
-      return this.answer(r.brain)
+      return await this.runExclusive(key, async (): Promise<BrainAnswer> => {
+        const partitionRoot = this.partitionRootFor(r.brain.project, root)
+        const outcome = await this.runBuild(partitionRoot, r.brain.project, caps)
+        if ('reason' in outcome) return outcome
+        // The walk this build committed is total truth for its partition: supersede any
+        // queued drain slice, re-baseline the freshness state, attach a first build.
+        this.rebuildSeq.set(key, (this.rebuildSeq.get(key) ?? 0) + 1)
+        this.afterRebuild(r.brain, partitionRoot)
+        return this.answer(r.brain)
+      })
     } finally {
       this.building.delete(key)
     }
@@ -83,8 +138,22 @@ export class BrainService {
     return this.open.size
   }
 
-  /** Close every handle. Idempotent; the next call reopens lazily. */
+  /** Freshness counters for one partition root — the BRAINFRESH smoke's witness. */
+  freshnessStats(root: string): BrainFreshnessStats | null {
+    return this.freshness?.statsFor(root) ?? null
+  }
+
+  /** How many drain-landed `brain:changed` emissions left this service. */
+  drainEmits(): number {
+    return this.drainEmitCount
+  }
+
+  /** Close every handle and stop following every root. Idempotent; the next call
+   *  reopens (and re-attaches, via the cold-start reconcile) lazily. */
   dispose(): void {
+    this.freshness?.dispose()
+    this.rootProject.clear()
+    this.rootsByProject.clear()
     for (const { store } of this.open.values()) {
       try {
         store.dispose()
@@ -99,6 +168,103 @@ export class BrainService {
   dump(root: string): string | null {
     const r = this.ensure(root)
     return 'reason' in r ? null : r.brain.store.dumpCanonical()
+  }
+
+  /** Queue work behind whatever the project is already doing — a drain never overlaps
+   *  a rebuild, two drains never overlap each other, and a failure never dams the queue. */
+  private runExclusive<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.locks.get(key) ?? Promise.resolve()
+    const run = prev.then(fn, fn)
+    this.locks.set(
+      key,
+      run.then(
+        () => undefined,
+        () => undefined
+      )
+    )
+    return run
+  }
+
+  /** The freshness layer's one door into the worker: serialize, guard against a rebuild
+   *  having superseded the slice, run the incremental op. Null = refused; the dirt stays. */
+  private applyFreshness(root: string, req: BrainDeltaRequest): Promise<BrainDeltaOutcome | null> {
+    const pre = this.ensure(root)
+    if ('reason' in pre) return Promise.resolve(null)
+    const key = foldProjectKey(pre.brain.project.projectKey)
+    const seq = this.rebuildSeq.get(key) ?? 0
+    return this.runExclusive(key, async (): Promise<BrainDeltaOutcome | null> => {
+      const r = this.ensure(root) // the LRU may have moved under the queue
+      if ('reason' in r) return null
+      if ((this.rebuildSeq.get(key) ?? 0) !== seq) {
+        // A rebuild landed first: its walk already covered this slice. An honest no-op.
+        return {
+          generation: r.brain.store.generation(),
+          applied: false,
+          processed: 0,
+          removed: [],
+          records: [],
+          files: 0,
+          nodes: 0,
+          edges: 0,
+          resolvedRefs: 0,
+          droppedRefs: 0,
+          cacheHits: 0,
+          cacheMisses: 0
+        }
+      }
+      const partitionRoot = this.partitionRootFor(r.brain.project, root)
+      const outcome = await this.runDelta(partitionRoot, r.brain.project, req)
+      return 'reason' in outcome ? null : outcome
+    })
+  }
+
+  private emitDrain(root: string, outcome: BrainDeltaOutcome): void {
+    this.drainEmitCount += 1
+    const projectKey = this.rootProject.get(foldProjectKey(root))
+    if (!projectKey || !this.changedCb) return
+    const roots = this.rootsByProject.get(foldProjectKey(projectKey)) ?? [root]
+    const dirty = roots.some((r) => (this.freshness?.dirtyCount(r) ?? 0) > 0)
+    this.changedCb({ projectKey, generation: outcome.generation, dirty })
+  }
+
+  /** Start following one BUILT partition. An empty partition is not followed — freshness
+   *  keeps an index current; it never grows one from nothing (the rebuild is that verb). */
+  private attachRoot(project: BrainProject, root: string, store: BrainStore, reconcile: boolean): void {
+    if (!this.freshness || this.freshness.attached(root)) return
+    const rows = store.filesForRoot(root)
+    if (!rows.length) return
+    this.freshness.attach(root, rows, reconcile)
+    const pKey = foldProjectKey(project.projectKey)
+    this.rootProject.set(foldProjectKey(root), project.projectKey)
+    const list = this.rootsByProject.get(pKey) ?? []
+    if (!list.some((r) => foldProjectKey(r) === foldProjectKey(root))) list.push(root)
+    this.rootsByProject.set(pKey, list)
+  }
+
+  /** A cold OPEN of built partitions: follow them, and heal what happened while the app
+   *  was closed — the first drain trusts the walk (hash-compare, mtime prefilter). */
+  private attachProject(brain: OpenBrain): void {
+    if (!this.freshness) return
+    for (const root of brain.project.roots) this.attachRoot(brain.project, root, brain.store, true)
+  }
+
+  private afterRebuild(brain: OpenBrain, partitionRoot: string): void {
+    if (!this.freshness) return
+    if (this.freshness.attached(partitionRoot)) {
+      this.freshness.reseed(partitionRoot, brain.store.filesForRoot(partitionRoot))
+    } else {
+      this.attachRoot(brain.project, partitionRoot, brain.store, false)
+    }
+  }
+
+  /** Stop following a project's roots (eviction, disposal). */
+  private detachProject(projectKey: string): void {
+    const pKey = foldProjectKey(projectKey)
+    for (const root of this.rootsByProject.get(pKey) ?? []) {
+      this.freshness?.detach(root)
+      this.rootProject.delete(foldProjectKey(root))
+    }
+    this.rootsByProject.delete(pKey)
   }
 
   /** The partition key: the project root the caller stands in, in the ROOTS list's
@@ -149,6 +315,44 @@ export class BrainService {
     })
   }
 
+  private runDelta(
+    partitionRoot: string,
+    project: BrainProject,
+    req: BrainDeltaRequest
+  ): Promise<BrainDeltaOutcome | BrainRefusal> {
+    const dbPath = brainDbPath(this.opts.baseDir, project.projectKey)
+    return new Promise((resolve) => {
+      const worker = new Worker(this.opts.workerFile, {
+        workerData: { grammarsDir: this.opts.grammarsDir }
+      })
+      const finish = (value: BrainDeltaOutcome | BrainRefusal): void => {
+        void worker.terminate()
+        resolve(value)
+      }
+      worker.on('message', (reply: BrainWorkerReply) => {
+        if ('delta' in reply) finish(reply.delta)
+        else if ('refusal' in reply) {
+          finish({
+            ok: false,
+            reason: reply.refusal.reason,
+            detail: `${reply.refusal.fileCount} files enumerated, cap ${reply.refusal.cap}`
+          })
+        } else if ('error' in reply) {
+          finish({ ok: false, reason: 'busy', detail: reply.error })
+        }
+      })
+      worker.on('error', (e) => finish({ ok: false, reason: 'busy', detail: String(e) }))
+      worker.postMessage({
+        id: 1,
+        op: req.reconcile ? 'reconcile' : 'applyDelta',
+        dbPath,
+        root: partitionRoot,
+        changed: req.changed,
+        deleted: req.deleted
+      })
+    })
+  }
+
   private answer(brain: OpenBrain): BrainStatus {
     const counts = brain.store.counts()
     const stats = brain.store.buildStats()
@@ -157,13 +361,16 @@ export class BrainService {
       projectKey: brain.project.projectKey,
       roots: brain.project.roots,
       generation: brain.store.generation(),
-      // Nothing can invalidate the index yet — 04 owns raising `dirty`.
-      dirty: false,
+      // The freshness law (04): staleness is DATA. `dirty` is the honest count of paths
+      // (any root) the index has seen move and not yet absorbed — never a blocking wait.
+      dirty: brain.project.roots.some((r) => (this.freshness?.dirtyCount(r) ?? 0) > 0),
       files: counts.files,
       nodes: counts.nodes,
       edges: counts.edges,
       languages: counts.languages,
-      indexing: this.building.has(foldProjectKey(brain.project.projectKey)),
+      indexing:
+        this.building.has(foldProjectKey(brain.project.projectKey)) ||
+        brain.project.roots.some((r) => this.freshness?.draining(r) ?? false),
       resolvedRefs: stats.resolvedRefs,
       droppedRefs: stats.droppedRefs,
       cacheHits: stats.cacheHits,
@@ -195,6 +402,9 @@ export class BrainService {
     while (this.open.size >= BRAIN_OPEN_DB_CAP) {
       const coldest = this.open.entries().next().value
       if (!coldest) break
+      // An evicted brain stops being followed too: freshness state is bookkeeping FOR an
+      // open handle, and the cold-start reconcile heals whatever happens while evicted.
+      this.detachProject(coldest[1].project.projectKey)
       try {
         coldest[1].store.dispose()
       } catch {
@@ -204,6 +414,7 @@ export class BrainService {
     }
     const brain = { project, store }
     this.open.set(key, brain)
+    this.attachProject(brain)
     return { brain }
   }
 }

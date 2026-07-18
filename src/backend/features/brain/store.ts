@@ -113,6 +113,25 @@ export class BrainStore {
     return row ?? { resolvedRefs: 0, droppedRefs: 0, cacheHits: 0, cacheMisses: 0 }
   }
 
+  /** One partition's row counts — the no-op drain's honest answer (04). */
+  partitionCounts(root: string): { files: number; nodes: number; edges: number } {
+    const one = (sql: string): number => (this.db.prepare(sql).get(root) as { n: number }).n
+    return {
+      files: one('SELECT COUNT(*) AS n FROM files WHERE root = ?'),
+      nodes: one('SELECT COUNT(*) AS n FROM nodes WHERE root = ?'),
+      edges: one('SELECT COUNT(*) AS n FROM edges WHERE root = ?')
+    }
+  }
+
+  /** One partition's file rows, path-ordered — the incremental path's baseline (04): the
+   *  drain keeps these for unchanged files and the freshness layer stat-compares against
+   *  their (mtime, bytes) to decide what "changed" even means. */
+  filesForRoot(root: string): { path: string; hash: string; lang: string; bytes: number; mtime: number }[] {
+    return this.db
+      .prepare('SELECT path, hash, lang, bytes, mtime FROM files WHERE root = ? ORDER BY path')
+      .all(root) as { path: string; hash: string; lang: string; bytes: number; mtime: number }[]
+  }
+
   cacheGet(lang: string, fileHash: string): PortableExtraction | null {
     const row = this.db
       .prepare('SELECT nodesJson, edgesJson FROM parse_cache WHERE lang = ? AND fileHash = ?')

@@ -23,6 +23,21 @@ export interface GitSink {
   files?(payload: GitFiles): void
 }
 
+/**
+ * Brain/04 (the freshness law): what one tick hands a subscriber. For a repo root it is the
+ * SAME parsed porcelain batch the explorer's path produced — status + per-file records from
+ * the one shared spawn, delivered EVERY tick (a subscriber stat-compares; change-only
+ * emission is the explorer sink's economy, not the contract here). For a non-repo root both
+ * `status` and `files` are null and no git process ever ran — the payload is a bare cadence
+ * beat the subscriber may spend on its own bounded work (the brain's mtime sweep).
+ */
+export interface GitTickPayload {
+  root: string
+  status: GitStatus | null
+  files: GitFileState[] | null
+  truncated: boolean
+}
+
 const DEFAULT_POLL_MS = 2500
 const METADATA_DEBOUNCE_MS = 80
 const MAX_CONCURRENT_PROBES = 4
@@ -40,6 +55,7 @@ export class GitMonitor {
   private readonly refreshSeq = new Map<number, number>() // paneId -> newest monotonic probe token
   private readonly fileRoots = new Set<string>() // repo roots the explorer registered (11/05)
   private readonly lastFiles = new Map<string, string>() // root -> serialized last-emitted file list
+  private readonly tickSubs = new Map<string, { root: string; subs: Set<(p: GitTickPayload) => void> }>() // brain/04
   private readonly metadataWatches = new Map<string, MetadataWatch>() // canonical dir -> shared watcher
   private timer: NodeJS.Timeout | undefined
   private metadataTimer: NodeJS.Timeout | undefined
@@ -117,6 +133,35 @@ export class GitMonitor {
     this.stopIfIdle()
   }
 
+  /** Case-fold on win32: a subscriber's spelling of a root and findRepoRoot's must key alike. */
+  private foldRoot(root: string): string {
+    return process.platform === 'win32' ? root.toLocaleLowerCase('en-US') : root
+  }
+
+  /**
+   * Brain/04: subscribe a root to the SHARED tick. A repo root joins the one existing porcelain
+   * spawn (probeRepo simply keeps its file lines, exactly as it does for an explorer root); a
+   * non-repo root costs no git process at all and receives a bare cadence beat. Zero new
+   * pollers, zero new spawns — the docs/05 law: a subscriber rides what the panes already pay
+   * for, and keeps the poll alive when it is the only rider. Returns unsubscribe.
+   */
+  subscribeTick(root: string, sub: (p: GitTickPayload) => void): () => void {
+    const key = this.foldRoot(root)
+    const entry = this.tickSubs.get(key) ?? { root, subs: new Set<(p: GitTickPayload) => void>() }
+    entry.subs.add(sub)
+    this.tickSubs.set(key, entry)
+    this.syncMetadataWatches() // HEAD moves in a subscribed repo wake the tick immediately
+    this.ensurePolling()
+    return () => {
+      const cur = this.tickSubs.get(key)
+      if (!cur) return
+      cur.subs.delete(sub)
+      if (cur.subs.size === 0) this.tickSubs.delete(key)
+      this.syncMetadataWatches()
+      this.stopIfIdle()
+    }
+  }
+
   dispose(): void {
     if (this.timer) clearInterval(this.timer)
     if (this.metadataTimer) clearTimeout(this.metadataTimer)
@@ -129,6 +174,7 @@ export class GitMonitor {
     this.refreshSeq.clear()
     this.fileRoots.clear()
     this.lastFiles.clear()
+    this.tickSubs.clear()
   }
 
   /** Watch only Git's small administrative directories. Branch switches, commits, staging,
@@ -139,6 +185,10 @@ export class GitMonitor {
     for (const cwd of this.cwds.values()) {
       const root = findRepoRoot(cwd)
       if (root) roots.add(root)
+    }
+    for (const entry of this.tickSubs.values()) {
+      const root = findRepoRoot(entry.root)
+      if (root) roots.add(root) // a subscribed non-repo root has no metadata to watch
     }
 
     const desired = new Map<string, { dir: string; roots: Set<string> }>()
@@ -193,13 +243,13 @@ export class GitMonitor {
   }
 
   private ensurePolling(): void {
-    if (this.timer || (this.cwds.size === 0 && this.fileRoots.size === 0)) return
+    if (this.timer || (this.cwds.size === 0 && this.fileRoots.size === 0 && this.tickSubs.size === 0)) return
     this.timer = setInterval(() => void this.tick(false), this.pollMs)
     this.timer.unref?.()
   }
 
   private stopIfIdle(): void {
-    if (this.cwds.size > 0 || this.fileRoots.size > 0 || !this.timer) return
+    if (this.cwds.size > 0 || this.fileRoots.size > 0 || this.tickSubs.size > 0 || !this.timer) return
     clearInterval(this.timer)
     this.timer = undefined
   }
@@ -233,7 +283,10 @@ export class GitMonitor {
     if (hit) return hit
     // Store the promise before another pane can ask for this root. The tick fans out all panes
     // concurrently, but a worktree still owns exactly one status process/result per round.
-    const pending = this.withProbeSlot(() => this.probe(cwd, this.fileRoots.has(root), true))
+    // wantFiles: an explorer registration OR a tick subscriber — either way it is the same
+    // command, the same args, the same output; the flag only decides a second read of the lines.
+    const wantFiles = this.fileRoots.has(root) || this.tickSubs.has(this.foldRoot(root))
+    const pending = this.withProbeSlot(() => this.probe(cwd, wantFiles, true))
     cache.set(root, pending)
     return pending
   }
@@ -283,6 +336,25 @@ export class GitMonitor {
     try {
       await Promise.all([...this.cwds.keys()].map((paneId) => this.refresh(paneId, cache)))
       await Promise.all([...this.fileRoots].map((root) => this.refreshFiles(root, cache)))
+      // Brain/04 subscribers, from the SAME per-tick cache: a subscribed repo any pane or the
+      // explorer already probed costs nothing extra. Delivery is every-tick by design — the
+      // subscriber's own bookkeeping decides what changed (and a non-repo beat spawns nothing).
+      await Promise.all(
+        [...this.tickSubs.values()].map(async (entry) => {
+          const repoRoot = findRepoRoot(entry.root)
+          const p = repoRoot
+            ? await this.probeRepo(repoRoot, cache)
+            : { status: null, files: null, truncated: false }
+          if (!this.tickSubs.has(this.foldRoot(entry.root))) return // unsubscribed mid-probe
+          for (const sub of entry.subs) {
+            try {
+              sub({ root: entry.root, status: p.status, files: p.files, truncated: p.truncated })
+            } catch {
+              /* a subscriber's throw must never break the pane/explorer refresh */
+            }
+          }
+        })
+      )
     } finally {
       this.ticking = false
       if (this.rerun) {

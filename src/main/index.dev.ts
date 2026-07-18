@@ -103,6 +103,7 @@ import { runBoardV2Smoke } from './smokes/boardv2-smoke'
 import { runBrainCoreSmoke } from './smokes/braincore-smoke'
 import { runBrainParseSmoke } from './smokes/brainparse-smoke'
 import { runBrainGraphSmoke } from './smokes/braingraph-smoke'
+import { runBrainFreshSmoke } from './smokes/brainfresh-smoke'
 import { runBoardMcpSmoke } from './smokes/boardmcp-smoke'
 import { runBoardGhSmoke } from './smokes/boardgh-smoke'
 import { runBoardQueueSmoke } from './smokes/boardqueue-smoke'
@@ -190,7 +191,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
   'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_RUNTIMESPLIT', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
-  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_BRAINCORE', 'MOGGING_BRAINPARSE', 'MOGGING_BRAINGRAPH', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
+  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_BRAINCORE', 'MOGGING_BRAINPARSE', 'MOGGING_BRAINGRAPH', 'MOGGING_BRAINFRESH', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
   'MOGGING_PROFILES', 'MOGGING_LOGINTRUTH', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
   // Typed-launch detection + the context gauge (the v6 pack).
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
@@ -507,6 +508,8 @@ function afterWindow(win: BrowserWindow): void {
     runFileActSmoke(win) // env-gated file-actions smoke: open/reveal via a SPY, copy, send-to-pane, hostile names inert (Phase-11/06)
   } else if (process.env.MOGGING_FILESMILESTONE) {
     runFilesMilestoneSmoke(win) // env-gated Phase-11 MILESTONE: the whole files promise composed + budgets on the composed surface (Phase-11/07)
+  } else if (process.env.MOGGING_BRAINFRESH) {
+    runBrainFreshSmoke(win) // env-gated brain-freshness smoke: the index rides the git tick — incremental drains, head-move deltas, cold-start reconcile, dump == rebuild (ADR 0018 step 04)
   } else if (process.env.MOGGING_SETSHELL) {
     runSetShellSmoke(win) // env-gated settings-shell smoke: grouped nav, cards, measured spacing + AA (Phase-8.5/04)
   } else if (process.env.MOGGING_SETAGENTCFG) {

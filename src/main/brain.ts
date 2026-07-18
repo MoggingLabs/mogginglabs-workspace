@@ -1,18 +1,22 @@
 import { join } from 'node:path'
 import { app, ipcMain, type BrowserWindow } from 'electron'
-import { BrainService } from '@backend/features/brain'
+import { BrainService, type BrainFreshnessStats, type BrainTickSource } from '@backend/features/brain'
 import { BrainChannels, type BrainAnswer, type BrainChangedEvent } from '@contracts'
 
 // App-wiring for the workspace brain (ADR 0018). The logic lives in @backend
 // (Electron-free, testable); main derives the ONE path Electron owns — the db dir
 // under the userData layout — refuses malformed input before the backend ever sees
 // it (the explorer.ts posture: junk in → an `invalid` refusal out, never a throw),
-// and pushes `brain:changed` after any accepted rebuild. This step is lifecycle
-// only: identity, status, typed refusals; 03 brings the graph, 04 the freshness
-// law. Nothing here (or in the backend it binds) forwards a path, a symbol, or
-// memory text to telemetry (ADR 0005).
+// and pushes `brain:changed` after any accepted rebuild AND after every landed
+// incremental drain (step 04: the freshness law, riding registerGit's one monitor
+// tick — never a poller of its own). Nothing here (or in the backend it binds)
+// forwards a path, a symbol, or memory text to telemetry (ADR 0005).
 
 let service: BrainService | null = null
+/** The one GitMonitor, handed over by boot after registerGit — survives a service
+ *  dispose/reopen cycle (the smoke's cold-start arm) because it belongs to the app. */
+let boundTickSource: BrainTickSource | null = null
+let boundWin: (() => BrowserWindow | null) | null = null
 
 /** Lazy: userData is re-pointed by MOGGING_USERDATA in every gate, so the paths
  *  resolve at first use, never at import. Main's whole contribution is the three
@@ -23,6 +27,14 @@ function ensureService(): BrainService {
       baseDir: join(app.getPath('userData'), 'brain'),
       workerFile: join(app.getAppPath(), 'out', 'main', 'brain-worker.js'),
       grammarsDir: join(app.getAppPath(), 'assets', 'grammars')
+    })
+    if (boundTickSource) service.bindTickSource(boundTickSource)
+    service.onChanged((event) => {
+      try {
+        boundWin?.()?.webContents.send(BrainChannels.changed, event)
+      } catch {
+        /* window gone */
+      }
     })
   }
   return service
@@ -53,17 +65,22 @@ export function brainBaseDir(): string {
 }
 
 /** Smoke-only introspection: the LRU's live handle count, a full close (the next
- *  call reopens lazily — dispose is a lifecycle law, not a shutdown-only path), and
- *  the canonical dump (the BRAINGRAPH gate's determinism spine). */
+ *  call reopens lazily — dispose is a lifecycle law, not a shutdown-only path), the
+ *  canonical dump (the BRAINGRAPH gate's determinism spine), and 04's freshness
+ *  counters + drain-emission count (the BRAINFRESH gate's witnesses). */
 export function brainDebug(): {
   openCount: () => number
   dispose: () => void
   dump: (root: string) => string | null
+  freshness: (root: string) => BrainFreshnessStats | null
+  drainEmits: () => number
 } {
   return {
     openCount: () => service?.openCount() ?? 0,
     dispose: () => disposeBrain(),
-    dump: (root: string) => ensureService().dump(root)
+    dump: (root: string) => ensureService().dump(root),
+    freshness: (root: string) => ensureService().freshnessStats(root),
+    drainEmits: () => service?.drainEmits() ?? 0
   }
 }
 
@@ -72,7 +89,9 @@ export function disposeBrain(): void {
   service = null
 }
 
-export function registerBrain(getWin: () => BrowserWindow | null): void {
+export function registerBrain(getWin: () => BrowserWindow | null, tickSource?: BrainTickSource): void {
+  boundWin = getWin
+  boundTickSource = tickSource ?? null
   ipcMain.handle(BrainChannels.status, (_e, req: unknown) => handleBrainStatus(req))
   ipcMain.handle(BrainChannels.rebuild, async (_e, req: unknown) => {
     const answer = await handleBrainRebuild(req)

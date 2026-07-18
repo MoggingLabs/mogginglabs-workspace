@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { BrainService } from '@backend/features/brain'
-import { brainDebug, handleBrainRebuild, handleBrainStatus } from '../brain'
+import { brainDebug, handleBrainRebuild } from '../brain'
 
 // Env-gated brain-graph smoke (MOGGING_BRAINGRAPH, ADR 0018 step 03) — WINDOWLESS,
 // zero UI, zero network, no daemon. The graph's laws on a fixture TS+py repo with

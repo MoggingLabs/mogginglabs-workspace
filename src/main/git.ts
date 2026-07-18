@@ -60,7 +60,14 @@ function checkIgnore(root: string, paths: string[]): Promise<string[]> {
   })
 }
 
-export function registerGit(getWebContents: () => WebContents | null): () => void {
+/** The app's ONE GitMonitor, exposed so the brain's freshness law (ADR 0018, step 04) can
+ *  ride the same tick — never so anyone can build a second poller. */
+export interface GitRegistration {
+  monitor: GitMonitor
+  dispose: () => void
+}
+
+export function registerGit(getWebContents: () => WebContents | null): GitRegistration {
   const monitor = new GitMonitor({
     change: (paneId, status) => getWebContents()?.send(GitChannels.change, { paneId, status }),
     files: (payload) => getWebContents()?.send(GitChannels.filesChange, payload)
@@ -80,5 +87,5 @@ export function registerGit(getWebContents: () => WebContents | null): () => voi
     )
   )
 
-  return () => monitor.dispose()
+  return { monitor, dispose: () => monitor.dispose() }
 }

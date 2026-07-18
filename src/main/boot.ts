@@ -325,7 +325,8 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       registerTemplates() // provider-mix templates: presets + resolveLayout + custom template store (06b)
       registerSessionRestore() // last-working-session snapshot: Home's restore card + exact-session resume intents
       registerAttention(() => win) // dock/taskbar badge when a background workspace needs attention (Phase-2/01)
-      disposeGit = registerGit(liveWebContents) // read-only per-pane git branch + dirty (Phase-2/03)
+      const git = registerGit(liveWebContents) // read-only per-pane git branch + dirty (Phase-2/03)
+      disposeGit = git.dispose
       disposeContext = registerContext(liveWebContents) // per-pane agent context bar: tails the CLIs' own session logs (counts only)
       registerWorktrees() // worktree-per-agent isolation: add/list/remove only (Phase-3/03)
       registerFsBrowse() // read-only one-level directory listing for the folder browser (Phase-8.5/03)
@@ -333,7 +334,7 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       registerExplorer(() => win) // the explorer: read-only listing + the liveness law's watcher pool (Phase-11/01, /04)
       registerReview() // pre-ship diff review: redacted diff + guarded merge (Phase-3/04)
       registerBoard(() => win) // Board v2: per-project boards, CAS patches, live push (Phase-3/05, rebuilt)
-      registerBrain(() => win) // the workspace brain: per-project identity/lifecycle/status, typed refusals (ADR 0018)
+      registerBrain(() => win, git.monitor) // the workspace brain: identity/status/typed refusals + the freshness law riding git's tick (ADR 0018)
       registerGithubBoard() // Board ↔ GitHub two-way: gated write-back + rules (ADR 0015)
       registerProfiles() // provider profiles: pointer sets, deny-listed at save (Phase-4/04)
       registerRemotes() // remote (SSH) hosts: connection pointers only (Phase-4/05)
