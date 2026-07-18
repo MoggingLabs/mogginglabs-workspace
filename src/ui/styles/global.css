@@ -8804,6 +8804,155 @@ body.pane-dragging * {
   background: var(--bg-inset);
 }
 
+/* ── The Library overlay (the store/inventory split, 2026-07-18) ─────────────
+   One browse surface: the services grid (Route A) + the per-CLI catalog,
+   registry and import under an advanced fold. An overlay, not a view — it
+   opens over the wizard without losing a half-configured workspace. */
+.library-modal .modal {
+  max-width: min(960px, calc(100vw - 2 * var(--sp-4)));
+}
+.library-modal .modal-body {
+  max-height: min(72vh, 780px);
+  overflow-y: auto;
+}
+.library-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+/* Route honesty on a server row: who holds this server's auth. */
+.mgr-route {
+  flex: none;
+  border-radius: var(--r-full);
+  font-size: var(--fs-11);
+  padding: 0 var(--sp-2);
+}
+.mgr-route.is-app {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent-ink);
+}
+.mgr-route.is-cli {
+  background: color-mix(in srgb, var(--text-mid) 14%, transparent);
+  color: var(--text-mid);
+}
+.mgr-route.is-house {
+  background: color-mix(in srgb, var(--info) 14%, transparent);
+  color: var(--info);
+}
+
+/* Key slots on the row that needs them: ${VAR} state + inline paste. */
+.mgr-keyslots {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-wrap: wrap;
+}
+.mgr-keyslot {
+  border-radius: var(--r-full);
+  font-size: var(--fs-11);
+  padding: 0 var(--sp-2);
+  font-family: var(--font-mono);
+}
+.mgr-keyslot.is-saved {
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+  color: var(--success);
+}
+.mgr-keyslot.is-missing {
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--text-hi);
+  border: 0;
+  cursor: pointer;
+}
+.mgr-keyslot.is-missing:hover {
+  background: color-mix(in srgb, var(--warning) 26%, transparent);
+}
+.mgr-keyslot-form-host:empty {
+  display: none;
+}
+.mgr-keyslot-form-host {
+  margin: var(--sp-1) 0 var(--sp-2);
+}
+
+/* Workspace-tools chips (the merged Workspace card): the wizard chip, grown up. */
+.wstool-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+.wstool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-12);
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--r-full);
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text-mid);
+  cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease);
+}
+.wstool-chip.is-on {
+  background: var(--accent-weak);
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.wstool-chip.is-partial {
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--text-hi);
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+}
+.wstool-chip:hover {
+  border-color: var(--border-strong);
+}
+.wstool-chip-note {
+  font-size: var(--fs-11);
+  opacity: 0.75;
+}
+/* The per-CLI matrix, demoted to the advanced detail of the merged card. */
+.toolplan-advanced > summary {
+  cursor: pointer;
+  font-size: var(--fs-12);
+  color: var(--text-mid);
+  user-select: none;
+}
+.toolplan-advanced[open] > summary {
+  color: var(--text-hi);
+}
+
+/* Connections: the in-card workspace scoping panel + the inventory empty state. */
+.conn-scope-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  border-top: 1px solid var(--border);
+  padding-top: var(--sp-1);
+}
+.conn-scope-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-12);
+  color: var(--text-hi);
+  cursor: pointer;
+}
+.conn-inventory-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+.conn-search[hidden] {
+  display: none;
+}
+.wizard-tools-empty {
+  margin-bottom: var(--sp-1);
+}
+
 /* ── Connections (ADR 0014): the app's OWN account connections ──────────────
    A card here is an account, not a config row. State is PROVEN — every value on
    it was answered by the server (initialize + tools/list), never inferred from

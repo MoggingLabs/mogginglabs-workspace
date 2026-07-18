@@ -75,6 +75,10 @@ export function runAuthRunnerSmoke(win: BrowserWindow): void {
       }))`)
       await ES(`window.__mogging.view('settings'); window.__mogging.settingsTab('integrations')`)
       await sleep(1600)
+      // The store/inventory split (2026-07-18): the preset catalog lives in the
+      // Library overlay — open it before driving `.cat-*` selectors.
+      await ES(`(document.querySelector('.integux-library-cta')?.click(), 1)`)
+      await sleep(900)
 
       // The alternate TOKEN radio must be the value sent to connect. It shows
       // the env/vault route and never creates an OAuth action.

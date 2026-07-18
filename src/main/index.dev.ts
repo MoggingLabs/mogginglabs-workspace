@@ -38,6 +38,7 @@ import { runTreeGitSmoke } from './smokes/treegit-smoke'
 import { runFileActSmoke } from './smokes/fileact-smoke'
 import { runFilesMilestoneSmoke } from './smokes/filesmilestone-smoke'
 import { runSetIntegSmoke } from './smokes/setinteg-smoke'
+import { runLibraryUxSmoke } from './smokes/libraryux-smoke'
 import { runSetShellSmoke } from './smokes/setshell-smoke'
 import { runSetUsageSmoke } from './smokes/setusage-smoke'
 import { runHomeUxSmoke } from './smokes/homeux-smoke'
@@ -183,7 +184,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
   'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_KBSHORTCUTS', 'MOGGING_KBGLOBAL', 'MOGGING_VERDICTLIVE', 'MOGGING_WEBTRAIL',
   'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX', 'MOGGING_WIZARDFAIL', 'MOGGING_WIZARDISO', 'MOGGING_WIZCD', 'MOGGING_WIZLAYOUT', 'MOGGING_MUTATIONRACE', 'MOGGING_AUTHRUNNER',
-  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX', 'MOGGING_RESUME',
+  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_LIBRARYUX', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX', 'MOGGING_RESUME',
   'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_RESPONSIVE', 'MOGGING_KBAPG', 'MOGGING_UXMILESTONE',
   'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT', 'MOGGING_CWD',
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
@@ -490,6 +491,8 @@ function afterWindow(win: BrowserWindow): void {
     runSetAgentConfigSmoke(win) // five-provider settings catalog, typed controls, real scope writes, remote honesty
   } else if (process.env.MOGGING_SETINTEG) {
     runSetIntegSmoke(win) // env-gated integrations smoke: disclosure, attention-through-fold, hit targets (Phase-8.5/05)
+  } else if (process.env.MOGGING_LIBRARYUX) {
+    runLibraryUxSmoke(win) // the store/inventory split: Library overlay, inventory honesty, chips->plans, key slots, route badges (2026-07-18)
   } else if (process.env.MOGGING_SETUSAGE) {
     runSetUsageSmoke(win) // env-gated usage tab + popover smoke: overview/disclosure, bug #4/#5, profiles FieldGroups (Phase-8.5/05b)
   } else if (process.env.MOGGING_HOMEUX) {

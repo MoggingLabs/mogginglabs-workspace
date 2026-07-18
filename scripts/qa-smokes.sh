@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 160 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 161 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
-# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 138 app-boot
+# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 139 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -427,6 +427,10 @@ run_smoke MCPMGR       MOGGING_MCPMGR    1 180 mcpmgr
 run_smoke MCPCAT       MOGGING_MCPCAT    1 180 mcpcat
 run_smoke INTEGUX      MOGGING_INTEGUX   1 240 integux
 run_smoke SETINTEG     MOGGING_SETINTEG  1 240 setinteg
+# The store/inventory split (2026-07-18): the Library overlay is the store, the
+# settings page is the inventory — this gate bites the door, the honesty, the
+# chip->plan mutation, the in-place key vaulting, and the route badges.
+run_smoke LIBRARYUX    MOGGING_LIBRARYUX 1 240 libraryux
 run_smoke INTEGMILESTONE MOGGING_INTEGMILESTONE 1 300 integmilestone
 run_smoke WIZARDUX     MOGGING_WIZARDUX  1 180 wizardux
 run_smoke WIZARDFAIL   MOGGING_WIZARDFAIL 1 180 wizardfail
