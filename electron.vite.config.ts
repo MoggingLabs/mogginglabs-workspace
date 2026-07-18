@@ -155,7 +155,11 @@ export default defineConfig(({ command }) => ({
       rollupOptions: {
         input: {
           index: resolve(__dirname, command === 'build' ? 'src/main/index.ts' : 'src/main/index.dev.ts'),
-          daemon: resolve(__dirname, 'src/pty-daemon/index.ts')
+          daemon: resolve(__dirname, 'src/pty-daemon/index.ts'),
+          // The brain's worker_threads indexer (ADR 0018.f): the ONLY graph that loads
+          // a parser. Plain JS like the daemon — it is spawned as a file, not imported,
+          // so bytecode's chunkAlias never touches it.
+          'brain-worker': resolve(__dirname, 'src/backend/features/brain/indexer-worker.ts')
         }
       }
     }

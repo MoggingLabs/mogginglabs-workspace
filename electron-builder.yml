@@ -21,6 +21,10 @@ files:
   # houseServerEntry -> <appPath>/bin/mogging-mcp.mjs) pointed at a path that does not exist
   # in any shipped build. It has been dead in production since it was written.
   - bin/**/*
+  # The brain's vendored grammar wasm + tag queries (ADR 0018.g): read as BYTES via
+  # Electron's asar-patched fs from the worker (Language.load(bytes)), so they can
+  # live INSIDE app.asar — no unpack. GRAMMARCAT pins every artifact's hash.
+  - assets/grammars/**/*
   - package.json
 # Native modules (node-pty, better-sqlite3) are unpacked so they load from disk at runtime.
 # bin/ joins them: those scripts are spawned as a SEPARATE plain-`node` process, and node has

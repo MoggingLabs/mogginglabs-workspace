@@ -23,6 +23,8 @@
     "test": "vitest run",
     "catalog:agent-settings:update": "node scripts/update-agent-settings-catalog.mjs",
     "catalog:agent-settings:check": "node scripts/check-agent-settings-catalog.mjs",
+    "catalog:grammars:update": "node scripts/update-grammar-catalog.mjs",
+    "catalog:grammars:check": "node scripts/check-grammar-catalog.mjs",
     "dist": "electron-vite build && electron-builder --publish never",
     "dist:win": "electron-vite build && electron-builder --win --publish never",
     "dist:mac": "electron-vite build && electron-builder --mac --publish never",
@@ -45,6 +47,7 @@
     "node-pty": "1.1.0",
     "posthog-node": "^5.39.2",
     "toml-eslint-parser": "^1.0.3",
+    "web-tree-sitter": "^0.26.11",
     "write-file-atomic": "^7.0.0",
     "yaml": "^2.9.0"
   },

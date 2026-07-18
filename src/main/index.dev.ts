@@ -101,6 +101,7 @@ import { runBoardSmoke } from './smokes/board-smoke'
 import { runBoardFailSmoke } from './smokes/boardfail-smoke'
 import { runBoardV2Smoke } from './smokes/boardv2-smoke'
 import { runBrainCoreSmoke } from './smokes/braincore-smoke'
+import { runBrainParseSmoke } from './smokes/brainparse-smoke'
 import { runBoardMcpSmoke } from './smokes/boardmcp-smoke'
 import { runBoardGhSmoke } from './smokes/boardgh-smoke'
 import { runBoardQueueSmoke } from './smokes/boardqueue-smoke'
@@ -188,7 +189,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
   'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_RUNTIMESPLIT', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
-  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_BRAINCORE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
+  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_BRAINCORE', 'MOGGING_BRAINPARSE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
   'MOGGING_PROFILES', 'MOGGING_LOGINTRUTH', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
   // Typed-launch detection + the context gauge (the v6 pack).
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
@@ -282,6 +283,14 @@ async function beforeAppSettings(): Promise<boolean> {
   // window, zero UI, zero parsing.
   if (process.env.MOGGING_BRAINCORE) {
     await runBrainCoreSmoke()
+    return true
+  }
+
+  // Windowless brain-parse smoke (ADR 0018.g): the WASM parser pool in the REAL
+  // worker file + the grammar-catalog discipline (check red on tamper) — no daemon,
+  // no window, zero UI, zero network, no graph.
+  if (process.env.MOGGING_BRAINPARSE) {
+    await runBrainParseSmoke()
     return true
   }
 

@@ -66,13 +66,20 @@ mutates.
 0008 §b). The PTY daemon's job is terminal survival (ADR 0006); it does not grow an
 index, and the brain does not grow a process.
 
-**(g) WASM-only parsers.** When parsing lands (03), it is `web-tree-sitter` — WASM
-grammars, one artifact per language, identical bytes on every OS. Native tree-sitter
-is **refused**: it would add a third ABI-bound native to the two we already carry
-(node-pty, better-sqlite3), each of which has cost real regressions across the
-Electron/helper ABI split (ADR 0017) — and a parser fleet is the worst possible
-candidate, being per-language × per-platform × per-ABI. WASM trades peak parse speed
-for zero rebuild surface, and an indexer that runs off the UI thread can afford it.
+**(g) WASM-only parsers.** Parsing is `web-tree-sitter` — WASM grammars, one artifact
+per language, identical bytes on every OS. Native tree-sitter is **refused**: it would
+add a third ABI-bound native to the two we already carry (node-pty, better-sqlite3),
+each of which has cost real regressions across the Electron/helper ABI split (ADR
+0017) — and a parser fleet is the worst possible candidate, being per-language ×
+per-platform × per-ABI. WASM trades peak parse speed for zero rebuild surface, and an
+indexer that runs off the UI thread can afford it. The grammars are **vendored,
+hash-pinned data** (`src/backend/features/brain/grammars.json` + committed artifacts
+under `assets/grammars/`): installs stay offline and deterministic; upstream drift
+arrives only through the operator-run update script and fails the offline GRAMMARCAT
+gate otherwise. Adding a language is a catalog row + an artifact + a tag query — zero
+code. **Grammar roster (gated):** `bash c c_sharp cpp css go html java javascript
+json php python ruby rust toml tsx typescript yaml` — this line is parsed by
+`scripts/check-grammar-catalog.mjs` and must equal the catalog exactly.
 
 **(h) Privacy (ADR 0005).** Paths, symbols, and memory text never reach telemetry.
 Refusal reasons are a closed enum; counts and booleans may be measured, content may

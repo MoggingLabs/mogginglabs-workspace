@@ -9,9 +9,10 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 159 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 161 gates: 23 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
-# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 137 app-boot
+# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE ·
+# GRAMMARCAT) + 138 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -270,6 +271,11 @@ run_static FUSES node scripts/check-fuses.mjs
 # every .jsc through the shipped loader's own accept path, and EXECUTES a
 # risky-constructs fixture through the same compiler — per-arch by construction.
 run_static BYTECODE node scripts/check-bytecode.mjs
+# The grammar catalog (ADR 0018.g): artifacts present + hash-pinned, extensions
+# uniquely routed, licences stated, ADR roster prose matching, size under cap.
+# OFFLINE by design — downloading/verifying new grammars is the operator-run
+# update script's job (scripts/update-grammar-catalog.mjs), never the sweep's.
+run_static GRAMMARCAT node scripts/check-grammar-catalog.mjs
 
 run_smoke SMOKE       MOGGING_SMOKE     1 180 smoke
 run_smoke MULTIPANE   MOGGING_MULTIPANE 1 180 multipane
@@ -310,6 +316,7 @@ run_smoke BOARDGH     MOGGING_BOARDGH   1 240 boardgh
 run_smoke BOARDQUEUE  MOGGING_BOARDQUEUE 1 300 boardqueue
 run_smoke BOARDFAIL   MOGGING_BOARDFAIL 1 120 boardfail
 run_smoke BRAINCORE   MOGGING_BRAINCORE 1 120 braincore
+run_smoke BRAINPARSE  MOGGING_BRAINPARSE 1 180 brainparse
 run_smoke PERSISTHEALTH MOGGING_PERSISTHEALTH 1 120 persisthealth
 run_smoke ROLERACE    MOGGING_ROLERACE 1 120 rolerace
 run_smoke AGENTREGISTRY MOGGING_AGENTREGISTRY 1 120 agentregistry
