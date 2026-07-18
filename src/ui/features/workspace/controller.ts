@@ -1229,6 +1229,13 @@ export class WorkspaceController {
     if (a) this.splitPane(a.meta.id, a.layout.focusedPaneId(), dir)
   }
 
+  /** Balance the ACTIVE workspace's layout — equal shares on every row and column
+   *  (layout menu, palette, Ctrl+Shift+=). Sizes-only; the grid persists through its
+   *  own onLayoutChange, so nothing more is owed here. */
+  balanceActive(): void {
+    this.active()?.layout.balance()
+  }
+
   /** Split the ACTIVE workspace's focused pane into a fresh ISOLATED git worktree
    *  (layout-menu row only — Ctrl+Shift+D stays a plain split by design). Same 3/03
    *  contract as the wizard: the worktree is created FIRST; a refusal opens nothing.

@@ -48,7 +48,9 @@ export const SHORTCUTS: ShortcutGroup[] = [
     rows: [
       { keys: 'Ctrl+Alt+← ↑ ↓ →', label: 'Move focus between panes' },
       { keys: 'Ctrl+Shift+D', label: 'New terminal (splits the focused pane)' },
-      { keys: 'Ctrl+Shift+Enter', label: 'Zoom the focused pane' }
+      { keys: 'Ctrl+Shift+Enter', label: 'Zoom the focused pane' },
+      { keys: 'Ctrl+Shift+=', label: 'Balance the layout (equal rows and columns)' },
+      { keys: 'Double-click a divider', label: 'Equal shares for that row/column (= on a focused divider)', gesture: true }
     ]
   },
   {
