@@ -422,6 +422,16 @@ export const EntitlementsChannels = {
   changed: 'entitlements:changed' // main -> renderer: EntitlementsSnapshot (pushed when a refresh/degrade changes the answer)
 } as const
 
+export const BrainChannels = {
+  // The workspace brain (ADR 0018): READS are free to every pane; this step is
+  // lifecycle only — identity, status, typed refusals. Disk MUTATION over MCP rides
+  // the per-workspace grant when the tools land (ADR 0018.e); nothing here writes
+  // a user file, and no path or symbol from these payloads may reach telemetry.
+  status: 'brain:status', // (BrainRootRequest) -> BrainStatus | BrainRefusal (never throws)
+  rebuild: 'brain:rebuild', // (BrainRootRequest) -> BrainStatus | BrainRefusal (bumps generation; 03 adds the re-index)
+  changed: 'brain:changed' // main -> renderer: BrainChangedEvent ({ projectKey, generation, dirty })
+} as const
+
 export const AllChannels: readonly string[] = [
   ...Object.values(AgentHookChannels),
   ...Object.values(IntegrationsChannels),
@@ -449,6 +459,7 @@ export const AllChannels: readonly string[] = [
   ...Object.values(ProfileChannels),
   ...Object.values(RemoteChannels),
   ...Object.values(BoardChannels),
+  ...Object.values(BrainChannels),
   ...Object.values(GitChannels),
   ...Object.values(FsChannels),
   ...Object.values(SystemChannels),

@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
 import { ipcMain, type BrowserWindow } from 'electron'
-import { findRepoRoot, readGitLayout } from '@backend/features/git'
 import {
   appendPosition,
+  foldProjectKey,
   insertPosition,
+  projectKeyForCwd,
   rebalancedPositions,
   sanitizeBoardConfig,
   sanitizeLabels,
@@ -53,35 +54,11 @@ function broadcast(boardId: string): void {
 }
 
 // ── Project identity ──────────────────────────────────────────────────────────
+// Lives in @backend/features/workspace/project-identity.ts since ADR 0018: the brain
+// resolves projects with the SAME helper (extracted, not forked), so a worktree's
+// brain and its board can never disagree about which project they belong to.
 
-/** Case-folded on Windows for COMPARISON only: two spellings of one folder are
- *  one board — but the stored key keeps its real casing, because it is also a
- *  real directory the queue launches into and gh runs against. */
-const foldKey = (p: string): string => (process.platform === 'win32' ? p.toLocaleLowerCase('en-US') : p)
-
-/**
- * The canonical project key for a directory: the repo ROOT for a git checkout,
- * and — the load-bearing case — the PARENT repo's root for a linked worktree,
- * so every `.mogging/worktrees/<slug>` workspace shares its project's board.
- * A non-repo folder is its own project. Empty/unresolvable → the Unfiled board.
- */
-export function projectKeyForCwd(cwd: string): string {
-  if (!cwd) return UNFILED_PROJECT_KEY
-  const root = findRepoRoot(cwd)
-  if (!root) {
-    try {
-      return path.resolve(cwd)
-    } catch {
-      return UNFILED_PROJECT_KEY
-    }
-  }
-  const layout = readGitLayout(root)
-  if (layout?.linkedWorktree) {
-    // commonDir is the PARENT repo's .git — its dirname is the parent root.
-    return path.dirname(path.resolve(layout.commonDir))
-  }
-  return path.resolve(root)
-}
+export { projectKeyForCwd }
 
 const boardNameFor = (projectKey: string): string =>
   projectKey === UNFILED_PROJECT_KEY ? 'Unfiled' : path.basename(projectKey) || projectKey
@@ -124,7 +101,7 @@ function ensureBoardForKey(projectKey: string): Board {
   // exact lookup first, then the folded scan (boards are few by construction).
   const existing =
     store.findBoardByProjectKey(projectKey) ??
-    store.listBoards().find((b) => foldKey(b.projectKey) === foldKey(projectKey)) ??
+    store.listBoards().find((b) => foldProjectKey(b.projectKey) === foldProjectKey(projectKey)) ??
     null
   if (existing) return existing
   const now = Date.now()

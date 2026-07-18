@@ -25,6 +25,7 @@ import { registerSystem } from './system'
 import { registerExplorer } from './explorer'
 import { registerReview } from './review'
 import { registerBoard } from './board'
+import { registerBrain, disposeBrain } from './brain'
 import { registerGithubBoard } from './github-board'
 import { registerProfiles } from './profiles'
 import { registerUsage } from './usage'
@@ -332,6 +333,7 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       registerExplorer(() => win) // the explorer: read-only listing + the liveness law's watcher pool (Phase-11/01, /04)
       registerReview() // pre-ship diff review: redacted diff + guarded merge (Phase-3/04)
       registerBoard(() => win) // Board v2: per-project boards, CAS patches, live push (Phase-3/05, rebuilt)
+      registerBrain(() => win) // the workspace brain: per-project identity/lifecycle/status, typed refusals (ADR 0018)
       registerGithubBoard() // Board ↔ GitHub two-way: gated write-back + rules (ADR 0015)
       registerProfiles() // provider profiles: pointer sets, deny-listed at save (Phase-4/04)
       registerRemotes() // remote (SSH) hosts: connection pointers only (Phase-4/05)
@@ -401,6 +403,7 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
     disposeAgentInstalls() // ephemeral install terminals must not outlive the app
     disposeAgentSettings()
     disposeAppSettings()
+    disposeBrain() // close every per-project brain db handle (ADR 0018)
     disposeGit?.()
     disposeGit = null
     disposeContext?.()
