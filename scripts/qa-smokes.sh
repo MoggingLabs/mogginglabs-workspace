@@ -355,10 +355,12 @@ run_smoke MCP          MOGGING_MCP       1 240 mcp
 run_smoke MCPWRITE     MOGGING_MCPWRITE  1 240 mcpwrite
 run_smoke AGENTWEB     MOGGING_AGENTWEB  1 240 agentweb
 run_smoke AGENTLAUNCH  MOGGING_AGENTLAUNCH 1 240 agentlaunch
-# LAUNCHNOW: the instant-lineup contract (2026-07) — the template lineup's launch command
-# is typed on the pane's readiness signal (after first output, within the gap budget),
-# the command build overlaps the shell boot (prefetch), and the shell slot stays clean.
-# A reintroduced fixed lineup delay (the old 900ms) fails the gap arithmetic.
+# LAUNCHNOW: the instant-launch contract (2026-07), both halves — fresh lineup commands
+# ride the SPAWN (SpawnRequest.run; zero renderer writes, proven by the ptyWrites spy,
+# bookkeeping intact), the custom row rides the same seam, and the typed FALLBACK still
+# delivers exactly once, ordered after first output, when the build misses the claim
+# window (setSpawnRunHold seam). Bites: reintroduced delays, lost fallbacks, double
+# delivery, and bookkeeping that only one delivery path performs.
 run_smoke LAUNCHNOW    MOGGING_LAUNCHNOW 1 240 launchnow
 run_smoke PERWS        MOGGING_PERWS     1 240 perws
 run_smoke PERWSAGENT   MOGGING_PERWSAGENT 1 240 perwsagent

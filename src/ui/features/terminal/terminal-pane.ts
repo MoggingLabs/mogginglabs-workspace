@@ -28,6 +28,7 @@ import { onTerminalFontSize, terminalFontSize, TERMINAL_LINE_HEIGHT } from '../.
 import { windowsPtyFor } from '../../core/terminal/pty-emulation'
 import { registerPaneInstance, retirePaneInstance } from '../../core/terminal/pane-instance-port'
 import { forgetPane, markPaneLive, markPaneReattached, markPaneRemoteReady, markPaneSpawnSettled } from '../../core/terminal/liveness-port'
+import { claimSpawnRun, forgetSpawnRun, reportSpawnRunOutcome } from '../../core/terminal/spawn-run-port'
 import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
 import { setPaneState, clearPaneState, paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
 import { completionsFor } from '../../core/attention/completions'
@@ -331,18 +332,38 @@ export class TerminalPane {
     // app's install folder, whatever the wizard picked. A REMOTE pane sends none: the path
     // is local and would mean nothing on the far side (publishPaneCwds skips those slots).
     const cwd = remote ? '' : (getPaneCwd(this.id) ?? '')
-    void terminalClient
+    // Spawn-run delivery (instant launch, part 2): a fresh template slot's launch command
+    // was armed on the spawn-run port BEFORE this pane was constructed. Claim it and wait
+    // briefly — the build is one main round trip racing a bounded window, so a slow build
+    // degrades to the typed fallback (reported below) instead of stalling the pane.
+    // Remote panes never carry a run: their launch types after the SSH bootstrap.
+    const armedRun = claimSpawnRun(this.id)
+    const term = this.term // definite by here; the async closure below reads its LIVE size
+    void (async () => {
+      let run: string | undefined
+      if (armedRun && !remote) {
+        const cmd = await Promise.race([
+          armedRun.catch(() => null),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500))
+        ])
+        run = cmd ?? undefined
+      }
+      return terminalClient
       .spawn({
         id: this.id,
         cwd,
-        cols: this.term.cols,
-        rows: this.term.rows,
+        cols: term.cols,
+        rows: term.rows,
         workspaceId: workspaceIdForPane(this.id),
         agentId: assignmentForPane(this.id),
         remoteHostId: remote?.hostId,
-        remoteCwd: remote?.cwd
+        remoteCwd: remote?.cwd,
+        run
       })
       .then((res) => {
+        // The delivery report the agents feature settles on: TRUE only when a FRESH
+        // session actually received the run line (a reattached session ignored it).
+        reportSpawnRunOutcome(this.id, !!run && !res.existing)
         // The pty told us how it grows. Apply BEFORE any output or resize: xterm re-reads
         // windowsPty on every resize, and nothing has resized a non-empty buffer yet.
         const wp = windowsPtyFor(res.pty)
@@ -375,6 +396,9 @@ export class TerminalPane {
         this.syncState?.()
       })
       .catch((err) => {
+        // A failed spawn delivered nothing — the agents feature's typed fallback will
+        // wait on liveness and fail as gracefully as it always has.
+        reportSpawnRunOutcome(this.id, false)
         // A pane with no pty renders nothing and grows wrong. Never swallow it — and
         // never leave the USER staring at a silently blank pane: say it in the pane,
         // where the missing prompt would have been.
@@ -388,6 +412,7 @@ export class TerminalPane {
           markPaneSpawnSettled(this.id)
         }
       })
+    })()
 
     // Blink the cursor only while this pane is focused — cuts idle repaints across many panes.
     this.term.textarea?.addEventListener('focus', () => (this.term.options.cursorBlink = true))
@@ -2013,6 +2038,7 @@ export class TerminalPane {
     clearPaneState(this.id)
     clearPaneCwd(this.id) // stops the backend git watch for this pane (git feature unwatches)
     forgetPane(this.id) // live/reattached marks die with the pane, not with the id
+    forgetSpawnRun(this.id) // armed builds/outcomes too — a recycled id must start clean
     if (this.selectionCopyTimer) clearTimeout(this.selectionCopyTimer) // a pane closed mid-drag must not copy after death
     this.dropAbort.abort() // drop the window-scoped drag listeners
     this.menuCleanup?.() // document/window listeners + the body-portaled menu

@@ -22,6 +22,12 @@ export interface AgentLaunchRequest {
   resume?: boolean
   /** Launch under this profile (Phase-4/04); omitted = the provider's default. */
   profileId?: string
+  /** 'spawn': the pane does not exist yet — the controller emits this BEFORE building
+   *  the grid so the agents feature can arm the command on the spawn-run port and the
+   *  pane's spawn carries it (typed by the backend at spawn; no idle-prompt window).
+   *  Omitted = typed delivery into a live pane (palette, restore, failover — and the
+   *  automatic fallback when a spawn-run build is late or refused). */
+  deliver?: 'spawn'
 }
 
 const subscribers = new Set<(req: AgentLaunchRequest) => void>()

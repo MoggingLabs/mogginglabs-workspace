@@ -8,7 +8,8 @@ import { getBridge } from '../../core/ipc/bridge'
 import { getFocusedPane } from '../../core/layout/focus'
 import { getPaneCwd, getPaneCwdProjection, onPaneCwdProjection, setPaneCwd } from '../../core/layout/pane-cwd'
 import { getPaneRemote, setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
-import { onAgentLaunchRequest, requestAgentLaunch, announceProfileFailover } from '../../core/agents/launch-port'
+import { onAgentLaunchRequest, requestAgentLaunch, announceProfileFailover, type AgentLaunchRequest } from '../../core/agents/launch-port'
+import { armSpawnRun, whenSpawnRunOutcome } from '../../core/terminal/spawn-run-port'
 import { clearPaneAgentSession, getPaneAgentSession, setPaneAgentSession, type PaneAgentSession } from '../../core/agents/agent-session-port'
 import { setCommands } from '../../core/commands/command-port'
 import { setActiveView } from '../../core/shell/view-port'
@@ -110,8 +111,13 @@ export const agentsFeature: UiFeature = {
     let populateGeneration = 0
     onAgentRegistryChange((agents) => void populate(agents))
     onProfilesChanged(() => void populate()) // Settings edits -> palette entries follow live
-    // Template opens (06b) + restore drive launches through this port.
-    onAgentLaunchRequest((req) => void launchInPane(req.paneId as number, req.provider, req.cwd, req.resume, req.profileId))
+    // Template opens (06b) + restore drive launches through this port. A fresh open's
+    // local slots arrive as deliver:'spawn' BEFORE their panes exist — spawnDeliver must
+    // arm the command synchronously in this callback, or the pane's spawn misses it.
+    onAgentLaunchRequest((req) => {
+      if (req.deliver === 'spawn') spawnDeliver(req)
+      else void launchInPane(req.paneId as number, req.provider, req.cwd, req.resume, req.profileId)
+    })
 
     // Usage-limit events (4/04) arrive on a dedicated channel from the daemon.
     getBridge().on(TerminalChannels.limit, (payload) => {
@@ -445,14 +451,8 @@ export const agentsFeature: UiFeature = {
       if (custom) {
         const cmd = provider.slice('custom:'.length).trim()
         if (!cmd) return
-        projectLaunchCwd(paneId, cwd)
         agentsClient.launchInto(paneId, cmd)
-        setPaneLabel(paneId as PaneId, cmd.split(/\s+/)[0] || 'custom')
-        // Published even though unsupported: it CLEARS any previous agent's context
-        // bar in this pane (the context feature filters non-context providers).
-        writeSession(paneId, { provider, cwd })
-        // Provider id only — NEVER the command text (ADR 0005/0002).
-        getTelemetry().captureEvent({ name: 'agent.launched', props: { provider: 'custom', resume } })
+        recordCustomLaunch(paneId, provider, cmd, cwd, resume)
         return
       }
       if (!isAgentCliId(provider)) return
@@ -469,8 +469,22 @@ export const agentsFeature: UiFeature = {
         })
         return
       }
-      projectLaunchCwd(paneId, cwd)
       agentsClient.launchInto(paneId, result.command)
+      recordCliLaunch(paneId, provider, cwd, resume, { mine, effectiveProfile, workspaceId, result })
+    }
+
+    /** Everything a successful CLI launch records — shared by typed delivery (right after
+     *  the write) and spawn-run delivery (the backend already typed it at spawn). Pure
+     *  bookkeeping: no waits, no writes into the pane. */
+    function recordCliLaunch(
+      paneId: number,
+      provider: string,
+      cwd: string,
+      resume: boolean,
+      prep: { mine: AgentProfile[]; effectiveProfile?: string; workspaceId?: string; result: AgentCommandResult }
+    ): void {
+      const { mine, effectiveProfile, workspaceId, result } = prep
+      projectLaunchCwd(paneId, cwd)
       // The profile's email is a label the app cannot enforce — the CLI's OAuth
       // lands on whatever account the browser offers. Main checked the launch
       // home; say what it found while the sign-in (or the mixup) is on screen.
@@ -511,6 +525,81 @@ export const agentsFeature: UiFeature = {
       setPaneLabel(paneId as PaneId, nameById.get(provider) ?? provider)
       // Booleans/ids only — never env values or command text (ADR 0005).
       getTelemetry().captureEvent({ name: 'agent.launched', props: { provider, resume, profiled: !!effectiveProfile } })
+    }
+
+    /** The custom-command twin of recordCliLaunch (wizard custom row — ADR 0005/0002:
+     *  the provider id is `custom:<command>`; telemetry never carries the command text). */
+    function recordCustomLaunch(paneId: number, provider: string, cmd: string, cwd: string, resume: boolean): void {
+      projectLaunchCwd(paneId, cwd)
+      setPaneLabel(paneId as PaneId, cmd.split(/\s+/)[0] || 'custom')
+      // Published even though unsupported: it CLEARS any previous agent's context
+      // bar in this pane (the context feature filters non-context providers).
+      writeSession(paneId, { provider, cwd })
+      getTelemetry().captureEvent({ name: 'agent.launched', props: { provider: 'custom', resume } })
+    }
+
+    /** DEV-only build stretch (LAUNCHNOW gate): pushes the spawn-run build past the
+     *  pane's claim window to prove the typed fallback delivers exactly once. */
+    let spawnRunHoldMs = 0
+
+    /**
+     * Spawn-run delivery (instant launch, part 2): a fresh template/wizard slot whose
+     * request arrives BEFORE its pane exists. Arm the command build on the spawn-run
+     * port synchronously — the pane's spawn claims it and the backend types it as the
+     * shell's first act — then settle on the pane's REPORT:
+     *   delivered      → bookkeeping only (the command is already executing);
+     *   anything else  → the typed fallback, which is exactly the pre-spawn-run launch
+     *     path (wait for the first output, write the SAME already-built command — the
+     *     build ran once, so one-shot config overrides are never double-consumed).
+     * A pane that never reports (disposed mid-open) times out to the fallback, whose
+     * own bounded liveness wait keeps the old behavior as the floor.
+     */
+    function spawnDeliver(req: AgentLaunchRequest): void {
+      const paneId = Number(req.paneId)
+      const { provider, cwd } = req
+      if (paneId < 0 || !provider || provider === 'shell') return
+      const custom = provider.startsWith('custom:')
+      const customCmd = custom ? provider.slice('custom:'.length).trim() : ''
+      if (custom && !customCmd) return
+      if (!custom && !isAgentCliId(provider)) return
+      const prep = custom || !isAgentCliId(provider)
+        ? null
+        : prepareCliLaunch(paneId, provider, cwd, false, req.profileId, undefined, false)
+      let build: Promise<string | null> = custom
+        ? Promise.resolve(customCmd)
+        : prep!.then((p) => (p.result.ok && p.result.command ? p.result.command : null))
+      if (import.meta.env.DEV && spawnRunHoldMs > 0) {
+        const ms = spawnRunHoldMs
+        build = new Promise<void>((r) => setTimeout(r, ms)).then(() => build)
+      }
+      armSpawnRun(paneId, build)
+      void (async () => {
+        const outcome = await whenSpawnRunOutcome(paneId, 20000)
+        if (custom) {
+          if (outcome !== true) {
+            // Typed fallback: the pane spawned without the run (late build, reattach,
+            // spawn failure) — deliver the pre-spawn-run way.
+            await whenPaneLive(paneId, 15000)
+            agentsClient.launchInto(paneId, customCmd)
+          }
+          recordCustomLaunch(paneId, provider, customCmd, cwd, false)
+          return
+        }
+        const p = await prep!
+        if (!p.result.ok || !p.result.command) {
+          showToast({
+            tone: 'danger',
+            title: `Agent was not launched in pane ${paneId}`,
+            body: p.result.reason || 'The saved configuration could not be synchronized before launch.'
+          })
+          return
+        }
+        if (outcome !== true) {
+          await whenPaneLive(paneId, 15000)
+          agentsClient.launchInto(paneId, p.result.command)
+        }
+        recordCliLaunch(paneId, provider, cwd, false, p)
+      })()
     }
 
     /** Usage-limit failover (4/04): next profile, same pane, same cwd. ONE hop. */
@@ -581,6 +670,11 @@ export const agentsFeature: UiFeature = {
         // live→write gap against it to prove lineup commands ride the readiness
         // signal, never a reintroduced fixed delay.
         paneLiveAt: (paneId: number) => paneLiveAt(paneId),
+        // LAUNCHNOW gate seam: stretch the spawn-run build past the pane's claim
+        // window so the typed fallback is provably exercised. 0 restores normal.
+        setSpawnRunHold: (ms: number) => {
+          spawnRunHoldMs = Math.max(0, Number(ms) || 0)
+        },
         markRemoteReady: (paneId: number) => markPaneRemoteReady(paneId),
         refreshCommands: () => refreshAgentRegistry().then((agents) => populate(agents)),
         // Smoke/dev shim: register an agent session WITHOUT launching (the dot is

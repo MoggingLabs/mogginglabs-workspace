@@ -385,10 +385,16 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     const workspaceId = typeof req.workspaceId === 'string' ? req.workspaceId : undefined
     const agentId = typeof req.agentId === 'string' ? req.agentId : undefined
     const env = remote ? undefined : resolveServiceKeyEnv(workspaceId, agentId)
-    const spec: SpawnSpec = { cwd: remote ? undefined : req.cwd, cols: req.cols, rows: req.rows, remote, env }
+    // `run` (spawn-run launch delivery): typed by the SESSION at spawn — local panes only
+    // (a remote launch is typed after the SSH bootstrap proves the far-side shell).
+    const run = remote || typeof req.run !== 'string' || !req.run ? undefined : req.run
+    const spec: SpawnSpec = { cwd: remote ? undefined : req.cwd, cols: req.cols, rows: req.rows, remote, env, run }
     // Recorded BEFORE the reply: a spawn that lands in a dying daemon still replays once the
     // connection is back, so the pane comes alive instead of staying blank until app restart.
-    specs.set(String(req.id), spec)
+    // WITHOUT `run`: it is a one-shot launch instruction, not pane identity — a reconnect
+    // replay that re-sent it would re-type the launch into a crash-respawned shell (a fresh
+    // agent with no conversation), where today's crash contract is an honest plain shell.
+    specs.set(String(req.id), { ...spec, run: undefined })
     // Straight through, unmodified: `existing` tells the restore path not to type a launch
     // command into a live agent, and `pty` tells xterm how this pane's pty grows. Main relays
     // the daemon's answer — it does not compute either (that is the whole point of pty-host).

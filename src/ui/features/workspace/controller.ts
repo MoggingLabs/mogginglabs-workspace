@@ -1670,12 +1670,40 @@ export class WorkspaceController {
     return this.create({ cwd, name })
   }
 
-  /** Open a workspace from a template spec (06b): the resolved grid + its lineup. */
+  /** Open a workspace from a template spec (06b): the resolved grid + its lineup.
+   *
+   *  Fresh LOCAL agent slots launch via SPAWN-RUN delivery: their requests go out
+   *  BEFORE create() builds the grid — panes spawn synchronously inside it, and the
+   *  agents feature must arm each command on the spawn-run port first so the spawn
+   *  itself carries the line (typed by the backend at spawn; no idle-prompt window).
+   *  The ordinal is pinned and passed into create() so the pre-create pane ids and
+   *  the built grid cannot drift. Remote slots stay on the typed path — launchInPane
+   *  reads the pane-remote seed at entry, which create() publishes — so they are
+   *  requested AFTER, through the same lineup walk restore uses. */
   openFromTemplate(spec: TemplateWorkspaceSpec): WorkspaceMeta {
+    const ordinal = this.nextOrdinal
+    // Only slots the grid will actually build (the same derivation create() seeds by):
+    // an armed launch for a pane that never constructs would idle out to the typed
+    // fallback — honest, but 20 slow seconds late instead of never wrong.
+    const tree = spec.layout ? parseTree(spec.layout, spec.paneCount) : null
+    const slots = new Set<number>(tree ? leafIds(tree) : Array.from({ length: spec.paneCount }, (_, k) => k + 1))
+    spec.assignments.forEach((provider, i) => {
+      if (provider && provider !== 'shell' && !spec.remotes?.[i] && slots.has(i + 1)) {
+        requestAgentLaunch({
+          paneId: formulaPaneId(ordinal, i + 1) as PaneId,
+          provider,
+          cwd: spec.paneCwds?.[i] || spec.cwd,
+          resume: false,
+          profileId: spec.profileIds?.[i] ?? undefined,
+          deliver: 'spawn'
+        })
+      }
+    })
     const meta = this.create({
       id: spec.id,
       name: spec.name,
       cwd: spec.cwd,
+      ordinal,
       paneCount: spec.paneCount,
       assignments: spec.assignments,
       paneCwds: spec.paneCwds,
@@ -1686,7 +1714,7 @@ export class WorkspaceController {
       // the same parseTree gate the restore path uses; invalid falls back to the grid.
       layout: spec.layout
     })
-    this.launchLineup(meta.id, false)
+    this.launchLineup(meta.id, false, (i) => !!meta.remotes?.[i])
     return meta
   }
 
@@ -1698,7 +1726,7 @@ export class WorkspaceController {
    *  asserts commands land on the readiness signal, not on a timer.) `resume`
    *  re-launches the lineup on restore. Worktree-isolated slots (3/03) launch at
    *  their OWN cwd — the agent cd's into its worktree. */
-  launchLineup(id: string, resume: boolean): void {
+  launchLineup(id: string, resume: boolean, only?: (index: number) => boolean): void {
     const view = this.views.get(id)
     const assignments = view?.meta.assignments
     if (!view || !assignments) return
@@ -1708,6 +1736,7 @@ export class WorkspaceController {
     // nonexistent pane id is at best lost, at worst delivered to a future pane.
     const live = new Set<number>(view.layout.paneIds())
     assignments.forEach((provider, i) => {
+      if (only && !only(i)) return // fresh opens: local slots already went out via spawn-run
       const paneId = paneIdForSlot(meta, i + 1)
       if (provider && provider !== 'shell' && live.has(paneId)) {
         const remote = meta.remotes?.[i]
