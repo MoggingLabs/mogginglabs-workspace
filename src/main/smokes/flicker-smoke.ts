@@ -21,8 +21,9 @@ import { softGapMs } from './smoke-shell'
 //     is pure paint — no cold reattach ripple), take ZERO PTY resizes across the whole
 //     cycle, and one sibling's pixels after restore hash byte-identical to before the
 //     expand (main-process captures). Frame budget sampled across the restore.
-//  3c. …and the budget path SURVIVES the fix: a hidden WORKSPACE still releases all 8
-//     contexts (poll), and re-acquires them on switch-back — pinned here so nobody
+//  3c. …and the budget path SURVIVES the fix: under budget a hidden WORKSPACE keeps its
+//     leases warm (the switch-flicker fix); with the budget forced to 0 it still
+//     releases all 8 contexts (poll) and re-acquires on switch-back — pinned so nobody
 //     "fixes" flicker by disabling the leasing outright (MILESTONE phase B's claim).
 //  4. Assert afterwards: every pane kept ONLY its own content (no cross-talk, no
 //     buffer loss), all 8 visible panes re-acquired WebGL, the frame budget held
@@ -197,10 +198,21 @@ const SCRIPT = `(async () => {
     dwell.noSiblingResizes && dwell.expandedResized && dwell.smooth
 
   // --- Phase 2c: the context budget must SURVIVE the fix ---------------------------
-  // Covered siblings keep their contexts now; hidden WORKSPACES must still release
-  // theirs (the ~16-context budget, MILESTONE phase B's claim) — pinned here so nobody
-  // "fixes" flicker by disabling the managed leasing outright. Poll both directions:
-  // the timings (1.5s debounce, one job per frame) are design facts, not assertions.
+  // The budget is now PRESSURE-DRIVEN (the workspace-switch flicker fix): a hidden
+  // workspace keeps its contexts WARM while the app-wide count fits the browser cap, so
+  // switching back is pure show/hide — no per-pane DOM→WebGL swap wave. Two pins here:
+  //  (a) under budget, a dwell past the release debounce keeps every hidden lease;
+  //  (b) with the budget forced to 0 (dev override), a hidden workspace still releases
+  //      all 8 contexts and re-acquires on switch-back — nobody may "fix" flicker by
+  //      deleting the managed leasing outright (MILESTONE phase B's claim).
+  m.workspace.switchByIndex(1)
+  await sleep(2400) // past the 1.5s release debounce + the job queue
+  const warmKept = panes.filter((p) => p.renderer() === 'webgl').length
+  window.__moggingGlBudget = 0
+  // Re-trip the hide path under pressure: flip back and away so onHide re-arms the
+  // (already-spent) release debounce for every pane.
+  m.workspace.switchByIndex(0)
+  await sleep(300)
   m.workspace.switchByIndex(1)
   let wsReleased = 0
   for (let i = 0; i < 25; i++) {
@@ -208,6 +220,7 @@ const SCRIPT = `(async () => {
     if (wsReleased === 8) break
     await sleep(400)
   }
+  delete window.__moggingGlBudget
   m.workspace.switchByIndex(0)
   let wsBack = 0
   for (let i = 0; i < 25; i++) {
@@ -215,7 +228,12 @@ const SCRIPT = `(async () => {
     if (wsBack === 8) break
     await sleep(500)
   }
-  const wsLeasing = { pass: wsReleased === 8 && wsBack === 8, released: wsReleased, reacquired: wsBack }
+  const wsLeasing = {
+    pass: warmKept === 8 && wsReleased === 8 && wsBack === 8,
+    warmKept,
+    released: wsReleased,
+    reacquired: wsBack
+  }
 
   // --- Assertions ------------------------------------------------------------------
   const ids = panes.map((p) => p.id)
