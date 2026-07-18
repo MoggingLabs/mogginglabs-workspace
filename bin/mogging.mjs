@@ -1101,7 +1101,14 @@ function parseFlags(args) {
   return out
 }
 
-/** Codex passes its notify payload as a JSON blob; map its `type` to our event vocabulary. */
+/** Codex passes its notify payload as a JSON blob; map its `type` to our event vocabulary.
+ *  An UNRECOGNIZED type is a GUESS and rides the bell's held-for-contradiction path as
+ *  `notice` — never a direct red latch. The old default (needs-input) is the same bug the
+ *  Claude whitelist below already fixed once: the day Codex ships a notify type this list has
+ *  never seen, every such event would paint a WORKING pane red with nothing to clear it.
+ *  PARITY: this mapping and the generated notify script's are twins — the NOTIFYPARITY gate
+ *  runs BOTH shipped artifacts over one corpus and fails on any divergence (it caught exactly
+ *  this default drifting once). */
 function codexTypeToEvent(type) {
   switch (type) {
     case 'agent-turn-complete':
@@ -1110,7 +1117,7 @@ function codexTypeToEvent(type) {
     case 'approval_requested':
       return 'needs-input'
     default:
-      return 'needs-input'
+      return 'notice'
   }
 }
 
@@ -1146,7 +1153,14 @@ function notifTypeToEvent(type) {
     case 'push_notification':
       return null // not an alert at all -> stay silent
     default:
-      return 'needs-input' // an unrecognized notification is still worth surfacing
+      // An unrecognized type is a GUESS, and guesses take the bell's held-for-contradiction
+      // path — never a direct red latch. The old default (needs-input) red-locked every pane
+      // whose CLI learned a new notification type before this list did: the /goal system
+      // shipped types this list never saw, and four background agents that had just ACHIEVED
+      // their goals latched red (found live 2026-07-15). That fix landed in the generated
+      // notify script and this CLI drifted behind it — the NOTIFYPARITY gate now pins the two
+      // artifacts to one dialect.
+      return 'notice'
   }
 }
 
@@ -1205,7 +1219,7 @@ async function runNotify(args) {
     try {
       event = codexTypeToEvent(JSON.parse(raw).type)
     } catch {
-      event = 'needs-input'
+      event = 'notice' // an unreadable blob is a guess, and a guess never latches red directly
     }
   }
   if (!event) event = 'needs-input'

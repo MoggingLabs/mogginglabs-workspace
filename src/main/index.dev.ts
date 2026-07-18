@@ -85,6 +85,7 @@ import { runBlocksSmoke } from './smokes/blocks-smoke'
 import { runClipboardSmoke } from './smokes/clipboard-smoke'
 import { runGitSmoke } from './smokes/git-smoke'
 import { runNotifySmoke } from './smokes/notify-smoke'
+import { runNotifyParitySmoke } from './smokes/notifyparity-smoke'
 import { runMilestoneSmoke } from './smokes/milestone-smoke'
 import { runFlickerSmoke } from './smokes/flicker-smoke'
 import { runPaneScrollSmoke } from './smokes/panescroll-smoke'
@@ -196,7 +197,9 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
   // Phase 11 — Files: the explorer's seven.
   'MOGGING_FSLIST', 'MOGGING_FILETREE', 'MOGGING_EXPLORER', 'MOGGING_EXPLORERRACE', 'MOGGING_TREELIVE', 'MOGGING_TREEGIT',
-  'MOGGING_FILEACT', 'MOGGING_FILESMILESTONE', 'MOGGING_AGENTCFG', 'MOGGING_GLOBALHOOKS'
+  'MOGGING_FILEACT', 'MOGGING_FILESMILESTONE', 'MOGGING_AGENTCFG', 'MOGGING_GLOBALHOOKS',
+  // ALERTAGREE pack (2026-07-18): the shipped notify artifacts' parity corpus.
+  'MOGGING_NOTIFYPARITY'
 ]
 const isSmoke = SMOKE_ENV.some((k) => !!process.env[k])
 
@@ -525,6 +528,8 @@ function afterWindow(win: BrowserWindow): void {
     runCwdSmoke(win, process.env.MOGGING_CWD) // universal cwd protocol: daemon auth + in-proc OSC fallback
   } else if (process.env.MOGGING_GIT) {
     runGitSmoke(win) // env-gated per-pane git smoke (Phase-2/03)
+  } else if (process.env.MOGGING_NOTIFYPARITY) {
+    runNotifyParitySmoke() // the two shipped notify artifacts (CLI + generated hook) speak ONE dialect — black-box corpus over a fixture endpoint
   } else if (process.env.MOGGING_NOTIFY) {
     runNotifySmoke(win) // env-gated `mogging notify` smoke (Phase-2/04)
   } else if (process.env.MOGGING_MILESTONE) {
