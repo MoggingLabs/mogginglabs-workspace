@@ -1256,7 +1256,7 @@ export class TerminalPane {
       if (menu.hidden) return
       const hadFocus = menu.contains(document.activeElement)
       const focusedText = hadFocus ? (document.activeElement?.textContent ?? '').trim() : ''
-      this.buildMenu(menu, closeMenu, title.textContent?.trim() ?? '', slotEl?.dataset.expandMode, host)
+      this.buildMenu(menu, closeMenu, title.textContent?.trim() ?? '', slotEl?.dataset.expandMode, slotEl?.dataset.eqAxes, host)
       positionMenu()
       if (hadFocus) {
         const entries = menuEntries()
