@@ -7,6 +7,7 @@ import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { DAEMON_PROTOCOL_VERSION } from '@contracts'
+import { enforceWindowlessChildren } from '@backend/platform/windowless-children'
 import { buildStampOf } from '@backend/platform/build-stamp'
 import { SessionStore } from '@backend/features/workspace'
 import { SessionManager } from './session'
@@ -50,6 +51,11 @@ function openSessionStore(dbPath: string): SessionStore {
 }
 
 function main(): void {
+  // Before anything can spawn: this process is windowless (detached, console-less — see
+  // the module for why that's load-bearing), so every child it spawns must be too, or
+  // Windows allocates the child a fresh VISIBLE console. node-pty's per-pane kill fork
+  // was the shipped instance: N terminal windows flashing on an N-pane workspace close.
+  enforceWindowlessChildren()
   if (!acquireLock()) {
     log('another live daemon holds the lock; exiting')
     process.exit(0)

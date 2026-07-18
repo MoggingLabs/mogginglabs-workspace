@@ -366,6 +366,7 @@ run_smoke PERWS        MOGGING_PERWS     1 240 perws
 run_smoke PERWSAGENT   MOGGING_PERWSAGENT 1 240 perwsagent
 run_smoke VAULTKEYS    MOGGING_VAULTKEYS 1 240 vaultkeys
 run_smoke WSCLOSE      MOGGING_WSCLOSE   1 240 wsclose
+run_smoke KILLFLASH    MOGGING_KILLFLASH 1 240 killflash
 run_smoke KBSHORTCUTS  MOGGING_KBSHORTCUTS 1 240 kbshortcuts
 run_smoke KBGLOBAL     MOGGING_KBGLOBAL  1 240 kbglobal
 run_smoke DAEMONCUSTODY MOGGING_DAEMONCUSTODY 1 240 daemoncustody
