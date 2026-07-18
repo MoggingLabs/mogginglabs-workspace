@@ -5774,10 +5774,13 @@ body.pane-dragging * {
   color: var(--accent-ink);
 }
 /* Refused tiles (above the cap, or a shrink that would close live agent work): still
-   hoverable/focusable so the title can say WHY, but visually out of the running. */
+   hoverable/focusable so the title can say WHY, but visually out of the running.
+   cursor: default, NOT not-allowed — the app's greyed-out idiom (the titlebar's
+   panel/Explorer toggles, .icon-btn:disabled) never shows the blocked cursor;
+   the dimming and the tooltip carry the refusal (user-confirmed in live verify). */
 .layout-tile.is-disabled {
   opacity: 0.45;
-  cursor: not-allowed;
+  cursor: default;
 }
 .layout-tile.is-disabled:hover {
   border-color: var(--border);
