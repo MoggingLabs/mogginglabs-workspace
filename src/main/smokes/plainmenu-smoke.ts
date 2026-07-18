@@ -11,8 +11,19 @@ import { setAgentDetectOverrideForSmoke } from '../agents'
 //
 //   plain  → entries offered            (a shell, nothing in it)
 //   agent  → entries gone, facts stay   (detection replay — the real typed-launch seam)
+//   live   → the OPEN menu tells the whole truth and follows it (see below)
 //   gone   → entries return             (the agent's process-table exit verdict)
 //   dead   → entries gone, menu lives   (`exit` kills the shell; Rename must survive)
+//
+// The `live` stage bites two regressions found 2026-07-18 (panes showed different fact
+// sets depending on HOW their agent was started):
+//   1. FULL FACT SET: a DETECTED agent pane — the app never launched it — must show every
+//      expected row (Status, Profile, Agent context, Branch), with an explicit "none"
+//      fallback where the pane genuinely lacks the fact. 'Profile: none' on a hand-typed
+//      agent is the exact row that used to be silently absent.
+//   2. LIVE FACTS: a fact changing under the OPEN menu (context reading, profile note)
+//      must update the menu IN PLACE — the menu neither closes (the old behavior) nor
+//      keeps showing the stale value.
 //
 // Hermetic: the installed CLI is a registry override (setAgentDetectOverrideForSmoke), the
 // agent session is a replayed detection event (__mogging.agents.detected) — no real CLI, no
@@ -43,7 +54,7 @@ export function runPlainMenuSmoke(win: BrowserWindow): void {
   }
 
   /** Open the pane's ⋯ menu, read it, close it — one synchronous renderer pass, so the
-   *  facts-changed auto-close can never race the read. */
+   *  live facts refresh (which rebuilds the open menu in place) can never race the read. */
   interface MenuRead {
     opened: boolean
     launch: number
@@ -95,16 +106,58 @@ export function runPlainMenuSmoke(win: BrowserWindow): void {
       await ES(`window.__mogging.agents.detected({ id: ${paneId}, agentId: 'codex', cwd: '', sinceMs: 5000 })`)
       const agent = await untilMenu(paneId, (m) => m.opened && m.launch === 0 && m.agentNote)
 
+      // ── live: the open menu shows the FULL fact set for a detected agent, and follows
+      //    fact changes in place (neither closing nor going stale) ─────────────────────
+      const live0 = await ES<Record<string, boolean>>(`(async () => {
+        const sleep = ms => new Promise(r => setTimeout(r, ms))
+        const button = document.querySelector('.layout-slot[data-pane-id="${paneId}"] [aria-label="Pane menu"]')
+        if (!(button instanceof HTMLButtonElement)) return { failed: true }
+        button.click()
+        const menu = document.getElementById('pane-menu-${paneId}')
+        const openedBefore = !!menu && !menu.hidden
+        const text0 = (menu && menu.textContent) || ''
+        // 1. FULL FACT SET on a DETECTED pane: every row exists, absence says "none".
+        const fullFacts = {
+          statusRow: text0.includes('Status:'),
+          profileFallback: text0.includes('Profile: none'),
+          contextRow: text0.includes('Agent context:'),
+          branchRow: text0.includes('Branch:')
+        }
+        // 2. LIVE FACTS: drive two fact ports UNDER the open menu — one the header
+        // renders (context), one it does not (the profile note) — and require the menu
+        // to stay open and read the new truth.
+        window.__mogging.context.set(${paneId}, 62)
+        await sleep(200)
+        const openAfterContext = !!menu && !menu.hidden
+        const contextLive = !!menu && (menu.textContent || '').includes('Agent context: 62% used')
+        window.__mogging.agents.profileNote(${paneId}, 'Live Profile')
+        await sleep(200)
+        const openAfterProfile = !!menu && !menu.hidden
+        const profileLive = !!menu && (menu.textContent || '').includes('Profile: Live Profile')
+        button.click() // close
+        window.__mogging.agents.profileNote(${paneId}) // clear the fixture note
+        const closed = !!menu && menu.hidden
+        return { openedBefore, ...fullFacts, openAfterContext, contextLive, openAfterProfile, profileLive, closed }
+      })()`)
+      const live = {
+        ok:
+          live0.openedBefore === true && live0.statusRow === true && live0.profileFallback === true &&
+          live0.contextRow === true && live0.branchRow === true && live0.openAfterContext === true &&
+          live0.contextLive === true && live0.openAfterProfile === true && live0.profileLive === true &&
+          live0.closed === true,
+        ...live0
+      }
+
       // ── gone: the agent's exit verdict clears the session — the entries return ─────
       await ES(`window.__mogging.agents.detected({ id: ${paneId}, agentId: null })`)
       const gone = await untilMenu(paneId, (m) => m.opened && m.launch >= 1 && !m.agentNote)
 
       // ── dead: kill the shell itself; entries go, the menu (Rename) survives ────────
       // The write must land in a LIVE PTY (a still-spawning one drops it silently).
-      let live = false
-      for (let i = 0; i < 60 && !live; i++) {
-        live = Boolean(await ES(`window.__mogging.agents.paneLive(${paneId})`))
-        if (!live) await sleep(500)
+      let paneWasLive = false
+      for (let i = 0; i < 60 && !paneWasLive; i++) {
+        paneWasLive = Boolean(await ES(`window.__mogging.agents.paneLive(${paneId})`))
+        if (!paneWasLive) await sleep(500)
       }
       await ES(`window.bridge.send('terminal:write', { id: ${paneId}, data: 'exit\\r' })`)
       // Process truth first: the pane prints its epitaph when the exit event arrives.
@@ -126,11 +179,12 @@ export function runPlainMenuSmoke(win: BrowserWindow): void {
       const pass =
         plain.opened && plain.launch >= 1 && plain.rename && !plain.agentNote &&
         agent.opened && agent.launch === 0 && agent.agentNote && agent.rename &&
+        live.ok &&
         gone.opened && gone.launch >= 1 && !gone.agentNote &&
-        live && exited &&
+        paneWasLive && exited &&
         dead.opened && dead.launch === 0 && dead.rename &&
         stillInstalled
-      result = { pass, plain, agent, gone, dead, live, exited, stillInstalled }
+      result = { pass, plain, agent, live, gone, dead, paneWasLive, exited, stillInstalled }
     } catch (error) {
       result = { pass: false, error: String(error) }
     } finally {
