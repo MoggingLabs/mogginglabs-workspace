@@ -267,7 +267,7 @@ involves any credential the app would hold, stop: that is the line ADR
 `mogging usage --json` + `usage cost --json` are stable contracts
 (`PlanUsage[]`, `CostScan[]`) for scripts and CI. The six usage gates
 (USAGE, USAGEUI, USAGEGLANCE, WEBUSAGE, USAGECLI, USAGESET) run in the same
-159-gate sweep as everything else, on Windows, macOS, and Linux — entirely on
+163-gate sweep as everything else, on Windows, macOS, and Linux — entirely on
 the FAKE adapter: under any usage smoke env the registry holds no real adapter,
 the status poller holds no fetcher, and the cost scan reads only a seeded
 fixture dir. Zero network is structural, not disciplined.

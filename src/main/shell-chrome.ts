@@ -31,6 +31,37 @@ export function registerShellChrome(getWin: () => BrowserWindow | null): void {
   })
 }
 
+/** A press on native chrome never reaches the DOM: -webkit-app-region: drag hands the
+ *  pointer to the OS before the renderer sees any event, so outside-click dismissers
+ *  (the pane ⋯ menu, the layout/usage popovers) stayed open when the user clicked the
+ *  title bar. Main DOES see it: on Windows every non-client press arrives as a
+ *  WM_NC*BUTTONDOWN window message (drag strip AND the window-control overlay, even
+ *  when the window never moves), and on every platform a drag/resize that actually
+ *  starts announces itself via will-move / will-resize. Forward ONE signal per
+ *  gesture; app-shell replays it into the DOM as a synthetic pointerdown. */
+export function wireChromePress(win: BrowserWindow): void {
+  let last = 0
+  const push = (): void => {
+    if (win.isDestroyed()) return
+    // will-move/will-resize STREAM for the whole drag; one dismissal per gesture is
+    // the whole job, so collapse the burst instead of spamming IPC every frame.
+    const now = Date.now()
+    if (now - last < 150) return
+    last = now
+    win.webContents.send(ShellChannels.chromePress, null)
+  }
+  if (process.platform === 'win32') {
+    // WM_NCLBUTTONDOWN / RBUTTONDOWN / MBUTTONDOWN. hookWindowMessage observes the
+    // message, it does not consume it — dragging and the control buttons still work.
+    for (const msg of [0x00a1, 0x00a4, 0x00a7]) win.hookWindowMessage(msg, push)
+  }
+  // Cross-platform (and the whole macOS path — Cocoa has no NC messages): a drag or
+  // resize that actually starts. A macOS press that never moves stays invisible; the
+  // platform offers no event for it, and blur/resize already cover the other exits.
+  win.on('will-move', push)
+  win.on('will-resize', push)
+}
+
 /** Push fullscreen/maximize state to the renderer — EVENTS only, never polled
  *  (Phase-5/04). State is tracked from the event IDENTITY, not re-queried: on
  *  Windows, `enter-full-screen` fires before `isFullScreen()` flips, so a re-query
