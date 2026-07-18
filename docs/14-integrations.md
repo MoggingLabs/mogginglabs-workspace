@@ -19,6 +19,31 @@ daemon is untouched by this phase (grant-blind); every boundary below is app-sid
 > `MOGGING_INTEGMILESTONE` (`src/main/integmilestone-smoke.ts`). This page is the
 > map; that smoke is the territory.
 
+## Where it lives in the UI — the store/inventory split (2026-07-18)
+
+Two surfaces, one rule: **the Library is what you can get; Settings is what you
+have.** Nothing below changed routes, custody, or write paths — this is a
+re-projection of the same objects onto the user's three questions.
+
+- **The Library** (`src/ui/features/settings/library.ts`) is the ONE browse
+  surface: the connectable-services grid (Route A — connect an account, then
+  scope it to workspaces right on the card), and under an advanced fold the
+  per-CLI preset catalog, the registry search, and the preset import (Route B).
+  It is an **overlay**, deliberately not a view: the wizard opens it
+  mid-configuration without losing a half-built workspace. Doors: the settings
+  overview band, the wizard's Agent-tools step, the servers empty state, and
+  ⌘K → "Browse the Library".
+- **Settings § Integrations** is the INVENTORY, four cards for three questions:
+  **Connected accounts** (who you are on each service, with "Use in
+  workspaces…" scoping per card), **Servers on your CLIs** (every registered
+  server with a route badge — *via your account* vs *CLI-owned auth* vs
+  *house* — and per-row `${VAR}` key slots that vault a paste in place),
+  **Workspace tools** (the plan chips, the per-CLI matrix as the advanced
+  detail, and the write grant — one card, one picker), and **Service keys
+  (advanced)** — the vault's audit view.
+- **Wizard § Agent tools** always renders: pick chips when servers exist, the
+  Library on-ramp when none — workspace creation is the moment of need.
+
 ## The five directions
 
 | # | Direction | Who acts | Where it lives |

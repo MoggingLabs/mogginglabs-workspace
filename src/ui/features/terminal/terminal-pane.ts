@@ -1093,7 +1093,7 @@ export class TerminalPane {
       'Pane menu',
       () => {
         if (!menu.hidden) return closeMenu(true)
-        this.buildMenu(menu, closeMenu, title.textContent?.trim() ?? '', slotEl?.dataset.expandMode, host)
+        this.buildMenu(menu, closeMenu, title.textContent?.trim() ?? '', slotEl?.dataset.expandMode, slotEl?.dataset.eqAxes, host)
         menu.scrollTop = 0
         menu.hidden = false
         menuBtn.setAttribute('aria-expanded', 'true')
@@ -1256,7 +1256,7 @@ export class TerminalPane {
       if (menu.hidden) return
       const hadFocus = menu.contains(document.activeElement)
       const focusedText = hadFocus ? (document.activeElement?.textContent ?? '').trim() : ''
-      this.buildMenu(menu, closeMenu, title.textContent?.trim() ?? '', slotEl?.dataset.expandMode, host)
+      this.buildMenu(menu, closeMenu, title.textContent?.trim() ?? '', slotEl?.dataset.expandMode, slotEl?.dataset.eqAxes, host)
       positionMenu()
       if (hadFocus) {
         const entries = menuEntries()
@@ -1572,6 +1572,7 @@ export class TerminalPane {
     closeMenu: (returnFocus?: boolean) => void,
     displayTitle: string,
     activeMode: string | undefined,
+    eqAxes: string | undefined,
     eventHost: HTMLElement
   ): void {
     menu.replaceChildren()
@@ -1710,6 +1711,15 @@ export class TerminalPane {
         new CustomEvent('mogging:split-pane', { bubbles: true, detail: { paneId: this.id, dir } })
       )
     }
+    // Equalize this pane's row/column: the grid's own event (like expand — sizes are
+    // its state; nothing is created or seeded). Entries appear only for the axes the
+    // slot's data-eq-axes stamp vouches for: a pane that SPANS rows is offered no
+    // "equal heights", because no column line contains it.
+    const equalizeFromMenu = (dir: 'h' | 'v'): void => {
+      eventHost.dispatchEvent(
+        new CustomEvent('mogging:equalize-pane', { bubbles: true, detail: { paneId: this.id, dir } })
+      )
+    }
     // Move this terminal to another workspace. Also the controller's: only it knows the other
     // workspaces, and only it can carry a live pane between two grids without the pane being
     // torn down and rebuilt (which would kill the PTY, and the agent inside it).
@@ -1740,6 +1750,8 @@ export class TerminalPane {
       item('plus', 'Split right — new terminal', () => splitFromMenu('h')),
       item('plus', 'Split down — new terminal', () => splitFromMenu('v'))
     )
+    if (eqAxes?.includes('h')) menu.append(item('columns', 'Equal widths in this row', () => equalizeFromMenu('h')))
+    if (eqAxes?.includes('v')) menu.append(item('rows', 'Equal heights in this column', () => equalizeFromMenu('v')))
     // Offered only when there is somewhere to move TO. A lone workspace would get a menu
     // entry whose only possible outcome is a toast explaining why it cannot work.
     if (getWorkspaces().workspaces.length > 1) {

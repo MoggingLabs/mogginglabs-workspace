@@ -15,6 +15,11 @@ import { setCommands } from '../../core/commands/command-port'
  *   ready       → "Restart to update"         (click = quitAndInstall)
  *   error       → "Update failed — retry"     (click = re-check)
  *
+ * A failure only earns the error row when a human asked for the check or when the feed
+ * itself is broken. A BACKGROUND check on an offline machine stays silent — main classifies
+ * (updater.ts) and self-heals via its retry ladder plus the online poke below — because a
+ * wake-from-sleep DNS blip once latched this row red for hours on a healthy network.
+ *
  * Restarting is safe: terminal sessions live in the daemon, which survives the swap
  * and hands panes back on relaunch — so "Restart to update" costs the user nothing.
  * Declining costs nothing either; autoInstallOnAppQuit lands it on the next quit.
@@ -46,6 +51,15 @@ export const updatesFeature: UiFeature = {
 
     let phase: UpdateState['phase'] = 'idle'
     let version: string | null = null
+    let offline = false
+
+    // The self-heal's fast path. Main's offline-retry ladder re-checks on a clock; the
+    // renderer knows the moment connectivity RETURNS (Chromium's online event), so poke a
+    // re-check then. Marked auto: it is machine-initiated, and a network that flaps back
+    // down mid-check must classify exactly like the clock's checks — quiet, not a red row.
+    window.addEventListener('online', () => {
+      if (offline) void bridge.invoke(UpdateChannels.check, { auto: true })
+    })
 
     btn.addEventListener('click', () => {
       if (phase === 'ready') {
@@ -76,6 +90,7 @@ export const updatesFeature: UiFeature = {
     bridge.on(UpdateChannels.state, (payload) => {
       const s = payload as UpdateState
       phase = s.phase
+      offline = s.offline === true
       if (s.version) version = s.version
 
       const downloading = s.phase === 'checking' || s.phase === 'available' || s.phase === 'downloading'

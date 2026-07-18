@@ -601,7 +601,26 @@ export const workspaceFeature: UiFeature = {
         },
         [icon('git-branch', 14), el('span', { text: 'New isolated terminal (worktree)' })]
       )
-      layoutMenu.append(picker.el, el('div', { class: 'menu-sep' }), add, addIsolated)
+      // BALANCE — equal shares on every row and column. The whole-workspace tidy that
+      // per-seam equalize (gutter double-click, pane ⋯ menu) does line by line.
+      const balance = el(
+        'button',
+        {
+          class: 'menu-item layout-menu-add',
+          type: 'button',
+          title: 'Every row and column returns to equal shares — arrangement and pane count stay',
+          onClick: () => {
+            layoutMenu.hidden = true
+            controller.balanceActive()
+          }
+        },
+        [
+          icon('columns', 14),
+          el('span', { text: 'Balance layout' }),
+          el('span', { class: 'kbd', text: 'Ctrl+Shift+=' })
+        ]
+      )
+      layoutMenu.append(picker.el, el('div', { class: 'menu-sep' }), add, addIsolated, balance)
     }
 
     // ── Keyboard: capture phase + stopPropagation so xterm never sees these ──
@@ -650,6 +669,12 @@ export const workspaceFeature: UiFeature = {
           e.preventDefault()
           e.stopPropagation()
           if (paneVerb()) controller.toggleZoom()
+        } else if (e.shiftKey && (k === '=' || k === '+')) {
+          // Ctrl+Shift+= — '=' for equal. Both spellings, because Shift turns '=' into
+          // '+' on US-like layouts and e.key reports the shifted character.
+          e.preventDefault()
+          e.stopPropagation()
+          if (paneVerb()) controller.balanceActive()
         } else if (!e.shiftKey && k >= '1' && k <= '9') {
           e.preventDefault()
           e.stopPropagation()
@@ -756,6 +781,14 @@ export const workspaceFeature: UiFeature = {
           hint: 'Pane',
           enabled: requiresGrid,
           run: () => controller.splitActive('v')
+        },
+        {
+          id: 'layout:balance',
+          title: 'Balance layout (equal rows and columns)',
+          hint: 'Layout',
+          kbd: 'Ctrl+Shift+=',
+          enabled: requiresGrid,
+          run: () => controller.balanceActive()
         },
         ...TEMPLATE_COUNTS.map((n) => ({
           id: `layout:${n}`,

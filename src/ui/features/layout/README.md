@@ -24,6 +24,13 @@ Replaces the Phase-0 single hardcoded pane with a resizable **split tree of slot
   joins the focused pane's line (auto direction: the pane's longer axis) and the line
   **re-equalizes** — every terminal in it gets an equal share. The new shell opens in the
   split pane's cwd.
+- **Equalize**: double-click a gutter (or press `=` on a focused one) and its whole LINE
+  takes equal shares — per member, so a nested stack counts as one column. The pane ⋯
+  menu offers the same per axis ("Equal widths in this row" / "Equal heights in this
+  column"), shown only when such a line contains the pane: a pane that SPANS the other
+  axis is a sibling in an outer line and gets no entry (slots carry `data-eq-axes`).
+  "Balance layout" (layout popover / palette / Ctrl+Shift+=) equalizes every line.
+  Sizes-only in all cases; the floors below still clamp rendering, equal WEIGHTS persist.
 - **Drag-rearrange**: drag a pane by its header. Drop near another pane's edge to take
   half of it (structure follows), on its center to swap, in a workspace-edge band for a
   full-height column / full-width row there.

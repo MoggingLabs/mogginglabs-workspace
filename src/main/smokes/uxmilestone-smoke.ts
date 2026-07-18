@@ -235,17 +235,18 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       await sleep(300)
 
       stage = 'b-persist'
-      // Disclosure persists across a leave/return. Connections is the default-open
-      // card now (catalog starts folded): fold Connections, open Grants, come back —
-      // both choices stick.
+      // Disclosure persists across a leave/return. Connected accounts is the
+      // default-open card (the rest start folded; the store/inventory split moved
+      // browsing to the Library): fold Connections, open Workspace tools, come
+      // back — both choices stick.
       const connectionsDefault = await cardOpen('connections')
       await toggleCard('connections')
       await sleep(150)
-      await toggleCard('grants')
+      await toggleCard('workspace')
       await sleep(150)
       await leaveSettings()
       await openSettings('integrations')
-      const persistOk = connectionsDefault && !(await cardOpen('connections')) && (await cardOpen('grants'))
+      const persistOk = connectionsDefault && !(await cardOpen('connections')) && (await cardOpen('workspace'))
 
       stage = 'b-usage'
       // Usage opens overview-first; a HOT fixture posts .usage-fill.is-hot on the collapsed
