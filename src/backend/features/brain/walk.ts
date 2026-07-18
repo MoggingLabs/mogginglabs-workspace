@@ -11,7 +11,9 @@ import { readGitLayout } from '../git'
 // path — this is the FULL enumeration 04 will diff against.
 //
 // `.mogging/` and `.memory/` are ignored in BOTH modes: worktree plumbing and the
-// memory graph are not source (09 carves `.memory/` back in for itself).
+// memory graph are not source. The carve-out is real, not a hole: 09's memory
+// indexer (memory.ts scanMemoryDir) enumerates `.memory/` itself — ONLY it sees
+// those files, and the code extractor never does.
 
 /** Folder-mode ignores; git mode gets these from .gitignore or the deny list below. */
 const FOLDER_IGNORES = new Set(['node_modules', 'dist', 'out', 'build'])

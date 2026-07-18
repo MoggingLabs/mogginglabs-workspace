@@ -721,5 +721,112 @@
     "access": "write",
     "upstream": "app",
     "verb": "brain.insertBefore"
+  },
+  {
+    "name": "search_memories",
+    "title": "Search team memories",
+    "description": "Full-text search over the TEAM'S memory graph — the plain-markdown notes in this project's .memory/ (decisions, gotchas, conventions, pointers), synced by git like any other file. Deterministic FTS5 bm25 ranking over name, description, and body: the same query over the same files always answers in the same order. Memories are read PROJECT-WIDE — the freshest copy across this project's checkouts wins, and every hit is labeled with the checkout (root) it came from. Free to call.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string", "description": "Free-text terms (implicit AND). Plain words only — FTS syntax is treated as words." },
+        "limit": { "type": "number", "description": "Max results, 1-100 (default 20)." },
+        "root": { "type": "string", "description": "Absolute project root — ONLY for sessions outside a pane." }
+      },
+      "required": ["query"]
+    },
+    "family": "brain",
+    "access": "read",
+    "upstream": "app",
+    "verb": "brain.memSearch"
+  },
+  {
+    "name": "get_memory",
+    "title": "Get one memory",
+    "description": "Read one memory in full by slug: description, tags, the markdown body, its outgoing [[wikilinks]] (each flagged dangling when its target is not written yet — a dangling link is VALID and marks wanted knowledge), its backlinks (memories that link here, derived from the index, never stored in files), and fileHash — the sha256 an update_memory compare-and-swaps against. Served from the freshest copy across this project's checkouts, root-labeled. An unwritten slug answers a typed unknown-memory refusal that says whether anything links to it.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "slug": { "type": "string", "description": "The memory's kebab-case slug (from search_memories / find_backlinks)." },
+        "root": { "type": "string", "description": "Absolute project root — ONLY for sessions outside a pane." }
+      },
+      "required": ["slug"]
+    },
+    "family": "brain",
+    "access": "read",
+    "upstream": "app",
+    "verb": "brain.memGet"
+  },
+  {
+    "name": "find_backlinks",
+    "title": "Find memory backlinks",
+    "description": "Every memory whose body [[wikilinks]] to the given slug, project-wide and root-labeled. Works for UNWRITTEN slugs too — exists:false with backlinks means the team has marked that topic as wanted knowledge before anyone wrote it; writing it is filling a hole the graph already points at. Backlinks are derived from the index; nothing is stored in the files.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "slug": { "type": "string", "description": "Target slug — written or not." },
+        "root": { "type": "string", "description": "Absolute project root — ONLY for sessions outside a pane." }
+      },
+      "required": ["slug"]
+    },
+    "family": "brain",
+    "access": "read",
+    "upstream": "app",
+    "verb": "brain.memBacklinks"
+  },
+  {
+    "name": "suggest_connections",
+    "title": "Suggest memory connections",
+    "description": "Deterministic, auditable link suggestions for one memory: every other memory scored by fixed-weight overlap — shared outgoing [[wikilinks]] (weight 3), shared tags (weight 2), shared title terms (weight 1) — already-linked pairs excluded, ties broken by slug. NO model, NO opinion: each suggestion carries its full breakdown (the shared links/tags/terms and the weights), so the ranking can be checked by hand. Use it to knit new memories into the graph.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "slug": { "type": "string", "description": "The memory to suggest connections for (must be written)." },
+        "limit": { "type": "number", "description": "Max suggestions, 1-50 (default 10)." },
+        "root": { "type": "string", "description": "Absolute project root — ONLY for sessions outside a pane." }
+      },
+      "required": ["slug"]
+    },
+    "family": "brain",
+    "access": "read",
+    "upstream": "app",
+    "verb": "brain.memSuggest"
+  },
+  {
+    "name": "create_memory",
+    "title": "Create team memory",
+    "description": "Write ONE new memory into your own checkout's .memory/ — a plain markdown file the whole team owns once git merges it. The name is kebab-cased into the slug/filename (hostile characters sanitize away; a collision refuses 'exists'). The body is markdown; [[wikilinks]] to other slugs — written or not yet written — build the graph. Lands atomically and is indexed before the reply, so your next search already finds it. Keep memories small and factual: one decision, one gotcha, one pointer.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Human name — kebab-cased into the slug (max 200 chars)." },
+        "description": { "type": "string", "description": "One-line summary (max 500 chars) — what search shows before the body." },
+        "body": { "type": "string", "description": "Markdown body, max 64 KB. [[wikilinks]] target other slugs." },
+        "tags": { "type": "string", "description": "Optional comma-separated tags (kebab-cased, max 16)." }
+      },
+      "required": ["name", "description", "body"]
+    },
+    "family": "brain",
+    "access": "write",
+    "upstream": "app",
+    "verb": "brain.memCreate"
+  },
+  {
+    "name": "update_memory",
+    "title": "Update team memory",
+    "description": "Replace one memory's BODY in your own checkout's .memory/ (frontmatter is preserved verbatim — name, description, and tags stay). Compare-and-swap: pass expectedFileHash (the fileHash from get_memory) — if the file's bytes changed since, the write refuses 'stale' carrying the fresh hash; re-read and retry. Lands atomically and is re-indexed before the reply. There is no delete tool: removing a memory is a human's git rm.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "slug": { "type": "string", "description": "The memory's slug (from get_memory / search_memories)." },
+        "expectedFileHash": { "type": "string", "description": "sha256 of the file's current bytes — get_memory answers it as fileHash." },
+        "body": { "type": "string", "description": "The full new markdown body, max 64 KB." }
+      },
+      "required": ["slug", "expectedFileHash", "body"]
+    },
+    "family": "brain",
+    "access": "write",
+    "upstream": "app",
+    "verb": "brain.memUpdate"
   }
 ]

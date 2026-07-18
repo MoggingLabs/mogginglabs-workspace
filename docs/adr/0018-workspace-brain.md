@@ -135,6 +135,53 @@ local.
   cross-file blast radius over a syntactic graph is a find-and-pray, and we don't
   ship those.
 
+## The memory lens (step 09, Phase 2.5) — the memory-flow stance
+
+The brain's one HUMAN-legible surface: `.memory/` — a wikilink knowledge graph
+the TEAM owns. Everything above stays true of it; what follows is the custody
+answer this step adds, recorded here because every clause is load-bearing:
+
+- **Files are the truth; the index is disposable.** Memories are plain markdown
+  at `<projectRoot>/.memory/<slug>.md` — frontmatter `name` (the slug),
+  `description`, optional `tags`; the body's `[[wikilinks]]` target other
+  slugs. They live IN the repo (the one deliberate exception to stance (b)'s
+  "nothing of ours lands in the user's tree" — these are the USER'S bytes, we
+  just read them), so **git is the sync**: branch, merge, review, and blame all
+  work on knowledge exactly as they work on code. No db, index, or dotfile
+  machinery inside `.memory/`, ever — the brain db's `memories`/`memory_links`/
+  FTS5 tables are a derived shadow, rebuilt whole from one scan.
+- **A dangling link is VALID.** A `[[link]]` to an unwritten slug marks wanted
+  knowledge and is queryable (`find_backlinks` answers for unwritten targets);
+  backlinks are DERIVED from the index and never stored in the files.
+- **Memory-flow custody.** Memories live per checkout but READ project-wide:
+  the freshest indexed copy across the project's roots wins and every answer
+  is root-labeled — never anonymous, never narrowed (a scope argument would
+  hide a teammate's fresher copy). Writes land in the CALLER'S own checkout's
+  `.memory/` only — the slug law (kebab-case filenames, one flat dir) makes
+  any other path unspellable — and git merges them home.
+- **Deterministic or absent.** Search is FTS5 bm25 (fixed tiebreaks);
+  `suggest_connections` is fixed-weight overlap arithmetic (shared links 3,
+  shared tags 2, shared title terms 1) with the full breakdown served back —
+  an unexplainable ranking is a bug, per stance (a).
+- **Closed sets, one wall.** Four reads (`search_memories`, `get_memory`,
+  `find_backlinks`, `suggest_connections`) join the reads-free family; two
+  writes (`create_memory`, `update_memory`) sit behind the SAME per-workspace
+  grant as every write, with 07's guards (create refuses `exists`; update is
+  file-CAS with the fresh hash riding the `stale` refusal; landings are
+  atomic-or-refused and indexed before the reply). The sets are closed by the
+  catalog validator; growing either is a revision of this ADR. There is no
+  delete tool — removing a memory is a human's `git rm`.
+- **Privacy (h), unchanged.** Memory text reaches the calling model only; the
+  trail carries verb + outcome, counts only.
+
+Proven by **MEMGRAPH** (`MOGGING_MEMGRAPH`, verdict `out/memgraph-result.json`):
+hostile-name create lands sanitized and inert; wikilinks/backlinks/dangling
+exact; FTS order stable across runs; suggestions arrive with their breakdown;
+stale CAS refuses with the disk untouched; a real pane edit reindexes on the
+tick; a worktree merge carries a memory home through REAL git; no grant means
+writes refuse while reads answer; a deleted brain db rebuilds search from the
+files alone; `.memory/` holds only `.md` files afterwards.
+
 ## Research lineage
 
 The brain synthesizes four clean-room shapes surveyed in

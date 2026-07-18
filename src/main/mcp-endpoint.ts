@@ -14,7 +14,7 @@ import { runtimeDir as clientRuntimeDir } from './daemon-client'
 import { recordTrail } from './trail'
 import { MCP_BROWSER_TOOL_NAMES, type BrowserAgentVerb, type BrowserAgentVerbName } from '@contracts'
 import { applyCardPatch, boardForPane, commentCard, createCard } from './board'
-import { handleBrainLibDocsMcp, handleBrainMcp, handleBrainWriteMcp, isBrainWriteVerb } from './brain'
+import { handleBrainLibDocsMcp, handleBrainMcp, handleBrainWriteMcp, handleMemoryWriteMcp, isBrainWriteVerb, isMemoryWriteVerb } from './brain'
 
 /**
  * The agent-control transport (Phase-6/05b). Main opens a token-authed LOCAL
@@ -440,6 +440,16 @@ export function startMcpEndpoint(): void {
           // synchronously re-indexed. One trail event per call, counts only.
           if (isBrainWriteVerb(msg.name)) {
             void handleBrainWriteMcp(msg.name, msg.args ?? {}, boundPane)
+              .then((r) => sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n'))
+              .catch((e) => sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: rpcFailure(e) }) + '\n'))
+            continue
+          }
+          // ADR 0018 step 09: the memory lens's WRITE family — `.memory/` files
+          // behind the SAME grant (re-derived app-side, fail-closed), landed in
+          // the caller's own checkout only, create-collision and update-CAS
+          // guarded, indexed before the reply. One trail event, counts only.
+          if (isMemoryWriteVerb(msg.name)) {
+            void handleMemoryWriteMcp(msg.name, msg.args ?? {}, boundPane)
               .then((r) => sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n'))
               .catch((e) => sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: rpcFailure(e) }) + '\n'))
             continue

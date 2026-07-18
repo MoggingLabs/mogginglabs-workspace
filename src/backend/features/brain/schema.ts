@@ -62,7 +62,13 @@ export interface BrainEdgeRow {
  *  truth; lib_docs is content-addressed like parse_cache — keyed (ecosystem,
  *  name, version), root-free, so one doc row serves every worktree pinning that
  *  version. Both are DERIVED (lockfiles + installed bytes) and excluded from the
- *  canonical dump like every other derived-when fact. */
+ *  canonical dump like every other derived-when fact.
+ *  v5 (ADR 0018/09) adds the memory lens: memories/memory_links are per-partition
+ *  rows scanned from `.memory/*.md` (the files are the truth; these tables are
+ *  disposable), and memories_fts is the FTS5 shadow the search verb ranks by
+ *  (bm25 — deterministic arithmetic, never an opinion). Backlinks are DERIVED
+ *  from memory_links, never stored in the files. All excluded from the
+ *  canonical dump, exactly like the library lens. */
 export const BRAIN_GRAPH_DDL = `
 CREATE TABLE IF NOT EXISTS files (
   root TEXT NOT NULL, path TEXT NOT NULL, hash TEXT NOT NULL, lang TEXT NOT NULL,
@@ -99,6 +105,20 @@ CREATE TABLE IF NOT EXISTS lib_docs (
   ecosystem TEXT NOT NULL, name TEXT NOT NULL, version TEXT NOT NULL,
   source TEXT NOT NULL, readme TEXT NOT NULL, signatures TEXT NOT NULL,
   PRIMARY KEY (ecosystem, name, version)
+);
+CREATE TABLE IF NOT EXISTS memories (
+  root TEXT NOT NULL, slug TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL,
+  tags TEXT NOT NULL, body TEXT NOT NULL, hash TEXT NOT NULL,
+  mtime INTEGER NOT NULL, bytes INTEGER NOT NULL,
+  PRIMARY KEY (root, slug)
+);
+CREATE TABLE IF NOT EXISTS memory_links (
+  root TEXT NOT NULL, src TEXT NOT NULL, dst TEXT NOT NULL,
+  PRIMARY KEY (root, src, dst)
+);
+CREATE INDEX IF NOT EXISTS memory_links_by_dst ON memory_links(dst);
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+  name, description, body, root UNINDEXED, slug UNINDEXED
 );
 `
 

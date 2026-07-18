@@ -85,12 +85,16 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
     // toggle covers the whole write surface, so this gate counts them too.
     'replace_symbol_body',
     'insert_after_symbol',
-    'insert_before_symbol'
+    'insert_before_symbol',
+    // ADR 0018 step 09: so do the memory writes — same toggle, same boundary.
+    'create_memory',
+    'update_memory'
   ]
   const countWrites = (names: string[]): number => names.filter((n) => WRITES.includes(n)).length
   /** Catalog geometry: 17 browser + 6 control reads + 1 self + 10 brain reads
-   *  (non-writes) + 14 writes (11 fleet/board + 3 brain). */
-  const NON_WRITE_COUNT = 34
+   *  + 4 memory reads (non-writes) + 16 writes (11 fleet/board + 3 brain + 2
+   *  memory). */
+  const NON_WRITE_COUNT = 38
   const WRITE_COUNT = WRITES.length
 
   const waitFor = async (probe: () => Promise<boolean>, tries = 12, gapMs = 400): Promise<boolean> => {

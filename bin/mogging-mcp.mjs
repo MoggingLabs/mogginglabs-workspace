@@ -292,6 +292,8 @@ function brainRefusalText(r) {
       return detail || 'no brain index for this checkout — nothing to map yet'
     case 'unknown-library':
       return detail || `unknown library (not in this checkout's lockfiles — see list_libraries)`
+    case 'unknown-memory':
+      return detail || `unknown memory (not in this project's .memory/ — see search_memories)`
     case 'consent':
       return `refused — ${detail || 'this workspace has not allowed registry doc fetches (default off); the human enables it in Settings'}`
     case 'fetch-failed':
@@ -334,6 +336,35 @@ function brainWriteRefusalText(r) {
         : `the brain is busy${detail ? ` (${detail})` : ''} — retry shortly`
     default:
       return `symbol write failed: ${r.reason || 'the app could not answer'}`
+  }
+}
+
+/** Memory-write refusal wording (ADR 0018 step 09) — every sentence tells the
+ *  MODEL its next move; `stale` rides with the fresh hash like every CAS. */
+function memoryWriteRefusalText(r) {
+  const detail = typeof r.detail === 'string' && r.detail ? r.detail : ''
+  switch (r.reason) {
+    case 'stale':
+      return (
+        'refused — the memory changed since your expectedFileHash.' +
+        (r.freshHash ? ` Fresh hash: ${r.freshHash}.` : '') +
+        ' Re-read it (get_memory) and retry against current bytes.' +
+        (detail ? ` (${detail})` : '')
+      )
+    case 'exists':
+      return `refused — ${detail || 'that memory already exists; update_memory edits it (get_memory answers its fileHash)'}`
+    case 'unknown-memory':
+      return detail || 'unknown memory (not in this checkout\'s .memory/) — create_memory writes new ones'
+    case 'forbidden':
+      return 'refused — this workspace has not granted write tools (the human grants them in the app)'
+    case 'too-large':
+      return `refused — ${detail || 'the body exceeds its byte cap'}`
+    case 'invalid':
+      return `refused — ${detail || 'the write was invalid'}`
+    case 'busy':
+      return `the brain is busy${detail ? ` (${detail})` : ''} — retry shortly`
+    default:
+      return `memory write failed: ${r.reason || 'the app could not answer'}`
   }
 }
 
@@ -580,6 +611,14 @@ async function dispatchWrite(def, args, by) {
       return { text: `released ${m.count}`, receipt: {} }
     }
     default: {
+      // ADR 0018 step 09: the memory writes ride the same app endpoint and the
+      // same grant. The success payload is the slug and the fileHash the next
+      // update will CAS against — the file is indexed before this reply.
+      if (def.verb === 'brain.memCreate' || def.verb === 'brain.memUpdate') {
+        const r = await callApp(def.verb, args)
+        if (!r.ok) return { error: memoryWriteRefusalText(r) }
+        return { text: JSON.stringify({ slug: r.slug, fileHash: r.fileHash }) }
+      }
       // ADR 0018 step 07: the brain's symbol writes ride the app endpoint like
       // the board's — main re-derives the grant (fail-closed), the engine holds
       // own-checkout scope + file CAS + sanity, the landing is atomic and

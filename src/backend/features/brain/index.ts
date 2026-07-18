@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { Worker } from 'node:worker_threads'
 import writeFileAtomic from 'write-file-atomic'
@@ -11,6 +11,8 @@ import {
   type BrainFreshnessStats,
   type BrainTickSource
 } from './freshness'
+import { MEMORY_DIR, replaceMemoryBody, scanMemoryDir } from './memory'
+import type { MemoryLandResult, MemoryWriteOp } from './memory-writes'
 import { resolveBrainProject, type BrainProject } from './project'
 import { BrainStore, brainDbPath } from './store'
 import type { BrainLandResult, BrainSpliceResult } from './writes'
@@ -39,6 +41,28 @@ export {
   type BrainSpliceResult,
   type BrainWriteHost
 } from './writes'
+export {
+  MEMORY_WRITE_VERBS,
+  isMemoryWriteVerb,
+  serveMemoryWrite,
+  type BrainMemoryWriteHost,
+  type MemoryLandResult,
+  type MemoryWriteOp
+} from './memory-writes'
+export {
+  MEMORY_DIR,
+  MEMORY_MAX_FILES,
+  MEMORY_MAX_FILE_BYTES,
+  MEMORY_SUGGEST_WEIGHTS,
+  isMemorySlug,
+  memorySlug,
+  memoryLinksOf,
+  parseMemoryText,
+  scanMemoryDir,
+  serializeMemory,
+  type MemoryFileRow,
+  type MemoryScan
+} from './memory'
 export {
   BRAIN_SERVE_DEFAULT_LIMIT,
   BRAIN_SERVE_MAX_LIMIT,
@@ -99,6 +123,10 @@ export class BrainService {
   private readonly libTimers = new Map<string, NodeJS.Timeout>()
   /** Landed library resolves — the BRAINDOCS smoke's progress witness. */
   private libResolveCount = 0
+  /** Per-root debounce for routed `.memory/` rescans (09). */
+  private readonly memTimers = new Map<string, NodeJS.Timeout>()
+  /** Landed memory rescans — the MEMGRAPH smoke's progress witness. */
+  private memRescanCount = 0
   /** Folded partition root -> projectKey / folded projectKey -> attached roots (04). */
   private readonly rootProject = new Map<string, string>()
   private readonly rootsByProject = new Map<string, string[]>()
@@ -122,6 +150,9 @@ export class BrainService {
     // 08: a lockfile landing in a drain re-resolves the LIBRARY truth too — the
     // freshness layer routes the paths, this schedules the (debounced) resolve.
     this.freshness.onLockfilePaths((root) => this.scheduleLibraryResolve(root))
+    // 09: `.memory/` traffic routes here and NEVER into the dirty set — the
+    // memory indexer is its own (cheap, main-thread) rescan of the flat dir.
+    this.freshness.onMemoryPaths((root) => this.scheduleMemoryRescan(root))
   }
 
   /** ONE `brain:changed` per landed drain arrives here (plus nothing else — rebuild
@@ -172,6 +203,9 @@ export class BrainService {
         // libraries lens, never the graph (the status answer stays the build's).
         const lib = await this.runLibraries(partitionRoot, r.brain.project)
         if (!('reason' in lib)) this.libResolveCount += 1
+        // 09: so does the memory lens — a rebuild restores search from the files
+        // alone, which is what makes the brain db honestly disposable.
+        this.rescanMemories(partitionRoot)
         return this.answer(r.brain)
       })
     } finally {
@@ -269,6 +303,123 @@ export class BrainService {
     })
   }
 
+  /**
+   * The ONE memory-write door (ADR 0018 step 09): land a create/update on the
+   * caller's own `.memory/` — CAS-guarded (update), atomic, synchronously
+   * re-scanned. Runs inside the project's exclusive queue, so it never
+   * interleaves with a drain, a rebuild, or another memory write. The slug law
+   * (kebab-case only, enforced at the serve layer) is what makes any path
+   * outside `<checkout>/.memory/` unspellable here.
+   */
+  async landMemoryWrite(root: string, op: MemoryWriteOp): Promise<MemoryLandResult> {
+    const pre = this.ensure(root)
+    if ('reason' in pre) return { ok: false, reason: pre.reason, ...(pre.detail ? { detail: pre.detail } : {}) }
+    const key = foldProjectKey(pre.brain.project.projectKey)
+    return this.runExclusive(key, async (): Promise<MemoryLandResult> => {
+      const r = this.ensure(root) // the LRU may have moved under the queue
+      if ('reason' in r) return { ok: false, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) }
+      const partitionRoot = this.partitionRootFor(r.brain.project, root)
+      const dir = path.join(partitionRoot, MEMORY_DIR)
+      const abs = path.join(dir, `${op.slug}.md`)
+      let next: string
+      if (op.kind === 'create') {
+        if (existsSync(abs)) {
+          return {
+            ok: false,
+            reason: 'exists',
+            detail: `memory "${op.slug}" already exists — update_memory edits it (get_memory answers its fileHash)`
+          }
+        }
+        next = op.text
+      } else {
+        let current: Buffer
+        try {
+          current = readFileSync(abs)
+        } catch {
+          return {
+            ok: false,
+            reason: 'unknown-memory',
+            detail: `no memory "${op.slug}" in this checkout's .memory/ — create_memory writes new ones`
+          }
+        }
+        const diskHash = createHash('sha256').update(current).digest('hex')
+        if (diskHash !== op.expectedFileHash) {
+          return {
+            ok: false,
+            reason: 'stale',
+            freshHash: diskHash,
+            detail: 'the memory changed since your expectedFileHash — re-read it (get_memory) and retry against current bytes'
+          }
+        }
+        const spliced = replaceMemoryBody(current.toString('utf8'), op.body)
+        if (spliced === null) {
+          return { ok: false, reason: 'invalid', detail: 'the file on disk has no readable frontmatter — fix it by hand; update_memory only swaps bodies' }
+        }
+        next = spliced
+      }
+      try {
+        mkdirSync(dir, { recursive: true })
+        // Atomic or refused (write-file-atomic): the old bytes whole or the new
+        // bytes whole, never a mix — the symbol-write law, for memories.
+        writeFileAtomic.sync(abs, next)
+      } catch (e) {
+        return { ok: false, reason: 'busy', detail: 'the write could not land: ' + (e instanceof Error ? e.message : String(e)) }
+      }
+      // Synchronous re-scan: the caller's next search/get already serves this.
+      this.rescanMemories(partitionRoot)
+      return { ok: true, slug: op.slug, fileHash: createHash('sha256').update(next, 'utf8').digest('hex') }
+    })
+  }
+
+  /** Rescan ONE partition's `.memory/` into the store — the whole memory
+   *  indexer (flat dir, small files, main-thread by design; the worker never
+   *  learns about memories). Generation-neutral, like the library lens. */
+  private rescanMemories(partitionRoot: string): void {
+    const r = this.ensure(partitionRoot)
+    if ('reason' in r) return
+    try {
+      const scan = scanMemoryDir(partitionRoot)
+      // An uncommitted memory file is re-announced by porcelain EVERY tick;
+      // identical bytes must not re-land (the standing-dirty-repo rule). The
+      // baseline is what the STORE holds — never a process-memory cache that
+      // could survive a db delete and lie about it.
+      const fingerprint = scan.rows.map((row) => `${row.slug}:${row.hash}`).join('\n')
+      const held = r.brain.store
+        .memoriesForRoots([partitionRoot])
+        .map((row) => `${row.slug}:${row.hash}`)
+        .join('\n')
+      if (fingerprint === held) return
+      r.brain.store.replaceMemories(partitionRoot, scan.rows, scan.links)
+      this.memRescanCount += 1
+    } catch {
+      /* a locked store loses one rescan; the next routed change retries */
+    }
+  }
+
+  /** Debounced routed-path rescan (09): one timer per root, the rescan queued
+   *  behind whatever the project is doing — never concurrent with a landing. */
+  private scheduleMemoryRescan(root: string): void {
+    const key = foldProjectKey(root)
+    const prior = this.memTimers.get(key)
+    if (prior) clearTimeout(prior)
+    const timer = setTimeout(() => {
+      this.memTimers.delete(key)
+      const pre = this.ensure(root)
+      if ('reason' in pre) return
+      const pKey = foldProjectKey(pre.brain.project.projectKey)
+      void this.runExclusive(pKey, async () => {
+        this.rescanMemories(this.partitionRootFor(pre.brain.project, root))
+      })
+    }, 300)
+    timer.unref?.()
+    this.memTimers.set(key, timer)
+  }
+
+  /** Landed memory rescans so far — the MEMGRAPH smoke's progress witness. */
+  memoryRescans(): number {
+    return this.memRescanCount
+  }
+
   /** Debounced lockfile-triggered library re-resolve (08): one timer per root,
    *  the resolve itself queued behind whatever the project is doing. */
   private scheduleLibraryResolve(root: string): void {
@@ -332,6 +483,8 @@ export class BrainService {
     this.freshness?.dispose()
     for (const timer of this.libTimers.values()) clearTimeout(timer)
     this.libTimers.clear()
+    for (const timer of this.memTimers.values()) clearTimeout(timer)
+    this.memTimers.clear()
     this.rootProject.clear()
     this.rootsByProject.clear()
     for (const { store } of this.open.values()) {
@@ -414,6 +567,9 @@ export class BrainService {
     const rows = store.filesForRoot(root)
     if (!rows.length) return
     this.freshness.attach(root, rows, reconcile)
+    // 09: the cold-start heal covers memories too — `.memory/` may have moved
+    // while the app was closed, and no porcelain tick will re-announce it.
+    if (reconcile) this.scheduleMemoryRescan(root)
     const pKey = foldProjectKey(project.projectKey)
     this.rootProject.set(foldProjectKey(root), project.projectKey)
     const list = this.rootsByProject.get(pKey) ?? []

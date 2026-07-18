@@ -171,7 +171,7 @@ export class BrainFreshness {
   ) {}
 
   /** `.memory/` traffic routes HERE and never into the dirty set (the walk excludes it —
-   *  a row for it would be drift). 08 attaches; this step just routes. */
+   *  a row for it would be drift). The service (09) attaches its memory rescan. */
   onMemoryPaths(cb: (root: string, paths: string[]) => void): () => void {
     this.memorySubs.add(cb)
     return () => this.memorySubs.delete(cb)
@@ -394,13 +394,21 @@ export class BrainFreshness {
     if (delta === null) {
       state.needsReconcile = true // git could not answer — the walk can
     } else {
+      const memoryPaths: string[] = []
       for (const raw of delta) {
         const rel = raw.replace(/\\/g, '/')
-        if (rel.startsWith('.mogging/') || rel.startsWith('.memory/')) continue
+        if (rel.startsWith('.mogging/')) continue
+        if (rel.startsWith('.memory/')) {
+          // A merge/checkout rewrites memories with a CLEAN tree — porcelain
+          // will never re-announce them, so the head delta is their one signal.
+          memoryPaths.push(rel)
+          continue
+        }
         // The same stat-compare: a commit-only move touched no worktree bytes, so its
         // paths fall out clean; a checkout rewrote exactly the delta, so they dirty.
         this.consider(state, rel)
       }
+      if (memoryPaths.length) for (const cb of this.memorySubs) cb(state.root, memoryPaths)
     }
     this.armIfDirty(state)
   }

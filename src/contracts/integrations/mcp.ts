@@ -134,12 +134,31 @@ export const MCP_BRAIN_WRITE_TOOL_NAMES = [
   'insert_before_symbol'
 ] as const
 
+/** The memory lens's read family (ADR 0018 step 09, Phase 2.5) — the team's
+ *  `.memory/` wikilink graph, read project-wide (freshest copy across roots
+ *  wins, root-labeled), searched and suggested DETERMINISTICALLY (FTS5 bm25;
+ *  fixed-weight overlap scoring with the breakdown served back). Reads are
+ *  never gated, like every brain read. */
+export const MCP_MEMORY_READ_TOOL_NAMES = [
+  'search_memories',
+  'get_memory',
+  'find_backlinks',
+  'suggest_connections'
+] as const
+
+/** The memory lens's write family (ADR 0018 step 09) — create/update files in
+ *  the caller's OWN checkout's `.memory/`, behind the SAME per-workspace grant
+ *  as every other write. THE SET IS CLOSED: growing it needs an ADR revision —
+ *  delete stays a human verb (`git rm` is the delete). */
+export const MCP_MEMORY_WRITE_TOOL_NAMES = ['create_memory', 'update_memory'] as const
+
 /** EVERY grant-gated write, one list: the fleet/board writes plus the brain's
- *  symbol writes. The grant store resolves 'all'/list against exactly this —
- *  one toggle, one boundary, no write outside it. */
+ *  symbol writes plus the memory writes. The grant store resolves 'all'/list
+ *  against exactly this — one toggle, one boundary, no write outside it. */
 export const MCP_WRITE_TOOL_NAMES = [
   ...MCP_CONTROL_WRITE_TOOL_NAMES,
-  ...MCP_BRAIN_WRITE_TOOL_NAMES
+  ...MCP_BRAIN_WRITE_TOOL_NAMES,
+  ...MCP_MEMORY_WRITE_TOOL_NAMES
 ] as const
 
 export const MCP_TOOL_NAMES = [
@@ -148,7 +167,9 @@ export const MCP_TOOL_NAMES = [
   ...MCP_CONTROL_SELF_TOOL_NAMES,
   ...MCP_CONTROL_WRITE_TOOL_NAMES,
   ...MCP_BRAIN_READ_TOOL_NAMES,
-  ...MCP_BRAIN_WRITE_TOOL_NAMES
+  ...MCP_BRAIN_WRITE_TOOL_NAMES,
+  ...MCP_MEMORY_READ_TOOL_NAMES,
+  ...MCP_MEMORY_WRITE_TOOL_NAMES
 ] as const
 
 export type McpBrowserToolName = (typeof MCP_BROWSER_TOOL_NAMES)[number]
@@ -157,6 +178,8 @@ export type McpControlSelfToolName = (typeof MCP_CONTROL_SELF_TOOL_NAMES)[number
 export type McpWriteToolName = (typeof MCP_WRITE_TOOL_NAMES)[number]
 export type McpBrainReadToolName = (typeof MCP_BRAIN_READ_TOOL_NAMES)[number]
 export type McpBrainWriteToolName = (typeof MCP_BRAIN_WRITE_TOOL_NAMES)[number]
+export type McpMemoryReadToolName = (typeof MCP_MEMORY_READ_TOOL_NAMES)[number]
+export type McpMemoryWriteToolName = (typeof MCP_MEMORY_WRITE_TOOL_NAMES)[number]
 export type McpToolName = (typeof MCP_TOOL_NAMES)[number]
 
 /** One catalog row. `verb` is the EXISTING upstream verb the server forwards
@@ -246,8 +269,12 @@ function validateMcpCatalog(raw: unknown): readonly McpToolDef[] {
     if (upstream !== 'app' && upstream !== 'daemon') fail(name + '.upstream must be app|daemon')
     const isBrowser = (MCP_BROWSER_TOOL_NAMES as readonly string[]).includes(name)
     if (isBrowser !== (family === 'browser')) fail(name + '.family disagrees with the name lists')
-    const isBrainRead = (MCP_BRAIN_READ_TOOL_NAMES as readonly string[]).includes(name)
-    const isBrainWrite = (MCP_BRAIN_WRITE_TOOL_NAMES as readonly string[]).includes(name)
+    const isBrainRead =
+      (MCP_BRAIN_READ_TOOL_NAMES as readonly string[]).includes(name) ||
+      (MCP_MEMORY_READ_TOOL_NAMES as readonly string[]).includes(name)
+    const isBrainWrite =
+      (MCP_BRAIN_WRITE_TOOL_NAMES as readonly string[]).includes(name) ||
+      (MCP_MEMORY_WRITE_TOOL_NAMES as readonly string[]).includes(name)
     if ((isBrainRead || isBrainWrite) !== (family === 'brain')) fail(name + '.family disagrees with the brain name lists')
     if (family === 'browser' && upstream !== 'app') fail(name + ': browser tools ride the app endpoint')
     if (family === 'browser' && (access === 'write' || access === 'self')) {
@@ -256,11 +283,12 @@ function validateMcpCatalog(raw: unknown): readonly McpToolDef[] {
     if (family === 'control' && access === 'act') {
       fail(name + ': act is a browser tier; control tools are read, self, or write')
     }
-    // ADR 0018 steps 05/07: the brain family is the CLOSED read set plus the
-    // CLOSED write set, on the app endpoint, every verb wearing the brain.*
-    // prefix. A brain verb outside the two lists — or a read that claims write
-    // access, or vice versa — is a review rejection; growing the write set
-    // needs an ADR revision. This is where the rejection becomes structural.
+    // ADR 0018 steps 05/07/09: the brain family is the CLOSED read sets (graph
+    // + memory) plus the CLOSED write sets (symbol + memory), on the app
+    // endpoint, every verb wearing the brain.* prefix. A brain verb outside
+    // the lists — or a read that claims write access, or vice versa — is a
+    // review rejection; growing a write set needs an ADR revision. This is
+    // where the rejection becomes structural.
     if (family === 'brain' && isBrainRead && access !== 'read') fail(name + ': brain reads are reads, forever')
     if (family === 'brain' && isBrainWrite && access !== 'write') {
       fail(name + ': brain writes sit behind the grant — access must be write')
@@ -301,8 +329,9 @@ function validateMcpCatalog(raw: unknown): readonly McpToolDef[] {
 /** THE catalog: the 14 shipped browser tools (names/schemas verbatim) + 6
  *  control reads + 1 self-scoped declaration + 11 control writes + 10 brain
  *  reads (ADR 0018 steps 05–08: the graph seven, the repomap, the library
- *  lens) + 3 brain writes (step 07: the closed symbol-write set). Validated
- *  at load. */
+ *  lens) + 3 brain writes (step 07: the closed symbol-write set) + 4 memory
+ *  reads and 2 memory writes (step 09: the `.memory/` wikilink lens).
+ *  Validated at load. */
 export const MCP_TOOLS: readonly McpToolDef[] = validateMcpCatalog(catalogJson)
 
 export const findMcpTool = (name: string): McpToolDef | undefined => MCP_TOOLS.find((t) => t.name === name)
@@ -316,7 +345,7 @@ export const MCP_HOUSE_TOOL_GROUPS: readonly { family: McpToolFamily; label: str
   [
     ['browser', 'browser'],
     ['control', 'fleet & board reads'],
-    ['brain', 'code-graph (brain) reads']
+    ['brain', 'brain reads (code graph & memory)']
   ] as const
 ).map(([family, label]) => ({
   family,

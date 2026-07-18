@@ -3,9 +3,11 @@ import { app, ipcMain, type BrowserWindow } from 'electron'
 import {
   BrainService,
   isBrainWriteVerb,
+  isMemoryWriteVerb,
   partitionOf,
   serveBrainRead,
   serveBrainWrite,
+  serveMemoryWrite,
   type BrainFreshnessStats,
   type BrainServeReply,
   type BrainTickSource
@@ -111,7 +113,13 @@ const BRAIN_WRITE_TOOL: Record<string, string> = {
   'brain.insertBefore': 'insert_before_symbol'
 }
 
-export { isBrainWriteVerb }
+/** brain.<memory verb> -> the write-tool name whose grant covers it (09). */
+const MEMORY_WRITE_TOOL: Record<string, string> = {
+  'brain.memCreate': 'create_memory',
+  'brain.memUpdate': 'update_memory'
+}
+
+export { isBrainWriteVerb, isMemoryWriteVerb }
 
 /**
  * The `brain.*` WRITE family over the agent wire (ADR 0018 step 07). Custody
@@ -140,6 +148,39 @@ export async function handleBrainWriteMcp(
     pane: boundPane,
     verb: tool,
     target: '1 symbol',
+    outcome: reply.ok ? 'ok' : 'refused',
+    ...(reply.ok ? {} : { reason: String(reply.reason ?? 'refused') })
+  })
+  return reply
+}
+
+/**
+ * The MEMORY write family over the agent wire (ADR 0018 step 09) — the symbol
+ * writes' custody, verbatim: the server already filters by grant; this endpoint
+ * re-derives it and fails closed. The engine's own locks follow (own-checkout
+ * `.memory/`, slug law, create-collision, update CAS). One trail event per
+ * call — verb and outcome only, never a slug, a name, or a byte of memory
+ * text (ADR 0005).
+ */
+export async function handleMemoryWriteMcp(
+  name: string,
+  args: Record<string, unknown>,
+  boundPane: string | undefined
+): Promise<BrainServeReply> {
+  const tool = MEMORY_WRITE_TOOL[name]
+  if (!tool) return { ok: false, reason: 'invalid', detail: `unroutable memory write verb: ${name}` }
+  const resolved = boundPane ? resolveGrantedWriteTools(boundPane) : { workspaceId: undefined, writeTools: [] as string[] }
+  if (!boundPane || !resolved.writeTools.includes(tool)) {
+    return { ok: false, reason: 'forbidden' }
+  }
+  const reply = await serveMemoryWrite(ensureService(), name, args, brainRootForPane(boundPane))
+  recordTrail({
+    ts: Date.now(),
+    source: 'mcp',
+    workspaceId: resolved.workspaceId ?? '',
+    pane: boundPane,
+    verb: tool,
+    target: '1 memory',
     outcome: reply.ok ? 'ok' : 'refused',
     ...(reply.ok ? {} : { reason: String(reply.reason ?? 'refused') })
   })
@@ -308,13 +349,15 @@ export function brainDebug(): {
   dump: (root: string) => string | null
   freshness: (root: string) => BrainFreshnessStats | null
   drainEmits: () => number
+  memoryRescans: () => number
 } {
   return {
     openCount: () => service?.openCount() ?? 0,
     dispose: () => disposeBrain(),
     dump: (root: string) => ensureService().dump(root),
     freshness: (root: string) => ensureService().freshnessStats(root),
-    drainEmits: () => service?.drainEmits() ?? 0
+    drainEmits: () => service?.drainEmits() ?? 0,
+    memoryRescans: () => service?.memoryRescans() ?? 0
   }
 }
 

@@ -1,6 +1,7 @@
 import * as path from 'node:path'
 import { BRAIN_LIB_ECOSYSTEMS, type BrainRefusal, type BrainStatus } from '@contracts'
 import { foldProjectKey } from '../workspace/project-identity'
+import { MEMORY_SUGGEST_WEIGHTS, isMemorySlug, memoryNameTerms, memorySearchExpr, memorySlug } from './memory'
 import { REPOMAP_DEFAULT_BUDGET, REPOMAP_MAX_BUDGET, REPOMAP_MIN_BUDGET, renderRepoMap } from './render'
 import { BRAIN_EDGE_KINDS, BRAIN_NODE_KINDS, type BrainNodeRow } from './schema'
 import type { BrainStore } from './store'
@@ -581,6 +582,214 @@ function serveLibDocs(s: ResolvedScope, args: Record<string, unknown>): BrainSer
   return reply
 }
 
+// ── The memory lens (09): the team's wikilink graph, read project-wide ───────
+// Memories live per checkout but READ project-wide by LAW (ADR 0018.i): the
+// freshest indexed copy across the project's roots wins, and every answer is
+// root-labeled — a cross-checkout memory is never anonymous. There is no scope
+// argument here on purpose: narrowing would hide a teammate's fresher copy.
+
+export const MEMORY_SEARCH_DEFAULT_LIMIT = 20
+export const MEMORY_SEARCH_MAX_LIMIT = 100
+export const MEMORY_SUGGEST_DEFAULT_LIMIT = 10
+export const MEMORY_SUGGEST_MAX_LIMIT = 50
+/** Raw FTS rows fetched before the freshest-copy dedupe — a hard read cap. */
+const MEMORY_SEARCH_FETCH_CAP = 400
+
+const parseTags = (json: string): string[] => {
+  try {
+    const v = JSON.parse(json) as unknown
+    return Array.isArray(v) ? v.filter((t): t is string => typeof t === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+/** The freshest copy wins; an mtime TIE falls to project-roots order (projectKey
+ *  first) — fixed, so the same rows always elect the same copy. */
+function freshestMemory<T extends { root: string; mtime: number }>(copies: T[], roots: string[]): T {
+  const rank = new Map(roots.map((r, i) => [foldProjectKey(r), i]))
+  return [...copies].sort(
+    (a, b) =>
+      b.mtime - a.mtime ||
+      (rank.get(foldProjectKey(a.root)) ?? roots.length) - (rank.get(foldProjectKey(b.root)) ?? roots.length)
+  )[0]
+}
+
+/** slug arg → the slug, or a refusal that TEACHES (the sanitized spelling rides
+ *  the refusal when one exists). */
+function slugArg(v: unknown): { slug: string } | BrainServeReply {
+  const raw = str(v)
+  if (!raw) return refuse('invalid', 'slug is required')
+  if (!isMemorySlug(raw)) {
+    const norm = memorySlug(raw)
+    return refuse('invalid', norm ? `"${raw.slice(0, 80)}" is not a slug — did you mean "${norm}"?` : 'slug must be kebab-case (a-z, 0-9, dashes)')
+  }
+  return { slug: raw }
+}
+
+/** slug → its freshest copy's root, for every written slug in scope. */
+function freshestBySlug<T extends { slug: string; root: string; mtime: number }>(rows: T[], roots: string[]): Map<string, T> {
+  const grouped = new Map<string, T[]>()
+  for (const r of rows) {
+    const list = grouped.get(r.slug) ?? []
+    list.push(r)
+    grouped.set(r.slug, list)
+  }
+  return new Map([...grouped.entries()].map(([slug, copies]) => [slug, freshestMemory(copies, roots)]))
+}
+
+function serveMemorySearch(s: ResolvedScope, args: Record<string, unknown>): BrainServeReply {
+  const query = str(args.query)
+  if (!query) return refuse('invalid', 'query is required')
+  const limit = intArg(args.limit, MEMORY_SEARCH_DEFAULT_LIMIT, 1, MEMORY_SEARCH_MAX_LIMIT)
+  if (limit === null) return refuse('invalid', `limit must be 1-${MEMORY_SEARCH_MAX_LIMIT}`)
+  const expr = memorySearchExpr(query)
+  if (!expr) return refuse('invalid', 'the query has no searchable terms')
+  const hits = s.store.memorySearch(s.projectRoots, expr, MEMORY_SEARCH_FETCH_CAP)
+  // Dedupe by slug — among the copies that MATCHED, the freshest wins and keeps
+  // its own bm25 rank; the final order is (rank asc, slug asc), fixed.
+  const kept = [...freshestBySlug(hits, s.projectRoots).values()].sort(
+    (a, b) => a.rank - b.rank || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0)
+  )
+  const page = kept.slice(0, limit)
+  return capReply(
+    {
+      ok: true,
+      ...envelope(s),
+      memories: page.map((h) => ({
+        slug: h.slug,
+        name: h.name,
+        description: h.description,
+        tags: parseTags(h.tags),
+        root: h.root
+      })),
+      truncated: kept.length > limit || hits.length >= MEMORY_SEARCH_FETCH_CAP
+    },
+    'memories'
+  )
+}
+
+function serveMemoryGet(s: ResolvedScope, args: Record<string, unknown>): BrainServeReply {
+  const a = slugArg(args.slug)
+  if ('ok' in a) return a
+  const copies = s.store.memoryCopies(s.projectRoots, a.slug)
+  const allLinks = s.store.memoryLinks(s.projectRoots)
+  if (!copies.length) {
+    const sources = new Set(allLinks.filter((l) => l.dst === a.slug).map((l) => l.src))
+    return refuse(
+      'unknown-memory',
+      sources.size
+        ? `no memory "${a.slug}" is written yet, but ${sources.size} memor${sources.size === 1 ? 'y links' : 'ies link'} to it — a dangling target marking wanted knowledge (find_backlinks lists the linkers)`
+        : `unknown memory ${a.slug} (not in this project's .memory/)`
+    )
+  }
+  const m = freshestMemory(copies, s.projectRoots)
+  const written = freshestBySlug(s.store.memoriesForRoots(s.projectRoots), s.projectRoots)
+  const mFold = foldProjectKey(m.root)
+  const links = [...new Set(allLinks.filter((l) => foldProjectKey(l.root) === mFold && l.src === a.slug).map((l) => l.dst))]
+    .sort()
+    .map((dst) => ({ slug: dst, dangling: !written.has(dst) }))
+  const backlinks = [...new Set(allLinks.filter((l) => l.dst === a.slug).map((l) => l.src))].sort().map((src) => ({
+    slug: src,
+    root: written.get(src)?.root ?? m.root
+  }))
+  const reply: BrainServeReply = {
+    ok: true,
+    ...envelope(s),
+    memory: {
+      slug: m.slug,
+      name: m.name,
+      description: m.description,
+      tags: parseTags(m.tags),
+      body: m.body,
+      root: m.root,
+      // The CAS handshake: update_memory compare-and-swaps against exactly this.
+      fileHash: m.hash,
+      mtime: m.mtime
+    },
+    links,
+    backlinks,
+    truncated: false
+  }
+  // Fit the byte cap by halving the body — flagged, like every other trim.
+  const mem = reply.memory as { body: string }
+  while (mem.body.length && JSON.stringify(reply).length > BRAIN_SERVE_RESPONSE_CAP) {
+    mem.body = mem.body.slice(0, Math.floor(mem.body.length / 2))
+    reply.truncated = true
+  }
+  return reply
+}
+
+function serveMemoryBacklinks(s: ResolvedScope, args: Record<string, unknown>): BrainServeReply {
+  const a = slugArg(args.slug)
+  if ('ok' in a) return a
+  const written = freshestBySlug(s.store.memoriesForRoots(s.projectRoots), s.projectRoots)
+  const allLinks = s.store.memoryLinks(s.projectRoots)
+  const backlinks = [...new Set(allLinks.filter((l) => l.dst === a.slug).map((l) => l.src))].sort().map((src) => ({
+    slug: src,
+    root: written.get(src)?.root ?? s.caller
+  }))
+  // A dangling TARGET is still queryable — that is the whole point of letting
+  // links precede their memories: `exists:false` + backlinks = wanted knowledge.
+  return capReply(
+    { ok: true, ...envelope(s), slug: a.slug, exists: written.has(a.slug), backlinks, truncated: false },
+    'backlinks'
+  )
+}
+
+function serveMemorySuggest(s: ResolvedScope, args: Record<string, unknown>): BrainServeReply {
+  const a = slugArg(args.slug)
+  if ('ok' in a) return a
+  const limit = intArg(args.limit, MEMORY_SUGGEST_DEFAULT_LIMIT, 1, MEMORY_SUGGEST_MAX_LIMIT)
+  if (limit === null) return refuse('invalid', `limit must be 1-${MEMORY_SUGGEST_MAX_LIMIT}`)
+  const written = freshestBySlug(s.store.memoriesForRoots(s.projectRoots), s.projectRoots)
+  const me = written.get(a.slug)
+  if (!me) return refuse('unknown-memory', `unknown memory ${a.slug} (not in this project's .memory/) — suggestions need a written source`)
+  const allLinks = s.store.memoryLinks(s.projectRoots)
+  // Each slug's OUTGOING set comes from its freshest copy's partition — the same
+  // copy every other read serves, so suggest never scores a stale edge.
+  const outgoing = new Map<string, Set<string>>()
+  for (const [slug, row] of written) {
+    const fold = foldProjectKey(row.root)
+    outgoing.set(slug, new Set(allLinks.filter((l) => l.src === slug && foldProjectKey(l.root) === fold).map((l) => l.dst)))
+  }
+  const mine = outgoing.get(a.slug) ?? new Set<string>()
+  const myTags = new Set(parseTags(me.tags))
+  const myTerms = new Set(memoryNameTerms(me.name))
+  const suggestions: { slug: string; root: string; score: number; breakdown: Record<string, unknown> }[] = []
+  for (const [slug, row] of written) {
+    if (slug === a.slug) continue
+    const theirs = outgoing.get(slug) ?? new Set<string>()
+    if (mine.has(slug) || theirs.has(a.slug)) continue // already connected — a suggestion would be noise
+    const sharedLinks = [...theirs].filter((d) => mine.has(d)).sort()
+    const sharedTags = parseTags(row.tags).filter((t) => myTags.has(t)).sort()
+    const sharedTerms = memoryNameTerms(row.name).filter((t) => myTerms.has(t)).sort()
+    const score =
+      MEMORY_SUGGEST_WEIGHTS.link * sharedLinks.length +
+      MEMORY_SUGGEST_WEIGHTS.tag * sharedTags.length +
+      MEMORY_SUGGEST_WEIGHTS.term * sharedTerms.length
+    if (score <= 0) continue
+    suggestions.push({
+      slug,
+      root: row.root,
+      score,
+      // The breakdown IS the audit: fixed weights, listed evidence, no opinion.
+      breakdown: { sharedLinks, sharedTags, sharedTerms, weights: MEMORY_SUGGEST_WEIGHTS }
+    })
+  }
+  suggestions.sort((x, y) => y.score - x.score || (x.slug < y.slug ? -1 : x.slug > y.slug ? 1 : 0))
+  return capReply(
+    {
+      ok: true,
+      ...envelope(s),
+      slug: a.slug,
+      suggestions: suggestions.slice(0, limit),
+      truncated: suggestions.length > limit
+    },
+    'suggestions'
+  )
+}
+
 /**
  * The one dispatch. `callerRoot` is the pane's resolved checkout root (main owns
  * that resolution — the exact board-read path), or null for a bare session.
@@ -616,6 +825,14 @@ export function serveBrainRead(
         return serveLibraries(scope, args)
       case 'brain.libdocs':
         return serveLibDocs(scope, args)
+      case 'brain.memSearch':
+        return serveMemorySearch(scope, args)
+      case 'brain.memGet':
+        return serveMemoryGet(scope, args)
+      case 'brain.memBacklinks':
+        return serveMemoryBacklinks(scope, args)
+      case 'brain.memSuggest':
+        return serveMemorySuggest(scope, args)
       default:
         return refuse('invalid', `unknown brain verb: ${verb}`)
     }

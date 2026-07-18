@@ -22,7 +22,7 @@ import {
 
 const Database = requireNative<typeof import('better-sqlite3')>('better-sqlite3')
 
-export const BRAIN_SCHEMA_VERSION = 4 // v4: the library lens (08) — additive, one-way, idempotent (v3 added ranks)
+export const BRAIN_SCHEMA_VERSION = 5 // v5: the memory lens (09) — additive, one-way, idempotent (v4 added libraries)
 /** Multi-row insert batch size — the build's transactional chunking unit. */
 export const BRAIN_INSERT_CHUNK = 1000
 
@@ -451,6 +451,83 @@ export class BrainStore {
     this.db
       .prepare('INSERT OR REPLACE INTO lib_docs (ecosystem,name,version,source,readme,signatures) VALUES (?,?,?,?,?,?)')
       .run(row.ecosystem, row.name, row.version, row.source, row.readme, row.signatures)
+  }
+
+  // ── The memory lens (ADR 0018 step 09): `.memory/` files are the truth ──────
+  // These tables (and their FTS5 shadow) are a disposable index over one scan of
+  // one checkout's `.memory/` — replaced whole per root, generation-NEUTRAL like
+  // the library lens (a memory edit moves no code-graph fact).
+
+  /** One scan's whole landing, one transaction: replace the root's memory rows,
+   *  links, and FTS shadow. */
+  replaceMemories(
+    root: string,
+    rows: { slug: string; name: string; description: string; tags: string[]; body: string; hash: string; mtime: number; bytes: number }[],
+    links: { src: string; dst: string }[]
+  ): void {
+    const txn = this.db.transaction((): void => {
+      this.db.prepare('DELETE FROM memories WHERE root = ?').run(root)
+      this.db.prepare('DELETE FROM memory_links WHERE root = ?').run(root)
+      this.db.prepare('DELETE FROM memories_fts WHERE root = ?').run(root)
+      const insRow = this.db.prepare(
+        'INSERT INTO memories (root,slug,name,description,tags,body,hash,mtime,bytes) VALUES (?,?,?,?,?,?,?,?,?)'
+      )
+      const insFts = this.db.prepare(
+        'INSERT INTO memories_fts (name,description,body,root,slug) VALUES (?,?,?,?,?)'
+      )
+      for (const r of rows) {
+        insRow.run(root, r.slug, r.name, r.description, JSON.stringify(r.tags), r.body, r.hash, r.mtime, r.bytes)
+        insFts.run(r.name, r.description, r.body, root, r.slug)
+      }
+      const insLink = this.db.prepare('INSERT OR IGNORE INTO memory_links (root,src,dst) VALUES (?,?,?)')
+      for (const l of links) insLink.run(root, l.src, l.dst)
+    })
+    txn()
+  }
+
+  /** Every memory row in the given partitions, body EXCLUDED (lists stay light),
+   *  stably ordered (slug, then root). */
+  memoriesForRoots(roots: string[]): { root: string; slug: string; name: string; description: string; tags: string; mtime: number; hash: string }[] {
+    if (!roots.length) return []
+    const rc = BrainStore.rootsClause(roots)
+    return this.db
+      .prepare(`SELECT root, slug, name, description, tags, mtime, hash FROM memories WHERE ${rc.sql} ORDER BY slug, root`)
+      .all(...rc.params) as { root: string; slug: string; name: string; description: string; tags: string; mtime: number; hash: string }[]
+  }
+
+  /** One slug's copies (body INCLUDED) across the given partitions. */
+  memoryCopies(roots: string[], slug: string): { root: string; slug: string; name: string; description: string; tags: string; body: string; hash: string; mtime: number; bytes: number }[] {
+    if (!roots.length) return []
+    const rc = BrainStore.rootsClause(roots)
+    return this.db
+      .prepare(`SELECT root, slug, name, description, tags, body, hash, mtime, bytes FROM memories WHERE ${rc.sql} AND slug = ? ORDER BY root`)
+      .all(...rc.params, slug) as { root: string; slug: string; name: string; description: string; tags: string; body: string; hash: string; mtime: number; bytes: number }[]
+  }
+
+  /** Every link row in the given partitions, stably ordered. */
+  memoryLinks(roots: string[]): { root: string; src: string; dst: string }[] {
+    if (!roots.length) return []
+    const rc = BrainStore.rootsClause(roots)
+    return this.db
+      .prepare(`SELECT root, src, dst FROM memory_links WHERE ${rc.sql} ORDER BY src, dst, root`)
+      .all(...rc.params) as { root: string; src: string; dst: string }[]
+  }
+
+  /** FTS5 bm25 search over the given partitions — rank ascending (best first),
+   *  ties broken (slug, root): the same query over the same rows always answers
+   *  in the same order. `expr` is the pre-quoted term expression (memory.ts) —
+   *  raw user syntax never reaches the FTS parser. */
+  memorySearch(roots: string[], expr: string, cap: number): { root: string; slug: string; name: string; description: string; tags: string; mtime: number; rank: number }[] {
+    if (!roots.length) return []
+    const rc = BrainStore.rootsClause(roots)
+    return this.db
+      .prepare(
+        `SELECT m.root AS root, m.slug AS slug, m.name AS name, m.description AS description, m.tags AS tags, m.mtime AS mtime, memories_fts.rank AS rank
+         FROM memories_fts JOIN memories m ON m.root = memories_fts.root AND m.slug = memories_fts.slug
+         WHERE memories_fts MATCH ? AND memories_fts.${rc.sql}
+         ORDER BY memories_fts.rank, m.slug, m.root LIMIT ?`
+      )
+      .all(expr, ...rc.params, cap) as { root: string; slug: string; name: string; description: string; tags: string; mtime: number; rank: number }[]
   }
 
   /**
