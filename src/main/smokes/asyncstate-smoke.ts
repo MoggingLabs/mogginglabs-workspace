@@ -653,6 +653,11 @@ export function runAsyncStateSmoke(win: BrowserWindow): void {
       // `btn.disabled = false`, with no finally. A rejection skipped the re-enable and the button
       // stayed disabled FOREVER — the user could not even retry the call that had just failed.
       const integNav = await showTab('integrations')
+      // The store/inventory split (2026-07-18): the preset catalog lives in the
+      // LIBRARY overlay now — open it from the band's CTA before driving `.cat-*`.
+      // The overlay is detached until first open, so this click is load-bearing.
+      await ES(`(document.querySelector('.integux-library-cta')?.click(), 1)`)
+      await sleep(900)
       // The catalog card's own primary — the only door to this panel. (F-22 renamed it
       // 'Add to CLI…': Connect is reserved for account connections; startsWith, not an
       // exact match, because the label carries a typographic ellipsis.)
@@ -721,6 +726,11 @@ export function runAsyncStateSmoke(win: BrowserWindow): void {
       }
       const integPass =
         integNav && panelOpened && panelUp && integErrorVisible && integNotStranded && integLoadingShown && integRecovered
+
+      // The Library overlay traps the shell as inert while open — close it before
+      // the next stage clicks its way to the Board.
+      await ES(`(document.querySelector('.library-modal .modal-close')?.click(), 1)`)
+      await sleep(400)
 
       // ══ 8 · BOARD — the optimistic mutation that lied ═════════════════════════
       // The card moved on screen before the write landed, which is the right feel and was, until

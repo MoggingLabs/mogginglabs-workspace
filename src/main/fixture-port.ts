@@ -1,4 +1,4 @@
-import type { CostScan, UpdateState, UsageAdapter } from '@contracts'
+import type { CostScan, UsageAdapter } from '@contracts'
 import type { StatusFetcher, StatusProviderRow } from '@backend/features/usage'
 
 // THE PRODUCTION SIDE OF THE HARNESS'S FIXTURE SEAMS (audit finding 41).
@@ -29,8 +29,21 @@ export interface UsageWorld {
   costScan: (providerId: string, windowDays?: number) => CostScan
 }
 
-/** Drives the whole update lifecycle to the renderer instead of the signed feed. */
-export type UpdateDriver = (push: (patch: UpdateState) => void) => void
+/** One update-check attempt's outcome, from the fixture feed standing in for the signed one. */
+export type UpdateCheckOutcome = { kind: 'ok' } | { kind: 'error'; message: string }
+
+/**
+ * Replaces the signed feed with scripted check OUTCOMES (UPDATEFAIL / UPDATEOFFLINE). NOT a
+ * state driver: updater.ts runs its real offline-vs-broken classification, retry ladder and
+ * pushes over these answers, so the gates bite on the production machinery — the old shape
+ * (a driver fabricating renderer states) could stay green while the real classifier rotted.
+ */
+export interface UpdateFeedFixture {
+  /** Consumed once per check attempt. */
+  next(): UpdateCheckOutcome
+  /** Compressed offline-retry ladder so a gate can watch the self-heal inside its timeout. */
+  retryDelaysMs?: number[]
+}
 
 /** Replaces the board's gh/git subprocess runs (BOARDGH: deterministic, zero
  *  network) and names the link-engine adapter its links should ride ('fake'). */
@@ -43,8 +56,8 @@ export interface BoardGhWorld {
 export interface FixtureHooks {
   /** Called once, per registerUsage(), AFTER the env is settled (prepareRuntime has run). */
   usageWorld?: () => UsageWorld | null
-  /** Armed only by the UPDATEFAIL gate. Its presence also means "the real feed is off". */
-  updateDriver?: UpdateDriver
+  /** Armed only by the UPDATEFAIL/UPDATEOFFLINE gates. Its presence also means "the real feed is off". */
+  updateFeed?: UpdateFeedFixture
   /** Force the vault-conditioned agent-web persistence OFF (manual dev/test affordance). */
   vaultDisabled?: () => boolean
   /** Skip the native save dialog and export straight to this path. */
@@ -65,9 +78,9 @@ export function usageWorld(): UsageWorld | null {
   return hooks.usageWorld?.() ?? null
 }
 
-/** The harness's update driver, or null. Non-null also means the real feed must not run. */
-export function updateDriver(): UpdateDriver | null {
-  return hooks.updateDriver ?? null
+/** The harness's fixture feed, or null. Non-null also means the real feed must not run. */
+export function updateFeedFixture(): UpdateFeedFixture | null {
+  return hooks.updateFeed ?? null
 }
 
 export function vaultDisabled(): boolean {

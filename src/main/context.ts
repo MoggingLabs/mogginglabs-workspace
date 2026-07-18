@@ -1,6 +1,6 @@
 import { app, ipcMain, type WebContents } from 'electron'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ContextMonitor, RELAY_SOURCE } from '@backend/features/context'
 import { claudeNotifyHooks } from '@backend/features/agents'
@@ -37,6 +37,16 @@ import { notifyHookInvocation } from './notify-hook'
 
 let statuslineRelayFile: string | null = null
 
+/** The relay file's current bytes, or null when absent/unreadable (either answer
+ *  means "write it"). */
+function readRelay(file: string): string | null {
+  try {
+    return readFileSync(file, 'utf8')
+  } catch {
+    return null
+  }
+}
+
 /** Write (idempotently) the relay script + the settings file that points claude at
  *  it, and return the `--settings` args a claude launch should carry. Since the
  *  bell work, the same generated file also carries the notify HOOKS (Notification/
@@ -49,11 +59,17 @@ export function claudeStatuslineArgs(session: Record<string, unknown> = {}): str
   try {
     const dir = join(app.getPath('userData'), 'context-relay')
     mkdirSync(dir, { recursive: true })
-    // Existence-checked every launch, not once per run: userData cleared mid-run
-    // otherwise left every later launch's settings pointing at a relay that is gone
-    // (statusline dead until restart, gauge on the transcript-tail fallback only).
+    // CONTENT-checked every launch, not existence-checked once per run. Existence alone
+    // rotted across releases: the sink dir's channel segment is BAKED into the generated
+    // script (DAEMON_PROTOCOL_VERSION interpolation, relay.ts), so a relay written by a
+    // previous protocol kept pushing every claude's numbers into the OLD channel's dir
+    // while this app's monitor read the new one — the statusline push silently dead for
+    // every pane, the gauge degraded to the 2.5s transcript-tail poll for good (and the
+    // running sessions re-read this file per statusline fire, so rewriting heals them
+    // live). The same check still covers userData cleared mid-run (a missing file never
+    // equals RELAY_SOURCE).
     statuslineRelayFile ??= join(dir, 'context-relay.mjs')
-    if (!existsSync(statuslineRelayFile)) writeFileSync(statuslineRelayFile, RELAY_SOURCE)
+    if (readRelay(statuslineRelayFile) !== RELAY_SOURCE) writeFileSync(statuslineRelayFile, RELAY_SOURCE)
     // Catalog ownership makes these app-owned keys read-only. Internal values
     // still land last here as defense in depth against stale persisted intent.
     const overlay: Record<string, unknown> = {
