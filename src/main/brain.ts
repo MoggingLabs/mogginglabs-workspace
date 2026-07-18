@@ -91,6 +91,56 @@ export function handleBrainMcp(name: string, args: Record<string, unknown>, boun
   return serveBrainRead(ensureService(), name, args, callerRoot)
 }
 
+// ── The launch-orientation knob (06): per-workspace, default ON ───────────────
+// One KV map in the settings store — the grant/plan precedent, minus the
+// ceremony a boolean does not need. Absent = TRUE: cold panes start oriented
+// unless this workspace said otherwise; OFF is zero injection bytes.
+
+const ORIENT_KV = 'brain.orientAtLaunch'
+
+function orientMap(): Record<string, boolean> {
+  try {
+    const raw = getSettingsStore()?.getSetting(ORIENT_KV)
+    const parsed = raw ? (JSON.parse(raw) as unknown) : null
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const out: Record<string, boolean> = {}
+      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) out[k] = v === true
+      return out
+    }
+  } catch {
+    /* unreadable map reads as all-default */
+  }
+  return {}
+}
+
+export function orientAtLaunch(workspaceId: string): boolean {
+  const map = orientMap()
+  return workspaceId in map ? map[workspaceId] : true
+}
+
+export function setOrientAtLaunch(workspaceId: string, on: boolean): boolean {
+  const store = getSettingsStore()
+  if (!store || !workspaceId) return false
+  const map = orientMap()
+  map[workspaceId] = on
+  try {
+    store.setSetting(ORIENT_KV, JSON.stringify(map))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** The launch seam's map fetch (06), exported for the BRAINMAP smoke: the same
+ *  serve verb the MCP tool answers with, keyed by the pane's actual cwd. */
+export function handleBrainMap(req: unknown): BrainServeReply {
+  const r = (req ?? {}) as { root?: unknown; budget?: unknown }
+  if (typeof r.root !== 'string' || !r.root) return { ok: false, reason: 'invalid' }
+  const args: Record<string, unknown> = {}
+  if (r.budget !== undefined) args.budget = r.budget
+  return serveBrainRead(ensureService(), 'brain.map', args, r.root)
+}
+
 /** Smoke-only introspection: the LRU's live handle count, a full close (the next
  *  call reopens lazily — dispose is a lifecycle law, not a shutdown-only path), the
  *  canonical dump (the BRAINGRAPH gate's determinism spine), and 04's freshness
@@ -120,6 +170,15 @@ export function registerBrain(getWin: () => BrowserWindow | null, tickSource?: B
   boundWin = getWin
   boundTickSource = tickSource ?? null
   ipcMain.handle(BrainChannels.status, (_e, req: unknown) => handleBrainStatus(req))
+  ipcMain.handle(BrainChannels.map, (_e, req: unknown) => handleBrainMap(req))
+  ipcMain.handle(BrainChannels.orientGet, (_e, wsId: unknown) =>
+    typeof wsId === 'string' && wsId ? orientAtLaunch(wsId) : true
+  )
+  ipcMain.handle(BrainChannels.orientSet, (_e, req: unknown) => {
+    const r = (req ?? {}) as { workspaceId?: unknown; on?: unknown }
+    const ok = typeof r.workspaceId === 'string' && !!r.workspaceId && setOrientAtLaunch(r.workspaceId, r.on === true)
+    return { ok }
+  })
   ipcMain.handle(BrainChannels.rebuild, async (_e, req: unknown) => {
     const answer = await handleBrainRebuild(req)
     if (answer.ok) {

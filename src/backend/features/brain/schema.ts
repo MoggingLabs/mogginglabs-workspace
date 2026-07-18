@@ -80,7 +80,20 @@ CREATE TABLE IF NOT EXISTS parse_cache (
   lang TEXT NOT NULL, fileHash TEXT NOT NULL, nodesJson TEXT NOT NULL, edgesJson TEXT NOT NULL,
   PRIMARY KEY (lang, fileHash)
 );
+CREATE TABLE IF NOT EXISTS ranks (
+  id TEXT PRIMARY KEY, root TEXT NOT NULL, rank REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ranks_by_root ON ranks(root);
 `
+
+/** One node's repomap rank row (step 06) — written in the SAME transaction as the
+ *  partition it ranks, which is what makes a stale rank impossible by
+ *  construction. DERIVED (deterministically) from edges; excluded from the
+ *  canonical dump like every other derived-when fact. */
+export interface BrainRankRow {
+  id: string
+  rank: number
+}
 
 /** STABLE node identity: sha1 of (root, file, startLine, name, kind). Same bytes →
  *  same tree → same lines → same ids — which is what makes the canonical dump the

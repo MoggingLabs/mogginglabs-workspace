@@ -14,6 +14,7 @@ import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
 import { openWizard } from '../../core/workspace/wizard-port'
 import { getWorkspaces, requestWorkspaceSwitch } from '../../core/workspace/workspace-info-port'
 import { onPaneAgentSession } from '../../core/agents/agent-session-port'
+import { composeFirstPrompt } from '../agents/launch'
 import { paneInstance } from '../../core/terminal/pane-instance-port'
 import { setActiveView } from '../../core/shell/view-port'
 import { showToast } from '../../components'
@@ -105,7 +106,17 @@ export async function startOnCard(
   // the pane's process subtree (typed-launch detection) — wait for THAT and hand
   // the task to something listening. Detection failure fails CLOSED: keep the
   // failed pane visible for diagnosis and say the task was NOT sent.
-  const prompt = `${card.title}\n\n${card.notes}`.trim().replace(/\r/g, '')
+  //
+  // 06: cold panes start ORIENTED — the compose seam prepends the project's
+  // repomap as a fenced block when this workspace opted in (the default),
+  // typed visibly through the same write as the task. Composed up front, once:
+  // the prompt the handoff sends is fixed before any timer arms.
+  const task = `${card.title}\n\n${card.notes}`.trim().replace(/\r/g, '')
+  const prompt = await composeFirstPrompt({
+    task,
+    root: paneCwds?.[0] ?? cwd,
+    anchorWorkspaceId: active?.id ?? null
+  })
   let handed = false
   let offSession: (() => void) | undefined
   let fallback: ReturnType<typeof setTimeout> | undefined

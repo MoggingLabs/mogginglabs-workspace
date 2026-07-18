@@ -288,6 +288,8 @@ function brainRefusalText(r) {
       return `the root does not exist${detail ? ` (${detail})` : ''}`
     case 'too-large':
       return `the project exceeds the brain's index cap${detail ? ` (${detail})` : ''}`
+    case 'no-map':
+      return detail || 'no brain index for this checkout — nothing to map yet'
     case 'busy':
       return `the brain is busy${detail ? ` (${detail})` : ''} — retry shortly`
     default:

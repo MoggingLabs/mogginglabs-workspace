@@ -195,14 +195,17 @@ export function runBrainMcpSmoke(win: BrowserWindow): void {
       clients.push(c1)
       await c1.rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {} })
 
-      // ── (g) registration honesty: exactly the seven, zero brain writes ─────
+      // ── (g) registration honesty: exactly the brain read family (derived from
+      //    the contract — 06 added the repomap), zero brain writes ─────────────
       const served = (((await c1.rpc('tools/list')).result as { tools?: { name: string }[] })?.tools ?? []).map((t) => t.name)
       const seven = [...MCP_BRAIN_READ_TOOL_NAMES]
       const brainServed = served.filter((n) => (seven as string[]).includes(n))
       const sevenOk =
-        brainServed.length === 7 &&
+        brainServed.length === seven.length &&
         seven.every((n) => served.includes(n)) &&
-        served.filter((n) => n.includes('brain') || n.includes('graph') || n.includes('symbol') || n.includes('references')).every((n) => (seven as string[]).includes(n))
+        served
+          .filter((n) => n.includes('brain') || n.includes('graph') || n.includes('symbol') || n.includes('references') || n.includes('repo_map'))
+          .every((n) => (seven as string[]).includes(n))
 
       // ── (a) fixture-known truth through every tool ─────────────────────────
       const st = await call(c1, 'brain_status')

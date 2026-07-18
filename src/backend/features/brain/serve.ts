@@ -1,6 +1,7 @@
 import * as path from 'node:path'
 import type { BrainRefusal, BrainStatus } from '@contracts'
 import { foldProjectKey } from '../workspace/project-identity'
+import { REPOMAP_DEFAULT_BUDGET, REPOMAP_MAX_BUDGET, REPOMAP_MIN_BUDGET, renderRepoMap } from './render'
 import { BRAIN_EDGE_KINDS, BRAIN_NODE_KINDS, type BrainNodeRow } from './schema'
 import type { BrainStore } from './store'
 
@@ -131,6 +132,9 @@ interface ResolvedScope {
   status: BrainStatus
   /** The caller's own partition root — the envelope's `root`, always. */
   caller: string
+  /** Every root the project owns (the map's fallback pool; scope never widens it). */
+  projectRoots: string[]
+  projectKey: string
   /** The partitions this answer may read (caller-only, or the whole project). */
   roots: string[]
   /** TRUE = label every hit with its root (cross-checkout reads are never anonymous). */
@@ -160,6 +164,8 @@ function resolveScope(
     store: h.store,
     status: h.status,
     caller,
+    projectRoots: [...h.project.roots],
+    projectKey: h.project.projectKey,
     roots: project ? [...h.project.roots] : [caller],
     labeled: project
   }
@@ -424,6 +430,34 @@ function serveReferences(s: ResolvedScope, args: Record<string, unknown>): Brain
   )
 }
 
+function serveMap(s: ResolvedScope, args: Record<string, unknown>): BrainServeReply {
+  const budget = intArg(args.budget, REPOMAP_DEFAULT_BUDGET, REPOMAP_MIN_BUDGET, REPOMAP_MAX_BUDGET)
+  if (budget === null) return refuse('invalid', `budget must be ${REPOMAP_MIN_BUDGET}-${REPOMAP_MAX_BUDGET} characters`)
+  // The map orients the caller's OWN checkout. A freshly minted worktree's
+  // partition is honestly empty (nothing indexed it yet) — orientation then
+  // falls back to the project's OTHER built partitions (projectKey first):
+  // same project, same shapes, and the stamp still says which generation. The
+  // fallback pool is the project's roots and nothing wider — custody holds.
+  let mapRoot = s.caller
+  let rows = s.store.repoMapRows(mapRoot)
+  if (!rows.length) {
+    for (const candidate of [s.projectKey, ...s.projectRoots]) {
+      if (foldProjectKey(candidate) === foldProjectKey(s.caller)) continue
+      rows = s.store.repoMapRows(candidate)
+      if (rows.length) {
+        mapRoot = candidate
+        break
+      }
+    }
+  }
+  if (!rows.length) {
+    return refuse('no-map', 'no brain index for this checkout — run brain:rebuild (or open the project) first')
+  }
+  const totalFiles = s.store.partitionCounts(mapRoot).files
+  const map = renderRepoMap(rows, { budget, generation: s.status.generation, totalFiles })
+  return { ok: true, ...envelope(s), map, mapRoot, budget }
+}
+
 /**
  * The one dispatch. `callerRoot` is the pane's resolved checkout root (main owns
  * that resolution — the exact board-read path), or null for a bare session.
@@ -453,6 +487,8 @@ export function serveBrainRead(
         return serveSymbol(scope, args)
       case 'brain.refs':
         return serveReferences(scope, args)
+      case 'brain.map':
+        return serveMap(scope, args)
       default:
         return refuse('invalid', `unknown brain verb: ${verb}`)
     }

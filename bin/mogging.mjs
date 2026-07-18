@@ -37,6 +37,7 @@ const argv = process.argv.slice(2).filter((a) => a !== '--dev')
 const cmd = argv[0]
 
 if (cmd === 'usage') runUsage(argv.slice(1))
+else if (cmd === 'map') runMap(argv.slice(1))
 else if (cmd === 'notify') runNotify(argv.slice(1)).catch(() => process.exit(0)) // a hook must never fail its agent
 else if (cmd === 'cwd') runCwd(argv.slice(1))
 else if (cmd === 'list') runList()
@@ -72,6 +73,7 @@ function usage(code) {
       '       mogging usage [--json] | usage cost [--provider <id|all>] [--json]\n' +
       '       mogging usage providers [--json] | usage refresh [--provider <id>]\n' +
       '       mogging usage set-key --provider <id> --stdin | usage clear-key --provider <id>\n' +
+      '       mogging map [--budget N]   ranked repo map (signatures only) for the current checkout\n' +
       '       any verb: --dev   target a repo-checkout (dev-channel) app instead of the installed\n' +
       '                 release. Inside dev panes MOGGING_CHANNEL=dev is inherited — no flag needed.\n'
   )
@@ -105,12 +107,12 @@ function appEndpointFilePath() {
 /** An authed session against the APP endpoint (promise-based calls, so a
  *  verb can make several). Same handshake the MCP server uses; the token
  *  never leaves this process except in the hello frame. */
-function withApp(onReady, { timeoutMs = 15000 } = {}) {
+function withApp(onReady, { timeoutMs = 15000, label = 'usage' } = {}) {
   let ep
   try {
     ep = JSON.parse(readFileSync(appEndpointFilePath(), 'utf8'))
   } catch {
-    process.stderr.write('mogging usage: app not running (no app endpoint found)\n')
+    process.stderr.write(`mogging ${label}: app not running (no app endpoint found)\n`)
     process.exit(3)
   }
   const sock = net.connect(ep.address)
@@ -131,7 +133,7 @@ function withApp(onReady, { timeoutMs = 15000 } = {}) {
     process.exit(code)
   }
   const timer = setTimeout(() => {
-    process.stderr.write('mogging usage: app did not respond in time\n')
+    process.stderr.write(`mogging ${label}: app did not respond in time\n`)
     finish(3)
   }, timeoutMs)
   const api = {
@@ -166,10 +168,10 @@ function withApp(onReady, { timeoutMs = 15000 } = {}) {
         // hunting a token problem they did not have.
         const why = m.reason || 'error'
         if (why === 'auth') {
-          process.stderr.write('mogging usage: app refused the token (auth)\n')
+          process.stderr.write(`mogging ${label}: app refused the token (auth)\n`)
           finish(4)
         } else {
-          process.stderr.write('mogging usage: app rejected the request (' + why + ')\n')
+          process.stderr.write(`mogging ${label}: app rejected the request (` + why + ')\n')
           finish(1)
         }
       } else if (m.t === 'result') {
@@ -180,9 +182,47 @@ function withApp(onReady, { timeoutMs = 15000 } = {}) {
     }
   })
   sock.on('error', (e) => {
-    process.stderr.write('mogging usage: ' + e.message + '\n')
+    process.stderr.write(`mogging ${label}: ` + e.message + '\n')
     finish(3)
   })
+}
+
+// --- mogging map (ADR 0018, step 06) ---------------------------------------------------------------
+// The repomap door for shells and scripts: the SAME `brain.map` read the MCP tool
+// and the launch injection use, over the SAME app endpoint the usage verbs ride.
+// Prints the map to stdout verbatim (signatures only — never file bodies).
+// Exit codes: 0 ok · 1 no brain for this cwd (or rejected) · 2 usage ·
+// 3 app not running / timeout · 4 auth refused — the shared code table, held.
+
+function runMap(args) {
+  const rawBudget = usageFlag(args, '--budget')
+  let budget
+  if (rawBudget !== undefined) {
+    budget = Number(rawBudget)
+    if (!Number.isFinite(budget) || budget < 200 || budget > 16000) {
+      process.stderr.write('mogging map: --budget must be 200-16000 (characters)\n')
+      process.exit(2)
+    }
+  }
+  let root
+  try {
+    root = realpathSync(process.cwd())
+  } catch {
+    root = resolve(process.cwd())
+  }
+  withApp(
+    async (api) => {
+      const m = await api.call('brain.map', { root, ...(budget !== undefined ? { budget } : {}) })
+      if (!m.ok || typeof m.map !== 'string') {
+        process.stderr.write('mogging map: ' + (m.detail || m.reason || 'no brain for this cwd') + '\n')
+        api.finish(1)
+        return
+      }
+      process.stdout.write(m.map + '\n')
+      api.finish(0)
+    },
+    { label: 'map' }
+  )
 }
 
 function usageFlag(args, name) {

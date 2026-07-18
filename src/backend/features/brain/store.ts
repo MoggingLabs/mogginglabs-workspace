@@ -9,6 +9,7 @@ import {
   type BrainEdgeRow,
   type BrainFileRow,
   type BrainNodeRow,
+  type BrainRankRow,
   type PortableExtraction
 } from './schema'
 
@@ -21,7 +22,7 @@ import {
 
 const Database = requireNative<typeof import('better-sqlite3')>('better-sqlite3')
 
-export const BRAIN_SCHEMA_VERSION = 2
+export const BRAIN_SCHEMA_VERSION = 3 // v3: the ranks table (06) — additive, one-way, idempotent
 /** Multi-row insert batch size — the build's transactional chunking unit. */
 export const BRAIN_INSERT_CHUNK = 1000
 
@@ -156,7 +157,8 @@ export class BrainStore {
     nodes: BrainNodeRow[],
     edges: BrainEdgeRow[],
     cacheRows: { lang: string; fileHash: string; ex: PortableExtraction }[],
-    stats: BrainBuildStats
+    stats: BrainBuildStats,
+    ranks: BrainRankRow[] = []
   ): number {
     const insertChunked = <T>(rows: T[], cols: number, sql: (placeholders: string) => string, flat: (r: T) => unknown[]): void => {
       for (let i = 0; i < rows.length; i += BRAIN_INSERT_CHUNK) {
@@ -169,13 +171,15 @@ export class BrainStore {
       // ONE bump per build, stamped onto the rows it indexed — read first so the
       // files rows and the meta row can never disagree about which build this was.
       const gen = this.generation() + 1
-      for (const table of ['files', 'nodes', 'edges']) {
+      for (const table of ['files', 'nodes', 'edges', 'ranks']) {
         this.db.prepare(`DELETE FROM ${table} WHERE root = ?`).run(root)
       }
       insertChunked(files, 7, (p) => `INSERT OR REPLACE INTO files (root,path,hash,lang,bytes,mtime,gen) VALUES ${p}`, (f) => [f.root, f.path, f.hash, f.lang, f.bytes, f.mtime, gen])
       insertChunked(nodes, 8, (p) => `INSERT OR REPLACE INTO nodes (id,root,kind,name,file,startLine,endLine,sig) VALUES ${p}`, (n) => [n.id, n.root, n.kind, n.name, n.file, n.startLine, n.endLine, n.sig])
       insertChunked(edges, 4, (p) => `INSERT OR IGNORE INTO edges (src,dst,kind,root) VALUES ${p}`, (e) => [e.src, e.dst, e.kind, e.root])
       insertChunked(cacheRows, 4, (p) => `INSERT OR IGNORE INTO parse_cache (lang,fileHash,nodesJson,edgesJson) VALUES ${p}`, (c) => [c.lang, c.fileHash, JSON.stringify(c.ex.defs), JSON.stringify({ imports: c.ex.imports, refs: c.ex.refs, heritage: c.ex.heritage })])
+      // The repomap ranks (06) ride the SAME commit as the rows they describe.
+      insertChunked(ranks, 3, (p) => `INSERT OR REPLACE INTO ranks (id,root,rank) VALUES ${p}`, (r) => [r.id, root, r.rank])
       this.db
         .prepare(
           'UPDATE meta SET generation = ?, resolved_refs = ?, dropped_refs = ?, cache_hits = ?, cache_misses = ?'
@@ -279,6 +283,18 @@ export class BrainStore {
       for (const edge of rows) out.push({ edge, dir: 'in' })
     }
     return out.slice(0, limit)
+  }
+
+  /** One partition's renderable map rows (06): every signature-bearing node with
+   *  its committed rank — stably ordered so the renderer's input never shuffles. */
+  repoMapRows(root: string): { file: string; startLine: number; sig: string; rank: number }[] {
+    return this.db
+      .prepare(
+        `SELECT n.file AS file, n.startLine AS startLine, n.sig AS sig, COALESCE(r.rank, 0) AS rank
+         FROM nodes n LEFT JOIN ranks r ON r.id = n.id
+         WHERE n.root = ? AND n.sig != '' ORDER BY n.file, n.startLine, n.id`
+      )
+      .all(root) as { file: string; startLine: number; sig: string; rank: number }[]
   }
 
   /** RESOLVED incoming reference edges to any of `ids`, stably ordered. */

@@ -103,10 +103,10 @@ export const MCP_CONTROL_WRITE_TOOL_NAMES = [
   'archive_card'
 ] as const
 
-/** The brain's read family (ADR 0018, step 05) — SEVEN graph reads, free to every
- *  pane (ADR 0008's reads-free stance), scoped app-side to the caller's own
- *  checkout. READS ONLY: a brain write verb in this list is a review rejection —
- *  the validator below enforces it structurally. */
+/** The brain's read family (ADR 0018, steps 05–06) — graph reads plus the ranked
+ *  repomap, free to every pane (ADR 0008's reads-free stance), scoped app-side to
+ *  the caller's own checkout. READS ONLY: a brain write verb in this list is a
+ *  review rejection — the validator below enforces it structurally. */
 export const MCP_BRAIN_READ_TOOL_NAMES = [
   'brain_status',
   'query_graph',
@@ -114,7 +114,8 @@ export const MCP_BRAIN_READ_TOOL_NAMES = [
   'get_neighbors',
   'shortest_path',
   'find_symbol',
-  'find_references'
+  'find_references',
+  'get_repo_map'
 ] as const
 
 export const MCP_TOOL_NAMES = [
@@ -266,8 +267,8 @@ function validateMcpCatalog(raw: unknown): readonly McpToolDef[] {
 }
 
 /** THE catalog: the 14 shipped browser tools (names/schemas verbatim) + 6
- *  control reads + 1 self-scoped declaration + 11 control writes + 7 brain
- *  graph reads (ADR 0018 step 05). Validated at load. */
+ *  control reads + 1 self-scoped declaration + 11 control writes + 8 brain
+ *  reads (ADR 0018 steps 05–06: the graph seven + the repomap). Validated at load. */
 export const MCP_TOOLS: readonly McpToolDef[] = validateMcpCatalog(catalogJson)
 
 export const findMcpTool = (name: string): McpToolDef | undefined => MCP_TOOLS.find((t) => t.name === name)

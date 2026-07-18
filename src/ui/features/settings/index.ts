@@ -1,5 +1,5 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { BrowserChannels, TelemetryChannels, type TelemetryRendererConfig } from '@contracts'
+import { BrainChannels, BrowserChannels, TelemetryChannels, type TelemetryRendererConfig } from '@contracts'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { Button, Card, FieldGroup, SectionHeader, TwoColumn, createSegmented, createToggleRow, el, icon, showToast, ICON_NAMES, type ElChild, type IconName } from '../../components'
 import { THEMES } from '../../core/theme/themes'
@@ -226,6 +226,64 @@ export const settingsFeature: UiFeature = {
       }
     }
 
+    // ── Launch orientation (ADR 0018/06): per-workspace, default ON ───────────
+    // The agent-browser-consent discipline, inherited whole: bound to the ACTIVE
+    // workspace, dead (and saying why) without one, held disabled across the
+    // round-trip, reverted on failure — a switch may not sit there lying.
+    const orientNote = el('p', {
+      class: 'toggle-row-hint orient-launch-note',
+      text: 'No workspace open — this setting is per-workspace. Open one, then decide here.',
+      hidden: true
+    })
+    const orientToggle = createToggleRow({
+      label: 'New board-launched agents start with a map of this project',
+      hint: 'Prepends the ranked repomap (file paths + signatures, never bodies) to the task a board card hands its agent — typed visibly into the pane. Off = the task alone, zero added bytes.',
+      extra: orientNote,
+      onChange: () => void applyOrientAtLaunch()
+    })
+    function syncOrientAvailability(): void {
+      const wsId = getWorkspaces().activeId
+      orientToggle.setDisabled(!wsId)
+      orientNote.hidden = !!wsId
+      if (!wsId) orientToggle.setChecked(false)
+    }
+    async function applyOrientAtLaunch(): Promise<void> {
+      const next = orientToggle.checked()
+      const wsId = getWorkspaces().activeId
+      if (!wsId) {
+        syncOrientAvailability()
+        return
+      }
+      orientToggle.setDisabled(true)
+      try {
+        const saved = (await getBridge().invoke(BrainChannels.orientSet, { workspaceId: wsId, on: next })) as
+          | { ok?: boolean }
+          | undefined
+        if (!saved?.ok) {
+          orientToggle.setChecked(!next)
+          showToast({
+            tone: 'danger',
+            title: 'Setting was not saved',
+            body: 'The settings store did not accept the change — nothing was switched. Try again.'
+          })
+        }
+      } catch (error) {
+        orientToggle.setChecked(!next)
+        showToast({ tone: 'danger', title: 'Setting was not saved', body: String(error) })
+      } finally {
+        syncOrientAvailability()
+      }
+    }
+    async function pullOrientAtLaunch(): Promise<void> {
+      try {
+        const wsId = getWorkspaces().activeId
+        orientToggle.setChecked(!!wsId && (await getBridge().invoke(BrainChannels.orientGet, wsId)) === true)
+      } catch {
+        /* leave as-is */
+      }
+      syncOrientAvailability()
+    }
+
     async function pullConsent(): Promise<void> {
       try {
         const cfg = (await getBridge().invoke(TelemetryChannels.getConfig)) as TelemetryRendererConfig
@@ -319,6 +377,16 @@ export const settingsFeature: UiFeature = {
               FieldGroup({ label: 'Font size', hint: 'Line height is fixed — only size varies.' }, fontSeg.el),
               FieldGroup({ label: 'New-workspace layout', hint: 'How many terminals the wizard suggests.' }, layoutSeg.el)
             ]
+          ),
+          // 06: the workspace card — one knob, so the card head is its label.
+          Card(
+            {
+              header: SectionHeader({
+                title: 'Agent orientation',
+                caption: 'Per workspace. A cold agent reads the map before it reads the task.'
+              })
+            },
+            [orientToggle.el]
           )
         ])
       },
@@ -719,6 +787,7 @@ export const settingsFeature: UiFeature = {
       if (requested) showSection(requested)
       else if (currentSection === 'integrations') enterIntegrations()
       void pullConsent()
+      void pullOrientAtLaunch()
       void providers.refresh() // re-detect: a CLI installed since last visit flips to Available
       void account.refresh() // status is push-kept; entering still re-pulls (missed pushes cost nothing)
       if (!page.querySelector('.ph-form')) void profilesHosts.refresh()

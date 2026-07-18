@@ -5,6 +5,7 @@ import { parentPort, workerData } from 'node:worker_threads'
 import { parse as parseJsonc } from 'jsonc-parser'
 import { BRAIN_MAX_FILES } from '@contracts'
 import { extractPortable, resolveProjectGraph, type ResolveContext } from './extract'
+import { computeRepoRanks } from './repomap'
 import { ParserPool, type GrammarCatalog, type ParseSkipReason, type TagCounts } from './parser-pool'
 import { BrainStore } from './store'
 import { walkRoot } from './walk'
@@ -220,7 +221,8 @@ async function build(
       graph.nodes,
       graph.edges,
       cacheRows,
-      { resolvedRefs: graph.resolvedRefs, droppedRefs: graph.droppedRefs, cacheHits, cacheMisses }
+      { resolvedRefs: graph.resolvedRefs, droppedRefs: graph.droppedRefs, cacheHits, cacheMisses },
+      computeRepoRanks(graph.nodes, graph.edges) // 06: ranks land in the SAME commit
     )
     // files carry the generation that indexed them — set at commit, ONE bump.
     return {
@@ -376,12 +378,15 @@ async function applyDelta(
       extractions,
       resolveContextFor(root)
     )
-    const generation = store.replacePartition(root, fileRows, graph.nodes, graph.edges, cacheRows, {
-      resolvedRefs: graph.resolvedRefs,
-      droppedRefs: graph.droppedRefs,
-      cacheHits,
-      cacheMisses
-    })
+    const generation = store.replacePartition(
+      root,
+      fileRows,
+      graph.nodes,
+      graph.edges,
+      cacheRows,
+      { resolvedRefs: graph.resolvedRefs, droppedRefs: graph.droppedRefs, cacheHits, cacheMisses },
+      computeRepoRanks(graph.nodes, graph.edges) // the incremental path ranks identically
+    )
     return {
       id,
       delta: {
