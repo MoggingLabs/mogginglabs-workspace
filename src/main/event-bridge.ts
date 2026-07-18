@@ -2,6 +2,7 @@ import { ipcMain, type BrowserWindow } from 'electron'
 import { BRIDGE_EVENTS, IntegrationsChannels, type BridgeEventName } from '@contracts'
 import { buildBridgeEvent, deliverWebhook, urlAllowed, webhookReceives } from '@backend/features/integrations'
 import { getSettingsStore } from './app-settings'
+import { paneHasAgent } from './agent-presence'
 import { vaultAvailable, vaultClearKey, vaultLoad, vaultStore } from './vault'
 import { workspaceIdForPane } from './integrations'
 import { recordTrail } from './trail'
@@ -151,8 +152,17 @@ function pushViews(): void {
 
 // ── Emission + delivery ─────────────────────────────────────────────────────
 
+/** DEV-only observation seam for the gates: when set, every emit is mirrored here BEFORE
+ *  webhook matching, so a smoke can assert what was (and was not) emitted without a single
+ *  configured webhook. Same pattern as agents.ts setAgentDetectOverrideForSmoke. */
+let smokeSink: ((event: BridgeEventName, fields: { workspace: string; pane?: string }) => void) | null = null
+export function setBridgeEventSinkForSmoke(sink: typeof smokeSink): void {
+  smokeSink = sink
+}
+
 /** Fire a house event at every matching webhook — never blocks the caller. */
 export function emitBridgeEvent(event: BridgeEventName, fields: { workspace: string; pane?: string; card?: string; note?: string }): void {
+  smokeSink?.(event, fields)
   const payload = buildBridgeEvent(event, fields, Date.now())
   for (const w of list()) {
     if (!webhookReceives({ events: w.events, workspaceId: w.workspaceId }, event, fields.workspace)) continue
@@ -204,6 +214,12 @@ export function onPaneStateForBridge(paneId: number, state: string): void {
   const prev = lastState.get(paneId)
   lastState.set(paneId, state)
   if (state === 'attention' && prev !== 'attention') {
+    // ALERTAGREE: the wire tells the same story as the pane. The daemon's tracker runs for
+    // every pane — a plain shell's BEL latches `attention` too — but only a pane that runs an
+    // agent may say "needs-you" to the user's automations, exactly as only such a pane may
+    // ring the rail or toast (the renderer's tracked gate; agent-presence.ts is its main-side
+    // twin, fed by launches + the daemon's detection stream).
+    if (!paneHasAgent(paneId)) return
     const workspace = workspaceIdForPane(String(paneId))
     if (workspace) emitBridgeEvent('needs-you', { workspace, pane: String(paneId) })
   }

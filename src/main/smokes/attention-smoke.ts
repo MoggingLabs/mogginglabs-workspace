@@ -3,6 +3,8 @@ import { writeFileSync } from 'node:fs'
 import { sleep } from './kit'
 import { join } from 'node:path'
 import { ActivityTracker, BELL_CONFIRM_MS, isEngagedInput, isSubmittedInput, OscParser } from '@backend/features/agent-state'
+import { notePaneAgent, notePaneGone } from '../agent-presence'
+import { onPaneStateForBridge, setBridgeEventSinkForSmoke } from '../event-bridge'
 
 // Env-gated tab-attention smoke (MOGGING_ATTENTION): create a 2nd workspace so Workspace 1 is
 // backgrounded, flip a pane in that background workspace to attention, assert its tab rings, then
@@ -464,16 +466,47 @@ const SCRIPT = `(async () => {
   }
 })()`
 
+/** C. The WEBHOOK half of ALERTAGREE: `needs-you` rides the same story as the pane. The
+ *  daemon's tracker latches `attention` for a plain shell's bell too, and the bridge used to
+ *  emit for it — an automation event over a pane no surface would corroborate. Asserted with
+ *  the observation seam (no webhook configured, no network): a transition INTO attention emits
+ *  ONLY while the pane is known to run an agent, and pane exit re-closes the gate. Runs AFTER
+ *  the UI script so pane 1's workspace is in the store (workspaceIdForPane must resolve — the
+ *  emit's other, pre-existing gate). */
+function bridgeAsserts(): { gateSilent: boolean; agentEmits: boolean; goneSilent: boolean } {
+  const seen: Array<{ event: string; pane?: string }> = []
+  setBridgeEventSinkForSmoke((event, fields) => void seen.push({ event, pane: fields.pane }))
+  try {
+    onPaneStateForBridge(1, 'idle')
+    onPaneStateForBridge(1, 'attention') // no presence -> the gate must hold
+    const gateSilent = seen.length === 0
+    notePaneAgent(1, true)
+    onPaneStateForBridge(1, 'idle')
+    onPaneStateForBridge(1, 'attention') // presence -> exactly one needs-you for pane 1
+    const agentEmits = seen.length === 1 && seen[0]!.event === 'needs-you' && seen[0]!.pane === '1'
+    notePaneGone(1)
+    onPaneStateForBridge(1, 'idle')
+    onPaneStateForBridge(1, 'attention') // exited -> closed again
+    const goneSilent = seen.length === 1
+    return { gateSilent, agentEmits, goneSilent }
+  } finally {
+    setBridgeEventSinkForSmoke(null)
+  }
+}
+
 export function runAttentionSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 45000) // safety net (the tracker's bell asserts wait out a real window)
   const run = async (): Promise<void> => {
-    let result: { pass?: boolean; osc?: unknown; tracker?: unknown; error?: string } = { pass: false }
+    let result: { pass?: boolean; osc?: unknown; tracker?: unknown; bridge?: unknown; error?: string } = { pass: false }
     const osc = oscOverflowAsserts()
     const tracker = await trackerAsserts()
     const trackerOk = Object.values(tracker).every(Boolean)
     try {
       const ui = (await win.webContents.executeJavaScript(SCRIPT, true)) as { pass?: boolean }
-      result = { ...ui, osc, tracker, pass: ui.pass === true && osc.pass && trackerOk }
+      await sleep(600) // the UI script's workspace save is debounced 400ms — let it land
+      const bridge = bridgeAsserts()
+      const bridgeOk = Object.values(bridge).every(Boolean)
+      result = { ...ui, osc, tracker, bridge, pass: ui.pass === true && osc.pass && trackerOk && bridgeOk }
     } catch (e) {
       result = { pass: false, osc, tracker, ...{ error: String(e) } }
     }
