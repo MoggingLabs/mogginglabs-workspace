@@ -117,6 +117,15 @@ export function createAppShell(root: HTMLElement): ShellContext {
       app.classList.toggle('is-maximized', s.maximized === true)
       app.dataset.chromeState = s.fullscreen ? 'fullscreen' : s.maximized ? 'maximized' : 'restored'
     })
+    // A press on native chrome (the title bar's drag strip, the window-control
+    // overlay) produces NO DOM event — the OS takes the pointer first, so open
+    // popovers survived a click that should dismiss them. Main forwards the press
+    // (shell:chromePress); replay it as a pointerdown targeting <body> — outside
+    // every menu by construction — so each outside-click dismisser closes exactly
+    // as if the click had been visible, current and future ones alike.
+    getBridge().on(ShellChannels.chromePress, () => {
+      document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    })
   } catch {
     /* no bridge (tests) — chrome classes stay at the restored defaults */
   }

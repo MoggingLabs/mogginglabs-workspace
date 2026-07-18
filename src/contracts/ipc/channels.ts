@@ -112,7 +112,12 @@ export const ShellChannels = {
   titlebarOverlay: 'shell:titlebarOverlay',
   /** main -> renderer: WindowStateEvent on fullscreen/maximize changes (events only —
    *  never polled). The renderer mirrors it as #app chrome classes. */
-  windowState: 'shell:windowState'
+  windowState: 'shell:windowState',
+  /** main -> renderer: a pointer went down on NATIVE chrome the DOM never sees —
+   *  the -webkit-app-region: drag strip, the window-control overlay, a window
+   *  drag/resize start. No payload. The shell replays it as a synthetic document
+   *  pointerdown so every outside-click dismisser (menus, popovers) fires. */
+  chromePress: 'shell:chromePress'
 } as const
 
 export const WorktreeChannels = {
