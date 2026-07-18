@@ -230,6 +230,25 @@ export class BrainStore {
     return { rows: rows.slice(0, limit), more: rows.length > limit }
   }
 
+  /** One file's row in one partition — the write door's CAS witness (07): a node's
+   *  line range is only as true as the bytes this hash names. */
+  fileRow(root: string, file: string): { path: string; hash: string; lang: string; bytes: number; mtime: number } | null {
+    return (
+      (this.db
+        .prepare('SELECT path, hash, lang, bytes, mtime FROM files WHERE root = ? AND path = ?')
+        .get(root, file) as { path: string; hash: string; lang: string; bytes: number; mtime: number } | undefined) ?? null
+    )
+  }
+
+  /** One file's nodes, stably ordered — the landed write's node re-resolution (07). */
+  nodesForFile(root: string, file: string): BrainNodeRow[] {
+    return this.db
+      .prepare(
+        'SELECT id, root, kind, name, file, startLine, endLine, sig FROM nodes WHERE root = ? AND file = ? ORDER BY startLine, id'
+      )
+      .all(root, file) as BrainNodeRow[]
+  }
+
   nodeById(id: string): BrainNodeRow | null {
     return (
       (this.db

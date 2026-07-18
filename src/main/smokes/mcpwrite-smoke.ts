@@ -80,11 +80,17 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
     'claim_card',
     'release_card',
     'comment_card',
-    'archive_card'
+    'archive_card',
+    // ADR 0018 step 07: the brain's symbol writes ride the SAME grant — one
+    // toggle covers the whole write surface, so this gate counts them too.
+    'replace_symbol_body',
+    'insert_after_symbol',
+    'insert_before_symbol'
   ]
   const countWrites = (names: string[]): number => names.filter((n) => WRITES.includes(n)).length
-  /** Catalog geometry: 17 browser + 6 reads + 1 self (non-writes) + 11 writes. */
-  const NON_WRITE_COUNT = 24
+  /** Catalog geometry: 17 browser + 6 control reads + 1 self + 8 brain reads
+   *  (non-writes) + 14 writes (11 fleet/board + 3 brain). */
+  const NON_WRITE_COUNT = 32
   const WRITE_COUNT = WRITES.length
 
   const waitFor = async (probe: () => Promise<boolean>, tries = 12, gapMs = 400): Promise<boolean> => {

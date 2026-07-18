@@ -523,7 +523,7 @@
   {
     "name": "get_node",
     "title": "Get graph node",
-    "description": "Read one graph node in full by id (from query_graph / find_symbol): kind, name, file, start/end lines, and its signature line. Unknown or out-of-scope ids answer a typed unknown-node refusal, never a guess.",
+    "description": "Read one graph node in full by id (from query_graph / find_symbol): kind, name, file, start/end lines, its signature line, and fileHash — the sha256 of its file as last indexed, which is the expectedFileHash a symbol write needs. Unknown or out-of-scope ids answer a typed unknown-node refusal, never a guess.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -631,5 +631,59 @@
     "access": "read",
     "upstream": "app",
     "verb": "brain.map"
+  },
+  {
+    "name": "replace_symbol_body",
+    "title": "Replace symbol body",
+    "description": "Replace one symbol's ENTIRE definition (its start line through its end line, declaration included) with new source, in your own checkout only. Compare-and-swap: pass expectedFileHash (the fileHash from get_node) — if the file's bytes changed since, the write refuses with reason 'stale' carrying the fresh hash; re-query the node and retry with current lines. The write lands atomically, the file is re-indexed before the reply, and the answer carries the new generation, the symbol's node (when it still resolves), and newFileHash for your next edit. Body text lands as INERT BYTES, verbatim; a body without a trailing newline gets the file's own line ending appended.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Node id of the symbol to replace (from find_symbol / get_node)." },
+        "expectedFileHash": { "type": "string", "description": "sha256 of the file's current bytes — get_node answers it as fileHash." },
+        "body": { "type": "string", "description": "The symbol's full new definition, max 64 KB. Bring your own indentation — lines land verbatim." }
+      },
+      "required": ["id", "expectedFileHash", "body"]
+    },
+    "family": "brain",
+    "access": "write",
+    "upstream": "app",
+    "verb": "brain.replaceBody"
+  },
+  {
+    "name": "insert_after_symbol",
+    "title": "Insert after symbol",
+    "description": "Insert whole lines immediately AFTER a symbol's last line, in your own checkout only. Indentation is taken from the symbol's first line and prepended to every non-empty line of text — write the text unindented. Same compare-and-swap as replace_symbol_body: expectedFileHash must match the file's current bytes (get_node answers it as fileHash), a mismatch refuses 'stale' with the fresh hash, and the reply carries the new generation, the anchor node, and newFileHash.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Anchor node id — the new lines land after its end line." },
+        "expectedFileHash": { "type": "string", "description": "sha256 of the file's current bytes — get_node answers it as fileHash." },
+        "text": { "type": "string", "description": "Whole lines to insert, unindented, max 64 KB — the anchor's indentation is applied for you." }
+      },
+      "required": ["id", "expectedFileHash", "text"]
+    },
+    "family": "brain",
+    "access": "write",
+    "upstream": "app",
+    "verb": "brain.insertAfter"
+  },
+  {
+    "name": "insert_before_symbol",
+    "title": "Insert before symbol",
+    "description": "Insert whole lines immediately BEFORE a symbol's first line, in your own checkout only. Indentation is taken from the symbol's first line and prepended to every non-empty line of text — write the text unindented. Same compare-and-swap as replace_symbol_body: expectedFileHash must match the file's current bytes (get_node answers it as fileHash), a mismatch refuses 'stale' with the fresh hash, and the reply carries the new generation, the anchor node at its shifted lines, and newFileHash.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Anchor node id — the new lines land before its start line." },
+        "expectedFileHash": { "type": "string", "description": "sha256 of the file's current bytes — get_node answers it as fileHash." },
+        "text": { "type": "string", "description": "Whole lines to insert, unindented, max 64 KB — the anchor's indentation is applied for you." }
+      },
+      "required": ["id", "expectedFileHash", "text"]
+    },
+    "family": "brain",
+    "access": "write",
+    "upstream": "app",
+    "verb": "brain.insertBefore"
   }
 ]

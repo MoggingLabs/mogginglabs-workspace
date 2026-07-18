@@ -897,7 +897,7 @@ function createGrantsBlock(): SyncedBlock {
     // round-trip, reverted on failure, truth re-rendered on success.
     const writeToggle = createToggleRow({
       label: 'Allow MCP write tools in this workspace',
-      hint: 'Off by default. On: agents here can send, mail, claim, and update through connected tools.',
+      hint: 'Off by default. On: agents here can send, mail, claim, update cards, and edit code symbols in their own checkout through connected tools.',
       checked: grant.writeTools === 'all',
       onChange: () => {
         const next = writeToggle.checked()

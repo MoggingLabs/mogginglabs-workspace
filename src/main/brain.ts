@@ -1,8 +1,18 @@
 import { join } from 'node:path'
 import { app, ipcMain, type BrowserWindow } from 'electron'
-import { BrainService, serveBrainRead, type BrainFreshnessStats, type BrainServeReply, type BrainTickSource } from '@backend/features/brain'
+import {
+  BrainService,
+  isBrainWriteVerb,
+  serveBrainRead,
+  serveBrainWrite,
+  type BrainFreshnessStats,
+  type BrainServeReply,
+  type BrainTickSource
+} from '@backend/features/brain'
 import { BrainChannels, locatePane, type BrainAnswer, type BrainChangedEvent } from '@contracts'
 import { getSettingsStore } from './app-settings'
+import { resolveGrantedWriteTools } from './integrations'
+import { recordTrail } from './trail'
 
 // App-wiring for the workspace brain (ADR 0018). The logic lives in @backend
 // (Electron-free, testable); main derives the ONE path Electron owns — the db dir
@@ -89,6 +99,49 @@ export function brainRootForPane(pane: string): string | null {
 export function handleBrainMcp(name: string, args: Record<string, unknown>, boundPane: string | undefined): BrainServeReply {
   const callerRoot = boundPane ? brainRootForPane(boundPane) : null
   return serveBrainRead(ensureService(), name, args, callerRoot)
+}
+
+/** brain.<write verb> -> the write-tool name whose grant covers it — the board
+ *  map's shape, one row per closed-set verb. */
+const BRAIN_WRITE_TOOL: Record<string, string> = {
+  'brain.replaceBody': 'replace_symbol_body',
+  'brain.insertAfter': 'insert_after_symbol',
+  'brain.insertBefore': 'insert_before_symbol'
+}
+
+export { isBrainWriteVerb }
+
+/**
+ * The `brain.*` WRITE family over the agent wire (ADR 0018 step 07). Custody
+ * first: the server already filters by grant; this endpoint re-derives it and
+ * fails closed (the board-write posture, verbatim) — no pane, no grant, no
+ * write. The engine's own locks follow (own-checkout scope, file CAS, sanity).
+ * Every call — landed or refused — leaves ONE trail event: verb and outcome
+ * only, never a path, a symbol, or a byte of content (ADR 0005).
+ */
+export async function handleBrainWriteMcp(
+  name: string,
+  args: Record<string, unknown>,
+  boundPane: string | undefined
+): Promise<BrainServeReply> {
+  const tool = BRAIN_WRITE_TOOL[name]
+  if (!tool) return { ok: false, reason: 'invalid', detail: `unroutable brain write verb: ${name}` }
+  const resolved = boundPane ? resolveGrantedWriteTools(boundPane) : { workspaceId: undefined, writeTools: [] as string[] }
+  if (!boundPane || !resolved.writeTools.includes(tool)) {
+    return { ok: false, reason: 'forbidden' }
+  }
+  const reply = await serveBrainWrite(ensureService(), name, args, brainRootForPane(boundPane))
+  recordTrail({
+    ts: Date.now(),
+    source: 'mcp',
+    workspaceId: resolved.workspaceId ?? '',
+    pane: boundPane,
+    verb: tool,
+    target: '1 symbol',
+    outcome: reply.ok ? 'ok' : 'refused',
+    ...(reply.ok ? {} : { reason: String(reply.reason ?? 'refused') })
+  })
+  return reply
 }
 
 // ── The launch-orientation knob (06): per-workspace, default ON ───────────────

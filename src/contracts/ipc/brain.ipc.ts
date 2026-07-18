@@ -12,6 +12,9 @@
 // affordably is refused `too-large`, never half-indexed in silence).
 export const BRAIN_MAX_FILES = 50_000
 export const BRAIN_MAX_FILE_BYTES = 1_048_576
+/** One symbol write's payload cap (ADR 0018 step 07). A body/text past this is a
+ *  `too-large` refusal — a symbol edit is a scalpel, never a file dump. */
+export const BRAIN_WRITE_MAX_BODY_BYTES = 65_536
 
 /** WHY the brain has no answer — a closed enum, never free text (nothing here can
  *  carry a path or a symbol into telemetry, ADR 0005; `detail` is for the UI/smoke

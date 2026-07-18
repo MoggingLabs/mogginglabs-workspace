@@ -125,9 +125,15 @@ local.
   versions, and per-language daemons with it.
 - **Cross-project graphs.** One brain per project, by law (c). Monorepo sub-projects
   share one brain via the repo root; two repos never share anything.
-- **Rename-symbol** (and symbol-level writes generally): the write wall (e) makes the
-  custody answer, but the feature itself is deferred until the graph can support it —
-  a rename over a syntactic graph is a find-and-pray, and we don't ship those.
+- **Rename-symbol.** Step 07 (2026-07-18) landed the symbol-level write surface under
+  stance (e)'s custody answer — a CLOSED three-verb set (`replace_symbol_body`,
+  `insert_after_symbol`, `insert_before_symbol`), each single-file, grant-gated,
+  own-checkout-scoped, file-CAS-guarded (`expectedFileHash`, refusing `stale` with the
+  fresh hash), atomic-or-refused, and synchronously re-indexed so the answer carries
+  the new generation. **The write set is closed by the catalog validator: growing it
+  is a revision of this ADR, not a code change.** Rename stays deferred — its
+  cross-file blast radius over a syntactic graph is a find-and-pray, and we don't
+  ship those.
 
 ## Research lineage
 

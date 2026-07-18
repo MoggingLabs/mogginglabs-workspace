@@ -6,7 +6,7 @@
 // (today's consent semantics exactly), written back so the migration runs once.
 
 import {
-  MCP_CONTROL_WRITE_TOOL_NAMES,
+  MCP_WRITE_TOOL_NAMES,
   defaultIntegrationsGrant,
   grantFromLegacyBrowserConsent,
   isSensitiveOrigin,
@@ -68,7 +68,7 @@ export function sanitizeGrant(workspaceId: string, raw: unknown): WorkspaceInteg
     g.writeTools = r.writeTools
   } else if (Array.isArray(r.writeTools)) {
     const tools = r.writeTools.filter((t): t is McpWriteToolName =>
-      (MCP_CONTROL_WRITE_TOOL_NAMES as readonly string[]).includes(t as string)
+      (MCP_WRITE_TOOL_NAMES as readonly string[]).includes(t as string)
     )
     // An explicit empty list is 'none' — one spelling for the closed fist.
     g.writeTools = tools.length ? tools : 'none'
@@ -133,9 +133,11 @@ export function clearGrant(kv: GrantKv, workspaceId: string): void {
 }
 
 /** The write-tool names `grant` exposes, resolved against the closed catalog
- *  list — the ONE place 'none'/'all'/list becomes a served set. */
+ *  list — the ONE place 'none'/'all'/list becomes a served set. Since ADR 0018
+ *  step 07 the list spans the fleet/board writes AND the brain's symbol writes:
+ *  the one existing toggle covers both, no second grant surface. */
 export function grantedWriteToolNames(grant: WorkspaceIntegrationsGrant): McpWriteToolName[] {
   if (grant.writeTools === 'none') return []
-  if (grant.writeTools === 'all') return [...MCP_CONTROL_WRITE_TOOL_NAMES]
-  return grant.writeTools.filter((t) => (MCP_CONTROL_WRITE_TOOL_NAMES as readonly string[]).includes(t))
+  if (grant.writeTools === 'all') return [...MCP_WRITE_TOOL_NAMES]
+  return grant.writeTools.filter((t) => (MCP_WRITE_TOOL_NAMES as readonly string[]).includes(t))
 }

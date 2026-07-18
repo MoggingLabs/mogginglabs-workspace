@@ -12,9 +12,10 @@ import type { BrainStore } from './store'
 // the `{ generation, dirty, root }` envelope (staleness visible THROUGH the
 // tool), every list is capped and paged, every response is size-capped with the
 // truncation FLAGGED (the no-silent-caps rule), and junk is a typed refusal in
-// the board family's wording register — never a throw. WRITES DO NOT EXIST
-// HERE: the catalog validator structurally rejects a brain verb that is not a
-// read, and this module exposes nothing that mutates.
+// the board family's wording register — never a throw. WRITES DO NOT LIVE
+// HERE: this module exposes nothing that mutates. The symbol-write family (07)
+// is writes.ts — grant-gated, CAS-guarded, own-checkout only — and the catalog
+// validator holds the brain's verbs to exactly the two closed sets.
 //
 // Electron-free: main hands in a BrainReadHost (the service) and the caller's
 // resolved checkout root; symbol names and paths flow back to the CALLING MODEL
@@ -68,7 +69,7 @@ const decodeCursor = (cursor: string): number | null => {
   }
 }
 
-interface NodeOut {
+export interface NodeOut {
   id: string
   kind: string
   name: string
@@ -79,7 +80,7 @@ interface NodeOut {
   root?: string
 }
 
-const nodeOut = (row: BrainNodeRow, labelRoot: boolean): NodeOut => ({
+export const nodeOut = (row: BrainNodeRow, labelRoot: boolean): NodeOut => ({
   id: row.id,
   kind: row.kind,
   name: row.name,
@@ -114,8 +115,9 @@ function intArg(v: unknown, fallback: number, min: number, max: number): number 
 
 /** The caller's own PARTITION: the project root enclosing (or equal to) the
  *  caller's checkout root, in the ROOTS list's spelling — the same fold rule
- *  identity uses everywhere. */
-function partitionOf(roots: string[], base: string): string | null {
+ *  identity uses everywhere. Exported: the write family (07) anchors its
+ *  own-checkout custody on the SAME resolution. */
+export function partitionOf(roots: string[], base: string): string | null {
   const folded = foldProjectKey(path.resolve(base))
   let best: string | null = null
   for (const root of roots) {
@@ -237,7 +239,10 @@ function serveNode(s: ResolvedScope, args: Record<string, unknown>): BrainServeR
   if (!id) return refuse('invalid', 'id is required')
   const row = visibleNode(s, id)
   if (!row) return unknownNode(id)
-  return { ok: true, ...envelope(s), node: nodeOut(row, s.labeled) }
+  // fileHash: the file's sha256 as last INDEXED — the expectedFileHash a symbol
+  // write (07) compare-and-swaps against. Package modules have no file, no hash.
+  const fileRow = row.file ? s.store.fileRow(row.root, row.file) : null
+  return { ok: true, ...envelope(s), node: nodeOut(row, s.labeled), ...(fileRow ? { fileHash: fileRow.hash } : {}) }
 }
 
 function serveNeighbors(s: ResolvedScope, args: Record<string, unknown>): BrainServeReply {

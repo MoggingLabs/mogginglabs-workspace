@@ -297,6 +297,40 @@ function brainRefusalText(r) {
   }
 }
 
+/** Write-refusal wording (ADR 0018 step 07) — every sentence tells the MODEL its
+ *  next move. `stale` rides with the fresh hash (the refuse-with-fresh-card
+ *  shape): re-query the node, then retry against current lines. */
+function brainWriteRefusalText(r) {
+  const detail = typeof r.detail === 'string' && r.detail ? r.detail : ''
+  switch (r.reason) {
+    case 'stale':
+      return (
+        'refused — the file changed since your expectedFileHash.' +
+        (r.freshHash ? ` Fresh hash: ${r.freshHash}.` : '') +
+        ' Re-query the node (get_node) and retry against current lines.' +
+        (detail ? ` (${detail})` : '')
+      )
+    case 'wrong-checkout':
+      return `refused — ${detail || 'that symbol lives in a different checkout of this project; write from a pane standing in it'}`
+    case 'forbidden':
+      return 'refused — this workspace has not granted write tools (the human grants them in the app)'
+    case 'unknown-node':
+      return detail || `unknown node (not in your project's brain)`
+    case 'missing':
+      return `refused — ${detail || 'the file does not exist on disk; re-query the node'}`
+    case 'too-large':
+      return `refused — ${detail || 'the payload or file exceeds its byte cap'}`
+    case 'invalid':
+      return `refused — ${detail || 'the write was invalid'}`
+    case 'busy':
+      return r.landed
+        ? `the write landed on disk but the re-index refused${detail ? ` (${detail})` : ''} — re-query before further edits`
+        : `the brain is busy${detail ? ` (${detail})` : ''} — retry shortly`
+    default:
+      return `symbol write failed: ${r.reason || 'the app could not answer'}`
+  }
+}
+
 async function handleBrainCall(id, def, args) {
   try {
     // The app endpoint bound this socket to our pane during hello; a paneless
@@ -540,6 +574,17 @@ async function dispatchWrite(def, args, by) {
       return { text: `released ${m.count}`, receipt: {} }
     }
     default: {
+      // ADR 0018 step 07: the brain's symbol writes ride the app endpoint like
+      // the board's — main re-derives the grant (fail-closed), the engine holds
+      // own-checkout scope + file CAS + sanity, the landing is atomic and
+      // synchronously re-indexed. The success payload is the write's receipt to
+      // the MODEL: the new generation, the landed node, and the newFileHash the
+      // next edit will CAS against. No receipt frame — the trail is app-side.
+      if (def.verb.startsWith('brain.')) {
+        const r = await callApp(def.verb, args)
+        if (!r.ok) return { error: brainWriteRefusalText(r) }
+        return { text: JSON.stringify({ generation: r.generation, node: r.node ?? null, newFileHash: r.newFileHash }) }
+      }
       // Board v2 writes all ride the app endpoint; main is the one writer
       // (CAS + claim rule + activity). Refusals come back verbatim and are
       // translated here into text a MODEL can act on — the fresh card rides

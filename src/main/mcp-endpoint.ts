@@ -14,7 +14,7 @@ import { runtimeDir as clientRuntimeDir } from './daemon-client'
 import { recordTrail } from './trail'
 import { MCP_BROWSER_TOOL_NAMES, type BrowserAgentVerb, type BrowserAgentVerbName } from '@contracts'
 import { applyCardPatch, boardForPane, commentCard, createCard } from './board'
-import { handleBrainMcp } from './brain'
+import { handleBrainMcp, handleBrainWriteMcp, isBrainWriteVerb } from './brain'
 
 /**
  * The agent-control transport (Phase-6/05b). Main opens a token-authed LOCAL
@@ -432,6 +432,16 @@ export function startMcpEndpoint(): void {
           // as capture — never telemetry, notify, or logs, ADR 0005).
           if (msg.name === 'board.list' || msg.name === 'board.get') {
             sock.write(JSON.stringify({ t: 'result', id, ...handleBoardRead(msg.name, msg.args ?? {}, boundPane) }) + '\n')
+            continue
+          }
+          // ADR 0018 step 07: the brain's WRITE family — symbol edits behind
+          // the SAME per-workspace grant as every write (re-derived app-side,
+          // fail-closed), own-checkout scoped, file-CAS guarded, atomic, and
+          // synchronously re-indexed. One trail event per call, counts only.
+          if (isBrainWriteVerb(msg.name)) {
+            void handleBrainWriteMcp(msg.name, msg.args ?? {}, boundPane)
+              .then((r) => sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n'))
+              .catch((e) => sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: rpcFailure(e) }) + '\n'))
             continue
           }
           // ADR 0018 step 05: the brain's READ family — free to every session

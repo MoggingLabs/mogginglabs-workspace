@@ -225,6 +225,24 @@ export class BrainFreshness {
     state.sweepCursor = -1
   }
 
+  /** A write the SERVICE itself landed and synchronously re-indexed (07): fold its
+   *  fresh records into the applied baseline so the next tick's stat-compare sees the
+   *  landing as absorbed, never as dirt. Bookkeeping only — no drain, no counters. */
+  absorb(root: string, records: { path: string; mtime: number; bytes: number }[], removed: string[]): void {
+    const state = this.roots.get(foldProjectKey(root))
+    if (!state) return
+    for (const p of removed) {
+      state.applied.delete(p)
+      state.dirty.delete(p)
+      state.deleted.delete(p)
+    }
+    for (const r of records) {
+      state.applied.set(r.path, { mtime: r.mtime, bytes: r.bytes })
+      state.dirty.delete(r.path)
+      state.deleted.delete(r.path)
+    }
+  }
+
   detach(root: string): void {
     const key = foldProjectKey(root)
     const state = this.roots.get(key)

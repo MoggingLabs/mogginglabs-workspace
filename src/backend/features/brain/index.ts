@@ -1,5 +1,8 @@
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { Worker } from 'node:worker_threads'
+import writeFileAtomic from 'write-file-atomic'
 import type { BrainAnswer, BrainChangedEvent, BrainRefusal, BrainStatus } from '@contracts'
 import { foldProjectKey } from '../workspace/project-identity'
 import {
@@ -10,6 +13,7 @@ import {
 } from './freshness'
 import { resolveBrainProject, type BrainProject } from './project'
 import { BrainStore, brainDbPath } from './store'
+import type { BrainLandResult, BrainSpliceResult } from './writes'
 import type { BrainBuildOutcome, BrainDeltaOutcome, BrainWorkerReply } from './indexer-worker'
 
 export { resolveBrainProject, type BrainProject } from './project'
@@ -25,6 +29,14 @@ export {
   type BrainTickSource
 } from './freshness'
 export { diffHeadMove, headDiffSpawnsForSmoke } from './head'
+export {
+  BRAIN_WRITE_VERBS,
+  isBrainWriteVerb,
+  serveBrainWrite,
+  type BrainLandResult,
+  type BrainSpliceResult,
+  type BrainWriteHost
+} from './writes'
 export {
   BRAIN_SERVE_DEFAULT_LIMIT,
   BRAIN_SERVE_MAX_LIMIT,
@@ -151,6 +163,96 @@ export class BrainService {
     } finally {
       this.building.delete(key)
     }
+  }
+
+  /**
+   * The ONE write door (ADR 0018 step 07): land a symbol write on `rel` under
+   * `root`'s partition — CAS-guarded, atomic, synchronously re-indexed. Runs the
+   * whole check-splice-write-reindex sequence inside the project's exclusive
+   * queue, so it never interleaves with a drain or a rebuild, and the hash it
+   * checks is the hash it writes over. Two hashes must BOTH match the expected:
+   * the disk's (the caller's claim of what it read) and the index's (the line
+   * range's provenance) — either off is a `stale` refusal carrying the fresh
+   * disk hash, and the disk is untouched. After write-file-atomic lands the
+   * bytes, THAT file is re-indexed in the worker before the answer: the reply's
+   * generation is the new one, and the caller's next query is already true.
+   */
+  async landSymbolWrite(
+    root: string,
+    rel: string,
+    expectedFileHash: string,
+    splice: (current: Buffer) => BrainSpliceResult
+  ): Promise<BrainLandResult> {
+    const pre = this.ensure(root)
+    if ('reason' in pre) return { ok: false, reason: pre.reason, ...(pre.detail ? { detail: pre.detail } : {}) }
+    const key = foldProjectKey(pre.brain.project.projectKey)
+    return this.runExclusive(key, async (): Promise<BrainLandResult> => {
+      const r = this.ensure(root) // the LRU may have moved under the queue
+      if ('reason' in r) return { ok: false, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) }
+      const partitionRoot = this.partitionRootFor(r.brain.project, root)
+      const abs = path.join(partitionRoot, rel)
+      let current: Buffer
+      try {
+        current = readFileSync(abs)
+      } catch {
+        return { ok: false, reason: 'missing', detail: 'the file does not exist on disk — re-query the node' }
+      }
+      const diskHash = createHash('sha256').update(current).digest('hex')
+      if (diskHash !== expectedFileHash) {
+        return {
+          ok: false,
+          reason: 'stale',
+          freshHash: diskHash,
+          detail: 'the file changed since your expectedFileHash — re-query the node and retry against current lines'
+        }
+      }
+      const dbRow = r.brain.store.fileRow(partitionRoot, rel)
+      if (!dbRow || dbRow.hash !== diskHash) {
+        // The caller's claim matches the DISK but the INDEX has not absorbed these
+        // bytes yet — the node's line range describes older bytes, and splicing by
+        // it would land blind. Same refusal register; the fix is a short re-query.
+        return {
+          ok: false,
+          reason: 'stale',
+          freshHash: diskHash,
+          detail: 'the index has not absorbed this file\'s current bytes yet — re-query shortly and retry'
+        }
+      }
+      const spliced = splice(current)
+      if ('reason' in spliced) {
+        return { ok: false, reason: spliced.reason, ...(spliced.detail ? { detail: spliced.detail } : {}) }
+      }
+      try {
+        // Atomic or refused: temp file + fsync + rename (write-file-atomic). A crash
+        // on any path leaves the old bytes whole or the new bytes whole, never a mix.
+        writeFileAtomic.sync(abs, spliced.next)
+      } catch (e) {
+        return { ok: false, reason: 'busy', detail: 'the write could not land: ' + (e instanceof Error ? e.message : String(e)) }
+      }
+      const newFileHash = createHash('sha256').update(spliced.next).digest('hex')
+      const outcome = await this.runDelta(partitionRoot, r.brain.project, {
+        changed: [rel],
+        deleted: [],
+        reconcile: false
+      })
+      if ('reason' in outcome) {
+        // The bytes LANDED; only the re-index refused. Saying "refused" without
+        // `landed` would be a lie the agent acts on. Freshness is deliberately NOT
+        // absorbed here, so the next tick sees the un-absorbed mtime and heals.
+        return {
+          ok: false,
+          reason: 'busy',
+          landed: true,
+          detail: 'the edit landed on disk, but the re-index failed — the index will catch up; re-query before further edits'
+        }
+      }
+      // The landing is absorbed truth, not dirt — and the UI learns the graph moved
+      // (the drain path's one-emission shape, without touching its counters).
+      this.freshness?.absorb(partitionRoot, outcome.records, outcome.removed)
+      const dirty = r.brain.project.roots.some((rt) => (this.freshness?.dirtyCount(rt) ?? 0) > 0)
+      this.changedCb?.({ projectKey: r.brain.project.projectKey, generation: outcome.generation, dirty })
+      return { ok: true, generation: outcome.generation, newFileHash }
+    })
   }
 
   /** Live open-db count — the LRU cap's witness for the BRAINCORE smoke. */
