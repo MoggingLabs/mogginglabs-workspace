@@ -200,8 +200,9 @@ export const agentsFeature: UiFeature = {
       getTelemetry().captureEvent({ name: 'agent.detected', props: { provider: ev.agentId } })
       // A DETECTED agent was not launched by the app, so it may carry no bell config at all
       // — a verdict-mute pane that works whole turns wearing a resting dot (found live
-      // 2026-07-16). If that CLI's global alerts aren't wired, say so once and offer to.
-      void nudgeGlobalHooks(ev.agentId)
+      // 2026-07-16). If that CLI's global alerts aren't wired (and the user never removed
+      // them), wire them now and say so — the ask-toast this replaces never converted.
+      void autoWireGlobalHooks(ev.agentId)
 
       if (!profileId) {
         setPaneProfile(paneId as PaneId, undefined) // a previous launch's note is not this agent's
@@ -213,38 +214,62 @@ export const agentsFeature: UiFeature = {
       if (getPaneAgentSession(paneId as PaneId)?.profileId === profileId) setPaneProfile(paneId as PaneId, name)
     }
 
-    /** One nudge per provider per app run, and only when that CLI's global alerts are
-     *  genuinely absent. A detected session cannot tell a truly bell-less hand-typed agent
-     *  from a daemon-restored one that kept its launch config, so the copy stays general —
-     *  wiring globally covers both, and every future one, and is a silent no-op outside
-     *  panes (global-hooks.ts). A CONFLICT (the user's own codex notify, say) is their
-     *  deliberate config — no nudge for that either. */
-    const hooksNudged = new Set<string>()
+    /** AUTO-WIRE a detected provider's global alerts, once per provider per app run.
+     *
+     *  A hand-typed agent carries none of the session-scoped bell config a launch rides, so
+     *  without the global wiring its pane is verdict-mute: the dot sits hollow through whole
+     *  turns — a working agent wearing "cannot tell you", forever. This used to be an
+     *  ask-toast, and the ask demonstrably failed: one transient nudge per app run, shown
+     *  while the user watches some other pane — found live 2026-07-18 as eight hand-typed
+     *  claude sessions (wizard-adjacent isolated-worktree terminals) all running with dead
+     *  status dots and nothing wired. Detection is the moment the app KNOWS the user runs
+     *  this CLI in its panes, so it wires the alerts then and says so, instead of asking and
+     *  expiring. The write is the same guarded mutation Settings performs (backup, atomic,
+     *  additive merge); wiring is a silent no-op outside app panes (global-hooks.ts).
+     *
+     *  The brakes, in order: a CONFLICT (the user's own codex notify, say) is their
+     *  deliberate config — status never reads not-applied, nothing is touched. An explicit
+     *  REMOVE (Settings, or the toast's Undo) persists an opt-out (`autoWire: false`) that
+     *  detection honors forever after. And the already-running session cannot re-read its
+     *  config — the wiring speaks from each agent's next launch — so the toast says so. */
+    const hooksAutoWired = new Set<string>()
     const HOOK_NUDGE_LABEL: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', opencode: 'OpenCode' }
-    async function nudgeGlobalHooks(providerId: string): Promise<void> {
+    async function autoWireGlobalHooks(providerId: string): Promise<void> {
       const label = HOOK_NUDGE_LABEL[providerId]
-      if (!label || hooksNudged.has(providerId)) return
-      hooksNudged.add(providerId)
+      if (!label || hooksAutoWired.has(providerId)) return
+      hooksAutoWired.add(providerId)
       try {
         const status = (await getBridge().invoke(AgentHookChannels.status)) as GlobalHooksStatus
         const row = status?.find?.((r) => r.provider === providerId)
         if (!row || (row.state !== 'not-applied' && row.state !== 'partial')) return
-        showToast({
-          tone: 'attention',
-          title: `Hand-typed ${label} sessions have no alerts`,
-          body: `Wire the alerts into ${label}’s own global config so a session typed at a pane’s prompt rings too (Settings › Agent CLIs to review or remove).`,
-          action: {
-            label: 'Wire alerts',
-            onClick: () => {
-              void (getBridge().invoke(AgentHookChannels.apply, { provider: providerId }) as Promise<GlobalHooksMutationResult>).then((result) => {
-                if (result?.ok) showToast({ tone: 'success', title: `${label} alerts wired globally`, body: 'New sessions ring their pane; a running one applies from its next launch.' })
-                else showToast({ tone: 'attention', title: 'Nothing was written', body: result?.reason })
-              })
+        if (row.autoWire === false) return // they removed it once; their no stands
+        const result = (await getBridge().invoke(AgentHookChannels.apply, { provider: providerId })) as GlobalHooksMutationResult
+        if (result?.ok) {
+          showToast({
+            tone: 'success',
+            title: `${label} alerts wired globally`,
+            body: `Hand-typed ${label} sessions now ring their pane and drive its status dot — this one from its next launch. Review or remove in Settings › Notifications.`,
+            action: {
+              label: 'Undo',
+              onClick: () => {
+                void (getBridge().invoke(AgentHookChannels.remove, { provider: providerId }) as Promise<GlobalHooksMutationResult>).then((undone) => {
+                  if (undone?.ok) showToast({ title: `${label} alert wiring removed`, body: 'It will not be re-applied automatically.' })
+                  else showToast({ tone: 'attention', title: 'Nothing was removed', body: undone?.reason })
+                })
+              }
             }
-          }
-        })
+          })
+        } else {
+          // The write refused (changed under us, unwritable file): fall back to saying why,
+          // with the manual path — never retry silently against a refusing file.
+          showToast({
+            tone: 'attention',
+            title: `Hand-typed ${label} sessions have no alerts`,
+            body: `${result?.reason ?? 'The wiring could not be applied.'} — Settings › Notifications to wire them by hand.`
+          })
+        }
       } catch {
-        /* the nudge is a courtesy — never a failure surface */
+        /* the auto-wire is a courtesy — never a failure surface */
       }
     }
 
