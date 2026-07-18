@@ -13,6 +13,13 @@ import { ActivityTracker, BELL_CONFIRM_MS, isEngagedInput, isSubmittedInput, Osc
 // and that silence is never mistaken for a completion. Those asserts are written to fail on the
 // engine this replaced: it derived "finished" from a busy->idle edge over a 2.5s duration floor,
 // so a pane that merely went quiet for long enough was stamped as having finished work.
+//
+// AND the gate on ALERTAGREE (2026-07-18): the attention port's tracked gate is the one door
+// every alert surface reads through. An untracked pane's verdicts reach NOTHING — no rail ring,
+// no toast (untrackedSilent) — and a tracked pane's attention rings the rail AND toasts in the
+// same breath (toastAgrees). Written to fail on the pre-gate renderer, where the toast layer read
+// the raw terminal:state relay and a plain shell's bell toasted "needs your input" over a pane
+// whose every other surface said nothing.
 
 /** Count the terminal bells a chunk sequence produces — the signal that latches a pane red. */
 function bellsFor(chunks: string[]): number {
@@ -368,9 +375,24 @@ const SCRIPT = `(async () => {
   m.workspace.create({ name: 'Foreground' }) // ordinal 1, active -> Workspace 1 (ordinal 0) backgrounded
   await sleep(700)
   const bgTab = document.querySelectorAll('.workspace-tab')[0] // Workspace 1
+
+  // ALERTAGREE: an UNTRACKED pane's verdicts reach no surface at all. The port's tracked gate
+  // is the one law every alert surface reads through — before it existed, the toast layer read
+  // the raw relay, so a plain shell's bell toasted "needs your input" over a pane whose dot,
+  // outline and rail all said nothing. Untracked first, so this assert drives the same door a
+  // plain shell's tracker events knock on: no rail ring, and NO toast.
+  m.attention.setPaneState(1, 'attention')
+  await sleep(400)
+  const untrackedSilent = !bgTab.getAttribute('data-attention') && !document.querySelector('.toast')
+
+  // Tracked (what a real agent session does through core/attention/tracking.ts), the SAME
+  // event rings everything at once — and the toast agrees with the pane by construction.
+  m.attention.setPaneTracked(1, true)
   m.attention.setPaneState(1, 'attention') // pane 1 lives in Workspace 1 (base 0)
   await sleep(400)
   const ringed = bgTab.getAttribute('data-attention')
+  const toastAgrees = Array.from(document.querySelectorAll('.toast-title'))
+    .some((t) => (t.textContent || '').includes('needs your input'))
   m.workspace.switchByIndex(0) // focus Workspace 1 -> its ring clears
   await sleep(400)
   const afterFocus = bgTab.getAttribute('data-attention')
@@ -423,10 +445,12 @@ const SCRIPT = `(async () => {
   const pane2 = document.querySelector('.layout-slot[data-pane-id="101"] .pane-state')
   const unknownIsHollow = !pane2 || pane2.getAttribute('data-state') === 'unknown'
 
-  const pass = ringed === 'attention' && !afterFocus &&
+  const pass = untrackedSilent && toastAgrees && ringed === 'attention' && !afterFocus &&
     quietIsNotGreen && doneGreensFast && ackClears && blockedOutline && blockedNotFinished && unknownIsHollow
   return {
     pass,
+    untrackedSilent,
+    toastAgrees,
     ringed,
     afterFocus,
     quietIsNotGreen,
