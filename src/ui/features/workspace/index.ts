@@ -446,7 +446,7 @@ export const workspaceFeature: UiFeature = {
         persist()
         updateRailFade()
       },
-      (anyAttention) => workspaceClient.setAttention(anyAttention),
+      (alert) => workspaceClient.setAttention(alert),
       touchRecent, // closing keeps the project's final layout in recents
       touchRecent // opening/working on a project bumps it to the top
     )

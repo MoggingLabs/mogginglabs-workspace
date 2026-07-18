@@ -4,6 +4,7 @@ import { sleep } from './kit'
 import { join } from 'node:path'
 import { ActivityTracker, BELL_CONFIRM_MS, isEngagedInput, isSubmittedInput, OscParser } from '@backend/features/agent-state'
 import { notePaneAgent, notePaneGone } from '../agent-presence'
+import { attentionSawActiveForSmoke, attentionSignal } from '../attention'
 import { onPaneStateForBridge, setBridgeEventSinkForSmoke } from '../event-bridge'
 
 // Env-gated tab-attention smoke (MOGGING_ATTENTION): create a 2nd workspace so Workspace 1 is
@@ -447,12 +448,45 @@ const SCRIPT = `(async () => {
   const pane2 = document.querySelector('.layout-slot[data-pane-id="101"] .pane-state')
   const unknownIsHollow = !pane2 || pane2.getAttribute('data-state') === 'unknown'
 
-  const pass = untrackedSilent && toastAgrees && ringed === 'attention' && !afterFocus &&
+  // 7. UNDO-GRACE MEMORY: a spent green swell stays spent across close -> undo. The prune in
+  //    refreshAttention skips mid-close workspaces' panes; before the fix it DELETED their
+  //    pulse memory, so undoing a close replayed a swell whose news was already delivered.
+  const mem = m.workspace.create({ name: 'Memory', paneCount: 2 })
+  await sleep(700)
+  const p2 = mem.ordinal * 100 + 2
+  const memSlot = () => document.querySelector('.layout-slot[data-pane-id="' + p2 + '"]')
+  m.attention.setPaneTracked(p2, true)
+  m.attention.setPaneState(p2, 'done') // visible (Memory is active), NOT focused -> swell plays once
+  await sleep(1600) // outlive the 1400ms one-shot
+  const swellPlayed = !!memSlot() && memSlot().getAttribute('data-alert') === 'finished'
+  m.workspace.switchByIndex(0)
+  await sleep(300)
+  m.workspace.close(mem.id) // no sessions, done is not running -> straight to the undo grace
+  await sleep(500)
+  const undoBtn = Array.from(document.querySelectorAll('.toast-action')).find((b) => b.textContent === 'Undo')
+  if (undoBtn) undoBtn.click()
+  await sleep(300)
+  let reswelled = false
+  const obs = new MutationObserver(() => {
+    if (memSlot() && memSlot().classList.contains('attn-pulse')) reswelled = true
+  })
+  obs.observe(document.getElementById('workspace-host'), { subtree: true, attributes: true, attributeFilter: ['class'] })
+  const memIdx = m.workspace.list().findIndex((w) => w.id === mem.id)
+  m.workspace.switchByIndex(memIdx)
+  await sleep(1800)
+  obs.disconnect()
+  const undoKeepsSpentSwell = swellPlayed && !!undoBtn && !reswelled &&
+    !!memSlot() && memSlot().getAttribute('data-alert') === 'finished'
+
+  const pass = untrackedSilent && toastAgrees && undoKeepsSpentSwell && ringed === 'attention' && !afterFocus &&
     quietIsNotGreen && doneGreensFast && ackClears && blockedOutline && blockedNotFinished && unknownIsHollow
   return {
     pass,
     untrackedSilent,
     toastAgrees,
+    undoKeepsSpentSwell,
+    swellPlayed,
+    reswelled,
     ringed,
     afterFocus,
     quietIsNotGreen,
@@ -497,18 +531,38 @@ function bridgeAsserts(): { gateSilent: boolean; agentEmits: boolean; goneSilent
 export function runAttentionSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 45000) // safety net (the tracker's bell asserts wait out a real window)
   const run = async (): Promise<void> => {
-    let result: { pass?: boolean; osc?: unknown; tracker?: unknown; bridge?: unknown; error?: string } = { pass: false }
+    let result: { pass?: boolean; osc?: unknown; tracker?: unknown; bridge?: unknown; policy?: boolean; activeFlagSeen?: boolean; error?: string } = { pass: false }
     const osc = oscOverflowAsserts()
     const tracker = await trackerAsserts()
     const trackerOk = Object.values(tracker).every(Boolean)
+    // D. The OS-signal POLICY (src/main/attention.ts), pure: background workspaces ring
+    // regardless of window focus; the ACTIVE workspace rings exactly while the window is NOT
+    // focused (the minimized-window gap this closed); all-quiet stays quiet.
+    const policy =
+      attentionSignal({ background: true, active: false }, true) &&
+      attentionSignal({ background: false, active: true }, false) &&
+      !attentionSignal({ background: false, active: true }, true) &&
+      !attentionSignal({ background: false, active: false }, false)
     try {
       const ui = (await win.webContents.executeJavaScript(SCRIPT, true)) as { pass?: boolean }
       await sleep(600) // the UI script's workspace save is debounced 400ms — let it land
       const bridge = bridgeAsserts()
       const bridgeOk = Object.values(bridge).every(Boolean)
-      result = { ...ui, osc, tracker, bridge, pass: ui.pass === true && osc.pass && trackerOk && bridgeOk }
+      // The LIVE half of the policy: the renderer really publishes the {background, active}
+      // pair (the script drove an unseen red in the ACTIVE workspace — a reverted renderer
+      // sending the old boolean can never set this).
+      const activeFlagSeen = attentionSawActiveForSmoke()
+      result = {
+        ...ui,
+        osc,
+        tracker,
+        bridge,
+        policy,
+        activeFlagSeen,
+        pass: ui.pass === true && osc.pass && trackerOk && bridgeOk && policy && activeFlagSeen
+      }
     } catch (e) {
-      result = { pass: false, osc, tracker, ...{ error: String(e) } }
+      result = { pass: false, osc, tracker, policy, ...{ error: String(e) } }
     }
     try {
       writeFileSync(join(process.cwd(), 'out', 'attention-result.json'), JSON.stringify(result))
