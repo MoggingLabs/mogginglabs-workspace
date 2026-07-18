@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 159 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 160 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
-# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 137 app-boot
+# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 138 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -366,6 +366,12 @@ run_smoke PERWS        MOGGING_PERWS     1 240 perws
 run_smoke PERWSAGENT   MOGGING_PERWSAGENT 1 240 perwsagent
 run_smoke VAULTKEYS    MOGGING_VAULTKEYS 1 240 vaultkeys
 run_smoke WSCLOSE      MOGGING_WSCLOSE   1 240 wsclose
+# RAILFOLD: the rail fold/unfold choreography (2026-07-18) — in flight the rail clips to
+# its animating edge and keeps the expanded layout at full width, so the pane count is
+# revealed/hidden AT its resting position and never overlaps the icon; the collapsed
+# end-state re-layout lands only after the fold. Bites: a dropped rail-anim stamp, a
+# lost :not(.rail-anim) guard, and any mid-fold layout squeeze.
+run_smoke RAILFOLD     MOGGING_RAILFOLD  1 240 railfold
 run_smoke KBSHORTCUTS  MOGGING_KBSHORTCUTS 1 240 kbshortcuts
 run_smoke KBGLOBAL     MOGGING_KBGLOBAL  1 240 kbglobal
 run_smoke DAEMONCUSTODY MOGGING_DAEMONCUSTODY 1 240 daemoncustody

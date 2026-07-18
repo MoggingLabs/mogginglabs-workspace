@@ -83,6 +83,42 @@ export function createAppShell(root: HTMLElement): ShellContext {
   }
   applyCalmMotion() // Settings § Appearance "Calm motion" — stamp :root before first paint
 
+  // Fold/unfold choreography (`rail-anim`): the rail's WIDTH transitions (global.css,
+  // --dur-rail), but its collapsed end-state is a discrete re-layout — labels display:none,
+  // badges to the icon's corner, header re-centred — that used to land at t=0 of the
+  // animation. On expand that painted the pane count on top of the icon inside a
+  // still-narrow rail. While `rail-anim` is on, global.css keeps the EXPANDED layout at
+  // full width and clips it to the animating edge, so the fold itself reveals/hides each
+  // element at its final position. A MutationObserver rather than wrapping the toggle
+  // sites: the collapse classes are flipped here (manual) AND in dock-budget.ts (auto),
+  // and the observer's microtask timing still runs before the next paint, so the
+  // in-flight rules apply from the transition's first frame.
+  let railAnimTimer: number | undefined
+  const railAnimEnd = (): void => {
+    window.clearTimeout(railAnimTimer)
+    railAnimTimer = undefined
+    app.classList.remove('rail-anim')
+  }
+  // transitionend only — NOT transitioncancel: retargeting a mid-flight fold (rapid
+  // double-toggle) cancels the old transition after the observer has already re-armed,
+  // and a cancel listener would strip the class out from under the reversed run. The
+  // timeout below is the backstop for a transition that dies without an end event
+  // (rail display:none mid-fold).
+  rail.addEventListener('transitionend', (e) => {
+    if (e.target === rail && e.propertyName === 'width') railAnimEnd()
+  })
+  let railWasCollapsed =
+    app.classList.contains('rail-collapsed') || app.classList.contains('rail-auto-collapsed')
+  new MutationObserver(() => {
+    const collapsed =
+      app.classList.contains('rail-collapsed') || app.classList.contains('rail-auto-collapsed')
+    if (collapsed === railWasCollapsed) return // class churn that didn't change the fold
+    railWasCollapsed = collapsed
+    app.classList.add('rail-anim')
+    window.clearTimeout(railAnimTimer)
+    railAnimTimer = window.setTimeout(railAnimEnd, 400) // width runs --dur-rail 260ms; reduced motion ~0
+  }).observe(app, { attributes: true, attributeFilter: ['class'] })
+
   // Ctrl/Cmd+Shift+B toggles the rail. Shift is required on purpose: plain Ctrl+B is a
   // real terminal keystroke (tmux prefix, readline cursor-back) and must reach the PTY.
   window.addEventListener(

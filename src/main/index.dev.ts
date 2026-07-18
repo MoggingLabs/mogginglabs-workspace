@@ -15,6 +15,7 @@ import { runPerWsSmoke } from './smokes/perws-smoke'
 import { runPerWsAgentSmoke } from './smokes/perwsagent-smoke'
 import { runVaultKeysSmoke } from './smokes/vaultkeys-smoke'
 import { runWsCloseSmoke } from './smokes/wsclose-smoke'
+import { runRailfoldSmoke } from './smokes/railfold-smoke'
 import { runKbShortcutsSmoke } from './smokes/kbshortcuts-smoke'
 import { runKbGlobalSmoke } from './smokes/kbglobal-smoke'
 import { runVerdictLiveSmoke } from './smokes/verdictlive-smoke'
@@ -180,7 +181,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_TEMPLATE', 'MOGGING_PROFPERSIST', 'MOGGING_BROWSER', 'MOGGING_BROWSERCTL', 'MOGGING_BROWSERUX', 'MOGGING_BROWSERTABS', 'MOGGING_BROWSERRACE', 'MOGGING_BROWSERZERO', 'MOGGING_LOCKDOWN', 'MOGGING_FIRSTRUN',
   'MOGGING_PRODUCT', 'MOGGING_PRODMILESTONE', 'MOGGING_USAGEGLANCE', 'MOGGING_USAGEUI', 'MOGGING_WEBUSAGE', 'MOGGING_USAGECLI',
   'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
-  'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_KBSHORTCUTS', 'MOGGING_KBGLOBAL', 'MOGGING_VERDICTLIVE', 'MOGGING_WEBTRAIL',
+  'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_RAILFOLD', 'MOGGING_KBSHORTCUTS', 'MOGGING_KBGLOBAL', 'MOGGING_VERDICTLIVE', 'MOGGING_WEBTRAIL',
   'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX', 'MOGGING_WIZARDFAIL', 'MOGGING_WIZARDISO', 'MOGGING_WIZCD', 'MOGGING_WIZLAYOUT', 'MOGGING_MUTATIONRACE', 'MOGGING_AUTHRUNNER',
   'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX', 'MOGGING_RESUME',
   'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_RESPONSIVE', 'MOGGING_KBAPG', 'MOGGING_UXMILESTONE',
@@ -435,6 +436,8 @@ function afterWindow(win: BrowserWindow): void {
     runPerWsAgentSmoke(win) // env-gated per-workspace AGENT-browser smoke: agents drive their own workspace's browser (Phase-8/07c)
   } else if (process.env.MOGGING_VAULTKEYS) {
     runVaultKeysSmoke(win) // env-gated service-key vault smoke: paste-once -> pane env, plaintext nowhere at rest (Phase-8/08)
+  } else if (process.env.MOGGING_RAILFOLD) {
+    runRailfoldSmoke(win) // env-gated rail fold/unfold choreography smoke (count never overlaps the icon)
   } else if (process.env.MOGGING_WSCLOSE) {
     runWsCloseSmoke(win) // env-gated workspace-close smoke: confirm on live work + 5s undo grace (UX audit WS-01)
   } else if (process.env.MOGGING_KBSHORTCUTS) {
