@@ -52,6 +52,10 @@ export interface LayoutSpec {
   count: number
   rows: number
   cols: number
+  /** Set = the tile is shown but not selectable, and the string says WHY (tooltip +
+   *  aria-disabled). The tile stays focusable so the reason is reachable, never a
+   *  silent dead button. */
+  disabledReason?: string
 }
 
 export interface LayoutGridPickerHandle {
@@ -73,8 +77,13 @@ export function createLayoutGridPicker(opts: {
 }): LayoutGridPickerHandle {
   let selected = opts.selected
   const tiles = new Map<number, HTMLButtonElement>()
+  const disabled = new Set(opts.specs.filter((s) => s.disabledReason).map((s) => s.count))
 
   function apply(count: number, fire: boolean): void {
+    // A user gesture on a disabled tile does nothing (its title says why). Programmatic
+    // setSelected still lands — the CURRENT count may itself be disabled (a screen that
+    // shrank under a 12-pane workspace) and must still render as selected.
+    if (fire && disabled.has(count)) return
     selected = count
     for (const [c, tile] of tiles) {
       tile.classList.toggle('is-selected', c === count)
@@ -89,11 +98,13 @@ export function createLayoutGridPicker(opts: {
     role: 'radiogroup',
     ariaLabel: 'How many terminals',
     onKeydown: (e) => {
-      const order = opts.specs.map((s) => s.count)
+      // Arrow keys walk the SELECTABLE tiles only; disabled ones stay mouse-hoverable
+      // and Tab-reachable for their reason, but the roving selection skips them.
+      const order = opts.specs.map((s) => s.count).filter((c) => !disabled.has(c))
       const i = order.indexOf(selected)
       let next: number | undefined
-      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = order[i + 1]
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = order[i - 1]
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = i >= 0 ? order[i + 1] : order[0]
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = i >= 0 ? order[i - 1] : order[order.length - 1]
       if (next != null) {
         e.preventDefault()
         apply(next, true)
@@ -103,12 +114,18 @@ export function createLayoutGridPicker(opts: {
   })
 
   for (const spec of opts.specs) {
+    const off = disabled.has(spec.count)
     const tile = el(
       'button',
       {
-        class: 'layout-tile',
+        class: 'layout-tile' + (off ? ' is-disabled' : ''),
         type: 'button',
         role: 'radio',
+        // aria-disabled, NOT the native attribute: a natively disabled button falls out
+        // of the tab order and (on some platforms) stops hit-testing, taking the reason
+        // tooltip with it. The click guard lives in apply().
+        title: spec.disabledReason,
+        attrs: off ? { 'aria-disabled': 'true' } : undefined,
         ariaLabel: `${spec.count} ${spec.count === 1 ? 'terminal' : 'terminals'} (${spec.rows}×${spec.cols})`,
         onClick: () => apply(spec.count, true)
       },

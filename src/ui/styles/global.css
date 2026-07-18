@@ -2076,13 +2076,23 @@ textarea {
   right: 0;
   left: auto;
   padding: var(--sp-2);
-  /* The 8 template tiles ride one row (~490px) — the .menu base cap (320px) would
-     clip them. The vw term keeps the right-anchored popover from poking past the
-     window's LEFT edge on a very narrow window (the tiles wrap instead). */
-  max-width: min(520px, calc(100vw - 240px));
+  /* A fixed column, not the old 520px tile strip: the 8 templates stack 4×2 (below),
+     so the status line, the tile grid and the action rows share one width instead of
+     three action rows rattling inside a strip sized for eight tiles. The vw term
+     keeps the right-anchored popover from poking past the window's LEFT edge on a
+     very narrow window. */
+  width: 340px;
+  max-width: calc(100vw - 240px);
 }
 .layout-menu[hidden] {
   display: none;
+}
+/* The popover's status line: panes now / live work / the cap — the same numbers the
+   dimmed tiles and the stepper ceiling are derived from. */
+.layout-menu-status {
+  padding: 0 var(--sp-1) var(--sp-1);
+  font-size: var(--fs-11);
+  color: var(--text-mid);
 }
 /* "New terminal" — the ADD action lives with the layout templates (same decision:
    how many panes). Full-width row under the tiles; the shortcut hugs the right. */
@@ -2092,16 +2102,33 @@ textarea {
 .layout-menu-add:hover .kbd {
   color: var(--accent-ink);
 }
+/* The isolated-terminals row: the verb button grows, the [− n +] stepper rides its
+   right edge. min-width 0 + ellipsis so the nowrap label yields to the stepper
+   instead of pushing the popover wide. */
+.layout-menu-iso-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.layout-menu-iso-row .menu-item {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.layout-menu-iso-row .menu-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* Compact tiles for the dense titlebar dropdown (the wizard runs the same picker at
-   full size). Only size/radius shift; hover + selected states come from .layout-tile.
-   `wrap` engages ONLY when the menu's vw-guarded max-width bites (narrow window) —
-   max-content sizing keeps the row single-line everywhere else. */
+   full size). A 4-across GRID, not the old single row: the popover column stays as
+   wide as its action rows and the tiles fill it edge to edge. Hover + selected
+   states come from .layout-tile. */
 .layout-picker--compact {
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
   gap: var(--sp-1);
 }
 .layout-picker--compact .layout-tile {
-  width: 56px;
+  width: auto;
   height: 56px;
   padding: 6px;
   border-radius: var(--r-sm);
@@ -5741,6 +5768,15 @@ body.pane-dragging * {
 }
 .layout-tile.is-selected .layout-tile-count {
   color: var(--accent-ink);
+}
+/* Refused tiles (above the cap, or a shrink that would close live agent work): still
+   hoverable/focusable so the title can say WHY, but visually out of the running. */
+.layout-tile.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.layout-tile.is-disabled:hover {
+  border-color: var(--border);
 }
 
 /* Wizard stepper. */

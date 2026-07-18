@@ -13,7 +13,7 @@ import {
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { TEMPLATE_COUNTS, TEMPLATES } from '../layout'
-import { Button, IconButton, clear, createLayoutGridPicker, el, icon, showToast } from '../../components'
+import { Button, IconButton, clear, createLayoutGridPicker, createStepper, el, icon, showToast } from '../../components'
 import { WorkspaceController, type CreateOpts } from './controller'
 import { resolveColors } from './model'
 import { workspaceClient } from './workspace.client'
@@ -554,11 +554,27 @@ export const workspaceFeature: UiFeature = {
 
     function renderLayoutMenu(): void {
       clear(layoutMenu)
+      // The popover opens on the workspace's TRUTH: what it holds, how much of it is
+      // live work, and where the cap sits — the same numbers the gates below enforce,
+      // so a dimmed tile and this line can never tell two stories.
+      const status = controller.layoutStatus()
+      if (status) {
+        const bits = [`${status.panes} of ${status.cap} panes`]
+        if (status.live > 0) bits.push(`${status.live} with live work`)
+        layoutMenu.append(el('div', { class: 'layout-menu-status', text: bits.join(' · ') }))
+      }
       // REMOVE #16: the SHARED grid picker (compact variant) — one component, replacing
       // the ad-hoc tile builder whose `.layout-menu-tile .layout-tile-count` reached
-      // across to override this very component's class.
+      // across to override this very component's class. Tiles the controller refuses —
+      // above the cap, or a shrink that would close live agent work — render dimmed
+      // with the reason, instead of lighting up a click the apply would have to fight.
       const picker = createLayoutGridPicker({
-        specs: TEMPLATE_COUNTS.map((n) => ({ count: n, rows: TEMPLATES[n].rows, cols: TEMPLATES[n].cols })),
+        specs: TEMPLATE_COUNTS.map((n) => ({
+          count: n,
+          rows: TEMPLATES[n].rows,
+          cols: TEMPLATES[n].cols,
+          disabledReason: controller.templateBlockReason(n) ?? undefined
+        })),
         selected: controller.activePaneCount(),
         compact: true,
         onSelect: (n) => {
@@ -585,22 +601,38 @@ export const workspaceFeature: UiFeature = {
           el('span', { class: 'kbd', text: 'Ctrl+Shift+D' })
         ]
       )
-      // ADD one ISOLATED terminal — same split, but the new pane lives in its own git
+      // ADD isolated terminals — same split, but each new pane lives in its own git
       // worktree (fresh mogging/<slug> branch), the manual twin of the wizard's
       // "Isolate each agent" checkbox. Menu-only by design: Ctrl+Shift+D stays plain.
+      // The stepper is what lets a SWARM start in one gesture (count clamped to the
+      // headroom the status line quotes); it defaults to 1, so the row alone is still
+      // the single-terminal verb it always was.
+      let isoCount = 1
+      const isoLabel = el('span', { text: 'New isolated terminal (worktree)' })
+      const isoStepper = createStepper({
+        value: 1,
+        min: 1,
+        max: status ? Math.max(1, status.cap - status.panes) : 1,
+        ariaLabel: 'How many isolated terminals',
+        onChange: (n) => {
+          isoCount = n
+          isoLabel.textContent = n === 1 ? 'New isolated terminal (worktree)' : `${n} new isolated terminals (worktrees)`
+        }
+      })
       const addIsolated = el(
         'button',
         {
           class: 'menu-item layout-menu-add layout-menu-add-isolated',
           type: 'button',
-          title: 'Splits the focused pane into a fresh git worktree on its own branch',
+          title: 'Splits the focused pane into fresh git worktrees — one branch per terminal',
           onClick: () => {
             layoutMenu.hidden = true
-            void controller.splitActiveIsolated()
+            void controller.splitActiveIsolated(undefined, isoCount)
           }
         },
-        [icon('git-branch', 14), el('span', { text: 'New isolated terminal (worktree)' })]
+        [icon('git-branch', 14), isoLabel]
       )
+      const isoRow = el('div', { class: 'layout-menu-iso-row' }, [addIsolated, isoStepper.el])
       // BALANCE — equal shares on every row and column. The whole-workspace tidy that
       // per-seam equalize (gutter double-click, pane ⋯ menu) does line by line.
       const balance = el(
@@ -620,7 +652,7 @@ export const workspaceFeature: UiFeature = {
           el('span', { class: 'kbd', text: 'Ctrl+Shift+=' })
         ]
       )
-      layoutMenu.append(picker.el, el('div', { class: 'menu-sep' }), add, addIsolated, balance)
+      layoutMenu.append(picker.el, el('div', { class: 'menu-sep' }), add, isoRow, balance)
     }
 
     // ── Keyboard: capture phase + stopPropagation so xterm never sees these ──
@@ -880,7 +912,7 @@ function exposeForDev(controller: WorkspaceController): void {
     zoom: () => controller.toggleZoom(),
     expand: (paneId: number, mode: 'full' | 'col' | 'row') => controller.expandPane(paneId, mode),
     split: (dir?: 'h' | 'v') => controller.splitActive(dir),
-    splitIsolated: (dir?: 'h' | 'v') => controller.splitActiveIsolated(dir),
+    splitIsolated: (dir?: 'h' | 'v', count?: number) => controller.splitActiveIsolated(dir, count),
     close: (paneId: number) => {
       const id = controller.activeMeta()?.id
       if (id) void controller.requestClosePane(id, paneId)

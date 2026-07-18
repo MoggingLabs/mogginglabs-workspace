@@ -13,6 +13,11 @@ import { join } from 'node:path'
 // Launch — then demands testimony: two managed worktrees exist, the workspace's
 // paneCwds point INTO them, and each pane's SHELL really ran there (a `custom:`
 // provider writes `git branch --show-current` into branch.txt at its own cwd).
+// Also owns the layout menu's ISOLATION verbs: the single row, the BATCH stepper
+// (N worktrees in one gesture — worktrees must equal panes added, and the return
+// is true only when every requested terminal opened), and the picker's live-work
+// gate (a template tile that would close a busy pane is aria-disabled with a
+// reason, un-clickable, and re-lights when the pane calms).
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim()
 }
@@ -150,6 +155,27 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
       }
       const plainStaysPlain = plainSplit && readdirSync(wtRoot).length === worktreesBeforePlain
 
+      // ── Batch: the layout menu's stepper promises N isolated terminals in ONE
+      // gesture. Geometry-relative on purpose (a small screen may trim the batch):
+      // the invariants are worktrees == panes added (no litter, no shortfall) and a
+      // return value that is true exactly when every REQUESTED terminal opened —
+      // never the literal number 2.
+      const panesBeforeBatch = await ES<number>(`window.__mogging.layout.paneCount()`)
+      const worktreesBeforeBatch = readdirSync(wtRoot).length
+      const batchReturned = await ES<boolean>(`window.__mogging.layout.splitIsolated(undefined, 2)`)
+      let panesAfterBatch = panesBeforeBatch
+      for (let i = 0; i < 20; i++) {
+        await sleep(300)
+        panesAfterBatch = await ES<number>(`window.__mogging.layout.paneCount()`)
+        if (panesAfterBatch >= panesBeforeBatch + 2) break
+      }
+      const batchAdded = panesAfterBatch - panesBeforeBatch
+      const batchWorktrees = readdirSync(wtRoot).length - worktreesBeforeBatch
+      const batchOk =
+        batchAdded >= 1
+          ? batchWorktrees === batchAdded && batchReturned === (batchAdded === 2)
+          : batchReturned === false && batchWorktrees === 0 // a full grid refuses with no litter
+
       // ── The Pedro case: a folder wearing an EMPTY `.git` is NOT a repo. The manual
       // isolated row must refuse honestly — no pane, no worktree litter.
       const fakeRepo = mkdtempSync(join(tmpdir(), 'mog-wiziso-fake-'))
@@ -164,6 +190,57 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         (await ES<number>(`window.__mogging.layout.paneCount()`)) === beforeFake &&
         !existsSync(join(fakeRepo, '.mogging', 'worktrees'))
 
+      // ── The picker refuses a shrink over LIVE work: in FakeRepo (no agent sessions,
+      // so the gate is deterministic), split plain, mark the new pane busy, and the
+      // 1-pane tile must be aria-disabled with a reason; its click must do nothing —
+      // no shrink, no confirm dialog. Calm the pane and the SAME tile lights again:
+      // the refusal derives from live state, not pane count.
+      await ES(`window.__mogging.layout.split()`)
+      for (let i = 0; i < 20; i++) {
+        await sleep(300)
+        if ((await ES<number>(`window.__mogging.layout.paneCount()`)) === beforeFake + 1) break
+      }
+      const tileGate = await ES<{
+        split: boolean
+        disabledWhileBusy: boolean
+        reason: string
+        ignored: boolean
+        enabledWhenIdle: boolean
+      }>(`(async () => {
+        const m = window.__mogging
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+        const ids = m.layout.paneIds()
+        const split = ids.length === ${beforeFake + 1}
+        const newest = ids[ids.length - 1] // highest slot: closed by every smaller template
+        m.attention.setPaneState(newest, 'busy')
+        await sleep(150)
+        const openMenu = async () => {
+          document.querySelector('.layout-launcher > button')?.click()
+          await sleep(80)
+          return document.querySelector('.layout-menu .layout-tile') // first tile = the 1-pane template
+        }
+        const tile = await openMenu()
+        const disabledWhileBusy = !!tile && tile.getAttribute('aria-disabled') === 'true'
+        const reason = (tile && tile.title) || ''
+        const before = m.layout.paneCount()
+        if (tile) tile.click()
+        await sleep(300)
+        const ignored = m.layout.paneCount() === before && !document.querySelector('.modal-overlay')
+        document.querySelector('.layout-launcher > button')?.click() // close (a close never re-renders)
+        m.attention.setPaneState(newest, 'idle')
+        await sleep(150)
+        const tile2 = await openMenu()
+        const enabledWhenIdle = !!tile2 && tile2.getAttribute('aria-disabled') !== 'true'
+        document.querySelector('.layout-launcher > button')?.click()
+        return { split, disabledWhileBusy, reason, ignored, enabledWhenIdle }
+      })()`)
+      const pickerGateOk =
+        tileGate.split &&
+        tileGate.disabledWhileBusy &&
+        tileGate.reason.length > 0 &&
+        tileGate.ignored &&
+        tileGate.enabledWhenIdle
+
       const pass =
         checkboxLive &&
         checked &&
@@ -174,7 +251,9 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         menuClicked &&
         manualIsolated &&
         plainStaysPlain &&
-        fakeRefusedHonestly
+        batchOk &&
+        fakeRefusedHonestly &&
+        pickerGateOk
       result = {
         pass,
         checkboxLive,
@@ -191,7 +270,12 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         manualIsolated,
         manualCwd,
         plainStaysPlain,
-        fakeRefusedHonestly
+        batchOk,
+        batchAdded,
+        batchReturned,
+        fakeRefusedHonestly,
+        tileGate,
+        pickerGateOk
       }
     } catch (error) {
       result = { pass: false, error: String(error) }
