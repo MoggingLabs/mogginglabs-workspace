@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 160 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 161 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
-# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 138 app-boot
+# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 139 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -372,6 +372,11 @@ run_smoke WSCLOSE      MOGGING_WSCLOSE   1 240 wsclose
 # end-state re-layout lands only after the fold. Bites: a dropped rail-anim stamp, a
 # lost :not(.rail-anim) guard, and any mid-fold layout squeeze.
 run_smoke RAILFOLD     MOGGING_RAILFOLD  1 240 railfold
+# CHROMEPRESS: presses on native chrome dismiss popovers (2026-07-18) — the drag strip
+# eats the pointer before the DOM, so main forwards WM_NC*BUTTONDOWN / will-move as
+# shell:chromePress and app-shell replays a body-target pointerdown. Bites: a dropped
+# wireChromePress in boot, a removed channel, a lost replay, a lost NC hook, the debounce.
+run_smoke CHROMEPRESS  MOGGING_CHROMEPRESS 1 240 chromepress
 run_smoke KBSHORTCUTS  MOGGING_KBSHORTCUTS 1 240 kbshortcuts
 run_smoke KBGLOBAL     MOGGING_KBGLOBAL  1 240 kbglobal
 run_smoke DAEMONCUSTODY MOGGING_DAEMONCUSTODY 1 240 daemoncustody
