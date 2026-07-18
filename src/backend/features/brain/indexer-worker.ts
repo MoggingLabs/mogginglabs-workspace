@@ -5,6 +5,8 @@ import { parentPort, workerData } from 'node:worker_threads'
 import { parse as parseJsonc } from 'jsonc-parser'
 import { BRAIN_MAX_FILES } from '@contracts'
 import { extractPortable, resolveProjectGraph, type ResolveContext } from './extract'
+import { resolveLibraries } from './libraries'
+import { scanLibraryDocs } from './libdocs'
 import { computeRepoRanks } from './repomap'
 import { ParserPool, type GrammarCatalog, type ParseSkipReason, type TagCounts } from './parser-pool'
 import { BrainStore } from './store'
@@ -65,6 +67,13 @@ export interface BrainDeltaOutcome {
   cacheMisses: number
 }
 
+/** One library resolve's outcome (08): lockfile rows landed + docs distilled. */
+export interface BrainLibrariesOutcome {
+  deps: number
+  docs: number
+  pruned: number
+}
+
 export type BrainWorkerReply =
   | { id: number; ok: true; lang: string; tagCounts: TagCounts; hasError: boolean }
   | { id: number; ok: false; skipped: ParseSkipReason }
@@ -74,6 +83,7 @@ export type BrainWorkerReply =
   | { id: number; progress: { phase: 'walk' | 'parse' | 'commit'; done: number; total: number } }
   | { id: number; build: BrainBuildOutcome }
   | { id: number; delta: BrainDeltaOutcome }
+  | { id: number; libraries: BrainLibrariesOutcome }
   | { id: number; refusal: { reason: 'too-large'; fileCount: number; cap: number } }
 
 const data = workerData as BrainWorkerData
@@ -458,6 +468,19 @@ port.on('message', (msg: { id: number; op: string; path?: string; dbPath?: strin
             typeof msg.maxFiles === 'number' ? msg.maxFiles : BRAIN_MAX_FILES
           )
         )
+      } else if (msg.op === 'libraries' && typeof msg.dbPath === 'string' && typeof msg.root === 'string') {
+        // 08: version truth + docs custody, one landing. Lockfiles are parsed,
+        // installed bytes distilled, doc rows pruned to what a lockfile still
+        // references — all in the store's one transaction. Zero network here.
+        const store = new BrainStore(msg.dbPath)
+        try {
+          const deps = resolveLibraries(msg.root)
+          const docRows = await scanLibraryDocs(pool, msg.root, deps)
+          const { pruned } = store.replaceLibraries(msg.root, deps, docRows)
+          port.postMessage({ id: msg.id, libraries: { deps: deps.length, docs: docRows.length, pruned } } satisfies BrainWorkerReply)
+        } finally {
+          store.dispose()
+        }
       } else if (msg.op === 'status') {
         port.postMessage({
           id: msg.id,

@@ -1,5 +1,5 @@
 import * as path from 'node:path'
-import type { BrainRefusal, BrainStatus } from '@contracts'
+import { BRAIN_LIB_ECOSYSTEMS, type BrainRefusal, type BrainStatus } from '@contracts'
 import { foldProjectKey } from '../workspace/project-identity'
 import { REPOMAP_DEFAULT_BUDGET, REPOMAP_MAX_BUDGET, REPOMAP_MIN_BUDGET, renderRepoMap } from './render'
 import { BRAIN_EDGE_KINDS, BRAIN_NODE_KINDS, type BrainNodeRow } from './schema'
@@ -463,6 +463,124 @@ function serveMap(s: ResolvedScope, args: Record<string, unknown>): BrainServeRe
   return { ok: true, ...envelope(s), map, mapRoot, budget }
 }
 
+// ── The library lens (08): version truth + docs custody, cache reads only ────
+
+function serveLibraries(s: ResolvedScope, args: Record<string, unknown>): BrainServeReply {
+  const eco = str(args.ecosystem)
+  if (eco !== undefined && !(BRAIN_LIB_ECOSYSTEMS as readonly string[]).includes(eco)) {
+    return refuse('invalid', `ecosystem must be one of: ${BRAIN_LIB_ECOSYSTEMS.join(', ')}`)
+  }
+  const rows = s.store.libRows(s.caller, eco)
+  const reply: BrainServeReply = {
+    ok: true,
+    ...envelope(s),
+    libraries: rows.map((r) => ({
+      ecosystem: r.ecosystem,
+      name: r.name,
+      version: r.version,
+      pinned: !!r.pinned,
+      direct: !!r.direct,
+      installed: !!r.installed,
+      ...(r.installedVersion && r.installedVersion !== r.version ? { installedVersion: r.installedVersion } : {}),
+      hasDocs: !!r.hasDocs
+    })),
+    truncated: false
+  }
+  return capReply(reply, 'libraries')
+}
+
+/** README sections whose heading matches `topic` (case-insensitive substring).
+ *  Preamble before the first heading stays only when nothing matched at all. */
+function filterReadmeByTopic(readme: string, topic: string): { text: string; matched: boolean } {
+  const needle = topic.toLowerCase()
+  const lines = readme.split('\n')
+  const out: string[] = []
+  let keeping = false
+  let matched = false
+  for (const line of lines) {
+    const heading = /^#{1,6}\s+(.*)$/.exec(line)
+    if (heading) {
+      keeping = heading[1].toLowerCase().includes(needle)
+      if (keeping) matched = true
+    }
+    if (keeping) out.push(line)
+  }
+  return { text: out.join('\n'), matched }
+}
+
+function serveLibDocs(s: ResolvedScope, args: Record<string, unknown>): BrainServeReply {
+  const name = str(args.name)
+  if (!name) return refuse('invalid', 'name is required')
+  const eco = str(args.ecosystem)
+  if (eco !== undefined && !(BRAIN_LIB_ECOSYSTEMS as readonly string[]).includes(eco)) {
+    return refuse('invalid', `ecosystem must be one of: ${BRAIN_LIB_ECOSYSTEMS.join(', ')}`)
+  }
+  const dep = s.store.libDep(s.caller, name, eco)
+  if (!dep) {
+    // A key lookup, never a path: hostile names refuse here, canonically.
+    return refuse('unknown-library', `unknown library ${name.slice(0, 120)} (not in this checkout's lockfiles or manifests — see list_libraries)`)
+  }
+  const base = {
+    ok: true as const,
+    ...envelope(s),
+    ecosystem: dep.ecosystem,
+    name: dep.name,
+    version: dep.version,
+    pinned: !!dep.pinned,
+    installed: !!dep.installed,
+    ...(dep.installedVersion && dep.installedVersion !== dep.version ? { installedVersion: dep.installedVersion } : {})
+  }
+  // The reference law, read-side: a pinned dep serves ONLY its pinned version's
+  // docs; a range serves what the disk holds. Version-correct or version-silent.
+  const doc = dep.pinned
+    ? s.store.libDoc(dep.ecosystem, dep.name, dep.version)
+    : dep.installedVersion
+      ? s.store.libDoc(dep.ecosystem, dep.name, dep.installedVersion)
+      : null
+  if (!doc) {
+    return {
+      ...base,
+      hasDocs: false,
+      note: dep.pinned
+        ? 'no docs cached for this version — the pinned version is not on disk. Install it, or retry with fetch:true (needs this workspace\'s library-docs permission).'
+        : 'no docs cached — nothing pins this dependency to an exact version, and an unversioned doc answer does not exist. Install or pin it first.'
+    }
+  }
+  let meta: { exports?: string[]; sigs?: string[]; readmeTruncated?: boolean } = {}
+  try {
+    meta = JSON.parse(doc.signatures) as typeof meta
+  } catch {
+    /* a corrupt row serves its readme; signatures degrade to empty */
+  }
+  const topic = str(args.topic)
+  let readme = doc.readme
+  let topicMatched: boolean | undefined
+  if (topic !== undefined) {
+    const filtered = filterReadmeByTopic(doc.readme, topic)
+    readme = filtered.text
+    topicMatched = filtered.matched
+  }
+  // The version stamp is the DOC's — the release these bytes actually describe.
+  const reply: BrainServeReply = {
+    ...base,
+    hasDocs: true,
+    version: doc.version,
+    source: doc.source,
+    readme,
+    exports: meta.exports ?? [],
+    signatures: meta.sigs ?? [],
+    truncated: meta.readmeTruncated === true,
+    ...(topicMatched === false ? { note: 'no README section matched that topic — the full README is still served without a topic filter' } : {})
+  }
+  // Fit the byte cap by trimming signatures first, then the README — flagged.
+  capReply(reply, 'signatures')
+  while (typeof reply.readme === 'string' && reply.readme.length && JSON.stringify(reply).length > BRAIN_SERVE_RESPONSE_CAP) {
+    reply.readme = reply.readme.slice(0, Math.floor(reply.readme.length / 2))
+    reply.truncated = true
+  }
+  return reply
+}
+
 /**
  * The one dispatch. `callerRoot` is the pane's resolved checkout root (main owns
  * that resolution — the exact board-read path), or null for a bare session.
@@ -494,6 +612,10 @@ export function serveBrainRead(
         return serveReferences(scope, args)
       case 'brain.map':
         return serveMap(scope, args)
+      case 'brain.libraries':
+        return serveLibraries(scope, args)
+      case 'brain.libdocs':
+        return serveLibDocs(scope, args)
       default:
         return refuse('invalid', `unknown brain verb: ${verb}`)
     }

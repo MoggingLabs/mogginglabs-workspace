@@ -22,7 +22,7 @@ import {
 
 const Database = requireNative<typeof import('better-sqlite3')>('better-sqlite3')
 
-export const BRAIN_SCHEMA_VERSION = 3 // v3: the ranks table (06) — additive, one-way, idempotent
+export const BRAIN_SCHEMA_VERSION = 4 // v4: the library lens (08) — additive, one-way, idempotent (v3 added ranks)
 /** Multi-row insert batch size — the build's transactional chunking unit. */
 export const BRAIN_INSERT_CHUNK = 1000
 
@@ -39,6 +39,31 @@ export interface BrainBuildStats {
   droppedRefs: number
   cacheHits: number
   cacheMisses: number
+}
+
+/** lib_deps as SQLite answers it (booleans as 0/1) — the library lens (08). */
+export interface BrainLibDepDbRow {
+  ecosystem: string
+  name: string
+  version: string
+  pinned: number
+  direct: number
+  installed: number
+  installedVersion: string
+}
+
+export interface BrainLibListDbRow extends BrainLibDepDbRow {
+  hasDocs: number
+}
+
+/** One (ecosystem, name, version) doc row — README + distilled signatures. */
+export interface BrainLibDocDbRow {
+  ecosystem: string
+  name: string
+  version: string
+  source: string
+  readme: string
+  signatures: string
 }
 
 /** `brain/<projectKey>.db` with the key made filename-safe: a project key is an
@@ -324,6 +349,108 @@ export class BrainStore {
         `SELECT src, dst, kind, root FROM edges WHERE kind = 'references' AND dst IN (${ids.map(() => '?').join(',')}) ORDER BY dst, src LIMIT ?`
       )
       .all(...ids, limit) as BrainEdgeRow[]
+  }
+
+  // ── The library lens (ADR 0018 step 08): lockfile truth + docs custody ──────
+
+  /**
+   * One resolve's whole landing, one transaction: replace the root's lib_deps,
+   * upsert the doc rows the disk scan distilled, and PRUNE lib_docs rows no
+   * lockfile references anymore (any root, by pinned OR installed version) — a
+   * version bump is a new entry, and the old one does not linger as a stale
+   * answer. Generation-NEUTRAL by design: the lockfile's own file row already
+   * moves the generation through the ordinary drain.
+   */
+  replaceLibraries(
+    root: string,
+    deps: {
+      ecosystem: string
+      name: string
+      version: string
+      pinned: boolean
+      direct: boolean
+      installed: boolean
+      installedVersion: string
+    }[],
+    docRows: { ecosystem: string; name: string; version: string; source: string; readme: string; signatures: string }[]
+  ): { pruned: number } {
+    const txn = this.db.transaction((): { pruned: number } => {
+      this.db.prepare('DELETE FROM lib_deps WHERE root = ?').run(root)
+      const insDep = this.db.prepare(
+        'INSERT OR REPLACE INTO lib_deps (root,ecosystem,name,version,pinned,direct,installed,installedVersion) VALUES (?,?,?,?,?,?,?,?)'
+      )
+      for (const d of deps) {
+        insDep.run(root, d.ecosystem, d.name, d.version, d.pinned ? 1 : 0, d.direct ? 1 : 0, d.installed ? 1 : 0, d.installedVersion)
+      }
+      const insDoc = this.db.prepare(
+        'INSERT OR REPLACE INTO lib_docs (ecosystem,name,version,source,readme,signatures) VALUES (?,?,?,?,?,?)'
+      )
+      for (const r of docRows) insDoc.run(r.ecosystem, r.name, r.version, r.source, r.readme, r.signatures)
+      // The reference law: a PINNED dep references exactly its pinned version;
+      // an unpinned (range) dep references what the disk holds. A doc row no
+      // lockfile references — a bumped-away version included, even while its
+      // bytes still sit on disk — is pruned, not left as a stale answer.
+      const pruned = this.db
+        .prepare(
+          `DELETE FROM lib_docs WHERE NOT EXISTS (
+             SELECT 1 FROM lib_deps d WHERE d.ecosystem = lib_docs.ecosystem AND d.name = lib_docs.name
+               AND ((d.pinned = 1 AND d.version = lib_docs.version)
+                 OR (d.pinned = 0 AND d.installedVersion = lib_docs.version))
+           )`
+        )
+        .run().changes
+      return { pruned }
+    })
+    return txn()
+  }
+
+  /** One partition's dependency rows, direct-first then name — the list verb's
+   *  stable order. hasDocs mirrors the prune's reference law exactly (pinned →
+   *  the pinned version; range → the installed version), so the flag never
+   *  claims docs the cache cannot version-correctly serve. */
+  libRows(root: string, ecosystem?: string): BrainLibListDbRow[] {
+    const where = ecosystem ? 'root = ? AND ecosystem = ?' : 'root = ?'
+    const params = ecosystem ? [root, ecosystem] : [root]
+    return this.db
+      .prepare(
+        `SELECT d.ecosystem, d.name, d.version, d.pinned, d.direct, d.installed, d.installedVersion,
+           EXISTS (
+             SELECT 1 FROM lib_docs c WHERE c.ecosystem = d.ecosystem AND c.name = d.name
+               AND ((d.pinned = 1 AND c.version = d.version)
+                 OR (d.pinned = 0 AND c.version = d.installedVersion))
+           ) AS hasDocs
+         FROM lib_deps d WHERE ${where} ORDER BY d.direct DESC, d.ecosystem, d.name`
+      )
+      .all(...params) as BrainLibListDbRow[]
+  }
+
+  /** One dependency's row in one partition (name exact; ecosystem optional). */
+  libDep(root: string, name: string, ecosystem?: string): BrainLibDepDbRow | null {
+    const where = ecosystem ? 'root = ? AND name = ? AND ecosystem = ?' : 'root = ? AND name = ?'
+    const params = ecosystem ? [root, name, ecosystem] : [root, name]
+    return (
+      (this.db
+        .prepare(
+          `SELECT ecosystem, name, version, pinned, direct, installed, installedVersion FROM lib_deps WHERE ${where} ORDER BY ecosystem LIMIT 1`
+        )
+        .get(...params) as BrainLibDepDbRow | undefined) ?? null
+    )
+  }
+
+  /** One cached doc row by exact (ecosystem, name, version). */
+  libDoc(ecosystem: string, name: string, version: string): BrainLibDocDbRow | null {
+    return (
+      (this.db
+        .prepare('SELECT ecosystem, name, version, source, readme, signatures FROM lib_docs WHERE ecosystem = ? AND name = ? AND version = ?')
+        .get(ecosystem, name, version) as BrainLibDocDbRow | undefined) ?? null
+    )
+  }
+
+  /** Land one fetched doc row (the consent-gated registry path, main-side). */
+  libDocPut(row: BrainLibDocDbRow): void {
+    this.db
+      .prepare('INSERT OR REPLACE INTO lib_docs (ecosystem,name,version,source,readme,signatures) VALUES (?,?,?,?,?,?)')
+      .run(row.ecosystem, row.name, row.version, row.source, row.readme, row.signatures)
   }
 
   /**

@@ -284,6 +284,64 @@ export const settingsFeature: UiFeature = {
       syncOrientAvailability()
     }
 
+    // ── Library-doc fetches (ADR 0018/08): per-workspace CONSENT, default OFF ──
+    // The orient knob's discipline verbatim — bound to the active workspace,
+    // dead (and saying why) without one, held disabled across the round-trip,
+    // reverted with one failure toast when the store refuses.
+    const libFetchNote = el('p', {
+      class: 'toggle-row-hint libfetch-note',
+      text: 'No workspace open — this permission is per-workspace. Open one, then decide here.',
+      hidden: true
+    })
+    const libFetchToggle = createToggleRow({
+      label: 'Agents may fetch library docs from package registries',
+      hint: 'Off by default. On: when a dependency this project pins is not installed on disk, an agent asking for its docs may fetch that exact version’s published README over HTTPS from npmjs.org or pypi.org — size-capped, nothing else fetched, nothing run. Off: library answers come only from files already on this machine.',
+      extra: libFetchNote,
+      onChange: () => void applyLibFetch()
+    })
+    function syncLibFetchAvailability(): void {
+      const wsId = getWorkspaces().activeId
+      libFetchToggle.setDisabled(!wsId)
+      libFetchNote.hidden = !!wsId
+      if (!wsId) libFetchToggle.setChecked(false)
+    }
+    async function applyLibFetch(): Promise<void> {
+      const next = libFetchToggle.checked()
+      const wsId = getWorkspaces().activeId
+      if (!wsId) {
+        syncLibFetchAvailability()
+        return
+      }
+      libFetchToggle.setDisabled(true)
+      try {
+        const saved = (await getBridge().invoke(BrainChannels.libFetchSet, { workspaceId: wsId, on: next })) as
+          | { ok?: boolean }
+          | undefined
+        if (!saved?.ok) {
+          libFetchToggle.setChecked(!next)
+          showToast({
+            tone: 'danger',
+            title: 'Permission was not changed',
+            body: 'The settings store did not accept the change — nothing was allowed or revoked. Try again.'
+          })
+        }
+      } catch (error) {
+        libFetchToggle.setChecked(!next)
+        showToast({ tone: 'danger', title: 'Permission was not changed', body: String(error) })
+      } finally {
+        syncLibFetchAvailability()
+      }
+    }
+    async function pullLibFetch(): Promise<void> {
+      try {
+        const wsId = getWorkspaces().activeId
+        libFetchToggle.setChecked(!!wsId && (await getBridge().invoke(BrainChannels.libFetchGet, wsId)) === true)
+      } catch {
+        /* leave as-is */
+      }
+      syncLibFetchAvailability()
+    }
+
     async function pullConsent(): Promise<void> {
       try {
         const cfg = (await getBridge().invoke(TelemetryChannels.getConfig)) as TelemetryRendererConfig
@@ -501,6 +559,19 @@ export const settingsFeature: UiFeature = {
               el('p', {
                 class: 'settings-scope',
                 text: 'Changes apply immediately; DO_NOT_TRACK is always honored.'
+              })
+            ]
+          ),
+          // 08: the brain's one network permission — a consent card, per workspace.
+          Card(
+            {
+              header: SectionHeader({ title: 'Library docs from registries', caption: 'OFF by default, per workspace.' })
+            },
+            [
+              libFetchToggle.el,
+              el('p', {
+                class: 'settings-scope',
+                text: 'Only the exact version a lockfile pins is ever requested, only from npmjs.org or pypi.org, and only its published README text comes back. No package is downloaded, installed, or run.'
               })
             ]
           ),
@@ -788,6 +859,7 @@ export const settingsFeature: UiFeature = {
       else if (currentSection === 'integrations') enterIntegrations()
       void pullConsent()
       void pullOrientAtLaunch()
+      void pullLibFetch()
       void providers.refresh() // re-detect: a CLI installed since last visit flips to Available
       void account.refresh() // status is push-kept; entering still re-pulls (missed pushes cost nothing)
       if (!page.querySelector('.ph-form')) void profilesHosts.refresh()

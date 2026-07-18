@@ -14,11 +14,13 @@ import {
 import { resolveBrainProject, type BrainProject } from './project'
 import { BrainStore, brainDbPath } from './store'
 import type { BrainLandResult, BrainSpliceResult } from './writes'
-import type { BrainBuildOutcome, BrainDeltaOutcome, BrainWorkerReply } from './indexer-worker'
+import type { BrainLibDocDbRow } from './store'
+import type { BrainBuildOutcome, BrainDeltaOutcome, BrainLibrariesOutcome, BrainWorkerReply } from './indexer-worker'
 
 export { resolveBrainProject, type BrainProject } from './project'
 export { BrainStore, brainDbPath, BRAIN_SCHEMA_VERSION } from './store'
-export type { BrainBuildOutcome, BrainDeltaOutcome } from './indexer-worker'
+export type { BrainBuildOutcome, BrainDeltaOutcome, BrainLibrariesOutcome } from './indexer-worker'
+export type { BrainLibDocDbRow, BrainLibDepDbRow, BrainLibListDbRow } from './store'
 export {
   BRAIN_DRAIN_QUIET_MS,
   BRAIN_DRAIN_SLICE,
@@ -44,6 +46,7 @@ export {
   BRAIN_SERVE_MAX_DEPTH,
   BRAIN_SERVE_RESPONSE_CAP,
   globToLike,
+  partitionOf,
   serveBrainRead,
   type BrainReadHost,
   type BrainServeReply
@@ -92,6 +95,10 @@ export class BrainService {
   private readonly locks = new Map<string, Promise<unknown>>()
   /** Bumped per landed rebuild — a drain that queued behind one drops its stale slice. */
   private readonly rebuildSeq = new Map<string, number>()
+  /** Per-root debounce for lockfile-triggered library resolves (08). */
+  private readonly libTimers = new Map<string, NodeJS.Timeout>()
+  /** Landed library resolves — the BRAINDOCS smoke's progress witness. */
+  private libResolveCount = 0
   /** Folded partition root -> projectKey / folded projectKey -> attached roots (04). */
   private readonly rootProject = new Map<string, string>()
   private readonly rootsByProject = new Map<string, string[]>()
@@ -112,6 +119,9 @@ export class BrainService {
       apply: (root, req) => this.applyFreshness(root, req),
       applied: (root, outcome) => this.emitDrain(root, outcome)
     })
+    // 08: a lockfile landing in a drain re-resolves the LIBRARY truth too — the
+    // freshness layer routes the paths, this schedules the (debounced) resolve.
+    this.freshness.onLockfilePaths((root) => this.scheduleLibraryResolve(root))
   }
 
   /** ONE `brain:changed` per landed drain arrives here (plus nothing else — rebuild
@@ -158,6 +168,10 @@ export class BrainService {
         // queued drain slice, re-baseline the freshness state, attach a first build.
         this.rebuildSeq.set(key, (this.rebuildSeq.get(key) ?? 0) + 1)
         this.afterRebuild(r.brain, partitionRoot)
+        // 08: the library truth rides every full build — a refused resolve costs the
+        // libraries lens, never the graph (the status answer stays the build's).
+        const lib = await this.runLibraries(partitionRoot, r.brain.project)
+        if (!('reason' in lib)) this.libResolveCount += 1
         return this.answer(r.brain)
       })
     } finally {
@@ -255,6 +269,48 @@ export class BrainService {
     })
   }
 
+  /** Debounced lockfile-triggered library re-resolve (08): one timer per root,
+   *  the resolve itself queued behind whatever the project is doing. */
+  private scheduleLibraryResolve(root: string): void {
+    const key = foldProjectKey(root)
+    const prior = this.libTimers.get(key)
+    if (prior) clearTimeout(prior)
+    const timer = setTimeout(() => {
+      this.libTimers.delete(key)
+      const pre = this.ensure(root)
+      if ('reason' in pre) return
+      const pKey = foldProjectKey(pre.brain.project.projectKey)
+      void this.runExclusive(pKey, async () => {
+        const r = this.ensure(root)
+        if ('reason' in r) return
+        const partitionRoot = this.partitionRootFor(r.brain.project, root)
+        const lib = await this.runLibraries(partitionRoot, r.brain.project)
+        if (!('reason' in lib)) this.libResolveCount += 1
+      })
+    }, 1000)
+    timer.unref?.()
+    this.libTimers.set(key, timer)
+  }
+
+  /** Landed library resolves so far — the BRAINDOCS smoke's progress witness. */
+  libraryResolves(): number {
+    return this.libResolveCount
+  }
+
+  /** Land ONE fetched doc row (the consent-gated registry path, main-side).
+   *  The row's version is the pinned version the fetch was locked to, so the
+   *  next resolve's prune keeps it exactly as long as a lockfile references it. */
+  landLibraryDoc(root: string, row: BrainLibDocDbRow): boolean {
+    const r = this.ensure(root)
+    if ('reason' in r) return false
+    try {
+      r.brain.store.libDocPut(row)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   /** Live open-db count — the LRU cap's witness for the BRAINCORE smoke. */
   openCount(): number {
     return this.open.size
@@ -274,6 +330,8 @@ export class BrainService {
    *  reopens (and re-attaches, via the cold-start reconcile) lazily. */
   dispose(): void {
     this.freshness?.dispose()
+    for (const timer of this.libTimers.values()) clearTimeout(timer)
+    this.libTimers.clear()
     this.rootProject.clear()
     this.rootsByProject.clear()
     for (const { store } of this.open.values()) {
@@ -472,6 +530,30 @@ export class BrainService {
         changed: req.changed,
         deleted: req.deleted
       })
+    })
+  }
+
+  /** 08: the library resolve, in the worker (lockfile parse + disk-docs distill
+   *  + one store transaction). Same spawn discipline as build/delta. */
+  private runLibraries(
+    partitionRoot: string,
+    project: BrainProject
+  ): Promise<BrainLibrariesOutcome | BrainRefusal> {
+    const dbPath = brainDbPath(this.opts.baseDir, project.projectKey)
+    return new Promise((resolve) => {
+      const worker = new Worker(this.opts.workerFile, {
+        workerData: { grammarsDir: this.opts.grammarsDir }
+      })
+      const finish = (value: BrainLibrariesOutcome | BrainRefusal): void => {
+        void worker.terminate()
+        resolve(value)
+      }
+      worker.on('message', (reply: BrainWorkerReply) => {
+        if ('libraries' in reply) finish(reply.libraries)
+        else if ('error' in reply) finish({ ok: false, reason: 'busy', detail: reply.error })
+      })
+      worker.on('error', (e) => finish({ ok: false, reason: 'busy', detail: String(e) }))
+      worker.postMessage({ id: 1, op: 'libraries', dbPath, root: partitionRoot })
     })
   }
 

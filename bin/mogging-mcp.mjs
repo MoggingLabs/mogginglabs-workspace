@@ -290,6 +290,12 @@ function brainRefusalText(r) {
       return `the project exceeds the brain's index cap${detail ? ` (${detail})` : ''}`
     case 'no-map':
       return detail || 'no brain index for this checkout — nothing to map yet'
+    case 'unknown-library':
+      return detail || `unknown library (not in this checkout's lockfiles — see list_libraries)`
+    case 'consent':
+      return `refused — ${detail || 'this workspace has not allowed registry doc fetches (default off); the human enables it in Settings'}`
+    case 'fetch-failed':
+      return `the registry fetch failed${detail ? ` (${detail})` : ''} — the on-disk answer is unchanged`
     case 'busy':
       return `the brain is busy${detail ? ` (${detail})` : ''} — retry shortly`
     default:

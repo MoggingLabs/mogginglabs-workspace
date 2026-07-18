@@ -14,7 +14,7 @@ import { runtimeDir as clientRuntimeDir } from './daemon-client'
 import { recordTrail } from './trail'
 import { MCP_BROWSER_TOOL_NAMES, type BrowserAgentVerb, type BrowserAgentVerbName } from '@contracts'
 import { applyCardPatch, boardForPane, commentCard, createCard } from './board'
-import { handleBrainMcp, handleBrainWriteMcp, isBrainWriteVerb } from './brain'
+import { handleBrainLibDocsMcp, handleBrainMcp, handleBrainWriteMcp, isBrainWriteVerb } from './brain'
 
 /**
  * The agent-control transport (Phase-6/05b). Main opens a token-authed LOCAL
@@ -440,6 +440,16 @@ export function startMcpEndpoint(): void {
           // synchronously re-indexed. One trail event per call, counts only.
           if (isBrainWriteVerb(msg.name)) {
             void handleBrainWriteMcp(msg.name, msg.args ?? {}, boundPane)
+              .then((r) => sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n'))
+              .catch((e) => sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: rpcFailure(e) }) + '\n'))
+            continue
+          }
+          // ADR 0018 step 08: get_library_docs is the one brain read with an
+          // ASYNC path — its opt-in `fetch` (per-workspace consent, default
+          // OFF, checked before any socket exists) may land registry docs in
+          // the cache before the ordinary cache read answers.
+          if (msg.name === 'brain.libdocs') {
+            void handleBrainLibDocsMcp(msg.args ?? {}, boundPane)
               .then((r) => sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n'))
               .catch((e) => sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: rpcFailure(e) }) + '\n'))
             continue

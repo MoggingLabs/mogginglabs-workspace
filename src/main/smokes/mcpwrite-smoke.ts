@@ -88,9 +88,9 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
     'insert_before_symbol'
   ]
   const countWrites = (names: string[]): number => names.filter((n) => WRITES.includes(n)).length
-  /** Catalog geometry: 17 browser + 6 control reads + 1 self + 8 brain reads
+  /** Catalog geometry: 17 browser + 6 control reads + 1 self + 10 brain reads
    *  (non-writes) + 14 writes (11 fleet/board + 3 brain). */
-  const NON_WRITE_COUNT = 32
+  const NON_WRITE_COUNT = 34
   const WRITE_COUNT = WRITES.length
 
   const waitFor = async (probe: () => Promise<boolean>, tries = 12, gapMs = 400): Promise<boolean> => {

@@ -633,6 +633,42 @@
     "verb": "brain.map"
   },
   {
+    "name": "list_libraries",
+    "title": "List project libraries",
+    "description": "The project's third-party dependencies as the LOCKFILES pin them: name, exact version (or the manifest's range, honestly flagged pinned:false when nothing pins), whether it is a direct dependency, whether the pinned version is installed on disk, and whether distilled docs are cached for it. Ecosystems: npm, py, go, cargo. Direct deps first; the list is capped with truncation flagged. Use get_library_docs for a dep's README and type signatures.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ecosystem": { "type": "string", "description": "Filter to one ecosystem.", "enum": ["npm", "py", "go", "cargo"] },
+        "root": { "type": "string", "description": "Absolute project root — ONLY for sessions outside a pane." }
+      }
+    },
+    "family": "brain",
+    "access": "read",
+    "upstream": "app",
+    "verb": "brain.libraries"
+  },
+  {
+    "name": "get_library_docs",
+    "title": "Get library docs",
+    "description": "Version-correct docs for ONE project dependency (from list_libraries): the README and distilled type signatures of the version actually pinned and installed, read from disk — never a guess about some other release. Every answer stamps { version, source: 'disk' | 'registry' }; an unversioned answer does not exist. topic filters README sections by heading. When the pinned version is not on disk, pass fetch:true to allow ONE registry fetch (npm/PyPI JSON, HTTPS, pinned version, size-capped) — that path needs this workspace's library-docs consent (default OFF; the human grants it in Settings) and refuses with reason 'consent' otherwise.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Dependency name exactly as list_libraries reports it (scoped npm names like @scope/pkg included)." },
+        "ecosystem": { "type": "string", "description": "Disambiguate when one name exists in two ecosystems.", "enum": ["npm", "py", "go", "cargo"] },
+        "topic": { "type": "string", "description": "Keep only README sections whose heading matches this (case-insensitive)." },
+        "fetch": { "type": "boolean", "description": "Allow ONE consent-gated registry fetch when the pinned version's docs are not on disk." },
+        "root": { "type": "string", "description": "Absolute project root — ONLY for sessions outside a pane." }
+      },
+      "required": ["name"]
+    },
+    "family": "brain",
+    "access": "read",
+    "upstream": "app",
+    "verb": "brain.libdocs"
+  },
+  {
     "name": "replace_symbol_body",
     "title": "Replace symbol body",
     "description": "Replace one symbol's ENTIRE definition (its start line through its end line, declaration included) with new source, in your own checkout only. Compare-and-swap: pass expectedFileHash (the fileHash from get_node) — if the file's bytes changed since, the write refuses with reason 'stale' carrying the fresh hash; re-query the node and retry with current lines. The write lands atomically, the file is re-indexed before the reply, and the answer carries the new generation, the symbol's node (when it still resolves), and newFileHash for your next edit. Body text lands as INERT BYTES, verbatim; a body without a trailing newline gets the file's own line ending appended.",

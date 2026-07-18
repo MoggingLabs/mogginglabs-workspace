@@ -465,6 +465,22 @@ export class BrainFreshness {
       state.stats.lastCacheMisses = outcome.cacheMisses
       for (const p of outcome.removed) state.applied.delete(p)
       for (const r of outcome.records) state.applied.set(r.path, { mtime: r.mtime, bytes: r.bytes })
+      // Echo dirt: a TICK that fired while this drain held its paths compared
+      // against the PRE-drain baseline and re-marked exactly what the outcome
+      // just absorbed — which would force a second, generation-bumping drain
+      // over identical bytes. Re-run the one dirt predicate (disk ≠ applied)
+      // against the FRESH baseline: tick echoes drop, real mid-drain writes
+      // stay dirty, and an unstat-able path stays dirt for the next pass.
+      for (const rel of [...state.dirty]) {
+        const rec = state.applied.get(rel)
+        if (!rec) continue
+        try {
+          const st = statSync(path.join(state.root, rel))
+          if (Math.floor(st.mtimeMs) === rec.mtime && st.size === rec.bytes) state.dirty.delete(rel)
+        } catch {
+          /* cannot stat: the dirt stands */
+        }
+      }
       state.sweepCursor = -1
       if (outcome.applied) this.deps.applied?.(state.root, outcome)
     } finally {

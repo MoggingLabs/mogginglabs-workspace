@@ -55,9 +55,14 @@ export interface BrainEdgeRow {
   root: string
 }
 
-/** The graph tables (v2). files/nodes/edges are per-partition (keyed by root);
+/** The graph tables (v2+). files/nodes/edges are per-partition (keyed by root);
  *  parse_cache is global by construction. mtime/gen are the two VOLATILE columns —
- *  the canonical dump excludes them, everything else must reproduce byte-for-byte. */
+ *  the canonical dump excludes them, everything else must reproduce byte-for-byte.
+ *  v4 (ADR 0018/08) adds the library lens: lib_deps is per-partition lockfile
+ *  truth; lib_docs is content-addressed like parse_cache — keyed (ecosystem,
+ *  name, version), root-free, so one doc row serves every worktree pinning that
+ *  version. Both are DERIVED (lockfiles + installed bytes) and excluded from the
+ *  canonical dump like every other derived-when fact. */
 export const BRAIN_GRAPH_DDL = `
 CREATE TABLE IF NOT EXISTS files (
   root TEXT NOT NULL, path TEXT NOT NULL, hash TEXT NOT NULL, lang TEXT NOT NULL,
@@ -84,6 +89,17 @@ CREATE TABLE IF NOT EXISTS ranks (
   id TEXT PRIMARY KEY, root TEXT NOT NULL, rank REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ranks_by_root ON ranks(root);
+CREATE TABLE IF NOT EXISTS lib_deps (
+  root TEXT NOT NULL, ecosystem TEXT NOT NULL, name TEXT NOT NULL,
+  version TEXT NOT NULL, pinned INTEGER NOT NULL, direct INTEGER NOT NULL,
+  installed INTEGER NOT NULL, installedVersion TEXT NOT NULL,
+  PRIMARY KEY (root, ecosystem, name)
+);
+CREATE TABLE IF NOT EXISTS lib_docs (
+  ecosystem TEXT NOT NULL, name TEXT NOT NULL, version TEXT NOT NULL,
+  source TEXT NOT NULL, readme TEXT NOT NULL, signatures TEXT NOT NULL,
+  PRIMARY KEY (ecosystem, name, version)
+);
 `
 
 /** One node's repomap rank row (step 06) — written in the SAME transaction as the

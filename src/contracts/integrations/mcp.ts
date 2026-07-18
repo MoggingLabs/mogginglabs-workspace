@@ -103,10 +103,12 @@ export const MCP_CONTROL_WRITE_TOOL_NAMES = [
   'archive_card'
 ] as const
 
-/** The brain's read family (ADR 0018, steps 05–06) — graph reads plus the ranked
- *  repomap, free to every pane (ADR 0008's reads-free stance), scoped app-side to
- *  the caller's own checkout. Reads are never gated; the validator holds every
- *  name here to `access: 'read'` structurally. */
+/** The brain's read family (ADR 0018, steps 05–08) — graph reads, the ranked
+ *  repomap, and the library lens (version truth + docs custody), free to every
+ *  pane (ADR 0008's reads-free stance), scoped app-side to the caller's own
+ *  checkout. Reads are never gated; the validator holds every name here to
+ *  `access: 'read'` structurally. (get_library_docs' opt-in `fetch` path is
+ *  consent-gated app-side — per-workspace, default OFF — not grant-gated.) */
 export const MCP_BRAIN_READ_TOOL_NAMES = [
   'brain_status',
   'query_graph',
@@ -115,7 +117,9 @@ export const MCP_BRAIN_READ_TOOL_NAMES = [
   'shortest_path',
   'find_symbol',
   'find_references',
-  'get_repo_map'
+  'get_repo_map',
+  'list_libraries',
+  'get_library_docs'
 ] as const
 
 /** The brain's write family (ADR 0018 step 07) — symbol-level edits in the
@@ -295,9 +299,10 @@ function validateMcpCatalog(raw: unknown): readonly McpToolDef[] {
 }
 
 /** THE catalog: the 14 shipped browser tools (names/schemas verbatim) + 6
- *  control reads + 1 self-scoped declaration + 11 control writes + 8 brain
- *  reads (ADR 0018 steps 05–06: the graph seven + the repomap) + 3 brain
- *  writes (step 07: the closed symbol-write set). Validated at load. */
+ *  control reads + 1 self-scoped declaration + 11 control writes + 10 brain
+ *  reads (ADR 0018 steps 05–08: the graph seven, the repomap, the library
+ *  lens) + 3 brain writes (step 07: the closed symbol-write set). Validated
+ *  at load. */
 export const MCP_TOOLS: readonly McpToolDef[] = validateMcpCatalog(catalogJson)
 
 export const findMcpTool = (name: string): McpToolDef | undefined => MCP_TOOLS.find((t) => t.name === name)

@@ -16,6 +16,36 @@ export const BRAIN_MAX_FILE_BYTES = 1_048_576
  *  `too-large` refusal — a symbol edit is a scalpel, never a file dump. */
 export const BRAIN_WRITE_MAX_BODY_BYTES = 65_536
 
+// ── Libraries (ADR 0018 step 08): version truth + docs custody ───────────────
+/** Stored README cap per (name, version) doc row — disk or registry alike. */
+export const BRAIN_LIBDOC_README_CAP = 65_536
+/** Distilled type-signature lines kept per doc row. */
+export const BRAIN_LIBDOC_SIG_CAP = 200
+/** Direct deps the disk scan doc-indexes per resolve (transitives never are). */
+export const BRAIN_LIBDOC_SCAN_CAP = 150
+/** The ONE network verb's response byte ceiling — reads past it are cut and the
+ *  stored README is truncated at BRAIN_LIBDOC_README_CAP, flagged, never silent. */
+export const BRAIN_LIBFETCH_BYTE_CAP = 1_048_576
+
+/** The ecosystems the resolver speaks. Closed — a new one is a code change. */
+export const BRAIN_LIB_ECOSYSTEMS = ['npm', 'py', 'go', 'cargo'] as const
+export type BrainLibEcosystem = (typeof BRAIN_LIB_ECOSYSTEMS)[number]
+
+/** One resolved dependency row: the LOCKFILE truth (or the manifest's honest
+ *  range when nothing pins), plus what is actually ON DISK. `version` is a
+ *  range string exactly when `pinned` is false — ranges are reported AS ranges,
+ *  never resolved by guesswork. `installed` means the PINNED version sits on
+ *  disk; `installedVersion` is what the disk actually holds ('' = absent). */
+export interface BrainLibDep {
+  ecosystem: BrainLibEcosystem
+  name: string
+  version: string
+  pinned: boolean
+  direct: boolean
+  installed: boolean
+  installedVersion: string
+}
+
 /** WHY the brain has no answer — a closed enum, never free text (nothing here can
  *  carry a path or a symbol into telemetry, ADR 0005; `detail` is for the UI/smoke
  *  and stays local):

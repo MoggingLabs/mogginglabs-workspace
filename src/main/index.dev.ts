@@ -107,6 +107,7 @@ import { runBrainFreshSmoke } from './smokes/brainfresh-smoke'
 import { runBrainMcpSmoke } from './smokes/brainmcp-smoke'
 import { runBrainMapSmoke } from './smokes/brainmap-smoke'
 import { runBrainWriteSmoke } from './smokes/brainwrite-smoke'
+import { runBrainDocsSmoke } from './smokes/braindocs-smoke'
 import { runBoardMcpSmoke } from './smokes/boardmcp-smoke'
 import { runBoardGhSmoke } from './smokes/boardgh-smoke'
 import { runBoardQueueSmoke } from './smokes/boardqueue-smoke'
@@ -194,7 +195,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
   'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_RUNTIMESPLIT', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
-  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_BRAINCORE', 'MOGGING_BRAINPARSE', 'MOGGING_BRAINGRAPH', 'MOGGING_BRAINFRESH', 'MOGGING_BRAINMCP', 'MOGGING_BRAINMAP', 'MOGGING_BRAINWRITE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
+  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_BRAINCORE', 'MOGGING_BRAINPARSE', 'MOGGING_BRAINGRAPH', 'MOGGING_BRAINFRESH', 'MOGGING_BRAINMCP', 'MOGGING_BRAINMAP', 'MOGGING_BRAINWRITE', 'MOGGING_BRAINDOCS', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
   'MOGGING_PROFILES', 'MOGGING_LOGINTRUTH', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
   // Typed-launch detection + the context gauge (the v6 pack).
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
@@ -519,6 +520,8 @@ function afterWindow(win: BrowserWindow): void {
     runBrainMapSmoke(win) // env-gated repomap smoke: PageRank hub leads, byte-identical renders, budget law, CLI exit codes, board-launch injection ON/OFF (ADR 0018 step 06; HOLD = manual)
   } else if (process.env.MOGGING_BRAINWRITE) {
     runBrainWriteSmoke(win) // env-gated symbol-write smoke: grant/scope/CAS locks, atomic landings re-indexed before the reply, inert hostile bytes, trail counts, SIGKILL torn-file storm (ADR 0018 step 07)
+  } else if (process.env.MOGGING_BRAINDOCS) {
+    runBrainDocsSmoke(win) // env-gated library-lens smoke: lockfile version truth, docs from disk, consent-gated registry fetch against a LOCAL fixture registry, hostile names inert (ADR 0018 step 08; HOLD = manual)
   } else if (process.env.MOGGING_SETSHELL) {
     runSetShellSmoke(win) // env-gated settings-shell smoke: grouped nav, cards, measured spacing + AA (Phase-8.5/04)
   } else if (process.env.MOGGING_SETAGENTCFG) {

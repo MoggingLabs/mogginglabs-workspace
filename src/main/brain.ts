@@ -3,15 +3,17 @@ import { app, ipcMain, type BrowserWindow } from 'electron'
 import {
   BrainService,
   isBrainWriteVerb,
+  partitionOf,
   serveBrainRead,
   serveBrainWrite,
   type BrainFreshnessStats,
   type BrainServeReply,
   type BrainTickSource
 } from '@backend/features/brain'
-import { BrainChannels, locatePane, type BrainAnswer, type BrainChangedEvent } from '@contracts'
+import { BrainChannels, locatePane, type BrainAnswer, type BrainChangedEvent, type BrainLibEcosystem } from '@contracts'
 import { getSettingsStore } from './app-settings'
-import { resolveGrantedWriteTools } from './integrations'
+import { resolveGrantedWriteTools, workspaceIdForPane } from './integrations'
+import { fetchLibraryDocs } from './libfetch'
 import { recordTrail } from './trail'
 
 // App-wiring for the workspace brain (ADR 0018). The logic lives in @backend
@@ -184,6 +186,108 @@ export function setOrientAtLaunch(workspaceId: string, on: boolean): boolean {
   }
 }
 
+// ── The library-docs fetch consent (08): per-workspace, default OFF ───────────
+// The orient knob's storage shape with CONSENT semantics: absent = FALSE — no
+// network unless this workspace's human said so, and the smokes never say so.
+
+const LIBFETCH_KV = 'brain.fetchLibraryDocs'
+
+function libFetchMap(): Record<string, boolean> {
+  try {
+    const raw = getSettingsStore()?.getSetting(LIBFETCH_KV)
+    const parsed = raw ? (JSON.parse(raw) as unknown) : null
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const out: Record<string, boolean> = {}
+      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) out[k] = v === true
+      return out
+    }
+  } catch {
+    /* unreadable map reads as all-default (closed) */
+  }
+  return {}
+}
+
+export function libFetchAllowed(workspaceId: string): boolean {
+  return libFetchMap()[workspaceId] === true
+}
+
+export function setLibFetchAllowed(workspaceId: string, on: boolean): boolean {
+  const store = getSettingsStore()
+  if (!store || !workspaceId) return false
+  const map = libFetchMap()
+  map[workspaceId] = on
+  try {
+    store.setSetting(LIBFETCH_KV, JSON.stringify(map))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * `brain.libdocs` over the agent wire (08) — async because of its ONE optional
+ * network path. The cache read itself is the serve layer's; this handler only
+ * fronts it with the fetch: consent first (per workspace, fail-closed, checked
+ * BEFORE any socket exists), then the registry-pinned bounded fetch, then the
+ * landing — and the final answer always comes from the cache it landed in.
+ */
+export async function handleBrainLibDocsMcp(
+  args: Record<string, unknown>,
+  boundPane: string | undefined
+): Promise<BrainServeReply> {
+  const callerRoot = boundPane ? brainRootForPane(boundPane) : null
+  if (args.fetch === true) {
+    const wsId = boundPane ? workspaceIdForPane(boundPane) : undefined
+    if (!wsId) {
+      return {
+        ok: false,
+        reason: 'consent',
+        detail: 'registry doc fetches need a pane session in a workspace — and that workspace\'s permission (Settings › Privacy)'
+      }
+    }
+    if (!libFetchAllowed(wsId)) {
+      return {
+        ok: false,
+        reason: 'consent',
+        detail: 'this workspace has not allowed library-doc fetches from package registries (default off) — the human enables it in Settings › Privacy'
+      }
+    }
+    const service = ensureService()
+    const name = typeof args.name === 'string' ? args.name : ''
+    const h = callerRoot ? service.readHandle(callerRoot) : null
+    if (h && !('reason' in h) && name) {
+      const caller = partitionOf([...h.project.roots], callerRoot as string) ?? h.project.projectKey
+      const eco = typeof args.ecosystem === 'string' ? args.ecosystem : undefined
+      const dep = h.store.libDep(caller, name, eco)
+      // Unknown names fall through to the serve layer's typed refusal — no
+      // socket is ever opened for a name no lockfile knows.
+      if (dep) {
+        if (!dep.pinned) {
+          return {
+            ok: false,
+            reason: 'invalid',
+            detail: 'nothing pins this dependency to an exact version — a range cannot be fetched without guessing. Pin it first.'
+          }
+        }
+        const cached = h.store.libDoc(dep.ecosystem, dep.name, dep.version)
+        if (!cached) {
+          const fetched = await fetchLibraryDocs(dep.ecosystem as BrainLibEcosystem, dep.name, dep.version)
+          if (!fetched.ok) return { ok: false, reason: fetched.reason, detail: fetched.detail }
+          service.landLibraryDoc(caller, {
+            ecosystem: dep.ecosystem,
+            name: dep.name,
+            version: dep.version,
+            source: 'registry',
+            readme: fetched.readme,
+            signatures: JSON.stringify({ exports: [], sigs: [], readmeTruncated: fetched.readmeTruncated })
+          })
+        }
+      }
+    }
+  }
+  return serveBrainRead(ensureService(), 'brain.libdocs', args, callerRoot)
+}
+
 /** The launch seam's map fetch (06), exported for the BRAINMAP smoke: the same
  *  serve verb the MCP tool answers with, keyed by the pane's actual cwd. */
 export function handleBrainMap(req: unknown): BrainServeReply {
@@ -230,6 +334,14 @@ export function registerBrain(getWin: () => BrowserWindow | null, tickSource?: B
   ipcMain.handle(BrainChannels.orientSet, (_e, req: unknown) => {
     const r = (req ?? {}) as { workspaceId?: unknown; on?: unknown }
     const ok = typeof r.workspaceId === 'string' && !!r.workspaceId && setOrientAtLaunch(r.workspaceId, r.on === true)
+    return { ok }
+  })
+  ipcMain.handle(BrainChannels.libFetchGet, (_e, wsId: unknown) =>
+    typeof wsId === 'string' && wsId ? libFetchAllowed(wsId) : false
+  )
+  ipcMain.handle(BrainChannels.libFetchSet, (_e, req: unknown) => {
+    const r = (req ?? {}) as { workspaceId?: unknown; on?: unknown }
+    const ok = typeof r.workspaceId === 'string' && !!r.workspaceId && setLibFetchAllowed(r.workspaceId, r.on === true)
     return { ok }
   })
   ipcMain.handle(BrainChannels.rebuild, async (_e, req: unknown) => {
