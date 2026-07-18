@@ -198,6 +198,14 @@ const SMOKE_ENV: readonly string[] = [
 ]
 const isSmoke = SMOKE_ENV.some((k) => !!process.env[k])
 
+// Smoke runs isolate LOCALAPPDATA/userData but keep the REAL home directory — so the
+// detection-time auto-wire (agent-global-hooks.ts) would write the developer's actual
+// ~/.claude / ~/.codex configs from inside a gate, pointing hooks at a throwaway
+// userData that the teardown deletes. Suppress it for every gate except GLOBALHOOKS,
+// whose whole job is to prove the auto-wire — and which points every home env at its
+// own fixtures before a handler runs.
+if (isSmoke && !process.env.MOGGING_GLOBALHOOKS) process.env.MOGGING_SUPPRESS_AUTOWIRE = '1'
+
 /**
  * WINDOWLESS, before the app-settings store and the daemon exist. TRUE = this launch is the
  * smoke; boot stops here.

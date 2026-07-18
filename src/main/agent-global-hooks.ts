@@ -61,6 +61,10 @@ const MEMO_KEY = (provider: string): string => `agenthooks.memo.${provider}`
 const OPTOUT_KEY = (provider: string): string => `agenthooks.autowire.${provider}`
 
 function autoWireAllowed(provider: string): boolean {
+  // Gate runs (index.dev.ts sets this for every smoke but GLOBALHOOKS): the isolated
+  // userData still resolves the REAL home configs, and a gate must never mutate the
+  // developer's machine. Never set in production.
+  if (process.env.MOGGING_SUPPRESS_AUTOWIRE) return false
   try {
     return getSettingsStore()?.getSetting(OPTOUT_KEY(provider)) !== 'off'
   } catch {
