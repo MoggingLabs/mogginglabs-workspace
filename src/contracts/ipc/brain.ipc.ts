@@ -41,13 +41,21 @@ export interface BrainStatus {
   generation: number
   /** TRUE when the index is known stale. 04 owns raising it; nothing may hide it. */
   dirty: boolean
-  /** Zeroed until 03's graph lands — a real answer from a real (empty) index. */
+  /** Real counts across every partition of the project's db (zero until built). */
   files: number
   nodes: number
   edges: number
   languages: string[]
   /** TRUE while the worker is rebuilding — answers stay served (from the old bytes). */
   indexing: boolean
+  /** The LAST build's reference fidelity (ADR 0018.d: reported, never faked):
+   *  a resolved reference became an edge; an ambiguous one was DROPPED and counted. */
+  resolvedRefs: number
+  droppedRefs: number
+  /** The LAST build's parse-cache economics — a second worktree of identical bytes
+   *  should read as all hits, and the BRAINGRAPH gate asserts exactly that. */
+  cacheHits: number
+  cacheMisses: number
 }
 
 export type BrainAnswer = BrainStatus | BrainRefusal

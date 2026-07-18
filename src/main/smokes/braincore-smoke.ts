@@ -143,7 +143,7 @@ export async function runBrainCoreSmoke(): Promise<void> {
 
     // ── (e) lifecycle: rebuild bumps; dispose closes; delete rebuilds; LRU caps ───
     const g1 = sRepo.ok ? sRepo.generation : -1
-    const afterRebuild = handleBrainRebuild({ root: repoA })
+    const afterRebuild = await handleBrainRebuild({ root: repoA })
     const viaWorktree = handleBrainStatus({ root: wtPath })
     const rebuildOk =
       afterRebuild.ok && afterRebuild.generation === g1 + 1 &&

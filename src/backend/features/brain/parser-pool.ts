@@ -157,6 +157,12 @@ export class ParserPool {
     return { ok: true, lang, tree, tagCounts, hasError: tree.rootNode.hasError }
   }
 
+  /** The compiled tag query for a LOADED language — the extraction's other input.
+   *  Null until parseFile loaded the language (lazy by law) or when no query ships. */
+  queryFor(lang: string): Query | null {
+    return this.languages.get(lang)?.query ?? null
+  }
+
   status(): PoolStatus {
     return {
       loaded: [...this.languages.keys()],
