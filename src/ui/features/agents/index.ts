@@ -684,6 +684,9 @@ export const agentsFeature: UiFeature = {
         // Smoke/dev shim: replay a detection event exactly as the backend sends it, so a
         // gate can prove the whole typed-launch path without a real agent process.
         detected: (ev: AgentDetectedEvent) => onAgentDetected(ev),
+        // Smoke/dev shim: drive the profile-note port directly — PLAINMENU proves an
+        // OPEN ⋯ menu follows it live (the note resolves async on the detection path).
+        profileNote: (paneId: number, name?: string) => setPaneProfile(paneId as PaneId, name),
         session: (paneId: number) => getPaneAgentSession(paneId as PaneId) ?? null
       }
     }

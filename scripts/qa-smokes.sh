@@ -314,6 +314,7 @@ run_smoke ROLERACE    MOGGING_ROLERACE 1 120 rolerace
 run_smoke AGENTREGISTRY MOGGING_AGENTREGISTRY 1 120 agentregistry
 run_smoke PLAINMENU   MOGGING_PLAINMENU 1 150 plainmenu
 run_smoke UPDATEFAIL  MOGGING_UPDATEFAIL 1 120 updatefail
+run_smoke UPDATEOFFLINE MOGGING_UPDATEOFFLINE 1 150 updateoffline
 run_smoke A11YMODAL   MOGGING_A11YMODAL 1 180 a11ymodal
 run_smoke BROWSERZERO MOGGING_BROWSERZERO 1 180 browserzero
 run_smoke SECRETFORMS MOGGING_SECRETFORMS 1 240 secretforms
@@ -437,6 +438,10 @@ run_smoke MCPMGR       MOGGING_MCPMGR    1 180 mcpmgr
 run_smoke MCPCAT       MOGGING_MCPCAT    1 180 mcpcat
 run_smoke INTEGUX      MOGGING_INTEGUX   1 240 integux
 run_smoke SETINTEG     MOGGING_SETINTEG  1 240 setinteg
+# The store/inventory split (2026-07-18): the Library overlay is the store, the
+# settings page is the inventory — this gate bites the door, the honesty, the
+# chip->plan mutation, the in-place key vaulting, and the route badges.
+run_smoke LIBRARYUX    MOGGING_LIBRARYUX 1 240 libraryux
 run_smoke INTEGMILESTONE MOGGING_INTEGMILESTONE 1 300 integmilestone
 run_smoke WIZARDUX     MOGGING_WIZARDUX  1 180 wizardux
 run_smoke WIZARDFAIL   MOGGING_WIZARDFAIL 1 180 wizardfail

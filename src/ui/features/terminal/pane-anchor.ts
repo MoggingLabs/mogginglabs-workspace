@@ -41,6 +41,18 @@ import type { Terminal } from '@xterm/xterm'
  *    viewport at all. Otherwise a pin already queued for the current frame would land
  *    between the wheel and xterm's scroll sync and snap the viewport back — the user's
  *    wheel would appear to do nothing.
+ *  - A GESTURE CARRIES A DIRECTION. Yielding is not believing: while the window is open
+ *    the machine keeps writing (a repaint, a replay, a refit), and the displacement THAT
+ *    produces comes to rest exactly where a human's would. So each gesture also records
+ *    whether the human ever pointed UP — a wheel tick with negative delta, a finger
+ *    dragging down, a PageUp/Home/ArrowUp chord; a scrollbar scrub is trusted outright,
+ *    its rest position IS the intent. At rest, an off-bottom viewport releases the anchor
+ *    only if the gesture actually pointed up. Without this, an incidental down-tick over
+ *    a pane whose CLI then repaints (Windows delivers the wheel to whatever unfocused
+ *    window the pointer happens to rest over) had its machine displacement attributed to
+ *    the human, and the pane sat stranded in the blank scrollback that same repaint had
+ *    just created. Direction renews with the window: trackpad inertia trains keep one
+ *    gesture — and one intent — alive across their whole run.
  *
  * Typing is read from real key events on the pane, NOT from `onData`: xterm answers
  * CPR/DA/focus queries through the same `onData` channel, and agents poll those
@@ -53,12 +65,13 @@ export interface PaneAnchorHandle {
   following(): boolean
   /** Follow the newest output again, now (typing, the jump pill, an explicit reveal). */
   stick(): void
-  /** A human is driving the viewport: the scroll this produces decides `following`. */
+  /** A human is driving the viewport with an exact target (a scrollbar scrub): wherever
+   *  this gesture comes to rest is where they meant to be, and it decides `following`. */
   noteUserScroll(): void
   /** Re-pin if we are following and something moved us off the bottom. */
   pin(): void
   /** Counters for the PANESCROLL gate: which paths actually fired. */
-  debug(): { gestures: number; scrolls: number; inWindow: number; repins: number; settles: number }
+  debug(): { gestures: number; scrolls: number; inWindow: number; repins: number; settles: number; overrides: number }
   dispose(): void
 }
 
@@ -69,14 +82,24 @@ const GESTURE_MS = 400
 export function createPaneAnchor(term: Terminal, body: HTMLElement): PaneAnchorHandle {
   let follow = true
   let gestureUntil = 0
+  let intentUp = false
+  let gestureFollow = true // `follow` as the current gesture found it
   let raf = 0
   let settle: ReturnType<typeof setTimeout> | undefined
-  const dbg = { gestures: 0, scrolls: 0, inWindow: 0, repins: 0, settles: 0 }
+  const dbg = { gestures: 0, scrolls: 0, inWindow: 0, repins: 0, settles: 0, overrides: 0 }
 
   const atBottom = (): boolean => {
     const b = term.buffer.active
     return b.viewportY >= b.baseY
   }
+
+  /** Where a gesture's dust settles, this is the verdict: at the bottom always follows;
+   *  off the bottom counts as the human's choice if the gesture pointed up; and a gesture
+   *  that never pointed up leaves `following` exactly as it found it — a pane that was
+   *  following stays following (the displacement was the machine's: a repaint/replay/
+   *  reflow landing inside the window), and a reader already parked in history who nudges
+   *  DOWN without reaching the bottom is not yanked there. */
+  const decide = (): boolean => atBottom() || (intentUp ? false : gestureFollow)
 
   const repin = (): void => {
     raf = 0
@@ -113,9 +136,15 @@ export function createPaneAnchor(term: Terminal, body: HTMLElement): PaneAnchorH
     if (!raf) raf = requestAnimationFrame(repin)
   }
 
-  const noteUserScroll = (): void => {
+  const noteGesture = (up: boolean): void => {
     dbg.gestures++
-    gestureUntil = Date.now() + GESTURE_MS
+    const now = Date.now()
+    if (now > gestureUntil) {
+      intentUp = false // a fresh gesture starts with no direction...
+      gestureFollow = follow // ...and remembers the state it found, to leave it undisturbed
+    }
+    if (up) intentUp = true // any 'up' the gesture expresses is kept for its whole run
+    gestureUntil = now + GESTURE_MS
     if (raf) {
       cancelAnimationFrame(raf) // drop a pin queued before the gesture landed
       raf = 0
@@ -126,15 +155,18 @@ export function createPaneAnchor(term: Terminal, body: HTMLElement): PaneAnchorH
     // user through history without ever emitting `onScroll`. An anchor that only
     // listened to scroll events would never notice they had left the bottom, and the
     // very next line of agent output would drag them back down. So: when the gesture
-    // window closes, look at where the viewport actually IS.
+    // window closes, look at where the viewport actually IS — read through `decide`,
+    // so a machine displacement inside the window is never mistaken for the human's.
     if (settle) clearTimeout(settle)
     settle = setTimeout(() => {
       settle = undefined
-      follow = atBottom()
+      follow = decide()
+      if (follow && !atBottom()) dbg.overrides++ // machine displacement overruled
       dbg.settles++
       pin()
     }, GESTURE_MS + 20)
   }
+  const noteUserScroll = (): void => noteGesture(true) // an exact scrub: trust where it rests
 
   const stick = (): void => {
     follow = true
@@ -150,7 +182,7 @@ export function createPaneAnchor(term: Terminal, body: HTMLElement): PaneAnchorH
     dbg.scrolls++
     if (Date.now() <= gestureUntil) {
       dbg.inWindow++
-      follow = atBottom() // the human decides
+      follow = decide() // the human decides — where the gesture pointed where it rests
     } else pin() // anything else: the anchor holds
   })
   // Writes AND reflows land here — the reattach replay and the reveal refit both do.
@@ -158,17 +190,30 @@ export function createPaneAnchor(term: Terminal, body: HTMLElement): PaneAnchorH
   const onResize = term.onResize(pin)
 
   // Gestures. Capture-phase and passive: we only ever OBSERVE them, xterm still handles
-  // them. `wheel` covers trackpads too; `touchmove` the touch drag.
+  // them. `wheel` covers trackpads too; `touchmove` the touch drag. Each reports the one
+  // thing an event can say that a rest position cannot: which way the human pointed.
   const gesture = { capture: true, passive: true } as const
-  body.addEventListener('wheel', noteUserScroll, gesture)
-  body.addEventListener('touchmove', noteUserScroll, gesture)
+  // Ctrl+wheel is the pinch-zoom gesture, not a scroll: it still opens the window (the
+  // anchor yields to whatever it does) but claims no direction.
+  const onWheel = (e: WheelEvent): void => noteGesture(!e.ctrlKey && e.deltaY < 0)
+  // A finger dragging DOWN scrolls the content up, into history.
+  let touchY: number | undefined
+  const onTouch = (e: TouchEvent): void => {
+    const y = e.touches[0]?.clientY
+    const up = Date.now() <= gestureUntil && touchY !== undefined && y !== undefined && y > touchY
+    touchY = y
+    noteGesture(up)
+  }
+  body.addEventListener('wheel', onWheel, gesture)
+  body.addEventListener('touchmove', onTouch, gesture)
 
   // Keys: the scroll chords are a gesture (they may leave the bottom deliberately);
   // every other key is TYPING, which means the user is talking to the agent at the
   // prompt — xterm's own scrollOnUserInput already jumps there, so re-arm with it.
   const SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown'])
+  const UP_KEYS = new Set(['PageUp', 'Home', 'ArrowUp'])
   const onKey = (e: KeyboardEvent): void => {
-    if ((e.shiftKey || e.ctrlKey || e.metaKey) && SCROLL_KEYS.has(e.key)) noteUserScroll()
+    if ((e.shiftKey || e.ctrlKey || e.metaKey) && SCROLL_KEYS.has(e.key)) noteGesture(UP_KEYS.has(e.key))
     else if (!e.ctrlKey && !e.metaKey && !e.altKey) stick() // typing = back to the prompt
   }
   body.addEventListener('keydown', onKey, true)
@@ -183,8 +228,8 @@ export function createPaneAnchor(term: Terminal, body: HTMLElement): PaneAnchorH
       onScroll.dispose()
       onRender.dispose()
       onResize.dispose()
-      body.removeEventListener('wheel', noteUserScroll, gesture)
-      body.removeEventListener('touchmove', noteUserScroll, gesture)
+      body.removeEventListener('wheel', onWheel, gesture)
+      body.removeEventListener('touchmove', onTouch, gesture)
       body.removeEventListener('keydown', onKey, true)
       if (settle) clearTimeout(settle)
       if (raf) cancelAnimationFrame(raf)

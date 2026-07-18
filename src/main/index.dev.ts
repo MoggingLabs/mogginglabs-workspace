@@ -40,6 +40,7 @@ import { runTreeGitSmoke } from './smokes/treegit-smoke'
 import { runFileActSmoke } from './smokes/fileact-smoke'
 import { runFilesMilestoneSmoke } from './smokes/filesmilestone-smoke'
 import { runSetIntegSmoke } from './smokes/setinteg-smoke'
+import { runLibraryUxSmoke } from './smokes/libraryux-smoke'
 import { runSetShellSmoke } from './smokes/setshell-smoke'
 import { runSetUsageSmoke } from './smokes/setusage-smoke'
 import { runHomeUxSmoke } from './smokes/homeux-smoke'
@@ -109,6 +110,7 @@ import { runBoardQueueSmoke } from './smokes/boardqueue-smoke'
 import { runPersistHealthSmoke } from './smokes/persisthealth-smoke'
 import { runRoleRaceSmoke } from './smokes/rolerace-smoke'
 import { runUpdateFailSmoke } from './smokes/updatefail-smoke'
+import { runUpdateOfflineSmoke } from './smokes/updateoffline-smoke'
 import { runA11yModalSmoke } from './smokes/a11ymodal-smoke'
 import { runBrowserZeroSmoke } from './smokes/browserzero-smoke'
 import { runSecretFormsSmoke } from './smokes/secretforms-smoke'
@@ -184,13 +186,13 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
   'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_RAILFOLD', 'MOGGING_CHROMEPRESS', 'MOGGING_KBSHORTCUTS', 'MOGGING_KBGLOBAL', 'MOGGING_VERDICTLIVE', 'MOGGING_WEBTRAIL',
   'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX', 'MOGGING_WIZARDFAIL', 'MOGGING_WIZARDISO', 'MOGGING_WIZCD', 'MOGGING_WIZLAYOUT', 'MOGGING_MUTATIONRACE', 'MOGGING_AUTHRUNNER',
-  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX', 'MOGGING_RESUME',
+  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_LIBRARYUX', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX', 'MOGGING_RESUME',
   'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_RESPONSIVE', 'MOGGING_KBAPG', 'MOGGING_UXMILESTONE',
   'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT', 'MOGGING_CWD',
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
   'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_RUNTIMESPLIT', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
-  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
+  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_UPDATEOFFLINE', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
   'MOGGING_PROFILES', 'MOGGING_LOGINTRUTH', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
   // Typed-launch detection + the context gauge (the v6 pack).
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
@@ -495,6 +497,8 @@ function afterWindow(win: BrowserWindow): void {
     runSetAgentConfigSmoke(win) // five-provider settings catalog, typed controls, real scope writes, remote honesty
   } else if (process.env.MOGGING_SETINTEG) {
     runSetIntegSmoke(win) // env-gated integrations smoke: disclosure, attention-through-fold, hit targets (Phase-8.5/05)
+  } else if (process.env.MOGGING_LIBRARYUX) {
+    runLibraryUxSmoke(win) // the store/inventory split: Library overlay, inventory honesty, chips->plans, key slots, route badges (2026-07-18)
   } else if (process.env.MOGGING_SETUSAGE) {
     runSetUsageSmoke(win) // env-gated usage tab + popover smoke: overview/disclosure, bug #4/#5, profiles FieldGroups (Phase-8.5/05b)
   } else if (process.env.MOGGING_HOMEUX) {
@@ -576,7 +580,9 @@ function afterWindow(win: BrowserWindow): void {
   } else if (process.env.MOGGING_PLAINMENU) {
     runPlainMenuSmoke(win) // pane ⋯ launch entries are plain-terminal-only, through the whole lifecycle
   } else if (process.env.MOGGING_UPDATEFAIL) {
-    runUpdateFailSmoke(win) // audit regression: a failed update check stays visible and its retry re-checks
+    runUpdateFailSmoke(win) // audit regression: a BROKEN feed stays loud even on a background check; retry re-checks
+  } else if (process.env.MOGGING_UPDATEOFFLINE) {
+    runUpdateOfflineSmoke(win) // regression (v0.14.0 live): an offline blip never latches the error row; manual retry honest; self-heals
   } else if (process.env.MOGGING_A11YMODAL) {
     runA11yModalSmoke(win) // audit regression: modal trap/inert/name, palette combobox, workspace-tab close by keyboard
   } else if (process.env.MOGGING_BROWSERZERO) {
