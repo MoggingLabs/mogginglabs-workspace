@@ -2078,10 +2078,12 @@ textarea {
   padding: var(--sp-2);
   /* A fixed column, not the old 520px tile strip: the 8 templates stack 4×2 (below),
      so the status line, the tile grid and the action rows share one width instead of
-     three action rows rattling inside a strip sized for eight tiles. The vw term
-     keeps the right-anchored popover from poking past the window's LEFT edge on a
-     very narrow window. */
-  width: 340px;
+     three action rows rattling inside a strip sized for eight tiles. 396px is the
+     narrowest that shows "New isolated terminal (worktree)" whole beside its stepper
+     (340 and 364 both ellipsized it mid-word — screenshot-verified twice). The vw
+     term keeps the right-anchored popover from poking past the window's LEFT edge
+     on a very narrow window. */
+  width: 396px;
   max-width: calc(100vw - 240px);
 }
 .layout-menu[hidden] {
@@ -2121,8 +2123,10 @@ textarea {
 /* Compact tiles for the dense titlebar dropdown (the wizard runs the same picker at
    full size). A 4-across GRID, not the old single row: the popover column stays as
    wide as its action rows and the tiles fill it edge to edge. Hover + selected
-   states come from .layout-tile. */
-.layout-picker--compact {
+   states come from .layout-tile. Both classes on purpose: the shared `.layout-picker`
+   rule (display:flex) sits LATER in this file, and at equal specificity it silently
+   won `display` — the grid never engaged and the eight tiles rode one squeezed row. */
+.layout-picker.layout-picker--compact {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: var(--sp-1);

@@ -616,7 +616,9 @@ export const workspaceFeature: UiFeature = {
         ariaLabel: 'How many isolated terminals',
         onChange: (n) => {
           isoCount = n
-          isoLabel.textContent = n === 1 ? 'New isolated terminal (worktree)' : `${n} new isolated terminals (worktrees)`
+          // Same length singular and plural, so raising the count never re-truncates
+          // the row the user is looking at.
+          isoLabel.textContent = n === 1 ? 'New isolated terminal (worktree)' : `${n} isolated terminals (worktrees)`
         }
       })
       const addIsolated = el(
