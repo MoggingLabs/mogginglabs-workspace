@@ -27,7 +27,7 @@ import { onTerminalTheme } from '../../core/theme/theme-port'
 import { onTerminalFontSize, terminalFontSize, TERMINAL_LINE_HEIGHT } from '../../core/terminal/font-port'
 import { windowsPtyFor } from '../../core/terminal/pty-emulation'
 import { registerPaneInstance, retirePaneInstance } from '../../core/terminal/pane-instance-port'
-import { forgetPane, markPaneLive, markPaneReattached, markPaneRemoteReady } from '../../core/terminal/liveness-port'
+import { forgetPane, markPaneLive, markPaneReattached, markPaneRemoteReady, markPaneSpawnSettled } from '../../core/terminal/liveness-port'
 import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
 import { setPaneState, clearPaneState, paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
 import { completionsFor } from '../../core/attention/completions'
@@ -359,6 +359,12 @@ export class TerminalPane {
         // adopt branch on restore (agents/index.ts), labelling a session that isn't there
         // instead of typing its resume, and the agent would never come back.
         if (res.existing && !res.restored && !this.disposed) markPaneReattached(this.id)
+        // The reattach verdict above is now DECIDED — release resume lineups waiting on
+        // it (whenPaneSpawnSettled). Liveness cannot carry this: a reattach replays
+        // scrollback before this reply lands, so "live" precedes "verdict known".
+        // Never after dispose: forgetPane already flushed the waiters for this id, and
+        // a late mark would leak onto the next pane to recycle it.
+        if (!this.disposed) markPaneSpawnSettled(this.id)
         // The reattach/restore REPLAY arrives right after this: thousands of scrollback
         // lines in a burst, into a grid that is about to be refitted. Land at the end of
         // the conversation, which is the only place it makes sense to land.
@@ -377,6 +383,9 @@ export class TerminalPane {
           const why = err instanceof Error ? err.message : String(err)
           this.term.write(`\x1b[91m[terminal failed to start]\x1b[0m\r\n\x1b[90m${why}\x1b[0m\r\n`)
           this.markDead('terminal failed to start') // never lived — same gray as exited
+          // A failed spawn is still a SETTLED spawn (there is no session, so no reattach
+          // mark) — a resume lineup waiting on the verdict must not burn its timeout.
+          markPaneSpawnSettled(this.id)
         }
       })
 

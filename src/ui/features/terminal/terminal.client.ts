@@ -31,7 +31,8 @@ export const terminalClient = {
     // Neither is observable from the terminal buffer: the shell decides what echoes.
     if (import.meta.env.DEV) {
       const spy = (window as unknown as { __mogging?: { ptyWrites?: unknown[] } }).__mogging?.ptyWrites
-      if (Array.isArray(spy)) spy.push({ id: cmd.id, data: cmd.data })
+      // `at` (performance.now) rides along for the LAUNCHNOW gate's gap math.
+      if (Array.isArray(spy)) spy.push({ id: cmd.id, data: cmd.data, at: performance.now() })
     }
     getBridge().send(TerminalChannels.write, cmd)
   },

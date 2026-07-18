@@ -511,35 +511,36 @@ export const wizardFeature: UiFeature = {
         return clean
       }
       if (!skipAgents && snap.isolate && snap.isRepo && snap.cwd) {
-        paneCwds = []
-        for (const assignment of resolved.assignments) {
-          if (assignment && assignment !== 'shell') {
-            if (!currentOpen(generation)) {
-              await rollbackWorktrees()
-              return false
-            }
-            try {
-              const wt = await wizardClient.createWorktree(snap.cwd)
-              if (!wt.ok || !wt.path) {
-                const cleaned = await rollbackWorktrees()
-                return refuse(
-                  `Could not isolate every agent${wt.error ? `: ${wt.error}` : '.'} No workspace was opened.` +
-                    (cleaned ? '' : ' A temporary worktree also needs manual cleanup.')
-                )
-              }
-              createdWorktrees.push(wt.path)
-              paneCwds.push(wt.path)
-            } catch (error) {
-              const cleaned = await rollbackWorktrees()
-              return refuse(
-                `Could not isolate every agent: ${error instanceof Error ? error.message : String(error)}. No workspace was opened.` +
-                  (cleaned ? '' : ' A temporary worktree also needs manual cleanup.')
-              )
-            }
-          } else {
-            paneCwds.push(null)
-          }
+        // One `git worktree add` per agent slot, in PARALLEL: each add gets its own
+        // random slug + branch (no shared ref, no shared path), so the adds never
+        // contend and the wall-clock is the SLOWEST add, not their sum — sequential
+        // creation was seconds of dead time on a real repo with a few agents.
+        // Every job SETTLES before any verdict is reached: a rollback issued while a
+        // sibling create was still in flight could not name its path and would leak
+        // the worktree (WIZARDFAIL asserts leak-zero on partial failure).
+        const jobs: Promise<{ path: string } | { error?: string } | null>[] = resolved.assignments.map((assignment) =>
+          assignment && assignment !== 'shell'
+            ? wizardClient
+                .createWorktree(snap.cwd)
+                .then((wt) => (wt.ok && wt.path ? { path: wt.path } : { error: wt.error }))
+                .catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }))
+            : Promise.resolve(null)
+        )
+        const settled = await Promise.all(jobs)
+        for (const job of settled) if (job && 'path' in job) createdWorktrees.push(job.path)
+        if (!currentOpen(generation)) {
+          await rollbackWorktrees()
+          return false
         }
+        const failure = settled.find((job): job is { error?: string } => !!job && !('path' in job))
+        if (failure) {
+          const cleaned = await rollbackWorktrees()
+          return refuse(
+            `Could not isolate every agent${failure.error ? `: ${failure.error}` : '.'} No workspace was opened.` +
+              (cleaned ? '' : ' A temporary worktree also needs manual cleanup.')
+          )
+        }
+        paneCwds = settled.map((job) => (job && 'path' in job ? job.path : null))
       }
 
       // The remote path's cwd rides on the REMOTE entry, never in paneCwds: a paneCwd is a
@@ -1491,17 +1492,19 @@ export const wizardFeature: UiFeature = {
           return r
         },
         // Worktree-isolation path (3/03): one worktree per non-shell slot at `repo`.
+        // Parallel like the real launch path — the smoke drives the same concurrency.
         openIsolated: async (repo: string, m: ProviderCount[]) => {
           const r = await wizardClient.resolve(m)
-          const paneCwds: (string | null)[] = []
-          for (const a of r.assignments) {
-            if (a && a !== 'shell') {
-              const wt = await wizardClient.createWorktree(repo)
-              paneCwds.push(wt.ok && wt.path ? wt.path : null)
-            } else {
-              paneCwds.push(null)
-            }
-          }
+          const paneCwds: (string | null)[] = await Promise.all(
+            r.assignments.map((a) =>
+              a && a !== 'shell'
+                ? wizardClient.createWorktree(repo).then(
+                    (wt) => (wt.ok && wt.path ? wt.path : null),
+                    () => null
+                  )
+                : Promise.resolve<string | null>(null)
+            )
+          )
           openWorkspaceFromTemplate({ name: 'Isolated', cwd: repo, paneCount: r.paneCount, assignments: r.assignments, paneCwds })
           return { ...r, paneCwds }
         },

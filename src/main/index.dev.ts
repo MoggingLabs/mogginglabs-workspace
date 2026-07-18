@@ -54,6 +54,7 @@ import { runReloadSmoke } from './smokes/reload-smoke'
 import { runMultipaneSmoke } from './smokes/multipane-smoke'
 import { runWorkspaceSmoke } from './smokes/workspace-smoke'
 import { runAgentLaunchSmoke } from './smokes/agentlaunch-smoke'
+import { runLaunchNowSmoke } from './smokes/launchnow-smoke'
 import { runTypedSmoke } from './smokes/typed-smoke'
 import { runTypedCostSmoke } from './smokes/typedcost-smoke'
 import { runCtxAccuracySmoke } from './smokes/ctxaccuracy-smoke'
@@ -175,7 +176,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_USERDATA', 'MOGGING_GATES', 'MOGGING_GALLERY', // isolation + sweep markers, set by every gate
   'MOGGING_SURVIVE', 'MOGGING_MIGRATE', 'MOGGING_NOTIFYHOOK', 'MOGGING_DAEMONCUSTODY', 'MOGGING_STAMPWAR', 'MOGGING_HEARTBEAT', 'MOGGING_DAEMONHEAL', 'MOGGING_SESSIONPOOL', 'MOGGING_INTEG', 'MOGGING_TOOLPLAN',
   'MOGGING_EVBRIDGE', 'MOGGING_MCPSTATUS', 'MOGGING_MCPLOOP', 'MOGGING_ACCOUNT', 'MOGGING_ENTITLE', 'MOGGING_DEVICEKEY', 'MOGGING_WATERMARK', 'MOGGING_AGENT', 'MOGGING_STATE', 'MOGGING_RELOAD',
-  'MOGGING_SMOKE', 'MOGGING_SHOT', 'MOGGING_MULTIPANE', 'MOGGING_WORKSPACE', 'MOGGING_AGENTLAUNCH',
+  'MOGGING_SMOKE', 'MOGGING_SHOT', 'MOGGING_MULTIPANE', 'MOGGING_WORKSPACE', 'MOGGING_AGENTLAUNCH', 'MOGGING_LAUNCHNOW',
   'MOGGING_TEMPLATE', 'MOGGING_PROFPERSIST', 'MOGGING_BROWSER', 'MOGGING_BROWSERCTL', 'MOGGING_BROWSERUX', 'MOGGING_BROWSERTABS', 'MOGGING_BROWSERRACE', 'MOGGING_BROWSERZERO', 'MOGGING_LOCKDOWN', 'MOGGING_FIRSTRUN',
   'MOGGING_PRODUCT', 'MOGGING_PRODMILESTONE', 'MOGGING_USAGEGLANCE', 'MOGGING_USAGEUI', 'MOGGING_WEBUSAGE', 'MOGGING_USAGECLI',
   'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
@@ -382,6 +383,8 @@ function afterWindow(win: BrowserWindow): void {
     runWorkspaceSmoke(win, process.env.MOGGING_WORKSPACE) // env-gated workspace persist/restore smoke
   } else if (process.env.MOGGING_AGENTLAUNCH) {
     runAgentLaunchSmoke(win) // env-gated agent-launcher smoke (picker -> TUI)
+  } else if (process.env.MOGGING_LAUNCHNOW) {
+    runLaunchNowSmoke(win) // instant-lineup contract: readiness-signal typing, no fixed delay
   } else if (process.env.MOGGING_TYPED) {
     runTypedSmoke(win) // env-gated typed-launch DETECTION smoke (a hand-typed agent gets a real identity)
   } else if (process.env.MOGGING_TEMPLATE) {

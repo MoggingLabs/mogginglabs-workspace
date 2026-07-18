@@ -9,7 +9,7 @@ ecosystems. Companion to `docs/RELEASING.md` (the mechanics of cutting a release
 | | Windows | macOS | Linux |
 |---|---|---|---|
 | **Built in CI** | NSIS x64 + blockmap | dmg + zip, arm64 (x64 deferred†) | AppImage + deb, x64 |
-| **Swept (158 gates)** | local (windows-sweep CI = Phase-6/03) | `macos-sweep` nightly + dispatch | `linux-sweep` nightly + dispatch |
+| **Swept (159 gates)** | local (windows-sweep CI = Phase-6/03) | `macos-sweep` nightly + dispatch | `linux-sweep` nightly + dispatch |
 | **Signed today** | no — config READY, cert pending | no — config READY (hardened runtime + entitlements + notarize wired), cert pending | n/a (GPG sums optional, later) |
 | **Auto-update** | GitHub releases feed (electron-updater) | feed wired, **inert until signed** — Squirrel.Mac refuses unsigned updates | AppImage via feed; deb manual |
 | **Install channels** | GitHub release · winget (manifest in `packaging/winget/`, not yet submitted) | GitHub release · homebrew cask (`packaging/homebrew/`, not yet submitted) | GitHub release |
@@ -59,7 +59,7 @@ Add the secrets in repo settings → rerun `Release`. The
 `CSC_LINK` breaks electron-builder), signing and notarization activate on their
 own. Verify beforehand any time with the `signing-dryrun` dispatch.
 
-† **Intel (x64) macOS is still deferred as of v0.13.0.** The 2026-07 macos runner image
+† **Intel (x64) macOS is still deferred as of v0.14.0.** The 2026-07 macos runner image
 regressed into the same `@electron/rebuild` spawn hang the ubuntu/windows
 images have (59 min of silence on `preparing better-sqlite3` — run
 28756024650), so the mac release uses the direct node-gyp bypass, which builds
@@ -139,14 +139,14 @@ one command — never hand-edit hashes:
 # from a local release build:
 node scripts/update-manifests.mjs            # reads dist/
 # from a published release:
-gh release download v0.13.0 -D /tmp/rel && node scripts/update-manifests.mjs /tmp/rel
+gh release download v0.14.0 -D /tmp/rel && node scripts/update-manifests.mjs /tmp/rel
 ```
 
 CI validates both continuously where the tooling exists (`winget validate` on
 windows-latest, `brew style` on macos-latest) so submission day is a
 copy-paste PR.
 
-**v0.13.0 status:** the committed manifests pin the shipped v0.13.0 artifacts —
+**v0.14.0 status:** the committed manifests pin the shipped v0.14.0 artifacts —
 sha256s regenerated from the uploaded release bytes (the command above), win-x64
 `.exe` and mac-arm64 `.dmg` verified against the assets on the release. The cask
 stays arm64-only (Intel deferred — see the matrix footnote). Neither is submitted

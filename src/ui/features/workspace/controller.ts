@@ -1690,33 +1690,36 @@ export class WorkspaceController {
     return meta
   }
 
-  /** Launch each non-shell pane's assigned CLI (06b). Delayed so the panes' PTYs are
-   *  spawned and ready. `resume` re-launches the lineup on restore. Worktree-isolated
-   *  slots (3/03) launch at their OWN cwd — the agent cd's into its worktree. */
+  /** Launch each non-shell pane's assigned CLI (06b). Immediate: the panes exist
+   *  (create() builds the grid synchronously), and PTY readiness is the launch path's
+   *  own contract — `whenPaneLive` holds the typed command until the first output, and
+   *  resume lineups additionally wait on `whenPaneSpawnSettled` for the reattach
+   *  verdict. (This used to hide behind a fixed 900ms delay; the LAUNCHNOW gate now
+   *  asserts commands land on the readiness signal, not on a timer.) `resume`
+   *  re-launches the lineup on restore. Worktree-isolated slots (3/03) launch at
+   *  their OWN cwd — the agent cd's into its worktree. */
   launchLineup(id: string, resume: boolean): void {
     const view = this.views.get(id)
     const assignments = view?.meta.assignments
     if (!view || !assignments) return
     const meta = view.meta
-    setTimeout(() => {
-      // Only into panes that EXIST: slot ids are sparse after closes (live 1,3,5), and
-      // assignment arrays can name slots the layout no longer has — a launch typed at a
-      // nonexistent pane id is at best lost, at worst delivered to a future pane.
-      const live = new Set<number>(view.layout.paneIds())
-      assignments.forEach((provider, i) => {
-        const paneId = paneIdForSlot(meta, i + 1)
-        if (provider && provider !== 'shell' && live.has(paneId)) {
-          const remote = meta.remotes?.[i]
-          const cwd = remote ? (remote.cwd ?? '') : (meta.paneCwds?.[i] || meta.cwd)
-          requestAgentLaunch({
-            paneId: paneId as PaneId,
-            provider,
-            cwd,
-            resume,
-            profileId: meta.profileIds?.[i] ?? undefined
-          })
-        }
-      })
-    }, 900)
+    // Only into panes that EXIST: slot ids are sparse after closes (live 1,3,5), and
+    // assignment arrays can name slots the layout no longer has — a launch typed at a
+    // nonexistent pane id is at best lost, at worst delivered to a future pane.
+    const live = new Set<number>(view.layout.paneIds())
+    assignments.forEach((provider, i) => {
+      const paneId = paneIdForSlot(meta, i + 1)
+      if (provider && provider !== 'shell' && live.has(paneId)) {
+        const remote = meta.remotes?.[i]
+        const cwd = remote ? (remote.cwd ?? '') : (meta.paneCwds?.[i] || meta.cwd)
+        requestAgentLaunch({
+          paneId: paneId as PaneId,
+          provider,
+          cwd,
+          resume,
+          profileId: meta.profileIds?.[i] ?? undefined
+        })
+      }
+    })
   }
 }

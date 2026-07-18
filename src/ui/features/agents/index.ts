@@ -1,5 +1,5 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { AgentHookChannels, IntegrationsChannels, ProfileChannels, TerminalChannels, isAgentCliId, planSignature, type AgentDetectedEvent, type AgentInfo, type AgentProfile, type GlobalHooksMutationResult, type GlobalHooksStatus, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
+import { AgentHookChannels, IntegrationsChannels, ProfileChannels, TerminalChannels, isAgentCliId, planSignature, type AgentCliId, type AgentCommandResult, type AgentDetectedEvent, type AgentInfo, type AgentProfile, type GlobalHooksMutationResult, type GlobalHooksStatus, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
 import { recordPaneLaunch } from '../../core/agents/toolplan-panes'
 import { recordPaneCli, setMcpSnapshot } from '../../core/agents/mcp-status-port'
 
@@ -19,9 +19,11 @@ import {
   isPaneLive,
   isPaneRemoteReady,
   markPaneRemoteReady,
+  paneLiveAt,
   wasPaneReattached,
   whenPaneLive,
-  whenPaneRemoteReady
+  whenPaneRemoteReady,
+  whenPaneSpawnSettled
 } from '../../core/terminal/liveness-port'
 import { getTelemetry } from '../../core/telemetry'
 import { showToast } from '../../components'
@@ -317,6 +319,47 @@ export const agentsFeature: UiFeature = {
       requestAgentLaunch({ paneId: focus.paneId, provider: agentId, cwd: focus.cwd, profileId })
     }
 
+    /** Resolve the profile + build the launch command — the main round trips of a local
+     *  CLI launch, factored out so a fresh launch can start them WHILE the shell is still
+     *  booting (the pane-live wait and the command build overlap instead of queuing).
+     *  Never rejects: a prefetch settles into a refused result, not an unhandled
+     *  rejection racing the liveness waiter. */
+    async function prepareCliLaunch(
+      paneId: number,
+      provider: AgentCliId,
+      cwd: string,
+      resume: boolean,
+      profileId: string | undefined,
+      remoteHostId: string | undefined,
+      remote: boolean
+    ): Promise<{ mine: AgentProfile[]; effectiveProfile?: string; workspaceId?: string; result: AgentCommandResult }> {
+      // Default profile (order 0) applies when none was named and any exist (4/04).
+      let mine: AgentProfile[] = []
+      let effectiveProfile = profileId
+      const workspaceId = workspaceIdForPane(paneId)
+      try {
+        mine = (await listProfiles()).filter((p) => p.provider === provider).sort((x, y) => x.order - y.order)
+        effectiveProfile = profileId ?? mine[0]?.id
+        const result = await agentsClient.command({
+          agentId: provider,
+          cwd,
+          resume,
+          profileId: effectiveProfile,
+          workspaceId,
+          // Names the pane so a cross-profile resume can continue its EXACT session
+          // (main reads the context monitor's lock — ADR 0013). Id only.
+          paneId,
+          // Both facts main-side needs: WHICH saved host to build for, and that the command
+          // is typed into the POSIX shell on the far side of SSH.
+          remoteHostId,
+          remote
+        })
+        return { mine, effectiveProfile, workspaceId, result }
+      } catch {
+        return { mine, effectiveProfile, workspaceId, result: { ok: false } }
+      }
+    }
+
     /** The one launch path: build the command (never a credential — ADR 0002), write it into
      *  the pane, label the pane. `shell` is a no-op (the pane is already a shell). A
      *  `custom:<command>` provider (wizard custom row) writes the user's own command verbatim. */
@@ -328,6 +371,22 @@ export const agentsFeature: UiFeature = {
       profileId?: string
     ): Promise<void> {
       if (paneId < 0 || !provider || provider === 'shell') return
+      const remoteTarget = getPaneRemote(paneId as PaneId)
+      const remote = !!remoteTarget
+      const custom = provider.startsWith('custom:')
+      // PREFETCH (fresh local CLI launches only): the command build is pure main-side
+      // work — profile resolution, config reconciliation, session pooling — none of
+      // which needs the pane's shell. Started here, it runs concurrently with the
+      // pane-live wait below, so by the first prompt byte the command is (usually)
+      // already in hand and the write lands immediately. Excluded on purpose:
+      //  - resume launches: they may ADOPT a reattached session and type nothing, and
+      //    building consumes one-shot config overrides (markAgentConfigSessionLaunched)
+      //    — a build that might not be typed must not run;
+      //  - remote launches: the far-side dialect ride is cheap and the SSH wait dwarfs it.
+      const prefetched =
+        !remote && !resume && !custom && isAgentCliId(provider)
+          ? prepareCliLaunch(paneId, provider, cwd, resume, profileId, undefined, false)
+          : null
       // A write raced into a still-spawning PTY is dropped by the daemon — wait for the
       // pane's first output (bounded; on timeout proceed, matching the old fixed-delay
       // behavior). Found by the Linux CI sweep: slow machines lost template-lineup launches.
@@ -335,8 +394,6 @@ export const agentsFeature: UiFeature = {
       // bootstrap's live cwd report proves the far-side shell is ready. Keep remote intent
       // queued through arbitrarily slow password, MFA, or host-key confirmation; pane
       // disposal cancels the waiter and still fails closed.
-      const remoteTarget = getPaneRemote(paneId as PaneId)
-      const remote = !!remoteTarget
       const ready = remote ? await whenPaneRemoteReady(paneId) : await whenPaneLive(paneId, 15000)
       if (remote && !ready) {
         showToast({
@@ -346,6 +403,11 @@ export const agentsFeature: UiFeature = {
         })
         return
       }
+      // The reattach verdict rides the SPAWN REPLY, which lands after the first output on
+      // a daemon reattach (scrollback replays first) — so "live" alone cannot authorize a
+      // resume decision. Wait for the verdict explicitly; the fixed 900ms lineup delay
+      // that used to paper over this ordering is gone.
+      if (resume && !remote) await whenPaneSpawnSettled(paneId, 15000)
       // RESTORE into a pane the daemon never let die. The PTY outlives the app (ADR 0006),
       // so on the next launch the pane reattaches to a session whose agent is still running
       // — and typing `claude --resume` there does not relaunch it, it types the words into
@@ -353,7 +415,6 @@ export const agentsFeature: UiFeature = {
       // the MCP chip, launch nothing. A fresh spawn (cold daemon) reports existing=false
       // and takes the normal path below.
       if (resume && wasPaneReattached(paneId)) {
-        const custom = provider.startsWith('custom:')
         const label = custom
           ? provider.slice('custom:'.length).trim().split(/\s+/)[0] || 'custom'
           : (nameById.get(provider) ?? provider)
@@ -381,7 +442,7 @@ export const agentsFeature: UiFeature = {
         lastLaunch.set(paneId, { provider, cwd, profileId: adoptedProfile })
         return
       }
-      if (provider.startsWith('custom:')) {
+      if (custom) {
         const cmd = provider.slice('custom:'.length).trim()
         if (!cmd) return
         projectLaunchCwd(paneId, cwd)
@@ -395,24 +456,11 @@ export const agentsFeature: UiFeature = {
         return
       }
       if (!isAgentCliId(provider)) return
-      // Default profile (order 0) applies when none was named and any exist (4/04).
-      const mine = (await listProfiles()).filter((p) => p.provider === provider).sort((x, y) => x.order - y.order)
-      const effectiveProfile = profileId ?? mine[0]?.id
-      const workspaceId = workspaceIdForPane(paneId)
-      const result = await agentsClient.command({
-        agentId: provider,
-        cwd,
-        resume,
-        profileId: effectiveProfile,
-        workspaceId,
-        // Names the pane so a cross-profile resume can continue its EXACT session
-        // (main reads the context monitor's lock — ADR 0013). Id only.
-        paneId,
-        // Both facts main-side needs: WHICH saved host to build for, and that the command
-        // is typed into the POSIX shell on the far side of SSH.
-        remoteHostId: remoteTarget?.hostId,
-        remote
-      })
+      // The prefetched build (started before the liveness wait) — or, on the resume/
+      // remote paths that must not prefetch, the same build strictly ordered here.
+      const { mine, effectiveProfile, workspaceId, result } = await (
+        prefetched ?? prepareCliLaunch(paneId, provider, cwd, resume, profileId, remoteTarget?.hostId, remote)
+      )
       if (!result.ok || !result.command) {
         showToast({
           tone: 'danger',
@@ -529,6 +577,10 @@ export const agentsFeature: UiFeature = {
         },
         lastLaunch: (paneId: number) => ({ ...(lastLaunch.get(paneId) ?? {}) }),
         paneLive: (paneId: number) => isPaneLive(paneId),
+        // First-output timestamp (performance.now) — the LAUNCHNOW gate measures the
+        // live→write gap against it to prove lineup commands ride the readiness
+        // signal, never a reintroduced fixed delay.
+        paneLiveAt: (paneId: number) => paneLiveAt(paneId),
         markRemoteReady: (paneId: number) => markPaneRemoteReady(paneId),
         refreshCommands: () => refreshAgentRegistry().then((agents) => populate(agents)),
         // Smoke/dev shim: register an agent session WITHOUT launching (the dot is

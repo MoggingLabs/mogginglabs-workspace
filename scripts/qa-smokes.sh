@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 158 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 159 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
-# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 136 app-boot
+# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 137 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -355,6 +355,11 @@ run_smoke MCP          MOGGING_MCP       1 240 mcp
 run_smoke MCPWRITE     MOGGING_MCPWRITE  1 240 mcpwrite
 run_smoke AGENTWEB     MOGGING_AGENTWEB  1 240 agentweb
 run_smoke AGENTLAUNCH  MOGGING_AGENTLAUNCH 1 240 agentlaunch
+# LAUNCHNOW: the instant-lineup contract (2026-07) — the template lineup's launch command
+# is typed on the pane's readiness signal (after first output, within the gap budget),
+# the command build overlaps the shell boot (prefetch), and the shell slot stays clean.
+# A reintroduced fixed lineup delay (the old 900ms) fails the gap arithmetic.
+run_smoke LAUNCHNOW    MOGGING_LAUNCHNOW 1 240 launchnow
 run_smoke PERWS        MOGGING_PERWS     1 240 perws
 run_smoke PERWSAGENT   MOGGING_PERWSAGENT 1 240 perwsagent
 run_smoke VAULTKEYS    MOGGING_VAULTKEYS 1 240 vaultkeys
