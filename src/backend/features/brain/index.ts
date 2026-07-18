@@ -25,6 +25,17 @@ export {
   type BrainTickSource
 } from './freshness'
 export { diffHeadMove, headDiffSpawnsForSmoke } from './head'
+export {
+  BRAIN_SERVE_DEFAULT_LIMIT,
+  BRAIN_SERVE_MAX_LIMIT,
+  BRAIN_SERVE_DEFAULT_DEPTH,
+  BRAIN_SERVE_MAX_DEPTH,
+  BRAIN_SERVE_RESPONSE_CAP,
+  globToLike,
+  serveBrainRead,
+  type BrainReadHost,
+  type BrainServeReply
+} from './serve'
 
 // The brain SERVICE (ADR 0018): the one object every later step consumes — identity,
 // lifecycle, status, typed refusals, (step 03) the FULL deterministic build, and
@@ -100,6 +111,15 @@ export class BrainService {
   status(root: string): BrainAnswer {
     const r = this.ensure(root)
     return 'reason' in r ? r : this.answer(r.brain)
+  }
+
+  /** The serve layer's one door (step 05): project identity + the open store +
+   *  a fresh stamped status, or the same typed refusals status gives. Reads only
+   *  ever flow through this — nothing here can mutate. */
+  readHandle(root: string): { project: BrainProject; store: BrainStore; status: BrainStatus } | BrainRefusal {
+    const r = this.ensure(root)
+    if ('reason' in r) return r
+    return { project: r.brain.project, store: r.brain.store, status: this.answer(r.brain) }
   }
 
   /**

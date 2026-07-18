@@ -1,6 +1,7 @@
 import {
   AgentChannels,
   IntegrationsChannels,
+  MCP_HOUSE_TOOL_GROUPS,
   planHasServerForCli,
   planSignature,
   toolCellState,
@@ -1134,9 +1135,21 @@ function createToolPlanBlock(): SyncedBlock {
         }
         return cell
       })
+      // Step-05 registration honesty: "always" is an ENUMERATED truth. The house
+      // row lists its always-served groups (derived from the one catalog — the
+      // brain's code-graph reads included), so who-has-what never goes vague.
+      const label = s.builtIn
+        ? el('span', {}, [
+            el('span', { text: s.label }),
+            el('span', {
+              class: 'menu-note toolplan-house-groups',
+              text: `always-on: ${MCP_HOUSE_TOOL_GROUPS.map((g) => `${g.label} (${g.count})`).join(' · ')} — writes stay behind the grant`
+            })
+          ])
+        : el('span', { text: s.label })
       table.append(
         el('div', { class: 'toolplan-row' }, [
-          el('span', { class: 'toolplan-tool' }, [providerLogo(s.id, 13), el('span', { text: s.label })]),
+          el('span', { class: 'toolplan-tool' }, [providerLogo(s.id, 13), label]),
           ...cells
         ])
       )

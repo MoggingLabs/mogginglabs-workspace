@@ -14,6 +14,7 @@ import { runtimeDir as clientRuntimeDir } from './daemon-client'
 import { recordTrail } from './trail'
 import { MCP_BROWSER_TOOL_NAMES, type BrowserAgentVerb, type BrowserAgentVerbName } from '@contracts'
 import { applyCardPatch, boardForPane, commentCard, createCard } from './board'
+import { handleBrainMcp } from './brain'
 
 /**
  * The agent-control transport (Phase-6/05b). Main opens a token-authed LOCAL
@@ -431,6 +432,15 @@ export function startMcpEndpoint(): void {
           // as capture — never telemetry, notify, or logs, ADR 0005).
           if (msg.name === 'board.list' || msg.name === 'board.get') {
             sock.write(JSON.stringify({ t: 'result', id, ...handleBoardRead(msg.name, msg.args ?? {}, boundPane) }) + '\n')
+            continue
+          }
+          // ADR 0018 step 05: the brain's READ family — free to every session
+          // (ADR 0008's reads-free stance), scoped app-side to the caller's own
+          // checkout (pane → workspace → root, the exact board-read path).
+          // Graph content is USER CONTENT: it rides this authed socket to the
+          // CALLING MODEL only — never telemetry, notify, or logs (ADR 0005).
+          if (msg.name.startsWith('brain.')) {
+            sock.write(JSON.stringify({ t: 'result', id, ...handleBrainMcp(msg.name, msg.args ?? {}, boundPane) }) + '\n')
             continue
           }
           // Board v2 writes: full CRUD behind the SAME per-workspace grant, all

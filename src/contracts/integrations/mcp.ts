@@ -11,7 +11,7 @@
 // set, and that `approve` is never a tool (docs/09: humans own the review gate).
 import catalogJson from './mcp-catalog.json'
 
-export type McpToolFamily = 'browser' | 'control'
+export type McpToolFamily = 'browser' | 'control' | 'brain'
 /** `read` is never gated · `self` is bound to the calling pane's session capability
  *  · `write` is gated by the workspace grant's `writeTools` (03) · `act` is gated
  *  per signed-in ORIGIN (04). */
@@ -103,17 +103,33 @@ export const MCP_CONTROL_WRITE_TOOL_NAMES = [
   'archive_card'
 ] as const
 
+/** The brain's read family (ADR 0018, step 05) — SEVEN graph reads, free to every
+ *  pane (ADR 0008's reads-free stance), scoped app-side to the caller's own
+ *  checkout. READS ONLY: a brain write verb in this list is a review rejection —
+ *  the validator below enforces it structurally. */
+export const MCP_BRAIN_READ_TOOL_NAMES = [
+  'brain_status',
+  'query_graph',
+  'get_node',
+  'get_neighbors',
+  'shortest_path',
+  'find_symbol',
+  'find_references'
+] as const
+
 export const MCP_TOOL_NAMES = [
   ...MCP_BROWSER_TOOL_NAMES,
   ...MCP_CONTROL_READ_TOOL_NAMES,
   ...MCP_CONTROL_SELF_TOOL_NAMES,
-  ...MCP_CONTROL_WRITE_TOOL_NAMES
+  ...MCP_CONTROL_WRITE_TOOL_NAMES,
+  ...MCP_BRAIN_READ_TOOL_NAMES
 ] as const
 
 export type McpBrowserToolName = (typeof MCP_BROWSER_TOOL_NAMES)[number]
 export type McpControlReadToolName = (typeof MCP_CONTROL_READ_TOOL_NAMES)[number]
 export type McpControlSelfToolName = (typeof MCP_CONTROL_SELF_TOOL_NAMES)[number]
 export type McpWriteToolName = (typeof MCP_CONTROL_WRITE_TOOL_NAMES)[number]
+export type McpBrainReadToolName = (typeof MCP_BRAIN_READ_TOOL_NAMES)[number]
 export type McpToolName = (typeof MCP_TOOL_NAMES)[number]
 
 /** One catalog row. `verb` is the EXISTING upstream verb the server forwards
@@ -192,7 +208,9 @@ function validateMcpCatalog(raw: unknown): readonly McpToolDef[] {
     }
     if (!(MCP_TOOL_NAMES as readonly string[]).includes(name)) fail('"' + name + '" is not a declared tool name')
     const family = entry.family
-    if (family !== 'browser' && family !== 'control') fail(name + '.family must be browser|control')
+    if (family !== 'browser' && family !== 'control' && family !== 'brain') {
+      fail(name + '.family must be browser|control|brain')
+    }
     const access = entry.access
     if (access !== 'read' && access !== 'self' && access !== 'write' && access !== 'act') {
       fail(name + '.access must be read|self|write|act')
@@ -201,12 +219,22 @@ function validateMcpCatalog(raw: unknown): readonly McpToolDef[] {
     if (upstream !== 'app' && upstream !== 'daemon') fail(name + '.upstream must be app|daemon')
     const isBrowser = (MCP_BROWSER_TOOL_NAMES as readonly string[]).includes(name)
     if (isBrowser !== (family === 'browser')) fail(name + '.family disagrees with the name lists')
+    const isBrain = (MCP_BRAIN_READ_TOOL_NAMES as readonly string[]).includes(name)
+    if (isBrain !== (family === 'brain')) fail(name + '.family disagrees with the brain name list')
     if (family === 'browser' && upstream !== 'app') fail(name + ': browser tools ride the app endpoint')
     if (family === 'browser' && (access === 'write' || access === 'self')) {
       fail(name + ': browser tools are read or act, never self/write')
     }
     if (family === 'control' && access === 'act') {
       fail(name + ': act is a browser tier; control tools are read, self, or write')
+    }
+    // ADR 0018 step 05: the brain family is READS ONLY, on the app endpoint, and
+    // every verb wears the brain.* prefix. A brain write verb is a review
+    // rejection — this line is where the rejection becomes structural.
+    if (family === 'brain' && access !== 'read') fail(name + ': brain tools are reads, only and forever')
+    if (family === 'brain' && upstream !== 'app') fail(name + ': brain tools ride the app endpoint')
+    if (family === 'brain' && !String(entry.verb ?? '').startsWith('brain.')) {
+      fail(name + ': brain verbs wear the brain.* prefix')
     }
     const isAct = (MCP_BROWSER_ACT_TOOL_NAMES as readonly string[]).includes(name)
     if (isAct !== (access === 'act')) fail(name + '.access disagrees with the §04 act list')
@@ -238,7 +266,25 @@ function validateMcpCatalog(raw: unknown): readonly McpToolDef[] {
 }
 
 /** THE catalog: the 14 shipped browser tools (names/schemas verbatim) + 6
- *  control reads + 1 self-scoped declaration + 11 control writes. Validated at load. */
+ *  control reads + 1 self-scoped declaration + 11 control writes + 7 brain
+ *  graph reads (ADR 0018 step 05). Validated at load. */
 export const MCP_TOOLS: readonly McpToolDef[] = validateMcpCatalog(catalogJson)
 
 export const findMcpTool = (name: string): McpToolDef | undefined => MCP_TOOLS.find((t) => t.name === name)
+
+/** The house server's ALWAYS-SERVED groups, by family, derived from the one
+ *  catalog — the tool-plan matrix lists these so its "always" cell is an
+ *  enumerated truth, not a vibe (step-05 registration honesty). Read/self/act
+ *  tiers are listed (act still gates per origin downstream); writes are the
+ *  grant's story and deliberately absent here. */
+export const MCP_HOUSE_TOOL_GROUPS: readonly { family: McpToolFamily; label: string; count: number }[] = (
+  [
+    ['browser', 'browser'],
+    ['control', 'fleet & board reads'],
+    ['brain', 'code-graph (brain) reads']
+  ] as const
+).map(([family, label]) => ({
+  family,
+  label,
+  count: MCP_TOOLS.filter((t) => t.family === family && t.access !== 'write').length
+}))

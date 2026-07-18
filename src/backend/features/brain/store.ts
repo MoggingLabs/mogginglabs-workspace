@@ -186,6 +186,111 @@ export class BrainStore {
     return txn()
   }
 
+  // ── Graph reads (ADR 0018, step 05): the serve layer's SQL, and nothing else's.
+  // Every list is ordered the same stable way — (root, file, startLine, id) — so
+  // pagination pages never shuffle between asks of the same generation.
+
+  private static rootsClause(roots: string[]): { sql: string; params: string[] } {
+    return { sql: `root IN (${roots.map(() => '?').join(',')})`, params: roots }
+  }
+
+  /** One page of nodes filtered by kind / name-LIKE / file-LIKE (patterns are
+   *  pre-translated globs; ESCAPE '\'). Fetch limit+1 to learn `more` honestly. */
+  nodesPage(
+    roots: string[],
+    filter: { kind?: string; nameLike?: string; fileLike?: string },
+    limit: number,
+    offset: number
+  ): { rows: BrainNodeRow[]; more: boolean } {
+    if (!roots.length) return { rows: [], more: false }
+    const rc = BrainStore.rootsClause(roots)
+    const where = [rc.sql]
+    const params: (string | number)[] = [...rc.params]
+    if (filter.kind) {
+      where.push('kind = ?')
+      params.push(filter.kind)
+    }
+    if (filter.nameLike !== undefined) {
+      where.push("name LIKE ? ESCAPE '\\'")
+      params.push(filter.nameLike)
+    }
+    if (filter.fileLike !== undefined) {
+      where.push("file LIKE ? ESCAPE '\\'")
+      params.push(filter.fileLike)
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT id, root, kind, name, file, startLine, endLine, sig FROM nodes WHERE ${where.join(' AND ')} ORDER BY root, file, startLine, id LIMIT ? OFFSET ?`
+      )
+      .all(...params, limit + 1, offset) as BrainNodeRow[]
+    return { rows: rows.slice(0, limit), more: rows.length > limit }
+  }
+
+  nodeById(id: string): BrainNodeRow | null {
+    return (
+      (this.db
+        .prepare('SELECT id, root, kind, name, file, startLine, endLine, sig FROM nodes WHERE id = ?')
+        .get(id) as BrainNodeRow | undefined) ?? null
+    )
+  }
+
+  nodesByIds(ids: string[]): BrainNodeRow[] {
+    if (!ids.length) return []
+    return this.db
+      .prepare(
+        `SELECT id, root, kind, name, file, startLine, endLine, sig FROM nodes WHERE id IN (${ids.map(() => '?').join(',')})`
+      )
+      .all(...ids) as BrainNodeRow[]
+  }
+
+  /** Definition nodes by EXACT name within the given partitions. */
+  nodesByExactName(roots: string[], name: string, kind?: string): BrainNodeRow[] {
+    if (!roots.length) return []
+    const rc = BrainStore.rootsClause(roots)
+    const params: string[] = [...rc.params, name]
+    let sql = `SELECT id, root, kind, name, file, startLine, endLine, sig FROM nodes WHERE ${rc.sql} AND name = ?`
+    if (kind) {
+      sql += ' AND kind = ?'
+      params.push(kind)
+    }
+    return this.db.prepare(sql + ' ORDER BY root, file, startLine, id').all(...params) as BrainNodeRow[]
+  }
+
+  /** Edges touching one node. `dir` per edge answers which side the node sits on. */
+  edgesTouching(
+    id: string,
+    direction: 'in' | 'out' | 'both',
+    kinds: string[] | null,
+    limit: number
+  ): { edge: BrainEdgeRow; dir: 'in' | 'out' }[] {
+    const kindClause = kinds && kinds.length ? ` AND kind IN (${kinds.map(() => '?').join(',')})` : ''
+    const kindParams = kinds ?? []
+    const out: { edge: BrainEdgeRow; dir: 'in' | 'out' }[] = []
+    if (direction === 'out' || direction === 'both') {
+      const rows = this.db
+        .prepare(`SELECT src, dst, kind, root FROM edges WHERE src = ?${kindClause} ORDER BY kind, dst LIMIT ?`)
+        .all(id, ...kindParams, limit) as BrainEdgeRow[]
+      for (const edge of rows) out.push({ edge, dir: 'out' })
+    }
+    if (direction === 'in' || direction === 'both') {
+      const rows = this.db
+        .prepare(`SELECT src, dst, kind, root FROM edges WHERE dst = ?${kindClause} ORDER BY kind, src LIMIT ?`)
+        .all(id, ...kindParams, limit) as BrainEdgeRow[]
+      for (const edge of rows) out.push({ edge, dir: 'in' })
+    }
+    return out.slice(0, limit)
+  }
+
+  /** RESOLVED incoming reference edges to any of `ids`, stably ordered. */
+  referencesInto(ids: string[], limit: number): BrainEdgeRow[] {
+    if (!ids.length) return []
+    return this.db
+      .prepare(
+        `SELECT src, dst, kind, root FROM edges WHERE kind = 'references' AND dst IN (${ids.map(() => '?').join(',')}) ORDER BY dst, src LIMIT ?`
+      )
+      .all(...ids, limit) as BrainEdgeRow[]
+  }
+
   /**
    * The determinism proof's material: every non-volatile row, totally ordered, one
    * JSON line each. mtime and gen are EXCLUDED by design (they are when-facts, not

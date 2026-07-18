@@ -1,7 +1,8 @@
 import { join } from 'node:path'
 import { app, ipcMain, type BrowserWindow } from 'electron'
-import { BrainService, type BrainFreshnessStats, type BrainTickSource } from '@backend/features/brain'
-import { BrainChannels, type BrainAnswer, type BrainChangedEvent } from '@contracts'
+import { BrainService, serveBrainRead, type BrainFreshnessStats, type BrainServeReply, type BrainTickSource } from '@backend/features/brain'
+import { BrainChannels, locatePane, type BrainAnswer, type BrainChangedEvent } from '@contracts'
+import { getSettingsStore } from './app-settings'
 
 // App-wiring for the workspace brain (ADR 0018). The logic lives in @backend
 // (Electron-free, testable); main derives the ONE path Electron owns — the db dir
@@ -62,6 +63,32 @@ export function handleBrainRebuild(req: unknown): Promise<BrainAnswer> {
  *  userData, never under a root" assertion. */
 export function brainBaseDir(): string {
   return join(app.getPath('userData'), 'brain')
+}
+
+/** The calling PANE's checkout root — pane → workspace → cwd, the exact
+ *  board-read path (locatePane over the same workspaces list boardForPane
+ *  walks). Null when the pane resolves nowhere: the serve layer then requires
+ *  an explicit `root`, exactly like a bare human session. */
+export function brainRootForPane(pane: string): string | null {
+  const paneNum = Number(pane)
+  if (!Number.isInteger(paneNum) || paneNum <= 0) return null
+  const workspaces = getSettingsStore()?.load()?.workspaces
+  if (!workspaces) return null
+  const cwd = locatePane(workspaces, paneNum)?.ws.cwd
+  return typeof cwd === 'string' && cwd ? cwd : null
+}
+
+/**
+ * The `brain.*` read family over the agent wire (ADR 0018 step 05): the
+ * mcp-endpoint forwards every brain verb here. Reads are FREE (ADR 0008) —
+ * no grant, no gate — but never unscoped: a pane session reads its own
+ * checkout (scope 'project' widens to labeled sibling worktrees); a paneless
+ *  session must name a root. Symbol names and paths flow back to the calling
+ * model only — never telemetry (ADR 0005).
+ */
+export function handleBrainMcp(name: string, args: Record<string, unknown>, boundPane: string | undefined): BrainServeReply {
+  const callerRoot = boundPane ? brainRootForPane(boundPane) : null
+  return serveBrainRead(ensureService(), name, args, callerRoot)
 }
 
 /** Smoke-only introspection: the LRU's live handle count, a full close (the next

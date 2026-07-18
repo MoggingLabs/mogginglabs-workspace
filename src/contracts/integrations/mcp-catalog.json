@@ -483,5 +483,137 @@
     "access": "write",
     "upstream": "app",
     "verb": "board.archive"
+  },
+  {
+    "name": "brain_status",
+    "title": "Code-graph status",
+    "description": "Read the code-graph brain's status for YOUR project: indexed files/nodes/edges and languages, the index generation, whether it is dirty (changes seen but not yet absorbed), reference-resolution fidelity (resolvedRefs vs droppedRefs — dropped means ambiguous, honestly uncounted as edges), and parse-cache stats. Every brain answer is stamped { generation, dirty, root } so you always know how fresh the map is. Free to call; scoped to the checkout your pane works in.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "root": { "type": "string", "description": "Absolute project root — ONLY for sessions outside a pane; inside a pane your own checkout is resolved for you." }
+      }
+    },
+    "family": "brain",
+    "access": "read",
+    "upstream": "app",
+    "verb": "brain.status"
+  },
+  {
+    "name": "query_graph",
+    "title": "Query code graph",
+    "description": "List graph nodes (modules, classes, interfaces, types, functions, methods, enums, consts) filtered by kind, name glob, and/or file-path glob (* and ? wildcards). Paged: default 50 per page, max 200 — pass the returned `cursor` to continue; `truncated` is set whenever more remained. Results come from YOUR checkout's partition unless scope=\"project\" (then every hit is labeled with its checkout root).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "description": "Restrict to one node kind.", "enum": ["module", "class", "interface", "type", "function", "method", "enum", "const"] },
+        "name": { "type": "string", "description": "Name filter — exact, or a glob like handle* or *Store." },
+        "file": { "type": "string", "description": "Root-relative file-path filter — exact, or a glob like src/*.ts." },
+        "limit": { "type": "number", "description": "Page size (default 50, max 200)." },
+        "cursor": { "type": "string", "description": "Continue a previous page (opaque; from the last answer)." },
+        "scope": { "type": "string", "description": "\"checkout\" (default) = your own checkout only; \"project\" = every checkout/worktree of the project, hits labeled by root.", "enum": ["checkout", "project"] },
+        "root": { "type": "string", "description": "Absolute project root — ONLY for sessions outside a pane." }
+      }
+    },
+    "family": "brain",
+    "access": "read",
+    "upstream": "app",
+    "verb": "brain.query"
+  },
+  {
+    "name": "get_node",
+    "title": "Get graph node",
+    "description": "Read one graph node in full by id (from query_graph / find_symbol): kind, name, file, start/end lines, and its signature line. Unknown or out-of-scope ids answer a typed unknown-node refusal, never a guess.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Node id (from query_graph or find_symbol)." },
+        "scope": { "type": "string", "description": "\"checkout\" (default) or \"project\" — a sibling worktree's node resolves only under project scope.", "enum": ["checkout", "project"] },
+        "root": { "type": "string", "description": "Absolute project root — ONLY for sessions outside a pane." }
+      },
+      "required": ["id"]
+    },
+    "family": "brain",
+    "access": "read",
+    "upstream": "app",
+    "verb": "brain.node"
+  },
+  {
+    "name": "get_neighbors",
+    "title": "Get node neighbors",
+    "description": "Walk one hop from a node: incoming, outgoing, or both edge directions, optionally filtered to edge kinds (comma-separated from: defines, imports, references, extends, implements). Each neighbor carries the connecting edge's kind and direction. Capped and truncation-flagged, never silently trimmed.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Node id (from query_graph or find_symbol)." },
+        "direction": { "type": "string", "description": "Which edges to follow.", "enum": ["in", "out", "both"] },
+        "kinds": { "type": "string", "description": "Comma-separated edge kinds to include (default: all)." },
+        "limit": { "type": "number", "description": "Max neighbors (default 50, max 200)." },
+        "scope": { "type": "string", "description": "\"checkout\" (default) or \"project\".", "enum": ["checkout", "project"] },
+        "root": { "type": "string", "description": "Absolute project root — ONLY for sessions outside a pane." }
+      },
+      "required": ["id", "direction"]
+    },
+    "family": "brain",
+    "access": "read",
+    "upstream": "app",
+    "verb": "brain.neighbors"
+  },
+  {
+    "name": "shortest_path",
+    "title": "Shortest graph path",
+    "description": "Breadth-first shortest path between two nodes over the code graph (edges walked in both directions), answering the node/edge chain when one exists within the caps. Depth cap maxDepth (default 8) and a visited cap guard the walk — exceeding either answers a typed too-deep refusal; two genuinely unconnected nodes answer found:false.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "from": { "type": "string", "description": "Start node id." },
+        "to": { "type": "string", "description": "Target node id." },
+        "maxDepth": { "type": "number", "description": "Depth cap, 1-16 (default 8)." },
+        "scope": { "type": "string", "description": "\"checkout\" (default) or \"project\".", "enum": ["checkout", "project"] },
+        "root": { "type": "string", "description": "Absolute project root — ONLY for sessions outside a pane." }
+      },
+      "required": ["from", "to"]
+    },
+    "family": "brain",
+    "access": "read",
+    "upstream": "app",
+    "verb": "brain.path"
+  },
+  {
+    "name": "find_symbol",
+    "title": "Find symbol definition",
+    "description": "Answer \"what defines X\": definition nodes matching a name — exact match first; when nothing matches exactly the name is retried as a glob. Optionally restricted to one kind. Returns each definition with its file, lines, and signature.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Symbol name — exact, or a glob like parse*." },
+        "kind": { "type": "string", "description": "Restrict to one node kind.", "enum": ["module", "class", "interface", "type", "function", "method", "enum", "const"] },
+        "scope": { "type": "string", "description": "\"checkout\" (default) or \"project\".", "enum": ["checkout", "project"] },
+        "root": { "type": "string", "description": "Absolute project root — ONLY for sessions outside a pane." }
+      },
+      "required": ["name"]
+    },
+    "family": "brain",
+    "access": "read",
+    "upstream": "app",
+    "verb": "brain.symbol"
+  },
+  {
+    "name": "find_references",
+    "title": "Find references",
+    "description": "Answer \"what references X\": the RESOLVED incoming reference edges to a node (by id, or by exact definition name), each with the referencing node and its file. Honesty note: when the last index dropped ambiguous references (droppedRefs nonzero), the answer says so — the list is the resolved truth, never a guess at the ambiguous remainder.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Target node id (preferred when you have it)." },
+        "name": { "type": "string", "description": "Exact definition name — used when id is not given." },
+        "scope": { "type": "string", "description": "\"checkout\" (default) or \"project\".", "enum": ["checkout", "project"] },
+        "root": { "type": "string", "description": "Absolute project root — ONLY for sessions outside a pane." }
+      }
+    },
+    "family": "brain",
+    "access": "read",
+    "upstream": "app",
+    "verb": "brain.refs"
   }
 ]

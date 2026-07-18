@@ -269,6 +269,49 @@ async function handleBrowserCall(id, def, args) {
   }
 }
 
+// ── The brain's read family (ADR 0018 step 05): reads-free graph queries ─────
+// Same app upstream as the board reads, same posture: the payload rides back to
+// the CALLING MODEL verbatim; refusals are TYPED app-side and worded here in
+// the board family's register. Reads only — brain writes do not exist.
+
+/** reason -> a sentence a MODEL can act on (the board-read wording register). */
+function brainRefusalText(r) {
+  const detail = typeof r.detail === 'string' && r.detail ? r.detail : ''
+  switch (r.reason) {
+    case 'unknown-node':
+      return detail || `unknown node (not in your project's brain)`
+    case 'too-deep':
+      return `refused — ${detail || 'the path walk exceeded its depth/visited caps'}`
+    case 'invalid':
+      return `refused — ${detail || 'the request was invalid'}`
+    case 'missing':
+      return `the root does not exist${detail ? ` (${detail})` : ''}`
+    case 'too-large':
+      return `the project exceeds the brain's index cap${detail ? ` (${detail})` : ''}`
+    case 'busy':
+      return `the brain is busy${detail ? ` (${detail})` : ''} — retry shortly`
+    default:
+      return `brain read failed: ${r.reason || 'the app could not answer'}`
+  }
+}
+
+async function handleBrainCall(id, def, args) {
+  try {
+    // The app endpoint bound this socket to our pane during hello; a paneless
+    // session passes an explicit `root` argument instead — reads are free
+    // either way, and the app enforces checkout scope, not this bridge.
+    const r = await callApp(def.verb, args)
+    if (!r.ok) {
+      toolError(id, brainRefusalText(r))
+      return
+    }
+    const { ok: _ok, t: _t, id: _id, ...payload } = r
+    toolText(id, JSON.stringify(payload))
+  } catch (e) {
+    toolError(id, String(e.message || e))
+  }
+}
+
 async function handleControlCall(id, def, args) {
   try {
     if (def.upstream === 'app') {
@@ -605,6 +648,7 @@ async function handleToolCall(id, params) {
   if (def.access === 'self') await handleSelfCall(id, def, args)
   else if (def.access === 'write') await handleWriteCall(id, def, args)
   else if (def.family === 'browser') await handleBrowserCall(id, def, args)
+  else if (def.family === 'brain') await handleBrainCall(id, def, args)
   else await handleControlCall(id, def, args)
 }
 

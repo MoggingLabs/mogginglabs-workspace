@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS edges (
   PRIMARY KEY (src, dst, kind, root)
 );
 CREATE INDEX IF NOT EXISTS edges_by_root ON edges(root);
+CREATE INDEX IF NOT EXISTS edges_by_dst ON edges(dst);
 CREATE TABLE IF NOT EXISTS parse_cache (
   lang TEXT NOT NULL, fileHash TEXT NOT NULL, nodesJson TEXT NOT NULL, edgesJson TEXT NOT NULL,
   PRIMARY KEY (lang, fileHash)
