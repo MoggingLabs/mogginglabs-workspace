@@ -14,14 +14,16 @@ MoggingLabs Workspace — a richer signal than OSC escape sequences alone. When 
 > agents you start yourself — a plain command typed into a pane, or a terminal outside the app.
 >
 > **Typing an agent at a pane's own prompt?** The session-scoped config can't reach it, so the
-> app can wire the equivalents below into each CLI's **own global config** for you — one click
-> per CLI in Settings › Agent CLIs › *Hand-typed session alerts* (explicit apply, timestamped
-> backup, removable the same way): Claude's hooks into `~/.claude/settings.json`, Codex's
-> `notify` + `[tui]` keys into `config.toml` (your own `notify` is never replaced — a conflict
-> refuses and says why), Gemini's hooks + `enableNotifications` into its `settings.json`, and
-> OpenCode's attention pair + the generated verdict plugin into `tui.json`/`opencode.json`.
-> The notify script (and the OpenCode plugin around it) no-op outside a MoggingLabs pane, so
-> globally wired means wired everywhere it matters and inert everywhere else.
+> app wires the equivalents below into each CLI's **own global config** for you **automatically**
+> the moment detection recognizes the agent — timestamped backup, an Undo toast, and reviewable
+> in Settings › Notifications › *Hand-typed session alerts* (Remove there also opts that CLI out
+> of the auto-wiring, and re-applies by hand): Claude's hooks into `~/.claude/settings.json`,
+> Codex's `notify` + `[tui]` keys into `config.toml` (your own `notify` is never replaced — a
+> conflict refuses and says why), Gemini's hooks + `enableNotifications` into its
+> `settings.json`, and OpenCode's attention pair + the generated verdict plugin into
+> `tui.json`/`opencode.json`. The notify script (and the OpenCode plugin around it) no-op outside
+> a MoggingLabs pane, so globally wired means wired everywhere it matters and inert everywhere
+> else. (Aider is the exception — no hook config, only its own YAML; see its row below.)
 
 OSC-based agent-state stays the baseline for *any* CLI (Phase-2/01); these hooks are the sharper,
 first-party layer for the CLIs that support hooks.
