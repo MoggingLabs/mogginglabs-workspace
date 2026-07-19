@@ -53,7 +53,11 @@ function statusLine(s: UpdateState): string {
     case 'error':
       return `The last check failed${s.error ? ` — ${s.error}` : ''}.`
     default:
-      return 'You are up to date.'
+      // Not an error state: nobody asked and nothing is broken — but never claim "up to
+      // date" on a machine whose last check could not reach the feed at all.
+      return s.offline
+        ? 'Could not check for updates — this machine looks offline. It retries on its own.'
+        : 'You are up to date.'
   }
 }
 

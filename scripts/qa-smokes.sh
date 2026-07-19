@@ -9,10 +9,10 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 174 gates: 23 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 182 gates: 23 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
 # GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE ·
-# GRAMMARCAT) + 151 app-boot
+# GRAMMARCAT) + 159 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -287,6 +287,12 @@ run_smoke CWD_INPROC  MOGGING_CWD       INPROC 180 cwd-inproc
 run_smoke GIT         MOGGING_GIT       1 240 git
 run_smoke NOTIFY      MOGGING_NOTIFY    1 180 notify
 run_smoke NOTIFYHOOK  MOGGING_NOTIFYHOOK 1 120 notifyhook
+# NOTIFYPARITY: the two SHIPPED notify artifacts — bin/mogging.mjs (hand-wired per hooks/README)
+# and the generated notify-hook script (session overlay + global wiring) — produce identical wire
+# events over the whole corpus (Claude notification types incl. unknown, Codex blobs incl.
+# malformed, argv events). They drifted once (the 2026-07-15 unknown-type→notice fix landed in
+# the generated script only); this is what keeps two copies of one mapping honest.
+run_smoke NOTIFYPARITY MOGGING_NOTIFYPARITY 1 120 notifyparity
 run_smoke GLOBALHOOKS MOGGING_GLOBALHOOKS 1 150 globalhooks
 run_smoke STATE       MOGGING_STATE     1 150 state-smoke
 run_smoke RELOAD      MOGGING_RELOAD    1 150 reload-smoke
@@ -335,11 +341,13 @@ run_smoke ROLERACE    MOGGING_ROLERACE 1 120 rolerace
 run_smoke AGENTREGISTRY MOGGING_AGENTREGISTRY 1 120 agentregistry
 run_smoke PLAINMENU   MOGGING_PLAINMENU 1 150 plainmenu
 run_smoke UPDATEFAIL  MOGGING_UPDATEFAIL 1 120 updatefail
+run_smoke UPDATEOFFLINE MOGGING_UPDATEOFFLINE 1 150 updateoffline
 run_smoke A11YMODAL   MOGGING_A11YMODAL 1 180 a11ymodal
 run_smoke BROWSERZERO MOGGING_BROWSERZERO 1 180 browserzero
 run_smoke SECRETFORMS MOGGING_SECRETFORMS 1 240 secretforms
 run_smoke BOARDRENDER MOGGING_BOARDRENDER 1 240 boardrender
 run_smoke KBAPG       MOGGING_KBAPG     1 240 kbapg
+run_smoke EQUALIZE    MOGGING_EQUALIZE  1 240 equalize
 run_smoke ASYNCSTATE  MOGGING_ASYNCSTATE 1 360 asyncstate
 run_smoke ORCHESTRATION MOGGING_ORCHESTRATION 1 300 orchestration
 run_smoke SWARM       MOGGING_SWARM     1 240 swarm
@@ -376,10 +384,35 @@ run_smoke MCP          MOGGING_MCP       1 240 mcp
 run_smoke MCPWRITE     MOGGING_MCPWRITE  1 240 mcpwrite
 run_smoke AGENTWEB     MOGGING_AGENTWEB  1 240 agentweb
 run_smoke AGENTLAUNCH  MOGGING_AGENTLAUNCH 1 240 agentlaunch
+# LAUNCHNOW: the instant-launch contract (2026-07), both halves — fresh lineup commands
+# ride the SPAWN (SpawnRequest.run; zero renderer writes, proven by the ptyWrites spy,
+# bookkeeping intact), the custom row rides the same seam, and the typed FALLBACK still
+# delivers exactly once, ordered after first output, when the build misses the claim
+# window (setSpawnRunHold seam). Bites: reintroduced delays, lost fallbacks, double
+# delivery, and bookkeeping that only one delivery path performs.
+run_smoke LAUNCHNOW    MOGGING_LAUNCHNOW 1 240 launchnow
 run_smoke PERWS        MOGGING_PERWS     1 240 perws
 run_smoke PERWSAGENT   MOGGING_PERWSAGENT 1 240 perwsagent
 run_smoke VAULTKEYS    MOGGING_VAULTKEYS 1 240 vaultkeys
 run_smoke WSCLOSE      MOGGING_WSCLOSE   1 240 wsclose
+# KILLFLASH: pane teardown stays windowless (2026-07-18) — the console-less daemon
+# (detached: libuv job-escape, measured survival-load-bearing) must force windowsHide on
+# every child it spawns, or node-pty's per-pane kill fork flashes one visible terminal
+# window per pane at undo-grace lapse. Bites: AttachConsole proves the daemon console-less,
+# an EnumWindows watcher over a real 16-pane close proves zero console-class windows
+# ever turn visible (red-proven 11+ CASCADIA sightings on the unfixed daemon).
+run_smoke KILLFLASH    MOGGING_KILLFLASH 1 240 killflash
+# RAILFOLD: the rail fold/unfold choreography (2026-07-18) — in flight the rail clips to
+# its animating edge and keeps the expanded layout at full width, so the pane count is
+# revealed/hidden AT its resting position and never overlaps the icon; the collapsed
+# end-state re-layout lands only after the fold. Bites: a dropped rail-anim stamp, a
+# lost :not(.rail-anim) guard, and any mid-fold layout squeeze.
+run_smoke RAILFOLD     MOGGING_RAILFOLD  1 240 railfold
+# CHROMEPRESS: presses on native chrome dismiss popovers (2026-07-18) — the drag strip
+# eats the pointer before the DOM, so main forwards WM_NC*BUTTONDOWN / will-move as
+# shell:chromePress and app-shell replays a body-target pointerdown. Bites: a dropped
+# wireChromePress in boot, a removed channel, a lost replay, a lost NC hook, the debounce.
+run_smoke CHROMEPRESS  MOGGING_CHROMEPRESS 1 240 chromepress
 run_smoke KBSHORTCUTS  MOGGING_KBSHORTCUTS 1 240 kbshortcuts
 run_smoke KBGLOBAL     MOGGING_KBGLOBAL  1 240 kbglobal
 run_smoke DAEMONCUSTODY MOGGING_DAEMONCUSTODY 1 240 daemoncustody
@@ -440,6 +473,10 @@ run_smoke MCPMGR       MOGGING_MCPMGR    1 180 mcpmgr
 run_smoke MCPCAT       MOGGING_MCPCAT    1 180 mcpcat
 run_smoke INTEGUX      MOGGING_INTEGUX   1 240 integux
 run_smoke SETINTEG     MOGGING_SETINTEG  1 240 setinteg
+# The store/inventory split (2026-07-18): the Library overlay is the store, the
+# settings page is the inventory — this gate bites the door, the honesty, the
+# chip->plan mutation, the in-place key vaulting, and the route badges.
+run_smoke LIBRARYUX    MOGGING_LIBRARYUX 1 240 libraryux
 run_smoke INTEGMILESTONE MOGGING_INTEGMILESTONE 1 300 integmilestone
 run_smoke WIZARDUX     MOGGING_WIZARDUX  1 180 wizardux
 run_smoke WIZARDFAIL   MOGGING_WIZARDFAIL 1 180 wizardfail

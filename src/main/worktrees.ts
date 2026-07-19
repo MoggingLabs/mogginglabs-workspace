@@ -18,9 +18,13 @@ export function registerWorktrees(): void {
   ipcMain.handle(WorktreeChannels.create, async (_e, req: CreateWorktreeRequest) => {
     const fault = wizardAuditFaults()
     if (fault) {
-      fault.worktreeCreateCalls++
+      // Each call's ORDINAL is captured at arrival: the wizard now issues its creates in
+      // parallel, and comparing failAt against the live counter AFTER the delay failed
+      // every call once the counter passed it (all concurrent calls saw the final count)
+      // — the gate meant "the Nth create fails", not "every create from the Nth on".
+      const call = ++fault.worktreeCreateCalls
       await auditDelay(fault.worktreeDelayMs)
-      if (fault.worktreeFailAt === fault.worktreeCreateCalls) {
+      if (fault.worktreeFailAt === call) {
         return { ok: false, error: 'injected worktree creation failure' }
       }
     }

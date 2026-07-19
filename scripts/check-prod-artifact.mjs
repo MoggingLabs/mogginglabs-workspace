@@ -69,6 +69,7 @@ const HARNESS_TRIGGERS = [
   'MOGGING_USAGE_COSTDIR', // usage.ts — fixture cost-scan root
   'MOGGING_USAGE_STATUS', // usage.ts — fixture provider-status body
   'MOGGING_USAGE_FIXTURE', // @backend fake-adapter — the fabricated numbers themselves
+  'MOGGING_UPDATE_OUTCOME', // harness-install fixture feed — UPDATEOFFLINE's per-check outcome flip
   // ── Pinned-origin overrides (ADR 0016). MOGGING_REGISTRY_BASE let an env var repoint
   // where a shipped build fetched the integrations registry (catalog.ts) — closed by
   // src/backend/core/origins.ts and banned here so it cannot come back. The other three

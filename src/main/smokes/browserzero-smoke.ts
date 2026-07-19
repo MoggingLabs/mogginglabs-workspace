@@ -342,6 +342,7 @@ export function runBrowserZeroSmoke(win: BrowserWindow): void {
       await ES(`(window.__mogging.view('grid'), 1)`)
       await sleep(300)
       const paneId = (await activeWs()).ordinal * 100 + 1
+      await ES(`window.__mogging.attention.setPaneTracked(${paneId}, true)`) // ALERTAGREE: an agent pane's state only counts once tracked
       await ES(`window.__mogging.attention.setPaneState(${paneId}, 'busy')`) // live work -> a REAL confirm
       await clickWsClose(wsB)
       await sleep(500)

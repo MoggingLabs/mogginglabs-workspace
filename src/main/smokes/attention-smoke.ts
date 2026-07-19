@@ -3,6 +3,9 @@ import { writeFileSync } from 'node:fs'
 import { sleep } from './kit'
 import { join } from 'node:path'
 import { ActivityTracker, BELL_CONFIRM_MS, isEngagedInput, isSubmittedInput, OscParser } from '@backend/features/agent-state'
+import { notePaneAgent, notePaneGone } from '../agent-presence'
+import { attentionSawActiveForSmoke, attentionSignal } from '../attention'
+import { onPaneStateForBridge, setBridgeEventSinkForSmoke } from '../event-bridge'
 
 // Env-gated tab-attention smoke (MOGGING_ATTENTION): create a 2nd workspace so Workspace 1 is
 // backgrounded, flip a pane in that background workspace to attention, assert its tab rings, then
@@ -13,6 +16,13 @@ import { ActivityTracker, BELL_CONFIRM_MS, isEngagedInput, isSubmittedInput, Osc
 // and that silence is never mistaken for a completion. Those asserts are written to fail on the
 // engine this replaced: it derived "finished" from a busy->idle edge over a 2.5s duration floor,
 // so a pane that merely went quiet for long enough was stamped as having finished work.
+//
+// AND the gate on ALERTAGREE (2026-07-18): the attention port's tracked gate is the one door
+// every alert surface reads through. An untracked pane's verdicts reach NOTHING — no rail ring,
+// no toast (untrackedSilent) — and a tracked pane's attention rings the rail AND toasts in the
+// same breath (toastAgrees). Written to fail on the pre-gate renderer, where the toast layer read
+// the raw terminal:state relay and a plain shell's bell toasted "needs your input" over a pane
+// whose every other surface said nothing.
 
 /** Count the terminal bells a chunk sequence produces — the signal that latches a pane red. */
 function bellsFor(chunks: string[]): number {
@@ -368,9 +378,24 @@ const SCRIPT = `(async () => {
   m.workspace.create({ name: 'Foreground' }) // ordinal 1, active -> Workspace 1 (ordinal 0) backgrounded
   await sleep(700)
   const bgTab = document.querySelectorAll('.workspace-tab')[0] // Workspace 1
+
+  // ALERTAGREE: an UNTRACKED pane's verdicts reach no surface at all. The port's tracked gate
+  // is the one law every alert surface reads through — before it existed, the toast layer read
+  // the raw relay, so a plain shell's bell toasted "needs your input" over a pane whose dot,
+  // outline and rail all said nothing. Untracked first, so this assert drives the same door a
+  // plain shell's tracker events knock on: no rail ring, and NO toast.
+  m.attention.setPaneState(1, 'attention')
+  await sleep(400)
+  const untrackedSilent = !bgTab.getAttribute('data-attention') && !document.querySelector('.toast')
+
+  // Tracked (what a real agent session does through core/attention/tracking.ts), the SAME
+  // event rings everything at once — and the toast agrees with the pane by construction.
+  m.attention.setPaneTracked(1, true)
   m.attention.setPaneState(1, 'attention') // pane 1 lives in Workspace 1 (base 0)
   await sleep(400)
   const ringed = bgTab.getAttribute('data-attention')
+  const toastAgrees = Array.from(document.querySelectorAll('.toast-title'))
+    .some((t) => (t.textContent || '').includes('needs your input'))
   m.workspace.switchByIndex(0) // focus Workspace 1 -> its ring clears
   await sleep(400)
   const afterFocus = bgTab.getAttribute('data-attention')
@@ -423,10 +448,45 @@ const SCRIPT = `(async () => {
   const pane2 = document.querySelector('.layout-slot[data-pane-id="101"] .pane-state')
   const unknownIsHollow = !pane2 || pane2.getAttribute('data-state') === 'unknown'
 
-  const pass = ringed === 'attention' && !afterFocus &&
+  // 7. UNDO-GRACE MEMORY: a spent green swell stays spent across close -> undo. The prune in
+  //    refreshAttention skips mid-close workspaces' panes; before the fix it DELETED their
+  //    pulse memory, so undoing a close replayed a swell whose news was already delivered.
+  const mem = m.workspace.create({ name: 'Memory', paneCount: 2 })
+  await sleep(700)
+  const p2 = mem.ordinal * 100 + 2
+  const memSlot = () => document.querySelector('.layout-slot[data-pane-id="' + p2 + '"]')
+  m.attention.setPaneTracked(p2, true)
+  m.attention.setPaneState(p2, 'done') // visible (Memory is active), NOT focused -> swell plays once
+  await sleep(1600) // outlive the 1400ms one-shot
+  const swellPlayed = !!memSlot() && memSlot().getAttribute('data-alert') === 'finished'
+  m.workspace.switchByIndex(0)
+  await sleep(300)
+  m.workspace.close(mem.id) // no sessions, done is not running -> straight to the undo grace
+  await sleep(500)
+  const undoBtn = Array.from(document.querySelectorAll('.toast-action')).find((b) => b.textContent === 'Undo')
+  if (undoBtn) undoBtn.click()
+  await sleep(300)
+  let reswelled = false
+  const obs = new MutationObserver(() => {
+    if (memSlot() && memSlot().classList.contains('attn-pulse')) reswelled = true
+  })
+  obs.observe(document.getElementById('workspace-host'), { subtree: true, attributes: true, attributeFilter: ['class'] })
+  const memIdx = m.workspace.list().findIndex((w) => w.id === mem.id)
+  m.workspace.switchByIndex(memIdx)
+  await sleep(1800)
+  obs.disconnect()
+  const undoKeepsSpentSwell = swellPlayed && !!undoBtn && !reswelled &&
+    !!memSlot() && memSlot().getAttribute('data-alert') === 'finished'
+
+  const pass = untrackedSilent && toastAgrees && undoKeepsSpentSwell && ringed === 'attention' && !afterFocus &&
     quietIsNotGreen && doneGreensFast && ackClears && blockedOutline && blockedNotFinished && unknownIsHollow
   return {
     pass,
+    untrackedSilent,
+    toastAgrees,
+    undoKeepsSpentSwell,
+    swellPlayed,
+    reswelled,
     ringed,
     afterFocus,
     quietIsNotGreen,
@@ -440,18 +500,69 @@ const SCRIPT = `(async () => {
   }
 })()`
 
+/** C. The WEBHOOK half of ALERTAGREE: `needs-you` rides the same story as the pane. The
+ *  daemon's tracker latches `attention` for a plain shell's bell too, and the bridge used to
+ *  emit for it — an automation event over a pane no surface would corroborate. Asserted with
+ *  the observation seam (no webhook configured, no network): a transition INTO attention emits
+ *  ONLY while the pane is known to run an agent, and pane exit re-closes the gate. Runs AFTER
+ *  the UI script so pane 1's workspace is in the store (workspaceIdForPane must resolve — the
+ *  emit's other, pre-existing gate). */
+function bridgeAsserts(): { gateSilent: boolean; agentEmits: boolean; goneSilent: boolean } {
+  const seen: Array<{ event: string; pane?: string }> = []
+  setBridgeEventSinkForSmoke((event, fields) => void seen.push({ event, pane: fields.pane }))
+  try {
+    onPaneStateForBridge(1, 'idle')
+    onPaneStateForBridge(1, 'attention') // no presence -> the gate must hold
+    const gateSilent = seen.length === 0
+    notePaneAgent(1, true)
+    onPaneStateForBridge(1, 'idle')
+    onPaneStateForBridge(1, 'attention') // presence -> exactly one needs-you for pane 1
+    const agentEmits = seen.length === 1 && seen[0]!.event === 'needs-you' && seen[0]!.pane === '1'
+    notePaneGone(1)
+    onPaneStateForBridge(1, 'idle')
+    onPaneStateForBridge(1, 'attention') // exited -> closed again
+    const goneSilent = seen.length === 1
+    return { gateSilent, agentEmits, goneSilent }
+  } finally {
+    setBridgeEventSinkForSmoke(null)
+  }
+}
+
 export function runAttentionSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 45000) // safety net (the tracker's bell asserts wait out a real window)
   const run = async (): Promise<void> => {
-    let result: { pass?: boolean; osc?: unknown; tracker?: unknown; error?: string } = { pass: false }
+    let result: { pass?: boolean; osc?: unknown; tracker?: unknown; bridge?: unknown; policy?: boolean; activeFlagSeen?: boolean; error?: string } = { pass: false }
     const osc = oscOverflowAsserts()
     const tracker = await trackerAsserts()
     const trackerOk = Object.values(tracker).every(Boolean)
+    // D. The OS-signal POLICY (src/main/attention.ts), pure: background workspaces ring
+    // regardless of window focus; the ACTIVE workspace rings exactly while the window is NOT
+    // focused (the minimized-window gap this closed); all-quiet stays quiet.
+    const policy =
+      attentionSignal({ background: true, active: false }, true) &&
+      attentionSignal({ background: false, active: true }, false) &&
+      !attentionSignal({ background: false, active: true }, true) &&
+      !attentionSignal({ background: false, active: false }, false)
     try {
       const ui = (await win.webContents.executeJavaScript(SCRIPT, true)) as { pass?: boolean }
-      result = { ...ui, osc, tracker, pass: ui.pass === true && osc.pass && trackerOk }
+      await sleep(600) // the UI script's workspace save is debounced 400ms — let it land
+      const bridge = bridgeAsserts()
+      const bridgeOk = Object.values(bridge).every(Boolean)
+      // The LIVE half of the policy: the renderer really publishes the {background, active}
+      // pair (the script drove an unseen red in the ACTIVE workspace — a reverted renderer
+      // sending the old boolean can never set this).
+      const activeFlagSeen = attentionSawActiveForSmoke()
+      result = {
+        ...ui,
+        osc,
+        tracker,
+        bridge,
+        policy,
+        activeFlagSeen,
+        pass: ui.pass === true && osc.pass && trackerOk && bridgeOk && policy && activeFlagSeen
+      }
     } catch (e) {
-      result = { pass: false, osc, tracker, ...{ error: String(e) } }
+      result = { pass: false, osc, tracker, policy, ...{ error: String(e) } }
     }
     try {
       writeFileSync(join(process.cwd(), 'out', 'attention-result.json'), JSON.stringify(result))

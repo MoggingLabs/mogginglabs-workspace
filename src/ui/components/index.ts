@@ -20,13 +20,7 @@ export { createStepper, type StepperHandle, type StepperOpts } from './stepper'
 export { createCheckbox, type CheckboxHandle, type CheckboxOpts } from './checkbox'
 export { createToggleRow, type ToggleRowHandle, type ToggleRowOpts } from './toggle-row'
 export { createMeter, type MeterHandle } from './meter'
-export {
-  MiniGridPreview,
-  createLayoutGridPicker,
-  type GridPreviewOpts,
-  type LayoutSpec,
-  type LayoutGridPickerHandle
-} from './grid-preview'
+export { MiniGridPreview, type GridPreviewOpts } from './grid-preview'
 export { createGridPainter, type GridPainterHandle, type GridPainterOpts } from './grid-painter'
 export { createModal, type ModalHandle, type ModalOpts } from './modal'
 export {

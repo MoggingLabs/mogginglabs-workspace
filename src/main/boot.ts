@@ -7,7 +7,7 @@ import { initMainTelemetry, flushTelemetry } from './telemetry'
 import { registerClipboard } from './clipboard'
 import { registerAppMenu } from './menu'
 import { registerDialogs } from './dialogs'
-import { registerShellChrome, wireWindowState } from './shell-chrome'
+import { registerShellChrome, wireChromePress, wireWindowState } from './shell-chrome'
 import { registerAppSettings, disposeAppSettings } from './app-settings'
 import { registerAgents, disposeAgentInstalls } from './agents'
 import { registerAgentGlobalHooks } from './agent-global-hooks'
@@ -186,6 +186,7 @@ function openWindow(): void {
   const w = createMainWindow({ largerThanScreen: harnessActive })
   win = w
   wireWindowState(w) // fullscreen/maximize -> renderer chrome classes (5/04)
+  wireChromePress(w) // native-chrome presses -> renderer popover dismissal
   // Only the CURRENT window may clear the pointer: a window re-created for a deep link
   // (ensureWindow) must not be nulled by its predecessor's late 'closed'.
   w.on('closed', () => {

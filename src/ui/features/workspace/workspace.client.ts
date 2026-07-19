@@ -17,8 +17,10 @@ export const workspaceClient = {
   onOpenCwd: (cb: (cwd: string) => void): void => {
     getBridge().on(WorkspaceChannels.openCwd, (p) => cb(p as string))
   },
-  setAttention: (anyAttention: boolean): void => {
-    getBridge().send(WorkspaceChannels.attention, anyAttention)
+  /** The OS-signal flags: background = an alert in a workspace you are not in; active = one in
+   *  the workspace you ARE in (main rings it only while the window itself is unfocused). */
+  setAttention: (alert: { background: boolean; active: boolean }): void => {
+    getBridge().send(WorkspaceChannels.attention, alert)
   },
   /** Native directory picker (main-owned dialog). Resolves to a path or null on cancel. */
   browseDir: (): Promise<string | null> =>

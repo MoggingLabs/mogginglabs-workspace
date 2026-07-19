@@ -112,34 +112,43 @@ export function runSetIntegSmoke(win: BrowserWindow): void {
          [...document.querySelectorAll('.integux-stats .integux-stat-value')].every(e => (e.textContent||'').trim() && e.textContent.trim() !== '—')`
       )
 
-      // The imported preset renders `.cat-badge.is-draft`, and its chip proves the
-      // INFORMATIONAL path: attention that surfaces on the header WITHOUT prising the
-      // section open. Assert both halves — a chip that force-opened would be a bug.
-      const draftBadge = await waitTrue(`!!document.querySelector('.cat-badge.is-draft')`)
-      const draftChip = await waitTrue(`!!document.querySelector('.collapsible-card[data-collapsible="catalog"] .cc-attn .cc-chip.is-draft')`)
+      // The imported preset renders `.cat-badge.is-draft` — in the LIBRARY overlay
+      // now (the store/inventory split, 2026-07-18): browsing moved off this page,
+      // so the draft badge is asserted where drafts actually render. The band CTA
+      // is the door; the overlay is detached until first open, so the click is
+      // load-bearing.
+      const libraryOpens = await ES<boolean>(`(() => {
+        const b = document.querySelector('.integux-library-cta')
+        if (!(b instanceof HTMLElement)) return false
+        b.click()
+        return true
+      })()`)
+      const draftBadge = await waitTrue(`!!document.querySelector('.library-modal .cat-badge.is-draft')`)
+      await ES(`(document.querySelector('.library-modal .modal-close')?.click(), 1)`)
+      await sleep(400)
       // Every section that can raise attention must be able to render its chip. A
       // signal wired in one place and forgotten in another is how `.cat-badge.is-draft`
       // nearly shipped counted-but-never-emitted.
       const wiredSections = await ES<string[]>(
         `[...document.querySelectorAll('.collapsible-card')].map(c => c.dataset.collapsible)`
       )
-      const sectionsOk = ['connections', 'catalog', 'servers', 'matrix', 'grants', 'keys'].every((id) => wiredSections.includes(id))
+      const sectionsOk = ['connections', 'servers', 'workspace', 'keys'].every((id) => wiredSections.includes(id))
 
       // ── (b) disclosure persists across a leave/return ───────────────────────
-      // Connections is the default-open card now (it is about YOUR accounts; the
-      // per-CLI config machinery below starts folded). Toggle two cards off their
+      // Connected accounts is the default-open card (it is about YOUR accounts;
+      // the per-CLI machinery below starts folded). Toggle two cards off their
       // defaults, leave, return: the choices stick and an untouched card keeps its
       // default.
       const connectionsOpenByDefault = await cardOpen('connections')
-      const catalogClosedByDefault = !(await cardOpen('catalog'))
+      const serversClosedByDefault = !(await cardOpen('servers'))
       await toggle('connections')
       await sleep(150)
-      await toggle('grants')
+      await toggle('workspace')
       await sleep(150)
       await leaveAndReturn()
       const persistOk =
-        connectionsOpenByDefault && catalogClosedByDefault &&
-        !(await cardOpen('connections')) && (await cardOpen('grants')) && !(await cardOpen('keys'))
+        connectionsOpenByDefault && serversClosedByDefault &&
+        !(await cardOpen('connections')) && (await cardOpen('workspace')) && !(await cardOpen('keys'))
 
       // ── (e/1) Integrations hit targets, measured on the real box ────────────
       // Cards must be open for a box to exist: a `display:none` body measures 0.
@@ -193,11 +202,11 @@ export function runSetIntegSmoke(win: BrowserWindow): void {
       const gapOk = integBoxes.gap !== null && integBoxes.gap >= sp4 - 0.5
 
       result = {
-        pass: saved.ok && imported.ok && hooksOk && honestyOk && refreshFirstOk && statsOk && attentionOk && draftBadge && draftChip && sectionsOk && persistOk && hitOk && gapOk,
+        pass: saved.ok && imported.ok && hooksOk && honestyOk && refreshFirstOk && statsOk && attentionOk && libraryOpens && draftBadge && sectionsOk && persistOk && hitOk && gapOk,
         importedOk: imported.ok,
         importedReason: imported.reason ?? null,
+        libraryOpens,
         draftBadge,
-        draftChip,
         sectionsOk,
         wiredSections,
         savedOk: saved.ok,

@@ -275,10 +275,14 @@ export function runWizardFailSmoke(win: BrowserWindow): void {
       const launchIgnoresMidflightRetarget =
         (await workspaceCount()) === beforeRetarget + 1 && retargetCwd === repo
 
-      // (b) A retarget between worktree creates: the failed transaction's rollback
-      // still targets the repo the worktrees were created in — nothing orphaned, no
-      // "manual cleanup" shrug, and the retarget dir untouched.
-      setWizardAuditFaults({ worktreeFailAt: 2, worktreeDelayMs: 600 })
+      // (b) A retarget while the worktree creates are IN FLIGHT (they run in parallel
+      // now — there is no "between"): the failed transaction's rollback still targets
+      // the repo the worktrees were created in — nothing orphaned, no "manual cleanup"
+      // shrug, and the retarget dir untouched. The 1500ms stretch keeps the status
+      // assertion deterministic: the retarget's own path probe (350ms debounce + a
+      // local fs stat) settles well before the creates do, so the isolation refusal
+      // is the LAST status writer.
+      setWizardAuditFaults({ worktreeFailAt: 2, worktreeDelayMs: 1500 })
       await open({ cwd: repo, paneCount: 2, mix: [{ provider: 'codex', count: 2 }] })
       await ES(`(() => {
         document.querySelectorAll('#view-wizard .wizard-adv').forEach((details) => (details.open = true))
@@ -289,9 +293,9 @@ export function runWizardFailSmoke(win: BrowserWindow): void {
       })()`)
       const beforeRollbackSwap = await workspaceCount()
       await clickLaunch()
-      await sleep(250) // create #1 is inside its injected delay — the swap lands mid-transaction
+      await sleep(250) // both creates are inside their injected delay — the swap lands mid-transaction
       await swapPathTo(retargetDir)
-      await sleep(2400)
+      await sleep(3200)
       const swapFault = snapshotFault()
       const swapStatus = await status()
       const liveIsolatedAfterSwap = (await listWorktrees(repo)).filter((item) => /[\\/]\.mogging[\\/]worktrees[\\/]/.test(item.path))

@@ -1,7 +1,7 @@
 import type { CostScan } from '@contracts'
 import { fakeAdapter, scanCost } from '@backend/features/usage'
 import { installFaultHooks } from './fault-port'
-import { installFixtures, type UpdateDriver, type UsageWorld } from './fixture-port'
+import { installFixtures, type UpdateFeedFixture, type UsageWorld } from './fixture-port'
 import { maybeAsyncFault } from './async-audit-faults'
 import { waitForMutationAudit } from './mutation-audit-faults'
 import { consumeConsentSetFailure } from './browserzero-audit-faults'
@@ -19,18 +19,33 @@ import { currentBoardGhWorld } from './boardgh-audit-fixture'
 // semantics, same lazy read-at-call (the smokes flip these vars at runtime, mid-run), same
 // injected message text the gates assert on.
 
-/** The updater's failing feed (UPDATEFAIL). What a dead/unreachable signed feed looks like. */
-const driveFailedFeed: UpdateDriver = (push) => {
-  push({ phase: 'checking', error: undefined })
-  setTimeout(
-    () =>
-      push({
-        phase: 'error',
-        error: 'Could not reach the signed update feed. Check your connection and try again.',
-        lastCheckedAt: Date.now()
-      }),
-    250
-  )
+/**
+ * The updater's fixture feeds — scripted check OUTCOMES, not renderer states, so what the
+ * gates exercise is updater.ts's real offline-vs-broken classification and retry ladder.
+ *
+ * UPDATEFAIL: a feed that is REACHED and broken (the artifact-name bug's shape — every
+ * check 404s). Must stay LOUD on every check, background included: that silence lasting
+ * nine releases is why the rail row exists.
+ *
+ * UPDATEOFFLINE: the wake-from-sleep DNS blip (found live on v0.14.0 — updater.log shows
+ * ERR_NAME_NOT_RESOLVED while the Wi-Fi re-associated, and the rail wore a red "Update
+ * failed — retry" for hours on a healthy network). Outcomes are keyed on
+ * MOGGING_UPDATE_OUTCOME read PER CHECK — the smoke flips it to 'ok' mid-run to end the
+ * outage, so the choreography is deterministic under any timer interleaving. The compressed
+ * ladder lets the gate watch the self-heal inside its timeout.
+ */
+const brokenFeed: UpdateFeedFixture = {
+  next: () => ({
+    kind: 'error',
+    message: 'HttpError: 404 "https://github.com/MoggingLabs/mogginglabs-workspace/releases/latest.yml"'
+  })
+}
+const offlineFeed: UpdateFeedFixture = {
+  next: () =>
+    process.env.MOGGING_UPDATE_OUTCOME === 'ok'
+      ? { kind: 'ok' }
+      : { kind: 'error', message: 'Error: net::ERR_NAME_NOT_RESOLVED' },
+  retryDelaysMs: [1500]
 }
 
 /**
@@ -120,8 +135,12 @@ export function installHarnessPorts(): void {
 
   installFixtures({
     usageWorld,
-    // Armed by the gate's own var. Its PRESENCE is also what tells updater.ts the real feed is off.
-    updateDriver: process.env.MOGGING_UPDATEFAIL ? driveFailedFeed : undefined,
+    // Armed by each gate's own var. Its PRESENCE is also what tells updater.ts the real feed is off.
+    updateFeed: process.env.MOGGING_UPDATEFAIL
+      ? brokenFeed
+      : process.env.MOGGING_UPDATEOFFLINE
+        ? offlineFeed
+        : undefined,
     vaultDisabled: () => !!process.env.MOGGING_TEST_NO_VAULT,
     exportPath: () => process.env.MOGGING_PERSIST_EXPORT_PATH ?? null,
     boardGhWorld: currentBoardGhWorld // armed only by the BOARDGH smoke's setBoardGhWorld

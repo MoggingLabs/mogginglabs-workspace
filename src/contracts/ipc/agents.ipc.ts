@@ -91,6 +91,10 @@ export interface GlobalHooksProviderStatus {
   /** The user-owned config file(s) the state was read from. */
   files: string[]
   reason?: string
+  /** False when the user explicitly REMOVED this provider's wiring (Settings, or the
+   *  undo toast): detection must not re-apply what a human deliberately took out. An
+   *  explicit Apply clears the opt-out. Absent = never opted out (auto-wire may act). */
+  autoWire?: boolean
 }
 
 /** `agentHooks:status` answers one row per provider, in catalog order. */

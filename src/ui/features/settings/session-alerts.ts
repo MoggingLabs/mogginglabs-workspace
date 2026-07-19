@@ -18,10 +18,14 @@ import { onViewChange } from '../../core/shell/view-port'
  * env-pointed files); an agent TYPED at a pane's own prompt carries none of it,
  * so its pane never rings. Wiring the same config into each CLI's own global
  * files closes that: the notify script (and OpenCode's plugin around it) no-ops
- * outside a MoggingLabs pane. Explicit action + backup + atomic write, same as
- * every user-owned config we touch; a CONFLICT (the user's own codex `notify`,
- * a differing tui value) shows its reason instead of an Apply button (F-07:
- * summarized, raw value behind a disclosure).
+ * outside a MoggingLabs pane. Typed-launch detection now applies this wiring
+ * ITSELF (agents feature, autoWireGlobalHooks — the ask-toast never converted);
+ * this card is the review surface: see what is wired, remove it (which also
+ * stops the auto-wiring for that CLI — the opt-out rides `autoWire`), re-apply
+ * by hand. Backup + atomic write, same as every user-owned config we touch; a
+ * CONFLICT (the user's own codex `notify`, a differing tui value) shows its
+ * reason instead of an Apply button (F-07: summarized, raw value behind a
+ * disclosure).
  */
 export function createSessionAlertsCard(): HTMLElement {
   const invoke = (channel: string, payload?: unknown): Promise<unknown> => getBridge().invoke(channel, payload)
@@ -139,14 +143,37 @@ export function createSessionAlertsCard(): HTMLElement {
   })
   sync()
 
+  // Aider has no wiring row on purpose: launched panes ring via the AIDER_NOTIFICATIONS* env,
+  // and its only global config is the user's own YAML (~/.aider.conf.yml) — a file the app
+  // will not rewrite (comments don't survive a faithful round-trip, and the house rule is
+  // refuse over clobber). The row still exists so the card answers "why doesn't my hand-typed
+  // aider ring?" instead of silently listing four CLIs of five — and it gives the fix INLINE
+  // (a settings caption pointing at a repo README is not something a user can act on). NO
+  // data-hooks-provider attribute: the GLOBALHOOKS gate counts those, and this is information,
+  // not wiring.
+  const aiderRow = el('div', { class: 'prov-item' }, [
+    el('div', { class: 'prov-row prov-row--static' }, [
+      el('div', { class: 'prov-row-main' }, [
+        el('div', { class: 'prov-row-head' }, [
+          el('span', { class: 'prov-name', text: 'Aider · global alerts' }),
+          Pill({ text: 'launch-only', tone: 'neutral' })
+        ]),
+        el('div', {
+          class: 'settings-row-caption',
+          text: 'Rings when launched by the app. A hand-typed aider needs two lines the app won’t add to your ~/.aider.conf.yml — set “notifications: true” and “notifications-command: mogging notify --event done”.'
+        })
+      ])
+    ])
+  ])
+
   return Card(
     {
       header: SectionHeader({
         title: 'Alerts for agents you start yourself',
         caption:
-          'Agents launched by the app already ring their pane. Wire each CLI’s global config so an agent you type at a pane’s own prompt rings too — outside a pane the wiring is a silent no-op.'
+          'Agents launched by the app already ring their pane. When you type an agent at a pane’s own prompt, the app wires that CLI’s global config automatically (backup kept; outside a pane the wiring is a silent no-op). Removing it here also stops the automatic wiring for that CLI.'
       })
     },
-    [hooksList]
+    [hooksList, aiderRow]
   )
 }

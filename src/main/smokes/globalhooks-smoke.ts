@@ -11,9 +11,9 @@ import { TerminalChannels } from '@contracts'
 // kill silently: the IPC surface (agentHooks:* through the REAL preload allowlist — a dropped
 // AllChannels spread refuses every call and reads as a feature bug), the write discipline
 // against real files (backup + atomic rewrite preserving the user's own content), the
-// per-provider once-per-run nudge toast on a DETECTED agent, the Settings › Agent CLIs card's
-// wire/remove round trip, codex's CONFLICT refusal, and the OpenCode plugin's materialization
-// into userData.
+// per-provider once-per-run AUTO-WIRE on a DETECTED agent (with its Undo toast, and the
+// persisted opt-out an explicit Remove leaves behind), the Settings card's wire/remove round
+// trip, codex's CONFLICT refusal, and the OpenCode plugin's materialization into userData.
 //
 // ISOLATION: every CLI home pointer (CLAUDE_CONFIG_DIR, CODEX_HOME, GEMINI_CONFIG_DIR,
 // XDG_CONFIG_HOME for opencode) is pointed INSIDE this gate's already-isolated userData before
@@ -112,17 +112,12 @@ export function runGlobalHooksSmoke(win: BrowserWindow): void {
       result.before = before
       result.statusIsolated = statusIsolated
 
-      // ── the nudge: a DETECTED claude in a pane, exactly as the daemon relay reports it ──
+      // ── AUTO-WIRE: a DETECTED claude in a pane, exactly as the daemon relay reports it,
+      // wires the global alerts itself (the ask-toast it replaced never converted — found
+      // live 2026-07-18 as eight verdict-mute hand-typed panes) and SAYS SO, with an Undo.
       wc.send(TerminalChannels.agent, { id: 1, agentId: 'claude', cwd: '' })
-      const nudgeShown = await waitTrue(
-        `(() => { const t = document.querySelector('.toast--attention'); return !!(t && /no alerts/i.test(t.querySelector('.toast-title')?.textContent || '') && t.querySelector('.toast-action')) })()`
-      )
-      result.nudgeShown = nudgeShown
-
-      // ── wire claude from the toast's own action ──
-      await ES(`(document.querySelector('.toast--attention .toast-action')?.click(), 1)`)
       const wiredToast = await waitTrue(
-        `(() => !!document.querySelector('.toast--success') && /wired globally/i.test(document.querySelector('.toast--success .toast-title')?.textContent || ''))()`
+        `(() => { const t = document.querySelector('.toast--success'); return !!(t && /wired globally/i.test(t.querySelector('.toast-title')?.textContent || '') && t.querySelector('.toast-action')) })()`
       )
       const afterWire = json(claudeFile)
       const backups = readdirSync(claudeHome).filter((f) => f.startsWith('settings.json.bak-'))
@@ -138,19 +133,23 @@ export function runGlobalHooksSmoke(win: BrowserWindow): void {
       result.backupMade = backups.length >= 1
       result.statusWired = (await status()).claude?.state === 'applied'
 
-      // ── once per provider per run: a second detected claude must not nudge again ──
-      await waitTrue(`(() => !document.querySelector('.toast--attention'))()`)
+      // ── once per provider per run: a second detected claude must not wire (or toast) again ──
+      const claudeBytes = read(claudeFile)
+      await ES(`(document.querySelectorAll('.toast-dismiss').forEach((b) => b.click()), 1)`)
+      await waitTrue(`(() => !document.querySelector('.toast--success') && !document.querySelector('.toast--attention'))()`, 60)
       wc.send(TerminalChannels.agent, { id: 101, agentId: 'claude', cwd: '' })
       await sleep(1200)
-      result.nudgedOnce = await ES<boolean>(`!document.querySelector('.toast--attention')`)
+      result.wiredOnce =
+        (await ES<boolean>(`!document.querySelector('.toast--success') && !document.querySelector('.toast--attention')`)) &&
+        read(claudeFile) === claudeBytes
 
-      // ── ...but a detected CODEX gets its own nudge (per-provider guards) ──
+      // ── ...but a detected CODEX auto-wires its own provider (per-provider guards) ──
       wc.send(TerminalChannels.agent, { id: 102, agentId: 'codex', cwd: '' })
-      const codexNudge = await waitTrue(
-        `(() => { const t = document.querySelector('.toast--attention'); return !!t && /Codex/.test(t.querySelector('.toast-title')?.textContent || '') })()`
+      const codexAutoWired = await waitTrue(
+        `(() => { const t = document.querySelector('.toast--success'); return !!t && /Codex/.test(t.querySelector('.toast-title')?.textContent || '') })()`
       )
-      result.codexNudge = codexNudge
-      await ES(`(document.querySelector('.toast--attention .toast-dismiss')?.click(), 1)`)
+      result.codexAutoWired = codexAutoWired && read(codexFile).includes('managed-by')
+      await ES(`(document.querySelector('.toast--success .toast-dismiss')?.click(), 1)`)
 
       // ── wire the other three over the same IPC the card uses ──
       const codexApply = await mutate('apply', 'codex')
@@ -217,6 +216,12 @@ export function runGlobalHooksSmoke(win: BrowserWindow): void {
       result.cardRemoved = cardRemoved
       result.removedFile = removedFile
 
+      // ── the opt-out: an explicit Remove is remembered, so detection's auto-wire must
+      // never write back what the user just deleted (status carries the contract flag the
+      // agents feature honors; an explicit re-Apply clears it again).
+      const optedOut = (await status()).claude as Row & { autoWire?: boolean }
+      result.optOutRecorded = optedOut?.state === 'not-applied' && optedOut?.autoWire === false
+
       // ── remove the other three: user content intact, memo-restored booleans ──
       const codexRemove = await mutate('remove', 'codex')
       const codexAfter = read(codexFile)
@@ -263,9 +268,9 @@ export function runGlobalHooksSmoke(win: BrowserWindow): void {
       result.junkRefused = junkApply?.ok === false && read(claudeFile) === junkBytes
 
       const KEYS = [
-        'statusIsolated', 'nudgeShown', 'wiredToast', 'wiredFile', 'backupMade', 'statusWired',
-        'nudgedOnce', 'codexNudge', 'codexWired', 'geminiWired', 'opencodeWired', 'fourRows',
-        'cardWired', 'cardRemoved', 'removedFile', 'codexRemoved', 'geminiRemoved',
+        'statusIsolated', 'wiredToast', 'wiredFile', 'backupMade', 'statusWired',
+        'wiredOnce', 'codexAutoWired', 'codexWired', 'geminiWired', 'opencodeWired', 'fourRows',
+        'cardWired', 'cardRemoved', 'removedFile', 'optOutRecorded', 'codexRemoved', 'geminiRemoved',
         'opencodeRemoved', 'codexConflict', 'statusJunk', 'junkRefused'
       ]
       result.pass = KEYS.every((k) => result[k] === true)

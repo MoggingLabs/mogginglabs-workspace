@@ -17,6 +17,14 @@ export interface SpawnRequest {
   remoteHostId?: string
   /** Initial folder on the remote host; never probed or interpreted as a local path. */
   remoteCwd?: string
+  /** A line the backend types into the fresh PTY the moment it spawns (the daemon's
+   *  existing SpawnSpec.run seam) — the wizard lineup's launch command executes as the
+   *  shell's first act, with no idle-prompt window. ONE-SHOT: ignored on reattach
+   *  (the session is already running something), never recorded for reconnect replay,
+   *  and never a credential — it is the same command string a launch would have typed
+   *  (ADR 0002). Local panes only; a remote pane's launch stays typed after the SSH
+   *  bootstrap proves the far-side shell. */
+  run?: string
 }
 
 /** Private OSC emitted by the SSH bootstrap only after remote command execution starts. */

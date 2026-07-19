@@ -26,6 +26,7 @@ import { createUpdatesSection } from './updates'
 import { createUsageAlertsBlock, createUsageSection } from './usage'
 import { createWebhooksSection } from './webhooks'
 import { createIntegrationsSection, enterIntegrations } from './integrations'
+import { openLibrary } from './library'
 
 const DEFAULT_LAYOUT_KEY = 'mogging.defaultPaneCount'
 
@@ -1116,9 +1117,12 @@ export const settingsFeature: UiFeature = {
         kbd: 'Ctrl+,',
         run: () => setActiveView('settings')
       },
+      // The Library is an OVERLAY, deliberately: it opens over whatever view the
+      // user is in (the wizard included) and returns them there on close.
+      { id: 'library:open', title: 'Browse the Library (connect tools)', hint: 'Integrations', run: () => openLibrary() },
       { id: 'integrations:setup', title: 'Set up integrations…', hint: 'Integrations', run: () => goIntegrations('flow') },
       { id: 'integrations:open', title: 'Open integrations', hint: 'Integrations', run: () => goIntegrations('servers') },
-      { id: 'integrations:matrix', title: 'Open integrations matrix (workspace tools)', hint: 'Integrations', run: () => goIntegrations('matrix') },
+      { id: 'integrations:matrix', title: 'Open workspace tools (scoping)', hint: 'Integrations', run: () => goIntegrations('matrix') },
       // REMOVE #2: `integrations:connect` was `integrations:open` under a second name —
       // both ran goIntegrations('servers'). REMOVE #3: `integrations:restart` promised a
       // restart in its title and only scrolled to the matrix. A verb that lies is worse

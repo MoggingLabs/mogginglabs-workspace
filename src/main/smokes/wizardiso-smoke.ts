@@ -13,6 +13,13 @@ import { join } from 'node:path'
 // Launch — then demands testimony: two managed worktrees exist, the workspace's
 // paneCwds point INTO them, and each pane's SHELL really ran there (a `custom:`
 // provider writes `git branch --show-current` into branch.txt at its own cwd).
+// Also owns the layout menu's verbs since the reorganize redesign: the isolated
+// BATCH stepper (N worktrees in one gesture — worktrees must equal panes added,
+// and the return is true only when every requested terminal opened), the PLAIN
+// batch stepper (N terminals, zero worktrees), and REORGANIZE (the Reorganize row
+// opens the wizard's layout PAINTER in a modal; applying a custom arrangement +
+// new count reshapes to exactly that spec, gated by the live-work confirm on a
+// drop, survivors preserved).
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim()
 }
@@ -150,6 +157,129 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
       }
       const plainStaysPlain = plainSplit && readdirSync(wtRoot).length === worktreesBeforePlain
 
+      // ── Batch: the layout menu's stepper promises N isolated terminals in ONE
+      // gesture. Geometry-relative on purpose (a small screen may trim the batch):
+      // the invariants are worktrees == panes added (no litter, no shortfall) and a
+      // return value that is true exactly when every REQUESTED terminal opened —
+      // never the literal number 2.
+      const panesBeforeBatch = await ES<number>(`window.__mogging.layout.paneCount()`)
+      const worktreesBeforeBatch = readdirSync(wtRoot).length
+      const batchReturned = await ES<boolean>(`window.__mogging.layout.splitIsolated(undefined, 2)`)
+      let panesAfterBatch = panesBeforeBatch
+      for (let i = 0; i < 20; i++) {
+        await sleep(300)
+        panesAfterBatch = await ES<number>(`window.__mogging.layout.paneCount()`)
+        if (panesAfterBatch >= panesBeforeBatch + 2) break
+      }
+      const batchAdded = panesAfterBatch - panesBeforeBatch
+      const batchWorktrees = readdirSync(wtRoot).length - worktreesBeforeBatch
+      const batchOk =
+        batchAdded >= 1
+          ? batchWorktrees === batchAdded && batchReturned === (batchAdded === 2)
+          : batchReturned === false && batchWorktrees === 0 // a full grid refuses with no litter
+
+      // ── PLAIN batch: the New-terminal stepper — N panes in one gesture, ZERO
+      // worktrees. splitActive returns nothing, so the honest-count contract is
+      // pinned against the workspace's OWN quoted headroom (layout.status) instead:
+      // the batch must add exactly min(2, headroom) — a clamped screen stays green
+      // for the clamp, a count-ignoring regression reds for the shortfall.
+      const panesBeforePlainBatch = panesAfterBatch
+      const worktreesBeforePlainBatch = readdirSync(wtRoot).length
+      const statusBeforePlainBatch = await ES<{ panes: number; cap: number } | null>(`window.__mogging.layout.status()`)
+      const plainBatchExpected = statusBeforePlainBatch
+        ? Math.min(2, Math.max(0, statusBeforePlainBatch.cap - statusBeforePlainBatch.panes))
+        : 2
+      await ES(`window.__mogging.layout.split(undefined, 2)`)
+      let panesAfterPlainBatch = panesBeforePlainBatch
+      for (let i = 0; i < 20; i++) {
+        await sleep(300)
+        panesAfterPlainBatch = await ES<number>(`window.__mogging.layout.paneCount()`)
+        if (panesAfterPlainBatch >= panesBeforePlainBatch + plainBatchExpected) break
+      }
+      const plainBatchAdded = panesAfterPlainBatch - panesBeforePlainBatch
+      const plainBatchOk =
+        plainBatchAdded === plainBatchExpected && readdirSync(wtRoot).length === worktreesBeforePlainBatch
+
+      // ── REORGANIZE: the layout PAINTER, on a live workspace. Three claims:
+      //   (a) the titlebar Reorganize row opens the wizard's painter in a MODAL;
+      //   (b) applying a CUSTOM arrangement + a NEW (lower) count reshapes to exactly
+      //       that spec — a full-width top pane over two below — proving the painted
+      //       arrangement drives the grid, not a canonical fallback;
+      //   (c) because the drop closes live panes (the wizard panes carry sessions), the
+      //       live-work CONFIRM fires first, and confirming preserves the survivors
+      //       (every surviving pane id existed before — none rebuilt).
+      const reorg = await ES<{
+        modalOpened: boolean
+        modalClosed: boolean
+        after: number
+        rows: number[]
+        confirmShown: boolean
+        topWide: boolean
+        preserved: boolean
+      }>(`(async () => {
+        const m = window.__mogging
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+        const box = (id) => document.querySelector('.layout-slot[data-pane-id="' + id + '"]').getBoundingClientRect()
+        const rowsOf = () => {
+          const boxes = m.layout.paneIds().map((id) => ({ y: Math.round(box(id).top) }))
+          const tops = [...new Set(boxes.map((b) => b.y))].sort((a, b) => a - b)
+          const bands = []
+          for (const t of tops) { if (!bands.length || t - bands[bands.length - 1] > 8) bands.push(t) }
+          return bands.map((band) => boxes.filter((b) => Math.abs(b.y - band) <= 8).length)
+        }
+
+        // (a) the real Reorganize row opens the painter modal.
+        document.querySelector('.layout-launcher > button')?.click()
+        await sleep(80)
+        document.querySelector('.layout-menu-reorganize')?.click()
+        await sleep(220)
+        const modalOpened =
+          !!document.querySelector('.modal .grid-painter') &&
+          !!document.querySelector('.modal .gp-lattice') &&
+          !!document.querySelector('.modal .gp-canvas')
+        ;[...document.querySelectorAll('.modal button')].find((b) => /^cancel$/i.test((b.textContent || '').trim()))?.click()
+        await sleep(400)
+        const modalClosed = !document.querySelector('.modal .grid-painter')
+
+        // (b)+(c) apply a custom, smaller layout directly; the confirm must gate the drop.
+        // The plain shells that will close aren't "live", so make the HIGHEST-id pane busy
+        // (highest local ⇒ certainly in the closing set when shrinking to 3) — now the drop
+        // genuinely closes live work and the confirm is owed. Under the ALERTAGREE tracked
+        // gate a state only sticks on a TRACKED pane (as a real session's would be), so claim
+        // it first — else setPaneState falls on the floor and nothing reads as live.
+        const beforeIds = m.layout.paneIds()
+        const victim = Math.max(...beforeIds)
+        m.attention.setPaneTracked(victim, true)
+        m.attention.setPaneState(victim, 'busy')
+        await sleep(150)
+        const spec = { rows: 2, cols: 2, regions: [{ r: 0, c: 0, rs: 1, cs: 2 }, { r: 1, c: 0, rs: 1, cs: 1 }, { r: 1, c: 1, rs: 1, cs: 1 }] }
+        const done = m.layout.reorganizeApply(spec) // Promise — blocks on the confirm
+        let confirmShown = false
+        for (let i = 0; i < 30 && !confirmShown; i++) {
+          await sleep(100)
+          const btn = [...document.querySelectorAll('.modal button')].find((b) => /close panes and reorganize/i.test(b.textContent || ''))
+          if (btn) { confirmShown = true; btn.click() }
+        }
+        await done
+        await sleep(500)
+        const ids = m.layout.paneIds()
+        const topWide = (() => {
+          if (ids.length !== 3) return false
+          const rects = ids.map(box).sort((a, b) => a.top - b.top)
+          return rects.slice(1).every((r) => rects[0].width >= r.width * 1.8) // top spans both columns
+        })()
+        const preserved = ids.every((id) => beforeIds.includes(id)) // survivors reused, none rebuilt
+        return { modalOpened, modalClosed, after: m.layout.paneCount(), rows: rowsOf(), confirmShown, topWide, preserved }
+      })()`)
+      const reorganizeOk =
+        reorg.modalOpened &&
+        reorg.modalClosed &&
+        reorg.confirmShown &&
+        reorg.after === 3 &&
+        JSON.stringify(reorg.rows) === JSON.stringify([1, 2]) &&
+        reorg.topWide &&
+        reorg.preserved
+
       // ── The Pedro case: a folder wearing an EMPTY `.git` is NOT a repo. The manual
       // isolated row must refuse honestly — no pane, no worktree litter.
       const fakeRepo = mkdtempSync(join(tmpdir(), 'mog-wiziso-fake-'))
@@ -174,6 +304,9 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         menuClicked &&
         manualIsolated &&
         plainStaysPlain &&
+        batchOk &&
+        plainBatchOk &&
+        reorganizeOk &&
         fakeRefusedHonestly
       result = {
         pass,
@@ -191,6 +324,13 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         manualIsolated,
         manualCwd,
         plainStaysPlain,
+        batchOk,
+        batchAdded,
+        batchReturned,
+        plainBatchOk,
+        plainBatchAdded,
+        reorganizeOk,
+        reorg,
         fakeRefusedHonestly
       }
     } catch (error) {

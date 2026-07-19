@@ -34,10 +34,18 @@ import { getSettingsStore } from './app-settings'
 
 // App wiring for the GLOBAL agent alert hooks (backend/features/agents/global-hooks.ts —
 // the hand-typed-launch gap, all four CLIs). Same write discipline as every user-owned
-// config this app touches (ADR 0008.b, the MCP manager's helpers reused verbatim): explicit
-// user action only, a timestamped backup of the bytes being replaced, temp-file+rename, a
-// file that changed under us refuses rather than clobbers, and a CONFLICT (the user's own
-// codex `notify`, a differing tui value) refuses with its reason on display. The booleans
+// config this app touches (ADR 0008.b, the MCP manager's helpers reused verbatim): a
+// timestamped backup of the bytes being replaced, temp-file+rename, a file that changed
+// under us refuses rather than clobbers, and a CONFLICT (the user's own codex `notify`, a
+// differing tui value) refuses with its reason on display.
+//
+// ONE deliberate exception to "explicit user action only": typed-launch detection AUTO-wires
+// a provider whose alerts are absent (agents feature, autoWireGlobalHooks). The ask-toast it
+// replaces was shown once per app run and demonstrably never converted — found live
+// 2026-07-18: eight hand-typed claude panes running all afternoon, every status dot
+// verdict-mute, the nudge long expired. The writes stay additive-and-backed-up, conflicts
+// still refuse (a user's own notify config is their machine), and a successful REMOVE is
+// remembered as an opt-out that detection never overrides. The booleans
 // that cannot carry an ours-marker (gemini's enableNotifications, opencode's attention pair)
 // ride a KV memo, so Remove restores what Apply displaced instead of guessing.
 //
@@ -46,6 +54,30 @@ import { getSettingsStore } from './app-settings'
 // session-scoped config regardless.
 
 const MEMO_KEY = (provider: string): string => `agenthooks.memo.${provider}`
+
+/** Detection-time auto-wiring's one brake: a user who REMOVED a provider's wiring said no.
+ *  Recorded on every successful remove, cleared by an explicit apply — so the auto-wire in
+ *  the agents feature (typed-launch detection) never re-applies what a human took out. */
+const OPTOUT_KEY = (provider: string): string => `agenthooks.autowire.${provider}`
+
+function autoWireAllowed(provider: string): boolean {
+  // Gate runs (index.dev.ts sets this for every smoke but GLOBALHOOKS): the isolated
+  // userData still resolves the REAL home configs, and a gate must never mutate the
+  // developer's machine. Never set in production.
+  if (process.env.MOGGING_SUPPRESS_AUTOWIRE) return false
+  try {
+    return getSettingsStore()?.getSetting(OPTOUT_KEY(provider)) !== 'off'
+  } catch {
+    return true
+  }
+}
+function autoWireRecord(provider: string, allowed: boolean): void {
+  try {
+    getSettingsStore()?.setSetting(OPTOUT_KEY(provider), allowed ? '' : 'off')
+  } catch {
+    /* a lost opt-out re-nudges at worst; the remove itself already succeeded */
+  }
+}
 
 function memoRead<T>(provider: string): T | null {
   try {
@@ -83,9 +115,9 @@ export function globalHooksStatusAll(): GlobalHooksStatus {
       return
     }
     try {
-      rows.push({ provider, files, ...read() })
+      rows.push({ provider, files, autoWire: autoWireAllowed(provider), ...read() })
     } catch (e) {
-      rows.push({ provider, files, state: 'unreadable', reason: String((e as Error).message).slice(0, 200) })
+      rows.push({ provider, files, autoWire: autoWireAllowed(provider), state: 'unreadable', reason: String((e as Error).message).slice(0, 200) })
     }
   }
   push('claude', [claudeFile()], () => ({ state: globalHooksState(readIfExists(claudeFile()), invocation!) }))
@@ -185,10 +217,20 @@ export function registerAgentGlobalHooks(): void {
   ipcMain.handle(AgentHookChannels.status, (): GlobalHooksStatus => globalHooksStatusAll())
   ipcMain.handle(AgentHookChannels.apply, (_e, payload: unknown): GlobalHooksMutationResult => {
     const provider = asProvider(payload)
-    return provider ? mutateProvider(provider, 'apply') : { ok: false, reason: 'unknown provider' }
+    if (!provider) return { ok: false, reason: 'unknown provider' }
+    const result = mutateProvider(provider, 'apply')
+    // Any apply — the user's own, or detection's auto-wire — re-arms auto-wiring: whoever
+    // wired it clearly wants the alerts, so a later stale state may self-heal again.
+    if (result.ok) autoWireRecord(provider, true)
+    return result
   })
   ipcMain.handle(AgentHookChannels.remove, (_e, payload: unknown): GlobalHooksMutationResult => {
     const provider = asProvider(payload)
-    return provider ? mutateProvider(provider, 'remove') : { ok: false, reason: 'unknown provider' }
+    if (!provider) return { ok: false, reason: 'unknown provider' }
+    const result = mutateProvider(provider, 'remove')
+    // A successful remove is the user saying no — remember it, or the next detected
+    // typed session would silently write back what they just deleted.
+    if (result.ok) autoWireRecord(provider, false)
+    return result
   })
 }

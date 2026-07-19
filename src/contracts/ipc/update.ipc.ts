@@ -24,6 +24,25 @@ export interface UpdateState {
   currentVersion?: string
   /** False in dev/smokes: there is no feed, so the UI must not claim to be up to date. */
   supported?: boolean
+  /**
+   * The last completed check could not REACH the network (DNS down, no route, mid-network
+   * change) — as opposed to reaching a feed that is broken. Offline is a fact about the
+   * machine, not the updater: a background check that fails this way stays out of
+   * `phase: 'error'` entirely (quiet `idle` + this flag), because one wake-from-sleep DNS
+   * blip used to latch the rail's red "Update failed — retry" for the full six-hour tick
+   * (found live, v0.14.0). Only a human-initiated check surfaces an offline failure, and
+   * this flag is what lets settings say "you look offline" instead of "the updater broke".
+   */
+  offline?: boolean
+}
+
+/**
+ * Payload for UpdateChannels.check. `auto: true` marks a machine-initiated re-check (the
+ * renderer's online-recovery poke) — offline failures from those stay quiet, exactly like
+ * the boot and six-hour checks. No payload = a human asked; failures answer honestly.
+ */
+export interface UpdateCheckRequest {
+  auto?: boolean
 }
 
 /**

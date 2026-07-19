@@ -91,7 +91,7 @@ export function runProfpersistSmoke(win: BrowserWindow, phase: string): void {
       await sleep(600)
       // Slot 1 explicitly picks profile B — the wizard-picker path, persisted (6/04).
       await ES(`window.__mogging.templates.open([{provider:'gemini',count:1}], undefined, undefined, ['p-personal'])`)
-      await sleep(4500) // launchLineup (+900ms) + env prefix lands at the prompt
+      await sleep(4500) // lineup types on pane readiness; env prefix lands at the prompt
 
       const settled = await settle() // the lineup launched gemini into the slot; it owns the pane
       const envB = await probeEnv('MARKA1')

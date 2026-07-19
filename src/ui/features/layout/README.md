@@ -3,8 +3,10 @@
 Replaces the Phase-0 single hardcoded pane with a resizable **split tree of slots**
 (Phase-1/04 as a grid; re-founded on a tree for per-seam resize + drag-rearrange).
 
-- `templates.ts` — pane-count → grid dims (1/2/4/6/8/9/12/16, all exact grids). Still the
-  shape source for the layout picker; a template is applied by building the matching tree.
+- `templates.ts` — pane-count → grid dims (1/2/4/6/8/9/12/16, all exact grids). The shape
+  source for the wizard's layout picker and the palette/control `layout` verbs; a template
+  is applied by building the matching tree. `gridShapeFor` (curated shape, else
+  near-square) is the same formula the layout popover's **Reorganize** row promises.
 - `layout-tree.ts` — the pure model: leaves are panes, splits are LINES ('h' side-by-side /
   'v' stacked) with fractional sizes. All mutations live here (split/remove/move/swap/
   serialize), DOM-free and normalize-guarded.
@@ -19,11 +21,24 @@ Replaces the Phase-0 single hardcoded pane with a resizable **split tree of slot
 - **Resize**: every gutter is ONE seam of ONE line — dragging it resizes only the panes
   touching that seam, never a whole row/column of the workspace. Works for any tree,
   including former "ragged" counts (3/5/7…), which previously couldn't resize at all.
-- **Add a terminal** (the layout popover's "New terminal" row, pane ⋯ menu split,
+- **Add terminals** (the layout popover's "New terminal" row, pane ⋯ menu split,
   Ctrl+Shift+D, palette): the new pane
   joins the focused pane's line (auto direction: the pane's longer axis) and the line
   **re-equalizes** — every terminal in it gets an equal share. The new shell opens in the
-  split pane's cwd.
+  split pane's cwd. Both popover add rows carry a [− n +] stepper (clamped to the
+  workspace's pane headroom) so N terminals — plain, or each in its own fresh git
+  worktree — open in one gesture; Ctrl+Shift+D stays a plain single split.
+- **Reorganize** (layout popover / palette): the CURRENT panes snap into the canonical
+  grid for their count — `gridShapeFor`'s curated template shapes, near-square for the
+  rest — structure and shares reset, nothing opens or closes, every pane keeps its
+  id/PTY. The structural sibling of Balance (which equalizes sizes but never structure).
+- **Equalize**: double-click a gutter (or press `=` on a focused one) and its whole LINE
+  takes equal shares — per member, so a nested stack counts as one column. The pane ⋯
+  menu offers the same per axis ("Equal widths in this row" / "Equal heights in this
+  column"), shown only when such a line contains the pane: a pane that SPANS the other
+  axis is a sibling in an outer line and gets no entry (slots carry `data-eq-axes`).
+  "Balance layout" (layout popover / palette / Ctrl+Shift+=) equalizes every line.
+  Sizes-only in all cases; the floors below still clamp rendering, equal WEIGHTS persist.
 - **Drag-rearrange**: drag a pane by its header. Drop near another pane's edge to take
   half of it (structure follows), on its center to swap, in a workspace-edge band for a
   full-height column / full-width row there.

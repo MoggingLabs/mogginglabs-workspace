@@ -1,5 +1,5 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { AgentHookChannels, IntegrationsChannels, ProfileChannels, TerminalChannels, isAgentCliId, planSignature, type AgentDetectedEvent, type AgentInfo, type AgentProfile, type GlobalHooksMutationResult, type GlobalHooksStatus, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
+import { AgentHookChannels, IntegrationsChannels, ProfileChannels, TerminalChannels, isAgentCliId, planSignature, type AgentCliId, type AgentCommandResult, type AgentDetectedEvent, type AgentInfo, type AgentProfile, type GlobalHooksMutationResult, type GlobalHooksStatus, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
 import { recordPaneLaunch } from '../../core/agents/toolplan-panes'
 import { recordPaneCli, setMcpSnapshot } from '../../core/agents/mcp-status-port'
 
@@ -8,7 +8,8 @@ import { getBridge } from '../../core/ipc/bridge'
 import { getFocusedPane } from '../../core/layout/focus'
 import { getPaneCwd, getPaneCwdProjection, onPaneCwdProjection, setPaneCwd } from '../../core/layout/pane-cwd'
 import { getPaneRemote, setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
-import { onAgentLaunchRequest, requestAgentLaunch, announceProfileFailover } from '../../core/agents/launch-port'
+import { onAgentLaunchRequest, requestAgentLaunch, announceProfileFailover, type AgentLaunchRequest } from '../../core/agents/launch-port'
+import { armSpawnRun, whenSpawnRunOutcome } from '../../core/terminal/spawn-run-port'
 import { clearPaneAgentSession, getPaneAgentSession, setPaneAgentSession, type PaneAgentSession } from '../../core/agents/agent-session-port'
 import { setCommands } from '../../core/commands/command-port'
 import { setActiveView } from '../../core/shell/view-port'
@@ -19,9 +20,11 @@ import {
   isPaneLive,
   isPaneRemoteReady,
   markPaneRemoteReady,
+  paneLiveAt,
   wasPaneReattached,
   whenPaneLive,
-  whenPaneRemoteReady
+  whenPaneRemoteReady,
+  whenPaneSpawnSettled
 } from '../../core/terminal/liveness-port'
 import { getTelemetry } from '../../core/telemetry'
 import { showToast } from '../../components'
@@ -109,8 +112,13 @@ export const agentsFeature: UiFeature = {
     let populateGeneration = 0
     onAgentRegistryChange((agents) => void populate(agents))
     onProfilesChanged(() => void populate()) // Settings edits -> palette entries follow live
-    // Template opens (06b) + restore drive launches through this port.
-    onAgentLaunchRequest((req) => void launchInPane(req.paneId as number, req.provider, req.cwd, req.resume, req.profileId))
+    // Template opens (06b) + restore drive launches through this port. A fresh open's
+    // local slots arrive as deliver:'spawn' BEFORE their panes exist — spawnDeliver must
+    // arm the command synchronously in this callback, or the pane's spawn misses it.
+    onAgentLaunchRequest((req) => {
+      if (req.deliver === 'spawn') spawnDeliver(req)
+      else void launchInPane(req.paneId as number, req.provider, req.cwd, req.resume, req.profileId)
+    })
 
     // Usage-limit events (4/04) arrive on a dedicated channel from the daemon.
     getBridge().on(TerminalChannels.limit, (payload) => {
@@ -193,8 +201,9 @@ export const agentsFeature: UiFeature = {
       getTelemetry().captureEvent({ name: 'agent.detected', props: { provider: ev.agentId } })
       // A DETECTED agent was not launched by the app, so it may carry no bell config at all
       // — a verdict-mute pane that works whole turns wearing a resting dot (found live
-      // 2026-07-16). If that CLI's global alerts aren't wired, say so once and offer to.
-      void nudgeGlobalHooks(ev.agentId)
+      // 2026-07-16). If that CLI's global alerts aren't wired (and the user never removed
+      // them), wire them now and say so — the ask-toast this replaces never converted.
+      void autoWireGlobalHooks(ev.agentId)
 
       if (!profileId) {
         setPaneProfile(paneId as PaneId, undefined) // a previous launch's note is not this agent's
@@ -206,38 +215,62 @@ export const agentsFeature: UiFeature = {
       if (getPaneAgentSession(paneId as PaneId)?.profileId === profileId) setPaneProfile(paneId as PaneId, name)
     }
 
-    /** One nudge per provider per app run, and only when that CLI's global alerts are
-     *  genuinely absent. A detected session cannot tell a truly bell-less hand-typed agent
-     *  from a daemon-restored one that kept its launch config, so the copy stays general —
-     *  wiring globally covers both, and every future one, and is a silent no-op outside
-     *  panes (global-hooks.ts). A CONFLICT (the user's own codex notify, say) is their
-     *  deliberate config — no nudge for that either. */
-    const hooksNudged = new Set<string>()
+    /** AUTO-WIRE a detected provider's global alerts, once per provider per app run.
+     *
+     *  A hand-typed agent carries none of the session-scoped bell config a launch rides, so
+     *  without the global wiring its pane is verdict-mute: the dot sits hollow through whole
+     *  turns — a working agent wearing "cannot tell you", forever. This used to be an
+     *  ask-toast, and the ask demonstrably failed: one transient nudge per app run, shown
+     *  while the user watches some other pane — found live 2026-07-18 as eight hand-typed
+     *  claude sessions (wizard-adjacent isolated-worktree terminals) all running with dead
+     *  status dots and nothing wired. Detection is the moment the app KNOWS the user runs
+     *  this CLI in its panes, so it wires the alerts then and says so, instead of asking and
+     *  expiring. The write is the same guarded mutation Settings performs (backup, atomic,
+     *  additive merge); wiring is a silent no-op outside app panes (global-hooks.ts).
+     *
+     *  The brakes, in order: a CONFLICT (the user's own codex notify, say) is their
+     *  deliberate config — status never reads not-applied, nothing is touched. An explicit
+     *  REMOVE (Settings, or the toast's Undo) persists an opt-out (`autoWire: false`) that
+     *  detection honors forever after. And the already-running session cannot re-read its
+     *  config — the wiring speaks from each agent's next launch — so the toast says so. */
+    const hooksAutoWired = new Set<string>()
     const HOOK_NUDGE_LABEL: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', opencode: 'OpenCode' }
-    async function nudgeGlobalHooks(providerId: string): Promise<void> {
+    async function autoWireGlobalHooks(providerId: string): Promise<void> {
       const label = HOOK_NUDGE_LABEL[providerId]
-      if (!label || hooksNudged.has(providerId)) return
-      hooksNudged.add(providerId)
+      if (!label || hooksAutoWired.has(providerId)) return
+      hooksAutoWired.add(providerId)
       try {
         const status = (await getBridge().invoke(AgentHookChannels.status)) as GlobalHooksStatus
         const row = status?.find?.((r) => r.provider === providerId)
         if (!row || (row.state !== 'not-applied' && row.state !== 'partial')) return
-        showToast({
-          tone: 'attention',
-          title: `Hand-typed ${label} sessions have no alerts`,
-          body: `Wire the alerts into ${label}’s own global config so a session typed at a pane’s prompt rings too (Settings › Agent CLIs to review or remove).`,
-          action: {
-            label: 'Wire alerts',
-            onClick: () => {
-              void (getBridge().invoke(AgentHookChannels.apply, { provider: providerId }) as Promise<GlobalHooksMutationResult>).then((result) => {
-                if (result?.ok) showToast({ tone: 'success', title: `${label} alerts wired globally`, body: 'New sessions ring their pane; a running one applies from its next launch.' })
-                else showToast({ tone: 'attention', title: 'Nothing was written', body: result?.reason })
-              })
+        if (row.autoWire === false) return // they removed it once; their no stands
+        const result = (await getBridge().invoke(AgentHookChannels.apply, { provider: providerId })) as GlobalHooksMutationResult
+        if (result?.ok) {
+          showToast({
+            tone: 'success',
+            title: `${label} alerts wired globally`,
+            body: `Hand-typed ${label} sessions now ring their pane and drive its status dot — this one from its next launch. Review or remove in Settings › Notifications.`,
+            action: {
+              label: 'Undo',
+              onClick: () => {
+                void (getBridge().invoke(AgentHookChannels.remove, { provider: providerId }) as Promise<GlobalHooksMutationResult>).then((undone) => {
+                  if (undone?.ok) showToast({ title: `${label} alert wiring removed`, body: 'It will not be re-applied automatically.' })
+                  else showToast({ tone: 'attention', title: 'Nothing was removed', body: undone?.reason })
+                })
+              }
             }
-          }
-        })
+          })
+        } else {
+          // The write refused (changed under us, unwritable file): fall back to saying why,
+          // with the manual path — never retry silently against a refusing file.
+          showToast({
+            tone: 'attention',
+            title: `Hand-typed ${label} sessions have no alerts`,
+            body: `${result?.reason ?? 'The wiring could not be applied.'} — Settings › Notifications to wire them by hand.`
+          })
+        }
       } catch {
-        /* the nudge is a courtesy — never a failure surface */
+        /* the auto-wire is a courtesy — never a failure surface */
       }
     }
 
@@ -318,6 +351,47 @@ export const agentsFeature: UiFeature = {
       requestAgentLaunch({ paneId: focus.paneId, provider: agentId, cwd: focus.cwd, profileId })
     }
 
+    /** Resolve the profile + build the launch command — the main round trips of a local
+     *  CLI launch, factored out so a fresh launch can start them WHILE the shell is still
+     *  booting (the pane-live wait and the command build overlap instead of queuing).
+     *  Never rejects: a prefetch settles into a refused result, not an unhandled
+     *  rejection racing the liveness waiter. */
+    async function prepareCliLaunch(
+      paneId: number,
+      provider: AgentCliId,
+      cwd: string,
+      resume: boolean,
+      profileId: string | undefined,
+      remoteHostId: string | undefined,
+      remote: boolean
+    ): Promise<{ mine: AgentProfile[]; effectiveProfile?: string; workspaceId?: string; result: AgentCommandResult }> {
+      // Default profile (order 0) applies when none was named and any exist (4/04).
+      let mine: AgentProfile[] = []
+      let effectiveProfile = profileId
+      const workspaceId = workspaceIdForPane(paneId)
+      try {
+        mine = (await listProfiles()).filter((p) => p.provider === provider).sort((x, y) => x.order - y.order)
+        effectiveProfile = profileId ?? mine[0]?.id
+        const result = await agentsClient.command({
+          agentId: provider,
+          cwd,
+          resume,
+          profileId: effectiveProfile,
+          workspaceId,
+          // Names the pane so a cross-profile resume can continue its EXACT session
+          // (main reads the context monitor's lock — ADR 0013). Id only.
+          paneId,
+          // Both facts main-side needs: WHICH saved host to build for, and that the command
+          // is typed into the POSIX shell on the far side of SSH.
+          remoteHostId,
+          remote
+        })
+        return { mine, effectiveProfile, workspaceId, result }
+      } catch {
+        return { mine, effectiveProfile, workspaceId, result: { ok: false } }
+      }
+    }
+
     /** The one launch path: build the command (never a credential — ADR 0002), write it into
      *  the pane, label the pane. `shell` is a no-op (the pane is already a shell). A
      *  `custom:<command>` provider (wizard custom row) writes the user's own command verbatim. */
@@ -329,6 +403,22 @@ export const agentsFeature: UiFeature = {
       profileId?: string
     ): Promise<void> {
       if (paneId < 0 || !provider || provider === 'shell') return
+      const remoteTarget = getPaneRemote(paneId as PaneId)
+      const remote = !!remoteTarget
+      const custom = provider.startsWith('custom:')
+      // PREFETCH (fresh local CLI launches only): the command build is pure main-side
+      // work — profile resolution, config reconciliation, session pooling — none of
+      // which needs the pane's shell. Started here, it runs concurrently with the
+      // pane-live wait below, so by the first prompt byte the command is (usually)
+      // already in hand and the write lands immediately. Excluded on purpose:
+      //  - resume launches: they may ADOPT a reattached session and type nothing, and
+      //    building consumes one-shot config overrides (markAgentConfigSessionLaunched)
+      //    — a build that might not be typed must not run;
+      //  - remote launches: the far-side dialect ride is cheap and the SSH wait dwarfs it.
+      const prefetched =
+        !remote && !resume && !custom && isAgentCliId(provider)
+          ? prepareCliLaunch(paneId, provider, cwd, resume, profileId, undefined, false)
+          : null
       // A write raced into a still-spawning PTY is dropped by the daemon — wait for the
       // pane's first output (bounded; on timeout proceed, matching the old fixed-delay
       // behavior). Found by the Linux CI sweep: slow machines lost template-lineup launches.
@@ -336,8 +426,6 @@ export const agentsFeature: UiFeature = {
       // bootstrap's live cwd report proves the far-side shell is ready. Keep remote intent
       // queued through arbitrarily slow password, MFA, or host-key confirmation; pane
       // disposal cancels the waiter and still fails closed.
-      const remoteTarget = getPaneRemote(paneId as PaneId)
-      const remote = !!remoteTarget
       const ready = remote ? await whenPaneRemoteReady(paneId) : await whenPaneLive(paneId, 15000)
       if (remote && !ready) {
         showToast({
@@ -347,6 +435,11 @@ export const agentsFeature: UiFeature = {
         })
         return
       }
+      // The reattach verdict rides the SPAWN REPLY, which lands after the first output on
+      // a daemon reattach (scrollback replays first) — so "live" alone cannot authorize a
+      // resume decision. Wait for the verdict explicitly; the fixed 900ms lineup delay
+      // that used to paper over this ordering is gone.
+      if (resume && !remote) await whenPaneSpawnSettled(paneId, 15000)
       // RESTORE into a pane the daemon never let die. The PTY outlives the app (ADR 0006),
       // so on the next launch the pane reattaches to a session whose agent is still running
       // — and typing `claude --resume` there does not relaunch it, it types the words into
@@ -354,7 +447,6 @@ export const agentsFeature: UiFeature = {
       // the MCP chip, launch nothing. A fresh spawn (cold daemon) reports existing=false
       // and takes the normal path below.
       if (resume && wasPaneReattached(paneId)) {
-        const custom = provider.startsWith('custom:')
         const label = custom
           ? provider.slice('custom:'.length).trim().split(/\s+/)[0] || 'custom'
           : (nameById.get(provider) ?? provider)
@@ -382,38 +474,19 @@ export const agentsFeature: UiFeature = {
         lastLaunch.set(paneId, { provider, cwd, profileId: adoptedProfile })
         return
       }
-      if (provider.startsWith('custom:')) {
+      if (custom) {
         const cmd = provider.slice('custom:'.length).trim()
         if (!cmd) return
-        projectLaunchCwd(paneId, cwd)
         agentsClient.launchInto(paneId, cmd)
-        setPaneLabel(paneId as PaneId, cmd.split(/\s+/)[0] || 'custom')
-        // Published even though unsupported: it CLEARS any previous agent's context
-        // bar in this pane (the context feature filters non-context providers).
-        writeSession(paneId, { provider, cwd })
-        // Provider id only — NEVER the command text (ADR 0005/0002).
-        getTelemetry().captureEvent({ name: 'agent.launched', props: { provider: 'custom', resume } })
+        recordCustomLaunch(paneId, provider, cmd, cwd, resume)
         return
       }
       if (!isAgentCliId(provider)) return
-      // Default profile (order 0) applies when none was named and any exist (4/04).
-      const mine = (await listProfiles()).filter((p) => p.provider === provider).sort((x, y) => x.order - y.order)
-      const effectiveProfile = profileId ?? mine[0]?.id
-      const workspaceId = workspaceIdForPane(paneId)
-      const result = await agentsClient.command({
-        agentId: provider,
-        cwd,
-        resume,
-        profileId: effectiveProfile,
-        workspaceId,
-        // Names the pane so a cross-profile resume can continue its EXACT session
-        // (main reads the context monitor's lock — ADR 0013). Id only.
-        paneId,
-        // Both facts main-side needs: WHICH saved host to build for, and that the command
-        // is typed into the POSIX shell on the far side of SSH.
-        remoteHostId: remoteTarget?.hostId,
-        remote
-      })
+      // The prefetched build (started before the liveness wait) — or, on the resume/
+      // remote paths that must not prefetch, the same build strictly ordered here.
+      const { mine, effectiveProfile, workspaceId, result } = await (
+        prefetched ?? prepareCliLaunch(paneId, provider, cwd, resume, profileId, remoteTarget?.hostId, remote)
+      )
       if (!result.ok || !result.command) {
         showToast({
           tone: 'danger',
@@ -422,8 +495,22 @@ export const agentsFeature: UiFeature = {
         })
         return
       }
-      projectLaunchCwd(paneId, cwd)
       agentsClient.launchInto(paneId, result.command)
+      recordCliLaunch(paneId, provider, cwd, resume, { mine, effectiveProfile, workspaceId, result })
+    }
+
+    /** Everything a successful CLI launch records — shared by typed delivery (right after
+     *  the write) and spawn-run delivery (the backend already typed it at spawn). Pure
+     *  bookkeeping: no waits, no writes into the pane. */
+    function recordCliLaunch(
+      paneId: number,
+      provider: string,
+      cwd: string,
+      resume: boolean,
+      prep: { mine: AgentProfile[]; effectiveProfile?: string; workspaceId?: string; result: AgentCommandResult }
+    ): void {
+      const { mine, effectiveProfile, workspaceId, result } = prep
+      projectLaunchCwd(paneId, cwd)
       // The profile's email is a label the app cannot enforce — the CLI's OAuth
       // lands on whatever account the browser offers. Main checked the launch
       // home; say what it found while the sign-in (or the mixup) is on screen.
@@ -464,6 +551,81 @@ export const agentsFeature: UiFeature = {
       setPaneLabel(paneId as PaneId, nameById.get(provider) ?? provider)
       // Booleans/ids only — never env values or command text (ADR 0005).
       getTelemetry().captureEvent({ name: 'agent.launched', props: { provider, resume, profiled: !!effectiveProfile } })
+    }
+
+    /** The custom-command twin of recordCliLaunch (wizard custom row — ADR 0005/0002:
+     *  the provider id is `custom:<command>`; telemetry never carries the command text). */
+    function recordCustomLaunch(paneId: number, provider: string, cmd: string, cwd: string, resume: boolean): void {
+      projectLaunchCwd(paneId, cwd)
+      setPaneLabel(paneId as PaneId, cmd.split(/\s+/)[0] || 'custom')
+      // Published even though unsupported: it CLEARS any previous agent's context
+      // bar in this pane (the context feature filters non-context providers).
+      writeSession(paneId, { provider, cwd })
+      getTelemetry().captureEvent({ name: 'agent.launched', props: { provider: 'custom', resume } })
+    }
+
+    /** DEV-only build stretch (LAUNCHNOW gate): pushes the spawn-run build past the
+     *  pane's claim window to prove the typed fallback delivers exactly once. */
+    let spawnRunHoldMs = 0
+
+    /**
+     * Spawn-run delivery (instant launch, part 2): a fresh template/wizard slot whose
+     * request arrives BEFORE its pane exists. Arm the command build on the spawn-run
+     * port synchronously — the pane's spawn claims it and the backend types it as the
+     * shell's first act — then settle on the pane's REPORT:
+     *   delivered      → bookkeeping only (the command is already executing);
+     *   anything else  → the typed fallback, which is exactly the pre-spawn-run launch
+     *     path (wait for the first output, write the SAME already-built command — the
+     *     build ran once, so one-shot config overrides are never double-consumed).
+     * A pane that never reports (disposed mid-open) times out to the fallback, whose
+     * own bounded liveness wait keeps the old behavior as the floor.
+     */
+    function spawnDeliver(req: AgentLaunchRequest): void {
+      const paneId = Number(req.paneId)
+      const { provider, cwd } = req
+      if (paneId < 0 || !provider || provider === 'shell') return
+      const custom = provider.startsWith('custom:')
+      const customCmd = custom ? provider.slice('custom:'.length).trim() : ''
+      if (custom && !customCmd) return
+      if (!custom && !isAgentCliId(provider)) return
+      const prep = custom || !isAgentCliId(provider)
+        ? null
+        : prepareCliLaunch(paneId, provider, cwd, false, req.profileId, undefined, false)
+      let build: Promise<string | null> = custom
+        ? Promise.resolve(customCmd)
+        : prep!.then((p) => (p.result.ok && p.result.command ? p.result.command : null))
+      if (import.meta.env.DEV && spawnRunHoldMs > 0) {
+        const ms = spawnRunHoldMs
+        build = new Promise<void>((r) => setTimeout(r, ms)).then(() => build)
+      }
+      armSpawnRun(paneId, build)
+      void (async () => {
+        const outcome = await whenSpawnRunOutcome(paneId, 20000)
+        if (custom) {
+          if (outcome !== true) {
+            // Typed fallback: the pane spawned without the run (late build, reattach,
+            // spawn failure) — deliver the pre-spawn-run way.
+            await whenPaneLive(paneId, 15000)
+            agentsClient.launchInto(paneId, customCmd)
+          }
+          recordCustomLaunch(paneId, provider, customCmd, cwd, false)
+          return
+        }
+        const p = await prep!
+        if (!p.result.ok || !p.result.command) {
+          showToast({
+            tone: 'danger',
+            title: `Agent was not launched in pane ${paneId}`,
+            body: p.result.reason || 'The saved configuration could not be synchronized before launch.'
+          })
+          return
+        }
+        if (outcome !== true) {
+          await whenPaneLive(paneId, 15000)
+          agentsClient.launchInto(paneId, p.result.command)
+        }
+        recordCliLaunch(paneId, provider, cwd, false, p)
+      })()
     }
 
     /** Usage-limit failover (4/04): next profile, same pane, same cwd. ONE hop. */
@@ -530,6 +692,15 @@ export const agentsFeature: UiFeature = {
         },
         lastLaunch: (paneId: number) => ({ ...(lastLaunch.get(paneId) ?? {}) }),
         paneLive: (paneId: number) => isPaneLive(paneId),
+        // First-output timestamp (performance.now) — the LAUNCHNOW gate measures the
+        // live→write gap against it to prove lineup commands ride the readiness
+        // signal, never a reintroduced fixed delay.
+        paneLiveAt: (paneId: number) => paneLiveAt(paneId),
+        // LAUNCHNOW gate seam: stretch the spawn-run build past the pane's claim
+        // window so the typed fallback is provably exercised. 0 restores normal.
+        setSpawnRunHold: (ms: number) => {
+          spawnRunHoldMs = Math.max(0, Number(ms) || 0)
+        },
         markRemoteReady: (paneId: number) => markPaneRemoteReady(paneId),
         refreshCommands: () => refreshAgentRegistry().then((agents) => populate(agents)),
         // Smoke/dev shim: register an agent session WITHOUT launching (the dot is
@@ -539,6 +710,9 @@ export const agentsFeature: UiFeature = {
         // Smoke/dev shim: replay a detection event exactly as the backend sends it, so a
         // gate can prove the whole typed-launch path without a real agent process.
         detected: (ev: AgentDetectedEvent) => onAgentDetected(ev),
+        // Smoke/dev shim: drive the profile-note port directly — PLAINMENU proves an
+        // OPEN ⋯ menu follows it live (the note resolves async on the detection path).
+        profileNote: (paneId: number, name?: string) => setPaneProfile(paneId as PaneId, name),
         session: (paneId: number) => getPaneAgentSession(paneId as PaneId) ?? null,
         // Smoke/dev shim: the compose seam itself (ADR 0018/06 + revision D) — the
         // BRAINRECALL gate's precise byte-budget witness (capture reflows lines).

@@ -6,9 +6,12 @@ import { TEMPLATES, type GridSpec } from './templates'
 import {
   cloneTree,
   computeLayout,
+  equalizeAllLines,
+  equalizeLineAt,
   isSplit,
   leafCount,
   leafIds,
+  lineOfLeaf,
   MAX_LEAVES,
   MIN_PANE_HEIGHT_PX,
   MIN_PANE_WIDTH_PX,
@@ -31,11 +34,23 @@ import {
   type SplitDir,
   type SplitNode
 } from './layout-tree'
-import { effectivePaneCapacity } from './pane-capacity'
+import { effectivePaneCapacity, type PaneCapacity } from './pane-capacity'
+import { treeForRegions, type GridSpecModel } from './grid-regions'
 import { machineSpec } from '../../core/system/machine-port'
 
 export { parseTree, leafIds, MIN_PANE_WIDTH_PX, minimumLayoutWidth } from './layout-tree'
 export type { LayoutTreeNode, SplitDir } from './layout-tree'
+
+/** The canonical grid shape for a pane count: the curated template shape, else
+ *  near-square — exactly what `apply(n)` builds. Exported so the layout popover's
+ *  "Reorganize" row can NAME the shape it will snap to ("Reorganize into 2×3")
+ *  without a second formula that could drift from the one the grid actually uses. */
+export function gridShapeFor(n: number): GridSpec {
+  const spec = TEMPLATES[n]
+  if (spec) return spec
+  const cols = Math.min(4, Math.max(1, Math.ceil(Math.sqrt(n))))
+  return { cols, rows: Math.ceil(n / cols) }
+}
 
 const GUTTER = 2 // px between panes — with each pane's 1px border: a 4px seam, matching the app edge
 const DRAG_THRESHOLD = 6 // px of header movement before a click becomes a pane drag
@@ -212,6 +227,17 @@ export class GridLayout {
       const d = (e as CustomEvent<{ paneId: number; mode: ExpandMode }>).detail
       if (d) this.toggleExpand(d.paneId, d.mode)
     })
+    // Pane ⋯ menu "Equal widths/heights" — handled by the grid itself, like expand:
+    // sizes are the grid's own state, and nothing is created or seeded (no controller
+    // hop). The pane resolves to its LINE here, at click time, so a menu opened before
+    // a drag-rearrange degrades to a no-op instead of equalizing a stale line.
+    this.grid.addEventListener('mogging:equalize-pane', (e) => {
+      const d = (e as CustomEvent<{ paneId: number; dir: SplitDir }>).detail
+      if (!d) return
+      const local = this.localOf(d.paneId)
+      const path = local != null ? lineOfLeaf(this.root, local, d.dir) : null
+      if (path != null) this.equalizeLine(path, 'menu')
+    })
     this.wirePaneDrag()
     // Geometry is JS-computed px (that is what buys per-seam resizing), so the grid
     // re-derives it whenever its box changes — window resizes, rail collapses, AND the
@@ -245,8 +271,15 @@ export class GridLayout {
    *  GPU budget is not a count limit: Chromium caps ~16 live WebGL contexts and panes
    *  past that edge ride the DOM renderer via PaneWebglManager's managed fallback. */
   limit(): number {
+    return this.capacity().maxPanes
+  }
+
+  /** The full budget behind `limit()` — cols × rows × total. The reorganize panel's
+   *  painter reads maxRows/maxCols (the lattice bounds), not just the total, so the
+   *  grid it lets you paint is one this workspace can actually render. */
+  capacity(): PaneCapacity {
     const elsewhere = Math.max(0, livePaneCount() - this.paneIds().length)
-    return effectivePaneCapacity(this.scrollHost, machineSpec(), elsewhere).maxPanes
+    return effectivePaneCapacity(this.scrollHost, machineSpec(), elsewhere)
   }
 
   /** Live pane ids (closed slots excluded) — the source of truth for attention scans. */
@@ -303,10 +336,7 @@ export class GridLayout {
 
   /** Column count for a pane count: the curated template shape, else near-square. */
   private shapeFor(n: number): GridSpec {
-    const spec = TEMPLATES[n]
-    if (spec) return spec
-    const cols = Math.min(4, Math.max(1, Math.ceil(Math.sqrt(n))))
-    return { cols, rows: Math.ceil(n / cols) }
+    return gridShapeFor(n)
   }
 
   /** Apply an N-pane template grid (any 1..16; template counts keep their curated
@@ -348,6 +378,30 @@ export class GridLayout {
     this.root = normalize(tree)
     this.rebuild()
     this.onLayoutChange?.()
+  }
+
+  /**
+   * Apply a PAINTED layout — the reorganize panel's arbitrary count + arrangement.
+   * The spec's reading-order region slots (1..N) map onto this workspace's local ids
+   * with `templateLocals` — LIVE panes reused first — so reorganizing preserves every
+   * terminal that still fits (its PTY untouched) and only the tail closes when the
+   * count drops; a raised count opens fresh slots at the end. Same slot resolution as
+   * `apply(n)`, so `peekTemplate(count)` names exactly the panes this creates/keeps.
+   * Returns false for a non-guillotine spec (the painter can't emit one) or over cap.
+   */
+  applyRegions(spec: GridSpecModel): boolean {
+    const shape = treeForRegions(spec) // leaf ids = reading-order region slots 1..N
+    if (!shape) return false
+    const count = spec.regions.length
+    const locals = this.templateLocals(count)
+    if (locals.length < count) return false
+    const remap = (node: LayoutTreeNode): LayoutTreeNode =>
+      isSplit(node) ? { ...node, children: node.children.map(remap) } : { id: locals[node.id - 1]! }
+    this.clearExpand()
+    this.root = remap(shape)
+    this.rebuild()
+    this.onLayoutChange?.()
+    return true
   }
 
   /** The persisted form of the current layout (ids renumbered to slot order). */
@@ -519,6 +573,15 @@ export class GridLayout {
     for (const id of ids) {
       const el = this.ensureSlot(id)
       el.classList.remove('expanded', 'covered')
+      // Which equalize entries this pane's ⋯ menu can honestly offer: 'h' iff the pane
+      // is a member of a row, 'v' iff of a column. A pane that SPANS the other axis has
+      // no such line and gets no entry — the menu tells the truth instead of no-opping.
+      // Stamped here (not reflow) because membership changes only with STRUCTURE, and
+      // every structure mutation funnels through rebuild.
+      const axes =
+        (lineOfLeaf(this.root, id, 'h') != null ? 'h' : '') + (lineOfLeaf(this.root, id, 'v') != null ? 'v' : '')
+      if (axes) el.dataset.eqAxes = axes
+      else delete el.dataset.eqAxes
       if (el.parentElement !== this.grid) this.grid.append(el)
       slots.push({ id: this.globalOf(id), el })
     }
@@ -787,6 +850,10 @@ export class GridLayout {
     g.tabIndex = 0
     g.addEventListener('mousedown', (e) => this.startGutterDrag(e, g.dataset.path ?? '', Number(g.dataset.index)))
     g.addEventListener('keydown', (e) => this.onGutterKey(e, g.dataset.path ?? '', Number(g.dataset.index)))
+    // Double-click = equal shares for the WHOLE line this seam belongs to (the sash
+    // idiom). Read off dataset, not the spec: the element is reused by seam key and a
+    // drag-rearrange can re-aim that key at a different split.
+    g.addEventListener('dblclick', () => this.equalizeLine(g.dataset.path ?? '', 'seam'))
     return g
   }
 
@@ -848,6 +915,29 @@ export class GridLayout {
     this.reflow()
   }
 
+  /** EQUAL shares on one line (seam double-click, '=' on a focused seam, the pane ⋯
+   *  menu's row/column entries). Sizes-only — expand state and every other line
+   *  survive, exactly like a seam drag. Equal WEIGHTS are what persist: a member
+   *  pinned wider by its subtree's floor renders clamped today and becomes truly
+   *  equal the moment the window can afford it. */
+  private equalizeLine(path: string, scope: 'seam' | 'menu'): void {
+    const node = nodeAtPath(this.root, path)
+    if (!node || !isSplit(node) || !equalizeLineAt(this.root, path)) return
+    this.reflow()
+    getTelemetry().captureEvent({ name: 'layout.equalized', props: { scope, dir: node.dir } })
+    this.onLayoutChange?.()
+  }
+
+  /** Equal shares on EVERY line — the workspace-level "Balance layout" (layout
+   *  popover, palette, Ctrl+Shift+=). Shape untouched: only sizes move, so no slot
+   *  (or PTY) can be created, lost or re-homed by tidying. */
+  balance(): void {
+    equalizeAllLines(this.root)
+    this.reflow()
+    getTelemetry().captureEvent({ name: 'layout.equalized', props: { scope: 'balance' } })
+    this.onLayoutChange?.()
+  }
+
   /** Drag ONE seam of ONE line. */
   private startGutterDrag(e: MouseEvent, path: string, index: number): void {
     const geom = this.seamGeometry(path, index)
@@ -878,6 +968,14 @@ export class GridLayout {
    *  An arrow ACROSS the seam is not this separator's business — it is left to bubble. */
   private onGutterKey(e: KeyboardEvent, path: string, index: number): void {
     if (e.ctrlKey || e.metaKey || e.altKey) return
+    // '=' (or shifted '+') on a focused seam: the keyboard twin of the double-click —
+    // the whole line equalizes, not just this seam's pair. One-shot, so it persists
+    // immediately rather than riding the arrow keys' burst timer.
+    if (e.key === '=' || e.key === '+') {
+      e.preventDefault()
+      this.equalizeLine(path, 'seam')
+      return
+    }
     const geom = this.seamGeometry(path, index)
     if (!geom) return
     const step = e.shiftKey ? SEAM_STEP_COARSE_PX : SEAM_STEP_PX
@@ -918,6 +1016,13 @@ export class GridLayout {
     el.classList.toggle('horizontal', !vertical)
     el.setAttribute('aria-orientation', vertical ? 'vertical' : 'horizontal')
     el.setAttribute('aria-label', vertical ? 'Resize panes left and right' : 'Resize panes up and down')
+    // The double-click's only discoverability for sighted users — the seam has no
+    // room for a visible affordance. Guarded like the aria writes below (a reflow
+    // storm re-derives the same string), and axis-aware for the same reuse reason.
+    const title = vertical
+      ? 'Drag to resize · double-click for equal widths'
+      : 'Drag to resize · double-click for equal heights'
+    if (el.title !== title) el.title = title
     const geom = this.seamGeometry(spec.path, spec.index)
     if (!geom) return
     const at = Math.round(geom.aPx)

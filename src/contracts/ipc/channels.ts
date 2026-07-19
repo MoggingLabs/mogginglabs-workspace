@@ -112,7 +112,12 @@ export const ShellChannels = {
   titlebarOverlay: 'shell:titlebarOverlay',
   /** main -> renderer: WindowStateEvent on fullscreen/maximize changes (events only —
    *  never polled). The renderer mirrors it as #app chrome classes. */
-  windowState: 'shell:windowState'
+  windowState: 'shell:windowState',
+  /** main -> renderer: a pointer went down on NATIVE chrome the DOM never sees —
+   *  the -webkit-app-region: drag strip, the window-control overlay, a window
+   *  drag/resize start. No payload. The shell replays it as a synthetic document
+   *  pointerdown so every outside-click dismisser (menus, popovers) fires. */
+  chromePress: 'shell:chromePress'
 } as const
 
 export const WorktreeChannels = {
@@ -265,7 +270,7 @@ export const BrowserChannels = {
 export const UpdateChannels = {
   state: 'update:state', // main -> renderer: UpdateState (checking/available/downloading/ready/error)
   restart: 'update:restart', // renderer -> main: quitAndInstall (the "Restart now" action)
-  check: 'update:check', // renderer -> main: re-check now (the rail row's retry; the "Check now" button)
+  check: 'update:check', // renderer -> main: re-check now (UpdateCheckRequest; no payload = a human asked)
   stateGet: 'update:stateGet', // -> UpdateState (a PULL: settings mounts long after the last push)
   prefsGet: 'update:prefsGet', // -> UpdatePrefs
   prefsSet: 'update:prefsSet' // (UpdatePrefs) -> void (applied immediately, persisted)

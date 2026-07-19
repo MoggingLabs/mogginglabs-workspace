@@ -14,14 +14,16 @@ MoggingLabs Workspace — a richer signal than OSC escape sequences alone. When 
 > agents you start yourself — a plain command typed into a pane, or a terminal outside the app.
 >
 > **Typing an agent at a pane's own prompt?** The session-scoped config can't reach it, so the
-> app can wire the equivalents below into each CLI's **own global config** for you — one click
-> per CLI in Settings › Agent CLIs › *Hand-typed session alerts* (explicit apply, timestamped
-> backup, removable the same way): Claude's hooks into `~/.claude/settings.json`, Codex's
-> `notify` + `[tui]` keys into `config.toml` (your own `notify` is never replaced — a conflict
-> refuses and says why), Gemini's hooks + `enableNotifications` into its `settings.json`, and
-> OpenCode's attention pair + the generated verdict plugin into `tui.json`/`opencode.json`.
-> The notify script (and the OpenCode plugin around it) no-op outside a MoggingLabs pane, so
-> globally wired means wired everywhere it matters and inert everywhere else.
+> app wires the equivalents below into each CLI's **own global config** for you **automatically**
+> the moment detection recognizes the agent — timestamped backup, an Undo toast, and reviewable
+> in Settings › Notifications › *Hand-typed session alerts* (Remove there also opts that CLI out
+> of the auto-wiring, and re-applies by hand): Claude's hooks into `~/.claude/settings.json`,
+> Codex's `notify` + `[tui]` keys into `config.toml` (your own `notify` is never replaced — a
+> conflict refuses and says why), Gemini's hooks + `enableNotifications` into its
+> `settings.json`, and OpenCode's attention pair + the generated verdict plugin into
+> `tui.json`/`opencode.json`. The notify script (and the OpenCode plugin around it) no-op outside
+> a MoggingLabs pane, so globally wired means wired everywhere it matters and inert everywhere
+> else. (Aider is the exception — no hook config, only its own YAML; see its row below.)
 
 OSC-based agent-state stays the baseline for *any* CLI (Phase-2/01); these hooks are the sharper,
 first-party layer for the CLIs that support hooks.
@@ -70,8 +72,16 @@ finished pane's green halo red a minute later purely for sitting there. It is no
 *idle* verdict, and green already carries "come look".
 
 So `mogging notify` reads the payload's `type` off stdin and whitelists the four that block. An
-unrecognized type still rings, on the theory that a notification nobody understands is worth
-surfacing. The `type` field **only** ever leaves the process — never the message or title.
+**unrecognized type is a guess**, and guesses never latch red directly: it is sent as `notice`,
+which the daemon holds for a beat and reads in context (swallowed mid-turn and on a finished
+pane; rung one confirmation window later when the pane is genuinely idle). The old behavior —
+"an unknown type still rings" — painted freshly-finished panes red the day Claude shipped new
+notification types (2026-07-15). The `type` field **only** ever leaves the process — never the
+message or title.
+
+> **Parity is gated.** `mogging notify` and the app's generated notify hook are twins by
+> contract, and the `NOTIFYPARITY` sweep gate runs both shipped artifacts over one event corpus
+> and fails on any divergence — the mapping above cannot silently fork again.
 
 ### The bell is a guess, not a verdict
 
@@ -162,8 +172,23 @@ Each snippet **merges** into your existing config — don't overwrite the whole 
 - **OpenCode** → drop [`opencode/plugin/mogging-notify.js`](./opencode/plugin/mogging-notify.js)
   into `~/.config/opencode/plugin/` (auto-loaded), and enable the chime in
   `~/.config/opencode/tui.json`: `{ "attention": { "enabled": true, "notifications": true } }`.
+- **aider** → add to `~/.aider.conf.yml`:
+  `notifications: true` and `notifications-command: mogging notify --event done`.
+  (App launches already set the `AIDER_NOTIFICATIONS*` env twins; this covers aider you type
+  yourself. aider has no chime — the done is its whole story — and the app deliberately offers
+  no one-click global wiring for it: your `.aider.conf.yml` is YAML the app won't rewrite.)
 
 ## Verify
 
-In a MoggingLabs pane, run `mogging notify --event needs-input` by hand — the pane's tab should
-ring immediately. Then install a snippet and let the agent trigger it on its next turn.
+In a MoggingLabs pane **that is running an agent the app knows about** (launch one from the app,
+or type a CLI and let detection adopt it — the pane's dot goes solid), run
+`mogging notify --event needs-input` by hand — the pane's tab should ring immediately. Then
+install a snippet and let the agent trigger it on its next turn.
+
+In a **plain shell** pane the same command deliberately raises nothing — no dot, no ring, no
+toast, no webhook. Alerts are the agent story, everywhere or nowhere (ALERTAGREE): a pane whose
+own surfaces cannot corroborate an alert may not have one raised elsewhere on its behalf. The
+same rule is why a bare `echo -e '\a'` in a plain shell no longer produces a "needs your input"
+toast. Remote (SSH) panes are the honest edge: their config lives on the far host and the daemon
+env never crosses SSH, so remote agents speak through the chime only — the dot stays hollow, and
+chime-alone reads as attention.

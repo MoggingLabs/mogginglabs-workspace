@@ -11,6 +11,7 @@ import {
 import { resolveHome } from '@backend/features/usage'
 import { AgentChannels, type AgentCommandRequest, type AgentCommandResult, type AgentInfo } from '@contracts'
 import { getSettingsStore } from './app-settings'
+import { notePaneAgent } from './agent-presence'
 import { maybeFault } from './fault-port'
 import { materializeToolPlanAtLaunch } from './tool-plan'
 import { claudeStatuslineArgs, paneSessionLog } from './context'
@@ -57,7 +58,11 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
           }
         : ('posix' as const)
       const command = buildLaunchCommand(req.agentId, req.cwd, req.resume, undefined, [], target)
-      return command ? { ok: true, command } : { ok: false, reason: `Unknown agent provider: ${req.agentId}` }
+      if (!command) return { ok: false, reason: `Unknown agent provider: ${req.agentId}` }
+      // needs-you presence (ALERTAGREE): a remote pane runs an agent too, even though its
+      // verdict channel is chime-only — mark it so the webhook gate agrees with the pane.
+      if (typeof req.paneId === 'number') notePaneAgent(req.paneId, true)
+      return { ok: true, command }
     }
     // Profile env (4/04): resolved HERE from the store — the renderer only ever
     // names a profile id; values (pointers, never secrets) stay main-side until
@@ -143,6 +148,10 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
       resumeSessionId
     )
     if (!command) return { ok: false, reason: `Unknown agent provider: ${req.agentId}` }
+    // needs-you presence (ALERTAGREE): mark the target pane as agent-bearing the moment the
+    // launch is real — the daemon's detector takes seconds to confirm a fresh CLI, and a
+    // permission prompt can beat it. Detection keeps it true; pane exit drops it.
+    if (typeof req.paneId === 'number') notePaneAgent(req.paneId, true)
     // Accepted residual: 'once' session overrides are consumed HERE, when the command
     // is handed back — the renderer still has to type it, and a pane disposed in that
     // microsecond gap spends the one-shot for nothing. Moving consumption behind a

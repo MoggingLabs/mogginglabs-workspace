@@ -78,7 +78,7 @@ export function runTemplateSmoke(win: BrowserWindow, phase: string): void {
       )) as { paneCount: number; assignments: string[] }
       await delay(1200)
       const count = Number(await ES('window.__mogging.workspace.count()'))
-      await delay(11000) // launchLineup delay (900ms) + claude render
+      await delay(11000) // claude render (lineup types on pane readiness — no fixed delay)
       const ui = await claudeUiOk(CLAUDE_PANE)
       const launch = (await ES(`window.__mogging.agents.lastLaunch(${CLAUDE_PANE})`)) as {
         provider?: string

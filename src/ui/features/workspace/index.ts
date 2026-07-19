@@ -12,8 +12,8 @@ import {
   type WorkspaceState
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { TEMPLATE_COUNTS, TEMPLATES } from '../layout'
-import { Button, IconButton, clear, createLayoutGridPicker, el, icon, showToast } from '../../components'
+import { TEMPLATE_COUNTS, type GridSpecModel } from '../layout'
+import { Button, IconButton, clear, createStepper, el, icon, showToast } from '../../components'
 import { WorkspaceController, type CreateOpts } from './controller'
 import { resolveColors } from './model'
 import { workspaceClient } from './workspace.client'
@@ -32,7 +32,7 @@ import { onAgentLaunchRequest, onProfileFailover } from '../../core/agents/launc
 import { onPaneAgentSession } from '../../core/agents/agent-session-port'
 import { activeView, setActiveView } from '../../core/shell/view-port'
 import { setCommands } from '../../core/commands/command-port'
-import { setPaneState } from '../../core/attention/attention-port'
+import { setPaneState, setPaneTracked } from '../../core/attention/attention-port'
 import { setPaneRole } from '../../core/layout/pane-meta'
 import { getPaneCwdProjection, onPaneCwdProjection } from '../../core/layout/pane-cwd'
 
@@ -446,7 +446,7 @@ export const workspaceFeature: UiFeature = {
         persist()
         updateRailFade()
       },
-      (anyAttention) => workspaceClient.setAttention(anyAttention),
+      (alert) => workspaceClient.setAttention(alert),
       touchRecent, // closing keeps the project's final layout in recents
       touchRecent // opening/working on a project bumps it to the top
     )
@@ -554,20 +554,34 @@ export const workspaceFeature: UiFeature = {
 
     function renderLayoutMenu(): void {
       clear(layoutMenu)
-      // REMOVE #16: the SHARED grid picker (compact variant) — one component, replacing
-      // the ad-hoc tile builder whose `.layout-menu-tile .layout-tile-count` reached
-      // across to override this very component's class.
-      const picker = createLayoutGridPicker({
-        specs: TEMPLATE_COUNTS.map((n) => ({ count: n, rows: TEMPLATES[n].rows, cols: TEMPLATES[n].cols })),
-        selected: controller.activePaneCount(),
-        compact: true,
-        onSelect: (n) => {
-          void controller.requestApplyTemplate(n)
-          layoutMenu.hidden = true
+      // The popover opens on the workspace's TRUTH: what it holds, how much of it is
+      // live work, and where the cap sits — the same numbers the stepper ceilings and
+      // the batch clamps enforce, so this line can never tell a second story.
+      const status = controller.layoutStatus()
+      if (status) {
+        const bits = [`${status.panes} of ${status.cap} panes`]
+        if (status.live > 0) bits.push(`${status.live} with live work`)
+        layoutMenu.append(el('div', { class: 'layout-menu-status', text: bits.join(' · ') }))
+      }
+      const headroom = status ? Math.max(1, status.cap - status.panes) : 1
+      // ADD terminals — the popover's whole additive vocabulary is counter-driven now
+      // (user direction: the template tiles pinned a COUNT, which is the one thing the
+      // owner of four live agents never wants pinned — Reorganize below keeps the
+      // tiles' real value, the SHAPE, without their kill switch). Each row's [− n +]
+      // clamps to the headroom the status line quotes; at 1 the row is exactly the
+      // single-split verb it always was, and Ctrl+Shift+D stays a plain single split.
+      let termCount = 1
+      const termLabel = el('span', { text: 'New terminal' })
+      const termStepper = createStepper({
+        value: 1,
+        min: 1,
+        max: headroom,
+        ariaLabel: 'How many terminals',
+        onChange: (n) => {
+          termCount = n
+          termLabel.textContent = n === 1 ? 'New terminal' : `${n} new terminals`
         }
       })
-      // ADD one terminal — lives IN this popover (templates and "one more" are the
-      // same decision: how many panes). Splits the focused pane; its line re-equalizes.
       const add = el(
         'button',
         {
@@ -576,32 +590,85 @@ export const workspaceFeature: UiFeature = {
           title: 'Splits the focused pane — the row/column re-equalizes',
           onClick: () => {
             layoutMenu.hidden = true
-            controller.splitActive()
+            controller.splitActive(undefined, termCount)
           }
         },
         [
           icon('plus', 14),
-          el('span', { text: 'New terminal' }),
+          termLabel,
           el('span', { class: 'kbd', text: 'Ctrl+Shift+D' })
         ]
       )
-      // ADD one ISOLATED terminal — same split, but the new pane lives in its own git
+      const addRow = el('div', { class: 'layout-menu-stepper-row' }, [add, termStepper.el])
+      // ADD isolated terminals — same split, but each new pane lives in its own git
       // worktree (fresh mogging/<slug> branch), the manual twin of the wizard's
       // "Isolate each agent" checkbox. Menu-only by design: Ctrl+Shift+D stays plain.
+      let isoCount = 1
+      const isoLabel = el('span', { text: 'New isolated terminal (worktree)' })
+      const isoStepper = createStepper({
+        value: 1,
+        min: 1,
+        max: headroom,
+        ariaLabel: 'How many isolated terminals',
+        onChange: (n) => {
+          isoCount = n
+          // Same length singular and plural, so raising the count never re-truncates
+          // the row the user is looking at.
+          isoLabel.textContent = n === 1 ? 'New isolated terminal (worktree)' : `${n} isolated terminals (worktrees)`
+        }
+      })
       const addIsolated = el(
         'button',
         {
           class: 'menu-item layout-menu-add layout-menu-add-isolated',
           type: 'button',
-          title: 'Splits the focused pane into a fresh git worktree on its own branch',
+          title: 'Splits the focused pane into fresh git worktrees — one branch per terminal',
           onClick: () => {
             layoutMenu.hidden = true
-            void controller.splitActiveIsolated()
+            void controller.splitActiveIsolated(undefined, isoCount)
           }
         },
-        [icon('git-branch', 14), el('span', { text: 'New isolated terminal (worktree)' })]
+        [icon('git-branch', 14), isoLabel]
       )
-      layoutMenu.append(picker.el, el('div', { class: 'menu-sep' }), add, addIsolated)
+      const isoRow = el('div', { class: 'layout-menu-stepper-row' }, [addIsolated, isoStepper.el])
+      // REORGANIZE — opens the layout painter (the wizard's own): choose a new grid
+      // SIZE and ARRANGEMENT, changing the pane count if you want, on the live
+      // workspace. The structural sibling of Balance: Balance evens the sizes of the
+      // arrangement you have, Reorganize lets you pick a new arrangement (and count).
+      // The trailing "…" says it opens a panel rather than acting on click.
+      const reorganize = el(
+        'button',
+        {
+          class: 'menu-item layout-menu-add layout-menu-reorganize',
+          type: 'button',
+          title: 'Choose a new grid size and arrangement — your terminals are kept where they fit',
+          onClick: () => {
+            layoutMenu.hidden = true
+            controller.openReorganize()
+          }
+        },
+        [icon('layout-grid', 14), el('span', { text: 'Reorganize layout…' })]
+      )
+      // BALANCE — equal shares on every row and column. The whole-workspace tidy that
+      // per-seam equalize (gutter double-click, pane ⋯ menu) does line by line.
+      const balance = el(
+        'button',
+        {
+          class: 'menu-item layout-menu-add',
+          type: 'button',
+          title: 'Every row and column returns to equal shares — arrangement and pane count stay',
+          onClick: () => {
+            layoutMenu.hidden = true
+            controller.balanceActive()
+          }
+        },
+        [
+          icon('columns', 14),
+          el('span', { text: 'Balance layout' }),
+          el('span', { class: 'kbd', text: 'Ctrl+Shift+=' })
+        ]
+      )
+      layoutMenu.append(addRow, isoRow, el('div', { class: 'menu-sep' }), reorganize, balance)
     }
 
     // ── Keyboard: capture phase + stopPropagation so xterm never sees these ──
@@ -650,6 +717,12 @@ export const workspaceFeature: UiFeature = {
           e.preventDefault()
           e.stopPropagation()
           if (paneVerb()) controller.toggleZoom()
+        } else if (e.shiftKey && (k === '=' || k === '+')) {
+          // Ctrl+Shift+= — '=' for equal. Both spellings, because Shift turns '=' into
+          // '+' on US-like layouts and e.key reports the shifted character.
+          e.preventDefault()
+          e.stopPropagation()
+          if (paneVerb()) controller.balanceActive()
         } else if (!e.shiftKey && k >= '1' && k <= '9') {
           e.preventDefault()
           e.stopPropagation()
@@ -757,6 +830,21 @@ export const workspaceFeature: UiFeature = {
           enabled: requiresGrid,
           run: () => controller.splitActive('v')
         },
+        {
+          id: 'layout:balance',
+          title: 'Balance layout (equal rows and columns)',
+          hint: 'Layout',
+          kbd: 'Ctrl+Shift+=',
+          enabled: requiresGrid,
+          run: () => controller.balanceActive()
+        },
+        {
+          id: 'layout:reorganize',
+          title: 'Reorganize layout (choose a new grid size and arrangement)',
+          hint: 'Layout',
+          enabled: requiresGrid,
+          run: () => controller.openReorganize()
+        },
         ...TEMPLATE_COUNTS.map((n) => ({
           id: `layout:${n}`,
           title: `Layout: ${n} pane${n === 1 ? '' : 's'}`,
@@ -846,8 +934,11 @@ function exposeForDev(controller: WorkspaceController): void {
     paneIds: () => controller.activePaneIds(),
     zoom: () => controller.toggleZoom(),
     expand: (paneId: number, mode: 'full' | 'col' | 'row') => controller.expandPane(paneId, mode),
-    split: (dir?: 'h' | 'v') => controller.splitActive(dir),
-    splitIsolated: (dir?: 'h' | 'v') => controller.splitActiveIsolated(dir),
+    split: (dir?: 'h' | 'v', count?: number) => controller.splitActive(dir, count),
+    splitIsolated: (dir?: 'h' | 'v', count?: number) => controller.splitActiveIsolated(dir, count),
+    reorganize: () => controller.openReorganize(), // opens the painter panel
+    reorganizeApply: (spec: GridSpecModel) => controller.requestReorganize(spec), // paint result, no UI
+    status: () => controller.layoutStatus(),
     close: (paneId: number) => {
       const id = controller.activeMeta()?.id
       if (id) void controller.requestClosePane(id, paneId)
@@ -884,7 +975,10 @@ function exposeForDev(controller: WorkspaceController): void {
     }
   }
   w.__mogging.attention = {
-    setPaneState: (id: number, state: string) => setPaneState(id as PaneId, state as AgentState)
+    setPaneState: (id: number, state: string) => setPaneState(id as PaneId, state as AgentState),
+    // The tracked gate (ALERTAGREE): smokes must claim a pane the way a real session would,
+    // or the port refuses its states — which is itself the first thing the gate asserts.
+    setPaneTracked: (id: number, tracked: boolean) => setPaneTracked(id as PaneId, tracked)
   }
   // View switcher for the CHROMEUX smoke (bug #11: the grid picker must be ABSENT off
   // the grid). setActiveView is the real port the titlebar view buttons call.

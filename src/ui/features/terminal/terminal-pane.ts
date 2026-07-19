@@ -29,12 +29,13 @@ import { onTerminalTheme } from '../../core/theme/theme-port'
 import { onTerminalFontSize, terminalFontSize, TERMINAL_LINE_HEIGHT } from '../../core/terminal/font-port'
 import { windowsPtyFor } from '../../core/terminal/pty-emulation'
 import { registerPaneInstance, retirePaneInstance } from '../../core/terminal/pane-instance-port'
-import { forgetPane, markPaneLive, markPaneReattached, markPaneRemoteReady } from '../../core/terminal/liveness-port'
+import { forgetPane, markPaneLive, markPaneReattached, markPaneRemoteReady, markPaneSpawnSettled } from '../../core/terminal/liveness-port'
+import { claimSpawnRun, forgetSpawnRun, reportSpawnRunOutcome } from '../../core/terminal/spawn-run-port'
 import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
 import { setPaneState, clearPaneState, paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
 import { completionsFor } from '../../core/attention/completions'
 import { applyPaneCwdEvent, clearPaneCwd, getPaneCwd, getPaneCwdProjection } from '../../core/layout/pane-cwd'
-import { getPaneRole, onPaneRole, getPaneRemote, getPaneProfile, setPaneProfile } from '../../core/layout/pane-meta'
+import { getPaneRole, onPaneRole, getPaneRemote, getPaneProfile, onPaneProfile, setPaneProfile } from '../../core/layout/pane-meta'
 import {
   clearPaneCli,
   mcpChipForPane,
@@ -44,6 +45,7 @@ import {
 } from '../../core/agents/mcp-status-port'
 import { getPaneContext, onPaneContext, type PaneContext } from '../../core/terminal/context-port'
 import { clearPaneAgentSession, getPaneAgentSession, onPaneAgentSession } from '../../core/agents/agent-session-port'
+import { isTrackedSession } from '../../core/attention/tracking'
 import { assignmentForPane, getWorkspaces, workspaceIdForPane } from '../../core/workspace/workspace-info-port'
 import { claimsFor, onClaimsChange, setClaimsForDev, workspaceClaims } from './claims-store'
 import { createPaneAnchor, type PaneAnchorHandle } from './pane-anchor'
@@ -336,18 +338,38 @@ export class TerminalPane {
     // app's install folder, whatever the wizard picked. A REMOTE pane sends none: the path
     // is local and would mean nothing on the far side (publishPaneCwds skips those slots).
     const cwd = remote ? '' : (getPaneCwd(this.id) ?? '')
-    void terminalClient
+    // Spawn-run delivery (instant launch, part 2): a fresh template slot's launch command
+    // was armed on the spawn-run port BEFORE this pane was constructed. Claim it and wait
+    // briefly — the build is one main round trip racing a bounded window, so a slow build
+    // degrades to the typed fallback (reported below) instead of stalling the pane.
+    // Remote panes never carry a run: their launch types after the SSH bootstrap.
+    const armedRun = claimSpawnRun(this.id)
+    const term = this.term // definite by here; the async closure below reads its LIVE size
+    void (async () => {
+      let run: string | undefined
+      if (armedRun && !remote) {
+        const cmd = await Promise.race([
+          armedRun.catch(() => null),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500))
+        ])
+        run = cmd ?? undefined
+      }
+      return terminalClient
       .spawn({
         id: this.id,
         cwd,
-        cols: this.term.cols,
-        rows: this.term.rows,
+        cols: term.cols,
+        rows: term.rows,
         workspaceId: workspaceIdForPane(this.id),
         agentId: assignmentForPane(this.id),
         remoteHostId: remote?.hostId,
-        remoteCwd: remote?.cwd
+        remoteCwd: remote?.cwd,
+        run
       })
       .then((res) => {
+        // The delivery report the agents feature settles on: TRUE only when a FRESH
+        // session actually received the run line (a reattached session ignored it).
+        reportSpawnRunOutcome(this.id, !!run && !res.existing)
         // The pty told us how it grows. Apply BEFORE any output or resize: xterm re-reads
         // windowsPty on every resize, and nothing has resized a non-empty buffer yet.
         const wp = windowsPtyFor(res.pty)
@@ -364,6 +386,12 @@ export class TerminalPane {
         // adopt branch on restore (agents/index.ts), labelling a session that isn't there
         // instead of typing its resume, and the agent would never come back.
         if (res.existing && !res.restored && !this.disposed) markPaneReattached(this.id)
+        // The reattach verdict above is now DECIDED — release resume lineups waiting on
+        // it (whenPaneSpawnSettled). Liveness cannot carry this: a reattach replays
+        // scrollback before this reply lands, so "live" precedes "verdict known".
+        // Never after dispose: forgetPane already flushed the waiters for this id, and
+        // a late mark would leak onto the next pane to recycle it.
+        if (!this.disposed) markPaneSpawnSettled(this.id)
         // The reattach/restore REPLAY arrives right after this: thousands of scrollback
         // lines in a burst, into a grid that is about to be refitted. Land at the end of
         // the conversation, which is the only place it makes sense to land.
@@ -374,6 +402,9 @@ export class TerminalPane {
         this.syncState?.()
       })
       .catch((err) => {
+        // A failed spawn delivered nothing — the agents feature's typed fallback will
+        // wait on liveness and fail as gracefully as it always has.
+        reportSpawnRunOutcome(this.id, false)
         // A pane with no pty renders nothing and grows wrong. Never swallow it — and
         // never leave the USER staring at a silently blank pane: say it in the pane,
         // where the missing prompt would have been.
@@ -382,8 +413,12 @@ export class TerminalPane {
           const why = err instanceof Error ? err.message : String(err)
           this.term.write(`\x1b[91m[terminal failed to start]\x1b[0m\r\n\x1b[90m${why}\x1b[0m\r\n`)
           this.markDead('terminal failed to start') // never lived — same gray as exited
+          // A failed spawn is still a SETTLED spawn (there is no session, so no reattach
+          // mark) — a resume lineup waiting on the verdict must not burn its timeout.
+          markPaneSpawnSettled(this.id)
         }
       })
+    })()
 
     // Blink the cursor only while this pane is focused — cuts idle repaints across many panes.
     this.term.textarea?.addEventListener('focus', () => (this.term.options.cursorBlink = true))
@@ -1083,7 +1118,7 @@ export class TerminalPane {
       'Pane menu',
       () => {
         if (!menu.hidden) return closeMenu(true)
-        this.buildMenu(menu, closeMenu, title.textContent?.trim() ?? '', slotEl?.dataset.expandMode, host)
+        this.buildMenu(menu, closeMenu, title.textContent?.trim() ?? '', slotEl?.dataset.expandMode, slotEl?.dataset.eqAxes, host)
         menu.scrollTop = 0
         menu.hidden = false
         menuBtn.setAttribute('aria-expanded', 'true')
@@ -1236,17 +1271,40 @@ export class TerminalPane {
       expandBtns,
       leftChips: [mcpChip, claimsChip, role, ...(remoteChip ? [remoteChip] : [])]
     })
-    // Menu facts are a snapshot rebuilt on open. If any live header fact changes
-    // underneath an open portal (state, title, agent, context, MCP, claims or git),
-    // close it so it can never continue presenting stale status. The menu button's
-    // own aria-expanded mutation is merely open/close bookkeeping and is ignored.
+    // Menu facts are LIVE. When any header fact changes underneath the open portal
+    // (state, title, agent, context, MCP, claims or git), rebuild the menu in place —
+    // the status a user opened the menu to watch keeps telling the truth, instead of
+    // the menu snapping shut under them (the old behavior) or, worse, going stale.
+    // Focus is restored to the same-named entry so keyboard use survives the rebuild.
+    // The menu button's own aria-expanded mutation is open/close bookkeeping — ignored.
+    const refreshMenu = (): void => {
+      if (menu.hidden) return
+      const hadFocus = menu.contains(document.activeElement)
+      const focusedText = hadFocus ? (document.activeElement?.textContent ?? '').trim() : ''
+      this.buildMenu(menu, closeMenu, title.textContent?.trim() ?? '', slotEl?.dataset.expandMode, slotEl?.dataset.eqAxes, host)
+      positionMenu()
+      if (hadFocus) {
+        const entries = menuEntries()
+        focusEntry(
+          entries.find((entry) => (entry.textContent ?? '').trim() === focusedText) ??
+            menu.querySelector<HTMLElement>('.menu-item') ??
+            entries[0]
+        )
+      }
+    }
     menuFactsObserver = new MutationObserver((records) => {
       const bookkeepingOnly = records.every(
         (record) =>
           record.type === 'attributes' && record.target === menuBtn && record.attributeName === 'aria-expanded'
       )
-      if (!bookkeepingOnly) closeMenu(false)
+      if (!bookkeepingOnly) refreshMenu()
     })
+    // The profile note renders nowhere in the header, so the observer above cannot see
+    // it change — and on the detection path its name resolves ASYNC, after the menu may
+    // already be open. The port tells us directly.
+    this.disposers.push(onPaneProfile((paneId) => {
+      if (paneId === this.id) refreshMenu()
+    }))
     // These observers are useful only while the snapshot is visible. Keeping one
     // subtree observer hot per pane made normal 16-pane status traffic pay menu costs
     // even though every menu was closed (and showed up as a long frame in MILESTONE).
@@ -1509,13 +1567,16 @@ export class TerminalPane {
     this.disposers.push(onPaneAgentSession((paneId, s) => {
       if (paneId !== this.id || this.disposed) return
       if (state.dataset.state === 'exited') return
-      const tracked = !!s && !s.provider.startsWith('custom:')
+      // The SAME predicate the attention port's tracked gate runs on (core/attention/
+      // tracking.ts wires it port-side): the dot's availability and the port's willingness
+      // to hold state are one law, declared once. The port clears an untracked pane's
+      // state itself — this handler only paints.
+      const tracked = isTrackedSession(s)
       if (state.hidden === !tracked) return // already in the right visibility
       state.hidden = !tracked
       if (tracked) {
         this.syncState?.() // appear with the truth, not the mount default
       } else {
-        clearPaneState(this.id) // an untracked pane must not hold the rail's attention
         state.dataset.state = 'unknown'
         state.title = 'completion tracking not available for this agent'
       }
@@ -1539,6 +1600,7 @@ export class TerminalPane {
     closeMenu: (returnFocus?: boolean) => void,
     displayTitle: string,
     activeMode: string | undefined,
+    eqAxes: string | undefined,
     eventHost: HTMLElement
   ): void {
     menu.replaceChildren()
@@ -1580,6 +1642,12 @@ export class TerminalPane {
     // workspace keeps its name, rather than being renumbered by wherever it happens to land.
     const paneName = displayTitle || `Terminal ${displayPaneNumber(this.id)}`
     const info: HTMLElement[] = [note(`Pane: ${paneName}`)]
+    // AN AGENT PANE ALWAYS SHOWS THE FULL FACT SET. Every launch path — wizard lineup,
+    // palette, ⋯ launch entry, restore-adopt, and a CLI hand-typed at the prompt
+    // (detection) — writes the same session port, so the menu keys every row on the
+    // session, never on how it was created. A fact the pane genuinely lacks says so
+    // ("none") instead of vanishing: an absent row is indistinguishable from a broken
+    // one, and which rows exist must not depend on where the agent came from.
     const session = getPaneAgentSession(this.id)
     if (session) {
       const provider = session.provider.startsWith('custom:')
@@ -1592,12 +1660,14 @@ export class TerminalPane {
     // Read the visible dot itself so menu and bar cannot disagree on that last case.
     const renderedStatus = this.stateDot && !this.stateDot.hidden ? this.stateDot.title.trim() : ''
     if (renderedStatus) info.push(note(`Status: ${renderedStatus}`))
+    else if (session) info.push(note('Status: not tracked for this CLI'))
     const remote = getPaneRemote(this.id)
     if (remote) {
       info.push(note(`Remote: ${remote.name} — local repo tools (git, worktrees, review) are off`))
     }
     const profileName = getPaneProfile(this.id)
     if (profileName) info.push(note(`Profile: ${profileName}`))
+    else if (session) info.push(note('Profile: none (CLI default configuration)'))
     const roleName = getPaneRole(this.id)
     if (roleName) info.push(note(`Role: ${roleName}`))
     const ownClaims = claimsFor(this.id).length
@@ -1644,11 +1714,15 @@ export class TerminalPane {
             `(~${k(ctxUsage.usedTokens)} of ${k(ctxUsage.windowTokens)} tokens)`
         )
       )
+    } else if (session) {
+      info.push(note('Agent context: not reported by this CLI'))
     }
 
     const status = getPaneGit(this.id)
     if (status) {
       info.push(note(displayGitStatus(status).menuLabel))
+    } else if (session && !remote) {
+      info.push(note('Branch: none — not inside a git repository'))
     }
     menu.append(...info, separator())
 
@@ -1663,6 +1737,15 @@ export class TerminalPane {
     const splitFromMenu = (dir: 'h' | 'v'): void => {
       eventHost.dispatchEvent(
         new CustomEvent('mogging:split-pane', { bubbles: true, detail: { paneId: this.id, dir } })
+      )
+    }
+    // Equalize this pane's row/column: the grid's own event (like expand — sizes are
+    // its state; nothing is created or seeded). Entries appear only for the axes the
+    // slot's data-eq-axes stamp vouches for: a pane that SPANS rows is offered no
+    // "equal heights", because no column line contains it.
+    const equalizeFromMenu = (dir: 'h' | 'v'): void => {
+      eventHost.dispatchEvent(
+        new CustomEvent('mogging:equalize-pane', { bubbles: true, detail: { paneId: this.id, dir } })
       )
     }
     // Move this terminal to another workspace. Also the controller's: only it knows the other
@@ -1695,6 +1778,8 @@ export class TerminalPane {
       item('plus', 'Split right — new terminal', () => splitFromMenu('h')),
       item('plus', 'Split down — new terminal', () => splitFromMenu('v'))
     )
+    if (eqAxes?.includes('h')) menu.append(item('columns', 'Equal widths in this row', () => equalizeFromMenu('h')))
+    if (eqAxes?.includes('v')) menu.append(item('rows', 'Equal heights in this column', () => equalizeFromMenu('v')))
     // Offered only when there is somewhere to move TO. A lone workspace would get a menu
     // entry whose only possible outcome is a toast explaining why it cannot work.
     if (getWorkspaces().workspaces.length > 1) {
@@ -2029,6 +2114,7 @@ export class TerminalPane {
     clearPaneState(this.id)
     clearPaneCwd(this.id) // stops the backend git watch for this pane (git feature unwatches)
     forgetPane(this.id) // live/reattached marks die with the pane, not with the id
+    forgetSpawnRun(this.id) // armed builds/outcomes too — a recycled id must start clean
     if (this.selectionCopyTimer) clearTimeout(this.selectionCopyTimer) // a pane closed mid-drag must not copy after death
     this.dropAbort.abort() // drop the window-scoped drag listeners
     this.menuCleanup?.() // document/window listeners + the body-portaled menu

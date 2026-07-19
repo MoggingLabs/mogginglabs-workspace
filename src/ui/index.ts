@@ -1,6 +1,7 @@
 import '@fontsource-variable/jetbrains-mono' // the app typeface — UI and terminals alike
 import './styles/global.css'
 import { createAppShell } from './shell/app-shell'
+import { wireAttentionTracking } from './core/attention/tracking'
 import { syncHistoryPref } from './core/clipboard/clipboard-port'
 import { mountFeatures, registerFeature } from './core/registry/feature-registry'
 import { installOverlayScrollbars } from './core/scroll/overlay-scroll'
@@ -39,6 +40,10 @@ export function start(): void {
   // before any pane can copy anything — otherwise the first copies of the session land
   // in a ring the user believes is disabled.
   syncHistoryPref()
+
+  // The attention port's tracked gate follows the agent-session port (ALERTAGREE). Wired
+  // BEFORE features mount: the session replays their mounts trigger must land on a live gate.
+  wireAttentionTracking()
 
   // Overlay scrollbars, app-wide: invisible at rest, revealed while scrolling and in the
   // bar's own lane. Two delegated listeners for every scrollable surface there will ever

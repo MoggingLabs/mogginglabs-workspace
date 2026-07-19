@@ -15,6 +15,9 @@ import { runPerWsSmoke } from './smokes/perws-smoke'
 import { runPerWsAgentSmoke } from './smokes/perwsagent-smoke'
 import { runVaultKeysSmoke } from './smokes/vaultkeys-smoke'
 import { runWsCloseSmoke } from './smokes/wsclose-smoke'
+import { runKillFlashSmoke } from './smokes/killflash-smoke'
+import { runRailfoldSmoke } from './smokes/railfold-smoke'
+import { runChromePressSmoke } from './smokes/chromepress-smoke'
 import { runKbShortcutsSmoke } from './smokes/kbshortcuts-smoke'
 import { runKbGlobalSmoke } from './smokes/kbglobal-smoke'
 import { runVerdictLiveSmoke } from './smokes/verdictlive-smoke'
@@ -38,6 +41,7 @@ import { runTreeGitSmoke } from './smokes/treegit-smoke'
 import { runFileActSmoke } from './smokes/fileact-smoke'
 import { runFilesMilestoneSmoke } from './smokes/filesmilestone-smoke'
 import { runSetIntegSmoke } from './smokes/setinteg-smoke'
+import { runLibraryUxSmoke } from './smokes/libraryux-smoke'
 import { runSetShellSmoke } from './smokes/setshell-smoke'
 import { runSetUsageSmoke } from './smokes/setusage-smoke'
 import { runHomeUxSmoke } from './smokes/homeux-smoke'
@@ -54,6 +58,7 @@ import { runReloadSmoke } from './smokes/reload-smoke'
 import { runMultipaneSmoke } from './smokes/multipane-smoke'
 import { runWorkspaceSmoke } from './smokes/workspace-smoke'
 import { runAgentLaunchSmoke } from './smokes/agentlaunch-smoke'
+import { runLaunchNowSmoke } from './smokes/launchnow-smoke'
 import { runTypedSmoke } from './smokes/typed-smoke'
 import { runTypedCostSmoke } from './smokes/typedcost-smoke'
 import { runCtxAccuracySmoke } from './smokes/ctxaccuracy-smoke'
@@ -83,6 +88,7 @@ import { runBlocksSmoke } from './smokes/blocks-smoke'
 import { runClipboardSmoke } from './smokes/clipboard-smoke'
 import { runGitSmoke } from './smokes/git-smoke'
 import { runNotifySmoke } from './smokes/notify-smoke'
+import { runNotifyParitySmoke } from './smokes/notifyparity-smoke'
 import { runMilestoneSmoke } from './smokes/milestone-smoke'
 import { runFlickerSmoke } from './smokes/flicker-smoke'
 import { runPaneScrollSmoke } from './smokes/panescroll-smoke'
@@ -121,11 +127,13 @@ import { runBoardQueueSmoke } from './smokes/boardqueue-smoke'
 import { runPersistHealthSmoke } from './smokes/persisthealth-smoke'
 import { runRoleRaceSmoke } from './smokes/rolerace-smoke'
 import { runUpdateFailSmoke } from './smokes/updatefail-smoke'
+import { runUpdateOfflineSmoke } from './smokes/updateoffline-smoke'
 import { runA11yModalSmoke } from './smokes/a11ymodal-smoke'
 import { runBrowserZeroSmoke } from './smokes/browserzero-smoke'
 import { runSecretFormsSmoke } from './smokes/secretforms-smoke'
 import { runBoardRenderSmoke } from './smokes/boardrender-smoke'
 import { runKbApgSmoke } from './smokes/kbapg-smoke'
+import { runEqualizeSmoke } from './smokes/equalize-smoke'
 import { runAsyncStateSmoke } from './smokes/asyncstate-smoke'
 import { runAgentRegistrySmoke } from './smokes/agentregistry-smoke'
 import { runPlainMenuSmoke } from './smokes/plainmenu-smoke'
@@ -190,27 +198,37 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_USERDATA', 'MOGGING_GATES', 'MOGGING_GALLERY', // isolation + sweep markers, set by every gate
   'MOGGING_SURVIVE', 'MOGGING_MIGRATE', 'MOGGING_NOTIFYHOOK', 'MOGGING_DAEMONCUSTODY', 'MOGGING_STAMPWAR', 'MOGGING_HEARTBEAT', 'MOGGING_DAEMONHEAL', 'MOGGING_SESSIONPOOL', 'MOGGING_INTEG', 'MOGGING_TOOLPLAN',
   'MOGGING_EVBRIDGE', 'MOGGING_MCPSTATUS', 'MOGGING_MCPLOOP', 'MOGGING_ACCOUNT', 'MOGGING_ENTITLE', 'MOGGING_DEVICEKEY', 'MOGGING_WATERMARK', 'MOGGING_AGENT', 'MOGGING_STATE', 'MOGGING_RELOAD',
-  'MOGGING_SMOKE', 'MOGGING_SHOT', 'MOGGING_MULTIPANE', 'MOGGING_WORKSPACE', 'MOGGING_AGENTLAUNCH',
+  'MOGGING_SMOKE', 'MOGGING_SHOT', 'MOGGING_MULTIPANE', 'MOGGING_WORKSPACE', 'MOGGING_AGENTLAUNCH', 'MOGGING_LAUNCHNOW',
   'MOGGING_TEMPLATE', 'MOGGING_PROFPERSIST', 'MOGGING_BROWSER', 'MOGGING_BROWSERCTL', 'MOGGING_BROWSERUX', 'MOGGING_BROWSERTABS', 'MOGGING_BROWSERRACE', 'MOGGING_BROWSERZERO', 'MOGGING_LOCKDOWN', 'MOGGING_FIRSTRUN',
   'MOGGING_PRODUCT', 'MOGGING_PRODMILESTONE', 'MOGGING_USAGEGLANCE', 'MOGGING_USAGEUI', 'MOGGING_WEBUSAGE', 'MOGGING_USAGECLI',
   'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
-  'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_KBSHORTCUTS', 'MOGGING_KBGLOBAL', 'MOGGING_VERDICTLIVE', 'MOGGING_WEBTRAIL',
+  'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_KILLFLASH', 'MOGGING_RAILFOLD', 'MOGGING_CHROMEPRESS', 'MOGGING_KBSHORTCUTS', 'MOGGING_KBGLOBAL', 'MOGGING_VERDICTLIVE', 'MOGGING_WEBTRAIL',
   'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX', 'MOGGING_WIZARDFAIL', 'MOGGING_WIZARDISO', 'MOGGING_WIZCD', 'MOGGING_WIZLAYOUT', 'MOGGING_MUTATIONRACE', 'MOGGING_AUTHRUNNER',
-  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX', 'MOGGING_RESUME',
-  'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_RESPONSIVE', 'MOGGING_KBAPG', 'MOGGING_UXMILESTONE',
+  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_LIBRARYUX', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX', 'MOGGING_RESUME',
+  'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_RESPONSIVE', 'MOGGING_KBAPG', 'MOGGING_EQUALIZE', 'MOGGING_UXMILESTONE',
   'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT', 'MOGGING_CWD',
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
   'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_RUNTIMESPLIT', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
-  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_BRAINCORE', 'MOGGING_BRAINPARSE', 'MOGGING_BRAINGRAPH', 'MOGGING_BRAINFRESH', 'MOGGING_BRAINMCP', 'MOGGING_BRAINMAP', 'MOGGING_BRAINWRITE', 'MOGGING_BRAINDOCS', 'MOGGING_MEMGRAPH', 'MOGGING_BRAINSEM', 'MOGGING_BRAINPROPS', 'MOGGING_BRAINCAP', 'MOGGING_BRAINRECALL', 'MOGGING_BRAINUX', 'MOGGING_BRAINMILESTONE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
+  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_BRAINCORE', 'MOGGING_BRAINPARSE', 'MOGGING_BRAINGRAPH', 'MOGGING_BRAINFRESH', 'MOGGING_BRAINMCP', 'MOGGING_BRAINMAP', 'MOGGING_BRAINWRITE', 'MOGGING_BRAINDOCS', 'MOGGING_MEMGRAPH', 'MOGGING_BRAINSEM', 'MOGGING_BRAINPROPS', 'MOGGING_BRAINCAP', 'MOGGING_BRAINRECALL', 'MOGGING_BRAINUX', 'MOGGING_BRAINMILESTONE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_UPDATEOFFLINE', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
   'MOGGING_PROFILES', 'MOGGING_LOGINTRUTH', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
   // Typed-launch detection + the context gauge (the v6 pack).
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
   // Phase 11 — Files: the explorer's seven.
   'MOGGING_FSLIST', 'MOGGING_FILETREE', 'MOGGING_EXPLORER', 'MOGGING_EXPLORERRACE', 'MOGGING_TREELIVE', 'MOGGING_TREEGIT',
-  'MOGGING_FILEACT', 'MOGGING_FILESMILESTONE', 'MOGGING_AGENTCFG', 'MOGGING_GLOBALHOOKS'
+  'MOGGING_FILEACT', 'MOGGING_FILESMILESTONE', 'MOGGING_AGENTCFG', 'MOGGING_GLOBALHOOKS',
+  // ALERTAGREE pack (2026-07-18): the shipped notify artifacts' parity corpus.
+  'MOGGING_NOTIFYPARITY'
 ]
 const isSmoke = SMOKE_ENV.some((k) => !!process.env[k])
+
+// Smoke runs isolate LOCALAPPDATA/userData but keep the REAL home directory — so the
+// detection-time auto-wire (agent-global-hooks.ts) would write the developer's actual
+// ~/.claude / ~/.codex configs from inside a gate, pointing hooks at a throwaway
+// userData that the teardown deletes. Suppress it for every gate except GLOBALHOOKS,
+// whose whole job is to prove the auto-wire — and which points every home env at its
+// own fixtures before a handler runs.
+if (isSmoke && !process.env.MOGGING_GLOBALHOOKS) process.env.MOGGING_SUPPRESS_AUTOWIRE = '1'
 
 /**
  * WINDOWLESS, before the app-settings store and the daemon exist. TRUE = this launch is the
@@ -421,6 +439,8 @@ function afterWindow(win: BrowserWindow): void {
     runWorkspaceSmoke(win, process.env.MOGGING_WORKSPACE) // env-gated workspace persist/restore smoke
   } else if (process.env.MOGGING_AGENTLAUNCH) {
     runAgentLaunchSmoke(win) // env-gated agent-launcher smoke (picker -> TUI)
+  } else if (process.env.MOGGING_LAUNCHNOW) {
+    runLaunchNowSmoke(win) // instant-lineup contract: readiness-signal typing, no fixed delay
   } else if (process.env.MOGGING_TYPED) {
     runTypedSmoke(win) // env-gated typed-launch DETECTION smoke (a hand-typed agent gets a real identity)
   } else if (process.env.MOGGING_TEMPLATE) {
@@ -471,8 +491,14 @@ function afterWindow(win: BrowserWindow): void {
     runPerWsAgentSmoke(win) // env-gated per-workspace AGENT-browser smoke: agents drive their own workspace's browser (Phase-8/07c)
   } else if (process.env.MOGGING_VAULTKEYS) {
     runVaultKeysSmoke(win) // env-gated service-key vault smoke: paste-once -> pane env, plaintext nowhere at rest (Phase-8/08)
+  } else if (process.env.MOGGING_RAILFOLD) {
+    runRailfoldSmoke(win) // env-gated rail fold/unfold choreography smoke (count never overlaps the icon)
+  } else if (process.env.MOGGING_CHROMEPRESS) {
+    runChromePressSmoke(win) // env-gated native-chrome-press smoke (title-bar press dismisses popovers)
   } else if (process.env.MOGGING_WSCLOSE) {
     runWsCloseSmoke(win) // env-gated workspace-close smoke: confirm on live work + 5s undo grace (UX audit WS-01)
+  } else if (process.env.MOGGING_KILLFLASH) {
+    runKillFlashSmoke(win) // env-gated pane-teardown quiet smoke: console-less daemon + zero visible console windows through a 16-pane kill storm
   } else if (process.env.MOGGING_KBSHORTCUTS) {
     runKbShortcutsSmoke(win) // env-gated keyboard-shortcuts smoke: ? overlay + Settings page (UX audit KB-01)
   } else if (process.env.MOGGING_KBGLOBAL) {
@@ -549,6 +575,8 @@ function afterWindow(win: BrowserWindow): void {
     runSetAgentConfigSmoke(win) // five-provider settings catalog, typed controls, real scope writes, remote honesty
   } else if (process.env.MOGGING_SETINTEG) {
     runSetIntegSmoke(win) // env-gated integrations smoke: disclosure, attention-through-fold, hit targets (Phase-8.5/05)
+  } else if (process.env.MOGGING_LIBRARYUX) {
+    runLibraryUxSmoke(win) // the store/inventory split: Library overlay, inventory honesty, chips->plans, key slots, route badges (2026-07-18)
   } else if (process.env.MOGGING_SETUSAGE) {
     runSetUsageSmoke(win) // env-gated usage tab + popover smoke: overview/disclosure, bug #4/#5, profiles FieldGroups (Phase-8.5/05b)
   } else if (process.env.MOGGING_HOMEUX) {
@@ -567,6 +595,8 @@ function afterWindow(win: BrowserWindow): void {
     runResponsiveSmoke(win) // audit regression: 600/800/1200 rail + both docks + keyboard budget
   } else if (process.env.MOGGING_KBAPG) {
     runKbApgSmoke(win) // audit regression: keyboard + APG for the grid seam, the scrollback, and the stepper
+  } else if (process.env.MOGGING_EQUALIZE) {
+    runEqualizeSmoke(win) // env-gated equalize/balance smoke: seam dblclick + '=', ⋯ menu honesty (spanning pane), Balance popover + chord
   } else if (process.env.MOGGING_UXMILESTONE) {
     runUxMilestoneSmoke(win) // env-gated UX MILESTONE: the whole revamp composed + budgets unchanged, one fixture world, zero network (Phase-8.5/09)
   } else if (process.env.MOGGING_USAGE) {
@@ -581,6 +611,8 @@ function afterWindow(win: BrowserWindow): void {
     runCwdSmoke(win, process.env.MOGGING_CWD) // universal cwd protocol: daemon auth + in-proc OSC fallback
   } else if (process.env.MOGGING_GIT) {
     runGitSmoke(win) // env-gated per-pane git smoke (Phase-2/03)
+  } else if (process.env.MOGGING_NOTIFYPARITY) {
+    runNotifyParitySmoke() // the two shipped notify artifacts (CLI + generated hook) speak ONE dialect — black-box corpus over a fixture endpoint
   } else if (process.env.MOGGING_NOTIFY) {
     runNotifySmoke(win) // env-gated `mogging notify` smoke (Phase-2/04)
   } else if (process.env.MOGGING_MILESTONE) {
@@ -630,7 +662,9 @@ function afterWindow(win: BrowserWindow): void {
   } else if (process.env.MOGGING_PLAINMENU) {
     runPlainMenuSmoke(win) // pane ⋯ launch entries are plain-terminal-only, through the whole lifecycle
   } else if (process.env.MOGGING_UPDATEFAIL) {
-    runUpdateFailSmoke(win) // audit regression: a failed update check stays visible and its retry re-checks
+    runUpdateFailSmoke(win) // audit regression: a BROKEN feed stays loud even on a background check; retry re-checks
+  } else if (process.env.MOGGING_UPDATEOFFLINE) {
+    runUpdateOfflineSmoke(win) // regression (v0.14.0 live): an offline blip never latches the error row; manual retry honest; self-heals
   } else if (process.env.MOGGING_A11YMODAL) {
     runA11yModalSmoke(win) // audit regression: modal trap/inert/name, palette combobox, workspace-tab close by keyboard
   } else if (process.env.MOGGING_BROWSERZERO) {

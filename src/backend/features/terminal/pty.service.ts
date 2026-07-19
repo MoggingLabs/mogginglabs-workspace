@@ -274,11 +274,17 @@ export class PtyService {
       })
 
       this.ptys.set(req.id, proc)
-      // Watch this pane's subtree. No `expectAgent`: an in-proc pane is always a FRESH shell
-      // (this backend has no restore), so it starts empty and every launch into it is typed —
-      // and therefore announces itself. It is never looked at unprompted.
-      this.agentProcs.track(String(req.id), proc.pid)
+      // Watch this pane's subtree. `expectAgent` mirrors the daemon's spec.run stance: a
+      // spawn-run launch is typed by the BACKEND, not through write(), so nothing would
+      // announce it — the detector must look on its own. Without a run the pane is a fresh
+      // empty shell and every launch into it is typed (announced), so it is never looked
+      // at unprompted.
+      this.agentProcs.track(String(req.id), proc.pid, !!req.run)
       this.publishCwd(req.id, cwdState.current())
+      // Spawn-run delivery (in-proc parity with the daemon's SpawnSpec.run): the launch
+      // command is the shell's first input — no idle-prompt window, and the write goes
+      // through THIS process's pty handle, so it cannot race a still-registering pane.
+      if (req.run) proc.write(req.run + '\r')
       return { existing: false, restored: false, pty: emulation }
     } catch (err) {
       // Example telemetry use: spawn failures are exactly what we want reported.

@@ -235,17 +235,18 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       await sleep(300)
 
       stage = 'b-persist'
-      // Disclosure persists across a leave/return. Connections is the default-open
-      // card now (catalog starts folded): fold Connections, open Grants, come back —
-      // both choices stick.
+      // Disclosure persists across a leave/return. Connected accounts is the
+      // default-open card (the rest start folded; the store/inventory split moved
+      // browsing to the Library): fold Connections, open Workspace tools, come
+      // back — both choices stick.
       const connectionsDefault = await cardOpen('connections')
       await toggleCard('connections')
       await sleep(150)
-      await toggleCard('grants')
+      await toggleCard('workspace')
       await sleep(150)
       await leaveSettings()
       await openSettings('integrations')
-      const persistOk = connectionsDefault && !(await cardOpen('connections')) && (await cardOpen('grants'))
+      const persistOk = connectionsDefault && !(await cardOpen('connections')) && (await cardOpen('workspace'))
 
       stage = 'b-usage'
       // Usage opens overview-first; a HOT fixture posts .usage-fill.is-hot on the collapsed
@@ -269,6 +270,7 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
         if (c) { await window.bridge.invoke('board:patch', { id: c.id, patch: { paneId: 101, workspaceId: 'fx-ws' } }); await window.__mogging.board.refresh() }
         return 1
       })()`)
+      await ES(`window.__mogging.attention.setPaneTracked(101, true)`) // ALERTAGREE: a board card's pane is an agent pane; the port needs it tracked to hold the state
       await ES(`window.__mogging.attention.setPaneState(101, 'attention')`)
       await ES(`window.bridge.invoke('integrations:link:set', { cardId: ${JSON.stringify(cardId)}, input: 'acme/web#12', cadence: 0 })`)
       await ES(`window.__mogging.board.refresh()`)
@@ -312,6 +314,7 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       await ES(`window.__mogging.workspace.create({ name: 'Feedback' })`)
       await sleep(1400)
       const meta = await ES<{ id: string; ordinal: number }>(`window.__mogging.workspace.active()`)
+      await ES(`window.__mogging.attention.setPaneTracked(${meta.ordinal * 100 + 1}, true)`) // ALERTAGREE: tracked agent pane -> the close confirms on live work
       await ES(`window.__mogging.attention.setPaneState(${meta.ordinal * 100 + 1}, 'busy')`)
       await sleep(300)
       await ES(`document.querySelector('.workspace-tab[data-ws-id="${meta.id}"] .ws-close')?.click()`)

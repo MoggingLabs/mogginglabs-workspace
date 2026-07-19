@@ -63,7 +63,13 @@ export function runWsCloseSmoke(win: BrowserWindow): void {
       const paneId = meta.ordinal * 100 + 1
       const pane2 = paneId + 1
       const pane3 = paneId + 2
-      // Give the pane live work so the close must confirm.
+      // Give the pane live work so the close must confirm. ALERTAGREE: the port only holds a
+      // pane's busy once it is tracked — an agent pane is (a real launch/detection marks it),
+      // and inspectLive reads the port to decide the confirm. A busy state on a tracked pane
+      // with NO session is exactly the "still running" (not "agent session") branch 0b tests.
+      await ES(`window.__mogging.attention.setPaneTracked(${paneId}, true)`)
+      await ES(`window.__mogging.attention.setPaneTracked(${pane2}, true)`)
+      await ES(`window.__mogging.attention.setPaneTracked(${pane3}, true)`)
       await ES(`window.__mogging.attention.setPaneState(${paneId}, 'busy')`)
       await ES(`window.__mogging.attention.setPaneState(${pane2}, 'busy')`)
       await ES(`window.__mogging.attention.setPaneState(${pane3}, 'busy')`)
