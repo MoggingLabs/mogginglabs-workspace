@@ -143,6 +143,29 @@ export function createSessionAlertsCard(): HTMLElement {
   })
   sync()
 
+  // Aider has no wiring row on purpose: launched panes ring via the AIDER_NOTIFICATIONS* env,
+  // and its only global config is the user's own YAML (~/.aider.conf.yml) — a file the app
+  // will not rewrite (comments don't survive a faithful round-trip, and the house rule is
+  // refuse over clobber). The row still exists so the card answers "why doesn't my hand-typed
+  // aider ring?" instead of silently listing four CLIs of five — and it gives the fix INLINE
+  // (a settings caption pointing at a repo README is not something a user can act on). NO
+  // data-hooks-provider attribute: the GLOBALHOOKS gate counts those, and this is information,
+  // not wiring.
+  const aiderRow = el('div', { class: 'prov-item' }, [
+    el('div', { class: 'prov-row prov-row--static' }, [
+      el('div', { class: 'prov-row-main' }, [
+        el('div', { class: 'prov-row-head' }, [
+          el('span', { class: 'prov-name', text: 'Aider · global alerts' }),
+          Pill({ text: 'launch-only', tone: 'neutral' })
+        ]),
+        el('div', {
+          class: 'settings-row-caption',
+          text: 'Rings when launched by the app. A hand-typed aider needs two lines the app won’t add to your ~/.aider.conf.yml — set “notifications: true” and “notifications-command: mogging notify --event done”.'
+        })
+      ])
+    ])
+  ])
+
   return Card(
     {
       header: SectionHeader({
@@ -151,6 +174,6 @@ export function createSessionAlertsCard(): HTMLElement {
           'Agents launched by the app already ring their pane. When you type an agent at a pane’s own prompt, the app wires that CLI’s global config automatically (backup kept; outside a pane the wiring is a silent no-op). Removing it here also stops the automatic wiring for that CLI.'
       })
     },
-    [hooksList]
+    [hooksList, aiderRow]
   )
 }

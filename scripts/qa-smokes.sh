@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 165 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 166 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
-# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 143 app-boot
+# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 144 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -281,6 +281,12 @@ run_smoke CWD_INPROC  MOGGING_CWD       INPROC 180 cwd-inproc
 run_smoke GIT         MOGGING_GIT       1 240 git
 run_smoke NOTIFY      MOGGING_NOTIFY    1 180 notify
 run_smoke NOTIFYHOOK  MOGGING_NOTIFYHOOK 1 120 notifyhook
+# NOTIFYPARITY: the two SHIPPED notify artifacts — bin/mogging.mjs (hand-wired per hooks/README)
+# and the generated notify-hook script (session overlay + global wiring) — produce identical wire
+# events over the whole corpus (Claude notification types incl. unknown, Codex blobs incl.
+# malformed, argv events). They drifted once (the 2026-07-15 unknown-type→notice fix landed in
+# the generated script only); this is what keeps two copies of one mapping honest.
+run_smoke NOTIFYPARITY MOGGING_NOTIFYPARITY 1 120 notifyparity
 run_smoke GLOBALHOOKS MOGGING_GLOBALHOOKS 1 150 globalhooks
 run_smoke STATE       MOGGING_STATE     1 150 state-smoke
 run_smoke RELOAD      MOGGING_RELOAD    1 150 reload-smoke

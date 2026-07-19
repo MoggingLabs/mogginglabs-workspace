@@ -59,6 +59,9 @@ export function runFeedbackUxSmoke(win: BrowserWindow): void {
       const meta = await ES<{ id: string; ordinal: number }>(`window.__mogging.workspace.active()`)
       const wsId = meta.id
       const paneId = meta.ordinal * 100 + 1
+      // ALERTAGREE: the port accepts an agent pane's busy only once tracked — mark it so the
+      // close-confirm sees live work (a real workspace close confirms on a busy AGENT pane).
+      await ES(`window.__mogging.attention.setPaneTracked(${paneId}, true)`)
       await ES(`window.__mogging.attention.setPaneState(${paneId}, 'busy')`)
       await sleep(300)
       await ES(`document.querySelector('.workspace-tab[data-ws-id="${wsId}"] .ws-close')?.click()`)

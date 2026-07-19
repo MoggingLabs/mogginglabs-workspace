@@ -218,7 +218,11 @@ export class WorkspaceController {
     private readonly tabsEl: HTMLElement,
     private readonly hostEl: HTMLElement,
     private readonly onChange: () => void,
-    private readonly onAttention?: (anyAttention: boolean) => void,
+    /** OS-signal flags, one per refreshAttention pass: `background` = an unseen alert in a
+     *  workspace you are not in; `active` = one in the workspace you ARE in — main rings that
+     *  half only while the window itself is unfocused (a minimized window is not "you can see
+     *  it"; src/main/attention.ts owns the focus fact). */
+    private readonly onAttention?: (alert: { background: boolean; active: boolean }) => void,
     private readonly onClosed?: (meta: WorkspaceMeta) => void,
     private readonly onOpened?: (meta: WorkspaceMeta) => void
   ) {
@@ -878,6 +882,7 @@ export class WorkspaceController {
     // already in front of you, so an agent that finished while you were elsewhere told you
     // nothing at all. Backgrounded workspaces only — you can see the one you are looking at.
     let anyAlert = false
+    let activeAlert = false // an UNSEEN alert in the workspace you are in — the minimized-window half
     let attnTotal = 0
     const scanned = new Set<PaneId>()
     for (const view of this.views.values()) {
@@ -947,6 +952,10 @@ export class WorkspaceController {
       if (indicator) view.tab.dataset.attention = indicator
       else delete view.tab.dataset.attention
       if (!active && (view.attentionLatched || doneCount > 0)) anyAlert = true
+      // The active workspace's UNSEEN alerts feed the OS signal's other half: with the window
+      // unfocused (minimized, behind another app) "you can see it" is false, and main is the
+      // one who knows which. A clicked red / acked green is seen — it rings nothing.
+      if (active && unseen > 0) activeAlert = true
 
       // The outline's LATCH: an UNSEEN alert while backgrounded arms it, and only focusing the
       // workspace disarms it — the alert may not fade on its own, even if the flagged pane
@@ -959,6 +968,15 @@ export class WorkspaceController {
       view.tab.classList.toggle('is-working', !active && busy && !view.alertLatched && unseen === 0)
     }
 
+    // Panes of workspaces MID-CLOSE (the 5-second undo grace) are deliberately not scanned —
+    // a hidden workspace must not ring — but their pulse memory has to SURVIVE the grace:
+    // pruned here, an undo replayed a green swell that was already spent (news is only new
+    // once) and re-armed the rail for a red already seen. Until the grace lapses they are
+    // still this session's panes; close() disposes them and the next pass prunes for real.
+    for (const id of this.pendingClose.keys()) {
+      const pending = this.views.get(id)
+      if (pending) for (const paneId of pending.layout.paneIds()) scanned.add(paneId)
+    }
     // Prune every lifetime set to the panes that still exist. Pane ids are ordinal-derived and
     // REUSED after a workspace closes: a pane disposed mid-alert would otherwise leave its
     // entry behind, and the successor holding that id would read "already pulsed" — its first
@@ -973,7 +991,7 @@ export class WorkspaceController {
       announce(`${attnTotal} ${attnTotal === 1 ? 'pane needs' : 'panes need'} your input`)
     }
     this.lastAttnTotal = attnTotal
-    this.onAttention?.(anyAlert)
+    this.onAttention?.({ background: anyAlert, active: activeAlert })
   }
 
   /** A real click landed on a pane (GridLayout.onPaneClick — never a programmatic focus).

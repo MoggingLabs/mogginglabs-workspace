@@ -13,6 +13,7 @@ import { daemonEntryPath, helperRuntime } from './node-helper'
 import { DaemonMigrationDeferredError, migrateOlderDaemonSessions } from './daemon-migrate'
 import { sweepDeadRunDirs } from './daemon-sweep'
 import { getSettingsStore } from './app-settings'
+import { notePaneAgent, notePaneGone } from './agent-presence'
 import { resolveServiceKeyEnv } from './service-keys'
 import { onPaneStateForBridge } from './event-bridge'
 import { setDaemonHealth, setDaemonHealthRetry } from './runtime-health'
@@ -143,6 +144,7 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
         lastStates.delete(id) // no session, no state — a late sync must not repaint a dead pane
         livePaneIds.delete(id)
         cwdRevisions.delete(id)
+        notePaneGone(Number(id)) // no process, no agent — the needs-you gate must agree
         getWebContents()?.send(TerminalChannels.exit, { id: Number(id), exitCode })
       },
       onState: (id, state, gen) => {
@@ -199,7 +201,12 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
       // appeared (or left). Gen-gated like every other pane event — a dead generation's
       // verdict must never claim the reused id's brand-new pane.
       onAgent: (id, agentId, cwd, sinceMs, gen) => {
-        if (current(id, gen)) getWebContents()?.send(TerminalChannels.agent, { id: Number(id), agentId, cwd, sinceMs })
+        if (!current(id, gen)) return
+        // The needs-you gate's second feeder (agent-presence.ts): detection covers hand-typed
+        // CLIs the launch path never saw, and the daemon replays each pane's detected agent on
+        // attach — so a restart over a surviving daemon re-learns presence without a launch.
+        notePaneAgent(Number(id), agentId != null)
+        getWebContents()?.send(TerminalChannels.agent, { id: Number(id), agentId, cwd, sinceMs })
       },
       // Filtered at the boundary, not at the consumer: this push paints the board's
       // "Approved by the reviewer" ✓, and a chip that lies is the same bug as a gate that

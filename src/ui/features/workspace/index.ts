@@ -32,7 +32,7 @@ import { onAgentLaunchRequest, onProfileFailover } from '../../core/agents/launc
 import { onPaneAgentSession } from '../../core/agents/agent-session-port'
 import { activeView, setActiveView } from '../../core/shell/view-port'
 import { setCommands } from '../../core/commands/command-port'
-import { setPaneState } from '../../core/attention/attention-port'
+import { setPaneState, setPaneTracked } from '../../core/attention/attention-port'
 import { setPaneRole } from '../../core/layout/pane-meta'
 import { getPaneCwdProjection, onPaneCwdProjection } from '../../core/layout/pane-cwd'
 
@@ -446,7 +446,7 @@ export const workspaceFeature: UiFeature = {
         persist()
         updateRailFade()
       },
-      (anyAttention) => workspaceClient.setAttention(anyAttention),
+      (alert) => workspaceClient.setAttention(alert),
       touchRecent, // closing keeps the project's final layout in recents
       touchRecent // opening/working on a project bumps it to the top
     )
@@ -975,7 +975,10 @@ function exposeForDev(controller: WorkspaceController): void {
     }
   }
   w.__mogging.attention = {
-    setPaneState: (id: number, state: string) => setPaneState(id as PaneId, state as AgentState)
+    setPaneState: (id: number, state: string) => setPaneState(id as PaneId, state as AgentState),
+    // The tracked gate (ALERTAGREE): smokes must claim a pane the way a real session would,
+    // or the port refuses its states — which is itself the first thing the gate asserts.
+    setPaneTracked: (id: number, tracked: boolean) => setPaneTracked(id as PaneId, tracked)
   }
   // View switcher for the CHROMEUX smoke (bug #11: the grid picker must be ABSENT off
   // the grid). setActiveView is the real port the titlebar view buttons call.

@@ -43,6 +43,7 @@ import {
 } from '../../core/agents/mcp-status-port'
 import { getPaneContext, onPaneContext, type PaneContext } from '../../core/terminal/context-port'
 import { clearPaneAgentSession, getPaneAgentSession, onPaneAgentSession } from '../../core/agents/agent-session-port'
+import { isTrackedSession } from '../../core/attention/tracking'
 import { assignmentForPane, getWorkspaces, workspaceIdForPane } from '../../core/workspace/workspace-info-port'
 import { claimsFor, onClaimsChange, setClaimsForDev, workspaceClaims } from './claims-store'
 import { createPaneAnchor, type PaneAnchorHandle } from './pane-anchor'
@@ -1542,13 +1543,16 @@ export class TerminalPane {
     this.disposers.push(onPaneAgentSession((paneId, s) => {
       if (paneId !== this.id || this.disposed) return
       if (state.dataset.state === 'exited') return
-      const tracked = !!s && !s.provider.startsWith('custom:')
+      // The SAME predicate the attention port's tracked gate runs on (core/attention/
+      // tracking.ts wires it port-side): the dot's availability and the port's willingness
+      // to hold state are one law, declared once. The port clears an untracked pane's
+      // state itself — this handler only paints.
+      const tracked = isTrackedSession(s)
       if (state.hidden === !tracked) return // already in the right visibility
       state.hidden = !tracked
       if (tracked) {
         this.syncState?.() // appear with the truth, not the mount default
       } else {
-        clearPaneState(this.id) // an untracked pane must not hold the rail's attention
         state.dataset.state = 'unknown'
         state.title = 'completion tracking not available for this agent'
       }

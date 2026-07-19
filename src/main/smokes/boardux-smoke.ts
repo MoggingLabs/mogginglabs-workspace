@@ -46,6 +46,11 @@ export function runBoardUxSmoke(win: BrowserWindow): void {
         if (c) { await window.bridge.invoke('board:patch', { id: c.id, patch: { paneId: 101, workspaceId: 'fx-ws' } }); await window.__mogging.board.refresh() }
         return 1
       })()`)
+      // ALERTAGREE: a card's pane is an AGENT pane (that is why it is on the board), so the
+      // port only accepts its state once it is tracked — mark it, exactly as a real launch/
+      // detection would (the board/verdictlive gates reach this via a real session). Without
+      // this the tracked gate drops the state and the attention chip never renders.
+      await ES(`window.__mogging.attention.setPaneTracked(101, true)`)
       await ES(`window.__mogging.attention.setPaneState(101, 'attention')`)
       await ES(`window.bridge.invoke('integrations:link:set', { cardId: ${JSON.stringify(cardId)}, input: 'acme/web#12', cadence: 0 })`)
       await ES(`window.__mogging.board.refresh()`)
