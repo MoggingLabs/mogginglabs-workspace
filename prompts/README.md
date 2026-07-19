@@ -20,7 +20,7 @@ Roadmap: `docs/02-mvp-and-roadmap.md`.
 | 0 | `phase-0/` | done | Parity spike: one PTY pane hosting a real agent CLI, Win/Mac parity (validates ADR 0001) |
 | 1 | `phase-1/` | done | MVP core: daemon PTY-host, SQLite restore, multi-pane, workspace tabs + `mogging .` + themes, agent launcher + provider-mix templates (06b), signed auto-updating packaging |
 | 2 | `phase-2/` | done | Agent awareness: OSC hardening + tab rings, command blocks, per-pane git, `mogging notify` + hooks, 16-agent perf milestone |
-| 2.5 | *(future)* | — | Memory graph (the differentiator): `.memory/` wikilink graph — mounts as tools on the phase-8 MCP server |
+| 2.5 | superseded → 12 | — | Memory graph (the differentiator): `.memory/` wikilink graph — absorbed whole into `phase-12/` (step 09) as one lens on the Workspace Brain |
 | 3 | `phase-3/` | done | Orchestration: worktree-per-agent + diff review, Kanban launcher, control API |
 | 4 | `phase-4/` | done | Differentiators: swarm (mailbox/roles/ledger/gate), SSH/remote, profiles + failover, Linux target |
 | 5 | `phase-5/` | done | UI/UX excellence: token system + workspace identity, icon family, window chrome, full-app views (receipts: `phase-5/REPORT.md`) |
