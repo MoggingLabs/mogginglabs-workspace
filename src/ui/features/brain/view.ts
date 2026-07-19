@@ -23,16 +23,18 @@ import {
 } from './client'
 import {
   EDGE_KIND_TOKENS,
+  FOCUS_DEFAULT_DEPTH,
   FOCUS_NODE_CAP,
   createGraphCanvas,
   fetchCodeFocus,
   fetchMemoryFocus,
   memSlugOf,
+  type FocusDepth,
   type FocusGraph,
   type FocusNode
 } from './graph'
 import { renderInspector, type InspectorModel } from './inspector'
-import { renderReader, renderWanted } from './reader'
+import { hideMemoryPreview, renderReader, renderWanted, type MemoryPreview } from './reader'
 
 /**
  * The Brain view (ADR 0018/10): the workspace index made VISIBLE — status, the
@@ -74,6 +76,7 @@ export function createBrainView(): BrainView {
   let overview: BrainOverviewAnswer | null = null
   let rebuildBusy = false
   let mode: 'graph' | 'reader' = 'graph'
+  let depth: FocusDepth = FOCUS_DEFAULT_DEPTH
   let focus: Focus | null = null
   let focusGraph: FocusGraph | null = null
   let focusRefused: string | null = null
@@ -193,7 +196,35 @@ export function createBrainView(): BrainView {
   })
   const searchList = el('div', { class: 'brain-search-list', role: 'listbox', hidden: true, attrs: { id: LISTBOX_ID } })
   const capChip = el('span', { class: 'brain-chip brain-chip-capped', hidden: true, title: `The lens caps at ${FOCUS_NODE_CAP} nodes — it is a window, not the graph` })
-  const searchRow = el('div', { class: 'brain-search' }, [searchInput, capChip, searchList])
+  // Graph depth (revision B): rings around the focus. 2 is the default fetch;
+  // 1 is direct neighbors; 3 buys one more voted expansion, same node cap.
+  const depthBtns = ([1, 2, 3] as const).map((d) =>
+    el('button', {
+      class: 'brain-depth-btn',
+      type: 'button',
+      text: String(d),
+      title: d === 1 ? 'Direct neighbors only' : d === 2 ? 'Two rings — the default window' : `Three rings, still capped at ${FOCUS_NODE_CAP} nodes`,
+      onClick: () => setDepth(d)
+    })
+  )
+  const depthNav = el('div', { class: 'brain-depth', role: 'group', ariaLabel: 'Graph depth' }, [
+    el('span', { class: 'brain-depth-label', text: 'Depth' }),
+    ...depthBtns
+  ])
+  const renderDepth = (): void =>
+    depthBtns.forEach((b, i) => {
+      const on = i + 1 === depth
+      b.classList.toggle('is-active', on)
+      b.setAttribute('aria-pressed', String(on))
+    })
+  renderDepth()
+  function setDepth(d: FocusDepth): void {
+    if (d === depth) return
+    depth = d
+    renderDepth()
+    if (focus) void focusOn(focus)
+  }
+  const searchRow = el('div', { class: 'brain-search' }, [searchInput, depthNav, capChip, searchList])
   // Contextual: only the kinds actually on screen earn a row (rebuilt per focus).
   const legend = el('div', { class: 'brain-legend', ariaLabel: 'Edge kinds', hidden: true })
   function renderLegend(graph: FocusGraph | null): void {
@@ -324,6 +355,25 @@ export function createBrainView(): BrainView {
           'Wikilink targets no memory is written for — wanted knowledge, not an error'
         )
       )
+      // Revision B: what the .memory/ scan refused to index — a row only when
+      // there is something to say, and never silence when there is.
+      const sk = o.memorySkips
+      const skParts = [
+        sk.invalid ? `${sk.invalid} invalid` : '',
+        sk.tooLarge ? `${sk.tooLarge} too large` : '',
+        sk.foreign ? `${sk.foreign} foreign` : '',
+        sk.capped ? 'capped' : ''
+      ].filter(Boolean)
+      if (skParts.length) {
+        statHost.append(
+          statRow(
+            'brain-stat-memskips',
+            'Memory files skipped',
+            skParts.join(' · '),
+            'Files in .memory/ the scan refused to index — non-slug names, foreign extensions, unreadable frontmatter — counted, never silent'
+          )
+        )
+      }
     }
     const dirty = s.dirty
     genChip.hidden = false
@@ -348,6 +398,7 @@ export function createBrainView(): BrainView {
     canvas.el.hidden = !lens || mode !== 'graph'
     readerHost.hidden = !lens || mode !== 'reader'
     legend.hidden = !lens || mode !== 'graph' || !legend.childElementCount
+    depthNav.hidden = !lens || mode !== 'graph'
     searchRow.hidden = !lens
     searchList.hidden = searchList.hidden || !lens
     stateHost.hidden = lens
@@ -462,6 +513,17 @@ export function createBrainView(): BrainView {
     }
   }
 
+  // The hover preview's material, cached per slug and cleared per GENERATION —
+  // a stale preview would quietly contradict the reader beside it.
+  const previewCache = new Map<string, MemoryPreview | null>()
+  let previewCacheGen = -1
+  const syncPreviewCache = (generation: number): void => {
+    if (generation !== previewCacheGen) {
+      previewCacheGen = generation
+      previewCache.clear()
+    }
+  }
+
   const readerDeps = {
     onNavigate: (slug: string): void => {
       reader = { slug }
@@ -471,6 +533,17 @@ export function createBrainView(): BrainView {
     },
     onFocusGraph: (slug: string): void => {
       void focusOn({ kind: 'memory', slug })
+    },
+    getPreview: async (slug: string): Promise<MemoryPreview | null> => {
+      if (previewCache.has(slug)) return previewCache.get(slug) ?? null
+      const got = await brainRead(projectRoot, 'brain.memGet', { slug })
+      let p: MemoryPreview | null = null
+      if (got.ok) {
+        const m = got.memory as BrainMemoryOut
+        p = { name: m.name, description: m.description, snippet: m.body.replace(/\s+/g, ' ').trim().slice(0, 240) }
+      }
+      previewCache.set(slug, p)
+      return p
     }
   }
 
@@ -483,7 +556,9 @@ export function createBrainView(): BrainView {
     focusGraph = null
     renderMain()
     const result =
-      next.kind === 'code' ? await fetchCodeFocus(projectRoot, next.id) : await fetchMemoryFocus(projectRoot, next.slug)
+      next.kind === 'code'
+        ? await fetchCodeFocus(projectRoot, next.id, depth)
+        : await fetchMemoryFocus(projectRoot, next.slug, depth)
     // A slower older fetch must not clobber a newer focus (async-state law).
     if (focus !== next) return
     if ('refused' in result) {
@@ -656,6 +731,7 @@ export function createBrainView(): BrainView {
     const [s, o] = await Promise.all([brainStatus(projectRoot), brainOverview(projectRoot)])
     status = s
     overview = o
+    if (s.ok) syncPreviewCache(s.generation)
     renderStatus()
     renderMain()
     if (s.ok && s.indexing) schedulePoll()
@@ -713,6 +789,9 @@ export function createBrainView(): BrainView {
       inspector = null
       searchHits = []
       searchInput.value = ''
+      previewCache.clear()
+      previewCacheGen = -1
+      hideMemoryPreview()
       closeSearchList()
       canvas.setGraph(null)
       renderLegend(null)
@@ -739,6 +818,7 @@ export function createBrainView(): BrainView {
       const oldGen = s?.ok ? s.generation : -1
       status = ns
       overview = no
+      if (ns.ok) syncPreviewCache(ns.generation)
       renderStatus()
       renderMain()
       // A new generation redraws the lens — the layout is deterministic PER
@@ -753,6 +833,7 @@ export function createBrainView(): BrainView {
       mode,
       active,
       focus,
+      depth,
       refused: focusRefused,
       capped: focusGraph?.capped ?? false,
       nodes: focusGraph?.nodes.length ?? 0,
@@ -795,6 +876,26 @@ export function createBrainView(): BrainView {
     statusText: () => statHost.textContent ?? '',
     chip: () => ({ gen: genChip.textContent, dirty: dirtyChip.textContent, indexing: !indexingChip.hidden }),
     rebuild: () => void runRebuild(),
+    refresh: () => {
+      refresh()
+      return true
+    },
+    setDepth: (d: number) => {
+      if (d === 1 || d === 2 || d === 3) setDepth(d)
+      return depth
+    },
+    propsProbe: () => {
+      const panel = readerHost.querySelector('.brain-props')
+      return {
+        keys: panel ? [...panel.querySelectorAll('.brain-prop-key')].map((n) => n.textContent ?? '') : [],
+        values: panel ? [...panel.querySelectorAll('.brain-prop-value')].map((n) => n.textContent ?? '') : [],
+        activeContent: panel ? panel.querySelectorAll('script, img, style, iframe, object, embed, svg').length : -1
+      }
+    },
+    previewProbe: () => {
+      const p = document.querySelector('.brain-preview') as HTMLElement | null
+      return { visible: !!p && !p.hidden, text: p?.textContent ?? '' }
+    },
     stageProgress: (on: boolean) => {
       rebuildBusy = on
       renderMain()
@@ -809,7 +910,10 @@ export function createBrainView(): BrainView {
     setActive: (on: boolean): void => {
       active = on
       if (on && staleWhileHidden) refresh()
-      if (!on) window.clearTimeout(pollTimer)
+      if (!on) {
+        window.clearTimeout(pollTimer)
+        hideMemoryPreview() // the card floats on document.body — never outlive the view
+      }
     },
     onChangedPush,
     dev

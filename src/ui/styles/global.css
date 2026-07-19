@@ -11154,6 +11154,102 @@ body.pane-dragging * {
   font-size: var(--fs-12);
 }
 
+/* Properties (ADR 0018 revision B): the extra frontmatter keys, key-sorted.
+   Values are agent-written bytes rendered as textContent — styling here never
+   touches markup content could inject. */
+.brain-props {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--sp-1) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-12);
+  max-width: var(--measure);
+}
+.brain-prop-key {
+  color: var(--text-lo);
+  overflow-wrap: anywhere;
+}
+.brain-prop-value {
+  margin: 0;
+  color: var(--text-hi);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+/* The wikilink hover preview (revision B): one floating card on document.body,
+   fixed-positioned by the reader, no animation — becalmed-safe by construction. */
+.brain-preview {
+  position: fixed;
+  z-index: 60; /* the search list's layer family; below any modal scrim */
+  width: min(360px, calc(100vw - 16px));
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-2);
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  pointer-events: none; /* a peek, not a surface — it must never eat the click */
+}
+.brain-preview-name {
+  margin: 0;
+  color: var(--text-hi);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  overflow-wrap: anywhere;
+}
+.brain-preview-desc {
+  margin: 0;
+  color: var(--text-mid);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+.brain-preview-snippet {
+  margin: 0;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  overflow-wrap: anywhere;
+}
+
+/* Graph depth (revision B): a three-stop group beside the search box. */
+.brain-depth {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.brain-depth-label {
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  margin-right: var(--sp-1);
+}
+.brain-depth-btn {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-mid);
+  font: inherit;
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  padding: 1px var(--sp-2);
+  cursor: pointer;
+}
+.brain-depth-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-hi);
+}
+.brain-depth-btn.is-active {
+  /* The lens buttons' AA-proven active recipe, verbatim. */
+  background: var(--bg-elevated);
+  color: var(--text-hi);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-1);
+}
+
 /* The inspector. */
 .brain-inspector {
   width: 300px;

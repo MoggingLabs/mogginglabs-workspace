@@ -56,13 +56,19 @@ export {
   MEMORY_MAX_FILES,
   MEMORY_MAX_FILE_BYTES,
   MEMORY_SUGGEST_WEIGHTS,
+  MEMORY_FILTER_MAX_CLAUSES,
+  MEMORY_MAX_PROPS,
+  MEMORY_PROP_VALUE_MAX,
+  MEMORY_RESERVED_KEYS,
   isMemorySlug,
   memorySlug,
   memoryLinksOf,
+  parseMemoryFilter,
   parseMemoryText,
   scanMemoryDir,
   serializeMemory,
   type MemoryFileRow,
+  type MemoryFilterClause,
   type MemoryScan
 } from './memory'
 export {
@@ -419,14 +425,23 @@ export class BrainService {
       // An uncommitted memory file is re-announced by porcelain EVERY tick;
       // identical bytes must not re-land (the standing-dirty-repo rule). The
       // baseline is what the STORE holds — never a process-memory cache that
-      // could survive a db delete and lie about it.
-      const fingerprint = scan.rows.map((row) => `${row.slug}:${row.hash}`).join('\n')
-      const held = r.brain.store
-        .memoriesForRoots([partitionRoot])
-        .map((row) => `${row.slug}:${row.hash}`)
-        .join('\n')
+      // could survive a db delete and lie about it. The fingerprint carries
+      // the SKIP COUNTS too (revision B): a newly-appeared foreign or invalid
+      // file changes no row, and rows alone would never land it.
+      const skipsOf = (s: { invalid: number; tooLarge: number; foreign: number }, capped: boolean): string =>
+        `#skips ${s.invalid}/${s.tooLarge}/${s.foreign}/${capped ? 1 : 0}`
+      const fingerprint =
+        scan.rows.map((row) => `${row.slug}:${row.hash}`).join('\n') + '\n' + skipsOf(scan.skipped, scan.capped)
+      const heldScan = r.brain.store.memoryScan(partitionRoot)
+      const held =
+        r.brain.store
+          .memoriesForRoots([partitionRoot])
+          .map((row) => `${row.slug}:${row.hash}`)
+          .join('\n') +
+        '\n' +
+        (heldScan ? skipsOf(heldScan, heldScan.capped) : '#skips never-landed')
       if (fingerprint !== held) {
-        r.brain.store.replaceMemories(partitionRoot, scan.rows, scan.links)
+        r.brain.store.replaceMemories(partitionRoot, scan.rows, scan.links, scan.skipped, scan.capped)
         this.memRescanCount += 1
       }
       // Revision A: EVERY drain offers the embed pass — even a no-change rescan

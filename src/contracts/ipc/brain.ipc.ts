@@ -138,6 +138,19 @@ export interface BrainSemConfig {
   keySlot: { kind: 'keychain' } | { kind: 'env-ref'; envRef: string } | { kind: 'none' }
 }
 
+/** `.memory/` files the scan refused to index, summed across the project's
+ *  roots (ADR 0018 revision B) — counted honestly, shown only when nonzero. */
+export interface BrainMemorySkips {
+  /** Non-slug filenames, unreadable frontmatter, binaries. */
+  invalid: number
+  /** Files past the per-file byte cap. */
+  tooLarge: number
+  /** Non-`.md` entries and subdirectories (an Obsidian vault drops these). */
+  foreign: number
+  /** TRUE when any root's flat-dir scan hit its file cap. */
+  capped: boolean
+}
+
 /**
  * `brain:overview` — the status card's extras: numbers the store already holds
  * that BrainStatus does not carry. Same request shape as `brain:status`, same
@@ -151,6 +164,8 @@ export interface BrainOverview {
   danglingLinks: number
   /** Lockfile-truth dependency counts for the caller's partition, per ecosystem. */
   ecosystems: BrainEcosystemCount[]
+  /** Honest `.memory/` skip counts (revision B) — the "skipped" row's truth. */
+  memorySkips: BrainMemorySkips
 }
 
 export type BrainOverviewAnswer = BrainOverview | BrainRefusal

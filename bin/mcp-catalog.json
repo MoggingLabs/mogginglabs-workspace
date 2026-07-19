@@ -725,12 +725,13 @@
   {
     "name": "search_memories",
     "title": "Search team memories",
-    "description": "Full-text search over the TEAM'S memory graph — the plain-markdown notes in this project's .memory/ (decisions, gotchas, conventions, pointers), synced by git like any other file. Deterministic FTS5 bm25 ranking over name, description, and body: the same query over the same files always answers in the same order. Memories are read PROJECT-WIDE — the freshest copy across this project's checkouts wins, and every hit is labeled with the checkout (root) it came from. Free to call. Fuzzy modes exist behind a per-workspace opt-in: mode 'semantic' ranks by embedding similarity from the workspace's OWN configured endpoint, 'hybrid' blends that with FTS by fixed weights and serves the full breakdown per hit — every fuzzy hit is labeled probabilistic:true with the provider and model that scored it. The default mode 'exact' is deterministic, needs no consent, and is unchanged by the lens existing.",
+    "description": "Full-text search over the TEAM'S memory graph — the plain-markdown notes in this project's .memory/ (decisions, gotchas, conventions, pointers), synced by git like any other file. Deterministic FTS5 bm25 ranking over name, description, and body: the same query over the same files always answers in the same order. Memories are read PROJECT-WIDE — the freshest copy across this project's checkouts wins, and every hit is labeled with the checkout (root) it came from. Free to call. An optional filter narrows candidates by tags and frontmatter properties BEFORE ranking, in every mode. Fuzzy modes exist behind a per-workspace opt-in: mode 'semantic' ranks by embedding similarity from the workspace's OWN configured endpoint, 'hybrid' blends that with FTS by fixed weights and serves the full breakdown per hit — every fuzzy hit is labeled probabilistic:true with the provider and model that scored it. The default mode 'exact' is deterministic, needs no consent, and is unchanged by the lens existing.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "query": { "type": "string", "description": "Free-text terms (implicit AND). Plain words only — FTS syntax is treated as words." },
         "mode": { "type": "string", "enum": ["exact", "semantic", "hybrid"], "description": "Default exact (deterministic, always answers, offline). semantic/hybrid need this workspace's semantic-memory permission plus its own embedding endpoint, and refuse typed without them." },
+        "filter": { "type": "string", "description": "Optional property filter: comma-joined AND clauses, max 8 — #tag (tag membership) · key (property present) · key=value (exact; the value runs to the comma). Reserved frontmatter keys (name, description, tags) refuse typed — filter tags with #tag. Zero matches answer ok with an empty list." },
         "limit": { "type": "number", "description": "Max results, 1-100 (default 20)." },
         "root": { "type": "string", "description": "Absolute project root — ONLY for sessions outside a pane." }
       },
@@ -744,7 +745,7 @@
   {
     "name": "get_memory",
     "title": "Get one memory",
-    "description": "Read one memory in full by slug: description, tags, the markdown body, its outgoing [[wikilinks]] (each flagged dangling when its target is not written yet — a dangling link is VALID and marks wanted knowledge), its backlinks (memories that link here, derived from the index, never stored in files), and fileHash — the sha256 an update_memory compare-and-swaps against. Served from the freshest copy across this project's checkouts, root-labeled. An unwritten slug answers a typed unknown-memory refusal that says whether anything links to it.",
+    "description": "Read one memory in full by slug: description, tags, properties (the extra frontmatter keys — Obsidian's convention, key-sorted inert text), the markdown body, its outgoing [[wikilinks]] (each flagged dangling when its target is not written yet — a dangling link is VALID and marks wanted knowledge), its backlinks (memories that link here, derived from the index, never stored in files), and fileHash — the sha256 an update_memory compare-and-swaps against. Served from the freshest copy across this project's checkouts, root-labeled. An unwritten slug answers a typed unknown-memory refusal that says whether anything links to it.",
     "inputSchema": {
       "type": "object",
       "properties": {

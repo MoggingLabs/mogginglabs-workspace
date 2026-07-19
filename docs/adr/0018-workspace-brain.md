@@ -4,7 +4,9 @@
   identity, lifecycle, status, typed refusals (`BrainService`, `brain:*`, the BRAINCORE
   gate) — before any graph exists, so every later step inherits them instead of
   retrofitting them. **Revision A (2026-07-19)** adds the LENS LAW — the one bounded
-  amendment to stance (a) — for the semantic memory lens.
+  amendment to stance (a) — for the semantic memory lens. **Revision B (2026-07-19)**
+  records the VAULT STANCE: `.memory/` is an Obsidian-compatible vault by
+  construction, with properties, a closed filter grammar, and honest skips.
 - **Relates to:** ADR 0004 (layering: contracts / backend / main), ADR 0005 (what may
   reach telemetry), ADR 0008 §b (protocols, not plugins — nothing new listens),
   docs/[02-mvp-and-roadmap.md](../02-mvp-and-roadmap.md) §Phase 12 (the roadmap entry
@@ -243,6 +245,63 @@ and hybrid components sum; an unchanged re-drain embeds nothing (counted) and
 one edit embeds exactly one; a model swap re-embeds on the next drain; the
 pasted key resolves in process while its plaintext greps to ZERO files at rest;
 and the lens off leaves step 09's surface untouched.
+
+## Revision B — the Obsidian alignment (the vault stance)
+
+Step 09 chose plain markdown, one-line frontmatter, and filename-resolved
+`[[wikilinks]]` for `.memory/` — which happens to be, clause for clause, the
+format Obsidian's millions of users already know. This revision makes that
+alignment a RECORDED LAW instead of a coincidence, in three clauses:
+
+- **(B1) An Obsidian-compatible vault BY CONSTRUCTION.** The same wikilink
+  syntax, the same frontmatter tags, links resolved by FILENAME (the slug IS
+  the filename; the dir is flat) — so pointing Obsidian at
+  `<checkout>/.memory/` gives its editor, backlinks, graph, and search for
+  free, and **git stays the sync** (no Obsidian Sync, no plugin, no
+  dependency, nothing of Obsidian's in the tree). Obsidian — and its Bases
+  properties/filter shape — is a SHAPE target only, a code wall harder than
+  Elastic-2.0's (the app is proprietary): read the conventions, never the
+  code. And one convention is refused FOREVER: executable query blocks
+  embedded in notes. A memory is inert bytes; bytes that run queries are a
+  lens hiding inside data, and every lens here is a verb with laws.
+- **(B2) Foreign files are counted, never indexed.** Obsidian (or any editor)
+  drops non-slug filenames, attachments, and config dirs into a vault. The
+  scan already SKIPPED everything that is not `<slug>.md`; it now COUNTS what
+  it skips — `memory_scan(root, invalid, too_large, foreign_files, capped)`,
+  replaced whole per rescan, and the rescan fingerprint includes the counts,
+  so a newly-appeared skipped file still lands a rescan rows alone would not.
+  The app SHOWS the count (`brain:overview.memorySkips`, the Brain view's
+  "Memory files skipped" row, only when nonzero): stance (a)'s "refused
+  honestly", applied per file.
+- **(B3) Properties, and the one filter.** Frontmatter lines beyond the
+  reserved three (`name`, `description`, `tags`) are PROPERTIES — Obsidian's
+  own convention, parsed under a fixed law: one `key: value` per line, last
+  occurrence wins, values control-stripped and capped
+  (`MEMORY_PROP_VALUE_MAX = 500`), keys SORTED, the first
+  `MEMORY_MAX_PROPS = 32` kept; a malformed KEY line stays a whole-file
+  `invalid` (the parse law is unchanged). Properties are inert bytes end to
+  end: indexed (`memory_props`), served by `get_memory` as `properties`,
+  rendered textContent-only — never interpreted. Over them, `search_memories`
+  gains ONE optional `filter` string with a CLOSED grammar — data, not code:
+  comma-joined AND clauses, at most 8; `#tag` (tag membership) · `key`
+  (property presence) · `key=value` (exact; the value runs to the comma).
+  Reserved keys and junk refuse `invalid`, typed and teaching; zero matches
+  answer `ok:true` with an empty list; the filter applies in EVERY mode
+  BEFORE ranking; and a filter-absent call answers byte-identically to
+  step 09's dispatch.
+
+Proven by **BRAINPROPS** (`MOGGING_BRAINPROPS`, verdict
+`out/brainprops-result.json`): a 40-property memory serves exactly 32 sorted
+keys with last-wins and capped values; the whole filter matrix (`=`,
+presence, `#tag`, AND, a miss answering `ok:true` empty, reserved/junk
+refusing typed); the filter composing with semantic AND hybrid modes with
+their probabilistic labels intact; a filter-absent hit carrying not one new
+field; `memorySkips` counting a seeded invalid + foreign file and a
+runtime-ADDED foreign file landing through the skips-aware fingerprint; and
+the reader's properties panel (hostile values inert), the 250ms wikilink
+hover preview (shows, hides, Escapes, never for dangling), graph depth
+1|2|3 with depth 2 byte-identical to the default fetch, and the skipped
+row on screen.
 
 ## Research lineage
 

@@ -109,6 +109,7 @@ import { runBrainMapSmoke } from './smokes/brainmap-smoke'
 import { runBrainWriteSmoke } from './smokes/brainwrite-smoke'
 import { runBrainDocsSmoke } from './smokes/braindocs-smoke'
 import { runMemGraphSmoke } from './smokes/memgraph-smoke'
+import { runBrainPropsSmoke } from './smokes/brainprops-smoke'
 import { runBrainSemSmoke } from './smokes/brainsem-smoke'
 import { runBrainUxSmoke } from './smokes/brainux-smoke'
 import { runBoardMcpSmoke } from './smokes/boardmcp-smoke'
@@ -198,7 +199,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
   'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_RUNTIMESPLIT', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
-  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_BRAINCORE', 'MOGGING_BRAINPARSE', 'MOGGING_BRAINGRAPH', 'MOGGING_BRAINFRESH', 'MOGGING_BRAINMCP', 'MOGGING_BRAINMAP', 'MOGGING_BRAINWRITE', 'MOGGING_BRAINDOCS', 'MOGGING_MEMGRAPH', 'MOGGING_BRAINSEM', 'MOGGING_BRAINUX', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
+  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_BRAINCORE', 'MOGGING_BRAINPARSE', 'MOGGING_BRAINGRAPH', 'MOGGING_BRAINFRESH', 'MOGGING_BRAINMCP', 'MOGGING_BRAINMAP', 'MOGGING_BRAINWRITE', 'MOGGING_BRAINDOCS', 'MOGGING_MEMGRAPH', 'MOGGING_BRAINSEM', 'MOGGING_BRAINPROPS', 'MOGGING_BRAINUX', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
   'MOGGING_PROFILES', 'MOGGING_LOGINTRUTH', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
   // Typed-launch detection + the context gauge (the v6 pack).
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
@@ -529,6 +530,8 @@ function afterWindow(win: BrowserWindow): void {
     runMemGraphSmoke(win) // env-gated memory-graph smoke: `.memory/` wikilink lens — hostile-name create inert, exact backlinks + dangling, stable FTS order, auditable suggestions, stale CAS, pane-edit reindex on the tick, real-git merge carries a memory home, db delete rebuilds from files (ADR 0018 step 09)
   } else if (process.env.MOGGING_BRAINSEM) {
     runBrainSemSmoke(win) // env-gated semantic-lens smoke: the LENS LAW — consent-typed refusals with exact byte-identical, FAKE-embedder value proof (semantic finds what unstemmed FTS misses), probabilistic labels + hybrid RRF sums, content-hash re-embed counting, model-swap invalidation, vaulted key with zero plaintext at rest, single-fire failure toast, zero network (ADR 0018 revision A)
+  } else if (process.env.MOGGING_BRAINPROPS) {
+    runBrainPropsSmoke(win) // env-gated vault-stance smoke: Obsidian-convention properties (sorted, capped, last-wins), the closed filter grammar in every mode with typed refusals, honest memorySkips + the skips-aware rescan fingerprint, the reader's properties panel + wikilink hover preview + graph depth 1|2|3, AA + counts-only telemetry (ADR 0018 revision B)
   } else if (process.env.MOGGING_BRAINUX) {
     runBrainUxSmoke(win) // env-gated Brain-VIEW smoke: palette + Ctrl+Shift+M doors, status card == brain:status truth with a LIVE pane-edit drain on screen, hub focus ≤150 on the canvas, inspector + explorer-reveal delegation, hostile memory rendered inert + wikilink nav + dangling dimmed, becalmed two-frame identity, AA on every new ink, counts-only telemetry (ADR 0018/10)
   } else if (process.env.MOGGING_SETSHELL) {

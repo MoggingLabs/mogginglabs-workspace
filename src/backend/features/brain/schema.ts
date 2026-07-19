@@ -76,7 +76,14 @@ export interface BrainEdgeRow {
  *  replaced on the next drain and never served under another model's name).
  *  Probabilistic state, doubly disposable — deleting the db loses nothing, and
  *  the deterministic lenses never read this table. Excluded from the canonical
- *  dump by nature. */
+ *  dump by nature.
+ *  v7 (ADR 0018 revision B) adds the vault stance's two tables: memory_props is
+ *  each memory's inert Obsidian-convention properties (sorted, capped rows the
+ *  parse law already fixed); memory_scan is ONE row per root of honest skip
+ *  counts (foreign_files because FOREIGN is SQLite-reserved) — what the flat
+ *  scan refused to index, counted so the app can say so. Both are replaced
+ *  whole per rescan, generation-neutral, and excluded from the canonical dump
+ *  like the rest of the memory lens. */
 export const BRAIN_GRAPH_DDL = `
 CREATE TABLE IF NOT EXISTS files (
   root TEXT NOT NULL, path TEXT NOT NULL, hash TEXT NOT NULL, lang TEXT NOT NULL,
@@ -131,6 +138,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
 CREATE TABLE IF NOT EXISTS memory_vectors (
   slug TEXT PRIMARY KEY, contentHash TEXT NOT NULL, model TEXT NOT NULL,
   dim INTEGER NOT NULL, vec BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS memory_props (
+  root TEXT NOT NULL, slug TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
+  PRIMARY KEY (root, slug, key)
+);
+CREATE TABLE IF NOT EXISTS memory_scan (
+  root TEXT PRIMARY KEY, invalid INTEGER NOT NULL, too_large INTEGER NOT NULL,
+  foreign_files INTEGER NOT NULL, capped INTEGER NOT NULL
 );
 `
 

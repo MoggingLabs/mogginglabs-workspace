@@ -18,6 +18,79 @@ export interface ReaderDeps {
   onNavigate(slug: string): void
   /** Focus the graph lens on this memory. */
   onFocusGraph(slug: string): void
+  /** One slug's hover-preview material (the view caches per slug, cleared per
+   *  generation). Null = nothing to preview — the card never shows. */
+  getPreview(slug: string): Promise<MemoryPreview | null>
+}
+
+// ── The wikilink hover preview (revision B) ──────────────────────────────────
+// One floating card for the whole app, textContent only, no animation (becalmed
+// -safe by construction). Shows after a deliberate dwell; hover and keyboard
+// focus are PEERS (enter/leave = focus/blur); Escape and any scroll dismiss.
+// A dangling target never previews — there is nothing behind it to show.
+
+export const MEMORY_PREVIEW_DELAY_MS = 250
+
+export interface MemoryPreview {
+  name: string
+  description: string
+  snippet: string
+}
+
+let previewEl: HTMLElement | null = null
+let previewTimer = 0
+/** Monotonic hover token: only the LATEST schedule may show its answer. */
+let previewToken = 0
+
+function previewHost(): HTMLElement {
+  if (!previewEl) {
+    previewEl = el('div', { class: 'brain-preview', role: 'tooltip', hidden: true })
+    document.body.append(previewEl)
+    // A VISIBLE preview owns Escape (layered dismissal — the view's own
+    // Esc-back must not fire under it); scroll anywhere just dismisses.
+    document.addEventListener(
+      'keydown',
+      (e) => {
+        if (e.key === 'Escape' && previewEl && !previewEl.hidden) {
+          e.stopPropagation()
+          hideMemoryPreview()
+        }
+      },
+      true
+    )
+    document.addEventListener('scroll', () => hideMemoryPreview(), { capture: true, passive: true })
+  }
+  return previewEl
+}
+
+export function hideMemoryPreview(): void {
+  window.clearTimeout(previewTimer)
+  previewToken += 1
+  if (previewEl) previewEl.hidden = true
+}
+
+function scheduleMemoryPreview(anchor: HTMLElement, slug: string, deps: ReaderDeps): void {
+  window.clearTimeout(previewTimer)
+  const token = ++previewToken
+  previewTimer = window.setTimeout(() => {
+    void deps.getPreview(slug).then((p) => {
+      if (token !== previewToken || !p) return
+      const host = previewHost()
+      clear(host)
+      host.append(el('p', { class: 'brain-preview-name', text: p.name }))
+      if (p.description) host.append(el('p', { class: 'brain-preview-desc', text: p.description }))
+      if (p.snippet) host.append(el('p', { class: 'brain-preview-snippet', text: p.snippet }))
+      host.hidden = false
+      // Position AFTER unhiding (it needs a size): below the link, flipped
+      // above when the viewport runs out, clamped either way.
+      const r = anchor.getBoundingClientRect()
+      const x = Math.max(8, Math.min(r.left, window.innerWidth - host.offsetWidth - 8))
+      const below = r.bottom + 6
+      const y = below + host.offsetHeight > window.innerHeight ? Math.max(8, r.top - host.offsetHeight - 6) : below
+      host.style.left = `${Math.round(x)}px`
+      host.style.top = `${Math.round(y)}px`
+    })
+  }, MEMORY_PREVIEW_DELAY_MS)
 }
 
 const wikilinkButton = (raw: string, slug: string, dangling: boolean, deps: ReaderDeps): HTMLElement => {
@@ -32,6 +105,12 @@ const wikilinkButton = (raw: string, slug: string, dangling: boolean, deps: Read
     [el('span', { text: raw })]
   )
   if (dangling) btn.append(el('span', { class: 'brain-wanted', text: '· wanted' }))
+  else {
+    btn.addEventListener('mouseenter', () => scheduleMemoryPreview(btn, slug, deps))
+    btn.addEventListener('mouseleave', () => hideMemoryPreview())
+    btn.addEventListener('focus', () => scheduleMemoryPreview(btn, slug, deps))
+    btn.addEventListener('blur', () => hideMemoryPreview())
+  }
   return btn
 }
 
@@ -72,6 +151,7 @@ const slugRow = (slug: string, dangling: boolean, deps: ReaderDeps): HTMLElement
 
 export function renderReader(host: HTMLElement, model: ReaderModel, deps: ReaderDeps): void {
   clear(host)
+  hideMemoryPreview() // a re-render orphans the card's anchor
   const m = model.memory
   const head = el('div', { class: 'brain-reader-head' }, [
     el('h2', { class: 'brain-reader-title', text: m.name }),
@@ -80,6 +160,20 @@ export function renderReader(host: HTMLElement, model: ReaderModel, deps: Reader
   ])
   const sub = el('p', { class: 'brain-reader-sub', text: m.description })
   const from = el('p', { class: 'brain-reader-root', text: `.memory/${m.slug}.md · ${m.root}`, title: 'The checkout serving the freshest copy' })
+
+  // Properties (revision B): the extra frontmatter keys, already key-sorted by
+  // the parse law. Values are agent-written bytes — textContent, nothing else.
+  const propEntries = Object.entries(m.properties ?? {})
+  const props = propEntries.length
+    ? el(
+        'dl',
+        { class: 'brain-props', ariaLabel: 'Properties' },
+        propEntries.flatMap(([key, value]) => [
+          el('dt', { class: 'brain-prop-key', text: key }),
+          el('dd', { class: 'brain-prop-value', text: value })
+        ])
+      )
+    : null
 
   const body = renderMemoryBody(m.body, model.links, m.slug, deps)
   const truncated = model.truncated
@@ -101,7 +195,9 @@ export function renderReader(host: HTMLElement, model: ReaderModel, deps: Reader
     ])
   ])
 
-  host.append(head, sub, from, body)
+  host.append(head, sub, from)
+  if (props) host.append(props)
+  host.append(body)
   if (truncated) host.append(truncated)
   host.append(rails)
 }
@@ -110,6 +206,7 @@ export function renderReader(host: HTMLElement, model: ReaderModel, deps: Reader
  *  the wanters listed. Agents (or you) write it; this surface never will. */
 export function renderWanted(host: HTMLElement, slug: string, backlinks: BrainBacklinkOut[], deps: ReaderDeps): void {
   clear(host)
+  hideMemoryPreview()
   host.append(
     EmptyState({
       icon: 'bookmark',

@@ -49,6 +49,8 @@ export interface BrainMemoryOut {
   name: string
   description: string
   tags: string[]
+  /** Extra frontmatter keys (revision B) — key-sorted, inert text. */
+  properties: Record<string, string>
   body: string
   root: string
   fileHash: string

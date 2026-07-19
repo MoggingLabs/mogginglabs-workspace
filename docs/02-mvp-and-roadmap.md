@@ -382,7 +382,11 @@ sixteen times.
   rediscovering the repo.
 - **Phase 2.5's `.memory/` graph, kept whole**: `[[wikilinks]]`, backlinks, the
   force-directed view, git-committable — now one lens on the Brain rather than a
-  separate feature.
+  separate feature. The dir is a documented **Obsidian-compatible vault by
+  construction** (same wikilinks, frontmatter tags + properties,
+  filename-resolved links — ADR 0018 revision B): Obsidian's editor, graph, and
+  search work on it for free, shape only, no Obsidian code, and query blocks in
+  notes refused forever.
 - **The economic claim this unlocks** (and no single-pane tool can make it): *many
   agents become cheaper per question than one agent working badly.* Our core feature
   stops being an ergonomic story and becomes an economic one.

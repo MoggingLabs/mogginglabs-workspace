@@ -26,6 +26,14 @@ export const MEMORY_MAX_FILE_BYTES = 256 * 1024
 export const MEMORY_NAME_MAX = 200
 export const MEMORY_DESCRIPTION_MAX = 500
 export const MEMORY_MAX_TAGS = 16
+// Properties (ADR 0018 revision B): frontmatter lines beyond the reserved
+// three are Obsidian-convention `key: value` PROPERTIES — inert bytes, parsed
+// under a fixed law: last occurrence wins, values control-stripped and capped,
+// keys SORTED, the first MEMORY_MAX_PROPS kept. A malformed KEY line is still
+// a whole-file invalid (the parse law is unchanged).
+export const MEMORY_RESERVED_KEYS = ['name', 'description', 'tags'] as const
+export const MEMORY_MAX_PROPS = 32
+export const MEMORY_PROP_VALUE_MAX = 500
 
 // The slug law + wikilink pattern moved to @contracts (10): the Brain view's
 // reader must re-find links with the SAME slugger and pattern the indexer used.
@@ -47,13 +55,15 @@ export interface ParsedMemory {
   name: string
   description: string
   tags: string[]
+  /** Non-reserved head keys, SORTED, first MEMORY_MAX_PROPS — inert bytes. */
+  props: Record<string, string>
   body: string
 }
 
 /**
  * Parse one memory file's text: `---` frontmatter (one `key: value` per line;
  * `tags: [a, b]`), then the body. Strict but forgiving where it must be:
- * unknown keys are tolerated (forward-compat, and update preserves them by
+ * unknown keys become PROPERTIES (revision B — and update preserves them by
  * never rewriting the head), junk structure is a null — the scan counts it,
  * the row does not exist, and the file on disk is untouched.
  */
@@ -71,6 +81,7 @@ export function parseMemoryText(text: string): ParsedMemory | null {
   let name = ''
   let description = ''
   let tags: string[] = []
+  const rawProps = new Map<string, string>()
   for (const line of lines.slice(1, end)) {
     if (!line.trim()) continue
     const m = /^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/.exec(line)
@@ -80,11 +91,18 @@ export function parseMemoryText(text: string): ParsedMemory | null {
     else if (m[1] === 'tags') {
       const inner = m[2].trim().replace(/^\[/, '').replace(/\]$/, '')
       tags = [...new Set(inner.split(',').map((t) => memorySlug(t)).filter((t): t is string => !!t))].sort()
+    } else {
+      // Last occurrence wins (a Map.set), value cleaned then capped.
+      rawProps.set(m[1], cleanLine(m[2]).slice(0, MEMORY_PROP_VALUE_MAX))
     }
   }
   if (!name) return null
+  const props: Record<string, string> = {}
+  for (const key of [...rawProps.keys()].sort().slice(0, MEMORY_MAX_PROPS)) {
+    props[key] = rawProps.get(key) as string
+  }
   const body = lines.slice(end + 1).join('\n').replace(/^\n+/, '')
-  return { name, description, tags, body }
+  return { name, description, tags, props, body }
 }
 
 const cleanLine = (s: string): string => s.replace(/[\x00-\x1f\x7f]+/g, ' ').trim()
@@ -133,6 +151,8 @@ export interface MemoryFileRow {
   name: string
   description: string
   tags: string[]
+  /** Sorted, capped properties (revision B) — the file's inert extra head. */
+  props: Record<string, string>
   body: string
   /** sha256 of the file's bytes — update_memory's CAS witness. */
   hash: string
@@ -214,6 +234,7 @@ export function scanMemoryDir(root: string): MemoryScan {
       name: parsed.name,
       description: parsed.description,
       tags: parsed.tags,
+      props: parsed.props,
       body: parsed.body,
       hash: createHash('sha256').update(bytes).digest('hex'),
       mtime: Math.floor(st.mtimeMs),
@@ -231,6 +252,63 @@ export function memorySearchExpr(query: string): string | null {
   const tokens = query.match(/[A-Za-z0-9_]+/g)
   if (!tokens || !tokens.length) return null
   return tokens.slice(0, 12).map((t) => `"${t}"`).join(' ')
+}
+
+// ── The property filter (ADR 0018 revision B): a CLOSED grammar, data not code ─
+
+/** Comma-joined AND clauses, at most this many. */
+export const MEMORY_FILTER_MAX_CLAUSES = 8
+
+export type MemoryFilterClause =
+  | { kind: 'tag'; tag: string }
+  | { kind: 'has'; key: string }
+  | { kind: 'eq'; key: string; value: string }
+
+const MEMORY_PROP_KEY_RE = /^[A-Za-z][A-Za-z0-9_-]*$/
+
+/**
+ * Parse a `search_memories` filter string. The grammar is CLOSED and the
+ * validator speaks its primitives back: `#tag` (tag membership) · `key`
+ * (property presence) · `key=value` (exact; the value runs to the comma).
+ * Reserved head keys and junk are typed errors — teaching, never a guess.
+ */
+export function parseMemoryFilter(filter: string): { clauses: MemoryFilterClause[] } | { error: string } {
+  const parts = filter.split(',')
+  if (parts.length > MEMORY_FILTER_MAX_CLAUSES) {
+    return { error: `a filter takes at most ${MEMORY_FILTER_MAX_CLAUSES} comma-joined clauses` }
+  }
+  const clauses: MemoryFilterClause[] = []
+  for (const part of parts) {
+    const clause = part.trim()
+    if (!clause) return { error: 'an empty filter clause says nothing — clauses are #tag, key, or key=value' }
+    if (clause.startsWith('#')) {
+      const raw = clause.slice(1)
+      if (!isMemorySlug(raw)) {
+        const norm = memorySlug(raw)
+        return { error: norm ? `"#${raw.slice(0, 80)}" is not a tag — did you mean "#${norm}"?` : 'a tag filter is #tag with a kebab-case tag (a-z, 0-9, dashes)' }
+      }
+      clauses.push({ kind: 'tag', tag: raw })
+      continue
+    }
+    const eq = clause.indexOf('=')
+    const key = (eq < 0 ? clause : clause.slice(0, eq)).trim()
+    if (!MEMORY_PROP_KEY_RE.test(key)) {
+      return { error: `"${clause.slice(0, 80)}" is not a filter clause — clauses are #tag, key, or key=value` }
+    }
+    if ((MEMORY_RESERVED_KEYS as readonly string[]).includes(key)) {
+      return { error: `"${key}" is frontmatter, not a property — search matches name/description already, and tags filter as #tag` }
+    }
+    if (eq < 0) {
+      clauses.push({ kind: 'has', key })
+      continue
+    }
+    // The value runs to the comma — cleaned exactly as indexing cleaned it,
+    // so what the file said is what the filter matches.
+    const value = cleanLine(clause.slice(eq + 1)).slice(0, MEMORY_PROP_VALUE_MAX)
+    if (!value) return { error: `"${key}=" has no value — use bare "${key}" to filter on presence` }
+    clauses.push({ kind: 'eq', key, value })
+  }
+  return { clauses }
 }
 
 /** Fixed suggestion weights (ADR 0018.i: an unexplainable ranking is a bug) —

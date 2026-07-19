@@ -8,6 +8,7 @@ import {
   isBrainWriteVerb,
   isEmbedEndpoint,
   isMemoryWriteVerb,
+  parseMemoryFilter,
   partitionOf,
   serveBrainRead,
   serveBrainWrite,
@@ -26,6 +27,7 @@ import {
   type BrainChangedEvent,
   type BrainEcosystemCount,
   type BrainLibEcosystem,
+  type BrainMemorySkips,
   type BrainOverviewAnswer,
   type BrainSemConfig
 } from '@contracts'
@@ -550,6 +552,15 @@ export async function handleBrainMemSearchMcp(
   }
   const query = typeof args.query === 'string' ? args.query : ''
   if (!query) return { ok: false, reason: 'invalid', detail: 'query is required' }
+  // Revision B: a junk filter refuses BEFORE the query embeds — no request
+  // leaves the machine for a call that could never answer.
+  if (args.filter !== undefined) {
+    const f =
+      typeof args.filter === 'string' && args.filter
+        ? parseMemoryFilter(args.filter)
+        : { error: 'filter must be a non-empty string — clauses are #tag, key, or key=value (comma-joined AND, max 8)' }
+    if ('error' in f) return { ok: false, reason: 'invalid', detail: f.error }
+  }
   // The query embeds per call, capped — one bounded request to the USER'S OWN
   // endpoint and nowhere else (the BYO guardrail is the absence of any other
   // URL in this file).
@@ -677,7 +688,18 @@ export function handleBrainOverview(req: unknown): BrainOverviewAnswer {
   const ecosystems: BrainEcosystemCount[] = [...perEco.entries()]
     .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
     .map(([ecosystem, deps]) => ({ ecosystem: ecosystem as BrainLibEcosystem, deps }))
-  return { ok: true, memories: written.size, danglingLinks: dangling.size, ecosystems }
+  // Revision B: what the `.memory/` scans refused to index, summed across the
+  // project's roots — the "Memory files skipped" row's truth, never hidden.
+  const memorySkips: BrainMemorySkips = { invalid: 0, tooLarge: 0, foreign: 0, capped: false }
+  for (const r of roots) {
+    const scan = h.store.memoryScan(r)
+    if (!scan) continue
+    memorySkips.invalid += scan.invalid
+    memorySkips.tooLarge += scan.tooLarge
+    memorySkips.foreign += scan.foreign
+    memorySkips.capped = memorySkips.capped || scan.capped
+  }
+  return { ok: true, memories: written.size, danglingLinks: dangling.size, ecosystems, memorySkips }
 }
 
 /** The launch seam's map fetch (06), exported for the BRAINMAP smoke: the same

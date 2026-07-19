@@ -22,7 +22,7 @@ import {
 
 const Database = requireNative<typeof import('better-sqlite3')>('better-sqlite3')
 
-export const BRAIN_SCHEMA_VERSION = 6 // v6: memory_vectors (revision A's semantic lens) — additive, one-way, idempotent (v5 added memories)
+export const BRAIN_SCHEMA_VERSION = 7 // v7: memory_props + memory_scan (revision B's vault stance) — additive, one-way, idempotent (v6 added memory_vectors)
 /** Multi-row insert batch size — the build's transactional chunking unit. */
 export const BRAIN_INSERT_CHUNK = 1000
 
@@ -459,30 +459,63 @@ export class BrainStore {
   // the library lens (a memory edit moves no code-graph fact).
 
   /** One scan's whole landing, one transaction: replace the root's memory rows,
-   *  links, and FTS shadow. */
+   *  links, FTS shadow, property rows, and honest skip counts (revision B). */
   replaceMemories(
     root: string,
-    rows: { slug: string; name: string; description: string; tags: string[]; body: string; hash: string; mtime: number; bytes: number }[],
-    links: { src: string; dst: string }[]
+    rows: { slug: string; name: string; description: string; tags: string[]; props: Record<string, string>; body: string; hash: string; mtime: number; bytes: number }[],
+    links: { src: string; dst: string }[],
+    skipped: { invalid: number; tooLarge: number; foreign: number } = { invalid: 0, tooLarge: 0, foreign: 0 },
+    capped = false
   ): void {
     const txn = this.db.transaction((): void => {
       this.db.prepare('DELETE FROM memories WHERE root = ?').run(root)
       this.db.prepare('DELETE FROM memory_links WHERE root = ?').run(root)
       this.db.prepare('DELETE FROM memories_fts WHERE root = ?').run(root)
+      this.db.prepare('DELETE FROM memory_props WHERE root = ?').run(root)
       const insRow = this.db.prepare(
         'INSERT INTO memories (root,slug,name,description,tags,body,hash,mtime,bytes) VALUES (?,?,?,?,?,?,?,?,?)'
       )
       const insFts = this.db.prepare(
         'INSERT INTO memories_fts (name,description,body,root,slug) VALUES (?,?,?,?,?)'
       )
+      const insProp = this.db.prepare('INSERT INTO memory_props (root,slug,key,value) VALUES (?,?,?,?)')
       for (const r of rows) {
         insRow.run(root, r.slug, r.name, r.description, JSON.stringify(r.tags), r.body, r.hash, r.mtime, r.bytes)
         insFts.run(r.name, r.description, r.body, root, r.slug)
+        for (const [key, value] of Object.entries(r.props)) insProp.run(root, r.slug, key, value)
       }
       const insLink = this.db.prepare('INSERT OR IGNORE INTO memory_links (root,src,dst) VALUES (?,?,?)')
       for (const l of links) insLink.run(root, l.src, l.dst)
+      this.db
+        .prepare('INSERT OR REPLACE INTO memory_scan (root,invalid,too_large,foreign_files,capped) VALUES (?,?,?,?,?)')
+        .run(root, skipped.invalid, skipped.tooLarge, skipped.foreign, capped ? 1 : 0)
     })
     txn()
+  }
+
+  /** One memory's property rows in one partition, key-ordered (revision B). */
+  memoryProps(root: string, slug: string): { key: string; value: string }[] {
+    return this.db
+      .prepare('SELECT key, value FROM memory_props WHERE root = ? AND slug = ? ORDER BY key')
+      .all(root, slug) as { key: string; value: string }[]
+  }
+
+  /** Every property row in the given partitions, stably ordered — the filter's
+   *  material (evaluated on each slug's freshest copy at the serve layer). */
+  memoryPropsForRoots(roots: string[]): { root: string; slug: string; key: string; value: string }[] {
+    if (!roots.length) return []
+    const rc = BrainStore.rootsClause(roots)
+    return this.db
+      .prepare(`SELECT root, slug, key, value FROM memory_props WHERE ${rc.sql} ORDER BY slug, key, root`)
+      .all(...rc.params) as { root: string; slug: string; key: string; value: string }[]
+  }
+
+  /** One root's honest skip counts as last landed — null before any rescan. */
+  memoryScan(root: string): { invalid: number; tooLarge: number; foreign: number; capped: boolean } | null {
+    const row = this.db
+      .prepare('SELECT invalid, too_large AS tooLarge, foreign_files AS foreignFiles, capped FROM memory_scan WHERE root = ?')
+      .get(root) as { invalid: number; tooLarge: number; foreignFiles: number; capped: number } | undefined
+    return row ? { invalid: row.invalid, tooLarge: row.tooLarge, foreign: row.foreignFiles, capped: !!row.capped } : null
   }
 
   /** Every memory row in the given partitions, body EXCLUDED (lists stay light),

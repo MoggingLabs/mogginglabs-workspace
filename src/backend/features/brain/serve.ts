@@ -9,7 +9,9 @@ import {
   isMemorySlug,
   memoryNameTerms,
   memorySearchExpr,
-  memorySlug
+  memorySlug,
+  parseMemoryFilter,
+  type MemoryFilterClause
 } from './memory'
 import { REPOMAP_DEFAULT_BUDGET, REPOMAP_MAX_BUDGET, REPOMAP_MIN_BUDGET, renderRepoMap } from './render'
 import { BRAIN_EDGE_KINDS, BRAIN_NODE_KINDS, type BrainNodeRow } from './schema'
@@ -648,17 +650,58 @@ export function freshestBySlug<T extends { slug: string; root: string; mtime: nu
   return new Map([...grouped.entries()].map(([slug, copies]) => [slug, freshestMemory(copies, roots)]))
 }
 
+/** The `filter` arg (revision B): absent → null; junk → a typed, teaching
+ *  refusal. The grammar is CLOSED — parseMemoryFilter speaks its primitives. */
+function filterArg(v: unknown): { clauses: MemoryFilterClause[] | null } | BrainServeReply {
+  if (v === undefined) return { clauses: null }
+  if (typeof v !== 'string' || !v) {
+    return refuse('invalid', 'filter must be a non-empty string — clauses are #tag, key, or key=value (comma-joined AND, max 8)')
+  }
+  const parsed = parseMemoryFilter(v)
+  if ('error' in parsed) return refuse('invalid', parsed.error)
+  return { clauses: parsed.clauses }
+}
+
+/** The slugs whose FRESHEST copy satisfies every clause — the same election
+ *  every read serves, evaluated BEFORE any ranking (revision B's one law). */
+function memoryFilterEligible(s: ResolvedScope, clauses: MemoryFilterClause[]): Set<string> {
+  const written = freshestBySlug(s.store.memoriesForRoots(s.projectRoots), s.projectRoots)
+  const propsBy = new Map<string, Map<string, string>>()
+  for (const p of s.store.memoryPropsForRoots(s.projectRoots)) {
+    const key = `${foldProjectKey(p.root)}\0${p.slug}`
+    const m = propsBy.get(key) ?? new Map<string, string>()
+    m.set(p.key, p.value)
+    propsBy.set(key, m)
+  }
+  const eligible = new Set<string>()
+  for (const [slug, row] of written) {
+    const props = propsBy.get(`${foldProjectKey(row.root)}\0${slug}`) ?? new Map<string, string>()
+    const tags = new Set(parseTags(row.tags))
+    const pass = clauses.every((c) =>
+      c.kind === 'tag' ? tags.has(c.tag) : c.kind === 'has' ? props.has(c.key) : props.get(c.key) === c.value
+    )
+    if (pass) eligible.add(slug)
+  }
+  return eligible
+}
+
 function serveMemorySearch(s: ResolvedScope, args: Record<string, unknown>): BrainServeReply {
   const query = str(args.query)
   if (!query) return refuse('invalid', 'query is required')
   const limit = intArg(args.limit, MEMORY_SEARCH_DEFAULT_LIMIT, 1, MEMORY_SEARCH_MAX_LIMIT)
   if (limit === null) return refuse('invalid', `limit must be 1-${MEMORY_SEARCH_MAX_LIMIT}`)
+  const f = filterArg(args.filter)
+  if ('ok' in f) return f
   const expr = memorySearchExpr(query)
   if (!expr) return refuse('invalid', 'the query has no searchable terms')
   const hits = s.store.memorySearch(s.projectRoots, expr, MEMORY_SEARCH_FETCH_CAP)
+  // The filter narrows the CANDIDATES before any ranking; zero matches is an
+  // honest ok + empty list, never an error. Filter absent = byte-identical.
+  const eligible = f.clauses ? memoryFilterEligible(s, f.clauses) : null
+  const considered = eligible ? hits.filter((h) => eligible.has(h.slug)) : hits
   // Dedupe by slug — among the copies that MATCHED, the freshest wins and keeps
   // its own bm25 rank; the final order is (rank asc, slug asc), fixed.
-  const kept = [...freshestBySlug(hits, s.projectRoots).values()].sort(
+  const kept = [...freshestBySlug(considered, s.projectRoots).values()].sort(
     (a, b) => a.rank - b.rank || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0)
   )
   const page = kept.slice(0, limit)
@@ -711,6 +754,8 @@ function serveMemoryGet(s: ResolvedScope, args: Record<string, unknown>): BrainS
       name: m.name,
       description: m.description,
       tags: parseTags(m.tags),
+      // Revision B: the freshest copy's properties — key-sorted, inert bytes.
+      properties: Object.fromEntries(s.store.memoryProps(m.root, a.slug).map((p) => [p.key, p.value])),
       body: m.body,
       root: m.root,
       // The CAS handshake: update_memory compare-and-swaps against exactly this.
@@ -830,8 +875,19 @@ export function serveMemorySearchSemantic(
     if (!query) return refuse('invalid', 'query is required')
     const limit = intArg(args.limit, MEMORY_SEARCH_DEFAULT_LIMIT, 1, MEMORY_SEARCH_MAX_LIMIT)
     if (limit === null) return refuse('invalid', `limit must be 1-${MEMORY_SEARCH_MAX_LIMIT}`)
+    const f = filterArg(args.filter)
+    if ('ok' in f) return f
 
     const written = freshestBySlug(s.store.memoriesForRoots(s.projectRoots), s.projectRoots)
+    // Revision B: the filter narrows the CANDIDATE SET before either ranking
+    // exists — the cosine list and the FTS list are both built filtered, so
+    // every rank (and the RRF blend of them) is a rank WITHIN the filtered set.
+    const eligible = f.clauses ? memoryFilterEligible(s, f.clauses) : null
+    if (eligible) {
+      for (const slug of [...written.keys()]) {
+        if (!eligible.has(slug)) written.delete(slug)
+      }
+    }
     // Only the CURRENT model's rows exist here (store filters): a model swap
     // invalidates every older vector without a flag to forget.
     const vectors = new Map<string, Float32Array>()
@@ -882,11 +938,10 @@ export function serveMemorySearchSemantic(
     // fused with the cosine list by fixed-weight reciprocal rank — the two
     // components SUM to the score, and the breakdown rides every hit.
     const expr = memorySearchExpr(query)
-    const ftsKept = expr
-      ? [...freshestBySlug(s.store.memorySearch(s.projectRoots, expr, MEMORY_SEARCH_FETCH_CAP), s.projectRoots).values()].sort(
-          (a, b) => a.rank - b.rank || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0)
-        )
-      : []
+    const ftsHits = expr ? s.store.memorySearch(s.projectRoots, expr, MEMORY_SEARCH_FETCH_CAP) : []
+    const ftsKept = [
+      ...freshestBySlug(eligible ? ftsHits.filter((h) => eligible.has(h.slug)) : ftsHits, s.projectRoots).values()
+    ].sort((a, b) => a.rank - b.rank || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
     const ftsRank = new Map(ftsKept.map((r, i) => [r.slug, i + 1]))
     const semRank = new Map(semRanked.map((r, i) => [r.slug, i + 1]))
     const blended = [...new Set([...ftsRank.keys(), ...semRank.keys()])]
