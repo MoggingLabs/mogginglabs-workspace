@@ -151,6 +151,13 @@ competitor names, truth-over-keywords). Same format as
   without contacting support (`ACCOUNTAREA` + Stripe's portal), and every
   tier bullet on `/pricing` traces to a `TIERS.md` row or is labelled
   in-development — no benefit is sold that the code does not enforce.
+- Nothing enforceable ships in plain text: every gate point DECIDES in the
+  bytecode-covered main process and fails CLOSED, so patching the renderer
+  bundle no longer widens a cap (`PLAINGATE`); what each artifact is really
+  covered by, per OS, is mapped with code signing named as the missing
+  keystone (`INTEGRITYMAP`); and every decision — architectural OR
+  commercial — carries its six-question review naming the cheapest defeat
+  (`SECREVIEW`).
 - The real operator secrets are generated, custodied, rotatable, and their
   public halves pinned; the tamper manifest is signed (`OPSECRETS`).
 - The legal + compliance set (EULA, ToS, privacy, security.txt) exists and
