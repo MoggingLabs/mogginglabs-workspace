@@ -345,12 +345,17 @@ export function runBrainPropsSmoke(win: BrowserWindow): void {
       await ES(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
       // The AA hover's preview must be PROVEN gone before the dangling probe — an
       // unverified hide left the dangling claim reading someone else's card.
-      await waitTrue(`!window.__mogging.brain.previewProbe().visible`, 10, 100)
+      const escapeHid2 = await waitTrue(`!window.__mogging.brain.previewProbe().visible`, 10, 100)
       await ES(`window.__mogging.brain.openReader('mem-d')`)
       await waitTrue(`window.__mogging.brain.state().reader === 'mem-d' && !!document.querySelector('.brain-wikilink.is-dangling')`)
       await hoverLink('wanted-x', 'mouseenter')
       await sleep(700) // past the dwell — a dangling target must never show
-      const danglingNoPreview = !((await ES(`window.__mogging.brain.previewProbe()`)) as { visible: boolean }).visible
+      const danglingProbe = (await ES(`window.__mogging.brain.previewProbe()`)) as { visible: boolean; text: string }
+      const danglingHoverState = (await ES(`(() => {
+        const hov = [...document.querySelectorAll(':hover')].map((n) => n.className && String(n.className).slice(0, 60)).slice(-4)
+        return { hover: hov, active: document.activeElement ? String(document.activeElement.className).slice(0, 60) : '' }
+      })()`)) as { hover: string[]; active: string }
+      const danglingNoPreview = !danglingProbe.visible
       const previewOk =
         hovered && previewShown &&
         preview1.text.includes('mem-b') && preview1.text.includes('Chain second') &&
@@ -418,7 +423,13 @@ export function runBrainPropsSmoke(win: BrowserWindow): void {
         panelA,
         hostileInertOk,
         previewOk,
-        previewDiag: { previewShown, previewHidOnLeave, previewHidOnEscape, stillInView, previewOnFocus, previewHidOnBlur, danglingNoPreview, text: preview1.text.slice(0, 200) },
+        previewDiag: {
+          previewShown, previewHidOnLeave, previewHidOnEscape, stillInView, previewOnFocus, previewHidOnBlur,
+          escapeHid2, danglingNoPreview,
+          danglingText: danglingProbe.text.slice(0, 200),
+          danglingHoverState,
+          text: preview1.text.slice(0, 200)
+        },
         depthOk,
         depthDiag: { depthDefault, d1, d2, d3, depthNavVisible },
         runtimeSkip,
