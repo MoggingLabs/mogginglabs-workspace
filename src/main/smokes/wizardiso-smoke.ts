@@ -242,11 +242,15 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         const modalClosed = !document.querySelector('.modal .grid-painter')
 
         // (b)+(c) apply a custom, smaller layout directly; the confirm must gate the drop.
-        // The plain shells that will close aren't "live", so mark the HIGHEST-id pane busy
+        // The plain shells that will close aren't "live", so make the HIGHEST-id pane busy
         // (highest local ⇒ certainly in the closing set when shrinking to 3) — now the drop
-        // genuinely closes live work and the confirm is owed.
+        // genuinely closes live work and the confirm is owed. Under the ALERTAGREE tracked
+        // gate a state only sticks on a TRACKED pane (as a real session's would be), so claim
+        // it first — else setPaneState falls on the floor and nothing reads as live.
         const beforeIds = m.layout.paneIds()
-        m.attention.setPaneState(Math.max(...beforeIds), 'busy')
+        const victim = Math.max(...beforeIds)
+        m.attention.setPaneTracked(victim, true)
+        m.attention.setPaneState(victim, 'busy')
         await sleep(150)
         const spec = { rows: 2, cols: 2, regions: [{ r: 0, c: 0, rs: 1, cs: 2 }, { r: 1, c: 0, rs: 1, cs: 1 }, { r: 1, c: 1, rs: 1, cs: 1 }] }
         const done = m.layout.reorganizeApply(spec) // Promise — blocks on the confirm
