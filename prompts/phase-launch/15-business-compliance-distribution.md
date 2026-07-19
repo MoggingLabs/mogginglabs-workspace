@@ -5,15 +5,14 @@ operator signs later. No code beyond a copy gate.
 
 ## Steps
 1. **The legal set** (`legal/`): an **EULA** granting free-tier use (fixes
-   the LICENSE-grants-nothing gap); **subscription terms** for Pro
-   carrying the **7-day money-back guarantee** (GROWTH-PLAN promises it on
-   all paid plans — a contract term, not copy); a **privacy policy**
-   naming every subprocessor (Sentry, PostHog, the IdP, Stripe, Loops) +
-   the data map, its erasure section describing **11a's request-based
-   mechanism + SLA**, never a self-serve erasure we did not build; and a
-   **security.txt** + policy (you hold users' OAuth grants — a researcher
-   needs a door). Templates are fine; mark each "operator: review with
-   counsel before publish."
+   the LICENSE-grants-nothing gap); **subscription terms** carrying the
+   **7-day money-back guarantee** (GROWTH-PLAN promises it on all paid
+   plans — a contract term, not copy); a **privacy policy** naming every
+   subprocessor (Sentry, PostHog, the IdP, Stripe, Loops) + the data map,
+   its erasure section describing **11a's request-based mechanism + SLA**,
+   never a self-serve erasure we did not build; a **security.txt** +
+   policy (you hold users' OAuth grants — a researcher needs a door).
+   Templates are fine; mark each "operator: counsel before publish."
 2. **Business runbook** (`docs/24-launch-ops.md`): the Stripe reality —
    with raw Stripe WE are merchant of record, so **enable Stripe Tax** and
    note where thresholds apply; prices per `TIERS.md` (**Pro monthly +
@@ -22,19 +21,20 @@ operator signs later. No code beyond a copy gate.
    **optional-later MoR wrapper** with its tax tradeoff; a support channel
    + a one-sentence Pro SLA; subprocessor/DPA notes. Every item flagged
    operator-action with cost ($0 unless noted; incorporation may be needed
-   for Stripe payouts — verify for the operator's country).
+   for Stripe payouts — verify per country).
 3. **Positioning reconciliation**: audit README + docs/00 non-goals + all
    marketing copy so "free, local, **account-free core**" stays exact
    while "no account, ever / no server, ever" absolutes become the
-   freemium truth. `check-credential-wording.mjs` grows patterns keeping
-   them out. **Also fix the STALE `GROWTH-PLAN.md`** ("three tiers", a
-   "$39 anchor" — the retired Agency price): reconcile to `TIERS.md` at
-   the source, never copy the error forward.
+   freemium truth; `check-credential-wording.mjs` grows patterns keeping
+   them out. **Also fix the STALE strategy docs at the source** —
+   `GROWTH-PLAN.md` ("three tiers", "$39 anchor", the $12 founding price)
+   and `PRICING-STRATEGY.md:52` (the retired notifications split) —
+   reconciling both to `TIERS.md`.
 4. **Distribution prep**: winget + homebrew playbooks (docs/10) as a ready
    checklist (fork, copy `packaging/*`, PR) — GATED on signed artifacts,
    so PENDING-operator; homebrew-tap-first; the Stripe Checkout plan
-   (hosted keeps PCI off us) + funnel events via the site's own
-   first-party collector, never a third-party script.
+   (hosted keeps PCI off us) + funnel events via the site's first-party
+   collector, never a third-party script.
 5. **COMPLIANCE static gate** (`scripts/check-compliance.mjs`, qa-smokes
    row): asserts every legal doc EXISTS and is non-placeholder,
    security.txt is well-formed, the subprocessor list is present. Verdict
@@ -52,9 +52,9 @@ operator signs later. No code beyond a copy gate.
   LICENSE-grants-nothing gap is closed for the free tier.
 - COMPLIANCE green (docs present + well-formed); the wording gate passes
   with the freemium-accurate copy.
-- The launch-ops runbook covers prices + Stripe Tax + the portal config,
-  refunds, support, the optional MoR wrapper, and the payout/incorporation
-  point — all costed.
+- The launch-ops runbook covers prices + Stripe Tax + portal config,
+  refunds, support, the optional MoR wrapper, and the payout point — all
+  costed.
 - Distribution playbooks are a ready checklist, PENDING-operator behind
   signing.
 
