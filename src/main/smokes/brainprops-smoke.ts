@@ -136,6 +136,12 @@ export function runBrainPropsSmoke(win: BrowserWindow): void {
 
   const wc = win.webContents
   wc.setBackgroundThrottling(false) // the graph settle rides rAF — an occluded runner window must not starve it
+  // The OS pointer on a CI desktop is REAL: when a re-render (openReader) lays a
+  // non-dangling wikilink under the stationary cursor, Chromium synthesizes a genuine
+  // mouseenter and pops a preview no step asked for — which read as danglingNoPreview:false
+  // on the windows runner. Chromium tracks hover from the LAST input event, so parking the
+  // pointer in the window chrome once makes every later hover recomputation target nothing.
+  wc.sendInputEvent({ type: 'mouseMove', x: 4, y: 4 })
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
   const root = app.getAppPath()
@@ -337,6 +343,9 @@ export function runBrainPropsSmoke(win: BrowserWindow): void {
         selectors: ['.brain-prop-key', '.brain-prop-value', '.brain-preview-name', '.brain-preview-desc', '.brain-preview-snippet']
       })
       await ES(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
+      // The AA hover's preview must be PROVEN gone before the dangling probe — an
+      // unverified hide left the dangling claim reading someone else's card.
+      await waitTrue(`!window.__mogging.brain.previewProbe().visible`, 10, 100)
       await ES(`window.__mogging.brain.openReader('mem-d')`)
       await waitTrue(`window.__mogging.brain.state().reader === 'mem-d' && !!document.querySelector('.brain-wikilink.is-dangling')`)
       await hoverLink('wanted-x', 'mouseenter')

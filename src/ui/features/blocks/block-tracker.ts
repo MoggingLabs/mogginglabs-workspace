@@ -77,8 +77,18 @@ export class BlockTracker {
   private readCommand(): string {
     const p = this.pending
     if (!p?.cmdMarker) return ''
-    const full = this.term.buffer.active.getLine(p.cmdMarker.line)?.translateToString(true) ?? ''
-    return full.slice(p.cmdCol ?? 0).trim()
+    const buf = this.term.buffer.active
+    const full = buf.getLine(p.cmdMarker.line)?.translateToString(true) ?? ''
+    // When C arrives with the cursor still ON the marker row (an emitter writing B,
+    // command, C in one stream — the shape session capture reads), the command ENDS at the
+    // cursor: anything beyond it is not the command but stale residue a reflow can fuse
+    // onto this row. Seen on macos CI: the pane re-widened while settling, xterm rejoined a
+    // wrapped zsh-deprecation-banner row onto the command's row, and the captured command
+    // grew a banner tail — which then poisons the session draft's command lines. A real
+    // shell's C lands after Enter's newline (cursor on the NEXT row), so its full-row read
+    // is unchanged.
+    const cursorOnMarkerRow = buf.baseY + buf.cursorY === p.cmdMarker.line
+    return (cursorOnMarkerRow ? full.slice(p.cmdCol ?? 0, buf.cursorX) : full.slice(p.cmdCol ?? 0)).trim()
   }
 
   private endBlock(exitCode?: number): void {
