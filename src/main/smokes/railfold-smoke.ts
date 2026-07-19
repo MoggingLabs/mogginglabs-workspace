@@ -12,7 +12,7 @@ import { join } from 'node:path'
 //   itself, at its resting position, and the count can never overlap the icon;
 //   the collapsed end-state (display:none et al.) lands only after the fold finishes.
 // Samples geometry through a collapse and an expand via the real Ctrl+Shift+B path,
-// polled from the main process (occlusion-proof — see `snapshot` below).
+// toggle + sampling loop as ONE in-renderer evaluation (occlusion-proof — see below).
 // Bites: a dropped `rail-anim` stamp (app-shell), a lost
 // `:not(.rail-anim)` guard or the clip/min-width in-flight rules (global.css), and
 // any regression that lays the count out beside the icon mid-fold.
@@ -46,42 +46,45 @@ export function runRailfoldSmoke(win: BrowserWindow): void {
     overlap: boolean
   }
 
-  // Sampled from the MAIN process, not a renderer rAF loop: an occluded window's rAF is
-  // throttled to ZERO (the CDP memory's "forced frames" trap), which starved a rAF sampler
-  // to an empty frame list. getComputedStyle/getBoundingClientRect resolve the transition's
-  // CURRENT value on demand — no painted frame needed — so an ES poll is occlusion-proof.
-  const snapshot = (): Promise<Frame> =>
-    ES<Frame>(`(() => {
-      const appEl = document.getElementById('app')
-      const rail = document.getElementById('rail')
-      const tab = document.querySelector('.workspace-tab')
-      const icon = tab ? tab.querySelector('.ws-icon') : null
-      const count = tab ? tab.querySelector('.ws-count') : null
-      const ir = icon ? icon.getBoundingClientRect() : null
-      const cr = count ? count.getBoundingClientRect() : null
-      const cs = count ? getComputedStyle(count) : null
-      const shown = !!(cs && cs.display !== 'none')
-      return {
-        railW: rail.getBoundingClientRect().width,
-        anim: appEl.classList.contains('rail-anim'),
-        overflowX: getComputedStyle(rail).overflowX,
-        countDisplay: cs ? cs.display : 'gone',
-        icon: ir ? [ir.left, ir.right] : null,
-        count: cr ? [cr.left, cr.right] : null,
-        overlap: !!(ir && cr && shown && cr.left < ir.right - 0.5 && cr.right > ir.left + 0.5)
+  // The toggle and the WHOLE 10ms sampling loop run in the renderer as ONE evaluation.
+  // Not a rAF loop: an occluded window's rAF is throttled to ZERO (the CDP memory's
+  // "forced frames" trap) — the reads are getComputedStyle/getBoundingClientRect, which
+  // resolve the transition's CURRENT value on demand, no painted frame needed. And not a
+  // per-sample main-process poll: each executeJavaScript rides a full IPC round-trip, and
+  // on a 2-core CI runner that round-trip (~300ms) outlasts the entire 400ms rail-anim
+  // window — a healthy fold sampled ≤1 in-flight frame and read widthAnimated:false
+  // (7/19 subset run, mac + windows). In-page timers (unthrottled above) hold the cadence.
+  // ~70 samples at a ≥10ms cadence ≈ 700ms+ — past the 260ms fold, then well into rest.
+  const phaseFrames = (): Promise<Frame[]> =>
+    ES<Frame[]>(`(async () => {
+      const snap = () => {
+        const appEl = document.getElementById('app')
+        const rail = document.getElementById('rail')
+        const tab = document.querySelector('.workspace-tab')
+        const icon = tab ? tab.querySelector('.ws-icon') : null
+        const count = tab ? tab.querySelector('.ws-count') : null
+        const ir = icon ? icon.getBoundingClientRect() : null
+        const cr = count ? count.getBoundingClientRect() : null
+        const cs = count ? getComputedStyle(count) : null
+        const shown = !!(cs && cs.display !== 'none')
+        return {
+          railW: rail.getBoundingClientRect().width,
+          anim: appEl.classList.contains('rail-anim'),
+          overflowX: getComputedStyle(rail).overflowX,
+          countDisplay: cs ? cs.display : 'gone',
+          icon: ir ? [ir.left, ir.right] : null,
+          count: cr ? [cr.left, cr.right] : null,
+          overlap: !!(ir && cr && shown && cr.left < ir.right - 0.5 && cr.right > ir.left + 0.5)
+        }
       }
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, shiftKey: true }))
+      const frames = []
+      for (let i = 0; i < 70; i++) {
+        frames.push(snap())
+        await new Promise((r) => setTimeout(r, 10))
+      }
+      return frames
     })()`)
-  // ~50 samples at a ≥10ms cadence ≈ 700ms+ — past the 260ms fold, then well into rest.
-  const sampleThrough = async (): Promise<Frame[]> => {
-    const frames: Frame[] = []
-    for (let i = 0; i < 50; i++) {
-      frames.push(await snapshot())
-      await sleep(10)
-    }
-    return frames
-  }
-  const toggle = (): Promise<unknown> =>
-    ES(`(window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, shiftKey: true })), 1)`)
 
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
@@ -97,12 +100,10 @@ export function runRailfoldSmoke(win: BrowserWindow): void {
 
       // ── Collapse: the count must ride the fold out, holding its resting x, never
       // squeezed toward the icon.
-      await toggle()
-      const foldFrames = await sampleThrough()
+      const foldFrames = await phaseFrames()
 
       // ── Expand: the reverse — the count is uncovered at its final x, never mid-rail.
-      await toggle()
-      const unfoldFrames = await sampleThrough()
+      const unfoldFrames = await phaseFrames()
 
       const animOf = (fs: Frame[]): Frame[] => fs.filter((f) => f.anim)
       const foldAnim = animOf(foldFrames)
