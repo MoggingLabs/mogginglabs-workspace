@@ -13,12 +13,14 @@ regress them. Work in `../MoggingLabs-Website`. Extend, never rebuild.
    git truth, the site's own rule). Retire "v0.4.0" and any claim the
    product outgrew.
 2. **The pricing page** (`/pricing`): render the DECIDED tiers from
-   `PRICING-STRATEGY.md` — **Free** (3 panes, 1 workspace, 1 basic
-   integration, community) · **Pro $19/mo ($15 annual)** · **Agency
-   $39/user/mo ($32 annual)** — on the "no credits, no metering, BYO
-   agents" wedge, framed for agency devs. Keep FAQPage schema honest; no
-   competitor names, no fake ratings. Update `src/lib/site.ts` if the CTA
-   or roster moved.
+   `PRICING-STRATEGY.md` — **Free** (2 workspaces, 4 panes each, **all
+   integrations**, community) · **Pro $19/mo ($15 annual)** · **Team
+   $29/user/mo ($24 annual), 2+ seats** · **Enterprise (contact sales)** —
+   on the "no credits, no metering, BYO agents" wedge for agency devs.
+   **Team + Enterprise are roadmap → frame as early-access / contact-us,
+   "in development"** per the site's truth rule (only Free + Pro are live).
+   Keep FAQPage schema honest; no competitor names, no fake ratings. Update
+   `src/lib/site.ts` if the CTA or roster moved.
 3. **Fill real gaps** the freshness audit (17) found: any shipped
    capability with no page or a thin one (the Brain deserves a /learn spoke
    or a docs section; accounts/BYO-neutrality deserves a trust surface).
@@ -41,7 +43,7 @@ regress them. Work in `../MoggingLabs-Website`. Extend, never rebuild.
 
 ## Definition of Done
 - No public page states a stale product: the Brain + accounts + current
-  pricing (Free/Pro $19/Agency $39) are present and true; every WEB-FINDINGS
+  pricing (Free/Pro/Team/Enterprise) are present and true; every WEB-FINDINGS
   freshness gap is closed or deferred with reason.
 - Every new/changed page carries valid structured data and is in `sitemap.ts`
   + `llms.txt`; the frozen SEO gates + Lighthouse 100 hold.

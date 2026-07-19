@@ -26,11 +26,11 @@ competitor names, truth-over-keywords). Same format as
 `prompts/phase-1..12/`: each step self-contained, pasteable as a `/goal`,
 **≤ 3900 chars**. Execute in order.
 
-> **Precondition.** This pack runs on `main` **with Phase 12 (the Brain)
-> merged and BRAINMILESTONE green** — Part I audits the composed product,
-> not a branch. If the Brain is still on `mogging/b239b2a2`, finish step
-> 14 and merge first (the reconcile-and-recount merge); `check-gate-count.mjs`
-> is the only authority on the number.
+> **Precondition — MET as of 2026-07-19.** This pack runs on `main` with
+> Phase 12 (the Brain) **merged** and its gates green — Part I audits the
+> composed product. Current baseline: **v0.15.0, 182 gates (159 app-boot +
+> 23 static)**. `check-gate-count.mjs` is the only authority on the count,
+> so treat that number as live (it keeps moving), never a hard-coded literal.
 
 ## The laws that bind this phase
 
@@ -89,7 +89,7 @@ competitor names, truth-over-keywords). Same format as
 | # | File | Gate / output |
 |---|------|---------------|
 | 17 | `17-web-revamp-inventory-and-laws.md` | Inventory + freshness audit + adopt the site's laws (no build); `WEB-INVENTORY`/`WEB-FINDINGS` |
-| 18 | `18-content-freshness-and-completeness.md` | Every page current (Brain, accounts, Free/Pro $19/Agency $39); frozen SEO gates re-verified |
+| 18 | `18-content-freshness-and-completeness.md` | Every page current (Brain, accounts, Free/Pro/Team/Enterprise); frozen SEO gates re-verified |
 | 19 | `19-docs-completeness-and-app-sync.md` | `/docs` complete + synced to the app; **DOCS** coverage gate |
 | 20 | `20-blog-maturation-and-editorial.md` | Grow `posts.ts` → real blog (authors/tags/RSS) + editorial system + launch posts |
 | 21 | `21-changelog-pipeline-cross-repo.md` | Release-driven `/changelog` + RSS + in-app "What's new" (Workspace→site); **CHANGELOG** gate |
@@ -114,7 +114,7 @@ competitor names, truth-over-keywords). Same format as
 - The legal + compliance set (EULA, ToS, privacy, security.txt) exists and
   the positioning copy is reconciled (`check-credential-wording.mjs`).
 - The EXISTING site (`mogginglabs.com`) is revamped and current: every page
-  states the shipped product (Brain, accounts, Free/Pro $19/Agency $39),
+  states the shipped product (Brain, accounts, Free/Pro/Team/Enterprise),
   docs are complete, the blog is real, and a tagged release
   **auto-publishes the changelog** to `/changelog` — all under the site's
   laws (Lighthouse 100, zero third-party) and all $0 (`WEBREVAMP`).

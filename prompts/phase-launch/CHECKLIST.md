@@ -8,9 +8,9 @@ step). The ONLY money item is **code signing** — the domain, hosting
 (Vercel/Cloudflare), Neon, Stripe, GSC, and Loops are ALREADY set up;
 everything this pack builds is $0.
 
-> **Precondition**
-> - [ ] Phase 12 (the Brain) is merged to `main` and BRAINMILESTONE is green.
-> - [ ] `check-gate-count.mjs` runs clean on the merged `main` (the baseline number).
+> **Precondition — MET (2026-07-19)**
+> - [x] Phase 12 (the Brain) is merged to `main` and its gates are green.
+> - [x] `check-gate-count.mjs` clean on `main`: **v0.15.0, 182 gates (159 app-boot + 23 static)** — the live baseline (derive, never hard-code).
 
 ---
 
@@ -61,9 +61,9 @@ everything this pack builds is $0.
 
 ### 08 · Provider decisions (ADR 0019)
 - [ ] The authN/authZ split ratified as binding (IdP = identity only; our backend mints DPoP-bound tokens).
-- [ ] IdP = Auth.js/Clerk on the Neon stack chosen (WorkOS AuthKit named as the Agency-tier SSO swap); Supabase Auth noted as still viable.
+- [ ] IdP = Auth.js/Clerk on the Neon stack chosen (WorkOS AuthKit named as the Enterprise-tier SSO swap); Supabase Auth noted as still viable.
 - [ ] Billing = Stripe ratified (already the deployed rail); Stripe-Tax-now + optional-later Polar/Paddle MoR wrapper recorded with the tax tradeoff.
-- [ ] Backend location = new routes on the website's Neon/Vercel stack (NOT a greenfield `server/`); pricing = Free/Pro $19/Agency $39.
+- [ ] Backend location = new routes on the website's Neon/Vercel stack (NOT a greenfield `server/`); pricing = Free/Pro/Team/Enterprise (Team per-seat, 2+; Free = 2 workspaces x 4 panes + all integrations).
 - [ ] FAKE→real mapping (incl. the EXISTING Stripe webhook extended) written; deferrals + operator-account items listed (no gate depends on them).
 
 ### 09 · Backend foundation
@@ -124,7 +124,7 @@ everything this pack builds is $0.
 
 ### 18 · Content freshness & completeness
 - [ ] Home/learn/docs/roadmap/about/mcp-servers refreshed to the shipped product (the Brain, accounts) with true, traced claims.
-- [ ] `/pricing` renders the DECIDED tiers (Free / Pro $19 / Agency $39) on the no-credits BYO wedge; FAQ schema honest.
+- [ ] `/pricing` renders the DECIDED tiers (Free / Pro $19 / Team $29 per seat 2+ / Enterprise contact-sales) on the no-credits BYO wedge; Team/Enterprise framed early-access/in-dev; FAQ schema honest.
 - [ ] Real gaps filled (a Brain surface, a BYO-neutrality trust surface); each new page in `sitemap.ts` + `llms.txt`.
 - [ ] Frozen SEO gates re-verified (validate-schema/check-cluster/check-mcp-links) + Lighthouse 100 on every touched page.
 
@@ -171,7 +171,7 @@ everything this pack builds is $0.
 - [~] Flip signing: add CI secrets, rerun `Release` (`signing-dryrun` → signed build).
 - [~] Stand up the IdP project (Auth.js on Neon / Clerk) — free; set its secrets in Vercel env.
 - [~] Set the entitlement backend's real config (pinned origins + private keys) in the Vercel/Neon secret store; deploy the new routes.
-- [~] Confirm the live Stripe account carries the DECIDED products/prices (Free/Pro $19/Agency $39) + enable Stripe Tax; a Polar/Paddle MoR wrapper stays optional-later.
+- [~] Confirm the live Stripe account carries the DECIDED products/prices (Pro $19 flat; Team $29/seat via quantity subscription, 2+) + enable Stripe Tax; a Polar/Paddle MoR wrapper stays optional-later.
 - [~] Publish the legal docs (counsel-reviewed) + open the Stripe checkout + flip the site `PRIMARY_CTA` to the public download.
 - [~] Submit winget PR + stand up the homebrew tap from the signed artifacts.
 - [~] Run the full three-OS CI sweep + verify the update feed resolves on the real release.

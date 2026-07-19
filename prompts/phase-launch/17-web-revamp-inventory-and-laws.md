@@ -25,8 +25,8 @@ rest of Part III fills. Work in `../MoggingLabs-Website`.
 4. **The freshness audit**: the site predates the **Brain** and the
    **accounts/entitlements** work and states an older product (v0.4.0
    numbers, "early access", no Brain). Grade each page STALE / OK against
-   the shipped Workspace (v0.14.0; the Brain; Free/**Pro $19**/**Agency
-   $39** pricing) and the roadmap — route each gap to `WEB-FINDINGS.md`
+   the shipped Workspace (v0.15.0; the Brain; Free / **Pro $19** / **Team
+   $29** / **Enterprise** pricing) and the roadmap — route each gap to `WEB-FINDINGS.md`
    (page · claim · reality · fix). Truth-outranks-keywords is the test.
 5. **Gap map to the net-new work**: mark what only NEEDS extending (SEO,
    structured data, analytics — mostly done) vs what is genuinely new

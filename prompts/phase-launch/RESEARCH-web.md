@@ -76,14 +76,22 @@ burden. See `RESEARCH.md` §3 (updated) for the reconciliation.
 
 ## 5. Pricing — DECIDED, use these exact tiers
 
-From `../MoggingLabs-Website/PRICING-STRATEGY.md` (owner-confirmed, July
-2026): **Free** (up to 3 panes, 1 workspace, 1 basic integration,
-community support) · **Pro $19/mo ($15 annual)** (unlimited panes/
-workspaces/integrations, full notifications, priority email) · **Agency
-$39/user/mo ($32 annual)** (shared team workspaces, roles, central
-billing, onboarding). Wedge: *no credits, no metering — bring the agents
-you already pay for*, aimed at **agency developers**. Part II's entitlement
-tiers and the pricing page align to **Free/Pro/Agency**, not Free/Pro/Team.
+From `../MoggingLabs-Website/PRICING-STRATEGY.md` (owner-confirmed, updated
+2026-07-19): **Free** (2 workspaces, 4 panes each, **all integrations
+unlimited**, local Brain, community) · **Pro $19/mo ($15 annual)** (unlimited
+workspaces, up to 16 panes, cross-machine sync, full swarm/Brain, priority
+email) · **Team $29/user/mo ($24 annual), 2+ seats** (shared workspaces/
+memory/roles, central billing, team-wide visibility, onboarding) ·
+**Enterprise (contact sales)** (SSO/SCIM, audit, policy, SLA, optional
+self-host). Wedge: *no credits, no metering — bring the agents you already
+pay for*, for **agency developers**. Two things drive the tiers: the ladder
+splits Free/Pro (individual scale, honor-system) from Team/Enterprise
+(shared, server-backed, actually enforceable); and **integrations are FREE**
+(funnel, not paywall) — the paid lever is scale + sync + team. Part II's
+entitlement tiers align to **Free/Pro/Team/Enterprise** with **org + per-seat**
+concepts; FREE_ENTITLEMENTS tightens to 2 workspaces x 4 panes (from the
+shipped 16-pane baseline). **Only Free + Pro are deliverable at v1** — Team/
+Enterprise launch as early-access / contact-us, framed in-development.
 
 ## 6. Blog — a typed file-based model, extend it
 

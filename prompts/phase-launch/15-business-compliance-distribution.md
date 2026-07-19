@@ -14,7 +14,7 @@ here; the operator signs/deploys later. No code beyond a copy gate.
 2. **Business runbook** (`docs/24-launch-ops.md`): the Stripe reality —
    with raw Stripe WE are merchant of record, so **enable Stripe Tax** and
    note where registration thresholds apply; the products/prices
-   (Free/Pro $19/Agency $39) checklist; the refund/chargeback flow; the
+   (Free/Pro $19/Team $29-per-seat/Enterprise) checklist; the refund/chargeback flow; the
    **optional-later MoR wrapper** (Polar/Paddle on Stripe rails) with its
    tax tradeoff; a support channel (email + GitHub issues) + a one-sentence
    Pro SLA; the subprocessor/DPA notes. Every item flagged operator-action

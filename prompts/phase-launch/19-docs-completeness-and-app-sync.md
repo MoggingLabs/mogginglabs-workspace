@@ -11,7 +11,7 @@ existing `/docs` shell.
    gaps — get-started/install per-OS, first run, the multi-pane grid,
    workspaces/worktrees, the board + swarm + reviewer-gated merges, the
    browser dock, usage/failover, integrations, the **Brain** (code graph +
-   memory), **accounts/entitlements + the Free/Pro/Agency line**, the
+   memory), **accounts/entitlements + the Free/Pro/Team/Enterprise line**, the
    `mogging` control CLI (every verb), MCP config, troubleshooting
    (SmartScreen/Gatekeeper, native rebuilds, offline), security & privacy.
 2. **Sync, don't fork**: the Workspace repo's `docs/` is the SOURCE of

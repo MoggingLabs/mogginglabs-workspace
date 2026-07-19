@@ -16,7 +16,7 @@ $0 fixed cost**, and *why*. Figures are carried from the repo's own
 > rail), not Polar — a Polar/Paddle MoR wrapper is an OPTIONAL later move
 > if global tax filing becomes a burden; the **IdP** is Auth.js/Clerk on
 > the Neon stack (Supabase Auth still viable); pricing is the owner's
-> DECIDED **Free / Pro $19 / Agency $39**. The sections below remain the
+> DECIDED **Free / Pro $19 / Team $29 (per seat, 2+) / Enterprise**. The sections below remain the
 > *education* on WHY (the DPoP/IdP split, the MoR-vs-raw-Stripe tax
 > tradeoff, offline grace) — read them for reasoning, not for the vendor
 > to pick.

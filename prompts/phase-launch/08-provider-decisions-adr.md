@@ -24,13 +24,14 @@ split. Grounded in `RESEARCH.md` + `RESEARCH-web.md`. No code this step.
    hit.
    (d) **IdP** for the Next.js/Neon stack: **Auth.js (NextAuth)** on Neon
    ($0, owned) primary, **Clerk** the polished-DX alternative, **WorkOS
-   AuthKit** the pre-declared Agency SSO swap — all behind the same
+   AuthKit** the pre-declared Enterprise SSO swap — all behind the same
    `id_token` seam. Supabase Auth is viable but adds a vendor the stack
    doesn't need.
-   (e) **Pricing = the owner's DECIDED tiers** (`PRICING-STRATEGY.md`):
-   **Free / Pro $19 / Agency $39/user** (annual $15/$32) — the claim's
-   tiers are Free/Pro/Agency, NOT Free/Pro/Team; align the FREE baseline +
-   gate points.
+   (e) **Pricing = DECIDED tiers** (`PRICING-STRATEGY.md`): **Free / Pro $19
+   / Team $29 per seat (2+) / Enterprise (contact sales)**, annual ~17% off.
+   FREE_ENTITLEMENTS revises to **2 workspaces x 4 panes, all integrations**
+   (from the shipped 16-pane baseline); Team/Enterprise add **org +
+   per-seat** to the claim.
 2. **Map the FAKEs to the reals**: `fake-idp.ts` → the chosen IdP + our
    token endpoint; `fake-entitle.ts` `/mor/webhook` → the EXISTING Stripe
    webhook (same event-id idempotency + signature-before-state), EXTENDED
@@ -40,7 +41,7 @@ split. Grounded in `RESEARCH.md` + `RESEARCH-web.md`. No code this step.
 3. **Operator accounts**: Stripe + Neon (live), the IdP project —
    operator-action in CHECKLIST; no gate depends on them (gates run
    local/FAKE). Domain + GSC already done.
-4. **Deferrals**: SSO (WorkOS) until Agency scale; RFC 8414 discovery pin,
+4. **Deferrals**: SSO (WorkOS) until Enterprise scale; RFC 8414 discovery pin,
    `iss`/`aud` in the entitlement JWT, RS-side `jti` replay — with the real
    issuer (11); the MoR-wrapper option — post-launch if tax demands it.
 
@@ -50,7 +51,7 @@ split. Grounded in `RESEARCH.md` + `RESEARCH-web.md`. No code this step.
 
 ## Definition of Done
 - ADR 0019 ratifies the split, the website-hosted backend, Stripe-as-rail
-  (+ the tax note), the IdP choice, and the Free/Pro/Agency tiers — each
+  (+ the tax note), the IdP choice, and the Free/Pro/Team/Enterprise tiers — each
   with rationale; the split is binding on 09-13.
 - The FAKE→real map shows every shipped contract the reals must keep,
   including that the Stripe webhook is EXTENDED, not replaced.

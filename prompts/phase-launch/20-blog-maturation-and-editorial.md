@@ -27,8 +27,8 @@ CMS or MDX runtime.
 4. **The launch post set** (3-5 real posts, in `posts.ts`): the Brain
    ("your agents share one map"), the neutrality/BYO-no-credits wedge, a
    technical deep-dive (the daemon/worktree model or the perception
-   budget), a "16 agents, one workspace" how-to, and the accounts/Free-Pro
-   -Agency story. Each targets a /learn cluster keyword and links into docs.
+   budget), a "16 agents, one workspace" how-to, and the accounts /
+   Free-Pro-Team-Enterprise story. Each targets a /learn cluster keyword and links into docs.
 5. **Verify the laws** on every new page: `npm run build` clean, valid
    schema, Lighthouse 100/100/100/100, greps at 0, sitemap + llms.txt +
    RSS updated in the same step.

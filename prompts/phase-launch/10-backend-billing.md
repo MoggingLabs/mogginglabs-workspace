@@ -20,7 +20,8 @@ entitlements, and add the subscription lifecycle.
    (derived plan + features + limits), `devices` (deviceId thumbprint ⇄
    account, per-plan cap). `validate-schema.mjs` covers them.
 3. **The full lifecycle** → `subscriptions` + derived `entitlements`, keyed
-   to the DECIDED tiers (Free/Pro $19/Agency $39): `checkout.session.
+   to the DECIDED tiers (Free/Pro/Team/Enterprise; Team is per-seat via a
+   Stripe quantity subscription): `checkout.session.
    completed` + `customer.subscription.created` (grant), `.updated` (plan
    change), `.deleted`/period-end (revert to Free at current-period-end,
    never mid-period), `charge.refunded` (revoke), `invoice.paid`/`past_due`
@@ -47,7 +48,7 @@ entitlements, and add the subscription lifecycle.
 - The existing Stripe webhook now ALSO derives entitlements, with its
   signature-before-state + idempotency + 400/200/503 contract intact; a
   forged and a replayed delivery each change nothing (proven).
-- Every lifecycle event maps to the right transition against Free/Pro/Agency
+- Every lifecycle event maps to the right transition against Free/Pro/Team/Enterprise
   (period-end revert, revoke, grace); each writes an immutable row; the
   reconcile cron heals a dropped webhook in test.
 - New migrations pass `validate-schema`; the revenue ledger is unregressed.
