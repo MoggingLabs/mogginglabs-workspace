@@ -363,7 +363,7 @@ not dependencies**:
 usage gauge, MCP registration — is listed in the research doc's "do not re-buy"
 table. It is not repeated here.*
 
-### Phase 12 — The Workspace Brain (the differentiator, finally) 🔨
+### Phase 12 — The Workspace Brain (the differentiator, finally) ✅ (`prompts/phase-12/`)
 *Absorbs Phase 2.5. The flagship.* One **context daemon per workspace**, mounted into
 every pane over MCP, so sixteen agents share one map instead of re-scanning one tree
 sixteen times.
@@ -397,6 +397,27 @@ sixteen times.
 - **The economic claim this unlocks** (and no single-pane tool can make it): *many
   agents become cheaper per question than one agent working badly.* Our core feature
   stops being an ergonomic story and becomes an economic one.
+
+**As shipped (2026-07-19).** Everything above landed, plus three organs the plan
+did not yet name: the **Obsidian alignment** (revision B — properties + a closed
+filter grammar + honest skips over the vault), **dual memory auto-capture**
+(revision C — structured drafts from signals the app already watches,
+git-invisible in `.memory/drafts/` until a granted promote), and **recall at
+spawn** (revision D — `recall_memories` + the second launch section, one shared
+budget with the repomap, per-slug usage counters informing the human). One
+correction to the plan's words: the "context daemon per workspace" shipped as a
+per-PROJECT **app service + `worker_threads` indexer** — the PTY daemon is
+untouched and nothing new listens (ADR 0008 §b), and identity is the board-v2
+resolver, extracted, so sixteen worktrees of one repo are one brain. Writes are
+**syntactic-graph symbol writes** behind the per-workspace grant (file-CAS,
+own-checkout, atomic-or-refused) — the plan's "LSP truth" line is answered
+honestly in [ADR 0018](adr/0018-workspace-brain.md)'s deferrals: tree-sitter
+gives syntax, not semantics, and the graph's edges say so. Laws + revisions:
+[ADR 0018](adr/0018-workspace-brain.md); the book:
+[docs/20-brain.md](20-brain.md); sixteen gates closed by `MOGGING_BRAINMILESTONE`
+(one composed fixture world, budgets measured DURING a forced 5k-file re-index
+under 16 live panes; the freeze table in `prompts/phase-12/README.md` holds the
+numbers).
 
 ### Phase 13 — Contention: sixteen agents, one repo, zero collisions 🔨
 The failure mode **our own product creates**, and the highest value-per-hour work on

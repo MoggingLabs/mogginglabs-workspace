@@ -114,6 +114,7 @@ import { runBrainRecallSmoke } from './smokes/brainrecall-smoke'
 import { runBrainPropsSmoke } from './smokes/brainprops-smoke'
 import { runBrainSemSmoke } from './smokes/brainsem-smoke'
 import { runBrainUxSmoke } from './smokes/brainux-smoke'
+import { runBrainMilestoneSmoke } from './smokes/brainmilestone-smoke'
 import { runBoardMcpSmoke } from './smokes/boardmcp-smoke'
 import { runBoardGhSmoke } from './smokes/boardgh-smoke'
 import { runBoardQueueSmoke } from './smokes/boardqueue-smoke'
@@ -201,7 +202,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
   'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_RUNTIMESPLIT', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
-  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_BRAINCORE', 'MOGGING_BRAINPARSE', 'MOGGING_BRAINGRAPH', 'MOGGING_BRAINFRESH', 'MOGGING_BRAINMCP', 'MOGGING_BRAINMAP', 'MOGGING_BRAINWRITE', 'MOGGING_BRAINDOCS', 'MOGGING_MEMGRAPH', 'MOGGING_BRAINSEM', 'MOGGING_BRAINPROPS', 'MOGGING_BRAINCAP', 'MOGGING_BRAINRECALL', 'MOGGING_BRAINUX', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
+  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_BRAINCORE', 'MOGGING_BRAINPARSE', 'MOGGING_BRAINGRAPH', 'MOGGING_BRAINFRESH', 'MOGGING_BRAINMCP', 'MOGGING_BRAINMAP', 'MOGGING_BRAINWRITE', 'MOGGING_BRAINDOCS', 'MOGGING_MEMGRAPH', 'MOGGING_BRAINSEM', 'MOGGING_BRAINPROPS', 'MOGGING_BRAINCAP', 'MOGGING_BRAINRECALL', 'MOGGING_BRAINUX', 'MOGGING_BRAINMILESTONE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
   'MOGGING_PROFILES', 'MOGGING_LOGINTRUTH', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
   // Typed-launch detection + the context gauge (the v6 pack).
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
@@ -540,6 +541,8 @@ function afterWindow(win: BrowserWindow): void {
     runBrainRecallSmoke(win) // env-gated recall-organ smoke: task-ranked curated memories with auditable fixed-weight breakdowns (drafts absent by topology), the second launch section under ONE shared budget with the map + toggle matrix, hybrid only under semantic consent (FAKE embedder, labeled, exact world embeds nothing), bodies never injected, per-slug usage counters exact, `mogging recall` exit codes (ADR 0018 revision D; HOLD = manual)
   } else if (process.env.MOGGING_BRAINUX) {
     runBrainUxSmoke(win) // env-gated Brain-VIEW smoke: palette + Ctrl+Shift+M doors, status card == brain:status truth with a LIVE pane-edit drain on screen, hub focus ≤150 on the canvas, inspector + explorer-reveal delegation, hostile memory rendered inert + wikilink nav + dangling dimmed, becalmed two-frame identity, AA on every new ink, counts-only telemetry (ADR 0018/10)
+  } else if (process.env.MOGGING_BRAINMILESTONE) {
+    runBrainMilestoneSmoke(win) // env-gated Phase-12 MILESTONE: the whole brain promise composed in ONE fixture world — shared-index economics across two worktrees, the oriented board launch, graph truth over real MCP, freshness under a real agent's write, granted atomic symbol writes + stale refusal, offline pinned docs, git-carried memory, the capture→promote→recall cipher arc with a labeled FAKE-embedder find, budgets held DURING a forced 5k-file re-index under 16 live panes, ADR 0005 hygiene, custody + zero sockets + the daemon protocol number equal (Phase-12/14)
   } else if (process.env.MOGGING_SETSHELL) {
     runSetShellSmoke(win) // env-gated settings-shell smoke: grouped nav, cards, measured spacing + AA (Phase-8.5/04)
   } else if (process.env.MOGGING_SETAGENTCFG) {

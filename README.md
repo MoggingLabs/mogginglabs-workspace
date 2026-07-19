@@ -50,10 +50,10 @@ npm install        # compiles native modules (node-pty, better-sqlite3). Needs a
 npm run dev        # launch the app in dev mode
 ```
 
-> **Status.** All roadmap phases through 11 (Files — the explorer sidebar) have shipped,
-> plus the accounts pack (the optional Pro tier, hardened — `docs/19-accounts.md`);
+> **Status.** All roadmap phases through 12 (the Workspace Brain — `docs/20-brain.md`) have
+> shipped, plus the accounts pack (the optional Pro tier, hardened — `docs/19-accounts.md`);
 > the current release is the version in `package.json`. The `qa-smokes.sh`
-> sweep now runs **173 gates** across three OSes. Per-phase receipts and measured numbers
+> sweep now runs **174 gates** across three OSes. Per-phase receipts and measured numbers
 > live where they were written: the docs each roadmap bullet below links, and the
 > `prompts/phase-*/REPORT.md` process records.
 
@@ -177,6 +177,7 @@ other; `main`/`preload`/`renderer` are the only composition root. See
 - **Phase 8.5** ✅ — The UI/UX revamp: an audit of every surface ([`AUDIT.md`](prompts/phase-8.5/AUDIT.md)), then rebuilt on one layout vocabulary (`Card`/`SectionHeader`/`FieldGroup`/`TwoColumn`, ramp extended to `--sp-7/8`) — one-page wizard, click-to-pick folder browser, overview-first Settings, Home/first-run, board + palette, one feedback language, chrome + possession banner, the Usage-glance recut; 13 removals, 16 bugs fixed; spacing frozen at zero, both budgets unmoved. Closed by `MOGGING_UXMILESTONE` + the `check-audit.mjs` coverage gate (receipts: `prompts/phase-8.5/README.md`).
 - **Accounts** ✅ — the optional Pro tier, hardened (ADR [0016](docs/adr/0016-accounts-and-entitlements.md)/[0017](docs/adr/0017-split-node-runtime.md)): PKCE + DPoP sign-in, signed short-TTL entitlements with a 14-day offline grace that degrades to Free and **never bricks**, a hardware device key (TPM/Secure Enclave) so a copied install is inert, origin pinning, the Electron fuse wall + ASAR integrity, main-process V8 bytecode, a forensic activation watermark + tamper self-check, and the runtime split that turned `runAsNode` off. The free local core stays account-free and fully offline; `mogging list/send/capture` stay ungated. Enforcement honesty: local checks are UX — the teeth are hardware binding + server-side value. Closed by `MOGGING_PRODMILESTONE` (one composed run on FAKE services, zero network); the book: [`docs/19-accounts.md`](docs/19-accounts.md). Code signing is the operator's deferred final step.
 - **Board v2** ✅ — the board becomes per-PROJECT (a repo's worktrees share one board; a switcher reaches the rest), main becomes the ONE writer (revision CAS + a claim rule — agents get full, guarded CRUD over MCP), the lanes learn flow practice (Backlog, WIP limits, priority/labels/aging/blocked/due, filter, activity log, archive), GitHub goes two-way behind a per-board risk-confirmed grant ([ADR 0015](docs/adr/0015-board-github-write-back.md)), and an opt-in, budget-fenced **queue** pulls the top To-do card into a fresh agent when a slot frees. Five new gates (`BOARDV2` · `BOARDMCP` · `BOARDUX` recut · `BOARDGH` · `BOARDQUEUE`); the map is [`docs/18-board.md`](docs/18-board.md).
+- **Phase 12** ✅ — The Workspace Brain: one deterministic tree-sitter code graph per PROJECT (a repo's worktrees share it — one index, content-addressed so identical bytes parse once), mounted into every pane over the house MCP server ([ADR 0018](docs/adr/0018-workspace-brain.md) + revisions A–D). Cold panes start **oriented**: a PageRank repomap + "what the team knows" recall in the first prompt, both under ONE budget. Freshness is a law (every answer stamps `generation` + `dirty`; the index rides the existing 2.5s git tick); symbol-level writes ride the grant with file-CAS; library docs answer at the lockfile-pinned version, offline; `.memory/` is an Obsidian-compatible team vault with auto-captured, quarantined drafts and granted promotion; the semantic lens is opt-in, BYO, labeled, never the truth layer. Sixteen gates closed by `MOGGING_BRAINMILESTONE`; the book: [`docs/20-brain.md`](docs/20-brain.md).
 
 Full plan: [`docs/02-mvp-and-roadmap.md`](docs/02-mvp-and-roadmap.md).
 

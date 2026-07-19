@@ -95,9 +95,9 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
   ]
   const countWrites = (names: string[]): number => names.filter((n) => WRITES.includes(n)).length
   /** Catalog geometry: 17 browser + 6 control reads + 1 self + 10 brain reads
-   *  + 4 memory reads (non-writes) + 18 writes (11 fleet/board + 3 brain + 4
-   *  memory). */
-  const NON_WRITE_COUNT = 38
+   *  + 5 memory reads (recall_memories joined at ADR 0018 revision D)
+   *  (non-writes) + 18 writes (11 fleet/board + 3 brain + 4 memory). */
+  const NON_WRITE_COUNT = 39
   const WRITE_COUNT = WRITES.length
 
   const waitFor = async (probe: () => Promise<boolean>, tries = 12, gapMs = 400): Promise<boolean> => {

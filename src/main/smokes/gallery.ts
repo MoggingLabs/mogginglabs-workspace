@@ -2,13 +2,14 @@ import { app, type BrowserWindow } from 'electron'
 import { execFile, execFileSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, parse } from 'node:path'
+import { dirname, join, parse } from 'node:path'
 import { createWorktree } from '@backend/features/worktrees'
 import { setFakeMode } from '@backend/features/usage'
 import { EntitlementsChannels, FREE_ENTITLEMENTS, UsageChannels, type EntitlementsSnapshot } from '@contracts'
 import { FakeIdp } from '@backend/features/account/fake-idp'
 import { setDeviceKeyForceSoftwareForSmoke } from '@backend/platform/dpop-key'
 import { login, logout, resetAccountForSmoke, setAccountConfigForSmoke, setBrowserOpenerForSmoke, whenSettledForSmoke } from '../account'
+import { handleBrainRebuild, handleBrainRecallUi } from '../brain'
 import { getUsageService, getUsageStatusService } from '../usage'
 import { getSettingsStore } from '../app-settings'
 import { clearTrail, flushTrailForSmoke, recordTrail } from '../trail'
@@ -530,6 +531,36 @@ export function runGallery(win: BrowserWindow): void {
         await sleep(1500)
       })
 
+      // ── Stage the Brain once (12/10): a code graph with a real neighborhood, a
+      //    team vault with tags/properties/wikilinks, one quarantined draft, and
+      //    non-zero usage counters — everything the view's three surfaces show. ──
+      await part('brain-staging', async () => {
+        const brainFiles: Record<string, string> = {
+          'src/hub.ts': `export function galleryHub(): number {\n  return 42\n}\n`,
+          'src/app.ts': `import { galleryHub } from './hub'\n\nexport function appMain(): number {\n  return galleryHub()\n}\n`,
+          'src/render.ts': `import { galleryHub } from './hub'\n\nexport class GalleryRenderer {\n  paint(): number {\n    return galleryHub()\n  }\n}\n`,
+          // The capture law's self-ignoring byte, staged as the engine would write it,
+          // so the hand-seeded draft below stays git-invisible like a real one.
+          '.memory/.gitignore': 'drafts/\n',
+          '.memory/release-checklist.md':
+            '---\nname: release-checklist\ndescription: What we check before tagging a release\ntags: [ops, release]\nowner: platform\nreviewed: 2026-07-18\n---\n\nTag only after the sweep is green. See [[deploy-runbook]] and [[signing-keys]].\n',
+          '.memory/deploy-runbook.md':
+            '---\nname: deploy-runbook\ndescription: The deploy, step by step\ntags: [ops]\n---\n\nShip from main. Rollback is a re-tag. Related: [[release-checklist]].\n',
+          '.memory/drafts/session-flaky-reflow.md':
+            '---\nname: session-flaky-reflow\ndescription: Auto-captured session draft about the flaky reflow fix\nauto: true\nsource: session\n---\n\n## Commands\n- `npm test reflow` — exit 1\n- `npm test reflow` — exit 0\n\n## Failures\n- `npm test reflow` — exit 1\n\n## Fixed\n- `npm test reflow` — succeeded on attempt 2\n'
+        }
+        for (const [rel, src] of Object.entries(brainFiles)) {
+          mkdirSync(dirname(join(repo, rel)), { recursive: true })
+          writeFileSync(join(repo, rel), src)
+        }
+        git(repo, ['add', '-A'])
+        git(repo, ['commit', '-m', 'brain gallery fixture'])
+        const built = await handleBrainRebuild({ root: repo })
+        if (!built.ok) throw new Error('brain gallery rebuild refused: ' + JSON.stringify(built))
+        // One recall bumps per-slug counters, so the usage column has truth to show.
+        await handleBrainRecallUi({ root: repo, task: 'release checklist deploy' })
+      })
+
       // ── Themed sweep ──────────────────────────────────────────────────────────
       for (const t of ['midnight', 'light'] as const) {
         const tag = t === 'midnight' ? 'dark' : 'light'
@@ -708,6 +739,35 @@ export function runGallery(win: BrowserWindow): void {
 
           await ES(`window.__mogging.explorer.toggle(false)`)
           await sleep(300)
+        })
+
+        await part(`${tag}-brain`, async () => {
+          // 12/10: the Brain view's three surfaces — the status card with every
+          // consent, the focus lens on a real neighborhood, and the memory reader
+          // (properties panel + wikilinks + the drafts section + usage counters).
+          await ES(`window.__mogging.workspace.switchByIndex(0)`) // Alpha: the staged brain project
+          await sleep(600)
+          await key(`key: 'M', code: 'KeyM', ctrlKey: true, shiftKey: true`)
+          await sleep(1400) // the view opens; status + overview land
+          await snap(`${tag}-brain-status`)
+          await ES(`window.__mogging.brain.search('galleryHub')`)
+          await sleep(700)
+          await ES(
+            `window.__mogging.brain.choose(window.__mogging.brain.results().findIndex((r) => r === 'code:galleryHub'))`
+          )
+          await sleep(2400) // the settle animation runs its course
+          await snap(`${tag}-brain-graph`)
+          await ES(`window.__mogging.brain.search('release')`)
+          await sleep(700)
+          await ES(
+            `window.__mogging.brain.choose(window.__mogging.brain.results().findIndex((r) => r === 'memory:release-checklist'))`
+          )
+          await sleep(1000)
+          await snap(`${tag}-brain-reader`)
+          await escape() // out of the reader state…
+          await sleep(300)
+          await escape() // …and the view itself closes; the grid returns
+          await sleep(500)
         })
 
         await part(`${tag}-densities`, async () => {

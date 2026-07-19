@@ -19,7 +19,8 @@
   reach telemetry), ADR 0008 §b (protocols, not plugins — nothing new listens),
   docs/[02-mvp-and-roadmap.md](../02-mvp-and-roadmap.md) §Phase 12 (the roadmap entry
   this begins), docs/research/[2026-07-vibe-coding-ecosystem.md](../research/2026-07-vibe-coding-ecosystem.md)
-  (the research this synthesizes).
+  (the research this synthesizes). The shipped surface, whole:
+  docs/[20-brain.md](../20-brain.md) (the book).
 
 ## Context
 

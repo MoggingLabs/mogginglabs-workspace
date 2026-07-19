@@ -69,6 +69,11 @@ const CLAIMS = [
   { file: 'prompts/phase-11/README.md', re: /\([^()]*?(\d+) gates\)/g, expect: TOTAL, what: 'sweep total' },
   { file: 'prompts/phase-11/REPORT.md', re: /all (\d+) gates/g, expect: TOTAL, what: 'sweep total' },
   { file: 'prompts/phase-11/REPORT.md', re: /local sweep \((\d+) gates,/g, expect: TOTAL, what: 'sweep total' },
+
+  // The Brain book's present-tense claim (Phase 12): total + both components.
+  { file: 'docs/20-brain.md', re: /stands at \*\*(\d+) gates/g, expect: TOTAL, what: 'sweep total' },
+  { file: 'docs/20-brain.md', re: /gates \((\d+) app-boot/g, expect: RUNTIME, what: 'app-boot gates' },
+  { file: 'docs/20-brain.md', re: /app-boot \+ (\d+) static\)/g, expect: STATIC, what: 'static gates' },
 ]
 
 // A version token in docs/10 that is deliberately HISTORICAL: a closed interval naming
