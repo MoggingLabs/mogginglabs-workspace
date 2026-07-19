@@ -613,12 +613,14 @@ async function dispatchWrite(def, args, by) {
       return { text: `released ${m.count}`, receipt: {} }
     }
     default: {
-      // ADR 0018 step 09: the memory writes ride the same app endpoint and the
-      // same grant. The success payload is the slug and the fileHash the next
-      // update will CAS against — the file is indexed before this reply.
-      if (def.verb === 'brain.memCreate' || def.verb === 'brain.memUpdate') {
+      // ADR 0018 step 09 (+ revision C's draft verbs): the memory writes ride
+      // the same app endpoint and the same grant. Create/update/promote answer
+      // the slug and the fileHash the next update will CAS against (the file is
+      // indexed before this reply); discard answers the slug it deleted.
+      if (def.verb === 'brain.memCreate' || def.verb === 'brain.memUpdate' || def.verb === 'brain.memPromote' || def.verb === 'brain.memDiscard') {
         const r = await callApp(def.verb, args)
         if (!r.ok) return { error: memoryWriteRefusalText(r) }
+        if (def.verb === 'brain.memDiscard') return { text: JSON.stringify({ slug: r.slug, discarded: true }) }
         return { text: JSON.stringify({ slug: r.slug, fileHash: r.fileHash }) }
       }
       // ADR 0018 step 07: the brain's symbol writes ride the app endpoint like

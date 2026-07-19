@@ -3,11 +3,18 @@ import { Button, Card, EmptyState, Pill, SectionHeader, Spinner, clear, createTo
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { requestExplorerReveal } from '../../core/shell/explorer-reveal-port'
 import { getTelemetry } from '../../core/telemetry'
+import type { BrainDraftRow } from '@contracts'
 import {
+  brainDraftDiscard,
+  brainDraftGet,
+  brainDraftPromote,
+  brainDrafts,
   brainOverview,
   brainRead,
   brainRebuild,
   brainStatus,
+  distillGet,
+  distillSet,
   libFetchGet,
   libFetchSet,
   orientGet,
@@ -81,6 +88,10 @@ export function createBrainView(): BrainView {
   let focusGraph: FocusGraph | null = null
   let focusRefused: string | null = null
   let reader: { slug: string } | null = null
+  // The draft quarantine (revision C): the reader lens's Drafts section.
+  let draftRows: BrainDraftRow[] = []
+  let draftsEvicted = 0
+  let openDraft: (BrainDraftRow & { body: string }) | null = null
   let inspector: InspectorModel | null = null
   let searchHits: SearchHit[] = []
   let searchSelected = 0
@@ -148,12 +159,35 @@ export function createBrainView(): BrainView {
     hint: 'Off by default. Fuzzy recall through YOUR OWN embedding endpoint (set in Settings › Privacy) — every fuzzy hit is labeled probabilistic; exact search never changes.',
     onChange: () => void applyConsent(semToggle, semSet, pullConsents)
   })
+  // Distillation (revision C): consent + the chat model, riding the SAME BYO
+  // endpoint the semantic lens configured. OFF = zero provider calls, ever —
+  // drafts land structured-only. Output is additive and labeled by law.
+  const distillToggle = createToggleRow({
+    label: 'Captured drafts may be distilled into prose',
+    hint: 'Off by default. Uses YOUR OWN endpoint (the semantic lens’s, Settings › Privacy) with the chat model below — the prose is labeled with its provider and model, and the structured draft is always kept beneath it.',
+    onChange: () => void applyConsent(distillToggle, (id, on) => distillSet(id, { on }), pullConsents)
+  })
+  const distillModelInput = el('input', {
+    class: 'brain-distill-model-input',
+    type: 'text',
+    placeholder: 'chat model (e.g. llama3.1)',
+    ariaLabel: 'Distillation chat model'
+  })
+  distillModelInput.addEventListener('change', () => {
+    const id = wsId()
+    if (id) void distillSet(id, { model: distillModelInput.value }).then(() => pullConsents())
+  })
+  distillModelInput.addEventListener('keydown', (e) => e.stopPropagation()) // typing must not trip global chords
+  const distillModelRow = el('div', { class: 'brain-distill-model' }, [
+    el('span', { class: 'brain-distill-model-label', text: 'Distill model' }),
+    distillModelInput
+  ])
   const consentCard = Card(
     {
       header: SectionHeader({ title: 'Consents', caption: 'Per-workspace. Two-way with Settings — one stored truth.' }),
       class: 'brain-consent-card'
     },
-    [orientToggle.el, libFetchToggle.el, semToggle.el]
+    [orientToggle.el, libFetchToggle.el, semToggle.el, distillToggle.el, distillModelRow]
   )
 
   const lensBtn = (lens: 'graph' | 'reader', label: string, hint: string): HTMLButtonElement =>
@@ -262,10 +296,14 @@ export function createBrainView(): BrainView {
     orientToggle.setDisabled(!id)
     libFetchToggle.setDisabled(!id)
     semToggle.setDisabled(!id)
+    distillToggle.setDisabled(!id)
+    distillModelInput.disabled = !id
     if (!id) {
       orientToggle.setChecked(false)
       libFetchToggle.setChecked(false)
       semToggle.setChecked(false)
+      distillToggle.setChecked(false)
+      distillModelInput.value = ''
     }
   }
   async function pullConsents(): Promise<void> {
@@ -274,6 +312,9 @@ export function createBrainView(): BrainView {
       orientToggle.setChecked(!!id && (await orientGet(id)))
       libFetchToggle.setChecked(!!id && (await libFetchGet(id)))
       semToggle.setChecked(!!id && (await semGet(id)))
+      const distill = id ? await distillGet(id) : { on: false, model: '' }
+      distillToggle.setChecked(distill.on)
+      if (document.activeElement !== distillModelInput) distillModelInput.value = distill.model
     } catch {
       /* bridge unavailable — leave as-is */
     }
@@ -353,6 +394,14 @@ export function createBrainView(): BrainView {
           'Wanted links',
           String(o.danglingLinks),
           'Wikilink targets no memory is written for — wanted knowledge, not an error'
+        ),
+        // Revision C: retention is honest — the cap and every eviction it took
+        // are on the card, never silent.
+        statRow(
+          'brain-stat-drafts',
+          'Drafts',
+          o.draftsEvicted ? `${o.drafts} · ${o.draftsEvicted} evicted` : String(o.drafts),
+          'Auto-captured drafts in quarantine (.memory/drafts/) — promoted by hand or by a granted agent; retention evicts oldest past the cap, counted here'
         )
       )
       // Revision B: what the .memory/ scan refused to index — a row only when
@@ -477,9 +526,96 @@ export function createBrainView(): BrainView {
     }
   }
 
+  async function refreshDrafts(): Promise<void> {
+    if (!projectRoot) {
+      draftRows = []
+      draftsEvicted = 0
+      return
+    }
+    const a = await brainDrafts(projectRoot)
+    if (a.ok) {
+      draftRows = a.drafts
+      draftsEvicted = a.evicted
+      if (openDraft && !a.drafts.some((d) => d.slug === openDraft?.slug)) openDraft = null
+    }
+  }
+
+  async function actOnDraft(slug: string, kind: 'promote' | 'discard'): Promise<void> {
+    const r = kind === 'promote' ? await brainDraftPromote(projectRoot, slug) : await brainDraftDiscard(projectRoot, slug)
+    if (!r.ok) {
+      showToast({ tone: 'danger', title: kind === 'promote' ? 'Promote refused' : 'Discard refused', body: r.detail ?? String(r.reason ?? 'refused') })
+    } else {
+      showToast({
+        tone: 'success',
+        title: kind === 'promote' ? 'Draft promoted' : 'Draft discarded',
+        body: kind === 'promote' ? `“${slug}” is a team memory now — permanent, linked, suggestible.` : `“${slug}” is gone. Promoted memories are never touched by this button.`
+      })
+      if (openDraft?.slug === slug) openDraft = null
+    }
+    await refreshDrafts()
+    await refreshData() // memories/drafts counts moved
+    if (mode === 'reader') void renderReaderPane()
+  }
+
+  /** The Drafts section (revision C): quarantine on screen — honest counts,
+   *  the two doors (promote / discard), and a read-only body view. Draft text
+   *  is agent/capture-written and lands via textContent only. */
+  function draftsSection(): HTMLElement {
+    const host = el('section', { class: 'brain-drafts', ariaLabel: 'Drafts' })
+    const caption = draftsEvicted
+      ? `Auto-captured, quarantined until promoted. ${draftsEvicted} evicted by retention.`
+      : 'Auto-captured from sessions, merges, and finished cards — quarantined until promoted.'
+    host.append(SectionHeader({ title: `Drafts (${draftRows.length})`, caption }))
+    if (!draftRows.length) {
+      host.append(el('p', { class: 'brain-drafts-none', text: 'Nothing captured yet. Work a session, merge a review, or finish a card — the record lands here.' }))
+      return host
+    }
+    const list = el('ul', { class: 'brain-drafts-list' })
+    for (const d of draftRows) {
+      const row = el('li', { class: 'brain-draft-row', dataset: { slug: d.slug } }, [
+        el(
+          'button',
+          {
+            class: 'brain-draft-open',
+            type: 'button',
+            title: `Read draft ${d.slug}`,
+            onClick: () => {
+              void brainDraftGet(projectRoot, d.slug).then((got) => {
+                if (got.ok && got.draft) {
+                  openDraft = got.draft
+                  void renderReaderPane()
+                }
+              })
+            }
+          },
+          [el('span', { class: 'brain-draft-name', text: d.name }), el('span', { class: 'brain-draft-desc', text: d.description })]
+        ),
+        Pill({ text: d.source || 'draft', title: 'Where this draft was captured from' }),
+        ...(d.distilled ? [Pill({ text: 'distilled', tone: 'accent', title: 'A labeled prose summary rides above the structured record' })] : []),
+        Button({ label: 'Promote', variant: 'outline', size: 'sm', title: 'Move into .memory/ proper — a permanent team memory', onClick: () => void actOnDraft(d.slug, 'promote') }),
+        Button({ label: 'Discard', variant: 'ghost', size: 'sm', title: 'Delete this draft (drafts only — promoted memories are never deletable here)', onClick: () => void actOnDraft(d.slug, 'discard') })
+      ])
+      list.append(row)
+    }
+    host.append(list)
+    if (openDraft) {
+      host.append(
+        el('div', { class: 'brain-draft-reader' }, [
+          el('h3', { class: 'brain-draft-reader-title', text: openDraft.name }),
+          el('p', { class: 'brain-reader-sub', text: openDraft.description }),
+          el('p', { class: 'brain-reader-root', text: `.memory/drafts/${openDraft.slug}.md · ${openDraft.root}` }),
+          el('pre', { class: 'brain-draft-body', text: openDraft.body })
+        ])
+      )
+    }
+    return host
+  }
+
   async function renderReaderPane(): Promise<void> {
     clear(readerHost)
     if (!reader) {
+      await refreshDrafts()
+      readerHost.append(draftsSection())
       readerHost.append(
         EmptyState({
           icon: 'bookmark',
@@ -786,6 +922,9 @@ export function createBrainView(): BrainView {
       focusGraph = null
       focusRefused = null
       reader = null
+      draftRows = []
+      draftsEvicted = 0
+      openDraft = null
       inspector = null
       searchHits = []
       searchInput.value = ''
@@ -901,7 +1040,38 @@ export function createBrainView(): BrainView {
       renderMain()
       return true
     },
-    consents: () => ({ orient: orientToggle.checked(), libFetch: libFetchToggle.checked(), semantic: semToggle.checked() })
+    consents: () => ({
+      orient: orientToggle.checked(),
+      libFetch: libFetchToggle.checked(),
+      semantic: semToggle.checked(),
+      distill: distillToggle.checked(),
+      distillModel: distillModelInput.value
+    }),
+    // The Drafts section's probes (revision C) — real state, real doors.
+    drafts: async () => {
+      await refreshDrafts()
+      return { rows: draftRows, evicted: draftsEvicted }
+    },
+    draftsProbe: () => {
+      const section = readerHost.querySelector('.brain-drafts')
+      return {
+        present: !!section,
+        header: section?.querySelector('.mog-section-header, h2, h3')?.textContent ?? section?.textContent?.slice(0, 80) ?? '',
+        rows: section ? [...section.querySelectorAll('.brain-draft-row')].map((r) => (r as HTMLElement).dataset.slug ?? '') : [],
+        openBody: section?.querySelector('.brain-draft-body')?.textContent ?? '',
+        activeContent: section ? section.querySelectorAll('script, img, style, iframe, object, embed, svg').length : -1
+      }
+    },
+    openDraftRow: async (slug: string) => {
+      const got = await brainDraftGet(projectRoot, slug)
+      if (got.ok && got.draft) {
+        openDraft = got.draft
+        if (mode === 'reader') await renderReaderPane()
+      }
+      return got.ok
+    },
+    promoteDraft: (slug: string) => void actOnDraft(slug, 'promote'),
+    discardDraft: (slug: string) => void actOnDraft(slug, 'discard')
   }
 
   return {

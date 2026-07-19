@@ -7,6 +7,10 @@
   amendment to stance (a) — for the semantic memory lens. **Revision B (2026-07-19)**
   records the VAULT STANCE: `.memory/` is an Obsidian-compatible vault by
   construction, with properties, a closed filter grammar, and honest skips.
+  **Revision C (2026-07-19)** adds DUAL MEMORY, AUTO-CAPTURED: structured drafts
+  from signals the app already watches, quarantined in `.memory/drafts/` until a
+  granted promote — and grows the closed memory-write set by exactly the two
+  draft verbs (`promote_memory`, `discard_memory`).
 - **Relates to:** ADR 0004 (layering: contracts / backend / main), ADR 0005 (what may
   reach telemetry), ADR 0008 §b (protocols, not plugins — nothing new listens),
   docs/[02-mvp-and-roadmap.md](../02-mvp-and-roadmap.md) §Phase 12 (the roadmap entry
@@ -172,8 +176,10 @@ answer this step adds, recorded here because every clause is load-bearing:
   grant as every write, with 07's guards (create refuses `exists`; update is
   file-CAS with the fresh hash riding the `stale` refusal; landings are
   atomic-or-refused and indexed before the reply). The sets are closed by the
-  catalog validator; growing either is a revision of this ADR. There is no
-  delete tool — removing a memory is a human's `git rm`.
+  catalog validator; growing either is a revision of this ADR — and revision C
+  below is exactly that, adding the two draft verbs (`promote_memory`,
+  `discard_memory`). There is no delete tool for a curated memory — removing
+  one is a human's `git rm`.
 - **Privacy (h), unchanged.** Memory text reaches the calling model only; the
   trail carries verb + outcome, counts only.
 
@@ -302,6 +308,75 @@ the reader's properties panel (hostile values inert), the 250ms wikilink
 hover preview (shows, hides, Escapes, never for dangling), graph depth
 1|2|3 with depth 2 byte-identical to the default fetch, and the skipped
 row on screen.
+
+## Revision C — dual memory, auto-captured (the capture law)
+
+Agents should not have to be told to remember. The app already WATCHES every
+session — command blocks (OSC 133: commands + exit codes), review merges,
+board cards reaching Done — and this revision captures draft memories FROM
+those signals: *reasoning* drafts (how it was solved — the ladder, its
+failures, the failure→retry→fix arcs) from a pane's block ladder at session
+end, and *knowledge* drafts (what was learned — touched files/symbols via the
+graph, the card's task, the branch) from a merge landing or a card reaching
+Done. Four clauses, each structural:
+
+- **(C1) Deterministic capture.** ZERO LLM in the base path: a draft's body is
+  lists derived from the signals (`brain/capture.ts`), never invented prose;
+  frontmatter carries `auto: true` + `source: session|merge|card` as inert
+  props under revision B's parse law. Triggers RIDE EXISTING EMITTERS — the
+  renderer's block tracker at pane end, the board's lane-change registry, the
+  review merge handler — zero new watchers. Capture reads command blocks and
+  board/merge facts only, never scraped pane text, and every command line
+  passes the house secret redaction before it can land.
+- **(C2) The quarantine.** Drafts land in `.memory/drafts/<slug>.md` — the ONE
+  subdirectory that is ours — and are second-class BY CONSTRUCTION: indexed in
+  their own tables, and **git-invisible until promoted**: the first landing
+  writes a self-ignoring `.memory/.gitignore` (`drafts/` — the
+  `.mogging/.gitignore` precedent; never overwritten, so a user's own ignore
+  file wins). Two laws hang on that byte: an unreviewed auto-capture never
+  propagates to the team through git, and an untracked draft never dirties
+  the repo — the review merge gate's clean-repo law stays open with drafts
+  standing. Promotion is the one door into git: the moved file is ordinary
+  untracked team memory, commit-ready. Beyond that, drafts are indexed in
+  their own tables (`memory_drafts`, its FTS shadow), searchable but ranked
+  BELOW every curated hit with `draft: true` + provenance on each one, and
+  EXCLUDED from `suggest_connections`, from the semantic lens, and from recall
+  — not by discipline but by topology (no curated query can see the draft
+  tables). Two granted verbs are the only doors: `promote_memory` moves the
+  file bytes-verbatim into `.memory/` proper (a non-draft refuses; a curated
+  collision refuses `exists`); `discard_memory` deletes a DRAFT only — a
+  promoted memory refuses, because **promoted memories are permanent: no
+  auto-delete path exists** and curated deletion stays a human's `git rm`.
+  Both join the closed memory-write set (the catalog validator holds it) —
+  this revision IS the ADR revision that growth demands. The Brain view's
+  reader gains a Drafts section (read, promote, discard — the human's own
+  surface, same engine locks).
+- **(C3) Optional distillation, additive and labeled.** Consent
+  `brain.captureDistill` (per workspace, default OFF) + a chat model let
+  revision A's BYO seam — a chat-completions SIBLING adapter, same endpoint,
+  same vaulted key, FAKE endpoint for every smoke — compress a structured
+  draft into prose. The output ADDS `distilled: true` + provider/model to the
+  head and the prose above the body; **the structured body always survives
+  below it** (truth survives the summary). No consent → structured drafts
+  only and zero provider calls (spied); a distill failure lands the
+  structured draft unchanged, typed and quiet.
+- **(C4) Retention honesty.** Caps are contracts (`BRAIN_MAX_DRAFTS`, a max
+  age), eviction is oldest-out, and every eviction is COUNTED
+  (`memory_draft_stats`, surfaced in `brain:overview` and the status card) —
+  never silent. Retention touches only the quarantine, by construction.
+
+Proven by **BRAINCAP** (`MOGGING_BRAINCAP`, verdict
+`out/braincap-result.json`): a REAL scripted pane emits a fail→fix OSC 133
+arc through the REAL PTY and its session end lands a reasoning draft with the
+exact failing command + exit code and the fixed arc; a Done card lands a
+knowledge draft; search ranks both below a curated fixture with `draft: true`
+on every draft hit; suggestions and the FAKE-embedder recall probe never see
+them; grantless promote refuses while a granted promote moves the file
+bytes-verbatim and suggestions then include it with a fixture-known
+breakdown; discard refuses on the promoted slug and deletes the draft;
+distill OFF spies zero provider calls and ON (FAKE) lands labeled prose over
+the preserved structure with zero sockets; a cap of N with N+5 landings
+counts the evictions; and `.memory/drafts/` holds only `.md` files.
 
 ## Research lineage
 

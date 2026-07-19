@@ -9,13 +9,19 @@ import {
 } from './memory'
 import type { BrainReadHost, BrainServeReply } from './serve'
 
-// The memory WRITE family (ADR 0018 step 09): create/update `.memory/` files —
-// 07's granted family, 07's guards, applied to the team's knowledge graph. TWO
-// verbs, a CLOSED set (growing it needs an ADR revision; delete stays human —
-// `git rm` is the delete):
+// The memory WRITE family (ADR 0018 step 09; revision C adds the two draft
+// verbs): `.memory/` files — 07's granted family, 07's guards, applied to the
+// team's knowledge graph. FOUR verbs, a CLOSED set (growing it needs an ADR
+// revision; deleting a CURATED memory stays human — `git rm` is the delete):
 //   brain.memCreate   mint `<slug>.md` from a name (hostile names sanitize
 //                     through the ONE slugger; a collision refuses `exists`)
 //   brain.memUpdate   swap the BODY under the existing head, CAS-guarded
+//   brain.memPromote  move ONE draft out of `.memory/drafts/` into `.memory/`
+//                     proper, bytes verbatim (a non-draft slug refuses; a
+//                     curated collision refuses `exists`)
+//   brain.memDiscard  delete ONE DRAFT — and only a draft, by construction:
+//                     a promoted memory refuses `invalid` (no tool deletes
+//                     curated memories, ever)
 // Custody first, the same locks in order, each a typed refusal, no bypass:
 //   (a) GRANT  — the bin serves these only under the workspace's granted-writes
 //                and main re-derives it per call (the board precedent);
@@ -31,7 +37,7 @@ import type { BrainReadHost, BrainServeReply } from './serve'
 // Electron-free; memory text flows back to the calling model only — never
 // telemetry (the trail carries counts, ADR 0005).
 
-export const MEMORY_WRITE_VERBS = ['brain.memCreate', 'brain.memUpdate'] as const
+export const MEMORY_WRITE_VERBS = ['brain.memCreate', 'brain.memUpdate', 'brain.memPromote', 'brain.memDiscard'] as const
 export type MemoryWriteVerb = (typeof MEMORY_WRITE_VERBS)[number]
 
 export const isMemoryWriteVerb = (name: string): name is MemoryWriteVerb =>
@@ -42,6 +48,8 @@ export const isMemoryWriteVerb = (name: string): name is MemoryWriteVerb =>
 export type MemoryWriteOp =
   | { kind: 'create'; slug: string; text: string }
   | { kind: 'update'; slug: string; expectedFileHash: string; body: string }
+  | { kind: 'promote'; slug: string }
+  | { kind: 'discard'; slug: string }
 
 export type MemoryLandResult =
   | { ok: true; slug: string; fileHash: string }
@@ -76,6 +84,30 @@ export async function serveMemoryWrite(
     if (!callerRoot) {
       return refuse('forbidden', 'memory writes exist only inside a pane session — pane identity is the custody anchor')
     }
+
+    // The draft verbs (revision C): slug in, engine locks out — no body, no
+    // hash. The engine decides draftness; a wrong-kind slug is its typed
+    // refusal, never a guess here.
+    if (verb === 'brain.memPromote' || verb === 'brain.memDiscard') {
+      const slug = str(args.slug)
+      if (!slug || !isMemorySlug(slug)) {
+        return refuse('invalid', 'slug must be the draft\'s kebab-case slug — search_memories flags draft hits with draft:true')
+      }
+      const landing = await host.landMemoryWrite(callerRoot, {
+        kind: verb === 'brain.memPromote' ? 'promote' : 'discard',
+        slug
+      })
+      if (!landing.ok) {
+        return {
+          ok: false,
+          reason: landing.reason,
+          ...(landing.detail ? { detail: landing.detail } : {}),
+          ...(landing.freshHash ? { freshHash: landing.freshHash } : {})
+        }
+      }
+      return { ok: true, slug: landing.slug, fileHash: landing.fileHash }
+    }
+
     const body = str(args.body)
     if (!body) return refuse('invalid', 'body is required')
     if (Buffer.byteLength(body, 'utf8') > BRAIN_WRITE_MAX_BODY_BYTES) {

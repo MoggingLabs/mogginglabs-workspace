@@ -26,6 +26,7 @@ import { registerExplorer } from './explorer'
 import { registerReview } from './review'
 import { registerBoard } from './board'
 import { registerBrain, disposeBrain } from './brain'
+import { registerBrainCapture } from './brain-capture'
 import { registerGithubBoard } from './github-board'
 import { registerProfiles } from './profiles'
 import { registerUsage } from './usage'
@@ -335,6 +336,7 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       registerReview() // pre-ship diff review: redacted diff + guarded merge (Phase-3/04)
       registerBoard(() => win) // Board v2: per-project boards, CAS patches, live push (Phase-3/05, rebuilt)
       registerBrain(() => win, git.monitor) // the workspace brain: identity/status/typed refusals + the freshness law riding git's tick (ADR 0018)
+      registerBrainCapture() // dual memory, auto-captured: session/card/merge triggers riding existing emitters + the draft quarantine's human surface (ADR 0018 revision C)
       registerGithubBoard() // Board ↔ GitHub two-way: gated write-back + rules (ADR 0015)
       registerProfiles() // provider profiles: pointer sets, deny-listed at save (Phase-4/04)
       registerRemotes() // remote (SSH) hosts: connection pointers only (Phase-4/05)

@@ -22,7 +22,7 @@ import {
 
 const Database = requireNative<typeof import('better-sqlite3')>('better-sqlite3')
 
-export const BRAIN_SCHEMA_VERSION = 7 // v7: memory_props + memory_scan (revision B's vault stance) — additive, one-way, idempotent (v6 added memory_vectors)
+export const BRAIN_SCHEMA_VERSION = 8 // v8: memory_drafts + fts + draft_stats (revision C's quarantine) — additive, one-way, idempotent (v7 added memory_props + memory_scan)
 /** Multi-row insert batch size — the build's transactional chunking unit. */
 export const BRAIN_INSERT_CHUNK = 1000
 
@@ -561,6 +561,87 @@ export class BrainStore {
          ORDER BY memories_fts.rank, m.slug, m.root LIMIT ?`
       )
       .all(expr, ...rc.params, cap) as { root: string; slug: string; name: string; description: string; tags: string; mtime: number; rank: number }[]
+  }
+
+  // ── The draft quarantine (ADR 0018 revision C): memory_drafts ───────────────
+  // A disposable index over one scan of one checkout's `.memory/drafts/` —
+  // replaced whole per root, generation-neutral. SEPARATE tables on purpose:
+  // drafts can never leak into suggestions, recall, or the embed pass, because
+  // no query over memories/memory_links/memory_vectors can see them.
+
+  /** One draft scan's whole landing, one transaction — rows + the FTS shadow. */
+  replaceMemoryDrafts(
+    root: string,
+    rows: { slug: string; name: string; description: string; tags: string[]; source: string; distilled: boolean; body: string; hash: string; mtime: number; bytes: number }[]
+  ): void {
+    const txn = this.db.transaction((): void => {
+      this.db.prepare('DELETE FROM memory_drafts WHERE root = ?').run(root)
+      this.db.prepare('DELETE FROM memory_drafts_fts WHERE root = ?').run(root)
+      const insRow = this.db.prepare(
+        'INSERT INTO memory_drafts (root,slug,name,description,tags,source,distilled,body,hash,mtime,bytes) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+      )
+      const insFts = this.db.prepare('INSERT INTO memory_drafts_fts (name,description,body,root,slug) VALUES (?,?,?,?,?)')
+      for (const r of rows) {
+        insRow.run(root, r.slug, r.name, r.description, JSON.stringify(r.tags), r.source, r.distilled ? 1 : 0, r.body, r.hash, r.mtime, r.bytes)
+        insFts.run(r.name, r.description, r.body, root, r.slug)
+      }
+    })
+    txn()
+  }
+
+  /** Every draft row in the given partitions, body EXCLUDED, stably ordered. */
+  memoryDraftsForRoots(roots: string[]): { root: string; slug: string; name: string; description: string; tags: string; source: string; distilled: number; mtime: number; hash: string }[] {
+    if (!roots.length) return []
+    const rc = BrainStore.rootsClause(roots)
+    return this.db
+      .prepare(`SELECT root, slug, name, description, tags, source, distilled, mtime, hash FROM memory_drafts WHERE ${rc.sql} ORDER BY slug, root`)
+      .all(...rc.params) as { root: string; slug: string; name: string; description: string; tags: string; source: string; distilled: number; mtime: number; hash: string }[]
+  }
+
+  /** One draft slug's copies (body INCLUDED) across the given partitions. */
+  memoryDraftCopies(roots: string[], slug: string): { root: string; slug: string; name: string; description: string; tags: string; source: string; distilled: number; body: string; hash: string; mtime: number; bytes: number }[] {
+    if (!roots.length) return []
+    const rc = BrainStore.rootsClause(roots)
+    return this.db
+      .prepare(`SELECT root, slug, name, description, tags, source, distilled, body, hash, mtime, bytes FROM memory_drafts WHERE ${rc.sql} AND slug = ? ORDER BY root`)
+      .all(...rc.params, slug) as { root: string; slug: string; name: string; description: string; tags: string; source: string; distilled: number; body: string; hash: string; mtime: number; bytes: number }[]
+  }
+
+  /** FTS5 bm25 over the DRAFT shadow — same order law as memorySearch. The
+   *  serve layer appends these AFTER every curated hit (ranked below by
+   *  construction) and flags each one. */
+  memoryDraftSearch(roots: string[], expr: string, cap: number): { root: string; slug: string; name: string; description: string; tags: string; source: string; distilled: number; mtime: number; rank: number }[] {
+    if (!roots.length) return []
+    const rc = BrainStore.rootsClause(roots)
+    return this.db
+      .prepare(
+        `SELECT d.root AS root, d.slug AS slug, d.name AS name, d.description AS description, d.tags AS tags, d.source AS source, d.distilled AS distilled, d.mtime AS mtime, memory_drafts_fts.rank AS rank
+         FROM memory_drafts_fts JOIN memory_drafts d ON d.root = memory_drafts_fts.root AND d.slug = memory_drafts_fts.slug
+         WHERE memory_drafts_fts MATCH ? AND memory_drafts_fts.${rc.sql}
+         ORDER BY memory_drafts_fts.rank, d.slug, d.root LIMIT ?`
+      )
+      .all(expr, ...rc.params, cap) as { root: string; slug: string; name: string; description: string; tags: string; source: string; distilled: number; mtime: number; rank: number }[]
+  }
+
+  /** Retention honesty: count `n` evicted drafts against `root` — the files
+   *  are gone, the count is not. */
+  bumpDraftEvictions(root: string, n: number): void {
+    if (n <= 0) return
+    this.db
+      .prepare(
+        'INSERT INTO memory_draft_stats (root, evicted) VALUES (?, ?) ON CONFLICT(root) DO UPDATE SET evicted = evicted + excluded.evicted'
+      )
+      .run(root, n)
+  }
+
+  /** Total evictions across the given partitions — the overview's number. */
+  draftEvictionsForRoots(roots: string[]): number {
+    if (!roots.length) return 0
+    const rc = BrainStore.rootsClause(roots)
+    const row = this.db
+      .prepare(`SELECT COALESCE(SUM(evicted), 0) AS n FROM memory_draft_stats WHERE ${rc.sql}`)
+      .get(...rc.params) as { n: number }
+    return row.n
   }
 
   // ── The semantic lens (ADR 0018 revision A): memory_vectors ─────────────────

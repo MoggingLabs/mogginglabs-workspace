@@ -830,5 +830,37 @@
     "access": "write",
     "upstream": "app",
     "verb": "brain.memUpdate"
+  },
+  {
+    "name": "promote_memory",
+    "title": "Promote a draft memory",
+    "description": "Move ONE auto-captured DRAFT out of quarantine (.memory/drafts/) into your own checkout's .memory/ proper, bytes verbatim. Drafts are captured automatically from real work (a session's command ladder, a merge, a board card reaching Done) and stay second-class until promoted: searchable but flagged draft:true, ranked below curated memories, excluded from suggest_connections and from recall. Promotion is the ONE door out — a promoted memory is a permanent team memory (no auto-delete path exists). A slug that is not a draft refuses; a curated memory already holding the slug refuses 'exists'. Lands atomically and is re-indexed before the reply.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "slug": { "type": "string", "description": "The draft's kebab-case slug (search_memories flags draft hits with draft:true)." }
+      },
+      "required": ["slug"]
+    },
+    "family": "brain",
+    "access": "write",
+    "upstream": "app",
+    "verb": "brain.memPromote"
+  },
+  {
+    "name": "discard_memory",
+    "title": "Discard a draft memory",
+    "description": "Delete ONE auto-captured DRAFT from quarantine (.memory/drafts/) in your own checkout. Drafts only, by construction: a promoted (curated) memory refuses — removing a team memory stays a human's git rm, and no tool can do it. Use after reading a draft that turned out to be noise; promotion is the other door. The deletion is re-indexed before the reply.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "slug": { "type": "string", "description": "The draft's kebab-case slug (search_memories flags draft hits with draft:true)." }
+      },
+      "required": ["slug"]
+    },
+    "family": "brain",
+    "access": "write",
+    "upstream": "app",
+    "verb": "brain.memDiscard"
   }
 ]

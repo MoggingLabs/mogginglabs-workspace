@@ -138,6 +138,59 @@ export interface BrainSemConfig {
   keySlot: { kind: 'keychain' } | { kind: 'env-ref'; envRef: string } | { kind: 'none' }
 }
 
+// ── Dual memory, auto-captured (ADR 0018 revision C) ─────────────────────────
+// Drafts are STRUCTURED memories the app captures from signals it already owns
+// (a pane's command-block ladder on session end, a review merge, a board card
+// reaching Done). They land quarantined in `.memory/drafts/<slug>.md` — second-
+// class BY CONSTRUCTION until a granted promote — and retention is honest:
+// capped, oldest-out, every eviction counted.
+
+/** Draft retention caps — contracts, not tunables (the cap posture). */
+export const BRAIN_MAX_DRAFTS = 200
+export const BRAIN_DRAFT_MAX_AGE_DAYS = 30
+
+/** One completed command block from a pane's ladder (OSC 133 truth): the
+ *  command line, its exit code, and how long it ran. SIGNALS, never scraped
+ *  pane text — the block vocabulary is the whole capture surface. */
+export interface BrainCaptureBlock {
+  command: string
+  exitCode?: number
+  durationMs?: number
+}
+
+/** `brain:captureSession` — a pane's ladder at session end (process exit or
+ *  pane close). Fire-and-forget: main validates, redacts, and lands a draft
+ *  only when the ladder carries signal. */
+export interface BrainCaptureSessionRequest {
+  pane: string
+  blocks: BrainCaptureBlock[]
+}
+
+/** Where a draft came from — the closed provenance set. */
+export type BrainDraftSource = 'session' | 'merge' | 'card'
+
+/** One draft row (`brain:drafts`) — list-light; `brain:draftGet` adds the body. */
+export interface BrainDraftRow {
+  slug: string
+  name: string
+  description: string
+  tags: string[]
+  source: BrainDraftSource | ''
+  distilled: boolean
+  mtime: number
+  root: string
+}
+
+export type BrainDraftsAnswer = { ok: true; drafts: BrainDraftRow[]; evicted: number } | BrainRefusal
+
+/** `brain:distillGet` — the optional distillation lens's per-workspace knobs:
+ *  consent (default OFF) and the chat model. The endpoint and key are revision
+ *  A's BYO embed target — one endpoint, two adapters, zero new custody. */
+export interface BrainDistillConfig {
+  on: boolean
+  model: string
+}
+
 /** `.memory/` files the scan refused to index, summed across the project's
  *  roots (ADR 0018 revision B) — counted honestly, shown only when nonzero. */
 export interface BrainMemorySkips {
@@ -166,6 +219,10 @@ export interface BrainOverview {
   ecosystems: BrainEcosystemCount[]
   /** Honest `.memory/` skip counts (revision B) — the "skipped" row's truth. */
   memorySkips: BrainMemorySkips
+  /** Quarantined drafts across the project's roots (revision C). */
+  drafts: number
+  /** Drafts evicted by retention (cap / max age) — counted, never silent. */
+  draftsEvicted: number
 }
 
 export type BrainOverviewAnswer = BrainOverview | BrainRefusal

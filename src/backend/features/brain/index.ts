@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import * as path from 'node:path'
 import { Worker } from 'node:worker_threads'
 import writeFileAtomic from 'write-file-atomic'
-import type { BrainAnswer, BrainChangedEvent, BrainRefusal, BrainStatus } from '@contracts'
+import { BRAIN_DRAFT_MAX_AGE_DAYS, BRAIN_MAX_DRAFTS, type BrainAnswer, type BrainChangedEvent, type BrainRefusal, type BrainStatus } from '@contracts'
 import { foldProjectKey } from '../workspace/project-identity'
+import { serializeDraft, type CaptureDraft, type DraftDistillation } from './capture'
 import { EMBED_BATCH, embedTextOfMemory, embedTexts, vectorToBlob, type EmbedTarget } from './embed'
 import {
   BrainFreshness,
@@ -12,7 +13,16 @@ import {
   type BrainFreshnessStats,
   type BrainTickSource
 } from './freshness'
-import { MEMORY_DIR, MEMORY_MAX_FILES, replaceMemoryBody, scanMemoryDir } from './memory'
+import {
+  MEMORY_DIR,
+  MEMORY_DRAFTS_DIRNAME,
+  MEMORY_MAX_FILES,
+  memorySlug,
+  replaceMemoryBody,
+  scanMemoryDir,
+  scanMemoryDrafts,
+  type MemoryFileRow
+} from './memory'
 import type { MemoryLandResult, MemoryWriteOp } from './memory-writes'
 import { resolveBrainProject, type BrainProject } from './project'
 import { freshestBySlug } from './serve'
@@ -53,6 +63,7 @@ export {
 } from './memory-writes'
 export {
   MEMORY_DIR,
+  MEMORY_DRAFTS_DIRNAME,
   MEMORY_MAX_FILES,
   MEMORY_MAX_FILE_BYTES,
   MEMORY_SUGGEST_WEIGHTS,
@@ -66,11 +77,37 @@ export {
   parseMemoryFilter,
   parseMemoryText,
   scanMemoryDir,
+  scanMemoryDrafts,
   serializeMemory,
   type MemoryFileRow,
   type MemoryFilterClause,
   type MemoryScan
 } from './memory'
+export {
+  CAPTURE_MAX_BLOCKS,
+  CAPTURE_MAX_FILES,
+  CAPTURE_MAX_SYMBOLS,
+  CAPTURE_MIN_COMMANDS,
+  buildCardDraft,
+  buildMergeDraft,
+  buildSessionDraft,
+  captureCommandLine,
+  serializeDraft,
+  type CaptureBlock,
+  type CaptureDraft,
+  type CardFacts,
+  type DraftDistillation,
+  type MergeFacts
+} from './capture'
+export {
+  distillAttemptsForSmoke,
+  distillDraft,
+  distillHttpAttemptsForSmoke,
+  fakeDistillText,
+  type DistillInput,
+  type DistillResult,
+  type DistillTarget
+} from './distill'
 export {
   BRAIN_SERVE_DEFAULT_LIMIT,
   BRAIN_SERVE_MAX_LIMIT,
@@ -142,6 +179,34 @@ export interface BrainMemoryEmbedPlan {
   onFailure: (detail: string) => void
 }
 export type BrainMemoryEmbedPlanner = (projectRoots: string[]) => BrainMemoryEmbedPlan | null
+
+// ── Draft retention caps (ADR 0018 revision C) ───────────────────────────────
+// Contract defaults with a SMOKE-ONLY override (the embed-fault pattern:
+// production never arms it, a gate may — proving eviction without landing two
+// hundred drafts).
+let draftCapOverride: { maxDrafts?: number; maxAgeDays?: number } = {}
+export function setDraftCapsForSmoke(caps: { maxDrafts?: number; maxAgeDays?: number }): void {
+  draftCapOverride = caps
+}
+const draftCaps = (): { maxDrafts: number; maxAgeDays: number } => ({
+  maxDrafts: draftCapOverride.maxDrafts ?? BRAIN_MAX_DRAFTS,
+  maxAgeDays: draftCapOverride.maxAgeDays ?? BRAIN_DRAFT_MAX_AGE_DAYS
+})
+
+/** A scanned draft file → its store row: provenance (`source`, `distilled`)
+ *  reads off the file's OWN props — the file stays the truth. */
+const draftRowOf = (row: MemoryFileRow): { slug: string; name: string; description: string; tags: string[]; source: string; distilled: boolean; body: string; hash: string; mtime: number; bytes: number } => ({
+  slug: row.slug,
+  name: row.name,
+  description: row.description,
+  tags: row.tags,
+  source: row.props.source === 'session' || row.props.source === 'merge' || row.props.source === 'card' ? row.props.source : '',
+  distilled: row.props.distilled === 'true',
+  body: row.body,
+  hash: row.hash,
+  mtime: row.mtime,
+  bytes: row.bytes
+})
 
 export class BrainService {
   /** Insertion-ordered: the Map IS the LRU (delete + re-set marks recency). */
@@ -364,6 +429,45 @@ export class BrainService {
       const partitionRoot = this.partitionRootFor(r.brain.project, root)
       const dir = path.join(partitionRoot, MEMORY_DIR)
       const abs = path.join(dir, `${op.slug}.md`)
+
+      // The draft verbs (revision C): move OR delete inside the quarantine —
+      // never a byte rewritten. Draftness is a FILE fact (which dir holds the
+      // slug), so the engine cannot be argued into deleting a curated memory.
+      if (op.kind === 'promote' || op.kind === 'discard') {
+        const draftAbs = path.join(dir, MEMORY_DRAFTS_DIRNAME, `${op.slug}.md`)
+        if (!existsSync(draftAbs)) {
+          if (op.kind === 'discard' && existsSync(abs)) {
+            return {
+              ok: false,
+              reason: 'invalid',
+              detail: `"${op.slug}" is a promoted memory, not a draft — promoted memories are permanent here; removing one is a human's git rm`
+            }
+          }
+          return {
+            ok: false,
+            reason: 'unknown-memory',
+            detail: `no draft "${op.slug}" in this checkout's .memory/drafts/ — search_memories flags draft hits with draft:true`
+          }
+        }
+        if (op.kind === 'promote' && existsSync(abs)) {
+          return {
+            ok: false,
+            reason: 'exists',
+            detail: `a memory "${op.slug}" already exists in .memory/ — discard the draft, or update_memory the memory`
+          }
+        }
+        try {
+          if (op.kind === 'promote') renameSync(draftAbs, abs)
+          else rmSync(draftAbs)
+        } catch (e) {
+          return { ok: false, reason: 'busy', detail: 'the landing could not move: ' + (e instanceof Error ? e.message : String(e)) }
+        }
+        this.rescanMemories(partitionRoot)
+        const fileHash =
+          op.kind === 'promote' ? createHash('sha256').update(readFileSync(abs)).digest('hex') : ''
+        return { ok: true, slug: op.slug, fileHash }
+      }
+
       let next: string
       if (op.kind === 'create') {
         if (existsSync(abs)) {
@@ -414,6 +518,89 @@ export class BrainService {
     })
   }
 
+  /**
+   * Land ONE auto-captured draft in `root`'s quarantine (ADR 0018 revision C):
+   * dedupe the slug against BOTH dirs (a draft never shadows a curated slug),
+   * write atomically, run retention (max age first, then oldest-out past the
+   * cap — every eviction counted, never silent), and rescan so the caller's
+   * next read is already true. Retention touches ONLY `.memory/drafts/` by
+   * construction — no auto-delete path for a promoted memory EXISTS.
+   */
+  async landMemoryDraft(root: string, draft: CaptureDraft, distilled?: DraftDistillation): Promise<{ ok: true; slug: string } | { ok: false; reason: string; detail?: string }> {
+    const pre = this.ensure(root)
+    if ('reason' in pre) return { ok: false, reason: pre.reason, ...(pre.detail ? { detail: pre.detail } : {}) }
+    const key = foldProjectKey(pre.brain.project.projectKey)
+    return this.runExclusive(key, async (): Promise<{ ok: true; slug: string } | { ok: false; reason: string; detail?: string }> => {
+      const r = this.ensure(root)
+      if ('reason' in r) return { ok: false, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) }
+      const partitionRoot = this.partitionRootFor(r.brain.project, root)
+      const memDir = path.join(partitionRoot, MEMORY_DIR)
+      const draftsDir = path.join(memDir, MEMORY_DRAFTS_DIRNAME)
+      const base = memorySlug(draft.slugBase)
+      if (!base) return { ok: false, reason: 'invalid', detail: 'the draft has no sluggable name' }
+      let slug: string | null = null
+      for (let i = 1; i <= 99; i++) {
+        const candidate = i === 1 ? base : memorySlug(`${base}-${i}`)
+        if (!candidate) break
+        if (!existsSync(path.join(draftsDir, `${candidate}.md`)) && !existsSync(path.join(memDir, `${candidate}.md`))) {
+          slug = candidate
+          break
+        }
+      }
+      if (!slug) return { ok: false, reason: 'exists', detail: 'no free slug within the collision window' }
+      try {
+        mkdirSync(draftsDir, { recursive: true })
+        // The quarantine is GIT-INVISIBLE by construction (the `.mogging/`
+        // gitignore precedent): a draft joins git only by promotion, and an
+        // untracked draft must never dirty the repo — the review merge gate
+        // (clean-repo law) would refuse every later merge otherwise. Written
+        // once, self-ignoring, and NEVER overwritten: an existing ignore file
+        // is the user's configuration, theirs to own.
+        const ignoreFile = path.join(memDir, '.gitignore')
+        if (!existsSync(ignoreFile)) {
+          writeFileAtomic.sync(
+            ignoreFile,
+            '# MoggingLabs Workspace: the draft quarantine joins git only by promotion.\ndrafts/\n.gitignore\n'
+          )
+        }
+        writeFileAtomic.sync(path.join(draftsDir, `${slug}.md`), serializeDraft(slug, draft, distilled))
+      } catch (e) {
+        return { ok: false, reason: 'busy', detail: 'the draft could not land: ' + (e instanceof Error ? e.message : String(e)) }
+      }
+      this.enforceDraftRetention(r.brain.store, partitionRoot, draftsDir)
+      this.rescanMemories(partitionRoot)
+      return { ok: true, slug }
+    })
+  }
+
+  /** Retention: expired drafts first (max age), then oldest-out past the cap.
+   *  Deterministic order (mtime, then slug); each deletion is COUNTED. */
+  private enforceDraftRetention(store: BrainStore, partitionRoot: string, draftsDir: string): void {
+    const caps = draftCaps()
+    const rows = scanMemoryDrafts(partitionRoot).rows
+      .map((row) => ({ slug: row.slug, mtime: row.mtime }))
+      .sort((a, b) => a.mtime - b.mtime || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
+    const cutoff = Date.now() - caps.maxAgeDays * 86_400_000
+    const doomed = new Set<string>()
+    for (const row of rows) if (row.mtime < cutoff) doomed.add(row.slug)
+    const remaining = rows.filter((row) => !doomed.has(row.slug))
+    for (const row of remaining.slice(0, Math.max(0, remaining.length - caps.maxDrafts))) doomed.add(row.slug)
+    let evicted = 0
+    for (const slug of doomed) {
+      try {
+        rmSync(path.join(draftsDir, `${slug}.md`))
+        evicted += 1
+      } catch {
+        /* a held file survives one round; the next landing retries */
+      }
+    }
+    try {
+      store.bumpDraftEvictions(partitionRoot, evicted)
+    } catch {
+      /* the count heals nothing but honesty; a locked store loses one bump */
+    }
+  }
+
   /** Rescan ONE partition's `.memory/` into the store — the whole memory
    *  indexer (flat dir, small files, main-thread by design; the worker never
    *  learns about memories). Generation-neutral, like the library lens. */
@@ -422,26 +609,47 @@ export class BrainService {
     if ('reason' in r) return
     try {
       const scan = scanMemoryDir(partitionRoot)
+      // Revision C: the quarantine scans in the SAME pass — its rows land in
+      // their own tables (drafts can never leak into suggestions or recall by
+      // construction), and its skips fold into the ONE honest skip account.
+      const draftScan = scanMemoryDrafts(partitionRoot)
+      const skipped = {
+        invalid: scan.skipped.invalid + draftScan.skipped.invalid,
+        tooLarge: scan.skipped.tooLarge + draftScan.skipped.tooLarge,
+        foreign: scan.skipped.foreign + draftScan.skipped.foreign
+      }
+      const capped = scan.capped || draftScan.capped
       // An uncommitted memory file is re-announced by porcelain EVERY tick;
       // identical bytes must not re-land (the standing-dirty-repo rule). The
       // baseline is what the STORE holds — never a process-memory cache that
       // could survive a db delete and lie about it. The fingerprint carries
       // the SKIP COUNTS too (revision B): a newly-appeared foreign or invalid
-      // file changes no row, and rows alone would never land it.
-      const skipsOf = (s: { invalid: number; tooLarge: number; foreign: number }, capped: boolean): string =>
-        `#skips ${s.invalid}/${s.tooLarge}/${s.foreign}/${capped ? 1 : 0}`
+      // file changes no row, and rows alone would never land it. Draft rows
+      // ride the same fingerprint (revision C) under their own marker.
+      const skipsOf = (s: { invalid: number; tooLarge: number; foreign: number }, c: boolean): string =>
+        `#skips ${s.invalid}/${s.tooLarge}/${s.foreign}/${c ? 1 : 0}`
       const fingerprint =
-        scan.rows.map((row) => `${row.slug}:${row.hash}`).join('\n') + '\n' + skipsOf(scan.skipped, scan.capped)
+        scan.rows.map((row) => `${row.slug}:${row.hash}`).join('\n') +
+        '\n#drafts\n' +
+        draftScan.rows.map((row) => `${row.slug}:${row.hash}`).join('\n') +
+        '\n' +
+        skipsOf(skipped, capped)
       const heldScan = r.brain.store.memoryScan(partitionRoot)
       const held =
         r.brain.store
           .memoriesForRoots([partitionRoot])
           .map((row) => `${row.slug}:${row.hash}`)
           .join('\n') +
+        '\n#drafts\n' +
+        r.brain.store
+          .memoryDraftsForRoots([partitionRoot])
+          .map((row) => `${row.slug}:${row.hash}`)
+          .join('\n') +
         '\n' +
         (heldScan ? skipsOf(heldScan, heldScan.capped) : '#skips never-landed')
       if (fingerprint !== held) {
-        r.brain.store.replaceMemories(partitionRoot, scan.rows, scan.links, scan.skipped, scan.capped)
+        r.brain.store.replaceMemories(partitionRoot, scan.rows, scan.links, skipped, capped)
+        r.brain.store.replaceMemoryDrafts(partitionRoot, draftScan.rows.map(draftRowOf))
         this.memRescanCount += 1
       }
       // Revision A: EVERY drain offers the embed pass — even a no-change rescan

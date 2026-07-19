@@ -387,6 +387,13 @@ sixteen times.
   filename-resolved links — ADR 0018 revision B): Obsidian's editor, graph, and
   search work on it for free, shape only, no Obsidian code, and query blocks in
   notes refused forever.
+- **Dual memory, auto-captured** (cipher's memory organ — ⛔ Elastic-2.0, shape
+  only, clean-room): agents are not told to remember — the app captures
+  structured drafts from signals it already watches (a session's command-block
+  ladder, a review merge, a Done card), quarantined in `.memory/drafts/` and
+  second-class by construction until a granted `promote_memory` (ADR 0018
+  revision C). Zero LLM in the base path; an opt-in BYO distillation lens adds
+  labeled prose over the preserved structure; retention is capped and counted.
 - **The economic claim this unlocks** (and no single-pane tool can make it): *many
   agents become cheaper per question than one agent working badly.* Our core feature
   stops being an ergonomic story and becomes an economic one.

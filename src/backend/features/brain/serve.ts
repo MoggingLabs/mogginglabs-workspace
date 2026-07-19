@@ -704,19 +704,42 @@ function serveMemorySearch(s: ResolvedScope, args: Record<string, unknown>): Bra
   const kept = [...freshestBySlug(considered, s.projectRoots).values()].sort(
     (a, b) => a.rank - b.rank || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0)
   )
-  const page = kept.slice(0, limit)
+  // Drafts (revision C): the quarantine is searchable but SECOND-CLASS by
+  // construction — its whole list ranks BELOW every curated hit (appended,
+  // never interleaved), every hit wears `draft: true` + its provenance, and a
+  // slug a curated memory holds never surfaces as a draft. The property
+  // filter never matches drafts (their props are provenance, not taxonomy).
+  const curatedSlugs = new Set(kept.map((h) => h.slug))
+  const draftHits = eligible
+    ? []
+    : [...freshestBySlug(s.store.memoryDraftSearch(s.projectRoots, expr, MEMORY_SEARCH_FETCH_CAP), s.projectRoots).values()]
+        .filter((d) => !curatedSlugs.has(d.slug))
+        .sort((a, b) => a.rank - b.rank || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
+  const merged = [
+    ...kept.map((h) => ({
+      slug: h.slug,
+      name: h.name,
+      description: h.description,
+      tags: parseTags(h.tags),
+      root: h.root
+    })),
+    ...draftHits.map((d) => ({
+      slug: d.slug,
+      name: d.name,
+      description: d.description,
+      tags: parseTags(d.tags),
+      root: d.root,
+      draft: true as const,
+      source: d.source,
+      ...(d.distilled ? { distilled: true as const } : {})
+    }))
+  ]
   return capReply(
     {
       ok: true,
       ...envelope(s),
-      memories: page.map((h) => ({
-        slug: h.slug,
-        name: h.name,
-        description: h.description,
-        tags: parseTags(h.tags),
-        root: h.root
-      })),
-      truncated: kept.length > limit || hits.length >= MEMORY_SEARCH_FETCH_CAP
+      memories: merged.slice(0, limit),
+      truncated: merged.length > limit || hits.length >= MEMORY_SEARCH_FETCH_CAP
     },
     'memories'
   )
@@ -728,6 +751,14 @@ function serveMemoryGet(s: ResolvedScope, args: Record<string, unknown>): BrainS
   const copies = s.store.memoryCopies(s.projectRoots, a.slug)
   const allLinks = s.store.memoryLinks(s.projectRoots)
   if (!copies.length) {
+    // Revision C: a DRAFT slug is quarantined, not unknown — teach the door
+    // out (promote) instead of pretending the file does not exist.
+    if (s.store.memoryDraftCopies(s.projectRoots, a.slug).length) {
+      return refuse(
+        'unknown-memory',
+        `"${a.slug}" is a quarantined DRAFT (auto-captured, .memory/drafts/) — promote_memory moves it into the team's memory; until then only search_memories surfaces it, flagged draft:true`
+      )
+    }
     const sources = new Set(allLinks.filter((l) => l.dst === a.slug).map((l) => l.src))
     return refuse(
       'unknown-memory',
@@ -792,6 +823,9 @@ function serveMemoryBacklinks(s: ResolvedScope, args: Record<string, unknown>): 
   )
 }
 
+// Drafts (revision C) are EXCLUDED here and from the semantic lens BY
+// CONSTRUCTION: both read only the curated tables (memories/memory_links/
+// memory_vectors), and drafts live in their own — quarantine as topology.
 function serveMemorySuggest(s: ResolvedScope, args: Record<string, unknown>): BrainServeReply {
   const a = slugArg(args.slug)
   if ('ok' in a) return a

@@ -88,11 +88,14 @@ export function runMcpWriteSmoke(win: BrowserWindow, mode: string): void {
     'insert_before_symbol',
     // ADR 0018 step 09: so do the memory writes — same toggle, same boundary.
     'create_memory',
-    'update_memory'
+    'update_memory',
+    // ADR 0018 revision C: the draft quarantine's two doors ride it too.
+    'promote_memory',
+    'discard_memory'
   ]
   const countWrites = (names: string[]): number => names.filter((n) => WRITES.includes(n)).length
   /** Catalog geometry: 17 browser + 6 control reads + 1 self + 10 brain reads
-   *  + 4 memory reads (non-writes) + 16 writes (11 fleet/board + 3 brain + 2
+   *  + 4 memory reads (non-writes) + 18 writes (11 fleet/board + 3 brain + 4
    *  memory). */
   const NON_WRITE_COUNT = 38
   const WRITE_COUNT = WRITES.length

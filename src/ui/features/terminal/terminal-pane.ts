@@ -2,8 +2,10 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import {
+  BrainChannels,
   WorktreeChannels,
   displayPaneNumber,
+  type BrainCaptureSessionRequest,
   type GitStatus,
   type AgentState,
   type PaneId,
@@ -121,6 +123,9 @@ export class TerminalPane {
    *  One cleanup tears all of it down when the pane id is retired. */
   private menuCleanup?: () => void
   private blocks?: BlockTracker
+  /** The one session-end capture emission (revision C) — exit and close race;
+   *  whichever fires first sends the ladder, the other finds this latched. */
+  private captureEmitted = false
   private refitTimer?: ReturnType<typeof setTimeout>
   private expandStateObs?: MutationObserver
   private refitLeading = true
@@ -754,6 +759,25 @@ export class TerminalPane {
       this.stateDot.title = title
     }
     clearPaneState(this.id)
+    this.emitSessionCapture() // the process is gone — the session ended (revision C)
+  }
+
+  /**
+   * Session-end capture (ADR 0018 revision C): hand the block tracker's ladder
+   * — commands + exit codes, the SIGNALS the tracker already modeled from OSC
+   * 133 — to main, ONCE per pane life (process exit or pane close, whichever
+   * lands first). Fire-and-forget: main redacts, decides signal, and lands a
+   * draft in the quarantine; a pane with no completed blocks sends nothing.
+   */
+  private emitSessionCapture(): void {
+    if (this.captureEmitted) return
+    this.captureEmitted = true
+    const blocks = (this.blocks?.list() ?? [])
+      .filter((b) => b.command && b.exitCode !== undefined)
+      .map((b) => ({ command: b.command, exitCode: b.exitCode, durationMs: b.durationMs }))
+    if (!blocks.length) return
+    const req: BrainCaptureSessionRequest = { pane: String(this.id), blocks }
+    void getBridge().invoke(BrainChannels.captureSession, req).catch(() => undefined)
   }
 
   /** Pane chrome — the terminal top bar, an exact take on the reference:
@@ -1991,6 +2015,7 @@ export class TerminalPane {
 
   dispose(): void {
     this.disposed = true
+    this.emitSessionCapture() // pane close IS session end when the process never exited (revision C)
     retirePaneInstance(this.id, this.instance)
     // Detach from the terminal channels and every port subscription FIRST: from here
     // on, events for this id belong to whichever pane next takes it — never to this

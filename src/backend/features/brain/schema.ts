@@ -83,7 +83,15 @@ export interface BrainEdgeRow {
  *  counts (foreign_files because FOREIGN is SQLite-reserved) — what the flat
  *  scan refused to index, counted so the app can say so. Both are replaced
  *  whole per rescan, generation-neutral, and excluded from the canonical dump
- *  like the rest of the memory lens. */
+ *  like the rest of the memory lens.
+ *  v8 (ADR 0018 revision C) adds the draft quarantine's tables: memory_drafts
+ *  mirrors memories for `.memory/drafts/` rows (plus the capture provenance —
+ *  source, distilled — derived from the file's own props at scan time);
+ *  memory_drafts_fts is its FTS5 shadow (searched SEPARATELY and ranked below
+ *  curated, flagged on every hit); memory_draft_stats counts retention
+ *  evictions per root (honesty accounting — the files are gone, the count is
+ *  not). Drafts NEVER join memories/memory_links/memory_vectors: exclusion
+ *  from suggestions, recall, and embedding is table topology, not discipline. */
 export const BRAIN_GRAPH_DDL = `
 CREATE TABLE IF NOT EXISTS files (
   root TEXT NOT NULL, path TEXT NOT NULL, hash TEXT NOT NULL, lang TEXT NOT NULL,
@@ -146,6 +154,18 @@ CREATE TABLE IF NOT EXISTS memory_props (
 CREATE TABLE IF NOT EXISTS memory_scan (
   root TEXT PRIMARY KEY, invalid INTEGER NOT NULL, too_large INTEGER NOT NULL,
   foreign_files INTEGER NOT NULL, capped INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS memory_drafts (
+  root TEXT NOT NULL, slug TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL,
+  tags TEXT NOT NULL, source TEXT NOT NULL, distilled INTEGER NOT NULL,
+  body TEXT NOT NULL, hash TEXT NOT NULL, mtime INTEGER NOT NULL, bytes INTEGER NOT NULL,
+  PRIMARY KEY (root, slug)
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_drafts_fts USING fts5(
+  name, description, body, root UNINDEXED, slug UNINDEXED
+);
+CREATE TABLE IF NOT EXISTS memory_draft_stats (
+  root TEXT PRIMARY KEY, evicted INTEGER NOT NULL
 );
 `
 

@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import { diffWorktree, mergeBranch } from '@backend/features/review'
 import { isManaged } from '@backend/features/worktrees'
+import { captureMerge } from './brain-capture'
 import { maybeFault } from './fault-port'
 import { getAuthoritativeApprovals } from './daemon-relay'
 import {
@@ -54,10 +55,17 @@ export async function mergeReviewedWorktree(
     }
   }
   const approved = approvals.some((a) => approvalMatchesSnapshot(a, diff.snapshot!))
-  return mergeBranch(req.repo, diff.snapshot, {
+  const result = await mergeBranch(req.repo, diff.snapshot, {
     approved,
     override: typeof req.override === 'string' ? req.override : undefined
   })
+  if (result.ok && result.state === 'merged') {
+    // ADR 0018 revision C: a landed merge is a capture SIGNAL — the branch,
+    // the reviewed diff's files, the graph's symbols in them. Fire-and-forget:
+    // capture is evidence, never enforcement, and the merge reply never waits.
+    void captureMerge(req.repo, diff.snapshot.branch, diff.files.map((f) => f.path)).catch(() => undefined)
+  }
+  return result
 }
 
 // App-wiring: bind the review module (Phase-3/04) to IPC. Diffs are redacted INSIDE

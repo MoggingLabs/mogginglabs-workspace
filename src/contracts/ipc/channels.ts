@@ -442,7 +442,18 @@ export const BrainChannels = {
   semKeyClear: 'brain:semKeyClear', // (workspaceId) -> { ok }
   semFailure: 'brain:semFailure', // main -> renderer: { workspaceId, detail } — the embed pass failed; fired ONCE per latch (the single-fire toast)
   read: 'brain:read', // (BrainReadRequest) -> the serve layer's reply for one READ verb (the Brain view's door — same caps, same refusals as the agent wire)
-  overview: 'brain:overview', // (BrainRootRequest) -> BrainOverviewAnswer (status-card extras the store already holds: memory/dangling counts, ecosystems)
+  overview: 'brain:overview', // (BrainRootRequest) -> BrainOverviewAnswer (status-card extras the store already holds: memory/dangling counts, ecosystems, drafts)
+  // Dual memory, auto-captured (ADR 0018 revision C): the capture door + the
+  // draft quarantine's human surface. Capture rides EXISTING emitters (the
+  // pane's block ladder at session end lands here; board/merge captures are
+  // main-side) — no new watcher, and no draft content ever reaches telemetry.
+  captureSession: 'brain:captureSession', // (BrainCaptureSessionRequest) -> { ok } (fire-and-forget; signal-less ladders land nothing)
+  drafts: 'brain:drafts', // (BrainRootRequest) -> BrainDraftsAnswer (project-wide draft rows + the eviction count)
+  draftGet: 'brain:draftGet', // ({ root, slug }) -> { ok, draft } | refusal (one draft, body included — the reader's door)
+  draftPromote: 'brain:draftPromote', // ({ root, slug }) -> { ok, slug, fileHash } | refusal (the human's own promote — same engine locks as the granted tool)
+  draftDiscard: 'brain:draftDiscard', // ({ root, slug }) -> { ok, slug } | refusal (drafts only, by construction — curated memories have no delete channel)
+  distillGet: 'brain:distillGet', // (workspaceId) -> BrainDistillConfig (consent default OFF + the chat model; endpoint/key are the revision-A BYO target)
+  distillSet: 'brain:distillSet', // ({ workspaceId, on?, model? }) -> { ok } (consent semantics — the libFetch discipline)
   changed: 'brain:changed' // main -> renderer: BrainChangedEvent ({ projectKey, generation, dirty })
 } as const
 

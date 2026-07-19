@@ -2,6 +2,9 @@ import {
   BrainChannels,
   type BrainAnswer,
   type BrainChangedEvent,
+  type BrainDistillConfig,
+  type BrainDraftRow,
+  type BrainDraftsAnswer,
   type BrainOverviewAnswer,
   type BrainSemConfig
 } from '@contracts'
@@ -125,6 +128,30 @@ export const semKeySet = (workspaceId: string, key: { plaintext?: string; envRef
 export const semKeyClear = (workspaceId: string): Promise<boolean> =>
   getBridge()
     .invoke(BrainChannels.semKeyClear, workspaceId)
+    .then((v) => (v as { ok?: boolean } | undefined)?.ok === true)
+
+// ── The draft quarantine (ADR 0018 revision C): list, read, promote, discard ─
+// The human's own surface over auto-captured drafts. Promote/discard run the
+// SAME engine locks the granted agent tools do — the grant wall is for agents.
+
+export const brainDrafts = (root: string): Promise<BrainDraftsAnswer> =>
+  getBridge().invoke(BrainChannels.drafts, { root }) as Promise<BrainDraftsAnswer>
+
+export const brainDraftGet = (root: string, slug: string): Promise<{ ok: boolean; reason?: string; draft?: BrainDraftRow & { body: string } }> =>
+  getBridge().invoke(BrainChannels.draftGet, { root, slug }) as Promise<{ ok: boolean; reason?: string; draft?: BrainDraftRow & { body: string } }>
+
+export const brainDraftPromote = (root: string, slug: string): Promise<{ ok: boolean; reason?: string; detail?: string }> =>
+  getBridge().invoke(BrainChannels.draftPromote, { root, slug }) as Promise<{ ok: boolean; reason?: string; detail?: string }>
+
+export const brainDraftDiscard = (root: string, slug: string): Promise<{ ok: boolean; reason?: string; detail?: string }> =>
+  getBridge().invoke(BrainChannels.draftDiscard, { root, slug }) as Promise<{ ok: boolean; reason?: string; detail?: string }>
+
+export const distillGet = (workspaceId: string): Promise<BrainDistillConfig> =>
+  getBridge().invoke(BrainChannels.distillGet, workspaceId) as Promise<BrainDistillConfig>
+
+export const distillSet = (workspaceId: string, cfg: { on?: boolean; model?: string }): Promise<boolean> =>
+  getBridge()
+    .invoke(BrainChannels.distillSet, { workspaceId, ...cfg })
     .then((v) => (v as { ok?: boolean } | undefined)?.ok === true)
 
 /** Subscribe to `brain:semFailure` pushes (the embed pass's single-fire toast). */

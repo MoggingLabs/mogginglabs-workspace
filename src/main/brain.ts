@@ -147,10 +147,13 @@ const BRAIN_WRITE_TOOL: Record<string, string> = {
   'brain.insertBefore': 'insert_before_symbol'
 }
 
-/** brain.<memory verb> -> the write-tool name whose grant covers it (09). */
+/** brain.<memory verb> -> the write-tool name whose grant covers it (09; the
+ *  draft verbs are revision C's). */
 const MEMORY_WRITE_TOOL: Record<string, string> = {
   'brain.memCreate': 'create_memory',
-  'brain.memUpdate': 'update_memory'
+  'brain.memUpdate': 'update_memory',
+  'brain.memPromote': 'promote_memory',
+  'brain.memDiscard': 'discard_memory'
 }
 
 export { isBrainWriteVerb, isMemoryWriteVerb }
@@ -699,7 +702,11 @@ export function handleBrainOverview(req: unknown): BrainOverviewAnswer {
     memorySkips.foreign += scan.foreign
     memorySkips.capped = memorySkips.capped || scan.capped
   }
-  return { ok: true, memories: written.size, danglingLinks: dangling.size, ecosystems, memorySkips }
+  // Revision C: the quarantine's honest numbers — distinct draft slugs, and
+  // every retention eviction ever counted (the files are gone, the count is not).
+  const drafts = new Set(h.store.memoryDraftsForRoots(roots).map((d) => d.slug)).size
+  const draftsEvicted = h.store.draftEvictionsForRoots(roots)
+  return { ok: true, memories: written.size, danglingLinks: dangling.size, ecosystems, memorySkips, drafts, draftsEvicted }
 }
 
 /** The launch seam's map fetch (06), exported for the BRAINMAP smoke: the same
@@ -741,6 +748,12 @@ export function brainDebug(): {
 export function disposeBrain(): void {
   service?.dispose()
   service = null
+}
+
+/** The capture module's door onto the ONE service (ADR 0018 revision C) —
+ *  main-internal; no renderer channel rides this directly. */
+export function brainServiceForCapture(): BrainService {
+  return ensureService()
 }
 
 export function registerBrain(getWin: () => BrowserWindow | null, tickSource?: BrainTickSource): void {

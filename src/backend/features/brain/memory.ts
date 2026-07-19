@@ -20,6 +20,12 @@ import { isMemorySlug, memorySlug, memoryWikilinkRe } from '@contracts'
 // into a plain slug or it is no link at all.
 
 export const MEMORY_DIR = '.memory'
+/** The draft quarantine (ADR 0018 revision C): auto-captured memories live in
+ *  `.memory/drafts/` — the ONE subdirectory that is ours, scanned by its own
+ *  flat pass and never counted a foreign skip. Everything else about the
+ *  format is identical: `<slug>.md`, the same frontmatter law, props carrying
+ *  the capture provenance (`auto`, `source`, `distilled`, …). */
+export const MEMORY_DRAFTS_DIRNAME = 'drafts'
 /** Flat-dir cap: past it the scan stops and says so (`capped`), never silently. */
 export const MEMORY_MAX_FILES = 2000
 export const MEMORY_MAX_FILE_BYTES = 256 * 1024
@@ -171,18 +177,19 @@ export interface MemoryScan {
 const emptyScan = (): MemoryScan => ({ rows: [], links: [], skipped: { invalid: 0, tooLarge: 0, foreign: 0 }, capped: false })
 
 /**
- * Enumerate ONE checkout's `.memory/` — flat, sorted, capped. Only `<slug>.md`
- * files become rows; anything else (subdirs, foreign extensions, byte-hostile
- * names that are not a slug, binaries, unparseable frontmatter) is a COUNTED
- * skip. Deterministic: the same bytes always produce the same rows and links.
+ * Enumerate ONE flat memory dir — sorted, capped. Only `<slug>.md` files
+ * become rows; anything else (subdirs, foreign extensions, byte-hostile names
+ * that are not a slug, binaries, unparseable frontmatter) is a COUNTED skip.
+ * Deterministic: the same bytes always produce the same rows and links.
+ * `ownDirs` names subdirectories that are OURS (the draft quarantine) — they
+ * are neither rows nor skips here; their own scan owns them.
  */
-export function scanMemoryDir(root: string): MemoryScan {
-  const dir = path.join(root, MEMORY_DIR)
+function scanFlatMemoryDir(dir: string, ownDirs: readonly string[]): MemoryScan {
   let entries: string[]
   try {
     entries = readdirSync(dir)
   } catch {
-    return emptyScan() // no .memory/ — an empty lens, not an error
+    return emptyScan() // no dir — an empty lens, not an error
   }
   const scan = emptyScan()
   let taken = 0
@@ -195,6 +202,12 @@ export function scanMemoryDir(root: string): MemoryScan {
       scan.skipped.invalid++
       continue
     }
+    if (st.isDirectory() && ownDirs.includes(entry)) continue
+    // A literal `.gitignore` is vault plumbing, not vault content: the app
+    // writes one to keep the draft quarantine out of git (revision C), and a
+    // user's own is their configuration. Inert either way — never a "foreign
+    // file" warning.
+    if (st.isFile() && entry === '.gitignore') continue
     if (!st.isFile() || !entry.endsWith('.md')) {
       scan.skipped.foreign++
       continue
@@ -243,6 +256,19 @@ export function scanMemoryDir(root: string): MemoryScan {
     for (const dst of memoryLinksOf(parsed.body, slug)) scan.links.push({ src: slug, dst })
   }
   return scan
+}
+
+/** One checkout's `.memory/` — the curated lens. The draft quarantine is the
+ *  ONE subdir that is ours (neither a row nor a foreign skip here). */
+export function scanMemoryDir(root: string): MemoryScan {
+  return scanFlatMemoryDir(path.join(root, MEMORY_DIR), [MEMORY_DRAFTS_DIRNAME])
+}
+
+/** One checkout's `.memory/drafts/` — the quarantine (ADR 0018 revision C).
+ *  Same laws, same skips accounting; links are scanned but the quarantine is
+ *  excluded from suggestions and recall BY CONSTRUCTION (separate tables). */
+export function scanMemoryDrafts(root: string): MemoryScan {
+  return scanFlatMemoryDir(path.join(root, MEMORY_DIR, MEMORY_DRAFTS_DIRNAME), [])
 }
 
 /** FTS5 MATCH expression from a free-text query: bare terms, each quoted (no

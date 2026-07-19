@@ -146,11 +146,19 @@ export const MCP_MEMORY_READ_TOOL_NAMES = [
   'suggest_connections'
 ] as const
 
-/** The memory lens's write family (ADR 0018 step 09) — create/update files in
- *  the caller's OWN checkout's `.memory/`, behind the SAME per-workspace grant
- *  as every other write. THE SET IS CLOSED: growing it needs an ADR revision —
- *  delete stays a human verb (`git rm` is the delete). */
-export const MCP_MEMORY_WRITE_TOOL_NAMES = ['create_memory', 'update_memory'] as const
+/** The memory lens's write family (ADR 0018 step 09; revision C adds the two
+ *  draft verbs) — create/update files in the caller's OWN checkout's
+ *  `.memory/`, plus promote/discard over the auto-captured DRAFT quarantine
+ *  (`.memory/drafts/`), all behind the SAME per-workspace grant as every other
+ *  write. THE SET IS CLOSED: growing it needs an ADR revision — delete of a
+ *  CURATED memory stays a human verb (`git rm` is the delete; discard_memory
+ *  refuses anything that is not a draft). */
+export const MCP_MEMORY_WRITE_TOOL_NAMES = [
+  'create_memory',
+  'update_memory',
+  'promote_memory',
+  'discard_memory'
+] as const
 
 /** EVERY grant-gated write, one list: the fleet/board writes plus the brain's
  *  symbol writes plus the memory writes. The grant store resolves 'all'/list
@@ -330,8 +338,8 @@ function validateMcpCatalog(raw: unknown): readonly McpToolDef[] {
  *  control reads + 1 self-scoped declaration + 11 control writes + 10 brain
  *  reads (ADR 0018 steps 05–08: the graph seven, the repomap, the library
  *  lens) + 3 brain writes (step 07: the closed symbol-write set) + 4 memory
- *  reads and 2 memory writes (step 09: the `.memory/` wikilink lens).
- *  Validated at load. */
+ *  reads and 4 memory writes (step 09: the `.memory/` wikilink lens; revision
+ *  C: promote/discard over the draft quarantine). Validated at load. */
 export const MCP_TOOLS: readonly McpToolDef[] = validateMcpCatalog(catalogJson)
 
 export const findMcpTool = (name: string): McpToolDef | undefined => MCP_TOOLS.find((t) => t.name === name)
