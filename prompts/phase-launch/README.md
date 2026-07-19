@@ -57,6 +57,19 @@ competitor names, truth-over-keywords). Same format as
 > attribution, but no step is allowed to describe fuses / bytecode /
 > watermark / tamper as a wall. Say what each actually buys.
 
+> **Every finding is must-fix; the floor is A, and A is DERIVED.** No
+> `defer`, no `wontfix` — a finding exits only as `fixed` (with a
+> regression assertion red on pre-fix bytes) or `invalid` (the claimed
+> behavior does not reproduce, DISPROVEN). Severity orders the queue, it
+> never excuses a drop. Grades aren't typed by anyone: **A ≡ zero open
+> findings on that lens for that row**, computed by LAUNCHAUDIT from
+> FINDINGS, so grade inflation is impossible. What keeps this terminating
+> — and keeps it from wrecking working code — is that **a finding must be
+> a defect or a violation of a stated rule, never a preference**: taste is
+> not fileable, and no speculative rewrite of gate-covered code qualifies.
+> A rule that proves wrong is amended in `RUBRIC.md` visibly, for EVERY
+> row — never waived for one instance.
+
 > **No-regression is a veto.** Both budgets (MILESTONE + PERCEPTION) and
 > every existing gate stay green on the bytes each step ships. A smarter
 > or cleaner change that moves a budget or reds a gate is a stop-ship, not
@@ -67,7 +80,7 @@ competitor names, truth-over-keywords). Same format as
 
 | # | File | Gate / output |
 |---|------|---------------|
-| 01 | `01-audit-method-and-coverage.md` | Feature inventory + rubric + routing doc; **LAUNCHAUDIT** static coverage gate |
+| 01 | `01-audit-method-and-coverage.md` | Feature inventory + rule-based rubric (floor A, derived) + routing doc; **LAUNCHAUDIT** static coverage gate |
 | 02 | `02-correctness-runtime-ui.md` | Edge-case sweep: terminal/PTY/daemon/scroll/layout/updater-UX; findings routed + fixed |
 | 03 | `03-correctness-orchestration.md` | Edge-case sweep: board/worktrees/review-merge/swarm/control-API |
 | 04 | `04-correctness-paid-and-reach.md` | Edge-case sweep: account/entitlements/hardening/connections/usage/browser/files/brain/MCP |
@@ -100,8 +113,8 @@ competitor names, truth-over-keywords). Same format as
 
 ## Overall Definition of Done
 - Every user-facing feature is graded, its edge cases enumerated, and
-  every finding either fixed or deferred-with-rationale — no surface below
-  the audit floor, no unrouted finding (`LAUNCHAUDIT`).
+  every finding **fixed** (or `invalid` by disproof) — every lens on every
+  row derives **A**, no unrouted finding, no `defer` (`LAUNCHAUDIT`).
 - The codebase carries no duplicated helper, dead affordance, or
   oversized/​spaghetti module past its budget (`MAINT`); both budgets held
   (`MILESTONE` · `PERCEPTION`).

@@ -24,11 +24,12 @@ authed socket + deep-link relay), and Phase-9 loops IF present on main.
    the control-API/MCP family — or a focused unit. Prove ledger denial,
    the mailbox handshake, territory commits, and the gated+overridden
    merge each still bite.
-3. **Route findings** to FINDINGS with severity; S1/S2 fixed here (a lost
-   claim, a merge that leaks, a queue that double-spawns are all S1), S3
-   deferred with rationale.
-4. **Grade** the rows ≥ B or defer; **re-measure** both budgets with the
-   swarm up if any renderer/daemon path moved.
+3. **Route findings** to FINDINGS with severity; ALL of S1–S3 fixed here
+   (a lost claim, a merge that leaks, a queue that double-spawns are all
+   S1). The only other exit is `invalid` — disproven, not argued.
+4. **Grades derive** to **A** when a lens carries no unresolved finding
+   (01 §3); **re-measure** both budgets with the swarm up if any
+   renderer/daemon path moved.
 
 ## Files
 - `INVENTORY.md` (grades) · `FINDINGS.md` (routing) · the orchestration/
@@ -36,8 +37,8 @@ authed socket + deep-link relay), and Phase-9 loops IF present on main.
   (mark 03 areas)
 
 ## Definition of Done
-- Every scoped row graded ≥ B (or deferred); every S1/S2 fixed with a
-  bite-proven regression assertion (red on pre-fix bytes).
+- Every scoped row derives **A** on every lens; every finding (S1–S3)
+  fixed with a bite-proven regression assertion (red on pre-fix bytes).
 - The custody/ownership invariants (no claim lost, no unredacted merge, no
   double-spawn, no unauthed control verb) each carry an assertion.
 - FINDINGS has no `open` row for this scope; gates + both budgets green.

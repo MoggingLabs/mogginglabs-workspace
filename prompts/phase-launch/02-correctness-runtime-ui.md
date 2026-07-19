@@ -1,7 +1,8 @@
 The first correctness sweep: the runtime and UI core — the surfaces a
 user touches every second. Grade each INVENTORY row on the six lenses,
 enumerate its edge cases, PROVE each one (a regression assertion, not a
-claim), and route every finding. Fix S1/S2 now; defer S3 with rationale.
+claim), and route every finding. EVERY finding is fixed here — severity
+orders the queue, it never excuses a drop.
 
 ## Scope (INVENTORY rows for this step)
 Terminal/xterm rendering, the PTY seam + daemon lifecycle
@@ -25,11 +26,13 @@ themes/tokens.
    EQUALIZE, LAYOUT, FIRSTRUN, the pane/daemon gates) or a focused unit.
    No new gate unless a whole class is uncovered — extend, don't multiply.
 3. **Route findings** to FINDINGS.md with severity. **S1** (data loss,
-   crash, hang, wrong persisted state) and **S2** (visible wrong behavior,
-   silent degradation) get FIXED here, minimally and in the surrounding
-   idiom; **S3** nits get a `defer` with one-line rationale.
-4. **Grade the rows** A–D in INVENTORY; anything below B is fixed or
-   deferred-with-rationale — LAUNCHAUDIT enforces it.
+   crash, hang, wrong persisted state), **S2** (visible wrong behavior,
+   silent degradation) and **S3** (nits) are ALL fixed here, minimally and
+   in the surrounding idiom. The only other exit is `invalid` — the
+   claimed behavior does not reproduce, disproven.
+4. **Grades derive** from FINDINGS (01 §3): a row's lens reaches **A**
+   when it carries no unresolved finding. Don't type letters; resolve rows
+   until LAUNCHAUDIT computes A.
 5. **Re-measure** MILESTONE + PERCEPTION after any renderer-touching fix;
    a budget move is a stop-ship (revert or fix the cost, never footnote).
 
@@ -39,9 +42,9 @@ themes/tokens.
   `CHECKLIST.md` (mark 02 areas)
 
 ## Definition of Done
-- Every scoped row graded ≥ B (or deferred with rationale); every S1/S2
+- Every scoped row derives **A** on every lens; every finding (S1–S3)
   fixed with a regression assertion that FAILS on the pre-fix bytes
-  (bite-prove it) and passes after.
+  (bite-prove it) and passes after, or `invalid` with the disproof.
 - No edge case listed without a verdict; FINDINGS has no `open` row for
   this scope.
 - The gates touched stay green; MILESTONE + PERCEPTION unmoved.

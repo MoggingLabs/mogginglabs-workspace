@@ -1,8 +1,8 @@
 Part II begins with the DECISIONS, recorded as an ADR — reconciled with
-what is ALREADY deployed: the company site (`../MoggingLabs-Website`,
-Next.js + Neon + Vercel) already runs **Stripe** billing + a revenue
-ledger. So this mostly RATIFIES the built reality + the one architecture
-split. Grounded in `RESEARCH.md` + `RESEARCH-web.md`. No code this step.
+what is ALREADY deployed: the site (`../MoggingLabs-Website`, Next.js +
+Neon + Vercel) already runs **Stripe** billing + a revenue ledger. So
+this mostly RATIFIES the built reality + the one architecture split.
+Grounded in `RESEARCH.md` + `RESEARCH-web.md`. No code this step.
 
 ## Steps
 1. **ADR 0019 — the real service stack**. Ratify, each with rationale +
@@ -40,7 +40,7 @@ split. Grounded in `RESEARCH.md` + `RESEARCH-web.md`. No code this step.
    redesign.
 3. **Operator accounts**: Stripe + Neon (live), the IdP project —
    operator-action in CHECKLIST; no gate depends on them (gates run
-   local/FAKE). Domain + GSC already done.
+   local/FAKE).
 4. **Deferrals**: SSO (WorkOS) until Enterprise scale; RFC 8414 discovery pin,
    `iss`/`aud` in the entitlement JWT, RS-side `jti` replay — with the real
    issuer (11); the MoR-wrapper option — post-launch if tax demands it.
@@ -51,8 +51,8 @@ split. Grounded in `RESEARCH.md` + `RESEARCH-web.md`. No code this step.
 
 ## Definition of Done
 - ADR 0019 ratifies the split, the website-hosted backend, Stripe-as-rail
-  (+ the tax note), the IdP choice, and the Free/Pro/Team/Enterprise tiers — each
-  with rationale; the split is binding on 09-13.
+  (+ the tax note), the IdP choice, and the Free/Pro/Team/Enterprise
+  tiers — each with rationale; binding on 09-13.
 - The FAKE→real map shows every shipped contract the reals must keep,
   including that the Stripe webhook is EXTENDED, not replaced.
 - Operator-account items are in CHECKLIST, flagged, no gate depending on

@@ -29,10 +29,11 @@ Brain (reads, freshness, symbol writes, memory), MCP + the `mogging` wedge.
    enforcement-honesty law holds: assert what the CHECK does, never
    overclaim it as a wall.
 3. **Route findings**; in this scope a licensing/custody/redaction defect
-   is **S1 by default**. Fix S1/S2 here; a fix near the crypto/verify path
-   gets an extra adversarial assertion.
-4. **Grade** ≥ B or defer; **re-measure** both budgets on the composed
-   surface (16 panes + account/brain machinery live).
+   is **S1 by default**. Fix ALL of S1–S3 here (`invalid` needs disproof);
+   a fix near the crypto/verify path gets an extra adversarial assertion.
+4. **Grades derive** to **A** when a lens carries no unresolved finding
+   (01 §3); **re-measure** both budgets on the composed surface (16 panes
+   + account/brain machinery live).
 
 ## Files
 - `INVENTORY.md` (grades) · `FINDINGS.md` (routing) · the account/
@@ -40,8 +41,8 @@ Brain (reads, freshness, symbol writes, memory), MCP + the `mogging` wedge.
   product files fixed · `CHECKLIST.md` (mark 04 areas)
 
 ## Definition of Done
-- Every scoped row graded ≥ B (or deferred); every S1/S2 fixed with a
-  regression assertion red on pre-fix bytes.
+- Every scoped row derives **A** on every lens; every finding (S1–S3)
+  fixed with a regression assertion red on pre-fix bytes.
 - The money invariants each carry a live assertion: no token over IPC,
   copied→Free, tampered→Free-only, forged-webhook→no-op, unreachable≠
   rejected, grace-then-Free-never-brick.

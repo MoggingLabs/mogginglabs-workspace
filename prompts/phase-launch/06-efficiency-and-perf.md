@@ -22,9 +22,10 @@ and clean but costs frame time is not done.
    Brain indexing and the account/entitlement machinery live. Capture the
    numbers into the pack README's table. A forced Brain full re-index
    under 16 panes must hold the gap ceiling (worker isolation).
-4. **Fix S1/S2 inefficiencies** (a per-frame regression, an always-on
-   poller, an unbounded cache) in the local idiom; **defer** S3 with the
-   measured cost noted. No new gate unless a whole budget class is
+4. **Fix EVERY inefficiency finding** (a per-frame regression, an
+   always-on poller, an unbounded cache) in the local idiom — S3 included,
+   with its measured cost recorded. `invalid` needs a measurement showing
+   the cost isn't real. No new gate unless a whole budget class is
    uncovered — MILESTONE + PERCEPTION are the instruments.
 
 ## Files
@@ -38,7 +39,8 @@ and clean but costs frame time is not done.
 - Both budgets GREEN on the merged surface with Brain + accounts live, the
   numbers recorded (fps avg, worst gap, heap, index time, freshness
   latency); a forced re-index under load holds the ceiling.
-- Every efficiency finding has a verdict backed by a measurement.
+- Every efficiency finding is `fixed` (or `invalid` by measurement); the
+  inefficiency lens derives **A** on every INVENTORY row.
 
 ## Checks that must be green
 - `npm run typecheck` → 0; build ok; static battery; LAUNCHAUDIT; MAINT;
@@ -47,7 +49,7 @@ and clean but costs frame time is not done.
 
 ## Guardrails
 - Measure, don't guess — a "perf fix" without a before/after number is a
-  finding, not a fix.
+  finding, not a fix. A suspicion without a measurement is not fileable.
 - A budget regression is a stop-ship; never widen a budget to pass —
   docs/05 unchanged is the freeze criterion.
 - Correctness and structure are frozen here — this step only changes cost,

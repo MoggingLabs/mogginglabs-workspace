@@ -26,9 +26,10 @@ the app degrades HONESTLY everywhere, never silently, never with a lie.
    module (`native-preflight` refuses to boot with the fix NAMED), a
    corrupt Brain db (rebuilds, never bricks). Each failure surfaces a
    human sentence, never a silent wrong state.
-5. **Route + fix + grade**: S1/S2 (data loss on migration, a silent
-   offline lie, a boot crash) fixed here with an assertion; grade the
-   environment lens on every INVENTORY row.
+5. **Route + fix + derive**: EVERY finding (data loss on migration, a
+   silent offline lie, a boot crash are S1; nits are S3) fixed here with an
+   assertion — no `defer`. The environment lens then derives **A** on every
+   INVENTORY row (01 §3).
 
 ## Files
 - The migration/offline/preflight product files fixed · new/extended

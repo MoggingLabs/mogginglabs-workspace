@@ -27,11 +27,17 @@ before and after.
    AST/parse, zero boot. Verdict `out/maint-result.json`.
 5. **Re-measure** both budgets if any hot path was decomposed; a refactor
    that costs frame time is reverted, not shipped.
+6. **Drive the structural lenses to A**: duplication, spaghetti and
+   refactor-debt findings are ALL must-fix (01 §3) — no `defer`. If a
+   required fix would red a gate or move a budget, the no-regression veto
+   still wins: the fix is reverted and the RULE is amended in `RUBRIC.md`
+   (visibly, for EVERY row), never waived for that one file.
 
 ## Files
 - `scripts/check-maintainability.mjs` · `scripts/qa-smokes.sh` · the
   extracted/deleted/decomposed product files · `FINDINGS.md` (each change)
-  · `INVENTORY.md` (grades rise) · `CHECKLIST.md` (mark 05)
+  · `INVENTORY.md` (grades derive to A) · `RUBRIC.md` (only if a rule is
+  amended) · `CHECKLIST.md` (mark 05)
 
 ## Definition of Done
 - MAINT green and bite-proven (re-introduce one duplicate → red; delete →
@@ -39,7 +45,9 @@ before and after.
 - Every extraction leaves the caller's behavior byte-identical, proven by
   the unchanged gates; every deletion confirmed unreferenced.
 - No new runtime dependency added; SPACING `--max 0` still frozen.
-- FINDINGS records every structural change with before/after locations.
+- FINDINGS records every structural change with before/after locations;
+  the duplication/spaghetti/refactor-debt lenses derive **A** on every
+  scoped row (no unresolved finding survives).
 
 ## Checks that must be green
 - `npm run typecheck` → 0; `npm run lint` → 0; build ok; static battery +
@@ -52,3 +60,6 @@ before and after.
 - Delete beats deprecate; a kept-for-later export earns an allowlist entry
   with a reason, not silence.
 - No dependency added to "simplify"; the house writes it in vanilla TS.
+- Refactor only what a RULE flags. A speculative rewrite of working,
+  gate-covered code is not a finding — that boundary is what keeps
+  must-fix-everything from wrecking the codebase.

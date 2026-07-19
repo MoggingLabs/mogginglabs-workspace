@@ -18,42 +18,44 @@ everything this pack builds is $0.
 
 ### 01 · Audit method & coverage
 - [ ] `INVENTORY.md` lists every feature + subsystem, one row each, with entry point + doc + covering gate.
-- [ ] `RUBRIC.md` defines the six lenses (correctness, smell, spaghetti, duplication, inefficiency, refactor-debt) with in-repo examples and a B floor.
-- [ ] `FINDINGS.md` routing ledger exists (id · area · lens · file:line · severity · verdict · rationale · resolved-in).
-- [ ] `LAUNCHAUDIT` gate written, wired into `qa-smokes.sh`, and bite-proven (an ungraded row reds it).
+- [ ] `RUBRIC.md` defines the six lenses (correctness, smell, spaghetti, duplication, inefficiency, refactor-debt), each by an OBJECTIVE TRIGGER + in-repo example, with the not-a-finding boundary written down (taste is not fileable).
+- [ ] Floor is **A**, and A is DERIVED — A ≡ zero open findings on that lens for that row; nobody types a letter.
+- [ ] `FINDINGS.md` routing ledger exists (id · area · lens · file:line · severity · verdict · evidence · resolved-in); verdicts are ONLY `fixed` or `invalid` (disproven) — `defer`/`wontfix` deleted.
+- [ ] `LAUNCHAUDIT` gate written, wired into `qa-smokes.sh`, and bite-proven (an ungraded lens, a below-A derivation, or a `defer` row each red it).
 
 ### 02 · Correctness — runtime & UI core
 - [ ] Edge cases enumerated for terminal/PTY/daemon/scroll/layout/panes/updater-UX/first-run/Settings/themes.
 - [ ] Each guarantee verified against `file:line` and asserted in the owning gate or a unit.
-- [ ] Every S1/S2 fixed with a regression assertion red on pre-fix bytes; S3 deferred with rationale.
-- [ ] Scoped rows graded ≥ B; MILESTONE + PERCEPTION unmoved.
+- [ ] Every finding S1–S3 fixed with a regression assertion red on pre-fix bytes (or `invalid` by disproof).
+- [ ] Scoped rows derive **A** on every lens; MILESTONE + PERCEPTION unmoved.
 
 ### 03 · Correctness — orchestration & swarm
 - [ ] Concurrency/failure edges enumerated for board/worktrees/review-merge/swarm/control-API/loops.
 - [ ] Ownership + redaction + merge + queue invariants each carry a live assertion.
-- [ ] Every S1/S2 fixed + bite-proven; rows graded ≥ B; both budgets green with the swarm up.
+- [ ] Every finding S1–S3 fixed + bite-proven; rows derive **A**; both budgets green with the swarm up.
 
 ### 04 · Correctness — money paths & reach
 - [ ] Adversarial/boundary edges enumerated for account/entitlements/hardening/updater-feed/connections/usage/browser/files/brain/MCP.
 - [ ] Money invariants asserted: no token over IPC, copied→Free, tampered→Free-only, forged-webhook→no-op, unreachable≠rejected, grace-then-Free-never-brick.
-- [ ] Licensing/custody/redaction defects treated S1; all S1/S2 fixed + adversarially asserted; PRODMILESTONE + budgets green.
+- [ ] Licensing/custody/redaction defects treated S1; ALL findings S1–S3 fixed + adversarially asserted; rows derive **A**; PRODMILESTONE + budgets green.
 
 ### 05 · Quality — dedup, dead code, refactor
 - [ ] Duplicated helpers/parallel implementations consolidated to one home, callers rerouted, bytes-identical.
 - [ ] Dead exports/branches/affordances deleted (not hidden) and proven unreferenced.
 - [ ] Oversized/spaghetti modules decomposed along real seams with no new dependency.
 - [ ] `MAINT` gate written, wired, and bite-proven; SPACING `--max 0` still frozen.
+- [ ] Duplication/spaghetti/refactor-debt lenses derive **A**; any rule that proved wrong was amended in `RUBRIC.md` for EVERY row, never waived per-instance.
 
 ### 06 · Efficiency & perf
 - [ ] Every poller/timer/watcher censused and proven zero-cost when idle/hidden.
-- [ ] Algorithmic/allocation waste routed with measurements; LRU caps confirmed bounded.
+- [ ] Algorithmic/allocation waste routed with measurements and ALL fixed (S3 included); LRU caps confirmed bounded; the inefficiency lens derives **A**.
 - [ ] Both budgets re-measured on the merged surface (Brain + accounts live) and recorded; a forced re-index under 16 panes holds the ceiling.
 
 ### 07 · Environment & failure
 - [ ] Cross-OS parity confirmed (win local + mac/linux sweeps) with honest per-OS custody rows.
 - [ ] Offline + flaky-network paths proven (free core works, transient law holds, missing-feed boot crash stays fixed).
 - [ ] First-run + old→new migration proven loss-free against a seeded old userData; downgrade refuses safely.
-- [ ] Low-resource + error-injection paths each surface an honest sentence, never a silent wrong state.
+- [ ] Low-resource + error-injection paths each surface an honest sentence, never a silent wrong state; the environment lens derives **A**.
 
 ---
 
@@ -182,7 +184,7 @@ everything this pack builds is $0.
 ---
 
 ## Definition of "v1.0.0 ready" (this phase's exit)
-- [ ] Part I green: every feature graded ≥ B, every S1/S2 fixed, both budgets held, `MAINT`/`LAUNCHAUDIT` green.
+- [ ] Part I green: every lens on every feature derives **A**, EVERY finding fixed (or disproven `invalid`) with no `defer` anywhere, both budgets held, `MAINT`/`LAUNCHAUDIT` green.
 - [ ] Part II green: real backend (on the website's Neon/Vercel stack) + IdP + Stripe-derived entitlements wired and proven offline, secrets real, security honest, compliance drafted.
 - [ ] Part III green: the LIVE site revamped — every page current, docs complete, blog real, changelog auto-publishes, newsroom + measurement + social structured, under the site's laws (`WEBREVAMP`).
 - [ ] The only remaining work is the operator block above — every item named and costed, nothing silently open.
