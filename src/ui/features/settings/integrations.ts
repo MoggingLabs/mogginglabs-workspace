@@ -1,7 +1,6 @@
 import {
   AgentChannels,
   IntegrationsChannels,
-  MCP_HOUSE_TOOL_GROUPS,
   planHasServerForCli,
   planSignature,
   toolCellState,
