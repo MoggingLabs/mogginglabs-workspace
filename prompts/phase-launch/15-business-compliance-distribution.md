@@ -1,42 +1,44 @@
 The paperwork a public launch legally needs — and the distribution prep —
-all $0, all producible now. Today the LICENSE grants NO right to use;
-you cannot ship even a free user until this lands. Drafts + runbooks
-here; the operator signs/deploys later. No code beyond a copy gate.
+all $0, all producible now. Today the LICENSE grants NO right to use; you
+cannot ship even a free user until this lands. Drafts + runbooks here; the
+operator signs later. No code beyond a copy gate.
 
 ## Steps
-1. **The legal set** (`legal/`): an **EULA** granting free-tier use
-   (fixes the LICENSE-grants-nothing gap), **subscription terms** for Pro,
-   a **privacy policy** naming every subprocessor (Sentry, PostHog, the
-   IdP, Stripe, Loops) + the data map (email, subscription status, device
-   records, telemetry), its erasure section describing **11a's
-   request-based mechanism + SLA**, never a self-serve erasure we did not
-   build — and a **security.txt** + policy
-   (you hold users' OAuth grants — a researcher needs a door). Templates
-   are fine; mark each "operator: review with counsel before publish."
+1. **The legal set** (`legal/`): an **EULA** granting free-tier use (fixes
+   the LICENSE-grants-nothing gap); **subscription terms** for Pro
+   carrying the **7-day money-back guarantee** (GROWTH-PLAN promises it on
+   all paid plans — a contract term, not copy); a **privacy policy**
+   naming every subprocessor (Sentry, PostHog, the IdP, Stripe, Loops) +
+   the data map, its erasure section describing **11a's request-based
+   mechanism + SLA**, never a self-serve erasure we did not build; and a
+   **security.txt** + policy (you hold users' OAuth grants — a researcher
+   needs a door). Templates are fine; mark each "operator: review with
+   counsel before publish."
 2. **Business runbook** (`docs/24-launch-ops.md`): the Stripe reality —
    with raw Stripe WE are merchant of record, so **enable Stripe Tax** and
-   note where registration thresholds apply; the prices per `TIERS.md`
-   (**Pro monthly + annual ONLY** — no Team product) + Customer Portal
-   config (11a: allow cancel + interval switch); the refund flow; the
-   **optional-later MoR wrapper** (Polar/Paddle on Stripe rails) with its
-   tax tradeoff; a support channel (email + GitHub issues) + a one-sentence
-   Pro SLA; the subprocessor/DPA notes. Every item flagged operator-action
-   with its cost ($0 unless noted; incorporation may be needed for Stripe
-   payouts — verify for the operator's country).
+   note where thresholds apply; prices per `TIERS.md` (**Pro monthly +
+   annual ONLY** — no Team product) + Portal config (11a: cancel +
+   interval switch); the refund flow honoring the 7-day window; the
+   **optional-later MoR wrapper** with its tax tradeoff; a support channel
+   + a one-sentence Pro SLA; subprocessor/DPA notes. Every item flagged
+   operator-action with cost ($0 unless noted; incorporation may be needed
+   for Stripe payouts — verify for the operator's country).
 3. **Positioning reconciliation**: audit README + docs/00 non-goals + all
    marketing copy so "free, local, **account-free core**" stays exact
    while "no account, ever / no server, ever" absolutes become the
    freemium truth. `check-credential-wording.mjs` grows patterns keeping
-   the retired absolutes out (extend 12's work).
-4. **Distribution prep**: the winget + homebrew playbooks (docs/10) as a
-   ready checklist (fork, copy `packaging/*`, PR) — GATED on signed
-   artifacts, so PENDING-operator; the homebrew-tap-first path; the Stripe
-   Checkout plan (hosted checkout keeps PCI off us) + funnel events via
-   the site's own first-party collector, never a third-party script.
+   them out. **Also fix the STALE `GROWTH-PLAN.md`** ("three tiers", a
+   "$39 anchor" — the retired Agency price): reconcile to `TIERS.md` at
+   the source, never copy the error forward.
+4. **Distribution prep**: winget + homebrew playbooks (docs/10) as a ready
+   checklist (fork, copy `packaging/*`, PR) — GATED on signed artifacts,
+   so PENDING-operator; homebrew-tap-first; the Stripe Checkout plan
+   (hosted keeps PCI off us) + funnel events via the site's own
+   first-party collector, never a third-party script.
 5. **COMPLIANCE static gate** (`scripts/check-compliance.mjs`, qa-smokes
-   row): asserts every required legal doc EXISTS and is non-placeholder,
-   security.txt is well-formed, and the subprocessor list is present.
-   Verdict `out/compliance-result.json`.
+   row): asserts every legal doc EXISTS and is non-placeholder,
+   security.txt is well-formed, the subprocessor list is present. Verdict
+   `out/compliance-result.json`.
 
 ## Files
 - `legal/{EULA,subscription-terms,privacy,security.txt}.md` ·
@@ -61,8 +63,8 @@ here; the operator signs/deploys later. No code beyond a copy gate.
   credential-wording gate; gate-count re-derived.
 
 ## Guardrails
-- $0 — drafts + runbooks only; the operator publishes/incorporates/signs.
+- $0 — drafts + runbooks only; the operator publishes/signs.
 - Legal templates are a STARTING point flagged for counsel — never
   presented as final legal advice.
-- The account-free FREE core promise stays literally true; only the
+- The account-free FREE core promise stays true; only the
   now-false absolutes are corrected.

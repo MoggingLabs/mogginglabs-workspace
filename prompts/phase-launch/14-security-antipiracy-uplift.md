@@ -41,7 +41,9 @@ nothing is oversold at launch.
 ## Definition of Done
 - The threat model maps every attacker to the control that stops/slows it,
   with the residual stated; the two "real teeth" cases show their raised
-  cost concretely.
+  cost concretely. It states plainly that **the tier caps are honor-system
+  client nudges** and that at v1 **Pro has no server-enforced lever**
+  (sync, its intended spine, is unbuilt) — `TIERS.md`.
 - PIRACYAUDIT green and bite-proven for each control it fences (flip one →
   red).
 - Every added measure is honestly scoped — no control is described beyond

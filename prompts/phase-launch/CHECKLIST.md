@@ -69,6 +69,8 @@ everything this pack builds is $0.
 - [ ] **`TIERS.md` ratified as the single source**: Free + Pro LIVE; Team/Enterprise **waitlist** (no Stripe product, no price id, no entitlement path, no org/seat schema).
 - [ ] NEW limit rows decided: **`maxWorkspaces`** (Free 2) + **`maxDevices`** (Pro 3); `maxSwarmRoles` drops to 4 on Free; `features[]` empty on both live tiers.
 - [ ] **Cross-machine sync recorded as NOT built** in this pack — labelled in-development everywhere, never a delivered Pro bullet.
+- [ ] `DECIDE:` the **notifications** tier split (`PRICING-STRATEGY.md:52` sells Basic vs Full and no mechanism exists) — define it as a row/flag, or cut it from `/pricing`.
+- [ ] Recorded honestly: the caps are **honor-system client nudges**, so at v1 **Pro has no server-enforced lever** (sync, its intended spine, is unbuilt) — 14's threat model says so.
 - [ ] FAKE→real mapping (incl. the EXISTING Stripe webhook extended) written; deferrals + operator-account items listed (no gate depends on them).
 
 ### 09 · Backend foundation
@@ -82,6 +84,7 @@ everything this pack builds is $0.
 - [ ] Full lifecycle mapped (created/updated/canceled/refunded/dunning) with period-end reverts and immutable audit rows.
 - [ ] Pro's **two price ids (monthly + annual)** both derive correctly; an interval switch re-derives; no Team price id exists.
 - [ ] Lifecycle **email via Loops** (payment failed / grace / reverted to Free / refunded) — no silent downgrade.
+- [ ] The PROMISED commercials exist (`TIERS.md` table): promotion codes with stacking OFF, the founding $12 Pro price, **price-lock** (a rise never re-prices an existing sub), and the early-access→GA migration.
 - [ ] Reconciliation cron heals a dropped webhook; billing tests green offline.
 
 ### 11 · Backend issuance
@@ -116,7 +119,8 @@ everything this pack builds is $0.
 - [ ] `PIRACYAUDIT` gate green + bite-proven; honesty pass finds/fixes any overclaim.
 
 ### 15 · Business, compliance & distribution
-- [ ] Legal set drafted (`legal/`): EULA (free-use grant), subscription terms, privacy (subprocessors named), security.txt.
+- [ ] Legal set drafted (`legal/`): EULA (free-use grant), subscription terms **carrying the 7-day money-back guarantee**, privacy (subprocessors named), security.txt.
+- [ ] The stale `GROWTH-PLAN.md` ("three tiers", "$39 anchor") reconciled to `TIERS.md` at the source.
 - [ ] Launch-ops runbook (`docs/24`): Stripe products/prices + Stripe Tax, refunds/chargebacks, support, the optional-later MoR wrapper + its tax tradeoff — all costed.
 - [ ] Positioning copy reconciled to the freemium truth; credential-wording gate extended and passing.
 - [ ] Distribution playbooks ready (winget/homebrew/landing/checkout/funnel), signing-gated ones marked PENDING-operator.

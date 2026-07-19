@@ -21,20 +21,22 @@ regress them. Work in `../MoggingLabs-Website`. Extend, never rebuild.
    button that cannot transact is the worst version of this). **Any benefit
    without a `TIERS.md` row or flag is labelled in-development —
    `cross-machine sync` specifically, which this pack does NOT build.**
-   Keep FAQPage schema honest. Update `src/lib/site.ts` if the CTA moved.
+   Print **price-lock** + the **7-day money-back guarantee** only because
+   10/15 make them real. Keep FAQPage schema honest; update
+   `src/lib/site.ts` if the CTA moved.
 3. **Fill real gaps** the freshness audit (17) found: any shipped
    capability with no page or a thin one (the Brain deserves a /learn
    spoke or a docs section; accounts/BYO-neutrality a trust surface).
    New page → new `metadata`, `json-ld.tsx` schema, `sitemap.ts` +
-   `llms.txt` entry in the SAME step (their global check).
+   `llms.txt` in the SAME step (their global check).
 4. **Honesty pass**: integrations stay framed as in-development where they
    are; early-access vs public-download copy matches reality; every claim
-   traces to the product. Reconcile with the app's own wording gate so the
+   traces to the product. Reconcile with the app's wording gate so the
    free-core promise reads identically on both sides.
-5. **Re-verify the frozen gates** on the changed bytes: `npm run build`
-   clean, `scripts/validate-schema.mjs` 0 errors, `scripts/check-cluster.mjs`
-   + `scripts/check-mcp-links.mjs` green, **Lighthouse 100/100/100/100** on
-   every touched page, em-dash/competitor greps at 0.
+5. **Re-verify the frozen gates** on the changed bytes: `build` clean,
+   `validate-schema.mjs` 0 errors, `check-cluster.mjs` + `check-mcp-
+   links.mjs` green, **Lighthouse 100/100/100/100** on every touched page,
+   em-dash/competitor greps at 0.
 
 ## Files
 - `../MoggingLabs-Website/src/app/(site)/**` (home, learn, docs, roadmap,

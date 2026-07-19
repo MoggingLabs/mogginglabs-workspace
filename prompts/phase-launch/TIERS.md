@@ -25,6 +25,7 @@ a row or a flag here, it is not enforceable — do not sell it as live.**
 | `maxSwarmRoles` | **4** | **16** | — | — |
 | `maxRemotes` | **10** | unlimited | — | — |
 | `maxDevices` | n/a (no claim) | **3** | — | — |
+| Notifications | **DECIDE** | **DECIDE** | — | — |
 | `features[]` | `[]` | `[]` | — | — |
 
 `unlimited` = the row is ABSENT from the claim, so `limit()` fails open to
@@ -48,6 +49,24 @@ sentinel number for unlimited.
 - **Free needs no account and mints no claim**, so no device cap applies to
   it. Free is the `FREE_ENTITLEMENTS` baseline, reached with no login, no
   network, or expired grace (ADR 0016 §2).
+- **`DECIDE:` Notifications.** `PRICING-STRATEGY.md:52` sells Free =
+  "Basic" vs Pro = "Full" notifications, and **no mechanism exists** — the
+  attention port (ALERTAGREE) has no tier split. Either define what Basic
+  withholds as a limit row or a flag, or **cut the row from the pricing
+  page**. It may not ship as an unbacked bullet.
+- **The caps are HONOR-SYSTEM, and must be described that way.**
+  `PRICING-STRATEGY.md:68` is explicit: pane/workspace caps are
+  client-side nudges, "never a wall and never a speed limit" — which is
+  ADR 0016 §5 restated. The signed claim is authoritative about WHAT you
+  bought; the client is not a security boundary. No step may describe a
+  cap as enforcement.
+- **Honest consequence: at v1 Pro has NO server-enforced lever.**
+  `PRICING-STRATEGY.md:88` calls cross-machine sync "the enforceable
+  individual Pro spine" — and sync is not built. So every Pro benefit
+  shipping at v1 is an honor-system client cap. That is an acceptable
+  launch posture (Free is deliberately generous and piracy teeth stay
+  hardware-binding + server value), but nobody should believe Pro is
+  enforced. 14's threat model states it.
 
 ## Not-live claims (must be labelled, never sold as present)
 
@@ -58,6 +77,25 @@ sentinel number for unlimited.
 - **Team / Enterprise** — shared workspaces, shared memory, roles, central
   billing, SSO/SCIM, audit, policy, SLA, self-host. None have schema or
   code. Waitlist framing only.
+
+## Commercial commitments already promised (reconciled 2026-07-19)
+
+`PRICING-STRATEGY.md` + `GROWTH-PLAN.md` promise things the pack did not
+carry. Each is now placed, or explicitly out of scope — none is silent.
+
+| Commitment | Source | Where it lands |
+|---|---|---|
+| **7-day money-back guarantee**, all paid plans | GROWTH:92 | **15** — legal set + refund runbook |
+| **Founding price: Pro $12/mo** for the early-access list | GROWTH:53 | **10** — a Stripe price/coupon; `DECIDE:` lifetime vs 12 months, before announcing |
+| **Price-lock** ("locked at today's rate") | GROWTH:63 | **10** grandfathers existing subs on a price rise; **18** may only print it if 10 honors it |
+| **Promotion codes** (`HUNT50` 50%/3mo; evergreen 30%/3mo) + **never-stack** | GROWTH:32,59,88 | **10** — Stripe promotion codes, stacking off |
+| **"Free during early access" → GA** migration | PRICING:98 | **10/11a** — existing early-access users must not silently lose access |
+| **30% recurring affiliate program** (12 invoices, 60-day cookie) | GROWTH:6,18 | **OUT of this pack** — post-launch; needs a platform + payouts. Recorded so it is not mistaken for shipped. |
+
+> **`GROWTH-PLAN.md` is STALE and must be reconciled by 15** — it says
+> "**three** tiers" (:73,:78) where `PRICING-STRATEGY.md` decided four, and
+> defends "the **$19/$39** anchors" (:91), where $39 is the retired Agency
+> price (now Team $29). Fix the source, don't copy the error forward.
 
 ## Annual + plan changes
 

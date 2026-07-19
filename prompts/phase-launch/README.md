@@ -24,7 +24,7 @@ It runs in the sibling repo `../MoggingLabs-Website` under ITS laws
 (Lighthouse 100/100/100/100, zero third-party requests, no em-dashes, no
 competitor names, truth-over-keywords). Same format as
 `prompts/phase-1..12/`: each step self-contained, pasteable as a `/goal`,
-**≤ 3900 chars**. Execute in order.
+**≤ 3950 chars**. Execute in order.
 
 > **Precondition — MET as of 2026-07-19.** This pack runs on `main` with
 > Phase 12 (the Brain) **merged** and its gates green — Part I audits the
