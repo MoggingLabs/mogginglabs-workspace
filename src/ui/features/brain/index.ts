@@ -6,7 +6,8 @@ import { shortcutsBlocked } from '../../core/commands/context'
 import { isModKey } from '../../core/commands/shortcuts'
 import { explorerRevealLog } from '../../core/shell/explorer-reveal-port'
 import { getTelemetry } from '../../core/telemetry'
-import { onBrainChanged } from './client'
+import { showToast } from '../../components'
+import { onBrainChanged, onSemFailure } from './client'
 import { createBrainView } from './view'
 
 /**
@@ -40,6 +41,17 @@ export const brainFeature: UiFeature = {
     })
 
     onBrainChanged((event) => view.onChangedPush(event.projectKey))
+
+    // Revision A: the semantic lens's ONE failure surface — main latches it to
+    // a single fire per workspace, so this can stay a plain toast. The detail
+    // is an endpoint/status sentence, never memory text or a key (ADR 0005).
+    onSemFailure((event) =>
+      showToast({
+        tone: 'danger',
+        title: 'Semantic memory recall is failing',
+        body: `${event.detail} — exact search still works. Check the endpoint in Settings › Privacy › Semantic memory recall.`
+      })
+    )
 
     setCommands('brain', [
       {

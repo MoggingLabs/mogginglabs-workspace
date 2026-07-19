@@ -237,6 +237,13 @@ export function memorySearchExpr(query: string): string | null {
  *  served back inside every breakdown so the arithmetic is auditable. */
 export const MEMORY_SUGGEST_WEIGHTS = { link: 3, tag: 2, term: 1 } as const
 
+/** The hybrid blend (ADR 0018 revision A): fixed-weight reciprocal-rank fusion
+ *  of the FTS list and the cosine list — each side contributes
+ *  `weight / (K + rank)`, the two components sum to the score, and the whole
+ *  breakdown is served back per hit. Auditable even when fuzzy. */
+export const MEMORY_HYBRID_WEIGHTS = { fts: 1, semantic: 1 } as const
+export const MEMORY_HYBRID_RRF_K = 60
+
 /** Lowercased word tokens of a display name — the title-term half of suggest. */
 export const memoryNameTerms = (name: string): string[] =>
   [...new Set(name.normalize('NFKD').toLowerCase().match(/[a-z0-9]+/g) ?? [])].sort()

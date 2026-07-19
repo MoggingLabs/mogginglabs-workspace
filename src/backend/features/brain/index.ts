@@ -5,15 +5,17 @@ import { Worker } from 'node:worker_threads'
 import writeFileAtomic from 'write-file-atomic'
 import type { BrainAnswer, BrainChangedEvent, BrainRefusal, BrainStatus } from '@contracts'
 import { foldProjectKey } from '../workspace/project-identity'
+import { EMBED_BATCH, embedTextOfMemory, embedTexts, vectorToBlob, type EmbedTarget } from './embed'
 import {
   BrainFreshness,
   type BrainDeltaRequest,
   type BrainFreshnessStats,
   type BrainTickSource
 } from './freshness'
-import { MEMORY_DIR, replaceMemoryBody, scanMemoryDir } from './memory'
+import { MEMORY_DIR, MEMORY_MAX_FILES, replaceMemoryBody, scanMemoryDir } from './memory'
 import type { MemoryLandResult, MemoryWriteOp } from './memory-writes'
 import { resolveBrainProject, type BrainProject } from './project'
+import { freshestBySlug } from './serve'
 import { BrainStore, brainDbPath } from './store'
 import type { BrainLandResult, BrainSpliceResult } from './writes'
 import type { BrainLibDocDbRow } from './store'
@@ -72,9 +74,21 @@ export {
   globToLike,
   partitionOf,
   serveBrainRead,
+  serveMemorySearchSemantic,
   type BrainReadHost,
-  type BrainServeReply
+  type BrainServeReply,
+  type MemorySemanticLens
 } from './serve'
+export {
+  EMBED_FAKE_ENDPOINT,
+  EMBED_QUERY_MAX_CHARS,
+  armEmbedFailureForSmoke,
+  embedHttpAttemptsForSmoke,
+  embedProviderLabel,
+  embedTexts,
+  isEmbedEndpoint,
+  type EmbedTarget
+} from './embed'
 
 // The brain SERVICE (ADR 0018): the one object every later step consumes — identity,
 // lifecycle, status, typed refusals, (step 03) the FULL deterministic build, and
@@ -110,6 +124,19 @@ interface OpenBrain {
   store: BrainStore
 }
 
+/** What one embed pass runs under (ADR 0018 revision A) — resolved by MAIN per
+ *  project at pass time: the consenting workspace's OWN endpoint + model, its
+ *  vault-resolved key (in memory only), and the single-fire failure surface.
+ *  Null = no consenting workspace stands in this project; the pass is a no-op
+ *  and the deterministic lenses never notice. */
+export interface BrainMemoryEmbedPlan {
+  endpoint: string
+  model: string
+  key: string | null
+  onFailure: (detail: string) => void
+}
+export type BrainMemoryEmbedPlanner = (projectRoots: string[]) => BrainMemoryEmbedPlan | null
+
 export class BrainService {
   /** Insertion-ordered: the Map IS the LRU (delete + re-set marks recency). */
   private readonly open = new Map<string, OpenBrain>()
@@ -127,6 +154,16 @@ export class BrainService {
   private readonly memTimers = new Map<string, NodeJS.Timeout>()
   /** Landed memory rescans — the MEMGRAPH smoke's progress witness. */
   private memRescanCount = 0
+  /** Revision A: the semantic lens's embed pass — debounced per root, single
+   *  flight per project, and OFF entirely until main hands in a planner. */
+  private embedPlanner: BrainMemoryEmbedPlanner | null = null
+  private readonly embedTimers = new Map<string, NodeJS.Timeout>()
+  private readonly embedInFlight = new Set<string>()
+  private readonly embedPending = new Set<string>()
+  private memEmbedPerformed = 0
+  private memEmbedSkipped = 0
+  private memEmbedFailures = 0
+  private memEmbedPasses = 0
   /** Folded partition root -> projectKey / folded projectKey -> attached roots (04). */
   private readonly rootProject = new Map<string, string>()
   private readonly rootsByProject = new Map<string, string[]>()
@@ -388,11 +425,128 @@ export class BrainService {
         .memoriesForRoots([partitionRoot])
         .map((row) => `${row.slug}:${row.hash}`)
         .join('\n')
-      if (fingerprint === held) return
-      r.brain.store.replaceMemories(partitionRoot, scan.rows, scan.links)
-      this.memRescanCount += 1
+      if (fingerprint !== held) {
+        r.brain.store.replaceMemories(partitionRoot, scan.rows, scan.links)
+        this.memRescanCount += 1
+      }
+      // Revision A: EVERY drain offers the embed pass — even a no-change rescan
+      // (a model swap or a fresh consent has work the fingerprint cannot see).
+      // The pass itself is content-hash keyed, so offering it is nearly free.
+      this.scheduleMemoryEmbed(partitionRoot)
     } catch {
       /* a locked store loses one rescan; the next routed change retries */
+    }
+  }
+
+  /** Hand in (or clear) the semantic lens's planner (ADR 0018 revision A).
+   *  Without one — consent OFF everywhere, or a build that never wires it —
+   *  no embed pass ever runs and no vector is ever read or written. */
+  setMemoryEmbedPlanner(planner: BrainMemoryEmbedPlanner | null): void {
+    this.embedPlanner = planner
+  }
+
+  /** Nudge the embed pass for the project `root` stands in — the consent/config
+   *  flip's door (turning the lens ON should not wait for the next edit). */
+  pokeMemoryEmbed(root: string): void {
+    this.scheduleMemoryEmbed(path.resolve(root))
+  }
+
+  /** The embed pass's counters — the BRAINSEM smoke's witnesses. */
+  memoryEmbedStats(): { performed: number; skipped: number; failures: number; passes: number } {
+    return {
+      performed: this.memEmbedPerformed,
+      skipped: this.memEmbedSkipped,
+      failures: this.memEmbedFailures,
+      passes: this.memEmbedPasses
+    }
+  }
+
+  private scheduleMemoryEmbed(root: string): void {
+    if (!this.embedPlanner) return
+    const key = foldProjectKey(root)
+    const prior = this.embedTimers.get(key)
+    if (prior) clearTimeout(prior)
+    const timer = setTimeout(() => {
+      this.embedTimers.delete(key)
+      void this.runMemoryEmbedPass(root)
+    }, 300)
+    timer.unref?.()
+    this.embedTimers.set(key, timer)
+  }
+
+  /**
+   * One embed pass over the PROJECT's freshest copies (the same election every
+   * read serves): content-hash keyed — an unchanged memory under an unchanged
+   * model never re-embeds (counted as a skip); a changed hash or a swapped
+   * model replaces the row in place. Runs OUTSIDE the exclusive queue on
+   * purpose (HTTP must not dam writes); a rescan landing mid-pass just makes
+   * the landed hash stale, and the next drain heals it — the key makes stale
+   * landings self-correcting. One failure aborts the pass, counts, and fires
+   * the plan's failure surface; nothing retries in a loop.
+   */
+  private async runMemoryEmbedPass(root: string): Promise<void> {
+    const planner = this.embedPlanner
+    if (!planner) return
+    const pre = this.ensure(root)
+    if ('reason' in pre) return
+    const project = pre.brain.project
+    const key = foldProjectKey(project.projectKey)
+    if (this.embedInFlight.has(key)) {
+      this.embedPending.add(key)
+      return
+    }
+    this.embedInFlight.add(key)
+    try {
+      const plan = planner([...project.roots])
+      if (!plan) return
+      const store = pre.brain.store
+      const written = freshestBySlug(store.memoriesForRoots([...project.roots]), project.roots)
+      // The row cap is the memory dir's own cap — past it nothing embeds silently
+      // wrong; the slugs are sorted so the kept set is stable.
+      const slugs = [...written.keys()].sort().slice(0, MEMORY_MAX_FILES)
+      const meta = new Map(store.memoryVectorMeta().map((m) => [m.slug, m]))
+      const toEmbed: { slug: string; hash: string; text: string }[] = []
+      let skipped = 0
+      for (const slug of slugs) {
+        const fresh = written.get(slug)
+        if (!fresh) continue
+        const held = meta.get(slug)
+        if (held && held.contentHash === fresh.hash && held.model === plan.model) {
+          skipped += 1
+          continue
+        }
+        const copy = store.memoryCopies([fresh.root], slug)[0]
+        if (!copy) continue
+        toEmbed.push({ slug, hash: copy.hash, text: embedTextOfMemory(copy) })
+      }
+      this.memEmbedSkipped += skipped
+      const target: EmbedTarget = { endpoint: plan.endpoint, model: plan.model, key: plan.key }
+      for (let i = 0; i < toEmbed.length; i += EMBED_BATCH) {
+        const batch = toEmbed.slice(i, i + EMBED_BATCH)
+        const res = await embedTexts(target, batch.map((b) => b.text))
+        if (!res.ok) {
+          this.memEmbedFailures += 1
+          plan.onFailure(res.detail)
+          return
+        }
+        try {
+          for (let j = 0; j < batch.length; j++) {
+            store.putMemoryVector(batch[j].slug, batch[j].hash, plan.model, res.dim, vectorToBlob(res.vectors[j]))
+          }
+        } catch {
+          return // the LRU may have closed the handle mid-pass; the next drain retries
+        }
+        this.memEmbedPerformed += batch.length
+      }
+      try {
+        store.pruneMemoryVectors(slugs)
+      } catch {
+        /* same: a lost prune re-runs next pass */
+      }
+      this.memEmbedPasses += 1
+    } finally {
+      this.embedInFlight.delete(key)
+      if (this.embedPending.delete(key)) void this.runMemoryEmbedPass(root)
     }
   }
 
@@ -485,6 +639,9 @@ export class BrainService {
     this.libTimers.clear()
     for (const timer of this.memTimers.values()) clearTimeout(timer)
     this.memTimers.clear()
+    for (const timer of this.embedTimers.values()) clearTimeout(timer)
+    this.embedTimers.clear()
+    this.embedPending.clear()
     this.rootProject.clear()
     this.rootsByProject.clear()
     for (const { store } of this.open.values()) {

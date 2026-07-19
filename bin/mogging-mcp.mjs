@@ -298,6 +298,8 @@ function brainRefusalText(r) {
       return `refused — ${detail || 'this workspace has not allowed registry doc fetches (default off); the human enables it in Settings'}`
     case 'fetch-failed':
       return `the registry fetch failed${detail ? ` (${detail})` : ''} — the on-disk answer is unchanged`
+    case 'embed-failed':
+      return `the embedding call failed${detail ? ` (${detail})` : ''} — the workspace's own endpoint did not answer; exact search still works (mode "exact")`
     case 'busy':
       return `the brain is busy${detail ? ` (${detail})` : ''} — retry shortly`
     default:

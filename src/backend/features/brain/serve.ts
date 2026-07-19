@@ -1,7 +1,16 @@
 import * as path from 'node:path'
 import { BRAIN_LIB_ECOSYSTEMS, type BrainRefusal, type BrainStatus } from '@contracts'
 import { foldProjectKey } from '../workspace/project-identity'
-import { MEMORY_SUGGEST_WEIGHTS, isMemorySlug, memoryNameTerms, memorySearchExpr, memorySlug } from './memory'
+import { blobToVector, cosineSim } from './embed'
+import {
+  MEMORY_HYBRID_RRF_K,
+  MEMORY_HYBRID_WEIGHTS,
+  MEMORY_SUGGEST_WEIGHTS,
+  isMemorySlug,
+  memoryNameTerms,
+  memorySearchExpr,
+  memorySlug
+} from './memory'
 import { REPOMAP_DEFAULT_BUDGET, REPOMAP_MAX_BUDGET, REPOMAP_MIN_BUDGET, renderRepoMap } from './render'
 import { BRAIN_EDGE_KINDS, BRAIN_NODE_KINDS, type BrainNodeRow } from './schema'
 import type { BrainStore } from './store'
@@ -627,8 +636,9 @@ function slugArg(v: unknown): { slug: string } | BrainServeReply {
   return { slug: raw }
 }
 
-/** slug → its freshest copy's root, for every written slug in scope. */
-function freshestBySlug<T extends { slug: string; root: string; mtime: number }>(rows: T[], roots: string[]): Map<string, T> {
+/** slug → its freshest copy, for every written slug in scope. Exported: the
+ *  embed drain (revision A) must elect the SAME copy every read serves. */
+export function freshestBySlug<T extends { slug: string; root: string; mtime: number }>(rows: T[], roots: string[]): Map<string, T> {
   const grouped = new Map<string, T[]>()
   for (const r of rows) {
     const list = grouped.get(r.slug) ?? []
@@ -788,6 +798,132 @@ function serveMemorySuggest(s: ResolvedScope, args: Record<string, unknown>): Br
     },
     'suggestions'
   )
+}
+
+// ── The semantic lens (ADR 0018 revision A): probabilistic, labeled, opt-in ──
+// This function is NOT in serveBrainRead's dispatch on purpose: the sync
+// deterministic path never learns the lens exists. Main calls it only after
+// the workspace's consent, endpoint, and query embedding all resolved — and
+// every hit it emits wears `probabilistic: true` with its provider and model,
+// because an unlabeled probabilistic answer is a review rejection by law.
+
+export interface MemorySemanticLens {
+  mode: 'semantic' | 'hybrid'
+  /** The query's embedding, already L2-normalized (main embeds per call). */
+  queryVec: Float32Array
+  /** The endpoint's host label + the model that produced the vectors. */
+  provider: string
+  model: string
+}
+
+export function serveMemorySearchSemantic(
+  host: BrainReadHost,
+  args: Record<string, unknown>,
+  callerRoot: string | null,
+  lens: MemorySemanticLens
+): BrainServeReply {
+  try {
+    const s0 = resolveScope(host, args, callerRoot)
+    if ('ok' in s0) return s0
+    const s = s0
+    const query = str(args.query)
+    if (!query) return refuse('invalid', 'query is required')
+    const limit = intArg(args.limit, MEMORY_SEARCH_DEFAULT_LIMIT, 1, MEMORY_SEARCH_MAX_LIMIT)
+    if (limit === null) return refuse('invalid', `limit must be 1-${MEMORY_SEARCH_MAX_LIMIT}`)
+
+    const written = freshestBySlug(s.store.memoriesForRoots(s.projectRoots), s.projectRoots)
+    // Only the CURRENT model's rows exist here (store filters): a model swap
+    // invalidates every older vector without a flag to forget.
+    const vectors = new Map<string, Float32Array>()
+    for (const row of s.store.memoryVectorRows(lens.model)) {
+      if (!written.has(row.slug)) continue
+      const vec = blobToVector(row.vec, row.dim)
+      if (vec) vectors.set(row.slug, vec)
+    }
+    const unembedded = written.size - vectors.size
+
+    // The cosine list: score desc, slug asc — fixed, like every house order.
+    const semRanked = [...vectors.entries()]
+      .map(([slug, vec]) => ({ slug, score: cosineSim(lens.queryVec, vec) }))
+      .sort((a, b) => b.score - a.score || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
+
+    const hitOf = (slug: string): Record<string, unknown> => {
+      const m = written.get(slug) as { slug: string; name: string; description: string; tags: string; root: string }
+      return {
+        slug: m.slug,
+        name: m.name,
+        description: m.description,
+        tags: parseTags(m.tags),
+        root: m.root,
+        // The lens law's label, load-bearing: this answer is an OPINION, and it
+        // says whose.
+        probabilistic: true,
+        provider: lens.provider,
+        model: lens.model
+      }
+    }
+
+    if (lens.mode === 'semantic') {
+      const page = semRanked.slice(0, limit)
+      return capReply(
+        {
+          ok: true,
+          ...envelope(s),
+          mode: 'semantic',
+          memories: page.map((r) => ({ ...hitOf(r.slug), score: r.score })),
+          truncated: semRanked.length > limit,
+          ...(unembedded > 0 ? { unembedded } : {})
+        },
+        'memories'
+      )
+    }
+
+    // Hybrid: the exact verb's own FTS list (freshest-copy deduped, same order)
+    // fused with the cosine list by fixed-weight reciprocal rank — the two
+    // components SUM to the score, and the breakdown rides every hit.
+    const expr = memorySearchExpr(query)
+    const ftsKept = expr
+      ? [...freshestBySlug(s.store.memorySearch(s.projectRoots, expr, MEMORY_SEARCH_FETCH_CAP), s.projectRoots).values()].sort(
+          (a, b) => a.rank - b.rank || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0)
+        )
+      : []
+    const ftsRank = new Map(ftsKept.map((r, i) => [r.slug, i + 1]))
+    const semRank = new Map(semRanked.map((r, i) => [r.slug, i + 1]))
+    const blended = [...new Set([...ftsRank.keys(), ...semRank.keys()])]
+      .map((slug) => {
+        const f = ftsRank.get(slug)
+        const v = semRank.get(slug)
+        const ftsComponent = f === undefined ? 0 : MEMORY_HYBRID_WEIGHTS.fts / (MEMORY_HYBRID_RRF_K + f)
+        const semComponent = v === undefined ? 0 : MEMORY_HYBRID_WEIGHTS.semantic / (MEMORY_HYBRID_RRF_K + v)
+        return { slug, score: ftsComponent + semComponent, ftsComponent, semComponent, f: f ?? null, v: v ?? null }
+      })
+      .sort((a, b) => b.score - a.score || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
+    const page = blended.slice(0, limit)
+    return capReply(
+      {
+        ok: true,
+        ...envelope(s),
+        mode: 'hybrid',
+        memories: page.map((r) => ({
+          ...hitOf(r.slug),
+          score: r.score,
+          breakdown: {
+            ftsRank: r.f,
+            semRank: r.v,
+            ftsComponent: r.ftsComponent,
+            semComponent: r.semComponent,
+            weights: MEMORY_HYBRID_WEIGHTS,
+            k: MEMORY_HYBRID_RRF_K
+          }
+        })),
+        truncated: blended.length > limit,
+        ...(unembedded > 0 ? { unembedded } : {})
+      },
+      'memories'
+    )
+  } catch (e) {
+    return refuse('busy', e instanceof Error ? e.message : String(e))
+  }
 }
 
 /**

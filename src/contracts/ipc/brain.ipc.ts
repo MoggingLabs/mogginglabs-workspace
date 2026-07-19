@@ -125,6 +125,20 @@ export interface BrainEcosystemCount {
 }
 
 /**
+ * `brain:semCfgGet` — the semantic lens's per-workspace target (ADR 0018
+ * revision A, the lens law). BYO only: both fields are EMPTY until the human
+ * sets them — no default endpoint exists, no model is bundled, and no request
+ * ever leaves for anywhere but this endpoint. The key never rides any channel:
+ * `keySlot` is the ADR 0007a presence story (vault ciphertext or an env-ref
+ * NAME at rest; set / clear / presence — no getter exists).
+ */
+export interface BrainSemConfig {
+  endpoint: string
+  model: string
+  keySlot: { kind: 'keychain' } | { kind: 'env-ref'; envRef: string } | { kind: 'none' }
+}
+
+/**
  * `brain:overview` — the status card's extras: numbers the store already holds
  * that BrainStatus does not carry. Same request shape as `brain:status`, same
  * refusal register.

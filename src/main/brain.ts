@@ -2,16 +2,23 @@ import { join } from 'node:path'
 import { app, ipcMain, type BrowserWindow } from 'electron'
 import {
   BrainService,
+  EMBED_QUERY_MAX_CHARS,
+  embedProviderLabel,
+  embedTexts,
   isBrainWriteVerb,
+  isEmbedEndpoint,
   isMemoryWriteVerb,
   partitionOf,
   serveBrainRead,
   serveBrainWrite,
+  serveMemorySearchSemantic,
   serveMemoryWrite,
   type BrainFreshnessStats,
   type BrainServeReply,
-  type BrainTickSource
+  type BrainTickSource,
+  type MemorySemanticLens
 } from '@backend/features/brain'
+import { redactSecrets } from '@backend/features/review'
 import {
   BrainChannels,
   locatePane,
@@ -19,12 +26,14 @@ import {
   type BrainChangedEvent,
   type BrainEcosystemCount,
   type BrainLibEcosystem,
-  type BrainOverviewAnswer
+  type BrainOverviewAnswer,
+  type BrainSemConfig
 } from '@contracts'
 import { getSettingsStore } from './app-settings'
 import { resolveGrantedWriteTools, workspaceIdForPane } from './integrations'
 import { fetchLibraryDocs } from './libfetch'
 import { recordTrail } from './trail'
+import { vaultAvailable, vaultClearKey, vaultHas, vaultLoad, vaultStore } from './vault'
 
 // App-wiring for the workspace brain (ADR 0018). The logic lives in @backend
 // (Electron-free, testable); main derives the ONE path Electron owns — the db dir
@@ -57,6 +66,21 @@ function ensureService(): BrainService {
         boundWin?.()?.webContents.send(BrainChannels.changed, event)
       } catch {
         /* window gone */
+      }
+    })
+    // Revision A: the embed planner — resolved PER PASS, so a consent or config
+    // flip lands on the very next drain without any rewiring. Null everywhere
+    // until a consenting, configured workspace stands in the project.
+    service.setMemoryEmbedPlanner((projectRoots) => {
+      const ws = semWorkspaceForRoots(projectRoots)
+      if (!ws) return null
+      const cfg = embedTargetOf(ws.id)
+      if (!cfg.endpoint || !cfg.model || !isEmbedEndpoint(cfg.endpoint)) return null
+      return {
+        endpoint: cfg.endpoint,
+        model: cfg.model,
+        key: resolveEmbedKey(ws.id),
+        onFailure: (detail) => fireSemFailure(ws.id, detail)
       }
     })
   }
@@ -273,6 +297,278 @@ export function setLibFetchAllowed(workspaceId: string, on: boolean): boolean {
   }
 }
 
+// ── The semantic lens (ADR 0018 revision A): consent, target, key, latch ─────
+// Consent is the libFetch card's storage shape with the SAME semantics: absent
+// = FALSE, per workspace, the human flips it. The target (endpoint + model) is
+// BYO only — both empty until set, no default to fall back to — and the key at
+// rest rides the ADR 0007.a vault pointer grammar verbatim (ciphertext or an
+// env-ref NAME; never a plaintext in any config file, never a getter channel).
+
+const SEM_KV = 'brain.semanticMemory'
+const SEMCFG_KV = 'brain.embedTarget'
+const SEM_KEY_CIPHER = (wsId: string): string => `brain.embedkeycipher.${wsId}`
+const SEM_KEY_ENVREF = (wsId: string): string => `brain.embedkeyenv.${wsId}`
+const SEM_ENV_NAME = /^[A-Z][A-Z0-9_]{2,40}$/
+const SEM_MODEL_MAX = 200
+const SEM_ENDPOINT_MAX = 2000
+
+function semMap(): Record<string, boolean> {
+  try {
+    const raw = getSettingsStore()?.getSetting(SEM_KV)
+    const parsed = raw ? (JSON.parse(raw) as unknown) : null
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const out: Record<string, boolean> = {}
+      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) out[k] = v === true
+      return out
+    }
+  } catch {
+    /* unreadable map reads as all-default (closed) */
+  }
+  return {}
+}
+
+export function semanticAllowed(workspaceId: string): boolean {
+  return semMap()[workspaceId] === true
+}
+
+function semTargetMap(): Record<string, { endpoint: string; model: string }> {
+  try {
+    const raw = getSettingsStore()?.getSetting(SEMCFG_KV)
+    const parsed = raw ? (JSON.parse(raw) as unknown) : null
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const out: Record<string, { endpoint: string; model: string }> = {}
+      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+        const row = v as { endpoint?: unknown; model?: unknown }
+        out[k] = {
+          endpoint: typeof row?.endpoint === 'string' ? row.endpoint : '',
+          model: typeof row?.model === 'string' ? row.model : ''
+        }
+      }
+      return out
+    }
+  } catch {
+    /* unreadable map reads as unconfigured */
+  }
+  return {}
+}
+
+export function embedTargetOf(workspaceId: string): { endpoint: string; model: string } {
+  return semTargetMap()[workspaceId] ?? { endpoint: '', model: '' }
+}
+
+/** The workspace's cwd, for the consent/config flip's embed nudge. */
+function wsCwd(workspaceId: string): string | null {
+  const workspaces = getSettingsStore()?.load()?.workspaces
+  if (!Array.isArray(workspaces)) return null
+  for (const ws of workspaces as { id?: unknown; cwd?: unknown }[]) {
+    if (ws?.id === workspaceId) return typeof ws.cwd === 'string' && ws.cwd ? ws.cwd : null
+  }
+  return null
+}
+
+/** The FIRST consenting workspace standing in this project (settings order —
+ *  fixed, so the same roots always elect the same lens config). Null = the
+ *  lens is off for this project and the embed pass is a no-op. */
+function semWorkspaceForRoots(projectRoots: string[]): { id: string; cwd: string } | null {
+  const workspaces = getSettingsStore()?.load()?.workspaces
+  if (!Array.isArray(workspaces)) return null
+  for (const ws of workspaces as { id?: unknown; cwd?: unknown }[]) {
+    const id = typeof ws?.id === 'string' ? ws.id : ''
+    const cwd = typeof ws?.cwd === 'string' ? ws.cwd : ''
+    if (!id || !cwd) continue
+    if (partitionOf(projectRoots, cwd) && semanticAllowed(id)) return { id, cwd }
+  }
+  return null
+}
+
+/** Nudge the workspace's project to run an embed pass (consent/config flips
+ *  should index now, not on the next edit). Quietly nothing without a cwd. */
+function pokeSemEmbed(workspaceId: string): void {
+  const cwd = wsCwd(workspaceId)
+  if (cwd) ensureService().pokeMemoryEmbed(cwd)
+}
+
+export function setSemanticAllowed(workspaceId: string, on: boolean): boolean {
+  const store = getSettingsStore()
+  if (!store || !workspaceId) return false
+  const map = semMap()
+  map[workspaceId] = on
+  try {
+    store.setSetting(SEM_KV, JSON.stringify(map))
+  } catch {
+    return false
+  }
+  semFailureFired.delete(workspaceId) // a flip re-arms the single-fire toast
+  if (on) pokeSemEmbed(workspaceId)
+  return true
+}
+
+export function setEmbedTarget(workspaceId: string, endpoint: string, model: string): { ok: boolean; reason?: string } {
+  const store = getSettingsStore()
+  if (!store || !workspaceId) return { ok: false, reason: 'no settings store' }
+  const ep = endpoint.trim().slice(0, SEM_ENDPOINT_MAX)
+  const mdl = model.trim().replace(/[\r\n]+/g, ' ').slice(0, SEM_MODEL_MAX)
+  if (ep && !isEmbedEndpoint(ep)) {
+    return { ok: false, reason: 'the endpoint must be an absolute http(s) base URL (…/v1) — a local one is fine' }
+  }
+  const map = semTargetMap()
+  map[workspaceId] = { endpoint: ep, model: mdl }
+  try {
+    store.setSetting(SEMCFG_KV, JSON.stringify(map))
+  } catch {
+    return { ok: false, reason: 'the settings store did not accept the change' }
+  }
+  semFailureFired.delete(workspaceId) // new target, new chance to fail loudly once
+  if (ep && mdl) pokeSemEmbed(workspaceId)
+  return { ok: true }
+}
+
+/** ADR 0007.a presence: keychain / env-ref / none — never a key byte. */
+export function embedKeySlot(workspaceId: string): BrainSemConfig['keySlot'] {
+  const envRef = getSettingsStore()?.getSetting(SEM_KEY_ENVREF(workspaceId))
+  if (envRef) return { kind: 'env-ref', envRef }
+  if (vaultHas(SEM_KEY_CIPHER(workspaceId))) return { kind: 'keychain' }
+  return { kind: 'none' }
+}
+
+/** Paste path: encrypt immediately; the plaintext argument is never stored,
+ *  logged, or echoed — the return carries ok/reason only (usage-keys, verbatim). */
+export function embedKeySetPlaintext(workspaceId: string, plaintext: string): { ok: boolean; reason?: string } {
+  if (typeof plaintext !== 'string' || !plaintext.trim() || plaintext.length > 4096) {
+    return { ok: false, reason: 'paste a non-empty key (max 4096 chars)' }
+  }
+  if (!vaultAvailable()) {
+    return {
+      ok: false,
+      reason: 'OS keychain encryption is unavailable on this system — use an env-ref instead (e.g. ${OLLAMA_KEY})'
+    }
+  }
+  if (!vaultStore(SEM_KEY_CIPHER(workspaceId), plaintext.trim())) {
+    return { ok: false, reason: 'the settings store is not available right now — the key was not saved; try again' }
+  }
+  getSettingsStore()?.setSetting(SEM_KEY_ENVREF(workspaceId), '') // keychain replaces any env-ref
+  semFailureFired.delete(workspaceId)
+  return { ok: true }
+}
+
+/** Env-ref path: the NAME persists, never a value; a secret-shaped literal is
+ *  refused with the same deny-list heuristic every pointer slot uses. */
+export function embedKeySetEnvRef(workspaceId: string, envRefRaw: string): { ok: boolean; reason?: string } {
+  const envRef = String(envRefRaw ?? '')
+    .trim()
+    .replace(/^\$\{?/, '')
+    .replace(/\}$/, '')
+  if (!SEM_ENV_NAME.test(envRef)) return { ok: false, reason: 'env-ref must be a VARIABLE NAME like ${OLLAMA_KEY}' }
+  if (redactSecrets(envRef).redactions > 0) {
+    return { ok: false, reason: 'that looks like a key VALUE — paste it in the key field, or give a variable NAME' }
+  }
+  const kv = getSettingsStore()
+  kv?.setSetting(SEM_KEY_ENVREF(workspaceId), envRef)
+  kv?.setSetting(SEM_KEY_CIPHER(workspaceId), '')
+  semFailureFired.delete(workspaceId)
+  return { ok: true }
+}
+
+export function embedKeyClear(workspaceId: string): void {
+  vaultClearKey(SEM_KEY_CIPHER(workspaceId))
+  getSettingsStore()?.setSetting(SEM_KEY_ENVREF(workspaceId), '')
+}
+
+/** The embed path ONLY (in memory, per request) — never exposed over any
+ *  channel. Null when no usable key exists (keyless local endpoints are fine). */
+export function resolveEmbedKey(workspaceId: string): string | null {
+  const slot = embedKeySlot(workspaceId)
+  if (slot.kind === 'env-ref') return process.env[slot.envRef] ?? null
+  if (slot.kind === 'keychain') return vaultLoad(SEM_KEY_CIPHER(workspaceId)) // null if the vault changed (re-paste)
+  return null
+}
+
+// The single-fire failure surface: ONE toast per workspace per latch — the
+// latch re-arms when consent, target, or key changes (a fixed config that
+// still fails deserves to fail loudly again). Detail is local color (ADR
+// 0005): an endpoint host or an HTTP status, never memory text, never a key.
+const semFailureFired = new Set<string>()
+let semToastCount = 0
+
+function fireSemFailure(workspaceId: string, detail: string): void {
+  if (semFailureFired.has(workspaceId)) return
+  semFailureFired.add(workspaceId)
+  semToastCount += 1
+  try {
+    boundWin?.()?.webContents.send(BrainChannels.semFailure, { workspaceId, detail: detail.slice(0, 300) })
+  } catch {
+    /* window gone */
+  }
+}
+
+/**
+ * `brain.memSearch` over the agent wire, mode-aware (ADR 0018 revision A) —
+ * async because semantic/hybrid embed the query per call. The lens law is the
+ * whole structure here: `exact` (or no mode) short-circuits into 09's sync
+ * dispatch BYTE-IDENTICALLY — consent, config, and the embedder are never even
+ * read; semantic/hybrid answer only for a consenting workspace with its own
+ * endpoint, and every fuzzy hit comes back labeled probabilistic with the
+ * provider and model that produced it.
+ */
+export async function handleBrainMemSearchMcp(
+  args: Record<string, unknown>,
+  boundPane: string | undefined
+): Promise<BrainServeReply> {
+  const callerRoot = boundPane ? brainRootForPane(boundPane) : null
+  const mode = args.mode
+  if (mode !== undefined && mode !== 'exact' && mode !== 'semantic' && mode !== 'hybrid') {
+    return { ok: false, reason: 'invalid', detail: 'mode must be "exact", "semantic", or "hybrid"' }
+  }
+  if (mode === undefined || mode === 'exact') {
+    return serveBrainRead(ensureService(), 'brain.memSearch', args, callerRoot)
+  }
+  const wsId = boundPane ? workspaceIdForPane(boundPane) : undefined
+  if (!wsId) {
+    return {
+      ok: false,
+      reason: 'consent',
+      detail:
+        'semantic recall needs a pane session in a workspace — and that workspace\'s permission (Settings › Privacy). Exact search stays free: retry with mode "exact".'
+    }
+  }
+  if (!semanticAllowed(wsId)) {
+    return {
+      ok: false,
+      reason: 'consent',
+      detail:
+        'this workspace has not allowed semantic memory recall (default off) — the human enables it in Settings › Privacy. Exact search still answers: retry with mode "exact".'
+    }
+  }
+  const cfg = embedTargetOf(wsId)
+  if (!cfg.endpoint || !cfg.model || !isEmbedEndpoint(cfg.endpoint)) {
+    return {
+      ok: false,
+      reason: 'invalid',
+      detail:
+        'the semantic lens has no embedding endpoint/model configured for this workspace — the human sets both in Settings › Privacy. Exact search still answers: retry with mode "exact".'
+    }
+  }
+  const query = typeof args.query === 'string' ? args.query : ''
+  if (!query) return { ok: false, reason: 'invalid', detail: 'query is required' }
+  // The query embeds per call, capped — one bounded request to the USER'S OWN
+  // endpoint and nowhere else (the BYO guardrail is the absence of any other
+  // URL in this file).
+  const embedded = await embedTexts(
+    { endpoint: cfg.endpoint, model: cfg.model, key: resolveEmbedKey(wsId) },
+    [query.slice(0, EMBED_QUERY_MAX_CHARS)]
+  )
+  if (!embedded.ok) {
+    return { ok: false, reason: 'embed-failed', detail: embedded.detail }
+  }
+  const lens: MemorySemanticLens = {
+    mode,
+    queryVec: embedded.vectors[0],
+    provider: embedProviderLabel(cfg.endpoint),
+    model: cfg.model
+  }
+  return serveMemorySearchSemantic(ensureService(), args, callerRoot, lens)
+}
+
 /**
  * `brain.libdocs` over the agent wire (08) — async because of its ONE optional
  * network path. The cache read itself is the serve layer's; this handler only
@@ -405,6 +701,8 @@ export function brainDebug(): {
   freshness: (root: string) => BrainFreshnessStats | null
   drainEmits: () => number
   memoryRescans: () => number
+  embedStats: () => { performed: number; skipped: number; failures: number; passes: number }
+  semToasts: () => number
 } {
   return {
     openCount: () => service?.openCount() ?? 0,
@@ -412,7 +710,9 @@ export function brainDebug(): {
     dump: (root: string) => ensureService().dump(root),
     freshness: (root: string) => ensureService().freshnessStats(root),
     drainEmits: () => service?.drainEmits() ?? 0,
-    memoryRescans: () => service?.memoryRescans() ?? 0
+    memoryRescans: () => service?.memoryRescans() ?? 0,
+    embedStats: () => service?.memoryEmbedStats() ?? { performed: 0, skipped: 0, failures: 0, passes: 0 },
+    semToasts: () => semToastCount
   }
 }
 
@@ -443,6 +743,38 @@ export function registerBrain(getWin: () => BrowserWindow | null, tickSource?: B
     const r = (req ?? {}) as { workspaceId?: unknown; on?: unknown }
     const ok = typeof r.workspaceId === 'string' && !!r.workspaceId && setLibFetchAllowed(r.workspaceId, r.on === true)
     return { ok }
+  })
+  // Revision A: the semantic lens's knobs — consent (the libFetch discipline),
+  // the BYO target, and the ADR 0007.a key pointer (set/clear/presence; no
+  // getter channel exists, which is the guarantee).
+  ipcMain.handle(BrainChannels.semGet, (_e, wsId: unknown) =>
+    typeof wsId === 'string' && wsId ? semanticAllowed(wsId) : false
+  )
+  ipcMain.handle(BrainChannels.semSet, (_e, req: unknown) => {
+    const r = (req ?? {}) as { workspaceId?: unknown; on?: unknown }
+    const ok = typeof r.workspaceId === 'string' && !!r.workspaceId && setSemanticAllowed(r.workspaceId, r.on === true)
+    return { ok }
+  })
+  ipcMain.handle(BrainChannels.semCfgGet, (_e, wsId: unknown): BrainSemConfig => {
+    const id = typeof wsId === 'string' ? wsId : ''
+    const target = id ? embedTargetOf(id) : { endpoint: '', model: '' }
+    return { ...target, keySlot: id ? embedKeySlot(id) : { kind: 'none' } }
+  })
+  ipcMain.handle(BrainChannels.semCfgSet, (_e, req: unknown) => {
+    const r = (req ?? {}) as { workspaceId?: unknown; endpoint?: unknown; model?: unknown }
+    if (typeof r.workspaceId !== 'string' || !r.workspaceId) return { ok: false, reason: 'no workspace' }
+    return setEmbedTarget(r.workspaceId, typeof r.endpoint === 'string' ? r.endpoint : '', typeof r.model === 'string' ? r.model : '')
+  })
+  ipcMain.handle(BrainChannels.semKeySet, (_e, req: unknown) => {
+    const r = (req ?? {}) as { workspaceId?: unknown; plaintext?: unknown; envRef?: unknown }
+    if (typeof r.workspaceId !== 'string' || !r.workspaceId) return { ok: false, reason: 'no workspace' }
+    if (typeof r.envRef === 'string' && r.envRef) return embedKeySetEnvRef(r.workspaceId, r.envRef)
+    return embedKeySetPlaintext(r.workspaceId, typeof r.plaintext === 'string' ? r.plaintext : '')
+  })
+  ipcMain.handle(BrainChannels.semKeyClear, (_e, wsId: unknown) => {
+    if (typeof wsId !== 'string' || !wsId) return { ok: false }
+    embedKeyClear(wsId)
+    return { ok: true }
   })
   ipcMain.handle(BrainChannels.rebuild, async (_e, req: unknown) => {
     const answer = await handleBrainRebuild(req)

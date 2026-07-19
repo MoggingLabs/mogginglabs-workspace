@@ -68,7 +68,15 @@ export interface BrainEdgeRow {
  *  disposable), and memories_fts is the FTS5 shadow the search verb ranks by
  *  (bm25 — deterministic arithmetic, never an opinion). Backlinks are DERIVED
  *  from memory_links, never stored in the files. All excluded from the
- *  canonical dump, exactly like the library lens. */
+ *  canonical dump, exactly like the library lens.
+ *  v6 (ADR 0018 revision A) adds memory_vectors: ONE row per written slug — the
+ *  PROJECT'S freshest copy embedded under the workspace's own endpoint, keyed
+ *  by contentHash (an unchanged memory never re-embeds) and stamped with the
+ *  model that produced it (a model change invalidates honestly: the row is
+ *  replaced on the next drain and never served under another model's name).
+ *  Probabilistic state, doubly disposable — deleting the db loses nothing, and
+ *  the deterministic lenses never read this table. Excluded from the canonical
+ *  dump by nature. */
 export const BRAIN_GRAPH_DDL = `
 CREATE TABLE IF NOT EXISTS files (
   root TEXT NOT NULL, path TEXT NOT NULL, hash TEXT NOT NULL, lang TEXT NOT NULL,
@@ -119,6 +127,10 @@ CREATE TABLE IF NOT EXISTS memory_links (
 CREATE INDEX IF NOT EXISTS memory_links_by_dst ON memory_links(dst);
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
   name, description, body, root UNINDEXED, slug UNINDEXED
+);
+CREATE TABLE IF NOT EXISTS memory_vectors (
+  slug TEXT PRIMARY KEY, contentHash TEXT NOT NULL, model TEXT NOT NULL,
+  dim INTEGER NOT NULL, vec BLOB NOT NULL
 );
 `
 

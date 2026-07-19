@@ -1,7 +1,7 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
 import { BrainChannels, BrowserChannels, TelemetryChannels, type TelemetryRendererConfig } from '@contracts'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
-import { Button, Card, FieldGroup, SectionHeader, TwoColumn, createSegmented, createToggleRow, el, icon, showToast, ICON_NAMES, type ElChild, type IconName } from '../../components'
+import { Button, Card, FieldGroup, SectionHeader, TwoColumn, createSegmented, createToggleRow, el, icon, showToast, submitWithRetain, ICON_NAMES, type ElChild, type IconName } from '../../components'
 import { THEMES } from '../../core/theme/themes'
 import { currentThemeId, onThemeChange, setTheme } from '../../core/theme/theme-state'
 import { setCommands } from '../../core/commands/command-port'
@@ -342,6 +342,145 @@ export const settingsFeature: UiFeature = {
       syncLibFetchAvailability()
     }
 
+    // ── Semantic memory recall (ADR 0018 revision A): consent + BYO target ────
+    // The libFetch card's consent discipline for the switch; the ADR 0007.a
+    // paste-once form (submitWithRetain — the ONE secret submit path) for the
+    // key. BYO only: both target fields start empty, nothing is bundled, and
+    // requests leave only for the endpoint typed here.
+    const semNote = el('p', {
+      class: 'toggle-row-hint brainsem-note',
+      text: 'No workspace open — this permission is per-workspace. Open one, then decide here.',
+      hidden: true
+    })
+    const semToggle = createToggleRow({
+      label: 'Agents may search team memories semantically',
+      hint: 'Off by default. On: search_memories gains fuzzy modes that embed queries and your .memory/ notes through the endpoint you set below — your own account or a local server (Ollama, LM Studio); nothing is bundled, proxied, or metered by us. Every fuzzy hit is labeled probabilistic with its provider and model. Exact search is unchanged either way.',
+      extra: semNote,
+      onChange: () => void applySemConsent()
+    })
+    async function applySemConsent(): Promise<void> {
+      const next = semToggle.checked()
+      const wsId = getWorkspaces().activeId
+      if (!wsId) {
+        void pullSemLens()
+        return
+      }
+      semToggle.setDisabled(true)
+      try {
+        const saved = (await getBridge().invoke(BrainChannels.semSet, { workspaceId: wsId, on: next })) as
+          | { ok?: boolean }
+          | undefined
+        if (!saved?.ok) {
+          semToggle.setChecked(!next)
+          showToast({
+            tone: 'danger',
+            title: 'Permission was not changed',
+            body: 'The settings store did not accept the change — nothing was allowed or revoked. Try again.'
+          })
+        }
+      } catch (error) {
+        semToggle.setChecked(!next)
+        showToast({ tone: 'danger', title: 'Permission was not changed', body: String(error) })
+      } finally {
+        void pullSemLens()
+      }
+    }
+    const semEndpoint = el('input', { class: 'input input-sm brainsem-endpoint', ariaLabel: 'Embedding endpoint base URL' }) as HTMLInputElement
+    semEndpoint.type = 'text'
+    semEndpoint.placeholder = 'http://localhost:11434/v1'
+    const semModel = el('input', { class: 'input input-sm brainsem-model', ariaLabel: 'Embedding model' }) as HTMLInputElement
+    semModel.type = 'text'
+    semModel.placeholder = 'nomic-embed-text'
+    const semTargetErr = el('p', { class: 'toggle-row-hint brainsem-target-err', hidden: true })
+    const semSaveTarget: HTMLButtonElement = Button({
+      label: 'Save endpoint',
+      size: 'sm',
+      onClick: () => {
+        const wsId = getWorkspaces().activeId
+        if (!wsId) return
+        semSaveTarget.disabled = true
+        void (async () => {
+          try {
+            const saved = (await getBridge().invoke(BrainChannels.semCfgSet, {
+              workspaceId: wsId,
+              endpoint: semEndpoint.value,
+              model: semModel.value
+            })) as { ok?: boolean; reason?: string } | undefined
+            semTargetErr.hidden = saved?.ok === true
+            if (saved?.ok !== true) semTargetErr.textContent = saved?.reason ?? 'the settings store did not accept the change'
+          } catch (error) {
+            semTargetErr.hidden = false
+            semTargetErr.textContent = String(error)
+          } finally {
+            semSaveTarget.disabled = false
+            void pullSemLens()
+          }
+        })()
+      }
+    })
+    const semKeyState = el('span', { class: 'brainsem-key-state', text: 'no key' })
+    const semKeyErr = el('p', { class: 'toggle-row-hint brainsem-key-err', hidden: true })
+    const semKeyInput = el('input', { class: 'input input-sm brainsem-key', ariaLabel: 'Embedding API key' }) as HTMLInputElement
+    semKeyInput.type = 'password'
+    semKeyInput.placeholder = 'paste API key (optional — local endpoints rarely need one)…'
+    const semKeySave: HTMLButtonElement = Button({
+      label: 'Save key',
+      size: 'sm',
+      onClick: () => {
+        const wsId = getWorkspaces().activeId
+        const plaintext = semKeyInput.value
+        if (!wsId || !plaintext) return
+        void submitWithRetain({
+          trigger: semKeySave,
+          retainFields: [semKeyInput],
+          errorEl: semKeyErr,
+          submit: () =>
+            getBridge().invoke(BrainChannels.semKeySet, { workspaceId: wsId, plaintext }) as Promise<{ ok: boolean; reason?: string }>,
+          onSuccess: () => void pullSemLens()
+        })
+      }
+    })
+    const semKeyClear: HTMLButtonElement = Button({
+      label: 'Clear key',
+      size: 'sm',
+      variant: 'outline',
+      onClick: () => {
+        const wsId = getWorkspaces().activeId
+        if (!wsId) return
+        void getBridge()
+          .invoke(BrainChannels.semKeyClear, wsId)
+          .then(() => void pullSemLens())
+      }
+    })
+    async function pullSemLens(): Promise<void> {
+      const wsId = getWorkspaces().activeId
+      semToggle.setDisabled(!wsId)
+      semNote.hidden = !!wsId
+      for (const c of [semEndpoint, semModel, semSaveTarget, semKeyInput, semKeySave, semKeyClear]) c.disabled = !wsId
+      if (!wsId) {
+        semToggle.setChecked(false)
+        semEndpoint.value = ''
+        semModel.value = ''
+        semKeyState.textContent = 'no key'
+        return
+      }
+      try {
+        semToggle.setChecked((await getBridge().invoke(BrainChannels.semGet, wsId)) === true)
+        const cfg = (await getBridge().invoke(BrainChannels.semCfgGet, wsId)) as
+          | { endpoint?: string; model?: string; keySlot?: { kind?: string; envRef?: string } }
+          | undefined
+        // Never clobber a mid-edit field with the stored value.
+        if (document.activeElement !== semEndpoint) semEndpoint.value = cfg?.endpoint ?? ''
+        if (document.activeElement !== semModel) semModel.value = cfg?.model ?? ''
+        const slot = cfg?.keySlot
+        semKeyState.textContent =
+          slot?.kind === 'keychain' ? 'key saved (vaulted)' : slot?.kind === 'env-ref' ? `env-ref \${${slot.envRef ?? ''}}` : 'no key'
+        semKeyClear.hidden = !slot || slot.kind === 'none'
+      } catch {
+        /* leave as-is */
+      }
+    }
+
     async function pullConsent(): Promise<void> {
       try {
         const cfg = (await getBridge().invoke(TelemetryChannels.getConfig)) as TelemetryRendererConfig
@@ -572,6 +711,34 @@ export const settingsFeature: UiFeature = {
               el('p', {
                 class: 'settings-scope',
                 text: 'Only the exact version a lockfile pins is ever requested, only from npmjs.org or pypi.org, and only its published README text comes back. No package is downloaded, installed, or run.'
+              })
+            ]
+          ),
+          // Revision A: the semantic lens — consent + the BYO embedding target.
+          Card(
+            {
+              header: SectionHeader({
+                title: 'Semantic memory recall',
+                caption: 'OFF by default, per workspace. Bring your own embedding endpoint — a local one works fully offline.'
+              })
+            },
+            [
+              semToggle.el,
+              FieldGroup(
+                { label: 'Embedding endpoint', hint: 'An OpenAI-compatible base URL (…/v1). Yours alone: requests go only here — never to us.' },
+                semEndpoint
+              ),
+              FieldGroup({ label: 'Embedding model', hint: 'The model name that endpoint serves.' }, semModel),
+              semSaveTarget,
+              semTargetErr,
+              FieldGroup(
+                { label: 'API key', hint: 'Optional. Vaulted on save — OS-keychain ciphertext, write-only: it can be replaced or cleared, never viewed again (ADR 0007.a).' },
+                el('div', { class: 'brainsem-key-row' }, [semKeyInput, semKeySave, semKeyClear, semKeyState])
+              ),
+              semKeyErr,
+              el('p', {
+                class: 'settings-scope',
+                text: 'When on, memory notes and search queries are sent to the endpoint above to be embedded — and nowhere else. Fuzzy results are always labeled probabilistic with their provider and model; exact search, backlinks, and suggestions stay deterministic and identical with this off.'
               })
             ]
           ),
@@ -860,6 +1027,7 @@ export const settingsFeature: UiFeature = {
       void pullConsent()
       void pullOrientAtLaunch()
       void pullLibFetch()
+      void pullSemLens()
       void providers.refresh() // re-detect: a CLI installed since last visit flips to Available
       void account.refresh() // status is push-kept; entering still re-pulls (missed pushes cost nothing)
       if (!page.querySelector('.ph-form')) void profilesHosts.refresh()

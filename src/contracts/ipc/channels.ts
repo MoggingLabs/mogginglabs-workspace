@@ -434,6 +434,13 @@ export const BrainChannels = {
   orientSet: 'brain:orientSet', // ({ workspaceId, on }) -> { ok } (persisted main-side with the other per-workspace knobs)
   libFetchGet: 'brain:libFetchGet', // (workspaceId) -> boolean (default FALSE — registry doc fetches are opt-in, per workspace; ADR 0018/08)
   libFetchSet: 'brain:libFetchSet', // ({ workspaceId, on }) -> { ok } (the orient knob's discipline, consent semantics)
+  semGet: 'brain:semGet', // (workspaceId) -> boolean (default FALSE — semantic memory recall is opt-in, per workspace; ADR 0018 revision A)
+  semSet: 'brain:semSet', // ({ workspaceId, on }) -> { ok } (consent semantics; ON nudges the embed pass so the lens does not wait for the next edit)
+  semCfgGet: 'brain:semCfgGet', // (workspaceId) -> BrainSemConfig (endpoint, model, key PRESENCE — a key byte never rides any channel, ADR 0007.a)
+  semCfgSet: 'brain:semCfgSet', // ({ workspaceId, endpoint, model }) -> { ok, reason? } (BYO only — no default endpoint exists to fall back to)
+  semKeySet: 'brain:semKeySet', // ({ workspaceId, plaintext } | { workspaceId, envRef }) -> { ok, reason? } (write-only: vault ciphertext or an env-ref NAME at rest)
+  semKeyClear: 'brain:semKeyClear', // (workspaceId) -> { ok }
+  semFailure: 'brain:semFailure', // main -> renderer: { workspaceId, detail } — the embed pass failed; fired ONCE per latch (the single-fire toast)
   read: 'brain:read', // (BrainReadRequest) -> the serve layer's reply for one READ verb (the Brain view's door — same caps, same refusals as the agent wire)
   overview: 'brain:overview', // (BrainRootRequest) -> BrainOverviewAnswer (status-card extras the store already holds: memory/dangling counts, ecosystems)
   changed: 'brain:changed' // main -> renderer: BrainChangedEvent ({ projectKey, generation, dirty })

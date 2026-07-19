@@ -2,7 +2,8 @@ import {
   BrainChannels,
   type BrainAnswer,
   type BrainChangedEvent,
-  type BrainOverviewAnswer
+  type BrainOverviewAnswer,
+  type BrainSemConfig
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 
@@ -95,6 +96,38 @@ export const libFetchSet = (workspaceId: string, on: boolean): Promise<boolean> 
   getBridge()
     .invoke(BrainChannels.libFetchSet, { workspaceId, on })
     .then((v) => (v as { ok?: boolean } | undefined)?.ok === true)
+
+// ── The semantic lens (ADR 0018 revision A): consent, target, key pointer ────
+// The key is WRITE-ONLY end to end (ADR 0007.a): set / clear / presence — no
+// wrapper here can read a key back, because no channel answering one exists.
+
+export const semGet = (workspaceId: string): Promise<boolean> =>
+  getBridge()
+    .invoke(BrainChannels.semGet, workspaceId)
+    .then((v) => v === true)
+
+export const semSet = (workspaceId: string, on: boolean): Promise<boolean> =>
+  getBridge()
+    .invoke(BrainChannels.semSet, { workspaceId, on })
+    .then((v) => (v as { ok?: boolean } | undefined)?.ok === true)
+
+export const semCfgGet = (workspaceId: string): Promise<BrainSemConfig> =>
+  getBridge().invoke(BrainChannels.semCfgGet, workspaceId) as Promise<BrainSemConfig>
+
+export const semCfgSet = (workspaceId: string, endpoint: string, model: string): Promise<{ ok: boolean; reason?: string }> =>
+  getBridge().invoke(BrainChannels.semCfgSet, { workspaceId, endpoint, model }) as Promise<{ ok: boolean; reason?: string }>
+
+export const semKeySet = (workspaceId: string, key: { plaintext?: string; envRef?: string }): Promise<{ ok: boolean; reason?: string }> =>
+  getBridge().invoke(BrainChannels.semKeySet, { workspaceId, ...key }) as Promise<{ ok: boolean; reason?: string }>
+
+export const semKeyClear = (workspaceId: string): Promise<boolean> =>
+  getBridge()
+    .invoke(BrainChannels.semKeyClear, workspaceId)
+    .then((v) => (v as { ok?: boolean } | undefined)?.ok === true)
+
+/** Subscribe to `brain:semFailure` pushes (the embed pass's single-fire toast). */
+export const onSemFailure = (cb: (event: { workspaceId: string; detail: string }) => void): (() => void) =>
+  getBridge().on(BrainChannels.semFailure, (payload) => cb(payload as { workspaceId: string; detail: string }))
 
 /** Subscribe to `brain:changed` pushes. App-lifetime — the unsubscriber may be dropped. */
 export const onBrainChanged = (cb: (event: BrainChangedEvent) => void): (() => void) =>

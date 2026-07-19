@@ -22,7 +22,7 @@ import {
 
 const Database = requireNative<typeof import('better-sqlite3')>('better-sqlite3')
 
-export const BRAIN_SCHEMA_VERSION = 5 // v5: the memory lens (09) — additive, one-way, idempotent (v4 added libraries)
+export const BRAIN_SCHEMA_VERSION = 6 // v6: memory_vectors (revision A's semantic lens) — additive, one-way, idempotent (v5 added memories)
 /** Multi-row insert batch size — the build's transactional chunking unit. */
 export const BRAIN_INSERT_CHUNK = 1000
 
@@ -528,6 +528,44 @@ export class BrainStore {
          ORDER BY memories_fts.rank, m.slug, m.root LIMIT ?`
       )
       .all(expr, ...rc.params, cap) as { root: string; slug: string; name: string; description: string; tags: string; mtime: number; rank: number }[]
+  }
+
+  // ── The semantic lens (ADR 0018 revision A): memory_vectors ─────────────────
+  // ONE row per written slug — the project's freshest copy embedded under the
+  // workspace's OWN endpoint. contentHash-keyed (unchanged never re-embeds),
+  // model-stamped (a swap invalidates honestly). The deterministic lenses never
+  // read this table; deleting it loses nothing but cached arithmetic.
+
+  /** Every vector row's identity WITHOUT its blob — the drain's skip check. */
+  memoryVectorMeta(): { slug: string; contentHash: string; model: string }[] {
+    return this.db
+      .prepare('SELECT slug, contentHash, model FROM memory_vectors ORDER BY slug')
+      .all() as { slug: string; contentHash: string; model: string }[]
+  }
+
+  /** The rows ONE model produced (blob included) — the search verb's material.
+   *  Rows another model wrote are invisible here by construction: a vector is
+   *  never served under a model's name that did not produce it. */
+  memoryVectorRows(model: string): { slug: string; contentHash: string; dim: number; vec: Buffer }[] {
+    return this.db
+      .prepare('SELECT slug, contentHash, dim, vec FROM memory_vectors WHERE model = ? ORDER BY slug')
+      .all(model) as { slug: string; contentHash: string; dim: number; vec: Buffer }[]
+  }
+
+  /** Land one embedded memory (REPLACE by slug: re-embeds and model swaps
+   *  overwrite in place — one row per slug, always). */
+  putMemoryVector(slug: string, contentHash: string, model: string, dim: number, vec: Buffer): void {
+    this.db
+      .prepare('INSERT OR REPLACE INTO memory_vectors (slug,contentHash,model,dim,vec) VALUES (?,?,?,?,?)')
+      .run(slug, contentHash, model, dim, vec)
+  }
+
+  /** Drop vectors for slugs no longer written — the drain's prune. */
+  pruneMemoryVectors(keepSlugs: string[]): number {
+    if (!keepSlugs.length) return this.db.prepare('DELETE FROM memory_vectors').run().changes
+    return this.db
+      .prepare(`DELETE FROM memory_vectors WHERE slug NOT IN (${keepSlugs.map(() => '?').join(',')})`)
+      .run(...keepSlugs).changes
   }
 
   /**

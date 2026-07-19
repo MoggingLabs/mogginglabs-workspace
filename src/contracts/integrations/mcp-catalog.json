@@ -725,11 +725,12 @@
   {
     "name": "search_memories",
     "title": "Search team memories",
-    "description": "Full-text search over the TEAM'S memory graph — the plain-markdown notes in this project's .memory/ (decisions, gotchas, conventions, pointers), synced by git like any other file. Deterministic FTS5 bm25 ranking over name, description, and body: the same query over the same files always answers in the same order. Memories are read PROJECT-WIDE — the freshest copy across this project's checkouts wins, and every hit is labeled with the checkout (root) it came from. Free to call.",
+    "description": "Full-text search over the TEAM'S memory graph — the plain-markdown notes in this project's .memory/ (decisions, gotchas, conventions, pointers), synced by git like any other file. Deterministic FTS5 bm25 ranking over name, description, and body: the same query over the same files always answers in the same order. Memories are read PROJECT-WIDE — the freshest copy across this project's checkouts wins, and every hit is labeled with the checkout (root) it came from. Free to call. Fuzzy modes exist behind a per-workspace opt-in: mode 'semantic' ranks by embedding similarity from the workspace's OWN configured endpoint, 'hybrid' blends that with FTS by fixed weights and serves the full breakdown per hit — every fuzzy hit is labeled probabilistic:true with the provider and model that scored it. The default mode 'exact' is deterministic, needs no consent, and is unchanged by the lens existing.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "query": { "type": "string", "description": "Free-text terms (implicit AND). Plain words only — FTS syntax is treated as words." },
+        "mode": { "type": "string", "enum": ["exact", "semantic", "hybrid"], "description": "Default exact (deterministic, always answers, offline). semantic/hybrid need this workspace's semantic-memory permission plus its own embedding endpoint, and refuse typed without them." },
         "limit": { "type": "number", "description": "Max results, 1-100 (default 20)." },
         "root": { "type": "string", "description": "Absolute project root — ONLY for sessions outside a pane." }
       },

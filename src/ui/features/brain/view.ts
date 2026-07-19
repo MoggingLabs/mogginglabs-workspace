@@ -12,6 +12,8 @@ import {
   libFetchSet,
   orientGet,
   orientSet,
+  semGet,
+  semSet,
   type BrainBacklinkOut,
   type BrainMemoryHit,
   type BrainMemoryLinkOut,
@@ -138,12 +140,17 @@ export function createBrainView(): BrainView {
     hint: 'Off by default. Exact pinned versions only, size-capped, HTTPS to the registry — the same permission Settings › Privacy owns.',
     onChange: () => void applyConsent(libFetchToggle, libFetchSet, pullConsents)
   })
+  const semToggle = createToggleRow({
+    label: 'Agents may search memories semantically',
+    hint: 'Off by default. Fuzzy recall through YOUR OWN embedding endpoint (set in Settings › Privacy) — every fuzzy hit is labeled probabilistic; exact search never changes.',
+    onChange: () => void applyConsent(semToggle, semSet, pullConsents)
+  })
   const consentCard = Card(
     {
       header: SectionHeader({ title: 'Consents', caption: 'Per-workspace. Two-way with Settings — one stored truth.' }),
       class: 'brain-consent-card'
     },
-    [orientToggle.el, libFetchToggle.el]
+    [orientToggle.el, libFetchToggle.el, semToggle.el]
   )
 
   const lensBtn = (lens: 'graph' | 'reader', label: string, hint: string): HTMLButtonElement =>
@@ -223,9 +230,11 @@ export function createBrainView(): BrainView {
     const id = wsId()
     orientToggle.setDisabled(!id)
     libFetchToggle.setDisabled(!id)
+    semToggle.setDisabled(!id)
     if (!id) {
       orientToggle.setChecked(false)
       libFetchToggle.setChecked(false)
+      semToggle.setChecked(false)
     }
   }
   async function pullConsents(): Promise<void> {
@@ -233,6 +242,7 @@ export function createBrainView(): BrainView {
     try {
       orientToggle.setChecked(!!id && (await orientGet(id)))
       libFetchToggle.setChecked(!!id && (await libFetchGet(id)))
+      semToggle.setChecked(!!id && (await semGet(id)))
     } catch {
       /* bridge unavailable — leave as-is */
     }
@@ -790,7 +800,7 @@ export function createBrainView(): BrainView {
       renderMain()
       return true
     },
-    consents: () => ({ orient: orientToggle.checked(), libFetch: libFetchToggle.checked() })
+    consents: () => ({ orient: orientToggle.checked(), libFetch: libFetchToggle.checked(), semantic: semToggle.checked() })
   }
 
   return {

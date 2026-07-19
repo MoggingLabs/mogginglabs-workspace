@@ -3,7 +3,8 @@
 - **Status:** Accepted (2026-07-18). Step 02 of the brain plan ships the LAWS below —
   identity, lifecycle, status, typed refusals (`BrainService`, `brain:*`, the BRAINCORE
   gate) — before any graph exists, so every later step inherits them instead of
-  retrofitting them.
+  retrofitting them. **Revision A (2026-07-19)** adds the LENS LAW — the one bounded
+  amendment to stance (a) — for the semantic memory lens.
 - **Relates to:** ADR 0004 (layering: contracts / backend / main), ADR 0005 (what may
   reach telemetry), ADR 0008 §b (protocols, not plugins — nothing new listens),
   docs/[02-mvp-and-roadmap.md](../02-mvp-and-roadmap.md) §Phase 12 (the roadmap entry
@@ -181,6 +182,67 @@ stale CAS refuses with the disk untouched; a real pane edit reindexes on the
 tick; a worktree merge carries a memory home through REAL git; no grant means
 writes refuse while reads answer; a deleted brain db rebuilds search from the
 files alone; `.memory/` holds only `.md` files afterwards.
+
+## Revision A — the LENS LAW (the semantic memory lens, Phase 2.5)
+
+Stance (a) said "no LLM, no embeddings, no vector store" — and it stays true of
+the CORE, whose every answer remains reproducible from bytes on disk. What the
+brain lacked was fuzzy RECALL over `.memory/`: FTS5 does not stem, so a vague
+question misses the note that answers it. This revision bounds (a) instead of
+repealing it: a **probabilistic LENS may exist over the deterministic core**,
+under four conditions that are each structural, not disciplinary:
+
+- **(A1) Opt-in.** The workspace consented (`brain.semanticMemory`, per
+  workspace, default OFF — the library-fetch card's consent semantics). No
+  consent → semantic modes refuse `consent`, typed; nothing embeds, ever.
+- **(A2) The user's OWN provider.** ADR 0002's spirit, applied to inference: we
+  never proxy, never meter, take no cut. ONE adapter — OpenAI-compatible HTTP
+  (`POST <endpoint>/embeddings`) — covers OpenAI, Azure, Ollama, LM Studio;
+  a local endpoint makes even the lens fully offline. There is **no bundled
+  model and no default endpoint**: both fields are empty until the human types
+  them, and no request leaves for anywhere else (the guardrail is the absence
+  of any other URL in the path). The key at rest rides ADR 0007.a's vault
+  pointer grammar verbatim — OS-vault ciphertext or an env-ref NAME, never a
+  plaintext in a config file, never a getter channel.
+- **(A3) Labels are load-bearing.** Every fuzzy hit carries
+  `probabilistic: true` plus the `provider` (endpoint host) and `model` that
+  scored it, and its `score`; hybrid hits carry the full blend breakdown
+  (fixed-weight reciprocal-rank fusion of the FTS list and the cosine list —
+  the two components SUM to the score). An unlabeled probabilistic answer is a
+  review rejection. Fuzzy, but still auditable.
+- **(A4) The deterministic path does not bend.** `search_memories` defaults to
+  `mode: 'exact'` — step 09's dispatch, byte-identical; semantic/hybrid live in
+  a separate handler the sync dispatch never learns about. Exact search,
+  backlinks, suggestions, and the whole offline core answer identically with
+  the lens on, off, or broken.
+
+**The mechanics, recorded:** vectors live in the brain db (`memory_vectors`,
+one row per written slug — the project's freshest copy, the same election every
+read serves), **content-hash keyed**: an unchanged memory never re-embeds (the
+skip is counted), a changed hash replaces the row, and a model swap invalidates
+honestly (rows are model-stamped and never served under another model's name).
+Embedding rides step 04's drain — consent ON only, debounced, off the exclusive
+queue so HTTP never dams a write. Similarity is house cosine, in process, over
+the db — **no external vector store, no new service, no new dependency**. Query
+embeds happen per call, capped. Failures are typed (`embed-failed`), abort the
+pass, and surface as ONE toast per latch — never a retry loop.
+
+**Lineage + license stance.** The shape is the memory organ of
+ByteRover's **cipher** (Elastic-2.0): semantic recall over a team knowledge
+store, BYO embedding provider. Elastic-2.0 is a **code wall** for this tree —
+the shape is taken clean-room, the code is refused, the asciinema
+format-only precedent (docs/02 §risk 5) applied again: read the docs, never the
+source, implement from the laws above.
+
+Proven by **BRAINSEM** (`MOGGING_BRAINSEM`, FAKE embedder — a deterministic
+seeded-hash trigram embedding, zero network — verdict
+`out/brainsem-result.json`): consent OFF refuses typed while exact answers
+byte-identically; a fixture pair with FTS-disjoint vocabulary is found by
+semantic and missed by exact (the value, proven); every fuzzy hit is labeled
+and hybrid components sum; an unchanged re-drain embeds nothing (counted) and
+one edit embeds exactly one; a model swap re-embeds on the next drain; the
+pasted key resolves in process while its plaintext greps to ZERO files at rest;
+and the lens off leaves step 09's surface untouched.
 
 ## Research lineage
 
