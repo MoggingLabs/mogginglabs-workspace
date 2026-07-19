@@ -73,6 +73,12 @@ everything this pack builds is $0.
 - [ ] Recorded honestly: the caps are **honor-system client nudges**, so at v1 **Pro has no server-enforced lever** (sync, its intended spine, is unbuilt) — 14's threat model says so.
 - [ ] FAKE→real mapping (incl. the EXISTING Stripe webhook extended) written; deferrals + operator-account items listed (no gate depends on them).
 
+### 08a · Decision security review
+- [ ] `SECREVIEW.md` written: the six questions, with the tier decision as the worked example (its cheapest defeat WAS a renderer constant).
+- [ ] ADR 0019 carries a `## Security review` section; every "cheapest defeat" answer is fixed or has a FINDINGS id (never a defer — 01 §3).
+- [ ] Every gated `TIERS.md` row names its enforcement point, so a renderer-only gate is visible at decision time.
+- [ ] `SECREVIEW` gate green + bite-proven (blank one answer → red); the standing law is in the pack README.
+
 ### 09 · Backend foundation
 - [ ] The backend (Next.js routes on the website's Neon stack) boots on loopback with health + per-env config (secrets from ENV, absent-honest locally).
 - [ ] Schema + forward-only Neon migrations for accounts/subscriptions/entitlements/devices/events (validate-schema clean).
@@ -117,6 +123,20 @@ everything this pack builds is $0.
 - [ ] Cheap residuals closed (no env origin override, TTL/grace tuned, device cap, feed integrity, key rotation exercised).
 - [ ] Attribution + revocation teeth documented (piracy telemetry → revoke workflow; watermark trace runbook).
 - [ ] `PIRACYAUDIT` gate green + bite-proven; honesty pass finds/fixes any overclaim.
+
+### 14a · Enforcement behind the wall
+- [ ] Every gate point inventoried (`entitlementLimit`/`allows`/plan comparisons) with `file:line` and what it withholds.
+- [ ] Main DECIDES, renderer RENDERS: a decision verb over IPC; the claims snapshot is demoted to display-only copy.
+- [ ] Enforcement fails **CLOSED** (an enforced name with no row refuses) while display still fails open — deleting a row can never widen a cap.
+- [ ] `PLAINGATE` green + bite-proven: no numeric cap, granting `limits[...]` read, or plan comparison survives in built `out/renderer`; patching the bundle no longer widens a cap.
+- [ ] The decision verb is provably off the hot path; MILESTONE + PERCEPTION unmoved.
+
+### 14b · Integrity map & the keystone
+- [ ] Per-artifact × per-OS protection matrix in the threat model; the outside-the-asar set named individually.
+- [ ] The signing keystone stated wherever integrity is claimed — unsigned builds are tamper-EVIDENT, never tamper-proof.
+- [ ] Linux's inert-integrity row in docs/18 + docs/19; no copy implies three-OS parity.
+- [ ] Swapping the node-helper or a `bin/` shim cannot bypass 14a's decision (proven, or filed S1 against 14a).
+- [ ] `INTEGRITYMAP` green + bite-proven.
 
 ### 15 · Business, compliance & distribution
 - [ ] Legal set drafted (`legal/`): EULA (free-use grant), subscription terms **carrying the 7-day money-back guarantee**, privacy (subprocessors named), security.txt.

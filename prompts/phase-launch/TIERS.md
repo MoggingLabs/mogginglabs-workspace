@@ -57,6 +57,14 @@ sentinel number for unlimited.
   source. `/pricing` must not list notifications as a Pro differentiator.
   Team/Enterprise "team-wide visibility" is a different, cross-user thing
   and stays waitlist.
+- **Where each gated row is ENFORCED** (08a requires this of every gated
+  row; a row whose only enforcement is a renderer constant must be visible
+  at decision time, not after launch). At v1: `maxWorkspaces`, `maxPanes`,
+  `maxSwarmRoles`, `maxRemotes` are decided in the **main process** behind
+  V8 bytecode, fail-closed (**14a** — before that step they are renderer
+  plain text and fail OPEN); `maxDevices` is the only one enforced
+  **server-side**, at issuance (**11**), and is therefore the sole cap an
+  attacker cannot reach by editing the client.
 - **The caps are HONOR-SYSTEM, and must be described that way.**
   `PRICING-STRATEGY.md:68` is explicit: pane/workspace caps are
   client-side nudges, "never a wall and never a speed limit" — which is

@@ -51,6 +51,18 @@ competitor names, truth-over-keywords). Same format as
 > free accounts; no gate ever reaches the internet (the house rule since
 > phase-accounts).
 
+> **Every decision carries a security review, and nothing enforceable
+> ships in plain text.** Each decision this pack ratifies answers
+> `SECREVIEW.md`'s six — above all **"what is the cheapest defeat?"**, named
+> concretely (08a). A decision whose cheapest defeat costs less than the
+> value it guards is not ratified until that changes or the residual is
+> accepted in writing. And enforcement lives where the bytes are covered:
+> gate points DECIDE in the main process (V8 bytecode), never in renderer
+> plain text, and enforcement fails **CLOSED** so deleting a row can never
+> widen a cap (14a). What that buys is FRICTION — "edit a line" becomes
+> "reverse V8 bytecode" — never a wall (14b maps the real cover per
+> artifact per OS, and names code signing as the missing keystone).
+
 > **The enforcement-honesty law (ADR 0016 §5, restated).** A client check
 > is UX, not security. Real teeth stay exactly two: **hardware binding**
 > and **server-authoritative value**. This phase may deepen friction and
@@ -97,6 +109,7 @@ competitor names, truth-over-keywords). Same format as
 | 06 | `06-efficiency-and-perf.md` | Inefficiency hunt + both budgets re-measured on the merged surface |
 | 07 | `07-environment-and-failure.md` | Cross-OS · offline · first-run · upgrade/migration · low-resource · error-injection |
 | 08 | `08-provider-decisions-adr.md` | IdP + MoR + host decided ($0); DPoP architecture resolved; **ADR 0019** |
+| 08a | `08a-decision-security-review.md` | The six-question review every decision carries; ADR 0019 first; **SECREVIEW** |
 | 09 | `09-backend-foundation.md` | `server/` skeleton, schema, migrations, config, observability, local-run + test harness |
 | 10 | `10-backend-billing.md` | Extend the LIVE Stripe webhook to derive entitlements + full subscription lifecycle |
 | 11 | `11-backend-issuance.md` | `GET /entitlement`: real Ed25519 claim, DPoP RS dance, device registry, JWKS, revoke |
@@ -104,6 +117,8 @@ competitor names, truth-over-keywords). Same format as
 | 12 | `12-real-idp-wiring.md` | Real IdP in `account.ts`; FAKE kept for gates; **IDPPARITY** gate |
 | 13 | `13-operator-secrets.md` | Real keypairs generated, custody/rotation runbooks, pinned halves, tamper manifest; **OPSECRETS** |
 | 14 | `14-security-antipiracy-uplift.md` | Threat re-model, residual gaps closed, cheap teeth added; **PIRACYAUDIT** |
+| 14a | `14a-enforcement-behind-the-wall.md` | Gate decisions move renderer→main (bytecode-covered), fail CLOSED; **PLAINGATE** |
+| 14b | `14b-integrity-map-and-keystone.md` | Per-artifact/per-OS protection matrix; the signing keystone named; **INTEGRITYMAP** |
 | 15 | `15-business-compliance-distribution.md` | EULA/ToS/privacy/security.txt/support + legal-entity & MoR runbooks + distribution prep |
 | 16 | `16-v1-milestone-and-freeze.md` | **V1MILESTONE** (product side) on the local real stack; Parts I–II verified; signing-flip runbook |
 
@@ -174,9 +189,12 @@ competitor names, truth-over-keywords). Same format as
 
 ## Parallelization
 01 → 02/03/04 (three independent sweeps) → 05 → 06 → 07 closes Part I.
-Part II spine: 08 → 09 → {10, 11} → 12; 13 needs 11; 14 needs 11+13; 15 is
-independent of the backend (docs/runbooks) and can run alongside 09–14; 16
-closes Part II. Part III (in `../MoggingLabs-Website`) spine: 17 → 18 → {19, 20} → 21; 22
+Part II spine: 08 → 08a (reviews 08's own ADR) → 09 → {10, 11} → 11a
+(needs 10+11) → 12; 13 needs 11; 14 needs 11+13; **14a needs 14** (it acts
+on the re-modelled threats) and **14b needs 14a** (it maps what 14a
+changed); 15 is independent of the backend (docs/runbooks) and can run
+alongside 09–14; 16 closes Part II and now also verifies PLAINGATE +
+INTEGRITYMAP + SECREVIEW. Part III (in `../MoggingLabs-Website`) spine: 17 → 18 → {19, 20} → 21; 22
 needs 20; 23 extends the existing collector (any time after 18); 24 needs 21
 and is **deferred** (activate after the site is live); 25 needs all of Part
 III (and reads 16's product certification). Part III depends on Part I's

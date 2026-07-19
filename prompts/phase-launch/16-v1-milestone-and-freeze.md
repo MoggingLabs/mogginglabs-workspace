@@ -52,13 +52,14 @@ spend." (Part III + the pack freeze land at 25.)
   the only money items are signing + operator accounts, named + costed.
 - `docs/25-going-live.md` has the product-flip section (ordered + costed;
   25 adds the web section); the signing dry-run prints READY.
-- The certification table is honest: local gates ✅, CI-OS + real deploy
+- The certification table is honest: local gates ✅, CI-OS + deploy
   PENDING.
 
 ## Checks that must be green
 - `npm run typecheck` → 0; build ok; the FULL static battery; V1MILESTONE +
-  PRODMILESTONE + MILESTONE + PERCEPTION + every Part-II gate in one run;
-  `server-ci`; gate-count re-derived and every prose count matching it.
+  PRODMILESTONE + MILESTONE + PERCEPTION + every Part-II gate in one run
+  (incl. **SECREVIEW · PLAINGATE · INTEGRITYMAP**); `server-ci`;
+  gate-count re-derived and every prose count matching it.
 
 ## Guardrails
 - The milestone composes existing machinery — nothing lands here a step
