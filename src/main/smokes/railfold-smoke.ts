@@ -20,6 +20,12 @@ import { join } from 'node:path'
 export function runRailfoldSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 60000)
   const wc = win.webContents
+  // The ES poll below is occlusion-proof, but each executeJavaScript round-trip still rides
+  // the renderer's task queue — and an unfocused CI window's throttled queue stretches one
+  // round-trip past the whole 400ms rail-anim window (the sampler then sees ≤1 in-flight
+  // frame and a healthy fold reads widthAnimated:false). Same law as MILESTONE's sampler:
+  // the measurement is of OUR choreography, not the compositor's backgrounding policy.
+  wc.setBackgroundThrottling(false)
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
   const emit = (o: object): void => {

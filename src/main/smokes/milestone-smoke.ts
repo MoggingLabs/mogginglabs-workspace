@@ -15,9 +15,12 @@ import { softFps, softGapMs } from './smoke-shell'
 //      (mostly) on the WebGL renderer.
 //
 //  B — attention at a glance + context management: create a 2nd workspace (the 16-pane grid backgrounds)
-//      -> its tab must ring (latched attention) and ALL 16 hidden panes must have RELEASED their
-//      WebGL contexts (DOM renderer; the browser caps ~16 live contexts/page). Switch back ->
-//      the ring clears, panes re-acquire WebGL, and an idle frame sample stays within budget.
+//      -> its tab must ring (latched attention). Context custody follows the flicker law
+//      (pane-webgl.ts): hidden panes keep their contexts WARM while the app-wide count fits
+//      the ~16 cap — so the release MACHINERY is proven the way FLICKER 3c pins it: force
+//      the budget to 0 (dev override), re-trip the hide path, and ALL 16 must release to the
+//      DOM renderer. Switch back (budget restored) -> the ring clears, panes re-acquire
+//      WebGL, and an idle frame sample stays within budget.
 //
 // Run with a FRESH isolated daemon (see docs/05-perf-budget.md): deterministic pane ids + new code.
 
@@ -129,15 +132,24 @@ const SCRIPT = `(async () => {
   await sleep(800)
   const ws1Tab = document.querySelectorAll('.workspace-tab')[0]
   const tabRing = ws1Tab ? ws1Tab.getAttribute('data-attention') : null
-  // Hidden panes release their contexts after a deliberate 1.5s quiet window (the
-  // perception budget keeps GL warm through rapid flips — docs/07). The ASSERTION is
-  // unchanged (all 16 must release); the wait polls instead of assuming the timing.
+  // Hidden panes now KEEP their contexts warm while the app-wide count fits the ~16 cap
+  // (the flicker law — FLICKER 3c pins the warm dwell; under the default budget only the
+  // over-cap remainder releases, so demanding all 16 here asserted a law the product
+  // repealed). The release MACHINERY is still this milestone's claim at 16-pane scale:
+  // force the budget to 0 exactly as FLICKER does, re-trip the hide path so onHide
+  // re-arms the (already-spent) release debounce for every pane, and ALL 16 must go.
+  const warmKept = panes.filter((p) => p.renderer() === 'webgl').length
+  window.__moggingGlBudget = 0
+  m.workspace.switchByIndex(0)
+  await sleep(300)
+  m.workspace.switchByIndex(1)
   let domHidden = 0
   for (let i = 0; i < 20; i++) {
     domHidden = panes.filter((p) => p.renderer() === 'dom').length
     if (domHidden === 16) break
     await sleep(400)
   }
+  delete window.__moggingGlBudget
 
   m.workspace.switchByIndex(0) // back to the grid
   await sleep(1500)
@@ -173,7 +185,7 @@ const SCRIPT = `(async () => {
     pass, budget: B,
     mounted: panes.length, ticks, stress, idle, heapMB,
     attention4, flipped, controlState, webglVisible,
-    tabRing, domHidden, ringAfterFocus, webglBack
+    tabRing, warmKept, domHidden, ringAfterFocus, webglBack
   }
 })()`
 
