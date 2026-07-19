@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 162 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 166 gates: 22 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
-# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 140 app-boot
+# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE) + 144 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -326,6 +326,7 @@ run_smoke BROWSERZERO MOGGING_BROWSERZERO 1 180 browserzero
 run_smoke SECRETFORMS MOGGING_SECRETFORMS 1 240 secretforms
 run_smoke BOARDRENDER MOGGING_BOARDRENDER 1 240 boardrender
 run_smoke KBAPG       MOGGING_KBAPG     1 240 kbapg
+run_smoke EQUALIZE    MOGGING_EQUALIZE  1 240 equalize
 run_smoke ASYNCSTATE  MOGGING_ASYNCSTATE 1 360 asyncstate
 run_smoke ORCHESTRATION MOGGING_ORCHESTRATION 1 300 orchestration
 run_smoke SWARM       MOGGING_SWARM     1 240 swarm
@@ -373,6 +374,24 @@ run_smoke PERWS        MOGGING_PERWS     1 240 perws
 run_smoke PERWSAGENT   MOGGING_PERWSAGENT 1 240 perwsagent
 run_smoke VAULTKEYS    MOGGING_VAULTKEYS 1 240 vaultkeys
 run_smoke WSCLOSE      MOGGING_WSCLOSE   1 240 wsclose
+# KILLFLASH: pane teardown stays windowless (2026-07-18) — the console-less daemon
+# (detached: libuv job-escape, measured survival-load-bearing) must force windowsHide on
+# every child it spawns, or node-pty's per-pane kill fork flashes one visible terminal
+# window per pane at undo-grace lapse. Bites: AttachConsole proves the daemon console-less,
+# an EnumWindows watcher over a real 16-pane close proves zero console-class windows
+# ever turn visible (red-proven 11+ CASCADIA sightings on the unfixed daemon).
+run_smoke KILLFLASH    MOGGING_KILLFLASH 1 240 killflash
+# RAILFOLD: the rail fold/unfold choreography (2026-07-18) — in flight the rail clips to
+# its animating edge and keeps the expanded layout at full width, so the pane count is
+# revealed/hidden AT its resting position and never overlaps the icon; the collapsed
+# end-state re-layout lands only after the fold. Bites: a dropped rail-anim stamp, a
+# lost :not(.rail-anim) guard, and any mid-fold layout squeeze.
+run_smoke RAILFOLD     MOGGING_RAILFOLD  1 240 railfold
+# CHROMEPRESS: presses on native chrome dismiss popovers (2026-07-18) — the drag strip
+# eats the pointer before the DOM, so main forwards WM_NC*BUTTONDOWN / will-move as
+# shell:chromePress and app-shell replays a body-target pointerdown. Bites: a dropped
+# wireChromePress in boot, a removed channel, a lost replay, a lost NC hook, the debounce.
+run_smoke CHROMEPRESS  MOGGING_CHROMEPRESS 1 240 chromepress
 run_smoke KBSHORTCUTS  MOGGING_KBSHORTCUTS 1 240 kbshortcuts
 run_smoke KBGLOBAL     MOGGING_KBGLOBAL  1 240 kbglobal
 run_smoke DAEMONCUSTODY MOGGING_DAEMONCUSTODY 1 240 daemoncustody

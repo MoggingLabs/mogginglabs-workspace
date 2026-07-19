@@ -22,6 +22,18 @@ import { getTelemetry } from '../../core/telemetry'
 // Serialized — and with hide-releases debounced — a rapid workspace flip is a pure
 // show/hide (GL stays warm), while a sustained hide still frees its contexts within a
 // second. Panes always render (DOM renderer) while work streams in.
+// Context accountant: every attached addon's manager, app-wide. The browser cap (~16
+// contexts per page) is the ONLY reason hidden panes ever give up GL — but the old rule
+// released them unconditionally, so switching back to a workspace hidden >1.5s replayed
+// a staggered DOM→WebGL swap per pane (one per frame): the visible "flicker" on workspace
+// switch. Now a hidden pane keeps its context WARM while the app-wide count fits the cap,
+// and a visible pane that needs a context past the cap evicts a hidden one's first — the
+// budget spends itself on what is on screen, and a switch inside budget is pure show/hide.
+// Dev/gate override (FLICKER 3c): the release path is pinned by forcing the budget to 0 —
+// with 16 real contexts the smoke's 8 panes could never create genuine pressure.
+const glBudget = (): number => (window as { __moggingGlBudget?: number }).__moggingGlBudget ?? 16
+const glAttached = new Set<PaneWebglManager>()
+
 const glJobQueue: Array<() => void> = []
 let glPumping = false
 function enqueueGlJob(job: () => void): void {
@@ -111,7 +123,10 @@ export class PaneWebglManager {
       this.glReleaseDebounce = undefined
       if (this.host.isVisible() || !this.webgl) return
       enqueueGlJob(() => {
-        if (!this.host.isVisible()) this.release()
+        // Budget-aware: a hidden pane's context is only surrendered when the app-wide
+        // count is actually pressing the browser cap. Under budget it stays warm, so
+        // switching back is pure show/hide — no DOM→WebGL swap, no per-pane flicker.
+        if (!this.host.isVisible() && glAttached.size > glBudget()) this.release()
       })
     }, 1500)
   }
@@ -120,6 +135,18 @@ export class PaneWebglManager {
    *  simply stays on the DOM renderer — a pane must always render; fast when it can. */
   private attachNow(): void {
     if (this.webgl || !this.host.isVisible()) return
+    // At the cap, a VISIBLE pane's need outranks a hidden pane's warm context: evict one
+    // hidden holder before attaching. (This is also what reclaims contexts a hidden pane
+    // kept under budget — its release debounce fired once and did nothing; the pressure
+    // that matters shows up here, at acquire time.)
+    if (glAttached.size >= glBudget()) {
+      for (const other of glAttached) {
+        if (other !== this && !other.host.isVisible()) {
+          other.release()
+          break
+        }
+      }
+    }
     try {
       const addon = new WebglAddon()
       addon.onContextLoss(() => {
@@ -135,6 +162,7 @@ export class PaneWebglManager {
       })
       this.host.term.loadAddon(addon)
       this.webgl = addon
+      glAttached.add(this)
     } catch (err) {
       console.warn('WebGL renderer unavailable; using default renderer.', err)
     }
@@ -159,6 +187,7 @@ export class PaneWebglManager {
     if (!this.webgl) return
     const addon = this.webgl
     this.webgl = undefined
+    glAttached.delete(this)
     try {
       addon.dispose()
     } catch {

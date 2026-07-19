@@ -1,7 +1,7 @@
 import { formulaPaneId, GitChannels, TerminalChannels, WorktreeChannels } from '@contracts'
 import type { AgentState, CreateWorktreeResult, PaneId, RemoveWorktreeResult } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { GridLayout, parseTree, leafIds, type LayoutTreeNode } from '../layout'
+import { GridLayout, gridShapeFor, parseTree, leafIds, type LayoutTreeNode } from '../layout'
 import { confirmDialog, icon, showToast, TOAST_DEFAULT_MS } from '../../components'
 import { batchSlots } from '../../core/layout/slots'
 import { openMovePaneModal, type MoveTarget } from './move-pane-modal'
@@ -1187,6 +1187,50 @@ export class WorkspaceController {
     return Math.min(view.layout.limit(), Math.max(1, Math.floor(entitlementLimit('maxPanes'))))
   }
 
+  /** The ONE cap refusal, quoted identically at every door (split, batch-isolate):
+   *  names which line was hit — the plan's, or what this machine/screen honestly holds. */
+  private refusePaneCap(view: WorkspaceView, cap: number): void {
+    showToast({
+      title: 'Pane limit reached',
+      body:
+        cap < view.layout.limit()
+          ? `Your ${entitlementPlan()} plan runs up to ${cap} terminals per workspace. Upgrade your MoggingLabs plan for more.`
+          : `A workspace holds at most ${cap} terminals on this screen.`
+    })
+  }
+
+  /** The layout popover's status line + its stepper ceilings: panes now, panes holding
+   *  live work (same union the destructive gates count), and the effective cap. */
+  layoutStatus(): { panes: number; live: number; cap: number } | null {
+    const view = this.active()
+    if (!view) return null
+    return {
+      panes: view.layout.paneCount,
+      live: inspectLive(view.layout.paneIds()).panes.length,
+      cap: this.effectiveMaxPanes(view)
+    }
+  }
+
+  /** The canonical grid the ACTIVE workspace's current pane count snaps to — what the
+   *  popover's "Reorganize" row promises ("Reorganize into 2×3"). Same formula the grid
+   *  itself applies (gridShapeFor), so the label cannot promise a shape apply won't build. */
+  reorganizeTarget(): { panes: number; rows: number; cols: number } | null {
+    const view = this.active()
+    if (!view) return null
+    const shape = gridShapeFor(view.layout.paneCount)
+    return { panes: view.layout.paneCount, rows: shape.rows, cols: shape.cols }
+  }
+
+  /** Snap the ACTIVE workspace back into the canonical grid for its CURRENT pane count
+   *  (the wizard's own shape resolution) — structure and shares reset, nothing closes,
+   *  every pane keeps its id/PTY (slots are reused by pane id). The structural sibling
+   *  of Balance: Balance equalizes the sizes of the arrangement you have; Reorganize
+   *  rebuilds the arrangement itself. Non-destructive by construction, so no confirm. */
+  reorganizeActive(): void {
+    const a = this.active()
+    if (a) this.applyTemplate(a.layout.paneCount)
+  }
+
   /** Add a terminal by splitting a pane (⋯ menu / titlebar + / palette / shortcut).
    *  `paneId` null → the workspace's focused pane; `dir` omitted → the pane's longer
    *  axis. The receiving LINE re-equalizes (every terminal in it gets an equal share). */
@@ -1200,13 +1244,7 @@ export class WorkspaceController {
       // entitlement can only LOWER what this machine honestly holds, never raise it,
       // and the refusal names which line was hit. Free covers the whole grid budget,
       // so an account-less install reads exactly as the redesign shipped it.
-      showToast({
-        title: 'Pane limit reached',
-        body:
-          cap < view.layout.limit()
-            ? `Your ${entitlementPlan()} plan runs up to ${cap} terminals per workspace. Upgrade your MoggingLabs plan for more.`
-            : `A workspace holds at most ${cap} terminals on this screen.`
-      })
+      this.refusePaneCap(view, cap)
       return
     }
     const target = paneId ?? view.layout.focusedPaneId()
@@ -1241,18 +1279,53 @@ export class WorkspaceController {
     })
   }
 
-  /** Split the ACTIVE workspace's focused pane (layout menu +, palette, Ctrl+Shift+D). */
-  splitActive(dir?: 'h' | 'v'): void {
+  /** Split the ACTIVE workspace's focused pane (layout menu +, palette, Ctrl+Shift+D).
+   *  `count` (default 1) is the layout menu's stepper: N plain terminals in one gesture,
+   *  clamped to the headroom up front so the refusal speaks once — never once per split. */
+  splitActive(dir?: 'h' | 'v', count = 1): void {
     const a = this.active()
-    if (a) this.splitPane(a.meta.id, a.layout.focusedPaneId(), dir)
+    if (!a) return
+    const want = Math.max(1, Math.floor(count))
+    const cap = this.effectiveMaxPanes(a)
+    const headroom = cap - a.layout.paneCount
+    if (headroom <= 0) {
+      this.refusePaneCap(a, cap)
+      return
+    }
+    const goal = Math.min(want, headroom)
+    for (let i = 0; i < goal; i++) this.splitPane(a.meta.id, a.layout.focusedPaneId(), dir)
+    if (goal < want) {
+      showToast({
+        title: `Opened ${goal} of ${want} terminals`,
+        body:
+          cap < a.layout.limit()
+            ? `Your ${entitlementPlan()} plan runs up to ${cap} terminals per workspace.`
+            : `A workspace holds at most ${cap} terminals on this screen.`
+      })
+    }
   }
 
-  /** Split the ACTIVE workspace's focused pane into a fresh ISOLATED git worktree
-   *  (layout-menu row only — Ctrl+Shift+D stays a plain split by design). Same 3/03
-   *  contract as the wizard: the worktree is created FIRST; a refusal opens nothing.
-   *  The repo is the workspace root, not the focused pane's cwd — a worktree of a
-   *  worktree would nest managed dirs inside each other. */
-  async splitActiveIsolated(dir?: 'h' | 'v'): Promise<boolean> {
+  /** Balance the ACTIVE workspace's layout — equal shares on every row and column
+   *  (layout menu, palette, Ctrl+Shift+=). Sizes-only; the grid persists through its
+   *  own onLayoutChange, so nothing more is owed here. */
+  balanceActive(): void {
+    this.active()?.layout.balance()
+  }
+
+  /** Split the ACTIVE workspace's focused pane into `count` fresh ISOLATED git
+   *  worktrees (layout-menu row only — Ctrl+Shift+D stays a plain split by design).
+   *  Same 3/03 contract as the wizard: each worktree is created FIRST; a refusal
+   *  opens nothing. The repo is the workspace root, not the focused pane's cwd — a
+   *  worktree of a worktree would nest managed dirs inside each other.
+   *
+   *  `count` (default 1) is what lets a swarm start in ONE gesture instead of a
+   *  click per agent. Clamped to the pane headroom BEFORE any worktree exists —
+   *  the create-then-split order means a split the cap would refuse must be refused
+   *  here, or the worktree it was made for is already litter on disk. Each split
+   *  lands in the just-created worktree; a mid-batch git failure stops the batch
+   *  and the toast says how many actually opened. Returns true only when every
+   *  REQUESTED terminal opened. */
+  async splitActiveIsolated(dir?: 'h' | 'v', count = 1): Promise<boolean> {
     const a = this.active()
     if (!a) return false
     const repo = a.meta.cwd
@@ -1260,6 +1333,15 @@ export class WorkspaceController {
       showToast({ tone: 'attention', title: 'No workspace folder', body: 'Isolation needs a git repository to branch from.' })
       return false
     }
+    const want = Math.max(1, Math.floor(count))
+    const cap = this.effectiveMaxPanes(a)
+    const headroom = cap - a.layout.paneCount
+    if (headroom <= 0) {
+      this.refusePaneCap(a, cap)
+      return false
+    }
+    const goal = Math.min(want, headroom)
+    let added = 0
     try {
       // Same honesty as the wizard's checkbox: refuse a non-repo (or a folder whose
       // `.git` git itself cannot read) BEFORE touching the filesystem.
@@ -1272,18 +1354,42 @@ export class WorkspaceController {
         })
         return false
       }
-      const wt = (await getBridge().invoke(WorktreeChannels.create, { repo })) as CreateWorktreeResult
-      if (!wt.ok || !wt.path) {
-        showToast({ tone: 'attention', title: 'Could not create a worktree', body: wt.error || 'git refused.' })
-        return false
+      for (; added < goal; added++) {
+        const wt = (await getBridge().invoke(WorktreeChannels.create, { repo })) as CreateWorktreeResult
+        if (!wt.ok || !wt.path) {
+          showToast({
+            tone: 'attention',
+            title: 'Could not create a worktree',
+            body: `${added > 0 ? `Opened ${added} of ${goal} isolated terminals — then ` : ''}${wt.error || 'git refused.'}`
+          })
+          return false
+        }
+        const before = a.layout.paneCount
+        this.splitPane(a.meta.id, a.layout.focusedPaneId(), dir, wt.path)
+        if (a.layout.paneCount === before) {
+          // The split was refused after all (the live limit can shift mid-batch as panes
+          // open elsewhere — splitPane already toasted why). The worktree this iteration
+          // just created has no pane to serve: take it back out rather than leave litter.
+          void getBridge().invoke(WorktreeChannels.remove, { repo, path: wt.path, force: false })
+          return false
+        }
       }
-      this.splitPane(a.meta.id, a.layout.focusedPaneId(), dir, wt.path)
-      return true
+      if (goal < want) {
+        // The cap trimmed the batch. Everything that fit is open; say what did not.
+        showToast({
+          title: `Opened ${goal} of ${want} isolated terminals`,
+          body:
+            cap < a.layout.limit()
+              ? `Your ${entitlementPlan()} plan runs up to ${cap} terminals per workspace.`
+              : `A workspace holds at most ${cap} terminals on this screen.`
+        })
+      }
+      return goal === want
     } catch (error) {
       showToast({
         tone: 'attention',
         title: 'Could not create a worktree',
-        body: error instanceof Error ? error.message : String(error)
+        body: `${added > 0 ? `Opened ${added} of ${goal} isolated terminals — then ` : ''}${error instanceof Error ? error.message : String(error)}`
       })
       return false
     }

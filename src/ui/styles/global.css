@@ -154,8 +154,17 @@
   --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45);
   --shadow-3: 0 24px 64px rgba(0, 0, 0, 0.55);
   --dur-1: 120ms;
-  --dur-2: 150ms; /* 5/07 motion audit: no transition anywhere exceeds 150 ms */
+  --dur-2: 150ms; /* 5/07 motion audit: no transition anywhere exceeds 150 ms (one sanctioned
+                     exception: --dur-rail below) */
   --ease: cubic-bezier(0.2, 0, 0, 1);
+  /* The rail fold's own motion grade (explicit direction, 2026-07-18): at 150ms on the
+     fast-start --ease curve the fold read as a snap, not a fold. It is the largest moving
+     surface in the app and the ONLY transition allowed past the audit's 150ms cap — a
+     longer run on a symmetric ease so it visibly travels. Both reduced-motion clamps
+     still flatten it (they clamp transition-duration wholesale). app-shell's rail-anim
+     fallback timer must stay ahead of this duration. */
+  --dur-rail: 260ms;
+  --ease-rail: cubic-bezier(0.45, 0, 0.15, 1);
 
   /* Layout constants. */
   --rail-w: 288px;
@@ -1367,7 +1376,7 @@ textarea {
   background: var(--bg-surface);
   border-right: 1px solid var(--border);
   user-select: none;
-  transition: width var(--dur-2) var(--ease);
+  transition: width var(--dur-rail) var(--ease-rail);
 }
 .rail-header {
   position: relative; /* anchors the ::after hairline */
@@ -1900,43 +1909,59 @@ textarea {
 #app.rail-auto-collapsed #rail {
   width: var(--rail-w-collapsed);
 }
-#app.rail-auto-collapsed .rail-title,
-#app.rail-auto-collapsed .rail-total,
-#app.rail-auto-collapsed .ws-label,
-#app.rail-auto-collapsed .ws-count,
-#app.rail-auto-collapsed .ws-close,
-#app.rail-auto-collapsed .rail-update-label {
+/* Fold/unfold IN FLIGHT (`rail-anim`, stamped by app-shell for exactly the width
+   transition's lifetime): the width above ANIMATES, but every end-state rule below is a
+   discrete re-layout — display:none labels, corner badges, a re-centred header — that
+   used to land at t=0. On expand that meant the pane count and label appeared at full
+   opacity inside a still-narrow rail, the count painted on top of the icon. In flight
+   the rail instead keeps the EXPANDED layout at its full width and clips it to the
+   animating edge, so the fold itself is what reveals/hides each element, at the exact
+   position it will occupy — nothing moves, nothing overlaps. Every end-state rule below
+   carries :not(.rail-anim) so it lands only once the fold has finished (by then the
+   collapsed re-layout happens entirely inside the already-clipped region). */
+#app.rail-anim #rail {
+  overflow: clip;
+}
+#app.rail-anim #rail > * {
+  min-width: calc(var(--rail-w) - 1px); /* the rail's content box: --rail-w minus its border */
+}
+#app.rail-auto-collapsed:not(.rail-anim) .rail-title,
+#app.rail-auto-collapsed:not(.rail-anim) .rail-total,
+#app.rail-auto-collapsed:not(.rail-anim) .ws-label,
+#app.rail-auto-collapsed:not(.rail-anim) .ws-count,
+#app.rail-auto-collapsed:not(.rail-anim) .ws-close,
+#app.rail-auto-collapsed:not(.rail-anim) .rail-update-label {
   display: none;
 }
-#app.rail-auto-collapsed .rail-footer {
+#app.rail-auto-collapsed:not(.rail-anim) .rail-footer {
   padding: var(--sp-2);
 }
-#app.rail-auto-collapsed .rail-update-btn,
-#app.rail-auto-collapsed .rail-header {
+#app.rail-auto-collapsed:not(.rail-anim) .rail-update-btn,
+#app.rail-auto-collapsed:not(.rail-anim) .rail-header {
   justify-content: center;
 }
-#app.rail-auto-collapsed .rail-header {
+#app.rail-auto-collapsed:not(.rail-anim) .rail-header {
   padding: 2px var(--sp-2);
 }
-#app.rail-collapsed .rail-title,
-#app.rail-collapsed .rail-total,
-#app.rail-collapsed .ws-label,
-#app.rail-collapsed .ws-count,
-#app.rail-collapsed .ws-close,
-#app.rail-collapsed .rail-update-label {
+#app.rail-collapsed:not(.rail-anim) .rail-title,
+#app.rail-collapsed:not(.rail-anim) .rail-total,
+#app.rail-collapsed:not(.rail-anim) .ws-label,
+#app.rail-collapsed:not(.rail-anim) .ws-count,
+#app.rail-collapsed:not(.rail-anim) .ws-close,
+#app.rail-collapsed:not(.rail-anim) .rail-update-label {
   display: none;
 }
 /* Collapsed, the update row keeps its icon and centres it on the icon column —
    the same treatment the + button gets. It must never be the reason the rail
    is wider than --rail-w-collapsed. */
-#app.rail-collapsed .rail-footer {
+#app.rail-collapsed:not(.rail-anim) .rail-footer {
   padding: var(--sp-2);
 }
-#app.rail-collapsed .rail-update-btn {
+#app.rail-collapsed:not(.rail-anim) .rail-update-btn {
   justify-content: center;
   padding: var(--sp-2);
 }
-#app.rail-collapsed .rail-header {
+#app.rail-collapsed:not(.rail-anim) .rail-header {
   /* Same vertical padding as expanded — the header must keep its height or every tab
      below it jumps. Only the horizontal inset gives way, so the lone + button centres
      over the icon column instead of overflowing it. */
@@ -1948,14 +1973,14 @@ textarea {
    third of the 54px square) and overlapping the corner, floated by a keyline. Smaller
    by explicit direction — the guardrail softened from "never shrunk" to "never dimmed
    or hidden": the loud fill, the glow-pulse and the count all survive the resize. */
-#app.rail-collapsed .workspace-tab .ws-badges {
+#app.rail-collapsed:not(.rail-anim) .workspace-tab .ws-badges {
   position: absolute;
   top: -4px;
   right: -4px;
   z-index: 1; /* above the tab's own border/outline, so the overlap reads as ON TOP */
 }
-#app.rail-collapsed .ws-attn,
-#app.rail-collapsed .ws-done {
+#app.rail-collapsed:not(.rail-anim) .ws-attn,
+#app.rail-collapsed:not(.rail-anim) .ws-done {
   min-width: 16px;
   height: 16px;
   padding: 0 var(--sp-1);
@@ -1968,7 +1993,7 @@ textarea {
 /* Collapsed, the two counts stack in the tab's top-right corner rather than sitting side by
    side: a 54px square has no room for a row of them, and the red must never be the one that
    gets pushed out of view. */
-#app.rail-collapsed .ws-badges {
+#app.rail-collapsed:not(.rail-anim) .ws-badges {
   flex-direction: column;
   gap: 2px;
 }
@@ -1976,7 +2001,7 @@ textarea {
    agent-browsing dot defaults to the SAME corner (top:3px right:3px), stacking two
    "look here" signals on one 8px square. Drop the agent dot to the bottom so both
    read; the attention count keeps the top-right corner. */
-#app.rail-collapsed .workspace-tab.is-agent-browsing::after {
+#app.rail-collapsed:not(.rail-anim) .workspace-tab.is-agent-browsing::after {
   top: auto;
   bottom: 3px;
 }
@@ -2027,10 +2052,10 @@ textarea {
   color: var(--text-hi);
 }
 
-/* Grid-layout picker (titlebar popover): the shared createLayoutGridPicker(), compact
-   variant. REMOVE #16 retired the ad-hoc .layout-menu-tile builder — whose
-   `.layout-menu-tile .layout-tile-count` reached across to override the shared
-   component's own class. One picker, one source of truth now. */
+/* Grid-layout popover (titlebar). Counter-driven since the reorganize redesign:
+   two add rows with [− n +] steppers, Reorganize (snap to the canonical grid) and
+   Balance — the template tile strip retired (its shape value lives on in Reorganize;
+   its count-pinning was the part nobody with live agents wanted). */
 .layout-launcher {
   position: relative;
 }
@@ -2051,38 +2076,56 @@ textarea {
   right: 0;
   left: auto;
   padding: var(--sp-2);
-  /* The 8 template tiles ride one row (~490px) — the .menu base cap (320px) would
-     clip them. The vw term keeps the right-anchored popover from poking past the
-     window's LEFT edge on a very narrow window (the tiles wrap instead). */
-  max-width: min(520px, calc(100vw - 240px));
+  /* A fixed column. 396px is the narrowest that shows "New isolated terminal
+     (worktree)" whole beside its stepper (340 and 364 both ellipsized it mid-word —
+     screenshot-verified); every other row fits inside it. The vw term keeps the
+     right-anchored popover from poking past the window's LEFT edge on a very
+     narrow window. */
+  width: 396px;
+  max-width: calc(100vw - 240px);
 }
 .layout-menu[hidden] {
   display: none;
 }
-/* "New terminal" — the ADD action lives with the layout templates (same decision:
-   how many panes). Full-width row under the tiles; the shortcut hugs the right. */
+/* The popover's status line: panes now / live work / the cap — the same numbers the
+   stepper ceilings and batch clamps are derived from. */
+.layout-menu-status {
+  padding: 0 var(--sp-1) var(--sp-1);
+  font-size: var(--fs-11);
+  color: var(--text-mid);
+}
 .layout-menu-add .kbd {
   margin-left: auto;
 }
 .layout-menu-add:hover .kbd {
   color: var(--accent-ink);
 }
-/* Compact tiles for the dense titlebar dropdown (the wizard runs the same picker at
-   full size). Only size/radius shift; hover + selected states come from .layout-tile.
-   `wrap` engages ONLY when the menu's vw-guarded max-width bites (narrow window) —
-   max-content sizing keeps the row single-line everywhere else. */
-.layout-picker--compact {
-  flex-wrap: wrap;
+/* An add row: the verb button grows, the [− n +] stepper rides its right edge.
+   min-width 0 + ellipsis so the nowrap label yields to the stepper instead of
+   pushing the popover wide. */
+.layout-menu-stepper-row {
+  display: flex;
+  align-items: center;
   gap: var(--sp-1);
 }
-.layout-picker--compact .layout-tile {
-  width: 56px;
-  height: 56px;
-  padding: 6px;
-  border-radius: var(--r-sm);
+.layout-menu-stepper-row .menu-item {
+  flex: 1 1 auto;
+  min-width: 0;
 }
-.layout-picker--compact .layout-tile-count {
-  font-size: var(--fs-10);
+.layout-menu-stepper-row .menu-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Reorganize's leading mark is a LIVE miniature of the exact grid the click builds
+   (MiniGridPreview), sized to sit where a 14px icon would. */
+.layout-menu-reorg-mark {
+  display: inline-flex;
+  flex: none;
+  width: 18px;
+  height: 13px;
+}
+.layout-menu-reorg-mark .grid-preview {
+  gap: 1px;
 }
 
 #workspace-host {
@@ -5672,51 +5715,8 @@ body.pane-dragging * {
   align-items: center;
   justify-content: center;
 }
-/* Layout picker tiles. */
-.layout-picker {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-2);
-}
-.layout-tile {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--sp-1);
-  width: 72px;
-  height: 72px;
-  padding: var(--sp-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--bg-surface);
-  cursor: pointer;
-  transition:
-    border-color var(--dur-1) var(--ease),
-    background var(--dur-1) var(--ease),
-    box-shadow var(--dur-1) var(--ease);
-}
-.layout-tile:hover {
-  border-color: var(--border-strong);
-}
-.layout-tile .grid-preview {
-  flex: 1 1 auto;
-  width: 100%;
-}
-.layout-tile-count {
-  font-family: var(--font-mono);
-  font-size: var(--fs-12);
-  font-weight: var(--fw-semibold);
-  color: var(--text-mid);
-  font-variant-numeric: tabular-nums;
-}
-.layout-tile.is-selected {
-  border-color: var(--accent);
-  background: var(--accent-weak);
-  box-shadow: 0 0 0 1px var(--accent);
-}
-.layout-tile.is-selected .layout-tile-count {
-  color: var(--accent-ink);
-}
+/* (The .layout-picker/.layout-tile rules retired with the titlebar tile picker — the
+   layout popover is counter-driven now. MiniGridPreview keeps .grid-preview above.) */
 
 /* Wizard stepper. */
 /* Modal / wizard shell. */

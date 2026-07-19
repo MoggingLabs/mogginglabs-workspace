@@ -311,6 +311,47 @@ export function moveLeafToRootEdge(root: LayoutTreeNode, srcId: number, edge: Dr
   })
 }
 
+/** EQUALIZE one line: every member of the split at `path` — single pane or nested
+ *  group — takes an equal share. Per-MEMBER on purpose (product decision): a stacked
+ *  group beside a pane is one column and gets one column's share, exactly the contract
+ *  `splitLine` already applies when "+" re-equalizes a line. Sizes-only: the shape,
+ *  and therefore every OTHER line's sizes, are untouched — which is what makes a pane
+ *  that spans this line's cross-axis (a sibling in an outer line) physically
+ *  unreachable by an equalize here. Returns false when `path` names no split. */
+export function equalizeLineAt(root: LayoutTreeNode, path: string): boolean {
+  const node = nodeAtPath(root, path)
+  if (!node || !isSplit(node)) return false
+  node.sizes = node.children.map(() => 1 / node.children.length)
+  return true
+}
+
+/** BALANCE the whole tree: `equalizeLineAt` on every line. Shape untouched — no leaf
+ *  is created, lost or re-parented, so slots (and their PTYs) cannot be disturbed. */
+export function equalizeAllLines(root: LayoutTreeNode): void {
+  if (!isSplit(root)) return
+  root.sizes = root.children.map(() => 1 / root.children.length)
+  for (const child of root.children) equalizeAllLines(child)
+}
+
+/** The path of the DEEPEST `dir` line on the way down to leaf `id` — the pane's own
+ *  visual row ('h') / column ('v'), maximal by the normalize invariant (same-dir
+ *  nesting merges, so a line IS the whole visual row segment). Null when the leaf sits
+ *  in no such line — exactly the spanning-pane case: a pane beside a stack is not a
+ *  member of the stack's rows, so a row-equalize can never reach it. */
+export function lineOfLeaf(root: LayoutTreeNode, id: number, dir: SplitDir): string | null {
+  // undefined = leaf not in this subtree · null = found, but under no `dir` line.
+  const visit = (n: LayoutTreeNode, path: string, nearest: string | null): string | null | undefined => {
+    if (!isSplit(n)) return n.id === id ? nearest : undefined
+    const own = n.dir === dir ? path : nearest
+    for (let i = 0; i < n.children.length; i++) {
+      const hit = visit(n.children[i]!, path === '' ? String(i) : `${path}.${i}`, own)
+      if (hit !== undefined) return hit
+    }
+    return undefined
+  }
+  return visit(root, '', null) ?? null
+}
+
 interface ExactSpanAllocation {
   total: number
   minimums: number[]

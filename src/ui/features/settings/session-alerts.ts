@@ -18,10 +18,14 @@ import { onViewChange } from '../../core/shell/view-port'
  * env-pointed files); an agent TYPED at a pane's own prompt carries none of it,
  * so its pane never rings. Wiring the same config into each CLI's own global
  * files closes that: the notify script (and OpenCode's plugin around it) no-ops
- * outside a MoggingLabs pane. Explicit action + backup + atomic write, same as
- * every user-owned config we touch; a CONFLICT (the user's own codex `notify`,
- * a differing tui value) shows its reason instead of an Apply button (F-07:
- * summarized, raw value behind a disclosure).
+ * outside a MoggingLabs pane. Typed-launch detection now applies this wiring
+ * ITSELF (agents feature, autoWireGlobalHooks — the ask-toast never converted);
+ * this card is the review surface: see what is wired, remove it (which also
+ * stops the auto-wiring for that CLI — the opt-out rides `autoWire`), re-apply
+ * by hand. Backup + atomic write, same as every user-owned config we touch; a
+ * CONFLICT (the user's own codex `notify`, a differing tui value) shows its
+ * reason instead of an Apply button (F-07: summarized, raw value behind a
+ * disclosure).
  */
 export function createSessionAlertsCard(): HTMLElement {
   const invoke = (channel: string, payload?: unknown): Promise<unknown> => getBridge().invoke(channel, payload)
@@ -165,7 +169,7 @@ export function createSessionAlertsCard(): HTMLElement {
       header: SectionHeader({
         title: 'Alerts for agents you start yourself',
         caption:
-          'Agents launched by the app already ring their pane. Wire each CLI’s global config so an agent you type at a pane’s own prompt rings too — outside a pane the wiring is a silent no-op. Remote (SSH) panes can’t be wired from here: their config lives on the remote host, so a remote agent speaks through its chime only and its dot stays hollow.'
+          'Agents launched by the app already ring their pane. When you type an agent at a pane’s own prompt, the app wires that CLI’s global config automatically (backup kept; outside a pane the wiring is a silent no-op). Removing it here also stops the automatic wiring for that CLI. Remote (SSH) panes can’t be wired from here: their config lives on the remote host, so a remote agent speaks through its chime only and its dot stays hollow.'
       })
     },
     [hooksList, aiderRow]

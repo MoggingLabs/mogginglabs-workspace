@@ -4,6 +4,7 @@
 // registers a UiFeature of its own; it just exports the components.
 export {
   GridLayout,
+  gridShapeFor,
   parseTree,
   leafIds,
   type ExpandMode,

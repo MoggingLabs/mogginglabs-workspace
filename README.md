@@ -53,7 +53,7 @@ npm run dev        # launch the app in dev mode
 > **Status.** All roadmap phases through 11 (Files — the explorer sidebar) have shipped,
 > plus the accounts pack (the optional Pro tier, hardened — `docs/19-accounts.md`);
 > the current release is the version in `package.json`. The `qa-smokes.sh`
-> sweep now runs **162 gates** across three OSes. Per-phase receipts and measured numbers
+> sweep now runs **166 gates** across three OSes. Per-phase receipts and measured numbers
 > live where they were written: the docs each roadmap bullet below links, and the
 > `prompts/phase-*/REPORT.md` process records.
 
