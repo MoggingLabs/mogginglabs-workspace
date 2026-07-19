@@ -54,6 +54,7 @@ import {
   watchStats
 } from './explorer.client'
 import { dockLayoutBudget, onDockLayoutChange, requestDockLayout } from '../../core/layout/dock-budget'
+import { setExplorerRevealHandler } from '../../core/shell/explorer-reveal-port'
 
 /**
  * The explorer dock (Phase-11/03, ADR 0010): the 02 tree given a home — a right-side
@@ -747,6 +748,23 @@ export const explorerFeature: UiFeature = {
     setCommands('explorer', [
       { id: 'explorer.toggle', title: 'Toggle file explorer', hint: 'Explorer', kbd: 'Ctrl+Shift+E', run: () => toggle(!open) }
     ])
+
+    // The Brain view's "show me this file" (ADR 0018/10): open the dock if it is
+    // shut, wait out the re-root it may have just started, then the tree's own
+    // reveal (expand ancestors, select, scroll). A path outside this workspace's
+    // folder shows nothing — the dock never lists outside its root.
+    setExplorerRevealHandler((path) => {
+      void (async () => {
+        if (!open) toggle(true)
+        for (let i = 0; i < 40 && !(rootPath && isWithin(rootPath, path, true)); i++) {
+          await new Promise((r) => setTimeout(r, 50))
+        }
+        if (!rootPath || !isWithin(rootPath, path, true)) return
+        await tree.reveal(path)
+        selection = path
+        saveMemory()
+      })()
+    })
 
     // ── Persisted boot state, applied BEFORE the dock first paints ────────────
     void explorerInit().then((init) => {

@@ -13,6 +13,7 @@ import { gitFeature } from './features/git'
 import { contextFeature } from './features/context'
 import { reviewFeature } from './features/review'
 import { boardFeature } from './features/board'
+import { brainFeature } from './features/brain'
 import { paletteFeature } from './features/palette'
 import { settingsFeature } from './features/settings'
 import { notifyFeature } from './features/notify'
@@ -54,6 +55,7 @@ export function start(): void {
   registerFeature(contextFeature) // per-pane agent context bar: CLI session-log tail -> header bar
   registerFeature(reviewFeature) // pre-ship diff review: redacted, text-only, guarded merge (Phase-3/04)
   registerFeature(boardFeature) // local Kanban board: cards that launch agents (Phase-3/05)
+  registerFeature(brainFeature) // the Brain view: status + graph lens + memory reader (ADR 0018/10)
   registerFeature(paletteFeature) // Ctrl/Cmd+K command palette over the command port
   registerFeature(settingsFeature) // theme / defaults / telemetry consent (ADR 0005)
   registerFeature(notifyFeature) // toasts for background-pane attention (mogging notify)

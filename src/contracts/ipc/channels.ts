@@ -434,6 +434,8 @@ export const BrainChannels = {
   orientSet: 'brain:orientSet', // ({ workspaceId, on }) -> { ok } (persisted main-side with the other per-workspace knobs)
   libFetchGet: 'brain:libFetchGet', // (workspaceId) -> boolean (default FALSE — registry doc fetches are opt-in, per workspace; ADR 0018/08)
   libFetchSet: 'brain:libFetchSet', // ({ workspaceId, on }) -> { ok } (the orient knob's discipline, consent semantics)
+  read: 'brain:read', // (BrainReadRequest) -> the serve layer's reply for one READ verb (the Brain view's door — same caps, same refusals as the agent wire)
+  overview: 'brain:overview', // (BrainRootRequest) -> BrainOverviewAnswer (status-card extras the store already holds: memory/dangling counts, ecosystems)
   changed: 'brain:changed' // main -> renderer: BrainChangedEvent ({ projectKey, generation, dirty })
 } as const
 

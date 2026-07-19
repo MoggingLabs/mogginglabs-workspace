@@ -1334,13 +1334,15 @@ textarea {
 #view-home,
 #view-board,
 #view-settings,
-#view-wizard {
+#view-wizard,
+#view-brain {
   display: none;
 }
 #content.view-home #view-home,
 #content.view-board #view-board,
 #content.view-settings #view-settings,
-#content.view-wizard #view-wizard {
+#content.view-wizard #view-wizard,
+#content.view-brain #view-brain {
   display: flex;
 }
 #content:not(.view-grid) #workspace-host {
@@ -10756,4 +10758,523 @@ body.pane-dragging * {
 .icon-btn--danger:hover {
   background: var(--danger-weak);
   color: var(--danger-ink);
+}
+
+/* ── The Brain view (ADR 0018/10) ──────────────────────────────────────────────
+   Full-app view on the board/settings precedent: head strip, then
+   [lens rail | lens surface | inspector]. Tokens only; index content and memory
+   text are UNTRUSTED and land via textContent, so nothing here styles markup
+   that content could inject. The canvas paints from these same tokens (resolved
+   at draw time), so themes carry it without a second palette. */
+#view-brain {
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  background: var(--bg-app);
+}
+.brain-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.brain-title {
+  margin: 0;
+  font-size: var(--fs-20);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--track-tight);
+}
+.brain-sub {
+  color: var(--text-lo);
+  font-size: var(--fs-12);
+}
+.brain-head-spacer {
+  flex: 1 1 0;
+}
+.brain-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-11);
+  color: var(--text-lo);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  padding: 1px var(--sp-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap; /* a chip is one breath — wrapped it reads as a blob over the canvas */
+}
+.brain-chip-dirty.is-dirty {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+.brain-chip-indexing {
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+.brain-chip-capped {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+.brain-body {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+.brain-empty-host {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The lens rail: lenses, the status card, the consents. */
+.brain-rail {
+  width: 320px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+.brain-lenses {
+  display: flex;
+  gap: var(--sp-2);
+}
+.brain-lens-btn {
+  flex: 1 1 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-mid);
+  font: inherit;
+  font-size: var(--fs-12);
+  padding: var(--sp-1) var(--sp-3);
+  cursor: pointer;
+}
+.brain-lens-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-hi);
+}
+.brain-lens-btn.is-active {
+  /* The segmented control's active recipe — AA-proven on every theme (the
+     accent-weak wash + accent-ink pair measured 4.35 on nord and lost). */
+  background: var(--bg-elevated);
+  color: var(--text-hi);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-1);
+}
+.brain-stats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.brain-stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--fs-12);
+}
+.brain-stat-label {
+  color: var(--text-lo);
+}
+.brain-stat-value {
+  color: var(--text-hi);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.brain-stat-refusal {
+  color: var(--danger-ink);
+  font-size: var(--fs-12);
+  margin: 0;
+}
+
+/* The lens surface. */
+.brain-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.brain-lens-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  position: relative;
+}
+.brain-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  position: relative;
+}
+.brain-search-input {
+  flex: 0 1 420px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-hi);
+  font: inherit;
+  font-size: var(--fs-13);
+  padding: var(--sp-1) var(--sp-3);
+}
+.brain-search-list {
+  position: absolute;
+  top: calc(100% + var(--sp-1));
+  left: 0;
+  width: min(480px, 100%);
+  z-index: 30;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-2);
+  max-height: 320px;
+  overflow-y: auto;
+  padding: var(--sp-1);
+}
+.brain-search-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-mid);
+  font: inherit;
+  font-size: var(--fs-12);
+  padding: var(--sp-2) var(--sp-3);
+  cursor: pointer;
+}
+.brain-search-item:hover,
+.brain-search-item.is-selected {
+  background: var(--accent-weak);
+  color: var(--text-hi);
+}
+/* The wash dims the row's quietest ink below AA (measured 3.77 on nord) — the
+   file column steps up one ink while the row is lit. */
+.brain-search-item:hover .brain-search-file,
+.brain-search-item.is-selected .brain-search-file {
+  color: var(--text-mid);
+}
+.brain-search-name {
+  color: var(--text-hi);
+  font-weight: var(--fw-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.brain-search-file {
+  margin-left: auto;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.brain-search-empty {
+  padding: var(--sp-3);
+  color: var(--text-lo);
+  font-size: var(--fs-12);
+}
+.brain-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  font-size: var(--fs-11);
+  color: var(--text-mid);
+}
+.brain-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.brain-legend-swatch {
+  width: 10px;
+  height: 2px;
+  border-radius: var(--r-full);
+}
+.brain-legend-swatch.is-defines {
+  background: var(--text-lo);
+}
+.brain-legend-swatch.is-imports {
+  background: var(--info);
+}
+.brain-legend-swatch.is-references {
+  background: var(--accent-ink);
+}
+.brain-legend-swatch.is-extends {
+  background: var(--success);
+}
+.brain-legend-swatch.is-implements {
+  background: var(--warning);
+}
+.brain-legend-swatch.is-wikilink {
+  background: var(--accent-ink);
+}
+.brain-canvas-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--bg-inset);
+}
+.brain-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.brain-main-state {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.brain-progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.brain-progress-note {
+  margin: 0;
+  color: var(--text-lo);
+  font-size: var(--fs-12);
+}
+
+/* The memory reader. */
+.brain-reader {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  padding: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.brain-reader-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.brain-reader-title {
+  margin: 0;
+  font-size: var(--fs-20);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--track-tight);
+  overflow-wrap: anywhere;
+}
+.brain-reader-sub {
+  margin: 0;
+  color: var(--text-mid);
+  max-width: var(--measure);
+}
+.brain-reader-root {
+  margin: 0;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  overflow-wrap: anywhere;
+}
+.brain-reader-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-hi);
+  font-size: var(--fs-13);
+  line-height: 1.6;
+  max-width: var(--measure);
+}
+.brain-wikilink {
+  display: inline;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--accent-ink);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.brain-wikilink:hover {
+  background: var(--accent-weak);
+}
+.brain-wikilink.is-dangling {
+  color: var(--text-lo);
+  text-decoration-style: dashed;
+}
+.brain-wanted {
+  font-size: var(--fs-10);
+  color: var(--text-lo);
+  margin-left: var(--sp-1);
+}
+.brain-reader-truncated {
+  margin: 0;
+  color: var(--warning);
+  font-size: var(--fs-12);
+}
+.brain-reader-rails {
+  display: flex;
+  gap: var(--sp-5);
+  flex-wrap: wrap;
+}
+.brain-reader-rail-title {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-12);
+  color: var(--text-mid);
+}
+.brain-reader-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.brain-reader-none {
+  margin: 0;
+  color: var(--text-lo);
+  font-size: var(--fs-12);
+}
+
+/* The inspector. */
+.brain-inspector {
+  width: 300px;
+  flex: none;
+  border-left: 1px solid var(--border);
+  background: var(--bg-surface);
+  overflow-y: auto;
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.brain-inspect-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+.brain-inspect-name {
+  margin: 0;
+  font-size: var(--fs-16);
+  overflow-wrap: anywhere;
+}
+.brain-inspect-sig {
+  margin: 0;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-11);
+  color: var(--text-mid);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.brain-inspect-file {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  color: var(--accent-ink);
+  font: inherit;
+  font-size: var(--fs-12);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.brain-inspect-file:hover {
+  text-decoration: underline;
+}
+.brain-inspect-root {
+  margin: 0;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  overflow-wrap: anywhere;
+}
+.brain-inspect-actions {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.brain-inspect-sub {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--text-mid);
+}
+.brain-inspect-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.brain-inspect-neighbor {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-mid);
+  font: inherit;
+  font-size: var(--fs-12);
+  padding: var(--sp-1) var(--sp-2);
+  cursor: pointer;
+  text-align: left;
+}
+.brain-inspect-neighbor:hover {
+  background: var(--bg-elevated);
+  color: var(--text-hi);
+}
+.brain-inspect-neighbor-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.brain-edge-chip {
+  font-size: var(--fs-10);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  padding: 0 var(--sp-1);
+  color: var(--text-lo);
+  flex: none;
+}
+.brain-edge-chip.is-imports {
+  color: var(--info);
+  border-color: var(--info);
+}
+.brain-edge-chip.is-references {
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+.brain-edge-chip.is-extends {
+  color: var(--success);
+  border-color: var(--success);
+}
+.brain-edge-chip.is-implements {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+.brain-edge-chip.is-wikilink {
+  color: var(--accent-ink);
+  border-color: var(--accent);
 }

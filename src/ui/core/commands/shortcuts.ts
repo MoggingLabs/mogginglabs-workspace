@@ -32,6 +32,9 @@ export const SHORTCUTS: ShortcutGroup[] = [
     rows: [
       { keys: 'Ctrl+K', label: 'Open the command palette' },
       { keys: 'Ctrl+Shift+G', label: 'Board' },
+      // Ctrl+Shift+M verified free at build time (2026-07-19): no handler in src
+      // binds M — the Ctrl+Shift+K fallback was not needed.
+      { keys: 'Ctrl+Shift+M', label: 'Brain — the workspace index' },
       { keys: 'Ctrl+,', label: 'Settings' },
       { keys: 'Esc', label: 'Back · close an overlay' }
     ]

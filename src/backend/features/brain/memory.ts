@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import * as path from 'node:path'
+import { isMemorySlug, memorySlug, memoryWikilinkRe } from '@contracts'
 
 // The memory FORMAT (ADR 0018 step 09, Phase 2.5): `.memory/<slug>.md` — plain
 // markdown files the TEAM owns, in the repo, synced by git like any other file.
@@ -22,30 +23,20 @@ export const MEMORY_DIR = '.memory'
 /** Flat-dir cap: past it the scan stops and says so (`capped`), never silently. */
 export const MEMORY_MAX_FILES = 2000
 export const MEMORY_MAX_FILE_BYTES = 256 * 1024
-export const MEMORY_SLUG_MAX = 80
 export const MEMORY_NAME_MAX = 200
 export const MEMORY_DESCRIPTION_MAX = 500
 export const MEMORY_MAX_TAGS = 16
 
-/** Kebab-case, filename-safe, from ANY name — `"; rm -rf / [[x]]"` becomes
- *  `rm-rf-x`, inert. Null when nothing survives sanitizing. */
-export function memorySlug(name: string): string | null {
-  const tokens = name.normalize('NFKD').toLowerCase().match(/[a-z0-9]+/g)
-  if (!tokens) return null
-  let slug = tokens.join('-')
-  if (slug.length > MEMORY_SLUG_MAX) slug = slug.slice(0, MEMORY_SLUG_MAX).replace(/-+$/, '')
-  return slug || null
-}
-
-/** A string that already IS a slug — the only shape reads accept and writes mint. */
-export const isMemorySlug = (s: string): boolean =>
-  s.length <= MEMORY_SLUG_MAX && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(s)
+// The slug law + wikilink pattern moved to @contracts (10): the Brain view's
+// reader must re-find links with the SAME slugger and pattern the indexer used.
+// Re-exported so every existing importer keeps its door.
+export { isMemorySlug, memorySlug, MEMORY_SLUG_MAX } from '@contracts'
 
 /** `[[wikilink]]` targets in `body`, sanitized through the ONE slugger, deduped,
  *  sorted, self-links dropped. A target that sanitizes to nothing is no link. */
 export function memoryLinksOf(body: string, selfSlug: string): string[] {
   const out = new Set<string>()
-  for (const m of body.matchAll(/\[\[([^[\]\n]+)\]\]/g)) {
+  for (const m of body.matchAll(memoryWikilinkRe())) {
     const slug = memorySlug(m[1])
     if (slug && slug !== selfSlug) out.add(slug)
   }

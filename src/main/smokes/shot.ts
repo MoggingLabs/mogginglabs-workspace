@@ -1,7 +1,10 @@
 import { app, type BrowserWindow } from 'electron'
+import { execFileSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { serializeMemory } from '@backend/features/brain'
+import { handleBrainRebuild } from '../brain'
 
 // Layout probe run alongside the grid shot: real geometry of pane 1's slot / header /
 // terminal, so "doesn't fill the width"-class reports are diagnosed with numbers.
@@ -246,9 +249,163 @@ function runWizardShot(win: BrowserWindow): void {
   else setTimeout(() => void run(), 1500)
 }
 
+/** Brain sweep (MOGGING_SHOT=brain, ADR 0018/10): the six view states in both
+ *  themes → out/gallery/brain/ — status (pick-a-focus), first-index progress,
+ *  no-folder empty, graph focus, reader, dangling/wanted. A fixture repo with a
+ *  known hub + a wikilinked `.memory/` (one dangling target), indexed main-side
+ *  before the first shot. The fast iteration loop for Brain design work. */
+function runBrainShot(win: BrowserWindow): void {
+  setTimeout(() => app.exit(1), 180000) // safety net
+  const wc = win.webContents
+  wc.setBackgroundThrottling(false)
+  const ES = (js: string): Promise<unknown> => wc.executeJavaScript(js, true)
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+  const dir = join(process.cwd(), 'out', 'gallery', 'brain')
+  const waitTrue = async (js: string, tries = 40, gap = 250): Promise<boolean> => {
+    for (let i = 0; i < tries; i++) {
+      if ((await ES(js).catch(() => false)) === true) return true
+      await sleep(gap)
+    }
+    return false
+  }
+  const snap = async (name: string): Promise<void> => {
+    await sleep(200)
+    const img = await wc.capturePage()
+    writeFileSync(join(dir, `${name}.png`), img.toPNG())
+  }
+  const HUB = 'hubOfTheGraph'
+  const stage = (): string => {
+    const repo = join(mkdtempOnce(), 'repo')
+    const files: Record<string, string> = {
+      'src/hub.ts': `export function ${HUB}(): number {\n  return 40\n}\n`,
+      ...Object.fromEntries(
+        ['a', 'b', 'c', 'd', 'e'].map((s) => [
+          `src/${s}.ts`,
+          `import { ${HUB} } from './hub'\nexport function caller${s.toUpperCase()}(): number {\n  return ${HUB}() + 1\n}\n`
+        ])
+      ),
+      '.memory/alpha-notes.md': serializeMemory({
+        slug: 'alpha-notes',
+        description: 'How the alpha subsystem is wired',
+        tags: ['ops'],
+        body: 'Alpha wiring notes. See [[beta-notes]].\n'
+      }),
+      '.memory/beta-notes.md': serializeMemory({
+        slug: 'beta-notes',
+        description: 'Beta gotchas, one wanted link',
+        tags: ['ops'],
+        body: 'Beta gotchas. See [[alpha-notes]]. Still unwritten: [[wanted-topic]].\n'
+      })
+    }
+    for (const [rel, src] of Object.entries(files)) {
+      const abs = join(repo, rel)
+      mkdirSync(dirname(abs), { recursive: true })
+      writeFileSync(abs, src)
+    }
+    const git = (args: string[]): string =>
+      execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true }).trim()
+    git(['init'])
+    git(['symbolic-ref', 'HEAD', 'refs/heads/main'])
+    git(['config', 'user.email', 'gallery@mogging.test'])
+    git(['config', 'user.name', 'Gallery'])
+    git(['config', 'commit.gpgsign', 'false'])
+    git(['add', '-A'])
+    git(['commit', '-m', 'fixture'])
+    return repo
+  }
+  let staged = ''
+  const mkdtempOnce = (): string => {
+    if (!staged) {
+      staged = join(tmpdir(), `mog-brainshot-${process.pid}`)
+      mkdirSync(staged, { recursive: true })
+    }
+    return staged
+  }
+  const run = async (): Promise<void> => {
+    try {
+      mkdirSync(dir, { recursive: true })
+      win.setSize(1600, 950)
+      const repo = stage()
+      await sleep(1000)
+      await ES(`window.__mogging.workspace.create({ name: 'Brain', cwd: ${JSON.stringify(repo)}, paneCount: 1 })`)
+      await sleep(2500)
+      const built = await handleBrainRebuild({ root: repo })
+      if (!built.ok) throw new Error('fixture rebuild refused: ' + JSON.stringify(built))
+      // A second workspace with NO folder stages the empty state honestly.
+      await ES(`window.__mogging.workspace.create({ name: 'NoFolder' })`)
+      await sleep(1500)
+
+      // Pass 1 — the pre-focus states, per theme: empty, status, progress.
+      for (const theme of ['midnight', 'light']) {
+        const tag = theme === 'midnight' ? 'dark' : 'light'
+        await ES(`window.__mogging.setTheme(${JSON.stringify(theme)})`)
+        await sleep(350)
+        await ES(`window.__mogging.brain.open()`)
+        await waitTrue(`!!document.querySelector('#content.view-brain')`)
+        await sleep(400)
+        await snap(`${tag}-brain-empty`) // the NoFolder workspace is active
+        await ES(`window.__mogging.workspace.switchByIndex(0)`)
+        await sleep(600)
+        await ES(`window.__mogging.brain.open()`)
+        await waitTrue(`!!document.querySelector('#content.view-brain')`)
+        await waitTrue(`(window.__mogging.brain.chip().gen || '') !== ''`)
+        await snap(`${tag}-brain-status`)
+        await ES(`window.__mogging.brain.stageProgress(true)`)
+        await sleep(300)
+        await snap(`${tag}-brain-progress`)
+        await ES(`window.__mogging.brain.stageProgress(false)`)
+        await ES(`window.__mogging.workspace.switchByIndex(1)`)
+        await sleep(400)
+      }
+      // Pass 2 — the lens states, per theme: focus, reader, dangling/wanted.
+      await ES(`window.__mogging.workspace.switchByIndex(0)`)
+      await sleep(500)
+      await ES(`window.__mogging.brain.open()`)
+      await waitTrue(`!!document.querySelector('#content.view-brain')`)
+      await ES(`window.__mogging.brain.search(${JSON.stringify(HUB)})`)
+      await waitTrue(`window.__mogging.brain.results().some((r) => r === 'code:${HUB}')`)
+      await ES(`window.__mogging.brain.choose(window.__mogging.brain.results().findIndex((r) => r === 'code:${HUB}'))`)
+      await waitTrue(`window.__mogging.brain.state().nodes > 0`)
+      await sleep(2200) // the settle runs out before the first shot
+      for (const theme of ['midnight', 'light']) {
+        const tag = theme === 'midnight' ? 'dark' : 'light'
+        await ES(`window.__mogging.setTheme(${JSON.stringify(theme)})`)
+        await sleep(400)
+        await ES(`document.querySelector('.brain-lens-btn[data-lens="graph"]')?.click()`)
+        await sleep(300)
+        await snap(`${tag}-brain-focus`)
+        await ES(`window.__mogging.brain.openReader('alpha-notes')`)
+        await waitTrue(`window.__mogging.brain.state().reader === 'alpha-notes' && !!document.querySelector('.brain-reader-body')`)
+        await snap(`${tag}-brain-reader`)
+        await ES(`window.__mogging.brain.openReader('beta-notes')`)
+        await waitTrue(`window.__mogging.brain.state().reader === 'beta-notes'`)
+        await snap(`${tag}-brain-dangling`)
+        await ES(`window.__mogging.brain.openReader('wanted-topic')`)
+        await waitTrue(`window.__mogging.brain.state().reader === 'wanted-topic'`)
+        await sleep(300)
+        await snap(`${tag}-brain-wanted`)
+      }
+      app.exit(0)
+    } catch (e) {
+      try {
+        writeFileSync(join(dir, 'error.txt'), String(e))
+      } catch {
+        /* ignore */
+      }
+      app.exit(1)
+    }
+  }
+  if (wc.isLoading()) wc.once('did-finish-load', () => setTimeout(() => void run(), 1500))
+  else setTimeout(() => void run(), 1500)
+}
+
 export function runShot(win: BrowserWindow): void {
   if (process.env.MOGGING_SHOT === 'all') {
     runGallery(win) // Phase-5/01: every surface, both themes -> out/gallery/
+    return
+  }
+  if (process.env.MOGGING_SHOT === 'brain') {
+    runBrainShot(win) // ADR 0018/10: the six Brain states × both themes -> out/gallery/brain/
     return
   }
   if (process.env.MOGGING_SHOT === 'typematrix') {

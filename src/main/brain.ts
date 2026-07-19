@@ -12,7 +12,15 @@ import {
   type BrainServeReply,
   type BrainTickSource
 } from '@backend/features/brain'
-import { BrainChannels, locatePane, type BrainAnswer, type BrainChangedEvent, type BrainLibEcosystem } from '@contracts'
+import {
+  BrainChannels,
+  locatePane,
+  type BrainAnswer,
+  type BrainChangedEvent,
+  type BrainEcosystemCount,
+  type BrainLibEcosystem,
+  type BrainOverviewAnswer
+} from '@contracts'
 import { getSettingsStore } from './app-settings'
 import { resolveGrantedWriteTools, workspaceIdForPane } from './integrations'
 import { fetchLibraryDocs } from './libfetch'
@@ -329,6 +337,53 @@ export async function handleBrainLibDocsMcp(
   return serveBrainRead(ensureService(), 'brain.libdocs', args, callerRoot)
 }
 
+/**
+ * The Brain VIEW's read door (10): the serve layer's dispatch, verbatim — same
+ * caps, same `{ generation, dirty, root }` envelopes, same typed refusals the
+ * agent wire gets. The window is the human's own reader (ADR 0008: reads are
+ * free), and it still goes through the ONE validation seam rather than growing
+ * a second, softer one. Writes have no channel here at all — serveBrainRead
+ * dispatches nothing that mutates. Exported for the BRAINUX smoke.
+ */
+export function handleBrainUiRead(req: unknown): BrainServeReply {
+  const r = (req ?? {}) as { root?: unknown; verb?: unknown; args?: unknown }
+  if (typeof r.root !== 'string' || !r.root || typeof r.verb !== 'string' || !r.verb) {
+    return { ok: false, reason: 'invalid' }
+  }
+  const args =
+    r.args && typeof r.args === 'object' && !Array.isArray(r.args) ? (r.args as Record<string, unknown>) : {}
+  return serveBrainRead(ensureService(), r.verb, args, r.root)
+}
+
+/**
+ * The status card's extras (10): numbers the store already holds that
+ * BrainStatus does not carry — distinct written memory slugs, dangling wikilink
+ * targets (wanted knowledge), and the caller partition's per-ecosystem lockfile
+ * truth. Derived HERE from the same handle every read uses; no new serve verb
+ * (the MCP verb sets stay closed). Exported for the BRAINUX smoke.
+ */
+export function handleBrainOverview(req: unknown): BrainOverviewAnswer {
+  const root = (req as { root?: unknown } | null | undefined)?.root
+  if (typeof root !== 'string' || !root) return { ok: false, reason: 'invalid' }
+  const h = ensureService().readHandle(root)
+  if ('reason' in h) return { ok: false, reason: h.reason, ...(h.detail ? { detail: h.detail } : {}) }
+  const roots = [...h.project.roots]
+  const written = new Set(h.store.memoriesForRoots(roots).map((m) => m.slug))
+  const dangling = new Set(
+    h.store
+      .memoryLinks(roots)
+      .map((l) => l.dst)
+      .filter((dst) => !written.has(dst))
+  )
+  const caller = partitionOf(roots, root) ?? h.project.projectKey
+  const perEco = new Map<string, number>()
+  for (const dep of h.store.libRows(caller)) perEco.set(dep.ecosystem, (perEco.get(dep.ecosystem) ?? 0) + 1)
+  const ecosystems: BrainEcosystemCount[] = [...perEco.entries()]
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .map(([ecosystem, deps]) => ({ ecosystem: ecosystem as BrainLibEcosystem, deps }))
+  return { ok: true, memories: written.size, danglingLinks: dangling.size, ecosystems }
+}
+
 /** The launch seam's map fetch (06), exported for the BRAINMAP smoke: the same
  *  serve verb the MCP tool answers with, keyed by the pane's actual cwd. */
 export function handleBrainMap(req: unknown): BrainServeReply {
@@ -371,6 +426,8 @@ export function registerBrain(getWin: () => BrowserWindow | null, tickSource?: B
   boundTickSource = tickSource ?? null
   ipcMain.handle(BrainChannels.status, (_e, req: unknown) => handleBrainStatus(req))
   ipcMain.handle(BrainChannels.map, (_e, req: unknown) => handleBrainMap(req))
+  ipcMain.handle(BrainChannels.read, (_e, req: unknown) => handleBrainUiRead(req))
+  ipcMain.handle(BrainChannels.overview, (_e, req: unknown) => handleBrainOverview(req))
   ipcMain.handle(BrainChannels.orientGet, (_e, wsId: unknown) =>
     typeof wsId === 'string' && wsId ? orientAtLaunch(wsId) : true
   )

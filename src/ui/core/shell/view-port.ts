@@ -1,13 +1,14 @@
 // Which top-level view owns the app below the titlebar (Phase-5/05): the Home
-// launcher, the live grid, the Board, the Settings page, or the new-workspace
+// launcher, the live grid, the Board, the Settings page, the new-workspace
 // wizard (8.5/02 — a full page, not a modal; it shares the rail with the grid so
-// you can see the workspaces you already have while you configure the next one).
+// you can see the workspaces you already have while you configure the next one),
+// or the Brain (ADR 0018/10 — the workspace index made visible).
 // The workspace feature reveals 'grid' on user-initiated workspace activation.
 // Pure pub/sub — no DOM here.
 
 import { getWorkspaces } from '../workspace/workspace-info-port'
 
-export type AppView = 'home' | 'grid' | 'board' | 'settings' | 'wizard'
+export type AppView = 'home' | 'grid' | 'board' | 'settings' | 'wizard' | 'brain'
 
 type Listener = (view: AppView) => void
 

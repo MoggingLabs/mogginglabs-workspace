@@ -104,3 +104,39 @@ export interface BrainChangedEvent {
   generation: number
   dirty: boolean
 }
+
+/**
+ * `brain:read` — the Brain VIEW's door onto the serve layer's read verbs (the
+ * same dispatch the agent wire runs: same caps, same envelopes, same typed
+ * refusals). Reads are free (ADR 0008) and the human's own window is a reader
+ * like any other; writes have no channel here at all.
+ */
+export interface BrainReadRequest {
+  root: string
+  /** A `brain.*` READ verb (serve.ts's closed dispatch — junk answers `invalid`). */
+  verb: string
+  args?: Record<string, unknown>
+}
+
+/** One ecosystem's presence in the caller's lockfile truth (brain:overview). */
+export interface BrainEcosystemCount {
+  ecosystem: BrainLibEcosystem
+  deps: number
+}
+
+/**
+ * `brain:overview` — the status card's extras: numbers the store already holds
+ * that BrainStatus does not carry. Same request shape as `brain:status`, same
+ * refusal register.
+ */
+export interface BrainOverview {
+  ok: true
+  /** Distinct written memory slugs across the project's roots (freshest-copy law). */
+  memories: number
+  /** Distinct `[[wikilink]]` targets no memory is written for — wanted knowledge. */
+  danglingLinks: number
+  /** Lockfile-truth dependency counts for the caller's partition, per ecosystem. */
+  ecosystems: BrainEcosystemCount[]
+}
+
+export type BrainOverviewAnswer = BrainOverview | BrainRefusal
