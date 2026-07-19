@@ -59,7 +59,7 @@ Add the secrets in repo settings → rerun `Release`. The
 `CSC_LINK` breaks electron-builder), signing and notarization activate on their
 own. Verify beforehand any time with the `signing-dryrun` dispatch.
 
-† **Intel (x64) macOS is still deferred as of v0.14.0.** The 2026-07 macos runner image
+† **Intel (x64) macOS is still deferred as of v0.15.0.** The 2026-07 macos runner image
 regressed into the same `@electron/rebuild` spawn hang the ubuntu/windows
 images have (59 min of silence on `preparing better-sqlite3` — run
 28756024650), so the mac release uses the direct node-gyp bypass, which builds
@@ -139,18 +139,19 @@ one command — never hand-edit hashes:
 # from a local release build:
 node scripts/update-manifests.mjs            # reads dist/
 # from a published release:
-gh release download v0.14.0 -D /tmp/rel && node scripts/update-manifests.mjs /tmp/rel
+gh release download v0.15.0 -D /tmp/rel && node scripts/update-manifests.mjs /tmp/rel
 ```
 
 CI validates both continuously where the tooling exists (`winget validate` on
 windows-latest, `brew style` on macos-latest) so submission day is a
 copy-paste PR.
 
-**v0.14.0 status:** the committed manifests pin the shipped v0.14.0 artifacts —
-sha256s regenerated from the uploaded release bytes (the command above), win-x64
-`.exe` and mac-arm64 `.dmg` verified against the assets on the release. The cask
-stays arm64-only (Intel deferred — see the matrix footnote). Neither is submitted
-upstream yet — the checklists below are the copy-paste path when you choose to.
+**v0.15.0 status:** the committed manifests pin the previous release's shipped
+artifacts until release day's regeneration — run the command above against the
+uploaded v0.15.0 bytes, then verify the win-x64 `.exe` and mac-arm64 `.dmg`
+sha256s against the assets on the release. The cask stays arm64-only (Intel
+deferred — see the matrix footnote). Neither is submitted upstream yet — the
+checklists below are the copy-paste path when you choose to.
 
 ### winget submission playbook
 1. Regenerate manifests for the release being submitted; commit.
