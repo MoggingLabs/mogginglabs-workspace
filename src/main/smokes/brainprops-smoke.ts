@@ -136,12 +136,6 @@ export function runBrainPropsSmoke(win: BrowserWindow): void {
 
   const wc = win.webContents
   wc.setBackgroundThrottling(false) // the graph settle rides rAF — an occluded runner window must not starve it
-  // The OS pointer on a CI desktop is REAL: when a re-render (openReader) lays a
-  // non-dangling wikilink under the stationary cursor, Chromium synthesizes a genuine
-  // mouseenter and pops a preview no step asked for — which read as danglingNoPreview:false
-  // on the windows runner. Chromium tracks hover from the LAST input event, so parking the
-  // pointer in the window chrome once makes every later hover recomputation target nothing.
-  wc.sendInputEvent({ type: 'mouseMove', x: 4, y: 4 })
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
   const root = app.getAppPath()
@@ -288,6 +282,15 @@ export function runBrainPropsSmoke(win: BrowserWindow): void {
       // ── (f) the UI: panel, hostile value, preview, depth, skipped row ──────
       await ES(`window.__mogging.brain.open()`)
       const viewOpen = await waitTrue(`!!document.querySelector('#content.view-brain')`)
+      // The OS pointer on a CI desktop is REAL, and Windows RE-ASSERTS it (WM_MOUSEMOVE
+      // synthesis on window changes) — parking the input tracker once did not stick: an
+      // openReader re-render kept laying mem-d's [[mem-c]] under the resting cursor, a
+      // GENUINE mouseenter fired, and a legitimate mem-c card failed the dangling claim
+      // (run-2 testimony: danglingText mem-c, :hover chain holding a live .brain-wikilink).
+      // Every event this smoke drives is DISPATCHED — synthetic dispatches skip
+      // hit-testing — so switching hit-testing off for the view's world removes the
+      // resident cursor from the experiment without touching anything the assertions do.
+      await ES(`(document.getElementById('content').style.pointerEvents = 'none', 1)`)
       const skipRowSel = `document.querySelector('.brain-stat-memskips .brain-stat-value')`
       const skipRow1 = await waitTrue(`(${skipRowSel}?.textContent ?? '') === '1 invalid · 1 foreign'`)
 
