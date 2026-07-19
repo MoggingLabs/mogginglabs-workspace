@@ -1,4 +1,4 @@
-import type { BrowserWindow } from 'electron'
+import { app, type BrowserWindow } from 'electron'
 import { bootMain, prepareRuntime } from './boot'
 import { installHarnessPorts } from './harness-install'
 import { runSmoke } from './smokes/smoke'
@@ -702,4 +702,10 @@ installSshShim() // before the daemon spawns (it inherits the env)
 // and installs nothing, so every one of them is a null check and none of their env triggers, or
 // their fixture worlds, exist in the shipped bundle (scripts/check-prod-artifact.mjs).
 installHarnessPorts() // before bootMain: whenReady registers the handlers that consult the hooks
+// RAILFOLD verifies the fold's IN-FLIGHT choreography — the very thing reduced motion
+// legitimately deletes (both clamps flatten transition-duration wholesale, global.css §--dur-rail),
+// and CI runner images ship with reduce-motion ON (Windows Server animations off, macos Reduce
+// Motion) so the 260ms run never exists to sample. Force the media signal off for THIS gate only;
+// the reduced-motion mode's own honesty stays the calm-motion setting's business, not this gate's.
+if (process.env.MOGGING_RAILFOLD) app.commandLine.appendSwitch('force-prefers-no-reduced-motion')
 bootMain({ harness: isSmoke, hooks: { beforeAppSettings, afterAppSettings, afterWindow } })

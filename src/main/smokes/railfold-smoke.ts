@@ -78,6 +78,12 @@ export function runRailfoldSmoke(win: BrowserWindow): void {
         }
       }
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, shiftKey: true }))
+      // The rail-anim stamp rides app-shell's MutationObserver MICROTASK — a snap in the
+      // dispatch task itself would force layout on the collapse classes WITHOUT the
+      // in-flight rules, a state the observer guarantees can never paint (that phantom
+      // frame read as a count-over-icon overlap on every OS). Yield one task so every
+      // sampled state is one the screen could actually show.
+      await new Promise((r) => setTimeout(r, 0))
       const frames = []
       for (let i = 0; i < 70; i++) {
         frames.push(snap())
