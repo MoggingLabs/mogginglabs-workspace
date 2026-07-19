@@ -114,6 +114,7 @@ export {
   BRAIN_SERVE_DEFAULT_DEPTH,
   BRAIN_SERVE_MAX_DEPTH,
   BRAIN_SERVE_RESPONSE_CAP,
+  freshestBySlug,
   globToLike,
   partitionOf,
   serveBrainRead,
@@ -132,6 +133,13 @@ export {
   isEmbedEndpoint,
   type EmbedTarget
 } from './embed'
+export {
+  MEMORY_RECALL_BACKLINK_CAP,
+  MEMORY_RECALL_WEIGHTS,
+  memoryRecallExpr,
+  recallTaskTerms,
+  serveBrainRecall
+} from './recall'
 
 // The brain SERVICE (ADR 0018): the one object every later step consumes — identity,
 // lifecycle, status, typed refusals, (step 03) the FULL deterministic build, and

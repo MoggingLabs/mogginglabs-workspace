@@ -290,6 +290,8 @@ function brainRefusalText(r) {
       return `the project exceeds the brain's index cap${detail ? ` (${detail})` : ''}`
     case 'no-map':
       return detail || 'no brain index for this checkout — nothing to map yet'
+    case 'no-brain':
+      return detail || 'this project has no team memories indexed yet — write one (create_memory), or rebuild the brain'
     case 'unknown-library':
       return detail || `unknown library (not in this checkout's lockfiles — see list_libraries)`
     case 'unknown-memory':

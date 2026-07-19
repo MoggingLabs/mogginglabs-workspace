@@ -22,7 +22,7 @@ import {
 
 const Database = requireNative<typeof import('better-sqlite3')>('better-sqlite3')
 
-export const BRAIN_SCHEMA_VERSION = 8 // v8: memory_drafts + fts + draft_stats (revision C's quarantine) — additive, one-way, idempotent (v7 added memory_props + memory_scan)
+export const BRAIN_SCHEMA_VERSION = 9 // v9: memory_usage (revision D's per-slug recall/read counters) — additive, one-way, idempotent (v8 added the draft quarantine's tables)
 /** Multi-row insert batch size — the build's transactional chunking unit. */
 export const BRAIN_INSERT_CHUNK = 1000
 
@@ -642,6 +642,28 @@ export class BrainStore {
       .prepare(`SELECT COALESCE(SUM(evicted), 0) AS n FROM memory_draft_stats WHERE ${rc.sql}`)
       .get(...rc.params) as { n: number }
     return row.n
+  }
+
+  // ── Usage truth (ADR 0018 revision D): memory_usage ─────────────────────────
+  // Plain integers the HUMAN reads to prune dead memories — bumped on every
+  // recall answer a slug rides and every full agent read; never decayed, never
+  // acted on by the app. Slug-keyed like memory_vectors (project-level).
+
+  /** Count one recall appearance or one full read against `slug`. */
+  bumpMemoryUsage(slug: string, kind: 'recall' | 'read'): void {
+    const col = kind === 'recall' ? 'recalls' : 'reads'
+    this.db
+      .prepare(
+        `INSERT INTO memory_usage (slug, ${col}) VALUES (?, 1) ON CONFLICT(slug) DO UPDATE SET ${col} = ${col} + 1`
+      )
+      .run(slug)
+  }
+
+  /** Every usage row, stably ordered — the view joins names onto these. */
+  memoryUsageRows(): { slug: string; recalls: number; reads: number }[] {
+    return this.db
+      .prepare('SELECT slug, recalls, reads FROM memory_usage ORDER BY slug')
+      .all() as { slug: string; recalls: number; reads: number }[]
   }
 
   // ── The semantic lens (ADR 0018 revision A): memory_vectors ─────────────────

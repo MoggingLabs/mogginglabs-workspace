@@ -52,7 +52,8 @@ export interface BrainReadHost {
 
 export type BrainServeReply = Record<string, unknown> & { ok: boolean }
 
-const refuse = (reason: string, detail?: string): BrainServeReply =>
+/** Exported for the recall organ (revision D) — one refusal shape everywhere. */
+export const refuse = (reason: string, detail?: string): BrainServeReply =>
   detail === undefined ? { ok: false, reason } : { ok: false, reason, detail }
 
 /** Glob (`*`/`?`) → SQL LIKE with `\` escapes. Anything else is literal. */
@@ -104,8 +105,8 @@ export const nodeOut = (row: BrainNodeRow, labelRoot: boolean): NodeOut => ({
 })
 
 /** Trim a reply's list until the serialized answer fits the byte cap. Trimming
- *  is never silent: it sets `truncated`. */
-function capReply(reply: BrainServeReply, listKey: string): BrainServeReply {
+ *  is never silent: it sets `truncated`. Exported for the recall organ (D). */
+export function capReply(reply: BrainServeReply, listKey: string): BrainServeReply {
   const list = reply[listKey]
   if (!Array.isArray(list)) return reply
   while (list.length && JSON.stringify(reply).length > BRAIN_SERVE_RESPONSE_CAP) {
@@ -115,10 +116,10 @@ function capReply(reply: BrainServeReply, listKey: string): BrainServeReply {
   return reply
 }
 
-const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
+export const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
 
 /** Positive-int arg with a clamp; undefined falls to the default; junk → null. */
-function intArg(v: unknown, fallback: number, min: number, max: number): number | null {
+export function intArg(v: unknown, fallback: number, min: number, max: number): number | null {
   if (v === undefined) return fallback
   if (typeof v !== 'number' || !Number.isFinite(v)) return null
   const n = Math.floor(v)
@@ -141,7 +142,7 @@ export function partitionOf(roots: string[], base: string): string | null {
   return best
 }
 
-interface ResolvedScope {
+export interface ResolvedScope {
   store: BrainStore
   status: BrainStatus
   /** The caller's own partition root — the envelope's `root`, always. */
@@ -155,7 +156,7 @@ interface ResolvedScope {
   labeled: boolean
 }
 
-function resolveScope(
+export function resolveScope(
   host: BrainReadHost,
   args: Record<string, unknown>,
   callerRoot: string | null
@@ -185,7 +186,7 @@ function resolveScope(
   }
 }
 
-const envelope = (s: ResolvedScope): { generation: number; dirty: boolean; root: string } => ({
+export const envelope = (s: ResolvedScope): { generation: number; dirty: boolean; root: string } => ({
   generation: s.status.generation,
   dirty: s.status.dirty,
   root: s.caller
@@ -606,7 +607,7 @@ export const MEMORY_SUGGEST_MAX_LIMIT = 50
 /** Raw FTS rows fetched before the freshest-copy dedupe — a hard read cap. */
 const MEMORY_SEARCH_FETCH_CAP = 400
 
-const parseTags = (json: string): string[] => {
+export const parseTags = (json: string): string[] => {
   try {
     const v = JSON.parse(json) as unknown
     return Array.isArray(v) ? v.filter((t): t is string => typeof t === 'string') : []

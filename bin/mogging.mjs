@@ -38,6 +38,7 @@ const cmd = argv[0]
 
 if (cmd === 'usage') runUsage(argv.slice(1))
 else if (cmd === 'map') runMap(argv.slice(1))
+else if (cmd === 'recall') runRecall(argv.slice(1))
 else if (cmd === 'notify') runNotify(argv.slice(1)).catch(() => process.exit(0)) // a hook must never fail its agent
 else if (cmd === 'cwd') runCwd(argv.slice(1))
 else if (cmd === 'list') runList()
@@ -74,6 +75,7 @@ function usage(code) {
       '       mogging usage providers [--json] | usage refresh [--provider <id>]\n' +
       '       mogging usage set-key --provider <id> --stdin | usage clear-key --provider <id>\n' +
       '       mogging map [--budget N]   ranked repo map (signatures only) for the current checkout\n' +
+      '       mogging recall [--limit N] <task…>   team memories ranked against a task (pre-brief a pane)\n' +
       '       any verb: --dev   target a repo-checkout (dev-channel) app instead of the installed\n' +
       '                 release. Inside dev panes MOGGING_CHANNEL=dev is inherited — no flag needed.\n'
   )
@@ -222,6 +224,58 @@ function runMap(args) {
       api.finish(0)
     },
     { label: 'map' }
+  )
+}
+
+// --- mogging recall (ADR 0018, revision D) ---------------------------------------------------------
+// The recall door for shells and hooks: the SAME `brain.recall` read the MCP tool
+// and the launch injection use, over the SAME app endpoint. Prints one hit per
+// line — `slug<TAB>score<TAB>name — description` — so a script can pre-brief a
+// pane without MCP. Paneless by nature, so the ranking is always the EXACT
+// deterministic base (hybrid rides a workspace's consent, which a bare shell
+// does not carry). Exit codes: 0 ok (hits or honestly none) · 1 no brain /
+// no memories for this cwd (or rejected) · 2 usage · 3 app not running /
+// timeout · 4 auth refused — the shared code table, held.
+
+function runRecall(args) {
+  const rawLimit = usageFlag(args, '--limit')
+  let limit
+  if (rawLimit !== undefined) {
+    limit = Number(rawLimit)
+    if (!Number.isInteger(limit) || limit < 1 || limit > 20) {
+      process.stderr.write('mogging recall: --limit must be 1-20\n')
+      process.exit(2)
+    }
+  }
+  const i = args.indexOf('--limit')
+  const words = (i >= 0 ? [...args.slice(0, i), ...args.slice(i + 2)] : args).filter((a) => a !== '--')
+  const task = words.join(' ').trim()
+  if (!task) {
+    process.stderr.write('usage: mogging recall [--limit N] <task…>\n')
+    process.exit(2)
+  }
+  let root
+  try {
+    root = realpathSync(process.cwd())
+  } catch {
+    root = resolve(process.cwd())
+  }
+  withApp(
+    async (api) => {
+      const m = await api.call('brain.recall', { root, task, ...(limit !== undefined ? { limit } : {}) })
+      if (!m.ok || !Array.isArray(m.memories)) {
+        process.stderr.write('mogging recall: ' + (m.detail || m.reason || 'no brain for this cwd') + '\n')
+        api.finish(1)
+        return
+      }
+      for (const hit of m.memories) {
+        const score = typeof hit.score === 'number' ? hit.score.toFixed(3) : ''
+        const line = `${hit.slug}\t${score}\t${hit.name}${hit.description ? ' — ' + hit.description : ''}`
+        process.stdout.write(line + '\n')
+      }
+      api.finish(0)
+    },
+    { label: 'recall' }
   )
 }
 

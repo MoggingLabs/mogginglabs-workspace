@@ -137,13 +137,16 @@ export const MCP_BRAIN_WRITE_TOOL_NAMES = [
 /** The memory lens's read family (ADR 0018 step 09, Phase 2.5) — the team's
  *  `.memory/` wikilink graph, read project-wide (freshest copy across roots
  *  wins, root-labeled), searched and suggested DETERMINISTICALLY (FTS5 bm25;
- *  fixed-weight overlap scoring with the breakdown served back). Reads are
- *  never gated, like every brain read. */
+ *  fixed-weight overlap scoring with the breakdown served back). Revision D
+ *  adds recall_memories: curated memories ranked against a TASK's text —
+ *  deterministic base, hybrid only under the workspace's semantic consent,
+ *  drafts excluded always. Reads are never gated, like every brain read. */
 export const MCP_MEMORY_READ_TOOL_NAMES = [
   'search_memories',
   'get_memory',
   'find_backlinks',
-  'suggest_connections'
+  'suggest_connections',
+  'recall_memories'
 ] as const
 
 /** The memory lens's write family (ADR 0018 step 09; revision C adds the two
@@ -337,9 +340,10 @@ function validateMcpCatalog(raw: unknown): readonly McpToolDef[] {
 /** THE catalog: the 14 shipped browser tools (names/schemas verbatim) + 6
  *  control reads + 1 self-scoped declaration + 11 control writes + 10 brain
  *  reads (ADR 0018 steps 05–08: the graph seven, the repomap, the library
- *  lens) + 3 brain writes (step 07: the closed symbol-write set) + 4 memory
+ *  lens) + 3 brain writes (step 07: the closed symbol-write set) + 5 memory
  *  reads and 4 memory writes (step 09: the `.memory/` wikilink lens; revision
- *  C: promote/discard over the draft quarantine). Validated at load. */
+ *  C: promote/discard over the draft quarantine; revision D: recall_memories).
+ *  Validated at load. */
 export const MCP_TOOLS: readonly McpToolDef[] = validateMcpCatalog(catalogJson)
 
 export const findMcpTool = (name: string): McpToolDef | undefined => MCP_TOOLS.find((t) => t.name === name)

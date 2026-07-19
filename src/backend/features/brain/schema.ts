@@ -91,7 +91,14 @@ export interface BrainEdgeRow {
  *  curated, flagged on every hit); memory_draft_stats counts retention
  *  evictions per root (honesty accounting — the files are gone, the count is
  *  not). Drafts NEVER join memories/memory_links/memory_vectors: exclusion
- *  from suggestions, recall, and embedding is table topology, not discipline. */
+ *  from suggestions, recall, and embedding is table topology, not discipline.
+ *  v9 (ADR 0018 revision D) adds memory_usage: ONE row per slug of plain
+ *  integer counters — how many times the memory rode a recall answer and how
+ *  many times an agent read it in full. A DB COLUMN, never the file (usage is
+ *  derived observation, not team knowledge); slug-keyed like memory_vectors
+ *  (project-level — the freshest-copy election already unifies roots). The
+ *  human reads it to prune; the app NEVER decays or deletes by it. Excluded
+ *  from the canonical dump like every other derived-when fact. */
 export const BRAIN_GRAPH_DDL = `
 CREATE TABLE IF NOT EXISTS files (
   root TEXT NOT NULL, path TEXT NOT NULL, hash TEXT NOT NULL, lang TEXT NOT NULL,
@@ -166,6 +173,9 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_drafts_fts USING fts5(
 );
 CREATE TABLE IF NOT EXISTS memory_draft_stats (
   root TEXT PRIMARY KEY, evicted INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS memory_usage (
+  slug TEXT PRIMARY KEY, recalls INTEGER NOT NULL DEFAULT 0, reads INTEGER NOT NULL DEFAULT 0
 );
 `
 

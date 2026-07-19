@@ -5,12 +5,14 @@ import {
   EMBED_QUERY_MAX_CHARS,
   embedProviderLabel,
   embedTexts,
+  freshestBySlug,
   isBrainWriteVerb,
   isEmbedEndpoint,
   isMemoryWriteVerb,
   parseMemoryFilter,
   partitionOf,
   serveBrainRead,
+  serveBrainRecall,
   serveBrainWrite,
   serveMemorySearchSemantic,
   serveMemoryWrite,
@@ -28,6 +30,8 @@ import {
   type BrainEcosystemCount,
   type BrainLibEcosystem,
   type BrainMemorySkips,
+  type BrainMemoryUsageAnswer,
+  type BrainMemoryUsageRow,
   type BrainOverviewAnswer,
   type BrainSemConfig
 } from '@contracts'
@@ -136,7 +140,29 @@ export function brainRootForPane(pane: string): string | null {
  */
 export function handleBrainMcp(name: string, args: Record<string, unknown>, boundPane: string | undefined): BrainServeReply {
   const callerRoot = boundPane ? brainRootForPane(boundPane) : null
-  return serveBrainRead(ensureService(), name, args, callerRoot)
+  const reply = serveBrainRead(ensureService(), name, args, callerRoot)
+  // Revision D: a full agent read counts toward the usage truth (a db column,
+  // never the file). Deliberately ONLY on this wire — the Brain view's own
+  // memGet reads (handleBrainUiRead, the hover previews) do not count, because
+  // the human browsing their vault is not usage; the counter informs that
+  // same human's pruning.
+  if (name === 'brain.memGet' && reply.ok && typeof args.slug === 'string') {
+    bumpMemoryUsage(callerRoot ?? (typeof args.root === 'string' ? args.root : null), args.slug, 'read')
+  }
+  return reply
+}
+
+/** Count one usage event against a slug in the project `root` stands in —
+ *  best-effort by design: honesty accounting never blocks an answer. */
+function bumpMemoryUsage(root: string | null, slug: string, kind: 'recall' | 'read'): void {
+  if (!root) return
+  const h = ensureService().readHandle(root)
+  if ('reason' in h) return
+  try {
+    h.store.bumpMemoryUsage(slug, kind)
+  } catch {
+    /* a locked store loses one bump */
+  }
 }
 
 /** brain.<write verb> -> the write-tool name whose grant covers it — the board
@@ -258,6 +284,47 @@ export function setOrientAtLaunch(workspaceId: string, on: boolean): boolean {
   map[workspaceId] = on
   try {
     store.setSetting(ORIENT_KV, JSON.stringify(map))
+    return true
+  } catch {
+    return false
+  }
+}
+
+// ── The recall-at-launch knob (revision D): per-workspace, default ON ─────────
+// The orient knob's storage shape, verbatim. Absent = TRUE: a board-launched
+// pane's first prompt carries "what the team knows" — but ONLY while
+// orientAtLaunch is ON (the compose seam checks orient first; recall rides the
+// orientation block, it never replaces the opt-out).
+
+const RECALL_KV = 'brain.recallAtLaunch'
+
+function recallMap(): Record<string, boolean> {
+  try {
+    const raw = getSettingsStore()?.getSetting(RECALL_KV)
+    const parsed = raw ? (JSON.parse(raw) as unknown) : null
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const out: Record<string, boolean> = {}
+      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) out[k] = v === true
+      return out
+    }
+  } catch {
+    /* unreadable map reads as all-default */
+  }
+  return {}
+}
+
+export function recallAtLaunch(workspaceId: string): boolean {
+  const map = recallMap()
+  return workspaceId in map ? map[workspaceId] : true
+}
+
+export function setRecallAtLaunch(workspaceId: string, on: boolean): boolean {
+  const store = getSettingsStore()
+  if (!store || !workspaceId) return false
+  const map = recallMap()
+  map[workspaceId] = on
+  try {
+    store.setSetting(RECALL_KV, JSON.stringify(map))
     return true
   } catch {
     return false
@@ -583,6 +650,96 @@ export async function handleBrainMemSearchMcp(
   return serveMemorySearchSemantic(ensureService(), args, callerRoot, lens)
 }
 
+// ── The RECALL organ (ADR 0018 revision D): the task-ranked pre-brief ────────
+// One core, three doors: the MCP tool (a pane's own workspace governs the
+// blend), the launch channel (the anchor workspace does), and the CLI (which
+// rides the MCP door paneless — exact, always). The BRAINRECALL smoke's spy.
+let recallEmbedCalls = 0
+
+/**
+ * The recall blend's lens: non-null ONLY for a consenting workspace with its
+ * own configured endpoint whose task embed SUCCEEDED. Everything else — no
+ * workspace, no consent, no target, a failed embed — is null and recall stays
+ * EXACT: deterministic by default, and a pre-brief is a garnish that must
+ * never be held hostage by a BYO endpoint. The reply's `mode` labels whichever
+ * truth happened; a failed embed also fires the revision-A single-fire toast,
+ * so the fallback is honest, never silent.
+ */
+async function recallLensFor(wsId: string | undefined, task: string): Promise<MemorySemanticLens | null> {
+  if (!wsId || !semanticAllowed(wsId)) return null
+  const cfg = embedTargetOf(wsId)
+  if (!cfg.endpoint || !cfg.model || !isEmbedEndpoint(cfg.endpoint)) return null
+  recallEmbedCalls += 1
+  const embedded = await embedTexts(
+    { endpoint: cfg.endpoint, model: cfg.model, key: resolveEmbedKey(wsId) },
+    [task.slice(0, EMBED_QUERY_MAX_CHARS)]
+  )
+  if (!embedded.ok) {
+    fireSemFailure(wsId, embedded.detail)
+    return null
+  }
+  return {
+    mode: 'hybrid',
+    queryVec: embedded.vectors[0],
+    provider: embedProviderLabel(cfg.endpoint),
+    model: cfg.model
+  }
+}
+
+/** `brain.recall` over the agent wire — the recall_memories tool (and, through
+ *  a paneless app-endpoint session, `mogging recall`). Exported for the
+ *  BRAINRECALL smoke. */
+export async function handleBrainRecallMcp(
+  args: Record<string, unknown>,
+  boundPane: string | undefined
+): Promise<BrainServeReply> {
+  const callerRoot = boundPane ? brainRootForPane(boundPane) : null
+  const wsId = boundPane ? workspaceIdForPane(boundPane) : undefined
+  const task = typeof args.task === 'string' ? args.task : ''
+  const lens = task ? await recallLensFor(wsId, task) : null
+  return serveBrainRecall(ensureService(), args, callerRoot, lens)
+}
+
+/** `brain:recall` — the launch seam's door (06's compose seam asks here), with
+ *  the ANCHOR workspace named explicitly. Exported for the BRAINRECALL smoke. */
+export async function handleBrainRecallUi(req: unknown): Promise<BrainServeReply> {
+  const r = (req ?? {}) as { root?: unknown; task?: unknown; workspaceId?: unknown; limit?: unknown }
+  if (typeof r.root !== 'string' || !r.root || typeof r.task !== 'string' || !r.task) {
+    return { ok: false, reason: 'invalid' }
+  }
+  const wsId = typeof r.workspaceId === 'string' && r.workspaceId ? r.workspaceId : undefined
+  const lens = await recallLensFor(wsId, r.task)
+  const args: Record<string, unknown> = { task: r.task }
+  if (r.limit !== undefined) args.limit = r.limit
+  return serveBrainRecall(ensureService(), args, r.root, lens)
+}
+
+/**
+ * `brain:memUsage` — every curated memory (freshest-copy election) joined with
+ * its usage counters, most-used first. The view's "is this memory earning its
+ * place?" column; pruning stays the HUMAN'S verb — nothing here (or anywhere)
+ * auto-deletes by these numbers. Exported for the BRAINRECALL smoke.
+ */
+export function handleBrainMemUsage(req: unknown): BrainMemoryUsageAnswer {
+  const root = (req as { root?: unknown } | null | undefined)?.root
+  if (typeof root !== 'string' || !root) return { ok: false, reason: 'invalid' }
+  const h = ensureService().readHandle(root)
+  if ('reason' in h) return { ok: false, reason: h.reason, ...(h.detail ? { detail: h.detail } : {}) }
+  const roots = [...h.project.roots]
+  const written = freshestBySlug(h.store.memoriesForRoots(roots), roots)
+  const usage = new Map(h.store.memoryUsageRows().map((u) => [u.slug, u]))
+  const rows: BrainMemoryUsageRow[] = [...written.entries()].map(([slug, m]) => ({
+    slug,
+    name: m.name,
+    description: m.description,
+    recalls: usage.get(slug)?.recalls ?? 0,
+    reads: usage.get(slug)?.reads ?? 0,
+    root: m.root
+  }))
+  rows.sort((a, b) => b.recalls + b.reads - (a.recalls + a.reads) || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
+  return { ok: true, rows }
+}
+
 /**
  * `brain.libdocs` over the agent wire (08) — async because of its ONE optional
  * network path. The cache read itself is the serve layer's; this handler only
@@ -732,6 +889,7 @@ export function brainDebug(): {
   memoryRescans: () => number
   embedStats: () => { performed: number; skipped: number; failures: number; passes: number }
   semToasts: () => number
+  recallEmbedCalls: () => number
 } {
   return {
     openCount: () => service?.openCount() ?? 0,
@@ -741,7 +899,10 @@ export function brainDebug(): {
     drainEmits: () => service?.drainEmits() ?? 0,
     memoryRescans: () => service?.memoryRescans() ?? 0,
     embedStats: () => service?.memoryEmbedStats() ?? { performed: 0, skipped: 0, failures: 0, passes: 0 },
-    semToasts: () => semToastCount
+    semToasts: () => semToastCount,
+    // Revision D: how many times the RECALL path embedded a task — the exact
+    // world's zero-embed witness (the BRAINRECALL smoke's spy).
+    recallEmbedCalls: () => recallEmbedCalls
   }
 }
 
@@ -771,6 +932,18 @@ export function registerBrain(getWin: () => BrowserWindow | null, tickSource?: B
     const ok = typeof r.workspaceId === 'string' && !!r.workspaceId && setOrientAtLaunch(r.workspaceId, r.on === true)
     return { ok }
   })
+  // Revision D: the recall organ's three renderer doors — the launch seam's
+  // pre-brief, its per-workspace knob, and the usage-truth table.
+  ipcMain.handle(BrainChannels.recall, (_e, req: unknown) => handleBrainRecallUi(req))
+  ipcMain.handle(BrainChannels.recallGet, (_e, wsId: unknown) =>
+    typeof wsId === 'string' && wsId ? recallAtLaunch(wsId) : true
+  )
+  ipcMain.handle(BrainChannels.recallSet, (_e, req: unknown) => {
+    const r = (req ?? {}) as { workspaceId?: unknown; on?: unknown }
+    const ok = typeof r.workspaceId === 'string' && !!r.workspaceId && setRecallAtLaunch(r.workspaceId, r.on === true)
+    return { ok }
+  })
+  ipcMain.handle(BrainChannels.memUsage, (_e, req: unknown) => handleBrainMemUsage(req))
   ipcMain.handle(BrainChannels.libFetchGet, (_e, wsId: unknown) =>
     typeof wsId === 'string' && wsId ? libFetchAllowed(wsId) : false
   )

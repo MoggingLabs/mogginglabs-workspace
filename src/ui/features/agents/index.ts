@@ -26,6 +26,7 @@ import {
 import { getTelemetry } from '../../core/telemetry'
 import { showToast } from '../../components'
 import { agentsClient } from './agents.client'
+import { composeFirstPrompt } from './launch'
 import { getAgentRegistry, onAgentRegistryChange, refreshAgentRegistry } from '../../core/agents/registry'
 
 /**
@@ -538,7 +539,11 @@ export const agentsFeature: UiFeature = {
         // Smoke/dev shim: replay a detection event exactly as the backend sends it, so a
         // gate can prove the whole typed-launch path without a real agent process.
         detected: (ev: AgentDetectedEvent) => onAgentDetected(ev),
-        session: (paneId: number) => getPaneAgentSession(paneId as PaneId) ?? null
+        session: (paneId: number) => getPaneAgentSession(paneId as PaneId) ?? null,
+        // Smoke/dev shim: the compose seam itself (ADR 0018/06 + revision D) — the
+        // BRAINRECALL gate's precise byte-budget witness (capture reflows lines).
+        compose: (task: string, root: string, anchorWorkspaceId: string) =>
+          composeFirstPrompt({ task, root, anchorWorkspaceId })
       }
     }
   }

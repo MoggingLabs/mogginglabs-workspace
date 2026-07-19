@@ -14,7 +14,7 @@ import { runtimeDir as clientRuntimeDir } from './daemon-client'
 import { recordTrail } from './trail'
 import { MCP_BROWSER_TOOL_NAMES, type BrowserAgentVerb, type BrowserAgentVerbName } from '@contracts'
 import { applyCardPatch, boardForPane, commentCard, createCard } from './board'
-import { handleBrainLibDocsMcp, handleBrainMcp, handleBrainMemSearchMcp, handleBrainWriteMcp, handleMemoryWriteMcp, isBrainWriteVerb, isMemoryWriteVerb } from './brain'
+import { handleBrainLibDocsMcp, handleBrainMcp, handleBrainMemSearchMcp, handleBrainRecallMcp, handleBrainWriteMcp, handleMemoryWriteMcp, isBrainWriteVerb, isMemoryWriteVerb } from './brain'
 
 /**
  * The agent-control transport (Phase-6/05b). Main opens a token-authed LOCAL
@@ -470,6 +470,16 @@ export function startMcpEndpoint(): void {
           // endpoint), so the verb routes through the ONE async handler.
           if (msg.name === 'brain.memSearch') {
             void handleBrainMemSearchMcp(msg.args ?? {}, boundPane)
+              .then((r) => sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n'))
+              .catch((e) => sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: rpcFailure(e) }) + '\n'))
+            continue
+          }
+          // ADR 0018 revision D: recall_memories ranks curated memories against
+          // a TASK — deterministic base always; the caller workspace's semantic
+          // consent silently upgrades the blend to hybrid (labeled per the lens
+          // law), so the verb routes through the ONE async handler.
+          if (msg.name === 'brain.recall') {
+            void handleBrainRecallMcp(msg.args ?? {}, boundPane)
               .then((r) => sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n'))
               .catch((e) => sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: rpcFailure(e) }) + '\n'))
             continue

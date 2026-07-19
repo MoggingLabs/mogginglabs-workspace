@@ -11299,6 +11299,42 @@ body.pane-dragging * {
   font-family: inherit;
 }
 
+/* Usage truth (revision D): the Memories section — every curated memory with
+   its recall/read count, sortable. Reuses the drafts list's row anatomy; the
+   count is a quiet numeric chip (data for the human's pruning, not an alarm). */
+.brain-memuse {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-5);
+}
+.brain-memuse-sortrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.brain-memuse-sort {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-mid);
+  font: inherit;
+  font-size: var(--fs-11);
+  padding: var(--sp-1) var(--sp-2);
+  cursor: pointer;
+}
+.brain-memuse-sort.is-active {
+  background: var(--bg-inset);
+  color: var(--text-hi);
+  border-color: var(--border-hi, var(--border));
+}
+.brain-memuse-count {
+  color: var(--text-mid);
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* Distillation (revision C): the consent card's model line. */
 .brain-distill-model {
   display: flex;

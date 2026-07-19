@@ -8,9 +8,11 @@
 // The last line is the honesty stamp: `[repomap: generation N, X/Y files]` —
 // what you see, out of what exists, as of which index.
 
-export const REPOMAP_DEFAULT_BUDGET = 4000
-export const REPOMAP_MAX_BUDGET = 16000
-export const REPOMAP_MIN_BUDGET = 200
+// The budget constants live in @contracts since revision D (the launch seam
+// shares them with the renderer); re-exported here so every reader keeps its door.
+import { REPOMAP_DEFAULT_BUDGET, REPOMAP_MAX_BUDGET, REPOMAP_MIN_BUDGET } from '@contracts'
+
+export { REPOMAP_DEFAULT_BUDGET, REPOMAP_MAX_BUDGET, REPOMAP_MIN_BUDGET }
 
 export interface RepoMapNodeRow {
   file: string

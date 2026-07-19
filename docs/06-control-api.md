@@ -14,6 +14,7 @@ tmux-grade scriptability from any shell (Phase-3/01). The `mogging` CLI talks to
 | `mogging capture <pane> [--lines N]` | Print the pane's retained scrollback tail (≤ 10000 lines, default 1000) to **stdout** | `0` ok · `1` unknown pane |
 | `mogging cwd [path]` | Declare the current pane's primary checkout/worktree (`.` by default). The next shell prompt retires it. | `0` ok · `1` rejected · `2` invalid/outside pane · `3` unavailable · `4` auth refused |
 | `mogging map [--budget N]` | Print the workspace brain's ranked repo map for the current checkout to **stdout** — file paths + definition signatures under a character budget (200–16000, default 4000), stamped `[repomap: generation N, X/Y files]`. Rides the app endpoint (the brain lives app-side). | `0` ok · `1` no brain for this cwd |
+| `mogging recall [--limit N] <task…>` | Print the team memories ranked against a task's text to **stdout**, one hit per line (`slug` TAB `score` TAB `name — description`, best first, ≤ 20) — the same deterministic `recall_memories` ranking agents get, so scripts and hooks can pre-brief a pane without MCP. Rides the app endpoint. | `0` ok · `1` no brain / no memories for this cwd |
 | `mogging [<dir>]` | Open/focus a workspace for a directory (deep link) | `0` |
 | `mogging notify --event <e>` | Raise the current pane's attention (Phase-2/04; always exits 0 — a hook must never fail its agent) | `0` |
 

@@ -795,6 +795,24 @@
     "verb": "brain.memSuggest"
   },
   {
+    "name": "recall_memories",
+    "title": "Recall team memories for a task",
+    "description": "Rank the team's CURATED memories against a task's text — 'what do we know about this?' in one call. Deterministic by default: FTS5 bm25 over the task's terms plus fixed-weight tag-match and backlink-count boosts, with the full breakdown served per hit so the ranking is auditable. Read project-wide (freshest copy wins, root-labeled), capped small (default 5, max 20) — a pre-brief, never a dump; get_memory reads any hit in full. When this workspace has enabled semantic memory recall (its own embedding endpoint), the answer silently upgrades to a hybrid blend — mode 'hybrid', every hit labeled probabilistic with the provider and model; without consent (or if the endpoint fails) the answer stays exact and says so. Auto-captured DRAFTS never appear in any mode. Board-launched panes receive these hits automatically in their first prompt when the workspace's recall-at-launch setting is on.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task": { "type": "string", "description": "The task's text — plain prose; terms are matched OR-wise (a task is not a conjunction)." },
+        "limit": { "type": "number", "description": "Max hits, 1-20 (default 5)." },
+        "root": { "type": "string", "description": "Absolute project root — ONLY for sessions outside a pane." }
+      },
+      "required": ["task"]
+    },
+    "family": "brain",
+    "access": "read",
+    "upstream": "app",
+    "verb": "brain.recall"
+  },
+  {
     "name": "create_memory",
     "title": "Create team memory",
     "description": "Write ONE new memory into your own checkout's .memory/ — a plain markdown file the whole team owns once git merges it. The name is kebab-cased into the slug/filename (hostile characters sanitize away; a collision refuses 'exists'). The body is markdown; [[wikilinks]] to other slugs — written or not yet written — build the graph. Lands atomically and is indexed before the reply, so your next search already finds it. Keep memories small and factual: one decision, one gotcha, one pointer.",

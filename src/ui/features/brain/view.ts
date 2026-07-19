@@ -3,12 +3,13 @@ import { Button, Card, EmptyState, Pill, SectionHeader, Spinner, clear, createTo
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { requestExplorerReveal } from '../../core/shell/explorer-reveal-port'
 import { getTelemetry } from '../../core/telemetry'
-import type { BrainDraftRow } from '@contracts'
+import type { BrainDraftRow, BrainMemoryUsageRow } from '@contracts'
 import {
   brainDraftDiscard,
   brainDraftGet,
   brainDraftPromote,
   brainDrafts,
+  brainMemUsage,
   brainOverview,
   brainRead,
   brainRebuild,
@@ -19,6 +20,8 @@ import {
   libFetchSet,
   orientGet,
   orientSet,
+  recallGet,
+  recallSet,
   semGet,
   semSet,
   type BrainBacklinkOut,
@@ -92,6 +95,10 @@ export function createBrainView(): BrainView {
   let draftRows: BrainDraftRow[] = []
   let draftsEvicted = 0
   let openDraft: (BrainDraftRow & { body: string }) | null = null
+  // Usage truth (revision D): every curated memory with its recall/read
+  // counts — the human's pruning table, sortable, never acted on by the app.
+  let usageRows: BrainMemoryUsageRow[] = []
+  let usageSort: 'uses' | 'name' = 'uses'
   let inspector: InspectorModel | null = null
   let searchHits: SearchHit[] = []
   let searchSelected = 0
@@ -149,6 +156,14 @@ export function createBrainView(): BrainView {
     hint: 'The ranked repomap, prepended to a card’s task — the same setting Settings › Terminal owns.',
     onChange: () => void applyConsent(orientToggle, orientSet, pullConsents)
   })
+  // Revision D: the recall organ's knob — active only while the map toggle
+  // above is ON (recall rides the orientation block, it never replaces the
+  // opt-out). Titles + descriptions only, one shared budget with the map.
+  const recallToggle = createToggleRow({
+    label: 'New agents also start with what the team knows',
+    hint: 'The task’s top recalled memories — titles and descriptions only, inside the map’s own character budget. Applies only while the map toggle is on.',
+    onChange: () => void applyConsent(recallToggle, recallSet, pullConsents)
+  })
   const libFetchToggle = createToggleRow({
     label: 'Agents may fetch library docs from package registries',
     hint: 'Off by default. Exact pinned versions only, size-capped, HTTPS to the registry — the same permission Settings › Privacy owns.',
@@ -187,7 +202,7 @@ export function createBrainView(): BrainView {
       header: SectionHeader({ title: 'Consents', caption: 'Per-workspace. Two-way with Settings — one stored truth.' }),
       class: 'brain-consent-card'
     },
-    [orientToggle.el, libFetchToggle.el, semToggle.el, distillToggle.el, distillModelRow]
+    [orientToggle.el, recallToggle.el, libFetchToggle.el, semToggle.el, distillToggle.el, distillModelRow]
   )
 
   const lensBtn = (lens: 'graph' | 'reader', label: string, hint: string): HTMLButtonElement =>
@@ -294,12 +309,16 @@ export function createBrainView(): BrainView {
   function syncConsentAvailability(): void {
     const id = wsId()
     orientToggle.setDisabled(!id)
+    // Recall rides the orientation block: with orient OFF the knob is moot,
+    // and a disabled row says so louder than a toggle that silently does nothing.
+    recallToggle.setDisabled(!id || !orientToggle.checked())
     libFetchToggle.setDisabled(!id)
     semToggle.setDisabled(!id)
     distillToggle.setDisabled(!id)
     distillModelInput.disabled = !id
     if (!id) {
       orientToggle.setChecked(false)
+      recallToggle.setChecked(false)
       libFetchToggle.setChecked(false)
       semToggle.setChecked(false)
       distillToggle.setChecked(false)
@@ -310,6 +329,7 @@ export function createBrainView(): BrainView {
     const id = wsId()
     try {
       orientToggle.setChecked(!!id && (await orientGet(id)))
+      recallToggle.setChecked(!!id && (await recallGet(id)))
       libFetchToggle.setChecked(!!id && (await libFetchGet(id)))
       semToggle.setChecked(!!id && (await semGet(id)))
       const distill = id ? await distillGet(id) : { on: false, model: '' }
@@ -611,11 +631,86 @@ export function createBrainView(): BrainView {
     return host
   }
 
+  async function refreshUsage(): Promise<void> {
+    if (!projectRoot) {
+      usageRows = []
+      return
+    }
+    const a = await brainMemUsage(projectRoot)
+    usageRows = a.ok ? a.rows : []
+  }
+
+  /** The Memories section (revision D): every curated memory with its usage
+   *  truth — recalls + reads as one sortable count. The numbers inform the
+   *  HUMAN's pruning (a dead memory is a `git rm` in their own editor); the
+   *  app never decays or deletes by them. Memory text lands via textContent. */
+  function memoriesSection(): HTMLElement {
+    const host = el('section', { class: 'brain-memuse', ariaLabel: 'Memories' })
+    host.append(
+      SectionHeader({
+        title: `Memories (${usageRows.length})`,
+        caption: 'How often each memory was recalled or read by agents — prune what never earns its place.'
+      })
+    )
+    if (!usageRows.length) {
+      host.append(el('p', { class: 'brain-drafts-none', text: 'No team memories yet. Agents write them (create_memory), or drop .md files into .memory/.' }))
+      return host
+    }
+    const sortBtn = (key: 'uses' | 'name', label: string): HTMLButtonElement => {
+      const b = el('button', {
+        class: 'brain-memuse-sort',
+        type: 'button',
+        text: label,
+        title: key === 'uses' ? 'Most recalled/read first' : 'Alphabetical by name',
+        onClick: () => {
+          usageSort = key
+          if (mode === 'reader') void renderReaderPane()
+        }
+      })
+      b.setAttribute('aria-pressed', String(usageSort === key))
+      b.classList.toggle('is-active', usageSort === key)
+      return b
+    }
+    host.append(el('div', { class: 'brain-memuse-sortrow', role: 'group', ariaLabel: 'Sort memories' }, [
+      el('span', { class: 'brain-depth-label', text: 'Sort' }),
+      sortBtn('uses', 'Most used'),
+      sortBtn('name', 'Name')
+    ]))
+    const rows = [...usageRows]
+    if (usageSort === 'name') rows.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.slug < b.slug ? -1 : 1))
+    // 'uses' keeps the channel's own order: (recalls + reads) desc, slug asc.
+    const list = el('ul', { class: 'brain-drafts-list brain-memuse-list' })
+    for (const r of rows) {
+      list.append(
+        el('li', { class: 'brain-draft-row brain-memuse-row', dataset: { slug: r.slug, uses: String(r.recalls + r.reads) } }, [
+          el(
+            'button',
+            {
+              class: 'brain-draft-open',
+              type: 'button',
+              title: `Open ${r.slug}`,
+              onClick: () => readerDeps.onNavigate(r.slug)
+            },
+            [el('span', { class: 'brain-draft-name', text: r.name }), el('span', { class: 'brain-draft-desc', text: r.description })]
+          ),
+          el('span', {
+            class: 'brain-memuse-count',
+            text: `${r.recalls + r.reads}×`,
+            title: `${r.recalls} recall${r.recalls === 1 ? '' : 's'} · ${r.reads} full read${r.reads === 1 ? '' : 's'} — counted, never decayed`
+          })
+        ])
+      )
+    }
+    host.append(list)
+    return host
+  }
+
   async function renderReaderPane(): Promise<void> {
     clear(readerHost)
     if (!reader) {
-      await refreshDrafts()
+      await Promise.all([refreshDrafts(), refreshUsage()])
       readerHost.append(draftsSection())
+      readerHost.append(memoriesSection())
       readerHost.append(
         EmptyState({
           icon: 'bookmark',
@@ -925,6 +1020,7 @@ export function createBrainView(): BrainView {
       draftRows = []
       draftsEvicted = 0
       openDraft = null
+      usageRows = []
       inspector = null
       searchHits = []
       searchInput.value = ''
@@ -1042,11 +1138,38 @@ export function createBrainView(): BrainView {
     },
     consents: () => ({
       orient: orientToggle.checked(),
+      recall: recallToggle.checked(),
+      recallDisabled: recallToggle.input.disabled,
       libFetch: libFetchToggle.checked(),
       semantic: semToggle.checked(),
       distill: distillToggle.checked(),
       distillModel: distillModelInput.value
     }),
+    // Usage truth (revision D) — the data the Memories section renders, fresh.
+    usage: async () => {
+      await refreshUsage()
+      return usageRows
+    },
+    usageProbe: () => {
+      const section = readerHost.querySelector('.brain-memuse')
+      return {
+        present: !!section,
+        sort: usageSort,
+        rows: section
+          ? [...section.querySelectorAll('.brain-memuse-row')].map((r) => ({
+              slug: (r as HTMLElement).dataset.slug ?? '',
+              uses: Number((r as HTMLElement).dataset.uses ?? -1)
+            }))
+          : []
+      }
+    },
+    setUsageSort: (key: string) => {
+      if (key === 'uses' || key === 'name') {
+        usageSort = key
+        if (mode === 'reader') void renderReaderPane()
+      }
+      return usageSort
+    },
     // The Drafts section's probes (revision C) — real state, real doors.
     drafts: async () => {
       await refreshDrafts()

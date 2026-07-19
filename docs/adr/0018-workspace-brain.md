@@ -10,7 +10,11 @@
   **Revision C (2026-07-19)** adds DUAL MEMORY, AUTO-CAPTURED: structured drafts
   from signals the app already watches, quarantined in `.memory/drafts/` until a
   granted promote — and grows the closed memory-write set by exactly the two
-  draft verbs (`promote_memory`, `discard_memory`).
+  draft verbs (`promote_memory`, `discard_memory`). **Revision D (2026-07-19)**
+  adds the RECALL organ: `recall_memories` ranks curated memories against a
+  task (deterministic base, hybrid only under revision A's consent), the
+  launch orientation gains its second budgeted section, and per-slug usage
+  counters inform the human — no automatic forgetting, ever.
 - **Relates to:** ADR 0004 (layering: contracts / backend / main), ADR 0005 (what may
   reach telemetry), ADR 0008 §b (protocols, not plugins — nothing new listens),
   docs/[02-mvp-and-roadmap.md](../02-mvp-and-roadmap.md) §Phase 12 (the roadmap entry
@@ -377,6 +381,66 @@ breakdown; discard refuses on the promoted slug and deletes the draft;
 distill OFF spies zero provider calls and ON (FAKE) lands labeled prose over
 the preserved structure with zero sockets; a cap of N with N+5 landings
 counts the evictions; and `.memory/drafts/` holds only `.md` files.
+
+## Revision D — the RECALL organ (memory reaches the agent)
+
+Steps 09–C built a memory the team can WRITE and SEARCH; what was missing is
+memory that ARRIVES: a new pane starting already knowing what the team
+learned, and a working agent asking "what do we know about this?" in one
+call. `recall_memories { task, limit? }` joins the read family — CURATED
+memories ranked against the task's text — and the 06 orientation block gains
+a second fenced section carrying the top hits. Four clauses, each structural:
+
+- **(D1) Deterministic by default.** The base rank is arithmetic: FTS5 bm25
+  over the task's terms (OR-joined — a task is prose, not a conjunction) plus
+  fixed-weight boosts for matched tags and for backlink count (capped, so
+  popularity seasons relevance and never replaces it), and the full breakdown
+  rides every hit — components that SUM to the score (the suggest engine's
+  auditability law). Under revision A's lens law, the workspace's semantic
+  consent upgrades the blend to HYBRID (the fixed-weight RRF, every hit
+  labeled `probabilistic` with provider + model); no consent, no config, or a
+  failed embed falls back to exact and the reply's `mode` says which truth
+  happened. Drafts appear in NO mode — revision C's quarantine is table
+  topology, and recall reads only the curated tables.
+- **(D2) The injection stays visible and bounded.** The launch section —
+  "what the team knows" — carries `name — description` lines ONLY (a body
+  byte in a first prompt is a review rejection; the pane can `get_memory`
+  what it wants), closed by an attribution stamp naming mode + generation.
+  ONE character budget — the repomap's own constant — binds BOTH sections:
+  memories fill first (cheaper than signatures), the map takes the remainder
+  and yields entirely below its own minimum, so recall can never inflate
+  spawn cost past 06's ceiling. The knob is `brain.recallAtLaunch` (per
+  workspace, default ON) and it is ACTIVE ONLY under `orientAtLaunch` —
+  recall rides the orientation block, it never outlives the opt-out. The
+  bytes are typed visibly through the same send path as the task, never a
+  hidden channel.
+- **(D3) Usage truth, not usage judgment — a stance under revision A's lens
+  law.** Every slug a recall answer carries and every full agent read
+  (`get_memory` over the wire) bumps a per-slug counter — a DB COLUMN
+  (`memory_usage`), never the file, because usage is derived observation, not
+  team knowledge. The Brain view shows the counts, sortable, so the HUMAN
+  prunes dead memories. **There is NO automatic decay and NO probabilistic
+  forgetting: the app never deletes or demotes a curated memory by these
+  numbers** — the counters inform a human verb (`git rm`), exactly as C2 made
+  deletion a human verb. The view's own reader deliberately does not count:
+  the human browsing their vault is not usage; the counter informs that same
+  human.
+- **(D4) One ranking, three doors.** The MCP tool, the launch channel, and
+  `mogging recall <task…>` (docs/06's register: `0` ok · `1` no brain ·
+  `2` usage · `3` app down) all serve the ONE dispatch — scripts and hooks
+  can pre-brief a pane without MCP, and no door ranks differently from
+  another. The CLI is paneless by nature, so it is always the exact base.
+
+Proven by **BRAINRECALL** (`MOGGING_BRAINRECALL`, verdict
+`out/brainrecall-result.json`): a task naming a fixture term ranks its memory
+first with the breakdown's components summing and the vocabulary-sharing
+draft absent; a board launch with both toggles ON types map + memories
+sections — combined within the one budget, attribution stamped — while
+recall OFF keeps the map only and orient OFF injects nothing; hybrid answers
+only under consent (FAKE embedder, labeled) and the exact world embeds
+nothing (spied, zero sockets); no body sentinel ever reaches a composed
+prompt; two recalls + one `get_memory` land exact per-slug counter deltas in
+the view's data; and the CLI's exit codes hold the shared table.
 
 ## Research lineage
 

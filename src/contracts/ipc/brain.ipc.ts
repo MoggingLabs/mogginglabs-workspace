@@ -16,6 +16,15 @@ export const BRAIN_MAX_FILE_BYTES = 1_048_576
  *  `too-large` refusal — a symbol edit is a scalpel, never a file dump. */
 export const BRAIN_WRITE_MAX_BODY_BYTES = 65_536
 
+// ── The repomap budget (ADR 0018 step 06) ────────────────────────────────────
+// CHARACTER budgets (deterministic and CLI-neutral, never tokens). Moved here
+// from the render layer in revision D: the launch seam's SHARED injection
+// budget IS the map's default — the renderer needs the same constant the
+// serve layer clamps by, and one number typed twice is how drift starts.
+export const REPOMAP_DEFAULT_BUDGET = 4000
+export const REPOMAP_MAX_BUDGET = 16000
+export const REPOMAP_MIN_BUDGET = 200
+
 // ── Libraries (ADR 0018 step 08): version truth + docs custody ───────────────
 /** Stored README cap per (name, version) doc row — disk or registry alike. */
 export const BRAIN_LIBDOC_README_CAP = 65_536
@@ -226,3 +235,45 @@ export interface BrainOverview {
 }
 
 export type BrainOverviewAnswer = BrainOverview | BrainRefusal
+
+// ── The RECALL organ (ADR 0018 revision D): memory reaches the agent ─────────
+// `recall_memories` ranks CURATED memories against a task's text — the read a
+// cold pane is pre-briefed with and a working agent asks "what do we know?"
+// through. Deterministic by default (FTS bm25 + fixed-weight tag and backlink
+// boosts, breakdown served); the semantic lens's consent upgrades the blend to
+// hybrid, labeled. Drafts are excluded ALWAYS (revision C's quarantine is
+// table topology, not a filter).
+
+/** Recall page caps — small by design: a pre-brief, never a dump. */
+export const MEMORY_RECALL_DEFAULT_LIMIT = 5
+export const MEMORY_RECALL_MAX_LIMIT = 20
+
+/**
+ * `brain:recall` — the launch seam's door (and the smoke's): the same serve
+ * verb the MCP tool answers, keyed by an explicit root. `workspaceId` names
+ * whose semantic-lens consent may upgrade the blend to hybrid — absent (or
+ * unconsenting) stays exact, and a failed embed FALLS BACK to exact, labeled
+ * truthfully in the reply's `mode` (recall is a garnish, never a blocker).
+ */
+export interface BrainRecallRequest {
+  root: string
+  task: string
+  workspaceId?: string
+  limit?: number
+}
+
+/** One curated memory's usage truth (`brain:memUsage`) — plain integers the
+ *  HUMAN reads to prune dead memories. Counted, never decayed: the app has no
+ *  automatic forgetting and never deletes a curated memory (revision D). */
+export interface BrainMemoryUsageRow {
+  slug: string
+  name: string
+  description: string
+  /** Times this memory rode a recall answer (tool, CLI, or spawn injection). */
+  recalls: number
+  /** Times an agent read it in full over the wire (`get_memory`). */
+  reads: number
+  root: string
+}
+
+export type BrainMemoryUsageAnswer = { ok: true; rows: BrainMemoryUsageRow[] } | BrainRefusal

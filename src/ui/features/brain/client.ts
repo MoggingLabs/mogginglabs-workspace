@@ -5,6 +5,7 @@ import {
   type BrainDistillConfig,
   type BrainDraftRow,
   type BrainDraftsAnswer,
+  type BrainMemoryUsageAnswer,
   type BrainOverviewAnswer,
   type BrainSemConfig
 } from '@contracts'
@@ -91,6 +92,24 @@ export const orientSet = (workspaceId: string, on: boolean): Promise<boolean> =>
   getBridge()
     .invoke(BrainChannels.orientSet, { workspaceId, on })
     .then((v) => (v as { ok?: boolean } | undefined)?.ok === true)
+
+// Revision D: the recall organ's knob + the usage-truth table. Recall itself
+// has no wrapper here on purpose — the VIEW never recalls (recall bumps the
+// usage counters; a browsing human must not); the launch seam invokes the
+// channel directly.
+
+export const recallGet = (workspaceId: string): Promise<boolean> =>
+  getBridge()
+    .invoke(BrainChannels.recallGet, workspaceId)
+    .then((v) => v === true)
+
+export const recallSet = (workspaceId: string, on: boolean): Promise<boolean> =>
+  getBridge()
+    .invoke(BrainChannels.recallSet, { workspaceId, on })
+    .then((v) => (v as { ok?: boolean } | undefined)?.ok === true)
+
+export const brainMemUsage = (root: string): Promise<BrainMemoryUsageAnswer> =>
+  getBridge().invoke(BrainChannels.memUsage, { root }) as Promise<BrainMemoryUsageAnswer>
 
 export const libFetchGet = (workspaceId: string): Promise<boolean> =>
   getBridge()
