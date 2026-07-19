@@ -226,7 +226,18 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
         const runs = blocks.filter((b) => b.command === ARC_COMMAND)
         return runs.length >= 2 && runs.some((b) => b.exitCode === 1) && runs.some((b) => b.exitCode === 0)
       })
-      if (!arcTracked) throw new Error('the arc pane never tracked its blocks')
+      if (!arcTracked) {
+        // Shell testimony before the verdict (the house debugging law: only the pane's own
+        // bytes prove what the shell did) — the arc first went red on macos CI with no
+        // evidence beyond this error string.
+        const testimony = await cli(['capture', String(paneA2)])
+        const blocksNow = (await ES<{ command: string; exitCode?: number }[]>(paneBlocks)) ?? []
+        throw new Error(
+          'the arc pane never tracked its blocks — blocks=' +
+            JSON.stringify(blocksNow).slice(0, 500) +
+            ' capture(code ' + testimony.code + ')=' + JSON.stringify(testimony.stdout).slice(0, 1500)
+        )
+      }
       // Session end = the shell process exits; markDead hands the ladder over.
       await cli(['send', String(paneA2), 'exit'])
       const sessionLanded = await waitFor(() => draftFiles().some((f) => f.startsWith('session-')))
