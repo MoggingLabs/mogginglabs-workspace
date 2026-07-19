@@ -87,11 +87,15 @@ self-host). Wedge: *no credits, no metering — bring the agents you already
 pay for*, for **agency developers**. Two things drive the tiers: the ladder
 splits Free/Pro (individual scale, honor-system) from Team/Enterprise
 (shared, server-backed, actually enforceable); and **integrations are FREE**
-(funnel, not paywall) — the paid lever is scale + sync + team. Part II's
-entitlement tiers align to **Free/Pro/Team/Enterprise** with **org + per-seat**
-concepts; FREE_ENTITLEMENTS tightens to 2 workspaces x 4 panes (from the
-shipped 16-pane baseline). **Only Free + Pro are deliverable at v1** — Team/
-Enterprise launch as early-access / contact-us, framed in-development.
+(funnel, not paywall) — the paid lever is scale.
+
+> **The mechanism lives in `TIERS.md`, and it OVERRIDES the prose above.**
+> Only **Free + Pro** are deliverable at v1. **Team/Enterprise are
+> waitlist**: no Stripe product, no price id, no entitlement path, no org
+> or seat schema — so they carry contact-us, never a checkout button.
+> **Cross-machine sync is NOT built in this pack** and may appear only
+> labelled in-development; it is not a delivered Pro bullet. Pro's real
+> levers at v1 are unlimited workspaces, 16 panes, and 3 devices.
 
 ## 6. Blog — a typed file-based model, extend it
 

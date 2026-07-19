@@ -12,18 +12,19 @@ regress them. Work in `../MoggingLabs-Website`. Extend, never rebuild.
    the current release audit (never invent — trace each to the Workspace
    git truth, the site's own rule). Retire "v0.4.0" and any claim the
    product outgrew.
-2. **The pricing page** (`/pricing`): render the DECIDED tiers from
-   `PRICING-STRATEGY.md` — **Free** (2 workspaces, 4 panes each, **all
-   integrations**, community) · **Pro $19/mo ($15 annual)** · **Team
-   $29/user/mo ($24 annual), 2+ seats** · **Enterprise (contact sales)** —
-   on the "no credits, no metering, BYO agents" wedge for agency devs.
-   **Team + Enterprise are roadmap → frame as early-access / contact-us,
-   "in development"** per the site's truth rule (only Free + Pro are live).
-   Keep FAQPage schema honest; no competitor names, no fake ratings. Update
-   `src/lib/site.ts` if the CTA or roster moved.
+2. **The pricing page** (`/pricing`): render from **`TIERS.md`** (the
+   matrix, not prose) — **Free** (2 workspaces, 4 panes, all integrations)
+   · **Pro $19/mo ($15 annual)** (unlimited workspaces, 16 panes, 3
+   devices) · **Team $29/seat** · **Enterprise** — on the "no credits, no
+   metering, BYO agents" wedge. **Team + Enterprise are WAITLIST:
+   contact-us only, NO checkout button** (no Stripe product exists; a buy
+   button that cannot transact is the worst version of this). **Any benefit
+   without a `TIERS.md` row or flag is labelled in-development —
+   `cross-machine sync` specifically, which this pack does NOT build.**
+   Keep FAQPage schema honest. Update `src/lib/site.ts` if the CTA moved.
 3. **Fill real gaps** the freshness audit (17) found: any shipped
-   capability with no page or a thin one (the Brain deserves a /learn spoke
-   or a docs section; accounts/BYO-neutrality deserves a trust surface).
+   capability with no page or a thin one (the Brain deserves a /learn
+   spoke or a docs section; accounts/BYO-neutrality a trust surface).
    New page → new `metadata`, `json-ld.tsx` schema, `sitemap.ts` +
    `llms.txt` entry in the SAME step (their global check).
 4. **Honesty pass**: integrations stay framed as in-development where they
@@ -42,11 +43,12 @@ regress them. Work in `../MoggingLabs-Website`. Extend, never rebuild.
   `WEB-FINDINGS.md` (resolved) · `CHECKLIST.md` (mark 18)
 
 ## Definition of Done
-- No public page states a stale product: the Brain + accounts + current
-  pricing (Free/Pro/Team/Enterprise) are present and true; every WEB-FINDINGS
-  freshness gap is closed or deferred with reason.
-- Every new/changed page carries valid structured data and is in `sitemap.ts`
-  + `llms.txt`; the frozen SEO gates + Lighthouse 100 hold.
+- No public page states a stale product: Brain + accounts + pricing true;
+  **every sellable claim traces to a `TIERS.md` row, everything else is
+  labelled in-development (sync, Team, Enterprise) with no checkout
+  path**; every WEB-FINDINGS gap closed or deferred with reason.
+- Every new/changed page carries valid structured data and is in
+  `sitemap.ts` + `llms.txt`; frozen SEO gates + Lighthouse 100 hold.
 - Copy obeys the laws (no em-dash, no competitor, no invented number, no
   fake rating); pricing matches `PRICING-STRATEGY.md` exactly.
 

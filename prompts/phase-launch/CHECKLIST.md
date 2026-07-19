@@ -65,7 +65,10 @@ everything this pack builds is $0.
 - [ ] The authN/authZ split ratified as binding (IdP = identity only; our backend mints DPoP-bound tokens).
 - [ ] IdP = Auth.js/Clerk on the Neon stack chosen (WorkOS AuthKit named as the Enterprise-tier SSO swap); Supabase Auth noted as still viable.
 - [ ] Billing = Stripe ratified (already the deployed rail); Stripe-Tax-now + optional-later Polar/Paddle MoR wrapper recorded with the tax tradeoff.
-- [ ] Backend location = new routes on the website's Neon/Vercel stack (NOT a greenfield `server/`); pricing = Free/Pro/Team/Enterprise (Team per-seat, 2+; Free = 2 workspaces x 4 panes + all integrations).
+- [ ] Backend location = new routes on the website's Neon/Vercel stack (NOT a greenfield `server/`).
+- [ ] **`TIERS.md` ratified as the single source**: Free + Pro LIVE; Team/Enterprise **waitlist** (no Stripe product, no price id, no entitlement path, no org/seat schema).
+- [ ] NEW limit rows decided: **`maxWorkspaces`** (Free 2) + **`maxDevices`** (Pro 3); `maxSwarmRoles` drops to 4 on Free; `features[]` empty on both live tiers.
+- [ ] **Cross-machine sync recorded as NOT built** in this pack — labelled in-development everywhere, never a delivered Pro bullet.
 - [ ] FAKE→real mapping (incl. the EXISTING Stripe webhook extended) written; deferrals + operator-account items listed (no gate depends on them).
 
 ### 09 · Backend foundation
@@ -77,6 +80,8 @@ everything this pack builds is $0.
 ### 10 · Backend billing
 - [ ] The EXISTING Stripe webhook is EXTENDED to derive entitlements, keeping its signature-before-state + idempotency + 400/200/503 contract (forged/replayed flip nothing).
 - [ ] Full lifecycle mapped (created/updated/canceled/refunded/dunning) with period-end reverts and immutable audit rows.
+- [ ] Pro's **two price ids (monthly + annual)** both derive correctly; an interval switch re-derives; no Team price id exists.
+- [ ] Lifecycle **email via Loops** (payment failed / grace / reverted to Free / refunded) — no silent downgrade.
 - [ ] Reconciliation cron heals a dropped webhook; billing tests green offline.
 
 ### 11 · Backend issuance
@@ -84,6 +89,13 @@ everything this pack builds is $0.
 - [ ] Device registry + per-plan cap enforced at issuance; a foreign device cannot be licensed.
 - [ ] Server-side revocation degrades on next refresh (no detonation); JWKS published.
 - [ ] The app, bound to the local backend offline, completes issue→Pro→revoke→Free (smoke green); `entitlements.ts` verifies with zero code change.
+- [ ] Claim limits match `TIERS.md` exactly; `features[]` empty; `maxWorkspaces` has a REAL app-side enforcement point (else Free's cap fails open).
+
+### 11a · Customer account area
+- [ ] Site login (Auth.js, same IdP) + `/account`: plan + interval + renewal date, device list with cap readout, revoke-a-device.
+- [ ] **Stripe Customer Portal** route live: card update, invoice history, plan/interval switch, and **CANCEL** — changes return through the EXISTING webhook, no second code path.
+- [ ] Export + delete-account requests recorded (`data_requests`) with an operator SLA; the privacy policy describes THIS mechanism, not instant self-serve erasure.
+- [ ] `ACCOUNTAREA` green offline; `/account` is `noindex` and does not perturb the frozen SEO gates.
 
 ### 12 · Real IdP wiring
 - [ ] Real IdP adapter (Auth.js/Clerk per ADR 0019) added behind the FAKE's interface (discovery/JWKS/PKCE, id_token verified-or-absent).
@@ -173,7 +185,9 @@ everything this pack builds is $0.
 - [~] Flip signing: add CI secrets, rerun `Release` (`signing-dryrun` → signed build).
 - [~] Stand up the IdP project (Auth.js on Neon / Clerk) — free; set its secrets in Vercel env.
 - [~] Set the entitlement backend's real config (pinned origins + private keys) in the Vercel/Neon secret store; deploy the new routes.
-- [~] Confirm the live Stripe account carries the DECIDED products/prices (Pro $19 flat; Team $29/seat via quantity subscription, 2+) + enable Stripe Tax; a Polar/Paddle MoR wrapper stays optional-later.
+- [~] Confirm the live Stripe account carries the `TIERS.md` products/prices (**Pro monthly $19 + Pro annual $15/mo — two price ids; NO Team product**) + enable Stripe Tax; a Polar/Paddle MoR wrapper stays optional-later.
+- [~] Configure the Stripe **Customer Portal** (allow cancel + interval switch) so 11a's route works against live keys.
+- [~] Stand up the Team/Enterprise **waitlist destination** (Loops list or the contact form) — there is no checkout path for either tier at v1.
 - [~] Publish the legal docs (counsel-reviewed) + open the Stripe checkout + flip the site `PRIMARY_CTA` to the public download.
 - [~] Submit winget PR + stand up the homebrew tap from the signed artifacts.
 - [~] Run the full three-OS CI sweep + verify the update feed resolves on the real release.
@@ -186,5 +200,6 @@ everything this pack builds is $0.
 ## Definition of "v1.0.0 ready" (this phase's exit)
 - [ ] Part I green: every lens on every feature derives **A**, EVERY finding fixed (or disproven `invalid`) with no `defer` anywhere, both budgets held, `MAINT`/`LAUNCHAUDIT` green.
 - [ ] Part II green: real backend (on the website's Neon/Vercel stack) + IdP + Stripe-derived entitlements wired and proven offline, secrets real, security honest, compliance drafted.
+- [ ] A customer can subscribe, see their plan and devices, and **CANCEL unaided**; every `/pricing` bullet traces to a `TIERS.md` row or is labelled in-development with no checkout path.
 - [ ] Part III green: the LIVE site revamped — every page current, docs complete, blog real, changelog auto-publishes, newsroom + measurement + social structured, under the site's laws (`WEBREVAMP`).
 - [ ] The only remaining work is the operator block above — every item named and costed, nothing silently open.

@@ -7,14 +7,17 @@ here; the operator signs/deploys later. No code beyond a copy gate.
 1. **The legal set** (`legal/`): an **EULA** granting free-tier use
    (fixes the LICENSE-grants-nothing gap), **subscription terms** for Pro,
    a **privacy policy** naming every subprocessor (Sentry, PostHog, the
-   IdP, the MoR) and the tiny data map (email, subscription status, device
-   records, opt-in telemetry), and a **security.txt** + disclosure policy
+   IdP, Stripe, Loops) + the data map (email, subscription status, device
+   records, telemetry), its erasure section describing **11a's
+   request-based mechanism + SLA**, never a self-serve erasure we did not
+   build — and a **security.txt** + policy
    (you hold users' OAuth grants — a researcher needs a door). Templates
    are fine; mark each "operator: review with counsel before publish."
 2. **Business runbook** (`docs/24-launch-ops.md`): the Stripe reality —
    with raw Stripe WE are merchant of record, so **enable Stripe Tax** and
-   note where registration thresholds apply; the products/prices
-   (Free/Pro $19/Team $29-per-seat/Enterprise) checklist; the refund/chargeback flow; the
+   note where registration thresholds apply; the prices per `TIERS.md`
+   (**Pro monthly + annual ONLY** — no Team product) + Customer Portal
+   config (11a: allow cancel + interval switch); the refund flow; the
    **optional-later MoR wrapper** (Polar/Paddle on Stripe rails) with its
    tax tradeoff; a support channel (email + GitHub issues) + a one-sentence
    Pro SLA; the subprocessor/DPA notes. Every item flagged operator-action
@@ -22,15 +25,14 @@ here; the operator signs/deploys later. No code beyond a copy gate.
    payouts — verify for the operator's country).
 3. **Positioning reconciliation**: audit README + docs/00 non-goals + all
    marketing copy so "free, local, **account-free core**" stays exact
-   while "no account, ever / no server, ever" absolutes are corrected to
-   the freemium truth. `check-credential-wording.mjs` grows the patterns
-   that keep the retired absolutes from creeping back (extend 12's work).
-4. **Distribution prep**: the winget + homebrew submission playbooks
-   (docs/10) turned into a ready checklist (fork, copy `packaging/*`, PR)
-   — GATED on signed artifacts, so marked PENDING-operator (post-signing);
-   the homebrew-tap-first path; the Stripe Checkout page plan (hosted
-   checkout keeps PCI off us) and the funnel events (via the site's own
-   first-party collector, never a third-party analytics script).
+   while "no account, ever / no server, ever" absolutes become the
+   freemium truth. `check-credential-wording.mjs` grows patterns keeping
+   the retired absolutes out (extend 12's work).
+4. **Distribution prep**: the winget + homebrew playbooks (docs/10) as a
+   ready checklist (fork, copy `packaging/*`, PR) — GATED on signed
+   artifacts, so PENDING-operator; the homebrew-tap-first path; the Stripe
+   Checkout plan (hosted checkout keeps PCI off us) + funnel events via
+   the site's own first-party collector, never a third-party script.
 5. **COMPLIANCE static gate** (`scripts/check-compliance.mjs`, qa-smokes
    row): asserts every required legal doc EXISTS and is non-placeholder,
    security.txt is well-formed, and the subprocessor list is present.
@@ -48,9 +50,9 @@ here; the operator signs/deploys later. No code beyond a copy gate.
   LICENSE-grants-nothing gap is closed for the free tier.
 - COMPLIANCE green (docs present + well-formed); the wording gate passes
   with the freemium-accurate copy.
-- The launch-ops runbook covers Stripe products/prices + Stripe Tax,
-  refunds, support, the optional-later MoR wrapper, and the payout/
-  incorporation point — all costed.
+- The launch-ops runbook covers prices + Stripe Tax + the portal config,
+  refunds, support, the optional MoR wrapper, and the payout/incorporation
+  point — all costed.
 - Distribution playbooks are a ready checklist, PENDING-operator behind
   signing.
 
@@ -60,7 +62,6 @@ here; the operator signs/deploys later. No code beyond a copy gate.
 
 ## Guardrails
 - $0 — drafts + runbooks only; the operator publishes/incorporates/signs.
-  Nothing here spends.
 - Legal templates are a STARTING point flagged for counsel — never
   presented as final legal advice.
 - The account-free FREE core promise stays literally true; only the

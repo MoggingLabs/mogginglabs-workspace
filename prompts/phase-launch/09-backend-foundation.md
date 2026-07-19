@@ -23,9 +23,10 @@ money-adjacent state has no forgiving version.
    checked in): `accounts` (id ⇄ IdP subject), `subscriptions` (plan,
    status, MoR ids, current-period), `entitlements` (derived plan +
    features + limits), `devices` (deviceId thumbprint ⇄ account, per-plan
-   cap), and an append-only `events` audit table (every webhook + issuance
-   + revocation, immutable). Postgres for prod; a local SQLite/Postgres
-   for gates — one migration runner, both targets.
+   cap per `TIERS.md`), `data_requests` (export/delete, 11a), and an
+   append-only `events` audit table (immutable). **No org/membership/seat
+   table — Team is waitlist (08); never build schema for a tier with no
+   billing path.** Postgres for prod; a local SQLite/Postgres for gates.
 3. **Robustness primitives from day one**: an `idempotency_keys` table +
    middleware (a repeated request is a no-op ack), request-id propagation,
    structured JSON logs to a free sink (Sentry/Logtail; no-op locally),
@@ -33,14 +34,13 @@ money-adjacent state has no forgiving version.
    refusals (junk → 4xx, never a 500 stack). No PII beyond email + ids in
    logs (ADR 0005 discipline extends to the server).
 4. **Local-run + test harness** (`server/test/`): a one-command
-   `server:dev` that boots the service on `127.0.0.1` against the local DB
-   with a FAKE MoR delivery and a FAKE IdP subject — the substrate steps
-   10–11 and the app-facing gates run on, zero external network. A vitest
-   suite covering routing, config, migrations up/down, and the
-   idempotency middleware.
+   `server:dev` booting on `127.0.0.1` against the local DB with a FAKE
+   Stripe delivery + FAKE IdP subject — the substrate 10–11 and the
+   app-facing gates run on, zero network. A vitest suite covering routing,
+   config, migrations up/down, and the idempotency middleware.
 5. **CI**: extend the site's CI (typecheck + migrate + test on a local DB);
-   it does NOT touch the app sweep count. Document the deploy path
-   (Vercel env matrix, Neon connection) as operator-action in CHECKLIST.
+   it does NOT touch the app sweep count. Document the deploy path as
+   operator-action in CHECKLIST.
 
 ## Files
 - `server/` (service, `db/migrations/`, `test/`) · `server/package.json` ·
@@ -60,8 +60,8 @@ money-adjacent state has no forgiving version.
   the app's own gate-count + static battery UNCHANGED (no app code moved).
 
 ## Guardrails
-- Robust, not minimal — idempotency, audit log, and observability are not
-  deferred; they are the foundation.
+- Robust, not minimal — idempotency, audit log, observability are the
+  foundation, never deferred.
 - The server is a separate package; it must not perturb the app build,
   bundle, or gate count.
 - Secrets from ENV only, never committed; local runs are offline by

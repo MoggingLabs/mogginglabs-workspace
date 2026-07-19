@@ -70,6 +70,15 @@ competitor names, truth-over-keywords). Same format as
 > A rule that proves wrong is amended in `RUBRIC.md` visibly, for EVERY
 > row — never waived for one instance.
 
+> **Nothing is sellable without a mechanism.** `TIERS.md` is the single
+> source for what each plan grants, expressed as `limits{}` rows and
+> `features[]` flags — 08 ratifies it, 10 bills it, 11 mints it, 11a
+> renders it, 18 sells it. **A benefit with no row and no flag is not a
+> tier feature**: it is either built, or labelled in-development with no
+> checkout path. At v1 that means **Free + Pro only**; Team/Enterprise are
+> waitlist (no Stripe product, no org/seat schema), and **cross-machine
+> sync is unbuilt** and may never appear as a delivered Pro bullet.
+
 > **No-regression is a veto.** Both budgets (MILESTONE + PERCEPTION) and
 > every existing gate stay green on the bytes each step ships. A smarter
 > or cleaner change that moves a budget or reds a gate is a stop-ship, not
@@ -91,6 +100,7 @@ competitor names, truth-over-keywords). Same format as
 | 09 | `09-backend-foundation.md` | `server/` skeleton, schema, migrations, config, observability, local-run + test harness |
 | 10 | `10-backend-billing.md` | Extend the LIVE Stripe webhook to derive entitlements + full subscription lifecycle |
 | 11 | `11-backend-issuance.md` | `GET /entitlement`: real Ed25519 claim, DPoP RS dance, device registry, JWKS, revoke |
+| 11a | `11a-customer-account-area.md` | Site login + `/account` (plan, devices) + **Stripe Customer Portal** (cancel) + data-rights requests; **ACCOUNTAREA** |
 | 12 | `12-real-idp-wiring.md` | Real IdP in `account.ts`; FAKE kept for gates; **IDPPARITY** gate |
 | 13 | `13-operator-secrets.md` | Real keypairs generated, custody/rotation runbooks, pinned halves, tamper manifest; **OPSECRETS** |
 | 14 | `14-security-antipiracy-uplift.md` | Threat re-model, residual gaps closed, cheap teeth added; **PIRACYAUDIT** |
@@ -122,6 +132,10 @@ competitor names, truth-over-keywords). Same format as
   Neon/Vercel stack and run locally offline in a gate; the app talks to it
   and the whole PRODMILESTONE promise holds (`V1MILESTONE`). Billing is the
   already-deployed **Stripe** rail, extended to derive entitlements.
+- A paying customer can **see their plan, manage devices, and CANCEL**
+  without contacting support (`ACCOUNTAREA` + Stripe's portal), and every
+  tier bullet on `/pricing` traces to a `TIERS.md` row or is labelled
+  in-development — no benefit is sold that the code does not enforce.
 - The real operator secrets are generated, custodied, rotatable, and their
   public halves pinned; the tamper manifest is signed (`OPSECRETS`).
 - The legal + compliance set (EULA, ToS, privacy, security.txt) exists and

@@ -27,23 +27,22 @@ Grounded in `RESEARCH.md` + `RESEARCH-web.md`. No code this step.
    AuthKit** the pre-declared Enterprise SSO swap — all behind the same
    `id_token` seam. Supabase Auth is viable but adds a vendor the stack
    doesn't need.
-   (e) **Pricing = DECIDED tiers** (`PRICING-STRATEGY.md`): **Free / Pro $19
-   / Team $29 per seat (2+) / Enterprise (contact sales)**, annual ~17% off.
-   FREE_ENTITLEMENTS revises to **2 workspaces x 4 panes, all integrations**
-   (from the shipped 16-pane baseline); Team/Enterprise add **org +
-   per-seat** to the claim.
+   (e) **Pricing + tiers = `TIERS.md`**, ratified as the single source (10
+   bills, 11 mints, 11a renders, 18 sells): Free + Pro live;
+   **Team/Enterprise waitlist — no Stripe product, no entitlement path, no
+   org/seat schema**; NEW rows `maxWorkspaces` (Free 2) + `maxDevices`
+   (Pro 3), without which Free's cap fails open; `features[]` empty;
+   **sync NOT built**.
 2. **Map the FAKEs to the reals**: `fake-idp.ts` → the chosen IdP + our
    token endpoint; `fake-entitle.ts` `/mor/webhook` → the EXISTING Stripe
    webhook (same event-id idempotency + signature-before-state), EXTENDED
-   to drive entitlements; `fake-entitle.ts` issuer → a new backend Ed25519
-   signer with the same `deviceId`+watermark claims. A fill-in, not a
-   redesign.
+   to drive entitlements; its issuer → a new backend Ed25519 signer with
+   the same `deviceId`+watermark claims. A fill-in, not a redesign.
 3. **Operator accounts**: Stripe + Neon (live), the IdP project —
-   operator-action in CHECKLIST; no gate depends on them (gates run
-   local/FAKE).
-4. **Deferrals**: SSO (WorkOS) until Enterprise scale; RFC 8414 discovery pin,
-   `iss`/`aud` in the entitlement JWT, RS-side `jti` replay — with the real
-   issuer (11); the MoR-wrapper option — post-launch if tax demands it.
+   operator-action in CHECKLIST; gate-free.
+4. **Deferrals**: SSO (WorkOS) until Enterprise scale; RFC 8414 discovery
+   pin, `iss`/`aud` in the JWT, RS-side `jti` replay — with the real
+   issuer (11); the MoR wrapper — post-launch if tax demands it.
 
 ## Files
 - `docs/adr/0019-real-service-stack.md` · `RESEARCH.md` + `RESEARCH-web.md`
@@ -51,12 +50,11 @@ Grounded in `RESEARCH.md` + `RESEARCH-web.md`. No code this step.
 
 ## Definition of Done
 - ADR 0019 ratifies the split, the website-hosted backend, Stripe-as-rail
-  (+ the tax note), the IdP choice, and the Free/Pro/Team/Enterprise
-  tiers — each with rationale; binding on 09-13.
+  (+ the tax note), the IdP choice, and `TIERS.md` — each with rationale;
+  binding on 09-13. No benefit is sellable without a row or flag behind it.
 - The FAKE→real map shows every shipped contract the reals must keep,
   including that the Stripe webhook is EXTENDED, not replaced.
-- Operator-account items are in CHECKLIST, flagged, no gate depending on
-  them.
+- Operator-account items are in CHECKLIST, flagged, gate-free.
 
 ## Checks that must be green
 - `npm run typecheck` → 0 (no code changed); `check-docs-refs` on the ADR
