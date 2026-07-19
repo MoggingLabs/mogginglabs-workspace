@@ -97,9 +97,19 @@ export function runUpdateOfflineSmoke(win: BrowserWindow): void {
         p1.settingsRetryEnabled
 
       // ── 2. A human clicks "Check for updates" while still offline → LOUD, honest copy.
-      await ES(`([...document.querySelectorAll('[data-section="about"] button')]
-        .find((el) => el.textContent?.trim() === 'Check for updates')?.click(), 1)`)
-      const s2 = await until(state, (s) => s.phase === 'error', 40, 250)
+      // The compressed ladder cycles 250ms 'checking' windows and the button DISABLES for
+      // each one — a synthetic .click() landing in that window is suppressed exactly as a
+      // human's would be (disabled buttons fire nothing), the manual check never runs, and
+      // the poll then reads the background ladder's quiet idle (the 07-20 macos rerun's
+      // s2: phase idle, the auto copy, lastCheckedAt advanced by background retries).
+      // Click the way a human succeeds: only an ENABLED button counts, re-clicking until
+      // the check actually takes — and once it errors, promise 3 says it STANDS.
+      let s2 = await state()
+      for (let i = 0; i < 12 && s2.phase !== 'error'; i++) {
+        await ES(`([...document.querySelectorAll('[data-section="about"] button')]
+          .find((el) => el.textContent?.trim() === 'Check for updates' && !el.disabled)?.click(), 1)`)
+        s2 = await until(state, (s) => s.phase === 'error', 10, 250)
+      }
       const p2 = await until(probe, (p) => p.railVisible && p.railError, 20, 250)
 
       const manualLoudOk =

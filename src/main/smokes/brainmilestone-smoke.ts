@@ -412,11 +412,16 @@ export function runBrainMilestoneSmoke(win: BrowserWindow): void {
       const started1 = (await ES(`window.__mogging.board.startOnCard(${JSON.stringify(card1)}, 'shell')`)) as boolean
       const paneL1 = await paneOf(String(card1))
       await confirmAgentUp(paneL1)
-      const cap1 = await captureHas(paneL1, 'BRAINMS_TASK_7100')
+      // Seam-tolerant needle: the capture is a screen scrape, and on a loaded runner two
+      // writers' redraws can eat a character at an overwrite boundary — the 07-20 macos
+      // rerun's scrollback held ",RAINMS_TASK_7100 tighten the gear coupling" forever (the
+      // B swallowed at the seam), which is the task PRESENT, not absent. The suffix stays
+      // unique in this world; every ordering claim is unchanged.
+      const cap1 = await captureHas(paneL1, 'INMS_TASK_7100')
       const cap1Flat = stripAnsi(cap1)
       const mapFenceAt = seen(cap1Flat, '```repomap')
       const mapStampAt = seen(cap1Flat, '[repomap: generation')
-      const taskAt = seen(cap1Flat, 'BRAINMS_TASK_7100')
+      const taskAt = seen(cap1Flat, 'INMS_TASK_7100')
       const launchOk =
         started1 &&
         mapFenceAt >= 0 &&
