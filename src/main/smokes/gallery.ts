@@ -546,6 +546,10 @@ export function runGallery(win: BrowserWindow): void {
           const base = 0 * 100 // Alpha is ordinal 0
           await ES(`window.__mogging.workspace.switchByIndex(2)`) // Beta active; Alpha backgrounds
           await sleep(400)
+          // ALERTAGREE: the rail rings only for tracked agent panes — mark the ones this
+          // gallery shot drives (a real agent pane is tracked via its launch/detection).
+          await ES(`window.__mogging.attention.setPaneTracked(${base + 2}, true)`)
+          await ES(`window.__mogging.attention.setPaneTracked(201, true)`)
           await ES(`window.__mogging.attention.setPaneState(${base + 2}, 'attention')`)
           await sleep(500)
           await snap(`${tag}-rail-attention`)
@@ -907,6 +911,7 @@ export function runGallery(win: BrowserWindow): void {
           await ES(`window.__mogging.workspace.switchByIndex(2)`) // Beta
           await sleep(400)
           const beta = (await ES(`(() => { const w = window.__mogging.workspace.active(); return { id: w.id, base: w.ordinal * 100 } })()`)) as { id: string; base: number }
+          await ES(`window.__mogging.attention.setPaneTracked(${beta.base + 1}, true)`) // ALERTAGREE: tracked agent pane -> the close confirms
           await ES(`window.__mogging.attention.setPaneState(${beta.base + 1}, 'busy')`)
           await sleep(300)
           await ES(`document.querySelector('.workspace-tab[data-ws-id="${beta.id}"] .ws-close')?.click()`)

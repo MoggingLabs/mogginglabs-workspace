@@ -229,6 +229,7 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         const active = m.workspace.active()
         const target = m.workspace.list().find(w => w.id !== active.id)
         if (!target) return { ok: false, reason: 'no non-active workspace' }
+        m.attention.setPaneTracked(target.ordinal * 100 + 1, true) // ALERTAGREE: the tab rings only for a tracked agent pane
         m.attention.setPaneState(target.ordinal * 100 + 1, 'attention')
         await sleep(250)
         const tab = document.querySelector('.workspace-tab[data-ws-id="' + target.id + '"]')
@@ -977,6 +978,9 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         for (let n = m.workspace.count(); n < 12; n++) m.workspace.create({ name: 'AA ' + (n + 1), activate: false })
         await sleep(600)
         const list = m.workspace.list()
+        // ALERTAGREE: every pane whose rail badge/glyph this section drives is an agent pane;
+        // the port holds their states only once tracked (a real launch/detection marks them).
+        for (const w of list) m.attention.setPaneTracked(w.ordinal * 100 + 1, true)
         // Quiet every pane, then VISIT each workspace: focusing is the only thing that disarms a
         // latched alert, and a latched tab rings instead of ever showing the working chip.
         for (const w of list) m.attention.setPaneState(w.ordinal * 100 + 1, 'idle')
@@ -999,6 +1003,7 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
       const working = await ES<number>(`(async () => {
         const m = window.__mogging
         const list = m.workspace.list()
+        for (const w of list) m.attention.setPaneTracked(w.ordinal * 100 + 1, true) // ALERTAGREE: tracked agent panes hold their busy
         // Every background tab to busy -> .is-working -> glyph on the --ws-tint wash. A couple
         // sit the state out (base-smoke workspaces on special panes — see the >= 8 floor below),
         // but their glyphs are still measured on the rest ground and still pass.

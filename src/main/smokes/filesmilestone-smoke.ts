@@ -124,6 +124,10 @@ export function runFilesMilestoneSmoke(win: BrowserWindow): void {
       // (9) ATTENTION IS SACRED. Seed it NOW and check it at the very end: nothing the
       // explorer does — not a batch, not a re-root, not a close — may clear it.
       const paneId = await ES<number>(`window.__mogging.panes[0].id`)
+      // ALERTAGREE: the port only holds an agent pane's state once tracked (a real launched
+      // agent is; the port drops an untracked pane's verdicts). Mark it so the attention this
+      // section swears is sacred can actually be set.
+      await ES(`window.__mogging.attention.setPaneTracked(${paneId}, true)`)
       await ES(`window.__mogging.attention.setPaneState(${paneId}, 'needs-input')`)
       await sleep(400)
       const attentionAtStart = await ES<string>(
