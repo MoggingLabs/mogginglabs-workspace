@@ -16,9 +16,10 @@ import { join } from 'node:path'
 // Also owns the layout menu's verbs since the reorganize redesign: the isolated
 // BATCH stepper (N worktrees in one gesture — worktrees must equal panes added,
 // and the return is true only when every requested terminal opened), the PLAIN
-// batch stepper (N terminals, zero worktrees), and REORGANIZE (the current panes
-// snap into the canonical grid for their count — curated template shapes, near-
-// square rest — closing nothing).
+// batch stepper (N terminals, zero worktrees), and REORGANIZE (the Reorganize row
+// opens the wizard's layout PAINTER in a modal; applying a custom arrangement +
+// new count reshapes to exactly that spec, gated by the live-work confirm on a
+// drop, survivors preserved).
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim()
 }
@@ -199,61 +200,81 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
       const plainBatchOk =
         plainBatchAdded === plainBatchExpected && readdirSync(wtRoot).length === worktreesBeforePlainBatch
 
-      // ── REORGANIZE: the chained mosaic the batches built snaps into the canonical
-      // grid for the CURRENT count — same shape formula the grid applies (curated
-      // template shapes, near-square rest), closing nothing. Asserted from rendered
-      // slot GEOMETRY: row bands and per-row pane counts must match the shape.
+      // ── REORGANIZE: the layout PAINTER, on a live workspace. Three claims:
+      //   (a) the titlebar Reorganize row opens the wizard's painter in a MODAL;
+      //   (b) applying a CUSTOM arrangement + a NEW (lower) count reshapes to exactly
+      //       that spec — a full-width top pane over two below — proving the painted
+      //       arrangement drives the grid, not a canonical fallback;
+      //   (c) because the drop closes live panes (the wizard panes carry sessions), the
+      //       live-work CONFIRM fires first, and confirming preserves the survivors
+      //       (every surviving pane id existed before — none rebuilt).
       const reorg = await ES<{
-        before: number
+        modalOpened: boolean
+        modalClosed: boolean
         after: number
         rows: number[]
-        beforeCanonical: boolean
+        confirmShown: boolean
+        topWide: boolean
+        preserved: boolean
       }>(`(async () => {
         const m = window.__mogging
         const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+        const box = (id) => document.querySelector('.layout-slot[data-pane-id="' + id + '"]').getBoundingClientRect()
         const rowsOf = () => {
-          const boxes = m.layout.paneIds().map((id) => {
-            const r = document.querySelector('.layout-slot[data-pane-id="' + id + '"]').getBoundingClientRect()
-            return { x: r.x, y: Math.round(r.y) }
-          })
+          const boxes = m.layout.paneIds().map((id) => ({ y: Math.round(box(id).top) }))
           const tops = [...new Set(boxes.map((b) => b.y))].sort((a, b) => a - b)
           const bands = []
-          for (const t of tops) {
-            if (!bands.length || t - bands[bands.length - 1] > 8) bands.push(t)
-          }
+          for (const t of tops) { if (!bands.length || t - bands[bands.length - 1] > 8) bands.push(t) }
           return bands.map((band) => boxes.filter((b) => Math.abs(b.y - band) <= 8).length)
         }
-        const shapeFor = (n) => {
-          const curated = { 1: [1, 1], 2: [1, 2], 4: [2, 2], 6: [2, 3], 8: [2, 4], 9: [3, 3], 12: [3, 4], 16: [4, 4] }
-          if (curated[n]) return curated[n]
-          const cols = Math.min(4, Math.max(1, Math.ceil(Math.sqrt(n))))
-          return [Math.ceil(n / cols), cols]
+
+        // (a) the real Reorganize row opens the painter modal.
+        document.querySelector('.layout-launcher > button')?.click()
+        await sleep(80)
+        document.querySelector('.layout-menu-reorganize')?.click()
+        await sleep(220)
+        const modalOpened =
+          !!document.querySelector('.modal .grid-painter') &&
+          !!document.querySelector('.modal .gp-lattice') &&
+          !!document.querySelector('.modal .gp-canvas')
+        ;[...document.querySelectorAll('.modal button')].find((b) => /^cancel$/i.test((b.textContent || '').trim()))?.click()
+        await sleep(400)
+        const modalClosed = !document.querySelector('.modal .grid-painter')
+
+        // (b)+(c) apply a custom, smaller layout directly; the confirm must gate the drop.
+        // The plain shells that will close aren't "live", so mark the HIGHEST-id pane busy
+        // (highest local ⇒ certainly in the closing set when shrinking to 3) — now the drop
+        // genuinely closes live work and the confirm is owed.
+        const beforeIds = m.layout.paneIds()
+        m.attention.setPaneState(Math.max(...beforeIds), 'busy')
+        await sleep(150)
+        const spec = { rows: 2, cols: 2, regions: [{ r: 0, c: 0, rs: 1, cs: 2 }, { r: 1, c: 0, rs: 1, cs: 1 }, { r: 1, c: 1, rs: 1, cs: 1 }] }
+        const done = m.layout.reorganizeApply(spec) // Promise — blocks on the confirm
+        let confirmShown = false
+        for (let i = 0; i < 30 && !confirmShown; i++) {
+          await sleep(100)
+          const btn = [...document.querySelectorAll('.modal button')].find((b) => /close panes and reorganize/i.test(b.textContent || ''))
+          if (btn) { confirmShown = true; btn.click() }
         }
-        const canonical = (rows, n) => {
-          const [expRows, expCols] = shapeFor(n)
-          if (rows.length !== expRows) return false
-          const full = expCols
-          const last = n - full * (expRows - 1)
-          return rows.every((c, i) => c === (i === expRows - 1 ? last : full))
-        }
-        const before = m.layout.paneCount()
-        const beforeCanonical = canonical(rowsOf(), before)
-        m.layout.reorganize()
-        await sleep(600)
-        return { before, after: m.layout.paneCount(), rows: rowsOf(), beforeCanonical }
-      })()`)
-      const reorganizeOk = (() => {
-        const n = reorg.after
-        if (n !== reorg.before) return false // reorganize must never open or close a pane
-        const curated: Record<number, [number, number]> = { 1: [1, 1], 2: [1, 2], 4: [2, 2], 6: [2, 3], 8: [2, 4], 9: [3, 3], 12: [3, 4], 16: [4, 4] }
-        const [expRows, expCols] = curated[n] ?? (() => {
-          const cols = Math.min(4, Math.max(1, Math.ceil(Math.sqrt(n))))
-          return [Math.ceil(n / cols), cols] as [number, number]
+        await done
+        await sleep(500)
+        const ids = m.layout.paneIds()
+        const topWide = (() => {
+          if (ids.length !== 3) return false
+          const rects = ids.map(box).sort((a, b) => a.top - b.top)
+          return rects.slice(1).every((r) => rects[0].width >= r.width * 1.8) // top spans both columns
         })()
-        if (reorg.rows.length !== expRows) return false
-        const last = n - expCols * (expRows - 1)
-        return reorg.rows.every((c, i) => c === (i === expRows - 1 ? last : expCols))
-      })()
+        const preserved = ids.every((id) => beforeIds.includes(id)) // survivors reused, none rebuilt
+        return { modalOpened, modalClosed, after: m.layout.paneCount(), rows: rowsOf(), confirmShown, topWide, preserved }
+      })()`)
+      const reorganizeOk =
+        reorg.modalOpened &&
+        reorg.modalClosed &&
+        reorg.confirmShown &&
+        reorg.after === 3 &&
+        JSON.stringify(reorg.rows) === JSON.stringify([1, 2]) &&
+        reorg.topWide &&
+        reorg.preserved
 
       // ── The Pedro case: a folder wearing an EMPTY `.git` is NOT a repo. The manual
       // isolated row must refuse honestly — no pane, no worktree litter.

@@ -12,8 +12,8 @@ import {
   type WorkspaceState
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { TEMPLATE_COUNTS } from '../layout'
-import { Button, IconButton, MiniGridPreview, clear, createStepper, el, icon, showToast } from '../../components'
+import { TEMPLATE_COUNTS, type GridSpecModel } from '../layout'
+import { Button, IconButton, clear, createStepper, el, icon, showToast } from '../../components'
 import { WorkspaceController, type CreateOpts } from './controller'
 import { resolveColors } from './model'
 import { workspaceClient } from './workspace.client'
@@ -631,30 +631,23 @@ export const workspaceFeature: UiFeature = {
         [icon('git-branch', 14), isoLabel]
       )
       const isoRow = el('div', { class: 'layout-menu-stepper-row' }, [addIsolated, isoStepper.el])
-      // REORGANIZE — snap the CURRENT panes back into their canonical grid (the
-      // wizard's own shape resolution; curated template shapes, near-square rest).
-      // The structural sibling of Balance: Balance equalizes the sizes of the
-      // arrangement you have, Reorganize rebuilds the arrangement. Never closes a
-      // pane, so it needs no gate and no confirm. The live miniature IS the promise:
-      // it draws the exact grid this click produces.
-      const target = controller.reorganizeTarget()
+      // REORGANIZE — opens the layout painter (the wizard's own): choose a new grid
+      // SIZE and ARRANGEMENT, changing the pane count if you want, on the live
+      // workspace. The structural sibling of Balance: Balance evens the sizes of the
+      // arrangement you have, Reorganize lets you pick a new arrangement (and count).
+      // The trailing "…" says it opens a panel rather than acting on click.
       const reorganize = el(
         'button',
         {
           class: 'menu-item layout-menu-add layout-menu-reorganize',
           type: 'button',
-          title: 'Rebuilds the current panes as a clean grid — nothing opens or closes',
+          title: 'Choose a new grid size and arrangement — your terminals are kept where they fit',
           onClick: () => {
             layoutMenu.hidden = true
-            controller.reorganizeActive()
+            controller.openReorganize()
           }
         },
-        [
-          target
-            ? el('span', { class: 'layout-menu-reorg-mark' }, [MiniGridPreview({ rows: target.rows, cols: target.cols })])
-            : icon('layout-grid', 14),
-          el('span', { text: target ? `Reorganize into ${target.rows}×${target.cols}` : 'Reorganize' })
-        ]
+        [icon('layout-grid', 14), el('span', { text: 'Reorganize layout…' })]
       )
       // BALANCE — equal shares on every row and column. The whole-workspace tidy that
       // per-seam equalize (gutter double-click, pane ⋯ menu) does line by line.
@@ -847,10 +840,10 @@ export const workspaceFeature: UiFeature = {
         },
         {
           id: 'layout:reorganize',
-          title: 'Reorganize layout (snap panes to a clean grid)',
+          title: 'Reorganize layout (choose a new grid size and arrangement)',
           hint: 'Layout',
           enabled: requiresGrid,
-          run: () => controller.reorganizeActive()
+          run: () => controller.openReorganize()
         },
         ...TEMPLATE_COUNTS.map((n) => ({
           id: `layout:${n}`,
@@ -943,7 +936,8 @@ function exposeForDev(controller: WorkspaceController): void {
     expand: (paneId: number, mode: 'full' | 'col' | 'row') => controller.expandPane(paneId, mode),
     split: (dir?: 'h' | 'v', count?: number) => controller.splitActive(dir, count),
     splitIsolated: (dir?: 'h' | 'v', count?: number) => controller.splitActiveIsolated(dir, count),
-    reorganize: () => controller.reorganizeActive(),
+    reorganize: () => controller.openReorganize(), // opens the painter panel
+    reorganizeApply: (spec: GridSpecModel) => controller.requestReorganize(spec), // paint result, no UI
     status: () => controller.layoutStatus(),
     close: (paneId: number) => {
       const id = controller.activeMeta()?.id

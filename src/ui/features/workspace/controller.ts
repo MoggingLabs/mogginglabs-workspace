@@ -1,10 +1,11 @@
 import { formulaPaneId, GitChannels, TerminalChannels, WorktreeChannels } from '@contracts'
 import type { AgentState, CreateWorktreeResult, PaneId, RemoveWorktreeResult } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { GridLayout, gridShapeFor, parseTree, leafIds, type LayoutTreeNode } from '../layout'
+import { GridLayout, parseTree, leafIds, specForCount, TEMPLATES, type GridSpecModel, type LayoutTreeNode } from '../layout'
 import { confirmDialog, icon, showToast, TOAST_DEFAULT_MS } from '../../components'
 import { batchSlots } from '../../core/layout/slots'
 import { openMovePaneModal, type MoveTarget } from './move-pane-modal'
+import { openReorganizeModal } from './reorganize-modal'
 import { setFocusedPane } from '../../core/layout/focus'
 import { setPaneCwd, getPaneCwd, getPaneCwdProjection } from '../../core/layout/pane-cwd'
 import { setPaneRole, setPaneRemote, clearPaneRemote, setPaneLabel, getPaneRemote } from '../../core/layout/pane-meta'
@@ -1113,32 +1114,39 @@ export class WorkspaceController {
     this.onChange()
   }
 
-  /** Apply an N-pane template to the active workspace. */
-  applyTemplate(n: number): void {
-    const a = this.active()
-    if (!a) return
-    // Slots this apply will CREATE get the same scrub a split gives its new pane: a
-    // template that re-grows over a closed slot's id must not resurrect that slot's
-    // remote host (the pane would silently spawn over ssh), swarm role, agent label,
-    // or manifest assignment. Same contract as splitPane — a re-opened slot is a fresh
-    // plain terminal at the workspace root.
+  /**
+   * The shared tail of every "resolve this workspace to a new layout" path — the
+   * template grid AND the painted reorganize. Slots this will CREATE get the same
+   * scrub a split gives its new pane: a re-grown slot must not resurrect the closed
+   * slot's remote host (the pane would silently spawn over ssh), swarm role, agent
+   * label, or manifest assignment — a re-opened slot is a fresh plain terminal at the
+   * workspace root. Then seed the new panes' cwd BEFORE `apply` spawns them (a pane
+   * reads its cwd at spawn; published afterwards it started in the daemon's directory).
+   * `count` and `apply` MUST resolve the same slot set — both go through templateLocals,
+   * so peekTemplate(count) names exactly what `apply` lands on.
+   */
+  private applyResolvedLayout(a: WorkspaceView, count: number, apply: () => void): void {
     const live = new Set(a.layout.paneIds())
-    for (const { local, paneId } of a.layout.peekTemplate(n)) {
+    for (const { local, paneId } of a.layout.peekTemplate(count)) {
       if (live.has(paneId)) continue
       clearPaneRemote(paneId)
       setPaneRole(paneId, '')
       setPaneLabel(paneId, '')
       this.scrubManifestSlot(a.meta, local - 1, '')
     }
-    // Count first, then publish, THEN apply: `apply` constructs any new TerminalPanes, and
-    // a pane reads its cwd at spawn time. Published afterwards, a pane added by growing the
-    // grid started its shell in the daemon's directory — the same bug `create` had.
-    a.meta.paneCount = n
+    a.meta.paneCount = count
     this.publishPaneCwds(a.meta) // seed the new panes' pty cwd + per-pane git (2/03)
-    a.layout.apply(n)
-    getTelemetry().captureEvent({ name: 'layout.applied', props: { panes: n } })
+    apply()
     this.refreshAttention()
     this.onChange()
+  }
+
+  /** Apply an N-pane template to the active workspace. */
+  applyTemplate(n: number): void {
+    const a = this.active()
+    if (!a) return
+    this.applyResolvedLayout(a, n, () => a.layout.apply(n))
+    getTelemetry().captureEvent({ name: 'layout.applied', props: { panes: n } })
   }
 
   /** Layout shrink shares the pane-close policy; growth is non-destructive. */
@@ -1193,24 +1201,52 @@ export class WorkspaceController {
     }
   }
 
-  /** The canonical grid the ACTIVE workspace's current pane count snaps to — what the
-   *  popover's "Reorganize" row promises ("Reorganize into 2×3"). Same formula the grid
-   *  itself applies (gridShapeFor), so the label cannot promise a shape apply won't build. */
-  reorganizeTarget(): { panes: number; rows: number; cols: number } | null {
+  /**
+   * Open the Reorganize panel — the wizard's layout painter, brought to a LIVE
+   * workspace. Seeded with the current pane count (its curated shape) and bounded by
+   * this workspace's real capacity (screen ∧ machine ∧ plan), so every grid it lets
+   * you paint is one the workspace can actually render. Apply routes to
+   * requestReorganize. The structural counterpart of Balance: Balance equalizes the
+   * sizes of the arrangement you have; Reorganize lets you choose a new arrangement
+   * AND a new pane count.
+   */
+  openReorganize(): void {
     const view = this.active()
-    if (!view) return null
-    const shape = gridShapeFor(view.layout.paneCount)
-    return { panes: view.layout.paneCount, rows: shape.rows, cols: shape.cols }
+    if (!view) return
+    const cap = view.layout.capacity()
+    const maxPanes = this.effectiveMaxPanes(view)
+    openReorganizeModal({
+      spec: specForCount(Math.min(view.layout.paneCount, maxPanes), TEMPLATES[view.layout.paneCount]),
+      maxRows: cap.maxRows,
+      maxCols: cap.maxCols,
+      maxPanes,
+      onApply: (spec) => this.requestReorganize(spec)
+    })
   }
 
-  /** Snap the ACTIVE workspace back into the canonical grid for its CURRENT pane count
-   *  (the wizard's own shape resolution) — structure and shares reset, nothing closes,
-   *  every pane keeps its id/PTY (slots are reused by pane id). The structural sibling
-   *  of Balance: Balance equalizes the sizes of the arrangement you have; Reorganize
-   *  rebuilds the arrangement itself. Non-destructive by construction, so no confirm. */
-  reorganizeActive(): void {
-    const a = this.active()
-    if (a) this.applyTemplate(a.layout.paneCount)
+  /** Apply a painted layout to the active workspace: confirm first if the new count
+   *  would close panes holding live work (the SAME shrink policy as a template change),
+   *  then rebuild to the chosen count + arrangement. Live terminals are preserved where
+   *  they map (applyRegions reuses live slots first — a pane's PTY is never killed by
+   *  rearranging); only the tail closes when the count drops. */
+  async requestReorganize(spec: GridSpecModel): Promise<boolean> {
+    const view = this.active()
+    if (!view) return false
+    const count = spec.regions.length
+    const keep = new Set<number>(view.layout.peekTemplate(count).map((s) => s.paneId))
+    const live = inspectLive(view.layout.paneIds().filter((paneId) => !keep.has(paneId)))
+    if (live.panes.length > 0) {
+      const ok = await confirmDialog({
+        title: `Reorganize to ${plural(count, 'pane', 'panes')}?`,
+        message: `${plural(live.panes.length, 'pane', 'panes')} would close. ${describeLive(live)}.`,
+        confirmLabel: 'Close panes and reorganize',
+        danger: true
+      })
+      if (!ok) return false
+    }
+    this.applyResolvedLayout(view, count, () => void view.layout.applyRegions(spec))
+    getTelemetry().captureEvent({ name: 'layout.reorganized', props: { panes: count, rows: spec.rows, cols: spec.cols } })
+    return true
   }
 
   /** Add a terminal by splitting a pane (⋯ menu / titlebar + / palette / shortcut).

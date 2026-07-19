@@ -2116,16 +2116,20 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Reorganize's leading mark is a LIVE miniature of the exact grid the click builds
-   (MiniGridPreview), sized to sit where a 14px icon would. */
-.layout-menu-reorg-mark {
-  display: inline-flex;
-  flex: none;
-  width: 18px;
-  height: 13px;
+/* Reorganize opens the layout painter in a modal (reorganize-modal.ts) — the wizard's
+   own painter, so .grid-painter/.gp-* styling is shared. Only the modal body wrapper
+   and its live readout are new. */
+.reorg-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
 }
-.layout-menu-reorg-mark .grid-preview {
-  gap: 1px;
+.reorg-caption {
+  margin: 0;
+  text-align: center;
+  font-size: var(--fs-12);
+  color: var(--text-mid);
+  font-variant-numeric: tabular-nums;
 }
 
 #workspace-host {

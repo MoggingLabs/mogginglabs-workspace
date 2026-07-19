@@ -34,7 +34,8 @@ import {
   type SplitDir,
   type SplitNode
 } from './layout-tree'
-import { effectivePaneCapacity } from './pane-capacity'
+import { effectivePaneCapacity, type PaneCapacity } from './pane-capacity'
+import { treeForRegions, type GridSpecModel } from './grid-regions'
 import { machineSpec } from '../../core/system/machine-port'
 
 export { parseTree, leafIds, MIN_PANE_WIDTH_PX, minimumLayoutWidth } from './layout-tree'
@@ -270,8 +271,15 @@ export class GridLayout {
    *  GPU budget is not a count limit: Chromium caps ~16 live WebGL contexts and panes
    *  past that edge ride the DOM renderer via PaneWebglManager's managed fallback. */
   limit(): number {
+    return this.capacity().maxPanes
+  }
+
+  /** The full budget behind `limit()` — cols × rows × total. The reorganize panel's
+   *  painter reads maxRows/maxCols (the lattice bounds), not just the total, so the
+   *  grid it lets you paint is one this workspace can actually render. */
+  capacity(): PaneCapacity {
     const elsewhere = Math.max(0, livePaneCount() - this.paneIds().length)
-    return effectivePaneCapacity(this.scrollHost, machineSpec(), elsewhere).maxPanes
+    return effectivePaneCapacity(this.scrollHost, machineSpec(), elsewhere)
   }
 
   /** Live pane ids (closed slots excluded) — the source of truth for attention scans. */
@@ -370,6 +378,30 @@ export class GridLayout {
     this.root = normalize(tree)
     this.rebuild()
     this.onLayoutChange?.()
+  }
+
+  /**
+   * Apply a PAINTED layout — the reorganize panel's arbitrary count + arrangement.
+   * The spec's reading-order region slots (1..N) map onto this workspace's local ids
+   * with `templateLocals` — LIVE panes reused first — so reorganizing preserves every
+   * terminal that still fits (its PTY untouched) and only the tail closes when the
+   * count drops; a raised count opens fresh slots at the end. Same slot resolution as
+   * `apply(n)`, so `peekTemplate(count)` names exactly the panes this creates/keeps.
+   * Returns false for a non-guillotine spec (the painter can't emit one) or over cap.
+   */
+  applyRegions(spec: GridSpecModel): boolean {
+    const shape = treeForRegions(spec) // leaf ids = reading-order region slots 1..N
+    if (!shape) return false
+    const count = spec.regions.length
+    const locals = this.templateLocals(count)
+    if (locals.length < count) return false
+    const remap = (node: LayoutTreeNode): LayoutTreeNode =>
+      isSplit(node) ? { ...node, children: node.children.map(remap) } : { id: locals[node.id - 1]! }
+    this.clearExpand()
+    this.root = remap(shape)
+    this.rebuild()
+    this.onLayoutChange?.()
+    return true
   }
 
   /** The persisted form of the current layout (ids renumbered to slot order). */
