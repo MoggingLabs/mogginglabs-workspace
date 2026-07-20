@@ -353,6 +353,28 @@ export function runBrainUxSmoke(win: BrowserWindow): void {
       const frameRefit = await ES<string>(`window.__mogging.brain.frame()`)
       const cameraOk = frameZoomed.length > 100 && frameZoomed !== frameA && frameRefit === frameA
 
+      // ── (f3) expand-in-place: alt-click GROWS the graph from a node, no re-focus ──
+      // The code graph here is a star (callers touch only the hub), so the MEMORY graph
+      // carries this: at depth 1, beta-notes shows alpha-notes; expanding alpha-notes must
+      // pull in hostile-bytes (which backlinks alpha-notes) — more of the neighborhood,
+      // same focus. Still becalmed, so the merge + resettle land synchronously.
+      await ES(`window.__mogging.brain.setDepth(1)`)
+      await ES(`window.__mogging.brain.focusMemory('beta-notes')`)
+      await waitTrue(`window.__mogging.brain.state().mode === 'graph' && window.__mogging.brain.nodes().some((n) => n.id === 'mem:alpha-notes')`, 60, 300)
+      await sleep(300)
+      const nodesBeforeExpand = (await ES(`window.__mogging.brain.state().nodes`)) as number
+      const focusBeforeExpand = (await ES(`(window.__mogging.brain.state().focus || {}).slug || ''`)) as string
+      const expandInvoked = (await ES(`window.__mogging.brain.expand('mem:alpha-notes')`)) as boolean
+      const expandGrew = await waitTrue(
+        `window.__mogging.brain.state().nodes > ${nodesBeforeExpand} && window.__mogging.brain.nodes().some((n) => n.id === 'mem:hostile-bytes')`,
+        60,
+        200
+      )
+      const focusAfterExpand = (await ES(`(window.__mogging.brain.state().focus || {}).slug || ''`)) as string
+      // Grew, pulled in the backlinker, and NEVER re-focused — that is expand-in-place.
+      const expandOk = expandInvoked && expandGrew && focusBeforeExpand === 'beta-notes' && focusAfterExpand === 'beta-notes'
+      await ES(`window.__mogging.brain.setDepth(2)`)
+
       await ES(`document.documentElement.classList.remove('motion-calm')`)
 
       // ── AA, graph mode: inspector/search inks + the CANVAS token pairs ─────
@@ -425,7 +447,7 @@ export function runBrainUxSmoke(win: BrowserWindow): void {
       const telemetryOk = !markers.some((m) => telemetryJson.includes(m))
 
       const pass =
-        doorsOk && noFocusSteal && statusOk && liveSyncOk && focusOk && inspectorOk && revealSeamOk && readerOk && calmOk && cameraOk && aaOk && telemetryOk
+        doorsOk && noFocusSteal && statusOk && liveSyncOk && focusOk && inspectorOk && revealSeamOk && readerOk && calmOk && cameraOk && expandOk && aaOk && telemetryOk
       result = {
         aaOk,
         aaReaderFailures: aaReader.failures,
@@ -462,6 +484,7 @@ export function runBrainUxSmoke(win: BrowserWindow): void {
         danglingDim,
         calmOk,
         cameraOk,
+        expandOk,
         frameBytes: frameA?.length ?? 0,
         telemetryOk,
         telemetryCallCount: telemetryCalls.length,
