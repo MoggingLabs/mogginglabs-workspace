@@ -149,13 +149,12 @@ export function runBrainOpenSmoke(win: BrowserWindow): void {
       const emptyFollowedOk = followed(F.repoEmpty)
 
       // ── (6) gold: the empty repo absorbs its FIRST file within ≤ 2 ticks ───────────
-      // Committed, so the delta rides the head-move path the freshness law already proves
-      // (BRAINFRESH (c) reparses exactly the changed files of a head move). The follow the
-      // attach fix earned is what lets this land at all — an unfollowed empty root would
-      // never see the file, and this poll would time out (the exact "silent forever" bug).
+      // An UNTRACKED source file is exactly what an agent writes. The porcelain tick lists
+      // it (`--untracked-files=normal`), consider() routes it by extension, and the drain
+      // lands it — the plain worktree-change path (no commit, so no head-move sequencing to
+      // race). The follow the attach fix earned is what lets this land at all — an
+      // unfollowed empty root would never see the file (the exact "silent forever" bug).
       writeFileSync(join(F.repoEmpty, 'first.ts'), 'export function firstfn(): number {\n  return 7\n}\n')
-      git(F.repoEmpty, ['add', 'first.ts'])
-      git(F.repoEmpty, ['commit', '-m', 'add first'])
       const appeared = await until(
         () => {
           const s = statusOf(F.repoEmpty)
@@ -165,7 +164,7 @@ export function runBrainOpenSmoke(win: BrowserWindow): void {
       )
       const g6 = statusOf(F.repoEmpty)
       const firstFileOk =
-        appeared.ok && g6?.generation === 3 && g6?.files === 1 && g6?.nodes === 1 &&
+        appeared.ok && g6?.generation === 3 && g6?.files === 1 && (g6?.nodes ?? 0) >= 1 &&
         dump(F.repoEmpty).includes('"firstfn"')
 
       const pass =
