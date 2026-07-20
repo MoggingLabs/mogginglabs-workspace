@@ -4,6 +4,7 @@ import {
   planHasServerForCli,
   planSignature,
   toolCellState,
+  transportLabel,
   type McpStatusSnapshot,
   type WorkspaceToolPlan,
   type HostedCliId,
@@ -299,7 +300,14 @@ function createServersBlock(): SyncedBlock {
       const row = el('div', { class: 'mgr-row' }, [
         el('span', { class: 'mgr-label' }, [providerLogo(server.id, 14), el('span', { text: server.label })]),
         routeBadge,
-        el('span', { class: 'mgr-id', text: `${server.id} · ${server.transport}` }),
+        el('span', {
+          class: 'mgr-id',
+          text: `${server.id} · ${transportLabel(server)}`,
+          // The tag is the ENDPOINT scheme, not the wire keyword: a bare "http" next to a
+          // server name read as an insecure connection when the endpoint is https. The
+          // title carries the precise transport for anyone who wants it.
+          attrs: { title: server.transport === 'http' ? 'Streamable-HTTP MCP transport' : 'stdio transport — a local subprocess' }
+        }),
         ...(keyBits.length ? [el('span', { class: 'mgr-keyslots' }, keyBits)] : []),
         el('div', { class: 'mgr-chips' }, chips)
       ])

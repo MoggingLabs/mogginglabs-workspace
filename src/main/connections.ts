@@ -13,6 +13,7 @@ import {
   buildAuthorizeUrl,
   canonicalResource,
   canRepairClientByReRegistering,
+  commitLandedGrant,
   createPkce,
   createState,
   discoverAccount,
@@ -501,37 +502,34 @@ async function onCallback(params: URLSearchParams, res: import('node:http').Serv
     return
   }
 
-  const label = presetFor(flow.serviceId)?.label ?? flow.serviceId
-  html(`Connected to ${label}`, 'You can close this tab and go back to MoggingLabs Workspace.')
-
-  // Two independent ways to learn whose account this is, because for most of the catalog
-  // the FIRST one comes back empty: only 2 of 10 servers here publish OIDC or a userinfo
-  // endpoint. The probe asks the server itself, which always knows — it is serving that
-  // account's data. Whichever answers, answers; if neither does, the card says "Connected"
-  // and does not pretend to a name it never learned.
-  const account = await discoverAccount(exchanged.tokens, flow.metadata)
-  const probe = await probeConnection(flow.resource, exchanged.tokens.accessToken)
-  setState(flow.serviceId, {
-    state: probe.ok ? 'connected' : 'error',
-    account: account ?? (probe.ok ? probe.probe.account : undefined),
-    scopes: exchanged.tokens.scopes ?? flow.scopes,
-    expiresAt: exchanged.tokens.expiresAt,
-    connectedAt: Date.now(),
-    serverName: probe.ok ? probe.probe.serverName : undefined,
-    toolCount: probe.ok ? probe.probe.toolCount : undefined,
-    tools: probe.ok ? probe.probe.tools : undefined,
-    // The grant landed, so whatever client made it is proven: remember WHERE this
-    // service signs in and whether the client was the user's own — that pair is
-    // what lets "Forget client ID" find the record later, even after a disconnect.
-    authServer: flow.metadata.issuer,
-    userClient: flow.client.source === 'user' || undefined,
-    needsClientId: undefined,
-    lastError: probe.ok ? undefined : probe.reason
-  })
-  // The connection is live -> it becomes a server the tool plan can reach. This is
-  // the ONE write into the CLI-facing world, and it carries a COMMAND, not a token.
-  if (probe.ok) registerConnectionServer(flow.serviceId)
-  endFlow()
+  // The grant is stored, so the connection is CONNECTED now — proven by the grant, not
+  // by the follow-up probe. commitLandedGrant runs the two-phase sequence: commit +
+  // register + answer the tab + close the flow synchronously (so a Cancel landing after
+  // is a no-op on a live connection), then enrich best-effort under the stamp guard. The
+  // sequence lives in the Electron-free orchestrator precisely so CONNPURE can bite it.
+  const tokens = exchanged.tokens
+  await commitLandedGrant(
+    {
+      setState: (patch) => void setState(flow.serviceId, patch),
+      readState: () => readMeta(flow.serviceId),
+      registerServer: () => void registerConnectionServer(flow.serviceId),
+      closeFlow: endFlow,
+      showPage: html,
+      discoverAccount: () => discoverAccount(tokens, flow.metadata),
+      probe: () => probeConnection(flow.resource, tokens.accessToken),
+      now: Date.now
+    },
+    {
+      label: presetFor(flow.serviceId)?.label ?? flow.serviceId,
+      scopes: tokens.scopes ?? flow.scopes,
+      expiresAt: tokens.expiresAt,
+      // The grant landed, so whatever client made it is proven: remember WHERE this
+      // service signs in and whether the client was the user's own — that pair is what
+      // lets "Forget client ID" find the record later, even after a disconnect.
+      authServer: flow.metadata.issuer,
+      userClient: flow.client.source === 'user'
+    }
+  )
 }
 
 // ── API-key connections: the same card, the same proof ──────────────────────

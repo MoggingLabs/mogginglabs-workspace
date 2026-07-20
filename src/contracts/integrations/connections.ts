@@ -209,3 +209,70 @@ export function connectionSummary(c: Connection, now: number = Date.now()): stri
  *  half of "which account": being signed in as the right person with the wrong powers
  *  is still the wrong connection. Empty when the provider scoped it implicitly. */
 export const connectionScopes = (c: Connection): string[] => (c.state === 'connected' ? (c.scopes ?? []) : [])
+
+// ── The connect lifecycle, in two phases (ADR 0014) ─────────────────────────
+// A connection is CONNECTED the instant its grant lands — proven by the grant, not
+// by a follow-up tools/list. Deriving "connected" from an enrichment probe was one
+// bug wearing three masks: it held the card on "connecting…" for the length of two
+// extra round trips; it demoted a valid grant to "error" whenever the probe failed
+// for reasons unrelated to the grant (Google gates tools at CALL time; a userinfo
+// endpoint can simply be slow); and it kept the flow "pending" through that window,
+// so a Cancel could set "disconnected" only to be overwritten by the late probe.
+// These two builders split the decision cleanly, and the CONNPURE gate bites them.
+
+/**
+ * PHASE 1 — the patch that marks a connection CONNECTED the moment its grant lands,
+ * BEFORE any enrichment. It carries what the grant itself proves (scopes, expiry,
+ * which issuer it signs in at, whether the client was the user's own) and deliberately
+ * NOT the account name, tool names, or tool count — those are answered by the server
+ * later, over {@link connectionEnrichmentPatch}, and a connection is no less connected
+ * for not yet knowing them. `needsClientId` and `lastError` are cleared: a landed grant
+ * has neither an unmet prerequisite nor a live failure.
+ */
+export function grantLandedPatch(g: {
+  scopes?: string[]
+  expiresAt?: number
+  connectedAt: number
+  authServer: string
+  userClient: boolean
+}): Partial<Connection> {
+  return {
+    state: 'connected',
+    scopes: g.scopes,
+    expiresAt: g.expiresAt,
+    connectedAt: g.connectedAt,
+    authServer: g.authServer,
+    userClient: g.userClient || undefined,
+    needsClientId: undefined,
+    lastError: undefined
+  }
+}
+
+/**
+ * PHASE 2 — the best-effort enrichment merged onto an ALREADY-connected card: whose
+ * account this is, and what the server serves. It NEVER carries `state`: a probe that
+ * fails (a quota error, an SSE hiccup, a slow whoami) says nothing about the grant's
+ * validity and must not un-connect it. Blanks are left blank — an answer we didn't get
+ * is never written as `undefined` over a value the card is already showing. (The one
+ * failure that DOES mean the grant is bad — an unauthorized resource — is handled by
+ * the caller, which downgrades to `expired`; it is not an enrichment field.)
+ */
+export function connectionEnrichmentPatch(e: {
+  account?: string | null
+  serverName?: string
+  toolCount?: number
+  tools?: string[]
+}): Partial<Connection> {
+  const patch: Partial<Connection> = {}
+  if (e.account) patch.account = e.account
+  if (e.serverName) patch.serverName = e.serverName
+  if (typeof e.toolCount === 'number') patch.toolCount = e.toolCount
+  if (e.tools) patch.tools = e.tools
+  return patch
+}
+
+/** Guard for the phase-2 write: is the card still the SAME landed grant we enriched
+ *  for? A Disconnect or a fresh connect during the enrichment round trips changes the
+ *  state or the connect stamp, and a stale answer must not overwrite it. */
+export const enrichmentTargetsSameGrant = (current: Connection | null | undefined, connectedAt: number): boolean =>
+  !!current && current.state === 'connected' && current.connectedAt === connectedAt

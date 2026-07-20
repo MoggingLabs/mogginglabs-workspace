@@ -46,8 +46,18 @@ import {
   probeConnection,
   probeWithSchemes,
   refreshTokens,
-  registerClient
+  registerClient,
+  commitLandedGrant,
+  type CommitEffects,
+  type ProbeOutcome
 } from '@backend/features/integrations'
+import {
+  connectionEnrichmentPatch,
+  enrichmentTargetsSameGrant,
+  grantLandedPatch,
+  transportLabel,
+  type Connection
+} from '@contracts'
 
 // ── Harness ──────────────────────────────────────────────────────────────────
 const failures: string[] = []
@@ -504,6 +514,105 @@ async function main(): Promise<void> {
   check(/not running/.test(deadRun.stdout), 'T14 app-not-running answers with the honest sentence')
   ep.close()
   rmSync(dir, { recursive: true, force: true })
+
+  // T15 — the two-phase connect: CONNECTED is proven by the grant, enrichment only fills.
+  // Each assertion below is the bug it prevents: a card stuck "connecting…" behind the
+  // probe, a valid grant demoted to "error", a Cancel overwritten by a late probe write.
+  const landed = grantLandedPatch({ scopes: ['mcp:use'], expiresAt: 123, connectedAt: 1000, authServer: `${origin}/as`, userClient: false })
+  check(landed.state === 'connected', 'T15 grant landing sets connected from the grant alone')
+  check(!('account' in landed) && !('tools' in landed) && !('toolCount' in landed) && !('serverName' in landed), 'T15 connected does NOT depend on any probe field (no account/tools/count/name in the landing patch)')
+  check(landed.needsClientId === undefined && landed.lastError === undefined && landed.userClient === undefined, 'T15 a landed grant clears the prerequisite flag, the error, and a false userClient')
+  check(grantLandedPatch({ connectedAt: 1, authServer: 'x', userClient: true, scopes: [] }).userClient === true, 'T15 a user-pasted client is remembered on the landed grant')
+
+  // The enrichment patch never carries state, and a failed/empty probe leaves the card as-is.
+  const good = connectionEnrichmentPatch({ account: 'pedro@fixture.test', serverName: 'fixture-mcp', toolCount: 4, tools: ['a', 'b'] })
+  check(!('state' in good) && good.account === 'pedro@fixture.test' && good.toolCount === 4, 'T15 enrichment fills account/tools and NEVER carries state')
+  const empty = connectionEnrichmentPatch({ account: null, serverName: undefined, toolCount: undefined, tools: undefined })
+  check(Object.keys(empty).length === 0, 'T15 a probe that answered nothing writes nothing (no blanks over a shown value)')
+  check(connectionEnrichmentPatch({ toolCount: 0 }).toolCount === 0, 'T15 a real zero tool count is kept (undefined-guard, not falsy-guard)')
+  // Merged, the two phases are: disconnected -> connected -> connected (enrichment can't undo it).
+  const base: Connection = { id: 'x', label: 'X', authKind: 'oauth', state: 'disconnected' }
+  const afterLand = { ...base, ...landed } as Connection
+  check(afterLand.state === 'connected', 'T15 phase-1 merge takes a disconnected card to connected')
+  check(({ ...afterLand, ...empty } as Connection).state === 'connected', 'T15 phase-2 merge over a failed probe stays connected')
+
+  // The stamp guard: only the SAME landed grant is enriched — a disconnect or reconnect drops the stale write.
+  check(enrichmentTargetsSameGrant(afterLand, 1000), 'T15 enrichment applies to the grant it was started for')
+  check(!enrichmentTargetsSameGrant({ ...afterLand, connectedAt: 2000 } as Connection, 1000), 'T15 a reconnect (new stamp) drops the stale enrichment')
+  check(!enrichmentTargetsSameGrant({ ...afterLand, state: 'disconnected' } as Connection, 1000), 'T15 a disconnect during enrichment drops the stale write')
+  check(!enrichmentTargetsSameGrant(null, 1000), 'T15 a card gone from the store is not re-minted by a late probe')
+
+  // T16 — the transport tag reflects the ENDPOINT scheme, not the ambiguous "http" keyword.
+  check(transportLabel({ transport: 'http', url: 'https://mcp.vercel.com' }) === 'HTTPS', 'T16 an https endpoint reads as HTTPS, not http')
+  check(transportLabel({ transport: 'http', url: 'http://127.0.0.1:7777/mcp' }) === 'HTTP · localhost', 'T16 a loopback http endpoint is named honestly as localhost http')
+  check(transportLabel({ transport: 'stdio', url: undefined }) === 'stdio', 'T16 stdio (a local subprocess) stands — it reads as no scheme')
+  check(transportLabel({ transport: 'http', url: undefined }) === 'HTTP', 'T16 a urless http row falls back to the bare transport')
+
+  // T17 — the connect ORCHESTRATION, driven hermetically through the REAL two-phase code
+  // (src/backend/features/integrations/connect-orchestrator.ts — the same function main
+  // calls). T15 proved the patch builders; this proves onCallback assembles them in the
+  // order that fixes stuck-connecting, the cancel race, and the probe-downgrade.
+  const mkFx = (over: {
+    probeResult?: ProbeOutcome
+    account?: string | null
+    frozenState?: Connection | null // when set, readState always returns this (mid-flight change)
+  }): { fx: CommitEffects; events: string[]; patches: Partial<Connection>[] } => {
+    const events: string[] = []
+    const patches: Partial<Connection>[] = []
+    let cur: Connection = { id: 'x', label: 'X', authKind: 'oauth', state: 'disconnected' }
+    const fx: CommitEffects = {
+      setState: (p) => {
+        events.push('setState:' + (p.state ?? 'enrich'))
+        patches.push(p)
+        cur = { ...cur, ...p }
+      },
+      readState: () => (over.frozenState !== undefined ? over.frozenState : cur),
+      registerServer: () => events.push('register'),
+      closeFlow: () => events.push('close'),
+      showPage: () => events.push('page'),
+      discoverAccount: async () => {
+        events.push('discover')
+        return over.account ?? null
+      },
+      probe: async () => {
+        events.push('probe')
+        return over.probeResult ?? { ok: true, probe: { serverName: 'fixture-mcp', toolCount: 4, tools: ['a', 'b', 'c', 'd'], account: 'pedro@fixture.test' } }
+      },
+      now: () => 1000
+    }
+    return { fx, events, patches }
+  }
+
+  const happy = mkFx({})
+  await commitLandedGrant(happy.fx, { label: 'Drive', authServer: 'https://accounts.google.com', userClient: false, scopes: ['mcp:use'] })
+  check(happy.events[0] === 'setState:connected', 'T17 the FIRST effect is the connected write — no probe gates it (kills stuck-connecting)')
+  check(happy.events.indexOf('close') < happy.events.indexOf('probe'), 'T17 the flow is CLOSED before enrichment — a late Cancel finds no pending flow')
+  check(happy.events.indexOf('register') >= 0 && happy.events.indexOf('register') < happy.events.indexOf('probe'), 'T17 the CLI bridge registers on the grant, not on the probe')
+  check(happy.events[happy.events.length - 1] === 'setState:enrich' && happy.patches[happy.patches.length - 1].account === 'pedro@fixture.test', 'T17 enrichment fills the account LAST, over a second push')
+
+  const failed = mkFx({ probeResult: { ok: false, reason: 'quota exhausted for this workspace' } })
+  await commitLandedGrant(failed.fx, { label: 'X', authServer: 'iss', userClient: false })
+  check(!failed.patches.some((p) => p.state === 'error' || p.state === 'expired'), 'T17 a non-unauthorized probe failure NEVER downgrades a landed grant (kills error-over-valid-grant)')
+
+  const refused = mkFx({ probeResult: { ok: false, reason: 'nope', unauthorized: true } })
+  await commitLandedGrant(refused.fx, { label: 'X', authServer: 'iss', userClient: false })
+  check(refused.patches.some((p) => p.state === 'expired'), 'T17 an unauthorized resource DOES downgrade — to expired, the one honest reconnect signal')
+
+  const moved = mkFx({ frozenState: { id: 'x', label: 'X', authKind: 'oauth', state: 'disconnected' } })
+  await commitLandedGrant(moved.fx, { label: 'X', authServer: 'iss', userClient: false })
+  check(!moved.patches.slice(1).some((p) => 'account' in p || p.state === 'expired'), 'T17 a disconnect during enrichment drops the stale write (stamp guard)')
+
+  const thrown = mkFx({})
+  thrown.fx.probe = async (): Promise<ProbeOutcome> => {
+    throw new Error('socket reset mid-probe')
+  }
+  let escaped = false
+  try {
+    await commitLandedGrant(thrown.fx, { label: 'X', authServer: 'iss', userClient: false })
+  } catch {
+    escaped = true
+  }
+  check(!escaped && thrown.events.includes('close'), 'T17 a thrown probe never escapes — the connection was already committed')
 
   fixture.close()
   clearTimeout(watchdog)
