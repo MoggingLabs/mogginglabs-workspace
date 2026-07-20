@@ -11542,6 +11542,22 @@ body.pane-dragging * {
   border-color: var(--border-strong);
   box-shadow: var(--shadow-1);
 }
+/* Camera refit — a sibling of the depth buttons, same recipe. */
+.brain-fit-btn {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-mid);
+  font: inherit;
+  font-size: var(--fs-11);
+  padding: 1px var(--sp-2);
+  margin-left: var(--sp-1);
+  cursor: pointer;
+}
+.brain-fit-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-hi);
+}
 
 /* The inspector. */
 .brain-inspector {

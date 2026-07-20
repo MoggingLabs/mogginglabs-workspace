@@ -274,7 +274,16 @@ export function createBrainView(): BrainView {
     renderDepth()
     if (focus) void focusOn(focus)
   }
-  const searchRow = el('div', { class: 'brain-search' }, [searchInput, depthNav, capChip, searchList])
+  // Camera refit (Stage 2): scroll to zoom, drag to pan, and this (or a double-click on
+  // empty space) snaps back to the default fit. Graph-mode only, toggled with depthNav.
+  const fitBtn = el('button', {
+    class: 'brain-fit-btn',
+    type: 'button',
+    text: 'Fit',
+    title: 'Refit the graph to view — scroll to zoom, drag to pan, double-click empty space to reset',
+    onClick: () => canvas.resetView()
+  })
+  const searchRow = el('div', { class: 'brain-search' }, [searchInput, depthNav, fitBtn, capChip, searchList])
   // Contextual: only the kinds actually on screen earn a row (rebuilt per focus).
   const legend = el('div', { class: 'brain-legend', ariaLabel: 'Edge kinds', hidden: true })
   function renderLegend(graph: FocusGraph | null): void {
@@ -469,6 +478,7 @@ export function createBrainView(): BrainView {
     readerHost.hidden = !lens || mode !== 'reader'
     legend.hidden = !lens || mode !== 'graph' || !legend.childElementCount
     depthNav.hidden = !lens || mode !== 'graph'
+    fitBtn.hidden = !lens || mode !== 'graph' || !focus
     searchRow.hidden = !lens
     searchList.hidden = searchList.hidden || !lens
     stateHost.hidden = lens
