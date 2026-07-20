@@ -37,6 +37,7 @@ import {
   FOCUS_DEFAULT_DEPTH,
   FOCUS_NODE_CAP,
   createGraphCanvas,
+  expandNodeInto,
   fetchCodeFocus,
   fetchMemoryFocus,
   memSlugOf,
@@ -303,7 +304,8 @@ export function createBrainView(): BrainView {
 
   const canvas = createGraphCanvas({
     onSelect: (n) => void selectNode(n),
-    onOpen: (n) => openNode(n)
+    onOpen: (n) => openNode(n),
+    onExpand: (n) => void expandFocus(n)
   })
   const readerHost = el('div', { class: 'brain-reader' })
   const stateHost = el('div', { class: 'brain-main-state' })
@@ -828,6 +830,26 @@ export function createBrainView(): BrainView {
     })
   }
 
+  /** Expand-in-place (Stage 2): alt-click grows the graph from a node WITHOUT re-focusing
+   *  — the same focus, more of its neighborhood, up to the node cap. Mutates the live
+   *  focusGraph and re-settles from the current positions. */
+  async function expandFocus(node: FocusNode): Promise<void> {
+    if (!focusGraph || !projectRoot) return
+    const g = focusGraph
+    const { added } = await expandNodeInto(projectRoot, g, node)
+    // A focus switch under the await drops the expansion (async-state law).
+    if (focusGraph !== g || added === 0) return
+    canvas.relayout()
+    capChip.hidden = !g.capped
+    capChip.textContent = `window · ${g.nodes.length} shown, more exists`
+    renderLegend(g)
+    legend.hidden = !legend.childElementCount
+    getTelemetry().captureEvent({
+      name: 'brain.expand',
+      props: { added, total: g.nodes.length, capped: g.capped, memory: memSlugOf(node.id) !== null }
+    })
+  }
+
   async function selectNode(n: FocusNode): Promise<void> {
     canvas.setSelected(n.id)
     let neighbors: BrainNeighborOut[] = []
@@ -1124,6 +1146,27 @@ export function createBrainView(): BrainView {
     nodes: () => (focusGraph?.nodes ?? []).map((n) => ({ id: n.id, kind: n.kind, name: n.name, ring: n.ring, x: n.x, y: n.y, dangling: !!n.dangling })),
     frame: () => canvas.frame(),
     positions: () => canvas.positions(),
+    // Camera + expand probes (Stage 2) — the BRAINUX witnesses. `zoom` drives the REAL
+    // wheel path (zoom toward the canvas centre); `resetView` refits; `expand` grows the
+    // graph from a node by id, exactly as an alt-click would.
+    resetView: () => {
+      canvas.resetView()
+      return true
+    },
+    zoom: () => {
+      const cv = canvas.el.querySelector('canvas')
+      if (!cv) return false
+      const rect = cv.getBoundingClientRect()
+      cv.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: -400, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2, bubbles: true, cancelable: true })
+      )
+      return true
+    },
+    expand: (id: string) => {
+      const n = focusGraph?.nodes.find((x) => x.id === id) ?? null
+      if (n) void expandFocus(n)
+      return !!n
+    },
     search: (q: string) => {
       searchInput.value = q
       searchInput.dispatchEvent(new Event('input'))

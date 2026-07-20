@@ -339,6 +339,20 @@ export function runBrainUxSmoke(win: BrowserWindow): void {
       await sleep(350)
       const frameB = await ES<string>(`window.__mogging.brain.frame()`)
       const calmOk = frameA.length > 100 && frameA === frameB
+
+      // ── (f2) the camera: a zoom CHANGES the frame; refit restores it byte-for-byte ──
+      // Still becalmed, so paints are deterministic. frameA is the settled DEFAULT frame:
+      // a real wheel zoom must move it, and resetView() must land back on it exactly —
+      // proof the camera is a pure view transform whose default is stable (the BRAINGRAPH
+      // determinism + the pre-camera frame both ride on that default being untouched).
+      await ES(`window.__mogging.brain.zoom()`)
+      await sleep(200)
+      const frameZoomed = await ES<string>(`window.__mogging.brain.frame()`)
+      await ES(`window.__mogging.brain.resetView()`)
+      await sleep(200)
+      const frameRefit = await ES<string>(`window.__mogging.brain.frame()`)
+      const cameraOk = frameZoomed.length > 100 && frameZoomed !== frameA && frameRefit === frameA
+
       await ES(`document.documentElement.classList.remove('motion-calm')`)
 
       // ── AA, graph mode: inspector/search inks + the CANVAS token pairs ─────
@@ -411,7 +425,7 @@ export function runBrainUxSmoke(win: BrowserWindow): void {
       const telemetryOk = !markers.some((m) => telemetryJson.includes(m))
 
       const pass =
-        doorsOk && noFocusSteal && statusOk && liveSyncOk && focusOk && inspectorOk && revealSeamOk && readerOk && calmOk && aaOk && telemetryOk
+        doorsOk && noFocusSteal && statusOk && liveSyncOk && focusOk && inspectorOk && revealSeamOk && readerOk && calmOk && cameraOk && aaOk && telemetryOk
       result = {
         aaOk,
         aaReaderFailures: aaReader.failures,
@@ -447,6 +461,7 @@ export function runBrainUxSmoke(win: BrowserWindow): void {
         navOk,
         danglingDim,
         calmOk,
+        cameraOk,
         frameBytes: frameA?.length ?? 0,
         telemetryOk,
         telemetryCallCount: telemetryCalls.length,
