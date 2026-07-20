@@ -281,13 +281,18 @@ export function runBrainMilestoneSmoke(win: BrowserWindow): void {
   const OSC_RE = new RegExp(String.raw`\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)`, 'g')
   const CSI_RE = new RegExp(String.raw`\u001b\[[0-9;?]*[A-Za-z]`, 'g')
   const stripAnsi = (s: string): string => s.replace(OSC_RE, '').replace(CSI_RE, '').replace(/[\r\n]/g, '')
-  const wrapTolerant = (needle: string): RegExp =>
-    new RegExp(
-      needle
-        .split('')
-        .map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-        .join('[^]{0,6}?')
-    )
+  // Insertion-tolerant (a wrap/reflow injects up to 6 chars between any two needle chars)
+  // AND single-elision-tolerant: a redraw seam on a loaded runner can EAT one character
+  // outright — three macos certification runs each lost a DIFFERENT capture needle to one
+  // swallowed char (",RAINMS_TASK_7100"; then the repomap stamp). The alternation tries
+  // the full needle first, then each one-char-elided variant; the needles are long unique
+  // fixture tokens, so a one-char-shorter match cannot collide in these worlds.
+  const wrapTolerant = (needle: string): RegExp => {
+    const esc = (c: string): string => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const chars = needle.split('')
+    const joined = (skip: number): string => chars.filter((_, i) => i !== skip).map(esc).join('[^]{0,6}?')
+    return new RegExp([joined(-1), ...chars.map((_, i) => joined(i))].join('|'))
+  }
   const seen = (flat: string, needle: string): number => {
     const m = wrapTolerant(needle).exec(flat)
     return m ? m.index : -1
@@ -412,16 +417,11 @@ export function runBrainMilestoneSmoke(win: BrowserWindow): void {
       const started1 = (await ES(`window.__mogging.board.startOnCard(${JSON.stringify(card1)}, 'shell')`)) as boolean
       const paneL1 = await paneOf(String(card1))
       await confirmAgentUp(paneL1)
-      // Seam-tolerant needle: the capture is a screen scrape, and on a loaded runner two
-      // writers' redraws can eat a character at an overwrite boundary — the 07-20 macos
-      // rerun's scrollback held ",RAINMS_TASK_7100 tighten the gear coupling" forever (the
-      // B swallowed at the seam), which is the task PRESENT, not absent. The suffix stays
-      // unique in this world; every ordering claim is unchanged.
-      const cap1 = await captureHas(paneL1, 'INMS_TASK_7100')
+      const cap1 = await captureHas(paneL1, 'BRAINMS_TASK_7100')
       const cap1Flat = stripAnsi(cap1)
       const mapFenceAt = seen(cap1Flat, '```repomap')
       const mapStampAt = seen(cap1Flat, '[repomap: generation')
-      const taskAt = seen(cap1Flat, 'INMS_TASK_7100')
+      const taskAt = seen(cap1Flat, 'BRAINMS_TASK_7100')
       const launchOk =
         started1 &&
         mapFenceAt >= 0 &&
