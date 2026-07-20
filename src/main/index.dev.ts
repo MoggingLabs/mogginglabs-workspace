@@ -110,6 +110,7 @@ import { runBrainCoreSmoke } from './smokes/braincore-smoke'
 import { runBrainParseSmoke } from './smokes/brainparse-smoke'
 import { runBrainGraphSmoke } from './smokes/braingraph-smoke'
 import { runBrainFreshSmoke } from './smokes/brainfresh-smoke'
+import { runBrainOpenSmoke } from './smokes/brainopen-smoke'
 import { runBrainMcpSmoke } from './smokes/brainmcp-smoke'
 import { runBrainMapSmoke } from './smokes/brainmap-smoke'
 import { runBrainWriteSmoke } from './smokes/brainwrite-smoke'
@@ -547,6 +548,8 @@ function afterWindow(win: BrowserWindow): void {
     runFilesMilestoneSmoke(win) // env-gated Phase-11 MILESTONE: the whole files promise composed + budgets on the composed surface (Phase-11/07)
   } else if (process.env.MOGGING_BRAINFRESH) {
     runBrainFreshSmoke(win) // env-gated brain-freshness smoke: the index rides the git tick — incremental drains, head-move deltas, cold-start reconcile, dump == rebuild (ADR 0018 step 04)
+  } else if (process.env.MOGGING_BRAINOPEN) {
+    runBrainOpenSmoke(win) // env-gated build-on-open smoke: a door builds a never-built project, the `built` signal, idempotency, and a built-but-empty partition that is followed and absorbs its first file (ADR 0018 — self-build)
   } else if (process.env.MOGGING_BRAINMCP) {
     runBrainMcpSmoke(win) // env-gated brain-over-MCP smoke: seven reads-free graph tools, checkout scope custody, stamps through the wire (ADR 0018 step 05; HOLD = the manual-first world)
   } else if (process.env.MOGGING_BRAINMAP) {

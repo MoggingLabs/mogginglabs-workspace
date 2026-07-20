@@ -81,6 +81,10 @@ export interface BrainStatus {
   /** Monotonic index generation; moves on every accepted rebuild. Freshness is a law
    *  (ADR 0018.d): every answer stamps it, so staleness is visible, never silent. */
   generation: number
+  /** TRUE once this project has been built at least once. The honest "never built"
+   *  signal a door acts on and the view shows — `generation` seeds at 1 on the empty
+   *  db, so it cannot tell "never indexed" from "indexed, genuinely empty"; this can. */
+  built: boolean
   /** TRUE when the index is known stale. 04 owns raising it; nothing may hide it. */
   dirty: boolean
   /** Real counts across every partition of the project's db (zero until built). */

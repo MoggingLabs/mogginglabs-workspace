@@ -77,6 +77,11 @@ export const brainStatus = (root: string): Promise<BrainAnswer> =>
 export const brainRebuild = (root: string): Promise<BrainAnswer> =>
   getBridge().invoke(BrainChannels.rebuild, { root }) as Promise<BrainAnswer>
 
+/** Build-on-open: a no-op once the project is built, one build when it is not.
+ *  The view fires this on mount; the launch seam fires it fire-and-forget. */
+export const brainEnsureBuilt = (root: string): Promise<BrainAnswer> =>
+  getBridge().invoke(BrainChannels.ensureBuilt, { root }) as Promise<BrainAnswer>
+
 export const brainOverview = (root: string): Promise<BrainOverviewAnswer> =>
   getBridge().invoke(BrainChannels.overview, { root }) as Promise<BrainOverviewAnswer>
 

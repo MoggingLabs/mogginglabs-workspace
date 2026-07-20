@@ -49,7 +49,13 @@ bin/mogging-mcp.mjs           the EXISTING endpoint relay every pane already has
 - **`BrainService`** (`brain/index.ts`) holds lazy per-project instances,
   LRU-capped at **4 open dbs**; `dispose()` is a lifecycle law (the freshness
   smoke tears it down cold and the first status after reopen heals by
-  reconcile, not a full reparse).
+  reconcile, not a full reparse). A project **builds itself on open**:
+  `ensureBuilt` (the Brain view opening a never-built project, a board-launched
+  pane under `orientAtLaunch`) kicks exactly one build and is a no-op once built,
+  so an index exists without anyone pressing Rebuild (`BRAINOPEN`). A built
+  partition is followed by freshness even when it holds no indexable files yet —
+  its `built` marker, not its row count, is what earns the tick subscription — so
+  the first source file to land in an empty project is never invisible.
 - **The indexer is a `worker_threads` worker** — parsing never shares the UI
   thread. A full build is ONE transactional commit; an incremental drain lands
   the delta the same way. Cross-worktree economics ride the
@@ -286,7 +292,7 @@ certification.
 
 ## 9. Proven by
 
-Sixteen gates own the pack — fifteen env-gated smokes plus one static — and
+Seventeen gates own the pack — sixteen env-gated smokes plus one static — and
 `BRAINMILESTONE` is the only authority on "Phase 12 done": one fixture world
 composing every promise end to end (shared index economics across worktrees,
 the oriented launch, graph truth over real MCP, freshness under a real
@@ -303,6 +309,7 @@ daemon protocol number equal before and after).
 | `GRAMMARCAT` (static) | catalog ↔ artifacts ↔ ADR roster agreement |
 | `BRAINGRAPH` | graph truth, determinism, partitions, cache economics, caps |
 | `BRAINFRESH` | the freshness law live: ticks, deltas, dirty, reconcile |
+| `BRAINOPEN` | build-on-open: a door builds a never-built project; the `built` signal; a built-but-empty partition that is followed and absorbs its first file |
 | `BRAINMCP` | the read family over real MCP from real panes |
 | `BRAINMAP` | the repomap + launch injection + `mogging map` |
 | `BRAINWRITE` | symbol writes: grant, CAS, own-checkout, atomicity, trail |
@@ -315,7 +322,7 @@ daemon protocol number equal before and after).
 | `BRAINRECALL` | the recall organ: ranking, the shared budget, usage, CLI |
 | `BRAINMILESTONE` | everything above, composed — the pack's freeze authority |
 
-The sweep stands at **182 gates (159 app-boot + 23 static)** — the number is
+The sweep stands at **183 gates (160 app-boot + 23 static)** — the number is
 `scripts/check-gate-count.mjs`'s derived output, the only authority.
 
 Full laws and their rationale: [ADR 0018](adr/0018-workspace-brain.md)

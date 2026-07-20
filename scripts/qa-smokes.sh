@@ -9,10 +9,10 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 182 gates: 23 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 183 gates: 23 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
 # GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE ·
-# GRAMMARCAT) + 159 app-boot
+# GRAMMARCAT) + 160 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -325,6 +325,7 @@ run_smoke BRAINCORE   MOGGING_BRAINCORE 1 120 braincore
 run_smoke BRAINPARSE  MOGGING_BRAINPARSE 1 180 brainparse
 run_smoke BRAINGRAPH  MOGGING_BRAINGRAPH 1 180 braingraph
 run_smoke BRAINFRESH  MOGGING_BRAINFRESH 1 300 brainfresh
+run_smoke BRAINOPEN   MOGGING_BRAINOPEN 1 180 brainopen
 run_smoke BRAINMCP    MOGGING_BRAINMCP  1 300 brainmcp
 run_smoke BRAINMAP    MOGGING_BRAINMAP  1 300 brainmap
 run_smoke BRAINWRITE  MOGGING_BRAINWRITE 1 300 brainwrite

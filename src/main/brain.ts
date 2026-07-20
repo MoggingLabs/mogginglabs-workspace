@@ -111,6 +111,18 @@ export function handleBrainRebuild(req: unknown): Promise<BrainAnswer> {
   return ensureService().rebuild(root)
 }
 
+/** The exact function `brain:ensureBuilt` runs (build-on-open) — same validation
+ *  seam, same refusals. A NO-OP that answers the current status when the caller's
+ *  partition is already built; one build when it is not. Exported so the BRAINOPEN
+ *  smoke drives the door with zero UI. */
+export function handleBrainEnsureBuilt(req: unknown): Promise<BrainAnswer> {
+  const root = (req as { root?: unknown } | null | undefined)?.root
+  if (typeof root !== 'string' || !root) {
+    return Promise.resolve({ ok: false, reason: 'invalid' })
+  }
+  return ensureService().ensureBuilt(root)
+}
+
 /** Where a project's db lives — exported for the BRAINCORE smoke's "under
  *  userData, never under a root" assertion. */
 export function brainBaseDir(): string {
@@ -987,6 +999,26 @@ export function registerBrain(getWin: () => BrowserWindow | null, tickSource?: B
   ipcMain.handle(BrainChannels.rebuild, async (_e, req: unknown) => {
     const answer = await handleBrainRebuild(req)
     if (answer.ok) {
+      const event: BrainChangedEvent = {
+        projectKey: answer.projectKey,
+        generation: answer.generation,
+        dirty: answer.dirty
+      }
+      try {
+        getWin()?.webContents.send(BrainChannels.changed, event)
+      } catch {
+        /* window gone */
+      }
+    }
+    return answer
+  })
+  ipcMain.handle(BrainChannels.ensureBuilt, async (_e, req: unknown) => {
+    // Push `brain:changed` ONLY when a build actually landed — the generation moved.
+    // ensureBuilt is called from every door (view open, each pane launch); a no-op
+    // (already built) must not spam the renderer, so we compare against the pre-state.
+    const before = handleBrainStatus(req)
+    const answer = await handleBrainEnsureBuilt(req)
+    if (answer.ok && (!before.ok || answer.generation > before.generation)) {
       const event: BrainChangedEvent = {
         projectKey: answer.projectKey,
         generation: answer.generation,

@@ -434,6 +434,7 @@ export const BrainChannels = {
   // a user file, and no path or symbol from these payloads may reach telemetry.
   status: 'brain:status', // (BrainRootRequest) -> BrainStatus | BrainRefusal (never throws)
   rebuild: 'brain:rebuild', // (BrainRootRequest) -> BrainStatus | BrainRefusal (bumps generation; 03 adds the re-index)
+  ensureBuilt: 'brain:ensureBuilt', // (BrainRootRequest) -> BrainStatus | BrainRefusal (build-on-open: a NO-OP once built or while building, else one build; the doors' door)
   map: 'brain:map', // ({ root, budget? }) -> the serve layer's brain.map reply (06: the repomap door for the launch seam)
   orientGet: 'brain:orientGet', // (workspaceId) -> boolean (default TRUE — new agents start oriented unless opted out)
   orientSet: 'brain:orientSet', // ({ workspaceId, on }) -> { ok } (persisted main-side with the other per-workspace knobs)

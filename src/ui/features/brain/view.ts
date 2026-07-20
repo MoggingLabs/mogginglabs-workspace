@@ -9,6 +9,7 @@ import {
   brainDraftGet,
   brainDraftPromote,
   brainDrafts,
+  brainEnsureBuilt,
   brainMemUsage,
   brainOverview,
   brainRead,
@@ -508,18 +509,21 @@ export function createBrainView(): BrainView {
     if (rebuildBusy || (s?.ok && s.indexing)) {
       showState(
         el('div', { class: 'brain-progress' }, [
-          loadingRow(s?.ok && s.generation === 0 ? 'First index — reading the project…' : 'Re-indexing — answers stay served from the old bytes…'),
+          loadingRow(s?.ok && !s.built ? 'First index — reading the project…' : 'Re-indexing — answers stay served from the old bytes…'),
           el('p', { class: 'brain-progress-note', text: 'The window stays live; the worker owns the build.' })
         ])
       )
       return
     }
-    if (s?.ok && s.generation === 0) {
+    // Fallback only: build-on-open normally takes a never-built project straight to the
+    // progress state above. This shows when the auto-build could not start (a typed
+    // refusal that is not `busy` — e.g. `too-large`) — the human's manual retry door.
+    if (s?.ok && !s.built) {
       showState(
         EmptyState({
           icon: 'activity',
           title: 'No index yet',
-          body: 'This project has never been indexed here. One build, then every lens answers.',
+          body: 'This project has not been indexed here yet. One build, then every lens answers.',
           action: Button({ label: 'Build the index', variant: 'primary', onClick: () => void runRebuild() })
         })
       )
@@ -960,12 +964,41 @@ export function createBrainView(): BrainView {
     status = null
     renderStatus()
     const [s, o] = await Promise.all([brainStatus(projectRoot), brainOverview(projectRoot)])
-    status = s
     overview = o
     if (s.ok) syncPreviewCache(s.generation)
+    // Build-on-open (the view door): a project that has never been indexed here builds
+    // itself — no button, no dead empty state. Show progress at once (no empty-state
+    // flash) and let autoBuildOnOpen poll it to green, exactly like a manual rebuild.
+    if (s.ok && !s.built && !s.indexing && !rebuildBusy) {
+      status = { ...s, indexing: true }
+      renderStatus()
+      renderMain()
+      void autoBuildOnOpen()
+      return
+    }
+    status = s
     renderStatus()
     renderMain()
     if (s.ok && s.indexing) schedulePoll()
+  }
+
+  /** The view door's one build: kick the worker and reflect the outcome. Bails if the
+   *  workspace switched under the await. `busy` means another door is already building —
+   *  keep the optimistic progress state and let the status poll (plus the brain:changed
+   *  push) carry it to green, never flashing a refusal the human did not cause. */
+  async function autoBuildOnOpen(): Promise<void> {
+    const root = projectRoot
+    const answer = await brainEnsureBuilt(root)
+    if (!active || root !== projectRoot) return // switched away mid-build — drop
+    if (!answer.ok && answer.reason === 'busy') {
+      schedulePoll()
+      return
+    }
+    status = answer
+    renderStatus()
+    renderMain()
+    if (answer.ok && answer.indexing) schedulePoll()
+    if (answer.ok && answer.built && focus) await focusOn(focus)
   }
 
   function schedulePoll(): void {

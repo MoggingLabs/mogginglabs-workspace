@@ -22,7 +22,7 @@ import {
 
 const Database = requireNative<typeof import('better-sqlite3')>('better-sqlite3')
 
-export const BRAIN_SCHEMA_VERSION = 9 // v9: memory_usage (revision D's per-slug recall/read counters) — additive, one-way, idempotent (v8 added the draft quarantine's tables)
+export const BRAIN_SCHEMA_VERSION = 10 // v10: built_roots — a partition's "this root has been built at least once" marker, so freshness follows a built-but-EMPTY root and the view can tell "never built" from "built, genuinely empty" (v9 added memory_usage; v8 the draft quarantine)
 /** Multi-row insert batch size — the build's transactional chunking unit. */
 export const BRAIN_INSERT_CHUNK = 1000
 
@@ -108,6 +108,11 @@ export class BrainStore {
         this.db.exec(`ALTER TABLE meta ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 0`)
       }
     }
+    // v10 backfill: a pre-v10 db that already holds file rows WAS built — mark those
+    // roots so an upgrade never re-reads "built" as "never built". A built-but-empty
+    // root from before v10 left no file rows and so no marker; its next build (or a
+    // reconcile that finds a file) records it. Idempotent (INSERT OR IGNORE).
+    this.db.exec('INSERT OR IGNORE INTO built_roots (root) SELECT DISTINCT root FROM files')
     this.db.prepare('UPDATE meta SET schema_version = ?').run(BRAIN_SCHEMA_VERSION)
   }
 
@@ -116,6 +121,21 @@ export class BrainStore {
       | { generation: number }
       | undefined
     return row?.generation ?? 1
+  }
+
+  /** Has ANY partition been built at least once? The db-wide "there is an index here"
+   *  signal — the seam that lets the view say "never built" instead of showing an empty
+   *  graph, and lets a door decide whether a first build is owed. Distinct from
+   *  `generation`, which seeds at 1 on the empty db and so cannot answer this. */
+  built(): boolean {
+    return !!(this.db.prepare('SELECT 1 FROM built_roots LIMIT 1').get())
+  }
+
+  /** Has THIS root's partition been built? The per-root truth freshness attaches on —
+   *  a built-but-EMPTY root (no indexable files) has zero file rows but IS followed, so
+   *  the first source file that lands there becomes queryable, never invisible. */
+  rootBuilt(root: string): boolean {
+    return !!(this.db.prepare('SELECT 1 FROM built_roots WHERE root = ?').get(root))
   }
 
   counts(): BrainCounts {
@@ -205,6 +225,9 @@ export class BrainStore {
       insertChunked(cacheRows, 4, (p) => `INSERT OR IGNORE INTO parse_cache (lang,fileHash,nodesJson,edgesJson) VALUES ${p}`, (c) => [c.lang, c.fileHash, JSON.stringify(c.ex.defs), JSON.stringify({ imports: c.ex.imports, refs: c.ex.refs, heritage: c.ex.heritage })])
       // The repomap ranks (06) ride the SAME commit as the rows they describe.
       insertChunked(ranks, 3, (p) => `INSERT OR REPLACE INTO ranks (id,root,rank) VALUES ${p}`, (r) => [r.id, root, r.rank])
+      // This root is now built — recorded in the SAME commit, so "built" can never
+      // disagree with the rows the build landed (an empty partition still records it).
+      this.db.prepare('INSERT OR IGNORE INTO built_roots (root) VALUES (?)').run(root)
       this.db
         .prepare(
           'UPDATE meta SET generation = ?, resolved_refs = ?, dropped_refs = ?, cache_hits = ?, cache_misses = ?'

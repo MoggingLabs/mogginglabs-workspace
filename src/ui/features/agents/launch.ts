@@ -72,6 +72,12 @@ export async function composeFirstPrompt(opts: ComposeFirstPromptOpts): Promise<
     const on = (await getBridge().invoke(BrainChannels.orientGet, opts.anchorWorkspaceId)) === true
     if (!on) return opts.task
 
+    // Build-on-open (the launch door): if this checkout has never been indexed, kick
+    // ONE build so the NEXT launch is oriented. Fire-and-forget — orientation is a
+    // garnish and a launch must never block on a parse; this launch uses whatever is
+    // already built (nothing, the very first time). A no-op once built.
+    void getBridge().invoke(BrainChannels.ensureBuilt, { root: opts.root }).catch(() => undefined)
+
     // Revision D: recall first — memories are cheaper than signatures, so they
     // take their (small) share of the ONE budget and the map yields the rest.
     let memSection = ''

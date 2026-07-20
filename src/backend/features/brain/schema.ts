@@ -177,6 +177,9 @@ CREATE TABLE IF NOT EXISTS memory_draft_stats (
 CREATE TABLE IF NOT EXISTS memory_usage (
   slug TEXT PRIMARY KEY, recalls INTEGER NOT NULL DEFAULT 0, reads INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS built_roots (
+  root TEXT PRIMARY KEY
+);
 `
 
 /** One node's repomap rank row (step 06) — written in the SAME transaction as the

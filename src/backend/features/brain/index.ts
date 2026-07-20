@@ -330,6 +330,23 @@ export class BrainService {
   }
 
   /**
+   * The build-on-open door (ADR 0018 — self-build): if the caller's partition has
+   * never been built, kick exactly ONE build for it; if it is already built, do
+   * nothing and answer the current status. Idempotent and cheap to call from every
+   * door (Brain view open, pane launch) — the per-root guard is what keeps "open"
+   * from meaning "rebuild every time". A build already in flight for this project
+   * answers `busy` (rebuild's own refusal); the caller retries on the next door,
+   * never here — orientation is a garnish, never a blocker.
+   */
+  async ensureBuilt(root: string): Promise<BrainAnswer> {
+    const r = this.ensure(root)
+    if ('reason' in r) return r
+    const partitionRoot = this.partitionRootFor(r.brain.project, root)
+    if (r.brain.store.rootBuilt(partitionRoot)) return this.answer(r.brain)
+    return this.rebuild(root)
+  }
+
+  /**
    * The ONE write door (ADR 0018 step 07): land a symbol write on `rel` under
    * `root`'s partition — CAS-guarded, atomic, synchronously re-indexed. Runs the
    * whole check-splice-write-reindex sequence inside the project's exclusive
@@ -948,12 +965,15 @@ export class BrainService {
     this.changedCb({ projectKey, generation: outcome.generation, dirty })
   }
 
-  /** Start following one BUILT partition. An empty partition is not followed — freshness
-   *  keeps an index current; it never grows one from nothing (the rebuild is that verb). */
+  /** Start following one BUILT partition. Built-ness is the gate, NOT row count: a
+   *  partition that was built but holds no indexable files still gets followed, so the
+   *  first source file to land there becomes queryable instead of invisible forever.
+   *  An UNBUILT partition is not followed — freshness keeps an index current; it never
+   *  grows one from nothing (the rebuild/ensureBuilt is that verb). */
   private attachRoot(project: BrainProject, root: string, store: BrainStore, reconcile: boolean): void {
     if (!this.freshness || this.freshness.attached(root)) return
+    if (!store.rootBuilt(root)) return
     const rows = store.filesForRoot(root)
-    if (!rows.length) return
     this.freshness.attach(root, rows, reconcile)
     // 09: the cold-start heal covers memories too — `.memory/` may have moved
     // while the app was closed, and no porcelain tick will re-announce it.
@@ -1109,6 +1129,7 @@ export class BrainService {
       projectKey: brain.project.projectKey,
       roots: brain.project.roots,
       generation: brain.store.generation(),
+      built: brain.store.built(),
       // The freshness law (04): staleness is DATA. `dirty` is the honest count of paths
       // (any root) the index has seen move and not yet absorbed — never a blocking wait.
       dirty: brain.project.roots.some((r) => (this.freshness?.dirtyCount(r) ?? 0) > 0),
