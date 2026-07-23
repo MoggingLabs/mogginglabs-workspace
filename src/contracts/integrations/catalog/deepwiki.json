@@ -1,0 +1,25 @@
+{
+  "id": "deepwiki",
+  "label": "DeepWiki",
+  "source": "repo://presets.json#deepwiki (dev-verified 2026-07-15; re-author from primary docs)",
+  "mcp": {
+    "transport": "http",
+    "url": "https://mcp.deepwiki.com/mcp"
+  },
+  "methods": [
+    {
+      "key": "open",
+      "kind": "none",
+      "name": "Connect (no account needed)",
+      "rank": 1
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "grantCopy": "Ask questions about any public GitHub repo - read-only, no account.",
+  "verifiedAt": "2026-07-15"
+}

@@ -1,0 +1,29 @@
+{
+  "id": "cf-graphql",
+  "label": "Cloudflare GraphQL",
+  "source": "repo://presets.json#cf-graphql (dev-verified 2026-07-15; re-author from primary docs)",
+  "group": "cloudflare",
+  "mcp": {
+    "transport": "http",
+    "url": "https://graphql.mcp.cloudflare.com/mcp"
+  },
+  "methods": [
+    {
+      "key": "browser",
+      "kind": "oauth",
+      "name": "Sign in with your browser",
+      "rank": 1,
+      "endpoints": {
+        "discovery": "mcp"
+      }
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "grantCopy": "Your account’s analytics via the GraphQL API.",
+  "verifiedAt": "2026-07-15"
+}

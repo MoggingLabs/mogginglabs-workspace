@@ -1,0 +1,41 @@
+{
+  "id": "n8n",
+  "label": "n8n",
+  "source": "repo://presets.json#n8n (dev-verified 2026-07-06; re-author from primary docs)",
+  "mcp": {
+    "transport": "http",
+    "url": "https://YOUR-N8N-INSTANCE/mcp/YOUR-TRIGGER-PATH"
+  },
+  "methods": [
+    {
+      "key": "api-key",
+      "kind": "apiKey",
+      "name": "Paste an API key",
+      "rank": 1,
+      "inputs": [
+        {
+          "key": "N8N_MCP_TOKEN",
+          "label": "N8n MCP Token",
+          "secret": true,
+          "required": true
+        }
+      ],
+      "connectionConfig": [
+        {
+          "key": "baseUrl",
+          "label": "Instance URL",
+          "help": "Self-hosted? Paste your instance address.",
+          "required": true
+        }
+      ]
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "grantCopy": "Your n8n workflows become agent tools. An agent that can run a workflow can do whatever that workflow does — expose deliberately, per workspace.",
+  "verifiedAt": "2026-07-06"
+}

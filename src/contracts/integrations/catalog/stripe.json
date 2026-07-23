@@ -1,0 +1,49 @@
+{
+  "id": "stripe",
+  "label": "Stripe",
+  "source": "https://docs.stripe.com/mcp",
+  "docs": "https://docs.stripe.com/api",
+  "mcp": {
+    "transport": "http",
+    "url": "https://mcp.stripe.com"
+  },
+  "methods": [
+    {
+      "key": "browser",
+      "kind": "oauth",
+      "name": "Sign in with your browser",
+      "rank": 1,
+      "endpoints": {
+        "discovery": "mcp"
+      }
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "profile": {
+    "via": "rest",
+    "url": "https://api.stripe.com/v1/account",
+    "paths": {
+      "id": "id",
+      "email": "email",
+      "name": "settings.dashboard.display_name||business_profile.name"
+    },
+    "source": "https://docs.stripe.com/api/account/retrieve"
+  },
+  "verification": {
+    "method": "GET",
+    "endpoint": "https://api.stripe.com/v1/account",
+    "source": "https://docs.stripe.com/api/account/retrieve"
+  },
+  "retry": {
+    "errorCodes": [
+      "429"
+    ]
+  },
+  "grantCopy": "LOUDEST one: this is MONEY. An agent here can touch customers, charges, and payouts your account can. A prompt-injected agent is a real financial risk — grant to one trusted workspace at most, keep write tools off, watch the trail.",
+  "verifiedAt": "2026-07-15"
+}

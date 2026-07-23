@@ -9,10 +9,10 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 183 gates: 23 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 185 gates: 25 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
 # GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE ·
-# GRAMMARCAT) + 160 app-boot
+# GRAMMARCAT · CATSCHEMA · TOOLWORDS) + 160 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -212,6 +212,17 @@ run_static MOTION  node scripts/check-reduced-motion.mjs
 # `npm install --dry-run` that must print no config warning (so it also catches keys arriving from
 # ~/.npmrc or the environment). Lockfile-only, offline-safe, writes nothing, ~1.3s.
 run_static NPMCONFIG node scripts/check-npm-config.mjs
+# CATSCHEMA: the provider catalog (ADR 0020) is the single source of truth for every
+# integration fact — a malformed row would surface as a broken chooser or a probe that
+# never fires. Schema + provenance-per-entry + humanized scopes + unique ids + a secret
+# scan (the catalog is committed plaintext and must stay boring). --selftest proves the
+# bite: every rule must catch its own violating fixture before the live data is trusted.
+run_static CATSCHEMA bash -c 'node scripts/check-catalog.mjs --selftest && node scripts/check-catalog.mjs'
+# TOOLWORDS: the integrations surfaces speak outcomes, not mechanism (ADR 0020 Appendix
+# A bans MCP/server/stdio/transport/drift/apply/adopt/preset at top level). REPORT-ONLY
+# until phase-tools 05–06 land the tool-first surfaces — the printed count is the
+# burn-down and must only ever go down; --enforce already exits 1 (proven at step 01).
+run_static TOOLWORDS node scripts/check-tool-wording.mjs
 # PRODARTIFACT: the harness used to SHIP. src/main/index.ts imported ~100 run*Smoke modules, so a
 # third of out/main/index.js — which electron-builder globs into app.asar — was a test rig every
 # user downloaded and loaded into the main process, wakeable by an env var (finding 41). Dev and

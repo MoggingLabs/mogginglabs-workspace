@@ -1,0 +1,52 @@
+{
+  "id": "vercel",
+  "label": "Vercel",
+  "source": "https://vercel.com/docs/mcp/vercel-mcp",
+  "docs": "https://vercel.com/docs/rest-api",
+  "mcp": {
+    "transport": "http",
+    "url": "https://mcp.vercel.com"
+  },
+  "methods": [
+    {
+      "key": "browser",
+      "kind": "oauth",
+      "name": "Sign in with your browser",
+      "rank": 1,
+      "endpoints": {
+        "discovery": "mcp"
+      }
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "profile": {
+    "via": "rest",
+    "url": "https://api.vercel.com/v2/user",
+    "paths": {
+      "id": "user.id",
+      "email": "user.email",
+      "name": "user.name||user.username",
+      "imageUrl": "user.avatar"
+    },
+    "source": "https://vercel.com/docs/rest-api/endpoints/user"
+  },
+  "verification": {
+    "method": "GET",
+    "endpoint": "https://api.vercel.com/v2/user",
+    "source": "https://vercel.com/docs/rest-api/endpoints/user"
+  },
+  "retry": {
+    "atHeader": "x-ratelimit-reset",
+    "remainingHeader": "x-ratelimit-remaining",
+    "errorCodes": [
+      "429"
+    ]
+  },
+  "grantCopy": "Deployments, projects, and logs your Vercel account can reach.",
+  "verifiedAt": "2026-07-15"
+}

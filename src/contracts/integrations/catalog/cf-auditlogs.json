@@ -1,0 +1,29 @@
+{
+  "id": "cf-auditlogs",
+  "label": "Cloudflare Audit Logs",
+  "source": "repo://presets.json#cf-auditlogs (dev-verified 2026-07-15; re-author from primary docs)",
+  "group": "cloudflare",
+  "mcp": {
+    "transport": "http",
+    "url": "https://auditlogs.mcp.cloudflare.com/mcp"
+  },
+  "methods": [
+    {
+      "key": "browser",
+      "kind": "oauth",
+      "name": "Sign in with your browser",
+      "rank": 1,
+      "endpoints": {
+        "discovery": "mcp"
+      }
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "grantCopy": "Who changed what on your Cloudflare account - read-only audit trail.",
+  "verifiedAt": "2026-07-15"
+}

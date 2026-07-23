@@ -1,0 +1,28 @@
+{
+  "id": "webflow",
+  "label": "Webflow",
+  "source": "repo://presets.json#webflow (dev-verified 2026-07-15; re-author from primary docs)",
+  "mcp": {
+    "transport": "http",
+    "url": "https://mcp.webflow.com/sse"
+  },
+  "methods": [
+    {
+      "key": "browser",
+      "kind": "oauth",
+      "name": "Sign in with your browser",
+      "rank": 1,
+      "endpoints": {
+        "discovery": "mcp"
+      }
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "grantCopy": "Sites, collections, and content your account can publish - an agent here can change a live site.",
+  "verifiedAt": "2026-07-15"
+}

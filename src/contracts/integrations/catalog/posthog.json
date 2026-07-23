@@ -1,0 +1,58 @@
+{
+  "id": "posthog",
+  "label": "PostHog",
+  "source": "https://posthog.com/docs/model-context-protocol",
+  "docs": "https://posthog.com/docs/api",
+  "mcp": {
+    "transport": "http",
+    "url": "https://mcp.posthog.com/mcp"
+  },
+  "methods": [
+    {
+      "key": "browser",
+      "kind": "oauth",
+      "name": "Sign in with your browser",
+      "rank": 1,
+      "endpoints": {
+        "discovery": "mcp"
+      }
+    },
+    {
+      "key": "api-key",
+      "kind": "apiKey",
+      "name": "Paste an API key",
+      "rank": 2,
+      "inputs": [
+        {
+          "key": "POSTHOG_API_KEY",
+          "label": "Posthog API Key",
+          "secret": true,
+          "required": true
+        }
+      ]
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "profile": {
+    "via": "rest",
+    "url": "https://us.posthog.com/api/users/@me/",
+    "paths": {
+      "id": "distinct_id",
+      "email": "email",
+      "name": "first_name"
+    },
+    "source": "https://posthog.com/docs/api/user"
+  },
+  "verification": {
+    "method": "GET",
+    "endpoint": "https://us.posthog.com/api/users/@me/",
+    "source": "https://posthog.com/docs/api/user"
+  },
+  "grantCopy": "Product analytics via your personal API key — reference it as an env pointer; the key itself never enters a config file.",
+  "verifiedAt": "2026-07-15"
+}

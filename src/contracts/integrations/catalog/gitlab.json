@@ -1,0 +1,60 @@
+{
+  "id": "gitlab",
+  "label": "GitLab",
+  "source": "https://docs.gitlab.com/ee/user/gitlab_duo/model_context_protocol/mcp_server.html",
+  "docs": "https://docs.gitlab.com/ee/api/rest/",
+  "mcp": {
+    "transport": "http",
+    "url": "https://gitlab.com/api/v4/mcp"
+  },
+  "methods": [
+    {
+      "key": "browser",
+      "kind": "oauth",
+      "name": "Sign in with your browser",
+      "rank": 1,
+      "endpoints": {
+        "discovery": "mcp"
+      },
+      "connectionConfig": [
+        {
+          "key": "baseUrl",
+          "label": "Instance URL",
+          "help": "Self-hosted? Paste your instance address.",
+          "required": false
+        }
+      ]
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "profile": {
+    "via": "rest",
+    "url": "https://gitlab.com/api/v4/user",
+    "paths": {
+      "id": "id",
+      "email": "email||username",
+      "name": "name||username",
+      "imageUrl": "avatar_url"
+    },
+    "source": "https://docs.gitlab.com/ee/api/users.html"
+  },
+  "verification": {
+    "method": "GET",
+    "endpoint": "https://gitlab.com/api/v4/user",
+    "source": "https://docs.gitlab.com/ee/api/users.html"
+  },
+  "retry": {
+    "atHeader": "ratelimit-reset",
+    "remainingHeader": "ratelimit-remaining",
+    "errorCodes": [
+      "429"
+    ]
+  },
+  "grantCopy": "Projects, issues, and MRs (GitLab 18.6+ instances). Self-managed: override the base URL — same path on your host.",
+  "verifiedAt": "2026-07-15"
+}

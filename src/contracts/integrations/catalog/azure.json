@@ -1,0 +1,25 @@
+{
+  "id": "azure",
+  "label": "Microsoft Azure",
+  "source": "repo://presets.json#azure (dev-verified 2026-07-06; re-author from primary docs)",
+  "mcp": {
+    "transport": "stdio",
+    "command": "npx -y @azure/mcp@latest server start"
+  },
+  "methods": [
+    {
+      "key": "open",
+      "kind": "none",
+      "name": "Connect (no account needed)",
+      "rank": 1
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "grantCopy": "Azure operations under your az login. Infrastructure blast radius — grant narrowly.",
+  "verifiedAt": "2026-07-06"
+}

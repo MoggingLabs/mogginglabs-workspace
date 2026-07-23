@@ -1,0 +1,42 @@
+{
+  "id": "fal",
+  "label": "fal.ai",
+  "source": "repo://presets.json#fal (dev-verified 2026-07-15; re-author from primary docs)",
+  "mcp": {
+    "transport": "http",
+    "url": "https://mcp.fal.ai/mcp"
+  },
+  "methods": [
+    {
+      "key": "browser",
+      "kind": "oauth",
+      "name": "Sign in with your browser",
+      "rank": 1,
+      "endpoints": {
+        "discovery": "mcp"
+      }
+    },
+    {
+      "key": "api-key",
+      "kind": "apiKey",
+      "name": "Paste an API key",
+      "rank": 2,
+      "inputs": [
+        {
+          "key": "FAL_KEY",
+          "label": "Fal Key",
+          "secret": true,
+          "required": true
+        }
+      ]
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "grantCopy": "1,000+ gen-media models on your fal key — generation bills to you. The key rides as an env pointer, never a literal.",
+  "verifiedAt": "2026-07-15"
+}

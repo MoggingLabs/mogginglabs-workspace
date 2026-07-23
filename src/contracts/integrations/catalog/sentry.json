@@ -1,0 +1,74 @@
+{
+  "id": "sentry",
+  "label": "Sentry",
+  "source": "https://docs.sentry.io/product/sentry-mcp/",
+  "docs": "https://docs.sentry.io/api/",
+  "mcp": {
+    "transport": "http",
+    "url": "https://mcp.sentry.dev/mcp"
+  },
+  "methods": [
+    {
+      "key": "browser",
+      "kind": "oauth",
+      "name": "Sign in with your browser",
+      "rank": 1,
+      "endpoints": {
+        "discovery": "mcp"
+      },
+      "connectionConfig": [
+        {
+          "key": "baseUrl",
+          "label": "Instance URL",
+          "help": "Self-hosted? Paste your instance address.",
+          "required": false
+        }
+      ]
+    },
+    {
+      "key": "api-key",
+      "kind": "apiKey",
+      "name": "Paste an API key",
+      "rank": 2,
+      "inputs": [
+        {
+          "key": "SENTRY_AUTH_TOKEN",
+          "label": "Sentry Auth Token",
+          "secret": true,
+          "required": true
+        }
+      ],
+      "connectionConfig": [
+        {
+          "key": "baseUrl",
+          "label": "Instance URL",
+          "help": "Self-hosted? Paste your instance address.",
+          "required": true
+        }
+      ]
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "profile": {
+    "via": "rest",
+    "url": "https://sentry.io/api/0/users/me/",
+    "paths": {
+      "id": "id",
+      "email": "email",
+      "name": "name"
+    },
+    "source": "https://docs.sentry.io/api/users/"
+  },
+  "verification": {
+    "method": "GET",
+    "endpoint": "https://sentry.io/api/0/",
+    "source": "https://docs.sentry.io/api/auth/"
+  },
+  "grantCopy": "Issues, traces, and releases. OAuth per CLI, or one auth token for all agents via the vault. Self-hosted Sentry: override the base URL.",
+  "verifiedAt": "2026-07-15"
+}

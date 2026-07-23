@@ -1,0 +1,96 @@
+{
+  "id": "github-mcp",
+  "label": "GitHub",
+  "source": "https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps",
+  "docs": "https://docs.github.com/en/copilot/customizing-copilot/using-model-context-protocol/using-the-github-mcp-server",
+  "setupGuideUrl": "https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app",
+  "mcp": {
+    "transport": "http",
+    "url": "https://api.githubcopilot.com/mcp/"
+  },
+  "methods": [
+    {
+      "key": "browser",
+      "kind": "oauth",
+      "name": "Sign in with your browser",
+      "rank": 1,
+      "endpoints": {
+        "authorizationUrl": "https://github.com/login/oauth/authorize",
+        "tokenUrl": "https://github.com/login/oauth/access_token"
+      },
+      "scopes": [
+        {
+          "scope": "repo",
+          "title": "Repositories",
+          "description": "Full access to public and private repositories your account can touch."
+        },
+        {
+          "scope": "read:org",
+          "title": "Read organizations",
+          "description": "Read organization and team membership."
+        },
+        {
+          "scope": "gist",
+          "title": "Gists",
+          "description": "Create and edit gists."
+        },
+        {
+          "scope": "workflow",
+          "title": "Actions workflows",
+          "description": "Manage GitHub Actions workflow files."
+        }
+      ],
+      "source": "https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps",
+      "quirks": {
+        "refreshKeepsToken": true
+      }
+    },
+    {
+      "key": "api-key",
+      "kind": "apiKey",
+      "name": "Paste an API key",
+      "rank": 2,
+      "inputs": [
+        {
+          "key": "GITHUB_PAT",
+          "label": "GitHub PAT",
+          "secret": true,
+          "required": true
+        }
+      ]
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "profile": {
+    "via": "rest",
+    "url": "https://api.github.com/user",
+    "paths": {
+      "id": "id",
+      "email": "email||login",
+      "name": "name||login",
+      "imageUrl": "avatar_url"
+    },
+    "source": "https://docs.github.com/en/rest/users/users#get-the-authenticated-user"
+  },
+  "verification": {
+    "method": "GET",
+    "endpoint": "https://api.github.com/user",
+    "source": "https://docs.github.com/en/rest/users/users#get-the-authenticated-user"
+  },
+  "retry": {
+    "atHeader": "x-ratelimit-reset",
+    "remainingHeader": "x-ratelimit-remaining",
+    "errorCodes": [
+      "403",
+      "429",
+      "5xx"
+    ]
+  },
+  "grantCopy": "Repos, issues, and PRs your account can touch. OAuth per CLI (vendor-preferred, per-CLI revocation) — or one PAT for all agents via the vault: one paste, shared blast radius.",
+  "verifiedAt": "2026-07-15"
+}

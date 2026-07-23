@@ -1,0 +1,48 @@
+{
+  "id": "supabase",
+  "label": "Supabase",
+  "source": "https://supabase.com/docs/guides/getting-started/mcp",
+  "docs": "https://supabase.com/docs/reference/api/introduction",
+  "mcp": {
+    "transport": "http",
+    "url": "https://mcp.supabase.com/mcp"
+  },
+  "methods": [
+    {
+      "key": "browser",
+      "kind": "oauth",
+      "name": "Sign in with your browser",
+      "rank": 1,
+      "endpoints": {
+        "discovery": "mcp"
+      }
+    },
+    {
+      "key": "api-key",
+      "kind": "apiKey",
+      "name": "Paste an API key",
+      "rank": 2,
+      "inputs": [
+        {
+          "key": "SUPABASE_ACCESS_TOKEN",
+          "label": "Supabase Access Token",
+          "secret": true,
+          "required": true
+        }
+      ]
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "verification": {
+    "method": "GET",
+    "endpoint": "https://api.supabase.com/v1/projects",
+    "source": "https://supabase.com/docs/reference/api/v1-list-all-projects"
+  },
+  "grantCopy": "Schema, auth, and edge functions — OAuth is currently all-or-nothing on permissions. OAuth per CLI, or one PAT for all agents via the vault (one paste, shared blast radius).",
+  "verifiedAt": "2026-07-15"
+}

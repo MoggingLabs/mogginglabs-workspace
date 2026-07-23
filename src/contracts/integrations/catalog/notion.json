@@ -1,0 +1,37 @@
+{
+  "id": "notion",
+  "label": "Notion",
+  "source": "https://developers.notion.com/docs/mcp",
+  "docs": "https://developers.notion.com/",
+  "mcp": {
+    "transport": "http",
+    "url": "https://mcp.notion.com/mcp"
+  },
+  "methods": [
+    {
+      "key": "browser",
+      "kind": "oauth",
+      "name": "Sign in with your browser",
+      "rank": 1,
+      "endpoints": {
+        "discovery": "mcp"
+      }
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "verification": {
+    "method": "GET",
+    "endpoint": "https://api.notion.com/v1/users/me",
+    "headers": {
+      "Notion-Version": "2022-06-28"
+    },
+    "source": "https://developers.notion.com/reference/get-self"
+  },
+  "grantCopy": "Pages and databases your account can touch — agents write where you can.",
+  "verifiedAt": "2026-07-15"
+}

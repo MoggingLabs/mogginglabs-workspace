@@ -1,0 +1,40 @@
+{
+  "id": "linear",
+  "label": "Linear",
+  "source": "https://linear.app/docs/mcp",
+  "docs": "https://developers.linear.app/docs",
+  "mcp": {
+    "transport": "http",
+    "url": "https://mcp.linear.app/mcp"
+  },
+  "methods": [
+    {
+      "key": "browser",
+      "kind": "oauth",
+      "name": "Sign in with your browser",
+      "rank": 1,
+      "endpoints": {
+        "discovery": "mcp"
+      }
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "verification": {
+    "method": "POST",
+    "endpoint": "https://api.linear.app/graphql",
+    "source": "https://developers.linear.app/docs/graphql/working-with-the-graphql-api"
+  },
+  "retry": {
+    "remainingHeader": "x-ratelimit-requests-remaining",
+    "errorCodes": [
+      "429"
+    ]
+  },
+  "grantCopy": "Issues, projects, and cycles your account can touch - finished work reports back to the ticket.",
+  "verifiedAt": "2026-07-15"
+}

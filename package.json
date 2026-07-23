@@ -25,6 +25,7 @@
     "catalog:agent-settings:check": "node scripts/check-agent-settings-catalog.mjs",
     "catalog:grammars:update": "node scripts/update-grammar-catalog.mjs",
     "catalog:grammars:check": "node scripts/check-grammar-catalog.mjs",
+    "catalog:integrations:check": "node scripts/check-catalog.mjs",
     "dist": "electron-vite build && electron-builder --publish never",
     "dist:win": "electron-vite build && electron-builder --win --publish never",
     "dist:mac": "electron-vite build && electron-builder --mac --publish never",

@@ -1,0 +1,28 @@
+{
+  "id": "square",
+  "label": "Square",
+  "source": "repo://presets.json#square (dev-verified 2026-07-15; re-author from primary docs)",
+  "mcp": {
+    "transport": "http",
+    "url": "https://mcp.squareup.com/sse"
+  },
+  "methods": [
+    {
+      "key": "browser",
+      "kind": "oauth",
+      "name": "Sign in with your browser",
+      "rank": 1,
+      "endpoints": {
+        "discovery": "mcp"
+      }
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "grantCopy": "MONEY: payments, customers, and catalog on your Square account. Grant to one trusted workspace at most.",
+  "verifiedAt": "2026-07-15"
+}

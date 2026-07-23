@@ -1,0 +1,106 @@
+#!/usr/bin/env node
+// TOOLWORDS — the plumbing-jargon gate (ADR 0020, phase-tools/01).
+//
+//   node scripts/check-tool-wording.mjs             # report-only until steps 05–06 flip it
+//   node scripts/check-tool-wording.mjs --enforce   # exit 1 on any violation (the future default)
+//
+// THE RULE: the integrations surfaces speak OUTCOMES, not mechanism. "Servers on
+// your CLIs" is a sentence that means nothing until the user has read three
+// paragraphs — and it was typed by us, in the house voice, which is exactly why a
+// list (not a style note) has to hold the line. Banned at top level: MCP, server,
+// stdio, transport, drift, apply, adopt, preset, Route A/B. Mechanism words remain
+// legal in fine print (the custody subtitles) and in the Library's advanced fold —
+// via the ALLOWED list below, which pins each survivor to the exact line it was
+// reviewed with (the check-credential-wording.mjs discipline).
+//
+// REPORT-ONLY FOR NOW (the LAUNCHAUDIT pattern): today's copy predates the tool-
+// first rebuild and is FULL of these words — this gate exists from step 01 so the
+// violation count only ever goes DOWN, and flips to enforcing as steps 05–06 land
+// the new surfaces. The count printed at the bottom is the burn-down.
+//
+// Scope: string literals in src/ui/features/settings/**/*.ts — the strings a user
+// actually reads. Comments and identifiers are out of scope by construction (we
+// tokenize literals out of comment-stripped source). Sentence-ish literals only
+// (must contain a space): a bare class name like 'mgr-server-id' is CSS, not copy.
+import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { join, relative, sep } from 'node:path'
+
+const ROOT = process.cwd()
+const SCOPE = join(ROOT, 'src', 'ui', 'features', 'settings')
+const ENFORCE = process.argv.includes('--enforce') || process.env.MOGGING_TOOLWORDS_ENFORCE === '1'
+
+const BANNED = [
+  ['mcp', /\bMCPs?\b/],
+  ['server', /\bservers?\b/i],
+  ['stdio', /\bstdio\b/i],
+  ['transport', /\btransports?\b/i],
+  ['drift', /\bdrift(?:ed|s)?\b/i],
+  ['apply', /\b(?:re-)?appl(?:y|ied|ies)\b/i],
+  ['adopt', /\badopt(?:ed|s)?\b/i],
+  ['preset', /\bpresets?\b/i],
+  ['route-ab', /\bRoute\s+[AB]\b/]
+]
+
+// Exact substrings that stay legal, pinned per file. Fine-print custody lines and
+// the Library's advanced fold earn entries here as steps 05–06 land; an entry is
+// suppressed only while the line still contains the reviewed text verbatim.
+const ALLOWED = [
+  // (empty at step 01 — the burn-down starts at the full count)
+]
+
+function tsFiles(dir) {
+  const out = []
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name)
+    if (statSync(p).isDirectory()) out.push(...tsFiles(p))
+    else if (name.endsWith('.ts')) out.push(p)
+  }
+  return out
+}
+
+/** Strip comments, then yield [literal, line] for every string literal. */
+function literals(src) {
+  const noComments = src.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' ')).replace(/(^|[^:])\/\/[^\n]*/g, (m, p1) => p1 + ' '.repeat(m.length - p1.length))
+  const out = []
+  const re = /'((?:[^'\\\n]|\\.)*)'|"((?:[^"\\\n]|\\.)*)"|`((?:[^`\\]|\\.)*)`/g
+  let m
+  while ((m = re.exec(noComments))) {
+    const text = m[1] ?? m[2] ?? m[3] ?? ''
+    const line = noComments.slice(0, m.index).split('\n').length
+    out.push([text, line])
+  }
+  return out
+}
+
+const violations = []
+for (const file of tsFiles(SCOPE)) {
+  const rel = relative(ROOT, file).split(sep).join('/')
+  const src = readFileSync(file, 'utf8')
+  for (const [text, line] of literals(src)) {
+    if (!text.includes(' ')) continue // class lists and ids are not copy
+    for (const [name, re] of BANNED) {
+      if (!re.test(text)) continue
+      const allowed = ALLOWED.some((a) => a.file === rel && text.includes(a.contains))
+      if (!allowed) violations.push({ file: rel, line, name, text: text.length > 90 ? text.slice(0, 87) + '…' : text })
+    }
+  }
+}
+
+if (violations.length) {
+  const mode = ENFORCE ? 'ENFORCING' : 'REPORT-ONLY (pending phase-tools 05–06)'
+  console.log(`TOOLWORDS [${mode}]: ${violations.length} jargon hit(s) in user-visible strings:`)
+  const byFile = new Map()
+  for (const v of violations) {
+    if (!byFile.has(v.file)) byFile.set(v.file, [])
+    byFile.get(v.file).push(v)
+  }
+  for (const [file, vs] of byFile) {
+    console.log(`  ${file} (${vs.length})`)
+    for (const v of vs.slice(0, 8)) console.log(`    L${v.line} [${v.name}] ${JSON.stringify(v.text)}`)
+    if (vs.length > 8) console.log(`    … and ${vs.length - 8} more`)
+  }
+  if (ENFORCE) process.exit(1)
+  console.log('TOOLWORDS: report-only pass — the count above is the burn-down; steps 05–06 flip enforcement.')
+  process.exit(0)
+}
+console.log('TOOLWORDS: no plumbing jargon in user-visible integration strings')

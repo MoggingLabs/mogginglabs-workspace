@@ -1,0 +1,165 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "mogging://integrations/provider-catalog",
+  "title": "Provider catalog entry (ADR 0020)",
+  "description": "One JSON per service. Validated by scripts/check-catalog.mjs (CATSCHEMA). Every entry carries source provenance; Nango (ELv2) and Metorial (FSL) content must never be copied verbatim — re-author from the provider's primary docs.",
+  "type": "object",
+  "required": ["id", "label", "source", "methods"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "label": { "type": "string", "minLength": 1 },
+    "source": { "type": "string", "minLength": 8 },
+    "logo": { "type": "string" },
+    "categories": { "type": "array", "items": { "type": "string" } },
+    "docs": { "type": "string", "pattern": "^https://" },
+    "setupGuideUrl": { "type": "string", "pattern": "^https://" },
+    "docsLinks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "name", "url"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "type": "string" },
+          "name": { "type": "string" },
+          "url": { "type": "string", "pattern": "^https://" }
+        }
+      }
+    },
+    "group": { "type": "string" },
+    "mcp": {
+      "type": "object",
+      "required": ["transport"],
+      "additionalProperties": false,
+      "properties": {
+        "transport": { "enum": ["http", "stdio"] },
+        "url": { "type": "string" },
+        "command": { "type": "string" }
+      }
+    },
+    "methods": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["key", "kind", "name", "rank"],
+        "additionalProperties": false,
+        "properties": {
+          "key": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+          "kind": { "enum": ["oauth", "apiKey", "cliOwned", "none"] },
+          "name": { "type": "string", "minLength": 1 },
+          "rank": { "type": "integer", "minimum": 1 },
+          "source": { "type": "string" },
+          "endpoints": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "discovery": { "enum": ["mcp", "oidc"] },
+              "authorizationUrl": { "type": "string", "pattern": "^https://" },
+              "tokenUrl": { "type": "string", "pattern": "^https://" },
+              "refreshUrl": { "type": "string", "pattern": "^https://" }
+            }
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["scope", "title"],
+              "additionalProperties": false,
+              "properties": {
+                "scope": { "type": "string" },
+                "title": { "type": "string", "minLength": 1 },
+                "description": { "type": "string" }
+              }
+            }
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["key", "label"],
+              "additionalProperties": false,
+              "properties": {
+                "key": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+                "label": { "type": "string" },
+                "help": { "type": "string" },
+                "secret": { "type": "boolean" },
+                "required": { "type": "boolean" },
+                "placeholder": { "type": "string" }
+              }
+            }
+          },
+          "connectionConfig": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["key", "label"],
+              "additionalProperties": false,
+              "properties": {
+                "key": { "type": "string" },
+                "label": { "type": "string" },
+                "help": { "type": "string" },
+                "placeholder": { "type": "string" },
+                "required": { "type": "boolean" }
+              }
+            }
+          },
+          "quirks": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "scopeSeparator": { "type": "string" },
+              "authorizationParams": { "type": "object", "additionalProperties": { "type": "string" } },
+              "tokenExpirationBuffer": { "type": "integer", "minimum": 0 },
+              "refreshKeepsToken": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "required": ["via"],
+      "additionalProperties": false,
+      "properties": {
+        "via": { "enum": ["oidc", "rest", "tool"] },
+        "url": { "type": "string", "pattern": "^https://" },
+        "tool": { "type": "string" },
+        "paths": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": { "type": "string" },
+            "email": { "type": "string" },
+            "name": { "type": "string" },
+            "imageUrl": { "type": "string" }
+          }
+        },
+        "source": { "type": "string" }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "required": ["method", "endpoint"],
+      "additionalProperties": false,
+      "properties": {
+        "method": { "enum": ["GET", "POST"] },
+        "endpoint": { "type": "string" },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "source": { "type": "string" }
+      }
+    },
+    "retry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "atHeader": { "type": "string" },
+        "remainingHeader": { "type": "string" },
+        "errorCodes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "grantCopy": { "type": "string" },
+    "verifiedAt": { "type": "string" }
+  }
+}

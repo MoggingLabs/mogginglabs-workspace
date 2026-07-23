@@ -1,0 +1,25 @@
+{
+  "id": "aws-api",
+  "label": "AWS (API suite)",
+  "source": "repo://presets.json#aws-api (dev-verified 2026-07-06; re-author from primary docs)",
+  "mcp": {
+    "transport": "stdio",
+    "command": "uvx awslabs.aws-api-mcp-server@latest"
+  },
+  "methods": [
+    {
+      "key": "open",
+      "kind": "none",
+      "name": "Connect (no account needed)",
+      "rank": 1
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "grantCopy": "AWS API operations under YOUR local credential chain — the agent can do what your aws CLI can. Scope the IAM role narrowly; this is infrastructure.",
+  "verifiedAt": "2026-07-06"
+}
