@@ -212,6 +212,21 @@ export function claudeNotifyHooks(invocation: string): Record<string, unknown> {
   return {
     Notification: hook('needs-input'),
     Stop: hook('done'),
+    // StopFailure: the turn DIED on an API error — no done, no idle, ever, so without this the
+    // pane wears busy until the next prompt (audit G2). The docs promise the command still runs
+    // ("output and exit code are ignored" — ignored by Claude, not unexecuted), so the socket
+    // side-effect fires. Lands as turn-failed: settles the pane, spares a standing green.
+    StopFailure: hook('turn-failed'),
+    // PostToolBatch: proof-of-work between turn-start and done (audit G1/G3). It re-lights busy
+    // the moment a CONTINUED turn (a blocking Stop hook — /goal, auto-continue — with no new
+    // UserPromptSubmit) touches a tool, which is the working-agent-wearing-idle fix. Chosen over
+    // PreToolUse(+PostToolUse) on measured numbers, not estimates (scripts/measure-hook-latency.mjs,
+    // 2026-07-23: 151ms median per fire): hooks run synchronously, so per-tool hooks add ~300ms
+    // to EVERY tool call (~30s over a 100-tool turn), while one fire per resolved batch costs
+    // ~1% of a model step for the same rail fidelity — the earliness per-tool hooks buy is
+    // invisible on a sidebar ring. Zero tokens either way: tool-hook stdout goes to the debug
+    // log only, and this command prints nothing.
+    PostToolBatch: hook('busy'),
     SubagentStart: hook('subagent-start'),
     SubagentStop: hook('subagent-stop'),
     UserPromptSubmit: hook('turn-start')
@@ -257,7 +272,35 @@ export function codexBellArgs(notifyScript?: string): string[] {
     '-c', 'tui.notification_condition=always'
   ]
   const p = notifyScript?.replace(/\\/g, '/')
-  if (p && !p.includes("'")) args.push('-c', `notify=[ 'node', '${p}' ]`)
+  if (p && !p.includes("'")) {
+    args.push('-c', `notify=[ 'node', '${p}' ]`)
+    // Codex's REAL hook system (config-advanced, verified 2026-07-23): `[[hooks.<Event>]]`
+    // array-of-tables, command handlers only ("prompt and agent hook handlers are parsed but
+    // skipped"). As a `-c` override that is an inline array of inline tables — the same
+    // TOML-literal single-quote discipline as `notify` above. Two events close the audit gaps
+    // the chime+notify pair cannot see:
+    //   UserPromptSubmit -> turn-start  the turn boundary (resets the subagent counter; the
+    //                                   chime+notify baseline had no turn-start at all, which
+    //                                   is why a second-turn Codex pane never left `done`
+    //                                   except by the user's own keystroke)
+    //   PostToolUse      -> busy        proof-of-work (G1/G3) — Codex has no batch-level
+    //                                   event, so per-tool is its only tool signal; the
+    //                                   ~150ms/fire cost (measure-hook-latency.mjs) is
+    //                                   accepted as the only option, not preferred
+    // Stop is deliberately NOT wired: `notify` already lands the official `done` and a second
+    // copy would be dead weight. The hook command is ONE shell string (not an argv array), so
+    // a path containing whitespace would need double quotes inside the TOML literal — which
+    // the cmd/sh/PowerShell relay cannot carry safely. Such a path skips the hooks and keeps
+    // the chime+notify baseline: a launch must never break over the bell.
+    // Our command prints nothing and exits 0, so UserPromptSubmit's stdout-becomes-context
+    // and PostToolUse's feedback-replaces-tool-result channels stay untouched (zero tokens).
+    if (!/\s/.test(p)) {
+      const hook = (event: string): string =>
+        `[ { hooks = [ { type = 'command', command = 'node ${p} --event ${event}' } ] } ]`
+      args.push('-c', `hooks.UserPromptSubmit=${hook('turn-start')}`)
+      args.push('-c', `hooks.PostToolUse=${hook('busy')}`)
+    }
+  }
   return args
 }
 
@@ -326,7 +369,12 @@ export function geminiSystemSettings(
     out.hooks = {
       ...hooks,
       BeforeAgent: [...prior('BeforeAgent'), hook('turn-start')],
-      AfterAgent: [...prior('AfterAgent'), hook('done')]
+      AfterAgent: [...prior('AfterAgent'), hook('done')],
+      // Proof-of-work between the turn boundaries (audit G1/G3). Gemini has no batch-level
+      // event (AfterModel fires per response CHUNK — worse, not better), so per-tool is its
+      // tool signal; the ~150ms/fire cost (measure-hook-latency.mjs) is accepted as the only
+      // option. Our command prints nothing, honoring the hooks' JSON-only stdout contract.
+      AfterTool: [...prior('AfterTool'), hook('busy')]
     }
   }
   return JSON.stringify(out)
@@ -351,12 +399,22 @@ export function opencodeTuiConfig(existing: unknown, session: Record<string, unk
 
 /** OpenCode has no hook config — its only verdict channel is a PLUGIN, so we generate one.
  *
- *  It listens for `session.idle` and speaks the house vocabulary:
- *    - the ROOT session going idle is the main agent finishing  -> `done`  -> GREEN
- *    - a CHILD session going idle is a subagent finishing       -> `subagent-stop`, which
+ *  It listens on OpenCode's full event bus (docs/plugins, verified 2026-07-23) and speaks the
+ *  house vocabulary:
+ *    - `session.idle`, ROOT session   the main agent finished        -> `done`  -> GREEN
+ *    - `session.idle`, CHILD session  a subagent finished            -> `subagent-stop`, which
  *      authors no state at all; it exists only to cancel the `subagent_done` chime the TUI
  *      fires at that same instant, which would otherwise ring the pane RED for a subagent.
- *  A question/permission chime has nothing behind it and still rings red, as it should.
+ *    - `permission.asked` / `permission.replied`  the EXPLICIT block channel (audit G6): a
+ *      named needs-input the instant the dialog opens — sharper than the chime deduction,
+ *      which has to hold a BEL for 2s first — and an explicit busy the instant it is answered.
+ *    - `session.error`  the turn DIED (audit G2) -> `turn-failed`: without it a pane whose
+ *      turn errored out wears busy forever (no done and no idle will ever arrive).
+ *    - `tool.execute.after`  proof-of-work (audit G1/G3) -> `busy`, THROTTLED: the plugin
+ *      runs in-process, so unlike Claude's synchronous hooks each fire is a detached spawn
+ *      that never blocks the agent — but a 100-tool turn would still burn 100 node spawns
+ *      for a dot that is already solid green. One fire per window keeps the pane honest at
+ *      spawn cost ~zero; `session.error` resets the window so recovery re-lights instantly.
  *
  *  Root vs child is `parentID` — OpenCode's own idiom is `list().find(s => !s.parentID)`,
  *  and the plugin uses the same SDK call. If the lookup fails we fall back to treating the
@@ -374,6 +432,9 @@ import { spawn } from 'node:child_process'
 
 const SCRIPT = ${JSON.stringify(notifyScript)}
 
+// One busy re-assert per window: the dot only needs re-lighting, not a spawn per tool.
+const BUSY_THROTTLE_MS = 15000
+
 const fire = (event) => {
   if (!process.env.MOGGING_PANE_ID || !process.env.MOGGING_DAEMON_ENDPOINT) return
   try {
@@ -383,20 +444,40 @@ const fire = (event) => {
   } catch {}
 }
 
-export const MoggingNotify = async ({ client }) => ({
-  event: async ({ event }) => {
-    try {
-      if (event?.type !== 'session.idle') return
-      const id = event.properties?.sessionID ?? event.properties?.sessionId
-      let isChild = false
+export const MoggingNotify = async ({ client }) => {
+  let lastBusyAt = 0
+  return {
+    event: async ({ event }) => {
       try {
-        const sessions = (await client.session.list())?.data ?? []
-        isChild = !!sessions.find((s) => s.id === id)?.parentID
+        const type = event?.type
+        if (type === 'session.idle') {
+          const id = event.properties?.sessionID ?? event.properties?.sessionId
+          let isChild = false
+          try {
+            const sessions = (await client.session.list())?.data ?? []
+            isChild = !!sessions.find((s) => s.id === id)?.parentID
+          } catch {}
+          fire(isChild ? 'subagent-stop' : 'done')
+        } else if (type === 'session.error') {
+          lastBusyAt = 0 // a recovering turn's next tool must re-light busy instantly
+          fire('turn-failed')
+        } else if (type === 'permission.asked') {
+          fire('needs-input')
+        } else if (type === 'permission.replied') {
+          fire('busy')
+        }
       } catch {}
-      fire(isChild ? 'subagent-stop' : 'done')
-    } catch {}
+    },
+    'tool.execute.after': async () => {
+      try {
+        const now = Date.now()
+        if (now - lastBusyAt < BUSY_THROTTLE_MS) return
+        lastBusyAt = now
+        fire('busy')
+      } catch {}
+    }
   }
-})
+}
 `
 }
 

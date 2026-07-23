@@ -3,6 +3,7 @@
   "//2": "Gemini needs BOTH channels. `enableNotifications` is ONE switch covering 'action-required prompts AND session completion' (its own words), so on its own it cannot say which -- read as 'needs you', it painted every COMPLETED pane red. `AfterAgent` fires when the agent loop completes: that is the `done` the app reads the chime against.",
   "//3": "  completes     -> chime + AfterAgent done -> the done wins  -> GREEN (finished)",
   "//4": "  needs a human -> chime alone, uncontradicted             -> RED   (blocked)",
+  "//6": "AfterTool is proof-of-work: it re-lights busy the moment a continued turn touches a tool, so a working agent never sits on a yellow idle dot. The command prints nothing (Gemini hooks expect JSON-only stdout).",
   "//5": "AfterAgent is the MAIN loop only -- Gemini's subagents run through a different executor and fire no agent hooks -- so subagents stay invisible, which is the house rule. Do NOT wire the Notification hook: it fires for errors/warnings/info, which are not 'blocked on you', and mapping it to needs-input rings the pane red for a warning.",
   "general": {
     "enableNotifications": true
@@ -19,6 +20,13 @@
       {
         "hooks": [
           { "type": "command", "command": "mogging notify --event done" }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "hooks": [
+          { "type": "command", "command": "mogging notify --event busy" }
         ]
       }
     ]
