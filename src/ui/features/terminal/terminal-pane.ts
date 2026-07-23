@@ -1,5 +1,4 @@
 import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import {
   BrainChannels,
@@ -49,6 +48,7 @@ import { isTrackedSession } from '../../core/attention/tracking'
 import { assignmentForPane, getWorkspaces, workspaceIdForPane } from '../../core/workspace/workspace-info-port'
 import { claimsFor, onClaimsChange, setClaimsForDev, workspaceClaims } from './claims-store'
 import { createPaneAnchor, type PaneAnchorHandle } from './pane-anchor'
+import { applyGrid, proposeGrid } from './pane-fit'
 import { createPaneHeaderFit, type PaneHeaderFitHandle } from './pane-header-fit'
 import { createPaneScrollbar, type PaneScrollbarHandle } from './pane-scrollbar'
 import { mountPaneDrop } from './pane-drop'
@@ -89,7 +89,6 @@ const REFIT_SETTLE_MS = 120
 export class TerminalPane {
   private readonly instance: number
   private readonly term: Terminal
-  private readonly fit = new FitAddon()
   private readonly serializer = new SerializeAddon()
   private readonly resizeObs: ResizeObserver
   private visObs?: IntersectionObserver
@@ -163,7 +162,6 @@ export class TerminalPane {
       // byte of output — the buffer is empty until then, so no resize can have gone wrong yet.
       theme: { background: '#0c0d0f', foreground: '#f4f5f7' } // corrected by the theme port on mount
     })
-    this.term.loadAddon(this.fit)
     this.term.loadAddon(this.serializer)
     this.gl = new PaneWebglManager({ term: this.term, isVisible: () => this.visible, isDisposed: () => this.disposed })
 
@@ -197,7 +195,7 @@ export class TerminalPane {
       }
     })
     this.visObs.observe(host)
-    this.fit.fit()
+    this.refit(true)
 
     // Every clipboard chord is intercepted here, ahead of the PTY — see handleKey.
     // Ctrl+C / Cmd+C / Ctrl+Insert copy a selection (bare Ctrl+C with none = SIGINT);
@@ -550,29 +548,23 @@ export class TerminalPane {
     }, REFIT_SETTLE_MS)
   }
 
-  /** Re-fit the grid to the body and tell the PTY. The default path is cheap by
-   *  construction (propose, bail when unchanged/hidden — safe on hot churn paths);
-   *  `force` runs a real fit() for the reveal-settle case, where proposeDimensions
-   *  has been observed reading stale parent style. */
+  /** Re-fit the grid to the body (pane-fit.ts — the house derivation, no phantom
+   *  scrollbar lane) and tell the PTY when it changed. Cheap by construction: propose
+   *  bails when hidden/unmeasurable, apply bails when unchanged — safe on hot churn
+   *  paths. `force` only adds the unconditional anchor pin for the reveal/zoom cases,
+   *  where the viewport moved under a follower even if the grid did not. */
   private refit(force = false): void {
     try {
-      if (force) {
-        const before = { cols: this.term.cols, rows: this.term.rows }
-        this.fit.fit()
-        if (this.term.cols !== before.cols || this.term.rows !== before.rows) {
-          terminalClient.resize({ id: this.id, cols: this.term.cols, rows: this.term.rows })
-        }
+      const d = proposeGrid(this.term)
+      if (!d) return // hidden, not yet opened, or xterm moved its internals
+      if (applyGrid(this.term, d)) {
+        terminalClient.resize({ id: this.id, cols: this.term.cols, rows: this.term.rows })
         // A fit REFLOWS the buffer under a viewport nobody asked to move (a reveal, a
         // zoom, a window drag). If this pane was following its output, it still is.
         this.anchor?.pin()
-        return
+      } else if (force) {
+        this.anchor?.pin()
       }
-      const d = this.fit.proposeDimensions()
-      if (!d || !Number.isFinite(d.cols) || !Number.isFinite(d.rows)) return // hidden
-      if (d.cols === this.term.cols && d.rows === this.term.rows) return // nothing changed
-      this.term.resize(d.cols, d.rows)
-      terminalClient.resize({ id: this.id, cols: this.term.cols, rows: this.term.rows })
-      this.anchor?.pin()
     } catch (err) {
       // Never swallow silently — a failing fit is exactly how "the terminal doesn't
       // take its space" bugs hide.
