@@ -49,6 +49,7 @@ import { assignmentForPane, getWorkspaces, workspaceIdForPane } from '../../core
 import { claimsFor, onClaimsChange, setClaimsForDev, workspaceClaims } from './claims-store'
 import { createPaneAnchor, type PaneAnchorHandle } from './pane-anchor'
 import { applyGrid, proposeGrid } from './pane-fit'
+import { onDevicePixelRatioChange } from '../../core/system/dpr-port'
 import { createPaneHeaderFit, type PaneHeaderFitHandle } from './pane-header-fit'
 import { createPaneScrollbar, type PaneScrollbarHandle } from './pane-scrollbar'
 import { mountPaneDrop } from './pane-drop'
@@ -163,7 +164,18 @@ export class TerminalPane {
       theme: { background: '#0c0d0f', foreground: '#f4f5f7' } // corrected by the theme port on mount
     })
     this.term.loadAddon(this.serializer)
-    this.gl = new PaneWebglManager({ term: this.term, isVisible: () => this.visible, isDisposed: () => this.disposed })
+    this.gl = new PaneWebglManager({
+      term: this.term,
+      isVisible: () => this.visible,
+      isDisposed: () => this.disposed,
+      // A renderer swap is a metrics event (WebGL floors cells at device pixels, the
+      // DOM renderer doesn't): re-derive the grid through the same coalescer resizes
+      // use, so a rapid show/hide flip still costs one fit and one ConPTY repaint.
+      // Guarded: release() is also the dispose path.
+      onRendererChanged: () => {
+        if (!this.disposed) this.scheduleRefit()
+      }
+    })
 
     // Pane frame: a slim header (title · git chip · state · zoom) over the terminal
     // body. Static DOM — every update below is event-driven, nothing per-frame.
@@ -326,6 +338,11 @@ export class TerminalPane {
     // a dead strip at the right edge. Once ALL faces are active, force a re-measure
     // (fontFamily must actually change to invalidate xterm's char-size cache) + refit.
     void document.fonts?.ready?.then(() => this.remeasureFont())
+
+    // Monitor hop / display-scale change: the CSS boxes don't move (no ResizeObserver
+    // tick) but the WebGL renderer's device-pixel-floored cell width changes, so the
+    // correct grid changes. The dpr port is the event for exactly this (dpr-port.ts).
+    this.disposers.push(onDevicePixelRatioChange(() => this.scheduleRefit()))
 
     // Remote pane (4/05): the workspace manifest published this BEFORE apply, so the
     // spawn itself rides ssh. Local panes are unchanged.

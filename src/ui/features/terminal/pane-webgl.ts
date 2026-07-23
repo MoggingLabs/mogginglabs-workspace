@@ -53,6 +53,12 @@ export interface PaneWebglHost {
   readonly term: Terminal
   isVisible(): boolean
   isDisposed(): boolean
+  /** The ACTIVE renderer changed (WebGL attached, or detached back to the DOM renderer).
+   *  Cell metrics belong to the active renderer — WebGL floors cells at device pixels,
+   *  the DOM renderer does not, and at fractional display scaling they disagree — so a
+   *  swap is a metrics event exactly like a resize: the host must re-derive its grid
+   *  from the renderer that will actually paint (pane-fit.ts reads the active one). */
+  onRendererChanged(): void
 }
 
 export class PaneWebglManager {
@@ -163,6 +169,7 @@ export class PaneWebglManager {
       this.host.term.loadAddon(addon)
       this.webgl = addon
       glAttached.add(this)
+      this.host.onRendererChanged()
     } catch (err) {
       console.warn('WebGL renderer unavailable; using default renderer.', err)
     }
@@ -193,5 +200,9 @@ export class PaneWebglManager {
     } catch {
       /* already disposed with the terminal */
     }
+    // After the swap back to the DOM renderer — its metrics may disagree with WebGL's
+    // (see PaneWebglHost.onRendererChanged). The host guards its own disposed state
+    // (release is also the dispose path).
+    this.host.onRendererChanged()
   }
 }
