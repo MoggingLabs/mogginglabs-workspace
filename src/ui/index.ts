@@ -1,4 +1,4 @@
-import '@fontsource-variable/jetbrains-mono' // the app typeface — UI and terminals alike
+import './styles/fonts.css' // the app typefaces, vendored whole (full JBM + the symbols face — see fonts.css)
 import './styles/global.css'
 import { createAppShell } from './shell/app-shell'
 import { wireAttentionTracking } from './core/attention/tracking'

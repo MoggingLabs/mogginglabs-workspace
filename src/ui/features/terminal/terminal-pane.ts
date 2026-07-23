@@ -25,7 +25,13 @@ import {
 import { getBridge } from '../../core/ipc/bridge'
 import { terminalClient } from './terminal.client'
 import { onTerminalTheme } from '../../core/theme/theme-port'
-import { onTerminalFontSize, terminalFontSize, TERMINAL_LINE_HEIGHT } from '../../core/terminal/font-port'
+import {
+  onFontsLoadingDone,
+  onTerminalFontSize,
+  terminalFontsActive,
+  terminalFontSize,
+  TERMINAL_LINE_HEIGHT
+} from '../../core/terminal/font-port'
 import { windowsPtyFor } from '../../core/terminal/pty-emulation'
 import { registerPaneInstance, retirePaneInstance } from '../../core/terminal/pane-instance-port'
 import { forgetPane, markPaneLive, markPaneReattached, markPaneRemoteReady, markPaneSpawnSettled } from '../../core/terminal/liveness-port'
@@ -144,8 +150,11 @@ export class TerminalPane {
   ) {
     this.instance = registerPaneInstance(this.id)
     this.term = new Terminal({
+      // JBM first (text + box drawing, vendored whole); the symbols face fills what JBM
+      // leaves open (braille, dingbats — unicode-range-scoped, metric-identical 0.6em,
+      // so a fallback glyph can never overlap a neighbouring cell); system faces last.
       fontFamily:
-        '"JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace',
+        '"JetBrains Mono Variable", "JetBrains Mono", "MoggingLabs Symbols", "Cascadia Code", Menlo, Consolas, monospace',
       fontSize: terminalFontSize(), // Settings § Terminal (5/06); default is the matrix pick
       lineHeight: TERMINAL_LINE_HEIGHT, // fixed by design — only fontSize is user-facing
       cursorBlink: false, // enabled only while focused (perf: fewer idle repaints across panes)
@@ -335,9 +344,13 @@ export class TerminalPane {
 
     // Font-metrics correctness: if any pane measured its cell size against a fallback
     // font (or a stale activation state), its canvas renders narrower than the pane —
-    // a dead strip at the right edge. Once ALL faces are active, force a re-measure
-    // (fontFamily must actually change to invalidate xterm's char-size cache) + refit.
-    void document.fonts?.ready?.then(() => this.remeasureFont())
+    // a dead strip at the right edge. Once the terminal faces are active, force a
+    // re-measure (fontFamily must actually change to invalidate xterm's char-size
+    // cache) + refit. terminalFontsActive STARTS the loads (fonts.ready is one-shot
+    // and could resolve before a lazy load began — the old silent re-measure-against-
+    // the-fallback race); the loadingdone subscription catches any face landing later.
+    void terminalFontsActive().then(() => this.remeasureFont())
+    this.disposers.push(onFontsLoadingDone(() => this.remeasureFont()))
 
     // Monitor hop / display-scale change: the CSS boxes don't move (no ResizeObserver
     // tick) but the WebGL renderer's device-pixel-floored cell width changes, so the

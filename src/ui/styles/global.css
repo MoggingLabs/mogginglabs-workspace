@@ -95,8 +95,8 @@
   /* Typography — JetBrains Mono everywhere (bundled variable face, identical on
      Win + Mac): one voice for chrome AND terminals, differentiated by a deliberate
      weight/size/tracking/case hierarchy rather than by family. */
-  --font-ui: "JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", ui-monospace,
-    Menlo, Consolas, monospace;
+  --font-ui: "JetBrains Mono Variable", "JetBrains Mono", "MoggingLabs Symbols",
+    "Cascadia Code", ui-monospace, Menlo, Consolas, monospace;
   --font-mono: var(--font-ui);
   --fs-10: 10px; /* chip grade — was referenced but undefined (chips fell back to inherited size) */
   --fs-11: 11px;

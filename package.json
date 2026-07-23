@@ -34,7 +34,6 @@
     "smoke:preregistered-client-pure": "tsx scripts/preregistered-client-pure-smoke.ts"
   },
   "dependencies": {
-    "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@sentry/electron": "^7.15.0",
     "@xterm/addon-search": "^0.16.0",
     "@xterm/addon-serialize": "^0.14.0",
