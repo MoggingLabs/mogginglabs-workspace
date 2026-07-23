@@ -222,6 +222,24 @@ const REMOTE_CONTEXT_MONITOR_START = '"$MOGGING_HELPER_DIR/.context-monitor" "$$
  *  spelled for a remote /bin/sh. See remoteBootstrap for why it is not optional. */
 const READY_OSC_PRINTF = `printf '\\033]777;mogging-remote-ready\\007'`
 
+/**
+ * The dims an ATTACH must apply to an existing session, or null for "leave it alone".
+ * Null when the spec carries no usable dims (a bare `attach` has none; a corrupt spec
+ * must never reach node-pty, which throws on non-positive sizes) and when they already
+ * match (a same-size resize forwarded to ConPTY costs a full spurious repaint — see
+ * PaneSession.resize). Floors mirror the renderer's fit minimums (2 cols / 1 row).
+ */
+export function attachDims(
+  spec: { cols?: number; rows?: number },
+  current: { cols: number; rows: number }
+): { cols: number; rows: number } | null {
+  const { cols, rows } = spec
+  if (typeof cols !== 'number' || typeof rows !== 'number') return null
+  if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 2 || rows < 1) return null
+  if (cols === current.cols && rows === current.rows) return null
+  return { cols, rows }
+}
+
 export function remoteBootstrapCommand(cwd?: string): string {
   const bashRc = [
     'if [ -r "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi',
@@ -900,6 +918,11 @@ class PaneSession {
     this.writePty(data)
   }
   resize(cols: number, rows: number): void {
+    // Idempotent by dimension, not by call: ConPTY answers EVERY resize it receives
+    // with a full-viewport repaint (see the renderer's REFIT_SETTLE_MS rationale), so
+    // a same-size resize is never a harmless no-op to forward — it is a spurious
+    // repaint replayed over whatever the agent is drawing.
+    if (cols === this.cols && rows === this.rows) return
     this.cols = cols
     this.rows = rows
     try {
@@ -1048,7 +1071,15 @@ export class SessionManager {
   }
 
   /** Spawn or return the existing pane (id-guard across the process boundary — a
-   *  reconnecting client re-requesting the same id ATTACHES, never duplicates). */
+   *  reconnecting client re-requesting the same id ATTACHES, never duplicates).
+   *
+   *  An attach RECONCILES size: the attaching client's viewport is authoritative — the
+   *  rule every terminal multiplexer converged on (tmux resizes a session to its
+   *  attaching client). Before this, the spec's dims were honoured only at construction,
+   *  so a session surviving a window/layout change kept its old grid and the agent kept
+   *  rendering at it — the "pane only fills half its width" bug. Reconciling HERE (the
+   *  daemon owns the pty) also heals resizes lost across a daemon reconnect for free:
+   *  the relay's replay re-spawns with the pane's CURRENT dims through this same path. */
   ensure(id: string, spec: SpawnSpec): { pane: PaneSession; existed: boolean } {
     const remote = spec.remote ? normalizeRemoteConnection(spec.remote) : null
     const remoteCwd = spec.remote?.cwd === undefined ? undefined : normalizeRemotePaneCwd(spec.remote.cwd)
@@ -1068,6 +1099,11 @@ export class SessionManager {
         this.markDirty(id)
         this.schedulePersist(100)
       }
+      // Size reconciliation, BEFORE the caller snapshots scrollback: ConPTY's answering
+      // repaint then rides the same delivery burst as the replay, so the client's first
+      // settled frame is already at the attach width (no visible narrow→wide snap).
+      const dims = attachDims(normalizedSpec, existing)
+      if (dims) existing.resize(dims.cols, dims.rows)
       return { pane: existing, existed: true }
     }
     // A legacy/corrupt restore may have lost SSH identity. The app's resolved remote spec is
