@@ -8,7 +8,7 @@ import { handleUsageCall } from './usage'
 import { getSettingsStore } from './app-settings'
 import { onIntegrationsGrantChanged, resolveGrantedWriteTools, workspaceIdForPane } from './integrations'
 import { connectionUpstream } from './connections'
-import { mcpFetch } from '@backend/features/integrations'
+import { mcpFetch, retryDelayMs, retrySpecFor, retryableStatus } from '@backend/features/integrations'
 import { getDaemonClient } from './daemon-relay'
 import { runtimeDir as clientRuntimeDir } from './daemon-client'
 import { recordTrail } from './trail'
@@ -164,11 +164,25 @@ async function handleConnectionRpc(
       reason: `The ${connection} connection is not connected in MoggingLabs Workspace — open Settings › Integrations and connect it.`
     }
   }
-  const res = await mcpFetch(upstream.url, payload, {
+  // Catalog-driven retry (phase-tools/02): the provider's own rate-limit grammar
+  // (which header carries the reset, which codes are retryable) is CATALOG data,
+  // not a blind backoff. One retry, delay capped — an agent's call may be slowed
+  // by a rate limit, never hung by one.
+  const retrySpec = retrySpecFor(connection)
+  let res = await mcpFetch(upstream.url, payload, {
     token: upstream.token,
     authScheme: upstream.authScheme,
     sessionId: sessions.get(connection)
   })
+  if (!res.ok && res.status != null && retryableStatus(res.status, retrySpec)) {
+    const headers = { get: (n: string) => res.ok ? null : (res.retryHeaders?.[n.toLowerCase()] ?? null) }
+    await new Promise((r) => setTimeout(r, retryDelayMs(headers, retrySpec, 0, Date.now())))
+    res = await mcpFetch(upstream.url, payload, {
+      token: upstream.token,
+      authScheme: upstream.authScheme,
+      sessionId: sessions.get(connection)
+    })
+  }
   if (!res.ok) {
     // Streamable HTTP: 404 with a session id means the SERVER expired the session
     // (spec: the client must start over with a new initialize). Holding the stale id

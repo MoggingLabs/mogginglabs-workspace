@@ -32,6 +32,7 @@
     "smoke:git-pure": "tsx scripts/git-feature-pure-smoke.ts",
     "smoke:remote-bootstrap-pure": "tsx scripts/remote-bootstrap-pure-smoke.ts",
     "smoke:connections-pure": "tsx scripts/connections-pure-smoke.ts",
+    "smoke:toolcred-pure": "tsx scripts/toolcred-pure-smoke.ts",
     "smoke:preregistered-client-pure": "tsx scripts/preregistered-client-pure-smoke.ts"
   },
   "dependencies": {

@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type { OAuthClientRecord } from '@contracts'
+import { normalizeTokenResponse, type NormalizeQuirks } from './credential-core'
 
 // The MCP OAuth 2.1 client (ADR 0014). Electron-free on purpose: everything here
 // is a pure function of the network, so the gate can drive it against a fixture
@@ -44,6 +45,15 @@ export interface OAuthTokens {
   refreshToken?: string
   /** Absolute ms. Absent when the provider issues a non-expiring token. */
   expiresAt?: number
+  /** Absolute ms — GitHub-style `refresh_token_expires_in`, normalized at the
+   *  credential-core seam. Additive (phase-tools/02): vault records written
+   *  before it exist without it and read fine — the fields below are the
+   *  v-next shim, all optional by construction. */
+  refreshTokenExpiresAt?: number
+  /** Almost always `Bearer`; absent on legacy records (read as Bearer). */
+  tokenType?: string
+  /** When the exchange/refresh happened — absent on legacy records. */
+  obtainedAt?: number
   scopes?: string[]
   /** OIDC only. Only Vercel and GitLab offer it across the whole catalog. */
   idToken?: string
@@ -311,7 +321,8 @@ export function buildAuthorizeUrl(o: {
 async function tokenRequest(
   metadata: AuthServerMetadata,
   client: OAuthClientRecord,
-  form: Record<string, string>
+  form: Record<string, string>,
+  quirks?: NormalizeQuirks
 ): Promise<{ ok: true; tokens: OAuthTokens } | { ok: false; reason: string }> {
   const body = new URLSearchParams({ ...form, client_id: client.clientId })
   // A confidential client (rare — only when DCR handed us a secret) authenticates
@@ -349,31 +360,34 @@ async function tokenRequest(
     }
     return { ok: false, reason: String(detail).slice(0, 200) }
   }
-  // The index signature is load-bearing: the non-standard fields are the point (see
-  // OAuthTokens.raw), so the shape must not be closed to exactly the five we name.
-  let j: {
-    access_token?: string
-    refresh_token?: string
-    expires_in?: number
-    scope?: string
-    id_token?: string
-    [key: string]: unknown
+  // THE normalization seam (phase-tools/02, credential-core): every raw token
+  // response — JSON or form-encoded, GitHub-quirked or standard — becomes the
+  // canonical shape HERE, and no downstream code ever reads a raw field. The
+  // raw object still rides OAuthTokens.raw for connect-time account discovery
+  // (Notion/Slack/Stripe name the account in non-standard fields) and is
+  // stripped at the vault's own choke point, exactly as before.
+  const normalized = normalizeTokenResponse(text, res.headers.get('content-type'), { quirks })
+  if (!normalized.ok) {
+    return {
+      ok: false,
+      reason: normalized.reason === 'The provider returned no access token.'
+        ? normalized.reason
+        : `${hostOf(metadata.token_endpoint)} did not return a token.`
+    }
   }
-  try {
-    j = JSON.parse(text)
-  } catch {
-    return { ok: false, reason: `${hostOf(metadata.token_endpoint)} did not return a token.` }
-  }
-  if (!j.access_token) return { ok: false, reason: 'The provider returned no access token.' }
+  const c = normalized.credential
   return {
     ok: true,
     tokens: {
-      accessToken: j.access_token,
-      refreshToken: j.refresh_token,
-      expiresAt: j.expires_in ? Date.now() + j.expires_in * 1000 : undefined,
-      scopes: j.scope ? j.scope.split(/\s+/).filter(Boolean) : undefined,
-      idToken: j.id_token,
-      raw: j as Record<string, unknown>
+      accessToken: c.accessToken,
+      refreshToken: c.refreshToken,
+      expiresAt: c.expiresAt,
+      refreshTokenExpiresAt: c.refreshTokenExpiresAt,
+      tokenType: c.tokenType,
+      obtainedAt: c.obtainedAt,
+      scopes: c.scopes,
+      idToken: typeof normalized.raw.id_token === 'string' ? normalized.raw.id_token : undefined,
+      raw: normalized.raw
     }
   }
 }
@@ -381,15 +395,20 @@ async function tokenRequest(
 export const exchangeCode = (
   metadata: AuthServerMetadata,
   client: OAuthClientRecord,
-  o: { code: string; verifier: string; redirectUri: string; resource: string }
+  o: { code: string; verifier: string; redirectUri: string; resource: string; quirks?: NormalizeQuirks }
 ): Promise<{ ok: true; tokens: OAuthTokens } | { ok: false; reason: string }> =>
-  tokenRequest(metadata, client, {
-    grant_type: 'authorization_code',
-    code: o.code,
-    code_verifier: o.verifier,
-    redirect_uri: o.redirectUri,
-    resource: o.resource
-  })
+  tokenRequest(
+    metadata,
+    client,
+    {
+      grant_type: 'authorization_code',
+      code: o.code,
+      code_verifier: o.verifier,
+      redirect_uri: o.redirectUri,
+      resource: o.resource
+    },
+    o.quirks
+  )
 
 /** Rotation-safe by construction: ONE holder means no two refreshers can race.
  *  The caller must persist the returned refresh token — many providers rotate it
@@ -397,13 +416,18 @@ export const exchangeCode = (
 export const refreshTokens = (
   metadata: AuthServerMetadata,
   client: OAuthClientRecord,
-  o: { refreshToken: string; resource: string }
+  o: { refreshToken: string; resource: string; quirks?: NormalizeQuirks }
 ): Promise<{ ok: true; tokens: OAuthTokens } | { ok: false; reason: string }> =>
-  tokenRequest(metadata, client, {
-    grant_type: 'refresh_token',
-    refresh_token: o.refreshToken,
-    resource: o.resource
-  })
+  tokenRequest(
+    metadata,
+    client,
+    {
+      grant_type: 'refresh_token',
+      refresh_token: o.refreshToken,
+      resource: o.resource
+    },
+    o.quirks
+  )
 
 /**
  * The rotation-merge rule, as a pure function so the regression suite can bite on it.
@@ -432,7 +456,10 @@ export async function mcpFetch(
   url: string,
   payload: unknown,
   o: { token?: string; sessionId?: string; timeoutMs?: number; authScheme?: string } = {}
-): Promise<{ ok: true; result: unknown; sessionId?: string } | { ok: false; status?: number; reason: string }> {
+): Promise<
+  | { ok: true; result: unknown; sessionId?: string }
+  | { ok: false; status?: number; reason: string; retryHeaders?: Record<string, string> }
+> {
   let res: Response
   try {
     res = await fetch(url, {
@@ -456,7 +483,14 @@ export async function mcpFetch(
   }
   const sessionId = res.headers.get('mcp-session-id') ?? undefined
   if (!res.ok) {
-    return { ok: false, status: res.status, reason: `${hostOf(url)} answered ${res.status}` }
+    // Rate-limit headers ride the failure so the proxy's catalog-driven retry
+    // (phase-tools/02) can honor the provider's own reset stamp — generically
+    // captured, because which header matters is the CATALOG's knowledge, not ours.
+    const retryHeaders: Record<string, string> = {}
+    res.headers.forEach((v, k) => {
+      if (/retry-after|ratelimit/i.test(k)) retryHeaders[k.toLowerCase()] = v
+    })
+    return { ok: false, status: res.status, reason: `${hostOf(url)} answered ${res.status}`, retryHeaders }
   }
   // A notification (no id) is answered with 202 and an empty body — not an error.
   if (res.status === 202) return { ok: true, result: null, sessionId }

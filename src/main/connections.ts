@@ -30,6 +30,10 @@ import {
   sanitizeUserClient,
   saveServer,
   userClientRecord,
+  oauthQuirksFor,
+  runVerificationProbe,
+  verificationSpecFor,
+  RefreshCoordinator,
   MCP_PRESETS,
   type AuthServerMetadata,
   type ClientStore,
@@ -331,6 +335,9 @@ export async function connect(serviceId: string, baseUrl?: string): Promise<{ ok
   // One flow at a time — and the superseded service's card must not stay
   // "connecting…" forever, which is exactly what plain endFlow() left behind.
   abandonFlow()
+  // A user-initiated reconnect always may try — the refresh cooldown protects
+  // the token endpoint from OUR retry loops, never from the user's own click.
+  resetRefreshCooldown(serviceId)
   // `needsClientId` is re-derived by THIS attempt, not carried over: a stale flag
   // from a previous failure must not leave the paste form on a card whose current
   // failure (an outage, a bad URL) pasting a client id cannot fix.
@@ -463,7 +470,9 @@ async function onCallback(params: URLSearchParams, res: import('node:http').Serv
     code,
     verifier: flow.verifier,
     redirectUri: flow.redirectUri,
-    resource: flow.resource
+    resource: flow.resource,
+    // Catalog method quirks ride into the normalization seam, exchange included.
+    quirks: oauthQuirksFor(flow.serviceId)
   })
   // The exchange is the ONE await a cancel can interleave: the user's Cancel (or a
   // superseding connect, or clearClient) ran abandonFlow while the token trip was in
@@ -557,6 +566,20 @@ export async function submitKey(serviceId: string, value: string, baseUrl?: stri
   const url = needsBaseUrl(preset) ? String(baseUrl ?? '').trim() : preset.urlOrCommand
   if (!url) return { ok: false, reason: `${preset.label} is self-hosted — paste your instance's MCP URL above the key.` }
   if (!validConnectionUrl(url)) return { ok: false, reason: 'The instance URL must be https:// (plain http only for localhost).' }
+  resetRefreshCooldown(serviceId)
+  // PROVE-BEFORE-SAVE, catalog-first (phase-tools/02): a service that declares a
+  // verification endpoint gets the provider's own 401 in one cheap REST trip —
+  // before the MCP handshake, and before anything could save. The catalog probe
+  // REFUSES only on the provider's own unauthorized answer; an unreachable or
+  // erroring verification endpoint proves nothing about the key and falls
+  // through to the MCP proof below, which remains the final word either way.
+  const verificationSpec = verificationSpecFor(serviceId)
+  if (verificationSpec) {
+    const proof = await runVerificationProbe(verificationSpec, value.trim())
+    if (!proof.ok && proof.unauthorized) {
+      return { ok: false, reason: 'That key was refused by the service.' }
+    }
+  }
   // VERIFY BEFORE WE CLAIM — and discover which Authorization scheme the server
   // takes while we're at it (Bearer for almost everyone; `Key` for fal.ai).
   const probe = await probeWithSchemes(url, value.trim())
@@ -704,41 +727,66 @@ export function cancelConnect(serviceId: string): void {
 
 // ── Refresh + the one decryption point ──────────────────────────────────────
 
-/** Serialize refreshes per connection. ONE holder is the whole reason app-held
- *  OAuth is sound under refresh-token rotation (ADR 0014) — but "one holder"
- *  means nothing if two proxy calls race the same rotation and one of them lands
- *  a refresh token the other already invalidated. */
-const refreshing = new Map<string, Promise<string | null>>()
+/** The refresh discipline (phase-tools/02, credential-core): per-connection lock,
+ *  freshness margin, failure cooldown, re-check-after-lock. ONE holder is the
+ *  whole reason app-held OAuth is sound under refresh-token rotation (ADR 0014) —
+ *  and the coordinator is what makes "one holder" true under concurrent demand
+ *  (proxy call + heartbeat + manual Check racing the same rotation). */
+const refreshCoordinator = new RefreshCoordinator()
 
 /**
  * The access token for an outbound call — the ONLY place token material is
- * decrypted, and it never leaves this module. Refreshes with a minute of slack so
- * a call in flight cannot expire mid-request.
+ * decrypted, and it never leaves this module. Refreshes with a margin of slack so
+ * a call in flight cannot expire mid-request; a provider that refused a refresh
+ * is not re-asked until the cooldown passes (the card already says `expired`).
  */
 export async function accessTokenFor(serviceId: string): Promise<string | null> {
   const tokens = loadTokens(serviceId)
   if (!tokens) return null
-  const fresh = !tokens.expiresAt || tokens.expiresAt - Date.now() > 60_000
-  if (fresh) return tokens.accessToken
-  if (!tokens.refreshToken) {
+  if (tokens.expiresAt && tokens.expiresAt - Date.now() <= 60_000 && !tokens.refreshToken) {
     setState(serviceId, { state: 'expired', lastError: 'The connection expired and cannot renew itself.' })
     return null
   }
-  const inflight = refreshing.get(serviceId)
-  if (inflight) return inflight
-  const run = doRefresh(serviceId, tokens).finally(() => refreshing.delete(serviceId))
-  refreshing.set(serviceId, run)
-  return run
+  const out = await refreshCoordinator.current<OAuthTokens>(serviceId, {
+    load: () => loadTokens(serviceId),
+    refresh: (current) => doRefresh(serviceId, current),
+    store: (next) => {
+      if (!storeTokens(serviceId, next)) return false
+      setState(serviceId, { state: 'connected', expiresAt: next.expiresAt, scopes: next.scopes, lastError: undefined })
+      return true
+    }
+  })
+  if (out.ok) return out.credential.accessToken
+  // A cooled refusal repeats no state churn — the refusal that STARTED the
+  // cooldown already set `expired` with the provider's own sentence.
+  if (!out.cooled && out.reason === 'the OS keychain would not hold the renewed credential') {
+    setState(serviceId, { state: 'error', lastError: 'The OS keychain would not hold the renewed credential.' })
+  }
+  return null
 }
 
-async function doRefresh(serviceId: string, tokens: OAuthTokens): Promise<string | null> {
+/** A user-initiated reconnect always may try: connect() and submitKey() clear the
+ *  refresh cooldown so "the app refused to even try" can never be the story. */
+const resetRefreshCooldown = (serviceId: string): void => refreshCoordinator.reset(serviceId)
+
+/** One refresh trip: discovery + client + token call + rotation merge. State
+ *  transitions for FAILURES live here (they carry provider-specific advice);
+ *  the success write lives in the coordinator's `store` above. */
+async function doRefresh(
+  serviceId: string,
+  tokens: OAuthTokens
+): Promise<{ ok: true; credential: OAuthTokens } | { ok: false; reason: string }> {
   const meta = readMeta(serviceId)
   const url = meta?.url
-  if (!url) return null
+  if (!url) return { ok: false, reason: 'no connection url' }
+  if (!tokens.refreshToken) {
+    setState(serviceId, { state: 'expired', lastError: 'The connection expired and cannot renew itself.' })
+    return { ok: false, reason: 'no refresh token' }
+  }
   const disco = await fetchAuthServerMetadataFor(url)
   if (!disco) {
     setState(serviceId, { state: 'error', lastError: 'Could not reach the provider to renew the connection.' })
-    return null
+    return { ok: false, reason: 'discovery failed' }
   }
   const client = loadClient(disco.issuer)
   if (!client) {
@@ -755,11 +803,14 @@ async function doRefresh(serviceId: string, tokens: OAuthTokens): Promise<string
         ? 'The client registration is gone — paste a client ID to reconnect.'
         : 'The client registration is gone — reconnect to renew it.'
     })
-    return null
+    return { ok: false, reason: 'client registration gone' }
   }
   const next = await refreshTokens(disco, client, {
-    refreshToken: tokens.refreshToken!,
-    resource: canonicalResource(url)
+    refreshToken: tokens.refreshToken,
+    resource: canonicalResource(url),
+    // Catalog method quirks ride into the normalization seam — the one place
+    // `tokenExpirationBuffer` and friends are ever applied.
+    quirks: oauthQuirksFor(serviceId)
   })
   if (!next.ok) {
     // The cached AS metadata may be the reason (a provider that moved its token
@@ -767,18 +818,12 @@ async function doRefresh(serviceId: string, tokens: OAuthTokens): Promise<string
     // attempt re-discovers instead of retrying into the same stale endpoint.
     metaCache.delete(url)
     setState(serviceId, { state: 'expired', lastError: `The connection could not renew: ${next.reason}` })
-    return null
+    return { ok: false, reason: next.reason }
   }
   // ROTATION: many providers issue a NEW refresh token on every use and invalidate
   // the old one; others return none on refresh at all. Both hands of that rule live
   // in mergeRefreshedTokens (pure — the regression suite bites on it directly).
-  const merged: OAuthTokens = mergeRefreshedTokens(tokens, next.tokens)
-  if (!storeTokens(serviceId, merged)) {
-    setState(serviceId, { state: 'error', lastError: 'The OS keychain would not hold the renewed credential.' })
-    return null
-  }
-  setState(serviceId, { state: 'connected', expiresAt: merged.expiresAt, scopes: merged.scopes, lastError: undefined })
-  return merged.accessToken
+  return { ok: true, credential: mergeRefreshedTokens(tokens, next.tokens) }
 }
 
 /** Cached AS metadata per connection URL — discovery is three round trips we do

@@ -9,10 +9,10 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 185 gates: 25 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 186 gates: 26 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
 # GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE ·
-# GRAMMARCAT · CATSCHEMA · TOOLWORDS) + 160 app-boot
+# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED) + 160 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -253,6 +253,14 @@ run_static REMOTEBOOT npm run smoke:remote-bootstrap-pure
 # reintroducing the scope over-ask, the rotation-merge drop, or the whoami unfence each
 # turns it red. Everything it asserts failed silently once; this is what stops the reprise.
 run_static CONNPURE npm run smoke:connections-pure
+# TOOLCRED: the credential core (ADR 0020, phase-tools/02) against a fixture provider —
+# normalization at exchange (GitHub's form-encoded refresh_token_expires_in shape, catalog
+# buffer applied, no raw field past the seam), the refresh discipline (per-connection lock,
+# freshness margin, failure cooldown, re-check-after-lock, non-rotating keep), the catalog
+# verification probe (prove-before-save; an outage is never a refusal), and the retry
+# grammar. Mutation-reds run LIVE on every pass: the lockless coordinator must double-hit
+# the fixture and the JSON-only parser must fail the form body — the assertions bite.
+run_static TOOLCRED npm run smoke:toolcred-pure
 # PREREGCLIENT: pre-registered OAuth clients for no-DCR providers (Google/GitHub/Slack).
 # Three fixture AS shapes prove: no-DCR fails ACTIONABLY (needsClientId → the paste form),
 # a refusing-but-live registration endpoint does NOT, a pasted secret rides the exchange,
