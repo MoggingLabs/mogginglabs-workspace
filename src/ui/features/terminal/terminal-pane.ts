@@ -167,9 +167,10 @@ export class TerminalPane {
       // this option is set. It defaults to false, so a Mac user could not select text in a
       // Claude Code pane AT ALL: not with Shift (mac ignores it), not with Option (off).
       macOptionClickForcesSelection: true,
-      // windowsPty is NOT set here: nobody in the renderer knows how this pane's pty grows until
-      // the pty exists. It is applied from the spawn answer below, which arrives before the first
-      // byte of output — the buffer is empty until then, so no resize can have gone wrong yet.
+      // windowsPty is NOT set here: it is platform truth the backend owns. The pane fetches it
+      // (terminalClient.ptyEmulation, cached app-wide) and applies it BEFORE spawn — a reattach
+      // replays scrollback WITH the spawn reply, and xterm re-reads windowsPty on every resize
+      // of a non-empty buffer, so "apply from the spawn answer" was a race, not an ordering.
       theme: { background: '#0c0d0f', foreground: '#f4f5f7' } // corrected by the theme port on mount
     })
     this.term.loadAddon(this.serializer)
@@ -372,6 +373,12 @@ export class TerminalPane {
     // degrades to the typed fallback (reported below) instead of stalling the pane.
     // Remote panes never carry a run: their launch types after the SSH bootstrap.
     const armedRun = claimSpawnRun(this.id)
+    // How this platform's ptys grow — fetched in parallel with the run race below and
+    // applied BEFORE spawn, because the first bytes can arrive WITH the spawn reply (a
+    // reattach replays scrollback ahead of the promise resolving) and xterm re-reads
+    // windowsPty on every resize of a non-empty buffer. Cached in the client: one IPC
+    // round trip per session, settled-synchronous for every later pane.
+    const emulation = terminalClient.ptyEmulation().catch(() => null)
     const term = this.term // definite by here; the async closure below reads its LIVE size
     void (async () => {
       let run: string | undefined
@@ -381,6 +388,11 @@ export class TerminalPane {
           new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500))
         ])
         run = cmd ?? undefined
+      }
+      const pty = await emulation
+      if (pty && !this.disposed) {
+        const wp = windowsPtyFor(pty)
+        if (wp) term.options.windowsPty = wp
       }
       return terminalClient
       .spawn({
@@ -398,8 +410,10 @@ export class TerminalPane {
         // The delivery report the agents feature settles on: TRUE only when a FRESH
         // session actually received the run line (a reattached session ignored it).
         reportSpawnRunOutcome(this.id, !!run && !res.existing)
-        // The pty told us how it grows. Apply BEFORE any output or resize: xterm re-reads
-        // windowsPty on every resize, and nothing has resized a non-empty buffer yet.
+        // The spawn reply's own emulation report — the authoritative confirmation of
+        // the pre-spawn value applied above (same probe, same module, so it can only
+        // differ if the backend changed under us mid-session; applying it keeps the
+        // daemon the authority either way).
         const wp = windowsPtyFor(res.pty)
         if (wp && !this.disposed) this.term.options.windowsPty = wp
         // Reattached, not started: the detached daemon still held this pane's session, so

@@ -1,5 +1,6 @@
 import { TerminalChannels } from '@contracts'
 import type { BackendContext, FeatureModule } from '../../core/ipc/registry'
+import { ptyEmulation } from '../../platform/pty-host'
 import { PtyService } from './pty.service'
 
 /** The terminal feature: hosts PTYs and bridges them to the UI over IPC. */
@@ -17,6 +18,10 @@ export function createTerminalModule(): FeatureModule {
         agent: (e) => ctx.emit(TerminalChannels.agent, e) // typed-launch detection
       })
       ctx.handle(TerminalChannels.spawn, (p) => service!.spawn(p))
+      // Platform truth a pane needs BEFORE its first byte: the same probe every spawn
+      // reply carries (pty-host.ts is the one source), served early so xterm's
+      // windowsPty is set before a reattach replay can land in the buffer.
+      ctx.handle(TerminalChannels.ptyEmulation, () => ptyEmulation())
       // The dot's reliability contract: a mounting pane PULLS its current state —
       // events fire on change only, and a reloaded renderer heard none of them.
       ctx.handle(TerminalChannels.stateSync, (p) => service!.stateOf((p as { id: number }).id))
