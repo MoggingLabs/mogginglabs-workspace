@@ -3089,6 +3089,47 @@ textarea {
 /* The jump pill: bottom-RIGHT, inset clear of the slide bar's lane, floating
    just above where prompts are typed. Appears only once you've scrolled up;
    one tap = latest. */
+/* The death affordance (PANERESTART): a dead pane says so where the user is looking and
+   offers the one recovery — floating just above the prompt line, clear of the slide bar's
+   lane, over the (now inert) terminal. Exists exactly while the pane is dead. */
+.pane-dead-banner {
+  position: absolute;
+  left: 50%;
+  bottom: var(--sp-3);
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: calc(100% - 52px); /* never under the slide bar's lane */
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-full);
+  background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 25%);
+}
+.pane-dead-msg {
+  color: var(--text-mid);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pane-dead-restart {
+  flex: none;
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--text-hi);
+  font-size: 12px;
+  cursor: pointer;
+}
+.pane-dead-restart:hover {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
 .pane-jump {
   position: absolute;
   right: 26px;
