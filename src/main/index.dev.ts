@@ -138,6 +138,7 @@ import { runEqualizeSmoke } from './smokes/equalize-smoke'
 import { runAsyncStateSmoke } from './smokes/asyncstate-smoke'
 import { runAgentRegistrySmoke } from './smokes/agentregistry-smoke'
 import { runPlainMenuSmoke } from './smokes/plainmenu-smoke'
+import { runPaneRestartSmoke } from './smokes/panerestart-smoke'
 import { runWizardFailSmoke } from './smokes/wizardfail-smoke'
 import { runWizardIsoSmoke } from './smokes/wizardiso-smoke'
 import { runWizCdSmoke } from './smokes/wizcd-smoke'
@@ -211,7 +212,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
   'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_RUNTIMESPLIT', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
-  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_BRAINCORE', 'MOGGING_BRAINPARSE', 'MOGGING_BRAINGRAPH', 'MOGGING_BRAINFRESH', 'MOGGING_BRAINMCP', 'MOGGING_BRAINMAP', 'MOGGING_BRAINWRITE', 'MOGGING_BRAINDOCS', 'MOGGING_MEMGRAPH', 'MOGGING_BRAINSEM', 'MOGGING_BRAINPROPS', 'MOGGING_BRAINCAP', 'MOGGING_BRAINRECALL', 'MOGGING_BRAINUX', 'MOGGING_BRAINMILESTONE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_UPDATEOFFLINE', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
+  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_BRAINCORE', 'MOGGING_BRAINPARSE', 'MOGGING_BRAINGRAPH', 'MOGGING_BRAINFRESH', 'MOGGING_BRAINMCP', 'MOGGING_BRAINMAP', 'MOGGING_BRAINWRITE', 'MOGGING_BRAINDOCS', 'MOGGING_MEMGRAPH', 'MOGGING_BRAINSEM', 'MOGGING_BRAINPROPS', 'MOGGING_BRAINCAP', 'MOGGING_BRAINRECALL', 'MOGGING_BRAINUX', 'MOGGING_BRAINMILESTONE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_UPDATEOFFLINE', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_PANERESTART', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
   'MOGGING_PROFILES', 'MOGGING_LOGINTRUTH', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
   // Typed-launch detection + the context gauge (the v6 pack).
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
@@ -664,6 +665,8 @@ function afterWindow(win: BrowserWindow): void {
     runAgentRegistrySmoke(win) // audit regression: live CLI availability reaches every launch surface
   } else if (process.env.MOGGING_PLAINMENU) {
     runPlainMenuSmoke(win) // pane ⋯ launch entries are plain-terminal-only, through the whole lifecycle
+  } else if (process.env.MOGGING_PANERESTART) {
+    runPaneRestartSmoke(win) // dead pane = state with a way back: exit code named, input gated, in-place restart
   } else if (process.env.MOGGING_UPDATEFAIL) {
     runUpdateFailSmoke(win) // audit regression: a BROKEN feed stays loud even on a background check; retry re-checks
   } else if (process.env.MOGGING_UPDATEOFFLINE) {
