@@ -16,7 +16,12 @@
 //   a CHILD session goes idle    -> `subagent-stop`  -> authors no state; it exists only to
 //                                                       cancel the `subagent_done` chime, which
 //                                                       would otherwise ring RED for a subagent
-//   a question / permission      -> chime alone, uncontradicted                    -> RED
+//   permission.asked / .replied  -> `needs-input` / `busy` — the EXPLICIT block channel, a named
+//                                   red the instant the dialog opens (sharper than the chime)
+//   session.error                -> `turn-failed` — the turn died; without it the pane would
+//                                   wear "busy" forever (no done and no idle will ever arrive)
+//   tool.execute.after           -> `busy`, throttled — proof-of-work that re-lights a
+//                                   continued turn without a process spawn per tool
 //
 // Root vs child is `parentID` — OpenCode's own idiom. Subagents must stay invisible: a pane's
 // colour is the MAIN agent's story.
@@ -39,17 +44,40 @@ const fire = (event) => {
   } catch {}
 }
 
-export const MoggingNotify = async ({ client }) => ({
-  event: async ({ event }) => {
-    try {
-      if (event?.type !== 'session.idle') return
-      const id = event.properties?.sessionID ?? event.properties?.sessionId
-      let isChild = false
+// One busy re-assert per window: the dot only needs re-lighting, not a spawn per tool.
+const BUSY_THROTTLE_MS = 15000
+
+export const MoggingNotify = async ({ client }) => {
+  let lastBusyAt = 0
+  return {
+    event: async ({ event }) => {
       try {
-        const sessions = (await client.session.list())?.data ?? []
-        isChild = !!sessions.find((s) => s.id === id)?.parentID
+        const type = event?.type
+        if (type === 'session.idle') {
+          const id = event.properties?.sessionID ?? event.properties?.sessionId
+          let isChild = false
+          try {
+            const sessions = (await client.session.list())?.data ?? []
+            isChild = !!sessions.find((s) => s.id === id)?.parentID
+          } catch {}
+          fire(isChild ? 'subagent-stop' : 'done')
+        } else if (type === 'session.error') {
+          lastBusyAt = 0 // a recovering turn's next tool must re-light busy instantly
+          fire('turn-failed')
+        } else if (type === 'permission.asked') {
+          fire('needs-input')
+        } else if (type === 'permission.replied') {
+          fire('busy')
+        }
       } catch {}
-      fire(isChild ? 'subagent-stop' : 'done')
-    } catch {}
+    },
+    'tool.execute.after': async () => {
+      try {
+        const now = Date.now()
+        if (now - lastBusyAt < BUSY_THROTTLE_MS) return
+        lastBusyAt = now
+        fire('busy')
+      } catch {}
+    }
   }
-})
+}

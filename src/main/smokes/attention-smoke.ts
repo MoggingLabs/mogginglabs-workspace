@@ -227,6 +227,47 @@ async function trackerAsserts(): Promise<Record<string, boolean>> {
   const secondTurnChimeRings = t2.current() === 'attention'
   const newTurnEndsGrace = tGrace.current() === 'attention'
 
+  // THE CONTINUED TURN (audit G1). A blocking Stop hook (/goal, auto-continue) ends the turn —
+  // `done` fires and is acknowledged — and the agent keeps working with NO new turn-start. The
+  // tool signal (PostToolBatch/AfterTool/PostToolUse -> busy) is the only thing that re-lights
+  // the pane; before it was wired, a working agent wore idle for the rest of the continuation.
+  const g1 = mk()
+  g1.turnStart()
+  g1.notify('done') // the Stop that wasn't final
+  g1.input(true) // the user (or the app) lands on the pane: green spent, resting idle
+  g1.notify('busy') // the continued turn touches a tool — the batch hook speaks
+  const toolReassertsBusy = g1.current() === 'busy'
+  g1.notify('done') // the REAL stop
+  const continuedTurnRegreens = g1.current() === 'done'
+
+  // THE DEAD TURN (audit G2). StopFailure / session.error: the turn died on an API error, so
+  // no done and no idle will EVER arrive — turn-failed is the only way off busy. It settles
+  // like a shell prompt: kills busy and a latched red plus the dead turn's leftovers, but
+  // never authors a first verdict and never spends a green (a failure completed nothing).
+  const tf1 = mk()
+  tf1.turnStart()
+  tf1.turnFailed()
+  const failEndsBusy = tf1.current() === 'idle'
+  const tf2 = mk()
+  tf2.turnStart()
+  tf2.raiseAttention()
+  tf2.turnFailed() // the blocked turn died; the red must not outlive it
+  const failEndsLatch = tf2.current() === 'idle'
+  const tf3 = mk()
+  tf3.turnStart()
+  tf3.subagentStart()
+  tf3.turnFailed() // died mid-fan-out: the counter is the dead turn's story
+  tf3.notify('done')
+  const failResetsSubagents = tf3.current() === 'done' // a stale count must not defer this
+  const tf4 = mk()
+  tf4.turnFailed()
+  const failNeverAuthors = tf4.current() === 'unknown'
+  const tf5 = mk()
+  tf5.turnStart()
+  tf5.notify('done')
+  tf5.turnFailed() // a stray failure after a real completion
+  const failSparesGreen = tf5.current() === 'done'
+
   // THE SHELL MARKS (deduction 4). A prompt means the foreground program is gone: it ends a
   // latch and a turn's leftovers, but never authors a first verdict and never spends a green.
   const s1 = mk()
@@ -316,6 +357,13 @@ async function trackerAsserts(): Promise<Record<string, boolean>> {
     submitEndsDone,
     secondTurnChimeRings,
     newTurnEndsGrace,
+    toolReassertsBusy,
+    continuedTurnRegreens,
+    failEndsBusy,
+    failEndsLatch,
+    failResetsSubagents,
+    failNeverAuthors,
+    failSparesGreen,
     strayHoldsRed,
     printableClearsToBusy,
     submitClearsToBusy,

@@ -879,6 +879,10 @@ class PaneSession {
     else if (event === 'subagent-stop') this.tracker.subagentStop()
     else if (event === 'idle-prompt') this.tracker.idlePrompt()
     else if (event === 'turn-start') this.tracker.turnStart()
+    // A dead turn (StopFailure / session.error) settles the pane — stateful because the
+    // tracker must also drop the dead turn's leftovers (pending subagents, a deferred done)
+    // while sparing a standing green and the hollow first state.
+    else if (event === 'turn-failed') this.tracker.turnFailed()
     // A NOTICE is a notification whose type the hook script does not recognize — a GUESS, but
     // one whose arrival proves the hook channel works. The tracker decides what it means by
     // WHERE it lands (activity.ts notice()): mid-turn it is certainly not a block (real blocks

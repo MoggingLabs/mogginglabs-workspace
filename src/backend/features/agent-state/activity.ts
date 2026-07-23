@@ -427,6 +427,26 @@ export class ActivityTracker {
    *  A pending CHIME deliberately survives too: `long_build; printf '\x1b]9;done\x07'` rings AT
    *  the prompt — the chime outlives its command; the block-claim does not. */
   shellPrompt(): void {
+    this.settle()
+  }
+
+  /** The TURN died without a verdict — Claude Code's StopFailure (an API error ended the turn;
+   *  the hook command still runs, its output merely goes unread) or OpenCode's session.error.
+   *
+   *  This is the stuck-busy fix (audit G2): a turn that dies emits no `done` and no `idle`,
+   *  ever, so without this the pane wears busy until the next prompt. The claim is the same
+   *  one a shell prompt makes — the thing that was running is GONE — so it settles the same
+   *  way: `busy` and a latched red die with the turn that raised them, the dead turn's
+   *  leftovers (pending subagents, a deferred done) are reset, and it never authors a first
+   *  verdict nor spends a green (a failure completed nothing, and a standing done predates it). */
+  turnFailed(): void {
+    this.settle()
+  }
+
+  /** The shared settling rule: the foreground story is over with no completion. Guarded to
+   *  busy/attention so it can neither author a first verdict (`unknown` stays hollow) nor
+   *  spend a green (`done` is the user's to acknowledge). */
+  private settle(): void {
     if (this.state !== 'busy' && this.state !== 'attention') return
     this.pendingSubagents = 0
     this.deferredDone = false
