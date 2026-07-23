@@ -150,6 +150,17 @@ const CONTEXT_CWD_REFRESH_MS = process.platform === 'linux' ? 3000 : 15_000
 const REANCHOR_MS = 300_000
 /** The agent existed for up to one detection lag before we saw it — the watch floor slack. */
 const FIRST_SEEN_SLACK_MS = 15_000
+
+/** The floor a context watch may look back to for this process's session. The process's own
+ *  creation time is the TRUE answer (its log cannot predate it) and survives an app restart —
+ *  first-seen-minus-slack collapses to "restart time" for an agent the daemon kept alive, and
+ *  an idle session's log then sits below the floor: a live pane stuck on "waiting for the
+ *  first response" for hours. min() keeps the fallback's slack when creation time is within
+ *  it (filesystem clock granularity), and the fallback itself when the platform reports none. */
+function sinceFloorMs(startedAt: number | undefined, now: number): number {
+  const fallback = now - FIRST_SEEN_SLACK_MS
+  return startedAt !== undefined ? Math.min(startedAt, fallback) : fallback
+}
 /** A wedged probe is killed rather than allowed to pile up. */
 const PROBE_TIMEOUT_MS = 15_000
 /** Retries for a failing process listing before backing off. */
@@ -318,6 +329,15 @@ export function readProcessCwd(pid: number): Promise<string | null> {
   return Promise.resolve(null)
 }
 
+/** `ps` etime ([[dd-]hh:]mm:ss) -> elapsed milliseconds; undefined for any other shape
+ *  (a defunct row prints `-`). Exported for the unit tier. */
+export function parseEtimeMs(etime: string): number | undefined {
+  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d{1,2}):(\d{2})$/.exec(etime)
+  if (!m) return undefined
+  const [, d, h, min, s] = m
+  return (((Number(d ?? 0) * 24 + Number(h ?? 0)) * 60 + Number(min)) * 60 + Number(s)) * 1000
+}
+
 /** One full process snapshot: pid/ppid/name/cmd for every process. Windows rides a single
  *  PowerShell CIM query (wmic is gone on current Windows); POSIX a single `ps`. A failure
  *  resolves to NULL — no data is never "no agents", and every verdict is held. */
@@ -377,21 +397,27 @@ function snapshotProcesses(rootPids: readonly number[] = []): Promise<ProcRow[] 
         resolve(rows.length ? rows : null)
       })
     } else {
-      execFile('ps', ['-eo', 'pid=,ppid=,pgid=,tpgid=,args='], opts, (err, stdout) => {
+      // `etime` (not `etimes`: macOS ps has no seconds variant) -> startedAt, so the
+      // recycled-ppid guard and the context-watch floor get creation-time evidence on
+      // POSIX too. Its formatted value ([[dd-]hh:]mm:ss) never contains spaces.
+      const snapshotAt = Date.now()
+      execFile('ps', ['-eo', 'pid=,ppid=,pgid=,tpgid=,etime=,args='], opts, (err, stdout) => {
         if (err || !stdout) return resolve(null)
         const rows: ProcRow[] = []
         for (const line of stdout.split('\n')) {
-          const m = /^\s*(\d+)\s+(\d+)\s+(-?\d+)\s+(-?\d+)\s+(.*)$/.exec(line)
+          const m = /^\s*(\d+)\s+(\d+)\s+(-?\d+)\s+(-?\d+)\s+(\S+)\s+(.*)$/.exec(line)
           if (!m) continue
-          const cmd = m[5]
+          const cmd = m[6]
           const exe = tokenizeCommandLine(cmd)[0] ?? ''
+          const elapsedMs = parseEtimeMs(m[5])
           rows.push({
             pid: Number(m[1]),
             ppid: Number(m[2]),
             pgid: Number(m[3]),
             tpgid: Number(m[4]),
             base: stripExeExt((exe.split(/[\\/]+/).pop() ?? '').toLowerCase()),
-            cmd
+            cmd,
+            ...(elapsedMs !== undefined ? { startedAt: snapshotAt - elapsedMs } : {})
           })
         }
         resolve(rows.length ? rows : null)
@@ -787,7 +813,7 @@ export class AgentProcessDetector {
             sinceMs:
               previousContext?.pid === foreground.pid
                 ? previousContext.sinceMs
-                : this.now() - FIRST_SEEN_SLACK_MS
+                : sinceFloorMs(byPid.get(foreground.pid)?.startedAt, this.now())
           }
           t.foreground = nextContext
           t.contextCheckedAt = this.now()
@@ -847,7 +873,7 @@ export class AgentProcessDetector {
           agentId: found.agentId,
           pid: found.pid,
           cwd: agentCwd ?? undefined,
-          sinceMs: this.now() - FIRST_SEEN_SLACK_MS
+          sinceMs: sinceFloorMs(byPid.get(found.pid)?.startedAt, this.now())
         }
         t.current = det
         this.emit(paneId, det)

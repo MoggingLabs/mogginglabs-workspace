@@ -45,10 +45,23 @@ function geminiChatsDir(projectDir: string | null): string | null {
 //             replaces it: the user relaunched the CLI inside the pane, and the new
 //             session supersedes the old. An idle-but-alive session is never dropped
 //             (idleness moves no mtimes).
+//   reserve   a locked pane may NOT migrate onto a file that an UNLOCKED same-target
+//             pane (same provider, home, cwd) with a SHARPER floor could still claim.
+//             Without this, pane A (idle, locked) sees pane B's brand-new session log
+//             one tick before B does, steals it as an "in-pane relaunch", and B —
+//             its own file now excluded — shows "waiting for the first response"
+//             forever while A wears B's numbers. Found live 2026-07-23.
+//   takeover  the reverse arbitration: an UNLOCKED pane whose (sharper) floor admits
+//             a file that another pane holds by mtime HEURISTIC may reclaim it — the
+//             holder unlocks and re-resolves on its next tick. Sharpest claimant wins.
+//   pin       claude only: the pane's own statusline relay names the EXACT transcript
+//             (`transcript_path`), so identity stops being a guess entirely. A pinned
+//             lock ignores mtime migration and cannot be taken over.
 //
 // Known honest gap: two panes launching the same CLI in the same cwd within the same
-// poll tick can swap locks (both files appear before either pane locks). Both bars
-// still show real sessions of that repo; the next relaunch heals it.
+// poll tick can swap locks (both files appear before either pane locks, both floors
+// equally sharp). Both bars still show real sessions of that repo; a relay pin or the
+// next relaunch heals it.
 
 export interface ContextSink {
   change(paneId: number, usage: ContextUsage | null): void
@@ -63,10 +76,10 @@ export interface ContextPaneSpec {
   adopted?: boolean
   /** Test seam: opencode's offline model catalogue (defaults to its real cache path). */
   opencodeModels?: string
-  /** The earliest this session's log can have been written (ms epoch). Typed-launch detection
-   *  knows this EXACTLY — the moment the agent's process was first seen, minus the detection
-   *  lag — which beats both guesses below: a fresh launch's slack, and an adopted pane's blind
-   *  30-minute window. */
+  /** The earliest this session's log can have been written (ms epoch). Detection knows this
+   *  EXACTLY — the agent process's creation time where the platform reports it (first-seen
+   *  minus the detection lag otherwise) — which beats both guesses below: a fresh launch's
+   *  slack, and an adopted pane's blind 30-minute window. */
   since?: number
 }
 
@@ -83,6 +96,9 @@ interface Track extends ContextPaneSpec {
   window?: number
   /** Baseline seed attempted for this lock (one shot — see the seed note below). */
   seeded?: boolean
+  /** Locked from the pane's own relay (`transcript_path`) — exact identity, immune
+   *  to mtime migration and takeover. */
+  pinned?: boolean
   lastSig?: string
 }
 
@@ -176,11 +192,44 @@ export class ContextMonitor {
     return t.watchStart - (t.adopted ? ADOPT_LOOKBACK_MS : LAUNCH_SLACK_MS)
   }
 
+  /** Two panes are after the SAME pool of session logs: one provider, one config
+   *  home, one cwd. Only then can their lock claims collide. */
+  private sameTarget(a: Track, b: Track): boolean {
+    return a.provider === b.provider && a.home === b.home && pathKey(a.cwd) === pathKey(b.cwd)
+  }
+
+  /** Whether pane t may lock the file (owned by `owner`, or unclaimed) at this mtime.
+   *  Encodes the reserve/takeover arbitration from the header: sharpest claimant wins,
+   *  a pin always wins. */
+  private mayClaim(t: Track, mtimeMs: number, owner: Track | undefined, others: Track[]): boolean {
+    if (owner) {
+      // Takeover: only an UNLOCKED pane may reclaim, only from a HEURISTIC (unpinned)
+      // lock, and only when its own floor is the sharper claim on this file.
+      return !t.file && !owner.pinned && this.sameTarget(t, owner) && this.floorFor(t) > this.floorFor(owner)
+    }
+    // Reserve: a locked pane weighing a migration must leave a fresh file to any
+    // unlocked same-target pane whose sharper floor admits it — that pane's own
+    // session is exactly what a file born inside its watch window looks like.
+    if (t.file) {
+      for (const o of others) {
+        if (o.file || !this.sameTarget(t, o)) continue
+        const oFloor = this.floorFor(o)
+        if (oFloor > this.floorFor(t) && mtimeMs >= oFloor) return false
+      }
+    }
+    return true
+  }
+
   /** Candidate session logs for a pane, newest first. Only files a pane could lock:
-   *  recent enough for ITS lock rule, not locked by any other pane. */
+   *  recent enough for ITS lock rule, and admissible under the claim arbitration. */
   private candidates(paneId: number, t: Track): Array<{ file: string; mtimeMs: number }> {
-    const lockedByOthers = new Set<string>()
-    for (const [id, other] of this.panes) if (id !== paneId && other.file) lockedByOthers.add(other.file)
+    const lockedByOthers = new Map<string, Track>()
+    const others: Track[] = []
+    for (const [id, other] of this.panes) {
+      if (id === paneId) continue
+      others.push(other)
+      if (other.file) lockedByOthers.set(other.file, other)
+    }
     const floor = this.floorFor(t)
 
     const out: Array<{ file: string; mtimeMs: number }> = []
@@ -201,10 +250,11 @@ export class ContextMonitor {
       for (const name of names) {
         if (!name.endsWith('.jsonl')) continue
         const file = join(dir, name)
-        if (lockedByOthers.has(file)) continue
         try {
           const st = fs.statSync(file)
-          if (st.mtimeMs >= floor) out.push({ file, mtimeMs: st.mtimeMs })
+          if (st.mtimeMs >= floor && this.mayClaim(t, st.mtimeMs, lockedByOthers.get(file), others)) {
+            out.push({ file, mtimeMs: st.mtimeMs })
+          }
         } catch {
           /* raced away */
         }
@@ -223,10 +273,10 @@ export class ContextMonitor {
         for (const name of names) {
           if (!name.startsWith('rollout-') || !name.endsWith('.jsonl')) continue
           const file = join(dir, name)
-          if (lockedByOthers.has(file)) continue
           try {
             const st = fs.statSync(file)
             if (st.mtimeMs < floor) continue // cheap gate before the session_meta read
+            if (!this.mayClaim(t, st.mtimeMs, lockedByOthers.get(file), others)) continue
             if (!this.codexCwd.has(file)) {
               if (this.codexCwd.size > 500) this.codexCwd.clear() // bounded, crude, sufficient
               const cwd = readCodexSessionCwd(file)
@@ -243,6 +293,31 @@ export class ContextMonitor {
     return out
   }
 
+  /** Unlock every OTHER pane holding `file`: the caller just claimed it (a relay pin,
+   *  or takeover arbitration). The loser re-resolves on its next tick; its gauge goes
+   *  honest-pending rather than wearing a session that was never its own. */
+  private claim(paneId: number, file: string): void {
+    for (const [id, other] of this.panes) {
+      if (id === paneId || other.file !== file) continue
+      other.file = undefined
+      other.fileMtimeMs = 0
+      other.pinned = false
+      this.emit(id, other, null)
+    }
+  }
+
+  /** Point the track at a different session file, resetting every per-lock gate. */
+  private lock(paneId: number, t: Track, file: string, mtimeMs: number, pinned: boolean): void {
+    this.claim(paneId, file)
+    t.file = file
+    t.fileMtimeMs = mtimeMs
+    t.lastSize = -1 // force a read of the new lock
+    t.lastMtimeMs = -1
+    t.window = undefined // a different file is a different session — re-resolve its window
+    t.seeded = false
+    t.pinned = pinned
+  }
+
   /** Lock/migrate this pane's session file, then read + parse + emit on change. */
   private refresh(paneId: number): void {
     const t = this.panes.get(paneId)
@@ -250,23 +325,35 @@ export class ContextMonitor {
 
     // 1. Resolve the file. Locked file gone -> unlock + hide the bar (session log
     //    deleted under us); a strictly newer candidate -> migrate (in-pane relaunch).
+    //    Claude first checks its relay sink: `transcript_path` NAMES the session file,
+    //    and an exact identity beats every mtime heuristic below (a fresh sink also
+    //    re-pins across an in-pane relaunch — the new session overwrites the sink
+    //    within its first statusline fire). The floor guard keeps a leftover sink
+    //    from a PREVIOUS session out, same as for its numbers.
+    const sink = t.provider === 'claude' ? readContextSink(paneId) : null
+    if (sink && sink.transcriptPath && sink.mtimeMs >= this.floorFor(t) && sink.transcriptPath !== t.file) {
+      try {
+        const st = fs.statSync(sink.transcriptPath)
+        this.lock(paneId, t, sink.transcriptPath, st.mtimeMs, true)
+      } catch {
+        /* named file not on disk (yet) — the heuristics below still apply */
+      }
+    }
     if (t.file) {
       try {
         fs.statSync(t.file)
       } catch {
         t.file = undefined
         t.fileMtimeMs = 0
+        t.pinned = false
         this.emit(paneId, t, null)
       }
     }
-    const best = this.candidates(paneId, t)[0]
-    if (best && (!t.file || (best.file !== t.file && best.mtimeMs > t.fileMtimeMs))) {
-      t.file = best.file
-      t.fileMtimeMs = best.mtimeMs
-      t.lastSize = -1 // force a read of the new lock
-      t.lastMtimeMs = -1
-      t.window = undefined // a different file is a different session — re-resolve its window
-      t.seeded = false
+    if (!t.pinned) {
+      const best = this.candidates(paneId, t)[0]
+      if (best && (!t.file || (best.file !== t.file && best.mtimeMs > t.fileMtimeMs))) {
+        this.lock(paneId, t, best.file, best.mtimeMs, false)
+      }
     }
     // 2. Stat the locked transcript (when there is one). This both feeds the stat
     //    gate for step 4 and keeps the sink's freeze-detection honest below.
@@ -295,7 +382,6 @@ export class ContextMonitor {
     //    own statusline config replaced the relay mid-session — both fall through
     //    to the transcript path below.
     if (t.provider === 'claude') {
-      const sink = readContextSink(paneId)
       const floor = this.floorFor(t)
       if (sink && sink.mtimeMs >= floor && !(t.lastMtimeMs > sink.mtimeMs + 5000)) {
         if (sink.windowTokens) t.window = sink.windowTokens
