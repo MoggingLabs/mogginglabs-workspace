@@ -381,6 +381,16 @@ export class TerminalPane {
     const emulation = terminalClient.ptyEmulation().catch(() => null)
     const term = this.term // definite by here; the async closure below reads its LIVE size
     void (async () => {
+      // Emulation FIRST — it is cached (settled-synchronous after the first pane), while
+      // the armed-run race below can legitimately take up to 2.5s. In that order a fresh
+      // pane has windowsPty set within a microtask of construction; the other way round,
+      // a slow armed run let the shell banner land into an un-told buffer (caught live
+      // by PANEFIT's ordering assertion).
+      const pty = await emulation
+      if (pty && !this.disposed) {
+        const wp = windowsPtyFor(pty)
+        if (wp) term.options.windowsPty = wp
+      }
       let run: string | undefined
       if (armedRun && !remote) {
         const cmd = await Promise.race([
@@ -388,11 +398,6 @@ export class TerminalPane {
           new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500))
         ])
         run = cmd ?? undefined
-      }
-      const pty = await emulation
-      if (pty && !this.disposed) {
-        const wp = windowsPtyFor(pty)
-        if (wp) term.options.windowsPty = wp
       }
       return terminalClient
       .spawn({

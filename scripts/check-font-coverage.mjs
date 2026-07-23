@@ -155,6 +155,17 @@ const fontsCss = readFileSync(join(root, 'src', 'ui', 'styles', 'fonts.css'), 'u
 for (const needle of ['jetbrains-mono-var.ttf', 'juliamono-regular.ttf', 'MoggingLabs Symbols', 'unicode-range']) {
   if (!fontsCss.includes(needle)) fail(`fonts.css lost "${needle}"`)
 }
+// The symbols face must stay SCOPED above the text blocks — a live fonts.check() cannot
+// assert this (it answers vacuous-true for chars no face covers), so the range is parsed
+// here: every entry must start at or above U+2190, or the face could shadow text glyphs.
+const rangeMatch = fontsCss.match(/unicode-range:\s*([^;]+);/)
+if (rangeMatch) {
+  for (const entry of rangeMatch[1].split(',').map((s) => s.trim())) {
+    const m = /^U\+([0-9A-Fa-f]+)(?:-([0-9A-Fa-f]+))?$/.exec(entry)
+    if (!m) fail(`fonts.css unicode-range entry unparsable: "${entry}"`)
+    else if (parseInt(m[1], 16) < 0x2190) fail(`symbols-face range ${entry} reaches below U+2190 (could shadow text)`)
+  }
+}
 const uiIndex = readFileSync(join(root, 'src', 'ui', 'index.ts'), 'utf8')
 if (!uiIndex.includes("./styles/fonts.css")) fail('src/ui/index.ts no longer imports styles/fonts.css')
 if (uiIndex.includes('@fontsource')) fail('src/ui/index.ts reimports a @fontsource subset build')

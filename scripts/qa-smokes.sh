@@ -9,10 +9,10 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 183 gates: 23 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 186 gates: 24 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
 # GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE ·
-# GRAMMARCAT) + 160 app-boot
+# GRAMMARCAT · FONTCOVER) + 162 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -206,6 +206,9 @@ run_static CUSTODY node scripts/check-credential-wording.mjs
 # specificity outranks the blanket clamp. Finding 36: five indicators had their pulse "becalmed"
 # into an INFINITE fade, so prefers-reduced-motion installed the very thing it exists to decline.
 run_static MOTION  node scripts/check-reduced-motion.mjs
+# The vendored terminal faces: cmap coverage (box/braille/dingbats) + 0.600em advance
+# parity on the exact bytes in the repo — a subset/optimizer swap goes red here.
+run_static FONTCOVER node scripts/check-font-coverage.mjs
 # NPMCONFIG: .npmrc carried `build_from_source=true` — a key npm has NEVER supported. It warned on
 # every install and hard-fails in npm's next major; electron-builder.yml's buildDependenciesFromSource
 # was doing the work all along. Two layers: no unsanctioned key in a root .npmrc, and a real
@@ -302,6 +305,8 @@ run_smoke SURVIVE_B   MOGGING_SURVIVE   B 120 survive SURVIVE
 run_smoke MILESTONE   MOGGING_MILESTONE 1 300 milestone
 run_smoke FLICKER     MOGGING_FLICKER   1 240 flicker
 run_smoke PANESCROLL  MOGGING_PANESCROLL 1 300 panescroll
+run_smoke PANEFIT     MOGGING_PANEFIT   1 240 panefit
+run_smoke REATTACHFIT MOGGING_REATTACHFIT 1 120 reattachfit
 run_smoke APPSCROLL   MOGGING_APPSCROLL 1 180 appscroll
 run_smoke CONPTY      MOGGING_CONPTY    1 180 conpty
 run_smoke PERCEPTION  MOGGING_PERCEPTION 1 240 perception
