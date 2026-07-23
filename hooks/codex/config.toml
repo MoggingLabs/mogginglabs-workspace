@@ -26,3 +26,20 @@ notify = ["mogging", "notify"]
 notifications = true
 notification_method = "osc9"
 notification_condition = "always"
+
+# Codex's real hook system (command handlers only) closes the two gaps the pair above cannot
+# see. UserPromptSubmit is the turn boundary (the app resets its subagent bookkeeping there,
+# and without it a second-turn Codex pane only leaves the green "finished" state by your own
+# keystroke). PostToolUse is proof-of-work: it re-lights "busy" the moment a continued turn
+# touches a tool, so a working agent never sits on a yellow idle dot. The commands print
+# nothing, so no hook output ever reaches the model's context.
+
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "mogging notify --event turn-start"
+
+[[hooks.PostToolUse]]
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "mogging notify --event busy"
