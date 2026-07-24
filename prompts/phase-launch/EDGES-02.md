@@ -147,6 +147,22 @@ this prose.
 
 ## Perf, re-measured
 
+### After F026 (the renderer moved again)
+
+- **PERCEPTION — PASS**, comfortably: switch max 34.2 ms and zoom max 25.2 ms against a 100 ms
+  action budget, echo median 2.8 ms against 60 ms, and **zero** frames over 100 ms across all
+  three churn profiles (churn, size-churn, torrent).
+- **MILESTONE — FAIL on one metric, and NOT this diff.** The 16-pane stress worst gap is
+  **215.3 ms** against 150 ms; everything else is comfortable (avgFps 131.5, idle gap 7.2 ms,
+  heap 55 MB, 16/16 WebGL, attention 4/4).
+- **Probed, not argued.** Restoring `controller.ts` to its pre-F026 bytes and re-running gives
+  **250 ms** — WORSE than with the fix. So the gap is this box's load after a long gate
+  session, matching the recorded 187–229 ms signature that passes under CI's soft-GPU profile.
+  The reasoning also holds independently: `applyResolvedLayout` runs on a layout apply and
+  never on the 16-pane render/stress path.
+
+### Earlier passes
+
 - **PERCEPTION — PASS.**
 - **MILESTONE — FAIL, and NOT this diff.** The only failing metric is the 16-pane stress worst
   frame gap: **208.4 ms** against a 150 ms budget. Everything else is comfortable (avgFps 134,
