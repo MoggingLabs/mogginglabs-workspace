@@ -34,11 +34,25 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
-      - name: Create the release if missing (draft)
+      - name: Create the release if missing (draft) — and demote a premature publish
         shell: bash
         run: |
           TAG="${{ inputs.tag || github.ref_name }}"
-          gh release view "$TAG" >/dev/null 2>&1 && exit 0
+          if gh release view "$TAG" --json isDraft >/dev/null 2>&1; then
+            # PUBLISH-AFTER-ASSETS LAW (v0.16.0, 2026-07-25): a release published
+            # before its latest*.yml feed files exist makes EVERY installed app's
+            # update check error for the whole build window — /releases/latest
+            # answers the moment a release is published, assets or not. A
+            # premature publish is demoted to draft here; the publish job at the
+            # end of this workflow is the only thing that flips it back.
+            DRAFT=$(gh release view "$TAG" --json isDraft -q .isDraft)
+            FEED=$(gh release view "$TAG" --json assets -q '[.assets[].name | select(startswith("latest"))] | length')
+            if [ "$DRAFT" = "false" ] && [ "$FEED" = "0" ]; then
+              echo "::warning::$TAG was published with no update-feed files — demoting to draft until the artifacts land (installed apps 404 otherwise)"
+              gh release edit "$TAG" --draft
+            fi
+            exit 0
+          fi
           gh release create "$TAG" --verify-tag --draft \
             --title "$(git log -1 --format=%s)" --generate-notes
         env:
@@ -287,3 +301,33 @@ jobs:
           version: ${{ github.ref_name }}
           sourcemaps: ./out
           finalize: true
+
+  # The other half of the publish-after-assets law: the ONLY hand that flips the
+  # draft live. Runs after every OS leg uploaded AND passed its own feed-verify
+  # step; re-checks the assembled release carries all three platforms' feed
+  # files before publishing. Humans never flip --draft=false by hand — a
+  # premature flip gets demoted by ensure-release on the next run anyway.
+  publish:
+    name: publish the verified release
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Publish only after the whole feed exists
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          gh release view "$TAG" --json assets -q '.assets[].name' | tr -d '\r' > assets.txt
+          rc=0
+          for feed in latest.yml latest-mac.yml latest-linux.yml; do
+            if grep -qxF "$feed" assets.txt; then echo "  ok      $feed"; else echo "  MISSING $feed"; rc=1; fi
+          done
+          if [ $rc -ne 0 ]; then
+            echo "::error::the assembled release is missing feed files — staying DRAFT"
+            exit 1
+          fi
+          gh release edit "$TAG" --draft=false --latest
+          echo "published $TAG to the update feed"

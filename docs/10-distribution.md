@@ -124,6 +124,20 @@ here, and avoid renaming artifacts at all: electron-updater finds the *previous*
 blockmap by string-substituting the version into the current name, so any rename
 silently downgrades that one update to a full download.
 
+### Publish-after-assets — the release is a DRAFT until the workflow says otherwise
+
+`/releases/latest` answers the moment a release is *published*, feed files or
+not — so a release published before its `latest*.yml` land makes every installed
+app's update check error ("Update failed — retry") for the whole build window
+(learned live, v0.16.0). The workflow enforces the ordering end to end: the
+`ensure-release` job creates the release as a DRAFT (and **demotes** a
+prematurely published one back to draft), and the final `publish` job — which
+runs only after all three OS legs uploaded and passed their feed verification —
+is the only hand that flips it live, after re-checking all three platforms'
+feed files exist on the assembled release. Cut a release by pushing the tag and
+(optionally) pre-creating the DRAFT with curated notes; never flip
+`--draft=false` yourself.
+
 Practical dependency: mac auto-update is inert until the app is signed +
 notarized (Squirrel.Mac refuses unsigned updates) — see the matrix above. Dev
 builds don't auto-update; `MOGGING_FAKE_UPDATE=<version>` replays the whole
