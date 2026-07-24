@@ -160,7 +160,7 @@ CI validates both continuously where the tooling exists (`winget validate` on
 windows-latest, `brew style` on macos-latest) so submission day is a
 copy-paste PR.
 
-**v0.15.1 status:** the committed manifests pin the shipped v0.15.1 artifacts —
+**v0.16.0 status:** the committed manifests pin the shipped v0.16.0 artifacts —
 sha256s regenerated from the uploaded release bytes (the command above), win-x64
 `.exe` and mac-arm64 `.dmg` verified against the assets on the release. The cask
 stays arm64-only (Intel deferred — see the matrix footnote). Neither is submitted
