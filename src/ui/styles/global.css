@@ -9475,6 +9475,93 @@ body.pane-dragging * {
   min-width: 0;
 }
 
+/* ── Tool cards (phase-tools/05): the chooser + the merged routes ─────────────
+   Method rows speak outcomes; the custody subtitle is the fine print. Coming-soon
+   rows are disabled by construction — greyed, no handler, no pretend affordance. */
+.conn-chooser {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+}
+.conn-method {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-hi);
+  font-size: var(--fs-12);
+  text-align: left;
+  cursor: pointer;
+}
+.conn-method:hover:not(:disabled),
+.conn-method:focus-visible:not(:disabled) {
+  border-color: var(--border-strong);
+}
+.conn-method-label {
+  font-weight: var(--fw-medium);
+}
+.conn-method-sub {
+  font-size: var(--fs-11);
+  color: var(--text-mid);
+}
+.conn-method.is-coming-soon {
+  opacity: 0.5;
+  cursor: default;
+  color: var(--text-mid);
+}
+.conn-advanced {
+  border-top: 1px dashed color-mix(in srgb, var(--border) 60%, transparent);
+  padding-top: var(--sp-1);
+}
+.conn-advanced-summary {
+  font-size: var(--fs-11);
+  color: var(--text-mid);
+  cursor: pointer;
+}
+.conn-route-cli {
+  font-style: italic;
+}
+.conn-keyslots {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.conn-keyslot-form {
+  display: flex;
+  gap: var(--sp-1);
+  align-items: center;
+  flex-wrap: wrap;
+}
+/* Own namespace, deliberately NOT .mgr-keyslot: the servers block's slot buttons are
+   an existing gate's anchors, and a same-classed span here would shadow them. */
+.conn-keyslot {
+  font-family: var(--mono, monospace);
+  font-size: var(--fs-11);
+  padding: 1px var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-mid);
+}
+.conn-keyslot.is-saved {
+  border-style: solid;
+}
+.conn-keyslot.is-missing {
+  border-style: dashed;
+}
+.conn-scope.is-raw {
+  font-family: var(--mono, monospace);
+  font-size: var(--fs-11);
+}
+.conn-setup-link {
+  align-self: flex-start;
+}
+
 /* ── Usage glance (Phase-7/03): titlebar two-bar gauge + popover ────────────── */
 .usage-wrap {
   position: relative;

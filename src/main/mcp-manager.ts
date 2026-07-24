@@ -12,6 +12,7 @@ import {
   parseCliMcpList,
   presetBlockedFor,
   presetToServerEntries,
+  providerCatalog,
   removeStoredServer,
   saveServer,
   sha256,
@@ -520,7 +521,10 @@ export function registerMcpManager(): void {
   ipcMain.handle(IntegrationsChannels.mgrBackups, (_e, cli: HostedCliId) => mgrBackups(cli))
 
   // ── The catalog (8/07) ─────────────────────────────────────────────────────
-  ipcMain.handle(IntegrationsChannels.catList, () => ({ presets: MCP_PRESETS, custom: customPresets() }))
+  // `providers` rides along since phase-tools/05: the tool cards render the chooser,
+  // humanized scopes, and setup links straight from the catalog rows (pure data,
+  // secret-free by the CATSCHEMA scan; presets remain the projected shape).
+  ipcMain.handle(IntegrationsChannels.catList, () => ({ presets: MCP_PRESETS, custom: customPresets(), providers: providerCatalog() }))
   ipcMain.handle(IntegrationsChannels.catCapabilities, () => authRunnerAuditCapabilities(CLI_CAPABILITIES))
   ipcMain.handle(IntegrationsChannels.catPrepare, async (_e, p: { presetId: string; baseUrl?: string; authKind?: McpAuthKind }) => {
     // Finding 39's seam: the Preview button's ONE read. It disabled itself on click and re-enabled

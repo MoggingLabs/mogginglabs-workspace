@@ -9,10 +9,10 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 188 gates: 26 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 189 gates: 26 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
 # GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE ·
-# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED) + 162 app-boot
+# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED) + 163 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -509,6 +509,15 @@ run_smoke TOOLPULSE    MOGGING_TOOLPULSE 1 300 toolpulse
 # probed identity (probed wins when both); identity once probed is never re-asked.
 # Mutation-red ×2 proven LIVE: broken allowlist match, inverted probed-beats-noted.
 run_smoke TOOLWHO      MOGGING_TOOLWHO   1 240 toolwho
+# TOOLCARDS (phase-tools/05): the catalog made visible on the REAL page — a dual-route
+# service is ONE card (merge key = service id) carrying both facts; the four status
+# tags track the engine's verifiedAt and flip when the provider revokes; the chooser
+# renders exactly the catalog's methods in rank order with the ADR 0020 strings and
+# custody subtitles verbatim, and the no-DCR client form carries the catalog's setup
+# link; scope titles humanized with raw in the title attr, uncataloged never hidden;
+# the detail's workspace checkbox mutates the same plan the matrix renders; Codex/
+# Gemini rows are inert coming-soon. Mutation-red ×2: broken merge key, broken rank.
+run_smoke TOOLCARDS    MOGGING_TOOLCARDS 1 240 toolcards
 # The store/inventory split (2026-07-18): the Library overlay is the store, the
 # settings page is the inventory — this gate bites the door, the honesty, the
 # chip->plan mutation, the in-place key vaulting, and the route badges.

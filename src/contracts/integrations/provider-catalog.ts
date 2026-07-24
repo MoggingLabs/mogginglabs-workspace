@@ -122,6 +122,9 @@ export interface ProviderEntry {
   docsLinks?: readonly { type: string; name: string; url: string }[]
   group?: string
   mcp?: { transport: McpTransport; url?: string; command?: string }
+  /** Per-CLI dialect notes the writers/UI consult (env expansion vs inheritance,
+   *  header syntax) — dev-verified data, moved in from presets.json at step 05. */
+  cliQuirks?: Readonly<Partial<Record<HostedCliId, string>>>
   methods: readonly ProviderMethod[]
   profile?: ProviderProfileSpec
   verification?: ProviderVerificationSpec
@@ -130,20 +133,21 @@ export interface ProviderEntry {
   verifiedAt?: string
 }
 
-// ── The migration shim (retired by phase-tools step 05) ──────────────────────
-// Projects a ProviderEntry back onto the McpPreset shape today's consumers read,
-// so the catalog can land dark while presets.json stays the runtime source. The
-// unit test (tests/unit/provider-catalog.test.ts) holds the two in agreement for
-// every id present in both.
+// ── The projection onto McpPreset (the RETIRED shim's successor, step 05) ─────
+// The catalog is the runtime source now: presets.json is gone, and the projection
+// below is how the remaining McpPreset consumers read the catalog. The unit test
+// (tests/unit/provider-catalog.test.ts) pins its invariants.
 
 const KIND_TO_AUTH: Record<ProviderMethodKind, McpAuthKind | null> = {
   oauth: 'oauth',
   apiKey: 'token',
   none: 'none',
-  cliOwned: null // a route, not an auth kind — presets never modeled it
+  cliOwned: null // a route, not an auth kind — the preset shape never modeled it
 }
 
-export function providerToPreset(p: ProviderEntry, cliQuirks: McpPreset['cliQuirks'] = {}): McpPreset {
+/** Project one catalog entry onto the McpPreset shape existing consumers read.
+ *  Facts only — every field derives from the entry; nothing is typed twice. */
+export function presetFromProvider(p: ProviderEntry): McpPreset {
   const authKinds: McpAuthKind[] = []
   for (const m of [...p.methods].sort((a, b) => a.rank - b.rank)) {
     const kind = KIND_TO_AUTH[m.kind]
@@ -163,7 +167,7 @@ export function providerToPreset(p: ProviderEntry, cliQuirks: McpPreset['cliQuir
     authKinds: authKinds.length ? authKinds : ['none'],
     envRefSlots,
     baseUrlOverride: p.methods.some((m) => (m.connectionConfig ?? []).length > 0) || undefined,
-    cliQuirks,
+    cliQuirks: p.cliQuirks ?? {},
     grantCopy: p.grantCopy ?? '',
     verifiedAt: p.verifiedAt ?? ''
   } as McpPreset

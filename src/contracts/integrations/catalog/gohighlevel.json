@@ -38,5 +38,8 @@
     }
   ],
   "grantCopy": "Client pipelines and automations your agency runs — an agent here acts on real client accounts. Grant narrowly.",
-  "verifiedAt": "2026-07-15"
+  "verifiedAt": "2026-07-15",
+  "cliQuirks": {
+    "codex": "bearer auth via bearer_token_env_var only"
+  }
 }

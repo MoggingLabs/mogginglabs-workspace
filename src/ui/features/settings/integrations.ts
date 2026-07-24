@@ -1196,7 +1196,9 @@ export function createIntegrationsSection(): HTMLElement {
     { defaultOpen: true, attentionOpens: true }
   )
   const servers = card('servers', 'Servers on your CLIs', 'Every server your CLIs know about, and who holds its auth. Writes are surgical, backed up, and only on your click.', serversBlock.block)
-  const workspace = card('workspace', 'Workspace tools', 'Which tools each workspace’s agents carry, and whether they may write. Default closed.', workspaceBlock.block)
+  // Shrunk to the POWER-USER view (phase-tools/05): everyday scoping happens on
+  // each tool's own card above; this card keeps the matrix and the write grant.
+  const workspace = card('workspace', 'Workspace tools', 'The power-user matrix: which tools each workspace’s agents carry, per CLI, and whether they may write. Everyday scoping lives on each tool’s card above.', workspaceBlock.block)
   const keys = card('keys', 'Service keys (advanced)', 'The vault’s audit view — every saved ${NAME}, encrypted by your OS keychain. Keys are normally pasted where they’re needed.', keysBlock.block)
 
   const cards: Record<SectionId, CollapsibleCardHandle> = { connections, servers, workspace, keys }

@@ -45,8 +45,17 @@ const BANNED = [
 // the Library's advanced fold earn entries here as steps 05–06 land; an entry is
 // suppressed only while the line still contains the reviewed text verbatim.
 const ALLOWED = [
-  // (empty at step 01 — the burn-down starts at the full count)
+  // (none yet — the step-05 surfaces were written clean; custody fine print lives
+  //  in contracts/integrations/tool-cards.ts, outside this scope by design)
 ]
+
+// ── ENFORCED files (phase-tools/05, deliverable 9) ────────────────────────────
+// Every file the tool-card step REWROTE holds the line from now on: a violation
+// here fails the gate even in report-only mode. The rest of the scope stays on
+// the burn-down until step 06 rewrites it (the reconciler) and joins this list.
+const ENFORCED_FILES = new Set([
+  'src/ui/features/settings/connections.ts'
+])
 
 function tsFiles(dir) {
   const out = []
@@ -86,8 +95,10 @@ for (const file of tsFiles(SCOPE)) {
   }
 }
 
+const enforced = violations.filter((v) => ENFORCED_FILES.has(v.file))
+
 if (violations.length) {
-  const mode = ENFORCE ? 'ENFORCING' : 'REPORT-ONLY (pending phase-tools 05–06)'
+  const mode = ENFORCE ? 'ENFORCING' : 'REPORT-ONLY (burn-down; rewritten files enforce)'
   console.log(`TOOLWORDS [${mode}]: ${violations.length} jargon hit(s) in user-visible strings:`)
   const byFile = new Map()
   for (const v of violations) {
@@ -95,12 +106,16 @@ if (violations.length) {
     byFile.get(v.file).push(v)
   }
   for (const [file, vs] of byFile) {
-    console.log(`  ${file} (${vs.length})`)
+    console.log(`  ${file} (${vs.length})${ENFORCED_FILES.has(file) ? '  ← ENFORCED' : ''}`)
     for (const v of vs.slice(0, 8)) console.log(`    L${v.line} [${v.name}] ${JSON.stringify(v.text)}`)
     if (vs.length > 8) console.log(`    … and ${vs.length - 8} more`)
   }
   if (ENFORCE) process.exit(1)
-  console.log('TOOLWORDS: report-only pass — the count above is the burn-down; steps 05–06 flip enforcement.')
+  if (enforced.length) {
+    console.error(`TOOLWORDS: ${enforced.length} violation(s) in ENFORCED (step-05 rewritten) files — these fail even in report-only mode.`)
+    process.exit(1)
+  }
+  console.log('TOOLWORDS: report-only pass — the count above is the burn-down; step 06 flips the rest.')
   process.exit(0)
 }
 console.log('TOOLWORDS: no plumbing jargon in user-visible integration strings')

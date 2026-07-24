@@ -1,38 +1,41 @@
 import { get as httpGet } from 'node:http'
 import { get as httpsGet } from 'node:https'
-import presetsJson from './presets.json'
 import { ORIGINS } from '../../core/origins'
 import { validateServerEntry } from './registry'
-import type { HostedCliId, McpAuthKind, McpPreset, McpServerEntry, McpTransport } from '@contracts'
+import { providerCatalog, providerEntryFor } from './provider-catalog-data'
+import { presetFromProvider, type HostedCliId, type McpAuthKind, type McpPreset, type McpServerEntry, type McpTransport } from '@contracts'
 
-// The Integrations Catalog (Phase-8/07). Presets are DATA — official servers
-// only, every row dev-verified with a date (the 7/01 discipline; the books
-// carry the probe record). The list is OPEN: a data row here, a registry
-// search, or a pasted preset — never code. We never run, proxy, or
-// authenticate a server: Connect writes config through 06's writers; OAuth
-// belongs to each CLI; keys are env-ref pointers (ADR 0008.b/d).
+// The Integrations Catalog (Phase-8/07; runtime source flipped to the PROVIDER
+// CATALOG at phase-tools/05 — presets.json is retired). Every service fact lives
+// in src/contracts/integrations/catalog/*.json, one file per provider, provenance
+// on every entry (ADR 0020); the McpPreset shape below is a PROJECTION of that
+// catalog for the consumers that still read it. The list is OPEN: a catalog row,
+// a registry search, or a pasted preset — never code. We never run, proxy, or
+// authenticate a server the CLI-owned way: Connect writes config through 06's
+// writers; OAuth belongs to each CLI on that route; keys are env-ref pointers.
 
-function coercePreset(raw: Record<string, unknown>): McpPreset {
-  const p: McpPreset = {
-    id: String(raw.id),
-    label: String(raw.label),
-    transport: (raw.transport === 'stdio' ? 'stdio' : 'http') as McpTransport,
-    urlOrCommand: String(raw.urlOrCommand),
-    authKinds: (Array.isArray(raw.authKinds) ? raw.authKinds : []).filter(
-      (k): k is McpAuthKind => k === 'oauth' || k === 'token' || k === 'none'
-    ),
-    envRefSlots: (Array.isArray(raw.envRefSlots) ? raw.envRefSlots : []).map(String),
-    cliQuirks: (typeof raw.cliQuirks === 'object' && raw.cliQuirks !== null ? raw.cliQuirks : {}) as McpPreset['cliQuirks'],
-    grantCopy: String(raw.grantCopy),
-    verifiedAt: String(raw.verifiedAt)
-  }
-  if (typeof raw.group === 'string' && raw.group) p.group = raw.group
-  if (raw.baseUrlOverride === true) p.baseUrlOverride = true
-  return p
-}
+/** The grid/library ROSTER: display order is a product decision (n8n first, the
+ *  Google Workspace group second, the long tail after), so it is data here — the
+ *  unit suite pins that it covers the catalog exactly. */
+export const CATALOG_ROSTER: readonly string[] = [
+  'n8n', 'gw-drive', 'gw-gmail', 'gw-calendar', 'gw-chat', 'slack', 'github-mcp', 'vercel', 'supabase',
+  'gohighlevel', 'clickup', 'make', 'sentry', 'posthog', 'stripe', 'cloudflare-docs', 'aws-api', 'azure',
+  'gitlab', 'notion', 'tally', 'zapier', 'atlassian', 'figma', 'postman', 'airtable', 'jotform', 'replicate',
+  'fal', 'elevenlabs', 'cf-bindings', 'cf-observability', 'cf-radar', 'cf-browser', 'cf-logs', 'cf-ai-gateway',
+  'cf-autorag', 'cf-auditlogs', 'cf-dns-analytics', 'cf-dex', 'cf-casb', 'cf-graphql', 'cf-containers',
+  'linear', 'asana', 'monday', 'intercom', 'close', 'jam', 'neon', 'prisma', 'box', 'globalping', 'paypal',
+  'square', 'plaid', 'canva', 'webflow', 'huggingface', 'deepwiki'
+]
 
-/** THE catalog, roster-ordered (n8n first, Google Workspace group second). */
-export const MCP_PRESETS: readonly McpPreset[] = (presetsJson as Record<string, unknown>[]).map(coercePreset)
+/** THE catalog projection, roster-ordered. Derived, never typed twice: every fact
+ *  comes out of the provider catalog through presetFromProvider. */
+export const MCP_PRESETS: readonly McpPreset[] = (() => {
+  const rostered = CATALOG_ROSTER.map((id) => providerEntryFor(id)).filter((e): e is NonNullable<typeof e> => !!e)
+  const known = new Set(CATALOG_ROSTER)
+  // A catalog row missing from the roster still ships — appended, never hidden.
+  const rest = providerCatalog().filter((e) => !known.has(e.id))
+  return [...rostered, ...rest].map(presetFromProvider)
+})()
 
 export const findPreset = (id: string): McpPreset | undefined => MCP_PRESETS.find((p) => p.id === id)
 

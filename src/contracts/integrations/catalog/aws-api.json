@@ -21,5 +21,8 @@
     }
   ],
   "grantCopy": "AWS API operations under YOUR local credential chain — the agent can do what your aws CLI can. Scope the IAM role narrowly; this is infrastructure.",
-  "verifiedAt": "2026-07-06"
+  "verifiedAt": "2026-07-06",
+  "cliQuirks": {
+    "claude-code": "rides your default AWS credential chain (aws configure / SSO)"
+  }
 }

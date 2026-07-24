@@ -21,5 +21,8 @@
     }
   ],
   "grantCopy": "Azure operations under your az login. Infrastructure blast radius — grant narrowly.",
-  "verifiedAt": "2026-07-06"
+  "verifiedAt": "2026-07-06",
+  "cliQuirks": {
+    "claude-code": "picks up your az login (Entra chain)"
+  }
 }

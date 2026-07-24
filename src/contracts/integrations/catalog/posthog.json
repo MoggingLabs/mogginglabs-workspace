@@ -54,5 +54,8 @@
     "source": "https://posthog.com/docs/api/user"
   },
   "grantCopy": "Product analytics via your personal API key — reference it as an env pointer; the key itself never enters a config file.",
-  "verifiedAt": "2026-07-15"
+  "verifiedAt": "2026-07-15",
+  "cliQuirks": {
+    "codex": "bearer auth via bearer_token_env_var only"
+  }
 }

@@ -38,5 +38,8 @@
     }
   ],
   "grantCopy": "1,000+ gen-media models on your fal key — generation bills to you. The key rides as an env pointer, never a literal.",
-  "verifiedAt": "2026-07-15"
+  "verifiedAt": "2026-07-15",
+  "cliQuirks": {
+    "codex": "Key-scheme header unsupported (bearer only) — use claude/gemini or the env-ref"
+  }
 }

@@ -89,9 +89,11 @@ export const verificationSpecFor = (id: string) => byId.get(id)?.verification
 /** Rate-limit-aware retry metadata for the bridge proxy. */
 export const retrySpecFor = (id: string) => byId.get(id)?.retry
 
-/** TEST-ONLY (the TOOLPULSE gate): register a fixture service so the catalog-driven
- *  probe selection can be proven against a local server. Additive on the id map only —
- *  `providerCatalog()` (the UI's browse source) never sees a fixture row. */
+/** TEST-ONLY (the TOOLPULSE/TOOLWHO/TOOLCARDS gates): register a fixture service so
+ *  the catalog-driven probe selection, identity ladder, and tool cards can be proven
+ *  against a local server. Rides BOTH doors — the id map and the full list (the
+ *  renderer's chooser reads `providerCatalog()` over IPC). Production never calls it. */
 export function injectProviderEntryForSmoke(entry: ProviderEntry): void {
   byId.set(entry.id, entry)
+  ;(ALL as ProviderEntry[]).push(entry)
 }

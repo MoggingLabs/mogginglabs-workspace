@@ -70,5 +70,8 @@
     "source": "https://docs.sentry.io/api/auth/"
   },
   "grantCopy": "Issues, traces, and releases. OAuth per CLI, or one auth token for all agents via the vault. Self-hosted Sentry: override the base URL.",
-  "verifiedAt": "2026-07-15"
+  "verifiedAt": "2026-07-15",
+  "cliQuirks": {
+    "codex": "Sentry-Bearer alt rides bearer_token_env_var"
+  }
 }

@@ -44,5 +44,8 @@
     "source": "https://supabase.com/docs/reference/api/v1-list-all-projects"
   },
   "grantCopy": "Schema, auth, and edge functions — OAuth is currently all-or-nothing on permissions. OAuth per CLI, or one PAT for all agents via the vault (one paste, shared blast radius).",
-  "verifiedAt": "2026-07-15"
+  "verifiedAt": "2026-07-15",
+  "cliQuirks": {
+    "codex": "PAT on-ramp uses bearer_token_env_var"
+  }
 }

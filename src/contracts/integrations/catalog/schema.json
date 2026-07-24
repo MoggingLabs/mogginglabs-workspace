@@ -139,6 +139,10 @@
         "source": { "type": "string" }
       }
     },
+    "cliQuirks": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
     "verification": {
       "type": "object",
       "required": ["method", "endpoint"],

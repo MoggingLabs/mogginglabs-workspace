@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Full 188-gate sweeps are heavy (~4h each): nightly, staggered per OS, + on demand.
+  # Full 189-gate sweeps are heavy (~4h each): nightly, staggered per OS, + on demand.
   schedule:
     - cron: '30 3 * * *' # linux-sweep
     - cron: '30 4 * * *' # macos-sweep
@@ -146,7 +146,7 @@ jobs:
 
   # Phase-4/06: the third platform must BUILD AND BOOT — full native install, the
   # SMOKE gate headless under xvfb, then the AppImage + deb package. The full
-  # 188-gate sweep on Linux is a follow-up; this asserts build + boot.
+  # 189-gate sweep on Linux is a follow-up; this asserts build + boot.
   linux-boot:
     name: linux boot + package
     runs-on: ubuntu-latest
@@ -216,7 +216,7 @@ jobs:
       - name: Fuse wall gate
         run: MOGGING_FUSES_APP=dist/linux-unpacked node scripts/check-fuses.mjs
 
-  # Phase-6/02: the ENTIRE 188-gate sweep on Linux — same script, same gate list as
+  # Phase-6/02: the ENTIRE 189-gate sweep on Linux — same script, same gate list as
   # Windows. Nightly + manual (heavy); the fast boot gate above still runs per push.
   # MOGGING_CI_GPU=soft relaxes ONLY frame-gap budgets (software GL under xvfb) and
   # prints loudly in every affected smoke's log; all other claims are untouched.
@@ -394,7 +394,7 @@ jobs:
           if-no-files-found: warn
 
   # Phase-6/03: Windows regression coverage stops depending on the dev machine —
-  # the ENTIRE 188-gate sweep on windows-latest. Same script, same gate list:
+  # the ENTIRE 189-gate sweep on windows-latest. Same script, same gate list:
   # Git Bash drives qa-smokes.sh through its native MINGW branches (the local-dev
   # path). No GPU on the runner -> MOGGING_CI_GPU=soft, the same frame-timing-only
   # honesty as linux/macos. The @electron/rebuild spawn hang is confirmed on this

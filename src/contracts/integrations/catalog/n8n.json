@@ -37,5 +37,8 @@
     }
   ],
   "grantCopy": "Your n8n workflows become agent tools. An agent that can run a workflow can do whatever that workflow does — expose deliberately, per workspace.",
-  "verifiedAt": "2026-07-06"
+  "verifiedAt": "2026-07-06",
+  "cliQuirks": {
+    "codex": "bearer auth via bearer_token_env_var only"
+  }
 }

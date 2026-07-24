@@ -1,14 +1,22 @@
 import {
+  BrowserChannels,
   ConnectionsChannels,
   IntegrationsChannels,
+  chooserMethods,
   clientFormHelp,
   connectionIdentityRow,
   connectionScopes,
   connectionSummary,
+  humanizeScopes,
+  mergeToolCards,
   planHasServerForCli,
+  toolCardTag,
   ACCOUNT_NOTE_MAX,
   type Connection,
-  type ConnectionState,
+  type McpServerEntry,
+  type McpStatusSnapshot,
+  type ProviderEntry,
+  type ToolCardRow,
   type WorkspaceToolPlan
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
@@ -30,13 +38,8 @@ import { HOSTED } from './cli-meta'
  * presence of a config block, and nothing is scraped out of a CLI's stdout.
  */
 
-const STATE_LABEL: Record<ConnectionState, string> = {
-  connected: 'connected',
-  connecting: 'connecting…',
-  disconnected: 'not connected',
-  expired: 'expired',
-  error: 'error'
-}
+// The status tag is the CONTRACT's (toolCardTag / connectionStatusTag, ADR 0020):
+// exactly four sentences, and "Connected" carries the continuous-verification stamp.
 
 export interface ConnectionsBlock {
   block: HTMLElement
@@ -103,8 +106,23 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
     return d
   }
 
+  /** The OTHER route's facts (phase-tools/05): registry rows, the CLI's own status
+   *  read, and the provider catalog the chooser/scopes/setup links render from.
+   *  Best-effort — the grid still paints from connections alone if any read fails. */
+  let servers: McpServerEntry[] = []
+  let snapshot: McpStatusSnapshot | null = null
+  let providers = new Map<string, ProviderEntry>()
+
   async function refresh(): Promise<void> {
     connections = ((await bridge.invoke(ConnectionsChannels.list)) as Connection[]) ?? []
+    try {
+      servers = ((await bridge.invoke(IntegrationsChannels.serversList)) as McpServerEntry[]) ?? []
+      snapshot = ((await bridge.invoke(IntegrationsChannels.statusGet)) as McpStatusSnapshot | null) ?? null
+      const cat = (await bridge.invoke(IntegrationsChannels.catList)) as { providers?: ProviderEntry[] } | null
+      providers = new Map((cat?.providers ?? []).map((e) => [e.id, e]))
+    } catch {
+      /* the app-held route is the primary truth; the rest enriches */
+    }
     paint()
   }
 
@@ -114,14 +132,22 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
       grid.append(EmptyState({ icon: 'plug', title: 'No services to connect', body: 'The catalog is empty.' }))
       return
     }
+    // ONE tool = one card, whichever route holds its credential (phase-tools/05):
+    // the app-held connections and the CLI-owned registry rows merge by service id.
+    const rows = mergeToolCards(connections, servers, snapshot)
     const q = searchInput.value.trim().toLowerCase()
-    const visible = connections.filter((c) => !q || c.label.toLowerCase().includes(q) || c.id.includes(q))
-    const groups: { label: string; test: (c: Connection) => boolean }[] = [
-      { label: 'Connected', test: (c) => c.state === 'connected' || c.state === 'connecting' },
-      { label: 'Needs attention', test: (c) => c.state === 'expired' || c.state === 'error' },
-      // The Available group is the BROWSE surface — Library only. The settings
-      // inventory shows what you have; what you could get lives in the Library.
-      ...(browse ? [{ label: 'Available', test: (c: Connection) => c.state === 'disconnected' }] : [])
+    const visible = rows.filter((r) => !q || r.label.toLowerCase().includes(q) || r.id.includes(q))
+    // "Known" gates the inventory's Not-connected group: a tool the user has TOUCHED
+    // (a CLI-owned row, a pasted client, a note, a past grant) keeps its card; the
+    // never-touched catalog stays in the Library, where browsing lives.
+    const known = (r: ToolCardRow): boolean =>
+      !!r.server || !!(r.connection && (r.connection.userClient || r.connection.accountNote || r.connection.connectedAt || r.connection.lastError))
+    const groups: { label: string; test: (r: ToolCardRow) => boolean }[] = [
+      { label: 'Connected', test: (r) => ['connected', 'connecting'].includes(toolCardTag(r).kind) },
+      { label: 'Needs attention', test: (r) => toolCardTag(r).kind === 'attention' },
+      browse
+        ? { label: 'Available', test: (r) => toolCardTag(r).kind === 'off' }
+        : { label: 'Not connected', test: (r) => toolCardTag(r).kind === 'off' && known(r) }
     ]
     let any = false
     for (const g of groups) {
@@ -130,7 +156,7 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
       any = true
       grid.append(el('div', { class: 'section-label conn-group-label', text: `${g.label} · ${mine.length}` }))
       const groupGrid = el('div', { class: 'conn-group-grid' })
-      for (const c of mine) groupGrid.append(card(c))
+      for (const r of mine) groupGrid.append(r.connection ? card(r.connection, r) : cliCard(r))
       grid.append(groupGrid)
     }
     if (!any && q) grid.append(el('div', { class: 'menu-note', text: 'No service matches that filter.' }))
@@ -160,7 +186,7 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
   // This panel is that decision, made on the card — one checkbox per workspace,
   // each toggle writing the plan for every CLI at once. The per-CLI matrix in
   // Settings › Integrations › Workspace tools stays the precision instrument.
-  function scopePanel(c: Connection): HTMLElement {
+  function scopePanel(c: { id: string; label: string }): HTMLElement {
     const host = el('div', { class: 'conn-scope-panel' })
     const workspaces = getWorkspaces().workspaces
     if (!workspaces.length) {
@@ -213,6 +239,55 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
     return host
   }
 
+  // ── Key slots, in the DETAIL (phase-tools/05) ──────────────────────────────
+  // Every ${VAR} this tool's CLI-owned route references, with its vault state —
+  // pasted right here, vault semantics unchanged (serviceKeySet; the Service-keys
+  // card below stays the audit view). The key lives with the tool that needs it.
+  function keySlots(server: McpServerEntry): HTMLElement | null {
+    const needed = [
+      ...new Set(
+        [...Object.values(server.env ?? {}), ...Object.values(server.headers ?? {})].flatMap((v) =>
+          [...String(v).matchAll(/\$\{([A-Z0-9_]+)\}/g)].map((m) => m[1])
+        )
+      )
+    ]
+    if (!needed.length) return null
+    const host = el('div', { class: 'conn-keyslots' })
+    void (async () => {
+      let saved = new Set<string>()
+      try {
+        saved = new Set(((await bridge.invoke(IntegrationsChannels.serviceKeyList)) as string[]) ?? [])
+      } catch {
+        /* vault unavailable — slots render as paste fields */
+      }
+      for (const name of needed) {
+        if (saved.has(name)) {
+          host.append(el('span', { class: 'conn-keyslot is-saved', text: `\${${name}} · saved`, title: 'Encrypted by your OS keychain; reaches agents as this env var at launch.' }))
+          continue
+        }
+        const input = el('input', { class: 'browser-sites-input conn-key-input', placeholder: `paste the ${name} value…` }) as HTMLInputElement
+        input.type = 'password'
+        input.setAttribute('aria-label', `${name} key value`)
+        input.addEventListener('keydown', (e) => e.stopPropagation())
+        const save = el('button', { class: 'trail-btn conn-mini', type: 'button', text: 'Save to vault' }) as HTMLButtonElement
+        const slotNote = el('div', { class: 'conn-summary is-error', role: 'alert', hidden: true })
+        save.onclick = (): void => {
+          if (!input.value) return
+          void submitWithRetain({
+            trigger: save,
+            retainFields: [input],
+            errorEl: slotNote,
+            submit: () =>
+              bridge.invoke(IntegrationsChannels.serviceKeySet, { name, value: input.value }) as Promise<{ ok: boolean; reason?: string }>,
+            onSuccess: () => refresh()
+          })
+        }
+        host.append(el('div', { class: 'conn-keyslot-form' }, [el('span', { class: 'conn-keyslot is-missing', text: `\${${name}}` }), input, save, slotNote]))
+      }
+    })()
+    return host
+  }
+
   // The note editor: a label, not a secret — but it is the user's words, so the
   // draft survives repaints and dies only on save or an explicit close. Saving an
   // empty field deletes the note (the only hand that ever does).
@@ -246,8 +321,16 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
     return form
   }
 
-  function card(c: Connection): HTMLElement {
-    const chip = el('span', { class: `conn-chip is-${c.state}`, text: STATE_LABEL[c.state] })
+  function card(c: Connection, cardRow?: ToolCardRow): HTMLElement {
+    // The FOUR tags (ADR 0020): ✓ Connected · verified {n}m ago / Needs attention /
+    // Not connected / Connecting… — worded by the contract, stamped by the status
+    // engine. `is-<state>` stays for the tone CSS; `data-status` carries the kind.
+    const tag = toolCardTag(cardRow ?? { id: c.id, label: c.label, connection: c })
+    const chip = el('span', {
+      class: `conn-chip is-${c.state} is-tag-${tag.kind}`,
+      text: tag.text,
+      attrs: { 'data-status': tag.kind }
+    })
     const head = el('div', { class: 'conn-card-head' }, [
       providerLogo(c.id, 16),
       el('span', { class: 'conn-label', text: c.label }),
@@ -270,7 +353,7 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
           class: `conn-account conn-identity is-${row.kind}${row.kind === 'none' ? ' is-unknown' : ''}`,
           // `tool`-derived identity is captioned softer: the server reported it about
           // itself, where oidc/rest came through the provider's own identity door.
-          attrs: row.kind === 'probed' && row.source === 'tool' ? { title: 'Reported by the server itself.' } : {}
+          attrs: row.kind === 'probed' && row.source === 'tool' ? { title: 'Reported by the tool itself.' } : {}
         },
         [
           icon(row.kind === 'probed' ? 'user' : 'info', 13),
@@ -305,15 +388,24 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
         ? null
         : el('div', { class: `conn-summary${c.state === 'error' ? ' is-error' : ''}`, text: summaryText })
 
-    // What the grant can DO. Being signed in as the right person with the wrong powers
-    // is still the wrong connection, and this is the only place a user can see which.
+    // What the grant can DO — HUMANIZED (phase-tools/05): the catalog's scope titles
+    // render, the raw scope string rides each span's title attribute, and a
+    // granted-but-uncataloged scope falls back to its raw string, never hidden.
+    // Being signed in as the right person with the wrong powers is still the wrong
+    // connection, and this is the only place a user can see which.
     const grantScopes = connectionScopes(c)
     const scopeLine = grantScopes.length
-      ? el('div', {
-          class: 'conn-scopes',
-          text: `Can: ${grantScopes.join(' · ')}`,
-          attrs: { title: grantScopes.join('\n') }
-        })
+      ? el('div', { class: 'conn-scopes' }, [
+          el('span', { text: 'Can: ' }),
+          ...humanizeScopes(providers.get(c.id), grantScopes).flatMap((h, i) => [
+            ...(i ? [el('span', { text: ' · ' })] : []),
+            el('span', {
+              class: `conn-scope${h.fallback ? ' is-raw' : ''}`,
+              text: h.title,
+              attrs: { title: h.scope }
+            })
+          ])
+        ])
       : null
 
     // Full observability: the actual TOOL NAMES this connection serves — what an
@@ -393,7 +485,7 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
       if (c.needsBaseUrl) {
         urlInput = el('input', {
           class: 'browser-sites-input conn-key-input',
-          placeholder: 'https://your-instance… (its MCP URL)'
+          placeholder: 'https://your-instance… (the address it serves tools at)'
         }) as HTMLInputElement
         urlInput.value = draft.url
         urlInput.setAttribute('aria-label', `${c.label} instance URL`)
@@ -453,13 +545,22 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
     const clientForm = (): HTMLElement => {
       const draft = clientDraftFor(c.id)
       // ONE sentence, written by the contract — so the form and the backend's
-      // redirect-mismatch advice can never name two different consoles.
+      // redirect-mismatch advice can never name two different consoles. The catalog's
+      // setup guide renders as a REAL door (phase-tools/05): "create your client here".
       const help = el('div', { class: 'conn-summary', text: clientFormHelp(c.authServer) })
+      const setupUrl = providers.get(c.id)?.setupGuideUrl
+      const setupLink = setupUrl
+        ? (() => {
+            const a = el('button', { class: 'trail-btn conn-mini conn-setup-link', type: 'button', text: 'Create your client here ↗' }) as HTMLButtonElement
+            a.onclick = (): void => void bridge.invoke(BrowserChannels.openExternal, { url: setupUrl })
+            return a
+          })()
+        : null
       let urlInput: HTMLInputElement | null = null
       if (c.needsBaseUrl) {
         urlInput = el('input', {
           class: 'browser-sites-input conn-key-input',
-          placeholder: 'https://your-instance… (its MCP URL)'
+          placeholder: 'https://your-instance… (the address it serves tools at)'
         }) as HTMLInputElement
         urlInput.value = draft.url
         urlInput.setAttribute('aria-label', `${c.label} instance URL`)
@@ -531,7 +632,7 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
           }
         })
       }
-      return el('div', { class: 'conn-key-form' }, [help, ...(urlInput ? [urlInput] : []), idInput, secretInput, save, close, note])
+      return el('div', { class: 'conn-key-form' }, [help, ...(setupLink ? [setupLink] : []), ...(urlInput ? [urlInput] : []), idInput, secretInput, save, close, note])
     }
 
     // "Forget client ID": the delete pixel for a pasted client. It exists wherever
@@ -556,6 +657,70 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
         })()
       }
       return forget
+    }
+
+    // ── THE CHOOSER (ADR 0020): the catalog's methods, ranked, outcome-worded ──
+    // Every row is a door the catalog declared; the custody subtitle is the fine
+    // print where mechanism words are legal. Claude Code first: the advanced route
+    // names only Claude Code; Codex and Gemini render greyed "coming soon" with
+    // ZERO handlers — disabled by construction, not by convention.
+    const chooserBlock = (conn: Connection, entry: ProviderEntry, cardRow?: ToolCardRow): HTMLElement => {
+      const host = el('div', { class: 'conn-chooser' })
+      for (const m of chooserMethods(entry)) {
+        if (m.kind === 'cliOwned') {
+          const fold = el('details', { class: 'conn-advanced' }, [
+            el('summary', { class: 'conn-advanced-summary', text: m.label })
+          ]) as HTMLDetailsElement
+          fold.append(el('div', { class: 'conn-method-sub', text: m.subtitle }))
+          const setUp = el('button', {
+            class: 'trail-btn conn-mini conn-cliowned-setup',
+            type: 'button',
+            text: cardRow?.server ? 'Authorize in Claude Code' : 'Set up on Claude Code'
+          }) as HTMLButtonElement
+          setUp.onclick = (): void => {
+            void (async () => {
+              busy(setUp, true, 'Working…')
+              const r = (await bridge.invoke(IntegrationsChannels.catConnect, { presetId: conn.id, clis: ['claude-code'] })) as { ok: boolean; reason?: string }
+              if (!r.ok) showToast({ tone: 'danger', title: `${conn.label} was not set up`, body: r.reason ?? 'The attempt was refused.' })
+              busy(setUp, false, cardRow?.server ? 'Authorize in Claude Code' : 'Set up on Claude Code')
+              await refresh()
+            })()
+          }
+          fold.append(setUp)
+          for (const soon of ['Codex', 'Gemini']) {
+            const dead = el('button', {
+              class: 'conn-method is-coming-soon',
+              type: 'button',
+              text: `${soon} — coming soon`
+            }) as HTMLButtonElement
+            dead.disabled = true // zero handlers, zero interactive pixels
+            fold.append(dead)
+          }
+          host.append(fold)
+          continue
+        }
+        const btn = el(
+          'button',
+          {
+            class: 'conn-method',
+            type: 'button',
+            attrs: { 'data-method-kind': m.kind, 'data-method-key': m.key }
+          },
+          [el('span', { class: 'conn-method-label', text: m.label }), el('span', { class: 'conn-method-sub', text: m.subtitle })]
+        ) as HTMLButtonElement
+        if (m.kind === 'apiKey') {
+          btn.onclick = (): void => {
+            keyFormOpen.add(conn.id)
+            paint()
+          }
+        } else {
+          // `oauth` and `none` both connect through the same engine; the handler
+          // words the wait honestly for each.
+          btn.onclick = (): void => beginConnect(btn)
+        }
+        host.append(btn)
+      }
+      return host
     }
 
     switch (c.state) {
@@ -655,6 +820,15 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
           if (c.userClient) actions.append(forgetClientButton())
           break
         }
+        // THE CHOOSER (ADR 0020, phase-tools/05): a not-yet-connected tool with a
+        // catalog row offers its connect METHODS, ranked, in outcome wording — each
+        // with its one-line custody subtitle in fine print. Repair states keep their
+        // repair verbs below: a chooser is for choosing, not for fixing.
+        const entry = providers.get(c.id)
+        if (c.state === 'disconnected' && entry) {
+          body.append(chooserBlock(c, entry, cardRow))
+          break
+        }
         // S4: only a card that needs REPAIR arms its verb — forty idle Connects in
         // accent were noise, and the accent stopped meaning "look here".
         const label = c.state === 'expired' || c.state === 'error' ? 'Reconnect' : 'Connect'
@@ -688,14 +862,74 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
       }
     }
 
+    // The OTHER route's fact, on the SAME card (one tool = one card): when Claude
+    // Code also carries this tool itself, say so — and offer its ${VAR} slots here.
+    const routeLine =
+      cardRow?.server != null
+        ? el('div', {
+            class: 'conn-summary conn-route-cli',
+            text:
+              cardRow?.cliState === 'connected'
+                ? 'Claude Code also signs in itself for this tool — its own check says it works.'
+                : cardRow?.cliState === 'needs-auth'
+                  ? 'Claude Code also carries this tool itself, and needs to finish signing in there.'
+                  : 'Claude Code also carries this tool itself (it holds its own credential on that route).'
+          })
+        : null
+    const slots = cardRow?.server ? keySlots(cardRow.server) : null
+
     return el('div', { class: `conn-card is-${c.state}`, dataset: { connection: c.id } }, [
       head,
       ...(identity ? [identity] : []),
       ...(summary ? [summary] : []),
       ...(scopeLine ? [scopeLine] : []),
+      ...(routeLine ? [routeLine] : []),
+      ...(slots ? [slots] : []),
       ...(toolsBlock ? [toolsBlock] : []),
       body,
       ...(actions.childNodes.length ? [actions] : [])
+    ])
+  }
+
+  // ── The CLI-owned-only card: a tool with no app-held connection at all ──────
+  // Same grid, same merge key, same four tags — the detail carries the route line,
+  // the ${VAR} slots, workspace scoping, and the chooser's advanced fold.
+  function cliCard(r: ToolCardRow): HTMLElement {
+    const tag = toolCardTag(r)
+    const chip = el('span', { class: `conn-chip is-cli is-tag-${tag.kind}`, text: tag.text, attrs: { 'data-status': tag.kind } })
+    const head = el('div', { class: 'conn-card-head' }, [providerLogo(r.id, 16), el('span', { class: 'conn-label', text: r.label }), chip])
+    const route = el('div', {
+      class: 'conn-summary conn-route-cli',
+      text:
+        r.cliState === 'connected'
+          ? 'Claude Code signs in itself for this tool — its own check says it works.'
+          : r.cliState === 'needs-auth'
+            ? 'Claude Code needs to finish signing in for this tool.'
+            : 'Claude Code carries this tool itself — it holds its own credential; the app brokers nothing on this route.'
+    })
+    const slots = r.server ? keySlots(r.server) : null
+    const body = el('div', { class: 'conn-card-body' })
+    if (opts.workspaceScoping) {
+      const open = scopeOpen.has(r.id)
+      const scope = el('button', {
+        class: 'trail-btn conn-mini conn-scope-toggle',
+        type: 'button',
+        text: open ? 'Hide workspaces' : 'Use in workspaces…',
+        attrs: { 'aria-expanded': String(open) }
+      }) as HTMLButtonElement
+      scope.onclick = (): void => {
+        if (scopeOpen.has(r.id)) scopeOpen.delete(r.id)
+        else scopeOpen.add(r.id)
+        paint()
+      }
+      body.append(scope)
+      if (open) body.append(scopePanel({ id: r.id, label: r.label }))
+    }
+    return el('div', { class: 'conn-card is-cli-route', dataset: { connection: r.id } }, [
+      head,
+      route,
+      ...(slots ? [slots] : []),
+      body
     ])
   }
 
@@ -703,8 +937,8 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
     el('div', {
       class: 'settings-row-caption',
       text: browse
-        ? 'Connect a service to MoggingLabs Workspace once, and every agent you launch can use it — no CLI to configure, no key to copy around. Sign-in happens in your own browser, on the provider’s real page. The credential is encrypted by your OS keychain and stays in this app: your CLIs reach the service through us, so no token is ever written into a CLI’s config file.'
-        : 'The accounts this app holds a connection to — who you are on each, what the server actually serves, and which workspaces use it. Each credential is encrypted by your OS keychain; Disconnect deletes it from this machine. To connect more, browse the Library.'
+        ? 'Connect a tool to MoggingLabs Workspace once, and every agent you launch can use it — no CLI to configure, no key to copy around. Sign-in runs entirely on this machine: the browser consent, the local hand-back, the keychain ciphertext — no vendor cloud of ours ever sees a token. The credential is encrypted by your OS keychain and stays in this app; your CLIs reach the tool through us, so no token is ever written into a CLI’s config file.'
+        : 'Your tools — who you are on each, what each one actually offers your agents, and which workspaces carry it. Sign-in runs entirely on this machine; no vendor cloud of ours ever sees a token. Each credential is encrypted by your OS keychain; Disconnect deletes it from this machine. To connect more, browse the Library.'
     }),
     searchInput,
     grid

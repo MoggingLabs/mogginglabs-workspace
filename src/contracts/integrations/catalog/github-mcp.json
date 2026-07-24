@@ -92,5 +92,8 @@
     ]
   },
   "grantCopy": "Repos, issues, and PRs your account can touch. OAuth per CLI (vendor-preferred, per-CLI revocation) — or one PAT for all agents via the vault: one paste, shared blast radius.",
-  "verifiedAt": "2026-07-15"
+  "verifiedAt": "2026-07-15",
+  "cliQuirks": {
+    "codex": "token on-ramp uses bearer_token_env_var"
+  }
 }

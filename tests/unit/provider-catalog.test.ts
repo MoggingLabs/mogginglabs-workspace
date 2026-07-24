@@ -1,21 +1,17 @@
-// The provider catalog ↔ presets.json agreement (phase-tools/01).
+// The provider catalog as the RUNTIME SOURCE (phase-tools/05).
 //
-// The catalog lands DARK: presets.json stays the runtime source until step 05, and
-// providerToPreset() is the shim that keeps McpPreset consumers a projection away.
-// This test holds the two in agreement for EVERY preset id — so the day step 05
-// flips consumers onto the catalog, nothing the UI renders can change by accident.
+// presets.json is retired: MCP_PRESETS is a projection of the catalog through
+// presetFromProvider, roster-ordered. These tests pin the projection's invariants —
+// the facts step 01's agreement test held between two files now hold between the
+// catalog and its one projection.
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { providerToPreset, type ProviderEntry } from '../../src/contracts/integrations/provider-catalog'
-import type { McpPreset } from '../../src/contracts/integrations/presets'
+import { presetFromProvider, type ProviderEntry } from '../../src/contracts/integrations/provider-catalog'
+import { CATALOG_ROSTER, MCP_PRESETS } from '../../src/backend/features/integrations/catalog'
 
 const ROOT = process.cwd()
 const CATALOG_DIR = join(ROOT, 'src', 'contracts', 'integrations', 'catalog')
-
-const presets = JSON.parse(
-  readFileSync(join(ROOT, 'src', 'backend', 'features', 'integrations', 'presets.json'), 'utf8')
-) as McpPreset[]
 
 const entries = new Map<string, ProviderEntry>(
   readdirSync(CATALOG_DIR)
@@ -26,27 +22,34 @@ const entries = new Map<string, ProviderEntry>(
     })
 )
 
-describe('provider catalog (ADR 0020, landing dark)', () => {
-  it('covers every preset id, and nothing else', () => {
-    const presetIds = new Set(presets.map((p) => p.id))
-    for (const id of presetIds) expect(entries.has(id), `catalog missing ${id}`).toBe(true)
-    for (const id of entries.keys()) expect(presetIds.has(id), `catalog has ${id} with no preset`).toBe(true)
+describe('provider catalog (ADR 0020, the runtime source)', () => {
+  it('the roster covers the catalog exactly (display order is data, not accident)', () => {
+    const roster = new Set(CATALOG_ROSTER)
+    expect(CATALOG_ROSTER.length).toBe(roster.size) // no duplicate roster rows
+    for (const id of roster) expect(entries.has(id), `roster names ${id} with no catalog row`).toBe(true)
+    for (const id of entries.keys()) expect(roster.has(id), `catalog row ${id} missing from the roster`).toBe(true)
   })
 
-  it('projects back onto every preset without drift (the step-05 flip is a no-op)', () => {
-    for (const p of presets) {
-      const entry = entries.get(p.id)!
-      const projected = providerToPreset(entry, p.cliQuirks)
-      expect(projected.id).toBe(p.id)
-      expect(projected.label).toBe(p.label)
-      expect(projected.transport).toBe(p.transport)
-      expect(projected.urlOrCommand).toBe(p.urlOrCommand)
-      expect(projected.group ?? undefined).toBe(p.group ?? undefined)
-      expect([...projected.authKinds]).toEqual([...p.authKinds])
-      expect([...projected.envRefSlots].sort()).toEqual([...p.envRefSlots].sort())
-      expect(Boolean(projected.baseUrlOverride)).toBe(Boolean(p.baseUrlOverride))
-      expect(projected.grantCopy).toBe(p.grantCopy)
-      expect(projected.verifiedAt).toBe(p.verifiedAt)
+  it('MCP_PRESETS is exactly the roster-ordered projection', () => {
+    expect(MCP_PRESETS.map((p) => p.id)).toEqual([...CATALOG_ROSTER])
+    for (const p of MCP_PRESETS) {
+      const projected = presetFromProvider(entries.get(p.id)!)
+      expect(projected).toEqual(p)
+    }
+  })
+
+  it('projection sanity: auth kinds derive from method ranks, quirks ride the entry', () => {
+    for (const e of entries.values()) {
+      const p = presetFromProvider(e)
+      expect(p.id).toBe(e.id)
+      expect(p.label).toBe(e.label)
+      // The first non-cliOwned method's kind decides the primary auth kind.
+      const ranked = [...e.methods].sort((a, b) => a.rank - b.rank).filter((m) => m.kind !== 'cliOwned')
+      if (ranked.length) {
+        const expectedFirst = ranked[0]!.kind === 'oauth' ? 'oauth' : ranked[0]!.kind === 'apiKey' ? 'token' : 'none'
+        expect(p.authKinds[0], `${e.id} primary auth kind`).toBe(expectedFirst)
+      }
+      expect(p.cliQuirks).toEqual(e.cliQuirks ?? {})
     }
   })
 
