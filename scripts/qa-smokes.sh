@@ -9,10 +9,10 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 187 gates: 26 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 188 gates: 26 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
 # GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE ·
-# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED) + 161 app-boot
+# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED) + 162 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -501,6 +501,14 @@ run_smoke CONNLIVE     MOGGING_CONNLIVE  1 180 connlive
 # raises the app-wide badge while Settings is inactive, a network blackhole never does,
 # recovery clears. Mutation-red ×2 proven LIVE: broken offline classifier, broken budget.
 run_smoke TOOLPULSE    MOGGING_TOOLPULSE 1 300 toolpulse
+# TOOLWHO (phase-tools/04): the catalog-driven identity ladder on fixtures — an OIDC
+# grant's claims land sourced 'oidc'; a rest profile hits the EXACT catalog endpoint
+# with the catalog's own paths; a whoami tool is called once where allowlisted and
+# ZERO times where not; the identity-less card renders the honest fallback; a user
+# note set over IPC survives disconnect/reconnect and renders visibly distinct from
+# probed identity (probed wins when both); identity once probed is never re-asked.
+# Mutation-red ×2 proven LIVE: broken allowlist match, inverted probed-beats-noted.
+run_smoke TOOLWHO      MOGGING_TOOLWHO   1 240 toolwho
 # The store/inventory split (2026-07-18): the Library overlay is the store, the
 # settings page is the inventory — this gate bites the door, the honesty, the
 # chip->plan mutation, the in-place key vaulting, and the route badges.

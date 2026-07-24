@@ -2,11 +2,11 @@ import {
   ConnectionsChannels,
   IntegrationsChannels,
   clientFormHelp,
-  connectionAccount,
+  connectionIdentityRow,
   connectionScopes,
   connectionSummary,
   planHasServerForCli,
-  NO_ACCOUNT_NOTE,
+  ACCOUNT_NOTE_MAX,
   type Connection,
   type ConnectionState,
   type WorkspaceToolPlan
@@ -87,6 +87,10 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
   const toolsOpen = new Set<string>()
   /** Which cards have their workspace-scoping panel expanded — same rule. */
   const scopeOpen = new Set<string>()
+  /** The account-note editor (phase-tools/04) — same repaint-survival rules: the
+   *  open-state and the typed draft outlive the wholesale grid repaint. */
+  const noteFormOpen = new Set<string>()
+  const noteDrafts = new Map<string, string>()
   /** The client-id form (no-DCR providers: Google, GitHub, Slack) — same
    *  repaint-survival rules as the key form: open-state and typed drafts are keyed
    *  by service, because the grid repaints wholesale and a rebuilt input is a
@@ -209,6 +213,39 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
     return host
   }
 
+  // The note editor: a label, not a secret — but it is the user's words, so the
+  // draft survives repaints and dies only on save or an explicit close. Saving an
+  // empty field deletes the note (the only hand that ever does).
+  function noteForm(c: Connection): HTMLElement {
+    const input = el('input', { class: 'input input-sm conn-note-input', ariaLabel: `Account note for ${c.label}` }) as HTMLInputElement
+    input.maxLength = ACCOUNT_NOTE_MAX
+    input.placeholder = 'e.g. work account — pedro@company.com'
+    input.value = noteDrafts.get(c.id) ?? c.accountNote ?? ''
+    input.addEventListener('keydown', (e) => e.stopPropagation())
+    input.addEventListener('input', () => noteDrafts.set(c.id, input.value))
+    const save = el('button', { class: 'trail-btn conn-mini', type: 'button', text: 'Save' }) as HTMLButtonElement
+    save.onclick = (): void => {
+      void (async () => {
+        save.disabled = true
+        save.setAttribute('aria-busy', 'true')
+        save.textContent = 'Saving…'
+        await bridge.invoke(ConnectionsChannels.setNote, { serviceId: c.id, note: input.value })
+        noteDrafts.delete(c.id)
+        noteFormOpen.delete(c.id)
+        // The push from main repaints with the new truth; nothing else to do here.
+      })()
+    }
+    const cancel = el('button', { class: 'trail-btn conn-mini', type: 'button', text: 'Cancel' }) as HTMLButtonElement
+    cancel.onclick = (): void => {
+      noteDrafts.delete(c.id)
+      noteFormOpen.delete(c.id)
+      paint()
+    }
+    const form = el('div', { class: 'conn-note-form' }, [input, save, cancel])
+    setTimeout(() => input.focus(), 0)
+    return form
+  }
+
   function card(c: Connection): HTMLElement {
     const chip = el('span', { class: `conn-chip is-${c.state}`, text: STATE_LABEL[c.state] })
     const head = el('div', { class: 'conn-card-head' }, [
@@ -218,18 +255,45 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
     ])
     // WHOSE account — the line the user is actually here to read. It gets its own row,
     // above everything else, because "am I connected as the right account?" is the
-    // question a connection card exists to answer. When the provider never told us, the
-    // blank is EXPLAINED rather than left silent; we never fill it with a guess.
+    // question a connection card exists to answer. The wording is the CONTRACT's
+    // (connectionIdentityRow, phase-tools/04): probed beats noted, a note is never
+    // presented as proof ("noted by you", always), and when the provider never told
+    // us the blank is EXPLAINED rather than left silent — never filled with a guess.
     // No identity row for a `local` connection: an open server has no account, so
     // "signed in as nobody" would be a false sentence where no sentence is due.
-    const who = connectionAccount(c)
-    const identity =
-      c.state === 'connected' && c.authKind !== 'local'
-        ? el('div', { class: `conn-account${who ? '' : ' is-unknown'}` }, [
-            icon(who ? 'user' : 'info', 13),
-            el('span', { text: who ?? NO_ACCOUNT_NOTE })
-          ])
-        : null
+    const row = connectionIdentityRow(c)
+    let identity: HTMLElement | null = null
+    if (c.state === 'connected' && c.authKind !== 'local' && row) {
+      identity = el(
+        'div',
+        {
+          class: `conn-account conn-identity is-${row.kind}${row.kind === 'none' ? ' is-unknown' : ''}`,
+          // `tool`-derived identity is captioned softer: the server reported it about
+          // itself, where oidc/rest came through the provider's own identity door.
+          attrs: row.kind === 'probed' && row.source === 'tool' ? { title: 'Reported by the server itself.' } : {}
+        },
+        [
+          icon(row.kind === 'probed' ? 'user' : 'info', 13),
+          el('span', { class: 'conn-identity-text', text: row.text })
+        ]
+      )
+      if (row.kind === 'probed' && row.secondaryNote) {
+        // The "wrong account" catch: the user's own label disagrees with the provider's
+        // answer — both truths render, the provider's first, the note visibly secondary.
+        identity.append(el('span', { class: 'conn-note-secondary', text: row.secondaryNote }))
+      }
+      const noteBtn = el('button', {
+        class: 'trail-btn conn-mini conn-note-edit',
+        type: 'button',
+        text: c.accountNote ? 'Edit note' : 'Add a note…'
+      }) as HTMLButtonElement
+      noteBtn.onclick = (): void => {
+        noteFormOpen.add(c.id)
+        paint()
+      }
+      identity.append(noteBtn)
+      if (noteFormOpen.has(c.id)) identity.append(noteForm(c))
+    }
 
     // ONE sentence, written by the contract — so "connected" can never be worded
     // two different ways by two different pens. F-21: an idle card's summary is the

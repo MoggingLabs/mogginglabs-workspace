@@ -408,6 +408,7 @@ export const ConnectionsChannels = {
   disconnect: 'connections:disconnect', // (serviceId) -> void (drops the token vault slot + the metadata; a user-pasted client id/secret stays for one-click reconnects until clearClient — and the vendor-side revoke is theirs)
   verify: 'connections:verify', // (serviceId) -> Connection (the one verify engine, cause 'manual' — proof, not a poll)
   verifySweep: 'connections:verifySweep', // () -> void — page entry requests exactly ONE budgeted sweep (cause 'page-entry'); results land over `changed`
+  setNote: 'connections:setNote', // ({ serviceId, note }) -> { ok } — the user's account note (trimmed, capped; empty clears). A label, never a secret, never telemetry (ADR 0005); survives disconnect/reconnect
   changed: 'connections:changed', // main -> renderer: Connection[] (pushed on every state change; the browser lands here)
   attention: 'connections:attention' // main -> renderer: ConnectionsAttention ({ failing: ids }) — pushed on verification-failure EDGES only (raise once, clear once)
 } as const

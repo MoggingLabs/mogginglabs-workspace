@@ -5,6 +5,7 @@ import {
   ConnectionsChannels,
   enrichmentTargetsSameGrant,
   connectionEnrichmentPatch,
+  sanitizeAccountNote,
   type Connection,
   type ConnectionAuthKind,
   type ConnectionsAttention,
@@ -37,6 +38,11 @@ import {
   oauthQuirksFor,
   runVerificationProbe,
   verificationSpecFor,
+  providerEntryFor,
+  resolveIdentityProfile,
+  profileFromJwt,
+  profileDisplay,
+  callWhoamiTool,
   classifyProbeOutcome,
   runBudgetedSweep,
   AttentionLedger,
@@ -68,6 +74,9 @@ import { vaultAvailable, vaultClearKey, vaultLoad, vaultStore } from './vault'
 
 const KV_META = (id: string): string => `connections.meta.${id}`
 const KV_INDEX = 'connections.index'
+/** The account NOTE lives OUTSIDE the meta on purpose: disconnect drops the meta,
+ *  and the user's own label must survive disconnect/reconnect — only they delete it. */
+const KV_NOTE = (id: string): string => `connections.note.${id}`
 const VAULT_TOKENS = (id: string): string => `connections.tokens.${id}`
 const VAULT_CLIENT = (authServer: string): string => `connections.client.${hostKey(authServer)}`
 const hostKey = (s: string): string => s.replace(/[^a-z0-9]/gi, '_').toLowerCase().slice(0, 64)
@@ -135,11 +144,14 @@ export function listConnections(): Connection[] {
     const stored = readMeta(p.id)
     // The preset-derived fields are recomputed over a stored meta, not trusted from
     // it: they describe the CATALOG (which auth kinds exist, whether a key path is
-    // offered), and the catalog can evolve after the meta was written.
+    // offered), and the catalog can evolve after the meta was written. The account
+    // NOTE is the same shape of truth: its KV slot is the single source (it outlives
+    // the meta by design), so it always overrides whatever a stored meta carries.
     const computed = {
       label: p.label,
       hasKeyOption: authKindOf(p) === 'oauth' && p.authKinds.includes('token'),
-      needsBaseUrl: needsBaseUrl(p)
+      needsBaseUrl: needsBaseUrl(p),
+      accountNote: readNote(p.id)
     }
     if (stored) return { ...stored, ...computed }
     return {
@@ -158,7 +170,24 @@ export function listConnections(): Connection[] {
     .filter((id) => !known.has(id))
     .map((id) => readMeta(id))
     .filter((m): m is Connection => !!m)
+    .map((m) => ({ ...m, accountNote: readNote(m.id) }))
   return [...fromCatalog, ...orphans]
+}
+
+function readNote(id: string): string | undefined {
+  const raw = getSettingsStore()?.getSetting(KV_NOTE(id))
+  return raw ? raw : undefined
+}
+
+/** The user's account note: a label, not a secret — but never telemetry (ADR 0005),
+ *  and never presented as proof (the wording helper renders it "noted by you").
+ *  Empty clears. Kept in its own KV slot so disconnect/reconnect cannot eat it. */
+export function setAccountNote(serviceId: string, note: string): { ok: boolean } {
+  const store = getSettingsStore()
+  if (!store) return { ok: false }
+  store.setSetting(KV_NOTE(serviceId), sanitizeAccountNote(String(note ?? '')))
+  push()
+  return { ok: true }
 }
 
 function push(): void {
@@ -1025,22 +1054,61 @@ async function verifyOne(
     classification = classifyProbeOutcome(proof, classifierOpts)
     if (!proof.ok) reason = proof.reason
   } else {
-    const probe = await probeConnection(meta.url, token ?? undefined, { authScheme: meta.authScheme })
+    // `skipAccount`: identity is the LADDER's job now (below) — the probe's own
+    // whoami side-question would re-ask it on every heartbeat.
+    const probe = await probeConnection(meta.url, token ?? undefined, { authScheme: meta.authScheme, skipAccount: true })
     classification = classifyProbeOutcome(probe, classifierOpts)
     if (probe.ok) {
       enrichment = {
         ...connectionEnrichmentPatch({
-          account: probe.probe.account,
           serverName: probe.probe.serverName,
           toolCount: probe.probe.toolCount,
           tools: probe.probe.tools
         }),
-        // Re-checking can FILL IN a name we could not get at connect time. Never
-        // blank one we already have.
-        account: probe.probe.account ?? meta.account
+        // Never blank a name we already have.
+        account: meta.account
       }
     } else {
       reason = probe.reason
+    }
+  }
+
+  // The identity ladder (phase-tools/04): catalog-driven, and it runs ONLY while the
+  // normalized profile is still blank — an identity once probed is stable, and a
+  // heartbeat must not spend a REST call (or a tool call) per beat re-asking it.
+  // Best-effort enrichment like everything else here: a blank stays blank.
+  if (classification === 'ok' && !meta.accountProfile) {
+    const who = await resolveIdentityProfile({
+      spec: providerEntryFor(serviceId)?.profile,
+      localClaims: () => profileFromJwt(loadTokens(serviceId)?.idToken),
+      restFetch: token
+        ? async (url) => {
+            try {
+              const res = await fetch(url, {
+                headers: { authorization: `${meta.authScheme ?? 'Bearer'} ${token}`, accept: 'application/json' },
+                signal: AbortSignal.timeout(8_000)
+              })
+              return res.ok ? ((await res.json()) as unknown) : null
+            } catch {
+              return null
+            }
+          }
+        : undefined,
+      toolNames: (enrichment?.tools as string[] | undefined) ?? meta.tools ?? [],
+      callTool:
+        token || meta.authKind === 'local'
+          ? (name) => callWhoamiTool(meta.url as string, name, { token: token ?? undefined, authScheme: meta.authScheme })
+          : undefined,
+      _testBreakAllowlist: !!process.env.MOGGING_WHO_BREAK_ALLOWLIST
+    })
+    if (who) {
+      enrichment = {
+        ...(enrichment ?? {}),
+        ...connectionEnrichmentPatch({ accountProfile: who.profile, accountSource: who.source }),
+        // The legacy string stays the computed fallback for untouched consumers —
+        // filled in when it was blank, never overwritten when it wasn't.
+        account: meta.account ?? profileDisplay(who.profile) ?? undefined
+      }
     }
   }
 
@@ -1182,4 +1250,7 @@ export function registerConnections(getWin: () => BrowserWindow | null): void {
   // Page entry (trigger 2): entering Integrations requests exactly ONE sweep — the
   // existing request→push→repaint contract; results land over `changed`, never here.
   ipcMain.handle(ConnectionsChannels.verifySweep, () => void sweepConnections('page-entry'))
+  ipcMain.handle(ConnectionsChannels.setNote, (_e, p: { serviceId: string; note: string }) =>
+    setAccountNote(String(p?.serviceId ?? ''), String(p?.note ?? ''))
+  )
 }

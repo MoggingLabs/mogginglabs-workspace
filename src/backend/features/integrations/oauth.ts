@@ -543,7 +543,7 @@ const TOOL_LIST_CAP = 200
  *  required arguments, and its name is on this list. That is a deliberately small,
  *  read-only door: we are not fishing through a user's account, we are asking the
  *  server the one question it already offers to answer. */
-const WHOAMI_TOOLS = new Set([
+export const WHOAMI_TOOLS = new Set([
   'whoami',
   'who_am_i',
   'get_me',
@@ -574,7 +574,14 @@ function envelopeError(result: unknown): string | null {
 export async function probeConnection(
   url: string,
   token?: string,
-  opts: { authScheme?: string } = {}
+  opts: {
+    authScheme?: string
+    /** Skip the whoami side-question (phase-tools/04): the status engine's verifies
+     *  own identity through the catalog-driven ladder, which runs ONLY while the
+     *  identity is still blank — an identity once probed is stable, and a heartbeat
+     *  must not spend an extra tool call per beat re-asking it. */
+    skipAccount?: boolean
+  } = {}
 ): Promise<{ ok: true; probe: ConnectionProbe } | { ok: false; reason: string; unauthorized?: boolean }> {
   const authScheme = opts.authScheme
   const init = await mcpFetch(
@@ -606,7 +613,7 @@ export async function probeConnection(
   const tools = (list.result as { result?: { tools?: McpToolDecl[] } })?.result?.tools
   if (!Array.isArray(tools)) return { ok: false, reason: `${hostOf(url)} did not list any tools.` }
   // Reuse the session we already have — asking again would cost a whole second handshake.
-  const account = token ? await askServerWhoAmI(url, token, sessionId, tools, authScheme) : undefined
+  const account = token && !opts.skipAccount ? await askServerWhoAmI(url, token, sessionId, tools, authScheme) : undefined
   const toolNames = tools
     .map((t) => String(t?.name ?? '').slice(0, 64))
     .filter(Boolean)

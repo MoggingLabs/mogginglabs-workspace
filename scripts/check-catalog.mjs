@@ -110,6 +110,30 @@ function checkEntry(name, entry, schema) {
         }
       }
     }
+    // Profile specs (phase-tools/04): the identity executor is only as honest as the
+    // data. A rest/oidc spec that fetches must name where; a fetching spec must map
+    // at least `id` plus one HUMAN identifier (email or name) — an identity that
+    // names nobody renders nothing and hides a broken spec forever; and any fetching
+    // or tool spec carries its own provenance (the license-lane discipline applies
+    // to identity facts too). A `tool` spec must name its tool.
+    const p = entry.profile
+    if (p && typeof p === 'object') {
+      if ((p.via === 'rest' || p.via === 'oidc') && p.url) {
+        if (!p.paths || typeof p.paths.id !== 'string' || !p.paths.id.trim()) {
+          errors.push(`${name}: profile (${p.via}) must map paths.id`)
+        }
+        if (!p.paths || (!p.paths.email && !p.paths.name)) {
+          errors.push(`${name}: profile (${p.via}) must map paths.email or paths.name`)
+        }
+      }
+      if (p.via === 'rest' && !p.url) errors.push(`${name}: profile (rest) must name its url`)
+      if (p.via === 'tool' && (typeof p.tool !== 'string' || !p.tool.trim())) {
+        errors.push(`${name}: profile (tool) must name its tool`)
+      }
+      if ((p.via === 'rest' || p.via === 'tool' || p.url) && (typeof p.source !== 'string' || p.source.length < 8)) {
+        errors.push(`${name}: profile lacks source provenance`)
+      }
+    }
     scanSecrets(entry, name, errors)
   }
   return errors
@@ -146,7 +170,8 @@ function selftest() {
     label: 'Self Test',
     source: 'https://example.com/docs',
     mcp: { transport: 'http', url: 'https://example.com/mcp' },
-    methods: [{ key: 'browser', kind: 'oauth', name: 'Sign in with your browser', rank: 1, scopes: [{ scope: 'a', title: 'A thing' }] }]
+    methods: [{ key: 'browser', kind: 'oauth', name: 'Sign in with your browser', rank: 1, scopes: [{ scope: 'a', title: 'A thing' }] }],
+    profile: { via: 'rest', url: 'https://example.com/me', paths: { id: 'id', email: 'email' }, source: 'https://example.com/docs/me' }
   }
   const mutations = [
     ['missing-source', (e) => delete e.source],
@@ -155,7 +180,13 @@ function selftest() {
     ['unhumanized-scope', (e) => (e.methods[0].scopes = [{ scope: 'repo', title: '' }])],
     ['unknown-prop', (e) => (e.bogus = true)],
     ['secret-prefix', (e) => (e.grantCopy = 'token ghp_0123456789abcdefghij0123456789abcdef')],
-    ['secret-entropy', (e) => (e.docsLinksNote = 'A'.repeat(0) + 'Qk3xLmP9vTzR7yWcH2dJ5nB8fKsG4aUe6oXiC1rMwqZt')]
+    ['secret-entropy', (e) => (e.docsLinksNote = 'A'.repeat(0) + 'Qk3xLmP9vTzR7yWcH2dJ5nB8fKsG4aUe6oXiC1rMwqZt')],
+    // phase-tools/04: the profile-spec rules must bite too.
+    ['profile-no-id-path', (e) => delete e.profile.paths.id],
+    ['profile-no-human-path', (e) => delete e.profile.paths.email],
+    ['profile-rest-no-url', (e) => delete e.profile.url],
+    ['profile-no-provenance', (e) => delete e.profile.source],
+    ['profile-tool-unnamed', (e) => (e.profile = { via: 'tool' })]
   ]
   let failed = 0
   if (checkEntry('selftest', structuredClone(good), schema).length !== 0) {

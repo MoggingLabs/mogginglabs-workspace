@@ -9442,6 +9442,39 @@ body.pane-dragging * {
   display: none;
 }
 
+/* ── Identity row (phase-tools/04): probed vs noted, visibly distinct ─────────
+   `is-probed` is the provider's own answer; `is-noted` is the user's label and must
+   never read as proof — italic, with the "noted by you" suffix the contract writes.
+   The secondary note is the wrong-account catch: it rides AFTER a probed identity,
+   quieter, when the two disagree. */
+.conn-identity {
+  flex-wrap: wrap; /* the note editor wraps to its own line under the identity */
+}
+.conn-identity.is-noted .conn-identity-text {
+  font-style: italic;
+  color: var(--text-mid);
+}
+.conn-note-secondary {
+  font-style: italic;
+  color: var(--text-mid);
+  font-size: var(--fs-12);
+  margin-left: var(--sp-2);
+}
+.conn-note-edit {
+  margin-left: auto;
+}
+.conn-note-form {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  flex-basis: 100%;
+  margin-top: var(--sp-1);
+}
+.conn-note-form .conn-note-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 /* ── Usage glance (Phase-7/03): titlebar two-bar gauge + popover ────────────── */
 .usage-wrap {
   position: relative;
