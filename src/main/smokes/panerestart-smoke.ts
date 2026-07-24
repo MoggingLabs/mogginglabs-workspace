@@ -44,7 +44,11 @@ export function runPaneRestartSmoke(win: BrowserWindow): void {
    *  writes a diagnosable per-stage result. */
   const until = async (js: string, tries = 40, gapMs = 250): Promise<boolean> => {
     for (let i = 0; i < tries; i++) {
-      if (await ES<boolean>(js)) return true
+      // Throw-tolerant: the dead→restart window is EXACTLY when pane objects
+      // churn, and a poll landing mid-teardown throws in the renderer — which
+      // killed the whole smoke on ubuntu (run 30123386698: "Script failed to
+      // execute", zero diagnostics). A transient throw is just "not yet".
+      if (await ES<boolean>(js).catch(() => false)) return true
       await sleep(gapMs)
     }
     return false
@@ -53,8 +57,10 @@ export function runPaneRestartSmoke(win: BrowserWindow): void {
   const pane = (paneId: number): string => `(window.__mogging.panes || []).find(p => p.id === ${paneId})`
   /** De-wrapped buffer text: ConPTY reflow wraps output at the pane's live width, which
    *  splits any needle across rows (the BRAINMILESTONE capture trap) — every buffer
-   *  assert joins rows before matching. */
-  const joined = (paneId: number): string => `${pane(paneId)}.text().split('\\n').join('')`
+   *  assert joins rows before matching. Optional-chained: mid-restart the pane
+   *  entry (or its term) transiently vanishes, and a read then must be '' — not
+   *  a renderer TypeError that ends the run. */
+  const joined = (paneId: number): string => `((${pane(paneId)})?.text() ?? '').split('\\n').join('')`
 
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
