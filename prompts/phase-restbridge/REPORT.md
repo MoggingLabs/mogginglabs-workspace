@@ -1,5 +1,70 @@
 # Phase RestBridge — execution report
 
+## 05 — Write-grant proof, the audit, docs, and the composed milestone (2026-07-24)
+
+**RESTMILESTONE** (`MOGGING_RESTMILESTONE`, app-boot; sweep now 199 = 170
+app-boot + 29 static, GATECOUNT reconciled) composes the whole promise in order,
+every arrow an assert, zero MCP traffic end to end: family-level "Paste an API
+key" → one paste proves ONCE and lights both members (`✓ Connected · verified 0m
+ago` chips) → the one-paste slot reads saved → identity from the profile spec
+(`accountSource: 'rest'`) → detail scoping writes the plan → pre-launch verify
+stamps within the ~2s budget → an agent-shaped `tools/call` rides the pinned URL
+with the injected header → a WRITE tool refuses with the grant off (the sentence
+names the switch; zero write hits) → the grant flips through the REAL store
+(`setIntegrationsGrant`, the Settings toggle's engine, resolved per-pane via
+`resolveWriteAllGranted` — the same seam the socket wiring reads) → the same
+call lands → fixture-side revocation raises attention within one heartbeat and
+the card reads Needs attention → a re-paste heals → disconnect deletes the
+credential while the user's CLI-route slot survives. **Write-refusal
+BRACKETED**: with the grant off and `_testDisableWriteGate` set, the write MUST
+land at the fixture — proven live on every run.
+
+### The gate audit (before → now; zero unexplained shrinkage)
+
+| Gate | Before | Now | Moved/changed assertions |
+|---|---|---|---|
+| TOOLCARDS | chooser/merge/scopes/family asserts | **green, untouched** | none — the guided panel is additive (restTools-only fixtures don't exist in its world) |
+| TOOLPULSE | key-auth verification path, budgets, edges | **green, untouched** | `verifyOne` spec selection widened to `connectedVia:'key'` (a superset; its fixtures use `authKind:'key'` and behave identically) |
+| TOOLWHO | identity ladder rungs, allowlist, stability | **green, untouched** | none — the rest rung was already data-driven; bridge rows reuse it verbatim |
+| TOOLCRED | credential core + retry grammar | **green, untouched** | none — the bridge IMPORTS retryableStatus/retryDelayMs; nothing moved |
+| TOOLFIX | reconciler surgical writes | **green (sweep row unchanged)** | none — bridge rows are ordinary registry entries; drift classification unchanged |
+| TOOLSMILESTONE | the phase-tools composed authority | **green, untouched** | none |
+| CONNPURE | 74 OAuth/connection laws | **green, untouched** | none — `connectedVia` is additive meta; no law moved |
+| CATSCHEMA→RESTSCHEMA | 12 mutations (phase-tools) | **26 mutations** | grew steps 01/03/04: 14 rest rules incl. cap, interpolation, draft-marker, mandatory-verification; `--entry` mode added for gate composition |
+| TOOLWORDS | wording burn-down | **green (report-only, count unchanged)** | new UI strings are outcome-worded; no banned word at top level |
+| SECRETFORMS | retain-on-failure/scrub-on-success | **green, untouched** | the guided panel reuses the same form path; RESTCARDS re-asserts retention on the bridge route |
+| MUTATIONRACE | single-fire grant toggle | **green, re-certified this step** | none — RESTMILESTONE flips the same store the toggle drives |
+
+New rows this pack: RESTEXEC (02), RESTIMPORT (03), RESTCARDS (04),
+RESTMILESTONE (05); RESTSCHEMA rides CATSCHEMA's row by design.
+
+### Curation debt ledger (dark rows never rot silently)
+
+| Row | State | Operator instruction |
+|---|---|---|
+| cf-bindings.restTools (3 reads) | **pending-verify** | With a real scoped token: run each tool via the bridge, confirm `/accounts`, `/workers/scripts`, `/kv/namespaces` shapes + the `setupTokenUrl` permissionGroupKeys render prefilled at dash.cloudflare.com; then stamp `verifiedAt` |
+| cf-dns-analytics.restTools (3 reads + 2 writes) | **pending-verify** | Same; additionally verify `create_dns_record` and `purge_cache` against a throwaway zone with the write grant on |
+| cf-graphql.restTools (1 read) | **pending-verify** | Run one small GraphQL query; confirm `data` responsePath shaping |
+| stripe.restTools (5 reads) | **pending-verify** | With a restricted test-mode key: run each list + balance; confirm the `starting_after` page shape; confirm dashboard.stripe.com/apikeys/create names the five Read permissions |
+| posthog.restTools (4 reads, step 01) | **pending-verify** | With a personal API key (preset=mcp_server link): run each list; confirm `results` pagination merge |
+
+### Perf (guardrail I7: zero boot-path work) — proven by stashed-baseline A/B
+
+PERCEPTION green. MILESTONE red on this box **with identical numbers on the
+pre-pack baseline (08b6c43)**: pack bytes maxGap 250–271ms / 127–130 fps / heap
+55MB / 1 long frame; baseline maxGap 270.8ms / 129 fps / 1 long frame — the
+same single stress-window frame gap either side, so the red is a local machine
+condition (the documented MILESTONE frame-gap class), not the bridge. Every
+other budget (fps, heap, WebGL visibility, attention flips) passes on both.
+Operator: confirm MILESTONE on CI / a quiet box alongside the full sweep.
+
+### Operator certification steps (standing convention)
+
+1. The full uncut local sweep (all 199 gates) on a quiet machine.
+2. The three-OS CI dispatch (gates empty = all 199).
+3. The live-token verification pass over the debt ledger above.
+
+
 ## 04 — Cards + Cloudflare (2026-07-24)
 
 The user-visible payoff, indistinguishable on the surface:

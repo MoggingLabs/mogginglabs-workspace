@@ -85,6 +85,42 @@ sections below; the UI speaks outcomes.
 > `MOGGING_INTEGMILESTONE` (`src/main/integmilestone-smoke.ts`). This page is the
 > map; that smoke is the territory.
 
+## The REST bridge — a global API key becomes curated tools (ADR 0021)
+
+Some providers have no hosted MCP worth speaking of, or gate it behind OAuth while
+one account API token can reach everything (Cloudflare is the poster child). For
+those, a catalog row may declare curated **`restTools`**: a small, hand-worded set
+of tools our house bridge serves by executing the provider's plain REST API with
+the vault-held key injected server-side. The user sees the SAME tool card either
+way — connect, verify, "as WHO", scoping, Fix — and never learns whether a tool
+rode the provider's MCP or our bridge.
+
+- **The curation law.** Hard cap of 12 tools per service, at least one read-only,
+  names and descriptions written for an agent choosing tools, per-tool provenance
+  to the provider's primary docs. WHY: the survey's tool-explosion evidence
+  (`docs/research/2026-07-rest-bridge-survey.md`) — auto-converting a 200-endpoint
+  spec shoves 40–80k tokens of schema into an agent's context and makes tool
+  selection worse; curation is the load-bearing practice. An OpenAPI spec is
+  curator INPUT (`scripts/curate-rest-tools.mjs` drafts, humans reword —
+  `TODO-reword` markers cannot ship), never runtime truth.
+- **The pinned-endpoint law.** The bridge executes catalog-pinned URLs with typed
+  params only; `${placeholders}` resolve from the stored connection, never from
+  agent args, and a path value carrying `://` or `..` is refused. An agent can
+  never steer the bridge to a URL of its choosing.
+- **The write grant, unchanged.** A mutating bridge tool is exactly as gated as
+  an MCP write tool: the per-workspace Write tools grant, read at the same seam,
+  fail-closed. The refusal names the switch.
+- **Custody, unchanged (ADR 0014).** The key is pasted once behind the guided
+  panel (a prefilled token-creation link plus the exact permissions the curated
+  set needs), proven against the catalog's verification endpoint before anything
+  saves, encrypted by the OS keychain, and decrypted at the one existing point.
+  The heartbeat re-verifies against the same endpoint — "verified {n}m ago" is as
+  true here as anywhere.
+- **Honest limits.** A bridge tool is OUR curation of the provider's API — a
+  dozen doors, not the whole building. Where a provider's own MCP is good, it
+  stays the preferred route; the bridge is the KEY route, and the card's chooser
+  offers both.
+
 ## Where it lives in the UI — the store/inventory split (2026-07-18)
 
 Two surfaces, one rule: **the Library is what you can get; Settings is what you

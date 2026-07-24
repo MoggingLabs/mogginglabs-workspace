@@ -47,6 +47,7 @@ import { runToolPulseSmoke } from './smokes/toolpulse-smoke'
 import { runToolWhoSmoke } from './smokes/toolwho-smoke'
 import { runToolCardsSmoke } from './smokes/toolcards-smoke'
 import { runRestCardsSmoke } from './smokes/restcards-smoke'
+import { runRestMilestoneSmoke } from './smokes/restmilestone-smoke'
 import { runToolFixSmoke } from './smokes/toolfix-smoke'
 import { runToolsMilestoneSmoke } from './smokes/toolsmilestone-smoke'
 import { runLibraryUxSmoke } from './smokes/libraryux-smoke'
@@ -215,7 +216,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
   'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_KILLFLASH', 'MOGGING_RAILFOLD', 'MOGGING_CHROMEPRESS', 'MOGGING_KBSHORTCUTS', 'MOGGING_KBGLOBAL', 'MOGGING_VERDICTLIVE', 'MOGGING_WEBTRAIL',
   'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX', 'MOGGING_WIZARDFAIL', 'MOGGING_WIZARDISO', 'MOGGING_WIZCD', 'MOGGING_WIZLAYOUT', 'MOGGING_MUTATIONRACE', 'MOGGING_AUTHRUNNER',
-  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_CONNLIVE', 'MOGGING_TOOLPULSE', 'MOGGING_TOOLWHO', 'MOGGING_TOOLCARDS', 'MOGGING_RESTCARDS', 'MOGGING_TOOLFIX', 'MOGGING_TOOLSMILESTONE', 'MOGGING_LIBRARYUX', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX', 'MOGGING_RESUME',
+  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_CONNLIVE', 'MOGGING_TOOLPULSE', 'MOGGING_TOOLWHO', 'MOGGING_TOOLCARDS', 'MOGGING_RESTCARDS', 'MOGGING_RESTMILESTONE', 'MOGGING_TOOLFIX', 'MOGGING_TOOLSMILESTONE', 'MOGGING_LIBRARYUX', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX', 'MOGGING_RESUME',
   'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_RESPONSIVE', 'MOGGING_KBAPG', 'MOGGING_EQUALIZE', 'MOGGING_UXMILESTONE',
   'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT', 'MOGGING_CWD',
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
@@ -630,6 +631,8 @@ function afterWindow(win: BrowserWindow): void {
     runToolCardsSmoke(win) // tool cards on the real page: dual-route=one card, four status tags track verifiedAt, catalog chooser ADR-verbatim + setup link, humanized scopes, detail scoping mutates the plan, coming-soon inert, mutation-red ×2 (phase-tools/05)
   } else if (process.env.MOGGING_RESTCARDS) {
     runRestCardsSmoke(win) // the bridge's user-visible payoff (ADR 0021): chooser + guided key panel (spied prefilled setupTokenUrl, requiredPermissions), prove-before-save with retained refusal, family one-paste fan-out, curated tools/list, rest identity, heartbeat with zero MCP, mutation-red ×2 (phase-restbridge/04)
+  } else if (process.env.MOGGING_RESTMILESTONE) {
+    runRestMilestoneSmoke(win) // THE authority on "phase-restbridge done": family paste → every member verified-0m → one-paste slot → identity → detail scoping → budgeted pre-launch → pinned+injected read → write refuses (grant off, bracketed) → real grant flip lands it → revoke raises attention → re-paste heals → disconnect keeps the user's slot; zero MCP (phase-restbridge/05)
   } else if (process.env.MOGGING_TOOLFIX) {
     runToolFixSmoke(win) // the silent reconciler in a SANDBOXED CLI home: heartbeat classifies hand-edits, Fix re-applies byte-identically with backup, keep-my-edit adopts untouched, no unclicked write ever, codex drift silent, mutation-red ×2 (phase-tools/06)
   } else if (process.env.MOGGING_TOOLSMILESTONE) {

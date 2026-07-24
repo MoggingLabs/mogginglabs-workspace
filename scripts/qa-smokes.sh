@@ -9,10 +9,10 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 198 gates: 29 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 199 gates: 29 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
 # GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE ·
-# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED · RESTEXEC · RESTIMPORT · FONTCOVER) + 169 app-boot
+# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED · RESTEXEC · RESTIMPORT · FONTCOVER) + 170 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -552,6 +552,17 @@ run_smoke TOOLCARDS    MOGGING_TOOLCARDS 1 240 toolcards
 # MOGGING_REST_BREAK_FANOUT half-lights the family; a restTools row without
 # `verification` reds the shipped-row judge.
 run_smoke RESTCARDS    MOGGING_RESTCARDS 1 240 restcards
+# RESTMILESTONE (phase-restbridge/05): THE authority on "phase-restbridge done" — the
+# whole promise composed in order, every arrow an assert: family-level paste proves
+# ONCE and lights every member (verified-0m chips), the one-paste slot reads saved,
+# identity lands from the profile spec, detail scoping writes the plan, pre-launch
+# verify stamps within budget, an agent-shaped read rides the pinned URL with the
+# injected header, a write REFUSES with the grant off (bracketed: the gateless call
+# must land, proving the zero-hit assert bites) and lands after the REAL grant flip,
+# fixture-side revocation raises attention within one beat, a re-paste heals, and
+# disconnect deletes the credential while the user's CLI-route slot survives. Zero
+# MCP traffic end to end.
+run_smoke RESTMILESTONE MOGGING_RESTMILESTONE 1 300 restmilestone
 # TOOLFIX (phase-tools/06): drift becomes "Needs attention → Fix" without losing one
 # byte of the mgr engine's safety — in a SANDBOXED CLI home (the isolation law). The
 # accelerated heartbeat classifies a hand-edited marked block; the card carries the
