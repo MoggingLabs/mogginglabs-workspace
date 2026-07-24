@@ -40,6 +40,7 @@ built, verified three ways:
 | 8 | offline/absent — the clipboard is locked | **F004** · `restore` claimed "Copied" and reordered the ring after a silent no-op. CLIPBOARD red on pre-fix bytes. |
 | 89 | concurrent — a double-clicked Restart | **F015** · handed off to quitAndInstall twice against a locked exe. UPDATEOFFLINE red on pre-fix bytes. |
 | 89 | offline/absent — a later check retracts a downloaded update | **F014** · a background check clobbered a `ready` update to idle. UPDATEOFFLINE red on pre-fix bytes, both pieces. |
+| 16 | huge — more panes requested than the budget holds | **F026** · the committed `paneCount` was the REQUEST, so a clamped apply (and a refused reorganize, whose refusal the caller discards) persisted a manifest the tree never matched. WIZLAYOUT red on pre-fix bytes (`meta:5, live:1`). |
 | 27 | offline/absent — the pane's shell binary is gone | **F025** · `ensure()` spawned unguarded, so the throw unwound the socket's data pump: this chunk's remaining frames discarded, and the asking client told nothing until its own 5s timeout — over a session `ensure` had already removed. DAEMONHEAL red on pre-fix bytes (silence instead of `spawnfailed`). |
 | 26 | offline/absent — a reused pid vouches for a dead socket | **F024** · off Windows, liveness reduced to `isAlive(pid)`, so a post-reboot stale endpoint was trusted and the app fell back to in-proc PERMANENTLY. DAEMONCUSTODY red on pre-fix bytes, all three corpse assertions. |
 | 28 | offline/absent — a daemon wedged before welcome | **F023** · connect() leaked a socket per timeout, collecting phantom authed clients that froze retire + idle shutdown. HEARTBEAT red on pre-fix bytes. |
@@ -119,35 +120,32 @@ built, verified three ways:
 
 ## OPEN — verified defects, not yet fixed
 
-Each is verified against the code with a concrete failure scenario. None is in
-`FINDINGS.md`: filing requires the fix **and** its bite proof, and inventing a
-`defer` for them is exactly what `RUBRIC.md` forbids. This list is the honest
-remainder of step 02.
+**Empty.** Every defect this step has verified is now filed with a bite proof. The list is kept
+(not deleted) because an empty OPEN section is a claim, and the claim has to be visible to be
+falsifiable: what remains for step 02 is EDGE COVERAGE on the rows below, not known-broken
+surfaces being carried.
 
-**S1** — none. Both former entries are now filed and bite-proven: the unguarded
-`SessionManager.ensure()` spawn is **F025**, and the POSIX pid-reuse corpse is **F024**. The
-corpse fix had in fact been WRITTEN with its DAEMONCUSTODY act already in place and was never
-routed to `FINDINGS.md` — work done but unbanked, which reads identically to work not done. The
-ledger, not the diff, is what makes a row derive A.
+The three that stood here last are worth remembering for how each ended:
 
-**S2**
+- **`SessionManager.ensure()` spawns unguarded** → **F025**. A named refusal, proven by reading
+  WHICH error came back rather than timing anything.
+- **POSIX pid-reuse liveness fails open** → **F024**. The fix and its DAEMONCUSTODY act were
+  already WRITTEN and never routed to `FINDINGS.md`. Work done but unbanked reads exactly like
+  work not done: the ledger, not the diff, is what makes a row derive A.
+- **`applyResolvedLayout` commits the requested `paneCount`** → **F026**, after one revert. The
+  first attempt made the apply REFUSE and asserted it in MOVEPANE, whose deliberately-tiny
+  8-pane budget the F003 and F011 phases depend on saturating exactly — two extra workspaces
+  starved it and broke an already-proven phase. The second attempt changed nothing about
+  refusal (it reads the landed count back off the layout) and brought its OWN fixture. Two
+  lessons, both banked: protecting proven phases outranks adding an unproven one, and a shared
+  exactly-sized budget is a fixture, not a free resource.
 
-Two entries stood here that were already closed and never struck: the scope-blind
-`rememberKey` (**F013**) and `undoMovePane`'s dead rail tab (**F011**). A stale OPEN list
-overstates the remainder as surely as a missing finding understates it.
+Also struck from this section: two entries that **F011** and **F013** had already closed and
+that nobody removed. A stale OPEN list overstates the remainder as surely as a missing finding
+understates it, and both failures are invisible to LAUNCHAUDIT — it reads `FINDINGS.md`, not
+this prose.
 
-- `applyResolvedLayout` commits `paneCount` before an apply that can refuse, stranding a
-  manifest that cannot be restored · `controller.ts:1155`.
-  ATTEMPTED and REVERTED. The fix (commit only when `apply()` did not return false) and a
-  MOVEPANE phase were written, and the phase's own assertion PASSED
-  (`refusedKeepsCountHonest:true`, cap 3 vs a requested 24). But the two extra workspaces it
-  opened starved MOVEPANE's deliberately-tiny 8-pane machine budget, which the F003 and F011
-  phases depend on saturating exactly — `movedAway` went false and an ALREADY-PROVEN phase
-  broke. Both were reverted: protecting banked proofs outranks adding an unproven one. The
-  lesson for the next attempt: this assertion needs its own fixture, not MOVEPANE's, because
-  that gate's budget is a shared, exactly-sized resource.
-
-
+## Perf, re-measured
 
 - **PERCEPTION — PASS.**
 - **MILESTONE — FAIL, and NOT this diff.** The only failing metric is the 16-pane stress worst

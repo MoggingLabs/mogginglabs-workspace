@@ -279,7 +279,31 @@ export function runWizLayoutSmoke(win: BrowserWindow): void {
         bigWorkspace.overflowY === 'auto' &&
         bigWorkspace.scrollHeight >= 890
 
-      const pass = defaultOneOk && capacityOk && chargedOk && dragCommitsOk && clickCommitsOk && oneRowOk && over16Ok && minimaOk
+      // ── (g) a REFUSED reorganize must not commit a count the tree never had ──────────
+      // `applyRegions` refuses a non-guillotine spec, and `requestReorganize` discards that
+      // refusal with a `void`. The committed count used to be the REQUEST, so a refusal
+      // persisted a manifest whose restore cannot reproduce it. Its OWN fixture, deliberately:
+      // a fresh 1-pane workspace, so the 5 landing slots are not panes that would CLOSE (which
+      // would raise the danger confirm) and so this cannot lean on another act's pane budget —
+      // the mistake that cost an earlier attempt at this assertion a proven MOVEPANE phase.
+      // The pinwheel is the canonical non-guillotine partition: valid, and it does not slice.
+      await ES(`window.__mogging.workspace.create({ name: 'Refused reorg', paneCount: 1 })`)
+      await sleep(900)
+      const refused = await ES<{ accepted: boolean; meta: number; live: number }>(`(async () => {
+        const pinwheel = { rows: 3, cols: 3, regions: [
+          { r: 0, c: 0, rs: 1, cs: 2 }, { r: 0, c: 2, rs: 2, cs: 1 },
+          { r: 1, c: 0, rs: 2, cs: 1 }, { r: 1, c: 1, rs: 1, cs: 1 },
+          { r: 2, c: 1, rs: 1, cs: 2 }
+        ] }
+        const accepted = await window.__mogging.layout.reorganizeApply(pinwheel)
+        return { accepted, meta: window.__mogging.workspace.active().paneCount, live: window.__mogging.layout.paneCount() }
+      })()`)
+      // The count that was COMMITTED must be the count the layout actually holds — 1, the
+      // untouched workspace — not the 5 regions that were asked for and refused.
+      const refusedCountHonest = refused.live === 1 && refused.meta === refused.live
+
+      const pass =
+        defaultOneOk && capacityOk && chargedOk && dragCommitsOk && clickCommitsOk && oneRowOk && over16Ok && minimaOk && refusedCountHonest
       result = {
         pass,
         defaultOneOk,
@@ -301,6 +325,8 @@ export function runWizLayoutSmoke(win: BrowserWindow): void {
         bigLaunched,
         bigWorkspace: { ...bigWorkspace, heights: bigWorkspace.heights.slice(0, 6) },
         minimaOk,
+        refusedCountHonest,
+        refused,
         minHeightSeen: Math.min(...bigWorkspace.heights),
         scroll: { overflowY: bigWorkspace.overflowY, scrollHeight: bigWorkspace.scrollHeight, clientHeight: bigWorkspace.clientHeight }
       }

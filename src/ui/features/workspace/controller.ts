@@ -1145,16 +1145,31 @@ export class WorkspaceController {
    */
   private applyResolvedLayout(a: WorkspaceView, count: number, apply: () => void): void {
     const live = new Set(a.layout.paneIds())
-    for (const { local, paneId } of a.layout.peekTemplate(count)) {
+    // `peekTemplate` names the slots the apply will ACTUALLY land on — already clamped to the
+    // budget, and already skipping any slot whose formula id a moved pane took with it.
+    const landing = a.layout.peekTemplate(count)
+    for (const { local, paneId } of landing) {
       if (live.has(paneId)) continue
       clearPaneRemote(paneId)
       setPaneRole(paneId, '')
       setPaneLabel(paneId, '')
       this.scrubManifestSlot(a.meta, local - 1, '')
     }
-    a.meta.paneCount = count
-    this.publishPaneCwds(a.meta) // seed the new panes' pty cwd + per-pane git (2/03)
+    // Seed the landing slots BY NAME (a pane reads its cwd + remote at spawn, so this must
+    // precede the apply). It used to walk 1..paneCount, which is the same list only while
+    // nothing is clamped and no id has moved away.
+    this.publishPaneCwds(
+      a.meta,
+      landing.map((s) => s.local)
+    ) // seed the new panes' pty cwd + per-pane git (2/03)
     apply()
+    // Commit what the layout LANDED on, never what was asked for. `apply(n)` CLAMPS to the
+    // budget (templateLocals) and `applyRegions` can refuse outright — and its refusal is
+    // discarded by the caller's `void`. Committing the request wrote a paneCount the tree
+    // never had: a manifest whose restore cannot reproduce it, persisted by the onChange
+    // below. Reading it back off the layout is true in all three cases (landed, clamped,
+    // refused) without giving any door a new way to fail.
+    a.meta.paneCount = a.layout.paneCount
     this.refreshAttention()
     this.onChange()
   }
