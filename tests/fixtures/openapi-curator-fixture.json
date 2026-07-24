@@ -1,0 +1,156 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Fixture API (RESTIMPORT gate)",
+    "version": "1.0.0",
+    "description": "A 20-operation OpenAPI document for scripts/check-restimport.mjs: reads, writes, path/query/body params, and one absurdly-parameterized op."
+  },
+  "externalDocs": { "url": "https://api.example.test/docs/openapi.json" },
+  "servers": [{ "url": "https://api.example.test/v1" }],
+  "paths": {
+    "/users": {
+      "get": {
+        "operationId": "listUsers",
+        "summary": "List all users",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer" }, "description": "Page size" },
+          { "name": "cursor", "in": "query", "schema": { "type": "string" } }
+        ]
+      },
+      "post": {
+        "operationId": "createUser",
+        "summary": "Create a user",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "email"],
+                "properties": {
+                  "name": { "type": "string", "description": "Display name" },
+                  "email": { "type": "string" },
+                  "admin": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/{user_id}": {
+      "parameters": [{ "name": "user_id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "The user id" }],
+      "get": { "operationId": "getUser", "summary": "Get one user" },
+      "patch": {
+        "operationId": "updateUser",
+        "summary": "Update a user",
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object", "properties": { "name": { "type": "string" } } } } }
+        }
+      },
+      "delete": { "operationId": "deleteUser", "summary": "Delete a user" }
+    },
+    "/users/{user_id}/keys": {
+      "parameters": [{ "name": "user_id", "in": "path", "required": true, "schema": { "type": "string" } }],
+      "get": { "operationId": "listUserKeys", "summary": "List a user's keys" }
+    },
+    "/projects": {
+      "get": { "operationId": "listProjects", "summary": "List projects" },
+      "post": {
+        "operationId": "createProject",
+        "summary": "Create a project",
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" } } } } }
+        }
+      }
+    },
+    "/projects/{project_id}": {
+      "parameters": [{ "name": "project_id", "in": "path", "required": true, "schema": { "type": "string" } }],
+      "get": { "operationId": "getProject", "summary": "Get one project" },
+      "delete": { "operationId": "deleteProject", "summary": "Delete a project" }
+    },
+    "/projects/{project_id}/items": {
+      "parameters": [{ "name": "project_id", "in": "path", "required": true, "schema": { "type": "string" } }],
+      "get": {
+        "operationId": "listItems",
+        "summary": "List items in a project",
+        "parameters": [{ "name": "search", "in": "query", "schema": { "type": "string" }, "description": "Filter by name" }]
+      },
+      "post": {
+        "operationId": "createItem",
+        "summary": "Create an item",
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object", "required": ["title"], "properties": { "title": { "type": "string" }, "count": { "type": "integer" } } } } }
+        }
+      }
+    },
+    "/items/{item_id}": {
+      "parameters": [{ "name": "item_id", "in": "path", "required": true, "schema": { "type": "string" } }],
+      "get": { "operationId": "getItem", "summary": "Get one item" },
+      "put": {
+        "operationId": "replaceItem",
+        "summary": "Replace an item",
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object", "required": ["title"], "properties": { "title": { "type": "string" } } } } }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "operationId": "getMetrics",
+        "summary": "Read account metrics",
+        "parameters": [
+          { "name": "from", "in": "query", "schema": { "type": "string" } },
+          { "name": "to", "in": "query", "schema": { "type": "string" } }
+        ]
+      }
+    },
+    "/health": { "get": { "operationId": "getHealth", "summary": "Liveness probe" } },
+    "/webhooks": {
+      "get": { "operationId": "listWebhooks", "summary": "List webhooks" },
+      "post": {
+        "operationId": "createWebhook",
+        "summary": "Create a webhook",
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object", "required": ["url"], "properties": { "url": { "type": "string" }, "active": { "type": "boolean" } } } } }
+        }
+      }
+    },
+    "/webhooks/{webhook_id}": {
+      "parameters": [{ "name": "webhook_id", "in": "path", "required": true, "schema": { "type": "string" } }],
+      "delete": { "operationId": "deleteWebhook", "summary": "Delete a webhook" }
+    },
+    "/search": {
+      "get": {
+        "operationId": "searchEverything",
+        "summary": "Search everything (the absurdly-parameterized op)",
+        "parameters": [
+          { "name": "q", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "scope", "in": "query", "schema": { "type": "string" } },
+          { "name": "kind", "in": "query", "schema": { "type": "string" } },
+          { "name": "owner", "in": "query", "schema": { "type": "string" } },
+          { "name": "tag", "in": "query", "schema": { "type": "string" } },
+          { "name": "label", "in": "query", "schema": { "type": "string" } },
+          { "name": "state", "in": "query", "schema": { "type": "string" } },
+          { "name": "created_after", "in": "query", "schema": { "type": "string" } },
+          { "name": "created_before", "in": "query", "schema": { "type": "string" } },
+          { "name": "updated_after", "in": "query", "schema": { "type": "string" } },
+          { "name": "updated_before", "in": "query", "schema": { "type": "string" } },
+          { "name": "sort", "in": "query", "schema": { "type": "string" } },
+          { "name": "order", "in": "query", "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer" } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer" } },
+          { "name": "cursor", "in": "query", "schema": { "type": "string" } },
+          { "name": "include_archived", "in": "query", "schema": { "type": "boolean" } },
+          { "name": "include_deleted", "in": "query", "schema": { "type": "boolean" } },
+          { "name": "highlight", "in": "query", "schema": { "type": "boolean" } },
+          { "name": "facets", "in": "query", "schema": { "type": "string" } },
+          { "name": "fields", "in": "query", "schema": { "type": "string" } },
+          { "name": "locale", "in": "query", "schema": { "type": "string" } },
+          { "name": "timezone", "in": "query", "schema": { "type": "string" } },
+          { "name": "fuzziness", "in": "query", "schema": { "type": "number" } },
+          { "name": "boost_recent", "in": "query", "schema": { "type": "boolean" } }
+        ]
+      }
+    }
+  }
+}

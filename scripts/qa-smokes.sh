@@ -9,10 +9,10 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 196 gates: 28 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 197 gates: 29 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
 # GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE ·
-# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED · RESTEXEC · FONTCOVER) + 168 app-boot
+# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED · RESTEXEC · RESTIMPORT · FONTCOVER) + 168 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -273,6 +273,14 @@ run_static TOOLCRED npm run smoke:toolcred-pure
 # path arg is refused. Mutation-reds run LIVE: the gateless write and the unpinned
 # traversal must each land at the fixture — the zero-hit assertions bite.
 run_static RESTEXEC npm run smoke:restexec-pure
+# RESTIMPORT: the OpenAPI curator (ADR 0021, phase-restbridge/03) against the 20-op
+# fixture spec — read-first menu, drafts stamped TODO-reword (the human rewording pass
+# is forced; RESTSCHEMA bites a shipped marker), emitted blocks judged by the SAME
+# check-catalog --entry judge as shipped rows, provenance pointers, verb-derived
+# readOnly, and the ≤12 cap refused at emit. Mutation-reds run LIVE: --test-disable-cap
+# must make the 13-pick succeed and --test-no-todo must strip the marker — both
+# assertions proven biting on every pass. Offline: the fixture is a file, never a URL.
+run_static RESTIMPORT node scripts/check-restimport.mjs
 # PREREGCLIENT: pre-registered OAuth clients for no-DCR providers (Google/GitHub/Slack).
 # Three fixture AS shapes prove: no-DCR fails ACTIONABLY (needsClientId → the paste form),
 # a refusing-but-live registration endpoint does NOT, a pasted secret rides the exchange,

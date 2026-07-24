@@ -67,6 +67,23 @@ permissionGroupKeys+name; GitHub prefills scopes/name/expiry on
 `/settings/tokens/new` and fine-grained `/settings/personal-access-tokens/new`),
 collapsing the 9-step provider ceremony to click → Create → copy.
 
+## The curation checklist (binding on every `restTools` block)
+
+The curator (`scripts/curate-rest-tools.mjs`) reads an OpenAPI document and
+emits DRAFT blocks to stdout — capped, typed, provenance-stamped, and marked
+`TODO-reword` on every drafted name/description. The spec is INPUT; a human
+finishes the job. Before a block ships:
+
+1. **Reword every name and description** for an agent choosing among tools —
+   never the spec's own words. A `TODO-reword` marker anywhere in the catalog
+   is a RESTSCHEMA failure: drafts cannot ship, by gate.
+2. **Drop anything an agent should not do unattended** — the cap is a ceiling,
+   not a target; fewer, better-worded tools beat coverage.
+3. **Verify each tool live with a real key** before stamping `verifiedAt` —
+   a doc-authored endpoint is a claim, not a fact.
+4. The curator never writes into `catalog/` — stdout only; the human pastes,
+   rewords, and CATSCHEMA/RESTSCHEMA judge the result.
+
 ## Sequencing
 
 The schema lands DARK (this step): data + validation only, RESTSCHEMA-gated inside

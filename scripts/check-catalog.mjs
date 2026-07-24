@@ -199,6 +199,13 @@ function checkEntry(name, entry, schema) {
         errors.push(`${name}: restTools has no read-only tool — a service whose only tools are writes is a curation smell`)
       }
     }
+    // The curator discipline (phase-restbridge/03): curate-rest-tools.mjs stamps
+    // every drafted name/description with TODO-reword so the agent-UX naming pass
+    // can never be skipped. A marker ANYWHERE in a shipped row means a draft was
+    // pasted and never reworded — drafts cannot ship.
+    if (JSON.stringify(entry).includes('TODO-reword')) {
+      errors.push(`${name}: contains a TODO-reword draft marker — curator output must be reworded (and dev-verified) before it ships`)
+    }
     scanSecrets(entry, name, errors)
   }
   return errors
@@ -300,7 +307,9 @@ function selftest() {
     ['rest-no-permissions', (e) => delete e.requiredPermissions],
     ['rest-write-by-silence', (e) => delete e.restTools[1].readOnly],
     ['rest-path-param-unslotted', (e) => (e.restTools[0].endpoint = 'https://example.com/api/things')],
-    ['rest-http-endpoint', (e) => (e.restTools[0].endpoint = 'http://example.com/api/{project_id}/things')]
+    ['rest-http-endpoint', (e) => (e.restTools[0].endpoint = 'http://example.com/api/{project_id}/things')],
+    // phase-restbridge/03: a pasted curator DRAFT (TODO-reword marker) cannot ship.
+    ['rest-draft-marker', (e) => (e.restTools[0].description = 'TODO-reword: List the things in a project.')]
   ]
   let failed = 0
   if (checkEntry('selftest', structuredClone(good), schema).length !== 0) {
@@ -318,6 +327,30 @@ function selftest() {
     }
   }
   return failed
+}
+
+// ── Single-entry mode (RESTIMPORT, phase-restbridge/03): validate ONE entry file
+// (schema + every rule) without touching the live catalog — the gate composes a
+// fixture row around curator output and judges it here, the same judge that
+// guards the shipped rows.
+const entryFlag = process.argv.indexOf('--entry')
+if (entryFlag >= 0) {
+  const file = process.argv[entryFlag + 1]
+  if (!file) {
+    console.error('usage: check-catalog.mjs --entry <entry.json>')
+    process.exit(2)
+  }
+  const schema = JSON.parse(readFileSync(join(DIR, 'schema.json'), 'utf8'))
+  const entry = JSON.parse(readFileSync(file, 'utf8'))
+  const name = file.replace(/\\/g, '/').split('/').pop()
+  const errors = checkEntry(name, entry, schema)
+  if (errors.length) {
+    console.error(`CATSCHEMA (--entry): ${errors.length} problem(s):`)
+    for (const e of errors) console.error(`  - ${e}`)
+    process.exit(1)
+  }
+  console.log(`CATSCHEMA (--entry): ${name} valid`)
+  process.exit(0)
 }
 
 if (process.argv.includes('--selftest')) {

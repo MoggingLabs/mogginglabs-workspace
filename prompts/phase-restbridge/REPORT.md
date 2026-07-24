@@ -1,5 +1,39 @@
 # Phase RestBridge — execution report
 
+## 03 — The OpenAPI curator (2026-07-24)
+
+Specs in, DRAFTS out, humans decide:
+
+- **`scripts/curate-rest-tools.mjs`** (node; JSON + YAML via the repo's existing
+  `yaml` dep, no new dependency): menu mode lists every operation read-first
+  (method, path, operationId, summary, param count, read/WRITE guess); `--pick`
+  emits the draft `restTools` block to STDOUT only — snake_cased names, every
+  description stamped `TODO-reword` (the agent-UX naming pass is forced), typed
+  params mapped (path/query/body, required honored; header/cookie params and
+  non-primitive body props deliberately dropped — curation decisions), verb-
+  derived `readOnly:false`, per-tool `source` = spec URL + `#/paths/…` JSON
+  pointer, the ≤12 cap refused at emit with the Speakeasy sentence. It never
+  writes into `catalog/`; `--url` fetch is a convenience that no gate uses.
+- **RESTSCHEMA's TODO rule**: a `TODO-reword` marker anywhere in a shipped row
+  fails `check-catalog.mjs` (+ the `rest-draft-marker` selftest mutation —
+  drafts cannot ship). New `--entry <file>` mode judges ONE composed entry with
+  the same rules, which is how the gate judges curator output.
+- **Curation checklist** appended to ADR 0021 (reword for agents, drop what an
+  agent shouldn't do unattended, dev-verify before `verifiedAt`, stdout-only).
+- **Fixture spec** `tests/fixtures/openapi-curator-fixture.json`: 20 ops
+  (11 reads / 9 writes), path/query/body params, one 25-param search op.
+
+Gate — **RESTIMPORT** (`scripts/check-restimport.mjs`, run_static; sweep now
+197 = 168 app-boot + 29 static, GATECOUNT reconciled): (a) menu lists 20 ops
+read-first; (b) a 4-pick draft fails the shipped-row judge ONLY on its
+TODO-reword markers and passes clean once reworded; (c) a 13-pick refuses on
+the cap; (d) provenance pointers name the spec + op; (e) writes emit
+`readOnly:false`. Mutation-reds live on every run: `--test-disable-cap` makes
+the 13-pick succeed, `--test-no-todo` strips the marker — both assertions
+proven biting. Tooling isolation grep-proven: nothing under `src/` or `bin/`
+references the curator.
+
+
 ## 02 — The bridge executor (2026-07-24)
 
 The house bridge serves curated `restTools` as real MCP tools:
