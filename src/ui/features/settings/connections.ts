@@ -2,9 +2,13 @@ import {
   BrowserChannels,
   ConnectionsChannels,
   IntegrationsChannels,
+  backupsLine,
   chooserMethods,
   clientFormHelp,
   connectionIdentityRow,
+  FIX_PREVIEW_TITLE,
+  FIX_SENTENCES,
+  type CliFixFlavor,
   connectionScopes,
   connectionSummary,
   humanizeScopes,
@@ -284,6 +288,91 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
         }
         host.append(el('div', { class: 'conn-keyslot-form' }, [el('span', { class: 'conn-keyslot is-missing', text: `\${${name}}` }), input, save, slotNote]))
       }
+    })()
+    return host
+  }
+
+  // ── The silent reconciler (phase-tools/06): drift becomes "Needs attention → Fix"
+  // The mgr engine (surgical writes, backups, marked-entries-only) is untouched
+  // underneath — every verb here rides an EXISTING channel, and nothing ever writes
+  // without the click. Claude Code only this phase; the sentence, the preview title
+  // and the backups line are the contract's, so no surface words them twice.
+  const fixOpen = new Set<string>()
+  function reconcileBlock(id: string, label: string): HTMLElement {
+    const host = el('div', { class: 'conn-fix' })
+    void (async () => {
+      let flavor: CliFixFlavor | null = null
+      try {
+        const statuses = (await bridge.invoke(IntegrationsChannels.mgrStatus, id)) as { cli: string; state: string }[]
+        const st = statuses.find((s) => s.cli === 'claude-code')?.state
+        flavor = st === 'drift-edited' ? 'edited' : st === 'drift-missing' ? 'missing' : null
+      } catch {
+        /* status unavailable — the tag already says Needs attention */
+      }
+      if (!flavor) return
+      const words = FIX_SENTENCES[flavor]
+      host.append(el('div', { class: 'conn-summary is-error conn-fix-sentence', text: words.sentence }))
+      if (!fixOpen.has(id)) {
+        const open = el('button', { class: 'trail-btn is-armed conn-fix-open', type: 'button', text: 'Fix…' }) as HTMLButtonElement
+        open.onclick = (): void => {
+          fixOpen.add(id)
+          paint()
+        }
+        host.append(open)
+        return
+      }
+      // Expanded: the diff preview keeps its trust-artifact role, plainly titled;
+      // the backups line says what safety net exists; then the one primary verb.
+      const preview = (await bridge.invoke(IntegrationsChannels.mgrPreview, {
+        serverId: id,
+        cli: 'claude-code',
+        action: 'apply'
+      })) as { file: string; block: string; summary: string } | null
+      if (preview?.block) {
+        host.append(el('div', { class: 'settings-row-caption conn-fix-preview-title', text: FIX_PREVIEW_TITLE }))
+        const pre = el('pre', { class: 'mgr-panel-block conn-fix-preview' })
+        pre.textContent = preview.block
+        host.append(pre)
+      }
+      try {
+        const backups = ((await bridge.invoke(IntegrationsChannels.mgrBackups, 'claude-code')) as string[]) ?? []
+        if (backups.length) host.append(el('div', { class: 'settings-row-caption conn-fix-backups', text: backupsLine(backups[0]) }))
+      } catch {
+        /* no backups yet — the first Fix creates one */
+      }
+      const afterWrite = async (): Promise<void> => {
+        fixOpen.delete(id)
+        try {
+          await bridge.invoke(IntegrationsChannels.statusRefresh)
+        } catch {
+          /* the next heartbeat re-reads either way */
+        }
+        await refresh()
+      }
+      const fix = el('button', { class: 'trail-btn is-armed conn-fix-now', type: 'button', text: 'Fix' }) as HTMLButtonElement
+      fix.onclick = (): void => {
+        void (async () => {
+          fix.disabled = true
+          fix.setAttribute('aria-busy', 'true')
+          const r = (await bridge.invoke(IntegrationsChannels.mgrApply, { serverId: id, cli: 'claude-code' })) as { ok: boolean; reason?: string }
+          if (!r.ok) showToast({ tone: 'danger', title: `${label} was not fixed`, body: r.reason ?? 'The attempt was refused.' })
+          await afterWrite()
+        })()
+      }
+      const secondary = el('button', { class: 'trail-btn conn-mini conn-fix-secondary', type: 'button', text: words.secondary }) as HTMLButtonElement
+      secondary.onclick = (): void => {
+        void (async () => {
+          secondary.disabled = true
+          await bridge.invoke(IntegrationsChannels.mgrAdopt, { serverId: id, cli: 'claude-code', forget: flavor === 'missing' })
+          await afterWrite()
+        })()
+      }
+      const close = el('button', { class: 'trail-btn conn-mini', type: 'button', text: 'Close' }) as HTMLButtonElement
+      close.onclick = (): void => {
+        fixOpen.delete(id)
+        paint()
+      }
+      host.append(el('div', { class: 'conn-actions' }, [fix, secondary, close]))
     })()
     return host
   }
@@ -877,6 +966,7 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
           })
         : null
     const slots = cardRow?.server ? keySlots(cardRow.server) : null
+    const fixBlock = cardRow?.cliState === 'drift' ? reconcileBlock(c.id, c.label) : null
 
     return el('div', { class: `conn-card is-${c.state}`, dataset: { connection: c.id } }, [
       head,
@@ -884,6 +974,7 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
       ...(summary ? [summary] : []),
       ...(scopeLine ? [scopeLine] : []),
       ...(routeLine ? [routeLine] : []),
+      ...(fixBlock ? [fixBlock] : []),
       ...(slots ? [slots] : []),
       ...(toolsBlock ? [toolsBlock] : []),
       body,
@@ -908,6 +999,7 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
             : 'Claude Code carries this tool itself — it holds its own credential; the app brokers nothing on this route.'
     })
     const slots = r.server ? keySlots(r.server) : null
+    const fixBlock = r.cliState === 'drift' ? reconcileBlock(r.id, r.label) : null
     const body = el('div', { class: 'conn-card-body' })
     if (opts.workspaceScoping) {
       const open = scopeOpen.has(r.id)
@@ -928,6 +1020,7 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
     return el('div', { class: 'conn-card is-cli-route', dataset: { connection: r.id } }, [
       head,
       route,
+      ...(fixBlock ? [fixBlock] : []),
       ...(slots ? [slots] : []),
       body
     ])
@@ -948,6 +1041,13 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
   // something you can SEE: the card repaints the moment the grant is real.
   bridge.on(ConnectionsChannels.changed, (payload) => {
     connections = (payload as Connection[]) ?? []
+    paint()
+  })
+  // The CLI route's facts ride the status snapshot (phase-tools/06): a card whose
+  // Claude Code config needs fixing must say so the moment the push lands — repaint
+  // only, never another poll (the request→push→request loop lesson).
+  bridge.on(IntegrationsChannels.statusChanged, (payload) => {
+    snapshot = (payload as McpStatusSnapshot | null) ?? snapshot
     paint()
   })
 

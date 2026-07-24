@@ -9,10 +9,10 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 189 gates: 26 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 190 gates: 26 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
 # GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE ·
-# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED) + 163 app-boot
+# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED) + 164 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -518,6 +518,15 @@ run_smoke TOOLWHO      MOGGING_TOOLWHO   1 240 toolwho
 # the detail's workspace checkbox mutates the same plan the matrix renders; Codex/
 # Gemini rows are inert coming-soon. Mutation-red ×2: broken merge key, broken rank.
 run_smoke TOOLCARDS    MOGGING_TOOLCARDS 1 240 toolcards
+# TOOLFIX (phase-tools/06): drift becomes "Needs attention → Fix" without losing one
+# byte of the mgr engine's safety — in a SANDBOXED CLI home (the isolation law). The
+# accelerated heartbeat classifies a hand-edited marked block; the card carries the
+# user-words sentence, the diff preview ("What Fix will change") and the backups line;
+# Fix re-applies byte-identically with a backup taken first; a deleted block restores;
+# "Keep my edit" adopts with the config untouched; the mtime NEVER moves without the
+# click; a codex drift is detected and surfaces nowhere. Mutation-red ×2: blinded
+# classifier, auto-applying reconciler.
+run_smoke TOOLFIX      MOGGING_TOOLFIX   1 240 toolfix
 # The store/inventory split (2026-07-18): the Library overlay is the store, the
 # settings page is the inventory — this gate bites the door, the honesty, the
 # chip->plan mutation, the in-place key vaulting, and the route badges.

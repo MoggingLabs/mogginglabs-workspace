@@ -1,5 +1,6 @@
 import type { BrowserWindow } from 'electron'
-import { sweepConnections } from './connections'
+import { reportCliDrift, sweepConnections } from './connections'
+import { mgrApply, scanCliDrift } from './mcp-manager'
 
 // Trigger 1 of the status engine (phase-tools/03): the heartbeat. Every ~15 minutes,
 // one budgeted, staggered beat re-verifies every `connected` connection — so
@@ -41,6 +42,17 @@ export function startConnectionPulse(getWin: () => BrowserWindow | null): void {
     try {
       const report = await sweepConnections('heartbeat', { cursor })
       cursor = report.nextCursor
+      // The silent reconciler's beat half (phase-tools/06): a CHEAP config
+      // stat/parse — no subprocess — classifying Claude Code drift; background
+      // drift rides the same attention path as a failed verify. NO WRITE, EVER:
+      // Fix is always a click. (`MOGGING_FIX_BREAK_CLICKGUARD` is TEST-ONLY, the
+      // TOOLFIX mutation-red — an auto-applying reconciler is exactly the
+      // regression the gate's mtime assert must catch.)
+      const drifted = scanCliDrift()
+      if (process.env.MOGGING_FIX_BREAK_CLICKGUARD) {
+        for (const d of drifted) mgrApply(d.id, 'claude-code')
+      }
+      reportCliDrift(drifted.map((d) => d.id))
     } catch {
       /* a beat may fail whole (store not ready); the next tick tries again */
     } finally {

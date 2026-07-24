@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { app, type BrowserWindow } from 'electron'
 import { bootMain, prepareRuntime } from './boot'
 import { installHarnessPorts } from './harness-install'
@@ -45,6 +46,7 @@ import { runConnLiveSmoke } from './smokes/connlive-smoke'
 import { runToolPulseSmoke } from './smokes/toolpulse-smoke'
 import { runToolWhoSmoke } from './smokes/toolwho-smoke'
 import { runToolCardsSmoke } from './smokes/toolcards-smoke'
+import { runToolFixSmoke } from './smokes/toolfix-smoke'
 import { runLibraryUxSmoke } from './smokes/libraryux-smoke'
 import { runSetShellSmoke } from './smokes/setshell-smoke'
 import { runSetUsageSmoke } from './smokes/setusage-smoke'
@@ -208,7 +210,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
   'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_KILLFLASH', 'MOGGING_RAILFOLD', 'MOGGING_CHROMEPRESS', 'MOGGING_KBSHORTCUTS', 'MOGGING_KBGLOBAL', 'MOGGING_VERDICTLIVE', 'MOGGING_WEBTRAIL',
   'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX', 'MOGGING_WIZARDFAIL', 'MOGGING_WIZARDISO', 'MOGGING_WIZCD', 'MOGGING_WIZLAYOUT', 'MOGGING_MUTATIONRACE', 'MOGGING_AUTHRUNNER',
-  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_CONNLIVE', 'MOGGING_TOOLPULSE', 'MOGGING_TOOLWHO', 'MOGGING_TOOLCARDS', 'MOGGING_LIBRARYUX', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX', 'MOGGING_RESUME',
+  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_CONNLIVE', 'MOGGING_TOOLPULSE', 'MOGGING_TOOLWHO', 'MOGGING_TOOLCARDS', 'MOGGING_TOOLFIX', 'MOGGING_LIBRARYUX', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX', 'MOGGING_RESUME',
   'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_RESPONSIVE', 'MOGGING_KBAPG', 'MOGGING_EQUALIZE', 'MOGGING_UXMILESTONE',
   'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT', 'MOGGING_CWD',
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
@@ -243,6 +245,14 @@ if (process.env.MOGGING_TOOLPULSE) {
   process.env.MOGGING_PULSE_MAXCONC ??= '2'
   process.env.MOGGING_PULSE_JITTER_MS ??= '120'
   process.env.MOGGING_PRELAUNCH_BUDGET_MS ??= '1500'
+}
+// TOOLFIX: the reconciler's world — an accelerated heartbeat AND a fully sandboxed
+// CLI home (the gate-isolation law: this gate hand-edits and REWRITES CLI configs,
+// and not one byte of that may touch the real user's files; resolveCliHomes honors
+// the pointer only alongside the isolated userData).
+if (process.env.MOGGING_TOOLFIX && process.env.MOGGING_USERDATA) {
+  process.env.MOGGING_SMOKE_CLI_HOME ??= join(process.env.MOGGING_USERDATA, 'cli-home')
+  process.env.MOGGING_PULSE_INTERVAL_MS ??= '1200'
 }
 
 /**
@@ -598,6 +608,8 @@ function afterWindow(win: BrowserWindow): void {
     runToolWhoSmoke(win) // the identity ladder vs fixtures: oidc/rest/tool rungs sourced honestly, allowlist zero-call, note survives disconnect, probed-beats-noted DOM, stability, mutation-red ×2 (phase-tools/04)
   } else if (process.env.MOGGING_TOOLCARDS) {
     runToolCardsSmoke(win) // tool cards on the real page: dual-route=one card, four status tags track verifiedAt, catalog chooser ADR-verbatim + setup link, humanized scopes, detail scoping mutates the plan, coming-soon inert, mutation-red ×2 (phase-tools/05)
+  } else if (process.env.MOGGING_TOOLFIX) {
+    runToolFixSmoke(win) // the silent reconciler in a SANDBOXED CLI home: heartbeat classifies hand-edits, Fix re-applies byte-identically with backup, keep-my-edit adopts untouched, no unclicked write ever, codex drift silent, mutation-red ×2 (phase-tools/06)
   } else if (process.env.MOGGING_LIBRARYUX) {
     runLibraryUxSmoke(win) // the store/inventory split: Library overlay, inventory honesty, chips->plans, key slots, route badges (2026-07-18)
   } else if (process.env.MOGGING_SETUSAGE) {

@@ -392,7 +392,7 @@ export function createCatalogBlock(): SyncedBlock {
       const save = el('button', { class: 'trail-btn cat-mini', type: 'button', text: 'Save as server' }) as HTMLButtonElement
       save.onclick = async (): Promise<void> => {
         const res = (await bridge.invoke(IntegrationsChannels.serversSave, d.entry)) as { ok: boolean; reason?: string }
-        save.textContent = res.ok ? 'Saved — apply under Settings › Integrations' : `refused: ${res.reason}`
+        save.textContent = res.ok ? 'Saved — set it up under Settings › Integrations' : `refused: ${res.reason}`
       }
       searchResults.append(
         el('div', { class: 'mgr-row' }, [

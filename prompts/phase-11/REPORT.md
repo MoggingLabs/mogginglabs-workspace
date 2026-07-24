@@ -244,7 +244,7 @@ requires a quiet machine**, and that run is the operator's to make.
 
 Two items, both deliberately left to the operator:
 
-1. **The full uncut local sweep** (all 189 gates). Not run here: the operator's
+1. **The full uncut local sweep** (all 190 gates). Not run here: the operator's
    standing instruction is that Claude never runs the full sweep — targeted subsets
    only. Every one of the seven new gates has been run and is green, as have every
    gate they could plausibly disturb (see §5).
@@ -258,7 +258,7 @@ certification row rather than a number nobody measured.
 ### The two commands that close it
 
 ```bash
-# 1. The full uncut local sweep (189 gates, ~4h). Run it on a QUIET machine:
+# 1. The full uncut local sweep (190 gates, ~4h). Run it on a QUIET machine:
 #    the three frame-budget gates (MILESTONE · PERCEPTION · FLICKER) are the
 #    only ones that need one, and §3 shows why. Strip the Electron env leak
 #    first if this shell is itself a Mogging pane.
@@ -267,7 +267,7 @@ env -u ELECTRON_RUN_AS_NODE -u ELECTRON_CLI_ARGS -u ELECTRON_EXEC_PATH \
     -u MOGGING_BROWSER_ENDPOINT -u MOGGING_CHANNEL \
   bash scripts/qa-smokes.sh
 
-# 2. The three-OS CI dispatch. `gates` EMPTY = all 189 gates; no ci.yml edit is
+# 2. The three-OS CI dispatch. `gates` EMPTY = all 190 gates; no ci.yml edit is
 #    needed, because the sweep jobs already take that input.
 gh workflow run ci.yml -f gates='' -f sweeps='linux,macos,windows'
 gh run watch   # …then paste the run id into README § Freeze

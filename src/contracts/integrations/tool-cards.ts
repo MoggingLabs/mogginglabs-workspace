@@ -136,6 +136,30 @@ export function chooserMethods(entry: ProviderEntry, o: { _testBreakRank?: boole
   }))
 }
 
+// ── The silent reconciler's sentences (ADR 0020 Appendix A, phase-tools/06) ──
+// Drift/apply/adopt is MACHINERY vocabulary; the user sees a tool whose Claude
+// Code config needs fixing, and a Fix button. One sentence, one primary verb, one
+// quiet secondary — written here so no surface can word them twice.
+
+export type CliFixFlavor = 'edited' | 'missing'
+
+export const FIX_SENTENCES: Readonly<Record<CliFixFlavor, { sentence: string; secondary: string }>> = {
+  edited: {
+    sentence: 'Claude Code’s config for this tool was edited by hand.',
+    secondary: 'Keep my edit'
+  },
+  missing: {
+    sentence: 'Claude Code’s config for this tool was removed outside the app.',
+    secondary: 'Forget this tool on Claude Code'
+  }
+}
+
+/** The diff preview keeps its trust-artifact role under a plain title. */
+export const FIX_PREVIEW_TITLE = 'What Fix will change'
+
+/** The backups line, plainly worded. */
+export const backupsLine = (latest: string): string => `We keep backups — latest: ${latest}`
+
 // ── Humanized scopes (Metorial): titles rendered, raw kept, nothing hidden ───
 
 export interface HumanScope {

@@ -57,6 +57,16 @@ const ENFORCED_FILES = new Set([
   'src/ui/features/settings/connections.ts'
 ])
 
+// The reconciler VOCABULARY (phase-tools/06): drift/apply/adopt left the
+// integrations surfaces for good — those categories enforce across every
+// integrations file even where the file as a whole is still on the burn-down.
+const ENFORCED_CATEGORIES = new Set(['drift', 'apply', 'adopt'])
+const ENFORCED_CATEGORY_FILES = new Set([
+  'src/ui/features/settings/connections.ts',
+  'src/ui/features/settings/integrations.ts',
+  'src/ui/features/settings/library.ts'
+])
+
 function tsFiles(dir) {
   const out = []
   for (const name of readdirSync(dir)) {
@@ -95,7 +105,9 @@ for (const file of tsFiles(SCOPE)) {
   }
 }
 
-const enforced = violations.filter((v) => ENFORCED_FILES.has(v.file))
+const enforced = violations.filter(
+  (v) => ENFORCED_FILES.has(v.file) || (ENFORCED_CATEGORIES.has(v.name) && ENFORCED_CATEGORY_FILES.has(v.file))
+)
 
 if (violations.length) {
   const mode = ENFORCE ? 'ENFORCING' : 'REPORT-ONLY (burn-down; rewritten files enforce)'
@@ -112,7 +124,8 @@ if (violations.length) {
   }
   if (ENFORCE) process.exit(1)
   if (enforced.length) {
-    console.error(`TOOLWORDS: ${enforced.length} violation(s) in ENFORCED (step-05 rewritten) files — these fail even in report-only mode.`)
+    console.error(`TOOLWORDS: ${enforced.length} violation(s) under ENFORCEMENT (rewritten files / retired categories) — these fail even in report-only mode:`)
+    for (const v of enforced) console.error(`  ${v.file}:L${v.line} [${v.name}] ${JSON.stringify(v.text)}`)
     process.exit(1)
   }
   console.log('TOOLWORDS: report-only pass — the count above is the burn-down; step 06 flips the rest.')

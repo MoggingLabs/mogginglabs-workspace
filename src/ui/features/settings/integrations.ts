@@ -15,7 +15,7 @@ import {
   type WorkspaceIntegrationsGrant
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { Button, EmptyState, FieldGroup, clear, createCheckbox, createCollapsibleCard, createModal, createToggleRow, el, icon, loadingRow, providerLogo, scrubFields, showToast, submitWithRetain } from '../../components'
+import { Button, EmptyState, FieldGroup, clear, createCheckbox, createCollapsibleCard, createModal, createToggleRow, el, icon, providerLogo, scrubFields, showToast, submitWithRetain } from '../../components'
 import type { CollapsibleCardHandle } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { onToolPlanPanesChange, restartNeededPaneIds } from '../../core/agents/toolplan-panes'
@@ -99,73 +99,30 @@ interface SyncedBlock {
 function createServersBlock(): SyncedBlock {
   const bridge = getBridge()
   const list = el('div', { class: 'mgr-list' })
-  const panel = el('div', { class: 'mgr-panel', hidden: true })
   const saveNote = el('div', { class: 'menu-note trail-empty mgr-save-note', role: 'status', attrs: { 'aria-live': 'polite' }, hidden: true })
 
-  async function openPanel(server: McpServerEntry, status: McpCliStatus): Promise<void> {
-    panel.hidden = false
-    clear(panel)
-    panel.append(loadingRow('Reading the CLI config…'))
-    const action = status.state === 'applied' ? 'remove' : 'apply'
-    const preview = (await bridge.invoke(IntegrationsChannels.mgrPreview, {
-      serverId: server.id,
-      cli: status.cli,
-      action
-    })) as { file: string; block: string; summary: string } | null
-    clear(panel)
-    if (!preview) {
-      panel.hidden = true
-      return
-    }
-    panel.append(el('div', { class: 'mgr-panel-summary', text: preview.summary }))
-    if (action === 'apply' && preview.block) {
-      const pre = el('pre', { class: 'mgr-panel-block' })
-      pre.textContent = preview.block
-      panel.append(pre)
-    }
-    const actions = el('div', { class: 'trail-controls' })
-    const doThen = (fn: () => Promise<unknown>) => async (): Promise<void> => {
-      clear(panel)
-      panel.append(loadingRow('Writing the CLI config…'))
-      await fn()
-      panel.hidden = true
-      await refresh()
-    }
-    if (status.state !== 'applied') {
-      const apply = el('button', { class: 'trail-btn', type: 'button', text: status.state === 'not-applied' ? 'Apply' : 'Re-apply' }) as HTMLButtonElement
-      apply.onclick = doThen(() => bridge.invoke(IntegrationsChannels.mgrApply, { serverId: server.id, cli: status.cli }))
-      actions.append(apply)
-    }
-    if (status.state !== 'not-applied' && status.state !== 'drift-missing') {
-      const remove = el('button', { class: 'trail-btn trail-clear', type: 'button', text: 'Remove from this CLI' }) as HTMLButtonElement
-      remove.onclick = doThen(() => bridge.invoke(IntegrationsChannels.mgrRemoveFrom, { serverId: server.id, cli: status.cli }))
-      actions.append(remove)
-    }
-    if (status.state === 'drift-edited') {
-      const adopt = el('button', { class: 'trail-btn', type: 'button', text: 'Adopt the edit' }) as HTMLButtonElement
-      adopt.onclick = doThen(() => bridge.invoke(IntegrationsChannels.mgrAdopt, { serverId: server.id, cli: status.cli }))
-      actions.append(adopt)
-    }
-    if (status.state === 'drift-missing') {
-      const forget = el('button', { class: 'trail-btn', type: 'button', text: 'Forget' }) as HTMLButtonElement
-      forget.onclick = doThen(() => bridge.invoke(IntegrationsChannels.mgrAdopt, { serverId: server.id, cli: status.cli, forget: true }))
-      actions.append(forget)
-    }
-    panel.append(actions)
-    const backups = (await bridge.invoke(IntegrationsChannels.mgrBackups, status.cli)) as string[]
-    if (backups.length) {
-      panel.append(el('div', { class: 'settings-row-caption', text: `Backups (${backups.length}) — latest: ${backups[0]}` }))
-    }
-  }
-
+  // The mgr PANEL died as a surface (phase-tools/06): its preview/write verbs live
+  // on each tool's card now, as the Fix flow — one sentence, one primary verb, the
+  // diff preview kept as the trust artifact. This card is the read-only audit view:
+  // chips state facts in outcome words and act only where acting is honest
+  // (needs sign-in → re-authorize). Claude Code is the one CLI whose config health
+  // renders this phase; a coming-soon CLI's config trouble must not raise an alarm
+  // the user cannot act on, so those chips state the base fact and nothing more.
   const STATE_TEXT: Record<McpCliStatus['state'], string> = {
-    'not-applied': 'add',
-    applied: '✓ applied',
-    'drift-edited': 'drift',
-    'drift-missing': 'missing'
+    'not-applied': 'not set up',
+    applied: '✓ on',
+    'drift-edited': 'needs fixing',
+    'drift-missing': 'gone'
+  }
+  /** A coming-soon CLI's config trouble, stated as the base fact (see above). */
+  const SOFT_STATE_TEXT: Record<McpCliStatus['state'], string> = {
+    'not-applied': 'not set up',
+    applied: '✓ on',
+    'drift-edited': '✓ on',
+    'drift-missing': 'not set up'
   }
 
-  const CONN_TEXT: Record<string, string> = { connected: 'connected', 'needs-auth': 'needs auth', error: 'error', drift: 'drift', registered: 'registered', off: 'not installed' }
+  const CONN_TEXT: Record<string, string> = { connected: 'working', 'needs-auth': 'needs sign-in', error: 'not working', drift: 'needs fixing', registered: 'saved', off: 'not installed' }
   // Re-authorize (11): run the CLI's catalog-owned OAuth command in a visible
   // plain terminal. A token-configured server routes back to its env reference.
   function runReauthorize(cli: HostedCliId, server: McpServerEntry, cmd: string | null): void {
@@ -173,7 +130,7 @@ function createServersBlock(): SyncedBlock {
       showToast({
         tone: 'attention',
         title: `${server.label} uses token auth`,
-        body: 'Check its Service key or shell environment; no OAuth command applies.'
+        body: 'Check its Service key or shell environment; there is no browser sign-in for it.'
       })
       return
     }
@@ -198,7 +155,7 @@ function createServersBlock(): SyncedBlock {
 
   async function refresh(): Promise<void> {
     let needsAuth = 0
-    let drifted = 0
+    let needFixing = 0
     let connected = 0
     const servers = (await bridge.invoke(IntegrationsChannels.serversList, undefined)) as McpServerEntry[]
     const snap = ((await bridge.invoke(IntegrationsChannels.statusGet)) as McpStatusSnapshot | null) ?? { statuses: [], at: 0 }
@@ -217,27 +174,37 @@ function createServersBlock(): SyncedBlock {
     for (const server of servers) {
       const statuses = (await bridge.invoke(IntegrationsChannels.mgrStatus, server.id)) as McpCliStatus[]
       const chips = statuses.map((s) => {
-        // The pushed connection state (11) is the LIVE truth when applied.
+        // The pushed connection state (11) is the LIVE truth when applied. A
+        // coming-soon CLI never wears an alarm here (phase-tools/06): its drift is
+        // detected backend-side and surfaces nowhere the user cannot act.
+        const claudeCode = s.cli === 'claude-code'
         const cs = conn.get(`${server.id}:${s.cli}`)
-        const live = cs && cs !== 'registered' && cs !== 'off' ? cs : null
+        const rawLive = cs && cs !== 'registered' && cs !== 'off' ? cs : null
+        const live = rawLive === 'drift' && !claudeCode ? null : rawLive
         const cls = live ?? s.state
         if (cls === 'needs-auth') needsAuth++
-        else if (cls === 'drift' || cls === 'drift-edited' || cls === 'drift-missing') drifted++
+        else if (claudeCode && (cls === 'drift' || cls === 'drift-edited' || cls === 'drift-missing')) needFixing++
         else if (cls === 'connected' || cls === 'applied') connected++
-        const label = s.installed ? (live ? CONN_TEXT[live] : STATE_TEXT[s.state]) : 'not installed'
-        const chip = el('button', {
-          class: `mgr-chip is-${cls}${s.installed ? '' : ' is-uninstalled'}`,
-          type: 'button',
-          text: `${CLI_LABEL[s.cli]} · ${label}`
-        }) as HTMLButtonElement
-        chip.title = s.file
-        chip.disabled = !s.installed && s.state === 'not-applied'
+        const stateText = claudeCode ? STATE_TEXT[s.state] : SOFT_STATE_TEXT[s.state]
+        const label = s.installed ? (live ? CONN_TEXT[live] : stateText) : 'not installed'
         if (live === 'needs-auth') {
           const cmd = caps.find((c) => c.cli === s.cli)?.authorizeCommand ?? null
+          const chip = el('button', {
+            class: `mgr-chip is-${cls}${s.installed ? '' : ' is-uninstalled'}`,
+            type: 'button',
+            text: `${CLI_LABEL[s.cli]} · ${label}`
+          }) as HTMLButtonElement
+          chip.title = s.file
           chip.onclick = (): void => runReauthorize(s.cli, server, cmd)
-        } else {
-          chip.onclick = (): void => void openPanel(server, s)
+          return chip
         }
+        // A FACT, not a verb: the mgr panel died as a surface — fixing lives on the
+        // tool's own card. Same class (SETINTEG's hit-target math keys on it).
+        const chip = el('span', {
+          class: `mgr-chip is-${cls}${s.installed ? '' : ' is-uninstalled'}`,
+          text: `${CLI_LABEL[s.cli]} · ${label}`
+        })
+        chip.title = s.file
         return chip
       })
       // Route honesty (the merged-inventory rule): a row must say WHO holds its
@@ -345,7 +312,7 @@ function createServersBlock(): SyncedBlock {
       )
     }
     signal('servers', {
-      chip: needsAuth ? attnChip('needs-auth', `${needsAuth} need auth`) : drifted ? attnChip('drift', `${drifted} drifted`) : null,
+      chip: needsAuth ? attnChip('needs-auth', `${needsAuth} need sign-in`) : needFixing ? attnChip('drift', `${needFixing} need fixing`) : null,
       stat: `${connected} connected`
     })
   }
@@ -496,9 +463,8 @@ function createServersBlock(): SyncedBlock {
   }
 
   const block = el('div', { class: 'trail-block mgr-block' }, [
-    el('div', { class: 'settings-row-caption', text: 'Every server your CLIs know about, with who holds its auth: “via your account” rides an app-held connection (its config entry is a command — no credential in any CLI file); “CLI-owned auth” means that CLI authenticates itself. Writes are surgical (only our marked entries), backed up first, and only ever on your click. A ${VAR} key slot on a row is pasted right there and vaulted — never written as a literal. Add more from the Library.' }),
+    el('div', { class: 'settings-row-caption', text: 'Every server your CLIs know about, with who holds its auth: “via your account” rides an app-held connection (its config entry is a command — no credential in any CLI file); “CLI-owned auth” means that CLI authenticates itself. A tool whose Claude Code config needs fixing says so on its own card above — with a Fix button, a preview of the change, and a backup taken first; nothing is ever written without your click. A ${VAR} key slot on a row is pasted right there and vaulted — never written as a literal. Add more from the Library.' }),
     list,
-    panel,
     el('div', { class: 'trail-controls' }, [statusRefreshBtn, addToggle]),
     form,
     saveNote
@@ -633,7 +599,7 @@ function createWorkspaceToolsBlock(): SyncedBlock {
     // F-25 sibling: "Inherit global tools" stays a switch — state, never a verb.
     const inheritToggle = createToggleRow({
       label: 'Inherit global (“everywhere”) tools',
-      hint: 'On: servers applied at the global tier reach this workspace too. Off: panes carry only this plan.',
+      hint: 'On: tools set up at the global (everywhere) tier reach this workspace too. Off: panes carry only this plan.',
       checked: plan.inheritGlobal,
       onChange: () => {
         const next = inheritToggle.checked()
@@ -714,7 +680,7 @@ function createWorkspaceToolsBlock(): SyncedBlock {
         class: 'settings-row-caption toolplan-truth',
         text:
           `Panes here launch with — ${counts.join(' · ')} — servers (house + plan${plan.inheritGlobal ? ' + global' : ''}).` +
-          (pending ? ` ${pending} live pane${pending === 1 ? '' : 's'} pending restart to apply.` : '')
+          (pending ? ` ${pending} live pane${pending === 1 ? '' : 's'} pick this up on restart.` : '')
       })
     )
 
@@ -772,7 +738,7 @@ function createWorkspaceToolsBlock(): SyncedBlock {
     const p = payload as WorkspaceToolPlan
     const stale = restartNeededPaneIds(p.workspaceId, planSignature(p)).length
     if (stale) {
-      showToast({ title: 'Tool plan changed', body: `${stale} live pane${stale === 1 ? '' : 's'} need a restart to apply`, tone: 'info', timeout: 6000 })
+      showToast({ title: 'Tool plan changed', body: `${stale} live pane${stale === 1 ? '' : 's'} pick this up on restart`, tone: 'info', timeout: 6000 })
     }
     void render()
   })

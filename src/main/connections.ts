@@ -996,16 +996,39 @@ export const verifyStatsForSmoke = (): {
   failing: attentionLedger.failingIds()
 })
 
+/** CLI-config drift (phase-tools/06): its own ledger, because a connection verify's
+ *  success must never clear a DRIFT alarm (and vice versa) — two different facts,
+ *  one attention surface. */
+const driftLedger = new AttentionLedger()
+
 /** Push the app-wide attention payload (ids only, secret-free). Called on EDGES —
- *  the ledger already swallowed repeats, so the rail rings once per failure. */
+ *  the ledgers already swallowed repeats, so the rail rings once per failure. */
 function pushAttention(): void {
   try {
-    const payload: ConnectionsAttention = { failing: attentionLedger.failingIds() }
+    const payload: ConnectionsAttention = {
+      failing: [...new Set([...attentionLedger.failingIds(), ...driftLedger.failingIds()])].sort()
+    }
     winGetter?.()?.webContents.send(ConnectionsChannels.attention, payload)
   } catch {
     /* window gone; the ledger is the truth and the next push repeats it */
   }
 }
+
+/** The heartbeat reports each beat's drift SET; edges (raise on new, clear on
+ *  recovered) ride the same law as verification failures. NO write ever happens
+ *  here — Fix is always a click (the surgical-writes-on-your-click law). */
+export function reportCliDrift(driftedIds: string[]): void {
+  const set = new Set(driftedIds)
+  let changed = false
+  for (const id of set) if (driftLedger.record(id, 'failed') !== null) changed = true
+  for (const id of driftLedger.failingIds()) {
+    if (!set.has(id) && driftLedger.record(id, 'ok') !== null) changed = true
+  }
+  if (changed) pushAttention()
+}
+
+/** Dev-gate observability (TOOLFIX): the drift ledger read back. */
+export const driftStatsForSmoke = (): string[] => driftLedger.failingIds()
 
 const envInt = (name: string, fallback: number): number => {
   const v = Number(process.env[name])

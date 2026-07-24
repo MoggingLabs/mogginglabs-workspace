@@ -315,7 +315,7 @@ daemon protocol number equal before and after).
 | `BRAINRECALL` | the recall organ: ranking, the shared budget, usage, CLI |
 | `BRAINMILESTONE` | everything above, composed — the pack's freeze authority |
 
-The sweep stands at **189 gates (163 app-boot + 26 static)** — the number is
+The sweep stands at **190 gates (164 app-boot + 26 static)** — the number is
 `scripts/check-gate-count.mjs`'s derived output, the only authority.
 
 Full laws and their rationale: [ADR 0018](adr/0018-workspace-brain.md)
