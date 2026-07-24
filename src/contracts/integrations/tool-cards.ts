@@ -73,11 +73,14 @@ export function mergeToolCards(
     if (s.builtIn) continue // the house server is not a tool card
     const key = keyOf(s.id, 'cli')
     const row = rows.get(key) ?? { id: s.id, label: s.label }
-    if (!isBridgeRow(s)) {
-      row.server = s
-      const cli = snapshot?.statuses.find((x) => x.serverId === s.id && x.cli === 'claude-code')
-      if (cli && cli.state !== 'off') row.cliState = cli.state
-    }
+    // The CLI's own read applies to EVERY registry row, the bridge included — a
+    // hand-edited bridge entry is exactly a config that needs fixing. Only the
+    // route FACTS (the "also carried CLI-owned" line, the ${VAR} slots) are
+    // reserved for non-bridge rows: the bridge is the connection wearing its
+    // config clothes, not a second route.
+    const cli = snapshot?.statuses.find((x) => x.serverId === s.id && x.cli === 'claude-code')
+    if (cli && cli.state !== 'off') row.cliState = cli.state
+    if (!isBridgeRow(s)) row.server = s
     rows.set(key, row)
   }
   return [...rows.values()]

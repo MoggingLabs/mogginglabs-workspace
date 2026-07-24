@@ -305,7 +305,7 @@ function createServersBlock(): SyncedBlock {
         el('div', { class: 'integux-empty' }, [
           EmptyState({
             icon: 'plug',
-            title: 'Only the built-in server so far',
+            title: 'Only the built-in tools so far',
             body: 'Browse the Library to add your first tool — connect an account once, or give a CLI its own copy.'
           })
         ])
@@ -587,11 +587,11 @@ function createWorkspaceToolsBlock(): SyncedBlock {
       }
       chipsRow.append(chip)
     }
-    toolsBody.append(el('div', { class: 'settings-row-caption', text: 'The house server is always on. Toggle a tool for this workspace’s agents:' }), chipsRow)
+    toolsBody.append(el('div', { class: 'settings-row-caption', text: 'The built-in tools are always on. Toggle a tool for this workspace’s agents:' }), chipsRow)
     // The tools empty state (8/13): explain plans in one sentence — and point at
     // the Library, where the first tool actually comes from.
     if (pickable.length === 0) {
-      toolsBody.append(el('div', { class: 'menu-note toolplan-empty', text: 'A plan decides which servers reach this workspace’s agents — minimal by default, so panes carry only what the work needs. Browse the Library to connect a tool, then turn it on here.' }))
+      toolsBody.append(el('div', { class: 'menu-note toolplan-empty', text: 'A plan decides which tools reach this workspace’s agents — minimal by default, so panes carry only what the work needs. Browse the Library to connect a tool, then turn it on here.' }))
       const browse = Button({ label: 'Browse the Library', icon: 'plug', variant: 'ghost', onClick: () => openLibrary({ onClose: () => void render() }) })
       toolsBody.append(el('div', { class: 'trail-controls' }, [browse]))
     }
@@ -634,7 +634,7 @@ function createWorkspaceToolsBlock(): SyncedBlock {
     )
     for (const s of servers) {
       const cells = HOSTED.map((cli) => {
-        if (s.builtIn) return el('span', { class: 'toolplan-cell is-locked', text: 'always', title: 'The house server is always available' })
+        if (s.builtIn) return el('span', { class: 'toolplan-cell is-locked', text: 'always', title: 'The built-in tools are always available' })
         const state = toolCellState(plan, s.id, cli, globalFor.get(s.id)?.has(cli) ?? false)
         const label = state === 'planned' ? 'on' : state === 'global' ? 'global' : 'off'
         const cell = el('button', {
@@ -679,7 +679,7 @@ function createWorkspaceToolsBlock(): SyncedBlock {
       el('div', {
         class: 'settings-row-caption toolplan-truth',
         text:
-          `Panes here launch with — ${counts.join(' · ')} — servers (house + plan${plan.inheritGlobal ? ' + global' : ''}).` +
+          `Panes here launch with — ${counts.join(' · ')} — tools (built-in + plan${plan.inheritGlobal ? ' + global' : ''}).` +
           (pending ? ` ${pending} live pane${pending === 1 ? '' : 's'} pick this up on restart.` : '')
       })
     )
@@ -694,7 +694,7 @@ function createWorkspaceToolsBlock(): SyncedBlock {
     }
     const grantTruth = grant
     const writeToggle = createToggleRow({
-      label: 'Allow MCP write tools in this workspace',
+      label: 'Allow write tools in this workspace',
       hint: 'Off by default. On: agents here can send, mail, claim, update cards, and edit code symbols in their own checkout through connected tools.',
       checked: grantTruth.writeTools === 'all',
       onChange: () => {
@@ -749,11 +749,11 @@ function createWorkspaceToolsBlock(): SyncedBlock {
   // the MUTATIONRACE smoke's anchors, and each sub-block's first switch is the
   // one that smoke clicks. One card, one picker, two honest captions.
   const toolsSub = el('div', { class: 'trail-block mgr-grants-block' }, [
-    el('div', { class: 'settings-row-caption', text: 'Which registered servers reach this workspace’s panes, per CLI — so agents carry only the tools the work needs, not everything connected. Scoping is context hygiene, not a permission — the write grant below stays the boundary.' }),
+    el('div', { class: 'settings-row-caption', text: 'Which of your tools reach this workspace’s panes, per CLI — so agents carry only what the work needs, not everything connected. Scoping is context hygiene, not a permission — the write grant below stays the boundary.' }),
     toolsBody
   ])
   const grantSub = el('div', { class: 'trail-block mgr-grants-block' }, [
-    el('div', { class: 'settings-row-caption', text: 'Per workspace, default closed: which MCP write tools agents get. The reviewer gate stays the boundary — approve is never a tool. Which ORIGINS agents may act on is a browser boundary: Trust › Browser.' }),
+    el('div', { class: 'settings-row-caption', text: 'Per workspace, default closed: which write tools agents get. The reviewer gate stays the boundary — approve is never a tool. Which ORIGINS agents may act on is a browser boundary: Trust › Browser.' }),
     grantBody
   ])
   const block = el('div', { class: 'trail-block wstool-block' }, [
@@ -1042,7 +1042,7 @@ function createIntegrationsIntro(): HTMLElement {
     el('div', {
       class: 'settings-row-caption',
       text:
-        'Browse the Library to connect a service once — sign-in happens in your own browser, the credential is encrypted by your OS keychain and never written into a CLI’s config, and every agent you launch can use it. This page is what you HAVE: your connected accounts, the servers on your CLIs, and which workspace carries what.'
+        'Browse the Library to connect a service once — sign-in happens in your own browser, the credential is encrypted by your OS keychain and never written into a CLI’s config, and every agent you launch can use it. This page is what you HAVE: your connected accounts, the tools on your CLIs, and which workspace carries what.'
     }),
     el('div', { class: 'integux-stats' }, [connections.el, servers.el, keys.el]),
     el('div', { class: 'trail-controls' }, [browse, setup])
@@ -1062,7 +1062,7 @@ function createIntegrationsPrivacy(): HTMLElement {
       // exists precisely to stop a comforting lie from creeping back in.
       el('span', {
         text:
-          'When you connect a service here, this app holds that connection: the OAuth token is encrypted by your OS keychain and never leaves your machine — not to us, not into a CLI’s config file, not into a log or telemetry. Your agents reach the service through the app, so a connected account is reachable by any agent whose workspace tool plan includes it — scope them deliberately, and disconnect here to delete the credential. Provider LOGINS (Claude, Codex, Gemini) are still never brokered: those CLIs sign in as themselves, as they always have (ADR 0002). Repo names, tool lists, and titles stay in the app: telemetry is counts and booleans only (docs/14).'
+          'When you connect a tool here, this app holds that connection: sign-in runs entirely on this machine, and the OAuth token is encrypted by your OS keychain and never leaves it — not to us, not into a CLI’s config file, not into a log or telemetry. Your agents reach the tool through the app, so a connected account is reachable by any agent whose workspace plan includes it — scope deliberately, and disconnect here to delete the credential. Provider LOGINS (Claude, Codex, Gemini) are still never brokered: those CLIs sign in as themselves, as they always have (ADR 0002). Repo names, tool lists, and titles stay in the app: telemetry is counts and booleans only (docs/14).'
       })
     ])
   ])
@@ -1161,7 +1161,7 @@ export function createIntegrationsSection(): HTMLElement {
     connectionsBlock.block,
     { defaultOpen: true, attentionOpens: true }
   )
-  const servers = card('servers', 'Servers on your CLIs', 'Every server your CLIs know about, and who holds its auth. Writes are surgical, backed up, and only on your click.', serversBlock.block)
+  const servers = card('servers', 'On your CLIs (advanced)', 'Everything your CLIs carry, and who holds its auth. A tool that needs fixing says so on its card above; writes are surgical, backed up, and only on your click.', serversBlock.block)
   // Shrunk to the POWER-USER view (phase-tools/05): everyday scoping happens on
   // each tool's own card above; this card keeps the matrix and the write grant.
   const workspace = card('workspace', 'Workspace tools', 'The power-user matrix: which tools each workspace’s agents carry, per CLI, and whether they may write. Everyday scoping lives on each tool’s card above.', workspaceBlock.block)

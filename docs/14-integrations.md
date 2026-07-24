@@ -1,10 +1,76 @@
-# 14 — Integrations: the five directions
+# 14 — Integrations: tools first
 
-Phase-8. The workspace stops being an island: agents reach your tools, your
-tools reach your agents, and the outside world's state lands back on the board.
-Five directions, one rule throughout — **every credential we hold, we hold as
-OS-keychain ciphertext, on your machine, or we refuse to hold it at all.** The
-daemon is untouched by this phase (grant-blind); every boundary below is app-side.
+Phase-8, rebuilt tool-first by phase-tools (ADR 0020). The workspace stops being
+an island: agents reach your tools, your tools reach your agents, and the outside
+world's state lands back on the board. One rule throughout — **every credential we
+hold, we hold as OS-keychain ciphertext, on your machine, or we refuse to hold it
+at all.** The daemon is untouched (grant-blind); every boundary below is app-side.
+
+## The tool is the unit (ADR 0020)
+
+The user-facing unit of this whole surface is the TOOL — never the plumbing that
+connects it. One tool = one card, whichever route holds its credential (the merge
+key is the catalog service id); mechanism words (MCP, server, stdio, transport,
+drift, apply, adopt, preset, Route A/B) never appear at top level — the TOOLWORDS
+gate holds that line, with fine print and the Library's advanced fold as the
+reviewed survivors. Every fact the app knows about a provider — auth methods,
+identity fetcher, liveness probe, refresh quirks, retry metadata, humanized
+scopes, setup links — lives in the **provider catalog**
+(`src/contracts/integrations/catalog/`, one JSON per service, `source:`
+provenance on every entry, CATSCHEMA-validated). **Adding a provider is a data
+PR with cited provenance, not a code change** — that is the contribution path.
+
+**Connect methods, in outcome words.** A not-yet-connected tool opens a chooser
+of the catalog's methods, ranked: *Sign in with your browser* (app-held OAuth,
+PKCE + loopback), *Paste an API key* (typed inputs from the catalog, proved
+before saved), *Let Claude Code sign in itself (advanced)* (the CLI-owned
+route). Each carries its one-line custody subtitle in fine print. Codex and
+Gemini render greyed "coming soon" with zero handlers this phase; the backend's
+three-CLI truth is untouched.
+
+**Identity — "as WHO?", never fabricated.** The catalog's `profile` spec drives
+one executor, rungs in order: OIDC claims already in hand → the provider's REST
+identity endpoint (catalog JSON paths) → an allowlisted MCP whoami tool (one
+call, empty args, never speculative). The landed result records its rung
+(`accountSource`). A **user-entered account note** covers providers with no
+identity door — probed beats noted, a note always renders "noted by you", and a
+disagreeing note rides secondary (the wrong-account catch). No door and no note:
+the honest fallback line. Identity once probed is stable — never re-asked per
+heartbeat.
+
+**Status is real verification, never inference.** One engine
+(`verifyConnection`, cause-stamped), three triggers:
+
+| Trigger | When | Shape |
+|---|---|---|
+| Heartbeat | ~15 min, post-paint, async | budgeted, jittered, bounded concurrency; the cursor resumes a budget-cut beat |
+| Page entry | entering Integrations | exactly one sweep (request → push → repaint) |
+| Pre-launch | a pane launching with connected tools | parallel, hard ~2s budget — the launch never waits past it |
+
+Card tags are exactly four: `✓ Connected · verified {n}m ago` · `Needs
+attention` · `Not connected` · `Connecting…`. A failed probe never un-connects a
+valid grant; only the provider's own unauthorized answer downgrades. Network-down
+(the updater's shared reachability classifier) says nothing and flips nothing.
+Real failures raise the app-wide attention badge on edges only. Continuous
+re-verification is ours alone among the surveyed projects — validate-once-then-
+trust is a named weakness we do not inherit.
+
+**The reconciler — Fix is always your click.** A hand-edited or deleted Claude
+Code config entry classifies on the heartbeat (cheap stat/parse, no subprocess)
+and renders as `Needs attention` with one sentence and one **Fix** button; the
+diff preview ("What Fix will change") and the timestamped backup survive from the
+old machinery, which is untouched underneath — surgical writes, marked entries
+only, and **never a write without your click**. "Keep my edit" and "Forget this
+tool on Claude Code" are the quiet secondaries. Other CLIs' drift stays detected
+backend-side and surfaces nowhere the user cannot act.
+
+**Custody, unchanged — and the differentiator, stated.** ADR 0014 (the app holds
+ONE grant per service as keychain ciphertext; CLIs reach the service through the
+app) and ADR 0002 (provider logins are never brokered) stand word for word.
+Sign-in runs entirely on this machine: the browser consent, the loopback
+hand-back, the keychain ciphertext — **no vendor cloud of ours ever sees a
+token**. The "Route A/B" vocabulary survives only in this book's architecture
+sections below; the UI speaks outcomes.
 
 > **Updated by [ADR 0014](adr/0014-app-held-service-connections.md).** The app is now
 > an OAuth client: it can hold a **connection** to a service *account* (Sentry, Notion,

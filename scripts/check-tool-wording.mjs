@@ -45,8 +45,43 @@ const BANNED = [
 // the Library's advanced fold earn entries here as steps 05–06 land; an entry is
 // suppressed only while the line still contains the reviewed text verbatim.
 const ALLOWED = [
-  // (none yet — the step-05 surfaces were written clean; custody fine print lives
-  //  in contracts/integrations/tool-cards.ts, outside this scope by design)
+  // ── The intended survivors (ADR 0020: mechanism words stay legal in fine print
+  //    and in the Library's advanced fold). Each pin names its reviewed line; an
+  //    entry suppresses only while the text survives verbatim. (phase-tools/07)
+  // Route-badge tooltips + token-auth toast: custody fine print on the audit card.
+  { file: 'src/ui/features/settings/integrations.ts', contains: 'uses token auth' },
+  { file: 'src/ui/features/settings/integrations.ts', contains: 'This server rides an app-held connection' },
+  { file: 'src/ui/features/settings/integrations.ts', contains: 'Each CLI holds its own credential for this server' },
+  // The audit row's id line + transport tooltips: the power-user detail, by design.
+  { file: 'src/ui/features/settings/integrations.ts', contains: '${transportLabel(server)}' },
+  { file: 'src/ui/features/settings/integrations.ts', contains: 'Streamable-HTTP MCP transport' },
+  { file: 'src/ui/features/settings/integrations.ts', contains: 'stdio transport — a local subprocess' },
+  // The add-your-own form (advanced; SECRETFORMS anchors its hooks): precise words
+  // are the point when a user hand-writes a config entry.
+  { file: 'src/ui/features/settings/integrations.ts', contains: 'Add server…' },
+  { file: 'src/ui/features/settings/integrations.ts', contains: 'Server id' },
+  { file: 'src/ui/features/settings/integrations.ts', contains: 'command (stdio)' },
+  { file: 'src/ui/features/settings/integrations.ts', contains: 'http transport' },
+  { file: 'src/ui/features/settings/integrations.ts', contains: 'stdio transport.' },
+  { file: 'src/ui/features/settings/integrations.ts', contains: 'Save server' },
+  // The audit card's caption + the vault card's honesty lines: custody fine print.
+  { file: 'src/ui/features/settings/integrations.ts', contains: 'Every server your CLIs know about' },
+  { file: 'src/ui/features/settings/integrations.ts', contains: 'reference it as ${NAME} in a server’s env' },
+  { file: 'src/ui/features/settings/integrations.ts', contains: 'any key an MCP server needs is readable' },
+  // The Library's ADVANCED fold (registry search, import/export, per-CLI route):
+  // the one place plumbing vocabulary is the honest vocabulary.
+  { file: 'src/ui/features/settings/library.ts', contains: 'Key slots (env references, never literals)' },
+  { file: 'src/ui/features/settings/library.ts', contains: 'adding here makes the server available to a CLI' },
+  { file: 'src/ui/features/settings/library.ts', contains: 'Search the official MCP registry' },
+  { file: 'src/ui/features/settings/library.ts', contains: 'Save as server' },
+  { file: 'src/ui/features/settings/library.ts', contains: 'Paste a preset JSON to import' },
+  { file: 'src/ui/features/settings/library.ts', contains: 'Import preset JSON' },
+  { file: 'src/ui/features/settings/library.ts', contains: 'Imported as a community preset.' },
+  { file: 'src/ui/features/settings/library.ts', contains: 'writes the server into each CLI’s own config' },
+  { file: 'src/ui/features/settings/library.ts', contains: 'Write a server into a CLI’s own config' },
+  { file: 'src/ui/features/settings/library.ts', contains: 'Export preset' },
+  { file: 'src/ui/features/settings/library.ts', contains: 'Connect ${preset.label}' },
+  { file: 'src/ui/features/settings/library.ts', contains: 'verified ${preset.verifiedAt}' }
 ]
 
 // ── ENFORCED files (phase-tools/05, deliverable 9) ────────────────────────────
