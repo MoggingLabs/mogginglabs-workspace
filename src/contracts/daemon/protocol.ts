@@ -384,6 +384,14 @@ export type NotifyEvent =
   // UserPromptSubmit: a new turn. Resets the pending-subagent counter, so a stop event
   // lost to a hard kill can't swallow every future done and strand the pane on busy.
   | 'turn-start'
+  // The turn DIED without a verdict: Claude Code's StopFailure (an API error ended the
+  // turn — its docs promise the hook command still runs even though its output is
+  // ignored) or OpenCode's session.error. Without it the pane is stuck on `busy`
+  // forever: no `done` and no `idle` will ever arrive from a turn that is gone. It
+  // settles the pane like a shell prompt does — never a green (nothing completed) and
+  // never a red (nothing is asking) — and it clears the dead turn's leftovers.
+  // Handled statefully by the tracker (session.applyNotify -> turnFailed()).
+  | 'turn-failed'
   // A notification whose TYPE the hook script does not recognize. A guess, deliberately
   // distinct from `needs-input`: the daemon routes it to the tracker's notice() — swallowed
   // mid-turn (a busy pane's real blocks arrive as explicit needs-input on the same channel,
@@ -434,6 +442,7 @@ export function notifyEventToState(event: string): AgentState {
       return 'done'
     case 'idle':
     case 'idle-prompt': // a parked prompt is idle, never blocked AND never finished
+    case 'turn-failed': // a dead turn settled nothing — stateless fallback; the tracker owns the reset
       return 'idle'
     default:
       return 'attention'

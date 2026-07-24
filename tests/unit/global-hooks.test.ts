@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  applyCodexGlobal,
+  applyGeminiGlobal,
   applyGlobalHooks,
+  codexGlobalState,
+  geminiGlobalState,
   globalHooksState,
   isOurHookCommand,
+  removeCodexGlobal,
   removeGlobalHooks
 } from '../../src/backend/features/agents/global-hooks'
 
@@ -13,7 +18,7 @@ import {
 
 const INV = 'node "C:\\Users\\p\\AppData\\Roaming\\app\\notify-hook\\notify.mjs"'
 const STALE_INV = 'node "C:\\old-install\\userData\\notify-hook\\notify.mjs"'
-const EVENTS = ['Notification', 'Stop', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit']
+const EVENTS = ['Notification', 'Stop', 'StopFailure', 'PostToolBatch', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit']
 
 describe('isOurHookCommand', () => {
   it('matches the generated invocation at any install path, and nothing else', () => {
@@ -27,7 +32,7 @@ describe('isOurHookCommand', () => {
 })
 
 describe('applyGlobalHooks', () => {
-  it('wires all five events into an absent file', () => {
+  it('wires all seven events into an absent file', () => {
     const next = JSON.parse(applyGlobalHooks(null, INV)) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
     for (const event of EVENTS) {
       expect(next.hooks[event]).toHaveLength(1)
@@ -116,5 +121,55 @@ describe('removeGlobalHooks', () => {
     expect(removeGlobalHooks(null)).toBeNull()
     expect(removeGlobalHooks('{}')).toBeNull()
     expect(removeGlobalHooks(JSON.stringify({ hooks: { Stop: [{ hooks: [{ command: 'theirs' }] }] } }))).toBeNull()
+  })
+})
+
+// The Codex global twin's HOOK BLOCKS (audit G1/G3/G6): [[hooks.<Event>]] array-of-tables,
+// every line tagged, appended at EOF — replaced wholesale on re-apply, stripped by remove,
+// and never a conflict (arrays append; a user's own hooks coexist).
+describe('codex global hook blocks', () => {
+  const SCRIPT = 'C:\\Users\\p\\AppData\\Roaming\\app\\notify-hook\\notify.mjs'
+
+  it('applies the notify slot, the tui keys, and both hook blocks; state reads applied', () => {
+    const text = applyCodexGlobal(null, SCRIPT)
+    expect(text).toContain('[[hooks.UserPromptSubmit]] # managed-by:')
+    expect(text).toContain('[[hooks.PostToolUse]] # managed-by:')
+    expect(text).toContain('--event turn-start')
+    expect(text).toContain('--event busy')
+    // The command is a TOML basic string with an inner-quoted path: safe with whitespace.
+    expect(text).toContain('node \\"C:/Users/p/AppData/Roaming/app/notify-hook/notify.mjs\\" --event busy')
+    expect(codexGlobalState(text, SCRIPT).state).toBe('applied')
+  })
+
+  it('is idempotent and replaces a stale vintage instead of stacking', () => {
+    const once = applyCodexGlobal(null, SCRIPT)
+    expect(applyCodexGlobal(once, SCRIPT)).toBe(once)
+    const moved = applyCodexGlobal(once, 'C:\\new-install\\notify-hook\\notify.mjs')
+    expect(moved.match(/\[\[hooks\.PostToolUse\]\]/g)).toHaveLength(1)
+    expect(codexGlobalState(once, 'C:\\new-install\\notify-hook\\notify.mjs').state).toBe('partial')
+  })
+
+  it("coexists with the user's own hooks and strips exactly ours", () => {
+    const theirs = '[[hooks.PostToolUse]]\nmatcher = "^Bash$"\n\n[[hooks.PostToolUse.hooks]]\ntype = "command"\ncommand = "my-audit"\n'
+    const applied = applyCodexGlobal(theirs, SCRIPT)
+    expect(codexGlobalState(applied, SCRIPT).state).toBe('applied')
+    const stripped = removeCodexGlobal(applied)!
+    expect(stripped).toContain('my-audit') // theirs survives
+    expect(stripped).not.toContain('managed-by')
+  })
+})
+
+describe('gemini global AfterTool', () => {
+  const INV2 = 'node "C:\\a\\notify-hook\\notify.mjs"'
+  it('wires the tool signal alongside the turn boundaries and reads applied', () => {
+    const { text } = applyGeminiGlobal(null, INV2)
+    const hooks = (JSON.parse(text) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }).hooks
+    expect(hooks.BeforeAgent[0].hooks[0].command).toBe(`${INV2} --event turn-start`)
+    expect(hooks.AfterAgent[0].hooks[0].command).toBe(`${INV2} --event done`)
+    expect(hooks.AfterTool[0].hooks[0].command).toBe(`${INV2} --event busy`)
+    expect(geminiGlobalState(text, INV2).state).toBe('applied')
+    // An older vintage without AfterTool is ours-but-incomplete: partial, so the UI re-offers Apply.
+    const stale = JSON.stringify({ ...JSON.parse(text) as object, hooks: { BeforeAgent: hooks.BeforeAgent, AfterAgent: hooks.AfterAgent } })
+    expect(geminiGlobalState(stale, INV2).state).toBe('partial')
   })
 })

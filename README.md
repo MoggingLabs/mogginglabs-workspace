@@ -53,7 +53,7 @@ npm run dev        # launch the app in dev mode
 > **Status.** All roadmap phases through 12 (the Workspace Brain — `docs/20-brain.md`) have
 > shipped, plus the accounts pack (the optional Pro tier, hardened — `docs/19-accounts.md`);
 > the current release is the version in `package.json`. The `qa-smokes.sh`
-> sweep now runs **191 gates** across three OSes. Per-phase receipts and measured numbers
+> sweep now runs **195 gates** across three OSes. Per-phase receipts and measured numbers
 > live where they were written: the docs each roadmap bullet below links, and the
 > `prompts/phase-*/REPORT.md` process records.
 

@@ -193,6 +193,9 @@ export interface SinkReading {
   windowTokens?: number
   usedTokens?: number
   model?: string
+  /** The exact session log Claude says this pane is in (statusline `transcript_path`) —
+   *  lets the monitor lock identity instead of guessing it from mtimes. */
+  transcriptPath?: string
 }
 
 /** The pane's relay file, parsed. Null when absent/unreadable/foreign-shaped. */
@@ -207,7 +210,8 @@ export function readContextSink(paneId: number | string): SinkReading | null {
       usedPct: num(o.usedPct) ?? null,
       windowTokens: num(o.windowTokens),
       usedTokens: num(o.usedTokens),
-      model: typeof o.model === 'string' && o.model ? o.model : undefined
+      model: typeof o.model === 'string' && o.model ? o.model : undefined,
+      transcriptPath: typeof o.transcriptPath === 'string' && o.transcriptPath ? o.transcriptPath : undefined
     }
   } catch {
     return null

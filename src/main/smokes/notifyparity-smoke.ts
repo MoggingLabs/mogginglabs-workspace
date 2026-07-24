@@ -49,6 +49,10 @@ const CORPUS: CorpusCase[] = [
   { name: 'argv-turn-start', argv: ['--event', 'turn-start'], expected: 'turn-start' },
   { name: 'argv-subagent-start', argv: ['--event', 'subagent-start'], expected: 'subagent-start' },
   { name: 'argv-subagent-stop', argv: ['--event', 'subagent-stop'], expected: 'subagent-stop' },
+  // The audit-G1/G2 events (PostToolBatch/AfterTool/PostToolUse -> busy; StopFailure/
+  // session.error -> turn-failed) must ride BOTH artifacts untouched.
+  { name: 'argv-busy', argv: ['--event', 'busy'], expected: 'busy' },
+  { name: 'argv-turn-failed', argv: ['--event', 'turn-failed'], expected: 'turn-failed' },
   { name: 'argv-needs-input-no-payload', argv: ['--event', 'needs-input'], expected: 'needs-input' },
   // Claude's multiplexed Notification hook — the stdin discriminator.
   { name: 'claude-permission', argv: ['--event', 'needs-input'], stdin: claude('permission_prompt'), expected: 'needs-input' },

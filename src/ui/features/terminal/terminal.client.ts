@@ -6,6 +6,7 @@ import type {
   ExitEvent,
   KillCommand,
   PaneId,
+  PtyEmulation,
   ResizeCommand,
   SpawnRequest,
   SpawnResult,
@@ -15,6 +16,11 @@ import type {
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 
+// One fetch per session: pty emulation is a platform constant (pty-host.ts), so every
+// pane after the first reads the settled promise synchronously — the pre-spawn await
+// in TerminalPane costs the app exactly one IPC round trip, ever.
+let ptyEmulationCache: Promise<PtyEmulation> | undefined
+
 /** Typed client for the terminal feature's IPC surface. The only place in the UI
  *  that knows the terminal channel names. */
 export const terminalClient = {
@@ -22,6 +28,10 @@ export const terminalClient = {
    *  already held (a surviving daemon), so nothing must be typed into the pane. */
   spawn: (req: SpawnRequest): Promise<SpawnResult> =>
     getBridge().invoke(TerminalChannels.spawn, req) as Promise<SpawnResult>,
+  /** How this platform's ptys grow — knowable BEFORE spawn, so a pane can set xterm's
+   *  windowsPty ahead of any byte (a reattach replay arrives with the spawn reply). */
+  ptyEmulation: (): Promise<PtyEmulation> =>
+    (ptyEmulationCache ??= getBridge().invoke(TerminalChannels.ptyEmulation) as Promise<PtyEmulation>),
   write: (cmd: WriteCommand): void => {
     // DEV-only observation seam (tree-shaken in prod): every byte the UI sends to a PTY
     // funnels through here, so a smoke that plants `__mogging.ptyWrites = []` sees exactly

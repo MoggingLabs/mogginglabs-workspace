@@ -1,5 +1,4 @@
 import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import {
   BrainChannels,
@@ -26,7 +25,13 @@ import {
 import { getBridge } from '../../core/ipc/bridge'
 import { terminalClient } from './terminal.client'
 import { onTerminalTheme } from '../../core/theme/theme-port'
-import { onTerminalFontSize, terminalFontSize, TERMINAL_LINE_HEIGHT } from '../../core/terminal/font-port'
+import {
+  onFontsLoadingDone,
+  onTerminalFontSize,
+  terminalFontsActive,
+  terminalFontSize,
+  TERMINAL_LINE_HEIGHT
+} from '../../core/terminal/font-port'
 import { windowsPtyFor } from '../../core/terminal/pty-emulation'
 import { registerPaneInstance, retirePaneInstance } from '../../core/terminal/pane-instance-port'
 import { forgetPane, markPaneLive, markPaneReattached, markPaneRemoteReady, markPaneSpawnSettled } from '../../core/terminal/liveness-port'
@@ -49,6 +54,8 @@ import { isTrackedSession } from '../../core/attention/tracking'
 import { assignmentForPane, getWorkspaces, workspaceIdForPane } from '../../core/workspace/workspace-info-port'
 import { claimsFor, onClaimsChange, setClaimsForDev, workspaceClaims } from './claims-store'
 import { createPaneAnchor, type PaneAnchorHandle } from './pane-anchor'
+import { applyGrid, proposeGrid } from './pane-fit'
+import { onDevicePixelRatioChange } from '../../core/system/dpr-port'
 import { createPaneHeaderFit, type PaneHeaderFitHandle } from './pane-header-fit'
 import { createPaneScrollbar, type PaneScrollbarHandle } from './pane-scrollbar'
 import { mountPaneDrop } from './pane-drop'
@@ -89,7 +96,6 @@ const REFIT_SETTLE_MS = 120
 export class TerminalPane {
   private readonly instance: number
   private readonly term: Terminal
-  private readonly fit = new FitAddon()
   private readonly serializer = new SerializeAddon()
   private readonly resizeObs: ResizeObserver
   private visObs?: IntersectionObserver
@@ -116,8 +122,14 @@ export class TerminalPane {
   private stateDot?: HTMLSpanElement
   /** The pane's process is gone (exit or failed spawn — the markDead paths). The state
    *  dot only records this when it is VISIBLE, so untracked plain panes need this flag:
-   *  buildMenu gates the agent-launch entries on it (a write into a dead PTY goes nowhere). */
+   *  buildMenu gates the agent-launch entries on it (a write into a dead PTY goes nowhere),
+   *  onData gates keystrokes on it (a write nobody hears must not pretend to land), and
+   *  restart() is the one road that clears it. */
   private dead = false
+  /** The in-pane death affordance (verdict + Restart) — exists exactly while dead. */
+  private deadBanner?: HTMLElement
+  /** The terminal body element — the banner's mount point (position:relative). */
+  private body?: HTMLElement
   private syncState?: () => void
   private renameFn?: () => void
   private renameModal?: ModalHandle
@@ -126,8 +138,12 @@ export class TerminalPane {
   private menuCleanup?: () => void
   private blocks?: BlockTracker
   /** The one session-end capture emission (revision C) — exit and close race;
-   *  whichever fires first sends the ladder, the other finds this latched. */
+   *  whichever fires first sends the ladder, the other finds this latched.
+   *  restart() re-arms it: a respawned pane is a new session life. */
   private captureEmitted = false
+  /** Blocks already captured by a PRIOR life's emission (the ladder spans lives —
+   *  scrollback survives restart). Each emission captures only past this mark. */
+  private capturedThrough = 0
   private refitTimer?: ReturnType<typeof setTimeout>
   private expandStateObs?: MutationObserver
   private refitLeading = true
@@ -144,8 +160,11 @@ export class TerminalPane {
   ) {
     this.instance = registerPaneInstance(this.id)
     this.term = new Terminal({
+      // JBM first (text + box drawing, vendored whole); the symbols face fills what JBM
+      // leaves open (braille, dingbats — unicode-range-scoped, metric-identical 0.6em,
+      // so a fallback glyph can never overlap a neighbouring cell); system faces last.
       fontFamily:
-        '"JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace',
+        '"JetBrains Mono Variable", "JetBrains Mono", "MoggingLabs Symbols", "Cascadia Code", Menlo, Consolas, monospace',
       fontSize: terminalFontSize(), // Settings § Terminal (5/06); default is the matrix pick
       lineHeight: TERMINAL_LINE_HEIGHT, // fixed by design — only fontSize is user-facing
       cursorBlink: false, // enabled only while focused (perf: fewer idle repaints across panes)
@@ -158,18 +177,30 @@ export class TerminalPane {
       // this option is set. It defaults to false, so a Mac user could not select text in a
       // Claude Code pane AT ALL: not with Shift (mac ignores it), not with Option (off).
       macOptionClickForcesSelection: true,
-      // windowsPty is NOT set here: nobody in the renderer knows how this pane's pty grows until
-      // the pty exists. It is applied from the spawn answer below, which arrives before the first
-      // byte of output — the buffer is empty until then, so no resize can have gone wrong yet.
+      // windowsPty is NOT set here: it is platform truth the backend owns. The pane fetches it
+      // (terminalClient.ptyEmulation, cached app-wide) and applies it BEFORE spawn — a reattach
+      // replays scrollback WITH the spawn reply, and xterm re-reads windowsPty on every resize
+      // of a non-empty buffer, so "apply from the spawn answer" was a race, not an ordering.
       theme: { background: '#0c0d0f', foreground: '#f4f5f7' } // corrected by the theme port on mount
     })
-    this.term.loadAddon(this.fit)
     this.term.loadAddon(this.serializer)
-    this.gl = new PaneWebglManager({ term: this.term, isVisible: () => this.visible, isDisposed: () => this.disposed })
+    this.gl = new PaneWebglManager({
+      term: this.term,
+      isVisible: () => this.visible,
+      isDisposed: () => this.disposed,
+      // A renderer swap is a metrics event (WebGL floors cells at device pixels, the
+      // DOM renderer doesn't): re-derive the grid through the same coalescer resizes
+      // use, so a rapid show/hide flip still costs one fit and one ConPTY repaint.
+      // Guarded: release() is also the dispose path.
+      onRendererChanged: () => {
+        if (!this.disposed) this.scheduleRefit()
+      }
+    })
 
     // Pane frame: a slim header (title · git chip · state · zoom) over the terminal
     // body. Static DOM — every update below is event-driven, nothing per-frame.
     const body = this.mountChrome(host)
+    this.body = body
     this.term.open(body)
     this.retireXtermScrollbar() // its viewport exists now — see the method
 
@@ -197,7 +228,7 @@ export class TerminalPane {
       }
     })
     this.visObs.observe(host)
-    this.fit.fit()
+    this.refit(true)
 
     // Every clipboard chord is intercepted here, ahead of the PTY — see handleKey.
     // Ctrl+C / Cmd+C / Ctrl+Insert copy a selection (bare Ctrl+C with none = SIGINT);
@@ -295,8 +326,11 @@ export class TerminalPane {
       }),
       terminalClient.onExit((e) => {
         if (e.id === this.id && !this.disposed) {
-          this.term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n')
-          this.markDead('process exited') // gray dot: nothing lives here anymore
+          // The exit code rides the whole wire (ExitEvent) — say it, don't drop it:
+          // a crash (non-zero), a clean `exit` and a kill must be distinguishable
+          // from the pane itself, or the next dead-pane incident is undiagnosable.
+          this.term.write(`\r\n\x1b[90m[process exited (code ${e.exitCode})]\x1b[0m\r\n`)
+          this.markDead(`process exited (code ${e.exitCode})`) // gray dot: nothing lives here anymore
           // No process, no agent: the context bar (and any future session-scoped
           // chrome) must not outlive the pane's process (agent-session port -> the
           // context feature drops every source).
@@ -312,7 +346,12 @@ export class TerminalPane {
         }
       })
     )
-    this.term.onData((data) => terminalClient.write({ id: this.id, data }))
+    // Input into a dead pane is GATED, not forwarded: the daemon has no session for the
+    // id, so the bytes would vanish with zero feedback — the exact "frozen" feel of the
+    // dead-pane incident. The banner (markDead) is the affordance that explains why.
+    this.term.onData((data) => {
+      if (!this.dead) terminalClient.write({ id: this.id, data })
+    })
 
     // ResizeObserver is the one true fit driver: it fires for real resizes AND for
     // display flips (hidden→shown reports 0→W), including a window resized while this
@@ -325,99 +364,52 @@ export class TerminalPane {
 
     // Font-metrics correctness: if any pane measured its cell size against a fallback
     // font (or a stale activation state), its canvas renders narrower than the pane —
-    // a dead strip at the right edge. Once ALL faces are active, force a re-measure
-    // (fontFamily must actually change to invalidate xterm's char-size cache) + refit.
-    void document.fonts?.ready?.then(() => this.remeasureFont())
+    // a dead strip at the right edge. Once the terminal faces are active, force a
+    // re-measure (fontFamily must actually change to invalidate xterm's char-size
+    // cache) + refit. terminalFontsActive STARTS the loads (fonts.ready is one-shot
+    // and could resolve before a lazy load began — the old silent re-measure-against-
+    // the-fallback race); the loadingdone subscription catches any face landing later.
+    void terminalFontsActive().then(() => this.remeasureFont())
+    this.disposers.push(onFontsLoadingDone(() => this.remeasureFont()))
 
-    // Remote pane (4/05): the workspace manifest published this BEFORE apply, so the
-    // spawn itself rides ssh. Local panes are unchanged.
-    const remote = getPaneRemote(this.id)
-    // The workspace's folder, published by the controller BEFORE it built this pane. This
-    // was a hardcoded '', so the shell started in the daemon's OWN directory and only an
-    // agent launch (`cd /d "<cwd>" && …`) ever moved it — a plain terminal opened in the
-    // app's install folder, whatever the wizard picked. A REMOTE pane sends none: the path
-    // is local and would mean nothing on the far side (publishPaneCwds skips those slots).
-    const cwd = remote ? '' : (getPaneCwd(this.id) ?? '')
+    // Monitor hop / display-scale change: the CSS boxes don't move (no ResizeObserver
+    // tick) but the WebGL renderer's device-pixel-floored cell width changes, so the
+    // correct grid changes. The dpr port is the event for exactly this (dpr-port.ts).
+    this.disposers.push(onDevicePixelRatioChange(() => this.scheduleRefit()))
+
     // Spawn-run delivery (instant launch, part 2): a fresh template slot's launch command
     // was armed on the spawn-run port BEFORE this pane was constructed. Claim it and wait
     // briefly — the build is one main round trip racing a bounded window, so a slow build
     // degrades to the typed fallback (reported below) instead of stalling the pane.
     // Remote panes never carry a run: their launch types after the SSH bootstrap.
     const armedRun = claimSpawnRun(this.id)
+    // How this platform's ptys grow — fetched in parallel with the run race below and
+    // applied BEFORE spawn, because the first bytes can arrive WITH the spawn reply (a
+    // reattach replays scrollback ahead of the promise resolving) and xterm re-reads
+    // windowsPty on every resize of a non-empty buffer. Cached in the client: one IPC
+    // round trip per session, settled-synchronous for every later pane.
+    const emulation = terminalClient.ptyEmulation().catch(() => null)
     const term = this.term // definite by here; the async closure below reads its LIVE size
     void (async () => {
+      // Emulation FIRST — it is cached (settled-synchronous after the first pane), while
+      // the armed-run race below can legitimately take up to 2.5s. In that order a fresh
+      // pane has windowsPty set within a microtask of construction; the other way round,
+      // a slow armed run let the shell banner land into an un-told buffer (caught live
+      // by PANEFIT's ordering assertion).
+      const pty = await emulation
+      if (pty && !this.disposed) {
+        const wp = windowsPtyFor(pty)
+        if (wp) term.options.windowsPty = wp
+      }
       let run: string | undefined
-      if (armedRun && !remote) {
+      if (armedRun && !getPaneRemote(this.id)) {
         const cmd = await Promise.race([
           armedRun.catch(() => null),
           new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500))
         ])
         run = cmd ?? undefined
       }
-      return terminalClient
-      .spawn({
-        id: this.id,
-        cwd,
-        cols: term.cols,
-        rows: term.rows,
-        workspaceId: workspaceIdForPane(this.id),
-        agentId: assignmentForPane(this.id),
-        remoteHostId: remote?.hostId,
-        remoteCwd: remote?.cwd,
-        run
-      })
-      .then((res) => {
-        // The delivery report the agents feature settles on: TRUE only when a FRESH
-        // session actually received the run line (a reattached session ignored it).
-        reportSpawnRunOutcome(this.id, !!run && !res.existing)
-        // The pty told us how it grows. Apply BEFORE any output or resize: xterm re-reads
-        // windowsPty on every resize, and nothing has resized a non-empty buffer yet.
-        const wp = windowsPtyFor(res.pty)
-        if (wp && !this.disposed) this.term.options.windowsPty = wp
-        // Reattached, not started: the detached daemon still held this pane's session, so
-        // its agent is alive and mid-conversation. The restore lineup checks this before
-        // typing (agents/index.ts) — otherwise `claude --resume` lands in Claude's prompt.
-        // A RESTORED session must NOT carry the mark: it is a fresh shell repainting
-        // persisted scrollback (daemon cold start, or the cross-version update
-        // migration) — no agent lives in it, so the lineup must type the resume, or the
-        // user gets painted history over a dead conversation. Neither may a DISPOSED pane:
-        // dispose() scrubs this id's marks (forgetPane), and a spawn landing after that
-        // would re-mark an id whose pane is gone — the NEXT pane to take it would take the
-        // adopt branch on restore (agents/index.ts), labelling a session that isn't there
-        // instead of typing its resume, and the agent would never come back.
-        if (res.existing && !res.restored && !this.disposed) markPaneReattached(this.id)
-        // The reattach verdict above is now DECIDED — release resume lineups waiting on
-        // it (whenPaneSpawnSettled). Liveness cannot carry this: a reattach replays
-        // scrollback before this reply lands, so "live" precedes "verdict known".
-        // Never after dispose: forgetPane already flushed the waiters for this id, and
-        // a late mark would leak onto the next pane to recycle it.
-        if (!this.disposed) markPaneSpawnSettled(this.id)
-        // The reattach/restore REPLAY arrives right after this: thousands of scrollback
-        // lines in a burst, into a grid that is about to be refitted. Land at the end of
-        // the conversation, which is the only place it makes sense to land.
-        this.anchor?.pin()
-        // Second stateSync pull: the spawn just registered/reattached the session, so
-        // the backend now KNOWS this pane's state (the mountChrome pull may have run
-        // before it existed). Reattach to a busy/attention agent paints correctly here.
-        this.syncState?.()
-      })
-      .catch((err) => {
-        // A failed spawn delivered nothing — the agents feature's typed fallback will
-        // wait on liveness and fail as gracefully as it always has.
-        reportSpawnRunOutcome(this.id, false)
-        // A pane with no pty renders nothing and grows wrong. Never swallow it — and
-        // never leave the USER staring at a silently blank pane: say it in the pane,
-        // where the missing prompt would have been.
-        console.error(`pane ${this.id}: spawn failed`, err)
-        if (!this.disposed) {
-          const why = err instanceof Error ? err.message : String(err)
-          this.term.write(`\x1b[91m[terminal failed to start]\x1b[0m\r\n\x1b[90m${why}\x1b[0m\r\n`)
-          this.markDead('terminal failed to start') // never lived — same gray as exited
-          // A failed spawn is still a SETTLED spawn (there is no session, so no reattach
-          // mark) — a resume lineup waiting on the verdict must not burn its timeout.
-          markPaneSpawnSettled(this.id)
-        }
-      })
+      return this.spawnPty(run)
     })()
 
     // Blink the cursor only while this pane is focused — cuts idle repaints across many panes.
@@ -476,6 +468,134 @@ export class TerminalPane {
     }))
 
     this.exposeForDev(host)
+  }
+
+  /** THE spawn door — mount rides it with the armed launch run, restart() rides it bare.
+   *  Remote/cwd are read at CALL time, so a restart spawns in the pane's current folder
+   *  (and a remote pane re-rides ssh), not a snapshot from mount. */
+  private spawnPty(run?: string): Promise<void> {
+    // Remote pane (4/05): the workspace manifest published this BEFORE apply, so the
+    // spawn itself rides ssh. Local panes are unchanged.
+    const remote = getPaneRemote(this.id)
+    // The workspace's folder, published by the controller BEFORE it built this pane. This
+    // was a hardcoded '', so the shell started in the daemon's OWN directory and only an
+    // agent launch (`cd /d "<cwd>" && …`) ever moved it — a plain terminal opened in the
+    // app's install folder, whatever the wizard picked. A REMOTE pane sends none: the path
+    // is local and would mean nothing on the far side (publishPaneCwds skips those slots).
+    const cwd = remote ? '' : (getPaneCwd(this.id) ?? '')
+    return terminalClient
+      .spawn({
+        id: this.id,
+        cwd,
+        cols: this.term.cols,
+        rows: this.term.rows,
+        workspaceId: workspaceIdForPane(this.id),
+        agentId: assignmentForPane(this.id),
+        remoteHostId: remote?.hostId,
+        remoteCwd: remote?.cwd,
+        run
+      })
+      .then((res) => {
+        // The delivery report the agents feature settles on: TRUE only when a FRESH
+        // session actually received the run line (a reattached session ignored it).
+        reportSpawnRunOutcome(this.id, !!run && !res.existing)
+        // The spawn reply's own emulation report — the authoritative confirmation of the
+        // pre-spawn value applied in the constructor (same probe, same module, so it can
+        // only differ if the backend changed under us mid-session; applying it keeps the
+        // daemon the authority either way).
+        const wp = windowsPtyFor(res.pty)
+        if (wp && !this.disposed) this.term.options.windowsPty = wp
+        // Reattached, not started: the detached daemon still held this pane's session, so
+        // its agent is alive and mid-conversation. The restore lineup checks this before
+        // typing (agents/index.ts) — otherwise `claude --resume` lands in Claude's prompt.
+        // A RESTORED session must NOT carry the mark: it is a fresh shell repainting
+        // persisted scrollback (daemon cold start, or the cross-version update
+        // migration) — no agent lives in it, so the lineup must type the resume, or the
+        // user gets painted history over a dead conversation. Neither may a DISPOSED pane:
+        // dispose() scrubs this id's marks (forgetPane), and a spawn landing after that
+        // would re-mark an id whose pane is gone — the NEXT pane to take it would take the
+        // adopt branch on restore (agents/index.ts), labelling a session that isn't there
+        // instead of typing its resume, and the agent would never come back.
+        if (res.existing && !res.restored && !this.disposed) markPaneReattached(this.id)
+        // The reattach verdict above is now DECIDED — release resume lineups waiting on
+        // it (whenPaneSpawnSettled). Liveness cannot carry this: a reattach replays
+        // scrollback before this reply lands, so "live" precedes "verdict known".
+        // Never after dispose: forgetPane already flushed the waiters for this id, and
+        // a late mark would leak onto the next pane to recycle it.
+        if (!this.disposed) markPaneSpawnSettled(this.id)
+        // The reattach/restore REPLAY arrives right after this: thousands of scrollback
+        // lines in a burst, into a grid that is about to be refitted. Land at the end of
+        // the conversation, which is the only place it makes sense to land.
+        this.anchor?.pin()
+        // Second stateSync pull: the spawn just registered/reattached the session, so
+        // the backend now KNOWS this pane's state (the mountChrome pull may have run
+        // before it existed). Reattach to a busy/attention agent paints correctly here.
+        this.syncState?.()
+      })
+      .catch((err) => {
+        // A failed spawn delivered nothing — the agents feature's typed fallback will
+        // wait on liveness and fail as gracefully as it always has.
+        reportSpawnRunOutcome(this.id, false)
+        // A pane with no pty renders nothing and grows wrong. Never swallow it — and
+        // never leave the USER staring at a silently blank pane: say it in the pane,
+        // where the missing prompt would have been.
+        console.error(`pane ${this.id}: spawn failed`, err)
+        if (!this.disposed) {
+          const why = err instanceof Error ? err.message : String(err)
+          this.term.write(`\x1b[91m[terminal failed to start]\x1b[0m\r\n\x1b[90m${why}\x1b[0m\r\n`)
+          this.markDead('terminal failed to start') // never lived — same gray as exited
+          // A failed spawn is still a SETTLED spawn (there is no session, so no reattach
+          // mark) — a resume lineup waiting on the verdict must not burn its timeout.
+          markPaneSpawnSettled(this.id)
+        }
+      })
+  }
+
+  /** Bring a dead pane back to life IN PLACE: same id, same slot, prior history kept in
+   *  SCROLLBACK (the fresh shell's boot frame repaints the screen area — that is a shell
+   *  booting, not a wipe; PANERESTART pins the distinction). The daemon already supports
+   *  this by construction — its `ensure()` respawns a removed id, exactly the road the
+   *  reconnect replay takes — so restart is the same spawn the pane mounted with,
+   *  re-armed. Restart-only state resets here; a crash-looping shell just re-offers the
+   *  banner (the spawnPty catch path). */
+  private restart(): void {
+    if (!this.dead || this.disposed) return
+    this.dead = false
+    this.captureEmitted = false // a restarted pane is a NEW session life (revision C)
+    this.deadBanner?.remove()
+    this.deadBanner = undefined
+    if (this.stateDot && this.stateDot.dataset.state === 'exited') {
+      // Back to the mount posture: hollow + hidden until a wired provider registers a
+      // session. The guards keyed on 'exited' (state events, stateSync, session clear)
+      // release with this — a repaint after restart is truth again, not a lie.
+      this.stateDot.dataset.state = 'unknown'
+      this.stateDot.title = 'completion tracking not available for this agent'
+      this.stateDot.hidden = true
+    }
+    this.term.focus()
+    void this.spawnPty()
+  }
+
+  /** The death affordance (the two-dead-pings incident): a dead pane must SAY it is dead
+   *  where the user is looking and offer the way back — not freeze behind a gray one-liner
+   *  buried in scrollback while keystrokes vanish. One banner per death; restart removes
+   *  it, a re-death re-creates it with the fresh verdict. */
+  private showDeadBanner(message: string): void {
+    if (this.deadBanner || !this.body) return
+    const banner = document.createElement('div')
+    banner.className = 'pane-dead-banner'
+    banner.setAttribute('role', 'status')
+    const msg = document.createElement('span')
+    msg.className = 'pane-dead-msg'
+    msg.textContent = message
+    const restart = document.createElement('button')
+    restart.type = 'button'
+    restart.className = 'pane-dead-restart'
+    restart.textContent = 'Restart terminal'
+    restart.addEventListener('click', () => this.restart())
+    banner.append(msg, restart)
+    this.body.append(banner)
+    this.deadBanner = banner
   }
 
   /**
@@ -550,29 +670,23 @@ export class TerminalPane {
     }, REFIT_SETTLE_MS)
   }
 
-  /** Re-fit the grid to the body and tell the PTY. The default path is cheap by
-   *  construction (propose, bail when unchanged/hidden — safe on hot churn paths);
-   *  `force` runs a real fit() for the reveal-settle case, where proposeDimensions
-   *  has been observed reading stale parent style. */
+  /** Re-fit the grid to the body (pane-fit.ts — the house derivation, no phantom
+   *  scrollbar lane) and tell the PTY when it changed. Cheap by construction: propose
+   *  bails when hidden/unmeasurable, apply bails when unchanged — safe on hot churn
+   *  paths. `force` only adds the unconditional anchor pin for the reveal/zoom cases,
+   *  where the viewport moved under a follower even if the grid did not. */
   private refit(force = false): void {
     try {
-      if (force) {
-        const before = { cols: this.term.cols, rows: this.term.rows }
-        this.fit.fit()
-        if (this.term.cols !== before.cols || this.term.rows !== before.rows) {
-          terminalClient.resize({ id: this.id, cols: this.term.cols, rows: this.term.rows })
-        }
+      const d = proposeGrid(this.term)
+      if (!d) return // hidden, not yet opened, or xterm moved its internals
+      if (applyGrid(this.term, d)) {
+        terminalClient.resize({ id: this.id, cols: this.term.cols, rows: this.term.rows })
         // A fit REFLOWS the buffer under a viewport nobody asked to move (a reveal, a
         // zoom, a window drag). If this pane was following its output, it still is.
         this.anchor?.pin()
-        return
+      } else if (force) {
+        this.anchor?.pin()
       }
-      const d = this.fit.proposeDimensions()
-      if (!d || !Number.isFinite(d.cols) || !Number.isFinite(d.rows)) return // hidden
-      if (d.cols === this.term.cols && d.rows === this.term.rows) return // nothing changed
-      this.term.resize(d.cols, d.rows)
-      terminalClient.resize({ id: this.id, cols: this.term.cols, rows: this.term.rows })
-      this.anchor?.pin()
     } catch (err) {
       // Never swallow silently — a failing fit is exactly how "the terminal doesn't
       // take its space" bugs hide.
@@ -795,21 +909,29 @@ export class TerminalPane {
     }
     clearPaneState(this.id)
     this.emitSessionCapture() // the process is gone — the session ended (revision C)
+    this.showDeadBanner(title) // death is a STATE with a way back, not a dead end
   }
 
   /**
    * Session-end capture (ADR 0018 revision C): hand the block tracker's ladder
    * — commands + exit codes, the SIGNALS the tracker already modeled from OSC
-   * 133 — to main, ONCE per pane life (process exit or pane close, whichever
-   * lands first). Fire-and-forget: main redacts, decides signal, and lands a
-   * draft in the quarantine; a pane with no completed blocks sends nothing.
+   * 133 — to main, ONCE per session life (process exit or pane close, whichever
+   * lands first; restart() begins a NEW life). The tracker's ladder spans the
+   * whole xterm buffer — every life's blocks, because scrollback survives a
+   * restart — so each emission takes only the blocks past the last high-water
+   * mark, never re-capturing a prior life's commands. Fire-and-forget: main
+   * redacts, decides signal, and lands a draft in the quarantine; a life with
+   * no completed blocks sends nothing.
    */
   private emitSessionCapture(): void {
     if (this.captureEmitted) return
     this.captureEmitted = true
-    const blocks = (this.blocks?.list() ?? [])
+    const ladder = this.blocks?.list() ?? []
+    const blocks = ladder
+      .slice(this.capturedThrough)
       .filter((b) => b.command && b.exitCode !== undefined)
       .map((b) => ({ command: b.command, exitCode: b.exitCode, durationMs: b.durationMs }))
+    this.capturedThrough = ladder.length
     if (!blocks.length) return
     const req: BrainCaptureSessionRequest = { pane: String(this.id), blocks }
     void getBridge().invoke(BrainChannels.captureSession, req).catch(() => undefined)
@@ -2020,6 +2142,9 @@ export class TerminalPane {
       },
       term: this.term,
       write: (data: string) => terminalClient.write({ id: this.id, data }),
+      // PANERESTART: the dead flag as the pane itself holds it (banner/menu/input all
+      // key on this one field), so the gate asserts the STATE, not a DOM inference.
+      dead: (): boolean => this.dead,
       text: (): string => {
         const b = this.term.buffer.active
         let s = ''

@@ -12,6 +12,7 @@ export const TerminalChannels = {
   exit: 'terminal:exit',
   state: 'terminal:state',
   stateSync: 'terminal:stateSync', // renderer -> backend: a mounting pane PULLS its current state (StateSyncRequest -> AgentState | null)
+  ptyEmulation: 'terminal:ptyEmulation', // renderer -> backend: how this platform's ptys grow (PtyEmulation) — knowable BEFORE spawn, so xterm's windowsPty is set before any byte (incl. a reattach replay) lands
   cwd: 'terminal:cwd', // backend -> renderer: a pane reported its cwd (OSC 7)
   setRole: 'terminal:setRole', // renderer -> daemon: swarm role manifest (Phase-4/01)
   limit: 'terminal:limit', // daemon -> renderer: a pane's agent hit a usage limit (Phase-4/04)
