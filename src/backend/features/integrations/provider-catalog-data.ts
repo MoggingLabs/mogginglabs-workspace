@@ -88,3 +88,10 @@ export const verificationSpecFor = (id: string) => byId.get(id)?.verification
 
 /** Rate-limit-aware retry metadata for the bridge proxy. */
 export const retrySpecFor = (id: string) => byId.get(id)?.retry
+
+/** TEST-ONLY (the TOOLPULSE gate): register a fixture service so the catalog-driven
+ *  probe selection can be proven against a local server. Additive on the id map only —
+ *  `providerCatalog()` (the UI's browse source) never sees a fixture row. */
+export function injectProviderEntryForSmoke(entry: ProviderEntry): void {
+  byId.set(entry.id, entry)
+}

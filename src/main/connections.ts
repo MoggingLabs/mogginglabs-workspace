@@ -3,11 +3,15 @@ import { createServer, type Server } from 'node:http'
 import { AddressInfo } from 'node:net'
 import {
   ConnectionsChannels,
+  enrichmentTargetsSameGrant,
+  connectionEnrichmentPatch,
   type Connection,
   type ConnectionAuthKind,
+  type ConnectionsAttention,
   type McpPreset,
   type McpServerEntry,
-  type OAuthClientRecord
+  type OAuthClientRecord,
+  type VerifyCause
 } from '@contracts'
 import {
   buildAuthorizeUrl,
@@ -33,8 +37,13 @@ import {
   oauthQuirksFor,
   runVerificationProbe,
   verificationSpecFor,
+  classifyProbeOutcome,
+  runBudgetedSweep,
+  AttentionLedger,
   RefreshCoordinator,
   MCP_PRESETS,
+  type ProbeClassification,
+  type SweepReport,
   type AuthServerMetadata,
   type ClientStore,
   type GrantKv,
@@ -894,6 +903,8 @@ export function disconnect(serviceId: string): void {
   const meta = readMeta(serviceId)
   // The vault slot first: if anything below throws, the credential is already gone.
   vaultClearKey(VAULT_TOKENS(serviceId))
+  // A disconnected connection cannot need attention — there is nothing left to fix.
+  if (attentionLedger.drop(serviceId)) pushAttention()
   metaCache.delete(meta?.url ?? '')
   if (meta?.userClient && meta.authServer) {
     // The GRANT is gone; the pasted client stays (reconnecting is one click, not a
@@ -931,31 +942,200 @@ export function disconnect(serviceId: string): void {
   // shows instead: sign out at the provider to kill the grant everywhere.
 }
 
-/** Prove it, now. The card's "Check" verb, and what runs when Settings opens. */
-export async function verify(serviceId: string): Promise<Connection | null> {
+// ── The status engine, main-side (phase-tools/03) ───────────────────────────
+// ONE verify path for every trigger. "✓ Connected · verified Xm ago" is true by
+// construction because manual Check, the heartbeat, page entry and pre-launch all
+// funnel through verifyConnection — same probe selection, same classification,
+// same CONNPURE laws, same attention edges. The pure halves (classification,
+// budgeted sweep, attention ledger) live in the credential core's sibling,
+// backend/features/integrations/status-engine.ts, where TOOLPULSE can bite them.
+
+const attentionLedger = new AttentionLedger()
+const verifyCauseCounts: Record<VerifyCause, number> = { manual: 0, heartbeat: 0, 'page-entry': 0, 'pre-launch': 0 }
+const sweepCauseCounts: Record<VerifyCause, number> = { manual: 0, heartbeat: 0, 'page-entry': 0, 'pre-launch': 0 }
+
+/** Dev-gate observability (TOOLPULSE): per-connection verifications and whole SWEEPS
+ *  counted by cause (page entry's "one poll exactly" is a sweep count), attention
+ *  read back. Counters only — never a URL or a token. */
+export const verifyStatsForSmoke = (): {
+  causes: Record<VerifyCause, number>
+  sweeps: Record<VerifyCause, number>
+  failing: string[]
+} => ({
+  causes: { ...verifyCauseCounts },
+  sweeps: { ...sweepCauseCounts },
+  failing: attentionLedger.failingIds()
+})
+
+/** Push the app-wide attention payload (ids only, secret-free). Called on EDGES —
+ *  the ledger already swallowed repeats, so the rail rings once per failure. */
+function pushAttention(): void {
+  try {
+    const payload: ConnectionsAttention = { failing: attentionLedger.failingIds() }
+    winGetter?.()?.webContents.send(ConnectionsChannels.attention, payload)
+  } catch {
+    /* window gone; the ledger is the truth and the next push repeats it */
+  }
+}
+
+const envInt = (name: string, fallback: number): number => {
+  const v = Number(process.env[name])
+  return Number.isFinite(v) && v > 0 ? v : fallback
+}
+
+/** One verification, with its classification for the sweep's offline short-circuit. */
+async function verifyOne(
+  serviceId: string,
+  cause: VerifyCause
+): Promise<{ connection: Connection | null; classification: ProbeClassification }> {
+  verifyCauseCounts[cause] += 1
   const meta = readMeta(serviceId)
-  if (!meta?.url) return listConnections().find((c) => c.id === serviceId) ?? null
+  if (!meta?.url) {
+    return { connection: listConnections().find((c) => c.id === serviceId) ?? null, classification: 'failed' }
+  }
+  const grantStamp = meta.connectedAt
+  const wasConnected = meta.state === 'connected'
   const token = await accessTokenFor(serviceId)
   if (!token && meta.authKind !== 'local') {
-    return setState(serviceId, { state: 'expired', lastError: 'The connection could not be renewed — reconnect it.' })
+    // GRANT-truth, not probe-truth: the credential could not be produced or renewed.
+    // accessTokenFor/doRefresh already wrote the specific sentence; the downgrade to
+    // `expired` is the one un-connect a verification is allowed (the CONNPURE law).
+    if (attentionLedger.record(serviceId, 'unauthorized') !== null) pushAttention()
+    return {
+      connection: setState(serviceId, {
+        state: 'expired',
+        verifyCause: cause,
+        lastError: readMeta(serviceId)?.lastError ?? 'The connection could not be renewed — reconnect it.'
+      }),
+      classification: 'unauthorized'
+    }
   }
-  const probe = await probeConnection(meta.url, token ?? undefined, { authScheme: meta.authScheme })
-  if (!probe.ok) {
-    return setState(serviceId, {
-      state: probe.unauthorized ? 'expired' : 'error',
-      lastError: probe.unauthorized ? 'The service no longer accepts this connection — reconnect it.' : probe.reason
-    })
+
+  // Probe selection is CATALOG-driven (step 01): a key-auth service with a declared
+  // `verification` block gets the provider's own REST endpoint — the probe API-key
+  // connections never had (one cheap trip; the provider's own 401 is the verdict).
+  // MCP services keep the initialize + tools/list proof over the app-held grant.
+  const classifierOpts = { _testBreakOfflineClassifier: !!process.env.MOGGING_PULSE_BREAK_OFFLINE }
+  const spec = meta.authKind === 'key' ? verificationSpecFor(serviceId) : undefined
+  let classification: ProbeClassification
+  let reason: string | undefined
+  let enrichment: Partial<Connection> | null = null
+  if (spec && token) {
+    const proof = await runVerificationProbe(spec, token, { authScheme: meta.authScheme })
+    classification = classifyProbeOutcome(proof, classifierOpts)
+    if (!proof.ok) reason = proof.reason
+  } else {
+    const probe = await probeConnection(meta.url, token ?? undefined, { authScheme: meta.authScheme })
+    classification = classifyProbeOutcome(probe, classifierOpts)
+    if (probe.ok) {
+      enrichment = {
+        ...connectionEnrichmentPatch({
+          account: probe.probe.account,
+          serverName: probe.probe.serverName,
+          toolCount: probe.probe.toolCount,
+          tools: probe.probe.tools
+        }),
+        // Re-checking can FILL IN a name we could not get at connect time. Never
+        // blank one we already have.
+        account: probe.probe.account ?? meta.account
+      }
+    } else {
+      reason = probe.reason
+    }
   }
-  return setState(serviceId, {
-    state: 'connected',
-    serverName: probe.probe.serverName,
-    toolCount: probe.probe.toolCount,
-    tools: probe.probe.tools,
-    // Re-checking can FILL IN a name we could not get at connect time (a server that was
-    // slow, or a whoami tool the vendor added since). Never blank one we already have.
-    account: probe.probe.account ?? meta.account,
-    lastError: undefined
+
+  // The probe crossed an await: a Disconnect or a FRESH grant may have landed
+  // meanwhile, and a stale verdict must not overwrite it (the enrichment stamp law,
+  // enrichmentTargetsSameGrant, guards every post-probe write).
+  const current = readMeta(serviceId)
+  if (!current) return { connection: null, classification }
+  if (wasConnected && grantStamp != null && !enrichmentTargetsSameGrant(current, grantStamp)) {
+    return { connection: current, classification }
+  }
+
+  switch (classification) {
+    case 'network-down':
+      // The MACHINE is offline. That says nothing about the grant: no state write,
+      // no verifiedAt stamp, no attention. The card keeps its last true answer.
+      return { connection: current, classification }
+    case 'unauthorized': {
+      // The one downgrade a probe may cause: the provider itself refused the
+      // credential at its own resource. `expired` — reconnect is the only fix.
+      if (attentionLedger.record(serviceId, 'unauthorized') !== null) pushAttention()
+      return {
+        connection: setState(serviceId, {
+          state: 'expired',
+          verifyCause: cause,
+          lastError: 'The service no longer accepts this connection — reconnect it.'
+        }),
+        classification
+      }
+    }
+    case 'failed': {
+      // Reached and refused (a quota error, a 500, a server bug) — but a failed
+      // probe NEVER un-connects a valid grant (the CONNLIVE no-downgrade law, now
+      // under every cause): the state stands, the sentence lands on the card, and
+      // the app-wide attention edge rings once.
+      if (attentionLedger.record(serviceId, 'failed') !== null) pushAttention()
+      return { connection: setState(serviceId, { verifyCause: cause, lastError: reason }), classification }
+    }
+    default: {
+      if (attentionLedger.record(serviceId, 'ok') !== null) pushAttention()
+      return {
+        connection: setState(serviceId, {
+          state: 'connected',
+          verifiedAt: Date.now(),
+          verifyCause: cause,
+          ...(enrichment ?? {}),
+          lastError: undefined
+        }),
+        classification
+      }
+    }
+  }
+}
+
+/** Prove it, now — the card's "Check" verb, and the engine every trigger funnels through. */
+export async function verifyConnection(serviceId: string, cause: VerifyCause): Promise<Connection | null> {
+  return (await verifyOne(serviceId, cause)).connection
+}
+
+/**
+ * One budgeted, staggered beat over every `connected` connection (Nango's budgeted
+ * sync, phase-tools/03). The heartbeat threads its cursor through so a budget-cut
+ * beat RESUMES next beat instead of re-probing the same head of the list; page
+ * entry sweeps once from wherever. A probe classified network-down aborts the rest
+ * of the beat — the machine is offline and 39 more probes would prove nothing.
+ */
+export async function sweepConnections(cause: VerifyCause, o: { cursor?: number } = {}): Promise<SweepReport> {
+  sweepCauseCounts[cause] += 1
+  const ids = listConnections()
+    .filter((c) => c.state === 'connected')
+    .map((c) => c.id)
+  return runBudgetedSweep(ids, o.cursor ?? 0, async (id) => (await verifyOne(id, cause)).classification, {
+    budgetMs: envInt('MOGGING_PULSE_BUDGET_MS', 10_000),
+    maxConcurrent: envInt('MOGGING_PULSE_MAXCONC', 3),
+    jitterMs: envInt('MOGGING_PULSE_JITTER_MS', 400),
+    _testIgnoreBudget: !!process.env.MOGGING_PULSE_BREAK_BUDGET
   })
+}
+
+/**
+ * Pre-launch verify (phase-tools/03): a pane launching with a plan that carries
+ * connected tools verifies them first — PARALLEL, hard budget (~2s), and the launch
+ * NEVER waits past it: a verdict that misses the window lands as status afterward
+ * over the normal `changed` pushes. Never on the connect critical path, and never
+ * a refusal — a slow probe must not cost the user their pane.
+ */
+export async function verifyConnectionsForLaunch(serviceIds: string[]): Promise<void> {
+  const ids = [...new Set(serviceIds)].filter((id) => readMeta(id)?.state === 'connected')
+  if (!ids.length) return
+  const all = Promise.allSettled(ids.map((id) => verifyConnection(id, 'pre-launch'))).then(() => undefined)
+  // TEST-ONLY (the TOOLPULSE mutation-red): a broken budget must delay the launch —
+  // and the gate must go red when it does.
+  if (process.env.MOGGING_PULSE_BREAK_BUDGET) return all
+  const budgetMs = envInt('MOGGING_PRELAUNCH_BUDGET_MS', 2_000)
+  await Promise.race([all, new Promise<void>((r) => setTimeout(r, budgetMs))])
 }
 
 /** A stored `connecting` state at BOOT is a lie: the flow it described died with the
@@ -998,5 +1178,8 @@ export function registerConnections(getWin: () => BrowserWindow | null): void {
   ipcMain.handle(ConnectionsChannels.clearClient, (_e, id: string) => clearClient(String(id)))
   ipcMain.handle(ConnectionsChannels.cancel, (_e, id: string) => cancelConnect(String(id)))
   ipcMain.handle(ConnectionsChannels.disconnect, (_e, id: string) => disconnect(String(id)))
-  ipcMain.handle(ConnectionsChannels.verify, (_e, id: string) => verify(String(id)))
+  ipcMain.handle(ConnectionsChannels.verify, (_e, id: string) => verifyConnection(String(id), 'manual'))
+  // Page entry (trigger 2): entering Integrations requests exactly ONE sweep — the
+  // existing request→push→repaint contract; results land over `changed`, never here.
+  ipcMain.handle(ConnectionsChannels.verifySweep, () => void sweepConnections('page-entry'))
 }

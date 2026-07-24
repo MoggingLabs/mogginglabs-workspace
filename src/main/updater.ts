@@ -10,6 +10,7 @@ import {
   type UpdateState
 } from '@contracts'
 import { getTelemetry } from '@backend'
+import { isNetworkDownMessage } from '@backend/core/net/reachability'
 import { getSettingsStore } from './app-settings'
 import { retireOwnDaemon, endDaemonQuiescence } from './daemon-client'
 import { updateFeedFixture } from './fixture-port'
@@ -124,26 +125,9 @@ function createUpdaterLog(): UpdaterLog {
 // error row. Anything else — a 404 on latest.yml, a signature refusal, a yml parse error —
 // means the feed was REACHED and is broken, and that stays loud on every check: a feed whose
 // downloads 404'd went unnoticed for nine releases precisely because nothing surfaced it.
-const OFFLINE_TOKENS = [
-  'ERR_NAME_NOT_RESOLVED',
-  'ERR_NAME_RESOLUTION_FAILED',
-  'ERR_INTERNET_DISCONNECTED',
-  'ERR_NETWORK_CHANGED',
-  'ERR_NETWORK_IO_SUSPENDED',
-  'ERR_CONNECTION_', // …REFUSED / RESET / TIMED_OUT / CLOSED / ABORTED
-  'ERR_TIMED_OUT',
-  'ERR_ADDRESS_UNREACHABLE',
-  'ERR_PROXY_CONNECTION_FAILED',
-  'ERR_NETWORK_ACCESS_DENIED',
-  'ENOTFOUND',
-  'ECONNREFUSED',
-  'ECONNRESET',
-  'ETIMEDOUT',
-  'EAI_AGAIN',
-  'ENETUNREACH',
-  'EHOSTUNREACH'
-]
-const isOfflineError = (message: string): boolean => OFFLINE_TOKENS.some((t) => message.includes(t))
+// The token list itself lives in backend/core/net/reachability.ts now (phase-tools/03): the
+// connection status engine obeys the same law, and one classifier keeps them agreeing.
+const isOfflineError = isNetworkDownMessage
 
 // Human reasons for the two failure kinds (the rail tooltip and the settings card; never a
 // stack). Lowercase and unterminated so settings can compose "The last check failed — …".

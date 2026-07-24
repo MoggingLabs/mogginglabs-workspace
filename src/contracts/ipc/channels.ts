@@ -406,8 +406,10 @@ export const ConnectionsChannels = {
   clearClient: 'connections:clearClient', // (serviceId) -> { ok, reason? } — forget a pasted client id (and its vaulted secret) for this service's sign-in server
   cancel: 'connections:cancel', // (serviceId) -> void — abandon a pending browser consent (closes the loopback port; the card returns to disconnected)
   disconnect: 'connections:disconnect', // (serviceId) -> void (drops the token vault slot + the metadata; a user-pasted client id/secret stays for one-click reconnects until clearClient — and the vendor-side revoke is theirs)
-  verify: 'connections:verify', // (serviceId) -> Connection (initialize + tools/list, right now — proof, not a poll)
-  changed: 'connections:changed' // main -> renderer: Connection[] (pushed on every state change; the browser lands here)
+  verify: 'connections:verify', // (serviceId) -> Connection (the one verify engine, cause 'manual' — proof, not a poll)
+  verifySweep: 'connections:verifySweep', // () -> void — page entry requests exactly ONE budgeted sweep (cause 'page-entry'); results land over `changed`
+  changed: 'connections:changed', // main -> renderer: Connection[] (pushed on every state change; the browser lands here)
+  attention: 'connections:attention' // main -> renderer: ConnectionsAttention ({ failing: ids }) — pushed on verification-failure EDGES only (raise once, clear once)
 } as const
 
 export const AccountChannels = {

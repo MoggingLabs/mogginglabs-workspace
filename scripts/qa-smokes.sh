@@ -9,10 +9,10 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 186 gates: 26 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 187 gates: 26 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
 # GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE ·
-# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED) + 160 app-boot
+# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED) + 161 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -493,6 +493,14 @@ run_smoke MCPCAT       MOGGING_MCPCAT    1 180 mcpcat
 run_smoke INTEGUX      MOGGING_INTEGUX   1 240 integux
 run_smoke SETINTEG     MOGGING_SETINTEG  1 240 setinteg
 run_smoke CONNLIVE     MOGGING_CONNLIVE  1 180 connlive
+# TOOLPULSE (phase-tools/03): the status engine on a fixture — the heartbeat re-stamps
+# verifiedAt on the accelerated knob under a budget the cursor resumes past (stagger
+# bounded, fixture-asserted); a key-auth service verifies on its catalog endpoint (exact
+# path asserted, MCP endpoint untouched); page entry = ONE sweep; pre-launch verify runs
+# before env materialization and never delays the pane past its budget; a real failure
+# raises the app-wide badge while Settings is inactive, a network blackhole never does,
+# recovery clears. Mutation-red ×2 proven LIVE: broken offline classifier, broken budget.
+run_smoke TOOLPULSE    MOGGING_TOOLPULSE 1 300 toolpulse
 # The store/inventory split (2026-07-18): the Library overlay is the store, the
 # settings page is the inventory — this gate bites the door, the honesty, the
 # chip->plan mutation, the in-place key vaulting, and the route badges.

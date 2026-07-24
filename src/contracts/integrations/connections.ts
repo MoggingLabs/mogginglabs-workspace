@@ -39,6 +39,16 @@ export type ConnectionState =
   | 'expired' // the grant no longer refreshes — the user must reconnect
   | 'error' // the last attempt failed; `lastError` says why, in their words
 
+/** What caused a verification (phase-tools/03). One engine, four triggers — the
+ *  card can say not just WHEN a connection was last proven but on whose behalf. */
+export type VerifyCause = 'manual' | 'heartbeat' | 'page-entry' | 'pre-launch'
+
+/** The app-wide verification-attention payload (secret-free: ids only). Pushed on
+ *  EDGES — a failure raises once, the recovering success clears once. */
+export interface ConnectionsAttention {
+  failing: string[]
+}
+
 /** The renderer's view of one connection. Secret-free by construction. */
 export interface Connection {
   /** The service id — the preset it was made from (e.g. `sentry`). */
@@ -99,6 +109,13 @@ export interface Connection {
    *  client ID", and a redirect mismatch must NOT purge it (the user typed it; we
    *  cannot re-register to get it back). */
   userClient?: boolean
+  /** When this connection last PASSED verification (phase-tools/03) — the "verified
+   *  Xm ago" stamp. Only a successful probe writes it; a failure leaves the last
+   *  true proof standing. */
+  verifiedAt?: number
+  /** What triggered the last verification that reached a verdict (success or real
+   *  failure — never a network-down non-answer). */
+  verifyCause?: VerifyCause
 }
 
 /** The one place a connection's OAuth client registration is remembered. Per

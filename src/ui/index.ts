@@ -20,6 +20,7 @@ import { settingsFeature } from './features/settings'
 import { notifyFeature } from './features/notify'
 import { browserFeature } from './features/browser'
 import { updatesFeature } from './features/updates'
+import { connAttentionFeature } from './features/connattn'
 import { usageFeature } from './features/usage'
 import { shortcutsFeature } from './features/shortcuts'
 import { explorerFeature } from './features/explorer'
@@ -66,6 +67,7 @@ export function start(): void {
   registerFeature(notifyFeature) // toasts for background-pane attention (mogging notify)
   registerFeature(browserFeature) // toggleable right browser dock: preview what agents build (6/05)
   registerFeature(updatesFeature) // auto-update UX: downloading dot + one-click restart toast (6/06)
+  registerFeature(connAttentionFeature) // connection verification failures: rail badge + titlebar dot, edges only (phase-tools/03)
   registerFeature(usageFeature) // usage glance: titlebar two-bar gauge + popover (Phase-7/03)
   registerFeature(shortcutsFeature) // ? opens the keyboard-shortcuts sheet (UX audit KB-01)
   // AFTER browser, deliberately: each dock appends itself into #main, so registration

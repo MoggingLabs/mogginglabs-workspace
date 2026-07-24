@@ -9425,6 +9425,23 @@ body.pane-dragging * {
   color: var(--text-mid);
 }
 
+/* ── Connection attention (phase-tools/03): verification-failure badge + dot ──
+   The update-dot's grammar in the danger tone: invisible until a real verification
+   failure, cleared by the recovering success. The rail row reuses .rail-update-btn
+   (is-error) — one footer grammar, two tenants. */
+.connattn-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-full);
+  background: var(--danger);
+  align-self: center;
+  margin: 0 var(--sp-1);
+}
+.connattn-dot[hidden] {
+  display: none;
+}
+
 /* ── Usage glance (Phase-7/03): titlebar two-bar gauge + popover ────────────── */
 .usage-wrap {
   position: relative;

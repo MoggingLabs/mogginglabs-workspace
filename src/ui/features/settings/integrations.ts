@@ -1,5 +1,6 @@
 import {
   AgentChannels,
+  ConnectionsChannels,
   IntegrationsChannels,
   planHasServerForCli,
   planSignature,
@@ -1123,6 +1124,10 @@ export function enterIntegrations(): void {
   setTimeout(() => {
     entryQueued = false
     syncAll?.()
+    // Trigger 2 of the status engine (phase-tools/03): entering Integrations requests
+    // exactly ONE verification sweep — same coalescing as the syncs, same request→
+    // push→repaint contract as the status poll above (results land over `changed`).
+    void getBridge().invoke(ConnectionsChannels.verifySweep)
     applyIntegrationsFocus() // after the syncs: a focus scroll should measure real content
   }, 0)
 }
