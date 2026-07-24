@@ -105,23 +105,55 @@ export function runUsageSmoke(win: BrowserWindow): void {
       const backoffOk = dbg.errors >= 2 && dbg.lastDelayMs > 500 // > jittered base
       setFakeMode('ok')
 
-      // 4 ── hidden pauses the poller; visible resumes it
-      svc.setVisible(false)
-      // Wait for the fetch count to STABILIZE before opening the observation
-      // window — a slow/contended runner can land an in-flight poll well after a
-      // fixed drain, corrupting h0 (the documented poller-pause flake). Once the
-      // count stops moving, the pause has taken; then confirm it stays put.
-      let drainPrev = -1
-      for (let i = 0; i < 20; i++) {
-        const c = svc.debug().providers.fake.fetches
-        if (c === drainPrev) break
-        drainPrev = c
-        await sleep(300)
+      // 4 ── hidden pauses the poller; visible resumes it. TWO claims, proven
+      // separately (the CI red's lesson — run 30110485956):
+      //
+      // (4a) THE WIRING: minimize→pause and restore→resume ride real
+      // BrowserWindow events (main/usage.ts browser-window-created). The old
+      // smoke poked svc.setVisible directly and never exercised this chain.
+      const waitVisible = async (want: boolean): Promise<number> => {
+        const t0 = Date.now()
+        for (let i = 0; i < 40; i++) {
+          if (svc.debug().visible === want) return Date.now() - t0
+          await sleep(250)
+        }
+        return -1
       }
-      const h0 = svc.debug().providers.fake.fetches
-      await sleep(1400)
-      const h1 = svc.debug().providers.fake.fetches
-      const hiddenOk = h1 === h0 && svc.debug().visible === false
+      win.minimize()
+      const pauseTookMs = await waitVisible(false)
+      win.restore()
+      const resumeTookMs = await waitVisible(true)
+      const wiringOk = pauseTookMs >= 0 && resumeTookMs >= 0
+      //
+      // (4b) THE PAUSE ITSELF: hidden = zero fetches. The observation's
+      // PRECONDITION (visible === false) can be voided by an EXTERNAL window
+      // event mid-window — desktop churn on CI runners, conhost focus churn
+      // from daemon spawns locally — through the very wiring (4a) just proved.
+      // An unpause invalidates the SAMPLE, not the claim: re-establish the
+      // precondition and re-observe (bounded; restarts recorded). A red here
+      // now means exactly one thing — a fetch fired WHILE hidden.
+      let hiddenOk = false
+      let hiddenObserved = false
+      let obsRestarts = -1
+      let h1 = 0
+      for (let attempt = 0; attempt < 5 && !hiddenObserved; attempt++) {
+        obsRestarts++
+        svc.setVisible(false)
+        let drainPrev = -1
+        for (let i = 0; i < 20; i++) {
+          const c = svc.debug().providers.fake.fetches
+          if (c === drainPrev) break
+          drainPrev = c
+          await sleep(300)
+        }
+        const h0 = svc.debug().providers.fake.fetches
+        await sleep(1400)
+        h1 = svc.debug().providers.fake.fetches
+        if (svc.debug().visible !== false) continue // externally unpaused — the sample is void
+        hiddenObserved = true
+        hiddenOk = h1 === h0
+      }
+      hiddenOk = hiddenOk && wiringOk
       svc.setVisible(true)
       tries = 0
       while (svc.debug().providers.fake.fetches === h1 && tries++ < 40) await sleep(200)
@@ -766,7 +798,7 @@ export function runUsageSmoke(win: BrowserWindow): void {
 
       const pass =
         shapeOk && cadenceOk && staleOk && backoffOk && hiddenOk && resumeOk && grepClean && goldenOk && catalogOk && codexOk && codexDegrades && keysOk && noGetterOk && specsOk && cloudOk && costOk && histOk && costChannelsOk && statusNormOk && statusSvcOk && statusAppOk && statusChannelsOk && fanoutOk && thrOk && alertChannelsOk
-      result = { pass, shapeOk, cadenceOk, staleOk, backoffOk, hiddenOk, resumeOk, grepClean, goldenOk, goldenFails, catalogOk, catalogFails, codexOk, codexDegrades, vaultAvailable, keysOk, cipherOk, dbBytesOk, roundtripOk, replaceOk, clearOk, refusalOk, envRefOk, envLiteralRefusedOk, noGetterOk, specsOk, cloudOk, costOk, codexScanOk, claudeScanOk, costDegrades, cacheStableOk, livePriceOk, forkOk, archivedOk, worktreeFoldOk, byteResumeOk, riskOk, paceAlertOk, histOk, ringTruncOk, ringClampOk, ringPolledOk, costChannelsOk, statusNormOk, statusSvcOk, enabledOnlyOk, unknownAfterFail, backoffSkipOk, statusHiddenOk, statusResumeOk, statusAppOk, appOutageOk, outageRelabeled, overlayOk, chipOk, overlayCleared, statusChannelsOk, fanoutOk, thrOk, armedSilently, quietFiredOk, singleFireOk, weeklyFiredOk, expiredLaneScopedOk, warnFailoverOk, warnOnceOk, nonActiveNoSuggest, siblingHotNoSuggest, oneToastPerJump, churnQuietOk, resetRearmOk, staleRegressOk, thrPersistOk, staticRearmOk, creditsFloorOk, spendCapOk, profileFlipAdoptsOk, alertChannelsOk, providers: USAGE_PROVIDERS.length, goldens: PACE_GOLDENS.length, tiles: snap.length, debug: svc.debug() }
+      result = { pass, shapeOk, cadenceOk, staleOk, backoffOk, hiddenOk, pauseTookMs, resumeTookMs, wiringOk, obsRestarts, resumeOk, grepClean, goldenOk, goldenFails, catalogOk, catalogFails, codexOk, codexDegrades, vaultAvailable, keysOk, cipherOk, dbBytesOk, roundtripOk, replaceOk, clearOk, refusalOk, envRefOk, envLiteralRefusedOk, noGetterOk, specsOk, cloudOk, costOk, codexScanOk, claudeScanOk, costDegrades, cacheStableOk, livePriceOk, forkOk, archivedOk, worktreeFoldOk, byteResumeOk, riskOk, paceAlertOk, histOk, ringTruncOk, ringClampOk, ringPolledOk, costChannelsOk, statusNormOk, statusSvcOk, enabledOnlyOk, unknownAfterFail, backoffSkipOk, statusHiddenOk, statusResumeOk, statusAppOk, appOutageOk, outageRelabeled, overlayOk, chipOk, overlayCleared, statusChannelsOk, fanoutOk, thrOk, armedSilently, quietFiredOk, singleFireOk, weeklyFiredOk, expiredLaneScopedOk, warnFailoverOk, warnOnceOk, nonActiveNoSuggest, siblingHotNoSuggest, oneToastPerJump, churnQuietOk, resetRearmOk, staleRegressOk, thrPersistOk, staticRearmOk, creditsFloorOk, spendCapOk, profileFlipAdoptsOk, alertChannelsOk, providers: USAGE_PROVIDERS.length, goldens: PACE_GOLDENS.length, tiles: snap.length, debug: svc.debug() }
     } catch (e) {
       result = { pass: false, error: e instanceof Error ? e.message : String(e) }
     }

@@ -129,12 +129,16 @@ export function runPaneRestartSmoke(win: BrowserWindow): void {
       }
       // In place, not wiped: the prior life's history is still in SCROLLBACK above. Three
       // needles from different depths — the live-probe keystroke, the epitaph's head, and
-      // the seeded fill's first line. Deliberately NOT the viewport's last rows: the fresh
-      // shell's boot frame repaints the screen area (that is a shell booting, not a wipe),
-      // and the exit code was asserted while the pane sat dead — when it matters.
+      // a line from DEEP in the seeded fill. Deliberately NOT the viewport's last rows: the
+      // fresh shell's boot frame repaints the screen area (that is a shell booting, not a
+      // wipe), and the exit code was asserted while the pane sat dead — when it matters.
+      // fill-60, not fill-1: the ring legally ROTATES under platform boot noise (macos-26
+      // run 30110485956 held fill-32 onward — zsh's chattier boot pushed the head out),
+      // and rotation-by-capacity is xterm behavior, not a restart wipe. Mid-fill proves
+      // history SURVIVED the restart on every platform's noise budget.
       const scrollbackKept = await ES<boolean>(
         `(() => { const t = ${joined(paneId)}; ` +
-        `return t.includes('live-probe') && t.includes('[process exit') && t.includes('fill-1-end') })()`
+        `return t.includes('live-probe') && t.includes('[process exit') && t.includes('fill-60-end') })()`
       )
       const scrollbackTail = await ES<string>(`(() => { const p = ${pane(paneId)}; return p ? p.text().replace(/\\n+/g, '\\n').slice(-1500) : '' })()`)
       await ES(`(() => { delete window.__mogging.ptyWrites; return 1 })()`)

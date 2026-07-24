@@ -26,6 +26,11 @@ import { getSettingsStore } from '../app-settings'
 export function runUsageUiSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 90000) // safety net
   const wc = win.webContents
+  // The open-latency stopwatch rides double-rAF: an occluded runner window
+  // throttles rAF to whole-compositor-beat granularity, so the median measured
+  // the THROTTLE (~490ms flat on macos-26), not the popover (28ms when the
+  // first sample landed pre-occlusion). Same pin as brainux/brainprops/conpty.
+  wc.setBackgroundThrottling(false)
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
   const waitTrue = async (js: string, tries = 30, gap = 200): Promise<boolean> => {

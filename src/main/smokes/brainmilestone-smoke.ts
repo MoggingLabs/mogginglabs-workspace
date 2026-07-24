@@ -417,7 +417,12 @@ export function runBrainMilestoneSmoke(win: BrowserWindow): void {
       const started1 = (await ES(`window.__mogging.board.startOnCard(${JSON.stringify(card1)}, 'shell')`)) as boolean
       const paneL1 = await paneOf(String(card1))
       await confirmAgentUp(paneL1)
-      const cap1 = await captureHas(paneL1, 'BRAINMS_TASK_7100')
+      // Wait for BOTH needles before doing position math: the task lands at the
+      // prompt while the stamp line can still be flushing on a loaded runner —
+      // macos-26 run 30110485956 captured fence+task with the stamp arriving a
+      // beat later, and launchOk read a frame the stamp wasn't on yet.
+      await captureHas(paneL1, 'BRAINMS_TASK_7100')
+      const cap1 = await captureHas(paneL1, '[repomap: generation')
       const cap1Flat = stripAnsi(cap1)
       const mapFenceAt = seen(cap1Flat, '```repomap')
       const mapStampAt = seen(cap1Flat, '[repomap: generation')

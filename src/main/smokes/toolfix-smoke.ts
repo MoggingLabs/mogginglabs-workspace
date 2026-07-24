@@ -118,7 +118,11 @@ export function runToolFixSmoke(win: BrowserWindow): void {
         `(document.querySelector('.conn-card[data-connection="fix-tool"] .conn-fix-sentence')?.textContent ?? '') === 'Claude Code’s config for this tool was removed outside the app.'`
       )
       await ES(`(document.querySelector('.conn-card[data-connection="fix-tool"] .conn-fix-open')?.click(), 1)`)
-      await sleep(700)
+      // The expanded panel builds ASYNC (preview + backups IPC round trips before
+      // the Fix button appends) — a fixed 700ms lost that race on windows-latest
+      // (2-core runner), the click landed on nothing, and restoredOk starved.
+      // Wait for the button, the same discipline as (b)'s previewOk gate above.
+      await waitTrue(`!!document.querySelector('.conn-card[data-connection="fix-tool"] .conn-fix-now')`)
       await ES(`(document.querySelector('.conn-card[data-connection="fix-tool"] .conn-fix-now')?.click(), 1)`)
       // The delete plant re-serialized the file, so whole-file byte identity is not
       // the fair claim here — ENTRY identity is: the restored marked entry must equal
