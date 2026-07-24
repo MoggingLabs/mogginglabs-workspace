@@ -403,6 +403,7 @@ export const ConnectionsChannels = {
   list: 'connections:list', // -> Connection[] (secret-free; the card grid's whole source)
   connect: 'connections:connect', // ({ serviceId, baseUrl? }) -> { ok, reason? } — opens CONSENT IN THE USER'S BROWSER; resolves when the flow STARTS, not when it lands
   submitKey: 'connections:submitKey', // ({ serviceId, value, baseUrl? }) -> { ok, reason? } — key-auth on-ramp: VERIFIED against the live server, then vaulted
+  submitFamilyKey: 'connections:submitFamilyKey', // ({ group, value }) -> { ok, reason?, connected? } — ONE paste lights a whole family (ADR 0021): proven once against the catalog verification block, then every restTools member connects and registers its bridge row
   setClient: 'connections:setClient', // ({ serviceId, clientId, clientSecret?, baseUrl? }) -> { ok, reason? } — pre-registered OAuth client for no-DCR providers (Google/GitHub/Slack); WRITE-ONLY (no getter, the 8/08 discipline), then straight into consent
   clearClient: 'connections:clearClient', // (serviceId) -> { ok, reason? } — forget a pasted client id (and its vaulted secret) for this service's sign-in server
   cancel: 'connections:cancel', // (serviceId) -> void — abandon a pending browser consent (closes the loopback port; the card returns to disconnected)

@@ -18,10 +18,92 @@
       }
     },
     {
+      "key": "api-key",
+      "kind": "apiKey",
+      "name": "Paste an API key",
+      "rank": 2,
+      "source": "https://docs.stripe.com/keys#create-restricted-api-secret-key",
+      "inputs": [
+        {
+          "key": "STRIPE_API_KEY",
+          "label": "Stripe restricted API key",
+          "secret": true,
+          "required": true
+        }
+      ]
+    },
+    {
       "key": "cli-owned",
       "kind": "cliOwned",
       "name": "Let Claude Code sign in itself (advanced)",
       "rank": 90
+    }
+  ],
+  "restAuth": {
+    "in": "header",
+    "header": "Authorization",
+    "scheme": "Bearer",
+    "source": "https://docs.stripe.com/api/authentication"
+  },
+  "requiredPermissions": ["Balance: Read", "Customers: Read", "Invoices: Read", "Subscriptions: Read", "Products: Read"],
+  "setupTokenUrl": "https://dashboard.stripe.com/apikeys/create",
+  "restTools": [
+    {
+      "name": "get_balance",
+      "description": "Read the account's current Stripe balance (available and pending).",
+      "method": "GET",
+      "endpoint": "https://api.stripe.com/v1/balance",
+      "source": "https://docs.stripe.com/api/balance/balance_retrieve"
+    },
+    {
+      "name": "list_customers",
+      "description": "List customers, optionally filtered by email.",
+      "method": "GET",
+      "endpoint": "https://api.stripe.com/v1/customers",
+      "params": [
+        { "key": "email", "in": "query", "type": "string", "description": "Exact-match email filter" },
+        { "key": "limit", "in": "query", "type": "integer", "description": "Page size (max 100)" }
+      ],
+      "pagination": { "cursorParam": "starting_after", "itemsPath": "data" },
+      "source": "https://docs.stripe.com/api/customers/list"
+    },
+    {
+      "name": "list_invoices",
+      "description": "List invoices, optionally scoped to one customer or status.",
+      "method": "GET",
+      "endpoint": "https://api.stripe.com/v1/invoices",
+      "params": [
+        { "key": "customer", "in": "query", "type": "string", "description": "Customer id" },
+        { "key": "status", "in": "query", "type": "string", "description": "draft, open, paid, uncollectible, or void" },
+        { "key": "limit", "in": "query", "type": "integer", "description": "Page size (max 100)" }
+      ],
+      "pagination": { "cursorParam": "starting_after", "itemsPath": "data" },
+      "source": "https://docs.stripe.com/api/invoices/list"
+    },
+    {
+      "name": "list_subscriptions",
+      "description": "List subscriptions, optionally scoped to one customer or status.",
+      "method": "GET",
+      "endpoint": "https://api.stripe.com/v1/subscriptions",
+      "params": [
+        { "key": "customer", "in": "query", "type": "string", "description": "Customer id" },
+        { "key": "status", "in": "query", "type": "string", "description": "active, past_due, canceled, trialing, all…" },
+        { "key": "limit", "in": "query", "type": "integer", "description": "Page size (max 100)" }
+      ],
+      "pagination": { "cursorParam": "starting_after", "itemsPath": "data" },
+      "source": "https://docs.stripe.com/api/subscriptions/list"
+    },
+    {
+      "name": "list_products",
+      "description": "List the account's product catalog entries.",
+      "method": "GET",
+      "endpoint": "https://api.stripe.com/v1/products",
+      "params": [
+        { "key": "active", "in": "query", "type": "boolean", "description": "Only active products" },
+        { "key": "limit", "in": "query", "type": "integer", "description": "Page size (max 100)" }
+      ],
+      "pagination": { "cursorParam": "starting_after", "itemsPath": "data" },
+      "source": "https://docs.stripe.com/api/products/list"
     }
   ],
   "profile": {

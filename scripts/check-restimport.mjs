@@ -60,6 +60,9 @@ function judgeEntry(restTools) {
     ],
     restAuth: { in: 'header', header: 'Authorization', scheme: 'Bearer', source: 'https://api.example.test/docs/auth' },
     requiredPermissions: ['read:all', 'write:all'],
+    // Mandatory since phase-restbridge/04: a restTools row must carry its
+    // prove-before-save verification block.
+    verification: { method: 'GET', endpoint: 'https://api.example.test/v1/health', source: 'https://api.example.test/docs/health' },
     restTools
   }
   const dir = mkdtempSync(join(tmpdir(), 'restimport-'))

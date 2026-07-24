@@ -18,10 +18,62 @@
       }
     },
     {
+      "key": "api-key",
+      "kind": "apiKey",
+      "name": "Paste an API key",
+      "rank": 2,
+      "source": "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/",
+      "inputs": [
+        {
+          "key": "CLOUDFLARE_API_TOKEN",
+          "label": "Cloudflare API token",
+          "secret": true,
+          "required": true
+        }
+      ]
+    },
+    {
       "key": "cli-owned",
       "kind": "cliOwned",
       "name": "Let Claude Code sign in itself (advanced)",
       "rank": 90
+    }
+  ],
+  "restAuth": {
+    "in": "header",
+    "header": "Authorization",
+    "scheme": "Bearer",
+    "source": "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/"
+  },
+  "requiredPermissions": ["Account Analytics Read"],
+  "setupTokenUrl": "https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22account_analytics%22%2C%22type%22%3A%22read%22%7D%5D&name=MoggingLabs%20Analytics%20(read)",
+  "verification": {
+    "method": "GET",
+    "endpoint": "https://api.cloudflare.com/client/v4/user/tokens/verify",
+    "source": "https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/verify/"
+  },
+  "profile": {
+    "via": "rest",
+    "url": "https://api.cloudflare.com/client/v4/user",
+    "paths": {
+      "id": "result.id",
+      "email": "result.email"
+    },
+    "source": "https://developers.cloudflare.com/api/resources/user/methods/get/"
+  },
+  "restTools": [
+    {
+      "name": "run_analytics_query",
+      "description": "Run one GraphQL analytics query against your account's traffic, DNS, and Workers datasets.",
+      "method": "POST",
+      "endpoint": "https://api.cloudflare.com/client/v4/graphql",
+      "params": [
+        { "key": "query", "in": "body", "type": "string", "required": true, "description": "The GraphQL query" },
+        { "key": "variables", "in": "body", "type": "string", "description": "JSON-encoded query variables" }
+      ],
+      "readOnly": true,
+      "responsePath": "data",
+      "source": "https://developers.cloudflare.com/analytics/graphql-api/"
     }
   ],
   "grantCopy": "Your account’s analytics via the GraphQL API.",

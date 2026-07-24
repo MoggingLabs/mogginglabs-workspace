@@ -599,6 +599,16 @@ export async function submitKey(serviceId: string, value: string, baseUrl?: stri
   if (!vaultAvailable()) {
     return { ok: false, reason: 'This machine has no OS keychain, so the key cannot be stored safely here.' }
   }
+  // THE BRIDGE ROUTE (ADR 0021, phase-restbridge/04): a row with curated
+  // restTools connects by key against the provider's own REST API — no MCP
+  // handshake exists on this route (a row needs no MCP url at all), so the
+  // catalog verification block is the WHOLE proof (RESTSCHEMA makes it
+  // mandatory) and the bridge serves the curated tools from here on.
+  const restEntry = providerEntryFor(serviceId)
+  if (restEntry?.restTools?.length) {
+    resetRefreshCooldown(serviceId)
+    return connectBridgeKey(serviceId, restEntry, value.trim(), preset)
+  }
   // Self-hosted (n8n, Make): the instance URL arrives WITH the key. Before this
   // parameter existed, the card's key form had no URL field and this branch refused
   // with "paste your instance's MCP URL first" — an instruction with nowhere to obey it.
@@ -632,6 +642,7 @@ export async function submitKey(serviceId: string, value: string, baseUrl?: stri
     state: 'connected',
     url,
     connectedAt: Date.now(),
+    connectedVia: 'key',
     serverName: probe.probe.serverName,
     toolCount: probe.probe.toolCount,
     tools: probe.probe.tools,
@@ -661,6 +672,119 @@ export async function submitKey(serviceId: string, value: string, baseUrl?: stri
     }
   }
   return { ok: true }
+}
+
+/** One bridge-route key connect: prove against the MANDATORY verification
+ *  block, vault, stamp, register the bridge row. The card flips straight to
+ *  `✓ Connected · verified 0m ago` — a verification probe just passed, which
+ *  is exactly what the stamp means; no MCP probe is ever involved. */
+async function connectBridgeKey(
+  serviceId: string,
+  entry: NonNullable<ReturnType<typeof providerEntryFor>>,
+  key: string,
+  preset: McpPreset
+): Promise<{ ok: boolean; reason?: string }> {
+  const spec = verificationSpecFor(serviceId)
+  if (!spec) return { ok: false, reason: `${entry.label} has no verification endpoint in the catalog — a data bug, not a key problem.` }
+  const scheme = entry.restAuth?.scheme ?? 'Bearer'
+  const proof = await runVerificationProbe(spec, key, { authScheme: scheme })
+  if (!proof.ok) {
+    return { ok: false, reason: proof.unauthorized ? 'That key was refused by the service.' : proof.reason }
+  }
+  if (!storeTokens(serviceId, { accessToken: key })) {
+    return { ok: false, reason: 'The OS keychain would not hold the key.' }
+  }
+  setState(serviceId, {
+    state: 'connected',
+    url: entry.mcp?.url,
+    connectedAt: Date.now(),
+    connectedVia: 'key',
+    authScheme: scheme,
+    // The curated set IS what this connection serves (the anti-explosion
+    // surface): names from the catalog, no server round trip to ask.
+    toolCount: entry.restTools!.length,
+    tools: entry.restTools!.map((t) => t.name),
+    verifiedAt: Date.now(),
+    verifyCause: 'manual',
+    expiresAt: undefined,
+    needsClientId: undefined,
+    lastError: undefined
+  })
+  registerConnectionServer(serviceId)
+  // ONE PASTE, EVERY ROUTE: the same key under the catalog's env slot name.
+  const slot = preset.envRefSlots[0]
+  if (slot) {
+    try {
+      serviceKeySet(slot, key)
+    } catch {
+      /* the connection stands; the slot can be pasted on its own row */
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * ONE paste lights the whole FAMILY (ADR 0021): every member of `group` whose
+ * row declares restTools + an apiKey method connects from a single key —
+ * proven ONCE against the first member's verification block (the family
+ * shares restAuth by eligibility), then each member vaults, stamps, and
+ * registers its own bridge row. MOGGING_REST_BREAK_FANOUT is TEST-ONLY (the
+ * RESTCARDS mutation-red): it stops after the first member, which is exactly
+ * the half-lit-family regression the gate must catch.
+ */
+export async function submitFamilyKey(group: string, value: string): Promise<{ ok: boolean; reason?: string; connected?: string[] }> {
+  const key = String(value ?? '').trim()
+  if (!key) return { ok: false, reason: 'Paste the key first.' }
+  if (!vaultAvailable()) {
+    return { ok: false, reason: 'This machine has no OS keychain, so the key cannot be stored safely here.' }
+  }
+  const members = connectableServices()
+    .map((p) => ({ preset: p, entry: providerEntryFor(p.id) }))
+    .filter((m) => m.entry?.group === group && m.entry.restTools?.length && m.entry.methods.some((x) => x.kind === 'apiKey'))
+  if (!members.length) return { ok: false, reason: 'No capability in this family takes a pasted key.' }
+  for (const m of members) {
+    const quota = connectionQuotaRefusal(m.preset.id)
+    if (quota) return { ok: false, reason: quota }
+  }
+  const first = members[0]
+  const spec = verificationSpecFor(first.preset.id)
+  if (!spec) return { ok: false, reason: `${first.entry!.label} has no verification endpoint in the catalog — a data bug, not a key problem.` }
+  const proof = await runVerificationProbe(spec, key, { authScheme: first.entry!.restAuth?.scheme ?? 'Bearer' })
+  if (!proof.ok) {
+    return { ok: false, reason: proof.unauthorized ? 'That key was refused by the service.' : proof.reason }
+  }
+  const connected: string[] = []
+  for (const m of members) {
+    if (!storeTokens(m.preset.id, { accessToken: key })) {
+      return { ok: false, reason: 'The OS keychain would not hold the key.', connected }
+    }
+    setState(m.preset.id, {
+      state: 'connected',
+      url: m.entry!.mcp?.url,
+      connectedAt: Date.now(),
+      connectedVia: 'key',
+      authScheme: m.entry!.restAuth?.scheme ?? 'Bearer',
+      toolCount: m.entry!.restTools!.length,
+      tools: m.entry!.restTools!.map((t) => t.name),
+      verifiedAt: Date.now(),
+      verifyCause: 'manual',
+      expiresAt: undefined,
+      needsClientId: undefined,
+      lastError: undefined
+    })
+    registerConnectionServer(m.preset.id)
+    connected.push(m.preset.id)
+    if (process.env.MOGGING_REST_BREAK_FANOUT) break
+  }
+  const slot = first.preset.envRefSlots[0]
+  if (slot) {
+    try {
+      serviceKeySet(slot, key)
+    } catch {
+      /* the connections stand */
+    }
+  }
+  return { ok: true, connected }
 }
 
 // ── Pre-registered OAuth clients: the no-DCR on-ramp (Google, GitHub, Slack) ─
@@ -904,7 +1028,9 @@ export async function restBridgeUpstream(
   serviceId: string
 ): Promise<{ entry: import('@contracts').ProviderEntry; token: string } | null> {
   const meta = readMeta(serviceId)
-  if (!meta || meta.state === 'disconnected' || meta.authKind !== 'key') return null
+  // The KEY route, whichever method ranks first in the catalog: `connectedVia`
+  // records the user's actual choice (a dual-auth row reads authKind 'oauth').
+  if (!meta || meta.state === 'disconnected' || (meta.authKind !== 'key' && meta.connectedVia !== 'key')) return null
   const entry = providerEntryFor(serviceId)
   if (!entry?.restTools?.length) return null
   const token = await accessTokenFor(serviceId)
@@ -1075,7 +1201,10 @@ async function verifyOne(
 ): Promise<{ connection: Connection | null; classification: ProbeClassification }> {
   verifyCauseCounts[cause] += 1
   const meta = readMeta(serviceId)
-  if (!meta?.url) {
+  // A bridge-route connection (ADR 0021) may have no MCP url at all — its
+  // catalog verification block is the probe, so `url` is not a precondition.
+  const keyRoute = meta?.authKind === 'key' || meta?.connectedVia === 'key'
+  if (!meta || (!meta.url && !(keyRoute && verificationSpecFor(serviceId)))) {
     return { connection: listConnections().find((c) => c.id === serviceId) ?? null, classification: 'failed' }
   }
   const grantStamp = meta.connectedAt
@@ -1101,7 +1230,7 @@ async function verifyOne(
   // connections never had (one cheap trip; the provider's own 401 is the verdict).
   // MCP services keep the initialize + tools/list proof over the app-held grant.
   const classifierOpts = { _testBreakOfflineClassifier: !!process.env.MOGGING_PULSE_BREAK_OFFLINE }
-  const spec = meta.authKind === 'key' ? verificationSpecFor(serviceId) : undefined
+  const spec = keyRoute ? verificationSpecFor(serviceId) : undefined
   let classification: ProbeClassification
   let reason: string | undefined
   let enrichment: Partial<Connection> | null = null
@@ -1112,7 +1241,9 @@ async function verifyOne(
   } else {
     // `skipAccount`: identity is the LADDER's job now (below) — the probe's own
     // whoami side-question would re-ask it on every heartbeat.
-    const probe = await probeConnection(meta.url, token ?? undefined, { authScheme: meta.authScheme, skipAccount: true })
+    // This branch only runs with no verification spec, and the entry guard above
+    // already required `url` for exactly that case.
+    const probe = await probeConnection(meta.url as string, token ?? undefined, { authScheme: meta.authScheme, skipAccount: true })
     classification = classifyProbeOutcome(probe, classifierOpts)
     if (probe.ok) {
       enrichment = {
@@ -1152,7 +1283,7 @@ async function verifyOne(
         : undefined,
       toolNames: (enrichment?.tools as string[] | undefined) ?? meta.tools ?? [],
       callTool:
-        token || meta.authKind === 'local'
+        (token || meta.authKind === 'local') && meta.url
           ? (name) => callWhoamiTool(meta.url as string, name, { token: token ?? undefined, authScheme: meta.authScheme })
           : undefined,
       _testBreakAllowlist: !!process.env.MOGGING_WHO_BREAK_ALLOWLIST
@@ -1286,6 +1417,11 @@ export function registerConnections(getWin: () => BrowserWindow | null): void {
   })
   ipcMain.handle(ConnectionsChannels.submitKey, (_e, p: { serviceId: string; value: string; baseUrl?: string }) =>
     submitKey(String(p?.serviceId ?? ''), String(p?.value ?? ''), p?.baseUrl ? String(p.baseUrl) : undefined)
+  )
+  // Write-only, like submitKey: the family paste (ADR 0021) — one key in, no
+  // channel ever brings it back out.
+  ipcMain.handle(ConnectionsChannels.submitFamilyKey, (_e, p: { group: string; value: string }) =>
+    submitFamilyKey(String(p?.group ?? ''), String(p?.value ?? ''))
   )
   // Write-only, like submitKey: the secret goes IN over this channel and no channel
   // brings a client secret back out (the 8/08 discipline).

@@ -18,12 +18,124 @@
       }
     },
     {
+      "key": "api-key",
+      "kind": "apiKey",
+      "name": "Paste an API key",
+      "rank": 2,
+      "source": "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/",
+      "inputs": [
+        {
+          "key": "CLOUDFLARE_API_TOKEN",
+          "label": "Cloudflare API token",
+          "secret": true,
+          "required": true
+        }
+      ]
+    },
+    {
       "key": "cli-owned",
       "kind": "cliOwned",
       "name": "Let Claude Code sign in itself (advanced)",
       "rank": 90
     }
   ],
+  "restAuth": {
+    "in": "header",
+    "header": "Authorization",
+    "scheme": "Bearer",
+    "source": "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/"
+  },
+  "requiredPermissions": ["Zone Read", "DNS Read", "DNS Write", "DNS Analytics Read", "Cache Purge"],
+  "setupTokenUrl": "https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22dns%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22dns_analytics%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22cache_purge%22%2C%22type%22%3A%22edit%22%7D%5D&name=MoggingLabs%20DNS",
+  "verification": {
+    "method": "GET",
+    "endpoint": "https://api.cloudflare.com/client/v4/user/tokens/verify",
+    "source": "https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/verify/"
+  },
+  "profile": {
+    "via": "rest",
+    "url": "https://api.cloudflare.com/client/v4/user",
+    "paths": {
+      "id": "result.id",
+      "email": "result.email"
+    },
+    "source": "https://developers.cloudflare.com/api/resources/user/methods/get/"
+  },
+  "restTools": [
+    {
+      "name": "list_zones",
+      "description": "List the zones (domains) this token can reach, with their ids and status.",
+      "method": "GET",
+      "endpoint": "https://api.cloudflare.com/client/v4/zones",
+      "params": [
+        { "key": "name", "in": "query", "type": "string", "description": "Filter by domain name" }
+      ],
+      "responsePath": "result",
+      "source": "https://developers.cloudflare.com/api/resources/zones/methods/list/"
+    },
+    {
+      "name": "list_dns_records",
+      "description": "List a zone's DNS records, optionally filtered by type or name.",
+      "method": "GET",
+      "endpoint": "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records",
+      "params": [
+        { "key": "zone_id", "in": "path", "type": "string", "required": true, "description": "Zone id from list_zones" },
+        { "key": "type", "in": "query", "type": "string", "description": "Record type (A, AAAA, CNAME, TXT…)" },
+        { "key": "name", "in": "query", "type": "string", "description": "Filter by record name" }
+      ],
+      "responsePath": "result",
+      "source": "https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/list/"
+    },
+    {
+      "name": "create_dns_record",
+      "description": "Create one DNS record in a zone (type, name, content).",
+      "method": "POST",
+      "endpoint": "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records",
+      "params": [
+        { "key": "zone_id", "in": "path", "type": "string", "required": true, "description": "Zone id from list_zones" },
+        { "key": "type", "in": "body", "type": "string", "required": true, "description": "Record type (A, AAAA, CNAME, TXT…)" },
+        { "key": "name", "in": "body", "type": "string", "required": true, "description": "Record name (e.g. www.example.com)" },
+        { "key": "content", "in": "body", "type": "string", "required": true, "description": "Record content (e.g. an IP address)" },
+        { "key": "ttl", "in": "body", "type": "integer", "description": "Time to live in seconds (1 = automatic)" },
+        { "key": "proxied", "in": "body", "type": "boolean", "description": "Proxy through Cloudflare" }
+      ],
+      "readOnly": false,
+      "source": "https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/create/"
+    },
+    {
+      "name": "dns_report",
+      "description": "Read a zone's DNS analytics report (queries by dimension and metric).",
+      "method": "GET",
+      "endpoint": "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_analytics/report",
+      "params": [
+        { "key": "zone_id", "in": "path", "type": "string", "required": true, "description": "Zone id from list_zones" },
+        { "key": "dimensions", "in": "query", "type": "string", "description": "Comma-separated dimensions (e.g. queryName)" },
+        { "key": "metrics", "in": "query", "type": "string", "description": "Comma-separated metrics (e.g. queryCount)" },
+        { "key": "since", "in": "query", "type": "string", "description": "Start of the window (ISO 8601)" },
+        { "key": "until", "in": "query", "type": "string", "description": "End of the window (ISO 8601)" }
+      ],
+      "responsePath": "result",
+      "source": "https://developers.cloudflare.com/api/resources/dns/subresources/analytics/subresources/reports/methods/get/"
+    },
+    {
+      "name": "purge_cache",
+      "description": "Purge a zone's entire edge cache — takes effect immediately.",
+      "method": "POST",
+      "endpoint": "https://api.cloudflare.com/client/v4/zones/{zone_id}/purge_cache",
+      "params": [
+        { "key": "zone_id", "in": "path", "type": "string", "required": true, "description": "Zone id from list_zones" },
+        { "key": "purge_everything", "in": "body", "type": "boolean", "required": true, "description": "Must be true — purges everything" }
+      ],
+      "readOnly": false,
+      "source": "https://developers.cloudflare.com/api/resources/cache/methods/purge/"
+    }
+  ],
+  "retry": {
+    "atHeader": "retry-after",
+    "errorCodes": [
+      "429"
+    ]
+  },
   "grantCopy": "DNS performance and debugging for your zones.",
   "verifiedAt": "2026-07-15"
 }

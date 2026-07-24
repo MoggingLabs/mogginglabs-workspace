@@ -162,6 +162,12 @@ function checkEntry(name, entry, schema) {
       if (!Array.isArray(entry.requiredPermissions) || entry.requiredPermissions.length === 0) {
         errors.push(`${name}: restTools requires requiredPermissions (least privilege as data)`)
       }
+      // phase-restbridge/04: prove-before-save is MANDATORY on the bridge's key
+      // route — a restTools service with no verification block would vault a key
+      // on faith, and the heartbeat would have nothing to re-verify against.
+      if (!entry.verification || typeof entry.verification !== 'object') {
+        errors.push(`${name}: restTools requires a verification block (prove-before-save is mandatory on the key route)`)
+      }
       const cfgKeys = new Set(
         (Array.isArray(entry.methods) ? entry.methods : []).flatMap((m) =>
           (Array.isArray(m?.connectionConfig) ? m.connectionConfig : []).map((c) => c?.key)
@@ -253,6 +259,7 @@ function selftest() {
       }
     ],
     profile: { via: 'rest', url: 'https://example.com/me', paths: { id: 'id', email: 'email' }, source: 'https://example.com/docs/me' },
+    verification: { method: 'GET', endpoint: 'https://example.com/verify', source: 'https://example.com/docs/verify' },
     // RESTSCHEMA fixture (ADR 0021): one read tool with a path param + pagination,
     // one write tool riding a declared connectionConfig placeholder.
     restAuth: { in: 'header', header: 'Authorization', scheme: 'Bearer', source: 'https://example.com/docs/auth' },
@@ -309,7 +316,9 @@ function selftest() {
     ['rest-path-param-unslotted', (e) => (e.restTools[0].endpoint = 'https://example.com/api/things')],
     ['rest-http-endpoint', (e) => (e.restTools[0].endpoint = 'http://example.com/api/{project_id}/things')],
     // phase-restbridge/03: a pasted curator DRAFT (TODO-reword marker) cannot ship.
-    ['rest-draft-marker', (e) => (e.restTools[0].description = 'TODO-reword: List the things in a project.')]
+    ['rest-draft-marker', (e) => (e.restTools[0].description = 'TODO-reword: List the things in a project.')],
+    // phase-restbridge/04: the key route's prove-before-save is mandatory.
+    ['rest-no-verification', (e) => delete e.verification]
   ]
   let failed = 0
   if (checkEntry('selftest', structuredClone(good), schema).length !== 0) {

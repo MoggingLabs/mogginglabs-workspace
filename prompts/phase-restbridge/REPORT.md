@@ -1,5 +1,57 @@
 # Phase RestBridge — execution report
 
+## 04 — Cards + Cloudflare (2026-07-24)
+
+The user-visible payoff, indistinguishable on the surface:
+
+- **The chooser learned the bridge**: a restTools row renders "Paste an API
+  key" (ADR 0020 strings verbatim); the key form became the GUIDED PANEL —
+  "Create your token ↗" opening the catalog's prefilled `setupTokenUrl`
+  (openExternal), the `requiredPermissions` listed in the provider's own words
+  ("This needs: … — nothing more."), the paste field, the over-scope fine print
+  ("a scoped one is safer"), and the Library's honest line ("Runs on this
+  machine against the provider's own API").
+- **submitKey learned the route**: restTools rows prove against the MANDATORY
+  catalog `verification` block (new RESTSCHEMA rule + `rest-no-verification`
+  selftest mutation — no MCP handshake exists on this route), vault, stamp
+  `✓ Connected · verified 0m ago` (`connectedVia:'key'` on the Connection
+  meta records the user's actual method — `authKind` describes the catalog's
+  primary), register the bridge row, fan the key into the env slot
+  (one-paste-every-route). The verify engine treats `connectedVia:'key'` as
+  key-route (verification-block re-verify, no url precondition) — additive,
+  zero behavior change for existing connections.
+- **The family key** (`submitFamilyKey` + the family-card method): rendered
+  ONCE when ≥2 key-ready members share `restAuth`; one paste proves once and
+  lights every member with its own bridge row. `MOGGING_REST_BREAK_FANOUT` is
+  the mutation knob.
+- **Authored rows** (re-authored from primary docs, per-tool provenance):
+  cf-bindings (accounts/Workers/KV reads), cf-dns-analytics (zones, DNS reads,
+  DNS create + cache purge as writes, DNS report), cf-graphql (one explicit
+  readOnly:true POST analytics query), stripe (balance/customers/invoices/
+  subscriptions/products reads) — each with apiKey method, restAuth,
+  requiredPermissions, prefilled setupTokenUrl, verification, profile.
+  **PENDING-VERIFY: the restTools blocks are doc-authored; live verification
+  with a real token is the operator's step — `verifiedAt` was NOT bumped for
+  any of them (it still stamps the earlier MCP-preset verification), and the
+  Cloudflare permissionGroupKeys in the setupTokenUrls need the same live
+  confirmation.** posthog's step-01 row already carried verification+profile
+  and needed nothing.
+
+Gate — **RESTCARDS** (app-boot, `MOGGING_RESTCARDS`; sweep now 198 = 169
+app-boot + 29 static, GATECOUNT reconciled): (a) chooser + guided panel with
+the exact spied setupTokenUrl; (b) refused key retained (SECRETFORMS law),
+good key → `verified 0m ago`; (c) family one-paste, one card per surface,
+both bridge rows; (d) curated tools/list through the real upstream; (e)
+identity accountSource 'rest'; (f) heartbeat re-verifies with ZERO MCP traffic.
+Mutation-reds live: the broken fan-out half-lights the family; a restTools row
+without `verification` reds the shipped-row judge. Reconciliation on the same
+bytes: TOOLCARDS, TOOLPULSE, TOOLWHO, TOOLSMILESTONE, SECRETFORMS, CONNPURE
+(74), UNIT (208), CUSTODY, TOOLWORDS, RESTEXEC, RESTIMPORT (its judge fixture
+gained the now-mandatory verification block), CATSCHEMA all green. Live-dev
+proof: a CDP-driven dev instance showed the real Cloudflare family card with
+"Paste an API key" and the guided panel (famUp/methodUp/panelUp all true).
+
+
 ## 03 — The OpenAPI curator (2026-07-24)
 
 Specs in, DRAFTS out, humans decide:

@@ -1,6 +1,8 @@
 import {
   BrowserChannels,
+  CHOOSER_LABELS,
   ConnectionsChannels,
+  CUSTODY_SUBTITLES,
   IntegrationsChannels,
   backupsLine,
   chooserMethods,
@@ -583,6 +585,30 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
     // ── The key on-ramp: paste once, and we PROVE it before claiming success ──
     const keyForm = (): HTMLElement => {
       const draft = draftFor(c.id)
+      // THE GUIDED PANEL (ADR 0021, phase-restbridge/04): a bridge-backed row
+      // turns the bare paste field into three steps — create the token at the
+      // provider's PRE-FILLED page (permissions, name, expiry already selected),
+      // see exactly which permissions the curated tools need (least privilege
+      // as data), then paste. The over-scope line is the honest fine print: a
+      // global key connects too; we just say a scoped one is safer.
+      const entry = providers.get(c.id)
+      const guided: HTMLElement[] = []
+      if (entry?.restTools?.length) {
+        if (entry.setupTokenUrl) {
+          const setup = el('button', { class: 'trail-btn conn-mini conn-token-setup', type: 'button', text: 'Create your token ↗' }) as HTMLButtonElement
+          setup.onclick = (): void => void bridge.invoke(BrowserChannels.openExternal, { url: entry.setupTokenUrl })
+          guided.push(setup)
+        }
+        if (entry.requiredPermissions?.length) {
+          guided.push(el('div', { class: 'settings-row-caption conn-required-perms', text: `This needs: ${entry.requiredPermissions.join(', ')} — nothing more.` }))
+        }
+      }
+      const guidedFinePrint: HTMLElement[] = entry?.restTools?.length
+        ? [
+            el('div', { class: 'settings-row-caption conn-overscope-note', text: 'A broader token (a global key) connects too — a scoped one is safer.' }),
+            el('div', { class: 'settings-row-caption conn-bridge-note', text: 'Runs on this machine against the provider’s own API.' })
+          ]
+        : []
       let urlInput: HTMLInputElement | null = null
       // Self-hosted (n8n, Make): the key means nothing without the instance URL, and
       // this field used to not exist — the submit refused with "paste your instance's
@@ -639,7 +665,7 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
           showToast({ tone: 'success', title: `${c.label} connected`, body: 'The key is encrypted by your OS keychain.' })
         })()
       }
-      return el('div', { class: 'conn-key-form' }, [...(urlInput ? [urlInput] : []), input, save, close, note])
+      return el('div', { class: 'conn-key-form' }, [...guided, ...(urlInput ? [urlInput] : []), input, save, close, note, ...guidedFinePrint])
     }
 
     // ── The client-id on-ramp (no-DCR providers). The provider will not let apps
@@ -1006,6 +1032,72 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
   // stays per capability underneath (each grant is its own resource), but the
   // client registration is issuer-shared, so the first consent covers the family.
   const familyOpen = new Set<string>()
+  /** The FAMILY key method (ADR 0021): rendered ONCE at family level when the
+   *  key-ready members (restTools + an apiKey method) all share one restAuth —
+   *  one paste lights the whole family. Same repaint-survival rules as every
+   *  secret form; the wording is the chooser's, verbatim (ADR 0020). */
+  const familyKeyOpen = new Set<string>()
+  const familyKeyDrafts = new Map<string, string>()
+  function familyKeyReady(fam: ToolCardGroup): { entries: ProviderEntry[]; pending: number } | null {
+    const entries = fam.members
+      .map((m) => providers.get(m.id))
+      .filter((e): e is ProviderEntry => !!e?.restTools?.length && !!e.methods.some((x) => x.kind === 'apiKey'))
+    if (entries.length < 2) return null
+    const auth = JSON.stringify(entries[0].restAuth ?? null)
+    if (!entries.every((e) => JSON.stringify(e.restAuth ?? null) === auth)) return null
+    const ids = new Set(entries.map((e) => e.id))
+    const pending = fam.members.filter((m) => ids.has(m.id) && toolCardTag(m).kind !== 'connected').length
+    return { entries, pending }
+  }
+  function familyKeyPanel(fam: ToolCardGroup, entries: ProviderEntry[]): HTMLElement {
+    const first = entries[0]
+    const parts: HTMLElement[] = []
+    if (first.setupTokenUrl) {
+      const setup = el('button', { class: 'trail-btn conn-mini conn-token-setup', type: 'button', text: 'Create your token ↗' }) as HTMLButtonElement
+      setup.onclick = (): void => void bridge.invoke(BrowserChannels.openExternal, { url: first.setupTokenUrl })
+      parts.push(setup)
+    }
+    const perms = [...new Set(entries.flatMap((e) => e.requiredPermissions ?? []))]
+    if (perms.length) parts.push(el('div', { class: 'settings-row-caption conn-required-perms', text: `This needs: ${perms.join(', ')} — nothing more.` }))
+    const input = el('input', { class: 'browser-sites-input conn-key-input conn-family-key-input', placeholder: 'paste your API key…' }) as HTMLInputElement
+    input.type = 'password'
+    input.value = familyKeyDrafts.get(fam.key) ?? ''
+    input.setAttribute('aria-label', `${fam.label} API key`)
+    input.addEventListener('keydown', (e) => e.stopPropagation())
+    input.addEventListener('input', () => familyKeyDrafts.set(fam.key, input.value))
+    const save = el('button', { class: 'trail-btn is-armed', type: 'button', text: 'Connect' }) as HTMLButtonElement
+    const close = el('button', { class: 'trail-btn conn-mini', type: 'button', text: 'Close' }) as HTMLButtonElement
+    close.onclick = (): void => {
+      familyKeyDrafts.delete(fam.key)
+      familyKeyOpen.delete(fam.key)
+      paint()
+    }
+    const note = el('div', { class: 'conn-summary is-error', hidden: true, role: 'alert' })
+    save.onclick = (): void => {
+      if (!input.value.trim()) return
+      void submitWithRetain({
+        trigger: save,
+        retainFields: [input],
+        errorEl: note,
+        submit: () =>
+          bridge.invoke(ConnectionsChannels.submitFamilyKey, { group: fam.key, value: input.value }) as Promise<{ ok: boolean; reason?: string }>,
+        onSuccess: () => {
+          familyKeyDrafts.delete(fam.key) // verified and vaulted — the plaintext leaves the DOM and the draft
+          familyKeyOpen.delete(fam.key)
+          showToast({ tone: 'success', title: `${fam.label} connected`, body: 'One key, every capability — encrypted by your OS keychain.' })
+        }
+      })
+    }
+    return el('div', { class: 'conn-key-form conn-family-key-form' }, [
+      ...parts,
+      input,
+      save,
+      close,
+      note,
+      el('div', { class: 'settings-row-caption conn-overscope-note', text: 'A broader token (a global key) connects too — a scoped one is safer.' }),
+      el('div', { class: 'settings-row-caption conn-bridge-note', text: 'Runs on this machine against the provider’s own API.' })
+    ])
+  }
   function familyCard(fam: ToolCardGroup): HTMLElement {
     const tag = groupTag(fam.members)
     const chip = el('span', { class: `conn-chip is-family is-tag-${tag.kind}`, text: tag.text, attrs: { 'data-status': tag.kind } })
@@ -1028,6 +1120,25 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
       chip
     ])
     const host = el('div', { class: 'conn-card conn-family-card', dataset: { group: fam.key } }, [head, toggle])
+    // The family key method: one door, chooser-worded, only while a key-ready
+    // member is still unconnected (a fully-lit family needs no paste button).
+    const ready = familyKeyReady(fam)
+    if (ready && ready.pending > 0) {
+      if (familyKeyOpen.has(fam.key)) {
+        host.append(familyKeyPanel(fam, ready.entries))
+      } else {
+        const method = el(
+          'button',
+          { class: 'conn-method conn-family-key-method', type: 'button', attrs: { 'data-method-kind': 'apiKey' } },
+          [el('span', { class: 'conn-method-label', text: CHOOSER_LABELS.apiKey }), el('span', { class: 'conn-method-sub', text: CUSTODY_SUBTITLES.apiKey })]
+        ) as HTMLButtonElement
+        method.onclick = (): void => {
+          familyKeyOpen.add(fam.key)
+          paint()
+        }
+        host.append(method)
+      }
+    }
     if (open) {
       const list = el('div', { class: 'conn-family-members' })
       for (const m of fam.members.sort((a, b) => a.label.localeCompare(b.label))) {

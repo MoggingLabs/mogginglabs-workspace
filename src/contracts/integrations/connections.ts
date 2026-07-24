@@ -106,6 +106,12 @@ export interface Connection {
    *  discovered at connect (Bearer for almost everyone; `Key` for fal.ai). The
    *  proxy reuses it so agent calls don't re-guess. Never a secret. */
   authScheme?: string
+  /** Which METHOD landed this connection. `key` marks the bridge route (ADR
+   *  0021): a dual-auth service (oauth-first catalog rank) connected by a
+   *  pasted key must serve the bridge and re-verify via the catalog
+   *  verification block — `authKind` alone can't say that (it describes the
+   *  catalog's primary method, not the user's choice). Never a secret. */
+  connectedVia?: 'key' | 'oauth' | 'local'
   /** A self-hosted service (n8n, Make): the card needs the instance URL before
    *  any credential means anything. */
   needsBaseUrl?: boolean

@@ -9,10 +9,10 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 197 gates: 29 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 198 gates: 29 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
 # GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE ·
-# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED · RESTEXEC · RESTIMPORT · FONTCOVER) + 168 app-boot
+# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED · RESTEXEC · RESTIMPORT · FONTCOVER) + 169 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -541,6 +541,17 @@ run_smoke TOOLWHO      MOGGING_TOOLWHO   1 240 toolwho
 # the detail's workspace checkbox mutates the same plan the matrix renders; Codex/
 # Gemini rows are inert coming-soon. Mutation-red ×2: broken merge key, broken rank.
 run_smoke TOOLCARDS    MOGGING_TOOLCARDS 1 240 toolcards
+# RESTCARDS (ADR 0021, phase-restbridge/04): the bridge's user-visible payoff on the
+# real page vs a fixture REST API with ZERO MCP endpoints — the restTools chooser + the
+# guided key panel (openExternal spied: the exact prefilled setupTokenUrl; the
+# requiredPermissions list), prove-before-save (a refused key stays in the field —
+# SECRETFORMS law) flipping to `✓ Connected · verified 0m ago`, the family one-paste
+# lighting every member with its own bridge row, curated tools/list through the real
+# upstream, identity from the catalog profile spec, and a heartbeat that re-verifies
+# via the verification endpoint with no MCP handshake ever fired. Mutation-red ×2:
+# MOGGING_REST_BREAK_FANOUT half-lights the family; a restTools row without
+# `verification` reds the shipped-row judge.
+run_smoke RESTCARDS    MOGGING_RESTCARDS 1 240 restcards
 # TOOLFIX (phase-tools/06): drift becomes "Needs attention → Fix" without losing one
 # byte of the mgr engine's safety — in a SANDBOXED CLI home (the isolation law). The
 # accelerated heartbeat classifies a hand-edited marked block; the card carries the

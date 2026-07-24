@@ -19,10 +19,79 @@
       }
     },
     {
+      "key": "api-key",
+      "kind": "apiKey",
+      "name": "Paste an API key",
+      "rank": 2,
+      "source": "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/",
+      "inputs": [
+        {
+          "key": "CLOUDFLARE_API_TOKEN",
+          "label": "Cloudflare API token",
+          "secret": true,
+          "required": true
+        }
+      ]
+    },
+    {
       "key": "cli-owned",
       "kind": "cliOwned",
       "name": "Let Claude Code sign in itself (advanced)",
       "rank": 90
+    }
+  ],
+  "restAuth": {
+    "in": "header",
+    "header": "Authorization",
+    "scheme": "Bearer",
+    "source": "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/"
+  },
+  "requiredPermissions": ["Account Settings Read", "Workers Scripts Read", "Workers KV Storage Read"],
+  "setupTokenUrl": "https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22read%22%7D%5D&name=MoggingLabs%20Workers%20(read)",
+  "verification": {
+    "method": "GET",
+    "endpoint": "https://api.cloudflare.com/client/v4/user/tokens/verify",
+    "source": "https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/verify/"
+  },
+  "profile": {
+    "via": "rest",
+    "url": "https://api.cloudflare.com/client/v4/user",
+    "paths": {
+      "id": "result.id",
+      "email": "result.email"
+    },
+    "source": "https://developers.cloudflare.com/api/resources/user/methods/get/"
+  },
+  "restTools": [
+    {
+      "name": "list_accounts",
+      "description": "List the Cloudflare accounts this token can reach, with their ids.",
+      "method": "GET",
+      "endpoint": "https://api.cloudflare.com/client/v4/accounts",
+      "responsePath": "result",
+      "source": "https://developers.cloudflare.com/api/resources/accounts/methods/list/"
+    },
+    {
+      "name": "list_workers",
+      "description": "List the Workers scripts deployed on an account.",
+      "method": "GET",
+      "endpoint": "https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/scripts",
+      "params": [
+        { "key": "account_id", "in": "path", "type": "string", "required": true, "description": "Account id from list_accounts" }
+      ],
+      "responsePath": "result",
+      "source": "https://developers.cloudflare.com/api/resources/workers/subresources/scripts/methods/list/"
+    },
+    {
+      "name": "list_kv_namespaces",
+      "description": "List an account's Workers KV namespaces with their ids and titles.",
+      "method": "GET",
+      "endpoint": "https://api.cloudflare.com/client/v4/accounts/{account_id}/storage/kv/namespaces",
+      "params": [
+        { "key": "account_id", "in": "path", "type": "string", "required": true, "description": "Account id from list_accounts" }
+      ],
+      "responsePath": "result",
+      "source": "https://developers.cloudflare.com/api/resources/kv/subresources/namespaces/methods/list/"
     }
   ],
   "retry": {
