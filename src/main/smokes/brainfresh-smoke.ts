@@ -1,6 +1,6 @@
 import { app, type BrowserWindow } from 'electron'
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { BRAIN_DRAIN_QUIET_MS, headDiffSpawnsForSmoke } from '@backend/features/brain'
@@ -134,7 +134,26 @@ export function runBrainFreshSmoke(win: BrowserWindow): void {
 
       // ── The world: a workspace whose ONE pane is a real shell in the repo ──────────
       await ES(`window.__mogging.workspace.create({ name: 'Fresh', cwd: ${JSON.stringify(F.repo)}, paneCount: 1 })`)
-      await sleep(4000) // the shell spawns and prints a prompt
+      await sleep(2000)
+      // SHELL READINESS BY MARKER, never a clock (the FLICKER lesson, and this
+      // gate's own cascade flavor: a slow shell eats the first typed command
+      // during init, section (a)'s append never lands, and every generation
+      // assert downstream inherits the shift). The marker round-trip proves the
+      // prompt is live; one re-send at half budget for shells that ate it.
+      const untilES = async (js: string, capMs: number, stepMs = 300): Promise<boolean> => {
+        const t0 = Date.now()
+        for (;;) {
+          if (await ES<boolean>(js).catch(() => false)) return true
+          if (Date.now() - t0 > capMs) return false
+          await sleep(stepMs)
+        }
+      }
+      await ES(`window.__mogging.panes[0].write(${JSON.stringify('echo BRAINFRESH_READY\r')})`)
+      const halfReady = await untilES(`(window.__mogging.panes[0].text() ?? '').includes('BRAINFRESH_READY')`, 12000)
+      if (!halfReady) {
+        await ES(`window.__mogging.panes[0].write(${JSON.stringify('echo BRAINFRESH_READY\r')})`)
+        await untilES(`(window.__mogging.panes[0].text() ?? '').includes('BRAINFRESH_READY')`, 15000)
+      }
 
       const b0 = await handleBrainRebuild({ root: F.repo })
       const bf0 = await handleBrainRebuild({ root: F.folder })
@@ -148,9 +167,20 @@ export function runBrainFreshSmoke(win: BrowserWindow): void {
       // ── (a) a REAL pane appends a function to a tracked file ───────────────────────
       const writeCmd = 'node ../ops.mjs append\r'
       await ES(`window.__mogging.panes[0].write(${JSON.stringify(writeCmd)})`)
+      // THE CLAIM BOUNDARY: the freshness law promises index-follows-FILE-CHANGE
+      // within ≤2 ticks — shell exec latency is not the index's debt. Start the
+      // clock when the append is ON DISK, not at the keystroke.
+      const appendLanded = await until(() => {
+        try {
+          return readFileSync(join(F.repo, 'tracked.ts'), 'utf8').includes('freshface')
+        } catch {
+          return false
+        }
+      }, 15000, 100)
       const appeared = await until(() => (statusOf(F.repo)?.generation ?? 0) >= gen + 1, 2 * TICK_MS + BRAIN_DRAIN_QUIET_MS + 2500)
       const sA = statusOf(F.repo)
       const freshOk =
+        appendLanded.ok &&
         appeared.ok &&
         appeared.ms <= 2 * TICK_MS + BRAIN_DRAIN_QUIET_MS && // ≤ 2 ticks + the quiet window
         sA?.generation === gen + 1 && // ONE drain, ONE bump
@@ -178,12 +208,16 @@ export function runBrainFreshSmoke(win: BrowserWindow): void {
 
       // ── (b) a REAL pane deletes a file → rows gone, tombstone counted ──────────────
       await ES(`window.__mogging.panes[0].write(${JSON.stringify('node ../ops.mjs delete\r')})`)
+      // Same claim boundary: the index's ≤2-tick debt starts when the file is
+      // GONE from disk, not when the keystroke entered the shell.
+      const deleteLanded = await until(() => !existsSync(join(F.repo, 'doomed.ts')), 15000, 100)
       const deleted = await until(() => {
         const s = statusOf(F.repo)
         return !!s && s.generation >= gen + 1 && !s.dirty && !s.indexing
       }, 2 * TICK_MS + BRAIN_DRAIN_QUIET_MS + 5000)
       const sB = statusOf(F.repo)
       const deleteOk =
+        deleteLanded.ok &&
         deleted.ok &&
         sB?.generation === gen + 1 &&
         sB?.files === 5 &&
@@ -275,20 +309,46 @@ export function runBrainFreshSmoke(win: BrowserWindow): void {
       rmSync(join(F.repo, 'storm.ts'))
       const first = handleBrainStatus({ root: F.repo }) // THE first status after reopen
       const firstDirtyOk = first.ok && first.dirty === true && first.generation === gen // staleness visible, instantly
+      // lastProcessed/lastRemoved are LAST-DRAIN registers: the engine's expected
+      // echo-drain (a no-op one tick after the heal absorbs the tick's re-marked
+      // dirt) legally overwrites them with zeros. Reading them after the settle
+      // is a race against that tick (caught red locally at healedMs≈2457 ≈ one
+      // tick) — so observe the heal's own counters DURING the poll, sticky: the
+      // 2/1 window is a full tick wide and the poll runs at 50ms.
+      let sawHealCounters = false
       const healed = await until(() => {
+        const f = fresh(F.repo)
+        if (f && f.reconciles === 1 && f.lastProcessed === 2 && f.lastRemoved === 1) sawHealCounters = true
         const s = statusOf(F.repo)
-        return !!s && s.generation === gen + 1 && !s.dirty && !s.indexing
+        return !!s && s.generation === gen + 1 && !s.dirty && !s.indexing && sawHealCounters
       }, 2 * TICK_MS + BRAIN_DRAIN_QUIET_MS + 10000)
       const fHeal = fresh(F.repo)
       const dumpHealed = dump(F.repo)
-      const healOk =
-        firstDirtyOk && healed.ok &&
-        (statusOf(F.repo)?.files ?? 0) === 5 && // tracked, cee, dee, winfile, coldnew
-        fHeal?.reconciles === 1 &&
-        fHeal?.lastProcessed === 2 && // coldnew + tracked — the prefilter spared the rest
-        fHeal?.lastRemoved === 1 && // storm.ts
-        dumpHealed.includes('"coldnew"') && dumpHealed.includes('"alphaTwo"') &&
-        !dumpHealed.includes('storm.ts')
+      const healParts = {
+        firstDirty: first.ok ? first.dirty : null,
+        firstGen: first.ok ? first.generation : null,
+        genExpected: gen,
+        healedOk: healed.ok,
+        healedMs: healed.ms,
+        files: statusOf(F.repo)?.files ?? 0,
+        hasColdnew: dumpHealed.includes('"coldnew"'),
+        hasAlphaTwo: dumpHealed.includes('"alphaTwo"'),
+        stormGone: !dumpHealed.includes('storm.ts')
+      }
+      const healConj = {
+        firstDirtyOk,
+        healedOk: healed.ok,
+        filesEq: (statusOf(F.repo)?.files ?? 0) === 5,
+        rec: fHeal?.reconciles === 1,
+        // Observed DURING the settle poll — the echo-drain legally zeroes the
+        // registers afterwards (see the healed loop above).
+        proc: sawHealCounters,
+        rem: sawHealCounters,
+        needleCold: dumpHealed.includes('"coldnew"'),
+        needleAlpha: dumpHealed.includes('"alphaTwo"'),
+        needleStormGone: !dumpHealed.includes('storm.ts')
+      }
+      const healOk = Object.values(healConj).every(Boolean)
       gen += 1
 
       // ── (g) determinism: the incremental path may not drift ────────────────────────
@@ -321,7 +381,7 @@ export function runBrainFreshSmoke(win: BrowserWindow): void {
         headStats: { headMoves: fresh(F.repo)?.headMoves ?? -1, diffSpawns: headDiffSpawnsForSmoke(), lastProcessed: fBack?.lastProcessed, lastCacheHits: fBack?.lastCacheHits },
         dirtyOk, sawDirtyMs: sawDirty.ms,
         sweepOk, sweeps: fresh(F.folder)?.sweeps ?? -1,
-        healOk, heal: { reconciles: fHeal?.reconciles, lastProcessed: fHeal?.lastProcessed, lastRemoved: fHeal?.lastRemoved },
+        healOk, healParts, healConj, heal: { reconciles: fHeal?.reconciles, lastProcessed: fHeal?.lastProcessed, lastRemoved: fHeal?.lastRemoved },
         determinismOk,
         metersOk, emitsPreCold, drainsPreCold, emitsPost, drainsPost,
         generations: { repo: statusOf(F.repo)?.generation, folder: statusOf(F.folder)?.generation },
