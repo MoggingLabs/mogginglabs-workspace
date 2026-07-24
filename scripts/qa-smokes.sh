@@ -9,10 +9,10 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 195 gates: 27 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 196 gates: 28 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
 # GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE ·
-# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED · FONTCOVER) + 168 app-boot
+# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED · RESTEXEC · FONTCOVER) + 168 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -264,6 +264,15 @@ run_static CONNPURE npm run smoke:connections-pure
 # grammar. Mutation-reds run LIVE on every pass: the lockless coordinator must double-hit
 # the fixture and the JSON-only parser must fail the form body — the assertions bite.
 run_static TOOLCRED npm run smoke:toolcred-pure
+# RESTEXEC: the REST-bridge executor (ADR 0021, phase-restbridge/02) against a fixture
+# REST API — tools/list is the catalog set verbatim, a read call lands with the key
+# injected per restAuth, args are typed-validated (refusals make zero requests),
+# pagination merges same-origin next links and stops at the cap, the ~50KB response cap
+# truncates honestly, a 429 retries per the catalog grammar (spacing asserted), a write
+# tool refuses without writeTools:'all' and executes with it, and a traversal/absolute-URL
+# path arg is refused. Mutation-reds run LIVE: the gateless write and the unpinned
+# traversal must each land at the fixture — the zero-hit assertions bite.
+run_static RESTEXEC npm run smoke:restexec-pure
 # PREREGCLIENT: pre-registered OAuth clients for no-DCR providers (Google/GitHub/Slack).
 # Three fixture AS shapes prove: no-DCR fails ACTIONABLY (needsClientId → the paste form),
 # a refusing-but-live registration endpoint does NOT, a pasted secret rides the exchange,

@@ -6,9 +6,9 @@ import { DAEMON_PROTOCOL_VERSION } from '@contracts'
 import { agentAct, agentControlDebug } from './browser-dock'
 import { handleUsageCall } from './usage'
 import { getSettingsStore } from './app-settings'
-import { onIntegrationsGrantChanged, resolveGrantedWriteTools, workspaceIdForPane } from './integrations'
-import { connectionUpstream } from './connections'
-import { mcpFetch, retryDelayMs, retrySpecFor, retryableStatus } from '@backend/features/integrations'
+import { onIntegrationsGrantChanged, resolveGrantedWriteTools, resolveWriteAllGranted, workspaceIdForPane } from './integrations'
+import { connectionUpstream, restBridgeUpstream } from './connections'
+import { handleRestBridgeRpc, mcpFetch, retryDelayMs, retrySpecFor, retryableStatus } from '@backend/features/integrations'
 import { getDaemonClient } from './daemon-relay'
 import { runtimeDir as clientRuntimeDir } from './daemon-client'
 import { recordTrail } from './trail'
@@ -151,12 +151,36 @@ function receiptCopy(tool: string, by: string): string {
  * process is one agent's session, so one socket is the right lifetime for it —
  * a map shared across bridges would cross two agents' sessions into one.
  */
+/** Bridge-call observability (ADR 0005): counts and booleans only — a call is
+ *  COUNTED, never named. Read back by the dev gates. */
+const restBridgeStats = { lists: 0, calls: 0, refusals: 0 }
+export const restBridgeStatsForSmoke = (): { lists: number; calls: number; refusals: number } => ({ ...restBridgeStats })
+
 async function handleConnectionRpc(
   connection: string,
   payload: unknown,
-  sessions: Map<string, string>
+  sessions: Map<string, string>,
+  boundPane: string | undefined
 ): Promise<{ ok: boolean; payload?: unknown; reason?: string }> {
   if (!/^[a-z0-9_-]{1,64}$/i.test(connection)) return { ok: false, reason: 'unknown connection' }
+  // ADR 0021: the KEY route serves the catalog's curated restTools through OUR
+  // house bridge — one pinned REST request per tools/call, key injected here,
+  // server-side. An OAuth-connected service (or a row with no restTools) falls
+  // through to the MCP proxy below, untouched. The write gate reads the SAME
+  // per-workspace grant seam as MCP write tools, fail-closed on a paneless caller.
+  const rest = await restBridgeUpstream(connection)
+  if (rest) {
+    const method = (payload as { method?: string } | null)?.method
+    if (method === 'tools/list') restBridgeStats.lists += 1
+    else if (method === 'tools/call') restBridgeStats.calls += 1
+    const resp = await handleRestBridgeRpc(payload, {
+      entry: rest.entry,
+      token: rest.token,
+      writeGranted: resolveWriteAllGranted(boundPane)
+    })
+    if (resp && typeof resp === 'object' && (resp.result as { isError?: boolean } | undefined)?.isError) restBridgeStats.refusals += 1
+    return resp === null ? { ok: true } : { ok: true, payload: resp }
+  }
   const upstream = await connectionUpstream(connection)
   if (!upstream) {
     return {
@@ -518,7 +542,7 @@ export function startMcpEndpoint(): void {
           // the APP is connected to; we attach the token it never gets to see.
           if (msg.name === 'connection.rpc') {
             const args = msg.args ?? {}
-            void handleConnectionRpc(String(args.connection ?? ''), args.payload, mcpSessions)
+            void handleConnectionRpc(String(args.connection ?? ''), args.payload, mcpSessions, boundPane)
               .then((r) => sock.write(JSON.stringify({ t: 'result', id, ...r }) + '\n'))
               .catch((e) => sock.write(JSON.stringify({ t: 'result', id, ok: false, reason: rpcFailure(e) }) + '\n'))
             continue

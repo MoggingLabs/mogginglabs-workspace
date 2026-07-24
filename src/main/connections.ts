@@ -893,6 +893,25 @@ async function fetchAuthServerMetadataFor(url: string): Promise<AuthServerMetada
   return disco.metadata
 }
 
+/**
+ * The REST bridge's half of the upstream question (ADR 0021): a service is
+ * bridge-served when it was connected on the KEY route and its catalog row
+ * declares curated `restTools`. OAuth-connected services keep the MCP proxy
+ * path untouched — the bridge is the KEY route, by construction. The token
+ * still comes from `accessTokenFor` — the ONE decryption point, unchanged.
+ */
+export async function restBridgeUpstream(
+  serviceId: string
+): Promise<{ entry: import('@contracts').ProviderEntry; token: string } | null> {
+  const meta = readMeta(serviceId)
+  if (!meta || meta.state === 'disconnected' || meta.authKind !== 'key') return null
+  const entry = providerEntryFor(serviceId)
+  if (!entry?.restTools?.length) return null
+  const token = await accessTokenFor(serviceId)
+  if (!token) return null
+  return { entry, token }
+}
+
 /** What the proxy needs: where to send the call, and what to send it with. */
 export async function connectionUpstream(
   serviceId: string
