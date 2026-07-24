@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { attachDims } from '../../src/pty-daemon/session'
+import { attachDims } from '../../src/pty-daemon/attach-dims'
 
 // The attach-size reconciliation rule (the "pane renders half its width" root cause):
 // the attaching client's viewport is authoritative, tmux-style. ensure() applies what

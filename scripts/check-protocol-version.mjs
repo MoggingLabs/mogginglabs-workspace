@@ -180,7 +180,13 @@ function wireFingerprint() {
 // hello's optional client identity + welcome's `otherClients`, the facts behind daemon.log
 // shutdown attribution and the stamp-war retire guard (daemon-client.ts ensureDaemon).
 // The fingerprint below pins the MERGED shape of both.
-const PINNED = { version: 10, fingerprint: '56dacb959ecf7e4e' }
+// Re-pinned WITHOUT a bump (2026-07-24, the additive-tolerant arm): the agent-state
+// signal work (7664d57) admitted `turn-failed` to NotifyEvent — a NEW VALUE in an
+// EXISTING string field of an existing verb, the exact class as the 'usage-limit'
+// re-pin above. An old daemon parses the frame fine and routes the unknown type to
+// notice() (degraded, never broken); the build stamp — not a version burn — is what
+// retires stale daemon code in place. Nothing an old daemon cannot SPEAK moved.
+const PINNED = { version: 10, fingerprint: 'dd23e8528e522a73' }
 
 const actualWire = wireFingerprint()
 if (actualWire !== PINNED.fingerprint) {

@@ -13,6 +13,7 @@ import { aiderLogPath } from '@backend/features/context'
 import type { Approval, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { PANE_CWD_MAX, normalizeRemoteConnection, notifyEventToState } from '@contracts'
 import { log } from './lifecycle'
+import { attachDims } from './attach-dims'
 import {
   ActivityTracker,
   AgentProcessDetector,
@@ -221,24 +222,6 @@ const REMOTE_CONTEXT_MONITOR_START = '"$MOGGING_HELPER_DIR/.context-monitor" "$$
 /** The readiness signal as a POSIX printf — the same OSC `REMOTE_READY_OSC` names in @contracts,
  *  spelled for a remote /bin/sh. See remoteBootstrap for why it is not optional. */
 const READY_OSC_PRINTF = `printf '\\033]777;mogging-remote-ready\\007'`
-
-/**
- * The dims an ATTACH must apply to an existing session, or null for "leave it alone".
- * Null when the spec carries no usable dims (a bare `attach` has none; a corrupt spec
- * must never reach node-pty, which throws on non-positive sizes) and when they already
- * match (a same-size resize forwarded to ConPTY costs a full spurious repaint — see
- * PaneSession.resize). Floors mirror the renderer's fit minimums (2 cols / 1 row).
- */
-export function attachDims(
-  spec: { cols?: number; rows?: number },
-  current: { cols: number; rows: number }
-): { cols: number; rows: number } | null {
-  const { cols, rows } = spec
-  if (typeof cols !== 'number' || typeof rows !== 'number') return null
-  if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 2 || rows < 1) return null
-  if (cols === current.cols && rows === current.rows) return null
-  return { cols, rows }
-}
 
 export function remoteBootstrapCommand(cwd?: string): string {
   const bashRc = [
