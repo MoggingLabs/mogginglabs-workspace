@@ -159,9 +159,15 @@ export function runUsageGlanceSmoke(win: BrowserWindow): void {
         const r = document.querySelector('.usage-popover .usage-reset')
         return { verdicts: vs, deltas: ds, reset: r ? r.textContent : '' }
       })()`)
+      // TIME-MASKED equality: the verdict embeds a wall-clock ETA ("runs out
+      // ~Sat 00:50"), and the IPC read and the DOM paint are two computations at
+      // two instants — straddle a minute boundary and byte equality lies
+      // (macos-26 run 30128897814: 00:49 vs 00:50). The claim is the verdict —
+      // class, phrasing, day anchor — not which minute the clock showed.
+      const maskClock = (s: string): string => s.replace(/\d{1,2}:\d{2}/g, 'HH:MM')
       const cOk =
         !!paceText &&
-        cInfo.verdicts.includes(paceText) &&
+        cInfo.verdicts.map(maskClock).includes(maskClock(paceText)) &&
         cInfo.verdicts.length >= 2 && // session AND weekly each pace themselves
         cInfo.deltas.length === cInfo.verdicts.length &&
         cInfo.deltas.every((d) => /[+\-−]?\d+%/.test(d)) &&

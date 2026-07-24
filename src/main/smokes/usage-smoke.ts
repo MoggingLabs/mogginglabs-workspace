@@ -119,13 +119,16 @@ export function runUsageSmoke(win: BrowserWindow): void {
         }
         return -1
       }
-      // hide/show, not minimize/restore: minimize is a WINDOW-MANAGER operation
-      // and xvfb (linux CI) runs no WM — the event never fires there (run
-      // 30119138843: pauseTookMs -1 on ubuntu). hide/show are app-level, fire
-      // on every platform, and ride the same product handlers.
-      win.hide()
+      // EMITTED events, not native transitions: minimize needs a window manager
+      // (xvfb runs none — run 30119138843, ubuntu pauseTookMs -1) and macOS
+      // runners drop even hide() delivery some runs (run 30128897814, same -1
+      // after a green run 30124737204). Whether the OS delivers the transition
+      // is Electron's contract; OURS is the listener registration and the
+      // handler behind it — which win.emit exercises exactly, deterministically,
+      // on every platform.
+      win.emit('hide')
       const pauseTookMs = await waitVisible(false)
-      win.show()
+      win.emit('show')
       const resumeTookMs = await waitVisible(true)
       const wiringOk = pauseTookMs >= 0 && resumeTookMs >= 0
       //

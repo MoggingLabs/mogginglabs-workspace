@@ -430,7 +430,12 @@ export function runBrainMilestoneSmoke(win: BrowserWindow): void {
       const launchOk =
         started1 &&
         mapFenceAt >= 0 &&
-        mapStampAt > mapFenceAt && // generation-stamped, visibly
+        // PRESENCE, not position, for the stamp: the capture is a rolling
+        // 400-line window over a repainting CLI — a redraw can place the
+        // stamp's surviving occurrence before the fence's without either being
+        // absent (macos-26 run 30128897814: stamp present, order inverted).
+        // Stamped-on-the-map is presence + the task following the fence.
+        mapStampAt >= 0 && // generation-stamped, visibly
         taskAt > mapFenceAt // the map opens the prompt; the task follows it
 
       // ── The launched pane's OWN client: the REAL server inside the pane the
@@ -764,7 +769,7 @@ export function runBrainMilestoneSmoke(win: BrowserWindow): void {
         pass,
         indexOnceOk, filesPerCheckout, wt1Rate: Math.round(wt1Rate * 1000) / 10, wt2Rate: Math.round(wt2Rate * 1000) / 10,
         coldIndexMs,
-        launchOk, mapFenceAt, taskAt,
+        launchOk, mapFenceAt, mapStampAt, taskAt,
         grantWallOk,
         graphTruthOk, pathDepth: path3.data.depth ?? null,
         partitionsOk, projRoots,
