@@ -59,7 +59,7 @@ Add the secrets in repo settings → rerun `Release`. The
 `CSC_LINK` breaks electron-builder), signing and notarization activate on their
 own. Verify beforehand any time with the `signing-dryrun` dispatch.
 
-† **Intel (x64) macOS is still deferred as of v0.15.1.** The 2026-07 macos runner image
+† **Intel (x64) macOS is still deferred as of v0.16.0.** The 2026-07 macos runner image
 regressed into the same `@electron/rebuild` spawn hang the ubuntu/windows
 images have (59 min of silence on `preparing better-sqlite3` — run
 28756024650), so the mac release uses the direct node-gyp bypass, which builds
@@ -139,7 +139,7 @@ one command — never hand-edit hashes:
 # from a local release build:
 node scripts/update-manifests.mjs            # reads dist/
 # from a published release:
-gh release download v0.15.1 -D /tmp/rel && node scripts/update-manifests.mjs /tmp/rel
+gh release download v0.16.0 -D /tmp/rel && node scripts/update-manifests.mjs /tmp/rel
 ```
 
 CI validates both continuously where the tooling exists (`winget validate` on
