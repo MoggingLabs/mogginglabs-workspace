@@ -145,6 +145,11 @@ export class GridLayout {
   private readonly resizeObs: ResizeObserver
   private dropHint: HTMLElement | null = null
   private seamPersistTimer?: ReturnType<typeof setTimeout>
+  // A drag registers window mousemove/mouseup removed only by its own `up`. If the workspace
+  // is closed mid-drag (a close-pane control command while the user holds a seam), the next
+  // mouseup ran applyDrop -> rebuild -> publishSlots into a DETACHED grid, re-creating slots
+  // (and their PTYs) nobody can see. dispose() calls this to abort an in-flight drag.
+  private activeDragCleanup: (() => void) | null = null
   // Every expand mode now tracks a viewport axis (col follows vertical scroll,
   // row horizontal, full both) — any scroll while expanded re-derives the rect.
   private readonly followExpandedViewport = (): void => {
@@ -270,15 +275,24 @@ export class GridLayout {
    *  refusals must quote (two different numbers would gate one door twice). Note the
    *  GPU budget is not a count limit: Chromium caps ~16 live WebGL contexts and panes
    *  past that edge ride the DOM renderer via PaneWebglManager's managed fallback. */
-  limit(): number {
-    return this.capacity().maxPanes
+  limit(discountElsewhere = 0): number {
+    return this.capacity(discountElsewhere).maxPanes
   }
 
   /** The full budget behind `limit()` — cols × rows × total. The reorganize panel's
    *  painter reads maxRows/maxCols (the lattice bounds), not just the total, so the
    *  grid it lets you paint is one this workspace can actually render. */
-  capacity(): PaneCapacity {
-    const elsewhere = Math.max(0, livePaneCount() - this.paneIds().length)
+  /**
+   * `discountElsewhere` is for a door that MOVES a pane that is already running: the mover is
+   * still counted in its source workspace, so charging the destination for it too asks the
+   * machine to afford a pane it is already affording. Untouched, that double-count made the
+   * refusal reduce to `totalLivePanes >= machineBudget` — i.e. once the machine budget was
+   * reached, EVERY cross-workspace move was refused, and the picker rendered every row "Full",
+   * for a move that creates nothing. The inner `adoptPane` gate never had the bug because it
+   * runs after `detachPane`, when the count is already one lower.
+   */
+  capacity(discountElsewhere = 0): PaneCapacity {
+    const elsewhere = Math.max(0, livePaneCount() - this.paneIds().length - Math.max(0, discountElsewhere))
     return effectivePaneCapacity(this.scrollHost, machineSpec(), elsewhere)
   }
 
@@ -949,13 +963,18 @@ export class GridLayout {
     const move = (ev: MouseEvent): void => {
       this.moveSeam(geom, index, base, (geom.horizontal ? ev.clientX : ev.clientY) - startPos)
     }
-    const up = (): void => {
+    const teardown = (): void => {
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', up)
       document.body.classList.remove('resizing')
+      this.activeDragCleanup = null
+    }
+    const up = (): void => {
+      teardown()
       getTelemetry().captureEvent({ name: 'layout.resized', props: { dir: geom.split.dir } })
       this.onLayoutChange?.()
     }
+    this.activeDragCleanup = teardown
     document.body.classList.add('resizing')
     window.addEventListener('mousemove', move)
     window.addEventListener('mouseup', up)
@@ -1079,17 +1098,24 @@ export class GridLayout {
         ev.preventDefault()
         this.showDropHint(srcId, this.zoneAt(srcId, ev))
       }
-      const up = (ev: MouseEvent): void => {
+      const teardown = (): void => {
         window.removeEventListener('mousemove', move)
         window.removeEventListener('mouseup', up)
-        if (!active) return
         document.body.classList.remove('pane-dragging')
         slot.classList.remove('drag-source')
         this.dropHint?.remove()
         this.dropHint = null
-        const zone = this.zoneAt(srcId, ev)
-        if (zone) this.applyDrop(srcId, zone)
+        this.activeDragCleanup = null
       }
+      const up = (ev: MouseEvent): void => {
+        const wasActive = active
+        const zone = wasActive ? this.zoneAt(srcId, ev) : null
+        teardown()
+        // applyDrop only for a drag that actually engaged AND is still attached — a disposed
+        // grid must never re-publish slots (activeDragCleanup fired in dispose nulls this path).
+        if (wasActive && zone) this.applyDrop(srcId, zone)
+      }
+      this.activeDragCleanup = teardown
       window.addEventListener('mousemove', move)
       window.addEventListener('mouseup', up)
     })
@@ -1201,6 +1227,10 @@ export class GridLayout {
   dispose(): void {
     this.resizeObs.disconnect()
     if (this.seamPersistTimer) clearTimeout(this.seamPersistTimer) // a workspace closed mid-nudge must not persist into it
+    this.activeDragCleanup?.() // abort an in-flight drag so the next mouseup can't re-publish slots into a detached grid
+    this.activeDragCleanup = null
+    for (const t of this.pulseTimers.values()) window.clearTimeout(t) // mid-swell pulses hold the slot + this GridLayout
+    this.pulseTimers.clear()
     this.scrollHost.removeEventListener('scroll', this.followExpandedViewport)
     clearSlots(this.source)
     this.grid.remove()

@@ -208,7 +208,68 @@ const SCRIPT = `(async () => {
   // WebGL context at any instant is the GL leasing's async, load-sensitive business (one
   // grant per frame), not the move's. Rendering is what the move owes, and the echo
   // assertions are what prove it — a killed PTY renders nothing at all, ever.
+  // ── Undo after the moved pane is GONE: the source must stay closed ──────────────────
+  // undoMovePane revived the emptied source BEFORE it knew the detach could succeed, and
+  // revivePending is not undoable — so a failed undo left the workspace in the rail holding
+  // ZERO panes. switch() refuses to enter a zero-pane workspace, so its tab did nothing when
+  // clicked, forever, with a persisted paneCount that no longer matched its tree.
+  const U1 = m.workspace.create({ name: 'UndoSrc' })
+  await sleep(900)
+  const U2 = m.workspace.create({ name: 'UndoDst', paneCount: 2 })
+  await sleep(1400)
+  const uPane = U1.ordinal * 100 + 1
+  const wsCountBeforeUndo = m.workspace.count()
+  const movedAway = pane(uPane) ? m.workspace.movePane(uPane, U2.id) === true : false
+  await sleep(700) // UndoSrc soft-closes: it held only that pane
+  // Close the pane in its NEW home, inside the undo grace.
+  // layout.close acts on the ACTIVE workspace, so switch to the pane's NEW home first —
+  // by index, resolved from the live list (there is no switch-by-id on the dev handle).
+  const u2Index = m.workspace.list().findIndex((w) => w.id === U2.id)
+  if (u2Index >= 0) m.workspace.switchByIndex(u2Index)
+  await sleep(600)
+  m.layout.close(uPane)
+  for (let i = 0; i < 40 && pane(uPane); i++) await sleep(200)
+  const undoPaneGone = !pane(uPane)
+  // Now click the move's Undo toast: it must REFUSE, not resurrect a dead tab.
+  const undoBtns = Array.from(document.querySelectorAll('.toast-action')).filter((b) => b.textContent.trim() === 'Undo')
+  if (undoBtns.length) undoBtns[undoBtns.length - 1].click()
+  await sleep(900)
+  const undoSrcRevived = m.workspace.list().some((w) => w.id === U1.id)
+  const noDeadTab = m.workspace.list().every((w) => (w.paneCount || 0) > 0)
+  const undoAfterCloseRefuses = movedAway && undoPaneGone && !undoSrcRevived && noDeadTab
+
+  // ── The machine-budget door: a MOVE creates no pane, so saturation must not refuse it ──
+  // The gate charged the destination for the pane being moved while it was STILL counted in
+  // the source, so the refusal reduced to "totalLivePanes >= machineBudget" — at saturation
+  // every cross-workspace move was refused and the picker rendered every row "Full", for an
+  // operation that creates nothing. The inner adoptPane gate never had it (it runs after
+  // detachPane). This gate runs with MOGGING_MACHINE_CORES=4 so the machine term is 8 and
+  // actually BINDS; on the harness box geometry caps first and the bug is invisible.
+  // (No backticks in here: this whole script is a template literal.)
+  const MACHINE_BUDGET = 8
+  const totalPanes = () => m.workspace.list().reduce((n, w) => n + (w.paneCount || 0), 0)
+  const need = MACHINE_BUDGET - totalPanes()
+  const SAT = m.workspace.create({ name: 'Sat', paneCount: Math.max(1, need) })
+  await sleep(1800)
+  // Pane ids are ordinal-derived (the idiom used for MOVED above); a freshly created
+  // workspace's meta has no paneIds until it has been through a save.
+  const satPane = SAT.ordinal * 100 + 1
+  for (let i = 0; i < 60 && !pane(satPane); i++) await sleep(200)
+  const saturatedTotal = totalPanes()
+  // Destination: any OTHER workspace that still holds at least one pane.
+  const dstMeta = m.workspace.list().find((w) => w.id !== SAT.id && (w.paneCount || 0) > 0)
+  const satTargets = pane(satPane) ? m.workspace.moveTargets(satPane) : []
+  const dstTarget = dstMeta ? satTargets.find((t) => t.id === dstMeta.id) : undefined
+  // Both halves matter: the picker must OFFER it (no "Full" chip) and the gate must TAKE it.
+  const budgetSaturated = saturatedTotal >= MACHINE_BUDGET
+  const budgetMoveOffered = !!dstTarget && dstTarget.full === false
+  const budgetMoved = pane(satPane) && dstMeta ? m.workspace.movePane(satPane, dstMeta.id) === true : false
+  await sleep(600)
+  const budgetDoorOk = budgetSaturated && budgetMoveOffered && budgetMoved
+
   const pass =
+    undoAfterCloseRefuses &&
+    budgetDoorOk &&
     beforeEchoed && targetsOk && moved === true &&
     sameObject && idKept && inBeta && landedOnBeta && focused &&
     scrollbackKept && countsOk &&
@@ -232,6 +293,11 @@ const SCRIPT = `(async () => {
     wizardAgent: {
       agentEchoed, menuItemShown, modalRowsOk, confirmEnabled,
       uiMoved, bSlot, manifestMoved, agentAliveAfterUiMove
+    },
+    undoAfterClose: { undoAfterCloseRefuses, movedAway, undoPaneGone, undoSrcRevived, noDeadTab, wsCountBeforeUndo },
+    machineBudgetDoor: {
+      budgetDoorOk, saturatedTotal, budgetSaturated, budgetMoveOffered, budgetMoved,
+      dstId: dstMeta ? dstMeta.id : null, satPane
     }
   }
 })()`

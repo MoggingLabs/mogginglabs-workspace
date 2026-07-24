@@ -1,3 +1,4 @@
+import { shortcutsBlocked } from '../../core/commands/context'
 import type { UiFeature } from '../../core/registry/feature-registry'
 import { BrainChannels, BrowserChannels, TelemetryChannels, type TelemetryRendererConfig } from '@contracts'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
@@ -1056,6 +1057,11 @@ export const settingsFeature: UiFeature = {
       'keydown',
       (e) => {
         if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === ',') {
+          // A blocking modal owns the keyboard: #app is inert, so swapping the whole
+          // top-level view behind it strands the user on Settings with their grid gone the
+          // moment they dismiss the dialog. Four sibling chord handlers already ask this;
+          // this one and the rail toggle did not.
+          if (shortcutsBlocked(e.target)) return
           e.preventDefault()
           e.stopPropagation()
           if (activeView() === 'settings') goBack()

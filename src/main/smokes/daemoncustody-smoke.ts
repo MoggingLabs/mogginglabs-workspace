@@ -33,7 +33,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { buildStampOf } from '@backend/platform/build-stamp'
-import { ensureDaemon, retireOwnDaemon } from '../daemon-client'
+import { ensureDaemon, retireOwnDaemon, probeReachable } from '../daemon-client'
 import { helperRuntime } from '../node-helper'
 import { sweepRunRoot } from '../daemon-sweep'
 import { isAlive } from '@backend/platform/pid'
@@ -164,9 +164,33 @@ export async function runDaemonCustodySmoke(): Promise<void> {
     r.staleRetired = await waitUntilDead(ep1.pid, 5000)
     r.freshSeated = ep2.pid !== ep1.pid && ep2.build === expected && isAlive(ep2.pid)
 
+    // ── D (pid-reuse corpse S1): an endpointLive-but-UNREACHABLE endpoint must NOT be trusted ──
+    // POSIX has no sync socket check — pipeAlive returns true for every non-pipe address — so a
+    // stale endpoint.json whose recorded pid was REUSED by an unrelated process after an unclean
+    // reboot (the run/ dir survives reboots) passes endpointLive though nothing listens on its
+    // socket: a corpse. Trusted, the relay dials that dead address forever and the app falls back
+    // to the in-proc backend PERMANENTLY on that machine. Windows cannot build this shape (a pipe
+    // either has a listener or fails accessSync), so MOGGING_DAEMON_FORCE_REACH_PROBE forces the
+    // same connect-probe the POSIX path always runs — proving the wire here.
+    const retiredEp2 = await retireOwnDaemon({ quiesce: false }) // clear the live daemon; NO quiesce
+    r.corpsePrepReady = retiredEp2 && (await waitUntilDead(ep2.pid, 5000))
+    // The corpse: current wire + the TRUE stamp (so this is NOT a stale-build retire — we isolate
+    // the reachability decision), a LIVE-but-foreign pid (this very process), and a non-pipe
+    // address nothing listens on. pipeAlive vouches for the non-pipe address exactly as it does a
+    // POSIX unix-socket path, so endpointLive says LIVE — only the connect-probe can catch it.
+    const corpseAddr = path.join(os.tmpdir(), `mogging-corpse-${process.pid}.nolisten`)
+    fs.writeFileSync(epFile, JSON.stringify({ ...ep2, build: expected, pid: process.pid, address: corpseAddr }))
+    process.env.MOGGING_DAEMON_FORCE_REACH_PROBE = '1'
+    const ep3 = await ensureDaemon(daemonEntry, helperRuntime())
+    process.env.MOGGING_DAEMON_FORCE_REACH_PROBE = ''
+    r.corpseNotTrusted = ep3.pid !== process.pid // pre-fix trusts endpointLive and returns the corpse
+    r.corpseRespawnReachable = await probeReachable(ep3) // a fresh real daemon answers; a corpse cannot
+    const onDisk = JSON.parse(fs.readFileSync(epFile, 'utf8')) as { pid: number }
+    r.corpseEndpointReplaced = onDisk.pid === ep3.pid && onDisk.pid !== process.pid
+
     // The pre-install step: retire our own daemon and refuse to resurrect it.
     const retired = await retireOwnDaemon({ quiesce: true })
-    r.retireOwnDaemon = retired && (await waitUntilDead(ep2.pid, 5000))
+    r.retireOwnDaemon = retired && (await waitUntilDead(ep3.pid, 5000))
     let refused = false
     try {
       await ensureDaemon(daemonEntry, helperRuntime())

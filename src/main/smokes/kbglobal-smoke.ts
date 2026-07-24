@@ -52,6 +52,8 @@ const CHORDS = {
   'Ctrl+T': { modifiers: 2, key: 't', code: 'KeyT', vk: 84 },
   'Ctrl+1': { modifiers: 2, key: '1', code: 'Digit1', vk: 49 },
   'Ctrl+2': { modifiers: 2, key: '2', code: 'Digit2', vk: 50 },
+  'Ctrl+,': { modifiers: 2, key: ',', code: 'Comma', vk: 188 },
+  'Ctrl+Shift+B': { modifiers: 10, key: 'B', code: 'KeyB', vk: 66 },
   F2: { modifiers: 0, key: 'F2', code: 'F2', vk: 113 },
   Escape: { modifiers: 0, key: 'Escape', code: 'Escape', vk: 27 }
 } as const
@@ -271,6 +273,21 @@ export function runKbGlobalSmoke(win: BrowserWindow): void {
       await press('Ctrl+Shift+G')
       const n2 = await snap()
       check('8 Ctrl+Shift+G while renaming must NOT open the Board', !n2.view.includes('view-board'), n2.view)
+      // The two chords that were NOT guarded: Ctrl+, swapped the whole top-level view behind
+      // the inert #app (dismiss the dialog and your grid is gone), and Ctrl+Shift+B also
+      // PERSISTED a rail preference the user never set. Both are observable from outside the
+      // modal, which is what makes them assertable here.
+      const railBefore = await ES(`localStorage.getItem('mogging.railCollapsed')`)
+      await press('Ctrl+,')
+      const n3 = await snap()
+      check('8 Ctrl+, while renaming must NOT open Settings', !n3.view.includes('view-settings'), n3.view)
+      await press('Ctrl+Shift+B')
+      const railAfter = await ES(`localStorage.getItem('mogging.railCollapsed')`)
+      check('8 Ctrl+Shift+B while renaming must NOT persist a rail preference', railAfter === railBefore, {
+        before: railBefore,
+        after: railAfter
+      })
+
       await press('Escape')
       await sleep(300)
 

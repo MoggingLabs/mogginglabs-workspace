@@ -394,6 +394,25 @@ const SCRIPT = `(async () => {
   await sleep(400)
   check('K viewport held under output', kp.scroll().viewportY === kUp.viewportY, JSON.stringify(kp.scroll()))
 
+  // A real chord is TWO keydowns: the modifier lands first, on its own. That bare press is not
+  // a SCROLL_KEY, so the anchor read it as typing and jumped the reader to the newest line
+  // BEFORE the chord it was starting could arrive — losing their place on every Shift+PageUp,
+  // Shift+Home and Shift+End. The smoke could not see it: the key() helper dispatches only the chord
+  // key with shiftKey already set, never the standalone modifier a real keyboard produces.
+  const beforeBareMod = kp.scroll()
+  for (const mod of ['Shift', 'Control', 'Alt']) {
+    ta().dispatchEvent(new KeyboardEvent('keydown', {
+      key: mod, code: mod + 'Left', keyCode: mod === 'Shift' ? 16 : mod === 'Control' ? 17 : 18,
+      shiftKey: mod === 'Shift', ctrlKey: mod === 'Control', altKey: mod === 'Alt',
+      bubbles: true, cancelable: true
+    }))
+    await sleep(120)
+  }
+  const afterBareMod = kp.scroll()
+  check('K a bare modifier press does not release the anchor',
+    afterBareMod.viewportY === beforeBareMod.viewportY && !afterBareMod.atBottom,
+    JSON.stringify({ beforeBareMod, afterBareMod }))
+
   await key('PageDown', true)
   check('K Shift+PageDown pages back down', kp.scroll().viewportY > kUp.viewportY, JSON.stringify(kp.scroll()))
   await key('Home', true)

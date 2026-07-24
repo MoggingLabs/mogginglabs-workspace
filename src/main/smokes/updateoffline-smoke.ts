@@ -1,6 +1,7 @@
 import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { installHandoffCountForSmoke } from '../updater'
 
 /**
  * The wake-from-sleep regression (found live on v0.14.0 — updater.log): the boot check hit
@@ -164,8 +165,41 @@ export function runUpdateOfflineSmoke(win: BrowserWindow): void {
         !p4.railVisible &&
         p4.settingsStatus.includes('up to date')
 
+      // ── 5. A DOWNLOADED (ready) update must survive a later check that finds nothing ──
+      // push() merges destructively, so a background check settling to idle wrote over a
+      // 'ready' phase and the staged update vanished from the rail + restart affordance.
+      process.env.MOGGING_UPDATE_OUTCOME = 'available'
+      await ES(`window.bridge.invoke('update:check', { auto: false })`)
+      const sReady = await until(state, (s) => s.phase === 'ready', 40, 250)
+      process.env.MOGGING_UPDATE_OUTCOME = 'ok' // the next check finds nothing newer
+      await ES(`window.bridge.invoke('update:check', { auto: true })`)
+      await new Promise((r) => setTimeout(r, 1200)) // let checking + settle run
+      const sAfterRecheck = await state()
+      const readySurvivesRecheck = sReady.phase === 'ready' && sAfterRecheck.phase === 'ready'
+
+      // ── 6. A double-clicked "Restart now" must hand off EXACTLY once ─────────────────
+      // retireForInstall's early-return let a second click skip the ~7s retire wait and call
+      // quitAndInstall while the first retire was still in flight — a second installer against
+      // a still-locked exe. The handler now latches. Reach ready again (phase 5 left it there),
+      // arm the probe (the handler otherwise early-returns in dev, and counts instead of really
+      // quitting), and fire two restarts ~200ms apart.
+      process.env.MOGGING_UPDATE_INSTALL_PROBE = '1'
+      process.env.MOGGING_UPDATE_OUTCOME = 'available'
+      await ES(`window.bridge.invoke('update:check', { auto: false })`)
+      await until(state, (s) => s.phase === 'ready', 40, 250)
+      await ES(`(window.bridge.invoke('update:restart'), setTimeout(() => window.bridge.invoke('update:restart'), 200), 1)`)
+      await new Promise((r) => setTimeout(r, 3500)) // both retire windows (1500ms each) settle
+      const handoffCount = installHandoffCountForSmoke()
+      process.env.MOGGING_UPDATE_INSTALL_PROBE = ''
+      const doubleClickHandsOffOnce = handoffCount === 1
+
       result = {
-        pass: quietOk && manualLoudOk && standsOk && healOk,
+        pass: quietOk && manualLoudOk && standsOk && healOk && readySurvivesRecheck && doubleClickHandsOffOnce,
+        doubleClickHandsOffOnce,
+        handoffCount,
+        readySurvivesRecheck,
+        sReady,
+        sAfterRecheck,
         quietOk,
         manualLoudOk,
         standsOk,

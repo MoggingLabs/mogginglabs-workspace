@@ -5,6 +5,7 @@ import { clear } from '../components'
 import { onViewChange } from '../core/shell/view-port'
 import { getWorkspaces, onWorkspacesChange } from '../core/workspace/workspace-info-port'
 import { applyCalmMotion } from '../core/a11y/motion-port'
+import { shortcutsBlocked } from '../core/commands/context'
 import { createTitlebar } from './titlebar'
 
 const RAIL_COLLAPSED_KEY = 'mogging.railCollapsed'
@@ -38,6 +39,7 @@ export function createAppShell(root: HTMLElement): ShellContext {
     // has nothing to toggle: refuse — the button below also reads disabled, and this
     // guard covers the shortcut path too. Nothing to gray IN the rail: it is gone.
     if (getWorkspaces().workspaces.length === 0) return
+    if (app.classList.contains('rail-auto-collapsed')) return // see syncRailToggle
     const collapsed = app.classList.toggle('rail-collapsed')
     try {
       localStorage.setItem(RAIL_COLLAPSED_KEY, collapsed ? '1' : '')
@@ -55,11 +57,26 @@ export function createAppShell(root: HTMLElement): ShellContext {
   // means something, and an empty rail beside the zero-workspace wizard meant
   // nothing — the wizard runs full-bleed until there are workspaces to show
   // (global.css keys the rail's display off this).
+  // Also disabled while the LAYOUT has auto-collapsed the rail (dock-budget.ts adds
+  // `rail-auto-collapsed` when the window is too narrow to afford an expanded rail beside the
+  // open docks). Both classes resolve to the same width, so clicking through an auto-collapse
+  // changed nothing on screen — and still WROTE `railCollapsed=1`, so widening the window
+  // later left the rail folded: the opposite of what the click asked for, from a button that
+  // appeared to do nothing. Same refusal shape as the zero-workspace case above, for the same
+  // reason: a control that cannot act must not look like it can.
+  const syncRailToggle = (): void => {
+    const none = getWorkspaces().workspaces.length === 0
+    const auto = app.classList.contains('rail-auto-collapsed')
+    railToggle.disabled = none || auto
+    railToggle.title = none
+      ? 'Workspace rail — create a workspace first'
+      : auto
+        ? 'Workspace rail — the window is too narrow to expand it'
+        : 'Toggle rail (Ctrl+Shift+B)'
+  }
   onWorkspacesChange((snapshot) => {
-    const none = snapshot.workspaces.length === 0
-    app.classList.toggle('no-workspaces', none)
-    railToggle.disabled = none
-    railToggle.title = none ? 'Workspace rail — create a workspace first' : 'Toggle rail (Ctrl+Shift+B)'
+    app.classList.toggle('no-workspaces', snapshot.workspaces.length === 0)
+    syncRailToggle()
   })
 
   const main = document.createElement('div')
@@ -110,6 +127,10 @@ export function createAppShell(root: HTMLElement): ShellContext {
   let railWasCollapsed =
     app.classList.contains('rail-collapsed') || app.classList.contains('rail-auto-collapsed')
   new MutationObserver(() => {
+    // Toggle state first: `rail-auto-collapsed` landing on an ALREADY-collapsed rail does not
+    // change the fold, so it would skip past the early return below and leave the button
+    // enabled — exactly the case that has nothing to act on.
+    syncRailToggle()
     const collapsed =
       app.classList.contains('rail-collapsed') || app.classList.contains('rail-auto-collapsed')
     if (collapsed === railWasCollapsed) return // class churn that didn't change the fold
@@ -125,6 +146,10 @@ export function createAppShell(root: HTMLElement): ShellContext {
     'keydown',
     (e) => {
       if ((e.ctrlKey || e.metaKey) && !e.altKey && e.shiftKey && e.key.toLowerCase() === 'b') {
+        // Same law as the other global chords: a blocking modal owns the keyboard. This one
+        // also WRITES localStorage, so firing it through a dialog left a persisted rail
+        // preference the user never set.
+        if (shortcutsBlocked(e.target)) return
         e.preventDefault()
         e.stopPropagation()
         toggleRail()
@@ -161,6 +186,12 @@ export function createAppShell(root: HTMLElement): ShellContext {
     // as if the click had been visible, current and future ones alike.
     getBridge().on(ShellChannels.chromePress, () => {
       document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+      // …and a `click`, because the dismissers are split across BOTH events and a synthetic
+      // pointerdown never produces one. The pane menu and the usage popover listen on
+      // pointerdown; the layout popover (workspace/index.ts) and the browser dock's trail and
+      // sites menus listen on click — so pressing the titlebar closed half the popovers this
+      // feature exists to close, including the layout one its own comment names as the target.
+      document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
   } catch {
     /* no bridge (tests) — chrome classes stay at the restored defaults */

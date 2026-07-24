@@ -13,6 +13,7 @@ import { getTelemetry } from '@backend'
 import { getSettingsStore } from './app-settings'
 import { retireOwnDaemon, endDaemonQuiescence } from './daemon-client'
 import { updateFeedFixture } from './fixture-port'
+import { consumeUpdatePrefsSetFailure } from './updateprefs-audit-faults'
 
 // App-wiring: auto-update via electron-updater against the signed GitHub Releases feed
 // (electron-builder.yml `publish`). Runs ONLY in a packaged build — never in dev/smokes. It
@@ -46,12 +47,28 @@ function checkForUpdatesSafely(): void {
 // The last state pushed, so a late subscriber (the settings pane, mounted long after boot)
 // can be told where things stand instead of showing a blank row until the next 6-hour tick.
 let last: UpdateState = { phase: 'idle' }
+let installHandoffCount = 0
+/** Test observable (MOGGING_UPDATE_INSTALL_PROBE): times the restart handler reached the
+ *  quitAndInstall handoff. A double-click must leave it at 1, never 2. */
+export function installHandoffCountForSmoke(): number {
+  return installHandoffCount
+}
 
 function push(patch: UpdateState): void {
   // lastCheckedAt/currentVersion/supported are sticky: a `downloading` push must not erase
   // the timestamp the preceding `checking` earned.
   last = { ...last, ...patch }
   getWin?.()?.webContents.send(UpdateChannels.state, last)
+}
+
+// A check must not disturb a DOWNLOADED update. push() merges destructively, so pushing
+// 'checking' over a 'ready' phase (then settling to idle/error) retracted a staged update from
+// the rail and the restart affordance while electron-updater still held the file. A ready
+// update is not un-readied by a later check finding nothing newer — the settle helpers keep it,
+// and this keeps the 'checking' flicker from clobbering it in the first place.
+function pushChecking(): void {
+  if (last.phase === 'ready') return
+  push({ phase: 'checking', error: undefined })
 }
 
 const PREFS_KEY = 'update.prefs'
@@ -209,6 +226,11 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
   const settleNothingNewer = (): void => {
     manualCheck = false
     clearOfflineRetry()
+    // A downloaded update is not un-downloaded by a later "nothing newer". Without this, the
+    // 6-hour tick (or the offline branch below) pushed phase 'idle' straight over 'ready' via
+    // the {...last,...patch} merge, and a ready-to-install update silently vanished from the
+    // rail and the restart affordance — while electron-updater still had the file staged.
+    if (last.phase === 'ready') return void push({ phase: 'ready', lastCheckedAt: Date.now() })
     push({ phase: 'idle', offline: false, error: undefined, lastCheckedAt: Date.now() })
   }
 
@@ -219,6 +241,8 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
     // A broken feed gains nothing from a minutes-scale ladder — the six-hour tick is enough.
     if (offline) scheduleOfflineRetry()
     else clearOfflineRetry()
+    // Same rule as settleNothingNewer: a completed download outlives a later failed check.
+    if (last.phase === 'ready') return void push({ phase: 'ready', offline, lastCheckedAt: Date.now() })
     if (offline && !manual && last.phase !== 'error') {
       // Nobody asked, and nothing is wrong with the updater — the machine is just offline.
       // Quiet idle, flagged so the settings card can say so honestly; the ladder and the
@@ -250,27 +274,48 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
     }
     if (fixtureCheckInFlight) return
     fixtureCheckInFlight = true
-    push({ phase: 'checking', error: undefined })
+    pushChecking()
     // Unhurried enough that a gate can observe the 'checking' hop.
     setTimeout(() => {
       fixtureCheckInFlight = false
       const outcome = fixture.next()
-      if (outcome.kind === 'ok') settleNothingNewer()
+      if (outcome.kind === 'available') {
+        // A fixture update that DOWNLOADS to ready — the state the settle guard protects. The
+        // real flow is minutes; this replays the shape so a gate can stand up a ready update
+        // and then drive a later check to prove ready is not retracted.
+        push({ phase: 'available', version: outcome.version })
+        push({ phase: 'downloading', version: outcome.version, percent: 100 })
+        push({ phase: 'ready', version: outcome.version })
+      } else if (outcome.kind === 'ok') settleNothingNewer()
       else settleFailure(outcome.message)
     }, 250)
   }
 
   ipcMain.handle(UpdateChannels.stateGet, (): UpdateState => last)
   ipcMain.handle(UpdateChannels.prefsGet, (): UpdatePrefs => readPrefs())
-  ipcMain.handle(UpdateChannels.prefsSet, (_e, prefs: UpdatePrefs) => {
+  ipcMain.handle(UpdateChannels.prefsSet, (_e, prefs: UpdatePrefs): { ok: boolean } => {
     const next: UpdatePrefs = { ...UPDATE_PREFS_DEFAULT, ...prefs }
-    getSettingsStore()?.setSetting(PREFS_KEY, JSON.stringify(next))
-    if (!feedLive) return
+    // The write can VANISH two ways and the old handler reported neither: a null store (open
+    // failed — PERSISTHEALTH exercises exactly this and lets boot continue) silently dropped
+    // the write on the optional chain, and `setSetting` can throw (SQLITE_FULL / READONLY).
+    // The renderer then fired-and-forgot, so the toggle stayed where the user put it while the
+    // stored value did not — and next launch it silently reverted, installing on quit from
+    // under them. Report the outcome; the renderer reverts + toasts, the house pattern.
+    if (consumeUpdatePrefsSetFailure()) return { ok: false } // UPDATEFAIL gate: a dropped write
+    const store = getSettingsStore()
+    if (!store) return { ok: false }
+    try {
+      store.setSetting(PREFS_KEY, JSON.stringify(next))
+    } catch {
+      return { ok: false }
+    }
+    if (!feedLive) return { ok: true }
     applyPrefs(next)
     // Switching channel changes what "latest" means, so re-ask immediately rather than
     // leaving the user staring at a stale answer until the next six-hour tick. Manual: the
     // user is standing in settings looking at the row, so a failure reports back.
     startCheck(true)
+    return { ok: true }
   })
 
   // ── THE PRE-INSTALL RETIRE ────────────────────────────────────────────────────────────
@@ -292,9 +337,17 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
   // app that refuses to update — we proceed, and the installer's own daemon handling
   // (build/installer.nsh) is the second line.
   let retiredForInstall = false
+  let installHandoffStarted = false // THE FIX: the restart handler is idempotent — a second
+  // click must not race the first's handoff to quitAndInstall while retireForInstall awaits.
   const retireForInstall = async (): Promise<void> => {
     if (retiredForInstall) return
     retiredForInstall = true
+    if (process.env.MOGGING_UPDATE_INSTALL_PROBE) {
+      // The retire window WITHOUT a real daemon kill: the race needs click 2 to arrive while
+      // click 1 is still here, so the wait is load-bearing; the real retireOwnDaemon is not.
+      await new Promise((r) => setTimeout(r, 1500))
+      return
+    }
     try {
       const ok = await retireOwnDaemon({ quiesce: true })
       if (!ok) autoUpdater.logger?.warn?.('daemon did not retire before install; installer fallback will handle it')
@@ -307,7 +360,8 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
   // is nothing to install — the renderer just stops showing it; guard so the smoke's click
   // can't quit the app.
   ipcMain.handle(UpdateChannels.restart, async () => {
-    if (!app.isPackaged || process.env.MOGGING_FAKE_UPDATE) return
+    const installProbe = process.env.MOGGING_UPDATE_INSTALL_PROBE
+    if (!installProbe && (!app.isPackaged || process.env.MOGGING_FAKE_UPDATE)) return
     // Phase-gated in MAIN, not just in the renderer's button logic: this handler used to run
     // the retire + quiesce unconditionally, so any invocation with NO update actually pending
     // (a stale 'ready' row, a replayed IPC) retired the daemon, latched `quiescing` forever,
@@ -315,7 +369,16 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
     // dead behind a Retry button that could never succeed. The renderer is a hint; the state
     // machine is the authority.
     if (last.phase !== 'ready') return
+    // A second click, arriving while the first is still handing off, must NOT run a second
+    // quitAndInstall — that used to fire against a still-locked exe because retireForInstall's
+    // early-return let the second caller skip the wait and proceed.
+    if (installHandoffStarted) return
+    installHandoffStarted = true
     await retireForInstall() // release the exe lock BEFORE the installer needs the exe
+    if (installProbe) {
+      installHandoffCount++ // the observable: how many times we reached the handoff
+      return // latch STAYS set — a second click must find it and refuse
+    }
     // (isSilent = true, isForceRunAfter = true): reinstall with no NSIS UI, then relaunch us.
     // The pair matters — with isSilent = false electron-updater IGNORES isForceRunAfter and
     // substitutes autoRunAppAfterInstall, so it is the silent flag that makes "come back
@@ -332,6 +395,7 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
       )
       getTelemetry().captureError(err, { feature: 'updater', op: 'quit-and-install', platform: process.platform })
       retiredForInstall = false
+      installHandoffStarted = false
       endDaemonQuiescence()
     }
   })
@@ -362,7 +426,7 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
   if (fake) {
     // Wait for the window's first paint so the renderer's listener is attached.
     const run = (): void => {
-      push({ phase: 'checking' })
+      pushChecking()
       setTimeout(() => push({ phase: 'available', version: fake }), 500)
       // Deliberately unhurried so the downloading row stays observable across a
       // smoke's other steps (the real flow is minutes; this replays the shape).
@@ -400,7 +464,7 @@ export function initAutoUpdate(winGetter: () => BrowserWindow | null): void {
   autoUpdater.autoDownload = true // fetch in the background; the user is never asked to wait
   applyPrefs(readPrefs()) // sets autoInstallOnAppQuit + the pre-release channel
 
-  autoUpdater.on('checking-for-update', () => push({ phase: 'checking', error: undefined }))
+  autoUpdater.on('checking-for-update', () => pushChecking())
   autoUpdater.on('update-available', (info) => {
     manualCheck = false
     clearOfflineRetry()

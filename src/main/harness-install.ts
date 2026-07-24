@@ -42,9 +42,11 @@ const brokenFeed: UpdateFeedFixture = {
 }
 const offlineFeed: UpdateFeedFixture = {
   next: () =>
-    process.env.MOGGING_UPDATE_OUTCOME === 'ok'
-      ? { kind: 'ok' }
-      : { kind: 'error', message: 'Error: net::ERR_NAME_NOT_RESOLVED' },
+    process.env.MOGGING_UPDATE_OUTCOME === 'available'
+      ? { kind: 'available', version: '9.9.9' } // downloads to ready — the settle guard's subject
+      : process.env.MOGGING_UPDATE_OUTCOME === 'ok'
+        ? { kind: 'ok' }
+        : { kind: 'error', message: 'Error: net::ERR_NAME_NOT_RESOLVED' },
   retryDelaysMs: [1500]
 }
 

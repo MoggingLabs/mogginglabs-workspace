@@ -70,6 +70,16 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
   const pingMuteUntil =
     Date.now() + Math.min(30_000, Math.max(0, Number(process.env.MOGGING_DAEMON_PING_MUTE_MS) || 0))
 
+  // Failure-injection seam (phase-launch/02, socket-leak S1; same shape as pingMute above):
+  // hold the WELCOME reply for the first N ms of this daemon's life while STILL admitting the
+  // connection to authedClients. A client's connect() times out waiting for welcome; the fix
+  // destroys its socket on that timeout, so the daemon's later welcome lands on a closed socket
+  // and the 'close' handler reaps the connection — the pre-fix reject-without-destroy left it
+  // open forever as a PHANTOM authed client (which then froze the stamp-war retire + idle
+  // shutdown). Production has no delay (env unset -> 0 -> welcome sent inline).
+  const welcomeDelayUntil =
+    Date.now() + Math.min(30_000, Math.max(0, Number(process.env.MOGGING_DAEMON_WELCOME_DELAY_MS) || 0))
+
   const server = net.createServer((sock) => {
     sock.setEncoding('utf8')
     let authed = false
@@ -430,13 +440,17 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           authedClients.add(send)
           hooks.onClientCountChange(1)
           hooks.onActivity()
-          send({
-            t: 'welcome',
-            v: DAEMON_PROTOCOL_VERSION,
-            panes: sessions.list(),
-            workspaces: sessions.workspaces(),
-            otherClients
-          })
+          const sendWelcome = (): void =>
+            send({
+              t: 'welcome',
+              v: DAEMON_PROTOCOL_VERSION,
+              panes: sessions.list(),
+              workspaces: sessions.workspaces(),
+              otherClients
+            })
+          const welcomeWait = welcomeDelayUntil - Date.now()
+          if (welcomeWait > 0) setTimeout(sendWelcome, welcomeWait) // the seam; 0 in production
+          else sendWelcome()
         } else {
           send({ t: 'error', reason: 'auth' })
           sock.destroy()

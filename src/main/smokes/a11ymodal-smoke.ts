@@ -275,7 +275,45 @@ export function runA11yModalSmoke(win: BrowserWindow): void {
       await sleep(600)
       const activateSwitches = await ES<boolean>(`window.__mogging.workspace.active().id === '${beta?.id}'`)
 
-      const modalOk = modal.ok === true && wrapForward && wrapBack &&
+      // ── A2. STACKED MODALS: one Escape closes the TOPMOST dialog only, not the whole stack.
+      // Every modal registers a capture-phase Escape listener on `window`; stopPropagation does
+      // not stop same-node siblings, so they fired in REGISTRATION order and the OUTER sheet
+      // closed FIRST — one Escape took the whole stack, discarding whatever the inner confirm
+      // was about. A busy tracked pane makes a workspace close CONFIRM: a real second modal.
+      stage = 'stack'
+      const stackWs = await ES<{ id: string; ordinal: number }>(
+        'window.__mogging.workspace.create({ name: "Stack", paneCount: 1 })'
+      )
+      await sleep(1200)
+      const stackPane = stackWs.ordinal * 100 + 1
+      await ES(`window.__mogging.attention.setPaneTracked(${stackPane}, true)`)
+      await ES(`window.__mogging.attention.setPaneState(${stackPane}, 'busy')`)
+      await sleep(300)
+      // Open the ? sheet, then raise the workspace-close confirm OVER it (dev handle bypasses
+      // the sheet's inert; the confirm appends to <body>, a sibling of #app).
+      await ES(`(document.querySelector('.palette-trigger')?.focus(), 1)`)
+      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '?', bubbles: true, cancelable: true }))`)
+      await sleep(450)
+      await ES(`window.__mogging.workspace.close(${JSON.stringify(stackWs.id)})`)
+      await sleep(500)
+      const stacked = await ES<number>(`document.querySelectorAll('.modal-overlay:not(.is-closing)').length`)
+      // The OUTER modal (the sheet, opened first) must be INERT while the confirm is on top —
+      // else a screen reader walks its virtual cursor into the dialog underneath. trapOverlay
+      // inerts only #app; the top modal now also inerts the ones beneath it.
+      const outerInertWhileStacked = await ES<boolean>(`(() => {
+        const os = [...document.querySelectorAll('.modal-overlay:not(.is-closing)')]
+        return os.length >= 2 && os[0].inert === true && os[os.length - 1].inert === false
+      })()`)
+      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`)
+      await sleep(600)
+      const afterOneEsc = await ES<number>(`document.querySelectorAll('.modal-overlay:not(.is-closing)').length`)
+      const stackFormed = stacked >= 2
+      const oneEscClosesOne = stackFormed && afterOneEsc === stacked - 1 && outerInertWhileStacked
+      // Clean up: dismiss the survivor(s) so nothing bleeds into a later run.
+      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`)
+      await sleep(400)
+
+      const modalOk = modal.ok === true && wrapForward && wrapBack && oneEscClosesOne &&
         afterModal.closed === true && afterModal.uninert === true && afterModal.focusReturned === true
       const paletteOk = palette.ok === true && arrowOk && paletteReturned
       const tabOk =
@@ -286,6 +324,7 @@ export function runA11yModalSmoke(win: BrowserWindow): void {
         pass: modalOk && paletteOk && tabOk,
         modalOk, paletteOk, tabOk,
         modal, wrapForward, wrapBack, afterModal,
+        oneEscClosesOne, stacked, afterOneEsc, stackFormed, outerInertWhileStacked,
         palette, arrowOk, arrowed, paletteReturned,
         structure, closeFocusable, gammaCloseFocusable, enterClosed, afterEnter, spaceClosed, activateSwitches
       }

@@ -23,7 +23,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { isAlive } from '@backend/platform/pid'
-import { ensureDaemon, retireOwnDaemon, DaemonClient } from '../daemon-client'
+import { ensureDaemon, probeOtherClients, retireOwnDaemon, DaemonClient } from '../daemon-client'
 import { helperRuntime } from '../node-helper'
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -69,6 +69,34 @@ export async function runHeartbeatSmoke(): Promise<void> {
   const r: Record<string, unknown> = {}
   const clients: DaemonClient[] = []
   try {
+    // ── D (socket-leak S1): a pre-welcome-timeout must DESTROY the socket, not leave a phantom.
+    // The daemon holds its WELCOME reply past the client's hardcoded 8s connect timeout (the
+    // MOGGING_DAEMON_WELCOME_DELAY_MS seam). The client times out and — with the fix — destroys
+    // its socket, so when the daemon finally welcomes a CLOSED socket the connection is reaped.
+    // The pre-fix reject-without-destroy left the socket open forever as a PHANTOM authed
+    // client, which then froze the stamp-war retire (otherClients never 0) and idle shutdown.
+    // `probeOtherClients` reads the daemon's other-authed-client count over the wire.
+    process.env.MOGGING_DAEMON_WELCOME_DELAY_MS = '10000'
+    const epLeak = await ensureDaemon(path.join(__dirname, 'daemon.js'), helperRuntime())
+    const leakBootAt = Date.now()
+    let leakWedgeRejected = false
+    try {
+      await new DaemonClient(epLeak, {}, { kind: 'app', heartbeatMs: 0 }).connect() // wedges pre-welcome
+    } catch {
+      leakWedgeRejected = true // the connect() timed out (8s) — the fix destroyed its socket on the way out
+    }
+    r.leakWedgeRejected = leakWedgeRejected
+    const pastWindow = leakBootAt + 10_000 + 1500 - Date.now()
+    if (pastWindow > 0) await delay(pastWindow) // let the delay window close so the probe's welcome is immediate
+    const phantoms = await probeOtherClients(epLeak)
+    r.leakNoPhantom = phantoms === 0 // the wedged connection must NOT survive as an authed client
+    process.env.MOGGING_DAEMON_WELCOME_DELAY_MS = ''
+    await retireOwnDaemon({ quiesce: false }) // no quiesce, so the ping-mute daemon below can boot
+    {
+      const until = Date.now() + 5000
+      while (isAlive(epLeak.pid) && Date.now() < until) await delay(100)
+    }
+
     // The daemon inherits this at spawn (ensureDaemon passes process.env through).
     process.env.MOGGING_DAEMON_PING_MUTE_MS = String(MUTE_MS)
     const muteStartedBy = Date.now() // the daemon boots AFTER this, so mute outlives this + MUTE_MS is a floor

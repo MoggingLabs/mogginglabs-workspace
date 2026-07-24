@@ -82,6 +82,16 @@ export function runChromePressSmoke(win: BrowserWindow): void {
       await pressAndSettle()
       const usagePopClosed = await poll(`(() => { const p = document.querySelector('.usage-popover'); return !p || p.hidden })()`)
 
+      // (e) The LAYOUT popover — the one the feature's own comment names as its target, and
+      //     the half the replay could not reach. The pane menu and usage popover dismiss on
+      //     pointerdown; this one (workspace/index.ts) listens on click, which a synthetic
+      //     pointerdown never produces, so it floated over the grid after a chrome press.
+      const layoutOpened = await poll(
+        `(() => { const b = document.querySelector('.layout-launcher .icon-btn'); if (b) b.click(); const m = document.querySelector('.layout-menu'); return !!m && !m.hidden })()`
+      )
+      await pressAndSettle()
+      const layoutClosed = await poll(`(() => { const m = document.querySelector('.layout-menu'); return !m || m.hidden })()`)
+
       // (d) A drag streams will-move every frame; the renderer must hear ONE signal.
       await sleep(300)
       await ES(`(window.__cpCount = 0, 1)`)
@@ -92,8 +102,8 @@ export function runChromePressSmoke(win: BrowserWindow): void {
       const burstCount = await ES<number>(`window.__cpCount`)
       const debounced = burstCount === 1
 
-      const pass = ncHooked && paneMenuOpened && paneMenuClosed && usagePopOpened && usagePopClosed && debounced
-      result = { pass, ncHooked, paneMenuOpened, paneMenuClosed, usagePopOpened, usagePopClosed, burstCount, debounced }
+      const pass = ncHooked && paneMenuOpened && paneMenuClosed && usagePopOpened && usagePopClosed && layoutOpened && layoutClosed && debounced
+      result = { pass, ncHooked, paneMenuOpened, paneMenuClosed, usagePopOpened, usagePopClosed, layoutOpened, layoutClosed, burstCount, debounced }
     } catch (e) {
       result = { pass: false, error: String(e) }
     }

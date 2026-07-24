@@ -100,6 +100,54 @@ export function runSetAgentConfigSmoke(win: BrowserWindow): void {
 
       const noPathLeak = await execute<boolean>(`!document.body.innerText.includes(${JSON.stringify(home)})`)
 
+      // ── F013: the danger "Don't ask again" is SCOPE-BLIND ──────────────────────────────
+      // The confirm's copy says the change "applies only to the selected scope", but its
+      // rememberKey was `agentcfg:<id>` with no scope — so ticking "Don't ask again" for one
+      // project silenced the SAME permission-bypass setting at All-projects (machine-wide),
+      // the most dangerous scope, reached with NO prompt. Now keyed by scope, so a skip granted
+      // at scope B must NOT suppress the prompt at scope C.
+      const scopeTexts = await execute(`(() => {
+        const sel = document.querySelector('.agentcfg-scope-select');
+        return [...(sel?.options || [])].filter((o) => !/remote|Unknown/i.test(o.textContent || '')).map((o) => o.textContent.trim());
+      })()`) as string[]
+      const pickScope = (text: string): Promise<boolean> =>
+        execute<boolean>(
+          `(() => {
+        const sel = document.querySelector('.agentcfg-scope-select');
+        const opt = [...(sel?.options || [])].find((o) => o.textContent.trim() === ${JSON.stringify(text)});
+        if (sel && opt) { sel.value = opt.value; sel.dispatchEvent(new Event('change', { bubbles: true })); return true; } return false;
+      })()`
+        )
+      const setBypass = (): Promise<unknown> =>
+        execute(`(() => {
+        const row = document.querySelector('.agentcfg-setting');
+        const select = row?.querySelector('select.agentcfg-input');
+        const option = [...(select?.options || [])].find((e) => e.textContent === 'bypassPermissions');
+        if (select && option) { select.value = option.value; select.dispatchEvent(new Event('change', { bubbles: true })); }
+        [...(row?.querySelectorAll('button') || [])].find((b) => b.textContent?.trim() === 'Save')?.click();
+      })()`)
+
+      let scopedRememberOk = false
+      if (scopeTexts.length >= 2) {
+        const scopeB = scopeTexts[0], scopeC = scopeTexts[1]
+        await pickScope(scopeB); await waitTrue(`!!document.querySelector('.agentcfg-setting')`, 60)
+        await setBypass()
+        const bModal = await waitTrue(`!![...document.querySelectorAll('.modal button')].find((b) => b.textContent?.includes('Apply setting'))`, 60)
+        // Tick "Don't ask again this session", then Apply.
+        await execute(`(() => {
+          const cb = [...document.querySelectorAll('.modal input[type="checkbox"]')][0];
+          if (cb && !cb.checked) { cb.click(); }
+        })()`)
+        await execute(`[...document.querySelectorAll('.modal button')].find((b) => b.textContent?.includes('Apply setting'))?.click()`)
+        await sleep(400)
+        // Switch to scope C and try again — the prompt MUST return (different scope).
+        await pickScope(scopeC); await waitTrue(`!!document.querySelector('.agentcfg-setting')`, 60)
+        await setBypass()
+        const cModal = await waitTrue(`!![...document.querySelectorAll('.modal button')].find((b) => b.textContent?.includes('Apply setting'))`, 40)
+        if (cModal) await execute(`[...document.querySelectorAll('.modal button')].find((b) => b.textContent?.includes('Cancel'))?.click()`)
+        scopedRememberOk = bModal === true && cModal === true
+      }
+
       // Remote targets are explicit, unknown, and read-only—never local values in disguise.
       await execute(`(() => {
         const select = document.querySelector('.agentcfg-scope-select');
@@ -126,7 +174,7 @@ export function runSetAgentConfigSmoke(win: BrowserWindow): void {
       const restored = /"defaultMode"\s*:\s*"default"/.test(readFileSync(claudeFile, 'utf8'))
 
       const pass = landingReady && rowsAccessible && detailReady && categoryCount >= 8 && scopeCount >= 6 && lazyCategoryOk &&
-        booleanControl && enumControl && currentVisible && dangerConfirm && saved && bypassWritten && noPathLeak &&
+        booleanControl && enumControl && currentVisible && dangerConfirm && saved && bypassWritten && noPathLeak && scopedRememberOk &&
         remoteReadOnly && userReloaded && released && restored
       result = {
         pass,
@@ -142,6 +190,7 @@ export function runSetAgentConfigSmoke(win: BrowserWindow): void {
         enumControl,
         currentVisible,
         dangerConfirm,
+        scopedRememberOk,
         saved,
         bypassWritten,
         noPathLeak,

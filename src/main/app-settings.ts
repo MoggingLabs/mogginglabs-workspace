@@ -21,6 +21,8 @@ let store: SettingsStore | null = null
 let storeOpenReason = ''
 const debugCounters = { loads: 0, saves: 0, exports: 0 }
 
+const GONE_CANDIDATES_KEY = 'workspaces.goneCandidates' // deferred grant-sweep (see saveState)
+
 export function registerAppSettings(): void {
   try {
     // The PERSISTHEALTH gate's three broken moments (open/load/save) arrive through the fault
@@ -57,23 +59,44 @@ export function registerAppSettings(): void {
     // user granted to something they deleted. A grant must not outlive its workspace.
     try {
       const previous = s.load()
-      const gone = (previous.workspaces ?? []).filter((old) => !state.workspaces.some((w) => w.id === old.id))
+      const present = new Set(state.workspaces.map((w) => w.id))
       s.save(state)
       // The last-working-session snapshot rides every save (shrink-hold semantics live
       // in session-restore.ts). AFTER s.save so a failed save never mirrors, BEFORE the
       // grant sweep so a sweep error can't starve it; best-effort by its own contract.
       noteWorkspaceSave(previous, state)
-      for (const w of gone) {
+
+      // DEFERRED sweep. A workspace absent from this save may only be SOFT-closed: softClose
+      // drops the id from `order` (which `list()` reads) immediately, but keeps its panes alive
+      // for a ~5s undo window. Sweeping its grant/config on that first shrinking save destroyed
+      // them before the user could Undo, and Undo did not restore them (an S1). So a workspace
+      // becomes a CANDIDATE on the save that first loses it, and is swept only on a LATER save
+      // where it is STILL gone (past the grace) — a candidate that reappears (Undo) is dropped
+      // unswept. The candidate set is persisted, NOT re-derived from `previous`: after the first
+      // shrinking save `previous` no longer holds the id, so a `previous`-diff would never sweep
+      // a truly-deleted workspace at all.
+      try {
+        let candidates: string[] = []
         try {
-          clearGrant({ get: (k) => s.getSetting(k), set: (k, v) => s.setSetting(k, v) }, w.id)
-          // A project/local/session intent must not resurrect if this workspace id
-          // is later reused for a different directory (same custody rule as grants).
-          s.removeAgentConfigTarget('project', w.id)
-          s.removeAgentConfigTarget('local', w.id)
-          s.removeAgentConfigTarget('session', w.id)
+          const raw = s.getSetting(GONE_CANDIDATES_KEY)
+          if (raw) candidates = (JSON.parse(raw) as string[]).filter((id) => typeof id === 'string')
         } catch {
-          /* best effort — stale feature state must never block a workspace save */
+          /* corrupt candidate list — start clean rather than throw */
         }
+        // Prior candidates still absent = truly gone (past the grace): sweep them now.
+        const toSweep = candidates.filter((id) => !present.has(id))
+        for (const id of toSweep) {
+          clearGrant({ get: (k) => s.getSetting(k), set: (k, v) => s.setSetting(k, v) }, id)
+          s.removeAgentConfigTarget('project', id)
+          s.removeAgentConfigTarget('local', id)
+          s.removeAgentConfigTarget('session', id)
+        }
+        // Next candidate set: anything gone as of THIS save (kept, not swept, so a soft-close
+        // followed by Undo is safe); a candidate that reappeared is simply not carried forward.
+        const goneNow = (previous.workspaces ?? []).map((w) => w.id).filter((id) => !present.has(id))
+        s.setSetting(GONE_CANDIDATES_KEY, JSON.stringify([...new Set(goneNow)]))
+      } catch {
+        /* best effort — stale feature state must never block a workspace save */
       }
       return { ok: true } satisfies WorkspaceSaveResult
     } catch (error) {

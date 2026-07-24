@@ -125,7 +125,6 @@ export async function materializeToolPlanAtLaunch(req: {
       // codec-validated, atomically renamed — and for a project file it MERGES (only
       // Workspace-tagged entries are replaced; foreign settings and comments survive).
       const snapshot = await configMutationCoordinator.read(file.path)
-      before.push({ path: file.path, existed: snapshot.text !== null, content: snapshot.text ?? '' })
       await configMutationCoordinator.mutate({
         file: file.path,
         expectedHash: snapshot.hash,
@@ -134,6 +133,14 @@ export async function materializeToolPlanAtLaunch(req: {
           ? (content) => (cli === 'codex' ? tomlCodec.validate(content) : jsoncCodec.validate(content))
           : undefined
       })
+      // Record the undo ONLY after OUR write took. The read→mutate window is not serialized
+      // (read is unqueued), so a concurrent launch for the same (workspace, cli) can write the
+      // file between our read and our mutate — our mutate then fails `changed-under-us`. If the
+      // undo had been recorded before the mutate, this launch's rollback (`existed:false`) would
+      // `rmSync` the file the OTHER launch legitimately wrote, deleting a plan the winner already
+      // returned `ok:true` for and now points `--mcp-config` at. No successful write ⇒ nothing
+      // of ours to undo.
+      before.push({ path: file.path, existed: snapshot.text !== null, content: snapshot.text ?? '' })
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error)
       return await refuse(`Could not materialize the scoped tool plan: ${file.path} was preserved (${why}). The scoped agent was not launched.`)

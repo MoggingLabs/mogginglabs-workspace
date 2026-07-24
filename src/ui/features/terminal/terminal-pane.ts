@@ -354,6 +354,13 @@ export class TerminalPane {
         ])
         run = cmd ?? undefined
       }
+      // The pane may have been closed while that race was in flight. Spawning into a disposed
+      // pane creates a daemon session nobody in this app will ever address — the relay
+      // tombstone re-kills it in THIS session, but the detached daemon has already persisted
+      // it to sessions.db and restores it on the next app start. UNPROVEN in-tree (like the
+      // other daemon-lifecycle fixes): biting it needs a daemon-session-persist-and-restore
+      // probe, not a relay-side read — `isLivePane` is masked by that tombstone. See EDGES-02.
+      if (this.disposed) return
       return terminalClient
       .spawn({
         id: this.id,

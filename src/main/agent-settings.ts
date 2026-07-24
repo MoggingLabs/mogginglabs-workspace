@@ -9,6 +9,7 @@ import {
   type PreparedAgentSessionOverlay
 } from '@backend/features/agent-settings'
 import { AGENT_CLI_REGISTRY, findAgentCliDefinition } from '@backend/core/agent-clis'
+import { configPointerVars } from './agent-config-pointers'
 import { detectAgents } from '@backend/features/agents'
 import {
   AgentConfigChannels,
@@ -134,12 +135,15 @@ function defaultTarget(): AgentConfigTarget {
 /**
  * The env a gate's isolated settings home resolves paths against.
  *
- * Overriding home/APPDATA/XDG_CONFIG_HOME is not enough: `sources.ts` `pointer()` reads the
- * provider's OWN config-dir env vars FIRST (CLAUDE_CONFIG_DIR, CODEX_HOME, GEMINI_CONFIG_DIR), so
- * an inherited one — set whenever a gate runs from inside a Claude/Codex/Gemini session, i.e. the
- * fleet/dogfood/CI-from-a-pane case — steers the "isolated" gate straight into the user's REAL CLI
- * config and mutates it (measured 2026-07-15: SETAGENTCFG wrote a fixture, incl. a fake API key,
- * into a live CLAUDE_CONFIG_DIR). Delete the pointers so `pointer()` falls back to the isolated home.
+ * Overriding home/APPDATA/XDG_CONFIG_HOME is not enough: `sources.ts` reads the provider's OWN
+ * config-dir env vars FIRST, so an inherited one — set whenever a gate runs from inside a
+ * Claude/Codex/Gemini session, i.e. the fleet/dogfood/CI-from-a-pane case — steers the
+ * "isolated" gate straight into the user's REAL CLI config and mutates it (measured
+ * 2026-07-15: SETAGENTCFG wrote a fixture, incl. a fake API key, into a live CLAUDE_CONFIG_DIR).
+ * Delete the pointers so the path helpers fall back to the isolated home.
+ *
+ * The list is DERIVED (`configPointerVars`, agent-config-pointers.ts — pure, with goldens),
+ * because the hand-written one drifted from the registry it was meant to mirror.
  */
 function isolatedEnv(home: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
@@ -147,7 +151,7 @@ function isolatedEnv(home: string): NodeJS.ProcessEnv {
     APPDATA: join(home, 'AppData', 'Roaming'),
     XDG_CONFIG_HOME: join(home, '.config')
   }
-  for (const pointerVar of ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'GEMINI_CONFIG_DIR']) delete env[pointerVar]
+  for (const pointerVar of configPointerVars()) delete env[pointerVar]
   return env
 }
 

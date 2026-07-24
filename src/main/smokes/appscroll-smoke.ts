@@ -86,6 +86,16 @@ const SCRIPT = `(async () => {
   check('B lane reveals', box.classList.contains('ovs-hot') && !invisible(laneThumb),
     'thumb=' + laneThumb + ' classes=' + box.className)
   check('B lane reveals the rail too', !railInvisible(box), track(box))
+
+  // A child vanishing under a STATIONARY pointer must not hide the bar. pointerleave does not
+  // bubble, but the listener is capture-phase on the document and capture visits every
+  // ancestor regardless — so a live-updating list re-rendering the row under the cursor cleared
+  // the lane, and only a pointermove could re-light it. The pointer has not moved here.
+  const inner = box.querySelector('*') || box
+  inner.dispatchEvent(new PointerEvent('pointerleave', { bubbles: false }))
+  await sleep(120)
+  check('B a child pointerleave does not hide the lane', box.classList.contains('ovs-hot'),
+    'classes=' + box.className)
   move(bx.left + 40, bx.top + 80, box) // ...and leaving the lane hides it again
   await sleep(120)
   check('B leaving the lane hides it', !box.classList.contains('ovs-hot') && invisible(thumb(box)), thumb(box))

@@ -9,7 +9,7 @@ import { getFocusedPane } from '../../core/layout/focus'
 import { getPaneCwd, getPaneCwdProjection, onPaneCwdProjection, setPaneCwd } from '../../core/layout/pane-cwd'
 import { getPaneRemote, setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
 import { onAgentLaunchRequest, requestAgentLaunch, announceProfileFailover, type AgentLaunchRequest } from '../../core/agents/launch-port'
-import { armSpawnRun, whenSpawnRunOutcome } from '../../core/terminal/spawn-run-port'
+import { armSpawnRun, whenSpawnRunOutcome, spawnRunOutcomeFor } from '../../core/terminal/spawn-run-port'
 import { clearPaneAgentSession, getPaneAgentSession, setPaneAgentSession, type PaneAgentSession } from '../../core/agents/agent-session-port'
 import { setCommands } from '../../core/commands/command-port'
 import { setActiveView } from '../../core/shell/view-port'
@@ -696,6 +696,10 @@ export const agentsFeature: UiFeature = {
         // live→write gap against it to prove lineup commands ride the readiness
         // signal, never a reintroduced fixed delay.
         paneLiveAt: (paneId: number) => paneLiveAt(paneId),
+        // LAUNCHNOW gate seam: a pane reports a spawn-run outcome EXACTLY when its spawn
+        // call went out, so `undefined` is the observable for "no spawn was ever issued" —
+        // what a pane disposed mid-claim must leave behind (it used to spawn an orphan).
+        spawnRunOutcome: (paneId: number) => spawnRunOutcomeFor(paneId),
         // LAUNCHNOW gate seam: stretch the spawn-run build past the pane's claim
         // window so the typed fallback is provably exercised. 0 restores normal.
         setSpawnRunHold: (ms: number) => {

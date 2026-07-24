@@ -22,8 +22,9 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { isAlive } from '@backend/platform/pid'
-import { beginDaemonQuiescence, endDaemonQuiescence, retireOwnDaemon } from '../daemon-client'
+import { beginDaemonQuiescence, endDaemonQuiescence, ensureDaemon, retireOwnDaemon } from '../daemon-client'
 import { startDaemonBackend, getDaemonClient } from '../daemon-relay'
+import { daemonEntryPath } from '../node-helper'
 import { getDaemonHealth } from '../runtime-health'
 import type { DaemonEndpoint } from '@contracts'
 
@@ -136,6 +137,30 @@ export async function runDaemonHealSmoke(): Promise<void> {
       const until = Date.now() + 5000
       while (isAlive(ep3.pid) && Date.now() < until) await delay(100)
       r.cleanedUp = retired && !isAlive(ep3.pid)
+    }
+
+    // ── D. a spawn that CANNOT start must reject, never take the app down ────────────────
+    // `spawn` reports a missing/unopenable executable asynchronously via an 'error' event,
+    // and an 'error' with no listener is re-thrown by EventEmitter — straight into boot.ts's
+    // uncaughtException -> fatal() -> app.exit(1). The reachable causes are all background
+    // ones (antivirus quarantining the unsigned helper, an installer swapping it, a dev
+    // `rm -rf build/node-helper`), so the whole window vanished mid-session because a
+    // RECONNECT could not find a binary. If this act regresses, the gate does not fail —
+    // the app exits and the verdict reads MISSING, which is itself the tell.
+    {
+      // A REAL entry with a DEAD executable: passing a bogus entry too made ensureDaemon
+      // refuse before it ever reached the spawn, so the 'error' path went unexercised and
+      // the assertion could not bite (caught by sabotaging the fix and watching this pass).
+      const gone = path.join(app.getPath('temp'), 'mogging-no-such-helper-5591.exe')
+      let rejected = false
+      try {
+        await ensureDaemon(daemonEntryPath(), { executable: gone, nativesDir: path.dirname(gone) })
+      } catch {
+        rejected = true // the built-in answer: a caught rejection the caller can back off on
+      }
+      // Surviving to WRITE a verdict is the other half of the proof: the pre-fix bytes
+      // never reach the write at all, so the gate reads MISSING rather than FAIL.
+      r.deadHelperRejects = rejected
     }
 
     const pass = Object.entries(r).every(([, v]) => v === true)

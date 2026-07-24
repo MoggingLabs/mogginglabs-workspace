@@ -22,6 +22,7 @@ import { runIntegrationAuthorization } from './auth-runner'
 import { connectedCount, createConnectionsBlock } from './connections'
 import { CLI_LABEL, CLI_PROVIDER, HOSTED } from './cli-meta'
 import { openLibrary } from './library'
+import { scrollBehavior } from '../../core/a11y/motion-port'
 
 // ── Attention, reported upward (8.5/05) ──────────────────────────────────────
 // Four folded Cards now (the store/inventory split, 2026-07-18: browsing —
@@ -1134,7 +1135,7 @@ export function applyIntegrationsFocus(): void {
   const card = focusTargets?.[t]
   if (!card) return
   card.setOpen(true, { persist: false })
-  setTimeout(() => card.el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60)
+  setTimeout(() => card.el.scrollIntoView({ behavior: scrollBehavior(), block: 'start' }), 60)
 }
 
 export function createIntegrationsSection(): HTMLElement {

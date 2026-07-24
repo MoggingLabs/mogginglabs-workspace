@@ -137,11 +137,39 @@ export function runRailfoldSmoke(win: BrowserWindow): void {
         Math.abs(endOfUnfold.railW - restW) < 2 &&
         !endOfUnfold.overlap
 
+      // The AUTO-collapse honesty case. dock-budget.ts adds `rail-auto-collapsed` when the
+      // window is too narrow to afford an expanded rail beside the open docks; both classes
+      // resolve to the same width, so clicking the toggle through one changed nothing on
+      // screen — and still WROTE railCollapsed=1, leaving the rail folded once the window
+      // widened again. A control that cannot act must not look like it can. Driven by the
+      // class rather than a resize+dock dance: the toggle's obligation is the same whoever
+      // set it, and this keeps the assertion about the contract instead of the geometry.
+      const autoHonesty = await ES<{ disabled: boolean; before: string | null; after: string | null; cls: boolean }>(`(async () => {
+        const app = document.getElementById('app')
+        const btn = document.querySelector('.rail-toggle')
+        const before = localStorage.getItem('mogging.railCollapsed')
+        app.classList.add('rail-auto-collapsed')
+        // The toggle's disabled state is synced from a MutationObserver, so it lands on a
+        // microtask — reading it in the same synchronous block sees the stale value.
+        await new Promise((r) => setTimeout(r, 100))
+        const disabled = btn instanceof HTMLButtonElement ? btn.disabled : false
+        if (btn) btn.click()
+        const after = localStorage.getItem('mogging.railCollapsed')
+        const cls = app.classList.contains('rail-collapsed')
+        app.classList.remove('rail-auto-collapsed')
+        return { disabled, before, after, cls }
+      })()`)
+      const autoCollapseRefuses =
+        autoHonesty.disabled && autoHonesty.after === autoHonesty.before
+
       const pass =
+        autoCollapseRefuses &&
         widthAnimated && clippedInFlight && neverOverlapped && heldItsPosition &&
         foldLandedHidden && unfoldLandedShown
       result = {
         pass,
+        autoCollapseRefuses,
+        autoHonesty,
         widthAnimated,
         clippedInFlight,
         neverOverlapped,

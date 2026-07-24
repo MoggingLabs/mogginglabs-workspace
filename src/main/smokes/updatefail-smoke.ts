@@ -1,6 +1,7 @@
 import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { failNextUpdatePrefsSet } from '../updateprefs-audit-faults'
 
 /** Audit regression: a BROKEN feed — reached but unreadable, the nine-404s shape — stays
  *  LOUD even for a background check (never classified as offline-quiet), and its retry
@@ -95,7 +96,49 @@ export function runUpdateFailSmoke(win: BrowserWindow): void {
         (retried.state.lastCheckedAt ?? 0) > (initial.state.lastCheckedAt ?? 0) &&
         retried.label === 'Update failed — retry'
 
-      result = { pass: initialVisible && retryWorked, initialVisible, retryWorked, initial, retried }
+      // ── The prefs toggle must not lie when the store refuses the write ─────────────────
+      // update:prefsSet persisted through getSettingsStore()?.setSetting(), which fails
+      // silently on a null store or a throwing write — the handler returned nothing and the
+      // renderer fired-and-forgot, so the toggle showed a value never persisted and next
+      // launch silently reverted it (installing on quit from under the user). The handler now
+      // answers {ok}, and the renderer reverts the switch + toasts. Armed via the same
+      // one-shot injector shape as BROWSERZERO's consent fault.
+      failNextUpdatePrefsSet(1)
+      const prefsHonest = await ES<{ found: boolean; before?: boolean; reverted?: boolean; toast?: boolean; after?: boolean; okStays?: boolean; okNoToast?: boolean }>(`(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+        const rows = [...document.querySelectorAll('[data-section="about"] .toggle-row, [data-section="about"] label')]
+        const row = rows.find((r) => /Install updates when the app quits/.test(r.textContent || ''))
+        const input = row ? row.querySelector('input.switch-input') || document.querySelector('[data-section="about"] input.switch-input') : null
+        if (!(input instanceof HTMLInputElement)) return { found: false }
+        const before = input.checked
+        input.click() // fires onChange -> save() -> prefsSet (armed to fail)
+        // Wait for the async save() to answer and the revert to land.
+        for (let i = 0; i < 40 && input.checked !== before; i++) await sleep(100)
+        await sleep(200)
+        const reverted = input.checked === before
+        const toast = [...document.querySelectorAll('.toast')].some((t) => /was not saved/i.test(t.textContent || ''))
+        // The SUCCESS half, same run: a toggle flipped with NO fault armed must STAY flipped and
+        // raise no failure toast. This bites the main handler's {ok:true} — without it save()
+        // would read every reply as failure and revert on success too.
+        await sleep(400)
+        const preRow = rows.find((r) => /Receive pre-release builds/.test(r.textContent || ''))
+        const preInput = preRow ? preRow.querySelector('input.switch-input') : null
+        let okStays = false, okNoToast = false
+        if (preInput instanceof HTMLInputElement) {
+          const pBefore = preInput.checked
+          // Count failure toasts BEFORE — the earlier armed-fault one lingers ~3s. The success
+          // click must add NONE, so compare counts rather than presence.
+          const failToastsBefore = [...document.querySelectorAll('.toast')].filter((t) => /was not saved/i.test(t.textContent || '')).length
+          preInput.click()
+          await sleep(500)
+          okStays = preInput.checked === !pBefore // flipped and HELD
+          const failToastsAfter = [...document.querySelectorAll('.toast')].filter((t) => /was not saved/i.test(t.textContent || '')).length
+          okNoToast = failToastsAfter <= failToastsBefore
+        }
+        return { found: true, before, reverted, toast, after: input.checked, okStays, okNoToast }
+      })()`)
+
+      result = { pass: initialVisible && retryWorked && prefsHonest.found === true && prefsHonest.reverted === true && prefsHonest.toast === true && prefsHonest.okStays === true && prefsHonest.okNoToast === true, initialVisible, retryWorked, prefsHonest, initial, retried }
     } catch (error) {
       result = { pass: false, error: String(error) }
     }

@@ -9,10 +9,10 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 182 gates: 23 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
-# DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
-# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE ·
-# GRAMMARCAT) + 159 app-boot
+# 183 gates: 24 static (AUDIT · LAUNCHAUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS ·
+# AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT ·
+# LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES ·
+# BYTECODE · GRAMMARCAT) + 159 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -130,6 +130,12 @@ run_smoke() {
   [ "$name" = "FIRSTRUN" ] && extra="MOGGING_FAKE_UPDATE=9.9.9"
   [ "$name" = "ROLERACE" ] && extra="MOGGING_DAEMON_SPAWN_DELAY_MS=2500"
   [ "$name" = "CWD_INPROC" ] && extra="MOGGING_INPROC=1"
+  # MOVEPANE's last phase needs the MACHINE term of the pane budget to BIND, which the
+  # harness box (16 cores -> 32) never does: geometry caps first, and the move-door
+  # double-count is invisible while it does. 4 cores => a budget of 8, saturated by the
+  # panes the smoke already opens plus a few. `env $extra` runs after the prefix
+  # assignments below, so this overrides MOGGING_MACHINE_CORES for this gate only.
+  [ "$name" = "MOVEPANE" ] && extra="MOGGING_MACHINE_CORES=4"
   # The canonical HARNESS machine (64 GiB / 16 cores): the pane budget otherwise
   # clamps dense fixtures to whatever box CI rents (a 7 GiB macOS runner budgets
   # six panes — a 16-pane gate would go red for the hardware, not the product).
@@ -186,6 +192,13 @@ run_static() {
   fi
 }
 run_static AUDIT   node scripts/check-audit.mjs
+# LAUNCHAUDIT: AUDIT's younger sibling, for the launch pack (phase-launch/01). AUDIT proves
+# phase-8.5's ledger is discharged; this one proves Part I's audit is COMPLETE — that a
+# denominator exists at all. It holds three lines: every gate in this very file is claimed by
+# an INVENTORY row (the "no subsystem without a row" proof, inverted so more rows cannot
+# satisfy it), every row's entry point still resolves, and every (row, lens) derives A from
+# FINDINGS.md — where `defer` and `wontfix` are not spellable. Pure parse, no boot.
+run_static LAUNCHAUDIT node scripts/check-launch-audit.mjs
 run_static SPACING node scripts/check-spacing.mjs --max 0
 run_static PTYSEAM node scripts/check-pty-seam.mjs
 run_static PROTOVER node scripts/check-protocol-version.mjs

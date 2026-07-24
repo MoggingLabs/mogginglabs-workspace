@@ -6,6 +6,7 @@ import { quotePathForShell, shellFlavor } from '@contracts'
 import {
   clipboardAuditState,
   failNextClipboardWrites,
+  silentlyDropNextClipboardWrites,
   resetClipboardReadAudit
 } from '../clipboard-audit-faults'
 
@@ -651,6 +652,28 @@ async function probeAgentClipboard(win: BrowserWindow): Promise<Record<string, u
     failNextClipboardWrites(0)
     const failedWriteNotOnClipboard = clipboard.readText() !== 'MUSTFAIL_5591'
 
+    // 11b. The TWIN: a RESTORE the OS refused must reject too, and must not touch the ring.
+    //      `restore` puts text on the clipboard exactly as `write` does, so it owes the same
+    //      read-back proof — without it the handler re-dated the entry, floated it to the top
+    //      and primed `lastText`, so the row CLAIMED to be the clipboard, the renderer showed
+    //      a green "Copied", and Ctrl+V still pasted the previous contents.
+    const ringBefore = (await exec(
+      `window.bridge.invoke('clipboard:history').then((h) => h.map((e) => e.id).join(','))`
+    )) as string
+    const restoreTargetId = ringBefore.split(',')[1] ?? '' // NOT the head: a no-op reorder must be visible
+    silentlyDropNextClipboardWrites(1)
+    const failedRestoreRejected = restoreTargetId
+      ? ((await exec(`(async () => {
+          try { await window.bridge.invoke('clipboard:restore', { id: ${JSON.stringify(restoreTargetId)} }); return false }
+          catch { return true }
+        })()`)) as boolean)
+      : false
+    silentlyDropNextClipboardWrites(0)
+    const ringAfter = (await exec(
+      `window.bridge.invoke('clipboard:history').then((h) => h.map((e) => e.id).join(','))`
+    )) as string
+    const failedRestoreLeftRingAlone = ringBefore === ringAfter
+
     // 12. …and the USER must see it. Drive the real chord (select + Ctrl+C) against an
     //     armed failure and require the danger toast. Two arms: copy-on-select's debounced
     //     copy fires first and consumes one; the chord consumes the other. The 3 s toast
@@ -680,12 +703,16 @@ async function probeAgentClipboard(win: BrowserWindow): Promise<Record<string, u
     return {
       ...inPage,
       failedWriteRejected,
+      failedRestoreRejected,
+      failedRestoreLeftRingAlone,
       failedWriteNotOnClipboard,
       copyFailToast,
       agentPass: !!(
         inPage.agentPass &&
         failedWriteRejected &&
         failedWriteNotOnClipboard &&
+        failedRestoreRejected &&
+        failedRestoreLeftRingAlone &&
         copyFailToast === 'toast-shown'
       )
     }

@@ -94,9 +94,18 @@ export interface ProcRow {
   startedAt?: number
 }
 
-/** Count logical submitted lines in one PTY input chunk. Bracketed paste can carry several
- * commands at once; CRLF is one boundary, not two. */
+/** Count logical submitted lines in one PTY input chunk. CRLF is one boundary, not two.
+ *
+ * An ESC-introduced chunk is a SEQUENCE, not submitted lines — the same rule
+ * `isSubmittedInput` applies one call away (replies.ts), and for the same reason: inside a
+ * bracketed paste (`ESC[200~ … ESC[201~`, on in every modern shell and agent prompt) the CRs
+ * are literal TEXT the program receives, not Enter keys that start commands. Counting them
+ * armed one probe and one command-start per pasted line: a 2k-line paste left `pendingSubmits`
+ * far above the `<= 1` reset gate, so every later prompt bought a full process-table listing
+ * for the rest of the pane's life, and `commandActive` stuck true let a background `git`
+ * relabel the pane's cwd. Both twins (this and the daemon's) call it from the same block. */
 export function countSubmittedLines(data: string): number {
+  if (data.startsWith('\x1b')) return 0
   return data.match(/\r\n|\r|\n/g)?.length ?? 0
 }
 

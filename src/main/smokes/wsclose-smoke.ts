@@ -165,6 +165,12 @@ export function runWsCloseSmoke(win: BrowserWindow): void {
         confirmedShrink && lastPaneAsked && keyboardAsked
 
       // 1 ── × on a workspace with live work opens the confirm dialog.
+      // F016: set a non-default grant NOW (after the confirm-entry-point tests above, before the
+      // soft-close + Undo below). The old saveState swept it on the first shrinking save — during
+      // the grace — and Undo did not restore it. The deferred sweep keeps it through the grace.
+      await ES(`window.bridge.invoke('integrations:grant:set', { workspaceId: ${JSON.stringify(wsId)}, writeTools: 'all', web: 'signed-in', actOrigins: ['https://github.com'] })`)
+      await sleep(300)
+      const grantBefore = await ES(`window.bridge.invoke('integrations:grant:get', ${JSON.stringify(wsId)}).then(g => g && g.writeTools)`)
       await xClick(wsId)
       await sleep(400)
       const dialogShown = await ES<boolean>(`!!document.querySelector('.modal[role="dialog"] .btn--danger')`)
@@ -189,6 +195,10 @@ export function runWsCloseSmoke(win: BrowserWindow): void {
       await sleep(500)
       const restored = (await count()) === 1 && !(await ES<boolean>(`(() => { const t = document.querySelector('.workspace-tab[data-ws-id="${wsId}"]'); return !t || t.hidden })()`))
 
+      // The grant must have survived the soft-close grace and the Undo (F016).
+      const grantAfterUndo = await ES(`window.bridge.invoke('integrations:grant:get', ${JSON.stringify(wsId)}).then(g => g && g.writeTools)`)
+      const grantSurvivedUndo = grantBefore === 'all' && grantAfterUndo === 'all'
+
       // 5 ── Close again and let the 5s grace lapse -> disposed for good.
       await xClick(wsId)
       await sleep(400)
@@ -196,11 +206,41 @@ export function runWsCloseSmoke(win: BrowserWindow): void {
       await sleep(6200)
       const disposed = (await count()) === 0 && !(await ES<boolean>(`!!document.querySelector('.workspace-tab[data-ws-id="${wsId}"]')`))
 
+      // ── F019: a workspace closed MID seam-drag must not leave the drag latched ──────────
+      // A seam drag registers window mousemove/mouseup removed only by its own `up`, and adds
+      // body.resizing. GridLayout.dispose() cleared neither — so closing the workspace mid-drag
+      // leaked the listeners and left `resizing` latched forever (and the leaked mouseup could
+      // later re-publish slots into the detached grid). dispose() now aborts the in-flight drag.
+      const dragWs = await ES<{ id: string }>('window.__mogging.workspace.create({ name: "DragClose", paneCount: 2 })')
+      await sleep(1500) // panes + gutter up
+      const draggingLatched = await ES<boolean>(`(() => {
+        const g = document.querySelector('.workspace-view:not([hidden]) .layout-gutter')
+        if (!g) return false
+        const r = g.getBoundingClientRect()
+        g.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }))
+        return document.body.classList.contains('resizing')
+      })()`)
+      await ES(`window.__mogging.workspace.close(${JSON.stringify(dragWs.id)})`)
+      await sleep(6500) // grace lapses -> dispose() runs -> the fix aborts the drag
+      const resizingCleared = !(await ES<boolean>(`document.body.classList.contains('resizing')`))
+      // Belt-and-braces: no orphan slots left outside a connected workspace view.
+      const noOrphanSlots = await ES<boolean>(
+        `[...document.querySelectorAll('.layout-slot')].every((s) => s.closest('.workspace-view') && s.closest('.workspace-view').isConnected)`
+      )
+      const midDragCloseClean = draggingLatched && resizingCleared && noOrphanSlots
+
       const pass =
-        idleSkipsConfirm && copyIsHonest &&
-        allEntryPointsSafe && dialogShown && cancelKept && softClosed && restored && disposed
+        idleSkipsConfirm && copyIsHonest && midDragCloseClean &&
+        allEntryPointsSafe && dialogShown && cancelKept && softClosed && restored && grantSurvivedUndo && disposed
       result = {
         pass,
+        midDragCloseClean,
+        draggingLatched,
+        resizingCleared,
+        noOrphanSlots,
+        grantSurvivedUndo,
+        grantBefore,
+        grantAfterUndo,
         idleSkipsConfirm,
         idleAskedNothing,
         idleSoftClosed,

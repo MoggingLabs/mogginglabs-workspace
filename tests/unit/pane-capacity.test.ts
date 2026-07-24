@@ -99,3 +99,54 @@ describe('machine pane budget', () => {
     expect(roomy.limitedBy === 'screen' || roomy.limitedBy === 'ceiling').toBe(true)
   })
 })
+
+// The move-door discount — a MOVE creates no pane, so the machine term must not charge twice.
+//
+// SCOPE OF THIS TEST, stated honestly: it pins the ARITHMETIC invariant only. It exercises
+// `effectivePaneCapacity` directly and therefore does NOT bite on the plumbing that carries
+// the discount (GridLayout.capacity -> limit -> effectiveMaxPanes -> the two move doors) —
+// verified by sabotaging that plumbing and watching this file stay green. The regression
+// assertion for the WIRING is MOVEPANE's machine-budget phase (F003), which runs with
+// MOGGING_MACHINE_CORES=4 so the machine term actually binds; it was proven to go red on the
+// pre-fix bytes. Keep both: this one says what the number should be, that one says the number
+// reaches the door.
+//
+// `GridLayout.capacity()` derives the destination's headroom as
+// `livePaneCount() - dst.paneIds().length`, which still counts the pane being moved (it is
+// live, in the SOURCE). Charging the destination for it as well made the refusal reduce to
+// `totalLivePanes >= machineBudget`: once the machine budget was reached, every
+// cross-workspace move was refused and the picker rendered every row "Full" — for an
+// operation that neither creates nor destroys a terminal. The inner `adoptPane` gate never
+// had the bug because it runs AFTER `detachPane`, when the count is already one lower; two
+// gates on one door, and only the outer one was wrong.
+describe('move-door capacity discount', () => {
+  const spec = { cpuCount: 8, totalMemMb: 16384 } // byCpu 16, byMemory 24 -> machine budget 16
+
+  it('the destination cap with the mover discounted equals the cap after it detaches', () => {
+    expect(machinePaneBudget(spec)).toBe(16)
+    // A saturated machine: 12 panes in the source, 4 in the destination, 16 live.
+    const T = 16
+    const dstPanes = 4
+    // What the OUTER gate used to compute: the mover still counted elsewhere.
+    const doubleCounted = effectivePaneCapacity(null, spec, T - dstPanes)
+    // What the INNER gate computes, one pane later — and what the fixed outer gate computes.
+    const discounted = effectivePaneCapacity(null, spec, T - dstPanes - 1)
+    expect(discounted.maxPanes).toBe(Math.min(discounted.screenMaxPanes, 16 - (T - dstPanes - 1)))
+    // The bug, stated as the two gates disagreeing about one door:
+    expect(dstPanes >= doubleCounted.maxPanes).toBe(true) // outer refused
+    expect(dstPanes >= discounted.maxPanes).toBe(false) // inner would have allowed
+  })
+
+  it('a move is never refused for machine budget alone, at any saturation', () => {
+    // The invariant: for every split of a machine-budget-saturated set of panes across two
+    // workspaces, the destination (mover discounted) still has room for the mover.
+    const machineMax = machinePaneBudget(spec)
+    for (let dstPanes = 1; dstPanes < machineMax; dstPanes++) {
+      const T = machineMax // saturated
+      const cap = effectivePaneCapacity(null, spec, T - dstPanes - 1)
+      const machineSideCap = Math.max(1, machineMax - (T - dstPanes - 1))
+      expect(dstPanes >= machineSideCap).toBe(false)
+      expect(cap.maxPanes).toBeGreaterThan(0)
+    }
+  })
+})

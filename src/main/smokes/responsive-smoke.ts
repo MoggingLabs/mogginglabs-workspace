@@ -185,8 +185,36 @@ export function runResponsiveSmoke(win: BrowserWindow): void {
         probes.push({ requested, initial, home, end, step, geometryOk, keyboardOk })
       }
 
-      const pass = probes.every((probe) => probe.geometryOk && probe.keyboardOk)
-      result = { pass, probes }
+      // ── F020: after an auto-collapse FOLD, the budget must recompute against the SETTLED
+      // rail width. It read the rail the instant it toggled rail-auto-collapsed — i.e. the
+      // PRE-fold (wide) width — so the browser dock wrongly OVERLAID at a width where the
+      // collapsed rail left room to dock it inline, and nothing recomputed when the fold landed.
+      // Explorer CLOSED, browser dock OPEN, cross the expandedNeed threshold (288+480+320=1088).
+      await ES(`window.__mogging.explorer.toggle(false)`)
+      await sleep(500)
+      const settleTo = async (target: number): Promise<void> => {
+        win.setSize(target, 720)
+        await sleep(400)
+        for (let i = 0; i < 24; i++) {
+          const w = await ES<number>('innerWidth')
+          if (Math.abs(w - target) <= 2) break
+          await sleep(80)
+        }
+      }
+      await settleTo(1200)
+      await sleep(600)
+      const wideFold = await measure() // 1200 >= 1088: rail expanded, browser fits inline
+      await settleTo(1000)
+      await sleep(700) // > --dur-rail (260ms): the fold settles, transitionend recomputes
+      const narrowFold = await measure() // 1000 < 1088: rail collapses; settled ~67px leaves room
+      const foldRecomputes =
+        wideFold.railAutoCollapsed === false &&
+        wideFold.browserOverlay === false &&
+        narrowFold.railAutoCollapsed === true &&
+        narrowFold.browserOverlay === false // the settled narrow rail leaves room to dock inline
+
+      const pass = foldRecomputes && probes.every((probe) => probe.geometryOk && probe.keyboardOk)
+      result = { pass, foldRecomputes, wideFold, narrowFold, probes }
     } catch (error) {
       result = { pass: false, error: String(error) }
     }

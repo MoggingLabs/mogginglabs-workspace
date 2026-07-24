@@ -253,8 +253,27 @@ process.stdout.write('SERVERS=' + keys.sort().join(',') + '|STRICT=' + a.include
       /not launched|did not fall back/.test(refused.reason ?? '') &&
       toolPlanSkipReason('ws-conflict') === refused.reason
 
+    // ── F017: two concurrent launches for the same (workspace, cli) must not delete each
+    // other's plan file. read() is unqueued, so both read the absent file (hash null); the
+    // first mutate writes, the second fails `changed-under-us`, and its rollback used to
+    // rmSync the file the FIRST launch legitimately wrote and returned ok:true for — the
+    // winner then pointed --mcp-config at a deleted file. ──────────────────────────────────
+    setToolPlan({ workspaceId: 'ws-race', entries: { sentry: 'all-clis' }, inheritGlobal: false })
+    const cfgPathOf = (r: { ok: boolean; args: string[] }): string | null => {
+      const i = r.args.indexOf('--mcp-config')
+      return i >= 0 && i + 1 < r.args.length ? r.args[i + 1] : null
+    }
+    const [raceA, raceB] = await Promise.all([
+      materializeToolPlanAtLaunch({ agentId: 'claude', cwd: repo, workspaceId: 'ws-race' }),
+      materializeToolPlanAtLaunch({ agentId: 'claude', cwd: repo, workspaceId: 'ws-race' })
+    ])
+    const raceWinner = raceA.ok ? raceA : raceB.ok ? raceB : null
+    const raceCfg = raceWinner ? cfgPathOf(raceWinner) : null
+    // A launch that returned ok:true must point --mcp-config at a file that EXISTS.
+    const raceNoSelfDelete = !!raceWinner && !!raceCfg && existsSync(raceCfg)
+
     const pass =
-      appImageExecutableOk && paneLauncherSelectOk && runtimeExact && stableMcpLaunchOk && packageMetaOk &&
+      raceNoSelfDelete && appImageExecutableOk && paneLauncherSelectOk && runtimeExact && stableMcpLaunchOk && packageMetaOk &&
       claudeArgsOk && claudeFileOk && claudeHouseExact && codexOk && coexistOk && listsPlannedOnly &&
       inheritOk && gitInvisibleOk && restartFlipsOk && templateOk && matrixOk && foreignRefused
     result = {
@@ -279,6 +298,10 @@ process.stdout.write('SERVERS=' + keys.sort().join(',') + '|STRICT=' + a.include
       templateOk,
       matrixOk,
       foreignRefused,
+      raceNoSelfDelete,
+      raceA,
+      raceB,
+      raceCfg,
       refused,
       shimOut
     }

@@ -20,6 +20,7 @@ import type {
 import { defaultShell } from '@backend/platform/shell'
 import { redactSecrets } from '@backend/features/review'
 import {
+  consumeClipboardSilentDrop,
   consumeClipboardWriteFailure,
   noteClipboardRead,
   noteSensitiveClipboardEntryBlocked
@@ -84,11 +85,13 @@ function clipboardFormats(): string[] {
 
 function writeClipboardText(text: string): void {
   if (consumeClipboardWriteFailure()) throw new Error('clipboard write failed')
+  if (consumeClipboardSilentDrop()) return // the Windows locked-clipboard no-op, modelled
   clipboard.writeText(text)
 }
 
 function writeClipboardImage(img: Electron.NativeImage): void {
   if (consumeClipboardWriteFailure()) throw new Error('clipboard write failed')
+  if (consumeClipboardSilentDrop()) return // the Windows locked-clipboard no-op, modelled
   clipboard.writeImage(img)
 }
 
@@ -276,6 +279,12 @@ function readRich(): RichClipboard {
   return { kind: 'text', text: readClipboardText() }
 }
 
+/** CRLF-insensitive compare for the write-path read-back. A real copy can read back with \n
+ *  rewritten to \r\n — fidelity, not failure; a locked clipboard reads back wholly different
+ *  old content, which still differs. Shared by `write` and `restore`: both put text on the
+ *  clipboard, so both owe the same proof that it landed. */
+const sameText = (a: string, b: string): boolean => a.replace(/\r\n/g, '\n') === b.replace(/\r\n/g, '\n')
+
 export function registerClipboard(): void {
   ipcMain.handle(ClipboardChannels.write, (_e, payload: WriteClipboard) => {
     const text = payload?.text ?? ''
@@ -292,7 +301,6 @@ export function registerClipboard(): void {
     // content, which still differs) without falsely warning on every pasted code block. An
     // empty write has nothing to verify. `clipboard.readText` directly, NOT the audited
     // reader: this is a write-path check, not the history watcher opening the clipboard.
-    const sameText = (a: string, b: string): boolean => a.replace(/\r\n/g, '\n') === b.replace(/\r\n/g, '\n')
     if (text && !sameText(clipboard.readText(), text)) throw new Error('clipboard write did not take')
     recordOurText(text, payload?.source ?? 'app')
   })
@@ -344,6 +352,13 @@ export function registerClipboard(): void {
       lastImageSig = signatureOf(img)
     } else {
       writeClipboardText(entry.text)
+      // The same read-back the `write` handler does, for the same reason: on Windows the
+      // clipboard is a machine-wide locked resource, so `clipboard.writeText` is a SILENT
+      // no-op while another process holds it — Electron neither copies nor throws. Verify
+      // BEFORE mutating the ring: a failed restore that still re-dated the entry, floated it
+      // to the top and primed `lastText` reported "Copied" to the user, claimed the row WAS
+      // the clipboard, and left Ctrl+V pasting the previous contents.
+      if (entry.text && !sameText(clipboard.readText(), entry.text)) throw new Error('clipboard write did not take')
       lastText = entry.text
     }
     // Restoring re-dates the entry and floats it to the top: it IS the clipboard now.

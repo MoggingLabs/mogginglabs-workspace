@@ -12,6 +12,7 @@ import { Button, IconButton, clear, createCollapsibleCard, createModal, el, load
 import { integrationAuthState, onIntegrationAuthState, runIntegrationAuthorization } from './auth-runner'
 import { createConnectionsBlock } from './connections'
 import { CLI_LABEL, CLI_PROVIDER, HOSTED } from './cli-meta'
+import { scrollBehavior } from '../../core/a11y/motion-port'
 
 /**
  * The Library — the ONE browse surface for everything an agent can use.
@@ -66,7 +67,7 @@ export function createCatalogBlock(): SyncedBlock {
     // rendered it far below the fold with nothing scrolling — the click "did
     // absolutely nothing". Un-hiding a control the user cannot see is not showing
     // it to them.
-    setTimeout(() => panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 0)
+    setTimeout(() => panel.scrollIntoView({ behavior: scrollBehavior(), block: 'nearest' }), 0)
     panel.append(el('div', { class: 'settings-row-caption', text: preset.grantCopy }))
     // CLI checkboxes, capability/installed dimming.
     const checks = new Map<HostedCliId, HTMLInputElement>()

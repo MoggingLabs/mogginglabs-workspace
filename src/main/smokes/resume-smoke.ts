@@ -8,6 +8,7 @@ import {
   setPaneSessionLogOverrideForSmoke
 } from '../session-restore'
 import { appSettingsDebug } from '../app-settings'
+import { paneHasAgent } from '../agent-presence'
 
 // Env-gated last-session RESUME smoke (MOGGING_RESUME). Fresh userData, real daemon.
 // The whole "Restore last working session" promise end to end, through the SHIPPED
@@ -191,7 +192,20 @@ export function runResumeSmoke(win: BrowserWindow): void {
       const intentsAfter = resumeIntentsForSmoke()
       const intentConsumed = resumeTyped && intentsAfter.length === 0
 
+      // ── F018: a restore/launch whose cwd has VANISHED must refuse, not book the pane ──
+      // controller.create passes the stored cwd straight to the launch; the daemon's pickCwd
+      // silently falls back to $HOME when it is gone, so the app booked the pane agent-bearing
+      // and spent its one-shot overrides on a session that never `cd`'d there. Main now refuses.
+      const deadCwd = join(tmpdir(), 'mogging-vanished-cwd-747474')
+      const DEAD_PANE = 747
+      const deadLaunch = await ES<{ ok?: boolean; reason?: string }>(
+        `window.bridge.invoke('agents:command', { agentId: 'claude', cwd: ${JSON.stringify(deadCwd)}, paneId: ${DEAD_PANE} })`
+      )
+      const missingCwdRefused =
+        deadLaunch?.ok === false && /no longer exists/.test(deadLaunch.reason ?? '') && paneHasAgent(DEAD_PANE) === false
+
       const pass =
+        missingCwdRefused &&
         noSnapshot &&
         emptyOffered &&
         quickMirrored &&
@@ -207,6 +221,8 @@ export function runResumeSmoke(win: BrowserWindow): void {
         intentConsumed
       result = {
         pass,
+        missingCwdRefused,
+        deadLaunch,
         noSnapshot,
         emptyOffered,
         quickMirrored,

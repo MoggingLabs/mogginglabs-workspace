@@ -16,12 +16,12 @@ everything this pack builds is $0.
 
 ## Part I — Prove the product is correct and clean
 
-### 01 · Audit method & coverage
-- [ ] `INVENTORY.md` lists every feature + subsystem, one row each, with entry point + doc + covering gate.
-- [ ] `RUBRIC.md` defines the six lenses (correctness, smell, spaghetti, duplication, inefficiency, refactor-debt), each by an OBJECTIVE TRIGGER + in-repo example, with the not-a-finding boundary written down (taste is not fileable).
-- [ ] Floor is **A**, and A is DERIVED — A ≡ zero open findings on that lens for that row; nobody types a letter.
-- [ ] `FINDINGS.md` routing ledger exists (id · area · lens · file:line · severity · verdict · evidence · resolved-in); verdicts are ONLY `fixed` or `invalid` (disproven) — `defer`/`wontfix` deleted.
-- [ ] `LAUNCHAUDIT` gate written, wired into `qa-smokes.sh`, and bite-proven (an ungraded lens, a below-A derivation, or a `defer` row each red it).
+### 01 · Audit method & coverage ✅ (2026-07-20)
+- [x] `INVENTORY.md` lists every feature + subsystem, one row each, with entry point + doc + covering gate — **183 rows across 37 areas**, and the gate proves the denominator is CLOSED (183/183 sweep gates claimed by a row; deleting a row reds the sweep).
+- [x] `RUBRIC.md` defines the six lenses (correctness, smell, spaghetti, duplication, inefficiency, refactor-debt), each by an OBJECTIVE TRIGGER + in-repo example, with the not-a-finding boundary written down (taste is not fileable) and an amendment rule that binds every row at once.
+- [x] Floor is **A**, and A is DERIVED — A ≡ zero open findings on that lens for that row; nobody types a letter. Lens cells record PROVENANCE (`~03` pending / `03` swept), never a grade.
+- [x] `FINDINGS.md` routing ledger exists (id · area · lens · file:line · severity · verdict · evidence · resolved-in); verdicts are ONLY `fixed` or `invalid` (disproven) — `defer`/`wontfix` deleted, and named explicitly by the gate so they cannot be typed by accident.
+- [x] `LAUNCHAUDIT` gate written, wired into `qa-smokes.sh` (gate **#183**; 24 static + 159 app-boot), and bite-proven **9 ways** in a green→red→green bracket against scratch copies: blank lens · `defer` verdict · below-A derivation · an unclaimed gate · a deleted entry-point file · a renamed anchor · `fixed` with no failing assertion · `invalid` with no DISPROVEN · `--freeze` with pendings outstanding.
 
 ### 02 · Correctness — runtime & UI core
 - [ ] Edge cases enumerated for terminal/PTY/daemon/scroll/layout/panes/updater-UX/first-run/Settings/themes.

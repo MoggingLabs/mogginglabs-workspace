@@ -51,6 +51,14 @@ export function reportSpawnRunOutcome(paneId: number, delivered: boolean): void 
   }
 }
 
+/** GATE seam: the outcome this pane recorded, or undefined if it never reported one.
+ *  A pane reports EXACTLY when its spawn call went out (both the .then and the .catch
+ *  report), so "undefined" is the observable for "no spawn was ever issued" — which is what
+ *  a pane disposed mid-claim must leave behind. */
+export function spawnRunOutcomeFor(paneId: number): boolean | undefined {
+  return outcomes.get(paneId)
+}
+
 /** Resolve with the pane's report, or null after `timeoutMs` (no pane ever claimed —
  *  the caller falls back to typed delivery, which fails as gracefully as it always has). */
 export function whenSpawnRunOutcome(paneId: number, timeoutMs: number): Promise<boolean | null> {

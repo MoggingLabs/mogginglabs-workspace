@@ -212,8 +212,16 @@ export function createPaneAnchor(term: Terminal, body: HTMLElement): PaneAnchorH
   // prompt — xterm's own scrollOnUserInput already jumps there, so re-arm with it.
   const SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown'])
   const UP_KEYS = new Set(['PageUp', 'Home', 'ArrowUp'])
+  // A modifier PRESS is the first half of a chord, never typing. A real Shift+PageUp is TWO
+  // keydowns — `Shift` (already carrying shiftKey) and then `PageUp` — and the first one is
+  // not a SCROLL_KEY, so it fell through to stick() and slammed a reader 400 lines up back to
+  // the newest line before the chord it was starting could arrive. Ctrl/Alt/Meta never showed
+  // it because their own flags gate the typing branch; Shift alone does not, which is why the
+  // one modifier every scroll chord uses was the one that broke it.
+  const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'AltGraph', 'CapsLock', 'NumLock', 'ScrollLock'])
   const onKey = (e: KeyboardEvent): void => {
     if ((e.shiftKey || e.ctrlKey || e.metaKey) && SCROLL_KEYS.has(e.key)) noteGesture(UP_KEYS.has(e.key))
+    else if (MODIFIER_KEYS.has(e.key)) return
     else if (!e.ctrlKey && !e.metaKey && !e.altKey) stick() // typing = back to the prompt
   }
   body.addEventListener('keydown', onKey, true)

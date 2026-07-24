@@ -84,6 +84,17 @@ export function onDockLayoutChange(listener: Listener): () => void {
         attributeFilter: ['hidden']
       })
     }
+    // The budget reads the rail's width the instant it toggles `rail-auto-collapsed`, which
+    // STARTS a 260ms width transition — so it reads the PRE-fold width and everything derived
+    // (available, the dock overlays, the drag handle's aria-valuemax) is computed against a rail
+    // ~221px wider than the one that lands, and stayed wrong because nothing recomputed when the
+    // fold settled. Recompute when the rail's width transition ends, against the settled width.
+    const rail = document.getElementById('rail')
+    if (rail) {
+      rail.addEventListener('transitionend', (e) => {
+        if (e.propertyName === 'width') requestDockLayout()
+      })
+    }
   }
   requestDockLayout()
   return () => listeners.delete(listener)

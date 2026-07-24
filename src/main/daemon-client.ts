@@ -183,7 +183,7 @@ export async function retireDaemonEndpoint(ep: DaemonEndpoint): Promise<boolean>
  * null as "retire as before" — a daemon that cannot answer is by definition old code
  * (or wedged), and both deserve the retire.
  */
-function probeOtherClients(ep: DaemonEndpoint, timeoutMs = 3000): Promise<number | null> {
+export function probeOtherClients(ep: DaemonEndpoint, timeoutMs = 3000): Promise<number | null> {
   return new Promise((resolve) => {
     let settled = false
     const finish = (v: number | null): void => {
@@ -222,6 +222,52 @@ function probeOtherClients(ep: DaemonEndpoint, timeoutMs = 3000): Promise<number
 }
 
 /**
+ * Can we actually CONNECT to this endpoint? `endpointLive` is a SYNC check — matching protocol
+ * version, a live pid, and (on Windows) an accessible pipe via `pipeAlive`'s accessSync. Off
+ * Windows there is NO sync socket check: `pipeAlive` returns true for every non-pipe address.
+ * So a stale endpoint whose recorded pid was REUSED by an unrelated process after an unclean
+ * reboot (the run/ dir survives reboots) passes `endpointLive` though its socket is a dead file
+ * nothing listens on — a corpse. This proves the wire: any welcome (even from an old daemon that
+ * cannot report otherClients) or an `error` frame means a real daemon answered; an ECONNREFUSED
+ * / ENOENT / timeout means the endpoint is a corpse and must be respawned, not trusted.
+ */
+export function probeReachable(ep: DaemonEndpoint, timeoutMs = 3000): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (v: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      try {
+        sock.destroy()
+      } catch {
+        /* already gone */
+      }
+      resolve(v)
+    }
+    const sock = net.connect(ep.address)
+    sock.setEncoding('utf8')
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    const framer = createLineFramer((obj) => {
+      const m = obj as { t?: string }
+      // ANY answer proves a listener is on the wire. Even an `error` frame (bad token, wrong
+      // version) is a LIVE daemon replying — only a failed connect is a corpse.
+      if (m.t === 'welcome' || m.t === 'error') finish(true)
+    })
+    sock.on('data', (chunk: string) => framer(chunk))
+    sock.on('error', () => finish(false))
+    sock.on('close', () => finish(false))
+    sock.on('connect', () => {
+      try {
+        sock.write(encodeMessage({ t: 'hello', v: ep.version, token: ep.token, client: { pid: process.pid, kind: 'probe' } }))
+      } catch {
+        finish(false)
+      }
+    })
+  })
+}
+
+/**
  * Retire OUR OWN live daemon — the pre-install step. The daemon runs from the installed
  * executable and, being a process, holds a Windows file lock on it: an installer that runs
  * while it lives ends in "MoggingLabs Workspace cannot be closed. Please close it manually
@@ -249,7 +295,22 @@ export interface DaemonHost {
 export async function ensureDaemon(daemonEntry: string, host: DaemonHost): Promise<DaemonEndpoint> {
   if (quiescing) throw new Error('daemon is quiescing for an update — refusing to spawn')
   const existing = readEndpoint()
-  if (endpointLive(existing)) {
+  // endpointLive is SYNC and, off Windows, cannot prove anything actually LISTENS on the socket
+  // (pipeAlive returns true for every non-pipe address). A stale endpoint whose recorded pid was
+  // REUSED by an unrelated process after an unclean reboot (the run/ dir survives reboots) passes
+  // endpointLive though its socket is a dead file — a corpse. Trusted, it is returned below and
+  // the relay dials its dead address forever, falling back to the in-proc backend PERMANENTLY
+  // (session survival dead on that machine until run/ is hand-deleted). So off Windows we PROVE
+  // the wire with a connect-probe; a corpse fails it and falls through to unlink + respawn.
+  // (Windows already proved liveness synchronously — pipeAlive's accessSync on the pipe.)
+  // MOGGING_DAEMON_FORCE_REACH_PROBE forces the probe even on Windows, so this POSIX-only wire
+  // can be exercised on a Windows CI box (inert in production — unset means Windows trusts
+  // pipeAlive and skips the probe exactly as before).
+  const forceReachProbe = process.env.MOGGING_DAEMON_FORCE_REACH_PROBE === '1'
+  if (
+    endpointLive(existing) &&
+    ((process.platform === 'win32' && !forceReachProbe) || (await probeReachable(existing)))
+  ) {
     // THE BUILD-STAMP CHECK. The endpoint is live and speaks our protocol — but is it running
     // our CODE? The daemon outlives the app (ADR 0006), so after an update this reconnect
     // would otherwise hand every pane to a process still executing last release's daemon:
@@ -299,8 +360,9 @@ export async function ensureDaemon(daemonEntry: string, host: DaemonHost): Promi
   // A stale endpoint must not survive this call. Left in place it poisons every retry:
   // waitForLiveEndpoint below re-reads it and "succeeds" against a daemon that isn't there,
   // and the relay's reconnect loop (which re-runs discovery each attempt) dials the same
-  // dead address forever instead of spawning a fresh daemon. Only ever unlinked when it
-  // failed endpointLive — a live daemon's endpoint is never touched.
+  // dead address forever instead of spawning a fresh daemon. Unlinked when it failed endpointLive
+  // OR proved unreachable above (a reused-pid corpse) — a daemon that actually ANSWERED is never
+  // touched.
   if (existing) {
     try {
       fs.unlinkSync(endpointPath())
@@ -327,6 +389,20 @@ export async function ensureDaemon(daemonEntry: string, host: DaemonHost): Promi
     stdio: ['ignore', logFd, logFd],
     windowsHide: true
   })
+  // A ChildProcess 'error' with NO listener is re-thrown by EventEmitter, which lands in
+  // boot.ts's `uncaughtException` -> fatal() -> app.exit(1). So a helper that has since been
+  // quarantined by antivirus, swapped by an installer, or deleted in dev took the whole app
+  // down mid-session from a BACKGROUND reconnect — when the built-in answer (a caught
+  // rejection, one journal line, backoff) was already right there. `spawn` reports failure
+  // asynchronously, so the throw arrives long after this function returns.
+  child.on('error', (e) => clientLog('daemon-spawn-error', { message: e instanceof Error ? e.message : String(e) }))
+  // The parent must close its OWN copy of the fd it handed the child; the child keeps its
+  // own. One leak per spawn is invisible at one-per-launch and is EMFILE under a crash loop.
+  try {
+    fs.closeSync(logFd)
+  } catch {
+    /* already closed */
+  }
   child.unref()
   clientLog('daemon-spawning', { childPid: child.pid ?? null })
 
@@ -426,7 +502,24 @@ export class DaemonClient {
         fn()
       }
       // Never hang: if the daemon doesn't welcome us, fail fast so callers can recover.
-      const timer = setTimeout(() => settle(() => reject(new Error('daemon welcome timeout'))), 8000)
+      // DESTROY the socket on the way out. Rejecting alone left it open, and the relay
+      // reconnects on a backoff — so a daemon wedged before `welcome` accumulated one live,
+      // unread connection per attempt. When it un-wedged it processed every queued `hello`
+      // and registered them all as authed clients, which (a) made `otherClients` permanently
+      // non-zero, so the stamp-war guard refused every legitimate build-stamp retire and an
+      // updated app could never replace a stale daemon, and (b) kept the client count off
+      // zero, so the idle shutdown could never fire. Both siblings in this file
+      // (retireDaemonEndpoint, probeOtherClients) already destroy inside their finish().
+      const timer = setTimeout(() => {
+        settle(() => {
+          try {
+            sock.destroy()
+          } catch {
+            /* already gone */
+          }
+          reject(new Error('daemon welcome timeout'))
+        })
+      }, 8000)
       const framer = createLineFramer((obj) =>
         this.dispatch(obj as ServerMessage, (panes) => settle(() => resolve(panes)))
       )
