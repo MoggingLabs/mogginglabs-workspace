@@ -61,6 +61,24 @@ describe('provider catalog (ADR 0020, the runtime source)', () => {
     }
   })
 
+  it('restTools are invisible to the McpPreset projection (dark data, ADR 0021)', () => {
+    // The REST-bridge block (restAuth/requiredPermissions/setupTokenUrl/restTools)
+    // lands DARK: stripping it must not move the projection by a single field.
+    for (const e of entries.values()) {
+      const stripped = structuredClone(e) as unknown as Record<string, unknown>
+      delete stripped.restAuth
+      delete stripped.requiredPermissions
+      delete stripped.setupTokenUrl
+      delete stripped.restTools
+      expect(presetFromProvider(stripped as unknown as ProviderEntry), `${e.id} projection drifted on restTools`).toEqual(presetFromProvider(e))
+    }
+    // The dark row that holds the schema honest exists and obeys the curation law.
+    const posthog = entries.get('posthog')!
+    expect(posthog.restTools?.length).toBeGreaterThan(0)
+    expect(posthog.restTools!.length).toBeLessThanOrEqual(12)
+    expect(posthog.restTools!.some((t) => t.readOnly !== false)).toBe(true)
+  })
+
   it('profile specs carry usable paths (id plus a nameable field)', () => {
     for (const e of entries.values()) {
       if (!e.profile || e.profile.via === 'oidc') continue

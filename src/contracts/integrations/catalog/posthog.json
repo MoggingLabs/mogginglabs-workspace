@@ -53,6 +53,58 @@
     "endpoint": "https://us.posthog.com/api/users/@me/",
     "source": "https://posthog.com/docs/api/user"
   },
+  "restAuth": {
+    "in": "header",
+    "header": "Authorization",
+    "scheme": "Bearer",
+    "source": "https://posthog.com/docs/api"
+  },
+  "requiredPermissions": ["project:read", "insight:read", "dashboard:read", "feature_flag:read"],
+  "setupTokenUrl": "https://us.posthog.com/settings/user-api-keys?preset=mcp_server",
+  "restTools": [
+    {
+      "name": "list_projects",
+      "description": "List the PostHog projects this key can reach, with their ids.",
+      "method": "GET",
+      "endpoint": "https://us.posthog.com/api/projects/",
+      "pagination": { "pageParam": "offset", "itemsPath": "results" },
+      "source": "https://posthog.com/docs/api/projects"
+    },
+    {
+      "name": "list_insights",
+      "description": "List saved insights (trends, funnels, retention) in a project.",
+      "method": "GET",
+      "endpoint": "https://us.posthog.com/api/projects/{project_id}/insights/",
+      "params": [
+        { "key": "project_id", "in": "path", "type": "string", "required": true, "description": "Project id from list_projects" },
+        { "key": "search", "in": "query", "type": "string", "description": "Filter insights by name" }
+      ],
+      "pagination": { "pageParam": "offset", "itemsPath": "results" },
+      "source": "https://posthog.com/docs/api/insights"
+    },
+    {
+      "name": "list_dashboards",
+      "description": "List the dashboards in a project, with their names and ids.",
+      "method": "GET",
+      "endpoint": "https://us.posthog.com/api/projects/{project_id}/dashboards/",
+      "params": [
+        { "key": "project_id", "in": "path", "type": "string", "required": true, "description": "Project id from list_projects" }
+      ],
+      "pagination": { "pageParam": "offset", "itemsPath": "results" },
+      "source": "https://posthog.com/docs/api/dashboards"
+    },
+    {
+      "name": "list_feature_flags",
+      "description": "List a project's feature flags with their keys and active state.",
+      "method": "GET",
+      "endpoint": "https://us.posthog.com/api/projects/{project_id}/feature_flags/",
+      "params": [
+        { "key": "project_id", "in": "path", "type": "string", "required": true, "description": "Project id from list_projects" }
+      ],
+      "pagination": { "pageParam": "offset", "itemsPath": "results" },
+      "source": "https://posthog.com/docs/api/feature-flags"
+    }
+  ],
   "grantCopy": "Product analytics via your personal API key — reference it as an env pointer; the key itself never enters a config file.",
   "verifiedAt": "2026-07-15",
   "cliQuirks": {

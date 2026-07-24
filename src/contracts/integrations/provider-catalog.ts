@@ -100,6 +100,56 @@ export interface ProviderVerificationSpec {
   source?: string
 }
 
+/** How an API key rides a bridge request (ADR 0021) — ONE declaration per
+ *  service, reused by every restTool: a header (name + optional scheme, e.g.
+ *  `Authorization: Bearer <key>`) or a query param. DARK until the step-02
+ *  executor; RESTSCHEMA validates it now. */
+export interface RestAuthSpec {
+  in: 'header' | 'query'
+  /** header carriage: the header name (required when in === 'header'). */
+  header?: string
+  /** header carriage: the scheme prefixed to the key (e.g. 'Bearer'). */
+  scheme?: string
+  /** query carriage: the param name (required when in === 'query'). */
+  queryParam?: string
+  source?: string
+}
+
+/** One typed parameter of a curated REST tool. Path params fill declared
+ *  `{slots}` in the pinned endpoint. */
+export interface RestToolParam {
+  key: string
+  in: 'path' | 'query' | 'body'
+  type: 'string' | 'number' | 'integer' | 'boolean'
+  required?: boolean
+  description?: string
+}
+
+/** One curated REST tool (ADR 0021): declarative, capped, provenance-pinned.
+ *  The endpoint is CATALOG-pinned https; its only interpolation is declared
+ *  `${connectionConfig}` keys — the bridge never executes an agent-supplied URL.
+ *  `name`/`description` are written for an agent choosing tools, never mirrored
+ *  from a spec (Speakeasy's curation doctrine as law). */
+export interface RestToolSpec {
+  /** Agent-facing, snake_case, ≤40 chars. */
+  name: string
+  /** One sentence, written for an agent choosing tools. */
+  description: string
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+  endpoint: string
+  params?: readonly RestToolParam[]
+  /** Default true; `false` marks a WRITE tool — gated by the per-workspace
+   *  write grant exactly like an MCP write tool. Non-GET methods must declare
+   *  this explicitly (RESTSCHEMA). */
+  readOnly?: boolean
+  /** Cursor/page param names + the JSON path to the item array. */
+  pagination?: { cursorParam?: string; pageParam?: string; itemsPath: string }
+  /** JSON path shaping the answer the bridge returns. */
+  responsePath?: string
+  /** Per-tool provenance: the primary API doc this tool was re-authored from. */
+  source: string
+}
+
 /** Rate-limit-aware retry metadata (Nango) — the bridge proxy adopts it. */
 export interface ProviderRetrySpec {
   atHeader?: string
@@ -129,6 +179,18 @@ export interface ProviderEntry {
   profile?: ProviderProfileSpec
   verification?: ProviderVerificationSpec
   retry?: ProviderRetrySpec
+  // ── The REST bridge block (ADR 0021, phase-restbridge/01) — DARK: no runtime
+  // reads these until the step-02 executor; RESTSCHEMA gate-hardens the shape
+  // now, and the McpPreset projection below ignores them (unit-pinned).
+  /** How the key rides — one declaration reused by every restTool. */
+  restAuth?: RestAuthSpec
+  /** The provider's own permission names the curated set needs (least
+   *  privilege as data). Required alongside restTools. */
+  requiredPermissions?: readonly string[]
+  /** PRE-FILLED token-creation link: click → Create → copy. */
+  setupTokenUrl?: string
+  /** Curated tools the house bridge serves — hard cap 12, ≥1 read-only. */
+  restTools?: readonly RestToolSpec[]
   grantCopy?: string
   verifiedAt?: string
 }

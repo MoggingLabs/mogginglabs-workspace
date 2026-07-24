@@ -163,6 +163,68 @@
         "errorCodes": { "type": "array", "items": { "type": "string" } }
       }
     },
+    "restAuth": {
+      "type": "object",
+      "required": ["in"],
+      "additionalProperties": false,
+      "properties": {
+        "in": { "enum": ["header", "query"] },
+        "header": { "type": "string", "minLength": 1 },
+        "scheme": { "type": "string" },
+        "queryParam": { "type": "string", "minLength": 1 },
+        "source": { "type": "string" }
+      }
+    },
+    "requiredPermissions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "setupTokenUrl": { "type": "string", "pattern": "^https://" },
+    "restTools": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "required": ["name", "description", "method", "endpoint", "source"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 40 },
+          "description": { "type": "string", "minLength": 1 },
+          "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+          "endpoint": { "type": "string", "pattern": "^https://" },
+          "params": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["key", "in", "type"],
+              "additionalProperties": false,
+              "properties": {
+                "key": { "type": "string", "minLength": 1 },
+                "in": { "enum": ["path", "query", "body"] },
+                "type": { "enum": ["string", "number", "integer", "boolean"] },
+                "required": { "type": "boolean" },
+                "description": { "type": "string" }
+              }
+            }
+          },
+          "readOnly": { "type": "boolean" },
+          "pagination": {
+            "type": "object",
+            "required": ["itemsPath"],
+            "additionalProperties": false,
+            "properties": {
+              "cursorParam": { "type": "string" },
+              "pageParam": { "type": "string" },
+              "itemsPath": { "type": "string" }
+            }
+          },
+          "responsePath": { "type": "string" },
+          "source": { "type": "string", "pattern": "^https://" }
+        }
+      }
+    },
     "grantCopy": { "type": "string" },
     "verifiedAt": { "type": "string" }
   }

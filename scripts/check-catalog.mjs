@@ -16,7 +16,12 @@
 //      ({scope,title}) — a raw scope string is not a sentence a user can consent to;
 //   4. ids are unique and match their filename;
 //   5. nothing secret-shaped hides in the data (known prefixes + entropy scan) —
-//      the catalog is committed plaintext and must stay boring.
+//      the catalog is committed plaintext and must stay boring;
+//   6. RESTSCHEMA (ADR 0021, phase-restbridge/01): a row's curated `restTools`
+//      block obeys the curation law — ≤12 tools, ≥1 read-only, snake_case unique
+//      names, typed params, per-tool provenance, pinned https endpoints whose only
+//      interpolation is declared connectionConfig keys, restAuth + requiredPermissions
+//      present. The data is DARK until the step-02 executor; the rules bite now.
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -52,6 +57,7 @@ function validate(schema, value, path, errors) {
       return
     }
     if (schema.minItems != null && value.length < schema.minItems) errors.push(`${path}: needs at least ${schema.minItems} item(s)`)
+    if (schema.maxItems != null && value.length > schema.maxItems) errors.push(`${path}: exceeds the cap of ${schema.maxItems} item(s)`)
     if (schema.items) value.forEach((v, i) => validate(schema.items, v, `${path}[${i}]`, errors))
     return
   }
@@ -61,6 +67,7 @@ function validate(schema, value, path, errors) {
       return
     }
     if (schema.minLength != null && value.length < schema.minLength) errors.push(`${path}: shorter than ${schema.minLength}`)
+    if (schema.maxLength != null && value.length > schema.maxLength) errors.push(`${path}: longer than ${schema.maxLength}`)
     if (schema.pattern && !new RegExp(schema.pattern).test(value)) errors.push(`${path}: does not match ${schema.pattern}`)
     return
   }
@@ -134,6 +141,64 @@ function checkEntry(name, entry, schema) {
         errors.push(`${name}: profile lacks source provenance`)
       }
     }
+    // RESTSCHEMA (ADR 0021, phase-restbridge/01): curated restTools are DATA the
+    // house bridge will execute — so the curation law is enforced here, before a
+    // single request flows. The cap and read-floor kill tool explosion and
+    // write-by-default; pinned interpolation kills arbitrary-URL execution;
+    // per-tool provenance keeps the license lanes honest.
+    const tools = entry.restTools
+    if (Array.isArray(tools)) {
+      const auth = entry.restAuth
+      if (!auth || typeof auth !== 'object') {
+        errors.push(`${name}: restTools requires restAuth (one key-carriage declaration every tool reuses)`)
+      } else {
+        if (auth.in === 'header' && (typeof auth.header !== 'string' || !auth.header.trim())) {
+          errors.push(`${name}: restAuth (header) must name its header`)
+        }
+        if (auth.in === 'query' && (typeof auth.queryParam !== 'string' || !auth.queryParam.trim())) {
+          errors.push(`${name}: restAuth (query) must name its query param`)
+        }
+      }
+      if (!Array.isArray(entry.requiredPermissions) || entry.requiredPermissions.length === 0) {
+        errors.push(`${name}: restTools requires requiredPermissions (least privilege as data)`)
+      }
+      const cfgKeys = new Set(
+        (Array.isArray(entry.methods) ? entry.methods : []).flatMap((m) =>
+          (Array.isArray(m?.connectionConfig) ? m.connectionConfig : []).map((c) => c?.key)
+        )
+      )
+      const toolNames = new Set()
+      let readTools = 0
+      for (const t of tools) {
+        if (!t || typeof t !== 'object') continue
+        if (typeof t.name === 'string') {
+          if (toolNames.has(t.name)) errors.push(`${name}: duplicate restTools name "${t.name}"`)
+          toolNames.add(t.name)
+        }
+        if (t.readOnly !== false) readTools++
+        if (t.method && t.method !== 'GET' && typeof t.readOnly !== 'boolean') {
+          errors.push(`${name}: restTools "${t.name}" (${t.method}) must declare readOnly explicitly — a mutating method is never read-only by silence`)
+        }
+        if (typeof t.endpoint === 'string') {
+          for (const m of t.endpoint.matchAll(/\$\{([^}]*)\}/g)) {
+            if (!cfgKeys.has(m[1])) {
+              errors.push(`${name}: restTools "${t.name}" endpoint interpolates \${${m[1]}} — not a declared connectionConfig key (endpoints are pinned; no free interpolation)`)
+            }
+          }
+        }
+        for (const p of Array.isArray(t.params) ? t.params : []) {
+          if (p?.in === 'path' && typeof t.endpoint === 'string' && !t.endpoint.includes(`{${p.key}}`)) {
+            errors.push(`${name}: restTools "${t.name}" path param "${p.key}" has no {${p.key}} slot in the pinned endpoint`)
+          }
+        }
+        if (typeof t.source !== 'string' || t.source.length < 8) {
+          errors.push(`${name}: restTools "${t.name}" lacks per-tool source provenance`)
+        }
+      }
+      if (readTools === 0) {
+        errors.push(`${name}: restTools has no read-only tool — a service whose only tools are writes is a curation smell`)
+      }
+    }
     scanSecrets(entry, name, errors)
   }
   return errors
@@ -170,8 +235,42 @@ function selftest() {
     label: 'Self Test',
     source: 'https://example.com/docs',
     mcp: { transport: 'http', url: 'https://example.com/mcp' },
-    methods: [{ key: 'browser', kind: 'oauth', name: 'Sign in with your browser', rank: 1, scopes: [{ scope: 'a', title: 'A thing' }] }],
-    profile: { via: 'rest', url: 'https://example.com/me', paths: { id: 'id', email: 'email' }, source: 'https://example.com/docs/me' }
+    methods: [
+      {
+        key: 'browser',
+        kind: 'oauth',
+        name: 'Sign in with your browser',
+        rank: 1,
+        scopes: [{ scope: 'a', title: 'A thing' }],
+        connectionConfig: [{ key: 'INSTANCE_URL', label: 'Instance URL' }]
+      }
+    ],
+    profile: { via: 'rest', url: 'https://example.com/me', paths: { id: 'id', email: 'email' }, source: 'https://example.com/docs/me' },
+    // RESTSCHEMA fixture (ADR 0021): one read tool with a path param + pagination,
+    // one write tool riding a declared connectionConfig placeholder.
+    restAuth: { in: 'header', header: 'Authorization', scheme: 'Bearer', source: 'https://example.com/docs/auth' },
+    requiredPermissions: ['thing:read', 'thing:write'],
+    setupTokenUrl: 'https://example.com/settings/tokens/new?scopes=thing:read',
+    restTools: [
+      {
+        name: 'list_things',
+        description: 'List the things in a project.',
+        method: 'GET',
+        endpoint: 'https://example.com/api/projects/{project_id}/things',
+        params: [{ key: 'project_id', in: 'path', type: 'string', required: true, description: 'Project id' }],
+        pagination: { pageParam: 'offset', itemsPath: 'results' },
+        source: 'https://example.com/docs/things'
+      },
+      {
+        name: 'create_thing',
+        description: 'Create a thing on your instance.',
+        method: 'POST',
+        endpoint: 'https://${INSTANCE_URL}/api/things',
+        params: [{ key: 'name', in: 'body', type: 'string', required: true }],
+        readOnly: false,
+        source: 'https://example.com/docs/things#create'
+      }
+    ]
   }
   const mutations = [
     ['missing-source', (e) => delete e.source],
@@ -186,7 +285,22 @@ function selftest() {
     ['profile-no-human-path', (e) => delete e.profile.paths.email],
     ['profile-rest-no-url', (e) => delete e.profile.url],
     ['profile-no-provenance', (e) => delete e.profile.source],
-    ['profile-tool-unnamed', (e) => (e.profile = { via: 'tool' })]
+    ['profile-tool-unnamed', (e) => (e.profile = { via: 'tool' })],
+    // phase-restbridge/01: the RESTSCHEMA rules must bite too.
+    ['rest-cap-breach', (e) => (e.restTools = Array.from({ length: 13 }, (_, i) => ({ ...e.restTools[0], name: `tool_${i}` })))],
+    ['rest-tool-unnamed-source', (e) => delete e.restTools[0].source],
+    ['rest-loose-interpolation', (e) => (e.restTools[1].endpoint = 'https://example.com/api/${NOT_DECLARED}/things')],
+    ['rest-all-writes', (e) => (e.restTools = [e.restTools[1]])],
+    ['rest-dup-names', (e) => (e.restTools[1].name = e.restTools[0].name)],
+    ['rest-bad-name', (e) => (e.restTools[0].name = 'ListThings')],
+    ['rest-name-too-long', (e) => (e.restTools[0].name = 'a'.repeat(41))],
+    ['rest-untyped-param', (e) => delete e.restTools[0].params[0].type],
+    ['rest-no-auth', (e) => delete e.restAuth],
+    ['rest-auth-headerless', (e) => delete e.restAuth.header],
+    ['rest-no-permissions', (e) => delete e.requiredPermissions],
+    ['rest-write-by-silence', (e) => delete e.restTools[1].readOnly],
+    ['rest-path-param-unslotted', (e) => (e.restTools[0].endpoint = 'https://example.com/api/things')],
+    ['rest-http-endpoint', (e) => (e.restTools[0].endpoint = 'http://example.com/api/{project_id}/things')]
   ]
   let failed = 0
   if (checkEntry('selftest', structuredClone(good), schema).length !== 0) {
@@ -209,7 +323,7 @@ function selftest() {
 if (process.argv.includes('--selftest')) {
   const failed = selftest()
   if (failed) process.exit(1)
-  console.log('CATSCHEMA selftest: every mutation caught (gate bites)')
+  console.log('CATSCHEMA selftest: every mutation caught, RESTSCHEMA rules included (gate bites)')
   process.exit(0)
 }
 
@@ -219,4 +333,4 @@ if (errors.length) {
   for (const e of errors) console.error(`  - ${e}`)
   process.exit(1)
 }
-console.log(`CATSCHEMA: ${files} catalog entries valid (schema, provenance, humanized scopes, unique ids, no secret-shaped literals)`)
+console.log(`CATSCHEMA: ${files} catalog entries valid (schema, provenance, humanized scopes, unique ids, no secret-shaped literals, restTools curation law)`)
