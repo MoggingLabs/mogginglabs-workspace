@@ -24,7 +24,13 @@ only, so the shape is gate-hardened before a single request flows.
      `pagination?` (cursor/page param names + item path), `responsePath?` (JSON
      path shaping the answer), `source` (per-tool provenance URL, REQUIRED);
    - per service: `restAuth` (how the key rides: header name/scheme or query
-     param — one declaration, reused by every tool);
+     param — one declaration, reused by every tool), `requiredPermissions[]`
+     (the provider's own permission names the curated set needs — least
+     privilege as data), and `setupTokenUrl` (a PRE-FILLED token-creation link:
+     Cloudflare's official template URLs carry permissionGroupKeys+name; GitHub
+     prefills scopes/name/expiry on /settings/tokens/new and fine-grained
+     /settings/personal-access-tokens/new — the 9-step provider ceremony
+     becomes click → Create → copy);
    - **THE CAP: ≤12 tools per service** (schema-enforced `maxItems`), and ≥1 must
      be `readOnly` — a service whose only tools are writes is a curation smell.
 3. **CATSCHEMA extension → RESTSCHEMA rules** in `check-catalog.mjs`: validate the

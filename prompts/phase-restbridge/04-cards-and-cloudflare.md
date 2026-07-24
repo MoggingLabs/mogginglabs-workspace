@@ -10,12 +10,19 @@ account, scopes, launches, and fixes IDENTICALLY to an MCP-backed tool.
 
 ## Deliverables
 1. **The chooser learns the bridge**: a catalog row with `restTools` + an `apiKey`
-   method renders "Paste an API key" even with no MCP token endpoint. Submit runs
-   prove-before-save against the catalog `verification` block (MANDATORY for
-   restTools services — RESTSCHEMA gains the rule + selftest mutation), vaults the
-   key (one-paste-every-route law included), registers the bridge server row, and
-   the card flips `✓ Connected · verified 0m ago` — the STATUS ENGINE's stamp, via
-   the verification endpoint, no MCP probe involved.
+   method renders "Paste an API key" even with no MCP token endpoint. The key form
+   becomes a GUIDED PANEL (this is the visual win): step 1 — a "Create your token"
+   button opening the catalog's `setupTokenUrl` (the PRE-FILLED provider page:
+   permissions, name, expiry already selected — the user only clicks Create and
+   copies) with the `requiredPermissions` listed underneath in the provider's own
+   words ("this needs: Zone DNS Read, Workers Read — nothing more"); step 2 — the
+   paste field; step 3 — live proof: submit runs prove-before-save against the
+   catalog `verification` block (MANDATORY for restTools services — RESTSCHEMA
+   gains the rule + selftest mutation), vaults the key (one-paste-every-route law
+   included), registers the bridge row, and the card flips `✓ Connected ·
+   verified 0m ago` — the STATUS ENGINE's stamp, no MCP probe involved. A pasted
+   OVER-scoped key (a global key) connects too, with one honest fine-print line
+   ("this token can do more than these tools use — a scoped one is safer").
 2. **The family + the key**: on a FAMILY card (Cloudflare), the key method renders
    ONCE at family level when every member shares `restAuth` + one key — one paste
    lights the whole family (each member registers its bridge row; the family tag
@@ -38,7 +45,9 @@ account, scopes, launches, and fixes IDENTICALLY to an MCP-backed tool.
 
 ## Gate — RESTCARDS
 Env-gated smoke, fixture REST API + fixture catalog rows: (a) the chooser renders
-the key method for a restTools-only fixture, ADR strings verbatim, rank honored;
+the key method for a restTools-only fixture, ADR strings verbatim, rank honored,
+and the guided panel shows the setup button (openExternal SPIED — the exact
+prefilled `setupTokenUrl` asserted) + the requiredPermissions list;
 (b) paste → prove-before-save hits the verification endpoint (fixture asserts
 path; a refused key retains the field, SECRETFORMS law) → card `✓ Connected ·
 verified 0m ago`; (c) the FAMILY key method: one paste → every member connected,
