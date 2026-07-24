@@ -3,35 +3,70 @@
     "Notification": [
       {
         "hooks": [
-          { "type": "command", "command": "mogging notify --event needs-input" }
+          {
+            "type": "command",
+            "command": "mogging notify --event needs-input"
+          }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "mogging notify --event done" }
+          {
+            "type": "command",
+            "command": "mogging notify --event done"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mogging notify --event turn-failed"
+          }
+        ]
+      }
+    ],
+    "PostToolBatch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mogging notify --event busy"
+          }
         ]
       }
     ],
     "SubagentStart": [
       {
         "hooks": [
-          { "type": "command", "command": "mogging notify --event subagent-start" }
+          {
+            "type": "command",
+            "command": "mogging notify --event subagent-start"
+          }
         ]
       }
     ],
     "SubagentStop": [
       {
         "hooks": [
-          { "type": "command", "command": "mogging notify --event subagent-stop" }
+          {
+            "type": "command",
+            "command": "mogging notify --event subagent-stop"
+          }
         ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "mogging notify --event turn-start" }
+          {
+            "type": "command",
+            "command": "mogging notify --event turn-start"
+          }
         ]
       }
     ]

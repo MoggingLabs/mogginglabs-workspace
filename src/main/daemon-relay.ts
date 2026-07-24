@@ -8,6 +8,7 @@ import * as path from 'node:path'
 import { TerminalChannels, LedgerChannels, GateChannels, PANE_CWD_MAX, normalizeRemoteConnection } from '@contracts'
 import type { AgentState, Approval, SpawnRequest, SpawnResult, SpawnSpec, StateSyncRequest, WriteCommand, ResizeCommand, KillCommand, SetRoleCommand } from '@contracts'
 import { getEntitlements, getTelemetry } from '@backend'
+import { ptyEmulation } from '@backend/platform/pty-host'
 import { ensureDaemon, DaemonClient, clientLog } from './daemon-client'
 import { daemonEntryPath, helperRuntime } from './node-helper'
 import { DaemonMigrationDeferredError, migrateOlderDaemonSessions } from './daemon-migrate'
@@ -407,6 +408,12 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     // the daemon's answer — it does not compute either (that is the whole point of pty-host).
     return await client.spawn(String(req.id), spec)
   })
+  // Platform truth a pane needs BEFORE its first byte. The daemon's own `spawned`
+  // reply answers from THIS same module (transport.ts imports the same ptyEmulation)
+  // and the daemon always runs on this machine — so serving it from main is not a
+  // guess, it is the identical probe a round-trip would fetch, minus the race with
+  // the reattach replay that made "apply from the spawn reply" arrive late.
+  ipcMain.handle(TerminalChannels.ptyEmulation, () => ptyEmulation())
   ipcMain.on(TerminalChannels.write, (_e, cmd: WriteCommand) => client.input(String(cmd.id), cmd.data))
   ipcMain.on(TerminalChannels.resize, (_e, cmd: ResizeCommand) => {
     const spec = specs.get(String(cmd.id))

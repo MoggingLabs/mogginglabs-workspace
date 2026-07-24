@@ -1,0 +1,65 @@
+{
+  "id": "gw-drive",
+  "label": "Google Drive",
+  "source": "https://developers.google.com/identity/protocols/oauth2",
+  "docs": "https://developers.google.com/workspace",
+  "setupGuideUrl": "https://console.cloud.google.com/apis/credentials",
+  "docsLinks": [
+    {
+      "type": "docs.auth.oauth",
+      "name": "Google OAuth 2.0 for desktop apps",
+      "url": "https://developers.google.com/identity/protocols/oauth2/native-app"
+    }
+  ],
+  "group": "google-workspace",
+  "mcp": {
+    "transport": "http",
+    "url": "https://drivemcp.googleapis.com/mcp/v1"
+  },
+  "methods": [
+    {
+      "key": "browser",
+      "kind": "oauth",
+      "name": "Sign in with your browser",
+      "rank": 1,
+      "endpoints": {
+        "discovery": "oidc",
+        "authorizationUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+        "tokenUrl": "https://oauth2.googleapis.com/token"
+      },
+      "scopes": [
+        {
+          "scope": "https://www.googleapis.com/auth/drive",
+          "title": "Google Drive files",
+          "description": "See, edit, create, and delete Drive files this account can reach."
+        }
+      ],
+      "source": "https://developers.google.com/identity/protocols/oauth2/scopes",
+      "quirks": {
+        "authorizationParams": {
+          "access_type": "offline",
+          "prompt": "consent"
+        }
+      }
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "profile": {
+    "via": "oidc",
+    "url": "https://openidconnect.googleapis.com/v1/userinfo",
+    "paths": {
+      "id": "sub",
+      "email": "email",
+      "name": "name",
+      "imageUrl": "picture"
+    },
+    "source": "https://developers.google.com/identity/openid-connect/openid-connect#obtaininguserprofileinformation"
+  },
+  "grantCopy": "Agents read and write the Drive files your account can. Client data in, deliverables out — grant per workspace.",
+  "verifiedAt": "2026-07-15"
+}

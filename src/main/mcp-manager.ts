@@ -12,6 +12,7 @@ import {
   parseCliMcpList,
   presetBlockedFor,
   presetToServerEntries,
+  providerCatalog,
   removeStoredServer,
   saveServer,
   sha256,
@@ -56,8 +57,20 @@ const kv = (): GrantKv | null => {
 
 const hashKey = (cli: string, id: string): string => `integrations.mgr.hash.${cli}.${id}`
 
-/** Per-OS/pointer-env config homes — the CLIs' own resolution, mirrored. */
+/** Per-OS/pointer-env config homes — the CLIs' own resolution, mirrored.
+ *
+ *  TEST-ONLY seam (the TOOLFIX gate): `MOGGING_SMOKE_CLI_HOME` sandboxes the whole
+ *  home, and it is honored ONLY alongside the gates' isolated userData — the
+ *  AGENTCFG/SETAGENTCFG lesson: a config-dir pointer that escapes isolation must
+ *  never be able to repoint a REAL user's config from a normal run. */
 export function resolveCliHomes(): CliHomes {
+  const sandbox =
+    process.env.MOGGING_SMOKE_CLI_HOME && process.env.MOGGING_USERDATA ? process.env.MOGGING_SMOKE_CLI_HOME : null
+  if (sandbox) {
+    // The whole home moves — pointer envs are deliberately ignored inside the
+    // sandbox so a leaked CODEX_HOME can never mix a real config into a gate.
+    return { home: sandbox, codexDir: join(sandbox, '.codex'), geminiDir: join(sandbox, '.gemini') }
+  }
   const home = homedir()
   return {
     home,
@@ -213,6 +226,26 @@ export function mgrStatus(serverId: string, homes: CliHomes = resolveCliHomes())
       state: applyState(readIfExists(file), w, serverId, stored)
     }
   })
+}
+
+/** The silent reconciler's CHEAP scan (phase-tools/06): config stat/parse only —
+ *  never a subprocess — over Claude Code alone this phase. Other CLIs' drift stays
+ *  DETECTED by mgrStatus (the backend truth is untouched) but surfaces nowhere: a
+ *  coming-soon CLI must not raise attention the user cannot act on.
+ *
+ *  `MOGGING_FIX_BREAK_CLASSIFIER` is TEST-ONLY (the TOOLFIX mutation-red): it blinds
+ *  the mapping, which is exactly the drift-never-classified regression the gate
+ *  must catch. */
+export function scanCliDrift(homes: CliHomes = resolveCliHomes()): { id: string; flavor: 'edited' | 'missing' }[] {
+  if (process.env.MOGGING_FIX_BREAK_CLASSIFIER) return []
+  const out: { id: string; flavor: 'edited' | 'missing' }[] = []
+  for (const server of listServers()) {
+    if (server.builtIn) continue
+    const st = mgrStatus(server.id, homes).find((x) => x.cli === 'claude-code')
+    if (st?.state === 'drift-edited') out.push({ id: server.id, flavor: 'edited' })
+    else if (st?.state === 'drift-missing') out.push({ id: server.id, flavor: 'missing' })
+  }
+  return out
 }
 
 export function mgrPreview(
@@ -520,7 +553,10 @@ export function registerMcpManager(): void {
   ipcMain.handle(IntegrationsChannels.mgrBackups, (_e, cli: HostedCliId) => mgrBackups(cli))
 
   // ── The catalog (8/07) ─────────────────────────────────────────────────────
-  ipcMain.handle(IntegrationsChannels.catList, () => ({ presets: MCP_PRESETS, custom: customPresets() }))
+  // `providers` rides along since phase-tools/05: the tool cards render the chooser,
+  // humanized scopes, and setup links straight from the catalog rows (pure data,
+  // secret-free by the CATSCHEMA scan; presets remain the projected shape).
+  ipcMain.handle(IntegrationsChannels.catList, () => ({ presets: MCP_PRESETS, custom: customPresets(), providers: providerCatalog() }))
   ipcMain.handle(IntegrationsChannels.catCapabilities, () => authRunnerAuditCapabilities(CLI_CAPABILITIES))
   ipcMain.handle(IntegrationsChannels.catPrepare, async (_e, p: { presetId: string; baseUrl?: string; authKind?: McpAuthKind }) => {
     // Finding 39's seam: the Preview button's ONE read. It disabled itself on click and re-enabled

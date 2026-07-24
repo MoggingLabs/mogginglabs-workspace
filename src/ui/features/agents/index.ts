@@ -163,15 +163,29 @@ export const agentsFeature: UiFeature = {
       // typing, into the shell behind a still-booting CLI, which then took the alternate screen
       // and wiped it: the task gone, the agent never saw it, the one thing the board exists to do.
       // The identity stays byte-for-byte; all we add is the verdict that the process is real.
+      // Detection's `sinceMs` is the agent PROCESS's start (creation time where the platform
+      // reports it): the true floor for the context-log watch. It refines an existing session
+      // in two honest cases — the session never had one (an adopted pane's 30-minute guess, a
+      // launch's 5-second slack), or the process it named is a DIFFERENT one (an in-pane
+      // relaunch the cwd cannot betray). The jitter gate keeps the platforms whose floor is
+      // re-derived per snapshot from re-watching a live gauge over rounding noise.
+      const sinceRefined = (s: { since?: number }): boolean =>
+        typeof ev.sinceMs === 'number' && (s.since === undefined || Math.abs(s.since - ev.sinceMs) > 30_000)
       if (existing && existing.provider === ev.agentId && !existing.detected) {
-        if (!existing.running) writeSession(paneId, { ...existing, running: true }, at)
+        if (!existing.running || sinceRefined(existing)) {
+          writeSession(paneId, { ...existing, running: true, since: sinceRefined(existing) ? ev.sinceMs : existing.since }, at)
+        }
         return
       }
       // Process cwd is the session-log identity for a hand-typed CLI. Canonical live cwd comes
       // only through the source-aware terminal cwd stream; writing it here was a competing,
       // unrevisioned path that could roll an explicit report back to an older process snapshot.
       const cwd = ev.cwd || getPaneCwd(paneId as PaneId) || ''
-      if (existing && existing.provider === ev.agentId && existing.cwd === cwd) return // same session, no news
+      // Same provider, same cwd, same process floor: the same session, no news. A materially
+      // different sinceMs is a RELAUNCH the cwd cannot show (claude quit, claude typed again in
+      // the same repo) — fall through and write the new session, so the context watch re-locks
+      // with the new process's true floor instead of trailing the dead session's log.
+      if (existing && existing.provider === ev.agentId && existing.cwd === cwd && !sinceRefined(existing)) return
 
       // A profile's env pointers are `set`/`export`ed INTO the pane's shell (see the launch
       // builder), so they outlive the agent that was launched with them: a CLI re-typed in

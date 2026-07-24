@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { countSubmittedLines, isRecycledPpidEdge, type ProcRow } from '@backend/features/agent-state/agent-proc'
+import { countSubmittedLines, isRecycledPpidEdge, parseEtimeMs, type ProcRow } from '@backend/features/agent-state/agent-proc'
 import { isSubmittedInput } from '@backend/features/agent-state/replies'
 
 // The recycled-ppid guard: Windows reuses pids aggressively, so a long-lived
@@ -75,5 +75,22 @@ describe('countSubmittedLines', () => {
     expect(countSubmittedLines(paste)).toBe(0)
     expect(isSubmittedInput('a\r')).toBe(true)
     expect(countSubmittedLines('a\r')).toBe(1)
+  })
+})
+
+// `ps` etime -> startedAt is what gives POSIX rows creation-time evidence at all —
+// both for the recycled-ppid guard above and for the context watch's sinceMs floor.
+describe('parseEtimeMs', () => {
+  it('parses every documented shape ([[dd-]hh:]mm:ss)', () => {
+    expect(parseEtimeMs('00:05')).toBe(5_000)
+    expect(parseEtimeMs('12:34')).toBe((12 * 60 + 34) * 1000)
+    expect(parseEtimeMs('3:02:01')).toBe(((3 * 60 + 2) * 60 + 1) * 1000)
+    expect(parseEtimeMs('2-03:04:05')).toBe((((2 * 24 + 3) * 60 + 4) * 60 + 5) * 1000)
+  })
+
+  it('yields undefined for foreign shapes (a defunct row prints "-")', () => {
+    expect(parseEtimeMs('-')).toBeUndefined()
+    expect(parseEtimeMs('')).toBeUndefined()
+    expect(parseEtimeMs('123')).toBeUndefined()
   })
 })

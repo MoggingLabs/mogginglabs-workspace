@@ -33,6 +33,25 @@ export interface McpServerEntry {
  *  equivalent in TOML) — writers touch ONLY blocks wearing it. */
 export const MCP_MANAGED_BY = 'mogginglabs'
 
+/**
+ * How a server row names its transport TO A READER. `http` is the MCP streamable-HTTP
+ * transport keyword — but shown bare next to a server name ("vercel · http") it reads
+ * as an insecure URL scheme, which is precisely the confusion it caused. Remote servers
+ * are always reached over https (validated at save; plain http is allowed only to
+ * loopback), so the honest, unambiguous thing to show is the endpoint's real scheme —
+ * the security fact a reader is actually looking for in that slot — not the wire-format
+ * keyword. `stdio` is a local subprocess and reads as no scheme at all, so it stands.
+ */
+export function transportLabel(entry: Pick<McpServerEntry, 'transport' | 'url'>): string {
+  if (entry.transport === 'stdio') return 'stdio'
+  try {
+    if (entry.url) return new URL(entry.url).protocol === 'https:' ? 'HTTPS' : 'HTTP · localhost'
+  } catch {
+    /* malformed url — fall through to the bare transport */
+  }
+  return 'HTTP'
+}
+
 /** Per-(server × CLI) apply state the manager surfaces. Drift is DETECTED,
  *  never auto-healed: re-apply/adopt/forget are explicit user verbs. */
 export type McpApplyState = 'not-applied' | 'applied' | 'drift-edited' | 'drift-missing'

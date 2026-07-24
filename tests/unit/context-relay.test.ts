@@ -15,7 +15,8 @@ import { DAEMON_PROTOCOL_VERSION } from '@contracts'
 /** A claude statusline payload with the fields the relay forwards. */
 const PAYLOAD = JSON.stringify({
   context_window: { used_percentage: 42.5, context_window_size: 200000, total_input_tokens: 85000 },
-  model: { id: 'claude-test-model' }
+  model: { id: 'claude-test-model' },
+  transcript_path: '/fake/projects/p/abcd-1234.jsonl'
 })
 
 interface RelayRun {
@@ -101,6 +102,8 @@ describe('context relay (the exact shipped script)', () => {
     expect(sink.windowTokens).toBe(200000)
     expect(sink.usedTokens).toBe(85000)
     expect(sink.model).toBe('claude-test-model')
+    // The exact-session identity: what lets the monitor LOCK instead of guess.
+    expect(sink.transcriptPath).toBe('/fake/projects/p/abcd-1234.jsonl')
   })
 
   it('outside a pane (no MOGGING_PANE_ID) writes nothing and still exits 0', async () => {

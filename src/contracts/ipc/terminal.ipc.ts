@@ -132,9 +132,12 @@ export interface CwdEvent {
  *  pane's process subtree plus terminal command/prompt boundaries; arbitrary executables do
  *  not gain a provider identity or resume capability merely because their cwd is observed.
  *
- *  `sinceMs` is when the agent was first seen (minus the detection lag): the floor a context
- *  watch may look back to for a session that predates it — which is every session after an app
- *  restart, since the daemon keeps the agent alive and replays this event on reattach.
+ *  `sinceMs` is when the agent PROCESS started — its creation time where the platform reports
+ *  one, first-seen minus the detection lag otherwise: the floor a context watch may look back
+ *  to for a session that predates it. Process start (not first-seen) is what survives an app
+ *  restart: the daemon keeps the agent alive and replays this event on reattach, and a floor
+ *  collapsed to "restart time" would hide an idle session's log for hours. A materially
+ *  different sinceMs for the same pane means a DIFFERENT process — an in-pane relaunch.
  *
  *  Ids and counts only — never a command line (ADR 0002/0005). */
 export interface AgentDetectedEvent {

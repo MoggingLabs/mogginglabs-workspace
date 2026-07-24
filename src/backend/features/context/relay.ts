@@ -47,7 +47,11 @@ const main = async () => {
         usedPct: num(cw.used_percentage),
         windowTokens: num(cw.context_window_size),
         usedTokens: num(cw.total_input_tokens),
-        model: typeof p?.model?.id === 'string' ? p.model.id : null
+        model: typeof p?.model?.id === 'string' ? p.model.id : null,
+        // The EXACT session file this pane is living in — the identity the app's
+        // log matcher otherwise has to guess from mtimes (and can guess wrong when
+        // two panes share a cwd). A path on this machine, never content.
+        transcriptPath: typeof p?.transcript_path === 'string' ? p.transcript_path : null
       })
       const dir = join(tmpdir(), 'mogging-ctx-' + userInfo().username + '-' + SEGMENT)
       mkdirSync(dir, { recursive: true })

@@ -103,7 +103,7 @@ export function runMutationRaceSmoke(win: BrowserWindow): void {
       // The write-tools control is a ToggleRow now (F-25) — same single-fire contract,
       // asserted on the switch input: disabled + aria-busy across the round-trip.
       const grantPending = await ES<{ found: boolean; disabled: boolean; busy: boolean }>(`(() => {
-        const block = [...document.querySelectorAll('.mgr-grants-block')].find((item) => item.textContent?.includes('which MCP write tools agents get'))
+        const block = [...document.querySelectorAll('.mgr-grants-block')].find((item) => item.textContent?.includes('which write tools agents get'))
         const input = block?.querySelector('.switch-input')
         if (!(input instanceof HTMLInputElement)) return { found: false, disabled: false, busy: false }
         input.click()
@@ -111,7 +111,7 @@ export function runMutationRaceSmoke(win: BrowserWindow): void {
       })()`)
       await sleep(100)
       const grantStillPending = await ES<boolean>(`(() => {
-        const block = [...document.querySelectorAll('.mgr-grants-block')].find((item) => item.textContent?.includes('which MCP write tools agents get'))
+        const block = [...document.querySelectorAll('.mgr-grants-block')].find((item) => item.textContent?.includes('which write tools agents get'))
         const input = block?.querySelector('.switch-input')
         return input instanceof HTMLInputElement && input.disabled && input.getAttribute('aria-busy') === 'true'
       })()`)
@@ -120,7 +120,7 @@ export function runMutationRaceSmoke(win: BrowserWindow): void {
       const grantUiCommitted = grantAfterUi.writeTools === 'none'
 
       const planPending = await ES<{ found: boolean; disabled: boolean; busy: boolean }>(`(() => {
-        const block = [...document.querySelectorAll('.mgr-grants-block')].find((item) => item.textContent?.includes('Which registered servers reach this workspace'))
+        const block = [...document.querySelectorAll('.mgr-grants-block')].find((item) => item.textContent?.includes('Which of your tools reach this workspace'))
         const button = [...(block?.querySelectorAll('.toolplan-cell') ?? [])].find((item) => item.getAttribute('aria-label')?.includes('Audit mutation server on Codex'))
         if (!(button instanceof HTMLButtonElement)) return { found: false, disabled: false, busy: false }
         button.click()
@@ -128,7 +128,7 @@ export function runMutationRaceSmoke(win: BrowserWindow): void {
       })()`)
       await sleep(100)
       const planStillPending = await ES<boolean>(`(() => {
-        const block = [...document.querySelectorAll('.mgr-grants-block')].find((item) => item.textContent?.includes('Which registered servers reach this workspace'))
+        const block = [...document.querySelectorAll('.mgr-grants-block')].find((item) => item.textContent?.includes('Which of your tools reach this workspace'))
         const button = [...(block?.querySelectorAll('.toolplan-cell') ?? [])].find((item) => item.getAttribute('aria-label')?.includes('Audit mutation server on Codex'))
         return button instanceof HTMLButtonElement && button.disabled && button.getAttribute('aria-busy') === 'true'
       })()`)

@@ -90,6 +90,9 @@ is OS-, network-, or migration-dependent; those rows carry `~07`.
 | 8 | Clipboard copy, paste and drops | `src/main/clipboard.ts:279 registerClipboard` | docs/16-files.md | CLIPBOARD | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 | 9 | Pane working-directory truth | `src/backend/features/agent-state/cwd-state.ts:78 PaneCwdState` | docs/06-control-api.md | CWD,CWD_INPROC | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 | 10 | Typed-agent process detection | `src/backend/features/agent-state/agent-proc.ts:451 AgentProcessDetector` | docs/06-control-api.md | TYPED,TYPEDCOST | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 186 | Pane grid fit contract | `src/ui/features/terminal/pane-fit.ts:33 gridFor` | docs/01-architecture.md | PANEFIT | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 187 | Vendored terminal fonts and metric parity | `src/ui/core/terminal/font-port.ts:34 terminalFontSize` | docs/11-design-system.md | FONTCOVER | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 188 | Dead-pane restart door | `src/ui/features/terminal/terminal-pane.ts:568 restart` | docs/11-design-system.md | PANERESTART | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 
 ### panes/layout — Phase 1 · MVP core
 
@@ -137,6 +140,7 @@ is OS-, network-, or migration-dependent; those rows carry `~07`.
 | 30 | Standalone Node runtime helper | `src/main/node-helper.ts:107 helperRuntime` | docs/adr/0017-split-node-runtime.md | RUNTIMESPLIT | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 | 31 | Daemon wire protocol version | `src/contracts/daemon/protocol.ts:28 DAEMON_PROTOCOL_VERSION` | docs/adr/0012-daemon-custody-version-vs-build-stamp.md | PROTOVER | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 | 32 | Windowless daemon child spawns | `src/backend/platform/windowless-children.ts:64 enforceWindowlessChildren` | docs/adr/0006-detached-pty-daemon.md | KILLFLASH | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 189 | Attach-size reconciliation | `src/pty-daemon/attach-dims.ts:14 attachDims` | docs/adr/0006-detached-pty-daemon.md | REATTACHFIT | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 
 ### agents — Phase 2 · Agent awareness
 
@@ -296,7 +300,7 @@ is OS-, network-, or migration-dependent; those rows carry `~07`.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 100 | OAuth discovery and registration | `src/backend/features/integrations/oauth.ts:107 discoverAuthServer` | docs/adr/0014-app-held-service-connections.md | CONNPURE | ~04 | ~05 | ~05 | ~05 | ~06 | ~05 |
 | 101 | Pre-registered OAuth clients | `src/backend/features/integrations/client-registry.ts:79 resolveClient` | docs/adr/0014-app-held-service-connections.md | PREREGCLIENT | ~04 | ~05 | ~05 | ~05 | ~06 | ~05 |
-| 102 | Connect an app-held service | `src/main/connections.ts:310 connect` | docs/adr/0014-app-held-service-connections.md | CONNPURE | ~04 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 102 | Connect an app-held service | `src/main/connections.ts:310 connect` | docs/adr/0014-app-held-service-connections.md | CONNPURE,CONNLIVE | ~04 | ~05 | ~05 | ~05 | ~06 | ~05 |
 | 103 | Terminal authorization runner | `src/ui/features/settings/auth-runner.ts:38 runIntegrationAuthorization` | docs/14-integrations.md | AUTHRUNNER | ~04 | ~05 | ~05 | ~05 | ~06 | ~05 |
 
 ### integrations — Phase 8 · Integrations
@@ -433,6 +437,25 @@ is OS-, network-, or migration-dependent; those rows carry `~07`.
 | 176 | Brain view and focus lens | `src/ui/features/brain/view.ts:79 createBrainView` | docs/20-brain.md | BRAINUX | ~04 | ~05 | ~05 | ~05 | ~06 | ~05 |
 | 177 | Memory reader rendering | `src/ui/features/brain/reader.ts:152 renderReader` | docs/20-brain.md | BRAINUX,BRAINPROPS | ~04 | ~05 | ~05 | ~05 | ~06 | ~05 |
 
+### tools — v0.16.0 · The toolbelt bump (ADR 0020)
+
+| # | Feature | Entry point | Spec | Gates | corr | smell | spag | dup | eff | debt |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 190 | Provider catalog as data | `src/backend/features/integrations/provider-catalog-data.ts:76 providerCatalog` | docs/adr/0020-tool-first-integrations.md | CATSCHEMA | ~04 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 191 | Credential core: exchange, refresh, quirks | `src/backend/features/integrations/credential-core.ts:42 normalizeTokenResponse` | docs/adr/0020-tool-first-integrations.md | TOOLCRED | ~04 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 192 | Tool verification status engine | `src/backend/features/integrations/status-engine.ts:38 classifyProbeOutcome` | docs/14-integrations.md | TOOLPULSE | ~04 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 193 | Catalog-driven account identity | `src/backend/features/integrations/identity.ts:48 readProfilePaths` | docs/adr/0020-tool-first-integrations.md | TOOLWHO | ~04 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 194 | Tool cards grid and outcome wording | `src/ui/features/settings/connections.ts:1101 familyCard` | docs/14-integrations.md | TOOLCARDS,TOOLWORDS,TOOLSMILESTONE | ~04 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 195 | Silent config-drift reconciler | `src/main/mcp-manager.ts:239 scanCliDrift` | docs/14-integrations.md | TOOLFIX,TOOLSMILESTONE | ~04 | ~05 | ~05 | ~05 | ~06 | ~05 |
+
+### restbridge — v0.16.0 · The toolbelt bump (ADR 0021)
+
+| # | Feature | Entry point | Spec | Gates | corr | smell | spag | dup | eff | debt |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 196 | REST bridge executor: restTools as MCP tools | `src/backend/features/integrations/rest-bridge.ts:78 restToolsListResult` | docs/adr/0021-local-rest-bridge.md | RESTEXEC,RESTMILESTONE | ~04 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 197 | OpenAPI curator: specs in, drafts out | `scripts/curate-rest-tools.mjs:98 draftTool` | docs/adr/0021-local-rest-bridge.md | RESTIMPORT | ~04 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 198 | Guided API-key panel and family cards | `src/ui/features/settings/connections.ts:1052 familyKeyPanel` | docs/14-integrations.md | RESTCARDS,RESTMILESTONE | ~04 | ~05 | ~05 | ~05 | ~06 | ~05 |
+
 ### build — Cross-cutting · the shipped artifact
 
 | # | Feature | Entry point | Spec | Gates | corr | smell | spag | dup | eff | debt |
@@ -528,6 +551,18 @@ Step 01's coverage check is **gate → row**: every gate must be claimed. A surf
 with **no gate of its own** is therefore invisible to it, and themes/tokens was
 exactly that — covered incidentally by SETSHELL/CHROMEUX/UXMILESTONE, owned by no
 row. Rows **75–76** now exist.
+
+### A3 (2026-07-24, post-merge) — the v0.16.0 toolbelt wave joins the denominator
+
+The merge of `main` (053193d) landed mid-step-02 carrying phase-tools (ADR
+0020), phase-restbridge (ADR 0021), the rendering contract, the dead-pane
+restart door, and the live connect driver — **17 sweep gates no row claimed**,
+and the sweep red exactly as check 1 promises. Rows **186–198** now claim 16 of
+them; **CONNLIVE** rides row 102 (the `connect()` row it drives). Provenance:
+the rendering/restart/attach rows are runtime & UI core (`~02` — step 02's
+remaining edge coverage grows by four rows); the tools and restbridge rows are
+money paths & reach (`~04`). Quality and efficiency lenses land with every
+other row in 05–07. Steps 02 and 04's scope lines carry the same addendum.
 
 The limitation is real and worth stating plainly: `LAUNCHAUDIT` proves *no gate
 is unclaimed*, which is **not** the same as *no surface is unrowed*. The

@@ -9,10 +9,11 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 183 gates: 24 static (AUDIT · LAUNCHAUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS ·
+# 200 gates: 30 static (AUDIT · LAUNCHAUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS ·
 # AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT ·
 # LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES ·
-# BYTECODE · GRAMMARCAT) + 159 app-boot
+# BYTECODE · GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED · RESTEXEC · RESTIMPORT ·
+# FONTCOVER) + 170 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -222,12 +223,26 @@ run_static CUSTODY node scripts/check-credential-wording.mjs
 # specificity outranks the blanket clamp. Finding 36: five indicators had their pulse "becalmed"
 # into an INFINITE fade, so prefers-reduced-motion installed the very thing it exists to decline.
 run_static MOTION  node scripts/check-reduced-motion.mjs
+# The vendored terminal faces: cmap coverage (box/braille/dingbats) + 0.600em advance
+# parity on the exact bytes in the repo — a subset/optimizer swap goes red here.
+run_static FONTCOVER node scripts/check-font-coverage.mjs
 # NPMCONFIG: .npmrc carried `build_from_source=true` — a key npm has NEVER supported. It warned on
 # every install and hard-fails in npm's next major; electron-builder.yml's buildDependenciesFromSource
 # was doing the work all along. Two layers: no unsanctioned key in a root .npmrc, and a real
 # `npm install --dry-run` that must print no config warning (so it also catches keys arriving from
 # ~/.npmrc or the environment). Lockfile-only, offline-safe, writes nothing, ~1.3s.
 run_static NPMCONFIG node scripts/check-npm-config.mjs
+# CATSCHEMA: the provider catalog (ADR 0020) is the single source of truth for every
+# integration fact — a malformed row would surface as a broken chooser or a probe that
+# never fires. Schema + provenance-per-entry + humanized scopes + unique ids + a secret
+# scan (the catalog is committed plaintext and must stay boring). --selftest proves the
+# bite: every rule must catch its own violating fixture before the live data is trusted.
+run_static CATSCHEMA bash -c 'node scripts/check-catalog.mjs --selftest && node scripts/check-catalog.mjs'
+# TOOLWORDS: the integrations surfaces speak outcomes, not mechanism (ADR 0020 Appendix
+# A bans MCP/server/stdio/transport/drift/apply/adopt/preset at top level). REPORT-ONLY
+# until phase-tools 05–06 land the tool-first surfaces — the printed count is the
+# burn-down and must only ever go down; --enforce already exits 1 (proven at step 01).
+run_static TOOLWORDS node scripts/check-tool-wording.mjs
 # PRODARTIFACT: the harness used to SHIP. src/main/index.ts imported ~100 run*Smoke modules, so a
 # third of out/main/index.js — which electron-builder globs into app.asar — was a test rig every
 # user downloaded and loaded into the main process, wakeable by an env var (finding 41). Dev and
@@ -258,6 +273,31 @@ run_static REMOTEBOOT npm run smoke:remote-bootstrap-pure
 # reintroducing the scope over-ask, the rotation-merge drop, or the whoami unfence each
 # turns it red. Everything it asserts failed silently once; this is what stops the reprise.
 run_static CONNPURE npm run smoke:connections-pure
+# TOOLCRED: the credential core (ADR 0020, phase-tools/02) against a fixture provider —
+# normalization at exchange (GitHub's form-encoded refresh_token_expires_in shape, catalog
+# buffer applied, no raw field past the seam), the refresh discipline (per-connection lock,
+# freshness margin, failure cooldown, re-check-after-lock, non-rotating keep), the catalog
+# verification probe (prove-before-save; an outage is never a refusal), and the retry
+# grammar. Mutation-reds run LIVE on every pass: the lockless coordinator must double-hit
+# the fixture and the JSON-only parser must fail the form body — the assertions bite.
+run_static TOOLCRED npm run smoke:toolcred-pure
+# RESTEXEC: the REST-bridge executor (ADR 0021, phase-restbridge/02) against a fixture
+# REST API — tools/list is the catalog set verbatim, a read call lands with the key
+# injected per restAuth, args are typed-validated (refusals make zero requests),
+# pagination merges same-origin next links and stops at the cap, the ~50KB response cap
+# truncates honestly, a 429 retries per the catalog grammar (spacing asserted), a write
+# tool refuses without writeTools:'all' and executes with it, and a traversal/absolute-URL
+# path arg is refused. Mutation-reds run LIVE: the gateless write and the unpinned
+# traversal must each land at the fixture — the zero-hit assertions bite.
+run_static RESTEXEC npm run smoke:restexec-pure
+# RESTIMPORT: the OpenAPI curator (ADR 0021, phase-restbridge/03) against the 20-op
+# fixture spec — read-first menu, drafts stamped TODO-reword (the human rewording pass
+# is forced; RESTSCHEMA bites a shipped marker), emitted blocks judged by the SAME
+# check-catalog --entry judge as shipped rows, provenance pointers, verb-derived
+# readOnly, and the ≤12 cap refused at emit. Mutation-reds run LIVE: --test-disable-cap
+# must make the 13-pick succeed and --test-no-todo must strip the marker — both
+# assertions proven biting on every pass. Offline: the fixture is a file, never a URL.
+run_static RESTIMPORT node scripts/check-restimport.mjs
 # PREREGCLIENT: pre-registered OAuth clients for no-DCR providers (Google/GitHub/Slack).
 # Three fixture AS shapes prove: no-DCR fails ACTIONABLY (needsClientId → the paste form),
 # a refusing-but-live registration endpoint does NOT, a pasted secret rides the exchange,
@@ -318,6 +358,8 @@ run_smoke SURVIVE_B   MOGGING_SURVIVE   B 120 survive SURVIVE
 run_smoke MILESTONE   MOGGING_MILESTONE 1 300 milestone
 run_smoke FLICKER     MOGGING_FLICKER   1 240 flicker
 run_smoke PANESCROLL  MOGGING_PANESCROLL 1 300 panescroll
+run_smoke PANEFIT     MOGGING_PANEFIT   1 240 panefit
+run_smoke REATTACHFIT MOGGING_REATTACHFIT 1 120 reattachfit
 run_smoke APPSCROLL   MOGGING_APPSCROLL 1 180 appscroll
 run_smoke CONPTY      MOGGING_CONPTY    1 180 conpty
 run_smoke PERCEPTION  MOGGING_PERCEPTION 1 240 perception
@@ -356,6 +398,7 @@ run_smoke PERSISTHEALTH MOGGING_PERSISTHEALTH 1 120 persisthealth
 run_smoke ROLERACE    MOGGING_ROLERACE 1 120 rolerace
 run_smoke AGENTREGISTRY MOGGING_AGENTREGISTRY 1 120 agentregistry
 run_smoke PLAINMENU   MOGGING_PLAINMENU 1 150 plainmenu
+run_smoke PANERESTART MOGGING_PANERESTART 1 180 panerestart
 run_smoke UPDATEFAIL  MOGGING_UPDATEFAIL 1 120 updatefail
 run_smoke UPDATEOFFLINE MOGGING_UPDATEOFFLINE 1 150 updateoffline
 run_smoke A11YMODAL   MOGGING_A11YMODAL 1 180 a11ymodal
@@ -489,6 +532,72 @@ run_smoke MCPMGR       MOGGING_MCPMGR    1 180 mcpmgr
 run_smoke MCPCAT       MOGGING_MCPCAT    1 180 mcpcat
 run_smoke INTEGUX      MOGGING_INTEGUX   1 240 integux
 run_smoke SETINTEG     MOGGING_SETINTEG  1 240 setinteg
+run_smoke CONNLIVE     MOGGING_CONNLIVE  1 180 connlive
+# TOOLPULSE (phase-tools/03): the status engine on a fixture — the heartbeat re-stamps
+# verifiedAt on the accelerated knob under a budget the cursor resumes past (stagger
+# bounded, fixture-asserted); a key-auth service verifies on its catalog endpoint (exact
+# path asserted, MCP endpoint untouched); page entry = ONE sweep; pre-launch verify runs
+# before env materialization and never delays the pane past its budget; a real failure
+# raises the app-wide badge while Settings is inactive, a network blackhole never does,
+# recovery clears. Mutation-red ×2 proven LIVE: broken offline classifier, broken budget.
+run_smoke TOOLPULSE    MOGGING_TOOLPULSE 1 300 toolpulse
+# TOOLWHO (phase-tools/04): the catalog-driven identity ladder on fixtures — an OIDC
+# grant's claims land sourced 'oidc'; a rest profile hits the EXACT catalog endpoint
+# with the catalog's own paths; a whoami tool is called once where allowlisted and
+# ZERO times where not; the identity-less card renders the honest fallback; a user
+# note set over IPC survives disconnect/reconnect and renders visibly distinct from
+# probed identity (probed wins when both); identity once probed is never re-asked.
+# Mutation-red ×2 proven LIVE: broken allowlist match, inverted probed-beats-noted.
+run_smoke TOOLWHO      MOGGING_TOOLWHO   1 240 toolwho
+# TOOLCARDS (phase-tools/05): the catalog made visible on the REAL page — a dual-route
+# service is ONE card (merge key = service id) carrying both facts; the four status
+# tags track the engine's verifiedAt and flip when the provider revokes; the chooser
+# renders exactly the catalog's methods in rank order with the ADR 0020 strings and
+# custody subtitles verbatim, and the no-DCR client form carries the catalog's setup
+# link; scope titles humanized with raw in the title attr, uncataloged never hidden;
+# the detail's workspace checkbox mutates the same plan the matrix renders; Codex/
+# Gemini rows are inert coming-soon. Mutation-red ×2: broken merge key, broken rank.
+run_smoke TOOLCARDS    MOGGING_TOOLCARDS 1 240 toolcards
+# RESTCARDS (ADR 0021, phase-restbridge/04): the bridge's user-visible payoff on the
+# real page vs a fixture REST API with ZERO MCP endpoints — the restTools chooser + the
+# guided key panel (openExternal spied: the exact prefilled setupTokenUrl; the
+# requiredPermissions list), prove-before-save (a refused key stays in the field —
+# SECRETFORMS law) flipping to `✓ Connected · verified 0m ago`, the family one-paste
+# lighting every member with its own bridge row, curated tools/list through the real
+# upstream, identity from the catalog profile spec, and a heartbeat that re-verifies
+# via the verification endpoint with no MCP handshake ever fired. Mutation-red ×2:
+# MOGGING_REST_BREAK_FANOUT half-lights the family; a restTools row without
+# `verification` reds the shipped-row judge.
+run_smoke RESTCARDS    MOGGING_RESTCARDS 1 240 restcards
+# RESTMILESTONE (phase-restbridge/05): THE authority on "phase-restbridge done" — the
+# whole promise composed in order, every arrow an assert: family-level paste proves
+# ONCE and lights every member (verified-0m chips), the one-paste slot reads saved,
+# identity lands from the profile spec, detail scoping writes the plan, pre-launch
+# verify stamps within budget, an agent-shaped read rides the pinned URL with the
+# injected header, a write REFUSES with the grant off (bracketed: the gateless call
+# must land, proving the zero-hit assert bites) and lands after the REAL grant flip,
+# fixture-side revocation raises attention within one beat, a re-paste heals, and
+# disconnect deletes the credential while the user's CLI-route slot survives. Zero
+# MCP traffic end to end.
+run_smoke RESTMILESTONE MOGGING_RESTMILESTONE 1 300 restmilestone
+# TOOLFIX (phase-tools/06): drift becomes "Needs attention → Fix" without losing one
+# byte of the mgr engine's safety — in a SANDBOXED CLI home (the isolation law). The
+# accelerated heartbeat classifies a hand-edited marked block; the card carries the
+# user-words sentence, the diff preview ("What Fix will change") and the backups line;
+# Fix re-applies byte-identically with a backup taken first; a deleted block restores;
+# "Keep my edit" adopts with the config untouched; the mtime NEVER moves without the
+# click; a codex drift is detected and surfaces nowhere. Mutation-red ×2: blinded
+# classifier, auto-applying reconciler.
+run_smoke TOOLFIX      MOGGING_TOOLFIX   1 240 toolfix
+# TOOLSMILESTONE (phase-tools/07): THE authority on "phase-tools done" — the whole
+# tool-first promise composed in one fixture walk, every arrow an assert: tools-only
+# top-level DOM (banned list vs live text, red-bracketed) → chooser connect ("Sign in
+# with your browser") → ✓ Connected · verified-ago → identity sourced 'rest' → note on
+# an identity-less tool → detail scoping → budgeted pre-launch with the tool in the
+# pane env → fixture break raises the app-wide badge within a beat, recovery clears →
+# Fix repairs a hand-broken Claude Code config (preview, backup, byte-identical) →
+# disconnect leaves an honest card with the note surviving. Sandboxed CLI home.
+run_smoke TOOLSMILESTONE MOGGING_TOOLSMILESTONE 1 300 toolsmilestone
 # The store/inventory split (2026-07-18): the Library overlay is the store, the
 # settings page is the inventory — this gate bites the door, the honesty, the
 # chip->plan mutation, the in-place key vaulting, and the route badges.

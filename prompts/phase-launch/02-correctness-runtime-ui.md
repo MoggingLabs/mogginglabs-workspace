@@ -11,7 +11,9 @@ scroll anchor (`terminal/pane-anchor.ts`), panes/layout/seams/equalize,
 workspace tabs + persistence/restore, the titlebar/rail/pane chrome,
 tooltips (native-title suppression if built), the updater lifecycle UX
 (`src/main/updater.ts` + the rail row), first-run/wizard, Settings shell,
-themes/tokens.
+themes/tokens. Post-merge addendum (INVENTORY A3): the pane-fit contract,
+vendored-font metric parity, attach-size reconciliation, and the dead-pane
+restart door (rows 186–189).
 
 ## Steps
 1. **Enumerate edge cases per row** in INVENTORY: for each, list the

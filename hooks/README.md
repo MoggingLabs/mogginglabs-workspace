@@ -28,6 +28,11 @@ MoggingLabs Workspace — a richer signal than OSC escape sequences alone. When 
 OSC-based agent-state stays the baseline for *any* CLI (Phase-2/01); these hooks are the sharper,
 first-party layer for the CLIs that support hooks.
 
+> **Engineering reference:** for the *complete* map — every hook and OSC signal each CLI can emit,
+> what we consume today, the exact signal→state routing, and the known gaps — see
+> [21 · Agent-state signals](../docs/21-agent-state-signals.md). This file is the user-facing
+> install guide; that one is the internal truth table.
+
 ## How it works
 
 - The MoggingLabs daemon spawns each pane with two env vars: `MOGGING_PANE_ID` (which pane this is)
@@ -49,6 +54,7 @@ first-party layer for the CLIs that support hooks.
 | `subagent-start` | *(gate only — holds busy)* | work fanned out to a subagent |
 | `subagent-stop` | *(gate only — emits nothing)* | a subagent landed |
 | `turn-start` | busy | a new prompt was submitted |
+| `turn-failed` | idle *(never red, never green)* | the turn **died** (an API error — Claude's `StopFailure`, OpenCode's `session.error`); without it the pane would wear busy forever |
 | `idle-prompt` | idle *(never red)* | "Claude is waiting for your input" — parked, not blocked |
 | `usage-limit` | attention *(+ failover offer)* | the agent hit a provider usage limit — the app offers a profile switch |
 
@@ -117,6 +123,23 @@ That is the shape of the whole problem, and it is the same for all of them. Each
 | **aider** | *(none)* | `AIDER_NOTIFICATIONS_COMMAND` |
 
 aider is the one that was always honest: it has no chime, only a done.
+
+### ...and a third signal: proof-of-work
+
+A turn can be **continued past its `Stop`** (Claude's `/goal`, auto-continue, post-compaction
+resume) with no new prompt submitted — so between `turn-start` and `done` the snippets also wire
+a **tool signal** that re-lights `busy` the moment a continued turn touches a tool. Otherwise a
+working agent sits on a yellow idle dot for the rest of the continuation:
+
+| CLI | tool signal | turn-failure signal |
+|-----|-------------|---------------------|
+| **Claude Code** | `PostToolBatch` (once per resolved batch — deliberately *not* `PreToolUse`/`PostToolUse`, which put ~300ms of hook on every tool call for the same rail fidelity) | `StopFailure` → `turn-failed` |
+| **Codex** | `hooks.PostToolUse` (its only tool event) + `hooks.UserPromptSubmit` for the turn boundary | *(none documented)* |
+| **Gemini** | `AfterTool` | *(none documented)* |
+| **OpenCode** | the plugin's `tool.execute.after` (throttled in-process) — plus `permission.asked`/`replied`, an *explicit* red/clear that beats the chime deduction | `session.error` → `turn-failed` |
+| **aider** | *(no tool channel)* | *(none)* |
+
+These hook commands print nothing on stdout, so they never add context or tokens to your agent.
 
 **Subagents stay invisible everywhere**, which is the house rule. Gemini's `AfterAgent` fires only
 for the main loop (its subagents run through a different executor that fires no agent hooks at all).

@@ -13,6 +13,7 @@ import { aiderLogPath } from '@backend/features/context'
 import type { Approval, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { PANE_CWD_MAX, normalizeRemoteConnection, notifyEventToState } from '@contracts'
 import { log } from './lifecycle'
+import { attachDims } from './attach-dims'
 import {
   ActivityTracker,
   AgentProcessDetector,
@@ -861,6 +862,10 @@ class PaneSession {
     else if (event === 'subagent-stop') this.tracker.subagentStop()
     else if (event === 'idle-prompt') this.tracker.idlePrompt()
     else if (event === 'turn-start') this.tracker.turnStart()
+    // A dead turn (StopFailure / session.error) settles the pane — stateful because the
+    // tracker must also drop the dead turn's leftovers (pending subagents, a deferred done)
+    // while sparing a standing green and the hollow first state.
+    else if (event === 'turn-failed') this.tracker.turnFailed()
     // A NOTICE is a notification whose type the hook script does not recognize — a GUESS, but
     // one whose arrival proves the hook channel works. The tracker decides what it means by
     // WHERE it lands (activity.ts notice()): mid-turn it is certainly not a block (real blocks
@@ -900,6 +905,11 @@ class PaneSession {
     this.writePty(data)
   }
   resize(cols: number, rows: number): void {
+    // Idempotent by dimension, not by call: ConPTY answers EVERY resize it receives
+    // with a full-viewport repaint (see the renderer's REFIT_SETTLE_MS rationale), so
+    // a same-size resize is never a harmless no-op to forward — it is a spurious
+    // repaint replayed over whatever the agent is drawing.
+    if (cols === this.cols && rows === this.rows) return
     this.cols = cols
     this.rows = rows
     try {
@@ -1048,7 +1058,15 @@ export class SessionManager {
   }
 
   /** Spawn or return the existing pane (id-guard across the process boundary — a
-   *  reconnecting client re-requesting the same id ATTACHES, never duplicates). */
+   *  reconnecting client re-requesting the same id ATTACHES, never duplicates).
+   *
+   *  An attach RECONCILES size: the attaching client's viewport is authoritative — the
+   *  rule every terminal multiplexer converged on (tmux resizes a session to its
+   *  attaching client). Before this, the spec's dims were honoured only at construction,
+   *  so a session surviving a window/layout change kept its old grid and the agent kept
+   *  rendering at it — the "pane only fills half its width" bug. Reconciling HERE (the
+   *  daemon owns the pty) also heals resizes lost across a daemon reconnect for free:
+   *  the relay's replay re-spawns with the pane's CURRENT dims through this same path. */
   ensure(id: string, spec: SpawnSpec): { pane: PaneSession; existed: boolean } {
     const remote = spec.remote ? normalizeRemoteConnection(spec.remote) : null
     const remoteCwd = spec.remote?.cwd === undefined ? undefined : normalizeRemotePaneCwd(spec.remote.cwd)
@@ -1068,6 +1086,11 @@ export class SessionManager {
         this.markDirty(id)
         this.schedulePersist(100)
       }
+      // Size reconciliation, BEFORE the caller snapshots scrollback: ConPTY's answering
+      // repaint then rides the same delivery burst as the replay, so the client's first
+      // settled frame is already at the attach width (no visible narrow→wide snap).
+      const dims = attachDims(normalizedSpec, existing)
+      if (dims) existing.resize(dims.cols, dims.rows)
       return { pane: existing, existed: true }
     }
     // A legacy/corrupt restore may have lost SSH identity. The app's resolved remote spec is

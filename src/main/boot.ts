@@ -36,6 +36,7 @@ import { registerEventBridge } from './event-bridge'
 import { registerTrail } from './trail'
 import { registerMcpManager } from './mcp-manager'
 import { registerConnections } from './connections'
+import { startConnectionPulse } from './connection-pulse'
 import { registerAccount } from './account'
 import { registerEntitlements } from './entitlements'
 import { registerMcpStatus } from './mcp-status'
@@ -386,6 +387,10 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
       // path (I7). Inert until the operator wires a signed manifest — a no-op in every
       // build shipped today, so it cannot touch boot cost or the MILESTONE frame budget.
       scheduleTamperSelfCheck(() => win)
+
+      // The connection heartbeat (phase-tools/03): POST-PAINT (I7), first beat a full
+      // interval out; zero network for a user with no connections.
+      startConnectionPulse(() => win)
 
       // ── HOOK: every windowed gate. See BootHooks.afterWindow.
       if (win) hooks?.afterWindow?.(win)

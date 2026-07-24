@@ -1,0 +1,50 @@
+/*
+ * The app's typefaces, vendored whole — replacing @fontsource-variable/jetbrains-mono,
+ * whose subset woff2s (latin/latin-ext/cyrillic/greek/vietnamese, a web-page
+ * optimization) shipped NONE of the glyphs terminals draw structure with: no box
+ * drawing (U+2500–257F), no block elements, no braille. Claude Code's borders and every
+ * ink-style spinner fell back to whatever the OS had, at foreign advance widths — the
+ * overlapping-glyph bug. Coverage verified byte-level on these exact files by
+ * scripts/check-font-coverage.mjs (the FONTCOVER static): swap a file here and the gate
+ * re-verifies it.
+ *
+ * JetBrains Mono v2.304 (official variable TTFs, box drawing 128/128 + blocks 32/32).
+ * JuliaMono v0.060 fills what JBM leaves open — braille 256/256, dingbats 192/192,
+ * geometric shapes 96/96, misc symbols/technical — at the IDENTICAL 0.600em advance
+ * (uniformly monospaced, hmtx-verified), so a fallback glyph can never overlap a
+ * neighbouring cell: metric parity is the no-overlap invariant, not luck. Its face is
+ * unicode-range-scoped to the symbol blocks, so it can never shadow JBM for text even
+ * if a stack reorders. Both fonts are SIL OFL 1.1 (license files alongside).
+ *
+ * font-display: block — these are packaged local assets (a load is milliseconds); a
+ * blocked frame is invisible, while `swap` would paint one frame of fallback metrics.
+ */
+
+@font-face {
+  font-family: 'JetBrains Mono Variable';
+  font-style: normal;
+  font-display: block;
+  font-weight: 100 800;
+  src: url('./fonts/jetbrains-mono-var.ttf') format('truetype-variations');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono Variable';
+  font-style: italic;
+  font-display: block;
+  font-weight: 100 800;
+  src: url('./fonts/jetbrains-mono-italic-var.ttf') format('truetype-variations');
+}
+
+@font-face {
+  font-family: 'MoggingLabs Symbols';
+  font-style: normal;
+  font-display: block;
+  font-weight: 400;
+  src: url('./fonts/juliamono-regular.ttf') format('truetype');
+  /* Arrows, misc technical, geometric shapes, misc symbols + dingbats, braille,
+     supplemental arrows/math/symbols — the blocks agent CLIs actually draw from
+     (verified against the installed claude/codex/opencode binaries). */
+  unicode-range: U+2190-21FF, U+2300-23FF, U+25A0-25FF, U+2600-27BF, U+2800-28FF,
+    U+2900-2BFF;
+}

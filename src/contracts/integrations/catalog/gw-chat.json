@@ -1,0 +1,65 @@
+{
+  "id": "gw-chat",
+  "label": "Google Chat",
+  "source": "https://developers.google.com/identity/protocols/oauth2",
+  "docs": "https://developers.google.com/workspace",
+  "setupGuideUrl": "https://console.cloud.google.com/apis/credentials",
+  "docsLinks": [
+    {
+      "type": "docs.auth.oauth",
+      "name": "Google OAuth 2.0 for desktop apps",
+      "url": "https://developers.google.com/identity/protocols/oauth2/native-app"
+    }
+  ],
+  "group": "google-workspace",
+  "mcp": {
+    "transport": "http",
+    "url": "https://chatmcp.googleapis.com/mcp/v1"
+  },
+  "methods": [
+    {
+      "key": "browser",
+      "kind": "oauth",
+      "name": "Sign in with your browser",
+      "rank": 1,
+      "endpoints": {
+        "discovery": "oidc",
+        "authorizationUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+        "tokenUrl": "https://oauth2.googleapis.com/token"
+      },
+      "scopes": [
+        {
+          "scope": "https://www.googleapis.com/auth/chat.messages",
+          "title": "Google Chat messages",
+          "description": "See and send messages in spaces this account belongs to."
+        }
+      ],
+      "source": "https://developers.google.com/identity/protocols/oauth2/scopes",
+      "quirks": {
+        "authorizationParams": {
+          "access_type": "offline",
+          "prompt": "consent"
+        }
+      }
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "profile": {
+    "via": "oidc",
+    "url": "https://openidconnect.googleapis.com/v1/userinfo",
+    "paths": {
+      "id": "sub",
+      "email": "email",
+      "name": "name",
+      "imageUrl": "picture"
+    },
+    "source": "https://developers.google.com/identity/openid-connect/openid-connect#obtaininguserprofileinformation"
+  },
+  "grantCopy": "An agent here speaks in your chats as you. Grant deliberately.",
+  "verifiedAt": "2026-07-15"
+}

@@ -48,7 +48,14 @@ let nextId = 1
 const waiting = new Map()
 
 async function open() {
-  const sess = await connectEndpoint(endpointFile(), {})
+  // Pane identity, same rule as mogging-mcp.mjs: agent CLIs inherit their pane's
+  // env. It exists for the REST bridge's write gate (ADR 0021) — the app resolves
+  // pane → workspace → grant and refuses `readOnly:false` tools without
+  // writeTools:'all'. A paneless (human) session binds nothing and writes refuse,
+  // fail-closed. The MCP proxy path never reads it.
+  const pane = process.env.MOGGING_PANE_ID || undefined
+  const paneToken = process.env.MOGGING_PANE_TOKEN || undefined
+  const sess = await connectEndpoint(endpointFile(), { hello: pane && paneToken ? { pane, paneToken } : {} })
   sess.onMessage((m) => {
     if (m.t === 'result' && waiting.has(m.id)) {
       const resolve = waiting.get(m.id)

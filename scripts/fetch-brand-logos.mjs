@@ -19,6 +19,8 @@ const SI = (slug) => ({ src: 'si', slug })
 /** Pinned pre-removal simple-icons version: Slack/AWS/Azure were dropped from
  *  @latest over trademark policy; the old CC0 releases still carry the paths. */
 const SI8 = (slug) => ({ src: 'si8', slug })
+/** Same story, later wave (Canva et al. left after v13). */
+const SI13 = (slug) => ({ src: 'si13', slug })
 const LOBE = (slug) => ({ src: 'lobe', slug })
 /** Direct file (Wikimedia Commons hosts the official multicolor marks). */
 const URL_SRC = (slug, url) => ({ src: 'url', slug, url })
@@ -48,7 +50,9 @@ const WANT = {
   azure: [URL_SRC('wikimedia-azure', 'https://upload.wikimedia.org/wikipedia/commons/f/fa/Microsoft_Azure.svg'), SI8('microsoftazure')],
   gitlab: [SI('gitlab')],
   notion: [SI('notion')],
-  tally: [SI('tally')],
+  // Tally is in no icon set; its own site ships the official mark as a square
+  // SVG favicon — the best vector there is for it.
+  tally: [SI('tally'), URL_SRC('tally-favicon', 'https://tally.so/favicon.svg')],
   zapier: [SI('zapier')],
   atlassian: [SI('jira'), SI('atlassian')],
   figma: [SI('figma')],
@@ -59,6 +63,31 @@ const WANT = {
   fal: [LOBE('fal-color'), LOBE('fal')],
   elevenlabs: [SI('elevenlabs'), LOBE('elevenlabs')],
   higgsfield: [LOBE('higgsfield-color'), LOBE('higgsfield')],
+  // ── Provider catalog rows that still rendered the monogram (2026-07-24) ──
+  asana: [SI('asana')],
+  box: [SI('box')],
+  canva: [SI('canva'), SI13('canva')],
+  close: [SI('close'), LOBE('close')],
+  deepwiki: [LOBE('deepwiki-color'), LOBE('deepwiki'), SI('deepwiki')],
+  globalping: [SI('globalping')],
+  huggingface: [SI('huggingface'), LOBE('huggingface-color'), LOBE('huggingface')],
+  intercom: [SI('intercom')],
+  jam: [SI('jam')],
+  linear: [SI('linear')],
+  monday: [SI('monday'), SI('mondaydotcom'), SI8('monday')],
+  neon: [SI('neon')],
+  paypal: [SI('paypal'), SI8('paypal')],
+  plaid: [SI('plaid'), SI8('plaid')],
+  prisma: [SI('prisma')],
+  square: [SI('square')],
+  webflow: [SI('webflow')],
+  // The Cloudflare FAMILY: thirteen capability rows + the family card, one mark.
+  cloudflare: [SI('cloudflare')],
+  ...Object.fromEntries(
+    ['cf-ai-gateway', 'cf-auditlogs', 'cf-autorag', 'cf-bindings', 'cf-browser', 'cf-casb', 'cf-containers', 'cf-dex', 'cf-dns-analytics', 'cf-graphql', 'cf-logs', 'cf-observability', 'cf-radar'].map(
+      (id) => [id, [SI('cloudflare')]]
+    )
+  ),
   // ── Usage catalog (contracts/usage USAGE_PROVIDERS) beyond the CLI four ──
   copilot: [SI('githubcopilot'), LOBE('copilot-color'), LOBE('copilot')],
   zed: [LOBE('zed'), SI('zedindustries')],
@@ -125,6 +154,8 @@ const CANDIDATE_URL = (c) =>
     ? `https://unpkg.com/simple-icons@latest/icons/${c.slug}.svg`
     : c.src === 'si8'
       ? `https://unpkg.com/simple-icons@8/icons/${c.slug}.svg`
+      : c.src === 'si13'
+        ? `https://unpkg.com/simple-icons@13/icons/${c.slug}.svg`
       : c.src === 'lobe'
         ? `https://unpkg.com/@lobehub/icons-static-svg@latest/icons/${c.slug}.svg`
         : c.url

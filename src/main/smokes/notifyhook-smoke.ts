@@ -157,6 +157,13 @@ export async function runNotifyHookSmoke(): Promise<void> {
       claude.Notification?.[0]?.hooks?.[0]?.command === 'INV --event needs-input' &&
       claude.Notification?.[0]?.hooks?.[0]?.type === 'command' &&
       claude.Stop?.[0]?.hooks?.[0]?.command === 'INV --event done' &&
+      // The audit-G1/G2 events: a dead turn settles the pane, a resolved tool batch re-lights
+      // a continued one. PostToolBatch (not PreToolUse/PostToolUse) is a MEASURED decision —
+      // scripts/measure-hook-latency.mjs — so a per-tool event reappearing here is a regression.
+      claude.StopFailure?.[0]?.hooks?.[0]?.command === 'INV --event turn-failed' &&
+      claude.PostToolBatch?.[0]?.hooks?.[0]?.command === 'INV --event busy' &&
+      claude.PreToolUse === undefined &&
+      claude.PostToolUse === undefined &&
       claude.SubagentStart?.[0]?.hooks?.[0]?.command === 'INV --event subagent-start' &&
       claude.SubagentStop?.[0]?.hooks?.[0]?.command === 'INV --event subagent-stop' &&
       claude.UserPromptSubmit?.[0]?.hooks?.[0]?.command === 'INV --event turn-start'
@@ -167,12 +174,22 @@ export async function runNotifyHookSmoke(): Promise<void> {
     // quotes (no cmd/sh/PowerShell escaping) and the inner spaces force buildLaunchCommand's
     // outer double-quoting, which is what keeps those single quotes literal under sh.
     const codexBase = '-c tui.notifications=true -c tui.notification_method=osc9 -c tui.notification_condition=always'
+    const codexHook = (event: string): string =>
+      `hooks.${event === 'turn-start' ? 'UserPromptSubmit' : 'PostToolUse'}=` +
+      `[ { hooks = [ { type = 'command', command = 'node C:/Apps/notify.mjs --event ${event}' } ] } ]`
     const codexOk =
       codexBellArgs().join(' ') === codexBase &&
+      // A space-free path gets the FULL wiring: notify (the done) + the real hook system
+      // (turn boundary + proof-of-work), all in TOML-literal single quotes.
+      codexBellArgs('C:\\Apps\\notify.mjs').join(' ') ===
+        `${codexBase} -c notify=[ 'node', 'C:/Apps/notify.mjs' ] -c ${codexHook('turn-start')} -c ${codexHook('busy')}` &&
+      // A path with whitespace keeps notify (argv array — spaces are safe there) but SKIPS the
+      // hooks: their command is one shell string, and inner double quotes cannot ride the
+      // cmd/sh/PowerShell relay. A launch must never break over the bell.
       codexBellArgs('C:\\App Data\\notify.mjs').join(' ') ===
         `${codexBase} -c notify=[ 'node', 'C:/App Data/notify.mjs' ]` &&
-      // A path a TOML literal cannot express (an apostrophe) must DROP the arg, never emit
-      // broken TOML — a launch must never break over the bell.
+      // A path a TOML literal cannot express (an apostrophe) must DROP the args, never emit
+      // broken TOML.
       codexBellArgs("C:\\Users\\O'Brien\\notify.mjs").join(' ') === codexBase
 
     // Merge-through: the admin's/user's own keys survive; only the switch is added. Gemini's
@@ -195,6 +212,8 @@ export async function runNotifyHookSmoke(): Promise<void> {
       gemAfter?.[0] === 'ADMIN' && // the admin's hook is not clobbered
       (gemAfter?.[1] as GemHook)?.hooks?.[0]?.command === 'INV --event done' &&
       gem.hooks?.BeforeAgent?.[0]?.hooks?.[0]?.command === 'INV --event turn-start' &&
+      // Proof-of-work (audit G1/G3): the tool signal that re-lights a continued turn.
+      (gem.hooks as { AfterTool?: GemHook[] })?.AfterTool?.[0]?.hooks?.[0]?.command === 'INV --event busy' &&
       // No script -> no hooks, and the notification-only baseline still applies.
       JSON.parse(geminiSystemSettings({}, undefined) as string).hooks === undefined
 
@@ -223,10 +242,66 @@ export async function runNotifyHookSmoke(): Promise<void> {
       ocPlugin.includes('parentID') &&
       ocPlugin.includes("'subagent-stop'") &&
       ocPlugin.includes("'done'") &&
+      // The modernized bus (audit G2/G6): explicit permission channel, dead-turn settle,
+      // and the throttled tool-activity busy re-assert.
+      ocPlugin.includes('permission.asked') &&
+      ocPlugin.includes('permission.replied') &&
+      ocPlugin.includes("'needs-input'") &&
+      ocPlugin.includes('session.error') &&
+      ocPlugin.includes("'turn-failed'") &&
+      ocPlugin.includes("'tool.execute.after'") &&
+      ocPlugin.includes('BUSY_THROTTLE_MS') &&
       ocPlugin.includes(JSON.stringify('C:\\App Data\\notify.mjs'))
 
     const aider = aiderBellEnv('INV')
     const aiderOk = aider.AIDER_NOTIFICATIONS === 'true' && aider.AIDER_NOTIFICATIONS_COMMAND === 'INV --event done'
+
+    // ── snippet parity: the manual-install twins in hooks/ carry the SAME wiring as the
+    //    builders (the NOTIFYPARITY lesson one layer up — two copies of a mapping, and
+    //    nothing made them agree, is how the 2026-07-15 drift shipped). Expectations are
+    //    DERIVED from the builders, so extending the wiring without the snippets bites here. ──
+    const repoFile = (p: string): string => fs.readFileSync(path.join(process.cwd(), p), 'utf8')
+    const claudeSnippet = JSON.parse(repoFile('hooks/claude-code/settings.json')) as {
+      hooks?: Record<string, Array<{ hooks: Array<{ command: string }> }>>
+    }
+    const claudeExpected = claudeNotifyHooks('mogging notify') as Record<string, Array<{ hooks: Array<{ command: string }> }>>
+    const snippetClaudeOk =
+      Object.keys(claudeSnippet.hooks ?? {}).sort().join('|') === Object.keys(claudeExpected).sort().join('|') &&
+      Object.keys(claudeExpected).every(
+        (ev) => claudeSnippet.hooks?.[ev]?.[0]?.hooks?.[0]?.command === claudeExpected[ev]?.[0]?.hooks?.[0]?.command
+      )
+    const gemSnippet = JSON.parse(repoFile('hooks/gemini/settings.json')) as {
+      general?: { enableNotifications?: boolean }
+      hooks?: Record<string, Array<{ hooks?: Array<{ command?: string }> }>>
+    }
+    const gemExpected = (JSON.parse(geminiSystemSettings({}, 'mogging notify')) as {
+      hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>>
+    }).hooks
+    const snippetGeminiOk =
+      gemSnippet.general?.enableNotifications === true &&
+      Object.keys(gemSnippet.hooks ?? {}).sort().join('|') === Object.keys(gemExpected).sort().join('|') &&
+      Object.keys(gemExpected).every((ev) => {
+        const want = gemExpected[ev]?.[gemExpected[ev].length - 1]?.hooks?.[0]?.command
+        return gemSnippet.hooks?.[ev]?.some((e) => e?.hooks?.[0]?.command === want)
+      })
+    const codexSnippet = repoFile('hooks/codex/config.toml')
+    const snippetCodexOk = [
+      'notify = ["mogging", "notify"]',
+      'notifications = true',
+      'notification_method = "osc9"',
+      'notification_condition = "always"',
+      '[[hooks.UserPromptSubmit]]',
+      'command = "mogging notify --event turn-start"',
+      '[[hooks.PostToolUse]]',
+      'command = "mogging notify --event busy"'
+    ].every((s) => codexSnippet.includes(s))
+    const ocSnippet = repoFile('hooks/opencode/plugin/mogging-notify.js')
+    const snippetOpencodeOk = [
+      'session.idle', 'parentID', "'subagent-stop'", "'done'",
+      'session.error', "'turn-failed'", 'permission.asked', 'permission.replied',
+      "'needs-input'", "'tool.execute.after'", 'BUSY_THROTTLE_MS'
+    ].every((s) => ocSnippet.includes(s))
+    const snippetsOk = snippetClaudeOk && snippetGeminiOk && snippetCodexOk && snippetOpencodeOk
 
     // ── routing: bellLaunchExtras hands each CLI its dialect, generated files live in
     //    userData (session-scoped — never a write to the user's own config). ──
@@ -391,12 +466,13 @@ export async function runNotifyHookSmoke(): Promise<void> {
     }
 
     const pass =
-      scriptOk && invOk && claudeOk && codexOk && geminiOk && opencodeOk && aiderOk && extrasOk &&
+      scriptOk && invOk && claudeOk && codexOk && geminiOk && opencodeOk && aiderOk && extrasOk && snippetsOk &&
       directOk && codexBlobOk && codexUnknownOk && noopOk && notifBlockingOk && notifUnknownOk && notifCompletedOk &&
       selfHealOk && staleHealOk
     write({
       pass,
       scriptOk, invOk, claudeOk, codexOk, geminiOk, opencodeOk, aiderOk, extrasOk,
+      snippetsOk, snippetClaudeOk, snippetGeminiOk, snippetCodexOk, snippetOpencodeOk,
       directOk, codexBlobOk, codexUnknownOk, noopOk, notifBlockingOk, notifUnknownOk, notifCompletedOk,
       selfHealOk, staleHealOk, selfHeal: { relayBefore, relayAfter, scriptHealed },
       direct, codexBlob, codexUnknown, noop, notifBlocking, notifUnknown, notifCompleted,

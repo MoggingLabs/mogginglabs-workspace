@@ -171,6 +171,15 @@ export function mutateIntegrationsGrant(raw: IntegrationsGrantMutation): Workspa
  *  endpoint serves to `grant.get`. Pane ids encode their workspace ordinal
  *  (locatePane — the house convention, stated once in @contracts); an
  *  unresolvable pane fails CLOSED: no workspace, no write tools. */
+/** The REST bridge's write gate (ADR 0021): a `readOnly:false` bridge tool
+ *  executes only when the calling workspace's grant says writeTools:'all' —
+ *  the SAME grant MCP write tools ride, read at the same seam. Fail-closed:
+ *  no pane, no workspace, no grant → no writes. */
+export function resolveWriteAllGranted(pane: string | undefined): boolean {
+  const wsId = pane ? workspaceIdForPane(pane) : undefined
+  return wsId ? getIntegrationsGrant(wsId).writeTools === 'all' : false
+}
+
 export function resolveGrantedWriteTools(pane: string): { workspaceId?: string; writeTools: string[] } {
   const wsId = workspaceIdForPane(pane)
   if (!wsId) return { writeTools: [] }

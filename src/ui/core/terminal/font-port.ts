@@ -53,3 +53,44 @@ export function onTerminalFontSize(cb: (size: number) => void): () => void {
   subscribers.add(cb)
   return () => subscribers.delete(cb)
 }
+
+/**
+ * Resolves when the terminal's faces are ACTIVE — the trigger for the one metrics
+ * re-measure a pane must run (xterm caches its cell size; measured against a fallback
+ * face it renders wrong until told).
+ *
+ * `fonts.load()` and not `fonts.ready`: ready is a one-shot promise that can resolve
+ * BEFORE a lazily-triggered face load has even started (CSS faces load on first use),
+ * after which it never fires again — the old hook silently re-measured against the
+ * fallback on any boot where the pane won that race. load() STARTS the load and
+ * resolves on activation, which closes the race by construction. The symbols face is
+ * unicode-range-scoped, so it must be asked for with a glyph inside its range — a bare
+ * load would never fetch it.
+ */
+export async function terminalFontsActive(): Promise<void> {
+  const fonts = document.fonts
+  if (!fonts?.load) return // ancient environment: nothing to wait for, measure as-is
+  const spec = `${DEFAULT_TERMINAL_FONT_SIZE}px "JetBrains Mono Variable"`
+  await Promise.allSettled([
+    fonts.load(`400 ${spec}`),
+    fonts.load(`700 ${spec}`), // xterm renders bold cells with fontWeightBold
+    fonts.load(`italic 400 ${spec}`),
+    fonts.load(`${DEFAULT_TERMINAL_FONT_SIZE}px "MoggingLabs Symbols"`, '⠋')
+  ])
+}
+
+const doneSubscribers = new Set<() => void>()
+let doneListenerArmed = false
+
+/** Subscribe to LATE face activations (`fonts.loadingdone`) — any face landing after
+ *  the initial await above still invalidates measured metrics. Returns unsubscribe. */
+export function onFontsLoadingDone(cb: () => void): () => void {
+  doneSubscribers.add(cb)
+  if (!doneListenerArmed && document.fonts?.addEventListener) {
+    doneListenerArmed = true
+    document.fonts.addEventListener('loadingdone', () => {
+      for (const sub of doneSubscribers) sub()
+    })
+  }
+  return () => doneSubscribers.delete(cb)
+}

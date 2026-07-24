@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { app, type BrowserWindow } from 'electron'
 import { bootMain, prepareRuntime } from './boot'
 import { installHarnessPorts } from './harness-install'
@@ -41,6 +42,14 @@ import { runTreeGitSmoke } from './smokes/treegit-smoke'
 import { runFileActSmoke } from './smokes/fileact-smoke'
 import { runFilesMilestoneSmoke } from './smokes/filesmilestone-smoke'
 import { runSetIntegSmoke } from './smokes/setinteg-smoke'
+import { runConnLiveSmoke } from './smokes/connlive-smoke'
+import { runToolPulseSmoke } from './smokes/toolpulse-smoke'
+import { runToolWhoSmoke } from './smokes/toolwho-smoke'
+import { runToolCardsSmoke } from './smokes/toolcards-smoke'
+import { runRestCardsSmoke } from './smokes/restcards-smoke'
+import { runRestMilestoneSmoke } from './smokes/restmilestone-smoke'
+import { runToolFixSmoke } from './smokes/toolfix-smoke'
+import { runToolsMilestoneSmoke } from './smokes/toolsmilestone-smoke'
 import { runLibraryUxSmoke } from './smokes/libraryux-smoke'
 import { runSetShellSmoke } from './smokes/setshell-smoke'
 import { runSetUsageSmoke } from './smokes/setusage-smoke'
@@ -92,6 +101,8 @@ import { runNotifyParitySmoke } from './smokes/notifyparity-smoke'
 import { runMilestoneSmoke } from './smokes/milestone-smoke'
 import { runFlickerSmoke } from './smokes/flicker-smoke'
 import { runPaneScrollSmoke } from './smokes/panescroll-smoke'
+import { runPaneFitSmoke } from './smokes/panefit-smoke'
+import { runReattachFitSmoke } from './smokes/reattachfit-smoke'
 import { runAppScrollSmoke } from './smokes/appscroll-smoke'
 import { runConptySmoke } from './smokes/conpty-smoke'
 import { runPaneOpsSmoke } from './smokes/paneops-smoke'
@@ -137,6 +148,7 @@ import { runEqualizeSmoke } from './smokes/equalize-smoke'
 import { runAsyncStateSmoke } from './smokes/asyncstate-smoke'
 import { runAgentRegistrySmoke } from './smokes/agentregistry-smoke'
 import { runPlainMenuSmoke } from './smokes/plainmenu-smoke'
+import { runPaneRestartSmoke } from './smokes/panerestart-smoke'
 import { runWizardFailSmoke } from './smokes/wizardfail-smoke'
 import { runWizardIsoSmoke } from './smokes/wizardiso-smoke'
 import { runWizCdSmoke } from './smokes/wizcd-smoke'
@@ -204,13 +216,13 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
   'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_KILLFLASH', 'MOGGING_RAILFOLD', 'MOGGING_CHROMEPRESS', 'MOGGING_KBSHORTCUTS', 'MOGGING_KBGLOBAL', 'MOGGING_VERDICTLIVE', 'MOGGING_WEBTRAIL',
   'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX', 'MOGGING_WIZARDFAIL', 'MOGGING_WIZARDISO', 'MOGGING_WIZCD', 'MOGGING_WIZLAYOUT', 'MOGGING_MUTATIONRACE', 'MOGGING_AUTHRUNNER',
-  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_LIBRARYUX', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX', 'MOGGING_RESUME',
+  'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_CONNLIVE', 'MOGGING_TOOLPULSE', 'MOGGING_TOOLWHO', 'MOGGING_TOOLCARDS', 'MOGGING_RESTCARDS', 'MOGGING_RESTMILESTONE', 'MOGGING_TOOLFIX', 'MOGGING_TOOLSMILESTONE', 'MOGGING_LIBRARYUX', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX', 'MOGGING_RESUME',
   'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_RESPONSIVE', 'MOGGING_KBAPG', 'MOGGING_EQUALIZE', 'MOGGING_UXMILESTONE',
   'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT', 'MOGGING_CWD',
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
-  'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL',
+  'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL', 'MOGGING_PANEFIT', 'MOGGING_REATTACHFIT',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_RUNTIMESPLIT', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
-  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_BRAINCORE', 'MOGGING_BRAINPARSE', 'MOGGING_BRAINGRAPH', 'MOGGING_BRAINFRESH', 'MOGGING_BRAINMCP', 'MOGGING_BRAINMAP', 'MOGGING_BRAINWRITE', 'MOGGING_BRAINDOCS', 'MOGGING_MEMGRAPH', 'MOGGING_BRAINSEM', 'MOGGING_BRAINPROPS', 'MOGGING_BRAINCAP', 'MOGGING_BRAINRECALL', 'MOGGING_BRAINUX', 'MOGGING_BRAINMILESTONE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_UPDATEOFFLINE', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
+  'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_BRAINCORE', 'MOGGING_BRAINPARSE', 'MOGGING_BRAINGRAPH', 'MOGGING_BRAINFRESH', 'MOGGING_BRAINMCP', 'MOGGING_BRAINMAP', 'MOGGING_BRAINWRITE', 'MOGGING_BRAINDOCS', 'MOGGING_MEMGRAPH', 'MOGGING_BRAINSEM', 'MOGGING_BRAINPROPS', 'MOGGING_BRAINCAP', 'MOGGING_BRAINRECALL', 'MOGGING_BRAINUX', 'MOGGING_BRAINMILESTONE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_UPDATEOFFLINE', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_PANERESTART', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
   'MOGGING_PROFILES', 'MOGGING_LOGINTRUTH', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
   // Typed-launch detection + the context gauge (the v6 pack).
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
@@ -229,6 +241,32 @@ const isSmoke = SMOKE_ENV.some((k) => !!process.env[k])
 // whose whole job is to prove the auto-wire — and which points every home env at its
 // own fixtures before a handler runs.
 if (isSmoke && !process.env.MOGGING_GLOBALHOOKS) process.env.MOGGING_SUPPRESS_AUTOWIRE = '1'
+
+// TOOLPULSE: the status engine's knobs, accelerated BEFORE boot arms the heartbeat
+// (startConnectionPulse reads the interval once, at registration). Production values
+// are the defaults in connections.ts/connection-pulse.ts; no other gate is touched.
+if (process.env.MOGGING_TOOLPULSE) {
+  process.env.MOGGING_PULSE_INTERVAL_MS ??= '1200'
+  process.env.MOGGING_PULSE_BUDGET_MS ??= '1500'
+  process.env.MOGGING_PULSE_MAXCONC ??= '2'
+  process.env.MOGGING_PULSE_JITTER_MS ??= '120'
+  process.env.MOGGING_PRELAUNCH_BUDGET_MS ??= '1500'
+}
+// TOOLFIX: the reconciler's world — an accelerated heartbeat AND a fully sandboxed
+// CLI home (the gate-isolation law: this gate hand-edits and REWRITES CLI configs,
+// and not one byte of that may touch the real user's files; resolveCliHomes honors
+// the pointer only alongside the isolated userData).
+if (process.env.MOGGING_TOOLFIX && process.env.MOGGING_USERDATA) {
+  process.env.MOGGING_SMOKE_CLI_HOME ??= join(process.env.MOGGING_USERDATA, 'cli-home')
+  process.env.MOGGING_PULSE_INTERVAL_MS ??= '1200'
+}
+// TOOLSMILESTONE: the composed walk needs both worlds — the accelerated heartbeat
+// AND the sandboxed CLI home (its Fix phase rewrites a claude config).
+if (process.env.MOGGING_TOOLSMILESTONE && process.env.MOGGING_USERDATA) {
+  process.env.MOGGING_SMOKE_CLI_HOME ??= join(process.env.MOGGING_USERDATA, 'cli-home')
+  process.env.MOGGING_PULSE_INTERVAL_MS ??= '1200'
+  process.env.MOGGING_PRELAUNCH_BUDGET_MS ??= '1500'
+}
 
 /**
  * WINDOWLESS, before the app-settings store and the daemon exist. TRUE = this launch is the
@@ -286,6 +324,14 @@ async function beforeAppSettings(): Promise<boolean> {
   // endDaemonQuiescence releasing it — the permanent-freeze latch, gated.
   if (process.env.MOGGING_DAEMONHEAL) {
     await runDaemonHealSmoke()
+    return true
+  }
+
+  // Windowless reattach-size smoke: an attach reconciles the daemon session to the
+  // attaching client's viewport (the half-width-pane root cause) — proven at the
+  // process level (the in-pane probe sees the resize), with dimension-idempotence.
+  if (process.env.MOGGING_REATTACHFIT) {
+    await runReattachFitSmoke()
     return true
   }
 
@@ -575,6 +621,22 @@ function afterWindow(win: BrowserWindow): void {
     runSetAgentConfigSmoke(win) // five-provider settings catalog, typed controls, real scope writes, remote honesty
   } else if (process.env.MOGGING_SETINTEG) {
     runSetIntegSmoke(win) // env-gated integrations smoke: disclosure, attention-through-fold, hit targets (Phase-8.5/05)
+  } else if (process.env.MOGGING_CONNLIVE) {
+    runConnLiveSmoke(win) // LIVE connect flow vs a fixture AS: connected-before-probe, cancel-no-op, no downgrade (ADR 0014)
+  } else if (process.env.MOGGING_TOOLPULSE) {
+    runToolPulseSmoke(win) // the status engine vs a fixture: heartbeat budget/stagger/cursor, catalog key probe, page-entry=1 sweep, pre-launch budget, attention edges + offline silence, mutation-red ×2 (phase-tools/03)
+  } else if (process.env.MOGGING_TOOLWHO) {
+    runToolWhoSmoke(win) // the identity ladder vs fixtures: oidc/rest/tool rungs sourced honestly, allowlist zero-call, note survives disconnect, probed-beats-noted DOM, stability, mutation-red ×2 (phase-tools/04)
+  } else if (process.env.MOGGING_TOOLCARDS) {
+    runToolCardsSmoke(win) // tool cards on the real page: dual-route=one card, four status tags track verifiedAt, catalog chooser ADR-verbatim + setup link, humanized scopes, detail scoping mutates the plan, coming-soon inert, mutation-red ×2 (phase-tools/05)
+  } else if (process.env.MOGGING_RESTCARDS) {
+    runRestCardsSmoke(win) // the bridge's user-visible payoff (ADR 0021): chooser + guided key panel (spied prefilled setupTokenUrl, requiredPermissions), prove-before-save with retained refusal, family one-paste fan-out, curated tools/list, rest identity, heartbeat with zero MCP, mutation-red ×2 (phase-restbridge/04)
+  } else if (process.env.MOGGING_RESTMILESTONE) {
+    runRestMilestoneSmoke(win) // THE authority on "phase-restbridge done": family paste → every member verified-0m → one-paste slot → identity → detail scoping → budgeted pre-launch → pinned+injected read → write refuses (grant off, bracketed) → real grant flip lands it → revoke raises attention → re-paste heals → disconnect keeps the user's slot; zero MCP (phase-restbridge/05)
+  } else if (process.env.MOGGING_TOOLFIX) {
+    runToolFixSmoke(win) // the silent reconciler in a SANDBOXED CLI home: heartbeat classifies hand-edits, Fix re-applies byte-identically with backup, keep-my-edit adopts untouched, no unclicked write ever, codex drift silent, mutation-red ×2 (phase-tools/06)
+  } else if (process.env.MOGGING_TOOLSMILESTONE) {
+    runToolsMilestoneSmoke(win) // THE authority on "phase-tools done": the whole tool-first promise composed — tools-only DOM (red-bracketed), chooser connect, verified-ago tag, rest identity, note, detail scoping, budgeted pre-launch, app-wide attention, Fix with preview+backup, honest disconnect (phase-tools/07)
   } else if (process.env.MOGGING_LIBRARYUX) {
     runLibraryUxSmoke(win) // the store/inventory split: Library overlay, inventory honesty, chips->plans, key slots, route badges (2026-07-18)
   } else if (process.env.MOGGING_SETUSAGE) {
@@ -619,6 +681,8 @@ function afterWindow(win: BrowserWindow): void {
     runMilestoneSmoke(win) // env-gated 16-agent perf milestone smoke (Phase-2/05)
   } else if (process.env.MOGGING_FLICKER) {
     runFlickerSmoke(win) // env-gated terminal-artifact smoke: churn without flicker
+  } else if (process.env.MOGGING_PANEFIT) {
+    runPaneFitSmoke(win) // env-gated pane-fit smoke: the terminal fills its pane against the ACTIVE renderer's metrics
   } else if (process.env.MOGGING_PANESCROLL) {
     runPaneScrollSmoke(win) // env-gated pane scroll-anchor + overlay slide-bar smoke
   } else if (process.env.MOGGING_APPSCROLL) {
@@ -661,6 +725,8 @@ function afterWindow(win: BrowserWindow): void {
     runAgentRegistrySmoke(win) // audit regression: live CLI availability reaches every launch surface
   } else if (process.env.MOGGING_PLAINMENU) {
     runPlainMenuSmoke(win) // pane ⋯ launch entries are plain-terminal-only, through the whole lifecycle
+  } else if (process.env.MOGGING_PANERESTART) {
+    runPaneRestartSmoke(win) // dead pane = state with a way back: exit code named, input gated, in-place restart
   } else if (process.env.MOGGING_UPDATEFAIL) {
     runUpdateFailSmoke(win) // audit regression: a BROKEN feed stays loud even on a background check; retry re-checks
   } else if (process.env.MOGGING_UPDATEOFFLINE) {

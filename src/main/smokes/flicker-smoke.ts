@@ -81,7 +81,19 @@ const SCRIPT = `(async () => {
   if (panes.length < 8) return { pass: false, error: 'expected 8 panes, got ' + panes.length }
   await sleep(2200) // shells reach prompts
   for (const p of panes) p.write('echo FLICK_' + p.id + '_END' + CR)
-  await sleep(1600)
+  // MARKER-based readiness, never a clock: on a 2-core runner the last shells of
+  // an 8-pane spawn wave are still initializing past any fixed sleep, the echoed
+  // line gets eaten by shell init, and every downstream assert starves (macos-26
+  // run 30110485956: panes 6-7 hasOwn=false with ZERO foreign bytes — the fill
+  // never landed, nothing was "lost"). Wait for each pane's own marker; re-send
+  // once at half budget for shells that ate the first line.
+  for (let i = 0; i < 50; i++) {
+    const missing = panes.filter((p) => p.text().indexOf('FLICK_' + p.id + '_END') < 0)
+    if (missing.length === 0) break
+    if (i === 25) for (const p of missing) p.write('echo FLICK_' + p.id + '_END' + CR)
+    await sleep(400)
+  }
+  await sleep(600) // let the marker's own echo settle before the baseline snapshot
   const baseLines = panes.map((p) => p.bufferLines())
   // The buffer-survival baseline is CONTENT, not line count: reflow (a pane
   // remeasured wider merges wrapped lines — long runner hostnames wrap zsh

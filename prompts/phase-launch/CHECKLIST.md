@@ -11,6 +11,7 @@ everything this pack builds is $0.
 > **Precondition — MET (2026-07-19)**
 > - [x] Phase 12 (the Brain) is merged to `main` and its gates are green.
 > - [x] `check-gate-count.mjs` clean on `main`: **v0.15.0, 182 gates (159 app-boot + 23 static)** — the live baseline (derive, never hard-code).
+> - [x] **Re-derived 2026-07-24** (post-toolbelt merge `053193d`): main moved to **v0.16.0, 200 gates (170 app-boot + 30 static)**; INVENTORY holds **198 rows** after amendment A3. The line above is the 2026-07-19 snapshot; the count is always the script's.
 
 ---
 

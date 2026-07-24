@@ -1,0 +1,54 @@
+{
+  "id": "slack",
+  "label": "Slack",
+  "source": "https://api.slack.com/authentication/oauth-v2",
+  "docs": "https://api.slack.com/",
+  "setupGuideUrl": "https://api.slack.com/apps",
+  "mcp": {
+    "transport": "http",
+    "url": "https://mcp.slack.com/mcp"
+  },
+  "methods": [
+    {
+      "key": "browser",
+      "kind": "oauth",
+      "name": "Sign in with your browser",
+      "rank": 1,
+      "endpoints": {
+        "authorizationUrl": "https://slack.com/oauth/v2/authorize",
+        "tokenUrl": "https://slack.com/api/oauth.v2.access"
+      },
+      "quirks": {
+        "scopeSeparator": ","
+      }
+    },
+    {
+      "key": "cli-owned",
+      "kind": "cliOwned",
+      "name": "Let Claude Code sign in itself (advanced)",
+      "rank": 90
+    }
+  ],
+  "profile": {
+    "via": "rest",
+    "url": "https://slack.com/api/auth.test",
+    "paths": {
+      "id": "user_id",
+      "name": "user"
+    },
+    "source": "https://api.slack.com/methods/auth.test"
+  },
+  "verification": {
+    "method": "POST",
+    "endpoint": "https://slack.com/api/auth.test",
+    "source": "https://api.slack.com/methods/auth.test"
+  },
+  "retry": {
+    "atHeader": "retry-after",
+    "errorCodes": [
+      "429"
+    ]
+  },
+  "grantCopy": "LOUD one: an agent connected to Slack SPEAKS AS YOU to your team. A prompt-injected agent could message anyone you can. Grant per workspace, keep the reviewer gate on, read the trail.",
+  "verifiedAt": "2026-07-15"
+}

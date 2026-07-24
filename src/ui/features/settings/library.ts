@@ -96,7 +96,7 @@ export function createCatalogBlock(): SyncedBlock {
       baseInput.setAttribute('aria-label', 'Base URL override')
       baseInput.spellcheck = false
       baseInput.addEventListener('keydown', (e) => e.stopPropagation())
-      panel.append(el('div', { class: 'settings-row-caption', text: 'Self-hosted? Paste your instance’s MCP URL:' }), baseInput)
+      panel.append(el('div', { class: 'settings-row-caption', text: 'Self-hosted? Paste your instance’s address:' }), baseInput)
     }
     // Auth-kind choice (dual-auth vendors state the trade).
     let authPick: McpAuthKind = preset.authKinds[0] ?? 'none'
@@ -150,7 +150,7 @@ export function createCatalogBlock(): SyncedBlock {
             authKind: authPick
           }) as Promise<PrepareResult>,
         {
-          action: 'preview this server’s config',
+          action: 'preview this tool’s config',
           onLoading: () => {
             previewBtn.disabled = true
           },
@@ -186,7 +186,7 @@ export function createCatalogBlock(): SyncedBlock {
             authKind: selectedAuth
           }) as Promise<ConnectResult>,
         {
-          action: 'connect this server to your CLIs',
+          action: 'connect this tool to your CLIs',
           onLoading: () => {
             connectBtn.disabled = true
             note.hidden = false
@@ -393,7 +393,7 @@ export function createCatalogBlock(): SyncedBlock {
       const save = el('button', { class: 'trail-btn cat-mini', type: 'button', text: 'Save as server' }) as HTMLButtonElement
       save.onclick = async (): Promise<void> => {
         const res = (await bridge.invoke(IntegrationsChannels.serversSave, d.entry)) as { ok: boolean; reason?: string }
-        save.textContent = res.ok ? 'Saved — apply under Settings › Integrations' : `refused: ${res.reason}`
+        save.textContent = res.ok ? 'Saved — set it up under Settings › Integrations' : `refused: ${res.reason}`
       }
       searchResults.append(
         el('div', { class: 'mgr-row' }, [

@@ -12,6 +12,7 @@ export const TerminalChannels = {
   exit: 'terminal:exit',
   state: 'terminal:state',
   stateSync: 'terminal:stateSync', // renderer -> backend: a mounting pane PULLS its current state (StateSyncRequest -> AgentState | null)
+  ptyEmulation: 'terminal:ptyEmulation', // renderer -> backend: how this platform's ptys grow (PtyEmulation) — knowable BEFORE spawn, so xterm's windowsPty is set before any byte (incl. a reattach replay) lands
   cwd: 'terminal:cwd', // backend -> renderer: a pane reported its cwd (OSC 7)
   setRole: 'terminal:setRole', // renderer -> daemon: swarm role manifest (Phase-4/01)
   limit: 'terminal:limit', // daemon -> renderer: a pane's agent hit a usage limit (Phase-4/04)
@@ -402,12 +403,16 @@ export const ConnectionsChannels = {
   list: 'connections:list', // -> Connection[] (secret-free; the card grid's whole source)
   connect: 'connections:connect', // ({ serviceId, baseUrl? }) -> { ok, reason? } — opens CONSENT IN THE USER'S BROWSER; resolves when the flow STARTS, not when it lands
   submitKey: 'connections:submitKey', // ({ serviceId, value, baseUrl? }) -> { ok, reason? } — key-auth on-ramp: VERIFIED against the live server, then vaulted
+  submitFamilyKey: 'connections:submitFamilyKey', // ({ group, value }) -> { ok, reason?, connected? } — ONE paste lights a whole family (ADR 0021): proven once against the catalog verification block, then every restTools member connects and registers its bridge row
   setClient: 'connections:setClient', // ({ serviceId, clientId, clientSecret?, baseUrl? }) -> { ok, reason? } — pre-registered OAuth client for no-DCR providers (Google/GitHub/Slack); WRITE-ONLY (no getter, the 8/08 discipline), then straight into consent
   clearClient: 'connections:clearClient', // (serviceId) -> { ok, reason? } — forget a pasted client id (and its vaulted secret) for this service's sign-in server
   cancel: 'connections:cancel', // (serviceId) -> void — abandon a pending browser consent (closes the loopback port; the card returns to disconnected)
   disconnect: 'connections:disconnect', // (serviceId) -> void (drops the token vault slot + the metadata; a user-pasted client id/secret stays for one-click reconnects until clearClient — and the vendor-side revoke is theirs)
-  verify: 'connections:verify', // (serviceId) -> Connection (initialize + tools/list, right now — proof, not a poll)
-  changed: 'connections:changed' // main -> renderer: Connection[] (pushed on every state change; the browser lands here)
+  verify: 'connections:verify', // (serviceId) -> Connection (the one verify engine, cause 'manual' — proof, not a poll)
+  verifySweep: 'connections:verifySweep', // () -> void — page entry requests exactly ONE budgeted sweep (cause 'page-entry'); results land over `changed`
+  setNote: 'connections:setNote', // ({ serviceId, note }) -> { ok } — the user's account note (trimmed, capped; empty clears). A label, never a secret, never telemetry (ADR 0005); survives disconnect/reconnect
+  changed: 'connections:changed', // main -> renderer: Connection[] (pushed on every state change; the browser lands here)
+  attention: 'connections:attention' // main -> renderer: ConnectionsAttention ({ failing: ids }) — pushed on verification-failure EDGES only (raise once, clear once)
 } as const
 
 export const AccountChannels = {

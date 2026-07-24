@@ -80,7 +80,13 @@ const CLAIMS = [
 // releases a since-fixed bug spanned, not a command anyone will copy-paste. Keyed on the
 // surrounding words, not a line number, so it survives edits above it. Adding an entry means
 // arguing the token names a PAST release ON PURPOSE.
-const HISTORICAL = [{ contains: 'broke every update from', why: 'the artifactName bug and the releases it spanned' }]
+const HISTORICAL = [
+  { contains: 'broke every update from', why: 'the artifactName bug and the releases it spanned' },
+  // The committed winget/homebrew manifests pin the LAST SHIPPED release's bytes by
+  // design (they regenerate from the new release's artifacts AFTER it publishes) —
+  // the version they name is a past release on purpose until that post-release step.
+  { contains: 'committed manifests pin the shipped', why: 'manifests regenerate post-release; they truthfully name the last shipped artifacts' }
+]
 
 const lineOf = (text, index) => text.slice(0, index).split('\n').length
 const lineAt = (text, index) => text.split('\n')[lineOf(text, index) - 1]

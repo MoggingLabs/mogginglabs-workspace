@@ -3,16 +3,22 @@ import { createServer, type Server } from 'node:http'
 import { AddressInfo } from 'node:net'
 import {
   ConnectionsChannels,
+  enrichmentTargetsSameGrant,
+  connectionEnrichmentPatch,
+  sanitizeAccountNote,
   type Connection,
   type ConnectionAuthKind,
+  type ConnectionsAttention,
   type McpPreset,
   type McpServerEntry,
-  type OAuthClientRecord
+  type OAuthClientRecord,
+  type VerifyCause
 } from '@contracts'
 import {
   buildAuthorizeUrl,
   canonicalResource,
   canRepairClientByReRegistering,
+  commitLandedGrant,
   createPkce,
   createState,
   discoverAccount,
@@ -29,7 +35,21 @@ import {
   sanitizeUserClient,
   saveServer,
   userClientRecord,
+  oauthQuirksFor,
+  runVerificationProbe,
+  verificationSpecFor,
+  providerEntryFor,
+  resolveIdentityProfile,
+  profileFromJwt,
+  profileDisplay,
+  callWhoamiTool,
+  classifyProbeOutcome,
+  runBudgetedSweep,
+  AttentionLedger,
+  RefreshCoordinator,
   MCP_PRESETS,
+  type ProbeClassification,
+  type SweepReport,
   type AuthServerMetadata,
   type ClientStore,
   type GrantKv,
@@ -39,6 +59,7 @@ import { getEntitlements } from '@backend'
 import { getSettingsStore } from './app-settings'
 import { getCliRuntime } from './cli-runtime'
 import { mgrStatus } from './mcp-manager'
+import { serviceKeySet } from './service-keys'
 import { vaultAvailable, vaultClearKey, vaultLoad, vaultStore } from './vault'
 
 // The connection broker (ADR 0014). The app IS the OAuth client: it holds one
@@ -54,6 +75,9 @@ import { vaultAvailable, vaultClearKey, vaultLoad, vaultStore } from './vault'
 
 const KV_META = (id: string): string => `connections.meta.${id}`
 const KV_INDEX = 'connections.index'
+/** The account NOTE lives OUTSIDE the meta on purpose: disconnect drops the meta,
+ *  and the user's own label must survive disconnect/reconnect — only they delete it. */
+const KV_NOTE = (id: string): string => `connections.note.${id}`
 const VAULT_TOKENS = (id: string): string => `connections.tokens.${id}`
 const VAULT_CLIENT = (authServer: string): string => `connections.client.${hostKey(authServer)}`
 const hostKey = (s: string): string => s.replace(/[^a-z0-9]/gi, '_').toLowerCase().slice(0, 64)
@@ -121,11 +145,14 @@ export function listConnections(): Connection[] {
     const stored = readMeta(p.id)
     // The preset-derived fields are recomputed over a stored meta, not trusted from
     // it: they describe the CATALOG (which auth kinds exist, whether a key path is
-    // offered), and the catalog can evolve after the meta was written.
+    // offered), and the catalog can evolve after the meta was written. The account
+    // NOTE is the same shape of truth: its KV slot is the single source (it outlives
+    // the meta by design), so it always overrides whatever a stored meta carries.
     const computed = {
       label: p.label,
       hasKeyOption: authKindOf(p) === 'oauth' && p.authKinds.includes('token'),
-      needsBaseUrl: needsBaseUrl(p)
+      needsBaseUrl: needsBaseUrl(p),
+      accountNote: readNote(p.id)
     }
     if (stored) return { ...stored, ...computed }
     return {
@@ -144,7 +171,24 @@ export function listConnections(): Connection[] {
     .filter((id) => !known.has(id))
     .map((id) => readMeta(id))
     .filter((m): m is Connection => !!m)
+    .map((m) => ({ ...m, accountNote: readNote(m.id) }))
   return [...fromCatalog, ...orphans]
+}
+
+function readNote(id: string): string | undefined {
+  const raw = getSettingsStore()?.getSetting(KV_NOTE(id))
+  return raw ? raw : undefined
+}
+
+/** The user's account note: a label, not a secret — but never telemetry (ADR 0005),
+ *  and never presented as proof (the wording helper renders it "noted by you").
+ *  Empty clears. Kept in its own KV slot so disconnect/reconnect cannot eat it. */
+export function setAccountNote(serviceId: string, note: string): { ok: boolean } {
+  const store = getSettingsStore()
+  if (!store) return { ok: false }
+  store.setSetting(KV_NOTE(serviceId), sanitizeAccountNote(String(note ?? '')))
+  push()
+  return { ok: true }
 }
 
 function push(): void {
@@ -330,6 +374,9 @@ export async function connect(serviceId: string, baseUrl?: string): Promise<{ ok
   // One flow at a time — and the superseded service's card must not stay
   // "connecting…" forever, which is exactly what plain endFlow() left behind.
   abandonFlow()
+  // A user-initiated reconnect always may try — the refresh cooldown protects
+  // the token endpoint from OUR retry loops, never from the user's own click.
+  resetRefreshCooldown(serviceId)
   // `needsClientId` is re-derived by THIS attempt, not carried over: a stale flag
   // from a previous failure must not leave the paste form on a card whose current
   // failure (an outage, a bad URL) pasting a client id cannot fix.
@@ -462,7 +509,9 @@ async function onCallback(params: URLSearchParams, res: import('node:http').Serv
     code,
     verifier: flow.verifier,
     redirectUri: flow.redirectUri,
-    resource: flow.resource
+    resource: flow.resource,
+    // Catalog method quirks ride into the normalization seam, exchange included.
+    quirks: oauthQuirksFor(flow.serviceId)
   })
   // The exchange is the ONE await a cancel can interleave: the user's Cancel (or a
   // superseding connect, or clearClient) ran abandonFlow while the token trip was in
@@ -501,37 +550,34 @@ async function onCallback(params: URLSearchParams, res: import('node:http').Serv
     return
   }
 
-  const label = presetFor(flow.serviceId)?.label ?? flow.serviceId
-  html(`Connected to ${label}`, 'You can close this tab and go back to MoggingLabs Workspace.')
-
-  // Two independent ways to learn whose account this is, because for most of the catalog
-  // the FIRST one comes back empty: only 2 of 10 servers here publish OIDC or a userinfo
-  // endpoint. The probe asks the server itself, which always knows — it is serving that
-  // account's data. Whichever answers, answers; if neither does, the card says "Connected"
-  // and does not pretend to a name it never learned.
-  const account = await discoverAccount(exchanged.tokens, flow.metadata)
-  const probe = await probeConnection(flow.resource, exchanged.tokens.accessToken)
-  setState(flow.serviceId, {
-    state: probe.ok ? 'connected' : 'error',
-    account: account ?? (probe.ok ? probe.probe.account : undefined),
-    scopes: exchanged.tokens.scopes ?? flow.scopes,
-    expiresAt: exchanged.tokens.expiresAt,
-    connectedAt: Date.now(),
-    serverName: probe.ok ? probe.probe.serverName : undefined,
-    toolCount: probe.ok ? probe.probe.toolCount : undefined,
-    tools: probe.ok ? probe.probe.tools : undefined,
-    // The grant landed, so whatever client made it is proven: remember WHERE this
-    // service signs in and whether the client was the user's own — that pair is
-    // what lets "Forget client ID" find the record later, even after a disconnect.
-    authServer: flow.metadata.issuer,
-    userClient: flow.client.source === 'user' || undefined,
-    needsClientId: undefined,
-    lastError: probe.ok ? undefined : probe.reason
-  })
-  // The connection is live -> it becomes a server the tool plan can reach. This is
-  // the ONE write into the CLI-facing world, and it carries a COMMAND, not a token.
-  if (probe.ok) registerConnectionServer(flow.serviceId)
-  endFlow()
+  // The grant is stored, so the connection is CONNECTED now — proven by the grant, not
+  // by the follow-up probe. commitLandedGrant runs the two-phase sequence: commit +
+  // register + answer the tab + close the flow synchronously (so a Cancel landing after
+  // is a no-op on a live connection), then enrich best-effort under the stamp guard. The
+  // sequence lives in the Electron-free orchestrator precisely so CONNPURE can bite it.
+  const tokens = exchanged.tokens
+  await commitLandedGrant(
+    {
+      setState: (patch) => void setState(flow.serviceId, patch),
+      readState: () => readMeta(flow.serviceId),
+      registerServer: () => void registerConnectionServer(flow.serviceId),
+      closeFlow: endFlow,
+      showPage: html,
+      discoverAccount: () => discoverAccount(tokens, flow.metadata),
+      probe: () => probeConnection(flow.resource, tokens.accessToken),
+      now: Date.now
+    },
+    {
+      label: presetFor(flow.serviceId)?.label ?? flow.serviceId,
+      scopes: tokens.scopes ?? flow.scopes,
+      expiresAt: tokens.expiresAt,
+      // The grant landed, so whatever client made it is proven: remember WHERE this
+      // service signs in and whether the client was the user's own — that pair is what
+      // lets "Forget client ID" find the record later, even after a disconnect.
+      authServer: flow.metadata.issuer,
+      userClient: flow.client.source === 'user'
+    }
+  )
 }
 
 // ── API-key connections: the same card, the same proof ──────────────────────
@@ -553,12 +599,36 @@ export async function submitKey(serviceId: string, value: string, baseUrl?: stri
   if (!vaultAvailable()) {
     return { ok: false, reason: 'This machine has no OS keychain, so the key cannot be stored safely here.' }
   }
+  // THE BRIDGE ROUTE (ADR 0021, phase-restbridge/04): a row with curated
+  // restTools connects by key against the provider's own REST API — no MCP
+  // handshake exists on this route (a row needs no MCP url at all), so the
+  // catalog verification block is the WHOLE proof (RESTSCHEMA makes it
+  // mandatory) and the bridge serves the curated tools from here on.
+  const restEntry = providerEntryFor(serviceId)
+  if (restEntry?.restTools?.length) {
+    resetRefreshCooldown(serviceId)
+    return connectBridgeKey(serviceId, restEntry, value.trim(), preset)
+  }
   // Self-hosted (n8n, Make): the instance URL arrives WITH the key. Before this
   // parameter existed, the card's key form had no URL field and this branch refused
   // with "paste your instance's MCP URL first" — an instruction with nowhere to obey it.
   const url = needsBaseUrl(preset) ? String(baseUrl ?? '').trim() : preset.urlOrCommand
   if (!url) return { ok: false, reason: `${preset.label} is self-hosted — paste your instance's MCP URL above the key.` }
   if (!validConnectionUrl(url)) return { ok: false, reason: 'The instance URL must be https:// (plain http only for localhost).' }
+  resetRefreshCooldown(serviceId)
+  // PROVE-BEFORE-SAVE, catalog-first (phase-tools/02): a service that declares a
+  // verification endpoint gets the provider's own 401 in one cheap REST trip —
+  // before the MCP handshake, and before anything could save. The catalog probe
+  // REFUSES only on the provider's own unauthorized answer; an unreachable or
+  // erroring verification endpoint proves nothing about the key and falls
+  // through to the MCP proof below, which remains the final word either way.
+  const verificationSpec = verificationSpecFor(serviceId)
+  if (verificationSpec) {
+    const proof = await runVerificationProbe(verificationSpec, value.trim())
+    if (!proof.ok && proof.unauthorized) {
+      return { ok: false, reason: 'That key was refused by the service.' }
+    }
+  }
   // VERIFY BEFORE WE CLAIM — and discover which Authorization scheme the server
   // takes while we're at it (Bearer for almost everyone; `Key` for fal.ai).
   const probe = await probeWithSchemes(url, value.trim())
@@ -572,6 +642,7 @@ export async function submitKey(serviceId: string, value: string, baseUrl?: stri
     state: 'connected',
     url,
     connectedAt: Date.now(),
+    connectedVia: 'key',
     serverName: probe.probe.serverName,
     toolCount: probe.probe.toolCount,
     tools: probe.probe.tools,
@@ -587,7 +658,133 @@ export async function submitKey(serviceId: string, value: string, baseUrl?: stri
     lastError: undefined
   })
   registerConnectionServer(serviceId)
+  // ONE PASTE, EVERY ROUTE (2026-07-24, user-driven): the same key, vaulted again
+  // under the catalog's env slot name (GITHUB_PAT, POSTHOG_API_KEY, …), so every
+  // ${SLOT} reference on the CLI-owned route reads "saved" without a second paste.
+  // Same vault, same custody, best-effort — a slot refusal never undoes the
+  // connection that just proved the key.
+  const slot = preset.envRefSlots[0]
+  if (slot) {
+    try {
+      serviceKeySet(slot, value.trim())
+    } catch {
+      /* the connection stands; the slot can be pasted on its own row */
+    }
+  }
   return { ok: true }
+}
+
+/** One bridge-route key connect: prove against the MANDATORY verification
+ *  block, vault, stamp, register the bridge row. The card flips straight to
+ *  `✓ Connected · verified 0m ago` — a verification probe just passed, which
+ *  is exactly what the stamp means; no MCP probe is ever involved. */
+async function connectBridgeKey(
+  serviceId: string,
+  entry: NonNullable<ReturnType<typeof providerEntryFor>>,
+  key: string,
+  preset: McpPreset
+): Promise<{ ok: boolean; reason?: string }> {
+  const spec = verificationSpecFor(serviceId)
+  if (!spec) return { ok: false, reason: `${entry.label} has no verification endpoint in the catalog — a data bug, not a key problem.` }
+  const scheme = entry.restAuth?.scheme ?? 'Bearer'
+  const proof = await runVerificationProbe(spec, key, { authScheme: scheme })
+  if (!proof.ok) {
+    return { ok: false, reason: proof.unauthorized ? 'That key was refused by the service.' : proof.reason }
+  }
+  if (!storeTokens(serviceId, { accessToken: key })) {
+    return { ok: false, reason: 'The OS keychain would not hold the key.' }
+  }
+  setState(serviceId, {
+    state: 'connected',
+    url: entry.mcp?.url,
+    connectedAt: Date.now(),
+    connectedVia: 'key',
+    authScheme: scheme,
+    // The curated set IS what this connection serves (the anti-explosion
+    // surface): names from the catalog, no server round trip to ask.
+    toolCount: entry.restTools!.length,
+    tools: entry.restTools!.map((t) => t.name),
+    verifiedAt: Date.now(),
+    verifyCause: 'manual',
+    expiresAt: undefined,
+    needsClientId: undefined,
+    lastError: undefined
+  })
+  registerConnectionServer(serviceId)
+  // ONE PASTE, EVERY ROUTE: the same key under the catalog's env slot name.
+  const slot = preset.envRefSlots[0]
+  if (slot) {
+    try {
+      serviceKeySet(slot, key)
+    } catch {
+      /* the connection stands; the slot can be pasted on its own row */
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * ONE paste lights the whole FAMILY (ADR 0021): every member of `group` whose
+ * row declares restTools + an apiKey method connects from a single key —
+ * proven ONCE against the first member's verification block (the family
+ * shares restAuth by eligibility), then each member vaults, stamps, and
+ * registers its own bridge row. MOGGING_REST_BREAK_FANOUT is TEST-ONLY (the
+ * RESTCARDS mutation-red): it stops after the first member, which is exactly
+ * the half-lit-family regression the gate must catch.
+ */
+export async function submitFamilyKey(group: string, value: string): Promise<{ ok: boolean; reason?: string; connected?: string[] }> {
+  const key = String(value ?? '').trim()
+  if (!key) return { ok: false, reason: 'Paste the key first.' }
+  if (!vaultAvailable()) {
+    return { ok: false, reason: 'This machine has no OS keychain, so the key cannot be stored safely here.' }
+  }
+  const members = connectableServices()
+    .map((p) => ({ preset: p, entry: providerEntryFor(p.id) }))
+    .filter((m) => m.entry?.group === group && m.entry.restTools?.length && m.entry.methods.some((x) => x.kind === 'apiKey'))
+  if (!members.length) return { ok: false, reason: 'No capability in this family takes a pasted key.' }
+  for (const m of members) {
+    const quota = connectionQuotaRefusal(m.preset.id)
+    if (quota) return { ok: false, reason: quota }
+  }
+  const first = members[0]
+  const spec = verificationSpecFor(first.preset.id)
+  if (!spec) return { ok: false, reason: `${first.entry!.label} has no verification endpoint in the catalog — a data bug, not a key problem.` }
+  const proof = await runVerificationProbe(spec, key, { authScheme: first.entry!.restAuth?.scheme ?? 'Bearer' })
+  if (!proof.ok) {
+    return { ok: false, reason: proof.unauthorized ? 'That key was refused by the service.' : proof.reason }
+  }
+  const connected: string[] = []
+  for (const m of members) {
+    if (!storeTokens(m.preset.id, { accessToken: key })) {
+      return { ok: false, reason: 'The OS keychain would not hold the key.', connected }
+    }
+    setState(m.preset.id, {
+      state: 'connected',
+      url: m.entry!.mcp?.url,
+      connectedAt: Date.now(),
+      connectedVia: 'key',
+      authScheme: m.entry!.restAuth?.scheme ?? 'Bearer',
+      toolCount: m.entry!.restTools!.length,
+      tools: m.entry!.restTools!.map((t) => t.name),
+      verifiedAt: Date.now(),
+      verifyCause: 'manual',
+      expiresAt: undefined,
+      needsClientId: undefined,
+      lastError: undefined
+    })
+    registerConnectionServer(m.preset.id)
+    connected.push(m.preset.id)
+    if (process.env.MOGGING_REST_BREAK_FANOUT) break
+  }
+  const slot = first.preset.envRefSlots[0]
+  if (slot) {
+    try {
+      serviceKeySet(slot, key)
+    } catch {
+      /* the connections stand */
+    }
+  }
+  return { ok: true, connected }
 }
 
 // ── Pre-registered OAuth clients: the no-DCR on-ramp (Google, GitHub, Slack) ─
@@ -706,41 +903,66 @@ export function cancelConnect(serviceId: string): void {
 
 // ── Refresh + the one decryption point ──────────────────────────────────────
 
-/** Serialize refreshes per connection. ONE holder is the whole reason app-held
- *  OAuth is sound under refresh-token rotation (ADR 0014) — but "one holder"
- *  means nothing if two proxy calls race the same rotation and one of them lands
- *  a refresh token the other already invalidated. */
-const refreshing = new Map<string, Promise<string | null>>()
+/** The refresh discipline (phase-tools/02, credential-core): per-connection lock,
+ *  freshness margin, failure cooldown, re-check-after-lock. ONE holder is the
+ *  whole reason app-held OAuth is sound under refresh-token rotation (ADR 0014) —
+ *  and the coordinator is what makes "one holder" true under concurrent demand
+ *  (proxy call + heartbeat + manual Check racing the same rotation). */
+const refreshCoordinator = new RefreshCoordinator()
 
 /**
  * The access token for an outbound call — the ONLY place token material is
- * decrypted, and it never leaves this module. Refreshes with a minute of slack so
- * a call in flight cannot expire mid-request.
+ * decrypted, and it never leaves this module. Refreshes with a margin of slack so
+ * a call in flight cannot expire mid-request; a provider that refused a refresh
+ * is not re-asked until the cooldown passes (the card already says `expired`).
  */
 export async function accessTokenFor(serviceId: string): Promise<string | null> {
   const tokens = loadTokens(serviceId)
   if (!tokens) return null
-  const fresh = !tokens.expiresAt || tokens.expiresAt - Date.now() > 60_000
-  if (fresh) return tokens.accessToken
-  if (!tokens.refreshToken) {
+  if (tokens.expiresAt && tokens.expiresAt - Date.now() <= 60_000 && !tokens.refreshToken) {
     setState(serviceId, { state: 'expired', lastError: 'The connection expired and cannot renew itself.' })
     return null
   }
-  const inflight = refreshing.get(serviceId)
-  if (inflight) return inflight
-  const run = doRefresh(serviceId, tokens).finally(() => refreshing.delete(serviceId))
-  refreshing.set(serviceId, run)
-  return run
+  const out = await refreshCoordinator.current<OAuthTokens>(serviceId, {
+    load: () => loadTokens(serviceId),
+    refresh: (current) => doRefresh(serviceId, current),
+    store: (next) => {
+      if (!storeTokens(serviceId, next)) return false
+      setState(serviceId, { state: 'connected', expiresAt: next.expiresAt, scopes: next.scopes, lastError: undefined })
+      return true
+    }
+  })
+  if (out.ok) return out.credential.accessToken
+  // A cooled refusal repeats no state churn — the refusal that STARTED the
+  // cooldown already set `expired` with the provider's own sentence.
+  if (!out.cooled && out.reason === 'the OS keychain would not hold the renewed credential') {
+    setState(serviceId, { state: 'error', lastError: 'The OS keychain would not hold the renewed credential.' })
+  }
+  return null
 }
 
-async function doRefresh(serviceId: string, tokens: OAuthTokens): Promise<string | null> {
+/** A user-initiated reconnect always may try: connect() and submitKey() clear the
+ *  refresh cooldown so "the app refused to even try" can never be the story. */
+const resetRefreshCooldown = (serviceId: string): void => refreshCoordinator.reset(serviceId)
+
+/** One refresh trip: discovery + client + token call + rotation merge. State
+ *  transitions for FAILURES live here (they carry provider-specific advice);
+ *  the success write lives in the coordinator's `store` above. */
+async function doRefresh(
+  serviceId: string,
+  tokens: OAuthTokens
+): Promise<{ ok: true; credential: OAuthTokens } | { ok: false; reason: string }> {
   const meta = readMeta(serviceId)
   const url = meta?.url
-  if (!url) return null
+  if (!url) return { ok: false, reason: 'no connection url' }
+  if (!tokens.refreshToken) {
+    setState(serviceId, { state: 'expired', lastError: 'The connection expired and cannot renew itself.' })
+    return { ok: false, reason: 'no refresh token' }
+  }
   const disco = await fetchAuthServerMetadataFor(url)
   if (!disco) {
     setState(serviceId, { state: 'error', lastError: 'Could not reach the provider to renew the connection.' })
-    return null
+    return { ok: false, reason: 'discovery failed' }
   }
   const client = loadClient(disco.issuer)
   if (!client) {
@@ -757,11 +979,14 @@ async function doRefresh(serviceId: string, tokens: OAuthTokens): Promise<string
         ? 'The client registration is gone — paste a client ID to reconnect.'
         : 'The client registration is gone — reconnect to renew it.'
     })
-    return null
+    return { ok: false, reason: 'client registration gone' }
   }
   const next = await refreshTokens(disco, client, {
-    refreshToken: tokens.refreshToken!,
-    resource: canonicalResource(url)
+    refreshToken: tokens.refreshToken,
+    resource: canonicalResource(url),
+    // Catalog method quirks ride into the normalization seam — the one place
+    // `tokenExpirationBuffer` and friends are ever applied.
+    quirks: oauthQuirksFor(serviceId)
   })
   if (!next.ok) {
     // The cached AS metadata may be the reason (a provider that moved its token
@@ -769,18 +994,12 @@ async function doRefresh(serviceId: string, tokens: OAuthTokens): Promise<string
     // attempt re-discovers instead of retrying into the same stale endpoint.
     metaCache.delete(url)
     setState(serviceId, { state: 'expired', lastError: `The connection could not renew: ${next.reason}` })
-    return null
+    return { ok: false, reason: next.reason }
   }
   // ROTATION: many providers issue a NEW refresh token on every use and invalidate
   // the old one; others return none on refresh at all. Both hands of that rule live
   // in mergeRefreshedTokens (pure — the regression suite bites on it directly).
-  const merged: OAuthTokens = mergeRefreshedTokens(tokens, next.tokens)
-  if (!storeTokens(serviceId, merged)) {
-    setState(serviceId, { state: 'error', lastError: 'The OS keychain would not hold the renewed credential.' })
-    return null
-  }
-  setState(serviceId, { state: 'connected', expiresAt: merged.expiresAt, scopes: merged.scopes, lastError: undefined })
-  return merged.accessToken
+  return { ok: true, credential: mergeRefreshedTokens(tokens, next.tokens) }
 }
 
 /** Cached AS metadata per connection URL — discovery is three round trips we do
@@ -796,6 +1015,27 @@ async function fetchAuthServerMetadataFor(url: string): Promise<AuthServerMetada
   if (!disco.ok) return null
   metaCache.set(url, disco.metadata)
   return disco.metadata
+}
+
+/**
+ * The REST bridge's half of the upstream question (ADR 0021): a service is
+ * bridge-served when it was connected on the KEY route and its catalog row
+ * declares curated `restTools`. OAuth-connected services keep the MCP proxy
+ * path untouched — the bridge is the KEY route, by construction. The token
+ * still comes from `accessTokenFor` — the ONE decryption point, unchanged.
+ */
+export async function restBridgeUpstream(
+  serviceId: string
+): Promise<{ entry: import('@contracts').ProviderEntry; token: string } | null> {
+  const meta = readMeta(serviceId)
+  // The KEY route, whichever method ranks first in the catalog: `connectedVia`
+  // records the user's actual choice (a dual-auth row reads authKind 'oauth').
+  if (!meta || meta.state === 'disconnected' || (meta.authKind !== 'key' && meta.connectedVia !== 'key')) return null
+  const entry = providerEntryFor(serviceId)
+  if (!entry?.restTools?.length) return null
+  const token = await accessTokenFor(serviceId)
+  if (!token) return null
+  return { entry, token }
 }
 
 /** What the proxy needs: where to send the call, and what to send it with. */
@@ -851,6 +1091,8 @@ export function disconnect(serviceId: string): void {
   const meta = readMeta(serviceId)
   // The vault slot first: if anything below throws, the credential is already gone.
   vaultClearKey(VAULT_TOKENS(serviceId))
+  // A disconnected connection cannot need attention — there is nothing left to fix.
+  if (attentionLedger.drop(serviceId)) pushAttention()
   metaCache.delete(meta?.url ?? '')
   if (meta?.userClient && meta.authServer) {
     // The GRANT is gone; the pasted client stays (reconnecting is one click, not a
@@ -888,31 +1130,267 @@ export function disconnect(serviceId: string): void {
   // shows instead: sign out at the provider to kill the grant everywhere.
 }
 
-/** Prove it, now. The card's "Check" verb, and what runs when Settings opens. */
-export async function verify(serviceId: string): Promise<Connection | null> {
+// ── The status engine, main-side (phase-tools/03) ───────────────────────────
+// ONE verify path for every trigger. "✓ Connected · verified Xm ago" is true by
+// construction because manual Check, the heartbeat, page entry and pre-launch all
+// funnel through verifyConnection — same probe selection, same classification,
+// same CONNPURE laws, same attention edges. The pure halves (classification,
+// budgeted sweep, attention ledger) live in the credential core's sibling,
+// backend/features/integrations/status-engine.ts, where TOOLPULSE can bite them.
+
+const attentionLedger = new AttentionLedger()
+const verifyCauseCounts: Record<VerifyCause, number> = { manual: 0, heartbeat: 0, 'page-entry': 0, 'pre-launch': 0 }
+const sweepCauseCounts: Record<VerifyCause, number> = { manual: 0, heartbeat: 0, 'page-entry': 0, 'pre-launch': 0 }
+
+/** Dev-gate observability (TOOLPULSE): per-connection verifications and whole SWEEPS
+ *  counted by cause (page entry's "one poll exactly" is a sweep count), attention
+ *  read back. Counters only — never a URL or a token. */
+export const verifyStatsForSmoke = (): {
+  causes: Record<VerifyCause, number>
+  sweeps: Record<VerifyCause, number>
+  failing: string[]
+} => ({
+  causes: { ...verifyCauseCounts },
+  sweeps: { ...sweepCauseCounts },
+  failing: attentionLedger.failingIds()
+})
+
+/** CLI-config drift (phase-tools/06): its own ledger, because a connection verify's
+ *  success must never clear a DRIFT alarm (and vice versa) — two different facts,
+ *  one attention surface. */
+const driftLedger = new AttentionLedger()
+
+/** Push the app-wide attention payload (ids only, secret-free). Called on EDGES —
+ *  the ledgers already swallowed repeats, so the rail rings once per failure. */
+function pushAttention(): void {
+  try {
+    const payload: ConnectionsAttention = {
+      failing: [...new Set([...attentionLedger.failingIds(), ...driftLedger.failingIds()])].sort()
+    }
+    winGetter?.()?.webContents.send(ConnectionsChannels.attention, payload)
+  } catch {
+    /* window gone; the ledger is the truth and the next push repeats it */
+  }
+}
+
+/** The heartbeat reports each beat's drift SET; edges (raise on new, clear on
+ *  recovered) ride the same law as verification failures. NO write ever happens
+ *  here — Fix is always a click (the surgical-writes-on-your-click law). */
+export function reportCliDrift(driftedIds: string[]): void {
+  const set = new Set(driftedIds)
+  let changed = false
+  for (const id of set) if (driftLedger.record(id, 'failed') !== null) changed = true
+  for (const id of driftLedger.failingIds()) {
+    if (!set.has(id) && driftLedger.record(id, 'ok') !== null) changed = true
+  }
+  if (changed) pushAttention()
+}
+
+/** Dev-gate observability (TOOLFIX): the drift ledger read back. */
+export const driftStatsForSmoke = (): string[] => driftLedger.failingIds()
+
+const envInt = (name: string, fallback: number): number => {
+  const v = Number(process.env[name])
+  return Number.isFinite(v) && v > 0 ? v : fallback
+}
+
+/** One verification, with its classification for the sweep's offline short-circuit. */
+async function verifyOne(
+  serviceId: string,
+  cause: VerifyCause
+): Promise<{ connection: Connection | null; classification: ProbeClassification }> {
+  verifyCauseCounts[cause] += 1
   const meta = readMeta(serviceId)
-  if (!meta?.url) return listConnections().find((c) => c.id === serviceId) ?? null
+  // A bridge-route connection (ADR 0021) may have no MCP url at all — its
+  // catalog verification block is the probe, so `url` is not a precondition.
+  const keyRoute = meta?.authKind === 'key' || meta?.connectedVia === 'key'
+  if (!meta || (!meta.url && !(keyRoute && verificationSpecFor(serviceId)))) {
+    return { connection: listConnections().find((c) => c.id === serviceId) ?? null, classification: 'failed' }
+  }
+  const grantStamp = meta.connectedAt
+  const wasConnected = meta.state === 'connected'
   const token = await accessTokenFor(serviceId)
   if (!token && meta.authKind !== 'local') {
-    return setState(serviceId, { state: 'expired', lastError: 'The connection could not be renewed — reconnect it.' })
+    // GRANT-truth, not probe-truth: the credential could not be produced or renewed.
+    // accessTokenFor/doRefresh already wrote the specific sentence; the downgrade to
+    // `expired` is the one un-connect a verification is allowed (the CONNPURE law).
+    if (attentionLedger.record(serviceId, 'unauthorized') !== null) pushAttention()
+    return {
+      connection: setState(serviceId, {
+        state: 'expired',
+        verifyCause: cause,
+        lastError: readMeta(serviceId)?.lastError ?? 'The connection could not be renewed — reconnect it.'
+      }),
+      classification: 'unauthorized'
+    }
   }
-  const probe = await probeConnection(meta.url, token ?? undefined, { authScheme: meta.authScheme })
-  if (!probe.ok) {
-    return setState(serviceId, {
-      state: probe.unauthorized ? 'expired' : 'error',
-      lastError: probe.unauthorized ? 'The service no longer accepts this connection — reconnect it.' : probe.reason
+
+  // Probe selection is CATALOG-driven (step 01): a key-auth service with a declared
+  // `verification` block gets the provider's own REST endpoint — the probe API-key
+  // connections never had (one cheap trip; the provider's own 401 is the verdict).
+  // MCP services keep the initialize + tools/list proof over the app-held grant.
+  const classifierOpts = { _testBreakOfflineClassifier: !!process.env.MOGGING_PULSE_BREAK_OFFLINE }
+  const spec = keyRoute ? verificationSpecFor(serviceId) : undefined
+  let classification: ProbeClassification
+  let reason: string | undefined
+  let enrichment: Partial<Connection> | null = null
+  if (spec && token) {
+    const proof = await runVerificationProbe(spec, token, { authScheme: meta.authScheme })
+    classification = classifyProbeOutcome(proof, classifierOpts)
+    if (!proof.ok) reason = proof.reason
+  } else {
+    // `skipAccount`: identity is the LADDER's job now (below) — the probe's own
+    // whoami side-question would re-ask it on every heartbeat.
+    // This branch only runs with no verification spec, and the entry guard above
+    // already required `url` for exactly that case.
+    const probe = await probeConnection(meta.url as string, token ?? undefined, { authScheme: meta.authScheme, skipAccount: true })
+    classification = classifyProbeOutcome(probe, classifierOpts)
+    if (probe.ok) {
+      enrichment = {
+        ...connectionEnrichmentPatch({
+          serverName: probe.probe.serverName,
+          toolCount: probe.probe.toolCount,
+          tools: probe.probe.tools
+        }),
+        // Never blank a name we already have.
+        account: meta.account
+      }
+    } else {
+      reason = probe.reason
+    }
+  }
+
+  // The identity ladder (phase-tools/04): catalog-driven, and it runs ONLY while the
+  // normalized profile is still blank — an identity once probed is stable, and a
+  // heartbeat must not spend a REST call (or a tool call) per beat re-asking it.
+  // Best-effort enrichment like everything else here: a blank stays blank.
+  if (classification === 'ok' && !meta.accountProfile) {
+    const who = await resolveIdentityProfile({
+      spec: providerEntryFor(serviceId)?.profile,
+      localClaims: () => profileFromJwt(loadTokens(serviceId)?.idToken),
+      restFetch: token
+        ? async (url) => {
+            try {
+              const res = await fetch(url, {
+                headers: { authorization: `${meta.authScheme ?? 'Bearer'} ${token}`, accept: 'application/json' },
+                signal: AbortSignal.timeout(8_000)
+              })
+              return res.ok ? ((await res.json()) as unknown) : null
+            } catch {
+              return null
+            }
+          }
+        : undefined,
+      toolNames: (enrichment?.tools as string[] | undefined) ?? meta.tools ?? [],
+      callTool:
+        (token || meta.authKind === 'local') && meta.url
+          ? (name) => callWhoamiTool(meta.url as string, name, { token: token ?? undefined, authScheme: meta.authScheme })
+          : undefined,
+      _testBreakAllowlist: !!process.env.MOGGING_WHO_BREAK_ALLOWLIST
     })
+    if (who) {
+      enrichment = {
+        ...(enrichment ?? {}),
+        ...connectionEnrichmentPatch({ accountProfile: who.profile, accountSource: who.source }),
+        // The legacy string stays the computed fallback for untouched consumers —
+        // filled in when it was blank, never overwritten when it wasn't.
+        account: meta.account ?? profileDisplay(who.profile) ?? undefined
+      }
+    }
   }
-  return setState(serviceId, {
-    state: 'connected',
-    serverName: probe.probe.serverName,
-    toolCount: probe.probe.toolCount,
-    tools: probe.probe.tools,
-    // Re-checking can FILL IN a name we could not get at connect time (a server that was
-    // slow, or a whoami tool the vendor added since). Never blank one we already have.
-    account: probe.probe.account ?? meta.account,
-    lastError: undefined
+
+  // The probe crossed an await: a Disconnect or a FRESH grant may have landed
+  // meanwhile, and a stale verdict must not overwrite it (the enrichment stamp law,
+  // enrichmentTargetsSameGrant, guards every post-probe write).
+  const current = readMeta(serviceId)
+  if (!current) return { connection: null, classification }
+  if (wasConnected && grantStamp != null && !enrichmentTargetsSameGrant(current, grantStamp)) {
+    return { connection: current, classification }
+  }
+
+  switch (classification) {
+    case 'network-down':
+      // The MACHINE is offline. That says nothing about the grant: no state write,
+      // no verifiedAt stamp, no attention. The card keeps its last true answer.
+      return { connection: current, classification }
+    case 'unauthorized': {
+      // The one downgrade a probe may cause: the provider itself refused the
+      // credential at its own resource. `expired` — reconnect is the only fix.
+      if (attentionLedger.record(serviceId, 'unauthorized') !== null) pushAttention()
+      return {
+        connection: setState(serviceId, {
+          state: 'expired',
+          verifyCause: cause,
+          lastError: 'The service no longer accepts this connection — reconnect it.'
+        }),
+        classification
+      }
+    }
+    case 'failed': {
+      // Reached and refused (a quota error, a 500, a server bug) — but a failed
+      // probe NEVER un-connects a valid grant (the CONNLIVE no-downgrade law, now
+      // under every cause): the state stands, the sentence lands on the card, and
+      // the app-wide attention edge rings once.
+      if (attentionLedger.record(serviceId, 'failed') !== null) pushAttention()
+      return { connection: setState(serviceId, { verifyCause: cause, lastError: reason }), classification }
+    }
+    default: {
+      if (attentionLedger.record(serviceId, 'ok') !== null) pushAttention()
+      return {
+        connection: setState(serviceId, {
+          state: 'connected',
+          verifiedAt: Date.now(),
+          verifyCause: cause,
+          ...(enrichment ?? {}),
+          lastError: undefined
+        }),
+        classification
+      }
+    }
+  }
+}
+
+/** Prove it, now — the card's "Check" verb, and the engine every trigger funnels through. */
+export async function verifyConnection(serviceId: string, cause: VerifyCause): Promise<Connection | null> {
+  return (await verifyOne(serviceId, cause)).connection
+}
+
+/**
+ * One budgeted, staggered beat over every `connected` connection (Nango's budgeted
+ * sync, phase-tools/03). The heartbeat threads its cursor through so a budget-cut
+ * beat RESUMES next beat instead of re-probing the same head of the list; page
+ * entry sweeps once from wherever. A probe classified network-down aborts the rest
+ * of the beat — the machine is offline and 39 more probes would prove nothing.
+ */
+export async function sweepConnections(cause: VerifyCause, o: { cursor?: number } = {}): Promise<SweepReport> {
+  sweepCauseCounts[cause] += 1
+  const ids = listConnections()
+    .filter((c) => c.state === 'connected')
+    .map((c) => c.id)
+  return runBudgetedSweep(ids, o.cursor ?? 0, async (id) => (await verifyOne(id, cause)).classification, {
+    budgetMs: envInt('MOGGING_PULSE_BUDGET_MS', 10_000),
+    maxConcurrent: envInt('MOGGING_PULSE_MAXCONC', 3),
+    jitterMs: envInt('MOGGING_PULSE_JITTER_MS', 400),
+    _testIgnoreBudget: !!process.env.MOGGING_PULSE_BREAK_BUDGET
   })
+}
+
+/**
+ * Pre-launch verify (phase-tools/03): a pane launching with a plan that carries
+ * connected tools verifies them first — PARALLEL, hard budget (~2s), and the launch
+ * NEVER waits past it: a verdict that misses the window lands as status afterward
+ * over the normal `changed` pushes. Never on the connect critical path, and never
+ * a refusal — a slow probe must not cost the user their pane.
+ */
+export async function verifyConnectionsForLaunch(serviceIds: string[]): Promise<void> {
+  const ids = [...new Set(serviceIds)].filter((id) => readMeta(id)?.state === 'connected')
+  if (!ids.length) return
+  const all = Promise.allSettled(ids.map((id) => verifyConnection(id, 'pre-launch'))).then(() => undefined)
+  // TEST-ONLY (the TOOLPULSE mutation-red): a broken budget must delay the launch —
+  // and the gate must go red when it does.
+  if (process.env.MOGGING_PULSE_BREAK_BUDGET) return all
+  const budgetMs = envInt('MOGGING_PRELAUNCH_BUDGET_MS', 2_000)
+  await Promise.race([all, new Promise<void>((r) => setTimeout(r, budgetMs))])
 }
 
 /** A stored `connecting` state at BOOT is a lie: the flow it described died with the
@@ -940,6 +1418,11 @@ export function registerConnections(getWin: () => BrowserWindow | null): void {
   ipcMain.handle(ConnectionsChannels.submitKey, (_e, p: { serviceId: string; value: string; baseUrl?: string }) =>
     submitKey(String(p?.serviceId ?? ''), String(p?.value ?? ''), p?.baseUrl ? String(p.baseUrl) : undefined)
   )
+  // Write-only, like submitKey: the family paste (ADR 0021) — one key in, no
+  // channel ever brings it back out.
+  ipcMain.handle(ConnectionsChannels.submitFamilyKey, (_e, p: { group: string; value: string }) =>
+    submitFamilyKey(String(p?.group ?? ''), String(p?.value ?? ''))
+  )
   // Write-only, like submitKey: the secret goes IN over this channel and no channel
   // brings a client secret back out (the 8/08 discipline).
   ipcMain.handle(
@@ -955,5 +1438,11 @@ export function registerConnections(getWin: () => BrowserWindow | null): void {
   ipcMain.handle(ConnectionsChannels.clearClient, (_e, id: string) => clearClient(String(id)))
   ipcMain.handle(ConnectionsChannels.cancel, (_e, id: string) => cancelConnect(String(id)))
   ipcMain.handle(ConnectionsChannels.disconnect, (_e, id: string) => disconnect(String(id)))
-  ipcMain.handle(ConnectionsChannels.verify, (_e, id: string) => verify(String(id)))
+  ipcMain.handle(ConnectionsChannels.verify, (_e, id: string) => verifyConnection(String(id), 'manual'))
+  // Page entry (trigger 2): entering Integrations requests exactly ONE sweep — the
+  // existing request→push→repaint contract; results land over `changed`, never here.
+  ipcMain.handle(ConnectionsChannels.verifySweep, () => void sweepConnections('page-entry'))
+  ipcMain.handle(ConnectionsChannels.setNote, (_e, p: { serviceId: string; note: string }) =>
+    setAccountNote(String(p?.serviceId ?? ''), String(p?.note ?? ''))
+  )
 }

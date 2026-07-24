@@ -31,6 +31,11 @@ competitor names, truth-over-keywords). Same format as
 > composed product. Current baseline: **v0.15.0, 182 gates (159 app-boot +
 > 23 static)**. `check-gate-count.mjs` is the only authority on the count,
 > so treat that number as live (it keeps moving), never a hard-coded literal.
+>
+> **Re-derived 2026-07-24** after the v0.16.0 toolbelt merge (`053193d`):
+> **200 gates (170 app-boot + 30 static)**, INVENTORY at 198 rows (amendment
+> A3). The baseline moved twice while Part I ran — proof the rule above is
+> load-bearing.
 
 ## The laws that bind this phase
 

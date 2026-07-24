@@ -12,6 +12,10 @@ device key, runtime split), the updater FEED (signature verify, artifact
 name), connections/integrations (OAuth, the event bridge, GitHub adapter),
 usage/metering, the browser dock + agent-web trail, files/explorer, the
 Brain (reads, freshness, symbol writes, memory), MCP + the `mogging` wedge.
+Post-merge addendum (INVENTORY A3): the tool catalog + credential
+core/status/identity/cards/reconciler (ADR 0020), the REST bridge
+executor/curator/key panel (ADR 0021), and the live connect driver
+(rows 190–198, CONNLIVE on 102).
 
 ## Steps
 1. **Enumerate the adversarial + boundary edges**: an AS answering

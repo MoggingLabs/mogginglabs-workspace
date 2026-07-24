@@ -32,8 +32,11 @@ import { claudeNotifyHooks } from './notify-hook'
 // balanced pairs. The overlay must stay: profile launches point CLAUDE_CONFIG_DIR at a
 // different home, where the global file (and these hooks) may not exist.
 
-/** The five hook events the bell layer wires (one source: claudeNotifyHooks). */
-const HOOK_EVENTS = ['Notification', 'Stop', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit'] as const
+/** The hook events the bell layer wires — DERIVED from claudeNotifyHooks, the one source, so
+ *  the session overlay and this global twin cannot diverge by construction (they used to be
+ *  two hand-maintained lists; adding StopFailure/PostToolBatch to one and not the other would
+ *  have been exactly the NOTIFYPARITY drift class again). */
+const HOOK_EVENTS: readonly string[] = Object.keys(claudeNotifyHooks(''))
 
 export type GlobalHooksState =
   | 'applied' // every event carries OUR entry with the CURRENT invocation
@@ -240,6 +243,37 @@ function codexRegions(text: string): CodexRegions {
 
 const codexNotifyValue = (scriptPath: string): string => `[ "node", ${tstr(scriptPath)} ]`
 
+/** The Codex hook events the global twin wires — the config.toml mirror of codexBellArgs'
+ *  session `-c hooks.*` overrides (turn boundary + proof-of-work; see notify-hook.ts for the
+ *  full rationale). `[[hooks.<Event>]]` is an ARRAY of tables, so entries APPEND — a user's
+ *  own hooks coexist with ours and, unlike the single `notify` slot, these can never
+ *  conflict. The TOML basic string can carry inner double quotes, so the global command
+ *  quotes its path and has no whitespace restriction (the session `-c` relay does). */
+const CODEX_HOOK_EVENTS: ReadonlyArray<{ event: string; notify: string }> = [
+  { event: 'UserPromptSubmit', notify: 'turn-start' },
+  { event: 'PostToolUse', notify: 'busy' }
+]
+
+const codexHookCommand = (scriptPath: string, notifyEvent: string): string =>
+  `node "${scriptPath.replace(/\\/g, '/')}" --event ${notifyEvent}`
+
+/** One generated hook block. EVERY line carries the tag, so removeCodexGlobal's
+ *  strip-tagged-lines pass removes whole blocks with no extra machinery. */
+function codexHookBlock(event: string, notifyEvent: string, scriptPath: string): string[] {
+  return [
+    `[[hooks.${event}]] ${CODEX_LINE_TAG}`,
+    `[[hooks.${event}.hooks]] ${CODEX_LINE_TAG}`,
+    codexLine('type', '"command"'),
+    codexLine('command', tstr(codexHookCommand(scriptPath, notifyEvent)))
+  ]
+}
+
+/** A tagged line belonging to one of OUR hook blocks, any vintage. `type`/`command` keys only
+ *  ever appear tagged inside our blocks (our other tagged lines are `notify` and the tui
+ *  keys), and a user's own hook lines are never tagged. */
+const isOurCodexHookLine = (l: string): boolean =>
+  codexTagged(l) && (/^\s*\[\[hooks\./.test(l) || keyLineRe('type').test(l) || keyLineRe('command').test(l))
+
 class WiringConflictError extends Error {}
 export const isWiringConflict = (e: unknown): e is WiringConflictError => e instanceof WiringConflictError
 
@@ -274,7 +308,15 @@ export function codexGlobalState(text: string | null, scriptPath: string): { sta
     const key = i === 0 ? 'notify' : `tui.${CODEX_TUI_KEYS[i - 1].key}`
     return { state: 'conflict', reason: `config.toml already sets ${key} = ${value} (not managed by this app)` }
   }
-  if (exact === found.length) return { state: 'applied' }
+  // The hook blocks: never a conflict (array-of-tables append), so only exact/ours counting.
+  for (const { event, notify } of CODEX_HOOK_EVENTS) {
+    const header = lines.findIndex((l) => codexTagged(l) && l.trim().startsWith(`[[hooks.${event}]]`))
+    if (header === -1) continue
+    ours++
+    const want = tstr(codexHookCommand(scriptPath, notify))
+    if (lines.slice(header).some((l) => codexTagged(l) && keyLineRe('command').test(l) && tomlLineValue(l) === want)) exact++
+  }
+  if (exact === found.length + CODEX_HOOK_EVENTS.length) return { state: 'applied' }
   if (ours > 0) return { state: 'partial' }
   return { state: 'not-applied' }
 }
@@ -323,7 +365,15 @@ export function applyCodexGlobal(text: string | null, scriptPath: string): strin
       // untagged + equal value: satisfied, leave the user's line alone
     }
   }
-  const joined = out.join('\n')
+
+  // hooks: replace OUR blocks wholesale — strip any vintage, append the current ones at EOF
+  // (table order is free in TOML, so after [tui] is as valid as before it).
+  const pruned = out.filter((l) => !isOurCodexHookLine(l))
+  while (pruned.length && pruned[pruned.length - 1].trim() === '') pruned.pop()
+  if (pruned.length) pruned.push('')
+  for (const { event, notify } of CODEX_HOOK_EVENTS) pruned.push(...codexHookBlock(event, notify, scriptPath))
+
+  const joined = pruned.join('\n')
   return joined.endsWith('\n') ? joined : joined + '\n'
 }
 
@@ -352,7 +402,9 @@ export interface GeminiWiringMemo {
 
 const geminiHookEvents = (invocation: string): Array<{ event: string; command: string }> => [
   { event: 'BeforeAgent', command: `${invocation} --event turn-start` },
-  { event: 'AfterAgent', command: `${invocation} --event done` }
+  { event: 'AfterAgent', command: `${invocation} --event done` },
+  // Proof-of-work (audit G1/G3) — the global twin of geminiSystemSettings' AfterTool hook.
+  { event: 'AfterTool', command: `${invocation} --event busy` }
 ]
 
 function geminiGeneral(obj: Record<string, unknown>): Record<string, unknown> {
@@ -369,16 +421,17 @@ export function geminiGlobalState(text: string | null, invocation: string): { st
     return { state: 'unreadable', reason: String((e as Error).message) }
   }
   const hooks = hooksMap(obj)
+  const events = geminiHookEvents(invocation)
   let exact = 0
   let ours = 0
-  for (const { event, command } of geminiHookEvents(invocation)) {
+  for (const { event, command } of events) {
     const entries = eventEntries(hooks, event)
     const mine = entries.filter(entryIsOurs)
     if (mine.length) ours++
     if (mine.some((entry) => (entry as { hooks?: Array<{ command?: unknown }> }).hooks?.some((h) => h?.command === command))) exact++
   }
   const chimeOn = geminiGeneral(obj).enableNotifications === true
-  if (exact === 2 && chimeOn) return { state: 'applied' }
+  if (exact === events.length && chimeOn) return { state: 'applied' }
   if (ours > 0) return { state: 'partial' }
   return { state: 'not-applied' }
 }

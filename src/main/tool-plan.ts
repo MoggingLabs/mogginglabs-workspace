@@ -5,6 +5,7 @@ import { MCP_MANAGED_BY, type AgentConfigValue, type HostedCliId, type McpServer
 import { composePlanEntries, findWriter, materializePlanFor } from '@backend/features/integrations'
 import { jsoncCodec, tomlCodec } from '@backend/features/agent-settings'
 import { configMutationCoordinator } from '@backend/core/config-files'
+import { verifyConnectionsForLaunch } from './connections'
 import { getToolPlan, hasToolPlan } from './integrations'
 import { houseServerEntry, listServers } from './mcp-manager'
 
@@ -79,6 +80,14 @@ export async function materializeToolPlanAtLaunch(req: {
   const workspaceId = req.workspaceId
   const plan = getToolPlan(req.workspaceId)
   const entries = composePlanEntries(plan, cli, listServers(), houseServerEntry())
+  // Pre-launch verify (phase-tools/03, trigger 3): the plan carries connected tools —
+  // verify them BEFORE the env materializes, parallel under a hard ~2s budget. The
+  // launch never waits past the budget and is never refused by a probe: a slow or
+  // failing verification lands as card status afterward, not as a lost pane. This is
+  // the seam because it is where the plan becomes launch env — a connection entry's
+  // command is our bridge shim, recognizable by its `--connection <id>` argument.
+  const connectionIds = entries.filter((e) => e.args?.[0] === '--connection').map((e) => e.id)
+  if (connectionIds.length) await verifyConnectionsForLaunch(connectionIds)
   const mat = materializePlanFor({
     cli,
     entries,

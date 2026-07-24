@@ -1,0 +1,237 @@
+// The tool card (ADR 0020, phase-tools/05): one TOOL = one card, whichever route
+// holds its credential — and every sentence the card speaks is written HERE, so no
+// surface can word the same fact two ways. The TOOLCARDS gate bites the merge and
+// the chooser directly (both carry TEST-ONLY mutation knobs it proves live).
+
+import type { Connection } from './connections'
+import type { McpServerEntry } from './registry'
+import type { McpConnState, McpStatusSnapshot } from './status'
+import type { ProviderEntry, ProviderMethod, ProviderMethodKind } from './provider-catalog'
+
+// ── The status tag: exactly four (ADR 0020 Appendix A) ───────────────────────
+
+export type ToolStatusKind = 'connected' | 'attention' | 'off' | 'connecting'
+export interface ToolStatusTag {
+  kind: ToolStatusKind
+  text: string
+}
+
+/** The connection-route tag. `verifiedAt` (phase-tools/03) makes "Connected" a
+ *  sentence about THIS quarter-hour — the continuous re-verify differentiator. */
+export function connectionStatusTag(c: Pick<Connection, 'state' | 'verifiedAt'>, now: number = Date.now()): ToolStatusTag {
+  switch (c.state) {
+    case 'connected': {
+      if (!c.verifiedAt) return { kind: 'connected', text: '✓ Connected' }
+      const mins = Math.max(0, Math.round((now - c.verifiedAt) / 60_000))
+      return { kind: 'connected', text: `✓ Connected · verified ${mins}m ago` }
+    }
+    case 'connecting':
+      return { kind: 'connecting', text: 'Connecting…' }
+    case 'expired':
+    case 'error':
+      return { kind: 'attention', text: 'Needs attention' }
+    default:
+      return { kind: 'off', text: 'Not connected' }
+  }
+}
+
+// ── The merge: one tool = one card, whichever route holds its credential ─────
+
+export interface ToolCardRow {
+  /** The merge key: the catalog service id (a registry row shares it). */
+  id: string
+  label: string
+  /** The app-held route (ADR 0014), when this service has a connection card. */
+  connection?: Connection
+  /** The CLI-owned route: a registry row that is NOT the app's own bridge fanout
+   *  (a bridge row is the connection wearing its server clothes — same tool). */
+  server?: McpServerEntry
+  /** Claude Code's own read of the CLI route (phase-8/11 status), when applied. */
+  cliState?: McpConnState
+}
+
+const isBridgeRow = (s: McpServerEntry): boolean => Array.isArray(s.args) && s.args[0] === '--connection'
+
+/**
+ * Merge the two routes into one row per service id. A service connected through
+ * the app AND applied on a CLI is ONE tool with two facts, never two cards.
+ * `_testBreakMergeKey` is TEST-ONLY (the TOOLCARDS mutation-red): it keys by
+ * route as well, which is exactly the two-cards-for-one-tool regression.
+ */
+export function mergeToolCards(
+  connections: readonly Connection[],
+  servers: readonly McpServerEntry[],
+  snapshot: McpStatusSnapshot | null,
+  o: { _testBreakMergeKey?: boolean } = {}
+): ToolCardRow[] {
+  const rows = new Map<string, ToolCardRow>()
+  const keyOf = (id: string, route: string): string => (o._testBreakMergeKey ? `${id}:${route}` : id)
+  for (const c of connections) {
+    rows.set(keyOf(c.id, 'conn'), { id: c.id, label: c.label, connection: c })
+  }
+  for (const s of servers) {
+    if (s.builtIn) continue // the house server is not a tool card
+    const key = keyOf(s.id, 'cli')
+    const row = rows.get(key) ?? { id: s.id, label: s.label }
+    // The CLI's own read applies to EVERY registry row, the bridge included — a
+    // hand-edited bridge entry is exactly a config that needs fixing. Only the
+    // route FACTS (the "also carried CLI-owned" line, the ${VAR} slots) are
+    // reserved for non-bridge rows: the bridge is the connection wearing its
+    // config clothes, not a second route.
+    const cli = snapshot?.statuses.find((x) => x.serverId === s.id && x.cli === 'claude-code')
+    if (cli && cli.state !== 'off') row.cliState = cli.state
+    if (!isBridgeRow(s)) row.server = s
+    rows.set(key, row)
+  }
+  return [...rows.values()]
+}
+
+/** The row's ONE status tag: the app-held route's truth wins (it is verified by
+ *  our own engine); the CLI route's read stands in only when that is all there is. */
+export function toolCardTag(row: ToolCardRow, now: number = Date.now()): ToolStatusTag {
+  if (row.connection && row.connection.state !== 'disconnected') return connectionStatusTag(row.connection, now)
+  if (row.cliState === 'connected') return { kind: 'connected', text: '✓ Connected' }
+  if (row.cliState === 'needs-auth' || row.cliState === 'error' || row.cliState === 'drift') {
+    return { kind: 'attention', text: 'Needs attention' }
+  }
+  if (row.connection) return connectionStatusTag(row.connection, now)
+  return { kind: 'off', text: 'Not connected' }
+}
+
+// ── Group cards: one PRODUCT = one card (2026-07-24, user-driven) ────────────
+// Thirteen Cloudflare capabilities are one tool in the user's head. The catalog
+// already models the family (`group`); this layer folds a family's rows into ONE
+// grid card whose members render as capabilities in the detail. Singletons pass
+// through untouched. Connecting stays per capability underneath — each grant is
+// its own resource by OAuth law — but the client registration and sign-in server
+// are issuer-shared, so the first consent covers the family's registration and
+// later capabilities usually approve silently.
+
+/** Display names for catalog groups — data, so no surface title-cases an id. */
+export const GROUP_LABELS: Readonly<Record<string, string>> = {
+  cloudflare: 'Cloudflare',
+  'google-workspace': 'Google Workspace'
+}
+
+export interface ToolCardGroup {
+  /** The grid key: the catalog `group`, or the lone member's id. */
+  key: string
+  label: string
+  /** Family members in roster order. length === 1 means render the plain card. */
+  members: ToolCardRow[]
+}
+
+/** Worst-wins aggregation: a family with one broken capability NEEDS you, a family
+ *  with one live capability IS connected — silence never outranks an alarm. */
+export function groupTag(members: readonly ToolCardRow[], now: number = Date.now()): ToolStatusTag {
+  const tags = members.map((m) => toolCardTag(m, now))
+  const pick = (kind: ToolStatusKind): ToolStatusTag | undefined => tags.find((t) => t.kind === kind)
+  return pick('attention') ?? pick('connecting') ?? pick('connected') ?? { kind: 'off', text: 'Not connected' }
+}
+
+/**
+ * Fold merged rows into product groups. `groupOf` names each row's family (the
+ * catalog's `group`, absent = the row is its own family). `_testBreakGroupKey` is
+ * TEST-ONLY (the TOOLCARDS mutation-red): it keys every row by its own id, which
+ * is exactly the thirteen-cards-for-one-product regression this layer kills.
+ */
+export function groupToolCards(
+  rows: readonly ToolCardRow[],
+  groupOf: (id: string) => string | undefined,
+  o: { _testBreakGroupKey?: boolean } = {}
+): ToolCardGroup[] {
+  const groups = new Map<string, ToolCardGroup>()
+  for (const row of rows) {
+    const key = o._testBreakGroupKey ? row.id : (groupOf(row.id) ?? row.id)
+    const g = groups.get(key) ?? { key, label: GROUP_LABELS[key] ?? row.label, members: [] }
+    g.members.push(row)
+    groups.set(key, g)
+  }
+  return [...groups.values()]
+}
+
+// ── The chooser (ADR 0020 Appendix A, verbatim) ──────────────────────────────
+
+export const CHOOSER_LABELS: Readonly<Record<ProviderMethodKind, string>> = {
+  oauth: 'Sign in with your browser',
+  apiKey: 'Paste an API key',
+  cliOwned: 'Let Claude Code sign in itself (advanced)',
+  none: 'Connect'
+}
+
+/** The one-line custody subtitles — fine print, where mechanism words are legal. */
+export const CUSTODY_SUBTITLES: Readonly<Record<ProviderMethodKind, string>> = {
+  oauth: 'Held by this app, encrypted by your OS keychain — never written into any CLI config.',
+  apiKey: 'Pasted once, encrypted by your OS keychain, referenced as ${NAME}.',
+  cliOwned: 'Claude Code holds its own credential; the app brokers nothing on this route.',
+  none: 'No account needed — connecting makes it available to your agents.'
+}
+
+export interface ChooserRow {
+  key: string
+  kind: ProviderMethodKind
+  label: string
+  subtitle: string
+  method: ProviderMethod
+}
+
+/**
+ * The catalog's methods in rank order, worded by the ADR table. `_testBreakRank`
+ * is TEST-ONLY (the TOOLCARDS mutation-red): it reverses the order, which is
+ * exactly the wrong-method-first regression the gate must catch.
+ */
+export function chooserMethods(entry: ProviderEntry, o: { _testBreakRank?: boolean } = {}): ChooserRow[] {
+  const ranked = [...entry.methods].sort((a, b) => (o._testBreakRank ? b.rank - a.rank : a.rank - b.rank))
+  return ranked.map((m) => ({
+    key: m.key,
+    kind: m.kind,
+    label: CHOOSER_LABELS[m.kind],
+    subtitle: CUSTODY_SUBTITLES[m.kind],
+    method: m
+  }))
+}
+
+// ── The silent reconciler's sentences (ADR 0020 Appendix A, phase-tools/06) ──
+// Drift/apply/adopt is MACHINERY vocabulary; the user sees a tool whose Claude
+// Code config needs fixing, and a Fix button. One sentence, one primary verb, one
+// quiet secondary — written here so no surface can word them twice.
+
+export type CliFixFlavor = 'edited' | 'missing'
+
+export const FIX_SENTENCES: Readonly<Record<CliFixFlavor, { sentence: string; secondary: string }>> = {
+  edited: {
+    sentence: 'Claude Code’s config for this tool was edited by hand.',
+    secondary: 'Keep my edit'
+  },
+  missing: {
+    sentence: 'Claude Code’s config for this tool was removed outside the app.',
+    secondary: 'Forget this tool on Claude Code'
+  }
+}
+
+/** The diff preview keeps its trust-artifact role under a plain title. */
+export const FIX_PREVIEW_TITLE = 'What Fix will change'
+
+/** The backups line, plainly worded. */
+export const backupsLine = (latest: string): string => `We keep backups — latest: ${latest}`
+
+// ── Humanized scopes (Metorial): titles rendered, raw kept, nothing hidden ───
+
+export interface HumanScope {
+  scope: string
+  title: string
+  /** False when the catalog knew this scope — true for a granted-but-uncataloged
+   *  scope, which renders as its raw string rather than being hidden. */
+  fallback: boolean
+}
+
+export function humanizeScopes(entry: ProviderEntry | undefined, granted: readonly string[]): HumanScope[] {
+  const titles = new Map<string, string>()
+  for (const m of entry?.methods ?? []) {
+    for (const s of m.scopes ?? []) if (s.title?.trim()) titles.set(s.scope, s.title.trim())
+  }
+  return granted.map((scope) => {
+    const title = titles.get(scope)
+    return title ? { scope, title, fallback: false } : { scope, title: scope, fallback: true }
+  })
+}
