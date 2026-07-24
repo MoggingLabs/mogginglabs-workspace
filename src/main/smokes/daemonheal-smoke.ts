@@ -14,6 +14,11 @@
 //   C. UN-QUIESCE → SELF-HEAL   endDaemonQuiescence() alone — no restart, no user action —
 //      must let the already-running retry loop seat a fresh daemon and go 'connected'.
 //      This is the fix for the one-way latch: before it, B's state was FOREVER.
+//   D. A PANE SPAWN THAT CANNOT START IS ANSWERED   an `ensure()` that throws must come back
+//      as a named refusal the client can act on. Unguarded it unwound the socket's data pump,
+//      which costs the rest of that chunk's frames AND tells the asker nothing.
+//   E. A DAEMON SPAWN THAT CANNOT START REJECTS   the same claim for the daemon process itself:
+//      a dead helper executable must reject, never re-throw an 'error' event into fatal().
 //
 // Windowless on purpose: the relay takes a WebContents GETTER and tolerates null (renderer
 // events are simply unsent), and daemon health is read straight off runtime-health's state.
@@ -86,6 +91,9 @@ export async function runDaemonHealSmoke(): Promise<void> {
   }, 150_000)
 
   const r: Record<string, unknown> = {}
+  // Testimony, not an assertion: `r` is boolean-only (the verdict is `every(v === true)`), so
+  // the refusal STRING that act D read rides alongside it in the result file.
+  let spawnRefusal = ''
   let dispose: (() => void) | null = null
   try {
     dispose = await startDaemonBackend(() => null)
@@ -129,6 +137,34 @@ export async function runDaemonHealSmoke(): Promise<void> {
     const log2 = readClientLog()
     r.quiesceJournaled = log2.includes('quiesce-begin') && log2.includes('quiesce-end')
 
+    // ── D. a pane spawn that CANNOT start must be ANSWERED, not swallowed ────────────────
+    // The daemon-process twin of act E, one level down. `ensure()` throws for real causes (the
+    // persisted shell is gone, ConPTY refuses, the cwd is unmounted) and the throw unwinds
+    // through the socket's data pump: the daemon survives on uncaughtException, but the framer
+    // has already advanced past this chunk's other frames and the asking client is told
+    // NOTHING — it falls to its own 5s timeout for a pane the daemon decided about instantly.
+    // The seam (MOGGING_DAEMON_SPAWN_FAIL_ID, inert unless it names this exact id) makes a real
+    // throw drivable; the assertion reads WHICH error came back, so it does not rest on timing.
+    {
+      const client = getDaemonClient()
+      const probeId = 'spawnfail-probe'
+      let refusal = ''
+      try {
+        if (!client) throw new Error('no daemon client after heal')
+        await client.spawn(probeId, { cwd: os.homedir() }, 4000)
+        refusal = 'RESOLVED — the armed spawn did not fail at all'
+      } catch (e) {
+        refusal = e instanceof Error ? e.message : String(e)
+      }
+      // The seam has to be ARMED for any of this to mean anything (a gate that silently lost
+      // its env would otherwise read as a pass).
+      r.spawnFailArmed = process.env.MOGGING_DAEMON_SPAWN_FAIL_ID === probeId
+      // The named refusal IS the claim: pre-fix the client can only report its own silence.
+      r.spawnFailureAnswered = /spawnfailed/.test(refusal)
+      r.spawnFailureNotSilence = !/did not answer/.test(refusal)
+      spawnRefusal = refusal
+    }
+
     // ── Cleanup: stop the loop FIRST, then prove the last daemon dead ────────────────────
     dispose()
     dispose = null
@@ -139,7 +175,7 @@ export async function runDaemonHealSmoke(): Promise<void> {
       r.cleanedUp = retired && !isAlive(ep3.pid)
     }
 
-    // ── D. a spawn that CANNOT start must reject, never take the app down ────────────────
+    // ── E. a DAEMON spawn that cannot start must reject, never take the app down ─────────
     // `spawn` reports a missing/unopenable executable asynchronously via an 'error' event,
     // and an 'error' with no listener is re-thrown by EventEmitter — straight into boot.ts's
     // uncaughtException -> fatal() -> app.exit(1). The reachable causes are all background
@@ -164,7 +200,7 @@ export async function runDaemonHealSmoke(): Promise<void> {
     }
 
     const pass = Object.entries(r).every(([, v]) => v === true)
-    write({ pass, ...r })
+    write({ pass, ...r, spawnRefusal })
     app.exit(pass ? 0 : 1)
   } catch (e) {
     try {

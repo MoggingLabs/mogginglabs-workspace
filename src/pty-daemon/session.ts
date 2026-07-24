@@ -1073,6 +1073,13 @@ export class SessionManager {
     // A legacy/corrupt restore may have lost SSH identity. The app's resolved remote spec is
     // authoritative; keeping the local impostor would both misroute input and enable local Git.
     if (existing) this.remove(id)
+    // Failure-injection seam for the spawn-refusal gate: the pane-spawn twin of
+    // MOGGING_DAEMON_SPAWN_DELAY_MS, and inert in production for the same reason. It names ONE
+    // pane id rather than arming a count, so a gate can drive a spawn that throws for real
+    // without disturbing any other pane this daemon is serving.
+    if (process.env.MOGGING_DAEMON_SPAWN_FAIL_ID && process.env.MOGGING_DAEMON_SPAWN_FAIL_ID === id) {
+      throw new Error(`injected spawn failure for pane ${id}`)
+    }
     // `pane` is referenced lazily by the hook (onExit fires long after construction).
     const pane: PaneSession = new PaneSession(
       id,

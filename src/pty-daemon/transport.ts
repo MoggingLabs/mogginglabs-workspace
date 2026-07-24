@@ -182,7 +182,25 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           }
           const spawn = (): void => {
             if (sock.destroyed) return
-            const { pane, existed } = sessions.ensure(m.id, spec)
+            let ensured: { pane: PaneSession; existed: boolean }
+            try {
+              ensured = sessions.ensure(m.id, spec)
+            } catch (e) {
+              // A spawn throws for real: the persisted shell or ssh binary is gone, ConPTY
+              // refuses below its build floor, the cwd is on an unmounted volume. Unguarded it
+              // unwinds through the socket's data pump, and PaneSession.writePty already
+              // documents what that costs — the daemon survives on uncaughtException, but
+              // createLineFramer has ALREADY advanced past this chunk's remaining frames, so
+              // other panes' input and resizes are dropped for good. The asking client is told
+              // nothing and waits out its own 5s spawn timeout, and since `ensure` removes a
+              // mismatched predecessor BEFORE it spawns, that silence can also be hiding a
+              // working session it just killed. `restore()` has had this isolation since the
+              // bad row that took the whole boot loop down; the spawn door never got it.
+              log(`spawn REFUSED for pane ${m.id}: ${e instanceof Error ? e.message : String(e)}`)
+              send({ t: 'error', reason: 'spawnfailed', id: m.id })
+              return
+            }
+            const { pane, existed } = ensured
             // Reply FIRST, then bind: subscribe() synchronously replays state/cwd, and the
             // client gates every pane event on the generation it learns from `spawned` — a
             // replay arriving ahead of the gen would be dropped as stale. Same tick either

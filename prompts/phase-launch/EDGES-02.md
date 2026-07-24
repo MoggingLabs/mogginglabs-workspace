@@ -37,9 +37,11 @@ built, verified three ways:
 | 5 · 9 · 11 | huge — a 2k-line bracketed paste | **F001** · every CR counted as a submitted command, in both write twins. Stuck `pendingSubmits` (permanent probe storm) and stuck `commandActive` (background `git` relabels the pane cwd). Unit red on pre-fix bytes. |
 | 41 | malformed — an inherited provider pointer | **F002** · `GEMINI_CLI_HOME` and opencode's four reads escaped `isolatedEnv`. Now derived from the registry; two bites. |
 | 16 | huge — machine budget saturated | **F003** · every cross-workspace move refused, picker all "Full". MOVEPANE red on pre-fix bytes. |
-| 9 | offline/absent — the clipboard is locked | **F004** · `restore` claimed "Copied" and reordered the ring after a silent no-op. CLIPBOARD red on pre-fix bytes. |
+| 8 | offline/absent — the clipboard is locked | **F004** · `restore` claimed "Copied" and reordered the ring after a silent no-op. CLIPBOARD red on pre-fix bytes. |
 | 89 | concurrent — a double-clicked Restart | **F015** · handed off to quitAndInstall twice against a locked exe. UPDATEOFFLINE red on pre-fix bytes. |
 | 89 | offline/absent — a later check retracts a downloaded update | **F014** · a background check clobbered a `ready` update to idle. UPDATEOFFLINE red on pre-fix bytes, both pieces. |
+| 27 | offline/absent — the pane's shell binary is gone | **F025** · `ensure()` spawned unguarded, so the throw unwound the socket's data pump: this chunk's remaining frames discarded, and the asking client told nothing until its own 5s timeout — over a session `ensure` had already removed. DAEMONHEAL red on pre-fix bytes (silence instead of `spawnfailed`). |
+| 26 | offline/absent — a reused pid vouches for a dead socket | **F024** · off Windows, liveness reduced to `isAlive(pid)`, so a post-reboot stale endpoint was trusted and the app fell back to in-proc PERMANENTLY. DAEMONCUSTODY red on pre-fix bytes, all three corpse assertions. |
 | 28 | offline/absent — a daemon wedged before welcome | **F023** · connect() leaked a socket per timeout, collecting phantom authed clients that froze retire + idle shutdown. HEARTBEAT red on pre-fix bytes. |
 | 80 | huge — a screen reader in a stacked modal | **F022** · the outer modal stayed reachable beneath the top one. A11YMODAL red on pre-fix bytes. |
 | 80 | huge — many stacked modals | **F021** · one Escape closed the whole stack, discarding the inner confirm's context. A11YMODAL red on pre-fix bytes. |
@@ -122,23 +124,18 @@ Each is verified against the code with a concrete failure scenario. None is in
 `defer` for them is exactly what `RUBRIC.md` forbids. This list is the honest
 remainder of step 02.
 
-**S1**
-
-
-- `SessionManager.ensure()` spawns unguarded: an unspawnable pane kills the old session and
-  answers nothing, so the client waits out its 5s timeout instead of getting a named
-  refusal · `session.ts:1077`
-- endpoint liveness fails OPEN on POSIX pid reuse — after an unclean reboot a Mac can be
-  permanently unable to seat a daemon · `daemon-client.ts:65`, `pid.ts:32`
+**S1** — none. Both former entries are now filed and bite-proven: the unguarded
+`SessionManager.ensure()` spawn is **F025**, and the POSIX pid-reuse corpse is **F024**. The
+corpse fix had in fact been WRITTEN with its DAEMONCUSTODY act already in place and was never
+routed to `FINDINGS.md` — work done but unbanked, which reads identically to work not done. The
+ledger, not the diff, is what makes a row derive A.
 
 **S2**
 
+Two entries stood here that were already closed and never struck: the scope-blind
+`rememberKey` (**F013**) and `undoMovePane`'s dead rail tab (**F011**). A stale OPEN list
+overstates the remainder as surely as a missing finding understates it.
 
-
-- the `permission-bypass` confirm's `rememberKey` is scope-blind: a session skip granted for
-  one project suppresses the machine-wide prompt · `agent-config.ts:418`
-- `undoMovePane` revives the source workspace before it knows the detach can succeed,
-  leaving a permanently dead rail tab · `controller.ts:1611`
 - `applyResolvedLayout` commits `paneCount` before an apply that can refuse, stranding a
   manifest that cannot be restored · `controller.ts:1155`.
   ATTEMPTED and REVERTED. The fix (commit only when `apply()` did not return false) and a

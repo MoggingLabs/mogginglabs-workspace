@@ -129,6 +129,9 @@ run_smoke() {
   local extra=""
   [ "$name" = "FIRSTRUN" ] && extra="MOGGING_FAKE_UPDATE=9.9.9"
   [ "$name" = "ROLERACE" ] && extra="MOGGING_DAEMON_SPAWN_DELAY_MS=2500"
+  # DAEMONHEAL act D drives a pane spawn that THROWS. The seam names ONE pane id, so the
+  # daemon's other panes — and this gate's own acts A-C — are untouched by it.
+  [ "$name" = "DAEMONHEAL" ] && extra="MOGGING_DAEMON_SPAWN_FAIL_ID=spawnfail-probe"
   [ "$name" = "CWD_INPROC" ] && extra="MOGGING_INPROC=1"
   # MOVEPANE's last phase needs the MACHINE term of the pane budget to BIND, which the
   # harness box (16 cores -> 32) never does: geometry caps first, and the move-door
