@@ -119,9 +119,13 @@ export function runUsageSmoke(win: BrowserWindow): void {
         }
         return -1
       }
-      win.minimize()
+      // hide/show, not minimize/restore: minimize is a WINDOW-MANAGER operation
+      // and xvfb (linux CI) runs no WM — the event never fires there (run
+      // 30119138843: pauseTookMs -1 on ubuntu). hide/show are app-level, fire
+      // on every platform, and ride the same product handlers.
+      win.hide()
       const pauseTookMs = await waitVisible(false)
-      win.restore()
+      win.show()
       const resumeTookMs = await waitVisible(true)
       const wiringOk = pauseTookMs >= 0 && resumeTookMs >= 0
       //

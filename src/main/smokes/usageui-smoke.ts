@@ -80,9 +80,27 @@ export function runUsageUiSmoke(win: BrowserWindow): void {
       // open latency <100ms perceived (click -> painted, double-rAF). Median of 3
       // open/close cycles — a single cold sample is noisy under the full-sweep tail.
       const opens: number[] = []
+      // ISOLATE each sample: open() fires two async refreshes (usage + profiles)
+      // that repaint IN PLACE when they land — a back-to-back reopen's double-rAF
+      // fence otherwise measures the PREVIOUS open's refresh tail, not the reopen
+      // (macos-26 run 30119138843: cold 36ms, reopens 546/611ms — the backlog,
+      // not the popover; a user's reopen has no in-flight backlog). Wait for
+      // frame stability (two consecutive <34ms frames) before each sample.
+      const frameCalm = `new Promise((res) => {
+        const t0 = performance.now()
+        let last = t0, calm = 0
+        const step = () => {
+          const now = performance.now()
+          calm = now - last < 34 ? calm + 1 : 0
+          last = now
+          if (calm >= 2 || now - t0 > 8000) return res(1)
+          requestAnimationFrame(step)
+        }
+        requestAnimationFrame(step)
+      })`
       for (let i = 0; i < 3; i++) {
         await ES(`window.__mogging.usage.close()`)
-        await sleep(60)
+        await ES(frameCalm)
         opens.push(
           await ES<number>(`new Promise((res) => {
             const t0 = performance.now()

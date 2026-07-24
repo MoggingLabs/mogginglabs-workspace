@@ -114,9 +114,25 @@ export function runUsageGlanceSmoke(win: BrowserWindow): void {
       // ── (b) open latency <100ms (median of 3, double-rAF) ──
       stage = 'b-open'
       const opens: number[] = []
+      // ISOLATE each sample: open() fires async refreshes that repaint in place
+      // when they land — a back-to-back reopen's double-rAF fence otherwise
+      // measures the PREVIOUS open's refresh tail, not the reopen (the USAGEUI
+      // lesson, macos-26 run 30119138843). Frame stability before each sample.
+      const frameCalm = `new Promise((res) => {
+        const t0 = performance.now()
+        let last = t0, calm = 0
+        const step = () => {
+          const now = performance.now()
+          calm = now - last < 34 ? calm + 1 : 0
+          last = now
+          if (calm >= 2 || now - t0 > 8000) return res(1)
+          requestAnimationFrame(step)
+        }
+        requestAnimationFrame(step)
+      })`
       for (let i = 0; i < 3; i++) {
         await ES(`window.__mogging.usage.close()`)
-        await sleep(60)
+        await ES(frameCalm)
         opens.push(
           await ES<number>(`new Promise((res) => {
             const t0 = performance.now()

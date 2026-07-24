@@ -80,27 +80,31 @@ const SCRIPT = `(async () => {
   const panes = (m.panes || []).slice(0, 8)
   if (panes.length < 8) return { pass: false, error: 'expected 8 panes, got ' + panes.length }
   await sleep(2200) // shells reach prompts
-  for (const p of panes) p.write('echo FLICK_' + p.id + '_END' + CR)
   // MARKER-based readiness, never a clock: on a 2-core runner the last shells of
   // an 8-pane spawn wave are still initializing past any fixed sleep, the echoed
-  // line gets eaten by shell init, and every downstream assert starves (macos-26
-  // run 30110485956: panes 6-7 hasOwn=false with ZERO foreign bytes — the fill
-  // never landed, nothing was "lost"). Wait for each pane's own marker; re-send
-  // once at half budget for shells that ate the first line.
-  for (let i = 0; i < 50; i++) {
-    const missing = panes.filter((p) => p.text().indexOf('FLICK_' + p.id + '_END') < 0)
-    if (missing.length === 0) break
-    if (i === 25) for (const p of missing) p.write('echo FLICK_' + p.id + '_END' + CR)
-    await sleep(400)
+  // line gets eaten by shell init (or dropped pre-PTY-attach), and every
+  // downstream assert starves. Re-send PERIODICALLY (~5s cadence, not once at
+  // half budget — macos-26 run 30119138843's pane 5 attached after the single
+  // resend and starved anyway), generous 30s cap.
+  const fillWait = async (suffix, capIters) => {
+    for (let i = 0; i < capIters; i++) {
+      const missing = panes.filter((p) => p.text().indexOf('FLICK_' + p.id + '_' + suffix) < 0)
+      if (missing.length === 0) return true
+      if (i % 12 === 0) for (const p of missing) p.write('echo FLICK_' + p.id + '_' + suffix + CR)
+      await sleep(400)
+    }
+    return panes.every((p) => p.text().indexOf('FLICK_' + p.id + '_' + suffix) >= 0)
   }
-  await sleep(600) // let the marker's own echo settle before the baseline snapshot
+  // TWO markers bracket each pane's content: TOP proves the head of the buffer
+  // survives churn, END the tail. The old baseline-substring claim asserted
+  // SHELL COSMETICS were stable — zsh legally redraws its prompt/partial-line
+  // glyphs between snapshots (macos-26 run 30119138843: pane 7 kept its marker
+  // and its line count yet "lost" its baseline bytes to a prompt redraw). The
+  // no-buffer-loss claim is the MARKERS surviving, not the cosmetics between.
+  const fillReadyTop = await fillWait('TOP', 75)
+  const fillReadyEnd = await fillWait('END', 75)
+  await sleep(600) // let the marker echoes settle before the baseline snapshot
   const baseLines = panes.map((p) => p.bufferLines())
-  // The buffer-survival baseline is CONTENT, not line count: reflow (a pane
-  // remeasured wider merges wrapped lines — long runner hostnames wrap zsh
-  // prompts in narrow grid panes) legally shrinks the line count with zero
-  // loss. Found by the macOS CI sweep: 6/8 idle panes "lost" lines while
-  // every marker survived (run 28657760100).
-  const baseTexts = panes.map((p) => p.text().replace(/\\s+/g, ''))
   m.workspace.create({ name: 'Churn' })
   await sleep(900)
 
@@ -256,9 +260,11 @@ const SCRIPT = `(async () => {
       hasOwn: txt.indexOf('FLICK_' + p.id + '_END') >= 0,
       foreign: ids.filter((o) => o !== p.id && txt.indexOf('FLICK_' + o + '_END') >= 0),
       renderer: p.renderer(),
-      // Truncation loses characters; reflow only moves line breaks. The claim
-      // ("no buffer loss") is about characters. Line counts stay as diagnostics.
-      bufferKept: txt.replace(/\\s+/g, '').indexOf(baseTexts[i]) >= 0,
+      // Truncation loses characters; reflow only moves line breaks; a prompt
+      // redraw is COSMETIC. The no-buffer-loss claim is both bracket markers
+      // surviving the churn (head and tail of the pane's own content). Line
+      // counts stay as diagnostics.
+      bufferKept: txt.indexOf('FLICK_' + p.id + '_TOP') >= 0 && txt.indexOf('FLICK_' + p.id + '_END') >= 0,
       lines: [baseLines[i], p.bufferLines()]
     }
   })
@@ -490,9 +496,11 @@ const SCRIPT = `(async () => {
     jumpHidden
   }
 
-  const pass = contentIntact && buffersKept && webglBack === 8 && smooth &&
+  const pass = fillReadyTop && fillReadyEnd && contentIntact && buffersKept && webglBack === 8 && smooth &&
     dwell.pass && wsLeasing.pass && synchronizedOutput.pass && scrollbar.pass
-  return { pass, churn, zoom, dwell, wsLeasing, synchronizedOutput, scrollbar, webglBack, contentIntact, buffersKept, results }
+  // smooth was a pass conjunct that never rode the result — a frame-gap red
+  // printed NOTHING false and read as a mystery. Every conjunct is visible now.
+  return { pass, fillReadyTop, fillReadyEnd, smooth, churn, zoom, dwell, wsLeasing, synchronizedOutput, scrollbar, webglBack, contentIntact, buffersKept, results }
 })()`
 
 export function runFlickerSmoke(win: BrowserWindow): void {
