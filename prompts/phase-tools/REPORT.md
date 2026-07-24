@@ -91,3 +91,20 @@ buttons with zero handlers (TOOLCARDS (f) dispatches clicks and asserts nothing
 invokes). Backend three-CLI truth untouched: detection, capability table, writers,
 plan matrix all still speak all three; codex/gemini config drift is detected and
 deliberately surfaces nowhere (TOOLFIX (e)).
+
+## Post-pack addendum (2026-07-24, user-driven): family cards + one-paste keys
+
+Live testing surfaced two UX findings, both landed and folded into TOOLCARDS:
+
+- **Family cards.** Thirteen Cloudflare capabilities rendered as thirteen cards. The
+  grid now folds catalog `group` families into ONE product card (aggregate tag,
+  worst state wins; members render WHOLE in the fold — chooser, identity, Fix,
+  scoping all intact). Singletons unchanged. TOOLCARDS (g): one family node, two
+  member cards in the fold, and the `_testBreakGroupKey` mutation-red proven live.
+- **One paste, every route.** A key that connects the app-held route is now also
+  vaulted under the catalog's env slot name, so every `${SLOT}` reference on the
+  CLI-owned route reads "saved" without a second paste (same vault, same custody).
+  TOOLCARDS (h) asserts the slot lands. For OAuth-only families (all of Cloudflare,
+  Google Workspace) a single global API key is impossible at the PROVIDER level —
+  their MCP endpoints accept no keys — but the issuer-shared client registration
+  already makes the first consent cover the family.

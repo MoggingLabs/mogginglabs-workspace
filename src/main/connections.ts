@@ -59,6 +59,7 @@ import { getEntitlements } from '@backend'
 import { getSettingsStore } from './app-settings'
 import { getCliRuntime } from './cli-runtime'
 import { mgrStatus } from './mcp-manager'
+import { serviceKeySet } from './service-keys'
 import { vaultAvailable, vaultClearKey, vaultLoad, vaultStore } from './vault'
 
 // The connection broker (ADR 0014). The app IS the OAuth client: it holds one
@@ -646,6 +647,19 @@ export async function submitKey(serviceId: string, value: string, baseUrl?: stri
     lastError: undefined
   })
   registerConnectionServer(serviceId)
+  // ONE PASTE, EVERY ROUTE (2026-07-24, user-driven): the same key, vaulted again
+  // under the catalog's env slot name (GITHUB_PAT, POSTHOG_API_KEY, …), so every
+  // ${SLOT} reference on the CLI-owned route reads "saved" without a second paste.
+  // Same vault, same custody, best-effort — a slot refusal never undoes the
+  // connection that just proved the key.
+  const slot = preset.envRefSlots[0]
+  if (slot) {
+    try {
+      serviceKeySet(slot, value.trim())
+    } catch {
+      /* the connection stands; the slot can be pasted on its own row */
+    }
+  }
   return { ok: true }
 }
 

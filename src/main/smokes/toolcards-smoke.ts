@@ -5,10 +5,11 @@ import { createHash, randomBytes } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { McpPreset, ProviderEntry } from '@contracts'
-import { chooserMethods, mergeToolCards, planHasServerForCli } from '@contracts'
+import { chooserMethods, groupToolCards, mergeToolCards, planHasServerForCli } from '@contracts'
 import { MCP_PRESETS, injectProviderEntryForSmoke, saveServer, type GrantKv } from '@backend/features/integrations'
-import { connect, listConnections, sweepConnections, verifyConnection, setAccountNote } from '../connections'
+import { connect, listConnections, submitKey, sweepConnections, verifyConnection, setAccountNote } from '../connections'
 import { listServers } from '../mcp-manager'
+import { serviceKeyNames } from '../service-keys'
 import { getToolPlan } from '../integrations'
 import { getSettingsStore } from '../app-settings'
 
@@ -188,8 +189,22 @@ export function runToolCardsSmoke(win: BrowserWindow): void {
         mk('cards-live', '/svc/live', ['none']),
         mk('cards-oauth', '/oauth-mcp', ['oauth']),
         mk('cards-nodcr', '/nodcr-mcp', ['oauth']),
-        mk('cards-choose', '/svc/choose', ['oauth', 'token'])
+        { ...mk('cards-choose', '/svc/choose', ['oauth', 'token']), envRefSlots: ['CARDS_KEY'] },
+        mk('cards-fama', '/svc/fama', ['none']),
+        mk('cards-famb', '/svc/famb', ['none'])
       )
+      // The FAMILY (2026-07-24): two capabilities of one product — the grid must
+      // fold them into ONE card whose members render in the fold.
+      for (const id of ['cards-fama', 'cards-famb']) {
+        injectProviderEntryForSmoke({
+          id,
+          label: id,
+          source: 'fixture://toolcards',
+          group: 'cards-fam',
+          mcp: { transport: 'http', url: `${origin}/svc/${id.slice(6)}` },
+          methods: [{ key: 'cli-owned', kind: 'cliOwned', name: 'Let Claude Code sign in itself (advanced)', rank: 90 }]
+        } as ProviderEntry)
+      }
       const CHOOSE_ENTRY: ProviderEntry = {
         id: 'cards-choose',
         label: 'cards-choose',
@@ -234,7 +249,7 @@ export function runToolCardsSmoke(win: BrowserWindow): void {
       } as ProviderEntry)
 
       // ── Connect the fixtures ─────────────────────────────────────────────────
-      for (const id of ['cards-dual', 'cards-live']) {
+      for (const id of ['cards-dual', 'cards-live', 'cards-fama']) {
         const r = await connect(id)
         if (!r.ok) throw new Error(`connect ${id} refused: ${r.reason}`)
       }
@@ -349,6 +364,25 @@ export function runToolCardsSmoke(win: BrowserWindow): void {
       const plan = getToolPlan(wsId)
       const scopingOk = planHasServerForCli(plan, 'cards-live', 'claude-code') && planHasServerForCli(plan, 'cards-live', 'codex')
 
+      // (g) THE FAMILY: one product card, members whole in the fold; broken group
+      // key = two cards (the mutation this layer exists to kill).
+      const familyOneCardOk = await waitTrue(`(() => {
+        const fams = document.querySelectorAll('.conn-family-card[data-group="cards-fam"]')
+        const loose = document.querySelectorAll('.conn-group-grid > .conn-card[data-connection="cards-fama"], .conn-group-grid > .conn-card[data-connection="cards-famb"]')
+        const chip = fams[0]?.querySelector('.conn-chip')?.textContent ?? ''
+        return fams.length === 1 && loose.length === 0 && chip.startsWith('✓ Connected')
+      })()`)
+      await ES(`(document.querySelector('.conn-family-card[data-group="cards-fam"] .conn-family-toggle')?.click(), 1)`)
+      const familyMembersOk = await waitTrue(`(() => {
+        const list = document.querySelector('.conn-family-card[data-group="cards-fam"] .conn-family-members')
+        return !!list && list.querySelectorAll('.conn-card[data-connection]').length === 2
+      })()`)
+      const famRows = mergeToolCards(listConnections(), listServers(), null).filter((r) => r.id.startsWith('cards-fam'))
+      const famGroupOf = (id: string): string | undefined => (id.startsWith('cards-fam') ? 'cards-fam' : undefined)
+      const mutationGroupRed =
+        groupToolCards(famRows, famGroupOf).length === 1 &&
+        groupToolCards(famRows, famGroupOf, { _testBreakGroupKey: true }).length === 2
+
       // (f) coming-soon rows: disabled, zero handlers — a dispatched click changes nothing.
       const serversBefore = listServers().length
       const planBefore = JSON.stringify(getToolPlan(wsId))
@@ -365,6 +399,12 @@ export function runToolCardsSmoke(win: BrowserWindow): void {
       await sleep(600)
       const nothingInvokedOk = listServers().length === serversBefore && JSON.stringify(getToolPlan(wsId)) === planBefore
 
+      // (h) ONE PASTE, EVERY ROUTE: a key that connects the app route also lands in
+      // the catalog's env slot, so the CLI-owned ${CARDS_KEY} reads saved. (Runs
+      // LAST — connecting cards-choose retires the chooser the earlier asserts read.)
+      const keyConn = await submitKey('cards-choose', 'key-anything')
+      const dualVaultOk = keyConn.ok && serviceKeyNames().includes('CARDS_KEY')
+
       result = {
         pass:
           oneCardOk &&
@@ -377,7 +417,15 @@ export function runToolCardsSmoke(win: BrowserWindow): void {
           scopesOk &&
           scopingOk &&
           comingSoonOk &&
-          nothingInvokedOk,
+          nothingInvokedOk &&
+          familyOneCardOk &&
+          familyMembersOk &&
+          mutationGroupRed &&
+          dualVaultOk,
+        familyOneCardOk,
+        familyMembersOk,
+        mutationGroupRed,
+        dualVaultOk,
         oneCardOk,
         mutationMergeRed,
         tagVerifiedOk,

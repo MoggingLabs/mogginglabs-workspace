@@ -9561,6 +9561,19 @@ body.pane-dragging * {
 .conn-setup-link {
   align-self: flex-start;
 }
+/* Family cards (2026-07-24): one product, capabilities in the fold. Member cards
+   render whole inside — indented, quieter border, nothing lost to the grouping. */
+.conn-family-card {
+  grid-column: 1 / -1; /* a family spans the grid row — it holds cards of its own */
+}
+.conn-family-members {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  padding-left: var(--sp-3);
+  border-left: 2px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
 
 /* ── Usage glance (Phase-7/03): titlebar two-bar gauge + popover ────────────── */
 .usage-wrap {

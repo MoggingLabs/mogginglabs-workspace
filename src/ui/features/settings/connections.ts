@@ -11,10 +11,13 @@ import {
   type CliFixFlavor,
   connectionScopes,
   connectionSummary,
+  groupTag,
+  groupToolCards,
   humanizeScopes,
   mergeToolCards,
   planHasServerForCli,
   toolCardTag,
+  type ToolCardGroup,
   ACCOUNT_NOTE_MAX,
   type Connection,
   type McpServerEntry,
@@ -137,21 +140,27 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
       return
     }
     // ONE tool = one card, whichever route holds its credential (phase-tools/05):
-    // the app-held connections and the CLI-owned registry rows merge by service id.
+    // the app-held connections and the CLI-owned registry rows merge by service id —
+    // and then families fold into ONE product card (2026-07-24): thirteen Cloudflare
+    // capabilities are one tool in the user's head, so they are one card in the grid.
     const rows = mergeToolCards(connections, servers, snapshot)
     const q = searchInput.value.trim().toLowerCase()
-    const visible = rows.filter((r) => !q || r.label.toLowerCase().includes(q) || r.id.includes(q))
+    const families = groupToolCards(rows, (id) => providers.get(id)?.group)
+    const familyMatches = (g: ToolCardGroup): boolean =>
+      !q || g.label.toLowerCase().includes(q) || g.members.some((m) => m.label.toLowerCase().includes(q) || m.id.includes(q))
+    const visible = families.filter(familyMatches)
     // "Known" gates the inventory's Not-connected group: a tool the user has TOUCHED
     // (a CLI-owned row, a pasted client, a note, a past grant) keeps its card; the
     // never-touched catalog stays in the Library, where browsing lives.
-    const known = (r: ToolCardRow): boolean =>
+    const knownRow = (r: ToolCardRow): boolean =>
       !!r.server || !!(r.connection && (r.connection.userClient || r.connection.accountNote || r.connection.connectedAt || r.connection.lastError))
-    const groups: { label: string; test: (r: ToolCardRow) => boolean }[] = [
-      { label: 'Connected', test: (r) => ['connected', 'connecting'].includes(toolCardTag(r).kind) },
-      { label: 'Needs attention', test: (r) => toolCardTag(r).kind === 'attention' },
+    const known = (g: ToolCardGroup): boolean => g.members.some(knownRow)
+    const groups: { label: string; test: (g: ToolCardGroup) => boolean }[] = [
+      { label: 'Connected', test: (g) => ['connected', 'connecting'].includes(groupTag(g.members).kind) },
+      { label: 'Needs attention', test: (g) => groupTag(g.members).kind === 'attention' },
       browse
-        ? { label: 'Available', test: (r) => toolCardTag(r).kind === 'off' }
-        : { label: 'Not connected', test: (r) => toolCardTag(r).kind === 'off' && known(r) }
+        ? { label: 'Available', test: (g) => groupTag(g.members).kind === 'off' }
+        : { label: 'Not connected', test: (g) => groupTag(g.members).kind === 'off' && known(g) }
     ]
     let any = false
     for (const g of groups) {
@@ -160,7 +169,14 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
       any = true
       grid.append(el('div', { class: 'section-label conn-group-label', text: `${g.label} · ${mine.length}` }))
       const groupGrid = el('div', { class: 'conn-group-grid' })
-      for (const r of mine) groupGrid.append(r.connection ? card(r.connection, r) : cliCard(r))
+      for (const fam of mine) {
+        if (fam.members.length === 1) {
+          const r = fam.members[0]
+          groupGrid.append(r.connection ? card(r.connection, r) : cliCard(r))
+        } else {
+          groupGrid.append(familyCard(fam))
+        }
+      }
       grid.append(groupGrid)
     }
     if (!any && q) grid.append(el('div', { class: 'menu-note', text: 'No service matches that filter.' }))
@@ -980,6 +996,46 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
       body,
       ...(actions.childNodes.length ? [actions] : [])
     ])
+  }
+
+  // ── The FAMILY card: one product, its capabilities in the fold ──────────────
+  // Cloudflare is one tool with thirteen capabilities, not thirteen tools. The
+  // header carries the family's one aggregate tag (worst wins) and the capability
+  // count; expanding renders each member's FULL card — chooser, identity, Fix,
+  // scoping, notes — so nothing a capability could do is lost to the fold. Sign-in
+  // stays per capability underneath (each grant is its own resource), but the
+  // client registration is issuer-shared, so the first consent covers the family.
+  const familyOpen = new Set<string>()
+  function familyCard(fam: ToolCardGroup): HTMLElement {
+    const tag = groupTag(fam.members)
+    const chip = el('span', { class: `conn-chip is-family is-tag-${tag.kind}`, text: tag.text, attrs: { 'data-status': tag.kind } })
+    const connectedN = fam.members.filter((m) => toolCardTag(m).kind === 'connected').length
+    const open = familyOpen.has(fam.key)
+    const toggle = el('button', {
+      class: 'conn-tools-toggle conn-family-toggle',
+      type: 'button',
+      text: `${open ? '▾' : '▸'} ${connectedN ? `${connectedN} of ${fam.members.length}` : `${fam.members.length}`} capabilities`,
+      attrs: { 'aria-expanded': String(open) }
+    }) as HTMLButtonElement
+    toggle.onclick = (): void => {
+      if (familyOpen.has(fam.key)) familyOpen.delete(fam.key)
+      else familyOpen.add(fam.key)
+      paint()
+    }
+    const head = el('div', { class: 'conn-card-head' }, [
+      providerLogo(fam.members[0].id, 16),
+      el('span', { class: 'conn-label', text: fam.label }),
+      chip
+    ])
+    const host = el('div', { class: 'conn-card conn-family-card', dataset: { group: fam.key } }, [head, toggle])
+    if (open) {
+      const list = el('div', { class: 'conn-family-members' })
+      for (const m of fam.members.sort((a, b) => a.label.localeCompare(b.label))) {
+        list.append(m.connection ? card(m.connection, m) : cliCard(m))
+      }
+      host.append(list)
+    }
+    return host
   }
 
   // ── The CLI-owned-only card: a tool with no app-held connection at all ──────

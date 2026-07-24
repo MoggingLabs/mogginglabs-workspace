@@ -98,6 +98,58 @@ export function toolCardTag(row: ToolCardRow, now: number = Date.now()): ToolSta
   return { kind: 'off', text: 'Not connected' }
 }
 
+// ── Group cards: one PRODUCT = one card (2026-07-24, user-driven) ────────────
+// Thirteen Cloudflare capabilities are one tool in the user's head. The catalog
+// already models the family (`group`); this layer folds a family's rows into ONE
+// grid card whose members render as capabilities in the detail. Singletons pass
+// through untouched. Connecting stays per capability underneath — each grant is
+// its own resource by OAuth law — but the client registration and sign-in server
+// are issuer-shared, so the first consent covers the family's registration and
+// later capabilities usually approve silently.
+
+/** Display names for catalog groups — data, so no surface title-cases an id. */
+export const GROUP_LABELS: Readonly<Record<string, string>> = {
+  cloudflare: 'Cloudflare',
+  'google-workspace': 'Google Workspace'
+}
+
+export interface ToolCardGroup {
+  /** The grid key: the catalog `group`, or the lone member's id. */
+  key: string
+  label: string
+  /** Family members in roster order. length === 1 means render the plain card. */
+  members: ToolCardRow[]
+}
+
+/** Worst-wins aggregation: a family with one broken capability NEEDS you, a family
+ *  with one live capability IS connected — silence never outranks an alarm. */
+export function groupTag(members: readonly ToolCardRow[], now: number = Date.now()): ToolStatusTag {
+  const tags = members.map((m) => toolCardTag(m, now))
+  const pick = (kind: ToolStatusKind): ToolStatusTag | undefined => tags.find((t) => t.kind === kind)
+  return pick('attention') ?? pick('connecting') ?? pick('connected') ?? { kind: 'off', text: 'Not connected' }
+}
+
+/**
+ * Fold merged rows into product groups. `groupOf` names each row's family (the
+ * catalog's `group`, absent = the row is its own family). `_testBreakGroupKey` is
+ * TEST-ONLY (the TOOLCARDS mutation-red): it keys every row by its own id, which
+ * is exactly the thirteen-cards-for-one-product regression this layer kills.
+ */
+export function groupToolCards(
+  rows: readonly ToolCardRow[],
+  groupOf: (id: string) => string | undefined,
+  o: { _testBreakGroupKey?: boolean } = {}
+): ToolCardGroup[] {
+  const groups = new Map<string, ToolCardGroup>()
+  for (const row of rows) {
+    const key = o._testBreakGroupKey ? row.id : (groupOf(row.id) ?? row.id)
+    const g = groups.get(key) ?? { key, label: GROUP_LABELS[key] ?? row.label, members: [] }
+    g.members.push(row)
+    groups.set(key, g)
+  }
+  return [...groups.values()]
+}
+
 // ── The chooser (ADR 0020 Appendix A, verbatim) ──────────────────────────────
 
 export const CHOOSER_LABELS: Readonly<Record<ProviderMethodKind, string>> = {
