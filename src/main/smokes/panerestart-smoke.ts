@@ -44,7 +44,11 @@ export function runPaneRestartSmoke(win: BrowserWindow): void {
    *  writes a diagnosable per-stage result. */
   const until = async (js: string, tries = 40, gapMs = 250): Promise<boolean> => {
     for (let i = 0; i < tries; i++) {
-      if (await ES<boolean>(js)) return true
+      // Throw-tolerant: the dead→restart window is EXACTLY when pane objects
+      // churn, and a poll landing mid-teardown throws in the renderer — which
+      // killed the whole smoke on ubuntu (run 30123386698: "Script failed to
+      // execute", zero diagnostics). A transient throw is just "not yet".
+      if (await ES<boolean>(js).catch(() => false)) return true
       await sleep(gapMs)
     }
     return false
@@ -53,8 +57,10 @@ export function runPaneRestartSmoke(win: BrowserWindow): void {
   const pane = (paneId: number): string => `(window.__mogging.panes || []).find(p => p.id === ${paneId})`
   /** De-wrapped buffer text: ConPTY reflow wraps output at the pane's live width, which
    *  splits any needle across rows (the BRAINMILESTONE capture trap) — every buffer
-   *  assert joins rows before matching. */
-  const joined = (paneId: number): string => `${pane(paneId)}.text().split('\\n').join('')`
+   *  assert joins rows before matching. Optional-chained: mid-restart the pane
+   *  entry (or its term) transiently vanishes, and a read then must be '' — not
+   *  a renderer TypeError that ends the run. */
+  const joined = (paneId: number): string => `((${pane(paneId)})?.text() ?? '').split('\\n').join('')`
 
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
@@ -127,18 +133,21 @@ export function runPaneRestartSmoke(win: BrowserWindow): void {
           10, 500
         )
       }
-      // In place, not wiped: the prior life's history is still in SCROLLBACK above. Three
-      // needles from different depths — the live-probe keystroke, the epitaph's head, and
-      // a line from DEEP in the seeded fill. Deliberately NOT the viewport's last rows: the
-      // fresh shell's boot frame repaints the screen area (that is a shell booting, not a
-      // wipe), and the exit code was asserted while the pane sat dead — when it matters.
-      // fill-60, not fill-1: the ring legally ROTATES under platform boot noise (macos-26
-      // run 30110485956 held fill-32 onward — zsh's chattier boot pushed the head out),
-      // and rotation-by-capacity is xterm behavior, not a restart wipe. Mid-fill proves
-      // history SURVIVED the restart on every platform's noise budget.
+      // In place, not wiped: the prior life's history is still in SCROLLBACK above.
+      // BOTH ends of the 120-line fill are legally mutable — the HEAD rotates out of
+      // the ring under platform boot noise (macos-26 runs 30110485956/30124737204
+      // rotated fill-1..31 plus live-probe and the epitaph — capacity, not a wipe;
+      // both facts are asserted at their own moments: spySawLive, exitCodeShown while
+      // the pane sat dead), and the TAIL sits in the respawned shell's boot-frame
+      // repaint zone (viewport repaint ≠ scrollback wipe — this smoke's founding trap;
+      // fill-110 died to it on a tall single-pane window). No fixed needle is safe at
+      // either end, so the claim is BULK SURVIVAL: a wipe keeps ~0 fill lines, a
+      // surviving buffer keeps the middle block — ≥40 distinct lines with margin on
+      // every platform's noise budget (mac kept ~58, windows ~90).
       const scrollbackKept = await ES<boolean>(
         `(() => { const t = ${joined(paneId)}; ` +
-        `return t.includes('live-probe') && t.includes('[process exit') && t.includes('fill-60-end') })()`
+        `const seen = new Set(); for (const m of t.matchAll(/fill-(\\d+)-end/g)) seen.add(m[1]); ` +
+        `return seen.size >= 40 })()`
       )
       const scrollbackTail = await ES<string>(`(() => { const p = ${pane(paneId)}; return p ? p.text().replace(/\\n+/g, '\\n').slice(-1500) : '' })()`)
       await ES(`(() => { delete window.__mogging.ptyWrites; return 1 })()`)

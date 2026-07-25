@@ -23,8 +23,18 @@ const SCRIPT = `(async () => {
   const panes = (m.panes || []).slice()
   if (panes.length !== N) return { pass: false, error: 'expected ' + N + ' panes, got ' + panes.length, count: panes.length }
   await sleep(1500)
-  for (const p of panes) p.write('echo MARK_' + p.id + '_END' + CR)
-  await sleep(2800)
+  // MARKER-based readiness with periodic re-sends, never a clock (the FLICKER
+  // lesson, same signature: macos-26 run 30123386698 saw panes 5-7 hasOwn=false
+  // with ZERO cross-talk — the slow shells of an 8-pane spawn wave ate the echo
+  // during init; nothing was misrouted, the fill never landed). ~5s cadence,
+  // 30s cap.
+  for (let i = 0; i < 75; i++) {
+    const missing = panes.filter((p) => p.text().indexOf('MARK_' + p.id + '_END') < 0)
+    if (missing.length === 0) break
+    if (i % 12 === 0) for (const p of missing) p.write('echo MARK_' + p.id + '_END' + CR)
+    await sleep(400)
+  }
+  await sleep(600) // let the last echo settle before the capture
   const ids = panes.map((p) => p.id)
   const results = panes.map((p) => {
     const txt = p.text()

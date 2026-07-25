@@ -114,9 +114,25 @@ export function runUsageGlanceSmoke(win: BrowserWindow): void {
       // ── (b) open latency <100ms (median of 3, double-rAF) ──
       stage = 'b-open'
       const opens: number[] = []
+      // ISOLATE each sample: open() fires async refreshes that repaint in place
+      // when they land — a back-to-back reopen's double-rAF fence otherwise
+      // measures the PREVIOUS open's refresh tail, not the reopen (the USAGEUI
+      // lesson, macos-26 run 30119138843). Frame stability before each sample.
+      const frameCalm = `new Promise((res) => {
+        const t0 = performance.now()
+        let last = t0, calm = 0
+        const step = () => {
+          const now = performance.now()
+          calm = now - last < 34 ? calm + 1 : 0
+          last = now
+          if (calm >= 2 || now - t0 > 8000) return res(1)
+          requestAnimationFrame(step)
+        }
+        requestAnimationFrame(step)
+      })`
       for (let i = 0; i < 3; i++) {
         await ES(`window.__mogging.usage.close()`)
-        await sleep(60)
+        await ES(frameCalm)
         opens.push(
           await ES<number>(`new Promise((res) => {
             const t0 = performance.now()
@@ -143,9 +159,15 @@ export function runUsageGlanceSmoke(win: BrowserWindow): void {
         const r = document.querySelector('.usage-popover .usage-reset')
         return { verdicts: vs, deltas: ds, reset: r ? r.textContent : '' }
       })()`)
+      // TIME-MASKED equality: the verdict embeds a wall-clock ETA ("runs out
+      // ~Sat 00:50"), and the IPC read and the DOM paint are two computations at
+      // two instants — straddle a minute boundary and byte equality lies
+      // (macos-26 run 30128897814: 00:49 vs 00:50). The claim is the verdict —
+      // class, phrasing, day anchor — not which minute the clock showed.
+      const maskClock = (s: string): string => s.replace(/\d{1,2}:\d{2}/g, 'HH:MM')
       const cOk =
         !!paceText &&
-        cInfo.verdicts.includes(paceText) &&
+        cInfo.verdicts.map(maskClock).includes(maskClock(paceText)) &&
         cInfo.verdicts.length >= 2 && // session AND weekly each pace themselves
         cInfo.deltas.length === cInfo.verdicts.length &&
         cInfo.deltas.every((d) => /[+\-−]?\d+%/.test(d)) &&
