@@ -268,7 +268,17 @@ export const PASTE_KEY = String.fromCharCode(22)
  * `Pc` (clipboard / primary / select / cut-buffer) is deliberately ignored. Windows and
  * macOS have exactly one clipboard, and every emulator on them routes all targets to it.
  */
-export type Osc52Request = { kind: 'copy'; text: string } | { kind: 'read' } | null
+export type Osc52Request =
+  | { kind: 'copy'; text: string }
+  | { kind: 'read' }
+  /** Recognised, deliberately NOT performed, and the user must be TOLD. An oversize
+   *  payload used to return null like a parse failure, so nothing was copied and
+   *  nothing was said — while the CLI printed "Copied N characters". That is the exact
+   *  failure this module exists to end ("a copy must never pass for one that worked"),
+   *  reappearing at the top of the size range. An EMPTY payload stays null: declining
+   *  to wipe the clipboard is by design, not a refusal to report. */
+  | { kind: 'refused'; reason: 'too-big' }
+  | null
 
 /** Ceiling on ONE OSC 52 payload, in base64 characters (~768 KB of text). Generous for any
  *  real copy — a whole file yanked in vim clears it — and a bound on a runaway or hostile
@@ -284,7 +294,8 @@ export function parseOsc52(data: string): Osc52Request {
   const b64 = payload.replace(/\s+/g, '')
   // An EMPTY payload is spec'd as "clear the selection". We decline: a CLI silently wiping
   // what the user had on their clipboard is a theft, not a copy, and no agent needs it.
-  if (!b64 || b64.length > OSC52_MAX_BASE64) return null
+  if (!b64) return null
+  if (b64.length > OSC52_MAX_BASE64) return { kind: 'refused', reason: 'too-big' }
   try {
     // atob yields a BINARY string — one char per byte. The payload is UTF-8, so it has to
     // be decoded as such: reading it straight out of atob would mangle every accent, CJK

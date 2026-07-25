@@ -93,10 +93,22 @@ function entryRow(entry: ClipboardEntry, now: number, refresh: () => void): HTML
     label: 'Copy to clipboard',
     title: 'Put this back on the clipboard',
     onClick: () => {
-      void restoreEntry(entry.id).then(() => {
-        showToast({ tone: 'success', title: 'Copied' })
-        refresh()
-      })
+      // The main handler REFUSES a write it could not verify (it throws), and this promise
+      // had no catch — so a refused restore produced no feedback at all: an inert-looking
+      // button and an unhandled rejection, while the terminal's own copies warn properly.
+      void restoreEntry(entry.id).then(
+        () => {
+          showToast({ tone: 'success', title: 'Copied' })
+          refresh()
+        },
+        () => {
+          showToast({
+            tone: 'danger',
+            title: 'Copy failed',
+            body: 'Another app is holding the system clipboard open. Nothing was copied — try again in a moment.'
+          })
+        }
+      )
     }
   })
 

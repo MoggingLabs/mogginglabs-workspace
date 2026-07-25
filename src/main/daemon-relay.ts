@@ -136,8 +136,8 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
         gens.set(id, gen)
         livePaneIds.add(id)
       },
-      onData: (id, data, gen) => {
-        if (current(id, gen)) getWebContents()?.send(TerminalChannels.data, { id: Number(id), data })
+      onData: (id, data, gen, replay) => {
+        if (current(id, gen)) getWebContents()?.send(TerminalChannels.data, { id: Number(id), data, replay })
       },
       onExit: (id, exitCode, gen) => {
         if (!current(id, gen)) return // a dead generation's late exit — not this pane's news
@@ -406,7 +406,20 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     // Straight through, unmodified: `existing` tells the restore path not to type a launch
     // command into a live agent, and `pty` tells xterm how this pane's pty grows. Main relays
     // the daemon's answer — it does not compute either (that is the whole point of pty-host).
-    return await client.spawn(String(req.id), spec)
+    try {
+      return await client.spawn(String(req.id), spec)
+    } catch (err) {
+      // The caller is about to BURY this pane: terminal-pane's spawn catch writes
+      // "[terminal failed to start]", marks it dead and gates every keystroke on the
+      // assumption that the daemon has no session for the id. A spec left behind breaks
+      // exactly that assumption — the next reconnect replays it, the daemon spawns a REAL
+      // session (for a remote pane, a real ssh with a live auth attempt), and it paints its
+      // prompt underneath the dead banner while refusing every keystroke, since only
+      // restart() clears `dead`. Withdraw it for the same reason the kill handler does:
+      // Restart is the one road back, and it re-records the spec through this same door.
+      specs.delete(String(req.id))
+      throw err
+    }
   })
   // Platform truth a pane needs BEFORE its first byte. The daemon's own `spawned`
   // reply answers from THIS same module (transport.ts imports the same ptyEmulation)

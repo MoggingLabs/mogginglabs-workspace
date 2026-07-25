@@ -127,6 +127,19 @@ const SCRIPT = `(async () => {
   await b.invoke('clipboard:remove', { id: hist[0].id })
   await sleep(80)
   const imageDeleteCleared = (await b.invoke('clipboard:readRich')).kind === 'text'
+  // A kept image entry for 11c (the image twin of the refused-restore proof). Written
+  // AFTER imageDeleteCleared on purpose: phase 8 asserts that deleting the image row
+  // clears the system clipboard, and an image written before that read leaves one on
+  // the clipboard, turning that assertion false.
+  cx.fillStyle = '#0088ff'
+  cx.fillRect(0, 0, 8, 8)
+  await b.invoke('clipboard:writeEntry', { kind: 'image', imageDataUrl: canvas.toDataURL('image/png'), source: 'app' })
+  await sleep(80)
+  // Put the SYSTEM clipboard back to text: the entry only needs to survive in the RING
+  // for 11c, and leaving an image on the clipboard perturbs the later sequence phases,
+  // which assert on external text capture and paste.
+  await b.invoke('clipboard:write', { text: 'RESET_AFTER_IMG_FIXTURE' })
+  await sleep(80)
 
   // 9. The environment names a quoting flavor.
   const env = await b.invoke('clipboard:env')
@@ -674,6 +687,33 @@ async function probeAgentClipboard(win: BrowserWindow): Promise<Record<string, u
     )) as string
     const failedRestoreLeftRingAlone = ringBefore === ringAfter
 
+    // 11c. The IMAGE twin. F004's read-back was applied only to the TEXT half, yet
+    //      writeClipboardImage carries the same silent-drop seam (a Windows clipboard held by
+    //      another process makes the write a no-op that neither copies nor throws). A refused
+    //      IMAGE restore therefore still re-dated its row, floated it to the top and primed
+    //      lastImageSig, while the settings tab reported a green "Copied" for an image that is
+    //      not on the clipboard. The read-back compares SIZE, not a fingerprint: the OS DIB
+    //      round-trip can move a semi-transparent image's hash (phase 8's note), and a strict
+    //      compare would refuse honest restores.
+    const imageEntryId = (await exec(
+      `window.bridge.invoke('clipboard:history').then((h) => { const i = h.find((e) => e.kind === 'image'); return i ? String(i.id) : '' })`
+    )) as string
+    const ringBeforeImg = (await exec(
+      `window.bridge.invoke('clipboard:history').then((h) => h.map((e) => e.id).join(','))`
+    )) as string
+    silentlyDropNextClipboardWrites(1)
+    const failedImageRestoreRejected = imageEntryId
+      ? ((await exec(`(async () => {
+          try { await window.bridge.invoke('clipboard:restore', { id: ${JSON.stringify(imageEntryId)} }); return false }
+          catch { return true }
+        })()`)) as boolean)
+      : false
+    silentlyDropNextClipboardWrites(0)
+    const ringAfterImg = (await exec(
+      `window.bridge.invoke('clipboard:history').then((h) => h.map((e) => e.id).join(','))`
+    )) as string
+    const failedImageRestoreLeftRingAlone = ringBeforeImg === ringAfterImg
+
     // 12. …and the USER must see it. Drive the real chord (select + Ctrl+C) against an
     //     armed failure and require the danger toast. Two arms: copy-on-select's debounced
     //     copy fires first and consumes one; the chord consumes the other. The 3 s toast
@@ -704,6 +744,9 @@ async function probeAgentClipboard(win: BrowserWindow): Promise<Record<string, u
       ...inPage,
       failedWriteRejected,
       failedRestoreRejected,
+      failedImageRestoreRejected,
+      failedImageRestoreLeftRingAlone,
+      imageEntryId,
       failedRestoreLeftRingAlone,
       failedWriteNotOnClipboard,
       copyFailToast,
@@ -712,6 +755,8 @@ async function probeAgentClipboard(win: BrowserWindow): Promise<Record<string, u
         failedWriteRejected &&
         failedWriteNotOnClipboard &&
         failedRestoreRejected &&
+        failedImageRestoreRejected &&
+        failedImageRestoreLeftRingAlone &&
         failedRestoreLeftRingAlone &&
         copyFailToast === 'toast-shown'
       )

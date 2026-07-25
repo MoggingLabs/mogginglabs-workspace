@@ -19,19 +19,35 @@
 //      which costs the rest of that chunk's frames AND tells the asker nothing.
 //   E. A DAEMON SPAWN THAT CANNOT START REJECTS   the same claim for the daemon process itself:
 //      a dead helper executable must reject, never re-throw an 'error' event into fatal().
+//   F. A FAILED SPAWN LEAVES NO REPLAY SPEC   the relay records each pane's spec BEFORE the
+//      reply, so a spawn that lands in a DYING daemon still comes back on the next reconnect.
+//      When that spawn FAILS outright the renderer buries the pane instead — "[terminal failed
+//      to start]", marked dead, every keystroke gated — so a spec left behind is a session the
+//      next reconnect spawns for REAL (for a remote pane, a real ssh with a live auth attempt),
+//      painting its prompt underneath a dead banner only restart() can clear. Driven through
+//      the TerminalChannels.spawn ipcMain handler: the ONLY door that writes that map.
+//   G. A QUIESCE DECLARED MID-FLIGHT IS OBEYED   B inverted. B quiesces and THEN kills; here the
+//      daemon dies first and the quiesce lands after ensureDaemon has already committed to a
+//      spawn. `quiescing` was read once at entry with ~25s of awaits behind it, so an updater's
+//      quiesce declared mid-flight still seated a daemon — one running from the INSTALLED exe,
+//      re-taking the very file lock the pre-install retire had just released: the NSIS "cannot
+//      be closed. Please close it manually and click Retry" stall this machinery exists to
+//      prevent, reported by retireOwnDaemon as "nothing running — nothing locks the exe".
+// (F and G run between D and the cleanup; E stays last — it needs the retire behind it.)
 //
 // Windowless on purpose: the relay takes a WebContents GETTER and tolerates null (renderer
 // events are simply unsent), and daemon health is read straight off runtime-health's state.
-import { app } from 'electron'
+import { app, ipcMain } from 'electron'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { isAlive } from '@backend/platform/pid'
-import { beginDaemonQuiescence, endDaemonQuiescence, ensureDaemon, retireOwnDaemon } from '../daemon-client'
+import { TerminalChannels } from '@contracts'
+import { beginDaemonQuiescence, endDaemonQuiescence, ensureDaemon, retireOwnDaemon, DaemonClient } from '../daemon-client'
 import { startDaemonBackend, getDaemonClient } from '../daemon-relay'
 import { daemonEntryPath } from '../node-helper'
 import { getDaemonHealth } from '../runtime-health'
-import type { DaemonEndpoint } from '@contracts'
+import type { DaemonEndpoint, SpawnRequest } from '@contracts'
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -75,6 +91,62 @@ async function waitHealed(notPid: number, ms: number): Promise<DaemonEndpoint | 
   return null
 }
 
+/** How many times `event` has been journaled so far — the loop's own progress, read from the
+ *  side. Act G waits on 'daemon-spawning' rather than sleeping a guessed number of ms. */
+const journalCount = (event: string): number => readClientLog().split(event).length - 1
+
+type InvokeDoor = (event: unknown, ...args: unknown[]) => unknown
+
+/** THE spawn door: the TerminalChannels.spawn ipcMain handler, registered by the relay.
+ *  Act F must go through THIS and nothing else — it is the only code in the app that records
+ *  a pane's reconnect-replay spec, and every other act reaches the daemon via
+ *  getDaemonClient().spawn(), which bypasses the whole bookkeeping under test.
+ *
+ *  A windowless smoke has no renderer to `invoke` with, so the handler is fetched from where
+ *  `ipcMain.handle` files it: the private `_invokeHandlers` map, keyed by channel, holding a
+ *  wrapper that answers through the invoke event's `_reply`/`_throw`. Nothing here is
+ *  production wiring — no seam is added to the relay for it — and if Electron ever moves that
+ *  map the door simply is not found, which act F reports as a FAILED flag (`replayDoorFound`)
+ *  rather than quietly turning into a vacuous pass. */
+function spawnDoor(): InvokeDoor | null {
+  const handlers = (ipcMain as unknown as { _invokeHandlers?: Map<string, InvokeDoor> })._invokeHandlers
+  return handlers?.get(TerminalChannels.spawn) ?? null
+}
+
+/** Drive the door and report ITS answer — resolved value or the message it threw. */
+function driveSpawnDoor(door: InvokeDoor, req: SpawnRequest): Promise<{ ok: boolean; detail: string }> {
+  return new Promise((resolve) => {
+    let settled = false
+    const say = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+    const settle = (ok: boolean, detail: string): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve({ ok, detail })
+    }
+    const timer = setTimeout(() => settle(false, 'TIMEOUT: the spawn door never answered'), 20_000)
+    try {
+      const returned = door(
+        {
+          _reply: (value: unknown): void => settle(true, 'RESOLVED ' + JSON.stringify(value ?? null)),
+          _throw: (err: unknown): void => settle(false, say(err))
+        },
+        req
+      )
+      // Belt and braces: today `handle` wraps the listener and answers through _reply/_throw
+      // above, and the wrapper's own promise resolves a microtask later (already settled). An
+      // Electron that filed the listener RAW would answer through this promise instead —
+      // whichever speaks FIRST is the answer, so the act survives either shape.
+      void Promise.resolve(returned).then(
+        (value) => settle(true, 'RESOLVED ' + JSON.stringify(value ?? null)),
+        (err) => settle(false, say(err))
+      )
+    } catch (e) {
+      settle(false, say(e))
+    }
+  })
+}
+
 export async function runDaemonHealSmoke(): Promise<void> {
   const write = (o: object): void => {
     try {
@@ -94,6 +166,11 @@ export async function runDaemonHealSmoke(): Promise<void> {
   // Testimony, not an assertion: `r` is boolean-only (the verdict is `every(v === true)`), so
   // the refusal STRING that act D read rides alongside it in the result file.
   let spawnRefusal = ''
+  let replayAnswer = ''
+  // Act F's pane id, minted per RUN. The daemon RESTORES persisted panes at cold start
+  // (SessionManager.restore), so a fixed id would let a session a PRE-FIX run left in
+  // sessions.db reappear in a later run's welcome and read as this run's resurrection.
+  const replayPaneId = 9000 + (Date.now() % 900)
   let dispose: (() => void) | null = null
   try {
     dispose = await startDaemonBackend(() => null)
@@ -165,6 +242,109 @@ export async function runDaemonHealSmoke(): Promise<void> {
       spawnRefusal = refusal
     }
 
+    // ── F. a spawn that failed with the daemon ABSENT must leave nothing to replay ───────
+    // The spec is recorded BEFORE the reply on purpose (a spawn into a dying daemon must still
+    // come back), so the ONLY thing standing between a FAILED spawn and a resurrected session
+    // is the handler's own withdrawal on the error path — the same `specs.delete` the kill
+    // handler does, for the same reason ("closed on purpose — never resurrected by a reconnect
+    // replay"). Quiescence is the clamp that makes the sequence deterministic: with it latched
+    // nothing can heal while the spawn is in flight, so the failure is decided BEFORE the
+    // reconnect that would replay it — otherwise a heal racing the 5s spawn timeout replays the
+    // spec while it is still legitimately present and the act would prove nothing.
+    {
+      const door = spawnDoor()
+      r.replayDoorFound = !!door
+      if (!door) throw new Error('no TerminalChannels.spawn handler registered — cannot reach the spec door')
+      const epBefore = readEndpoint()
+      if (!epBefore || !isAlive(epBefore.pid)) throw new Error('no live daemon at the start of act F')
+      beginDaemonQuiescence()
+      process.kill(epBefore.pid)
+      const deadBy = Date.now() + 5000
+      while (getDaemonHealth().state === 'connected' && Date.now() < deadBy) await delay(50)
+      r.replaySawDeadDaemon = getDaemonHealth().state !== 'connected'
+      const answer = await driveSpawnDoor(door, { id: replayPaneId, cwd: os.homedir(), cols: 80, rows: 24 })
+      replayAnswer = answer.detail
+      // WHICH failure matters: the refusal must be the daemon's silence (the client's own spawn
+      // timeout), which can only be reached AFTER the spec was recorded. A rejection thrown
+      // earlier — a bad remote host, an invalid remote cwd — never reaches `specs.set` at all,
+      // and would make everything below true without exercising the withdrawal.
+      r.replaySpawnRefused = !answer.ok && /did not answer spawn/.test(answer.detail)
+      endDaemonQuiescence()
+      const epHealed = await waitHealed(epBefore.pid, 30_000)
+      r.replayHealed = !!epHealed
+      if (!epHealed) throw new Error('relay did not heal after the failed spawn')
+      // The relay's own count, journaled at the moment it replays: 'daemon-reconnected {panes:N}'.
+      const reconnects = readClientLog().split('\n').filter((l) => l.includes('daemon-reconnected'))
+      r.replayedNothing = /"panes":0/.test(reconnects[reconnects.length - 1] ?? '')
+      // THE claim, end to end: ask the healed daemon itself. `welcome` lists every session it
+      // holds, so a replayed spec shows up here as a REAL pane — the prompt that would be
+      // painting under the renderer's dead banner. Sampled a few times because the replay is
+      // dispatched (not awaited) just before health flips to 'connected'.
+      let welcomeReads = 0
+      let resurrectedPane = false
+      for (let i = 0; i < 3 && !resurrectedPane; i++) {
+        if (i > 0) await delay(700)
+        const probe = new DaemonClient(epHealed, {}, { kind: 'daemonheal-welcome', heartbeatMs: 0 })
+        try {
+          const panes = await probe.connect()
+          welcomeReads++
+          if (panes.some((p) => p.id === String(replayPaneId))) resurrectedPane = true
+        } catch {
+          /* a refused sample proves nothing either way — `replayWelcomeRead` is the guard */
+        }
+        probe.dispose()
+      }
+      r.replayWelcomeRead = welcomeReads > 0
+      r.replayNoSessionResurrected = !resurrectedPane
+    }
+
+    // ── G. a quiesce declared MID-FLIGHT must not seat a daemon ──────────────────────────
+    // B's inversion, and the half of quiescence B cannot see: B latches BEFORE the death, so
+    // the entry check alone answers it. Here the loop is already past that check and inside
+    // ensureDaemon's spawn when the updater declares the quiesce — the window that was ~25s
+    // wide (reach probe, other-clients probe, stamp retire, spawn + a 15s readiness wait) and
+    // read exactly once. 'daemon-spawning' is journaled BETWEEN the child spawn and the
+    // readiness wait, so waiting for a FRESH one puts the quiesce provably mid-flight: a
+    // guessed sleep that landed early would be answered by the entry check and pass either way.
+    {
+      const epLive = readEndpoint()
+      if (!epLive || !isAlive(epLive.pid)) throw new Error('no live daemon at the start of act G')
+      const spawnsBefore = journalCount('daemon-spawning')
+      process.kill(epLive.pid)
+      const committedBy = Date.now() + 10_000
+      while (journalCount('daemon-spawning') === spawnsBefore && Date.now() < committedBy) await delay(25)
+      r.midFlightCaughtInSpawn = journalCount('daemon-spawning') > spawnsBefore
+      beginDaemonQuiescence()
+      // Health is the observable, NOT a live pid: post-fix the daemon this spawn seated does
+      // exist for a moment before it is retired — that is the fix WORKING (retire what we just
+      // seated rather than hand it back). What must never happen is the relay taking it into
+      // service, which is the resurrection the installer trips over.
+      const windowUntil = Date.now() + 8000
+      let resurrections = 0
+      while (Date.now() < windowUntil) {
+        if (getDaemonHealth().state === 'connected') resurrections++
+        await delay(200)
+      }
+      r.midFlightNotResurrected = resurrections === 0
+      // Which check refused it: the LATE one, past the readiness wait. A quiesce answered by
+      // the entry check journals 'daemon-reconnect-failed … quiescing' and nothing else — so
+      // this line is also the proof the act landed mid-flight rather than early. POLLED, not
+      // sampled once: the daemon's readiness is the machine's business, not the claim's.
+      const lateRetire = /quiesce-retire-late-spawn/
+      const retiredBy = Date.now() + 8000
+      while (!lateRetire.test(readClientLog()) && Date.now() < retiredBy) await delay(200)
+      r.midFlightLateSpawnRetired = lateRetire.test(readClientLog())
+      // And nothing may be LEFT running: a live daemon still holds the exe the installer is
+      // about to overwrite, which is the entire point of the pre-install retire.
+      const goneBy = Date.now() + 8000
+      let left = readEndpoint()
+      while (left && isAlive(left.pid) && Date.now() < goneBy) {
+        await delay(200)
+        left = readEndpoint()
+      }
+      r.midFlightNoDaemonLeft = !(left && isAlive(left.pid))
+    }
+
     // ── Cleanup: stop the loop FIRST, then prove the last daemon dead ────────────────────
     dispose()
     dispose = null
@@ -200,7 +380,7 @@ export async function runDaemonHealSmoke(): Promise<void> {
     }
 
     const pass = Object.entries(r).every(([, v]) => v === true)
-    write({ pass, ...r, spawnRefusal })
+    write({ pass, ...r, spawnRefusal, replayAnswer, replayPaneId })
     app.exit(pass ? 0 : 1)
   } catch (e) {
     try {

@@ -26,11 +26,20 @@ const live = makeSignal()
 const spawnSettled = makeSignal()
 const remoteReady = makeSignal()
 const reattached = new Set<number>()
+/** Pane ids whose pane was CLOSED FOR GOOD. A launch lineup can be mid-flight when the
+ *  user closes the pane (or its workspace, once the undo grace lapses): its waiters then
+ *  resolve false and it would otherwise proceed to spend a one-shot restore intent and
+ *  the session config overrides on a pane that no longer exists, booking it agent-bearing
+ *  and typing `claude --resume <uuid>` into an id the app reuses. F018's stance, for a
+ *  vanished PANE rather than a vanished cwd. Cleared by mark(), so a recycled id starts
+ *  clean the moment its new pane shows any sign of life. */
+const gone = new Set<number>()
 /** When each pane went live (performance.now()) — the LAUNCHNOW gate's evidence
  *  that lineup commands land immediately after the first output, never on a timer. */
 const liveAtMs = new Map<number, number>()
 
 function mark(signal: Signal, id: number): void {
+  gone.delete(id) // a recycled id is not the pane that was closed
   if (signal.on.has(id)) return
   signal.on.add(id)
   const w = signal.waiters.get(id)
@@ -91,6 +100,14 @@ export function forgetPane(id: number): void {
   drop(remoteReady, id)
   reattached.delete(id)
   liveAtMs.delete(id)
+  gone.add(id)
+}
+
+/** Was this pane closed for good? A lineup that awaited liveness must re-check before it
+ *  SPENDS anything: the waiters answer false both for "timed out" and for "the pane is
+ *  gone", and only the second means there is nothing left to launch into. */
+export function isPaneGone(id: number): boolean {
+  return gone.has(id)
 }
 
 export function markPaneLive(id: number): void {

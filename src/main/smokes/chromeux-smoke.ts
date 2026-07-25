@@ -720,10 +720,17 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         const retiredFacts = factNeedles.every(needle => menuText.includes(needle))
         const actionNeedles = [
           'Expand to whole workspace', 'Expand across full width', 'Expand to full height',
-          'Split right', 'Split down', 'Rename', 'Clear terminal',
-          'Copy working directory', 'Show claims'
+          'Split right', 'Split down', 'Rename', 'Clear terminal', 'Show claims'
         ]
         const retiredActions = actionNeedles.every(needle => menuText.includes(needle))
+        // ...but NOT "Copy working directory". This is a REMOTE pane (stage c): the
+        // controller's publishPaneCwds skips remote slots and this workspace declares no
+        // paneCwds, so the pane has no directory in either lane (local cwd, remote manifest)
+        // and the row is correctly withheld — same gate as "Move to another workspace…".
+        // It used to be listed above as a required needle, which asserted the DEFECT: a row
+        // whose handler is gated on the cwd, so clicking it copied nothing and said nothing.
+        // PLAINMENU owns the both-ways proof (absent with no path, back with one).
+        const copyCwdGated = !menuText.includes('Copy working directory')
 
         const renameItem = [...menu.querySelectorAll('.menu-item')].find(el => (el.textContent || '').trim() === 'Rename')
         if (!renameItem) return { ok: false, reason: 'no Rename item', menuText }
@@ -784,11 +791,11 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         slot.style.width = ''
         return {
           ok: sampleGeometry && signalRhythm && transitions && retiredInline && portaled && viewportContained &&
-            retiredFacts && retiredActions && renamePortaled && titleUpdated && renamedInMenu &&
+            retiredFacts && retiredActions && copyCwdGated && renamePortaled && titleUpdated && renamedInMenu &&
             expandedViaMenu && restoredViaMenu && splitViaMenu && splitCleanup && closesOnWorkspaceSwitch,
           sampleGeometry, signalRhythm, transitions, samples, retiredInline,
           portaled, viewportContained, menuRect: { left: menuRect.left, top: menuRect.top, right: menuRect.right, bottom: menuRect.bottom },
-          retiredFacts, factNeedles, retiredActions, actionNeedles,
+          retiredFacts, factNeedles, retiredActions, actionNeedles, copyCwdGated,
           renamePortaled, titleUpdated, renamedInMenu,
           expandedViaMenu, restoredViaMenu, splitViaMenu, splitCleanup, closesOnWorkspaceSwitch
         }

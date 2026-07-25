@@ -118,34 +118,139 @@ built, verified three ways:
 | 4 | huge · concurrent · cancel | a single synchronous call; the emulation descriptor is returned from the same expression that configured the pty, so it cannot be stale |
 | 7 | concurrent | a per-pane accumulator with no timers or handles — nothing to race |
 
+## The final sweep — the last 20 rows, all six edges each
+
+The rows below were the remainder: the 16 that INVENTORY still carried at `~02`, plus the four
+that amendment A3 added (186–189). Ten parallel audits, two rows each, every verdict carrying
+either the guard that makes it clean or the scenario that makes it a defect.
+
+**A correction this sweep had to make first.** The "Deliberately NOT swept" list below names 16
+rows — 1 · 11 · 16 · 22 · 23 · 24 · 25 · 26 · 27 · 28 · 43 · 74 · 80 · 88 · 89 · 91 — but EIGHT
+of those (11 · 22 · 28 · 43 · 74 · 80 · 89 · 91) were flipped to `02` in INVENTORY when their
+findings landed, and nobody updated this prose. The real remainder was
+**1 · 2 · 3 · 4 · 7 · 8 · 10 · 16 · 23 · 24 · 25 · 26 · 27 · 29 · 88 · 185**. Same failure mode
+as the stale OPEN entries struck above, in the opposite direction: prose that overstates what is
+left is still prose LAUNCHAUDIT cannot read. INVENTORY's cells are the truth; this file explains
+them and must be re-derived from them, never maintained in parallel.
+
+### Rows that came back CLEAN on all six edges
+
+- **Row 4 · ConPTY-only PTY spawn seam** — the `huge` N/A is REPLACED with a real reason: argv/env
+  IS unbounded (the ~10 KB remote bootstrap, cmd.exe's 8191-char ceiling that already bit the SSH
+  shim), and it is safe because an over-long command line surfaces as a node-pty throw that all
+  four call sites guard (`transport.ts:186`, `pty.service.ts:289`, `install.ts:73`,
+  `claude-refresh.ts:95`) — not because the call is synchronous. `windowsBuild()` fails CLOSED
+  (unparsable `os.release()` → NaN → 0 → the loud refusal), and `useConpty` is omitted from the
+  option type AND spread after `...opts`, so a runtime value cannot flip the backend.
+- **Row 23 · Async request generation guard** — the generation token is compared on ALL THREE
+  exits, including the REJECT path (`async-state.ts:76`), which was the specific hazard sought.
+- **Row 27 · Detached pane sessions survive** — three identity guards are object-identity, not id,
+  so a recycled generational id cannot cross-talk (`session.ts:1027`, `transport.ts:128`,
+  `agent-proc.ts:809`); the four calls that run OUTSIDE the per-row try are all total.
+- **Row 186 · Pane grid fit contract** — the 2×1 clamp cannot reach a live ConPTY (every
+  unmeasurable path returns null before it; every measurable one is floored by the split tree's
+  132×110 leaf minima), and a resize cannot be lost in the spawn window (one ordered socket, no
+  await before `client.spawn`).
+- **Row 187 · Vendored fonts and metric parity** — verified against the vendored BYTES, not the
+  gate: all three faces including the italic FONTCOVER does not read are a uniform 0.600em
+  advance, and every assigned codepoint in the declared ranges is covered (the only two gaps,
+  U+2B74/U+2B75, are unassigned in Unicode). The pre-load measurement bug is closed by
+  construction — `fonts.load()` on the unicode-range-scoped face, not the one-shot `fonts.ready`.
+
+### Fixed and bite-proven in this sweep
+
+| row | edge | verdict |
+| --- | --- | --- |
+| 185 | empty — the ledger table goes missing | **F027** · the anti-blindness guard read the LEGEND table (`FINDINGS.md:15` strips to `id`), so `sawHeader` was satisfied 35 lines before the real header and a FINDINGS.md with no ledger printed `0 finding(s), all resolved · every lens derives A ✓` and exited 0. Proven on a scratch copy: exit 0 pre-fix, exit 1 post-fix. |
+| 185 | malformed — a mangled id cell | **F028** · silently `continue`d in BOTH loops, ahead of the column-count check. Pre-fix bites: `F013`→`F-013` printed **25** findings, exit 0; row 88's id → `88a` printed **197 rows · 1182 lens cells**, exit 0 — a row and its six lens cells deleted from the census in silence. |
+| 26 | offline/absent — a live daemon that has not answered YET | **F030** · `probeReachable` folded a TIMEOUT into "definitely gone" and the caller UNLINKS on false, so a live-but-slow daemon lost its endpoint and the run ended on the in-proc backend with no Retry — F024's end state from the opposite direction, against the rule `pid.ts:29-30` already states. Narrowed fix: a completed CONNECT proves the wire. Bite-proven by a new unit — a real silent `net.createServer` must probe true (red pre-fix), while the corpse case stays false in BOTH runs, so F024 is provably intact. **The unit also caught the first version of this fix being an inert no-op** (the flag was declared but never assigned) — which is the entire argument for bite proofs. |
+| 7 | malformed — an aborted OSC followed by another OSC | **F029** · `ESC ]` inside an open OSC ate the SUCCESSOR's intro, so its body scanned as ground-state output and its BEL rang a FALSE attention bell — latching a pane red for nothing — while the prompt mark behind it was lost. Bite-proven by a new focused unit inside the existing **UNIT** gate: on the pre-fix bytes the three defect assertions red while both control assertions stay green. |
+
 ## OPEN — verified defects, not yet fixed
 
-**Empty.** Every defect this step has verified is now filed with a bite proof. The list is kept
-(not deleted) because an empty OPEN section is a claim, and the claim has to be visible to be
-falsifiable: what remains for step 02 is EDGE COVERAGE on the rows below, not known-broken
-surfaces being carried.
+These are REAL, traced to `file:line`, with a reaching scenario — but they are **not** in
+`FINDINGS.md`, because filing requires the fix AND its bite proof, and these do not have theirs
+yet. Naming them here is what keeps the remainder honest: the count is visible and falsifiable
+rather than absorbed into a green sweep.
 
-The three that stood here last are worth remembering for how each ended:
+Six carry a fix already applied in the working tree (marked **fix landed**); they still belong
+here until the pre-fix red is actually recorded, because a fix without its failing assertion is,
+in this pack's own words, "a story about a fix".
 
-- **`SessionManager.ensure()` spawns unguarded** → **F025**. A named refusal, proven by reading
-  WHICH error came back rather than timing anything.
-- **POSIX pid-reuse liveness fails open** → **F024**. The fix and its DAEMONCUSTODY act were
-  already WRITTEN and never routed to `FINDINGS.md`. Work done but unbanked reads exactly like
-  work not done: the ledger, not the diff, is what makes a row derive A.
-- **`applyResolvedLayout` commits the requested `paneCount`** → **F026**, after one revert. The
-  first attempt made the apply REFUSE and asserted it in MOVEPANE, whose deliberately-tiny
-  8-pane budget the F003 and F011 phases depend on saturating exactly — two extra workspaces
-  starved it and broke an already-proven phase. The second attempt changed nothing about
-  refusal (it reads the landed count back off the layout) and brought its OWN fixture. Two
-  lessons, both banked: protecting proven phases outranks adding an unproven one, and a shared
-  exactly-sized budget is a fixture, not a free resource.
+| row | edge | defect | sev |
+| --- | --- | --- | --- |
 
-Also struck from this section: two entries that **F011** and **F013** had already closed and
-that nobody removed. A stale OPEN list overstates the remainder as surely as a missing finding
-understates it, and both failures are invisible to LAUNCHAUDIT — it reads `FINDINGS.md`, not
-this prose.
+Nine of the ten entries that stood here are now FILED with bite proofs — F037 (row 10),
+F038 and F040 (row 2), F039 (row 1), F041 (row 188 huge), F042 and F043 (row 25),
+F044 (row 29), F045 (row 26). One remains, and it remains for a reason no amount of
+effort on this box can change:
+
+| 188 | malformed | The exit verdict drops `signal` (`session.ts:686`), so on POSIX a SIGKILL/SIGSEGV death reports `code 0` — byte-identical to a clean `exit`, defeating the epitaph on exactly the crashes it was built for. | S2 |
 
 ## Perf, re-measured
+
+### After ALL 18 fixes landed (2026-07-25) — the closing measurement
+
+Re-measured on the complete diff (every fix and every new assertion in the tree), on the same
+box, under the same load — three concurrent `claude` sessions at ~115% of a core each plus an
+electron at 102%, measured as a per-process CPU RATE rather than cumulative time.
+
+- **PERCEPTION — PASS.** switch max **41.6 ms** and home max **30.6 ms** against a 100 ms action
+  budget, echo median **1.8 ms** against 60 ms, and **zero** frames over 100 ms across all three
+  churn profiles. Clean, with room. Note it is BETTER than the HEAD baseline on every metric
+  (switch 109.7, home 102.3), and better than the mid-session measurement of this same diff —
+  the fixes did not cost perception, and the earlier `homeMax` outlier was the load, as argued.
+- **MILESTONE — FAIL on one metric, and NOT this diff.** The 16-pane stress worst gap is
+  **215.3 ms** against 150 ms; everything else is comfortable (avgFps 132.5, heap 54 MB, 16/16
+  WebGL). The stashed HEAD baseline under this same load is **298.7 ms** — far worse — and 215.3
+  sits inside the 187-229 ms machine-load signature already recorded for this box, which passes
+  under CI's soft-GPU profile.
+
+**What is claimed:** the budgets are UNMOVED by this step's work, proven by baseline rather than
+argued, and PERCEPTION is outright green. **What is NOT claimed:** that MILESTONE is green here.
+It is red on a box that was never quiet, and the goal's "no other sessions" clause was never
+satisfiable from inside this session — the load is three OTHER Claude sessions. A confirming run
+on a genuinely idle machine (or CI) is the remaining evidence, and it is an operator step.
+
+### After the final sweep (2026-07-24) — measured, and ATTRIBUTED
+
+Both budgets were re-measured after this step's renderer-touching fixes (the unmeasured-dims
+spawn, the WebGL give-up branch, the replay flag, the menu and spawn-report guards), and BOTH
+are RED on this box. Neither red is this diff, and that is probed rather than argued — the
+house rule, applied in the only direction that can falsify it: stash everything, re-run at
+HEAD, compare under the SAME load.
+
+**The machine was NOT quiet, and the cause is named.** No dev server was running, but three
+concurrent `claude` sessions plus five `node` children were each burning ~85–90% of a core —
+~8 cores saturated, measured as a per-process CPU delta rather than inferred from cumulative
+time. This is the recorded condition under which these two gates blow up.
+
+| metric | HEAD (stashed baseline) | with this step's diff | |
+| --- | --- | --- | --- |
+| MILESTONE 16-pane stress worst gap | **298.7 ms** | **277.8 ms** | better with the fix |
+| MILESTONE avgFps | 125.3 | 126.8 | better |
+| MILESTONE idle worst gap | 62.5 ms | 13.9 ms | better |
+| MILESTONE heap | 56 MB | 51 MB | better |
+| MILESTONE webgl visible / attention | 16/16 · 4/4 | 16/16 · 4/4 | equal |
+| PERCEPTION switch max | **109.7 ms** | **59.4 ms** | better with the fix |
+| PERCEPTION home max | 102.3 ms | 120.3 ms | worse — a single sample |
+| PERCEPTION echo median | 2.4 ms | 2.4 ms | equal (budget 60) |
+| PERCEPTION frames over 100 ms (churn · size-churn · torrent) | 0 · 0 · 0 | 0 · 0 · 0 | equal |
+
+**Verdict: unmoved, and better on five of six.** HEAD fails BOTH gates on its own — MILESTONE
+at 298.7 ms and PERCEPTION on *two* metrics (switch 109.7 AND home 102.3) — so the failure
+pre-exists this diff entirely. The one metric that reads worse with the fix, PERCEPTION's
+`homeMax`, is a single outlier in `[40.1, 120.3, 18, 24.1]` whose three siblings sit at
+18–40 ms, against a baseline whose own sample set (`[30.2, 102.3, 18, 25.7]`) has the same
+shape — one spike, three quiet samples. That is a scheduler artifact of a saturated box, not a
+budget move, and the surrounding numbers (switch nearly halved, zero long frames anywhere)
+point the other way.
+
+**What is NOT claimed:** that these gates are green. They are red, on this box, under this
+load. What is proven is the step's actual requirement — that this diff did not move them — and
+proving it required the baseline, not the reasoning. Re-run both on a genuinely idle machine
+(or under CI's soft-GPU profile, where the recorded band passes) before treating either red as
+a product fact.
 
 ### After F026 (the renderer moved again)
 

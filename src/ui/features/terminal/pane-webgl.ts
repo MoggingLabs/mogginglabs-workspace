@@ -146,12 +146,25 @@ export class PaneWebglManager {
     // kept under budget — its release debounce fired once and did nothing; the pressure
     // that matters shows up here, at acquire time.)
     if (glAttached.size >= glBudget()) {
+      let victim: PaneWebglManager | undefined
       for (const other of glAttached) {
         if (other !== this && !other.host.isVisible()) {
-          other.release()
+          victim = other
           break
         }
       }
+      // Past the cap with nothing to reclaim (every holder is on screen), RIDE THE DOM
+      // RENDERER — which is what pane-capacity.ts:89-91 already promises in words: "GPU is
+      // deliberately NOT a count limit … PaneWebglManager already rides the DOM renderer past
+      // that edge — correct, just not GPU-smooth." Without this branch the attach went ahead
+      // anyway, Chromium force-lost the oldest context, its owner's onContextLoss re-acquired
+      // 1.5s later and evicted the next one — a renderer-swap churn (each swap is a metrics
+      // event → refit → ConPTY repaint over whatever the agent is drawing), re-armed on every
+      // workspace switch because onShow() forgives glLosses. Reachable: the machine budget
+      // offers up to ABS_MAX_PANES=32 and a 1920x1080 work area fits well past 16 at the
+      // 132x110 minima, so >16 panes can be visible at once in one workspace.
+      if (!victim) return
+      victim.release()
     }
     try {
       const addon = new WebglAddon()

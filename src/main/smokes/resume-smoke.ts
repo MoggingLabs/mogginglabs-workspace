@@ -29,9 +29,16 @@ import { paneHasAgent } from '../agent-presence'
 //   (7) EXACT RESUME the relaunched claude pane is TYPED `claude --resume <THE uuid>` —
 //                    observed in the pane's own PTY echo — and the armed intent is
 //                    consumed (empty map afterwards; consume-once).
+// Plus three REFUSALS, each one a launch that must NOT be spent, and isn't: a vanished cwd
+// (F018), a save that cannot re-derive its sessions (it HOLDS them rather than erasing them),
+// and a pane CLOSED under a waiting lineup (the launch bails before consuming its intent).
 // Writes out/resume-result.json, then exits (0=pass, 1=fail).
 
 const UUID_A = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+// The session armed on the SHELL slot for the cancel-mid-flight act — a second uuid, so the
+// intent that must survive is provably that act's own and not step (2)'s leftover.
+const UUID_B = 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff'
+const CLOSED_PANE = 102 // Alpha slot 2: a shell, so nothing else ever books it agent-bearing
 
 const stripAnsi = (s: string): string =>
   s
@@ -123,6 +130,30 @@ export function runResumeSmoke(win: BrowserWindow): void {
         paneSessions?.[1] == null &&
         snapWorking?.workspaces[1]?.paneSessions === undefined
 
+      // ── row 25 "empty": a save that cannot RE-DERIVE the sessions must HOLD them ──
+      // The boot restore fires its own debounced mirror save ~400ms after launch, at a moment
+      // when the context monitor has locked NO session logs at all — so paneSessionsFor answers
+      // undefined for every workspace. That rewrite ERASED the exact-session ids this card
+      // exists to carry, and every save after it (the teardown ones) is HELD — so a user who
+      // booted, worked and closed with no lock-bearing save in between came back to a bare
+      // `--resume`: the CLI's session PICKER instead of their conversation. Reproduce the boot
+      // save exactly — take the lock away, re-save the SAME working set (same count, so it
+      // mirrors) — and the ids it cannot re-derive must still be there afterwards.
+      // The recolour is the WITNESS that this save really rewrote Alpha's row, so a hold (which
+      // would leave step (2)'s snapshot in place, sessions and all) cannot pass for a hold-what-
+      // you-cannot-re-derive. Nothing downstream reads a workspace's colour.
+      setPaneSessionLogOverrideForSmoke(101, null)
+      const blindColor = '#ff2f8e'
+      await save([{ ...wsA, color: blindColor }, wsB], 'resume-a')
+      const snapAfterBlind = lastSessionSnapshotForSmoke()
+      const blindSaveHeldSessions =
+        snapAfterBlind?.workspaces.length === 2 &&
+        snapAfterBlind.workspaces[0]?.color === blindColor &&
+        snapAfterBlind.workspaces[0]?.paneSessions?.[0]?.provider === 'claude' &&
+        snapAfterBlind.workspaces[0]?.paneSessions?.[0]?.file === sessionFile &&
+        snapAfterBlind.workspaces[0]?.paneSessions?.[0]?.sessionId === UUID_A
+      setPaneSessionLogOverrideForSmoke(101, { provider: 'claude', file: sessionFile })
+
       // (3) SHRINK-HOLD: the teardown — close Alpha (2→1), then close Bravo (1→0).
       // Neither save may touch the snapshot: the last working SESSION is both of them.
       await save([wsB], 'resume-b')
@@ -204,8 +235,53 @@ export function runResumeSmoke(win: BrowserWindow): void {
       const missingCwdRefused =
         deadLaunch?.ok === false && /no longer exists/.test(deadLaunch.reason ?? '') && paneHasAgent(DEAD_PANE) === false
 
+      // ── row 25 "cancel-mid-flight": a pane closed under a WAITING lineup spends nothing ──
+      // forgetPane resolves the liveness waiters FALSE, and the local branch had no equivalent
+      // of the remote branch's bail — so the launch ran on into a pane that no longer exists:
+      // it consumed the one-shot restore intent, spent the session config overrides, booked a
+      // non-existent pane agent-bearing, and typed the resume command into an id the app
+      // REUSES. F018's stance, for a vanished PANE rather than a vanished cwd.
+      //
+      // Arm the intent on the SHELL slot (pane 102 — never launched into, so a set presence bit
+      // could only be this launch's own signature), then start the resume lineup and close the
+      // pane in the SAME tick: launchInPane is already parked on its first await when the ✕ path
+      // runs (requestClosePane -> closePane -> rebuild -> publishSlots -> dispose is synchronous
+      // for a shell pane with no session and no live work), so the close lands mid-flight and
+      // the spawn-settled waiter it re-enters is the one that answers false 15s later.
+      const sessionFileB = join(tmpdir(), 'mog-resume-home', 'projects', 'x', `${UUID_B}.jsonl`)
+      setPaneSessionLogOverrideForSmoke(CLOSED_PANE, { provider: 'claude', file: sessionFileB })
+      await save([wsA, wsB], 'resume-a') // same count: mirrors, and slot 2 now carries a session
+      await ES(`window.bridge.invoke('workspace:restoreSession')`) // arms an intent per slot
+      const cancelArmed = resumeIntentsForSmoke().some(
+        (i) => i.paneId === CLOSED_PANE && i.sessionId === UUID_B
+      )
+      setPaneSessionLogOverrideForSmoke(CLOSED_PANE, null)
+      // "101,102|101": the pane really was in the active grid, and the close really took it out.
+      const cancelCloseIds = await ES<string>(
+        `(() => {
+          const before = window.__mogging.layout.paneIds().join(',')
+          window.__mogging.agents.launchIn(${CLOSED_PANE}, 'claude', ${JSON.stringify(cwdA)}, undefined, true).catch(() => {})
+          window.__mogging.layout.close(${CLOSED_PANE})
+          return before + '|' + window.__mogging.layout.paneIds().join(',')
+        })()`
+      )
+      // The re-entered spawn-settled waiter answers false at its own 15s timeout and only THEN
+      // is the gone-check reached — so the reading has to sit past it, with room for the two
+      // IPC round trips a pre-fix run would spend on the way to consuming the intent.
+      await sleep(20000)
+      const cancelIds = cancelCloseIds.split('|')
+      const armedAfterCancel = resumeIntentsForSmoke()
+      const cancelMidFlightRefused =
+        cancelArmed &&
+        (cancelIds[0]?.split(',') ?? []).includes(String(CLOSED_PANE)) &&
+        !(cancelIds[1]?.split(',') ?? []).includes(String(CLOSED_PANE)) &&
+        armedAfterCancel.some((i) => i.paneId === CLOSED_PANE && i.sessionId === UUID_B) &&
+        paneHasAgent(CLOSED_PANE) === false
+
       const pass =
         missingCwdRefused &&
+        cancelMidFlightRefused &&
+        blindSaveHeldSessions &&
         noSnapshot &&
         emptyOffered &&
         quickMirrored &&
@@ -223,6 +299,12 @@ export function runResumeSmoke(win: BrowserWindow): void {
         pass,
         missingCwdRefused,
         deadLaunch,
+        cancelMidFlightRefused,
+        cancelArmed,
+        cancelCloseIds,
+        armedAfterCancel,
+        blindSaveHeldSessions,
+        blindSaveSessions: snapAfterBlind?.workspaces[0]?.paneSessions ?? null,
         noSnapshot,
         emptyOffered,
         quickMirrored,
@@ -243,6 +325,7 @@ export function runResumeSmoke(win: BrowserWindow): void {
       result = { pass: false, error: e instanceof Error ? e.message : String(e) }
     } finally {
       setPaneSessionLogOverrideForSmoke(101, null)
+      setPaneSessionLogOverrideForSmoke(CLOSED_PANE, null)
     }
     try {
       writeFileSync(join(process.cwd(), 'out', 'resume-result.json'), JSON.stringify(result, null, 2))

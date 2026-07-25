@@ -20,15 +20,26 @@ import { app, type BrowserWindow } from 'electron'
 //      (the setSpawnRunHold dev seam), the command is typed exactly ONCE, only after
 //      the pane's first output (write.at >= paneLiveAt) — i.e. the pre-spawn-run path
 //      is intact, ordered, and never double-delivers.
+//   D. a pane DISPOSED mid-flight leaves the id clean: with its spawn reply held (the
+//      holdSpawnReply dev seam) the pane is closed while the reply is still in the air,
+//      and when the reply finally lands it must record NOTHING. dispose() runs
+//      forgetSpawnRun(id), so the id is already FREE; a stale outcome written after it
+//      is read SYNCHRONOUSLY by the next pane to recycle that id (whenSpawnRunOutcome
+//      short-circuits on a known outcome), which then skips the typed fallback and still
+//      books the launch — a pane with no agent that the app records as agent-bearing.
+//      `undefined` is the port's documented observable for "no spawn was ever issued".
 //
-// A reintroduced fixed delay, a lost fallback, a double delivery, or bookkeeping that
-// only the typed path performs — each fails exactly one named flag here.
+// A reintroduced fixed delay, a lost fallback, a double delivery, bookkeeping that only
+// the typed path performs, or an outcome written for a freed pane id — each fails exactly
+// one named flag here.
 // Writes out/launchnow-result.json, then exits (0=pass, 1=fail).
 
 const CLAUDE_PANE = 102 // 2nd workspace (ordinal 1) -> base 100; mix [shell, claude] -> slot 2
 const SHELL_PANE = 101
 const CUSTOM_PANE = 201 // 3rd workspace (ordinal 2), single custom slot
 const FALLBACK_PANE = 301 // 4th workspace (ordinal 3), single claude slot, build held
+const DISPOSE_PANE = 402 // 5th workspace (ordinal 4), mix [shell, claude] -> slot 2, reply held
+const DISPOSE_HOLD_MS = 5000 // how long that pane's spawn reply is stretched
 const CUSTOM_MARK = 'LAUNCHNOW_SPAWNRUN_31337'
 
 export function runLaunchNowSmoke(win: BrowserWindow): void {
@@ -63,6 +74,17 @@ export function runLaunchNowSmoke(win: BrowserWindow): void {
     `return w.id===${paneId}&&String(w.data).indexOf(${JSON.stringify(mark)})>=0}))`
   const paneText = (paneId: number): string =>
     `(function(){var ps=(window.__mogging&&window.__mogging.panes)||[];var p=ps.find(function(x){return x.id===${paneId}});return p?p.text():'';})()`
+  // The pane's own three-state spawn witness (the one PANEFIT pins), read as a tag:
+  //   'no-pane' the handle is gone, i.e. dispose() ran to its last statement;
+  //   'none'    the pane exists but has issued no spawn (spawnDims still undefined);
+  //   'issued'  the spawn call went out (lastSpawnDims is set synchronously before it).
+  const spawnStateOf = (paneId: number): string =>
+    `(function(){var ps=(window.__mogging&&window.__mogging.panes)||[];` +
+    `var p=ps.find(function(x){return x.id===${paneId}});` +
+    `return !p?'no-pane':(p.spawnDims()===undefined?'none':'issued');})()`
+  // boolean | undefined, stringified — 'undefined' is the port's "no spawn was ever
+  // issued" observable and must survive the trip out of the renderer intact.
+  const outcomeOf = (paneId: number): string => `String(window.__mogging.agents.spawnRunOutcome(${paneId}))`
 
   const run = async (): Promise<void> => {
     if (done) return
@@ -126,6 +148,45 @@ export function runLaunchNowSmoke(win: BrowserWindow): void {
       const fallbackOrdered = fallbackTypedOnce && cLiveAt !== null && cWrites[0].at >= cLiveAt
       const fallbackBookkept = cLast?.provider === 'claude'
 
+      // ── D: a pane disposed mid-flight leaves NO outcome on its id ──────────────
+      // Armed BEFORE the pane exists (same ordering rule as the run itself): the pane's
+      // spawn reply, once it lands, is parked for DISPOSE_HOLD_MS before a single line of
+      // its handler runs. That is the only window in which this race is reachable.
+      await ES(`window.__mogging.agents.holdSpawnReply(${DISPOSE_PANE}, ${DISPOSE_HOLD_MS})`)
+      await ES("window.__mogging.templates.open([{provider:'shell',count:1},{provider:'claude',count:1}])")
+      let dSpawnState = ''
+      for (let i = 0; i < 40 && dSpawnState !== 'issued'; i++) {
+        await delay(200)
+        dSpawnState = String(await ES(spawnStateOf(DISPOSE_PANE)))
+      }
+      // The reply is in flight RIGHT NOW: the spawn went out AND no outcome exists yet
+      // (the hold still owns it). Both, or closing the pane below proves nothing.
+      const disposeSpawnIssued = dSpawnState === 'issued'
+      const disposeHeldAtClose = String(await ES(outcomeOf(DISPOSE_PANE))) === 'undefined'
+      // The real close door (pane ⋯ / ✕ / shortcut all land here). Two panes in this
+      // workspace, so this closes the PANE, not the workspace; nothing is typed into
+      // anything, so no other phase's state moves.
+      await ES(`window.__mogging.layout.close(${DISPOSE_PANE})`)
+      // The instant the pane's dev handle is gone, dispose() has run to its LAST statement
+      // — forgetSpawnRun included, so the id is free from here on. Stamped in the renderer,
+      // on the same clock the hold releases against.
+      let disposedAt = 0
+      for (let i = 0; i < 15 && disposedAt === 0; i++) {
+        await delay(100)
+        disposedAt = Number(
+          await ES(`(function(){var s=${spawnStateOf(DISPOSE_PANE)};return s==='no-pane'?Date.now():0;})()`)
+        )
+      }
+      const disposePaneGone = disposedAt > 0
+      await delay(DISPOSE_HOLD_MS + 1200) // the held reply resumes INSIDE this window
+      const dReleasedAt = Number(await ES('window.__mogging.agents.spawnReplyHoldReleasedAt()'))
+      const dOutcome = String(await ES(outcomeOf(DISPOSE_PANE)))
+      // Anti-vacuity: the handler REALLY resumed, and it did so after the pane was gone.
+      // Without this, "no stale outcome" is equally true of a reply that never landed.
+      const disposeReplyRan = disposePaneGone && dReleasedAt > disposedAt
+      const disposedLeavesNoOutcome = dOutcome === 'undefined'
+      await ES(`window.__mogging.agents.holdSpawnReply(${DISPOSE_PANE}, 0)`)
+
       const pass =
         spawnRunDelivered &&
         spawnRunBookkept &&
@@ -133,7 +194,12 @@ export function runLaunchNowSmoke(win: BrowserWindow): void {
         customDelivered &&
         fallbackTypedOnce &&
         fallbackOrdered &&
-        fallbackBookkept
+        fallbackBookkept &&
+        disposeSpawnIssued &&
+        disposeHeldAtClose &&
+        disposePaneGone &&
+        disposeReplyRan &&
+        disposedLeavesNoOutcome
       emit({
         pass,
         spawnRunDelivered,
@@ -143,6 +209,11 @@ export function runLaunchNowSmoke(win: BrowserWindow): void {
         fallbackTypedOnce,
         fallbackOrdered,
         fallbackBookkept,
+        disposeSpawnIssued,
+        disposeHeldAtClose,
+        disposePaneGone,
+        disposeReplyRan,
+        disposedLeavesNoOutcome,
         aTypedWriteCount: aTypedWrites.length,
         aLast,
         aSession,
@@ -152,7 +223,11 @@ export function runLaunchNowSmoke(win: BrowserWindow): void {
         cWriteCount: cWrites.length,
         cLiveAt,
         cWriteAt: cWrites[0]?.at ?? null,
-        cLast
+        cLast,
+        dSpawnState,
+        dOutcome,
+        dDisposedAt: disposedAt,
+        dReleasedAt
       })
       app.exit(pass ? 0 : 1)
     } catch (e) {

@@ -9,7 +9,13 @@ import { getFocusedPane } from '../../core/layout/focus'
 import { getPaneCwd, getPaneCwdProjection, onPaneCwdProjection, setPaneCwd } from '../../core/layout/pane-cwd'
 import { getPaneRemote, setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
 import { onAgentLaunchRequest, requestAgentLaunch, announceProfileFailover, type AgentLaunchRequest } from '../../core/agents/launch-port'
-import { armSpawnRun, whenSpawnRunOutcome, spawnRunOutcomeFor } from '../../core/terminal/spawn-run-port'
+import {
+  armSpawnRun,
+  holdSpawnReply,
+  spawnReplyHoldReleasedAt,
+  whenSpawnRunOutcome,
+  spawnRunOutcomeFor
+} from '../../core/terminal/spawn-run-port'
 import { clearPaneAgentSession, getPaneAgentSession, setPaneAgentSession, type PaneAgentSession } from '../../core/agents/agent-session-port'
 import { setCommands } from '../../core/commands/command-port'
 import { setActiveView } from '../../core/shell/view-port'
@@ -24,7 +30,8 @@ import {
   wasPaneReattached,
   whenPaneLive,
   whenPaneRemoteReady,
-  whenPaneSpawnSettled
+  whenPaneSpawnSettled,
+  isPaneGone
 } from '../../core/terminal/liveness-port'
 import { getTelemetry } from '../../core/telemetry'
 import { showToast } from '../../components'
@@ -454,6 +461,14 @@ export const agentsFeature: UiFeature = {
       // resume decision. Wait for the verdict explicitly; the fixed 900ms lineup delay
       // that used to paper over this ordering is gone.
       if (resume && !remote) await whenPaneSpawnSettled(paneId, 15000)
+      // The pane may have been CLOSED while we waited — the waiters above answer false for
+      // "timed out" and for "gone" alike, and only the second means there is nothing left
+      // to launch into. Without this the lineup ran on: it consumed the one-shot restore
+      // intent and the session config overrides, booked a non-existent pane agent-bearing,
+      // and typed `claude --resume <uuid>` into an id the app REUSES (a split takes the
+      // lowest free slot). F018 closed exactly this class for a vanished cwd; this is the
+      // same stance for a vanished pane. Checked here, before anything is spent.
+      if (isPaneGone(paneId)) return
       // RESTORE into a pane the daemon never let die. The PTY outlives the app (ADR 0006),
       // so on the next launch the pane reattaches to a session whose agent is still running
       // — and typing `claude --resume` there does not relaunch it, it types the words into
@@ -696,8 +711,12 @@ export const agentsFeature: UiFeature = {
         detect: () => refreshAgentRegistry(),
         items: () => installedIds.slice(),
         launch: (agentId: string, profileId?: string) => launchInFocused(agentId, profileId),
-        launchIn: (paneId: number, agentId: string, cwd: string, profileId?: string) =>
-          launchInPane(paneId, agentId, cwd, false, profileId),
+        // `resume` rides LAST so the existing three-argument call sites are untouched. The
+        // RESUME gate needs it: a resume launch is the only kind that waits on the spawn
+        // verdict and the only kind that can SPEND a restore intent, so it is the only kind
+        // that can prove a pane closed mid-flight is not spent on.
+        launchIn: (paneId: number, agentId: string, cwd: string, profileId?: string, resume = false) =>
+          launchInPane(paneId, agentId, cwd, resume, profileId),
         remoteReady: (paneId: number) => isPaneRemoteReady(paneId),
         setAutoFailover: (on: boolean) => {
           const id = getWorkspaces().activeId
@@ -719,6 +738,14 @@ export const agentsFeature: UiFeature = {
         setSpawnRunHold: (ms: number) => {
           spawnRunHoldMs = Math.max(0, Number(ms) || 0)
         },
+        // LAUNCHNOW gate seam, the mirror of setSpawnRunHold on the far side of the round
+        // trip: hold ONE pane's handling of its SPAWN REPLY so the gate can close the pane
+        // mid-flight and prove a disposed pane leaves NO outcome behind for the next pane
+        // to recycle its id (dispose already freed it via forgetSpawnRun).
+        holdSpawnReply: (paneId: number, ms: number) => holdSpawnReply(paneId, ms),
+        // …and when that hold let go, so the gate can prove the reply handling truly
+        // resumed after the dispose instead of never running at all.
+        spawnReplyHoldReleasedAt: () => spawnReplyHoldReleasedAt(),
         markRemoteReady: (paneId: number) => markPaneRemoteReady(paneId),
         refreshCommands: () => refreshAgentRegistry().then((agents) => populate(agents)),
         // Smoke/dev shim: register an agent session WITHOUT launching (the dot is

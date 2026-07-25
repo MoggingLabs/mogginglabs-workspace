@@ -114,6 +114,7 @@ export function noteWorkspaceSave(previous: WorkspaceState | null, next: Workspa
   try {
     const store = getSettingsStore()
     if (!store) return
+    const held = loadSnapshot()
     const prevCount = previous?.workspaces?.length ?? 0
     const nextCount = next.workspaces.length
     // Teardown/hold: an empty or shrinking save keeps the pre-shrink snapshot —
@@ -123,7 +124,14 @@ export function noteWorkspaceSave(previous: WorkspaceState | null, next: Workspa
       savedAt: Date.now(),
       activeId: next.activeId ?? null,
       workspaces: next.workspaces.map((w) => {
-        const paneSessions = paneSessionsFor(w)
+        // HOLD what this save cannot re-derive, the same stance as the shrink-hold above.
+        // The boot restore fires a debounced mirror save ~400ms after launch, when the context
+        // monitor has locked NO session logs yet — so paneSessionsFor answers undefined for
+        // every workspace and this rewrite ERASED the exact-session ids the card exists to
+        // carry. A later teardown save is held, so a user who boots, works, and closes without
+        // an intervening lock-bearing save restored with a bare `--resume`: the CLI's session
+        // PICKER instead of their conversation.
+        const paneSessions = paneSessionsFor(w) ?? held?.workspaces.find((p) => p.id === w.id)?.paneSessions
         return paneSessions ? { ...w, paneSessions } : { ...w }
       })
     }

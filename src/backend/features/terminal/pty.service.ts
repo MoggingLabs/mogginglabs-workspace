@@ -34,6 +34,7 @@ import {
   type PaneCwdSnapshot
 } from '../agent-state'
 import { aiderLogPath } from '../context'
+import { exitCodeFor } from '../../../pty-daemon/exit-code'
 
 /** The sink the service pushes pane events into (wired to IPC by the module). */
 export interface TerminalSink {
@@ -119,7 +120,9 @@ export class PtyService {
       // Never `restored`: an in-proc pty lives in THIS process, so an existing session is
       // by definition continuously alive (a renderer reload), never a cold-start restore.
       const buf = this.buffers.get(req.id)
-      if (buf) this.sink.data({ id: req.id, data: buf })
+      // Marked as replay: these bytes already acted once. Re-parsing them must not re-fire
+      // their OSC 52 copies into the live system clipboard (DataEvent.replay).
+      if (buf) this.sink.data({ id: req.id, data: buf, replay: true })
       this.publishCwd(req.id, this.cwdStates.get(req.id)?.current())
       return { existing: true, restored: false, pty: ptyEmulation() }
     }
@@ -258,14 +261,16 @@ export class PtyService {
         this.sink.data({ id: req.id, data })
       })
 
-      proc.onExit(({ exitCode }) => {
+      proc.onExit(({ exitCode, signal }) => {
         if (this.ptys.get(req.id) !== proc) return // kill() (or a successor) already owns cleanup
         this.trackers.get(req.id)?.dispose()
         this.trackers.delete(req.id)
         this.agentProcs.untrack(String(req.id))
         this.gitContexts.get(req.id)?.dispose()
         this.gitContexts.delete(req.id)
-        this.sink.exit({ id: req.id, exitCode })
+        // 128+signal, the daemon twin's rule: a POSIX signal death reports exitCode 0, so a
+        // SIGKILL/SIGSEGV was indistinguishable from a clean `exit` in the pane's epitaph.
+        this.sink.exit({ id: req.id, exitCode: exitCodeFor({ exitCode, signal }) })
         this.ptys.delete(req.id)
         this.sizes.delete(req.id)
         this.buffers.delete(req.id)

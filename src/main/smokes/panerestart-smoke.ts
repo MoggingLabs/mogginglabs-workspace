@@ -21,6 +21,17 @@ import { join } from 'node:path'
 // the wire (the spy works), then sees a DEAD one reach nothing (the gate works) — both
 // driven through xterm's own input path (term.input → onData), the road real typing takes.
 // Real PTY death (`exit` typed into the shell), real respawn, zero fixtures, zero network.
+//
+// The epitaph's NUMBER is proven by a SECOND, violent death: after the restart the same pane
+// is killed with "kill -9 $$" from its own shell, and the LAST epitaph must read a NON-ZERO
+// code (137). node-pty hands JS {exitCode, signal}, and POSIX WIFSIGNALED sets exitCode 0
+// with the signal alongside (node-pty src/unix/pty.cc: "int exit_code = 0, signal_code = 0"),
+// so without the 128+signal rule a SIGKILL/SIGSEGV printed "(code 0)" — byte-identical to the
+// user typing exit, on exactly the deaths (OOM killer, segfault) this seam exists to diagnose.
+// The existing /\[process exited \(code \d+\)\]/ assert matches 137 just as happily, so that
+// act cannot carry this claim: the number itself is the claim. win32 has no WIFSIGNALED —
+// ConPTY names a real exit code for every death — so the act SKIPS there, recording its reason
+// in signalEpitaph rather than passing silently as an assertion that never ran.
 // Writes out/panerestart-result.json, then exits (0=pass, 1=fail).
 export function runPaneRestartSmoke(win: BrowserWindow): void {
   const resultPath = join(process.cwd(), 'out', 'panerestart-result.json')
@@ -152,14 +163,53 @@ export function runPaneRestartSmoke(win: BrowserWindow): void {
       const scrollbackTail = await ES<string>(`(() => { const p = ${pane(paneId)}; return p ? p.text().replace(/\\n+/g, '\\n').slice(-1500) : '' })()`)
       await ES(`(() => { delete window.__mogging.ptyWrites; return 1 })()`)
 
+      // ── crash: a SIGNAL death must not read as a clean exit ───────────────────────
+      // The restarted pane is alive, so it can die a SECOND time — violently this time.
+      // "kill -9 $$" makes the pane's own shell the SIGKILL target, the same road an OOM
+      // kill or a segfault takes: WIFSIGNALED, exitCode 0, signal 9. The first death's
+      // "(code 0)" epitaph is still in scrollback above, so the claim is the LAST epitaph
+      // in the buffer — it must name a NON-ZERO code (137 = 128+9, the number the user
+      // already reads in $?). Kept OUT of the win32 run entirely: there is no WIFSIGNALED
+      // there, and a skip that reported itself as a passing assert would be a lie the
+      // result file could not distinguish from the real thing.
+      let signalDeathNamed = true
+      let signalExitCode = -1
+      let signalEpitaph =
+        'skipped: POSIX-only — win32 has no WIFSIGNALED (ConPTY names a real exit code for every death)'
+      if (process.platform !== 'win32') {
+        // -1 when the buffer holds no epitaph at all; the poll waits for a POSITIVE code,
+        // which the surviving "(code 0)" from the clean exit can never satisfy.
+        const lastEpitaphCode =
+          '(() => { let last = -1; ' +
+          `for (const m of (${joined(paneId)}).matchAll(/\\[process exited \\(code (\\d+)\\)\\]/g)) last = Number(m[1]); ` +
+          'return last })()'
+        try {
+          await ES(`(() => { ${pane(paneId)}.write('kill -9 $$\\r'); return 1 })()`)
+          // Short budget on purpose: a SIGKILL epitaph lands in well under a second, and
+          // the gate's wall clock is shared with a fully-red run of every stage above.
+          signalDeathNamed = await until(`${lastEpitaphCode} > 0`, 24, 250)
+          signalExitCode = await ES<number>(lastEpitaphCode).catch(() => -1)
+          signalEpitaph = signalDeathNamed
+            ? 'signal death named: last epitaph code ' + signalExitCode + ' (SIGKILL = 128+9 = 137)'
+            : 'last epitaph code ' + signalExitCode +
+              ' — a SIGKILL is reported as a clean exit (the 128+signal rule is gone)'
+        } catch (error) {
+          // Never let this act erase the diagnostics of the stages above it.
+          signalDeathNamed = false
+          signalEpitaph = 'act threw: ' + String(error)
+        }
+      }
+
       const pass =
         paneWasLive && spySawLive &&
         exitCodeShown && deadFact && bannerShown && fillPainted &&
         deadInputGated &&
-        aliveAgain && bannerGone && respawnedShell && scrollbackKept
+        aliveAgain && bannerGone && respawnedShell && scrollbackKept &&
+        signalDeathNamed
       result = {
         pass, paneWasLive, spySawLive, exitCodeShown, deadFact, bannerShown, fillPainted,
         deadInputGated, aliveAgain, bannerGone, respawnedShell, scrollbackKept,
+        signalDeathNamed, signalExitCode, signalEpitaph,
         scrollbackTail
       }
     } catch (error) {

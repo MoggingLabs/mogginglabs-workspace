@@ -60,7 +60,7 @@ export function runReloadSmoke(win: BrowserWindow): void {
   // A node loop that prints MARK_<n> every 400ms forever (until Ctrl-C / pty killed).
   // At i===4 (~1.6s in — safely after our last keystroke, which would clear the latch)
   // it emits ONE OSC 9, latching the pane's attention state for the reload assertion.
-  const LOOP = `node -e "let i=0;setInterval(function(){if(i===4){process.stdout.write(String.fromCharCode(27)+']9;needs input'+String.fromCharCode(7))}process.stdout.write('MARK_'+(i++)+String.fromCharCode(10))},400)"\r`
+  const LOOP = `node -e "let i=0;setInterval(function(){if(i===2){process.stdout.write(String.fromCharCode(27)+']52;c;UkVQTEFZRURfQ09QWQ=='+String.fromCharCode(7))}if(i===4){process.stdout.write(String.fromCharCode(27)+']9;needs input'+String.fromCharCode(7))}process.stdout.write('MARK_'+(i++)+String.fromCharCode(10))},400)"\r`
   const marks = (s: string): number[] => (s.match(/MARK_(\d+)/g) || []).map((m) => Number(m.slice(5)))
   const chipState = (): Promise<unknown> =>
     ES(
@@ -75,7 +75,7 @@ export function runReloadSmoke(win: BrowserWindow): void {
     app.exit(1)
   }
 
-  async function phaseB(beforeMax: number, stateBefore: string): Promise<void> {
+  async function phaseB(beforeMax: number, stateBefore: string, clipBefore: string): Promise<void> {
     if (done) return
     try {
       await delay(2200) // let the new pane mount + resubscribe
@@ -114,7 +114,9 @@ export function runReloadSmoke(win: BrowserWindow): void {
       const latchHeld =
         stateBefore === 'attention' && syncAnswer === 'attention' && stateAfter === 'attention'
       const noErrors = errors.length === 0
-      const pass = remounted && survived && noDuplicate && latchHeld && noErrors
+      const clipAfter = String(await ES('window.bridge.invoke("clipboard:read")'))
+      const clipboardHeld = clipBefore === 'SENTINEL_KEEP_ME' && clipAfter === 'SENTINEL_KEEP_ME'
+      const pass = remounted && survived && noDuplicate && latchHeld && noErrors && clipboardHeld
 
       done = true
       write({
@@ -127,6 +129,9 @@ export function runReloadSmoke(win: BrowserWindow): void {
         stateAfter,
         syncAnswer,
         noErrors,
+        clipboardHeld,
+        clipBefore,
+        clipAfter,
         beforeMax,
         afterMin,
         afterMax,
@@ -173,11 +178,22 @@ export function runReloadSmoke(win: BrowserWindow): void {
       const beforeMax = before.length ? Math.max(...before) : -1
       const stateBefore = String(await chipState())
 
+      // OSC 52 REPLAY (row 8). The loop emitted one OSC 52 at i===2 and it copied once -
+      // correct live behaviour, and it is now in the scrollback ring. Overwrite the clipboard
+      // with a SENTINEL: the reload reattaches and REPLAYS that ring through the same
+      // terminal:data channel, xterm re-parses it, and pre-fix the handler fired AGAIN,
+      // silently replacing what the user holds with an old agent copy (from sessions.db, one
+      // that can predate the session). Post-fix the replay is flagged and the handler is inert.
+      // Written by IPC, not typed: a keystroke here would clear the attention latch below.
+      await ES('window.bridge.invoke("clipboard:write",{text:"SENTINEL_KEEP_ME"});1')
+      await delay(500)
+      const clipBefore = String(await ES('window.bridge.invoke("clipboard:read")'))
+
       // Attach the next-load promise BEFORE reloading so we can't miss it.
       const loaded = new Promise<void>((res) => wc.once('did-finish-load', () => res()))
       wc.reload()
       await loaded
-      await phaseB(beforeMax, stateBefore)
+      await phaseB(beforeMax, stateBefore, clipBefore)
     } catch (e) {
       failOut('phaseA exception: ' + String(e))
     }

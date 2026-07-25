@@ -37,7 +37,13 @@ import { spawnPaneMcpSmokeClient, type PaneMcpSmokeClient } from './pane-mcp-smo
 //       structured body preserved BELOW it, zero real sockets;
 //   (g) retention honesty: cap N, land N+5 more → 5+ evictions, COUNTED in
 //       the drafts answer and the overview — never silent;
-//   (h) `.memory/drafts/` holds only `.md` files afterwards.
+//   (h) `.memory/drafts/` holds only `.md` files afterwards;
+//   (i) the RING law — the pane's block ladder is a 300-entry ring that spans
+//       restarts, so the capture high-water mark must be a BLOCK ID, never an
+//       array index: three lives on one pane (arc → a life that floods the ring
+//       past its cap → one more arc) and the THIRD life still lands its own
+//       reasoning draft. With an index mark that third life captured nothing at
+//       all — slice(length) of a saturated ring is empty.
 // Verdict: out/braincap-result.json.
 
 function git(cwd: string, args: string[]): string {
@@ -397,10 +403,131 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
       // ── (h) the quarantine holds only .md files ────────────────────────────
       const onlyMdOk = draftFiles().length > 0 && draftFiles().every((f) => f.endsWith('.md'))
 
+      // ── (i) the RING law: the capture high-water mark is a BLOCK ID, never an index ─
+      // The pane's block ladder is a 300-entry RING (block-tracker.ts MAX_BLOCKS) that
+      // DELIBERATELY spans restarts — scrollback survives a restart, so the ladder does
+      // too. An array index goes stale the instant that ring shifts: once saturated,
+      // list().length stops growing, so slice(index) returns EMPTY and every
+      // post-restart life captured NOTHING — the Brain never heard that session existed
+      // (and it degrades before saturation too: at 295/300 with 20 new blocks, 15 are
+      // lost). Block.id is a monotonic mint, so it stays true across shifts.
+      // THREE lives on the SAME pane, in order:
+      //   life 1  the real arc above — the mark parks at its last block;
+      //   life 2  floods the ring PAST the cap and ends. THAT emission is what parks the
+      //           pre-fix mark at ladder.length (300), where an index can never grow again;
+      //   life 3  one distinct arc — which must still land its OWN reasoning draft.
+      // Pre-fix, life 3 emits nothing at all (slice(300) of a 300-long ladder is empty):
+      // no third draft on disk and the emission counter never moves.
+      // The fill is REAL OSC 133 bytes written into the pane's own xterm (PANERESTART's
+      // fill technique) — the vocabulary the tracker reads from a shell — so the ring it
+      // saturates is the shipped ring at the shipped cap, and the saturation itself is
+      // ASSERTED: a run that failed to overrun the ring goes red, never quietly vacuous.
+      setDraftCapsForSmoke({}) // (g) is measured — retention must not eat this evidence
+      const RING_CAP = 300 // block-tracker.ts MAX_BLOCKS
+      const RING_FILL = 330 // past the cap even with life 1's blocks: the ring MUST shift
+      const LIFE3_CMD = 'ringlife3-probe'
+      const ringPane = `(window.__mogging.panes || []).find((x) => x.id === ${paneA2})`
+      const ringButton = `document.querySelector('.layout-slot[data-pane-id="${paneA2}"] .pane-dead-restart')`
+      const readRing = (): Promise<{ n: number; last: number }> =>
+        ES<{ n: number; last: number }>(
+          `(() => { const p = ${ringPane}; if (!p) return { n: -1, last: -1 }; const b = p.blocks(); ` +
+            `return { n: b.length, last: b.length ? b[b.length - 1].id : -1 } })()`
+        ).catch(() => ({ n: -1, last: -1 }))
+      const ringRestart = async (): Promise<boolean> => {
+        const clicked = await ES<number>(
+          `(() => { const el = ${ringButton}; if (!el) return 0; el.click(); return 1 })()`
+        ).catch(() => 0)
+        if (clicked !== 1) return false
+        return waitFor(
+          () => ES<boolean>(`(() => { const p = ${ringPane}; return !!p && !p.dead() })()`).catch(() => false),
+          30, 400
+        )
+      }
+      // Session end is a REAL process exit. A freshly respawned shell can miss the first
+      // write while it boots (the PANERESTART trap), so the poke repeats until the pane
+      // holds the dead fact itself.
+      const ringEndLife = async (): Promise<boolean> => {
+        for (let poke = 0; poke < 4; poke++) {
+          await ES(`(() => { const p = ${ringPane}; if (p) p.write('exit\\r'); return 1 })()`).catch(() => 0)
+          const died = await waitFor(
+            () => ES<boolean>(`(() => { const p = ${ringPane}; return !!p && p.dead() })()`).catch(() => false),
+            8, 400
+          )
+          if (died) return true
+        }
+        return false
+      }
+      // Life 3's draft by CONTENT, not by filename: the slug is minted from the ladder
+      // the emission happened to carry, and only the bytes can say whose life it was.
+      const life3Draft = (): string => {
+        for (const f of draftFiles()) {
+          if (!f.startsWith('session-')) continue
+          try {
+            const b = readFileSync(join(draftsDir, f), 'utf8')
+            if (b.includes(LIFE3_CMD)) return b
+          } catch {
+            /* a draft mid-write reads as not-yet */
+          }
+        }
+        return ''
+      }
+      const emissions0 = captureStatsForSmoke().session
+
+      // life 2: flood the ring past its cap, then end the session
+      const life2Alive = await ringRestart()
+      if (life2Alive) {
+        await ES(
+          `(() => { const p = ${ringPane}; if (!p) return 0; ` +
+            `const E = String.fromCharCode(27), BEL = String.fromCharCode(7); ` +
+            `const osc = (s) => E + ']133;' + s + BEL; let s = '\\r\\n'; ` +
+            `for (let i = 1; i <= ${RING_FILL}; i++) ` +
+            `s += osc('A') + osc('B') + 'ringfill-' + i + osc('C') + '\\r\\n' + osc('D;0'); ` +
+            `p.term.write(s); return ${RING_FILL} })()`
+        ).catch(() => 0)
+      }
+      const ringSaturated = life2Alive && (await waitFor(async () => (await readRing()).n >= RING_CAP, 40, 300))
+      const ringFilled = await readRing()
+      const life2Ended = ringSaturated && (await ringEndLife())
+
+      // life 3: one distinct arc, and its draft is the whole claim
+      const life3Alive = life2Ended && (await ringRestart())
+      if (life3Alive) {
+        await ES(
+          `(() => { const p = ${ringPane}; if (!p) return 0; ` +
+            `const E = String.fromCharCode(27), BEL = String.fromCharCode(7); ` +
+            `const osc = (s) => E + ']133;' + s + BEL; const c = ${JSON.stringify(LIFE3_CMD)}; ` +
+            `p.term.write('\\r\\n' + osc('A') + osc('B') + c + osc('C') + '\\r\\n' + osc('D;1') + ` +
+            `osc('A') + osc('B') + c + osc('C') + '\\r\\n' + osc('D;0')); return 1 })()`
+        ).catch(() => 0)
+      }
+      const life3Minted =
+        life3Alive && (await waitFor(async () => (await readRing()).last >= ringFilled.last + 2, 30, 300))
+      const ringAfterLife3 = await readRing()
+      const life3Ended = life3Minted && (await ringEndLife())
+      const life3Landed = life3Ended && (await waitFor(() => life3Draft() !== '', 30, 500))
+      const life3Bytes = life3Draft()
+      const ringEmissions = captureStatsForSmoke().session - emissions0
+      const ringOk =
+        life2Alive &&
+        ringSaturated &&
+        ringFilled.n === RING_CAP && // the ring sits AT its cap — from here an index is a lie
+        ringFilled.last > RING_CAP && // ids outran indices: the shift really happened
+        life2Ended &&
+        life3Alive &&
+        life3Minted &&
+        ringAfterLife3.n === RING_CAP && // still saturated, so a pre-fix slice(300) IS empty
+        life3Ended &&
+        life3Landed &&
+        life3Bytes.includes('source: session') &&
+        life3Bytes.includes(`\`${LIFE3_CMD}\` — exit 1`) &&
+        life3Bytes.includes(`\`${LIFE3_CMD}\` — exit 0`) &&
+        life3Bytes.includes('succeeded on attempt 2') &&
+        ringEmissions >= 2 // life 2 AND life 3 both spoke (pre-fix: only life 2 ever does)
+
       const pass =
         sessionOk && cardOk && distillOffOk && cleanOk && searchOk && suggestClean && recallOk &&
         grantlessOk && movedOk && promoteGitOk && suggestNowOk && discardPromotedOk && discardDraftOk &&
-        distilledOk && retentionOk && onlyMdOk
+        distilledOk && retentionOk && onlyMdOk && ringOk
       result = {
         pass,
         cleanOk,
@@ -429,6 +556,22 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
         retentionOk,
         retention: { beforeRows, beforeEvicted, after: after.ok ? { rows: after.drafts.length, evicted: after.evicted } : null },
         onlyMdOk,
+        ringOk,
+        ring: {
+          cap: RING_CAP,
+          fill: RING_FILL,
+          life2Alive,
+          ringSaturated,
+          ringFilled, // { n, last }: n must BE the cap, last must have outrun it
+          life2Ended,
+          life3Alive,
+          life3Minted,
+          ringAfterLife3,
+          life3Ended,
+          life3Landed,
+          ringEmissions, // 2 post-fix; 1 pre-fix — life 3 never reaches the channel
+          life3Head: life3Bytes.slice(0, 400)
+        },
         captureStats: captureStatsForSmoke(),
         platform: process.platform
       }

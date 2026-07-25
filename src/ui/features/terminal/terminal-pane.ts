@@ -35,7 +35,7 @@ import {
 import { windowsPtyFor } from '../../core/terminal/pty-emulation'
 import { registerPaneInstance, retirePaneInstance } from '../../core/terminal/pane-instance-port'
 import { forgetPane, markPaneLive, markPaneReattached, markPaneRemoteReady, markPaneSpawnSettled } from '../../core/terminal/liveness-port'
-import { claimSpawnRun, forgetSpawnRun, reportSpawnRunOutcome } from '../../core/terminal/spawn-run-port'
+import { claimSpawnReplyHold, claimSpawnRun, forgetSpawnRun, reportSpawnRunOutcome } from '../../core/terminal/spawn-run-port'
 import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
 import { setPaneState, clearPaneState, paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
 import { completionsFor } from '../../core/attention/completions'
@@ -108,6 +108,17 @@ export class TerminalPane {
   private readonly dropAbort = new AbortController()
   private devHandle: unknown
   private liveMarked = false
+  /** GATE seam (PANEFIT): the grid this pane's spawn actually CLAIMED — null when it
+   *  claimed none because it could not measure. The whole point of the unmeasured-dims
+   *  fix is what is NOT sent, and "not sent" has no other observable.
+   *  THREE states on purpose: `undefined` = no spawn was ever issued, `null` = spawned
+   *  and deliberately claimed nothing, an object = claimed that grid. Collapsing the
+   *  first two made the PANEFIT assertion VACUOUS — it passed on the pre-fix bytes
+   *  because the pane had not spawned yet, not because the fix worked. */
+  private lastSpawnDims: { cols: number; rows: number } | null | undefined = undefined
+  /** True while REPLAYED scrollback is being parsed (see DataEvent.replay): handlers that
+   *  act on the world rather than paint — OSC 52's clipboard write — stay inert. */
+  private replaying = false
   private remoteReadyProbe = ''
   private remoteReadyMarked = false
   private scrollbar?: PaneScrollbarHandle
@@ -143,7 +154,13 @@ export class TerminalPane {
   private captureEmitted = false
   /** Blocks already captured by a PRIOR life's emission (the ladder spans lives —
    *  scrollback survives restart). Each emission captures only past this mark. */
-  private capturedThrough = 0
+  /** High-water mark for session capture, by BLOCK ID — never by array index. `blocks` is a
+   *  300-entry RING that deliberately spans restarts, so an index went stale the moment it
+   *  shifted: once saturated, `list().length` stops growing, `slice(index)` returns empty and
+   *  EVERY post-restart life captured nothing at all (and it degrades before saturation too —
+   *  at 295/300 with 20 new blocks, 15 are lost). Block.id is a monotonic mint, so it stays
+   *  true across shifts. */
+  private capturedThroughId = 0
   private refitTimer?: ReturnType<typeof setTimeout>
   private expandStateObs?: MutationObserver
   private refitLeading = true
@@ -280,7 +297,24 @@ export class TerminalPane {
     // construction — it is the universal protocol, not a Claude Code special case.
     this.osc52 = this.term.parser.registerOscHandler(52, (data) => {
       const req = parseOsc52(data)
-      if (req?.kind === 'copy') void this.copyOrWarn(req.text)
+      // NEVER while replaying. A reattach/reconnect/cold restore repaints this pane by
+      // re-writing its scrollback ring through this same channel, and xterm re-parses it —
+      // so every OSC 52 still in the ring used to re-execute, silently replacing whatever
+      // the user currently holds with an old agent copy. The persisted ring makes it worse
+      // than stale: a payload from a PREVIOUS session (sessions.db) could land on the live
+      // clipboard on an ordinary app restart. Still CONSUMED (return true) — a replayed
+      // copy request is not display content either. The OSC 133 handler below already
+      // carries this same replay grace, for the same reason.
+      if (req?.kind === 'copy' && !this.replaying) void this.copyOrWarn(req.text)
+      // Say so. A refusal the user is not told about is indistinguishable from a copy
+      // that worked — and the CLI has already claimed it worked.
+      else if (req?.kind === 'refused' && !this.replaying) {
+        showToast({
+          tone: 'danger',
+          title: 'Copy failed',
+          body: 'That copy was too large to put on the clipboard.'
+        })
+      }
       return true
     })
 
@@ -321,7 +355,18 @@ export class TerminalPane {
             this.liveMarked = true
             markPaneLive(this.id) // first PTY output — lineup launches may proceed
           }
-          this.term.write(e.data)
+          // The flag must span xterm's parse, which is ASYNCHRONOUS — hence the write
+          // callback rather than a straight-line reset. Replayed bytes are re-parsed, and
+          // handlers that ACT (OSC 52 copying to the system clipboard) must stay inert
+          // for them.
+          if (e.replay) {
+            this.replaying = true
+            this.term.write(e.data, () => {
+              this.replaying = false
+            })
+          } else {
+            this.term.write(e.data)
+          }
         }
       }),
       terminalClient.onExit((e) => {
@@ -490,22 +535,51 @@ export class TerminalPane {
     // app's install folder, whatever the wizard picked. A REMOTE pane sends none: the path
     // is local and would mean nothing on the far side (publishPaneCwds skips those slots).
     const cwd = remote ? '' : (getPaneCwd(this.id) ?? '')
-    return terminalClient
-      .spawn({
-        id: this.id,
-        cwd,
-        cols: this.term.cols,
-        rows: this.term.rows,
-        workspaceId: workspaceIdForPane(this.id),
-        agentId: assignmentForPane(this.id),
-        remoteHostId: remote?.hostId,
-        remoteCwd: remote?.cwd,
-        run
-      })
+    // Assert a grid only if this pane actually MEASURED one. A pane mounted into a hidden
+    // workspace (boot restore builds every workspace with activate:false, and only one is
+    // switched to) cannot measure — proposeGrid returns null on a display:none subtree — so
+    // xterm still carries its constructed 80x24. Sending that claimed a viewport we never
+    // had, and the daemon faithfully resized the SURVIVING session down to it: on relaunch,
+    // every workspace the user did not click first had its live agent squeezed to 80 columns,
+    // hard-wrapping everything it printed until the tab was first visited. Omitting the dims
+    // is the seam's own documented "leave it alone" case.
+    const measured = proposeGrid(this.term)
+    this.lastSpawnDims = measured ? { cols: this.term.cols, rows: this.term.rows } : null
+    const reply = terminalClient.spawn({
+      id: this.id,
+      cwd,
+      cols: measured ? this.term.cols : undefined,
+      rows: measured ? this.term.rows : undefined,
+      workspaceId: workspaceIdForPane(this.id),
+      agentId: assignmentForPane(this.id),
+      remoteHostId: remote?.hostId,
+      remoteCwd: remote?.cwd,
+      run
+    })
+    // DEV/GATE seam (LAUNCHNOW): stretch THIS pane's handling of its own spawn reply, so
+    // the gate can close the pane while the reply is still in flight — the race every
+    // post-dispose guard below exists for, and one main answers far too fast to hit by
+    // hand. Unarmed (every real run) this IS the bare spawn promise; the whole branch is
+    // tree-shaken out of production.
+    const settled = import.meta.env.DEV
+      ? reply.then(async (res) => {
+          const hold = claimSpawnReplyHold(this.id)
+          if (hold) await hold
+          return res
+        })
+      : reply
+    return settled
       .then((res) => {
         // The delivery report the agents feature settles on: TRUE only when a FRESH
         // session actually received the run line (a reattached session ignored it).
-        reportSpawnRunOutcome(this.id, !!run && !res.existing)
+        // Never after dispose, for the same reason spelled out for the marks below:
+        // dispose() runs forgetSpawnRun(this.id), and a reply landing after that writes a
+        // stale outcome for a FREE id. The next pane to recycle it reads that `true`
+        // SYNCHRONOUSLY (whenSpawnRunOutcome short-circuits on a known outcome), skips the
+        // typed fallback and still books the launch — a pane with no agent that the app
+        // records as agent-bearing. The port states the law: "a recycled pane id must start
+        // with no armed build, no stale outcome, and no waiter still hoping".
+        if (!this.disposed) reportSpawnRunOutcome(this.id, !!run && !res.existing)
         // The spawn reply's own emulation report — the authoritative confirmation of the
         // pre-spawn value applied in the constructor (same probe, same module, so it can
         // only differ if the backend changed under us mid-session; applying it keeps the
@@ -541,8 +615,10 @@ export class TerminalPane {
       })
       .catch((err) => {
         // A failed spawn delivered nothing — the agents feature's typed fallback will
-        // wait on liveness and fail as gracefully as it always has.
-        reportSpawnRunOutcome(this.id, false)
+        // wait on liveness and fail as gracefully as it always has. Disposed panes report
+        // nothing at all (see the .then twin): forgetSpawnRun already answered the waiters
+        // with null, which IS the typed-fallback floor.
+        if (!this.disposed) reportSpawnRunOutcome(this.id, false)
         // A pane with no pty renders nothing and grows wrong. Never swallow it — and
         // never leave the USER staring at a silently blank pane: say it in the pane,
         // where the missing prompt would have been.
@@ -935,10 +1011,10 @@ export class TerminalPane {
     this.captureEmitted = true
     const ladder = this.blocks?.list() ?? []
     const blocks = ladder
-      .slice(this.capturedThrough)
+      .filter((b) => b.id > this.capturedThroughId)
       .filter((b) => b.command && b.exitCode !== undefined)
       .map((b) => ({ command: b.command, exitCode: b.exitCode, durationMs: b.durationMs }))
-    this.capturedThrough = ladder.length
+    if (ladder.length) this.capturedThroughId = ladder[ladder.length - 1].id
     if (!blocks.length) return
     const req: BrainCaptureSessionRequest = { pane: String(this.id), blocks }
     void getBridge().invoke(BrainChannels.captureSession, req).catch(() => undefined)
@@ -1917,12 +1993,18 @@ export class TerminalPane {
     menu.append(
       separator(),
       item('pencil', 'Rename', () => this.renameFn?.()),
-      item('trash', 'Clear terminal', () => this.term.clear()),
-      item('folder', 'Copy working directory', () => {
-        const cwd = getPaneCwd(this.id)
-        if (cwd) void this.copyOrWarn(cwd)
-      })
+      item('trash', 'Clear terminal', () => this.term.clear())
     )
+    // Offered only when there IS a working directory to copy — the same "don't offer what
+    // cannot work" gate Move uses above. A remote pane has no local cwd (publishPaneCwds
+    // skips remote slots and the spawn sends ''), so this row used to sit there permanently
+    // dead: its handler is `if (cwd)`, so clicking it copied nothing, said nothing, and left
+    // the user pasting whatever was on the clipboard before. The menu is rebuilt on open and
+    // refreshed live, so it appears the moment a cwd is known.
+    const menuCwd = getPaneCwd(this.id) || getPaneRemote(this.id)?.cwd || ''
+    if (menuCwd) {
+      menu.append(item('folder', 'Copy working directory', () => void this.copyOrWarn(menuCwd)))
+    }
     // Worktree-isolated pane (3/03): guarded removal. Dirty worktrees are refused with
     // an explicit force step — an agent's uncommitted work is never silently destroyed.
     const cwdState = getPaneCwdProjection(this.id)
@@ -1949,14 +2031,28 @@ export class TerminalPane {
               return
             }
           }
-          const res = await new Promise<RemoveWorktreeResult>((resolve) => {
-            eventHost.dispatchEvent(
-              new CustomEvent('mogging:remove-worktree', {
-                bubbles: true,
-                detail: { paneId: this.id, repo, path: cwd, force, resolve }
+          // The controller closes the pane FIRST, then removes — so by the time its `dirty`
+          // refusal comes back (the backend re-checks on every non-force removal, and the
+          // worktrees module's own comment says this refusal "arrives only AFTER the pane was
+          // closed"), this element is DETACHED. A bubbling event from a detached node reaches
+          // no listener — the controller's is on the workspace container — so the retry's
+          // promise never settled and "Remove anyway" was a dead button, with the ⋯ entry that
+          // was the only other door gone along with the pane. Once there is no pane left to
+          // sequence, go straight down the same backend door the controller uses.
+          const res = eventHost.isConnected
+            ? await new Promise<RemoveWorktreeResult>((resolve) => {
+                eventHost.dispatchEvent(
+                  new CustomEvent('mogging:remove-worktree', {
+                    bubbles: true,
+                    detail: { paneId: this.id, repo, path: cwd, force, resolve }
+                  })
+                )
               })
-            )
-          })
+            : ((await getBridge().invoke(WorktreeChannels.remove, {
+                repo,
+                path: cwd,
+                force
+              })) as RemoveWorktreeResult)
           {
             if (res.ok) {
               showToast({ tone: 'success', title: 'Worktree removed', body: 'Its branch is kept for review.' })
@@ -2045,6 +2141,9 @@ export class TerminalPane {
     w.__mogging.panes = w.__mogging.panes ?? []
     this.devHandle = {
       id: this.id,
+      /** What this pane's spawn claimed as its viewport, or null for "I could not
+       *  measure, so I claimed nothing" (PANEFIT asserts the null). */
+      spawnDims: (): { cols: number; rows: number } | null | undefined => this.lastSpawnDims,
       // CHROMEUX (8.5/08): force role/claims/mcp chips visible with representative text,
       // so the one-line header contract can be measured with ALL chips lit (the remote
       // chip is real — built from the workspace manifest). DEV-only, tree-shaken in prod.

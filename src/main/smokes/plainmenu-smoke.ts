@@ -25,6 +25,11 @@ import { setAgentDetectOverrideForSmoke } from '../agents'
 //      must update the menu IN PLACE — the menu neither closes (the old behavior) nor
 //      keeps showing the stale value.
 //
+// A last stage generalizes the same law to the OTHER conditional row: "Copy working
+// directory" is offered exactly when the pane HAS a directory to copy. A remote pane with
+// no path must not offer it (pre-fix it did, and the click was a silent no-op); a remote
+// pane that knows its far-side path must.
+//
 // Hermetic: the installed CLI is a registry override (setAgentDetectOverrideForSmoke), the
 // agent session is a replayed detection event (__mogging.agents.detected) — no real CLI, no
 // network. Writes out/plainmenu-result.json, then exits (0=pass, 1=fail).
@@ -60,26 +65,40 @@ export function runPlainMenuSmoke(win: BrowserWindow): void {
     launch: number
     rename: boolean
     agentNote: boolean
+    /** "Copy working directory" — offered ONLY when this pane HAS a directory to copy. */
+    copyCwd: boolean
+    /** A known sibling action: an absence reading is worthless without it (an empty or
+     *  failed menu would otherwise "prove" every row is correctly gone). */
+    clear: boolean
+    /** The pane's own "Remote: <host>" fact row — the remote stage's identity witness. */
+    remoteFact: boolean
   }
   const readMenu = (paneId: number): Promise<MenuRead> =>
     ES<MenuRead>(`(() => {
+      const blank = { opened: false, launch: -1, rename: false, agentNote: false, copyCwd: false, clear: false, remoteFact: false }
       const button = document.querySelector('.layout-slot[data-pane-id="${paneId}"] [aria-label="Pane menu"]')
-      if (!(button instanceof HTMLButtonElement)) return { opened: false, launch: -1, rename: false, agentNote: false }
+      if (!(button instanceof HTMLButtonElement)) return blank
       button.click()
       const menu = document.getElementById('pane-menu-${paneId}')
       const opened = !!menu && !menu.hidden
       const items = menu ? [...menu.querySelectorAll('.menu-item')].map(el => (el.textContent || '').trim()) : []
       const launch = items.filter(text => /^Launch .+ here$/.test(text)).length
       const rename = items.includes('Rename')
+      const copyCwd = items.includes('Copy working directory')
+      const clear = items.includes('Clear terminal')
       const agentNote = !!menu && (menu.textContent || '').includes('Agent CLI:')
+      const remoteFact = !!menu && (menu.textContent || '').includes('Remote: ')
       button.click()
-      return { opened, launch, rename, agentNote }
+      return { opened, launch, rename, agentNote, copyCwd, clear, remoteFact }
     })()`)
 
   /** Poll the menu until `want` holds (the agents feature repopulates commands and
    *  retires sessions asynchronously — a fixed sleep would be a guess). */
   const untilMenu = async (paneId: number, want: (m: MenuRead) => boolean, tries = 40): Promise<MenuRead> => {
-    let last: MenuRead = { opened: false, launch: -1, rename: false, agentNote: false }
+    let last: MenuRead = {
+      opened: false, launch: -1, rename: false, agentNote: false,
+      copyCwd: false, clear: false, remoteFact: false
+    }
     for (let i = 0; i < tries; i++) {
       last = await readMenu(paneId)
       if (want(last)) return last
@@ -176,6 +195,56 @@ export function runPlainMenuSmoke(win: BrowserWindow): void {
       // section is the pane's gate, not a command that quietly unpublished itself.
       const stillInstalled = (await ES<string[]>(`window.__mogging.agents.items()`)).includes('codex')
 
+      // ── remote: THE MENU NEVER OFFERS WHAT IT CANNOT DO ───────────────────────────
+      // "Copy working directory" is the same law as "Move to another workspace…" (offered
+      // only when there IS somewhere to move to). A REMOTE pane has no local cwd — the
+      // controller's publishPaneCwds SKIPS remote slots and the spawn sends cwd:'' — so the
+      // row sat there permanently dead: its handler is gated on the cwd, so clicking it
+      // copied nothing, said nothing, and left the user pasting whatever was on the
+      // clipboard before, while the menu's own law says a fact the pane lacks must SAY so.
+      //
+      // Both halves live in ONE workspace, so the two readings differ in exactly one input
+      // — whether the pane knows a directory — and in nothing else:
+      //   slot 2: remote, no path at all                     -> the row must be GONE
+      //   slot 3: remote WITH its far-side path (paneCwds -> the remote manifest, which is
+      //           what getPaneRemote(id).cwd reads)          -> the row must be BACK
+      // Slot 1 is left alone on purpose (GridLayout's constructor builds it first), and the
+      // LOCAL control is free: the first workspace's pane carries the workspace cwd, and it
+      // showed the row back in `plain` — asserted below.
+      //
+      // The hosts are unknown to the settings store, so the ssh spawn is refused in the
+      // main process (daemon-relay) — no session, no cwd event, which is exactly the pane
+      // under test. The same fixture CHROMEUX builds its remote pane with.
+      const remoteBase = await ES<number>(`(() => {
+        window.__mogging.workspace.create({
+          name: 'RemoteMenu',
+          paneCount: 3,
+          remotes: [null, { hostId: 'plainmenu-host-a', name: 'devbox-77' }, { hostId: 'plainmenu-host-b', name: 'devbox-78' }],
+          paneCwds: [null, null, '/srv/plainmenu']
+        })
+        return window.__mogging.workspace.active().ordinal * 100
+      })()`)
+      await sleep(900)
+      // Bounded polls: the menu is rebuilt on every open, so one read is normally the whole
+      // story — the retries only cover the new grid still mounting. Short on purpose, so a
+      // PRE-FIX build fails fast instead of spending the gate's budget waiting for an
+      // absence that can never arrive.
+      const remoteNoCwd = await untilMenu(remoteBase + 2, (m) => m.opened && m.rename && !m.copyCwd, 8)
+      const remoteWithCwd = await untilMenu(remoteBase + 3, (m) => m.opened && m.rename && m.copyCwd, 8)
+      const copyCwd = {
+        // The absence is only meaningful on a menu that provably BUILT (Rename + Clear
+        // terminal) for the provably REMOTE pane (its own "Remote: …" fact row).
+        ok:
+          plain.copyCwd &&
+          remoteNoCwd.opened && remoteNoCwd.rename && remoteNoCwd.clear && remoteNoCwd.remoteFact &&
+          !remoteNoCwd.copyCwd &&
+          remoteWithCwd.opened && remoteWithCwd.rename && remoteWithCwd.clear &&
+          remoteWithCwd.remoteFact && remoteWithCwd.copyCwd,
+        local: plain.copyCwd,
+        noCwd: remoteNoCwd,
+        withCwd: remoteWithCwd
+      }
+
       const pass =
         plain.opened && plain.launch >= 1 && plain.rename && !plain.agentNote &&
         agent.opened && agent.launch === 0 && agent.agentNote && agent.rename &&
@@ -183,8 +252,9 @@ export function runPlainMenuSmoke(win: BrowserWindow): void {
         gone.opened && gone.launch >= 1 && !gone.agentNote &&
         paneWasLive && exited &&
         dead.opened && dead.launch === 0 && dead.rename &&
-        stillInstalled
-      result = { pass, plain, agent, live, gone, dead, paneWasLive, exited, stillInstalled }
+        stillInstalled &&
+        copyCwd.ok
+      result = { pass, plain, agent, live, gone, dead, paneWasLive, exited, stillInstalled, copyCwd }
     } catch (error) {
       result = { pass: false, error: String(error) }
     } finally {

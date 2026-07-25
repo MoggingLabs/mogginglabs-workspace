@@ -373,6 +373,34 @@ const CASES: Case[] = [
     }
   },
   {
+    // …and the SAME scenario one shell deeper, which used to be invisible. The user types
+    // `powershell` at the pane's cmd prompt (or `bash` inside bash, where the rcfile hook does
+    // not survive), then `claude` inside it. Nothing announces that agent: the nested shell owns
+    // the foreground, so every later Enter is that shell's input and commandSubmitted returns
+    // early; and the nested shell emits no prompt marker of its own, while the OUTER shell's
+    // marker stays LATCHED — which used to make the one backstop for marker-less panes (the
+    // re-anchor) skip this pane forever. The pane ran an agent with no context gauge, no
+    // provider mark, no MCP chip, no failover, no resume, and a restore brought back a plain
+    // shell. Two listings, both earned: one to see what the un-prompted command was (a SHELL),
+    // and one re-anchor in the following five minutes to look inside it.
+    name: 'agent started inside a nested interactive shell',
+    maxListings: 2,
+    mustDetect: true,
+    context: { pid: 320, cwd: 'C:\\repo' },
+    run: async (w) => {
+      w.procs.set(SHELL, { ppid: 1, base: 'cmd', cmd: 'cmd.exe' })
+      w.detector.track('p1', SHELL)
+      w.detector.promptSeen('p1') // the OUTER shell has integration: hasPromptMarker latches true
+      await w.advance(20_000)
+      w.detector.commandSubmitted('p1') // the user types: powershell
+      w.procs.set(320, { ppid: SHELL, base: 'powershell', cmd: 'powershell.exe', cwd: 'C:\\repo' })
+      await w.advance(5_000) // listing 1: the pane's foreground is itself a SHELL
+      w.detector.commandSubmitted('p1') // `claude`, typed INTO the nested shell — ignored, and
+      w.procs.set(321, { ppid: 320, base: 'claude', cmd: 'claude', cwd: 'C:\\repo' }) // unannounced
+      await w.advance(6 * 60_000) // only the re-anchor can still find it (listing 2)
+    }
+  },
+  {
     // A cold restore (a reboot): the session types its OWN resume into a still-booting shell,
     // so the agent appears with nobody to announce it — and the shell's prompt arrives BEFORE
     // that command has run, so it must not be read as "nothing is running".

@@ -6,8 +6,15 @@ import type { PaneId } from '../domain/pane'
 export interface SpawnRequest {
   id: PaneId
   cwd: string
-  cols: number
-  rows: number
+  /** The pane's MEASURED grid, or absent when it has none yet (mounted into a hidden
+   *  workspace: display:none reports a zero cell, so proposeGrid returns null and xterm
+   *  still holds its constructed 80x24 default). Absent means "leave the session alone" —
+   *  the daemon's own rule for a spec with no dims (attachDims). Asserting the default as
+   *  if it were a measurement RESIZED surviving sessions down to 80 columns on every
+   *  restore, since only the first-clicked workspace is ever active. A cold spawn with no
+   *  dims lands on the same 80x24 it lands on today. */
+  cols?: number
+  rows?: number
   /** Trusted renderer context for least-privilege pane environment materialization.
    *  Missing/unknown values fail closed: no workspace-scoped secrets are injected. */
   workspaceId?: string
@@ -96,6 +103,12 @@ export interface SetRoleCommand {
 export interface DataEvent {
   id: PaneId
   data: string
+  /** This payload is REPLAYED scrollback (a reattach, a reconnect, a cold restore), not
+   *  live output. Bytes already seen once must not act a second time: xterm re-parses
+   *  them, so every OSC 52 still in the ring would re-copy to the system clipboard —
+   *  silently replacing what the user holds, with a payload that can predate this session
+   *  entirely (the ring is persisted). The OSC 133 handler already carries this grace. */
+  replay?: boolean
 }
 export interface ExitEvent {
   id: PaneId

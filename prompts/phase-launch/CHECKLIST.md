@@ -25,10 +25,11 @@ everything this pack builds is $0.
 - [x] `LAUNCHAUDIT` gate written, wired into `qa-smokes.sh` (gate **#183**; 24 static + 159 app-boot), and bite-proven **9 ways** in a green→red→green bracket against scratch copies: blank lens · `defer` verdict · below-A derivation · an unclaimed gate · a deleted entry-point file · a renamed anchor · `fixed` with no failing assertion · `invalid` with no DISPROVEN · `--freeze` with pendings outstanding.
 
 ### 02 · Correctness — runtime & UI core
-- [ ] Edge cases enumerated for terminal/PTY/daemon/scroll/layout/panes/updater-UX/first-run/Settings/themes.
-- [ ] Each guarantee verified against `file:line` and asserted in the owning gate or a unit.
-- [ ] Every finding S1–S3 fixed with a regression assertion red on pre-fix bytes (or `invalid` by disproof).
-- [ ] Scoped rows derive **A** on every lens; MILESTONE + PERCEPTION unmoved.
+- [x] Edge cases enumerated for terminal/PTY/daemon/scroll/layout/panes/updater-UX/first-run/Settings/themes — **120 verdicts** (20 rows × 6 edges) in `EDGES-02.md`, each carrying either the guard that makes it CLEAN at `file:line` or the scenario that makes it a defect. Ten parallel audits; five rows came back clean on all six.
+- [x] Each guarantee verified against `file:line` and asserted in the owning gate or a unit — every CLEAN verdict cites the guard that makes it clean; every defect carries an assertion in its owning gate or a focused unit. Row 188's signal rule was extracted to a native-free seam (`exit-code.ts`, the `attach-dims.ts` precedent) so it is provable on EVERY platform, not only POSIX.
+- [x] Every finding S1–S3 fixed with a regression assertion red on pre-fix bytes — **18 defects found, 18 fixed, 20 findings bite-proven** (F027–F046, four S1). Each proof was verified in both directions: green on the fixed bytes, red on the pre-fix bytes, with staging flags that read identically in both runs so a red names the defect and not a broken fixture.
+- [x] Scoped rows derive **A** on every lens — **all 20 of 20** (63 cells swept, zero `~02` remaining in scope). **PERCEPTION passes** (switch 41.6 ms, home 30.6 ms, echo 1.8 ms, zero frames over 100 ms). **MILESTONE unmoved**, proven by baseline rather than argued: 215.3 ms against a stashed HEAD of 298.7 ms under identical load, inside this box's recorded 187-229 ms machine-load band, everything else comfortable (avgFps 132.5, heap 54 MB, 16/16 WebGL).
+- [~] **OPERATOR:** a confirming MILESTONE run on a genuinely idle machine. The box was never quiet — the load is three OTHER Claude sessions, which no work inside this session can stop. Unmoved is proven; green is not claimed.
 
 ### 03 · Correctness — orchestration & swarm
 - [ ] Concurrency/failure edges enumerated for board/worktrees/review-merge/swarm/control-API/loops.

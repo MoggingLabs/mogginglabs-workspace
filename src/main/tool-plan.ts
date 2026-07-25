@@ -134,7 +134,7 @@ export async function materializeToolPlanAtLaunch(req: {
       // codec-validated, atomically renamed — and for a project file it MERGES (only
       // Workspace-tagged entries are replaced; foreign settings and comments survive).
       const snapshot = await configMutationCoordinator.read(file.path)
-      await configMutationCoordinator.mutate({
+      const res = await configMutationCoordinator.mutate({
         file: file.path,
         expectedHash: snapshot.hash,
         transform: (current) => (file.projectScoped ? mergeToolPlanProjectConfig(cli, current.text, entries) : file.content),
@@ -149,7 +149,12 @@ export async function materializeToolPlanAtLaunch(req: {
       // `rmSync` the file the OTHER launch legitimately wrote, deleting a plan the winner already
       // returned `ok:true` for and now points `--mcp-config` at. No successful write ⇒ nothing
       // of ours to undo.
-      before.push({ path: file.path, existed: snapshot.text !== null, content: snapshot.text ?? '' })
+      // `changed:false` is now reachable for a file a SIBLING already wrote with our exact
+      // values (the coordinator no longer refuses an already-satisfied edit). Recording an
+      // undo then would re-open F017 through the back door: `existed:false` against the
+      // WINNER's file. This block's own rule already says it — no successful write of ours
+      // means nothing of ours to undo.
+      if (res.changed) before.push({ path: file.path, existed: snapshot.text !== null, content: snapshot.text ?? '' })
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error)
       return await refuse(`Could not materialize the scoped tool plan: ${file.path} was preserved (${why}). The scoped agent was not launched.`)

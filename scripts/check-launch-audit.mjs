@@ -138,7 +138,16 @@ const rows = []
       sawTable = true
       continue
     } // header
-    if (!/^\d+$/.test(stripMd(cells[0]))) continue
+    // A row whose id cell is not a plain number is REJECTED, never skipped. Skipping is
+    // silent deletion: mangle `| 88 |` and the row leaves the census entirely — its six
+    // lens cells stop being counted and `--freeze` would call the pack done without ever
+    // having swept it. The closed-denominator rule only catches it when the row uniquely
+    // claims a gate, so it is not a backstop. Inside `## The rows` the only non-row pipe
+    // lines are the `| # |` header (above) and the `|---|` separator (dropped by tableRows).
+    if (!/^\d+$/.test(stripMd(cells[0]))) {
+      fail('inventory', `${area}: row id "${stripMd(cells[0])}" is not a number — a malformed row cannot be silently dropped`)
+      continue
+    }
     rows.push({ area, cells, line })
   }
   if (!sawTable) fail('inventory', 'no table header found — the parser or the file moved')
@@ -242,7 +251,21 @@ const findLines = stripComments(readFileSync(FINDINGS, 'utf8')).split('\n')
 const findings = []
 {
   let sawHeader = false
+  // Scoped to `## Ledger` for the same reason the inventory scan is scoped to `## The rows`:
+  // this doc explains itself in tables too. `## The columns` opens with `| **id** | …`, whose
+  // first cell strips to exactly `id` — so an UNSCOPED scan satisfied `sawHeader` off the
+  // LEGEND, 35 lines above the real header, and the anti-blindness guard below was decorative:
+  // delete the whole ledger (a merge that keeps the prose, a truncation) and the gate printed
+  // `0 finding(s), all resolved · every lens derives A ✓` and exited 0. That is the failure
+  // this file's own history records (see stripComments) arriving through a second door.
+  let inLedger = false
   for (const line of findLines) {
+    const h2 = line.match(/^##\s+(?!#)(.+?)\s*$/)
+    if (h2) {
+      inLedger = /^Ledger\b/i.test(stripMd(h2[1]))
+      continue
+    }
+    if (!inLedger) continue
     if (!line.trim().startsWith('|')) continue
     const cells = tableRows([line])[0]
     if (!cells) continue
@@ -250,7 +273,13 @@ const findings = []
       sawHeader = true
       continue
     }
-    if (!/^F\d+$/i.test(stripMd(cells[0]))) continue
+    // Rejected, not skipped — same law as the inventory ids. A mangled `F013` would otherwise
+    // drop the row before the verdict/evidence checks ever see it, and an UNRESOLVED finding
+    // would vanish from the ledger while its (row, lens) quietly derives A.
+    if (!/^F\d+$/i.test(stripMd(cells[0]))) {
+      fail('findings', `ledger row "${stripMd(cells[0])}" is not a finding id (expected e.g. \`F001\`) — a malformed row cannot be silently dropped`)
+      continue
+    }
     findings.push(cells)
   }
   // Zero findings is a legitimate state (the seed). A missing TABLE is not — that is the

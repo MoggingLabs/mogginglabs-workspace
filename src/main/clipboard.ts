@@ -349,6 +349,17 @@ export function registerClipboard(): void {
           : undefined
       if (!img || img.isEmpty()) return
       writeClipboardImage(img)
+      // F004's read-back, applied to the IMAGE half too — writeClipboardImage carries the
+      // very same silent-drop seam, so a locked Windows clipboard made this a no-op that
+      // still re-dated the row, floated it to the top, primed lastImageSig and reported
+      // "Copied". Compared by SIZE, deliberately not by fingerprint: the OS DIB round-trip
+      // can move a semi-transparent image's hash, which would refuse honest restores.
+      const back = readClipboardImage()
+      const want = img.getSize()
+      const got = back.getSize()
+      if (back.isEmpty() || got.width !== want.width || got.height !== want.height) {
+        throw new Error('clipboard write did not take')
+      }
       lastImageSig = signatureOf(img)
     } else {
       writeClipboardText(entry.text)

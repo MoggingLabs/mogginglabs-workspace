@@ -247,7 +247,18 @@ export function probeReachable(ep: DaemonEndpoint, timeoutMs = 3000): Promise<bo
     }
     const sock = net.connect(ep.address)
     sock.setEncoding('utf8')
-    const timer = setTimeout(() => finish(false), timeoutMs)
+    // A completed CONNECT already proves the wire — a corpse (a dead unix socket file, an
+    // absent pipe) answers ECONNREFUSED/ENOENT and never completes one. So a connected-but-
+    // silent endpoint is UNDECIDED, not gone, and pid.ts's rule binds here too: "Only
+    // 'definitely gone' … may kill it; every other answer keeps the undecided default and
+    // lets connect() be the judge" — a rule written after an over-eager false negative
+    // unlinked a LIVE daemon's endpoint and "the boot ended with no daemon at all". Treating
+    // a slow daemon as a corpse reached that same end state: unlink the live endpoint, spawn
+    // a rival the still-held lock refuses, and nothing ever rewrites endpoint.json, so the
+    // run falls to the in-proc backend with no Retry. F024's corpse is untouched — it cannot
+    // connect, so the timeout still reports false for it.
+    let connected = false
+    const timer = setTimeout(() => finish(connected), timeoutMs)
     const framer = createLineFramer((obj) => {
       const m = obj as { t?: string }
       // ANY answer proves a listener is on the wire. Even an `error` frame (bad token, wrong
@@ -258,6 +269,7 @@ export function probeReachable(ep: DaemonEndpoint, timeoutMs = 3000): Promise<bo
     sock.on('error', () => finish(false))
     sock.on('close', () => finish(false))
     sock.on('connect', () => {
+      connected = true // the wire is PROVEN here; silence after this is undecided, not gone
       try {
         sock.write(encodeMessage({ t: 'hello', v: ep.version, token: ep.token, client: { pid: process.pid, kind: 'probe' } }))
       } catch {
@@ -371,6 +383,15 @@ export async function ensureDaemon(daemonEntry: string, host: DaemonHost): Promi
     }
   }
 
+  // Re-checked HERE, not just at entry: everything between the two reads is awaited (a
+  // reach-probe, an other-clients probe, a stamp retire — up to ~10s), and the quiesce that
+  // matters is declared by the UPDATER on another turn of the loop. `retireOwnDaemon` finds
+  // no live endpoint (we just unlinked it), reports "nothing running — nothing locks the
+  // exe", and quitAndInstall hands off — while this spawn is still in flight. The daemon it
+  // seats runs from the INSTALLED executable and re-takes the very file lock the retire
+  // released, which is the NSIS "cannot be closed" stall the whole quiesce machinery exists
+  // to prevent.
+  if (quiescing) throw new Error('daemon is quiescing for an update — refusing to spawn')
   fs.mkdirSync(runtimeDir(), { recursive: true })
   const logFd = fs.openSync(daemonSpawnLogPath(), 'a')
   // The standalone helper hosts the daemon (ADR 0017) — NOT process.execPath: the
@@ -412,6 +433,13 @@ export async function ensureDaemon(daemonEntry: string, host: DaemonHost): Promi
     throw new Error('pty daemon did not become ready')
   }
   clientLog('daemon-ready', { pid: ep.pid, build: ep.build ?? null })
+  // And once more after the 15s readiness wait — the same window, at its widest. Retire what
+  // we just seated rather than handing it back, so the exe is free for the installer.
+  if (quiescing) {
+    clientLog('quiesce-retire-late-spawn', { pid: ep.pid })
+    await retireDaemonEndpoint(ep)
+    throw new Error('daemon is quiescing for an update — refusing to spawn')
+  }
   return ep
 }
 
@@ -421,7 +449,7 @@ export interface DaemonEvents {
    *  (id, gen) accepts the replay itself. Pane ids are reused; gens are not (v5). */
   onGen?: (id: string, gen: number) => void
   /** Pane output (also delivers scrollback on (re)attach, for repaint). */
-  onData?: (id: string, data: string, gen: number) => void
+  onData?: (id: string, data: string, gen: number, replay?: boolean) => void
   onExit?: (id: string, code: number, gen: number) => void
   onState?: (id: string, state: AgentState, gen: number) => void
   /** A pane's OSC-7 cwd (also replayed on (re)attach) — feeds per-pane git (2/03). */
@@ -592,7 +620,9 @@ export class DaemonClient {
         // Gen FIRST: consumers gate every pane event on (id, gen), and the scrollback
         // replay below must be accepted by the generation it belongs to.
         this.events.onGen?.(m.id, m.gen)
-        if (m.scrollback) this.events.onData?.(m.id, m.scrollback, m.gen)
+        // REPLAY, not live output: the renderer must not re-execute the OSC 52 copies
+        // still sitting in this scrollback (see DataEvent.replay).
+        if (m.scrollback) this.events.onData?.(m.id, m.scrollback, m.gen, true)
         // `existing` is how a caller learns the daemon reattached us to a session that
         // was already running (it is detached — ADR 0006). Nothing else can tell them.
         const waiters = this.spawnWaiters.get(m.id)
@@ -606,7 +636,7 @@ export class DaemonClient {
       }
       case 'attached':
         this.events.onGen?.(m.id, m.gen)
-        if (m.scrollback) this.events.onData?.(m.id, m.scrollback, m.gen)
+        if (m.scrollback) this.events.onData?.(m.id, m.scrollback, m.gen, true)
         break
       case 'exit':
         this.events.onExit?.(m.id, m.code, m.gen)

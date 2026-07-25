@@ -447,8 +447,12 @@ run_smoke AGENTLAUNCH  MOGGING_AGENTLAUNCH 1 240 agentlaunch
 # ride the SPAWN (SpawnRequest.run; zero renderer writes, proven by the ptyWrites spy,
 # bookkeeping intact), the custom row rides the same seam, and the typed FALLBACK still
 # delivers exactly once, ordered after first output, when the build misses the claim
-# window (setSpawnRunHold seam). Bites: reintroduced delays, lost fallbacks, double
-# delivery, and bookkeeping that only one delivery path performs.
+# window (setSpawnRunHold seam). Act D holds a pane's spawn REPLY (holdSpawnReply seam),
+# closes the pane inside that hold, and proves the late reply records NOTHING for the now
+# FREE id — a stale outcome there is read synchronously by the next pane to recycle it,
+# which then skips the typed fallback and books a launch it never received. Bites:
+# reintroduced delays, lost fallbacks, double delivery, bookkeeping that only one delivery
+# path performs, and an outcome written for a disposed pane.
 run_smoke LAUNCHNOW    MOGGING_LAUNCHNOW 1 240 launchnow
 run_smoke PERWS        MOGGING_PERWS     1 240 perws
 run_smoke PERWSAGENT   MOGGING_PERWSAGENT 1 240 perwsagent

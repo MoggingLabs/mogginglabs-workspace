@@ -80,19 +80,19 @@ is OS-, network-, or migration-dependent; those rows carry `~07`.
 
 | # | Feature | Entry point | Spec | Gates | corr | smell | spag | dup | eff | debt |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Terminal pane rendering and echo | `src/ui/features/terminal/terminal-pane.ts:89 TerminalPane` | docs/07-perception-budget.md | SMOKE,MULTIPANE,PERCEPTION | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
-| 2 | Pane menu and agent-launch entries | `src/ui/features/terminal/terminal-pane.ts:1598 buildMenu` | docs/11-design-system.md | PLAINMENU | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
-| 3 | Per-pane WebGL context leasing | `src/ui/features/terminal/pane-webgl.ts:58 PaneWebglManager` | docs/05-perf-budget.md | FLICKER,MILESTONE | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
-| 4 | ConPTY-only PTY spawn seam | `src/backend/platform/pty-host.ts:70 spawnPty` | docs/01-architecture.md | CONPTY,PTYSEAM | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 1 | Terminal pane rendering and echo | `src/ui/features/terminal/terminal-pane.ts:89 TerminalPane` | docs/07-perception-budget.md | SMOKE,MULTIPANE,PERCEPTION | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 2 | Pane menu and agent-launch entries | `src/ui/features/terminal/terminal-pane.ts:1598 buildMenu` | docs/11-design-system.md | PLAINMENU | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 3 | Per-pane WebGL context leasing | `src/ui/features/terminal/pane-webgl.ts:58 PaneWebglManager` | docs/05-perf-budget.md | FLICKER,MILESTONE | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 4 | ConPTY-only PTY spawn seam | `src/backend/platform/pty-host.ts:70 spawnPty` | docs/01-architecture.md | CONPTY,PTYSEAM | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 | 5 | Pane PTY lifecycle service | `src/backend/features/terminal/pty.service.ts:52 PtyService` | docs/adr/0003-persistent-pty-host-process.md | SMOKE,RELOAD | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 | 6 | Command blocks from OSC 133 | `src/ui/features/blocks/block-tracker.ts:35 BlockTracker` | docs/01-architecture.md | BLOCKS | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
-| 7 | Agent state from the OSC stream | `src/backend/features/agent-state/osc-parser.ts:84 OscParser` | docs/01-architecture.md | STATE,RELOAD | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
-| 8 | Clipboard copy, paste and drops | `src/main/clipboard.ts:279 registerClipboard` | docs/16-files.md | CLIPBOARD | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 7 | Agent state from the OSC stream | `src/backend/features/agent-state/osc-parser.ts:84 OscParser` | docs/01-architecture.md | STATE,RELOAD | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 8 | Clipboard copy, paste and drops | `src/main/clipboard.ts:279 registerClipboard` | docs/16-files.md | CLIPBOARD | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 | 9 | Pane working-directory truth | `src/backend/features/agent-state/cwd-state.ts:78 PaneCwdState` | docs/06-control-api.md | CWD,CWD_INPROC | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
-| 10 | Typed-agent process detection | `src/backend/features/agent-state/agent-proc.ts:451 AgentProcessDetector` | docs/06-control-api.md | TYPED,TYPEDCOST | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
-| 186 | Pane grid fit contract | `src/ui/features/terminal/pane-fit.ts:33 gridFor` | docs/01-architecture.md | PANEFIT | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
-| 187 | Vendored terminal fonts and metric parity | `src/ui/core/terminal/font-port.ts:34 terminalFontSize` | docs/11-design-system.md | FONTCOVER | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
-| 188 | Dead-pane restart door | `src/ui/features/terminal/terminal-pane.ts:568 restart` | docs/11-design-system.md | PANERESTART | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 10 | Typed-agent process detection | `src/backend/features/agent-state/agent-proc.ts:451 AgentProcessDetector` | docs/06-control-api.md | TYPED,TYPEDCOST | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 186 | Pane grid fit contract | `src/ui/features/terminal/pane-fit.ts:33 gridFor` | docs/01-architecture.md | PANEFIT | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 187 | Vendored terminal fonts and metric parity | `src/ui/core/terminal/font-port.ts:34 terminalFontSize` | docs/11-design-system.md | FONTCOVER | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 188 | Dead-pane restart door | `src/ui/features/terminal/terminal-pane.ts:568 restart` | docs/11-design-system.md | PANERESTART | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 
 ### panes/layout — Phase 1 · MVP core
 
@@ -103,7 +103,7 @@ is OS-, network-, or migration-dependent; those rows carry `~07`.
 | 13 | Equalize and balance lines | `src/ui/features/layout/layout-tree.ts:321 equalizeLineAt` | docs/02-mvp-and-roadmap.md | EQUALIZE | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 | 14 | Cross-workspace pane move | `src/ui/features/workspace/move-pane-modal.ts:43 openMovePaneModal` | docs/11-design-system.md | MOVEPANE | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 | 15 | Workspace close with undo grace | `src/ui/features/workspace/controller.ts:174 WorkspaceController` | docs/11-design-system.md | WSCLOSE,MULTIPANE | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
-| 16 | Layout painter pane budget | `src/ui/features/layout/pane-capacity.ts:132 effectivePaneCapacity` | docs/05-perf-budget.md | WIZLAYOUT | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 16 | Layout painter pane budget | `src/ui/features/layout/pane-capacity.ts:132 effectivePaneCapacity` | docs/05-perf-budget.md | WIZLAYOUT | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 
 ### scroll — Phase 11.5 · Scroll
 
@@ -125,22 +125,22 @@ is OS-, network-, or migration-dependent; those rows carry `~07`.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 21 | Workspace and session SQLite store | `src/backend/features/workspace/session-store.ts:36 SessionStore` | docs/01-architecture.md | MIGRATE,SURVIVE_B | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 | 22 | Settings load, save and export | `src/main/app-settings.ts:24 registerAppSettings` | docs/01-architecture.md | PERSISTHEALTH | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
-| 23 | Async request generation guard | `src/ui/core/async/async-state.ts:59 createAsyncGuard` | docs/11-design-system.md | ASYNCSTATE | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
-| 24 | Config file mutation serialization | `src/backend/core/config-files/mutation-coordinator.ts:75 ConfigMutationCoordinator` | docs/adr/0011-agent-cli-configuration-control-plane.md | MUTATIONRACE | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
-| 25 | Restore last working session | `src/main/session-restore.ts:208 registerSessionRestore` | docs/11-design-system.md | RESUME | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 23 | Async request generation guard | `src/ui/core/async/async-state.ts:59 createAsyncGuard` | docs/11-design-system.md | ASYNCSTATE | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 24 | Config file mutation serialization | `src/backend/core/config-files/mutation-coordinator.ts:75 ConfigMutationCoordinator` | docs/adr/0011-agent-cli-configuration-control-plane.md | MUTATIONRACE | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 25 | Restore last working session | `src/main/session-restore.ts:208 registerSessionRestore` | docs/11-design-system.md | RESUME | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 
 ### daemon — Phase 1 · MVP core (ADR 0006)
 
 | # | Feature | Entry point | Spec | Gates | corr | smell | spag | dup | eff | debt |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 26 | Daemon discovery and custody | `src/main/daemon-client.ts:249 ensureDaemon` | docs/adr/0012-daemon-custody-version-vs-build-stamp.md | DAEMONCUSTODY,STAMPWAR | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
-| 27 | Detached pane sessions survive | `src/pty-daemon/session.ts:922 SessionManager` | docs/adr/0006-detached-pty-daemon.md | SURVIVE_A,SURVIVE_B,PANEOPS | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 26 | Daemon discovery and custody | `src/main/daemon-client.ts:249 ensureDaemon` | docs/adr/0012-daemon-custody-version-vs-build-stamp.md | DAEMONCUSTODY,STAMPWAR | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 27 | Detached pane sessions survive | `src/pty-daemon/session.ts:922 SessionManager` | docs/adr/0006-detached-pty-daemon.md | SURVIVE_A,SURVIVE_B,PANEOPS | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 | 28 | Daemon socket client heartbeat | `src/main/daemon-client.ts:389 DaemonClient` | docs/adr/0006-detached-pty-daemon.md | HEARTBEAT | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
-| 29 | Daemon relay reconnect and heal | `src/main/daemon-relay.ts:92 startDaemonBackend` | docs/adr/0006-detached-pty-daemon.md | DAEMONHEAL | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 29 | Daemon relay reconnect and heal | `src/main/daemon-relay.ts:92 startDaemonBackend` | docs/adr/0006-detached-pty-daemon.md | DAEMONHEAL | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 | 30 | Standalone Node runtime helper | `src/main/node-helper.ts:107 helperRuntime` | docs/adr/0017-split-node-runtime.md | RUNTIMESPLIT | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 | 31 | Daemon wire protocol version | `src/contracts/daemon/protocol.ts:28 DAEMON_PROTOCOL_VERSION` | docs/adr/0012-daemon-custody-version-vs-build-stamp.md | PROTOVER | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 | 32 | Windowless daemon child spawns | `src/backend/platform/windowless-children.ts:64 enforceWindowlessChildren` | docs/adr/0006-detached-pty-daemon.md | KILLFLASH | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
-| 189 | Attach-size reconciliation | `src/pty-daemon/attach-dims.ts:14 attachDims` | docs/adr/0006-detached-pty-daemon.md | REATTACHFIT | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 189 | Attach-size reconciliation | `src/pty-daemon/attach-dims.ts:14 attachDims` | docs/adr/0006-detached-pty-daemon.md | REATTACHFIT | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 
 ### agents — Phase 2 · Agent awareness
 
@@ -266,7 +266,7 @@ is OS-, network-, or migration-dependent; those rows carry `~07`.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 86 | First-run setup checklist | `src/ui/features/home/firstrun.ts:46 createFirstRun` | docs/02-mvp-and-roadmap.md | FIRSTRUN,PRODUCT,UXMILESTONE | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 | 87 | Toast feedback family | `src/ui/components/toast.ts:70 showToast` | docs/11-design-system.md | FEEDBACKUX | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
-| 88 | Unsilenceable destructive confirm | `src/ui/components/confirm.ts:29 confirmDialog` | docs/11-design-system.md | FEEDBACKUX,UXMILESTONE | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 88 | Unsilenceable destructive confirm | `src/ui/components/confirm.ts:29 confirmDialog` | docs/11-design-system.md | FEEDBACKUX,UXMILESTONE | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 
 ### updater — Phase 6 · Product-ready
 
@@ -472,7 +472,7 @@ is OS-, network-, or migration-dependent; those rows carry `~07`.
 
 | # | Feature | Entry point | Spec | Gates | corr | smell | spag | dup | eff | debt |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 185 | Launch audit coverage gate | `scripts/check-launch-audit.mjs:50 LENSES` | prompts/phase-launch/RUBRIC.md | LAUNCHAUDIT | ~02 | ~05 | ~05 | ~05 | ~06 | ~05 |
+| 185 | Launch audit coverage gate | `scripts/check-launch-audit.mjs:50 LENSES` | prompts/phase-launch/RUBRIC.md | LAUNCHAUDIT | 02 | ~05 | ~05 | ~05 | ~06 | ~05 |
 
 <!-- ROWS:END -->
 

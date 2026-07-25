@@ -91,3 +91,42 @@ export function forgetSpawnRun(paneId: number): void {
     for (const fn of w) fn(null)
   }
 }
+
+/**
+ * GATE seam (LAUNCHNOW) — the mirror of the agents feature's setSpawnRunHold, one round
+ * trip later. The SPAWN REPLY is where the pane's post-dispose guards live, and the race
+ * they exist for is otherwise unobservable: main answers in milliseconds, so no gate can
+ * close a pane inside that window by hand. Arm a hold by pane id BEFORE the pane is built
+ * (the same ordering rule as armSpawnRun) and its reply handling waits that long.
+ *
+ * Only the DEV-only dev handles arm this and only a DEV-gated call site claims it, so a
+ * production pane never sees either half.
+ */
+let replyHold: { paneId: number; ms: number } | null = null
+let replyHoldReleasedAt = 0
+
+export function holdSpawnReply(paneId: number, ms: number): void {
+  replyHold = ms > 0 ? { paneId, ms } : null
+  replyHoldReleasedAt = 0
+}
+
+/** One-shot claim by the spawning pane. Null = nothing armed (every normal pane). */
+export function claimSpawnReplyHold(paneId: number): Promise<void> | null {
+  if (!replyHold || replyHold.paneId !== paneId) return null
+  const { ms } = replyHold
+  replyHold = null
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      replyHoldReleasedAt = Date.now()
+      resolve()
+    }, ms)
+  })
+}
+
+/** GATE seam: when the armed hold let go (0 = never). The gate needs this to prove the
+ *  held reply really did resume AFTER the pane was disposed — without it, "no stale
+ *  outcome" would also be true of a handler that simply never ran, which is exactly how
+ *  a vacuous assertion passes on the broken bytes. */
+export function spawnReplyHoldReleasedAt(): number {
+  return replyHoldReleasedAt
+}

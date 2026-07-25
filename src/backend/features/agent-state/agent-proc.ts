@@ -440,6 +440,13 @@ interface TrackedPane {
   current: DetectedAgentProc | null
   /** The foreground process context, whether or not its executable is a known adapter. */
   foreground: DetectedProcessContext | null
+  /** True when that foreground is itself an interactive SHELL (the user typed `bash` or
+   *  `powershell` at the pane prompt). It suppresses every later commandSubmitted, and the
+   *  nested shell emits no prompt marker of its own — while `hasPromptMarker` stays latched
+   *  from the OUTER shell, which used to skip the one re-anchor built for marker-less panes.
+   *  An agent started in there was invisible to the whole identity stack: no gauge, no
+   *  provider mark, no resume, and a restore brought back a plain shell. */
+  foregroundIsShell: boolean
   contextCheckedAt: number
   /** True only while the shell is waiting for a submitted/restored foreground command. */
   contextArmed: boolean
@@ -527,6 +534,7 @@ export class AgentProcessDetector {
       rootPid,
       current: null,
       foreground: null,
+      foregroundIsShell: false,
       contextCheckedAt: 0,
       contextArmed: expectAgent,
       contextEpoch: 0,
@@ -599,6 +607,7 @@ export class AgentProcessDetector {
     // be alive, but it no longer owns the pane's active directory.
     if (t.foreground) {
       t.foreground = null
+      t.foregroundIsShell = false
       this.emitContext(paneId, null)
     }
     if (t.current) {
@@ -682,6 +691,7 @@ export class AgentProcessDetector {
             t.probeAt = this.now()
           } else {
             t.foreground = null
+            t.foregroundIsShell = false
             this.emitContext(paneId, null)
           }
         }
@@ -705,7 +715,10 @@ export class AgentProcessDetector {
     // none of it, and a 30-minute agent session there costs zero listings instead of six.
     if (this.now() - this.lastSnapshotAt >= REANCHOR_MS) {
       for (const t of this.panes.values()) {
-        if ((t.current || t.foreground) && !t.hasPromptMarker) t.probeAt = this.now()
+        // `foregroundIsShell` too: a NESTED interactive shell holds the foreground, so no Enter
+        // is ever announced and no prompt mark ever arrives — the marker-less case this
+        // re-anchor exists for, wearing the outer shell's latched hasPromptMarker.
+        if ((t.current || t.foreground) && (!t.hasPromptMarker || t.foregroundIsShell)) t.probeAt = this.now()
       }
     }
     this.tickTimer = this.setTimer(() => this.tick(), LIVENESS_TICK_MS)
@@ -825,6 +838,7 @@ export class AgentProcessDetector {
                 : sinceFloorMs(byPid.get(foreground.pid)?.startedAt, this.now())
           }
           t.foreground = nextContext
+          t.foregroundIsShell = !!nextContext && SHELL_BINS.has(byPid.get(nextContext.pid)?.base ?? '')
           t.contextCheckedAt = this.now()
           t.pendingSubmits = 0 // subsequent Enter keys belong to this foreground program
           if (
@@ -835,6 +849,7 @@ export class AgentProcessDetector {
           }
         } else if (previousContext) {
           t.foreground = null
+          t.foregroundIsShell = false
           this.emitContext(paneId, null)
         }
         const prev = t.current

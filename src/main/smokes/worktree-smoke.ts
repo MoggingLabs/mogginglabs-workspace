@@ -20,6 +20,12 @@ import { setWorktreeAuditFault, worktreeAuditFault } from '../worktree-audit-fau
 //     `cd` prefix, so they surface the true spawn cwd.)
 //  3. removal is dirty-SAFE: a dirty worktree is refused, force removes it, a clean
 //     one removes first try. Repo HEAD is byte-identical before/after everything.
+//  4. …and the refusal that arrives LATE still has a working door. The controller
+//     closes the pane BEFORE removing, and the backend re-checks dirtiness on every
+//     non-force removal, so a worktree that passed the pane's own pre-check can come
+//     back 'dirty' once the pane (and its ⋯ menu) no longer exists. The second toast's
+//     "Remove anyway" is then the only force step left, and it must not depend on the
+//     dead element's bubbling event to reach anyone.
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim()
 }
@@ -38,7 +44,7 @@ function makeRepo(): string {
 }
 
 export function runWorktreeSmoke(win: BrowserWindow): void {
-  setTimeout(() => app.exit(1), 120000) // safety net
+  setTimeout(() => app.exit(1), 150000) // safety net (gate budget is 240s — see qa-smokes.sh)
   const wc = win.webContents
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -266,12 +272,159 @@ export function runWorktreeSmoke(win: BrowserWindow): void {
         cleanRemoved.ok === true && forcedRemoved.ok === true &&
         dirtyOrderOk && cleanOrderOk && lockRetryOk && replacementOk
 
+      // ── The 'dirty' refusal that arrives AFTER the pane is already gone ──────────
+      // The pre-check half above is the EASY half: the pane is still mounted, so its
+      // "Remove anyway" retry has a listener to reach. This is the other half. The
+      // controller closes the pane FIRST and the backend re-checks dirtiness on every
+      // NON-force removal, so a worktree the pane's own pre-check read CLEAN can still
+      // come back 'dirty' with the pane — and the ⋯ entry that was the only other door —
+      // already gone. That second toast's "Remove anyway" used to dispatch a BUBBLING
+      // event from a DETACHED element; the controller's listener is on the workspace
+      // container, so it reached nobody, the promise never settled, and the worktree
+      // could not be force-removed by ANY route. A fresh workspace with one isolated
+      // slot, because the two above are spent — this runs after their assertions read.
+      const postProvider = 'custom:git status --short' // read-only: the worktree stays CLEAN
+      const postOpened = (await ES(
+        `window.__mogging.templates.openIsolated(${JSON.stringify(repo)}, [{provider:${JSON.stringify(postProvider)},count:1}])`
+      )) as { paneCwds: (string | null)[] }
+      const postCwd = (postOpened?.paneCwds ?? []).find((p): p is string => !!p) ?? ''
+      // Canonical spelling captured while the directory still EXISTS — realpath cannot
+      // resolve an 8.3 alias after the delete, and a post-hoc canon would make the
+      // "git no longer lists it" check pass by simply never matching (see canon above).
+      const postCanon = postCwd ? canon(postCwd) : ''
+      const postPorcelainBefore = git(repo, ['worktree', 'list', '--porcelain'])
+      const postRegisteredBefore =
+        !!postCwd &&
+        (norm(postPorcelainBefore).includes(postCanon) || norm(postPorcelainBefore).includes(norm(postCwd)))
+      // The new workspace's pane id is READ from the layout, never re-derived from the
+      // ordinal formula. Its meta's own paneCwds is what proves the read landed on the
+      // NEW workspace: the old one is also down to a single (replacement) pane.
+      let postPaneId = 0
+      for (let i = 0; i < 100 && !postPaneId; i++) {
+        const meta = await ES<{ paneCwds?: (string | null)[] } | null>(`window.__mogging.workspace.active()`)
+        const ids = await ES<number[]>(`window.__mogging.layout.paneIds()`)
+        if (postCwd && meta?.paneCwds?.[0] === postCwd && ids.length === 1) postPaneId = ids[0]
+        else await sleep(100)
+      }
+      // Clear the board: an earlier phase's toast must not answer for this one, and a FULL
+      // stack (4) would queue this pane's refusal instead of showing it.
+      await ES(`Array.from(document.querySelectorAll('.toast .toast-dismiss')).forEach((el) => el.click()); 0`)
+      // The ⋯ entry exists only once the pane-cwd port has published this pane's worktree
+      // (buildMenu reads the projection), so keep opening until the entry is really there.
+      // A failed probe leaves the menu OPEN and its stale entries in the DOM — close it
+      // first, or the retry clicks yesterday's menu instead of a freshly built one.
+      const openMenuItemWhenReady = async (paneId: number, label: string): Promise<boolean> => {
+        for (let i = 0; i < 80; i++) {
+          const clicked = await ES<boolean>(`(() => {
+            const slot = document.querySelector('.layout-slot[data-pane-id="${paneId}"]')
+            const opener = slot ? slot.querySelector('.pane-act-menu') : null
+            if (!(opener instanceof HTMLButtonElement)) return false
+            const menu = document.getElementById('pane-menu-${paneId}')
+            if (menu && !menu.hidden) opener.click()
+            opener.click()
+            const item = Array.from(document.querySelectorAll('#pane-menu-${paneId} .menu-item'))
+              .find((el) => (el.textContent ?? '').trim() === ${JSON.stringify(label)})
+            if (!(item instanceof HTMLButtonElement)) return false
+            item.click()
+            return true
+          })()`)
+          if (clicked) return true
+          await sleep(100)
+        }
+        return false
+      }
+      const postAudit = (): Promise<OrderEvent[]> =>
+        ES<OrderEvent[]>(
+          `window.__mogging.workspace.worktreeRemovalAudit().filter((event) => event.paneId === ${postPaneId})`
+        )
+      const postMenuClicked = postPaneId > 0 && (await openMenuItemWhenReady(postPaneId, 'Remove worktree…'))
+      // 'request' is journaled the instant the controller RECEIVES the dispatch, which can
+      // only happen after the pane's own pre-check read this tree clean from a MOUNTED
+      // element — no toast was raised, so this is the clean-worktree path.
+      let postRequested = false
+      for (let i = 0; i < 100 && !postRequested; i++) {
+        const events = await postAudit()
+        postRequested = events[0]?.stage === 'request' && events[0]?.paneStillMounted === true
+        if (!postRequested) await sleep(100)
+      }
+      // Dirty the tree while the close is still pending on its confirm. This is a FENCE,
+      // not a race: the snapshot below is taken AFTER the write, and 'request' still being
+      // the only entry means no removal has run yet — so the backend's re-check, which
+      // cannot happen before the first 'remove-attempt', is guaranteed to see this file.
+      // If the sequence ever slips, this field goes red instead of the case quietly
+      // passing as a second copy of the pre-check half.
+      if (postCwd) writeFileSync(join(postCwd, 'dirty.txt'), 'uncommitted after the pre-check\n')
+      const postFenceEvents = await postAudit()
+      const postFencedBeforeClose = postFenceEvents.length === 1 && postFenceEvents[0].stage === 'request'
+      const postCloseConfirmed = await confirmPaneClose()
+      // The refusal the pre-check cannot produce: reason 'dirty', pane already unmounted.
+      let postDirtyAfterClose = false
+      for (let i = 0; i < 150 && !postDirtyAfterClose; i++) {
+        const last = (await postAudit()).filter((event) => event.stage === 'remove-result').at(-1)
+        postDirtyAfterClose = last?.ok === false && last?.reason === 'dirty' && last?.paneStillMounted === false
+        if (!postDirtyAfterClose) await sleep(100)
+      }
+      const postPresentAfterRefusal = !!postCwd && existsSync(postCwd)
+      const postPaneGone = await ES<boolean>(`window.__mogging.layout.paneIds().indexOf(${postPaneId}) < 0`)
+      // The last door: pane gone, menu gone, one toast left holding the only force step.
+      let postSecondToast = false
+      for (let i = 0; i < 60 && !postSecondToast; i++) {
+        postSecondToast = await ES<boolean>(`(() => {
+          const toast = Array.from(document.querySelectorAll('.toast'))
+            .find((el) => el.querySelector('.toast-title')?.textContent === 'Worktree has uncommitted changes')
+          if (!toast) return false
+          return !!Array.from(toast.querySelectorAll('.toast-action'))
+            .find((el) => (el.textContent ?? '').trim() === 'Remove anyway')
+        })()`)
+        if (!postSecondToast) await sleep(100)
+      }
+      // node-pty exits asynchronously and Windows will not delete a dead process's former
+      // cwd until its handle is gone. The controller's retry loop covers that for its own
+      // removals; this force goes straight down the backend door and gets ONE shot, so let
+      // the just-closed pane's shell drain first. The toast lives 10s — this spends 2.
+      await sleep(2000)
+      const postForceClicked = await clickToastAction('Remove anyway')
+      // The promise SETTLED — pre-fix nothing ever came back, so this toast, not merely the
+      // vanished directory, is the difference between the two builds. Watched BEFORE the
+      // filesystem: it is raised on an ok result (the directory is already gone by then)
+      // and it only lives 6s, so waiting on the disk first could outlast the testimony.
+      let postSuccessToast = false
+      for (let i = 0; i < 120 && !postSuccessToast; i++) {
+        postSuccessToast = await ES<boolean>(
+          `Array.from(document.querySelectorAll('.toast .toast-title')).some((el) => (el.textContent ?? '').trim() === 'Worktree removed')`
+        )
+        if (!postSuccessToast) await sleep(100)
+      }
+      const postGone = await waitGone(postCwd)
+      const postEvents = await postAudit()
+      const postStages = postEvents.map((event) => event.stage).join(',')
+      // The FIXED path does not re-enter the controller: with no pane left to sequence
+      // there is nothing to close, so the journal ENDS at the refusal and the force is a
+      // direct backend call. A second 'remove-attempt' here would mean the retry went back
+      // through the pane's event — the very thing a detached element cannot do.
+      const postAuditOk =
+        postStages === 'request,pane-closed,remove-attempt,remove-result' &&
+        postEvents[0]?.paneStillMounted === true &&
+        postEvents.slice(1).every((event) => event.paneStillMounted === false)
+      // A NON-force removal can never delete a dirty worktree, and this one was refused for
+      // exactly that. So a tree that is now gone was removed by the FORCE call and nothing
+      // else — "removed" and "was never dirty" are not confusable here. git agrees.
+      const postPorcelainAfter = git(repo, ['worktree', 'list', '--porcelain'])
+      const postUnregistered =
+        !norm(postPorcelainAfter).includes(postCanon) && !norm(postPorcelainAfter).includes(norm(postCwd))
+      const postCloseOk =
+        !!postCwd && postPaneId > 0 && postRegisteredBefore && postMenuClicked && postRequested &&
+        postFencedBeforeClose && postCloseConfirmed && postDirtyAfterClose && postPresentAfterRefusal &&
+        postPaneGone && postSecondToast && postForceClicked && postGone && postSuccessToast &&
+        postAuditOk && postUnregistered
+
       // Read-only guarantee: the repo's HEAD/branch never moved.
       const headAfter = git(repo, ['rev-parse', 'HEAD'])
       const branchAfter = git(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])
       const repoIntact = headBefore === headAfter && branchAfter === 'main'
 
-      const pass = openedOk && gitAgrees && branchesOk && chipsOk && shellsOk && removalOk && repoIntact
+      const pass =
+        openedOk && gitAgrees && branchesOk && chipsOk && shellsOk && removalOk && postCloseOk && repoIntact
       result = {
         pass,
         openedOk,
@@ -301,6 +454,25 @@ export function runWorktreeSmoke(win: BrowserWindow): void {
         replacementOk,
         liveAfter,
         orderEvents,
+        postCloseOk,
+        postCwd,
+        postPaneId,
+        postRegisteredBefore,
+        postMenuClicked,
+        postRequested,
+        postFencedBeforeClose,
+        postCloseConfirmed,
+        postDirtyAfterClose,
+        postPresentAfterRefusal,
+        postPaneGone,
+        postSecondToast,
+        postForceClicked,
+        postGone,
+        postSuccessToast,
+        postAuditOk,
+        postStages,
+        postUnregistered,
+        postEvents,
         repoIntact,
         dirs
       }
