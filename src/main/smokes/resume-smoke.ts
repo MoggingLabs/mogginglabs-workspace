@@ -339,8 +339,13 @@ export function runResumeSmoke(win: BrowserWindow): void {
       )
       // ...then poll for the defect's own signature, which exits the moment it appears — a
       // pre-fix run spends only the one command-build round trip getting here.
+      // The signature is the LAUNCH, not traffic. Polling for "any write to this pane" reported
+      // the defect present on a correct build the moment the fresh pane took focus and xterm
+      // answered with CSI I / CSI O. Matching the command text instead cannot be satisfied by
+      // the terminal talking to itself, and needs no escape grammar to say so.
       const recycledTyped = await waitTrue(
-        `(window.__mogging.ptyWrites || []).some((w) => w.id === ${CLOSED_PANE})`,
+        `(window.__mogging.ptyWrites || []).some((w) => w.id === ${CLOSED_PANE} && ` +
+          `(String(w.data).includes('claude') || String(w.data).includes('resume')))`,
         40,
         250
       )
